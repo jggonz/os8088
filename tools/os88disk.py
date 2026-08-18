@@ -577,7 +577,23 @@ def build(args) -> int:
     # A folder's own directory is a cluster chain like any other file: two
     # link entries ('.', '..'), one entry per subfolder, and its files,
     # rounded up to clusters.
-    dir_nclus = {k: max(1, ((2 + len(kids[k]) + len(groups[k])) * 32
+    # ...or to the slots --dir-slots asked for. THE KERNEL DOES NOT GROW A
+    # DIRECTORY (SPEC.md 18.5: FERR_DIRFULL when the scan reaches the end
+    # of the chain with no reusable slot), so a folder that programs will
+    # SAVE INTO ships with spare slots, or the first few saves after the
+    # last one fill it - RUNCPM's A\0 is built with room for the files a
+    # CP/M session makes (SPEC.md 71.3).
+    min_slots = {}
+    for spec in args.dir_slots:
+        key, sep, n = spec.rpartition("=")
+        if not sep or not n.isdigit():
+            fail(f"--dir-slots wants FOLDER=N, not '{spec}'")
+        min_slots[folder_key(key)] = int(n)
+    for key in min_slots:
+        if key not in dirs:
+            fail(f"--dir-slots {key}: no such folder on this disk")
+    dir_nclus = {k: max(1, (max(2 + len(kids[k]) + len(groups[k]),
+                                min_slots.get(k, 0)) * 32
                             + lay.cluster_bytes - 1)
                         // lay.cluster_bytes) for k in dirs}
 
@@ -919,6 +935,13 @@ def main() -> int:
                          "shows the first 31, the file API - OSAPI_FILE_FIND "
                          "and every name-taking cell - reaches them all "
                          "(SPEC.md 19, 71.3: a CP/M drive folder)")
+    ap.add_argument("--dir-slots", metavar="FOLDER=N", action="append",
+                    default=[],
+                    help="size this folder's directory for at least N "
+                         "entries ('.' and '..' included), rounded up to "
+                         "whole clusters (repeatable): the kernel does not "
+                         "grow a directory (SPEC.md 18.5), so a folder "
+                         "programs save into ships with spare slots")
     ap.add_argument("packages", metavar="[DIR[/DIR...]:]PKG.o88", nargs="*",
                     help="package files, in directory order "
                          "(none = empty disk); the prefix is the folder to "
@@ -928,7 +951,7 @@ def main() -> int:
 
     if args.verify:
         if args.output or args.size or args.scramble or args.packages \
-                or args.folder:
+                or args.folder or args.dir_slots:
             ap.error("--verify takes no other arguments")
         return verify(args.verify)
     if not args.output or not args.size:

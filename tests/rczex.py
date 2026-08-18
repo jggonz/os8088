@@ -6,9 +6,11 @@
                                                  [--keep] [--socket PATH]
 
 Boots the RUNCPM floppy in QEMU (`make test TESTAPPS=...`), opens Disk B by
-the two-press double-click, launches RUNCPM the same way, loads ZEXDOC.COM
-through the debug key (Alt+L, the name, Enter - docs/RUNCPM-PORT-PLAN.md
-wave 2), and then READS THE TERMINAL OFF SCREENDUMPS - there is no serial
+the two-press double-click, launches RUNCPM the same way, TYPES `ZEXDOC` AT
+THE `A>` PROMPT (wave 4: the DRI CCP loads it off A\0 through the disk
+layer, SPEC.md 71.3; `--loader` uses the debug key instead - Alt+L, the
+name, Enter - which is how waves 2 and 3 ran it), and then READS THE
+TERMINAL OFF SCREENDUMPS - there is no serial
 port into a package, and what the user sees is the glass - through
 tests/rczex_ocr.py's harvested 8x8 glyphs, until ZEXDOC prints 'Tests
 complete'. Every one of ZEXDOC's groups (its names are string constants in
@@ -103,6 +105,9 @@ def main():
     ap.add_argument("--keep", action="store_true", help="leave QEMU running")
     ap.add_argument("--socket", default="build/qmp.sock")
     ap.add_argument("--shots", default="build/port-shots")
+    ap.add_argument("--loader", action="store_true",
+                    help="load through Alt+L (the debug key) instead of typing "
+                         "the name at the CCP's prompt")
     args = ap.parse_args()
     sock = args.socket
     os.makedirs(args.shots, exist_ok=True)
@@ -144,7 +149,13 @@ def main():
         scr.learn(r, text)                           # the banner is whole
     glyphs = scr.glyphs
 
-    qmp(sock, "sendkey alt-l", "sleep 0.5")
+    if args.loader:
+        qmp(sock, "sendkey alt-l", "sleep 0.5")
+    else:
+        # the CCP is at its prompt (the banner's row 9 is 'A>'); the DRI
+        # CCP opens NAME.COM through F_OPEN/F_READ, ~24 records a second
+        # of the wake's slices, then jumps to 0100h
+        pass
     sendkeys(sock, args.program)
     qmp(sock, "sendkey ret")
     t_start = time.time()
@@ -190,7 +201,7 @@ def main():
             break
     elapsed = int(time.time() - t_start)
     subprocess.run([sys.executable, "tools/shot.py", sock,
-                    os.path.join(args.shots, f"wave2-{args.program.lower()}-end.png"),
+                    os.path.join(args.shots, f"rczex-{args.program.lower()}-end.png"),
                     "--crop", "0,38,640,200"], check=False, stdout=subprocess.DEVNULL)
     if not args.keep:
         qmp(sock, "quit")

@@ -20,8 +20,13 @@
 #   apps/runcpm/hosttest/rcmemtest.sh the Z80-RAM movers on a real x86 with
 #                                     SS != DS, in raw QEMU, with negative
 #                                     controls (a few seconds)
-#   (wave 4) hosttest/rcfstest.c      the FCB/directory/record layer against a
-#                                     fake folder tree
+#   apps/runcpm/hosttest/rcfstest.c   the disk layer (rcfs.c, SPEC.md 71.3)
+#                                     with the BDOS dispatcher over a fake
+#                                     folder tree with contents: names, the
+#                                     directory-entry synthesis and its
+#                                     extent chain, the record math, the
+#                                     open-file table, $$$.SUB, the capture
+#                                     files, the errors, USER n, BDOS 249
 #
 # NOT here, because it takes minutes: apps/runcpm/hosttest/rcz80test.sh runs
 # the Z80 core against ZEXDOC in raw QEMU (`make rcz80test`); tests/rczex.py
@@ -45,6 +50,11 @@ mkdir -p $BUILD
 $HOSTCC -O1 -w -I apps/runcpm/hosttest -I apps/runcpm \
     -o $BUILD/rcuitest apps/runcpm/hosttest/rcuitest.c
 $BUILD/rcuitest
+
+# The disk layer, through rc_bdos, against a fake folder tree with contents.
+$HOSTCC -O1 -w -I apps/runcpm/hosttest -I apps/runcpm \
+    -o $BUILD/rcfstest apps/runcpm/hosttest/rcfstest.c
+$BUILD/rcfstest
 
 # The movers, on a real x86 with SS != DS (a boot sector in raw QEMU).
 apps/runcpm/hosttest/rcmemtest.sh

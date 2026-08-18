@@ -249,9 +249,13 @@ def clusters(size, cbytes):
     return max(1, (size + cbytes - 1) // cbytes)
 
 
-def select(out, geometry, reserve):
+def select(out, geometry, reserve, slots=0):
     """The A/0 files a geometry carries, in fill order, beside the root
-    files `reserve` names (paths; their sizes are priced here)."""
+    files `reserve` names (paths; their sizes are priced here); A/0's own
+    directory is priced for at least `slots` entries - the spare ones the
+    disk rule asks os88disk.py for with --dir-slots (the kernel does not
+    grow a directory, SPEC.md 18.5, so a CP/M session's saves need room
+    that ships with the disk, SPEC.md 71.3)."""
     if geometry not in GEOMETRY:
         fail(f"--select wants 360, 720 or 1440, not {geometry}")
     cbytes, total = GEOMETRY[geometry]
@@ -271,7 +275,8 @@ def select(out, geometry, reserve):
         return (c, base)
 
     def dir_clusters(nfiles):
-        return clusters((2 + nfiles) * DIR_ENTRY, cbytes)   # '.', '..', files
+        return clusters(max(2 + nfiles, slots) * DIR_ENTRY, cbytes)   # '.',
+                                                            # '..', files
 
     used, chosen = 0, []
     for base, size in sorted(rows, key=rank):
@@ -295,12 +300,15 @@ def main():
                     help="print the A/0 files a 360/720/1440 disk carries, one path per line")
     ap.add_argument("--reserve", nargs="*", default=[], metavar="FILE",
                     help="with --select: the root files that ride beside A/0, priced first")
+    ap.add_argument("--dir-slots", type=int, default=0, metavar="N",
+                    help="with --select: price A/0's directory for at least N entries "
+                         "(what os88disk.py --dir-slots A/0=N will build)")
     ap.add_argument("--from", dest="src", metavar="DIR",
                     help="a local checkout of RunCPM at the pinned commit to take the files from")
     args = ap.parse_args()
 
     if args.select:
-        chosen, used, budget = select(args.output, args.select, args.reserve)
+        chosen, used, budget = select(args.output, args.select, args.reserve, args.dir_slots)
         for base in chosen:
             print(os.path.join(args.output, "A", "0", base))
         print(f"getruncpm: {len(chosen)} files, {used} of {budget} clusters "

@@ -1917,7 +1917,7 @@ $(BUILD)/cword360.img: $(CWORDDISK) tools/os88disk.py
 # THE HOST CHECKS RUN FIRST AND STOP THE BUILD. They are an order-only-free
 # prerequisite of the .raw.asm through the stamp below: a check that fails
 # leaves no stamp, and the compile does not run.
-$(eval $(call CC_PACKAGE,runcpm,runcpm))
+$(eval $(call CC_PACKAGE,runcpm,runcpm,RUNCPM.OVL))
 
 # THE REST OF THE TRANSLATION UNIT (SPEC.md 70.1): runcpm.c #includes the
 # parts, and the shim %includes the three hand-written pieces. Every one is a
@@ -1928,7 +1928,8 @@ RUNCPMSRC := apps/runcpm/rcterm.c apps/runcpm/rccpm.c apps/runcpm/rcfs.c \
              apps/runcpm/rcabout.c
 RUNCPMINC := apps/runcpm/rcz80.inc apps/runcpm/rcmem.inc apps/runcpm/rcband.inc
 RUNCPMHOST := apps/runcpm/build.sh apps/runcpm/hosttest/os88.h \
-              apps/runcpm/hosttest/rcuitest.c apps/runcpm/hosttest/rcmemtest.asm \
+              apps/runcpm/hosttest/rcuitest.c apps/runcpm/hosttest/rcfstest.c \
+              apps/runcpm/hosttest/rcmemtest.asm \
               apps/runcpm/hosttest/rcmemtest.sh $(RUNCPMINC)
 $(BUILD)/runcpm.raw.asm: $(RUNCPMSRC) $(BUILD)/.runcpm-hostchecks
 $(BUILD)/runcpm.bin: $(RUNCPMINC)
@@ -1993,14 +1994,23 @@ $(BUILD)/HELLO.COM: | $(BUILD)
 # an empty A/0 and verify clean - which reads exactly like a working disk.
 # RUNCPMIMG therefore keeps its stderr and stops the recipe when the
 # selection is empty. $(3) is the geometry's extra root files, if any.
-RUNCPMDISK := $(BUILD)/runcpm.o88 $(RUNCPMDIR)/CCP-DR.60K $(RUNCPMDIR)/LICENSE \
-              $(RUNCPMDIR)/1STREAD.ME
-RUNCPMDEPS := $(BUILD)/runcpm.o88 $(BUILD)/runcpm-src.stamp \
+RUNCPMDISK := $(BUILD)/runcpm.o88 $(BUILD)/RUNCPM.OVL $(RUNCPMDIR)/CCP-DR.60K \
+              $(RUNCPMDIR)/LICENSE $(RUNCPMDIR)/1STREAD.ME
+RUNCPMDEPS := $(BUILD)/runcpm.o88 $(BUILD)/RUNCPM.OVL $(BUILD)/runcpm-src.stamp \
               tools/os88disk.py tools/getruncpm.py
+# A\0 SHIPS WITH SPARE DIRECTORY SLOTS (SPEC.md 71.3): the kernel does not
+# grow a directory (SPEC.md 18.5, FERR_DIRFULL), so a folder a CP/M session
+# saves into - MBASIC's SAVE, TE's write, PIP's copy, SUBMIT's $$$.SUB - must
+# have its room built in; os88disk.py's own sizing leaves ONE free slot after
+# the master disk's 77 files, and the second save failed 'Not saved: X'
+# (found on the glass in wave 4). 128 entries is the size of RUNCPM's
+# directory cache, so A\0 holds 126 files, and getruncpm.py --select prices
+# the same figure so the fill cannot overflow the disk.
+RUNCPMSLOTS := 128
 define RUNCPMIMG
-sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select $(2) --reserve $(RUNCPMDISK) $(3) | sed 's,^,A/0:,')"; \
+sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select $(2) --dir-slots $(RUNCPMSLOTS) --reserve $(RUNCPMDISK) $(3) | sed 's,^,A/0:,')"; \
 [ -n "$$sel" ] || { echo "runcpm: getruncpm.py --select $(2) chose nothing"; exit 1; }; \
-python3 tools/os88disk.py -o $(1) --size $(2) --deep-folders $(RUNCPMDISK) $(3) $$sel
+python3 tools/os88disk.py -o $(1) --size $(2) --deep-folders --dir-slots A/0=$(RUNCPMSLOTS) $(RUNCPMDISK) $(3) $$sel
 endef
 
 runcpmdisk: $(BUILD)/runcpm.img $(BUILD)/runcpm720.img $(BUILD)/runcpm360.img

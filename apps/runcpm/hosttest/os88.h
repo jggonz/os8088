@@ -46,6 +46,11 @@ struct os88_menuset { const char *name; int oncmd; int nmenus;
 #define OS88_FERR_IO      2
 #define OS88_FERR_NAME    3
 #define OS88_FERR_NOENT   4
+#define OS88_FERR_EXIST   5
+#define OS88_FERR_FULL    6
+#define OS88_FERR_DIRFULL 7
+#define OS88_FERR_PROT    8
+#define OS88_FERR_WPROT   9
 #define OS88_FERR_BIG    10
 
 void *os88_main(void);
@@ -86,9 +91,17 @@ int  os88_toast(const char *text, int ticks);
 int  os88_cpu(void);
 
 unsigned os88_mem_claim(int kb);
+int      os88_mem_free(unsigned seg);
+unsigned os88_mem_regrow(unsigned seg, int kb);
 unsigned os88_mem_largest_kb(void);
+int  os88_peek(unsigned seg, unsigned off);
+void os88_poke(unsigned seg, unsigned off, int value);
 unsigned os88_file_read(const char *name, void *buf, unsigned cap);
 unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap);
+int  os88_file_write_seg(const char *name, unsigned seg, unsigned count);
+int  os88_file_delete(const char *name);
+int  os88_file_rename(const char *oldname, const char *newname);
+int  os88_file_mkdir(const char *name);
 unsigned os88_ticks(void);
 int  os88_ferr(void);
 int  os88_file_find(int ordinal, struct os88_find *f);

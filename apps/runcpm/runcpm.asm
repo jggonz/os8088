@@ -45,8 +45,18 @@
                                     ; HALT) to close the window: there is no
                                     ; self-close slot (SPEC.md 71, cword's
                                     ; File > Close idiom)
-                                    ; and NOT (yet): CC_HAS_OVL - only if the
-                                    ; size line says so; CC_ICON - wave 6
+%define CC_HAS_OVL                  ; RUNCPM.OVL (SPEC.md 70.14, 71): the
+                                    ; per-command half of the disk layer
+                                    ; (ERA/REN/MAKE/open/close/the search/
+                                    ; F_SIZE/USER/BDOS 249/_CheckSUB),
+                                    ; _PatchCPM, the banner's tail and the
+                                    ; debug loader - resident image+bss
+                                    ; passed the 55,000 trigger in wave 4
+                                    ; and the split is by FREQUENCY: a
+                                    ; record, a byte punched, a keystroke
+                                    ; stay in. First loaded by rc_boot on
+                                    ; the first wake, before any folder
+                                    ; move; and NOT (yet): CC_ICON - wave 6
 
 %include "cc/crt0.asm"              ; the sections, the 32-byte header, the
                                     ; entry and callback trampolines, and the

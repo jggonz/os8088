@@ -16,8 +16,9 @@
  *
  * WHAT IT IS (SPEC.md 71). A Z80 (rcz80.inc, wave 2) running CP/M 2.2 in a
  * 64KB heap claim, a BDOS and BIOS in C (rccpm.c, wave 3), CP/M drives as
- * folders on the floppy (rcfs.c, wave 4), an 80x25 terminal drawn in a
- * window (rcterm.c, this wave), and DRI's CCP as the command processor. The
+ * folders on the floppy with whole files in heap claims (rcfs.c, wave 4),
+ * an 80x25 terminal drawn in a window (rcterm.c, wave 1), and DRI's CCP as
+ * the command processor. The
  * structural difference from RunCPM is that NOTHING BLOCKS: RunCPM sits in
  * the host's getch(); here the emulator runs on the UI task in bounded
  * slices, re-entered through the kernel's wake event (SPEC.md 71.1 -
@@ -32,8 +33,10 @@
  *
  *   rcterm.c    the terminal model, the VT100 subset, the glass shadow and
  *               the damage-only flush (SPEC.md 71.2)
- *   rccpm.c     the CP/M image constants; wave 3: BIOS, BDOS, the line editor
- *   rcfs.c      the place (drive,user) -> folder; wave 4: files
+ *   rccpm.c     the CP/M image constants, BIOS, BDOS, the line editor
+ *   rcfs.c      the disk layer: (drive,user) -> folder, the directory cache,
+ *               the open-file table over claims, every disk function
+ *               (SPEC.md 71.3)
  *   rcabout.c   About (wave 5)
  *
  * and the shim (runcpm.asm) %includes rcz80.inc, rcmem.inc and rcband.inc.
@@ -103,9 +106,34 @@ static void rc_bell_service(void);
 static void rc_fs_init(void);
 static int  rc_fs_cd(int d, int u);
 static int  rc_fs_home(void);
+static int  rc_fs_drive_exists(int d);
+static void rc_fs_flush_all(void);
+static unsigned ovl_fs_open(void);
+static unsigned ovl_fs_close(void);
+static unsigned ovl_fs_make(void);
+static unsigned ovl_search_first(unsigned fcbaddr, int isdir);
+static unsigned ovl_fs_snext(void);
+static unsigned ovl_fs_delete(void);
+static unsigned ovl_fs_rename(void);
+static unsigned rc_fs_readseq(void);
+static unsigned rc_fs_writeseq(void);
+static unsigned rc_fs_readrand(void);
+static unsigned rc_fs_writerand(void);
+static unsigned ovl_fs_size(void);
+static unsigned ovl_fs_randrec(void);
+static void ovl_fs_setuser(int u);
+static unsigned ovl_fs_makedisk(void);
+static unsigned ovl_fs_checksub(void);
+static void rc_fs_capture(int lst, int c);
 static void rc_about(void *win);
 static int  rc_key_pop(void);
-static void rc_patch_cpm(void);
+static int  ovl_patch_cpm(void);            /* module code: 0 = not loaded */
+static int rc_full;                          /* fullscreen latch held (Alt+F):
+                                              * rcfs.c's rc_say reads it - a
+                                              * toast is the bar's, and the
+                                              * bar is under a fullscreen
+                                              * window (SPEC.md 71.4) */
+static void *rc_win;                         /* our window, for rc_say_now */
 static void rc_con_reset(void);
 static int  rc_bios(void);
 static int  rc_bdos(void);
@@ -124,6 +152,8 @@ void rc_zcopy_out(void *dst, unsigned zaddr, unsigned n);
 void rc_zzcopy_in(unsigned zaddr, unsigned seg, unsigned off, unsigned n);
 void rc_zzcopy_out(unsigned seg, unsigned off, unsigned zaddr, unsigned n);
 void rc_zfill(unsigned zaddr, int v, unsigned n);
+void rc_sfill(unsigned seg, unsigned off, int v, unsigned n);   /* another
+                                              * claim: a file's gap (wave 4) */
 
 /* the key ring: os88_onkey pushes, the BDOS/BIOS console reads pop
  * (rccpm.c); the debug loader's prompt reads it too */
@@ -222,8 +252,6 @@ struct rc_kmset {
 static struct rc_kmset rc_kmenus = { "RunCPM", 0, 0 };
 
 static unsigned rc_zseg;                     /* the 64KB Z80 RAM claim */
-static int rc_full;                          /* fullscreen latch held */
-static void *rc_win;
 
 /* THE MACHINE'S STATE - what a wake does, and whether the next one is
  * wanted (SPEC.md 71.1: re-post only while there is work) */
@@ -294,7 +322,9 @@ static void rc_banner(void)
      * (rc_clock_step), so the rest of the banner follows from there */
 }
 
-static void rc_banner2(void)
+static int ovl_banner2(void)                 /* module code (SPEC.md 70.14):
+                                              * once a launch; 0 = the module
+                                              * refused - rc_boot says so */
 {
     rc_puts("BIOS at 0x");
     rc_puthex16(RC_BIOSJMPPAGE);
@@ -306,6 +336,7 @@ static void rc_banner2(void)
     rc_puts("CCP " RC_CCPNAME " at 0x");
     rc_puthex16(RC_CCPADDR);
     rc_puts("\r\n");
+    return 1;
 }
 
 /* ==========================================================================
@@ -463,7 +494,7 @@ static int rc_clock_step(void)
         rc_putc('0' + q % 10);
         rc_puts(" MHz\r\n");
     }
-    rc_banner2();
+    ovl_banner2();
     rc_boot();                               /* main.c 110: the loop's first lap */
     return 0;
 }
@@ -496,7 +527,21 @@ static int rc_clock_step(void)
 static void rc_boot(void)
 {
     rc_puts(RC_CCPHEAD);
-    rc_patch_cpm();                          /* cold: IOBYTE and DSKByte too */
+    if (!ovl_patch_cpm()) {                  /* cold: IOBYTE and DSKByte too.
+                                              * THE MODULE'S GATE (SPEC.md
+                                              * 71): the disk layer's per-
+                                              * command half is RUNCPM.OVL,
+                                              * loaded by this first call
+                                              * from the launch folder; when
+                                              * it cannot be, no CP/M can run
+                                              * - the fact on the terminal
+                                              * (the reason is cc_ovneed's
+                                              * toast), the window kept up
+                                              * to show it, as for the CCP */
+        rc_puts("Unable to load RUNCPM.OVL.\r\nCPU halted.\r\n");
+        rc_mode = RC_M_IDLE;
+        return;
+    }
     rc_status = RC_ST_RUNNING;
     rc_con_reset();                          /* no line half-edited, no error
                                               * waiting: a warm boot */
@@ -530,6 +575,12 @@ static void rc_boot(void)
  * anything else is the loop's next lap, CCPHEAD and the CCP again. */
 static void rc_program_end(void)
 {
+    rc_fs_flush_all();                       /* the program's open files
+                                              * written back and released
+                                              * (SPEC.md 71.3), before the
+                                              * loop laps or the window goes
+                                              * - the file slots are legal:
+                                              * this is the wake, no lock */
     if (rc_status == RC_ST_EXIT) {
         rc_puts("\r\n");
         rc_mode = RC_M_EXIT;
@@ -644,7 +695,7 @@ static void rc_ld_back(void)
 static void rc_run_program(void)
 {
     rc_status = RC_ST_RUNNING;
-    rc_patch_cpm();
+    ovl_patch_cpm();
     rc_con_reset();                          /* the CCP's half-typed line, if
                                               * the loader interrupted one,
                                               * is not the program's */
@@ -699,7 +750,8 @@ static void rc_ax_load(void)
     rc_axlen = blen;
 }
 
-static void rc_load_go(void)
+static int ovl_load_go(void)                 /* module code: 0 = the module
+                                              * refused, nothing loaded */
 {
     unsigned n, off, big;
     off = rc_zoff512();
@@ -723,16 +775,17 @@ static void rc_load_go(void)
         rc_puts(rc_ldname);
         rc_puts(big ? ": too big for the TPA\r\n" : ": not found\r\n");
         rc_ld_back();                        /* back to the prompt, or idle */
-        return;
+        return 1;
     }
     rc_zzcopy_in(0x0100, rc_zseg, off, n);   /* down to the TPA: dst < src,
                                               * ascending, overlap-safe */
     rc_run_program();
+    return 1;
 }
 
 /* the prompt's keys: printable into the name (upper-cased, 8 at most), BS,
  * Enter echoes the CR/LF and hands the read to the wake, Esc cancels */
-static void rc_load_key(int c)
+static void ovl_load_key(int c)
 {
     if (c == 13) {
         rc_putc(13);
@@ -742,7 +795,7 @@ static void rc_load_key(int c)
             rc_ld_back();
             return;
         }
-        rc_ldmode = RC_LD_LOAD;              /* os88_onwake: rc_load_go() */
+        rc_ldmode = RC_LD_LOAD;              /* os88_onwake: ovl_load_go() */
     } else if (c == 27) {
         rc_puts("\r\n");
         rc_ldmode = 0;
@@ -789,7 +842,9 @@ void os88_onwake(void *win)
 {
     if (rc_ldmode == RC_LD_LOAD) {
         rc_ldmode = 0;
-        rc_load_go();                       /* the floppy, with no lock held */
+        if (!ovl_load_go())                  /* the floppy, with no lock held */
+            rc_ld_back();                    /* the module refused: as typed
+                                              * nothing (the toast says why) */
     } else if (rc_mode == RC_M_CLOCK || rc_mode == RC_M_RUN) {
         /* THE SLICE LENGTH ADAPTS to the machine it runs on: os88_cpu() set
          * the first guess, and from there a slice that ends inside the tick
@@ -1015,7 +1070,7 @@ void os88_onkey(int ascii, int scan, void *win)
     if (rc_ldmode == RC_LD_PROMPT) {        /* the loader's prompt owns the
                                              * keys until Enter or Esc */
         if (ascii != 0) {
-            rc_load_key(ascii);
+            ovl_load_key(ascii);
             rc_flush(win);                  /* the echo (Enter's CR/LF too),
                                              * under the held lock: ONE flush
                                              * before the read, which is the

@@ -49940,6 +49940,11 @@ assembly. What follows from the ceiling in practice:
   zeroed by the loader (§21 step 8), so a static buffer is the right way to
   spend the ceiling and a large initialised array in `.data` is the wrong
   way — it is paid for twice, once on the floppy and once in the region.
+- **55,000 resident bytes (image + bss) is the trigger for the split** (§70.14):
+  a package that measures past it stops growing in one segment and moves its
+  per-command code to `ovl_*` first — the figure `.claude/skills/port-to-os8088/LESSONS.md`
+  §5 derived from CWORD, which hit the ceiling mid-feature twice, and both times
+  the fix was cheap only because the code was already the kind that can move.
 
 ### 70.10 `tools/cc8086.py` — the gate, in order
 
@@ -50742,11 +50747,36 @@ once and whole, Select decided from the drive letter, the 32-bit uptime,
 the merged warm-boot flush, the exit's flush skipped, the loader's hand-back),
 68 functions, largest frame 30 —
 the editor and the CCP loop cost ~4.7KB of image and ~470 bytes of bss (the
-`^W` recall buffer, the AUTOEXEC buffer, the per-drive place cache), well
-under §70.9's 55,000
-trigger, so no `RUNCPM.OVL` exists yet and the resident/overlay decision is
-deferred to the wave whose size line asks for it (the candidates stand as
-named). Every later figure replaces this one as the waves land.*
+`^W` recall buffer, the AUTOEXEC buffer, the per-drive place cache); **wave 4
+(the disk layer whole, §71.3: the place table, the directory cache, the
+open-file table over claims, every disk function 15–36/40, the capture files,
+`_CheckSUB`, `USER n`'s folder, BDOS 249) measures `image=43052 bss=11525`**
+(after the review: two directory slots, `_CheckSUB` off the search, the
+open-file table keeping closed files, `REN` re-sorting, `F_WRITE`'s 0xFF),
+120 functions, largest frame 30 — the file system cost ~13.5KB of image (51
+functions of C: name conversion, the record math, the search, the table) and
+~4.6KB of bss (the two 2KB slots, the 256-byte table), 54,577 in all against
+§70.9's 55,000 trigger — and the review's second pass (the fullscreen
+refusal line, the fill's announcement, the host-order insert, the remembered
+`USER n` refusal) took it to 55,053, PAST the trigger, **so `RUNCPM.OVL` exists
+from wave 4: the split by FREQUENCY moved 20 functions — the per-command half
+of the disk layer (`ERA`, `REN`, `MAKE`, `F_OPEN`, `F_CLOSE`, the search
+`F_SFIRST`/`F_SNEXT` and `_mockupDirEntry`, `F_SIZE`, `F_RANDREC`, `USER n`'s
+folder, BDOS 249, `_CheckSUB`), `_PatchCPM`, the banner's tail and the debug
+loader — and measures `image=38576 bss=11587` resident (50,163) + a
+6,155-byte `RUNCPM.OVL`, 46 resident shims, 17 loading call sites; what a
+record, a punched byte, a console byte or a keystroke touches (`F_READ`/
+`F_WRITE`, the random records, the capture files, the open-file table's
+loader `rc_oft_get`, the directory cache) stays resident.** The module is
+first called by `rc_boot` on the first wake (`ovl_patch_cpm`, after
+`ovl_banner2`), before any folder move, so `RUNCPM.OVL` resolves in the
+launch folder like the CCP; `ovl_patch_cpm` answers 1, and a 0 — no heap, no
+file, a stale module, each toasted by `cc_ovneed` — stops the machine with
+`Unable to load RUNCPM.OVL.` / `CPU halted.` on the terminal, the window kept
+up as for a missing CCP; every later `ovl_*` call therefore finds the module
+in. The About panel (wave 5) and the icon (wave 6) are the growth left, both
+module code by the same rule. Every later figure replaces this one as the
+waves land.*
 
 **The Z80 core is hand-written 8086 (`rcz80.inc`, wave 2), and it is the
 only thing that touches Z80 memory per instruction.** `_rc_run(n)` is a cdecl
@@ -50845,9 +50875,10 @@ slice's budget, servicing every RST handoff in between (`rccpm.c`'s
 L on the way out — with the console functions 0–12 (wave 3: the line editor
 too), the drive/user state functions 13, 14, 24, 25, 27–32, 37–39, RunCPM's
 private 230, 231, 248–254, BIOS BOOT..CONOUT and the register-only entries,
-and a disk function answering 0xFF, never a false success, until wave 4 —
-so DIR and TYPE at the prompt answer `no file` / `X?` exactly as the DRI CCP
-does for a file that is not there), flushes the
+and, from wave 4, the disk functions through `rcfs.c` (§71.3) — in wave 3
+they answered 0xFF, never a false success, so DIR and TYPE at the prompt
+answered `no file` / `X?` exactly as the DRI CCP does for a file that is not
+there), flushes the
 terminal ONCE under the lock, rings what rang, and re-posts only while the
 machine has work — never while blocked in a console read on an empty key ring
 (then PC is put back ON the RST, the machine is `RC_M_BLOCKED`, and
@@ -50901,8 +50932,8 @@ which QEMU's BIOS never shows (found by the review; the harness's read stub
 now refuses an unaligned base as the disk driver would). The read is capped
 at the TPA below the CCP (`FERR_BIG` says "too big for the TPA"; the aligned
 landing costs 0100h–02FFh of the cap, ~57KB remain), and the rule is stated
-at `os88_file_read_seg` in `os88.h`; wave 4's whole-file claims read at
-offset 0 and are aligned by construction — a .COM is several
+at `os88_file_read_seg` in `os88.h`; the disk layer's whole-file claims
+(§71.3) read at offset 0 and are aligned by construction — a .COM is several
 `int 13h` calls, ~400 ms each on the target, and nothing that takes disk time
 runs under the gfx lock a W_ONKEY holds — patches the CP/M image (`_PatchCPM`
 whole: page zero, IOBYTE 3Dh and DSKByte on a cold start, the BDOS jump page
@@ -51009,7 +51040,8 @@ not the next program's. **`disk.h`'s `_error`** — `\r\nBdos Err on X: ` +
 `R/O` / `Select` / `\r\nCP/M ERR` — is the same shape: the text, then a
 blocked wait for a key (`rc_errwait`), then `\r\n`, the drive back to
 DSKByte's and a warm boot, and the function that erred finishes its tail
-(DRV_SET's, cpm.h 1226, in wave 3; wave 4's callers add theirs). The
+(DRV_SET's, cpm.h 1226; the disk functions' is 0xFF, and `_OpenFile`/
+`_CloseFile` after a Select error answer H = errSELECT, 0x02FF). The
 erring function jumps INTO the wait in the same trap, so a key already in
 the ring (typeahead behind `b:` Enter) ends it at once as upstream's
 `_getcon()` would, and only an empty ring blocks. DRV_SET and BIOS SELDSK
@@ -51017,18 +51049,19 @@ answer `Select` **exactly where upstream does — for a DRIVE whose folder
 does not exist below the launch folder**, decided from the letter alone
 (`_SelectDisk` → `_sys_select("A"+dr)` stats `FILEBASE/<letter>` only,
 abstraction_posix.h 147–152; the user folder is never a Select error —
-`_SetUser` → `_MakeUserDir` creates it on USER n, disk.h 862–870, and that
-creation is wave 4's): `rc_fs_cd` answers 0 standing in the user folder, 1
-standing in the DRIVE's folder when the user's is absent (searches there
-answer "no file" until wave 4 creates it), −1 for an absent drive, and only
+`_SetUser` → `_MakeUserDir` creates it on USER n, disk.h 862–870 — wave 4's
+`rc_fs_mkuser`, §71.3): `rc_fs_cd` answers 0 standing in the user folder, 1
+standing in the DRIVE's folder when the user's is absent (the area reads as
+EMPTY: searches there answer "no file" and nothing can be made in it, §71.3),
+−1 for an absent drive, and only
 −1 is `Select` — so `USER 1` followed by any warm boot (the DRI CCP restarts
 with C = DSKByte = 0x10: setuser(1), select(0)) shows an empty A/1 rather
 than an unrecoverable `Bdos Err on A: Select` on every key (the wave-3
 review found it; the harness now scripts USER 1). The drive is `E`
 unmasked as `cpm.h` 1235 keeps it: `E` ≥ 16 has no folder and prints `Bdos
 Err on Q: Select` (measured: `q:` at the prompt), never a silent success on
-`E mod 16`; BIOS SELDSK's `rc_fs_cd` MOVES the instance where `B_SELDSK`
-only tests, a stand-in wave 4 replaces with a look-up. Measured on the
+`E mod 16`; BIOS SELDSK is a look-up in the place table (`rc_fs_drive_exists`), and
+nothing moves — as `B_SELDSK` only tests. Measured on the
 glass: `B:` at the prompt prints `Bdos Err on B: Select`, waits, and the
 key boots back to `A>`; `user 1` then `^C` boots to `A>` with no error.
 F_USERNUM keeps the user code (0–31 as BDOS does; the folder is made in wave
@@ -51055,8 +51088,9 @@ terminal would send RunCPM — Up/Down/Right/Left `ESC[A`/`B`/`C`/`D`, Home
 the arrows are the kernel's mouse, §9.6, and never reach a package.) Alt+L,
 the debug loader, is also allowed while the machine is BLOCKED at the CCP's
 prompt: the `.COM` runs in the CCP's place and its RET warm-boots back — so
-`make rczex` still loads ZEXDOC that way until wave 4's disk layer lets the
-CCP load it; a refused load, Esc and an empty name go back to the state
+`make rczex` loaded ZEXDOC that way until wave 4's disk layer let the CCP
+load it (now it types `ZEXDOC` at the prompt; `--loader` keeps the old way);
+a refused load, Esc and an empty name go back to the state
 they interrupted — and if that state was BLOCKED and a key arrived while
 the load was pending (typed between Enter and the wake that read the
 floppy: `os88_onkey` does not flip BLOCKED→RUN while the loader is active),
@@ -51279,22 +51313,154 @@ Ctrl+Backspace, both verified on the glass in wave 3. BEL is
 CP/M drives are folders `A\0 .. P\F` below the launch folder, exactly RunCPM's
 host layout with FAT12's 8.3 names standing in for CP/M's; SELDSK of an absent
 DRIVE folder answers `Bdos Err on X: Select` (the letter alone decides, as
-`_sys_select` does — an absent USER folder is never a Select error); USER n
-creates its folder at once, as `_SetUser` → `_MakeUserDir` does (wave 4; until
-then an absent user folder reads as empty); `FORMAT.COM` (BDOS 249) creates a
-drive. **The record model is whole
-files in heap claims**: an 8-entry open-file table, open loads the file with
-`os88_file_read_seg`, close writes it back with `os88_file_write_seg` when
-dirty (and on warm boot), directory searches come from a 128-entry cache per
-current (drive, user) with `?` matching and the multi-entry extent chain for
-large files (`disk.h` `_mockupDirEntry`), and `$$$.SUB` works so `SUBMIT`
-does. `PUN.TXT`/`LST.TXT` capture are ordinary entries flushed at warm boot.
-**Files above 65,535 bytes are refused as a fact** — the file API a package
-reaches reads and writes whole files with a 16-bit count and no seek — with a
-BDOS error and a toast naming the file; DIR still lists them; none is shipped.
-A ninth open file evicts a clean entry or errors with a toast. The first
-search of a folder is O(files) `int 13h` calls (`os88_file_find` walks by
-ordinal); the cache makes later ones free.
+`_sys_select` does — an absent USER folder is never a Select error: it is an
+EMPTY area, as a glob of `A/3/*` is upstream, and nothing can be made in it);
+`USER n` creates its folder at once, as `_SetUser` → `_MakeUserDir` does for
+0..15 (`NOHIGHUSER`; areas 16–31 read as empty, silently, as upstream's
+missing `G..V` would; a `mkdir` the disk REFUSES — full, protected — is silent
+as upstream's is, and REMEMBERED for the session, because the DRI CCP sets the
+user at every warm boot and one look-up plus a FAT scan per `^C` in user *n*
+would be disk work back on the boot path — an `ERA` that frees something, or
+BDOS 249, lets it be tried once more; harness: `USER 5` on a full disk across
+two more warm boots is one `os88_file_mkdir`), `FORMAT.COM` (BDOS 249, `_sys_makedisk`) creates
+`<letter>` and `<letter>\0` — both measured (wave 4): `user 1` / `save 1
+u1.bin` puts `A\1\U1.BIN` on the floppy, walked from the FAT12 directory on
+the host. **The record model is whole files in heap claims** (`rcfs.c`, wave
+4): an 8-entry open-file table; `F_OPEN` — and any record call on an FCB the
+table does not know, because upstream is by name on every call and a read
+after a close simply works — reads the file WHOLE with `os88_file_read_seg`
+into a claim sized to it (KB-rounded, ≥ 1KB); a record read is a 128-byte
+`rc_zzcopy_in` out of the claim (a partial last record is `^Z`-filled, as
+`_sys_readseq`'s buffer is), a record write a `rc_zzcopy_out` in — the claim
+regrown when it must with 3KB of slack (`os88_mem_regrow`, which may move it:
+the harness's regrow always does), a gap written past the end zero-filled
+(`rc_sfill`, the one fill outside the Z80's RAM); `F_CLOSE` writes a MODIFIED
+file back whole with `os88_file_write_seg` and KEEPS the entry, clean (an
+unmodified close keeps it too), so a program that closes and reopens the same
+file — MBASIC's `SAVE` then `LOAD`, TE's save-and-continue, PIP's passes, an
+editor's `.BAK` cycle — reads nothing (harness: zero `os88_file_read_seg`
+calls on the reopen); the claim goes when the table or the heap needs it (the
+ninth open, a refused claim) or when the program ends — the warm boot,
+`EXIT`, `HALT` — where every entry left is flushed AND released by
+`rc_program_end`, on the wake with no lock: RunCPM does not hold heap for
+programs that are over, so the next program's open of the same file (the CCP
+loading a `.COM` twice) reads it again, as a CP/M machine's CCP reads a
+`.COM` from the disk every time (so a program that keeps a file open and never
+closes it loses nothing at its end; what IS lost is a modified file when the
+WINDOW is closed mid-program — the kernel's teardown frees the claims and
+nothing writes them — where upstream's per-record `fwrite` would have reached
+the host: stated). `F_MAKE` is upstream's `fopen "a"`: an existing file keeps its bytes
+and the FCB starts at record 0; a made file is in the directory at once and on
+the disk at its close. `ERA` deletes every match (a made-and-unwritten one
+too), `REN` flushes an open file under its old name first and the held bytes
+follow the new name; the CCP's `$$$.SUB`
+FCB (`CCPaddr+0x7AC`) is truncated to `rc` records on close, which is how
+`SUBMIT` works with DRI's CCP (measured: `submit clean` runs its five `ERA`s in
+order and `submit info` assembles `INFO.COM` with `Z80ASM`, then `$$$.SUB` is
+gone from the FAT12 directory); `DRV_ALLRESET` answers `_CheckSUB` — 0xFF when
+a `$-file` is on A: in the current user area — which is the batch flag the DRI
+CCP reads (`CCP-DR.60K` 0xE76B). **`_CheckSUB` is asked at EVERY warm boot
+(after every CCP command) and is answered from a REMEMBERED FACT, never by a
+search**: `rc_subfact[u]` per user area of A:, exact once any slot has listed
+A\u (the fill scans the names for `$`) and kept by our own MAKE/ERA/REN
+(SUBMIT's `F_MAKE` sets it, the CCP's `ERA` of the empty `$$$.SUB` clears it);
+while it is unknown — the first boot of a session, before any `DIR` — it is
+resolved by ONE by-name look-up of `$$$.SUB` (`os88_file_read` with a 32-byte
+cap: `FERR_BIG`, decided from the directory entry with no data read, or
+`FERR_NOENT`), the `$`-file SUBMIT makes and the only one the DRI CCP ever
+opens. So NOTHING WALKS A FOLDER ON THE BOOT PATH (measured: `A>` on the glass
+after 14 `int 13h` calls from the double-click, the package and CCP loads
+included, `DISKCNT=1`), and a `$`-name put on A: from OUTSIDE — never by
+SUBMIT — is the batch flag only after A\u has been listed once, where upstream
+would see it at once: the one narrowing, stated. `PUN.TXT`/`LST.TXT` capture (BDOS 4/5) are
+ordinary entries in `A\0`, created (truncated) the first time in the session
+and appended to after — `pun_open`/`lst_open` outlive the programs, as
+upstream's do — and flushed like any other; an `ERA` of a file NAMED
+`PUN.TXT`/`LST.TXT` closes the capture BY NAME ALONE, from whatever drive or
+user the `ERA` ran in (`disk.h` 489–500 compares `tmpFCB`'s name and nothing
+else), so the next punch starts `A\0\PUN.TXT` over — upstream's quirk, kept
+(harness: `ERA PUN.TXT` in user 3). Directory searches come from a
+**128-entry cache** of a (drive, user) — name in FCB form and the
+32-bit size, in the order of the HOST names as upstream's `glob()` sorts them,
+so `DIR` reads alike — the rows are COMPARED in host form (`"NAME.EXT"`), not
+FCB form, because the two orders differ for a name holding a character below
+`.`: `A-B.TXT` lists before `A.TXT` (`-` < `.`) and the FCB form would put it
+after; a binary search converts the new name once and one row per probe
+(harness: `A`, `A-B.TXT`, `A.B`, `A.TXT` in that order, and a `MAKE` inserts
+alike; and stays so across `REN`: the row goes out and comes back in place) —
+held in **TWO SLOTS, the least recently wanted one refilled** (4KB of bss: a
+session on B: keeps A:'s slot for the CCP's `.COM`s and `$$$.SUB`, and `PIP
+B:=A:*.*` — a search on A, an open on A, a make on B, per file — refills
+neither; harness: `DIR A:`, `DIR B:`, an open on each with the other wanted
+between, zero walks; a third area takes the older slot), each filled by ONE
+`os88_file_find` walk. **The walk is priced in sector reads, and it is
+quadratic**: `dsk_find` is by ordinal and re-reads the folder's directory
+sectors from its first one on every call (§19.7.1), so a folder of F files
+costs sum(ceil(k/16), k = 1..F+1) — **measured with `make DISKCNT=1`: the
+first `DIR` of A\0's 77 files is 238 `int 13h` calls and 238 sectors on a
+kernel built `DIRW1=1` (no sector cache), ~95 s at PERFORMANCE.md's 400 ms a
+call, and ~560 at the 126-file cap; and 0 (ZERO) `int 13h` calls, 0 sectors,
+on the ordinary kernel, because §18.95's track cache already held A\0's
+directory sectors from the launch's own reads and every re-seek was served
+from RAM** — so on a machine that has room for that cache (a 640KB PC: 36KB
+of purgeable heap, claimed at mount when 72KB is free at its rank) the walk is
+CPU only, ~238 sector copies out of the cache, and on one that has not — or
+whose cache the session's claims have shed — it is the 238 calls, ONCE per
+area per session (never at boot: `_CheckSUB` above), at the first `DIR`,
+`TYPE` or program open of that area, expected disk work with the listing as
+its result — **and it is ANNOUNCED before it starts**, because it runs inside
+one wake with the glass frozen: `RunCPM: reading A:0` (19 characters), a toast
+raised INSIDE an `os88_gfx_lock()`/`unlock()` bracket so `toast_show` takes
+§59.4's immediate path (`toast_now`: the UI task holds the lock) rather than
+the staged one that would put the strip up after the walk — one lock take and
+one strip draw per area per session, `wave4c-dir-toast.png` — and, when the
+window is fullscreen (where the bar is under it, §71.4), the same text on the
+terminal, flushed on the spot (`rc_say_now`; `wave4c-full-user2.png`); every later `DIR`, `TYPE` and open is free of it (harness: the
+second `DIR` makes zero `os88_file_find` calls; glass: the second `dir` and a
+`^C` are 0 `int 13h` calls, `type info.sub` 2). The slots are updated in place
+by our own MAKE/DELETE/RENAME and kept across warm boots (a walk per `^C`
+would be seconds on the target; what another program puts in the folder while
+RunCPM runs is seen only when the area's slot is refilled). `?` matching,
+`dr = '?'` walking every user area of the drive in turn, `EX = '?'` returning
+the multi-entry extent chain (`disk.h` `_mockupDirEntry`: two logical extents
+a directory entry, 4KB blocks, 8 16-bit `al` words from block 8 — harness:
+0/127/128/16384/16385/32768/65535 bytes are one entry each with the extent,
+`rc` and block count `disk.h` gives them, 67,301 bytes three entries `ex`
+1/3/4 with `rc` 128/128/14, 134,899 bytes five entries ending `ex` 8 `rc` 30),
+`F_SIZE` in 24 bits from the cache. **Files above 65,535 bytes are refused as
+a fact** — the file API a package reaches reads and writes whole files with a
+16-bit count and no seek — with a BDOS 0xFF (open, make, and a SEQUENTIAL
+write of record 511 — the code upstream's `_sys_writeseq` answers for a
+failed `fwrite`, and the same 0xFF for a record the heap will not hold) or 6
+(a random write past the end: `_sys_writerand`'s seek code) and a toast naming
+the file (`RunCPM: NAME.EXT>64K`, or `RunCPM RAM? NAME.EXT`) — every such
+refusal goes through `rc_say`, which ALSO prints the text on the terminal
+while the window is fullscreen (§71.4); a random READ with `r2` set answers 1
+with `cr`/`ex`/`s2` stepped from the record's low bits, as `_sys_readrand`
+does — its `fseek` past the end succeeds on every host, `fread` moves nothing,
+and 6 is only a FAILED `fseek` (harness); `DIR`
+still lists them with the whole chain; none is shipped. The last record this
+model READS is 511 (a 65,535-byte file's tail) and the last it WRITES 510
+(65,408 bytes: the 16-bit size's last whole record). **A ninth open evicts the
+least recently used CLEAN entry**; when every entry is a modified file the
+open errs `Bdos Err on X: CP/M ERR` with the toast `RunCPM: 8 files open`; a
+claim the heap refuses evicts clean entries and retries, then toasts `RunCPM
+RAM? NAME.EXT` and answers 0xFF (measured in the harness, all three). A
+write-back that fails toasts its FACT — `Dir full: NAME.EXT` (**the kernel does
+not grow a directory, §18.5: `FERR_DIRFULL` when the chain has no free slot**),
+`Disk full:`, `Protected:`, else `Not saved:` — and the bytes are lost, as an
+upstream `fwrite` failure would lose them. **That directory fact shapes the
+disk**: `os88disk.py`'s own sizing left A\0 ONE free slot after the master
+disk's 77 files, and the second save of a session failed on the glass (wave
+4); so `os88disk.py --dir-slots A/0=128` (`RUNCPMSLOTS`) builds A\0's
+directory for 128 entries — the size of the cache: 126 files — on every
+geometry, and `getruncpm.py --select --dir-slots 128` prices the same clusters
+so the fill cannot overflow the disk (1.44MB: 8 clusters, 720KB/360KB: 4). A
+user folder made by `USER n` or a drive made by BDOS 249 is one cluster like
+every folder the OS makes: 14 files on a 512-byte-cluster disk (1.44MB), 30 on
+a 1KB one — stated here, not hidden. **The 360KB disk ships full** (354/354
+clusters) — a session cannot save on it until wave 6's curation leaves room,
+which is that wave's call.
 
 The CCP is `CCP-DR.60K`, loaded once at launch from the launch folder — before
 any folder move, like the `.OVL` — into a 2KB claim and copied to 0xE400 on
@@ -51302,7 +51468,35 @@ every warm boot with CCPHEAD printed above it; `AUTOEXEC.TXT` is read from the
 launch folder once at launch and poked on every warm boot — identical to
 upstream's read-on-every-boot default here, because CP/M cannot reach the
 launch folder (wave 3 — the mechanics are in §71's command-processor
-paragraph).
+paragraph). BIOS SELDSK answers the DPH when the drive's letter has a folder —
+a look-up in the place table, nothing moves (wave 4).
+
+**Measured on the glass (wave 4, `build/runcpm.img`, `build/port-shots/wave4-*.png`):**
+`dir` lists A\0 sorted (`wave4-dir.png`), a second `dir` from the cache;
+`type left-off.txt`; MBASIC: a two-line program typed, `RUN`, `SAVE "T"`,
+`NEW`, `LOAD "T"`, `LIST`, `RUN` (`wave4-mbasic.png`; `T.BAS` on the floppy);
+TE: `te hello.txt`, two lines typed, `save As` `hello.txt`, `eXit`, `type
+hello.txt` (`wave4-te-type.png`); `pip copy.txt=hello.txt` and `type copy.txt`
+(`wave4-pip.png`) — the FAT12 image walked on the host from the root through
+`A` and `0` to `COPY.TXT`'s cluster holds HELLO.TXT's 128 bytes exactly (TE's
+text, `\r\n`, `^Z` fill); `submit clean` and `submit info`
+(`wave4-submit-*.png`) — Z80ASM's `INFO.COM` then runs and prints `running on
+Unknown` (§71.4, `wave4-info.png`); `user 1` / `save 1 u1.bin` / `era copy2.txt`
+(`wave4-user-era.png`); ZEXDOC typed at the prompt: `make rczex`. **Re-taken
+after the review (`wave4b-*.png`, `DISKCNT=1`, the counters read over QMP
+between steps):** `dir` twice (`wave4b-dir.png`, `-dir2.png`: 0 `int 13h`
+calls each on the cached kernel — `wave4b-dirw1-dir.png` is the same first
+`dir` on the `DIRW1=1` kernel, 238 calls); MBASIC `SAVE "T"`/`NEW`/`LOAD
+"T"`/`LIST`/`RUN` (`wave4b-mbasic.png`); `pip copy2.txt=1stread.me`
+(`wave4b-pip.png`, `-pip2.png`) — `A\0\COPY2.TXT` walked from the FAT12
+directory is 1STREAD.ME's 3,854 bytes then `^Z` to the record; `submit info`
+(`wave4b-submit-info.png`) and the new `INFO.COM` (`wave4b-info-user-era.png`,
+with `user 1` / `save 1 u1.bin` → `A\1\U1.BIN` walked, and `era`); `format
+b:` then `pip b:=a:*.sub` — twelve files across the two slots
+(`wave4b-format-pip.png`) — and a session on B: (`b:`, `dir`, `type
+info.sub`, `a:`: 2 `int 13h` calls in all, `wave4b-b-drive.png`;
+`B\0\INFO.SUB` walked equals A's); `exit` closes the window
+(`wave4b-exit.png`).
 
 ### 71.4 What is present and greyed, and what is absent
 
@@ -51321,7 +51515,21 @@ name (its table predates HostOS 0x08 — a third-party binary, not edited);
 `::CPU HALTED::` (DEBUG-only upstream — this port toasts the fact and then
 does exactly what BOOT does: the "\r\n", the exit path, the self-close);
 `Unable to load CP/M CCP.` leaves the window up rather than ending the
-process (stated in §71: the text would otherwise never be read).
+process (stated in §71: the text would otherwise never be read), and
+`Unable to load RUNCPM.OVL.` does the same for the module (§71's numbers
+paragraph). **A toast is the BAR's strip, and the bar is under a fullscreen
+window** (§11.2's fullscreen, `Alt+F` here, §71.2 — a shipped mode: `menu_draw_bar` early-outs on
+`wm_fs_vis`, and `toast_pass` retires the strip after `TOAST_TICKS` all the
+same), so a refusal stated only by a toast would reach a fullscreen user as a
+bare BDOS code — the `Dir full:`/`Disk full:`/`Protected:`/`Not saved:` of a
+failed write-back at `F_CLOSE` as nothing at all if the program ignores the
+code. So every wave-4 refusal and wait goes through ONE `rc_say(msg)`: the
+toast, AND — when `rc_full` is set — the same ≤ 24-character text on the
+terminal, `"\r\n" msg "\r\n"` through `rc_puts` (one row = one band, ~1 ms:
+the console line is where upstream's `disk.h` prints its errors); `rc_say_now`
+is the same under the gfx lock with the terminal flushed on the spot, for the
+one WAIT (§71.3's walk). Harness: the `>64K` refusal is on the console only
+while `rc_full`; glass: `wave4c-full-user2.png`.
 
 Absent: RunCPM's internal C CCP (host-blocking C; DRI's binary is the command
 processor), the debugger/disassembler, Arduino GPIO calls, STREAMIO, RunVT
@@ -51343,8 +51551,9 @@ master disk unpacked into `build/runcpm-disk/A/0` MINUS the three files above
 65,535 bytes, which `A/0/LEFT-OFF.TXT` names on the disk — the way
 `tools/getstories.py` fetches Frotz's stories, and the disk rules (and, from
 wave 6, `allapps`) depend on its stamp. **Each floppy** carries `RUNCPM.O88`,
-`CCP-DR.60K`, `LICENSE` and `1STREAD.ME` in its root (`build/runcpm.img`
-also `HELLO.COM`, below) and drive A user 0 as
+`RUNCPM.OVL` (from wave 4's split — beside the package, where `cc_ovneed`
+resolves it, §70.14), `CCP-DR.60K`, `LICENSE` and `1STREAD.ME` in its root
+(`build/runcpm.img` also `HELLO.COM`, below) and drive A user 0 as
 far as the geometry holds it, chosen at recipe time by `getruncpm.py --select
 <kb>` — the texts and submit files first (they are ~18 clusters and make
 the disk explain itself), then the programs, then documentation, libraries
@@ -51365,13 +51574,16 @@ manifest is checked in. Measured at the pin (`A0.zip` holds 79 files; 3 are
 above 65,535 bytes; `A/0` is the 76 that remain + `LEFT-OFF.TXT` = 77, and
 `LEFT-OFF.TXT` also names, derived from the `.SUB` files themselves, the two
 submit files that assemble a left-off source — `BDOS.SUB`, `ZCPR3.SUB` — and
-will not run): **1.44MB and 720KB carry all 77; 360KB carries 62 — every one
+will not run): **1.44MB and 720KB carry all 77; 360KB carries 55 — every one
 of the 37 .COM, the 12 .SUB, `INFO.TXT`, `LEFT-OFF.TXT` and `1STREAD.ME`,
-then `MLOAD.DOC`, four .LIB and five .Z80 sources as far as the 319 clusters
-go** — 83 / 82 / 67 files by `os88disk.py --verify`'s count with the root's
-four (the package, the CCP, LICENSE, 1STREAD.ME) plus `HELLO.COM` and
-`ASSOC.DAT`, 1,294 of 2,847 / 672 of 713 / 353 of 354 clusters (wave 2's
-count with the 24,848-byte package; wave 6 curates). **A/0
+then `MLOAD.DOC`, `BDOSEQU.LIB` and `CONSOLE7.Z80` as far as the 299 clusters
+go** — 84 / 83 / 61 files by `os88disk.py --verify`'s count with the root's
+five (the package, the `.OVL`, the CCP, LICENSE, 1STREAD.ME) plus `HELLO.COM`
+and `ASSOC.DAT`, 1,337 of 2,847 / 693 of 713 / 354 of 354 clusters (wave 4's
+count with the 38,576-byte package and its 6,155-byte module — wave 2's
+24,848-byte package left the 360KB disk 62 files and 319 clusters for `A/0`,
+`--reserve` re-shaped the selection by itself, seven sources and three
+libraries fewer; wave 6 curates). **A/0
 holds more entries than the Disk window's
 32-entry listing cap** (§19): that is a DISPLAY cap — `OSAPI_FILE_FIND` and
 every name-taking cell walk the whole folder — and `tools/os88disk.py

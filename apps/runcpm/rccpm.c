@@ -30,11 +30,11 @@
  *
  * WAVE 3 carries the console side whole (BDOS 0-12 with the editor; BIOS
  * BOOT..CONOUT and the register-only entries), the drive/user state, the
- * private calls, and the error path; wave 4 the disk functions through
- * rcfs.c. Until then a disk function answers 0xFF (not found / error), never
- * a false success - so DIR and TYPE answer 'NO FILE' - and DRV_SET selects a
- * drive that exists as a folder (rcfs.c's quiet goto) or errors 'Bdos Err on
- * X: Select' as disk.h does.
+ * private calls, and the error path; WAVE 4 the disk functions - 4/5 (the
+ * capture files), 13's _CheckSUB, 15-23, 32's folder, 33-36, 40, 249 - each
+ * a call into rcfs.c (SPEC.md 71.3), which answers HL as disk.h does and
+ * raises disk.h's _error the same way DRV_SET does: the erring function
+ * comes back with rc_errwait set, and rc_bdos finishes the wait (below).
  * ==========================================================================*/
 
 /* globals.h, the CCP_DR block: the 60K CP/M 2.2 layout the DRI CCP on the
@@ -125,11 +125,16 @@ static const unsigned char rc_dph[16] = {
     RC_DPBADDR & 0xFF, RC_DPBADDR >> 8, 0, 0, 0, 0
 };
 
-/* rc_patch_cpm - cpm.h _PatchCPM + _PatchBIOS: page zero, the BDOS jump
+/* ovl_patch_cpm - cpm.h _PatchCPM + _PatchBIOS: page zero, the BDOS jump
  * page and handoff stub, the BIOS jump page (33 JPs) and its handoff stubs
  * (RST 08h; RET; NOP each), the DPB and DPH. IOBYTE and DSKByte are set on
- * a cold start only, as upstream (Status != STATUS_RESTART). */
-static void rc_patch_cpm(void)
+ * a cold start only, as upstream (Status != STATUS_RESTART). MODULE CODE
+ * (SPEC.md 70.14, 71): the first ovl_* calls of a session are ovl_banner2
+ * and this one, both on the first wake before any folder move - the load
+ * resolves RUNCPM.OVL in the launch folder - and it answers 1, so a 0 is
+ * the module refused (no heap, no file, a stale one: cc_ovneed toasted why)
+ * and rc_boot stops the machine on it. */
+static int ovl_patch_cpm(void)
 {
     unsigned i;
     static unsigned char jp[3];
@@ -167,6 +172,7 @@ static void rc_patch_cpm(void)
     }
     rc_zcopy_in(RC_DPBADDR, rc_dpb, 15);
     rc_zcopy_in(RC_DPHADDR, rc_dph, 16);
+    return 1;
 }
 
 /* ==========================================================================
@@ -177,9 +183,11 @@ static void rc_patch_cpm(void)
  * then finishes the function that erred (its tail is by function number:
  * DRV_SET's in wave 3; wave 4's callers add theirs).
  * ========================================================================*/
+#define RC_ERR_CPM       0                    /* anything else: 'CP/M ERR' */
 #define RC_ERR_WRITEPROT 1                    /* disk.h errWRITEPROT */
 #define RC_ERR_SELECT    2                    /* disk.h errSELECT */
 static int rc_errwait;                        /* printed; a key ends it */
+static int rc_errkind;                        /* ...which error it was */
 
 static void rc_error(int err)
 {
@@ -193,6 +201,7 @@ static void rc_error(int err)
     else
         rc_puts("\r\nCP/M ERR");
     rc_errwait = 1;                           /* Status = _getcon(): the wait */
+    rc_errkind = err;
 }
 
 /* ==========================================================================
@@ -450,12 +459,10 @@ static int rc_bios(void)
                                                * (_sys_select: the letter
                                                * alone, cpm.h 595-601; C is
                                                * the raw byte - 16+ has no
-                                               * folder), else 0. rc_fs_cd
-                                               * moves the instance where
-                                               * upstream only tests: a
-                                               * stand-in wave 4 replaces
-                                               * with a look-up (rcfs.c) */
-        rc_z.hl = (rc_fs_cd(RC_C(), rc_user) >= 0) ? RC_DPHADDR : 0;
+                                               * folder), else 0 - a look-up
+                                               * in the place table (rcfs.c),
+                                               * nothing moves */
+        rc_z.hl = rc_fs_drive_exists(RC_C()) ? RC_DPHADDR : 0;
         break;
     case 36:                                  /* SETDMA */
         rc_z.hl = rc_z.bc;
@@ -515,8 +522,10 @@ static int rc_bios(void)
  * the machine goes on, 0 when the slice must stop (a Status other than
  * RUNNING - P_TERMCPM, ^C in the editor, an error's warm boot - or a console
  * read with no key: PC put back on the RST for the retry, registers
- * untouched). A disk function answers 0xFF (never a false success) until
- * rcfs.c lands in wave 4. */
+ * untouched). The disk functions - 13's _CheckSUB, 15-23, 32's folder,
+ * 33-36, 40 and 249 - answer through rcfs.c (SPEC.md 71.3), and an _error
+ * inside one (Select, R/O, CP/M ERR) leaves rc_errwait for the tail below,
+ * which finishes the erring function by number. */
 static int rc_bdos(void)
 {
     int fn = RC_C();
@@ -543,6 +552,9 @@ errwait:
         rc_cdrive = rc_odrive = rc_rd(RC_DSKBYTE) & 0x0F;
         rc_status = RC_ST_RESTART;
         hl = 0xFF;                            /* _SelectDisk's result */
+        if ((fn == 15 || fn == 16) && rc_errkind == RC_ERR_SELECT)
+            hl = 0x02FF;                      /* _OpenFile/_CloseFile: H =
+                                               * errSELECT (disk.h 359) */
         if (fn == 14) {                       /* DRV_SET's tail (cpm.h 1226) */
             if ((rc_rd(RC_DSKBYTE) & 0x0F) == rc_cdrive) {
                 rc_cdrive = rc_odrive = 0;
@@ -573,8 +585,11 @@ errwait:
     case 3:                                   /* A_READ */
         hl = 0x1A;
         break;
-    case 4:                                   /* A_WRITE: PUN.TXT (wave 4) */
-    case 5:                                   /* L_WRITE: LST.TXT (wave 4) */
+    case 4:                                   /* A_WRITE: A/0/PUN.TXT */
+        rc_fs_capture(0, RC_E());
+        break;
+    case 5:                                   /* L_WRITE: A/0/LST.TXT */
+        rc_fs_capture(1, RC_E());
         break;
     case 6:                                   /* C_RAWIO */
         c = RC_E();
@@ -633,12 +648,14 @@ errwait:
         break;
     case 13:                                  /* DRV_ALLRESET: R/W, no login,
                                                * DMA 0080, drive A; HL =
-                                               * _CheckSUB (wave 4: $$$.SUB) */
+                                               * _CheckSUB - 0xFF when a
+                                               * $-file is on A: (the DRI
+                                               * CCP's batch flag: $$$.SUB) */
         rc_rovec = 0;
         rc_login = 0;
         rc_dma = 0x0080;
         rc_cdrive = 0;
-        hl = 0;
+        hl = ovl_fs_checksub();
         break;
     case 14:                                  /* DRV_SET: _SelectDisk(E+1) -
                                                * the DRIVE's folder exists
@@ -691,12 +708,15 @@ errwait:
     case 31:                                  /* DRV_PDB */
         hl = RC_DPBADDR;
         break;
-    case 32:                                  /* F_USERNUM: get/set (the
-                                               * folder is made in wave 4) */
+    case 32:                                  /* F_USERNUM: get/set - the set
+                                               * is _SetUser: 0-31 as BDOS
+                                               * does, and the user folder
+                                               * MADE for 0-15 (_MakeUserDir,
+                                               * rcfs.c) */
         if (RC_E() == 0xFF)
             hl = rc_user;
         else
-            rc_user = RC_E() & 0x1F;          /* _SetUser: 0-31 as BDOS does */
+            ovl_fs_setuser(RC_E());
         break;
     case 37:                                  /* DRV_RESET */
         rc_rovec &= ~rc_z.de;
@@ -705,11 +725,48 @@ errwait:
     case 39:                                  /* DRV_FREE_MPM */
         hl = 0;
         break;
-    case 15: case 16: case 17: case 18: case 19: case 20: case 21:
-    case 22: case 23: case 33: case 34: case 35: case 36: case 40:
-        hl = 0xFF;                            /* the disk layer is wave 4:
-                                               * not found / error, never a
-                                               * false success */
+    /* --- the disk functions, disk.h through rcfs.c (SPEC.md 71.3): DE =
+     * the FCB, HL = the answer, and an _error inside leaves rc_errwait set
+     * for the tail below --------------------------------------------------- */
+    case 15:                                  /* F_OPEN */
+        hl = ovl_fs_open();
+        break;
+    case 16:                                  /* F_CLOSE */
+        hl = ovl_fs_close();
+        break;
+    case 17:                                  /* F_SFIRST: the entry at DMA */
+        hl = ovl_search_first(rc_z.de, 1);
+        break;
+    case 18:                                  /* F_SNEXT */
+        hl = ovl_fs_snext();
+        break;
+    case 19:                                  /* F_DELETE */
+        hl = ovl_fs_delete();
+        break;
+    case 20:                                  /* F_READ */
+        hl = rc_fs_readseq();
+        break;
+    case 21:                                  /* F_WRITE */
+        hl = rc_fs_writeseq();
+        break;
+    case 22:                                  /* F_MAKE */
+        hl = ovl_fs_make();
+        break;
+    case 23:                                  /* F_RENAME */
+        hl = ovl_fs_rename();
+        break;
+    case 33:                                  /* F_READRAND */
+        hl = rc_fs_readrand();
+        break;
+    case 34:                                  /* F_WRITERAND */
+    case 40:                                  /* F_WRITEZF: as _WriteRand */
+        hl = rc_fs_writerand();
+        break;
+    case 35:                                  /* F_SIZE */
+        hl = ovl_fs_size();
+        break;
+    case 36:                                  /* F_RANDREC */
+        hl = ovl_fs_randrec();
         break;
     /* --- RunCPM's private calls, cpm.h 2038-2135 --------------------------- */
     case 230:                                 /* F_SETMASK: mask8bit */
@@ -736,10 +793,10 @@ errwait:
                        (h << 5) + (h << 4) + (h << 2) + (h << 1) + h) & 0xFFFF;
         }
         break;
-    case 249:                                 /* F_MAKEDISK: wave 4 (rcfs.c
-                                               * makes the folder); until then
-                                               * _sys_makedisk's 'not made' */
-        hl = 0xFE;
+    case 249:                                 /* F_MAKEDISK: _sys_makedisk -
+                                               * <letter> and <letter>/0 below
+                                               * the launch folder (rcfs.c) */
+        hl = ovl_fs_makedisk();
         break;
     case 250:                                 /* F_HOSTOS */
         hl = RC_HOSTOS;
@@ -761,6 +818,11 @@ errwait:
     default:                                  /* unimplemented: HL = 0 */
         break;
     }
+    if (rc_errwait)                           /* a disk function's _error:
+                                               * the wait, then the tail, in
+                                               * this trap if a key is queued
+                                               * (as DRV_SET's above) */
+        goto errwait;
 tail:
     /* CP/M BDOS does this before returning (cpm.h) */
     rc_z.hl = hl;

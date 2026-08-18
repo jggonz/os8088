@@ -414,6 +414,23 @@ unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap)
     return 0;
 }
 
+/* wave 4's file layer (rcfs.c) is exercised by hosttest/rcfstest.c against a
+ * fake folder tree with contents; here the scripts never open a file, so
+ * these stubs exist to LINK and to say so if they are ever reached - except
+ * mkdir, which the USER 1 script reaches (_SetUser -> _MakeUserDir) and which
+ * refuses as a full disk would, so the area stays absent as wave 3's script
+ * expects */
+static int n_mkdir;
+int os88_file_mkdir(const char *name) { n_mkdir++; ferr = OS88_FERR_FULL; return -1; }
+int os88_mem_free(unsigned seg) { printf("HARNESS: os88_mem_free(%04x): not here\n", seg); exit(1); }
+unsigned os88_mem_regrow(unsigned seg, int kb) { printf("HARNESS: os88_mem_regrow: not here\n"); exit(1); }
+int  os88_peek(unsigned seg, unsigned off) { printf("HARNESS: os88_peek: not here\n"); exit(1); }
+void os88_poke(unsigned seg, unsigned off, int value) { printf("HARNESS: os88_poke: not here\n"); exit(1); }
+int os88_file_write_seg(const char *name, unsigned seg, unsigned count) { printf("HARNESS: os88_file_write_seg(%s): not here\n", name); exit(1); }
+int os88_file_delete(const char *name) { printf("HARNESS: os88_file_delete(%s): not here\n", name); exit(1); }
+int os88_file_rename(const char *o, const char *n) { printf("HARNESS: os88_file_rename(%s): not here\n", o); exit(1); }
+void rc_sfill(unsigned seg, unsigned off, int v, unsigned n) { printf("HARNESS: rc_sfill: not here\n"); exit(1); }
+
 void os88_memset(void *p, int c, unsigned n) { memset(p, c, n); }
 void os88_memcpy(void *d, const void *s, unsigned n) { memcpy(d, s, n); }
 unsigned os88_strlen(const char *s) { return (unsigned)strlen(s); }

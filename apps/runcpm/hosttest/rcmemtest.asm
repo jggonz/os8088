@@ -258,8 +258,31 @@ body:
     cmp byte [es:0x1FFF], 0
     jne .f2e
     pop es
+    ; rc_sfill(SEG_FILE, 0x0100, 0x5A, 24): the file claim, not the Z80's
+    mov word [pushes], 4
+    PUSHI 24
+    PUSHI 0x5A
+    PUSHI 0x0100
+    PUSHI SEG_FILE
+    call disc_call
+    dw _rc_sfill
+    push es
+    mov ax, SEG_FILE
+    mov es, ax
+    cmp byte [es:0x0100], 0x5A
+    jne .f2e
+    cmp byte [es:0x0117], 0x5A
+    jne .f2e
+    cmp byte [es:0x0118], 0x5A     ; one past: untouched (QEMU's RAM is 0)
+    je .f2e
+    mov ax, SEG_Z80
+    mov es, ax
+    cmp byte [es:0x0100], 0x5A     ; and NOT the Z80's 0100
+    je .f2e
+    pop es
     ; n = 0: nothing moves
     call zclear
+    mov word [pushes], 3
     PUSHI 0
     PUSHI src
     PUSHI 0x3000

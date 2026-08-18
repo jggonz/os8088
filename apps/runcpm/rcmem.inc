@@ -185,4 +185,22 @@ _rc_zfill:
     pop bp
     ret
 
+; void rc_sfill(unsigned seg, unsigned off, int v, unsigned n) - n bytes of
+; v into ANOTHER claim seg:off (a file's gap written past its end is zeros,
+; SPEC.md 71.3 - the one fill this program makes outside the Z80's RAM)
+_rc_sfill:
+    push bp
+    mov bp, sp
+    push es
+    mov es, [bp+4]                  ; seg
+    mov di, [bp+6]                  ; off
+    mov ax, [bp+8]
+    mov cx, [bp+10]
+    cld
+    rep stosb                       ; cc8086:allow ES = the file's claim,
+                                    ; loaded above and restored below
+    pop es
+    pop bp
+    ret
+
 section .text
