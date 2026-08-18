@@ -1,6 +1,11 @@
 /* ============================================================================
  * os8088 - apps/runcpm/hosttest/rcuitest.c    RUNCPM's terminal, on the host
  *
+ * Part of RUNCPM (SPEC.md 71), a reimplementation of RunCPM 6.9 by Marcelo
+ * Dantas / "Mockba the Borg" (MIT licence, Copyright (c) 2017 Mockba the
+ * Borg): the scripts below expect what RunCPM/cpm.h's C_READSTR, main.c's
+ * banner and disk.h's _error print.
+ *
  * A BUILD-HOST PROGRAM. It never runs on the 8086, it is not in the package,
  * and apps/runcpm/build.sh compiles and runs it BEFORE the target build; a
  * failure stops the build.

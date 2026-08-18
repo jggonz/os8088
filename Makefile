@@ -1920,7 +1920,7 @@ $(BUILD)/cword360.img: $(CWORDDISK) tools/os88disk.py
 $(eval $(call CC_PACKAGE,runcpm,runcpm,RUNCPM.OVL))
 
 # THE REST OF THE TRANSLATION UNIT (SPEC.md 70.1): runcpm.c #includes the
-# parts, and the shim %includes the three hand-written pieces. Every one is a
+# parts, and the shim %includes the three hand-written pieces and the icon. Every one is a
 # written prerequisite because make cannot see through either kind of include
 # - and every file the port plan names is listed from wave 1, stubs included,
 # so no later wave adds a file the build does not know (docs/RUNCPM-PORT-PLAN.md).
@@ -1932,7 +1932,7 @@ RUNCPMHOST := apps/runcpm/build.sh apps/runcpm/hosttest/os88.h \
               apps/runcpm/hosttest/rcmemtest.asm \
               apps/runcpm/hosttest/rcmemtest.sh $(RUNCPMINC)
 $(BUILD)/runcpm.raw.asm: $(RUNCPMSRC) $(BUILD)/.runcpm-hostchecks
-$(BUILD)/runcpm.bin: $(RUNCPMINC)
+$(BUILD)/runcpm.bin: $(RUNCPMINC) apps/runcpm/icon.inc
 
 # ($(RUNCPMINC) is in RUNCPMHOST because rcmemtest.asm %includes rcmem.inc and
 # rcz80.inc: an edit to a mover must re-run the mover harness, and make
@@ -1965,12 +1965,13 @@ runcpm-src: $(BUILD)/runcpm-src.stamp
 # warm-boot path (SPEC.md 71). Emitted here rather than assembled because
 # there is no Z80 assembler in this tree and nine bytes of code are not worth
 # adding one. It is a BUILD ARTIFACT of this tree, not master-disk
-# content, so it rides the ROOT of build/runcpm.img ONLY (the launch folder,
-# where the loader looks after A\0; the wave-2 gate names 'a .COM on
-# build/runcpm.img' and tests/rczex.py boots that image) - never A\0, and
-# never the 720KB/360KB disks: a CP/M user's DIR shows RunCPM's disk and
-# nothing invented here (SPEC.md 71.5; wave 6's curation pass decides
-# whether it stays at all).
+# content, and it ships on NO image (SPEC.md 71.5 - wave 6's curation took
+# it off build/runcpm.img's root, where wave 2's gate had it: a released
+# disk carries RunCPM's files and nothing invented here, in A\0 or beside
+# it). It is still built, for a hand test of the loader's launch-folder
+# path: put it in the root of a SCRATCH copy of an image (tools/os88disk.py)
+# and Alt+L HELLO. tests/rczex.py needs no such row - RUNCPM.O88 is the
+# fifth listed row of the shipping root.
 $(BUILD)/HELLO.COM: | $(BUILD)
 	printf '\016\011\021\011\001\315\005\000\311Hello from the Z80 - RunCPM on os8088\r\n$$' > $@
 
@@ -1986,8 +1987,8 @@ $(BUILD)/HELLO.COM: | $(BUILD)
 # that is a data store rather than a place to browse. Each image is
 # --verify'd, and the verify is what catches a --select that overshot - but
 # --select is told what it is choosing beside: --reserve names the root files
-# (the package, an .OVL if one comes, the CCP, the texts, HELLO.COM on the
-# 1.44MB disk) and prices them in the geometry's own clusters, so the A/0
+# (the package, an .OVL if one comes, the CCP, the texts) and prices them
+# in the geometry's own clusters, so the A/0
 # selection re-shapes itself as the package grows instead of the 360KB
 # build stopping at 'data over capacity'. The selection is a shell
 # substitution INSIDE the recipe, so a --select that fails (no A0.list, a
@@ -2016,8 +2017,8 @@ endef
 
 runcpmdisk: $(BUILD)/runcpm.img $(BUILD)/runcpm720.img $(BUILD)/runcpm360.img
 
-$(BUILD)/runcpm.img: $(RUNCPMDEPS) $(BUILD)/HELLO.COM
-	$(call RUNCPMIMG,$@,1440,$(BUILD)/HELLO.COM)
+$(BUILD)/runcpm.img: $(RUNCPMDEPS)
+	$(call RUNCPMIMG,$@,1440)
 	@python3 tools/os88disk.py --verify $@
 
 $(BUILD)/runcpm720.img: $(RUNCPMDEPS)
@@ -3423,9 +3424,9 @@ $(APPSIMG360): $(APPS) tools/os88disk.py
 # THE EVERYTHING DISK (ON DEMAND: `make allapps`) - SPEC.md 19.9
 # =============================================================================
 # build/apps-all.img: ONE 1.44MB floppy with every application this project
-# ships on it, including the three that have their own disks and therefore
+# ships on it, including the four that have their own disks and therefore
 # never appear on the shipped apps disk - FROTZ (SPEC.md 61), WORD (SPEC.md
-# 65) and CWORD (SPEC.md 70.12). It is a CONVENIENCE, offered beside the
+# 65), CWORD (SPEC.md 70.12) and RUNCPM (SPEC.md 71). It is a CONVENIENCE, offered beside the
 # shipped images on a release page for somebody who wants one disk rather
 # than four, and nothing in the tree boots it by default.
 #
@@ -3434,10 +3435,11 @@ $(APPSIMG360): $(APPS) tools/os88disk.py
 # (SPEC.md 70.1). A clone with nasm and python3 builds every SHIPPED floppy;
 # this one target is the exception, so it is on demand exactly like cworddisk.
 #
-# WHY 1.44MB AND ONLY 1.44MB. The contents are ~430KB. That is not a geometry
-# choice made to be generous - a 720KB or 360KB build of this list simply does
-# not fit, and the shipped disks already cover those machines. So there is one
-# size here and no --size variants to keep in step.
+# WHY 1.44MB AND ONLY 1.44MB. The contents are ~1,050KB with RUNCPM's drive
+# on it (~430KB before). That is not a geometry choice made to be generous - a
+# 720KB or 360KB build of this list simply does not fit, and the shipped disks
+# already cover those machines. So there is one size here and no --size
+# variants to keep in step.
 #
 # THE TREE: each Word gets a FOLDER OF ITS OWN rather than a place in APPS/,
 # and that is a correctness requirement and not tidiness. Both carry an
@@ -3450,11 +3452,37 @@ $(APPSIMG360): $(APPS) tools/os88disk.py
 # FROTZ ships without a story. The stories are fetched by tools/getstories.py
 # and are never committed (SPEC.md 61), so what rides here is the interpreter;
 # `make zdisk` is still where a story disk comes from.
+#
+# RUNCPM (SPEC.md 71.5) rides the same way the Words do - a folder of its own,
+# RUNCPM\, because it too has an .OVL resolved in the launching instance's
+# folder, and the CCP it loads and the CP/M drive A\0 below it are found the
+# same way - and, unlike FROTZ, WITH its disk: the master disk is fetched by
+# tools/getruncpm.py (never committed, the same rule as the stories) and this
+# target acquires the fetch as a prerequisite, which it can because it already
+# needs the C toolchain. The A\0 selection is the 1.44MB one - the whole
+# master disk minus the three files above 65,535 bytes, its LEFT-OFF.TXT
+# saying so - chosen at recipe time exactly as build/runcpm.img's is
+# (RUNCPMIMG's shell substitution and its empty-selection guard), and A\0
+# is a deep folder with the same 128 directory slots. --select is told what
+# it chooses beside: --reserve names EVERY FILE ON THIS DISK (ALLAPPSFILES,
+# the files behind ALLAPPSARGS - not the prerequisite list, which carries
+# tools and a stamp that never ride), and --folders the folder directories
+# the tree above has besides RUNCPM\A\0, one cluster each at 1.44MB's 16
+# entries a cluster - DERIVED from ALLAPPSARGS below (ALLAPPSDIRS: every
+# DIR: prefix, each one's parent, --folder DOCS, and RUNCPM\A, the
+# selection's own parent; ten today: APPS, GAMES, MEDIA, WORD, CWORD,
+# RUNCPM, RUNCPM\A, SYSTEM, SYSTEM\DOS, DOCS), so the budget is derived
+# here as it is for build/runcpm.img, and a folder added to the tree above
+# is priced without anyone remembering a constant. One parent level is
+# taken (the tree nests one deep); a DIR/SUB/SUB2: entry would need its
+# grandparent added by hand.
 ALLAPPSIMG := $(BUILD)/apps-all.img
 
-ALLAPPS := $(APPS) $(BUILD)/frotz.o88 \
-           $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC \
-           $(BUILD)/cword.o88 $(BUILD)/CWORD.OVL $(BUILD)/WELCOME.RTF
+ALLAPPSFILES := $(APPS) $(BUILD)/frotz.o88 \
+                $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC \
+                $(BUILD)/cword.o88 $(BUILD)/CWORD.OVL $(BUILD)/WELCOME.RTF \
+                $(RUNCPMDISK)
+ALLAPPS := $(ALLAPPSFILES) $(RUNCPMDEPS)
 
 ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(BUILD)/frotz.o88) \
                $(addprefix GAMES:,$(APPS_GAMES)) \
@@ -3463,13 +3491,21 @@ ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(BUILD)/frotz.o88) \
                                  $(BUILD)/WELCOME.DOC) \
                $(addprefix CWORD:,$(BUILD)/cword.o88 $(BUILD)/CWORD.OVL \
                                   $(BUILD)/WELCOME.RTF) \
+               $(addprefix RUNCPM:,$(RUNCPMDISK)) \
                $(SYSAPPSARGS) \
                $(addprefix SYSTEM/DOS:,$(APPS_DOS))
+ALLAPPSDIRS := $(sort $(foreach a,$(ALLAPPSARGS),$(firstword $(subst :, ,$a))) \
+                      DOCS RUNCPM/A)
+ALLAPPSDIRS := $(sort $(ALLAPPSDIRS) \
+                      $(patsubst %/,%,$(filter-out ./,$(dir $(ALLAPPSDIRS)))))
+ALLAPPSFOLDERS := $(words $(ALLAPPSDIRS))
 
 allapps: $(ALLAPPSIMG)
 
 $(ALLAPPSIMG): $(ALLAPPS) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(ALLAPPSARGS) --folder DOCS
+	sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select 1440 --dir-slots $(RUNCPMSLOTS) --folders $(ALLAPPSFOLDERS) --reserve $(ALLAPPSFILES) | sed 's,^,RUNCPM/A/0:,')"; \
+	[ -n "$$sel" ] || { echo "allapps: getruncpm.py --select 1440 chose nothing"; exit 1; }; \
+	python3 tools/os88disk.py -o $@ --size 1440 --deep-folders --dir-slots RUNCPM/A/0=$(RUNCPMSLOTS) --folder DOCS $(ALLAPPSARGS) $$sel
 	@python3 tools/os88disk.py --verify $@
 	@echo "allapps: $@ - every app on one 1.44MB floppy; boot the system"
 	@echo "         disk with it in B: (make run RUNAPPS=$@)"

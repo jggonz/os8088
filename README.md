@@ -319,7 +319,7 @@ slot.
 ### A package can also be written in C
 
 The OS itself is assembly and stays that way. But a **package** can be written
-in C, and one is: `apps/cword` — a second reimplementation of **Microsoft Word
+in C, and two are. The first is `apps/cword` — a second reimplementation of **Microsoft Word
 1.1a**, in C this time, with the same nine-menu bar, ribbon, ruler and status
 line as `apps/word` and RTF as its file format. It has both of the product's
 views — Draft, which wraps to the window, and Page, which wraps to the sheet —
@@ -335,6 +335,25 @@ is asked for — the split falling exactly between what a keystroke touches and
 what a menu command touches. When the typefaces went in, that line is what
 moved: the resident half got *smaller* while the program grew a view and a text
 engine.
+
+The second C package is `apps/runcpm` — a reimplementation of
+[RunCPM](https://github.com/MockbaTheBorg/RunCPM) 6.9 (Marcelo Dantas /
+Mockba the Borg, MIT), a **CP/M 2.2 emulator in a window**: a Z80 written in
+8086 assembly running in a 64KB claim of its own, the BDOS and BIOS in C, CP/M
+drives as folders on the floppy (`A\0`, `A\1`, `B\0`…), Digital Research's
+own CCP at the `A>` prompt, and an 80×25 terminal drawn damage-only through a
+glass shadow — one composed row band per changed row, so a keystroke's echo is
+one drawing call. It passes ZEXDOC, the Z80 instruction exerciser, from the
+prompt (`make rczex`), and MBASIC, TE, PIP, SUBMIT and Z80ASM off RunCPM's
+master disk run on it. It is the port that gave the kernel its wake event —
+the emulator runs on the UI task in bounded slices and never blocks, so a
+program waiting for a key costs nothing — and it too spills into a second
+segment, `RUNCPM.OVL`, split by frequency: what a record, a console byte or a
+keystroke touches stays resident, and the per-command half of the disk layer
+goes out. Nothing of RunCPM's is committed: `tools/getruncpm.py` fetches the
+CCP and the master disk at a pinned commit and `make runcpmdisk` builds the
+three floppies from them (the 360KB one curated to the programs and texts,
+with a `LEFT-OFF.TXT` naming what it leaves off).
 
 The compiler is [SmallerC](https://github.com/alexfru/SmallerC) (2-clause
 BSD), pinned to one commit and **fetched rather than vendored** — it is not in
@@ -398,6 +417,7 @@ cleanly and runs wrong when C meets this machine.
 | `build/zork*.img`      | 1.44MB / 720KB / 360KB   | Frotz story floppies (`make zdisk`) |
 | `build/word*.img`      | 1.44MB / 720KB / 360KB   | Microsoft Word floppies (`make worddisk`) |
 | `build/cword*.img`     | 1.44MB / 720KB / 360KB   | Word in C, package + `CWORD.OVL` (`make cworddisk`) |
+| `build/runcpm*.img`    | 1.44MB / 720KB / 360KB   | RunCPM, package + `RUNCPM.OVL` + CP/M drive A (`make runcpmdisk`) |
 
 The boot sector takes its geometry from `-DSPT` / `-DHEADS` at assembly
 time and reads exactly as many sectors as the measured kernel occupies.

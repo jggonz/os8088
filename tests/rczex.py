@@ -15,7 +15,11 @@ port into a package, and what the user sees is the glass - through
 tests/rczex_ocr.py's harvested 8x8 glyphs, until ZEXDOC prints 'Tests
 complete'. Every one of ZEXDOC's groups (its names are string constants in
 the .COM, read from there so the list cannot drift) must read '  OK'; an
-'ERROR' line, an unreadable result, or the timeout fails the gate.
+'ERROR' line, an unreadable result, or the timeout fails the gate. Part of
+RUNCPM, a reimplementation of RunCPM 6.9 by Marcelo Dantas / "Mockba the
+Borg" (MIT licence, Copyright (c) 2017 Mockba the Borg): BANNER below is
+what RunCPM/main.c prints, and ZEXDOC is Frank D. Cringle's exerciser off
+RunCPM's master disk.
 
 ZEXDOC ran ~144 s in the raw-QEMU harness (apps/runcpm/hosttest/rcz80test.sh:
 the same shipping core, no OS around it) and 146 s here (2026-08-17, an
@@ -30,9 +34,9 @@ ZEXALL (undocumented flags too) is `--program ZEXALL`, on demand: it reports
 differences in X/Y that this core does not compute (SPEC.md 71.4).
 
 Coordinates are the 640x480 VGA desktop's: Disk B's icon at (600,100), and
-RUNCPM.O88 the sixth row of the Disk window it opens (rows 16 px apart from
-y = 128: 1STREAD.ME, A, CCP-DR.60K, HELLO.COM, LICENSE, RUNCPM.O88 - the root
-of every RUNCPM disk sorts the same way). The banner rows are then found by glyph
+RUNCPM.O88 the fifth row of the Disk window it opens (rows 16 px apart from
+y = 128: 1STREAD.ME, A, CCP-DR.60K, LICENSE, RUNCPM.O88, then RUNCPM.OVL -
+the root of every RUNCPM disk sorts the same way, and ASSOC.DAT is hidden). The banner rows are then found by glyph
 consistency, not assumed (rczex_ocr.Screen.find_origin).
 """
 import argparse
@@ -136,7 +140,7 @@ def main():
 
     dclick(sock, 600, 100)                           # Disk B
     time.sleep(3)
-    dclick(sock, 170, 208)                           # RUNCPM.O88
+    dclick(sock, 170, 192)                           # RUNCPM.O88
     time.sleep(4)
     mouse_to(sock, 620, 470)                         # off the terminal
     scr = screen(sock, os.path.join(args.shots, "rczex-0.ppm"))

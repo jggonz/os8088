@@ -56,7 +56,10 @@
                                     ; record, a byte punched, a keystroke
                                     ; stay in. First loaded by rc_boot on
                                     ; the first wake, before any folder
-                                    ; move; and NOT (yet): CC_ICON - wave 6
+                                    ; move
+%define CC_ICON "runcpm/icon.inc"   ; RunCPM.ico, 16x16 at 1bpp (SPEC.md 20.2,
+                                    ; 71.5) - crt0 puts it at file offset 32
+                                    ; and checks the length
 
 %include "cc/crt0.asm"              ; the sections, the 32-byte header, the
                                     ; entry and callback trampolines, and the

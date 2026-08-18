@@ -7,7 +7,8 @@
     python3 tools/getruncpm.py -o build/runcpm-disk --select 360 \
                              --reserve build/runcpm.o88 ...   # the A/0 files
                              # a 360KB / 720KB / 1440KB disk carries beside
-                             # the root files named
+                             # the root files named (--folders N: how many
+                             # other folders the disk has; apps-all's ten)
     python3 tools/getruncpm.py -o build/runcpm-disk --from DIR # take the files
                              # from a local checkout of RunCPM at the pin
 
@@ -38,23 +39,43 @@ WHAT LANDS in the output directory:
                      A/0/LEFT-OFF.TXT so the disk says what is missing (as of
                      the pin: Z80ASM.PDF, BDOS.ASM, ZCPR3.ASM)
     A0.list          every extracted file with its size, one per line
+    left-off.list    the files above 65,535 bytes, with their sizes
+    left-off/<KB>/LEFT-OFF.TXT   written by --select: the geometry's own
+                     note (below), which the disk rules put in A/0 in place
+                     of the master folder's
 
 --select prints the A/0 files a given geometry carries, most useful first
 (the texts and submit files - a few KB that make the disk explain itself
 and give SUBMIT.COM something to submit - then the programs, then
 documentation, libraries and sources), stopping when the geometry's cluster
 budget is spent, so the Makefile's disk rules can pass them to os88disk.py
-without a manifest checked in. THE BUDGET IS DERIVED, NOT GUESSED: --reserve
+without a manifest checked in. THE 360KB DISK IS CURATED, NOT MERELY FILLED
+(SPEC.md 71.5): it carries the programs and the texts - every .COM, .SUB,
+.TXT and .ME - and none of the sources, libraries or documentation, so that
+an XT session has room to SAVE (the kernel does not grow a directory and a
+full disk cannot take a $$$.SUB, an MBASIC program or TE's file); the 720KB
+and 1.44MB disks carry the whole master disk. Whatever a geometry leaves off
+is NAMED ON THAT DISK: --select writes the geometry's own LEFT-OFF.TXT
+(<out>/left-off/<KB>/LEFT-OFF.TXT) - the files above 65,535 bytes, every
+submit file whose source this disk lacks (two on 720KB/1.44MB, eleven on
+360KB - only CLEAN.SUB runs there), and every master-disk file this geometry does not carry by policy
+or has no room for, each under its own heading - and prints it in place of
+A/0's, so a CP/M user can TYPE what is missing and why. 1STREAD.ME
+(upstream's, on A/0 and in the root) credits the programs beyond Digital
+Research's distribution. THE BUDGET IS DERIVED, NOT GUESSED: --reserve
 names the root files that ride beside A/0 (the package, its .OVL if one
-comes, the CCP, LICENSE, the read-me, HELLO.COM on the 1.44MB disk) and
+comes, the CCP, LICENSE, the read-me) and
 their sizes are priced in the geometry's own clusters, so the selection
 re-shapes itself as the package grows and the disk build's --verify (still
 the check) is never the first to hear of it; what stays a constant is the
-directory arithmetic os88disk.py does - the folder chain A and A/0's own
-directory (32 bytes an entry, counted as files are chosen) and the one-
-cluster ASSOC.DAT it writes beside every package. Measured at the pin: a
+directory arithmetic os88disk.py does - the disk's other folders (--folders,
+a cluster each; the folder A by default), A/0's own directory (32 bytes an
+entry, counted as files are chosen) and ASSOC.DAT, which is priced by
+os88disk.py's own build_assoc on the packages --reserve names (one cluster
+here, four on apps-all's 22 packages). Measured at the pin: a
 720KB disk and a 1.44MB disk carry all of it; the 360KB one carries every
-.COM, .SUB, .TXT and .ME and a little documentation (SPEC.md 71.5).
+.COM, .SUB, .TXT and .ME and nothing else (52 files, 350/354 clusters;
+SPEC.md 71.5).
 """
 import argparse
 import hashlib
@@ -86,6 +107,11 @@ MAX_FILE = 65535          # a whole file must fit a 16-bit count (SPEC.md 71.3)
 # INFO.TXT and no LEFT-OFF.TXT saying what is missing - which is what an
 # alphabetical .COM fill did to the 360KB disk once.
 CATEGORY = [".TXT", ".ME", ".SUB", ".COM", ".DOC", ".LIB", ".Z80", ".ASM"]
+# ...and the 360KB disk stops after the programs (SPEC.md 71.5): the sources,
+# libraries and documentation stay on the 720KB/1.44MB disks, so the XT disk
+# ships with room to save into instead of full to the last cluster (which is
+# how the wave-4 build shipped - and no session could save on it)
+CURATED = {360: CATEGORY[:4]}
 # a geometry's cluster size and its DATA clusters (tools/os88disk.py's
 # layouts: 354 / 713 / 2,847). What A/0 may take is that minus the root files
 # --reserve names, priced in these clusters, minus the directory arithmetic
@@ -95,10 +121,12 @@ CATEGORY = [".TXT", ".ME", ".SUB", ".COM", ".DOC", ".LIB", ".Z80", ".ASM"]
 # 'in use' exactly (353 / 672 / 1,294 with the 24,848-byte package)
 GEOMETRY = {360: (1024, 354), 720: (1024, 713), 1440: (512, 2847)}
 DIR_ENTRY = 32            # a FAT directory entry
-FIXED_CLUSTERS = 2        # the folder A's own directory (one cluster: '.',
-                          # '..' and '0') and ASSOC.DAT, the one-cluster
-                          # icon/association cache os88disk.py writes in the
-                          # root beside every package (SPEC.md 54.7)
+# ASSOC.DAT, the icon/association cache os88disk.py writes in the root beside
+# the packages (SPEC.md 54.7), is priced by asking os88disk.py itself
+# (assoc_clusters below): one cluster on the RUNCPM disks, whose only package
+# is RUNCPM.O88, four on apps-all's 22. The disk's OTHER folder directories -
+# the folder A above A/0 (one cluster: '.', '..' and '0') on the RUNCPM
+# disks, ten folders on apps-all - are --folders, priced a cluster each
 
 
 def fail(msg):
@@ -188,20 +216,42 @@ def unpack(out, raw):
         kept.append((base, len(data)))
     kept.sort()
     left.sort()
-    # the disk says what is not on it, in its own terms (a CP/M user reads
-    # this with TYPE and has no SPEC.md)
+    text = left_off_text(out, kept, left)
+    write_if_changed(os.path.join(out, "A", "0", "LEFT-OFF.TXT"), text.encode())
+    kept.append(("LEFT-OFF.TXT", len(text)))
+    kept.sort()
+    listing = "".join(f"{base} {size}\n" for base, size in kept)
+    write_if_changed(os.path.join(out, "A0.list"), listing.encode())
+    # what --select's per-geometry note needs without re-reading the zip
+    write_if_changed(os.path.join(out, "left-off.list"),
+                     "".join(f"{b} {s}\n" for b, s in left).encode())
+    return kept, left
+
+
+def left_off_text(out, kept, left, geometry=None, by_policy=(), no_room=()):
+    """The disk says what is not on it, in its own terms (a CP/M user reads
+    this with TYPE and has no SPEC.md): the files above 65,535 bytes, every
+    submit file whose source this disk lacks and - for a geometry that does
+    not carry the whole master disk - what it leaves off (`by_policy`: the
+    curation, `no_room`: the budget) and why."""
     text = ("Files of RunCPM's master disk that are NOT on this disk:\r\n"
             "this port reads and writes whole files and cannot open one\r\n"
             "larger than 65535 bytes, so these are left off.\r\n")
     for base, size in left:
         text += f"  {base:<12} {size:>7} bytes\r\n"
     # ...and the consequence, derived from the disk itself: a submit file
-    # whose command names a left-off SOURCE by its stem (`MAC BDOS` assembles
-    # BDOS.ASM) will not run here. The stem is matched as an OPERAND only -
+    # whose command names a SOURCE that is not on this disk by its stem
+    # (`MAC BDOS` assembles BDOS.ASM, `Z80ASM ABDOS/H` assembles ABDOS.Z80)
+    # will not run here - whether the source is above the size limit or the
+    # geometry left it off. The stem is matched as an OPERAND only -
     # Z80ASM.PDF's stem is also the assembler's name, and `Z80ASM INFO` runs
-    # fine (as of the pin: BDOS.SUB and ZCPR3.SUB)
-    stems = {os.path.splitext(b)[0] for b, _ in left
-             if os.path.splitext(b)[1] in (".ASM", ".Z80", ".MAC")}
+    # fine (as of the pin: BDOS.SUB and ZCPR3.SUB on 720KB/1.44MB, eleven of
+    # the twelve on the curated 360KB disk - only CLEAN.SUB runs there)
+    sources = {}
+    for base, _ in list(left) + list(by_policy) + list(no_room):
+        stem, ext = os.path.splitext(base)
+        if ext in (".ASM", ".Z80", ".MAC"):
+            sources[stem] = base
     broken = []
     for base, _ in kept:
         if not base.endswith(".SUB"):
@@ -214,8 +264,9 @@ def unpack(out, raw):
             if not words or words[0].startswith(";"):
                 continue
             for w in words[1:]:
-                if w.upper() in stems:
-                    hit = w.upper() + ".ASM"
+                w = w.split("/")[0].upper()          # ABDOS/H: the option
+                if w in sources:
+                    hit = sources[w]
                     break
             if hit:
                 break
@@ -225,12 +276,20 @@ def unpack(out, raw):
         text += "\r\n"
         for sub, src in broken:
             text += f"{sub} assembles {src} and will not run on this disk.\r\n"
-    write_if_changed(os.path.join(out, "A", "0", "LEFT-OFF.TXT"), text.encode())
-    kept.append(("LEFT-OFF.TXT", len(text)))
-    kept.sort()
-    listing = "".join(f"{base} {size}\n" for base, size in kept)
-    write_if_changed(os.path.join(out, "A0.list"), listing.encode())
-    return kept, left
+    if by_policy:
+        text += (f"\r\nThis is the {geometry}KB disk: it carries the programs and\r\n"
+                 "the texts and leaves room to save. The rest of the master\r\n"
+                 "disk - sources, libraries, documentation and the ABDOS\r\n"
+                 "images - is on the 720KB and 1.44MB disks:\r\n")
+        for base, size in by_policy:
+            text += f"  {base:<12} {size:>7} bytes\r\n"
+    if no_room:
+        text += (f"\r\nThe {geometry}KB disk has no room for these master-disk files:\r\n")
+        for base, size in no_room:
+            text += f"  {base:<12} {size:>7} bytes\r\n"
+    text += ("\r\n1STREAD.ME (RunCPM's own) credits the programs beyond\r\n"
+             "Digital Research's distribution.\r\n")
+    return text
 
 
 def read_list(out):
@@ -249,24 +308,54 @@ def clusters(size, cbytes):
     return max(1, (size + cbytes - 1) // cbytes)
 
 
-def select(out, geometry, reserve, slots=0):
+def assoc_clusters(reserve, cbytes):
+    """What ASSOC.DAT costs on a disk carrying the packages among `reserve`
+    - os88disk.py's own build_assoc, on the same bytes, so the two cannot
+    disagree (16 bytes + 80 a package + 4 an association; SPEC.md 54.7)."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import os88disk
+    group = []
+    for path in reserve:
+        stem, ext = os.path.splitext(os.path.basename(path))
+        if ext.upper() != ".O88":
+            continue
+        with open(path, "rb") as fh:
+            body = fh.read()
+        group.append((stem.upper().encode().ljust(8)[:8] + b"O88", body, 0))
+    body, _ = os88disk.build_assoc({"": group})
+    return clusters(len(body), cbytes) if body else 0
+
+
+def select(out, geometry, reserve, slots=0, folders=1):
     """The A/0 files a geometry carries, in fill order, beside the root
-    files `reserve` names (paths; their sizes are priced here); A/0's own
+    files `reserve` names (paths; their sizes are priced here) and the
+    `folders` other folder directories on the disk (a cluster each); A/0's own
     directory is priced for at least `slots` entries - the spare ones the
     disk rule asks os88disk.py for with --dir-slots (the kernel does not
     grow a directory, SPEC.md 18.5, so a CP/M session's saves need room
-    that ships with the disk, SPEC.md 71.3)."""
+    that ships with the disk, SPEC.md 71.3). Answers (paths, used, budget):
+    the paths are A/0's files, except that LEFT-OFF.TXT is the GEOMETRY'S
+    OWN - written to <out>/left-off/<KB>/LEFT-OFF.TXT, naming what this
+    disk leaves off - and is priced at its real size."""
     if geometry not in GEOMETRY:
         fail(f"--select wants 360, 720 or 1440, not {geometry}")
     cbytes, total = GEOMETRY[geometry]
     rows = read_list(out)
+    kept = [(b, s) for b, s in rows if b != "LEFT-OFF.TXT"]
+    left = []
+    p = os.path.join(out, "left-off.list")
+    if not os.path.exists(p):               # a cache an older script unpacked
+        fail(f"{p} missing - run tools/getruncpm.py -o {out} first")
+    with open(p) as fh:
+        left = [(b, int(s)) for b, s in (l.split() for l in fh)]
     root = 0
     for path in reserve:
         try:
             root += clusters(os.path.getsize(path), cbytes)
         except OSError as exc:
             fail(f"--reserve {path}: {exc}")
-    budget = total - root - FIXED_CLUSTERS
+    budget = total - root - assoc_clusters(reserve, cbytes) - folders
+    carried = CURATED.get(geometry)         # None: everything, ranked
 
     def rank(row):
         base = row[0]
@@ -278,15 +367,37 @@ def select(out, geometry, reserve, slots=0):
         return clusters(max(2 + nfiles, slots) * DIR_ENTRY, cbytes)   # '.',
                                                             # '..', files
 
-    used, chosen = 0, []
-    for base, size in sorted(rows, key=rank):
-        n = clusters(size, cbytes)
-        if used + n + dir_clusters(len(chosen) + 1) > budget:
-            continue
-        used += n
-        chosen.append(base)
-    used += dir_clusters(len(chosen))
-    return chosen, used, budget
+    # LEFT-OFF.TXT is chosen first and priced at the size it will have,
+    # which depends on what is left off - so choose, write, and if the note
+    # grew past its allowance, choose again with the allowance raised
+    # (converges in a pass or two: the note is a few hundred bytes)
+    note_clusters = 1
+    while True:
+        used, chosen = note_clusters, ["LEFT-OFF.TXT"]
+        by_policy, no_room = [], []      # the two reasons a file is dropped
+        for base, size in sorted(kept, key=rank):
+            n = clusters(size, cbytes)
+            ext = os.path.splitext(base)[1]
+            if carried is not None and ext not in carried:
+                by_policy.append((base, size))
+                continue
+            if used + n + dir_clusters(len(chosen) + 1) > budget:
+                no_room.append((base, size))
+                continue
+            used += n
+            chosen.append(base)
+        used += dir_clusters(len(chosen))
+        by_policy.sort()
+        no_room.sort()
+        text = left_off_text(out, [(b, 0) for b in chosen], left, geometry,
+                             by_policy, no_room)
+        if clusters(len(text), cbytes) <= note_clusters:
+            break
+        note_clusters = clusters(len(text), cbytes)
+    note = os.path.join(out, "left-off", str(geometry), "LEFT-OFF.TXT")
+    write_if_changed(note, text.encode())
+    paths = [note] + [os.path.join(out, "A", "0", b) for b in chosen[1:]]
+    return paths, used, budget
 
 
 def main():
@@ -303,14 +414,19 @@ def main():
     ap.add_argument("--dir-slots", type=int, default=0, metavar="N",
                     help="with --select: price A/0's directory for at least N entries "
                          "(what os88disk.py --dir-slots A/0=N will build)")
+    ap.add_argument("--folders", type=int, default=1, metavar="N",
+                    help="with --select: how many OTHER folder directories the disk "
+                         "has, priced a cluster each (default 1: the folder A "
+                         "above A/0; apps-all has ten)")
     ap.add_argument("--from", dest="src", metavar="DIR",
                     help="a local checkout of RunCPM at the pinned commit to take the files from")
     args = ap.parse_args()
 
     if args.select:
-        chosen, used, budget = select(args.output, args.select, args.reserve, args.dir_slots)
-        for base in chosen:
-            print(os.path.join(args.output, "A", "0", base))
+        chosen, used, budget = select(args.output, args.select, args.reserve,
+                                      args.dir_slots, args.folders)
+        for path in chosen:
+            print(path)
         print(f"getruncpm: {len(chosen)} files, {used} of {budget} clusters "
               f"for A/0 on the {args.select}KB disk (after {len(args.reserve)} "
               f"root files)", file=sys.stderr)

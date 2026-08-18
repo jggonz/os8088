@@ -59,10 +59,20 @@ make covl       #   covl is the OVERLAY gate (§70.14); cword is the
                 #   application — Word 1.1a again, in C, in two segments
                 #   (§70.12). `make clean` SPARES build/cc
                 #   (clean-cc removes it) — it is a pinned upstream instrument
+make runcpm     # RUNCPM (§71), the second C application: RunCPM 6.9 as a
+make runcpmdisk #   windowed CP/M 2.2 emulator — the host checks, then the
+                #   package; then the three floppies, from RunCPM's CCP and
+                #   master disk that `tools/getruncpm.py` fetches at a pinned
+                #   commit (`make runcpm-src`; never committed). `make rczex`
+                #   / `make rcz80test` are the Z80 core's ZEXDOC gates (in the
+                #   OS / in raw QEMU), `make rcmemtest` the movers',
+                #   `make rcbandbench` the row composer's bench
+                #   (PERFORMANCE.md Set 65)
 make allapps  # build/apps-all.img (§19.9): ONE 1.44MB floppy with every app
-              #   on it, Frotz and both Words included, for a release page.
-              #   Needs the C toolchain, so it is on demand like cworddisk —
-              #   it is the only target outside §70 that does
+              #   on it, Frotz, both Words and RunCPM (with its drive A)
+              #   included, for a release page. Needs the C toolchain and
+              #   the RunCPM fetch, so it is on demand like cworddisk —
+              #   it is the only target outside §70/§71 that does
 make clean
 ```
 

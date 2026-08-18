@@ -486,3 +486,48 @@ bar in-window, the empty menu set, greying Undo and Page as facts, the pitch,
 the 12 rows, not touching a shared include, not fixing a pre-existing defect
 outside scope (F8 extend, the dialog-dismiss sliver — reported instead) — was
 decided, done, and written down. That is the ratio to keep.
+
+## 13. What the RunCPM port added
+
+`apps/runcpm` is RunCPM 6.9 (SPEC.md §71), ported across six waves by the
+skill this file belongs to; `docs/RUNCPM-PORT-PLAN.md` carries each wave's
+measured paragraph. What it learned that CWORD had not, one line each:
+
+- **The `.OVL` cannot be loaded from `os88_main`** — there is no instance
+  yet to resolve a module for (CWORD's `cw_doc_clear` rule, §70.14);
+  ordinary file reads CAN, and the CCP and `AUTOEXEC.TXT` are read there.
+  So an `ovl_*` the program needs first is called from the FIRST callback
+  (the first wake here) and its refusal is printed as a fact where the user
+  is looking (`Unable to load RUNCPM.OVL.` / `CPU halted.`), not toasted
+  into a window that is not up.
+- **Announce a long walk under the lock, before it starts.** A first `DIR`
+  of a 77-file folder is seconds on the target; a toast raised under the
+  gfx lock takes §59.4's immediate path (`RunCPM: reading A:0`) and the
+  user knows the machine is not dead.
+- **Toasts under a fullscreen window go to the terminal too.** The bar the
+  toast lands on is under a `WF_FULL` window; every refusal goes through one
+  `rc_say` that toasts AND prints the line on the console while fullscreen.
+- **Measure a band before believing a per-cell guess.** The row composer's
+  first loop was 306 µs a cell (7× the model's ~40) — one bench harness
+  (`tests/rcband`, PERFORMANCE.md Set 65) turned the guess into 173 µs a
+  cell + 860 µs a call, and the flush's whole pacing was re-sized on it.
+- **A file read into a claim lands at a 512-ALIGNED offset**, never at
+  paragraph 10h: SPEC.md §2.1.1's rule, and int 13h error 09h on real
+  hardware whenever the claim's 64KB page boundary fell inside the file —
+  ~13% of ZEXDOC launches — that QEMU's BIOS never showed.
+- **`wm_geom`'s content height is `W_H − TITLE_H − 1`**, not `W_H −
+  TITLE_H`: a window authored `TITLE_H + 200` tall showed 24 rows and a
+  sliver, and the model's 25th row was never on the glass.
+- **Adaptive slicing must count only EXHAUSTED slices.** A slice that ends
+  early (blocked in a console read) counted as "fast", ~30 keystrokes
+  walked the budget to its cap, and the next busy slice was 1.6 s of UI
+  task; the step answers whether the budget was spent and an early end
+  leaves the estimate alone.
+- **A hot counter in the package's bss is a TCG slow path under QEMU** when
+  that page also holds translated code (the per-branch budget decrement was
+  5× on the whole core, in the OS only); keep it in the emulated machine's
+  own memory or in a register — the 8088 is happier too.
+- **A shared name scratch aliases across a refill.** The directory fill used
+  the caller's `rc_n11` and an `F_OPEN` that triggered a refill opened the
+  LAST file walked — exactly the trap the `static` idiom (§70.5) invites;
+  give a walker its own scratch and make the harness refill before an open.

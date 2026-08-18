@@ -50723,7 +50723,8 @@ surface names ONE RunCPM file:
 **Two segments' worth of memory, one 60KB package.** The package itself is
 one translation unit (`runcpm.c` including `rcterm.c`, `rccpm.c`, `rcfs.c`,
 `rcabout.c`) plus three hand-written includes in the shim (`rcz80.inc` the
-Z80 core, `rcmem.inc` the Z80-RAM movers, `rcband.inc` the row composer),
+Z80 core, `rcmem.inc` the Z80-RAM movers, `rcband.inc` the row composer)
+and the icon (`icon.inc`, through `CC_ICON`),
 and its budget is planned at ~42KB image + ~11.5KB bss — AT §70.9's split
 trigger, so the `ovl_*` candidates (About, `_PatchCPM`, the banner and clock
 estimate, ERA/REN/MAKE, the error texts) are named from the first wave and
@@ -50782,8 +50783,16 @@ shims, 20 loading call sites, largest frame 30 — +780 image / +102 bss for
 the panel's strings, its resident close and hit test, `rc_blank_rect`
 (shared with `os88_paint`'s partial expose) and the paused-machine guards;
 the panel's drawing and the counters' toast are module code by the same
-rule. The icon (wave 6) is the growth left. Every later figure replaces this
-one as the waves land.*
+rule. **Wave 6 (the icon, the disks' curation, the documents) is the last
+and measures `image=39412 bss=11689` resident (51,101) + the same
+7,389-byte `RUNCPM.OVL`**, 128 functions, 23 in the module, 55 resident
+shims, 20 loading call sites, largest frame 30 — +64 bytes of image, the
+16×16 icon block at file offset 32 (`icon.inc`, `CC_ICON`), −8 for the
+About panel's shortened line (the review's: "A native reimplementation of
+RunCPM 6.9 for", since the Z80 core is 8086 assembly and "in C" was half
+true), and no other C. That is the shipping figure — 10,339 bytes under
+the 61,440 ceiling and 3,899 under §70.9's 55,000 split trigger, `os88pkg:
+'RUNCPM' entry=+0x0060 image=39412 bss=11689 icon=yes assoc=0`.*
 
 **The Z80 core is hand-written 8086 (`rcz80.inc`, wave 2), and it is the
 only thing that touches Z80 memory per instruction.** `_rc_run(n)` is a cdecl
@@ -50836,7 +50845,7 @@ raw QEMU with SS≠DS (`apps/runcpm/hosttest/rcz80test.sh`, `make rcz80test`:
 every one of the 67 groups OK, **144 s**), and inside os8088 through the
 debug loader with the terminal read off screendumps (`tests/rczex.py`, `make
 rczex`, an 8×8-glyph OCR harvested from the banner and the group names in
-`tests/rczex_ocr.py`; **146 s** from Alt+L to `Tests complete`, 67 of 67 OK — re-measured after the second review at 175–211 s over three runs on a host at load ~2.3, with the raw harness at 155 s the same hour and a control build carrying the previous slice adaptation at 178 s: the host's spread, not the code's); DAA/CPL/
+`tests/rczex_ocr.py`; **146 s** from Alt+L to `Tests complete`, 67 of 67 OK — re-measured after the second review at 175–211 s over three runs on a host at load ~2.3, with the raw harness at 155 s the same hour and a control build carrying the previous slice adaptation at 178 s: the host's spread, not the code's; wave 6's review re-run measured 515–557 s twice with the raw harness at 179 s and a control build of the previous package at 513 s the same hour — the same shape, wider); DAA/CPL/
 SCF/CCF were also probed over every A and H/N/C combination against `cpu1.h`'s
 rule while the core was written. **The Z80's speed on the target is a number
 to MEASURE, not to estimate**: the banner's `Estimated Z80 clock speed` line
@@ -50855,12 +50864,19 @@ the machine delivers here), and the MHz has two decimals (`%u` would print 0
 on the XT) — the stated deviations from `cpu_mhz.h`'s 64-bit method. QEMU on
 this host prints ~157 MHz-equivalent (a fact about the host; the ~32 MHz the
 first build printed was t0 taken in `os88_main`, before the window's first
-paint, and was wrong by that paint). **The 386 and XT figures are PENDING**:
-they are read on 86Box (`make 386-runcpm`; `vm/xt640` with `fdd_02_fn`
-hand-pointed at `build/runcpm360.img`), which is a GUI application the
-review sessions could not drive, and MartyPC needs a Rust toolchain and an
-IBM ROM this host does not have — so **the 8086 slice length is
-UNMEASURED**: `rc_slice_n = 512 << os88_cpu()` is the design's guess at ~50
+paint, and was wrong by that paint). **The 386 and XT figures are PENDING
+at the end of the port (wave 6)**: they are read on 86Box — `make
+386-runcpm`, then in the machine's window double-click Disk B, then
+`RUNCPM.O88`, and read the banner's `Estimated Z80 clock speed` line as it
+prints (the same for the XT with `vm/xt640` and its `fdd_02_fn` hand-pointed
+at `build/runcpm360.img` for the session, the cfg `git checkout`ed after;
+and, while there, a first and second `DIR`, a `TYPE` of a 20KB file and a
+TE full-screen redraw for a visible repaint or a flash) — 86Box is a GUI
+application none of the port's sessions could drive (no assistive access
+for input from an agent), and MartyPC needs a Rust toolchain and an IBM ROM
+this host does not have, so the two readings are the user's to take and to
+write here with the slice constants they justify. Until then **the 8086
+slice length is UNMEASURED**: `rc_slice_n = 512 << os88_cpu()` is the design's guess at ~50
 ms of control transfers on the 8088, the 16,384 cap and 256 floor were sized
 on QEMU, and the adaptation to the ticks is what stands between the guess
 and the machine until the readings are recorded here. C decides around the
@@ -50951,9 +50967,11 @@ SP under the CCP with 0000 on top so a RET warm-boots, an empty command tail)
 processor, and it costs one prompt string. `HELLO.COM` (nine bytes emitted
 by the Makefile: LD C,9 / LD DE / CALL 5 / RET and a string) is the wave's
 first proof; it is a build artifact of this tree, not master-disk content,
-so it rides the image ROOT — the launch folder, where the loader looks after
-`A\0` — and never `A\0` (a CP/M user's DIR shows RunCPM's disk and nothing
-invented here). HALT is BOOT's exit: `cpu1.h` 0x76 sets `Status =
+and it ships on no image (§71.5): wave 2 put it in `build/runcpm.img`'s root
+— the launch folder, where the loader looks after `A\0` — and wave 6's
+review took it off, since a released disk shows RunCPM's files and nothing
+invented here; it is still built as `build/HELLO.COM` for a scratch-image
+test of that path. HALT is BOOT's exit: `cpu1.h` 0x76 sets `Status =
 STATUS_EXIT` exactly as BIOS BOOT does, so `main.c`'s "\r\n" and exit path
 follow for both, and the one deviation is that the fact is toasted (`RunCPM:
 CPU halted`, §71.4); WBOOT/BDOS 0/^C/a disk error end the program and lap
@@ -51486,9 +51504,11 @@ geometry, and `getruncpm.py --select --dir-slots 128` prices the same clusters
 so the fill cannot overflow the disk (1.44MB: 8 clusters, 720KB/360KB: 4). A
 user folder made by `USER n` or a drive made by BDOS 249 is one cluster like
 every folder the OS makes: 14 files on a 512-byte-cluster disk (1.44MB), 30 on
-a 1KB one — stated here, not hidden. **The 360KB disk ships full** (354/354
-clusters) — a session cannot save on it until wave 6's curation leaves room,
-which is that wave's call.
+a 1KB one — stated here, not hidden. **The 360KB disk shipped full in wave 4**
+(354/354 clusters — a session could not save on it); wave 6 curated it to
+the programs and the texts (§71.5), and it ships at 350/354 with 4KB free —
+`pip test.txt=info.txt` and `type test.txt` on it are
+`build/port-shots/wave6-360-pip.png`.
 
 The CCP is `CCP-DR.60K`, loaded once at launch from the launch folder — before
 any folder move, like the `.OVL` — into a 2KB claim and copied to 0xE400 on
@@ -51596,48 +51616,101 @@ Package `RUNCPM`, directory `apps/runcpm/`, images `build/runcpm.img` /
 `runcpm720.img` / `runcpm360.img` (each `--verify`'d), 86Box machine
 `vm/386-runcpm` (a copy of `vm/386-c-word` with the B: image and uuid
 changed), on `apps-all.img` as a folder of its own `RUNCPM\` (§19.9 — the
-CCP, and the `.OVL` if it exists, must sit beside the package). **Nothing
+CCP, the `.OVL` and drive `A\0` must sit beside the package, below). **Nothing
 third-party is committed** (CONTRIBUTING.md §6): `tools/getruncpm.py`
 fetches RunCPM at the pinned commit at build time (`make runcpm-src`, the
 stamp `build/runcpm-src.stamp`) — `CCP/CCP-DR.60K`, `LICENSE`,
 `DISK/1STREAD.ME` and `DISK/A0.zip`, every artifact's SHA-256 checked, the
 master disk unpacked into `build/runcpm-disk/A/0` MINUS the three files above
 65,535 bytes, which `A/0/LEFT-OFF.TXT` names on the disk — the way
-`tools/getstories.py` fetches Frotz's stories, and the disk rules (and, from
-wave 6, `allapps`) depend on its stamp. **Each floppy** carries `RUNCPM.O88`,
-`RUNCPM.OVL` (from wave 4's split — beside the package, where `cc_ovneed`
-resolves it, §70.14), `CCP-DR.60K`, `LICENSE` and `1STREAD.ME` in its root
-(`build/runcpm.img` also `HELLO.COM`, below) and drive A user 0 as
+`tools/getstories.py` fetches Frotz's stories, and the disk rules and
+`allapps` depend on its stamp. **Each floppy** carries `RUNCPM.O88`
+(with its embedded 16×16 icon, `apps/runcpm/icon.inc` — RunCPM's own,
+`RunCPM/RunCPM.ico`, the one 16×16 image in it, transcribed pixel for
+pixel: a two-row window strip with its close box over a dark field carrying
+a large green `A>`; read at 1bpp — field and strip black, glyph and close
+box white — so it is the same picture on every adapter, with one stated
+deviation, a white row between strip and field where the colour edge was,
+§20.2), `RUNCPM.OVL`
+(from wave 4's split — beside the package, where `cc_ovneed` resolves it,
+§70.14), `CCP-DR.60K`, `LICENSE` and `1STREAD.ME` in its root
+and drive A user 0 as
 far as the geometry holds it, chosen at recipe time by `getruncpm.py --select
 <kb>` — the texts and submit files first (they are ~18 clusters and make
 the disk explain itself), then the programs, then documentation, libraries
 and sources; **the cluster budget is DERIVED, not a constant**: the recipe
 passes `--reserve` with the root files that ride beside `A/0` (the package,
-the `.OVL` if one comes, the CCP, LICENSE, the read-me — and `HELLO.COM` on
-the 1.44MB disk alone: a 49-byte build artifact of this tree (nine bytes of
-Z80 and a 40-byte message), not RunCPM's, which the wave-2 gate names as "a .COM on `build/runcpm.img`" and
-`tests/rczex.py` boots; it rides no other geometry, and wave 6's curation
-decides whether it stays), their sizes are priced in the geometry's own
+the `.OVL`, the CCP, LICENSE, the read-me — and nothing of this tree's:
+`HELLO.COM`, the 49-byte hand-assembled hello wave 2's gate loaded from the
+root of `build/runcpm.img`, is still built (`build/HELLO.COM`, for a hand
+test of Alt+L's launch-folder path on a scratch image) and ships on no
+image, since wave 6's review: a released disk carries RunCPM's files and
+nothing invented here, beside `A\0` as much as in it; `tests/rczex.py`
+finds `RUNCPM.O88` at the fifth listed row of the root without it), their
+sizes are priced in the geometry's own
 clusters, and what stays constant is `os88disk.py`'s own directory
-arithmetic (the folder `A`'s cluster, `A/0`'s directory at 32 bytes an
-entry counted as files are chosen, and the one-cluster `ASSOC.DAT` written
-beside every package) — checked: the arithmetic reproduces `--verify`'s
+arithmetic (the disk's other folder directories at a cluster each —
+`--folders`, default 1: the folder `A` — `A/0`'s directory at 32 bytes an
+entry counted as files are chosen, and `ASSOC.DAT`, priced by `os88disk.py`'s
+own `build_assoc` on the packages `--reserve` names: one cluster here, four
+on `apps-all.img`'s 22 packages) — checked: the arithmetic reproduces `--verify`'s
 "in use" exactly on all three images, so the 360KB disk re-selects itself as
 the package grows and never stops at "data over capacity" first — and no
-manifest is checked in. Measured at the pin (`A0.zip` holds 79 files; 3 are
-above 65,535 bytes; `A/0` is the 76 that remain + `LEFT-OFF.TXT` = 77, and
-`LEFT-OFF.TXT` also names, derived from the `.SUB` files themselves, the two
-submit files that assemble a left-off source — `BDOS.SUB`, `ZCPR3.SUB` — and
-will not run): **1.44MB and 720KB carry all 77; 360KB carries 55 — every one
-of the 37 .COM, the 12 .SUB, `INFO.TXT`, `LEFT-OFF.TXT` and `1STREAD.ME`,
-then `MLOAD.DOC`, `BDOSEQU.LIB` and `CONSOLE7.Z80` as far as the 299 clusters
-go** — 84 / 83 / 61 files by `os88disk.py --verify`'s count with the root's
-five (the package, the `.OVL`, the CCP, LICENSE, 1STREAD.ME) plus `HELLO.COM`
-and `ASSOC.DAT`, 1,337 of 2,847 / 693 of 713 / 354 of 354 clusters (wave 4's
-count with the 38,576-byte package and its 6,155-byte module — wave 2's
-24,848-byte package left the 360KB disk 62 files and 319 clusters for `A/0`,
-`--reserve` re-shaped the selection by itself, seven sources and three
-libraries fewer; wave 6 curates). **A/0
+manifest is checked in. **The 360KB disk is CURATED, not merely filled
+(wave 6):** it carries the programs and the texts — every `.COM`, `.SUB`,
+`.TXT` and `.ME` — and none of the sources, libraries or documentation, so
+that an XT session has room to save into (the kernel does not grow a
+directory and a disk full to its last cluster, which is how wave 4's 360KB
+build shipped, cannot take a `$$$.SUB`, an MBASIC program or TE's file);
+the 720KB and 1.44MB disks carry the whole master disk. **Whatever a
+geometry leaves off is named ON THAT DISK:** `--select` writes the
+geometry's own `LEFT-OFF.TXT` (`build/runcpm-disk/left-off/<kb>/`) in place
+of `A/0`'s — the three files above 65,535 bytes, every submit file whose
+source this disk lacks (derived from the `.SUB` contents against what is
+off the disk, size limit and curation alike: two on 720KB/1.44MB —
+`BDOS.SUB`, `ZCPR3.SUB` — and eleven of the twelve on 360KB, whose `.Z80`
+and `.ASM` sources are curated off; only `CLEAN.SUB`, which assembles
+nothing, still runs there), the master-disk files this
+geometry does not carry, under two headings — by policy (the curation) and
+for want of room (the budget) — and that `1STREAD.ME` (RunCPM's own, on
+`A/0` and in the root, unedited) credits the programs beyond Digital
+Research's distribution — priced at its real size (the note re-selects
+until it fits its own allowance), so a CP/M user can `TYPE` what is
+missing (`TYPE` and PIP read it; TE.COM will not open `LEFT-OFF.TXT` —
+`Can't open` — while it opens `LEFTOFF.TXT`, PIP's copy of it, and `TYPE`
+and PIP open the dashed name through the same `F_OPEN`: the refusal is
+upstream of the BDOS call, in TE.COM's own handling of the name, which
+ships as a binary on the master disk and was not read).
+Measured at the pin (`A0.zip` holds 79 files; 3 are above 65,535 bytes;
+`A/0` is the 76 that remain + `LEFT-OFF.TXT` = 77): **1.44MB and 720KB
+carry all 77 (`ABDOS.60K`/`.64K` included, ranked last); 360KB carries 52 —
+every one of the 37 `.COM`, the 12 `.SUB`, `INFO.TXT`, `1STREAD.ME` and its
+own `LEFT-OFF.TXT` — with 4 clusters (4KB) free for the session's saves** —
+83 / 83 / 58 files by `os88disk.py --verify`'s count with the root's
+five (the package, the `.OVL`, the CCP, LICENSE, 1STREAD.ME) plus
+`ASSOC.DAT`, 1,339 of 2,847 / 695 of 713 / 350 of 354
+clusters (wave 6's count with the 39,412-byte package and its 7,389-byte
+module; wave 4's 360KB disk carried 55 files at 354/354 — three sources
+and libraries filled it to the last cluster and no session could save —
+and wave 2's 24,848-byte package left it 62 files: `--reserve` re-shaped
+the selection by itself each time). **`apps-all.img` (§19.9) carries the
+same package as a folder of its own, `RUNCPM\`** — the package, the
+`.OVL`, the CCP, LICENSE, 1STREAD.ME and `A\0` below it, the 1.44MB
+selection (all 77) chosen at recipe time exactly as `build/runcpm.img`'s
+is — `--reserve` names every file on the disk (`ALLAPPSFILES`, the files
+behind the disk's arguments, not the prerequisite list) and `--folders`
+the folder directories the tree has besides `RUNCPM\A\0`, a cluster each
+— `ALLAPPSFOLDERS`, counted by make from the disk's arguments (every `DIR:`
+prefix, its parent, `--folder DOCS` and `RUNCPM\A`; ten today), not a
+constant beside them — so this budget too is derived and reproduces
+`--verify`'s "in use" exactly
+(2,847 − 1,865 = 982 = 2,212 − 1,230) — `A\0` a deep folder with the same 128
+directory slots; `make allapps`
+therefore acquires `tools/getruncpm.py`'s stamp as a prerequisite, which it
+can because it already needs the C toolchain — 112 files in 11 folders,
+2,212 of 2,847 clusters, booted to `A>` from `RUNCPM\` (the `.OVL` and the
+CCP resolve in the launch folder, and so does `A\0`: wave 6's
+`build/port-shots/wave6-all-a-prompt.png`). **A/0
 holds more entries than the Disk window's
 32-entry listing cap** (§19): that is a DISPLAY cap — `OSAPI_FILE_FIND` and
 every name-taking cell walk the whole folder — and `tools/os88disk.py

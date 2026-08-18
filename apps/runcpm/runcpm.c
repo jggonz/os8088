@@ -39,7 +39,8 @@
  *               (SPEC.md 71.3)
  *   rcabout.c   the About panel (SPEC.md 71.4)
  *
- * and the shim (runcpm.asm) %includes rcz80.inc, rcmem.inc and rcband.inc.
+ * and the shim (runcpm.asm) %includes rcz80.inc, rcmem.inc and rcband.inc,
+ * and icon.inc through CC_ICON (the 16x16 terminal icon, SPEC.md 71.5).
  *
  * WHAT WAVES 2 AND 3 ARE. The Z80 (rcz80.inc), the movers (rcmem.inc), the
  * slice driver in os88_onwake, the boot state machine - the banner, the
