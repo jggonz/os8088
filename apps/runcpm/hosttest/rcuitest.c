@@ -53,6 +53,9 @@ static char gl_ch[GH][GW];       /* the character a call left in the cell
 static unsigned char gl_rev[GH][GW];
 
 static int n_run, n_blit, n_scroll, n_fill, n_blit_refused;
+static int n_frame;              /* gfx_frame calls: FOUR fills each in the
+                                  * kernel (two hlines, two vlines, SPEC.md
+                                  * 11.95.2), priced so */
 static int n_cells;              /* every cell put down, by any primitive */
 static int n_run_cells;          /* ...of which font_run lettered */
 static int n_blit_cells;         /* ...and blit1 emitted from a band */
@@ -71,11 +74,11 @@ static void gclear(void)
 
 static void callreset(void)
 {
-    n_run = n_blit = n_scroll = n_fill = n_blit_refused = 0;
+    n_run = n_blit = n_scroll = n_fill = n_blit_refused = n_frame = 0;
     n_cells = n_run_cells = n_blit_cells = n_scroll_rows = n_fill_rows = 0;
 }
 
-static int calls(void) { return n_run + n_blit + n_scroll + n_fill; }
+static int calls(void) { return n_run + n_blit + n_scroll + n_fill + n_frame * 4; }
 
 /* --- the fake window ------------------------------------------------------ */
 static int cont_x = 8, cont_y = 38, cont_w = 640, cont_h = 200;
@@ -119,6 +122,17 @@ void os88_gfx_fill(int x1, int y1, int x2, int y2)
                 gl_rev[y][c] = 0;
             }
     (void)x;
+}
+
+/* a frame is four 1-pixel fills; the fake glass is cell-atomic and cannot
+ * hold a line, so it counts and draws nothing - what matters to the audit is
+ * that the close's fill covers every cell a frame touched, and it does: the
+ * frames are inside the panel's rectangle */
+void os88_gfx_frame(int x1, int y1, int x2, int y2)
+{
+    need_lock("gfx_frame");
+    n_frame++;
+    (void)x1; (void)y1; (void)x2; (void)y2;
 }
 
 int os88_gfx_scroll(int x1, int y1, int x2, int y2, int dy)
@@ -639,8 +653,8 @@ static void expose(void)
 
 /* --- the cost table ------------------------------------------------------- */
 struct cost { const char *what; int calls, cells, scrolls, blits, runs, fills;
-              int run_cells, blit_cells, scroll_rows, fill_rows, fill_w; };
-static struct cost costs[20];
+              int run_cells, blit_cells, scroll_rows, fill_rows, fill_w, frames; };
+static struct cost costs[32];
 static int ncosts;
 static void cost(const char *what)
 {
@@ -649,6 +663,7 @@ static void cost(const char *what)
     c->scrolls = n_scroll; c->blits = n_blit; c->runs = n_run; c->fills = n_fill;
     c->run_cells = n_run_cells; c->blit_cells = n_blit_cells;
     c->scroll_rows = n_scroll_rows; c->fill_rows = n_fill_rows; c->fill_w = fill_w;
+    c->frames = n_frame;
 }
 
 /* THE MODEL of what the target pays - calls and cells are exact, the ms
@@ -681,6 +696,7 @@ static double model_ms(const struct cost *c)
     us += (double)c->blits * US_BAND_CALL + (double)c->blit_cells * US_BAND_CELL;
     us += (double)c->scrolls * 756 + (double)c->scroll_rows * US_SCROLL_ROW;
     us += (double)c->fills * 756 + (double)c->fill_rows * (US_FILL_ROW + 0.28 * c->fill_w);
+    us += (double)c->frames * 4 * 756;      /* four 1-px fills each */
     return us / 1000.0;
 }
 static void print_costs(void)
@@ -1592,6 +1608,84 @@ static void run_all(int cols_geom, int rows_geom, int table)
     audit("full expose");
     if (table) cost("full expose repaint of the TE screen");
 
+    /* THE ABOUT PANEL (rcabout.c, SPEC.md 71.4) over the full TE screen:
+     * the kernel's 'About RunCPM' item dispatches os88_about under the lock;
+     * the panel is one fill, two frames, a band per label, the button; the
+     * machine is PAUSED while it is up (no slice, no wake, no flush - a
+     * byte put into the model meanwhile stays there); Esc / Enter / space /
+     * a click on OK take it down; any other key or click is swallowed, Alt+F
+     * refused; the close is the panel's rectangle as damage - ONE fill and
+     * one band per row the panel covered, never the whole screen - and the
+     * machine kicked back. The audit runs only when the panel is down: while
+     * it is up the glass is deliberately not the terminal's. */
+    if (vis_rows() == 25 || vis_rows() == 17) {
+        int calls_open, w0;
+        rc_mode = RC_M_RUN;
+        callreset();
+        lock_depth = 1; os88_about(win); lock_depth = 0;
+        if (!rc_abt) { printf("FAIL: About did not open\n"); fails++; }
+        calls_open = calls();
+        if (n_fill != 2 || n_frame != 4 || n_blit != 8 || n_run != 0) { printf("FAIL: the About panel cost %d fills / %d frames / %d bands / %d runs, wanted 2 / 4 / 8 / 0\n", n_fill, n_frame, n_blit, n_run); fails++; }
+        /* twelve rows: the OK button's bottom (its box is y-3..y+10) inside
+         * the panel, and the panel inside the content box - on every
+         * geometry, the 17-row CGA one included (LESSONS.md 8) */
+        if (rc_ab_by + 10 > rc_ab_y + rc_ab_h - 2 || rc_ab_y + rc_ab_h > cont_y + cont_h - 1 || rc_ab_x + rc_ab_w > cont_x + cont_w - 1 || rc_ab_x < cont_x || rc_ab_y < cont_y) { printf("FAIL: About: OK at y %d..%d, panel %d..%d, content %d..%d - a control off the panel\n", rc_ab_by - 3, rc_ab_by + 10, rc_ab_y, rc_ab_y + rc_ab_h, cont_y, cont_y + cont_h - 1); fails++; }
+        if (rc_ab_x & 7) { printf("FAIL: About: the panel's x %d is not on a byte boundary\n", rc_ab_x); fails++; }
+        if (table) cost("About: the panel (fill, frames, 8 bands, OK)");
+        /* paused: a wake runs nothing, posts nothing, flushes nothing; a
+         * byte fed meanwhile waits in the model */
+        w0 = wakes_posted; callreset();
+        feed("\033[24;70Hpaused");
+        wake();
+        if (calls() != 0 || wakes_posted != w0 || n_rc_run != 0 + n_rc_run) { printf("FAIL: About up: a wake cost %d calls, posted %d\n", calls(), wakes_posted - w0); fails++; }
+        { int nr = n_rc_run; wake(); if (n_rc_run != nr) { printf("FAIL: About up: the wake ran a slice\n"); fails++; } }
+        /* keys and clicks: swallowed, except the ones that press OK; Alt+F
+         * refused */
+        rc_khead = rc_ktail = 0;
+        lock_depth = 1; os88_onkey('x', 0x2D, win); os88_onkey(0, 0x21, win); lock_depth = 0;
+        if (rc_khead != rc_ktail) { printf("FAIL: About up: a key reached the ring\n"); fails++; }
+        if (fullscreen || !rc_abt) { printf("FAIL: About up: Alt+F was not refused (fs %d abt %d)\n", fullscreen, rc_abt); fails++; }
+        lock_depth = 1; os88_onclick(rc_ab_x + 3, rc_ab_y + 3, win); lock_depth = 0;
+        if (!rc_abt) { printf("FAIL: About: a click on the panel's frame closed it\n"); fails++; }
+        /* Esc: the close - fill + the rows under the panel, then the audit
+         * finds model == glass == shadow again, and the machine is kicked */
+        callreset(); w0 = wakes_posted;
+        lock_depth = 1; os88_onkey(27, 0x01, win); lock_depth = 0;
+        if (rc_abt) { printf("FAIL: About: Esc did not close it\n"); fails++; }
+        audit("about closed (Esc)");
+        expect_row("about closed", 23, "Row 23 of a document being edited in TE, seventy-nine columns of textpaused.");
+        {   /* the rows the panel covered, plus the row written while it was
+             * up and the cursor's row: nothing else */
+            int rows_under = (rc_ab_y + rc_ab_h - cont_y) / 8 - (rc_ab_y - cont_y) / 8 + 1;
+            if (n_fill != 1 || n_scroll != 0 || n_blit > rows_under + 2 || n_blit < rows_under - 1) { printf("FAIL: About's close cost %d fills / %d bands / %d scrolls over %d rows under it, wanted 1 / ~%d / 0\n", n_fill, n_blit, n_scroll, rows_under, rows_under); fails++; }
+            if (n_fill_rows != rc_ab_h + 1) { printf("FAIL: About's close filled %d rows, wanted the panel's %d - a full repaint?\n", n_fill_rows, rc_ab_h + 1); fails++; }
+        }
+        if (wakes_posted != w0 + 1) { printf("FAIL: About's close did not kick the paused machine\n"); fails++; }
+        if (table) cost("About: Esc (the panel's rect as damage)");
+        /* the click on OK, and Enter, do the same */
+        lock_depth = 1; os88_about(win); lock_depth = 0;
+        callreset();
+        lock_depth = 1; os88_onclick(rc_ab_bx + 20, rc_ab_by + 3, win); lock_depth = 0;
+        if (rc_abt) { printf("FAIL: About: a click on OK did not close it\n"); fails++; }
+        audit("about closed (OK)");
+        if (n_fill != 1) { printf("FAIL: About's OK click cost %d fills\n", n_fill); fails++; }
+        lock_depth = 1; os88_about(win); lock_depth = 0;
+        lock_depth = 1; os88_onkey(13, 0x1C, win); lock_depth = 0;
+        if (rc_abt) { printf("FAIL: About: Enter did not close it\n"); fails++; }
+        audit("about closed (Enter)");
+        /* a kernel repaint while the panel is up draws the panel again over
+         * the exposed terminal, from the live geometry */
+        lock_depth = 1; os88_about(win); lock_depth = 0;
+        callreset();
+        expose();
+        if (!rc_abt || n_frame != 4) { printf("FAIL: About: a whole repaint did not redraw the panel (%d frames)\n", n_frame); fails++; }
+        lock_depth = 1; os88_onkey(27, 0x01, win); lock_depth = 0;
+        audit("about closed after expose");
+        wake();
+        rc_mode = RC_M_IDLE;
+        (void)calls_open;
+    }
+
     /* Alt+F: the latch paints us whole INSIDE the slot (the stub does what
      * wm_fullscreen does), and the flush that follows must find nothing to
      * do - the shadow describes the new glass. Both directions. */
@@ -1684,6 +1778,47 @@ static void run_all(int cols_geom, int rows_geom, int table)
     if (calls() != 0) { printf("FAIL: an overrun cost %d calls\n", calls()); fails++; }
     if (rc_bells != 0) { printf("FAIL: the overrun bell was not serviced\n"); fails++; }
     rc_khead = rc_ktail = 0;
+
+    /* A 40KB TYPE (docs/RUNCPM-PORT-PLAN.md wave 5): 512 lines of 78
+     * characters put out three lines a slice - the pacing the target's slice
+     * length gives a TYPE loop (~2 control transfers a byte, a few hundred
+     * bytes a slice on the 8088) - and flushed once a slice. Nothing may
+     * repaint more than it changed: ONE scroll and ONE fill of the vacated
+     * strip per flush (never per line, never a full-content fill), the
+     * three text rows and the cursor's row as bands - 6 calls a slice, 2 a
+     * line - and the coalescing holds for the whole file: scrolls == flushes
+     * <= lines. QEMU puts hundreds of lines in a slice and gets one scroll
+     * for all of them; the count is what SPEC.md 71.2 states. */
+    feed("\033[2J\033[H");
+    wake();
+    rc_mode = RC_M_IDLE;
+    callreset();
+    {
+        int ln, flushes = 0, bytes = 0, full_fills = 0;
+        for (ln = 0; ln < 512; ln++) {
+            sprintf(line, "%03d: the quick brown fox jumps over the lazy dog - forty kilobytes of it......\r\n", ln);
+            feed(line);
+            bytes += (int)strlen(line);
+            if (ln % 3 == 2) {
+                int f0 = n_fill_rows;
+                wake();
+                flushes++;
+                if (n_fill_rows - f0 >= vis_rows() * 8) full_fills++;
+            }
+        }
+        wake();
+        audit("40KB TYPE");
+        expect_row("40KB TYPE last", 23, "511: the quick brown fox jumps over the lazy dog - forty kilobytes of it......");
+        if (bytes < 40000) { printf("FAIL: the TYPE fixture is %d bytes, not 40KB\n", bytes); fails++; }
+        /* the first flushes fill the screen without scrolling (rows 0..23
+         * of a 25-row window); every one after scrolls ONCE */
+        if (n_scroll > 512) { printf("FAIL: 40KB TYPE: %d scrolls for 512 lines - more than one a line\n", n_scroll); fails++; }
+        if (n_scroll < flushes - 8) { printf("FAIL: 40KB TYPE: %d scrolls for %d flushes - lines drawn instead of scrolled\n", n_scroll, flushes); fails++; }
+        if (full_fills != 0) { printf("FAIL: 40KB TYPE: %d full-content fills - a full repaint\n", full_fills); fails++; }
+        if (n_fill > flushes) { printf("FAIL: 40KB TYPE: %d fills for %d flushes\n", n_fill, flushes); fails++; }
+        if (calls() > 512 * 2 + 4 * flushes) { printf("FAIL: 40KB TYPE: %d calls for 512 lines / %d flushes - more than a scroll, a fill, the rows and the cursor per flush\n", calls(), flushes); fails++; }
+        if (table) cost("40KB TYPE: 512 lines, 3 a slice (171 flushes)");
+    }
 }
 
 /* a disk without CCP-DR.60K: the launch is not refused (the claims were had);

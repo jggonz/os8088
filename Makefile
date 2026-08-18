@@ -1960,10 +1960,11 @@ runcpm-src: $(BUILD)/runcpm-src.stamp
 
 # HELLO.COM - the hand-assembled Z80 hello the wave-2 gate loads with the
 # debug key (docs/RUNCPM-PORT-PLAN.md): LD C,9 / LD DE,0109h / CALL 5 / RET,
-# then the string; the RET goes to the 0000 the loader put on the stack, so
-# it also exercises the warm-boot path (SPEC.md 71). Emitted here rather than
-# assembled because there is no Z80 assembler in this tree and nine bytes are
-# not worth adding one. It is a BUILD ARTIFACT of this tree, not master-disk
+# then the string - 49 bytes: nine of Z80 and a 40-byte message; the RET
+# goes to the 0000 the loader put on the stack, so it also exercises the
+# warm-boot path (SPEC.md 71). Emitted here rather than assembled because
+# there is no Z80 assembler in this tree and nine bytes of code are not worth
+# adding one. It is a BUILD ARTIFACT of this tree, not master-disk
 # content, so it rides the ROOT of build/runcpm.img ONLY (the launch folder,
 # where the loader looks after A\0; the wave-2 gate names 'a .COM on
 # build/runcpm.img' and tests/rczex.py boots that image) - never A\0, and

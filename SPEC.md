@@ -50697,8 +50697,9 @@ that is hand-written 8086; what cannot carry is present and greyed with the
 fact that greys it (§47).** Nothing from RunCPM is vendored (CONTRIBUTING.md
 §6): every file that carries derived tables, strings or behaviour cites the
 RunCPM file in its header and carries the MIT attribution, and so does the
-About box (wave 5; until it exists the kernel's `About RunCPM` item toasts
-the product, version and author). The design record is
+About box (§71.4: the kernel's `About RunCPM` item, `OSAPI_ABOUT_SET`, opens
+`rcabout.c`'s panel — the product, `main.c`'s banner line, what this port
+is, `LICENSE`'s copyright line, OK). The design record is
 `docs/RUNCPM-PORT-PLAN.md`.
 
 **Where the behaviour comes from — the authority table.** Every user-visible
@@ -50774,9 +50775,15 @@ launch folder like the CCP; `ovl_patch_cpm` answers 1, and a 0 — no heap, no
 file, a stale module, each toasted by `cc_ovneed` — stops the machine with
 `Unable to load RUNCPM.OVL.` / `CPU halted.` on the terminal, the window kept
 up as for a missing CCP; every later `ovl_*` call therefore finds the module
-in. The About panel (wave 5) and the icon (wave 6) are the growth left, both
-module code by the same rule. Every later figure replaces this one as the
-waves land.*
+in. **Wave 5 (the About panel, the flush counters key, the panel-as-damage
+close, the 642-px window) measures `image=39356 bss=11689` resident (51,045)
++ a 7,389-byte `RUNCPM.OVL`**, 128 functions, 23 in the module, 55 resident
+shims, 20 loading call sites, largest frame 30 — +780 image / +102 bss for
+the panel's strings, its resident close and hit test, `rc_blank_rect`
+(shared with `os88_paint`'s partial expose) and the paused-machine guards;
+the panel's drawing and the counters' toast are module code by the same
+rule. The icon (wave 6) is the growth left. Every later figure replaces this
+one as the waves land.*
 
 **The Z80 core is hand-written 8086 (`rcz80.inc`, wave 2), and it is the
 only thing that touches Z80 memory per instruction.** `_rc_run(n)` is a cdecl
@@ -51197,11 +51204,16 @@ the cost table and asserts its rows; the measured table below is the
 authority, and every number in it is what `hosttest/rcuitest.c` prints.
 
 **In a framed window a 640-px screen shows 79 of 80 columns and CGA shows 17
-of 25 rows** — facts of the window frame (measured, wave 1: the 640-wide
-window is flush with the screen, so its content starts at x = 0 with no left
-border, §11.95.2, and 639 px hold 79 cells; the CGA band holds 17 cell rows) —
-so the terminal can take §11.2's fullscreen latch (`os88_fullscreen`, a new
-thunk) and show the whole 80×25 on every adapter. **The window is
+of 25 rows; Hercules shows all 80 framed** — facts of the window frame
+(measured, wave 1: `wm_fit` clamps the window's width to the screen's, so on
+a 640-px screen it is 640 wide, flush with the screen, its content starting
+at x = 0 with no left border, §11.95.2, and 639 px hold 79 cells; the CGA
+band holds 17 cell rows; wave 5: the window is AUTHORED 642 wide, `RC_COLS ×
+8 + 2`, so that on Hercules' 720 px it keeps its border at x = 7 and its 640
+px of content hold all 80 columns — the first four waves' 640-wide window
+showed 79 there too, seen on the Hercules glass) — so the terminal can take
+§11.2's fullscreen latch (`os88_fullscreen`, a new thunk) and show the whole
+80×25 on every adapter. **The window is
 `TITLE_H + 200 + 1` tall**: a framed window's content is `W_H − TITLE_H − 1`
 rows (`wm_geom`, the bottom border is inside `W_H`), and at `TITLE_H + 200`
 the VGA window showed 24 rows and a 7-px sliver — model row 24, the row a
@@ -51252,7 +51264,20 @@ WF_OWNBG nobody whitened the region, so `os88_paint` fills the damage rect
 once and marks those shadow cells KNOWN BLANK — spaces, no attribute — never
 unknown, so a foreign panel lifting off a mostly blank terminal costs the
 fill and the text and not a band the width of the damage per row); **Alt+F in
-either direction: the latch's own paint, then 0** †; with `gfx_blit1` refused
+either direction: the latch's own paint, then 0** †; **the About panel
+(§71.4) 26 calls / 266 cells** (one fill, two frames — four 1-px fills each —
+eight bands, the button's fill and two frames) and **its close over a full
+TE screen 1 fill + one band per row the panel covered** † (20 calls / 977
+cells for the 17 rows under it: the panel's rectangle is DAMAGE through
+`rc_blank_rect`, never a repaint of the 25 rows); **a 40KB TYPE — 512 lines
+of 78 characters, three lines a slice — 163 scrolls, 163 fills and 683 bands
+in 171 flushes, 1,009 calls: two a line, no full-content fill anywhere** †
+(the first flushes fill the empty screen without a scroll, every one after
+is ONE scroll + ONE strip fill + the three text rows + the cursor's row; on
+the glass, `TYPE Z80CCP.ASM` — 1,569 lines, 37KB — under QEMU is 866 calls /
+35,662 cells / 3 scrolls read off the Alt+C toast, because a slice there
+puts more than a screen out at once and a scroll of 25 or more rows is a
+redraw of the 25 rows, cheaper than the scroll); with `gfx_blit1` refused
 a mixed row is one `font_run` per uniform run (6 for the fixture); with
 `gfx_scroll` refused (§5.5: the clip does not hold the whole rectangle — **an
 overlapped terminal**, a Calculator or a dialog reaching it) nothing on the
@@ -51306,7 +51331,10 @@ Keys: arrows/Home/End/PgUp/PgDn/Del arrive as VT sequences (the table is in
 §71's editor paragraph); ^C is 3; the BIOS folds Ctrl-H/I/M into
 BkSp/Tab/Enter (identical bytes, no loss); `^?` is Ctrl+- and DEL is
 Ctrl+Backspace, both verified on the glass in wave 3. BEL is
-`os88_snd_tone`.
+`os88_snd_tone`. **Alt+C** (scan 0x2E) toasts the flush counters since the
+last press — `gfx <calls>/<cells> scr <scrolls>` — the plan's cost-pass
+instrument, module code, and no cost until pressed; Alt+L is the debug
+loader (§71).
 
 ### 71.3 The disks: drives are folders, files are whole
 
@@ -51500,6 +51528,32 @@ info.sub`, `a:`: 2 `int 13h` calls in all, `wave4b-b-drive.png`;
 
 ### 71.4 What is present and greyed, and what is absent
 
+**The About panel** (`rcabout.c`, wave 5) is the kernel bar's `About RunCPM`
+(`OSAPI_ABOUT_SET`, the empty menu set's name cell): a 12-row panel — the
+640×200 number, LESSONS.md 8: a control's y is `6 + row × 10` and only the
+PANEL clamps to the content box, so `6 + 10 × 10 + 10 = 116` against the ~122
+rows CGA and Hercules leave — carrying `readme.md`'s title `RunCPM - Z80 CP/M
+emulator`, `main.c` 76's `CP/M Emulator v6.9 by Marcelo Dantas`, three lines
+saying what this port is, `LICENSE`'s `MIT License, Copyright (c) 2017 Mockba
+the Borg.` and an OK button that wears the focus frame — and nothing about
+how the build renders (that is this section's business). It is drawn as one
+fill, two frames, a band per label (§71.2's `rc_draw_band`, x snapped to a
+byte boundary) and the button; Esc, Enter, space or a click on OK take it
+down, every other key and click is swallowed (modal), and Alt+F is refused
+while it is up (the latch would repaint the window whole under it). **The
+Z80 is PAUSED while the panel is up** — no slice, no wake, no flush; the
+close re-kicks — which is the one behaviour the panel adds to RunCPM (whose
+console has no modal box): nothing changes the model while the glass is the
+panel's, so a kernel repaint under it (a menu dropped over the window) can
+flush nothing stale through its damage clip. Its close is the panel's
+rectangle as DAMAGE (`rc_blank_rect`, the routine `os88_paint`'s partial
+expose uses): one fill and the rows under it to where they differ, never
+the 25-row repaint an invalidated shadow would cost (§71.2's table). The
+show is module code (a refused module opens nothing and pauses nothing); the
+close and the hit test are resident. Seen on VGA, CGA (framed: OK inside
+the panel, the panel inside the 136-row content) and Hercules,
+`build/port-shots/wave5-about-*.png`.
+
 Greyed with its fact (§47): CPU throttling / BDOS 254 (`F_CPUSPEED`) and
 `cpuDelayInstructions` — the fact is structural, not a speed guess: nothing
 in this design can sleep inside a slice (the emulator runs on the UI task
@@ -51560,8 +51614,8 @@ the disk explain itself), then the programs, then documentation, libraries
 and sources; **the cluster budget is DERIVED, not a constant**: the recipe
 passes `--reserve` with the root files that ride beside `A/0` (the package,
 the `.OVL` if one comes, the CCP, LICENSE, the read-me — and `HELLO.COM` on
-the 1.44MB disk alone: a nine-byte build artifact of this tree, not
-RunCPM's, which the wave-2 gate names as "a .COM on `build/runcpm.img`" and
+the 1.44MB disk alone: a 49-byte build artifact of this tree (nine bytes of
+Z80 and a 40-byte message), not RunCPM's, which the wave-2 gate names as "a .COM on `build/runcpm.img`" and
 `tests/rczex.py` boots; it rides no other geometry, and wave 6's curation
 decides whether it stays), their sizes are priced in the geometry's own
 clusters, and what stays constant is `os88disk.py`'s own directory

@@ -59,12 +59,14 @@ void os88_onkey(int ascii, int scan, void *win);
 void os88_oncmd(int item, int menu, void *win);
 void os88_about(void *win);
 void os88_onwake(void *win);
+void os88_onclick(int x, int y, void *win);
 void os88_worker(void *win);
 
 void os88_gfx_lock(void);
 void os88_gfx_unlock(void);
 void os88_set_color(int c);
 void os88_gfx_fill(int x1, int y1, int x2, int y2);
+void os88_gfx_frame(int x1, int y1, int x2, int y2);
 int  os88_gfx_scroll(int x1, int y1, int x2, int y2, int dy);
 int  os88_gfx_blit1(const void *bits, int stride, int x, int y, int w, int rows);
 void os88_font_run(int x, int y, const char *s, int ink, int paper);

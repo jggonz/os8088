@@ -741,6 +741,45 @@ static void rc_flush(void *win)
     rc_dirty_any = 0;
 }
 
+/* rc_blank_rect - a rectangle of the content that something else has been
+ * drawn over (a kernel repaint's damage rect under WF_OWNBG, os88_paint; the
+ * About panel's rectangle, rcabout.c): ONE white fill of it - it covers the
+ * two slivers outside the cell grid as far as it reaches them, so they cost
+ * no fill of their own - and the cells it covers are then KNOWN BLANK in
+ * the shadow, spaces with no attribute, not unknown: rc_flush draws each row
+ * only to the span where the model differs, so a panel lifting off a mostly
+ * blank terminal costs the fill and the text under it, never a band the
+ * width of the rectangle per row (the erase-then-nothing shape; the whole-
+ * repaint path made the same choice, SPEC.md 71.2). A partly-covered cell
+ * is blanked in the shadow too: if the model has a glyph there it is redrawn
+ * whole, and if it has a space the uncovered part was already white. Lock
+ * held; the clip is the caller's (the kernel's paint clip, or the one the
+ * caller armed), so the fill touches nothing of another window's. */
+static void rc_blank_rect(void *win, int x1, int y1, int x2, int y2)
+{
+    static struct os88_pt org;
+    int r, x, c0, c1, r0, r1;
+
+    os88_wm_content(win, &org);
+    os88_set_color(OS88_WHITE);
+    os88_gfx_fill(x1, y1, x2, y2);
+    rc_n_calls++;
+    c0 = (x1 - org.x) >> 3;   if (c0 < 0) c0 = 0;
+    c1 = (x2 - org.x) >> 3;   if (c1 > RC_COLS - 1) c1 = RC_COLS - 1;
+    r0 = (y1 - org.y) >> 3;   if (r0 < 0) r0 = 0;
+    r1 = (y2 - org.y) >> 3;   if (r1 > RC_ROWS - 1) r1 = RC_ROWS - 1;
+    for (r = r0; r <= r1; r++) {
+        if (c1 >= c0) {
+            unsigned char *sa = rc_sha + RC_ATOFF(rc_shrow[r]);
+            os88_memset(rc_sh + RC_CHOFF(rc_shrow[r]) + c0, ' ', c1 - c0 + 1);
+            for (x = c0; x <= c1; x++)
+                sa[x >> 3] &= (unsigned char)~(0x80 >> (x & 7));
+        }
+        rc_dirty[r] = 1;
+    }
+    rc_dirty_any = 1;
+}
+
 /* rc_bell_service - BEL rings the speaker, one tone per BEL, from OUTSIDE
  * the lock (os88_onwake calls it after the flush): the tone slot is any-
  * context, but nothing that is not drawing belongs inside a lock hold. */

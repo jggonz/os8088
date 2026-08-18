@@ -37,7 +37,7 @@
  *   rcfs.c      the disk layer: (drive,user) -> folder, the directory cache,
  *               the open-file table over claims, every disk function
  *               (SPEC.md 71.3)
- *   rcabout.c   About (wave 5)
+ *   rcabout.c   the About panel (SPEC.md 71.4)
  *
  * and the shim (runcpm.asm) %includes rcz80.inc, rcmem.inc and rcband.inc.
  *
@@ -125,7 +125,11 @@ static void ovl_fs_setuser(int u);
 static unsigned ovl_fs_makedisk(void);
 static unsigned ovl_fs_checksub(void);
 static void rc_fs_capture(int lst, int c);
-static void rc_about(void *win);
+static int  ovl_about_show(void *win);       /* module code: 0 = not loaded */
+static void rc_about_close(void *win);
+static int  rc_about_hit_ok(int x, int y);
+static void rc_blank_rect(void *win, int x1, int y1, int x2, int y2);
+static int  rc_wants_wake(void);
 static int  rc_key_pop(void);
 static int  ovl_patch_cpm(void);            /* module code: 0 = not loaded */
 static int rc_full;                          /* fullscreen latch held (Alt+F):
@@ -134,6 +138,12 @@ static int rc_full;                          /* fullscreen latch held (Alt+F):
                                               * bar is under a fullscreen
                                               * window (SPEC.md 71.4) */
 static void *rc_win;                         /* our window, for rc_say_now */
+static int rc_abt;                           /* the About panel is up
+                                              * (rcabout.c): the machine is
+                                              * PAUSED - no slice, no wake,
+                                              * no flush - and every key and
+                                              * click is the panel's until it
+                                              * comes down (SPEC.md 71.4) */
 static void rc_con_reset(void);
 static int  rc_bios(void);
 static int  rc_bdos(void);
@@ -225,17 +235,24 @@ static int rc_key_pop(void)
  * ========================================================================*/
 
 /* The window: authored for the 640x480 reference screen (SPEC.md 39) and
- * clamped onto the live one - 640 wide, 18 rows of title and 200 of content
- * = 25 cell rows, at (7,20): under the menu bar, one cell in. On CGA the
- * band is shorter and the window shows what it holds (SPEC.md 71.2). THE +1:
- * a framed window's content is W_H - TITLE_H - 1 rows (kernel/wm.inc
- * wm_geom: the bottom border is inside W_H), so 18 + 200 showed 24 rows and
- * a 7-px sliver, and the model's row 24 - the row a scrolled cursor lives on
- * - was never on the glass. Found on the glass, not in the harness, whose
- * fake window was 200 rows of content by construction. */
+ * clamped onto the live one - 80 cells + the two border columns wide, 18
+ * rows of title and 200 of content = 25 cell rows, at (7,20): under the menu
+ * bar, one cell in. On CGA the band is shorter and the window shows what it
+ * holds (SPEC.md 71.2). THE +1: a framed window's content is W_H - TITLE_H
+ * - 1 rows (kernel/wm.inc wm_geom: the bottom border is inside W_H), so
+ * 18 + 200 showed 24 rows and a 7-px sliver, and the model's row 24 - the
+ * row a scrolled cursor lives on - was never on the glass. Found on the
+ * glass, not in the harness, whose fake window was 200 rows of content by
+ * construction. THE +2 (wave 5): wm_fit clamps the width to the screen's, so
+ * on a 640-px screen the window is 640 wide, flush and borderless (SPEC.md
+ * 11.95.2) with 639 px = 79 cells of content, exactly as before; on
+ * Hercules' 720 px it stays 642 wide at x = 7 with its border, and its 640
+ * px of content hold all 80 columns FRAMED - the plan's claim for that
+ * adapter, which the first four waves' 640-wide window did not deliver
+ * (seen on the Hercules glass in wave 5: 'Len:4' for 'Len:47'). */
 #define RC_WIN_X   7
 #define RC_WIN_Y   20
-#define RC_WIN_W   640
+#define RC_WIN_W   (RC_COLS * 8 + 2)
 #define RC_WIN_H   (OS88_TITLE_H + RC_ROWS * RC_CELLH + 1)
 
 static const char rc_title[] = "RunCPM";
@@ -287,6 +304,8 @@ static unsigned rc_sl_fast;                  /* slices in a row that took no
 
 /* --- console helpers, console.h's shape: _puthex16 is lowercase (tohex) --- */
 static char rc_num[8];
+static char rc_msg[64];                      /* a toast being built (the
+                                              * launch refusals, Alt+C) */
 static void rc_puthex16(unsigned w)
 {
     int i;
@@ -826,6 +845,8 @@ static void rc_load_prompt(void)
  * worker is not hired yet) */
 static int rc_wants_wake(void)
 {
+    if (rc_abt)
+        return 0;                            /* paused under the About panel */
     return rc_mode == RC_M_CLOCK || rc_mode == RC_M_RUN ||
            rc_mode == RC_M_EXIT || rc_ldmode == RC_LD_LOAD;
 }
@@ -840,6 +861,11 @@ static int rc_wants_wake(void)
  * re-post only while the machine has work. */
 void os88_onwake(void *win)
 {
+    if (rc_abt)
+        return;                              /* the About panel is up: the
+                                              * machine is paused, the glass
+                                              * is the panel's; its close
+                                              * re-kicks (rcabout.c) */
     if (rc_ldmode == RC_LD_LOAD) {
         rc_ldmode = 0;
         if (!ovl_load_go())                  /* the floppy, with no lock held */
@@ -950,53 +976,32 @@ void os88_worker(void *win)
 void os88_paint(void *win)
 {
     static struct os88_rect d;
-    static struct os88_pt org;
     static struct os88_size sz;
-    int whole, r, c0, c1, r0, r1, x;
+    int whole;
 
     whole = os88_wm_damage(win, &d);
     if (!whole && d.x1 > d.x2)
         return;                             /* nothing to draw */
     if (os88_wm_geom(win, &sz) < 0)
         return;
-    os88_wm_content(win, &org);
 
     if (whole || !rc_sh_ok) {
         rc_sh_inval();
     } else {
         /* the partial expose: ONE white fill of the damage rect (nobody
-         * whitened it - WF_OWNBG - and it covers the two slivers outside
-         * the cell grid as far as the damage reaches them, so they cost no
-         * fill of their own), and the damaged cells are then KNOWN BLANK in
-         * the shadow - spaces, no attribute - not unknown: rc_flush draws
-         * each row only to the span where the model differs, so a foreign
-         * panel lifting off a mostly blank terminal costs the fill and the
-         * text under it, never a band the width of the damage per row (the
-         * erase-then-nothing shape; the whole-repaint path made the same
-         * choice, SPEC.md 71.2). A partly-covered cell is blanked in the
-         * shadow too: if the model has a glyph there it is redrawn whole,
-         * and if it has a space the uncovered part was already white. The
+         * whitened it - WF_OWNBG) and the damaged cells KNOWN BLANK in the
+         * shadow, so rc_flush draws only the text under it (rc_blank_rect,
+         * rcterm.c - the About panel's close uses the same routine). The
          * clip is the kernel's paint clip, so the fill touches nothing of
          * another window's. */
-        os88_set_color(OS88_WHITE);
-        os88_gfx_fill(d.x1, d.y1, d.x2, d.y2);
-        rc_n_calls++;
-        c0 = (d.x1 - org.x) >> 3;   if (c0 < 0) c0 = 0;
-        c1 = (d.x2 - org.x) >> 3;   if (c1 > RC_COLS - 1) c1 = RC_COLS - 1;
-        r0 = (d.y1 - org.y) >> 3;   if (r0 < 0) r0 = 0;
-        r1 = (d.y2 - org.y) >> 3;   if (r1 > RC_ROWS - 1) r1 = RC_ROWS - 1;
-        for (r = r0; r <= r1; r++) {
-            if (c1 >= c0) {
-                unsigned char *sa = rc_sha + RC_ATOFF(rc_shrow[r]);
-                os88_memset(rc_sh + RC_CHOFF(rc_shrow[r]) + c0, ' ', c1 - c0 + 1);
-                for (x = c0; x <= c1; x++)
-                    sa[x >> 3] &= (unsigned char)~(0x80 >> (x & 7));
-            }
-            rc_dirty[r] = 1;
-        }
-        rc_dirty_any = 1;
+        rc_blank_rect(win, d.x1, d.y1, d.x2, d.y2);
     }
     rc_flush(win);
+    if (rc_abt)
+        ovl_about_show(win);                /* the panel was over all of
+                                             * that (a menu dropped over the
+                                             * window, a drag): drawn again
+                                             * from the live geometry */
     if (rc_wants_wake())
         os88_wm_wake(win);                  /* every callback kicks (71) */
 }
@@ -1012,6 +1017,10 @@ void os88_paint(void *win)
  * owns F and Esc); Alt+L the debug loader. */
 #define RC_SCAN_ALT_F 0x21
 #define RC_SCAN_ALT_L 0x26
+#define RC_SCAN_ALT_C 0x2E                  /* the flush counters, toasted
+                                             * (docs/RUNCPM-PORT-PLAN.md
+                                             * 'Verification': calls / cells /
+                                             * scrolls since the last press) */
 /* the keys without an ASCII code, by scan code, and what a VT100 sends for
  * them (the xterm sequences RunCPM sees through a posix terminal): up
  * ESC[A, down ESC[B, right ESC[C, left ESC[D, Home ESC[H, End ESC[F, PgUp
@@ -1037,8 +1046,41 @@ static void rc_key_vt(int scan)
         }
     }
 }
+/* ovl_dbg_counters - Alt+C: the terminal's flush counters since the last
+ * press, as a toast: 'gfx <calls>/<cells> scr <n>' (<= 24 characters,
+ * TOAST_MAX). The instrument the plan's cost pass names - a counter in the
+ * primitive, multiplied by PERFORMANCE.md's table - and it costs the machine
+ * nothing until pressed. Module code (once per press). */
+static int ovl_dbg_counters(void)
+{
+    os88_strcpy(rc_msg, "gfx ", sizeof(rc_msg));
+    os88_utoa(rc_n_calls, rc_num);
+    os88_strcpy(rc_msg + os88_strlen(rc_msg), rc_num, 6);
+    os88_strcpy(rc_msg + os88_strlen(rc_msg), "/", 2);
+    os88_utoa(rc_n_cells, rc_num);
+    os88_strcpy(rc_msg + os88_strlen(rc_msg), rc_num, 6);
+    os88_strcpy(rc_msg + os88_strlen(rc_msg), " scr ", 6);
+    os88_utoa(rc_n_scroll, rc_num);
+    os88_strcpy(rc_msg + os88_strlen(rc_msg), rc_num, 6);
+    os88_toast(rc_msg, 0);
+    rc_n_calls = rc_n_cells = rc_n_scroll = 0;
+    return 1;
+}
+
 void os88_onkey(int ascii, int scan, void *win)
 {
+    if (rc_abt) {
+        /* the About panel owns every key: Esc, Enter and space press OK,
+         * anything else is swallowed - Alt+F included, because the latch
+         * would repaint the window whole under the panel (rcabout.c) */
+        if (ascii == 27 || ascii == 13 || ascii == ' ')
+            rc_about_close(win);
+        return;
+    }
+    if (ascii == 0 && scan == RC_SCAN_ALT_C) {
+        ovl_dbg_counters();
+        return;
+    }
     if (ascii == 0 && scan == RC_SCAN_ALT_F) {
         /* OSAPI_FULLSCREEN paints SYNCHRONOUSLY inside the slot (kernel/
          * wm.inc wm_fullscreen: wm_raise whole on enter, wm_paint_all on
@@ -1099,8 +1141,11 @@ void os88_onkey(int ascii, int scan, void *win)
  * until the next paint or key - so every callback that can run re-posts. */
 void os88_onclick(int x, int y, void *win)
 {
-    (void)x;
-    (void)y;
+    if (rc_abt) {                           /* modal: OK, or nowhere */
+        if (rc_about_hit_ok(x, y))
+            rc_about_close(win);
+        return;
+    }
     if (rc_wants_wake())
         os88_wm_wake(win);
 }
@@ -1113,16 +1158,19 @@ void os88_oncmd(int item, int menu, void *win)
     (void)win;
 }
 
+/* the kernel bar's 'About RunCPM' (OSAPI_ABOUT_SET): the panel, drawn under
+ * the lock this handler holds; the machine pauses until it comes down. A
+ * refused module (0) opens nothing and pauses nothing - cc_ovneed's toast
+ * says why. */
 void os88_about(void *win)
 {
-    rc_about(win);
+    ovl_about_show(win);
 }
 
 /* os88_main - the entry (SPEC.md 20.2): claims first, then the window. The
  * launch requirement is CLAIMS, not KB: the 64KB Z80 RAM and the 2KB CCP
  * claim must be had, and a refusal quotes what was asked and what there is
  * (SPEC.md 71). */
-static char rc_msg[64];
 void *os88_main(void)
 {
     void *win;
