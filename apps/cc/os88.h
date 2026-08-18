@@ -117,10 +117,11 @@
  *   OSAPI_XMEM_*                          every argument and answer is a
  *     32-bit linear base, and there is no 32-bit type here (rule 4). The one
  *     part of the API that C genuinely cannot hold.
- *   OSAPI_FSX_* / OSAPI_FULLSCREEN        the exclusive bracket (SPEC.md 53)
+ *   OSAPI_FSX_*                           the exclusive bracket (SPEC.md 53)
  *     hands control to a near proc of yours and then forbids every drawing
  *     slot until it returns. The rules are the whole feature and none of them
- *     is checkable from C.
+ *     is checkable from C. (OSAPI_FULLSCREEN, the WINDOW latch of SPEC.md
+ *     11.2, is a different thing and IS wrapped: os88_fullscreen() below.)
  *   OSAPI_GFX_LINIT / LSTEP / LSTEPV      a resumable Bresenham whose state
  *     block is explicitly not yours to read (SPEC.md 5.6.7).
  *   OSAPI_SYS_SNAPSHOT / CLAIM_SNAPSHOT / SYS_KB   buffer layouts that the
@@ -133,10 +134,13 @@
  *   OSAPI_REBOOT, OSAPI_FILE_GOTO_Q, OSAPI_VOL_AT, OSAPI_FILE_READ_AT,
  *   OSAPI_FONT_GLYPHS, OSAPI_WM_BAND      omitted for surface, not for
  *     danger. Adding one is a thunk of a dozen lines in os88thunk.asm.
+ *     (OSAPI_FILE_GOTO_QM, GOTO_Q's instance-marking twin, is wrapped as
+ *     os88_file_goto_q_mark(): SPEC.md 71.1 says why the plain one was not
+ *     enough for a program whose working folder changes on every call.)
  *
- * The count: 86 of the 122 slots apps/os88api.inc publishes, plus six
+ * The count: 90 of the 134 slots apps/os88api.inc publishes, plus six
  * window-record accessors and six runtime helpers that are not slots at all -
- * 105 C entry points, and every one of them is in apps/cc/os88thunk.asm.
+ * 109 C entry points, and every one of them is in apps/cc/os88thunk.asm.
  * ==========================================================================*/
 
 #ifndef OS88_H
@@ -338,6 +342,7 @@ static char os88__sz_find[sizeof(struct os88_find)    == 24 ? 1 : -1];
  *                                       unsigned size_lo, unsigned size_hi,
  *                                       void *win);
  *   CC_HAS_WORKER     void  os88_worker(void *win);
+ *   CC_HAS_ONWAKE     void  os88_onwake(void *win);       (71.1 - see below)
  * ========================================================================*/
 
 /* os88_main - your entry point (SPEC.md 20.2, 21 step 8).
@@ -366,6 +371,19 @@ void os88_oncmd(int item, int menu, void *win);
 void os88_about(void *win);
 void os88_onfile(int mode, const char *name,
                  unsigned size_lo, unsigned size_hi, void *win);
+
+/* os88_onwake - W_ONWAKE (SPEC.md 71.1), installed by os88_wm_onwake() and
+ * posted by os88_wm_wake(). THE ONE CALLBACK THAT RUNS WITHOUT THE GFX LOCK:
+ * on the UI task, billed to your instance, lock free. So it may call the file
+ * slots (they are UI-task-only, and this IS the UI task), and it may take the
+ * lock itself - os88_gfx_lock() ... os88_gfx_unlock() around a burst of
+ * drawing you can put a number on - and it must not draw before it has.
+ * Nothing arrives with it: it is a kick, at most one queued per window at a
+ * time, and a stale one after your window's slot was reused is possible, so
+ * be indifferent to being called with nothing to do. It is what lets a long
+ * computation with I/O live on the UI task in slices, each re-posting the
+ * next (RunCPM's Z80, SPEC.md 71). Needs CC_HAS_ONWAKE. */
+void os88_onwake(void *win);
 
 /* os88_worker - your one background task (SPEC.md 20.6), started by
  * os88_task_spawn() from a callback. IT MUST NEVER RETURN: call
@@ -564,6 +582,29 @@ void os88_wm_onresize(void *win);                /* 11.98 - your content box
                                                   * CHANGED and you did not
                                                   * ask (an adapter change).
                                                   * You must NOT draw in it */
+void os88_wm_onwake(void *win);                  /* 71.1 - install
+                                                  * os88_onwake(); needs
+                                                  * CC_HAS_ONWAKE */
+
+/* os88_wm_wake - post the kick (SPEC.md 71.1): os88_onwake() runs on the UI
+ * task, lock free, a few event-loop passes later. Any context - a callback,
+ * the handler itself, a worker; no lock needed. Returns 0 when a wake is
+ * queued for this window (posted now, or one was ALREADY waiting - the kernel
+ * keeps at most one per window, so kicking from every callback is free and
+ * cannot fill the 16-record event ring), -1 when the ring was full of other
+ * events and nothing was posted: kick again from your next callback.
+ * Needs CC_HAS_ONWAKE, like the installer: a wake with no handler dispatches
+ * to nothing, so a package without one does not carry the thunk. */
+int os88_wm_wake(void *win);
+
+/* os88_fullscreen - SPEC.md 11.2's latch: your window's frame becomes the
+ * whole screen, menu bar and dock included, until you let go. Call it with
+ * the gfx lock held (a callback holds it). enter != 0 takes the screen and
+ * returns -1 if another window already has it; 0 gives it back. The kernel
+ * repaints you whole either way. Exiting is YOUR job - the bar is unreachable
+ * meanwhile - and 11.2.1's F/Esc is the convention; a terminal that owns both
+ * keys states its own chord (71.2). NOT the exclusive bracket of SPEC.md 53. */
+int os88_fullscreen(void *win, int enter);
 
 /* --- tasks and time (SPEC.md 8, 20.6) ------------------------------------- */
 void os88_task_yield(void);
@@ -651,6 +692,17 @@ int os88_disk_cluster_sectors(void);             /* chunk sizes are multiples
 void os88_file_here(struct os88_place *p);       /* bank where you stand... */
 int  os88_file_goto(struct os88_place *p);       /* ...and come back. A
                                                   * REMOUNT: real floppy I/O */
+
+/* os88_file_goto_q_mark - stand in another folder QUIETLY, and STAY there
+ * (SPEC.md 71.1, 19.2.2). Inside the volume you are on it is a word - no disk
+ * I/O - and across volumes a quiet mount that skips the listing, the sort and
+ * the icon harvest; and unlike OSAPI_FILE_GOTO_Q (deliberately not wrapped)
+ * your instance's own folder moves with it, so the very next os88_file_*
+ * resolves THERE rather than being re-stood where you were launched. A CP/M
+ * drive is a folder, and this is how a drive switch costs one word. 0 moved,
+ * -1 refused (os88_ferr() says why). It does not fill any Disk window's
+ * listing, so it is not the one to call before showing a folder. */
+int  os88_file_goto_q_mark(unsigned clus, int vol);
 int  os88_vol_sys(void);                         /* the volume this machine
                                                   * BOOTED from */
 

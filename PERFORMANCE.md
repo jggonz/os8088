@@ -6709,3 +6709,36 @@ back and compared pixel for pixel: **0 differing pixels of 624 × 8 on all three
 adapters** (1,236 ink pixels on VGA, 2,602 on CGA, 1,034 on Hercules). That
 covers the shift, the row walk and — on CGA and Hercules — the interleaved bank
 wrap, which is the part no screenshot of a working desktop would have exercised.
+
+### Set 65 — RunCPM's row composer, priced before it was quoted (SPEC.md §71.2)
+
+Emulator: QEMU under `-icount shift=3,sleep=off`, VGA; one count is **0.359 ms
+of real XT** (Part 4). Harness: `tests/rcband` (`make rcbandbench`), N=8 a row,
+one run — the `FONT_RUN` bar in the same run, per Set 64's rule. It exists
+because §71.2's cost model priced `rc_band`'s compose at an unmeasured ~40 µs a
+cell and every derived number rested on it (rule 4).
+
+| ms on a 4.77 MHz 8088 (VGA) | counts/op | ms |
+|---|---|---|
+| `FONT_RUN` 79 cells, byte-aligned | 167 | **60.0** |
+| `RC_BAND` 79 cells, **shipping** compose (drawing nothing) | 32.4 | 11.6 |
+| `RC_BAND` 79 cells, the **first** loop (kept in the harness) | 67.4 | 24.2 |
+| `GFX_BLIT1` 632×8, stride 80 | 8.1 | 2.9 |
+| band 79 = compose + blit | 40.4 | **14.5** |
+| `RC_BAND` 1 cell | 0.9 | 0.31 |
+| band 1 cell = compose + blit | 2.9 | **1.03** |
+| `FONT_RUN` 1 cell | 4.5 | 1.62 |
+| band 11 cells = compose + blit | 7.75 | 2.78 |
+
+**Read as lines: a band is 860 µs a call + 173 µs a cell** (the compose 145 of
+it, the emit ~31 — Set 64's 395 + 31/cell for `blit1` alone holds); the first
+loop was **306 µs a cell**, 7× the model's guess, and the rewrite (a constant
+stride, the eight rows unrolled, the attribute bit rotated in a register —
+Set 64's own lesson) halved it. **The band beats `font_run` at every width**:
+1.03 ms against 1.62 for one cell on VGA, 14.5 against 60 for a row (against
+Set 64's ~24 ms aligned row on CGA/Hercules the 79-cell band is 1.7× cheaper,
+not 4×). **Two 1-cell bands (2.07 ms) beat one span from 8 cells up**, which
+is where §71.2's same-row cursor split sits. The identity rows — the string
+lettered, the same string composed and blitted under it, and a third with
+every eighth cell reverse-video so the attribute byte's wrap is on the glass
+— are the correctness check, by screendump.

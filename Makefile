@@ -641,8 +641,8 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc
         fonts fontsheets fontlist \
         stories zdisk ztest zh zhboot zcheck zgfx zpic zscreens xt-z 386-z \
         worddisk wordcheck xt-word 386-word \
-        cc-note chello covl cword cworddisk 386-c-word \
-        allapps \
+        cc-note chello covl cword cworddisk 386-c-word runcpm runcpmdisk \
+        allapps rcbandbench \
         checkdocs clean clean-cc clean-marty distclean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
@@ -1901,6 +1901,55 @@ $(BUILD)/cword360.img: $(CWORDDISK) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(CWORDDISK) --folder DOCS
 	@python3 tools/os88disk.py --verify $@
 
+# --- RUNCPM, RunCPM 6.9 as a C package (SPEC.md 71) --------------------------
+# The C toolchain's second application: a CP/M 2.2 emulator - a Z80 in a 64KB
+# claim, BIOS/BDOS in C, drives as folders, an 80x25 terminal in a window - a
+# reimplementation of Marcelo Dantas / Mockba the Borg's RunCPM (MIT). `make
+# runcpm` runs the host checks (apps/runcpm/build.sh - the terminal against a
+# model of the glass) and then builds the package; `make runcpmdisk` the
+# floppy. Nothing here is on the shipped apps disks, and nothing in `all`
+# reaches it: on demand like cword, through the same cc-toolchain guard.
+#
+# THE HOST CHECKS RUN FIRST AND STOP THE BUILD. They are an order-only-free
+# prerequisite of the .raw.asm through the stamp below: a check that fails
+# leaves no stamp, and the compile does not run.
+$(eval $(call CC_PACKAGE,runcpm,runcpm))
+
+# THE REST OF THE TRANSLATION UNIT (SPEC.md 70.1): runcpm.c #includes the
+# parts, and the shim %includes the three hand-written pieces. Every one is a
+# written prerequisite because make cannot see through either kind of include
+# - and every file the port plan names is listed from wave 1, stubs included,
+# so no later wave adds a file the build does not know (docs/RUNCPM-PORT-PLAN.md).
+RUNCPMSRC := apps/runcpm/rcterm.c apps/runcpm/rccpm.c apps/runcpm/rcfs.c \
+             apps/runcpm/rcabout.c
+RUNCPMINC := apps/runcpm/rcz80.inc apps/runcpm/rcmem.inc apps/runcpm/rcband.inc
+RUNCPMHOST := apps/runcpm/build.sh apps/runcpm/hosttest/os88.h \
+              apps/runcpm/hosttest/rcuitest.c
+$(BUILD)/runcpm.raw.asm: $(RUNCPMSRC) $(BUILD)/.runcpm-hostchecks
+$(BUILD)/runcpm.bin: $(RUNCPMINC)
+
+$(BUILD)/.runcpm-hostchecks: apps/runcpm/runcpm.c $(RUNCPMSRC) $(RUNCPMHOST) | $(BUILD)
+	apps/runcpm/build.sh
+	@touch $@
+
+runcpm: $(BUILD)/runcpm.o88
+
+# The wave-1 floppy: the package, and A\0\RCPROBE.TXT - a file that exists in
+# the drive-A/user-0 folder and nowhere else, which is what the launch's first
+# wake reads through os88_file_goto_q_mark to prove the quiet move sticks
+# (SPEC.md 71.1). Wave 2 replaces the folder's contents with the master disk
+# tools/getruncpm.py fetches, and adds the 720KB and 360KB geometries.
+$(BUILD)/RCPROBE.TXT: | $(BUILD)
+	printf 'A0 reached through goto_q_mark\r\n' > $@
+
+RUNCPMDISK := $(BUILD)/runcpm.o88 A/0:$(BUILD)/RCPROBE.TXT
+
+runcpmdisk: $(BUILD)/runcpm.img
+
+$(BUILD)/runcpm.img: $(BUILD)/runcpm.o88 $(BUILD)/RCPROBE.TXT tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(RUNCPMDISK)
+	@python3 tools/os88disk.py --verify $@
+
 # =============================================================================
 # FROTZ and its story floppy (SPEC.md 61) - ON DEMAND: `make zdisk`
 # =============================================================================
@@ -2600,6 +2649,25 @@ $(BUILD)/benchsml.dat: | $(BUILD)
 # reporting a cliff that is the FILE's.
 $(BUILD)/bigfile.dat: | $(BUILD)
 	python3 -c "import sys; sys.stdout.buffer.write(bytes((i>>9)&0xFF for i in range(104*1024)))" > $@
+
+# ...and RUNCPM's row composer on the same harness (SPEC.md 71.2): the package's
+# own apps/runcpm/rcband.inc timed against the 79-cell FONT_RUN it replaces,
+# with the first version of the loop kept in the harness for the record. Its
+# own disk, on demand, because it exists to answer one question once:
+#   make rcbandbench
+#   make test TESTAPPS=build/rcband.img QEMU="qemu-system-i386 -icount shift=3,sleep=off"
+rcbandbench: $(BUILD)/rcband.img
+
+$(BUILD)/rcbband.bin: tests/rcband/rcbandbench.asm apps/runcpm/rcband.inc tests/benchlib.inc apps/os88api.inc tools/benchlint.py | $(BUILD)
+	python3 tools/benchlint.py tests/rcband/rcbandbench.asm
+	$(NASM) -f bin -w+error -I apps/ -I tests/ -o $@ tests/rcband/rcbandbench.asm
+	@echo "rcbband: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/rcbband.o88: $(BUILD)/rcbband.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/rcbband.bin -o $@
+
+$(BUILD)/rcband.img: $(BUILD)/rcbband.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/rcbband.o88
 
 $(BUILD)/bench.img: $(BENCHPKGS) $(BENCHDATA) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BENCHPKGS) $(BENCHDATA)

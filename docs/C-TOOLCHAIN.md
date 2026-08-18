@@ -154,8 +154,13 @@ external-reference error naming that function, and a C function with no
 
 The `%define`s available are `CC_HAS_ONKEY`, `CC_HAS_ONCLICK`,
 `CC_HAS_ONMOUSEUP`, `CC_HAS_ONRESIZE`, `CC_HAS_MENUS`, `CC_HAS_ABOUT`,
-`CC_HAS_FDLG` and `CC_HAS_WORKER`, plus `CC_ICON` to name an embedded icon
-file. A trampoline you do not ask for is not assembled at all.
+`CC_HAS_FDLG`, `CC_HAS_WORKER` and `CC_HAS_ONWAKE` (`os88_onwake()`, the one
+callback dispatched WITHOUT the gfx lock — SPEC.md 71.1: install it with
+`os88_wm_onwake()`, post it with `os88_wm_wake()` from any context, and it
+runs on the UI task where the file slots are legal, taking the lock itself for
+whatever it draws; `apps/runcpm` is the worked example), plus `CC_ICON` to
+name an embedded icon file. A trampoline you do not ask for is not assembled
+at all.
 
 ### The `make` rule
 
@@ -621,14 +626,14 @@ two real defects no screenshot would have shown.
 
 ## The API in C
 
-`apps/os88api.inc` is the assembly SDK: ~122 jump-table slots, each with a
+`apps/os88api.inc` is the assembly SDK: 134 jump-table slots, each with a
 **register** contract. C has no register contracts, so every slot a C package
 can reach has a hand-written bridge in `apps/cc/os88thunk.asm` and a prototype
 in `apps/cc/os88.h`. **`os88api.inc` stays the authority on what each slot does
 and when it may be called**; `os88.h` is the shape it takes in C, and every
 prototype there carries the SPEC section that owns it.
 
-**105 C entry points**: most of the slots, plus the window-record accessors and
+**109 C entry points**: most of the slots, plus the window-record accessors and
 the string and memory helpers, which are not slots at all.
 
 **You never dereference the window record.** It lives in `KERNEL_SEG`, and

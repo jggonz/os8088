@@ -823,9 +823,9 @@ VIEW_KB       equ 3          ; each window's cache, claimed when it opens
 | `kernel/font.inc`   | 8x8 font (copied at init from the BIOS ROM set, or the IBM ROM's own on a pre-EGA machine), text draw |
 | `kernel/mouse.inc`  | COM1 UART, IRQ4 ISR, packet decode, cursor (save-under) |
 | `kernel/sched.inc`  | PIT hook, context switch, task table, spawn/yield/sleep |
-| `kernel/events.inc` | 8-byte event records, system event ring queue           |
+| `kernel/events.inc` | 8-byte event records (`EVT_MDOWN`/`MUP`/`RDOWN`, and `EVT_WAKE` — a package's own kick, §71.1), system event ring queue |
 | `kernel/clock.inc`  | system clock (§37): the RTC ladder (§37.90 — MC146818 at 70h/71h, MM58167 and RP5C01 at 2C0h, int 1Ah last), the wall-clock date + time advanced from `[ticks]`, field editing and formatting — prefix `clk_` |
-| `kernel/wm.inc`     | window records, z-order, frames, hit test, paint-all, `wm_owner` side table |
+| `kernel/wm.inc`     | window records, z-order, frames, hit test, paint-all, `wm_owner` side table; the per-slot handler side tables `wm_about`/`wm_onsz`/`wm_onwk` and the wake post/dispatch `wm_wake`/`wm_wake_disp` (§71.1) |
 | `kernel/instance.inc` | instance table: records, kind descriptors, launch/close lifecycle (§29) |
 | `kernel/memory.inc` | the claim heap (§50): the map, `mem_claim`/`mem_free`/`mem_avail`, the teardown fence — prefix `mem_` |
 | `kernel/menu.inc`   | menu bar (System menu + the active application's name and menus), runtime bar layout, pull-down tracking, Locator's own menu set (§12/§12.2/§12.3) |
@@ -5357,12 +5357,25 @@ EVT_NONE  equ 0
 EVT_MDOWN equ 1     ; a=x, b=y, c=birth tick
 EVT_MUP   equ 2     ; a=x, b=y, c=birth tick
 EVT_RDOWN equ 3     ; a=x, b=y, c=birth tick - RIGHT button press (§9/§12.4)
+EVT_WAKE  equ 4     ; a=window ptr - a PACKAGE'S OWN KICK (§71.1), posted by
+                    ; OSAPI_WM_WAKE from any context and dispatched by the UI
+                    ; task to the window's wake handler WITHOUT the gfx lock
 ```
 
 There is deliberately no `EVT_RUP`: the only consumer of the right button
 is the context-menu tracker, which polls `mouse_btn` bit 1 for its whole
 life (§12.4). `EV_C` is carried on `EVT_RDOWN` for record symmetry and is
 read by nobody — a right double-click would need no format change.
+
+`EVT_WAKE` is the one record that is not a user event, and the one whose
+poster is a package. `wm_wake` **coalesces** it — at most one queued wake per
+window slot (`wm_wkq`), the flag cleared by the dispatch before the handler
+runs — so a package that kicks from every callback cannot fill the ring and
+drop the mouse; the answer to a second post while one waits is the same CF=0
+promise. It is the ONE event `ui_task` dispatches with no lock held: the
+handler is `ui_ptcall`'s environment minus the lock (billed, stamped, so its
+file calls resolve in its own instance's folder), and it takes the lock
+itself for whatever it draws.
 
 Single system queue, 16 records, ring buffer in .bss. Producers may be ISRs:
 `evq_push` (SI → record; copies 8 bytes; guards the copy + index update with
@@ -50679,15 +50692,17 @@ that is hand-written 8086; what cannot carry is present and greyed with the
 fact that greys it (§47).** Nothing from RunCPM is vendored (CONTRIBUTING.md
 §6): every file that carries derived tables, strings or behaviour cites the
 RunCPM file in its header and carries the MIT attribution, and so does the
-About box. The design record is `docs/RUNCPM-PORT-PLAN.md`.
+About box (wave 5; until it exists the kernel's `About RunCPM` item toasts
+the product, version and author). The design record is
+`docs/RUNCPM-PORT-PLAN.md`.
 
 **Where the behaviour comes from — the authority table.** Every user-visible
 surface names ONE RunCPM file:
 
 | what | from |
 |---|---|
-| the boot banner, the exit text, the load sequence | `RunCPM/main.c` (66–105, 125–137), `cpu_mhz.h` |
-| version, CCPHEAD, the memory layout constants (TPA 60K, BDOS 0xE400, BIOS 0xFE00, CCP 0xDC00) | `RunCPM/globals.h` |
+| the boot banner, the exit text, the load sequence — the banner's `Built` line is the pinned upstream commit's date, **`e698e8ab59c2de915b23be7f5b146a5c621f5c76` (2026-07-21 20:43:19 −0400)**, not `__DATE__`/`__TIME__` (a build stamp would break the byte-for-byte rebuild); `tools/getruncpm.py`'s pin is the same hash, so the two cannot drift. **Four stated deviations**: that `Built` line; `CPU is 8086 native` (this core's own `CPU_IS`); the clock estimate's two decimals and smaller burst; and **`FILEBASE is ./` is not printed** — every desktop build defines `FILEBASE` (`abstraction_posix.h` `"./"`, `abstraction_windows.h` `".\"`) and `main.c` 96–99 prints it after the CCP line, but the base here is the launch folder and a package has no path string to name it by | `RunCPM/main.c` (66–105, 125–137), `cpu_mhz.h` |
+| version, CCPHEAD, the memory layout constants (TPA 60K, BDOS 0xEC00 = TPASIZE×1024−1024, BIOS 0xFE00, CCP 0xE400 = BDOS−0x800) | `RunCPM/globals.h` |
 | page zero, the BIOS/BDOS jump pages, RST 08h/10h handoff, DPB/DPH | `RunCPM/cpm.h` `_PatchBIOS`/`_PatchCPM` |
 | BIOS entries BOOT..SECTRAN and their register answers | `RunCPM/cpm.h` `_Bios` |
 | BDOS 0–40 and RunCPM's private 230, 231, 248–254; the BDOS 10 line editor's key map and help text | `RunCPM/cpm.h` `_Bdos` |
@@ -50710,8 +50725,12 @@ estimate, ERA/REN/MAKE, the error texts) are named from the first wave and
 Z80's 64KB is **not** in the package: it is `os88_mem_claim(64)`, its own
 segment, and the launch refuses (quoting what it asked and
 `os88_mem_largest_kb()`) if that claim, the 2KB CCP claim or one file claim
-cannot be had. *Numbers: measured, pending — every figure here is replaced by
-`os88pkg`'s line as the waves land.*
+cannot be had. *Numbers: wave 1 (window, terminal, shadow, banner, wake,
+quiet goto, harness — no Z80, no BDOS, no files yet) measures
+`image=12590 bss=6473`, 42 functions, largest frame 30 bytes; the C runtime it
+carries is at most `ccsmoke`'s whole image, 3,456 bytes (the runtime plus that
+program's own C and data). Every later figure replaces this one as the waves
+land.*
 
 **The Z80 core is hand-written 8086, and it is the only thing that touches
 Z80 memory per instruction.** `_rc_run(n)` is a cdecl entry that saves DS/ES/BP,
@@ -50763,35 +50782,141 @@ Two things were added to the kernel for this port and both are general:
   (`os88_file_goto_q_mark(clus, vol)`), and is how a CP/M drive/user switch is
   one word rather than a full `dsk_chdir`.
 
-Both fit inside the image rung's measured headroom (429 bytes at the time of
-the decision, `tools/kernsize.py`); neither raises `KERN_BUDGET` or
-`KERN_CODE_MAX`. Their slot numbers, register contracts and the event record
-are pinned in `apps/os88api.inc` and in the §4 owners of `events.inc`,
-`ui.inc` and `wm.inc` when the wave lands, and this section is amended with
-them.
+**Measured (wave 1):** the three cells, the event, the side tables and the
+dispatch cost the kernel **+181 bytes of `.text` and +44 of `.bss`** — the
+image rung went from 429 bytes left to **204 left**, no rung crossed, footprint
+unchanged (`kern_small`: 255 → 30 left, likewise no crossing); neither
+`KERN_BUDGET` nor `KERN_CODE_MAX` moved. The slots, appended after 0x0420 (the
+free list of §20.3.1 being empty), and their contracts, which
+`apps/os88api.inc` carries in full:
+
+| slot | routine | contract |
+|---|---|---|
+| **0x0428** | `wm_wake` (`OSAPI_WM_WAKE`) | in BX = a window of yours. Posts `EVT_WAKE {a = BX}`; any context, ISR- and worker-safe. out CF=0 a wake is queued for that window (posted now, or one already waited — coalesced, at most one per window), CF=1 the ring was full and nothing was posted. Every register preserved |
+| **0x0430** | `wm_onwake` (`OSAPI_WM_ONWAKE`) | in BX = window, AX = a near proc in your segment, 0 clears. A side table (`wm_onwk`, `wm_onsz`'s shape) cleared by `wm_destroy`, not a template word. The handler is called SI = your window, on the UI task, billed to your instance, **without the gfx lock**: it may call the file slots and may take the lock for a stated burst; nothing is delivered with it, and one stale wake after a slot's reuse is possible. **A handler re-posts itself only while it has work** — a wake round trip is at least one task switch (693 µs), so a handler that always re-posts spins the UI task at ~1,400 wakes a second and paints whatever it paints ~90 times a second on the target; RunCPM's re-posts when the slice ran out with the Z80 still running or output is pending, and NOT when the Z80 is blocked in CONIN on an empty key ring — then the next kick is `os88_onkey`'s. (Wave 1's counter re-posts unconditionally, marked RC_W1 scaffolding; wave 2's slice driver inherits this rule) |
+| **0x0438** | `osapi_file_goto_qm` (`OSAPI_FILE_GOTO_QM`) | in DX = folder cluster, BL = volume; out exactly as `OSAPI_FILE_GOTO_Q` (CF=0 AX=0 / CF=1 AX=FERR_*). GOTO_Q's quiet stand and then `inst_vol_mark`, so the calling instance now stands there and its next file cell's `inst_vol_enter` does not undo the move |
+
+`ui_task` pops `EVT_WAKE` in order with the mouse events (`ui.inc`, `.wake`)
+and calls `wm_wake_disp` (`wm.inc`): the slot's flag is cleared first so the
+handler may re-post from inside itself; a record whose window died is
+skipped; the call is `ui_ptcall`'s — `inst_win_owner`, `snd_disp_set`,
+`task_cycles`, `wm_pkgcall`, `inst_charge` — with no `gfx_lock` around it.
+The C side is `CC_HAS_ONWAKE` → `cc_onwake` in `crt0.asm`, and the thunks
+`os88_wm_onwake(win)`, `int os88_wm_wake(win)`,
+`int os88_file_goto_q_mark(clus, vol)` and, for Decision 2 below,
+`int os88_fullscreen(win, enter)` in `os88thunk.asm`/`os88.h`. Proved on the
+glass in wave 1: a wake handler that re-posts itself and counts its round
+trips climbs with no key pressed (~15,000 round trips a second in QEMU); and
+from that handler, `rc_fs_cd(0,0)` — two `os88_file_find` walks and two
+`os88_file_goto_q_mark`s from the launch folder into `A\0` — followed by
+`os88_file_read("RCPROBE.TXT")` reads a file that exists only there, and a
+third `goto_q_mark` comes home.
 
 ### 71.2 The terminal, and what a byte costs
 
-The console is an **80×25 VT100-subset terminal model** — CR LF BS BEL TAB FF;
-`ESC [` H f A B C D J K m (0 and 7 only) L M s u ?25h/l — with a reverse-video
-attribute bitmap and the cursor as an inverse cell; every output byte is
-masked to 7 bits as `console.h` does. It is drawn **damage-only through a
-glass shadow** (§70.12's model): a scrolled line is one `gfx_scroll` plus the
-one repainted row; a changed row is composed into a 1bpp band by
-`rcband.inc` (from `OSAPI_FONT_GLYPHS`) and goes down with one `gfx_blit1`,
-or one `font_run` for a short span and as the fallback when `blit1` refuses;
-a full repaint happens only on expose. The host harness prints the cost
-table (echo one character, one DIR row, one scrolled line, `ESC[2J`, a
-25-row full-screen redraw) and the targets are: echo 2 calls, DIR row 2
-calls, full 25-row redraw 25 calls.
+The console is an **80×25 VT100-subset terminal model** — CR LF BS BEL TAB FF
+(FF is a line feed, the VT100 rule and what the host terminals RunCPM runs on
+do; RunCPM's `console.h` passes it untranslated); `ESC [` H f A B C D J K m
+(0 and 7 only) L M s u ?25h/l — with a reverse-video attribute bitmap and the
+cursor as an inverse cell; every output byte is masked to 7 bits as
+`console.h` does. It is drawn **damage-only through a
+glass shadow** (§70.12's model): a scrolled line is one `gfx_scroll`, one
+white fill of the rows it vacated and the rows that then differ; a changed row
+is composed into a 1bpp band by `rcband.inc` (from `OSAPI_FONT_GLYPHS`) and
+goes down with one `gfx_blit1` — **the band is the first choice at every
+width**, measured cheaper than one `font_run` even for a single cell
+(PERFORMANCE.md Set 65), and `font_run` is only the fallback when `blit1`
+refuses; a full repaint happens only on expose, and is one white fill of the
+content and then each row to its last non-blank cell. The host harness prints
+the cost table and asserts its rows; the measured table below is the
+authority, and every number in it is what `hosttest/rcuitest.c` prints.
 
-**In a framed window a 640-px screen shows 78 of 80 columns and CGA shows 17
-of 25 rows** — facts of the window frame — so the terminal can take §11.2's
-fullscreen latch (`os88_fullscreen`, a new thunk) and show the whole 80×25 on
-every adapter. **The chord is Alt+F in both directions, which is a stated
-exception to §11.2.1's F/Esc binding**: a terminal owns both F and Esc, and
-the exception is the reason. Rows outside the window are model rows, not lost
-rows: `TE.COM`'s status line exists on CGA in fullscreen.
+**In a framed window a 640-px screen shows 79 of 80 columns and CGA shows 17
+of 25 rows** — facts of the window frame (measured, wave 1: the 640-wide
+window is flush with the screen, so its content starts at x = 0 with no left
+border, §11.95.2, and 639 px hold 79 cells; the CGA band holds 17 cell rows) —
+so the terminal can take §11.2's fullscreen latch (`os88_fullscreen`, a new
+thunk) and show the whole 80×25 on every adapter. **The window is
+`TITLE_H + 200 + 1` tall**: a framed window's content is `W_H − TITLE_H − 1`
+rows (`wm_geom`, the bottom border is inside `W_H`), and at `TITLE_H + 200`
+the VGA window showed 24 rows and a 7-px sliver — model row 24, the row a
+scrolled cursor lives on, was never on the glass, and the sliver fill hid it
+(found on the glass after review; the harness's fake window was 200 rows by
+construction). **The chord is Alt+F in
+both directions, which is a stated exception to §11.2.1's F/Esc binding**: a
+terminal owns both F and Esc, and the exception is the reason. Verified in
+wave 1: the chord reaches `os88_onkey` as ascii 0, scan 0x21, is not consumed
+by the kernel first, and enters and leaves the latch on VGA and on CGA (where
+fullscreen is 80×25 exactly). **`OSAPI_FULLSCREEN` paints the window whole
+inside the slot** (`wm_raise` on enter, `wm_paint_all` on exit, under the
+lock the key handler already holds), so the shadow describes the new glass
+when the slot returns and the flush after Alt+F costs **0 calls** in either
+direction — an invalidation there would draw the same 25 rows a second time,
+the double-draw class that no emulator shows; the harness's `os88_fullscreen`
+stub does what the kernel does and asserts the zero. Rows outside the window
+are model rows, not lost rows: `TE.COM`'s status line exists on CGA in
+fullscreen.
+
+**What a byte costs — what the harness prints (wave 1 after review,
+`hosttest/rcuitest.c`, 80×25; calls and cells are exact, and the harness
+asserts the rows marked †):** a full expose of the banner screen † **9 calls**
+(one white fill of the content, then the 7 banner rows and the cursor's row,
+each to its last non-blank cell — 218 cells, not 2,000); echo one character †
+**1 call / 2 cells** (one band: the character and the moved cursor); a
+cursor-only move to another row † **2 calls / 2 cells** (a 1-cell band per
+row); a cursor-only move along an unchanged row † **2 calls / 2 cells** when
+the span would be 8 cells or more (two 1-cell bands, 2 × (860 + 173) µs,
+beat a span of 860 + 173 n from n = 8 — the measured crossover, PERFORMANCE.md
+Set 65) and **1 call, the span** when nearer (3 apart: 1 call / 4 cells); a scrolled DIR row
+at the bottom † **4 calls / 61 cells** (the `gfx_scroll` of the 200-row
+content, ONE white fill of the vacated 8-px strip, the text row's band, the
+cursor's 1-cell band on the vacated row); three lines in one slice **6
+calls** (ONE scroll of three, one fill of the three vacated rows, the rows);
+`ESC[2J ESC[H` **2 calls / 1 cell** (one white fill and the cursor) and **a
+cursor-only move on the still-empty screen after it 2 calls, 0 fills** † —
+the flush that acts on the all-blank fact consumes it, so
+CLS-then-position-then-wait, the commonest CP/M shape, does not refill and
+re-cursor the screen on every wake; a TE-style 25-row full-screen redraw **25
+calls / 1,903 cells**; the identical screen written again **0**; `ESC[L` then
+`ESC[M` one signed `gfx_scroll` and one fill each plus the rows (7 calls for
+the two); a full expose of a full TE screen **25 calls** (the fill and 24
+non-blank rows — the fill is the price a dense screen pays for the sparse
+screen's saving); a partial expose of 3 rows × 11 cells 3 calls; **Alt+F in
+either direction: the latch's own paint, then 0** †; with `gfx_blit1` refused
+a mixed row is one `font_run` per uniform run (6 for the fixture); with
+`gfx_scroll` refused (§5.5: the clip does not hold the whole rectangle — **an
+overlapped terminal**, a Calculator or a dialog reaching it) nothing on the
+glass moved, the shadow stays true, and a scrolled line is a band per row
+from the scrolled region's top down to where the shifted text differs (25
+calls / 468 cells for the fixture) — the price of an overlapped terminal,
+which wave 2's flush pacing bounds per slice but does not remove. The
+attribute compare is BIT-exact — a differing attribute byte widens the span
+to the cells whose bits differ, never to its 8-cell group — and cursor, text
+and attribute changes on one row are always ONE call because the cursor is an
+inverse cell folded into the row's band, never a call of its own.
+
+**The ms column is a MODEL per primitive, and the band is now measured.** The
+harness prices `font_run` at 756 µs + 900 µs a cell (Part 2); **the band
+(`rc_band` + `gfx_blit1`) at 860 µs a call + 173 µs a cell**, measured on
+`tests/rcband` (`make rcbandbench`; PERFORMANCE.md Set 65: 1 cell 1.03 ms,
+11 cells 2.78, 79 cells 14.5, icount counts at Part 4's 0.359 ms — the
+compose is 145 of the 173, and its first version measured 306 µs a cell,
+seven times the ~40 the model had guessed, before the loop was given a
+constant stride, unrolled rows and a rotated attribute bit); `gfx_scroll` at
+756 µs + 150 µs a pixel row on VGA (Set 54 after §5.5.1, 32-byte rows;
+Hercules 269; an 80-byte row is more, unmeasured); `gfx_fill` at 756 µs +
+177 µs a row + 0.28 µs a pixel. On that model a banner expose is **~117 ms**
+(the fill ~72 of it) where 25 full-width bands were ~360; a full TE screen
+expose is ~398 ms against ~351 drawn row by row (the stated trade); a
+scrolled DIR row is **~47 ms**, of which ~31 is the scroll of the 200-row
+content and ~4 the vacated strip's fill — so a TYPE of a 100-line file that
+flushes per line is 4–5 s of scrolling on VGA (more on Hercules and CGA),
+and *three lines in one slice = ONE scroll* is what saves seconds. **Wave 2's
+slice pacing — how many lines the machine may put out before a flush — is
+therefore a performance decision, not a detail: flush every N lines or when
+the key ring is drained, N sized so a screenful of TYPE is a handful of
+scrolls.** `ESC[2J` is ~73 ms on the same model (one fill of 640×200), paid
+once per clear.
 
 Keys: arrows/Home/End/PgUp/PgDn/Del arrive as VT sequences; ^C is 3; the BIOS
 folds Ctrl-H/I/M into BkSp/Tab/Enter (identical bytes, no loss); `^?` is
@@ -50818,7 +50943,7 @@ search of a folder is O(files) `int 13h` calls (`os88_file_find` walks by
 ordinal); the cache makes later ones free.
 
 The CCP is `CCP-DR.60K`, loaded once at launch from the launch folder — before
-any folder move, like the `.OVL` — into a 2KB claim and copied to 0xDC00 on
+any folder move, like the `.OVL` — into a 2KB claim and copied to 0xE400 on
 every warm boot with CCPHEAD printed above it; `AUTOEXEC.TXT` is read from the
 launch folder on every warm boot as upstream's default does.
 
@@ -50854,4 +50979,7 @@ the way `tools/getstories.py` fetches Frotz's stories, and the disk rules and
 that fits and is under 65,535 bytes (360KB: the executables and text; 720KB
 and 1.44MB: sources as far as they fit, manifest listed). Like every §70
 target these are on demand and nothing in `all` needs the compiler or the
-network (§70.13). It shares nothing with any other package.
+network (§70.13). It shares nothing with any other package. Its one bench
+harness, `tests/rcband/rcbandbench.asm` (`make rcbandbench` →
+`build/rcband.img`; PERFORMANCE.md Set 65), %includes the package's own
+`rcband.inc` and ships nothing.

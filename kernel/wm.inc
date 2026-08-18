@@ -1281,6 +1281,118 @@ wm_onmouseup:
     ret
 
 ; -----------------------------------------------------------------------------
+; wm_onwake - install (or clear) a window's WAKE handler (SPEC.md 71.1)
+; in:  BX = window ptr, AX = near ptr in the window's OWN segment, 0 to clear
+; out: nothing (all registers preserved)
+;
+; wm_onresize's shape exactly and for its reason: a SIDE TABLE, not a word in
+; the record, because WIN_SIZE is the stride every reader of a window pays and
+; growing it costs every existing .o88 a rebuild. Cleared by wm_destroy, so a
+; reused slot never inherits a stranger's near pointer.
+; -----------------------------------------------------------------------------
+wm_onwake:
+    push si
+    call wm_wkh_slot
+    mov [si], ax
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_wkh_slot - SI -> this window's wake handler word (module internal)
+; in:  BX = window ptr
+; out: SI = wm_onwk + index*2; every other register preserved
+; clobbers: flags
+; -----------------------------------------------------------------------------
+wm_wkh_slot:
+    push ax
+    call wm_ptr2idx             ; AL = index, AH = 0
+    mov si, ax
+    shl si, 1
+    add si, wm_onwk
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_wake - post an EVT_WAKE for a window (SPEC.md 71.1, slot OSAPI_WM_WAKE)
+; in:  BX = window ptr
+; out: CF=0 a wake is queued for this window (posted now, or one was already
+;      waiting - the two are the same promise); CF=1 the queue was full and
+;      nothing was posted. Every register preserved.
+;
+; ISR- and worker-safe: the record is filled and pushed under one
+; pushf/cli ... popf, so two posters cannot interleave in the one static
+; record, and evq_push's own guard nests inside it harmlessly.
+;
+; COALESCED, one queued wake per window: the ring is 16 records and drops
+; silently when full (SPEC.md 10), and a package that kicks from every
+; callback - which is what SPEC.md 71 tells it to do, so a dropped wake cannot
+; stall it - would otherwise be the thing that fills the ring and drops the
+; mouse. The flag is per SLOT (wm_wkq), set here and cleared by wm_wake_disp
+; BEFORE the handler runs, so a handler that re-posts itself gets exactly one
+; more record.
+; -----------------------------------------------------------------------------
+wm_wake:
+    push ax
+    push si
+    call wm_ptr2idx             ; AL = index (AH = 0)
+    mov si, ax
+    pushf
+    cli
+    cmp byte [wm_wkq+si], 0
+    jne .queued                 ; one is already in the ring: same promise
+    mov ax, [evq_count]
+    cmp ax, EVQ_CAP
+    jae .full                   ; evq_push would drop it silently; say so
+    mov byte [wm_wkq+si], 1
+    mov word [wm_wk_rec+EV_TYPE], EVT_WAKE
+    mov [wm_wk_rec+EV_A], bx
+    mov si, wm_wk_rec
+    call evq_push
+.queued:
+    popf
+    clc
+    jmp short .out
+.full:
+    popf
+    stc
+.out:
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_wake_disp - dispatch one EVT_WAKE (SPEC.md 71.1); called by ui_task
+; in:  SI = the window ptr the record carried; the UI task, gfx lock NOT held
+; out: nothing
+; clobbers: AX, BX, CX, DX, SI, DI, BP (a dispatch site, like ui_ptcall's)
+;
+; The slot's flag is cleared FIRST, so the handler may re-post from inside
+; itself. A window that died between the post and the pop is a record with
+; bit 0 clear, and nothing is called; a slot reused by a new tenant since the
+; post gets one early wake, which a wake handler must be indifferent to by
+; construction (it is a KICK, not a message). Billed to the owning instance
+; and stamped for it - ui_ptcall's environment minus the lock - so the file
+; slots the handler is entitled to call (SPEC.md 71.1) resolve in the
+; handler's own instance's folder, not the machine's.
+; -----------------------------------------------------------------------------
+wm_wake_disp:
+    mov bx, si
+    test word [bx+W_FLAGS], 1
+    jz .out                     ; the record is free: a wake for the dead
+    call wm_ptr2idx             ; AL = index, AH = 0
+    mov si, ax
+    mov byte [wm_wkq+si], 0     ; the promise is spent by this dispatch
+    shl si, 1
+    mov bp, [wm_onwk+si]
+    or bp, bp
+    jz .out                     ; never asked to be woken
+    mov si, bx
+    call ui_ptcall              ; SI = window, BP = the handler; CX/DX are
+                                ; carried and meaningless here
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
 ; wm_ask_size - put a proposed size to the window before committing it
 ; in:  BX = window ptr, CX = proposed width, DX = proposed height
 ; out: CX/DX = the size the window will accept; every other register
@@ -1809,6 +1921,11 @@ wm_destroy:
                                 ; a stranger's near pointer called in a new
                                 ; tenant's segment is not a wrong answer, it is
                                 ; a jump into the middle of its image
+    mov word [wm_onwk+si], 0    ; ...and its wake handler (SPEC.md 71.1), the
+                                ; same rule a third time
+    shr si, 1
+    mov byte [wm_wkq+si], 0     ; ...and its "a wake is queued" flag, or the
+    shl si, 1                   ; next tenant of this slot could never post one
     shl si, 1                   ; ...and the four BAND extents (SPEC.md
     mov word [wm_su_ext+si], 0  ; 11.96.11), which is the same rule a fourth
     mov word [wm_su_ext+si+2], 0; time: the fragment layout is a function of
@@ -8333,6 +8450,11 @@ wm_onsz:    resw MAX_WIN            ; per-slot size-CHANGED handler offset, 0 =
                                     ; exactly, for wm_about's reason: a handler
                                     ; is per SLOT and a wider record is paid for
                                     ; by every reader of a window
+wm_onwk:    resw MAX_WIN            ; per-slot WAKE handler offset, 0 = none
+                                    ; (SPEC.md 71.1); wm_onsz's shape and reason
+wm_wkq:     resb MAX_WIN            ; per slot: 1 = an EVT_WAKE for this window
+                                    ; is in the ring (wm_wake coalesces on it)
+wm_wk_rec:  resb EVQ_RECSIZE        ; the one wake record, filled under cli
 wm_owner:   resb MAX_WIN            ; instance index owning each window slot
                                     ; (SPEC.md 29), 0xFF = unowned; NOT part
                                     ; of wm_init's zero run (fill is 0xFF)

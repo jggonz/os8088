@@ -437,6 +437,40 @@ cc_onresize:
     ret
 %endif
 
+%ifdef CC_HAS_ONWAKE
+; -----------------------------------------------------------------------------
+; cc_onwake - W_ONWAKE, the package's own kick (SPEC.md 71.1), installed by
+; os88_wm_onwake(). THE ONE CALLBACK THAT RUNS WITHOUT THE GFX LOCK: the UI
+; task popped an EVT_WAKE that OSAPI_WM_WAKE posted (from a callback, from the
+; handler itself, from a worker) and dispatches it here, billed to the
+; instance, lock free. So the C may call the file slots and may take the lock
+; itself with os88_gfx_lock() for a burst it can state - and must not draw
+; before it has. Nothing arrives with it: it is a kick, and one after the
+; window's slot was reused is possible, so the handler must be indifferent to
+; being called with nothing to do.
+; in:  SI = the window; lock NOT held
+; out: nothing; every register the kernel cares about is preserved
+; -----------------------------------------------------------------------------
+cc_onwake:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    cld
+    push si                         ; arg 1: void *win
+    call _os88_onwake
+    add sp, 2
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+%endif
+
 %ifdef CC_HAS_MENUS
 ; -----------------------------------------------------------------------------
 ; cc_oncmd - AM_ONCMD, a pick from one of your menus (SPEC.md 12.2)

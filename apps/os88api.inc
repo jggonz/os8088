@@ -2248,6 +2248,27 @@ CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
                                  ; folder, and it does not move your app's own
                                  ; current folder the way GOTO does.
 
+%define OSAPI_FILE_GOTO_QM  KERNEL_SEG:0x0438   ; DX = a folder's first cluster
+                                 ; (0 = the root), BL = the volume. out exactly
+                                 ; as OSAPI_FILE_GOTO_Q: CF=0 and AX=0, else
+                                 ; AX = FERR_* and nothing moved.
+                                 ;
+                                 ; GOTO_Q's quiet stand AND the instance MOVES
+                                 ; WITH IT (SPEC.md 71.1, 19.2.1): the same
+                                 ; word-or-quiet-mount, and then the folder is
+                                 ; recorded as where your instance now stands,
+                                 ; so the file cell you call next resolves
+                                 ; THERE. GOTO_Q alone is undone by that next
+                                 ; cell, which first re-stands the machine in
+                                 ; your instance's folder - right for a copy
+                                 ; loop that wants to come home, wrong for a
+                                 ; program whose working folder changes on
+                                 ; every call (a CP/M drive is a folder). Same
+                                 ; caveat as GOTO_Q: the global listing is
+                                 ; left empty and owed, so it is not the one to
+                                 ; call before SHOWING a folder. Bank where you
+                                 ; were with OSAPI_FILE_HERE first if you mean
+                                 ; to come back.
 %define OSAPI_REBOOT        KERNEL_SEG:0x0368   ; AL = 0 the ordinary restart /
                                  ; non-0 restart WITHOUT touching a disk. No
                                  ; answer, every register AND THE FLAGS
@@ -2432,6 +2453,50 @@ OSAPI_FT_UP   equ 3             ; the synthesized '..' (SPEC.md 19.5)
                                  ; none of this. An app that draws through the
                                  ; bottom of its own frame after an adapter
                                  ; change is the symptom this exists for.
+%define OSAPI_WM_ONWAKE     KERNEL_SEG:0x0430   ; BX = win ptr, AX = a near proc
+                                 ; in YOUR segment (0 clears it): your WAKE
+                                 ; handler (SPEC.md 71.1). Install it from your
+                                 ; entry proc after OSAPI_WM_CREATE, like
+                                 ; OSAPI_WM_ONRESIZE - a side table, not a
+                                 ; template word, cleared when the window dies.
+                                 ;
+                                 ; Called SI = your window, on the UI task,
+                                 ; billed to your instance, WITHOUT THE GFX
+                                 ; LOCK - the one callback that is not under
+                                 ; it. So it may call the file slots (it is
+                                 ; the UI task, which is their contract), and
+                                 ; it may take the lock itself with
+                                 ; OSAPI_GFX_LOCK for a burst it can state and
+                                 ; release it - and it may NOT draw before it
+                                 ; has. It is a KICK, not a message: nothing
+                                 ; is delivered with it, one arrives per
+                                 ; OSAPI_WM_WAKE below (or fewer - see there),
+                                 ; and a stale one after a slot was reused is
+                                 ; possible, so a handler must be indifferent
+                                 ; to being called with nothing to do.
+                                 ;
+                                 ; WHAT IT IS FOR: a long computation with I/O
+                                 ; that has to live on the UI task because
+                                 ; file slots do - RunCPM's Z80 runs in slices
+                                 ; from here (SPEC.md 71), each slice re-posting
+                                 ; the next, and a program waiting on a key
+                                 ; costs nothing until W_ONKEY kicks.
+%define OSAPI_WM_WAKE       KERNEL_SEG:0x0428   ; BX = win ptr (a window of
+                                 ; YOURS). Post an EVT_WAKE for it (SPEC.md
+                                 ; 10, 71.1): the UI task pops it in order with
+                                 ; the mouse events and calls the handler
+                                 ; above. Any context - ISR-safe and worker-
+                                 ; safe, no lock needed. out CF=0 a wake is
+                                 ; queued for that window - posted now, or one
+                                 ; was ALREADY waiting, which is the same
+                                 ; promise: the kernel keeps at most one queued
+                                 ; wake per window, so kicking from every
+                                 ; callback (paint, key, click, the handler
+                                 ; itself) is free and can never fill the
+                                 ; 16-record ring. CF=1 the ring was full of
+                                 ; other events and nothing was posted - kick
+                                 ; again from your next callback. Every
+                                 ; register preserved.
 %define OSAPI_WM_KEEPH      KERNEL_SEG:0x03E0   ; BX = win ptr, AL = 0 clear /
                                  ; non-0 set: "my layout is FIXED - if I will
                                  ; not fit the desktop band, hang me over the

@@ -718,6 +718,61 @@ _os88_wm_onresize:
     ret
 %endif
 
+%ifdef CC_HAS_ONWAKE
+; void os88_wm_onwake(void *win) - BX = win, AX = the near proc (SPEC.md 71.1).
+_os88_wm_onwake:
+    push bp
+    mov bp, sp
+    mov bx, [bp+4]
+    mov ax, cc_onwake
+    call OSAPI_WM_ONWAKE
+    pop bp
+    ret
+
+; int os88_wm_wake(void *win) - BX = win (SPEC.md 71.1). Post the kick; the
+; handler above runs on the UI task, lock free, some passes later. Any
+; context. 0 = a wake is queued for this window (now or already), -1 = the
+; 16-record ring was full of other events and nothing was posted - kick again
+; from your next callback. Under CC_HAS_ONWAKE with the installer: a wake
+; with no handler dispatches to nothing, so a package without one has no use
+; for it and does not pay its bytes.
+_os88_wm_wake:
+    push bp
+    mov bp, sp
+    mov bx, [bp+4]
+    call OSAPI_WM_WAKE
+    mov ax, 0                       ; MOV: CF is the answer
+    jnc .ok
+    dec ax
+.ok:
+    pop bp
+    ret
+%endif
+
+; int os88_fullscreen(void *win, int enter) - BX = win, AL = 1 enter / 0 exit
+; (SPEC.md 11.2 - the WF_FULL latch, NOT the 53 exclusive bracket). The caller
+; holds the gfx lock, which a window callback does. 0 = done, -1 = enter
+; refused (another window owns the screen). Exiting is the app's job - the
+; menu bar is unreachable while it holds the screen - and SPEC.md 11.2.1's
+; F/Esc binding is the convention, with 71.2's stated exception for a
+; terminal that owns both keys. Every window callback runs with the lock
+; already held, so the fold below is the same one CC_T_WINF does: any non-zero
+; word means enter.
+_os88_fullscreen:
+    push bp
+    mov bp, sp
+    mov bx, [bp+4]
+    mov ax, [bp+6]
+    or ah, al
+    mov al, ah
+    call OSAPI_FULLSCREEN
+    mov ax, 0
+    jnc .ok
+    dec ax
+.ok:
+    pop bp
+    ret
+
 ; =============================================================================
 ; TASKS AND TIME (SPEC.md 8, 20.6)
 ; =============================================================================
@@ -1111,6 +1166,29 @@ _os88_file_goto:
     dec ax
 .ok:
     pop di
+    pop bp
+    ret
+
+; int os88_file_goto_q_mark(unsigned clus, int vol) - DX = the folder's first
+; cluster (0 = the root), BL = the volume (SPEC.md 71.1, 19.2.2). GOTO_Q's
+; quiet stand - a word inside the current volume, a quiet mount across one -
+; AND the instance moves with it, so the file call you make next resolves
+; there instead of being re-stood in the folder you were launched from. 0
+; moved, -1 refused (os88_ferr() says why). Bank the place you were with
+; os88_file_here() first if you mean to come back; a launch folder is one
+; struct os88_place, and so is a CP/M drive.
+_os88_file_goto_q_mark:
+    push bp
+    mov bp, sp
+    mov dx, [bp+4]
+    mov bx, [bp+6]
+    call OSAPI_FILE_GOTO_QM
+    mov [cc_ferr], ax               ; the FERR_* on refusal, 0 on success -
+                                    ; the same word every file thunk writes
+    mov ax, 0
+    jnc .ok
+    dec ax
+.ok:
     pop bp
     ret
 

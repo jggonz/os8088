@@ -26,6 +26,16 @@ EVT_RDOWN   equ 3               ; a=x, b=y, c=birth tick; RIGHT button PRESS.
                                 ; for record symmetry and is read by nobody -
                                 ; a right double-click would need no format
                                 ; change to arrive.
+EVT_WAKE    equ 4               ; a=window ptr, b/c unused. A PACKAGE'S OWN
+                                ; KICK (SPEC.md 71.1): posted through
+                                ; OSAPI_WM_WAKE from any context, popped by
+                                ; the UI task and dispatched to the window's
+                                ; W_ONWAKE handler WITHOUT the gfx lock, so
+                                ; the handler may call the file slots and may
+                                ; take the lock itself for a stated burst.
+                                ; wm_wake coalesces: one queued wake per
+                                ; window at a time, so a package that kicks
+                                ; from every callback cannot fill the ring.
 
 EVQ_RECSIZE equ 8               ; bytes per record
 EVQ_CAP     equ 16              ; records in the ring

@@ -162,6 +162,8 @@ ui_task:
     je .mup                     ; (SPEC.md 13.5), and is otherwise ignored -
                                 ; which is what this loop did with every
                                 ; mouse-up before that section existed
+    cmp ax, EVT_WAKE            ; a package's own kick (SPEC.md 71.1): its
+    je .wake                    ; wake handler, WITHOUT the gfx lock
     cmp ax, EVT_MDOWN
     jne .yield                  ; only mouse-downs matter here
     mov cx, [ui_ev + EV_A]      ; CX = click x
@@ -392,6 +394,11 @@ ui_task:
 .drag:
     call ui_drag                ; in: BX = window, CX/DX = mousedown x/y
     jmp short .yield
+
+.wake:
+    mov si, [ui_ev + EV_A]      ; the window that asked; NO lock is taken -
+    call wm_wake_disp           ; the handler takes it itself for a stated
+    jmp .yield                  ; burst, and may call the file slots (71.1)
 
 .rdown:
     mov cx, [ui_ev + EV_A]      ; the right button is swallowed by a modal

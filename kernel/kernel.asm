@@ -2091,7 +2091,36 @@ osapi_table:
                                   ;          could stand in its own folder, or
                                   ;          in one a dialog had given it, and
                                   ;          nowhere else
-osapi_table_end:                  ; 0x0428
+    OSAPI_SLOT wm_wake            ; 0x0428 - BX = a window of yours: post an
+                                  ;          EVT_WAKE for it (SPEC.md 71.1).
+                                  ;          Any context - ISR- and worker-
+                                  ;          safe. out CF=0 a wake is queued
+                                  ;          (now, or one was already waiting:
+                                  ;          one per window at a time), CF=1
+                                  ;          the ring was full and nothing was
+                                  ;          posted. The UI task pops it and
+                                  ;          calls the handler below WITHOUT
+                                  ;          the gfx lock
+    OSAPI_SLOT wm_onwake          ; 0x0430 - BX = window, AX = a near proc in
+                                  ;          YOUR segment (0 clears it): the
+                                  ;          WAKE handler. Called SI = your
+                                  ;          window, on the UI task, lock NOT
+                                  ;          held, billed to your instance -
+                                  ;          it may call the file slots and
+                                  ;          may take the lock for a burst it
+                                  ;          can state. Install it after
+                                  ;          OSAPI_WM_CREATE like
+                                  ;          OSAPI_WM_ONRESIZE - a side table,
+                                  ;          not a template word
+    OSAPI_SLOT osapi_file_goto_qm ; 0x0438 - DX = folder cluster, BL = volume:
+                                  ;          OSAPI_FILE_GOTO_Q's quiet stand
+                                  ;          AND THEN inst_vol_mark, so the
+                                  ;          calling instance now believes it
+                                  ;          lives there and the next file
+                                  ;          cell's inst_vol_enter does not
+                                  ;          undo the move (SPEC.md 71.1,
+                                  ;          19.2.2). Same answers as GOTO_Q
+osapi_table_end:                  ; 0x0440
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -2099,8 +2128,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 131 * 8
-%error "os8088 API jump table must be exactly 131 8-byte slots"
+%if OSAPI_TABLE_LEN != 134 * 8
+%error "os8088 API jump table must be exactly 134 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -3026,6 +3055,26 @@ osapi_file_goto_q:
     mov ax, FERR_NODISK
     pop dx
     stc
+    ret
+
+; ---- osapi_file_goto_qm - the quiet stand that MOVES THE INSTANCE (71.1) -----
+; in:  DX = the folder's first cluster (0 = the root), BL = the volume
+; out: CF=0 moved and marked; CF=1 and AX = FERR_* (nothing marked)
+;
+; osapi_file_goto_q and then inst_vol_mark, which is the one line the two
+; differ by. GOTO_Q deliberately leaves the instance's own folder alone, and
+; every package file cell first re-stands the machine there (inst_vol_enter,
+; SPEC.md 19.2.1) - so a package that WORKS in a folder that is not its own
+; (RunCPM's CP/M drives are folders, SPEC.md 71.3, and every BDOS call may
+; change one) was undone by its very next read. This is the quiet move that
+; sticks: no listing, no sort, no icon harvest, and the instance follows.
+; It is what OSAPI_FILE_GOTO does minus the dsk_chdir, and inst_vol_mark
+; preserves the flags, so GOTO_Q's CF answer is the answer.
+osapi_file_goto_qm:
+    call osapi_file_goto_q
+    jc .out
+    call inst_vol_mark
+.out:
     ret
 
 ; ---- osapi_video - the screen the program actually got (SPEC.md 39.2) --------
