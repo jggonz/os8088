@@ -96,6 +96,9 @@ VM386WORD := $(CURDIR)/vm/386-word
 # checked the clock of.
 VM386CWORD := $(CURDIR)/vm/386-c-word
 
+# The RUNCPM machine (SPEC.md 71.5): the same 386, B: = build/runcpm.img.
+VM386RUNCPM := $(CURDIR)/vm/386-runcpm
+
 # VIDEO=cga|herc|vga forces the adapter instead of probing for it (SPEC.md
 # 39.1). The shipped images are always built without it, so they auto-detect;
 # this exists because QEMU emulates no CGA and no Hercules card, and forcing
@@ -642,6 +645,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc
         stories zdisk ztest zh zhboot zcheck zgfx zpic zscreens xt-z 386-z \
         worddisk wordcheck xt-word 386-word \
         cc-note chello covl cword cworddisk 386-c-word runcpm runcpmdisk \
+        runcpm-src rcz80test rcmemtest rczex 386-runcpm \
         allapps rcbandbench \
         checkdocs clean clean-cc clean-marty distclean
 
@@ -1924,31 +1928,123 @@ RUNCPMSRC := apps/runcpm/rcterm.c apps/runcpm/rccpm.c apps/runcpm/rcfs.c \
              apps/runcpm/rcabout.c
 RUNCPMINC := apps/runcpm/rcz80.inc apps/runcpm/rcmem.inc apps/runcpm/rcband.inc
 RUNCPMHOST := apps/runcpm/build.sh apps/runcpm/hosttest/os88.h \
-              apps/runcpm/hosttest/rcuitest.c
+              apps/runcpm/hosttest/rcuitest.c apps/runcpm/hosttest/rcmemtest.asm \
+              apps/runcpm/hosttest/rcmemtest.sh $(RUNCPMINC)
 $(BUILD)/runcpm.raw.asm: $(RUNCPMSRC) $(BUILD)/.runcpm-hostchecks
 $(BUILD)/runcpm.bin: $(RUNCPMINC)
 
+# ($(RUNCPMINC) is in RUNCPMHOST because rcmemtest.asm %includes rcmem.inc and
+# rcz80.inc: an edit to a mover must re-run the mover harness, and make
+# cannot see through a %include - LESSONS.md 9.)
 $(BUILD)/.runcpm-hostchecks: apps/runcpm/runcpm.c $(RUNCPMSRC) $(RUNCPMHOST) | $(BUILD)
 	apps/runcpm/build.sh
 	@touch $@
 
 runcpm: $(BUILD)/runcpm.o88
 
-# The wave-1 floppy: the package, and A\0\RCPROBE.TXT - a file that exists in
-# the drive-A/user-0 folder and nowhere else, which is what the launch's first
-# wake reads through os88_file_goto_q_mark to prove the quiet move sticks
-# (SPEC.md 71.1). Wave 2 replaces the folder's contents with the master disk
-# tools/getruncpm.py fetches, and adds the 720KB and 360KB geometries.
-$(BUILD)/RCPROBE.TXT: | $(BUILD)
-	printf 'A0 reached through goto_q_mark\r\n' > $@
+# THE MASTER DISK AND THE CCP ARE FETCHED, NEVER COMMITTED (CONTRIBUTING.md 6,
+# SPEC.md 71.5): tools/getruncpm.py takes RunCPM's CCP-DR.60K, LICENSE,
+# 1STREAD.ME and DISK/A0.zip at the pinned commit (the same hash the banner's
+# 'Built' line names), verifies every SHA-256, and unpacks the master disk
+# into build/runcpm-disk/A/0 minus the three files above 65,535 bytes (which
+# A/0/LEFT-OFF.TXT names). A stamp rather than a directory, as the story cache
+# is: make cannot depend on eighty files, and the script is idempotent -
+# nothing is downloaded twice. `make runcpm-src` alone fetches.
+RUNCPMDIR := $(BUILD)/runcpm-disk
+$(BUILD)/runcpm-src.stamp: tools/getruncpm.py | $(BUILD)
+	python3 tools/getruncpm.py -o $(RUNCPMDIR)
+	@touch $@
 
-RUNCPMDISK := $(BUILD)/runcpm.o88 A/0:$(BUILD)/RCPROBE.TXT
+runcpm-src: $(BUILD)/runcpm-src.stamp
 
-runcpmdisk: $(BUILD)/runcpm.img
+# HELLO.COM - the hand-assembled Z80 hello the wave-2 gate loads with the
+# debug key (docs/RUNCPM-PORT-PLAN.md): LD C,9 / LD DE,0109h / CALL 5 / RET,
+# then the string; the RET goes to the 0000 the loader put on the stack, so
+# it also exercises the warm-boot path (SPEC.md 71). Emitted here rather than
+# assembled because there is no Z80 assembler in this tree and nine bytes are
+# not worth adding one. It is a BUILD ARTIFACT of this tree, not master-disk
+# content, so it rides the ROOT of build/runcpm.img ONLY (the launch folder,
+# where the loader looks after A\0; the wave-2 gate names 'a .COM on
+# build/runcpm.img' and tests/rczex.py boots that image) - never A\0, and
+# never the 720KB/360KB disks: a CP/M user's DIR shows RunCPM's disk and
+# nothing invented here (SPEC.md 71.5; wave 6's curation pass decides
+# whether it stays at all).
+$(BUILD)/HELLO.COM: | $(BUILD)
+	printf '\016\011\021\011\001\315\005\000\311Hello from the Z80 - RunCPM on os8088\r\n$$' > $@
 
-$(BUILD)/runcpm.img: $(BUILD)/runcpm.o88 $(BUILD)/RCPROBE.TXT tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(RUNCPMDISK)
+# THE THREE FLOPPIES (SPEC.md 71.5): the package in the root beside the CCP it
+# loads (before any folder move: the same rule as CWORD.OVL), RunCPM's LICENSE
+# and 1STREAD.ME, and drive A user 0 - the master disk as far as the geometry
+# holds it, chosen at recipe time by getruncpm.py --select (the texts and
+# submit files first, then the programs, then documentation, libraries and
+# sources; 720KB and 1.44MB carry all of it, 360KB the programs and texts), so
+# no manifest is checked in. A/0 holds 77 files on 1.44MB, past the Disk
+# window's 32-entry listing cap, which is a DISPLAY cap (SPEC.md 19): the file
+# API walks them all, and --deep-folders is os88disk.py's word for a folder
+# that is a data store rather than a place to browse. Each image is
+# --verify'd, and the verify is what catches a --select that overshot - but
+# --select is told what it is choosing beside: --reserve names the root files
+# (the package, an .OVL if one comes, the CCP, the texts, HELLO.COM on the
+# 1.44MB disk) and prices them in the geometry's own clusters, so the A/0
+# selection re-shapes itself as the package grows instead of the 360KB
+# build stopping at 'data over capacity'. The selection is a shell
+# substitution INSIDE the recipe, so a --select that fails (no A0.list, a
+# bad geometry) would otherwise print nothing and the image would build with
+# an empty A/0 and verify clean - which reads exactly like a working disk.
+# RUNCPMIMG therefore keeps its stderr and stops the recipe when the
+# selection is empty. $(3) is the geometry's extra root files, if any.
+RUNCPMDISK := $(BUILD)/runcpm.o88 $(RUNCPMDIR)/CCP-DR.60K $(RUNCPMDIR)/LICENSE \
+              $(RUNCPMDIR)/1STREAD.ME
+RUNCPMDEPS := $(BUILD)/runcpm.o88 $(BUILD)/runcpm-src.stamp \
+              tools/os88disk.py tools/getruncpm.py
+define RUNCPMIMG
+sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select $(2) --reserve $(RUNCPMDISK) $(3) | sed 's,^,A/0:,')"; \
+[ -n "$$sel" ] || { echo "runcpm: getruncpm.py --select $(2) chose nothing"; exit 1; }; \
+python3 tools/os88disk.py -o $(1) --size $(2) --deep-folders $(RUNCPMDISK) $(3) $$sel
+endef
+
+runcpmdisk: $(BUILD)/runcpm.img $(BUILD)/runcpm720.img $(BUILD)/runcpm360.img
+
+$(BUILD)/runcpm.img: $(RUNCPMDEPS) $(BUILD)/HELLO.COM
+	$(call RUNCPMIMG,$@,1440,$(BUILD)/HELLO.COM)
 	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/runcpm720.img: $(RUNCPMDEPS)
+	$(call RUNCPMIMG,$@,720)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/runcpm360.img: $(RUNCPMDEPS)
+	$(call RUNCPMIMG,$@,360)
+	@python3 tools/os88disk.py --verify $@
+
+# THE CORE GATES (SPEC.md 71, docs/RUNCPM-PORT-PLAN.md wave 2). `make rczex`
+# is the plan's: boot build/runcpm.img in QEMU, launch RUNCPM, load ZEXDOC
+# through the debug key and read the terminal rows off screendumps until
+# 'Tests complete' (tests/rczex.py, an 8x8-glyph OCR in tests/rczex_ocr.py).
+# `make rcz80test` runs the SAME shipping core against the same ZEXDOC in raw
+# QEMU from a boot sector - and `make rcmemtest` runs the Z80-RAM movers there with SS != DS
+# and negative controls (apps/runcpm/hosttest/*.sh). None of the three is in
+# `all`: the first two need the fetched master disk.
+rcz80test: $(BUILD)/runcpm-src.stamp
+	apps/runcpm/hosttest/rcz80test.sh
+
+rcmemtest:
+	apps/runcpm/hosttest/rcmemtest.sh
+
+#
+# MEASURED (2026-08-17, wave 2, an Apple-silicon host running QEMU's TCG):
+# rcz80test 144 s alone (185 s beside another QEMU); rczex 146 s from Alt+L
+# to 'Tests complete', 67 of 67 groups OK (179 s before the review's slice
+# fixes) - the in-OS run costs about what the raw one does, the wake round
+# trip and the terminal being what is left. Re-measured after the second
+# review on a host at load ~2.3: rczex 175 / 211 / 193 s over three runs
+# with rcz80test at 155 s the same hour and a control build carrying the
+# previous adaptation at 178 s - the spread is the host's, not the code's,
+# and the figure to quote is the quiet-host one. (The first
+# in-OS runs were five times slower, and the reason is in SPEC.md 71: TCG's
+# price for a per-branch write into a page that also holds translated code.)
+rczex: $(BUILD)/runcpm.img
+	python3 tests/rczex.py $(BUILD)/runcpm.img
 
 # =============================================================================
 # FROTZ and its story floppy (SPEC.md 61) - ON DEMAND: `make zdisk`
@@ -3887,6 +3983,17 @@ xt-word: $(IMG360) $(BUILD)/word720.img
 386-c-word: $(IMG) $(BUILD)/cword.img
 	@$(UNPROTECT) $(VM386CWORD)/86box.cfg
 	$(BOX) -P $(VM386CWORD) -N
+
+# The RUNCPM machine (SPEC.md 71.5): vm/386-c-word with B: = build/runcpm.img
+# and the uuid changed and NOTHING else, for the same reason that one is a
+# copy of vm/386-word (above). The banner's 'Estimated Z80 clock speed' read
+# here is the number SPEC.md 71 records for the 386; the XT figure is taken
+# on vm/xt640 with fdd_02_fn hand-pointed at build/runcpm360.img for the
+# session (docs/RUNCPM-PORT-PLAN.md wave 2) - no xt-runcpm target until the
+# measurement says the port is usable there.
+386-runcpm: $(IMG) $(BUILD)/runcpm.img
+	@$(UNPROTECT) $(VM386RUNCPM)/86box.cfg
+	$(BOX) -P $(VM386RUNCPM) -N
 
 # The MARTYPC DEBUGGER (docs/MARTYPC-DEBUG.md): a remote debug server bolted
 # into MartyPC's headless frontend, giving memory, registers, breakpoints,

@@ -96,8 +96,8 @@ static int rc_prm[4];
 static int rc_nprm;
 static int rc_priv;                                /* CSI ? */
 static int rc_scx, rc_scy;                         /* ESC[s .. ESC[u */
-static int rc_bells;                               /* BELs since the last
-                                                    * flush: one tone each */
+/* rc_bells - BELs since the last flush, one tone each - is declared in
+ * runcpm.c ahead of the key ring, which rings it on an overrun */
 static int rc_all_blank;                           /* ESC[2J happened
                                                     * and nothing was written
                                                     * since: the flush may
@@ -198,18 +198,29 @@ static void rc_dirty_from(int from)
 }
 
 /* scroll rows top..RC_ROWS-1 up by one: the top row's storage becomes the
- * new blank bottom row. 25 stores, no byte moves. */
+ * new blank bottom row. 25 stores, no byte moves. THE DIRTY FLAGS ROTATE
+ * WITH THE ROWS: the shadow ring is rotated the same way by the flush's
+ * gfx_scroll, so a row that agreed with its shadow before the scroll agrees
+ * after it, and only the vacated row is new - marking every row from `top`
+ * dirty here would make the flush compare all of them (rc_rowdiff is a
+ * repe cmpsb, ~370 us a row on the 8088: ~9 ms on top of every scrolled
+ * line, a fifth of what the line costs). The flush marks every row from
+ * `top` dirty ITSELF on the one path where it is true - a gfx_scroll the
+ * kernel refused, so the glass did not move (below). */
 static void rc_scroll_up(int top)
 {
     int r;
     unsigned char p = rc_prow[top];
-    for (r = top; r < RC_ROWS - 1; r++)
+    for (r = top; r < RC_ROWS - 1; r++) {
         rc_prow[r] = rc_prow[r + 1];
+        rc_dirty[r] = rc_dirty[r + 1];
+    }
     rc_prow[RC_ROWS - 1] = p;
     rc_row_clear(p);
+    rc_dirty[RC_ROWS - 1] = 1;             /* the vacated row */
+    rc_dirty_any = 1;
     rc_scr_note(top, 1);                   /* the glass can follow with ONE
                                             * gfx_scroll (SPEC.md 5.5) */
-    rc_dirty_from(top);
 }
 
 /* the mirror image, for ESC[L: rows top.. move DOWN one, top becomes blank */
@@ -217,12 +228,15 @@ static void rc_scroll_down(int top)
 {
     int r;
     unsigned char p = rc_prow[RC_ROWS - 1];
-    for (r = RC_ROWS - 1; r > top; r--)
+    for (r = RC_ROWS - 1; r > top; r--) {
         rc_prow[r] = rc_prow[r - 1];
+        rc_dirty[r] = rc_dirty[r - 1];
+    }
     rc_prow[top] = p;
     rc_row_clear(p);
+    rc_dirty[top] = 1;
+    rc_dirty_any = 1;
     rc_scr_note(top, -1);
-    rc_dirty_from(top);
 }
 
 static void rc_put_cell(int x, int y, int ch)
@@ -342,7 +356,13 @@ static void rc_csi(int c)
         rc_scx = rc_cx; rc_scy = rc_cy;
         break;
     case 'u':
-        rc_move(rc_scx == RC_COLS ? RC_COLS - 1 : rc_scx, rc_scy);
+        /* the saved cursor comes back EXACTLY, a pending wrap included
+         * (rc_scx == RC_COLS): ESC[s at column 80 then ESC[u then a
+         * character must wrap the way it would have without the pair.
+         * (wave 1 clamped it and lost the wrap: found by the reviewer) */
+        rc_cx = rc_scx;
+        rc_cy = rc_scy;
+        rc_dirty_any = 1;
         break;
     case 'h':
     case 'l':
@@ -617,6 +637,15 @@ static void rc_flush(void *win)
             os88_gfx_fill(x0, y0 + (vac << 3), x0 + (cols << 3) - 1,
                           y0 + ((vac + n) << 3) - 1);
             rc_n_calls++;
+            /* the row the cursor was DRAWN on moved with the glass: its
+             * shadow row (cursor bit and all) is at the new index, and the
+             * compare below must visit it there - or a cursor left at row
+             * 10 while ESC[M scrolls row 5 stays on the glass at row 9 */
+            if (rc_sh_cy >= top && rc_sh_cy < rows) {
+                r = rc_scr_n > 0 ? rc_sh_cy - n : rc_sh_cy + n;
+                rc_sh_cy = (r < top || r >= rows) ? -1 : r;   /* or scrolled
+                                                              * off */
+            }
             while (n > 0) {
                 if (rc_scr_n > 0) {         /* up: top row's shadow storage
                                              * becomes the vacated bottom */
@@ -624,27 +653,39 @@ static void rc_flush(void *win)
                     for (r = top; r < rows - 1; r++) rc_shrow[r] = rc_shrow[r + 1];
                     rc_shrow[rows - 1] = p;
                     rc_sh_row_blank(rows - 1);
+                    rc_dirty[rows - 1] = 1; /* the vacated glass row: the model
+                                             * row now there may be anything
+                                             * (a row from below a short
+                                             * window, its flag long clear) */
                 } else {                    /* down: the bottom's becomes the
                                              * vacated top */
                     p = rc_shrow[rows - 1];
                     for (r = rows - 1; r > top; r--) rc_shrow[r] = rc_shrow[r - 1];
                     rc_shrow[top] = p;
                     rc_sh_row_blank(top);
+                    rc_dirty[top] = 1;
                 }
                 n--;
             }
+        } else {
+            /* refused (SPEC.md 5.5: the clip does not hold the whole
+             * rectangle - a window overlapping the terminal - or the region
+             * is not the visible one): nothing on the glass moved, so the
+             * shadow is still true and nothing here is marked unknown; but
+             * every model row from `top` down shifted against it, so every
+             * one is compared and drawn to the span where the shifted text
+             * differs from what stands. That is the price of an overlapped
+             * terminal (SPEC.md 71.2): a scrolled line is a band per row
+             * from `top` down - and this is the ONE place that dirties them
+             * all (rc_scroll_up rotates the flags with the rows). */
+            rc_dirty_from(top);
         }
-        /* refused (SPEC.md 5.5: the clip does not hold the whole rectangle -
-         * a window overlapping the terminal - or the region is not the
-         * visible one): nothing on the glass moved, so the shadow is still
-         * true and nothing here is marked unknown; the scroll already
-         * dirtied every row from `top`, and each is drawn to the span where
-         * the shifted text differs from what stands. That is the price of an
-         * overlapped terminal (SPEC.md 71.2): a scrolled line is a band per
-         * row from `top` down. */
         rc_scr_reset();
     } else if (rc_scr_bad) {
-        rc_scr_reset();                    /* the dirty rows carry it */
+        rc_dirty_from(0);                  /* two regions or two directions:
+                                            * no one gfx_scroll describes it,
+                                            * so every row is compared */
+        rc_scr_reset();
     }
 
     /* ESC[2J's price: if the whole model is blank and the glass is not, ONE

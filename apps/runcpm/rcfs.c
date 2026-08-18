@@ -23,10 +23,11 @@
  * and remembering it. rc_fs_cd() below is that switch; wave 4 grows the
  * directory cache and the open-file table around it.
  *
- * WAVE 1 carries rc_fs_cd() and one PROBE that proves the mechanism from a
- * wake handler - the place where the dispatch is billed to this instance and
- * where every BDOS call will run: stand in A/0, read a file that exists only
- * there, come home. Its output is scaffolding and wave 4 removes it.
+ * WAVE 1 carried rc_fs_cd() and a probe that proved the mechanism from a
+ * wake handler; wave 2's debug loader (runcpm.c) is the living proof now -
+ * it stands in A\0 through rc_fs_cd(0, 0) and reads the .COM it was named
+ * from there, in the context every BDOS call will have: the UI task, no
+ * lock, the dispatch billed to this instance.
  * ==========================================================================*/
 
 #define RC_DRIVES 16
@@ -114,28 +115,4 @@ static int rc_fs_cd(int d, int u)
     rc_cur.clus = rc_pl_clus[i];
     rc_cur.vol = rc_home.vol;
     return 0;
-}
-
-/* --- WAVE 1 SCAFFOLDING: the goto_q_mark proof (docs/RUNCPM-PORT-PLAN.md,
- * wave 1 'done when') - removed by wave 4 when the real drive layer lands.
- * Called ONCE from the first os88_onwake, because that is the context every
- * BDOS call will have: the UI task, no lock, the dispatch billed to this
- * instance. Reads A\0\RCPROBE.TXT - a file the wave-1 disk carries there and
- * nowhere else - into `out`, and comes home. Answers the byte count, or a
- * negative code naming the step that failed. */
-static char rc_probe_buf[80];
-static int rc_fs_probe(void)
-{
-    unsigned n;
-    if (rc_fs_cd(0, 0) < 0)
-        return -1;                          /* no A\0 folder */
-    n = os88_file_read("RCPROBE.TXT", rc_probe_buf, sizeof(rc_probe_buf) - 1);
-    if (n == 0 && os88_ferr() != 0) {
-        rc_fs_home();
-        return -2;                          /* standing there, no file */
-    }
-    rc_probe_buf[n] = 0;
-    if (rc_fs_home() < 0)
-        return -3;
-    return (int)n;
 }

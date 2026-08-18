@@ -38,13 +38,33 @@
  *
  * and the shim (runcpm.asm) %includes rcz80.inc, rcmem.inc and rcband.inc.
  *
- * WHAT WAVE 1 IS. The window, the terminal, the shadow, the banner, the wake
- * round trip and the quiet-goto proof, and the host harness that prices the
- * redraw path (hosttest/rcuitest.c). Two pieces of SCAFFOLDING are here and
- * are marked RC_W1: the wake handler counts its round trips on the glass and
- * echoes typed keys through the terminal (there is no Z80 to feed yet), and
- * the first wake runs rcfs.c's goto_q_mark probe. Wave 2 replaces the first
- * with the slice driver, wave 4 the second with the drive layer.
+ * WHAT WAVE 2 IS. The Z80 (rcz80.inc), the movers (rcmem.inc), the slice
+ * driver in os88_onwake, the boot state machine (banner, the measured clock
+ * estimate, then the machine idles until wave 3's CCP), the console side of
+ * the BDOS and BIOS (rccpm.c) and the debug loader - Alt+L asks for a name
+ * and runs that .COM from A\0 (or the launch folder) at 0100h, which is how
+ * ZEXDOC and the hello are run before there is a command processor. Wave
+ * 1's scaffolding (the wake counter, the local echo, the goto_q_mark probe)
+ * is gone: the loader standing in A\0 through rc_fs_cd() is the living
+ * proof of the quiet goto, and the slice loop is the wake's client.
+ *
+ * THE SLICE (SPEC.md 71, 71.1). One wake runs rc_run() for rc_slice_n control
+ * transfers (os88_cpu() sets the first guess, ~50 ms on the target; then it
+ * adapts to the ticks - and ONLY a slice that spent its whole budget says
+ * anything about the machine's speed: a slice that ended early, in a
+ * console read on an empty ring, at a program's end or at a HALT, leaves the
+ * estimate alone, so a typist's keys cannot walk the budget up to the cap
+ * and hand the next busy slice seconds of UI task), servicing every RST
+ * handoff in between; then flushes the terminal ONCE under the lock; then
+ * re-posts ONLY while the machine has work - never while it is blocked in a
+ * console read on an empty key ring, when os88_onkey's kick is the next one.
+ * Flushing once per slice, not per line, is the pacing decision SPEC.md 71.2
+ * asks for: a scrolled line is ~47 ms of glass on the target and N lines in
+ * one slice are ONE gfx_scroll - so a keystroke is answered within one slice
+ * PLUS one flush, and the flush is at most one scroll + one fill +
+ * min(lines, RC_ROWS) bands. The clock estimate runs through the same
+ * slices, and so does the debug loader's floppy read: NOTHING that takes
+ * disk time or Z80 time runs under the gfx lock a W_ONKEY holds.
  *
  * THE FOUR RULES (SPEC.md 70.5-70.8), obeyed visibly: every buffer and every
  * out-parameter is static; no struct is ever copied; there is no long, no
@@ -63,6 +83,7 @@ void  os88_onkey(int ascii, int scan, void *win);
 void  os88_oncmd(int item, int menu, void *win);
 void  os88_about(void *win);
 void  os88_onwake(void *win);
+void  os88_onclick(int x, int y, void *win);
 
 static void rc_term_init(void);
 static void rc_putc(int c);
@@ -71,8 +92,63 @@ static void rc_flush(void *win);
 static void rc_sh_inval(void);
 static void rc_bell_service(void);
 static void rc_fs_init(void);
-static int  rc_fs_probe(void);
+static int  rc_fs_cd(int d, int u);
+static int  rc_fs_home(void);
 static void rc_about(void *win);
+static int  rc_key_pop(void);
+static void rc_patch_cpm(void);
+static int  rc_bios(void);
+static int  rc_bdos(void);
+
+/* the hand-written half (SPEC.md 70.11): rcz80.inc and rcmem.inc in the
+ * shim. Near cdecl; the register file is rc_z (rccpm.c). The host harness
+ * models them in C. */
+int  rc_run(int n);
+int  rc_rd(unsigned a);
+int  rc_rd16(unsigned a);
+void rc_wr(unsigned a, int v);
+void rc_wr16(unsigned a, int v);
+void rc_zcopy_in(unsigned zaddr, const void *src, unsigned n);
+void rc_zcopy_out(void *dst, unsigned zaddr, unsigned n);
+void rc_zzcopy_in(unsigned zaddr, unsigned seg, unsigned off, unsigned n);
+void rc_zzcopy_out(unsigned seg, unsigned off, unsigned zaddr, unsigned n);
+void rc_zfill(unsigned zaddr, int v, unsigned n);
+
+/* the key ring: os88_onkey pushes, the BDOS/BIOS console reads pop
+ * (rccpm.c); the debug loader's prompt reads it too */
+#define RC_KRING 64
+static unsigned char rc_kbuf[RC_KRING];
+static int rc_khead, rc_ktail;
+
+static int rc_bells;                        /* BELs since the last flush,
+                                             * one tone each (rcterm.c's
+                                             * parser counts them; so does
+                                             * the ring, below) */
+static int rc_key_push(int c)
+{
+    int n = (rc_ktail + 1) & (RC_KRING - 1);
+    if (n == rc_khead) {
+        /* full: input overrun. Never silent - one of the three defects
+         * CLAUDE.md names as invisible in an emulator - so it does what the
+         * PC BIOS does with a full keyboard buffer: rings. Zero glass cost,
+         * one tone from rc_bell_service outside the lock. */
+        rc_bells++;
+        return -1;
+    }
+    rc_kbuf[rc_ktail] = (unsigned char)c;
+    rc_ktail = n;
+    return 0;
+}
+
+static int rc_key_pop(void)
+{
+    int c;
+    if (rc_khead == rc_ktail)
+        return -1;
+    c = rc_kbuf[rc_khead];
+    rc_khead = (rc_khead + 1) & (RC_KRING - 1);
+    return c;
+}
 
 #include "rcterm.c"
 #include "rccpm.c"
@@ -111,34 +187,20 @@ struct rc_kmset {
 static struct rc_kmset rc_kmenus = { "RunCPM", 0, 0 };
 
 static unsigned rc_zseg;                     /* the 64KB Z80 RAM claim */
-static int rc_running;                       /* the machine wants wakes */
 static int rc_full;                          /* fullscreen latch held */
 static void *rc_win;
 
-/* the key ring: os88_onkey pushes, the slice pops (wave 3: BDOS CONIN) */
-#define RC_KRING 64
-static unsigned char rc_kbuf[RC_KRING];
-static int rc_khead, rc_ktail;
-
-static int rc_key_push(int c)
-{
-    int n = (rc_ktail + 1) & (RC_KRING - 1);
-    if (n == rc_khead)
-        return -1;                          /* full: input overrun, dropped */
-    rc_kbuf[rc_ktail] = (unsigned char)c;
-    rc_ktail = n;
-    return 0;
-}
-
-static int rc_key_pop(void)
-{
-    int c;
-    if (rc_khead == rc_ktail)
-        return -1;
-    c = rc_kbuf[rc_khead];
-    rc_khead = (rc_khead + 1) & (RC_KRING - 1);
-    return c;
-}
+/* THE MACHINE'S STATE - what a wake does, and whether the next one is
+ * wanted (SPEC.md 71.1: re-post only while there is work) */
+#define RC_M_CLOCK   0                       /* measuring the clock estimate */
+#define RC_M_IDLE    1                       /* no program: wave 2's rest
+                                              * state (wave 3: the CCP) */
+#define RC_M_RUN     2                       /* a program runs in slices */
+#define RC_M_BLOCKED 3                       /* ...and waits for a key */
+static int rc_mode = RC_M_CLOCK;
+static int rc_slice_n;                       /* control transfers a slice */
+static unsigned rc_sl_fast;                  /* slices in a row that took no
+                                              * tick: the length adapts */
 
 /* --- console helpers, console.h's shape: _puthex16 is lowercase (tohex) --- */
 static char rc_num[8];
@@ -173,8 +235,12 @@ static void rc_banner(void)
     rc_puts("CPU is ");
     rc_puts("8086 native");                  /* CPU_IS: not cpu1.h's 'Model 1' */
     rc_puts("\r\n");
-    /* wave 2: Z80estimateClock() - '<n> T-states in <n> ms', 'Estimated Z80
-     * clock speed: N.NN MHz' */
+    /* Z80estimateClock() prints its two lines here - measured in slices
+     * (rc_clock_step), so the rest of the banner follows from there */
+}
+
+static void rc_banner2(void)
+{
     rc_puts("BIOS at 0x");
     rc_puthex16(RC_BIOSJMPPAGE);
     rc_puts(" - ");
@@ -188,64 +254,409 @@ static void rc_banner(void)
 }
 
 /* ==========================================================================
- * RC_W1 SCAFFOLDING - the wake counter and the local echo. Wave 2's slice
- * driver replaces rc_slice() whole: _rc_run(n), the trap, the console drain.
+ * THE CLOCK ESTIMATE - cpu_mhz.h Z80estimateClock(), in slices and 16-bit
+ * words. Upstream loads a 17-byte loop at 0000 (LD DE,1000 / LD BC,10000 /
+ * the inner DEC BC-LD A,B-OR C-JR NZ / the outer DEC DE-LD A,D-OR E-JR NZ /
+ * HALT), times it with millis() and prints '<T-states> T-states in <ms> ms'
+ * and 'Estimated Z80 clock speed: <n> MHz' from a 64-bit sum. Two stated
+ * deviations (SPEC.md 71): the burst is SMALLER (BC = 1000, DE = 10: 260,319
+ * T-states by cpu_mhz.h's own T-state table, against 260 million - the
+ * upstream burst is 40 million instructions, minutes on the target) and is
+ * RUN REPEATEDLY until at least RC_CLK_TICKS ticks have passed, so the same
+ * code measures a 4.77 MHz 8088 and QEMU; the T-states are bursts x 260,319
+ * in two words, the ms are ticks x 55, and the speed is printed with two
+ * decimals ('%u MHz' would print 0 on the XT). It runs on the wake in the
+ * ordinary slices (rc_clock_step), so the window is live while it measures.
  * ========================================================================*/
-static unsigned rc_wakes;
-static int rc_probe_done;
-#define RC_W1_ROW  9                        /* the counter's row (1-based) */
+#define RC_CLK_TICKS 4                       /* ~220 ms of slices at least,
+                                              * and one whole burst */
+static const unsigned char rc_clkcode[17] = {
+    0x11, 0x0A, 0x00,                        /* LD DE,10   (upstream 1000) */
+    0x01, 0xE8, 0x03,                        /* LD BC,1000 (upstream 10000) */
+    0x0B, 0x78, 0xB1, 0x20, 0xFB,            /* DEC BC / LD A,B / OR C / JR NZ */
+    0x1B, 0x7A, 0xB3, 0x20, 0xF3,            /* DEC DE / LD A,D / OR E / JR NZ */
+    0x76                                     /* HALT */
+};
+/* T-states of one burst, cpu_mhz.h's arithmetic with DE = 10, BC = 1000:
+ * inner body 26, exit 21; total_inner = 10 + 999*26 + 21 = 26,005; outer
+ * body 26,031, exit 26,026; total = 10 + 9*26,031 + 26,026 + 4 = 260,319 */
+#define RC_CLK_TS_HI 0x0003
+#define RC_CLK_TS_LO 0xF8DF                  /* 260,319 = 0x0003F8DF */
+static unsigned rc_clk_t0, rc_clk_bursts;
+static int rc_clk_started;                   /* t0 taken: the first slice ran */
 
-static void rc_slice(void)
+/* --- two words as one number: the few operations the estimate needs. The
+ * masks are no-ops on the target (unsigned IS 16 bits) and are what keeps
+ * the host harness, whose unsigned is 32 bits, computing the same thing
+ * (LESSONS.md 7) --------------------------------------------------------- */
+static unsigned rc_u32_hi, rc_u32_lo;        /* the accumulator */
+static void rc_u32_add(unsigned hi, unsigned lo)
 {
-    int c;
-    /* the machine's "output" for this wave: typed keys, echoed */
-    while ((c = rc_key_pop()) >= 0) {
-        if (c == 13) {
-            rc_putc(13);
-            rc_putc(10);
-        } else {
-            rc_putc(c);
+    unsigned l = (rc_u32_lo + lo) & 0xFFFF;
+    if (l < rc_u32_lo)
+        rc_u32_hi++;
+    rc_u32_lo = l;
+    rc_u32_hi = (rc_u32_hi + hi) & 0xFFFF;
+}
+/* the accumulator >= (hi,lo)? */
+static int rc_u32_ge(unsigned hi, unsigned lo)
+{
+    if (rc_u32_hi != hi)
+        return rc_u32_hi > hi;
+    return rc_u32_lo >= lo;
+}
+static void rc_u32_sub(unsigned hi, unsigned lo)
+{
+    if (rc_u32_lo < lo)
+        rc_u32_hi--;
+    rc_u32_lo = (rc_u32_lo - lo) & 0xFFFF;
+    rc_u32_hi = (rc_u32_hi - hi) & 0xFFFF;
+}
+/* the accumulator, in decimal, through the terminal: powers of ten as word
+ * pairs, each subtracted while it fits */
+static const unsigned rc_pow10_hi[10] = {
+    0x3B9A, 0x05F5, 0x0098, 0x000F, 0x0001, 0, 0, 0, 0, 0 };
+static const unsigned rc_pow10_lo[10] = {
+    0xCA00, 0xE100, 0x9680, 0x4240, 0x86A0, 10000, 1000, 100, 10, 1 };
+static void rc_putdec32(void)
+{
+    int i, d, started = 0;
+    for (i = 0; i < 10; i++) {
+        d = 0;
+        while (rc_u32_ge(rc_pow10_hi[i], rc_pow10_lo[i])) {
+            rc_u32_sub(rc_pow10_hi[i], rc_pow10_lo[i]);
+            d++;
+        }
+        if (d || started || i == 9) {
+            rc_putc('0' + d);
+            started = 1;
         }
     }
-    /* the round-trip counter, on its own row, cursor put back after */
-    if ((rc_wakes & 15) == 1) {
-        rc_puts("\033[s\033[");
-        rc_putdec(RC_W1_ROW);
-        rc_puts(";1H\033[7m wave 1 \033[0m wake round trips: ");
-        rc_putdec(rc_wakes);
-        rc_puts("   \033[u");
+}
+
+static void rc_clock_begin(void)
+{
+    rc_zcopy_in(0x0000, rc_clkcode, 17);
+    rc_z.pc = 0;
+    rc_z.sp = 0xE3FE;
+    rc_z.iff = 0;
+    rc_clk_bursts = 0;
+    rc_clk_started = 0;
+    rc_mode = RC_M_CLOCK;
+}
+
+/* one SLICE of the clock program a wake - the ordinary slice budget, never
+ * a whole burst: a burst is ~11,000 control transfers, ~20 slices (~1 s)
+ * on the target, and a wake that ran it whole would hold the UI task for
+ * that second with no key, click or paint dispatched (the stall the slices
+ * exist to prevent). A slice that runs out mid-burst leaves PC where the
+ * Z80 stopped and the next wake RESUMES it; PC goes back to 0000 only after
+ * a HALT, and only completed bursts count. t0 is the first slice's start,
+ * so the ms include the wake round trips - the estimate is what the machine
+ * actually delivers here. On the target the first HALT comes after the four
+ * ticks and the estimate is one burst; under QEMU a burst is a slice or
+ * less and dozens complete. When the ticks are in: the two lines, the rest
+ * of the banner, and the machine goes idle (wave 3: loads the CCP). Answers
+ * 1 when the slice spent its whole budget (the adaptation may read its
+ * timing), 0 when a HALT ended it early. */
+static int rc_clock_step(void)
+{
+    unsigned dt;
+    int r;
+    if (!rc_clk_started) {
+        rc_clk_started = 1;
+        rc_clk_t0 = os88_ticks();
     }
+    r = rc_run(rc_slice_n);
+    if (r != RC_RUN_HALT)
+        return 1;                            /* mid-burst: resumed next wake */
+    rc_clk_bursts++;
+    rc_z.pc = 0;                             /* the next burst starts over */
+    dt = os88_ticks() - rc_clk_t0;
+    if (dt < RC_CLK_TICKS)
+        return 0;
+    /* T-states = bursts x 260,319 */
+    rc_u32_hi = rc_u32_lo = 0;
+    while (rc_clk_bursts-- > 0)
+        rc_u32_add(RC_CLK_TS_HI, RC_CLK_TS_LO);
+    {
+        unsigned ts_hi = rc_u32_hi, ts_lo = rc_u32_lo;
+        unsigned ms = dt * 55;               /* 18.2 Hz: 54.9 ms a tick */
+        unsigned q, cnt;
+        rc_putdec32();
+        rc_puts(" T-states in ");
+        rc_putdec(ms);
+        rc_puts(" ms\r\n");
+        /* hundredths of MHz = T-states / (ms * 10): counted by subtraction
+         * of ms*10 - at most a few thousand rounds on any machine that runs
+         * this (QEMU is ~2,000; the target ~10) */
+        rc_u32_hi = ts_hi;
+        rc_u32_lo = ts_lo;
+        {
+            unsigned d = ms * 10;
+            q = 0;
+            cnt = 0;
+            while (rc_u32_ge(0, d) && ++cnt < 30000) {
+                rc_u32_sub(0, d);
+                q++;
+            }
+        }
+        rc_puts("Estimated Z80 clock speed: ");
+        rc_putdec(q / 100);
+        rc_putc('.');
+        rc_putc('0' + (q % 100) / 10);
+        rc_putc('0' + q % 10);
+        rc_puts(" MHz\r\n");
+    }
+    rc_banner2();
+    rc_mode = RC_M_IDLE;                     /* wave 3: the CCP is loaded here */
+    return 0;
+}
+
+/* ==========================================================================
+ * THE SLICE DRIVER
+ * ========================================================================*/
+
+/* rc_program_end - the machine came back to us: EXIT (BIOS BOOT / EXIT.COM,
+ * and HALT - cpu1.h 0x76 sets Status = STATUS_EXIT exactly as BOOT does),
+ * RESTART (WBOOT, BDOS 0, ^C - wave 3 reloads the CCP here) or RETURN. Wave
+ * 2 has no CCP to return to: the machine idles, and the debug loader is the
+ * way back in. Upstream prints "\r\n" and leaves on EXIT (main.c 160). */
+static void rc_program_end(void)
+{
+    if (rc_status == RC_ST_EXIT)
+        rc_puts("\r\n");
+    rc_mode = RC_M_IDLE;
+}
+
+/* rc_slice - one wake's worth of Z80: run until the slice budget is spent,
+ * servicing every handoff on the way; a service that cannot complete (a
+ * console read on an empty ring) leaves PC on the RST and blocks the
+ * machine until a key comes. Answers 1 when the budget was EXHAUSTED - the
+ * only kind of slice whose duration measures the machine - and 0 when the
+ * slice ended early (blocked, program end, HALT). */
+static int rc_slice(void)
+{
+    int n = rc_slice_n, r;
+    while (n > 0) {
+        r = rc_run(n);
+        n = rc_z.cnt;
+        if (r == RC_RUN_SLICE)
+            return 1;
+        if (r == RC_RUN_HALT) {
+            /* cpu1.h 0x76: Status = STATUS_EXIT, exactly as BIOS BOOT - so
+             * main.c's exit path follows (the "\r\n", wave 3's self-close);
+             * '::CPU HALTED::' is DEBUG-only upstream, and the one stated
+             * deviation is that the fact is toasted (SPEC.md 71.4) */
+            os88_toast("RunCPM: CPU halted", 0);
+            rc_status = RC_ST_EXIT;
+            rc_program_end();
+            return 0;
+        }
+        if (r == RC_RUN_BDOS ? rc_bdos() : rc_bios())
+            continue;
+        /* the machine stopped: why? */
+        if (rc_status == RC_ST_RUNNING) {
+            rc_mode = RC_M_BLOCKED;          /* a console read waits for a key:
+                                              * os88_onkey kicks (71.1) */
+            return 0;
+        }
+        rc_program_end();
+        return 0;
+    }
+    return 1;
+}
+
+/* ==========================================================================
+ * THE DEBUG LOADER (docs/RUNCPM-PORT-PLAN.md wave 2): Alt+L asks for a name
+ * on the terminal, reads NAME.COM from the floppy into the Z80 claim and
+ * runs it at 0100h the way the CCP would: page zero patched, C = the
+ * disk/user byte, SP under the CCP with 0000 on top so a RET warm-boots. It
+ * looks in A\0 (the CP/M disk, through the same rc_fs_cd() the drive layer
+ * will use) and then in the launch folder. Always compiled: it is how ZEXDOC
+ * is run by tests/rczex.py, and it costs one prompt string.
+ *
+ * THE READ LANDS 512-ALIGNED AND IS COPIED DOWN. Every disk-visible base is
+ * 512-byte aligned (SPEC.md 2.1.1): int 13h moves whole sectors and
+ * kernel/disk.inc's dsk_runcap can split a run at a 64KB physical page only
+ * at sector granularity, so a transfer that STARTS 256 mod 512 - a read
+ * straight to 0100h in a claim - has one sector straddling the page whenever
+ * the claim's internal page boundary falls inside the file, and the DMA
+ * controller answers that with error 09h on real hardware ("Disk error" on
+ * ~13% of ZEXDOC launches, ~38% of MBASIC's, by where a 64KB claim lands).
+ * QEMU's BIOS ignores the page and never shows it. So the read goes to the
+ * first 512-aligned offset at or above 0200h (a claim's base is KB-aligned
+ * by the kernel's own guard, kernel.asm 6b; the offset is computed from the
+ * segment anyway, so nothing here leans on it) and rc_zzcopy_in moves it to
+ * 0100h - destination below source, ascending rep movsb, overlap-safe.
+ * Nothing else in this program reads a file into the Z80 claim off 0000h;
+ * wave 4's whole-file claims read at offset 0. The rule is stated at
+ * os88_file_read_seg in os88.h and in SPEC.md 71.
+ * ========================================================================*/
+#define RC_TPA_TOP   RC_CCPADDR              /* the TPA ends where the CCP
+                                              * begins: 0100h..E3FFh */
+static char rc_ldname[16];
+static int  rc_ldlen;
+#define RC_LD_PROMPT 1                       /* the prompt is up */
+#define RC_LD_LOAD   2                       /* Enter: the read is on the next
+                                              * wake, where the lock is NOT
+                                              * held (SPEC.md 71.1) - a .COM
+                                              * is several int 13h calls,
+                                              * ~400 ms each on the target */
+static int  rc_ldmode;
+
+static void rc_run_program(void)
+{
+    rc_status = RC_ST_RUNNING;
+    rc_patch_cpm();
+    rc_z.af = 0;
+    rc_z.bc = rc_rd(RC_DSKBYTE);             /* C = the drive/user (main.c) */
+    rc_z.de = 0;
+    rc_z.hl = 0;
+    rc_z.ix = rc_z.iy = 0;
+    rc_z.iff = 0;
+    rc_z.sp = RC_TPA_TOP - 2;
+    rc_wr16(RC_TPA_TOP - 2, 0x0000);         /* a RET warm-boots */
+    rc_z.pc = 0x0100;
+    rc_wr(0x0080, 0);                        /* an empty command tail */
+    rc_dma = 0x0080;
+    rc_mode = RC_M_RUN;
+}
+
+static void rc_load_go(void)
+{
+    unsigned n, off, big;
+    /* the first 512-aligned claim offset at or above 0200h: 0200h plus the
+     * bytes from the claim's physical base up to the next 512 boundary */
+    off = 0x200 + ((0x200 - ((rc_zseg << 4) & 0x1FF)) & 0x1FF);
+    os88_strcpy(rc_ldname + rc_ldlen, ".COM", 5);
+    n = 0;
+    big = 0;
+    if (rc_fs_cd(0, 0) == 0) {               /* A\0 first: the CP/M disk */
+        n = os88_file_read_seg(rc_ldname, rc_zseg + (off >> 4), RC_TPA_TOP - off);
+        big = (n == 0 && os88_ferr() == OS88_FERR_BIG);
+    }
+    if (n == 0 && !big) {                    /* then the launch folder - but a
+                                              * file that EXISTS in A\0 and is
+                                              * too big is not looked for
+                                              * again: the fallback's NOENT
+                                              * would hide the true fact */
+        rc_fs_home();
+        n = os88_file_read_seg(rc_ldname, rc_zseg + (off >> 4), RC_TPA_TOP - off);
+        big = (n == 0 && os88_ferr() == OS88_FERR_BIG);
+    }
+    if (n == 0) {
+        rc_puts(rc_ldname);
+        rc_puts(big ? ": too big for the TPA\r\n" : ": not found\r\n");
+        rc_mode = RC_M_IDLE;
+        return;
+    }
+    rc_zzcopy_in(0x0100, rc_zseg, off, n);   /* down to the TPA: dst < src,
+                                              * ascending, overlap-safe */
+    rc_run_program();
+}
+
+/* the prompt's keys: printable into the name (upper-cased, 8 at most), BS,
+ * Enter echoes the CR/LF and hands the read to the wake, Esc cancels */
+static void rc_load_key(int c)
+{
+    if (c == 13) {
+        rc_putc(13);
+        rc_putc(10);
+        rc_ldmode = 0;
+        if (rc_ldlen == 0) {
+            rc_mode = RC_M_IDLE;
+            return;
+        }
+        rc_ldmode = RC_LD_LOAD;              /* os88_onwake: rc_load_go() */
+    } else if (c == 27) {
+        rc_puts("\r\n");
+        rc_ldmode = 0;
+        rc_mode = RC_M_IDLE;
+    } else if (c == 8 || c == 127) {
+        if (rc_ldlen > 0) {
+            rc_ldlen--;
+            rc_puts("\010 \010");
+        }
+    } else if (c > 32 && c < 127 && rc_ldlen < 8) {
+        if (c >= 'a' && c <= 'z')
+            c -= 32;
+        rc_ldname[rc_ldlen++] = (char)c;
+        rc_putc(c);
+    }
+}
+
+static void rc_load_prompt(void)
+{
+    rc_ldlen = 0;
+    rc_ldmode = RC_LD_PROMPT;
+    rc_puts("\r\nLoad .COM: ");
+}
+
+/* does the machine want the next wake? (SPEC.md 71.1: only while it works -
+ * a slice, a clock slice, or the loader's pending read) */
+static int rc_wants_wake(void)
+{
+    return rc_mode == RC_M_CLOCK || rc_mode == RC_M_RUN ||
+           rc_ldmode == RC_LD_LOAD;
 }
 
 /* ==========================================================================
  * THE CALLBACKS
  * ========================================================================*/
 
-/* os88_onwake - THE slice (SPEC.md 71): on the UI task, lock NOT held. Run,
- * then flush under the lock for exactly one rc_flush, then re-post. */
+/* os88_onwake - THE slice (SPEC.md 71): on the UI task, lock NOT held. Do
+ * the loader's pending read, or run one slice (of the program or of the
+ * clock estimate); flush the terminal ONCE under the lock; ring what rang;
+ * re-post only while the machine has work. */
 void os88_onwake(void *win)
 {
-    rc_wakes++;
-    rc_slice();
-    if (!rc_probe_done) {                   /* RC_W1: the goto_q_mark proof,
-                                             * once, from THIS context */
-        int n = rc_fs_probe();
-        rc_probe_done = 1;
-        rc_puts("\033[s\033[8;1HA\\0 probe: ");
-        if (n >= 0) {
-            rc_putdec((unsigned)n);
-            rc_puts(" bytes: ");
-            rc_puts(rc_probe_buf);
-        } else if (n == -1) {
-            rc_puts("no A\\0 folder");
-        } else if (n == -2) {
-            rc_puts("in A\\0, no RCPROBE.TXT");
+    if (rc_ldmode == RC_LD_LOAD) {
+        rc_ldmode = 0;
+        rc_load_go();                       /* the floppy, with no lock held */
+    } else if (rc_mode == RC_M_CLOCK || rc_mode == RC_M_RUN) {
+        /* THE SLICE LENGTH ADAPTS to the machine it runs on: os88_cpu() set
+         * the first guess, and from there a slice that ends inside the tick
+         * it began in four times running doubles the budget (to a cap), and
+         * one that spans two tick boundaries halves it (to a floor). That
+         * holds a slice between ~14 and ~55 ms on the 8088, the 386 and
+         * QEMU alike, and the wake round trip (a task switch, the flush) is
+         * paid a dozen times a second rather than a thousand. ONLY A SLICE
+         * THAT EXHAUSTED ITS BUDGET IS TIMED: one that ended early - a
+         * program blocking in C_READ after a few hundred instructions (each
+         * key into TE or MBASIC is one such wake), a program end, a HALT -
+         * took no time because the machine did no work, and counting it as
+         * "fast" would double the budget every four keystrokes: ~30 keys of
+         * ordinary typing walked it from 512 to the 16,384 cap, and the
+         * next busy slice (Enter into a compute loop) then ran ~1.6 s of UI
+         * task with nothing dispatched - found by the review, and the harness
+         * now asserts both halves. The bound on a keystroke's echo is honest:
+         * one slice PLUS one flush, and the flush is unbounded by this loop
+         * - at most one gfx_scroll + one fill + min(lines, RC_ROWS) bands
+         * (SPEC.md 71.1: ~50 + up to ~400 ms on the target under a program
+         * that scrolls a screenful a slice). The clock's slices are exhausted
+         * ones and adapt the same way, so the first program slice starts
+         * where the estimate left the budget. */
+        unsigned t = os88_ticks(), dt;
+        int ex;
+        if (rc_mode == RC_M_CLOCK)
+            ex = rc_clock_step();
+        else
+            ex = rc_slice();
+        dt = os88_ticks() - t;
+        if (!ex) {
+            /* an early end says nothing about the machine's speed */
+        } else if (dt == 0) {
+            if (++rc_sl_fast >= 4) {
+                rc_sl_fast = 0;
+                if (rc_slice_n < 0x4000)
+                    rc_slice_n <<= 1;
+            }
         } else {
-            rc_puts("read, could not come home");
+            rc_sl_fast = 0;
+            if (dt >= 2 && rc_slice_n > 256)
+                rc_slice_n >>= 1;
         }
-        rc_puts("\033[K\033[u");
-        rc_puts("\033[11;1H");             /* the echo starts below the two
-                                             * scaffold rows */
     }
     if (rc_dirty_any) {
         os88_gfx_lock();
@@ -254,30 +665,25 @@ void os88_onwake(void *win)
         os88_gfx_unlock();
     }
     rc_bell_service();
-    /* RC_W1: the unconditional re-post is scaffolding for the counter. WAVE
-     * 2's slice driver re-posts ONLY while the machine has work - the slice
-     * ran out with the Z80 still running, or output is pending - and NOT
-     * when the Z80 is blocked in CONIN on an empty key ring: then the next
-     * kick is os88_onkey's (SPEC.md 71.1's handler contract). Carried
-     * forward as it is, the UI task would spin at ~1,400 wakes a second on
-     * the target while a program waits for a key. */
-    if (rc_running)
+    if (rc_wants_wake())
         os88_wm_wake(win);                  /* the next slice; a full ring
                                              * is re-kicked by any callback */
 }
 
 /* os88_paint - W_PAINT, lock held. WF_OWNBG is set, so the kernel did not
- * whiten the content and os88_wm_damage() says which part needs drawing: the
- * rows (and cell columns) it covers are marked unknown in the shadow and
- * drawn by the same flush everything else uses; a whole repaint is one white
- * fill of the content and then every row to its last non-blank cell (rc_flush
- * does both). The two slivers outside the cell grid are ours to whiten. */
+ * whiten the content and os88_wm_damage() says which part needs drawing: a
+ * partial expose is ONE white fill of the damage and the cells it covers
+ * marked KNOWN BLANK in the shadow, then the same flush everything else
+ * uses draws the text that belongs there; a whole repaint is one white fill
+ * of the content and then every row to its last non-blank cell (rc_flush
+ * does both). The two slivers outside the cell grid are ours to whiten, and
+ * either fill covers them. */
 void os88_paint(void *win)
 {
     static struct os88_rect d;
     static struct os88_pt org;
     static struct os88_size sz;
-    int whole, r, c0, c1, r0, r1, x, y;
+    int whole, r, c0, c1, r0, r1, x;
 
     whole = os88_wm_damage(win, &d);
     if (!whole && d.x1 > d.x2)
@@ -289,35 +695,40 @@ void os88_paint(void *win)
     if (whole || !rc_sh_ok) {
         rc_sh_inval();
     } else {
-        /* the damaged cells are unknown; the rest of the shadow still holds */
+        /* the partial expose: ONE white fill of the damage rect (nobody
+         * whitened it - WF_OWNBG - and it covers the two slivers outside
+         * the cell grid as far as the damage reaches them, so they cost no
+         * fill of their own), and the damaged cells are then KNOWN BLANK in
+         * the shadow - spaces, no attribute - not unknown: rc_flush draws
+         * each row only to the span where the model differs, so a foreign
+         * panel lifting off a mostly blank terminal costs the fill and the
+         * text under it, never a band the width of the damage per row (the
+         * erase-then-nothing shape; the whole-repaint path made the same
+         * choice, SPEC.md 71.2). A partly-covered cell is blanked in the
+         * shadow too: if the model has a glyph there it is redrawn whole,
+         * and if it has a space the uncovered part was already white. The
+         * clip is the kernel's paint clip, so the fill touches nothing of
+         * another window's. */
+        os88_set_color(OS88_WHITE);
+        os88_gfx_fill(d.x1, d.y1, d.x2, d.y2);
+        rc_n_calls++;
         c0 = (d.x1 - org.x) >> 3;   if (c0 < 0) c0 = 0;
         c1 = (d.x2 - org.x) >> 3;   if (c1 > RC_COLS - 1) c1 = RC_COLS - 1;
         r0 = (d.y1 - org.y) >> 3;   if (r0 < 0) r0 = 0;
         r1 = (d.y2 - org.y) >> 3;   if (r1 > RC_ROWS - 1) r1 = RC_ROWS - 1;
         for (r = r0; r <= r1; r++) {
-            if (c1 >= c0)
-                os88_memset(rc_sh + RC_CHOFF(rc_shrow[r]) + c0, 0, c1 - c0 + 1);
+            if (c1 >= c0) {
+                unsigned char *sa = rc_sha + RC_ATOFF(rc_shrow[r]);
+                os88_memset(rc_sh + RC_CHOFF(rc_shrow[r]) + c0, ' ', c1 - c0 + 1);
+                for (x = c0; x <= c1; x++)
+                    sa[x >> 3] &= (unsigned char)~(0x80 >> (x & 7));
+            }
             rc_dirty[r] = 1;
         }
         rc_dirty_any = 1;
     }
-    /* the slivers: right of the last column, below the last row. On a WHOLE
-     * repaint rc_flush's one fill of the entire content covers them (SPEC.md
-     * 71.2), so nothing is filled here; on a partial one each is filled only
-     * when the damage reaches it, and only the part of it the damage covers:
-     * a partial expose over the cells alone costs no fill, and the clip
-     * throws nothing away */
-    if (!whole && rc_sh_ok) {
-        os88_set_color(OS88_WHITE);
-        x = org.x + ((sz.w >> 3 > RC_COLS ? RC_COLS : sz.w >> 3) << 3);
-        y = org.y + ((sz.h >> 3 > RC_ROWS ? RC_ROWS : sz.h >> 3) << 3);
-        if (x < org.x + sz.w && d.x2 >= x)
-            os88_gfx_fill(d.x1 < x ? x : d.x1, d.y1, d.x2, d.y2);
-        if (y < org.y + sz.h && d.y2 >= y)
-            os88_gfx_fill(d.x1, d.y1 < y ? y : d.y1, d.x2, d.y2);
-    }
     rc_flush(win);
-    if (rc_running)
+    if (rc_wants_wake())
         os88_wm_wake(win);                  /* every callback kicks (71) */
 }
 
@@ -326,6 +737,7 @@ void os88_paint(void *win)
  * fullscreen chord in both directions (SPEC.md 71.2, the stated exception to
  * 11.2.1 - a terminal owns F and Esc). */
 #define RC_SCAN_ALT_F 0x21
+#define RC_SCAN_ALT_L 0x26
 void os88_onkey(int ascii, int scan, void *win)
 {
     if (ascii == 0 && scan == RC_SCAN_ALT_F) {
@@ -346,9 +758,42 @@ void os88_onkey(int ascii, int scan, void *win)
         }
         return;
     }
-    if (ascii != 0)
+    if (ascii == 0 && scan == RC_SCAN_ALT_L) {
+        /* the debug loader: only when nothing runs and no read is pending */
+        if (rc_mode == RC_M_IDLE && rc_ldmode == 0) {
+            rc_load_prompt();
+            rc_flush(win);                  /* the lock is held here */
+        }
+        return;
+    }
+    if (rc_ldmode == RC_LD_PROMPT) {        /* the loader's prompt owns the
+                                             * keys until Enter or Esc */
+        if (ascii != 0) {
+            rc_load_key(ascii);
+            rc_flush(win);                  /* the echo (Enter's CR/LF too),
+                                             * under the held lock: ONE flush
+                                             * before the read, which is the
+                                             * next wake's */
+        }
+    } else if (ascii != 0) {
         rc_key_push(ascii);
-    if (rc_running)
+        if (rc_mode == RC_M_BLOCKED)
+            rc_mode = RC_M_RUN;             /* the trap is retried (71.1) */
+    }
+    if (rc_wants_wake())
+        os88_wm_wake(win);
+}
+
+/* os88_onclick - W_ONCLICK, lock held. The terminal has no mouse; a click is
+ * one more callback that KICKS (SPEC.md 71): os88_wm_wake answers -1 when
+ * the 16-record event ring is full of other events and nothing was posted,
+ * and a machine mid-run with no key wanted (ZEXDOC) would otherwise stall
+ * until the next paint or key - so every callback that can run re-posts. */
+void os88_onclick(int x, int y, void *win)
+{
+    (void)x;
+    (void)y;
+    if (rc_wants_wake())
         os88_wm_wake(win);
 }
 
@@ -366,7 +811,7 @@ void os88_about(void *win)
 }
 
 /* os88_main - the entry (SPEC.md 20.2): claims first, then the window. The
- * launch requirement is CLAIMS, not KB: the 64KB Z80 RAM must be had (wave 2
+ * launch requirement is CLAIMS, not KB: the 64KB Z80 RAM must be had (wave 3
  * adds the CCP claim), and a refusal quotes what was asked and what there
  * is (SPEC.md 71). */
 static char rc_msg[64];
@@ -386,9 +831,15 @@ void *os88_main(void)
         os88_toast(rc_msg, 0);
         return 0;
     }
+    rc_z.seg = rc_zseg;
     rc_term_init();
     rc_banner();
     rc_status = RC_ST_RUNNING;
+    /* the slice's first length: ~50 ms of Z80 on the machine this runs on
+     * (SPEC.md 71) - a control transfer is ~5 instructions of ~20 us on the
+     * 8088; os88_onwake then adapts it to what the ticks say */
+    rc_slice_n = 512 << os88_cpu();          /* 8086 512, 286 1024, 386+ 2048 */
+    rc_clock_begin();
 
     win = os88_wm_create(RC_WIN_X, RC_WIN_Y, RC_WIN_W, RC_WIN_H, rc_title);
     if (win == 0)
@@ -404,6 +855,5 @@ void *os88_main(void)
     os88_about_set(win);
     os88_wm_onwake(win);                    /* the slice driver's entry (71.1) */
     rc_fs_init();                           /* bank the launch folder */
-    rc_running = 1;                         /* the first paint kicks */
-    return win;
+    return win;                             /* the first paint kicks */
 }

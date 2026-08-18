@@ -661,6 +661,15 @@ int os88_snd_tone(int hz, int ticks, int prio);  /* hz 0 = off, ticks 0 = until
  * The 32-bit count the slots take is capped at 16 bits here, which costs
  * nothing a package can reach: your image and bss together cap at 60KB, and
  * anything bigger belongs in a claim, which the _seg forms read into.
+ * A _seg base MUST BE 512-BYTE ALIGNED (SPEC.md 2.1.1: every disk-visible
+ * base is): a claim's own base is (the kernel's guard 6b - KB-granular
+ * blocks from a 512-aligned heap), and so is any offset into it that is a
+ * multiple of 0x200 (seg + 0x20, + 0x40, ...) - but seg + 0x10 is NOT, and
+ * int 13h answers a run that then straddles a 64KB physical page with
+ * error 09h on real hardware, which QEMU never shows. Read to an aligned
+ * offset and move the bytes yourself if they must sit elsewhere (SPEC.md
+ * 71's loader is the worked example). A DS-relative buffer (the non-_seg
+ * forms) is copied through the kernel and has no such rule.
  * Every one of these sets os88_ferr(). */
 unsigned os88_file_read(const char *name, void *buf, unsigned cap);
 unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap);

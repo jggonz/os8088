@@ -34,6 +34,8 @@ struct os88_menuset { const char *name; int oncmd; int nmenus;
 #define OS88_VID_HERC  1
 #define OS88_VID_CGA   2
 #define OS88_CPU_8086  0
+#define OS88_CPU_286   1
+#define OS88_CPU_386   2
 #define OS88_MENU_DIS  1
 #define OS88_FT_FILE   0
 #define OS88_FT_PKG    1
@@ -44,6 +46,7 @@ struct os88_menuset { const char *name; int oncmd; int nmenus;
 #define OS88_FERR_IO      2
 #define OS88_FERR_NAME    3
 #define OS88_FERR_NOENT   4
+#define OS88_FERR_BIG    10
 
 void *os88_main(void);
 void os88_paint(void *win);
@@ -80,6 +83,8 @@ int  os88_cpu(void);
 unsigned os88_mem_claim(int kb);
 unsigned os88_mem_largest_kb(void);
 unsigned os88_file_read(const char *name, void *buf, unsigned cap);
+unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap);
+unsigned os88_ticks(void);
 int  os88_ferr(void);
 int  os88_file_find(int ordinal, struct os88_find *f);
 void os88_file_here(struct os88_place *p);

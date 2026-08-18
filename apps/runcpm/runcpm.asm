@@ -22,6 +22,13 @@
                                     ; (SPEC.md 70.14, 71)
 
 %define CC_HAS_ONKEY                ; void os88_onkey(int, int, void *)
+%define CC_HAS_ONCLICK              ; void os88_onclick(int, int, void *) -
+                                    ; the terminal has no mouse; a click is
+                                    ; one more callback that KICKS the slice
+                                    ; driver, so a wake the full event ring
+                                    ; refused (os88_wm_wake -1) cannot park
+                                    ; a running machine until a key or a
+                                    ; paint (SPEC.md 71)
 %define CC_HAS_ABOUT                ; void os88_about(void *)
 %define CC_HAS_ONWAKE               ; void os88_onwake(void *) - THE slice
                                     ; driver's entry (SPEC.md 71.1): the one

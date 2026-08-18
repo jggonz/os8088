@@ -50726,28 +50726,198 @@ Z80's 64KB is **not** in the package: it is `os88_mem_claim(64)`, its own
 segment, and the launch refuses (quoting what it asked and
 `os88_mem_largest_kb()`) if that claim, the 2KB CCP claim or one file claim
 cannot be had. *Numbers: wave 1 (window, terminal, shadow, banner, wake,
-quiet goto, harness — no Z80, no BDOS, no files yet) measures
-`image=12590 bss=6473`, 42 functions, largest frame 30 bytes; the C runtime it
-carries is at most `ccsmoke`'s whole image, 3,456 bytes (the runtime plus that
-program's own C and data). Every later figure replaces this one as the waves
-land.*
+quiet goto, harness — no Z80, no BDOS, no files yet) measured
+`image=12590 bss=6473`, 42 functions, largest frame 30 bytes; **wave 2 (the
+Z80 core, the movers, the slice driver, the console side of BDOS/BIOS,
+_PatchCPM, the clock estimate, the debug loader) measures `image=24848
+bss=6465`** (after two reviews: the clock in slices, the loader's read on the
+wake and 512-aligned, the adaptation blind to early-ended slices, the click
+kick), 58 functions, largest frame 30 — the core and its five tables
+are ~9KB of that, well under §70.9's 55,000 trigger, so no `RUNCPM.OVL`
+exists yet and the resident/overlay decision is deferred to the wave whose
+size line asks for it (the candidates stand as named). Every later figure
+replaces this one as the waves land.*
 
-**The Z80 core is hand-written 8086, and it is the only thing that touches
-Z80 memory per instruction.** `_rc_run(n)` is a cdecl entry that saves DS/ES/BP,
-loads DS = the Z80 claim, unpacks the Z80 registers from statics — A/F in
-AL/AH (F in `lahf` layout with P/V and N fixed up per operation), BC in CX, DE
-in DX, HL in DI, PC in SI, the Z80 SP in BP (every stack access `ds:`), BX the
-dispatch scratch (`xor bh,bh / mov bl,[si] / inc si / shl bx,1 / jmp
-[cs:bx+tab]`) — runs `n` instructions or until a RST 08h/10h handoff or HALT,
-packs them back and returns the reason. IX/IY, the alternate set, I/R and IFF
-live in statics; DDCB/FDCB run through the CB table with a precomputed
-`(IX+d)` operand pointer; IN answers 0 and OUT is a no-op. **The Z80's speed
-on the target is a number to MEASURE, not to estimate**: the banner's
-`Estimated Z80 clock speed` line is computed on the machine it runs on (16-bit
-tick arithmetic over a fixed instruction burst — a stated deviation from
-`cpu_mhz.h`'s 64-bit method), and the figure read on the 386 machine and on
-the XT is recorded here when it exists. C decides around the core: BDOS, BIOS,
-files, terminal.
+**The Z80 core is hand-written 8086 (`rcz80.inc`, wave 2), and it is the
+only thing that touches Z80 memory per instruction.** `_rc_run(n)` is a cdecl
+entry that saves DS/BP, loads DS = the Z80 claim, unpacks the Z80 registers
+from the register file `_rc_z` (19 words the C reads as `extern struct
+rc_zregs rc_z` — af bc de hl pc sp ix iy af' bc' de' hl' i r iff im seg cnt
+reason) — A/F in AL/AH (F in `lahf` layout: S Z H P/V C land where the Z80
+keeps them; N is fixed per operation from lahf's always-set bit 1, P/V after
+arithmetic is the 8086's OF taken with a `jo`, X/Y are not computed), BC in
+CX, DE in DX, HL in DI, PC in SI, the Z80 SP in BP (every stack access
+`ds:`), BX the dispatch scratch (`xor bh,bh / mov bl,[si] / inc si / shl
+bx,1 / jmp [cs:bx+rc_tab]`) — and runs until **`n` control transfers** have
+been taken (a JP, JR, DJNZ, CALL, RET, RST or block-repeat step: the budget
+is decremented only there, which keeps the memory decrement off the
+straight-line path, and no loop exists without one), or a RST 08h/10h
+handoff, or HALT; then packs them back and answers the reason (`RC_RUN_SLICE
+/ BIOS / BDOS / HALT`, the budget left in `rc_z.cnt` so a serviced trap
+resumes the same slice). CB, ED and DD/FD have tables of their own (DD and FD
+share one through a pointer to the index register the prefix named; DDCB and
+FDCB share the CB operators through a precomputed `(IX+d)`); the CB set is
+deliberately compact — a getter, one of 32 operators, a putter, three
+indirections — because 8080-era software never issues one and the base
+table takes the bytes instead. **Documented semantics are `cpu1.h`'s, and the
+undocumented forms ZEXDOC exercises are implemented** (IXH/IXL/IYH/IYL, SLL);
+DD/FD before any other opcode without an HL form execute the unprefixed
+opcode; ED holes are two-byte NOPs; DDCB/FDCB with a register field other
+than (HL) act on memory only. DAA is the 8086's own DAA/DAS with H and (after
+a subtract) C recomputed by the Z80's rule. **Three stated deviations:** IN
+answers 0 and OUT is a no-op (`abstraction_posix.h`'s `_HardwareIn/Out`); R
+is not counted per fetch (that would be a memory increment on every
+instruction, a quarter of the dispatch) — `LD A,R` answers a value that
+advances with the slice count and PC, which is what programs that read R
+want of it; interrupts never happen, so EI/DI keep IFF for `LD A,I/R` to
+report. **The core's own scratch — the slice budget while it runs, the DD/FD
+index pointer and value, the CB operands — lives in the Z80's top 16 bytes,
+0xFFF0–0xFFFF**, above everything RunCPM's BIOS page uses (the DPH ends at
+0xFF9F; nothing upstream reads or writes 0xFFA0–0xFFFF), as DS-relative words
+with no override — the one place the emulator keeps its own bookkeeping in
+Z80 memory, and a stated deviation. Measured reason: under QEMU the same
+core ran at 38 MHz-equivalent with the budget in a package static and 180
+with it there — TCG sends every write to a page that also holds translated
+code through a slow path, and a package's bss shares its last page with
+whatever the heap put above it (the Sound driver, at 0x9E400, whose code
+runs every tick); on the 8088 the DS form is also a byte shorter on a path
+taken at every control transfer. RunCPM's INT_HANDOFF pushes PC, calls `_Bios/_Bdos` and pops it; here
+the core simply returns with PC past the RST and the `RET` after it in the
+page does the rest — identical machine state, no push. **Gates:** ZEXDOC off
+the master disk, run against the SHIPPING core two ways — a boot sector in
+raw QEMU with SS≠DS (`apps/runcpm/hosttest/rcz80test.sh`, `make rcz80test`:
+every one of the 67 groups OK, **144 s**), and inside os8088 through the
+debug loader with the terminal read off screendumps (`tests/rczex.py`, `make
+rczex`, an 8×8-glyph OCR harvested from the banner and the group names in
+`tests/rczex_ocr.py`; **146 s** from Alt+L to `Tests complete`, 67 of 67 OK — re-measured after the second review at 175–211 s over three runs on a host at load ~2.3, with the raw harness at 155 s the same hour and a control build carrying the previous slice adaptation at 178 s: the host's spread, not the code's); DAA/CPL/
+SCF/CCF were also probed over every A and H/N/C combination against `cpu1.h`'s
+rule while the core was written. **The Z80's speed on the target is a number
+to MEASURE, not to estimate**: the banner's `Estimated Z80 clock speed` line
+is computed on the machine it runs on — `cpu_mhz.h`'s 17-byte loop with a
+SMALLER burst (BC = 1000, DE = 10: 260,319 T-states by its own table, against
+260 million) RUN REPEATEDLY, **through the ordinary slices** — a slice of it a
+wake, never a whole burst (a burst is ~11,000 control transfers, ~20 slices
+on the target: run whole it would hold the UI task for ~1 s with no key,
+click or paint dispatched); a slice that runs out mid-burst leaves PC where
+it stopped and the next wake resumes it, PC returns to 0000 only after a
+HALT, only completed bursts count, and t0 is the first slice's start — until
+four ticks have passed and a burst has completed, so the same code measures
+a 4.77 MHz 8088 and QEMU; the T-states are bursts × 260,319 in two words, the
+ms are ticks × 55 (they include the wake round trips: the estimate is what
+the machine delivers here), and the MHz has two decimals (`%u` would print 0
+on the XT) — the stated deviations from `cpu_mhz.h`'s 64-bit method. QEMU on
+this host prints ~157 MHz-equivalent (a fact about the host; the ~32 MHz the
+first build printed was t0 taken in `os88_main`, before the window's first
+paint, and was wrong by that paint). **The 386 and XT figures are PENDING**:
+they are read on 86Box (`make 386-runcpm`; `vm/xt640` with `fdd_02_fn`
+hand-pointed at `build/runcpm360.img`), which is a GUI application the
+review sessions could not drive, and MartyPC needs a Rust toolchain and an
+IBM ROM this host does not have — so **the 8086 slice length is
+UNMEASURED**: `rc_slice_n = 512 << os88_cpu()` is the design's guess at ~50
+ms of control transfers on the 8088, the 16,384 cap and 256 floor were sized
+on QEMU, and the adaptation to the ticks is what stands between the guess
+and the machine until the readings are recorded here. C decides around the
+core: BDOS, BIOS, files, terminal.
+
+**The Z80-RAM movers (`rcmem.inc`)** are the one place in RUNCPM where ES is
+loaded and a string instruction runs (`rc_rd/rc_rd16/rc_wr/rc_wr16` and
+`rc_zcopy_in/out`, `rc_zzcopy_in/out` between claims, `rc_zfill`; every one
+restores ES and leaves DF clear, every `rep` marked `cc8086:allow`), because
+`os88_peek/poke` are far calls and a BDOS record through them would be a
+program; `hosttest/rcmemtest.sh` runs them from a boot sector with SS≠DS,
+across the 64KB wrap, with guards, and with two negative controls the checks
+must catch (`make rcmemtest`, and `apps/runcpm/build.sh` runs it before every
+build).
+
+**The slice driver (wave 2, `os88_onwake`)**: one wake runs `rc_run` for the
+slice's budget, servicing every RST handoff in between (`rccpm.c`'s
+`rc_bdos`/`rc_bios`, cpm.h's register plumbing — HL cleared, C = E, B = H, A =
+L on the way out — with the console functions 0–2, 6–9, 11–12 and BIOS
+BOOT..CONOUT and the register-only entries carried in wave 2 and a disk
+function answering 0xFF, never a false success, until wave 4), flushes the
+terminal ONCE under the lock, rings what rang, and re-posts only while the
+machine has work — never while blocked in a console read on an empty key ring
+(then PC is put back ON the RST, the machine is `RC_M_BLOCKED`, and
+`os88_onkey`'s kick after pushing the key retries the trap). **The slice
+length adapts**: `os88_cpu()` sets the first budget (512 transfers on the
+8086, 1024 on a 286, 2048 from a 386), then a slice that ends inside the
+tick it began in four times running doubles it (cap 16,384) and one that
+spans two tick boundaries halves it (floor 256) — so a slice is ~14–55 ms
+on the 8088, the 386 and QEMU alike (a bound the adaptation enforces once
+the target's slice length is measured, above), and the wake round trip is
+paid a dozen times a second rather than a thousand. **Only a slice that
+EXHAUSTED its budget is timed** (`rc_slice`/`rc_clock_step` answer whether
+it did): a slice that ended early — a program blocking in `C_READ`/`CONIN`
+after a few hundred instructions, which is what every key into TE or MBASIC
+is; a program end; a HALT — took no time because the machine did no work,
+and it leaves the estimate alone. (Counting it as fast, as the first build
+did, let ~30 keystrokes of ordinary typing walk the budget from 512 to the
+16,384 cap and hand the next busy slice — Enter into a compute loop — ~1.6 s
+of UI task with no key, click or paint dispatched, 32× the bound below;
+found by the review, and the harness asserts both halves: twelve keys into a
+blocked read with the tick standing still leave the budget where it was,
+four exhausted slices in one tick double it.) That once-per-slice
+flush is the pacing decision §71.2 asked for: N lines in one slice are one
+`gfx_scroll` — and the bound on a keystroke's echo is stated honestly: **one
+slice PLUS one flush**, and the flush is at most one `gfx_scroll` + one fill
++ min(lines, 25) bands, which the slice's adaptation does not see (a program
+that scrolls a screenful a slice is ~50 ms of Z80 and up to ~400 ms of glass
+a wake on the target). The clock estimate's slices are exhausted ones and
+adapt the same way, so the first program slice starts where the estimate
+left the budget. **The
+debug loader** — Alt+L (ascii 0, scan 0x26; only when nothing runs and no
+read is pending) prints `Load .COM: `, takes a name (upper-cased, BS, Esc
+cancels), and on Enter echoes the CR/LF and flushes under W_ONKEY's lock and
+hands the read to the NEXT WAKE (`rc_ldmode = RC_LD_LOAD`, which
+`rc_wants_wake()` answers for): `os88_onwake`, with no lock held, reads
+`NAME.COM` from `A\0` (through `rc_fs_cd(0,0)`, the drive layer's own quiet
+goto — the living proof of §71.1's mark) or else the launch folder (a file
+that exists in `A\0` and is too big is NOT looked for again: the fallback's
+NOENT would hide the fact) into the claim **at the first 512-aligned offset
+at or above 0200h, and copies it down to 0100h** with `rc_zzcopy_in`
+(destination below source, ascending `rep movsb`, overlap-safe) — because
+**a `_seg` read's base must be 512-byte aligned** (§2.1.1: every disk-visible
+base is; a claim's base is KB-aligned by kernel.asm's guard 6b, and so is any
+offset that is a multiple of 0x200 — `seg + 0x10` is not): `dsk_runcap`
+splits a run at a 64KB physical page only at sector granularity, so a
+transfer that starts 256 mod 512 has one sector straddling the page whenever
+the claim's internal page boundary falls inside the file, and the DMA
+controller answers that with error 09h on real hardware — "Disk error" on
+~13% of ZEXDOC launches and ~38% of MBASIC's by where a 64KB claim lands,
+which QEMU's BIOS never shows (found by the review; the harness's read stub
+now refuses an unaligned base as the disk driver would). The read is capped
+at the TPA below the CCP (`FERR_BIG` says "too big for the TPA"; the aligned
+landing costs 0100h–02FFh of the cap, ~57KB remain), and the rule is stated
+at `os88_file_read_seg` in `os88.h`; wave 4's whole-file claims read at
+offset 0 and are aligned by construction — a .COM is several
+`int 13h` calls, ~400 ms each on the target, and nothing that takes disk time
+runs under the gfx lock a W_ONKEY holds — patches the CP/M image (`_PatchCPM`
+whole: page zero, IOBYTE 3Dh and DSKByte on a cold start, the BDOS jump page
+and its `RST 10h; RET; NOP`, the 33 BIOS jumps and their `RST 08h; RET; NOP`,
+the fake DPB/DPH byte for byte) and runs it as the CCP would (C = DSKByte,
+SP under the CCP with 0000 on top so a RET warm-boots, an empty command tail)
+— it is always compiled, it is how ZEXDOC is run before there is a command
+processor, and it costs one prompt string. `HELLO.COM` (nine bytes emitted
+by the Makefile: LD C,9 / LD DE / CALL 5 / RET and a string) is the wave's
+first proof; it is a build artifact of this tree, not master-disk content,
+so it rides the image ROOT — the launch folder, where the loader looks after
+`A\0` — and never `A\0` (a CP/M user's DIR shows RunCPM's disk and nothing
+invented here). HALT is BOOT's exit: `cpu1.h` 0x76 sets `Status =
+STATUS_EXIT` exactly as BIOS BOOT does, so `main.c`'s "\r\n" and exit path
+follow for both, and the one deviation is that the fact is toasted (`RunCPM:
+CPU halted`, §71.4); BOOT/WBOOT/BDOS 0/HALT end the program and, until wave
+3's CCP and self-close, leave the machine idle for the next Alt+L. **A full
+key ring rings**: the 64-entry ring holds 63 keys, and a key that finds it
+full is dropped with one BEL tone (the PC BIOS's own answer to a full
+keyboard buffer) — input overrun is one of the three defects CLAUDE.md names
+as invisible in an emulator, and it is never silent here. **BDOS 9 is
+bounded** to one lap of the 64KB (a string with no `$` anywhere — a wrong DE,
+a hostile .COM — stops after 65,536 reads instead of holding the UI task
+forever; every string with a `$` sees exactly `cpm.h`'s behaviour) and **BIOS
+MOVE** is one `rep movsb` through the mover (ascending, as `cpm.h`'s
+`while (BC--) RAM[HL++] = RAM[DE++]` is, the same bytes in the same order;
+HL and DE end past the block and BC = 0xFFFF as upstream's post-decrement
+leaves it) rather than ~50 µs a byte on the UI task.
 
 **No worker, no blocking, and the kernel grew a wake event for it (§71.1).**
 RunCPM blocks in the host's `getch()`; a package's worker cannot touch a file
@@ -50759,8 +50929,11 @@ around the glass flush, and re-posts itself through `OSAPI_WM_WAKE`. A Z80
 program waiting on a key costs zero CPU until `os88_onkey` pushes the key and
 kicks. Every blocking BDOS call (CONIN 1/6, BIOS CONIN, the line editor 10)
 is either "retry the trap when a key exists" or a small state machine advanced
-by `os88_onkey`. Every callback that can run (paint, key, click) also kicks,
-so a wake dropped by a full event queue cannot stall the machine.
+by `os88_onkey`. Every callback that can run (paint, key, click —
+`os88_onclick` exists for this alone; the terminal has no mouse) also kicks,
+so a wake `os88_wm_wake` refused with −1 (the 16-record event ring full of
+other events, nothing posted) cannot park a running machine past the next
+paint, key or click.
 
 ### 71.1 The kernel additions: a UI-task wake, and a quiet goto that moves the instance
 
@@ -50793,7 +50966,7 @@ free list of §20.3.1 being empty), and their contracts, which
 | slot | routine | contract |
 |---|---|---|
 | **0x0428** | `wm_wake` (`OSAPI_WM_WAKE`) | in BX = a window of yours. Posts `EVT_WAKE {a = BX}`; any context, ISR- and worker-safe. out CF=0 a wake is queued for that window (posted now, or one already waited — coalesced, at most one per window), CF=1 the ring was full and nothing was posted. Every register preserved |
-| **0x0430** | `wm_onwake` (`OSAPI_WM_ONWAKE`) | in BX = window, AX = a near proc in your segment, 0 clears. A side table (`wm_onwk`, `wm_onsz`'s shape) cleared by `wm_destroy`, not a template word. The handler is called SI = your window, on the UI task, billed to your instance, **without the gfx lock**: it may call the file slots and may take the lock for a stated burst; nothing is delivered with it, and one stale wake after a slot's reuse is possible. **A handler re-posts itself only while it has work** — a wake round trip is at least one task switch (693 µs), so a handler that always re-posts spins the UI task at ~1,400 wakes a second and paints whatever it paints ~90 times a second on the target; RunCPM's re-posts when the slice ran out with the Z80 still running or output is pending, and NOT when the Z80 is blocked in CONIN on an empty key ring — then the next kick is `os88_onkey`'s. (Wave 1's counter re-posts unconditionally, marked RC_W1 scaffolding; wave 2's slice driver inherits this rule) |
+| **0x0430** | `wm_onwake` (`OSAPI_WM_ONWAKE`) | in BX = window, AX = a near proc in your segment, 0 clears. A side table (`wm_onwk`, `wm_onsz`'s shape) cleared by `wm_destroy`, not a template word. The handler is called SI = your window, on the UI task, billed to your instance, **without the gfx lock**: it may call the file slots and may take the lock for a stated burst; nothing is delivered with it, and one stale wake after a slot's reuse is possible. **A handler re-posts itself only while it has work** — a wake round trip is at least one task switch (693 µs), so a handler that always re-posts spins the UI task at ~1,400 wakes a second and paints whatever it paints ~90 times a second on the target; RunCPM's re-posts when the slice ran out with the Z80 still running or output is pending, and NOT when the Z80 is blocked in CONIN on an empty key ring — then the next kick is `os88_onkey`'s. (Wave 1's counter re-posted unconditionally as scaffolding; wave 2's slice driver keeps this rule - `rc_wants_wake()` is the one place it is decided.) A CF=1 answer is not retried: every callback that can run — paint, key, click — kicks again, which is why RUNCPM declares `os88_onclick` though the terminal has no mouse |
 | **0x0438** | `osapi_file_goto_qm` (`OSAPI_FILE_GOTO_QM`) | in DX = folder cluster, BL = volume; out exactly as `OSAPI_FILE_GOTO_Q` (CF=0 AX=0 / CF=1 AX=FERR_*). GOTO_Q's quiet stand and then `inst_vol_mark`, so the calling instance now stands there and its next file cell's `inst_vol_enter` does not undo the move |
 
 `ui_task` pops `EVT_WAKE` in order with the mouse events (`ui.inc`, `.wake`)
@@ -50879,17 +51052,32 @@ CLS-then-position-then-wait, the commonest CP/M shape, does not refill and
 re-cursor the screen on every wake; a TE-style 25-row full-screen redraw **25
 calls / 1,903 cells**; the identical screen written again **0**; `ESC[L` then
 `ESC[M` one signed `gfx_scroll` and one fill each plus the rows (7 calls for
-the two); a full expose of a full TE screen **25 calls** (the fill and 24
-non-blank rows — the fill is the price a dense screen pays for the sparse
-screen's saving); a partial expose of 3 rows × 11 cells 3 calls; **Alt+F in
+the two); a full expose of a full TE screen **26 calls** (the fill and its 25
+non-blank rows, status line included — the fill is the price a dense screen
+pays for the sparse screen's saving); a partial expose of 3 rows × 11 cells † **1 fill + the
+text under it** (3 bands over TE text, the fill ALONE over blank rows: under
+WF_OWNBG nobody whitened the region, so `os88_paint` fills the damage rect
+once and marks those shadow cells KNOWN BLANK — spaces, no attribute — never
+unknown, so a foreign panel lifting off a mostly blank terminal costs the
+fill and the text and not a band the width of the damage per row); **Alt+F in
 either direction: the latch's own paint, then 0** †; with `gfx_blit1` refused
 a mixed row is one `font_run` per uniform run (6 for the fixture); with
 `gfx_scroll` refused (§5.5: the clip does not hold the whole rectangle — **an
 overlapped terminal**, a Calculator or a dialog reaching it) nothing on the
 glass moved, the shadow stays true, and a scrolled line is a band per row
 from the scrolled region's top down to where the shifted text differs (25
-calls / 468 cells for the fixture) — the price of an overlapped terminal,
-which wave 2's flush pacing bounds per slice but does not remove. The
+calls / 408 cells for the fixture) — the price of an overlapped terminal,
+which wave 2's flush pacing bounds per slice but does not remove — and that
+refused branch is the ONE place that dirties every row from the region's
+top: a scroll ROTATES the dirty flags with the rows (as the flush rotates
+the shadow ring), so after a scroll the kernel honoured, only the vacated
+row and the rows written since are compared — not every row from `top`
+(`rc_rowdiff` is a `repe cmpsb`, ~370 µs a 79-cell row on the 8088: ~9 ms
+on top of every scrolled line, a fifth of what the line costs, and wave 2's
+slice made one-scroll-per-flush the ordinary path); the flush tracks the
+row the cursor was DRAWN on across the rotation and marks the vacated
+visible row dirty itself (a row from below a short window may arrive there
+with its flag long clear) — both asserted by the harness. The
 attribute compare is BIT-exact — a differing attribute byte widens the span
 to the cells whose bits differ, never to its 8-cell group — and cursor, text
 and attribute changes on one row are always ONE call because the cursor is an
@@ -50917,6 +51105,10 @@ therefore a performance decision, not a detail: flush every N lines or when
 the key ring is drained, N sized so a screenful of TYPE is a handful of
 scrolls.** `ESC[2J` is ~73 ms on the same model (one fill of 640×200), paid
 once per clear.
+
+`ESC[s`/`ESC[u` save and restore the cursor EXACTLY, a pending wrap included
+(wave 2: wave 1 clamped the restored column and lost the wrap — the reviewer's
+row, and the harness now asserts it).
 
 Keys: arrows/Home/End/PgUp/PgDn/Del arrive as VT sequences; ^C is 3; the BIOS
 folds Ctrl-H/I/M into BkSp/Tab/Enter (identical bytes, no loss); `^?` is
@@ -50949,16 +51141,20 @@ launch folder on every warm boot as upstream's default does.
 
 ### 71.4 What is present and greyed, and what is absent
 
-Greyed with its fact (§47): CPU throttling / BDOS 254 (the emulated Z80 is
-slower than a real one on the target — nothing to throttle); files > 65,535
+Greyed with its fact (§47): CPU throttling / BDOS 254 (`F_CPUSPEED`) and
+`cpuDelayInstructions` — the fact is structural, not a speed guess: nothing
+in this design can sleep inside a slice (the emulator runs on the UI task
+and never blocks), so there is no delay for 254 to act on; it is accepted
+and ignored, and the banner prints the speed the machine delivers, whatever
+it is; files > 65,535
 bytes and > 8 open at once (above); ANSI bold/underline/colour (one 8×8 face,
 1bpp adapters — only reverse video renders); escapes outside the subset
 (swallowed); CP/M 3, banked memory, F_MULTISEC, date stamps (off by default
 upstream and needing `long`/`time()`); XMODEM (no serial path reaches a
 package); the 64-bit clock estimate (replaced, stated); `INFO.COM`'s host
 name (its table predates HostOS 0x08 — a third-party binary, not edited);
-`::CPU HALTED::` (DEBUG-only upstream — this port toasts the fact and
-self-closes).
+`::CPU HALTED::` (DEBUG-only upstream — this port toasts the fact and then
+does exactly what BOOT does: the "\r\n", the exit path, wave 3's self-close).
 
 Absent: RunCPM's internal C CCP (host-blocking C; DRI's binary is the command
 processor), the debugger/disassembler, Arduino GPIO calls, STREAMIO, RunVT
@@ -50973,13 +51169,53 @@ Package `RUNCPM`, directory `apps/runcpm/`, images `build/runcpm.img` /
 changed), on `apps-all.img` as a folder of its own `RUNCPM\` (§19.9 — the
 CCP, and the `.OVL` if it exists, must sit beside the package). **Nothing
 third-party is committed** (CONTRIBUTING.md §6): `tools/getruncpm.py`
-fetches RunCPM at a pinned commit at build time — the CCP and `DISK/A0.zip` —
-the way `tools/getstories.py` fetches Frotz's stories, and the disk rules and
-`allapps` depend on its stamp. The disks carry everything on the master disk
-that fits and is under 65,535 bytes (360KB: the executables and text; 720KB
-and 1.44MB: sources as far as they fit, manifest listed). Like every §70
-target these are on demand and nothing in `all` needs the compiler or the
-network (§70.13). It shares nothing with any other package. Its one bench
-harness, `tests/rcband/rcbandbench.asm` (`make rcbandbench` →
-`build/rcband.img`; PERFORMANCE.md Set 65), %includes the package's own
-`rcband.inc` and ships nothing.
+fetches RunCPM at the pinned commit at build time (`make runcpm-src`, the
+stamp `build/runcpm-src.stamp`) — `CCP/CCP-DR.60K`, `LICENSE`,
+`DISK/1STREAD.ME` and `DISK/A0.zip`, every artifact's SHA-256 checked, the
+master disk unpacked into `build/runcpm-disk/A/0` MINUS the three files above
+65,535 bytes, which `A/0/LEFT-OFF.TXT` names on the disk — the way
+`tools/getstories.py` fetches Frotz's stories, and the disk rules (and, from
+wave 6, `allapps`) depend on its stamp. **Each floppy** carries `RUNCPM.O88`,
+`CCP-DR.60K`, `LICENSE` and `1STREAD.ME` in its root (`build/runcpm.img`
+also `HELLO.COM`, below) and drive A user 0 as
+far as the geometry holds it, chosen at recipe time by `getruncpm.py --select
+<kb>` — the texts and submit files first (they are ~18 clusters and make
+the disk explain itself), then the programs, then documentation, libraries
+and sources; **the cluster budget is DERIVED, not a constant**: the recipe
+passes `--reserve` with the root files that ride beside `A/0` (the package,
+the `.OVL` if one comes, the CCP, LICENSE, the read-me — and `HELLO.COM` on
+the 1.44MB disk alone: a nine-byte build artifact of this tree, not
+RunCPM's, which the wave-2 gate names as "a .COM on `build/runcpm.img`" and
+`tests/rczex.py` boots; it rides no other geometry, and wave 6's curation
+decides whether it stays), their sizes are priced in the geometry's own
+clusters, and what stays constant is `os88disk.py`'s own directory
+arithmetic (the folder `A`'s cluster, `A/0`'s directory at 32 bytes an
+entry counted as files are chosen, and the one-cluster `ASSOC.DAT` written
+beside every package) — checked: the arithmetic reproduces `--verify`'s
+"in use" exactly on all three images, so the 360KB disk re-selects itself as
+the package grows and never stops at "data over capacity" first — and no
+manifest is checked in. Measured at the pin (`A0.zip` holds 79 files; 3 are
+above 65,535 bytes; `A/0` is the 76 that remain + `LEFT-OFF.TXT` = 77, and
+`LEFT-OFF.TXT` also names, derived from the `.SUB` files themselves, the two
+submit files that assemble a left-off source — `BDOS.SUB`, `ZCPR3.SUB` — and
+will not run): **1.44MB and 720KB carry all 77; 360KB carries 62 — every one
+of the 37 .COM, the 12 .SUB, `INFO.TXT`, `LEFT-OFF.TXT` and `1STREAD.ME`,
+then `MLOAD.DOC`, four .LIB and five .Z80 sources as far as the 319 clusters
+go** — 83 / 82 / 67 files by `os88disk.py --verify`'s count with the root's
+four (the package, the CCP, LICENSE, 1STREAD.ME) plus `HELLO.COM` and
+`ASSOC.DAT`, 1,294 of 2,847 / 672 of 713 / 353 of 354 clusters (wave 2's
+count with the 24,848-byte package; wave 6 curates). **A/0
+holds more entries than the Disk window's
+32-entry listing cap** (§19): that is a DISPLAY cap — `OSAPI_FILE_FIND` and
+every name-taking cell walk the whole folder — and `tools/os88disk.py
+--deep-folders` is the build's word for a subfolder that is a data store
+rather than a place to browse (the root stays capped; the Disk window shows
+the first 31 of such a folder). Like every §70 target these are on demand and
+nothing in `all` needs the compiler or the network (§70.13). It shares
+nothing with any other package. Its one bench harness,
+`tests/rcband/rcbandbench.asm` (`make rcbandbench` → `build/rcband.img`;
+PERFORMANCE.md Set 65), %includes the package's own `rcband.inc` and ships
+nothing; its two boot-sector harnesses (`hosttest/rcz80test.sh`,
+`hosttest/rcmemtest.sh`) and `tests/rczex.py` %include or boot the shipping
+text and ship nothing either. `vm/386-runcpm` is `vm/386-c-word` with the B:
+image and the uuid changed (`make 386-runcpm`).

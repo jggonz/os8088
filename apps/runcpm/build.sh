@@ -17,10 +17,15 @@
 #                                     the way the Z80 side will, model == glass
 #                                     and shadow == glass after every step,
 #                                     and the cost table in calls and cells
-#   (wave 2) hosttest/rcmemtest       the Z80-RAM movers on a real x86 with
-#                                     SS != DS, in QEMU, negative controls
+#   apps/runcpm/hosttest/rcmemtest.sh the Z80-RAM movers on a real x86 with
+#                                     SS != DS, in raw QEMU, with negative
+#                                     controls (a few seconds)
 #   (wave 4) hosttest/rcfstest.c      the FCB/directory/record layer against a
 #                                     fake folder tree
+#
+# NOT here, because it takes minutes: apps/runcpm/hosttest/rcz80test.sh runs
+# the Z80 core against ZEXDOC in raw QEMU (`make rcz80test`); tests/rczex.py
+# is the same oracle inside os8088 (`make rczex`).
 #
 # The compiler for the TARGET is not in this tree: tools/setup-cc.sh fetches
 # SmallerC at its pinned commit into build/cc/ (gitignored). The checks below
@@ -40,3 +45,6 @@ mkdir -p $BUILD
 $HOSTCC -O1 -w -I apps/runcpm/hosttest -I apps/runcpm \
     -o $BUILD/rcuitest apps/runcpm/hosttest/rcuitest.c
 $BUILD/rcuitest
+
+# The movers, on a real x86 with SS != DS (a boot sector in raw QEMU).
+apps/runcpm/hosttest/rcmemtest.sh

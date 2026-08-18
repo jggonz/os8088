@@ -21,6 +21,7 @@ vm/386-z/nvr/
 vm/xt-word/nvr/
 vm/386-word/nvr/
 vm/386-c-word/nvr/
+vm/386-runcpm/nvr/
 
 # Page snapshots the Playwright MCP server drops in the working directory
 .playwright-mcp/

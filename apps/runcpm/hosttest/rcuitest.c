@@ -250,6 +250,16 @@ int  os88_snd_tone(int hz, int ticks, int prio) { return 0; }
 int  os88_toast(const char *text, int ticks)
 { strncpy(last_toast, text, sizeof(last_toast) - 1); return 0; }
 int  os88_cpu(void) { return OS88_CPU_8086; }
+/* the tick: advances by tick_step on every read - one, so an EXHAUSTED
+ * slice always spans exactly one tick and the adaptive length holds still
+ * (an early-ended slice - blocked, program end, HALT - is not timed at all
+ * and the rows below assert that with tick_step = 0); and zero during the
+ * clock estimate, where the modelled Z80 advances the tick once per
+ * completed BURST instead, so four ticks are four bursts and the two lines
+ * are checkable in 32-bit arithmetic here */
+static unsigned ticks;
+static unsigned tick_step = 1;
+unsigned os88_ticks(void) { unsigned t = ticks; ticks += tick_step; return t; }
 unsigned os88_mem_claim(int kb) { return 0x2000; }
 unsigned os88_mem_largest_kb(void) { return 200; }
 
@@ -284,11 +294,35 @@ int os88_file_find(int ordinal, struct os88_find *f)
 }
 unsigned os88_file_read(const char *name, void *buf, unsigned cap)
 {
-    if (std_clus == 9 && strcmp(name, "RCPROBE.TXT") == 0) {
-        strncpy(buf, "A0 through goto_q_mark", cap);
-        ferr = 0;
-        return 22;
+    ferr = OS88_FERR_NOENT;
+    return 0;
+}
+/* the loader's read: HELLO.COM exists in A\0 (clus 9) only, 40 bytes that
+ * LAND in the claim (the claim is the fake Z80's RAM below, seg 0x2000) so
+ * the copy down to 0100h is checked; BIG.COM exists there too and is over
+ * the cap (FERR_BIG). The stub does what the disk driver does with a base
+ * that is not 512-aligned - refuses it, loudly: SPEC.md 2.1.1, and the one
+ * defect QEMU cannot show (its BIOS ignores the DMA page). */
+static char last_read[16];
+static unsigned last_read_seg, n_reads;
+static unsigned char zram[65536];
+static const char hello_bytes[40] = "\016\011\021\011\001\315\005\000\311Hello from the Z80 - 40 bytes.$";
+unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap)
+{
+    strncpy(last_read, name, 15);
+    last_read_seg = seg;
+    n_reads++;
+    if (seg & 0x1F) {
+        printf("HARNESS: os88_file_read_seg to %04x: not a 512-aligned base (SPEC.md 2.1.1)\n", seg);
+        exit(1);
     }
+    if (std_clus == 9 && strcmp(name, "HELLO.COM") == 0) {
+        if (seg < 0x2000 || ((seg - 0x2000) << 4) + 40 > 0x10000) { printf("HARNESS: read outside the claim\n"); exit(1); }
+        memcpy(zram + ((seg - 0x2000) << 4), hello_bytes, 40);
+        ferr = 0;
+        return 40;
+    }
+    if (std_clus == 9 && strcmp(name, "BIG.COM") == 0) { ferr = OS88_FERR_BIG; return 0; }
     ferr = OS88_FERR_NOENT;
     return 0;
 }
@@ -302,6 +336,88 @@ char *os88_utoa(unsigned v, char *dst6) { sprintf(dst6, "%u", v); return dst6; }
 
 /* --- the program ------------------------------------------------------------ */
 #include "../runcpm.c"
+
+/* --- the Z80 and its RAM, modelled (apps/runcpm/rcz80.inc, rcmem.inc) -------
+ * The core is not run here (rcz80test.sh runs the shipping text in raw QEMU
+ * against ZEXDOC); what the harness models is the CONTRACT the C sees: a
+ * register file, a 64KB RAM the accessors reach, and rc_run() as a SCRIPT of
+ * handoffs - each step sets PC (past the RST), BC and DE and answers a
+ * reason; a step the C put PC back onto (the retry, SPEC.md 71.1) is served
+ * again. In the clock state the burst is ZCLK_BURST control transfers spent
+ * against the budget of each call: a call that runs out mid-burst answers
+ * SLICE with PC inside the loop, and the C must come back with THAT PC (a
+ * PC of 0000 mid-burst is a restart, counted in clk_restarts); the call
+ * that spends the last of it HALTs, PC on the HALT, and advances the tick. */
+struct rc_zregs rc_z;
+struct zstep { int reason; unsigned pc, bc, de; };
+static struct zstep zsteps[32];
+static int zsn, zsp, zlast = -1;
+static int n_rc_run;
+#define ZCLK_BURST 11000
+static int zclk_left = ZCLK_BURST;          /* of the burst under way */
+static int clk_restarts, clk_slices, clk_halts;
+static void zscript_reset(void) { zsn = zsp = 0; zlast = -1; }
+static void zstep(int reason, unsigned pc, unsigned bc, unsigned de)
+{ zsteps[zsn].reason = reason; zsteps[zsn].pc = pc; zsteps[zsn].bc = bc; zsteps[zsn].de = de; zsn++; }
+int rc_run(int n)
+{
+    struct zstep *st;
+    n_rc_run++;
+    if (rc_mode == RC_M_CLOCK) {
+        if (zclk_left != ZCLK_BURST && rc_z.pc == 0)
+            clk_restarts++;                     /* mid-burst, PC reset: WRONG */
+        if (zclk_left == ZCLK_BURST && rc_z.pc != 0)
+            clk_restarts++;                     /* a new burst not from 0000 */
+        if (n < zclk_left) {                    /* the slice runs out inside */
+            zclk_left -= n;
+            rc_z.pc = 6;                        /* inside the inner loop */
+            rc_z.cnt = 0;
+            clk_slices++;
+            return RC_RUN_SLICE;
+        }
+        rc_z.cnt = n - zclk_left;
+        zclk_left = ZCLK_BURST;
+        rc_z.pc = 16;                           /* on the HALT */
+        clk_halts++;
+        ticks++;                                /* a burst is one tick here */
+        return RC_RUN_HALT;
+    }
+    if (zlast >= 0 && rc_z.pc == zsteps[zlast].pc - 1) {
+        st = &zsteps[zlast];                    /* the retry: same trap again */
+    } else if (zsp < zsn) {
+        st = &zsteps[zsp];
+        zlast = zsp++;
+    } else {
+        rc_z.cnt = 0;                           /* nothing scripted: the slice
+                                                 * runs out */
+        return RC_RUN_SLICE;
+    }
+    rc_z.pc = st->pc; rc_z.bc = st->bc; rc_z.de = st->de;
+    rc_z.cnt = n - 1;
+    return st->reason;
+}
+int  rc_rd(unsigned a) { return zram[a & 0xFFFF]; }
+int  rc_rd16(unsigned a) { return zram[a & 0xFFFF] | (zram[(a + 1) & 0xFFFF] << 8); }
+void rc_wr(unsigned a, int v) { zram[a & 0xFFFF] = (unsigned char)v; }
+void rc_wr16(unsigned a, int v) { zram[a & 0xFFFF] = (unsigned char)v; zram[(a + 1) & 0xFFFF] = (unsigned char)(v >> 8); }
+void rc_zcopy_in(unsigned zaddr, const void *src, unsigned n)
+{ unsigned i; for (i = 0; i < n; i++) zram[(zaddr + i) & 0xFFFF] = ((const unsigned char *)src)[i]; }
+void rc_zcopy_out(void *dst, unsigned zaddr, unsigned n)
+{ unsigned i; for (i = 0; i < n; i++) ((unsigned char *)dst)[i] = zram[(zaddr + i) & 0xFFFF]; }
+/* the claim-to-Z80 mover, modelled for the one claim the harness has - the
+ * Z80's own (the loader's copy-down, BIOS MOVE): an ASCENDING byte copy, as
+ * rcmem.inc's rep movsb is, so an overlap smears exactly the way the machine
+ * would */
+void rc_zzcopy_in(unsigned zaddr, unsigned seg, unsigned off, unsigned n)
+{
+    unsigned i;
+    if (seg != 0x2000) { printf("HARNESS: rc_zzcopy_in from seg %04x: not the claim\n", seg); exit(1); }
+    for (i = 0; i < n; i++)
+        zram[(zaddr + i) & 0xFFFF] = zram[(off + i) & 0xFFFF];
+}
+void rc_zzcopy_out(unsigned seg, unsigned off, unsigned zaddr, unsigned n) { (void)seg; (void)off; (void)zaddr; (void)n; }
+void rc_zfill(unsigned zaddr, int v, unsigned n)
+{ unsigned i; for (i = 0; i < n; i++) zram[(zaddr + i) & 0xFFFF] = (unsigned char)v; }
 
 /* --- the assembly, modelled (apps/runcpm/rcband.inc) ------------------------ */
 void rc_band(unsigned char *dst, const unsigned char *chars,
@@ -401,10 +517,7 @@ static void expect_cursor(const char *step, int x, int y)
 }
 
 /* one wake: what the machine does after every slice */
-static void wake(void) { rc_wakes = 2; os88_onwake(win); }   /* 2: the RC_W1
-                                  * counter line is not reprinted (it prints
-                                  * every 16th wake) - the table is the
-                                  * terminal's cost, not the scaffold's */
+static void wake(void) { os88_onwake(win); }
 static void feed(const char *s) { rc_puts(s); }
 static void expose(void)
 {
@@ -486,13 +599,17 @@ static void run_all(int cols_geom, int rows_geom, int table)
     cont_w = cols_geom * 8; cont_h = rows_geom * 8;
     gclear(); callreset(); ncosts = 0; wakes_posted = 0;
     std_clus = 0; std_vol = 0; ferr = 0;
-    rc_probe_done = 0; rc_wakes = 0;
+    ticks = 100; tick_step = 1; zscript_reset(); n_rc_run = 0;
+    zclk_left = ZCLK_BURST; clk_restarts = clk_slices = clk_halts = 0;
+    memset(zram, 0, sizeof(zram));
+    rc_khead = rc_ktail = 0;
 
-    /* launch: os88_main builds the model (banner), the loader shows the
-     * window and paints it whole */
+    /* launch: os88_main builds the model (the banner's first four lines: the
+     * clock estimate comes on the wake), the loader shows the window and
+     * paints it whole */
     win = os88_main();
     if (!win) { printf("FAIL: os88_main returned 0 (%s)\n", last_toast); fails++; return; }
-    if (rc_all_blank) { /* the banner wrote something */ }
+    if (rc_z.seg != 0x2000) { printf("FAIL: rc_z.seg not the claim\n"); fails++; }
     expose();
     audit("expose after launch");
     expect_row("banner 1", 0, "  CP/M Emulator v6.9 by Marcelo Dantas");
@@ -500,37 +617,285 @@ static void run_all(int cols_geom, int rows_geom, int table)
                                   * pinned upstream commit's date (SPEC.md 71) */
     expect_row("banner 3", 2, "----------------------------------------");
     expect_row("banner 4", 3, "CPU is 8086 native");
-    expect_row("banner 5", 4, "BIOS at 0xfe00 - BDOS at 0xec00");
-    expect_row("banner 6", 5, "BIOS/BDOS using interrupt handoff method");
-    expect_row("banner 7", 6, "CCP CCP-DR.60K at 0xe400");
-    expect_cursor("after banner", 0, 7);
-    /* a whole repaint is ONE fill of the content and then only the rows with
-     * something on them, each to its last non-blank cell: the banner's 7 and
-     * the cursor's row (one cell) */
-    if (n_fill != 1 || n_blit != 8 || calls() != 9) { printf("FAIL: the banner expose cost %d fills / %d bands / %d calls, wanted 1 / 8 / 9\n", n_fill, n_blit, calls()); fails++; }
-    if (table) cost("expose: full repaint, banner (fill + 8 rows)");
+    expect_cursor("after banner 1", 0, 4);
     if (wakes_posted == 0) { printf("FAIL: the paint did not kick\n"); fails++; }
+    if (rc_mode != RC_M_CLOCK) { printf("FAIL: not measuring the clock after launch\n"); fails++; }
 
-    /* the first wake: the probe (fake tree) and the counter line */
-    callreset();
-    wake();
-    audit("first wake");
-    expect_row("probe row", 7, "A\\0 probe: 22 bytes: A0 through goto_q_mark");
-    if (std_clus != 0) { printf("FAIL: the probe did not come home (clus %u)\n", std_clus); fails++; }
-    if (wakes_posted < 2) { printf("FAIL: the wake did not re-post\n"); fails++; }
+    /* the clock estimate: the clock program runs in ORDINARY SLICES, a slice
+     * a wake, until four ticks have passed and a burst has completed - the
+     * modelled Z80 spends 11,000 transfers a burst against the slice budget
+     * (512 on the 8086 the stub reports, doubling as the adaptation sees
+     * slices that took no tick), resumes a burst the slice cut (a restart
+     * is counted and fails), and advances the tick once per HALT, so four
+     * ticks are four bursts and the two lines are checkable in real 32-bit
+     * arithmetic here: 4 x 260,319 T-states in 4 x 55 ms, hundredths of MHz
+     * = T / (ms * 10) */
+    tick_step = 0;
+    for (i = 0; i < 200 && rc_mode == RC_M_CLOCK; i++) wake();
+    tick_step = 1;
+    audit("clock estimate");
+    if (rc_mode != RC_M_IDLE) { printf("FAIL: the clock estimate did not finish (mode %d after %d wakes)\n", rc_mode, i); fails++; }
+    if (clk_restarts) { printf("FAIL: %d clock slice(s) restarted the burst instead of resuming it\n", clk_restarts); fails++; }
+    if (clk_slices < 4) { printf("FAIL: the clock ran whole bursts (%d slices cut a burst, wanted several)\n", clk_slices); fails++; }
+    if (clk_halts != 4) { printf("FAIL: the clock estimate completed %d bursts, wanted 4\n", clk_halts); fails++; }
+    if (i > 40) { printf("FAIL: the clock estimate took %d wakes; the slice did not adapt\n", i); fails++; }
+    {
+        unsigned long ts = 4UL * 260319UL, ms = 4UL * 55UL, hund = ts / (ms * 10UL);
+        sprintf(line, "%lu T-states in %lu ms", ts, ms);
+        expect_row("clock 1", 4, line);
+        sprintf(line, "Estimated Z80 clock speed: %lu.%02lu MHz", hund / 100, hund % 100);
+        expect_row("clock 2", 5, line);
+    }
+    expect_row("banner 5", 6, "BIOS at 0xfe00 - BDOS at 0xec00");
+    expect_row("banner 6", 7, "BIOS/BDOS using interrupt handoff method");
+    expect_row("banner 7", 8, "CCP CCP-DR.60K at 0xe400");
+    expect_cursor("after banner", 0, 9);
+    if (n_rc_run != i) { printf("FAIL: the clock ran %d rc_run calls in %d wakes, wanted one a wake\n", n_rc_run, i); fails++; }
+    {   int w = wakes_posted;                /* idle: no wake is wanted */
+        wake();
+        if (wakes_posted != w) { printf("FAIL: an idle machine re-posted its wake\n"); fails++; }
+    }
 
-    /* echo one character - the keystroke path: os88_onkey pushes, the
-     * slice pops and echoes, the flush draws */
-    feed("\033[12;1H");                 /* park the cursor on an empty row */
-    wake();
+    /* the whole banner, exposed: ONE fill of the content and then only the
+     * rows with something on them, each to its last non-blank cell - the
+     * nine banner rows and the cursor's row (one cell) */
     callreset();
+    { int r, c; for (r = 0; r < 25; r++) for (c = 0; c < 80; c++) gl_ch[cont_y + r*8][cont_x/8 + c] = '#'; }
+    expose();
+    audit("expose the banner");
+    if (n_fill != 1 || n_blit != 10 || calls() != 11) { printf("FAIL: the banner expose cost %d fills / %d bands / %d calls, wanted 1 / 10 / 11\n", n_fill, n_blit, calls()); fails++; }
+    if (table) cost("expose: full repaint, banner (fill + 10 rows)");
+
+    /* THE DEBUG LOADER AND THE HANDOFFS: Alt+L, a name, Enter - the loader
+     * stands in A\0 (rc_fs_cd through the fake tree), reads HELLO.COM into
+     * the claim at paragraph 10h, patches page zero and runs; the scripted
+     * Z80 then does BDOS 9 (a string in its RAM), BDOS 2, and a BIOS WBOOT,
+     * which ends the program (SPEC.md 71) */
+    callreset();
+    lock_depth = 1;
+    os88_onkey(0, 0x26, win);            /* Alt+L */
+    lock_depth = 0;
+    audit("load prompt");
+    expect_row("load prompt", 10, "Load .COM: ");
+    if (!rc_ldmode) { printf("FAIL: Alt+L did not open the loader prompt\n"); fails++; }
+    lock_depth = 1;
+    os88_onkey('h', 0x23, win); os88_onkey('e', 0x12, win); os88_onkey('l', 0x26, win);
+    os88_onkey('l', 0x26, win); os88_onkey('o', 0x18, win);
+    os88_onkey('x', 0x2D, win); os88_onkey(8, 0x0E, win);      /* a typo, erased */
+    lock_depth = 0;
+    audit("load name typed");
+    expect_row("load name", 10, "Load .COM: HELLO");
+    strcpy((char *)zram + 0x500, "Hello from the Z80$");   /* clear of the
+                                                  * loader's 0x200 landing */
+    zstep(RC_RUN_BDOS, 0xED01, 0x0009, 0x0500);      /* BDOS 9: DE = the string */
+    last_read[0] = 0; last_read_seg = 0;
+    lock_depth = 1;
+    { int w = wakes_posted;
+      os88_onkey(13, 0x1C, win);
+      lock_depth = 0;
+      audit("load enter");
+      /* Enter under the lock: the CR/LF echoed and flushed, NO floppy read
+       * (several int 13h calls, ~400 ms each on the target: not under the
+       * lock W_ONKEY holds - SPEC.md 71.1), a wake posted for it */
+      if (last_read[0]) { printf("FAIL: the loader read %s from os88_onkey, under the lock\n", last_read); fails++; }
+      if (rc_ldmode != RC_LD_LOAD || wakes_posted == w) { printf("FAIL: Enter did not hand the read to the wake (ldmode %d)\n", rc_ldmode); fails++; }
+      expect_cursor("load enter", 0, 11);
+    }
+    callreset();
+    { int w = wakes_posted;
+      wake();                                /* the read, lock not held */
+      audit("load wake");
+      if (rc_ldmode != 0) { printf("FAIL: the load wake left ldmode %d\n", rc_ldmode); fails++; }
+      /* the read lands at the first 512-aligned offset at or above 0200h
+       * (the claim is 0x2000: that is 0x2020) and is copied down to 0100h */
+      if (strcmp(last_read, "HELLO.COM") != 0 || last_read_seg != 0x2020) { printf("FAIL: the loader read '%s' into %04x, wanted HELLO.COM into 2020 (512-aligned)\n", last_read, last_read_seg); fails++; }
+      if (memcmp(zram + 0x100, hello_bytes, 40) != 0) { printf("FAIL: the .COM was not copied down to 0100h\n"); fails++; }
+      if (calls() != 0) { printf("FAIL: the load wake drew %d calls (nothing changed on the glass)\n", calls()); fails++; }
+      if (wakes_posted == w) { printf("FAIL: the load wake did not re-post for the first slice\n"); fails++; }
+    }
+    if (std_clus != 9) { printf("FAIL: the loader is not standing in A\\0 (clus %u)\n", std_clus); fails++; }
+    if (rc_mode != RC_M_RUN) { printf("FAIL: the loader did not start the machine (mode %d)\n", rc_mode); fails++; }
+    if (rc_z.pc != 0x0100 || rc_z.sp != 0xE3FE) { printf("FAIL: the program starts at %04x sp %04x\n", rc_z.pc, rc_z.sp); fails++; }
+    if (zram[0] != 0xC3 || zram[5] != 0xC3 || zram[0xED00] != 0xD7 || zram[0xFF03] != 0xCF) { printf("FAIL: page zero / handoff pages not patched\n"); fails++; }
+    if (zram[0xFF80] != 0x00 || zram[0xFF81] != 0x01 || zram[0xFF82] != 0x05) { printf("FAIL: the DPB is not cpm.h's\n"); fails++; }
+    callreset();
+    wake();                                  /* the slice: BDOS 9, then the
+                                              * script runs out */
+    audit("hello slice");
+    expect_row("hello", 11, "Hello from the Z80");
+    if (rc_mode != RC_M_RUN) { printf("FAIL: the machine stopped after BDOS 9 (mode %d)\n", rc_mode); fails++; }
+    if (rc_z.hl != 0 || rc_z.bc != 0x0000 || (rc_z.af & 0xFF) != 0) { printf("FAIL: the BDOS tail (HL=0, C=E, B=H, A=L): hl %04x bc %04x af %04x\n", rc_z.hl, rc_z.bc, rc_z.af); fails++; }
+    if (table) cost("a slice: BDOS 9 (18 chars)");
+    zstep(RC_RUN_BDOS, 0xED01, 0x0002, 0x0021);      /* BDOS 2: '!' */
+    zstep(RC_RUN_BIOS, 0xFF04, 0, 0);                /* BIOS WBOOT (fn 3) */
+    wake();
+    audit("hello end");
+    expect_row("hello!", 11, "Hello from the Z80!");
+    if (rc_mode != RC_M_IDLE) { printf("FAIL: WBOOT did not end the program (mode %d)\n", rc_mode); fails++; }
+    if (rc_status != RC_ST_RESTART) { printf("FAIL: WBOOT did not ask for a restart\n"); fails++; }
+
+    /* a .COM that exists in A\0 but is over the TPA: the fact printed is
+     * 'too big', and the launch-folder fallback (whose NOENT would hide it)
+     * is not tried */
+    lock_depth = 1;
+    os88_onkey(0, 0x26, win);
+    os88_onkey('b', 0x30, win); os88_onkey('i', 0x17, win); os88_onkey('g', 0x22, win);
+    os88_onkey(13, 0x1C, win);
+    lock_depth = 0;
+    n_reads = 0;
+    wake();
+    audit("big load");
+    expect_row("big load", 13, "BIG.COM: too big for the TPA");
+    if (n_reads != 1) { printf("FAIL: a too-big .COM was read %u times (the fallback would hide the fact)\n", n_reads); fails++; }
+    if (rc_mode != RC_M_IDLE) { printf("FAIL: a refused load left mode %d\n", rc_mode); fails++; }
+    feed("\033[12;20H\033[J");          /* the cursor back after the hello,
+                                          * the rows below cleared */
+    wake();
+
+    /* the blocked read: BDOS 1 on an empty ring stops the machine WITHOUT a
+     * re-post; the key kicks it, the trap is retried, the echo lands */
+    zscript_reset();
+    zstep(RC_RUN_BDOS, 0xED01, 0x0001, 0);           /* BDOS 1: C_READ */
+    zstep(RC_RUN_BIOS, 0xFF04, 0, 0);
+    rc_mode = RC_M_RUN; rc_status = RC_ST_RUNNING;
+    feed("\r\n");
+    { int w;
+      wake();
+      audit("blocked read");
+      if (rc_mode != RC_M_BLOCKED) { printf("FAIL: an empty ring did not block the read (mode %d)\n", rc_mode); fails++; }
+      if (rc_z.pc != 0xED00) { printf("FAIL: the trap was not put back for the retry (pc %04x)\n", rc_z.pc); fails++; }
+      w = wakes_posted;
+      wake();
+      if (wakes_posted != w) { printf("FAIL: a blocked machine re-posted its wake\n"); fails++; }
+      lock_depth = 1;
+      os88_onkey('k', 0x25, win);
+      lock_depth = 0;
+      if (rc_mode != RC_M_RUN || wakes_posted == w) { printf("FAIL: the key did not kick the blocked machine\n"); fails++; }
+      callreset();
+      wake();
+      audit("read retried");
+      expect_row("echo", 12, "k");
+      if ((rc_z.af & 0xFF) != 'k') { printf("FAIL: C_READ answered %02x\n", rc_z.af & 0xFF); fails++; }
+      if (rc_mode != RC_M_IDLE) { printf("FAIL: the WBOOT after the read did not end the program\n"); fails++; }
+    }
+    if (table) cost("a key into a blocked C_READ: the echo");
+    zscript_reset();
+
+    /* echo one character - the keystroke path: the machine waits in C_READ,
+     * os88_onkey pushes and kicks, the retried trap pops and echoes, the
+     * flush draws: ONE band, the character and the moved cursor */
+    feed("\033[14;1H");                 /* park the cursor on an empty row */
+    wake();
+    zstep(RC_RUN_BDOS, 0xED01, 0x0001, 0);           /* C_READ, no key yet */
+    rc_mode = RC_M_RUN; rc_status = RC_ST_RUNNING;
+    wake();
+    if (rc_mode != RC_M_BLOCKED) { printf("FAIL: echo test: not blocked\n"); fails++; }
+    callreset();
+    lock_depth = 1;
     os88_onkey('a', 0x1E, win);
+    lock_depth = 0;
     wake();
     audit("echo a");
-    expect_row("echo a", 11, "a");
-    expect_cursor("echo a", 1, 11);
+    expect_row("echo a", 13, "a");
+    expect_cursor("echo a", 1, 13);
     if (calls() != 1 || n_cells != 2) { printf("FAIL: echo one character cost %d calls / %d cells, wanted 1 / 2\n", calls(), n_cells); fails++; }
     if (table) cost("echo one character (cell + cursor)");
+    rc_mode = RC_M_IDLE; zscript_reset();
+
+    /* THE ADAPTATION IS BLIND TO AN EARLY-ENDED SLICE. Twelve keys into a
+     * program that blocks in C_READ after each (TE, MBASIC: every key is one
+     * wake, one retried trap, one echo, blocked again) with the tick standing
+     * still - the shape that once walked the budget from 512 to the 16,384
+     * cap in ~30 keystrokes and handed the next busy slice ~1.6 s of UI task
+     * (found by the review) - leaves rc_slice_n where it was; and four
+     * EXHAUSTED slices inside one tick still double it. */
+    {
+        int n0 = 512, k;
+        rc_slice_n = n0; rc_sl_fast = 0;         /* the 8086's first guess */
+        for (k = 0; k < 13; k++) zstep(RC_RUN_BDOS, 0xED01, 0x0001, 0);   /* C_READ x13 */
+        rc_mode = RC_M_RUN; rc_status = RC_ST_RUNNING;
+        tick_step = 0;
+        wake();                                  /* blocks on the first */
+        if (rc_mode != RC_M_BLOCKED) { printf("FAIL: adaptation row: not blocked\n"); fails++; }
+        for (k = 0; k < 12; k++) {
+            lock_depth = 1; os88_onkey('a' + k, 0x1E, win); lock_depth = 0;
+            wake();                              /* the retry, the echo, blocked again */
+            if (rc_mode != RC_M_BLOCKED) { printf("FAIL: adaptation row: key %d did not block again (mode %d)\n", k, rc_mode); fails++; break; }
+        }
+        if (rc_slice_n != n0) { printf("FAIL: 12 keys into a blocked C_READ moved the slice budget %d -> %d (an early-ended slice must not adapt it)\n", n0, rc_slice_n); fails++; }
+        zscript_reset();                         /* nothing scripted: the slice
+                                                  * EXHAUSTS its budget */
+        rc_mode = RC_M_RUN; rc_status = RC_ST_RUNNING;
+        rc_sl_fast = 0;
+        for (k = 0; k < 4; k++) wake();
+        if (rc_slice_n != n0 << 1) { printf("FAIL: four exhausted slices in one tick left the budget at %d (from %d), wanted it doubled\n", rc_slice_n, n0); fails++; }
+        for (k = 0; k < 4; k++) wake();
+        if (rc_slice_n != n0 << 2) { printf("FAIL: eight exhausted slices in one tick left the budget at %d, wanted x4\n", rc_slice_n); fails++; }
+        tick_step = 1;
+        wake(); wake();                          /* one tick a slice: holds */
+        if (rc_slice_n != n0 << 2) { printf("FAIL: a slice a tick moved the budget to %d\n", rc_slice_n); fails++; }
+        tick_step = 2;                           /* two boundaries a slice: halves */
+        wake();
+        if (rc_slice_n != n0 << 1) { printf("FAIL: a slice across two ticks left the budget at %d, wanted halved\n", rc_slice_n); fails++; }
+        tick_step = 1;
+        rc_slice_n = n0; rc_sl_fast = 0;
+        rc_mode = RC_M_IDLE; zscript_reset();
+        feed("\033[14;1H\033[K");               /* the row the echoes landed on */
+        wake();
+    }
+
+    /* HALT is BOOT's exit (cpu1.h 0x76: Status = STATUS_EXIT): the toast,
+     * main.c's "\r\n", the machine idle - and it is not timed */
+    {
+        int n0 = rc_slice_n;
+        zstep(RC_RUN_HALT, 0x0123, 0, 0);
+        rc_mode = RC_M_RUN; rc_status = RC_ST_RUNNING;
+        last_toast[0] = 0;
+        feed("\033[14;1H");
+        tick_step = 0;
+        wake();
+        tick_step = 1;
+        audit("halt");
+        if (strcmp(last_toast, "RunCPM: CPU halted") != 0) { printf("FAIL: HALT toasted '%s'\n", last_toast); fails++; }
+        if (rc_mode != RC_M_IDLE || rc_status != RC_ST_EXIT) { printf("FAIL: HALT left mode %d status %d, wanted idle / EXIT\n", rc_mode, rc_status); fails++; }
+        expect_cursor("halt crlf", 0, 14);
+        if (rc_slice_n != n0) { printf("FAIL: a HALT slice adapted the budget\n"); fails++; }
+        zscript_reset();
+    }
+
+    /* BIOS MOVE goes through the mover, ascending, and leaves cpm.h's
+     * registers (HL and DE past the block, BC = 0xFFFF); BDOS 9 with no '$'
+     * anywhere in the 64KB stops after one lap instead of never */
+    {
+        int k;
+        for (k = 0; k < 300; k++) zram[0x3000 + k] = (unsigned char)k;
+        zram[0x3100] = 0xAA;                    /* inside the destination: an
+                                                 * overlap the ascending copy
+                                                 * smears exactly as cpm.h */
+        zstep(RC_RUN_BIOS, 0xFF00 + 75 + 1, 300, 0x3000);   /* MOVE: BC=300 (DE)->(HL) */
+        rc_z.hl = 0x3100;
+        rc_mode = RC_M_RUN; rc_status = RC_ST_RUNNING;
+        wake();
+        /* ascending, so the overlap smears as cpm.h's loop does: source byte
+         * 0x3100 is read at k = 0x100, by which time it holds source byte
+         * 0x3000 (= 0), so dest[0x100] = 0 and dest[0x12B] = 0x2B */
+        if (zram[0x3100] != 0 || zram[0x3101] != 1 || zram[0x31FF] != 0xFF ||
+            zram[0x3200] != 0 || zram[0x322B] != 0x2B) { printf("FAIL: MOVE bytes: %02x %02x %02x %02x %02x\n", zram[0x3100], zram[0x3101], zram[0x31FF], zram[0x3200], zram[0x322B]); fails++; }
+        if (rc_z.hl != 0x3100 + 300 || rc_z.de != 0x3000 + 300 || rc_z.bc != 0xFFFF) { printf("FAIL: MOVE registers hl %04x de %04x bc %04x (cpm.h: past the block, BC = FFFF)\n", rc_z.hl, rc_z.de, rc_z.bc); fails++; }
+        zscript_reset();
+        memset(zram + 0x4000, 'x', 0x100);      /* no '$' anywhere: zram is
+                                                 * zeros and 'x' */
+        for (k = 0; k < 0x10000; k++) if (zram[k] == '$') zram[k] = 'y';
+        zstep(RC_RUN_BDOS, 0xED01, 0x0009, 0x4000);
+        rc_mode = RC_M_RUN; rc_status = RC_ST_RUNNING;
+        wake();
+        audit("bdos 9 no $");
+        if (rc_z.de != 0x4001) { printf("FAIL: BDOS 9 with no '$' left DE %04x (one lap and one past)\n", rc_z.de); fails++; }
+        zscript_reset(); rc_mode = RC_M_IDLE;
+        memcpy(zram + 0x100, hello_bytes, 40);  /* put the hello back */
+        feed("\033[2J\033[14;1H");
+        wake();
+    }
 
     /* cursor-only move to another row: the old cursor cell and the new */
     callreset();
@@ -604,6 +969,18 @@ static void run_all(int cols_geom, int rows_geom, int table)
     expect_row("wrap x", 24, "X");
     expect_cursor("wrap", 1, 24);
 
+    /* ESC[s at the pending wrap, ESC[u, then a character: the wrap must
+     * still happen (the reviewer's row: wave 1 clamped the restored column) */
+    feed("\r\n");
+    for (i = 0; i < 80; i++) rc_putc('a' + (i % 26));
+    feed("\033[s\033[1;1H\033[u");
+    expect_cursor("save/restore at the wrap", 80, 24);
+    feed("Q");
+    wake();
+    audit("wrap after restore");
+    expect_row("wrap after restore", 24, "Q");
+    expect_cursor("wrap after restore", 1, 24);
+
     /* backspace and CR at the pending wrap */
     feed("\r\n");
     for (i = 0; i < 80; i++) rc_putc('a');
@@ -668,6 +1045,25 @@ static void run_all(int cols_geom, int rows_geom, int table)
     if (calls() != 0) { printf("FAIL: redrawing an identical screen cost %d calls\n", calls()); fails++; }
     if (table) cost("the identical screen written again");
 
+    /* the cursor DRAWN on row 20, then ESC[M from row 4: the glass row that
+     * carried the cursor moved up to 19 with the scroll, and its shadow row
+     * (cursor bit and all) with it - the flush must compare row 19, or the
+     * old cursor stays on the glass there (the dirty flags now rotate with
+     * the rows, so the flush tracks the drawn cursor's row itself) */
+    feed("\033[21;5H");
+    wake();
+    audit("cursor at 20");
+    callreset();
+    feed("\033[5;1H\033[M");
+    wake();
+    audit("ESC[M with the cursor elsewhere");
+    expect_row("ESC[M elsewhere", 4, "Row 05 of a document being edited in TE, seventy-nine columns of text.......");
+    if (vis_rows() == 25 && (n_scroll != 1 || n_fill != 1)) { printf("FAIL: ESC[M elsewhere cost %d scroll / %d fill\n", n_scroll, n_fill); fails++; }
+    if (table) cost("ESC[M at row 4, cursor drawn at row 20");
+    feed("\033[5;1H\033[L\033[5;1HRow 04 of a document being edited in TE, seventy-nine columns of text.......\033[1;1H");
+    wake();
+    audit("te restored");
+
     /* insert and delete line at the cursor (ESC[L / ESC[M) */
     callreset();
     feed("\033[5;1H\033[L");
@@ -716,7 +1112,32 @@ static void run_all(int cols_geom, int rows_geom, int table)
     lock_depth = 1; os88_paint(win); lock_depth = 0;
     damage_whole = 1;
     audit("partial expose");
+    /* ONE fill of the damage and then only the text under it (three rows
+     * of TE text here: three bands to their spans), never a band the width
+     * of the damage per row over blank cells */
+    if (n_fill != 1 || n_blit != 3 || calls() != 4) { printf("FAIL: partial expose cost %d fills / %d bands / %d calls, wanted 1 / 3 / 4\n", n_fill, n_blit, calls()); fails++; }
     if (table) cost("partial expose of 3 rows x 11 cells");
+    /* ...and the same damage over BLANK rows costs the fill alone (the
+     * scribble covers the two rows the rect holds whole: the fake glass is
+     * cell-atomic and cannot show a cell whose bottom three pixel rows were
+     * never covered, which the real fill leaves as they were - ours) */
+    feed("\033[2J\033[H");
+    wake();
+    callreset();
+    damage_whole = 0;
+    { int r, c; for (r = 5; r <= 6; r++) for (c = 2; c <= 12; c++) { gl_ch[cont_y + r*8][cont_x/8 + c] = '#'; gl_rev[cont_y + r*8][cont_x/8 + c] = 1; } }
+    lock_depth = 1; os88_paint(win); lock_depth = 0;
+    damage_whole = 1;
+    audit("partial expose, blank");
+    if (n_fill != 1 || calls() != 1) { printf("FAIL: partial expose over blank rows cost %d fills / %d calls, wanted 1 / 1\n", n_fill, calls()); fails++; }
+    if (table) cost("partial expose of 3 rows x 11 blank cells");
+    for (i = 0; i < 24; i++) {
+        sprintf(line, "\033[%d;1HRow %02d of a document being edited in TE, seventy-nine columns of text.......", i + 1, i);
+        feed(line);
+    }
+    feed("\033[25;1H\033[7m TE.COM  A:DOC.TXT  Line 1  Col 1  ^J for help                                 \033[0m\033[1;1H");
+    wake();
+    audit("te again");
 
     /* a full expose of the TE screen */
     callreset();
@@ -775,6 +1196,34 @@ static void run_all(int cols_geom, int rows_geom, int table)
     feed("\007\007");
     wake();
     if (rc_bells != 0) { printf("FAIL: bells not serviced\n"); fails++; }
+
+    /* a click kicks a running machine (the plan's 'kick from every callback':
+     * a wake the full event ring refused is re-posted by the next callback)
+     * and leaves an idle one alone */
+    { int w = wakes_posted;
+      rc_mode = RC_M_RUN;
+      lock_depth = 1; os88_onclick(100, 100, win); lock_depth = 0;
+      if (wakes_posted != w + 1) { printf("FAIL: a click did not kick the running machine\n"); fails++; }
+      rc_mode = RC_M_IDLE;
+      lock_depth = 1; os88_onclick(100, 100, win); lock_depth = 0;
+      if (wakes_posted != w + 1) { printf("FAIL: a click kicked an idle machine\n"); fails++; }
+    }
+
+    /* input overrun is never silent: the 64-entry ring holds 63 keys, and
+     * the key that finds it full RINGS (the PC BIOS's own answer to a full
+     * keyboard buffer), at no glass cost */
+    rc_khead = rc_ktail = 0; rc_bells = 0;
+    lock_depth = 1;
+    for (i = 0; i < 63; i++) os88_onkey('a', 0x1E, win);
+    if (rc_bells != 0) { printf("FAIL: the ring rang before it was full (%d)\n", i); fails++; }
+    os88_onkey('b', 0x30, win);
+    if (rc_bells != 1) { printf("FAIL: the 64th key into a full ring did not ring (%d)\n", rc_bells); fails++; }
+    lock_depth = 0;
+    callreset();
+    wake();
+    if (calls() != 0) { printf("FAIL: an overrun cost %d calls\n", calls()); fails++; }
+    if (rc_bells != 0) { printf("FAIL: the overrun bell was not serviced\n"); fails++; }
+    rc_khead = rc_ktail = 0;
 }
 
 int main(void)
