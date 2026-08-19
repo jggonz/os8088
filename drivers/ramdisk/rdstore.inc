@@ -121,8 +121,12 @@ rd_store_get:
     jmp short .ok               ; as the volume is mounted
 .xms:
     mov ax, [rd_extkb]          ; the bounce is ONE EXTENT, so it follows the
-    call OSAPI_MEM_CLAIM        ; store's granule rather than being a constant
-    jc .notab                   ; that could stop matching it
+    cmp ax, RDI_META / 1024     ; store's granule rather than being a constant
+    jae .bsz                    ; that could stop matching it - but never less
+    mov ax, RDI_META / 1024     ; than RDI_META, because rd_wbuf_get LENDS it
+.bsz:                           ; as the image block (SPEC.md 62.9.12) and a
+    call OSAPI_MEM_CLAIM        ; 1KB extent would take 3KB of the next claim
+    jc .notab                   ; with it
     mov [rd_bounce], dx
     mov ax, rd_reloc
     call OSAPI_MEM_MOVABLE

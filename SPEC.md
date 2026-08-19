@@ -46103,6 +46103,14 @@ loop **assembles away** rather than counting zero — `mov cx, 0` followed by
 `loop` decrements to 0xFFFF and runs 65,536 times — so `%if RD_NSEED` wraps
 the loop and `rd_seed_one` with it.
 
+**It is behind `%ifdef`, so a change to what it calls does not fail the build
+that ships**, and §62.9.10's store moved twice under it: `RDE_EXT` became a
+word and `rd_io` took its nine words in memory instead of in registers.
+`rd_seed_one` writes both contracts the way `rd_write` does — a word
+`RD_NOEXT`, `DX:CX` into `rd_chain_fit`, and the `[rd_io_*]` cells filled in
+before the call — and `make ramseed` is the only thing that compiles it, which
+is why it is run whenever the store's interfaces move.
+
 #### 62.9.6 Milestone 3 as built — writes
 
 **Done and verified: New Folder, Delete, Rename, a document SAVED back onto a
@@ -46424,11 +46432,19 @@ always 0.
 The abstraction that keeps the verbs from caring is `rd_ext_seg`: *give me a
 segment through which extent `i` can be read and written*. Conventional, that
 is `[rd_arena] + i*64` paragraphs and `rd_ext_flush` is a `ret`. Extended, it
-is a **4KB conventional bounce claim**: the extent is copied down with
-`OSAPI_XMEM_COPY`, worked on in place, and copied back by `rd_ext_flush`. Every
-transfer is then 1,024 bytes at a 1,024-byte boundary — **even, aligned and
-inside the 32KB per-call bound**, so none of §41.5's three refusals is
-reachable and there is no ragged-end case to get wrong.
+is a **conventional bounce claim sized at the larger of one extent and
+`RDI_META`**: the extent is copied down with `OSAPI_XMEM_COPY`, worked on in
+place, and copied back by `rd_ext_flush`. A stage moves one whole extent at an
+extent boundary — **even, aligned and inside the 32KB per-call bound**, so none
+of §41.5's three refusals is reachable and there is no ragged-end case to get
+wrong.
+
+**`RDI_META` is the floor because §62.9.12 LENDS this claim** as the 4,096-byte
+block Preserve and Load build their metadata in, and moves the arena through it
+4,096 bytes at a time. A bounce that followed the granule alone is 1KB under
+any store below 2MB — so every Preserve would write three kilobytes past it,
+into whichever claim the heap handed out next, with nothing on screen to say
+so.
 
 Three things about the extended path are easy to undo. It is claimed and freed
 with the store, so a machine that never selects it pays nothing. The block
@@ -46480,8 +46496,14 @@ directory, which lives in the driver's own image and never went near extended
 memory, perfectly correct about its name, its type and its size. It reads as
 data corruption and it is a copy that never happened.
 
-`[rd_xerr]` is one byte: cleared at the top of `rd_io`, raised by either stage,
-and tested by all four verbs that call `rd_io`, which answer `FERR_IO`. That is
+`[rd_xerr]` is one byte: cleared at the top of `rd_io` and again by §62.9.12's
+Preserve and Load before their arena runs, raised by either stage **and by
+`rd_blk_out`/`rd_blk_in`, which are the movers on the image paths and threw the
+same carry away**, and tested by all four verbs that call `rd_io`, which answer
+`FERR_IO`, and after every arena chunk, which answers `RDERR_FILE`. A refused
+copy down there leaves the bounce holding the PREVIOUS chunk, which Preserve
+would append to the image and call a success; a refused copy up means the chunk
+never reached the store at all and Load would mount over it. That is
 the tree's own rule — *a stub that returns a plausible zero is a harness that
 has started lying about the thing under test* — applied to a driver rather than
 to a test rig. **It is a guard and not a fix**: it does not stop a copy failing,
@@ -46903,10 +46925,29 @@ Nothing special-cases it: a rule refusing the volume being preserved would be
 a rule about *this* file, while every other writer in the OS would still let
 you fill a disk from itself.
 
-With the store in extended memory the arena is moved through the same 4KB
-bounce the extents use, so the chunk is 4,096 there and 32,768 conventional —
-one register, and the only place in this file where the two locations differ
-above `rd_ext_seg`.
+With the store in extended memory the arena is moved through the same bounce
+the extents use — which is why §62.9.10 floors that claim at `RDI_META` — so
+the chunk is 4,096 there and 32,768 conventional — one register, and the only
+place in this file where the two locations differ above `rd_ext_seg`.
+
+**The loan is only made when there is a bounce to lend, and it invalidates the
+stage.** `RDC_LOC` is a *preference*: the page writes it while nothing is
+mounted, which is exactly when no store is claimed and the bounce is 0 — and
+`Load` has no mount guard, because loading into an empty machine is what it is
+for. Lending 0 there put the image's first 4,096 bytes at `0000:0000`, over the
+interrupt vector table, from two clicks on a shipped panel; `rd_wbuf_get` takes
+the transient conventional claim instead. When it does lend, `[rd_sext]`
+becomes `RD_NOEXT` for `rd_blk_out`'s reason — the block written into the
+bounce lands on top of whatever extent `rd_ext_seg` believes is staged there,
+and a *refused* Load would otherwise leave the live volume serving the image's
+header as that extent's contents and then flush it into extended memory for
+good.
+
+**Every read is checked for its COUNT and not just its carry.** The metadata
+block already was; the arena chunks were not, so a truncated image read 0 bytes
+per chunk with CF clear and mounted a volume whose directory was perfectly
+correct about files whose bodies are whatever the fresh claim happened to hold.
+A short chunk is `RDERR_FILE` before anything is put on the desktop.
 
 **Restoring at boot is an association, not a copy.** The blob remembers a
 volume, a folder cluster and an 8.3 name (§51.9.1), and `DRVV_READY` reads that

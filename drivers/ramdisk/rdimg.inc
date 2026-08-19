@@ -353,16 +353,29 @@ rd_unmount:
 ; rd_wbuf_get / rd_wbuf_free - the 4KB block the metadata is built in
 ; out: CF = 0 and [rd_wseg] names it
 ;
-; The extended path already holds a 4KB bounce and lends it: the metadata is
+; The extended path already holds a bounce and lends it: the metadata is
 ; written in full before the first arena chunk is staged, so the two uses
-; cannot overlap. Conventional, it is a transient claim - a machine that never
-; preserves never pays for it.
+; cannot overlap, and rd_store_get sizes that claim at RDI_META even when the
+; extent is smaller (SPEC.md 62.9.10). Conventional, it is a transient claim -
+; a machine that never preserves never pays for it.
+;
+; THE LOAN IS ONLY MADE WHEN THERE IS A BOUNCE TO LEND. [rd_loc] is a
+; PREFERENCE the page writes while nothing is mounted, so `Xms` with no store
+; claimed is an ordinary state and [rd_bounce] is 0 in it - and lending 0 puts
+; Load's 4,096 bytes over the interrupt vector table. Falling through to the
+; transient claim is what a conventional machine does anyway.
+;
+; ...and the loan INVALIDATES THE STAGE for rd_blk_out's reason: the block
+; written here lands on top of whatever extent rd_ext_seg believes is staged.
 ; -----------------------------------------------------------------------------
 rd_wbuf_get:
     push ax
     push dx
     cmp byte [rd_loc], RDL_XMS
     jne .claim
+    cmp word [rd_bounce], 0
+    je .claim
+    mov word [rd_sext], RD_NOEXT
     mov ax, [rd_bounce]
     mov [rd_wseg], ax
     mov byte [rd_wown], 0
@@ -409,6 +422,11 @@ rd_wbuf_free:
 ; OSAPI_XMEM_COPY down into the bounce. The staged extent is FORGOTTEN rather
 ; than written back, and that is safe by construction: rd_ext_flush writes
 ; through on every store write, so there is never a dirty extent to lose.
+;
+; A REFUSED COPY IS RECORDED AND NEVER SWALLOWED (SPEC.md 62.9.10.2): the
+; bounce would still hold the PREVIOUS chunk and the caller would append it to
+; the image and report success. The caller clears [rd_xerr] before its run and
+; tests it once a chunk.
 ; -----------------------------------------------------------------------------
 rd_blk_out:
     cmp byte [rd_loc], RDL_XMS
@@ -436,6 +454,9 @@ rd_blk_out:
     xor si, si
     mov di, 1                   ; in from extended
     call OSAPI_XMEM_COPY
+    jnc .ok
+    mov byte [rd_xerr], 1       ; (SPEC.md 62.9.10.2)
+.ok:
     pop es
     pop di
     pop si
@@ -468,6 +489,9 @@ rd_blk_in:
     xor si, si
     xor di, di                  ; out to extended
     call OSAPI_XMEM_COPY
+    jnc .ok
+    mov byte [rd_xerr], 1       ; (SPEC.md 62.9.10.2)
+.ok:
     pop es
     pop di
     pop si
@@ -481,7 +505,8 @@ rd_chunk_sz:
     mov ax, RDI_CHUNK
     cmp byte [rd_loc], RDL_XMS
     jne .out
-    mov ax, RDI_XCHUNK          ; through a 4KB bounce, so 4KB at a time
+    mov ax, RDI_XCHUNK          ; through the bounce, which is RDI_META or an
+                                ; extent, whichever is larger - so 4KB at a time
 .out:
     ret
 
@@ -594,6 +619,7 @@ rd_preserve:
     jc .nofile
     call rd_wbuf_free
                                 ; --- then the arena, chunk by chunk ---------
+    mov byte [rd_xerr], 0       ; ONE run, one verdict (SPEC.md 62.9.10.2)
     mov word [rd_pos], 0
     mov word [rd_pos+2], 0
 .chunk:
@@ -616,6 +642,8 @@ rd_preserve:
     mov ax, [rd_pos]
     mov dx, [rd_pos+2]
     call rd_blk_out             ; BX = a segment those bytes are readable in
+    cmp byte [rd_xerr], 0       ; a refused copy down leaves the PREVIOUS chunk
+    jne .nofile2                ; there, and appending it is the corruption
     mov cx, [rd_ilen]
     mov es, bx
     xor bx, bx
@@ -872,6 +900,7 @@ rd_load:
     call rd_ctab_apply
     call rd_wbuf_free
 
+    mov byte [rd_xerr], 0       ; ONE run, one verdict (SPEC.md 62.9.10.2)
     mov word [rd_pos], 0        ; --- then the arena -------------------------
     mov word [rd_pos+2], 0
 .chunk:
@@ -904,11 +933,17 @@ rd_load:
     call OSAPI_FILE_READ_AT     ; CX is the capacity; DX:AX comes back as the
     pop bx                      ; count, which for a whole chunk is CX
     jc .nofile3
+    cmp ax, [rd_ilen]           ; ...and a SHORT one is a truncated image, the
+    jne .nofile3                ; same test the metadata block already makes -
+                                ; without it the store keeps whatever the fresh
+                                ; claim held and mounts over it
     mov ax, [rd_pos]
     mov dx, [rd_pos+2]
     mov cx, [rd_ilen]
     call rd_blk_in              ; extended: push the chunk up. Conventional it
                                 ; landed in the arena already and this is a ret
+    cmp byte [rd_xerr], 0       ; a refused copy either way means this chunk
+    jne .nofile3                ; never reached the store (SPEC.md 62.9.10.2)
     mov cx, [rd_ilen]
     call rd_chunk_adv
     jmp short .chunk

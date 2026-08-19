@@ -326,7 +326,7 @@ rd_seed_one:
     mov [di+RDE_PAR], al
     mov al, [si+RDE_TYPE]
     mov [di+RDE_TYPE], al
-    mov byte [di+RDE_EXT], RD_NOEXT
+    mov word [di+RDE_EXT], RD_NOEXT     ; a WORD now, and RD_NOEXT is 0xFFFF
     mov word [di+RDE_SIZE], 0
     mov word [di+RDE_SIZE+2], 0
     push si
@@ -340,21 +340,27 @@ rd_seed_one:
     or cx, cx
     jz .out                     ; a folder: no extent, no content
     push si
-    mov bx, [si+RDS_DATA]       ; the content, in this image
-    mov si, di                  ; rd_chain_fit takes the ROW in SI
-    call rd_chain_fit
+    mov si, di                  ; rd_chain_fit takes the ROW in SI and DX:CX
+    xor dx, dx                  ; as the count - a seed is well under 64KB, so
+    call rd_chain_fit           ; the high half is genuinely zero
     pop si
     jc .out                     ; a seed that will not fit simply is not
                                 ; there, which is better than half there
     mov [di+RDE_SIZE], cx
-    push si
-    mov ah, [di+RDE_EXT]
-    mov al, 1                   ; caller -> store
+    mov byte [rd_io_dir], 1     ; caller -> store, and rd_io takes its nine
+    mov ax, [di+RDE_EXT]        ; words in MEMORY (SPEC.md 62.9.10) - the
+    mov [rd_io_ext], ax         ; extent read back AFTER rd_chain_fit set it
+    mov word [rd_io_off], 0
+    mov word [rd_io_off+2], 0
+    mov [rd_io_len], cx
+    mov word [rd_io_len+2], 0
     push cs
-    pop dx                      ; DX:BX = our own image
-    xor si, si
+    pop ax
+    mov [rd_io_seg], ax         ; the content, in this image
+    mov ax, [si+RDS_DATA]
+    mov [rd_io_ofs], ax
+    mov byte [rd_io_prog], 0
     call rd_io
-    pop si
 .out:
     pop dx
     pop cx
