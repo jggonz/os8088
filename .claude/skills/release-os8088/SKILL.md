@@ -5,9 +5,18 @@ description: Build os8088 and publish the floppy images to the os8088.com websit
 
 # Release os8088
 
-Builds the four floppy images, publishes them into the website repository next
+Builds the floppy images, publishes them into the website repository next
 door along with the notes for its releases page, opens a pull request there,
-and cuts a GitHub release on this repo with the images attached.
+and cuts a GitHub release on this repo.
+
+**The GitHub release carries ONE asset: a zip.** `os8088-<version>.zip` holds
+every image, a README that says which two of them a reader needs, and a
+SHA256SUMS covering all of them. Eleven loose `.img` files used to hang off
+the release, and a reader had to know which pair they wanted before they could
+download anything. Step 3a builds it. The website is unchanged -- its download
+page still serves the images individually out of `public/disk/`, because the
+browser demo streams them and a table of per-image checksums is the point of
+that page.
 
 The release notes get written once and used twice: `data/releases.json` in the
 website repo (step 4a) and the GitHub release (step 6) say the same thing, and
@@ -143,31 +152,38 @@ to a fresh branch off `main` and would otherwise sweep unrelated work into it.
 ```bash
 cd "$OS_REPO"
 make clean && make
-ls -l build/os8088.img build/os8088-360.img build/apps.img build/apps360.img
+ls -l build/os8088.img build/os8088-720.img build/os8088-360.img \
+      build/apps.img build/apps720.img build/apps360.img build/media360.img
 ```
 
-All four must exist. The build enforces its own invariants -- a 512-byte boot
-sector and a kernel that fits under offset 0xA000 -- so a build failure here is
-a real problem, not something to work around. Report the kernel size; if it has
+All seven must exist -- step 3a refuses to pack without them. The build
+enforces its own invariants -- a 512-byte boot sector and a kernel that fits
+under offset 0xA000 -- so a build failure here is a real problem, not
+something to work around. Report the kernel size; if it has
 grown, say by how much and how much headroom is left (the ceiling is 0xA000 =
 40,960 bytes for image + bss).
 
-**The optional fifth image** is `build/apps-all.img` (SPEC.md 19.9): one
-1.44MB floppy with every application on it, Frotz and both Words included, for
-somebody who wants one disk rather than four. It is not built by `make`,
-because `cword` needs a compiler this tree does not contain:
+**Then the on-demand disks**, which `make` does not build and the zip carries
+when they exist:
 
 ```bash
-tools/setup-cc.sh && make allapps
-ls -l build/apps-all.img
+tools/setup-cc.sh                     # SmallerC; needed by cword and allapps
+make allapps                          # apps-all.img -- every program, one disk
+make worddisk cworddisk               # word*.img, cword*.img
+make runcpm-src && make runcpmdisk    # runcpm*.img
 ```
 
-Offer it, do not assume it. If `tools/setup-cc.sh` cannot run -- no network,
-no host toolchain -- **release the four and say the fifth was skipped**; it is
-a convenience, and a release that waits on it is a release that does not
-happen. When it is included, boot it in step 3 like any other image (it goes
-in B:, `make test TESTAPPS=build/apps-all.img`) and list it last everywhere,
-so the four shipped images stay the obvious download.
+Offer these, do not assume them. If `tools/setup-cc.sh` cannot run -- no
+network, no host toolchain -- **release the seven and say which on-demand disks
+were skipped**; they are a convenience, and a release that waits on one is a
+release that does not happen. `mkzip.py` prints the ones it did not find, so
+that list is generated rather than remembered. Boot any that were built in step
+3 like any other image (they go in B:, `make test TESTAPPS=build/word.img`).
+
+**Do not build the story disk for a release.** `make zdisk` fetches Infocom
+story files that nobody here has the right to redistribute, and they are not
+release content. `mkzip.py` will not pack them -- its manifest is an allowlist,
+not a glob -- but do not put them in `build/` on a release run either.
 
 ### 3. Smoke-test the build before publishing
 
@@ -184,10 +200,56 @@ magick build/smoke.ppm build/smoke.png    # or: convert, on older ImageMagick
 ```
 
 **Look at `build/smoke.png` with the Read tool.** You are checking for: the
-menu bar across the top with the chip glyph, File and Special; the dithered
-desktop; a Disk A (and Disk B) icon at the right; the dock strip at the bottom.
+menu bar across the top with the chip glyph, then Locator, File and Builtins;
+a Disk A and a Disk B icon down the right-hand side; the mouse pointer.
 If the screen is blank or garbled, stop -- do not publish. Delete the two
 scratch files afterwards; `build/` is gitignored, but leave it tidy.
+
+### 3a. Pack the release zip
+
+The one asset the GitHub release gets. Build it only after step 3 has booted
+the images -- the zip is what people download, and packing an unbooted image is
+the same mistake with an extra layer of wrapping on it.
+
+```bash
+cd "$OS_REPO"
+python3 .claude/skills/release-os8088/mkzip.py --version "$VERSION"
+```
+
+It writes `build/os8088-<version>.zip` and prints the entry count, the packed
+and unpacked sizes, the zip's own sha256, and which on-demand disks were not
+built. **Quote that sha256 in the release notes** -- it is the only checksum a
+reader of the GitHub release gets, since there is no longer a per-file table
+there.
+
+The script does three things worth knowing about:
+
+- **Its file list is an allowlist, not a glob.** `build/` also holds the story
+  disks and every test gate's scratch image, and a glob ships those the first
+  time somebody runs an unrelated target before cutting a release. If a new
+  disk should be in releases, add it to `MANIFEST` in `mkzip.py` -- that is the
+  only place the list lives.
+- **It refuses to pack a partial release.** A missing image that `make` builds
+  stops it; a missing on-demand disk is reported and skipped.
+- **The zip is byte-for-byte reproducible.** Timestamps come from the date in
+  the version string and the images are already deterministic, so the same
+  version from the same commit packs to the same bytes. Do not add anything
+  that varies per run.
+
+Then look inside it, the same way step 3 makes you look at the screenshot:
+
+```bash
+cd "$(mktemp -d)" && unzip -q "$OS_REPO/build/os8088-$VERSION.zip"
+cd "os8088-$VERSION" && shasum -a 256 -c SHA256SUMS && cat README.txt
+```
+
+**Read the README with the Read tool.** It is written for someone who has never
+seen this project, so "Writing the copy" governs it exactly as it governs the
+release notes. Check the version, the commit and the file list are this
+release's, and that every image listed is one that was actually built. The
+QEMU command line in it is the real one -- if `make run`'s invocation ever
+changes, `README` in `mkzip.py` has to change with it, and the way to know is
+to run the command out of the unpacked directory and see the desktop come up.
 
 ### 4. Publish into the website repo
 
@@ -489,7 +551,7 @@ End the PR body with:
 
 ### 6. Tag and cut the GitHub release
 
-Only after the images are verified.
+Only after the images are booted and the zip is unpacked and checked.
 
 ```bash
 cd "$OS_REPO"
@@ -498,13 +560,20 @@ git push origin "$VERSION"
 gh release create "$VERSION" \
   --title "os8088 $VERSION" \
   --notes "<notes>" \
-  build/os8088.img build/os8088-360.img build/apps.img build/apps360.img
+  "build/os8088-$VERSION.zip"
 ```
 
-Add `build/apps-all.img` to that argument list **only if step 2 built it**, and
-last, after the four. A missing asset makes `gh release create` fail with the
-tag already pushed, which is the one failure in this whole procedure that
-cannot simply be re-run.
+**One asset, and it is the zip.** Do not attach loose `.img` files beside it --
+that is the arrangement this replaced, and half of each is worse than either.
+Confirm the file exists before running the command: a missing asset makes `gh
+release create` fail with the tag already pushed, which is the one failure in
+this whole procedure that cannot simply be re-run.
+
+Because the release page no longer lists a file per image, the notes have to
+say what the zip contains and how big it is -- one sentence naming the two
+images a reader actually needs, the packed size, and the sha256 step 3a
+printed. Someone who wants a per-image checksum finds it in the SHA256SUMS
+inside the zip, or on the download page, and the notes should say which.
 
 `gh` infers the repository from the checkout's remote, so this works for a
 fork or a rename without any edit here.
@@ -524,8 +593,11 @@ and update `data/releases.json` to match before the website PR is merged.
 ### 7. Report
 
 Tell the user: the version, the PR URL, the release URL, the kernel size and
-its delta, the Spotlight page's URL if step 4b ran, and anything you skipped or
-that needs their attention. If the website PR is merged, the site's own CI
+its delta, the zip's packed size and how many images went into it, the
+Spotlight page's URL if step 4b ran, and anything you skipped or that needs
+their attention -- naming any on-demand disk that did not get built, since a
+reader of the zip's README cannot tell a disk that was left out from one that
+does not exist. If the website PR is merged, the site's own CI
 deploys from its `main` branch -- say so, and say the site is not live until
 that merge happens.
 
@@ -536,7 +608,15 @@ them in a status line is how they get lost.
 
 ## Rules
 
-- **Never publish an unbooted image.** Step 3 is not optional.
+- **Never publish an unbooted image.** Step 3 is not optional, and packing one
+  into a zip does not make it booted.
+- **The GitHub release gets the zip and nothing else.** Never attach loose
+  images beside it, and never build the zip from a glob of `build/` -- the
+  manifest in `mkzip.py` is the list, and it exists so a story disk or a test
+  gate's scratch image cannot ride out with a release.
+- **Never hand-assemble the zip.** `mkzip.py` writes the README, the checksums
+  and a reproducible archive; a `zip -r` by hand gets none of those and looks
+  identical until somebody checks.
 - **Never invent a checksum or a size.** Everything on the download page comes
   from `releases.json`, which `release.py` computes from the actual bytes.
 - **Never ship a release with an empty entry on the releases page.** Step 4a is
