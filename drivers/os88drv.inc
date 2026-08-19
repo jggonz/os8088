@@ -536,7 +536,15 @@ HDD_LISTKB   equ 6
                             ;     length every driver before this word had
     db 0FFh, 0D5h           ; +12 THE DISPATCHER: `call bp`...
     db 0CBh                 ; +14 ...`retf`. The kernel far-calls this fixed
-    db 0                    ; +15 offset with BP = the proc it wants.
+                            ;     offset with BP = the proc it wants.
+    db DSV_SIZE             ; +15 THE DSV_* TABLE LENGTH THIS DRIVER WAS BUILT
+                            ;     WITH (SPEC.md 51.2) - the FSV word's rule one
+                            ;     level up. drv_publish copies only this many
+                            ;     bytes and publishes 0 for the cells past it,
+                            ;     instead of reading whatever you put after
+                            ;     your table. Was the dispatcher's pad byte
+                            ;     (0), which the kernel reads as 28 - the
+                            ;     length every driver before it had
     %strlen %%len %1
     %if %%len > 15
         %error "OS88_DRIVER: name must be at most 15 characters"

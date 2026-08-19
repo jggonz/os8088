@@ -18133,12 +18133,23 @@ of a page over the cable, reported the exact count, ended in the right state,
 and displayed thirty bytes of nothing where the reply's first line should
 have been.
 
-The fix is the push order plus a staged far pointer: `BP` must still hold the
-near proc at the `call far` (a header's dispatcher is `call bp` / `retf`), so
-the caller's `BP` cannot be restored before it — which means `DI` has to be
-pushed *above* `BP` to be poppable, and the far pointer has to live somewhere
-other than `DI`. `drv_blk_call_x` stages one for exactly the same reason.
-Cost: `.text` +11, no rung crossed on either kernel.
+The fix is the push order plus a **per-class call site**: `BP` must still hold
+the near proc at the `call far` (a header's dispatcher is `call bp` / `retf`),
+so the caller's `BP` cannot be restored before it — which means `DI` has to be
+pushed *above* `BP` to be poppable, and the far pointer has to be reachable
+with no register at all.
+
+**And it is the class's own `drv_fptr` pair, not one staged word.** The first
+version staged the segment the way `drv_blk_call_x` does, and that routine may:
+its only caller is `dsk_xfer`, which holds `[sch_lock]` across the whole
+transfer. This cell holds nothing and is documented worker-safe two paragraphs
+up, so a shared staging word is one a second task can rewrite between the store
+and the `call far` — a verb entered on driver B's dispatcher with `DS` naming
+driver A's image, silently, on a machine with `ETHER.DRV` and a `DRVC_FILE`
+driver both publishing the cell. So the dispatch ends in five fixed sites,
+`call far [cs:drv_fptr]` … `[cs:drv_fptr5]`, which is what `drv_svc_call` and
+`drv_fs_call` already do with the same pairs. Cost: `.text` +38, no rung
+crossed on either kernel.
 
 #### 20.11.1 Verb 0 is IDENTIFY, and it is not a formality
 
@@ -38603,11 +38614,27 @@ driver to probe again — see §31.7 for what that costs and why the answer cann
 change between attach and detach. 0 means the driver did not answer, and the
 panel then assumes it can do everything.
 
-**Widening the table means rebuilding every `.drv`.** `drv_publish` copies
-`DSV_SIZE/2` words, so a kernel that knows about a new cell reads past the end
-of a driver built before it. Every driver is in this tree and `make` rebuilds
-them all, which is the same reason `APP_MAX_SIZE` can be mirrored in three
-places (§20.1).
+**The table has a length, and the driver's header carries it** — §62.9.1.1's
+answer for the `FSV_*` table, one level up, because the same widening happened
+here: the three Control Panel cells and `DSV_PKGCALL` took `DSV_SIZE` 28 → 36.
+"Every driver is in this tree and `make` rebuilds them all" is true for a driver
+built in the same tree and **wrong for the file on somebody's disk**: `HDD.DRV`
+and `NET.DRV` both put their own data directly after their tables, so a kernel
+copying 36 bytes out of a released one published `'Ha'` — or `net_read` — into
+`DSV_PKGCALL`, which is the fence any `.O88` on the apps floppy reaches through
+`OSAPI_DRV_CALL` (§20.11).
+
+So the dispatcher's pad byte at **+15 is `DRV_H_DSV`, the byte length of the
+`DSV_*` table this driver was built with**. `OS88_DRIVER` writes `DSV_SIZE`
+there for every class; `drv_publish` copies that many bytes and **publishes 0
+for every cell past it**, so a cell the driver does not have is refused by the
+`or bp, bp` / `jz` test every consumer already makes — `drv_pkg_call`'s fence,
+`cp_drv_ev`'s three page cells — instead of being far-called. **A byte of 0
+means `DSV_TAB0` = 28**, the length every released driver has, so a mismatched
+floppy set degrades to a driver with no page key and no package door rather
+than a wild far call. `DRV_VER` does not change, for §62.9.1.1's reason: every
+existing cell means what it meant, and a version bump would cost the user a
+working driver instead of one missing cell.
 
 The copy is the `dsk_get_dir` idiom in a new place: every consumer downstream
 is then an ordinary near read with DS = KERNEL_SEG, and `snd_tick` — which
@@ -39521,6 +39548,20 @@ AL = the mode, ES:DI = the chosen NUL name in KERNEL_SEG, DX:CX = its size
 
 which is the ordinary page-cell contract: DS is the driver's, ES is the
 kernel's, and the gfx lock is held with the dialog already off the screen.
+
+**A DIALOG ALREADY UP IS THE THIRD REFUSAL, AND IT IS TESTED FIRST.** The cell
+asks `fdlg_win` — the one word `fdlg_open` itself gates on, and the one both
+`fdlg_close` and `fdlg_commit` clear — before it writes anything, and **nothing
+is written until `drv_pub_seg` and the row lookup have both passed.** Neither
+half is a nicety. The staged mode, the completion proc and the arming word used
+to be written on the way *in*, so an `.O88` that called this slot and was
+refused for not being a driver had already replaced the request a real driver
+had in flight: the user's Save Image dialog then committed into
+`drv_dlg_done`'s `jz .out` and wrote nothing, reported nothing, and closed. And
+a second legitimate request would have replaced the first driver's arming and
+then been refused by `fdlg_open`'s own gate one call later, leaving *both*
+dialogs unbacked. The row is armed last and cleared on every failing path after
+that, so the window between the two carries nothing to dispatch into.
 
 Three things hold it up. **The row AND the segment are both banked**, and the
 segment is compared before the dispatch, so a driver unticked while its own

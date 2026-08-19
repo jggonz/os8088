@@ -176,6 +176,11 @@ DRV_H_FSV   equ 10              ; word: THE FSV_* TABLE LENGTH THIS DRIVER WAS
                                 ; FSV_TAB0. Was reserved; the bss is inside
                                 ; the image so nothing else ever needed it
 DRV_H_DISP  equ PKG_DISP        ; 12: `call bp / retf`, exactly as a package
+DRV_H_DSV   equ 15              ; byte: THE DSV_* TABLE LENGTH THIS DRIVER WAS
+                                ; BUILT WITH (SPEC.md 51.2) - DRV_H_FSV's rule
+                                ; one level up, and 0 means DSV_TAB0 the same
+                                ; way. It is the dispatcher's pad byte, which
+                                ; nothing has ever read
 DRV_HDR_SZ  equ 0x20
 DRV_VER     equ 4
 DRV_MAX_KB  equ 40              ; the biggest driver image we will claim
@@ -301,6 +306,14 @@ DSV_PKGCALL equ 34              ; dw: THE FENCE for OSAPI_DRV_CALL. A driver
                                 ; hard disk from any .O88 on the floppy
 DSV_SIZE    equ 36              ; ...and it must stay EVEN: drv_publish copies
                                 ; the table DSV_SIZE/2 WORDS at a time
+DSV_TAB0    equ 28              ; ...and the length every driver that carries 0
+                                ; at DRV_H_DSV has: the table stood at 28 until
+                                ; the four cells above landed, and HDD.DRV's
+                                ; and NET.DRV's own data follows their tables
+                                ; directly - so a kernel that copied 36 bytes
+                                ; out of one of those files published 'Ha' /
+                                ; net_read into DSV_PKGCALL, which is the fence
+                                ; (SPEC.md 51.2)
 
 ; --- the FSV_* verbs behind DSV_FS (SPEC.md 62.9.1) --------------------------
 ; A DRVC_FILE volume has NO SECTORS - dsk_xfer refuses one outright - so what
@@ -1747,15 +1760,30 @@ osapi_drv_dlg_x:
     push dx
     push si
     push di
-    mov [drv_dlg_mode], al      ; AL is the MODE, and both helpers below answer
-    mov [drv_dlg_cb], di        ; in it
-    mov word [drv_dlg_row], 0
-    mov bx, es
+    cmp word [fdlg_win], 0      ; ...ALREADY UP, which is the header's third
+    jne .no                     ; refusal and fdlg_open_x's own gate asked one
+                                ; call earlier: a second request that got as
+                                ; far as the stores below would replace the
+                                ; first driver's arming and then be refused
+                                ; there, leaving the live dialog's commit with
+                                ; nothing to dispatch into (SPEC.md 51.10)
+    mov ah, al                  ; the MODE rides in AH across the fences: AL is
+    mov bx, es                  ; what drv_row_ix_of answers in
     call drv_pub_seg            ; a published driver's, and nobody else's
     jc .no
     call drv_row_ix_of
     jc .no
     call drv_row_x              ; BX = the row this segment is running
+    mov [drv_dlg_mode], ah      ; NOTHING IS WRITTEN UNTIL BOTH FENCES PASS
+    mov [drv_dlg_cb], di        ; (SPEC.md 51.10): a refused caller used to
+                                ; disarm the dialog a driver already had up on
+                                ; its way to CF = 1, and any .O88 can reach
+                                ; this slot. The pre-emptive disarm that stood
+                                ; here is gone with it - the row is armed at
+                                ; .named and cleared at .disarm, and between
+                                ; the two nothing can dispatch: drv_dlg_done
+                                ; runs only for a dialog THIS routine opened,
+                                ; and the gate above says none is up
     mov ax, [bx+DRVR_SEG]
     mov [drv_dlg_seg], ax
 
@@ -2607,7 +2635,25 @@ drv_publish:
     mov al, [bx+DRVR_CLASS]
     call drv_cls_svc_x            ; DI = this CLASS's copy, not the one copy
     jc .out
-    mov cx, DSV_SIZE / 2
+    mov cx, DSV_SIZE / 2        ; ...AS FAR AS THE DRIVER'S TABLE REACHES
+                                ; (SPEC.md 51.2), which is DRV_H_FSV's test one
+                                ; level up: the header says how long a table it
+                                ; was built with, a LONGER one still means
+                                ; these cells, and anything shorter - 0 is a
+                                ; driver written before the byte existed - has
+                                ; only DSV_TAB0 of them. The rest are published
+                                ; as 0, so every consumer's `or bp, bp / jz`
+                                ; refuses them as unpublished instead of
+                                ; far-calling the name string a released driver
+                                ; keeps directly after its table
+    cmp byte [es:DRV_H_DSV], DSV_SIZE
+    jae .copy
+    mov cx, DSV_TAB0 / 2
+    xor ax, ax
+    mov [di+DSV_CPKEY], ax
+    mov [di+DSV_CPUP], ax
+    mov [di+DSV_CPDRAG], ax
+    mov [di+DSV_PKGCALL], ax
 .copy:
     mov ax, [es:si]
     mov [di], ax
@@ -3932,11 +3978,15 @@ section .text
 ; all 232 bytes of a page, reported the right count, and showed 30 bytes of
 ; nothing where the reply's first line should have been.
 ;
-; The fix is the push ORDER plus a staged far pointer. BP must still hold the
+; The fix is the push ORDER plus a per-class call site. BP must still hold the
 ; near proc at the `call far` (the header's dispatcher is `call bp`/`retf`),
 ; so the caller's BP cannot come back before it - which means DI must be
-; pushed ABOVE BP to be poppable, and the far pointer must live somewhere
-; other than DI. drv_blk_call_x stages one for the same reason.
+; pushed ABOVE BP to be poppable, and the far pointer must be reachable
+; without a register. drv_blk_call_x STAGES one instead, and may: its only
+; caller is dsk_xfer, which holds [sch_lock] across the transfer. This cell
+; holds nothing and is documented worker-safe, so a shared staging word is one
+; a second task can rewrite between the store and the call - which is why the
+; five sites below name drv_fptr..drv_fptr5 outright.
 drv_pkg_call_x:
     push ds
     push bp                     ; ...UNDER DI: BP stays the near proc across
@@ -3971,12 +4021,44 @@ drv_pkg_call_x:
     or ax, ax
     jz .none                    ; nothing attached, or attached and not yet
                                 ; published (SPEC.md 51.2.1)
-    mov [drv_pkgseg], ax        ; ...staged, so DI can go back to its owner
+    mov ds, ax                  ; DS = the driver's segment, so DI can go back
     pop ax                      ; the caller's AX
     pop di                      ; ...and the caller's DI, which a verb taking
                                 ; ES:DI is about to write through
-    mov ds, [cs:drv_pkgseg]     ; DS = the driver's segment. The far pointer is
-    call far [cs:drv_pkgfp]     ; read through CS because DS has just gone
+                                ;
+                                ; THE CALL SITE IS THE CLASS'S OWN PAIR, and
+                                ; nothing is staged: this cell takes no lock
+                                ; and is legal from a worker (SPEC.md 20.6
+                                ; rule 7), so a second task entering it for
+                                ; another class would have rewritten one shared
+                                ; word between the store and the call - driver
+                                ; B's dispatcher entered with driver A's image
+                                ; in DS. drv_svc_call and drv_fs_call far-call
+                                ; these same pairs from fixed sites for the
+                                ; same reason, and through CS because DS has
+                                ; just gone (SPEC.md 20.11)
+    cmp bh, DRVC_SOUND
+    je .c1
+    cmp bh, DRVC_DISK
+    je .c2
+    cmp bh, DRVC_DEBUG
+    je .c3
+    cmp bh, DRVC_NET
+    je .c4
+    call far [cs:drv_fptr5]     ; DRVC_FILE: the class was range-checked above,
+    jmp short .done             ; so the fall-through is the last of the five
+.c1:
+    call far [cs:drv_fptr]
+    jmp short .done
+.c2:
+    call far [cs:drv_fptr2]
+    jmp short .done
+.c3:
+    call far [cs:drv_fptr3]
+    jmp short .done
+.c4:
+    call far [cs:drv_fptr4]
+.done:
     pop bp
     pop ds
     ret
@@ -3989,12 +4071,8 @@ drv_pkg_call_x:
     stc
     ret
 
-section .text                   ; DATA, so back to the kernel segment
-                                ; (SPEC.md 2.6 rule 1)
-
-; The staged far pointer drv_pkg_call assembles per call - adjacent and in
-; this order, because `call far [mem]` takes the offset from the word and the
-; segment from the one after it. drv_blkfp/drv_blkseg is the same pair for the
-; same reason.
-drv_pkgfp:   dw PKG_DISP
-drv_pkgseg:  dw 0
+section .text                   ; ...and the file ends in .text, where it began
+                                ; (SPEC.md 2.6 rule 1). There is no staged far
+                                ; pointer here any more: drv_pkg_call far-calls
+                                ; the class's own drv_fptr pair, because a
+                                ; staged one is a word two tasks share
