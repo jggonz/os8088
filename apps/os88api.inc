@@ -1084,6 +1084,14 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; Call it AFTER wm_create. Do NOT combine it
                                  ; with a polling OSAPI_MOUSE loop - SPEC.md
                                  ; 13.7's rule, and for the same reason.
+                                 ;
+                                 ; out CF=1 = REFUSED and nothing armed:
+                                 ; this is a kern_small machine, which
+                                 ; carries the slot and not the body. TEST
+                                 ; CF AND HAVE A SECOND PATH - there is no
+                                 ; tracking and no timer there, so draw the
+                                 ; static down state SPEC.md 13.8.2
+                                 ; describes and leave it down.
 %define OSAPI_WM_TIMER      KERNEL_SEG:0x0438   ; BX = win ptr, AX = TICKS from
                                  ; now (0 cancels). CALL ME BACK IN N TICKS
                                  ; (SPEC.md 13.9) - 18.2 ticks a second, the
@@ -1106,6 +1114,14 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; too: the kernel delivers and you decide
                                  ; (ask OSAPI_WM_GEOM). It does NOT fire after
                                  ; your window is destroyed.
+                                 ;
+                                 ; out CF=1 = REFUSED and nothing armed:
+                                 ; this is a kern_small machine, which
+                                 ; carries the slot and not the body. TEST
+                                 ; CF AND HAVE A SECOND PATH - there is no
+                                 ; tracking and no timer there, so draw the
+                                 ; static down state SPEC.md 13.8.2
+                                 ; describes and leave it down.
 %define OSAPI_WM_ONTIMER    KERNEL_SEG:0x0440   ; BX = win ptr, AX = a near proc
                                  ; in YOUR segment (0 clears it): what the
                                  ; timer above calls. CX = DX = 0 - a timer has
@@ -1113,6 +1129,14 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; under the gfx lock and billed to you, which
                                  ; is W_ONCLICK's environment exactly. Call it
                                  ; AFTER wm_create.
+                                 ;
+                                 ; out CF=1 = REFUSED and nothing armed:
+                                 ; this is a kern_small machine, which
+                                 ; carries the slot and not the body. TEST
+                                 ; CF AND HAVE A SECOND PATH - there is no
+                                 ; tracking and no timer there, so draw the
+                                 ; static down state SPEC.md 13.8.2
+                                 ; describes and leave it down.
 %define OSAPI_VOL_SYS       KERNEL_SEG:0x0420   ; out BL = the volume this
                                  ; machine BOOTED from - A: on a floppy
                                  ; machine, the installed partition on one
@@ -1580,8 +1604,16 @@ W_ONTIMER equ 30            ; word: near ptr or 0 - your one-shot timer's
                             ; set it with OSAPI_WM_ONTIMER
 W_TIMER   equ 32            ; word: the kernel's deadline, 0 = disarmed. Arm
                             ; it with OSAPI_WM_TIMER; do not write it
-WIN_SIZE  equ 34
 MAX_WIN   equ 12
+
+; THE LAST THREE WORDS ARE kern_big's ALONE. The 128KB kernel's record STOPS
+; at 28 bytes (SPEC.md 13.8.2), so on that machine offset 28 is the NEXT
+; window's W_FLAGS and offset 32 is its W_W - naming any of the three there
+; reads, or writes, a window that is not yours. Install them with
+; OSAPI_WM_ONDRAG / OSAPI_WM_ONTIMER / OSAPI_WM_TIMER, which answer CF = 1 on
+; the kernel that has neither, and never name these offsets yourself. That is
+; also why there is no WIN_SIZE here: the stride is 34 on one shipping kernel
+; and 28 on the other, and a window INDEX never leaves the kernel anyway.
 
 ; THE RECORD LIVES IN KERNEL_SEG. On entry to any callback ES points there
 ; (SPEC.md 20.1), so read and write it with an override:

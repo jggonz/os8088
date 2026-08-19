@@ -257,15 +257,16 @@ ui_task:
     mov bp, [si + W_ONCLICK]
     or bp, bp
     jz .yield                   ; window does not take clicks
-    call gfx_lock               ; W_ONCLICK contract: CX=x, DX=y, SI=win
-    call ui_ptcall              ; (CX/DX survived wm_hit/wm_top/gfx_lock)
 %ifdef KERN_BIG
     mov [ui_dragx], cx          ; ...the point the tracking edge measures
     mov [ui_dragy], dx          ; movement against (SPEC.md 13.8.2), seeded
-                                ; with the point the package was just TOLD
-                                ; about, so its first W_ONDRAG is the first
-                                ; place the pointer is not
+                                ; with the point the package is about to be
+                                ; TOLD about, so its first W_ONDRAG is the
+                                ; first place the pointer is not. BEFORE the
+                                ; dispatch: ui_ptcall does not preserve CX/DX
 %endif
+    call gfx_lock               ; W_ONCLICK contract: CX=x, DX=y, SI=win
+    call ui_ptcall              ; (CX/DX survived wm_hit/wm_top/gfx_lock)
     mov [ui_armw], si           ; ...and the RELEASE is owed to this window
     mov byte [ui_armr], 0       ; (SPEC.md 13.7): region 0, armed only because
                                 ; W_ONCLICK actually ran. A press that merely
@@ -576,8 +577,9 @@ ui_task:
 ; ui_ptcall - dispatch a POINT callback on a window, billed (SPEC.md 8.1/34.3)
 ; in:  SI = window, BP = the handler's offset in that window's segment,
 ;      CX = x, DX = y; the caller holds the gfx lock
-; out: nothing; CX/DX preserved across the call so the caller may reuse them
-; clobbers: AX, BX, DI (and whatever the handler clobbers)
+; out: nothing; the point does NOT come back - CX is whatever the handler left
+;      and DX is the billing stamp's high word, so read the point before this
+; clobbers: AX, BX, CX, DX, DI (and whatever the handler clobbers)
 ;
 ; W_ONCLICK and W_ONMOUSEUP have the identical contract and the identical
 ; environment - UI task, gfx lock held, billed to the owning instance, with
@@ -690,6 +692,7 @@ ui_timer_pass:
     push dx
     push si
     push bp
+    push di                     ; ui_ptcall leaves the owning record here
     mov byte [wm_tarm], 0       ; THE FLAG IS ITS OWN ACCUMULATOR, and that is
                                 ; what keeps a live value out of a register
                                 ; across the dispatch below - ui_ptcall
@@ -732,6 +735,7 @@ ui_timer_pass:
 .step:
     add si, WIN_SIZE
     loop .next
+    pop di
     pop bp
     pop si
     pop dx
@@ -810,6 +814,7 @@ ui_arm_trk:
                                 ; come straight back on the same point
     push si
     push bp
+    push di                     ; ui_ptcall leaves the owning record here
     mov si, [ui_armw]
     test word [si + W_FLAGS], 2 ; the window can have gone between two passes -
     jz .pout                    ; a package worker reaching inst_task_die, or a
@@ -828,6 +833,7 @@ ui_arm_trk:
     call ui_ptcall
     call gfx_unlock
 .pout:
+    pop di
     pop bp
     pop si
     jmp short .done

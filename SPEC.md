@@ -5552,7 +5552,12 @@ W_ONTIMER equ 30 ; word: near ptr or 0 - the one-shot timer's handler
 W_TIMER  equ 32  ; word: the deadline in [ticks], 0 = disarmed. Written by
                  ; `wm_timer` (API slot 0x0430) and cleared by the scan
                  ; BEFORE it dispatches, so a handler may re-arm.
-WIN_SIZE equ 34
+WIN_SIZE equ 34  ; on kern_big. THE LAST THREE WORDS ARE KERN_BIG's ALONE:
+                 ; the 128KB kernel's record stops at 28 and its
+                 ; OSAPI_WM_ONDRAG / _TIMER / _ONTIMER answer CF = 1 instead
+                 ; (§13.8.2). `apps/os88api.inc` publishes no WIN_SIZE at all
+                 ; for that reason - the stride differs between the two
+                 ; shipping kernels and no package may stride this table.
 MAX_WIN  equ 12
 
 WF_SIZABLE equ 4  ; W_FLAGS bit2: the window can be resized (§11.1)
@@ -11211,7 +11216,19 @@ it, and a package's control could not say the same thing.
 in the caller's segment, 0 clears it) **after** `wm_create` — not a template
 word, exactly as `W_ONSIZE` and `W_ONMOUSEUP` are not, because the template
 copy is eight words and growing it would read one word past every existing
-package's template. `WIN_SIZE` goes 28 → **30**.
+package's template. `WIN_SIZE` goes 28 → **34** with §13.9's two words beside
+it — **on `kern_big` alone**. The three words are 72 bytes of `.bss` across
+`MAX_WIN` plus the routines that walk them, and `kern_small` was measured at
+zero spare when the split was made, so the 128KB kernel keeps a 28-byte record
+and carries `OSAPI_WM_ONDRAG`, `OSAPI_WM_TIMER` and `OSAPI_WM_ONTIMER` as
+stubs that answer **CF = 1** — `gfx_blit1`'s precedent (§5.4.2). The big
+kernel **states CF = 0** rather than letting the flag fall out of the body,
+because a capability test that cannot be made on the kernel that *has* the
+capability is not a test; a package tests `CF` and draws the static down state
+instead. The offsets are the kernel's own throughout: a package installs the
+three through their slots and never names `W_ONDRAG`, `W_ONTIMER` or
+`W_TIMER`, which is what makes the split safe — a window INDEX never leaves
+the kernel and nothing outside `kernel/` strides the table.
 
 It is called with **CX = x, DX = y, SI = window**, in `W_ONCLICK`'s
 environment exactly — the UI task, under the gfx lock, billed to the owning
@@ -11543,7 +11560,10 @@ after `wm_create`, not a template word — is what runs when it expires, in
 `W_ONCLICK`'s environment exactly: the UI task, under the gfx lock, billed to
 the owning instance, through the same `ui_ptcall`. `CX`/`DX` are **0**: a
 timer has no point, and the dispatcher is shared rather than copied because a
-second billing wrapper is a second thing to keep in step.
+second billing wrapper is a second thing to keep in step. Both slots, and
+`W_ONTIMER`'s two record words, are **`kern_big`'s alone** on §13.8.2's terms:
+on the 128KB kernel they answer **CF = 1** and there is no timer, so a package
+tests the carry and does without.
 
 **What it is for is un-drawing.** A control drawn down by a *keystroke* has no
 release edge to come back up on — §13.8's whole mechanism hangs off a mouse

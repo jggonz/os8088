@@ -3845,7 +3845,9 @@ gfx_blit1:            stc               ; kern_small carries the SLOT and not
 ; is an ABI that depends on a knob (SPEC.md 20.8 rule 4) and would shift every
 ; number above it - and the small build answers CF = 1, gfx_blit1's precedent
 ; exactly. A package tests CF and does without: no tracking, no timer, and its
-; down state is the static one 13.8.2 describes.
+; down state is the static one 13.8.2 describes. The big build STATES CF = 0
+; rather than letting it fall out of the body, or the test is not a test on the
+; kernel that has the feature.
 ;
 ; They are named _c rather than being the routines themselves so that the
 ; kern_big side is a plain jump to code that knows nothing about the split,
@@ -3853,10 +3855,13 @@ gfx_blit1:            stc               ; kern_small carries the SLOT and not
 ; inside three routines.
 %ifdef KERN_BIG
 wm_ondrag_c:          call wm_ondrag
-                  ret
+                  clc             ; CF = 0 is the ANSWER, not the caller's own
+                  ret             ; carry coming back: the bodies write no flag
 wm_timer_c:           call wm_timer
-                  ret
+                  clc             ; the arm path's is worse - it is the carry
+                  ret             ; out of [ticks] + delay
 wm_ontimer_c:         call wm_ontimer
+                  clc
                   ret
 %else
 wm_ondrag_c:                    ; THREE LABELS, ONE BODY - the cells are what
