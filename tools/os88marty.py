@@ -389,19 +389,92 @@ class Marty:
         """One MartyKey by name: 'KeyA', 'Enter', 'Digit1', 'ArrowUp'."""
         return self.cmd(cmd="key", key=name, down=down, up=up)
 
+    # The US layout's shifted characters, as (MartyKey name, needs shift).
+    # MartyKey's vocabulary is the W3C KeyboardEvent.code set, so these are
+    # the emulator's own names rather than a second table that has to agree
+    # with an enum (debug_server.rs says why it takes names at all).
+    _PUNCT = {
+        ".": ("Period", 0), ",": ("Comma", 0), "/": ("Slash", 0),
+        ";": ("Semicolon", 0), "'": ("Quote", 0), "[": ("BracketLeft", 0),
+        "]": ("BracketRight", 0), "\\": ("Backslash", 0), "-": ("Minus", 0),
+        "=": ("Equal", 0), "`": ("Backquote", 0),
+        ":": ("Semicolon", 1), "?": ("Slash", 1), '"': ("Quote", 1),
+        "<": ("Comma", 1), ">": ("Period", 1), "_": ("Minus", 1),
+        "+": ("Equal", 1), "~": ("Backquote", 1), "{": ("BracketLeft", 1),
+        "}": ("BracketRight", 1), "|": ("Backslash", 1),
+        "!": ("Digit1", 1), "@": ("Digit2", 1), "#": ("Digit3", 1),
+        "$": ("Digit4", 1), "%": ("Digit5", 1), "^": ("Digit6", 1),
+        "&": ("Digit7", 1), "*": ("Digit8", 1), "(": ("Digit9", 1),
+        ")": ("Digit0", 1),
+    }
+
     def type_text(self, s):
-        """ASCII through the keyboard. Letters, digits, space and Enter."""
+        """ASCII through the keyboard, INCLUDING shifted characters.
+
+        It was letters, digits, space and Enter, and the first thing that
+        needed more was a URL: `no key mapping for ':'` ended a whole
+        browser-fetch run before it had typed four characters. `:` and `/`
+        are not exotic - they are what an address is made of - and an
+        uppercase letter was quietly wrong rather than refused, since
+        `Key` + ch.upper() with no shift held reaches the guest as lower case.
+
+        SHIFT IS HELD ACROSS THE KEY and released after, because the debug
+        server presses with `KeyboardModifiers::default()` - the modifier is a
+        key that is down, exactly as it is on the real 8255, and not a flag on
+        the press.
+        """
         for ch in s:
             if ch == "\n":
                 self.key("Enter")
+            elif ch == "\t":
+                self.key("Tab")
+            elif ch == "\b":
+                self.key("Backspace")   # ...and it was missing, which is not
+                                        # exotic either: the first test to
+                                        # DELETE something rather than type it
+                                        # had nowhere to go
             elif ch == " ":
                 self.key("Space")
-            elif ch.isalpha():
-                self.key("Key" + ch.upper())
+            elif ch.isalpha() and ch.isascii():
+                self._shifted("Key" + ch.upper(), ch.isupper())
             elif ch.isdigit():
                 self.key("Digit" + ch)
+            elif ch in self._PUNCT:
+                name, sh = self._PUNCT[ch]
+                self._shifted(name, sh)
             else:
                 raise MartyError("no key mapping for %r" % ch)
+
+    def ctrl(self, name):
+        """One key with ControlLeft HELD across it - a control character.
+
+        _shifted's shape and for its reason: the debug server presses with
+        `KeyboardModifiers::default()`, so a modifier is a key that is DOWN
+        exactly as it is on the real 8255, and not a flag on the press. There
+        was no way to send one at all, and the first thing that wanted one was
+        a terminal's escape key - which is Ctrl+] on every telnet client there
+        has ever been.
+        """
+        self.key("ControlLeft", down=True, up=False)
+        try:
+            self.key(name)
+        finally:
+            self.key("ControlLeft", down=False, up=True)     # ...ALWAYS: a
+                                                             # stuck modifier
+                                                             # is a guest
+                                                             # nobody can get
+                                                             # back
+    def _shifted(self, name, shift):
+        """One key, optionally with ShiftLeft held down across it."""
+        if not shift:
+            return self.key(name)
+        self.key("ShiftLeft", down=True, up=False)
+        try:
+            self.key(name)
+        finally:
+            self.key("ShiftLeft", down=False, up=True)  # ...ALWAYS: a stuck
+                                                        # modifier is a guest
+                                                        # nobody can get back
 
     def mouse(self, dx=0, dy=0, l=False, r=False):
         """One packet. dx/dy are RELATIVE and clamped to a signed byte."""

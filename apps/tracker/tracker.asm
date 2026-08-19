@@ -121,8 +121,19 @@
 %endmacro
 
 ; --- tuning --------------------------------------------------------------------
-TRK_RITEM   equ 16                  ; a composed Rate item: MENU_DIS + '* ' +
-                                    ; '11 kHz' + ' (Xt)' + NUL = 15
+TRK_VITEM   equ 24                  ; a composed View item: MENU_DIS +
+                                    ; 'Fullscreen' + ' (5.5 kHz)' + NUL = 22
+TRK_RITEM_SH equ 5                  ; ...and the item stride is a SHIFT, so it
+TRK_RITEM   equ 1 << TRK_RITEM_SH   ; is derived from the size rather than
+                                    ; being a second opinion about it. It was
+                                    ; two constants and they disagreed: 24
+                                    ; bytes declared, `shl di,1` three times =
+                                    ; EIGHT written, so item 0 ran into item 1
+                                    ; and the menu read `* 5.5 kH  11 kHz`.
+                                    ; A composed Rate item is '* ' + '11 kHz'
+                                    ; + ' (Windowed)' + NUL = 20 (SPEC.md
+                                    ; 45.9.3). No MENU_DIS: the Rate menu
+                                    ; lists only rows this mode can pick
 ; --- the ring is CHOSEN, not fixed (SPEC.md 45.18) ---------------------------
 ; It was a flat 16,384 and that is still what a machine with room gets. What
 ; it cost on a small one was the worst shape available: the module loaded,
@@ -162,6 +173,17 @@ TRK_RATE    equ 11000               ; open rate request, Hz (kernel quantizes
                                     ; via the TC; mp_gen mixes to the same)
 TRK_RATE_XT equ 5500                ; XT mode's rate (SPEC.md 45.9): halves
                                     ; the mixer's per-second sample budget
+TRK_RATE_XT2 equ 11000              ; ...and XT mode's HIGH rate (SPEC.md
+                                    ; 45.9.3), which is WINDOWED-ONLY and is
+                                    ; not the default. PERFORMANCE.md Set 65
+                                    ; measured both: windowed it delivers
+                                    ; 100.2% of the music over 4.7 minutes,
+                                    ; and on the 45.13 text screen it delivers
+                                    ; 88.4% - a sixth of the song silently
+                                    ; missing, which is not one of 45.8's
+                                    ; honest degradations. So the surface is
+                                    ; part of the CHOICE and trk_fs_enter
+                                    ; refuses rather than quietly reverting
 TRK_RATE22  equ 22050               ; Rate menu (SPEC.md 45.10): still the
                                     ; classic TC regime, any DSP
 TRK_RATE44  equ 44100               ; the 34.5 wide-rate regime - DSP >= 4
@@ -275,11 +297,11 @@ trk_entry:
                                     ; glyphs are the ones that come out
                                     ; aligned). wm_snap preserves FLAGS, so
                                     ; the loader's CF still survives to .out
-    call trk_rate_menu              ; ...and this ends in MENU_SET. It has to
-                                    ; run before the first paint: the three
-                                    ; Rate items are composed into BSS, which
+    call trk_menus_build            ; ...and this ends in MENU_SET. It has to
+                                    ; run before the first paint: every item
+                                    ; it owns is composed into BSS, which
                                     ; arrives ZEROED, so a set installed ahead
-                                    ; of it carries three EMPTY strings.
+                                    ; of it carries EMPTY strings.
                                     ; It preserves FLAGS too, so the loader's
     mov si, trk_about               ; CF still survives to .out
     call OSAPI_ABOUT_SET
@@ -579,9 +601,11 @@ trk_onkey:
     call trk_xt_toggle
     jmp .out
 .rcyc:
-    mov al, [trk_rsel]              ; R cycles 11 -> 22 -> 44 -> 11
-    inc al                          ; (SPEC.md 45.10 - fullscreen reach)
-    cmp al, 3
+    call trk_rsel_get               ; R cycles whatever the Rate MENU lists in
+    mov al, ah                      ; this mode - 11/22/44 outside XT mode and
+    inc al                          ; 5.5/11 inside it (SPEC.md 45.9.3/45.10).
+    call trk_rcount                 ; One control, so the key and the menu
+    cmp al, cl                      ; cannot come to differ
     jb .rset
     xor al, al
 .rset:
@@ -705,8 +729,12 @@ trk_oncmd:
     call trk_fs_exit
     jmp .out
 .enter:
-    call trk_fs_enter
-    jmp .out
+    call trk_fs_ok                  ; belt: the row is MENU_DIS while this
+    jc .out                         ; refuses and a greyed row is not
+    call trk_fs_enter               ; dispatched, so this cannot fire - and
+    jmp .out                        ; the greying and the refusal share one
+                                    ; predicate (SPEC.md 47 rule 5) rather
+                                    ; than being two opinions
 .file:
     or bl, bl                       ; File > Open...
     jz .fopen
@@ -1237,6 +1265,33 @@ trk_fs_enter:
     push cx
     cmp byte [trk_fs], 0
     jne .out                        ; the bracket blocks, so this is belt-only
+%ifdef TTXFSANY
+    jmp short .surf                 ; the refusal below is the PRODUCT rule,
+%endif                              ; and it makes the thing it was decided
+                                    ; from unmeasurable: with it in place
+                                    ; os88rate.py --fullscreen at 11 kHz is
+                                    ; silently a WINDOWED run, which is
+                                    ; exactly how it first reported 100.3% on
+                                    ; a text screen it never reached. So the
+                                    ; bench can bypass it. Bench-only, and the
+                                    ; shipped build is byte-identical
+    call trk_fs_ok                  ; XT mode's HIGH rate is WINDOWED-ONLY
+    jnc .surf                       ; (SPEC.md 45.9.3): the 45.13 text screen
+                                    ; delivers 88.7% of the music at 11 kHz.
+                                    ; View > Fullscreen is GREYED while this
+                                    ; refuses - one predicate, so the menu and
+                                    ; the refusal cannot come to differ - but
+                                    ; the F key and the splash click have no
+                                    ; greying and still arrive here, so this
+                                    ; is where the message is said. It is at
+                                    ; THIS routine and not at its three call
+                                    ; sites so a fourth cannot forget it
+    push si
+    mov si, trk_s_fsxhi
+    call tui_msg
+    pop si
+    jmp .out
+.surf:
     mov byte [trk_fs], 1            ; BEFORE the call - see the header
     call trk_legend                 ; ...and the status legend is picked FOR a
                                     ; surface, so it changes with this byte
@@ -1273,7 +1328,11 @@ trk_fs_enter:
 .run:
     mov ax, trk_fsx_main
     mov bx, [trk_win]
-    mov cx, FSXF_KEEPWORKER | FSXF_FASTTICK
+%ifdef TTXNOFAST
+    mov cx, FSXF_KEEPWORKER         ; PERFORMANCE.md Set 67's A/B: the sub-tick
+%else                               ; alone, which costs three IRQ0s and three
+    mov cx, FSXF_KEEPWORKER | FSXF_FASTTICK   ; sch_switch scans a tick where
+%endif                              ; one would do. Bench-only
                                     ; the worker feeds through the freeze, and
                                     ; the quantum goes to 18 ms so its slot
                                     ; costs the scroll a third of a frame
@@ -1762,13 +1821,17 @@ trk_play:
     mov byte [trk_ghave], 1
 .granted:
     cmp byte [mp_xt], 0             ; XT mode overrides the Rate menu with
-    je .rsel                        ; its own 5,500 Hz (SPEC.md 45.9/45.10)
+    je .rsel                        ; its own rate (SPEC.md 45.9/45.10)
 %ifdef TRKLOG
     mov ax, [tlog_xrate]            ; ...which K can move WITHOUT leaving XT
-%else                               ; mode, so the rate can be swept with the
-    mov ax, TRK_RATE_XT             ; surface held still (docs/FIELD-NOTES.md
-%endif                              ; 16). Bench-only; the shipped build is
-    jmp .rate                       ; the constant it always was
+    jmp .rate                       ; mode, so the rate can be swept with the
+%else                               ; surface held still (docs/FIELD-NOTES.md
+    mov ax, TRK_RATE_XT             ; 16). Bench-only, and it OUTRANKS the
+    cmp byte [trk_xhi], 0           ; user's pick below: a sweep that a
+    je .rate                        ; setting could veto is not a sweep
+    mov ax, TRK_RATE_XT2            ; 45.9.3's windowed-only high rate
+    jmp .rate
+%endif
 .rsel:
     mov bl, [trk_rsel]              ; the Rate menu's pick: 0/1/2
     xor bh, bh
@@ -2068,7 +2131,7 @@ trk_transport:
 ; MENU_SET re-runs - the kernel holds a COPY of the set (SPEC.md 12.2).
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
-; trk_rate_menu - compose the three Rate items and hand the set back to the
+; trk_menus_build - compose every item this set owns and install it ONCE
 ;                 kernel (SPEC.md 45.17.1). Preserves every register.
 ;
 ; TWO MARKS THAT MEAN TWO THINGS, which is the whole point of composing these
@@ -2093,31 +2156,50 @@ trk_transport:
 ; the thing, do it and report. trk_play already does, with `44 kHz needs a DSP
 ; 4.x card` on err 2.
 ; -----------------------------------------------------------------------------
-trk_rate_menu:
+trk_menus_build:
     pushf                           ; FLAGS, not just registers: the entry proc
     push ax                         ; calls this between `jc .out` and its own
     push bx                         ; ret, and the loader reads that CF
     push cx
     push si
     push di
-    xor cx, cx                      ; CX = the item index
+
+    ; --- View > Fullscreen: greyed while the rate cannot use it -------------
+    mov di, trk_viewitem
+    call trk_fs_ok                  ; CF = 1: 11 kHz is picked, so the text
+    jnc .vlive                      ; screen is refused (SPEC.md 45.9.3)
+    mov byte [di], MENU_DIS         ; ...so do not OFFER it. A row that is
+    inc di                          ; live and then says no is rule 4's
+.vlive:                             ; "looks available and is not"
+    mov si, trk_s_fullm
+    call trk_scpy
+    call trk_fs_ok
+    jnc .vterm
+    mov si, trk_s_fswin             ; rule 7: name what brings it back
+    call trk_scpy
+.vterm:
+    mov byte [di], 0
+
+    ; --- Rate: XT mode's TWO, or the other mode's three ---------------------
+    mov cx, 3                       ; the counts differ, so AMENU_NITEM is
+    cmp byte [mp_xt], 0             ; written rather than assembled
+    je .n
+    mov cx, 2
+.n:
+    mov [trk_e_rate + AMENU_NITEM], cx
+    xor bx, bx                      ; BX = the item index
 .item:
-    mov bx, cx
-    shl bx, 1                       ; BX = index*2, for the word tables
-    mov di, cx
-    shl di, 1                       ; DI = index*TRK_RITEM. Shifted, not
+    mov di, bx
+%rep TRK_RITEM_SH                   ; DI = index*TRK_RITEM. Shifted, not
     shl di, 1                       ; multiplied: `mul` writes DX, which is
-    shl di, 1                       ; not on this routine's push list, and an
-    shl di, 1                       ; 8086 shift by anything but 1 needs CL -
-    add di, trk_ritem0              ; which is the loop counter
-    mov [trk_mi_rate + bx], di
-    cmp byte [mp_xt], 0
-    je .mark
-    mov byte [di], MENU_DIS         ; XT mode: the whole row is unavailable
-    inc di
-.mark:
+%endrep                             ; not on this routine's push list - and
+    add di, trk_ritem0              ; %rep is what keeps the count and the
+                                    ; size in step
     mov al, ' '
-    cmp cl, [trk_rsel]
+    push bx
+    call trk_rsel_get               ; AH = the live pick for THIS mode
+    cmp bl, ah
+    pop bx
     jne .pad
     mov al, '*'
 .pad:
@@ -2125,26 +2207,88 @@ trk_rate_menu:
     inc di
     mov byte [di], ' '
     inc di
+    push bx
+    shl bx, 1
     mov si, [trk_rname + bx]
-    call trk_scpy
     cmp byte [mp_xt], 0
-    je .term
-    mov si, trk_s_rxt
+    je .name
+    mov si, [trk_xrname + bx]
+.name:
+    call trk_scpy
+    pop bx
+    cmp byte [mp_xt], 0             ; the 11 kHz row - and ONLY in XT mode -
+    je .term                        ; carries the trade in its own label
+    cmp bl, 1
+    jne .term
+    mov si, trk_s_xwin
     call trk_scpy
 .term:
     mov byte [di], 0
-    inc cx
-    cmp cx, 3
+    inc bx
+    cmp bx, cx
     jb .item
-    mov bx, [trk_win]
-    mov si, trk_menus
-    call OSAPI_MENU_SET
-    pop di
+
+    mov bx, [trk_win]               ; ONE MENU_SET for the whole set, which is
+    mov si, trk_menus               ; why this is one routine: two that each
+    call OSAPI_MENU_SET             ; ended in it meant the last one called
+    pop di                          ; decided what reached the bar
     pop si
     pop cx
     pop bx
     pop ax
     popf
+    ret
+
+; -----------------------------------------------------------------------------
+; trk_fs_ok - may the app enter its fullscreen surface? CF = 1 if not.
+;
+; ONE predicate for the greying, the key's refusal and trk_fs_enter's belt
+; (SPEC.md 47 rule 5). Preserves everything but the flags.
+; -----------------------------------------------------------------------------
+trk_fs_ok:
+    cmp byte [mp_xt], 0             ; XT mode's high rate cannot hold the
+    je .ok                          ; 45.13 text screen (PERFORMANCE.md
+    cmp byte [trk_xhi], 0           ; Sets 65-67), so it is not offered
+    je .ok
+    stc
+    ret
+.ok:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; trk_rsel_get / trk_rsel_put - the rate pick for whichever mode is on
+;
+; Two bytes rather than one, so each mode REMEMBERS its own choice across a
+; toggle: [trk_rsel] is the Rate menu's 11/22/44 and [trk_xhi] is XT mode's
+; 5.5/11. out AH = the pick; put takes it in AL.
+; -----------------------------------------------------------------------------
+trk_rsel_get:
+    mov ah, [trk_rsel]
+    cmp byte [mp_xt], 0
+    je .out
+    mov ah, [trk_xhi]
+.out:
+    ret
+
+trk_rsel_put:
+    cmp byte [mp_xt], 0
+    je .plain
+    mov [trk_xhi], al
+    ret
+.plain:
+    mov [trk_rsel], al
+    ret
+
+; -----------------------------------------------------------------------------
+; trk_rcount - how many rows the Rate menu has in this mode. out CL.
+; -----------------------------------------------------------------------------
+trk_rcount:
+    mov cl, 3
+    cmp byte [mp_xt], 0
+    je .out
+    mov cl, 2
+.out:
     ret
 
 ; DS:SI (asciiz, terminator dropped) -> [DI], DI left past it. AL, SI spent.
@@ -2165,15 +2309,31 @@ trk_rate_set:
     push cx
     push si
     push di
-    cmp byte [mp_xt], 0             ; XT mode takes TRK_RATE_XT whatever is
-    je .live                        ; picked here, so the menu rows are greyed
-    mov si, trk_s_ratext            ; (SPEC.md 45.17.1) - but R still arrives,
-    call tui_msg                    ; and a key that does nothing has to say
-    jmp .done                       ; why (SPEC.md 47 rule 6's other half)
-.live:
-    cmp al, [trk_rsel]
-    je .done                        ; same pick: nothing to do
-    mov [trk_rsel], al
+    call trk_rcount                 ; CL = rows in THIS mode: 3 outside XT
+    cmp al, cl                      ; mode, 2 inside it. A pick past the end
+    jae .done                       ; cannot happen from the menu and can from
+                                    ; a future key, so it is refused here
+    cmp byte [trk_tx], 0            ; the SPEC.md 45.13 text surface: a rate
+    je .ok                          ; change needs the stream reopened, which
+    mov si, trk_s_txxt              ; is windowed-only - the same 'windowed
+    call tui_msg                    ; first' the X key says, and for the same
+    jmp short .done                 ; reason
+.ok:
+    push ax
+    call trk_rsel_get               ; AH = the live pick for this mode
+    cmp al, ah
+    pop ax
+    je .done                        ; same pick: nothing to do at all
+    call trk_rsel_put
+%ifdef TRKLOG
+    cmp byte [mp_xt], 0             ; the bench sweep OUTRANKS trk_xhi in
+    je .idle0                       ; trk_play, so it is moved to agree with
+    call tlog_xrate_set             ; it - otherwise R relabels the menu while
+.idle0:                             ; K's rate keeps playing, and a bench
+%endif                              ; build that lies about its own state is
+                                    ; the one thing a bench build may not do.
+                                    ; It lived in trk_xrate_tog until that
+                                    ; routine folded into this one
     cmp byte [mp_playing], 0
     je .idle
     call trk_play_stop              ; drains the worker (SPEC.md 45.2)
@@ -2182,11 +2342,26 @@ trk_rate_set:
     je .menu                        ; paths closes before the rate changes
     call trk_stream_close
 .menu:
-    call trk_rate_menu
-    mov bl, [trk_rsel]
+    call trk_menus_build            ; the '*' moves, and in XT mode View >
+                                    ; Fullscreen greys or un-greys with it -
+                                    ; ONE builder, so they cannot disagree
+    cmp byte [mp_xt], 0             ; ...and the SPLASH carries the same fact
+    je .msg                         ; in its hint line, which is pixels rather
+    call tui_draw_all               ; than a menu string and so does not
+                                    ; follow a rebuild. Outside XT mode
+                                    ; nothing on the splash is rate-dependent,
+                                    ; so that path repaints exactly as little
+                                    ; as it did before
+.msg:
+    call trk_rsel_get
+    mov bl, ah
     xor bh, bh
     shl bx, 1
     mov si, [trk_rmsg + bx]
+    cmp byte [mp_xt], 0
+    je .say
+    mov si, [trk_xrmsg + bx]
+.say:
     call tui_msg
 .done:
     pop di
@@ -2228,10 +2403,14 @@ trk_xt_toggle:
     mov si, trk_s_xton
 .lab:
     mov [trk_mi_file + 2], si
-    call trk_rate_menu              ; XT mode overrides the Rate menu, so the
-                                    ; three rows grey and un-grey with it -
-                                    ; and this ends in MENU_SET (SPEC.md
-                                    ; 45.17.1)
+    call trk_menus_build            ; the Rate menu becomes XT mode's TWO rows
+                                    ; or the other mode's three, and View >
+                                    ; Fullscreen greys with them (SPEC.md
+                                    ; 45.9.3) - one builder, one MENU_SET
+    call tui_draw_all               ; ...and the splash's hint line follows the
+                                    ; same predicate: leaving XT mode makes
+                                    ; fullscreen available again whatever the
+                                    ; high rate was set to
     mov si, trk_s_xtmoff
     cmp byte [mp_xt], 0
     je .msg
@@ -2479,8 +2658,16 @@ trk_tpl:
 ; --- app menu set (SPEC.md 12.2) -----------------------------------------------
     OS88_MENUSET trk_menus, trk_m_name, trk_oncmd
         OS88_MENU trk_m_file, trk_mi_file, 2
+trk_e_view:
         OS88_MENU trk_m_view, trk_mi_view, 1
-        OS88_MENU trk_m_rate, trk_mi_rate, 3
+trk_e_rate:                             ; ...labelled because its AMENU_NITEM
+        OS88_MENU trk_m_rate, trk_mi_rate, 3    ; is written at RUN TIME: the
+                                        ; Rate menu is TWO items in XT mode
+                                        ; and three outside it (SPEC.md
+                                        ; 45.9.3). The set is the package's
+                                        ; own image and the image is writable,
+                                        ; which trk_xt_toggle's relabel has
+                                        ; always relied on
     OS88_MENUSET_END trk_menus
 
 trk_m_name:  db 'Tracker', 0
@@ -2491,9 +2678,17 @@ trk_mi_file: dw trk_s_open, trk_s_xtoff ; item 1 repointed by trk_xt_toggle
 trk_s_open:  db 'Open...', 0
 trk_s_xtoff: db 'XT Mode: Off', 0
 trk_s_xton:  db 'XT Mode: On', 0
+trk_s_fsxhi: db '11 kHz is windowed: R picks 5.5', 0
 trk_m_view:  db 'View', 0
-trk_mi_view: dw trk_s_fullm
+trk_mi_view: dw trk_viewitem            ; AMENU_ITEMS is an ARRAY of pointers,
+                                        ; never the string itself - pointed at
+                                        ; the composed buffer directly, the bar
+                                        ; reads its first two characters as a
+                                        ; pointer and draws whatever they name
 trk_s_fullm: db 'Fullscreen', 0
+trk_s_fswin: db ' (5.5 kHz)', 0         ; SPEC.md 47 rule 7: the greyed row
+                                        ; says what would bring it back, which
+                                        ; is the OTHER control's setting
 trk_m_rate:  db 'Rate', 0
 trk_mi_rate: dw trk_ritem0, trk_ritem1, trk_ritem2  ; COMPOSED, by
                                         ; trk_rate_menu (SPEC.md 45.17.1)
@@ -2501,12 +2696,24 @@ trk_s_r11:   db '11 kHz', 0
 trk_s_r22:   db '22 kHz', 0
 trk_s_r44:   db '44 kHz', 0
 trk_rname:   dw trk_s_r11, trk_s_r22, trk_s_r44
-trk_s_rxt:   db ' (Xt)', 0              ; SPEC.md 47 rule 7: say WHY not
 trk_rates:   dw TRK_RATE, TRK_RATE22, TRK_RATE44
 trk_rmsg:    dw trk_s_m11, trk_s_m22, trk_s_m44
 trk_s_m11:   db 'Rate: 11 kHz - Enter plays', 0
 trk_s_m22:   db 'Rate: 22 kHz - Enter plays', 0
 trk_s_m44:   db 'Rate: 44 kHz - Enter plays', 0
+; ...and XT mode's own two, which REPLACE the three above while it is on
+; rather than greying beside them (SPEC.md 45.9.3): 22 and 44 kHz are not
+; choices a tier-0 machine can make, so a menu that lists them is a menu
+; three fifths of which is unreachable. `(Windowed)` is rule 7 again - the
+; trade is the whole feature, so the row that carries it says so.
+trk_s_x55:   db '5.5 kHz', 0
+trk_s_x11:   db '11 kHz', 0
+trk_s_xwin:  db ' (Windowed)', 0
+trk_xrname:  dw trk_s_x55, trk_s_x11
+trk_xrates:  dw TRK_RATE_XT, TRK_RATE_XT2
+trk_xrmsg:   dw trk_s_xm55, trk_s_xm11
+trk_s_xm55:  db 'Rate: 5.5 kHz - Enter plays', 0
+trk_s_xm11:  db 'Rate: 11 kHz - windowed only', 0
 
 trk_ttl:     db 'Tracker', 0
 
@@ -2532,7 +2739,6 @@ trk_s_snderr: db 'Sound open failed', 0
 trk_s_xtmon:  db 'XT mode on - Enter plays', 0
 trk_s_xtmoff: db 'XT mode off - Enter plays', 0
 trk_s_norate: db '44 kHz needs a DSP 4.x card', 0
-trk_s_ratext: db 'Xt mode sets the rate - X first', 0
 trk_s_buffer: db 'Buffering...', 0
 trk_s_txxt:   db 'XT off is windowed: Esc first', 0
 
@@ -2645,6 +2851,10 @@ trk_reloc:
     TRKB trk_hired                  ; the worker exists
     TRKB trk_abon                   ; the About panel is up; worker frames drop
     TRKB trk_pmode                  ; 0 = song, 1 = pattern loop, 2 = resume
+    TRKB trk_xhi                      ; XT mode's rate: 0 = 5,500 (the default,
+                                      ; and bss arrives zeroed so it is the
+                                      ; default by construction), 1 = 11,000
+    TRKBUF trk_viewitem, TRK_VITEM    ; ...and the View item, which greys
     TRKBUF trk_ritem0, TRK_RITEM      ; the three composed Rate items
     TRKBUF trk_ritem1, TRK_RITEM      ; (SPEC.md 45.17.1) - in the PACKAGE's own
     TRKBUF trk_ritem2, TRK_RITEM      ; segment, which is where a menu string

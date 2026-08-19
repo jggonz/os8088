@@ -75,12 +75,12 @@ def main():
 
         w = dispcp.win_list(m, S)
         wx, wy, ww, wh = dispcp.win_rect(m, S, w[-1])
-        dispcp.open_row(m, mo, S, os88marty.settle, wx, wy, 0)   # APPS
+        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "APPS")
         step(m, "APPS folder")
 
         w = dispcp.win_list(m, S)
         wx, wy, ww, wh = dispcp.win_rect(m, S, w[-1])
-        dispcp.open_row(m, mo, S, os88marty.settle, wx, wy, 1)
+        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "ARTFUL.O88")
         time.sleep(3)
         os88marty.settle(m)
         step(m, "a package running")

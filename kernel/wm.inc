@@ -62,7 +62,45 @@ W_ONMOUSEUP equ 26              ; word: near ptr or 0 - the release half of a
                                 ; template word: wm_create zeroes it and
                                 ; wm_onmouseup sets it, so no existing window
                                 ; template changes (the W_ONSIZE precedent)
-WIN_SIZE equ 28                 ; NOT a power of two: never shift, multiply
+%ifdef KERN_BIG
+; --- SPEC.md 13.8.2 and 13.9 are kern_big's ALONE -----------------------------
+; Three words and six bytes a record, which is 72 bytes of .bss across
+; MAX_WIN, plus the routines that walk them. kern_small was measured at ZERO
+; footprint spare when this split was made and it is the guard the 128KB
+; machine lives under - so it carries the API slots as refusing stubs
+; (gfx_blit1's precedent, SPEC.md 5.4.2), and none of the state. WIN_SIZE is
+; therefore 34 here and 28 there, which is safe because a window INDEX never
+; leaves the kernel: a package is given a pointer, and nothing outside
+; kernel/ strides this table (checked - no package names WIN_SIZE at all).
+W_ONDRAG equ 28                 ; word: near ptr or 0 - the pointer MOVED while
+                                ; this window's press was armed (SPEC.md
+                                ; 13.8.2). CX = x, DX = y, SI = window, the
+                                ; same environment as W_ONCLICK and
+                                ; W_ONMOUSEUP, through the same ui_ptcall.
+                                ; Delivered between the two edges of ONE
+                                ; gesture, only when the point CHANGED, and
+                                ; outside the window as freely as the release
+                                ; - a control cannot un-draw itself as the
+                                ; pointer leaves if it is not told it left.
+                                ; NOT a template word: wm_create zeroes it and
+                                ; wm_ondrag sets it, so no existing window
+                                ; template changes (W_ONSIZE's precedent, and
+                                ; W_ONMOUSEUP's after it)
+W_ONTIMER equ 30                ; word: near ptr or 0 - the one-shot timer's
+                                ; handler (SPEC.md 13.9). CX = DX = 0,
+                                ; SI = window; W_ONCLICK's environment, through
+                                ; the same ui_ptcall. NOT a template word:
+                                ; wm_create zeroes it, wm_ontimer sets it
+W_TIMER  equ 32                 ; word: the deadline in [ticks], 0 = DISARMED.
+                                ; wm_timer writes it; the scan clears it
+                                ; BEFORE dispatching, so a handler that wants
+                                ; a repeat re-arms inside itself and one that
+                                ; does not fires exactly once. Clearing after
+                                ; would silently cancel that re-arm
+WIN_SIZE equ 34                 ; NOT a power of two: never shift, multiply
+%else
+WIN_SIZE equ 28                 ; ...and kern_small stops where SPEC.md 13.7
+%endif                          ; left it
 MAX_WIN  equ 12                 ; mirrored in apps/os88api.inc (SPEC.md 11)
 
 WF_SIZABLE equ 4                ; W_FLAGS bit2: resizable (SPEC.md 11.1)
@@ -1105,6 +1143,15 @@ wm_create:
                                 ; The template copy above is EIGHT words and
                                 ; must stay eight: growing it would read one
                                 ; word past every existing package's template
+%ifdef KERN_BIG
+    mov word [bx+W_ONDRAG], 0   ; ...nor the tracking edge (SPEC.md 13.8.2),
+                                ; for that same reason and no other
+    mov word [bx+W_ONTIMER], 0  ; ...nor the timer's handler, nor its deadline
+    mov word [bx+W_TIMER], 0    ; (SPEC.md 13.9) - and the deadline especially,
+                                ; because a REUSED slot inheriting a live one
+                                ; would fire a stranger's handler at a window
+                                ; that has only just been made
+%endif
     mov word [bx+W_DISP], PKG_DISP  ; the far pointer wm_pkgcall uses: the
     mov ax, es                      ; dispatcher's fixed offset, and the
     mov cx, cs                      ; segment the caller called us in. Ours
@@ -1281,7 +1328,68 @@ wm_onmouseup:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_onwake - install (or clear) a window's WAKE handler (SPEC.md 71.1)
+; wm_ondrag - install (or clear) a window's tracking handler (SPEC.md 13.8.2)
+; in:  BX = window ptr, AX = near ptr in the window's OWN segment, 0 to clear
+; out: nothing (all registers preserved)
+;
+; A separate word from W_ONMOUSEUP rather than the same proc with a flag, and
+; the reason is the failure mode: a package that ignored such a flag would
+; treat every pointer movement as the release and fire its control on the way
+; past. Two words is two contracts a package opts into one at a time.
+; -----------------------------------------------------------------------------
+%ifdef KERN_BIG
+wm_ondrag:
+    mov [bx+W_ONDRAG], ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_ontimer - install (or clear) a window's timer handler (SPEC.md 13.9)
+; in:  BX = window ptr, AX = near ptr in the window's OWN segment, 0 to clear
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+wm_ontimer:
+    mov [bx+W_ONTIMER], ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_timer - arm this window's one-shot timer (SPEC.md 13.9)
+; in:  BX = window ptr, AX = ticks from now (0 = cancel)
+; out: nothing (all registers preserved)
+;
+; TWO SENTINELS MEET HERE and the bias is what keeps them apart. AX = 0 means
+; cancel; W_TIMER = 0 means disarmed - so a deadline that lands exactly on 0,
+; which [ticks] + AX does once every 65,536 ticks, would arm a timer that
+; never fires. It is biased to 1: one tick early, imperceptible, and the case
+; stops existing rather than being reasoned about later.
+;
+; [wm_tarm] is the gate the scan reads. Only arming sets it and only the scan
+; clears it, so the flag can be STALE (one wasted walk) and never MISSING (a
+; timer that never fires) - which is the direction that matters, and is why
+; this is a self-healing flag rather than a count that three places would
+; have to keep right.
+; -----------------------------------------------------------------------------
+wm_timer:
+    push ax
+    or ax, ax
+    jz .cancel
+    add ax, [ticks]
+    jnz .set                    ; ...and never 0, which means disarmed
+    inc ax
+.set:
+    mov [bx+W_TIMER], ax
+    mov byte [wm_tarm], 1
+    pop ax
+    ret
+.cancel:
+    mov [bx+W_TIMER], ax        ; AX is 0 here: cancel is a store of the
+    pop ax                      ; sentinel and nothing else. [wm_tarm] is NOT
+    ret                         ; cleared - the scan owns that, and clearing it
+                                ; here would need to know whether any OTHER
+                                ; window still has one
+%endif                          ; KERN_BIG
+
+; -----------------------------------------------------------------------------
+; wm_onwake - install (or clear) a window's WAKE handler (SPEC.md 74.1)
 ; in:  BX = window ptr, AX = near ptr in the window's OWN segment, 0 to clear
 ; out: nothing (all registers preserved)
 ;
@@ -1313,7 +1421,7 @@ wm_wkh_slot:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_wake - post an EVT_WAKE for a window (SPEC.md 71.1, slot OSAPI_WM_WAKE)
+; wm_wake - post an EVT_WAKE for a window (SPEC.md 74.1, slot OSAPI_WM_WAKE)
 ; in:  BX = window ptr
 ; out: CF=0 a wake is queued for this window (posted now, or one was already
 ;      waiting - the two are the same promise); CF=1 the queue was full and
@@ -1361,7 +1469,7 @@ wm_wake:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_wake_disp - dispatch one EVT_WAKE (SPEC.md 71.1); called by ui_task
+; wm_wake_disp - dispatch one EVT_WAKE (SPEC.md 74.1); called by ui_task
 ; in:  SI = the window ptr the record carried; the UI task, gfx lock NOT held
 ; out: nothing
 ; clobbers: AX, BX, CX, DX, SI, DI, BP (a dispatch site, like ui_ptcall's)
@@ -1372,7 +1480,7 @@ wm_wake:
 ; post gets one early wake, which a wake handler must be indifferent to by
 ; construction (it is a KICK, not a message). Billed to the owning instance
 ; and stamped for it - ui_ptcall's environment minus the lock - so the file
-; slots the handler is entitled to call (SPEC.md 71.1) resolve in the
+; slots the handler is entitled to call (SPEC.md 74.1) resolve in the
 ; handler's own instance's folder, not the machine's.
 ; -----------------------------------------------------------------------------
 wm_wake_disp:
@@ -1921,7 +2029,7 @@ wm_destroy:
                                 ; a stranger's near pointer called in a new
                                 ; tenant's segment is not a wrong answer, it is
                                 ; a jump into the middle of its image
-    mov word [wm_onwk+si], 0    ; ...and its wake handler (SPEC.md 71.1), the
+    mov word [wm_onwk+si], 0    ; ...and its wake handler (SPEC.md 74.1), the
                                 ; same rule a third time
     shr si, 1
     mov byte [wm_wkq+si], 0     ; ...and its "a wake is queued" flag, or the
@@ -5375,6 +5483,14 @@ wm_draw_title:
     pop bx
     pop ax
 .none:
+%ifdef KERN_BIG
+    call wm_chrome_relit        ; SPEC.md 13.8.1: a box being HELD DOWN stays
+                                ; down across a repaint, and a window that just
+                                ; lost its boxes stops claiming one is lit. The
+                                ; common tail, so both exits pay it - the
+                                ; fullscreen early-out above included, which is
+                                ; the case that has no title bar at all
+%endif
 %ifdef SNAPAUDIT
     push ax
     mov ax, [snap_tsave]
@@ -5382,6 +5498,125 @@ wm_draw_title:
     pop ax
 %endif
     ret
+
+%ifdef KERN_BIG
+section .cold                   ; the two chrome-box helpers are COLD (SPEC.md
+                                ; 2.6): they are a geometry table and a repaint
+                                ; hook, neither on a path that runs per frame,
+                                ; and .text's rung had 204 bytes left when this
+                                ; feature arrived wanting 232. Their public
+                                ; names are thunks in kernel.asm and the bodies
+                                ; are _x, which is the file modules' shape.
+                                ; wm_chrome_relit's GUARD stays resident, up in
+                                ; the thunk, so the common case - nothing is
+                                ; held down - is still a compare and a near ret
+                                ; on every title draw in the system
+
+; -----------------------------------------------------------------------------
+; wm_chrome_rect_x - the INTERIOR of a title-bar box (SPEC.md 13.8.1)
+; in:  SI = window, AH = wm_hit's region (2 = close box, 3 = minimize box)
+; out: AX, BX, CX, DX = x1, y1, x2, y2 inclusive; SI preserved
+;
+; The 11x11 boxes wm_draw_title lays down, inset by their own frame - so this
+; is the 9x9 white middle and an inversion of it leaves the frame standing.
+; ONE description of that geometry, which is SPEC.md 20.5.1's rect-pointer
+; discipline reaching a control the shared painter does not own: the boxes are
+; drawn inline up in wm_draw_title and hit-tested in wm_hit, and this is the
+; third reader rather than a third copy of the arithmetic.
+;
+; THE REGION IS TESTED BEFORE AX IS LOADED, and that is not a style choice: AH
+; is the argument and AX is about to be a coordinate, so the compare has to
+; happen first. It sits between the cmp and the je because `mov` writes no
+; flags - the 8086 idiom, and the alternative is a push and a pop.
+; -----------------------------------------------------------------------------
+wm_chrome_rect_x:
+    mov bx, [si+W_Y]
+    mov dx, bx
+    add bx, 5                   ; rows W_Y+5 .. W_Y+13 for both boxes
+    add dx, 13
+    cmp ah, 3
+    mov ax, [si+W_X]            ; (writes no flags: the cmp above still stands)
+    je .min
+    add ax, 9                   ; close box interior: W_X+9 .. W_X+17
+    mov cx, ax
+    add cx, 8
+    ret
+.min:
+    add ax, [si+W_W]
+    sub ax, 18                  ; minimize box: the close box mirrored
+    mov cx, ax                  ; (W_X+W_W-18 .. W_X+W_W-10)
+    add cx, 8
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_chrome_relit_x - re-apply a held chrome box's down state (SPEC.md 13.8.1)
+; in:  DI = the window wm_draw_title just drew, BP = the frontmost window,
+;      and [ui_armlit] is already known non-zero (the thunk tested it)
+; out: nothing; all registers preserved
+;
+; [ui_armlit] is the authority and the glass has to agree with it, which is
+; what lets ui_lit_set be a plain XOR of the difference. Two answers, and the
+; second is the one that is easy to leave out:
+;
+;   - the armed window was drawn WITH its boxes (frontmost, not fullscreen):
+;     put the inversion back, because the fill above has just erased it.
+;   - it was drawn WITHOUT them: its boxes went with its pinstripes, so
+;     nothing is lit any more and saying otherwise leaves the release XOR-ing
+;     a square onto a title bar that has no box in it.
+;
+; A package worker calling OSAPI_WM_FRONT is the reachable way to lose the
+; front position mid-gesture - the user cannot click anything, the button
+; being down - which is exactly the kind of rare that is never debugged.
+; -----------------------------------------------------------------------------
+wm_chrome_relit_x:
+    cmp di, [ui_armw]
+    jne .out                    ; a different window: this draw says nothing
+    test word [di+W_FLAGS], WF_FULL
+    jnz .clear                  ; no title bar at all (SPEC.md 11.2)
+    cmp di, bp
+    jne .clear                  ; not frontmost: no boxes were drawn
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, di
+    mov ah, [ui_armr]
+    call wm_chrome_rect_x
+    call KERNEL_SEG:cw_gfx_xor_fill ; the caller holds the gfx lock: every
+    pop si                          ; wm_draw_title caller does
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.out:
+    ret
+.clear:
+    mov byte [ui_armlit], 0
+    ret
+
+; -----------------------------------------------------------------------------
+; The far entries (SPEC.md 2.6): kernel.asm's resident thunks far-call these,
+; and these near-call the bodies above. gbz_gfx_blit1's shape exactly.
+;
+; THE LAYER IS NOT OPTIONAL AND LEAVING IT OUT DOES NOT FAIL TO ASSEMBLE. A
+; cold body keeps an ordinary near `ret`, so a resident thunk far-calling one
+; DIRECTLY pops the offset and leaves the segment on the stack - the `ret`
+; returns to a computed address in whatever follows cold_end, which here was
+; the FAT window. os88ovlchk.py does not see it: it refuses NEAR calls that
+; cross a boundary, and this is a far call to a near-ret body, which is the
+; same mistake from the other side. What it looks like from outside is a
+; machine whose desktop still moves its mouse (mou_isr is an ISR) and whose
+; UI task never comes back - so the press arms, the flag it set reads
+; perfectly over the debugger, and nothing is ever drawn or released.
+; -----------------------------------------------------------------------------
+wmz_wm_chrome_rect:     call wm_chrome_rect_x
+                    retf
+wmz_wm_chrome_relit:    call wm_chrome_relit_x
+                    retf
+
+section .text
+%endif                          ; KERN_BIG
 
 ; -----------------------------------------------------------------------------
 ; wm_title_set - change a window's caption and redraw ONLY the caption
@@ -8426,6 +8661,17 @@ section .bss
 wm_wins:    resb MAX_WIN * WIN_SIZE ; 12 windows x WIN_SIZE bytes
 wm_zord:    resb MAX_WIN            ; window indices, [0] = backmost
 wm_zn:      resb 1                  ; entries in wm_zord
+%ifdef KERN_BIG
+wm_tarm:    resb 1                  ; SPEC.md 13.9: MAY any window have a timer
+                                    ; armed? Set by every wm_timer arm, cleared
+                                    ; by ui_timer_pass's walk when it finds
+                                    ; none. STALE is one wasted walk; MISSING
+                                    ; would be a timer that never fires, and
+                                    ; only arming sets it, so the unsafe
+                                    ; direction is unreachable. It is what
+                                    ; keeps the cost at one compare per UI pass
+                                    ; on a machine with nothing armed
+%endif
 wm_rz_ox:   resw 1              ; where a window was, banked across ONE
 wm_rz_oy:   resw 1              ; geometry change so the repaint after it can
 wm_rz_ow:   resw 1              ; ask what actually moved (SPEC.md 11.95.1).
@@ -8451,7 +8697,7 @@ wm_onsz:    resw MAX_WIN            ; per-slot size-CHANGED handler offset, 0 =
                                     ; is per SLOT and a wider record is paid for
                                     ; by every reader of a window
 wm_onwk:    resw MAX_WIN            ; per-slot WAKE handler offset, 0 = none
-                                    ; (SPEC.md 71.1); wm_onsz's shape and reason
+                                    ; (SPEC.md 74.1); wm_onsz's shape and reason
 wm_wkq:     resb MAX_WIN            ; per slot: 1 = an EVT_WAKE for this window
                                     ; is in the ring (wm_wake coalesces on it)
 wm_wk_rec:  resb EVQ_RECSIZE        ; the one wake record, filled under cli

@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/runcpm/icon.inc
 ;
-; RUNCPM's embedded 16x16 icon (SPEC.md 20.2, 71.5): RunCPM's OWN icon,
+; RUNCPM's embedded 16x16 icon (SPEC.md 20.2, 74.5): RunCPM's OWN icon,
 ; RunCPM/RunCPM.ico (IDI_ICON1 in RunCPM.rc - the one 16x16 image in it),
 ; transcribed pixel for pixel: a two-row window title strip - a white pixel
 ; at its left, a red close box at its right - over a dark field with a large
@@ -13,7 +13,7 @@
 ;
 ; Derived from RunCPM (https://github.com/MockbaTheBorg/RunCPM), MIT License,
 ; Copyright (c) 2017 Mockba the Borg - the attribution every file in this
-; package that carries RunCPM material wears (SPEC.md 71).
+; package that carries RunCPM material wears (SPEC.md 74).
 ;
 ; It is a 1bpp reading of that image (SPEC.md 39.4 - no grey to round away):
 ; the dark field and the blue strip are black, the green glyph and the red

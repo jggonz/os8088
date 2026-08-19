@@ -1148,7 +1148,7 @@ def frames(items):
 
 # ----------------------------------------------------------------- overlay
 #
-# SPEC.md 70.14.  A C function whose name begins with `ovl_` does not live in
+# SPEC.md 73.14.  A C function whose name begins with `ovl_` does not live in
 # the package's segment: its code is emitted into `.modc`, which crt0.asm
 # declares `follows=.data vstart=0` and tools/os88ovl.py cuts off the end of
 # the assembled image into <NAME>.OVL - a file that ships beside the package
@@ -1328,13 +1328,13 @@ def overlay(lines, errors, path):
                     % (path, i + 1, sym[1:], line.strip()))
 
     tail = ["", "; " + "-" * 74,
-            "; cc8086: the overlay's two vector tables (SPEC.md 70.14).",
+            "; cc8086: the overlay's two vector tables (SPEC.md 73.14).",
             "; Offsets assembled in - one nasm job, so both halves agree about",
             "; every address; segments stamped by cc_ovbind at load.",
             "; " + "-" * 74,
             "%ifndef CC_HAS_OVL",
             '%error "this package has ovl_* functions but its .asm shim does '
-            'not %define CC_HAS_OVL - see SPEC.md 70.14"',
+            'not %define CC_HAS_OVL - see SPEC.md 73.14"',
             "%endif",
             "section .data",
             "cc_ovm_first:"]

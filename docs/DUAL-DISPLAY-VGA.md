@@ -1066,7 +1066,7 @@ text screen untestable on that card in this container.
     own straddling-drag test) **passes**, and so do `dispsave` on Hercules+CGA
     and on VGA+Hercules unswapped.
 
-    **A second case joined it once §39.2.2 was fixed, and the order matters.**
+    **A second case joined it once §39.2.1.2 was fixed, and the order matters.**
     On the VGA-primary arrangement `tests/dispfreeze.py` now cannot take the
     pointer to `(439,199)` — it stops at `(440,99)`, deterministically, with
     the button **up**. That click *succeeded* on every run before the
@@ -1161,7 +1161,7 @@ text screen untestable on that card in this container.
     outside `drv_tab` — checked first, and on BX itself, because BX is the
     only thing there that does not go through DS.
 
-    **§39.2.2's `menu_bcell` overrun is fixed and did NOT cure this**, and the
+    **§39.2.1.2's `menu_bcell` overrun is fixed and did NOT cure this**, and the
     verification once claimed for it was invalid: the harness click never
     landed and the tick that said otherwise was the BIOS's. That fix stands on
     its own arithmetic; the claim that it cured the field report does not.

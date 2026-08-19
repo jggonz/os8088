@@ -121,8 +121,8 @@ def main(argv):
             sys.exit("dispblit: no Disk window after double-clicking B:")
         dslot = w[-1]
         dx, dy, dw, dh = win_by(m, dslot)
-        dispcp.open_row(m, mo, S, os88marty.settle, dx, dy,
-                        card=pri["idx"])
+        dispcp.open_named(m, mo, S, os88marty.settle, dx, dy, "PAINT.O88",
+                          card=pri["idx"])
         w = wins(m)
         if dslot == w[-1]:
             sys.exit("dispblit: PAINT.O88 did not launch from row 0")

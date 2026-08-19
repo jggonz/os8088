@@ -27,7 +27,7 @@ EVT_RDOWN   equ 3               ; a=x, b=y, c=birth tick; RIGHT button PRESS.
                                 ; a right double-click would need no format
                                 ; change to arrive.
 EVT_WAKE    equ 4               ; a=window ptr, b/c unused. A PACKAGE'S OWN
-                                ; KICK (SPEC.md 71.1): posted through
+                                ; KICK (SPEC.md 74.1): posted through
                                 ; OSAPI_WM_WAKE from any context, popped by
                                 ; the UI task and dispatched to the window's
                                 ; W_ONWAKE handler WITHOUT the gfx lock, so

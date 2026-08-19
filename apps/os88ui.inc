@@ -79,8 +79,17 @@
   %macro UI_WHITE 0
     mov byte [gfx_color], CWHITE
   %endmacro
+  %macro UI_BLACK 0
+    mov byte [gfx_color], CBLACK
+  %endmacro
   %macro UI_INK 0
     mov [gfx_color], al
+  %endmacro
+  %macro UI_HLINE 0
+    call KERNEL_SEG:cw_gfx_hline
+  %endmacro
+  %macro UI_GRAY 0
+    call KERNEL_SEG:cw_gfx_fill_gray
   %endmacro
 %else
   %macro UI_FRAME 0
@@ -107,8 +116,20 @@
     call OSAPI_SET_COLOR
     pop ax
   %endmacro
+  %macro UI_BLACK 0
+    push ax
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    pop ax
+  %endmacro
   %macro UI_INK 0
     call OSAPI_SET_COLOR
+  %endmacro
+  %macro UI_HLINE 0
+    call OSAPI_GFX_HLINE
+  %endmacro
+  %macro UI_GRAY 0
+    call OSAPI_GFX_FILL_GRAY
   %endmacro
 %endif
 
@@ -150,6 +171,25 @@ OS88UI_INK  equ 8               ; ...and DI's HIGH BYTE is the ink, for a
                                 ; otherwise be - 47 rule 1 is about state and
                                 ; this is about decoration, and state is not
                                 ; negotiable.
+OS88UI_DOWN equ 16              ; THE PRESSED LOOK (SPEC.md 13.8): interior
+                                ; BLACK, label WHITE, frame unchanged. It is a
+                                ; DRAWN STATE and not an XOR overlay, which is
+                                ; the whole of why it is a flag on the painter
+                                ; rather than a routine of its own - see the
+                                ; block comment below os88ui_btn.
+                                ;
+                                ; It IMPLIES the fill: a button being drawn
+                                ; down is being drawn over its own upright
+                                ; self, so the erase is never optional and
+                                ; OS88UI_FILL is not consulted on this path.
+                                ;
+                                ; DISABLED WINS over this too, and the case is
+                                ; not hypothetical: a control can be greyed
+                                ; between the press and the release (a Stop
+                                ; button whose stream ended). A greyed-down
+                                ; button would be a black box with a dithered
+                                ; caption in it, which says "pressed" about a
+                                ; control that will refuse.
 
 ; -----------------------------------------------------------------------------
 ; os88ui_btn - draw one standard button
@@ -175,6 +215,32 @@ OS88UI_INK  equ 8               ; ...and DI's HIGH BYTE is the ink, for a
 ; THE PEN IS PUT BACK on every path. Leaving CDGRAY behind is untidy; leaving
 ; [gfx_dis] behind draws the next string in this lock hold as a checkerboard,
 ; which is a bug in somebody else's code with its cause in this routine.
+;
+; --- THE DOWN STATE IS DRAWN, NOT XOR-ED (SPEC.md 13.8) ----------------------
+; OS88UI_DOWN makes this routine paint the pressed look: interior black, label
+; white, same frame. It is deliberately NOT an `os88ui_bflip` that XORs the
+; interior, which is the shorter and the wrong answer, and the reason is a
+; hazard Calculator had already met and worked around in private:
+;
+;   XOR IS ITS OWN INVERSE, WHICH IS EXACTLY THE PROBLEM. Press XORs the
+;   button down; a repaint arrives between the two edges - the window dragged,
+;   a window above it closing, wm_paint_dmg promoting it - and draws the
+;   button UPRIGHT, because a painter knows nothing about an overlay. The
+;   release then XORs "back" and inverts a button that was already upright,
+;   and it stays inverted for the session. cal_onup's own comment names this,
+;   and its answer was to redraw rather than un-XOR, which is this flag by
+;   hand at one call site.
+;
+; Drawn, the state is IDEMPOTENT: a caller that holds "this control is down"
+; passes the flag from its W_PAINT as well and every repaint agrees with the
+; glass by construction. There is nothing to un-draw and no order to get
+; wrong. It costs a fill and a string against one gfx_xor_fill - about 3ms
+; more per edge on the field machine at PERFORMANCE.md Part 2's floor, on an
+; event a human generates - and it buys a class of bug that cannot happen.
+;
+; A DOWN button is still drawn by the routine that draws an upright one, so
+; its label is centred by the same arithmetic and its frame is in the same
+; place. That is the property a separate flip routine cannot have.
 ; -----------------------------------------------------------------------------
 os88ui_btn:
     push ax
@@ -188,9 +254,20 @@ os88ui_btn:
                                 ; (SPEC.md 20.1), so every read below needs a
                                 ; ds: override or it addresses the task stack;
                                 ; in the kernel it is equally correct and free
+    test di, OS88UI_DOWN        ; DOWN implies the fill and picks its colour:
+    jz .fillck                  ; black, and the label goes white below
+    test di, OS88UI_DIS         ; ...unless it is greyed, in which case it is
+    jnz .fillw                  ; not going to fire and must not say it will -
+                                ; but it STILL erases, because the ground it is
+                                ; being drawn over is a pressed button
+    UI_BLACK
+    jmp short .fill
+.fillck:
     test di, OS88UI_FILL
     jz .pen
+.fillw:
     UI_WHITE
+.fill:
     mov ax, [ds:bp+0]
     mov bx, [ds:bp+2]
     mov cx, [ds:bp+4]
@@ -217,7 +294,11 @@ os88ui_btn:
     mov al, ah
     xor ah, ah
     UI_INK
-.rect:
+.rect:                          ; ...and the FRAME is drawn with that pen. A
+                                ; down button's frame is therefore still black
+                                ; (DOWN sets no ink), which is what keeps the
+                                ; control the same size and in the same place
+                                ; whichever state it is in
     mov ax, [ds:bp+0]
     mov bx, [ds:bp+2]
     mov cx, [ds:bp+4]
@@ -235,6 +316,12 @@ os88ui_btn:
     inc dx
     UI_FRAME
 .label:
+    test di, OS88UI_DOWN        ; the caption over a black interior, in white -
+    jz .lwidth                  ; the frame above is already drawn, so this
+    test di, OS88UI_DIS         ; changes the pen for the STRING alone. Greyed
+    jnz .lwidth                 ; wins here as it does everywhere else
+    UI_WHITE
+.lwidth:
     UI_WIDTH                    ; AX = the label's width in px; SI intact
     mov cx, [ds:bp+4]
     sub cx, [ds:bp+0]
@@ -305,6 +392,14 @@ os88ui_bhit:
 OS88UI_GRADIO equ 0             ; open ring / ring with a filled centre dot
 OS88UI_GCHECK equ 2             ; open square / square with a cross
 OS88UI_GON    equ 1             ; ...or'd into either: the SET state
+OS88UI_GDOWN  equ 4             ; ...and the PRESSED look (SPEC.md 13.8): the
+                                ; box black and the picture white, which is
+                                ; os88ui_btn's down state one widget over and
+                                ; drawn the same way rather than XOR-ed, for
+                                ; the same reason. It rides in AL beside the
+                                ; index because the index is masked to 2 bits
+                                ; (`and si, 3`) and bit 2 was free; the
+                                ; disabled flag has AH to itself and keeps it
 OS88UI_GW     equ 12            ; both are 12 x 12
 
 ; -----------------------------------------------------------------------------
@@ -329,6 +424,31 @@ OS88UI_GW     equ 12            ; both are 12 x 12
 ; one drawing call each, which at PERFORMANCE.md Part 2's ~756us of fixed
 ; cost is 35-50ms on the field machine. Draw the ROW that changed, never the
 ; page.
+;
+; -----------------------------------------------------------------------------
+; os88ui_gdn - should this glyph be drawn PRESSED?
+; in:  DI = the banked argument word (AL's flags, AH's disabled byte)
+; out: ZF = 1 draw it down; all registers preserved
+;
+; A predicate rather than two open-coded tests because it is asked twice - once
+; about the BOX and once about the PICTURE - and the two must never disagree,
+; which is a white glyph on a white box (invisible) or a black one on black.
+; Disabled outranks it, as it outranks OS88UI_INK on the button (47 rule 1).
+; -----------------------------------------------------------------------------
+os88ui_gdn:
+    push ax
+    mov ax, di
+    test ax, 0xFF00             ; disabled: never drawn pressed
+    jnz .no
+    and ax, OS88UI_GDOWN
+    cmp ax, OS88UI_GDOWN        ; ZF = 1 exactly when the bit is set
+    pop ax                      ; (pop writes no flags)
+    ret
+.no:
+    or ax, ax                   ; AX's high byte is set here, so ZF = 0
+    pop ax
+    ret
+
 ; -----------------------------------------------------------------------------
 os88ui_glyph:
     push ax
@@ -371,8 +491,12 @@ os88ui_glyph:
                                 ; in a package)
 
     UI_WHITE                    ; the box first, so a glyph can be redrawn
-    mov ax, cx                  ; in place. [gfx_dis] does not reach a fill,
-    mov bx, dx                  ; so a stale one cannot tint it
+    call os88ui_gdn             ; in place. [gfx_dis] does not reach a fill,
+    jnz .box                    ; so a stale one cannot tint it - and a
+    UI_BLACK                    ; PRESSED glyph is that box in black, over
+.box:                           ; which the picture below goes white
+    mov ax, cx
+    mov bx, dx
     add cx, OS88UI_GW - 1
     add dx, OS88UI_GW - 1
     UI_FILL                     ; AX,BX,CX,DX = x1,y1,x2,y2; BX survives it
@@ -386,6 +510,10 @@ os88ui_glyph:
     clc
 .set:
     UI_PEN
+    call os88ui_gdn             ; ...and the picture in white if it is down,
+    jnz .pixpen                 ; which UI_PEN has just overwritten with the
+    UI_WHITE                    ; live or the disabled ink
+.pixpen:
 
     mov dx, bx                  ; DX = pen y, back at the top row
     mov bh, OS88UI_GW           ; BH = rows left
@@ -499,13 +627,36 @@ os88ui_g_con:                   ; check, set: the same square, crossed
 section .cold
 %endif
 
-%ifndef OS88UI_KERNEL
-; --- the package-side click machinery ----------------------------------------
-; Not assembled into the kernel: fdlg.inc and ctrl.inc have their own hit
-; tests (fdlg_hit, cp_onclick's ladders) and nothing kernel-side arms a
-; control yet. The code is here rather than elsewhere so that the day a
-; kernel dialog wants a release-fired button, it is this gate that moves and
-; not a second copy that gets written.
+; --- the click machinery: every PACKAGE, and kern_BIG ------------------------
+; A package always has it - it is four small routines and a word, and the
+; press/release pair is the SDK's own idiom. The kernel has it only in the big
+; build, because kern_small's dialogs still fire on the press (SPEC.md 13.8.3
+; is kern_big's, docs/UIHELPERS-PLAN.md 18) and 40 bytes of .cold plus two of
+; .bss is a whole 512-byte rung on the guard the 128KB machine lives under -
+; measured, not assumed: making these unconditional cost kern_small exactly
+; that and nothing else.
+%ifdef OS88UI_KERNEL
+  %ifdef KERN_BIG
+    %define OS88UI_ARM
+  %endif
+%else
+  %define OS88UI_ARM
+%endif
+%ifdef OS88UI_ARM
+
+; --- ...and it is BOTH WORLDS' now -------------------------------------------
+; This block used to sit inside `%ifndef OS88UI_KERNEL`, with a note saying
+; the day a kernel dialog wanted a release-fired button it was this gate that
+; would move and not a second copy that would get written. That day is SPEC.md
+; 13.8.3: the Standard File dialog and the Control Panel fire on the release
+; now, and they use these four rather than a private arm each.
+;
+; The BODIES are unconditional. Only the WORD differs, and it has to: a
+; package declares its bss as one total with equ offsets so two bytes of image
+; is cheaper than a convention, while in the kernel this file is assembled
+; into `.cold` - and a word declared there and reached through DS is NOT that
+; word (SPEC.md 2.6 rule 1), which is the trap os88ui_krect's own comment
+; records costing eight bytes through the middle of sch_isr.
 
 ; -----------------------------------------------------------------------------
 ; os88ui_bfind - which button of a table is the point in?
@@ -572,8 +723,417 @@ os88ui_fire:
     mov word [os88ui_armw], 0
     ret
 
-os88ui_armw: dw 0
-%endif
+; -----------------------------------------------------------------------------
+; os88ui_armed - what is armed, WITHOUT spending it
+; out: AX = the control the press landed on (0 = none); nothing else touched
+;
+; The tracking edge's reader (SPEC.md 13.8.2). W_ONDRAG arrives between the
+; press and the release, so it has to ask what was armed and leave it armed -
+; which os88ui_fire cannot do, that being the whole of what makes a missed
+; release harmless. Two names over one word rather than a flag argument,
+; because "peek" and "take" are what the two callers actually mean and a
+; caller that got the flag backwards would spend the arm from a drag and then
+; find nothing at the release.
+; -----------------------------------------------------------------------------
+os88ui_armed:
+    mov ax, [os88ui_armw]
+    ret
+
+%ifndef OS88UI_KERNEL
+os88ui_armw: dw 0               ; a package's: DATA, inline, for the reason
+%endif                          ; above. The kernel's is in .bss at the bottom
+%endif                          ; OS88UI_ARM
+
+
+%ifdef OS88UI_SCROLL
+; =============================================================================
+; THE SCROLL BAR (SPEC.md 13.10)
+;
+; The second shared element, and the argument for it is not the same as
+; os88ui_btn's. A button was five bodies that agreed; a scroll bar was FIVE
+; PRIVATE IMPLEMENTATIONS OF ONE WIDGET - kernel/files.inc, kernel/fdlg.inc,
+; apps/notepad, apps/frotz/zwin.inc and apps/artful/atrend.inc - each a frame
+; plus two arrow cells plus a proportional thumb, each with its own arithmetic
+; for where the thumb goes, and no two of them the same picture.
+;
+; IN THE KERNEL IT IS A NET SAVING, which is unusual for a generalisation and
+; is why it was costed before it was built: files.inc's bar was 387 bytes and
+; fdlg.inc's 288, against ~385 for this plus a setter apiece. The two of them
+; also disagreed by a PIXEL in two places - arrow cells 11 rows against 12,
+; arrow centre x1+6 against x1+7 - which is exactly the drift a shared element
+; exists to end, so this unifies on files.inc's, whose arrow is symmetric in
+; its cell where fdlg's sat one row high.
+;
+; WHAT IT IS NOT is a scroll POLICY. It answers where the parts are and draws
+; them; what an arrow does to a view, how far a page is, and whether a click on
+; the thumb pages or does nothing are all the caller's - which is why
+; os88ui_sbhit reports the thumb as a part of its own rather than folding it
+; into one of the pages. files.inc treats that as page-down and fdlg.inc as
+; nothing, and both were right about their own window.
+;
+; THE BLOCK is seven words, and the caller fills it because it has to know all
+; seven anyway:
+;
+;   +0  x1   +2  y1   +4  x2   +6  y2      the bar, ABSOLUTE and INCLUSIVE
+;   +8  total    how many rows there are in all
+;   +10 fit      how many are visible
+;   +12 pos      the first visible row
+;
+; Everything else is derived, and derived HERE so that a painter and a
+; hit-tester cannot hold different opinions about it:
+;
+;   the two arrow-cell rules      y1+10 and y2-10
+;   the arrow glyphs' centre      x1 + (x2-x1)/2, which is x1+6 on a 14px bar
+;   the track                     (x1+1, y1+11) .. (x2-1, y2-11)
+;
+; A 14-pixel bar is what both kernel callers use and what the arrow glyph is
+; drawn for (5 rows, widths 1..9), but nothing here requires it: the centre is
+; computed and the arrow clips to the cell by construction.
+; =============================================================================
+
+OS88UI_SBNONE  equ 0            ; os88ui_sbhit's answers
+OS88UI_SBUP    equ 1            ; the up-arrow cell
+OS88UI_SBDOWN  equ 2            ; the down-arrow cell
+OS88UI_SBPGUP  equ 3            ; the track ABOVE the thumb
+OS88UI_SBPGDN  equ 4            ; ...and below it
+OS88UI_SBTHUMB equ 5            ; the thumb itself - a part of its own, because
+                                ; the two kernel callers disagree about what it
+                                ; means and both are right
+OS88UI_SBMINH  equ 8            ; the shortest thumb that is still a thumb
+OS88UI_SBCELL  equ 10           ; the arrow cell: the rule sits this far in
+
+; -----------------------------------------------------------------------------
+; os88ui_sbthumb - the thumb's geometry
+; in:  BX = the block
+; out: CF = 1 = there is no thumb (everything fits, or the track is too short
+;      to hold one); else CF = 0, AX = its top and DX = its height, ABSOLUTE.
+;      Every other register preserved.
+;
+; The proportional-thumb arithmetic both kernel bars already had, once. The
+; degenerate-track refusal is files.inc's and fdlg.inc had none, which is the
+; safe direction to unify: fdlg's bar is a fixed size and can never reach it.
+; -----------------------------------------------------------------------------
+os88ui_sbthumb:
+    push bx
+    push cx
+    push si
+    mov ax, [ds:bx+8]           ; total
+    cmp ax, [ds:bx+10]          ; ...against fit
+    jbe .none
+    mov si, [ds:bx+2]
+    add si, OS88UI_SBCELL+1     ; SI = the track's top
+    mov cx, [ds:bx+6]
+    sub cx, OS88UI_SBCELL+1
+    sub cx, si
+    inc cx                      ; CX = the track's height
+    cmp cx, OS88UI_SBMINH
+    jl .none                    ; shorter than the shortest thumb
+    mov ax, [ds:bx+10]          ; fit * track / total = the height
+    mul cx
+    div word [ds:bx+8]
+    cmp ax, OS88UI_SBMINH
+    jge .hok
+    mov ax, OS88UI_SBMINH
+.hok:
+    push ax                     ; ...banked, because the offset needs the mul
+    mov ax, [ds:bx+12]          ; pos * track / total = the offset down it
+    mul cx
+    div word [ds:bx+8]
+    pop dx                      ; DX = the height
+    add ax, si                  ; ...and AX the top
+    add cx, si                  ; clamp: top <= track end - height + 1
+    sub cx, dx
+    cmp ax, cx
+    jle .out
+    mov ax, cx
+.out:
+    clc
+    jmp short .done
+.none:
+    stc
+.done:
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; os88ui_sbar - draw the whole bar
+; in:  BX = the block; the gfx lock is held
+; out: nothing (all registers preserved); leaves the pen BLACK
+; -----------------------------------------------------------------------------
+os88ui_sbar:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov di, bx                  ; DI = the block: BX is every primitive's y1
+    UI_BLACK
+    mov ax, [ds:di+0]           ; --- the bar's own frame ---
+    mov bx, [ds:di+2]
+    mov cx, [ds:di+4]
+    mov dx, [ds:di+6]
+    UI_FRAME
+
+    mov ax, [ds:di+0]           ; --- the two arrow-cell rules ---
+    mov bx, [ds:di+4]
+    mov dx, [ds:di+2]
+    add dx, OS88UI_SBCELL
+    UI_HLINE
+    mov dx, [ds:di+6]
+    sub dx, OS88UI_SBCELL
+    UI_HLINE
+
+    call os88ui_sbcx            ; SI = the arrow glyphs' centre column
+    mov bp, 0                   ; --- the up glyph: 5 rows, widths 1..9 ---
+    mov dx, [ds:di+2]
+    add dx, 3
+.up:
+    mov ax, si
+    sub ax, bp
+    mov bx, si
+    add bx, bp
+    UI_HLINE
+    inc dx
+    inc bp
+    cmp bp, 5
+    jb .up
+
+    mov bp, 4                   ; --- ...and the down glyph, widths 9..1 ---
+    mov dx, [ds:di+6]
+    sub dx, 7
+.dn:
+    mov ax, si
+    sub ax, bp
+    mov bx, si
+    add bx, bp
+    UI_HLINE
+    inc dx
+    dec bp
+    jns .dn
+
+    mov ax, [ds:di+0]           ; --- the track, 50% grey between the rules ---
+    inc ax
+    mov bx, [ds:di+2]
+    add bx, OS88UI_SBCELL+1
+    mov cx, [ds:di+4]
+    dec cx
+    mov dx, [ds:di+6]
+    sub dx, OS88UI_SBCELL+1
+    cmp bx, dx
+    jg .out                     ; degenerate track: no grey and no thumb
+    UI_GRAY
+
+    mov bx, di                  ; --- and the thumb, if there is one ---
+    call os88ui_sbthumb
+    jc .out
+    call os88ui_sbthdraw
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; os88ui_sbcx - the arrow glyphs' centre column (internal)
+; in:  DI = the block
+; out: SI = the column; nothing else touched
+; -----------------------------------------------------------------------------
+os88ui_sbcx:
+    push ax
+    mov si, [ds:di+4]
+    sub si, [ds:di+0]
+    shr si, 1                   ; (x2-x1)/2, which is 6 on a 14px bar
+    add si, [ds:di+0]
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; os88ui_sbthdraw - draw the thumb: a white body in a black frame (internal)
+; in:  DI = the block, AX = its top, DX = its height; pen BLACK on the way out
+; -----------------------------------------------------------------------------
+os88ui_sbthdraw:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, ax                  ; y1
+    add dx, ax
+    dec dx                      ; y2 = top + height - 1
+    mov ax, [ds:di+0]
+    add ax, 2
+    mov cx, [ds:di+4]
+    sub cx, 2
+    UI_WHITE
+    UI_FILL
+    UI_BLACK
+    UI_FRAME
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; os88ui_sbhit - which part of the bar is this point in?
+; in:  BX = the block, CX = x, DX = y (ABSOLUTE)
+; out: AL = OS88UI_SB*; AH clobbered, everything else preserved
+;
+; A point outside the bar answers OS88UI_SBNONE, so a caller may hand it a
+; release that landed anywhere on the screen without a test of its own.
+; -----------------------------------------------------------------------------
+os88ui_sbhit:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov di, bx
+    cmp cx, [ds:di+0]
+    jl .none
+    cmp cx, [ds:di+4]
+    jg .none
+    cmp dx, [ds:di+2]
+    jl .none
+    cmp dx, [ds:di+6]
+    jg .none
+    mov si, [ds:di+2]
+    add si, OS88UI_SBCELL
+    cmp dx, si
+    jle .up                     ; the up-arrow cell, its rule included
+    mov si, [ds:di+6]
+    sub si, OS88UI_SBCELL
+    cmp dx, si
+    jge .down
+    mov si, dx                  ; --- the track: SI = the point's y, banked
+    mov bx, di                  ; across the thumb call, which answers in DX
+    call os88ui_sbthumb
+    jc .none                    ; no thumb: the track is inert
+    cmp si, ax
+    jl .pgup
+    add ax, dx                  ; ...one past the thumb's last row
+    cmp si, ax
+    jge .pgdn
+    mov al, OS88UI_SBTHUMB
+    jmp short .out
+.pgup:
+    mov al, OS88UI_SBPGUP
+    jmp short .out
+.pgdn:
+    mov al, OS88UI_SBPGDN
+    jmp short .out
+.up:
+    mov al, OS88UI_SBUP
+    jmp short .out
+.down:
+    mov al, OS88UI_SBDOWN
+    jmp short .out
+.none:
+    mov al, OS88UI_SBNONE
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; os88ui_sbmove - the view scrolled: move the THUMB and draw nothing else
+; in:  BX = the block, already holding the NEW pos; AX = the pos it was at;
+;      the gfx lock is held
+; out: nothing (all registers preserved); the pen is left BLACK
+;
+; A scroll does not change the thumb's HEIGHT - that is fit*track/total and a
+; scroll moves none of the three - so it TRANSLATES it, and the frame, the two
+; rules, the two arrow glyphs and all of the track it did not cover are exactly
+; where they were. Three drawing calls instead of the bar's sixteen.
+;
+; files.inc had this and fdlg.inc did not, which is one of the things being
+; shared here rather than merely deduplicated: the dialog's scroll used to
+; repaint its whole bar.
+;
+; THE NEW THUMB IS DRAWN BEFORE THE STRIP IT VACATED IS GREYED, which is
+; SPEC.md 42.7.1's ordering: for the width of one fill the thumb is briefly
+; DOUBLED, and a doubled thumb reads as movement where an absent one reads as
+; a blink. A step too small to move it draws nothing at all.
+; -----------------------------------------------------------------------------
+os88ui_sbmove:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov di, bx
+    mov bp, ax                  ; BP = the old pos
+    call os88ui_sbthumb         ; where it is going
+    jc .out                     ; no thumb: nothing moved
+    mov si, ax                  ; SI = the new top, CX its height
+    mov cx, dx
+    mov ax, [ds:di+12]          ; ...and where it was, by putting the old pos
+    push ax                     ; back for one call
+    mov [ds:di+12], bp
+    mov bx, di
+    call os88ui_sbthumb
+    pop word [ds:di+12]         ; (its CF cannot differ: the refusal is about
+                                ; total against fit, and a scroll moves neither)
+    cmp ax, si
+    je .out                     ; the track is short enough that this step does
+                                ; not move it: draw nothing
+
+    mov bp, ax                  ; BP = the old top, wanted after the fills
+    push cx
+    mov ax, si                  ; the NEW thumb first (see the header)
+    mov dx, cx
+    call os88ui_sbthdraw
+    pop cx
+
+    mov bx, bp                  ; BX/DX = the band it is leaving
+    mov dx, bp
+    add dx, cx
+    dec dx
+    cmp bp, si
+    jl .down
+    mov ax, si                  ; it moved UP: what it vacated is the strip
+    add ax, cx                  ; below the new one (= new bottom + 1)
+    cmp ax, bx
+    jle .grey                   ; disjoint: the whole old band is vacated
+    mov bx, ax
+    jmp short .grey
+.down:
+    mov ax, si                  ; it moved DOWN: the strip above it
+    dec ax
+    cmp ax, dx
+    jge .grey
+    mov dx, ax
+.grey:
+    cmp bx, dx
+    jg .out
+    mov ax, [ds:di+0]           ; the track, between the arrow-cell rules
+    inc ax
+    mov cx, [ds:di+4]
+    dec cx
+    UI_GRAY
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+%endif                          ; OS88UI_SCROLL
 
 
 %ifdef OS88UI_KERNEL
@@ -599,6 +1159,31 @@ section .bss
 ; their own comment and had it right; this is what forgetting it costs.
 ; -----------------------------------------------------------------------------
 os88ui_krect: resw 4
+
+%ifdef OS88UI_SCROLL
+; -----------------------------------------------------------------------------
+; os88ui_ksb - THE kernel's scroll-bar block, and there is one for the same
+; reason os88ui_krect is one: every kernel user of it is the UI task under the
+; gfx lock, and nothing in a drawing or a hit-testing path re-enters. A package
+; declares its own (the block is seven words of anything).
+; -----------------------------------------------------------------------------
+os88ui_ksb: resw 7
+%endif
+
+; -----------------------------------------------------------------------------
+; os88ui_armw - THE kernel's arm, and there is exactly one on purpose
+;
+; os88ui_krect's argument exactly: every kernel caller is the UI task under the
+; gfx lock, a gesture is one press and one release, and nothing in the dispatch
+; path re-enters - so two can never be in flight. The file dialog is MODAL
+; (SPEC.md 38.2), which makes it stronger still there: while one is up nothing
+; else is clickable at all.
+;
+; .bss and not .cold, for the reason the block above gives.
+; -----------------------------------------------------------------------------
+%ifdef OS88UI_ARM
+os88ui_armw: resw 1
+%endif
 section .cold
 
 ; -----------------------------------------------------------------------------
@@ -623,6 +1208,20 @@ section .cold
 os88ui_btn_f:
     call os88ui_btn
     retf
+%ifdef OS88UI_ARM
+; ...and the arm's three, for ctrl.inc - which is an ON-DEMAND MODULE
+; (SPEC.md 2.8) running from a heap claim with a CS of its own, so it reaches
+; everything here by far call exactly as it reaches os88ui_btn.
+os88ui_arm_f:
+    call os88ui_arm
+    retf
+os88ui_fire_f:
+    call os88ui_fire
+    retf
+os88ui_armed_f:
+    call os88ui_armed
+    retf
+%endif
 os88ui_glyph_f:
     call os88ui_glyph
     retf

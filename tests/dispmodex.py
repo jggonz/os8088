@@ -34,8 +34,7 @@ TITLE_H = 18
 FSXM_MODEX = 8
 VGA_CAPS = 0x01EF
 HERC_CAPS = 0x0011
-GAMES_ROW = 1           # B: root, sorted: APPS GAMES MEDIA SYSTEM
-MISSILE_ROW = 3         # GAMES, sorted, with '..' at slot 0 (SPEC.md 19.5)
+GAMES_DIR, MISSILE_PKG = "GAMES", "MISSILE.O88"
 
 
 def u16(b, i=0): return b[i] | (b[i + 1] << 8)
@@ -78,9 +77,9 @@ def report(m, where, want_caps, want_mono, bad):
         bad.append(where)
 
 
-def row(m, mo, disk, card, n):
+def row(m, mo, disk, card, name):
     bx, by, bw, bh = dispcp.win_rect(m, S, disk)
-    dispcp.open_row(m, mo, S, os88marty.settle, bx, by, n, card=card)
+    dispcp.open_named(m, mo, S, os88marty.settle, bx, by, name, card=card)
 
 
 def launch(m, mo, disk, card, up=False):
@@ -92,9 +91,9 @@ def launch(m, mo, disk, card, up=False):
     reading missile's bss offsets out of another package's segment answers a
     plausible 0x0000 rather than erroring."""
     if up:
-        row(m, mo, disk, card, 0)
-    row(m, mo, disk, card, GAMES_ROW)
-    row(m, mo, disk, card, MISSILE_ROW)
+        row(m, mo, disk, card, "..")       # SPEC.md 19.5's synthesized parent
+    row(m, mo, disk, card, GAMES_DIR)
+    row(m, mo, disk, card, MISSILE_PKG)
     time.sleep(3)
 
 

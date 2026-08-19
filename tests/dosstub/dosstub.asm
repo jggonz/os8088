@@ -152,6 +152,9 @@ start:
     mov cx, com_len
     rep movsb
 
+%ifdef PKTFAKE
+    call pkt_install            ; a PACKET DRIVER on int 60h, for /N
+%endif
     mov si, s_go
     call puts
 
@@ -206,6 +209,8 @@ int21:
     je  f_setdta
     cmp ah, 0x25
     je  f_setvec
+    cmp ah, 0x35
+    je  f_getvec
     cmp ah, 0x36
     je  f_dfree
     cmp ah, 0x3B
@@ -582,6 +587,24 @@ f_setdta:
 ; a stub that pretended to would be hiding whether the program can be reached
 ; by one. Nothing here raises a critical error, so it is never called - but
 ; the vector is where the program put it.
+; --- AH=35h: get interrupt vector. AL = the vector -> ES:BX -----------------
+; ne_probe (drivers/net/pktdrv.inc) walks 60h..80h with this looking for a
+; packet driver's signature, so /N needs it. The IVT is at 0:0 and this is
+; the whole of the call.
+f_getvec:
+    push ax
+    xor bx, bx
+    mov es, bx
+    mov bl, al
+    xor bh, bh
+    shl bx, 1
+    shl bx, 1
+    mov ax, [es:bx+2]
+    mov bx, [es:bx]
+    mov es, ax
+    pop ax
+    iret
+
 f_setvec:
     push bx
     push es
@@ -1606,6 +1629,106 @@ puthex8:
 .p:
     call putc
     ret
+
+%ifdef PKTFAKE
+; =============================================================================
+; A PACKET DRIVER THAT IS NOT ONE (make dosstub PKTFAKE=1)
+;
+; Enough of the FTP Software interface for drivers/net/pktdrv.inc to find it,
+; claim it and read a station address off it: the signature, driver_info,
+; access_type, get_address, send_pkt and release_type. It puts nothing on any
+; wire - there is no wire - so a stack over it gets no answer to anything and
+; DHCP times out, which is the point: what this proves is the half that is
+; ours (the probe, the class check, the handle, the MAC) on the machine the
+; program will really run on.
+;
+; **IT IS A KNOB AND NOT THE DEFAULT** for the stub's own reason: a harness
+; that answers where the real thing would not is one that hides the failure
+; it exists to find, and a plain `make dosstub` must still show /N refusing.
+; =============================================================================
+PKT_VEC     equ 0x60
+
+pkt_install:
+    push ax
+    push bx
+    push dx
+    push ds
+    xor ax, ax
+    mov ds, ax
+    mov bx, PKT_VEC * 4
+    mov word [bx], pkt_entry
+    mov ax, cs
+    mov [bx + 2], ax
+    pop ds
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; The signature the spec puts at offset 3 of the handler, which is why the
+; three bytes in front of it are a jump over it.
+pkt_entry:
+    nop                         ; **THREE BYTES, because the signature is at
+    jmp short pkt_go            ; OFFSET 3** and `jmp short` is two of them -
+    db 'PKT DRVR', 0            ; a real driver gets there with a near jump
+pkt_go:
+    cmp ah, 1
+    je  pkt_info
+    cmp ah, 2
+    je  pkt_access
+    cmp ah, 3
+    je  pkt_release
+    cmp ah, 4
+    je  pkt_send
+    cmp ah, 6
+    je  pkt_addr
+    stc                         ; anything else: BAD_COMMAND, which is what a
+    mov dh, 2                   ; driver answers rather than pretending
+    jmp short pkt_ret
+pkt_info:
+    mov bx, 0x0109              ; version
+    mov ch, 1                   ; class 1: Ethernet - what the probe checks
+    mov dx, 1                   ; type
+    mov cl, 0                   ; number
+    mov al, 2                   ; functionality: basic
+    clc
+    jmp short pkt_ret
+pkt_access:
+    mov ax, 0x4242              ; a handle, and the probe only keeps it
+    clc
+    jmp short pkt_ret
+pkt_release:
+    clc
+    jmp short pkt_ret
+pkt_send:
+    clc                         ; taken, and dropped on the floor
+    jmp short pkt_ret
+pkt_addr:
+    push si
+    push di
+    push cx
+    mov si, pkt_mac
+    cld
+.c:
+    jcxz .done
+    mov al, [cs:si]
+    mov [es:di], al
+    inc si
+    inc di
+    dec cx
+    jmp short .c
+.done:
+    pop cx
+    pop di
+    pop si
+    clc
+pkt_ret:
+    retf 2                      ; **retf 2, NOT iret**: the packet driver
+                                ; returns its CARRY to the caller, and an
+                                ; iret would put the flags back the way they
+                                ; were and lose it
+pkt_mac:    db 0x52,0x54,0x00,0x12,0x34,0x56
+%endif
 
 ; =============================================================================
 s_banner:   db 13,10,'dosstub: just enough DOS to run a .COM',13,10,0

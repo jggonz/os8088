@@ -2,9 +2,9 @@
  * os8088 - apps/cword/cword.c     Microsoft Word 1.1a, written in C
  *
  * A native reimplementation of Microsoft Word for Windows 1.1a ("Opus") as an
- * os8088 package, compiled from C by the toolchain of SPEC.md 70 and split
- * across two segments by the overlay of SPEC.md 70.14. The binding contract is
- * SPEC.md 70.12; the reasoning behind the UI it reproduces is docs/WORD-PLAN.md
+ * os8088 package, compiled from C by the toolchain of SPEC.md 73 and split
+ * across two segments by the overlay of SPEC.md 73.14. The binding contract is
+ * SPEC.md 73.12; the reasoning behind the UI it reproduces is docs/WORD-PLAN.md
  * and SPEC.md 68, which describe the same product ported by hand into assembly.
  *
  * THE USER INTERFACE IS OPUS'S, TAKEN FROM THE SOURCE AND NOT FROM MEMORY.
@@ -27,7 +27,7 @@
  * CSL compiler against the Windows 2.x API, and none of that exists here. What
  * a user touches is what carries across, and it carries across exactly.
  *
- * IT IS NOT SPEC.md 68's PORT AND SHARES NOTHING WITH IT (SPEC.md 70.12). That
+ * IT IS NOT SPEC.md 68's PORT AND SHARES NOTHING WITH IT (SPEC.md 73.12). That
  * one is apps/word, hand-written assembly, package WORD, `.DOC`, build/word*.img
  * and vm/xt-word; this one is apps/cword, package CWORD, `.RTF`,
  * build/cword*.img and vm/386-c-word. Two programs may have the same ambition;
@@ -47,7 +47,7 @@
  * 4.77 MHz 8088.
  *
  * TWO THINGS HAVE BEEN ADDED SINCE AND NEITHER CHANGES THAT. View > Page
- * (SPEC.md 70.12.1) wraps to a 60-cell SHEET instead of to the window, which is
+ * (SPEC.md 73.12.1) wraps to a 60-cell SHEET instead of to the window, which is
  * two numbers in cw_layout() and a pair of rules drawn outside the text column.
  * And the ribbon's Font box now lists the machine's typefaces off the system
  * disk's FONTS/ folder and SETS THE DOCUMENT IN ONE (SPEC.md 19.8, 67.12.2) -
@@ -60,7 +60,7 @@
  * ---------------------------------------------------------------------------
  * A package's image and bss share 61,440 bytes and that ceiling IS the segment
  * (SPEC.md 33). The assembly port spends 54,952 of it. C costs two to three
- * times as much image for the same work (SPEC.md 70.9), so this program does
+ * times as much image for the same work (SPEC.md 73.9), so this program does
  * not fit in one segment and could not be made to.
  *
  * So it is in two. Everything on the redraw path - layout, wrap, the glass
@@ -74,7 +74,7 @@
  * keystroke touches and what a menu command touches, so nothing in the inner
  * loop ever pays for it.
  *
- * THAT LINE MOVED WHEN THE TYPEFACES ARRIVED (SPEC.md 70.12.2), and the shape
+ * THAT LINE MOVED WHEN THE TYPEFACES ARRIVED (SPEC.md 73.12.2), and the shape
  * of the move is worth reading before adding anything here: the resident image
  * got SMALLER while the program grew a second view and a typeface engine,
  * because everything that runs once per command went out. There are 971 bytes
@@ -164,7 +164,7 @@
  *  3. NO long, NO float, NO bit-field.
  *  4. SMALL FRAMES - no local arrays; the build prints every frame size.
  *
- * AND ONE RULE OF THIS PROGRAM'S OWN, which SPEC.md 70.11 states generally and
+ * AND ONE RULE OF THIS PROGRAM'S OWN, which SPEC.md 73.11 states generally and
  * this file meets in three places: THE PER-CHARACTER LOOP IS ASSEMBLY. A
  * proportional layout wants an advance per character of every word the wrap
  * measures, a pen per cell of every row drawn, and one glyph divided in half
@@ -190,7 +190,7 @@
  * ========================================================================*/
 #define CW_COLS_MAX  127                /* cells a row may hold. IT WENT 76 ->
                                          * 127 WHEN A FACE COULD BE CHOSEN
-                                         * (SPEC.md 70.12.2): the narrowest
+                                         * (SPEC.md 73.12.2): the narrowest
                                          * advance apps/os88type.inc permits is
                                          * TY_MINADV (4), so a row of narrow
                                          * glyphs holds more cells than it holds
@@ -227,7 +227,7 @@
                                          * when it cannot prove one free;
                                          * `row * 128` is a shift. The wasted
                                          * bytes are bss, the cheap half of the
-                                         * ceiling (SPEC.md 70.9) */
+                                         * ceiling (SPEC.md 73.9) */
 #define CW_BAND_PX   736                /* the compose band's width in pixels -
                                          * apps/os88type.inc's TY_STRIDE (92
                                          * bytes) times 8. It covers the widest
@@ -406,7 +406,7 @@ static int cw_pap_n = 1;                       /* entry 0 is the default and
 static struct os88_size cw_sz;          /* the live content box */
 static struct os88_pt   cw_org;
 
-/* THE TEXT COLUMN AND THE CHROME ARE TWO ORIGINS AND NOT ONE (SPEC.md 70.12.1).
+/* THE TEXT COLUMN AND THE CHROME ARE TWO ORIGINS AND NOT ONE (SPEC.md 73.12.1).
  * They are equal in Draft view. In Page view the text narrows to the sheet and
  * moves to the middle of the window, and the menu bar, the ribbon and the
  * status line must NOT go with it - so everything that draws the document reads
@@ -445,7 +445,7 @@ static int cw_pap_now;                  /* the PAP new paragraphs get. NOT
                                          * `cw_pap`: cwrtfio.c owns that name
                                          * for the RTF reader's property
                                          * record, and one translation unit
-                                         * means one namespace (SPEC.md 70.1) */
+                                         * means one namespace (SPEC.md 73.1) */
 static int cw_mod;                      /* changed since the last save */
 static int cw_ovr;                      /* overtype (Ins), status lamp OVR */
 static int cw_ext;                      /* F8 extend-selection, lamp EXT */
@@ -453,7 +453,7 @@ static int cw_showp;                    /* Show paragraph marks */
 static int cw_page;                     /* View > Page rather than Draft */
 
 /* ==========================================================================
- * THE CHOSEN FACE (SPEC.md 70.12.2)
+ * THE CHOSEN FACE (SPEC.md 73.12.2)
  *
  * cw_prop IS THE ONE FLAG, and everything that used to be 8k asks cw_cx() /
  * cw_xc() instead of shifting. With it clear those two are exactly the shifts
@@ -492,7 +492,7 @@ static int cw_fl_rows;                  /* ...and how many items a column of it
                                          * holds, which is the window's height
                                          * rather than the list's length: past
                                          * that it wraps into a second column
-                                         * (SPEC.md 70.12.2) */
+                                         * (SPEC.md 73.12.2) */
 static int cw_fl_x1;                    /* ...and its rectangle, banked once */
 static int cw_fl_y1;
 static int cw_fl_x2;
@@ -633,7 +633,7 @@ static int cw_col;
 static int cw_pg;
 
 /* ==========================================================================
- * THE ONE PIECE OF ASSEMBLY (apps/cword/cword.asm, SPEC.md 70.11)
+ * THE ONE PIECE OF ASSEMBLY (apps/cword/cword.asm, SPEC.md 73.11)
  * ========================================================================*/
 void cw_memmove(void *dst, const void *src, unsigned n);
 
@@ -647,7 +647,7 @@ void cw_memmove(void *dst, const void *src, unsigned n);
  *
  * ZERO MEANS IT DID NOT HAPPEN, in every one that can be refused: the library
  * reports refusal in the carry flag and C has no carry, so the shims convert
- * it once, to the same convention SPEC.md 70.14's overlay doors already use.
+ * it once, to the same convention SPEC.md 73.14's overlay doors already use.
  * ========================================================================*/
 void cw_ty_init(void);
 int  cw_ty_rows(void);                  /* the current face's cell height */
@@ -691,7 +691,7 @@ static void cw_wrap(int s, int pap);
 static int  cw_pap_of(int para_end);
 static void cw_toast(const char *s);
 
-/* THE OVERLAY'S DOORS (SPEC.md 70.14). Every one of these is named `ovl_*`,
+/* THE OVERLAY'S DOORS (SPEC.md 73.14). Every one of these is named `ovl_*`,
  * so tools/cc8086.py emits its code into CWORD.OVL instead of into this
  * segment and turns each call below into a far call preceded by a
  * load-on-demand check.
@@ -931,7 +931,7 @@ static int cw_layout(void *win)
     x = cw_bx;
 
     /* VIEW > PAGE NARROWS THE TEXT COLUMN TO THE SHEET and centres it, which
-     * is the whole of the mode (SPEC.md 70.12.1): every wrap decision, indent,
+     * is the whole of the mode (SPEC.md 73.12.1): every wrap decision, indent,
      * caret x and click hit test below derives from this pair and is right for
      * the sheet without knowing a sheet exists. The centring stays on a
      * multiple of 8 so the fixed face keeps font_run's single-store path, and a
@@ -948,7 +948,7 @@ static int cw_layout(void *win)
      * kernel's cell it still is, exactly; in a face whose narrowest advance is
      * TY_MINADV a row of narrow glyphs holds more cells than the column holds
      * byte columns, and CW_COLS_MAX is what bounds the row buffer, the shadow
-     * and the delta diff (SPEC.md 70.12.2). */
+     * and the delta diff (SPEC.md 73.12.2). */
     if (cw_prop) {
         c = w / 4;                      /* TY_MINADV, the floor SPEC.md 6.4
                                          * permits and ty_open enforces */
@@ -1016,7 +1016,7 @@ static int cw_cx(int cell)
      * reads most naturally and is not cosmetic: an 8086 has no `imul reg, imm`,
      * so tools/cc8086.py lowers `cell * 8` to a shift chain that WRITES FLAGS,
      * and it refuses the site outright when it cannot prove the flags dead
-     * (SPEC.md 70.6). Written as `if (!cw_prop) return cell * 8;` the multiply
+     * (SPEC.md 73.6). Written as `if (!cw_prop) return cell * 8;` the multiply
      * is the last thing before a branch and the build stops naming this line.
      * With the test after it, the compare that follows kills the flags and the
      * lowering is provably safe. */
@@ -1052,7 +1052,7 @@ static void cw_wrap(int s, int pap)
     w = cw_pap_width(pap, first);       /* pixels */
 
     /* HOW MANY CHARACTERS FIT, measured rather than divided. cw_ty_fit() is
-     * apps/os88type.inc's own walk (SPEC.md 70.11 - the per-character loop is
+     * apps/os88type.inc's own walk (SPEC.md 73.11 - the per-character loop is
      * assembly and the C calls it once), and in the kernel's cell it answers
      * exactly `w / 8` because every advance there is 8.
      *
@@ -1494,7 +1494,7 @@ static int cw_build_row(int r)
             n++;
         }
     }
-    /* THE PIXEL MAP, ONE CALL A ROW (SPEC.md 70.11, 67.12.2). It has to come
+    /* THE PIXEL MAP, ONE CALL A ROW (SPEC.md 73.11, 67.12.2). It has to come
      * before the indent, because centring and right-aligning ask how wide the
      * row's text actually is - which in a chosen face is cw_px[n] and not
      * n * 8 - and it is measured over cw_row[] rather than over the document
@@ -1809,7 +1809,7 @@ static void cw_sheet(void)
  *
  * Two 8-pixel margin strips whitened and cw_sheet() again: four calls, paid
  * only in Page view and only on a scroll. A keystroke that does not scroll the
- * view still costs what SPEC.md 70.12 says it costs. */
+ * view still costs what SPEC.md 73.12 says it costs. */
 static void cw_sheet_scrolled(void)
 {
     int y1;
@@ -2090,7 +2090,7 @@ static void cw_show(void *win, int lo, int hi, int delta)
              * fill bounded by the column left both of them on the glass when
              * the view went back to Draft - the text redrawn correctly with two
              * vertical rules standing through it. Same one call, wider span
-             * (SPEC.md 70.12.1). */
+             * (SPEC.md 73.12.1). */
             os88_set_color(OS88_WHITE);
             os88_gfx_fill(cw_bx, cw_ty - 1, cw_bx + cw_bcols * 8 - 1,
                           cw_ty + (cw_rows - 1) * cw_pitch + cw_gh + 1);
@@ -2516,7 +2516,7 @@ static void ovl_hang(void *win, int on)
                                          * and the keyboard map */
 #include "cwovl.c"                      /* ...and everything that runs once per
                                          * command, which is in the OTHER
-                                         * segment (SPEC.md 70.14) */
+                                         * segment (SPEC.md 73.14) */
 
 /* ==========================================================================
  * THE CALLBACKS
@@ -2561,7 +2561,7 @@ void *os88_main(void)
      * bss and bss arrives zeroed, so entry 0 already IS left-aligned, single
      * spaced and unindented and the search found it. Saying so is worth more
      * than the call, and the call could not stay - ovl_pap_find() is module code
-     * now (SPEC.md 70.12.2) and os88_main() runs before there is an instance to
+     * now (SPEC.md 73.12.2) and os88_main() runs before there is an instance to
      * load a module for (SPEC.md 20.2). */
     cw_doc_clear();
     cw_cur = 0;
@@ -2582,7 +2582,7 @@ void *os88_main(void)
      * nine menus are drawn inside its own window because MENU_APPMAX is five
      * (SPEC.md 12.2, 65.2). About there opens the same box Help > About does,
      * and the empty set above it is what makes the bar read the product's name
-     * rather than the file's (SPEC.md 70.12). */
+     * rather than the file's (SPEC.md 73.12). */
     os88_menu_set(win, (struct os88_menuset *)&cw_kmenus);
     os88_about_set(win);
     os88_assoc_set("RTF", "CWORD");     /* double-clicking a document on the

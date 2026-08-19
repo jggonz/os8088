@@ -2731,9 +2731,16 @@ tui_draw_all:
     mov si, tui_s_keys2
     mov dx, 88
     call tui_cline
-    mov si, tui_s_anykey
-    mov dx, 108
-    call tui_cline
+    mov si, tui_s_anykey            ; ...and NOT while 11 kHz is picked, where
+    call trk_fs_ok                  ; F and the click are both refused
+    jnc .hint                       ; (SPEC.md 45.9.3). View > Fullscreen is
+    mov si, tui_s_nofs              ; greyed on the same predicate; a legend
+.hint:                              ; is the one place with no greying to do
+    mov dx, 108                     ; the explaining, so it says the other
+    call tui_cline                  ; thing instead. The tree has been here
+                                    ; before: trk_s_stopdf's own comment is
+                                    ; about a legend that went on advertising
+                                    ; a key it was written to stop advertising
     call tui_msg_draw
 .about:
     cmp byte [trk_abon], 0
@@ -3185,6 +3192,7 @@ tui_s_anykey:  db 'F full  K rate  D log  W write  M mark', 0
 %else
 tui_s_anykey:  db 'Press F or click for fullscreen', 0
 %endif
+tui_s_nofs:    db 'Full screen needs Rate 5.5 kHz', 0
 ; Two status legends, because L IS REFUSED on the exclusive surface
 ; (SPEC.md 53.7 - the file dialog's answer comes back through an event ladder a
 ; bracket is not running) and offering a key that answers "not here" is worse

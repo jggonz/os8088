@@ -1,0 +1,15 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+<html><head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>UTF-8 fold test</title>
+</head><body>
+<h1>UTF-8 fold test</h1>
+<p>The same words as torture.htm section 7, encoded as UTF-8 instead:
+Köln, naïve, Zürich, señor, café, Æsop, ß, ½, µ, ©, £, ×.</p>
+<p>Punctuation a proxy will emit and the cell font has no glyph for:
+“curly quotes”, ‘single’, an em—dash, an en–dash, ellipsis…,
+a non-breaking space, and a bullet •.</p>
+<p>Beyond the Latin-1 range entirely, and so beyond any fold:
+☕ € ☃ 中文 Здравствуй.</p>
+<p>A truncated sequence at the end of a buffer must not run off it: â</p>
+</body></html>

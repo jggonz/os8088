@@ -55,6 +55,16 @@ HDP_B1X      equ 78             ; 'Mount' / 'Unmount'
 HDP_B2X      equ 154            ; 'Install' (SPEC.md 52.10.4)
 HDP_BW0      equ 64
 HDP_BW1      equ 72
+; --- control ids (SPEC.md 13.8.4) -------------------------------------------
+; 1-based so 0 can mean "nothing is down", and per PAGE, exactly as ctrl.inc's
+; are: changing the page needs a click in the item list and the button is
+; already down, so the selection cannot move between the press and the release.
+HDP_CFORMAT  equ 1
+HDP_CMOUNT   equ 2
+HDP_CINSTALL equ 3
+HDP_CMINUS   equ 4
+HDP_CPLUS    equ 5
+
 HDP_BW2      equ 64             ; 154 + 64 = 218, inside the 221px pane - the
                                 ; same arithmetic the caption column obeys
 HDP_CAPY     equ 104
@@ -217,9 +227,11 @@ hd_page_paint:
     ; --- the +/- pair ---------------------------------------------------------
     mov si, hd_s_minus
     mov ax, HDP_MX
+    mov cl, HDP_CMINUS
     call hd_page_pm
     mov si, hd_s_plus
     mov ax, HDP_PX
+    mov cl, HDP_CPLUS
     call hd_page_pm
 
     ; --- the two buttons ------------------------------------------------------
@@ -282,6 +294,13 @@ hd_page_button:
     push ax
     push bx
     push si
+    mov al, cl                  ; ...and PRESSED if it is the one being held.
+    inc al                      ; ASKED FIRST, because CL is the button index
+    call hd_isdown              ; on the way in and the DIS flag on the way
+    mov dx, 0                   ; out - two meanings, one register, four
+    jne .nodn                   ; instructions apart
+    mov dx, OS88UI_DOWN
+.nodn:
     mov al, cl
     call hd_btn_ok              ; CF = 1 = this control is disabled, which is
     mov cx, 0                   ; the shape the shared control's flag takes:
@@ -306,8 +325,12 @@ hd_page_button:
     add ax, HDP_BH - 1
     mov [hd_pbrect+6], ax
     mov di, cx
-    mov bx, hd_pbrect           ; no OS88UI_FILL: hd_page_repaint white-fills
-    call os88ui_btn             ; the pane before this ever runs twice - and
+    or di, dx                   ; DIS | DOWN - and DIS outranks it inside the
+                                ; control, so a greyed button never says it
+                                ; will fire (SPEC.md 13.8)
+    mov bx, hd_pbrect           ; OS88UI_FILL: the ground behind this is the
+    or di, OS88UI_FILL          ; pane's white on a full paint and a PRESSED
+    call os88ui_btn             ; button on a release, and only the fill covers
                                 ; the control leaves the pen live by itself,
                                 ; so the clc/GFX_PEN that used to close this
                                 ; routine is gone
@@ -320,6 +343,263 @@ hd_page_button:
     ret
 
 hd_pbrect:  dw 0, 0, 0, 0       ; the button being drawn, screen coordinates
+
+; --- SPEC.md 13.8.4: this page acts on the RELEASE ---------------------------
+; THE LADDER IS THE HIT TEST, which is ctrl.inc's own answer (SPEC.md 13.8.3)
+; and for its reason: splitting hd_page_click into a hit test and an action
+; would be a SECOND description of five controls' geometry that then has to
+; agree with two painters. So the ladder is RUN to identify, and [hd_pgpr]
+; (hd_pgpr - `hd_probe' is the HARDWARE probe) says which of three a pass is:
+;
+;   0  act - the release, once it knows the pointer is still on the control
+;   1  identify only - the drag, and the release's own hit test
+;   2  the PRESS: a row or a field still SELECTS (a safe prefix action keeps
+;      the press, SPEC.md 13.6) while a button only reports its id
+;
+; That third mode is the whole reason hd_ctl takes an id of 0: it is what a
+; site that is not an armable control passes, and it is the only thing that
+; can tell the two species apart in one ladder.
+hd_pgpr:    db 0
+hd_ctlid:   db 0                ; ...and what the pass resolved to
+hd_down:    db 0                ; which control is DRAWN pressed, 0 = none
+
+; -----------------------------------------------------------------------------
+; hd_ctl - a ladder site reports itself
+; in:  AL = this site's id, or 0 for a site that is not an armable control
+; out: CF = 1: return without acting. CF = 0: act. Every register preserved.
+; -----------------------------------------------------------------------------
+hd_ctl:
+    cmp byte [hd_pgpr], 0
+    je .act
+    or al, al
+    jz .row
+    mov [hd_ctlid], al
+    stc
+    ret
+.row:
+    cmp byte [hd_pgpr], 2      ; the press: rows and fields still select
+    je .act
+    stc
+    ret
+.act:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_isdown - is control AL the one drawn pressed?
+; out: ZF = 1 if it is; every register preserved
+; -----------------------------------------------------------------------------
+hd_isdown:
+    cmp al, [hd_down]
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_page_probe - run the ladder to IDENTIFY
+; in:  DI = pane left, DX = pane top, CX/BX = pane-relative point, AL = the
+;      mode wanted (1 = identify only, 2 = the press)
+; out: AL = the control the point landed on, 0 = none
+; -----------------------------------------------------------------------------
+hd_page_probe:
+    mov [hd_pgpr], al
+    mov byte [hd_ctlid], 0
+    call hd_page_ladder
+    mov byte [hd_pgpr], 0      ; cleared on EVERY path out, not by the three
+    mov al, [hd_ctlid]          ; callers: a page left probing would take no
+    ret                         ; clicks at all for the rest of the session
+
+; -----------------------------------------------------------------------------
+; hd_page_click - DSV_CPCLICK: the PRESS
+; in:  DI = pane left, DX = pane top, CX/BX = pane-relative point
+; out: nothing
+;
+; A row or a field still SELECTS here - a safe prefix action keeps the press
+; (SPEC.md 13.6) - and a BUTTON only arms and draws itself down. That split is
+; what mode 2 is for, and it is the whole difference between this page and a
+; window: a window can afford two ladders, a page ABI hands over one entry.
+; -----------------------------------------------------------------------------
+hd_page_click:
+    push ax
+    push bp
+    mov al, 2
+    call hd_page_probe
+    or al, al
+    jz .out
+    mov bp, dx                  ; the painters take the pane top in BP
+    xor ah, ah
+    call os88ui_arm
+    call hd_setdown             ; ...and the pressed look
+.out:
+    pop bp
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_ctlpaint - redraw ONE control, in whatever state [hd_down] says
+; in:  AL = a control id, DI = pane left, BP = pane top; the lock is held
+; out: nothing (all registers preserved)
+;
+; NOT hd_page_repaint: that erases the whole pane, so driving the pressed look
+; through it would white 221x131 and letter it again on every press and every
+; slide across a control - PERFORMANCE.md's double-draw flash, introduced by
+; the feature whose whole argument is that it does not flash.
+; -----------------------------------------------------------------------------
+hd_ctlpaint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    cmp al, HDP_CMINUS
+    jb .btn
+    mov cl, al                  ; the +/- pair; CL is the id hd_page_pm reads
+    mov si, hd_s_minus
+    mov ax, HDP_MX
+    cmp cl, HDP_CMINUS
+    je .pm
+    mov si, hd_s_plus
+    mov ax, HDP_PX
+.pm:
+    call hd_page_pm
+    jmp short .out
+.btn:
+    dec al                      ; the three framed buttons, 0-based
+    mov cl, al
+    mov si, hd_s_format
+    mov ax, HDP_B0X
+    mov bx, HDP_BW0
+    or cl, cl
+    jz .draw
+    cmp cl, 2
+    je .inst
+    mov si, hd_s_mount          ; Mount says Unmount when this device already
+    call hd_mounted             ; has a volume (hd_page_paint's own branch)
+    jc .m
+    mov si, hd_s_unmount
+.m:
+    mov ax, HDP_B1X
+    mov bx, HDP_BW1
+    jmp short .draw
+.inst:
+    mov si, hd_s_install
+    mov ax, HDP_B2X
+    mov bx, HDP_BW2
+.draw:
+    call hd_page_button
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_setdown - AL becomes the control drawn pressed (0 = none), and it DRAWS
+; in:  AL = an id or 0; DI = pane left, BP = pane top; the lock is held
+; out: nothing (all registers preserved)
+;
+; Draws only what CHANGED - the control being let go and the one being taken -
+; so a pointer moving inside the control it pressed costs one compare and no
+; pixels (SPEC.md 13.8.1).
+; -----------------------------------------------------------------------------
+hd_setdown:
+    push ax
+    cmp al, [hd_down]
+    je .out
+    push ax
+    mov al, [hd_down]           ; ...the one being let go, upright again
+    or al, al
+    jz .take
+    mov byte [hd_down], 0
+    call hd_ctlpaint
+.take:
+    pop ax
+    mov [hd_down], al
+    or al, al
+    jz .out
+    call hd_ctlpaint            ; ...and the one being taken, pressed
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_page_up - DSV_CPUP (SPEC.md 13.8.4). Same arguments as DSV_CPCLICK.
+; -----------------------------------------------------------------------------
+hd_page_up:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    call os88ui_fire            ; AX = what the press armed, and it is CLEARED
+    or ax, ax
+    jz .out
+    mov si, ax                  ; SI = the armed control. NOT BX and NOT the
+                                ; stack: BX is the ladder's own pane-relative
+                                ; Y, so banking the id there hands the second
+                                ; probe below a click at y = 2
+    mov bp, dx                  ; BP = pane top, the painters' convention
+    mov al, 1                   ; identify only
+    call hd_page_probe
+    xor ah, ah
+    cmp ax, si
+    je .fire
+    xor al, al                  ; a different control, or none: CANCELLED
+    call hd_setdown
+    jmp short .out
+.fire:
+    mov byte [hd_down], 0       ; NOT hd_setdown: every path below repaints the
+                                ; pane, which draws this control upright with
+                                ; it - and drawing it upright here first is
+                                ; PERFORMANCE.md's double-draw
+    xor al, al                  ; ...and now for real
+    call hd_page_probe
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_page_drag - DSV_CPDRAG (SPEC.md 13.8.1/13.8.4)
+; -----------------------------------------------------------------------------
+hd_page_drag:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    call os88ui_armed           ; PEEK: the arm is the release's to spend
+    or ax, ax
+    jz .out
+    mov si, ax                  ; SI, for hd_page_up's reason: BX is the
+    mov bp, dx                  ; ladder's pane-relative y
+    mov al, 1
+    call hd_page_probe          ; AL = what the pointer is over now
+    xor ah, ah
+    cmp ax, si
+    je .set
+    xor al, al                  ; off it: nothing is down
+.set:
+    call hd_setdown             ; ...which draws only if that CHANGED
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 
 ; -----------------------------------------------------------------------------
 ; hd_page_pm - one of the two adjust buttons (module internal)
@@ -350,8 +630,14 @@ hd_page_pm:
     mov [hd_pbrect+2], ax
     add ax, HDP_FH + 1
     mov [hd_pbrect+6], ax
-    xor di, di                  ; always live, never the default, and the row
-                                ; behind it is erased by hd_page_repaint
+    mov di, OS88UI_FILL         ; always live, never the default - and it FILLS
+                                ; for the reason hd_page_button does: a
+                                ; release redraws it over a pressed one
+    mov al, cl                  ; CL = the id, set by the caller (nothing here
+    call hd_isdown              ; overwrites CX, unlike hd_page_button)
+    jne .nodn
+    or di, OS88UI_DOWN
+.nodn:
     mov bx, hd_pbrect
     call os88ui_btn
     pop di
@@ -619,12 +905,15 @@ hd_dev_line:
     ret
 
 ; -----------------------------------------------------------------------------
-; hd_page_click - DSV_CPCLICK
+; hd_page_ladder - the page's one coordinate ladder (module internal)
 ; in:  DI = pane left, DX = pane top, CX = pane-relative x, BX = relative y
-;      (the gfx lock is HELD)
+;      (the gfx lock is HELD); [hd_pgpr] says whether this pass ACTS
 ; out: nothing
+;
+; THE LADDER IS THE HIT TEST (SPEC.md 13.8.4), so the press, the drag and the
+; release all run this one description rather than three that have to agree.
 ; -----------------------------------------------------------------------------
-hd_page_click:
+hd_page_ladder:
     push ax
     push bx
     push cx
@@ -648,6 +937,10 @@ hd_page_click:
     jmp .done
 
 .devrow:
+    xor al, al                  ; NOT an armable control: a row SELECTS, which
+    call hd_ctl                 ; is a safe prefix action and keeps the press
+    jc .done                    ; (SPEC.md 13.6) - but it must not happen a
+                                ; second time on the release's own hit test
     mov ax, dx
     sub ax, HDP_R0Y - 2
     mov bl, HDP_ROWH
@@ -668,14 +961,23 @@ hd_page_click:
     jl .done
     cmp cx, HDP_PX + HDP_BTW
     jge .done
+    mov al, HDP_CPLUS
+    call hd_ctl
+    jc .done
     mov al, 1
     call hd_page_adjust
     jmp .repaint
 .minus:
+    mov al, HDP_CMINUS
+    call hd_ctl
+    jc .done
     mov al, 0
     call hd_page_adjust
     jmp .repaint
 .pickfield:
+    xor al, al                  ; a field SELECTS too - .devrow's reasoning
+    call hd_ctl
+    jc .done
     xor bl, bl
 .fscan:
     mov al, bl
@@ -711,6 +1013,10 @@ hd_page_click:
     cmp cx, HDP_B2X + HDP_BW2
     jge .done
 .hit:
+    mov al, bl                  ; ids are 1-based (0 means "nothing is down"),
+    inc al                      ; and BL is the 0-based index hd_btn_ok wants
+    call hd_ctl
+    jc .done
     mov al, bl
     call hd_btn_ok
     jc .refused

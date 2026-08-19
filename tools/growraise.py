@@ -58,7 +58,13 @@ from os88geom import drive_pt, row_xy, top, windows, winptr
 
 VOL_B = "B"
 ROW_GAMES = 1               # B: root, sorted: APPS GAMES MEDIA SYSTEM
-ROW_MINES = 2               # GAMES/, sorted: ARKANOID MINES MISSILE SOLITAIR
+ROW_MINES = 3               # GAMES/: `..` is slot 0 (SPEC.md 19.5) and the
+                            # rest sort ARKANOID CYCLONE MINES MISSILE
+                            # SOLITAIR TAMEGRAM. It was 2 and CYCLONE landed
+                            # in front of MINES afterwards, so this launched
+                            # the wrong game and reported "Minesweeper did not
+                            # launch" - a row ORDINAL is exactly what SPEC.md
+                            # 19.4 says nothing may be built on
 
 
 def named(m, title):

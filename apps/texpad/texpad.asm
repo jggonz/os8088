@@ -87,6 +87,13 @@ tp_entry:
     call OSAPI_MENU_SET
     pop si
     mov [tp_win], bx
+    push ax                     ; SPEC.md 13.7/13.8.1: the bar's seven fire on
+    mov ax, tp_onup             ; the RELEASE and follow the pointer between
+    call OSAPI_WM_ONMOUSEUP     ; the edges. Not template words, so they are
+    mov ax, tp_ondrag           ; set after wm_create like MENU_SET above
+    call OSAPI_WM_ONDRAG
+    pop ax
+    mov byte [tp_bdown], 0
     mov al, 1
     call OSAPI_WM_SIZABLE
     mov al, 1
@@ -897,7 +904,22 @@ tp_fmt_stat:
     pop ax
     ret
 
-tp_draw_bar:
+; --- SPEC.md 13.8: the top row acts on the RELEASE and draws itself down ----
+; The seven rects were already one description shared by the drawing and
+; os88ui_bhit; what was missing is that the press ACTED. None of these has a
+; safe prefix action - Setup opens a window, the four cyclers change a
+; document's page setup, and the arrows move a page - so all seven want the
+; release (SPEC.md 13.6).
+;
+; tp_btn1 is the per-control painter the down state needs: redrawing the whole
+; bar on every press and every slide would re-letter the status line beside it
+; and is PERFORMANCE.md's double-draw flash.
+tp_bdown:   db 0                ; which of the seven is DRAWN pressed, 0 = none
+tp_btab:    dw tp_r_set, tp_r_cls, tp_r_mar, tp_r_gut, tp_r_pad
+            dw tp_r_prev, tp_r_next
+TP_NBTN     equ 7
+
+tp_btn1:
     push ax
     push bx
     push cx
@@ -905,58 +927,140 @@ tp_draw_bar:
     push si
     push di
     mov di, OS88UI_FILL
-    mov bx, tp_r_set
+    cmp al, [tp_bdown]
+    jne .nodn
+    or di, OS88UI_DOWN
+.nodn:
+    dec al
+    xor ah, ah
+    mov bx, ax
+    shl bx, 1
+    mov bx, [tp_btab+bx]        ; BX = this button's rect
+    or al, al
+    jnz .b1
     mov si, tp_s_set
-    call os88ui_btn
-    mov bx, tp_r_cls
+    jmp .draw
+.b1:
+    cmp al, 1
+    jne .b2
     mov si, tp_s_ltr
     cmp byte [tp_psize], 0
-    je .sz
+    je .draw
     mov si, tp_s_leg
     cmp byte [tp_psize], 1
-    je .sz
+    je .draw
     mov si, tp_s_a4s
     cmp byte [tp_psize], 2
-    je .sz
+    je .draw
     mov si, tp_s_a5s
-.sz:
-    call os88ui_btn
-    mov bx, tp_r_mar
+    jmp .draw
+.b2:
+    cmp al, 2
+    jne .b3
     mov si, tp_s_sgl
     cmp byte [tp_bind], 0
-    je .bd
+    je .draw
     mov si, tp_s_fac
     cmp byte [tp_bind], 1
-    je .bd
+    je .draw
     mov si, tp_s_opp
-.bd:
-    call os88ui_btn
-    mov bx, tp_r_gut
+    jmp .draw
+.b3:
+    cmp al, 3
+    jne .b4
     mov si, tp_s_g0
     cmp byte [tp_gutter], 0
-    je .g
+    je .draw
     mov si, tp_s_g1
     cmp byte [tp_gutter], 1
-    je .g
+    je .draw
     mov si, tp_s_g2
-.g:
-    call os88ui_btn
-    mov bx, tp_r_pad
+    jmp .draw
+.b4:
+    cmp al, 4
+    jne .b5
     mov si, tp_s_pc
     cmp byte [tp_pad], 0
-    je .p
+    je .draw
     mov si, tp_s_pn
     cmp byte [tp_pad], 1
-    je .p
+    je .draw
     mov si, tp_s_pl
-.p:
-    call os88ui_btn
-    mov bx, tp_r_prev
+    jmp .draw
+.b5:
     mov si, tp_s_lt
-    call os88ui_btn
-    mov bx, tp_r_next
+    cmp al, 5
+    je .draw
     mov si, tp_s_gt
+.draw:
     call os88ui_btn
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tp_bhit - which of the seven is this SCREEN point in? (0 = none)
+; -----------------------------------------------------------------------------
+tp_bhit:
+    push bx
+    push si
+    mov al, 1
+.next:
+    mov si, ax
+    dec si
+    shl si, 1
+    mov bx, [tp_btab+si]
+    call os88ui_bhit
+    jnc .out
+    inc al
+    cmp al, TP_NBTN
+    jbe .next
+    xor al, al
+.out:
+    pop si
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; tp_setdown - AL becomes the button drawn pressed (0 = none), and it DRAWS
+; -----------------------------------------------------------------------------
+tp_setdown:
+    push ax
+    cmp al, [tp_bdown]
+    je .out
+    push ax
+    mov al, [tp_bdown]
+    or al, al
+    jz .take
+    mov byte [tp_bdown], 0
+    call tp_btn1
+.take:
+    pop ax
+    mov [tp_bdown], al
+    or al, al
+    jz .out
+    call tp_btn1
+.out:
+    pop ax
+    ret
+
+tp_draw_bar:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov al, 1
+.each:
+    call tp_btn1
+    inc al
+    cmp al, TP_NBTN
+    jbe .each
     call tp_fmt_bar
     mov cx, [tp_r_next+4]
     add cx, 8
@@ -2160,6 +2264,151 @@ tp_onkey:
     ret
 
 ; -----------------------------------------------------------------------------
+; tp_bact - do what bar button AL says (SPEC.md 13.8)
+; in:  AL = 1..7; the gfx lock is held
+; out: CF = 1 if the caller owes a full redraw
+;
+; ONE body, lifted out of tp_onclick's ladder so the press and the release
+; cannot come to hold different opinions about what a button means.
+; -----------------------------------------------------------------------------
+tp_bact:
+    cmp al, 1
+    je .set
+    cmp al, 2
+    je .sz
+    cmp al, 3
+    je .bd
+    cmp al, 4
+    je .gut
+    cmp al, 5
+    je .pad
+    cmp al, 6
+    je .prev
+    call tp_next_page
+    stc
+    ret
+.set:
+    call tp_typeset
+    stc
+    ret
+.sz:
+    mov al, [tp_psize]
+    inc al
+    cmp al, 4
+    jb .szok
+    xor al, al
+.szok:
+    mov [tp_psize], al
+    jmp short .rely
+.bd:
+    mov al, [tp_bind]
+    inc al
+    cmp al, 3
+    jb .bdok
+    xor al, al
+.bdok:
+    mov [tp_bind], al
+    jmp short .rely
+.gut:
+    mov al, [tp_gutter]
+    inc al
+    cmp al, 3
+    jb .gok
+    xor al, al
+.gok:
+    mov [tp_gutter], al
+    jmp short .rely
+.pad:
+    mov al, [tp_pad]
+    inc al
+    cmp al, 3
+    jb .ps
+    xor al, al
+.ps:
+    mov [tp_pad], al
+.rely:
+    mov byte [tp_needset], 1
+    stc
+    ret
+.prev:
+    call tp_prev_page
+    stc
+    ret
+.next:
+    call tp_next_page
+    stc
+    ret
+; -----------------------------------------------------------------------------
+; tp_onup - W_ONMOUSEUP (SPEC.md 13.7): a bar button fires HERE
+; in:  CX = x, DX = y (SCREEN), SI = the window; gfx lock held
+; -----------------------------------------------------------------------------
+tp_onup:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call os88ui_fire            ; AX = what the press armed, and it is CLEARED
+    or ax, ax
+    jz .out
+    mov di, ax
+    call tp_bhit                ; still on it?
+    xor ah, ah
+    cmp ax, di
+    je .fire
+    xor al, al                  ; no: thought better of, and nothing fires
+    call tp_setdown
+    jmp short .out
+.fire:
+    mov byte [tp_bdown], 0      ; NOT tp_setdown: tp_redraw below draws the
+                                ; whole window, this button upright with it,
+                                ; and drawing it upright first is
+                                ; PERFORMANCE.md's double-draw
+    call tp_bact
+    jnc .out
+    mov byte [tp_ldfull], 0
+    call tp_redraw
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tp_ondrag - W_ONDRAG (SPEC.md 13.8.1): the pointer moved, press still down
+; -----------------------------------------------------------------------------
+tp_ondrag:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call os88ui_armed           ; PEEK: the arm is the release's to spend
+    or ax, ax
+    jz .out
+    mov di, ax
+    call tp_bhit
+    xor ah, ah
+    cmp ax, di
+    je .set
+    xor al, al                  ; off it: nothing is down
+.set:
+    call tp_setdown             ; ...which draws only if that CHANGED
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 tp_onclick:
     call tp_deferred_ld
     push ax
@@ -2185,27 +2434,18 @@ tp_onclick:
     pop dx
     pop cx
     mov byte [tp_abouton], 0
-    mov bx, tp_r_set
-    call os88ui_bhit
-    jnc .set
-    mov bx, tp_r_cls
-    call os88ui_bhit
-    jnc .sz
-    mov bx, tp_r_mar
-    call os88ui_bhit
-    jnc .bd
-    mov bx, tp_r_gut
-    call os88ui_bhit
-    jnc .gut
-    mov bx, tp_r_pad
-    call os88ui_bhit
-    jnc .pad
-    mov bx, tp_r_prev
-    call os88ui_bhit
-    jnc .prev
-    mov bx, tp_r_next
-    call os88ui_bhit
-    jnc .next
+    ; SPEC.md 13.6/13.8: the seven bar buttons only ARM and DRAW here, and
+    ; tp_onup acts. The two scroll-bar rects below keep the press - a scroll
+    ; is repeatable and reversible, which is the definition of a safe prefix
+    ; action, and the arrow cells are the part that would want a down state.
+    call tp_bhit
+    or al, al
+    jz .sbars
+    xor ah, ah
+    call os88ui_arm
+    call tp_setdown
+    jmp .out
+.sbars:
     mov bx, tp_r_ssb
     call os88ui_bhit
     jnc .ssb
@@ -2228,53 +2468,6 @@ tp_onclick:
     jmp .draw
 .prv:
     mov byte [tp_focus], 1
-    jmp .draw
-.set:
-    call tp_typeset
-    jmp .draw
-.sz:
-    mov al, [tp_psize]
-    inc al
-    cmp al, 4
-    jb .szok
-    xor al, al
-.szok:
-    mov [tp_psize], al
-    jmp .rely
-.bd:
-    mov al, [tp_bind]
-    inc al
-    cmp al, 3
-    jb .bdok
-    xor al, al
-.bdok:
-    mov [tp_bind], al
-    jmp .rely
-.gut:
-    mov al, [tp_gutter]
-    inc al
-    cmp al, 3
-    jb .gok
-    xor al, al
-.gok:
-    mov [tp_gutter], al
-    jmp .rely
-.pad:
-    mov al, [tp_pad]
-    inc al
-    cmp al, 3
-    jb .ps
-    xor al, al
-.ps:
-    mov [tp_pad], al
-.rely:
-    mov byte [tp_needset], 1
-    jmp .draw
-.prev:
-    call tp_prev_page
-    jmp .draw
-.next:
-    call tp_next_page
     jmp .draw
 .ssb:
     mov byte [tp_focus], 0

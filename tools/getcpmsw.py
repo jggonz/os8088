@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """getcpmsw: fetch the CP/M GAMES AND APPLICATIONS the RUNCPM floppies carry
-beside RunCPM's master disk (SPEC.md §71.6).
+beside RunCPM's master disk (SPEC.md §74.6).
 
     python3 tools/getcpmsw.py -o build/cpmsw               # fetch + verify
     python3 tools/getcpmsw.py -o build/cpmsw --check       # verify, never fetch
@@ -37,7 +37,7 @@ in a user area of drive A (the reason is there). What is taken:
     A/5   Yahoo Software's arcade games — LADDER, CATCHUM, PM — with the
           LADCONF/CATCONF terminal setup they ship with, and the area ranked
           first. **Tell them they are on `10) Heathkit/Zenith H19 (ANSI)`**:
-          that entry emits plain 1-based `ESC[row;colH`, which is §71.2's
+          that entry emits plain 1-based `ESC[row;colH`, which is §74.2's
           subset, while their own `6) DEC VT-100 (ANSI)` entry emits those
           coordinates BIASED BY 32 (`ESC[54;32f` for row 22, column 0) and
           wraps its status panel on a real VT-100 exactly as it does here -
@@ -59,7 +59,7 @@ in a user area of drive A (the reason is there). What is taken:
 WHAT IS NOT HERE, and cannot be: the collection also carries Zork, The
 Hitchhiker's Guide to the Galaxy and Colossal Cave Adventure, and **this port
 could not run them if it shipped them** — `ZORK1.DAT` is 76,288 bytes,
-`HITCH.DAT` 113,330 and Adventure's `ADVT.DAT` 68,864, and §71.3's record
+`HITCH.DAT` 113,330 and Adventure's `ADVT.DAT` 68,864, and §74.3's record
 model reads a file WHOLE through a 16-bit count, so nothing above 65,535
 bytes can be opened. The size limit is checked here (`MAX_FILE`), on every
 file, so a refreshed collection cannot quietly put an unopenable file on a
@@ -89,18 +89,18 @@ import urllib.parse
 import urllib.request
 
 TIMEOUT = 180
-MAX_FILE = 65535          # a whole file must fit a 16-bit count (SPEC.md §71.3)
+MAX_FILE = 65535          # a whole file must fit a 16-bit count (SPEC.md §74.3)
 DIR_ENTRY = 32            # a FAT directory entry
 # spare directory slots every game area ships with: the kernel does not grow a
 # directory (SPEC.md §18.5) and these games SAVE - Nemesis writes a character
 # file (`ARAGORN.CHR` is one that came with it), LADDER and CATCHUM rewrite
 # their score file, TERMDEF writes `TERM.DEF`. A rewritten file needs no slot;
 # a new one does, and without spare slots the first save that makes a file
-# fails 'Not saved' the way wave 4's 360KB disk did (SPEC.md §71.5).
+# fails 'Not saved' the way wave 4's 360KB disk did (SPEC.md §74.5).
 SPARE_SLOTS = 16
 
-# What each geometry carries (SPEC.md §71.6). A DECISION per geometry, in the
-# shape SPEC.md §71.5's CURATED already has: 1.44MB has room for all three
+# What each geometry carries (SPEC.md §74.6). A DECISION per geometry, in the
+# shape SPEC.md §74.5's CURATED already has: 1.44MB has room for all three
 # areas beside the whole master disk; the 720KB disk carries the arcade area
 # and pays for it out of the master disk's SOURCES, which is the trade the
 # 360KB disk already makes for room to save; the 360KB disk carries no games
@@ -130,7 +130,7 @@ AREA_FOLDER = {
     "D/0": "1crrzcjQsx-QRbyiKn1ulXCgHfjdkqLpC",
 }
 
-# What each area is, in the order a disk fills them (SPEC.md §71.6): the
+# What each area is, in the order a disk fills them (SPEC.md §74.6): the
 # collection's coordinates, the USER AREA OF DRIVE A it lands in on the disk,
 # what it is, the line to type at `A>` and its titles.
 #
@@ -759,7 +759,7 @@ def get_file(area, name, out, check, src):
              f"  `--refresh` prints a new PINNED table once you have.")
     if len(data) > MAX_FILE:
         fail(f"{area}/{name} is {len(data)} bytes: above the {MAX_FILE}-byte\n"
-             f"  limit SPEC.md §71.3's whole-file record model has. It cannot be\n"
+             f"  limit SPEC.md §74.3's whole-file record model has. It cannot be\n"
              f"  opened on the disk, so it is not put on one.")
     write_if_changed(dest, data)
     return len(data)

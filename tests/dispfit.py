@@ -27,8 +27,8 @@ window would pass with two of the three sites missing.
 into its record from outside the guest. That is SPEC.md 11.96.13's own
 counterfactual (see the commit that measured it), and without it this file
 cannot see the ordering it exists to protect: `ui_drag_phase` runs after
-ui_drag's clamps and moves W_X - and, since SPEC.md 11.96.13.1, W_Y - by up to
-7px, so ui_drag's bank has to sit
+ui_drag's clamps and moves W_X - W_X alone; the W_Y half of it was withdrawn,
+SPEC.md 11.96.13.1 - by up to 7px, so ui_drag's bank has to sit
 BELOW it - but alignment is the default now, `wm_snap_ax` has already put W_X
 on the right phase, and for an ordinary window the snap moves nothing. So the
 bank in the wrong place passes every test that only drags ordinary windows,

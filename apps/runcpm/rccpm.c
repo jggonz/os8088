@@ -1,5 +1,5 @@
 /* ============================================================================
- * os8088 - apps/runcpm/rccpm.c         BIOS, BDOS, the CP/M image (SPEC.md 71)
+ * os8088 - apps/runcpm/rccpm.c         BIOS, BDOS, the CP/M image (SPEC.md 74)
  *
  * Part of RUNCPM, a reimplementation of RunCPM 6.9 by Marcelo Dantas /
  * "Mockba the Borg" (https://github.com/MockbaTheBorg/RunCPM, MIT licence,
@@ -17,7 +17,7 @@
  * host.h); console.h's byte semantics; disk.h _error's text and its
  * wait-for-a-key-then-warm-boot.
  *
- * WHAT IS THIS PLATFORM'S: NOTHING BLOCKS (SPEC.md 71). RunCPM's _getcon()
+ * WHAT IS THIS PLATFORM'S: NOTHING BLOCKS (SPEC.md 74). RunCPM's _getcon()
  * sits in the host's getch(); here a console function that needs a key and
  * finds the ring empty answers 0 to the slice driver, which puts PC back on
  * the RST (the trap is retried when os88_onkey pushes a key and kicks) and
@@ -32,7 +32,7 @@
  * BOOT..CONOUT and the register-only entries), the drive/user state, the
  * private calls, and the error path; WAVE 4 the disk functions - 4/5 (the
  * capture files), 13's _CheckSUB, 15-23, 32's folder, 33-36, 40, 249 - each
- * a call into rcfs.c (SPEC.md 71.3), which answers HL as disk.h does and
+ * a call into rcfs.c (SPEC.md 74.3), which answers HL as disk.h does and
  * raises disk.h's _error the same way DRV_SET does: the erring function
  * comes back with rc_errwait set, and rc_bdos finishes the wait (below).
  * ==========================================================================*/
@@ -57,7 +57,7 @@
 #define RC_VERSIONBCD  0x69
 #define RC_VERSIONCCP  0x00                   /* CCP_DR: DRI's, for INFO.COM */
 #define RC_HOSTOS      0x08                   /* new: os8088, after Pico 0x07
-                                               * (SPEC.md 71) */
+                                               * (SPEC.md 74) */
 #define RC_IOBYTE      0x0003
 #define RC_DSKBYTE     0x0004
 /* CCPHEAD: "\r\nRunCPM Version " VERSION " (" CCPname ") - " CPM DBG ABD
@@ -129,7 +129,7 @@ static const unsigned char rc_dph[16] = {
  * page and handoff stub, the BIOS jump page (33 JPs) and its handoff stubs
  * (RST 08h; RET; NOP each), the DPB and DPH. IOBYTE and DSKByte are set on
  * a cold start only, as upstream (Status != STATUS_RESTART). MODULE CODE
- * (SPEC.md 70.14, 71): the first ovl_* calls of a session are ovl_banner2
+ * (SPEC.md 73.14, 71): the first ovl_* calls of a session are ovl_banner2
  * and this one, both on the first wake before any folder move - the load
  * resolves RUNCPM.OVL in the launch folder - and it answers 1, so a 0 is
  * the module refused (no heap, no file, a stale one: cc_ovneed toasted why)
@@ -523,7 +523,7 @@ static int rc_bios(void)
  * RUNNING - P_TERMCPM, ^C in the editor, an error's warm boot - or a console
  * read with no key: PC put back on the RST for the retry, registers
  * untouched). The disk functions - 13's _CheckSUB, 15-23, 32's folder,
- * 33-36, 40 and 249 - answer through rcfs.c (SPEC.md 71.3), and an _error
+ * 33-36, 40 and 249 - answer through rcfs.c (SPEC.md 74.3), and an _error
  * inside one (Select, R/O, CP/M ERR) leaves rc_errwait for the tail below,
  * which finishes the erring function by number. */
 static int rc_bdos(void)
@@ -725,7 +725,7 @@ errwait:
     case 39:                                  /* DRV_FREE_MPM */
         hl = 0;
         break;
-    /* --- the disk functions, disk.h through rcfs.c (SPEC.md 71.3): DE =
+    /* --- the disk functions, disk.h through rcfs.c (SPEC.md 74.3): DE =
      * the FCB, HL = the answer, and an _error inside leaves rc_errwait set
      * for the tail below --------------------------------------------------- */
     case 15:                                  /* F_OPEN */
@@ -811,7 +811,7 @@ errwait:
         hl = RC_CCPADDR;
         break;
     case 254:                                 /* F_SETCPUSPEED: accepted and
-                                               * ignored (SPEC.md 71.4: nothing
+                                               * ignored (SPEC.md 74.4: nothing
                                                * can sleep inside a slice, so
                                                * there is no delay to set) */
         break;

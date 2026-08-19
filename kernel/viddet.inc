@@ -381,7 +381,7 @@ vid_apply:
     sub ax, 7                   ; the pointer clamps across the whole of it
     mov [vid_wm8], ax
     mov ax, [vid_pw]            ; ...AND THE CLOCK IS THE PRIMARY'S, because the
-    dec ax                      ; MENU BAR is (SPEC.md 39.2.2). This was taken
+    dec ax                      ; MENU BAR is (SPEC.md 39.2.1.2). This was taken
     sub ax, 7                   ; from [vid_w] like the two above it, which is
     sub ax, 198                 ; w - 8 - MENU_CLK_W - 6, floored to a glyph
     and ax, 0FFF8h              ; cell: the bar's segments are cell ranges

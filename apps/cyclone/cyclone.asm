@@ -26,7 +26,11 @@
 ;    rather than a repair. That single constraint is what removes the whole
 ;    save-under/repair machinery a sprite over static art would otherwise
 ;    need. The depth rings are drawn only at the far end, where nothing
-;    travels.
+;    travels. **It has to be ENFORCED at both ends of the tube**: inside it
+;    by `cy_lanecap`, which bounds a mover by its lane rather than by the
+;    depth ramp, and on the lip by `cy_lip_build`, because CY_TOPD is a SCALE
+;    and a scale clears nothing on a web whose rim edge runs radially - the
+;    flat ribbon put the claw exactly on the web at every window size.
 ;
 ;  - **A mover that did not move is not drawn.** `cy_mv_step` compares the
 ;    rounded screen rect against the one on the glass and returns early when
@@ -211,10 +215,32 @@ CY_SCRROW   equ 12
 CY_SCRN     equ 4                   ; rows in the band
 CY_SCRH     equ CY_SCRROW * CY_SCRN
 CY_FIRECD   equ 3                   ; frames between shots while fire is held
-CY_SCRT     equ 6                   ; frames between scroll steps. It was 3,
+CY_SCRT     equ 12                  ; frames between scroll steps. It was 3,
                                     ; which is a row every 165ms and faster
-                                    ; than a name-and-score line can be read
+                                    ; than a name-and-score line can be read;
+                                    ; then 6, and 12 is that halved AGAIN once
+                                    ; SPEC.md 67.21.1's nineteen lines started
+                                    ; arriving. A row every 660ms, so a line is
+                                    ; on the glass for 2.6s of its four-row
+                                    ; crossing and a whole cycle is ~16s
 CY_SCRMAXC  equ 40                  ; the widest scroll row we will letter
+
+; --- the model swatches (SPEC.md 67.21.2) ------------------------------------
+; A scroll line may carry a PICTURE of the thing it names, and which picture is
+; in the line's own first byte: 1..CYE_KINDS is that enemy kind, CY_SCRM_PU is
+; the powerup box. In the text rather than in a parallel table indexed by line,
+; because a table is a second place that has to agree about which line is which
+; and this tree has paid for that shape twice already.
+;
+; The shapes are NOT redrawn here. cy_ekext and cy_ekcol are the tables the
+; game itself draws an enemy from - and cy_pal REWRITES two of those pens for
+; the live adapter (a dither class on VGA, white on 1bpp) - so reading them is
+; what makes a swatch a picture of what you will actually meet rather than a
+; second artist's impression of it.
+CY_SCRM_PU  equ CYE_KINDS + 1       ; ...and the powerup, which is not a kind
+CY_SCRMW    equ 2                   ; glyph cells a swatch reserves at the pen
+CY_SCRM_SPL equ 0xFE                ; a line that IS the high-score table
+CY_SCRM_END equ 0xFF                ; ...and the one that ends the list
 CY_NHS      equ 5
 CY_HSFSZ    equ 4 + CY_NHS * 7       ; magic, then a score and a name per row
 CY_INITW    equ 12                  ; glyph cells the initials prompt spans
@@ -516,8 +542,24 @@ cy_pn_droid     db 'AI DROID', 0
 cy_pn_jump      db 'JUMP', 0
 cy_pn_zap       db 'ZAPPER CHARGE', 0
 
-; the attract screen's scrolling text. One line per row; an empty string is a
-; blank line and a lone 0 byte ends the list, so the scroller needs no count.
+; The attract screen's scrolling text. One line per row, an empty string is a
+; blank line, and the list ends with 0FFh.
+;
+; THE TERMINATOR IS 0FFh AND NOT A BARE NUL, for cy_ab_text's reason four
+; hundred lines below - and this list is where that bug actually shipped. A
+; blank separator line IS an empty string, so it is a single 0 byte, and
+; `cy_scroll_next` read the first of them as the end of the list: the attract
+; screen showed CYCLONE 88 and then went straight to the high scores for ever.
+; Every line from here down had never been on screen. The panel next door
+; carries the same warning because the same mistake was found there first and
+; fixed only there.
+;
+; The bound is 40 glyphs (CY_SCRMAXC), which is the widest row the scroller
+; will letter; cy_scroll_row CLAMPS rather than overflowing, so a longer line
+; is silently cut off at both ends by the centring.
+; A line beginning with a byte under 0x20 carries a model swatch (above); the
+; two spaces after it are the room the picture is drawn in, so the centring
+; counts them and the line and its picture cannot part company.
 cy_scroll_txt:
     db 'CYCLONE 88', 0
     db '', 0
@@ -525,32 +567,56 @@ cy_scroll_txt:
     db '', 0
     db 'AFTER TEMPEST 2000', 0
     db '', 0
+    db CY_SCRM_SPL                  ; THE HIGH SCORES GO HERE, which is above
+    db '', 0                        ; the enemies now: the table is what a
+                                    ; player comes back for and the bestiary is
+                                    ; read once, so the table should not be at
+                                    ; the far end of a 25-line cycle
     db 'ENEMIES', 0
-    db 'FLIPPER  CLIMBS THE WEB', 0
-    db 'TANKER   SPLITS WHEN SHOT', 0
-    db 'SPIKER   BUILDS THE SPIKES', 0
-    db 'FUSEBALL WALKS THE RIM', 0
-    db 'PULSAR   ELECTRIFIES A LANE', 0
+    db CYE_FLIPPER  + 1, '  FLIPPER  CLIMBS THE WEB', 0
+    db CYE_TANKER   + 1, '  TANKER   SPLITS WHEN SHOT', 0
+    db CYE_SPIKER   + 1, '  SPIKER   BUILDS THE SPIKES', 0
+    db CYE_FUSEBALL + 1, '  FUSEBALL WALKS THE RIM', 0
+    db CYE_PULSAR   + 1, '  PULSAR   ELECTRIFIES A LANE', 0
     db '', 0
-    db 'POWERUPS', 0
-    db 'PARTICLE LASER', 0
-    db 'AI DROID', 0
-    db 'JUMP', 0
-    db 'ZAPPER CHARGE', 0
+    ; ...and the powerups get a line each rather than a bare name, the way the
+    ; enemies do: the names are the ones the pickup banner says when you take
+    ; one, so the scroll and the game agree on what to call them. The hollow
+    ; box is 67.9.1 - the one thing on the web that is not solid - and it is
+    ; drawn on the HEADER and not on all four, because all four arrive as the
+    ; same box and four copies of one picture is noise rather than information.
+    db CY_SCRM_PU, '  POWERUPS - THE HOLLOW BOX', 0
+    db 'PARTICLE LASER  SHOTS PIERCE', 0
+    db 'AI DROID        A SECOND GUN', 0
+    db 'JUMP            HOP A LANE', 0
+    db 'ZAPPER CHARGE   ONE MORE ZAP', 0
     db '', 0
-    db 0
+    db CY_SCRM_END
 
 ; =============================================================================
-; The About panel (SPEC.md 67.14)
+; The panels - About and How To Play (SPEC.md 67.14)
 ;
-; CY_ABLINE lines of at most CY_ABCOL glyphs. The box is sized from those two
-; numbers rather than measured, because a panel that grows when a string does
-; is a panel whose frame and whose text can disagree.
+; ONE panel with two texts, because they are the same object: a box drawn last
+; over a frozen game, taken down by any key or click. Each is CY_*LINE lines of
+; at most CY_*COL glyphs, and the box is sized from those two numbers rather
+; than measured - a panel that grows when a string does is a panel whose frame
+; and whose text can disagree.
+;
+; THE LINE COUNT IS BOUNDED BY CGA AND NOT BY TASTE. The content box there is
+; 136 rows (dock 176, less MBAR_H, TITLE_H and wm_fit's row), so a panel is
+; lines*9 + 12 <= 136 - thirteen lines. The primitives clamp to the content box
+; (cy_clamp), so a fourteenth would not draw through the frame; it would be cut
+; off, which is worse, because nothing says so.
 ; =============================================================================
 CY_ABCOL    equ 24                  ; glyph columns the widest line may use
 CY_ABLINE   equ 9                   ; ...and lines, both asserted below
 CY_ABW      equ CY_ABCOL * 8 + 16   ; ...plus an 8px inset each side
 CY_ABH      equ CY_ABLINE * 9 + 12
+
+CY_HPCOL    equ 29                  ; the same two numbers for How To Play
+CY_HPLINE   equ 13
+CY_HPW      equ CY_HPCOL * 8 + 16
+CY_HPH      equ CY_HPLINE * 9 + 12
 
 ; THE TERMINATOR IS 0FFh AND NOT A BARE NUL, because a blank separator line
 ; IS an empty string: with 0 ending the block the panel stopped at its own
@@ -575,6 +641,32 @@ cy_ab_end:
 ; the lines getting longer, together.
 %if (cy_ab_end - cy_ab_text) > CY_ABLINE * (CY_ABCOL + 1) + 1
   %error "cy_ab_text no longer fits the CY_ABLINE x CY_ABCOL box it is drawn in"
+%endif
+
+; The Help menu's one item. The keys FIRST, because that is what a player who
+; has just opened the window cannot guess, and the rules under them - the
+; attract screen's scroll (SPEC.md 67.10) lists the enemies and the powerups
+; and this does not repeat it. It could not, when this was written: the scroll
+; stopped at its second line and nineteen of its lines had never been on screen
+; (SPEC.md 67.21.1), so this panel was deferring to a list nobody could see.
+cy_hp_text:
+    db 'HOW TO PLAY', 0
+    db '', 0
+    db 'ARROWS   move round the rim', 0
+    db 'SPACE    fire down the web', 0
+    db 'Z  zap   J  jump   P  pause', 0
+    db 'F        full screen', 0
+    db 'ENTER    start a game', 0
+    db '', 0
+    db 'Shoot every enemy to warp to', 0
+    db 'the next level. One that gets', 0
+    db 'to the rim shoots back, so', 0
+    db 'jump clear or kill it first.', 0
+    db 'Grab the powerups on the web.', 0
+    db 0xFF
+cy_hp_end:
+%if (cy_hp_end - cy_hp_text) > CY_HPLINE * (CY_HPCOL + 1) + 1
+  %error "cy_hp_text no longer fits the CY_HPLINE x CY_HPCOL box it is drawn in"
 %endif
 
 ; =============================================================================
@@ -754,19 +846,50 @@ cy_entry:
     ret
 
 ; =============================================================================
-; cy_about - the About panel, reached from the app's own name menu (SPEC.md
-; 12.7). It used to be a bare cy_full_repaint, which is a menu item that
-; visibly does nothing - the whole cell exists to say what this program is.
+; THE PANELS (SPEC.md 67.14)
+;
+; Two menu items put a page of text over the game: `About Cyclone 88` on the
+; app-name cell (SPEC.md 12.7) and `How To Play` on the Help menu. Both used to
+; be a bare cy_full_repaint - a menu item that visibly does nothing, in the two
+; cells whose whole purpose is to say something.
+;
+; ONE panel serves both, because the drawing, the freeze and the dismissal are
+; the same three things and a second copy of them is a second opinion about
+; when the box comes down. What differs is a text pointer and two dimensions,
+; banked at arm time; nothing re-derives which panel is up.
 ;
 ; Arkanoid's shape (SPEC.md 44): a flag, drawn LAST by the ordinary render so
 ; there is no second window and no second paint path, and any key or click
 ; takes it down. A live game is frozen underneath it, because a dropped frame
-; does not stop the enemies and a player would lose a life reading the credits.
+; does not stop the enemies and a player would lose a life reading the rules.
 ; =============================================================================
+
+; cy_about / cy_help - the two arms. Each names its text and its box and falls
+; into the body.
 cy_about:
+    mov si, cy_ab_text
+    mov ax, CY_ABW
+    mov bx, CY_ABH
+    mov cl, CY_ABLINE
+    jmp short cy_panel_up
+
+cy_help:
+    mov si, cy_hp_text
+    mov ax, CY_HPW
+    mov bx, CY_HPH
+    mov cl, CY_HPLINE
+    ; ...and fall through
+
+; cy_panel_up - arm the panel. SI = text, AX/BX = box size, CL = its line cap.
+; UI task, gfx lock held.
+cy_panel_up:
     push si
-    mov byte [cy_abon], 1
-    mov byte [cy_abdirty], 1
+    mov [cy_pntxt], si
+    mov [cy_pnw], ax
+    mov [cy_pnh], bx
+    mov [cy_pnln], cl
+    mov byte [cy_pnon], 1
+    mov byte [cy_pndirty], 1
     cmp byte [cy_state], CYS_PLAY
     jne .draw
     mov byte [cy_state], CYS_PAUSE
@@ -777,19 +900,31 @@ cy_about:
     pop si
     ret
 
-; cy_abdismiss - take the panel down if it is up.
-; out: CF = 1 the key or click was spent doing it. Preserves everything.
-cy_abdismiss:
-    cmp byte [cy_abon], 0
+; cy_pn_off - clear the panel state and put a game the panel paused back, and
+; draw NOTHING. For a caller that is about to repaint the world anyway.
+; out: CF = 1 a panel was up. Preserves everything else.
+cy_pn_off:
+    cmp byte [cy_pnon], 0
     je .none
-    push si
-    mov byte [cy_abon], 0
+    mov byte [cy_pnon], 0
     cmp byte [cy_wasplay], 0
-    je .rp
+    je .yes
     mov byte [cy_wasplay], 0
     mov byte [cy_state], CYS_PLAY   ; the panel paused it; taking it down
-.rp:                                ; puts it back, which is not a resume
-    mov byte [cy_full], 1           ; the player asked for separately
+.yes:                               ; puts it back, which is not a resume
+    stc                             ; the player asked for separately
+    ret
+.none:
+    clc
+    ret
+
+; cy_pn_dismiss - take the panel down if it is up, and repaint over it.
+; out: CF = 1 the key or click was spent doing it. Preserves everything.
+cy_pn_dismiss:
+    call cy_pn_off
+    jnc .none
+    push si
+    mov byte [cy_full], 1
     call cy_full_repaint
     pop si
     stc
@@ -798,79 +933,84 @@ cy_abdismiss:
     clc
     ret
 
-; cy_about_draw - the panel itself, drawn last and over everything.
-cy_about_draw:
-    cmp byte [cy_abon], 0
+; cy_panel_draw - the panel itself, drawn last and over everything.
+cy_panel_draw:
+    cmp byte [cy_pnon], 0
     je .out
-    cmp byte [cy_abdirty], 0
+    cmp byte [cy_pndirty], 0
     je .out                         ; already on the glass, and nothing under
-    mov byte [cy_abdirty], 0        ; it has drawn since
+    mov byte [cy_pndirty], 0        ; it has drawn since
     mov ax, [cy_cwid]               ; a centred box, sized to the widest line
-    sub ax, CY_ABW
+    sub ax, [cy_pnw]
     jns .x
     xor ax, ax
 .x:
     shr ax, 1
     and al, 0xF8                    ; the pen on a multiple of 8 earns
-    mov [cy_abx], ax                ; font_run's single-store path (SPEC.md 6.1)
+    mov [cy_pnx], ax                ; font_run's single-store path (SPEC.md 6.1)
     mov ax, [cy_chgt]
-    sub ax, CY_ABH
+    sub ax, [cy_pnh]
     jns .y
     xor ax, ax
 .y:
     shr ax, 1
-    mov [cy_aby], ax
+    mov [cy_pny], ax
 
     mov al, CY_C_BG                 ; a bed, then a frame, then the lines: the
     call cy_setcol                  ; run is opaque so there is no second fill
-    mov ax, [cy_abx]
-    mov bx, [cy_aby]
-    mov cx, ax
-    add cx, CY_ABW - 1
-    mov dx, bx
-    add dx, CY_ABH - 1
+    call cy_pn_rect
     call cy_fillc
     mov al, CY_C_TEXT               ; SOLID, not the web's dither: a 1px frame
     call cy_setcol                  ; in the dither class is a dotted line on
-    mov ax, [cy_abx]                ; both mono adapters (SPEC.md 39.4)
-    mov bx, [cy_aby]
-    mov cx, ax
-    add cx, CY_ABW - 1
-    mov dx, bx
-    add dx, CY_ABH - 1
+    call cy_pn_rect                 ; both mono adapters (SPEC.md 39.4)
     call cy_framec
 
-    mov si, cy_ab_text
-    mov byte [cy_abln], 0           ; the row INDEX, in bss - the pen used to
+    mov si, [cy_pntxt]
+    mov byte [cy_pnrow], 0          ; the row INDEX, in bss - the pen used to
 .line:                              ; be carried in BX across a far call into
     cmp byte [si], 0xFF             ; the kernel, which is a register this
     je .done                        ; loop cannot afford to be wrong about
     push si
-    mov al, [cy_abln]
+    mov al, [cy_pnrow]
     mov ah, 0
     mov bx, ax
-    shl ax, 1                       ; y = aby + 6 + 9*line
+    shl ax, 1                       ; y = pny + 6 + 9*line
     shl ax, 1
     shl ax, 1
     add ax, bx
-    add ax, [cy_aby]
+    add ax, [cy_pny]
     add ax, 6
     mov dx, ax
-    mov cx, [cy_abx]
+    mov cx, [cy_pnx]
     add cx, 8
     mov al, CY_C_TEXT
     mov ah, CY_C_BG
     call cy_textc
     pop si
     call cy_strskip
-    inc byte [cy_abln]
-    cmp byte [cy_abln], CY_ABLINE
+    inc byte [cy_pnrow]
+    mov al, [cy_pnrow]
+    cmp al, [cy_pnln]
     jb .line
 .done:
     ; the panel is not a mover and nothing repairs what it covered, so the
     ; blocks must stop claiming pixels it took (Missile Command's rule)
     call cy_obj_forget
 .out:
+    ret
+
+; cy_pn_rect - the banked box as (AX,BX)-(CX,DX), inclusive. The bed and the
+; frame are the same rectangle and derived once, because two derivations of one
+; rect are two chances for the frame to sit a pixel off the fill it lines.
+cy_pn_rect:
+    mov ax, [cy_pnx]
+    mov bx, [cy_pny]
+    mov cx, ax
+    add cx, [cy_pnw]
+    dec cx
+    mov dx, bx
+    add dx, [cy_pnh]
+    dec dx
     ret
 
 ; cy_strskip - SI to just past the NUL.
@@ -937,8 +1077,8 @@ cy_hire:
 ; =============================================================================
 cy_onkey:
     push si
-    call cy_abdismiss               ; any key takes the About panel down, and
-    jc .spent                       ; is spent doing it
+    call cy_pn_dismiss              ; any key takes a panel down, and is spent
+    jc .spent                       ; doing it
     call cy_key_common
 .spent:
     call cy_kbdrain                 ; the UI task takes ONE key per pass, so
@@ -1040,7 +1180,7 @@ cy_key_common:
 ; =============================================================================
 cy_onclick:
     push si
-    call cy_abdismiss
+    call cy_pn_dismiss
     jc .out
     mov byte [cy_firereq], 1
     cmp byte [cy_state], CYS_TITLE
@@ -1059,30 +1199,38 @@ cy_onclick:
 ; =============================================================================
 cy_oncmd:
     push si
-    or ah, ah
-    jnz .help
-    cmp al, 0
-    je .new
-    cmp al, 1
+    or ah, ah                       ; BOTH indices are tested, menu and item.
+    jnz .helpm                      ; A menu with one item today is a menu with
+    cmp al, 0                       ; two tomorrow, and the second one then
+    je .new                         ; dispatches as the first with nothing
+    cmp al, 1                       ; saying so (tamegram's trap)
     je .pause
     cmp al, 2
     je .fs
-    jmp .out
+    jmp short .out
+.helpm:
+    cmp ah, 1
+    jne .out
+    or al, al
+    jz .how
+    jmp short .out
 .new:
     call cy_newgame
-    jmp .out
+    jmp short .out
 .pause:
     mov al, 'p'
     mov ah, 0
     call cy_key_common
-    jmp .out
+    jmp short .out
 .fs:
     call cy_go_fsx
-    jmp .out
-.help:
-    mov byte [cy_state], CYS_TITLE
-    mov byte [cy_full], 1
-    call cy_full_repaint
+    jmp short .out
+.how:
+    ; It used to be `cy_state = CYS_TITLE` plus a repaint, which is wrong in
+    ; both directions: from the attract screen - where a player who has just
+    ; opened the window IS - it drew the same screen again and the item did
+    ; nothing at all, and from a live game it threw the game away to show one.
+    call cy_help
 .out:
     pop si
     ret
@@ -1310,6 +1458,8 @@ cy_build_verts:
     cmp word [cy_dd], CY_NDEPTH
     jb .p2d
 
+    call cy_lip_build               ; ...and then the lip, which is the one
+                                    ; row that is NOT a scale of the rim
     pop bp
     pop di
     pop si
@@ -1317,6 +1467,324 @@ cy_build_verts:
     pop cx
     pop bx
     pop ax
+    ret
+
+; =============================================================================
+; THE LIP HAS TO CLEAR THE RIM, AND A RADIAL SCALE DOES NOT DO IT (67.5.3.1)
+;
+; 67.5.3 puts the claw and every fully ascended enemy at CY_TOPD - a depth
+; OUTSIDE the rim - so that nothing the player does happens among the spokes.
+; 67.1's whole scheme rests on that: a mover's erase is one gfx_fill in the
+; background colour, so a mover overlapping the web takes the web's pixels
+; with it and nothing puts them back.
+;
+; CY_TOPD IS A SCALE ABOUT THE VANISHING POINT, and a scale separates nothing
+; where the rim edge runs radially. It is right for the circle and the square,
+; whose edges are roughly perpendicular to the radius, and it fails on:
+;
+;   - the FLAT ribbon, where every vertex has y = 0, so scaling slides the lip
+;     ALONG the rim line: the claw is drawn ON the web at every window size and
+;     on every adapter, and eats it on every lane it crosses;
+;   - the STAR's inner vertices and the PLUS's inner corners, which sit at 0.44
+;     and 0.47 of the radius, so 296/256 of that is a few pixels and the
+;     NEIGHBOURING edge is inside the claw's own rect;
+;   - the VEE and the TRIANGLE near their ends, the same thing in miniature.
+;
+; Measured with tests/cycweb.py - one sweep of the claw over every lane with
+; 67.19's repair stubbed, so what is counted is what the claw ate rather than
+; how fast the repair paints it back: 256 web pixels over the eight shapes,
+; 85 of them on the star and 48 on the plus.
+;
+; So a lane's lip is pushed along its rim edge's own OUTWARD NORMAL - and only
+; where it has to be, the scaled position being kept wherever it already
+; clears. That is what keeps this a repair rather than a redesign: on a
+; full-screen VGA only the star (<=3px) and the flat ribbon (<=7px) move at
+; all, the square never moves at any size, and the circle and the horseshoe
+; move only in a small window and only by 1-3px.
+;
+; What it clears by is the rect's OWN support along that normal, which is
+; (|ey|*hw + |ex|*hh) / |e| - what an axis-aligned rect actually reaches in
+; that direction - plus two pixels of air, one for the web line and one for
+; the WALK (see below). The half-extents come from cy_lanecap, so a narrow
+; lane asks for less rather than for more.
+;
+; It is a TABLE and not a formula at the call site because it is layout-time
+; work: three or four divides a lane, sixteen lanes, once per window change,
+; against a claw drawn eighteen times a second with an arrival beside it.
+; =============================================================================
+CY_LIPEXT   equ 5                   ; the widest half-extent anything at the
+                                    ; lip is drawn with: the claw's own 5 (the
+                                    ; ramp at CY_TOPD is 21/20, so 5 stays 5),
+                                    ; and no kind in cy_ekext is wider
+CY_LIPKMAX  equ 12                  ; ...so a push past twice that is a shape
+                                    ; nothing can clear, and walking the claw
+                                    ; off the playfield is not the better of
+                                    ; the two wrong answers
+
+; cy_lip_build - fill cy_lipx/cy_lipy for the current shape. Layout-time only,
+; and called from cy_build_verts because it reads the rows that builds.
+cy_lip_build:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    xor si, si                      ; SI = the lane, the one loop counter
+.each:
+    cmp si, [cy_nlane]
+    jae .out
+    mov di, si
+    shl di, 1                       ; DI = its slot in the two tables
+
+    ; --- the rim edge this lane is drawn against ---------------------------
+    mov ax, CY_DEPTH
+    mov bx, si
+    call cy_vert
+    mov [cy_lptx], cx
+    mov [cy_lpty], dx
+    mov ax, si
+    call cy_web_next
+    mov [cy_lpv2], ax
+    mov bx, ax
+    mov ax, CY_DEPTH
+    call cy_vert
+    mov ax, cx
+    sub ax, [cy_lptx]               ; e = B - A
+    mov [cy_lpex], ax
+    mov ax, dx
+    sub ax, [cy_lpty]
+    mov [cy_lpey], ax
+    add cx, [cy_lptx]               ; ...and the edge's midpoint, which is the
+    sar cx, 1                       ; point on the line the lip is measured
+    mov [cy_lpmx], cx               ; from
+    add dx, [cy_lpty]
+    sar dx, 1
+    mov [cy_lpmy], dx
+
+    ; --- where the scaled lip put it, and how wide the lane is there -------
+    mov ax, CY_TOPD
+    mov bx, si
+    call cy_vert
+    mov [cy_lptx], cx
+    mov [cy_lpty], dx
+    mov bx, [cy_lpv2]
+    mov ax, CY_TOPD
+    call cy_vert
+    mov ax, cx
+    sub ax, [cy_lptx]
+    jns .sx
+    neg ax
+.sx:
+    mov bx, dx
+    sub bx, [cy_lpty]
+    jns .sy
+    neg bx
+.sy:
+    cmp ax, bx                      ; the dominant span, which is what
+    jae .sm                         ; cy_lanecap bounds a mover by
+    mov ax, bx
+.sm:
+    mov [cy_lspm], ax
+    add cx, [cy_lptx]
+    sar cx, 1
+    mov [cy_lipx + di], cx          ; the scaled position IS the answer until
+    add dx, [cy_lpty]               ; something below says otherwise
+    sar dx, 1
+    mov [cy_lipy + di], dx
+    sub cx, [cy_lpmx]               ; d = lip - rim: the lean it already has
+    mov [cy_lpdx], cx
+    sub dx, [cy_lpmy]
+    mov [cy_lpdy], dx
+
+    ; --- |e|, near enough: max + min/2, which is up to 12% LONG ------------
+    mov ax, [cy_lpex]
+    or ax, ax
+    jns .ax
+    neg ax
+.ax:
+    mov bx, [cy_lpey]
+    or bx, bx
+    jns .ay
+    neg bx
+.ay:
+    mov [cy_lpax], ax               ; |ex| and |ey|, both wanted again below
+    mov [cy_lpay], bx
+    cmp ax, bx
+    jae .lmax
+    xchg ax, bx
+.lmax:
+    shr bx, 1
+    add ax, bx
+    jnz .lok
+    inc ax                          ; a zero-length edge cannot happen; a
+.lok:                               ; divide by zero only has to happen once
+    mov [cy_lpl], ax
+
+    ; --- what the lane NEEDS: the rect's support along that normal ---------
+    mov ax, CY_LIPEXT
+    call cy_lanecap                 ; ...at THIS lane's width, not the ramp's
+    mov bx, [cy_lpax]
+    add bx, [cy_lpay]
+    mul bx                          ; cap * (|ex| + |ey|) - all of it scaled
+    add ax, [cy_lpl]                ; by |e|, plus TWO pixels of air: one is
+    add ax, [cy_lpl]                ; the web line's own pixel and the second
+    mov [cy_lpn], ax                ; is the WALK's, because SPEC.md 5.6.7
+                                    ; lays a line where Bresenham puts it and
+                                    ; not where the ideal one runs. One pixel
+                                    ; was measured and was one short: the vee
+                                    ; kept a single pixel of its own rim edge
+                                    ; inside the corner of the claw's rect,
+                                    ; where the ideal line misses that corner
+                                    ; by 0.7 of one
+
+    ; --- what it HAS, and the push if that is not enough -------------------
+    ; THE TEST IS EXACT AND THE ESTIMATE IS NOT, which is the whole shape of
+    ; what follows. |e| is max + min/2 - within 12% and always long - so a
+    ; push computed from it lands up to a tenth short, and the two roundings
+    ; into whole pixels take more; measured, the first version left the star
+    ; still eating 4 pixels of its own edge on three lanes. So the distance is
+    ; re-measured from the CROSS PRODUCT of the offset actually applied, and
+    ; the push grows a pixel at a time until that says it clears. It converges
+    ; in one or two passes, it is bounded by CY_LIPKMAX, and it needs no
+    ; square root anywhere.
+    mov word [cy_lpox], 0
+    mov word [cy_lpoy], 0
+    call cy_lp_cross                ; CX = the distance the scale already has
+    cmp cx, [cy_lpn]
+    jae .next                       ; ...and it clears this edge: leave it
+    mov al, [cy_lpdir]              ; the sign of THIS cross is the direction
+    mov [cy_lpdir0], al             ; to push in, and the loop overwrites it
+
+    mov ax, [cy_lpn]                ; k = ceil((need - dist) / |e|), at least 1
+    sub ax, cx
+    add ax, [cy_lpl]
+    dec ax
+    xor dx, dx
+    div word [cy_lpl]
+    or ax, ax
+    jnz .kok
+    mov ax, 1
+.kok:
+    mov [cy_lpk], ax
+.try:
+    mov cx, [cy_lpk]
+    mov ax, [cy_lpey]               ; the normal is (ey, -ex)...
+    call cy_lp_scale
+    mov [cy_lpox], ax
+    mov cx, [cy_lpk]
+    mov ax, [cy_lpex]
+    neg ax
+    call cy_lp_scale
+    mov [cy_lpoy], ax
+    cmp byte [cy_lpdir0], 1         ; ...whose sign is the cross product's:
+    je .test                        ; negative and it already leans the way
+    cmp byte [cy_lpdir0], 2         ; the scaled lip does, positive and it is
+    je .flip                        ; the other one
+    ; A FLAT WEB LEANS NOWHERE. Every vertex has y = 0, so the lip is ON the
+    ; rim line and the cross product is zero: up is as good an answer as down,
+    ; and it is the one that puts the claw between the HUD and the tube rather
+    ; than underneath it.
+    cmp word [cy_lpoy], 0
+    jl .test
+    jg .flip
+    cmp word [cy_lpox], 0           ; ...and a vertical ribbon, to the right
+    jg .test
+.flip:
+    neg word [cy_lpox]
+    neg word [cy_lpoy]
+.test:
+    call cy_lp_cross                ; the distance with THIS offset on it
+    cmp cx, [cy_lpn]
+    jae .apply
+    inc word [cy_lpk]
+    cmp word [cy_lpk], CY_LIPKMAX
+    jbe .try                        ; ...and a shape nothing clears keeps the
+.apply:                             ; last one rather than walking away
+    mov ax, [cy_lpox]
+    add [cy_lipx + di], ax
+    mov ax, [cy_lpoy]
+    add [cy_lipy + di], ax
+.next:
+    inc si
+    jmp .each
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; cy_lp_cross - the perpendicular distance from the lip to the rim edge's
+; LINE, times |e| so that nothing has to be divided to compare it with
+; cy_lpn. In 32 bits, because a lip that is miles clear must not wrap into
+; one that reads as too close.
+; out: CX = |ex*(dy+oy) - ey*(dx+ox)|, 0FFFFh when that will not fit a word;
+;      [cy_lpdir] = 0 on the line, 1 negative, 2 positive. Preserves the rest.
+cy_lp_cross:
+    push ax
+    push bx
+    push dx
+    mov ax, [cy_lpdy]
+    add ax, [cy_lpoy]
+    imul word [cy_lpex]
+    mov cx, ax
+    mov bx, dx
+    mov ax, [cy_lpdx]
+    add ax, [cy_lpox]
+    imul word [cy_lpey]
+    sub cx, ax
+    sbb bx, dx
+    mov byte [cy_lpdir], 2
+    or bx, bx
+    js .neg
+    jnz .big
+    or cx, cx
+    jnz .out
+    mov byte [cy_lpdir], 0          ; ON the line, and leaning nowhere
+    jmp short .out
+.neg:
+    mov byte [cy_lpdir], 1
+    cmp bx, -1
+    jne .big
+    neg cx
+    jnz .out
+.big:
+    mov cx, 0xFFFF
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; cy_lp_scale - AX = (AX * CX) / [cy_lpl], signed, rounded to nearest.
+cy_lp_scale:
+    push bx
+    push cx
+    push dx
+    push si
+    xor si, si
+    or ax, ax
+    jns .pos
+    neg ax
+    inc si
+.pos:
+    mul cx
+    mov bx, [cy_lpl]
+    shr bx, 1
+    add ax, bx
+    adc dx, 0
+    div word [cy_lpl]
+    or si, si
+    jz .out
+    neg ax
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ; --- cy_vert ------------------------------------------------------------------
@@ -1456,6 +1924,24 @@ cy_lanepos:
     sar cx, 1
     sar dx, 1
 
+    ; THE LIP IS NOT THE RING (67.5.3.1). Every other depth is a scale about
+    ; the vanishing point and its midpoint is the answer; CY_TOPD's is where
+    ; the claw and the arrivals are DRAWN, and cy_lip_build has already moved
+    ; it clear of the rim edge on the webs a scale does not clear. The SPAN
+    ; above is still the ring's, because that is the lane a mover is bounded
+    ; by and the push does not widen it.
+    ; DI is still the row offset and BX is still the lane, so the test needs
+    ; NO scratch word - which matters, because cy_bottom_lane calls this from
+    ; the worker's update phase with no gfx lock held and a UI callback can
+    ; be inside it at the same time.
+    cmp di, CY_TOPD * CY_MAXV * 2
+    jne .out
+    cmp bx, [cy_nlane]
+    jae .out
+    shl bx, 1
+    mov cx, [cy_lipx + bx]
+    mov dx, [cy_lipy + bx]
+.out:
     pop di
     pop si
     pop bx
@@ -3548,11 +4034,11 @@ cy_render:
                                     ; with no enemies and no player in it, and
                                     ; a repaint on the target machine is ~200ms
 .nofull:
-    cmp byte [cy_abon], 0
+    cmp byte [cy_pnon], 0
     jne .fin                        ; THE PANEL OWNS THE SCREEN. Without this
                                     ; the state render runs underneath it and
-                                    ; cy_about_draw puts the whole box back on
-                                    ; top - a bed fill, a frame and seven
+                                    ; cy_panel_draw puts the whole box back on
+                                    ; top - a bed fill, a frame and a dozen
                                     ; opaque runs EVERY FRAME, which is
                                     ; PERFORMANCE.md's double-draw with the
                                     ; panel as the second layer
@@ -3562,7 +4048,7 @@ cy_render:
 .small:
     call cy_small_render
 .fin:
-    call cy_about_draw              ; LAST and over everything, whatever the
+    call cy_panel_draw              ; LAST and over everything, whatever the
                                     ; state drew underneath it
     cmp byte [cy_inbr], 0
     jne .out
@@ -3700,7 +4186,7 @@ cy_draw_all:
                                     ; number that says whether the incremental
                                     ; paths are being used at all
     call cy_obj_forget              ; the fill took every mover with it
-    mov byte [cy_abdirty], 1        ; ...and the About panel, if one is up
+    mov byte [cy_pndirty], 1        ; ...and the panel, if one is up
     call cy_hud_clr                 ; ...and the status strip's shadow
     mov word [cy_msgp], 0           ; ...and the banner
     mov byte [cy_msgdirty], 1
@@ -4490,6 +4976,15 @@ cy_rim_step:
 ; threaded anywhere. It marks whether or not it really cut anything, which is
 ; why the budget matters: a wrong mark costs three lines eventually, and a
 ; missed one costs pixels for ever.
+;
+; WHAT IT IS NOT IS A FIX FOR SOMETHING THAT SITS ON THE WEB (67.5.3.1). A
+; sweep at one lane every fourth frame is a few hundred milliseconds behind
+; the damage and costs three line walks when it fires; it is affordable
+; because it is cleaning up after the occasional corner of a rect. The claw
+; used to be drawn ON the rim edge for the whole of a flat, star, plus or vee
+; level - damage on every lane, on every frame it moved - and no budget makes
+; that look right. That is a GEOMETRY bug and cy_lip_build is where it is
+; fixed; nothing here was made to work harder for it.
 ; =============================================================================
 CY_WEBREP   equ 1                   ; lanes repaired per repair frame...
 CY_WEBEVERY equ 4                   ; ...and only every 4th frame is one.
@@ -5367,7 +5862,7 @@ cy_play_render:
     call cy_spk_mark
     call cy_obj_hide
     mov byte [cy_u_act + si], 0
-    jmp short .unext
+    jmp .unext
 .ulive:
     mov bx, si
     shl bx, 1
@@ -5377,10 +5872,10 @@ cy_play_render:
     call cy_spk_mark
     pop ax
     call cy_dmap
-    mov bx, 0x0303
+    mov bx, 0x0304
     test word [cy_frame], 4         ; it pulses, so the eye finds it - and a
     jz .usz                         ; pulse is free: the rect changed, so the
-    mov bx, 0x0404                  ; frame was going to redraw it anyway
+    mov bx, 0x0405                  ; frame was going to redraw it anyway
 .usz:
     call cy_setrect
     mov ax, si
@@ -5388,9 +5883,63 @@ cy_play_render:
     call cy_obj_ptr
     mov al, CY_C_PU
     call cy_obj_show
+    jc .unext                       ; it did not move: the hole is still there
+
+    ; THE HOLE (SPEC.md 67.9.1). A powerup was a solid white square pulsing
+    ; between 0303h and 0404h - which are the FUSEBALL's and the TANKER's own
+    ; footprints - and CY_C_PU and the fuseball's pen are both 39.4's white
+    ; class, so on Hercules and CGA a powerup and a fuseball were the same
+    ; pixels. Colour cannot separate them on a 1bpp adapter and the aspect
+    ; ratios were already taken, so what is left is SOLID against HOLLOW:
+    ; nothing else on the web is hollow, and that is a property no enemy can
+    ; collide with however many kinds arrive later.
+    ;
+    ; The claw's notch is the shape and the reason (cy_player_draw): the whole
+    ; rect goes down first, so every pixel inside it is written on every draw
+    ; and cy_rsub stays exact; the hole is an ordinary background erase and is
+    ; reported as one; and DI is still this powerup's own block, so cy_obj_dmg
+    ; skips it and cannot recurse. Gated on cy_obj_show having drawn, or a
+    ; parked powerup would cost a fill a frame for a hole already on the glass.
+    ;
+    ; THE WALLS ARE 2px WIDE AND 1px TALL, which are the claw's own numbers and
+    ; are not a compromise: a CGA pixel is 2.4:1 TALL and a Hercules one 1.55:1
+    ; (SPEC.md 39), so one row is thicker on the glass than one column is wide -
+    ; and 1px on the sides is what the file already calls spindly. The 1 is also
+    ; what opens the hole EARLY: an inset of 2 on both axes needs half-extents
+    ; of 3, which the depth ramp only reaches at the rim, so the box would have
+    ; been solid for the whole climb and hollow only where you grab it.
+    mov al, CY_C_BG
+    call cy_setcol
+    mov ax, [cy_snl]
+    add ax, 2
+    mov cx, [cy_snr]
+    sub cx, 2
+    cmp ax, cx                      ; A DISTANT ONE STAYS SOLID, and that is
+    jg .unext                       ; the right answer rather than a fallback:
+    mov bx, [cy_snt]                ; cy_setrect scales the extents by depth,
+    add bx, 1                       ; so far out this is a 1px dot - and so is
+    mov dx, [cy_snb]                ; every enemy. The confusion is at grab
+    sub dx, 1                       ; range and that is where the hole opens
+    cmp bx, dx
+    jg .unext
+    call cy_fillc
+    mov ax, [cy_snl]                ; the hole is an erase like any other
+    add ax, 2
+    mov [cy_sol], ax
+    mov ax, [cy_snt]
+    inc ax
+    mov [cy_sot], ax
+    mov ax, [cy_snr]
+    sub ax, 2
+    mov [cy_sor], ax
+    mov ax, [cy_snb]
+    dec ax
+    mov [cy_sob], ax
+    call cy_obj_dmg
 .unext:
     inc si
-    jmp short .uloop
+    jmp .uloop                      ; NOT `jmp short`: the hole above put the
+                                    ; loop body past 127 bytes
 
     ; --- the player's claw -------------------------------------------------
 .pl:
@@ -6072,6 +6621,184 @@ cy_s_initp: db 'NAME ', 0
 cy_hs_magic: db 'CY8', 1            ; the format, so a stale or foreign file is
                                     ; refused rather than decoded
 
+; --- SYSTEM\APPDATA (SPEC.md 19.9) -------------------------------------------
+; The table used to be written wherever this instance was standing, which is
+; the folder it was launched from - GAMES, next to the games. The file browser
+; is the whole of how a user reaches an application here, so a data file in an
+; app folder is a misclick waiting to happen and one more row to scroll past.
+;
+; cy_data_enter stands us in SYSTEM\APPDATA on OUR OWN volume - the disk we
+; were launched from, which is in the drive by definition, where the boot
+; volume may well have been swapped out on a one-floppy machine - and
+; cy_data_leave puts us back. Every path out of a save or a load must call the
+; leave, or the app is left standing somewhere else and its next Save As opens
+; there (SPEC.md 38.10) and every unqualified name it passes the file API
+; afterwards resolves there.
+;
+; IT IS OSAPI_FILE_GOTO AND NOT ITS QUIET TWIN, and that is the whole of what
+; the first version got wrong. OSAPI_FILE_GOTO_Q moves the GLOBAL cwd and
+; deliberately NOT the instance's - its own contract says so: "this is where
+; the caller is standing to do a job, not where the application now believes
+; it lives" - while OSAPI_FILE_FIND, _READ and _WRITE every one resolve in the
+; INSTANCE's folder through inst_vol_enter. So the quiet move was undone by
+; the very next call: the walk listed GAMES, found no SYSTEM in it, and the
+; save wrote nothing at all. The load path appeared to work, which is worse
+; than failing - it was luck about which folder the globals happened to be
+; standing in, and luck does not repeat.
+;
+; The price is that each step is a REMOUNT: four for a save, four for the load
+; at first paint. That is affordable exactly here - a save is already seconds
+; of floppy and happens once per qualifying game over - and it is NOT cached,
+; because a cached cluster plus a swapped disk is a write into whatever
+; cluster 3 is on somebody else's floppy.
+cy_d_system: db 'SYSTEM', 0
+cy_d_appdat: db 'APPDATA', 0
+
+; cy_data_enter - bank where we are and go to SYSTEM\APPDATA on this volume.
+; out: CF=1 we did not get there and NOTHING was banked or moved - the caller
+;      does its file operation nowhere and must NOT call cy_data_leave.
+;      CF=0 and the banked pair is in [cy_dbdrv]/[cy_dbclus].
+; UI task only. Clobbers nothing the callers keep.
+cy_data_enter:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    call OSAPI_FILE_HERE            ; DX = our cwd cluster, BL = our drive
+    mov [cy_dbclus], dx
+    mov [cy_dbdrv], bl
+    xor dx, dx                      ; the ROOT of that same volume
+    call OSAPI_FILE_GOTO
+    jc .back
+    mov si, cy_d_system
+    call cy_data_dive
+    jc .back
+    mov si, cy_d_appdat
+    call cy_data_dive
+    jc .back
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.back:
+    ; A DISK WITHOUT THE FOLDER IS NOT AN ERROR - it is a user's own disk, or
+    ; one written by something else. Put the volume back and refuse: the caller
+    ; then does nothing, which is exactly what a refused write already did.
+    call cy_data_home
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; cy_data_leave / cy_data_home - back to the banked folder. Preserves
+; everything AND the flags: the caller's result is in CF and AX.
+cy_data_leave:
+    pushf
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    call cy_data_home
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    popf
+    ret
+
+cy_data_home:
+    push ax
+    push bx
+    push dx
+    mov dx, [cy_dbclus]
+    mov bl, [cy_dbdrv]
+    call OSAPI_FILE_GOTO
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; cy_data_dive - step into the folder named at SI, in the current directory.
+; out: CF=1 there is no such folder. ES = DS on entry.
+cy_data_dive:
+    push ax
+    push cx
+    push si
+    push di
+    xor cx, cx                      ; the walk's ordinal, 0 to start
+.each:
+    push ds                         ; ES EVERY TIME, not once: the buffer is
+    pop es                          ; ours and nothing promises ES survives a
+    mov di, cy_dfind                ; far call into the kernel
+    call OSAPI_FILE_FIND
+    jc .none
+    cmp word [cy_dfind + 14], OSAPI_FT_DIR
+    jne .each                       ; only a FOLDER can be dived into, and the
+                                    ; type word is the question to ask: type 1
+                                    ; is a PACKAGE and not "a file"
+    push cx
+    push si
+    mov di, cy_dfind
+    call cy_data_same
+    pop si
+    pop cx
+    jc .each
+    mov dx, [cy_dfind + 16]         ; its first cluster
+    mov bl, [cy_dbdrv]
+    call OSAPI_FILE_GOTO
+    jc .none
+    pop di
+    pop si
+    pop cx
+    pop ax
+    clc
+    ret
+.none:
+    pop di
+    pop si
+    pop cx
+    pop ax
+    stc
+    ret
+
+; cy_data_same - is the NUL name at SI the one at DI? CF=0 yes.
+cy_data_same:
+    push ax
+.n:
+    mov al, [si]
+    cmp al, [di]
+    jne .no
+    or al, al
+    jz .yes
+    inc si
+    inc di
+    jmp short .n
+.yes:
+    pop ax
+    clc
+    ret
+.no:
+    pop ax
+    stc
+    ret
+
 ; cy_hs_load - read the table, once, from the first paint. Anything wrong with
 ; the file leaves the built-in defaults standing: a high score table is not
 ; worth an error box, and the first run has no file at all.
@@ -6089,12 +6816,15 @@ cy_hs_load:
     push es
     push ds
     pop es
+    call cy_data_enter              ; SPEC.md 19.9: the table lives in
+    jc .done                        ; SYSTEM\APPDATA, not beside the games
     mov si, cy_hs_file
     mov bx, cy_hsbuf
     mov cx, CY_HSFSZ
     xor dx, dx
     call OSAPI_FILE_READ
-    jc .done
+    call cy_data_leave              ; ...and we stand where we started again,
+    jc .done                        ; whatever the read answered
     or dx, dx
     jnz .done                       ; longer than a word: not ours
     cmp ax, CY_HSFSZ
@@ -6154,11 +6884,15 @@ cy_hs_save:
     mov si, cy_hsn
     mov cx, CY_NHS * 3
     call cy_bcopy
+    call cy_data_enter
+    jc .gone
     mov si, cy_hs_file
     mov bx, cy_hsbuf
     mov cx, CY_HSFSZ
     xor dx, dx
     call OSAPI_FILE_WRITE
+    call cy_data_leave
+.gone:
     pop es
     pop di
     pop si
@@ -6500,6 +7234,7 @@ cy_scroll_span:
 cy_scroll_reset:
     mov word [cy_scrp], cy_scroll_txt
     mov byte [cy_scrm], 0
+    mov byte [cy_scrsp], 0          ; the table has not been spliced this pass
     ret
 
 cy_scroll_step:
@@ -6577,6 +7312,29 @@ cy_scroll_row:
     jz .out
     mov [cy_tmpw], cx
 
+    ; A MODEL BYTE IS PEELED OFF THE FRONT, so the length below - and therefore
+    ; the centring - is the TEXT's. Peeling it after measuring would centre the
+    ; line one cell left of where its picture goes.
+    ;
+    ; THE ZERO TEST IS NOT OPTIONAL AND IT IS SPEC.md 67.21.1's BUG A THIRD
+    ; TIME: an empty line is a LONE NUL, which is under 20h, so `cmp byte [si],
+    ; 0x20 / jae` peeled a blank separator's own terminator and stepped SI onto
+    ; the NEXT line - which then rendered RAW, model byte lettered as a glyph
+    ; and one cell out of centre, while the real row drew properly a moment
+    ; later. Two adjacent band rows holding the same line, one with a swatch
+    ; and one without. At the END of the list it was worse: the terminator row
+    ; peeled the last blank's NUL, ran cy_strlen straight past 0FFh and
+    ; lettered the About panel's first line out of the image behind it.
+    mov byte [cy_scrmid], 0
+    mov al, [si]
+    or al, al
+    jz .nomod                       ; an empty line, not a model
+    cmp al, 0x20
+    jae .nomod
+    mov [cy_scrmid], al
+    inc si
+.nomod:
+
     mov di, cy_scrline              ; blank it, then centre the text in it
     mov al, ' '
     push cx
@@ -6601,6 +7359,12 @@ cy_scroll_row:
     add di, ax
     mov cx, bx
     rep movsb
+
+    shl ax, 1                       ; where the TEXT starts on the glass: the
+    shl ax, 1                       ; run is emitted at the band's left edge
+    shl ax, 1                       ; and the centring lives inside the buffer,
+    add ax, [cy_tmpn]               ; so the swatch has to be told
+    mov [cy_scrmx], ax
 
     ; THE LEADING HAS TO BE ERASED TOO. font_run is opaque over its own 8px
     ; cell and no further, so with a 12-row pitch the two rows above the
@@ -6636,7 +7400,8 @@ cy_scroll_row:
     mov al, CY_C_TEXT
     mov ah, CY_C_BG
     call cy_textc
-.out:
+    call cy_scroll_model            ; ...and the picture LAST, over the two
+.out:                               ; cells the opaque run just blanked for it
     pop es
     pop di
     pop si
@@ -6646,28 +7411,143 @@ cy_scroll_row:
     pop ax
     ret
 
+; cy_scroll_model - the picture beside the row just lettered (SPEC.md 67.21.2).
+;
+; [cy_scrmid] is 0 for a line with no model, 1..CYE_KINDS for that enemy kind,
+; CY_SCRM_PU for the powerup box. The shape and the pen come out of cy_ekext
+; and cy_ekcol - THE GAME'S OWN TABLES - so a swatch cannot become a picture of
+; something the web does not contain, and it follows cy_pal's per-adapter
+; rewrite of the two dither pens for free.
+;
+; It draws in the two cells the opaque run reserved at the text's pen, centred
+; on the glyph rows. Nothing else draws in the band (the playfield stops above
+; it, SPEC.md 67.10), so there is no object block, no damage mark and no
+; repair - the band is the scroller's alone and the next blit carries the
+; swatch up with the text as ordinary pixels.
+;
+; Preserves nothing but the flags' irrelevance: it is the last thing in
+; cy_scroll_row, which has pushed everything.
+cy_scroll_model:
+    mov al, [cy_scrmid]
+    or al, al
+    jz .out
+    mov bl, al
+    mov bh, 0
+    dec bx                          ; 1..CYE_KINDS -> the kind index
+    cmp bl, CYE_KINDS
+    jb .kind
+    cmp al, CY_SCRM_PU
+    jne .out                        ; not a model we know: draw nothing
+    mov bx, 0x0405                  ; the powerup's larger pulse phase, and its
+    mov al, CY_C_PU                 ; pen; the hole is cut below
+    mov byte [cy_scrmh], 1
+    jmp short .have
+.kind:
+    mov byte [cy_scrmh], 0
+    mov al, [cy_ekcol + bx]         ; the live pen for THIS adapter
+    add bx, bx
+    mov bx, [cy_ekext + bx]
+.have:
+    ; The centre: half way across the reserved cells, and on the middle of the
+    ; 8 glyph rows. The 12-row pitch is cleared by the run and the two leading
+    ; fills, so a model up to 11 rows tall has somewhere to be. SI and DI are
+    ; free here - cy_scroll_row pushed both and this is the last thing it does -
+    ; and cy_tmpx/cy_tmpy are deliberately NOT borrowed: those are cy_setrect's
+    ; scratch, and a routine on the drawing spine reaching into another one's
+    ; temporaries is how this file's worst bugs have started.
+    mov [cy_scrmk], bx              ; the extents, out of the way of the pen:
+    call cy_setcol                  ; OSAPI_SET_COLOR clobbers freely
+    mov si, [cy_scrmx]
+    add si, CY_SCRMW * 8 / 2        ; SI = centre x
+    mov di, [cy_chgt]
+    sub di, CY_SCRROW - 2 - 3       ; DI = centre y (the glyphs start 10 up)
+
+    mov bx, [cy_scrmk]
+    mov dl, bl                      ; half WIDTH
+    mov dh, 0
+    mov ax, si
+    sub ax, dx                      ; AX = x1
+    mov cx, si
+    add cx, dx                      ; CX = x2
+    mov dl, bh                      ; ...then half HEIGHT, before BX is spent
+    mov dh, 0
+    mov bx, di
+    sub bx, dx                      ; BX = y1
+    add dx, di                      ; DX = y2
+    call cy_fillc                   ; preserves all four, which the hole needs
+
+    cmp byte [cy_scrmh], 0
+    je .out
+    ; ...and the hole, on 67.9.1's terms and with its numbers: 2px of wall each
+    ; side, 1px top and bottom. The whole rect was written just above, so this
+    ; is the claw's shape here too.
+    push ax
+    push bx
+    push cx
+    push dx
+    mov al, CY_C_BG
+    call cy_setcol
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    add ax, 2
+    sub cx, 2
+    cmp ax, cx
+    jg .out
+    inc bx
+    dec dx
+    cmp bx, dx
+    jg .out
+    call cy_fillc
+.out:
+    ret
+
 ; cy_scroll_next - SI = the next line. Walks the static list, then the high
-; scores, then round again.
+; scores WHERE THE LIST ASKS FOR THEM, then round again.
+;
+; The table used to come after the whole static list, because the list simply
+; ran out; it is spliced at a CY_SCRM_SPL marker now, so where it appears is a
+; property of the text and not of this routine. [cy_scrsp] is what makes that
+; safe: the marker is honoured once per pass, so two markers in a row - or one
+; left where the table returns to - cannot bounce between the list and the
+; table for ever. That would spin with the gfx lock held, which is SPEC.md
+; 59.7's hang: a machine that looks alive and never draws again.
 cy_scroll_next:
     push ax
     push bx
     push cx
     push di
+.top:
     mov al, [cy_scrm]
     or al, al
     jnz .hs
     mov si, [cy_scrp]
-    cmp byte [si], 0
-    je .tohs
+    mov al, [si]
+    cmp al, CY_SCRM_END             ; 0FFh, NOT 0: a blank separator line is an
+    je .wrap                        ; empty string and so is a lone 0 byte
+    cmp al, CY_SCRM_SPL
+    jne .plain
+    cmp byte [cy_scrsp], 0
+    jne .plain                      ; already spliced: step over it below
+    inc si                          ; past the marker, which is where the
+    mov [cy_scrp], si               ; table returns to
+    mov byte [cy_scrsp], 1
+    mov byte [cy_scrm], 1
+    jmp short .hs
+.plain:
     push si
     call cy_strlen
     add si, cx
     inc si
     mov [cy_scrp], si
     pop si
-    jmp .out
-.tohs:
-    mov byte [cy_scrm], 1
+    cmp byte [si], CY_SCRM_SPL      ; a marker reached a second time. It cannot
+    je .spent                       ; be, [cy_scrp] having stepped past it - but
+    jmp .out                        ; 0FEh is not under 20h, so cy_scroll_row
+.spent:                             ; would letter it as a glyph rather than
+    mov si, cy_scr_blank            ; peel it, and an unreachable garbage
+    jmp .out                        ; character is not worth leaving reachable
 .hs:
     mov al, [cy_scrm]
     cmp al, 1
@@ -6679,8 +7559,8 @@ cy_scroll_next:
     mov bl, al
     sub bl, 2
     cmp bl, CY_NHS
-    jae .wrap
-    mov bh, 0
+    jae .back                       ; the table is spent: back to the LIST,
+    mov bh, 0                       ; which is where the marker left off
     mov di, cy_scrbuf
     mov byte [di], '1'
     add [di], bl
@@ -6711,7 +7591,12 @@ cy_scroll_next:
     mov byte [cy_scrbuf + 14], 0
     inc byte [cy_scrm]
     mov si, cy_scrbuf
-    jmp .out
+    jmp short .out
+.back:
+    mov byte [cy_scrm], 0           ; and round .top once. [cy_scrp] was stepped
+    jmp .top                        ; PAST the marker when the table was
+                                    ; spliced, so this reads the line after it
+                                    ; and cannot splice again
 .wrap:
     mov byte [cy_scrm], 0
     call cy_scroll_reset
@@ -6759,6 +7644,14 @@ cy_go_fsx:
     push cx
     cmp byte [cy_fsx], 0
     jne .out
+    ; A PANEL MAY NOT CROSS INTO THE BRACKET. Every windowed way to take one
+    ; down is a key or a click through W_ONKEY/W_ONCLICK, and neither is
+    ; dispatched in a bracket (SPEC.md 53.1) - the exclusive loop polls int 16h
+    ; straight into cy_key_common. The menu is the one path that reaches here
+    ; with a panel up (Help, then Game > Full Screen), and it would arrive on
+    ; the exclusive surface with no way at all to dismiss it. Off, not
+    ; dismissed: the entry below already owes a whole repaint.
+    call cy_pn_off
     mov byte [cy_fsxq], 0
     mov byte [cy_fsx], 1            ; BEFORE the call: fsx_restore's
     mov byte [cy_inbr], 1           ; wm_paint_all runs INSIDE fsx_run and
@@ -6954,12 +7847,16 @@ CY_TWORDS equ 14
     CBYTE cy_needlay
     CBYTE cy_full
     CBYTE cy_hired
-    CBYTE cy_abon                   ; the About panel is up
+    CBYTE cy_pnon                   ; a panel (About or How To Play) is up
     CBYTE cy_wasplay                ; ...and it was a live game it paused
-    CWORD cy_abx                    ; where it was drawn, so nothing re-derives
-    CWORD cy_aby
-    CBYTE cy_abln                   ; the About panel's row cursor
-    CBYTE cy_abdirty                ; ...and whether it is owed pixels
+    CWORD cy_pnx                    ; where it was drawn, so nothing re-derives
+    CWORD cy_pny
+    CBYTE cy_pnrow                  ; the panel's row cursor
+    CBYTE cy_pndirty                ; ...and whether it is owed pixels
+    CWORD cy_pntxt                  ; WHICH panel: its text block, its box and
+    CWORD cy_pnw                    ; its line cap, banked at arm time. Nothing
+    CWORD cy_pnh                    ; downstream asks which of the two it is -
+    CBYTE cy_pnln                   ; there is one panel and it has content
     CBYTE cy_dieph                  ; which step of the death sweep has played
     CBYTE cy_curon                  ; the fullscreen cursor is on the glass
     CWORD cy_curx                   ; ...and WHERE, banked - an XOR erased at a
@@ -7019,6 +7916,11 @@ CY_TWORDS equ 14
     CWORD cy_tshape
     CWORD cy_scrt
     CWORD cy_scrp
+    CBYTE cy_scrsp                  ; the high-score table has been spliced in
+    CBYTE cy_scrmid                 ; this row's model, 0 = none (67.21.2)
+    CBYTE cy_scrmh                  ; ...and whether it is cut hollow
+    CWORD cy_scrmk                  ; its extents, banked across the pen change
+    CWORD cy_scrmx                  ; where the row's TEXT starts on the glass
     CBUF  cy_scrbuf, 16
     CBUF  cy_scrline, CY_SCRMAXC + 1
 
@@ -7039,6 +7941,28 @@ CY_TWORDS equ 14
     CWORD cy_lspx                   ; the lane's span, published by cy_lanepos
     CWORD cy_lspy
     CWORD cy_lspm                   ; ...and the dominant of the two
+
+    ; --- the lip (67.5.3.1): where a lane's CY_TOPD movers actually sit ---
+    CBUF  cy_lipx, CY_MAXLANE * 2
+    CBUF  cy_lipy, CY_MAXLANE * 2
+    CWORD cy_lptx                   ; ...and cy_lip_build's own scratch, which
+    CWORD cy_lpty                   ; runs once per window change and so keeps
+    CWORD cy_lpv2                   ; none of it in registers
+    CWORD cy_lpex
+    CWORD cy_lpey
+    CWORD cy_lpmx
+    CWORD cy_lpmy
+    CWORD cy_lpdx
+    CWORD cy_lpdy
+    CWORD cy_lpax
+    CWORD cy_lpay
+    CWORD cy_lpl
+    CWORD cy_lpn
+    CWORD cy_lpox
+    CWORD cy_lpoy
+    CWORD cy_lpk
+    CBYTE cy_lpdir
+    CBYTE cy_lpdir0
     CBUF  cy_fnum, 4
 
     ; --- cy_rsub's three rects --------------------------------------------
@@ -7117,6 +8041,9 @@ CY_TWORDS equ 14
     CBYTE cy_ipos                   ; ...and how many characters are in
     CBUF  cy_ibuf, 4
     CBUF  cy_hsbuf, CY_HSFSZ        ; the file, staged
+    CBUF  cy_dfind, OSAPI_FIND_SZ   ; one OSAPI_FILE_FIND record (SPEC.md 19.9)
+    CWORD cy_dbclus                 ; where we were standing before the visit
+    CBYTE cy_dbdrv
     CBUF  cy_ibuf2, CY_INITW + 2    ; ...and the prompt it is lettered from
 
     OS88_BSS CY_BSS

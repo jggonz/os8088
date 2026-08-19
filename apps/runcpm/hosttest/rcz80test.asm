@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/runcpm/hosttest/rcz80test.asm
 ;
-; Part of RUNCPM (SPEC.md 71), a reimplementation of RunCPM 6.9 by Marcelo
+; Part of RUNCPM (SPEC.md 74), a reimplementation of RunCPM 6.9 by Marcelo
 ; Dantas / "Mockba the Borg" (MIT licence, Copyright (c) 2017 Mockba the
 ; Borg): the CP/M it stands up around the core is cpm.h's _PatchCPM in
 ; miniature.

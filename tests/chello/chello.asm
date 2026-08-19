@@ -1,13 +1,13 @@
 ; =============================================================================
 ; os8088 - tests/chello/chello.asm
 ;
-; The assembly shim of the C toolchain's capability gate (SPEC.md 70), and the
+; The assembly shim of the C toolchain's capability gate (SPEC.md 73), and the
 ; second worked example of the two files a C package is made of - the first
 ; being apps/cc/ccsmoke.asm, which this is deliberately identical in shape to.
 ;
 ; It is the top-level nasm source: the .c is never assembled on its own,
 ; because `nasm -f bin` has no notion of an external symbol, so the compiled C,
-; the runtime and the header are one assembly (SPEC.md 70.1).
+; the runtime and the header are one assembly (SPEC.md 73.1).
 ;
 ; A shim does four things and nothing else belongs in it: name the package,
 ; declare which callbacks the C actually defines, include the runtime and then

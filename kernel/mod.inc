@@ -40,19 +40,29 @@ MOD_MAX     equ 2               ; rows in mod_tab
 MOD_CTRL    equ 0               ; the Control Panel (SPEC.md 31)
 MOD_FMT     equ 1               ; the floppy formatter (SPEC.md 18.96)
 
-MOD_NENT    equ 4               ; far-pointer slots reserved per module. A
+MOD_NENT    equ 8               ; far-pointer slots reserved per module. A
                                 ; fixed stride, so a thunk's
                                 ; `call far [mod_fp + K]` is an assembly-time
                                 ; constant with no arithmetic at run time -
                                 ; which is what makes dispatch re-entrant and
                                 ; register-free (see mod_fp below).
                                 ;
-                                ; FOUR, which is what both modules use, and
-                                ; not a round eight: the stride costs .bss on
-                                ; every machine and the header costs the file,
-                                ; and raising it is a rebuild of every module
-                                ; - which a kernel change already is, since
-                                ; they come out of the same assembly
+                                ; EIGHT. It was four - "what both modules use,
+                                ; and not a round eight" - until SPEC.md
+                                ; 13.8.3 gave the Control Panel a
+                                ; W_ONMOUSEUP and a W_ONDRAG and it needed
+                                ; six. The costs the old comment named are
+                                ; real and are what they are: +32 bytes of
+                                ; .bss (MOD_MAX x 16) and 8 bytes of each
+                                ; module FILE, and every module is rebuilt -
+                                ; which a kernel change already forces,
+                                ; MOD_H_BUILD being the commit count.
+                                ;
+                                ; IT HAS TO BE A POWER OF TWO, because
+                                ; mod_fpi SHIFTS by MODFP_SHIFT while each
+                                ; module's base equ MULTIPLIES by
+                                ; MODFP_STRIDE. The assertion below is what
+                                ; caught those two disagreeing once already
 
 MODFP_STRIDE equ MOD_NENT * 4   ; bytes of mod_fp per module: four far
                                 ; pointers. Named because it is spelled TWICE
@@ -60,7 +70,7 @@ MODFP_STRIDE equ MOD_NENT * 4   ; bytes of mod_fp per module: four far
                                 ; SHIFTS by it and each module's own base is
                                 ; an `equ` that MULTIPLIES by it, and the
                                 ; shift said 5 while the multiply said 16.
-MODFP_SHIFT equ 4               ; They agree for module 0 whatever either says,
+MODFP_SHIFT equ 5               ; They agree for module 0 whatever either says,
                                 ; so the Control Panel worked perfectly and the
                                 ; formatter's slots were armed sixteen bytes
                                 ; past the end of the array - over [mod_fsz],
@@ -167,6 +177,29 @@ mod_row:
     shl bx, 1
     shl bx, 1                   ; MODR_SIZE = 8
     add bx, mod_tab
+    ret
+
+; -----------------------------------------------------------------------------
+; mod_live - is module AL resident RIGHT NOW? (SPEC.md 2.8, 13.8.3)
+; in:  AL = a module id
+; out: CF = 0 resident, CF = 1 not; BX = its row either way, nothing else
+;      touched
+;
+; mod_need without the loading. The callers are the ones that can only ever
+; follow a gesture the module itself took - a W_ONMOUSEUP or a W_ONDRAG after
+; a W_ONCLICK that loaded it (SPEC.md 13.8.3) - where "not resident" means the
+; arm is stale and there is nothing to fire. Loading the Control Panel off a
+; FLOPPY to answer a mouse movement would be absurd, and on the drag path
+; mod_need would try it eighteen times a second.
+; -----------------------------------------------------------------------------
+mod_live:
+    call mod_row
+    cmp word [bx+MODR_SEG], 0
+    je .no
+    clc
+    ret
+.no:
+    stc
     ret
 
 ; -----------------------------------------------------------------------------

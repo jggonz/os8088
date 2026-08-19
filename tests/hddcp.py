@@ -19,7 +19,11 @@ from os88mouse import Mouse
 IMG = sys.argv[1]
 OUT = sys.argv[2]
 MACHINE = "os8088_xt_hdd"
-WIN_SIZE, MAX_WIN = 28, 12
+from os88geom import WIN_SIZE, MAX_WIN   # NOT a local copy: this one
+                                        # moved 28 -> 30 with SPEC.md
+                                        # 13.8.2's W_ONDRAG, and a stale
+                                        # stride decodes window 1 as
+                                        # garbage and reads it as unused
 
 CP_I0Y, CP_IROWH = 6, 14           # ctrl.inc: the item list
 CP_DIVX, CP_RX = 88, 96            # ...the divider, and the pane's left edge

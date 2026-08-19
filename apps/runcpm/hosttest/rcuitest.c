@@ -1,7 +1,7 @@
 /* ============================================================================
  * os8088 - apps/runcpm/hosttest/rcuitest.c    RUNCPM's terminal, on the host
  *
- * Part of RUNCPM (SPEC.md 71), a reimplementation of RunCPM 6.9 by Marcelo
+ * Part of RUNCPM (SPEC.md 74), a reimplementation of RunCPM 6.9 by Marcelo
  * Dantas / "Mockba the Borg" (MIT licence, Copyright (c) 2017 Mockba the
  * Borg): the scripts below expect what RunCPM/cpm.h's C_READSTR, main.c's
  * banner and disk.h's _error print.
@@ -10,7 +10,7 @@
  * and apps/runcpm/build.sh compiles and runs it BEFORE the target build; a
  * failure stops the build.
  *
- * WHY. rcterm.c is a damage model (SPEC.md 71.2): a shadow of the glass, a
+ * WHY. rcterm.c is a damage model (SPEC.md 74.2): a shadow of the glass, a
  * per-row compare, one call per changed span, one gfx_scroll for N scrolled
  * lines. Every one of those decisions is a chance to leave a stale cell or to
  * draw a cell twice, and PERFORMANCE.md is explicit that neither shows in an
@@ -346,7 +346,7 @@ int os88_file_find(int ordinal, struct os88_find *f)
     return -1;
 }
 /* AUTOEXEC.TXT lives in the ROOT (the launch folder, clus 0) when the script
- * says so - read ONCE at launch (SPEC.md 71: upstream re-reads it on every
+ * says so - read ONCE at launch (SPEC.md 74: upstream re-reads it on every
  * warm boot; here that is a directory walk of the launch folder per ^C and
  * buys nothing, so it is cached). The stubs model OSAPI_FILE_READ as the
  * kernel does it: a file LARGER THAN THE CAPACITY is FERR_BIG and NOTHING is
@@ -465,7 +465,7 @@ char *os88_utoa(unsigned v, char *dst6) { sprintf(dst6, "%u", v); return dst6; }
  * against ZEXDOC); what the harness models is the CONTRACT the C sees: a
  * register file, a 64KB RAM the accessors reach, and rc_run() as a SCRIPT of
  * handoffs - each step sets PC (past the RST), BC and DE and answers a
- * reason; a step the C put PC back onto (the retry, SPEC.md 71.1) is served
+ * reason; a step the C put PC back onto (the retry, SPEC.md 74.1) is served
  * again. In the clock state the burst is ZCLK_BURST control transfers spent
  * against the budget of each call: a call that runs out mid-burst answers
  * SLICE with PC inside the loop, and the C must come back with THAT PC (a
@@ -744,7 +744,7 @@ static void run_all(int cols_geom, int rows_geom, int table)
     /* AUTOEXEC.TXT: 'DIR' and a rest behind a CR - and on one geometry a
      * 200-byte line, longer than main.c's 125-byte poke AND than a 125-byte
      * read would carry: the file is read whole and the first 125 bytes are
-     * poked (SPEC.md 71) */
+     * poked (SPEC.md 74) */
     autoexec_text = (cols_geom == 79) ? ax_long : "DIR\r\nrest";
     ax_len = (cols_geom == 79) ? 125 : 3;
     rc_mask = 0x7F; rc_cdrive = rc_odrive = rc_user = 0; rc_rovec = rc_login = 0;
@@ -757,7 +757,7 @@ static void run_all(int cols_geom, int rows_geom, int table)
     if (!win) { printf("FAIL: os88_main returned 0 (%s)\n", last_toast); fails++; return; }
     if (rc_z.seg != 0x2000) { printf("FAIL: rc_z.seg not the claim\n"); fails++; }
     /* the CCP: its 2KB claim and the read from the launch folder happen in
-     * os88_main, before anything moves the instance (SPEC.md 71.3) */
+     * os88_main, before anything moves the instance (SPEC.md 74.3) */
     if (n_claims != 2 || rc_ccpseg != 0x3000 || rc_ccplen != 2048) { printf("FAIL: the CCP claim/read: %d claims, seg %04x, %u bytes\n", n_claims, rc_ccpseg, rc_ccplen); fails++; }
     /* ...and AUTOEXEC.TXT, ONCE, whole, from the launch folder, into the
      * TPA (cleared behind it): its first 125 bytes cached, cut at the first
@@ -769,7 +769,7 @@ static void run_all(int cols_geom, int rows_geom, int table)
     audit("expose after launch");
     expect_row("banner 1", 0, "  CP/M Emulator v6.9 by Marcelo Dantas");
     expect_row("banner 2", 1, "      Built Jul 21 2026 - 20:43:19");   /* the
-                                  * pinned upstream commit's date (SPEC.md 71) */
+                                  * pinned upstream commit's date (SPEC.md 74) */
     expect_row("banner 3", 2, "----------------------------------------");
     expect_row("banner 4", 3, "CPU is 8086 native");
     expect_cursor("after banner 1", 0, 4);
@@ -1087,7 +1087,7 @@ static void run_all(int cols_geom, int rows_geom, int table)
      * (rc_fs_cd through the fake tree), reads HELLO.COM into the claim
      * 512-aligned, patches page zero and runs; the scripted Z80 then does
      * BDOS 9 (a string in its RAM), BDOS 2, and a BIOS WBOOT, which ends
-     * the program and boots the CCP again (SPEC.md 71) */
+     * the program and boots the CCP again (SPEC.md 74) */
     callreset();
     lock_depth = 1;
     os88_onkey(0, 0x26, win);            /* Alt+L */
@@ -1113,7 +1113,7 @@ static void run_all(int cols_geom, int rows_geom, int table)
       audit("load enter");
       /* Enter under the lock: the CR/LF echoed and flushed, NO floppy read
        * (several int 13h calls, ~400 ms each on the target: not under the
-       * lock W_ONKEY holds - SPEC.md 71.1), a wake posted for it */
+       * lock W_ONKEY holds - SPEC.md 74.1), a wake posted for it */
       if (last_read[0]) { printf("FAIL: the loader read %s from os88_onkey, under the lock\n", last_read); fails++; }
       if (rc_ldmode != RC_LD_LOAD || wakes_posted == w) { printf("FAIL: Enter did not hand the read to the wake (ldmode %d)\n", rc_ldmode); fails++; }
       expect_cursor("load enter", 0, 2);
@@ -1374,7 +1374,7 @@ static void run_all(int cols_geom, int rows_geom, int table)
     if (table) cost("cursor-only move to another row");
 
     /* cursor-only move on the SAME row, far: cols 9 -> 19 is a span of 11,
-     * past the measured crossover (SPEC.md 71.2: a band is 860 us + 173 a
+     * past the measured crossover (SPEC.md 74.2: a band is 860 us + 173 a
      * cell, so two 1-cell bands at 2.07 ms beat a span of 8 or more), so it
      * is two 1-cell bands */
     callreset();
@@ -1613,7 +1613,7 @@ static void run_all(int cols_geom, int rows_geom, int table)
     audit("full expose");
     if (table) cost("full expose repaint of the TE screen");
 
-    /* THE ABOUT PANEL (rcabout.c, SPEC.md 71.4) over the full TE screen:
+    /* THE ABOUT PANEL (rcabout.c, SPEC.md 74.4) over the full TE screen:
      * the kernel's 'About RunCPM' item dispatches os88_about under the lock;
      * the panel is one fill, two frames, a band per label, the button; the
      * machine is PAUSED while it is up (no slice, no wake, no flush - a
@@ -1755,7 +1755,7 @@ static void run_all(int cols_geom, int rows_geom, int table)
     }
 
     /* the keys without an ASCII code go into the ring as the VT100 sequence
-     * a host terminal sends RunCPM (SPEC.md 71.2): Up ESC[A, Del ESC[3~;
+     * a host terminal sends RunCPM (SPEC.md 74.2): Up ESC[A, Del ESC[3~;
      * Ctrl+2 is a NUL; a key the table does not name goes nowhere */
     rc_khead = rc_ktail = 0;
     lock_depth = 1;
@@ -1793,7 +1793,7 @@ static void run_all(int cols_geom, int rows_geom, int table)
      * three text rows and the cursor's row as bands - 6 calls a slice, 2 a
      * line - and the coalescing holds for the whole file: scrolls == flushes
      * <= lines. QEMU puts hundreds of lines in a slice and gets one scroll
-     * for all of them; the count is what SPEC.md 71.2 states. */
+     * for all of them; the count is what SPEC.md 74.2 states. */
     feed("\033[2J\033[H");
     wake();
     rc_mode = RC_M_IDLE;
@@ -1828,7 +1828,7 @@ static void run_all(int cols_geom, int rows_geom, int table)
 
 /* a disk without CCP-DR.60K: the launch is not refused (the claims were had);
  * main.c 118's text follows the banner and the machine idles, the window up
- * to show it (SPEC.md 71) - and Alt+L is still there */
+ * to show it (SPEC.md 74) - and Alt+L is still there */
 static void run_noccp(void)
 {
     int i;

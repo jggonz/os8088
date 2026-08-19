@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - tests/covl/covl.asm
 ;
-; The assembly shim of the C OVERLAY capability gate (SPEC.md 70.14). Same
+; The assembly shim of the C OVERLAY capability gate (SPEC.md 73.14). Same
 ; four jobs as every other shim - name the package, declare the callbacks,
 ; include the runtime and then the compiled C, close the image - plus the one
 ; line this gate exists for.

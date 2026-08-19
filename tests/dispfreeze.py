@@ -97,9 +97,10 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     dispcp.open_drive(m, mo, S, os88marty.settle, "B", card=pri)
     w = dispcp.win_list(m, S); bx, by, bw, bh = dispcp.win_rect(m, S, w[-1])
     disk = w[-1]
-    dispcp.open_row(m, mo, S, os88marty.settle, bx, by, 0, card=pri)   # APPS
+    dispcp.open_named(m, mo, S, os88marty.settle, bx, by, "APPS", card=pri)
     bx, by, bw, bh = dispcp.win_rect(m, S, disk)
-    dispcp.open_row(m, mo, S, os88marty.settle, bx, by, 5, card=pri)   # NOTEPAD
+    dispcp.open_named(m, mo, S, os88marty.settle, bx, by, "NOTEPAD.O88",
+                      card=pri)
     time.sleep(2)
     wins = dispcp.win_list(m, S)
     print("windows:", [(s,) + dispcp.win_rect(m, S, s) for s in wins])

@@ -1305,6 +1305,11 @@ kbm_isr:
     push ds
     mov ax, KERNEL_SEG
     mov ds, ax
+    call kbd_ovflow             ; SPEC.md 9.8, and AHEAD of every gate below:
+                                ; a BIOS about to find its buffer full is a
+                                ; nested beep and a dead machine, and that is
+                                ; true on a machine with a mouse and on one
+                                ; whose software never asked for key state
     mov ah, [kbd_armed]         ; SPEC.md 9.7's key-state map wants every byte
     or ah, ah                   ; that arrives; the keypad-5 half wants one
     jnz .peek                   ; byte on a mouseless machine. EITHER is a
@@ -1484,6 +1489,130 @@ kbd_down:
     mov byte [kbd_armed], 1     ; ...and only NOW may the ISR write here
     jmp short .go
 
+; =============================================================================
+; The overrun guard (SPEC.md 9.8) - A FULL BIOS BUFFER IS A HANG, NOT A BEEP
+;
+; The BIOS beeps when its 16-entry key buffer fills, and on the period IBM ROM
+; that beep is `call F000:E8C0`: two `loop $` delays run with INTERRUPTS
+; ENABLED. So every IRQ1 arriving inside one nests another int 09h - and
+; another beep - on whichever task stack is current, and a worker gets 256
+; bytes (SPEC.md 8). Measured on a 5150: seven nested copies of the same
+; 26-byte frame and a halt in sch_stkdie, about a second after the first held
+; key. It is a stack overrun with no bug anywhere near the stack.
+;
+; A margin cannot absorb it - a beep is up to ~60ms, LONGER than the ~50ms gap
+; between two held keys, so once one starts every following key lands inside
+; it. The buffer must never be full when the BIOS goes to write to it, which
+; is the whole of the invariant below.
+; =============================================================================
+KBD_BUFB    equ 0x1E            ; 0040:001E - the BIOS key buffer, and one past
+KBD_BUFE    equ 0x3E            ; its end. LITERAL, not 0040:0080/0082: those
+                                ; two BDA words do not exist on the earliest
+                                ; 5150 ROM, and winding the tail back to what
+                                ; happens to be at 40:80 is a keyboard that has
+                                ; stopped working (SPEC.md 9.8)
+KBD_OVBEEPS equ 3               ; ...and the beeps one overrun burst is worth
+
+; -----------------------------------------------------------------------------
+; kbd_ovflow - keep the BIOS buffer off full, from inside int 09h
+; in:  DS = KERNEL_SEG
+; out: nothing; preserves every register, clobbers the flags (kbm_isr calls
+;      this before it loads any of its own)
+;
+; Full, by the BIOS's own definition, is tail + 2 == head. When it is, the
+; NEWEST entry is un-enqueued - the tail winds back one slot - so the handler
+; below finds room, stores the arriving key where the previous newest sat, and
+; never reaches its beep. What gets dropped is therefore the NEW input: the
+; fifteen keys already queued keep their order and reach the application
+; untouched, which is the half of the queue the user is still waiting on.
+;
+; IT PREDICTS NOTHING. An earlier version read the scancode and made room only
+; for codes that would actually enqueue - skipping modifiers, prefixes and
+; break codes, so a key RELEASE on a full buffer cost nothing. Every such
+; filter is a guess with holes in it (Alt released with a pending Alt-numpad
+; value enqueues a character from a BREAK code), and a hole here is not a lost
+; keystroke, it is the hang above. So on a full buffer any int 09h at all
+; costs the newest queued key. That is a real cost, paid knowingly, in a state
+; where keys are being dropped regardless.
+;
+; It reads no port, which is what lets it sit ahead of SPEC.md 9.6.4's gates:
+; 9.7 arms the peek on being ASKED, and a guard every machine needs must not
+; quietly widen that. Two words of the BIOS data area are the whole input.
+; -----------------------------------------------------------------------------
+kbd_ovflow:
+    push ax
+    push bx
+    push es
+    mov ax, 0x40
+    mov es, ax
+    mov ax, [es:0x1A]           ; head - where the reader is
+    mov bx, [es:0x1C]           ; tail - where the BIOS is about to write
+    cmp ax, bx
+    je .drained                 ; empty: the reader has caught up, so the next
+                                ; burst is a new one and beeps again
+    cmp ax, KBD_BUFB            ; a head this arithmetic cannot reason about is
+    jb .out                     ; left alone and the old behaviour stands - it
+    cmp ax, KBD_BUFE            ; is a BIOS whose buffer is not where every
+    jae .out                    ; BIOS this boots on puts it
+    test al, 1
+    jnz .out
+    add bx, 2                   ; the slot the BIOS is about to fill...
+    cmp bx, KBD_BUFE
+    jb .nowrap
+    mov bx, KBD_BUFB
+.nowrap:
+    cmp bx, ax
+    jne .out                    ; ...is not the head: there is room, and this
+                                ; is the path every ordinary keystroke takes
+    sub ax, 4                   ; FULL. head - 4 is the slot BEFORE the newest,
+    cmp ax, KBD_BUFB            ; which is where the tail belongs once the
+    jae .wind                   ; newest is gone
+    add ax, KBD_BUFE - KBD_BUFB
+.wind:
+    mov [es:0x1C], ax
+    cmp byte [kbd_ovn], KBD_OVBEEPS
+    jae .out                    ; three beeps is the lot: past that the drop is
+                                ; silent, so the machine spends the time
+                                ; catching up rather than announcing that it
+                                ; has not (SPEC.md 9.8)
+    inc byte [kbd_ovn]
+    mov byte [kbd_ovb], 1       ; THE ISR ONLY EVER SETS A BYTE: snd_beep takes
+                                ; a critical section and may reach a loaded
+                                ; driver, and stack inside a nested keyboard
+                                ; interrupt is the one thing this routine
+                                ; exists to stop spending. kbd_ovspend sounds
+                                ; it in task context
+.out:
+    pop es
+    pop bx
+    pop ax
+    ret
+.drained:
+    mov byte [kbd_ovn], 0
+    jmp short .out
+
+; -----------------------------------------------------------------------------
+; kbd_ovspend - sound the overrun beep the ISR asked for, in TASK context
+;
+; Called from the two places that between them cover every state the machine
+; can be in: ui_task's deferred ladder (every pass, mouse or no mouse - kbm_ui
+; returns early on a machine that has one, so this cannot ride on its tail the
+; way kbm_p5spend does) and kbm_poll0, for the modal loops that ladder never
+; reaches. A pending beep that waits a pass is a beep slightly late, and the
+; overrun it is announcing is still going on.
+; out: nothing (all registers preserved, flags clobbered)
+; -----------------------------------------------------------------------------
+kbd_ovspend:
+    push ax
+    xor al, al
+    xchg al, [kbd_ovb]          ; read-and-clear in one, kbm_p5spend's idiom
+    or al, al                   ; and for its reason
+    jz .out
+    call snd_beep               ; SPEC.md 34.3, and a refusal by a higher
+.out:                           ; priority owner is fine: something louder than
+    pop ax                      ; a full keyboard buffer is already sounding
+    ret
+
 ; -----------------------------------------------------------------------------
 ; kbm_p5spend - turn a keypad-5 press the ISR saw into the button press
 ;
@@ -1579,6 +1708,9 @@ kbm_poll0:
                                 ; BIOS that delivers keypad 5 the call above
                                 ; has already claimed it and cleared the flag
                                 ; (SPEC.md 9.6.4), and this finds nothing
+    call kbd_ovspend            ; ...and a modal loop is exactly where the
+                                ; buffer overruns unheard otherwise: ui_task's
+                                ; ladder is not running (SPEC.md 9.8)
     pop ax
     ret
 
@@ -1686,6 +1818,13 @@ kbd_armed   db 0                ; SPEC.md 9.7: has anything ever ASKED for key
                                 ; kbd_down has not cleared yet
 kbd_dnmap   times KBD_MAPSZ db 0 ; ...and the bit per key. Zeroed again at the
                                 ; arm, so this initialiser is belt and braces
+kbd_ovn     db 0                ; SPEC.md 9.8: beeps this overrun burst has
+                                ; already spent, reset when the buffer next
+                                ; reads empty
+kbd_ovb     db 0                ; ...and one the ISR has asked for and no pass
+                                ; has sounded yet. Both .text with a real
+                                ; initialiser for kbd_armed's reason - the ISR
+                                ; reads them on the machine's first keystroke
 
 ; -----------------------------------------------------------------------------
 ; mou_isr / mou_isr3 - IRQ4 and IRQ3. Microsoft

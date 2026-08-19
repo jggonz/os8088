@@ -2,7 +2,7 @@
 # =============================================================================
 # os8088 - apps/runcpm/build.sh
 #
-# RUNCPM's host checks (SPEC.md 71), run by `make runcpm` BEFORE the target
+# RUNCPM's host checks (SPEC.md 74), run by `make runcpm` BEFORE the target
 # build, and each one stops it: a stale cell or a double draw found here costs
 # a second, and neither shows in an emulator (PERFORMANCE.md).
 #
@@ -20,7 +20,7 @@
 #   apps/runcpm/hosttest/rcmemtest.sh the Z80-RAM movers on a real x86 with
 #                                     SS != DS, in raw QEMU, with negative
 #                                     controls (a few seconds)
-#   apps/runcpm/hosttest/rcfstest.c   the disk layer (rcfs.c, SPEC.md 71.3)
+#   apps/runcpm/hosttest/rcfstest.c   the disk layer (rcfs.c, SPEC.md 74.3)
 #                                     with the BDOS dispatcher over a fake
 #                                     folder tree with contents: names, the
 #                                     directory-entry synthesis and its

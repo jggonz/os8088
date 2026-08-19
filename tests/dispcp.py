@@ -28,7 +28,7 @@ from os88geom import (MBAR_H, MENU_ITEM_H, TITLE_H, KERNEL_SEG,  # noqa: E402
                       WIN_SIZE, MAX_WIN, W_FLAGS, W_X, W_Y, W_W, W_H, W_TITLE,
                       DESK_ZY0, DESK_ZW, DESK_COLW,
                       DV_KIND, DV_FLAGS, DV_SIZE, DVOL_MAX, DVK_FREE,
-                      FM_ROW_Y0, FM_ROW_H)
+                      FM_ROW_Y0, FM_ROW_H, FS_SCRL, FS_N, FS_VSEG)
 SYS_X, SYS_Y = 12, 8
 
 # [vid_kind] -> the type name `cards` reports, and the --primary spelling ->
@@ -258,8 +258,35 @@ def row_xy(wx, wy, row=0):
             wy + TITLE_H + 1 + FM_ROW_Y0 + row * FM_ROW_H + FM_ROW_H // 2)
 
 
-def open_row(m, mo, S, settle, wx, wy, row=0, card=None):
-    """Double-click a Disk window row and settle."""
+def open_row(m, mo, S, settle, wx, wy, row=0, card=None, expect=None):
+    """Double-click a VISIBLE row of a Disk window and settle.
+
+    **PREFER open_named.** `row` here is a position on the GLASS, not a file:
+    it is what the window is showing at that y, which depends on the folder's
+    contents AND on where the list is scrolled. Exactly one caller in this
+    tree legitimately wants that (wmartifact, which asks for "the last row
+    this window can reach"); everything else means a FILE and should say so,
+    because a folder that gains one entry renumbers every row after it.
+
+    `expect` is the seatbelt for a caller that must use a row anyway: name the
+    file you believe is there and this refuses rather than double-clicking
+    whatever sorted into the slot. Either way the entry actually clicked is
+    printed, so a wrong one is visible in the log instead of turning up
+    several steps later as "the package would not launch".
+    """
+    got = None
+    try:
+        rows = listing(m, S)
+        i = scroll(m, S) + row
+        if 0 <= i < len(rows):
+            got = rows[i][0]
+    except Exception:                       # a window mid-navigation, or a
+        pass                                # volume that will not list: the
+                                            # click is still the caller's call
+    if expect is not None and (got or "").upper() != expect.upper():
+        raise RuntimeError("row %d of this window is %r, not %r"
+                           % (row, got, expect))
+    print("      open_row: row %d = %s" % (row, got or "?"))
     x, y = row_xy(wx, wy, row)
     mo.dblclick(x, y)
     settle(m, card=card)
@@ -284,25 +311,49 @@ DSK_DE_SIZE = 32                # SPEC.md 19.1: name @0 NUL-padded, type @16,
 DSK_DE_TYPE = 16                # first cluster @18, size @20
 
 
-def listing(m, S):
-    """[(name, type)] of the current global mount snapshot, in display order.
-
-    Read through [dsk_dseg]:[dsk_doff] rather than at `disk_dir`, because a
-    driver-backed volume lists into its driver's claim instead (disk.inc's
-    dsk_doff comment) - the floppy case is the one where those two agree.
-    """
-    n = _u16(m.read(S("disk_nfiles"), 2))
-    seg = _u16(m.read(S("dsk_dseg"), 2))
-    off = _u16(m.read(S("dsk_doff"), 2))
-    if not n:
-        return []
-    raw = m.read((seg << 4) + off, n * DSK_DE_SIZE)
+def _decode(raw, n):
     out = []
     for i in range(n):
         e = raw[i * DSK_DE_SIZE:(i + 1) * DSK_DE_SIZE]
         out.append((e[:16].split(b"\0")[0].decode("latin-1"),
                     _u16(e, DSK_DE_TYPE)))
     return out
+
+
+def listing(m, S):
+    """[(name, type)] of what the ACTING Disk window is showing, in order.
+
+    **THE WINDOW'S OWN CACHE FIRST, and the global snapshot only as a
+    fallback.** SPEC.md 22.1's rule is that paints read the window's cache and
+    only actions re-sync the globals - and SPEC.md 18.9's quiet mount
+    deliberately leaves `disk_nfiles` at 0 with [dsk_lstale] raised, which is
+    a perfectly ordinary state after anything that moved the volume without
+    navigating. Reading the globals there answers "this folder is empty" about
+    a window with a dozen rows on screen, which is the wrong answer to the
+    only question this is ever asked: WHAT IS THE USER LOOKING AT. Mounting a
+    RAM disk from the Control Panel puts the machine in exactly that state,
+    and it is what tests/rdmove.py met.
+
+    The cache is a byte-for-byte copy of `disk_dir` living in the window's own
+    FS_VSEG claim (SPEC.md 2.3/22.1), so the decode is the same one.
+
+    The fallback reads through [dsk_dseg]:[dsk_doff] rather than at `disk_dir`,
+    because a driver-backed volume lists into its DRIVER's claim instead
+    (disk.inc's dsk_doff comment) - the floppy case is where those agree.
+    """
+    vp = _u16(m.read(S("fm_vp"), 2))
+    if vp:
+        base = (KERNEL_SEG << 4) + vp
+        n = _u16(m.read(base + FS_N, 2))
+        vseg = _u16(m.read(base + FS_VSEG, 2))
+        if n and vseg:
+            return _decode(m.read(vseg << 4, n * DSK_DE_SIZE), n)
+    n = _u16(m.read(S("disk_nfiles"), 2))
+    if not n:
+        return []
+    seg = _u16(m.read(S("dsk_dseg"), 2))
+    off = _u16(m.read(S("dsk_doff"), 2))
+    return _decode(m.read((seg << 4) + off, n * DSK_DE_SIZE), n)
 
 
 def row_of(m, S, name):
@@ -317,9 +368,105 @@ def row_of(m, S, name):
                        % (name, [r[0] for r in rows]))
 
 
+def scroll(m, S):
+    """[FS_SCRL] of the ACTING Disk window - the first entry it is showing.
+
+    Through [fm_vp], which files.inc publishes as "the acting window's state
+    block" and which fm_vp_set writes on every raise, so it names the window a
+    caller has just navigated in. [fm_vp] is a NEAR offset in KERNEL_SEG and
+    S() answers a LINEAR address, so the segment base goes back on by hand -
+    mixing the two reads 0x600 bytes low, lands inside the kernel image, and
+    answers a plausible 0 forever (tests/fmbtn.py paid a whole debugging round
+    for that one).
+    """
+    vp = _u16(m.read(S("fm_vp"), 2))
+    return _u16(m.read((KERNEL_SEG << 4) + vp + FS_SCRL, 2))
+
+
+def scroll_to(m, mo, S, settle, wx, wy, entry, card=None):
+    """Bring directory entry `entry` on screen; answer its VISIBLE row.
+
+    THE POINT OF THIS IS THAT IT NEEDS NO `fit`. How many rows a Disk window
+    shows depends on its height, the adapter and the view mode, and every one
+    of those is a number a harness would have to keep in step. Instead: ask
+    the window to scroll to `entry`, then read [FS_SCRL] BACK. At the top of
+    the list it lands exactly there and the answer is visible row 0; near the
+    end it CLAMPS, and `entry - FS_SCRL` is then the row it really is on.
+    Either way the arithmetic is done by the kernel, which is the only thing
+    that knows.
+
+    It scrolls with the KEYBOARD (Up/Down, SPEC.md 22.11's eight ways) rather
+    than the bar, because the bar's cells are five nested layouts deep while a
+    key is a key. A bounded number of steps: the list caps at 32 entries
+    (FS_N), so 40 is past any list that can exist.
+    """
+    if entry < 0:
+        raise RuntimeError("entry %d is not a row" % entry)
+
+    def step(key):
+        """One arrow, then wait for [FS_SCRL] to move. Answers whether it did.
+
+        POLLING THE WORD rather than settling on the picture: a settle is two
+        identical frames a second apart and there are up to a dozen of these,
+        which turned one navigation into half a minute. The word is the thing
+        the answer is computed from anyway, so waiting on anything else is
+        waiting on a proxy.
+        """
+        was = scroll(m, S)
+        m.key(key)
+        for _ in range(30):
+            time.sleep(0.1)
+            if scroll(m, S) != was:
+                return True
+        return False
+
+    for _ in range(40):                         # to the top first, so the
+        if scroll(m, S) == 0:                   # walk below is one-directional
+            break                               # and cannot oscillate
+        if not step("ArrowUp"):
+            break                               # already at the top stop
+    else:
+        raise RuntimeError("the list would not scroll to the top")
+    for _ in range(40):
+        if scroll(m, S) >= entry:
+            break
+        if not step("ArrowDown"):               # the END STOP: it clamped, so
+            break                               # `entry` is as visible as it
+    else:                                       # is ever going to get
+        raise RuntimeError("entry %d never came on screen" % entry)
+    settle(m, card=card)                        # ...and ONE settle at the end,
+                                                # because the click that
+                                                # follows is aimed at pixels
+    row = entry - scroll(m, S)
+    if row < 0:
+        raise RuntimeError("scrolled PAST entry %d - the list moved under us"
+                           % entry)
+    return row
+
+
 def open_named(m, mo, S, settle, wx, wy, name, card=None):
-    """Double-click the row called `name` in the Disk window at (wx, wy)."""
-    return open_row(m, mo, S, settle, wx, wy, row_of(m, S, name), card=card)
+    """Double-click the row called `name` in the Disk window at (wx, wy).
+
+    **THE ONLY WAY A TEST SHOULD NAME A FILE.** row_of answers which DIRECTORY
+    ENTRY it is (SPEC.md 19.4 sorts by name, so the Makefile's order never
+    reaches the screen), and scroll_to turns that into a row on the GLASS - so
+    a folder that gains a file shifts nothing and a folder that outgrows the
+    window scrolls itself. Both of those have broken tests in this tree, and
+    the second is why open_row(literal) could not simply be replaced by
+    open_row(row_of(...)): CYCLONE took GAMES past what a CGA Disk window
+    shows, and an entry index below the fold clicks on whatever is drawn at
+    that y - or on nothing at all.
+    """
+    entry = row_of(m, S, name)
+    row = scroll_to(m, mo, S, settle, wx, wy, entry, card=card)
+    return open_row(m, mo, S, settle, wx, wy, row, card=card, expect=name)
+                                            # ...and CHECKED before it clicks,
+                                            # which closes the one hole left in
+                                            # the scroll: the arrows only reach
+                                            # this window while it is frontmost,
+                                            # and a caller that forgot to raise
+                                            # it would otherwise scroll nothing
+                                            # and double-click the wrong row
 
 
 # --- the window record (SPEC.md 11) ------------------------------------------
@@ -361,3 +508,48 @@ def win_list(m, S, check=True):
                     "WIN_SIZE (%d here) has moved in kernel/wm.inc"
                     % (i, x, y, w, h, vw, vh, WIN_SIZE))
     return out
+
+
+# -----------------------------------------------------------------------------
+# The Drivers page's list SCROLLS (SPEC.md 31.1.1), so a drv_tab row is not a
+# band on screen. CP_DVIS of DRV_MAX rows are shown from [cp_dtop], and a row
+# below the fold has to be scrolled to before it can be clicked at all.
+#
+# It is here rather than in each gate because it is geometry, and the tree's
+# rule is one place for it (SPEC.md 22's fm_hit discipline): SPEC.md 31.1's
+# reorder put os88net at row 4, and every test that ticks it would otherwise
+# be clicking the empty pane below the last band - which does nothing, says
+# nothing, and reads as the driver having failed to load.
+# -----------------------------------------------------------------------------
+# **THE PANE'S X CONSTANTS ARE PANE-RELATIVE AND ITS Y CONSTANTS ARE NOT.**
+# `cp_page` hands a page DI = the PANE left (content left + CP_RX) and BP =
+# the pane top, which IS the content top - so CP_DSX1 needs CP_RX added and
+# CP_DBY1 does not. Getting that wrong puts the arrow click 96px left of the
+# arrow, in the middle of the driver rows, where it does nothing at all.
+CP_RX = 96
+CP_DVIS, CP_DBY1, CP_DROWH = 4, 20, 26
+CP_DSX1, CP_DSW, CP_DSAH = 200, 14, 14
+CP_DBYN = CP_DBY1 + CP_DROWH * CP_DVIS
+
+
+def drv_show(mo, x0, y0, row, settle=None):
+    """Scroll the Drivers list until drv_tab `row` is visible.
+
+    in:  mo = a mouse with .click(x, y); x0/y0 = the panel's CONTENT origin
+    out: the VISIBLE index to click, i.e. row - [cp_dtop]
+
+    The list only ever needs scrolling DOWN here: the page opens at the top
+    and every gate that calls this wants one of the last rows.
+    """
+    top = max(0, row - (CP_DVIS - 1))
+    for _ in range(top):
+        mo.click(x0 + CP_RX + CP_DSX1 + CP_DSW // 2,
+                 y0 + CP_DBYN - CP_DSAH // 2)
+        if settle:
+            settle()
+    return row - top
+
+
+def drv_row_y(y0, vis):
+    """The y to click for a VISIBLE driver row (drv_show's answer)."""
+    return y0 + CP_DBY1 + vis * CP_DROWH + CP_DROWH // 2

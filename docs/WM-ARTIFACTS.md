@@ -16,14 +16,25 @@
 >
 > **§2 is FIXED too (SPEC.md §39.16.2.1)**, and its numbers had moved first
 > because the GEOMETRY moved.
-> `ui_drag_phase` now snaps `dy` to a multiple of 8 (SPEC.md §11.96.13.1), so
-> the drags land on different rows than when this was written: the window that
-> went to `(687,51)` goes to `(687,44)`, and the residue tracks it. Drag back
-> now leaves **3,844 px** where it left 5,058, in a band of **24 rows** where
-> it was 31 — and 155 rows of window at y = 44 ends at 199 against 206 at
-> y = 51, which is those 7 rows exactly. The drag *out* read **0** even before
-> the fix, for the reason §2.1 gives. It is 0 on both cards both ways round
-> now, with both controls still 0.
+> `ui_drag_phase` snapped `dy` to a multiple of 8 at the time (SPEC.md
+> §11.96.13.1), so the drags landed on different rows than when this was
+> written: the window that went to `(687,51)` went to `(687,44)`, and the
+> residue tracked it. Drag back left **3,844 px** where it had left 5,058, in a
+> band of **24 rows** where it was 31 — and 155 rows of window at y = 44 ends at
+> 199 against 206 at y = 51, which is those 7 rows exactly. The drag *out* read
+> **0** even before the fix, for the reason §2.1 gives. It was 0 on both cards
+> both ways round, with both controls still 0.
+>
+> **That `dy` snap has since been WITHDRAWN** (SPEC.md §11.96.13.1 — the 7px of
+> vertical drop precision it cost reaches a hand and the dither phase it bought
+> does not), so the geometry moves back: the window goes to `(687,51)` again and
+> the residue figures here should read as the 5,058 px / 31 rows this report was
+> originally written against, not the 3,844 / 24 above. **Those two numbers are
+> the only thing in this box the withdrawal touches** — neither fix depended on
+> the snap, and the paragraph is left standing rather than re-stated because the
+> shift itself is the evidence that the residue tracks the window's rows.
+> **`tests/wmartifact.py` has not been re-run since the withdrawal**; the
+> arithmetic above is what it should print, and the run is what would confirm it.
 >
 > **Everything below this box is the report as it was written**, and it is
 > left that way: it is the evidence, and the diagnosis in §1 is what found the

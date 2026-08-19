@@ -117,7 +117,7 @@ File > Format Disk prepares a floppy, erasing anything on it. os8088 offers the 
 6. RUNNING PROGRAMS
 ----------------------------
 
-Programs live on the apps disk in the folders APPS and GAMES. Open a disk window on that disk, open the folder, and double-click a program.
+Programs live in the folders APPS and GAMES. The apps disk holds them all; the system disk carries Note Pad, Calculator, Paint and Mines. Open a disk window, open the folder, and double-click a program.
 
 Several programs can run at once, and most can be started more than once. The machine shares time between them, so a game keeps moving while a file is copied. Programs that handle text share one clipboard, so you can copy in one and paste in another, even after closing the first.
 

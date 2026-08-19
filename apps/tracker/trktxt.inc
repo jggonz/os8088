@@ -306,8 +306,13 @@ ttx_begin:
 ttx_clkpick:
     push ax
     mov byte [ttx_clk], FSXW_FRAME  ; the PIT, not the CRTC (SPEC.md 53.5.1)
+%ifdef TTXNOFAST
+    mov byte [ttx_fdiv], 1          ; no sub-tick: one frame per tick, and
+    mov byte [ttx_fcnt], 1          ; FSXW_FRAME then waits on a [sch_subs]
+%else                               ; that only moves once a tick
     mov byte [ttx_fdiv], FSX_SUBTICK
     mov byte [ttx_fcnt], FSX_SUBTICK
+%endif
     mov al, TTX_SHCHUNKF            ; one row a frame: TTX_SHCHUNK's four are
     mov [ttx_chunk], al             ; ~25 ms and a frame's slot is now 18
     pop ax
@@ -1193,6 +1198,17 @@ ttx_draw_dyn:
 %ifdef TRKLOG
     call tlog_fstart                ; this frame's span starts here
 %endif
+%ifdef TTXNOALL
+    jmp .out                        ; the TRUE drawing ceiling (PERFORMANCE.md
+%endif                              ; Set 67): TTXNODRAW takes out the grid
+                                    ; BLIT and nothing else, and the blit is
+                                    ; under half of what this screen costs -
+                                    ; the readouts, the VU needles, the shadow
+                                    ; rebuild and tui_sync are the rest. A
+                                    ; ceiling that only removes the blit is
+                                    ; not the ceiling on DRAWING, and reading
+                                    ; it as one is how Set 66 concluded that
+                                    ; no drawing change could help
     call tui_sync                   ; the position being HEARD (SPEC.md 45.15):
                                     ; everything below quotes tui_a*, so the
                                     ; grid, the readout and the needles all
@@ -1232,7 +1248,17 @@ ttx_draw_dyn:
     je .norows
 .rows:
     mov byte [ttx_vdirty], 0
+%ifdef TTXPAGE
+    dec byte [ttx_pgn]              ; the PAGE-FLIP proxy (PERFORMANCE.md Set
+    jnz .norows                     ; 66): blit once every TTX_VIS row changes
+    mov byte [ttx_pgn], TTX_VIS     ; instead of once per row - the window
+%endif                              ; jumping a page rather than sliding a row.
+                                    ; It does NOT move the band in between, so
+                                    ; it is a LOWER BOUND on the real thing's
+                                    ; cost by 59 attribute writes a row
+%ifndef TTXNODRAW
     call ttx_blit
+%endif
 %ifdef TRKLOG
     mov al, TLOGF_BLIT
     call tlog_flag
@@ -1279,10 +1305,18 @@ ttx_draw_dyn:
 .novu:                              ; in the field (SPEC.md 45.16.1)
 %ifdef TRKLOG
     call tlog_frame                 ; the log's status line is live, so it is
-    call ttx_status                 ; redrawn every frame: the [ttx_lmsg]
-    jmp short .out                  ; pointer compare cannot see digits change
-.msg:                               ; inside one buffer
-%endif
+  %ifndef TTXQSTAT                  ; redrawn every frame: the [ttx_lmsg]
+    call ttx_status                 ; pointer compare cannot see digits change
+    jmp short .out                  ; inside one buffer
+  %endif                            ; ...and TTXQSTAT takes that back, because
+.msg:                               ; it is the LOG's cost and not the app's:
+%endif                              ; the shipped build redraws this line on a
+                                    ; message CHANGE, so a capacity measurement
+                                    ; taken with it live prices ttx_putn at 59
+                                    ; characters 54.6 times a second that
+                                    ; TRACKER.O88 never spends (PERFORMANCE.md
+                                    ; Set 66). Bench-only, like everything else
+                                    ; behind TRKLOG
     mov ax, [tui_msgp]
     cmp ax, [ttx_lmsg]
     je .out
@@ -1339,6 +1373,9 @@ ttx_s_mute:   db '   MUTE', 0
     TRKB ttx_shnext                 ; ...and the one below row 63
     TRKB ttx_shok                   ; ...and whether it holds anything
     TRKB ttx_vdirty                 ; force the next blit (a fresh shadow)
+%ifdef TTXPAGE
+    TRKB ttx_pgn                    ; TTXPAGE's countdown to the next page
+%endif
     TRKBUF ttx_line, TTX_RW + 8     ; one composed line, ascii
     TRKB ttx_row                    ; ttx_rowtext's row (mp_cell2txt spends
                                     ; every general register, so it cannot

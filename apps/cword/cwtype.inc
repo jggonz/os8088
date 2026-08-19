@@ -1,6 +1,6 @@
 ; =============================================================================
 ; os8088 - apps/cword/cwtype.inc     apps/os88type.inc, wearing a C calling
-;                                    convention (SPEC.md 70.12.2)
+;                                    convention (SPEC.md 73.12.2)
 ;
 ; %included by apps/cword/cword.asm, after the compiled C and before
 ; CC_IMAGE_END. It is the second piece of assembly in this package and it
@@ -14,7 +14,7 @@
 ;
 ;   1. ES. The library takes a caller's text in ES:SI (SPEC.md 20.3's X stubs)
 ;      and a C program's strings are in DS - the package segment, because that
-;      is the only segment a C program can name at all (SPEC.md 70.5.1). So the
+;      is the only segment a C program can name at all (SPEC.md 73.5.1). So the
 ;      shims that pass text load ES = DS and PUT IT BACK: ES arrives as
 ;      KERNEL_SEG on every callback and the kernel's own code expects it that
 ;      way (SPEC.md 20.4). This is cwmove.inc's rule in a second place.
@@ -27,17 +27,17 @@
 ;
 ;   3. The CARRY. The library reports refusal in CF - no face slot, a bad file,
 ;      a blit the kernel does not carry (SPEC.md 6.5) - and C has no carry. The
-;      convention here is the one SPEC.md 70.14 already uses for the overlay's
+;      convention here is the one SPEC.md 73.14 already uses for the overlay's
 ;      doors: ZERO MEANS IT DID NOT HAPPEN. Nothing in the C tests a status
 ;      code, so nothing in the C can forget which way round it was.
 ;
 ; THE WHOLE LIBRARY IS RESIDENT, and that is a decision rather than an
 ; oversight. ty_putn, ty_flush and ty_advof ARE the redraw path, so they could
-; never have gone to CWORD.OVL (SPEC.md 70.14 splits by frequency); ty_scan and
+; never have gone to CWORD.OVL (SPEC.md 73.14 splits by frequency); ty_scan and
 ; ty_open could have, and moving them would have meant a `%ifdef` through
 ; apps/os88type.inc - a file apps/word and tests/facetest also include - to
 ; sort its own labels into two sections. The room came from this program's own
-; once-per-command code instead (SPEC.md 70.12.2), which is code this package
+; once-per-command code instead (SPEC.md 73.12.2), which is code this package
 ; owns, and the side effect is worth having: THE FONT LIST WORKS ON A DISK WITH
 ; NO CWORD.OVL ON IT.
 ; =============================================================================
@@ -93,7 +93,7 @@ _cw_ty_adv:
 ; =============================================================================
 ; THE THREE PER-CHARACTER WALKS, WHICH ARE WHY THIS FILE IS NOT FOUR SHIMS
 ;
-; SPEC.md 70.11 is binding here and it is the reason these exist: "a C package
+; SPEC.md 73.11 is binding here and it is the reason these exist: "a C package
 ; composes and decides; anything that touches pixels, cells or bytes per
 ; iteration is a hand-written proc that C calls once." A proportional layout is
 ; exactly that shape - the wrap sums an advance per character of every word it

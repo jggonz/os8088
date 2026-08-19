@@ -3,7 +3,7 @@
 ;
 ; A BOOT SECTOR THAT TESTS apps/runcpm/rcmem.inc ON A REAL x86 - the Z80-RAM
 ; accessors and block movers, the one place in RUNCPM where ES is loaded and
-; a string instruction runs (SPEC.md 70.6). The host harness cannot reach
+; a string instruction runs (SPEC.md 73.6). The host harness cannot reach
 ; them (it substitutes C), tools/cc8086.py never sees hand-written assembly,
 ; and a mover that got a segment wrong would write into the kernel and not
 ; fault (LESSONS.md 4). So, as apps/cword/hosttest/cwmovetest.asm does for
@@ -24,7 +24,7 @@
 ;      including a 24-byte block laid across the 64KB wrap (0xFFF4..0x000B),
 ;      and touches NOTHING outside it (a guard byte each side is checked);
 ;   3. after every call ES, DS, BP and SP are what they were and DF is clear -
-;      the register discipline the callback ABI needs (SPEC.md 70.3: SI and DI
+;      the register discipline the callback ABI needs (SPEC.md 73.3: SI and DI
 ;      are the caller's to lose, and the movers do use them);
 ;   4. NEGATIVE CONTROLS: two deliberately broken routines - one that leaves
 ;      ES = the claim, one that returns with DF set - are run through the same

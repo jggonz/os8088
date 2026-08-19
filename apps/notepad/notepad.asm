@@ -568,173 +568,52 @@ np_seecaret:
     ret
 
 ; -----------------------------------------------------------------------------
-; np_thumb - the thumb's geometry, shared by the painter and the hit test
-; in:  np_bounds run
-; out: CF=1 no thumb (it all fits, or the track is too short); else CF=0,
-;      AX = thumb top (absolute y), DX = thumb height
-; clobbers: nothing else
-;
-; The Disk window's arithmetic (SPEC.md 22): height = fit*track/total with an
-; 8px floor, top = scroll*track/total, clamped so the bottom of the thumb
-; cannot leave the track.
-; -----------------------------------------------------------------------------
-np_thumb:
-    push bx
-    push cx
-    mov ax, [np_drows]
-    cmp ax, [np_vrows]
-    jbe .none
-    call np_trackh                  ; BX = track height
-    cmp bx, 8
-    jl .none                        ; degenerate track: bare, no thumb
-    mov ax, [np_vrows]
-    mul bx
-    div word [np_drows]             ; AX = proportional height
-    cmp ax, 8
-    jge .hok
-    mov ax, 8
-.hok:
-    mov cx, ax
-    mov ax, [np_top]
-    mul bx
-    div word [np_drows]             ; AX = offset down the track
-    add ax, [np_ty]
-    add ax, NP_SB_ARR               ; ...from the track's top
-    mov dx, [np_ty]                 ; clamp: top <= track top + track - height
-    add dx, NP_SB_ARR
-    add dx, bx
-    sub dx, cx
-    cmp ax, dx
-    jle .tok
-    mov ax, dx
-.tok:
-    mov dx, cx
-    clc
-    jmp short .out
-.none:
-    stc
-.out:
-    pop cx
-    pop bx
-    ret
-
-; np_trackh - BX = the grey track's height, between the two arrow cells
-np_trackh:
-    push ax
-    mov bx, [np_sbb]
-    sub bx, [np_ty]
-    inc bx
-    sub bx, NP_SB_ARR*2
-    pop ax
-    ret
-
 ; -----------------------------------------------------------------------------
 ; np_sbar - draw the scroll bar
 ; in:  SI = window ptr, np_bounds run, gfx lock held
 ; out: nothing; clobbers what a callback may
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; np_sbset - fill np_sb with this window's bar (SPEC.md 13.10)
+; out: BX = the block; every other register preserved
+;
+; Note Pad's bar was already PIXEL-IDENTICAL to the shared element - 14 wide,
+; NP_SB_ARR = 11 putting the rule at ty+10 and the track at ty+11, the arrow
+; centred on x1+6 - so this conversion changes nothing on the glass. It was
+; simply the third copy of a picture the kernel now draws once.
+; -----------------------------------------------------------------------------
+np_sbset:
+    push ax
+    mov ax, [np_sbr]
+    sub ax, NP_SB_W-1
+    mov [np_sb+0], ax
+    mov ax, [np_sbr]
+    mov [np_sb+4], ax
+    mov ax, [np_ty]
+    mov [np_sb+2], ax
+    mov ax, [np_sbb]
+    mov [np_sb+6], ax
+    mov ax, [np_drows]
+    mov [np_sb+8], ax
+    mov ax, [np_vrows]
+    mov [np_sb+10], ax
+    mov ax, [np_top]
+    mov [np_sb+12], ax
+    mov bx, np_sb
+    pop ax
+    ret
+
+np_sb:      dw 0,0,0,0,0,0,0
+
 np_sbar:
     push ax
     push bx
-    push cx
-    push dx
-    push di
-    push bp
-    mov di, [np_sbr]
-    sub di, NP_SB_W-1               ; DI = the bar's left column, absolute
-
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov ax, di                      ; the box
-    mov bx, [np_ty]
-    mov cx, [np_sbr]
-    mov dx, [np_sbb]
-    call OSAPI_GFX_FRAME
-
-    mov ax, di                      ; the two arrow-cell rules
-    mov bx, [np_sbr]
-    mov dx, [np_ty]
-    add dx, NP_SB_ARR-1
-    call OSAPI_GFX_HLINE
-    mov ax, di
-    mov bx, [np_sbr]
-    mov dx, [np_sbb]
-    sub dx, NP_SB_ARR-1
-    call OSAPI_GFX_HLINE
-
-    xor bp, bp                      ; up glyph: 5 rows, widths 1..9
-    mov dx, [np_ty]
-    add dx, 3
-.up:
-    mov ax, di
-    add ax, 6
-    sub ax, bp
-    mov bx, di
-    add bx, 6
-    add bx, bp
-    call OSAPI_GFX_HLINE
-    inc dx
-    inc bp
-    cmp bp, 5
-    jb .up
-
-    mov bp, 4                       ; down glyph: 5 rows, widths 9..1
-    mov dx, [np_sbb]
-    sub dx, 7
-.dn:
-    mov ax, di
-    add ax, 6
-    sub ax, bp
-    mov bx, di
-    add bx, 6
-    add bx, bp
-    call OSAPI_GFX_HLINE
-    inc dx
-    dec bp
-    jns .dn
-
-    mov ax, di                      ; the track, grey between the rules
-    inc ax
-    mov bx, [np_ty]
-    add bx, NP_SB_ARR
-    mov cx, [np_sbr]
-    dec cx
-    mov dx, [np_sbb]
-    sub dx, NP_SB_ARR
-    cmp bx, dx
-    jg .done                        ; degenerate track: leave it framed
-    call OSAPI_GFX_FILL_GRAY
-
-    call np_thumb                   ; CF=1: it all fits, no thumb
-    jc .done
-    mov bx, ax                      ; y1 = thumb top
-    add dx, ax
-    dec dx                          ; y2 = top + height - 1
-    mov ax, di
-    add ax, 2
-    mov cx, [np_sbr]
-    sub cx, 2
-    push ax
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    pop ax
-    call OSAPI_GFX_FILL
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov ax, di
-    add ax, 2
-    mov cx, [np_sbr]
-    sub cx, 2
-    call OSAPI_GFX_FRAME
-.done:
+    call np_sbset
+    call os88ui_sbar
     mov ax, [np_top]                ; remember what is on screen, so a redraw
     mov [np_sbtop], ax              ; that moved neither number draws nothing
     mov ax, [np_drows]
     mov [np_sbrows], ax
-    pop bp
-    pop di
-    pop dx
-    pop cx
     pop bx
     pop ax
     ret
@@ -797,7 +676,7 @@ np_sbclick:
     push dx
     call np_sbhit
     jc .no
-    mov bx, dx                      ; BX = the click's y; np_thumb wants DX
+    mov bx, dx                      ; BX = the click's y
     mov ax, [np_ty]
     add ax, NP_SB_ARR
     cmp bx, ax
@@ -806,14 +685,18 @@ np_sbclick:
     sub ax, NP_SB_ARR
     cmp bx, ax
     ja .linedn
-    call np_thumb                   ; AX = thumb top, DX = its height
-    jc .yes                         ; it all fits: the bar is inert, but ours
-    cmp bx, ax
-    jb .pageup
-    add ax, dx
-    cmp bx, ax
-    jae .pagedn
-    jmp short .yes                  ; on the thumb itself
+    call np_sbset                   ; the SHARED element's parts (SPEC.md
+    push cx                         ; 13.10) - it takes the point absolute and
+    push dx                         ; this ladder has the y in BX
+    mov dx, bx
+    call os88ui_sbhit
+    pop dx
+    pop cx
+    cmp al, OS88UI_SBPGUP
+    je .pageup
+    cmp al, OS88UI_SBPGDN
+    je .pagedn
+    jmp short .yes                  ; the thumb itself, or an inert track
 .lineup:
     mov ax, [np_top]
     sub ax, NP_SB_STEP
@@ -10420,6 +10303,7 @@ np_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
 %assign NP_BSS_TOTAL NPB
 
 ; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
+%define OS88UI_SCROLL           ; SPEC.md 13.10: the shared scroll bar
 %include "os88ui.inc"
 
     OS88_BSS NP_BSS_TOTAL

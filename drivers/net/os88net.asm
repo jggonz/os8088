@@ -83,6 +83,76 @@ com_entry:
 %include "lplink.inc"           ; the transport, shared with NET.DRV and with
 %include "lplslv.inc"           ; tests/lptlink - one body, no drift
 
+; =============================================================================
+; THE TCP/IP STACK, WHICH IS os8088's OWN (SPEC.md 62.11.1)
+;
+; drivers/ether's stack talks to its card through five routines and knows
+; nothing else about it, so pktdrv.inc puts a PACKET DRIVER underneath it and
+; the whole of inet/tcp/dns runs here unchanged. ethsock.inc is the socket
+; verbs themselves, the same bodies ETHER.DRV serves - so a bug fixed in one
+; end is fixed in both, which two implementations could never promise.
+;
+; The stack asks the KERNEL for exactly two things and neither is a kernel
+; question: the tick counter and a random word. On DOS they are the BIOS
+; counter and a small LCG, named so the shared code needs no %ifdef.
+; =============================================================================
+%define ETH_NOEMIT 1            ; **THE BUFFERS DO NOT GO IN THE FILE.** See the
+                                ; block at the end of this program and the note
+                                ; in ethstate.inc: they were 16,776 bytes of
+                                ; literal zeros on the floppy, 59% of the whole
+                                ; .COM, and a .COM already owns the memory past
+                                ; its image
+OSAPI_GET_TICKS equ dos_ticks   ; ...NEAR calls here, where a package's are FAR
+OSAPI_RAND      equ dos_rand
+
+; **THE ORDER IS ether.asm's AND IS NOT FREE**: ethstate.inc sizes its socket
+; arrays with constants tcp.inc defines, so the state comes LAST - which is
+; exactly where the driver keeps it, for exactly this reason.
+%include "nwire.inc"            ; the wire alphabet, SHARED (62.11.1)
+%include "netpkg.inc"           ; the NETV_/NSK_/NETE_ numbering, which is the
+                                ; SAME on both ends by construction
+PKGV_IDENT  equ 0               ; apps/os88api.inc's, which a .COM does not
+                                ; include - netpkg.inc names it
+%include "ethsock.inc"
+%include "ethusr.inc"
+%include "pktdrv.inc"           ; ...where ne2000.inc would be
+%include "inet.inc"
+%include "tcp.inc"
+%include "dns.inc"
+%include "ethstate.inc"
+%include "nwslv.inc"            ; ...and the socket commands, served
+
+
+
+; --- dos_ticks - the BIOS tick counter, as OSAPI_GET_TICKS answers it --------
+; out: AX = the low word of 0040:006C. The stack only ever SUBTRACTS two of
+; these, so the low word alone is right and the midnight wrap is somebody
+; else's problem in both directions (SPEC.md 45.15's `js`, one layer down).
+dos_ticks:
+    push ds
+    push bx
+    mov bx, 0x40
+    mov ds, bx
+    mov ax, [0x6C]
+    pop bx
+    pop ds
+    ret
+
+; --- dos_rand - OSAPI_RAND's shape, and it is used for the same two things ---
+; A sequence number and a DNS transaction id: what they need is to be hard to
+; guess by accident, not by an attacker, so an LCG seeded from the clock is
+; the same bargain the kernel's own makes.
+dos_rand:
+    push dx
+    mov ax, [dos_seed]
+    mov dx, 25173
+    mul dx
+    add ax, 13849
+    mov [dos_seed], ax
+    pop dx
+    ret
+dos_seed:   dw 0
+
 NC_INFO     equ 'I'
 NC_READ     equ 'R'
 NC_WRITE    equ 'W'
@@ -216,6 +286,12 @@ start:
     call open_image             ; ...only if /I: named one
     jc  .bye
 
+    call net_bss_clear          ; ...the reserved buffers, BEFORE anything reads
+                                ; one (see the block at the end of this file)
+    call net_start              ; /N: the packet driver and an address, BEFORE
+                                ; the cable - it is the slower of the two to
+                                ; fail and the one with something to say
+
     call lpl_scan
     call report_ports
     call pin_or_scan
@@ -241,6 +317,115 @@ start:
     mov si, s_noport
     call puts
     jmp short .bye
+
+; --- net_bss_clear - zero what the file no longer carries --------------------
+; DOS zeroes nothing above a .COM's image, so this is what makes the reserved
+; block behave exactly as the emitted one did. ~17KB of rep stosw, once.
+net_bss_clear:
+    push ax
+    push cx
+    push di
+    push es
+    push ds
+    pop es
+    mov di, net_bss0
+    mov cx, (net_bss1 - net_bss0 + 1) / 2
+    xor ax, ax
+    cld
+    rep stosw
+    pop es
+    pop di
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; net_start - /N: bring the TCP/IP stack up and PROMISE SOCKETS
+; in:  nothing; out: nothing - a refusal is reported and the run carries on
+;
+; **THE PROMISE IS [lp_myver] AND IT IS MADE HERE OR NOWHERE.** The version
+; byte in the handshake is the whole of how os8088 learns whether this far end
+; speaks the socket verbs (netsock.inc), so it goes to NET_VER_SOCK only when
+; there is a stack behind it. A run that fails to find a packet driver, or
+; fails to get a lease, therefore serves FILES exactly as it always did and
+; the other end says `No partner` in the browser rather than hanging on an
+; open that can never finish.
+; -----------------------------------------------------------------------------
+net_start:
+    push ax
+    push si
+    cmp byte [netflag], 0
+    je  .out
+    mov si, s_nwtry
+    call puts
+    call nw_up
+    jc  .no
+    mov byte [lp_myver], NET_VER_SOCK
+    mov si, s_nwok
+    call puts
+    mov si, eth_ip              ; ...and WHICH address, because a machine with
+    call put_ip                 ; two networks on it is an ordinary thing
+    mov si, s_crlf
+    call puts
+    jmp short .out
+.no:
+    call puts                   ; nw_up left the reason in SI
+    mov si, s_nwfiles
+    call puts
+.out:
+    pop si
+    pop ax
+    ret
+
+; --- put_ip - the four bytes at DS:SI as a dotted quad -----------------------
+put_ip:
+    push ax
+    push bx
+    push cx
+    push si
+    mov cx, 4
+.b:
+    mov al, [si]
+    inc si
+    xor ah, ah
+    call put_dec
+    dec cx
+    jz  .out
+    mov al, '.'
+    call putc
+    jmp short .b
+.out:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; --- put_dec - AX as decimal, no padding -------------------------------------
+put_dec:
+    push ax
+    push bx
+    push cx
+    push dx
+    xor cx, cx
+    mov bx, 10
+.d:
+    xor dx, dx
+    div bx
+    push dx
+    inc cx
+    or  ax, ax
+    jnz .d
+.e:
+    pop ax
+    add al, '0'
+    call putc
+    loop .e
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
 
 ; =============================================================================
 ; LISTENING
@@ -360,7 +545,44 @@ serve:
     je  .fenum
     cmp al, NF_RMTREE
     je  .frmtree
-    jmp short .cmd
+    cmp al, NW_OPEN
+    je  .nwopen
+    cmp al, NW_LISTEN
+    je  .nwlisten
+    cmp al, NW_ACCEPT
+    je  .nwaccept
+    cmp al, NW_STAT
+    je  .nwstat
+    cmp al, NW_SEND
+    je  .nwsend
+    cmp al, NW_RECV
+    je  .nwrecv
+    cmp al, NW_CLOSE
+    je  .nwclose
+    jmp .cmd                    ; ...NEAR: the socket handlers below sit
+                                ; between here and the top of the loop
+
+.nwopen:
+    call nw_s_open
+    jmp .cmd
+.nwlisten:
+    call nw_s_listen
+    jmp .cmd
+.nwaccept:
+    call nw_s_accept
+    jmp .cmd
+.nwstat:
+    call nw_s_stat
+    jmp .cmd
+.nwsend:
+    call nw_s_send
+    jmp .cmd
+.nwrecv:
+    call nw_s_recv
+    jmp .cmd
+.nwclose:
+    call nw_s_close
+    jmp .cmd
 
 .fwrite:
     call srv_write
@@ -679,6 +901,8 @@ parse_args:
     je  .whole
     cmp al, 'i'
     je  .image
+    cmp al, 'n'
+    je  .net
     cmp al, '?'
     je  .help
     cmp al, 'h'
@@ -686,6 +910,9 @@ parse_args:
     jmp short .skipopt
 .help:
     mov byte [helpflag], 1
+    jmp short .skipopt
+.net:
+    mov byte [netflag], 1
     jmp short .skipopt
 .ro:
     mov byte [roflag], 1
@@ -718,7 +945,9 @@ parse_args:
 .port:
     inc si                      ; past 'P'
     dec cx
-    jcxz .argdone
+    jnz .phave                  ; **NOT jcxz**: it is short-only on an 8086 and
+    jmp .argdone                ; /N pushed .argdone out of its reach. `dec cx`
+.phave:                         ; has already set ZF the same way
     cmp byte [si], ':'
     jne .skipopt
     inc si
@@ -4020,7 +4249,7 @@ s_wmc:      db 'Serving files from EVERY DRIVE on this machine.',13,10,0
 s_ronly:    db 'Writes REFUSED (/RO).',13,10,0
 s_rwok:     db 'Writes allowed.',13,10,0
 s_help:
-    db 'OS88NET [folder] [/W] [/RO] [/P:base] [/I:image]',13,10,13,10
+    db 'OS88NET [folder] [/W] [/RO] [/N] [/P:base] [/I:image]',13,10,13,10
     db '  folder    serve this folder and everything under it.',13,10
     db '            Default: the current directory.',13,10
     db '  /W        serve EVERY drive on this machine: the root of the',13,10
@@ -4030,6 +4259,11 @@ s_help:
     db '            /P:3BC. Default: scan and use the first that answers.',13,10
     db '  /I:image  block mode: serve 512-byte sectors out of an image',13,10
     db '            file instead of serving files.',13,10
+    db '  /N       serve SOCKETS as well as files: os8088 packages then',13,10
+    db '            reach the network through this machine. Needs a packet',13,10
+    db '            driver loaded (the one mTCP uses) and a DHCP server.',13,10
+    db '            IT TAKES THE NETWORK for the run - do not start mTCP',13,10
+    db '            programs alongside it.',13,10
     db '  /?        this.',13,10,13,10
     db 'ESC stops a run. os8088 connects from Control Panel, os88net.',13,10,0
 sf_wtag:    db 'W'              ; the tag wr_arg's log line carries. A byte of
@@ -4042,6 +4276,7 @@ s_portpin:  db 'Port pinned by /P: to ',0
 s_portscan: db 'Port chosen by scanning (see the table below).',0
 s_imgsay:   db 'Block-mode image (/I:): ',0
 helpflag:   db 0
+netflag:    db 0                ; /N was asked for (net_start)
 
 imgname:    times 80 db 0       ; ...EMPTY by default now: the bare argument
                                 ; is the FOLDER to serve, and block mode is
@@ -4049,6 +4284,12 @@ imgname:    times 80 db 0       ; ...EMPTY by default now: the bare argument
 fh:         dw 0
 nsecs:      dw 0
 roflag:     db 0
+s_nwtry:    db 'Sockets (/N): looking for a packet driver...',13,10,0
+s_nwok:     db '  up, address ',0
+s_nwnopkt:  db '  no packet driver in 60h..80h, or it is not Ethernet',13,10,0
+s_nwnodhcp: db '  a packet driver, but DHCP never answered',13,10,0
+s_nwfiles:  db '  serving FILES only - os8088 will say No partner',13,10,0
+s_crlf:     db 13,10,0
 pinned:     db 0
 pinbase:    dw 0
 nrun:       db 0                ; sectors left in the run being served
@@ -4106,3 +4347,41 @@ oldbuf:     times 88 db 0       ; rename's first path, while the second is
                                 ; built in wildbuf
 dtabuf:     times 48 db 0       ; OUR DTA, and not DOS's at PSP:0080 - that is
                                 ; where the command tail lives
+
+; =============================================================================
+; THE BUFFERS, PAST THE IMAGE (ETH_NOEMIT, SPEC.md 62.11.1)
+;
+; `absolute` gives every label below an address and emits NOT ONE BYTE, which
+; is the standard shape for a .COM's bss - DOS hands a .COM the whole memory
+; block, so everything above the image is already ours.
+;
+; **IT MUST BE THE LAST THING IN THIS FILE AND THE ASSERTION BELOW IS WHY.**
+; `absolute $` reserves from wherever it is written, and this program's own
+; strings and flags are at the BOTTOM of the file - so placed in the middle it
+; handed out addresses that were about to be emitted over, and net_bss_clear
+; then zeroed [netflag], the help text and everything else in its path. What
+; that looked like was /N silently not being asked for, several screens away
+; from the cause.
+;
+; **THEY ARRIVE DIRTY AND net_bss_clear IS WHAT PAYS FOR THAT.** Emitted, they
+; were zero because the file said so; reserved, they are whatever DOS last
+; left there - and a socket table of rubbish is a table of sockets that are
+; already open. That is PERFORMANCE.md's DIRTYRAM lesson arriving on a real
+; machine instead of an emulator, which is where it always arrives.
+; =============================================================================
+    absolute $
+net_bss0:
+sk_tab:     resb NET_SOCKS * SK_SZ
+sk_rxb:     resb NET_SOCKS * SK_RXCAP
+sk_txb:     resb NET_SOCKS * SK_TXCAP
+eth_rxh:    resb 4
+eth_rxb:    resb NE_FRAME + 4
+eth_txb:    resb NE_FRAME + 4
+pk_ring:    resb PKT_NBUF * PKT_FRAME
+nw_buf:     resb NET_SKMAX
+net_bss1:
+    section .text
+os88net_tail:
+%if os88net_tail > net_bss0
+  %error "os88net: something is emitted AFTER the absolute block - it and the reserved buffers overlap, and net_bss_clear will zero it"
+%endif

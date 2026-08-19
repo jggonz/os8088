@@ -1301,6 +1301,8 @@ fcp_file1:
     push si
     push di
     mov byte [fcp_ovw], 0
+    mov word [fcp_ovwsz], 0     ; ...and it replaces nothing until proven
+    mov word [fcp_ovwsz+2], 0   ; otherwise (SPEC.md 22.5.2)
     call fcp_fnames             ; publish this file's source and destination
     mov al, [fcp_fddrv]         ; does the destination already hold it?
     mov bx, [fcp_fdclus]
@@ -1311,6 +1313,13 @@ fcp_file1:
     jc .free                    ; FERR_NOENT is the ordinary case
     test al, DSKW_DIR
     jnz .clash                  ; a FOLDER of that name: not a replaceable
+    mov [fcp_ovwsz], cx         ; a FILE of that name: its clusters come back
+    mov [fcp_ovwsz+2], dx       ; when dskw_write replaces it, so fcp_room may
+                                ; count them as room. Banked HERE because this
+                                ; is the one stat the engine already does -
+                                ; asking again at the check would be a second
+                                ; directory walk for a number we have held all
+                                ; along
     cmp byte [fcp_all], 0       ; file, and not something to silently remove
     jne .go                     ; "replace all" was answered earlier
     mov byte [fcp_pend], 1      ; suspend: fcp_cname is what to ask about
@@ -1612,6 +1621,95 @@ fcp_chunkset:
     ret
 
 ; -----------------------------------------------------------------------------
+; fcp_room - will this file fit the destination? (SPEC.md 22.5.2)
+; in:  [fcp_need] = the whole file's byte count, [fcp_ovwsz] = the size of the
+;      entry it replaces (0 = none); THE DESTINATION VOLUME IS CURRENT
+; out: CF = 0 there is room, or we could not find out; CF = 1 it will not fit
+; clobbers: flags
+;
+; **ASKED BEFORE ANYTHING IS CREATED**, which is the whole of it. Without this
+; a copy that does not fit runs to the end of the volume and stops, leaving a
+; TRUNCATED file whose directory entry states the truncated length as though it
+; were the file's own - measured, a 304,552-byte module onto a 264K RAM disk
+; lists as `BANANA.MOD 260096` and is not a module any more. Doing the work and
+; throwing it away would merely be wasteful; doing the work and leaving
+; something that looks like the file is the part that costs the user data.
+;
+; It is free: dskw_dfree answers from the resident FAT snapshot with no disk
+; I/O at all, and the destination volume is current here anyway because the
+; create is the next thing that happens.
+;
+; **"I DO NOT KNOW" ANSWERS YES.** A volume whose dfree fails - a redirector
+; that publishes no FSV_DFREE (SPEC.md 62.9.1) is the real case - falls through
+; to the behaviour that stood before this existed. Turning an unknown into a
+; refusal would break copies that work today, which is a worse trade than the
+; one this is fixing.
+;
+; It compares BYTES and not clusters, so it is optimistic by up to one cluster
+; per file: a file that fits by less than a cluster's rounding still passes here
+; and can still fail at the end. That is deliberate - a FALSE REFUSAL is worse
+; than a late failure, and the late failure is what fcp_undo below is for. The
+; case this catches is the one that matters, a file the volume could not hold
+; under any rounding.
+; -----------------------------------------------------------------------------
+fcp_room:                       ; clobbers AX, BX, DX - its ONE caller reloads
+    call dskw_dfree_x           ; all three between here and the create, so
+    jc .yes                     ; saving them would be four bytes spent on
+    add ax, [fcp_ovwsz]         ; nothing. CX is untouched: [fcp_flen] is
+    adc dx, [fcp_ovwsz+2]       ; already in it and the create needs it
+    jc .yes                     ; the sum wrapped: bigger than any file
+    cmp dx, [fcp_need+2]
+    ja .yes
+    jb .no
+    cmp ax, [fcp_need]
+    jb .no
+.yes:
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_undo - a transfer failed after creating its destination (SPEC.md 22.5.2)
+; in:  [fcp_made] = 1 if there is anything to undo; AX = the error being
+;      returned
+; out: AX and every other register unchanged, CF untouched
+;
+; **A FAILED COPY MUST LEAVE NOTHING, NOT SOMETHING THAT LOOKS LIKE THE FILE.**
+; fcp_room catches the case anybody can predict; this covers the ones nobody
+; can - a rounding that fits by bytes and not by clusters, a directory that
+; fills, a device that errors halfway, another writer taking the space between
+; the check and the write. In all of them the destination is a partial file
+; with a plausible name and a plausible size, and the next thing the user does
+; with it is the thing that goes wrong.
+;
+; A REPLACE that fails is deleted too, and that is the right answer rather than
+; a hard one: dskw_write has already released the old chain by the time a chunk
+; can fail, so the original is gone whichever way this goes. What is left is a
+; choice between a missing file and a corrupt one wearing its name.
+;
+; It preserves AX because the caller is on its way out with an FERR_* in it,
+; and the flags because .err's `stc` is above this. A delete that fails is
+; ignored: we are already failing, and there is nothing better to report.
+; -----------------------------------------------------------------------------
+fcp_undo:
+    cmp byte [fcp_made], 0
+    je .out
+    push ax                     ; **AX AND NOTHING ELSE.** Its one caller is
+    mov byte [fcp_made], 0      ; fcp_xfer's `.err`, whose very next
+    mov al, [fcp_fddrv]         ; instructions pop BX, CX, DX, SI, DI and ES
+    mov bx, [fcp_fdclus]        ; off the stack and whose `stc` sets the flags
+    call fcp_goto               ; after this returns - so those are free and
+    jc .done                    ; saving them is bytes spent to restore values
+    mov si, fcp_fname           ; that are about to be overwritten. AX is not:
+    call dskw_delete_x          ; it carries the FERR_* on its way out
+.done:
+    pop ax
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
 ; fcp_xfer - move one file's bytes, source directory to destination
 ; out: CF=0, or CF=1 with AX = FERR_* (FERR_BIG when it does not fit the
 ;      buffer - see the header note about dskw_write's 16-bit length)
@@ -1675,6 +1773,10 @@ fcp_xfer:
     mov si, fcp_fname
     call fcp_rdopen
     jc .err
+    mov ax, [fcp_rsz]           ; THE WHOLE FILE, banked before the first chunk
+    mov [fcp_need], ax          ; comes off it: fcp_rsz is what REMAINS, so
+    mov ax, [fcp_rszh]          ; after fcp_rdnext it is no longer the size
+    mov [fcp_need+2], ax
     call fcp_rdnext             ; AX = bytes; 0 = the file is empty, which is
     jc .err                     ; a real file and creates a real empty one
     mov [fcp_flen], ax
@@ -1683,6 +1785,11 @@ fcp_xfer:
     mov bx, [fcp_fdclus]        ; its first chunk already in hand
     call fcp_goto
     jc .err
+    call fcp_room               ; ...but ASK FIRST (SPEC.md 22.5.2). Here and
+    jnc .create                 ; not earlier, because this is the first moment
+    mov ax, FERR_FULL           ; the destination volume is current - so the
+    jmp short .err              ; check costs no switch of its own - and it is
+.create:                        ; still before anything has been created
     mov es, [fcp_seg]
     xor bx, bx
     mov cx, [fcp_flen]
@@ -1690,6 +1797,7 @@ fcp_xfer:
     mov si, fcp_fname
     call dskw_write_x
     jc .err
+    mov byte [fcp_made], 1      ; ...and from HERE a failure owes a delete
 
 .chunk:
     mov ax, [fcp_rsz]           ; the file itself says whether there is more,
@@ -1716,6 +1824,7 @@ fcp_xfer:
     jc .err
     jmp .chunk
 .fin:
+    mov byte [fcp_made], 0      ; whole and committed: nothing to undo
     pop es
     pop di
     pop si
@@ -1725,8 +1834,9 @@ fcp_xfer:
     clc
     ret
 .err:
-    pop es
-    pop di
+    call fcp_undo               ; ...and a partial destination goes with it
+    pop es                      ; (SPEC.md 22.5.2). It preserves AX and the
+    pop di                      ; flags, the FERR_* being on its way out
     pop si
     pop dx
     pop cx
@@ -1824,6 +1934,16 @@ fcp_fddrv:  resb 1              ; ...destination drive...
 fcp_fpad:   resb 1
 fcp_fsclus: resw 1              ; ...source folder...
 fcp_fdclus: resw 1              ; ...destination folder...
+fcp_made:   resb 1              ; 1 = fcp_xfer has CREATED the destination, so
+                                ; a failure from here owes a delete (SPEC.md
+                                ; 22.5.2)
+fcp_ovwsz:  resw 2              ; the size of the entry this file will REPLACE,
+                                ; 0 = it replaces nothing. A replace hands its
+                                ; clusters back, so it is room the check may
+                                ; count (22.5.2)
+fcp_need:   resw 2              ; the whole file, banked across dskw_dfree -
+                                ; which answers in DX:AX and so spends the
+                                ; register the count arrives in
 fcp_flen:   resw 1              ; ...and the byte count dskw_read reported
 
 section .text

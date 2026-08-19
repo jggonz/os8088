@@ -142,7 +142,7 @@ emulator have the hardware": a ✅ means reach for it first.
 | **Flicker** — the double-draw flash | ✅ | ❌ | `os88marty.py flicker` (PERFORMANCE.md Part 3.1) | one sample per displayed frame. A Disk window repaint flashes 1,963 px for 166 ms; an idle desktop and a pointer move measure zero. CGA, Hercules and VGA — the MDA's rasterisation of Hercules graphics was measured working at the pinned build (docs/MARTYPC-DEBUG.md); this row used to exclude it |
 | Fullscreen exclusive (SPEC.md §53) | ➖ | ✅ | `make test TESTAPPS=build/fsxtest.img` | every FSXM mode the adapter owns sets, draws and restores — the desktop screendump below the bar is byte-identical after a full sweep; Mode X dumps 640x480 (line-doubled 320x240) |
 | ...**which MONITOR it lands on** (SPEC.md §53.7.1) | ✅ | ❌ | `python3 tests/dispfsx.py [--app paint] [--far] [--noxt]` on `os8088_xt_vga_herc` | needs two cards and the guest's own answer back, so it is MartyPC's alone. **Two assertions, and they are different questions**: while the bracket is UP, its own display must change a lot and the other must not change at all; AFTER the round trip, both cards must be pixel-identical to a forced full repaint (and so must their raster dimensions and the `vid_ctx` records — a card left in the wrong mode is a state a repaint cannot fix, so that comparison would read 0 either way). The second alone passes on a broken kernel: §53.6's exit `wm_paint_all` repaints the world, so a bracket that drew its whole face onto the *wrong* monitor for its entire session leaves no trace afterwards. A one-card machine (`--machine os8088_5150_cga_gla`) is the regression leg — `fsx_surf` answers `(0,0,w,h)` there, which is what both apps hard-coded before it existed |
-| Does an INCREMENTAL redraw agree with a full repaint? | ✅ | ❌ | `python3 tests/dispcorner.py [--only a\|b] [--under hello] [--dest seam\|near\|far] [--mode right\|below] [--single]` on `os8088_xt_vga_herc` | do the thing, capture, force a repaint (poke `[cp_dirty]` with `WF_SAVEU` cleared, then read the flag back — see "Prefer a self-checking harness" below for why it is neither of the two more obvious ways), diff. **A** sweeps `hello` through launch / raise / drag / drag-back / close-the-Disk-window and watches `(W_X, W_Y+W_H)`, the drop shadow's bottom-left corner, which nothing writes (`wm_draw_shadow`'s L starts at x+1) and which therefore has to be desktop dither on both paths. **B** drags a window off two others and across the seam. **C is the one that found a real defect** (SPEC.md §11.96.13.1): it drags a Disk window ±40 and ±41 rows and labels each leg by the parity **the record actually took**, because `wm_dock_snap` and `ui_drag`'s clamp both move a dropped window — a requested +180 came out +175 in the run that found it. Its control is `make DRAGCACHE=0 && … --define NODRAGCACHE`. A and C need no seam and run on a one-card machine, which is where the two **mono** adapters get checked — `CDGRAY` really is a checkerboard there. It prints WHERE and crops a PNG of both captures, because a count says a defect exists and only a picture says which of the things in that rect it is. Two rules it exists to enforce, both learned the expensive way: the subject is chosen **by name out of the guest**, never by a row number, and it must be **inert** — see "Prefer a self-checking harness" below |
+| Does an INCREMENTAL redraw agree with a full repaint? | ✅ | ❌ | `python3 tests/dispcorner.py [--only a\|b] [--under hello] [--dest seam\|near\|far] [--mode right\|below] [--single]` on `os8088_xt_vga_herc` | do the thing, capture, force a repaint (poke `[cp_dirty]` with `WF_SAVEU` cleared, then read the flag back — see "Prefer a self-checking harness" below for why it is neither of the two more obvious ways), diff. **A** sweeps `hello` through launch / raise / drag / drag-back / close-the-Disk-window and watches `(W_X, W_Y+W_H)`, the drop shadow's bottom-left corner, which nothing writes (`wm_draw_shadow`'s L starts at x+1) and which therefore has to be desktop dither on both paths. **B** drags a window off two others and across the seam. **C is the one that found a real defect** (SPEC.md §11.96.13.1): it drags a Disk window ±40 and ±41 rows and labels each leg by the parity **the record actually took**, because `wm_dock_snap` and `ui_drag`'s clamp both move a dropped window — a requested +180 came out +175 in the run that found it. Its control is `make DRAGCACHE=0 && … --define NODRAGCACHE`. That defect's fix was **withdrawn** and the residue is accepted, so C no longer asks whether the two captures agree — it asks **which kind of difference** it is. `dither_split` excuses only pixels it can prove are a screen-phased dither replayed a row off (a filled rect, a 2-periodic checkerboard in both captures, in the same two colours, one the other shifted a row); anything else still fails, an **even** `dy` may produce neither class, and the control build may produce neither on any leg. **That is a classifier and not a tolerance, which is the only reason it is allowed to exist** — subtracting a count would pass a kernel that had lost the scroll-bar track altogether, and `--selftest` proves it does not, on synthetic captures, with no emulator and no build. A and C need no seam and run on a one-card machine, which is where the two **mono** adapters get checked — `CDGRAY` really is a checkerboard there. It prints WHERE and crops a PNG of both captures, because a count says a defect exists and only a picture says which of the things in that rect it is. Two rules it exists to enforce, both learned the expensive way: the subject is chosen **by name out of the guest**, never by a row number, and it must be **inert** — see "Prefer a self-checking harness" below |
 | **What the guest WROTE to a floppy** | ✅ | ⚠️ | `tools/os88flush.py diff 0` (docs/MARTYPC-DEBUG.md); on QEMU the mounted `.img` is written in place, so `os88disk.py --verify` it after `quit` | the only route to os8088's write path that is not os8088's read path. A Control Panel close adds `SYSTEM.CFG` and moves sectors 1, 3, 5, 268 — both FATs, the root, the data cluster: SPEC.md §18.4's commit order, seen from outside. QEMU's ⚠️ is that its writeback is all-or-nothing at exit, so there is no *mid-session* snapshot and no per-drive control |
 | Boot-sector relocation (SPEC.md §2.7) | ✅ | ✅ | `make test RAMKB=<n>` — see below | 105 boots, 104 prints `RAM` and never loads a byte |
 | A machine that reports a **small** `int 12h` to the KERNEL | ✅ | ❌ | MartyPC `conventional.size`, or 86Box `mem_size` | `RAMKB=` moves the sector only; the heap still sees the real answer. MartyPC's real BIOS counts what the config says it has |
@@ -844,6 +844,70 @@ alongside `tests/npbench.inc`, and the two measure Note Pad from outside and
 inside respectively, so the first thing its README does is say which question
 each one answers.
 
+### Name the FILE, never the row (`dispcp.open_named`)
+
+**A scripted session must never write down which row a package is on**, and
+this is a rule rather than a preference because it has now broken tests in
+this tree twice, both times silently. The Disk window's listing is sorted by
+name (SPEC.md §19.4), so the Makefile's build order never reaches the screen;
+a subdirectory synthesizes a `..` at slot 0 and the root does not (§19.5), so
+the two are offset by one; and adding **one** package to `GAMES/` renumbers
+every entry after it. A stale row index does not error — it double-clicks
+whatever sorted into that slot, and what the run then reports is that the app
+it meant to open "did not launch", several steps and one screenshot away from
+the cause.
+
+`CYCLONE.O88` did exactly that: it landed alphabetically between `ARKANOID`
+and `MINES` and quietly moved five tests' targets. `tests/dispmine.py`'s
+`MINES_ROW` became CYCLONE, `tests/dispmcfs.py`'s and `tests/dispmodex.py`'s
+`MISSILE_ROW` became MINES, and three of the `APPS/` ones were already wrong
+from an earlier addition.
+
+So there is one entry point and it takes a name:
+
+```python
+dispcp.open_named(m, mo, S, settle, wx, wy, "MISSILE.O88")
+```
+
+It asks the guest which directory entry that is (`row_of`, over the mount
+snapshot the kernel just built), **scrolls it into view** and then clicks. The
+scroll is the half that made this usable everywhere: `APPS/` is twelve entries
+and a 640x200 Disk window shows seven, so a name-resolving helper without it
+still could not reach `TRACKER.O88` — which is why `tests/dispfsx.py` and
+`tests/paintgif.py` each build a one-file disk of their own. Those disks are a
+speed convenience now rather than a requirement.
+
+**It needs no `fit`**, and that is deliberate: how many rows a window shows
+depends on its height, the adapter and the view mode, all of which a harness
+would then have to track. Instead it asks the window to scroll to the entry
+and reads `[FS_SCRL]` **back** — at the top it lands exactly there, near the
+end it clamps, and `entry - FS_SCRL` is the visible row either way. The
+arithmetic is the kernel's, which is the only thing that knows. It scrolls
+with the arrow keys rather than the bar's cells (a key is a key; the bar is
+five nested layouts deep) and waits by polling `[FS_SCRL]` rather than
+settling on the picture, which is the difference between 30 seconds and 7.
+
+**It reads the WINDOW'S OWN CACHE, not the global mount snapshot**, and that
+is the second thing this cost. SPEC.md §22.1's rule is that paints read the
+window's cache and only *actions* re-sync the globals — and SPEC.md §18.9's
+quiet mount deliberately leaves `disk_nfiles` at 0 with `[dsk_lstale]` raised,
+which is an ordinary state after anything that moved the volume without
+navigating. Mounting a RAM disk from the Control Panel is exactly that, and
+`tests/rdmove.py` met it: the globals answered *this folder is empty* about a
+window with two rows on screen. The cache is a byte-for-byte copy of
+`disk_dir` in the window's `FS_VSEG` claim, so it is the same decode — the
+question is only which copy answers *what is the user looking at*.
+
+`open_row` survives for the one caller that genuinely means a position on the
+glass — `tests/wmartifact.py`, which asks for *the last row this window can
+reach* — and it now **prints the entry it clicked** and takes an optional
+`expect="NAME"` that refuses rather than clicking the wrong file. So the next
+one of these is visible in the log instead of turning up as a launch failure.
+`open_named` passes `expect` through, which closes the one hole the scroll
+leaves: the arrow keys only reach the window while it is **frontmost**, so a
+caller that forgot to raise it would otherwise scroll nothing and double-click
+whatever was already on that row.
+
 ## Everything not shipped lives in `tests/`
 
 `tests/` holds every package that is not shipping software, and it is **not**
@@ -862,6 +926,12 @@ checks referenced throughout this document:
 | `sbtest` | the Sound Blaster streams (§34.5/§34.6) | `make test-snd SB16=1 TESTAPPS=build/sbtest.img` |
 | `filetest` | the write path (§18.4) | `make test TESTAPPS=build/filetest.img` |
 | `fsxtest` | fullscreen exclusive (§53): keys 0–8 cycle every mode with an identifying pattern, `x` runs a same-mode bracket, `t` keys a duration-0 tone for the §53.3 legs; the window shows the `fsx_caps` mask (01EF/000F/0011 by adapter) and the last result (`K`/`R`/`F`/`S`) | `make test TESTAPPS=build/fsxtest.img` (also under `VIDEO=cga` / `VIDEO=herc`; `make test-snd` + two instances for the sound legs) |
+| `socktest` | **a TCP connection over the parallel cable** (§62.11): `NETV_OPEN`/`STATUS`/`SEND`/`RECV`/`CLOSE` from a package's WORKER, non-blocking throughout, fetching a page and checking the exact bytes. The far end is `tests/lptlink/partner.py`'s `SocketBox` — **real host sockets**, not a model — so the page really did cross one, out of an HTTP server the harness starts on 127.0.0.1. It writes its reply in **two sends with a gap between**, which is what produces a zero-length `NETV_RECV` while the socket is still up — the one mistake that gives a plausible short page rather than an error. **That gap is WAITED FOR, not slept**: the first version used 1.5 s of wall clock and the condition never arose, because one wire exchange under a stepped partner costs seconds of host time, so the body was always there before the guest asked. The server holds the body until the far end has actually served an empty read on a live socket. Measured on a 5150: ten wire commands, 232 bytes in reads of 65/0/167/0, `HTTP/1.0 200 OK` at the front, every handle back. The wire's own verdict is still the 5150's (§62.10.3) | `make socktest && python3 tests/socktest.py` |
+| `brfetch` | **the BROWSER fetching a page** (§71): a URL typed into the location bar through the 8255 and int 09h, an HTTP GET over the cable, and the reply through the same parser and painter a floppy page goes through. It checks the REQUEST the server saw (the exact request line and a `Host:` header — a malformed GET still gets an answer out of a forgiving server and fails against every real one), that ink appeared **below the bar**, and that the browser's own status line agrees | `make browsertest && python3 tests/brfetch.py` |
+| `ethcfg` | **an address set BY HAND, and remembered** (§72.7). QEMU's for the same reason its neighbour is. It exists because every part of it fails QUIETLY: a window that draws but takes no keystroke, a field whose rect and whose hit test have drifted apart, an `Ok` that parses nothing, and a setting that is applied and never written. Five assertions in the order a user meets them - the default is Automatic with slirp's address; `Set Up` opens a 216x141 window seeded from the live addresses; typing through the 8255 and int 09h reaches `W_ONKEY` and `Ok` changes the driver's LIVE addresses (read out of its image, not off the screen), while a field that was NOT edited survives; the page then says `Manual` instead of `Bound` and greys Renew; and **it survives a REBOOT**, which is what the feature is for. It finds the Ethernet row at `[cp_nst]` rather than counting five - on a one-adapter machine the Display page is not drawn at all (§31.10.1), so a count clicks `Sound` on CGA and fails somewhere else entirely. It puts the machine back on Automatic afterwards, because a gate that dirties the tree for its neighbour will eventually be run in the wrong order | `make ethertest && python3 tests/ethcfg.py` |
+| `ethernet` | **an NE2000, a TCP/IP stack, and the browser over it** (§72). **THE ONE GATE HERE THAT IS QEMU'S RATHER THAN MARTYPC'S, and not by preference**: MartyPC has no network card of any kind, so the emulator this tree develops on cannot host `ETHER.DRV` at all — it is on the short list beside the 286/386 targets and §52.1's IDE rung 1. Five assertions climbing the stack: a card was found and its PROM address is plausible (not zero, not all ones, not multicast); DHCP bound and the address, router and name server are the ones slirp hands out — which is already transmit, receive, broadcast, UDP and the option walker before a socket exists; the browser fetched a page over TCP and the exact request line reached a REAL host socket; `br_nstate` is `BN_DONE` and `br_nlines` non-zero; and the `.o88` under test is the one `make` builds for the shipped floppy. **Every assertion is about behaviour and none about speed** — QEMU is not an 8088 and there is no number here for PERFORMANCE.md to want off the 5150. `ETHDUMP=<file>` writes every frame either way to a pcap, which is the instrument for this driver: a stack that is silent and a stack talking nonsense look identical from inside the guest | `make ethertest && make browsertest && python3 tests/ethernet.py` |
+| `drvscroll` | **the Drivers page's pressed look costs one control** (SPEC.md §31.1.2). Not a package — a host script, because what it asserts is what is on the GLASS around a mouse edge. The decisive check is the ROW BAND either side of an arrow press: 0 differing pixels *and* no flashing rect reaching into it, because a control redrawn to the same value is invisible to a pixel diff and unmistakable to `flicker`'s bbox. It also proves the arrow is drawn HELD, that sliding off puts the cell back to 0 differing pixels, that one click is one row, that a greyed arrow draws and scrolls nothing, and that the scrolled pane matches a forced full repaint. Reads the 1bpp framebuffer, so CGA or Hercules — and both were run | `python3 tests/drvscroll.py [machine] [image]` |
+| `drvcall` | **a package reaching a driver** (§20.11): `OSAPI_DRV_CALL`, the `DSV_PKGCALL` fence, and — the half nothing else can check — that the driver was handed the *package's* segment in `ES`. Its counterpart is `RAMDISK.DRV`'s two package verbs, so it needs no card and no cable and runs on MartyPC. The assertion is in `tests/drvcall.py`, which reads the three report strings out of the package's own image and drives the Control Panel tick, so it sees the refusal **before** the driver is published as well as the answer after | `make drvcalltest && python3 tests/drvcall.py [--adapter herc]` |
 | `stackprobe` | the 256-byte task-stack margin (§8) | `make test TESTAPPS=build/stkprobe.img` |
 | `xmtest` | the extended-memory **teardown** (§41.5/§29.4): does a closed instance's blocks above 1MB get freed? Needs a machine with a store, so **QEMU on a 386** — the target machine can never have one. The assertion lives outside the package, in `tests/xmcheck.py`, which reads `xm_tab` over QMP around the close | `make test TESTAPPS=build/xmtest.img` then `python3 tests/xmcheck.py build/qmp.sock` |
 | `trklog` | not a gate — a **recorder**. Tracker itself, built with `-DTRKLOG`, logging one record per system tick and writing it to `TRKLOG.TXT` (SPEC.md §45.14) | `make test SB16=1 TESTAPPS=build/trklog.img` |

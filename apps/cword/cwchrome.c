@@ -2,7 +2,7 @@
  * os8088 - apps/cword/cwchrome.c      the menu bar, the ribbon, the ruler and
  *                                     the status line
  *
- * #included by cword.c - one translation unit (SPEC.md 70.1). Drawing only:
+ * #included by cword.c - one translation unit (SPEC.md 73.1). Drawing only:
  * nothing here changes the document, and everything here is called with the
  * gfx lock already held.
  *
@@ -431,7 +431,7 @@ static void cw_ruler(void)
      * carries the slot without the body - so the dot-by-dot loop stays as the
      * fallback rather than as the method. */
     /* THE SCALE IS IN 1/10 INCH AND NOT IN CELLS, which stopped being the same
-     * thing the day a face could be chosen (SPEC.md 70.12.2): a ruler measures
+     * thing the day a face could be chosen (SPEC.md 73.12.2): a ruler measures
      * the SHEET, so a tick is 8 pixels in every face and `nc` is the column's
      * width in ticks - cw_wpx / 8 - rather than cw_cols, which is now a count
      * of however many glyphs a row may hold. */
@@ -535,7 +535,7 @@ static int cw_rul_hit(int mx, int my)
  * CapsLock ALONE emits no key event, so this port's lamp changes on the next
  * keystroke or click rather than at the moment the key went down. The
  * assembly port hires a worker for that poll; this one does not have a worker
- * at all, which is also what makes SPEC.md 70.14's UI-task-only overlay rule
+ * at all, which is also what makes SPEC.md 73.14's UI-task-only overlay rule
  * free here. */
 #define CW_BIOS_KFLAG 0x0017
 

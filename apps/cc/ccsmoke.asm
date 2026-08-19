@@ -1,11 +1,11 @@
 ; =============================================================================
 ; os8088 - apps/cc/ccsmoke.asm
 ;
-; The assembly shim of the C toolchain's smoke test (SPEC.md 70), and the
+; The assembly shim of the C toolchain's smoke test (SPEC.md 73), and the
 ; template every C package copies. It is the top-level nasm source: the .c
 ; file is never assembled on its own, because `nasm -f bin` has no notion of
 ; an external symbol and the C, the runtime and the header therefore have to
-; be one assembly (SPEC.md 70.1).
+; be one assembly (SPEC.md 73.1).
 ;
 ; A shim does exactly four things and nothing else belongs in it:
 ;

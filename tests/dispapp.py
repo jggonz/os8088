@@ -61,11 +61,12 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     dispcp.open_drive(m, mo, S, os88marty.settle, "B", card=pri)
     w = dispcp.win_list(m, S)
     wx, wy, ww, wh = dispcp.win_rect(m, S, w[-1])
-    dispcp.open_row(m, mo, S, os88marty.settle, wx, wy, 1, card=pri)   # GAMES
+    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "GAMES", card=pri)
     w = dispcp.win_list(m, S)
     wx, wy, ww, wh = dispcp.win_rect(m, S, w[-1])
     before_sec = mono(m)                     # the secondary BEFORE Arkanoid
-    dispcp.open_row(m, mo, S, os88marty.settle, wx, wy, 1, card=pri)   # ARKANOID
+    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "ARKANOID.O88",
+                      card=pri)
     import time; time.sleep(3)
     wins = dispcp.win_list(m, S)
     print("windows now:", [(s,) + dispcp.win_rect(m, S, s) for s in wins])

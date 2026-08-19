@@ -1216,6 +1216,7 @@ list to check yourself against.
 | Select a covered drive icon | **two** whole-screen repaints per click | one XOR strip, zero repaints; byte-identical output | §26.2 |
 | Select a file row (Disk window) | ~130 glyphs + a dozen fills | two XOR bands; **zero** `font_char`, **zero** `gfx_fill` for most cases | §22.2 |
 | Scroll a Disk window one row | `fm_repaint`: header, both buttons, every visible row, the whole scroll bar and the status line. Measured on CGA with `os88marty.py flicker` — **16 frames of visible redraw = 262 ms, 15 of them flashing = 246 ms, worst 2,772 transient pixels**, bounding box the whole window content | one `gfx_scroll`, the row it exposed, two XOR bands and the thumb: **5 frames = 83 ms, 2 flashing = 33 ms, worst 320 px** — and the bounding box is one row and the bar. Framebuffer **byte-identical** to the full repaint on CGA (both byte phases), Hercules and VGA mode 12h, 25 frames each | §22.11 |
+| Scroll the Browser one line, deep in a page | the tier test read the old scroll POSITION rather than the delta, so past one windowful every scroll repainted the whole band, on every page, for the rest of the document. Measured on a cycle-accurate 5150/CGA in a 15-row band, one Down key: **15 `font_run`s and no `gfx_scroll` at all**, **19 frames of visible redraw = 317 ms** | one `gfx_scroll` and the row it exposed, at every depth: **1 `font_run` and 1 `gfx_scroll`**, **5 frames = 83 ms**. Framebuffer **0 differing pixels** against the band repaint on CGA (15 rows) and Hercules (27), 55 scroll steps each | §71.10 |
 | Scroll a Disk window that is already at an end stop | a full repaint to show the same pixels — **266 ms** | **nothing at all**, 0 frames | §22.11 |
 | Type into the file dialog's name box | ~120 glyphs + a 298×151 fill | `font_char` **972 → 36**, scanlines **7,600 → 184** (8 chars) | §38.8 |
 | Note Pad keystroke | full content fill + a glyph per character | **2 cells**; `font_char` **8,410 → 350**, scanlines **5,020 → 1,960** (20 keystrokes, 410-char note) | §27.2 |
@@ -1226,6 +1227,7 @@ list to check yourself against.
 | Note Pad insert at the front | 1,600 cells ≈ most of a second | a scroll, settled later | §27.3 |
 | An opaque text run | 228–336 framebuffer accesses, alignment-dependent | flat **80**; 1.30× on hardware (`fontbench`), 1.24× on a second harness and a second adapter (Part 9), and no flash | §6.1, §6.1.1 |
 | Task Manager row update | 20 glyphs to change 3, twice a second | the changed chunks only | §28.2 |
+| Press an arrow on the Drivers page | §13.8.3's pressed look reached this page as `cp_drv_boxes` — **every** row's checkbox, on both edges of every press, and `os88ui_glyph` white-fills its box before it draws a pixel. Measured on a cycle-accurate 5150/CGA with `tests/drvscroll.py`: the press is **9 frames = 133.3 ms** of visible redraw with the flashing rect spanning the whole list, the release carries another **100 ms** in front of the scroll's own repaint, and a press on a **greyed** arrow spends **116.7 ms** twice to draw nothing at all | the one control the down state moved to or from: the press is **2 frames = 16.7 ms**, the flash is the mouse pointer's own cell and the rows are 0 differing pixels; a greyed arrow is **0 frames**; the release is the scroll's pane repaint alone, **367.1 → 267.1 ms**. A driver row's own press 133.3 → **33.6 ms**, one glyph instead of four | §31.1.2 |
 | Timer digits | eight erase-and-letter pairs — 8 `gfx_fill` + 8 `font_char`, each cell blank between its two calls, **twice a second for as long as the window is open**: 320 + 320 calls in 20 s, ~24.7 ms a redraw | one `font_run` over the cells that CHANGED, byte-aligned by `WF_SNAP`: **0 fills, 0 `font_char`**, 20 runs of 22 cells in the same 20 s, and no blank interval | §14.1, §6.1 |
 | Menu bar redraw | every window operation | gated on `[menu_bdirty]` | §12.05 |
 | Menu bar when it IS owed | one white fill across the whole bar, then the logo's 121 `gfx_pixel` calls, the app name and every cell title put back — measured on CGA with `os88marty.py flicker`: switching application is **9 frames flashing = 149 ms, worst 534 transient pixels**, bounding box the full width of the bar | three segments, each on its own trigger. The menus are composed into `menu_bcell` and emitted as the one `font_run` span that DIFFERS: **1 frame = 17 ms, worst 37 px — and those 37 are the mouse arrow**. The logo and the rule are drawn only when something painted over the bar | §12.9 |
@@ -6710,7 +6712,308 @@ adapters** (1,236 ink pixels on VGA, 2,602 on CGA, 1,034 on Hercules). That
 covers the shift, the row walk and — on CGA and Hercules — the interleaved bank
 wrap, which is the part no screenshot of a working desktop would have exercised.
 
-### Set 65 — RunCPM's row composer, priced before it was quoted (SPEC.md §71.2)
+### Set 65 — is there room for 11,000 Hz in XT mode? Windowed yes, fullscreen no
+
+Set 20 ended on a question it could not answer. It took Tracker's XT mixer from
+45.2% of a 4.77 MHz 8088 to 29.6%, said "the only large lever left is the SAMPLE
+RATE, because the work is `channels × rate` and nothing else", and then spent
+that lever *downwards* — 4,000 Hz, built onto the bench build's `K` key,
+listened to on the field owner's hardware and **closed** ("4,000 Hz sounds
+terrible"). This is the same lever pushed the other way: what did the 16 points
+buy, and is it enough for **11,000 Hz** — double XT mode's rate, and the rate
+the default mode already asks for.
+
+Machine: `os8088_5150_sb_gla`, a cycle-accurate 4.77 MHz 8088 with a CGA and a
+Sound Blaster (DSP 2.01). Module: `BEVERLY.MOD`, four channels, XT mode
+**pre-armed** (`mp_xt` = 1, which is what a tier-0 machine boots into). Build:
+`make trklog`, whose `K` key moves the XT rate without leaving XT mode
+(docs/FIELD-NOTES.md 16). Instrument: `tools/os88rate.py`.
+
+**THE HEADLINE NUMBER IS NOT THE PROFILE.** A profile says where the time went;
+it does not say whether the music came out. So the measure is **bytes per second
+reaching the card** — `d[trk_consumed]` over `d(guest cycles)` — because when
+the ring cannot supply them SPEC.md §34.5's honest path takes bounded SILENCE
+rather than looping stale samples, so that ratio *is* the fraction of the song
+that was audible. The ring lead (`trk_total − trk_consumed`) is the same story
+one step earlier.
+
+| windowed | 5,500 Hz | 11,000 Hz | 11,000 Hz, 4.7 min |
+|---|---|---|---|
+| **audible** | 5,511 B/s = **100.2%** | 11,036 = **100.3%** | 11,019 = **100.2%** |
+| ring lead, min / median | 14,336 / 16,384 | 6,144 / 14,336 | 2,048 / 14,336 |
+| `mp_mixch_xt` + `mp_stepi_set` | 35.0% | **62.8%** | 61.1% |
+| `[SOUND.DRV]` | 4.8% | 8.8% | 9.3% |
+| kernel, BIOS, idle | 48.4% | 18.4% | 19.5% |
+
+| fullscreen text (§45.13) | 5,500 Hz | 11,000 Hz | 11,000 Hz, `T` |
+|---|---|---|---|
+| **audible** | 5,500 B/s = **100.0%** | 9,166 = **83.3%** | 8,348 = **75.9%** |
+| ring lead, min / median | 14,336 / 14,336 | 2,048 / 8,192 | 2,048 / 8,192 |
+| `mp_mixch_xt` + `mp_stepi_set` | 34.4% | **52.7%** | 53.4% |
+| `ttx_*` — the scrolling grid | 10.8% | 9.5% | 9.6% |
+| kernel, BIOS, idle | 26.9% | 9.4% | 9.2% |
+
+**Windowed, 11,000 Hz holds outright** — 100.2% of the music over 280 seconds of
+guest time, which is most of the module rather than a sample of it. **On the
+fullscreen text screen it does not: 17% of the song is never played**, and the
+ring lead spends its time at one half instead of seven.
+
+**The arithmetic between those two lines is the whole result, and it closes.**
+The mixer *needs* about **62% of a 4.77 MHz 8088** to hold 11,000 Hz — windowed
+it gets 62.8% and delivers 100.3%. The fullscreen text screen spends ~10 points
+on the grid, so the mixer gets 52.7%, and 52.7 / 62 = **85% against 83.3%
+measured**. The model is the machine, again.
+
+**The surprise is which surface is the expensive one, and it is not the one this
+tree's prose implies.** §45.13 exists because the graphics grid cost 2,567 glyph
+cells a second and the text grid costs "~4% of the machine", so fullscreen text
+reads as the *cheap* surface. It is the dear one — because §45.9.1 already stops
+animating the **windowed** grid on a tier-0 machine while something is playing,
+so windowed-while-playing draws almost nothing and fullscreen draws a scrolling
+grid. Measured, that grid is **9.5–10.8%**, not 4%. At 5,500 Hz the difference
+is invisible: both surfaces deliver 100% and the slack absorbs it. At 11,000 Hz
+there is no slack, and the same 10 points are the entire margin.
+
+**The frame clock is NOT the lever, and the control says so.** `T` puts the
+frame clock back on the tick — 18.2 Hz instead of `FSXW_FRAME`'s 54.6 — and the
+drawing cost does not move (9.6% against 9.5%), because §45.16.1 already made
+the blit change-driven: it is priced per **ROW**, and rows do not slow down when
+frames do. Three times fewer frames bought nothing, and delivery came out
+*worse* rather than better (75.9%), which on one run each is inside what these
+two conditions can be told apart by — the useful reading is that it did not
+help, not that it hurt. Anything that recovers those 10 points has to stop the
+grid scrolling, which is the one thing §45.13 was built to start.
+
+**So the answer to "is there capacity" is yes, and the answer to "can it be
+offered" is a decision rather than a measurement** — the shape Set 20's 4,000 Hz
+question had, and it belongs where that one was settled: on hardware, by ear.
+The three ways it could go, priced:
+
+- **11 kHz windowed only**, refused on the text surface the §47 say-why-not way,
+  the way `L` and `S` already are (§45.7). Costs nothing measured here and gives
+  up nothing that works today.
+- **11 kHz everywhere, and the fullscreen grid stops scrolling at that rate** —
+  §45.9.1's argument applied to the text screen at double the rate. Buys the
+  ~10 points; gives back exactly what §45.13 was built for.
+- **11 kHz everywhere as it stands.** 17% of the music silently missing. Not an
+  option: SPEC.md §45.8's degradations are all *honest* ones, and this is not.
+
+**Two things this set does not prove.** Every number here is MartyPC's: the
+calibration machine, 5150 #1, is period and has **no sound card at all**. A
+field confirmation goes to **5150 #2** (docs/FIELD-MACHINES.md), whose Picomem
+carries a Sound Blaster the rebuilt PMInit now reaches — and that machine is
+worth having for this one, because what XT mode spends is CPU and its 8088 is a
+stock 4.77 MHz part; only the storage, the DSP and its DMA are the card's. And
+the audible question, whether 11 kHz is worth having, cannot be measured at all.
+`BEVERLY.MOD` is one four-channel module, and the mixer's cost is
+`channels × rate` with silent channels skipped, so a module that rests fewer
+channels costs more than this one does.
+
+**What says the instrument is not manufacturing the result**: the 5,500 Hz
+windowed rows reproduce Set 20's post-fix figures on a different harness — the
+two inner loops measure **29.5%** here against Set 20's **29.6%** — and both
+5,500 Hz rows deliver 100.0–100.2%, which is the "nothing is wrong" reading a
+starving row has to be told apart from.
+
+**One trap, and it cost the first two runs.** A `.DRV` is a v4 package whose
+image is a heap claim taken from the TOP down (SPEC.md §51), so its code sits in
+HIGH memory — and a `base <= ip < base + 0x10000` package window swallows it and
+buckets it into whatever the last label in the listing happens to be. This put
+SOUND.DRV's block ISR into **`tlog_s_clkr`, a STRING**, at 4.8% and 8.8%; the
+giveaway was that a string scaled with the sample rate. It is a bucket of its
+own now, and the package window stops at the image size — which is at header
+**+8**, not +4, where the link base lives and is always 0.
+
+### Set 66 — the fullscreen ladder, and the harness was in the measurement
+
+Set 65 said fullscreen 11 kHz delivered **83.3%** of the music and put ~10
+points of that on the §45.13 text screen's drawing. Two things were wrong with
+it and the second is the one worth keeping.
+
+**Five points of that "drawing" was the LOG.** `ttx_status` calls `ttx_putn`,
+and in the `TRKLOG` build it runs **every frame** — its own header says why, the
+status line being live so a `[ttx_lmsg]` pointer compare cannot see digits
+change inside one buffer — where the shipped build redraws it on a message
+CHANGE. So the capacity run was pricing 59 characters 54.6 times a second that
+`TRACKER.O88` never spends. `TTXQSTAT` takes that back, and `ttx_putn` leaves
+the profile entirely.
+
+| fullscreen text, 11,000 Hz | audible | mixer | grid |
+|---|---|---|---|
+| Set 65, as measured | 83.3% | 52.7% | `ttx_blit` 4.8% + `ttx_putn` 4.7% |
+| `TTXQSTAT` — what the shipped build draws | **88.4%** | 50.2% | `ttx_blit` 5.2% |
+| `TTXPAGE` — blit once a window, not once a row | **90.7%** | 51.5% | `ttx_blit` 1.9% |
+| `TTXNODRAW` — no grid blit **at all** | **91.9%** | 52.7% | — |
+
+**A page-flipping grid — the window jumping a page every `TTX_VIS` rows instead
+of sliding a row, ~19× fewer blits — is worth 2.3 points of delivery, and
+removing the blit outright is worth 3.5.** (The `TTXPAGE` row is a lower bound
+on the real thing by 59 attribute writes a row, which it does not do.)
+
+> **THE CONCLUSION THIS SET DREW FROM THAT WAS WRONG, AND SET 67 IS THE
+> CORRECTION.** It read the `TTXNODRAW` row as the ceiling on *drawing* and
+> concluded that no drawing change could make fullscreen 11 kHz hold.
+> `TTXNODRAW` removes the grid **BLIT** and nothing else, and the blit is
+> **under half** of what the text screen costs — the readouts, the VU needles,
+> the shadow rebuild and `tui_sync` are the rest. The true ceiling is
+> **99.8%**, so it holds. The rows below are all correct; the sentence that
+> read them was not. **A knob named for what it removes is not evidence about
+> the category it sits in.**
+
+**What is actually in the way is the SCHEDULER, and it took bucketing the
+kernel to see it.** "Outside the package" was 17.6% on a run that was starving,
+which is already the tell: a machine that is out of cycles does not have 17%
+spare. Resolved against the kernel's own symbols:
+
+| `TTXNODRAW`, 11,000 Hz fullscreen | |
+|---|---|
+| `sch_switch.nowrap` | **5.2%** |
+| `sch_switch.scan` | **2.2%** |
+| `task_yield.save` | 1.2% |
+| `osapi_table` | 1.3% |
+
+**~8% of a 4.77 MHz 8088 inside the task switch**, because in an fsx bracket two
+tasks are always runnable — the drawing side and §53.2's kept worker — and
+`fsx_wait`'s `FSXW_FRAME` is a **spin on `task_yield`**, so every round trip is
+two context switches. That is also why Set 65's `T` control did nothing: `T`
+moves the app's frame WAIT between `FSXW_TICK` and `FSXW_FRAME`, and
+`FSXW_TICK` is a `hlt` — which idles the CPU rather than handing it to the
+worker, so it measured *worse*.
+
+**Set 67 measured `FSXF_FASTTICK` and the switch count is NOT what it costs.**
+Dropping the sub-tick is worth **+4.7 points** and the scheduler's own share
+does not fall at all (11.4% → 12.0%). The hypothesis in this paragraph — that
+three IRQ0s a tick mean three times the switch cost — is refuted by its own
+A/B; what the sub-tick actually buys back is frames, and frames are what the
+text screen's furniture is priced in.
+
+**The general lesson is the one this tree keeps relearning.** The bench build is
+not the shipped build, and the difference does not announce itself: it assembles,
+it boots, it plays, and it charges the thing under test for the instrument's own
+work. Set 65's `ttx_putn` rows were a *measurement of TRKLOG*. Every figure here
+is `TTXQSTAT`, and the windowed numbers Set 65 shipped its verdict on are
+unaffected — windowed, `ttx_status` had nothing to draw over and `ttx_putn` never
+appeared in those profiles at all.
+
+**The SHIPPED player was measured separately, and it had to be.** The rate pick
+is behind an `%ifdef` — `trk_play` reads `tlog_xrate` under `TRKLOG` and
+`trk_xhi` without it — so every figure above is evidence about the bench build
+and none of it is evidence about `TRACKER.O88`. Driven through §45.9.3's own
+`R` key instead of `K` (`os88rate.py --rkey`, which exists for this):
+**11,019 B/s of 11,000 = 100.2%** over 234 s of guest time, windowed, mixer
+57.9%, ring lead median 14,336 of 16,384. That is the number the feature ships
+on. `tests/trkrate.py --shipped` is the same distinction as a gate.
+
+**And two of the four knobs above are permanent.** `TTXQSTAT` stays because
+without it no fullscreen capacity figure taken on a `TRKLOG` build means
+anything; `TTXPAGE` and `TTXNODRAW` stay because the negative result is the
+valuable part and the next author to propose a cheaper grid should be able to
+re-run it in one command rather than rebuild the argument. All three are inside
+`%ifdef` and `TRACKER.O88` is **byte-identical** with and without them.
+
+### Set 67 — fullscreen CAN hold 11 kHz, and the grid blit was never the cost
+
+Set 66 concluded that no change to the fullscreen text screen's drawing could
+make 11 kHz hold. That was wrong, and the way it was wrong is worth more than
+the number: its ceiling knob `TTXNODRAW` removes the grid **BLIT** and nothing
+else, and it was read as though it removed *drawing*. The blit is **under half**
+of what that screen costs.
+
+All rows: `os8088_5150_sb_gla`, `BEVERLY.MOD`, XT mode, 11,000 Hz,
+`TTXQSTAT`, ~170 s of guest time each. The last row is the shipped windowed
+player at the same rate, for scale.
+
+| fullscreen text | audible | mixer | text screen | scheduler |
+|---|---|---|---|---|
+| as shipped | 88.7% | 61.2% | 13.0% | 11.4% |
+| `TTXPAGE` — page-flip the grid | 90.7% | — | — | — |
+| `TTXNODRAW` — no grid blit | 91.9% | 52.7%\* | — | — |
+| `TTXNOFAST` — no sub-tick | 93.4% | 65.0% | 11.5% | 12.0% |
+| `TTXNOFAST TTXPAGE` | **96.8%** | 68.0% | 6.1% | 14.4% |
+| `TTXNOFAST TTXNODRAW` | **96.8%** | 68.2% | 5.3% | 14.7% |
+| **`TTXNOFAST TTXNOALL` — no text drawing at all** | **99.8%** | 68.4% | 0.2% | 19.9% |
+| *(windowed, the shipped player)* | *99.8%* | *70.1%* | *0.2%* | *9.0%* |
+
+\* Set 66's figure, taken before `TTXFSANY` existed — see the harness note.
+
+**So it holds, and the last row says why it always could**: with nothing to
+draw the bracket gives the mixer **68.4%**, within 1.7 points of what windowed
+gives it. The bracket is not the problem.
+
+**The grid blit is ~40% of the screen's cost and the furniture is the rest.**
+`TTXNOFAST TTXPAGE` and `TTXNOFAST TTXNODRAW` land on the **same 96.8%** — once
+the blit is gone, page-flipping has captured all of it — and the 3.2% still
+missing is the readouts, the VU needles, the shadow rebuild and `tui_sync`,
+which is the half no grid change touches. **A cheaper grid gets two thirds of
+the way and cannot get further.**
+
+**The sub-tick is worth +4.7 points and NOT for the reason Set 66 gave.** That
+set put the bracket's cost on `FSXF_FASTTICK` tripling IRQ0 and therefore the
+switch scan; the A/B refutes it — the scheduler's share does not fall when the
+sub-tick goes (11.4% → 12.0%), it *rises* as the mixer gets more to do. What
+the sub-tick actually costs is **frames**, and frames are the unit the
+furniture is priced in. Note the scheduler at **19.9%** on the row that
+delivers 99.8%: `fsx_wait`'s yield-spin is not a tax, it is idle time with a
+name, and a run that reports 20% there while delivering everything asked for is
+saying the machine had it to spare.
+
+**Why windowed looked "cheaper" than a mode that owns the machine**, which is
+the question that started this: it is not overhead, it is work. The bracket
+*does* hand the app more — the kernel's own share falls from **10.8% to 3.1%**,
+no gfx lock, no cursor, no `ui_task` — and §45.9.1 stopped animating the
+**windowed** grid on a tier-0 machine while something is playing, so windowed
+XT mode draws **0.2%** and fullscreen draws 13.0%. Fullscreen is dearer because
+it is the mode that still shows you the music. **The 21.8% cursor-and-lock
+figure that makes windowed sound expensive is Set 4's, and it is Missile
+Command's** — an app that takes the lock every frame. Here `cur_shape_pass`
+measures **0.6%**.
+
+**What it would take, priced.** Not proposed, not built — the shipped feature
+is windowed-only (SPEC.md §45.9.3) and this is what a later attempt would be
+buying:
+
+- **Drop `FSXF_FASTTICK` at the high rate** — +4.7. It costs the frame rate,
+  54.6 → 18.2 Hz, which §45.16 measured the scroll's smoothness in.
+- **Page-flip the grid** — +3.4 on top of that. §45.13.5's carry already moves
+  a window rather than reformatting one, so this is a change to *when* it
+  blits, and it costs the row-by-row scroll the text screen exists to give
+  back.
+- **The last 3.2% is the per-frame furniture** and wants §56.12's shape — an
+  invalidation mask over the readouts and needles, which is a bigger change
+  than either of the above and the only one that does not cost a visible
+  feature.
+
+Two of those three are giving back exactly what §45.13 was built to provide.
+**That is the trade, and it is a decision rather than an optimisation.**
+
+**A fourth, found while wiring the §45.9.3 gate: the listing pattern was
+anchored on `<1>`, NASM's marker for an INCLUDED line** — so it saw every
+`.inc` and none of `tracker.asm`, and no `trk_*` symbol had ever appeared in a
+profile. That reads as "the app spends no time in its own main file" rather
+than as a missing pattern. The first attempt at the fix was worse and is the
+part worth keeping: a loose `\w+:` search anywhere in the line **harvests
+English**, and it put `es` at 44.1% of the machine, `pass` at 8.7% and `DX` at
+1.9% — words out of comments — while the profile still looked exactly like a
+profile. Both patterns are anchored at the start of the source now and the
+comment is cut off first. **A profile is a histogram of whatever you told it
+the symbols were, and it never looks wrong.** Every figure in Sets 65–67
+predates this and is unaffected: the mis-anchored pattern dropped
+`tracker.asm`'s own labels into one fallback bucket, which measured 0.2–2.3%,
+and every category quoted above comes from an `.inc` or the kernel.
+
+**Three harness corrections, and every one of them changed a number.** The
+11 kHz refusal §45.9.3 added made the fullscreen measurement **unreachable** —
+`K` now also sets `trk_xhi`, so `F` was declined and a run labelled "fullscreen
+text" was silently windowed, reporting **100.3%** on a screen it never reached.
+`TTXFSANY` is the bench bypass, and the general rule is that **a product
+refusal must not make the measurement it was decided from unrunnable.** The
+`--defines` list was **prepending `TRKLOG` invisibly**, so asking for the
+shipped player got a bench listing and `mp_xt` read as **254**; it is the full
+list now, and `make trkrate` writes each disk's defines beside it so the tool
+reads them rather than being told. And Set 66's own `ttx_status` correction is
+the third — that one is in Set 66.
+
+### Set 68 — RunCPM's row composer, priced before it was quoted (SPEC.md §74.2)
 
 Emulator: QEMU under `-icount shift=3,sleep=off`, VGA; one count is **0.359 ms
 of real XT** (Part 4). Harness: `tests/rcband` (`make rcbandbench`), N=8 a row,

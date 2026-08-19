@@ -291,9 +291,13 @@ matters.**
 `make DISKCNT=1` then read `dsk_dbg_ph` (six sector counters) and
 `dsk_dbg_phc` (the same six as int 13h calls) by name through
 `tools/os88sym.py`. They need **no caller tagging**: the volume's own layout
-says which region a sector is in and `[fpg_on]` — the progress widget's own
-flag — says whether the bar was counting it, so the payload bucket is *by
-construction* exactly what the bar shows.
+says which region a sector is in and `[fpg_total]` — the progress widget's
+current **scale** — says whether the bar was counting it, so the payload
+bucket is *by construction* exactly what the bar shows. (It was `[fpg_on]`
+until SPEC.md §12.8.3 split the two: the widget's chrome now spans the whole
+freeze, so "the icon is up" and "these sectors are inside the total" stopped
+being one question, and a mount's sectors arrive with the first true and the
+second false.)
 
 ```python
 import os88sym

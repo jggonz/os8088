@@ -70,13 +70,13 @@ def main(argv):
         dispcp.open_drive(m, mo, S, settle, "B")
         disk = dispcp.win_list(m, S)[-1]
         wx, wy, ww, wh = dispcp.win_rect(m, S, disk)
-        dispcp.open_row(m, mo, S, settle, wx, wy, 0)        # APPS
+        dispcp.open_named(m, mo, S, settle, wx, wy, "APPS")
         seg = None
         for _ in range(3):
             wx, wy, ww, wh = dispcp.win_rect(m, S, disk)
             mo.click(wx + 40, wy + TITLE_H // 2)
             settle(m)
-            dispcp.open_row(m, mo, S, settle, wx, wy, 2)    # FRACTAL.O88
+            dispcp.open_named(m, mo, S, settle, wx, wy, "FRACTAL.O88")
             m.advance(frames=200)                           # ...and let it get
             m.run()                                         # some rows down
             got = dispapps.pkg_seg(m, 0)

@@ -1,0 +1,167 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1">
+<title>os8088 &mdash; a Macintosh-style GUI for the Intel 8088</title>
+</head>
+<body bgcolor="#ffffff" text="#000000" link="#0000ee" vlink="#551a8b">
+
+<center>
+<h1>os8088</h1>
+<img src="os8088.gif" alt="[os8088 logo]" width="466" height="110">
+<h3>A Macintosh System 1-style GUI operating system<br>
+for the Intel 8086, in real-mode assembly</h3>
+<small>Served over plain HTTP, on purpose &mdash; see <a href="#http">below</a>.</small>
+</center>
+
+<hr>
+
+<h2>What it is</h2>
+
+<p>os8088 is a pre-emptively multitasking, windowed operating system that
+boots from a single 360&nbsp;KB floppy and runs in 256&nbsp;KB of RAM. It is
+written entirely in NASM real-mode assembly, targets the <b>4.77&nbsp;MHz
+Intel 8088</b>, and drives VGA, Hercules or CGA from one binary &mdash; the
+adapter is probed at boot and can be changed while the machine runs.</p>
+
+<p>It has overlapping windows, a serial mouse, a bottom dock, a file manager,
+loadable device drivers and loadable software packages that run as closable,
+multi-instance applications. <i>This page is being read on it.</i></p>
+
+<h2>The machine it is calibrated against</h2>
+
+<p>Every performance figure in the project comes off one machine: an
+IBM&nbsp;PC 5150, kept entirely period on purpose.</p>
+
+<table border="1" cellpadding="4" cellspacing="0">
+<tr>
+  <th>Part</th><th>What is in it</th><th>Why it matters</th>
+</tr>
+<tr>
+  <td>CPU</td>
+  <td>Intel 8088 @ 4.77 MHz</td>
+  <td>Measured at 4.64&ndash;4.68 MHz from MUL and DIV</td>
+</tr>
+<tr>
+  <td>RAM</td>
+  <td>640 KB</td>
+  <td>256 on the board, 384 on an ISA card</td>
+</tr>
+<tr>
+  <td>Video</td>
+  <td>Hercules GB101 and a CGA</td>
+  <td>Two cards, two monitors, one extended desktop</td>
+</tr>
+<tr>
+  <td>Storage</td>
+  <td>One 360 KB floppy, ST-225 on an ST11M</td>
+  <td>A real DOS 3.3 install lives on the hard disk</td>
+</tr>
+<tr>
+  <td>Clock</td>
+  <td>AST SixPakPlus, MM58167</td>
+  <td>Rung 2 of the clock ladder was written for it</td>
+</tr>
+</table>
+
+<p><small>An <tt>int 13h</tt> call costs one to two disk revolutions whatever
+it moves, so disk work is costed in <b>calls</b> and never in sectors.</small></p>
+
+<h2>What a drawing call costs</h2>
+
+<p>The single most important number in the project, and the one nothing in it
+believed until it was measured:</p>
+
+<table border="1" cellpadding="4" cellspacing="0">
+<tr><th>Operation</th><th>Hercules</th><th>CGA</th></tr>
+<tr><td>Any <tt>gfx_*</tt> call, fixed part</td><td>756 &micro;s</td><td>756 &micro;s</td></tr>
+<tr><td>One 8x8 glyph cell</td><td>901 &micro;s</td><td>909 &micro;s</td></tr>
+<tr><td>One 78-cell row of text</td><td>71.4 ms</td><td>72.7 ms</td></tr>
+<tr><td>A full page of text</td><td>2.50 s</td><td>1.24 s</td></tr>
+</table>
+
+<p>A redraw is priced by <b>how many primitive calls it makes</b>, not by how
+many pixels it covers. That sentence is why this browser scrolls by moving the
+pixels it already has instead of lettering them again.</p>
+
+<h2>Software that ships with it</h2>
+
+<ul>
+<li>Note Pad &mdash; wrapping, scrolling, find and replace, undo</li>
+<li>Paint &mdash; a bitmap editor with BMP and GIF codecs</li>
+<li>Tracker and ModPlug Player &mdash; two MOD players, two interfaces</li>
+<li>Solitaire, Minesweeper, Arkanoid, Missile Command, Cyclone</li>
+<li>Word &mdash; reads and writes real <tt>.DOC</tt> files</li>
+<li>Frotz &mdash; a Z-machine, so the machine plays Infocom games</li>
+<li>TeXPad &mdash; typesets to PDF and PostScript</li>
+</ul>
+
+<h2>Search this site</h2>
+
+<p>A search box is one text input and one submit button, which is the whole of
+what the browser's form support is for &mdash; and the same shape FrogFind
+uses.</p>
+
+<form action="/search.php" method="get">
+<input type="hidden" name="v" value="1">
+Find: <input type="text" name="q" size="24"> <input type="submit" value="Go">
+</form>
+
+<p><small>Tab moves to the field, Enter submits.</small></p>
+
+<h2>Getting it</h2>
+
+<ol>
+<li>Download the 360 KB image</li>
+<li>Write it to a real floppy</li>
+<li>Put it in drive A: and turn the machine on</li>
+</ol>
+
+<p>The toolchain is <tt>nasm</tt> and <tt>python3</tt> and there is no linker
+anywhere &mdash; every binary is a flat <tt>nasm -f bin</tt> image.</p>
+
+<pre>
+    ; the boot sector relocates itself to the top of memory
+    int   12h                 ; KB of conventional RAM
+    mov   cl, 6
+    shl   ax, cl              ; paragraphs
+    sub   ax, 32              ; ...less our own 512 bytes
+    push  ax                  ; 8086 has no push imm
+    push  word .there
+    retf
+</pre>
+
+<h2><a name="http">Why this page is plain HTTP</a></h2>
+
+<p>A TLS handshake is public-key arithmetic, and an RSA-2048 private operation
+on a 4.77&nbsp;MHz 8088 with no multiplier worth the name is <b>minutes</b>.
+So this machine cannot reach an HTTPS site at all, and this page is served
+without it so that it can.</p>
+
+<p>Links that leave for HTTPS are kept here on purpose, so the browser has
+something it must politely refuse:
+<a href="https://example.invalid/">an https link</a> &mdash; clicking it
+should say why, not hang.</p>
+
+<center>
+<table border="0" cellpadding="8" cellspacing="0" bgcolor="#000080">
+<tr><td align="center">
+<font color="#ffffff" size="3"><b>&copy; the os8088 project</b><br>
+This box is a one-cell table with white text on navy &mdash;<br>
+if you can read it, colour is being ignored correctly.</font>
+</td></tr>
+</table>
+</center>
+
+<hr>
+
+<center>
+<small>
+<a href="torture.htm">Browser torture test</a> |
+<a href="http://frogfind.de/">FrogFind</a> |
+<a href="#">Top of page</a>
+</small>
+</center>
+
+</body>
+</html>

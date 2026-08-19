@@ -2,7 +2,7 @@
  * os8088 - apps/cc/ccsmoke.c
  *
  * The C toolchain's smoke test, and the worked example of every part of the
- * SDK a package actually uses (SPEC.md 70). It is deliberately small and
+ * SDK a package actually uses (SPEC.md 73). It is deliberately small and
  * deliberately boring: one window, a counter, a menu, an About, a key handler
  * and a click handler - the shortest program that proves the entry
  * trampoline, all four callback trampolines, the cdecl bridge, the window
@@ -21,9 +21,9 @@
  * written to obey them visibly:
  *
  *   - every buffer is `static`, because the address of an automatic is
- *     silently wrong here and tools/cc8086.py refuses it (70.5);
+ *     silently wrong here and tools/cc8086.py refuses it (73.5);
  *   - nothing is copied with a string instruction, because they address ES
- *     and ES is the kernel's (70.5.1);
+ *     and ES is the kernel's (73.5.1);
  *   - the window record is read through os88_win_*(), never dereferenced;
  *   - there is no `long`, no `float` and no printf.
  * ==========================================================================*/
@@ -42,7 +42,7 @@ static int sm_keys;                      /* ...and how many keys arrived */
 static char sm_line[40];                 /* STATIC: os88_utoa() takes its
                                           * address, and the address of an
                                           * automatic is the one thing this
-                                          * toolchain refuses to build (70.5) */
+                                          * toolchain refuses to build (73.5) */
 static char sm_num[8];
 
 /* The menu set. Not `const`: os88_menu_set() writes its oncmd field, because
@@ -73,8 +73,8 @@ static void sm_draw(void *win)
     /* STATIC, and this is the rule that catches everyone: an out-parameter is
      * an address, so a local `struct os88_pt org;` passed as `&org` is
      * `lea ax, [bp-N]` and the build stops. It was written that way first and
-     * tools/cc8086.py refused both of them by name (70.5). Statics are also
-     * what keeps the frame small enough for a 256-byte worker stack (70.8) -
+     * tools/cc8086.py refused both of them by name (73.5). Statics are also
+     * what keeps the frame small enough for a 256-byte worker stack (73.8) -
      * the two rules are one rule seen twice. */
     static struct os88_pt org;
     static struct os88_size sz;

@@ -1,10 +1,10 @@
 ; =============================================================================
 ; os8088 - apps/runcpm/rcband.inc      the row composer and the row compare
 ;
-; Part of RUNCPM (SPEC.md 71), a reimplementation of RunCPM 6.9 by Marcelo
+; Part of RUNCPM (SPEC.md 74), a reimplementation of RunCPM 6.9 by Marcelo
 ; Dantas / "Mockba the Borg" (MIT). %included by apps/runcpm/runcpm.asm after
 ; the compiled C and before CC_IMAGE_END. Nothing here is RunCPM's - it is the
-; platform's cost model made concrete (SPEC.md 70.11: the inner loop is
+; platform's cost model made concrete (SPEC.md 73.11: the inner loop is
 ; assembly; C composes and decides, and calls it once per ROW).
 ;
 ; The three routines wear SmallerC's cdecl: arguments at [bp+4], [bp+6], ...
@@ -35,14 +35,14 @@ section .text
 ; character outside the table's range - it covers what OSAPI_FONT_GLYPHS says
 ; it covers, and this terminal stores 32..126 only - is a blank cell. One
 ; os88_gfx_blit1(dst, RC_COLS, x, y, n*8, 8) then puts the band down: ONE
-; drawing call for a row (SPEC.md 71.2), whatever n is.
+; drawing call for a row (SPEC.md 74.2), whatever n is.
 ;
 ; THE STRIDE IS AN ASSEMBLE-TIME CONSTANT AND THE EIGHT ROWS ARE UNROLLED,
 ; which is PERFORMANCE.md Set 64's lesson taken whole: the first version of
 ; this loop walked the eight rows with `inc bx / add di,[bp+12] / loop` around
 ; a stride held in memory and recomputed the attribute bit with two `shr ..,cl`
 ; a cell, and it measured 306 us a cell on the icount harness (tests/rcband,
-; `make rcbandbench`; SPEC.md 71.2 has the table) - seven times the ~40 the
+; `make rcbandbench`; SPEC.md 74.2 has the table) - seven times the ~40 the
 ; cost model had guessed. Now a cell is: the attribute bit held in DH and
 ; rotated once per cell (the next attribute byte is fetched only when it
 ; wraps), the glyph address as three shifts, and eight `mov al,[es:bx+k] /
@@ -157,7 +157,7 @@ _rc_band:
 ; int rc_rowdiffl(const unsigned char *a, const unsigned char *b, int n)
 ;   -> the index of the LAST byte where they differ, or -1
 ;
-; The shadow compare of SPEC.md 71.2: called once (each) per row that can
+; The shadow compare of SPEC.md 74.2: called once (each) per row that can
 ; have changed, so a 25-row screen is at most 50 calls of ~10 cycles a byte -
 ; and the two answers together are the span one drawing call covers.
 ; -----------------------------------------------------------------------------

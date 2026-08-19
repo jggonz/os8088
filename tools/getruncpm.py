@@ -22,20 +22,20 @@ os8088 tree pins the upstream COMMIT rather than a branch so that the images
 rebuild byte for byte (tools/os88disk.py pins the volume serial and every
 timestamp; this pins the input).
 
-THE PIN is the commit SPEC.md 71's banner names as its 'Built' date, and
+THE PIN is the commit SPEC.md 74's banner names as its 'Built' date, and
 every artifact's SHA-256 is checked on the way in - a mismatch is a hard
 failure and never a warning.
 
 WHAT LANDS in the output directory:
 
     CCP-DR.60K       Digital Research's CCP for a 60K CP/M 2.2, the command
-                     processor RUNCPM loads from its own folder (SPEC.md 71.3)
+                     processor RUNCPM loads from its own folder (SPEC.md 74.3)
     LICENSE          RunCPM's MIT licence
     1STREAD.ME       the master disk's read-me
     A/0/*            the master disk, DISK/A0.zip unpacked: drive A user 0.
                      Files above 65,535 bytes are NOT extracted - the file API
                      a package reaches reads and writes whole files with a
-                     16-bit count (SPEC.md 71.3, 71.4) - and are listed in
+                     16-bit count (SPEC.md 74.3, 74.4) - and are listed in
                      A/0/LEFT-OFF.TXT so the disk says what is missing (as of
                      the pin: Z80ASM.PDF, BDOS.ASM, ZCPR3.ASM)
     A0.list          every extracted file with its size, one per line
@@ -50,7 +50,7 @@ and give SUBMIT.COM something to submit - then the programs, then
 documentation, libraries and sources), stopping when the geometry's cluster
 budget is spent, so the Makefile's disk rules can pass them to os88disk.py
 without a manifest checked in. THE 360KB DISK IS CURATED, NOT MERELY FILLED
-(SPEC.md 71.5): it carries the programs and the texts - every .COM, .SUB,
+(SPEC.md 74.5): it carries the programs and the texts - every .COM, .SUB,
 .TXT and .ME - and none of the sources, libraries or documentation, so that
 an XT session has room to SAVE (the kernel does not grow a directory and a
 full disk cannot take a $$$.SUB, an MBASIC program or TE's file); the 720KB
@@ -75,7 +75,7 @@ os88disk.py's own build_assoc on the packages --reserve names (one cluster
 here, four on apps-all's 22 packages). Measured at the pin: a
 720KB disk and a 1.44MB disk carry all of it; the 360KB one carries every
 .COM, .SUB, .TXT and .ME and nothing else (52 files, 350/354 clusters;
-SPEC.md 71.5).
+SPEC.md 74.5).
 """
 import argparse
 import hashlib
@@ -98,7 +98,7 @@ PINNED = {
     "LICENSE":         ("1ee0ceaa2d409ffe7d95b2ab1aac4948c6b4625c54aafc000c209084ac39e167", 1072),
 }
 
-MAX_FILE = 65535          # a whole file must fit a 16-bit count (SPEC.md 71.3)
+MAX_FILE = 65535          # a whole file must fit a 16-bit count (SPEC.md 74.3)
 
 # --select: what a geometry carries, in the order it is filled. Category first,
 # then name, so the choice is deterministic and reads as a policy rather than
@@ -107,7 +107,7 @@ MAX_FILE = 65535          # a whole file must fit a 16-bit count (SPEC.md 71.3)
 # INFO.TXT and no LEFT-OFF.TXT saying what is missing - which is what an
 # alphabetical .COM fill did to the 360KB disk once.
 CATEGORY = [".TXT", ".ME", ".SUB", ".COM", ".DOC", ".LIB", ".Z80", ".ASM"]
-# ...and the 360KB disk stops after the programs (SPEC.md 71.5): the sources,
+# ...and the 360KB disk stops after the programs (SPEC.md 74.5): the sources,
 # libraries and documentation stay on the 720KB/1.44MB disks, so the XT disk
 # ships with room to save into instead of full to the last cluster (which is
 # how the wave-4 build shipped - and no session could save on it)
@@ -359,7 +359,7 @@ def select(out, geometry, reserve, slots=0, folders=1, reserve_clusters=0):
     directory is priced for at least `slots` entries - the spare ones the
     disk rule asks os88disk.py for with --dir-slots (the kernel does not
     grow a directory, SPEC.md 18.5, so a CP/M session's saves need room
-    that ships with the disk, SPEC.md 71.3). Answers (paths, used, budget):
+    that ships with the disk, SPEC.md 74.3). Answers (paths, used, budget):
     the paths are A/0's files, except that LEFT-OFF.TXT is the GEOMETRY'S
     OWN - written to <out>/left-off/<KB>/LEFT-OFF.TXT, naming what this
     disk leaves off - and is priced at its real size."""

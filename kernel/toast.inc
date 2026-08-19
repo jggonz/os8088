@@ -472,21 +472,18 @@ toast_place:
                                 ; buffer rather than trusting the flag is what
                                 ; keeps the two decs below off a negative count
     mov dx, [menu_bn]           ; **DX = ONE PAST THE LAST CELL THE STRIP MAY
-    cmp byte [fpg_on], 0        ; TAKE**, which is the end of the segment
-    je .gap                     ; UNLESS SPEC.md 12.8's widget is armed
-    sub dx, FPG_W / 8           ; (59.9.2). The widget is drawn straight onto
-                                ; the segment's last cells and is composed
-                                ; into no buffer at all, so menu_bcell cannot
-                                ; see it and the diff cannot arbitrate: two
-                                ; painters, one strip of glass, which is
-                                ; exactly what 59.1 exists to prevent. It sits
-                                ; at [vid_clk_hx] - FPG_W and its right edge
-                                ; IS the segment's, so the cells it holds are
-                                ; the last FPG_W / 8 of them - derived here
-                                ; rather than published, because a second
-                                ; opinion about where the widget is, is a
-                                ; second thing to keep in step
-.gap:
+                                ; TAKE**, which is the end of the segment -
+                                ; and that already accounts for SPEC.md 12.8's
+                                ; widget (59.9.2), because menu_bar_text takes
+                                ; FPG_CELLS off [menu_bn] itself while it is
+                                ; armed (SPEC.md 12.8.3). This used to
+                                ; subtract them here, which was the only
+                                ; reader that needed to; the widget outliving
+                                ; its operation made a whole composition able
+                                ; to run underneath it, so the reservation
+                                ; moved to where every reader of the segment
+                                ; sees it and this line lost its second
+                                ; opinion about where the widget is
     mov ax, dx                  ; the GAP: the cells between the end of the last
     sub ax, [menu_bend]         ; drawn menu and whatever is on our right
     jbe .out                    ; the menus fill the segment: no gap at all

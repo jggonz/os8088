@@ -159,7 +159,7 @@ Useful in this repo:
 #### Porting a program with the agent
 
 `apps/cword` — Microsoft Word 1.1a, in C — was built by porting: the
-original's source next door, this tree's C toolchain (SPEC.md §70), and a
+original's source next door, this tree's C toolchain (SPEC.md §73), and a
 coding agent finding out, one obstacle at a time, what would and would not
 carry across a 16-bit compiler, a 60KB segment and a 4.77 MHz machine.
 `.claude/skills/port-to-os8088/` is that experience turned into a procedure,

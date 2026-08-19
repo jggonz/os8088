@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/runcpm/rcmem.inc       the Z80-RAM accessors and movers
 ;
-; Part of RUNCPM (SPEC.md 71), a reimplementation of RunCPM 6.9 by Marcelo
+; Part of RUNCPM (SPEC.md 74), a reimplementation of RunCPM 6.9 by Marcelo
 ; Dantas / "Mockba the Borg" (MIT). %included by apps/runcpm/runcpm.asm after
 ; the compiled C, and by hosttest/rcmemtest.asm, the boot-sector harness that
 ; runs these on a real x86 with SS != DS and negative controls (the cwmovetest
@@ -10,21 +10,21 @@
 ; WHY THESE EXIST. The Z80's 64KB is a heap claim of its own (rc_z.seg), and
 ; the C side - the BDOS, the loader, the DMA - has to read and write it. The
 ; SDK's os88_peek/os88_poke are FAR calls through the API cell (~47 us each,
-; SPEC.md 70.11); a BDOS call that moves a 128-byte record through them would
+; SPEC.md 73.11); a BDOS call that moves a 128-byte record through them would
 ; be a program. So the package carries its own: near cdecl accessors for a
 ; byte or a word, and block movers that are the ONE place in RUNCPM where ES
 ; is loaded and a string instruction runs. Every one restores ES (it arrives
 ; as KERNEL_SEG on every callback, SPEC.md 20.4) and leaves DF clear; every
 ; `rep` line is marked cc8086:allow with its reason, which is the convention
 ; the gate would ask for if it read this file (it reads the compiled C only -
-; the marks are for the reviewer, SPEC.md 70.6).
+; the marks are for the reviewer, SPEC.md 73.6).
 ;
 ; RunCPM's own equivalents are ram.h's _RamRead/_RamWrite/_RamLoad and the
 ; direct RAM[] access of RAM_FAST; there is nothing to port there, only the
 ; addresses that these take (a Z80 address is a 16-bit offset into the claim,
 ; and it wraps at 64KB exactly as the Z80's does).
 ;
-; All cdecl (SPEC.md 70.3): arguments at [bp+4], [bp+6], ...; the answer in
+; All cdecl (SPEC.md 73.3): arguments at [bp+4], [bp+6], ...; the answer in
 ; AX; BP, DS, SS:SP and DF preserved; AX BX CX DX SI DI are the caller's to
 ; lose. rc_z.seg is the claim, banked by the C at launch (rcz80.inc _rc_z).
 ; =============================================================================
@@ -187,7 +187,7 @@ _rc_zfill:
 
 ; void rc_sfill(unsigned seg, unsigned off, int v, unsigned n) - n bytes of
 ; v into ANOTHER claim seg:off (a file's gap written past its end is zeros,
-; SPEC.md 71.3 - the one fill this program makes outside the Z80's RAM)
+; SPEC.md 74.3 - the one fill this program makes outside the Z80's RAM)
 _rc_sfill:
     push bp
     mov bp, sp

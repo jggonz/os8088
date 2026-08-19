@@ -3817,9 +3817,28 @@ ark_padr:
     pop ax
     ret
 
+ARK_MSGLH   equ 8                   ; banner line pitch: the glyph cell, so the
+                                    ; blank line between M_OVER's two strings is
+                                    ; exactly one empty row of text
+
 ; -----------------------------------------------------------------------------
-; ark_msgy - the row the banner sits on: the middle of the open play area,
-;            between the bottom of the wall and the paddle
+; ark_msgh - how tall the banner is for the mode it is about to draw: one line
+;            of glyphs, except M_OVER's three (the message, a blank, the key)
+; out: AX = height in rows; preserves all other registers
+; -----------------------------------------------------------------------------
+ark_msgh:
+    mov ax, ARK_MSGLH
+    cmp byte [ark_mode], M_OVER
+    jne .out
+    mov ax, ARK_MSGLH * 3
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_msgy - the row the banner's FIRST line sits on: the banner is centred on
+;            the middle of the open play area, between the bottom of the wall
+;            and the paddle, so a taller banner grows symmetrically about the
+;            same middle rather than hanging off the one-line row
 ; out: AX = content y; preserves all other registers
 ; -----------------------------------------------------------------------------
 ark_msgy:
@@ -3830,8 +3849,12 @@ ark_msgy:
     add ax, [ark_bricky]
     mov bx, [ark_pady]
     add ax, bx
+    shr ax, 1                       ; the middle of the open play area...
+    mov dx, ax
+    call ark_msgh                   ; ...less half of what is about to sit on it
     shr ax, 1
-    sub ax, 4
+    sub dx, ax
+    mov ax, dx
     pop dx
     pop bx
     ret
@@ -3849,12 +3872,13 @@ ark_clear_msg:
     call OSAPI_SET_COLOR
     call ark_msgy
     mov bx, ax
+    call ark_msgh                   ; the band is whatever the banner is tall,
+    mov dx, bx                      ; plus the row of air it always had
+    add dx, ax
     mov ax, [ark_rail]
     mov cx, [ark_cwid]
     sub cx, [ark_rail]
     dec cx
-    mov dx, bx
-    add dx, 8
     call ark_fillc
     pop dx
     pop cx
@@ -3885,18 +3909,36 @@ ark_draw_msg:
 .have:
     mov al, CYELLOW
     call OSAPI_SET_COLOR
-    call OSAPI_FONT_WIDTH           ; centred in the content
-    mov cx, [ark_cwid]
-    sub cx, ax
-    shr cx, 1
     call ark_msgy
     mov dx, ax
-    call ark_textc
+    call ark_msgline
+    cmp byte [ark_mode], M_OVER     ; and M_OVER carries a second line, one
+    jne .out                        ; blank row under the first: 'GAME OVER - N'
+    add dx, ARK_MSGLH * 2           ; on one line read as a sentence cut off
+    mov si, ark_s_overn
+    call ark_msgline
 .out:
     pop si
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_msgline - one line of the banner, centred in the content
+; in:  SI = string, DX = content y; the pen is already set
+; out: nothing; preserves every register
+; -----------------------------------------------------------------------------
+ark_msgline:
+    push ax
+    push cx
+    call OSAPI_FONT_WIDTH
+    mov cx, [ark_cwid]
+    sub cx, ax
+    shr cx, 1
+    call ark_textc
+    pop cx
     pop ax
     ret
 
@@ -4131,7 +4173,13 @@ ark_s_pcmd:  db 'Pause', 0
 ark_ttl:     db 'Arkanoid', 0
 ark_s_ready: db 'SPACE TO SERVE', 0
 ark_s_pause: db 'PAUSED', 0
-ark_s_over:  db 'GAME OVER - N', 0
+ark_s_over:  db 'GAME OVER', 0
+ark_s_overn: db 'N - NEW GAME', 0   ; the second line of the game-over banner,
+                                    ; a blank line under the first. On one line
+                                    ; it read 'GAME OVER - N', and a player took
+                                    ; the trailing letter for a message that had
+                                    ; been cut off rather than for the key that
+                                    ; starts the next game
 ark_s_clear: db 'WALL CLEARED', 0
 ark_s_lv:    db 'LV', 0
 

@@ -31,7 +31,7 @@
 ; failure is clean: the GOTO or the read fails, the page says so, and nothing
 ; is claimed.
 ;
-; WHEN THE MEMORY GOES BACK (SPEC.md 52.11.4): when the CONTROL PANEL closes,
+; WHEN THE MEMORY GOES BACK (SPEC.md 52.11.7): when the CONTROL PANEL closes,
 ; and at detach whatever happens. DSV_CPCLOSE is the hook (SPEC.md 31.9.1) and
 ; hd_tool_reap is what the driver publishes in it.
 ;

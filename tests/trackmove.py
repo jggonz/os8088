@@ -32,7 +32,7 @@ sys.path.insert(0, "/home/user/os8088/tests")
 import os88marty, os88mouse, os88sym, os88geom, dispcp
 
 MC_SIZE, MEM_MAX = 10, 32
-ROW_MOD, ROW_HEAPFRAG = 0, 1        # sorted by name: BEVERLY, HEAPFRAG, TRACKER
+PKG_MOD, PKG_HEAPFRAG = "BEVERLY.MOD", "HEAPFRAG.O88"
 MS_SZ, MS_SEG = 12, 0
 MP_CHSZ, MP_SEG = 40, 6
 MEM_K_DRV = 0xFF03              # a loaded driver's IMAGE claim (SPEC.md 51.3);
@@ -123,7 +123,7 @@ def main():
             os88marty.settle(m)
 
         # --- heapfrag first, so it owns the floor of the arena --------------
-        dispcp.open_row(m, mo, S, os88marty.settle, wx, wy, ROW_HEAPFRAG)
+        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, PKG_HEAPFRAG)
         time.sleep(22)
         os88marty.settle(m)
         hf_seg, hf_win = find_win(m, S, "Heap")
@@ -131,7 +131,7 @@ def main():
 
         # --- then the module, which OPENS TRACKER through the association ---
         raise_disk()
-        dispcp.open_row(m, mo, S, os88marty.settle, wx, wy, ROW_MOD)
+        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, PKG_MOD)
         time.sleep(30)                       # 116KB off a 360KB floppy
         os88marty.settle(m)
         tk_seg, tk_win = find_win(m, S, "Tracker")
@@ -204,7 +204,7 @@ def main():
 
         # --- and run it again, whose big claim forces the compaction ---------
         raise_disk()
-        dispcp.open_row(m, mo, S, os88marty.settle, wx, wy, ROW_HEAPFRAG)
+        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, PKG_HEAPFRAG)
         time.sleep(22)
         os88marty.settle(m)
 

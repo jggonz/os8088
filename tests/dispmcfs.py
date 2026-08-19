@@ -29,7 +29,7 @@ import os88marty, os88mouse, os88sym, dispcp                # noqa: E402
 
 S = os88sym.linear
 TITLE_H = 18
-GAMES_ROW, MISSILE_ROW = 1, 3
+GAMES_DIR, MISSILE_PKG = "GAMES", "MISSILE.O88"
 MBAR_H = 19
 
 
@@ -99,10 +99,11 @@ def main():
         dispcp.open_drive(m, mo, S, os88marty.settle, "B", card=pri)
         disk = dispcp.win_list(m, S)[-1]
         bx, by = dispcp.win_rect(m, S, disk)[:2]
-        dispcp.open_row(m, mo, S, os88marty.settle, bx, by, GAMES_ROW, card=pri)
+        dispcp.open_named(m, mo, S, os88marty.settle, bx, by, GAMES_DIR,
+                          card=pri)
         bx, by = dispcp.win_rect(m, S, disk)[:2]
-        dispcp.open_row(m, mo, S, os88marty.settle, bx, by, MISSILE_ROW,
-                        card=pri)
+        dispcp.open_named(m, mo, S, os88marty.settle, bx, by, MISSILE_PKG,
+                          card=pri)
         time.sleep(3)
         g = [w for w in dispcp.win_list(m, S) if w != disk]
         if not g:

@@ -25,7 +25,7 @@ has the mechanics of the compiler and the gate and is not repeated here.
   field order and the dialogs' contents each came from ONE named file in the
   reference tree (`Opus/resource/menus.cmd`, `keys.cmd`, `ibdefs.h`,
   `status.h`, `dlg/*.des`) — and that table of surface → file is the first
-  thing in SPEC.md §70.12. Build that table before writing a line. When you
+  thing in SPEC.md §73.12. Build that table before writing a line. When you
   find yourself typing a menu string you did not just read, stop.
 - **The code did not port and was never expected to.** Word was pcode built
   by a proprietary compiler against the Windows 2.x API. What carried was
@@ -47,7 +47,7 @@ has the mechanics of the compiler and the gate and is not repeated here.
   cword's RTF reader carries character formatting only, so a verbatim copy
   would have rendered *"This paragraph is centered"* flush left. `WELCOME.RTF`
   says those formats can be set *in the program* (true) and names the three
-  narrowed spans in prose instead of wearing them (§70.12.3).
+  narrowed spans in prose instead of wearing them (§73.12.3).
 - **The licence question is the user's.** The reference had no LICENSE and
   every file said "Copyright (C) Microsoft". Four options were put to the
   user (clean-room; lift tables, keep unreleased; lift and ship; pause) with a
@@ -58,7 +58,7 @@ has the mechanics of the compiler and the gate and is not repeated here.
   `apps/word` (assembly, `WORD`, `.DOC`, `vm/xt-word`) and `apps/cword` (C,
   `CWORD`, `.RTF`, `vm/386-c-word`) share no file, target, image, vm dir or
   extension, by rule, "because the next person to touch either will silently
-  get the other" (§70.12). Check every name against `apps/`, `vm/`, the
+  get the other" (§73.12). Check every name against `apps/`, `vm/`, the
   Makefile and `build/` before wave 1.
 
 ## 2. Measure before scoping
@@ -192,7 +192,7 @@ The numbers, so the next port can do the arithmetic before it starts:
   the trigger: at that point the next wave's first job is the split. CWORD hit
   the ceiling mid-feature twice, and both times the fix was moving code out,
   which is cheap only if the code is already the kind that can move.
-- **Split by FREQUENCY, never by size** (§70.14). What a keystroke touches —
+- **Split by FREQUENCY, never by size** (§73.14). What a keystroke touches —
   layout, wrap, the shadow, the chrome, the keyboard, the type library — stays
   resident; what runs once per command — dialogs, file in/out, search, Sort,
   Renumber, TOC, the clipboard, the paragraph dictionary, the Font list —
@@ -489,12 +489,12 @@ decided, done, and written down. That is the ratio to keep.
 
 ## 13. What the RunCPM port added
 
-`apps/runcpm` is RunCPM 6.9 (SPEC.md §71), ported across six waves by the
+`apps/runcpm` is RunCPM 6.9 (SPEC.md §74), ported across six waves by the
 skill this file belongs to; `docs/RUNCPM-PORT-PLAN.md` carries each wave's
 measured paragraph. What it learned that CWORD had not, one line each:
 
 - **The `.OVL` cannot be loaded from `os88_main`** — there is no instance
-  yet to resolve a module for (CWORD's `cw_doc_clear` rule, §70.14);
+  yet to resolve a module for (CWORD's `cw_doc_clear` rule, §73.14);
   ordinary file reads CAN, and the CCP and `AUTOEXEC.TXT` are read there.
   So an `ovl_*` the program needs first is called from the FIRST callback
   (the first wake here) and its refusal is printed as a fact where the user
@@ -529,5 +529,5 @@ measured paragraph. What it learned that CWORD had not, one line each:
   own memory or in a register — the 8088 is happier too.
 - **A shared name scratch aliases across a refill.** The directory fill used
   the caller's `rc_n11` and an `F_OPEN` that triggered a refill opened the
-  LAST file walked — exactly the trap the `static` idiom (§70.5) invites;
+  LAST file walked — exactly the trap the `static` idiom (§73.5) invites;
   give a walker its own scratch and make the harness refill before an open.

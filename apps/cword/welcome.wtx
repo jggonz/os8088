@@ -1,4 +1,4 @@
-; apps/cword/welcome.wtx - the shipped WELCOME.RTF's source (SPEC.md 70.12.3).
+; apps/cword/welcome.wtx - the shipped WELCOME.RTF's source (SPEC.md 73.12.3).
 ; Same markup and the same parser as apps/word/welcome.wtx (tools/os88doc.py
 ; owns parse_line; tools/os88rtf.py turns the result into RTF instead of .DOC).
 ;

@@ -1,8 +1,8 @@
 /* ============================================================================
  * os8088 - apps/runcpm/rcfs.c          drives are folders, files are whole
- *                                      (SPEC.md 71.3)
+ *                                      (SPEC.md 74.3)
  *
- * Part of RUNCPM (SPEC.md 71), a reimplementation of RunCPM 6.9 by Marcelo
+ * Part of RUNCPM (SPEC.md 74), a reimplementation of RunCPM 6.9 by Marcelo
  * Dantas / "Mockba the Borg" (https://github.com/MockbaTheBorg/RunCPM, MIT
  * licence, Copyright (c) 2017 Mockba the Borg). #included by runcpm.c.
  *
@@ -38,7 +38,7 @@
  * (cpm.h 795-818: created - truncated - the FIRST time in the session and
  * appended to after; deleting the file starts it over).
  *
- * WHAT IS THIS PLATFORM'S: WHOLE FILES IN CLAIMS (SPEC.md 71.3). RunCPM
+ * WHAT IS THIS PLATFORM'S: WHOLE FILES IN CLAIMS (SPEC.md 74.3). RunCPM
  * fopens the host file BY NAME on every record and seeks; the file API a
  * package reaches (SPEC.md 18.4, 19) reads and writes WHOLE files with a
  * 16-bit count and no seek, and every file call resolves in the instance's
@@ -61,7 +61,7 @@
  *     of F files is sum(ceil(k/16), k = 1..F+1) sector reads - MEASURED
  *     238 int 13h calls for A\0's 77 files on a DIRW1=1 kernel (no
  *     sector cache; ~560 at its 126-file cap) and 0 with SPEC.md 18.95's
- *     track cache, which serves every re-seek from RAM (SPEC.md 71.3) - a
+ *     track cache, which serves every re-seek from RAM (SPEC.md 74.3) - a
  *     machine with no room for that cache pays ~400 ms a call, ~95 s,
  *     with the glass frozen inside this wake, so the fill SAYS so first
  *     (rc_say_now: an immediate toast, and the terminal line when
@@ -81,19 +81,19 @@
  *     the exit flushes what is left and releases every claim - RunCPM does
  *     not hold heap for programs that are over. A ninth open evicts the
  *     least recently used CLEAN entry, and when none is clean the open errs
- *     'Bdos Err on X: CP/M ERR' with a toast (SPEC.md 71.4). A file above
+ *     'Bdos Err on X: CP/M ERR' with a toast (SPEC.md 74.4). A file above
  *     65,535 bytes cannot be held
  *     - the read is a 16-bit count - so open/make/write refuse it as a FACT
- *     with a toast naming the file (SPEC.md 47, 71.4); DIR still lists it
+ *     with a toast naming the file (SPEC.md 47, 74.4); DIR still lists it
  *     with its whole extent chain; the master disk's three such files are
  *     not shipped. Records stop at 511 (65,408 bytes written), the 16-bit
  *     size's last whole record.
  *
  * Every function here is called on the UI task with no lock held (SPEC.md
- * 71.1: the BDOS runs on the wake), which is what makes the file slots legal
- * from a BDOS call at all. Every buffer is static (SPEC.md 70.5).
+ * 74.1: the BDOS runs on the wake), which is what makes the file slots legal
+ * from a BDOS call at all. Every buffer is static (SPEC.md 73.5).
  *
- * TWO SEGMENTS (SPEC.md 70.14, 71): the resident image + bss passed the
+ * TWO SEGMENTS (SPEC.md 73.14, 71): the resident image + bss passed the
  * 55,000 trigger in wave 4, so the PER-COMMAND half of this file is module
  * code in RUNCPM.OVL - the ovl_* names: ERA/REN/MAKE, F_OPEN/F_CLOSE, the
  * search and _mockupDirEntry, F_SIZE/F_RANDREC, USER n's folder, BDOS 249,
@@ -104,7 +104,7 @@
  * ovl_patch_cpm on the first wake before any folder move and the machine
  * does not boot without it, so no ovl_* here can find the module absent and
  * every one keeps its natural BDOS code (0 = success). Never take the
- * address of one (SPEC.md 70.14).
+ * address of one (SPEC.md 73.14).
  * ==========================================================================*/
 
 #define RC_DRIVES 16
@@ -122,7 +122,7 @@
 
 /* the last record this model can READ, 511 (a 65,535-byte file's tail),
  * and the last it can WRITE, 510 (65,408 bytes: the 16-bit size's last
- * whole record) - SPEC.md 71.3 */
+ * whole record) - SPEC.md 74.3 */
 #define RC_MAXREC_R 511
 #define RC_MAXREC_W 510
 
@@ -297,7 +297,7 @@ static int rc_fs_drive_exists(int d)
  * user folder; 1 = the drive's folder exists but the user folder does not
  * (users 16..31 have no folder: NOHIGHUSER) - the instance stands in the
  * DRIVE's folder, and the area reads as EMPTY (rc_dc_want); -1 = there is
- * no such DRIVE (SPEC.md 71.3: 'Bdos Err on X: Select', the fact _sys_select
+ * no such DRIVE (SPEC.md 74.3: 'Bdos Err on X: Select', the fact _sys_select
  * decides from the letter alone), and the instance is left where it was.
  * Each fact is looked up ONCE per drive and once per (drive,user). */
 static int rc_fs_cd(int d, int u)
@@ -589,7 +589,7 @@ static void rc_dc_subfact(void)
  * (the least recently wanted slot is the one refilled). Answers 0 with the
  * folder present, 1 when the user area is absent (the slot is empty and
  * nothing can be made there), -1 for an absent drive. The fill is the one
- * os88_file_find walk (rc_n_find counts it: SPEC.md 71.3 prices it). */
+ * os88_file_find walk (rc_n_find counts it: SPEC.md 74.3 prices it). */
 static int rc_dc_want(int d, int u)
 {
     struct rc_dcache *p;
@@ -616,7 +616,7 @@ static int rc_dc_want(int d, int u)
         return 1;
     }
     /* the walk is seconds on a machine without the track cache (SPEC.md
-     * 71.3: 238 int 13h calls for A\0), inside THIS wake with the glass
+     * 74.3: 238 int 13h calls for A\0), inside THIS wake with the glass
      * frozen - say so first: "RunCPM: reading A:0" (19 chars) */
     os88_strcpy(rc_tmsg, "RunCPM: reading ", sizeof(rc_tmsg));
     rc_tmsg[16] = (char)('A' + d);
@@ -706,7 +706,7 @@ static void rc_dc_forget(int d, int u, const char *n11)
  * rc_error prints its line, "\r\n" msg "\r\n" (one row = one band), where
  * upstream's disk.h prints - because a toast is the BAR's strip and the bar
  * is under a fullscreen window (kernel/menu.inc menu_draw_bar early-outs on
- * wm_fs_vis), so it would expire unseen (SPEC.md 71.4). */
+ * wm_fs_vis), so it would expire unseen (SPEC.md 74.4). */
 static void rc_say(const char *msg)
 {
     os88_toast(msg, 0);
@@ -808,7 +808,7 @@ static int rc_oft_flush(int i)
 
 /* rc_fs_flush_all - a warm boot, or the exit: every open file written back
  * and RELEASED - the program that held them is gone (main.c's loop laps),
- * and RunCPM does not hold heap for programs that are over (SPEC.md 71.3:
+ * and RunCPM does not hold heap for programs that are over (SPEC.md 74.3:
  * the next program's open of the same file reads it again, as a CP/M
  * machine's CCP reads a .COM from the disk every time) */
 static void rc_fs_flush_all(void)
@@ -835,7 +835,7 @@ static int rc_oft_evict(void)
 }
 
 /* rc_oft_slot - a free row, evicting a clean one if the table is full;
- * -1 with the toast when every entry is a modified file (SPEC.md 71.4) */
+ * -1 with the toast when every entry is a modified file (SPEC.md 74.4) */
 static int rc_oft_slot(void)
 {
     int i;
@@ -1468,7 +1468,7 @@ static unsigned rc_fs_writerand(void)
     rec = rc_fcb[33] | ((unsigned)rc_fcb[34] << 8);
     if (rec > RC_MAXREC_W) {
         rc_toast_name("RunCPM: ", rc_oft[i].name, ">64K");
-        return 6;                            /* seek past the disk (71.4) */
+        return 6;                            /* seek past the disk (74.4) */
     }
     r = rc_rec_write(i, rec);
     if (r != 0)
@@ -1574,7 +1574,7 @@ static unsigned ovl_fs_makedisk(void)
  * by ONE by-name look-up of $$$.SUB, the $-file SUBMIT makes and the only
  * one the DRI CCP ever opens (a by-name look-up is one pass over the
  * folder's directory sectors: it costs no walk and puts none on the boot
- * path). Stated in SPEC.md 71.3: until A\u has been listed, another $-name
+ * path). Stated in SPEC.md 74.3: until A\u has been listed, another $-name
  * put there from outside is not the batch flag - it would be upstream. */
 static unsigned ovl_fs_checksub(void)
 {

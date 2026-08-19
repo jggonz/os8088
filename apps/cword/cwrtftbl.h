@@ -96,7 +96,7 @@
  * WHAT WAS NARROWED, AND WHAT IT COSTS
  * ---------------------------------------------------------------------------
  * Opus's `CP` (character position) and `FC` (file character offset) are
- * `typedef long`. There is no `long` in this toolchain (SPEC.md 70.7), so:
+ * `typedef long`. There is no `long` in this toolchain (SPEC.md 73.7), so:
  *
  *   CP -> 16 bits, unsigned.  A DOCUMENT IS CAPPED AT 65,535 CHARACTERS. At
  *         ~2,000 characters a page that is about 32 pages, and it is a hard
@@ -134,7 +134,7 @@
  * text disappears, and nothing reports anything.
  *
  * THIS FILE REMOVES THE HAZARD RATHER THAN DOCUMENTING IT. There is not one
- * bit-field here (SmallerC has none anyway, SPEC.md 70.7). A property record
+ * bit-field here (SmallerC has none anyway, SPEC.md 73.7). A property record
  * is a byte array with manifest offsets, and a flag is a manifest MASK. The
  * bit numbers are still Opus's - CW_CHP_BIT_BOLD is 0 because ibitCfBold is 0 -
  * so every row stays checkable against the source, but nothing derives a bit
@@ -175,7 +175,7 @@
  * summary information appearing in the middle of page one.
  *
  * ---------------------------------------------------------------------------
- * ONE TRANSLATION UNIT (SPEC.md 70.1)
+ * ONE TRANSLATION UNIT (SPEC.md 73.1)
  * ---------------------------------------------------------------------------
  * `nasm -f bin` has no notion of an external symbol, so a C package is exactly
  * one .c file. cwrtftbl.c is therefore #included by the package's single
@@ -188,7 +188,7 @@
  * This header carries no code and may be included freely.
  *
  * ---------------------------------------------------------------------------
- * WHAT IT COSTS (APP_MAX_SIZE is 61,440 for image + bss together, SPEC.md 70.9)
+ * WHAT IT COSTS (APP_MAX_SIZE is 61,440 for image + bss together, SPEC.md 73.9)
  * ---------------------------------------------------------------------------
  * Measured, not estimated - see the note at the foot of cwrtftbl.c for the
  * command and the exact figures. The tables are `.data`, so they are file bytes
@@ -281,7 +281,7 @@
  * CW_IPFN_* - the actions a CW_RAC_CHNGDEST or CW_RAC_SPECCHARACT row names.
  * Opus indexes rgpfnRtfActions[] (RTFTBL.H:86-106, 126-137) with 21 of these;
  * cword keeps five. The reader switches on the number - a table of function
- * pointers would cost a relocation this OS does not have (SPEC.md 70.2: there
+ * pointers would cost a relocation this OS does not have (SPEC.md 73.2: there
  * is no relocation of any kind).
  * ------------------------------------------------------------------------- */
 #define CW_IPFN_PARAEND     0   /* ipfnDoParaEnd    - end the paragraph      */

@@ -40,7 +40,8 @@ def w(m, name, idx=0):
 def bb(m, name, idx=0):
     return m.read(sym(m, name) + idx, 1)[0]
 
-WIN_SIZE, W_FLAGS, W_X, W_Y, W_W, W_H = 28, 0, 2, 4, 6, 8
+from os88geom import WIN_SIZE   # NOT a local copy: it moved 28 -> 30
+W_FLAGS, W_X, W_Y, W_W, W_H = 0, 2, 4, 6, 8
 TITLE_H, FM_ROW_Y0, FM_ROW_H, DESK_ZY0 = 18, 22, 16, 32
 
 def win(m, slot):

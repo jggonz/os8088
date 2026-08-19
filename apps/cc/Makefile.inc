@@ -1,7 +1,7 @@
 # =============================================================================
 # os8088 - apps/cc/Makefile.inc
 #
-# The build rules for a C package (SPEC.md 70.1, 67.10). A fragment, not a
+# The build rules for a C package (SPEC.md 73.1, 67.10). A fragment, not a
 # Makefile: the top-level Makefile owns the tree's targets, and this is the
 # one line it needs to gain C -
 #
@@ -74,14 +74,14 @@ CC_SCINC    := $(CC_SC)/v0100/include
 CC_RUNTIME  := $(CC_DIR)/os88.h $(CC_DIR)/crt0.asm $(CC_DIR)/os88thunk.asm \
                apps/os88api.inc
 
-# CC_MAXFRAME is tools/cc8086.py's --max-frame (SPEC.md 70.8). 96 is the
+# CC_MAXFRAME is tools/cc8086.py's --max-frame (SPEC.md 73.8). 96 is the
 # tool's own default and it is a SMELL THRESHOLD, not a budget: a 96-byte
 # frame in this OS is a local buffer, a local buffer is either an `&local`
 # (refused outright) or dead weight that should have been static, and on a
 # worker it is over a third of the whole 256-byte stack with the tick and
 # mouse ISR frames still to land on top. Lowering it for a package that runs
 # on a worker is a normal thing to do; raising it is an argument to have in
-# SPEC.md 70.8.
+# SPEC.md 73.8.
 CC_MAXFRAME ?= 96
 
 # One newline, so that the $(if) in the packaging rule below can expand to two
@@ -101,7 +101,7 @@ endef
 # way every other package's includes do, and -I $(BUILD)/ so the shim can name
 # the generated assembly without knowing where the build tree is.
 #
-# THE THIRD ARGUMENT IS THE OVERLAY (SPEC.md 70.14), and it is the file name
+# THE THIRD ARGUMENT IS THE OVERLAY (SPEC.md 73.14), and it is the file name
 # the module ships under - `CWORD.OVL`, matching CC_PKG_NAME, because that is
 # the name crt0.asm's loader asks the file API for. Given it, one step goes in
 # between nasm and os88pkg.py: tools/os88ovl.py cuts the assembled image at the
@@ -179,7 +179,7 @@ $(BUILD)/ccsmoke.img: $(BUILD)/ccsmoke.o88 tools/os88disk.py
 cc-smoke: $(BUILD)/ccsmoke.img
 
 # -----------------------------------------------------------------------------
-# TWO THINGS THAT MUST NOT DRIFT (SPEC.md 70.10)
+# TWO THINGS THAT MUST NOT DRIFT (SPEC.md 73.10)
 #
 # * NO RULE THAT PRODUCES AN .o88 MAY PASS --no-gate. That flag lowers the
 #   instruction set without enforcing the &local rule, the ES-string rule, the
@@ -192,7 +192,7 @@ cc-smoke: $(BUILD)/ccsmoke.img
 #   every function's frame size on every build because the number that
 #   actually matters is a SUM over a call chain, the chain runs through kernel
 #   dispatches no static analysis can see, and the only defence is an author
-#   who notices the figures growing (SPEC.md 70.8, and 15.1's idea that the
+#   who notices the figures growing (SPEC.md 73.8, and 15.1's idea that the
 #   guard which works is the one that prints on every build). Do not add
 #   --quiet to these rules to tidy the output.
 # =============================================================================

@@ -115,7 +115,7 @@ def main():
             print("FAIL: the Disk window never opened")
             return 1
         wx, wy, ww, wh = dispcp.win_rect(m, S, w[-1])
-        dispcp.open_row(m, mo, S, os88marty.settle, wx, wy, 0)
+        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "HEAPFRAG.O88")
 
         # the suite runs on the first W_PAINT and fills a heap-sized buffer
         # twice over on a 4.77MHz machine: give it real time, then settle

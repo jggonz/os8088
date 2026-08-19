@@ -36,6 +36,14 @@ this tree has already paid for a gate that could only pass.
 
 The mouse is parked at the same place for every capture so the arrow cancels
 out of every comparison.
+
+C came later and is a third question of the same shape asked about a VERTICAL
+drag, where a drop's dy shifts a screen-phased dither's phase inside the drag
+cache (SPEC.md 11.96.13.1). That residue is ACCEPTED now, so C does not ask
+whether the two captures agree - it asks which KIND of difference it is, and
+`dither_split` is what makes that a classification rather than a tolerance.
+`--selftest` checks that rule against synthetic captures with no emulator at
+all, including the two cases that would make it a way of not looking.
 """
 import argparse
 import sys
@@ -92,6 +100,189 @@ def bbox(d):
     xs = [p[0] for p in d]
     ys = [p[1] for p in d]
     return (min(xs), min(ys), max(xs), max(ys))
+
+
+def px(cap, w, x, y):
+    o = (y * w + x) * 3
+    return cap[o:o + 3]
+
+
+def dither_split(inc, full, pts, w, h):
+    """Split a differing-pixel set into DITHER-PHASE RESIDUE and a REAL
+    disagreement (SPEC.md 11.96.13.1).
+
+    A drop's dy is not snapped, so the drag cache can replay a window's own
+    dithered controls an odd number of rows from where they were banked and
+    every pixel of them comes back inverted. That is accepted - an inverted
+    50% dither is the same 50% grey, inside the solid chrome of a scroll-bar
+    track, with no adjacent dither to seam against - so this file has to be
+    able to say "that, and only that" about a difference.
+
+    IT IS A CLASSIFIER AND NOT A TOLERANCE, and the difference is the whole
+    reason it is allowed to exist. Subtracting 1,416 from a count, or
+    comparing against a threshold, would pass a kernel that had lost the
+    scroll-bar track altogether. What is required here instead is that the
+    pixels BE a phase-shifted copy of what the repaint drew:
+
+      1. they fill a rectangle - every pixel inside it differs, none outside
+         the component does. A stale-content defect is ragged;
+      2. inside that rectangle each capture is a 2-periodic CHECKERBOARD:
+         every pixel differs from its right-hand and lower neighbour. Solid
+         areas, glyphs and window chrome all fail this at once;
+      3. each capture uses exactly two colours there, and the SAME two;
+      4. and one is the other shifted a row - inc[x,y] == full[x,y+1].
+
+    Neighbours are taken from INSIDE the rectangle only. A track's edge pixel
+    sits against the black border drawn either side of it, which is the
+    dither's own black, so reaching outside would misfile every boundary
+    pixel as a real difference.
+
+    The size floor is what keeps (2) from being vacuous: on a 1- or 2-pixel
+    rect "differs from its neighbour" is a statement about almost nothing.
+    """
+    seen = set(pts)
+    residue, real = [], []
+    while seen:
+        # the component this pixel belongs to, 4-connected
+        start = next(iter(seen))
+        comp, stack = [], [start]
+        seen.discard(start)
+        while stack:
+            x, y = stack.pop()
+            comp.append((x, y))
+            for n in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                if n in seen:
+                    seen.discard(n)
+                    stack.append(n)
+        x0, y0, x1, y1 = bbox(comp)
+        cw, ch = x1 - x0 + 1, y1 - y0 + 1
+        ok = (len(comp) == cw * ch and cw >= 3 and ch >= 3 and len(comp) >= 16)
+        if ok:
+            for cap in (inc, full):
+                cols = set()
+                for y in range(y0, y1 + 1):
+                    for x in range(x0, x1 + 1):
+                        v = px(cap, w, x, y)
+                        cols.add(bytes(v))
+                        if x < x1 and px(cap, w, x + 1, y) == v:
+                            ok = False
+                        if y < y1 and px(cap, w, x, y + 1) == v:
+                            ok = False
+                    if not ok:
+                        break
+                if not ok or len(cols) != 2:
+                    ok = False
+                    break
+        if ok:
+            for y in range(y0, y1):
+                for x in range(x0, x1 + 1):
+                    if px(inc, w, x, y) != px(full, w, x, y + 1):
+                        ok = False
+                        break
+                if not ok:
+                    break
+        (residue if ok else real).extend(comp)
+    return residue, real
+
+
+def selftest():
+    """dither_split, CHECKED WITHOUT A GUEST - `python3 tests/dispcorner.py
+    --selftest`, no emulator, no floppy, no build.
+
+    A classifier that excuses a class of difference is a way of not looking
+    unless it can be shown to excuse ONLY that class, and the two cases that
+    matter are both here: a track that VANISHED has the same pixel count as
+    one whose phase slipped, and a checkerboard drawn in the wrong colour has
+    the same shape. Neither may pass. This is the tautology guard
+    tools/notepad/pixcheck.py exists to state, applied to the rule rather
+    than to the run.
+    """
+    W, H = 64, 64
+    BLK, WHT, RED = bytes([0, 0, 0]), bytes(b"\xff" * 3), bytes([255, 0, 0])
+
+    def blank():
+        return bytearray(bytes([128, 128, 128]) * W * H)
+
+    def put(cap, x, y, v):
+        o = (y * W + x) * 3
+        cap[o:o + 3] = v
+
+    def dset(a, b):
+        return [((i // 3) % W, (i // 3) // W)
+                for i in range(0, len(a), 3) if a[i:i + 3] != b[i:i + 3]]
+
+    def track(cap, phase):          # 12 x 31, a scroll-bar track's shape
+        for y in range(10, 41):
+            for x in range(10, 22):
+                put(cap, x, y, WHT if (x + y) % 2 == phase else BLK)
+
+    cases, bad = [], []
+    inc, full = blank(), blank()                    # 1: the phase slipped
+    track(full, 0); track(inc, 1)
+    cases.append(("phase slipped", inc, full, 372, 0))
+
+    inc, full = blank(), blank()                    # 2: stale solid content
+    for y in range(30, 40):
+        for x in range(30, 45):
+            put(inc, x, y, RED)
+    cases.append(("stale block", inc, full, 0, 150))
+
+    inc, full = blank(), blank()                    # 3: both, in one capture
+    track(full, 0); track(inc, 1)
+    for y in range(50, 58):
+        for x in range(30, 45):
+            put(inc, x, y, RED)
+    cases.append(("slip + block", inc, full, 372, 120))
+
+    inc, full = blank(), blank()                    # 4: right shape, wrong ink
+    track(full, 0)
+    for y in range(10, 41):
+        for x in range(10, 22):
+            put(inc, x, y, RED if (x + y) % 2 else BLK)
+    cases.append(("wrong colour", inc, full, 0, 372))
+
+    inc, full = blank(), blank()                    # 5: THE TOLERANCE TRAP -
+    track(full, 0)                                  # the track is simply GONE,
+    cases.append(("track vanished", inc, full, 0, 372))   # at the same count
+
+    inc, full = blank(), blank()                    # 6: too small to mean it
+    for y in (20, 21):
+        for x in (20, 21):
+            put(full, x, y, WHT if (x + y) % 2 == 0 else BLK)
+            put(inc, x, y, WHT if (x + y) % 2 else BLK)
+    cases.append(("2x2 speck", inc, full, 0, 4))
+
+    for name, inc, full, want_r, want_x in cases:
+        r, x = dither_split(inc, full, dset(inc, full), W, H)
+        ok = (len(r), len(x)) == (want_r, want_x)
+        print("  %-15s residue %3d real %3d   %s"
+              % (name, len(r), len(x), "ok" if ok else
+                 "FAIL (wanted %d/%d)" % (want_r, want_x)))
+        if not ok:
+            bad.append(name)
+    print("selftest: " + ("FAIL: " + ", ".join(bad) if bad else
+                          "dither_split excuses a phase slip and nothing else"))
+    return 1 if bad else 0
+
+
+def classify(inc, full, d, w, h, tag, label, bad, allow_dither):
+    """Report a differing set by CLASS and rule on it. `allow_dither` is the
+    only knob, and it is set from the drag the leg actually took - an even dy
+    cannot produce residue, so it is never allowed to excuse one."""
+    if not d:
+        print("%s: %-22s 0 differing pixel(s)" % (tag, label))
+        return [], []
+    res, real = dither_split(inc, full, d, w, h)
+    print("%s: %-22s %d differing pixel(s): %d dither-phase, %d real  "
+          "bbox %r" % (tag, label, len(d), len(res), len(real), bbox(d)))
+    if real:
+        bad.append("%s/%s: %d pixels differ and are NOT a dither's phase "
+                   "(bbox %r)" % (tag, label, len(real), bbox(real)))
+    if res and not allow_dither:
+        bad.append("%s/%s: %d pixels of dither-phase residue where the drag "
+                   "cannot make any (bbox %r)" % (tag, label, len(res),
+                                                  bbox(res)))
+    return res, real
 
 
 def crop_png(path, cap, w, h, box, margin=24):
@@ -164,12 +355,18 @@ def repaint(m, mo, card):
                            "figure below would be a comparison with itself")
 
 
-def probe(m, mo, pri, pw, ph, label, bad, prev, corner=None, tag="A"):
+def probe(m, mo, pri, pw, ph, label, bad, prev, corner=None, tag="A",
+          allow_dither=False):
     """Do the capture / force / capture / diff, below the menu bar.
 
     `prev` is a one-element list holding the previous probe's post-repaint
     capture: the operation just performed must have MOVED some pixels, or the
     0 this is about to print is vacuous and says so.
+
+    `allow_dither` says whether THIS leg's drag could have shifted a
+    screen-phased dither's phase (SPEC.md 11.96.13.1). It is decided from the
+    dy the record actually took, never from the one asked for, and it excuses
+    only pixels dither_split can prove are that.
     """
     mo.to(*PARK)
     os88marty.settle(m, card=pri)
@@ -186,13 +383,10 @@ def probe(m, mo, pri, pw, ph, label, bad, prev, corner=None, tag="A"):
     full = shot(m, (pri,))[pri][2]
     prev[0] = full
     d = [(x, y + MBAR_H) for x, y in diff(inc[base:], full[base:], pw)]
-    print("%s: %-22s %d differing pixel(s)  bbox %r"
-          % (tag, label, len(d), bbox(d)))
     if corner is not None and corner in d:
         bad.append("%s/%s: the shadow corner %r differs"
                    % (tag, label, corner))
-    elif d:
-        bad.append("%s/%s: %d pixels differ" % (tag, label, len(d)))
+    classify(inc, full, d, pw, ph, tag, label, bad, allow_dither)
     if d:
         crop_png("/tmp/corner%s-%s-inc.png" % (tag, label), inc, pw, ph,
                  bbox(d))
@@ -253,8 +447,18 @@ def main():
                     help="a NASM define this build was made with, e.g. "
                          "--define NODRAGCACHE for `make DRAGCACHE=0`. "
                          "Symbol resolution needs it or it refuses.")
+    ap.add_argument("--selftest", action="store_true",
+                    help="check dither_split against synthetic captures and "
+                         "exit - no emulator, no build (SPEC.md 11.96.13.1)")
     a = ap.parse_args()
+    if a.selftest:
+        return selftest()
     S.__defaults__[0][0] = tuple(a.define)
+    # THE CONTROL BUILD EXCUSES NOTHING. With the drag cache compiled out
+    # there is no replay to carry a stale dither's phase - the window redraws
+    # in full at the new place - so SPEC.md 11.96.13.1's residue must read 0
+    # on every leg, whatever dy the drop took.
+    nodc = "NODRAGCACHE" in a.define
     bad = []
 
     with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
@@ -324,17 +528,17 @@ def main():
                      for x, y in diff(inc[base:], full[base:], pw)]
                 r = dispcp.win_rect(m, S, h)          # RE-READ: a drag moved it
                 corner = (r[0], r[1] + r[3])
-                print("A: %-10s %d differing pixel(s)  corner %r  bbox %r"
-                      % (label, len(d), corner, bbox(d)))
                 for p in d[:8]:
                     print("     %r%s" % (p, "  <-- (W_X, W_Y+W_H)"
                                          if p == corner else ""))
                 if corner in d:
                     bad.append("A/%s: the shadow corner %r differs"
                                % (label, corner))
-                elif d:
-                    bad.append("A/%s: %d pixels differ, not the corner"
-                               % (label, len(d)))
+                # ...and NO dither is excused here: hello draws one string and
+                # has no dithered control in it, so nothing on this leg can be
+                # SPEC.md 11.96.13.1's residue and a rect that looks like one
+                # would be a finding about some other window.
+                classify(inc, full, d, pw, ph, "A", label, bad, False)
                 if d:
                     crop_png("/tmp/cornerA-%s-inc.png" % label,
                              inc, pw, ph, bbox(d))
@@ -413,9 +617,25 @@ def main():
         # inverted. dx cannot do it: it is already forced to a multiple of 8,
         # and 8 is even.
         #
-        # So this is a parity A/B on a window that HAS a dither in it, and the
-        # control is `make DRAGCACHE=0` - with the cache gone the window
-        # redraws in full at the new place and an odd dy must read 0 as well.
+        # WHAT CHANGED IS THE VERDICT AND NOT THE EXPERIMENT (SPEC.md
+        # 11.96.13.1). The kernel snapped dy for a while to make the odd legs
+        # read 0; that cost 7px of vertical drop precision and a sub-8px nudge
+        # that moved nothing, to buy a 50% checkerboard in the other phase
+        # inside a scroll-bar track. The snap is gone and the residue is
+        # ACCEPTED - so this leg no longer asks "is it 0", it asks WHICH KIND
+        # of difference it is:
+        #
+        #   odd dy  -> dither-phase residue is allowed, anything else fails;
+        #   even dy -> neither is allowed. This is what stops the classifier
+        #              from becoming a way of not looking, and it is the same
+        #              pairing the experiment always had;
+        #   NODRAGCACHE -> neither is allowed on ANY leg. With the cache gone
+        #              the window redraws in full at the new place, so a
+        #              residue here would mean the fill itself had moved.
+        #
+        # dither_split is what makes that a classification rather than a
+        # tolerance: the pixels have to BE a phase-shifted copy of what the
+        # repaint drew, and a defect that merely happens to be 1,416 px is not.
         if a.only == "c":
             dispcp.open_drive(m, mo, S, os88marty.settle, "B", card=pri)
             d3 = dispcp.win_list(m, S)[-1]
@@ -446,11 +666,20 @@ def main():
                 # THE PARITY THAT MATTERS IS THE ONE THE RECORD TOOK, not the
                 # one asked for: wm_dock_snap and ui_drag's clamp both move a
                 # dropped window, and in the run that found this they turned a
-                # requested +180 into an actual +175.
+                # requested +180 into an actual +175. It is what the residue is
+                # allowed FROM as well, for the same reason - a leg that asked
+                # for an odd dy and was clamped to an even one has no phase
+                # shift in it and must not be handed an excuse for one.
+                #
+                # `got & 7` rather than `got & 1`: gfx_fill_gray's phase is
+                # 2-periodic but gfx_fill_pat's is 8, and a dropped window can
+                # land on any delta a clamp leaves it - so what is allowed is
+                # "the cache replayed at a delta that shifts SOME dither".
+                shifts = bool(got & 7) and not nodc
                 probe(m, mo, pri, pw, ph,
                       "dy%+d got%+d %s" % (want, got,
                                            "ODD" if got & 1 else "even"),
-                      bad, prev, tag="C")
+                      bad, prev, tag="C", allow_dither=shifts)
 
         # --- B: a drag that uncovers ---------------------------------------
         if a.only not in ("a", "c"):
@@ -508,7 +737,14 @@ def main():
             os88marty.settle(m, card=pri)
             mo.to(*PARK)
             os88marty.settle(m, card=pri)
-            print("dragged to %r" % (dispcp.win_rect(m, S, d2),))
+            landed = dispcp.win_rect(m, S, d2)
+            print("dragged to %r" % (landed,))
+            # ...AND IN "below" THAT WAS A VERTICAL DRAG. The subject here is a
+            # Disk window, which has the dithered scroll-bar track SPEC.md
+            # 11.96.13.1 is about, so B has to make the same distinction C
+            # does - off the dy the RECORD took, and never in the control
+            # build. In "right" this is 0 and nothing is excused.
+            bshifts = bool((landed[1] - wy) & 7) and not nodc
             look = (pri, sec) if (seam and not a.single) else (pri,)
             inc = shot(m, look)
 
@@ -522,11 +758,10 @@ def main():
                 base = off * w0 * 3
                 dd = [(x, y + off)
                       for x, y in diff(inc[c][2][base:], full[c][2][base:], w0)]
-                print("B: %-8s %d differing pixel(s)  bbox %r"
-                      % (nm, len(dd), bbox(dd)))
+                classify(inc[c][2], full[c][2], dd, w0, h0, "B", nm, bad,
+                         bshifts)
                 if not dd:
                     continue
-                bad.append("B: %s differs by %d" % (nm, len(dd)))
                 # ...AND WHAT THE PIXELS ARE. A bbox says which rect owns them
                 # and a picture says what they show, which is the difference
                 # between "the drop shadow" and "three characters of a file

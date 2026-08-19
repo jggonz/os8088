@@ -79,7 +79,8 @@ def main(argv):
         dispcp.open_drive(m, mo, S, os88marty.settle, "B", card=pri["idx"])
         d = dispcp.win_list(m, S)[-1]
         dx, dy, dw, dh = dispcp.win_rect(m, S, d)
-        dispcp.open_row(m, mo, S, os88marty.settle, dx, dy, card=pri["idx"])
+        dispcp.open_named(m, mo, S, os88marty.settle, dx, dy, "NOTEPAD.O88",
+                          card=pri["idx"])
         w = dispcp.win_list(m, S)
         if w[-1] == d:
             sys.exit("dispnp: NOTEPAD.O88 did not launch from row 0")

@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/cc/crt0.asm
 ;
-; The prologue of a C package (SPEC.md 70.2, 67.4): the section layout, the
+; The prologue of a C package (SPEC.md 73.2, 67.4): the section layout, the
 ; 32-byte header with its dispatcher, the entry trampoline the loader calls,
 ; and one trampoline per window callback. It %includes apps/cc/os88thunk.asm,
 ; so including this file is the whole of "link against the C runtime".
@@ -35,7 +35,7 @@
 ; the C.
 ;
 ; -----------------------------------------------------------------------------
-; THE SECTIONS, AND THE SILENT TRAP THEY EXIST TO CLOSE (SPEC.md 70.2)
+; THE SECTIONS, AND THE SILENT TRAP THEY EXIST TO CLOSE (SPEC.md 73.2)
 ; -----------------------------------------------------------------------------
 ; An assembly package is one flat run of bytes from `org 0`, and
 ; apps/os88api.inc was written on that assumption: OS88_IMAGE_END computes
@@ -92,7 +92,7 @@
 ; every load (SPEC.md 21) - and the build rule prints the sizes.
 ;
 ; -----------------------------------------------------------------------------
-; WHY EVERY CALLBACK GOES THROUGH A TRAMPOLINE (SPEC.md 70.4)
+; WHY EVERY CALLBACK GOES THROUGH A TRAMPOLINE (SPEC.md 73.4)
 ; -----------------------------------------------------------------------------
 ; The kernel reaches a package by far-calling <package>:12 with BP = the
 ; callback's near offset; the three bytes there are `call bp` / `retf`, so a
@@ -131,7 +131,7 @@
 ;        compiled C needs no help.
 ;   SS = LOW_SEG, and SS != DS is a property of the whole operating system,
 ;        not a detail. `[bp+N]` reads the stack, which is right; the ADDRESS
-;        of a local is wrong, which is why tools/cc8086.py refuses it (70.5).
+;        of a local is wrong, which is why tools/cc8086.py refuses it (73.5).
 ;   ES = KERNEL_SEG on entry, because the window record and the file dialog's
 ;        name live there. The trampolines save and restore it; the routines
 ;        that actually read the kernel's segment load it themselves rather
@@ -152,7 +152,7 @@
 ; which says "you forgot the name". %fatal stops here with the one that does.
 ; A task's whole stack (kernel/sched.inc, SCH_STACK), which cc_iswk needs as a
 ; number rather than as a fact about the kernel it cannot see, and the depth of
-; cc_ovthunk's return stash in WORDS (SPEC.md 70.14).
+; cc_ovthunk's return stash in WORDS (SPEC.md 73.14).
 CC_STACK    equ 256
 CC_OVDEPTH  equ 16
 
@@ -160,7 +160,7 @@ CC_OVDEPTH  equ 16
   %fatal "cc/crt0.asm: define CC_PKG_NAME (e.g. %define CC_PKG_NAME 'CWORD') before including this file"
 %endif
 
-; --- the layout, pinned by SPEC.md 70.2 ---------------------------------------
+; --- the layout, pinned by SPEC.md 73.2 ---------------------------------------
 cpu 8086
 bits 16
 section .text   start=0
@@ -168,7 +168,7 @@ section .rodata follows=.text   align=2
 section .data   follows=.rodata align=2
 section .bss    follows=.data   align=2 nobits
 %ifdef CC_HAS_OVL
-; The overlay's code (SPEC.md 70.14), which ships as <NAME>.OVL beside the
+; The overlay's code (SPEC.md 73.14), which ships as <NAME>.OVL beside the
 ; package instead of inside it. It FOLLOWS .data - the same section .bss
 ; follows - and the two do not collide because .bss is `nobits` and writes no
 ; file byte: .bss's base and .modc's first byte are both cc_image_end, which is
@@ -204,7 +204,7 @@ section .text
     dw cc_entry                     ; +6  entry offset - an ABSOLUTE label,
                                     ;     because .text starts at 0
     dw CC_IMAGE_SIZE                ; +8  image size = the whole file. An
-                                    ;     ABSOLUTE LABEL, not `$-$$` (70.2)
+                                    ;     ABSOLUTE LABEL, not `$-$$` (73.2)
     dw CC_BSS_SIZE                  ; +10 bytes the loader zeroes after it -
                                     ;     a difference taken INSIDE .bss
     db 0FFh, 0D5h                   ; +12 THE DISPATCHER: `call bp`...
@@ -272,7 +272,7 @@ cc_entry:
     pop si
     or bx, bx                       ; CF LAST, and after the pops: `pop`
     jz .abort                       ; writes no flags, so either order works -
-    clc                             ; pinning one removes the question (70.4)
+    clc                             ; pinning one removes the question (73.4)
     ret
 .abort:
     stc
@@ -282,7 +282,7 @@ cc_entry:
 ; THE WINDOW CALLBACKS
 ;
 ; One trampoline each, all the same shape: save, clear DF, push the C
-; arguments RIGHT TO LEFT, call, clean up (the CALLER cleans - SPEC.md 70.3),
+; arguments RIGHT TO LEFT, call, clean up (the CALLER cleans - SPEC.md 73.3),
 ; restore, near `ret`. Each is assembled only if the shim asked for it.
 ; =============================================================================
 
@@ -439,7 +439,7 @@ cc_onresize:
 
 %ifdef CC_HAS_ONWAKE
 ; -----------------------------------------------------------------------------
-; cc_onwake - W_ONWAKE, the package's own kick (SPEC.md 71.1), installed by
+; cc_onwake - W_ONWAKE, the package's own kick (SPEC.md 74.1), installed by
 ; os88_wm_onwake(). THE ONE CALLBACK THAT RUNS WITHOUT THE GFX LOCK: the UI
 ; task popped an EVT_WAKE that OSAPI_WM_WAKE posted (from a callback, from the
 ; handler itself, from a worker) and dispatches it here, billed to the
@@ -554,7 +554,7 @@ cc_about:
 ; routine is the one place in the package that reads another segment before
 ; anything else has run.
 ;
-; The size arrives as 32 bits and C has no such type (SPEC.md 70.7), so it is
+; The size arrives as 32 bits and C has no such type (SPEC.md 73.7), so it is
 ; handed over as two words. USE IT TO REFUSE BEFORE TOUCHING THE DISK: it is
 ; free, and reading 116KB off a floppy to then say "wrong format" is about ten
 ; seconds of motor the user cannot tell from a load that works.
@@ -686,11 +686,11 @@ cc_iswk:
 
 %ifdef CC_HAS_OVL
 ; =============================================================================
-; THE OVERLAY (SPEC.md 70.14)
+; THE OVERLAY (SPEC.md 73.14)
 ;
 ; A package links at org 0 and addresses itself with 16-bit offsets (SPEC.md
 ; 33), so image + bss can never reach 64KB whatever the heap has free - and C
-; spends that ceiling two to three times faster than assembly does (70.9). A
+; spends that ceiling two to three times faster than assembly does (73.9). A
 ; MODULE HAS A SEGMENT OF ITS OWN, so it does not spend the package's.
 ;
 ; It is kernel SPEC.md 2.8's shape and SPEC.md 68.10's, not a driver's: the
@@ -962,7 +962,7 @@ cc_tpl:
 ; the module: .modc is vstart=0, so this label's value IS the byte count, and
 ; cc_ovneed turns it into the KB it claims. It is initialised DATA rather than
 ; an equ because `%if` cannot compare a section-relative label to a constant
-; (SPEC.md 70.2, the same reason there is no assembly-time size assertion).
+; (SPEC.md 73.2, the same reason there is no assembly-time size assertion).
 cc_ovsize:  dw cc_modc_end
 %endif
 
@@ -989,7 +989,7 @@ cc_wksp:    resw 1                  ; SP at the top of the worker's stack
                                     ; test needs no %ifdef of its own
 %ifdef CC_HAS_OVL
 cc_ovseg:   resw 1                  ; the claim the module was read into,
-                                    ; 0 = not loaded yet (SPEC.md 70.14)
+                                    ; 0 = not loaded yet (SPEC.md 73.14)
 cc_ovrsp:   resw 1                  ; and the return stash cc_ovthunk keeps -
 cc_ovrst:   resw CC_OVDEPTH         ; see it for why a global LIFO is safe
 %endif
@@ -1006,7 +1006,7 @@ section .text                       ; leave the assembler in .text - the next
 ; It defines the labels the header referred to forwards: cc_bss_end at the end
 ; of all bss (the runtime's above, then the C's), and cc_image_end at the end
 ; of .data, which with `.text start=0` IS the file's size. The two `equ`s are
-; the names SPEC.md 70.2 pins, and they resolve because each is a difference
+; the names SPEC.md 73.2 pins, and they resolve because each is a difference
 ; or a label inside ONE section - `cc_bss_end - cc_image_end` would be a
 ; cross-section subtraction, which nasm refuses in an equ as `invalid operand
 ; type`. Leaving the assembler in .text afterwards costs nothing and keeps the

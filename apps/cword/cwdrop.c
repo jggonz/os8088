@@ -1,7 +1,7 @@
 /* ============================================================================
  * os8088 - apps/cword/cwdrop.c        the dropdown menus
  *
- * #included by cword.c - one translation unit (SPEC.md 70.1).
+ * #included by cword.c - one translation unit (SPEC.md 73.1).
  *
  * Both period gestures, because Word 1.1a supported both and a user of either
  * habit finds the other one broken: PRESS-DRAG-RELEASE, where the button going
@@ -185,7 +185,7 @@ static void cw_menu_paint(void)
              * place, and it hid because every checkable item here was one whose
              * state the user could see elsewhere: the ribbon lit, the strip was
              * on the screen or it was not. View > Draft / Page is the first pair
-             * where the check IS the answer (SPEC.md 70.12.1), which is what
+             * where the check IS the answer (SPEC.md 73.12.1), which is what
              * turned it up.
              *
              * Two strokes, which is what apps/word draws - a short down-stroke

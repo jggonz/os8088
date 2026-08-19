@@ -70,7 +70,7 @@
  * and table contents, so they mean the same thing on a 64-bit host as on an
  * 8086 - and on the host they are free, instant, and able to stop a build.
  * Running them on the target would cost image bytes against a 60 KB ceiling
- * (SPEC.md 70.9) and milliseconds at every launch, to discover at run time, in
+ * (SPEC.md 73.9) and milliseconds at every launch, to discover at run time, in
  * front of a user, something that was already true when the file was written.
  *
  * WHAT IT CANNOT CHECK, said plainly: that a value is what Opus has. Nothing
@@ -115,7 +115,7 @@ static const char *cw_chk_name(int check)
  * quoted. These are TARGET bytes - six per keyword row, four per property row,
  * one per name character plus its NUL - not the host's, and they are the
  * numbers to watch against APP_MAX_SIZE (61,440 for image and bss together,
- * SPEC.md 70.9). The code that goes with them is measured by assembling the
+ * SPEC.md 73.9). The code that goes with them is measured by assembling the
  * package; see the note at the foot of cwrtftbl.c. */
 static void cw_report_size(void)
 {

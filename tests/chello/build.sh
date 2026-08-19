@@ -2,7 +2,7 @@
 # =============================================================================
 # os8088 - tests/chello/build.sh
 #
-# Build the C toolchain's capability gate (SPEC.md 70) end to end and put it on
+# Build the C toolchain's capability gate (SPEC.md 73) end to end and put it on
 # a floppy. It is a script rather than a make target because nothing under
 # tests/ ships and the top-level Makefile does not know about C packages yet -
 # apps/cc/Makefile.inc holds the reusable rules and this is the same five steps
@@ -55,11 +55,11 @@ PATH="$PWD/$SC:$PATH" "$SC/smlrcc" -tiny -S \
     tests/chello/chello.c -o $BUILD/chello.raw.asm
 
 # (2) The gate. It lowers the five non-8086 families SmallerC emits and REFUSES
-#     the C that is silently wrong here - &automatic above all (SPEC.md 70.5).
+#     the C that is silently wrong here - &automatic above all (SPEC.md 73.5).
 #     It prints every function's frame size on every build, deliberately: the
 #     number that matters is a sum over a call chain no static analysis can
 #     see, and an author who notices the figures growing is the only defence
-#     (70.8). Never pass --quiet or --no-gate here.
+#     (73.8). Never pass --quiet or --no-gate here.
 python3 tools/cc8086.py $BUILD/chello.raw.asm -o $BUILD/chello.gen.asm
 
 # (3) One nasm job: the shim, which %includes apps/cc/crt0.asm (via -I apps/)

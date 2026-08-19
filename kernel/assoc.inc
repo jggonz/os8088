@@ -1507,6 +1507,10 @@ asc_use_x:
 .parse:
     call asc_merge_ext          ; the declarations this volume knows about...
     call asc_seed               ; ...and WHERE each of them is (SPEC.md 54.7.1)
+                                ; and what it LOOKS like (54.7.3). Once per
+                                ; volume SWITCH, not per mount - the compare
+                                ; at the top is the gate - so the reduce is
+                                ; paid where a floppy is already turning
 .out:
     pop es
     pop di
@@ -1518,9 +1522,13 @@ asc_use_x:
     ret
 
 ; -----------------------------------------------------------------------------
-; asc_seed - teach the hints where this whole DISK's programs are (54.7.1)
+; asc_seed - teach the hints where this whole DISK's programs are, and what
+;            they look like (SPEC.md 54.7.1 / 54.7.3)
 ; in:  ES = [asc_seg], [asc_n] rows valid, [disk_drive] = this volume
 ; out: nothing (all registers preserved)
+;
+; A row records everything assoc_note_app records - the location AND the
+; glyph - and this took only the first half of it, which is SPEC.md 54.7.3.
 ;
 ; The harvest is per DIRECTORY - assoc_note_app fires once per type-1 entry of
 ; the one directory being listed - so browsing B: root taught the machine
@@ -1567,11 +1575,38 @@ asc_seed:
     jc .next                    ; association, so there is nothing to point
     mov bl, al
     xor bh, bh
+    mov dh, al                  ; bank the slot: the glyph take below spends AX
     mov dl, [disk_drive]
     mov [assoc_drv+bx], dl
     mov ax, [es:di+ASC_ROWCLUS]
     shl bx, 1
     mov [assoc_clus+bx], ax
+    ; ...and WHAT IT LOOKS LIKE (SPEC.md 54.7.3). The row carries the whole
+    ; 64-byte body, so the glyph costs no read either - and without it a
+    ; DECLARED extension (54.6) resolved to a slot whose glyph was still the
+    ; unresolved sentinel, so its documents drew assoc_compose's BARE PAGE
+    ; until the folder the program lives in had been browsed. Every program
+    ; on the shipped apps disk is one folder down (19.2) and the documents
+    ; are in MEDIA/, so that was every .HTM and .TEX on the disk.
+    mov si, di
+    add si, ASC_ROWICO + 32     ; the cached body's DATA plane
+    mov cx, 16
+    xor ax, ax
+.ink:
+    or ax, [es:si]              ; an all-zero body is the ICONLESS sentinel:
+    inc si                      ; leave the glyph unresolved rather than
+    inc si                      ; blanking one another volume resolved, which
+    loop .ink                   ; is the rule assoc_note_app already follows
+    or ax, ax
+    jz .next
+    sub si, 32                  ; SI walked the plane: back to its start
+    mov bl, dh
+    xor bh, bh
+    mov cl, 3
+    shl bx, cl
+    mov di, assoc_glyph
+    add di, bx
+    call assoc_reduce           ; ES = [asc_seg], per this routine's contract
 .next:
     pop si
     pop cx

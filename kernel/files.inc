@@ -90,6 +90,18 @@ FM_ROW_H    equ 16              ; list row height, px
 FM_ROW_Y0   equ 22              ; row area top (both views)
 FM_DBLCLK   equ 9               ; double-click window, ticks
 FM_SB_W     equ 14              ; scroll bar width
+
+; --- the two header buttons (SPEC.md 22.18) ----------------------------------
+; ONE description each, in fm_btab below: the painter and all three edges read
+; it, so what is drawn and what is clickable cannot drift - which is exactly
+; what they had done. The painter measured from [fm_rgt] (absolute) and the
+; hit test from [fm_cw] (content-relative), two arithmetics for one rectangle,
+; and the label pens were three hand-computed constants that had to agree with
+; the strings by hand.
+FM_BTN_W    equ 63              ; both are 63 x 14, at content y 2..15
+FM_BTN_H    equ 14
+FM_BREFRESH equ 1               ; ...and their ids, which are also [fm_dbtn]'s
+FM_BVIEW    equ 2
 FMI_CELL_W  equ 80              ; icon-view cell - 80 and not 78 so that every
                                 ; column starts on a byte (SPEC.md 22.11.1.1):
                                 ; the content origin is a multiple of 8
@@ -319,6 +331,18 @@ fm_kinit_x:
                                 ; construction rather than by an app's word
                                 ; (SPEC.md 22.14). It has no worker, so the
                                 ; other disqualifier cannot arise
+%ifdef KERN_BIG
+    mov ax, fm_onup             ; SPEC.md 13.7/13.8.1: the two edges the two
+    call KERNEL_SEG:cw_wm_onmouseup ; header buttons fire and track on. Not
+    mov ax, fm_ondrag           ; template words - the template is eight and
+    call KERNEL_SEG:cw_wm_ondrag ; growing it would read one past every
+                                ; existing package's - so a KD_INIT is where
+                                ; a kernel window installs them, and a
+                                ; KD_POOL block is REUSED, so a window closed
+                                ; mid-gesture must not hand a pressed button
+                                ; to the next one in its slot
+    mov byte [fm_dbtn], 0
+%endif
     mov word [bx + W_MENUS], fm_menus
                                 ; the Disk browser IS Locator's window
                                 ; (SPEC.md 12.3): fronting it keeps Locator
@@ -1238,6 +1262,21 @@ fm_s_refresh: db 'Refresh', 0   ; button label, 7 chars = 56 px
 fm_s_icons:   db 'Icons', 0     ; view-toggle labels: the view a click
 fm_s_list:    db 'List', 0      ; switches TO (SPEC.md 22)
 
+; --- the two header buttons, ONE description (SPEC.md 22.18) -----------------
+; Two words per button, indexed by (id-1)*4: the minimum content width at
+; which it is DRAWN, and how far its left edge sits back from [fm_rgt]. Every
+; other number about them is derived - x2 is x1 + FM_BTN_W - 1, y is
+; [fm_cy]+2, and the label's pen is os88ui_btn's centring rather than a
+; constant that has to be recomputed whenever a caption changes length.
+;
+; A button that does not fit is not drawn AND not clickable, out of the one
+; test, which is what "nothing invisible is ever clickable" now means here
+; rather than two `cmp` pairs that happen to carry the same literal.
+%ifdef KERN_BIG                 ; kern_small keeps the hand-drawn pair, so it
+fm_btab:      dw 76, 67         ; would carry a table nothing reads
+              dw 142, 135       ; view toggle
+%endif
+
 fm_s_empty:   db 0              ; status line strings, indexed by [ld_status]
 fm_s_dskerr:  db 'Disk error', 0
 fm_s_badpkg:  db 'Bad package', 0
@@ -1949,6 +1988,229 @@ fm_layout:
     pop ax
     ret
 
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; fm_brect - one header button's rectangle (SPEC.md 22.18)
+; in:  AL = FM_BREFRESH or FM_BVIEW; fm_layout has run
+; out: CF = 1 and nothing written if that button is too narrow to be drawn;
+;      CF = 0 and os88ui_krect = its ABSOLUTE inclusive rect. AX clobbered,
+;      every other register preserved
+;
+; THE single description. The painter had one arithmetic (measured back from
+; [fm_rgt], absolute) and the hit test another (measured forward from
+; [fm_cw], content-relative), for one rectangle - and the width test that
+; decides whether a button exists at all was written out twice in each. This
+; is both, once, and a caller cannot ask about a button that is not there
+; without being told so in CF.
+;
+; os88ui_krect is the kernel's shared staging rect and is safe here for
+; os88ui_armw's reason (SPEC.md 13.8.3): every user of it is the UI task under
+; the gfx lock, and nothing in a dispatch path re-enters.
+; -----------------------------------------------------------------------------
+fm_brect:
+    push bx
+    push si
+    dec al
+    xor ah, ah
+    mov si, ax
+    shl si, 1
+    shl si, 1                   ; SI = (id-1) * 4: two words a row
+    mov ax, [fm_cw]
+    cmp ax, [fm_btab+si]
+    jl .no                      ; too narrow: not drawn, so not clickable
+    mov ax, [fm_rgt]
+    sub ax, [fm_btab+si+2]
+    mov [os88ui_krect+0], ax
+    add ax, FM_BTN_W-1
+    mov [os88ui_krect+4], ax
+    mov ax, [fm_cy]
+    add ax, 2
+    mov [os88ui_krect+2], ax
+    add ax, FM_BTN_H-1
+    mov [os88ui_krect+6], ax
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop si
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_bhit - which header button is this point in? (SPEC.md 22.18)
+; in:  CX = x, DX = y, ABSOLUTE; fm_layout has run
+; out: AL = FM_BREFRESH, FM_BVIEW or 0; AH clobbered, everything else kept
+;
+; Absolute because a release can land anywhere on the screen (SPEC.md 13.7)
+; and the two edges have nothing content-relative to hand over; the click
+; path banks the absolute point in [fm_pressx]/[fm_pressy] before it converts,
+; for the drag's sake, so it has one to give.
+; -----------------------------------------------------------------------------
+fm_bhit:
+    push bx
+    mov al, FM_BREFRESH
+.try:
+    push ax
+    call fm_brect
+    pop ax
+    jc .next
+    mov bx, os88ui_krect
+    call os88ui_bhit            ; a near call: this file and os88ui.inc are
+    jnc .out                    ; both .cold, one segment (SPEC.md 2.6)
+.next:
+    inc al
+    cmp al, FM_BVIEW
+    jbe .try
+    xor al, al
+.out:
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_btn1 - draw one header button, pressed or upright (SPEC.md 22.18)
+; in:  AL = FM_BREFRESH or FM_BVIEW; fm_layout has run; gfx lock held
+; out: nothing (all registers preserved)
+;
+; The painter and the down-state redraw are the same routine, so a control
+; cannot look one way when the page draws it and another way when an edge
+; does. Neither button ever greys - Refresh is always available and so is
+; changing the view - so there is no OS88UI_DIS here and no predicate to
+; share (SPEC.md 47 rule 3 has nothing to say about a control that cannot
+; refuse).
+; -----------------------------------------------------------------------------
+fm_btn1:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ax                     ; fm_brect EATS AX - it is the one register it
+    call fm_brect               ; documents clobbering, and the id is needed
+    pop ax                      ; twice more below. (pop leaves CF alone)
+    jc .out                     ; too narrow: not drawn
+    mov si, fm_s_refresh
+    cmp al, FM_BREFRESH
+    je .lbl
+    mov si, fm_s_icons          ; the view a click switches TO (SPEC.md 22)
+    cmp byte [fm_lview], 0
+    je .lbl
+    mov si, fm_s_list
+.lbl:
+    mov di, OS88UI_FILL         ; the ground behind it is the content's white
+                                ; on a full paint and a PRESSED button on a
+                                ; release, and only the fill covers both
+    call fm_isdown              ; ZF = 1: this is the one being held
+    jne .draw
+    or di, OS88UI_DOWN
+.draw:
+    mov bx, os88ui_krect
+    call os88ui_btn
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_isdown - is button AL the one drawn pressed, in THIS window?
+; in:  AL = a button id; [fm_vp] is the acting window's state block
+; out: ZF = 1 if it is; every register preserved
+;
+; TWO tests, because there can be four Disk windows (SPEC.md 22) and the byte
+; is one. Without the second, a press in one window would draw the same button
+; pressed in every other one that happened to repaint - which a damage repaint
+; behind a drag can easily do.
+; -----------------------------------------------------------------------------
+fm_isdown:
+    push bx
+    mov bx, [fm_vp]
+    cmp bx, [fm_dvp]
+    jne .out                    ; ZF = 0 from the compare, and AL is not even
+                                ; looked at
+    cmp al, [fm_dbtn]
+.out:
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_setdown - AL becomes the button drawn pressed (0 = none), and it DRAWS
+; in:  AL = a button id or 0; fm_layout has run; gfx lock held
+; out: nothing (all registers preserved)
+;
+; [fm_dbtn]/[fm_dvp]'s one writer, and it redraws only what CHANGED - the
+; button being let go and the one being taken, never the header, the rows or
+; the status line. A pointer moving inside the button it pressed therefore
+; costs two compares and no pixels, which is what makes an edge arriving per
+; mouse packet affordable at all (SPEC.md 13.8.1).
+; -----------------------------------------------------------------------------
+fm_setdown:
+    push ax
+    push bx
+    mov bx, [fm_vp]
+    cmp al, [fm_dbtn]
+    jne .move
+    cmp bx, [fm_dvp]
+    je .out                     ; same button, same window: nothing moved
+.move:
+    push ax
+    mov al, [fm_dbtn]           ; ...the one being let go, upright again -
+    or al, al                   ; but only if it is THIS window's, or the
+    jz .take                    ; rect belongs to a layout we are not in
+    cmp bx, [fm_dvp]
+    jne .take
+    mov byte [fm_dbtn], 0
+    call fm_btn1
+.take:
+    pop ax
+    mov [fm_dbtn], al
+    mov [fm_dvp], bx
+    or al, al
+    jz .out
+    call fm_btn1                ; ...and the one being taken, pressed
+.out:
+    pop bx
+    pop ax
+    ret
+%endif
+
+; -----------------------------------------------------------------------------
+; fm_sbset - fill os88ui_ksb with THIS window's scroll bar (SPEC.md 13.10)
+; in:  fm_layout has run
+; out: BX = the block; every other register preserved
+;
+; ONE setter for all four users - the full paint, the hit test, the thumb move
+; and the keyboard - so the four numbers that say where this window's bar is
+; are written once and the shared element derives the rest.
+; -----------------------------------------------------------------------------
+fm_sbset:
+    push ax
+    mov ax, [fm_rgt]
+    sub ax, FM_SB_W-1
+    mov [os88ui_ksb+0], ax
+    mov ax, [fm_rgt]
+    mov [os88ui_ksb+4], ax
+    mov ax, [fm_cy]
+    add ax, FM_ROW_Y0
+    mov [os88ui_ksb+2], ax
+    mov ax, [fm_cy]
+    add ax, [fm_listb]
+    dec ax
+    mov [os88ui_ksb+6], ax
+    mov ax, [fm_total]
+    mov [os88ui_ksb+8], ax
+    mov ax, [fm_fit]
+    mov [os88ui_ksb+10], ax
+    mov ax, [fm_lscr]
+    mov [os88ui_ksb+12], ax
+    mov bx, os88ui_ksb
+    pop ax
+    ret
+
 ; -----------------------------------------------------------------------------
 ; fm_clamp_scroll - clamp fm_lscr into [0, max(total - fit, 0)], then commit
 ; in:  fm_total/fm_fit valid (fm_layout ran)
@@ -1981,55 +2243,6 @@ fm_clamp_scroll:
     mov [di+FS_SCRL], ax
     pop di
     pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; fm_thumb - scroll-bar thumb geometry (shared by painter and hit-tester)
-; in:  fm_* layout valid
-; out: CF=1 no thumb (everything fits, or the track is degenerate); else
-;      CF=0, AX = thumb top (absolute y), DX = thumb height
-; clobbers: nothing else
-; Track = content-relative rows 33 .. listb-12 (between the arrow rules),
-; height listb-44. thumb h = max(8, fit*track/total), top rides fm_scroll.
-; -----------------------------------------------------------------------------
-fm_thumb:
-    push bx
-    push cx
-    mov ax, [fm_total]
-    cmp ax, [fm_fit]
-    jbe .none
-    mov bx, [fm_listb]
-    sub bx, 44                  ; BX = track height
-    cmp bx, 8                   ; shorter than the minimum thumb: bare
-    jl .none                    ; track (SPEC.md 22 degenerate exception)
-    mov ax, [fm_fit]
-    mul bx
-    div word [fm_total]         ; AX = proportional thumb height
-    cmp ax, 8
-    jge .hok
-    mov ax, 8
-.hok:
-    mov cx, ax                  ; CX = thumb height
-    mov ax, [fm_lscr]
-    mul bx
-    div word [fm_total]         ; AX = thumb offset in the track
-    add ax, FM_ROW_Y0+11        ; track top, content-relative (= 33)
-    mov dx, bx                  ; clamp: top <= track top + track - height
-    add dx, FM_ROW_Y0+11
-    sub dx, cx
-    cmp ax, dx
-    jle .tok
-    mov ax, dx
-.tok:
-    add ax, [fm_cy]             ; absolute
-    mov dx, cx
-    clc
-    jmp .out
-.none:
-    stc
-.out:
-    pop cx
-    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2100,6 +2313,27 @@ fm_onclick_x:
     sub dx, ax                  ; DX = content-relative x
     call fm_layout              ; BX = window ptr
 
+%ifdef KERN_BIG
+    ; --- the two header buttons: the press ARMS and DRAWS, nothing more ---
+    ; SPEC.md 13.6/22.18. Neither has a safe prefix action - Refresh is a
+    ; mount and the toggle relays the whole window - so both want the release,
+    ; and a mis-aimed press can be thought better of by sliding off.
+    push cx
+    push dx
+    mov cx, [fm_pressx]         ; ABSOLUTE: fm_bhit is shared with the two
+    mov dx, [fm_pressy]         ; edges, which have nothing else to give it
+    call fm_bhit
+    pop dx
+    pop cx
+    or al, al
+    jz .sbar
+    xor ah, ah
+    call os88ui_arm             ; near: this file and os88ui.inc are both
+    call fm_setdown             ; .cold, one segment (SPEC.md 2.6)
+    jmp .quiet                  ; ...and .quiet rather than straight out,
+                                ; because this press may also have retired an
+                                ; editor prompt
+%else
     ; --- Refresh button (drawn iff cw >= 76) ---
     mov ax, [fm_cw]
     cmp ax, 76
@@ -2137,34 +2371,35 @@ fm_onclick_x:
     xor byte [di+FS_VIEW], 1    ; selection is kept (SPEC.md 22). The mirrors
     mov word [di+FS_SCRL], 0    ; are re-read by the repaint's own fm_layout
     jmp .redraw
+%endif
 
     ; --- scroll bar (present iff the row area is) ---
 .sbar:
     cmp word [fm_fit], 0
     je .rows
-    mov ax, [fm_cw]
-    sub ax, FM_SB_W
-    cmp dx, ax
-    jl .rows                    ; left of the bar
-    cmp cx, FM_ROW_Y0
-    jl .rows                    ; above it
-    cmp cx, [fm_listb]
-    jge .rows                   ; below it
-    cmp cx, FM_ROW_Y0+10        ; up-arrow cell, rows 22..32
-    jle .sb_up
-    mov ax, [fm_listb]
-    sub ax, 11                  ; down-arrow cell, rows listb-11..listb-1
-    cmp cx, ax
-    jge .sb_down
-    call fm_thumb               ; track: page against the thumb top
-    jnc .sb_track
-    jmp .quiet                  ; no thumb: the track is inert, and an inert
-                                ; click owes the status line at most
-.sb_track:
-    sub ax, [fm_cy]             ; thumb top, content-relative
-    cmp cx, ax
-    jl .sb_pgup
-    mov ax, [fm_fit]            ; at/below the thumb top: page down
+    ; SPEC.md 13.10: the shared element owns where the parts are, and this
+    ; owns what they mean. A click ON the thumb pages DOWN here, which is what
+    ; this window always did - the dialog does nothing there, and the element
+    ; reports the thumb as a part of its own rather than choosing for them.
+    push cx
+    push dx
+    mov ax, cx                  ; the element takes it ABSOLUTE and this
+    mov cx, [fm_pressx]         ; ladder is content-relative with x in DX
+    mov dx, ax
+    add dx, [fm_cy]
+    call fm_sbset
+    call os88ui_sbhit
+    pop dx
+    pop cx
+    cmp al, OS88UI_SBNONE
+    je .rows                    ; not on the bar at all
+    cmp al, OS88UI_SBUP
+    je .sb_up
+    cmp al, OS88UI_SBDOWN
+    je .sb_down
+    cmp al, OS88UI_SBPGUP
+    je .sb_pgup
+    mov ax, [fm_fit]            ; on the thumb or below it: page down
     jmp short .sb_move
 .sb_pgup:
     mov ax, [fm_fit]
@@ -2267,6 +2502,107 @@ fm_onclick_x:
     pop bx
     pop ax
     ret
+
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; fm_onup - W_ONMOUSEUP for the Disk window (SPEC.md 13.7/22.18)
+; in:  CX = x, DX = y (ABSOLUTE), SI = window ptr; gfx lock held
+; out: nothing (all registers preserved)
+;
+; The release is where a header button acts. os88ui_fire answers what the
+; press armed AND spends the arm, so a release that lands anywhere else -
+; another window, the desktop, off the screen entirely - still disarms; that
+; is 13.7's second rule, and it is why the arm is spent before the point is
+; ever looked at.
+;
+; The window is re-published first, because a release can arrive at a window
+; that is not the last one anything painted.
+; -----------------------------------------------------------------------------
+fm_onup_x:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call os88ui_fire            ; AX = what the press armed, and it is CLEARED
+    or ax, ax
+    jz .out
+    push ax
+    mov bx, si
+    call fm_layout              ; ...which publishes [fm_vp] as well
+    pop bx                      ; BL = the button the press armed
+    call fm_bhit                ; is the pointer STILL on it?
+    cmp al, bl
+    je .fire
+    xor al, al                  ; no: thought better of. Let it up and that is
+    call fm_setdown             ; all - nothing fires
+    jmp short .out
+.fire:
+    mov byte [fm_dbtn], 0       ; NOT fm_setdown: the repaint below draws the
+                                ; whole window, this button upright with it,
+                                ; and drawing it upright here first is
+                                ; PERFORMANCE.md's double-draw with the
+                                ; button as the flash
+    cmp al, FM_BREFRESH
+    jne .view
+    call fm_reload              ; re-list where we ARE, folder included
+    jmp short .paint            ; (under the gfx lock: stalls painters
+                                ;  briefly; accepted by SPEC.md 22)
+.view:
+    mov di, [fm_vp]             ; flip the view, back to the top; the
+    xor byte [di+FS_VIEW], 1    ; selection is kept (SPEC.md 22). The mirrors
+    mov word [di+FS_SCRL], 0    ; are re-read by the repaint's own fm_layout
+.paint:
+    call fm_repaint             ; SI still = window ptr
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_ondrag - W_ONDRAG (SPEC.md 13.8.1): the pointer moved, press still down
+; in:  CX = x, DX = y (ABSOLUTE), SI = window ptr; gfx lock held
+; out: nothing (all registers preserved)
+;
+; The same question fm_onup asks at the release, one pass early, so what is
+; drawn pressed is exactly what would fire. fm_setdown draws only on a change,
+; so a pointer moving INSIDE the button it pressed costs two compares and no
+; pixels.
+; -----------------------------------------------------------------------------
+fm_ondrag_x:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call os88ui_armed           ; PEEK: the arm is the release's to spend
+    or ax, ax
+    jz .out
+    push ax
+    mov bx, si
+    call fm_layout
+    pop bx
+    call fm_bhit                ; AL = what the pointer is over now
+    cmp al, bl
+    je .set
+    xor al, al                  ; off it: nothing is down
+.set:
+    call fm_setdown             ; ...which draws only if that CHANGED
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; fm_hit - which directory entry is a content point in? (SPEC.md 22)
@@ -5331,7 +5667,18 @@ fm_draw_core:
     mov si, fm_hdrbuf
     call KERNEL_SEG:cw_font_str
 
-    ; --- Refresh button (iff cw >= 76): frame (cw-68,2)..(cw-6,15) ---
+    ; --- the two header buttons (SPEC.md 22.18) ---
+    ; Each is drawn only when it fits, and fm_btn1 answers that itself out of
+    ; fm_btab - the same test the hit-tester makes, so "nothing invisible is
+    ; ever clickable" is one description rather than two that agree.
+%ifdef KERN_BIG
+    mov al, FM_BREFRESH
+    call fm_btn1
+    mov al, FM_BVIEW
+    call fm_btn1
+%else
+    ; kern_small draws them by hand and never presses them: the shared
+    ; control is KERN_BIG's (SPEC.md 13.8), and so is os88ui.inc's body
     cmp word [fm_cw], 76
     jl .nobtns
     mov ax, [fm_rgt]
@@ -5350,7 +5697,6 @@ fm_draw_core:
     mov si, fm_s_refresh
     call KERNEL_SEG:cw_font_str
 
-    ; --- view toggle (iff cw >= 142): frame (cw-136,2)..(cw-74,15) ---
     cmp word [fm_cw], 142
     jl .nobtns
     mov ax, [fm_rgt]
@@ -5374,6 +5720,7 @@ fm_draw_core:
     add dx, 4
     call KERNEL_SEG:cw_font_str
 .nobtns:
+%endif
 
     call fm_draw_rows           ; the row area, the selection and the bar -
                                 ; a proc of its own so a SCROLL can have them
@@ -5500,88 +5847,17 @@ fm_draw_rows:
     mov ax, [fm_lsel]           ; the selection cell, same proc as the bar
     call fm_sel_bar
 
-    ; --- scroll bar: x cw-14..cw-1, y 22..listb-1 (SPEC.md 22) ---
+    ; --- the scroll bar, through the SHARED element (SPEC.md 13.10) ---
+    ; It was 139 bytes of frame, two rules, two hand-plotted arrows, a grey
+    ; track and a thumb - and fdlg.inc's 136 bytes of the same picture, a
+    ; PIXEL apart in two places. [fm_sbx1] stays because fm_scrollpaint's
+    ; blit band is measured from it.
 .bar:
     mov ax, [fm_rgt]
-    sub ax, FM_SB_W-1           ; abs x1
+    sub ax, FM_SB_W-1
     mov [fm_sbx1], ax
-    mov bx, [fm_cy]
-    add bx, FM_ROW_Y0
-    mov [fm_sby1], bx           ; abs y1
-    mov cx, [fm_rgt]            ; abs x2
-    mov dx, [fm_cy]
-    add dx, [fm_listb]
-    dec dx
-    mov [fm_sby2], dx           ; abs y2
-    mov byte [gfx_color], CBLACK
-    call KERNEL_SEG:cw_gfx_frame
-
-    mov ax, [fm_sbx1]           ; arrow-cell rules, 11 rows in from each end
-    mov bx, [fm_rgt]
-    mov dx, [fm_sby1]
-    add dx, 10
-    call KERNEL_SEG:cw_gfx_hline
-    mov dx, [fm_sby2]
-    sub dx, 10
-    call KERNEL_SEG:cw_gfx_hline
-
-    mov bp, 0                   ; up glyph: rows y1+3..y1+7, widths 1..9
-    mov dx, [fm_sby1]
-    add dx, 3
-.uparr:
-    mov ax, [fm_sbx1]
-    add ax, 6
-    sub ax, bp
-    mov bx, [fm_sbx1]
-    add bx, 6
-    add bx, bp
-    call KERNEL_SEG:cw_gfx_hline
-    inc dx
-    inc bp
-    cmp bp, 5
-    jb .uparr
-
-    mov bp, 4                   ; down glyph: rows y2-7..y2-3, widths 9..1
-    mov dx, [fm_sby2]
-    sub dx, 7
-.dnarr:
-    mov ax, [fm_sbx1]
-    add ax, 6
-    sub ax, bp
-    mov bx, [fm_sbx1]
-    add bx, 6
-    add bx, bp
-    call KERNEL_SEG:cw_gfx_hline
-    inc dx
-    dec bp
-    jns .dnarr
-
-    mov ax, [fm_sbx1]           ; track: gray between the rules
-    inc ax
-    mov bx, [fm_sby1]
-    add bx, 11
-    mov cx, [fm_rgt]
-    dec cx
-    mov dx, [fm_sby2]
-    sub dx, 11
-    cmp bx, dx
-    jg .nothumb                 ; degenerate track
-    call KERNEL_SEG:cw_gfx_fill_gray
-
-    call fm_thumb               ; CF=1: everything fits, no thumb
-    jc .nothumb
-    mov bx, ax                  ; y1 = thumb top (abs)
-    add dx, ax
-    dec dx                      ; y2 = top + height - 1
-    mov ax, [fm_sbx1]
-    add ax, 2
-    mov cx, [fm_rgt]
-    sub cx, 2
-    mov byte [gfx_color], CWHITE
-    call KERNEL_SEG:cw_gfx_fill
-    mov byte [gfx_color], CBLACK
-    call KERNEL_SEG:cw_gfx_frame
-.nothumb:
+    call fm_sbset
+    call os88ui_sbar
 .norows:
     ret
 
@@ -6195,69 +6471,14 @@ fm_scrollpaint:
 ; a blink. A step too small to move it draws nothing at all.
 ; -----------------------------------------------------------------------------
 fm_sb_thumb:
-    call fm_thumb               ; where it goes ([fm_lscr] is already new)
-    jc .out                     ; no thumb: everything fits, so nothing moved
-    mov [fm_thnew], ax
-    mov [fm_thh], dx
-    mov ax, [fm_sdlt]
-    sub [fm_lscr], ax
-    call fm_thumb               ; ...and where it was. Its CF is deliberately
-    mov bx, [fm_sdlt]           ; not tested: fm_thumb refuses on fm_total
-    add [fm_lscr], bx           ; against fm_fit, and a scroll changes
-                                ; neither, so it cannot disagree with the
-                                ; call above - and the restore has spent the
-                                ; flags by here anyway
-    cmp ax, [fm_thnew]
-    je .out                     ; the track is short enough that this step
-                                ; does not move it: draw nothing
-
-    mov bx, ax                  ; BX/DX = the band it is leaving
-    mov dx, ax
-    add dx, [fm_thh]
-    dec dx
-    push ax                     ; AX = the old top, wanted after the fills
-
-    mov ax, [fm_rgt]            ; the new thumb: white body, black frame
-    sub ax, FM_SB_W-3           ; (= scroll-bar x1 + 2)
-    mov cx, [fm_rgt]
-    sub cx, 2
+    push ax
     push bx
-    push dx
-    mov bx, [fm_thnew]
-    mov dx, bx
-    add dx, [fm_thh]
-    dec dx
-    mov byte [gfx_color], CWHITE
-    call KERNEL_SEG:cw_gfx_fill
-    mov byte [gfx_color], CBLACK
-    call KERNEL_SEG:cw_gfx_frame
-    pop dx
+    call fm_sbset               ; the block already holds the NEW scroll
+    mov ax, [fm_lscr]
+    sub ax, [fm_sdlt]           ; ...and this is where it was
+    call os88ui_sbmove
     pop bx
     pop ax
-
-    cmp ax, [fm_thnew]
-    jl .down
-    mov ax, [fm_thnew]          ; it moved UP: what it vacated is the strip
-    add ax, [fm_thh]            ; below the new one (= new bottom + 1)
-    cmp ax, bx
-    jle .grey                   ; disjoint: the whole old band is vacated
-    mov bx, ax
-    jmp short .grey
-.down:
-    mov ax, [fm_thnew]          ; it moved DOWN: the strip above it
-    dec ax
-    cmp ax, dx
-    jge .grey
-    mov dx, ax
-.grey:
-    cmp bx, dx
-    jg .out
-    mov ax, [fm_rgt]            ; the track, between the arrow-cell rules
-    sub ax, FM_SB_W-2           ; (= scroll-bar x1 + 1)
-    mov cx, [fm_rgt]
-    dec cx
-    call KERNEL_SEG:cw_gfx_fill_gray
-.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -6755,6 +6976,16 @@ fm_delt:    resw 1              ; [ticks] at the last DELETE key fm_onkey saw,
                                 ; confirmation exists in the machine at a time
 fm_pressx:  resw 1              ; fm_onclick's press point, ABSOLUTE - the
 fm_pressy:  resw 1              ; drag tracks in screen coordinates (22.4)
+%ifdef KERN_BIG
+fm_dbtn:    resb 1              ; which header button is DRAWN pressed, 0 =
+                                ; none (SPEC.md 22.18). fm_setdown is its one
+                                ; writer and the four drawing paths ask
+fm_dvp:     resw 1              ; ...and whose. There can be FOUR Disk windows
+                                ; and this byte is one, so the painter needs
+                                ; to know the pressed button is THIS window's
+                                ; or a damage repaint behind the drag draws it
+                                ; pressed in a window nobody touched
+%endif
 fm_dgidx:   resw 1              ; fm_drag: the row it began on...
 fm_dgwin:   resw 1              ; ...the window it began in...
 fm_startx:  resw 1              ; ...and where the button went down
@@ -6788,8 +7019,6 @@ fm_bx1:     resw 1              ; scroll scratch: the blit band, rounded in
 fm_bx2:     resw 1              ; to byte columns and stopping short of the
 fm_by1:     resw 1              ; scroll bar; y covers whole rows only
 fm_by2:     resw 1
-fm_thnew:   resw 1              ; scroll scratch: where the thumb is going
-fm_thh:     resw 1              ; ...and its height, which a scroll cannot
                                 ; change (fm_sb_thumb)
 fm_fsize:   resw 1              ; fm_stage_name: entry size, bytes (lo word)
 fm_fsizeh:  resw 1              ; ...and its high word (SPEC.md 19)
@@ -6834,6 +7063,12 @@ fmf_fm_kinit:           call fm_kinit_x
                     retf
 fmf_fm_onclick:         call fm_onclick_x
                     retf
+%ifdef KERN_BIG
+fmf_fm_onup:            call fm_onup_x
+                    retf
+fmf_fm_ondrag:          call fm_ondrag_x
+                    retf
+%endif
 fmf_fm_oncmd:           call fm_oncmd_x
                     retf
 fmf_fm_onkey:           call fm_onkey_x

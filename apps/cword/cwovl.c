@@ -1,10 +1,10 @@
 /* ============================================================================
  * os8088 - apps/cword/cwovl.c     everything that runs once per command
  *
- * #included by cword.c - one translation unit (SPEC.md 70.1) - but NOT in the
+ * #included by cword.c - one translation unit (SPEC.md 73.1) - but NOT in the
  * same segment as the rest of it. Every function here is named `ovl_*`, which
  * is the whole of the marking that puts its code in `.modc` and ships it as
- * CWORD.OVL beside CWORD.O88 (SPEC.md 70.14). The module is read into a heap
+ * CWORD.OVL beside CWORD.O88 (SPEC.md 73.14). The module is read into a heap
  * claim the first time one of these is called and stays for the session.
  *
  * WHY THIS IS THE LINE. A package's image and bss share 61,440 bytes and that
@@ -142,13 +142,13 @@ static const struct cw_ctl cw_dc_ask[] = {
 #define CW_NC_ASK 6
 
 /* --- About: the product, the version, what this port is, and the credit that
- *     has to be on the screen (SPEC.md 70.12).
+ *     has to be on the screen (SPEC.md 73.12).
  *
  * AND NOTHING ELSE. It used to close with two lines about Draft view and the
  * one 8x8 face - a fact about how the build renders, which belongs in SPEC.md
  * and in the greyed items themselves (SPEC.md 47), not in the box a user opens
  * to find out whose software this is. It also went stale the day View > Page
- * and a face off FONTS/ landed (SPEC.md 70.12.1, 67.12.2), which is what a
+ * and a face off FONTS/ landed (SPEC.md 73.12.1, 67.12.2), which is what a
  * release note in an About box does.
  *
  * TWELVE ROWS, AND THAT NUMBER IS THE 640x200 ADAPTERS' (SPEC.md 39). A

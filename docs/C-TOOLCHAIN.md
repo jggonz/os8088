@@ -6,9 +6,9 @@ write a package: a C compiler, a gate that makes its output safe here, and a
 runtime that bridges the two. It is allowed to be slower and larger than
 assembly in exchange for being writable.
 
-**SPEC.md §70 is the contract.** It says what is true and why. This file says
+**SPEC.md §73 is the contract.** It says what is true and why. This file says
 what to type, in what order, and what to do when the build refuses you. If the
-two ever disagree, §70 is right and this file is stale.
+two ever disagree, §73 is right and this file is stale.
 
 Read this before writing a line of C, and read
 [`apps/cc/os88.h`](../apps/cc/os88.h) beside it — it is the API, and its
@@ -78,7 +78,7 @@ and not a patch: `MAX_IDENT_TABLE_LEN`, `MAX_MACRO_TABLE_LEN`,
 which is upstream saying they are meant to be set from outside. smlrc keeps
 those tables in fixed-size arrays and stops when one fills — `Identifier table
 exhausted`, naming no file, no line and no way forward — and a program the size
-of `cword` (SPEC.md 70.12: about 5,000 lines in ONE translation unit, because
+of `cword` (SPEC.md 73.12: about 5,000 lines in ONE translation unit, because
 `nasm -f bin` has no notion of an external symbol) fills three of the four.
 Nothing about the compiler's OUTPUT changes, so the pin stays a pin. They go
 through `CFLAGS` because `CPPFLAGS` is `+=` in SmallerC's own makefile and
@@ -155,7 +155,7 @@ external-reference error naming that function, and a C function with no
 The `%define`s available are `CC_HAS_ONKEY`, `CC_HAS_ONCLICK`,
 `CC_HAS_ONMOUSEUP`, `CC_HAS_ONRESIZE`, `CC_HAS_MENUS`, `CC_HAS_ABOUT`,
 `CC_HAS_FDLG`, `CC_HAS_WORKER` and `CC_HAS_ONWAKE` (`os88_onwake()`, the one
-callback dispatched WITHOUT the gfx lock — SPEC.md 71.1: install it with
+callback dispatched WITHOUT the gfx lock — SPEC.md 74.1: install it with
 `os88_wm_onwake()`, post it with `os88_wm_wake()` from any context, and it
 runs on the UI task where the file slots are legal, taking the lock itself for
 whatever it draws; `apps/runcpm` is the worked example), plus `CC_ICON` to
@@ -229,7 +229,7 @@ is the only thing distinguishing them, and only `.gen.asm` may be assembled.
 
 These are not style advice. Each is a defect that **assembles cleanly, boots,
 and misbehaves**, and each is refused by `tools/cc8086.py` with a message that
-says what to write instead. §70.5, §70.5.1, §70.7 and §70.8 are the reasoning;
+says what to write instead. §73.5, §73.5.1, §73.7 and §73.8 are the reasoning;
 this is the practice.
 
 ### Rule 1 — never take the address of an automatic
@@ -401,7 +401,7 @@ static storage.
 96 bytes is a **smell threshold**, not a budget: a 96-byte frame in this OS is
 a local buffer, and rule 1 already says a local buffer is either refused or
 should have been static. Lowering it for a package that runs on a worker is
-normal; raising it is an argument to have in §70.8.
+normal; raising it is an argument to have in §73.8.
 
 **The frame report is printed on every build and it is not noise.** The number
 that actually matters is a *sum over a call chain*, the chain runs through
@@ -515,7 +515,7 @@ os88pkg: 'CWORD' entry=+0x0020 image=37062 bss=22028 icon=no assoc=0
 ```
 
 `cword` is 59,090 of 61,440 — **96%, with 2,350 spare** — and it is a
-reimplementation of Microsoft Word 1.1a (SPEC.md 70.12), which does not fit in
+reimplementation of Microsoft Word 1.1a (SPEC.md 73.12), which does not fit in
 one segment at all: another 9,430 bytes of its code are in `CWORD.OVL`. That is
 what the next section is about.
 
@@ -526,7 +526,7 @@ what the next section is about.
 ## When it does not fit: the overlay
 
 **A module has a segment of its own, so it does not spend the package's**
-(SPEC.md 70.14). Name a function `ovl_*` and its CODE is emitted into a section
+(SPEC.md 73.14). Name a function `ovl_*` and its CODE is emitted into a section
 that ships as `<NAME>.OVL` beside `<NAME>.O88`, read into a heap claim the
 first time one of them is called:
 
@@ -682,7 +682,7 @@ walks the four rules against the actual code that obeys them.
   `OS88_IMAGE_END` — those compute `$-$$`, and `$$` is the start of the
   *current* section, so in a four-section file the header's image-size word
   becomes the size of one section. That is what `apps/cc/crt0.asm`'s pinned
-  layout exists to make structurally impossible. §70.2 has the full account,
+  layout exists to make structurally impossible. §73.2 has the full account,
   including two further layout traps that reached a booting package.
 - **`char` is signed** and `int` is 16 bits, so `char c = getch(); if (c == 200)`
   is never true. Use `unsigned char` where you mean a byte.

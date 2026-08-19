@@ -83,9 +83,12 @@ FD_TEXTX    equ 28              ; fits because FD_ROWH is already 16, and the
                                 ; BPB rule 8 caps a volume at 65,535 sectors
                                 ; - which right-aligned at 196 starts at 132.
                                 ; A wider icon has to move the size column
-FD_TRKY1    equ FD_LY1+12       ; track between the two arrow-cell rules
-FD_TRKY2    equ FD_LY2-12
-FD_TRKH     equ FD_TRKY2-FD_TRKY1+1
+                                ; (FD_TRKY1/FD_TRKY2/FD_TRKH were here. The
+                                ; track is the SHARED element's now - SPEC.md
+                                ; 13.10 derives it from the bar's own rect, so
+                                ; two arrow cells a pixel deeper than files
+                                ; .inc's stopped being a thing this file could
+                                ; be wrong about on its own)
 
 FD_BX1      equ 224             ; the button column, 62 x 14 each
 FD_BX2      equ 286
@@ -255,6 +258,20 @@ fdlg_open_x:
     mov ax, fdlg_s_tsave
 .titled:
     mov [bx+W_TITLE], ax
+    mov word [fdlg_down], 0     ; a fresh dialog has nothing pressed
+%ifdef KERN_BIG
+    mov ax, fdlg_onup           ; the column fires on the RELEASE now (SPEC.md
+    call KERNEL_SEG:cw_wm_onmouseup ; 13.8.3) and follows the pointer between
+    mov ax, fdlg_ondrag         ; the two edges - both are .text thunks,
+    call KERNEL_SEG:cw_wm_ondrag ; because this module is .cold and wm_pkgcall
+                                ; dispatches a W_SEG-0 window NEAR
+    mov ax, fdlg_s_topen        ; (AX was the title and is spent above; it is
+    cmp byte [fdlg_mode], 0     ; rebuilt here rather than banked because the
+    je .rt                      ; two stores below want it and a push/pop
+    mov ax, fdlg_s_tsave        ; across two far calls is longer)
+.rt:
+    mov [bx+W_TITLE], ax
+%endif
     mov [fdlg_win], bx          ; take the gate LAST: until this store the
                                 ; window is an ordinary one
     call KERNEL_SEG:cw_wm_show  ; raise + repaint, under the caller's lock
@@ -1105,55 +1122,6 @@ fdlg_clamp:
     ret
 
 ; -----------------------------------------------------------------------------
-; fdlg_thumb - scroll-bar thumb geometry, shared by painter and hit-tester
-; in:  nothing
-; out: CF = 1 = no thumb (everything fits); else CF = 0, AX = thumb top and
-;      DX = thumb height, both content-relative. Preserves everything else.
-; -----------------------------------------------------------------------------
-fdlg_thumb:
-    push bx
-    push cx
-    call fdlg_rows              ; AX = total rows
-    cmp ax, FD_ROWS
-    jbe .none
-    mov bx, ax                  ; BX = total
-    mov ax, FD_ROWS * FD_TRKH
-    xor dx, dx
-    div bx                      ; AX = proportional thumb height
-    cmp ax, 8
-    jae .hok
-    mov ax, 8
-.hok:
-    mov cx, ax                  ; CX = height
-    mov ax, [fdlg_scrl]
-    mov dx, FD_TRKH
-    mul dx
-    div bx                      ; AX = offset down the track
-    add ax, FD_TRKY1
-    mov dx, FD_TRKY1+FD_TRKH    ; clamp: top <= track end - height
-    sub dx, cx
-    cmp ax, dx
-    jle .tok
-    mov ax, dx
-.tok:
-    mov dx, cx
-    pop cx
-    pop bx
-    clc
-    ret
-.none:
-    pop cx
-    pop bx
-    stc
-    ret
-
-; =============================================================================
-; Drawing. Everything below is content-relative and goes through fdlg_off /
-; fdlg_text, which add the live content origin cached by fdlg_paint - the
-; window can be dragged, so nothing may bake in FD_X/FD_Y.
-; =============================================================================
-
-; -----------------------------------------------------------------------------
 ; fdlg_off - content-relative rect to absolute (internal)
 ; in:  AX = x1, BX = y1, CX = x2, DX = y2
 ; out: the same four, offset by the content origin
@@ -1267,6 +1235,7 @@ fdlg_actok:
 ; apps.inc is .text and reaches it through os88ui_btn_f.
 ; =============================================================================
 %define OS88UI_KERNEL
+%define OS88UI_SCROLL          ; SPEC.md 13.10: both kernel bars use it
 %include "os88ui.inc"
 
 ; -----------------------------------------------------------------------------
@@ -1295,6 +1264,13 @@ fdlg_defbtn:
                                 ; failure rule 4 exists to prevent)
     mov bx, FD_BY0
     mov al, OS88UI_DEF | OS88UI_FILL
+    cmp word [fdlg_down], 1     ; ...and DOWN if it is the one being held
+    jne .nodown                 ; (SPEC.md 13.8.3). Read here rather than
+    or al, OS88UI_DOWN          ; passed, so fdlg_paint's column and
+.nodown:                        ; fdlg_setdown's two edges cannot disagree -
+                                ; and os88ui_btn settles the precedence, DIS
+                                ; outranking DOWN, because a button that is
+                                ; going to refuse must not say "pressed"
                                 ; the outer ring - and the FILL, because this
                                 ; is the one button in the kernel REDRAWN IN
                                 ; PLACE (fdlg_draw_name, on the edge where
@@ -1388,7 +1364,25 @@ fdlg_btn2:
     push bp
     mov bp, bx                  ; BP = the button top (a value, never an
                                 ; address: SS is not DS, SPEC.md 1)
+    test al, OS88UI_DOWN        ; the pressed look (SPEC.md 13.8), drawn rather
+    jz .frame                   ; than XOR-ed: interior black, both labels
+    push ax                     ; white, same frame. It is written out here
+    mov byte [gfx_color], CBLACK ; and not taken from os88ui_btn because this
+    mov ax, FD_BX1              ; is a TWO-LINE button and that routine centres
+    mov bx, bp                  ; ONE label in both axes
+    mov cx, FD_BX2
+    mov dx, bp
+    add dx, FD_BH2
+    call fdlg_off
+    inc ax                      ; the interior, one pixel in from the frame
+    inc bx
+    dec cx
+    dec dx
+    call KERNEL_SEG:cw_gfx_fill
+    pop ax
+.frame:
     mov byte [gfx_color], CBLACK
+    push ax
     mov ax, FD_BX1
     mov bx, bp
     mov cx, FD_BX2
@@ -1396,6 +1390,11 @@ fdlg_btn2:
     add dx, FD_BH2
     call fdlg_off
     call KERNEL_SEG:cw_gfx_frame
+    pop ax
+    test al, OS88UI_DOWN        ; ...and the two captions in white over it
+    jz .ink
+    mov byte [gfx_color], CWHITE
+.ink:
     mov dx, bp
     add dx, FD_BT1
     call fdlg_blabel            ; SI = the upper label
@@ -1494,22 +1493,21 @@ fdlg_paint_x:
 
     call fdlg_list_body
 
-    ; --- the button column ---
-    call fdlg_defbtn            ; Open / Save, greyed when it would refuse
-    mov si, fdlg_s_cancel
-    mov bx, FD_BY1
-    xor ax, ax
-    call fdlg_btn
-    mov si, fdlg_s_drive
-    mov bx, FD_BY2
-    xor ax, ax
-    call fdlg_btn
+    ; --- the button column, EVERY ONE THROUGH fdlg_btn1 -----------------
+    ; ...which reads [fdlg_down] itself, so a repaint arriving in the middle
+    ; of a gesture draws the held button held (SPEC.md 13.8.3). Open-coding
+    ; the four here again is what would let the full paint and the two edges
+    ; disagree about what is pressed.
+    mov ax, 1
+    call fdlg_btn1              ; Open / Save, greyed when it would refuse
+    mov ax, 2
+    call fdlg_btn1              ; Cancel
+    mov ax, 3
+    call fdlg_btn1              ; Drive
     cmp byte [fdlg_mode], 0     ; New Folder is a SAVE-mode button: opening a
     je .nonewf                  ; file has no use for one, and the fourth
-    mov si, fdlg_s_newf         ; frame would be clutter in the common case
-    mov di, fdlg_s_newf2
-    mov bx, FD_BY3
-    call fdlg_btn2
+    mov ax, 4                   ; frame would be clutter in the common case
+    call fdlg_btn1
 .nonewf:
 
     ; --- the name box ---
@@ -1804,100 +1802,53 @@ fdlg_sel_bar:
     ret
 
 ; -----------------------------------------------------------------------------
-; fdlg_draw_sbar - the scroll bar: rules, arrows, track, thumb (internal)
-; in:  the layout cache; gfx lock held
-; out: nothing (all registers preserved)
+; fdlg_sbset - fill os88ui_ksb with this dialog's bar (internal)
+; in:  nothing; the dialog is up
+; out: BX = the block; every other register preserved
+;
+; ONE setter for all three users - the painter, the hit-tester and the thumb
+; move - so the four numbers that say where the bar is are written once.
+; ABSOLUTE, because the shared element is (a package's bar is not inside a
+; kernel window and has no content origin to be relative to).
 ; -----------------------------------------------------------------------------
-fdlg_draw_sbar:
+fdlg_sbset:
     push ax
-    push bx
-    push cx
-    push dx
-    push bp
-
-    mov byte [gfx_color], CBLACK
-    mov ax, FD_SBX              ; the bar's own frame, inside the list's
-    mov bx, FD_LY1
-    mov cx, FD_LX2
-    mov dx, FD_LY2
-    call fdlg_off
-    call KERNEL_SEG:cw_gfx_frame
-
-    mov ax, FD_SBX              ; the two arrow-cell rules
-    mov bx, FD_LX2
-    mov dx, FD_LY1+11
-    call fdlg_hline
-    mov dx, FD_LY2-11
-    call fdlg_hline
-
-    mov bp, 0                   ; up arrow: five rows, widths 1..9
-    mov dx, FD_LY1+3
-.up:
-    mov ax, FD_SBX+7
-    sub ax, bp
-    mov bx, FD_SBX+7
-    add bx, bp
-    call fdlg_hline
-    inc dx
-    inc bp
-    cmp bp, 5
-    jb .up
-
-    mov bp, 4                   ; down arrow: the same, widths 9..1
-    mov dx, FD_LY2-7
-.dn:
-    mov ax, FD_SBX+7
-    sub ax, bp
-    mov bx, FD_SBX+7
-    add bx, bp
-    call fdlg_hline
-    inc dx
-    dec bp
-    jns .dn
-
-    mov ax, FD_SBX+1            ; the track, 50% grey between the rules
-    mov bx, FD_TRKY1
-    mov cx, FD_LX2-1
-    mov dx, FD_TRKY2
-    call fdlg_off
-    call KERNEL_SEG:cw_gfx_fill_gray
-
-    call fdlg_thumb             ; CF = 1: everything fits, no thumb
-    jc .out
-    mov bx, ax                  ; y1 = thumb top
-    add dx, ax
-    dec dx                      ; y2 = top + height - 1
-    mov ax, FD_SBX+2
-    mov cx, FD_LX2-2
-    call fdlg_off
-    mov byte [gfx_color], CWHITE
-    call KERNEL_SEG:cw_gfx_fill
-    mov byte [gfx_color], CBLACK
-    call KERNEL_SEG:cw_gfx_frame
-.out:
-    pop bp
-    pop dx
-    pop cx
-    pop bx
+    mov ax, [fdlg_cx]
+    add ax, FD_SBX
+    mov [os88ui_ksb+0], ax
+    mov ax, [fdlg_cx]
+    add ax, FD_LX2
+    mov [os88ui_ksb+4], ax
+    mov ax, [fdlg_cy]
+    add ax, FD_LY1
+    mov [os88ui_ksb+2], ax
+    mov ax, [fdlg_cy]
+    add ax, FD_LY2
+    mov [os88ui_ksb+6], ax
+    call fdlg_rows
+    mov [os88ui_ksb+8], ax      ; total
+    mov word [os88ui_ksb+10], FD_ROWS
+    mov ax, [fdlg_scrl]
+    mov [os88ui_ksb+12], ax
+    mov bx, os88ui_ksb
     pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; fdlg_hline - a content-relative horizontal line (internal)
-; in:  AX = x1, BX = x2, DX = y (content-relative), [gfx_color] set
+; fdlg_draw_sbar - the scroll bar, through the SHARED element (SPEC.md 13.10)
+; in:  the layout cache; gfx lock held
 ; out: nothing (all registers preserved)
+;
+; It was 136 bytes of frame, two rules, two hand-plotted arrows, a grey track
+; and a thumb - files.inc's 139 bytes of the same thing one file along, and
+; the two of them a PIXEL apart in two places. The element is that picture
+; once; what this routine is now is where the bar IS.
 ; -----------------------------------------------------------------------------
-fdlg_hline:
-    push ax
+fdlg_draw_sbar:
     push bx
-    push dx
-    add ax, [fdlg_cx]
-    add bx, [fdlg_cx]
-    add dx, [fdlg_cy]
-    call KERNEL_SEG:cw_gfx_hline
-    pop dx
+    call fdlg_sbset
+    call os88ui_sbar
     pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2489,6 +2440,280 @@ fdlg_pick:
     pop ax
     ret
 
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; fdlg_onup - W_ONMOUSEUP (SPEC.md 13.7): the button fires HERE
+; in:  CX = x, DX = y (SCREEN, possibly outside the window), SI = window ptr;
+;      gfx lock held
+; out: nothing (all registers preserved)
+;
+; The pressed button is put back up FIRST and unconditionally, before anything
+; acts - fdlg_act and fdlg_close both DESTROY this window, so a later restore
+; would draw into a dead one (SPEC.md 13.8.2's rule, with teeth here).
+; -----------------------------------------------------------------------------
+fdlg_onup_x:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    call fdlg_pt                ; CX = content y, DX = content x
+    call os88ui_fire            ; AX = what the press armed, and it is CLEARED
+    or ax, ax
+    jz .out
+    mov di, ax
+    xor ax, ax
+    call fdlg_setdown           ; ...upright again, whatever happens next
+    call fdlg_bhit              ; AX = the button under the RELEASE
+    cmp ax, di
+    jne .out                    ; a different button, or none: CANCELLED
+    call fdlg_bact
+.out:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif                          ; KERN_BIG
+
+; -----------------------------------------------------------------------------
+; fdlg_bact - do what button AX does
+; in:  AX = fdlg_bhit's index (1..4); gfx lock held
+; out: nothing; every register clobbered (fdlg_act can destroy the window)
+;
+; ONE ACTION LADDER FOR BOTH BUILDS, which is what makes the split honest:
+; kern_big calls it from the RELEASE (SPEC.md 13.8.3) and kern_small from the
+; press, and the difference between the two kernels is then WHICH EDGE calls
+; this - not two copies of what the four buttons do.
+; -----------------------------------------------------------------------------
+fdlg_bact:
+    dec ax
+    jz .b_def
+    dec ax
+    jz .b_cancel
+    dec ax
+    jz .b_drive
+    jmp fdlg_newfolder          ; repaints itself, both halves
+.b_def:
+    jmp fdlg_act                ; CF = 1 = the window is gone
+.b_cancel:
+    jmp fdlg_close
+.b_drive:
+    call fdlg_nextvol           ; the next LIVE volume, at its root (SPEC.md
+    xor ax, ax                  ; 38.11); disk_mount publishes [disk_drive]
+    call fdlg_go
+    jmp fdlg_repaint
+
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; fdlg_ondrag - W_ONDRAG (SPEC.md 13.8.2): the pointer moved, press still down
+; in:  CX = x, DX = y (SCREEN), SI = window ptr; gfx lock held
+; out: nothing (all registers preserved)
+;
+; The same question fdlg_onup asks at the release, one pass early, so what is
+; drawn down is exactly what would fire. os88ui_armed and not os88ui_fire:
+; the arm has to survive this and be there for the release.
+; -----------------------------------------------------------------------------
+fdlg_ondrag_x:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    call os88ui_armed
+    or ax, ax
+    jz .out                     ; the press landed on nothing: nothing to track
+    mov di, ax
+    call fdlg_pt
+    call fdlg_bhit
+    cmp ax, di
+    je .set
+    xor ax, ax                  ; off it: nothing down
+.set:
+    call fdlg_setdown           ; ...which draws only if that CHANGED
+.out:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif                          ; KERN_BIG
+
+; -----------------------------------------------------------------------------
+; fdlg_pt - a SCREEN point to a content-relative one, layout cache refreshed
+; in:  CX = x, DX = y (screen), SI = window ptr
+; out: CX = content y, DX = content x - fdlg_bhit's argument order; AX and BX
+;      clobbered
+;
+; Factored out of fdlg_onclick because three edges now need it and the
+; conversion of one into three is exactly where a second copy of this
+; arithmetic would have been written.
+; -----------------------------------------------------------------------------
+fdlg_pt:
+    mov bx, si
+    push cx                     ; save the click x across wm_content
+    mov cx, dx                  ; CX = click y
+    call KERNEL_SEG:cw_wm_content ; AX = content left, DX = content top
+    mov [fdlg_cx], ax
+    mov [fdlg_cy], dx
+    sub cx, dx                  ; CX = content-relative y
+    pop dx
+    sub dx, ax                  ; DX = content-relative x
+    ret
+
+; -----------------------------------------------------------------------------
+; fdlg_setdown - MOVE the pressed state to button AX (0 = none)
+; in:  AX = fdlg_bhit's index, or 0; the layout cache is current; gfx lock held
+; out: nothing (all registers preserved)
+;
+; The ONE writer of [fdlg_down], which is what keeps "which button is drawn
+; down" and "which button the variable says is down" from parting - Calculator's
+; cal_setdown exactly (SPEC.md 65.8), and for the same reason: [fdlg_down] is
+; read by fdlg_paint's button column, so a repaint mid-gesture draws the held
+; button held.
+;
+; It draws NOTHING when the state has not changed, which is what makes the
+; tracking edge affordable: a pointer moving INSIDE the button it pressed
+; costs one compare.
+;
+; Both buttons are redrawn with FILL, because the ground under the one going
+; up is a pressed button and the ground under the one coming down is an
+; upright one. That is os88ui.inc's OS88UI_FILL question answered "yes" on
+; both counts, and it is why neither of these is an XOR (SPEC.md 13.8).
+; -----------------------------------------------------------------------------
+%ifdef KERN_BIG
+fdlg_setdown:
+    push ax
+    cmp ax, [fdlg_down]
+    je .out
+    push bx
+    xchg ax, [fdlg_down]        ; AX = the OLD one, and the variable is already
+    or ax, ax                   ; the new one - so a repaint racing this reads
+    jz .down                    ; the new state on either side of the draw
+    call fdlg_btn1
+.down:
+    mov ax, [fdlg_down]
+    or ax, ax
+    jz .done
+    call fdlg_btn1
+.done:
+    pop bx
+.out:
+    pop ax
+    ret
+%endif                          ; KERN_BIG
+
+; -----------------------------------------------------------------------------
+; fdlg_btn1 - redraw button AX of the column, down or up as [fdlg_down] says
+; in:  AX = fdlg_bhit's index (1..4); gfx lock held
+; out: nothing (all registers preserved)
+;
+; The DOWN state is read from [fdlg_down] rather than passed, so this one
+; routine serves fdlg_setdown's two edges AND fdlg_paint's full column and
+; they cannot disagree (SPEC.md 13.8.2's rule for a package, which is the
+; kernel's here too).
+; -----------------------------------------------------------------------------
+fdlg_btn1:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov di, ax                  ; DI = which
+    xor cx, cx                  ; CL = the extra flags
+    cmp ax, [fdlg_down]
+    jne .up
+    mov cl, OS88UI_DOWN
+.up:
+    dec di
+    jz .b_def                   ; 1: the default button draws itself, greying
+    dec di                      ; and all (fdlg_defbtn)
+    jz .b_cancel
+    dec di
+    jz .b_drive
+    mov si, fdlg_s_newf         ; 4: New / Folder, two lines
+    mov di, fdlg_s_newf2
+    mov bx, FD_BY3
+    mov ax, cx                  ; AL = the flags (DOWN or nothing)
+    call fdlg_btn2
+    jmp short .out
+.b_cancel:
+    mov si, fdlg_s_cancel
+    mov bx, FD_BY1
+    jmp short .plain
+.b_drive:
+    mov si, fdlg_s_drive
+    mov bx, FD_BY2
+.plain:
+    mov ax, cx                  ; AL = the flags, AH = 0: never greyed
+    or al, OS88UI_FILL          ; the ground is the other state of itself
+    call fdlg_btn
+    jmp short .out
+.b_def:
+    call fdlg_defbtn            ; reads [fdlg_down] itself, having its own
+.out:                           ; flag word to build
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fdlg_bhit - which button of the right-hand column is this point in?
+; in:  DX = x, CX = y, both CONTENT-relative
+; out: AX = 1 Open/Save, 2 Cancel, 3 Drive, 4 New Folder; 0 = none.
+;      All other registers preserved
+;
+; ONE DESCRIPTION, read by the press, the tracking edge and the release alike
+; (SPEC.md 13.8.3) - which is what a ladder of inline coordinates could not be,
+; and is fm_hit's discipline (SPEC.md 22) arriving where os88ui.inc's rect
+; pointer could not reach: these four share an x span and differ only in y, so
+; the shared rect table would be four copies of the same two columns.
+;
+; The index is 1-based because 0 means "none", which is os88ui_bfind's own
+; sentinel and what os88ui_arm/fire carry.
+;
+; New Folder is NOT DRAWN in Open mode (SPEC.md 38.3), so it is not here
+; either - the drawn control and the clickable control being the same control
+; is the whole point of the routine.
+; -----------------------------------------------------------------------------
+fdlg_bhit:
+    push cx
+    cmp dx, FD_BX1
+    jl .none
+    cmp dx, FD_BX2
+    jg .none
+    sub cx, FD_BY0
+    js .none
+    mov ax, 1                   ; Open / Save
+    cmp cx, FD_BH
+    jle .out
+    sub cx, FD_BY1 - FD_BY0
+    js .none
+    inc ax                      ; Cancel
+    cmp cx, FD_BH
+    jle .out
+    sub cx, FD_BY2 - FD_BY1
+    js .none
+    inc ax                      ; Drive
+    cmp cx, FD_BH
+    jle .out
+    cmp byte [fdlg_mode], 0
+    je .none                    ; Open mode: no New Folder drawn, none clickable
+    sub cx, FD_BY3 - FD_BY2
+    js .none
+    inc ax                      ; New Folder, and it is FD_BH2 tall - two lines
+    cmp cx, FD_BH2
+    jle .out
+.none:
+    xor ax, ax
+.out:
+    pop cx
+    ret
+
 ; -----------------------------------------------------------------------------
 ; fdlg_onclick - W_ONCLICK (SPEC.md 38.3)
 ; in:  CX = x, DX = y (absolute), SI = window ptr; gfx lock held
@@ -2504,51 +2729,23 @@ fdlg_onclick_x:
     push dx
     push di
 
-    mov bx, si
-    push cx                     ; save the click x across wm_content
-    mov cx, dx                  ; CX = click y
-    call KERNEL_SEG:cw_wm_content ; AX = content left, DX = content top
-    mov [fdlg_cx], ax
-    mov [fdlg_cy], dx
-    sub cx, dx                  ; CX = content-relative y
-    pop dx
-    sub dx, ax                  ; DX = content-relative x
+    call fdlg_pt                ; CX = content y, DX = content x
 
-    ; --- the button column ---
-    cmp dx, FD_BX1
-    jl .sbar
-    cmp dx, FD_BX2
-    jg .sbar
-    cmp cx, FD_BY0
-    jl .sbar
-    cmp cx, FD_BY0+FD_BH
-    jg .b_cancel
-    call fdlg_act               ; the default button; CF = 1 = window gone
-    jmp .out
-.b_cancel:
-    cmp cx, FD_BY1
-    jl .out
-    cmp cx, FD_BY1+FD_BH
-    jg .b_drive
-    call fdlg_close
-    jmp .out
-.b_drive:
-    cmp cx, FD_BY2
-    jl .out
-    cmp cx, FD_BY2+FD_BH
-    jg .b_newf
-    call fdlg_nextvol           ; the next LIVE volume, at its root; the
-    xor ax, ax                  ; button cycles every volume the machine has
-    call fdlg_go                ; (SPEC.md 38.11), and disk_mount is what
-    jmp .redraw                 ; publishes [disk_drive]
-.b_newf:
-    cmp byte [fdlg_mode], 0
-    je .out                     ; not drawn in Open mode, so not clickable
-    cmp cx, FD_BY3
-    jl .out
-    cmp cx, FD_BY3+FD_BH2       ; the two-line button is FD_BH2 tall, and the
-    jg .out                     ; hit band has to be the drawn one
-    call fdlg_newfolder         ; repaints itself, both halves
+    ; --- the button column ---------------------------------------------
+    ; kern_big: the press ARMS and draws down and acts on NOTHING (SPEC.md
+    ; 13.8.3) - a mis-aimed press used to fire Cancel. kern_small keeps the
+    ; old behaviour, which is all it can afford, and the two share both the
+    ; hit test AND the action, so what differs between the kernels is only
+    ; WHICH EDGE acts.
+    call fdlg_bhit
+    or ax, ax
+    jz .sbar
+%ifdef KERN_BIG
+    call os88ui_arm
+    call fdlg_setdown
+%else
+    call fdlg_bact
+%endif
     jmp .out
 
     ; --- the name box: put the caret where the user pointed ---
@@ -2583,26 +2780,32 @@ fdlg_onclick_x:
 
     ; --- the scroll bar ---
 .sbar2:
+    ; SPEC.md 13.10: the shared element owns where the parts ARE and this
+    ; owns what they MEAN - which is why it reports the thumb as a part of its
+    ; own. files.inc pages down on it and this does nothing, and both are
+    ; right about their own window.
     cmp dx, FD_SBX
     jl .rows
-    cmp dx, FD_LX2
-    jg .out
-    cmp cx, FD_LY1
-    jl .out
-    cmp cx, FD_LY2
-    jg .out
-    cmp cx, FD_LY1+11
-    jle .s_up
-    cmp cx, FD_LY2-11
-    jge .s_dn
-    call fdlg_thumb             ; the track pages against the thumb
-    jc .out                     ; no thumb: the track is inert, and inert
-    cmp cx, ax                  ; means nothing to draw
-    jl .s_pgup
-    add ax, dx
-    cmp cx, ax
-    jge .s_pgdn
-    jmp .out                    ; on the thumb itself: nothing to do
+    push cx                     ; it takes the point ABSOLUTE (a package's bar
+    push dx                     ; has no content origin), and this ladder is
+    mov ax, cx                  ; content-relative with x in DX and y in CX
+    mov cx, dx
+    add cx, [fdlg_cx]
+    mov dx, ax
+    add dx, [fdlg_cy]
+    call fdlg_sbset
+    call os88ui_sbhit
+    pop dx
+    pop cx
+    cmp al, OS88UI_SBUP
+    je .s_up
+    cmp al, OS88UI_SBDOWN
+    je .s_dn
+    cmp al, OS88UI_SBPGUP
+    je .s_pgup
+    cmp al, OS88UI_SBPGDN
+    je .s_pgdn
+    jmp .out                    ; the thumb itself, or off the bar entirely
 .s_up:
     dec word [fdlg_scrl]
     jmp .rlist
@@ -2714,6 +2917,16 @@ section .bss
 
                                 ; (fdlg_win, the gate, is NOT here - it is a
                                 ; `dw 0` up in .text; see the note there)
+fdlg_down:  resw 1              ; SPEC.md 13.8.3: which button of the column is
+                                ; drawn DOWN, as fdlg_bhit's 1-based index
+                                ; (0 = none). fdlg_setdown is its one writer
+                                ; and fdlg_btn1 its one reader, so the full
+                                ; paint and the two edges cannot disagree.
+                                ; A gesture cannot outlive the dialog - both
+                                ; fdlg_act and fdlg_close destroy the window -
+                                ; but fdlg_open clears it anyway, because the
+                                ; NEXT dialog is a fresh gesture and a stale 1
+                                ; would draw Open pressed the moment it opened
 fdlg_mode:  resb 1              ; 0 = Open, 1 = Save
 fdlg_rqwin: resw 1              ; the requester's window...
 fdlg_hdrv:  resb 1              ; fdlg_home_go's fallback: the volume the
@@ -2783,6 +2996,12 @@ fdf_fdlg_grab:          call fdlg_grab_x
                     retf
 fdf_fdlg_onclick:       call fdlg_onclick_x
                     retf
+%ifdef KERN_BIG
+fdf_fdlg_onup:          call fdlg_onup_x
+                    retf
+fdf_fdlg_ondrag:        call fdlg_ondrag_x
+                    retf
+%endif
 fdf_fdlg_onkey:         call fdlg_onkey_x
                     retf
 fdf_fdlg_open:          call fdlg_open_x

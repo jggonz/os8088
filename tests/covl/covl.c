@@ -1,7 +1,7 @@
 /* ============================================================================
  * os8088 - tests/covl/covl.c
  *
- * THE CAPABILITY GATE FOR C OVERLAYS (SPEC.md 70.14). tests/chello proved a
+ * THE CAPABILITY GATE FOR C OVERLAYS (SPEC.md 73.14). tests/chello proved a
  * compiled package can hold a window; this one proves a compiled package can
  * hold a window while half of its code is in a SECOND SEGMENT, read off the
  * floppy on demand.
@@ -23,7 +23,7 @@
  *     function is entered by a far call, which pushes FOUR bytes of return
  *     address where a near call pushes two, so every argument it names is two
  *     bytes further from its frame pointer than the compiler thought
- *     (SPEC.md 70.14). ovl_mix(1,2,3,4) answers 1234 and nothing else: get
+ *     (SPEC.md 73.14). ovl_mix(1,2,3,4) answers 1234 and nothing else: get
  *     the fixup wrong and it reads the saved CS as an argument, which is a
  *     large and obviously wrong number rather than a plausible one.
  *
@@ -35,7 +35,7 @@
  *
  *  4. THE MODULE CAN CALL ITSELF. ovl_mix() calls ovl_inner() twice, which is
  *     a call that stays inside the module - and is still far, because a
- *     function body cannot have two argument layouts (70.14).
+ *     function body cannot have two argument layouts (73.14).
  *
  *  5. IT SURVIVES REPETITION. The counters go up by exactly one per press:
  *     a mechanism that leaks a word of stack per call works for a while and
@@ -113,7 +113,7 @@ static void cv_note_set(int tag)
 /* ===========================================================================
  * THE MODULE. Everything from here to the end of this block is compiled into
  * `.modc` and shipped as COVL.OVL, because the names begin with `ovl_` and
- * that is the whole of the marking (SPEC.md 70.14). Nothing else about these
+ * that is the whole of the marking (SPEC.md 73.14). Nothing else about these
  * functions is special: they name resident statics, resident string literals
  * and resident functions exactly as the code above does, and tools/cc8086.py
  * turns the calls into far calls.
@@ -153,7 +153,7 @@ static void cv_draw(void *win)
     x = cv_org.x + 8;
     y = cv_org.y + 8;
 
-    os88_font_run(x, y, "C overlay gate (SPEC.md 70.14)", OS88_BLACK,
+    os88_font_run(x, y, "C overlay gate (SPEC.md 73.14)", OS88_BLACK,
                   OS88_WHITE);
     y += 16;
 

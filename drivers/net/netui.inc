@@ -174,30 +174,20 @@ net_cp_click:
     mov [net_py], dx
 
     ; --- is it in the button? -----------------------------------------------
-    ; CX and BX are PANE-RELATIVE (SPEC.md 31.1) and so are these four
-    ; constants, which is the whole of the fix: they used to be compared
-    ; against a rect built from the pane's ABSOLUTE origin, so the test could
-    ; never pass and the button did nothing. See the header above NP_BX.
-    cmp cx, NP_BX
-    jb  .out
-    cmp cx, NP_BX + NP_BW
-    jae .out
-    cmp bx, NP_BY
-    jb  .out
-    cmp bx, NP_BY + NP_BH
-    jae .out
+    ; net_bhit, which asks net_brect - the rect the PAINTER draws. It used to
+    ; be four constants compared here, which is one description too many even
+    ; when they agree: they did not, once, and the button did nothing at all
+    ; on a page that drew perfectly. See the header above NP_BX.
+    call net_bhit
+    jc  .out
 
-    cmp byte [net_state], NS_LINKED
-    je  .disc
-    call net_connect            ; may fail: the page will say so
-    jmp short .redraw
-.disc:
-    call net_drop
-.redraw:
-    mov di, [net_px]
-    mov dx, [net_py]
-    call net_pane_clear
-    call net_cp_paint
+    ; ...and the press only ARMS and DRAWS (SPEC.md 13.6/13.8.4). Connect is
+    ; a handshake over a cable and Disconnect tears a mounted volume down, so
+    ; neither has a safe prefix action and both want the release.
+    mov ax, 1
+    call os88ui_arm
+    mov al, 1
+    call net_setdown
 .out:
     pop bp
     pop di
@@ -377,9 +367,18 @@ net_brect:
 ; here. It also centres the label in both axes, which is why the +8/+5 this
 ; routine used to carry are gone.
 ;
-; NO OS88UI_FILL: net_pane_clear has already whited the pane on every path
-; that reaches this, so filling again would be PERFORMANCE.md's double-draw
-; with the frame as the second layer.
+; OS88UI_FILL, AND IT IS NOT OPTIONAL SINCE 13.8.4. It used to be left off,
+; correctly, because net_pane_clear had whited the pane on every path that
+; reached this - and a release path reaches it over a PRESSED button, whose
+; interior is black. Without the fill the "upright" redraw leaves that black
+; interior and letters a black caption onto it: measured, 147 lit pixels while
+; held and **0** after sliding off. The button does not come back up, it goes
+; invisible, which is the failure os88ui.inc's own header describes as reading
+; like SPEC.md 47 rule 1 being broken when rule 1 is fine.
+;
+; The rule generalises to every control that gains a down state: OS88UI_FILL
+; asks "can this be drawn a second time without the ground being repainted
+; first?", not "is my background white".
 ;
 ; IT NEVER GREYS - see the header. Both states are actions the user may take
 ; and neither has a predicate that could refuse one, which is SPEC.md 47
@@ -397,10 +396,139 @@ net_draw_btn:
     jne .lab
     mov si, s_disc
 .lab:
-    xor di, di                  ; no flags: live, no fill, no default ring
+    mov di, OS88UI_FILL         ; live, no default ring - see the header on
+    cmp byte [net_down], 0      ; why the fill is not optional      ; ...except PRESSED, which every path that
+    je .up                      ; draws this button asks about, so the glass
+    mov di, OS88UI_DOWN         ; follows [net_down] on a full pane repaint as
+.up:                            ; much as on an edge (SPEC.md 13.8)
     call os88ui_btn
     pop di
     pop si
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; net_bhit - is the pane-relative point in the button?
+; in:  CX = pane-relative x, BX = pane-relative y
+; out: CF = 0 inside, CF = 1 outside; all registers preserved
+;
+; net_brect answers in SCREEN coordinates because that is what os88ui_btn
+; draws in, and the page ABI hands a click PANE-relative (SPEC.md 31.1), so
+; the point is lifted rather than the rect lowered - one conversion, at the
+; asking end, where a second copy of the rect would be a second description.
+; -----------------------------------------------------------------------------
+net_bhit:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, bx                  ; AX = the pane-relative y
+    add cx, [net_px]            ; ...and both lifted to the screen
+    add ax, [net_py]
+    mov dx, ax
+    call net_brect              ; BX -> the rect; CX/DX are not touched
+    call os88ui_bhit            ; CF = 0 inside
+    pop dx                      ; (pop leaves the flags alone)
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; net_setdown - AL = 1 if the button is drawn PRESSED, 0 if upright
+; in:  AL as above; the gfx lock is held and [net_px]/[net_py] are current
+; out: nothing (all registers preserved)
+;
+; Draws only on a CHANGE, so a pointer moving inside the button it pressed
+; costs one compare and no pixels - which is what makes an edge arriving per
+; mouse packet affordable (SPEC.md 13.8.1).
+; -----------------------------------------------------------------------------
+net_setdown:
+    push ax
+    cmp al, [net_down]
+    je .out
+    mov [net_down], al
+    call net_draw_btn
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; DSV_CPUP - the release (SPEC.md 13.8.4). Same arguments as DSV_CPCLICK.
+; -----------------------------------------------------------------------------
+net_cp_up:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov [net_px], di
+    mov [net_py], dx
+    call os88ui_fire            ; AX = what the press armed, and it is CLEARED
+    or ax, ax
+    jz .out
+    call net_bhit               ; still on it?
+    jc .up                      ; no: thought better of, and nothing fires
+    mov byte [net_down], 0      ; NOT net_setdown: the repaint below draws the
+                                ; whole pane, this button upright with it, and
+                                ; drawing it upright first is PERFORMANCE.md's
+                                ; double-draw with the button as the flash
+    cmp byte [net_state], NS_LINKED
+    je  .disc
+    call net_connect            ; may fail: the page will say so
+    jmp short .redraw
+.disc:
+    call net_drop
+.redraw:
+    mov di, [net_px]
+    mov dx, [net_py]
+    call net_pane_clear
+    call net_cp_paint
+    jmp short .out
+.up:
+    xor al, al
+    call net_setdown
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; DSV_CPDRAG - the tracking edge (SPEC.md 13.8.1/13.8.4)
+; -----------------------------------------------------------------------------
+net_cp_drag:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov [net_px], di
+    mov [net_py], dx
+    call os88ui_armed           ; PEEK: the arm is the release's to spend
+    or ax, ax
+    jz .out
+    call net_bhit
+    mov al, 1
+    jnc .set
+    xor al, al                  ; off it: nothing is down
+.set:
+    call net_setdown            ; ...which draws only if that CHANGED
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -421,3 +549,7 @@ s_disc:     db 'Disconnect', 0
 net_cbuf:   db 0,0            ; the dead command's letter, as a string
 net_buf:    db 0,0,0,0,0,0,0,0,0
 net_rc:     dw 0,0,0,0       ; the button's rect, built by net_brect
+net_down:   db 0             ; 1 = it is drawn PRESSED (SPEC.md 13.8.4).
+                             ; net_setdown is its one writer and net_draw_btn
+                             ; is its one reader, so a repaint mid-press shows
+                             ; the same thing an edge does

@@ -1,5 +1,5 @@
 ; =============================================================================
-; os8088 - apps/runcpm/rcz80.inc       the Z80 core (SPEC.md 71)
+; os8088 - apps/runcpm/rcz80.inc       the Z80 core (SPEC.md 74)
 ;
 ; Part of RUNCPM, a reimplementation of RunCPM 6.9 by Marcelo Dantas /
 ; "Mockba the Borg" (https://github.com/MockbaTheBorg/RunCPM, MIT licence,
@@ -11,7 +11,7 @@
 ; QEMU). %included by apps/runcpm/runcpm.asm after the compiled C and by both
 ; harnesses, so what is tested is the shipping text and not a restatement.
 ;
-; THE REGISTER PLAN (SPEC.md 71), which is why the code reads as it does:
+; THE REGISTER PLAN (SPEC.md 74), which is why the code reads as it does:
 ;
 ;     Z80        8086            note
 ;     A / F      AL / AH         F in `lahf` LAYOUT: S=7 Z=6 H=4 P/V=2 C=0 land
@@ -59,7 +59,7 @@
 ; a trap and resume the SAME slice. R is not counted per fetch (that would be
 ; a memory increment on every instruction, a quarter of the dispatch): LD A,R
 ; answers a value that advances with the slice count, which is what programs
-; that read R want of it - a stated deviation (SPEC.md 71).
+; that read R want of it - a stated deviation (SPEC.md 74).
 ;
 ; RunCPM's INT_HANDOFF: RST 08h at BIOSpage+3n and RST 10h at BDOSpage are
 ; the BIOS and BDOS entries. cpu1.h pushes PC, calls _Bios/_Bdos and pops it
@@ -67,7 +67,7 @@
 ; C services the call and re-enters, and the RET that follows the RST in the
 ; page does the rest - identical machine state, no push. A trap the C cannot
 ; complete yet (CONIN with an empty key ring) is retried by putting PC back on
-; the RST (SPEC.md 71.1's handler contract).
+; the RST (SPEC.md 74.1's handler contract).
 ;
 ; Interrupts never happen (there is no interrupt source): EI/DI keep IFF for
 ; LD A,I / LD A,R to report, HALT stops the machine, IN answers 0 and OUT is a
@@ -120,7 +120,7 @@ section .text
 ; a slow path, and the package's bss shares its last page with whatever the
 ; heap put above it - the Sound driver, here, whose code runs every tick -
 ; so a per-branch write to a package static cost the core five times its
-; speed on the machine every gate runs on. Stated in SPEC.md 71 as the one
+; speed on the machine every gate runs on. Stated in SPEC.md 74 as the one
 ; place the emulator uses Z80 memory for its own bookkeeping.
 RC_ZS_CNT   equ 0xFFF0              ; the slice budget while rc_run runs
 RC_ZS_IXP   equ 0xFFF2              ; DD/FD: -> _rc_z+RZ_IX or +RZ_IY (a
@@ -134,7 +134,7 @@ RC_ZS_VAL   equ 0xFFFC              ; CB: the operand in transit (a byte)
 ; -----------------------------------------------------------------------------
 ; int rc_run(int n) - cdecl. Run the Z80 in the claim rc_z.seg for up to n
 ; control transfers; answer RC_RUN_*. Preserves BP, DS, SS:SP, DF (the C ABI
-; wants nothing else, SPEC.md 70.3).
+; wants nothing else, SPEC.md 73.3).
 ; -----------------------------------------------------------------------------
 _rc_run:
     push bp
@@ -1031,7 +1031,7 @@ section .text
 ; =============================================================================
 ; CB: rotates, shifts, BIT, RES, SET
 ;
-; Compact by design (SPEC.md 71: 8080-era software never issues one, so the
+; Compact by design (SPEC.md 74: 8080-era software never issues one, so the
 ; base table takes the bytes and CB takes the indirections): one of eight
 ; GETTERS moves the operand into rc_val, cb_oper runs one of 32 OPERATORS on
 ; it (BL in, BL out, BH scratch, ret-terminated), and one of eight PUTTERS
@@ -1402,7 +1402,7 @@ d_cb:       call rc_ixea              ; DD CB d op
             pop ax
             jmp rc_next
 
-; the IXH/IXL forms (undocumented, and ZEXDOC exercises them - SPEC.md 71):
+; the IXH/IXL forms (undocumented, and ZEXDOC exercises them - SPEC.md 74):
 ; the halves of the index register, addressed through rc_ixptr as bytes
 ; (+0 = the low half IXL, +1 = the high half IXH), so one macro serves both
 %macro DX_LD_R_X 2                      ; LD %1, IXH/IXL   (%2 = 0|1)
@@ -1668,7 +1668,7 @@ e_ld_a_i:   mov al, [cs:_rc_z+RZ_I]
             jmp short e_air
 e_ld_a_r:   mov al, [cs:_rc_z+RZ_R]     ; bit 7 as LD R,A left it, the rest
             and al, 80h                 ; advancing with the slice count
-            mov bl, [RC_ZS_CNT]         ; (SPEC.md 71: not per fetch)
+            mov bl, [RC_ZS_CNT]         ; (SPEC.md 74: not per fetch)
             xor bl, [cs:_rc_z+RZ_R]
             add bl, [cs:_rc_z+RZ_PC]
             and bl, 7Fh

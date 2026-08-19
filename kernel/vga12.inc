@@ -3242,6 +3242,26 @@ gfx_unlock:
                                 ; two stores above bound theirs. It is a
                                 ; compare and a branch when nothing moved
 %endif
+    call fpg_finish             ; ANY UNLOCKING OF THE USER INTERFACE TAKES
+                                ; SPEC.md 12.8'S PROGRESS WIDGET DOWN
+                                ; (SPEC.md 12.8.3), and it is dsk_batch's
+                                ; argument below in the other direction: the
+                                ; freeze the widget reports IS this hold, so
+                                ; the hold is its extent and no caller can
+                                ; leave it on the bar - not by forgetting a
+                                ; bracket, not by returning early, not by a
+                                ; file operation that failed.
+                                ;
+                                ; HERE, and not below with the batch: it
+                                ; DRAWS, so it has to run while we still own
+                                ; the screen and the arrow is still down - and
+                                ; after the clip region above, or the fills
+                                ; that give the bed back would be cut by
+                                ; whatever region the hold happened to leave
+                                ; armed. It preserves the flags, which this
+                                ; routine's contract requires, and is a
+                                ; compare and a return on the unlocks that saw
+                                ; no file work, which is nearly all of them
     cmp byte [cur_lazy], 0      ; was the hide ever spent? (SPEC.md 7.1.4)
     jne .never                  ; no: the arrow never left the screen, so
     call cursor_show            ; showing it would bank itself as background

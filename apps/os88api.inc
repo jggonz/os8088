@@ -790,10 +790,16 @@ CPU_F_UNREAL        equ 0x04     ; unreal mode armed: FS and GS carry a 4GB
 ; opaque bytes to disk and back with the rest of the Control Panel; it never
 ; reads them, and it round-trips them untouched on a machine where the driver
 ; never loads. Versioning them is the driver's job.
+; **THERE ARE TWO BLOBS AND YOURS IS PICKED BY YOUR drv_tab ROW** (SPEC.md
+; 51.9.1), so DRV_BLOB_SZ is not one number: the hard disk's is 34 bytes and
+; the RAM disk's is 24. It is the ROW and not the class, because the RAM disk
+; and the parallel link share DRVC_FILE and a class-keyed blob would hand each
+; of them the other's settings. A driver with no row in the map is refused.
 %define DRV_BLOB_SZ         34
+%define DRV_RBLOB_SZ        24
 %define OSAPI_DRV_CFG       KERNEL_SEG:0x0290   ; AL = 0 read / anything else
                                  ; write, ES:SI = the driver's buffer, CX =
-                                 ; bytes (<= DRV_BLOB_SZ).
+                                 ; bytes (<= YOUR blob's size).
                                  ; out CF=1 = not the published driver, or a
                                  ; WRITE past DRV_BLOB_SZ; a never-written blob
                                  ; reads back as zeroes, so put a version byte
@@ -804,6 +810,30 @@ CPU_F_UNREAL        equ 0x04     ; unreal mode armed: FS and GS carry a 4GB
                                  ; close or Special > Restart and nothing else
                                  ; (SPEC.md 31.8). The old verb 2, "write the
                                  ; file NOW", is retired and reads as 1
+
+; --- a DRIVER page's file dialog (SPEC.md 51.10) -----------------------------
+; OSAPI_FILE_DLG is unreachable from a driver and always was: fdlg_open fences
+; on a live INSTANCE owning the window it is handed (SPEC.md 38.1), because
+; the staleness triple it banks is what stops a commit calling into a region
+; that has been freed. A driver has no instance and no such window.
+;
+; This is that call with the panel's own window supplied by the kernel - which
+; is the honest answer rather than a way past the fence, your page being drawn
+; inside that window in the first place. Everything else is OSAPI_FILE_DLG's:
+; it does NOT block, Cancel calls nothing at all, and it must be called from a
+; page CLICK and never from a page paint.
+;
+; Your completion proc is reached the way every other page cell is - a far
+; call through your own dispatcher, DS = your segment, ES = KERNEL_SEG - with
+;   AL = the mode it ran in, ES:DI = the chosen NUL name, DX:CX = its size.
+; The gfx lock is held and the dialog is already off the screen, so you may
+; draw. If your driver is unticked while its own dialog is up, the answer is
+; dropped rather than dispatched into whatever took your image's memory.
+%define OSAPI_DRV_DLG       KERNEL_SEG:0x0428   ; AL = FDLG_OPEN / FDLG_SAVE,
+                                 ; ES:SI = a default name (NUL, <= 12) or 0,
+                                 ; DI = your near completion proc. out CF=1 =
+                                 ; refused: not a published driver, no Control
+                                 ; Panel on screen, or a dialog already up
 
 ; --- the three snapshots, and a patterned fill (SPEC.md 20.9) ----------------
 ; The first three answer questions about the SYSTEM rather than about you: the
@@ -1025,6 +1055,64 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; kernel is about to make. Its other half is
                                  ; OSAPI_WM_ONRESIZE, which is the NOTICE after
                                  ; a change nobody proposed - see below.
+%define OSAPI_WM_ONDRAG     KERNEL_SEG:0x0430   ; BX = win ptr, AX = a near proc
+                                 ; in YOUR segment (0 clears it). THE TRACKING
+                                 ; EDGE (SPEC.md 13.8.2): the pointer moved
+                                 ; while your press was armed. CX = x, DX = y,
+                                 ; SI = window - W_ONCLICK's environment
+                                 ; exactly, on the UI task with the gfx lock
+                                 ; held and billed to you.
+                                 ;
+                                 ; Between the W_ONCLICK and the W_ONMOUSEUP of
+                                 ; ONE gesture, only when the point CHANGED,
+                                 ; and OUTSIDE the window as freely as the
+                                 ; release - which is the whole point: a
+                                 ; control cannot un-draw its pressed state as
+                                 ; the pointer slides off it if nothing tells
+                                 ; it the pointer left. Range-test CX/DX
+                                 ; yourself; they may be negative once you
+                                 ; subtract your content origin.
+                                 ;
+                                 ; REDRAW ONLY ON A CHANGE. This is called per
+                                 ; pointer movement, so a handler that redraws
+                                 ; its control every time is tens of ms of
+                                 ; repaint per mouse packet on a 4.77MHz
+                                 ; machine. Keep which control is down in a
+                                 ; variable your W_PAINT reads (SPEC.md 13.8),
+                                 ; compare, and draw the two that changed.
+                                 ;
+                                 ; Call it AFTER wm_create. Do NOT combine it
+                                 ; with a polling OSAPI_MOUSE loop - SPEC.md
+                                 ; 13.7's rule, and for the same reason.
+%define OSAPI_WM_TIMER      KERNEL_SEG:0x0438   ; BX = win ptr, AX = TICKS from
+                                 ; now (0 cancels). CALL ME BACK IN N TICKS
+                                 ; (SPEC.md 13.9) - 18.2 ticks a second, the
+                                 ; clock the whole system already keeps.
+                                 ;
+                                 ; WHAT IT IS FOR IS UN-DRAWING. A control
+                                 ; drawn down by a KEYSTROKE has no release
+                                 ; edge to come back up on, and a callback
+                                 ; cannot sleep - it holds the gfx lock. The
+                                 ; only other answer was a worker task, which
+                                 ; is a task slot of twelve and 256 bytes of
+                                 ; stack for a 165ms flash.
+                                 ;
+                                 ; ONE-SHOT, and it disarms itself BEFORE your
+                                 ; handler runs - so re-arm inside the handler
+                                 ; for a repeat (a blinking caret), and do
+                                 ; nothing for a single shot.
+                                 ;
+                                 ; It fires while your window is MINIMIZED
+                                 ; too: the kernel delivers and you decide
+                                 ; (ask OSAPI_WM_GEOM). It does NOT fire after
+                                 ; your window is destroyed.
+%define OSAPI_WM_ONTIMER    KERNEL_SEG:0x0440   ; BX = win ptr, AX = a near proc
+                                 ; in YOUR segment (0 clears it): what the
+                                 ; timer above calls. CX = DX = 0 - a timer has
+                                 ; no point - SI = the window, on the UI task
+                                 ; under the gfx lock and billed to you, which
+                                 ; is W_ONCLICK's environment exactly. Call it
+                                 ; AFTER wm_create.
 %define OSAPI_VOL_SYS       KERNEL_SEG:0x0420   ; out BL = the volume this
                                  ; machine BOOTED from - A: on a floppy
                                  ; machine, the installed partition on one
@@ -1046,6 +1134,97 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; instance standing where you left it, and
                                  ; every unqualified name you pass the file
                                  ; API afterwards resolves THERE.
+; **IT WAS 0x0428 AND MOVED HERE IN A MERGE**, which is the one hazard at this
+; boundary that nothing in the toolchain catches: the two sides added different
+; NAMES at the same address, so this file merged CLEAN with two cells pointing
+; at one another and nothing would have said so until a package called one and
+; got the other. The check is mechanical and belongs after every merge - sort
+; the %defines by address and look for a duplicate (docs/UPSTREAM.md).
+%define OSAPI_DRV_CALL      KERNEL_SEG:0x0448   ; in BH = a DRVC_* class,
+                                 ; BL = a verb THAT DRIVER defines; AX, CX, DX,
+                                 ; SI and DI are the driver's to define too.
+                                 ; out CF=1 with AX=0 when no driver of that
+                                 ; class is loaded and published, or when the
+                                 ; one that is publishes no package entry
+                                 ; point; otherwise whatever the verb answers
+                                 ; in AX, BX, CX, DX and SI. BP, DS and ES come
+                                 ; back yours, so a verb cannot answer in
+                                 ; those.
+                                 ;
+                                 ; **DI IS AN ARGUMENT AND NOT AN ANSWER**: it
+                                 ; reaches the driver as you set it - a verb
+                                 ; taking ES:DI is the ordinary shape for one
+                                 ; that fills a buffer - and comes back yours.
+                                 ; It did not, once: the dispatcher used DI as
+                                 ; scratch and a receiving verb wrote into the
+                                 ; caller's segment at an offset nobody chose,
+                                 ; which looked like a working transfer with
+                                 ; the wrong bytes in it (SPEC.md 20.11).
+                                 ;
+                                 ; THE KERNEL KNOWS NOTHING ABOUT WHAT IS
+                                 ; BEHIND IT, and that is the whole design
+                                 ; (SPEC.md 20.11). A sockets ABI in the API
+                                 ; table would be a contract the kernel owes
+                                 ; for ever and a driver ABI is one the driver
+                                 ; owes - so the verbs live in
+                                 ; drivers/<name>/<name>.inc beside the driver
+                                 ; that answers them, and this cell is the
+                                 ; door. os8088 gains no networking code at
+                                 ; all.
+                                 ;
+                                 ; ES IS YOUR SEGMENT ON THE WAY IN, unlike
+                                 ; every other driver entry point in the
+                                 ; machine - which is what lets a verb read a
+                                 ; buffer you hand it as ES:SI or ES:DI.
+                                 ;
+                                 ; A DRIVER MUST OPT IN. One that publishes no
+                                 ; DSV_PKGCALL cannot be reached this way at
+                                 ; all: HDD.DRV does not, so no .O88 on the
+                                 ; floppy can name DRVC_DISK here and arrive at
+                                 ; a raw sector write.
+                                 ;
+                                 ; WORKER-SAFETY IS THE DRIVER'S TO STATE,
+                                 ; per verb (SPEC.md 20.6 rule 7). The cell
+                                 ; itself takes no lock, raises no sch_lock and
+                                 ; touches no disk, so it is legal from a
+                                 ; worker - what you REACH through it may not
+                                 ; be, and only the driver's own header can
+                                 ; say which of its verbs are.
+
+PKGV_IDENT   equ 0              ; **VERB 0 OF EVERY PACKAGE DOOR IS IDENTIFY**
+                                ; (SPEC.md 20.11.1). out AX = a two-character
+                                ; signature the driver's own header pins, CF=0.
+                                ; ASK IT FIRST AND BELIEVE NOTHING ELSE UNTIL
+                                ; IT ANSWERS.
+                                ;
+                                ; The reason is that BH is a CLASS and a class
+                                ; is a publication SLOT, while a verb space
+                                ; belongs to a DRIVER: NET.DRV and RAMDISK.DRV
+                                ; are both DRVC_FILE, so `open a socket` and
+                                ; `upper-case this string` are the same number
+                                ; at the same address, and a package that
+                                ; guessed would hand a hostname to the RAM disk
+                                ; and read the length back as a handle. It
+                                ; assembles, it runs, and it says nothing -
+                                ; which is the failure this tree keeps naming.
+                                ;
+                                ; It is one verb and it is worth it: a driver
+                                ; that does not answer a signature you know is
+                                ; a driver you must not send a second verb to
+
+; The classes OSAPI_DRV_CALL's BH takes. Mirrored from kernel/driver.inc -
+; drivers/os88drv.inc has no copy, it includes this file. A class is also a
+; PUBLICATION SLOT: one driver of each may be attached at a time - which is
+; why PKGV_IDENT above exists: a class does not name a driver.
+DRVC_SOUND   equ 1
+DRVC_DISK    equ 2              ; block volumes: hard disks (SPEC.md 51.8).
+                                ; Publishes no package entry point and is not
+                                ; going to - see OSAPI_DRV_CALL above
+DRVC_DEBUG   equ 3              ; the serial monitor (SPEC.md 58)
+DRVC_NET     equ 4              ; the parallel link (SPEC.md 62)
+DRVC_FILE    equ 5              ; a volume served by somebody answering
+                                ; questions about FILES rather than sectors
+                                ; (SPEC.md 62.9)
 %define OSAPI_FILE_HERE     KERNEL_SEG:0x0228   ; out DX = YOUR instance's
                                  ; current directory (0 = the root), BL = its
                                  ; drive. No disk I/O.
@@ -1393,7 +1572,15 @@ W_ONSIZE  equ 24            ; word: near ptr or 0 - your resize negotiator.
 W_ONMOUSEUP equ 26          ; word: near ptr or 0 - the RELEASE half of a
                             ; content click (SPEC.md 13.7). NOT a template
                             ; word - set it with OSAPI_WM_ONMOUSEUP
-WIN_SIZE  equ 28
+W_ONDRAG  equ 28            ; word: near ptr or 0 - the pointer MOVED while
+                            ; your press was armed (SPEC.md 13.8.2). NOT a
+                            ; template word - set it with OSAPI_WM_ONDRAG
+W_ONTIMER equ 30            ; word: near ptr or 0 - your one-shot timer's
+                            ; handler (SPEC.md 13.9). NOT a template word -
+                            ; set it with OSAPI_WM_ONTIMER
+W_TIMER   equ 32            ; word: the kernel's deadline, 0 = disarmed. Arm
+                            ; it with OSAPI_WM_TIMER; do not write it
+WIN_SIZE  equ 34
 MAX_WIN   equ 12
 
 ; THE RECORD LIVES IN KERNEL_SEG. On entry to any callback ES points there
@@ -2248,13 +2435,13 @@ CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
                                  ; folder, and it does not move your app's own
                                  ; current folder the way GOTO does.
 
-%define OSAPI_FILE_GOTO_QM  KERNEL_SEG:0x0438   ; DX = a folder's first cluster
+%define OSAPI_FILE_GOTO_QM  KERNEL_SEG:0x0460   ; DX = a folder's first cluster
                                  ; (0 = the root), BL = the volume. out exactly
                                  ; as OSAPI_FILE_GOTO_Q: CF=0 and AX=0, else
                                  ; AX = FERR_* and nothing moved.
                                  ;
                                  ; GOTO_Q's quiet stand AND the instance MOVES
-                                 ; WITH IT (SPEC.md 71.1, 19.2.1): the same
+                                 ; WITH IT (SPEC.md 74.1, 19.2.1): the same
                                  ; word-or-quiet-mount, and then the folder is
                                  ; recorded as where your instance now stands,
                                  ; so the file cell you call next resolves
@@ -2453,9 +2640,9 @@ OSAPI_FT_UP   equ 3             ; the synthesized '..' (SPEC.md 19.5)
                                  ; none of this. An app that draws through the
                                  ; bottom of its own frame after an adapter
                                  ; change is the symptom this exists for.
-%define OSAPI_WM_ONWAKE     KERNEL_SEG:0x0430   ; BX = win ptr, AX = a near proc
+%define OSAPI_WM_ONWAKE     KERNEL_SEG:0x0458   ; BX = win ptr, AX = a near proc
                                  ; in YOUR segment (0 clears it): your WAKE
-                                 ; handler (SPEC.md 71.1). Install it from your
+                                 ; handler (SPEC.md 74.1). Install it from your
                                  ; entry proc after OSAPI_WM_CREATE, like
                                  ; OSAPI_WM_ONRESIZE - a side table, not a
                                  ; template word, cleared when the window dies.
@@ -2481,9 +2668,9 @@ OSAPI_FT_UP   equ 3             ; the synthesized '..' (SPEC.md 19.5)
                                  ; from here (SPEC.md 71), each slice re-posting
                                  ; the next, and a program waiting on a key
                                  ; costs nothing until W_ONKEY kicks.
-%define OSAPI_WM_WAKE       KERNEL_SEG:0x0428   ; BX = win ptr (a window of
+%define OSAPI_WM_WAKE       KERNEL_SEG:0x0450   ; BX = win ptr (a window of
                                  ; YOURS). Post an EVT_WAKE for it (SPEC.md
-                                 ; 10, 71.1): the UI task pops it in order with
+                                 ; 10, 74.1): the UI task pops it in order with
                                  ; the mouse events and calls the handler
                                  ; above. Any context - ISR-safe and worker-
                                  ; safe, no lock needed. out CF=0 a wake is

@@ -2384,7 +2384,7 @@ mem_own:
                                      ; it has no instance, so the test above
                                      ; can never say yes about it
     push dx                          ; ...or by a SEGMENT that is itself a
-    mov dx, [ss:si+MC_OWN]           ; driver image: SPEC.md 52.11.4's second
+    mov dx, [ss:si+MC_OWN]           ; driver image: SPEC.md 52.11.7's second
     call mem_own_drv                 ; image, one level and no further. DX is
     pop dx                           ; banked because osapi_mem_free passes the
     jnc .yes                         ; segment to free in it, and `pop` leaves
@@ -2442,7 +2442,7 @@ mem_owner_of_x:
 ; out: CF = 0 yes, CF = 1 no
 ; clobbers: flags
 ;
-; SPEC.md 52.11.4. A driver may load a SECOND IMAGE of its own - HDD.DRV reads
+; SPEC.md 52.11.7. A driver may load a SECOND IMAGE of its own - HDD.DRV reads
 ; HDDTOOL.DRV when the user clicks Format or Install - and it claims that
 ; image through OSAPI_MEM_CLAIM like any other buffer, so the claim's owner is
 ; the RESIDENT's segment. The tool then runs in a segment mem_own had never

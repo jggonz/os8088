@@ -240,7 +240,8 @@ pairing at all.
 | memory | **640 KB**: 256 KB on the board, **384 KB on an ISA expansion card** |
 | keyboard | a generic AT keyboard through an **AT→XT adapter**, so the keyboard is *not* a Model F. Worth knowing before any §9.6/§9.7 scancode result is read off it |
 | video | **PVGA1A-JK, 256 KB** (a Western Digital / Paradise chip) as primary, **plus the Hercules GB101 moved over from 5150 #1** |
-| the modern card | a **Picomem**, playing drive A and B (360 KB), a hard disk, an AdLib, a Sound Blaster (needs a rebuilt PMInit before os8088 sees it), an NE2000 and EMS |
+| the modern card | a **Picomem**, playing drive A and B (360 KB), a hard disk, an AdLib, a Sound Blaster, an NE2000 and EMS. The rebuilt **PMInit this needed now exists** (someone else wrote it), so the card's DSP tier is reachable — see the row below, because it changes which machine an AUDIO question goes to |
+| **audio questions go HERE** | 5150 #1 is period and has **no sound card at all**, so it cannot judge one. This machine can, and for a MIXER question its answer is worth having: what SPEC.md §45.9's XT mode spends is CPU, and this is a **stock 4.77 MHz 8088** — the Picomem replaces the *storage*, not the processor. What is still the card's rather than a real one's is the **DSP and its DMA**, so a delivered-audio ratio taken here is a statement about that emulation; the CPU cost underneath it is genuine. `make PICOMEM=1` is what brings the card's sound up at attach (SPEC.md §34.10) |
 | period | **no.** Every storage timing on this machine is the Picomem's, not a drive's — so **nothing from here goes into PERFORMANCE.md Part 2**, and a disk number taken here answers a question about the emulated device |
 
 **What it has found, in its first session:**
@@ -417,13 +418,19 @@ really did claim two drives and the probe really did reach its removing path
 stating as a property of the register rather than as a detail of one bug:
 `make combo` builds a **360KB** disk because the calibration 5150 has one
 5.25" drive, and that disk cannot be read here at all. This machine takes
-**1.44MB** in drive A. Until a `combo144` target exists, the disk for it is
-`os88disk.py` called directly with `--size 1440`, `--boot build/boot.bin` and
-the Makefile's own `$(COMBOARGS)` — and 1.44MB is 2,847 clusters against the
-360's 354, so the three things `combo` documents dropping all fit: **BIGFILE.DAT**
-(without which `sysbench` skips the cache-capacity sweep and the DOS
-read-rate cross-check), BEVERLY.MOD and README.TXT. A disk built for this
-machine should carry them; there is no reason not to.
+**1.44MB** in drive A, and **`make combo144` is its disk** — 1.44MB is 2,847
+clusters against the 360's 354, so it carries the FULL payload and drops
+nothing at all: every application, **BIGFILE.DAT** (without which `sysbench`
+skips the cache-capacity sweep and the DOS read-rate cross-check),
+BEVERLY.MOD and README.TXT.
+
+**Do not build that disk by hand out of `$(COMBOARGS)`**, which is what this
+paragraph used to tell you to do before the target existed. That variable is
+the 360KB disk's list and it is now *subtractive in two directions* —
+`COMBO_DROP` takes five applications off and `COMBO_DRVDROP` takes `ETHER.DRV`
+off — so a 1.44MB disk built from it would silently be missing six files on a
+volume with 1,500 free clusters. `COMBO144ARGS` is built from the full lists
+for exactly this reason.
 
 **The `sysbench` came back and it diagnosed the controller** (SPEC.md
 §18.97.3, docs/FIELD-NOTES.md 21). `claimed 2` — so the count did reach us
@@ -662,9 +669,40 @@ make combo          # -> build/combo.img, 360KB bootable
 ```
 
 **This is what to build and send for a field or bench request unless something
-below says otherwise.** The system, every application, every game and all four
-benchmarks on one bootable 360KB floppy — **304 of 354 clusters, so about
-50KB is left for the reports, `SYSTEM.CFG` and anything you save.**
+below says otherwise.** The system, most applications, every game and all four
+benchmarks on one bootable 360KB floppy — **343 of 354 clusters, so about
+11KB is left for the reports, `SYSTEM.CFG` and anything you save.**
+
+**"Most", not "every", and that is new.** The packages outgrew 354 clusters,
+so the 360KB combo now carries a *maintained* list: `COMBO_DROP` in the
+Makefile names what comes off. It started with **Artful, ModPlug and
+TeXPad** — 56 clusters — and **Tracker and Recorder** joined them for 21 more.
+Tracker is the clearest cut on the disk: this image deliberately leaves
+`BEVERLY.MOD` off, so the player was here with nothing whatever to open.
+Neither `combo720` nor `combo144` drops anything: they have 713 and 2,847
+clusters and carry every application there is. When the 360KB disk stops
+fitting again, `os88disk.py` refuses it with `packages need N clusters; disk
+holds 354` and another name goes in `COMBO_DROP`.
+
+**And one DRIVER comes off, which is a first.** Dropping applications got the
+disk from 385 clusters to 364 and it holds 354, so the last ten had to come
+from something that is not an application. `COMBO_DRVDROP` is
+**`ETHER.DRV`** — 21 clusters, the largest single file on the disk after the
+kernel, and **the machine this disk is for has no Ethernet card in it**, so on
+the calibration 5150 it is 21 clusters that can never attach to anything. The
+alternatives priced against it were Browser + Telnet (19) and Cyclone (13);
+this is the only cut of that size that costs no benchmark and no game.
+
+What it costs, stated because it is a real loss: **a combo disk can no longer
+bring the Ethernet stack up on a machine that does have a NIC.** `make
+ethertest` is the disk for that and always was — it ships a `SYSTEM.CFG` that
+asks for the driver before the first paint — and the two larger combos and
+every `make field` disk still carry it. Nothing had to handle the absence: no
+`SYSTEM.CFG` on this disk asks for the driver, so `drv_boot` never looks for
+it, and ticking the row in the Control Panel's Drivers page reports **`Not on
+the system disk`**, which is what that page says for any driver that is not
+there. Verified on a cycle-accurate 5150: the disk boots, the page lists
+Ethernet, and the tick comes back off with that message under it.
 
 **One image and not one per card**, and that is SPEC.md §39.19 rather than a
 compromise. It used to be two — `herc.img` and a `VIDEO=cga` `cga.img` —
@@ -734,7 +772,7 @@ tree is 484:
 
 | | | why |
 |---|---|---|
-| `MEDIA/BEVERLY.MOD` | 114 cl | a third of the disk, and the only item here that is *data* rather than software. Tracker and ModPlug still launch; they have nothing to open. Use the shipped apps disk when the module is the point. |
+| `MEDIA/BEVERLY.MOD` | 114 cl | a third of the disk, and the only item here that is *data* rather than software. Tracker and ModPlug still launch; they have nothing to open. Swap in `build/media360.img` when the module is the point — the same arithmetic took it off the shipped 360KB apps disk and onto a media disk of its own (SPEC.md §24.4). |
 | `BIGFILE.DAT` | 104 cl | sysbench's cache-capacity sweep and the DOS read-rate cross-check. sysbench says so and skips that row; every other row runs. It is on the `make field` disks, which is one of the reasons those still exist. |
 | `README.TXT` | 16 cl | the manual, on a disk that is for running. |
 
@@ -927,11 +965,17 @@ case, and it has different rules. They apply to work on **any branch of the
 rather than a property of the project — a session working in a different fork
 should not assume them.
 
-**Send the 360 KB pair after every commit, without being asked.** That is
-`build/os8088-360.img` (the system disk) and `build/apps360.img` (the apps
-disk) — the 360 KB geometry because it is what the register's machines read.
+**Send the 360 KB set after every commit, without being asked.** That is
+`build/os8088-360.img` (the system disk), `build/apps360.img` (the apps disk)
+and `build/media360.img` (the media disk, SPEC.md §24.4) — the 360 KB
+geometry because it is what the register's machines read.
 The owner does not have to ask each time, and a commit that lands without its
 images is a commit they cannot put on a machine.
+
+It was a **pair** until the media disk, and the third one is not an extra
+courtesy: `BEVERLY.MOD` is 114 of a 360 KB disk's 354 clusters, so at that
+geometry the module comes off the apps disk and there is no shipped copy of it
+anywhere else. Send all three, or the module is not on the machine at all.
 
 **"Send" means attach the files to the reply.** A path into the session's own
 `build/` or scratch directory is not a delivery: those live in a container the
@@ -960,7 +1004,7 @@ tested together, so no earlier run covers the result.
 That last one has a stated exemption, and it follows from the same reasoning
 rather than softening it: **a merge that cannot reach the images needs neither
 the build nor the boot.** Documentation and harness code `make` never invokes
-produce an identical set of six images by construction, so there is nothing
+produce an identical set of seven images by construction, so there is nothing
 for a boot to cover. The line is "could this change a byte under `build/`" and
 **not** "is it under `tools/`" — `os88disk.py`, `os88pkg.py`, `os88drv.py` and
 `os88mini.py` all write shipped bytes, the last by generating a prerequisite

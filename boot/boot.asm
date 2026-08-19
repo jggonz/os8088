@@ -75,7 +75,7 @@ RELOC_ADJ    equ 0x07E0         ; int 12h answers KB; KB*64 is the paragraph
                                 ; boots on any machine with a spare page above
                                 ; int 12h's answer and dies on one without
 SPLASH_OFF   equ 0x0008         ; the kernel's boot splash far entry (SPEC.md 15)
-SPL_RESIDENT equ 8              ; splash is fully aboard after this many
+SPL_RESIDENT equ 9              ; splash is fully aboard after this many
                                 ; sectors - must match kernel/splash.inc
 
 BPB_END      equ 62             ; where a DOS BPB stops and our code starts

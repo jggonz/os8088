@@ -84,7 +84,7 @@ slv_reply:
     call lp_sbyte
     jc  .bad
     loop .s
-    mov al, PROTO_VER
+    mov al, [lp_myver]          ; ...NOT the constant: see PROTO_VER
     call lp_sbyte
     jc  .bad
     clc

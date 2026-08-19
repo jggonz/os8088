@@ -442,9 +442,34 @@ tlog_rate_key:
     shl bx, 1
     mov ax, [tlog_xrates + bx]
     mov [tlog_xrate], ax
+    mov byte [trk_xhi], 0           ; ...and the app's own byte follows, so
+    cmp ax, TRK_RATE_XT2            ; File > Xt Rate never names a rate that
+    jne .lab                        ; is not the one playing. 4,000 has no
+    mov byte [trk_xhi], 1           ; label of its own and reads as 5.5, which
+.lab:                               ; is the honest half-truth of the two
     mov si, [tlog_xrstr + bx]
     call tui_msg
     pop si
+    pop bx
+    pop ax
+    ret
+
+; tlog_xrate_set - move K's sweep onto whatever trk_xhi now says (SPEC.md
+; 45.9.3). Called by trk_xrate_tog, so the two controls cannot disagree: this
+; file's rate is the one trk_play reads, and the app's byte is the one the
+; menu draws. Preserves everything.
+tlog_xrate_set:
+    push ax
+    push bx
+    mov bl, 0                       ; trk_xhi 0 -> index 0 (5,500)
+    mov ax, TRK_RATE_XT
+    cmp byte [trk_xhi], 0
+    je .set
+    mov bl, 2                       ; ...and 1 -> index 2 (11,000). 4,000 is
+    mov ax, TRK_RATE_XT2            ; K's alone: the shipped build has no such
+.set:                               ; rate and SPEC.md Set 20 closed it
+    mov [tlog_xrate], ax
+    mov [tlog_xr], bl
     pop bx
     pop ax
     ret

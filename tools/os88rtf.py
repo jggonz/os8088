@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""os88rtf.py - generate an RTF document (SPEC.md 70.12.3) from the same
+"""os88rtf.py - generate an RTF document (SPEC.md 73.12.3) from the same
 line-based markup (.wtx) that tools/os88doc.py turns into a native .DOC.
 
 Usage: os88rtf.py SOURCE.wtx -o OUT.RTF
@@ -21,7 +21,7 @@ and with the same defaults (cw_rrb in apps/cword/cwrtftbl.c: paper 12240 x
 15840, margins 1800/1800/1440/1440, \\deftab720, \\fs24), so a file this
 produces is the shape of one cword saved. It is ordinary RTF 1 - any reader
 takes it - and the paragraph properties the markup carries are emitted in
-full even though cword's reader is documented to drop them (SPEC.md 70.12.3):
+full even though cword's reader is documented to drop them (SPEC.md 73.12.3):
 the file is not the place to encode one reader's narrowing.
 """
 

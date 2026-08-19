@@ -1,10 +1,10 @@
 /* ============================================================================
  * os8088 - apps/runcpm/rcterm.c        the terminal: model, parser, glass
  *
- * Part of RUNCPM (SPEC.md 71), a reimplementation of RunCPM 6.9 by Marcelo
+ * Part of RUNCPM (SPEC.md 74), a reimplementation of RunCPM 6.9 by Marcelo
  * Dantas / "Mockba the Borg" (https://github.com/MockbaTheBorg/RunCPM, MIT
  * licence, Copyright (c) 2017 Mockba the Borg). #included by runcpm.c: one
- * translation unit (SPEC.md 70.1).
+ * translation unit (SPEC.md 73.1).
  *
  * WHAT IS RUNCPM'S HERE. RunCPM has no terminal of its own: its console is
  * the host's, and every byte a CP/M program writes goes to it through
@@ -16,11 +16,11 @@
  * 7-bit mask is console.h's, the geometry is runvt's, and the escape subset
  * is what the programs on the master disk (TE, WordStar, CLS) actually send -
  * ESC [ H f A B C D J K m L M s u ?25h/l. Everything outside it is swallowed
- * (SPEC.md 71.4: RunCPM carries no terminal emulator to be faithful to).
+ * (SPEC.md 74.4: RunCPM carries no terminal emulator to be faithful to).
  * Only reverse video renders: one 8x8 face, and two adapters of three are
- * 1bpp (SPEC.md 71.4).
+ * 1bpp (SPEC.md 74.4).
  *
- * WHAT IS THIS PLATFORM'S: THE GLASS SHADOW (SPEC.md 71.2, 70.12).
+ * WHAT IS THIS PLATFORM'S: THE GLASS SHADOW (SPEC.md 74.2, 73.12).
  * PERFORMANCE.md prices a redraw by CALLS: 756 us for any gfx_* call and
  * ~900 us per glyph cell on the target machine. A terminal that redrew its
  * screen per byte would take 1.8 s per byte. So:
@@ -35,7 +35,7 @@
  *     span as ONE rc_band + os88_gfx_blit1 (rcband.inc composes the 1bpp band
  *     from the kernel's own glyph table) - the band is the first choice at
  *     EVERY width, because it is cheaper than one font_run even for one cell
- *     (measured, SPEC.md 71.2: 1.03 ms against 1.62), and font_run is only
+ *     (measured, SPEC.md 74.2: 1.03 ms against 1.62), and font_run is only
  *     the fallback when blit1 refuses. The cursor is an inverse cell FOLDED
  *     INTO the row it is on, so it never costs a call of its own and can never
  *     be drawn twice; the one split is a cursor that moved along an unchanged
@@ -51,7 +51,7 @@
  *     cell grid too) and then each row to its last non-blank cell, so a blank
  *     row costs nothing and a prompt screen is a handful of calls; a full
  *     TE screen pays the fill on top of its 25 rows and that is the stated
- *     trade (SPEC.md 71.2). Both refused (blit1 and scroll) is font_run runs.
+ *     trade (SPEC.md 74.2). Both refused (blit1 and scroll) is font_run runs.
  *
  * The host harness (hosttest/rcuitest.c) drives this file against a model of
  * the glass and prints the cost table.
@@ -59,7 +59,7 @@
  * ROWS SHOWN ARE WHAT THE WINDOW HOLDS: the model is always 25x80; the flush
  * draws min(25, content_h/8) rows and min(80, content_w/8) columns from the
  * live geometry, so a 640-px framed window shows 79 or 78 columns and a CGA
- * framed window 17 rows, and the fullscreen latch shows all of it (71.2).
+ * framed window 17 rows, and the fullscreen latch shows all of it (74.2).
  * ==========================================================================*/
 
 #define RC_COLS   80
@@ -67,7 +67,7 @@
 #define RC_ATTRB  10                       /* attribute bytes per row */
 #define RC_CELLH  8                        /* the 8x8 face: row pitch */
 
-/* row r's byte offsets: r*80 and r*10 without a multiply (SPEC.md 70.11) */
+/* row r's byte offsets: r*80 and r*10 without a multiply (SPEC.md 73.11) */
 #define RC_CHOFF(r)  ((((r) << 6) + ((r) << 4)))
 #define RC_ATOFF(r)  ((((r) << 3) + ((r) << 1)))
 
@@ -338,7 +338,7 @@ static void rc_csi(int c)
         break;
     case 'm':
         /* SGR: 0 off, 7 reverse; bold/underline/colour are parsed and
-         * ignored (SPEC.md 71.4). No parameter at all is 0. */
+         * ignored (SPEC.md 74.4). No parameter at all is 0. */
         if (rc_nprm == 0) rc_rev = 0;
         for (r = 0; r < rc_nprm; r++) {
             if (rc_prm[r] == 0) rc_rev = 0;
@@ -372,7 +372,7 @@ static void rc_csi(int c)
         }
         break;
     default:
-        break;                             /* swallowed (71.4) */
+        break;                             /* swallowed (74.4) */
     }
 }
 
@@ -434,7 +434,7 @@ static void rc_putc(int c)
         return;
     case 0x0C: rc_lf(); return;            /* FF is a line feed, the VT100
                                              * rule and what RunCPM's host
-                                             * terminals do (SPEC.md 71.2) */
+                                             * terminals do (SPEC.md 74.2) */
     default: break;
     }
     if (c < 0x20 || c == 0x7F)
@@ -520,7 +520,7 @@ static void rc_draw_band(int x0, int y, const unsigned char *mch, int f, int n)
 /* the same-row cursor split's threshold: two 1-cell bands cost 2 x (860 +
  * 173) = 2,066 us; a span of n cells 860 + 173 n; equal near n = 7, so a span
  * of 8 or more cells (the two cells 7 or more apart) is split (measured,
- * SPEC.md 71.2, PERFORMANCE.md Set 65) */
+ * SPEC.md 74.2, PERFORMANCE.md Set 65) */
 #define RC_SPLIT_SPAN 7
 
 /* rc_flush_row - bring logical row r on the glass up to date */
@@ -564,7 +564,7 @@ static void rc_flush_row(int r, int x0, int y, int cols)
     n = l - f + 1;
     /* a cursor that moved along an otherwise unchanged row: if the two cells
      * are further apart than the measured crossover, two 1-cell bands are
-     * cheaper than the span (SPEC.md 71.2: a band is ~860 us + 173 us a
+     * cheaper than the span (SPEC.md 74.2: a band is ~860 us + 173 us a
      * cell, so two 1-cell bands are 2.07 ms and a span passes that at 8
      * cells) */
     if (fc < 0 && nbits == 2 && n > RC_SPLIT_SPAN) {
@@ -602,7 +602,7 @@ static void rc_flush(void *win)
          * the two slivers outside the cell grid as well, so os88_paint fills
          * nothing on this path - and the shadow says "blank", not "unknown",
          * so the row loop below draws each row only to its last non-blank
-         * cell and a blank row costs nothing (SPEC.md 71.2: a banner or a
+         * cell and a blank row costs nothing (SPEC.md 74.2: a banner or a
          * prompt screen is a handful of calls; a full TE screen pays this
          * fill on top of its 25 rows, ~70 ms on the model, and that is the
          * trade). The clip is armed if this is not a paint, so nothing of
@@ -681,7 +681,7 @@ static void rc_flush(void *win)
              * every model row from `top` down shifted against it, so every
              * one is compared and drawn to the span where the shifted text
              * differs from what stands. That is the price of an overlapped
-             * terminal (SPEC.md 71.2): a scrolled line is a band per row
+             * terminal (SPEC.md 74.2): a scrolled line is a band per row
              * from `top` down - and this is the ONE place that dirties them
              * all (rc_scroll_up rotates the flags with the rows). */
             rc_dirty_from(top);
@@ -750,7 +750,7 @@ static void rc_flush(void *win)
  * only to the span where the model differs, so a panel lifting off a mostly
  * blank terminal costs the fill and the text under it, never a band the
  * width of the rectangle per row (the erase-then-nothing shape; the whole-
- * repaint path made the same choice, SPEC.md 71.2). A partly-covered cell
+ * repaint path made the same choice, SPEC.md 74.2). A partly-covered cell
  * is blanked in the shadow too: if the model has a glyph there it is redrawn
  * whole, and if it has a space the uncovered part was already white. Lock
  * held; the clip is the caller's (the kernel's paint clip, or the one the

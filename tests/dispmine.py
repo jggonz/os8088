@@ -41,7 +41,7 @@ import dispapps                                             # noqa: E402
 S = os88sym.linear
 TITLE_H = 18
 MN_STRIP_H, MN_CELLPX, MN_COLS = 20, 16, 9      # apps/mines' own constants
-GAMES_ROW, MINES_ROW = 1, 2                     # B:\ row 1, then GAMES row 2
+GAMES_DIR, MINES_PKG = "GAMES", "MINES.O88"
 WATCH = ["mn_mode", "mn_revealed", "mn_flags"]
 
 
@@ -75,13 +75,13 @@ def main(argv):
         dispcp.open_drive(m, mo, S, settle, "B")
         disk = dispcp.win_list(m, S)[-1]
         wx, wy = dispcp.win_rect(m, S, disk)[:2]
-        dispcp.open_row(m, mo, S, settle, wx, wy, GAMES_ROW)
+        dispcp.open_named(m, mo, S, settle, wx, wy, GAMES_DIR)
         seg = slot = None
         for _ in range(3):
             wx, wy = dispcp.win_rect(m, S, disk)[:2]
             mo.click(wx + 40, wy + TITLE_H // 2)        # raise the Disk window
             settle(m)
-            dispcp.open_row(m, mo, S, settle, wx, wy, MINES_ROW)
+            dispcp.open_named(m, mo, S, settle, wx, wy, MINES_PKG)
             m.advance(frames=120)
             m.run()
             got = dispapps.pkg_seg(m, 0)

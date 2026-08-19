@@ -74,7 +74,7 @@ they need no relocation, because the shed already gives their room back.
 | **SB DMA double-buffer** | **PINNED (forever)** | `MC_DMA` |
 | **HDD** install buffer | **PINNED (rule)** | §66.5.10. An `OSAPI_FILE_READ`/`WRITE` target at all four uses, and claimed for one install and freed at the end of it — Note Pad's staging buffer again |
 | **HDD** per-partition listing (6KB) | **PINNED (forever, structurally)** | §66.5.10.1. **Donated** to the kernel by `osapi_vol_add`, so the segment is written down in three places and the callback — which dispatches to the *owner*, the driver — can reach only one. Fixing it is a kernel-side change |
-| **HDD** second image (`HDDTOOL.DRV`) | **PINNED (forever)** | base is CS (§52.11.4) |
+| **HDD** second image (`HDDTOOL.DRV`) | **PINNED (forever)** | base is CS (§52.11.7) |
 | **RAM disk** store | **MOVABLE** | §66.5.10. `rd_reloc`, **one** word — nothing outside `ramdisk.asm` sees the arena, and every handle into it is an offset |
 
 ---

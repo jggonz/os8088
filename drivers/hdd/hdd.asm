@@ -1215,7 +1215,21 @@ hd_services:
     dw hd_page_paint            ; DSV_CPPAINT
     dw hd_page_click            ; DSV_CPCLICK
     dw hd_tool_reap             ; DSV_CPCLOSE - the panel has gone, so the disk
-                                ; tool's 11KB goes with it (SPEC.md 52.11.4)
+                                ; tool's 11KB goes with it (SPEC.md 52.11.7)
+    dw 0                        ; DSV_FS      - a file redirector's, not ours
+    dw 0                        ; DSV_CPKEY   - this page takes no keys: its
+                                ; geometry is typed with - and + (SPEC.md 52.4)
+    dw hd_page_up               ; DSV_CPUP    - the page acts on the RELEASE
+    dw hd_page_drag             ; DSV_CPDRAG  - ...and follows the pointer
+                                ;               between the edges (13.8.4)
+    times DSV_SIZE - ($ - hd_services) db 0
+                                ; drv_publish copies DSV_SIZE bytes
+                                ; whatever this table's length is, so
+                                ; one that stops short publishes
+                                ; whatever FOLLOWS it - see
+                                ; ramdisk.asm, which did. This one is
+                                ; exact today and the pad is what
+                                ; keeps it exact when DSV_SIZE grows
 
 hd_s_page:   db 'Hard Drive', 0
 

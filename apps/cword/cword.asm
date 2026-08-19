@@ -1,10 +1,10 @@
 ; =============================================================================
 ; os8088 - apps/cword/cword.asm
 ;
-; The assembly shim of CWORD, Microsoft Word 1.1a written in C (SPEC.md 70.12).
+; The assembly shim of CWORD, Microsoft Word 1.1a written in C (SPEC.md 73.12).
 ; It is the top-level nasm source: the .c is never assembled on its own,
 ; because `nasm -f bin` has no notion of an external symbol, so the compiled C,
-; the runtime and the 32-byte header are ONE assembly (SPEC.md 70.1).
+; the runtime and the 32-byte header are ONE assembly (SPEC.md 73.1).
 ;
 ; A shim does four things and nothing else belongs in it: name the package,
 ; declare which callbacks the C actually defines, include the runtime and then
@@ -28,7 +28,7 @@
                                     ; (there is no self-close slot: SPEC.md
                                     ; 65.2, and apps/cword/cwcmd.c says how)
 %define CC_HAS_OVL                  ; ...and half of this program is in
-                                    ; CWORD.OVL (SPEC.md 70.14)
+                                    ; CWORD.OVL (SPEC.md 73.14)
 
 %define CC_HAS_MENUS                ; void os88_oncmd(int, int, void *) - and
                                     ; it can never be called. This program's
@@ -38,7 +38,7 @@
                                     ; EMPTY, and exists so that its AM_NAME
                                     ; puts 'Microsoft Word' in the kernel bar
                                     ; instead of this header's 'CWORD'
-                                    ; (SPEC.md 70.12). A set with no menus has
+                                    ; (SPEC.md 73.12). A set with no menus has
                                     ; no item to pick, so the handler is a
                                     ; stub - but the %define has to be here
                                     ; anyway, because os88_menu_set() is the
@@ -50,7 +50,7 @@
 
 %include "cword.gen.asm"            ; the compiled C, found through -I build/
 
-; The one hand-written routine (SPEC.md 70.11's rule that the inner loop is
+; The one hand-written routine (SPEC.md 73.11's rule that the inner loop is
 ; assembly): a byte move that handles both directions. C cannot write one -
 ; an ascending loop corrupts an insertion by trailing its own output, and a
 ; descending loop in C costs 3-5x what `rep movsb` costs on the target. It is

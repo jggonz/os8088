@@ -31,6 +31,16 @@
 ; in .text with real initialisers - NOT .bss, which -f bin zeroes not at all:
 ; drv_boot reads the disk before any init routine of ours could run, and a
 ; garbage [fpg_on] would put this widget's drawing inside the splash.
+;
+; **THE CHROME BELONGS TO THE FREEZE AND THE TROUGH BELONGS TO THE PHASE**
+; (SPEC.md 12.8.3). Everything above describes ONE data transfer, and a user
+; does not do one: a document double-click is an association lookup, then a
+; package load, then the application reading its file, with a mount and a
+; directory walk between each pair - so the widget used to appear, vanish and
+; appear again while the machine never unfroze once. The freeze is exactly one
+; gfx-lock hold, so that is the widget's extent: fpg_busy arms it from inside
+; the disk path, fpg_end ends only the PHASE, and gfx_unlock's fpg_finish is
+; what takes it away. Nothing brackets anything, and no caller can leave it up.
 ; =============================================================================
 
 section .text
@@ -55,6 +65,21 @@ FPG_W      equ FPG_ICO_W + FPG_ISP + FPG_BOX_W + FPG_GAP    ; 80
 FPG_BAR_PX equ FPG_BOX_W - 2    ; 62: the trough, in pixels
 FPG_MINX   equ MENU_SYS_XR + 8  ; an origin left of this would collide with
                                 ; the System menu: refuse the whole feature
+FPG_CELLS  equ FPG_W / 8        ; ...and what that is in menu-bar glyph cells,
+                                ; which is what menu_bar_text has to keep off
+                                ; (SPEC.md 12.8.3): the widget is drawn
+                                ; straight onto the segment's last cells and
+                                ; is composed into no buffer at all
+FPG_WARM   equ 3                ; sectors of disk work inside ONE lock hold
+                                ; before the widget appears at all (12.8.3).
+                                ; Its unit is the only honest one available -
+                                ; a sector is ~24 ms on the field machine, so
+                                ; three of them is ~72 ms - and its job is to
+                                ; keep a one-sector directory probe, which is
+                                ; over inside a single displayed frame, from
+                                ; putting an icon up and taking it away again.
+                                ; That is PERFORMANCE.md's double-draw flash
+                                ; with the widget itself as the flash
 FPG_UNIT   equ 512              ; the trough's internal unit, in bytes: a
 FPG_USHR   equ 9                ; SECTOR, because fpg_step's caller is the
                                 ; per-sector loop in dsk_xfer and that is the
@@ -83,11 +108,19 @@ FPG_USHR   equ 9                ; SECTOR, because fpg_step's caller is the
 ; a 32MB job (the volume cap, SPEC.md 18.7) lands one unit short of exact and
 ; the trough is 62 pixels wide, so nothing about that is visible.
 ;
-; Refuses, silently and completely, in four cases: already armed (an
-; operation nested inside another - the OUTER one is the honest scale), the
-; splash still owning the screen and the video mode (SPEC.md 15.3), a visible
-; fullscreen window over the bar (SPEC.md 11.2), and an origin that would
-; reach the System menu on a narrow screen.
+; **It no longer refuses a nested call, and that is SPEC.md 12.8.3.** It used
+; to, on the reasoning that the outer operation is the honest scale - but
+; there IS no outer operation with a scale: what surrounds a package load is
+; a mount and a directory walk, neither of which has a byte count to give. So
+; a second begin inside one freeze is not a nesting, it is the NEXT PHASE, and
+; what it re-scales is the trough alone. The chrome is already up and is not
+; redrawn, which is what stops the icon flickering at every phase boundary.
+;
+; Refuses, silently and completely, in three cases, all of them decided when
+; the CHROME goes up and none of them re-asked afterwards: the splash still
+; owning the screen and the video mode (SPEC.md 15.3), a visible fullscreen
+; window over the bar (SPEC.md 11.2), and an origin that would reach the
+; System menu on a narrow screen.
 ; -----------------------------------------------------------------------------
 fpg_begin:
     pushf
@@ -96,18 +129,11 @@ fpg_begin:
     push cx
     push dx
     push si
-    cmp byte [fpg_on], 0        ; the outermost operation owns the widget
-    jne .out
-    cmp byte [spl_live], 0      ; boot: the splash owns screen and mode
-    jne .out
-    call wm_fs_vis              ; the bar is under a fullscreen window
+    mov word [fpg_total], 0     ; no scale until one is computed below, so a
+                                ; refusal cannot leave the PREVIOUS phase's
+                                ; divisor counting this one's sectors
+    call fpg_arm                ; ...and CF=1 = the widget cannot be shown here
     jc .out
-
-    mov bx, [vid_clk_hx]        ; the LIVE cell edge (SPEC.md 39.2), never
-    sub bx, FPG_W               ; MENU_CLK_HX - that one is the VGA reference
-    cmp bx, FPG_MINX            ; SIGNED, so the one test also catches a screen
-    jl .out                     ; narrower than the widget wrapping the sub
-    mov [fpg_x0], bx
 
     mov ax, cx                  ; --- DX:CX bytes -> a 16-bit unit count
     add ax, FPG_UNIT - 1        ; round UP: a 1-byte job is one unit, not none
@@ -125,7 +151,6 @@ fpg_begin:
     jz .out                     ; would be fpg_step's divisor: refuse it whole
     mov [fpg_total], ax
     mov word [fpg_done], 0
-    mov word [fpg_px], 0
     mov word [fpg_frac], FPG_UNIT - 1
                                 ; SEEDED, not zeroed, and that one word is what
                                 ; makes fpg_stepb round the way the total above
@@ -138,12 +163,115 @@ fpg_begin:
                                 ; transfer and no arithmetic anywhere was
                                 ; wrong (SPEC.md 12.8.1). fpg_step never reads
                                 ; it, so the sector path is untouched
+    call fpg_clear              ; the trough is this phase's now: empty it,
+                                ; whether it held the previous phase's bar or
+                                ; the busy hatch (SPEC.md 12.8.3)
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
+; fpg_busy - a file operation with no scale is still a frozen machine
+;            (SPEC.md 12.8.3)
+; in:  CX = sectors this call is about to move (0 = none, just re-assert);
+;      DS = KERNEL_SEG, gfx lock held by the caller
+; out: nothing - every register and the flags preserved
+;
+; THE CHOKE POINT, and it has exactly two call sites because there are exactly
+; two ways a sector's worth of waiting can happen: dsk_xfer, which is every
+; int 13h and every cache hit in the machine, and drv_fs_call, which is every
+; verb of a redirected volume (SPEC.md 62.9). Between them they cover the
+; three things SPEC.md 12.8 could not: a MOUNT, a DIRECTORY WALK, and a file
+; crossing a cable one FSV_ verb at a time. No operation has to remember to
+; ask, and a new one cannot forget - which is dskw_sync's argument (22.8)
+; applied to the other half of the same problem.
+;
+; The trough shows the 50% HATCH while there is no scale, and that is the
+; honest picture rather than a compromise: a bar that MOVES has to be a
+; fraction of something, and neither a mount nor a walk knows its own length
+; until it has finished. One gfx_fill_gray covers the whole phase however long
+; it lasts, where an animated indicator would pay ~2 ms of PERFORMANCE.md
+; Part 2's fixed cost per step to say the same thing. It is the desktop's own
+; dither, so it survives the 1bpp reduction as a checkerboard on both mono
+; adapters (SPEC.md 39.4) and reads as neither empty nor full on any of them.
+;
+; Unarmed it is a compare, an add and a compare, once per int 13h call
+; against that call's ~24 ms. Armed with a scale it is two compares.
+; -----------------------------------------------------------------------------
+fpg_busy:
+    pushf
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    cmp byte [fpg_on], 0
+    jne .armed
+    mov al, [fpg_warm]          ; --- not yet: has the machine been at the disk
+    or ch, ch                   ; long enough to be worth saying so?
+    jnz .sat                    ; a run over 255 sectors cannot happen, but a
+    add al, cl                  ; corrupt one must not wrap the counter back
+    jnc .warm                   ; under the threshold
+.sat:
+    mov al, 0xFF
+.warm:
+    mov [fpg_warm], al
+    cmp al, FPG_WARM
+    jb .out
+    call fpg_arm
+    jc .out
+.armed:
+    cmp word [fpg_total], 0
+    jne .out                    ; a phase with a scale owns the trough
+    cmp byte [fpg_pat], 0
+    jne .out                    ; ...and the hatch is already on it
+    call fpg_hatch
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
+; fpg_arm - put the chrome up if it is not up already (internal)
+; out: CF=0 the widget is on screen; CF=1 it cannot be, and every entry point
+;      above must do nothing at all
+; clobbers: AX, BX, CX, DX, SI, flags
+;
+; The three refusals live HERE and are asked once per freeze rather than once
+; per phase, which is what makes a re-scale free. A fullscreen window that
+; goes up while the widget is already armed is therefore not re-tested - the
+; same exposure fpg_step has always had, and for the same reason: the test is
+; a walk and the window it protects against needs a callback to take the
+; screen in between two of its own file operations.
+; -----------------------------------------------------------------------------
+fpg_arm:
+    cmp byte [fpg_on], 0
+    jne .yes
+    cmp byte [spl_live], 0      ; boot: the splash owns screen and mode
+    jne .no
+    call wm_fs_vis              ; the bar is under a fullscreen window
+    jc .no
+
+    mov bx, [vid_clk_hx]        ; the LIVE cell edge (SPEC.md 39.2), never
+    sub bx, FPG_W               ; MENU_CLK_HX - that one is the VGA reference
+    cmp bx, FPG_MINX            ; SIGNED, so the one test also catches a screen
+    jl .no                      ; narrower than the widget wrapping the sub
+    mov [fpg_x0], bx
 
     mov byte [fpg_on], 1        ; **ARMED BEFORE THE FIRST PIXEL, so that the
-    mov byte [menu_bdirty], 1   ; TOAST CAN GET OUT OF THE WAY** (SPEC.md
-    call menu_draw_bar          ; 59.9.2). A strip is placed where it fitted
-                                ; when it went up, and SPEC.md 59.9's first
-                                ; choice - the gap the menus leave - is the
+    mov word [fpg_px], 0        ; TOAST CAN GET OUT OF THE WAY** (SPEC.md
+    mov byte [fpg_pat], 0       ; 59.9.2). A strip is placed where it fitted
+    mov byte [menu_bdirty], 1   ; when it went up, and SPEC.md 59.9's first
+    call menu_draw_bar          ; choice - the gap the menus leave - is the
                                 ; same stretch of bar this widget is about to
                                 ; be drawn on; measured on a 5150/CGA, Paint's
                                 ; own `Saving...` lands on cells 43..53 and
@@ -152,38 +280,57 @@ fpg_begin:
                                 ; and the operation runs with `Sa` and half a
                                 ; document icon on the bar.
                                 ;
+                                ; The flag being set FIRST is also what makes
+                                ; that composition keep off our cells at all:
+                                ; menu_bar_text shortens the menus segment by
+                                ; FPG_CELLS while it is up (SPEC.md 12.8.3),
+                                ; and this is the one composition that has to
+                                ; see the reservation appear.
+                                ;
                                 ; Re-placing it costs one composition, which
                                 ; is a compare per cell plus at most one
-                                ; font_run, once per file operation - against
-                                ; a disk this is not measurable. It is done
-                                ; HERE and not by asking toast_kill to retire
-                                ; the message, which is what this site used to
-                                ; do: a refusal loses the message for good and
+                                ; font_run, once per FREEZE - against a disk
+                                ; this is not measurable. It is done HERE and
+                                ; not by asking toast_kill to retire the
+                                ; message, which is what this site used to do:
+                                ; a refusal loses the message for good and
                                 ; silently, and the messages worth saying are
                                 ; exactly the ones about the operation that is
                                 ; starting.
-                                ;
-                                ; [menu_bdirty] because the reservation
-                                ; changed, not the text: nothing menu_bar_text
-                                ; composes has moved, so the flag is the only
-                                ; thing that can ask for the placement to be
-                                ; taken again. menu_inval below re-sets it, so
-                                ; fpg_end's own pass is not spent here
 
+    call fpg_paint              ; the bed, the icon and the box
+    call fpg_span               ; ...and the bar has lost those cells: tell it
+    call menu_inval             ; which, so fpg_finish gives back exactly them
+                                ; and not the whole bar (SPEC.md 12.9)
+.yes:
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fpg_paint - the widget's own pixels, from its own state (internal)
+; clobbers: AX, BX, CX, DX, SI, flags
+;
+; Split out of the arm because menu_furniture - the ONE path in the machine
+; that erases the menu bar (SPEC.md 12.9) - has to be able to put the widget
+; back, and it runs from inside menu_draw_bar. So this draws pixels and
+; nothing else: no menu_draw_bar (which would recurse straight back into it),
+; no menu_inval. It repaints the TROUGH from [fpg_pat]/[fpg_px] rather than
+; leaving it empty, or an overdraw mid-transfer would drop the bar back to
+; zero and the next fpg_step would only light the strip past where it already
+; was.
+; -----------------------------------------------------------------------------
+fpg_paint:
     call cur_unlazy             ; spend gfx_lock's promised hide before we
                                 ; draw anywhere near the arrow (SPEC.md 7.1.4)
-
-    mov ax, bx                  ; --- the bed: white over whatever the bar had
-    mov cx, bx                  ;     there, since the space is BORROWED and
-    add cx, FPG_W - 1           ;     menu_relayout's limit is untouched
-    xor bx, bx
+    call fpg_span               ; --- the bed: white over whatever the bar had
+    xor bx, bx                  ;     there, since the space is BORROWED and
+                                ;     menu_relayout's limit is untouched
     mov dx, MBAR_H - 2          ; the black rule on the last row is not ours
     mov byte [gfx_color], CWHITE
     call gfx_fill
-    mov ax, [fpg_x0]            ; ...and the bar has lost those cells: tell it
-    mov cx, ax                  ; which, so fpg_end gives back exactly them
-    add cx, FPG_W - 1           ; and not the whole bar (SPEC.md 12.9)
-    call menu_inval
 
     mov cx, [fpg_x0]            ; --- the document icon
     mov dx, FPG_ICO_Y
@@ -195,15 +342,47 @@ fpg_begin:
     mov bx, FPG_BOX_Y
     mov dx, FPG_BOX_Y + FPG_BOX_H - 1
     call gfx_frame
-                                ; widget waits for a gfx_unlock that does not
-                                ; come until the operation is over (SPEC.md 32)
+
+    cmp byte [fpg_pat], 0       ; --- and whatever the trough was showing
+    jne fpg_hatch
+    cmp word [fpg_px], 0
+    je .out
+    call fpg_tin
+    mov cx, ax
+    add cx, [fpg_px]
+    dec cx
+    mov byte [gfx_color], CBLACK
+    jmp gfx_fill
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    popf
+    ret
+
+; -----------------------------------------------------------------------------
+; fpg_hatch / fpg_clear - the trough, without a scale and with one (internal)
+; clobbers: AX, BX, CX, DX, flags
+; -----------------------------------------------------------------------------
+fpg_hatch:
+    mov byte [fpg_pat], 1
+    call fpg_tin
+    jmp gfx_fill_gray
+
+fpg_clear:
+    mov word [fpg_px], 0
+    mov byte [fpg_pat], 0
+    call fpg_tin
+    mov byte [gfx_color], CWHITE
+    jmp gfx_fill
+
+; -----------------------------------------------------------------------------
+; fpg_tin - the trough's interior, inside the box frame (internal)
+; out: AX = x1, BX = y1, CX = x2, DX = y2, all inclusive - gfx_fill's argument
+; clobbers: AX, BX, CX, DX
+; -----------------------------------------------------------------------------
+fpg_tin:
+    call fpg_boxr
+    inc ax
+    dec cx
+    mov bx, FPG_BOX_Y + 1
+    mov dx, FPG_BOX_Y + FPG_BOX_H - 2
     ret
 
 ; -----------------------------------------------------------------------------
@@ -220,10 +399,17 @@ fpg_begin:
 ; Armed, it draws only when the bar's pixel extent actually CHANGED - the
 ; trough is 62 pixels and an operation is usually more sectors than that, so
 ; most steps draw nothing at all.
+;
+; **The gate is [fpg_total] and not [fpg_on]** (SPEC.md 12.8.3): the chrome
+; now outlives the phase, so "the widget is on screen" and "these sectors are
+; part of what the bar is measuring" stopped being one question. A mount's
+; sectors reach here with the icon up and no scale, and counting them against
+; the previous phase's divisor is exactly the wrong answer. It is also the
+; divisor below, so the one test still guards the div.
 ; -----------------------------------------------------------------------------
 fpg_step:
     pushf
-    cmp byte [fpg_on], 0
+    cmp word [fpg_total], 0
     je .out
     push ax                     ; AX/BX/CX/DX/SI and no more: everything this
     push bx                     ; calls below - gfx_fill and fpg_boxr
@@ -305,7 +491,7 @@ fpg_step:
 ; -----------------------------------------------------------------------------
 fpg_stepb:
     pushf
-    cmp byte [fpg_on], 0
+    cmp word [fpg_total], 0     ; fpg_step's gate, for fpg_step's reason
     je .out
     push ax
     push cx
@@ -330,10 +516,45 @@ fpg_stepb:
     ret
 
 ; -----------------------------------------------------------------------------
-; fpg_end - disarm, and give the bar back
-; in:  nothing;  DS = KERNEL_SEG, gfx lock held by the caller
+; fpg_end - this PHASE is over; the widget is not (SPEC.md 12.8.3)
+; in:  nothing;  DS = KERNEL_SEG
 ; out: nothing - all registers and the flags preserved (its call sites sit in
 ;      the dskw_*_x epilogues, between a body's CF/AX answer and the caller's)
+;
+; It used to be the teardown, and moving that to fpg_finish is the whole of
+; how the widget stopped flickering: what follows a package load is another
+; file operation two or three routines later, with the machine frozen solidly
+; in between, so a teardown here put the icon away and the next fpg_begin
+; brought it straight back.
+;
+; It does NOT draw the hatch, deliberately. The common case by far is one
+; transfer and then an unlock, and drawing the busy pattern there would be a
+; fill nobody ever sees - so the trough is simply left holding a full bar
+; until fpg_busy's next sector says the machine is still at the disk. Doing
+; nothing is also what keeps this a `mov` and a `ret` in the dskw_*_x
+; epilogues, where the flags are a body's answer in flight.
+; -----------------------------------------------------------------------------
+fpg_end:
+    mov word [fpg_total], 0     ; no scale: fpg_step and fpg_stepb stop, and
+    ret                         ; fpg_busy may hatch the trough again
+
+; -----------------------------------------------------------------------------
+; fpg_finish - disarm, and give the bar back
+; in:  nothing;  DS = KERNEL_SEG, gfx lock held by the caller
+; out: nothing - all registers and the flags preserved
+;
+; **gfx_unlock is its ONE caller, and that is the whole safety argument**
+; (SPEC.md 12.8.3) - dsk_batch_end's, one section over (SPEC.md 18.9.3). The
+; freeze this widget reports IS a gfx-lock hold: the disk is the UI task's,
+; dsk_xfer raises [sch_lock] across every int 13h, and the caller has held the
+; lock since before it started. So every way out of a locked run of kernel
+; code - return, failure, a question, a swap prompt - comes through here, and
+; the widget cannot be left on the bar by anything: not by forgetting a
+; bracket, not by returning early, not by a file operation that failed.
+; Nothing anywhere has to call this and nothing may.
+;
+; It is a compare and a return on every unlock that saw no file work, which is
+; nearly all of them.
 ;
 ; **Only our own cells go back, not the whole bar** (SPEC.md 12.9). This used
 ; to be menu_force + menu_draw_bar, which white-filled the bar end to end and
@@ -342,34 +563,39 @@ fpg_stepb:
 ; 88px strip.
 ;
 ; The split is between the rows that carry menu text and the rows that do
-; not. fpg_begin already told the bar which CELLS it took, so menu_bar_text's
+; not. fpg_arm already told the bar which CELLS it took, so menu_bar_text's
 ; opaque run is about to rewrite the text band from what the widget left to
 ; what the menu says, in one pass and with no white in between - erasing that
 ; band here would put the flash straight back. What it cannot reach is the
 ; icon's top and bottom and the box frame, which live ABOVE and BELOW the
 ; glyph rows: those are ours to clean up, and they are two thin fills.
 ; -----------------------------------------------------------------------------
-fpg_end:
+fpg_finish:
     pushf
     push ax
     push bx
     push cx
     push dx
-    cmp byte [fpg_on], 0
+    mov al, [fpg_on]            ; **ONE STORE CLEARS BOTH**, because [fpg_on]
+    mov word [fpg_on], 0        ; and [fpg_warm] are declared adjacent and are
+                                ; always cleared together: the next freeze
+                                ; warms up from nothing whether this one armed
+                                ; or not, which is what makes FPG_WARM mean
+                                ; "in this hold" rather than "ever". The old
+                                ; value is banked first because it is the test
+                                ; below - and the declaration order is load
+                                ; bearing for exactly this reason
+    or al, al
     je .out
-    mov byte [fpg_on], 0
+    mov word [fpg_total], 0     ; ...and no phase survives the widget either
 
     mov byte [gfx_color], CWHITE
-    mov ax, [fpg_x0]            ; --- above the text band: the icon's head
-    mov cx, ax
-    add cx, FPG_W - 1
+    call fpg_span               ; --- above the text band: the icon's head
     xor bx, bx
     mov dx, MENU_TEXT_Y - 1
     call gfx_fill
 
-    mov ax, [fpg_x0]            ; --- and below it: its foot and the box
-    mov cx, ax
-    add cx, FPG_W - 1
+    call fpg_span               ; --- and below it: its foot and the box
     mov bx, MENU_TEXT_Y + 8
     mov dx, MBAR_H - 2
     call gfx_fill
@@ -384,13 +610,32 @@ fpg_end:
                                 ; box frame stays on the glass for good. One
                                 ; store makes the erase this routine's own
                                 ; rather than a debt somebody else may settle
-    call menu_draw_bar          ; the text band, as the ONE run that differs
+    call menu_draw_bar          ; the text band, as the ONE run that differs -
+                                ; and the menus segment is FPG_CELLS longer
+                                ; again the moment [fpg_on] went to 0 above,
+                                ; so this is also the composition that gives
+                                ; those cells back (SPEC.md 12.8.3)
 .out:
     pop dx
     pop cx
     pop bx
     pop ax
     popf
+    ret
+
+; -----------------------------------------------------------------------------
+; fpg_span - the whole widget's horizontal extent, from the armed origin
+; out: AX = left x, CX = right x (both inclusive)
+; clobbers: AX, CX
+;
+; Four sites want exactly this - the bed, the menu_inval that borrows the
+; cells, and fpg_finish's two thin fills - and one of them giving a different
+; answer from another is a strip of bar nothing owns.
+; -----------------------------------------------------------------------------
+fpg_span:
+    mov ax, [fpg_x0]
+    mov cx, ax
+    add cx, FPG_W - 1
     ret
 
 ; -----------------------------------------------------------------------------
@@ -408,10 +653,21 @@ fpg_boxr:
 
 ; --- state (SPEC.md 12.8: .text, because -f bin zeroes no .bss and the very
 ;     first int 13h of the machine calls fpg_step) ----------------------------
-fpg_on      db 0                ; armed? tested by fpg_step on every sector
+fpg_on      db 0                ; is the CHROME up? Set for the whole freeze
+                                ; (SPEC.md 12.8.3), not for one transfer.
+                                ; **KEEP [fpg_warm] NEXT TO IT** - fpg_finish
+                                ; clears the pair with one word store
+fpg_warm    db 0                ; sectors of disk work seen in this lock hold,
+                                ; against FPG_WARM; zeroed by fpg_finish, so
+                                ; by gfx_unlock, so once per freeze
+fpg_pat     db 0                ; 1 = the trough is carrying the busy hatch,
+                                ; so fpg_busy does not draw it twice and
+                                ; fpg_paint knows to put it back
 fpg_x0      dw 0                ; the widget's left edge, from [vid_clk_hx]
 fpg_done    dw 0                ; units stepped so far
-fpg_total   dw 1                ; ...out of this many (never 0: it divides)
+fpg_total   dw 0                ; ...out of this many. **0 = no scale**, and
+                                ; that is fpg_step's and fpg_stepb's gate as
+                                ; well as the divisor they guard (12.8.3)
 fpg_px      dw 0                ; pixels of trough currently lit
 fpg_frac    dw 0                ; fpg_stepb's carry: bytes reported that have
                                 ; not yet made a whole unit (SPEC.md 12.8.1)

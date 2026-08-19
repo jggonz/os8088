@@ -1,5 +1,5 @@
 /* ============================================================================
- * os8088 - apps/runcpm/rcabout.c       the About panel (SPEC.md 71.4)
+ * os8088 - apps/runcpm/rcabout.c       the About panel (SPEC.md 74.4)
  *
  * Part of RUNCPM, a reimplementation of RunCPM 6.9 by Marcelo Dantas /
  * "Mockba the Borg" (https://github.com/MockbaTheBorg/RunCPM, MIT licence,
@@ -10,10 +10,10 @@
  * banner line, 'CP/M Emulator v6.9 by Marcelo Dantas', as it stands; the
  * licence line is RunCPM/LICENSE's first two lines, 'MIT License' and
  * 'Copyright (c) 2017 Mockba the Borg'; and between them three lines say
- * what this port is (SPEC.md 71's opening paragraph, condensed) - the product,
+ * what this port is (SPEC.md 74's opening paragraph, condensed) - the product,
  * the version, what this port is, the attribution, OK, AND NOTHING ELSE
  * (LESSONS.md 8: what the build renders or greys is a fact about the build
- * and belongs in SPEC.md 71.4 and in the greyed items, not here).
+ * and belongs in SPEC.md 74.4 and in the greyed items, not here).
  *
  * TWELVE ROWS, AND THAT NUMBER IS THE 640x200 ADAPTERS' (SPEC.md 39,
  * LESSONS.md 8). A control's y is 6 + row * 10 from the panel's top; the
@@ -27,7 +27,7 @@
  * HOW IT IS DRAWN. One white fill, two frames, one composed band per label
  * (rcterm.c's rc_draw_band: rc_band + gfx_blit1, 860 us + 173 us a cell,
  * font_run only when blit1 refuses - the same choice the terminal makes,
- * SPEC.md 71.2), the OK button (a fill, two frames, a band): ~20 drawing
+ * SPEC.md 74.2), the OK button (a fill, two frames, a band): ~20 drawing
  * calls, once per About. The panel's x is snapped to a byte boundary so
  * every band starts on one.
  *
@@ -41,7 +41,7 @@
  * nothing stale through its damage clip; the machine picks up where it was
  * when the panel comes down (rc_about_close re-kicks). RunCPM's own console
  * has no modal box; a paused CP/M program is the one behaviour this panel
- * adds, and it is stated in SPEC.md 71.4.
+ * adds, and it is stated in SPEC.md 74.4.
  *
  * WHAT IT COSTS TO TAKE DOWN. Not a full repaint: the panel's rectangle is
  * DAMAGE - rc_blank_rect (rcterm.c, the same routine os88_paint's partial
@@ -53,7 +53,7 @@
  * would draw the whole screen again (a full TE screen is 26 calls / 1,903
  * cells - 1.9 s on the target).
  *
- * The show is module code (ovl_*, SPEC.md 70.14): once per command, and
+ * The show is module code (ovl_*, SPEC.md 73.14): once per command, and
  * 'the module refused' (a disk without RUNCPM.OVL, toasted by cc_ovneed)
  * means the panel does not open - the machine is not paused, nothing to
  * take down. The close and the hit test are resident: a dozen compares.

@@ -149,6 +149,11 @@ pn_entry:
     jc .out                         ; no window: nothing to attach menus to
     mov ax, pn_onresize             ; the keyboard's depth follows the box, and
     call OSAPI_WM_ONRESIZE          ; the box is the kernel's (SPEC.md 11.98)
+    mov ax, pn_onup                 ; SPEC.md 13.7/13.8.1: the five buttons
+    call OSAPI_WM_ONMOUSEUP         ; fire on the RELEASE and follow the
+    mov ax, pn_ondrag               ; pointer between the edges. The KEYS do
+    call OSAPI_WM_ONDRAG            ; not - a note is a safe prefix action
+    mov byte [pn_down], 0
     call OSAPI_WM_GEOM              ; CX/DX = the content we were actually
     call pn_metrics                 ; given, which on a CGA is 22 rows short
     mov si, pn_menus
@@ -327,54 +332,18 @@ pn_onclick:
     jmp .out
 
     ; --- the button rows -------------------------------------------------------
+    ; SPEC.md 13.6/13.8: Replay plays, Clear throws a recording away and the
+    ; three song buttons replace it - not one has a safe prefix action, so the
+    ; press only ARMS and DRAWS and pn_onup acts. The KEYS are untouched: a
+    ; piano key sounds a note, which is exactly the safe prefix action 13.6 is
+    ; about, and a note that waited for the release would be unplayable.
 .rows:
-    cmp dx, PN_ROW1_Y
-    jl .out
-    cmp dx, PN_ROW1_Y+PN_BTN_H
-    jl .row1
-    cmp dx, PN_ROW2_Y
-    jl .out
-    cmp dx, PN_ROW2_Y+PN_BTN_H
-    jge .out
-    cmp cx, 52                      ; songs row: TWINKLE / ODE / MARY
-    jl .out
-    cmp cx, 116
-    jl .twinkle
-    cmp cx, 118
-    jl .out
-    cmp cx, 158
-    jl .ode
-    cmp cx, 160
-    jl .out
-    cmp cx, 208
-    jge .out
-    mov si, pn_song_mary
-    mov di, pn_s_mary
-    call pn_load
-    jmp .out
-.twinkle:
-    mov si, pn_song_twk
-    mov di, pn_s_twk
-    call pn_load
-    jmp .out
-.ode:
-    mov si, pn_song_ode
-    mov di, pn_s_ode
-    call pn_load
-    jmp .out
-.row1:
-    cmp cx, 2
-    jl .out
-    cmp cx, 58
-    jl .replay
-    cmp cx, 60
-    jl .out
-    cmp cx, 108
-    jge .out
-    call pn_clear
-    jmp .out
-.replay:
-    call pn_replay
+    call pn_bhit
+    or al, al
+    jz .out
+    xor ah, ah
+    call os88ui_arm
+    call pn_setdown
 .out:
     pop di
     pop si
@@ -1029,6 +998,250 @@ pn_draw_viewer:
 ; in:  [pn_ox]/[pn_oy], [pn_msg]
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; pn_bact - do what button AL says (SPEC.md 13.8)
+; in:  AL = 1..PN_NBTN; the gfx lock is held
+; -----------------------------------------------------------------------------
+pn_bact:
+    push si
+    push di
+    cmp al, 1
+    je .replay
+    cmp al, 2
+    je .clear
+    cmp al, 3
+    je .twk
+    cmp al, 4
+    je .ode
+    mov si, pn_song_mary
+    mov di, pn_s_mary
+    jmp short .load
+.twk:
+    mov si, pn_song_twk
+    mov di, pn_s_twk
+    jmp short .load
+.ode:
+    mov si, pn_song_ode
+    mov di, pn_s_ode
+.load:
+    call pn_load
+    jmp short .out
+.clear:
+    call pn_clear
+    jmp short .out
+.replay:
+    call pn_replay
+.out:
+    pop di
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; pn_onup - W_ONMOUSEUP (SPEC.md 13.7): the five buttons fire HERE
+; in:  CX = x, DX = y (SCREEN), SI = the window; gfx lock held
+; -----------------------------------------------------------------------------
+pn_onup:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call os88ui_fire            ; AX = what the press armed, and it is CLEARED
+    or ax, ax
+    jz .out
+    mov di, ax
+    call pn_pt                  ; CX/DX content-relative
+    call pn_bhit
+    xor ah, ah
+    cmp ax, di
+    je .fire
+    xor al, al                  ; a different button, or none: CANCELLED
+    call pn_setdown
+    jmp short .out
+.fire:
+    push ax
+    xor al, al
+    call pn_setdown             ; upright FIRST: pn_bact may play a whole song
+    pop ax                      ; and the button must not be held down for it
+    call pn_bact
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pn_ondrag - W_ONDRAG (SPEC.md 13.8.1): the pointer moved, press still down
+; -----------------------------------------------------------------------------
+pn_ondrag:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call os88ui_armed           ; PEEK: the arm is the release's to spend
+    or ax, ax
+    jz .out
+    mov di, ax
+    call pn_pt
+    call pn_bhit
+    xor ah, ah
+    cmp ax, di
+    je .set
+    xor al, al                  ; off it: nothing is down
+.set:
+    call pn_setdown             ; ...which draws only if that CHANGED
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pn_pt - a SCREEN point to a content-relative one (internal)
+; in:  CX = x, DX = y, SI = the window
+; out: CX/DX content-relative; AX, BX clobbered
+; -----------------------------------------------------------------------------
+pn_pt:
+    push si
+    mov bx, si
+    mov si, dx
+    call OSAPI_WM_CONTENT
+    sub cx, ax
+    mov ax, si
+    sub ax, dx
+    mov dx, ax
+    pop si
+    ret
+
+; --- SPEC.md 13.8: the five buttons, ONE description --------------------------
+; They were five literal argument sets in the painter against five bands of
+; literals in pn_onclick - two descriptions of one row of buttons, agreeing by
+; hand, which is SPEC.md 22's fm_hit discipline broken in a package. The table
+; is both now, and it is also what lets ONE button be redrawn for the down
+; state instead of the whole pair of rows.
+;
+; x, y, width, label, colour - ten bytes an entry, the last a pad so the
+; index is a shift rather than a multiply.
+PN_BE       equ 10
+PN_NBTN     equ 5
+pn_btab:
+    dw 2,   PN_ROW1_Y, 56, pn_l_replay
+    db CBLACK, 0
+    dw 60,  PN_ROW1_Y, 48, pn_l_clear
+    db CBLACK, 0
+    dw 52,  PN_ROW2_Y, 64, pn_l_twk
+    db CGREEN, 0
+    dw 118, PN_ROW2_Y, 40, pn_l_ode
+    db CMAGENTA, 0
+    dw 160, PN_ROW2_Y, 48, pn_l_mary
+    db CRED, 0
+pn_down:    db 0                    ; which is DRAWN pressed, 1-based, 0 = none
+
+; -----------------------------------------------------------------------------
+; pn_btn1 - draw button AL (1..PN_NBTN), pressed if it is the held one
+; -----------------------------------------------------------------------------
+pn_btn1:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov di, ax
+    dec di
+    xor dh, dh
+    mov dl, PN_BE
+    push ax
+    mov ax, di
+    mul dl
+    mov di, ax                      ; DI = the entry's offset
+    pop ax
+    mov si, [pn_btab+di+6]
+    mov cl, [pn_btab+di+8]
+    mov bx, [pn_btab+di+2]
+    mov dx, [pn_btab+di+4]
+    push ax
+    mov ax, [pn_btab+di+0]
+    call pn_btn
+    pop ax
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pn_bhit - which button is this CONTENT-relative point in? (0 = none)
+; in:  CX = x, DX = y (content-relative)
+; out: AL = 1..PN_NBTN or 0; AH clobbered
+; -----------------------------------------------------------------------------
+pn_bhit:
+    push bx
+    push si
+    push di
+    xor di, di
+    mov al, 1
+.next:
+    mov bx, [pn_btab+di+2]          ; y1
+    cmp dx, bx
+    jl .no
+    add bx, PN_BTN_H
+    cmp dx, bx
+    jge .no
+    mov bx, [pn_btab+di+0]          ; x1
+    cmp cx, bx
+    jl .no
+    add bx, [pn_btab+di+4]          ; ...+ width
+    cmp cx, bx
+    jl .out
+.no:
+    add di, PN_BE
+    inc al
+    cmp al, PN_NBTN
+    jbe .next
+    xor al, al
+.out:
+    pop di
+    pop si
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; pn_setdown - AL becomes the button drawn pressed (0 = none), and it DRAWS
+; -----------------------------------------------------------------------------
+pn_setdown:
+    push ax
+    cmp al, [pn_down]
+    je .out
+    push ax
+    mov al, [pn_down]
+    or al, al
+    jz .take
+    mov byte [pn_down], 0
+    xor ah, ah
+    call pn_btn1
+.take:
+    pop ax
+    mov [pn_down], al
+    or al, al
+    jz .out
+    xor ah, ah
+    call pn_btn1
+.out:
+    pop ax
+    ret
+
 pn_draw_btns:
     push ax
     push bx
@@ -1036,18 +1249,13 @@ pn_draw_btns:
     push dx
     push si
     push di
-    mov ax, 2
-    mov bx, PN_ROW1_Y
-    mov dx, 56
-    mov si, pn_l_replay
-    mov cl, CBLACK
-    call pn_btn
-    mov ax, 60
-    mov bx, PN_ROW1_Y
-    mov dx, 48
-    mov si, pn_l_clear
-    mov cl, CBLACK
-    call pn_btn
+    mov al, 1
+.each:
+    xor ah, ah
+    call pn_btn1
+    inc al
+    cmp al, 2
+    jbe .each
     call pn_draw_msg
     mov al, CBLACK
     call OSAPI_SET_COLOR
@@ -1055,24 +1263,13 @@ pn_draw_btns:
     mov cx, 2
     mov dx, PN_ROW2_Y+4
     call pn_cstr
-    mov ax, 52
-    mov bx, PN_ROW2_Y
-    mov dx, 64
-    mov si, pn_l_twk
-    mov cl, CGREEN
-    call pn_btn
-    mov ax, 118
-    mov bx, PN_ROW2_Y
-    mov dx, 40
-    mov si, pn_l_ode
-    mov cl, CMAGENTA
-    call pn_btn
-    mov ax, 160
-    mov bx, PN_ROW2_Y
-    mov dx, 48
-    mov si, pn_l_mary
-    mov cl, CRED
-    call pn_btn
+    mov al, 3
+.each2:
+    xor ah, ah
+    call pn_btn1
+    inc al
+    cmp al, PN_NBTN
+    jbe .each2
     pop di
     pop si
     pop dx

@@ -998,3 +998,47 @@ overlays = [
     type = "MDA"
     subtype = "Hercules"
     clock_mode = "Dynamic"
+
+# ...and the GLaBIOS twin of the SOUND machine, which is the one a CONTAINER
+# can actually run. `os8088_5150_sb` above wants `ibm5150_82_v4`, and that ROM
+# is IBM's and is not in this tree, so a fresh checkout has GLaBIOS and nothing
+# else - and until this stanza existed that meant NO machine here had a Sound
+# Blaster in it at all. Every other class already had its `_gla` twin for
+# exactly this reason (`_cga_gla`, `_herc_gla`, `_both_gla`); the sound machines
+# did not, so any measurement of the mixer had to be taken somewhere else.
+#
+# The ROM is the only difference from `os8088_5150_sb` - same 8088 at 4.77MHz,
+# same CGA, same AdLib at 0x388 and same DSP 2.01 at 0x220 - and the one thing
+# it is NOT good for is a DISK number: PERFORMANCE.md Set 38 measured GLaBIOS's
+# `int 13h` at 1.61x lighter than the period ROM's. A CPU-bound measurement
+# taken while the drive is stopped does not touch that.
+[[machine]]
+name = "os8088_5150_sb_gla"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+    [[machine.sound]]
+    type = "AdLib"
+    io_base = 0x388
+
+    [[machine.sound]]
+    type = "SoundBlaster"
+    io_base = 0x220
+    irq = 7
+    dsp_version = [2, 1]

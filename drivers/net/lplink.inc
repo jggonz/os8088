@@ -40,8 +40,15 @@ MAGQ_LO     equ 0x83F3
 
 MAXCAND     equ 8               ; the BIOS table (3) plus the three standard
                                 ; bases, deduped - so usually 3 or 4
-PROTO_VER   equ 1               ; what the reply carries, so a mismatched pair
-                                ; says so instead of desyncing
+PROTO_VER   equ 1               ; what the reply carries by DEFAULT, so a
+                                ; mismatched pair says so instead of desyncing.
+                                ; **IT IS A VARIABLE ON THE SLAVE SIDE**
+                                ; ([lp_myver]): the version byte is how a far
+                                ; end says whether it speaks the socket verbs
+                                ; (netsock.inc's NET_VER_SOCK), and OS88NET.COM
+                                ; only does when /N brought a stack up. A
+                                ; constant here would have to promise sockets
+                                ; on every run or on none
 
 ; --- every wait is bounded IN TIME, not in polls -----------------------------
 ; NET-PLAN 1.3 rule 1: a cable that is not plugged in must produce a failed
@@ -790,6 +797,7 @@ lp_turnw:   db TURN_RX          ; ticks a REVERSAL will wait - see REPLY_TMO.
 lp_svdat:   db 0
 lp_svctl:   db 0
 lp_ver:     db 0
+lp_myver:   db PROTO_VER        ; ...what WE answer with (see PROTO_VER)
 lp_dlset:   db 0
 dl_wf:      dw 0
 

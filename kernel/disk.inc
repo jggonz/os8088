@@ -390,7 +390,7 @@ dsk_dbg_trc: times DSK_DBG_TRC*2 dw 0
 ;
 ; They need NO CALLER TAGGING, which is what makes them cheap enough to be
 ; worth having: the mounted volume's own layout says which REGION a sector is
-; in, and [fpg_on] says whether the bar was counting it. So dsk_dbg_pdat is
+; in, and [fpg_total] says whether the bar was counting it. So dsk_dbg_pdat is
 ; exactly what the widget shows and the other five are exactly what it does
 ; not, with no second opinion about the boundary.
 ;
@@ -423,7 +423,7 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 
 ; -----------------------------------------------------------------------------
 ; dsk_dbg_class - attribute [dsk_run] sectors at LBA DI to a phase (internal)
-; in:  DI = the volume-relative LBA, [dsk_run] = sectors, [dsk_op], [fpg_on]
+; in:  DI = the volume-relative LBA, [dsk_run] = sectors, [dsk_op], [fpg_total]
 ; out: nothing - every register AND the flags preserved
 ;
 ; Called from inside dsk_xfer's run loop, where the flags are live and AX is
@@ -444,7 +444,10 @@ dsk_dbg_class:
     cmp ax, [dsk_datalba]
     jb .root
     mov bx, 8                   ; the data area, and the widget decides which
-    cmp byte [fpg_on], 0        ; half of the answer this sector is
+    cmp word [fpg_total], 0     ; half of the answer this sector is - the
+                                ; SCALE and not [fpg_on], which since SPEC.md
+                                ; 12.8.3 says the icon is up rather than that
+                                ; the bar is counting this sector
     jne .add
     mov bx, 10
     jmp short .add
@@ -944,6 +947,26 @@ dsk_xfer:
     push di
     push bp
 
+    call KERNEL_SEG:cw_fpg_busy ; **EVERY SECTOR IN THE MACHINE PASSES HERE,
+                                ; SO THIS IS WHERE THE PROGRESS WIDGET IS PUT
+                                ; UP** (SPEC.md 12.8.3). CX is what this call
+                                ; is about to move, and fpg_busy accumulates
+                                ; it against FPG_WARM: a mount, a directory
+                                ; walk, an icon harvest and a FAT flush all
+                                ; freeze the machine for as long as their
+                                ; sectors take and none of them has a byte
+                                ; count to arm SPEC.md 12.8's bar with, so
+                                ; until this they froze it with nothing on
+                                ; screen at all. No operation has to remember
+                                ; to ask and none can forget - dskw_sync's
+                                ; argument (22.8) at the other end of the same
+                                ; problem.
+                                ;
+                                ; ABOVE the pin and the lock, deliberately: it
+                                ; draws the first time it decides to, and
+                                ; that draw must not land inside the window
+                                ; where ES:BX is pinned and switching is off.
+                                ; Every register and the flags are preserved
 
     inc byte [sch_lock]         ; pause task switching across all int 13h
     push word [mem_pinseg]      ; NESTED, not owned: clip_put pins its source

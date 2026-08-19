@@ -3,7 +3,7 @@
 ;
 ; RCBANDBENCH: what does RUNCPM's row composer cost? apps/runcpm/rcband.inc's
 ; rc_band turns a run of terminal cells into a 1bpp band that ONE
-; OSAPI_GFX_BLIT1 puts down (SPEC.md 71.2), and every number in that section's
+; OSAPI_GFX_BLIT1 puts down (SPEC.md 74.2), and every number in that section's
 ; cost model rests on what a cell of that compose costs. PERFORMANCE.md rule 4
 ; says measure before quoting, and this is the measurement: the SAME
 ; rcband.inc the package ships is %included here and timed with
@@ -21,7 +21,7 @@
 ;   FONT_RUN 79 aligned      the bar - the same 79-cell line lettered by the
 ;                            kernel, taken in the same run (Set 64's rule)
 ;   RC_BAND 79 (shipping)    the compose alone, drawing nothing: the number
-;                            SPEC.md 71.2's model quotes per cell
+;                            SPEC.md 74.2's model quotes per cell
 ;   RC_BAND 79 (v1 loop)     the FIRST version of that loop - `loop` over
 ;                            eight rows with the stride added from memory and
 ;                            the attribute bit recomputed with two `shr ..,cl`
@@ -31,10 +31,10 @@
 ;   BLIT1 632x8 stride 80    the emit alone, the band's real stride
 ;   BAND 79 = compose+blit   what a changed row actually pays
 ;   BAND 1 cell              a cursor cell: the floor of the cheapest row draw
-;   FONT_RUN 1 cell          ...against the run it replaced (SPEC.md 71.2:
+;   FONT_RUN 1 cell          ...against the run it replaced (SPEC.md 74.2:
 ;                            the band is the first choice at EVERY n)
 ;   BAND 11 cells            the same-row cursor span, against two 1-cell
-;                            bands - the crossover 71.2 states
+;                            bands - the crossover 74.2 states
 ;
 ; AND THE IDENTITY ROWS, a correctness test in a benchmark's clothes: the
 ; string lettered by FONT_RUN, the same string composed by rc_band and blitted
@@ -58,11 +58,11 @@ section .bss align=1 follows=.text
 section .text
 
 RB_CELLS    equ 79                ; the line: 79 cells, 632 px - a framed
-                                  ; 640-px window's whole content (71.2)
+                                  ; 640-px window's whole content (74.2)
 RB_W        equ RB_CELLS * 8
 RB_STRIDE   equ 80                ; rc_band's stride: RC_COLS, always
 RB_N        equ 8                 ; iterations a row (bandbench's)
-RB_SPAN     equ 11                ; the same-row cursor span of SPEC.md 71.2
+RB_SPAN     equ 11                ; the same-row cursor span of SPEC.md 74.2
 
 ; -----------------------------------------------------------------------------
 ; rb_entry - package entry (SPEC.md 20.2)

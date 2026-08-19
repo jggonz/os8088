@@ -168,6 +168,11 @@ hd_iw_open:
     call OSAPI_WM_CREATE
     jc .out
     mov [hd_iwin], bx
+    mov ax, hd_iw_up            ; SPEC.md 13.7/13.8.1: not template words, so
+    call OSAPI_WM_ONMOUSEUP     ; a window installs them itself after create
+    mov ax, hd_iw_drag
+    call OSAPI_WM_ONDRAG
+    mov byte [hd_idown], 0
     mov al, 1                   ; WF_SNAP (SPEC.md 11.94): the content origin
     call OSAPI_WM_SNAP          ; stays on a multiple of 8, so every run in
                                 ; here takes SPEC.md 6.1's single-store path
@@ -379,6 +384,13 @@ hd_iw_button:
     mov [hd_ibw], bx            ; latched across the predicate call; SI is not
                                 ; any more - os88ui_btn takes the label there,
                                 ; so hd_ibl went with the drawing
+    mov al, cl                  ; ...and PRESSED if it is the one being held.
+    inc al                      ; ASKED FIRST, because CL is the predicate
+    cmp al, [hd_idown]          ; selector on the way in and the DIS flag on
+    mov dx, 0                   ; the way out - two meanings, one register
+    jne .nodn
+    mov dx, OS88UI_DOWN
+.nodn:
     cmp cl, 1
     je .live
     ja .rest
@@ -405,8 +417,12 @@ hd_iw_button:
     add ax, HIW_BH - 1
     mov [hd_ibrect+6], ax
     mov di, cx
-    mov bx, hd_ibrect           ; no OS88UI_FILL: hd_ibtns_draw white-fills
-    call os88ui_btn             ; the whole 16px band before re-emitting
+    or di, dx                   ; DIS | DOWN, and DIS outranks it inside the
+                                ; control, so a greyed button never says it
+                                ; will fire (SPEC.md 13.8)
+    mov bx, hd_ibrect           ; OS88UI_FILL because a RELEASE redraws this
+    or di, OS88UI_FILL          ; button over a pressed one; on a full pass
+    call os88ui_btn             ; hd_ibtns_draw has already whited the band
     pop di
     pop si
     pop dx
@@ -416,6 +432,245 @@ hd_iw_button:
     ret
 
 hd_ibrect:  dw 0, 0, 0, 0       ; the button being drawn, screen coordinates
+hd_idown:   db 0                ; which button is DRAWN pressed, 0 = none
+                                ; (SPEC.md 13.8.4). hd_isetdown is its one
+                                ; writer and hd_iw_button its one reader
+
+; -----------------------------------------------------------------------------
+; hd_ibhit - which button is this CONTENT-relative point in?
+; in:  CX = content-relative x, DX = content-relative y
+; out: AL = 1..3 (Install, Close, Restart), or 0; AH clobbered
+;
+; One description, read by the press, the drag and the release - and by the
+; painter through the same HIW_B* constants. The ids are the predicate
+; selector plus one, which is not a coincidence worth hiding: hd_iw_button's
+; CL already names the control.
+; -----------------------------------------------------------------------------
+hd_ibhit:
+    cmp dx, HIW_BY - 2
+    jl .no
+    cmp dx, HIW_BY + HIW_BH
+    jge .no
+    mov al, 1
+    cmp cx, HIW_B0X
+    jl .no
+    cmp cx, HIW_B0X + HIW_BW0
+    jl .out
+    inc al
+    cmp cx, HIW_B1X
+    jl .no
+    cmp cx, HIW_B1X + HIW_BW1
+    jl .out
+    inc al
+    cmp cx, HIW_B2X
+    jl .no
+    cmp cx, HIW_B2X + HIW_BW2
+    jl .out
+.no:
+    xor al, al
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_ictlpaint - redraw ONE button, in whatever state [hd_idown] says
+; in:  AL = 1..3; the lock is held
+; out: nothing (all registers preserved)
+;
+; NOT hd_ibtns_draw: that white-fills the whole 16px band and re-emits all
+; three, which on every press and every slide is PERFORMANCE.md's double-draw
+; flash - the defect the feature exists to avoid, introduced by the feature.
+; -----------------------------------------------------------------------------
+hd_ictlpaint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push ax
+    call hd_iorg                ; DI = content left, BP = content top
+    pop ax
+    jc .out
+    dec al
+    mov cl, al                  ; CL = the predicate selector, which IS the id
+    or al, al                   ; minus one (see hd_ibhit)
+    jnz .b1
+    mov si, hd_s_iinst          ; ...and in the apps stage it is not an INSTALL
+    cmp byte [hd_iw_st], HII_SYSDONE    ; any more (SPEC.md 52.10.10), so the
+    jne .b0                     ; button says what the click actually does -
+    mov si, hd_s_icopy          ; hd_ibtns_emit's own branch, and the one thing
+.b0:                            ; here that a caption table could not carry
+    mov ax, HIW_B0X
+    mov bx, HIW_BW0
+    jmp short .draw
+.b1:
+    cmp cl, 1
+    jne .b2
+    mov si, hd_s_close
+    mov ax, HIW_B1X
+    mov bx, HIW_BW1
+    jmp short .draw
+.b2:
+    mov si, hd_s_irest
+    mov ax, HIW_B2X
+    mov bx, HIW_BW2
+.draw:
+    call hd_iw_button
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_isetdown - AL becomes the button drawn pressed (0 = none), and it DRAWS
+; in:  AL = an id or 0; the lock is held
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+hd_isetdown:
+    push ax
+    cmp al, [hd_idown]
+    je .out
+    push ax
+    mov al, [hd_idown]          ; the one being let go, upright again
+    or al, al
+    jz .take
+    mov byte [hd_idown], 0
+    call hd_ictlpaint
+.take:
+    pop ax
+    mov [hd_idown], al
+    or al, al
+    jz .out
+    call hd_ictlpaint           ; ...and the one being taken, pressed
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_iw_pt - a SCREEN point to a content-relative one (module internal)
+; in:  CX = x, DX = y, SI = the window
+; out: CX/DX content-relative; AX, BX, DI, BP clobbered
+; -----------------------------------------------------------------------------
+hd_iw_pt:
+    push si
+    mov bx, si
+    mov si, dx
+    call OSAPI_WM_CONTENT
+    mov di, ax
+    mov bp, dx
+    sub cx, di
+    mov dx, si
+    sub dx, bp
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_iw_up - W_ONMOUSEUP (SPEC.md 13.7): the three buttons fire HERE
+; in:  CX = x, DX = y (SCREEN, possibly outside the window), SI = the window
+; out: nothing
+; -----------------------------------------------------------------------------
+hd_iw_up:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    call os88ui_fire            ; AX = what the press armed, and it is CLEARED
+    or ax, ax
+    jz .done
+    push ax
+    call hd_iw_pt
+    pop bx                      ; BL = the armed control
+    call hd_ibhit
+    cmp al, bl
+    je .fire
+    xor al, al                  ; a different control, or none: CANCELLED
+    call hd_isetdown
+    jmp short .done
+.fire:
+    mov byte [hd_idown], 0      ; NOT hd_isetdown: every path below redraws the
+                                ; band, hides the window or reboots the
+                                ; machine, and drawing this button upright
+                                ; first is PERFORMANCE.md's double-draw
+    cmp al, 2
+    je .close
+    ja .restart
+    call hd_inst_ok
+    jc .refused
+    call hd_inst_step
+    call hd_ibtns_draw          ; the stage moved, so hd_inst_ok and hd_rest_ok
+    call hd_imsg_draw           ; may both have flipped - and the message
+    jmp short .done             ; always did. The ROWS did not: hd_iw_scan
+                                ; runs at open, and a stage changes no slot's
+                                ; state (SPEC.md 52.10.6)
+.close:
+    call hd_iw_shut
+    jmp short .done
+.restart:
+    call hd_rest_ok             ; a greyed control explains itself, so a
+    jc .done                    ; refused release here says nothing (47 rule 5)
+    mov al, 1                   ; ...and NOT the flushing kind: the caption
+                                ; this button sits under has just told the
+                                ; user to take the floppy out, so the Control
+                                ; Panel's write would mount an empty drive and
+                                ; then say so (SPEC.md 20.10/52.10.6)
+    call OSAPI_REBOOT           ; POSTED, not performed: we are holding the
+    jmp short .done             ; gfx lock (SPEC.md 20.10)
+.refused:
+    ; A greyed control explains itself (SPEC.md 47 rule 5), so this says
+    ; nothing new - it makes sure the reason is on screen.
+    mov word [hd_imsg], hd_s_ibad
+    call hd_imsg_draw           ; ONE line: nothing else about the window has
+.done:                          ; changed, and a full repaint here flashed
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_iw_drag - W_ONDRAG (SPEC.md 13.8.1): the pointer moved, press still down
+; -----------------------------------------------------------------------------
+hd_iw_drag:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    call os88ui_armed           ; PEEK: the arm is the release's to spend
+    or ax, ax
+    jz .done
+    push ax
+    call hd_iw_pt
+    pop bx
+    call hd_ibhit
+    cmp al, bl
+    je .set
+    xor al, al                  ; off it: nothing is down
+.set:
+    call hd_isetdown            ; ...which draws only if that CHANGED
+.done:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
 
 ; =============================================================================
 ; Drawing the face a piece at a time (SPEC.md 52.10.6)
@@ -1226,42 +1481,16 @@ hd_iw_click:
 
     cmp dx, HIW_BY - 2
     jl .rows
-    cmp dx, HIW_BY + HIW_BH
-    jge .done
-    mov cx, [hd_iclx]
-    cmp cx, HIW_B0X
-    jl .done
-    cmp cx, HIW_B0X + HIW_BW0
-    jl .install
-    cmp cx, HIW_B1X
-    jl .done
-    cmp cx, HIW_B1X + HIW_BW1
-    jl .close
-    cmp cx, HIW_B2X
-    jl .done
-    cmp cx, HIW_B2X + HIW_BW2
-    jge .done
-    call hd_rest_ok             ; a greyed control explains itself, so a
-    jc .done                    ; refused click here says nothing (47 rule 5)
-    mov al, 1                   ; ...and NOT the flushing kind: the caption
-                                ; this button sits under has just told the
-                                ; user to take the floppy out, so the Control
-                                ; Panel's write would mount an empty drive and
-                                ; then say so (SPEC.md 20.10/52.10.6)
-    call OSAPI_REBOOT           ; POSTED, not performed: we are holding the
-    jmp short .done             ; gfx lock (SPEC.md 20.10)
-.close:
-    call hd_iw_shut
+    ; SPEC.md 13.6/13.8.4: Install writes a disk, Restart reboots the machine
+    ; and Close ends the window - not one of the three has a safe prefix
+    ; action, so the press only ARMS and DRAWS and hd_iw_up acts.
+    call hd_ibhit
+    or al, al
+    jz .done
+    xor ah, ah
+    call os88ui_arm
+    call hd_isetdown
     jmp short .done
-.install:
-    call hd_inst_ok
-    jc .refused
-    call hd_inst_step
-    call hd_ibtns_draw          ; the stage moved, so hd_inst_ok and hd_rest_ok
-    call hd_imsg_draw           ; may both have flipped - and the message
-    jmp short .done             ; always did. The ROWS did not: hd_iw_scan
-                                ; runs at open, and a stage changes no slot's
-                                ; state (SPEC.md 52.10.6)
 .rows:
     mov ax, [hd_icly]
     sub ax, HIW_R0Y - 2

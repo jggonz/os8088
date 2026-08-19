@@ -6,8 +6,10 @@ fails LOUDLY when the kernel moves under it.
 
 WHY THIS EXISTS. Nine scripts had their own copy of the window record's
 stride, the desktop's zone pitch and the Disk window's row height, and the
-kernel moved twice: WIN_SIZE went 26 -> 28 when SPEC.md 13.7 added
-W_ONMOUSEUP, and SPEC.md 26.4's square CGA icon took the zone pitch 60 -> 34
+kernel moved four times: WIN_SIZE went 26 -> 28 when SPEC.md 13.7 added
+W_ONMOUSEUP, 28 -> 30 for 13.8.2's W_ONDRAG and 30 -> 34 for 13.9's timer
+pair - this guard caught the last two on the next run, which is exactly what
+it is for - and SPEC.md 26.4's square CGA icon took the zone pitch 60 -> 34
 and its width 48 -> 32. Every copy that did not follow went on returning
 NUMBERS - a stride that decodes window 1 as garbage and reads it as unused, a
 double-click 22px below a 14-row zone that lands on bare desktop - and both
@@ -57,7 +59,7 @@ class GeomError(Exception):
 
 _MIRROR = {
     # kernel/wm.inc - the window record (SPEC.md 11)
-    "WIN_SIZE": ("kernel/wm.inc", 28),
+    "WIN_SIZE": ("kernel/wm.inc", 34),
     "MAX_WIN": ("kernel/wm.inc", 12),
     "W_FLAGS": ("kernel/wm.inc", 0),
     "W_X": ("kernel/wm.inc", 2),
@@ -107,6 +109,13 @@ _MIRROR = {
     # kernel/files.inc - a Disk window's list (SPEC.md 22)
     "FM_ROW_Y0": ("kernel/files.inc", 22),
     "FM_ROW_H": ("kernel/files.inc", 16),
+    # ...and two fields of its per-window state block, which is what lets a
+    # harness ask WHERE THE LIST IS SCROLLED TO instead of assuming row 0 is
+    # entry 0. That assumption is the one dispcp.open_named exists to end.
+    "FS_SCRL": ("kernel/files.inc", 2),
+    "FS_N": ("kernel/files.inc", 6),
+    "FS_VIEW": ("kernel/files.inc", 12),
+    "FS_VSEG": ("kernel/files.inc", 16),
     # kernel/kernel.asm - the chrome
     "MBAR_H": ("kernel/kernel.asm", 20),
     "TITLE_H": ("kernel/kernel.asm", 18),

@@ -37,7 +37,8 @@ for i, a in enumerate(sys.argv):
     if a == "--machine":
         MACHINE = sys.argv[i + 1]
 APPS = "build/calcref.img" if REF else "build/apps360.img"
-ROW = 1 if REF else 2              # the reference disk holds CALCREF alone
+PKG = "CALCREF.O88" if REF else "CALC.O88"   # the reference disk holds
+                                            # CALCREF alone
 
 # '+' is the NUMPAD plus, not Shift+Equal, and that is not cosmetic: a key
 # injected while the machine is PAUSED lands in the emulator's queue with no
@@ -75,10 +76,10 @@ with os88marty.launch("build/os8088-360.img", apps=APPS,
     dispcp.open_drive(m, mo, S, os88marty.settle, "B")
     w = dispcp.win_list(m, S)
     wx, wy, ww, wh = dispcp.win_rect(m, S, w[-1])
-    dispcp.open_row(m, mo, S, os88marty.settle, wx, wy, 0)      # APPS
+    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "APPS")
     w = dispcp.win_list(m, S)
     wx, wy, ww, wh = dispcp.win_rect(m, S, w[-1])
-    dispcp.open_row(m, mo, S, os88marty.settle, wx, wy, ROW)    # CALC.O88
+    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, PKG)
     time.sleep(2)
     slot = dispcp.win_list(m, S)[-1]
     print("CALC%s at %s on %s\n"

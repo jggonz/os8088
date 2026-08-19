@@ -48,30 +48,23 @@
 ; into it exactly as wm_pkgcall calls a package (SPEC.md 52.11).
 PKG_DISP     equ 12
 
-; --- driver classes, mirrored from kernel/driver.inc -------------------------
+; --- driver classes ----------------------------------------------------------
+; DRVC_* IS IN apps/os88api.inc, which this file includes above, and it is
+; there rather than here because a PACKAGE names one too: OSAPI_DRV_CALL takes
+; a class in BH (SPEC.md 20.11). It was mirrored in both for as long as only
+; drivers could name one, and a mirror that nothing checks is a second opinion
+; waiting to differ - the kernel's copy in kernel/driver.inc is the third and
+; is the one that cannot be shared, a driver never including a kernel header.
+;
 ; A class is also a PUBLICATION SLOT: one driver of each class may be
 ; attached at a time, and each has its own copy of the service table below,
 ; so a sound driver and a disk driver do not disconnect one another.
-DRVC_SOUND   equ 1
-DRVC_DISK    equ 2              ; block volumes: hard disks (SPEC.md 51.8)
-DRVC_DEBUG   equ 3              ; the serial monitor (SPEC.md 58): no service
-                                ; the kernel dispatches, only a Control Panel
-                                ; page - but a class of its own, because a
-                                ; class is the publication slot and sharing
-                                ; one disconnects the driver already in it
-DRVC_FILE    equ 5              ; a volume served by somebody ANSWERING
-                                ; QUESTIONS ABOUT FILES rather than about
-                                ; sectors (SPEC.md 62.9). Its verbs are a
-                                ; table of their own, reached through DSV_FS
-                                ; below, because DSV_* is full
-DRVC_NET     equ 4              ; the parallel link (docs/NET-PLAN.md): a
-                                ; SECOND block-serving class beside DRVC_DISK,
-                                ; which is what dsk_vtab's DV_CLASS exists for
-DRVC_OVL     equ 0x40           ; NOT A KERNEL CLASS. A driver's own loadable
-                                ; half (OS88_OVERLAY below): the kernel never
-                                ; loads one and drv_check would refuse it, and
-                                ; the number is here so that saying so is a
-                                ; property of the file rather than a comment.
+DRVC_OVL     equ 0x40           ; NOT A KERNEL CLASS, so it stays here. A
+                                ; driver's own loadable half (OS88_OVERLAY
+                                ; below): the kernel never loads one and
+                                ; drv_check would refuse it, and the number is
+                                ; here so that saying so is a property of the
+                                ; file rather than a comment.
                                 ; It WAS 4 and moved when DRVC_NET took that
                                 ; number: a real class costs a publication
                                 ; slot (42 bytes) and burning one to leave a
@@ -223,7 +216,69 @@ DSV_FS       equ 26             ; dw: DRVC_FILE only - the FSV_* verb table,
                                 ; class into the kernel's .bss and thirteen
                                 ; would be charged to every machine including
                                 ; the ones with no driver at all
-DSV_SIZE     equ 28
+DSV_CPKEY    equ 28             ; dw: near proc: that page's KEY (SPEC.md
+                                ; 31.9.2). **BL = ASCII, BH = scan code** and
+                                ; the gfx lock is HELD exactly as it is for a
+                                ; click. 0 = this page takes no keys, which is
+                                ; every page that existed before this cell -
+                                ; and until it, the Control Panel's own window
+                                ; had no W_ONKEY, so a page could not be typed
+                                ; into at all.
+                                ;
+                                ; **BX AND NOT AX**, unlike int 16h and unlike
+                                ; W_ONKEY, because drv_cp_call carries the
+                                ; CLASS in AL (SPEC.md 31.9) - AX is the one
+                                ; register no page ABI argument may use. In AX
+                                ; this assembles, boots, and hands the page a
+                                ; class number as a keystroke.
+                                ;
+                                ; YOU MUST REPAINT WHAT YOU CHANGE, as with a
+                                ; click: the kernel does not repaint after you
+                                ; return. Answer CF = 0 when you took the key
+                                ; and CF = 1 when you did not - an unclaimed
+                                ; key is not an error, it is a key that belongs
+                                ; to nobody, and the panel drops it
+DSV_CPUP     equ 30             ; near proc: that page's RELEASE, with the
+                                ; same DI/DX/CX/BX as DSV_CPCLICK. 0 = I do
+                                ; not want releases, and my page acts on the
+                                ; press as it always did (SPEC.md 13.8.4)
+DSV_CPDRAG   equ 32             ; near proc: the TRACKING edge - the pointer
+                                ; moved while the press is still down, same
+                                ; arguments, and only when the point CHANGED.
+                                ; What it is for is un-drawing a pressed
+                                ; control the pointer has left (SPEC.md 13.8.1)
+DSV_PKGCALL  equ 34             ; dw: near proc reached by OSAPI_DRV_CALL -
+                                ; THE FENCE (SPEC.md 20.11). Publish it and a
+                                ; package can call you; leave it 0 and it
+                                ; cannot. HDD.DRV leaves it 0, so no package
+                                ; can reach DSV_BLK and write a raw sector.
+                                ;
+                                ;   in  BL = a verb YOU define, BH = your class
+                                ;       AX/CX/DX/SI/DI = yours to define
+                                ;       ES = THE CALLING PACKAGE'S SEGMENT, so
+                                ;            a buffer it hands you is ES:SI or
+                                ;            ES:DI - this is the one driver
+                                ;            entry point where ES is not the
+                                ;            kernel's
+                                ;       DS = yours, BP spent by the dispatcher
+                                ;   out whatever you define; CF and AX reach
+                                ;       the package unchanged
+                                ;
+                                ; **IT WAS 28 AND MOVED TO 34 IN A MERGE**, because the three page cells
+                                ; above were appended at the same numbers on
+                                ; the integration branch. A driver's service
+                                ; table is copied by OFFSET, so two tables that
+                                ; disagree about a cell hand the kernel one
+                                ; routine where it asked for another - which is
+                                ; why every driver here pads to DSV_SIZE rather
+                                ; than ending where its last row does.
+                                ;
+                                ; WORKER-SAFE IS YOUR CLAIM, NOT THE KERNEL'S
+                                ; (SPEC.md 20.6 rule 7): the cell itself takes
+                                ; no lock and raises no sch_lock, so a verb of
+                                ; yours is callable from a package's worker
+                                ; only if what it does is. Say so per verb.
+DSV_SIZE     equ 36
 
 ; --- DSV_FS: the file redirector's verbs (SPEC.md 62.9) ----------------------
 ; A DRVC_FILE volume has NO SECTORS - no BPB, no FAT, no directory to walk -

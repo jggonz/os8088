@@ -7,6 +7,13 @@
 > disagree, SPEC.md is the contract. §2.2.1 records which milestones are
 > built and which are not.
 
+> **Stage 3 — the socket half — has moved to docs/NET-STACK-PLAN.md**, which
+> takes §5 further than this document could: it covers mTCP forwarding *and*
+> an 8-bit Ethernet card behind **one** socket API, because those are the same
+> feature to a package and two very different prices to build. Its consumer is
+> docs/BROWSER-PLAN.md. §1–§4 and §6–§9 here are unchanged and still describe
+> the transport, the redirector and the DOS side.
+
 SPEC.md is the binding contract for what
 the kernel *is*; this is the study of what it would take to put a **LapLink
 parallel link to a DOS machine** behind a loadable driver (SPEC.md §51) — a

@@ -4,12 +4,12 @@
  * A BUILD-HOST PROGRAM (docs/RUNCPM-PORT-PLAN.md wave 4). It never runs on
  * the 8086, it is not in the package, and apps/runcpm/build.sh compiles and
  * runs it BEFORE the target build; a failure stops the build. Part of RUNCPM
- * (SPEC.md 71), a reimplementation of RunCPM 6.9 by Marcelo Dantas / "Mockba
+ * (SPEC.md 74), a reimplementation of RunCPM 6.9 by Marcelo Dantas / "Mockba
  * the Borg" (MIT licence, Copyright (c) 2017 Mockba the Borg): the values it
  * expects - the extent chain, the record codes, $$$.SUB's shape - are worked
  * by hand from RunCPM/disk.h and cpm.h.
  *
- * WHY. rcfs.c (SPEC.md 71.3) reimplements RunCPM's disk.h over whole files
+ * WHY. rcfs.c (SPEC.md 74.3) reimplements RunCPM's disk.h over whole files
  * in heap claims: the FCB and directory-entry synthesis, the record math in
  * 16 bits, the open-file table with its eviction and write-back, the search
  * state and the multi-extent chain, $$$.SUB's truncation on close, the

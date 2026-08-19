@@ -47,6 +47,10 @@
 ; =============================================================================
 
 %include "os88drv.inc"
+%define NETPKG_DRIVER           ; the constants, not the client half
+%include "netpkg.inc"           ; the SOCKET ABI (SPEC.md 62.11) - the same
+                                ; file a package includes, so the two ends
+                                ; cannot drift
 
     OS88_DRIVER 'os88net', DRVC_FILE, net_entry
 
@@ -146,24 +150,50 @@ net_svc:
     dw net_cp_click             ; DSV_CPCLICK
     dw 0                        ; DSV_CPCLOSE
     dw net_fsv                  ; DSV_FS      - ...through this table
+    dw 0                        ; DSV_CPKEY   - this page takes no keys
+    dw net_cp_up                ; DSV_CPUP    - Connect fires on the RELEASE
+    dw net_cp_drag              ; DSV_CPDRAG  - ...and follows the pointer
+                                ;               between the two edges
+                                ;               (SPEC.md 13.8.4)
+    dw net_pkg                  ; DSV_PKGCALL - AND SOCKETS (SPEC.md 62.11,
+                                ; drivers/net/netpkg.inc). One of the three
+                                ; drivers in the tree that open the package
+                                ; door, and the reason the door exists: a
+                                ; browser needs a connection and os8088 has no
+                                ; networking code at all (SPEC.md 20.11)
+    times DSV_SIZE - ($ - net_svc) db 0
+                                ; drv_publish copies DSV_SIZE bytes
+                                ; whatever this table's length is, so
+                                ; one that stops short publishes
+                                ; whatever FOLLOWS it - see
+                                ; ramdisk.asm, which did. This one is
+                                ; exact today and the pad is what
+                                ; keeps it exact when DSV_SIZE grows
 
 ; The FSV_* verbs (SPEC.md 62.9.1). A cell of 0 is "not implemented", which
 ; drv_fs_call answers as an ordinary refusal rather than a fault - so a phase
 ; lands its own verbs and the ones after it decline cleanly meanwhile.
+;
+; **EVERY CELL POINTS AT A GATE THUNK AND NOT AT THE VERB** (SPEC.md 62.11):
+; the wire is shared with the socket verbs now, which a package's WORKER may
+; be inside, so a file verb has to own it for its whole run. net_fgate is that
+; ownership and netsock.inc's NFSGATE macro is the six bytes per cell. Adding
+; a verb here without a thunk is not a thing that can be forgotten quietly -
+; the cell has nothing to name until one exists.
 net_fsv:
-    dw net_list                 ; FSV_LIST
-    dw net_chdir                ; FSV_CHDIR
-    dw net_stat                 ; FSV_STAT
-    dw net_read                 ; FSV_READ
-    dw net_write                ; FSV_WRITE
-    dw net_append               ; FSV_APPEND
-    dw net_readat               ; FSV_READAT
-    dw net_delete               ; FSV_DELETE
-    dw net_rename               ; FSV_RENAME
-    dw net_mkdir                ; FSV_MKDIR
-    dw net_rmdir                ; FSV_RMDIR
-    dw net_dfree                ; FSV_DFREE
-    dw net_enum                 ; FSV_ENUM (SPEC.md 62.9.7/62.10.6) - the verb
+    dw nfs_list                 ; FSV_LIST
+    dw nfs_chdir                ; FSV_CHDIR
+    dw nfs_stat                 ; FSV_STAT
+    dw nfs_read                 ; FSV_READ
+    dw nfs_write                ; FSV_WRITE
+    dw nfs_append               ; FSV_APPEND
+    dw nfs_readat               ; FSV_READAT
+    dw nfs_delete               ; FSV_DELETE
+    dw nfs_rename               ; FSV_RENAME
+    dw nfs_mkdir                ; FSV_MKDIR
+    dw nfs_rmdir                ; FSV_RMDIR
+    dw nfs_dfree                ; FSV_DFREE
+    dw nfs_enum                 ; FSV_ENUM (SPEC.md 62.9.7/62.10.6) - the verb
                                 ; a FOLDER copy walks its source with. This
                                 ; carried 0 for two milestones, and the effect
                                 ; was not a broken copy but a REFUSED one:
@@ -171,8 +201,8 @@ net_fsv:
                                 ; and answers FERR_PROT, so dragging a folder
                                 ; onto or off the Link volume reported
                                 ; `Protected` and moved nothing
-    dw net_copy                 ; FSV_COPY (SPEC.md 62.9.8)
-    dw net_rmtree               ; FSV_RMTREE (SPEC.md 62.10.7) - the far side
+    dw nfs_copy                 ; FSV_COPY (SPEC.md 62.9.8)
+    dw nfs_rmtree               ; FSV_RMTREE (SPEC.md 62.10.7) - the far side
                                 ; recurses with its own int 21h, so a tree
                                 ; costs one command frame instead of an
                                 ; FSV_ENUM and an FSV_DELETE per file
@@ -269,6 +299,13 @@ net_detach:
 .done:                          ; is NET-PLAN 1.4.3's whole point
     mov byte [net_state], NS_NOPORT
     mov byte [net_vol], 0xFF
+    call nsk_drop               ; every socket goes with the session. NC_BYE
+                                ; above is what tells the far side so; this is
+                                ; what stops a package's stale handle naming
+                                ; one the NEXT link hands out
+    mov byte [net_busy], 0      ; ...and the wire is nobody's. A detach that
+                                ; left it claimed would refuse every file verb
+                                ; of the next attach with FERR_IO
     ret
 
 ; =============================================================================
@@ -370,6 +407,10 @@ net_connect:
 .linked:
     mov byte [net_state], NS_LINKED
     mov byte [net_lost_f], 0    ; a fresh link is not the old one's failure
+    call nsk_drop               ; ...and a fresh link has NO SOCKETS. The far
+                                ; side dropped its own when the session ended,
+                                ; so a handle from the last link would name
+                                ; whatever this one hands out next
 %ifndef NET_TURN1               ; ...`make NETTURN1=1` is the A/B, and leaving
                                 ; the store out is the WHOLE of the old
                                 ; behaviour: lp_init already set TURN_RX
@@ -1806,6 +1847,7 @@ net_lost:
                                 ; four sites that reach here
 
 %include "netui.inc"            ; the Control Panel page (SPEC.md 31.9)
+%include "netsock.inc"          ; ...the SOCKET half (SPEC.md 62.11)
 %include "lplink.inc"           ; ...and the transport, shared with tests/lptlink
 %include "os88ui.inc"           ; ...and the standard control (SPEC.md 20.5.1)
 
@@ -1868,5 +1910,26 @@ net_len:    dd 0                ; ...and what it says it is sending
 net_off:    dd 0                ; FSV_READAT's window
 net_bseg:   dw 0                ; the destination, which walks a segment at a
 net_boff:   dw 0                ; time - see net_rdnorm
+
+; --- the socket half's state (SPEC.md 62.11, netsock.inc) --------------------
+net_busy:   db 0                ; THE WIRE'S MUTEX. One byte, and the first
+                                ; thing in this driver that two tasks touch:
+                                ; the file verbs are the UI task's and the
+                                ; socket verbs are a package worker's
+net_sk:     times NET_SOCKS db NSK_FREE     ; per handle, the state we last
+                                ; saw. NSK_FREE is 0 and is never a live
+                                ; state, so this array is both the allocator
+                                ; and the mirror - which is what stops
+                                ; NETV_STATE's free count and nsk_hchk being
+                                ; two opinions about the same thing
+net_sport:  dw 0                ; a port, banked across the command byte
+net_shnd:   db 0                ; ...a handle, likewise
+net_sst:    db 0                ; the far side's status byte
+net_sstate: db 0                ; and its socket state - or, in nsk_reply_h,
+                                ; the state WE mean to record. Both live
+                                ; across an lp_rbyte, whose contract is about
+                                ; AL and says nothing about the high half
+net_slen:   dw 0                ; bytes in flight
+net_scap:   dw 0                ; ...and what we told it we could take
 
     OS88_DRV_END

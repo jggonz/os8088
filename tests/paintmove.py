@@ -33,7 +33,7 @@ sys.path.insert(0, "/home/user/os8088/tests")
 import os88marty, os88mouse, os88sym, os88geom, dispcp
 
 MC_SIZE, MEM_MAX = 10, 32
-ROW_HEAPFRAG, ROW_PAINT = 0, 1          # the listing is sorted by name (19.4)
+PKG_HEAPFRAG, PKG_PAINT = "HEAPFRAG.O88", "PAINT.O88"
 
 
 def pkg_syms(src, incs=("apps/",)):
@@ -146,7 +146,7 @@ def main():
             os88marty.settle(m)
 
         # --- heapfrag first, so it owns the floor of the arena --------------
-        dispcp.open_row(m, mo, S, os88marty.settle, wx, wy, ROW_HEAPFRAG)
+        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, PKG_HEAPFRAG)
         time.sleep(22)
         os88marty.settle(m)
         hf_seg, hf_win = pkg_seg(m, S, "Heap")
@@ -154,7 +154,7 @@ def main():
 
         # --- then Paint, which lands ABOVE it -------------------------------
         raise_disk()
-        dispcp.open_row(m, mo, S, os88marty.settle, *disk, row=ROW_PAINT)
+        dispcp.open_named(m, mo, S, os88marty.settle, *disk, name=PKG_PAINT)
         time.sleep(6)
         os88marty.settle(m)
         pt_seg, pt_win = pkg_seg(m, S, "Paint")
@@ -223,7 +223,7 @@ def main():
 
         # --- and run it again, whose big claim forces the compaction --------
         raise_disk()
-        dispcp.open_row(m, mo, S, os88marty.settle, *disk, row=ROW_HEAPFRAG)
+        dispcp.open_named(m, mo, S, os88marty.settle, *disk, name=PKG_HEAPFRAG)
         time.sleep(22)
         os88marty.settle(m)
 

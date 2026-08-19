@@ -1,0 +1,29 @@
+# A `proxy-v*` tag publishes os88proxy.exe as a release asset.
+#
+#     git tag proxy-v1.0.0 && git push origin proxy-v1.0.0
+#
+# It builds NOTHING of its own: it calls os88proxy-exe.yml, so the binary a
+# tester downloads is the one that branch's own gates built and checked, and
+# there is no second copy of the build to drift.
+#
+# A release rather than an Actions artifact for two reasons: CLAUDE.md's rule
+# that a binary belongs in a release where a version can be attached to it,
+# and the practical one - an artifact needs a GitHub account to download and a
+# release asset does not.
+name: os88proxy.exe (release)
+
+on:
+  push:
+    tags:
+      - 'proxy-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    uses: ./.github/workflows/os88proxy-exe.yml
+    with:
+      release_tag: ${{ github.ref_name }}
+    permissions:
+      contents: write

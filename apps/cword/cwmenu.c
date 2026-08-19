@@ -2,7 +2,7 @@
  * os8088 - apps/cword/cwmenu.c        Word's nine menus, and the bar they hang
  *                                     from
  *
- * #included by cword.c - one translation unit (SPEC.md 70.1).
+ * #included by cword.c - one translation unit (SPEC.md 73.1).
  *
  * EVERY STRING BELOW IS VERBATIM FROM `Opus/resource/menus.cmd` (Microsoft
  * Word for Windows 1.1a, Computer History Museum release, 2014), MW_MENU - the
@@ -19,7 +19,7 @@
  *
  * AN ARRAY OF STRUCTS, WHICH IS ALLOWED AND IS THE SAFER CHOICE. The C rule
  * here is `no struct assignment, no struct by value, no struct return`
- * (SPEC.md 70.5.1) - because ES is the kernel's and SmallerC copies a struct
+ * (SPEC.md 73.5.1) - because ES is the kernel's and SmallerC copies a struct
  * with `rep movsb` - and INDEXING one copies nothing: `cw_it[i].label` is
  * address arithmetic and a word load. The first draft of this file was five
  * parallel arrays and it was wrong on the day it was written: four items had
@@ -113,7 +113,7 @@ static const struct cw_item cw_it[] = {
          { "Draft",            0,                 CWF_CHK, 0, 'D', CWA_DRAFT  },
          /* Draft wraps to the WINDOW and Page wraps to the SHEET - a 60-cell
           * column centred in the content, its edges drawn and a tick where a
-          * page begins (SPEC.md 70.12.1, and SPEC.md 68.11 for the same mode in
+          * page begins (SPEC.md 73.12.1, and SPEC.md 68.11 for the same mode in
           * the assembly port). They are a LIVE PAIR: exactly one of the two
           * carries a check, which cw_item_chk() answers from cw_page. */
          { "Page",             0,                 CWF_CHK, 0, 'P', CWA_PAGE   },

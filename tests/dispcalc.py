@@ -301,10 +301,10 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     dispcp.open_drive(m, mo, S, os88marty.settle, "B")
     w = dispcp.win_list(m, S)
     wx, wy, ww, wh = dispcp.win_rect(m, S, w[-1])
-    dispcp.open_row(m, mo, S, os88marty.settle, wx, wy, 0)          # APPS
+    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "APPS")
     w = dispcp.win_list(m, S)
     wx, wy, ww, wh = dispcp.win_rect(m, S, w[-1])
-    dispcp.open_row(m, mo, S, os88marty.settle, wx, wy, 2)          # CALC.O88
+    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "CALC.O88")
     time.sleep(2)
     slot = dispcp.win_list(m, S)[-1]
     cx, cy, cw, ch = dispcp.win_rect(m, S, slot)

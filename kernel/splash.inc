@@ -23,7 +23,7 @@
 ; the first tick can arrive.
 ; =============================================================================
 
-SPL_RESIDENT equ 8              ; sectors the boot sector waits for before
+SPL_RESIDENT equ 9              ; sectors the boot sector waits for before
                                 ; ticking us (must match boot/boot.asm).
                                 ; It was 6, and the module ended at 3,072
                                 ; bytes EXACTLY - no headroom at all, so the
@@ -43,6 +43,21 @@ SPL_RESIDENT equ 8              ; sectors the boot sector waits for before
                                 ; ended 4 bytes over 3,584. Shaving four bytes
                                 ; off a module that has twice filled its rung
                                 ; buys one more collision; a sector buys 512.
+                                ;
+                                ; **AND IT IS 9 FOR THE THIRD**, which is the
+                                ; same shape a third time and by now a pattern
+                                ; worth naming: another MERGE, SPEC.md 72's
+                                ; Ethernet driver arriving on top of the
+                                ; integration branch's four new API slots. The
+                                ; module ended 20 bytes over 4,096, and the 20
+                                ; is one API slot: 8 bytes of jump table plus
+                                ; its 12-byte X stub, both of which live above
+                                ; this module by construction. Nothing in
+                                ; splash.inc grew at all - which is precisely
+                                ; what "fires on whatever crosses the line"
+                                ; means, and why shaving bytes out of the
+                                ; splash would have been work aimed at the
+                                ; wrong file.
                                 ;
                                 ; One more sector is one more BIOS read before
                                 ; the bar starts moving: ~24 ms on the field

@@ -64,15 +64,22 @@ def main():
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")
         disk = dispcp.win_list(m, S)[-1]
         bx, by = dispcp.win_rect(m, S, disk)[:2]
-        dispcp.open_row(m, mo, S, os88marty.settle, bx, by, 1)   # MEDIA
+        dispcp.open_named(m, mo, S, os88marty.settle, bx, by, "MEDIA")
         os88marty.settle(m)
 
-        # ROW 1 IS OS8088.GIF - row 0 is the synthesized `..` (SPEC.md 19.5).
-        # Double-clicking it launches Paint THROUGH THE ASSOCIATION (SPEC.md
-        # 54) with the picture already decoded and drawn, which is exactly the
-        # operation the field timed and is one click rather than a menu walk.
+        # OS8088.GIF, double-clicked, launches Paint THROUGH THE ASSOCIATION
+        # (SPEC.md 54) with the picture already decoded and drawn, which is
+        # exactly the operation the field timed and is one click rather than a
+        # menu walk. The click is hand-built rather than open_named's because
+        # the whole measurement is the cycles either side of it - but WHICH
+        # ROW is still asked rather than written down (it used to be a literal
+        # 1, on the reasoning that row 0 is the synthesized `..`).
         bx, by, bw, bh = dispcp.win_rect(m, S, disk)
-        rx, ry = dispcp.row_xy(bx, by, 1)   # the module owns this formula
+        rx, ry = dispcp.row_xy(bx, by,
+                               dispcp.scroll_to(m, mo, S, os88marty.settle,
+                                                bx, by,
+                                                dispcp.row_of(m, S,
+                                                              "OS8088.GIF")))
 
         mo.to(rx, ry)
         os88marty.settle(m)

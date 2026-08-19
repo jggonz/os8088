@@ -1,7 +1,7 @@
 /* ============================================================================
  * os8088 - tests/chello/chello.c
  *
- * THE C TOOLCHAIN'S CAPABILITY GATE (SPEC.md 70): the first program written in
+ * THE C TOOLCHAIN'S CAPABILITY GATE (SPEC.md 73): the first program written in
  * C that this operating system ever loaded and ran. Everything else about the
  * toolchain - the compiler patch set, tools/cc8086.py, apps/cc/crt0.asm, the
  * cdecl bridge in apps/cc/os88thunk.asm - is inference from emitted assembly
@@ -36,7 +36,7 @@
  *     segment, so the address of an automatic is a stack offset that every
  *     later dereference resolves through DS - the program writes to the stack
  *     and reads out of its own image. tools/cc8086.py refuses the bp-relative
- *     `lea` by name (70.5), so this is a build failure and not a bug. The two
+ *     `lea` by name (73.5), so this is a build failure and not a bug. The two
  *     out-parameter structs below are `static` inside their function, which is
  *     the idiom; so is every char buffer, because os88_utoa() takes an address.
  *  2. NOTHING TAKES ES. No string instruction is reachable from here: the four
@@ -45,7 +45,7 @@
  *     os88_wm_content()/os88_wm_geom() rather than dereferenced.
  *  3. THE FRAMES ARE TINY. No function here has more than four `int` locals;
  *     the build prints every frame size and the largest in this file is 8
- *     bytes. The UI task has about 700 bytes of headroom (70.8).
+ *     bytes. The UI task has about 700 bytes of headroom (73.8).
  *  4. NO 32-BIT INTEGER AND NO float. Nothing here wants one.
  *
  * ---------------------------------------------------------------------------
@@ -61,7 +61,7 @@
  * double-draw flash that PERFORMANCE.md names as one of the three defects an
  * emulator cannot show you. That is the whole cost model of this OS in one
  * window, and it is exactly the sum that stops being affordable in a real
- * application - which is what SPEC.md 70.11 is about.
+ * application - which is what SPEC.md 73.11 is about.
  * ==========================================================================*/
 
 #include "os88.h"
@@ -104,7 +104,7 @@ static char ch_num[8];                  /* os88_utoa() take their addresses     
 static struct os88_pt   ch_org;
 static struct os88_size ch_sz;
 
-/* --- string building, which is all a C program gets (SPEC.md 70.9: no printf,
+/* --- string building, which is all a C program gets (SPEC.md 73.9: no printf,
  * because the family is thousands of bytes for the one conversion anybody
  * wanted) ------------------------------------------------------------------ */
 
@@ -163,7 +163,7 @@ static void ch_draw(void *win)
     int x, y, right;
 
     /* ch_org and ch_sz are STATIC because `&automatic` is refused at build
-     * time (70.5). Verified rather than assumed: making just this one an
+     * time (73.5). Verified rather than assumed: making just this one an
      * ordinary local and rebuilding gives
      *
      *   error: `lea ax, [bp-10]` takes the address of an automatic. [...]
@@ -256,7 +256,7 @@ void os88_paint(void *win)
 void os88_onclick(int x, int y, void *win)
 {
     os88_wm_content(win, &ch_org);           /* &static: an out-parameter has
-                                              * to point at one (70.5) */
+                                              * to point at one (73.5) */
     ch_mx = x - ch_org.x;
     ch_my = y - ch_org.y;
     ch_clicks++;

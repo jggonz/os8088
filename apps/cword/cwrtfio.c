@@ -49,7 +49,7 @@
  * trips documents through it, so a defect in the writer or the reader is a
  * failed build on a Mac rather than a corrupted file discovered in an
  * emulator. `nasm -f bin` has no notion of an external symbol, so a C package
- * is exactly one translation unit (SPEC.md 70.1) - this file is #included by
+ * is exactly one translation unit (SPEC.md 73.1) - this file is #included by
  * cword.c, once, and by the host harness, once, and is not compiled alone.
  *
  * ---------------------------------------------------------------------------
@@ -64,7 +64,7 @@
  *
  * A parallel byte array rather than a run list because every access in the
  * layout and redraw paths is then O(1) with no search, and because bss is the
- * cheap half of the 60KB ceiling (SPEC.md 70.9): 4,000 characters cost 8,000
+ * cheap half of the 60KB ceiling (SPEC.md 73.9): 4,000 characters cost 8,000
  * bytes of bss and NO file bytes, where the equivalent run list would cost
  * code, which is paid for twice.
  *
@@ -140,7 +140,7 @@ int cw_tjc;                             /* the pending tab stop's jc */
 
 /* The group stack (Opus SavePropsRtf, RTFIN.C:395). Parallel arrays and not
  * an array of structs, because a struct assignment is a `rep movsb` and ES is
- * the kernel's (SPEC.md 70.5.1) - the same rule that shapes the document
+ * the kernel's (SPEC.md 73.5.1) - the same rule that shapes the document
  * model shapes this. Only the state cword can actually act on is stacked:
  * character formatting, the destination, and the \* flag. */
 #define CW_STK_MAX  16                  /* {\rtf{\fonttbl{\f0 x;}}} is 3 */
@@ -520,7 +520,7 @@ int ovl_hexval(int c)
 
 /* The scanned control word, in file scope because an out-parameter would have
  * to point at something and pointing it at an automatic is refused at build
- * time (SPEC.md 70.5). */
+ * time (SPEC.md 73.5). */
 char cw_kw[34];
 int  cw_kw_val;
 int  cw_kw_fval;
@@ -821,7 +821,7 @@ void ovl_emit(const char *s)
 /* The digit stack is STATIC, not a local array: the address of an automatic is
  * a bare offset that every later dereference resolves through DS while the
  * bytes live on the LOW_SEG stack, and tools/cc8086.py refuses the
- * bp-relative `lea` that would produce it (SPEC.md 70.5). A local `char d[8]`
+ * bp-relative `lea` that would produce it (SPEC.md 73.5). A local `char d[8]`
  * here is the most natural thing to write and it does not build. */
 char cw_dig[8];
 

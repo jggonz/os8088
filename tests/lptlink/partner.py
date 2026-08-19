@@ -37,6 +37,10 @@ trips with the emulator stepped in between, so this is the instrument for
 number comes off two period boxes and PERFORMANCE.md Set 39 already has it.
 """
 
+import errno
+import select
+import socket
+
 MAGIC_Q = b'O88?'                # master -> slave
 MAGIC_R = b'O88!'                # slave -> master, then a version byte
 
@@ -63,14 +67,44 @@ STEP = 400
 SEE = 8
 TURN = 40
 
-# NO BLIND STEPPING AFTER THE PRESS, and that is the whole of what
+# NO BLIND STEPPING PAST THE EDGE THAT ACTS, and that is the whole of what
 # click_paused had to unlearn. Stepping a mouse packet's worth (60,000
 # instructions) to "let the UART clear" runs the guest straight through the
-# click dispatch and into net_connect, which sends NC_BYE and the magic into a
-# wire nobody is watching - so the partner starts looking after the
-# conversation has already begun and waits out its budget on nibbles that
-# came and went. The partner's own 400-step loop clocks the UART perfectly
-# well; it just has to be the thing doing the stepping.
+# dispatch and into net_connect, which sends NC_BYE and the magic into a wire
+# nobody is watching - so the partner starts looking after the conversation
+# has already begun and waits out its budget on nibbles that came and went.
+# The partner's own 400-step loop clocks the UART perfectly well; it just has
+# to be the thing doing the stepping.
+#
+# **WHICH EDGE THAT IS HAS CHANGED, AND THE RULE HAS NOT.** This said "after
+# the PRESS" for as long as ui_task dispatched a panel control on MDOWN.
+# SPEC.md 13.8.3 moved every one of them to the RELEASE, and a PACKAGE's own
+# W_ONCLICK still fires on MDOWN - so the two cases are two methods and the
+# choice is which EDGE acts, never which window is in front.
+# click_paused_release steps freely BETWEEN the two edges (it has to, the
+# mouse being a 1200-baud UART that DROPS a packet sent while its predecessor
+# is in flight, and a press now puts nothing on the wire) and stops dead at
+# the release; click_paused sends the press and stops dead there. Read this
+# before "simplifying" either: stepping past whichever edge acts puts the
+# failure back exactly as it reads above, and it reads as a broken CABLE.
+
+
+# --- the socket half (SPEC.md 62.11, drivers/net/netpkg.inc) -----------------
+# Mirrored from netpkg.inc and netsock.inc. They are the contract and this is
+# the second copy - there is no way for a Python far end to include an asm
+# header, which is exactly why every one of these carries its name from there.
+NET_VER_SOCK = 2                 # the version byte that says "I speak sockets"
+NET_HOSTMAX = 64                 # the fixed host field on the wire
+NET_SOCKS = 4                    # simultaneous handles
+NET_SKMAX = 1024                 # the most one SEND or RECV moves
+
+NSK_FREE, NSK_CONNECT, NSK_UP = 0, 1, 2
+NSK_CLOSING, NSK_CLOSED, NSK_FAILED, NSK_LISTEN = 3, 4, 5, 6
+
+NSTF_PORT, NSTF_LINK, NSTF_SOCK = 0x01, 0x02, 0x04
+
+NETE_OK, NETE_NOLINK, NETE_BUSY, NETE_HANDLE = 0, 1, 2, 3
+NETE_FULL, NETE_IO, NETE_REFUSED, NETE_VERB = 4, 5, 6, 7
 
 
 class LinkTimeout(Exception):
@@ -117,6 +151,28 @@ class Partner(object):
         self._owed = False
         self._ackowed = False
         self._status(idle=True)
+
+    def allow(self, steps):
+        """Give the guest `steps` more emulator steps FROM NOW.
+
+        **`budget` IS A LIFETIME TOTAL AND `spent` NEVER RESETS**, which is the
+        one thing about this class that reads backwards. `_step` raises when
+        `spent > budget`, and `serve` raises the ceiling only for the wait on
+        a COMMAND BYTE (`idle`) and puts it straight back afterwards - so once
+        a session has spent more than the constructor's budget, the very first
+        wait INSIDE a command fails, at a point that looks exactly like the
+        guest hanging mid-frame.
+
+        It cost a whole run of tests/socktest.py: the connect handshake spent
+        9.4M steps, the default budget is 4M, and the fetch's first
+        `recv_word` blew up on its first step with `the guest never moved the
+        line we are waiting on` - about a guest that was driving the line
+        perfectly well.
+
+        So a long session RE-ANCHORS between phases. This is that, named, so
+        the next test finds it instead of the trap.
+        """
+        self.budget = self.spent + steps
 
     def arm_ack(self):
         """The NEXT nibble os8088 sends us waits `stall_ack` ticks for its ack.
@@ -270,18 +326,50 @@ class Partner(object):
 
     # --- driving the guest to the point of talking ---------------------------
     def click_paused(self, marty=None):
-        """Press and release the left button on a PAUSED guest, deterministically.
+        """Press the left button on a PAUSED guest, deterministically.
 
         The caller positions the cursor while the machine runs - mo.to()
         proves where it is by reading guest memory, which needs cycles - then
         pauses, then calls this, then starts receiving.
 
-        THE PRESS ALONE, and no release: ui_task dispatches a click on MDOWN,
-        so the press is what runs net_connect, and anything sent after it is
-        one more thing that can consume the cycles the handshake needs.
+        THE PRESS ALONE, and no release. **This is the right call for a
+        control that acts on the PRESS, which since SPEC.md 13.8.3 means a
+        PACKAGE's own W_ONCLICK and no longer means a Control Panel control** -
+        see click_paused_release below, and pick by which edge acts rather
+        than by which window happens to be in front. Anything sent after the
+        press is one more thing that can consume the cycles the handshake
+        needs.
         """
         m = marty or self.m
         m.mouse(0, 0, l=True)
+
+    def click_paused_release(self, marty=None, settle=4_000_000):
+        """...and the same for a control that acts on the RELEASE.
+
+        SPEC.md 13.8.3 moved every Control Panel control off the button DOWN:
+        the press now ARMS and draws the pressed look, and the RELEASE is what
+        runs net_connect. A press-only click therefore leaves the Drivers row
+        armed for ever, the driver is never loaded, and the far end waits on a
+        wire nobody is holding - which is what it looks like from here, so the
+        failure reads as a broken LINK rather than a harness that is one edge
+        short. Nothing about the cable changed.
+
+        The two edges cannot both go into a paused guest back to back: the
+        mouse is a real 1200-baud UART and a packet sent while its predecessor
+        is still in flight is DROPPED (SPEC.md 9.4.3), so the guest would
+        decode one press and no release. So the press goes in, the machine
+        runs a BOUNDED, deterministic number of cycles - long enough for the
+        packet to arrive and ui_task to arm the row, and it puts NOTHING on
+        the wire, because arming is all a press does now - and only then is
+        the release sent into a paused machine, still the last thing before
+        the partner starts receiving. `advance` and not sleep, for the reason
+        its own docstring gives.
+        """
+        m = marty or self.m
+        m.mouse(0, 0, l=True)
+        m.advance(cycles=settle)
+        m.pause()
+        m.mouse(0, 0, l=False)
 
     # --- the handshake -------------------------------------------------------
     def hunt(self, limit=64):
@@ -312,8 +400,15 @@ class Partner(object):
         raise LinkTimeout('no magic in %d nibbles (window %08X, wanted %08X)'
                           % (limit * 2, win, want))
 
-    def hello(self, version=1):
-        """mst_hello's other half: hunt for 'O88?', answer 'O88!' + version."""
+    def hello(self, version=NET_VER_SOCK):
+        """mst_hello's other half: hunt for 'O88?', answer 'O88!' + version.
+
+        THE VERSION BYTE IS THE SOCKET PROBE (SPEC.md 62.11): a far side that
+        answers 2 speaks the lowercase socket verbs and one that answers 1 does
+        not, so `hello(version=1)` is how a test presents an OLD PARTNER and
+        checks that NET.DRV refuses NETV_* with NETE_REFUSED rather than
+        sending a letter into a command loop that has never heard of it.
+        """
         self.hunt()
         self.send(MAGIC_R)
         self.send_byte(version)
@@ -543,8 +638,16 @@ class Partner(object):
         return st, free, gran
 
     # --- serving, once the link is up ----------------------------------------
-    def serve(self, tree, limit=64, idle=2000000):
+    def serve(self, tree, limit=64, idle=2000000, sox=None):
         """Answer commands until the master says NC_BYE, or `limit` of them.
+
+        `sox` is a SocketBox and is what makes this a NETWORK far end as well
+        as a file server (SPEC.md 62.11). Pass None and the seven lowercase
+        socket commands are refused - which is a state worth being able to
+        produce, but NOT the one an old partner is in: an old partner answers
+        version 1 at the handshake and NET.DRV never sends a socket letter at
+        all. Both refusals exist and they are different things.
+
 
         THIS IS THE FILE SERVER, and it is here rather than in a file of its
         own for the reason lplink.inc is shared between the driver and
@@ -770,6 +873,60 @@ class Partner(object):
                 self.send_word(tree.free & 0xFFFF)
                 self.send_word((tree.free >> 16) & 0xFFFF)
                 self.send_word(tree.granule)
+            # --- the SOCKET verbs (SPEC.md 62.11) ------------------------
+            # LOWERCASE, and that is the whole reason they fit: the one-byte
+            # command space had six capitals left and the socket layer needs
+            # seven. `sox` is a SocketBox and may be None, which is what a
+            # partner built before sockets looks like - it never gets here,
+            # because such a partner answers version 1 and NET.DRV refuses
+            # NETV_* without sending a letter at all (netsock.inc).
+            elif c == ord('o'):             # NW_OPEN: port, 64-byte host
+                port = self.recv_word()
+                host = self.recv(NET_HOSTMAX).split(b'\0')[0]
+                st, h = ((NETE_REFUSED, 0) if sox is None else
+                         sox.open(host.decode('ascii', 'replace'), port))
+                self.send_byte(st)
+                self.send_byte(h)           # ...ALWAYS: the frame is fixed
+            elif c == ord('l'):             # NW_LISTEN: port
+                port = self.recv_word()
+                st, h = ((NETE_REFUSED, 0) if sox is None else
+                         sox.listen(port))
+                self.send_byte(st)
+                self.send_byte(h)
+            elif c == ord('a'):             # NW_ACCEPT: a listening handle
+                h = self.recv_byte()
+                st, n = ((NETE_REFUSED, 0) if sox is None else sox.accept(h))
+                self.send_byte(st)
+                self.send_byte(n)           # 0 = nobody yet, which is ordinary
+            elif c == ord('s'):             # NW_STAT: handle
+                h = self.recv_byte()
+                if sox is None:
+                    st, state, rdy = NETE_REFUSED, NSK_FREE, 0
+                else:
+                    st, state, rdy = sox.status(h)
+                self.send_byte(st)
+                self.send_byte(state)
+                self.send_word(rdy)
+            elif c == ord('w'):             # NW_SEND: handle, len, bytes
+                h = self.recv_byte()
+                n = self.recv_word()
+                body = self.recv(n)
+                st, took = ((NETE_REFUSED, 0) if sox is None else
+                            sox.send(h, body))
+                self.send_byte(st)
+                self.send_word(took)
+            elif c == ord('r'):             # NW_RECV: handle, cap
+                h = self.recv_byte()
+                cap = self.recv_word()
+                st, body = ((NETE_REFUSED, b'') if sox is None else
+                            sox.recv(h, cap))
+                self.send_byte(st)
+                self.send_word(len(body))
+                self.send(body)
+            elif c == ord('c'):             # NW_CLOSE: handle
+                h = self.recv_byte()
+                st = NETE_REFUSED if sox is None else sox.close(h)
+                self.send_byte(st)
             else:
                 raise LinkTimeout('unknown command %r after %r'
                                   % (chr(c), ''.join(seen)))
@@ -794,6 +951,204 @@ class Partner(object):
 # entry uses, which is a different structure that happens to be the same
 # length - so every field was in the wrong place and nothing could say so.
 DE_SIZE = 32
+
+
+class SocketBox(object):
+    """The far side's TCP, played with REAL host sockets (SPEC.md 62.11).
+
+    This is the half of the cable that os8088 will never have: the 8088 does
+    no TCP at all over the link, it asks the far side for one and polls. So
+    the harness's job here is not to simulate a stack - it is to BE one, and
+    Python's non-blocking sockets are a better far end than any model, because
+    a page fetched through this really did cross a socket.
+
+    THREE THINGS ARE FAITHFUL AND ONE IS NOT.
+
+    Faithful: every method answers OUT OF STATE IT ALREADY HAS and never waits
+    for the network, which is the property the whole non-blocking API rests
+    on; readable bytes are drained into a buffer by `pump` so `recv` is a copy
+    and never a syscall that could block; and a peer that closes leaves
+    NSK_CLOSING with whatever it sent still readable, so a caller that reads
+    a zero-length recv as an end-of-stream is caught here rather than in the
+    field.
+
+    NOT faithful: **the name lookup blocks.** A real far side resolves inside
+    NSK_CONNECT with a UDP round trip and a timeout; `getaddrinfo` here is
+    synchronous, so a hostname that takes a second to resolve stops this end
+    dead for a second while the guest is paused anyway. The CONTRACT it is
+    standing in for - poll NETV_STATUS until it leaves NSK_CONNECT - is
+    exercised either way, because a connect to a live host still passes
+    through NSK_CONNECT for at least one poll.
+    """
+
+    def __init__(self, log=None):
+        self.sk = {}                 # handle -> dict
+        self.log = log if log is not None else []
+        self.empty_up = 0            # recvs that delivered NOTHING while the
+                                     # socket was still NSK_UP - the condition
+                                     # a caller must not read as an end, and
+                                     # the one a test has to be able to WAIT
+                                     # FOR rather than hope for
+
+    # --- housekeeping -----------------------------------------------------
+    def _free(self):
+        for h in range(1, NET_SOCKS + 1):
+            if h not in self.sk:
+                return h
+        return 0
+
+    def close_all(self):
+        """Every socket dies with the SESSION, which is what NET.DRV's
+        nsk_drop assumes at both edges: NC_BYE ends the session and a fresh
+        link starts with no handles."""
+        for e in list(self.sk.values()):
+            try:
+                e['s'].close()
+            except OSError:
+                pass
+        self.sk.clear()
+
+    def pump(self):
+        """Advance every connect and drain everything readable. Called before
+        any verb answers, so an answer is always about NOW."""
+        for h, e in list(self.sk.items()):
+            s = e['s']
+            if e['st'] == NSK_CONNECT:
+                r, w, x = select.select([], [s], [s], 0)
+                if x:
+                    e['st'] = NSK_FAILED
+                elif w:
+                    err = s.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                    e['st'] = NSK_UP if err == 0 else NSK_FAILED
+            if e['st'] not in (NSK_UP, NSK_CLOSING):
+                continue
+            while len(e['rx']) < NET_SKMAX * 4:
+                r, w, x = select.select([s], [], [], 0)
+                if not r:
+                    break
+                try:
+                    b = s.recv(4096)
+                except OSError as ex:
+                    if ex.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+                        break
+                    e['st'] = NSK_FAILED
+                    break
+                if not b:
+                    # THE PEER CLOSED. The bytes already in `rx` stay
+                    # readable - that is what NSK_CLOSING means, and it is
+                    # why a zero-length recv is not an end (netpkg.inc).
+                    e['st'] = NSK_CLOSING
+                    break
+                e['rx'] += b
+
+    # --- the verbs --------------------------------------------------------
+    def open(self, host, port):
+        h = self._free()
+        if not h:
+            return NETE_FULL, 0
+        try:
+            info = socket.getaddrinfo(host, port, socket.AF_INET,
+                                      socket.SOCK_STREAM)
+        except OSError:
+            self.log.append('OPEN %s:%d -> no such host' % (host, port))
+            return NETE_REFUSED, 0
+        af, kind, proto, _, addr = info[0]
+        s = socket.socket(af, kind, proto)
+        s.setblocking(False)
+        e = s.connect_ex(addr)
+        if e not in (0, errno.EINPROGRESS, errno.EWOULDBLOCK):
+            s.close()
+            self.log.append('OPEN %s:%d -> refused (%d)' % (host, port, e))
+            return NETE_REFUSED, 0
+        self.sk[h] = {'s': s, 'st': NSK_CONNECT, 'rx': bytearray()}
+        self.log.append('OPEN %s:%d -> handle %d' % (host, port, h))
+        return NETE_OK, h
+
+    def listen(self, port):
+        h = self._free()
+        if not h:
+            return NETE_FULL, 0
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(('127.0.0.1', port))
+            s.listen(4)
+        except OSError:
+            s.close()
+            return NETE_REFUSED, 0
+        s.setblocking(False)
+        self.sk[h] = {'s': s, 'st': NSK_LISTEN, 'rx': bytearray()}
+        self.log.append('LISTEN %d -> handle %d' % (port, h))
+        return NETE_OK, h
+
+    def accept(self, h):
+        e = self.sk.get(h)
+        if e is None or e['st'] != NSK_LISTEN:
+            return NETE_HANDLE, 0
+        r, w, x = select.select([e['s']], [], [], 0)
+        if not r:
+            return NETE_OK, 0            # nobody yet: the ORDINARY answer
+        n = self._free()
+        if not n:
+            return NETE_FULL, 0
+        c, _ = e['s'].accept()
+        c.setblocking(False)
+        self.sk[n] = {'s': c, 'st': NSK_UP, 'rx': bytearray()}
+        self.log.append('ACCEPT %d -> handle %d' % (h, n))
+        return NETE_OK, n
+
+    def status(self, h):
+        self.pump()
+        e = self.sk.get(h)
+        if e is None:
+            return NETE_HANDLE, NSK_FREE, 0
+        return NETE_OK, e['st'], min(len(e['rx']), 0xFFFF)
+
+    def send(self, h, data):
+        self.pump()
+        e = self.sk.get(h)
+        if e is None or e['st'] == NSK_LISTEN:
+            return NETE_HANDLE, 0
+        if e['st'] != NSK_UP:
+            return NETE_OK, 0            # not connected yet, or closing: took
+        try:                             # nothing, which the caller retries
+            n = e['s'].send(data)
+        except OSError as ex:
+            if ex.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+                return NETE_OK, 0
+            e['st'] = NSK_FAILED
+            return NETE_OK, 0
+        self.log.append('SEND %d %d byte(s) -> %d taken' % (h, len(data), n))
+        return NETE_OK, n
+
+    def recv(self, h, cap):
+        self.pump()
+        e = self.sk.get(h)
+        if e is None or e['st'] == NSK_LISTEN:
+            return NETE_HANDLE, b''
+        n = min(cap, len(e['rx']))
+        out = bytes(e['rx'][:n])
+        del e['rx'][:n]
+        # LOGGED EVEN WHEN IT IS ZERO, which is the whole point: a
+        # zero-length recv on a socket that is still up is what a caller
+        # must not read as an end (netpkg.inc), and a log that only recorded
+        # the interesting ones could not prove one ever happened.
+        if n == 0 and e['st'] == NSK_UP:
+            self.empty_up += 1
+        self.log.append('RECV %d cap %d -> %d (state %d)'
+                        % (h, cap, n, e['st']))
+        return NETE_OK, out
+
+    def close(self, h):
+        e = self.sk.pop(h, None)
+        if e is None:
+            return NETE_HANDLE
+        try:
+            e['s'].close()
+        except OSError:
+            pass
+        self.log.append('CLOSE %d' % h)
+        return NETE_OK
 
 
 class FileTree(object):

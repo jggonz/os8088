@@ -182,8 +182,11 @@ rc_entry:
     push ax                         ; SPEC.md 13.7: the buttons fire on the
     mov ax, rc_onup                 ; RELEASE, over the button the press
     call OSAPI_WM_ONMOUSEUP         ; landed on - so a mis-aimed press can be
-    pop ax                          ; slid off and cancelled. Not a template
-                                    ; word; set after wm_create, like MENU_SET
+    mov ax, rc_ondrag               ; slid off and cancelled - and 13.8.1's
+    call OSAPI_WM_ONDRAG            ; tracking edge, so it comes back UP while
+    pop ax                          ; the pointer is off it rather than at the
+                                    ; release. Not template words; set after
+                                    ; wm_create, like MENU_SET
     mov si, rc_menus                ; BX = the window wm_create just returned
     call OSAPI_MENU_SET             ; (draws nothing, takes no lock, and
                                     ; preserves the flags as well as the
@@ -246,14 +249,66 @@ rc_onclick:
     mov ax, 4                       ; already SCREEN coords, which is what
     mov bx, rc_rects                ; os88ui_bfind wants
     call os88ui_bfind               ; AX = button+1, 0 = none
-    call os88ui_arm                 ; ...and that is ALL a press does now
-    pop di                          ; (SPEC.md 13.7): no action, no repaint,
-    pop si                          ; nothing to undo if the user slides off
+    call os88ui_arm                 ; ...and that is all a press ACTS on
+    mov [rc_down], ax               ; (SPEC.md 13.7): no action, nothing to
+    or ax, ax                       ; undo if the user slides off. What it now
+    jz .out                         ; DRAWS is the pressed state (SPEC.md 13.8)
+    call rc_draw_btns               ; ...through the ONE painter, which is what
+.out:                               ; keeps the enable rules in a single place -
+                                    ; four buttons rather than one, and a press
+                                    ; is a human-rate event
+    pop di
+    pop si
     pop dx
     pop cx
     pop bx
     pop ax
     ret                             ; near: dispatched (SPEC.md 20.5)
+
+; -----------------------------------------------------------------------------
+; rc_ondrag - W_ONDRAG (SPEC.md 13.8.1): the pointer moved, press still down
+; in:  CX = x, DX = y (SCREEN), SI = the window; gfx lock held
+; out: nothing (all registers preserved)
+;
+; The same question rc_onup asks at the release, one pass early, so what is
+; drawn pressed is exactly what would fire. It redraws only on a CHANGE, so a
+; pointer moving inside the button it pressed costs one compare and no pixels.
+; -----------------------------------------------------------------------------
+rc_ondrag:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call os88ui_armed               ; PEEK: the arm is the release's to spend
+    or ax, ax
+    jz .out
+    mov di, ax
+    mov bx, si
+    call OSAPI_WM_CONTENT           ; the window may have moved since the press
+    mov [rc_ox], ax
+    mov [rc_oy], dx
+    call rc_layout
+    mov ax, 4
+    mov bx, rc_rects
+    call os88ui_bfind               ; AX = the button under the pointer now
+    cmp ax, di
+    je .same
+    xor ax, ax                      ; off it: nothing is down
+.same:
+    cmp ax, [rc_down]
+    je .out                         ; unchanged: no pixels
+    mov [rc_down], ax
+    call rc_draw_btns
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; rc_onup - W_ONMOUSEUP (SPEC.md 13.7): the button fires HERE
@@ -284,6 +339,11 @@ rc_onup:
     or ax, ax                       ; cleared - one release per press, so
     jz .out                         ; there is no stale arm to guard against
     mov di, ax
+    cmp word [rc_down], 0           ; ...and the pressed button comes back UP
+    je .find                        ; first and unconditionally, whatever the
+    mov word [rc_down], 0           ; release turns out to mean. Every path
+    call rc_draw_btns               ; below either acts (and repaints) or
+.find:                              ; cancels (and must leave it upright)
     mov ax, 4
     mov bx, rc_rects
     call os88ui_bfind               ; AX = the button under the RELEASE
@@ -1010,6 +1070,11 @@ rc_draw_btns:
 ; The rect is a STORED 4-word block rather than four registers, because
 ; os88ui_bhit reads the same words - so the drawn button and the clickable
 ; button cannot drift (fm_hit's discipline, SPEC.md 22).
+;
+; THE DOWN STATE IS READ HERE AND NOT PASSED IN, which is what makes every
+; repaint agree with it for free (SPEC.md 13.8): rc_draw_btns is the one
+; painter, a W_PAINT goes through it, and [rc_down] is consulted per button.
+; Passing it as an argument would mean the press path knew and W_PAINT did not.
 ; -----------------------------------------------------------------------------
 rc_btn:
     push ax
@@ -1020,11 +1085,30 @@ rc_btn:
     shl bx, 1
     shl bx, 1                       ; *8: four words a rect (8086: no shl imm)
     add bx, rc_rects
-    xor di, di
+    mov di, OS88UI_FILL             ; NOT `xor di, di`, and this was the bug
+                                    ; reported as "the buttons stay black with
+                                    ; no text visible after mouse-on
+                                    ; mouse-off". A release redraws this button
+                                    ; over a PRESSED one, whose interior is
+                                    ; black - so without the fill the upright
+                                    ; redraw keeps that black interior and
+                                    ; letters a black caption onto it, and the
+                                    ; button goes INVISIBLE rather than coming
+                                    ; up. OS88UI_FILL asks "can this be drawn a
+                                    ; second time without the ground being
+                                    ; repainted first?", not "is my background
+                                    ; white" - os88ui.inc's own header, and the
+                                    ; same defect os88net's Connect had
+                                    ; (SPEC.md 13.8.4)
     or cl, cl
     jnz .live
     mov di, OS88UI_DIS
 .live:
+    inc ax                          ; [rc_down] is index+1, os88ui_bfind's own
+    cmp ax, [rc_down]               ; sentinel, so 0 can mean "none"
+    jne .draw
+    or di, OS88UI_DOWN              ; ...and DIS still outranks it inside
+.draw:                              ; os88ui_btn, which is where that rule lives
     call os88ui_btn
     pop di
     pop bx
@@ -1071,6 +1155,17 @@ rc_layout:
 
 rc_bx:      dw 4, 58, 112, 166      ; the button row, content-relative
 rc_rects:   times 16 dw 0           ; ...as four {x1,y1,x2,y2}, screen coords
+rc_down:    dw 0                    ; SPEC.md 13.8: which button is being HELD,
+                                    ; as os88ui_bfind's index+1 (0 = none). It
+                                    ; is DATA rather than bss for os88ui_armw's
+                                    ; own reason - a package's bss is one total
+                                    ; with equ offsets (OS88_BSS) and two bytes
+                                    ; of image is cheaper than renumbering it.
+                                    ; rc_draw_btns reads it, so a full repaint
+                                    ; arriving mid-press draws the held button
+                                    ; down and the state cannot part from the
+                                    ; glass (13.8's idempotence, which is the
+                                    ; whole reason DOWN is drawn and not XOR-ed)
 
 ; -----------------------------------------------------------------------------
 ; rc_putu5 - AX as 5 zero-padded decimal chars at DS:BX

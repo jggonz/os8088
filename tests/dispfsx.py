@@ -70,17 +70,18 @@ KINDS = {0: "VGA", 1: "HERC", 2: "CGA"}
 #   python3 tools/os88disk.py -o /tmp/fsx-tracker.img --size 360 \
 #           build/tracker.o88
 #
-# On the shipped apps disk TRACKER.O88 is the LAST of ten rows in APPS
-# (SPEC.md 19.4's sort), and ten 16px rows do not fit the Disk window - so
-# driving it there means scrolling first, which is a second thing to get wrong
-# in a test about something else. tests/paintgif.py's image exists for the
-# same reason.
-APP_ROW = 0
+# The one-file disk is a CONVENIENCE now and no longer a requirement: on the
+# shipped apps disk TRACKER.O88 is the last row of a folder that does not fit
+# a 640x200 Disk window, and dispcp.open_named scrolls to it (it asks the
+# guest where the list is and where the entry is). What the small disk still
+# buys is speed - one mount, one row - so it stays.
 APPS = {
-    # name:      (the .o88 to put on the disk, the key that takes the screen)
-    "tracker":   ("build/tracker.o88", "KeyF"),
-    "paint":     ("build/paint.o88", "KeyF"),   # SPEC.md 42.7: the bare letter
-}                                               # while no text tool is typing
+    # name:      (the .o88 to put on the disk, its FILE NAME, the key that
+    #             takes the screen)
+    "tracker":   ("build/tracker.o88", "TRACKER.O88", "KeyF"),
+    "paint":     ("build/paint.o88", "PAINT.O88", "KeyF"),
+}                        # SPEC.md 42.7: the bare letter, while no text tool
+                         # is typing
 
 
 def u16(b, i=0): return b[i] | (b[i + 1] << 8)
@@ -141,7 +142,7 @@ def main():
                     help="make this adapter the primary first (SPEC.md "
                          "39.19.2's other two arrangements)")
     a = ap.parse_args()
-    o88, fskey = APPS[a.app]
+    o88, pkg, fskey = APPS[a.app]
     apps = a.apps
     if apps is None:
         apps = "/tmp/fsx-%s.img" % a.app
@@ -198,12 +199,13 @@ def main():
         dispcp.open_drive(m, mo, S, os88marty.settle, "B", card=pri)
         disk = dispcp.win_list(m, S)[-1]
         bx, by = dispcp.win_rect(m, S, disk)[:2]
-        dispcp.open_row(m, mo, S, os88marty.settle, bx, by, APP_ROW, card=pri)
+        dispcp.open_named(m, mo, S, os88marty.settle, bx, by, pkg,
+                          card=pri)
         time.sleep(6)
         t = [w for w in dispcp.win_list(m, S) if w != disk]
         if not t:
-            sys.exit("%s did not launch - is row %d its .o88 on %s?"
-                     % (a.app, APP_ROW, apps))
+            sys.exit("%s did not launch - is %s on %s?"
+                     % (a.app, pkg, apps))
         t = t[-1]
 
         wx, wy, ww, wh = dispcp.win_rect(m, S, t)

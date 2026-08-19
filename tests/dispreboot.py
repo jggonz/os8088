@@ -234,9 +234,10 @@ def main():
         dispcp.open_drive(m, mo, S, os88marty.settle, "B", card=pri)
         w = dispcp.win_list(m, S); disk = w[-1]
         bx, by, bw, bh = dispcp.win_rect(m, S, disk)
-        dispcp.open_row(m, mo, S, os88marty.settle, bx, by, 0, card=pri)
+        dispcp.open_named(m, mo, S, os88marty.settle, bx, by, "APPS", card=pri)
         bx, by, bw, bh = dispcp.win_rect(m, S, disk)
-        dispcp.open_row(m, mo, S, os88marty.settle, bx, by, 5, card=pri)
+        dispcp.open_named(m, mo, S, os88marty.settle, bx, by, "NOTEPAD.O88",
+                          card=pri)
         time.sleep(2)
         wins = dispcp.win_list(m, S)
         if len(wins) < 2:

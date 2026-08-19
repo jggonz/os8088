@@ -36,7 +36,7 @@ never had (switchable to cooperative from the Control Panel, if you want to
 feel what they were up against).
 
 ```
-make          # build all six floppy images
+make          # build all seven floppy images
 make run      # boot it in QEMU (with an emulated serial mouse)
 make run-640  # the same, on a 640KB machine
 make run-720  # the same, off the 720KB pair
@@ -443,7 +443,7 @@ sooner, so a C package is a small package. Everything else — the header, the
 loader, the disk format, the 60KB check — cannot tell a C package from an
 assembly one, which is the test of whether it was done right.
 **[docs/C-TOOLCHAIN.md](docs/C-TOOLCHAIN.md)** is the guide;
-[SPEC.md](SPEC.md) §70 is the contract.
+[SPEC.md](SPEC.md) §73 is the contract.
 
 **Porting something else the same way is a skill.** The CWORD port took four
 sessions of finding out what the toolchain, the 60KB segment and a 4.77 MHz
@@ -471,6 +471,7 @@ cleanly and runs wrong when C meets this machine.
 | `build/apps.img`       | 1.44MB FAT12             | QEMU software floppy (B:)       |
 | `build/apps720.img`    | 720KB FAT12              | 3.5" DD software floppy         |
 | `build/apps360.img`    | 360KB FAT12              | 86Box / real XT software floppy |
+| `build/media360.img`   | 360KB FAT12              | 360KB media floppy — the shipped module, which the 360KB apps disk has no room for |
 | `build/zork*.img`      | 1.44MB / 720KB / 360KB   | Frotz story floppies (`make zdisk`) |
 | `build/word*.img`      | 1.44MB / 720KB / 360KB   | Microsoft Word floppies (`make worddisk`) |
 | `build/cword*.img`     | 1.44MB / 720KB / 360KB   | Word in C, package + `CWORD.OVL` (`make cworddisk`) |
@@ -483,7 +484,7 @@ A 1.44MB drive postdates the 8086 by years, so period hardware gets the
 360KB build.
 
 **No binary is committed to this repository.** `build/` is gitignored
-outright — the six images, the kernel, the boot sectors, the drivers and
+outright — the seven images, the kernel, the boot sectors, the drivers and
 every package are products of `make`, which needs only `nasm` and `python3`.
 For a floppy you can boot without a toolchain, take a
 [release](https://github.com/jggonz/os8088/releases) or

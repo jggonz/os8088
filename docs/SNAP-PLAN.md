@@ -297,6 +297,20 @@ The investigation is kept because the reasoning redirects the effort somewhere
 that pays, and because "we never checked Y" is otherwise a question that comes
 back every time somebody reads §11.94.
 
+**...and it came back once, from a direction this section did not cover, and
+the answer held.** SPEC.md §11.96.13.1 found a reason to quantise a *drop's*
+`dy` that has nothing to do with the renderer: the drag cache replays a
+window's banked pixels at the new position, and a screen-phased dither inside
+that window comes back inverted when the delta is odd. Everything below stays
+true — there is still no y-alignment win in this renderer, and the vertical
+quantum that pays is still `nbanks` applied to a scroll delta — and the drop
+snap was shipped and then withdrawn on its own terms: 7px of vertical drop
+precision, and a sub-8px nudge that moved nothing, bought a 50% checkerboard in
+the other phase inside a scroll-bar track. **`W_X` can afford its 7px because
+§11.94 has already put the window on the phase, so `dx` is a multiple of 8 by
+construction and the snap moves nothing; there is no `wm_snap_ay` to do that for
+`y`, and this section is why there is not.**
+
 ### 6.1 Text: provably zero, not merely small
 
 The vertical layout is the banked framebuffer (SPEC.md §39.3), and the

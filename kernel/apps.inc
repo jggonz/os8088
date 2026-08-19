@@ -100,6 +100,15 @@ app_tmr_s_start: db 'Start', 0
 app_tmr_s_stop:  db 'Stop', 0
 app_tmr_s_reset: db 'Reset', 0
 app_tmr_lbl:     dw app_tmr_s_start, app_tmr_s_stop, app_tmr_s_reset
+%ifdef KERN_BIG
+; Which button is DRAWN pressed, 1-based so 0 can mean "none" (SPEC.md 13.8).
+; ONE byte for the machine and not one per Timer, which is safe for the reason
+; os88ui_armw is: a gesture is one press and one release on the UI task under
+; the gfx lock, and the arm that reaches app_tmr_onup is the same singleton.
+; The window comes in SI on every edge, so the painter never has to ask WHOSE.
+; Inline .text data, like [cp_down] and for its reason.
+app_tmr_down:    db 0
+%endif
 
 ; First line: the version, and the BUILD NUMBER after it (SPEC.md 14.2).
 ; BUILD_NUM counts the commits behind this checkout, so it goes up by one per
@@ -150,6 +159,13 @@ app_tmr_kinit:
     call app_tmr_forget         ; a pool slot is REUSED (SPEC.md 29.4), so the
                                 ; previous instance's cells are sitting there
                                 ; describing a window that has been destroyed
+%ifdef KERN_BIG
+    mov ax, app_tmr_onup        ; SPEC.md 13.7/13.8.1: the two edges the three
+    call wm_onmouseup           ; buttons fire and track on. Not template
+    mov ax, app_tmr_ondrag      ; words, so a KD_INIT is where a kernel window
+    call wm_ondrag              ; installs them - and a REUSED pool slot must
+    mov byte [app_tmr_down], 0  ; not hand a pressed button to its successor
+%endif
     mov al, 1                   ; the content origin onto a multiple of 8, so
     call wm_snap                ; every digit run takes font_run's single-store
                                 ; path (SPEC.md 6.1/11.94). BX = window ptr by
@@ -406,6 +422,171 @@ app_tmr_onclick:
     mov di, [di+I_SPTR]         ; DI = time state
     call app_tmr_hit            ; AL = button index, CF = 1: not on one
     jc .done
+%ifdef KERN_BIG
+    ; SPEC.md 13.6/13.8: neither Start, Stop nor Reset has a safe prefix
+    ; action, so the press only ARMS and DRAWS and app_tmr_onup acts. The
+    ; greying is deliberately NOT tested here - a greyed button arms and draws
+    ; itself down, and os88ui_btn's DIS outranks DOWN so it says "pressed"
+    ; about nothing. The refusal stays at the release, where it always was.
+    inc al                      ; 1-based, so 0 can mean "nothing is down"
+    xor ah, ah
+    call COLD_SEG:os88ui_arm_f  ; apps.inc is .text and the arm is .cold
+    call app_tmr_setdown
+%else
+    call app_tmr_act
+%endif
+.done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; app_tmr_onup - W_ONMOUSEUP (SPEC.md 13.7): a Timer button fires HERE
+; in:  CX = x, DX = y (SCREEN, possibly outside the window), SI = window ptr;
+;      gfx lock held
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+app_tmr_onup:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call COLD_SEG:os88ui_fire_f ; AX = what the press armed, and it is CLEARED
+    or ax, ax
+    jz .out
+    push bp
+    mov bp, ax                  ; BP = the armed control, 1-based. NOT BX:
+                                ; BX is the WINDOW here, which app_tmr_hit
+                                ; needs and which app_tmr_setdown and
+                                ; app_tmr_btn need after it
+    mov bx, si
+    call inst_of_win
+    jc .oute
+    mov di, [di+I_SPTR]
+    mov bx, si
+    call app_tmr_hit            ; is the pointer STILL on it?
+    jc .up
+    inc al
+    xor ah, ah
+    cmp ax, bp
+    jne .up
+    dec al
+    push ax
+    xor al, al
+    call app_tmr_setdown        ; upright FIRST, before anything acts - and
+    pop ax                      ; the act below redraws two of the three
+    call app_tmr_act
+    jmp short .oute
+.up:
+    xor al, al                  ; a different button, or none: CANCELLED
+    call app_tmr_setdown
+.oute:
+    pop bp
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; app_tmr_ondrag - W_ONDRAG (SPEC.md 13.8.1): the pointer moved, press down
+; in:  CX = x, DX = y (SCREEN), SI = window ptr; gfx lock held
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+app_tmr_ondrag:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call COLD_SEG:os88ui_armed_f ; PEEK: the arm is the release's to spend
+    or ax, ax
+    jz .out
+    push bp
+    mov bp, ax                  ; BP, for app_tmr_onup's reason: BX is the
+    mov bx, si                  ; window every routine below wants
+    call inst_of_win
+    jc .oute
+    mov di, [di+I_SPTR]
+    mov bx, si
+    call app_tmr_hit
+    jc .off
+    inc al
+    xor ah, ah
+    cmp ax, bp
+    je .set
+.off:
+    xor al, al                  ; off it: nothing is down
+.set:
+    call app_tmr_setdown        ; ...which draws only if that CHANGED
+.oute:
+    pop bp
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; app_tmr_setdown - AL becomes the button drawn pressed (0 = none), and DRAWS
+; in:  AL = a 1-based index or 0; BX = window ptr, DI = time state; lock held
+; out: nothing (all registers preserved)
+;
+; Draws only what CHANGED - one button rather than three, and never the digits.
+; -----------------------------------------------------------------------------
+app_tmr_setdown:
+    push ax
+    cmp al, [app_tmr_down]
+    je .out
+    push ax
+    mov al, [app_tmr_down]      ; the one being let go, upright again
+    or al, al
+    jz .take
+    dec al
+    mov byte [app_tmr_down], 0
+    call app_tmr_btn
+.take:
+    pop ax
+    mov [app_tmr_down], al
+    or al, al
+    jz .out
+    dec al
+    call app_tmr_btn            ; ...and the one being taken, pressed
+.out:
+    pop ax
+    ret
+%endif
+
+; -----------------------------------------------------------------------------
+; app_tmr_act - do what button AL says (SPEC.md 14)
+; in:  AL = button index (0-based), BX = window ptr, DI = time state ptr;
+;      gfx lock held
+; out: nothing (all registers preserved)
+;
+; ONE body for both builds: kern_big reaches it from the release and
+; kern_small from the press, and neither has an opinion the other does not.
+; -----------------------------------------------------------------------------
+app_tmr_act:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
     call app_tmr_bok            ; a greyed control explains itself, so a
     jc .done                    ; refused click says nothing more (SPEC.md 47
                                 ; rule 6) - no beep, no notice
@@ -435,7 +616,6 @@ app_tmr_onclick:
     call app_tmr_btn            ; not move, and the digits did not either
     mov al, APP_TMR_STOP
     call app_tmr_btn
-
 .done:
     pop di
     pop si
@@ -537,6 +717,15 @@ app_tmr_btn:
     jnc .live
     or di, OS88UI_DIS           ; SPEC.md 47 rule 1, and rule 2's predicate is
 .live:                          ; the same one the click path refuses on
+%ifdef KERN_BIG
+    mov ax, bp                  ; ...and PRESSED if it is the one being held
+    inc ax                      ; (SPEC.md 13.8): ids are 1-based so that 0
+    cmp al, [app_tmr_down]      ; can mean "nothing is down". DIS OUTRANKS IT
+    jne .nodn                   ; inside the control, which is what a Timer
+    or di, OS88UI_DOWN          ; needs more than anything else converted so
+.nodn:                          ; far: Start and Stop grey each other, so the
+%endif                          ; four combinations of the two flags are all
+                                ; reachable in one gesture
     mov bx, os88ui_krect
     call COLD_SEG:os88ui_btn_f  ; the SHARED control (SPEC.md 2.6's far entry:
                                 ; the body is cold, where fdlg and ctrl are,

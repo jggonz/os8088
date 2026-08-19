@@ -256,7 +256,32 @@ Billing does not change. Both paths are unbilled today and `ui.inc:1107` gives
 the reason it has to stay that way for the close: *"the record the cycles would
 go to is the one being freed."*
 
-## 7. Phase B — pressed-state feedback (a separate decision, not recommended yet)
+## 7. Phase B — pressed-state feedback — TAKEN (SPEC.md §13.8.1)
+
+> **STATUS: LANDED.** Read this section for the *objection*, which was exact
+> and is still the thing to defend against — and then read why neither way out
+> it offers was the one taken. There is a third, and it is the one the UI
+> task's existing shape already pays for: **the pointer is observed once per
+> UI PASS**, in the deferred ladder beside `ui_arm_chk` (`ui_arm_trk`). That
+> is not §3's tracking loop — no `gfx_unlock`/`task_yield`/`gfx_lock` round
+> trip, nothing held across a wait, no pacing to get wrong, and the keyboard
+> mouse still costs one keypress because the handler still arms and returns.
+> It costs **one compare per pass** when nothing is armed, which is the same
+> compare and the same argument as its neighbour.
+>
+> So the recommendation below — ship Phase A alone and revisit — was right,
+> and this is the revisit. The mono check it asks for was done: `chromedown.py`
+> passes ten cases on CGA, Hercules **and** VGA mode 12h, and the 1bpp answer
+> to *"is a 50%-dither XOR over a pinstriped title bar legible"* turned out
+> not to arise, because what inverts is the box's **9x9 white interior** and
+> the pinstripes are broken around it two pixels out by `wm_draw_title`
+> already. It reads as a solid black square, which is what a Macintosh close
+> box does.
+>
+> docs/UIHELPERS-PLAN.md §15 is the landed work and the survey of what still
+> has no down state.
+
+## 7.0 The original text
 
 The System 1 behaviour is that the box inverts while held and un-inverts if the
 pointer leaves. Two ways to get part of it:

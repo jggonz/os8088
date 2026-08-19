@@ -176,12 +176,12 @@ def main(argv):
         # ...and apps/piano, out of B:\APPS - the fixed-layout case, whose
         # keyboard is the only part of its content with any slack in it
         wx, wy, ww, wh = dispcp.win_rect(m, S, disk)
-        dispcp.open_row(m, mo, S, settle, wx, wy, 0)        # APPS
+        dispcp.open_named(m, mo, S, settle, wx, wy, "APPS")
         for _ in range(3):
             wx, wy, ww, wh = dispcp.win_rect(m, S, disk)
             mo.click(wx + 40, wy + TITLE_H // 2)
             settle(m)
-            dispcp.open_row(m, mo, S, settle, wx, wy, 7)    # PIANO.O88
+            dispcp.open_named(m, mo, S, settle, wx, wy, "PIANO.O88")
             m.advance(frames=120)
             m.run()
             got = pkg_seg(m, len(segs))
@@ -196,10 +196,12 @@ def main(argv):
         wx, wy, ww, wh = dispcp.win_rect(m, S, disk)        # ...back to B:\ and
         mo.click(wx + 40, wy + TITLE_H // 2)                # on into GAMES
         settle(m)
-        dispcp.open_row(m, mo, S, settle, wx, wy, 0)        # ..
+        dispcp.open_named(m, mo, S, settle, wx, wy, "..")
         wx, wy, ww, wh = dispcp.win_rect(m, S, disk)
-        dispcp.open_row(m, mo, S, settle, wx, wy, 1)        # GAMES
-        for row, app in ((1, "arkanoid"), (4, "solitaire"), (3, "missile")):
+        dispcp.open_named(m, mo, S, settle, wx, wy, "GAMES")
+        for pkg, app in (("ARKANOID.O88", "arkanoid"),
+                         ("SOLITAIR.O88", "solitaire"),
+                         ("MISSILE.O88", "missile")):
             got = None
             for _ in range(3):      # a dropped double-click SELECTS the row and
                                     # launches nothing (SPEC.md 9.4.3) - and a
@@ -208,7 +210,7 @@ def main(argv):
                 wx, wy, ww, wh = dispcp.win_rect(m, S, disk)
                 mo.click(wx + 40, wy + TITLE_H // 2)   # raise it back over
                 settle(m)                                   # whatever opened
-                dispcp.open_row(m, mo, S, settle, wx, wy, row)
+                dispcp.open_named(m, mo, S, settle, wx, wy, pkg)
                 m.advance(frames=120)
                 m.run()
                 got = pkg_seg(m, len(segs))

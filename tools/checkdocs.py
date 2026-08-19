@@ -1,13 +1,26 @@
 #!/usr/bin/env python3
-"""Documentation consistency gate. Two things drift silently and have:
+"""Documentation consistency gate. Three things drift silently and have:
 
   1. a section citation that names a heading which does not exist;
-  2. an API slot number in prose that is not a slot apps/os88api.inc defines.
+  2. an API slot number in prose that is not a slot apps/os88api.inc defines;
+  3. TWO HEADINGS WITH THE SAME NUMBER, which makes every citation of that
+     number ambiguous and every one of them pass.
 
 The second is the nastier one: after a renumbering, a stale citation is often
 still a VALID slot - just a different routine - so nothing catches it and the
 prose quietly documents the wrong call. Run from the repo root; exit 1 on any
 finding.
+
+THE THIRD WAS INVISIBLE HERE FOR THREE RELEASES, and the reason is one word:
+`headings()` returned a SET, so a number defined twice is indistinguishable
+from a number defined once and check 1 passes every citation of it. Three
+collisions accumulated that way and none of them was noticed by a gate that
+runs in the default build - SPEC.md 22.6 across PRs #54/#61 (10 references
+meant one section and 1 meant the other), 39.2.1 across #73/#81, and 52.11.4
+twice inside the SAME squash. Upstream squash-merges branches that were
+written in parallel (docs/UPSTREAM.md), so two authors appending "the next
+free number" to one section is the NORMAL case rather than a slip, and the
+number they pick is the one thing a clean textual merge cannot conflict on.
 
 A citation names a DOCUMENT as well as a number, and this used to assume the
 document was always SPEC.md - which is true in every kernel source and in
@@ -72,6 +85,25 @@ RULE_REFS = {"1.6", "1.7", "29.2.8", "45", "49"}
 HELD = set()
 
 
+def dupes(path):
+    """{number: [line, ...]} for every number this document heads TWICE.
+
+    Deliberately not built on headings() - that returns a set, and a set is
+    exactly what hid this. The two must stay separate: a future "just reuse
+    headings()" is the bug coming back.
+    """
+    seen = {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for n, line in enumerate(fh, 1):
+                m = HEAD.match(line)
+                if m:
+                    seen.setdefault(m.group(1), []).append(n)
+    except OSError:
+        return {}
+    return {k: v for k, v in seen.items() if len(v) > 1}
+
+
 def headings(path):
     """The numbered headings a document defines, as a set of strings.
 
@@ -115,6 +147,16 @@ def main() -> int:
              or f == "Makefile"]
 
     bad = []
+    # ...before any citation is resolved, because a duplicate makes the
+    # resolution meaningless rather than wrong: both headings exist, so every
+    # citation of the number passes and points at whichever the reader finds
+    # first.
+    for path in sorted(docs):
+        for num, lines in sorted(dupes(path).items()):
+            bad.append("%s: §%s heads %d sections (lines %s) - a citation of "
+                       "it cannot say which" %
+                       (path, num, len(lines),
+                        ", ".join(str(x) for x in lines)))
     for path in files:
         try:
             text = open(path, encoding="utf-8").read()

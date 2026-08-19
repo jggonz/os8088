@@ -67,6 +67,10 @@ HTW_ROWH     equ 12
 HTW_BY       equ 96             ; the button row
 HTW_BH       equ 16
 HTW_CAPY     equ 120
+HTW_CFORMAT  equ 1              ; control ids (SPEC.md 13.8.4), 1-based so 0
+HTW_CDELETE  equ 2              ; can mean "nothing is down"
+HTW_CCLOSE   equ 3
+
 HTW_B0X      equ 4              ; 'Format'
 HTW_B1X      equ 76             ; 'Delete'
 HTW_B2X      equ 148            ; 'Close'
@@ -135,6 +139,11 @@ hd_tw_open:
     call OSAPI_WM_CREATE
     jc .out
     mov [hd_twin], bx
+    mov ax, hd_tw_up            ; SPEC.md 13.7/13.8.1: not template words, so
+    call OSAPI_WM_ONMOUSEUP     ; a window installs them itself after create
+    mov ax, hd_tw_drag
+    call OSAPI_WM_ONDRAG
+    mov byte [hd_tdown], 0
 .show:
     call OSAPI_WM_SHOW
 .out:
@@ -278,6 +287,7 @@ hd_tw_paint:
     call hd_tw_fmtok            ; ...and the same predicate/carry idiom Delete
     mov cl, 0                   ; uses below (SPEC.md 47 rule 2): it greys the
     adc cl, 0                   ; button here and refuses the click in
+    mov ch, HTW_CFORMAT
     call hd_tw_button           ; hd_tw_format
     call hd_tw_delok            ; the ONE predicate (SPEC.md 47 rule 2): it
     mov cl, 0                   ; greys the button here and refuses the click
@@ -288,11 +298,13 @@ hd_tw_paint:
     mov si, hd_s_tdel
     mov ax, HTW_B1X
     mov bx, HTW_BW1
+    mov ch, HTW_CDELETE
     call hd_tw_button
     mov si, hd_s_close
     mov ax, HTW_B2X
     mov bx, HTW_BW2
     xor cl, cl
+    mov ch, HTW_CCLOSE
     call hd_tw_button
 
     mov si, [hd_tmsg]
@@ -356,8 +368,14 @@ hd_tw_button:
     mov dl, cl                  ; CL = the flag word; DI is about to be it
     xor dh, dh
     mov di, dx
-    mov bx, hd_tbrect           ; no OS88UI_FILL: hd_tw_repaint calls
-    call os88ui_btn             ; hd_win_erase before this ever runs twice
+    mov al, ch                  ; CH = the control's id (SPEC.md 13.8.4)
+    cmp al, [hd_tdown]
+    jne .nodn
+    or di, OS88UI_DOWN          ; DIS outranks it inside the control, so a
+.nodn:                          ; greyed button never says it will fire
+    mov bx, hd_tbrect           ; OS88UI_FILL because a RELEASE redraws this
+    or di, OS88UI_FILL          ; button over a pressed one; on a full repaint
+    call os88ui_btn             ; hd_win_erase has already whited the ground
     pop di
     pop si
     pop dx
@@ -518,31 +536,17 @@ hd_tw_click:
     jmp short .repaint
 
 .buttons:
-    cmp dx, HTW_BY + HTW_BH
-    jge .done
-    mov ax, cx
-    cmp ax, HTW_B0X
-    jl .done
-    cmp ax, HTW_B0X + HTW_BW0
-    jl .format
-    cmp ax, HTW_B1X
-    jl .done
-    cmp ax, HTW_B1X + HTW_BW1
-    jl .delete
-    cmp ax, HTW_B2X
-    jl .done
-    cmp ax, HTW_B2X + HTW_BW2
-    jge .done
-    mov byte [hd_tarm], 0
-    mov bx, [hd_twin]
-    call OSAPI_WM_HIDE
+    ; SPEC.md 13.6/13.8.4: none of the three has a safe prefix action - Format
+    ; writes a partition table, Delete takes a volume away and Close ends the
+    ; window - so the press only ARMS and DRAWS, and hd_tw_up acts.
+    call hd_tbhit
+    or al, al
+    jz .done
+    xor ah, ah
+    call os88ui_arm
+    call hd_tsetdown
     jmp short .done
 
-.delete:
-    call hd_tw_delete
-    jmp short .repaint
-.format:
-    call hd_tw_format
 .repaint:
     call hd_tw_repaint
 .done:
@@ -554,6 +558,225 @@ hd_tw_click:
     pop bx
     pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; hd_tbhit - which button is this CONTENT-relative point in?
+; in:  CX = content-relative x, DX = content-relative y
+; out: AL = HTW_C*, or 0; AH clobbered, everything else preserved
+;
+; One description, read by the press, the drag and the release - and by the
+; painter through the same HTW_B* constants, which is what keeps the drawn
+; control and the clickable one the same rectangle (SPEC.md 22.18's rule, one
+; window along).
+; -----------------------------------------------------------------------------
+hd_tbhit:
+    cmp dx, HTW_BY
+    jl .no
+    cmp dx, HTW_BY + HTW_BH
+    jge .no
+    mov al, HTW_CFORMAT
+    cmp cx, HTW_B0X
+    jl .no
+    cmp cx, HTW_B0X + HTW_BW0
+    jl .out
+    inc al
+    cmp cx, HTW_B1X
+    jl .no
+    cmp cx, HTW_B1X + HTW_BW1
+    jl .out
+    inc al
+    cmp cx, HTW_B2X
+    jl .no
+    cmp cx, HTW_B2X + HTW_BW2
+    jl .out
+.no:
+    xor al, al
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_tw_pt - a SCREEN point to a content-relative one (module internal)
+; in:  CX = x, DX = y, SI = the window
+; out: CX/DX content-relative, DI = content left, BP = content top; AX, BX
+;      clobbered
+; -----------------------------------------------------------------------------
+hd_tw_pt:
+    push si
+    mov bx, si
+    mov si, dx
+    call OSAPI_WM_CONTENT
+    mov di, ax
+    mov bp, dx
+    sub cx, di
+    mov dx, si
+    sub dx, bp
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_tsetdown - AL becomes the button drawn pressed (0 = none), and it DRAWS
+; in:  AL = an id or 0; DI = content left, BP = content top; the lock is held
+; out: nothing (all registers preserved)
+;
+; Draws only what CHANGED, and one button rather than the window: hd_tw_repaint
+; erases the whole content, so driving the pressed look through it would be
+; PERFORMANCE.md's double-draw flash on every press and every slide.
+; -----------------------------------------------------------------------------
+hd_tsetdown:
+    push ax
+    cmp al, [hd_tdown]
+    je .out
+    push ax
+    mov al, [hd_tdown]          ; the one being let go, upright again
+    or al, al
+    jz .take
+    mov byte [hd_tdown], 0
+    call hd_tctlpaint
+.take:
+    pop ax
+    mov [hd_tdown], al
+    or al, al
+    jz .out
+    call hd_tctlpaint           ; ...and the one being taken, pressed
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_tctlpaint - redraw ONE button, in whatever state [hd_tdown] says
+; in:  AL = a control id, DI = content left, BP = content top; lock held
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+hd_tctlpaint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov ch, al
+    cmp al, HTW_CDELETE
+    je .del
+    ja .close
+    mov si, hd_s_tfmt           ; Format: live on every row there is
+    mov ax, HTW_B0X
+    mov bx, HTW_BW0
+    call hd_tw_fmtok
+    mov cl, 0
+    adc cl, 0
+    jmp short .draw
+.del:
+    mov si, hd_s_tdel           ; Delete: the ONE predicate, shared with the
+    mov ax, HTW_B1X             ; click refusal (SPEC.md 47 rule 2)
+    mov bx, HTW_BW1
+    call hd_tw_delok
+    mov cl, 0
+    adc cl, 0
+    jmp short .draw
+.close:
+    mov si, hd_s_close
+    mov ax, HTW_B2X
+    mov bx, HTW_BW2
+    xor cl, cl
+.draw:
+    call hd_tw_button
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_tw_up - W_ONMOUSEUP (SPEC.md 13.7): the three buttons fire HERE
+; in:  CX = x, DX = y (SCREEN, possibly outside the window), SI = the window
+; out: nothing
+; -----------------------------------------------------------------------------
+hd_tw_up:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    call os88ui_fire            ; AX = what the press armed, and it is CLEARED
+    or ax, ax
+    jz .done
+    push ax
+    call hd_tw_pt
+    pop bx                      ; BL = the armed control
+    call hd_tbhit               ; still on it?
+    cmp al, bl
+    je .fire
+    xor al, al                  ; no: thought better of, and nothing fires
+    call hd_tsetdown
+    jmp short .done
+.fire:
+    mov byte [hd_tdown], 0      ; NOT hd_tsetdown: every path below either
+                                ; repaints the window or hides it, and drawing
+                                ; this button upright first is
+                                ; PERFORMANCE.md's double-draw
+    cmp al, HTW_CCLOSE
+    je .close
+    cmp al, HTW_CDELETE
+    je .delete
+    call hd_tw_format
+    jmp short .repaint
+.delete:
+    call hd_tw_delete
+.repaint:
+    call hd_tw_repaint
+    jmp short .done
+.close:
+    mov byte [hd_tarm], 0
+    mov bx, [hd_twin]
+    call OSAPI_WM_HIDE
+.done:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_tw_drag - W_ONDRAG (SPEC.md 13.8.1): the pointer moved, press still down
+; in:  CX = x, DX = y (SCREEN), SI = the window
+; out: nothing
+; -----------------------------------------------------------------------------
+hd_tw_drag:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    call os88ui_armed           ; PEEK: the arm is the release's to spend
+    or ax, ax
+    jz .done
+    push ax
+    call hd_tw_pt
+    pop bx
+    call hd_tbhit
+    cmp al, bl
+    je .set
+    xor al, al                  ; off it: nothing is down
+.set:
+    call hd_tsetdown            ; ...which draws only if that CHANGED
+.done:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+hd_tdown:   db 0                ; which button is DRAWN pressed, 0 = none
 
 ; -----------------------------------------------------------------------------
 ; hd_tw_format - partition and format the selected slot (module internal)

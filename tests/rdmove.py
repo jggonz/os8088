@@ -31,14 +31,18 @@ sys.path.insert(0, "/home/user/os8088/tests")
 import os88marty, os88mouse, os88sym, os88geom, dispcp
 
 MC_SIZE, MEM_MAX = 10, 32
-ROW_HEAPFRAG = 0
+PKG_HEAPFRAG = "HEAPFRAG.O88"
+
 
 DRVR_SZ, DRVR_SEG = 16, 2           # driver.inc's row: 0 = not loaded
-RD_ROW = 2                          # drv_tab row 2 is the RAM disk
+RD_ROW = 3                          # drv_tab row 3 is the RAM disk since
+                                    # SPEC.md 31.1's reorder
 CP_I0Y, CP_IROWH = 6, 14            # ctrl.inc: the item list
 CP_RX = 96                          # ...the pane's left edge
 CP_DBY1, CP_DROWH = 20, 26          # ...the Drivers page's hit bands
 CP_IDRV = 2                         # SPEC.md 31.3
+RP_MNTX, RP_MNTW = 2, 64            # page.inc: Mount, in the first button row
+RP_B0Y, RP_BH = 52, 16
 
 
 def drv_syms():
@@ -51,8 +55,14 @@ def drv_syms():
     with tempfile.TemporaryDirectory() as d:
         cp, mp = os.path.join(d, "r.asm"), os.path.join(d, "r.map")
         open(cp, "w").write(open(src).read() + "\n[map symbols %s]\n" % mp)
+        # -DRAMPAGE_KB is the MAKEFILE's, and it is not optional: rdpage.inc
+        # sizes the page image's claim from it, so without it this assembles
+        # to an ERROR - which is what this helper did for as long as the knob
+        # has existed, and it fails before the emulator is ever started.
+        kb = (os.path.getsize("build/rampage.bin") + 1023) // 1024
         subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "drivers/",
                         "-I", "drivers/ramdisk/", "-I", "apps/", "-I", "build/",
+                        "-DRAMPAGE_KB=%d" % kb,
                         "-o", os.path.join(d, "r.bin"), cp], check=True)
         out = {}
         for line in open(mp):
@@ -126,7 +136,7 @@ def main():
             os88marty.settle(m)
 
         # --- heapfrag first, so it owns the floor of the arena --------------
-        dispcp.open_row(m, mo, S, os88marty.settle, wx, wy, ROW_HEAPFRAG)
+        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, PKG_HEAPFRAG)
         time.sleep(22)
         os88marty.settle(m)
         hf_win = [w for w in os88geom.windows(m, S)
@@ -158,6 +168,24 @@ def main():
         if not seg:
             print("FAIL: the RAM disk driver did not load")
             return 1
+
+        # ...and MOUNT it, which is when the arena is claimed.
+        #
+        # TICKING THE ROW ONLY LOADS THE DRIVER (SPEC.md 51.3): rd_store_get
+        # runs at the MOUNT, so without this second click [rd_arena] is 0 and
+        # there is nothing on the heap for compaction to move at all. That is
+        # what this script did for as long as the page has existed, and with
+        # the nasm failure above it in front of it nobody had seen it.
+        #
+        # The page is the row past the static ones (SPEC.md 31.9), and Mount
+        # is the first button of its first row.
+        nst = m.read(S("cp_nst"), 1)[0]
+        mo.click(x0 + 40, y0 + CP_I0Y + nst * CP_IROWH + 7)
+        time.sleep(8)                           # the first paint LOADS the
+        os88marty.settle(m)                     # page image off the floppy
+        mo.click(x0 + CP_RX + RP_MNTX + RP_MNTW // 2, y0 + RP_B0Y + RP_BH // 2)
+        time.sleep(6)
+        os88marty.settle(m)
 
         # CLOSE the panel: SPEC.md 31.8 writes SYSTEM.CFG on the close, and
         # leaving it open would sit a modal-ish window over everything below.
@@ -205,7 +233,7 @@ def main():
 
         # --- and run it again, whose big claim forces the compaction --------
         raise_disk()
-        dispcp.open_row(m, mo, S, os88marty.settle, *disk, row=ROW_HEAPFRAG)
+        dispcp.open_named(m, mo, S, os88marty.settle, *disk, name=PKG_HEAPFRAG)
         time.sleep(22)
         os88marty.settle(m)
 
@@ -221,6 +249,29 @@ def main():
         if top_p > fill:
             print("        %5d KB HOLE (to the top)" % ((top_p - fill) // 64))
 
+        # WHY CHECK 1 IS STILL INCONCLUSIVE, and what it is NOT.
+        #
+        # It is not the arena being pinned (the line above says MOVABLE) and
+        # not the compactor declining to work. It is that nothing in this
+        # scenario NEEDS the ground the arena is standing on, and the heap
+        # dump printed above is the evidence: there is a PINNED kernel claim
+        # (owner ff05, a Disk window's listing cache - SPEC.md 2.3/22.1)
+        # sitting ABOVE the arena, and a pinned claim is a wall. Every free
+        # run is capped by it, heapfrag asks for `largest + 1` (its own
+        # hf_frag), and sliding the arena down cannot join the run below the
+        # wall to the run above it - so the compactor is right to leave it
+        # where it is, and a run that leaves it there measures nothing about
+        # the relocation proc.
+        #
+        # Sizing the store was tried and does not reach it: mem_claim did not
+        # put a 24KB store in any of heapfrag's 32KB comb holes either, so the
+        # arena lands above the comb whatever size it is.
+        #
+        # What this wants is the wall on the other side - the Disk windows'
+        # caches claimed BEFORE the store rather than after - and that is a
+        # scenario change in a SPEC.md 66 gate rather than something to bolt
+        # on here. Until then checks 2 and 3 stand on their own: the store's
+        # contents are verified byte for byte and the volume is read back.
         bad = 0
         new = arena()
         moved = new != base

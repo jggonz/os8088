@@ -1,6 +1,6 @@
 ---
 name: port-to-os8088
-description: Port an existing program - written in C or in any other language - to os8088 as a C package (SPEC.md §70), the way apps/cword ported Microsoft Word 1.1a. Interactive intake of the reference source (scan nearby repos or clone a list), then a multi-agent scouting workflow that drafts the port plan, then one multi-agent implementation workflow per wave, asking the user only at real decisions, and a PR at the end. Runs on Opus 5 or Fable 5 only. Use when the user asks to port, bring over, reimplement or "do a CWORD-style port of" an application.
+description: Port an existing program - written in C or in any other language - to os8088 as a C package (SPEC.md §73), the way apps/cword ported Microsoft Word 1.1a. Interactive intake of the reference source (scan nearby repos or clone a list), then a multi-agent scouting workflow that drafts the port plan, then one multi-agent implementation workflow per wave, asking the user only at real decisions, and a PR at the end. Runs on Opus 5 or Fable 5 only. Use when the user asks to port, bring over, reimplement or "do a CWORD-style port of" an application.
 ---
 
 # Port a program to os8088, in C
@@ -29,7 +29,7 @@ Three files travel with this skill and are read by every agent it spawns:
 | [`workflows/implement.js`](workflows/implement.js) | one implementation wave: implement → three review lenses → fix → independent verify on QEMU |
 
 Also binding, and already in the tree: `docs/C-TOOLCHAIN.md` (what to type
-and what each refusal means), `SPEC.md §70` (the contract), `apps/cc/os88.h`
+and what each refusal means), `SPEC.md §73` (the contract), `apps/cc/os88.h`
 (the API), `CLAUDE.md` (the hard rules and the performance table).
 
 ---
@@ -52,7 +52,7 @@ the session model, which is the one the gate just checked.
 1. `LESSONS.md` beside this file — all of it.
 2. `docs/C-TOOLCHAIN.md` — the four rules, the ceiling, the overlay.
 3. `apps/cc/os88.h`'s header comment, and skim the prototypes.
-4. `SPEC.md §70.12` (the CWORD account) and `§70.14` (the overlay).
+4. `SPEC.md §73.12` (the CWORD account) and `§73.14` (the overlay).
 5. `apps/cword/cword.c`'s header comment — the redraw model and the cost table.
 
 That is ~1,500 lines and it is the difference between a plan that fits and one
@@ -157,7 +157,7 @@ plan. Do not ask a question whose answer is in `LESSONS.md` or the SPEC.
 Then write the plan into the tree, in this order:
 
 1. **`SPEC.md`** — a new top-level section at the end (the next free number),
-   titled `<N>. <NAME> — <Product>, written in C`, in the shape of §70.12:
+   titled `<N>. <NAME> — <Product>, written in C`, in the shape of §73.12:
    what it is, where the UI comes from (the authority table), the two segments
    and the byte budget, what ships, what is greyed and the fact for each, the
    names (package, dir, images, vm) and the sentence that it shares nothing
@@ -175,7 +175,7 @@ Before wave 1, check every name the plan uses collides with nothing:
 `ls apps/ vm/ | grep -i <name>`, `grep -in <name> Makefile | head`. A package,
 its directory, its disk images, its vm directory and its extension must not
 answer to an existing program's name — `apps/word` and `apps/cword` are two
-programs with one ambition and **share nothing**, by rule (SPEC.md §70.12).
+programs with one ambition and **share nothing**, by rule (SPEC.md §73.12).
 Package names are ≤ 15 characters, upper case in `CC_PKG_NAME`.
 
 ## 7. Implement — one workflow per wave

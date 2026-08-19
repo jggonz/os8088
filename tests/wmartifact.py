@@ -119,20 +119,15 @@ def diff(m, card, tag, show=8):
 
 
 def row_of(m, name):
-    """Which display row a file is on. The listing is SORTED by name
-    (SPEC.md 19.4), so a row index is a runtime fact and never the order the
-    Makefile happened to build things in."""
-    n = u16(m.read(S("disk_nfiles"), 2))
-    base = S("disk_dir")
-    for i in range(n):
-        e = m.read(base + i * DSK_DE_SIZE, DSK_DE_SIZE)
-        if e.split(b"\0")[0].decode("latin-1").strip() == name:
-            return i
-    raise RuntimeError("%s is not in this listing (%d entries: %s)"
-                       % (name, n, ", ".join(
-                           m.read(base + i * DSK_DE_SIZE, DSK_DE_SIZE)
-                           .split(b"\0")[0].decode("latin-1")
-                           for i in range(n))))
+    """Which display row a file is on - dispcp's, which is the one copy.
+
+    This was a second implementation of it and the two had already drifted:
+    this one read `disk_dir` directly, where a driver-backed volume lists into
+    its DRIVER's claim and the snapshot is reached through [dsk_dseg]:[dsk_doff]
+    instead. That is invisible on a floppy, which is the only volume this test
+    opens - which is exactly how a second copy survives long enough to matter.
+    """
+    return dispcp.row_of(m, S, name)
 
 
 def name_at(m, row):
@@ -173,7 +168,7 @@ def open_apps(m, mo):
     dispcp.open_drive(m, mo, S, os88marty.settle, "B")
     w = dispcp.win_list(m, S)
     wx, wy, ww, wh = dispcp.win_rect(m, S, w[-1])
-    dispcp.open_row(m, mo, S, os88marty.settle, wx, wy, row_of(m, "APPS"))
+    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "APPS")
     w = dispcp.win_list(m, S)
     return dispcp.win_rect(m, S, w[-1])
 
@@ -204,7 +199,7 @@ def part_shadow(machine):
                          "open at all" % len(base))
 
         row = row_of(m, "HELLO.O88")
-        dispcp.open_row(m, mo, S, os88marty.settle, wx, wy, row)
+        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "HELLO.O88")
         time.sleep(2)
         os88marty.settle(m)
         slot = dispcp.win_list(m, S)[-1]

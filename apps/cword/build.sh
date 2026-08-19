@@ -39,10 +39,10 @@
 #                               three defects PERFORMANCE.md names cannot be
 #                               seen in an emulator at all
 #   (1) smlrcc -tiny -S         C -> NASM, but 80386 NASM
-#   (2) tools/cc8086.py         -> strict 8086, or REFUSE (SPEC.md 70.6, 67.10)
+#   (2) tools/cc8086.py         -> strict 8086, or REFUSE (SPEC.md 73.6, 67.10)
 #   (3) nasm -f bin             one assembly, no linker: the shim %includes
 #                               apps/cc/crt0.asm and build/cword.gen.asm
-#   (4) tools/os88ovl.py        cut CWORD.OVL off the end (SPEC.md 70.14)
+#   (4) tools/os88ovl.py        cut CWORD.OVL off the end (SPEC.md 73.14)
 #   (5) tools/os88pkg.py        validate the 32-byte header and stamp it
 #   (6) tools/os88disk.py       FAT12, three geometries (CLAUDE.md), --verify
 #
@@ -106,16 +106,16 @@ PATH="$PWD/$SC:$PATH" "$SC/smlrcc" -tiny -S \
     apps/cword/cword.c -o $BUILD/cword.raw.asm
 
 # (2) The gate. It lowers the seven non-8086 forms SmallerC emits and REFUSES
-#     the C that is silently wrong here - &automatic above all (SPEC.md 70.5).
+#     the C that is silently wrong here - &automatic above all (SPEC.md 73.5).
 #     It prints every function's frame size on every build, deliberately
-#     (70.8). Never pass --quiet or --no-gate here.
+#     (73.8). Never pass --quiet or --no-gate here.
 python3 tools/cc8086.py $BUILD/cword.raw.asm -o $BUILD/cword.gen.asm
 
 # (3) One nasm job: the shim, which %includes apps/cc/crt0.asm (via -I apps/)
 #     and build/cword.gen.asm (via -I build/).
 nasm -f bin -w+error -I apps/ -I $BUILD/ -o $BUILD/cword.bin apps/cword/cword.asm
 
-# (4) THE OVERLAY CUT (SPEC.md 70.14). Everything from `.modc` on is code that
+# (4) THE OVERLAY CUT (SPEC.md 73.14). Everything from `.modc` on is code that
 #     must not ship inside CWORD.O88: it becomes CWORD.OVL, a file beside it,
 #     read into a heap claim the first time a dialog, a file command or one of
 #     the utilities is asked for. os88ovl.py finds the boundary in the image

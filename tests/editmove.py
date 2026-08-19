@@ -49,15 +49,19 @@ import os88marty, os88mouse, os88sym, os88geom, dispcp
 
 MC_SIZE, MEM_MAX = 10, 32
 
-# the listing is sorted by name (SPEC.md 19.4). modplug rides its own image
-# (BEVERLY.MOD renumbers everything), so its rows are counted separately.
-ROW = {"artful": 0, "fractal": 1, "heapfrag": 2, "notepad": 3}
-ROW_MPP = {"heapfrag": 1, "modplug": 2}     # BEVERLY.MOD is row 0
-# ...and for Frotz the app's row is THE STORY: it owns .Z5 (SPEC.md 54), so
+# WHAT TO DOUBLE-CLICK, BY NAME. It was a row INDEX per app and a comment
+# saying the listing is sorted (SPEC.md 19.4) - which is true and is exactly
+# why an index rots: any file added to one of these disks renumbers every
+# entry after it, and a stale index launches whatever sorted into that slot
+# with no diagnostic anywhere. dispcp.open_named asks the guest.
+PKG = {"artful": "ARTFUL.O88", "fractal": "FRACTAL.O88",
+       "heapfrag": "HEAPFRAG.O88", "notepad": "NOTEPAD.O88"}
+PKG_MPP = {"heapfrag": "HEAPFRAG.O88", "modplug": "MODPLUG.O88"}
+# ...and for Frotz the app's file is THE STORY: it owns .Z5 (SPEC.md 54), so
 # one double-click opens the app AND loads the file. Opening FROTZ.O88 itself
 # gives a running app that holds no claim at all, which reads as "declared
 # nothing movable" and is really "there is no story in it".
-ROW_Z   = {"frotz": 2, "heapfrag": 1}       # FROTZ.O88 0, HEAPFRAG 1, ZOPS 2
+PKG_Z   = {"frotz": "ZOPS.Z5", "heapfrag": "HEAPFRAG.O88"}
 
 # the Standard File dialog's geometry (SPEC.md 38, kernel/fdlg.inc)
 FD_ROW0, FD_ROWH, FD_TEXTX = 22, 16, 28
@@ -75,7 +79,7 @@ APPS = {
     "modplug": dict(title="ModPlug", src="apps/modplug/modplug.asm",
                     incs=("apps/", "apps/modplug/"),
                     words=["mpp_modseg"], wait=8,
-                    img="build/mppmove360.img", rows=ROW_MPP),
+                    img="build/mppmove360.img", rows=PKG_MPP),
     # ...and the window is titled after the STORY, not the app: Frotz calls
     # OSAPI_WM_TITLE when one is loaded (SPEC.md 11.92), so matching "Frotz"
     # finds nothing on exactly the runs that worked
@@ -84,7 +88,7 @@ APPS = {
                     words=["zf_sseg", "zf_stkseg"], wait=30,
                     extra=["zf_pcseg", "zf_sdelta", "zi_undoseg",
                            "zf_err", "zf_dead", "zx_badop"],
-                    img="build/zmove360.img", rows=ROW_Z),
+                    img="build/zmove360.img", rows=PKG_Z),
 }
 
 
@@ -183,7 +187,7 @@ def main():
             d.append("NOPARK")
         return os88sym.linear(name, tuple(d))
 
-    rows = cfg.get("rows", ROW)
+    rows = cfg.get("rows", PKG)
     with os88marty.launch("build/os8088-360.img",
                           apps=cfg.get("img", "build/editmove360.img"),
                           machine=a.machine, boot=False) as m:
@@ -214,7 +218,7 @@ def main():
             os88marty.settle(m)
 
         # --- heapfrag first, so it owns the floor of the arena --------------
-        dispcp.open_row(m, mo, S, os88marty.settle, wx, wy, rows["heapfrag"])
+        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, rows["heapfrag"])
         time.sleep(22)
         os88marty.settle(m)
         hf_seg, hf_win = pkg_seg(m, S, "Heap")
@@ -222,7 +226,7 @@ def main():
 
         # --- then the app, which lands ABOVE it -----------------------------
         raise_disk()
-        dispcp.open_row(m, mo, S, os88marty.settle, *disk, row=rows[a.app])
+        dispcp.open_named(m, mo, S, os88marty.settle, *disk, name=rows[a.app])
         time.sleep(cfg["wait"])
         os88marty.settle(m)
         seg, win = pkg_seg(m, S, cfg["title"])
@@ -393,7 +397,8 @@ def main():
 
         # --- and run it again, whose big claim forces the compaction --------
         raise_disk()
-        dispcp.open_row(m, mo, S, os88marty.settle, *disk, row=rows["heapfrag"])
+        dispcp.open_named(m, mo, S, os88marty.settle, *disk,
+                          name=rows["heapfrag"])
         time.sleep(22)
         os88marty.settle(m)
 

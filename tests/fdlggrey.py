@@ -33,7 +33,11 @@ def drive_y(m, n=1):
 
 
 MACHINE = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_cga_gla"
-WIN_SIZE, MAX_WIN = 28, 12
+from os88geom import WIN_SIZE, MAX_WIN   # NOT a local copy: this one
+                                        # moved 28 -> 30 with SPEC.md
+                                        # 13.8.2's W_ONDRAG, and a stale
+                                        # stride decodes window 1 as
+                                        # garbage and reads it as unused
 FD_BX1, FD_BX2, FD_BY0, FD_BH, TITLE_H = 224, 286, 20, 13, 18
 fails = []
 

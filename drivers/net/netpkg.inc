@@ -1,0 +1,219 @@
+; =============================================================================
+; NET.DRV's package verbs - sockets, behind OSAPI_DRV_CALL (SPEC.md 20.11)
+;
+; Included by BOTH ends, exactly as drivers/ramdisk/rdpkg.inc is: the driver
+; that answers these and every package that asks. Nothing here is a kernel
+; slot and nothing here is in SPEC.md's API table - which is the whole point
+; of the door (docs/NET-STACK-PLAN.md 1.1). A sockets ABI in the kernel would
+; be a contract os8088 owes for ever on a subject it has no code for; here it
+; is the DRIVER's, it lives beside the driver, and it can be got wrong once
+; and fixed.
+;
+;       %include "netpkg.inc"
+;       ...
+;       mov  bh, NET_CLASS              ; DRVC_FILE - see NET_CLASS below
+;       mov  bl, NETV_OPEN
+;       mov  si, my_host                ; ES:SI - ES is YOUR segment here
+;       mov  cx, 80
+;       call OSAPI_DRV_CALL
+;       jc   .no                        ; AX = a NETE_* below
+;
+; **ES IS YOUR OWN SEGMENT** on the way in - the one driver entry point in the
+; machine where it is not KERNEL_SEG - so a buffer you hand a verb is ES:SI or
+; ES:DI and needs no staging.
+;
+; -----------------------------------------------------------------------------
+; EVERY VERB IS NON-BLOCKING, AND THAT IS THE LOAD-BEARING RULE
+; -----------------------------------------------------------------------------
+; A file operation may freeze the machine for tens of milliseconds because
+; that is what the floppy already does and SPEC.md 12.8's widget reports it.
+; A connect is SECONDS and a recv may never complete at all, so a blocking
+; socket call is a hang with the gfx lock held.
+;
+; So NETV_OPEN starts a connection and returns; NETV_STATUS says how it is
+; getting on and how many bytes are readable NOW; NETV_RECV delivers what has
+; already arrived and answers 0 when nothing has. **Waiting is the caller's**,
+; and the ordinary shape is a worker task (SPEC.md 20.6) polling NETV_STATUS.
+;
+; What is bounded is the WIRE exchange, not the connection: every verb here is
+; one request-and-reply over the cable, and the far side answers it out of
+; state it already has. It never goes and waits for the network on our behalf.
+;
+; -----------------------------------------------------------------------------
+; WORKER SAFETY
+; -----------------------------------------------------------------------------
+; **Every verb here is worker-safe** (SPEC.md 20.6 rule 7's amendment): none
+; takes the gfx lock, raises sch_lock or touches a disk. That is deliberate
+; and it is what the polling design needs - a verb a worker could not call
+; would leave nothing to poll with.
+;
+; The wire is shared with the Link VOLUME's file verbs, which run on the UI
+; task, so the driver arbitrates: a file verb waits briefly for a socket
+; exchange to finish, and a socket verb that finds the wire busy answers
+; **NETE_BUSY immediately** rather than waiting. NETE_BUSY is an ordinary
+; answer and not a failure - poll again next tick.
+; =============================================================================
+
+; --- the verbs ---------------------------------------------------------------
+NETV_IDENT   equ PKGV_IDENT     ; = 0. -> AX = 'NL', CF=0. **ASK IT FIRST.**
+                                ; BH is a CLASS and a class is a publication
+                                ; SLOT, not a driver: NET.DRV and RAMDISK.DRV
+                                ; are BOTH DRVC_FILE, so NETV_OPEN and
+                                ; RDPV_UPCASE are the same number at the same
+                                ; address. A package that skipped this would
+                                ; hand a hostname to the RAM disk and read the
+                                ; length back as a socket handle - it
+                                ; assembles, it runs, and it says nothing.
+                                ; SPEC.md 20.11.1
+NETV_STATE   equ 1              ; -> AL = NSTF_* bits, AH = free sockets.
+                                ; CF=1 only when there is no driver; a machine
+                                ; with a cable and no partner answers CF=0
+                                ; with NSTF_LINK clear, which is the state a
+                                ; package should SAY rather than refuse on
+NETV_OPEN    equ 2              ; in  ES:SI = a NUL host - a name or a dotted
+                                ;     quad, up to NET_HOSTMAX-1 bytes
+                                ;     CX = the port
+                                ; out AX = a handle, 1..NET_SOCKS
+                                ;
+                                ; RESOLUTION IS PART OF CONNECTING. A name is
+                                ; passed through and the far side looks it up,
+                                ; so a lookup is inside NSK_CONNECTING and
+                                ; needs no verb of its own - see NETV_RESOLVE
+NETV_STATUS  equ 3              ; in  AL = a handle
+                                ; out AH = an NSK_* state, CX = bytes readable
+                                ;     RIGHT NOW (0 is ordinary), AL = the
+                                ;     handle back
+NETV_SEND    equ 4              ; in  AL = handle, ES:SI = bytes, CX = how many
+                                ; out CX = HOW MANY WERE TAKEN, which may be
+                                ;     fewer than asked and may be 0. Advance
+                                ;     your own pointer by it and come back
+NETV_RECV    equ 5              ; in  AL = handle, ES:DI = a buffer, CX = its
+                                ;     capacity
+                                ; out CX = bytes delivered, 0 = nothing has
+                                ;     arrived yet. **0 IS NOT END-OF-STREAM**:
+                                ;     that is NSK_CLOSING with CX = 0 from
+                                ;     NETV_STATUS, and reading a 0 as an end
+                                ;     truncates every page that arrives in
+                                ;     more than one piece
+NETV_CLOSE   equ 6              ; in  AL = a handle. Always succeeds from the
+                                ; caller's point of view: the handle is yours
+                                ; no more whatever the far side says
+NETV_LISTEN  equ 7              ; in  CX = a port -> AX = a LISTENING handle
+NETV_ACCEPT  equ 8              ; in  AL = a listening handle
+                                ; out AX = a NEW connected handle, or 0 with
+                                ;     CF=0 for "nobody yet" - which is the
+                                ;     ordinary answer and not an error.
+                                ;
+                                ; SEPARATE FROM LISTEN because a server must
+                                ; stay reachable while it is serving: the
+                                ; listener outlives the connection it accepts
+NETV_RESOLVE equ 9              ; RESERVED, AND NOT IMPLEMENTED. It is in the
+                                ; numbering so that adding it later does not
+                                ; move anything below it. NETV_OPEN taking a
+                                ; NAME subsumes it for everything in
+                                ; docs/NET-STACK-PLAN.md's staging - a browser
+                                ; and an FTP client both want the connection,
+                                ; never the address - and a verb whose only
+                                ; caller is hypothetical is a contract to get
+                                ; wrong for free
+NETV_MAX     equ 9              ; ...and anything above it is refused. A verb
+                                ; table indexed by an unchecked verb is a wild
+                                ; near call inside the driver
+
+; --- NETV_STATE's bits -------------------------------------------------------
+NSTF_PORT    equ 0x01           ; a parallel port was found
+NSTF_LINK    equ 0x02           ; ...and a partner answered on it
+NSTF_SOCK    equ 0x04           ; ...and that partner speaks the socket verbs.
+                                ; A far side built before them answers the
+                                ; file verbs perfectly well and refuses these,
+                                ; so this is a fact about the PARTNER and not
+                                ; about the cable
+
+; --- a socket's state, as NETV_STATUS answers it -----------------------------
+NSK_FREE     equ 0              ; not a handle of yours
+NSK_CONNECT  equ 1              ; connecting - or still resolving the name
+NSK_UP       equ 2              ; connected: send and recv both work
+NSK_CLOSING  equ 3              ; THE PEER HAS CLOSED ITS END. Readable bytes
+                                ; may still be waiting, so drain to CX = 0
+                                ; before you believe the transfer is over -
+                                ; this state is what "end of stream" means and
+                                ; a 0 from NETV_RECV is not
+NSK_CLOSED   equ 4              ; both ends done
+NSK_FAILED   equ 5              ; it never connected, or it broke
+NSK_LISTEN   equ 6              ; a listening handle: NETV_ACCEPT is what this
+                                ; one is for and send/recv are refused on it
+
+; --- what CF=1 means, in AX --------------------------------------------------
+NETE_NODRV   equ 0              ; the kernel's own refusal: no DRVC_NET driver
+                                ; is published, or it publishes no package
+                                ; door. AX = 0 is the kernel's answer and not
+                                ; the driver's, which is why it is the zero
+NETE_NOLINK  equ 1              ; no partner on the cable
+NETE_BUSY    equ 2              ; the wire is in use by the Link volume. NOT A
+                                ; FAILURE - come back next tick
+NETE_HANDLE  equ 3              ; not a handle of yours, or wrong kind for the
+                                ; verb (send on a listener)
+NETE_FULL    equ 4              ; all NET_SOCKS handles are in use
+NETE_IO      equ 5              ; the link died mid-command. The driver has
+                                ; dropped it; every handle is gone with it
+NETE_REFUSED equ 6              ; the far side said no: a name that does not
+                                ; resolve, a port nothing is listening on, a
+                                ; partner too old for the socket verbs
+NETE_VERB    equ 7              ; a verb this driver does not have
+
+; --- who to ask, and how to know you reached them ----------------------------
+; **THE CLASS IS DRVC_FILE AND NOT DRVC_NET**, which is the one thing here
+; most likely to be got wrong from the name. NET.DRV became the FILE
+; REDIRECTOR at SPEC.md 62.10 - it serves a volume by answering questions
+; about files, so it occupies the DRVC_FILE publication slot and DRVC_NET is
+; block mode's, which is retired. A driver publishes in ONE class; sockets are
+; a second service of the same driver, not a second driver.
+;
+; And a class is a SLOT, so DRVC_FILE names whichever DRVC_FILE driver is
+; attached - RAMDISK.DRV is the other one, and it publishes a package door
+; too. NETV_IDENT is what tells them apart, and it is not optional.
+; **AND SINCE SPEC.md 72 THERE ARE TWO CLASSES**, because ETHER.DRV answers
+; these same verbs off a card and serves no volume, so it publishes in
+; DRVC_NET. `NET_CLASS` is therefore no longer a constant a package can bake
+; in: apps/os88sock.inc's `net_find` asks each candidate for NETV_IDENT and
+; stores the winner, and NET_CLASS names that byte. Every `mov bh, NET_CLASS`
+; written against the old constant assembles unchanged - the operand went from
+; an immediate to a memory byte and nothing else moved.
+;
+; A DRIVER includes this file for the verb numbers and has no use for the
+; question, so it defines NETPKG_DRIVER and gets the constant it publishes in.
+%ifdef NETPKG_DRIVER
+NET_CLASS    equ DRVC_FILE       ; the redirector's own slot, for net.asm
+%else
+%define NET_CLASS [net_cls]      ; ...and os88sock.inc's answer for a package
+%endif
+NET_SIG      equ 'NL'            ; what NETV_IDENT answers. **IT NAMES THE ABI
+                                ; AND NOT THE DRIVER**: the card answers it too,
+                                ; because what a package is asking is "do you
+                                ; speak sockets", and the thing it has to be
+                                ; told apart from is the RAM disk sharing a
+                                ; publication slot (SPEC.md 20.11.1)
+
+; --- limits ------------------------------------------------------------------
+NET_SOCKS    equ 4              ; simultaneous handles. FOUR IS THE FLOOR AND
+                                ; NOT A ROUND NUMBER: an FTP server is a
+                                ; control connection plus a data connection
+                                ; plus a listener that must stay open across
+                                ; both, and the fourth is a browser fetching
+                                ; while something else is connected
+                                ; (docs/NET-STACK-PLAN.md 1.2)
+NET_HOSTMAX  equ 64             ; the host field on the wire, INCLUDING the
+                                ; NUL, and a fixed frame like every other one
+                                ; here (SPEC.md 62.10.1)
+NET_SKMAX    equ 1024           ; the most bytes one NETV_SEND or NETV_RECV
+                                ; moves. Ask for more and you get this much
+                                ; and the count says so.
+                                ;
+                                ; It is a LATENCY bound, not a memory one: the
+                                ; cable runs at 3,741 bytes/second
+                                ; (PERFORMANCE.md Set 39), so a full chunk is
+                                ; ~274 ms of wire during which nothing else on
+                                ; the machine moves. A page arrives in pieces
+                                ; either way, and a caller that cannot cope
+                                ; with a partial read is broken on a real
+                                ; network as well

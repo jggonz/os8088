@@ -4,7 +4,7 @@
 ; A BOOT SECTOR THAT TESTS cw_memmove ON A REAL x86, because nothing else can.
 ;
 ; apps/cword/cwmove.inc is the one hand-written routine in the package
-; (SPEC.md 70.11: a C package composes, the byte loop is assembly). The host
+; (SPEC.md 73.11: a C package composes, the byte loop is assembly). The host
 ; harness cannot exercise it - it substitutes the C library's memmove() - and
 ; the compiler gate cannot either, because it never sees hand-written
 ; assembly. So the routine's first execution would otherwise be on the user's

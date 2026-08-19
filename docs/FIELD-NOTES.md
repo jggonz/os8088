@@ -2608,3 +2608,73 @@ tests that settle it are physical: pull the Picomem, then the Hercules, and
 see whether the VGA steadies; measure +5V under load; reseat both cards and
 try other slots. If it steadies with less in the backplane, no amount of
 software is the answer.
+
+## 25. An XMS RAM disk "corrupted" what was copied onto it (SOLVED — the volume was too small, and the copy TRUNCATED IN SILENCE)
+
+Reported on an 86Box 386 with 4MB. The reporter's own sequence, which is what
+solved it:
+
+* type **1024** into the size box — **it corrects to 264**
+* mount, open the RAM drive (the correction to 264K was not noticed)
+* drag a **297KB** mod onto it from a hard-disk Disk window
+* it appears to arrive; double-clicking it says *not a mod*
+* delete it, copy **BEVERLY.MOD** (116KB) instead — apparent success, *not a mod*
+* drag that back to the hard disk — still *not a mod*
+
+### It was two defects, and neither is the extended-memory store
+
+**The 264K was ours** (SPEC.md §62.9.10.3): `rd_kb_max` subtracted conventional
+room for the chain table and the bounce *from the ceiling* instead of gating on
+it, so an extended store could never exceed the conventional heap it exists to
+escape. That is why a 4MB machine offered 264K. **Fixed** — and confirmed by the
+reporter, who then mounted 1024K in extended memory, copied the 297KB mod
+cleanly and played a 150KB one off the drive.
+
+**And a copy that runs out of room leaves a TRUNCATED FILE with no error left on
+screen.** Reproduced exactly: a 264K store, `BANANA.MOD` 304,552 bytes dragged
+on, and the volume afterwards lists **`BANANA.MOD 260096`** — `Size 254K
+Free 10K` — a file whose directory entry states the truncated length as though
+it were the file's own. `fcp_file1`'s `.err` returns and **nothing deletes the
+partial**; the verdict goes to a §59.5 toast, which expires. So the reporter's
+first file was truncated, and their second failed for the *same* reason: after
+the first copy the store was 10K free, and a 116KB file into 10K truncates too.
+Deleting the first file between them did not help, because the free space they
+were told about was §62.9.10.5's figure — which was also wrong.
+
+**This one is NOT specific to the RAM disk and is NOT fixed.** `dskw_append`
+grows a file incrementally by design and the copy engine chunks, so *any*
+destination that fills mid-copy leaves a partial — a floppy does the same. The
+fix belongs in `fcp_file1`/`fcp_file2`: a copy that fails after creating its
+destination should delete it, so a failed copy leaves nothing rather than
+something that looks like the file. It is a change to the engine every volume
+shares and it wants its own commit and its own testing.
+
+### What was ruled out along the way
+
+**The extended-memory ownership fence**, which looked exactly like it.
+`OSAPI_XMEM_COPY` refuses a range whose block is not the caller's, and
+`drv_fs_call` was not clearing the dispatch stamp (§62.9.10.4) — so the driver
+could ask for its own bounce as somebody else and be refused, while
+`rd_stage_in`/`rd_stage_out` threw the refusal away (§62.9.10.2). That composes
+into precisely this symptom.
+
+It is fixed, and **it is not this.** `snd_req_inst` answers `0xFF` when no
+callback is being dispatched, which is what a Disk window's own drag or
+Edit ▸ Paste is — Locator has no instance — so the copy asks as `0xFF`, matches
+a block stamped `0xFF` at Mount, and works. Measured on QEMU: the same scripted
+floppy → XMS volume → floppy round trip of that 116,085-byte file comes back
+**byte-identical under `make FSNOSTAMP=1`**, the build with the defect put back,
+and byte-identical with it fixed. Two builds, one gesture, 0 differing bytes
+either way — at 16MB with 8KB extents *and* at 264K with 1KB extents.
+
+**It is still worth having fixed**, because it is reachable from every path that
+carries an instance stamp: `wm_pkgcall` does `push word [snd_inst]` /
+`call snd_disp_set` around every `W_PAINT`, `W_ONKEY` and `W_ONCLICK`, so a
+package's Save, a file-dialog commit inside an application and a worker all ask
+as themselves. Saving from an app onto an extended-memory RAM disk *was* broken
+and silent. Nobody had done it.
+
+### The one that reads as a bug and is not
+
+**A drag between Disk windows is a COPY, not a move** (SPEC.md §22.3/§22.5), so
+the source file staying where it was is correct.

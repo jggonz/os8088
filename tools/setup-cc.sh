@@ -208,7 +208,7 @@ else
 	# THE FOUR LIMITS, RAISED BY A BUILD FLAG AND NOT BY A PATCH. smlrc
 	# keeps its tables in fixed-size arrays and refuses when one fills:
 	# `Identifier table exhausted`, and the message names no file, no line
-	# and no way forward. A program of CWORD's size (SPEC.md 70.12, about
+	# and no way forward. A program of CWORD's size (SPEC.md 73.12, about
 	# 5,000 lines in one translation unit, because `nasm -f bin` has no
 	# notion of an external symbol) fills three of the four.
 	#

@@ -819,6 +819,12 @@ menu_draw_bar:
     cmp byte [menu_bovr], 0     ; --- segment 1: the static furniture -------
     je .txt                     ; only ever owed after an OVERDRAW
     call menu_furniture
+    cmp byte [fpg_on], 0        ; ...and that fill took SPEC.md 12.8's widget
+    je .txt                     ; with it, which since 12.8.3 can be up across
+    call fpg_paint              ; a repaint at all. Its own pixels only - the
+                                ; cells are already ours, the text pass below
+                                ; keeps off them, and fpg_paint deliberately
+                                ; does not call back into this routine
 
 .txt:
     cmp byte [menu_bdirty], 0   ; --- segment 2: the menus ------------------
@@ -934,21 +940,42 @@ menu_bar_text:
     jbe .n
     mov ax, MENU_BCMAX
 .n:
-    mov [menu_bn], ax           ; ...and the WHOLE of it is the menus'. The
-                                ; toast strip used to borrow the right end of
-                                ; this segment and cover them (SPEC.md 59.8);
-                                ; it is in the clock's field now, so nothing
-                                ; below here has a tenant to make room for -
-                                ; **except SPEC.md 12.8's widget, which is
-                                ; drawn straight onto this segment's last
-                                ; cells and is not composed at all** (59.9.2).
-                                ; [menu_bres] is how many of them it holds,
-                                ; and it bounds the GAP alone: the menus are
-                                ; laid out against [vid_clk_hx] by
-                                ; menu_layout, the padding still has to reach
-                                ; [menu_bn] to erase an application's menus
-                                ; when it goes away, and only the strip's
-                                ; placement has to keep off
+    cmp byte [fpg_on], 0        ; ...and the whole of it is the menus' UNLESS
+    je .res                     ; SPEC.md 12.8's widget is up, when the last
+    sub ax, FPG_CELLS           ; FPG_CELLS of it are ITS (SPEC.md 12.8.3).
+    jns .res                    ; The widget is drawn straight onto them and
+    xor ax, ax                  ; is composed into no buffer at all, so
+.res:                           ; menu_bcell cannot see it and the diff cannot
+    mov [menu_bn], ax           ; arbitrate: two painters, one strip of glass,
+                                ; which is exactly what 59.1 exists to
+                                ; prevent.
+                                ;
+                                ; Taking it off [menu_bn] rather than off the
+                                ; toast alone is what SPEC.md 12.8.3 needed:
+                                ; the widget now outlives the operation that
+                                ; armed it, so a composition CAN happen while
+                                ; it is up - launching an application from a
+                                ; Disk window changes the bar's owner between
+                                ; the package load and the document read, with
+                                ; the machine frozen throughout - and the
+                                ; padding below would have lettered spaces
+                                ; straight through the icon and the box.
+                                ; menu_bput already drops a cell at or past
+                                ; this bound without advancing DI, and
+                                ; menu_bpadc already clamps to it (59.7), so
+                                ; one subtraction is the whole of it.
+                                ;
+                                ; The cells come back at fpg_finish, which
+                                ; clears the flag and asks for one more
+                                ; composition; what was under them is put back
+                                ; by fpg_arm's menu_inval, taken when the
+                                ; widget went up.
+                                ;
+                                ; The clamp at 0 is for a screen too narrow to
+                                ; hold both - fpg_arm refuses such a screen,
+                                ; so it cannot happen, but a negative cell
+                                ; count here would be an unsigned bound
+                                ; everywhere below
 
     mov word [menu_bfirst], 0FFFFh
     mov word [menu_blast], 0    ; SEEDED now that it is a maximum (menu_bput).

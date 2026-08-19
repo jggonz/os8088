@@ -24,7 +24,11 @@ import os88marty as M
 from os88mouse import Mouse
 
 MACHINE = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_cga_gla"
-WIN_SIZE, MAX_WIN = 28, 12
+from os88geom import WIN_SIZE, MAX_WIN   # NOT a local copy: this one
+                                        # moved 28 -> 30 with SPEC.md
+                                        # 13.8.2's W_ONDRAG, and a stale
+                                        # stride decodes window 1 as
+                                        # garbage and reads it as unused
 MUP = (240, 100)                 # the main window's frame
 VAN = (160, 60)                  # ...and the vanish window's
 fails = []

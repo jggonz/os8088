@@ -165,6 +165,13 @@ CAL_HIST_N   equ 8                  ; kept, and the most rows ever shown
 CAL_OPEN_H   equ CAL_BASE_H + CAL_HIST_N * CAL_ROW_H ; the height we ASK for
 
 ; --- rect table indices (one table, drawn from and hit-tested from) ------------
+CAL_FLASH    equ 3                  ; ticks a TYPED key stays pressed (SPEC.md
+                                    ; 65.9): 165ms, long enough to see on a
+                                    ; 4.77MHz machine and short enough not to
+                                    ; lag a fast typist. A constant and not a
+                                    ; setting - 31.8 makes a Control Panel page
+                                    ; a SYSTEM.CFG write on close, and a flash
+                                    ; duration is not worth one
 CAL_R_HDR    equ CAL_NKEY           ; 20: the disclosure strip
 CAL_R_HIST   equ CAL_NKEY + 1       ; 21..28: the history rows
 CAL_NRECT    equ CAL_R_HIST + CAL_HIST_N
@@ -240,6 +247,16 @@ cal_entry:
     call OSAPI_WM_ONMOUSEUP         ; SPEC.md 13.7: a key fires on the RELEASE,
                                     ; over the key the press landed on, so a
                                     ; mis-aimed press can be slid off
+    mov ax, cal_ondrag
+    call OSAPI_WM_ONDRAG            ; ...and SPEC.md 13.8.2: the key it landed
+                                    ; on FOLLOWS the pointer between the two
+                                    ; edges, so sliding off says the gesture is
+                                    ; cancelled before the button comes up
+    mov ax, cal_ontimer
+    call OSAPI_WM_ONTIMER           ; ...and SPEC.md 13.9's one-shot, which is
+                                    ; how a key pressed from the KEYBOARD gets
+                                    ; back up: it has no release edge, and a
+                                    ; callback cannot sleep
     mov ax, cal_onresize
     call OSAPI_WM_ONRESIZE          ; SPEC.md 11.98: [cal_nvis] is derived from
                                     ; the content box and KEPT, so the box
@@ -497,9 +514,66 @@ cal_onclick:
     mov bx, cal_rects
     call os88ui_bfind               ; AX = index + 1, 0 = none
     call os88ui_arm
+    call cal_setdown                ; ...and the pressed look, through the one
+                                    ; writer - 0 is a legal argument, so the
+                                    ; press that lands on nothing needs no test
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret                             ; near: dispatched (SPEC.md 20.5)
+
+; -----------------------------------------------------------------------------
+; cal_ondrag - W_ONDRAG (SPEC.md 13.8.2): the pointer moved, press still down
+; in:  CX = x, DX = y (SCREEN, and possibly outside the window), SI = window;
+;      UI task, gfx lock held
+; out: nothing; preserves all registers
+;
+; THE PRESSED CONTROL FOLLOWS THE POINTER: down while it is over the control
+; the press landed on, up the moment it is not, down again on the way back.
+; That is the half of the down state that is worth having - it says the
+; gesture is CANCELLED before the user commits to it, which is the whole
+; reason press-and-slide-off is a usable way to change your mind.
+;
+; It is the same question cal_onup asks at the release, one pass early, and
+; it is deliberately the same two calls in the same order - os88ui_bfind
+; against the armed control - so what is lit is exactly what would fire. The
+; kernel decides none of that: it says only "the pointer is here and your
+; press is live" (13.8.2), because there is no widget layer for it to ask.
+;
+; os88ui_armed rather than os88ui_fire: the arm has to survive this and be
+; there for the release. Spending it here would leave the release with
+; nothing armed and the calculator would take no input at all.
+; -----------------------------------------------------------------------------
+cal_ondrag:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, si
+    push cx
+    push dx
+    call cal_geom                   ; the window can have been dragged since
+    call cal_layout                 ; the press; CX/DX are already SCREEN
+    pop dx                          ; coordinates, which is what bfind wants
+    pop cx
+    call os88ui_armed               ; AX = what the press armed, still armed
     or ax, ax
-    jz .out
-    call cal_invert
+    jz .out                         ; the press landed on nothing: nothing to
+    mov di, ax                      ; track, and no repaint owed
+    call cal_nrect
+    mov bx, cal_rects
+    call os88ui_bfind               ; AX = what is under the pointer NOW
+    cmp ax, di
+    je .set                         ; back on it (or never left)
+    xor ax, ax                      ; off it: nothing down
+.set:
+    call cal_setdown                ; ...which draws only if that CHANGED
 .out:
     pop di
     pop si
@@ -540,7 +614,10 @@ cal_onup:
     or ax, ax                       ; CLEARED - one release per press, so
     jz .out                         ; there is no stale arm to guard against
     mov di, ax
-    call cal_restore                ; ...upright again, whatever happens next
+    push ax
+    xor ax, ax
+    call cal_setdown                ; ...upright again, FIRST and whatever
+    pop ax                          ; happens next (SPEC.md 13.8.2)
     push di
     call cal_nrect
     mov bx, cal_rects
@@ -614,6 +691,10 @@ cal_onkey:
     call cal_paste
     jmp short .out
 .plain:
+    call cal_flash                  ; the key on the pad goes DOWN (SPEC.md
+                                    ; 65.9) - BEFORE the action, so a verb that
+                                    ; repaints puts the pressed key back up
+                                    ; itself rather than over the top of it
     call cal_key
 .out:
     pop di
@@ -623,6 +704,103 @@ cal_onkey:
     pop bx
     pop ax
     ret                             ; near: dispatched (SPEC.md 20.5)
+
+; -----------------------------------------------------------------------------
+; cal_flash - press key AL on the pad and arm the timer to let it go
+; in:  AL = CK_*, SI = the window; the layout is current; gfx lock held
+; out: nothing; preserves all registers
+;
+; A typed key had nothing to show for it before this: the display changed and
+; the key that produced it did not move (SPEC.md 65.9). The kernel's one-shot
+; timer (SPEC.md 13.9) is what makes it possible at all - a callback cannot
+; sleep, holding the gfx lock as it does, and the alternative was a worker
+; task for a 165ms flash.
+;
+; A code with no key on the pad - Q, R, %, N are Math-menu verbs - flashes
+; NOTHING rather than the nearest thing, which is what cal_keyrect's 0 means.
+; -----------------------------------------------------------------------------
+cal_flash:
+    push ax
+    push bx
+    push si
+    call cal_keyrect                ; AX = index + 1, 0 = not on the pad
+    or ax, ax
+    jz .out
+    call cal_setdown                ; ...through the ONE writer, as every mouse
+    mov bx, si                      ; edge does (SPEC.md 65.8)
+    mov ax, CAL_FLASH
+    call OSAPI_WM_TIMER             ; ...and a REPEAT re-arms this rather than
+.out:                               ; stacking, the timer being one-shot and
+    pop si                          ; per-window: a held key stays lit and goes
+    pop bx                          ; up CAL_FLASH ticks after the last repeat
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cal_ontimer - W_ONTIMER (SPEC.md 13.9): the flash is over
+; in:  CX = DX = 0, SI = window; UI task, gfx lock held
+; out: nothing; preserves all registers
+;
+; IT DEFERS TO THE MOUSE, and that is the whole of it. Type a key and then
+; press a mouse button on the pad inside the flash window, and an
+; unconditional clear here springs the HELD key up under a finger that is
+; still down - SPEC.md 13.8.2's defect arriving from the clock instead of from
+; a repaint. os88ui_armed answers whether a gesture is still running, and a
+; timed un-draw does not outrank one that is.
+; -----------------------------------------------------------------------------
+cal_ontimer:
+    push ax
+    push bx
+    push si
+    call os88ui_armed
+    or ax, ax
+    jnz .out                        ; a press is live: the release owns the
+    mov bx, si                      ; down state and will put it up itself
+    call cal_geom
+    call cal_layout                 ; the window may have moved since the key
+    xor ax, ax
+    call cal_setdown
+.out:
+    pop si
+    pop bx
+    pop ax
+    ret                             ; near: dispatched (SPEC.md 20.5)
+
+; -----------------------------------------------------------------------------
+; cal_keyrect - which keypad key produces code AL?
+; in:  AL = CK_*
+; out: AX = the key index + 1 (os88ui_bfind's sentinel), or 0 for none;
+;      preserves all other registers
+;
+; The reverse of cal_keytab, WALKED rather than tabulated: the table is twenty
+; entries and this runs once per keystroke, on a machine where the keystroke
+; itself costs milliseconds. A second table would be a second description of
+; the same pairing, which is exactly what cal_keytab exists to prevent.
+; -----------------------------------------------------------------------------
+cal_keyrect:
+    push bx
+    push cx
+    push dx
+    mov dl, al
+    xor bx, bx
+    xor cx, cx
+.next:
+    cmp dl, [cal_keytab+bx+2]       ; the CODE, a byte at +2 of a 4-byte entry
+    je .hit                         ; whose first word is the label
+    add bx, 4
+    inc cx
+    cmp cx, CAL_NKEY
+    jb .next
+    xor ax, ax
+    jmp short .out
+.hit:
+    mov ax, cx
+    inc ax
+.out:
+    pop dx
+    pop cx
+    pop bx
+    ret
 
 ; -----------------------------------------------------------------------------
 ; cal_asckey - one ASCII byte to a key code
@@ -989,6 +1167,9 @@ cal_drawall:
     xor si, si                      ; the twenty keys
 .key:
     mov ax, si
+    xor di, di                      ; upright, and no erase owed: the kernel
+                                    ; whited this content before W_PAINT. One
+                                    ; instruction for both, `xor` clearing CF
     call cal_btn
     inc si
     cmp si, CAL_NKEY
@@ -1011,14 +1192,20 @@ cal_drawall:
 
 ; -----------------------------------------------------------------------------
 ; cal_btn - draw keypad button AX
-; in:  AX = the key index 0..19, CF = 1 to erase its interior first;
-;      the layout is current; gfx lock held
+; in:  AX = the key index 0..19, CF = 1 to erase its interior first,
+;      DI = extra OS88UI_* flags (OS88UI_DOWN, or 0); the layout is current;
+;      gfx lock held
 ; out: nothing; preserves all registers
 ;
 ; OS88UI_FILL rides in on CF because the flag's own question is "can this be
 ; drawn a second time without the ground being repainted first" (os88ui.inc),
 ; and the two callers give different answers: cal_drawall's ground is white
-; already, cal_restore's is an inverted button.
+; already, cal_restore's is a pressed button.
+;
+; DI is an ARGUMENT rather than a second CF because OS88UI_DOWN is not a
+; property of the caller the way the fill is - it is the state of this one
+; control - and because a flag word that is already the painter's own
+; vocabulary does not need translating (SPEC.md 13.8).
 ; -----------------------------------------------------------------------------
 cal_btn:
     push ax
@@ -1026,10 +1213,16 @@ cal_btn:
     push cx
     push si
     push di
-    mov di, OS88UI_FILL
-    jc .fill
-    xor di, di
+    jnc .fill                   ; DOWN implies the erase by itself, so this
+    or di, OS88UI_FILL          ; only ever ADDS to what the caller asked for
 .fill:
+    push ax                     ; ...and the DOWN state comes from [cal_down]
+    inc ax                      ; rather than from the caller, so that every
+    cmp ax, [cal_down]          ; painter agrees with it for free - a W_PAINT
+    jne .nodown                 ; mid-gesture included (SPEC.md 13.8.2). The
+    or di, OS88UI_DOWN          ; press path passes it too and that is
+.nodown:                        ; harmless: the flag is already set
+    pop ax
     mov si, ax
     add si, si
     add si, si
@@ -1047,11 +1240,27 @@ cal_btn:
     ret
 
 ; -----------------------------------------------------------------------------
-; cal_invert  - XOR-invert control AX-1's rect (the pressed look)
+; cal_invert  - draw control AX-1 in its PRESSED state
 ; cal_restore - put control AX-1 back the way it was drawn
 ; in:  AX = index + 1 (os88ui_bfind's answer); the layout is current; gfx
 ;      lock held
 ; out: nothing; preserves all registers
+;
+; NEITHER OF THESE XORs A BUTTON ANY MORE (SPEC.md 13.8). A keypad key is
+; drawn down by os88ui_btn with OS88UI_DOWN and drawn up by the same routine
+; without it - the same primitive over the same rect, which is what
+; cal_draw_row had always been doing for a history row and for the reason
+; SPEC.md 65.4 records: an XOR and a redraw are two descriptions of one
+; control that have to agree by hand, and here they did not.
+;
+; The header strip keeps its XOR, and that is not an oversight. It is a
+; disclosure rule with a triangle and a label in it, not a framed button, so
+; os88ui_btn has nothing to say about it - and its restore below is already
+; the erase-and-redraw pair rather than a second XOR.
+;
+; NEITHER IS CALLED DIRECTLY ANY MORE: cal_setdown owns the pair, because the
+; down state is a VARIABLE now (SPEC.md 13.8.2) and two callers moving it
+; independently is how it parts from [cal_down].
 ; -----------------------------------------------------------------------------
 cal_invert:
     push ax
@@ -1059,24 +1268,29 @@ cal_invert:
     push cx
     push dx
     push si
+    push di
     dec ax
-    cmp ax, CAL_R_HIST
-    jb .rect
+    cmp ax, CAL_NKEY
+    jb .key
+    je .hdr
     sub ax, CAL_R_HIST              ; a history ROW inverts by being drawn
     stc                             ; again with its two colours swapped -
     call cal_draw_row               ; the same opaque pass over the same
     jmp short .out                  ; cells the release will use
-.rect:
-    mov cl, 3
-    shl ax, cl
-    mov si, cal_rects
-    add si, ax
+.key:
+    mov di, OS88UI_DOWN             ; ...and a keypad key by being drawn down,
+    stc                             ; over the upright one already there
+    call cal_btn
+    jmp short .out
+.hdr:
+    mov si, cal_rects + CAL_R_HDR * 8
     mov ax, [si+0]
     mov bx, [si+2]
     mov cx, [si+4]
     mov dx, [si+6]
     call OSAPI_GFX_XOR_FILL
 .out:
+    pop di
     pop si
     pop dx
     pop cx
@@ -1114,14 +1328,62 @@ cal_restore:
     call cal_draw_hdr
     jmp short .out
 .key:
-    stc                             ; the ground under it is inverted
-    call cal_btn
+    xor di, di                      ; upright - and the erase is not optional,
+    stc                             ; because the ground under it is a pressed
+    call cal_btn                    ; button (os88ui.inc's OS88UI_FILL note)
 .out:
     pop di
     pop si
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cal_setdown - MOVE the pressed state to control AX (0 = none)
+; in:  AX = index + 1, or 0 for "nothing is down"; the layout is current;
+;      gfx lock held
+; out: nothing; preserves all registers
+;
+; THE ONE PLACE THE DOWN STATE MOVES, and the one writer of [cal_down]. All
+; three edges come through it - the press, the tracking edge and the release -
+; so "which control is drawn down" and "which control [cal_down] says is down"
+; cannot part.
+;
+; It draws NOTHING when the state has not changed, and that is not an
+; optimisation here, it is the thing that makes W_ONDRAG affordable at all: the
+; edge arrives per pointer movement, and a pointer crossing a keypad delivers
+; one every few milliseconds. Redrawing two buttons per movement would be tens
+; of milliseconds of repaint per mouse packet on the field machine (SPEC.md
+; 13.8.2's third rule); comparing first makes the common case - the pointer
+; moving INSIDE the control it pressed - cost one compare.
+; -----------------------------------------------------------------------------
+cal_setdown:
+    push ax
+    cmp ax, [cal_down]
+    je .out
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    xchg ax, [cal_down]             ; AX = the OLD one, and the variable is
+    or ax, ax                       ; already the new one - so a repaint racing
+    jz .down                        ; this reads the new state whichever side
+    call cal_restore                ; of the draw it lands on
+.down:
+    mov ax, [cal_down]
+    or ax, ax
+    jz .done
+    call cal_invert
+.done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+.out:
     pop ax
     ret
 
@@ -1220,15 +1482,23 @@ cal_draw_hdr:
 ; -----------------------------------------------------------------------------
 cal_draw_rows:
     push ax
+    push bx
     xor ax, ax
 .row:
     cmp ax, [cal_nvis]
     jae .out
-    clc                             ; NOT the `cmp` above: below-and-not-equal
-    call cal_draw_row               ; leaves CF SET, and CF is what says
-    inc ax                          ; INVERTED now
+    mov bx, ax                      ; the HELD row is drawn held, so a repaint
+    add bx, CAL_R_HIST + 1          ; mid-gesture agrees with [cal_down] the
+    cmp bx, [cal_down]              ; way cal_btn does. CF here is the answer
+    stc                             ; and NOT the `cmp` above: below-and-not-
+    je .draw                        ; equal leaves CF set for reasons of its
+    clc                             ; own, which is what this used to inherit
+.draw:
+    call cal_draw_row
+    inc ax
     jmp short .row
 .out:
+    pop bx
     pop ax
     ret
 
@@ -3426,6 +3696,20 @@ cal_jtab:
     dw cal_kpct                     ; 21 CK_PCT
     dw cal_krecip                   ; 22 CK_RECIP
     dw cal_knop                     ; 23 CK_HIST (the callers take this one)
+
+; WHICH CONTROL IS DRAWN DOWN (SPEC.md 13.8/13.8.2), as os88ui_bfind's
+; index + 1 so that 0 can mean "none". It is DATA rather than bss for
+; os88ui_armw's reason - a package's bss is one total with equ offsets
+; (OS88_BSS) and two bytes of image is cheaper than renumbering it.
+;
+; IT IS READ BY THE PAINTERS, which is the point of it being a variable at all
+; rather than something the press hands to a drawing routine: cal_drawall,
+; cal_btn, cal_draw_hdr's caller and cal_draw_rows all consult it, so a
+; W_PAINT arriving in the middle of a gesture draws the held key held. Without
+; that the kernel repaints the window - a drag over it, a window above it
+; closing - and the key springs up under a finger that is still down, after
+; which the release "restores" a control that is already upright.
+cal_down:   dw 0
 
 ; The keypad: a label and a key code per button, row-major, and it is the
 ; table cal_layout walks - so the cap, the rect and the action are one

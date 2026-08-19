@@ -31,6 +31,7 @@ proves it against a known md5 when one is supplied.
 import argparse
 import hashlib
 import os
+import re
 import struct
 import sys
 
@@ -45,6 +46,28 @@ MOD_H_IMG = 8
 MOD_H_NENT = 10
 MOD_H_ENT = 12
 MOD_VER = 5
+
+
+def _mod_nent():
+    """MOD_NENT, READ OUT OF kernel/mod.inc rather than copied.
+
+    It was a bare 4 here and in two places there, and raising it to 8 for
+    SPEC.md 13.8.3's two Control Panel edges failed the build in this file
+    with a message about the MODULE - `6 entries, which is outside
+    1..MOD_NENT` - naming a constant this file did not actually have. That is
+    tools/os88geom.py's lesson in a second place: the drawn thing and the
+    tested thing come from ONE description.
+    """
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(here, "kernel", "mod.inc")) as f:
+        m = re.search(r"^MOD_NENT\s+equ\s+(\d+)", f.read(), re.M)
+    if not m:
+        raise SystemExit("os88mod: no MOD_NENT in kernel/mod.inc")
+    return int(m.group(1))
+
+
+MOD_NENT = _mod_nent()
 
 
 def fail(msg):
@@ -106,9 +129,10 @@ def check_image(name, img, ident, build):
         fail("%s: header says %d bytes, the section is %d"
              % (name, size, len(img)))
     nent, = struct.unpack_from("<H", img, MOD_H_NENT)
-    if not 1 <= nent <= 4:
-        fail("%s: %d entries, which is outside 1..MOD_NENT" % (name, nent))
-    hdr = MOD_H_ENT + 4 * 2
+    if not 1 <= nent <= MOD_NENT:
+        fail("%s: %d entries, which is outside 1..%d (MOD_NENT, read from "
+             "kernel/mod.inc)" % (name, nent, MOD_NENT))
+    hdr = MOD_H_ENT + MOD_NENT * 2
     for i in range(nent):
         ent, = struct.unpack_from("<H", img, MOD_H_ENT + i * 2)
         if not hdr <= ent < len(img):

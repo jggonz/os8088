@@ -92,6 +92,20 @@ snd_entry:
     ; table is built from what actually replied, so a machine with an AdLib
     ; and no Sound Blaster publishes FM and no stream verb at all.
     mov byte [drv_up], 0
+%ifdef PICOMEM
+    call pm_init                ; a PicoMEM's AdLib and Sound Blaster do not
+                                ; answer until the card is told to install
+                                ; them, and on DOS that is PMINIT.EXE's job
+                                ; (SPEC.md 34.10). HERE, three instructions
+                                ; ahead of the probe that has to find them,
+                                ; because this is the only point in the system
+                                ; that is defined to be between drv_boot and
+                                ; the first port read. It answers nothing: a
+                                ; card that came up is found below because it
+                                ; is now really there, and a machine with no
+                                ; PicoMEM in it has had a hundred reads of
+                                ; 2A3h and not one write anywhere
+%endif
     call opl_probe              ; the timer-flag dance; a present chip is
     jc .nofm                    ; FULLY initialised before this returns
     mov byte [drv_up], 1
@@ -166,6 +180,15 @@ snd_entry:
     clc
     ret
 .nohw:
+%ifdef PICOMEM
+    call pm_undo                ; ...and if we turned a PicoMEM's DSP on and
+                                ; then found nothing, put it back: SPEC.md
+                                ; 51.2's attach is all-or-nothing, and a
+                                ; refusal that left a port changed is exactly
+                                ; what that rule forbids. NOT on the .bug path
+                                ; below - DRVE_TWICE means an attach is
+                                ; already live and owns the card
+%endif
     mov al, DRVE_HW             ; the reason, explicitly: attach's refusal may
 .bug:                           ; carry a DRVE_* now (SPEC.md 51.2) and the
     stc                         ; kernel reads whatever AL holds - so .bug
@@ -919,6 +942,13 @@ opl_init:
     ret
 
 %include "sb.inc"               ; the Sound Blaster half (SPEC.md 34.5/34.6)
+
+%ifdef PICOMEM
+%include "picomem.inc"          ; ...and the PicoMEM's side of getting one to
+                                ; exist at all (SPEC.md 34.10). `make PICOMEM=1`
+                                ; only; without the knob this driver is
+                                ; byte-identical to the shipped one
+%endif
 
 ; =============================================================================
 ; State. A driver has no .bss: these ship zeroed inside the image

@@ -38,7 +38,7 @@
  * ---------------------------------------------------------------------------
  * ONE TRANSLATION UNIT: THIS FILE IS #included, NOT COMPILED
  * ---------------------------------------------------------------------------
- * `nasm -f bin` has no notion of an external symbol (SPEC.md 70.1), so a C
+ * `nasm -f bin` has no notion of an external symbol (SPEC.md 73.1), so a C
  * package is exactly one .c file. The package's translation unit does
  *
  *       #include "cwrtftbl.h"
@@ -294,7 +294,7 @@ CW_CTASSERT(73, sizeof(struct CW_RRB)  == 4);
  *
  * Two changes from the original: it returns the index rather than a flag plus
  * an out-parameter (an out-parameter would have to point at something, and
- * pointing it at an automatic is refused at build time - SPEC.md 70.5), and
+ * pointing it at an automatic is refused at build time - SPEC.md 73.5), and
  * the compare is explicitly through `unsigned char`. Opus's `CHAR` is signed
  * on this compiler too, and every keyword in the table is 7-bit ASCII so no
  * live comparison can differ - but the moment someone adds a keyword with a
@@ -685,10 +685,10 @@ int cw_rtf_selfcheck(void)
 /* ============================================================================
  * WHAT THIS COSTS - MEASURED, NOT ESTIMATED
  *
- * APP_MAX_SIZE is 61,440 bytes for image and bss TOGETHER (SPEC.md 70.9), and
+ * APP_MAX_SIZE is 61,440 bytes for image and bss TOGETHER (SPEC.md 73.9), and
  * C spends it two to four times faster than assembly does, so a table is a line
  * item and not a rounding error. Taken by compiling this file alone through the
- * real chain and assembling the result under SPEC.md 70.2's four section
+ * real chain and assembling the result under SPEC.md 73.2's four section
  * directives - `nasm -f bin -w+error`, `cpu 8086`:
  *
  *     PATH="$SC:$PATH" $SC/smlrcc -tiny -S -SI $SC/v0100/include \
@@ -721,7 +721,7 @@ int cw_rtf_selfcheck(void)
  * two shifts and an add.
  *
  * Everything above is .text, .rodata or .data, which means FILE bytes: a table
- * is paid for twice, once on the floppy and once in the region (SPEC.md 70.9 -
+ * is paid for twice, once on the floppy and once in the region (SPEC.md 73.9 -
  * bss is the cheap half of the ceiling and there is none of it here). The
  * self-check is in none of that total and never will be: it compiles only
  * under CW_RTF_SELFCHECK, which no target build defines and no target build

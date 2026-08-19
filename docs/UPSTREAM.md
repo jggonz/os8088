@@ -119,6 +119,47 @@ question rather than the particular answer:
       grep -q "^%define $s " apps/os88api.inc || echo "NOT IN THIS SDK: $s"
   done
   ```
+- **…and then look for two NAMES at one ADDRESS**, which the check above
+  cannot see. It asks "is this slot in the SDK" and answers yes for both
+  halves of a collision. When both trees APPEND to the same tail in the same
+  round — which is the normal case, `main`'s next free number being the
+  branch's next free number too — the merge is **clean**: two `%define`s with
+  different names, one address, no conflict marker, and nothing says a word
+  until a package calls one and gets the other. That is how
+  `OSAPI_DRV_CALL` and `OSAPI_DRV_DLG` both came to sit at `0x0428`.
+  ```sh
+  python3 - <<'EOF'
+  import re, collections
+  s = open("apps/os88api.inc").read()
+  d = collections.defaultdict(list)
+  for m in re.finditer(r'^%define\s+(OSAPI_\w+)\s+KERNEL_SEG:(0x[0-9a-fA-F]+)', s, re.M):
+      d[int(m.group(2), 16)].append(m.group(1))
+  for a, n in sorted(d.items()):
+      if len(n) > 1:
+          print("COLLISION 0x%04X: %s" % (a, ", ".join(n)))
+  EOF
+  ```
+  **Run it after every merge from `main`, not only when a conflict points at
+  the file** — a conflict is the one signal this failure does not give you.
+  The same applies one layer down to `drivers/os88drv.inc`'s `DSV_*` offsets,
+  where the collision is a service table whose cells have all shifted: this
+  merge's `DSV_PKGCALL` (28 on the branch) met `DSV_CPKEY` (28 upstream), and
+  the pad every table carries to `DSV_SIZE` is what kept it to a renumbering
+  rather than a driver publishing its file lister as a mouse handler.
+- **A renumbered slot invalidates every `.o88` and `.drv`, and `make` rebuilds
+  only the ones it builds at all.** The shipped packages follow. The gate and
+  benchmark packages under `tests/` are not in `all` — they have their own
+  on-demand targets (`make drvcalltest`, `make socktest`, `make bench`) — so a
+  binary built against the old number in some earlier session simply *stays on
+  its scratch image* until that target is asked for. Their rules do list
+  `apps/os88api.inc`, so the rebuild is correct once invoked; nothing invokes
+  it. A gate then far-calls whatever now lives at the old address — SPEC.md
+  §20.8 rule 4's failure exactly, assembles cleanly and runs wrong — and
+  reports the FEATURE as broken. `tests/drvcall.py` did, for a `DRVCALL.O88`
+  calling what had become the file dialog, and the hour went into the kernel's
+  publication path, which was correct throughout. **Run each gate's own build
+  target before believing a post-merge gate failure**; each test's docstring
+  names it in its first line.
 - **Compare slot CONTRACTS where the address matches** — the same number can
   mean something else. Each of these was, at the time, something the branch had
   and `main` did not: `OSAPI_FONT_GLYPHS` answering `DX:SI` rather than `SI`

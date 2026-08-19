@@ -3,7 +3,7 @@
  *
  * A reimplementation of RunCPM 6.9 by Marcelo Dantas / "Mockba the Borg"
  * (https://github.com/MockbaTheBorg/RunCPM) for os8088, as one C package
- * (SPEC.md 71, built by SPEC.md 70's toolchain). RunCPM is MIT licensed:
+ * (SPEC.md 74, built by SPEC.md 73's toolchain). RunCPM is MIT licensed:
  *
  *   Copyright (c) 2017 Mockba the Borg (RunCPM/LICENSE); the source files
  *   read "Copyright (c) 2016 - Marcelo Dantas". This port carries RunCPM's
@@ -14,33 +14,33 @@
  *   Nothing from RunCPM is vendored (CONTRIBUTING.md 6); the attribution is
  *   here, in every file that carries derived material, and in the About box.
  *
- * WHAT IT IS (SPEC.md 71). A Z80 (rcz80.inc, wave 2) running CP/M 2.2 in a
+ * WHAT IT IS (SPEC.md 74). A Z80 (rcz80.inc, wave 2) running CP/M 2.2 in a
  * 64KB heap claim, a BDOS and BIOS in C (rccpm.c, wave 3), CP/M drives as
  * folders on the floppy with whole files in heap claims (rcfs.c, wave 4),
  * an 80x25 terminal drawn in a window (rcterm.c, wave 1), and DRI's CCP as
  * the command processor. The
  * structural difference from RunCPM is that NOTHING BLOCKS: RunCPM sits in
  * the host's getch(); here the emulator runs on the UI task in bounded
- * slices, re-entered through the kernel's wake event (SPEC.md 71.1 -
+ * slices, re-entered through the kernel's wake event (SPEC.md 74.1 -
  * OSAPI_WM_WAKE / OSAPI_WM_ONWAKE, added for it), so the file slots are
  * always legal, the UI stack is the only stack, and a program waiting on a
  * key costs nothing until os88_onkey pushes one and kicks.
  *
  * THIS TRANSLATION UNIT. `nasm -f bin` has no external symbols (SPEC.md
- * 70.1), so the parts are #included here, in this order, and every one of
+ * 73.1), so the parts are #included here, in this order, and every one of
  * them is a written prerequisite in the Makefile because make cannot see
  * through a #include:
  *
  *   rcterm.c    the terminal model, the VT100 subset, the glass shadow and
- *               the damage-only flush (SPEC.md 71.2)
+ *               the damage-only flush (SPEC.md 74.2)
  *   rccpm.c     the CP/M image constants, BIOS, BDOS, the line editor
  *   rcfs.c      the disk layer: (drive,user) -> folder, the directory cache,
  *               the open-file table over claims, every disk function
- *               (SPEC.md 71.3)
- *   rcabout.c   the About panel (SPEC.md 71.4)
+ *               (SPEC.md 74.3)
+ *   rcabout.c   the About panel (SPEC.md 74.4)
  *
  * and the shim (runcpm.asm) %includes rcz80.inc, rcmem.inc and rcband.inc,
- * and icon.inc through CC_ICON (the 16x16 terminal icon, SPEC.md 71.5).
+ * and icon.inc through CC_ICON (the 16x16 terminal icon, SPEC.md 74.5).
  *
  * WHAT WAVES 2 AND 3 ARE. The Z80 (rcz80.inc), the movers (rcmem.inc), the
  * slice driver in os88_onwake, the boot state machine - the banner, the
@@ -60,7 +60,7 @@
  * probe) is gone: the loader standing in A\0 through rc_fs_cd() is the
  * living proof of the quiet goto, and the slice loop is the wake's client.
  *
- * THE SLICE (SPEC.md 71, 71.1). One wake runs rc_run() for rc_slice_n control
+ * THE SLICE (SPEC.md 74, 74.1). One wake runs rc_run() for rc_slice_n control
  * transfers (os88_cpu() sets the first guess, ~50 ms on the target; then it
  * adapts to the ticks - and ONLY a slice that spent its whole budget says
  * anything about the machine's speed: a slice that ended early, in a
@@ -70,7 +70,7 @@
  * handoff in between; then flushes the terminal ONCE under the lock; then
  * re-posts ONLY while the machine has work - never while it is blocked in a
  * console read on an empty key ring, when os88_onkey's kick is the next one.
- * Flushing once per slice, not per line, is the pacing decision SPEC.md 71.2
+ * Flushing once per slice, not per line, is the pacing decision SPEC.md 74.2
  * asks for: a scrolled line is ~47 ms of glass on the target and N lines in
  * one slice are ONE gfx_scroll - so a keystroke is answered within one slice
  * PLUS one flush, and the flush is at most one scroll + one fill +
@@ -78,7 +78,7 @@
  * slices, and so does the debug loader's floppy read: NOTHING that takes
  * disk time or Z80 time runs under the gfx lock a W_ONKEY holds.
  *
- * THE FOUR RULES (SPEC.md 70.5-70.8), obeyed visibly: every buffer and every
+ * THE FOUR RULES (SPEC.md 73.5-73.8), obeyed visibly: every buffer and every
  * out-parameter is static; no struct is ever copied; there is no long, no
  * float, no printf; every frame is small - the report on every build says
  * how small.
@@ -137,20 +137,20 @@ static int rc_full;                          /* fullscreen latch held (Alt+F):
                                               * rcfs.c's rc_say reads it - a
                                               * toast is the bar's, and the
                                               * bar is under a fullscreen
-                                              * window (SPEC.md 71.4) */
+                                              * window (SPEC.md 74.4) */
 static void *rc_win;                         /* our window, for rc_say_now */
 static int rc_abt;                           /* the About panel is up
                                               * (rcabout.c): the machine is
                                               * PAUSED - no slice, no wake,
                                               * no flush - and every key and
                                               * click is the panel's until it
-                                              * comes down (SPEC.md 71.4) */
+                                              * comes down (SPEC.md 74.4) */
 static void rc_con_reset(void);
 static int  rc_bios(void);
 static int  rc_bdos(void);
 static void rc_boot(void);
 
-/* the hand-written half (SPEC.md 70.11): rcz80.inc and rcmem.inc in the
+/* the hand-written half (SPEC.md 73.11): rcz80.inc and rcmem.inc in the
  * shim. Near cdecl; the register file is rc_z (rccpm.c). The host harness
  * models them in C. */
 int  rc_run(int n);
@@ -239,7 +239,7 @@ static int rc_key_pop(void)
  * clamped onto the live one - 80 cells + the two border columns wide, 18
  * rows of title and 200 of content = 25 cell rows, at (7,20): under the menu
  * bar, one cell in. On CGA the band is shorter and the window shows what it
- * holds (SPEC.md 71.2). THE +1: a framed window's content is W_H - TITLE_H
+ * holds (SPEC.md 74.2). THE +1: a framed window's content is W_H - TITLE_H
  * - 1 rows (kernel/wm.inc wm_geom: the bottom border is inside W_H), so
  * 18 + 200 showed 24 rows and a 7-px sliver, and the model's row 24 - the
  * row a scrolled cursor lives on - was never on the glass. Found on the
@@ -260,7 +260,7 @@ static const char rc_title[] = "RunCPM";
 
 /* The kernel bar shows the instance name unless a menu set says otherwise
  * (LESSONS.md 8): an EMPTY set whose name is the product. Six bytes of .data
- * rather than struct os88_menuset's 36 (SPEC.md 70.9); not const, because
+ * rather than struct os88_menuset's 36 (SPEC.md 73.9); not const, because
  * os88_menu_set() writes oncmd. Its handler can never be called. */
 struct rc_kmset {
     const char *name;
@@ -272,7 +272,7 @@ static struct rc_kmset rc_kmenus = { "RunCPM", 0, 0 };
 static unsigned rc_zseg;                     /* the 64KB Z80 RAM claim */
 
 /* THE MACHINE'S STATE - what a wake does, and whether the next one is
- * wanted (SPEC.md 71.1: re-post only while there is work) */
+ * wanted (SPEC.md 74.1: re-post only while there is work) */
 #define RC_M_CLOCK   0                       /* measuring the clock estimate */
 #define RC_M_IDLE    1                       /* nothing runs: no CCP could be
                                               * loaded, or the loader refused
@@ -286,7 +286,7 @@ static unsigned rc_zseg;                     /* the 64KB Z80 RAM claim */
 #define RC_M_DEAD    5                       /* the worker is closing us */
 static int rc_mode = RC_M_CLOCK;
 static unsigned rc_ccpseg;                   /* the 2KB CCP claim (SPEC.md
-                                              * 71.3): CCP-DR.60K, read ONCE
+                                              * 74.3): CCP-DR.60K, read ONCE
                                               * at launch from the launch
                                               * folder, before any folder
                                               * move, and copied to 0xE400 on
@@ -324,7 +324,7 @@ static void rc_putdec(unsigned n)
  * 71 states: 'Built' is the pinned upstream commit's date (a __DATE__ would
  * break byte-for-byte rebuilds), CPU_IS is this core's own name, and the two
  * Z80estimateClock lines arrive with the core in wave 2 (they are measured on
- * this machine, in 16-bit arithmetic) - and a fourth, stated in SPEC.md 71's
+ * this machine, in 16-bit arithmetic) - and a fourth, stated in SPEC.md 74's
  * authority table: main.c's `FILEBASE is ./` line (every desktop build defines
  * FILEBASE, abstraction_posix.h/abstraction_windows.h) is not printed, because
  * the base here is the launch folder and a package has no path string to name
@@ -342,7 +342,7 @@ static void rc_banner(void)
      * (rc_clock_step), so the rest of the banner follows from there */
 }
 
-static int ovl_banner2(void)                 /* module code (SPEC.md 70.14):
+static int ovl_banner2(void)                 /* module code (SPEC.md 73.14):
                                               * once a launch; 0 = the module
                                               * refused - rc_boot says so */
 {
@@ -365,7 +365,7 @@ static int ovl_banner2(void)                 /* module code (SPEC.md 70.14):
  * the inner DEC BC-LD A,B-OR C-JR NZ / the outer DEC DE-LD A,D-OR E-JR NZ /
  * HALT), times it with millis() and prints '<T-states> T-states in <ms> ms'
  * and 'Estimated Z80 clock speed: <n> MHz' from a 64-bit sum. Two stated
- * deviations (SPEC.md 71): the burst is SMALLER (BC = 1000, DE = 10: 260,319
+ * deviations (SPEC.md 74): the burst is SMALLER (BC = 1000, DE = 10: 260,319
  * T-states by cpu_mhz.h's own T-state table, against 260 million - the
  * upstream burst is 40 million instructions, minutes on the target) and is
  * RUN REPEATEDLY until at least RC_CLK_TICKS ticks have passed, so the same
@@ -541,7 +541,7 @@ static int rc_clock_step(void)
  * is what lets rc_slice run the CCP's prompt in the same slice.
  * 'Unable to load CP/M CCP.' is main.c 118's text for a missing CCP; upstream
  * breaks out of the loop and exits - here the machine goes idle instead
- * (SPEC.md 71: the window stays so the message can be read; the close box
+ * (SPEC.md 74: the window stays so the message can be read; the close box
  * ends it, and Alt+L still loads a .COM).
  * ========================================================================*/
 static void rc_boot(void)
@@ -597,7 +597,7 @@ static void rc_program_end(void)
 {
     rc_fs_flush_all();                       /* the program's open files
                                               * written back and released
-                                              * (SPEC.md 71.3), before the
+                                              * (SPEC.md 74.3), before the
                                               * loop laps or the window goes
                                               * - the file slots are legal:
                                               * this is the wake, no lock */
@@ -627,7 +627,7 @@ static int rc_slice(void)
             /* cpu1.h 0x76: Status = STATUS_EXIT, exactly as BIOS BOOT - so
              * main.c's exit path follows (the "\r\n", wave 3's self-close);
              * '::CPU HALTED::' is DEBUG-only upstream, and the one stated
-             * deviation is that the fact is toasted (SPEC.md 71.4) */
+             * deviation is that the fact is toasted (SPEC.md 74.4) */
             os88_toast("RunCPM: CPU halted", 0);
             rc_status = RC_ST_EXIT;
             rc_program_end();
@@ -638,7 +638,7 @@ static int rc_slice(void)
         /* the machine stopped: why? */
         if (rc_status == RC_ST_RUNNING) {
             rc_mode = RC_M_BLOCKED;          /* a console read waits for a key:
-                                              * os88_onkey kicks (71.1) */
+                                              * os88_onkey kicks (74.1) */
             return 0;
         }
         rc_program_end();
@@ -680,7 +680,7 @@ static int rc_slice(void)
  * 0100h - destination below source, ascending rep movsb, overlap-safe.
  * Nothing else in this program reads a file into the Z80 claim off 0000h;
  * wave 4's whole-file claims read at offset 0. The rule is stated at
- * os88_file_read_seg in os88.h and in SPEC.md 71.
+ * os88_file_read_seg in os88.h and in SPEC.md 74.
  * ========================================================================*/
 #define RC_TPA_TOP   RC_CCPADDR              /* the TPA ends where the CCP
                                               * begins: 0100h..E3FFh */
@@ -694,7 +694,7 @@ static int  rc_ldprev;                       /* the mode the prompt
 #define RC_LD_PROMPT 1                       /* the prompt is up */
 #define RC_LD_LOAD   2                       /* Enter: the read is on the next
                                               * wake, where the lock is NOT
-                                              * held (SPEC.md 71.1) - a .COM
+                                              * held (SPEC.md 74.1) - a .COM
                                               * is several int 13h calls,
                                               * ~400 ms each on the target */
 static int  rc_ldmode;
@@ -749,7 +749,7 @@ static unsigned rc_zoff512(void)
  * 512-aligned and rewritten by everything that follows - the Z80 claim's
  * TPA, at the loader's own landing (rc_zoff512) with the TPA up to the CCP
  * as the capacity (~57KB: a file over that is FERR_BIG and ignored, stated
- * in SPEC.md 71) - and the first 125 bytes come out into rc_axbuf, cut at
+ * in SPEC.md 74) - and the first 125 bytes come out into rc_axbuf, cut at
  * the first control character. Called before the clock code, before any
  * folder move; the bytes left in the TPA are cleared. */
 static void rc_ax_load(void)
@@ -841,7 +841,7 @@ static void rc_load_prompt(void)
     rc_puts("\r\nLoad .COM: ");
 }
 
-/* does the machine want the next wake? (SPEC.md 71.1: only while it works -
+/* does the machine want the next wake? (SPEC.md 74.1: only while it works -
  * a slice, a clock slice, the loader's pending read, or an exit whose
  * worker is not hired yet) */
 static int rc_wants_wake(void)
@@ -856,7 +856,7 @@ static int rc_wants_wake(void)
  * THE CALLBACKS
  * ========================================================================*/
 
-/* os88_onwake - THE slice (SPEC.md 71): on the UI task, lock NOT held. Do
+/* os88_onwake - THE slice (SPEC.md 74): on the UI task, lock NOT held. Do
  * the loader's pending read, or run one slice (of the program or of the
  * clock estimate); flush the terminal ONCE under the lock; ring what rang;
  * re-post only while the machine has work. */
@@ -891,7 +891,7 @@ void os88_onwake(void *win)
          * now asserts both halves. The bound on a keystroke's echo is honest:
          * one slice PLUS one flush, and the flush is unbounded by this loop
          * - at most one gfx_scroll + one fill + min(lines, RC_ROWS) bands
-         * (SPEC.md 71.1: ~50 + up to ~400 ms on the target under a program
+         * (SPEC.md 74.1: ~50 + up to ~400 ms on the target under a program
          * that scrolls a screenful a slice). The clock's slices are exhausted
          * ones and adapt the same way, so the first program slice starts
          * where the estimate left the budget. */
@@ -947,7 +947,7 @@ void os88_onwake(void *win)
                                              * is re-kicked by any callback */
 }
 
-/* os88_worker - hired ONLY to close the window (SPEC.md 71: EXIT.COM / BIOS
+/* os88_worker - hired ONLY to close the window (SPEC.md 74: EXIT.COM / BIOS
  * BOOT / HALT), so it costs nothing until then. cword's idiom: the destroy
  * needs the lock and os88_task_alive() forbids it, so they cannot share a
  * bracket; the destroy is what makes task_alive() die - the kernel's own
@@ -1013,7 +1013,7 @@ void os88_paint(void *win)
  * Ctrl+Backspace is 127 (DEL), Enter 13, BkSp 8, Tab 9, Esc 27 (the BIOS
  * folds Ctrl-H/I/M into BkSp/Tab/Enter: identical bytes); a key with none
  * is looked up in the scan table below and goes as the VT100 sequence a
- * host terminal would send RunCPM (SPEC.md 71.2). Alt+F is the fullscreen
+ * host terminal would send RunCPM (SPEC.md 74.2). Alt+F is the fullscreen
  * chord in both directions (the stated exception to 11.2.1 - a terminal
  * owns F and Esc); Alt+L the debug loader. */
 #define RC_SCAN_ALT_F 0x21
@@ -1125,7 +1125,7 @@ void os88_onkey(int ascii, int scan, void *win)
         else
             rc_key_vt(scan);
         if (rc_mode == RC_M_BLOCKED && rc_khead != rc_ktail && rc_ldmode == 0)
-            rc_mode = RC_M_RUN;             /* the trap is retried (71.1) -
+            rc_mode = RC_M_RUN;             /* the trap is retried (74.1) -
                                              * not while the loader's read is
                                              * pending: the load takes the
                                              * machine, or rc_ld_back hands
@@ -1136,7 +1136,7 @@ void os88_onkey(int ascii, int scan, void *win)
 }
 
 /* os88_onclick - W_ONCLICK, lock held. The terminal has no mouse; a click is
- * one more callback that KICKS (SPEC.md 71): os88_wm_wake answers -1 when
+ * one more callback that KICKS (SPEC.md 74): os88_wm_wake answers -1 when
  * the 16-record event ring is full of other events and nothing was posted,
  * and a machine mid-run with no key wanted (ZEXDOC) would otherwise stall
  * until the next paint or key - so every callback that can run re-posts. */
@@ -1171,7 +1171,7 @@ void os88_about(void *win)
 /* os88_main - the entry (SPEC.md 20.2): claims first, then the window. The
  * launch requirement is CLAIMS, not KB: the 64KB Z80 RAM and the 2KB CCP
  * claim must be had, and a refusal quotes what was asked and what there is
- * (SPEC.md 71). */
+ * (SPEC.md 74). */
 void *os88_main(void)
 {
     void *win;
@@ -1190,7 +1190,7 @@ void *os88_main(void)
     }
     rc_z.seg = rc_zseg;
     /* the CCP: a 2KB claim, and CCP-DR.60K read into it NOW - from the
-     * launch folder, before any folder move (SPEC.md 71.3), the way an .OVL
+     * launch folder, before any folder move (SPEC.md 74.3), the way an .OVL
      * would be. The claim's base is KB-aligned, so the _seg read is legal.
      * A missing file is not a refused launch: main.c prints 'Unable to load
      * CP/M CCP.' on the terminal (rc_boot), and this port keeps the window
@@ -1210,7 +1210,7 @@ void *os88_main(void)
     rc_banner();
     rc_status = RC_ST_RUNNING;
     /* the slice's first length: ~50 ms of Z80 on the machine this runs on
-     * (SPEC.md 71) - a control transfer is ~5 instructions of ~20 us on the
+     * (SPEC.md 74) - a control transfer is ~5 instructions of ~20 us on the
      * 8088; os88_onwake then adapts it to what the ticks say */
     rc_slice_n = 512 << os88_cpu();          /* 8086 512, 286 1024, 386+ 2048 */
     rc_clock_begin();
@@ -1227,7 +1227,7 @@ void *os88_main(void)
                                              * followed by 25 bands */
     os88_menu_set(win, (struct os88_menuset *)&rc_kmenus);
     os88_about_set(win);
-    os88_wm_onwake(win);                    /* the slice driver's entry (71.1) */
+    os88_wm_onwake(win);                    /* the slice driver's entry (74.1) */
     rc_fs_init();                           /* bank the launch folder */
     return win;                             /* the first paint kicks */
 }

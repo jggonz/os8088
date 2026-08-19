@@ -306,6 +306,11 @@ pt_entry:
                                     ; claim - the region stays untouched
     mov [pt_win], bx
     push ax
+    mov ax, pt_onup                 ; SPEC.md 13.7/13.8.1: Apply fires on the
+    call OSAPI_WM_ONMOUSEUP         ; RELEASE and follows the pointer between
+    mov ax, pt_ondrag               ; the edges. Not template words, so they
+    call OSAPI_WM_ONDRAG            ; are set after wm_create
+    mov byte [pt_adown], 0
     mov al, 1                       ; WE OWN OUR BACKGROUND (SPEC.md 11.90.1):
     call OSAPI_WM_OWNBG             ; pt_fsbed + the palette + the strip + the
     pop ax                          ; canvas cover every pixel of the content,
@@ -2517,6 +2522,27 @@ pt_szdraw:
     inc byte [pt_szi]
     cmp byte [pt_szi], 3
     jb .box
+    call pt_szdraw_apply            ; ...and Apply, which is a proc of its own
+    pop di                          ; so an edge can redraw ONE button rather
+    pop si                          ; than the whole group - the group is a
+    pop dx                          ; white fill and three boxes, and doing
+    pop cx                          ; that per press and per slide is
+    pop bx                          ; PERFORMANCE.md's double-draw flash
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_szdraw_apply - the Apply button alone (SPEC.md 13.8)
+; in:  [pt_ox]/[pt_oy]; the gfx lock is held
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+pt_szdraw_apply:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
     ; --- Apply, the full width of the column ----------------------------------
     ; The one standard labelled button in Paint, and so the one thing here
     ; that is the shared control (apps/os88ui.inc). Everything else in this
@@ -2542,7 +2568,18 @@ pt_szdraw:
     mov [pt_brect+6], ax
     mov si, pt_s_apply
     mov bx, pt_brect
-    xor di, di
+    mov di, OS88UI_FILL         ; OS88UI_FILL, and it is not optional since the
+                                ; down state (SPEC.md 13.8.4): a RELEASE
+                                ; redraws this button over a PRESSED one,
+                                ; whose interior is black, and without the fill
+                                ; the upright redraw keeps that interior and
+                                ; letters a black caption onto it. The comment
+                                ; above is what was true before there was a
+                                ; second way to reach this routine
+    cmp byte [pt_adown], 0
+    je .nodn
+    or di, OS88UI_DOWN
+.nodn:
     call os88ui_btn
     mov byte [pt_pen], CBLACK       ; os88ui_btn leaves the KERNEL's pen live;
                                     ; [pt_pen] is this module's own and the
@@ -2602,6 +2639,106 @@ pt_szval:
 ; clamps and the toast are all shared - typing 900 into a box on a machine that
 ; cannot fund it is exactly a drag that asked for too much.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; pt_aphit - is this SCREEN point on Apply? (SPEC.md 13.8)
+; out: CF = 0 yes; all registers preserved
+; -----------------------------------------------------------------------------
+pt_aphit:
+    push bx
+    call pt_apwant              ; pt_brect = its rect, whether or not the size
+    mov bx, pt_brect            ; group was the last thing drawn
+    call os88ui_bhit
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_apwant - stage Apply's rect into pt_brect (internal)
+; -----------------------------------------------------------------------------
+pt_apwant:
+    push ax
+    xor ax, ax
+    add ax, [pt_ox]
+    mov [pt_brect+0], ax
+    add ax, PT_SEPX - 2
+    mov [pt_brect+4], ax
+    mov ax, PT_SZ_AY
+    add ax, [pt_oy]
+    mov [pt_brect+2], ax
+    add ax, PT_SZ_AH - 1
+    mov [pt_brect+6], ax
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_onup - W_ONMOUSEUP (SPEC.md 13.7): Apply fires HERE
+; in:  CX = x, DX = y (SCREEN), SI = the window; gfx lock held
+; out: nothing (all registers preserved)
+;
+; Reached BOTH ways: the kernel's release edge when windowed, and
+; pt_fsx_main's own falling edge inside the bracket (SPEC.md 42.7's input
+; model) - because a control that behaves differently in two modes is worse
+; than one that acts too early in both.
+; -----------------------------------------------------------------------------
+pt_onup:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call os88ui_fire            ; AX = what the press armed, and it is CLEARED
+    or ax, ax
+    jz .out
+    call pt_aphit               ; still on it?
+    jc .up                      ; no: thought better of, and nothing fires
+    mov byte [pt_adown], 0      ; NOT a redraw first: pt_szapply repaints the
+    call pt_szapply             ; group, this button upright with it
+    jmp short .out
+.up:
+    cmp byte [pt_adown], 0
+    je .out
+    mov byte [pt_adown], 0
+    call pt_szdraw_apply
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_ondrag - W_ONDRAG (SPEC.md 13.8.1): the pointer moved, press still down
+; -----------------------------------------------------------------------------
+pt_ondrag:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call os88ui_armed           ; PEEK: the arm is the release's to spend
+    or ax, ax
+    jz .out
+    call pt_aphit
+    mov al, 1
+    jnc .set
+    xor al, al                  ; off it: nothing is down
+.set:
+    cmp al, [pt_adown]
+    je .out                     ; unchanged: no pixels
+    mov [pt_adown], al
+    call pt_szdraw_apply
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 pt_szapply:
     push ax
     push bx
@@ -3752,8 +3889,19 @@ pt_fsx_main:
     call OSAPI_MOUSE
     mov ah, [pt_pbtn]
     mov [pt_pbtn], al
-    not ah
-    and ah, al                      ; AH = buttons pressed since the last look
+    push bx
+    mov bl, ah
+    not bl
+    and bl, al                      ; BL = buttons PRESSED since the last look
+    mov bh, al
+    not bh
+    and bh, ah                      ; BH = ...and RELEASED (SPEC.md 13.7): the
+    mov ah, bl                      ; bracket owes the release edge as much as
+    test bh, 1                      ; the kernel does, or Apply would fire on
+    pop bx                          ; the press in here and on the release out
+    jz .nrel                        ; there - one control, two behaviours
+    call pt_onup
+.nrel:
     test ah, 1
     jnz .press
     call pt_ptr_move
@@ -3993,7 +4141,15 @@ pt_pal_click:
     mov ax, [pt_hitx]
     cmp ax, PT_SEPX - 1
     jge .drop
-    call pt_szapply
+    ; SPEC.md 13.6/13.8: Apply resizes the canvas and can refuse for want of
+    ; memory - no safe prefix action at all - so the press only ARMS and DRAWS
+    ; and pt_onup acts. It arms in the BRACKET as well as windowed, because a
+    ; control that behaves differently in two modes is worse than one that
+    ; acts too early in both (SPEC.md 42.7).
+    mov ax, 1
+    call os88ui_arm
+    mov byte [pt_adown], 1
+    call pt_szdraw_apply
     jmp short .out
 .drop:
     mov byte [pt_fbox], 0           ; anywhere else in the column
@@ -10395,6 +10551,7 @@ pt_ic_text:
     PTBYTE pt_fbold                 ; ...as it was before this click
     PTBYTE pt_fresh                 ; the next digit replaces the value
     PTBYTE pt_szi                   ; pt_szdraw's box counter
+    PTBYTE pt_adown                 ; 1 = Apply is DRAWN pressed (SPEC.md 13.8)
     PTBYTE pt_szchg                 ; pt_setsize moved the canvas
     PTBYTE pt_szmem                 ; ...and refused for want of memory, not ink
     PTWORD pt_reqw                  ; the size asked for, before pt_fit had its
