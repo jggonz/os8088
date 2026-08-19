@@ -430,18 +430,21 @@ def main():
         pseg = u16(rec, 22)
         say("browser at %04X" % pseg)
 
-        bx0, by0 = dispcp.win_rect(m, S, bw)[:2]
-        # THE LOCATION BAR IS NOT THE TOP ROW OF THE CONTENT ANY MORE. The
-        # toolbar - Back, Forward, Reload and the state - is above it, so this
-        # click was landing on Forward: the bar never took focus, the URL was
-        # typed into the page, and the browser reported BN_ERR about a fetch
-        # nobody had asked for. Content top + BR_LPAD + BR_TBH + BR_TBG, plus
-        # half of BR_LBAR.
-        BR_LPAD, BR_TBH, BR_TBG, BR_LBAR = 3, 13, 1, 15
-        bary = by0 + dispcp.TITLE_H + 1 + BR_LPAD + BR_TBH + BR_TBG + BR_LBAR // 2
-        Mouse().click(bx0 + 60, bary)
+        # **THE BAR IS ALREADY FOCUSED AND ALREADY HOLDS `http://`** (SPEC.md
+        # 71.7): the browser opens it that way ON PURPOSE, because the scheme
+        # is not optional (71.2) and a new reader who typed a bare host used to
+        # get `Bad URL`. So there is nothing to click and nothing to retype -
+        # what goes in is the URL WITHOUT its scheme, onto the caret the
+        # browser has already parked at the end.
+        #
+        # Clicking it first is what this did before, and it was wrong twice
+        # over: the click moved the caret into the MIDDLE of the `http://`
+        # already there, and then the full URL was typed on top - so the bar
+        # read `http:/http://10.0.2.2:8090/eth.htm/`, the browser refused it
+        # correctly, and the gate reported the STACK as broken over a fetch
+        # that was never asked for. Nothing below assertion 2 could pass.
         time.sleep(1.0)
-        type_url(URL)
+        type_url(URL[len("http://"):])
         time.sleep(1.0)
         subprocess.run(["python3", "tools/qmp.py", SOCK, "sendkey ret"],
                        check=True, capture_output=True)
