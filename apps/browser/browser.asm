@@ -2935,6 +2935,23 @@ br_load:
     push si
     push di
     push es
+    mov al, [br_nstate]             ; **A FETCH IN FLIGHT IS DROPPED HERE TOO**,
+    cmp al, BN_OPEN                 ; on br_go's range test and through br_go's
+    jb .nofetch                     ; own br_abort: the free below hands the
+    cmp al, BN_DONE                 ; source claim back and the file's SIZE is
+    jae .nofetch                    ; claimed in its place, while a worker that
+    call br_abort                   ; nothing had told still drained the socket
+.nofetch:                           ; into it - so File > Open on a small page
+                                    ; while a large one arrived wrote the rest
+                                    ; of the reply past the end of the new
+                                    ; claim, and into segment 0 if it landed
+                                    ; between the free and the claim. It is
+                                    ; here and not in br_opened because br_load
+                                    ; is what frees the buffers, and a third
+                                    ; caller cannot forget a guard it does not
+                                    ; have to write (br_arg's launch path
+                                    ; reaches it at BN_IDLE, where it is a
+                                    ; no-op)
     call br_free_all
 
     mov ax, [br_srclen]             ; source claim: exactly the file when the

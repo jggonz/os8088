@@ -58,7 +58,17 @@ BN_ERR      equ 7                   ; finished, and it did not work
 
 BR_HOSTMAX  equ 64                  ; matches netpkg.inc's NET_HOSTMAX field
 BR_PATHMAX  equ 96
-BR_REQMAX   equ 200
+BR_REQMAX   equ 76 + BR_PATHMAX + BR_HOSTMAX
+                                    ; **DERIVED FROM THE PIECES**, br_nsline's
+                                    ; reason one buffer along: it was a literal
+                                    ; 200 against a request that composes 4 +
+                                    ; path + 17 + host + 55 = 234 at the limits
+                                    ; br_split already enforces, so a long path
+                                    ; on a long host ran 34 bytes into
+                                    ; br_nsline - which br_status then rewrote
+                                    ; with the state, cutting the request's own
+                                    ; tail off before .send ever put it on the
+                                    ; wire
 BR_CHUNK    equ 512                 ; one NETV_RECV, well under NET_SKMAX
 
 ; -----------------------------------------------------------------------------
@@ -158,6 +168,18 @@ br_go:
 .nohist:                            ; new place (BROWSER-PLAN 5)
     mov word [br_nlen], 0
     mov word [br_code], 0
+    mov byte [br_trunc], 0          ; ...the CUT flag, which br_parse clears on
+                                    ; a file load and nothing cleared on this
+                                    ; path, so one truncated page would have
+                                    ; reported every page after it as cut
+    mov word [br_hcol], 0           ; ...and the HEADER scan's own two, which
+    mov byte [br_hstate], 0         ; are per-fetch as much as the count is:
+                                    ; [br_hcol] only ever counts up, so it sat
+                                    ; at 12 after the first reply's status line
+                                    ; and every byte of every later fetch was
+                                    ; taken past the digit accumulator - the
+                                    ; code was read for the FIRST page of the
+                                    ; session and no other
     mov byte [br_nstate], BN_OPEN
     call br_toolbar                 ; the strip, because br_hpush above has
     jmp short .out                  ; just moved what Back and Forward may do
@@ -612,9 +634,15 @@ br_hclose:
 ; -----------------------------------------------------------------------------
 br_req:
     push ax
+    push bx
     push si
     push di
     mov di, br_reqb
+    mov bx, br_reqb + BR_REQMAX - 1 ; the last byte br_rputs may write, set
+                                    ; ONCE for all five pieces: the size above
+                                    ; is derived and correct, and this is what
+                                    ; keeps a longer User-Agent from quietly
+                                    ; making it wrong again
     mov si, br_s_get
     call br_rputs
     mov si, br_path
@@ -629,16 +657,22 @@ br_req:
     mov [br_reqn], di
     pop di
     pop si
+    pop bx
     pop ax
     ret
 
 ; --- br_rputs - the NUL string at DS:SI to DS:DI, DI advanced ---------------
+; in:  BX = the LAST offset it may write - a string that does not fit is CUT,
+;      the way br_copyspan bounds its own copy, rather than written past the
+;      end of the buffer
 br_rputs:
     push ax
 .c:
     mov al, [si]
     or al, al
     jz .out
+    cmp di, bx
+    ja .out
     mov [di], al
     inc di
     inc si
@@ -664,27 +698,55 @@ br_take:
     push si
     push di
     push es
+    push cx                         ; **THE CEILING IS THE CLAIM'S**, not the
+    mov bx, [br_srckb]              ; constant's, which is br_flushbuf's shape
+    mov cl, 10                      ; against [br_dockb]: a file load claims the
+    shl bx, cl                      ; FILE's size and nothing else here knows
+    dec bx                          ; that, so a fetch bounded on BR_MAXKB
+    pop cx                          ; writes past a smaller block
+    mov es, [br_srcseg]             ; ONCE - the claim is PINNED, so it cannot
+    mov dx, es                      ; move under us - and ZERO means br_go has
+    or dx, dx                       ; freed it: segment 0 is the kernel image
+    jz .done                        ; and every task's stack
     mov si, br_rxb
 .next:
     mov al, [si]
     inc si
+    mov ah, [br_gen]                ; **THE GUARD COVERS THE OPERATION AND NOT
+    cmp ah, [br_gen0]               ; ITS ENTRY** (SPEC.md 71.8). br_nstep
+    jne .done                       ; checks once a pass and this loop is up to
+                                    ; BR_CHUNK stores long: a tick landing
+                                    ; inside it lets the UI task drop the fetch
+                                    ; and start another, and the rest of the
+                                    ; chunk then went into the NEW fetch's
+                                    ; buffer - where [br_nstate] is BN_OPEN
+                                    ; again, so the stale bytes are read as its
+                                    ; headers. The bytes belong to a fetch that
+                                    ; no longer exists, so dropping them is the
+                                    ; whole of the fix
     cmp byte [br_nstate], BN_BODY
     je .body
     call br_hdrb
     jmp short .step
 .body:
     mov di, [br_nlen]
-    cmp di, BR_MAXKB*1024 - 1
-    jae .step                       ; the ceiling: the page is TRUNCATED and
-                                    ; br_trunc is what says so on screen. A
-                                    ; browser that stopped reading would leave
-                                    ; the far side driving a socket nobody is
-                                    ; draining
-    mov es, [br_srcseg]
+    cmp di, bx
+    jb .store
+    mov byte [br_trunc], 1          ; the ceiling: the page is TRUNCATED and
+    jmp short .step                 ; br_trunc is what says so on screen - it
+                                    ; is set HERE as well as in br_flushbuf,
+                                    ; because a reply cut at the ceiling used
+                                    ; to record nothing at all and the reader
+                                    ; got a page that stops mid-sentence under
+                                    ; a status line reading `Ready`. A browser
+                                    ; that stopped reading would leave the far
+                                    ; side driving a socket nobody is draining
+.store:
     mov [es:di], al
     inc word [br_nlen]
 .step:
     loop .next
+.done:
     pop es
     pop di
     pop si
@@ -779,7 +841,17 @@ br_finish:
     mov [br_srclen], ax
     or ax, ax
     jz .empty
-    call br_parse
+    mov al, [br_trunc]              ; br_take's ceiling, BANKED ACROSS THE
+    push ax                         ; PARSE: br_parse clears the flag on its
+    call br_parse                   ; way in and br_flushbuf may set it again,
+    pop ax                          ; so the two truncations are one answer
+    or al, [br_trunc]
+    jz .notrunc
+    mov word [br_nmsg], br_s_trunc  ; ...and a page that was CUT says so, which
+.notrunc:                           ; is SPEC.md 47 rule 3: the state line is
+                                    ; the only place it can, and `Ready` under
+                                    ; an article that stops mid-sentence reads
+                                    ; as the site being broken
     cmp byte [br_ptitle], 0         ; **THE PAGE NAMES ITS OWN HISTORY ENTRY.**
     je .notit                       ; br_hpush ran back in br_go, before a byte
     mov bx, [br_histi]              ; had arrived, so the URL is all it had to
@@ -796,7 +868,26 @@ br_finish:
     call br_measure
     mov word [br_top], 0
     mov word [br_ptop], 0
-    call br_layout
+    call br_layout                  ; ...and the LAYOUT runs whether or not we
+                                    ; draw: br_paint measures but does not lay
+                                    ; out, so a reveal after a skipped frame
+                                    ; would paint a stale line table
+    mov bx, [br_win]
+    call OSAPI_WM_CLIP_SET          ; **A BACKGROUND PAINTER ARMS A REGION OR
+    jc .nodraw                      ; PAINTS OVER THE WINDOW ON TOP OF IT**
+                                    ; (SPEC.md 20.6 rule 5, SPEC.md 11.3): what
+                                    ; follows is the band, the scroll bar and
+                                    ; the strip at ABSOLUTE screen
+                                    ; coordinates, so a reader who clicked
+                                    ; another window while the page arrived got
+                                    ; the whole of it drawn across that
+                                    ; window's content. The clip and not
+                                    ; br_nshow's OSAPI_WM_OBSCURED, because
+                                    ; this is the paint that puts the finished
+                                    ; page up and one covered pixel must not
+                                    ; veto it; it includes the hidden test the
+                                    ; rule asks for and dies at the unlock
+                                    ; below
     call br_paint_band
     call br_sbar
     call br_toolbar                 ; ...AND THE STRIP, not just br_status: a
@@ -806,6 +897,7 @@ br_finish:
                                     ; says so. br_toolbar draws the state too,
                                     ; so this replaces the br_status that was
                                     ; here rather than joining it
+.nodraw:
     call OSAPI_GFX_UNLOCK
     jmp short .out
 .empty:
@@ -951,4 +1043,5 @@ br_s_refused: db 'Connection refused', 0
 br_s_lost:   db 'Link lost', 0
 br_s_empty:  db 'Empty reply', 0
 br_s_badurl: db 'Not an http URL', 0
+br_s_trunc:  db 'Page truncated', 0
 br_s_nomem:  db 'Not enough memory', 0

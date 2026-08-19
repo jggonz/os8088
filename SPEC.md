@@ -52819,6 +52819,18 @@ An HTTP/1.0 `GET` with `Connection: close`, which together are why there is no
 chunked decoder — a 1.0 server ends a response by closing, and that is exactly
 `NSK_CLOSING` with nothing readable seen from the API's side.
 
+**`BR_REQMAX` is derived from the pieces the request is made of** —
+`76 + BR_PATHMAX + BR_HOSTMAX`, the three literals plus the two variable
+parts — and `br_rputs` takes the last offset it may write in `BX` besides.
+It was a literal 200 against five pieces that compose 234 bytes at the limits
+`br_split` already enforces, so a long path on a long host ran 34 bytes into
+`br_nsline`, the buffer declared next; `br_status` then rewrote that buffer
+with the state before `.send` had put the request on the wire, cutting the
+request's own tail — headers and the blank line that ends them — off the GET
+the server was waiting to finish reading. This is `br_nsline`'s own rule one
+buffer along: a size held as a literal beside the constants it is a function
+of is a size that goes wrong silently.
+
 ### 71.1 The UI task claims the memory; the worker may not
 
 §20.6 rule 7 forbids a worker `OSAPI_MEM_*`, and every socket verb is
@@ -52828,11 +52840,45 @@ Return in the location bar, or a form's Submit — all of which already run with
 the gfx lock held), and the worker opens, polls, sends, drains, then parses
 and repaints under the lock.
 
+**Both of the worker's paints ask whether the window still shows**, which is
+§20.6 rule 5 and not a courtesy: `br_nshow` takes `OSAPI_WM_OBSCURED` for the
+one status cell, and `br_finish` — the band, the scroll bar and the strip, at
+absolute screen coordinates — arms `OSAPI_WM_CLIP_SET` and skips the frame on
+CF=1. `br_finish` had neither, so a reader who clicked another window while
+the page arrived had the finished page painted straight across that window's
+content, with nothing to tell it it had been damaged. The clip rather than the
+veto there, on rule 5's own terms: this is the paint that puts the page up,
+and one covered pixel must not blank it. `br_measure` and `br_layout` stay
+outside the skip — `br_paint` measures but does not lay out, so a reveal after
+a skipped frame would draw a stale line table.
+
 **The source claim is kept until the next load**, where a file load frees it
 the moment the parse is done. That is not an oversight: freeing it is
 `OSAPI_MEM_FREE` and the worker may not make the call. It costs `BR_MAXKB`
 held while a network page is on screen and is given back by `br_free_all` at
 the start of whatever is loaded next.
+
+**A load therefore drops the fetch before it frees anything**, on §71.8's
+range test and through §71.8's own `br_abort`, and the test is in `br_load`
+rather than in the File > Open completion that reaches it — `br_load` is what
+frees the buffers, so no later caller has to remember a guard it does not have
+to write. Without it File > Open on a local page while a network one was
+arriving handed the source claim back and claimed the FILE's size in its
+place, while a worker nothing had told went on appending the reply at
+`[br_nlen]`: past the end of the smaller claim, and into segment 0 — the
+kernel image and every task's stack — for the window in which `[br_srcseg]`
+is 0. `br_take`'s ceiling is `[br_srckb]` shifted rather than the constant
+`BR_MAXKB` for the same reason, which is the shape `br_flushbuf` already uses
+against `[br_dockb]`: the bound has to be the block being written into.
+
+**A page cut at either ceiling says so.** `br_take` stops storing at the
+source claim's end and `br_flushbuf` refuses the copy when the document claim
+is full; both set `[br_trunc]`, and `br_finish` banks it across `br_parse` —
+which clears the flag on its way in — to put `Page truncated` in `[br_nmsg]`.
+An article that stops mid-sentence under a status line reading `Ready` is a
+refusal with no reason at all (§47 rule 3), and reads as the site being
+broken. `br_go` clears the flag with the rest of the per-fetch state (§71.8),
+because on the network path the parse is not what starts the fetch.
 
 ### 71.2 `https://` is refused by name
 
@@ -53026,6 +53072,27 @@ therefore lands on a socket that is closed and **not yet reissued**, so there
 is no window in which a stray `RECV` can read the new fetch's bytes.
 `.open` has a `.stalesock` arm of its own, because a pass superseded *while
 opening* holds a socket that belongs to nobody.
+
+**The guard covers the operation and not its entry**, which is the rule a
+critical section follows here (§1). `br_nstep` checks once a pass and
+`br_take` then runs up to `BR_CHUNK` stores, so a tick landing inside that
+loop let the UI task run the whole of `br_go` — abort, free, re-claim — and
+the rest of the chunk went into the *new* fetch's buffer, where `[br_nstate]`
+is `BN_OPEN` again and the stale bytes are read as its headers. `br_take`
+therefore banks `ES` from `[br_srcseg]` once at entry, refuses outright when
+it is zero, and re-tests `[br_gen]` against `[br_gen0]` before every store.
+Bailing mid-chunk is safe: those bytes belong to a fetch that no longer
+exists. It costs one compare pair per received byte against a loop that
+already tests the state per byte.
+
+**And every piece of per-fetch state is cleared in the one routine that starts
+a fetch.** `br_go` reset `[br_nlen]`, `[br_code]` and `[br_nstate]` but not
+the two the header scan walks with: `[br_hcol]` only ever counts up, so after
+the first reply's status line it sat at 12 and every byte of every later fetch
+was taken straight past the digit accumulator — the status code was read for
+the FIRST page of the session and no other. `[br_hstate]` self-corrects on the
+first byte that is not CR or LF, and is reset beside it because the omission
+is the same one; `[br_trunc]` joins them for §71.1's reason.
 
 **The gate that proves this passed with the bug in place, and that is worth
 more than the fix.** `tests/brnav.py` holds a `/slow.htm` open on a thread so
