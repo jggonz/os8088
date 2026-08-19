@@ -152,9 +152,11 @@ Useful in this repo:
   manager. Those two break in ways that only show up as a hang.
 - `claude --permission-mode acceptEdits` if you're tired of approving edits to
   `.inc` files; keep approvals on for `Bash` so you see what it boots.
-- Two project skills live in `.claude/skills/` and Claude Code picks them up
-  automatically: `/release-os8088` cuts a release, and `/port-to-os8088`
-  ports an existing program to a C package — the next section.
+- Three project skills live in `.claude/skills/` and Claude Code picks them up
+  automatically: `/release-os8088` cuts a release, `/port-to-os8088` ports an
+  existing program to a C package — the next section — and
+  `/review-fork-pr <PR#>` is the maintainer's side of a pull request that
+  arrives from a fork.
 
 #### Porting a program with the agent
 
@@ -211,6 +213,44 @@ and what each one cost to find.
 You can also run any single piece by hand: the two workflow scripts under
 `.claude/skills/port-to-os8088/workflows/` are ordinary `Workflow` scripts
 that take their inputs as `args`, and the skill file says what to pass.
+
+#### Reviewing a pull request that comes from a fork
+
+Most substantial work on os8088 arrives as a pull request from someone's fork,
+cut from a `main` that has since moved: large, long-lived and usually
+conflicting. `/review-fork-pr <PR#>` is that review as a procedure.
+
+```
+claude                                  # from the repo root
+> /review-fork-pr 92
+```
+
+It reads the PR's topology first — whose fork, which branch, whether
+"allow edits by maintainers" is on, because that decides whether the fixes can
+go back to the contributor's branch at all — fetches the PR into a scratch
+worktree so your own checkout stays usable, merges `main` into it and resolves
+the collisions git reports *and the ones it does not* (a duplicated SPEC
+section number merges perfectly cleanly and `checkdocs` cannot see it), then
+reviews the result with a team of agents split by subsystem, every finding
+adversarially verified by a second agent that tries to refute it. It stops
+there and shows you a plan. Nothing is written to your repo, the fork or the
+PR until you answer.
+
+After you approve, it applies the fixes — minimal, in the contributor's style,
+declining anything that turns out not to be real — verifies them (both
+kernels, the size guards, all three disk geometries, a boot, the 1bpp adapter,
+and whatever gate the feature owns), pushes them to the contributor's branch
+so the PR itself becomes mergeable, and posts a comment that explains each fix
+in terms of what would have gone wrong for a user. Merging is always yours.
+
+`.claude/skills/review-fork-pr/LESSONS.md` is what seven of these reviews cost
+to learn, and is worth reading even if you review by hand: the git mechanics
+that silently do the wrong thing (a push to `origin` that leaves the PR
+untouched), the defect class unique to a long-lived fork (a guard `main` added
+after the fork point is simply absent, with no conflict reported), and the
+memory-safety patterns these PRs have actually shipped.
+[`docs/UPSTREAM.md`](docs/UPSTREAM.md) is the same cycle seen from the fork's
+side, and binds both.
 
 ### Codex
 

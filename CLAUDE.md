@@ -141,7 +141,12 @@ FAT timestamp), so a released image can be rebuilt byte-for-byte. Releases are
 cut by `.claude/skills/release-os8088`; a port of an existing program to a
 C package, the way `apps/cword` was made, is driven by
 `.claude/skills/port-to-os8088` (`/port-to-os8088`), whose `LESSONS.md` is
-what that port learned.
+what that port learned; and an incoming pull request **from a contributor's
+fork** — fetch it, merge `main` into it, review it, fix it, push the fixes
+back to their branch, comment — is `.claude/skills/review-fork-pr`
+(`/review-fork-pr <PR#>`), whose `LESSONS.md` is what seven of those reviews
+learned. `docs/UPSTREAM.md` is the same cycle seen from the fork's side and
+binds both.
 
 ## Hard rules (§1 — these break silently if violated)
 
