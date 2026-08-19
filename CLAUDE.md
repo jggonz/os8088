@@ -59,6 +59,14 @@ make covl       #   covl is the OVERLAY gate (§70.14); cword is the
                 #   application — Word 1.1a again, in C, in two segments
                 #   (§70.12). `make clean` SPARES build/cc
                 #   (clean-cc removes it) — it is a pinned upstream instrument
+make cpmsw      # the CP/M games and applications the RUNCPM floppies carry
+                #   beside RunCPM's master disk (§71.6) - LADDER, CATCHUM,
+                #   Nemesis, GAINA, WordStar, Turbo Pascal - fetched by
+                #   tools/getcpmsw.py from the public RunCPM software
+                #   collection, every file pinned, nothing committed;
+                #   CPMSW='A/5:FILE' adds your own. The 1.44MB disk carries
+                #   the lot, the 720KB one the arcade area, the 360KB one
+                #   none (GAMES.TXT on each says which and why)
 make runcpm     # RUNCPM (§71), the second C application: RunCPM 6.9 as a
 make runcpmdisk #   windowed CP/M 2.2 emulator — the host checks, then the
                 #   package; then the three floppies, from RunCPM's CCP and
@@ -93,21 +101,27 @@ exactly like the feature being broken.
 86Box targets for period hardware, one per `vm/` directory: `xt`, `xt-640`,
 `xt-cga`, `xt-hercules`, `xt-multimon`, `xt-sound`, `286`, `286-sound`,
 `386sx`, `386`, `386-sound`, `486`, `pentium`, `xt-z`, `386-z`, `xt-word`,
-`386-word`, `386-c-word`, `386-runcpm`; plus `marty` (MartyPC). `xt-multimon` is the
+`386-word`, `386-c-word`, `xt-runcpm`, `286-runcpm`, `386-runcpm`; plus
+`marty` (MartyPC). `xt-multimon` is the
 **two-card** XT — a CGA and a Hercules, a monitor window each — and the only
 86Box machine that can show §39.12–§39.19's extended desktop; it boots Single,
 and Control Panel → Display → Desktop is what extends it (§39.19.1). `xt-z`
 and `386-z` are the Frotz machines (§61.9), `xt-word`/`386-word` are the Word
 machines (§68.5), `386-c-word` is the C word processor's (§70.12) and
-`386-runcpm` the CP/M emulator's (§71.5) — the six that put a dedicated
+`xt-runcpm`/`286-runcpm`/`386-runcpm` the CP/M emulator's, one per floppy
+geometry because the three disks carry different software and the machines
+run at different speeds — which for a CP/M game IS the play speed (§71.5,
+§71.6) — the eight that put a dedicated
 floppy in B: instead of the apps disk. `make zdisk` builds the story disk
 (`tools/getstories.py` fetches the stories, which are never committed), `make
 worddisk` the Word disk, `make cworddisk` the CWORD disk — which carries
 `WELCOME.RTF`, the same welcome document the Word disk carries as a `.DOC`,
 adapted to what cword's RTF can actually say (§70.12.3) — and `make
 runcpmdisk` the RUNCPM disks (`tools/getruncpm.py` fetches RunCPM's CCP and
-master disk at a pinned commit, never committed; `make rczex` and `make
-rcz80test` are the Z80 core's ZEXDOC gates, in the OS and in raw QEMU).
+master disk at a pinned commit and `tools/getcpmsw.py` the CP/M games and
+applications that ride beside it, §71.6 — never committed, either of them;
+`make rczex` and `make rcz80test` are the Z80 core's ZEXDOC gates, in the OS
+and in raw QEMU).
 `make allapps` collapses all of them onto one 1.44MB floppy (§19.9).
 
 **`RESET=` clears a machine's non-volatile state on the way in**, and it

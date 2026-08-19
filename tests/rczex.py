@@ -34,14 +34,20 @@ ZEXALL (undocumented flags too) is `--program ZEXALL`, on demand: it reports
 differences in X/Y that this core does not compute (SPEC.md 71.4).
 
 Coordinates are the 640x480 VGA desktop's: Disk B's icon at (600,100), and
-RUNCPM.O88 the fifth row of the Disk window it opens (rows 16 px apart from
-y = 128: 1STREAD.ME, A, CCP-DR.60K, LICENSE, RUNCPM.O88, then RUNCPM.OVL -
-the root of every RUNCPM disk sorts the same way, and ASSOC.DAT is hidden). The banner rows are then found by glyph
-consistency, not assumed (rczex_ocr.Screen.find_origin).
+RUNCPM.O88 the row `package_row` FINDS - rows are 16 px apart from y = 128,
+and the Disk window lists the root sorted by its 8.3 name with the hidden
+ASSOC.DAT and the volume label left out, so the row is read off the image's
+own root directory rather than assumed. It used to be a constant, the fifth
+row, and the games (SPEC.md 71.6) moved it: their drive folders - D, G, H,
+N - sort in among the files, and a stale constant double-clicks a FOLDER,
+which opens a window and hangs the gate on a missing banner. The banner rows
+are then found by glyph consistency, not assumed
+(rczex_ocr.Screen.find_origin).
 """
 import argparse
 import os
 import re
+import struct
 import subprocess
 import sys
 import time
@@ -76,6 +82,32 @@ def dclick(sock, x, y):
     mouse_to(sock, x, y)
     qmp(sock, "mouse_button 1", "sleep 0.08", "mouse_button 0", "sleep 0.10",
         "mouse_button 1", "sleep 0.08", "mouse_button 0")
+
+
+def package_row(image, name="RUNCPM.O88"):
+    """Which row of the Disk window `name` is on, off the image's own FAT12
+    root directory: every entry but the volume label and the hidden ones,
+    sorted by the 11-byte 8.3 name, which is the order the Disk window lists
+    (checked against the glass on the 1.44MB disk)."""
+    with open(image, "rb") as fh:
+        boot = fh.read(36)
+        bps = struct.unpack("<H", boot[11:13])[0]
+        res = struct.unpack("<H", boot[14:16])[0]
+        nfat, nroot = boot[16], struct.unpack("<H", boot[17:19])[0]
+        spf = struct.unpack("<H", boot[22:24])[0]
+        fh.seek((res + nfat * spf) * bps)
+        root = fh.read(nroot * 32)
+    names = []
+    for i in range(nroot):
+        e = root[i * 32:i * 32 + 32]
+        if not e or e[0] in (0x00, 0xE5) or e[11] & 0x0A:   # free, hidden, label
+            continue
+        names.append(e[:11].decode("latin-1"))
+    names.sort()
+    want = name.split(".")[0].ljust(8) + name.split(".")[1].ljust(3)
+    if want not in names:
+        raise SystemExit(f"rczex: {name} is not in {image}'s root")
+    return names.index(want)
 
 
 def screen(sock, path):
@@ -140,7 +172,7 @@ def main():
 
     dclick(sock, 600, 100)                           # Disk B
     time.sleep(3)
-    dclick(sock, 170, 192)                           # RUNCPM.O88
+    dclick(sock, 170, 128 + 16 * package_row(args.image))     # RUNCPM.O88
     time.sleep(4)
     mouse_to(sock, 620, 470)                         # off the terminal
     scr = screen(sock, os.path.join(args.shots, "rczex-0.ppm"))

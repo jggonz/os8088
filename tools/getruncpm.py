@@ -111,6 +111,13 @@ CATEGORY = [".TXT", ".ME", ".SUB", ".COM", ".DOC", ".LIB", ".Z80", ".ASM"]
 # libraries and documentation stay on the 720KB/1.44MB disks, so the XT disk
 # ships with room to save into instead of full to the last cluster (which is
 # how the wave-4 build shipped - and no session could save on it)
+# The 1.44MB disk needs no rule of its own once it carries games (SPEC.md
+# 71.6): the games are priced first (--reserve-clusters) and this RANKED fill
+# then spends what is left, which stops it in the libraries - every program,
+# every text and both .DOC files, and the sources left off for want of room
+# rather than by a policy. Adding a CURATED[1440] here would have said the
+# same thing about build/runcpm.img and a DIFFERENT one about apps-all.img,
+# whose RUNCPM folder carries no games and has room for all 77.
 CURATED = {360: CATEGORY[:4]}
 # a geometry's cluster size and its DATA clusters (tools/os88disk.py's
 # layouts: 354 / 713 / 2,847). What A/0 may take is that minus the root files
@@ -121,6 +128,21 @@ CURATED = {360: CATEGORY[:4]}
 # 'in use' exactly (353 / 672 / 1,294 with the 24,848-byte package)
 GEOMETRY = {360: (1024, 354), 720: (1024, 713), 1440: (512, 2847)}
 DIR_ENTRY = 32            # a FAT directory entry
+# ROOM TO SAVE IN KB, held back from A/0's fill (SPEC.md 71.5): a disk full to its
+# last cluster cannot take a $$$.SUB, an MBASIC program or TE's file, which is
+# how wave 4's 360KB disk shipped. The 360KB disk's own CURATION is its guard
+# - it stops after the programs and never reaches the budget - so it needs no
+# reserve; the 720KB and 1.44MB disks fill until the budget stops them, and
+# once the games are priced beside them (SPEC.md 71.6) that is exactly what
+# the 720KB one did: 713 of 713 clusters, no room for a single save. The fill
+# is RANKED, so what this holds back is the last thing chosen - a source or a
+# library, never a program. IN KB and not in clusters, which is the mistake
+# this constant was written with: 16 clusters is 16KB on the 720KB disk and
+# 8KB on the 1.44MB one, whose clusters are 512 bytes - the geometry with the
+# most room got the least. The 1.44MB disk holds back 64KB because it is the
+# one a session actually works on (SPEC.md 71.6: WordStar and Turbo Pascal
+# are on it, and both write files).
+SAVE_ROOM_KB = {360: 0, 720: 16, 1440: 64}
 # ASSOC.DAT, the icon/association cache os88disk.py writes in the root beside
 # the packages (SPEC.md 54.7), is priced by asking os88disk.py itself
 # (assoc_clusters below): one cluster on the RUNCPM disks, whose only package
@@ -326,10 +348,14 @@ def assoc_clusters(reserve, cbytes):
     return clusters(len(body), cbytes) if body else 0
 
 
-def select(out, geometry, reserve, slots=0, folders=1):
+def select(out, geometry, reserve, slots=0, folders=1, reserve_clusters=0):
     """The A/0 files a geometry carries, in fill order, beside the root
     files `reserve` names (paths; their sizes are priced here) and the
-    `folders` other folder directories on the disk (a cluster each); A/0's own
+    `folders` other folder directories on the disk (a cluster each) and
+    `reserve_clusters` more that something else on the disk has already spent
+    - the GAMES (tools/getcpmsw.py --cost, SPEC.md 71.6), which are priced
+    FIRST because an area is carried whole or not at all while A/0's fill is
+    ranked and shrinks by itself; A/0's own
     directory is priced for at least `slots` entries - the spare ones the
     disk rule asks os88disk.py for with --dir-slots (the kernel does not
     grow a directory, SPEC.md 18.5, so a CP/M session's saves need room
@@ -354,7 +380,8 @@ def select(out, geometry, reserve, slots=0, folders=1):
             root += clusters(os.path.getsize(path), cbytes)
         except OSError as exc:
             fail(f"--reserve {path}: {exc}")
-    budget = total - root - assoc_clusters(reserve, cbytes) - folders
+    budget = total - root - assoc_clusters(reserve, cbytes) - folders \
+             - reserve_clusters - clusters(SAVE_ROOM_KB[geometry] * 1024, cbytes)
     carried = CURATED.get(geometry)         # None: everything, ranked
 
     def rank(row):
@@ -414,6 +441,9 @@ def main():
     ap.add_argument("--dir-slots", type=int, default=0, metavar="N",
                     help="with --select: price A/0's directory for at least N entries "
                          "(what os88disk.py --dir-slots A/0=N will build)")
+    ap.add_argument("--reserve-clusters", type=int, default=0, metavar="N",
+                    help="with --select: clusters already spent on this disk by "
+                         "something else (the games: tools/getcpmsw.py --cost)")
     ap.add_argument("--folders", type=int, default=1, metavar="N",
                     help="with --select: how many OTHER folder directories the disk "
                          "has, priced a cluster each (default 1: the folder A "
@@ -424,12 +454,15 @@ def main():
 
     if args.select:
         chosen, used, budget = select(args.output, args.select, args.reserve,
-                                      args.dir_slots, args.folders)
+                                      args.dir_slots, args.folders,
+                                      args.reserve_clusters)
         for path in chosen:
             print(path)
         print(f"getruncpm: {len(chosen)} files, {used} of {budget} clusters "
               f"for A/0 on the {args.select}KB disk (after {len(args.reserve)} "
-              f"root files)", file=sys.stderr)
+              f"root files"
+              f"{f' and {args.reserve_clusters} clusters of games' if args.reserve_clusters else ''})",
+              file=sys.stderr)
         return
 
     out = args.output

@@ -51662,7 +51662,11 @@ manifest is checked in. **The 360KB disk is CURATED, not merely filled
 that an XT session has room to save into (the kernel does not grow a
 directory and a disk full to its last cluster, which is how wave 4's 360KB
 build shipped, cannot take a `$$$.SUB`, an MBASIC program or TE's file);
-the 720KB and 1.44MB disks carry the whole master disk. **Whatever a
+the 720KB and 1.44MB disks carry the whole master disk **when nothing else
+is on them** — since §71.6 put games and applications beside it they carry
+59 and 70 of the 77, the ranked fill dropping the sources for want of room
+(`apps-all.img`'s `RUNCPM\` folder, which carries no games, still carries
+all 77). **Whatever a
 geometry leaves off is named ON THAT DISK:** `--select` writes the
 geometry's own `LEFT-OFF.TXT` (`build/runcpm-disk/left-off/<kb>/`) in place
 of `A/0`'s — the three files above 65,535 bytes, every submit file whose
@@ -51682,15 +51686,18 @@ and PIP open the dashed name through the same `F_OPEN`: the refusal is
 upstream of the BDOS call, in TE.COM's own handling of the name, which
 ships as a binary on the master disk and was not read).
 Measured at the pin (`A0.zip` holds 79 files; 3 are above 65,535 bytes;
-`A/0` is the 76 that remain + `LEFT-OFF.TXT` = 77): **1.44MB and 720KB
-carry all 77 (`ABDOS.60K`/`.64K` included, ranked last); 360KB carries 52 —
-every one of the 37 `.COM`, the 12 `.SUB`, `INFO.TXT`, `1STREAD.ME` and its
-own `LEFT-OFF.TXT` — with 4 clusters (4KB) free for the session's saves** —
-83 / 83 / 58 files by `os88disk.py --verify`'s count with the root's
-five (the package, the `.OVL`, the CCP, LICENSE, 1STREAD.ME) plus
-`ASSOC.DAT`, 1,339 of 2,847 / 695 of 713 / 350 of 354
-clusters (wave 6's count with the 39,412-byte package and its 7,389-byte
-module; wave 4's 360KB disk carried 55 files at 354/354 — three sources
+`A/0` is the 76 that remain + `LEFT-OFF.TXT` = 77): with nothing beside it
+**1.44MB and 720KB carried all 77** (`ABDOS.60K`/`.64K` included, ranked
+last) at 1,339 of 2,847 and 695 of 713 clusters, 83 files each by
+`os88disk.py --verify`'s count with the root's five (the package, the
+`.OVL`, the CCP, LICENSE, 1STREAD.ME) plus `ASSOC.DAT` — which is what
+`apps-all.img` still carries and what these two carried before §71.6's
+software went on beside them (**59 and 70 files now, 2,722 of 2,847 and 698
+of 713 clusters with it, 213 and 89 files on the disk**); **360KB carries 52
+— every one of the 37 `.COM`, the 12 `.SUB`, `INFO.TXT`, `1STREAD.ME` and
+its own `LEFT-OFF.TXT` — with 3 clusters free for the session's saves and
+`GAMES.TXT` beside them**, 59 files at 351 of 354 clusters (wave 6's count
+with the 39,412-byte package and its 7,389-byte module; wave 4's 360KB disk carried 55 files at 354/354 — three sources
 and libraries filled it to the last cluster and no session could save —
 and wave 2's 24,848-byte package left it 62 files: `--reserve` re-shaped
 the selection by itself each time). **`apps-all.img` (§19.9) carries the
@@ -51724,4 +51731,142 @@ PERFORMANCE.md Set 65), %includes the package's own `rcband.inc` and ships
 nothing; its two boot-sector harnesses (`hosttest/rcz80test.sh`,
 `hosttest/rcmemtest.sh`) and `tests/rczex.py` %include or boot the shipping
 text and ship nothing either. `vm/386-runcpm` is `vm/386-c-word` with the B:
-image and the uuid changed (`make 386-runcpm`).
+image and the uuid changed (`make 386-runcpm`), and §71.6 adds one machine
+per smaller geometry beside it — `vm/xt-runcpm`, `vm/286-runcpm` — by the
+same copy rule.
+
+### 71.6 The software beside the master disk: games, applications, and the machine as the play speed
+
+The RUNCPM floppies carry **CP/M software of their own beside RunCPM's master
+disk** — arcade games, dungeon crawlers, a word processor and a compiler —
+fetched by **`tools/getcpmsw.py`** from the public **RunCPM software
+collection** on Google Drive, the `A..P/0..F` drive tree RunCPM users share
+(`A/0` of it is the master disk `getruncpm.py` fetches). **Nothing it
+downloads is committed** (CONTRIBUTING.md §6, `tools/getstories.py`'s
+paragraph and §71.5's rule): what is committed is the PIN — a Drive file id,
+a SHA-256 and a size **per file** — the bytes land in `build/cpmsw/`, and a
+collection that moved under us is a hard failure, never a warning, so the
+images still rebuild byte-for-byte. `make cpmsw` fetches; `--from DIR` takes
+the files off a local copy instead; `--refresh` re-reads the collection and
+prints a new table to paste in.
+
+**The collection's own `<DRIVE>/<USER>` coordinates are the key of
+everything fetched** — `build/cpmsw/N/0/…`, so `--from` a local copy works
+and a file here is the file there — but **on the floppy every area lands in a
+USER AREA OF DRIVE A**, and that is a decision about the disk rather than
+about CP/M. A CP/M drive is a folder in the floppy's ROOT (§71.3), every
+drive letter `A..P` sorts before `RUNCPM.O88`, and five drive folders pushed
+the package off the eight rows the Disk window shows — so double-clicking the
+emulator meant scrolling to it first (seen on the glass; it is why this
+paragraph exists). Drive `A` is already there, a user area costs one folder,
+and `USER 6` is a shorter thing to tell a session than `N:` `USER 0`. What
+ships, in fill order:
+
+| collection | on the disk | what | from `A>` |
+|---|---|---|---|
+| `A/5` | `A\5` | Yahoo Software's arcade games — LADDER, CATCHUM, PM (1982–83) | `USER 5` |
+| `N/0` | `A\6` | Nemesis, Dungeon Master, Castle, with their level and monster data | `USER 6` |
+| `G/4` | `A\7` | GAINA, a video game with its board overlays | `USER 7` |
+| `H/3` | `A\8` | Borland's Turbo Pascal v3.01A (which reports `Terminal: ANSI` unprompted) | `USER 8` |
+| `D/0` | `A\9` | MicroPro WordStar v3.30 | `USER 9` |
+
+**What a geometry carries is a DECISION and not a leftover** (`POLICY` in
+`getcpmsw.py`), because an area is carried **whole or not at all** — a game
+without its data files is a game that does not start — and because the games
+are priced FIRST while the master disk's fill is ranked and shrinks by
+itself (`getruncpm.py --select --reserve-clusters`, which the Makefile hands
+`getcpmsw.py --cost`). Measured, with `--verify`'s own count:
+
+* **1.44MB**: all five areas, and most of the master disk —
+  every program, every text, both `.DOC`s and the first libraries — 59 of the
+  77.
+  This needs no curation rule of its own: the games are priced first and
+  §71.5's RANKED fill spends what is left, so what the software displaces is
+  the master disk's **sources** (the `.ASM`, `.Z80` and `.LIB` files and the
+  two ABDOS images, 299KB of its 592) — RunCPM's own repository's, a `git
+  clone` away, where WordStar and Turbo Pascal are not. A `CURATED[1440]`
+  would have said this about `build/runcpm.img` and the wrong thing about
+  `apps-all.img`, whose `RUNCPM\` folder carries no games and still holds all
+  77. **213 files in 7 folders, 2,722 of 2,847 clusters** — 125 clusters,
+  62KB, free to save into (the Disk window says `Free 64K`).
+* **720KB**: the arcade area only, beside 70 files of the master disk (the
+  fill drops sources first, by rank). **89 files, 698 of 713 clusters.**
+* **360KB**: **no games** — 297 clusters cannot hold 206KB of arcade *and*
+  the master disk's programs, and a disk that dropped the programs for games
+  would not be RunCPM's disk any more. Unchanged at **59 files, 351 of 354
+  clusters**, its own §71.5 curation intact.
+
+**Whatever a geometry leaves off it NAMES ON THE DISK**: `getcpmsw.py
+--select` writes `GAMES.TXT` into `A/0` beside the master disk — what is
+there, the line to type at `A>` to reach each area, the terminal setting
+below, and the areas only the 1.44MB disk has — so a CP/M user can `TYPE` it
+with no SPEC.md. Every game area ships **16 spare directory slots**
+(`SPARE_SLOTS`), because these programs SAVE — Nemesis writes a character
+file, LADDER and CATCHUM rewrite a score file, `TERMDEF` writes `TERM.DEF` —
+and the kernel does not grow a directory (§18.5). For the same reason
+`getruncpm.py` now holds **`SAVE_ROOM_KB`** back from `A/0`'s fill (64KB on
+1.44MB, 16KB on 720KB, 0 on 360KB, whose curation is its own guard): the
+first build with games on it filled the 720KB disk to 713 of 713 clusters,
+which is exactly what §71.5 says a disk must not ship as. **In KB and not in
+clusters**, which is how it was first written — 16 clusters is 16KB on the
+720KB disk and 8KB on the 1.44MB one, whose clusters are 512 bytes, so the
+geometry with the most room got the least.
+
+**Nothing above 65,535 bytes is fetched at all** (`MAX_FILE`, checked on
+every file on the way in, so a refreshed collection cannot quietly put an
+unopenable file on a disk), and that decides three famous absences by
+arithmetic rather than by taste: the collection's **Zork** (`ZORK1.DAT`,
+76,288 bytes), **The Hitchhiker's Guide to the Galaxy** (`HITCH.DAT`,
+113,330) and **Colossal Cave Adventure** (`ADVT.DAT`, 68,864) cannot be
+opened by §71.3's whole-file record model. Infocom's two are also
+Activision's to give away and they have not, which is `getstories.py`'s
+answer and the same one. An empty file is dropped too — the collection has
+one, and `os88disk.py` refuses a zero-byte entry.
+
+**THE TERMINAL SETTING IS `10) Heathkit/Zenith H19 (ANSI)`, NOT THE VT-100
+ENTRY** — measured, and the one thing a session must be told. LADDER and
+CATCHUM ask their terminal type once (`LADCONF`, `CATCONF`); their **`6) DEC
+VT-100 (ANSI)`** entry emits CSI coordinates biased by 32 — `ESC[54;32f` for
+row 22, column 0 — which a real VT-100 clamps to its bottom row, so the
+status panel lands at column 71 and wraps. That is **the game's encoding and
+not this terminal's**: the identical stream was captured from *upstream*
+RunCPM on a host terminal (a pty, 80×25) and rendered through a VT-100
+model, and it wraps there exactly as it does on our glass — the two screens
+are the same screen. The H19 (ANSI)
+entry emits plain 1-based `ESC[row;colH` — §71.2's subset — and lays out
+correctly, verified on the glass. `14) IBM PC` emits `ESC =` (ADM-3A
+addressing), which §71.2 does not have. `N/0`'s games read a `TERM.DEF` that
+ships beside them.
+
+**THE MACHINE IS THE PLAY SPEED, and there are three of them.** The Z80 runs
+at whatever the host CPU emulating an 8086 emulating it can manage, and
+**nothing throttles it** — RunCPM's `cpu_mhz.h` *estimates* a clock, it does
+not set one, and upstream has no limiter either — so an arcade game is
+unplayably fast under QEMU on a modern host (measured: LADDER's man dies
+before a screendump catches him, and upstream RunCPM on the same host does
+the identical thing, 70KB of terminal output in a second). The 86Box
+machines are where they are played, one per geometry (§71.5's `vm/386-runcpm`
+plus two, each a copy of a machine that has been booted with the B: image and
+the uuid changed):
+
+| target | machine | B: | carries |
+|---|---|---|---|
+| `make xt-runcpm` | IBM XT, 8088 at 4.77 MHz, 640KB | `runcpm360.img` | the master disk, no games |
+| `make 286-runcpm` | AMI 286 at 12.5 MHz | `runcpm720.img` | the arcade area |
+| `make 386-runcpm` | Micronics 386DX/25 | `runcpm.img` | all five areas |
+
+LADDER's own *Play speed* setting is the fine adjustment on top of that.
+
+**`CPMSW=` is the knob for your own** — `CPMSW='A/5:path/to/GAME.COM'`, the
+same shape and the same reason as the Frotz disk's `STORIES=` (§61): the
+collection carries dBase, SuperCalc, MultiPlan, WordStar 4 and much else
+this tree cannot choose for you, and the geometry's `--verify` is what says
+it did not fit.
+
+One gate moved with this: `tests/rczex.py` double-clicked `RUNCPM.O88` at a
+CONSTANT row of the Disk window, and the games' drive folders — `D`, `G`,
+`H`, `N` — sort in among the root's files and move it. It now reads the row
+off the image's own FAT12 root (`package_row`), sorted the way the Disk
+window sorts; a stale constant would have double-clicked a folder, which
+opens a window and fails the gate on a missing banner rather than on
+anything true.

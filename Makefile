@@ -96,8 +96,13 @@ VM386WORD := $(CURDIR)/vm/386-word
 # checked the clock of.
 VM386CWORD := $(CURDIR)/vm/386-c-word
 
-# The RUNCPM machine (SPEC.md 71.5): the same 386, B: = build/runcpm.img.
+# The RUNCPM machines (SPEC.md 71.5, 71.6): one per FLOPPY GEOMETRY, because
+# the three RUNCPM disks do not carry the same software and the machines that
+# take them do not run at the same speed - and a CP/M game is timing-sensitive
+# in a way an application is not (SPEC.md 71.6).
 VM386RUNCPM := $(CURDIR)/vm/386-runcpm
+VMXTRUNCPM := $(CURDIR)/vm/xt-runcpm
+VM286RUNCPM := $(CURDIR)/vm/286-runcpm
 
 # VIDEO=cga|herc|vga forces the adapter instead of probing for it (SPEC.md
 # 39.1). The shipped images are always built without it, so they auto-detect;
@@ -645,7 +650,8 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc
         stories zdisk ztest zh zhboot zcheck zgfx zpic zscreens xt-z 386-z \
         worddisk wordcheck xt-word 386-word \
         cc-note chello covl cword cworddisk 386-c-word runcpm runcpmdisk \
-        runcpm-src rcz80test rcmemtest rczex 386-runcpm \
+        runcpm-src cpmsw rcz80test rcmemtest rczex 386-runcpm \
+        xt-runcpm 286-runcpm \
         allapps rcbandbench \
         checkdocs clean clean-cc clean-marty distclean
 
@@ -1958,6 +1964,31 @@ $(BUILD)/runcpm-src.stamp: tools/getruncpm.py | $(BUILD)
 
 runcpm-src: $(BUILD)/runcpm-src.stamp
 
+# THE GAMES ARE FETCHED TOO, AND PINNED THE SAME WAY (SPEC.md 71.6):
+# tools/getcpmsw.py takes three user areas of the public RunCPM software
+# collection - A/5 (LADDER, CATCHUM, PM), N/0 (Nemesis, Dungeon Master,
+# Castle) and G/4 (GAINA) - each file by its own id and SHA-256, and lands
+# them in build/cpmsw/<DRIVE>/<USER>/ under the collection's own coordinates,
+# so a file here is the file there. Nothing is committed (CONTRIBUTING.md 6),
+# every file is checked against the 65,535-byte whole-file limit on the way
+# in (SPEC.md 71.3 - which is why Zork, Hitchhiker and Colossal Cave are not
+# among them: their data files are 76KB, 113KB and 68KB), and a stamp stands
+# in for the eighty files exactly as the master disk's does.
+CPMSWDIR := $(BUILD)/cpmsw
+$(BUILD)/cpmsw.stamp: tools/getcpmsw.py | $(BUILD)
+	python3 tools/getcpmsw.py -o $(CPMSWDIR)
+	@touch $@
+
+cpmsw: $(BUILD)/cpmsw.stamp
+
+# ...and your own: CPMSW='A/5:path/to/GAME.COM N/0:path/to/DATA' puts files
+# on the disk beside these, in the drive/user area you name, unmodified - the
+# same knob STORIES= is for the Frotz disk, and for the same reason (the
+# collection carries WordStar, dBase, Turbo Pascal and much else this tree
+# cannot choose for you). The geometry still has to hold them: the disk
+# build's --verify is what says it did not.
+CPMSW ?=
+
 # HELLO.COM - the hand-assembled Z80 hello the wave-2 gate loads with the
 # debug key (docs/RUNCPM-PORT-PLAN.md): LD C,9 / LD DE,0109h / CALL 5 / RET,
 # then the string - 49 bytes: nine of Z80 and a 40-byte message; the RET
@@ -1999,7 +2030,8 @@ $(BUILD)/HELLO.COM: | $(BUILD)
 RUNCPMDISK := $(BUILD)/runcpm.o88 $(BUILD)/RUNCPM.OVL $(RUNCPMDIR)/CCP-DR.60K \
               $(RUNCPMDIR)/LICENSE $(RUNCPMDIR)/1STREAD.ME
 RUNCPMDEPS := $(BUILD)/runcpm.o88 $(BUILD)/RUNCPM.OVL $(BUILD)/runcpm-src.stamp \
-              tools/os88disk.py tools/getruncpm.py
+              $(BUILD)/cpmsw.stamp tools/os88disk.py tools/getruncpm.py \
+              tools/getcpmsw.py
 # A\0 SHIPS WITH SPARE DIRECTORY SLOTS (SPEC.md 71.3): the kernel does not
 # grow a directory (SPEC.md 18.5, FERR_DIRFULL), so a folder a CP/M session
 # saves into - MBASIC's SAVE, TE's write, PIP's copy, SUBMIT's $$$.SUB - must
@@ -2010,9 +2042,13 @@ RUNCPMDEPS := $(BUILD)/runcpm.o88 $(BUILD)/RUNCPM.OVL $(BUILD)/runcpm-src.stamp 
 # the same figure so the fill cannot overflow the disk.
 RUNCPMSLOTS := 128
 define RUNCPMIMG
-sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select $(2) --dir-slots $(RUNCPMSLOTS) --reserve $(RUNCPMDISK) $(3) | sed 's,^,A/0:,')"; \
+gsel="$$(python3 tools/getcpmsw.py -o $(CPMSWDIR) --select $(2))"; \
+gcost="$$(python3 tools/getcpmsw.py -o $(CPMSWDIR) --cost $(2))"; \
+gslot="$$(python3 tools/getcpmsw.py -o $(CPMSWDIR) --slots $(2))"; \
+[ -n "$$gsel" ] || { echo "runcpm: getcpmsw.py --select $(2) chose nothing"; exit 1; }; \
+sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select $(2) --dir-slots $(RUNCPMSLOTS) --reserve-clusters $$gcost --reserve $(RUNCPMDISK) $(3) | sed 's,^,A/0:,')"; \
 [ -n "$$sel" ] || { echo "runcpm: getruncpm.py --select $(2) chose nothing"; exit 1; }; \
-python3 tools/os88disk.py -o $(1) --size $(2) --deep-folders --dir-slots A/0=$(RUNCPMSLOTS) $(RUNCPMDISK) $(3) $$sel
+python3 tools/os88disk.py -o $(1) --size $(2) --deep-folders --dir-slots A/0=$(RUNCPMSLOTS) $$gslot $(RUNCPMDISK) $(3) $$sel $$gsel $(CPMSW)
 endef
 
 runcpmdisk: $(BUILD)/runcpm.img $(BUILD)/runcpm720.img $(BUILD)/runcpm360.img
@@ -4041,6 +4077,36 @@ xt-word: $(IMG360) $(BUILD)/word720.img
 386-runcpm: $(IMG) $(BUILD)/runcpm.img
 	@$(UNPROTECT) $(VM386RUNCPM)/86box.cfg
 	$(BOX) -P $(VM386RUNCPM) -N
+
+# ...and the same package on the two smaller geometries (SPEC.md 71.6). Each
+# is a COPY of a machine that has been booted with the B: image and the uuid
+# changed and nothing else, the rule vm/386-c-word records: 86Box substitutes
+# a default for an unrecognised key and rewrites the config on exit, so a
+# hand-written profile is a machine running at a clock nobody chose.
+#
+#   xt-runcpm   an IBM XT, 8088 at 4.77 MHz, 640KB, A: = the 360KB os8088 and
+#               B: = build/runcpm360.img - the master disk's programs and
+#               texts, and NO games: 297 clusters do not hold both, which
+#               GAMES.TXT on that disk says.
+#   286-runcpm  an AMI 286 at 12.5 MHz, B: = build/runcpm720.img (35_2dd) -
+#               the arcade area beside the master disk's programs.
+#   386-runcpm  the 386DX/25 above, B: = build/runcpm.img - everything.
+#
+# THE MACHINE IS THE PLAY SPEED. The Z80 runs at what the host CPU emulating
+# an 8086 emulating it can manage, and nothing throttles it (RunCPM's
+# cpu_mhz.h ESTIMATES a clock, it does not set one - upstream has no limiter
+# either), so an arcade game is unplayably fast under QEMU on a modern host
+# (measured: LADDER's man dies before a screendump can catch him, and
+# upstream RunCPM on the same host does the identical thing) and runs at
+# period speed on these three. The XT is the slowest and the 386 the
+# fastest; LADDER's own 'Play speed' setting is the fine adjustment.
+xt-runcpm: $(IMG360) $(BUILD)/runcpm360.img
+	@$(UNPROTECT) $(VMXTRUNCPM)/86box.cfg
+	$(BOX) -P $(VMXTRUNCPM) -N
+
+286-runcpm: $(IMG) $(BUILD)/runcpm720.img
+	@$(UNPROTECT) $(VM286RUNCPM)/86box.cfg
+	$(BOX) -P $(VM286RUNCPM) -N
 
 # The MARTYPC DEBUGGER (docs/MARTYPC-DEBUG.md): a remote debug server bolted
 # into MartyPC's headless frontend, giving memory, registers, breakpoints,

@@ -62,8 +62,12 @@ make 386-z    # 86Box: the 386DX with a story disk in B:
 make cworddisk  # build the floppy for the word processor written in C
 make 386-c-word # 86Box: the 386DX with that disk in B:
 make runcpmdisk # build the RunCPM floppies - the CP/M 2.2 emulator, its
-                # overlay, DR's CCP and the master disk as CP/M drive A
-make 386-runcpm # 86Box: the 386DX with the RunCPM disk in B:
+                # overlay, DR's CCP, the master disk as CP/M drive A, and
+                # the CP/M games and applications beside it (make cpmsw
+                # fetches those; the 1.44MB disk carries the most)
+make xt-runcpm  # 86Box: the 4.77MHz XT with the 360KB RunCPM disk in B:
+make 286-runcpm # 86Box: the 12.5MHz 286 with the 720KB one - arcade games
+make 386-runcpm # 86Box: the 386DX with the 1.44MB one - everything
 make allapps  # one 1.44MB floppy with every program on it, both word
               # processors, Frotz and RunCPM included
 make test     # boot headless with a QMP socket for scripted testing
@@ -80,7 +84,8 @@ make clean
 `allapps`, which carries both — want the compiler first: `tools/setup-cc.sh`
 fetches and builds it into `build/cc`, and nothing else in the tree depends on
 it. `runcpmdisk` and `allapps` also fetch RunCPM's command processor and
-master disk (`make runcpm-src`); neither is committed here.
+master disk (`make runcpm-src`), and `runcpmdisk` the CP/M software that
+rides beside it (`make cpmsw`); none of it is committed here.
 
 ![what it looks like: gray dithered desktop, menu bar, drive icons, Note Pad,
 Timer, Bounce, Control Panel and Task Manager windows, and the dock
@@ -185,8 +190,10 @@ gate, which round-trips the `.DOC` through an independent host-side reader.
 runcpmdisk` builds **RunCPM**, a CP/M 2.2 emulator in a window — a Z80 with
 Digital Research's own command processor at the `A>` prompt, its drives kept
 as folders on the floppy, and RunCPM's master disk in drive A so MBASIC, PIP,
-SUBMIT, TE and Z80ASM run. `make allapps` puts every one of these on one
-1.44MB floppy.
+SUBMIT, TE and Z80ASM run — with **CP/M games and applications beside it**:
+LADDER, CATCHUM and PM, Nemesis and Dungeon Master, GAINA, WordStar 3.30 and
+Turbo Pascal 3.01A, as much of it as each geometry holds. `make allapps` puts
+every one of these on one 1.44MB floppy.
 
 **Hardware**
 
@@ -381,6 +388,30 @@ CCP and the master disk at a pinned commit and `make runcpmdisk` builds the
 three floppies from them (the 360KB one curated to the programs and texts,
 with a `LEFT-OFF.TXT` naming what it leaves off).
 
+**And there is software to run on it.** `tools/getcpmsw.py` fetches CP/M
+games and applications from the public RunCPM software collection — every
+file pinned by id, SHA-256 and size, nothing committed, the collection's own
+`<DRIVE>/<USER>` coordinates kept — and each floppy takes what it holds, an
+area whole or not at all, every one of them a **user area of drive A** so
+that the emulator's own icon stays on the first screen of the Disk window:
+
+| disk | machine | CP/M software |
+|---|---|---|
+| `build/runcpm.img` (1.44MB) | `make 386-runcpm` — 386DX/25 | **all of it**, in drive A's user areas: `USER 5` LADDER, CATCHUM, PM · `USER 6` Nemesis, Dungeon Master, Castle · `USER 7` GAINA · `USER 8` Turbo Pascal 3.01A · `USER 9` WordStar 3.30 — beside 59 files of the master disk |
+| `build/runcpm720.img` (720KB) | `make 286-runcpm` — 286 at 12.5MHz | `USER 5`, the arcade games, beside 70 files of the master disk |
+| `build/runcpm360.img` (360KB) | `make xt-runcpm` — 4.77MHz XT | no room for games: the master disk's programs and texts, and a `GAMES.TXT` saying where they are |
+
+Two things a session needs to know, both on the disk in `GAMES.TXT`. **Tell
+the games they are on a `10) Heathkit/Zenith H19 (ANSI)` terminal**, not the
+VT-100 entry — LADDER's and CATCHUM's VT-100 setting emits ANSI coordinates
+biased by 32, which a real VT-100 wraps just as ours does (checked against
+upstream RunCPM through a VT-100 model). And **the machine is the play
+speed**: nothing throttles the emulated Z80 — upstream has no limiter either
+— so an arcade game is unplayably fast under QEMU on a modern host and runs
+at period speed on the three 86Box machines above. Zork, Hitchhiker and
+Colossal Cave are not there and cannot be: their data files are 76KB, 113KB
+and 68KB, and this port opens a file whole through a 16-bit count.
+
 The compiler is [SmallerC](https://github.com/alexfru/SmallerC) (2-clause
 BSD), pinned to one commit and **fetched rather than vendored** — it is not in
 this repository, `tools/setup-cc.sh` builds it into the gitignored `build/cc`,
@@ -443,7 +474,7 @@ cleanly and runs wrong when C meets this machine.
 | `build/zork*.img`      | 1.44MB / 720KB / 360KB   | Frotz story floppies (`make zdisk`) |
 | `build/word*.img`      | 1.44MB / 720KB / 360KB   | Microsoft Word floppies (`make worddisk`) |
 | `build/cword*.img`     | 1.44MB / 720KB / 360KB   | Word in C, package + `CWORD.OVL` (`make cworddisk`) |
-| `build/runcpm*.img`    | 1.44MB / 720KB / 360KB   | RunCPM, package + `RUNCPM.OVL` + CP/M drive A (`make runcpmdisk`) |
+| `build/runcpm*.img`    | 1.44MB / 720KB / 360KB   | RunCPM, package + `RUNCPM.OVL` + CP/M drive A + the games and applications each holds (`make runcpmdisk`) |
 | `build/apps-all.img`   | 1.44MB FAT12             | every program on one floppy, the four above included (`make allapps`) |
 
 The boot sector takes its geometry from `-DSPT` / `-DHEADS` at assembly
