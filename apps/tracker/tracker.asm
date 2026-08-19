@@ -1591,10 +1591,12 @@ trk_fsx_key:
     jmp .out                        ; the app on a surface it no longer wants.
                                     ; Say why not (SPEC.md 47), like L does
 .rcyc:
-    mov al, [trk_rsel]              ; R cycles 11 -> 22 -> 44 -> 11
-    inc al
-    cmp al, 3
-    jb .rset
+    call trk_rsel_get               ; R cycles whatever the Rate MENU lists in
+    mov al, ah                      ; this mode - 11/22/44 outside XT mode and
+    inc al                          ; 5.5/11 inside it (SPEC.md 45.9.3/45.10).
+    call trk_rcount                 ; The bracket's key asks the same two
+    cmp al, cl                      ; routines the windowed one does, so they
+    jb .rset                        ; cannot come to differ
     xor al, al
 .rset:
     call trk_rate_set
@@ -2407,16 +2409,22 @@ trk_xt_toggle:
                                     ; or the other mode's three, and View >
                                     ; Fullscreen greys with them (SPEC.md
                                     ; 45.9.3) - one builder, one MENU_SET
-    call tui_draw_all               ; ...and the splash's hint line follows the
-                                    ; same predicate: leaving XT mode makes
-                                    ; fullscreen available again whatever the
-                                    ; high rate was set to
     mov si, trk_s_xtmoff
     cmp byte [mp_xt], 0
     je .msg
     mov si, trk_s_xtmon
 .msg:
+    cmp byte [trk_fs], 0            ; in the bracket the whole frame follows
+    jne .card                       ; the mode - the pattern view's SHAPE does
+    cmp byte [trk_xhi], 0           ; (SPEC.md 45.9.1). Windowed, the card's
+    je .say                         ; only mode-dependent pixel is the hint,
+.card:                              ; and trk_fs_ok moves with mp_xt ONLY when
+    mov [tui_msgp], si              ; the high rate is picked - at 5.5 kHz the
+    call tui_draw_all               ; repaint would be identical pixels. Set
+    jmp short .out                  ; the message first and the card letters
+.say:                               ; that line once (PERFORMANCE.md rule 2)
     call tui_msg
+.out:
     pop di
     pop si
     pop cx

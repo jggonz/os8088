@@ -1008,7 +1008,9 @@ tp_btn1:
 tp_bhit:
     push bx
     push si
-    mov al, 1
+    xor ah, ah                      ; the FULL AX indexes tp_btab below, and
+    mov al, 1                       ; tp_onclick arrives with the content-left
+                                    ; X still in it (SPEC.md 13.8)
 .next:
     mov si, ax
     dec si

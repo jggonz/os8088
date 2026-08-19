@@ -686,12 +686,9 @@ np_sbclick:
     cmp bx, ax
     ja .linedn
     call np_sbset                   ; the SHARED element's parts (SPEC.md
-    push cx                         ; 13.10) - it takes the point absolute and
-    push dx                         ; this ladder has the y in BX
-    mov dx, bx
-    call os88ui_sbhit
-    pop dx
-    pop cx
+    call os88ui_sbhit               ; 13.10) - BX = the block np_sbset just
+                                    ; filled, and CX/DX are still the point,
+                                    ; absolute, as it takes them
     cmp al, OS88UI_SBPGUP
     je .pageup
     cmp al, OS88UI_SBPGDN

@@ -1102,7 +1102,10 @@ rc_btn:
                                     ; (SPEC.md 13.8.4)
     or cl, cl
     jnz .live
-    mov di, OS88UI_DIS
+    or di, OS88UI_DIS               ; ADDS to the fill rather than replacing
+                                    ; it, as the DOWN branch below does - a
+                                    ; control does not stop needing the erase
+                                    ; by being greyed
 .live:
     inc ax                          ; [rc_down] is index+1, os88ui_bfind's own
     cmp ax, [rc_down]               ; sentinel, so 0 can mean "none"

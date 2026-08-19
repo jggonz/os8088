@@ -1156,21 +1156,26 @@ pn_btn1:
     push dx
     push si
     push di
-    mov di, ax
-    dec di
+    mov bx, ax                      ; the offset rides in BX, not DI - DI is
+    dec bx                          ; the flag word pn_btn takes
     xor dh, dh
     mov dl, PN_BE
     push ax
-    mov ax, di
+    mov ax, bx
     mul dl
-    mov di, ax                      ; DI = the entry's offset
+    mov bx, ax                      ; BX = the entry's offset
     pop ax
-    mov si, [pn_btab+di+6]
-    mov cl, [pn_btab+di+8]
-    mov bx, [pn_btab+di+2]
-    mov dx, [pn_btab+di+4]
-    push ax
-    mov ax, [pn_btab+di+0]
+    mov si, [pn_btab+bx+6]
+    mov cl, [pn_btab+bx+8]
+    mov dx, [pn_btab+bx+4]
+    mov di, OS88UI_FILL             ; a release redraws this button over a
+    cmp al, [pn_down]               ; PRESSED one, whose interior is black
+    jne .nodown                     ; (SPEC.md 13.8.6) - and the down state
+    or di, OS88UI_DOWN              ; comes from [pn_down] rather than from the
+.nodown:                            ; caller, so a W_PAINT mid-gesture agrees
+    push ax                         ; with it for free (SPEC.md 13.8)
+    mov ax, [pn_btab+bx+0]
+    mov bx, [pn_btab+bx+2]
     call pn_btn
     pop ax
     pop di
@@ -1311,7 +1316,8 @@ pn_draw_msg:
 
 ; -----------------------------------------------------------------------------
 ; pn_btn - one button: 1px frame + centered label, both in the given color
-; in:  AX = content x1, BX = content y1, DX = width, SI = label, CL = color
+; in:  AX = content x1, BX = content y1, DX = width, SI = label, CL = color,
+;      DI = extra OS88UI_* flags (OS88UI_DOWN, OS88UI_FILL, or 0)
 ; out: nothing; preserves all registers
 ;
 ; The drawing is os88ui_btn's (apps/os88ui.inc); this is the adapter, and
@@ -1343,16 +1349,15 @@ pn_btn:
     mov [pn_brect+2], bx
     add bx, PN_BTN_H-1
     mov [pn_brect+6], bx
-    xor di, di
     cmp cl, CBLACK                  ; black is the control's own ink, so the
-    je .go                          ; two plain buttons carry no flag at all
+    je .go                          ; two plain buttons ask for no ink at all
     mov dh, cl                      ; ...and a coloured one rides in DI's high
-    mov dl, OS88UI_INK              ; byte beside the flag (os88ui.inc)
-    mov di, dx
+    mov dl, OS88UI_INK              ; byte beside the caller's flags
+    or di, dx                       ; (os88ui.inc)
 .go:
-    mov bx, pn_brect                ; no OS88UI_FILL: pn_draw_btns runs only
-    call os88ui_btn                 ; from pn_paint, where the content arrives
-    pop di                          ; white
+    mov bx, pn_brect
+    call os88ui_btn
+    pop di
     pop si
     pop dx
     pop cx
