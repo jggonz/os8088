@@ -11306,6 +11306,19 @@ already down.
 callers: a panel left probing would take no clicks at all for the rest of the
 session.
 
+**It is THREE modes and not two, and that is `[hd_pgpr]`'s split one level up**
+(§13.8.4). `cp_pgprobe` takes the mode in `AL` — **1** identify only, for the
+drag and for the release's own hit test, and **2** the press, where a row or a
+field still *selects* because a safe prefix action keeps the press (§13.6)
+while a button only reports its id. `cp_ctl` therefore takes an id of **0** for
+a site that is not an armable control, and that id is the only thing that can
+tell the two species apart inside one ladder. It arrived without one: the
+Display page's adapter rows and the Date/Time page's field rows had no `cp_ctl`
+call at all, so they were the two sites that acted on **every** pass — sliding
+off `Set Primary` set the pending adapter to whatever row the pointer crossed,
+and sliding off `+` re-lettered both clock rows per mouse packet, which is
+PERFORMANCE.md's input overrun.
+
 **The pressed LOOK is drawn per CONTROL, and the page painter is the wrong
 routine to reach for.** `cp_page` is the one thing that redraws a page and it
 **erases the pane first**, being the redraw path for a selection *move* — so a
@@ -11386,6 +11399,21 @@ press, `os88ui_fire` on the release, `os88ui_armed` on the drag, its own down
 byte, its own per-control painter. `DSV_SIZE` goes 30 → 34 (the two cells land
 above §31.9.2's `DSV_CPKEY`); the cells are 0 for a driver that never asked,
 and such a page acts on the press exactly as before.
+
+**`W_ONMOUSEUP` on the panel is BOTH kernels', and only the drag is
+`kern_big`'s.** `W_ONMOUSEUP` is in `kern_small`'s window record too
+(`WIN_SIZE` 28 includes it) and `W_ONDRAG` is not (§13.8.2), so `cp_kinit`,
+`cp_onup`, `cpf_cp_onup`, `CPE_ONUP`, `cp_pt` and `cp_drv_ev` are unconditional
+and `CP_NENT` is **5** there against 6. On `kern_small` `cp_onup_x` reduces to
+`cp_pt` + `DSV_CPUP` through `cp_drv_ev` and stops: the static pages there
+still act on the press, and none of the kernel's own arm, probe or pressed
+look crosses over. Without that edge the driver pages are dead on the 128KB
+machine in the one way that reads as nothing being wrong — the press arms and
+draws the control filled black, `hd_page_up`/`eth_cp_up` are never entered, and
+the button stays drawn pressed until something else repaints the pane. Measured
+on `build/small.img`: Control Panel → Drivers → tick Hard Drive → its page →
+`Format` left the button drawn held and opened nothing; with the edge the
+format tool comes up, which is what the same click does on `kern_big`.
 
 Three things are load-bearing.
 
@@ -25151,7 +25179,10 @@ Three changes, and the first is the fix:
    agree. The refusal moved **ahead of `cp_ctl`**, which is what stops a greyed
    arrow arming and drawing itself pressed: §13.8's *disabled outranks down*,
    which this page would otherwise have broken the moment the arrows gained a
-   look. The Display page's `cpf_vidok` was already in that order.
+   look. The Display page's `cpf_vidok` was already in that order, and the
+   Sound page's `cp_snd_rowok` was the one site left in the wrong one — a
+   greyed tier row armed, blinked its three radios pressed and blinked them
+   back, and only then refused. It is ahead of `cp_ctl` now too.
 
 What the page costs now: a press draws one arrow, the release draws it upright,
 and the scroll draws the pane — which is the one whole-pane repaint §31.1.1
@@ -53611,13 +53642,14 @@ case, and it is the FIELD's rather than the container's — a LAN with no DHCP
 server, or a crossover cable to one other PC, where the alternative was
 rebuilding the driver and carrying a floppy across the room.
 
-**It is a WINDOW and not the page, because the page ABI has no keyboard.**
-There is `DSV_CPPAINT` and `DSV_CPCLICK` and no `DSV_CPKEY`, so a dotted quad
-cannot be typed on a Control Panel page at all. Adding a cell would grow
-`DSV_SIZE`, invalidate every driver's service table and cost kernel `.bss` per
-class on a build standing at exactly `KERN_BUDGET` — to reach a control four
-numbers wide. A driver's own window has `W_ONKEY` like any other and costs the
-kernel nothing, which is HDD.DRV's disk tool exactly (§52.2).
+**It is a WINDOW and not the page, and the reason is the LAYOUT rather than
+the ABI.** A page *can* be typed into: `DSV_CPKEY` is a cell of the service
+table (§31.9.2), `cp_onkey` forwards to it and RAMDISK.DRV publishes one. What
+does not fit is the control — four editable dotted quads, two mode radios and
+two buttons in the 221x132 pane a page is given — and the panel's keyboard is
+`kern_big`'s alone (§62.9.15) while this driver loads on both kernels. A
+driver's own window has `W_ONKEY` like any other and costs the kernel nothing,
+which is HDD.DRV's disk tool exactly (§52.2).
 
 It is **unbound** (§38): no instance record, so no dock tile, no Task Manager
 row, and its close box reduces to `wm_hide`. That leaves one obligation the

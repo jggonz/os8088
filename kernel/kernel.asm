@@ -3787,11 +3787,15 @@ cp_onkey:             call COLD_SEG:cpf_cp_onkey
                                 ; dispatch is a NEAR call in KERNEL_SEG, which
                                 ; a cold offset would answer with whatever
                                 ; lives at that address down here (SPEC.md 2.6)
+%endif
 cp_onup:              call COLD_SEG:cpf_cp_onup      ; SPEC.md 13.8.3's two
                     ret                              ; edges. The window record
-cp_ondrag:            call COLD_SEG:cpf_cp_ondrag    ; holds these as NEAR
-                    ret                              ; pointers, so resident
-%endif
+%ifdef KERN_BIG                                      ; holds these as NEAR
+cp_ondrag:            call COLD_SEG:cpf_cp_ondrag    ; pointers, so resident -
+                    ret                              ; and the RELEASE is on
+%endif                                               ; both kernels, because a
+                                ; driver's page acts on it (SPEC.md 13.8.4).
+                                ; The drag is kern_big's (SPEC.md 13.8.2)
                       ; ...but NOT cp_flush. It has no thunk on purpose: with
                       ; no way into it from .text, "the panel's teardown is the
                       ; only thing that writes SYSTEM.CFG" (SPEC.md 31.8) is

@@ -249,9 +249,14 @@ eth_cp_up:
     call eth_cp_pane            ; pumps the ring (SPEC.md 72.2.1)
     jmp short .out
 .setup:
-    call eth_cfg_open           ; the Setup window (SPEC.md 72.7)
-    call eth_cp_pane            ; ...and the pane under it, so the button it
-    jmp short .out              ; was pressed with comes back upright
+    call eth_cp_pane            ; the pane FIRST, so the button it was pressed
+    call eth_cfg_open           ; with comes back upright - and the Setup
+    jmp short .out              ; window (SPEC.md 72.7) SECOND, because a page
+                                ; draws itself unclipped (SPEC.md 31.9) and
+                                ; wm_show has already drawn that window whole:
+                                ; repainting the pane after it paints straight
+                                ; over its corner, which is what the Install
+                                ; dialog arrived doing (drivers/hdd/page.inc)
 .cancel:
     xor al, al
     call eth_setdown

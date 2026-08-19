@@ -567,7 +567,7 @@ Three things about it:
     "bss": 5823,
     "budget": 105472,
     "codemax": 65536,
-    "cold": 35648,
+    "cold": 35658,
     "coldpara": 2240,
     "fatpara": 288,
     "imgpara": 3424,
@@ -578,7 +578,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2799,
     "stk0": 1024,
-    "text": 48485
+    "text": 48500
   }
 }
 ```

@@ -11,12 +11,12 @@
 ; exists to shorten).
 ;
 ; --- WHY IT IS A WINDOW AND NOT THE PAGE ------------------------------------
-; A Control Panel page gets DSV_CPPAINT and DSV_CPCLICK and there is no
-; DSV_CPKEY: the page ABI has no keyboard at all, so a dotted quad cannot be
-; TYPED on one. Adding a cell would grow DSV_SIZE, invalidate every driver's
-; service table, and cost kernel `.bss` per class on a build that stands at
-; exactly KERN_BUDGET (docs/KERNEL-MEMORY.md) - to reach a control four
-; numbers wide.
+; **NOT because a page cannot be typed into - it can.** DSV_CPKEY is a cell of
+; the service table (SPEC.md 31.9.2), cp_onkey forwards to it and RAMDISK.DRV
+; already publishes one. The reason is the LAYOUT: four editable dotted quads,
+; two mode radios and two buttons do not fit the 221x132 pane a page is given,
+; and the keyboard is kern_big's alone (SPEC.md 62.9.15) while this driver
+; loads on both kernels.
 ;
 ; A driver's own WINDOW has W_ONKEY like any other window and costs the kernel
 ; nothing, which is HDD.DRV's disk tool exactly (SPEC.md 52.2). So the page

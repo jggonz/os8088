@@ -126,9 +126,8 @@ cp_tpl:     dw 160, 130, 320, 151, cp_ttl, cp_paint, cp_onkey, cp_onclick
 cp_tpl:     dw 160, 130, 320, 151, cp_ttl, cp_paint, 0, cp_onclick
 %endif
 
-%ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
-; cp_kinit - KD_INIT (SPEC.md 29.3): install the panel's two extra edges
+; cp_kinit - KD_INIT (SPEC.md 29.3): install the panel's extra edges
 ; in:  BX = window, DI = 0 (stateless), SI = record; UI task, no lock, the
 ;      window is not yet visible
 ; out: nothing; preserves all registers
@@ -139,6 +138,14 @@ cp_tpl:     dw 160, 130, 320, 151, cp_ttl, cp_paint, 0, cp_onclick
 ; the reason the template is eight words and growing it would read one past
 ; every existing package's.
 ;
+; **BOTH KERNELS INSTALL THE RELEASE** (SPEC.md 13.8.4). W_ONMOUSEUP is in
+; kern_small's window record too (WIN_SIZE 28 includes it), and a DRIVER's
+; page acts on the release now - so a panel without the edge is a Hard Drive
+; page whose Mount, Format and Install do nothing at all, and the same of
+; ETHER's Renew and Set Up and os88net's Connect. W_ONDRAG is kern_big's alone
+; (SPEC.md 13.8.2), and so is the arm cleared below: kern_small's release
+; forwards DSV_CPUP and spends no arm of its own.
+;
 ; It is also where the arm is cleared, because a panel that was closed
 ; mid-gesture would otherwise leave one armed for the NEXT one to fire - and
 ; unlike the file dialog this window is an INSTANCE that can be closed from
@@ -146,16 +153,19 @@ cp_tpl:     dw 160, 130, 320, 151, cp_ttl, cp_paint, 0, cp_onclick
 ; -----------------------------------------------------------------------------
 cp_kinit:
     push ax
+%ifdef KERN_BIG
     mov byte [cp_down], 0
     xor ax, ax
     call COLD_SEG:os88ui_arm_f
+%endif
     mov ax, cp_onup
     call wm_onmouseup           ; .text calling .text: apps.inc's kind table
-    mov ax, cp_ondrag           ; is resident and so is this proc
+%ifdef KERN_BIG                 ; is resident and so is this proc
+    mov ax, cp_ondrag
     call wm_ondrag
+%endif
     pop ax
     ret
-%endif
 cp_ttl:     db 'Control Panel', 0
 cp_sname:   db 'Control', 0     ; KD_NAME: fits the memory view's 7-char
                                 ; NAME column, which is the tighter of the two
@@ -215,12 +225,25 @@ cp_dtop:    db 0                ; the FIRST DRIVER ROW SHOWN (SPEC.md 31.1.1).
 ; five painters - the drift fm_hit discipline exists to stop, reintroduced by
 ; the fix for it. So a ladder is RUN to identify: [cp_probe] makes every
 ; action site report its id and return instead of acting, and the same ladder
-; run with the flag clear does the thing.
+; run with the flag clear does the thing. Which of THREE a pass is, HDD.DRV's
+; own [hd_pgpr] exactly (SPEC.md 13.8.4):
+;
+;   0  act - the release, once it knows the pointer is still on the control
+;   1  identify only - the drag, and the release's own hit test
+;   2  the PRESS: a row or a field still SELECTS (a safe prefix action keeps
+;      the press, SPEC.md 13.6) while a button only reports its id
+;
+; That third mode is why cp_ctl takes an id of 0: it is what a site that is
+; not an armable control passes, and it is the only thing that can tell the
+; two species apart inside one ladder. Without it the Display page's adapter
+; rows and the Date/Time page's field rows - the two sites that keep the
+; press - moved the selection on every DRAG packet and again on the release,
+; from inside a pass whose whole contract is that it acts on nothing.
 ;
 ; Inline .text data with the rest of this block, and for the same reason - the
 ; module's own image is loaded and dropped, so nothing that must survive a
 ; drop can live in it.
-cp_probe:   db 0                ; 1 = identify only
+cp_probe:   db 0                ; 0 = act, 1 = identify only, 2 = the press
 cp_ctlid:   db 0                ; ...and what the ladder resolved to (0 = none)
 cp_down:    db 0                ; which control is DRAWN pressed (0 = none).
                                 ; cp_setdown is its one writer and the six
@@ -663,13 +686,15 @@ CPE_PAINT   equ 0
 CPE_ONCLICK equ 1
 CPE_FLUSH   equ 2
 CPE_TICK    equ 3
-%ifdef KERN_BIG
-CPE_ONUP    equ 4               ; SPEC.md 13.8.3's two edges. kern_big only,
-CPE_ONDRAG  equ 5               ; so CP_NENT differs between the builds - which
-CP_NENT     equ 6               ; is safe because MOD_H_NENT is IN the header
-%else                           ; and mod_check compares it against the file it
-CP_NENT     equ 4               ; just read, so a CTRL.DRV with the wrong count
-%endif                          ; is refused rather than dispatched into
+CPE_ONUP    equ 4               ; SPEC.md 13.8.3's two edges. The RELEASE is on
+%ifdef KERN_BIG                 ; both kernels - a driver's page acts on it
+CPE_ONDRAG  equ 5               ; (SPEC.md 13.8.4) - and the drag is kern_big's
+CP_NENT     equ 6               ; alone, so CP_NENT differs between the builds.
+%else                           ; Which is safe because MOD_H_NENT is IN the
+CP_NENT     equ 5               ; header and mod_check compares it against the
+%endif                          ; file it just read, so a CTRL.DRV with the
+                                ; wrong count is refused rather than
+                                ; dispatched into
 CPFP        equ mod_fp + MOD_CTRL * MODFP_STRIDE
 
 section .modc                   ; the on-demand image starts HERE, at its own
@@ -693,8 +718,8 @@ modc_hdr:
     dw modc_e_onclick           ; CPE_ONCLICK
     dw modc_e_flush             ; CPE_FLUSH
     dw modc_e_tick              ; CPE_TICK
-%ifdef KERN_BIG
     dw modc_e_onup              ; CPE_ONUP
+%ifdef KERN_BIG
     dw modc_e_ondrag            ; CPE_ONDRAG
 %endif
     times MOD_NENT - CP_NENT dw 0   ; the table is a FIXED MOD_NENT words, so
@@ -723,9 +748,9 @@ modc_e_flush:   call cp_flush_close_x
             retf
 modc_e_tick:    call cp_tick_x
             retf
-%ifdef KERN_BIG
 modc_e_onup:    call cp_onup_x
             retf
+%ifdef KERN_BIG
 modc_e_ondrag:  call cp_ondrag_x
             retf
 %endif
@@ -964,8 +989,9 @@ cp_onclick_x:
     jnc .drvpress               ; [cp_probe] is a KERNEL byte and a driver's
                                 ; ladder has never heard of it, so a driver
                                 ; told to identify would ACT
-    call cp_pgprobe             ; SPEC.md 13.8.3: run the ladder to IDENTIFY,
-    or al, al                   ; acting on nothing
+    mov al, 2                   ; SPEC.md 13.8.3: run the ladder to IDENTIFY,
+    call cp_pgprobe             ; acting on nothing but a row that SELECTS -
+    or al, al                   ; mode 2, and only this caller passes it
     jz .done
     xor ah, ah
     call COLD_SEG:os88ui_arm_f
@@ -988,7 +1014,6 @@ cp_onclick_x:
     pop ax
     ret
 
-%ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
 ; cp_onup_x - W_ONMOUSEUP (SPEC.md 13.7/13.8.3): a panel control fires HERE
 ; in:  CX = x, DX = y (SCREEN, possibly outside the window), SI = window ptr;
@@ -1003,6 +1028,13 @@ cp_onclick_x:
 ; hands the ladder a pane-relative point and every ladder's first test is a
 ; band, so there is no separate "is this even in the pane" question to get
 ; wrong.
+;
+; **ON kern_small IT IS THE FORWARD AND NOTHING ELSE** (SPEC.md 13.8.4): the
+; static pages there still act on the press, but a DRIVER's page acts on the
+; release on both kernels, so without this edge no button on any driver page
+; could ever fire - the press armed and drew it held and nothing came after.
+; What kern_small does not get is the kernel's own arm, probe and pressed
+; look - that half is the drag's company inside the guard below.
 ; -----------------------------------------------------------------------------
 cp_onup_x:
     push ax
@@ -1015,6 +1047,7 @@ cp_onup_x:
     call cp_pt                  ; DI/BP = pane origin, CX/DX = pane-relative
     mov ax, DSV_CPUP            ; SPEC.md 13.8.4: a driver page owns its own
     call cp_drv_ev              ; gesture, so the probe below must not run
+%ifdef KERN_BIG
     jnc .done
     call COLD_SEG:os88ui_fire_f ; AX = what the press armed, and it is CLEARED
     or ax, ax
@@ -1024,10 +1057,12 @@ cp_onup_x:
     xor al, al
     call cp_setdown             ; ...upright FIRST and unconditionally, before
     pop bx                      ; anything acts (SPEC.md 13.8.2)
-    call cp_pgprobe             ; AL = what the RELEASE is over
+    mov al, 1                   ; AL = what the RELEASE is over, and nothing
+    call cp_pgprobe             ; on the page may act from inside it
     cmp al, bl
     jne .done                   ; a different control, or none: CANCELLED
     call cp_pgact               ; ...and only now does anything happen
+%endif
 .done:
     pop bp
     pop di
@@ -1038,6 +1073,7 @@ cp_onup_x:
     pop ax
     ret
 
+%ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
 ; cp_ondrag_x - W_ONDRAG (SPEC.md 13.8.2): the pointer moved, press still down
 ; in:  CX = x, DX = y (SCREEN), SI = window ptr; gfx lock held
@@ -1065,7 +1101,8 @@ cp_ondrag_x:
     or ax, ax
     jz .ddone
     mov bx, ax
-    call cp_pgprobe             ; AL = what the pointer is over now
+    mov al, 1                   ; AL = what the pointer is over now, and the
+    call cp_pgprobe             ; same: identify only
     cmp al, bl
     je .dset
     xor al, al                  ; off it: nothing is down
@@ -1080,6 +1117,7 @@ cp_ondrag_x:
     pop bx
     pop ax
     ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; cp_pt - a SCREEN point to the pane origin and a pane-relative point
@@ -1104,6 +1142,7 @@ cp_pt:
     add di, CP_RX
     ret
 
+%ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
 ; cp_ctlpaint - redraw the CONTROLS the down state just moved between
 ; in:  AL = the control now down, AH = the one that was (0 = none, either way)
@@ -1206,7 +1245,8 @@ cp_setdown:
 
 ; -----------------------------------------------------------------------------
 ; cp_pgprobe - run the current page's ladder to IDENTIFY (SPEC.md 13.8.3)
-; in:  DI/BP = pane origin, CX/DX = pane-relative point
+; in:  AL = the mode wanted (1 = identify only, 2 = the press, where a row or
+;      a field still selects), DI/BP = pane origin, CX/DX = pane-relative pt
 ; out: AL = the control id the ladder landed on (0 = none); AH clobbered
 ;
 ; The ladder is the hit test, and this is how it is asked rather than told.
@@ -1215,6 +1255,7 @@ cp_setdown:
 ; why it is here and not two stores at each of the three call sites.
 ; -----------------------------------------------------------------------------
 cp_pgprobe:
+    mov ah, al                  ; AH = the mode, banked past the pane gate
     mov byte [cp_ctlid], 0
     ; --- THE PANE GATE, which used to be the DISPATCH's ---------------------
     ; cp_onclick_x tested `cx >= CP_DIVX` before ever reaching a page, so no
@@ -1235,7 +1276,7 @@ cp_pgprobe:
     jl .none
     cmp dx, CP_CH - 1
     jg .none
-    mov byte [cp_probe], 1
+    mov [cp_probe], ah
     mov al, [cp_sel]
     call cp_item_click
     mov byte [cp_probe], 0
@@ -1484,7 +1525,6 @@ cp_item_click:
     pop ax
     ret
 
-%ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
 ; cp_drv_ev - forward a RELEASE or a DRAG to a driver's page (SPEC.md 13.8.4)
 ; in:  AX = DSV_CPUP or DSV_CPDRAG - the WHOLE word, because it is banked in
@@ -1551,7 +1591,6 @@ cp_drv_ev:
     pop bx
     pop ax
     ret
-%endif
 
 ; (cp_drv_gone_x was here. It is RESIDENT now, above the .modc switch, because
 ; drv_shutdown calls it after cp_flush_close has dropped this image - SPEC.md
@@ -1561,7 +1600,8 @@ cp_drv_ev:
 %ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
 ; cp_ctl - a page ladder reports which control it landed on (SPEC.md 13.8.3)
-; in:  AL = this site's control id, unique within its page
+; in:  AL = this site's control id, unique within its page - or 0 for a site
+;      that is not an armable control and SELECTS instead
 ; out: CF = 1 while PROBING, and the caller must return without acting;
 ;      CF = 0 to act. Every register preserved.
 ;
@@ -1570,10 +1610,23 @@ cp_drv_ev:
 ; identify-or-act ones. The id is per PAGE and needs no page number beside it:
 ; changing the page needs a click in the item list and the button is already
 ; down, so [cp_sel] cannot move between the press and the release.
+;
+; **AN ID OF 0 IS THE THIRD SPECIES**, hd_ctl's exactly (SPEC.md 13.8.4): a
+; selecting site acts on the PRESS - a safe prefix action keeps it
+; (SPEC.md 13.6) - and reports nothing at all, so the drag and the release
+; find it and return. Two of those sites shipped with no cp_ctl call whatever,
+; which meant they acted on every pass instead of on none.
 ; -----------------------------------------------------------------------------
 cp_ctl:
-    mov [cp_ctlid], al
     cmp byte [cp_probe], 0
+    je .act
+    or al, al
+    jz .sel                     ; not an armable control: nothing to report
+    mov [cp_ctlid], al
+    stc
+    ret
+.sel:
+    cmp byte [cp_probe], 2      ; ...and it still selects on the press
     je .act
     stc
     ret
@@ -2449,6 +2502,13 @@ cp_vid_click:
     div cl                      ; AL = slot, AH = the remainder
     call cp_vid_slot
     jc .done                    ; a band with no row under it
+%ifdef KERN_BIG
+    push ax                     ; ...and the row SELECTS, which keeps the press
+    xor al, al                  ; (SPEC.md 13.6): id 0, so the drag and the
+    call cp_ctl                 ; release find it and return instead of moving
+    pop ax                      ; the dot to whatever the pointer crossed on
+    jc .done                    ; its way off the button (SPEC.md 13.8.3)
+%endif
     cmp al, [cp_vsel]
     je .done                    ; already the pending choice: draw nothing
     mov [cp_vsel], al
@@ -2569,6 +2629,13 @@ cp_time_click:
 
     call cp_time_pick           ; --- the field rows: which field? ---
     jc .done
+%ifdef KERN_BIG
+    push ax                     ; the field SELECTS, so it keeps the press and
+    xor al, al                  ; reports nothing: id 0 (SPEC.md 13.6/13.8.3).
+    call cp_ctl                 ; Without it a slide across these rows with '+'
+    pop ax                      ; held re-lettered both clock rows per mouse
+    jc .done                    ; packet - PERFORMANCE.md's input overrun
+%endif
     cmp al, [cp_tsel]
     je .done                    ; already selected: change nothing
     mov [cp_tsel], al
@@ -3484,15 +3551,20 @@ cp_snd_click:
     jg .done
 .band:
     mov al, bl
+    call cp_snd_rowok           ; a row whose hardware is not here is refused
+    jc .done                    ; without a notice: it is drawn grey, which
+                                ; has already said so.
+                                ; **AHEAD of cp_ctl, deliberately**, the way
+                                ; cpf_vidok and cp_drv_arrowok are: a control
+                                ; that will refuse must not arm, or the press
+                                ; draws it held and SPEC.md 13.8's "disabled
+                                ; outranks down" is broken by this page
 %ifdef KERN_BIG
     add al, 2                   ; ids 2..4, the Test button being 1
     call cp_ctl
     jc .done
     mov al, bl
 %endif
-    call cp_snd_rowok           ; a row whose hardware is not here is refused
-    jc .done                    ; without a notice: it is drawn grey, which
-                                ; has already said so
     xor bh, bh
     mov ah, [bx+cp_snd_tiers]   ; the SND_RT_* that row asks for
     mov byte [cp_snd_err], 0
@@ -4338,7 +4410,6 @@ cpf_cp_onclick:
 .c_gone:
     retf
 
-%ifdef KERN_BIG
 ; SPEC.md 13.8.3's two edges. They do NOT call mod_need, and that is the
 ; difference from every shim above: a release or a drag can only follow a
 ; PRESS this panel took, and taking it is what loaded the image - so if the
@@ -4354,6 +4425,7 @@ cpf_cp_onup:
     call far [CPFP + CPE_ONUP*4]
 .u_gone:
     retf
+%ifdef KERN_BIG
 cpf_cp_ondrag:
     push ax
     mov al, MOD_CTRL
