@@ -534,16 +534,11 @@ te_scrollpaint:
     add bx, TE_TOPY                 ; BX = y1
     mov dx, bx
     add dx, ax                      ; DX = y2
-    mov ax, [te_px]                 ; AX = x1, a byte column (te_layout)
-    mov cx, [te_vcols]
-    push dx
-    mov dl, 3
-    xchg cl, dl
-    shl dx, cl                      ; ...DX = the visible width in pixels
-    mov cx, dx
-    pop dx
-    add cx, ax
+    call te_wpx                     ; AX = the visible width in pixels - the
+    mov cx, ax                      ; routine that owns the `<< 3`, so DX (y2)
+    add cx, [te_px]                 ; stays out of the width entirely
     dec cx                          ; CX = x2, so x2+1 is a byte column too
+    mov ax, [te_px]                 ; AX = x1, a byte column (te_layout)
     call OSAPI_GFX_SCROLL
     pop ax
     jc .all
@@ -724,16 +719,38 @@ te_onkey:
 ; either way - what they must not have is a frozen one.
 ; -----------------------------------------------------------------------------
 te_tx:
-    push bx
-    push cx
     or al, al
     jz .out                         ; a bare scan code: no arrows, no function
                                     ; keys. This terminal sends CHARACTERS
     cmp al, 13
-    jne .q
+    jne te_txraw
     mov al, 13                      ; CR, and the LF is the host's business:
-.q:                                 ; RFC 854 says CR LF and every host in
-    mov bx, [te_txw]                ; practice accepts a bare CR
+    jmp short te_txraw              ; RFC 854 says CR LF and every host in
+.out:                               ; practice accepts a bare CR
+    ret
+
+; -----------------------------------------------------------------------------
+; te_txraw - queue AL exactly as given, with no ASCII filter
+; in:  AL = the byte
+;
+; The PROTOCOL replies come through here (te_refuse), because an option byte
+; of 0 - TRANSMIT-BINARY, an ordinary thing for a host to offer - is a legal
+; option and te_tx's scan-code filter eats it. What went on the wire then was
+; a two-byte IAC WONT, which RFC 854 says is incomplete: the host takes the
+; user's next keystroke as the option number and the two ends disagree about
+; that option for the rest of the session.
+;
+; **te_txw HAS TWO WRITERS** - te_onkey on the UI task and te_refuse on the
+; worker - so the read-modify-write below is a critical section (SPEC.md 1).
+; An interleave rolls te_txw BACKWARDS past te_txr, and te_flushtx's wrap arm
+; then hands the host 56 bytes of stale ring.
+; -----------------------------------------------------------------------------
+te_txraw:
+    push bx
+    push cx
+    pushf
+    cli
+    mov bx, [te_txw]
     mov cx, bx
     inc cx
     and cx, TE_TX-1
@@ -742,6 +759,7 @@ te_tx:
     mov [te_txb + bx], al
     mov [te_txw], cx
 .out:
+    popf
     pop cx
     pop bx
     ret
@@ -1133,17 +1151,17 @@ te_refuse:
     push bx
     mov bl, al                      ; the option
     mov al, IAC
-    call te_tx
-    mov al, T_WONT
-    cmp byte [te_verb], T_DO
-    je .send
+    call te_txraw                   ; RAW, all three: option 0 is legal and
+    mov al, T_WONT                  ; te_tx's scan-code filter would eat it,
+    cmp byte [te_verb], T_DO        ; leaving a two-byte command the host
+    je .send                        ; completes with the user's next keystroke
     cmp byte [te_verb], T_DONT
     je .send
     mov al, T_DONT                  ; it said WILL or WONT
 .send:
-    call te_tx
+    call te_txraw
     mov al, bl
-    call te_tx
+    call te_txraw
     pop bx
     pop ax
     ret

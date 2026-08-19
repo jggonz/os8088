@@ -269,9 +269,13 @@ os88line_draw:
     add ax, cx
     mov cx, ax
     mov bx, [si+LN_Y1]
-    inc bx
-    mov dx, [si+LN_Y2]
-    dec dx
+    add bx, LN_INSET            ; the bar lives in the GLYPH BAND and not the
+    mov dx, bx                  ; whole inner height, because the opaque
+    add dx, 7                   ; font_run that repaints this cell is what
+                                ; ERASES it - the strip fill above starts past
+                                ; the text and reaches no caret inside it, so
+                                ; a taller bar left its top and bottom rows
+                                ; behind at every column the caret visited
     push ax
     mov al, CBLACK
     UI_INK

@@ -48219,6 +48219,16 @@ would have released the wire half-way through a transfer. At the table, a verb
 added later cannot be added ungated: its cell has nothing to name until a
 thunk exists.
 
+**And the Control Panel's own buttons are a third user of the cable.**
+`net_cp_up` calls `net_connect` and `net_drop` directly, and both drive the
+port — the goodbye byte and `lp_restore` on one side, the whole hello
+handshake on the other. That was safe while the panel was the only thing
+there; with a package's worker able to be inside `nsk_send` it is not, so
+both take `net_fclaim` first and release after. They are a **click**, so they
+wait like a file verb rather than answering busy; a claim that never came free
+leaves the button up and redraws the page unchanged, and the user clicks
+again.
+
 #### 62.11.4 What is checked, and what is still the 5150's
 
 `tests/socktest` is the gate: a package with a worker that opens a connection,
@@ -48343,6 +48353,15 @@ a short reply on a failure desyncs the cable and the next command is read out
 of this one's tail. And the status byte is netpkg.inc's own `NETE_*`
 numbering, which is one fewer mapping to keep in step.
 
+**`NW_SEND` reads what was ANNOUNCED and keeps what fits**, which is the same
+rule read from the other end: the length word is the master's, so clamping it
+to `NET_SKMAX` and then reading only the clamp leaves the excess queued as the
+next command's letters — the desync the fixed frame exists to prevent, driven
+this time by stream data. The bytes past the cap are read and discarded, and
+the reply's *taken* word still says how many were kept. A conforming master
+cannot over-announce (`nsk_cap`), which is exactly why this is the end that
+must not assume it.
+
 **What is proven, and on what.** `tests/dosstub` boots `OS88NET.COM` on a
 cycle-accurate 8088 with a real parallel port, and `PKTFAKE=1` puts a packet
 driver on int 60h that answers the interface and drops every frame. With it,
@@ -48389,6 +48408,15 @@ screens from the cause. `os88net_tail > net_bss0` is an assembly-time
 **And `/N` takes the network for the run.** It registers for every packet and
 runs its own DHCP, so mTCP's own programs must not run alongside it. The help
 text says so.
+
+**It also HANDS THE TYPE BACK, on every way out.** `access_type` leaves the
+packet driver holding a far pointer at `pk_recv` *inside this `.COM`*, and
+this is not a TSR — `int 21h` `4Ch` frees the block and the next matching
+frame far-calls whatever DOS put there, which on a live network is seconds
+away and looks like nothing to do with the program that caused it. `ne_stop`
+is called at `.bye`, the one exit every path funnels through, and it is
+guarded by `[pk_handle]` rather than `[eth_up]`: a run that registered and
+then lost DHCP serves files with `eth_up` 0 and a **live** upcall.
 
 ## 63. The logo (`tools/os88logo.py`, `MEDIA/OS8088.GIF`)
 
@@ -52593,6 +52621,18 @@ drops** rather than blocking. At 3,741 B/s that ring is seventeen milliseconds
 of typing ahead of the cable; a user who outruns it has an unresponsive
 machine either way, and what they must not have is a frozen one.
 
+**That ring has TWO writers, and the option replies are not keystrokes.**
+`te_refuse` (§70.1) runs on the *worker*, so the read-modify-write of
+`[te_txw]` is a critical section (§1) and not a single-producer's private
+business: an interleave rolls the write index backwards past the read index,
+and `te_flushtx`'s wrap arm then hands the host 56 bytes of stale ring. And
+the protocol replies go in through `te_txraw`, which is the same queue without
+`te_tx`'s `or al, al` filter — that filter is right for the keyboard, where a
+zero is a bare scan code (§11.2.1), and wrong for a reply, where **option 0 is
+`TRANSMIT-BINARY`**: a filtered option byte puts a two-byte `IAC WONT` on the
+wire, and RFC 854 has the host take the user's next keystroke as the option
+number.
+
 `NETE_BUSY` is retried and never reported: the Link volume's file verbs share
 the wire, so a Disk window click can be mid-command when the worker's turn
 comes round. A package that treated it as an error would drop a live
@@ -52826,6 +52866,14 @@ header — and typing writes into it. And the text cells are **never blanked**:
 one opaque `OSAPI_FONT_RUN` puts background and glyphs down in a single pass
 and only the strip past the text is filled, because a fill-then-letter pair
 would empty the field for tens of milliseconds on every keystroke (§27.2).
+
+**Which is what sizes the caret**: it is a 1px bar in the **glyph band**
+(`LN_INSET` to `LN_INSET+7`) rather than the box's whole inner height, because
+the opaque run that repaints that cell is the only thing that erases it. A
+taller bar was drawn over rows nothing repaints — the run covers eight, and
+the one fill starts past the text — so every column the caret visited kept its
+pixels above and below the letters until something forced a full window
+repaint.
 
 ### 71.4 The chrome takes the top of the content, and everything follows
 

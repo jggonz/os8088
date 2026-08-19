@@ -478,10 +478,16 @@ net_cp_up:
                                 ; double-draw with the button as the flash
     cmp byte [net_state], NS_LINKED
     je  .disc
-    call net_connect            ; may fail: the page will say so
-    jmp short .redraw
+    call net_fclaim             ; THE WIRE, for the whole handshake: a
+    jc  .redraw                 ; package's worker may be inside a socket
+    call net_connect            ; verb on it (netsock.inc), and the panel is
+    mov byte [net_busy], 0      ; neither of the two gates. Busy: the page
+    jmp short .redraw           ; redraws unchanged and the user clicks again
 .disc:
+    call net_fclaim
+    jc  .redraw
     call net_drop
+    mov byte [net_busy], 0
 .redraw:
     mov di, [net_px]
     mov dx, [net_py]

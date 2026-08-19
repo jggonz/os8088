@@ -311,6 +311,12 @@ start:
     mov si, s_stopped
     call puts
 .bye:
+    call ne_stop                ; release_type BEFORE DOS frees this block, or
+                                ; the next frame the card sees far-calls
+                                ; pk_recv's offset in whatever now lives here.
+                                ; pk_handle guards it, not eth_up: a /N run
+                                ; that registered and then lost DHCP has
+                                ; eth_up 0 and a LIVE upcall
     mov ax, 0x4C00
     int 0x21
 .noport:

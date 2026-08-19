@@ -200,21 +200,25 @@ nw_s_send:
     mov [nw_hnd], al
     call lp_rword
     jc  .io
-    mov [nw_len], ax
+    mov [nw_ann], ax            ; what the master PROMISED...
     cmp ax, NET_SKMAX
     jbe .cap
     mov ax, NET_SKMAX           ; **THE BYTES STILL COME**, all of them - see
-    mov [nw_len], ax            ; the header. A master that promised more than
-.cap:                           ; this asked for is its own bug and the wire
-                                ; is still read to the end
-    mov cx, [nw_len]
+.cap:                           ; the header. A master that promised more than
+    mov [nw_len], ax            ; this asked for is its own bug and the wire
+                                ; is still read to the end, or the excess is
+                                ; decoded as the NEXT command's letters
+    mov cx, [nw_ann]
     mov di, nw_buf
     jcxz .have
 .rd:
     call lp_rbyte
     jc  .io
-    mov [di], al
+    cmp di, nw_buf + NET_SKMAX
+    jae .skip                   ; past the cap: read and DISCARD, so the frame
+    mov [di], al                ; ends where the master thinks it does
     inc di
+.skip:
     loop .rd
 .have:
     mov word [nw_took], 0
@@ -339,6 +343,8 @@ nw_st:      db 0
 nw_state:   db 0
 nw_rdy:     dw 0
 nw_len:     dw 0
+nw_ann:     dw 0                ; what NW_SEND's master ANNOUNCED, which may be
+                                ; more than nw_len: the drain is by this
 nw_cap:     dw 0
 nw_took:    dw 0
 nw_host:    times NET_HOSTMAX db 0
