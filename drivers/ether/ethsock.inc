@@ -198,6 +198,13 @@ eth_v_close:
     je  .fin
     cmp byte [bx+SKO_TS], TS_CLOSEW
     je  .fin
+    and byte [bx+SKO_FL], ~SKF_RES      ; a NAME still being looked up is
+    mov ah, [bx+SKO_IDX]                ; cancelled WITH the slot. [dns_sk]
+    cmp ah, [dns_sk]                    ; lives outside the record, so
+    jne .nores                          ; sk_alloc's mem_zero cannot reach it
+    mov byte [dns_sk], 0xFF             ; and the reply would land on whoever
+    mov word [dns_lport], 0             ; the slot went to next - dns_in writes
+.nores:                                 ; SKO_RIP and calls tcp_syn on it
     mov byte [bx+SKO_TS], TS_CLOSED     ; nothing was ever connected, or it is
     mov byte [bx+SKO_ST], NSK_FREE      ; already over: the slot goes now
     jmp short .out

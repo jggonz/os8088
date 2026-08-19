@@ -53188,6 +53188,54 @@ them for as long as it likes, and eight frames is about 12KB — more than one
 tick of anything this stack talks to, and a bound the desktop can feel the end
 of.
 
+#### 72.2.2 One card, two tasks — `eth_busy`
+
+Every socket verb pumps the ring (§72.2.1), and a package's verbs run on that
+package's **worker** task while `eth_dhcp_wait` spins the pump on the **UI**
+task. So two tasks can be inside this driver at once, and three separate things
+break when they are:
+
+- **`[eth_useg]` is one word** naming whichever package is inside. The other
+  task overwriting it mid-verb makes the first one's `NETV_RECV` write its
+  reply into a *different package's segment*.
+- **`eth_rxb` is one frame.** A pre-emption between `ne_rx` filling it and
+  `eth_frame` parsing it hands the parser somebody else's packet, and one
+  inside `ne_dma_read`'s ~1,514-iteration byte loop lets the other task
+  reprogram RSAR and RBCR, so both transfers read spliced data.
+- **The 8390's register file is paged** (§72.2). A pre-emption inside
+  `ne_curr`'s page-1 window leaves the card on page 1 for the other task, whose
+  `ne_out NE_BNRY` then writes PAR2 — the station address — and the card stops
+  matching itself.
+
+`[eth_busy]` is the mutex, taken with interrupts off by `eth_claim` (§20.6),
+and it is `NET.DRV`'s `nsk_claim` deliberately rather than by coincidence:
+§62.11.3 arbitrates the *same socket ABI* the same way, and a mutex invented
+twice is a mutex fixed once. `eth_pkg` claims around the whole verb dispatch
+and releases with a flag-free `mov`, so the verb's own CF and AX reach the
+package unchanged.
+
+Three things sit outside it, each for its own reason:
+
+- **`NETV_IDENT` is answered first and with no claim.** It is a question about
+  which *driver* this is (§20.11.1) and it touches neither the card nor
+  `[eth_useg]`. `NETV_STATE` is **not** in that company — `eth_v_state` pumps.
+- **A verb that loses the race answers `NETE_BUSY` and never waits**, which
+  netpkg.inc already defines as an ordinary answer to poll through and every
+  client here is already written for. There is no waiting half here as there is
+  on the cable, because nothing on this driver is the user's click.
+- **`eth_dhcp_wait` claims per pump and not across the spin.** Holding it for
+  `DHCP_WAIT` would answer six seconds of a worker's verbs with `NETE_BUSY`.
+  `DRVV_DETACH` does the opposite and takes it outright: it cannot fail and
+  cannot wait, so it takes the card and clears the flag on the way out.
+
+**And a bounded spin is bounded in TIME.** `ne_dma_write`'s RDC wait was
+`mov cx, 0` — 65,536 turns of a port read behind a near call, ~1.5 seconds of a
+4.77MHz 8088, on the path of *every transmit*. `NE_RDCSPIN` (400) and
+`NE_TXSPIN` (4000) are named beside `NE_FRAME` and sized from the target
+machine (PERFORMANCE.md rule 3): ~9 ms and ~92 ms, two orders of headroom over
+what an 8390 needs, and a tenth of a second per frame rather than 1.6 seconds
+when the card has gone away.
+
 ### 72.3 Big-endian is the wire's and little-endian is ours
 
 `drivers/ether/inet.inc` — Ethernet framing, ARP, IP, ICMP echo, UDP and the
@@ -53215,7 +53263,13 @@ What is refused rather than handled: IP **options** (the header must be 0x45,
 because a stack that guessed the header length would read the transport header
 at the wrong offset when it guessed wrong) and IP **fragments** (nothing this
 stack sends can provoke one, and a browser that met one would need a buffer it
-has not got). ICMP answers echo and nothing else — a machine that answers a
+has not got). **The total length is bounded at BOTH ends**, against the frame
+*without* its Ethernet header above and against `IP_HLEN` below: a header
+claiming 0..19 makes `sub ax, IP_HLEN` wrap to ~65,500, and that is the payload
+length `tcp_in` is handed — the socket ring is then filled from past the end of
+the received frame with whatever this driver last transmitted, and `NETV_RECV`
+gives it to the package as data the peer sent. ICMP answers echo and nothing
+else — a machine that answers a
 ping is a machine somebody can prove is on the network with none of the
 software above this line working, which is why it is the first end-to-end test
 of the driver and why it is one packet.
@@ -53249,7 +53303,12 @@ Four things are load-bearing:
 - **What an acknowledgement retires is retired in one place** (`tcp_ackin`) and
   it has three things in it, because TCP counts three in the same sequence
   space: a SYN, the data and a FIN. Miss one and the connection hangs at exactly
-  the point that thing was outstanding.
+  the point that thing was outstanding. It is bounded at **both** ends of the
+  window — at or behind SND.UNA is old, and *ahead of SND.NXT is not an
+  acknowledgement at all*: taking one would put SND.UNA past what was sent, and
+  since every segment's sequence comes from SND.UNA the connection would then
+  send from a number the peer discards, with the retransmit timer just
+  disarmed.
 - **A segment is acknowledged only if it advanced RCV.NXT or carried data.** A
   stack that answers every segment with an ACK answers the peer's own ACKs,
   which on a stop-and-wait connection is a frame per frame for nothing.
@@ -53264,6 +53323,16 @@ server answer a second request while it is serving the first. `SKF_ACPT` marks
 a slot a listener made and nobody has been told about, which is both what stops
 one connection being handed out twice and what frees a slot whose peer went away
 before anybody asked.
+
+**A passive open is promoted in `tcp_seg`, not in `tcp_accept_in`.** The slot
+that answers a SYN is `TS_SYNRCVD`/`NSK_CONNECT` and stays there until the
+peer's final ACK arrives — an ordinary in-order segment, so the promotion to
+`TS_ESTAB`/`NSK_UP` hangs off `tcp_ackin` having cleared `SKF_SYNA` and not off
+any state of its own. Two things are load-bearing about it: `SKF_ACPT` stays
+**on**, because `eth_v_accept` clearing it is what hands the handle out; and
+`tcp_accept_in` sets `SKO_TMO` like `tcp_syn` does, because `sk_alloc` has just
+zeroed the record and `tcp_timers` reads a zero deadline as one it has already
+passed — a slot aborted before anybody could be told it existed.
 
 TIME-WAIT is `TCP_TWTMO` = 36 ticks and not the standard's minutes: four
 sockets and a machine that reboots by being switched off make minutes a way to
@@ -53286,7 +53355,24 @@ when the answer arrives. One lookup at a time; a second socket waits.
 A compression pointer **ends** a name and is never followed — every name this
 parser skips is one it does not need to read, and following a pointer is how a
 hostile reply makes a parser loop forever. Every walk is bounded by the frame
-and not by the end marker, for the same reason.
+and not by the end marker, for the same reason — and bounded by **what is left
+of it rather than by where the step landed**, because a 16-bit add of a
+`RDLENGTH` off the wire wraps, and a wrapped cursor is *below* the message,
+where every test of where it landed passes and the walk is over the driver's
+own image.
+
+**A reply is taken only from the server that was asked**: `udp_in` dispatches
+on the destination port alone, so `dns_in` checks the source address against
+`eth_dns` and the source port against 53 before it looks at anything else.
+Off-path is all that closes — anything that can watch the query leave can
+forge the source too — but the 16-bit transaction ID over a source port that
+walks upward from 49152 is not on its own an identity.
+
+**A `NETV_CLOSE` while a name is in flight cancels the lookup.** `[dns_sk]`
+names the slot from *outside* the record, so `sk_alloc`'s `mem_zero` cannot
+reach it: a slot freed with `SKF_RES` still set is handed straight back to the
+next `NETV_OPEN`, and the old reply then writes `SKO_RIP` and calls `tcp_syn`
+on a connection that belongs to somebody else.
 
 **A static address is set in the Control Panel and remembered in a file of the
 driver's own** — §72.7 below, which is where the argument for both lives, and

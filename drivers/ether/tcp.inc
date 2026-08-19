@@ -925,6 +925,12 @@ tcp_accept_in:
     mov byte [bx+SKO_TS], TS_SYNRCVD
     mov byte [bx+SKO_ST], NSK_CONNECT
     or  byte [bx+SKO_FL], SKF_SYNA | SKF_ACPT
+    mov byte [bx+SKO_TRY], 0
+    call OSAPI_GET_TICKS                ; the connect deadline, which sk_alloc
+    add ax, TCP_CONNTMO                 ; has just ZEROED - and a deadline of
+    mov [bx+SKO_TMO], ax                ; zero is one tcp_timers' .ctmo has
+                                        ; already passed, so the slot is
+                                        ; aborted on the very first pump
     mov al, TF_SYN | TF_ACK
     xor cx, cx
     call tcp_out
@@ -989,6 +995,14 @@ tcp_seg:
                                         ; a frame per frame for nothing
     call tcp_ackin                      ; what have they acknowledged?
 
+    cmp byte [bx+SKO_TS], TS_SYNRCVD    ; **AND A PASSIVE OPEN IS NOW UP.** The
+    jne .est                            ; peer's final ACK is the only thing
+    test byte [bx+SKO_FL], SKF_SYNA     ; that promotes a slot tcp_accept_in
+    jnz .est                            ; made, and tcp_ackin has just cleared
+    mov byte [bx+SKO_TS], TS_ESTAB      ; SKF_SYNA if it covered our SYN. SKF_
+    mov byte [bx+SKO_ST], NSK_UP        ; ACPT stays on: eth_v_accept is what
+    call tcp_disarm                     ; hands the handle out
+.est:
     mov cx, [eth_seglen]                ; ...and the data
     jcxz .nodata
     mov si, eth_rxb + IP_PAY
@@ -1089,6 +1103,17 @@ tcp_ackin:
     call be32_get
     mov di, eth_ph2
     call q_put
+    mov si, eth_ph2                     ; ahead of what we SENT is no ack at
+    mov di, bx                          ; all: SND.UNA may never pass SND.NXT,
+    add di, SKO_SNXT                    ; and a peer that moved it there would
+    call q_sub                          ; have every later segment sent from a
+    or  dx, dx                          ; sequence the peer discards, with the
+    js  .inwin                          ; retransmit timer just disarmed
+    or  ax, ax
+    jnz .out
+    or  dx, dx
+    jnz .out
+.inwin:
     mov si, eth_ph2                     ; theirs - ours: zero or less is old
     mov di, bx
     add di, SKO_SUNA

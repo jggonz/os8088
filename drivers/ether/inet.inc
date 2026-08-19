@@ -868,10 +868,13 @@ eth_frame:
 .mine:
     mov si, eth_rxb + IP_OFF + IPO_LEN  ; the wire length, which is what the
     call be_get                         ; payload length must come from: the
-    cmp ax, cx                          ; card's frame is padded to 60 bytes
-    ja  .drop                           ; and every short packet is padded
-    sub ax, IP_HLEN
-    mov cx, ax
+    sub cx, EH_SIZE                     ; card's frame is padded to 60 bytes
+    cmp ax, cx                          ; and every short packet is padded. The
+    ja  .drop                           ; datagram's room is the frame WITHOUT
+    cmp ax, IP_HLEN                     ; the Ethernet header, and a length
+    jb  .drop                           ; below the header itself wraps the
+    sub ax, IP_HLEN                     ; subtract into ~65,500 - which becomes
+    mov cx, ax                          ; the payload length tcp_in is given
     mov al, [eth_rxb+IP_OFF+IPO_PROTO]
     cmp al, IPP_ICMP
     je  .icmp

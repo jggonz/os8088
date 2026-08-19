@@ -212,12 +212,26 @@ eth_ready:
 ; -----------------------------------------------------------------------------
 eth_dhcp_wait:
     push ax
-    call dhcp_begin
     call OSAPI_GET_TICKS
     add ax, DHCP_WAIT
     mov [eth_dl], ax
+.begin:
+    call eth_claim              ; the DISCOVER is a frame like any other, so it
+    jnc .go                     ; goes out under the claim too - and a worker
+    call OSAPI_GET_TICKS        ; that holds it is milliseconds away, with the
+    sub ax, [eth_dl]            ; same deadline bounding even that
+    js  .begin
+    mov byte [dhcp_st], DH_FAIL
+    jmp short .done
+.go:
+    call dhcp_begin
+    mov byte [eth_busy], 0
 .spin:
-    call eth_pump
+    call eth_claim              ; ONE PUMP AT A TIME and never held across the
+    jc  .look                   ; spin: this is the UI task sitting here for up
+    call eth_pump               ; to DHCP_WAIT ticks, and a package's worker
+    mov byte [eth_busy], 0      ; would get NETE_BUSY for every one of them
+.look:
     cmp byte [dhcp_st], DH_BOUND
     je  .done
     cmp byte [dhcp_st], DH_FAIL
@@ -240,6 +254,11 @@ eth_detach:
     push dx
     push si
     push di
+    mov byte [eth_busy], 1      ; **TAKEN AND NOT ASKED FOR** (SPEC.md 72.2.2):
+                                ; a detach cannot fail and cannot wait, so it
+                                ; takes the card outright and every package
+                                ; verb from here answers NETE_BUSY - which is
+                                ; the honest thing for a driver on its way out
     call eth_cfg_reap           ; **BEFORE anything else.** The window's
                                 ; dispatcher is ours and the kernel is about to
                                 ; free the image it lives in (SPEC.md 72.7)
@@ -249,6 +268,9 @@ eth_detach:
     call ne_stop
     mov byte [eth_up], 0
 .out:
+    mov byte [eth_busy], 0      ; ...and the flag does not outlive the driver:
+                                ; a claim left standing would refuse every
+                                ; verb of the next attach
     pop di
     pop si
     pop dx
@@ -309,22 +331,31 @@ eth_pkg:
     push bx
     push si
     push di
-    mov [eth_useg], es
-    push ds
-    pop es
     inc word [eth_ncall]        ; how many times a package has asked us
                                 ; anything - the counter that tells "the
                                 ; driver answered wrongly" from "nobody is
                                 ; calling it", which from inside the guest
                                 ; look identical
+    cmp bl, NETV_IDENT
+    je  .ident                  ; ...ANSWERED FIRST AND WITH NO CLAIM: it is a
+                                ; question about which DRIVER this is and it
+                                ; touches neither the card nor [eth_useg]
+                                ; (SPEC.md 20.11.1). NETV_STATE is NOT in that
+                                ; company - eth_v_state pumps the ring
+    call eth_claim              ; **THE CARD IS ONE CARD** (SPEC.md 72.2.2)
+    jc  .busy
+    mov [eth_useg], es
+    push ds
+    pop es
     cmp bl, NETV_MAX
     ja  .verb
     cmp byte [eth_up], 0
     jne .up
-    cmp bl, NETV_IDENT          ; a driver with no card still IDENTIFIES, or a
-    je  .up                     ; package cannot tell "no card" from "wrong
-    cmp bl, NETV_STATE          ; class" - and NETV_STATE is the verb that
-    je  .up                     ; exists to say so (netpkg.inc)
+    cmp bl, NETV_STATE          ; a driver with no card still IDENTIFIES (it
+    je  .up                     ; is answered above) and still answers
+                                ; NETV_STATE, or a package cannot tell "no
+                                ; card" from "wrong class" - and NETV_STATE is
+                                ; the verb that exists to say so (netpkg.inc)
     mov ax, NETE_NOLINK
     jmp short .err
 .up:
@@ -347,10 +378,43 @@ eth_pkg:
 .err:
     stc
 .out:
+    mov byte [eth_busy], 0      ; ...a `mov` touches no flags, so the verb's
+                                ; own CF and AX reach the package unchanged
+.pop:
     pop di
     pop si
     pop bx
     pop es
+    ret
+.ident:
+    call eth_v_ident
+    jmp short .pop
+.busy:
+    mov ax, NETE_BUSY           ; NOT A FAILURE (netpkg.inc): the other task is
+    stc                         ; in the driver, come back next tick
+    jmp short .pop
+
+; -----------------------------------------------------------------------------
+; eth_claim - the card, from the two tasks that want it
+;
+; Test-and-set under one `cli`, because this is the first thing in the driver
+; that two tasks can be inside at once (SPEC.md 72.2.2). The shape is
+; drivers/net/netsock.inc's nsk_claim and deliberately so - it answers the
+; same socket ABI, and a mutex invented twice is a mutex fixed once.
+; clobbers: flags (CF=1 = it is somebody else's)
+; -----------------------------------------------------------------------------
+eth_claim:
+    pushf
+    cli
+    cmp byte [eth_busy], 0
+    jne .no
+    mov byte [eth_busy], 1
+    popf                        ; ...AND THE ANSWER AFTER THE popf, always:
+    clc                         ; popf restores the CALLER'S carry along with
+    ret                         ; its interrupt flag, so a `clc` before it is
+.no:                            ; a result the caller never sees
+    popf
+    stc
     ret
 
 eth_vtab:

@@ -679,6 +679,14 @@ dns_in:
     je  .out
     cmp cx, 12
     jb  .out
+    mov si, eth_rxb + IP_OFF + IPO_SRC  ; from the SERVER we asked, and from
+    mov di, eth_dns                     ; the port servers answer on: udp_in
+    call ip_eq                          ; dispatched this on the destination
+    jne .out                            ; port alone, and the transaction ID
+    mov si, eth_rxb + IP_PAY + UDO_SP   ; below is 16 bits over a source port
+    call be_get                         ; that walks upward from a known base
+    cmp ax, DNS_PORT
+    jne .out
     mov si, eth_rxb + IP_PAY + UD_HLEN
     mov bx, si
     add bx, cx                          ; BX = one past the message, and every
@@ -749,8 +757,13 @@ dns_in:
 .next:
     mov ah, [si+8]                      ; RDLENGTH, big-endian, into a step
     mov al, [si+9]
-    add si, 10
-    add si, ax
+    mov cx, bx                          ; ...bounded by what is LEFT and not by
+    sub cx, si                          ; where the step lands: the add is
+    sub cx, 10                          ; modulo 65536, and wire data that
+    cmp ax, cx                          ; wraps SI puts it BELOW the message,
+    ja  .fail                           ; where every test of where it landed
+    add si, 10                          ; passes and the walk is over this
+    add si, ax                          ; driver's own image
     cmp si, bx
     jae .fail
     dec dl
@@ -804,8 +817,11 @@ dns_timer:
 .scan:
     mov al, dl
     call sk_ptr
+    cmp byte [bx+SKO_ST], NSK_FREE      ; a slot that has been FREED owes
+    je  .nextscan                       ; nothing, whatever SKF_RES still says
     test byte [bx+SKO_FL], SKF_RES
     jnz .go
+.nextscan:
     inc dl
     loop .scan
     jmp short .out

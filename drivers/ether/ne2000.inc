@@ -125,6 +125,16 @@ NE1_PSTOP   equ 0x40
 NE_FRAME    equ 1514            ; the largest Ethernet frame without the FCS
 NE_MINFRAME equ 60              ; ...and the smallest one may put on the wire
 
+; --- and the two SPINS, sized from the 4.77MHz machine (PERFORMANCE.md rule 3)
+; A spin is not "as large as the counter goes": one turn of either is a port
+; read behind a near call+ret, ~23 us on an 8088, so the count IS the time.
+; The 8390 finishes a remote DMA of a whole frame in well under a millisecond
+; and a transmit of one in ~1.2 ms plus backoff, so these are 9 ms and 92 ms -
+; two orders of headroom each, and a card that has gone away costs a tenth of
+; a second per frame rather than the 1.6 SECONDS `mov cx, 0` bought.
+NE_RDCSPIN  equ 400             ; remote DMA complete (ne_dma_write)
+NE_TXSPIN   equ 4000            ; the previous transmit is done (ne_tx)
+
 ; -----------------------------------------------------------------------------
 ; ne_out / ne_in - one card register
 ; in:  AL = the register (base-relative); ne_out also AH = the byte
@@ -237,7 +247,7 @@ ne_dma_write:
     out dx, al
     loop .byte
 .wait:
-    mov cx, 0                   ; bounded: a card that never raises RDC is one
+    mov cx, NE_RDCSPIN          ; bounded: a card that never raises RDC is one
 .rdc:                           ; that has gone away, and this must not hang
     mov al, NE_ISR
     call ne_in
@@ -704,7 +714,7 @@ ne_tx:
     mov cx, NE_MINFRAME
 .len:
     push cx
-    mov bx, 4000                ; the PREVIOUS transmit must be done first
+    mov bx, NE_TXSPIN           ; the PREVIOUS transmit must be done first
 .busy:
     mov al, NE_CR
     call ne_in
