@@ -25,7 +25,7 @@ MEDIAIMG360 := $(BUILD)/media360.img
 BOX   := /Applications/86Box.app/Contents/MacOS/86Box
 
 # RESET= clears a machine's non-volatile state on the way in, and it reaches
-# EVERY 86Box target at once because all eighteen of them launch through
+# EVERY 86Box target at once because all twenty-three of them launch through
 # $(BOX) and differ only in which vm/ directory they point at:
 #
 #   make 386-c-word RESET=1       the CMOS  (the one you almost always want)
@@ -71,10 +71,11 @@ VM386DX := $(CURDIR)/vm/386dx
 # that asked for it - a machine whose BIOS claimed 3MB extended and whose Task
 # Manager showed no XMS bar.
 VM386XMS := $(CURDIR)/vm/386-xms
-# ...and the same three machines with a sound card in them (SPEC.md 51.4).
+# ...and the sound-card profiles for those machines (SPEC.md 51.4).
 # QEMU's -device adlib/sb16 is the only other way to give the driver
 # something to attach to, and it is not a real card: these are.
 VMXTSND := $(CURDIR)/vm/xt-sound
+VMXTSND144 := $(CURDIR)/vm/xt-sound-1.44
 VM286SND := $(CURDIR)/vm/286-sound
 VM386SND := $(CURDIR)/vm/386-sound
 # The top of the range: a 486DX2/66 and a Pentium 133, both with an SB16.
@@ -697,7 +698,8 @@ KERNEL_SRC := kernel/kernel.asm
 KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc
 
 .PHONY: small kernsplit all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
-        xt-hercules xt-multimon 286 386sx 386 386-xms xt-sound 286-sound 386-sound 486 pentium \
+        xt-hercules xt-multimon 286 386sx 386 386-xms xt-sound xt-sound-1.44 \
+        286-sound 386-sound 486 pentium \
         bench field combo combo144 combo720 stackprobe trklog npbench clicktest marty \
         comscan lptlink calcref \
         fonts fontsheets fontlist \
@@ -4672,15 +4674,23 @@ xt-multimon: $(IMG360) $(APPSIMG360)
 	@$(UNPROTECT) $(VM386XMS)/86box.cfg
 	$(BOX) -P $(VM386XMS) -N
 
-# The three sound machines: an XT with a Sound Blaster 2.0 (so the OPL2 is
-# the FM tier and the DSP the stream tier on the CPU this OS is FOR), and the
-# 286/386 with an SB16. `make test ADLIB=1` / `SB16=1` gives the driver
-# something to attach to under QEMU; these give it a card on a machine whose
-# bus and clock are period-correct, which is the only place a stream's pacing
-# means anything (SPEC.md 34.5/51.4).
+# The sound machines: an XT with a Sound Blaster 2.0 (so the OPL2 is the FM
+# tier and the DSP the stream tier on the CPU this OS is FOR), a second XT
+# with an SB 1.0 and the everything disk in a 1.44MB B: drive, and the 286/386
+# with an SB16. `make test ADLIB=1` / `SB16=1` gives the driver something to
+# attach to under QEMU; these give it a card on a machine whose bus and clock
+# are period-correct, which is the only place a stream's pacing means anything
+# (SPEC.md 34.5/51.4).
 xt-sound: $(IMG360) $(APPSIMG360)
 	@$(UNPROTECT) $(VMXTSND)/86box.cfg
 	$(BOX) -P $(VMXTSND) -N
+
+# Keep the period-correct 360KB system disk in A:, but expose every application
+# through the only geometry large enough for $(ALLAPPSIMG). The 1986 XT board
+# supplies the full 640KB needed by the larger applications.
+xt-sound-1.44: $(IMG360) $(ALLAPPSIMG)
+	@$(UNPROTECT) $(VMXTSND144)/86box.cfg
+	$(BOX) -P $(VMXTSND144) -N
 
 286-sound: $(IMG) $(APPSIMG)
 	@$(UNPROTECT) $(VM286SND)/86box.cfg

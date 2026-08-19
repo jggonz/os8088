@@ -51,6 +51,7 @@ make 386      # 86Box: 386DX @ 25MHz, 2MB, VGA
 make 486      # 86Box: 486DX2 @ 66MHz, 8MB, VGA, Sound Blaster 16
 make pentium  # 86Box: Pentium @ 133MHz, 16MB, VGA, Sound Blaster 16
 make xt-sound # the 640KB XT with a Sound Blaster 2.0 (OPL2 + DSP)
+make xt-sound-1.44 # the 640KB XT with SB 1.0 and every app on a 1.44MB B:
 make 286-sound  # 86Box: the 286, with a Sound Blaster 16
 make 386-sound  # 86Box: the 386DX, with a Sound Blaster 16
 make worddisk # build the Microsoft Word floppy, all three geometries
@@ -552,16 +553,17 @@ a config claiming a P133 boots a P75. And unlike an XT, these machines have a
 CMOS — on the first launch the BIOS stops at its setup screen, and picking
 "EXIT FOR BOOT" once writes `vm/<machine>/nvr/`.)
 
-`make xt-sound`, `make 286-sound` and `make 386-sound` add a sound card to
-three of the machines above: a Sound Blaster 2.0 on a 640KB XT
-(`vm/xt-sound`), so the OPL2 is the FM tier and the DSP the streaming tier on
-the CPU this OS is actually for, and an SB16 on the 286 and the 386
+`make xt-sound`, `make xt-sound-1.44`, `make 286-sound` and `make 386-sound`
+add a sound card to four of the machines above. The first XT has a Sound
+Blaster 2.0 (`vm/xt-sound`); the 1.44MB variant has a Sound Blaster 1.0 and
+mounts `build/apps-all.img` in B: (`vm/xt-sound-1.44`), putting every
+application on the same 4.77MHz machine. The 286 and 386 use an SB16
 (`vm/286-sound`, `vm/386-sound`). `make test ADLIB=1` and `SB16=1` give the
 driver a card to attach to under QEMU, but only these give it one on a
 machine whose bus and clock are period-correct — and pacing a stream is the
 one thing that means nothing anywhere else.
 
-All twelve, at a glance:
+All targets, at a glance:
 
 | target | machine | CPU | RAM | video | sound |
 |---|---|---|---|---|---|
@@ -570,6 +572,7 @@ All twelve, at a glance:
 | `xt-cga` | IBM PC/XT | 8088 @ 4.77MHz | 256KB | CGA | — |
 | `xt-hercules` | IBM PC/XT | 8088 @ 4.77MHz | 256KB | Hercules | — |
 | `xt-sound` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | Sound Blaster 2.0 |
+| `xt-sound-1.44` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | Sound Blaster 1.0 |
 | `286` | AMI 286 clone | 286 @ 12.5MHz | 1MB | OTI-067 VGA | — |
 | `286-sound` | AMI 286 clone | 286 @ 12.5MHz | 1MB | OTI-067 VGA | Sound Blaster 16 |
 | `386sx` | Shuttle HOT-304 | 386SX @ 16MHz | 2MB | OTI-067 VGA | — |
@@ -583,8 +586,9 @@ All twelve, at a glance:
 | `xt-word` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | — |
 | `386-word` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | — |
 
-The XT-class machines boot the 360KB pair; the AT-class ones boot the 1.44MB
-pair.
+The XT-class machines boot the 360KB system disk; most pair it with the 360KB
+apps disk, while `xt-sound-1.44` mounts the everything disk in a 1.44MB B:
+drive. The AT-class machines boot the 1.44MB pair.
 
 `xt-multimon` is the **two-card** XT — a CGA and a Hercules, a monitor window
 each — and the only 86Box machine that can show the extended desktop. It boots

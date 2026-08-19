@@ -111,7 +111,8 @@ sees an up-to-date `kernel.bin`, boots the previous configuration, and it reads
 exactly like the feature being broken.
 
 86Box targets for period hardware, one per `vm/` directory: `xt`, `xt-640`,
-`xt-cga`, `xt-hercules`, `xt-multimon`, `xt-sound`, `286`, `286-sound`,
+`xt-cga`, `xt-hercules`, `xt-multimon`, `xt-sound`, `xt-sound-1.44`, `286`,
+`286-sound`,
 `386sx`, `386`, `386-sound`, `486`, `pentium`, `xt-z`, `386-z`, `xt-word`,
 `386-word`, `386-c-word`, `xt-runcpm`, `286-runcpm`, `386-runcpm`; plus
 `marty` (MartyPC). `xt-multimon` is the

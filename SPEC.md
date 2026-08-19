@@ -12451,6 +12451,11 @@ Three things about it are deliberate:
   board maximum without a word (which is why the 286 is not `ibmat` — the
   5170 planar stops at 512KB), and an empty CMOS makes the BIOS stop at its
   setup screen once, until `vm/<machine>/nvr/` exists.
+- Complete-app XT sound target: `xt-sound-1.44` (`vm/xt-sound-1.44`) keeps
+  the 360KB system disk in A:, mounts §19.10's `apps-all.img` in a 1.44MB B:
+  drive, and runs the full 640KB 1986 XT board at 4.77MHz with a Sound Blaster
+  1.0 at 220h, IRQ 5, DMA 1. It is separate from `xt-sound`, whose Sound
+  Blaster 2.0 and 360KB apps disk remain the ordinary period baseline.
 - Gate packages ride their own scratch images and are mounted in place of
   the apps disk with `make test-snd TESTAPPS=<img>` (the `test` target's B:
   drive is fixed):  and `build/filetest.img` / `-frag` (§18.4). A write
