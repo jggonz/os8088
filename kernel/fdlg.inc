@@ -1364,15 +1364,17 @@ fdlg_btn2:
     push bp
     mov bp, bx                  ; BP = the button top (a value, never an
                                 ; address: SS is not DS, SPEC.md 1)
-    test al, OS88UI_DOWN        ; the pressed look (SPEC.md 13.8), drawn rather
-    jz .frame                   ; than XOR-ed: interior black, both labels
-    push ax                     ; white, same frame. It is written out here
+    mov byte [gfx_color], CWHITE ; the pressed look (SPEC.md 13.8), drawn rather
+    test al, OS88UI_DOWN        ; than XOR-ed: interior black, both labels
+    jz .bed                     ; white, same frame. It is written out here
     mov byte [gfx_color], CBLACK ; and not taken from os88ui_btn because this
-    mov ax, FD_BX1              ; is a TWO-LINE button and that routine centres
-    mov bx, bp                  ; ONE label in both axes
-    mov cx, FD_BX2
-    mov dx, bp
-    add dx, FD_BH2
+.bed:                           ; is a TWO-LINE button and that routine centres
+    push ax                     ; ONE label in both axes - but the FILL itself
+    mov ax, FD_BX1              ; is unconditional, exactly as OS88UI_FILL is
+    mov bx, bp                  ; on both of fdlg_setdown's edges: the ground
+    mov cx, FD_BX2              ; under the one coming back UP is a pressed
+    mov dx, bp                  ; button, and the captions are transparent, so
+    add dx, FD_BH2              ; an up-draw with no erase leaves a black box
     call fdlg_off
     inc ax                      ; the interior, one pixel in from the frame
     inc bx
@@ -1380,7 +1382,6 @@ fdlg_btn2:
     dec dx
     call KERNEL_SEG:cw_gfx_fill
     pop ax
-.frame:
     mov byte [gfx_color], CBLACK
     push ax
     mov ax, FD_BX1

@@ -132,8 +132,13 @@ fpg_begin:
     mov word [fpg_total], 0     ; no scale until one is computed below, so a
                                 ; refusal cannot leave the PREVIOUS phase's
                                 ; divisor counting this one's sectors
-    call fpg_arm                ; ...and CF=1 = the widget cannot be shown here
-    jc .out
+    push cx                     ; BANKED across the arm: fpg_arm clobbers CX
+    push dx                     ; and DX (its header says so, and on the path
+    call fpg_arm                ; that puts the chrome up they come back as
+    pop dx                      ; fpg_paint's and fpg_span's coordinates), and
+    pop cx                      ; this pair IS the scale. `pop` leaves the
+    jc .out                     ; flags alone, so CF=1 - the widget cannot be
+                                ; shown here - still reads at the jump
 
     mov ax, cx                  ; --- DX:CX bytes -> a 16-bit unit count
     add ax, FPG_UNIT - 1        ; round UP: a 1-byte job is one unit, not none
@@ -267,6 +272,15 @@ fpg_arm:
     jl .no                      ; narrower than the widget wrapping the sub
     mov [fpg_x0], bx
 
+    mov al, [menu_bovr]         ; sampled BEFORE the composition below, because
+                                ; a bar that owes an overdraw repair gets it
+                                ; from inside menu_draw_bar - and menu_furniture
+                                ; puts the widget back ITSELF (SPEC.md 12.9),
+                                ; so the paint at the bottom of this routine
+                                ; would be a second one over the same pixels.
+                                ; menu_draw_bar clobbers nothing, so AL still
+                                ; carries the answer on the far side of it
+
     mov byte [fpg_on], 1        ; **ARMED BEFORE THE FIRST PIXEL, so that the
     mov word [fpg_px], 0        ; TOAST CAN GET OUT OF THE WAY** (SPEC.md
     mov byte [fpg_pat], 0       ; 59.9.2). A strip is placed where it fitted
@@ -298,7 +312,10 @@ fpg_arm:
                                 ; exactly the ones about the operation that is
                                 ; starting.
 
-    call fpg_paint              ; the bed, the icon and the box
+    or al, al                   ; the bed, the icon and the box - unless the
+    jnz .span                   ; repair above has just drawn them, in which
+    call fpg_paint              ; case doing it again is PERFORMANCE.md Part 1's
+.span:                          ; double-draw flash with the widget as the flash
     call fpg_span               ; ...and the bar has lost those cells: tell it
     call menu_inval             ; which, so fpg_finish gives back exactly them
                                 ; and not the whole bar (SPEC.md 12.9)

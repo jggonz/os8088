@@ -10610,6 +10610,14 @@ into it) and no `menu_inval`. It repaints the trough from `[fpg_pat]`/
 drop the bar to zero and the next `fpg_step` would light only the strip past
 where it already was.
 
+That leaves two painters on one strip for the one composition that arms the
+widget, so **`fpg_arm` samples `[menu_bovr]` before its `menu_draw_bar` and
+skips its own `fpg_paint` when it was set** — the repair has just drawn those
+same pixels, and drawing them again is the bed, the two-pass masked icon and
+the box frame twice over: PERFORMANCE.md Part 1's double-draw flash with the
+widget itself as the flash. Sampled *before*, because `menu_furniture` clears
+the flag on its way through.
+
 ##### Three consequences worth stating
 
 - **`fpg_step`'s gate is `[fpg_total]`, not `[fpg_on]`.** The chrome outliving
