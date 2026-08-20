@@ -595,7 +595,7 @@ Three things about it:
     "bss": 6419,
     "budget": 114176,
     "codemax": 65536,
-    "cold": 37611,
+    "cold": 37628,
     "coldpara": 2368,
     "fatpara": 288,
     "imgpara": 3808,
@@ -612,7 +612,7 @@ Three things about it:
     "bss": 5947,
     "budget": 105984,
     "codemax": 65536,
-    "cold": 35906,
+    "cold": 35923,
     "coldpara": 2272,
     "fatpara": 288,
     "imgpara": 3456,
@@ -1128,21 +1128,21 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 31,918 | 34.7% |
+| the file system, end to end | 31,935 | 34.7% |
 | the window system and its furniture | 24,715 | 26.8% |
 | drawing: adapters, primitives, glyphs, icons | 13,965 | 15.2% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 10,857 | 11.8% |
 | the kernel proper: API table, heap, scheduler, events | 7,878 | 8.6% |
 | the three built-in kinds | 1,751 | 1.9% |
 | the Control Panel | 1,030 | 1.1% |
-| **total** | **92,114** | |
+| **total** | **92,131** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
 | `wm.inc` — the window manager (§11) | 11,593 | 95 | **11,688** | 1,061 | — |
-| `files.inc` — the Disk window (§22) | 1,145 | 8,055 | **9,200** | 470 | — |
+| `files.inc` — the Disk window (§22) | 1,145 | 8,072 | **9,217** | 470 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 358 | 6,052 | **6,410** | 890 | 3,584 |
 | `vga12.inc` — the VGA planar primitives (§5) | 5,634 | 425 | **6,059** | 654 | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 5,041 | **5,220** | 155 | — |
@@ -1179,7 +1179,7 @@ generated in the first place.
 | `blank.inc` — **(undescribed)** | 124 | — | **124** | — | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 3,425 | — | **3,425** | — | — |
-| **total** | **54,503** | **37,611** | **92,114** | **6,419** | **7,830** |
+| **total** | **54,503** | **37,628** | **92,131** | **6,419** | **7,830** |
 <!-- END generated table -->
 
 ### Reading it
