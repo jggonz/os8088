@@ -2542,8 +2542,18 @@ wm_ask_close:
     jz .yes                     ; no negotiator: the close goes ahead
     cmp [wm_clask], si
     je .no                      ; its own negotiator is already on the stack
-    mov cx, [wm_clask]          ; nested, not replaced - CX, because DI is
-    mov [wm_clask], si          ; inst_win_owner's answer below
+    push word [wm_clask]        ; nested, not replaced - AND ON THE STACK, the
+    mov [wm_clask], si          ; way [snd_inst] is two lines below. A register
+                                ; will not do it: wm_pkgcall restores DS and ES
+                                ; and NOTHING else, and a negotiator may clobber
+                                ; every one of AX/BX/CX/DX/SI/DI - np_onclose
+                                ; already does, through os88ui_ask. Banked in CX
+                                ; the fence came back holding whatever the
+                                ; package left there and was never 0 again, so
+                                ; the recursion this exists to terminate ran
+                                ; unguarded from the first dirty close onward.
+                                ; POP writes no flags, so the negotiator's CF
+                                ; still reaches the branch below untouched
     call inst_win_owner         ; DI = the owning record, 0 = unowned
     push word [snd_inst]
     call snd_disp_set
@@ -2553,7 +2563,7 @@ wm_ask_close:
                                 ; not (SPEC.md 20.3's own argument for the
                                 ; API cell's shape)
     pop word [snd_inst]         ; the outer dispatch's stamp, back
-    mov [wm_clask], cx
+    pop word [wm_clask]         ; ...and the outer ask's fence
     jc .no
 .yes:
     clc
@@ -2608,9 +2618,15 @@ wm_close_pass:
     je .out
     push ax
     push bx
-    mov bx, [wm_clreq]
-    mov word [wm_clreq], 0
-    call gfx_lock
+    call gfx_lock               ; ...AND THE REQUEST IS SPENT UNDER THE LOCK,
+    mov bx, [wm_clreq]          ; not before it. wm_destroy cancels a request
+    or bx, bx                   ; naming the window it is freeing and runs with
+    jz .done                    ; the lock held, so taking the word before the
+    mov word [wm_clreq], 0      ; wait left exactly the interval that guard was
+                                ; written to cover: a request read here, the
+                                ; window destroyed while this pass waited, and
+                                ; the cancellation written into a word this
+                                ; pass had already emptied
     test word [bx+W_FLAGS], 1   ; still a live record? A minimized window is
     jz .done                    ; closable, so this is bit 0 and not bit 1
     xor ax, ax                  ; retire the negotiator: the request IS its

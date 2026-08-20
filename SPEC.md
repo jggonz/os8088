@@ -58052,7 +58052,10 @@ may raise a dialog, and a dialog can end up back in a close path. Asking the
 same window again would recurse on a 256-byte task stack (§8): `sch_stkdie`,
 not a wrong answer. The fence answers REFUSED for the one window whose
 negotiator is live, so the recursion terminates at depth one and the outer ask
-still decides. It is **saved and restored** rather than set and cleared,
+still decides. It is saved **on the stack** — `wm_pkgcall` restores `DS` and
+`ES` and nothing else, so a register the negotiator is entitled to clobber
+would come back holding the package's leftovers and the fence would never read
+0 again. It is **saved and restored** rather than set and cleared,
 because closing a *different* window of your own from inside a negotiator is
 legal and the outer fence has to survive it.
 
@@ -58096,6 +58099,13 @@ naming the window it is destroying, so a slot that died in between cannot be
 closed through a pointer that now means a different window. The pass tests
 `W_FLAGS` bit 0 and not bit 1 — a minimized window is closable, which is what
 the dock's context menu already does.
+
+**The word is read and cleared UNDER the gfx lock, not before it.** The second
+guard is a write `wm_destroy` makes with the lock held, so a pass that took the
+request and then waited for the lock had already emptied the word the
+cancellation was going to be written into — the one interval that guard cannot
+reach. The lock-free part is the `cmp` alone, which is what keeps this one
+compare per idle pass.
 
 ### 75.3 The standard alert — `os88ui_ask`, and it is NOT in the kernel
 
