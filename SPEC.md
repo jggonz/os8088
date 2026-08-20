@@ -9853,7 +9853,20 @@ collapses one rect onto the centre of the other, `WM_AN_SEED` px each side, and
 
 ### 11.99.2 `WF_NOANIM` — the windows that come and go too often
 
-W_FLAGS **bit 8**, which cost the record nothing (bits 0–7 and 15 were taken).
+W_FLAGS **bit 14**, and the bit number is load-bearing rather than arbitrary.
+**Bit 8 is not free**: the high byte of `W_FLAGS` is §7.2.1's per-window cursor
+*shape*, and bit 8 is `CUR_CROSSSH` — which is why `WF_STALE` is bit 15 and says
+so at its own `equ`. What IS free is bits 9–14, because both writers of the
+shape refuse a value at or past `CUR_NSHAPE` (`wm_cursor`, `cur_shape_set`) and
+`CUR_NSHAPE` is 2, so the field only ever holds 0 or 1.
+
+**The two places that touch that byte therefore mask BOTH kernel bits off.**
+`wm_cursor`'s read-modify-write keeps `(WF_STALE | WF_NOANIM) >> 8` and drops
+the rest; `cur_shape_pass` masks both away before comparing with `[cur_shape]`.
+At bit 8 the Standard File dialog and the notice window wore the aiming
+crosshair, and any package calling `OSAPI_WM_CURSOR` cleared its own opt-out —
+the same collision `WF_STALE` was moved off, arriving a second time.
+
 It is defined in **both** builds so a test does not need an `%ifdef` around it,
 and `kern_small` simply has no animation to opt out of.
 

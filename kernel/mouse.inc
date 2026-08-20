@@ -2818,7 +2818,9 @@ cur_shape_pass:
                                 ; clicked through the kernel - only a window's
                                 ; CONTENT is the application's to dress
     mov ah, [bx + W_FLAGS + 1]  ; the high byte (SPEC.md 7.2.1), whose TOP bit
-    and ah, ~(WF_STALE >> 8) & 0xFF ; is the kernel's WF_STALE and not a shape
+    and ah, ~((WF_STALE | WF_NOANIM) >> 8) & 0xFF ; TWO bits are the kernel's
+                                ; - WF_STALE and WF_NOANIM - and neither is a
+                                ; shape (SPEC.md 11.99.2)
 .set:
     cmp ah, [cur_shape]
     je .out                     ; THE COMMON ANSWER, and the compare has to be

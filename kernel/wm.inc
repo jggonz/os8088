@@ -126,12 +126,20 @@ WF_NOSNAP  equ 16               ; W_FLAGS bit4: this window OPTS OUT of having
                                 ; 1 and wm_destroy writes 0, so a fresh or
                                 ; reused record is snapped with nothing to
                                 ; set and no template word to carry
-WF_NOANIM  equ 0x0100          ; W_FLAGS bit8: this window does NOT zoom on
-                              ; show or destroy (SPEC.md 11.99.2). Bits 0-7
-                              ; and 15 were taken; this cost the record
-                              ; nothing. kern_big only - kern_small has no
-                              ; animation to opt out of, and the bit is
-                              ; defined in both so a test is not %ifdef'd
+WF_NOANIM  equ 0x4000          ; W_FLAGS bit14: this window does NOT zoom on
+                               ; show or destroy (SPEC.md 11.99.2). THE TOP OF
+                               ; the shape field and not its bottom, for the
+                               ; reason WF_STALE gives below: the REST of that
+                               ; byte is SPEC.md 7.2.1's cursor shape, and at
+                               ; bit 8 this bit IS CUR_CROSSSH. Bits 9-14 are
+                               ; free because both writers refuse a shape at
+                               ; or past CUR_NSHAPE (wm_cursor here,
+                               ; cur_shape_set in mouse.inc), so the field
+                               ; only ever holds 0 or 1 - but the two places
+                               ; that touch the byte must mask this bit off
+                               ; with WF_STALE. kern_big only - kern_small has
+                               ; no animation to opt out of, and the bit is
+                               ; defined in both so a test is not %ifdef'd
 WF_STALE   equ 0x8000          ; W_FLAGS bit15: THE PIXELS ON THE GLASS NO
                                ; LONGER DESCRIBE THIS WINDOW'S CONTENT (SPEC.md
                                ; 11.96.16.1), so nothing may bank them until it
@@ -3408,17 +3416,33 @@ wm_show:
     test word [bx+W_FLAGS], 2   ; are visible wm_top answers with US
     jnz .onglass                ; ...and for the same reason this is the last
     call wm_su_precover         ; moment the windows we are about to land on
-.onglass:                       ; can be banked (SPEC.md 11.96.16). A window
-                                ; ALREADY on the glass is skipped: what it
-                                ; covers is covered by IT, so a bank there
-                                ; would store this window's own pixels as
-                                ; somebody else's content
-    or word [bx+W_FLAGS], 2
-%ifdef WM_ANIM
-    call wm_an_open             ; SPEC.md 11.99: the zoom, BEFORE the window is
+    or word [bx+W_FLAGS], 2     ; can be banked (SPEC.md 11.96.16). A window
+%ifdef WM_ANIM                  ; ALREADY on the glass is skipped: what it
+    call wm_an_open             ; covers is covered by IT, so a bank there
+%endif                          ; would store this window's own pixels as
+    jmp short .raise            ; somebody else's content
+                                ;
+                                ; SPEC.md 11.99: the zoom, BEFORE the window is
                                 ; drawn - it is an outline over what is on the
                                 ; screen now, and the window lands when it ends
+.onglass:
+    or word [bx+W_FLAGS], 2
+%ifdef WM_ANIM
+    mov byte [wm_an_armed], 0   ; ...AND A WINDOW ALREADY ON THE GLASS DOES NOT
+                                ; ZOOM. 11.99 is about a window that APPEARS,
+                                ; and this routine is deliberately the RAISE
+                                ; path as well (see the header): four fronting
+                                ; paths reach it with the window still on the
+                                ; screen - an app relaunched at its instance
+                                ; cap, File > Task Manager, a drive whose Disk
+                                ; window is showing, a second os88ui_ask - and
+                                ; PERFORMANCE.md Part 5 prices a raise of the
+                                ; frontmost window at NO WINDOW AT ALL. The arm
+                                ; is still SPENT, for wm_an_open's own .drop
+                                ; reason: the next window that really does
+                                ; appear must not inherit this one's tile
 %endif
+.raise:
     mov al, 1                   ; a newly visible window has no pixels on
     call wm_raise               ; screen: it is drawn WHOLE
     pop di
@@ -4295,7 +4319,8 @@ wm_cursor:
                                 ; from the UI task, so the read-modify-write
                                 ; below cannot be interruptible
     mov ah, [bx + W_FLAGS + 1]
-    and ah, WF_STALE >> 8       ; keep the kernel's bit, drop the old shape
+    and ah, (WF_STALE | WF_NOANIM) >> 8 ; keep the kernel's BITS, drop the old
+                                ; shape - WF_NOANIM lives in this byte too
     or al, ah
     mov [bx + W_FLAGS + 1], al
     mov byte [cur_shchk], 1
@@ -5020,9 +5045,16 @@ wm_dmg_wins:
                                 ; and reaches wherever its own rect reaches
     call wm_dmg_shadowed        ; ...but it still owes its DROP SHADOW, because
     jnc .mnodmg                 ; 11.91.1's dither subtracts the frame and eats
-    call wm_dmg_bit             ; the L (SPEC.md 11.91.4). Two lines, not a
-    or [wm_dmg_shad], ax        ; repaint - and NOT wm_dmg_mask, or this would
-                                ; be 11.91.2 undone
+    push ax                     ; the L (SPEC.md 11.91.4). Two lines, not a
+    call wm_dmg_bit             ; repaint - and NOT wm_dmg_mask, or this would
+    or [wm_dmg_shad], ax        ; be 11.91.2 undone.
+    pop ax                      ;
+                                ; AX IS BANKED BECAUSE dock_px_hit BELOW READS
+                                ; IT AS x1 and wm_dmg_bit answers in it: this
+                                ; route falls through into .mnodmg with the
+                                ; window's z-bit where the rect's left edge
+                                ; should be, which reads as a dock overlap
+                                ; test that is right by accident or not at all
 .mnodmg:
     cmp byte [wm_dmg_dk], 0     ; the strip was drawn, and it is drawn UNDER
     je .mnodock                 ; windows, so a window the strip was drawn

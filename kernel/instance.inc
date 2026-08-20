@@ -1661,6 +1661,13 @@ inst_an_tile:
 ; back. One routine does both halves so a fifth path cannot forget the second.
 ; -----------------------------------------------------------------------------
 inst_unmin:
+    test byte [di+I_FLAGS], 1   ; ...AND ONLY A REAL UN-MINIMIZE ARMS A TILE.
+    jz .out                     ; Three of the four callers front an instance
+                                ; that need not be minimized at all -
+                                ; inst_find_kind and its two siblings match on
+                                ; I_STATE and never look at this bit - and an
+                                ; arm there flies an outline out of a dock tile
+                                ; onto a window that never left the screen
     and byte [di+I_FLAGS], 0xFE
     push ax
     push bx
@@ -1676,6 +1683,7 @@ inst_unmin:
     pop cx
     pop bx
     pop ax
+.out:
     ret
 %endif
 

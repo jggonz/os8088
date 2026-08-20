@@ -190,8 +190,11 @@ eight events.** Hooking the two routines catches the **modal file dialog**
 comes back repeatedly), every **package secondary window** through
 `cw_wm_show` (ModPlug's Setup and PlayList), and `wm_destroy_seg`'s teardown
 loop — which would animate *each* of a package's windows in turn, a third of a
-second each, while it is quitting. An opt-out is needed and W_FLAGS **bit 8 is
-free** (bits 0–7 and 15 are taken), so `WF_NOANIM` costs nothing in the record.
+second each, while it is quitting. An opt-out is needed and W_FLAGS has a free
+bit for it — but **not bit 8**, which this plan first reached for: bits 8–14 of
+`W_FLAGS` are §7.2.1's cursor *shape* field and bit 8 is `CUR_CROSSSH`. The bit
+is **14**, the top of that field, for the reason `WF_STALE` is 15 (SPEC.md
+§11.99.2), and it costs nothing in the record.
 
 **5.5 There is no honest source rect for an opening window.** A Mac zooms out
 of the icon that was double-clicked; here a launch arrives from a menu item, a

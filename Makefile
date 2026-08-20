@@ -390,9 +390,10 @@ ifneq ($(KFZ),)
 VIDDEF += -DKFZTRACE
 endif
 
+# THEMEDARK belongs in $(KNOBS) below and is listed there: a `KNOBS +=` HERE
+# is silently wiped, because $(KNOBS) is a `:=` further down the file.
 ifneq ($(THEMEDARK),)
 VIDDEF += -DTHEMEDARK=$(THEMEDARK)
-KNOBS += THEMEDARK=$(THEMEDARK)
 endif
 
 ifneq ($(KERN_SMALL),)
@@ -675,11 +676,20 @@ endif
 # each of them changes the binary (see their ifneqs at the top of this file).
 # BOOTDIAG is the one asymmetry that is meant to be one: it feeds $(BOOTDEF)
 # alone, and the stamp deletes boot.bin/boot360.bin whatever it says.
+#
+# AND IT IS NOT ONLY THE BANNER ANY MORE. `all` runs `test-fast` when this list
+# is EMPTY, and the suite resolves every symbol through tools/os88sym.py, which
+# re-assembles kernel.asm with no --define and refuses a map that is not
+# byte-identical to build/kernel.bin. So a knob in the stamp and NOT in this
+# list does not merely go unannounced - it builds its kernel and then FAILS THE
+# BUILD on api-abi. KERN_SMALL was the sharp one: `make KERN_SMALL=1` is the
+# second build CLAUDE.md asks for after every change, and it exited 1.
 KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
                              KFZ DIRW1 INSTRO KEEPH STRAD DIRTYRAM HEAPCOMPACT HEAPPARK HEAPPARKLK FDDPROBE FDDABSENT REDRAWFULL NOSPLIT NOSUOCCL SNDSNIFF RAMKB DRAGCACHE \
                              SNAPAUDIT SCROLLROW \
                              CURFIX \
-                             FONT INSTCHUNK PICOMEM PM_BASE PM_SB_PORT ANIMOFF DISINK0,\
+                             FONT INSTCHUNK PICOMEM PM_BASE PM_SB_PORT ANIMOFF DISINK0 \
+                             KERN_SMALL FSNOSTAMP THEMEDARK,\
                              $(if $($(k)),$(k)=$($(k)))))
 VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(STRAD),-st$(STRAD))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(DIRTYRAM),-dr$(DIRTYRAM))$(if $(FSNOSTAMP),-fn$(FSNOSTAMP))$(if $(ANIMOFF),-ao$(ANIMOFF))$(if $(THEMEDARK),-td$(THEMEDARK))$(if $(DISINK0),-di$(DISINK0))
 $(shell mkdir -p $(BUILD); \
