@@ -1557,8 +1557,17 @@ os88ui_apaint:
 os88ui_adn:
     push ax
     dec al                      ; the table's 0-based index; 0 -> 0xFF, which
-    mov [os88ui_adown], al      ; no button is
+    cmp al, [os88ui_adown]      ; no button is
+    je .out                     ; ...AND IT DRAWS NOTHING WHEN THE STATE HAS
+                                ; NOT CHANGED, which is the kernel twin's own
+                                ; rule (cp_setdown, SPEC.md 13.8.3). Without
+                                ; it a press landing on the MESSAGE - or on
+                                ; the whitespace between buttons - answered 0,
+                                ; wrote the same 0xFF back and re-lettered the
+                                ; whole row for nothing (PERFORMANCE.md rule 1)
+    mov [os88ui_adown], al
     call os88ui_abtns
+.out:
     pop ax
     ret
 

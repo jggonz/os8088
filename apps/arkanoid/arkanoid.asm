@@ -170,6 +170,17 @@ ARK_PREF_BW  equ ARK_BW_BIG * ARK_COLS + 2 * ARK_RAIL_BIG + 2
 ARK_PREF_BH  equ ARK_CHW_BIG + TITLE_H + 1
 ARK_PREF_SW  equ ARK_BW_SML * ARK_COLS + 2 * ARK_RAIL_SML + 2
 ARK_PREF_SH  equ ARK_CHW_SML + TITLE_H + 1
+
+; ...AND THE FLOOR IS ONE PIXEL SHORTER THAN THE PREFERENCE, because a floor
+; is the one number no clamp may cut. On a CGA wm_fit's height cap is
+; vid_dock_y0 - MBAR_H - 1 = 155 - the `dec di` that keeps a frame off the
+; dock strip, which is the same pixel ark_entry's own `sub bx, MBAR_H + 1`
+; below takes - and wm_min_floor runs AFTER that clamp and wins. Published as
+; the floor, ARK_PREF_SH's 156 put it straight back, y floored at MBAR_H, and
+; the frame's drop shadow landed on row 176: exactly vid_dock_y0. From there
+; wm_dock_clear's `jae` is true for this window forever, so every window
+; opened or moved over the game pays a dock repaint it did not owe.
+ARK_MIN_SH   equ ARK_CHW_SML + TITLE_H
 ARK_MAXROW  equ 6                   ; ...and the most rows either set uses
 ARK_NZONE   equ 5                   ; paddle zones the bounce divides it into
                                     ; (ark_zbias/ark_zbq)
@@ -463,7 +474,7 @@ ark_entry:
                                     ; published these three sizes the kernel
                                     ; had none for it that anyone had designed
     mov cx, ARK_PREF_SW             ; ...and the floor is the small record's
-    mov dx, ARK_PREF_SH             ; own size, because a straddle still CLAMPS
+    mov dx, ARK_MIN_SH              ; own size, because a straddle still CLAMPS
     call OSAPI_WM_MINSIZE           ; a published size to the rows both cards
                                     ; have (SPEC.md 39.16.3) and a wall with
                                     ; the rows squeezed out of it is a
