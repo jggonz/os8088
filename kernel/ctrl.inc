@@ -1248,6 +1248,10 @@ cp_ctlpaint:
     je .snd
     cmp al, CP_IVID
     je .vid
+%ifdef OS88_THEME
+    cmp al, CP_ITHM
+    je .thm
+%endif
     jmp short .out              ; a DRIVER's page (SPEC.md 31.9) draws its own
                                 ; controls and knows nothing about this
 .sched:
@@ -1269,6 +1273,11 @@ cp_ctlpaint:
     call cp_vid_mode            ; ...and the three arrangement radios (which
                                 ; refuses itself on a one-display machine)
     jmp short .out
+%ifdef OS88_THEME
+.thm:
+    call cp_thm_radios          ; the whole group: a radio glyph is one
+    jmp short .out              ; os88ui_glyph_f and the page has five of them
+%endif
 .drv:
     mov al, bh                  ; the one coming UP first, then the one going
     call cp_drv_ctl1            ; down: two controls, and usually one of them
@@ -2238,17 +2247,17 @@ cp_thm_radios:
     jz .a0
     mov al, OS88UI_GRADIO | OS88UI_GON
 .a0:
-    mov bh, 4                   ; ...id 4 (SPEC.md 13.8.3)
-    call cp_dngly
-    call COLD_SEG:os88ui_glyph_f
-    mov dx, bp
-    add dx, CPH_A1Y
+    mov bh, 5                   ; ...id 5, which is what cp_thm_click's UPPER
+    call cp_dngly               ; band reports for this row (SPEC.md 13.8.3):
+    call COLD_SEG:os88ui_glyph_f; its `inc al` then `add al, 4` makes On 5 and
+    mov dx, bp                  ; Off 4, so the painter must agree or a press
+    add dx, CPH_A1Y             ; on one row draws the OTHER one pressed
     mov ax, OS88UI_GRADIO       ; row 1: Off
     or bl, bl
     jnz .a1
     mov al, OS88UI_GRADIO | OS88UI_GON
 .a1:
-    mov bh, 5
+    mov bh, 4
     call cp_dngly
     call COLD_SEG:os88ui_glyph_f
 %endif
