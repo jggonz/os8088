@@ -26,11 +26,11 @@ PIN=$(sed -n 's/^commit=//p' "$HERE/UPSTREAM")
 command -v cargo >/dev/null || { echo "build.sh: cargo not found - install Rust" >&2; exit 1; }
 
 # --- source, at the pin ------------------------------------------------------
-# THREE STATES, not two, and the third is what CI is in on every run after the
-# first. .github/workflows/tests.yml caches `build/martypc/src/target` - the
-# cargo output, which is the several minutes worth keeping - and actions/cache
-# RECREATES that path when it restores, so `src/` comes back holding `target/`
-# and nothing else. No `.git`, so this used to take the clone branch, and
+# THREE STATES, not two, and the third is what any CACHING build is in on every
+# run after the first. A cache that keeps `build/martypc/src/target` - the
+# cargo output, which is the several minutes worth keeping - RECREATES that
+# path when it restores, so `src/` comes back holding `target/` and nothing
+# else. No `.git`, so this used to take the clone branch, and
 # `git clone` into a non-empty directory is a hard error:
 #
 #     fatal: destination path '.../build/martypc/src' already exists
