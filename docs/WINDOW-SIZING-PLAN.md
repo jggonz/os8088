@@ -179,7 +179,7 @@ Six parts. (1) and (2) are new API cells, (3) is how their
 clamps compose, (4) and (5) are the behaviour the cells buy, and (6) is the
 hole §1.2 found, which has to be closed either way.
 
-### 3.1 `OSAPI_WM_PREFER` (0x0468) — a frame size per adapter kind
+### 3.1 `OSAPI_WM_PREFER` (0x0478) — a frame size per adapter kind
 
 `BX` = window, `SI` = the offset **in the window's own segment** of a 12-byte
 table: three `(w, h)` pairs in `VID_VGA`, `VID_HERC`, `VID_CGA` order, which is
@@ -216,7 +216,7 @@ many answers it writes down*: today it patches `WT_W`/`WT_H` with the one
 answer for the screen it happens to have booted on, and afterwards it records
 all three.
 
-### 3.2 `OSAPI_WM_MINSIZE` (0x0470) — a floor the kernel may not cut through
+### 3.2 `OSAPI_WM_MINSIZE` (0x0480) — a floor the kernel may not cut through
 
 `BX` = window, `CX` = minimum outer width, `DX` = minimum outer height;
 `CX = DX = 0` withdraws. A per-slot side table, 4 bytes x `MAX_WIN` = 48 bytes

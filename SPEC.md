@@ -9987,7 +9987,7 @@ without one has only what its author asked for. That split is why §11.99.3 and
 docs/WINDOW-SIZING-PLAN.md is the investigation this came out of, including the
 survey of what all 24 packages did before it.
 
-#### 11.100.1 `OSAPI_WM_PREFER` (slot 0x0468) — a frame size per adapter kind
+#### 11.100.1 `OSAPI_WM_PREFER` (slot 0x0478) — a frame size per adapter kind
 
 **BX = window, SI = the offset, in the window's own segment, of a 12-byte
 table: three `(w, h)` pairs in `VID_VGA`, `VID_HERC`, `VID_CGA` order** — which
@@ -10033,7 +10033,7 @@ entry and then declares it. What changes is not whether it derives but **how
 many answers it writes down**: before this it patched `WT_W`/`WT_H` with the one
 answer for the screen it happened to boot on.
 
-#### 11.100.2 `OSAPI_WM_MINSIZE` (slot 0x0470) — a floor the kernel may not cut through
+#### 11.100.2 `OSAPI_WM_MINSIZE` (slot 0x0480) — a floor the kernel may not cut through
 
 **BX = window, CX = minimum outer width, DX = minimum outer height**;
 `CX = DX = 0` withdraws. A per-slot side table (`wm_minw`/`wm_minh`, 48 bytes
@@ -30961,7 +30961,7 @@ screen the moment its window was **dragged** across. `sol_onresize` on a
 `pt_scrh` = 348 with its window on a 200-row display. They followed **Activate
 Mode** correctly — that is a change of *primary* — and did not follow a drag.
 
-`OSAPI_WM_DISPLAY` (slot 0x0478) is `OSAPI_VIDEO` for the display *your
+`OSAPI_WM_DISPLAY` (slot 0x0488) is `OSAPI_VIDEO` for the display *your
 window* is on: `BX` = the window, out `AX` = width, `BX` = height, `CX` = the
 first row the dock owns, `SI` = the first row the desktop band has, `DL` =
 kind, `DH` = bits per pixel.

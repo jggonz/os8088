@@ -2119,7 +2119,7 @@ wm_kind_was:
 
 ; -----------------------------------------------------------------------------
 ; wm_display - OSAPI_VIDEO for the display THIS WINDOW is on (public; API
-;              0x0478, SPEC.md 39.16.4)
+;              0x0488, SPEC.md 39.16.4)
 ; in:  BX = the window
 ; out: AX = width, BX = height, CX = the first row the DOCK owns, SI = the
 ;      first row the desktop band has, DL = 0 VGA / 1 Hercules / 2 CGA,
@@ -2192,7 +2192,7 @@ wm_display:
 
 ; -----------------------------------------------------------------------------
 ; wm_prefer - "this is how big I want to be on each adapter" (public; API
-;             0x0468, SPEC.md 11.100.1)
+;             0x0478, SPEC.md 11.100.1)
 ; in:  BX = window ptr, SI = the offset of a PREF_SIZE table in the window's own
 ;      segment, or 0 to withdraw
 ; out: nothing - every register preserved, FLAGS INCLUDED
@@ -2220,7 +2220,7 @@ wm_prefer:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_minsize - "do not cut me past this" (public; API 0x0470, SPEC.md 11.100.2)
+; wm_minsize - "do not cut me past this" (public; API 0x0480, SPEC.md 11.100.2)
 ; in:  BX = window ptr, CX = minimum outer width, DX = minimum outer height
 ;      (0/0 withdraws)
 ; out: nothing - every register preserved, FLAGS INCLUDED
