@@ -193,6 +193,13 @@ FS_EDIT     equ 13              ; byte: the status-line editor is armed here
                                 ; rather than answering it. The offsets are
                                 ; left as a hole deliberately: every one below
                                 ; is hand-written, and FS_SIZE is unchanged.
+FS_2UP      equ 14              ; byte: 1 = this window's LAST PAINT left a
+                                ; two-line prompt's first line up in the row
+                                ; area (SPEC.md 22.20.1). One of the two free
+                                ; bytes above, and it has to be PER WINDOW:
+                                ; the Disk window is multi-instance, so a
+                                ; global was cleared by another window's paint
+                                ; while a prompt was still on this one's glass
 FS_VSEG     equ 16              ; word: this window's listing-cache claim
                                 ; (SPEC.md 50.2), 0 = none - fm_kinit claims
                                 ; VIEW_KB and the instance's teardown frees
@@ -352,6 +359,8 @@ fm_kinit_x:
     mov word [di+FS_N], 0           ; reopened window never resumes one
     mov byte [di+FS_VIEW], 0
     mov byte [di+FS_EDIT], 0
+    mov byte [di+FS_2UP], 0     ; ...and no prompt of the LAST tenant's left
+                                ; up in the row area, for FS_DIRTY's reason
     mov byte [di+FS_DIRTY], 0   ; a KD_POOL block is REUSED (SPEC.md 29.3):
                                 ; a window closed while it still owed a
                                 ; refresh must not hand that debt to the next
@@ -1340,7 +1349,7 @@ fm_chevtab:   db 0x99, 0xC3, 0xE7, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
 fm_statin:    db 0                  ; fm_stat_line/fm_stat_row: extra right
                                 ; inset, px. FM_SB_W for a line drawn in the
                                 ; ROW AREA, where the scroll bar is
-fm_2up:       db 0                  ; 1 = a two-line prompt's FIRST line is on
+fm_l2up:      db 0                  ; FS_2UP. 1 = a two-line prompt's FIRST line is on
                                 ; the glass, up in the ROW AREA where only a
                                 ; whole repaint can erase it (SPEC.md 22.20.1).
                                 ; .text, not .bss: fm_status_only reads it
@@ -1979,6 +1988,8 @@ fm_layout:
     mov [fm_ldrv], al
     mov al, [di+FS_EDIT]
     mov [fm_ledit], al
+    mov al, [di+FS_2UP]
+    mov [fm_l2up], al
     mov ax, [di+FS_N]
     mov [fm_lnf], ax
     mov ax, [di+FS_SCRL]
@@ -6378,7 +6389,7 @@ fm_status_only:
     ; its own fallback (docs/FIELD-NOTES.md 17.1) and clicking away did not,
     ; so a format question stayed on the row above for the rest of the
     ; session.
-    cmp byte [fm_2up], 0
+    cmp byte [fm_l2up], 0
     jne .refuse                 ; one is on the glass...
     mov al, [fm_ledit]
     call fm_2line
@@ -6477,7 +6488,7 @@ fm_scroll_by:
     mov [fm_sdlt], ax
     jz .same                    ; an end stop: not one pixel changes, where
                                 ; this used to repaint the window whole
-    cmp byte [fm_2up], 0        ; a two-line prompt's first line is up in the
+    cmp byte [fm_l2up], 0       ; a two-line prompt's first line is up in the
     jne .no                     ; ROW AREA (SPEC.md 22.20.1): the blit would
                                 ; carry it down the window and fm_rows_only
                                 ; would erase it without redrawing the status
@@ -6788,7 +6799,9 @@ fm_draw_status:
     jnc .n2                     ; draw one, so a fourth two-line prompt is a
     inc al                      ; row in fm_2line and nothing else
 .n2:
-    mov [fm_2up], al
+    mov [fm_l2up], al           ; the mirror, and the window's own byte
+    mov di, [fm_vp]
+    mov [di+FS_2UP], al
     ; --- status line at (6, staty): the precedence is binding (SPEC.md 22),
     ;     because both of these can be true at the same moment. There used to
     ;     be FIVE rungs and three of them were the wrong species. Two were
