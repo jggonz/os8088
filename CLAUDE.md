@@ -96,6 +96,17 @@ make runcpmdisk #   windowed CP/M 2.2 emulator — the host checks, then the
                 #   OS / in raw QEMU), `make rcmemtest` the movers',
                 #   `make rcbandbench` the row composer's bench
                 #   (PERFORMANCE.md Set 65)
+make c64        # C64 (docs/C64-SPEC.md), the third C application: VICE
+make c64disk    #   3.10's x64 as a windowed Commodore 64 — a 6510 in a 64KB
+                #   claim, a VIC-II and two CIAs in C, and the KERNAL, BASIC
+                #   and CHARGEN read at launch from a SIDECAR, C64.ROM, built
+                #   by `make c64rom` from the three Commodore ROM images
+                #   COMMITTED under apps/c64/rom/ (a stated, user-decided
+                #   departure from CONTRIBUTING.md §6 for those three files).
+                #   `make c64memtest` is the mover and composer gate (SS ≠ DS,
+                #   in raw QEMU), `make c64bandbench` the composer's bench, and
+                #   `make c64cputest` the 6510's — it arrives with the core.
+                #   THE CONTRACT IS docs/C64-SPEC.md, not a section of SPEC.md
 make ethertest  # THE ETHERNET GATE'S DISK (§72.9): a SYSTEM.CFG that already
                 #   asks for ETHER.DRV, so the card is up and DHCP has run
                 #   before the first paint and the test reads state instead of
@@ -131,8 +142,9 @@ exactly like the feature being broken.
 `xt-cga`, `xt-hercules`, `xt-multimon`, `xt-sound`, `xt-sound-1.44`, `286`,
 `286-sound`,
 `386sx`, `386`, `386-sound`, `486`, `pentium`, `xt-z`, `386-z`, `xt-word`,
-`386-word`, `386-c-word`, `xt-runcpm`, `286-runcpm`, `386-runcpm`; plus
-`marty` (MartyPC). `xt-multimon` is the
+`386-word`, `386-c-word`, `xt-runcpm`, `286-runcpm`, `386-runcpm`, `xt-c64`,
+`286-c64`, `386-c64`;
+plus `marty` (MartyPC). `xt-multimon` is the
 **two-card** XT — a CGA and a Hercules, a monitor window each — and the only
 86Box machine that can show §39.12–§39.19's extended desktop; it boots Single,
 and Control Panel → Display → Desktop is what extends it (§39.19.1). `xt-z`

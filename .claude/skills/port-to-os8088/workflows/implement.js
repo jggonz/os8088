@@ -35,6 +35,9 @@ export const meta = {
 const REPO = args.repo
 const SKILL = REPO + '/.claude/skills/port-to-os8088'
 const ROUNDS = args.rounds == null ? 2 : args.rounds
+// Optional per-role model overrides: args.models = { implement, fix, review, verify }. Omitted,
+// every agent inherits the session model (the skill's default).
+const MODELS = args.models || {}
 const WAVE = args.wave
 
 const READ_FIRST = `Read, in this order, before touching anything:
@@ -91,7 +94,7 @@ You are implementing WAVE ${WAVE} of the port plan for ${args.name}, in ${REPO}/
 ${RULES}
 
 Work until the wave's "done_when" is true on the glass and the harness passes, then return the report. Include in "report" the exact commands you ran, the size line, and where the screendumps are.`,
-  { label: `implement:wave${WAVE}`, phase: 'Implement', schema: IMPL_SCHEMA })
+  { label: `implement:wave${WAVE}`, phase: 'Implement', schema: IMPL_SCHEMA, model: MODELS.implement })
 
 if (!impl) return { status: 'failed', report: 'implementer returned nothing', questions: [], size: '', shots: [], reviews: [] }
 log(`implement: ${impl.status}; ${impl.size}`)
@@ -118,7 +121,7 @@ ${l.prompt}
 
 IMPLEMENTER'S REPORT:
 ${JSON.stringify(current, null, 1)}`,
-    { label: `review:${l.key}:r${round}`, phase: 'Review', schema: REVIEW_SCHEMA })))).filter(Boolean)
+    { label: `review:${l.key}:r${round}`, phase: 'Review', schema: REVIEW_SCHEMA, model: MODELS.review })))).filter(Boolean)
 
   const findings = reviews.flatMap(r => r.findings.map(f => ({ ...f, lens: r.lens })))
   const serious = findings.filter(f => f.severity !== 'minor')
@@ -141,7 +144,7 @@ ${JSON.stringify(findings.filter(f => f.severity === 'minor'), null, 1)}
 
 PREVIOUS REPORT:
 ${JSON.stringify(current, null, 1)}`,
-    { label: `fix:wave${WAVE}:r${round}`, phase: 'Fix', schema: IMPL_SCHEMA })
+    { label: `fix:wave${WAVE}:r${round}`, phase: 'Fix', schema: IMPL_SCHEMA, model: MODELS.fix })
   if (fixed) current = fixed
   round++
 }
@@ -155,7 +158,7 @@ You are the independent verifier for wave ${WAVE} of the ${args.name} port. Do n
 
 IMPLEMENTER'S FINAL REPORT:
 ${JSON.stringify(current, null, 1)}`,
-  { label: `verify:wave${WAVE}`, phase: 'Verify', schema: VERIFY_SCHEMA })
+  { label: `verify:wave${WAVE}`, phase: 'Verify', schema: VERIFY_SCHEMA, model: MODELS.verify })
 
 const status = current.status === 'blocked' ? 'blocked' : (verified && verified.pass ? 'done' : 'failed')
 return {

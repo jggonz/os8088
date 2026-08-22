@@ -154,7 +154,9 @@ ui_task:
                                 ; dispatched at a window nobody could see
     mov di, ui_ev
     call evq_pop
-    jc .yield                   ; queue empty
+    jc .empty                   ; queue empty: and an EMPTY ring is the moment
+                                ; a wake whose record somebody else drained can
+                                ; be told apart from one still waiting its turn
     mov ax, [ui_ev + EV_TYPE]
     cmp ax, EVT_RDOWN           ; the right button goes its own, much
     je .rdown                   ; narrower way (SPEC.md 12.4/13)
@@ -414,6 +416,15 @@ ui_task:
     call gfx_unlock
 .drag:
     call ui_drag                ; in: BX = window, CX/DX = mousedown x/y
+    jmp short .yield
+
+.empty:
+    call wm_wake_sweep          ; SPEC.md 74.1's promise, kept when the RECORD
+                                ; was lost: six loops in this kernel drain the
+                                ; ring of everything they are not waiting for,
+                                ; and a package whose wake they swallowed can
+                                ; never post another (wm.inc). One compare when
+                                ; nothing has posted since the last clean scan
     jmp short .yield
 
 .wake:

@@ -50,7 +50,17 @@ from harness import check, done                           # noqa: E402
 
 ASM = ["kernel/kernel.asm", "kernel/splash.inc", "boot/boot.asm",
        "boot/boothd.asm", "apps/os88api.inc", "apps/os88ui.inc",
-       "drivers/os88drv.inc"]
+       "drivers/os88drv.inc",
+       # apps/c64 is a C package whose assembly half and C half type the same
+       # constants out twice (docs/C64-SPEC.md, its memory and screen
+       # sections): the core's scratch offsets, the composer's band stride.
+       # A drifted C64_SCR_WLO reads the wrong scratch words and presents as
+       # a stale screen, not as an error.
+       "apps/c64/c64cpu.inc", "apps/c64/c64band.inc"]
+
+# ...and the C side of those, which cannot `%include` an .inc any more than a
+# host tool can.  `#define NAME VALUE`, same one-value-everywhere rule.
+CDEF = ["apps/c64/c64.c", "apps/c64/c64scr.c"]
 
 # Constants a host tool spells out for itself, and where the truth lives.
 PY_MIRROR = {
@@ -65,6 +75,8 @@ DIVERGENT = {}
 
 EQU = re.compile(r"^([A-Z][A-Z0-9_]*)\s+equ\s+([^\s;]+)", re.M)
 PYCONST = re.compile(r"^([A-Z][A-Z0-9_]*)\s*=\s*([^\s#]+)", re.M)
+CCONST = re.compile(r"^#define\s+([A-Z][A-Z0-9_]*)\s+([^\s/]+)\s*(?:/\*|$)",
+                    re.M)
 
 
 def num(v):
@@ -92,8 +104,33 @@ def defs(rel, pattern):
     return out
 
 
+def structfields(rel, name):
+    """The field names of `struct <name>`, in order, uppercased."""
+    path = os.path.join(ROOT, rel)
+    if not os.path.exists(path):
+        return []
+    with open(path, errors="replace") as f:
+        src = f.read()
+    m = re.search(r"struct\s+%s\s*\{(.*?)\}" % name, src, re.S)
+    if not m:
+        return []
+    out = []
+    for line in m.group(1).split(";"):
+        line = re.sub(r"/\*.*?\*/", " ", line, flags=re.S)
+        line = line.split("/*")[0]
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        for f in " ".join(parts[1:]).split(","):
+            f = f.strip().strip("*").strip()
+            if re.match(r"^[a-z_][a-z0-9_]*$", f):
+                out.append(f.upper())
+    return out
+
+
 def main():
     tables = {rel: defs(rel, EQU) for rel in ASM}
+    tables.update({rel: defs(rel, CCONST) for rel in CDEF})
 
     where = {}
     for rel, d in tables.items():
@@ -130,8 +167,23 @@ def main():
                   got=got, want=truth[name])
             pychecked += 1
 
-    print("t_mirror: %d names mirrored across %d asm files, %d host-tool copies"
-          % (len(mirrored), len(ASM), pychecked))
+    # ...and the one mirrored LAYOUT: apps/c64's 6510 register file is a nasm
+    # `resw` block with CM_* offsets and a C struct read over the same bytes,
+    # and the field ORDER is the layout (docs/C64-SPEC.md's register plan).
+    # A field inserted on one side alone makes the C read the wrong word.
+    fields = structfields("apps/c64/c64.c", "c64_mach")
+    cpu = defs("apps/c64/c64cpu.inc", EQU)
+    if fields and cpu:
+        for i, f in enumerate(fields):
+            name = "CM_" + f
+            check(cpu.get(name) == i * 2,
+                  "struct c64_mach.%s is %s in c64cpu.inc" % (f.lower(), name),
+                  "the C struct and the core's resw block are one layout typed "
+                  "out twice; a field inserted on one side reads the wrong word",
+                  got=cpu.get(name, "<not defined>"), want=i * 2)
+
+    print("t_mirror: %d names mirrored across %d asm/c files, %d host-tool copies"
+          % (len(mirrored), len(ASM) + len(CDEF), pychecked))
     done("t_mirror")
 
 

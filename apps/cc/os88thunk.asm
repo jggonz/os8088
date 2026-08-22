@@ -447,6 +447,12 @@ CC_T_WIN  _os88_wm_grow,       OSAPI_WM_GROW      ; a resizable window's own
 CC_T_WIN  _os88_wm_destroy,    OSAPI_WM_DESTROY   ; a SECOND window of yours;
                                                   ; your own dies with the
                                                   ; instance (SPEC.md 38.1)
+CC_T_WIN  _os88_wm_close,      OSAPI_WM_CLOSE     ; ...and THIS is how you
+                                                  ; close your OWN (SPEC.md
+                                                  ; 75.2): deferred to the next
+                                                  ; UI pass, so it RETURNS and
+                                                  ; you must return too. The
+                                                  ; lock may be held or not
 
 ; The flag setters - BX = win, AL = 0 clear / non-zero set.
 CC_T_WINF _os88_wm_sizable,    OSAPI_WM_SIZABLE
@@ -824,6 +830,27 @@ _os88_mouse:
     ret
 
 CC_T_AX   _os88_evq_pending,   OSAPI_EVQ_PENDING
+
+; int os88_key_down(int scan) - AL = a make scancode; out CF = 1 that key is
+; DOWN right now, 0 it is up; the slot keeps every register (SPEC.md 9.7).
+; ASKING IS WHAT ARMS IT: the first call clears and arms the map and always
+; answers "up", so ask once in os88_main() and ignore that answer - asking
+; first from a callback erases the make os88_onkey has already seen. It is
+; ADVICE, NOT AN ORACLE: a break code lost inside a long interrupts-off window
+; leaves that key reading down until it is pressed again, so bound what a
+; "yes" makes you do rather than trusting it to end on its own.
+_os88_key_down:
+    push bp
+    mov bp, sp
+    mov ax, [bp+4]
+    call OSAPI_KEY_DOWN
+    mov ax, 0                       ; MOV: CF is the answer, and the slot kept
+    jnc .up                         ; AL, so XOR would throw the carry away
+    inc ax
+.up:
+    pop bp
+    ret
+
 CC_T_A1   _os88_srand,         OSAPI_SRAND, ax
 CC_T_AX   _os88_rand,          OSAPI_RAND
 
@@ -1452,6 +1479,44 @@ _os88_clip_get:
     mov cx, [bp+6]
     push ds
     pop es                          ; ES:DI - the buffer is ours
+    call OSAPI_CLIP_GET
+    mov ax, cx
+    pop di
+    pop bp
+    ret
+
+; int os88_clip_put_seg(unsigned seg, unsigned off, unsigned len) - the same
+; slot with the text in a CLAIM rather than in your own segment, the way
+; os88_file_write_seg is os88_file_write's. It is what lets a package whose
+; clipboard staging area is 1KB or 2KB keep those bytes out of its bss: claim,
+; fill, put, free. ES is loaded from the argument and not from DS.
+_os88_clip_put_seg:
+    push bp
+    mov bp, sp
+    push si
+    mov ax, [bp+4]
+    mov es, ax                      ; ES:SI - THEIR segment, a heap claim
+    mov si, [bp+6]
+    mov cx, [bp+8]
+    call OSAPI_CLIP_PUT
+    mov ax, 0
+    jnc .ok
+    dec ax
+.ok:
+    pop si
+    pop bp
+    ret
+
+; int os88_clip_get_seg(unsigned seg, unsigned off, unsigned cap) - and the
+; read half, out AX = the bytes actually copied.
+_os88_clip_get_seg:
+    push bp
+    mov bp, sp
+    push di
+    mov ax, [bp+4]
+    mov es, ax                      ; ES:DI - THEIR segment, a heap claim
+    mov di, [bp+6]
+    mov cx, [bp+8]
     call OSAPI_CLIP_GET
     mov ax, cx
     pop di

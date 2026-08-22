@@ -117,6 +117,23 @@ VM386RUNCPM := $(CURDIR)/vm/386-runcpm
 VMXTRUNCPM := $(CURDIR)/vm/xt-runcpm
 VM286RUNCPM := $(CURDIR)/vm/286-runcpm
 
+# The C64 machines (C64-SPEC §14.3), one per FLOPPY GEOMETRY for the
+# same reason the RUNCPM ones are: the three C64 disks are not the same disk
+# and the machines that take them do not run at the same speed - and for an
+# EMULATOR the machine IS the emulated machine's speed, which the status row
+# prints. vm/386-c64 lands in wave 1 as the machine the port is LOOKED at on;
+# vm/xt-c64 and vm/286-c64 in the final wave. Each is a copy of a machine that
+# has booted with fdd_02_fn and the uuid changed and nothing else.
+#
+# ALL THREE ARE MANUAL EVIDENCE (C64-SPEC §14.6). `make 386-c64`
+# launches 86Box; it cannot assert that anything booted, and no gate in this
+# port rests on it.
+VM386C64 := $(CURDIR)/vm/386-c64
+VMXTC64 := $(CURDIR)/vm/xt-c64
+VM286C64 := $(CURDIR)/vm/286-c64
+VMXTC64 := $(CURDIR)/vm/xt-c64
+VM286C64 := $(CURDIR)/vm/286-c64
+
 # VIDEO=cga|herc|vga forces the adapter instead of probing for it (SPEC.md
 # 39.1). The shipped images are always built without it, so they auto-detect;
 # this exists because QEMU emulates no CGA and no Hercules card, and forcing
@@ -777,6 +794,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc
         runcpm-src cpmsw rcz80test rcmemtest rczex 386-runcpm \
         xt-runcpm 286-runcpm \
         allapps rcbandbench \
+        c64 c64disk c64rom c64bandbench c64cputest c64memtest 386-c64 xt-c64 286-c64 \
         checkdocs test-fast test-full test-soak clean clean-cc clean-marty distclean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
@@ -2579,6 +2597,169 @@ rcmemtest:
 # price for a per-branch write into a page that also holds translated code.)
 rczex: $(BUILD)/runcpm.img
 	python3 tests/rczex.py $(BUILD)/runcpm.img
+
+# --- C64, VICE 3.10's x64 as a C package (docs/C64-SPEC.md) ------------------
+# The C toolchain's third application: a Commodore 64 - a 6510 in a 64KB
+# claim, a VIC-II and two CIAs in C, the KERNAL/BASIC/CHARGEN read at launch
+# from a SIDECAR file, and the 320x200 screen composed into 1bpp bands. A
+# reimplementation of VICE 3.10's x64 (GPL-2-or-later, (C) 1996-2025 the VICE
+# team); apps/c64/COPYING is the licence text and apps/c64/ is GPL, which the
+# rest of this tree is not.
+#
+# `make c64` runs the host checks (apps/c64/build.sh - the program against a
+# model of the glass, and the composer against tools/c64ref.py's independent
+# compositor) and then builds the package; `make c64disk` the floppy. Nothing
+# here is on the shipped apps disks and nothing in `all` reaches it: on demand
+# like cword and runcpm, through the same cc-toolchain guard.
+#
+# THE HOST CHECKS RUN FIRST AND STOP THE BUILD, through the stamp below: a
+# check that fails leaves no stamp, and the compile does not run.
+$(eval $(call CC_PACKAGE,c64,c64,C64.OVL))
+
+# THE REST OF THE TRANSLATION UNIT (SPEC.md 73.1): c64.c #includes the parts,
+# and the shim %includes the three hand-written pieces and the icon. Every one
+# is a WRITTEN PREREQUISITE because make cannot see through either kind of
+# include - and every file docs/C64-PORT-PLAN.md names is listed from wave 1,
+# stubs included, so no later wave adds a file the build does not know
+# (LESSONS.md 9).
+C64SRC := apps/c64/c64io.c apps/c64/c64kbd.c apps/c64/c64scr.c \
+          apps/c64/c64menu.c apps/c64/c64cmd.c apps/c64/c64load.c \
+          apps/c64/c64about.c
+C64INC := apps/c64/c64cpu.inc apps/c64/c64mem.inc apps/c64/c64band.inc
+C64HOST := apps/c64/build.sh apps/c64/hosttest/os88.h \
+           apps/c64/hosttest/c64uitest.c apps/c64/hosttest/c64memtest.asm \
+           apps/c64/hosttest/c64memtest.sh tools/c64ref.py $(C64INC)
+# ...and the core's own gate, which is NOT in build.sh (it takes minutes) but
+# is a prerequisite of nothing either - `make c64cputest` runs it on demand,
+# the way `make rcz80test` does. Listed here so the file names are in one
+# place: apps/c64/hosttest/c64cputest.asm, c64cputest.sh and tools/c64dec.py.
+$(BUILD)/c64.raw.asm: $(C64SRC) $(BUILD)/.c64-hostchecks
+$(BUILD)/c64.bin: $(C64INC) apps/c64/icon.inc
+
+# ($(C64INC) is in C64HOST because c64memtest.asm %includes c64mem.inc AND
+# c64band.inc: an edit to a mover or a composer must re-run the SS != DS gate,
+# and make cannot see through a %include.)
+# build/c64-rom/C64.ROM is a PREREQUISITE and not something build.sh makes:
+# c64uitest reads it (it is the CHARGEN the composer is checked against), and
+# the file has exactly one owner - the rule twenty lines below - because it is
+# also a prerequisite of build/c64.img through C64DISK.
+$(BUILD)/.c64-hostchecks: apps/c64/c64.c $(C64SRC) $(C64HOST) \
+                          $(BUILD)/c64-rom/C64.ROM | $(BUILD)
+	apps/c64/build.sh
+	@touch $@
+
+c64: $(BUILD)/c64.o88
+
+# THE ROM SIDECAR (C64-SPEC §1.3, 1.4). tools/c64rom.py checks the
+# SHA-256 of each of the three COMMITTED Commodore ROM images under
+# apps/c64/rom/ and concatenates them into build/c64-rom/C64.ROM in a fixed
+# layout. No network and no VICE tree: those three files are the one stated,
+# user-decided departure from CONTRIBUTING.md 6, and they are what makes the
+# C64 build on a bare clone. The package REFUSES AT LAUNCH naming the file if
+# the disk does not carry it, which is a screendump in wave 1's gate.
+C64ROMS := apps/c64/rom/kernal-901227-03.bin apps/c64/rom/basic-901226-01.bin \
+           apps/c64/rom/chargen-901225-01.bin
+$(BUILD)/c64-rom/C64.ROM: tools/c64rom.py $(C64ROMS) | $(BUILD)
+	python3 tools/c64rom.py -o $@
+
+c64rom: $(BUILD)/c64-rom/C64.ROM
+
+# THE DISK. C64.O88, C64.OVL and C64.ROM are THREE FILES IN ONE FOLDER on
+# every disk they share (SPEC.md 19.2.1: the .OVL is resolved in the launching
+# instance's current directory), plus a README.TXT naming the licence and
+# whose the ROMs are - AND COPYING, THE LICENCE ITSELF. The floppy is the
+# distributed form of a GPL-2-or-later binary and README.TXT on it says "the
+# full licence text is apps/c64/COPYING in the os8088 source tree, and it
+# accompanies every release": it has to be here for that to be true. RUNCPM's
+# disk ships its upstream LICENSE beside the CCP for the same reason
+# (the rule at the $(RUNCPMDISK) recipe above). COPYING is 17,989 bytes, which
+# is ~50 of a 360KB disk's 354 clusters - C64-SPEC §14.2 says which of the
+# three geometries carries it and what README.TXT says where it cannot.
+# All three geometries (C64-SPEC §14.2): the same five files in one C64/
+# folder on each - ~62KB, so even the 360KB disk carries the licence. One
+# disk per 86Box machine: c64.img for the 386, c64720.img for the 286,
+# c64360.img for the XT (runcpmdisk's arrangement, §74.5).
+C64DISK := $(BUILD)/c64.o88 $(BUILD)/C64.OVL $(BUILD)/c64-rom/C64.ROM \
+           apps/c64/COPYING apps/c64/README.TXT tools/os88disk.py
+C64IMG = python3 tools/os88disk.py -o $(1) --size $(2) \
+	    C64:$(BUILD)/c64.o88 C64:$(BUILD)/C64.OVL \
+	    C64:$(BUILD)/c64-rom/C64.ROM C64:apps/c64/README.TXT \
+	    C64:apps/c64/COPYING
+c64disk: $(BUILD)/c64.img $(BUILD)/c64720.img $(BUILD)/c64360.img
+
+$(BUILD)/c64.img: $(C64DISK)
+	$(call C64IMG,$@,1440)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/c64720.img: $(C64DISK)
+	$(call C64IMG,$@,720)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/c64360.img: $(C64DISK)
+	$(call C64IMG,$@,360)
+	@python3 tools/os88disk.py --verify $@
+
+# THE COMPOSER'S BENCH (C64-SPEC §14.5, 9.7). The package's own
+# apps/c64/c64band.inc timed on tests/benchlib.inc's icount harness: per CELL
+# and per CALL, in microseconds. The tier table in apps/c64/c64scr.c and 9.7's
+# cost table are written FROM these numbers and not from a guess
+# (PERFORMANCE.md rule 4). Its own disk, on demand, because it answers one
+# question:
+#   make c64bandbench
+#   make test TESTAPPS=build/c64band.img QEMU="qemu-system-i386 -icount shift=3,sleep=off"
+c64bandbench: $(BUILD)/c64band.img
+
+$(BUILD)/c64bband.bin: tests/c64band/c64bandbench.asm apps/c64/c64band.inc \
+                       tests/benchlib.inc apps/os88api.inc tools/benchlint.py | $(BUILD)
+	python3 tools/benchlint.py tests/c64band/c64bandbench.asm
+	$(NASM) -f bin -w+error -I apps/ -I tests/ -o $@ tests/c64band/c64bandbench.asm
+	@echo "c64bband: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/c64bband.o88: $(BUILD)/c64bband.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/c64bband.bin -o $@
+
+$(BUILD)/c64band.img: $(BUILD)/c64bband.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/c64bband.o88
+	@python3 tools/os88disk.py --verify $@
+
+# THE TWO BOOT-SECTOR GATES (C64-SPEC §3.6, 4.6). c64memtest runs the
+# SHIPPING c64mem.inc and c64band.inc on a real x86 with SS != DS and an ES
+# sentinel, with negative controls, and IS in build.sh because it takes
+# seconds. c64cputest is the core's twelve rows and is NOT, because it takes
+# minutes - the rcz80test precedent. Wave 1 ships the first; the second
+# arrives with the core it gates (docs/C64-PORT-PLAN.md wave 2).
+c64memtest:
+	apps/c64/hosttest/c64memtest.sh
+
+c64cputest: apps/c64/hosttest/c64cputest.asm apps/c64/hosttest/c64cputest.sh \
+            tools/c64dec.py $(C64INC)
+	apps/c64/hosttest/c64cputest.sh
+
+# THE 386 C64 MACHINE (C64-SPEC §14.3): vm/386-runcpm with B: =
+# build/c64.img and the uuid changed and NOTHING else, for the reason
+# vm/386-c-word records - 86Box substitutes a default for an unrecognised key
+# and rewrites the config on exit, so a hand-written profile is a machine
+# running at a clock nobody chose. `git checkout` the cfg before committing
+# and never commit the nvr/. RESET=1|cmos|flash|both clears a stale CMOS.
+#
+# IT IS MANUAL EVIDENCE AND NEVER A GATE (C64-SPEC §14.6): a make
+# target that launches a GUI emulator cannot assert that anything booted.
+386-c64: $(IMG) $(BUILD)/c64.img
+	@$(UNPROTECT) $(VM386C64)/86box.cfg
+	$(BOX) -P $(VM386C64) -N
+
+# ...and the XT and the 286, one per floppy geometry exactly as the RUNCPM
+# machines are (§74.5): vm/xt-runcpm / vm/286-runcpm with B: = the 360KB /
+# 720KB C64 disk and the uuid changed and nothing else. The XT is the
+# machine this OS is for, and it is where C64-SPEC §4.4's speed figure is
+# read - by a person, off the status row (C64-SPEC §14.6).
+xt-c64: $(IMG360) $(BUILD)/c64360.img
+	@$(UNPROTECT) $(VMXTC64)/86box.cfg
+	$(BOX) -P $(VMXTC64) -N
+
+286-c64: $(IMG) $(BUILD)/c64720.img
+	@$(UNPROTECT) $(VM286C64)/86box.cfg
+	$(BOX) -P $(VM286C64) -N
 
 # =============================================================================
 # FROTZ and its story floppy (SPEC.md 61) - ON DEMAND: `make zdisk`
