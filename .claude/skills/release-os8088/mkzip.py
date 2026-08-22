@@ -65,6 +65,22 @@ MANIFEST = [
                               "arcade games only."),
     ("runcpm360.img",  False, "CP/M emulator disk, 360KB. Carries the emulator and no "
                               "programs -- there is no room for them at this size."),
+    ("c64.img",        False, "Commodore 64 disk, 1.44MB. Carries the emulator, the three "
+                              "Commodore ROM images it reads at launch, and COPYING."),
+    ("c64720.img",     False, "Commodore 64 disk, 720KB."),
+    ("c64360.img",     False, "Commodore 64 disk, 360KB."),
+]
+
+# Files packed beside the images, when the image they belong to is here.
+# THE C64 IS GPL-2-OR-LATER because VICE is, and docs/C64-SPEC.md 1.2 says in
+# as many words that "the release zip carries COPYING". Its own floppies carry
+# it too -- this is the second copy, for a reader who unpacks the zip and never
+# mounts a disk. (trigger image, source path, name in the zip, description)
+EXTRAS = [
+    ("c64.img", "apps/c64/COPYING", "COPYING.C64",
+     "The GNU General Public License version 2, which is the licence the "
+     "Commodore 64 emulator is under. It applies to that one program and to "
+     "nothing else here."),
 ]
 
 README = """\
@@ -121,7 +137,11 @@ these same bytes.
 
 Built from commit {commit}.
 
-Licence: MIT. The LICENSE file in the source repository has the terms.
+Licence: MIT, with one exception. The LICENSE file in the source repository
+has the terms. The Commodore 64 emulator on c64*.img is under the GNU General
+Public License version 2 or later, because it is a port of VICE, which is; that
+licence is COPYING.C64 here when those disks are in this zip, and on the disks
+themselves. Nothing else in os8088 is affected by it.
 """
 
 
@@ -188,6 +208,18 @@ def main():
         else:
             skipped.append(name)
 
+    # An extra rides only when the image it belongs to did. A licence for a
+    # program that is not in the zip is noise; a program in the zip without
+    # its licence is the thing this list exists to stop.
+    have = {name for name, _, _ in picked}
+    for trigger, src, as_name, desc in EXTRAS:
+        if trigger in have:
+            if not os.path.isfile(src):
+                print("mkzip: %s is in the zip and %s is missing -- refusing to "
+                      "ship it without its licence." % (trigger, src), file=sys.stderr)
+                return 1
+            picked.append((as_name, src, desc))
+
     if missing:
         print("mkzip: these are built by `make` and are not in %s:" % bd,
               file=sys.stderr)
@@ -221,9 +253,10 @@ def main():
         n = len(zf.namelist())
 
     raw = sum(os.path.getsize(p) for _, p, _ in picked)
+    imgs = sum(1 for name, _, _ in picked if name.endswith(".img"))
     print("mkzip: %s" % out)
     print("  %d entries, %d images, %.1fMB packed from %.1fMB"
-          % (n, len(picked), os.path.getsize(out) / 1e6, raw / 1e6))
+          % (n, imgs, os.path.getsize(out) / 1e6, raw / 1e6))
     print("  sha256 %s" % sha256(out))
     if skipped:
         print("  on-demand disks NOT built, so not in the zip: %s"
