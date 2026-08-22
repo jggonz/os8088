@@ -4348,9 +4348,10 @@ $(MEDIAIMG360): $(MEDIA_DISK_DATA) tools/os88disk.py
 # THE EVERYTHING DISK (ON DEMAND: `make allapps`) - SPEC.md 19.10
 # =============================================================================
 # build/apps-all.img: ONE 1.44MB floppy with every application this project
-# ships on it, including the four that have their own disks and therefore
+# ships on it, including the five that have their own disks and therefore
 # never appear on the shipped apps disk - FROTZ (SPEC.md 61), WORD (SPEC.md
-# 65), CWORD (SPEC.md 73.12) and RUNCPM (SPEC.md 74). It is a CONVENIENCE, offered beside the
+# 65), CWORD (SPEC.md 73.12), RUNCPM (SPEC.md 74) and C64 (docs/C64-SPEC.md).
+# It is a CONVENIENCE, offered beside the
 # shipped images on a release page for somebody who wants one disk rather
 # than four, and nothing in the tree boots it by default.
 #
@@ -4394,8 +4395,8 @@ $(MEDIAIMG360): $(MEDIA_DISK_DATA) tools/os88disk.py
 # the tree above has besides RUNCPM\A\0, one cluster each at 1.44MB's 16
 # entries a cluster - DERIVED from ALLAPPSARGS below (ALLAPPSDIRS: every
 # DIR: prefix, each one's parent, --folder DOCS, and RUNCPM\A, the
-# selection's own parent; ten today: APPS, GAMES, MEDIA, WORD, CWORD,
-# RUNCPM, RUNCPM\A, SYSTEM, SYSTEM\DOS, DOCS), so the budget is derived
+# selection's own parent; eleven today: APPS, GAMES, MEDIA, WORD, CWORD,
+# RUNCPM, RUNCPM\A, C64, SYSTEM, SYSTEM\DOS, DOCS), so the budget is derived
 # here as it is for build/runcpm.img, and a folder added to the tree above
 # is priced without anyone remembering a constant. One parent level is
 # taken (the tree nests one deep); a DIR/SUB/SUB2: entry would need its
@@ -4405,6 +4406,8 @@ ALLAPPSIMG := $(BUILD)/apps-all.img
 ALLAPPSFILES := $(APPS) $(BUILD)/frotz.o88 \
                 $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC \
                 $(BUILD)/cword.o88 $(BUILD)/CWORD.OVL $(BUILD)/WELCOME.RTF \
+                $(BUILD)/c64.o88 $(BUILD)/C64.OVL $(BUILD)/c64-rom/C64.ROM \
+                apps/c64/README.TXT apps/c64/COPYING \
                 $(RUNCPMDISK)
 ALLAPPS := $(ALLAPPSFILES) $(RUNCPMDEPS)
 
@@ -4416,6 +4419,9 @@ ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(BUILD)/frotz.o88) \
                $(addprefix CWORD:,$(BUILD)/cword.o88 $(BUILD)/CWORD.OVL \
                                   $(BUILD)/WELCOME.RTF) \
                $(addprefix RUNCPM:,$(RUNCPMDISK)) \
+               $(addprefix C64:,$(BUILD)/c64.o88 $(BUILD)/C64.OVL \
+                                $(BUILD)/c64-rom/C64.ROM \
+                                apps/c64/README.TXT apps/c64/COPYING) \
                $(SYSAPPSARGS) \
                $(addprefix SYSTEM/DOS:,$(APPS_DOS))
 ALLAPPSDIRS := $(sort $(foreach a,$(ALLAPPSARGS),$(firstword $(subst :, ,$a))) \

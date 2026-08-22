@@ -3472,7 +3472,10 @@ listings (§14.4). A released C64 disk boots to `READY.` and the user types.
 
 On `apps-all.img` the package gets **a folder of its own, `C64\`, never a
 place in `APPS/`** (SPEC.md §19.9, SPEC.md §19.10) — three files that must
-resolve in one directory.
+resolve in one directory, and `README.TXT` and `COPYING` beside them for the
+reason above: that disk is a distributed form of the binary exactly as the
+dedicated ones are, so the licence travels there too. Five files, ~120 of
+2,847 clusters.
 
 ### 14.3 The three 86Box machines
 

@@ -17885,19 +17885,20 @@ one: Note Pad, Paint, TeXPad and Word write **documents**, which are the user's
 and belong exactly where the user put them.
 ### 19.10 `apps-all.img` — one floppy with everything, and why it is on demand
 
-The shipped apps floppy is built in three geometries and carries the fifteen
-packages that fit the smallest of them. Three applications are deliberately not
+The shipped apps floppy is built in three geometries and carries the nineteen
+packages that fit the smallest of them. Five applications are deliberately not
 on it, each with a disk of its own and for the same reason — they are large and
-they travel with data: **Frotz** (§61), **Word** (§68.5) and **cword**
-(§73.12). That is right for the machines this runs on and awkward for a person
-downloading it, who wants to try the software rather than curate a shelf of
-floppies.
+they travel with data: **Frotz** (§61), **Word** (§68.5), **cword** (§73.12),
+**RUNCPM** (§74.5) and **C64** (`docs/C64-SPEC.md` §14.2). That is right for
+the machines this runs on and awkward for a person downloading it, who wants to
+try the software rather than curate a shelf of floppies.
 
 `make allapps` builds **`build/apps-all.img`**: one 1.44MB volume with every
 application on it, offered beside the shipped images on a release page. It is a
 convenience and nothing in the tree boots it by default.
 
-**It is 1.44MB and has no smaller variants.** The contents are ~430KB, so a
+**It is 1.44MB and has no smaller variants.** The contents are ~1,230KB with
+RUNCPM's drive A and the C64's ROM sidecar on it, so a
 720KB or 360KB build of this list does not exist rather than being declined —
 and the machines those geometries are for are already served by the shipped
 disks. One size means no set of variants to keep in step.
@@ -17910,15 +17911,18 @@ The tree, and the one part of it that is a correctness requirement:
 
 | folder | what |
 |---|---|
-| `APPS/` | the ten tools, plus `FROTZ.O88` |
-| `GAMES/` | the five games |
+| `APPS/` | the thirteen tools, plus `FROTZ.O88` |
+| `GAMES/` | the six games |
 | `WORD/` | `WORD.O88`, `WORD.OVL`, `WELCOME.DOC` |
 | `CWORD/` | `CWORD.O88`, `CWORD.OVL`, `WELCOME.RTF` |
-| `MEDIA/` | the module and the two `.TEX` documents — where a File Open starts (§38.10) |
+| `RUNCPM/`, `RUNCPM/A/0/` | `RUNCPM.O88`, `RUNCPM.OVL`, the CCP and its `LICENSE` — and CP/M drive A below them (§74.5) |
+| `C64/` | `C64.O88`, `C64.OVL`, `C64.ROM`, `README.TXT` and `COPYING` (`docs/C64-SPEC.md` §14.2) |
+| `MEDIA/` | the module, the two `.TEX` documents and `DEMO.HTM` — where a File Open starts (§38.10) |
 | `SYSTEM/`, `SYSTEM/DOS/` | the Task Manager (§28.3) and `OS88NET.COM` (§62) |
 | `DOCS/` | empty, for the user's own saves |
 
-**Each Word gets a folder of its own, and that is not tidiness.** Both carry an
+**Each Word gets a folder of its own, and that is not tidiness** — and so do
+RUNCPM and the C64, for the same reason. Both Words carry an
 overlay resolved in the launching instance's current directory (§68.10, §73.14,
 §19.2.1), and a double-click on a document leaves that directory on the
 **document's** (§54.9). Package, overlay and welcome document therefore have to
