@@ -41,7 +41,8 @@ A Macintosh System 1-style graphical OS for an 8086/8088 XT-class machine. The
 display adapter is detected at boot (§39): VGA 640x480 in 16 colors (mode
 12h), or Hercules 720x348 / CGA 640x200, both 1bpp. Pre-emptive multitasking
 via the PIT timer interrupt, switchable at run time to cooperative from the
-Control Panel (§8.2/§31). Serial Microsoft mouse on COM1. Boots from floppy
+Control Panel (§8.2/§31). Microsoft serial mouse on COM1 or COM2, and a
+PS/2 mouse on machines that have somewhere to put one (§9.9). Boots from floppy
 straight into the GUI: gray dithered desktop, menu bar with pull-down menus,
 draggable overlapping windows with title bars and close boxes. Built-in apps:
 About dialog, Timer and Bounce (each running as its own
@@ -821,7 +822,7 @@ VIEW_KB       equ 3          ; each window's cache, claimed when it opens
 | `kernel/vga12.inc`  | mode 12h planar primitives, save/restore, gfx lock, `gfx_scroll` (§5.5); the coordinate core `vga_rect_setup` that both renderers share (§39.3) — the mode set left for `viddet.inc` |
 | `kernel/softgfx.inc`  | the software renderer (§32/§39.3): the software planar primitives, and the only video driver on a 1bpp adapter |
 | `kernel/font.inc`   | 8x8 font (copied at init from the BIOS ROM set, or the IBM ROM's own on a pre-EGA machine), text draw |
-| `kernel/mouse.inc`  | COM1 UART, IRQ4 ISR, packet decode, cursor (save-under) |
+| `kernel/mouse.inc`  | COM1/COM2 UARTs, IRQ4/IRQ3 ISRs, the 8042 auxiliary port and its IRQ12 ISR (§9.9), both packet decoders and the `mou_apply` back end they share, cursor (save-under) |
 | `kernel/sched.inc`  | PIT hook, context switch, task table, spawn/yield/sleep |
 | `kernel/events.inc` | 8-byte event records (`EVT_MDOWN`/`MUP`/`RDOWN`, and `EVT_WAKE` — a package's own kick, §71.1), system event ring queue |
 | `kernel/clock.inc`  | system clock (§37): the RTC ladder (§37.90 — MC146818 at 70h/71h, MM58167 and RP5C01 at 2C0h, int 1Ah last), the wall-clock date + time advanced from `[ticks]`, field editing and formatting — prefix `clk_` |
@@ -4164,7 +4165,7 @@ grows, because `inst_task_die`'s `gfx_lock` may wait a watchdog period
 behind a non-yielding UI-side callback; the window is already hidden by
 then, so this is invisible.
 
-## 9. mouse.inc — serial Microsoft mouse + cursor
+## 9. mouse.inc — the Microsoft serial and PS/2 mice + cursor
 
 - **COM1 (0x3F8, IRQ4 → int 0x0C) and COM2 (0x2F8, IRQ3 → int 0x0B)**, both
   at once (§9.5). `mouse_init`: probe each base for a UART, and for every one
@@ -4177,6 +4178,11 @@ then, so this is invisible.
   IRQs still masked — and **recorded while it is drained** (§9.4.1): a port
   that answers `'M'` and then goes quiet is not power-cycled afterwards, and
   where it is the only one that answered, its `[mou_need]` drops to 1.
+- **And the 8042's auxiliary port, IRQ12 → int 74h**, where a PS/2 mouse
+  lives (§9.9). Probed **after** both serial ports, behind `[cpu_tier] !=
+  CPU_8086` because an XT has no 8042 at all, and only ever committed to on a
+  device that answered `0xFF` with `0xFA 0xAA`. It joins §9.5's contest as row
+  `MOU_P2ROW` = 4 and the first complete packet still wins.
 - Microsoft protocol, 3-byte packets, 7 data bits. Byte 0 has bit 6 set:
   `1 LB RB Y7 Y6 X7 X6`; bytes 1/2 have bit 6 clear: low 6 bits of X, Y.
   dx = sign-extended {X7X6,X5..X0}, dy likewise (positive = down).
@@ -4252,7 +4258,9 @@ then, so this is invisible.
   never sees a half-drawn state.
 - Public: `mouse_init`, `mouse_unhook`, `cursor_show`, `cursor_hide`,
   `mouse_x` (word), `mouse_y` (word), `mouse_btn` (byte), `mou_hotplug`
-  (§9.4, the UI task's per-pass call).
+  (§9.4, the UI task's per-pass call). The PS/2 half adds no entry point of
+  its own: `mouse_init` probes it, `mou_lockon` retires it and `mouse_unhook`
+  gives its vector back (§9.9.4).
 
 ### 9.4 Reset, absence and hot-plug (`mou_hotplug`)
 
@@ -4476,6 +4484,10 @@ says which UART the mouse is on and the line says which wire it pulls, and
 `0x08` with row 0, is a cross-wired card — a fact no emulator here produces
 by accident and no reading of the source can supply.
 
+Row **4** is neither UART: it is `MOU_P2ROW`, and beside a `mou_line` of
+`0xFF` it says the PS/2 mouse won (§9.9.4). Those two values are the pair to
+read first on a machine that has both sockets populated.
+
 #### 9.4.3 …and a fourth word, which is the HARNESS's
 
 A pointer to **`mouse_x`**, and behind it `mouse_y` and `mouse_btn`. It is
@@ -4543,6 +4555,32 @@ Three things hold it up:
 a **state dump rather than a measurement** — so it emits no `bl_head`, whose
 `N`/`counts`/`us per op` heading would label every row as a quantity it is
 not.
+
+#### 9.4.4 …and a fifth word, which is the PS/2 mouse's
+
+A pointer to a **7-byte contiguous span** — `mou_p2` +0, `mou_p2st` +1,
+`mou_p2id` +2, `mou_p2ph` +3, `mou_p2b0` +4, `mou_p2b1` +5, `mou_p2cmd0` +6.
+**Appended**, exactly like §9.4.3's fourth word, so every offset above is
+unmoved and a reader written against the older block is unaffected.
+
+`mou_p2st` is the member worth reading and the reason the word is here at all:
+it is **how far §9.9.1's handshake got**, so "this machine has no auxiliary
+port", "it has one and nothing is plugged into it" and "a device answered but
+failed its self-test" are three different numbers rather than one `mou_p2` = 0.
+0 is the tier gate or an 8042 that would not take the first command, 2 is no
+auxiliary port, 4/5/6 a device that did not answer its reset, **8 says int 74h
+is ours** and 9 says the mouse is live. It is the *step* and not a flag
+because `mou_p2_off` clears `[mou_p2]` when this mouse loses §9.5's contest
+and leaves the vector installed — `mouse_unhook` still owes it back, and 8 is
+the only thing that can tell it so.
+`mou_p2cmd0` is the second: it is the 8042 command byte **as the machine's own
+BIOS left it**, which is the one fact a report about a controller that behaved
+oddly turns on, and it cannot be read off a source listing.
+
+The layout is asserted at the bottom of `mouse.inc` beside the other thirteen
+offsets, for the reason given there — a reader is a separate program, on a
+floppy, on a machine with no debugger, and a member that moved would be
+silently republished as a different quantity.
 
 ### 9.5 COM1 or COM2 — the port is not asked and not configured
 
@@ -5449,6 +5487,252 @@ the tail winds `0x3C` → `0x3A`, the BIOS stores the arriving key at `0x3A` and
 leaves the tail back at `0x3C` with the head untouched, and twelve consecutive
 overrun interrupts ask for a beep on the first three and none after — the
 counter back to zero on the next keystroke that finds the buffer empty.
+
+### 9.9 The PS/2 mouse — the other socket, probed after the serial one
+
+An XT has one place to put a mouse and it is a serial port. Every machine
+above one — the 286, 386, 486 and Pentium boxes in `vm/`, and every clone
+anyone still plugs a period part into — has a second: the **auxiliary device
+port of the 8042 keyboard controller**, on **IRQ12**, which is where a PS/2
+mouse lives. §9.5 already says the machine is asked rather than the user;
+this is that same sentence applied to the *socket* rather than to the port
+address.
+
+**The order is serial first, then PS/2**, and it is an order rather than a
+preference because of what §9.4 says about the serial side: there is no probe
+there, only an identify burst and a contest, and the burst alone is
+`MOU_IDWIN` ≈ 1 s of `mouse_init`. So the serial half runs to completion
+exactly as it always did and `mou_p2_init` runs after it, as `mouse_init`'s
+last act. A machine with both mice ends up with **both live**, and the
+contest settles it the way §9.5 settles two serial ports: the first complete
+packet wins, and the loser is retired once, on the UI task, by the routine
+that already did that.
+
+#### 9.9.1 It is a real probe, which the serial side has never had
+
+§9.4 opens with "there is no probe — a machine with no mouse is
+indistinguishable from one whose mouse has not spoken yet". That is a fact
+about a serial mouse and it is **false here**. A PS/2 mouse answers, in
+order, to a reset this kernel sends, and every step below is a question whose
+wrong answer abandons the whole thing and puts the controller back exactly as
+it was found:
+
+1. **`0xAD` — the keyboard interface off, first.** Not tidiness. The 8042 has
+   one output buffer and int 09h is live: a keystroke landing mid-handshake
+   raises IRQ1, the BIOS reads 60h, and the byte it takes is **our device's
+   reply**. With the keyboard interface disabled nothing of the keyboard's can
+   reach that buffer, and the keystroke is delivered out of the keyboard's own
+   buffer when `0xAE` re-enables it at the end.
+2. **`0x20` — read the command byte and bank it** (`[mou_p2cmd0]`). Everything
+   written below is written over this value, and every failure path restores
+   it byte for byte.
+3. **`0xA8`, then `0xA9` — enable the auxiliary device and TEST it.** `0x00`
+   is "no error"; `0xFF` is "there is no auxiliary interface"; anything else
+   names a stuck clock or data line; and a controller that has never heard of
+   the command answers nothing at all and times out. **This is the step that
+   makes the rest safe on a machine that has no aux port**: it is a question,
+   and only the answer `0x00` licenses a single write below it.
+4. **the command byte back, bit 5 clear** (run the aux clock) and **bit 1
+   still clear** — IRQ12 stays off until the vector is ours.
+5. **`0xD4`, `0xFF` — reset the device.** `0xFA` acknowledges, then the BAT
+   result `0xAA`, then the device ID. A plain PS/2 mouse IDs as `0x00`; the
+   byte is **banked and published rather than tested**, because a wheel mouse
+   sitting in its 3-byte boot mode is still exactly the mouse this decoder
+   wants and refusing it would buy nothing.
+
+Those five are the probe. What follows is the commitment, and nothing in it
+runs until a device has answered `0xFA 0xAA` to an edge this kernel made:
+**int 74h's vector saved and ours installed first**, then the command byte a
+second time with **bit 1 set**, `0xD4`/`0xF4` to start data reporting, the
+output buffer flushed, `0xAE`, and then IRQ12 unmasked at the slave 8259
+(`0xA1` bit 4) **and IRQ2 at the master** (`0x21` bit 2) — the cascade,
+without which the slave's line reaches nothing and the symptom is a mouse
+that passes every step of the probe and then never interrupts.
+
+**Two orderings in that sentence are load-bearing and one of them cost a
+debugging session.** IRQ12 is masked at the slave from the routine's *first*
+instruction, before a single question is asked, because the machine's own BIOS
+may have left the line armed with a handler of its own — and a handler that
+reads 60h takes the replies to steps 3, 5 and 6 out from under the probe,
+which reads as a controller that stopped answering rather than as a race. And
+**the vector goes in before bit 1 does**: arming IRQ12 at the controller while
+int 74h still points at that BIOS hands it the very next byte, which is the
+`0xF4` acknowledgement, and the enable then times out with `[mou_p2st]` stuck
+at 7 on a machine where every earlier step passed. Both were seen; the second
+is what the QEMU boot in docs/TESTING.md reported before it was fixed.
+
+A probe that fails **leaves IRQ12 masked** rather than putting the mask back.
+Nothing else in this kernel uses that line, `0xA7` has just left the port
+unclocked so nothing can drive it, and a probe that failed has no business
+handing the line to a handler whose device it has been power-cycling. It
+self-heals: `int 19h` re-enters `mouse_init`, and the unmask is on the path
+that succeeds.
+
+**The timeouts are ticks, not spins**, and that is CLAUDE.md's third
+performance rule rather than a preference: a spin count sized against a 286 is
+some fifty times too short on a 486, and one sized against a 486 is minutes on
+a 286, while `[ticks]` is the same quantity on both. `MOU_P2TMO` is 2 ticks
+(~110 ms) for every handshake step, and the reset's BAT — which the device is
+allowed half a second for — **retries that short wait** `MOU_P2BAT` times
+rather than being a second timeout to size. The only machine that pays a
+timeout at all is one with a working aux port and nothing plugged into it: the
+`0xA9` answer is instant, the reset's missing `0xFA` costs ~110 ms, and that
+is the whole bill.
+
+#### 9.9.2 Nothing here touches port 64h on the target machine
+
+An 8088 XT has no 8042. Its keyboard is an 8255 PPI at 60h–63h, 64h is not
+decoded, and what a write there reaches is a question about one machine's
+address decoding that nobody should have to answer to boot a desktop. So the
+whole of §9.9 sits behind **`[cpu_tier] != CPU_8086`** (§41.1) — `cpu_detect`
+has run since `kmain`'s first overlay call, long before `mouse_init` — and on
+the machine this project targets `mou_p2_init` is one compare and a `ret`.
+That is CLAUDE.md's "degrade by tier" in its literal form: the tier is a fact
+the code can test, not a guess about what a machine probably has.
+
+The tier is the outer gate and §9.9.1's `0xA9` is the inner one. A 286 whose
+controller is a plain AT 8042 with no auxiliary device gets **asked**, says
+so, and has nothing written to it that was not read back first.
+
+**And there is a third, at build time: `kern_small` does not carry the code at
+all.** §62.9.15's kernel is the 128–256KB machine's, every one of which is an
+XT that the tier gate would refuse at run time anyway, so the module is inside
+`%ifdef KERN_BIG` rather than shipped as ~700 bytes that provably cannot
+execute — the same treatment §62.9.15 already gives the Control Panel's
+keyboard. **The state stays in both builds**, which is deliberate and is
+§57.3's third rule read carefully: a block may change shape when its readers
+change with it, and `tests/sysbench` is *one binary that runs on both
+kernels*, so a `'MO'` block that were four words on one and five on the other
+is exactly the silent misread §9.4.2's assertions exist to prevent. Nine bytes
+on `kern_small` buys that, and they move no rung.
+
+#### 9.9.3 The packet, and the line both mice end up on
+
+Three bytes, and the sync rule is byte 0's **bit 3, which is always set**:
+
+```
+byte 0    YV XV YS XS  1 MB RB LB
+byte 1    X movement, 8 bits, sign in byte 0's XS
+byte 2    Y movement, likewise — and POSITIVE IS UP
+```
+
+Three things differ from §9's Microsoft packet, and all three live in the
+decode and nowhere else:
+
+- **Y is inverted.** The screen counts down and a PS/2 mouse counts up, so the
+  decoder negates it. This is the one defect in a PS/2 driver that looks
+  exactly like a working mouse.
+- **`XV`/`YV` mean the deltas are a lie**, and a packet carrying either is
+  dropped whole rather than clamped. A dropped packet costs one report of
+  motion; a believed overflow flag costs a pointer that jumps the width of the
+  screen.
+- **The button bits are already in `mouse_btn`'s order** — bit 0 left, bit 1
+  right — so both decoders hand the shared back end the same two bits and
+  neither has to know the other exists. The middle button (bit 2) is read and
+  dropped: §10's event set has no record for it.
+
+**`mou_apply` is that shared back end**, and it is the point of the change
+rather than a side effect of it. From the moment a report is a signed dx, a
+signed dy and two button bits, **nothing about it is protocol-specific**: the
+staging through `[mou_nx]`, `mou_clamp`'s 2-D answer (§39.15.4), the
+`EVT_MDOWN`/`EVT_MUP`/`EVT_RDOWN` rules — including the binding fall-through
+of §9, where a packet reporting both buttons changed queues the left event
+only — `[blk_act]` (§64.1), `[cur_mvt]` (§7.1.4.3) and §7's draw-or-defer
+decision are **one copy of one routine**. A second copy would be a second
+place for that fall-through to be got wrong, and it would be got wrong.
+
+#### 9.9.4 Winning, losing, and what each does to the other
+
+The PS/2 mouse joins §9.5's contest as **row `MOU_P2ROW` = 4**, one past the
+last serial row, and that single choice is what makes it cost nothing anywhere
+else:
+
+- `mou_byte`'s `cmp bl, [mou_port]` can never match row 4, so once the PS/2
+  mouse has won, **every serial byte is dropped unheard** by the same
+  instruction that already did that to a losing UART.
+- `mou_lockon` retires "every port but `[mou_port]`", and 4 is no port, so
+  **both** UARTs are retired. `[mou_line]` becomes `MOU_P2LINE` = 0xFF, which
+  is not a master-8259 bit at all, so §9.5.2.1's guard — never mask the line
+  the winning packets arrived on — lets both serial lines be masked and masks
+  neither of the two wires the PS/2 mouse is actually on.
+- and the **same routine, read backwards**, calls `mou_p2_off` when
+  `[mou_port]` is a serial row: `0xD4`/`0xF5` stops the device reporting,
+  IRQ12 goes back into the slave's OCW1, and the aux interrupt bit comes back
+  out of the command byte. A mouse that lost is silent, exactly as a UART that
+  lost is.
+
+There is **no run threshold**, and the asymmetry is the whole of §9.5.1.
+`[mou_need]` exists because a Hayes result code is a well-formed Microsoft
+packet and nothing arriving on a serial line can be trusted to be a mouse; the
+aux port carries **one** device, and that device answered a reset with
+`0xFA 0xAA` before its interrupt was ever armed. So the first packet settles
+the row and is acted on, which is `[mou_need]` = 1 in everything but name —
+§9.5's "one port is not a contest", reached by a stronger road.
+
+**The hot-plug poller stands down for it** (§9.4). `mou_hotplug` already stops
+power-cycling the serial ports when a port answers the identify burst like a
+mouse; `[mou_p2]` is a stronger version of that same statement and is tested
+beside `[mou_idany]`, **in poller state 0 only**, for exactly §9.4.1's reason:
+standing down from state 1 strands DTR low and leaves a serial mouse unpowered
+for the session, which is deader than the bug the poller exists to fix. The
+accepted cost is §9.4.1's own — a serial mouse plugged in *later*, into a
+machine that already has a PS/2 mouse, does not get its reset edges.
+
+**`mouse_unhook` owes int 74h its vector back**, and for §9.6.5's reason
+rather than for tidiness. `sched_unhook`'s only caller is the Chip menu's
+Restart, which ends in `int 19h`; `int 19h` is the bootstrap loader and not
+POST, so it does not reset the interrupt vector table, and a vector left
+pointing into `KERNEL_SEG` after the handoff is a vector nobody owns. So it
+disables reporting, masks IRQ12, restores `[mou_p2cmd0]` byte for byte and
+puts the vector back — the same four steps, in the same order, that the serial
+ports get.
+
+#### 9.9.5 What it costs, and what it deliberately does not do
+
+**690 bytes of `.text` on `kern_big`, and one 512-byte image rung**: 120 steps
+→ 121, `KERN_SIZE` 113,152 → **113,664**, and the spare inside an unchanged
+`KERN_BUDGET` of 114,176 goes **two steps to one**. `KERN_CODE_MAX` is
+untouched at 3,873 bytes left, and no guard is raised — but the rung is the
+figure to carry forward, because §9.5.3 already recorded that the padding to
+`OVL_START` this module used to land in is spent, and one step of spare is
+where §9.6 and §9.8 each found themselves.
+
+`kern_small` pays **15 bytes and no rung at all**: the module is compiled out
+(§9.9.2), so what it carries is the nine bytes of published state and the
+shape of `mou_apply` — the shared back end costs the serial decoder a
+`mov si, ax`, a `mov ax, si` and the call plumbing that used to be
+fall-through, and gives back the copy of the event and cursor tail that used
+to be inline. Its image rung is left with **2 bytes**, which is worth writing
+down for the next author rather than hiding: the next byte added to
+`kern_small`'s `.text` anywhere costs the whole 512, and its footprint spare
+is one step.
+
+The per-interrupt cost is **one `in` from 64h** in front of the byte read —
+the test that says whether the byte in the 8042's single output buffer is the
+mouse's or the keyboard's, and a keyboard byte is left where it is for int 09h
+to take. Everything after the decode is `mou_apply`, which is the code the
+serial path was already running. The per-boot cost is §9.9.1's handshake,
+which is milliseconds when a mouse answers and ~110 ms when an aux port exists
+with nothing on it. On the 8088 target it is one compare.
+
+What is deliberately **not** done:
+
+- **No Control Panel row, no `SYSTEM.CFG` key and no build knob**, for §9.5's
+  reason exactly: the machine answers faster than the user can, and an answer
+  stored in a settings file is one more thing to be wrong after the hardware
+  moves.
+- **No wheel and no third button.** `0xF4` leaves the device in its 3-byte
+  boot mode; the Z axis needs the `200/100/80` sample-rate knock and a 4-byte
+  packet, and §10 has nowhere to put either. The device ID is banked so that a
+  field report can at least say what was plugged in.
+- **No hot-plug.** A PS/2 port is not hot-pluggable by design, a mouse pushed
+  into a live one usually needs the machine reset before it speaks, and §9.4's
+  cycle is a *power* cycle the aux port has no equivalent of. The probe runs
+  once.
+- **No BIOS `int 15h AH=C2h`.** It is the other way to do this; it is absent
+  from most of the machines in `vm/` and wrong on several that have it, and it
+  would put a far call into an unknown ROM inside the path that moves the
+  pointer.
 
 ## 10. events.inc
 

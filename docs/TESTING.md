@@ -232,6 +232,7 @@ emulator have the hardware": a ✅ means reach for it first.
 | Mouse on COM2 (SPEC.md §9.5) | ➖ | ✅ | `make test MOUSEPORT=com2` | both UARTs probe present, COM2 wins, COM1 retired |
 | A **cross-wired IRQ** (SPEC.md §9.5.2) | ➖ | ✅ | `make test MOUSEPORT=com2irq4` | the Compaq Portable III: mouse at 2F8 driving IRQ4. Undetectable before the fix |
 | A **modem** on the other port | ➖ | ✅ | a socket chardev at 3F8 — see below | eight result codes claim nothing, move nothing, click nothing |
+| **A PS/2 mouse** (SPEC.md §9.9) | ➖ | ✅ | `make test MOUSEPORT=ps2` | the `pc` machine's 8042 has an auxiliary port whether or not anything is plugged into it, so both halves are testable here and neither is on MartyPC or a 5150 — an XT has no 8042 at all, and `[cpu_tier]` refuses the whole module there. See below |
 | Performance benchmarks | ✅ | ✅ | `make bench` (from `tests/`, not in `all`) | numbers are always in flux — see below |
 | **Flicker** — the double-draw flash | ✅ | ❌ | `os88marty.py flicker` (PERFORMANCE.md Part 3.1) | one sample per displayed frame. A Disk window repaint flashes 1,963 px for 166 ms; an idle desktop and a pointer move measure zero. CGA, Hercules and VGA — the MDA's rasterisation of Hercules graphics was measured working at the pinned build (docs/MARTYPC-DEBUG.md); this row used to exclude it |
 | Fullscreen exclusive (SPEC.md §53) | ➖ | ✅ | `make test TESTAPPS=build/fsxtest.img` | every FSXM mode the adapter owns sets, draws and restores — the desktop screendump below the bar is byte-identical after a full sweep; Mode X dumps 640x480 (line-doubled 320x240) |
@@ -463,6 +464,62 @@ One trap in writing that test, and it produced two false failures: a movement
 pattern that **nets to zero** returns the cursor to where it started, so
 "the cursor changed" reports a perfectly working mouse as broken. Drift in one
 direction.
+
+### The PS/2 mouse (SPEC.md §9.9), and why QEMU is the only instrument
+
+`make test MOUSEPORT=ps2` gives the guest **no serial ports at all**
+(`-serial none`, and no `msmouse` chardev), so both UART rows are rejected by
+SPEC.md §9.5's probe, nothing can win the serial contest, and the only
+pointing device on the machine is the PS/2 mouse the `pc` machine has anyway.
+That is the positive test for the 8042 handshake, and there is nowhere else to
+run it: MartyPC and every 5150 in docs/FIELD-MACHINES.md is an 8088 whose
+keyboard is an 8255 PPI, so `[cpu_tier]` refuses the module before it reads a
+port. **86Box's AT-class machines are where it should next be tried on
+something closer to iron**, and it has not been.
+
+What to assert, all of it readable with `tools/os88sym.py` and `xp`:
+
+| | |
+|---|---|
+| `mou_bases` | `0000 0000` — the serial probe rejected both rows, so the contest is not merely lost, it cannot be entered |
+| `mou_p2st` | **9**. This is the row to read first on any failure: it is how far the handshake got (SPEC.md §9.4.4), so `2` means "no auxiliary port" and `7` means "the enable timed out" and they are different bugs |
+| `mou_p2` / `mou_p2id` | `1` and `00` — live, and a plain 3-byte mouse |
+| after one `tools/mouse.py to X Y` | `mou_seen` 1, `mou_port` **04** (`MOU_P2ROW`), `mou_line` **FF** (`MOU_P2LINE`), and `mouse_x`/`mouse_y` **exactly** the requested X/Y |
+
+That last row is the one that catches the defect a PS/2 driver actually has.
+`tools/mouse.py` pins against the kernel's own edge clamp and then walks back
+by exact deltas, so **landing on the requested pixel is a statement about the
+sign handling and the Y inversion** — SPEC.md §9.9.3's "positive is up" —
+which nothing else here would notice. A mouse with the Y sense inverted moves,
+draws, clicks and drags perfectly and simply goes the wrong way.
+
+Two more that are not about the mouse at all and are the reason the handshake
+is written the way it is. **The keyboard must survive all of it**: the 8042
+has one output buffer for two devices, and both `mou_p2_init`'s reads and the
+ISR's are a chance to take a keystroke away from int 09h. Send a burst and
+watch the BIOS keyboard buffer's head and tail at `0040:001A`:
+
+```
+python3 tools/qmp.py build/qmp.sock 'xp/2xh 0x41a'
+python3 tools/qmp.py build/qmp.sock 'sendkey a' 'sendkey b' 'sendkey c'
+python3 tools/qmp.py build/qmp.sock 'xp/2xh 0x41a'      # +2 bytes per key
+```
+
+Six keys advanced it `001E → 002A` with the PS/2 mouse live, and nine did
+`002A → 003C` while `tools/mouse.py move` ran against it — no byte lost in
+either direction. And the **serial** configurations must be unchanged: on the
+default `make test`, `mou_port` still settles on `00` with `mou_line` `10`,
+because QEMU keeps routing input to whichever handler was activated last and
+`msmouse` is still that one. The PS/2 mouse is probed, found, and then retired
+by `mou_lockon` — `mou_p2` goes back to `0` with `mou_p2st` left at `9`,
+which is the pair that says "the vector is still ours to give back".
+
+**What found the ordering bug.** The first version of this armed IRQ12 in the
+8042's command byte before installing int 74h, and the machine's own BIOS
+handler ate the `0xF4` acknowledgement: every earlier step passed and
+`mou_p2st` sat at `7`. Nothing about that reads as a race — it reads as a
+controller that stopped answering — and the only reason it was found in
+minutes rather than on hardware is that `mou_p2st` records the step.
 
 ### Can we boot a real 5150 BIOS instead of SeaBIOS?
 

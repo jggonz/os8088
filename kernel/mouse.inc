@@ -89,6 +89,40 @@ MOU_IDQUIET equ 4               ; ...and nothing for the last ~220ms of the
                                 ; cannot: a banner that happens to be short is
                                 ; still arriving when the window closes
 
+; --- the PS/2 mouse (SPEC.md 9.9) --------------------------------------------
+; The 8042 keyboard controller's AUXILIARY device port, on IRQ12, which is
+; where every machine above an XT puts its mouse. Probed AFTER both serial
+; ports - that is SPEC.md 9.9's order, and it is an order rather than a
+; preference because the serial half has no probe at all and its identify
+; window is a whole second of mouse_init.
+MOU_P2DAT   equ 0x60            ; the 8042's data port...
+MOU_P2CMD   equ 0x64            ; ...and its status (read) / command (write)
+MOU_P2ROW   equ 4               ; [mou_port] once the PS/2 mouse has won: ONE
+                                ; PAST the last serial row, so every `cmp bl,
+                                ; [mou_port]` in the serial decoder fails and
+                                ; mou_lockon retires both UARTs (SPEC.md 9.9.4)
+MOU_P2LINE  equ 0xFF            ; ...and [mou_line]'s value then. NOT a master
+                                ; 8259 bit, so 9.5.2.1's "never mask the line
+                                ; the winning packets came in on" guard masks
+                                ; both serial lines and neither of the two
+                                ; wires this mouse is actually on
+MOU_P2SL    equ 0x10            ; IRQ12's bit in the SLAVE 8259's OCW1 (0xA1)
+MOU_P2CASC  equ 0x04            ; ...and IRQ2's in the master's: the CASCADE,
+                                ; without which the slave's line reaches
+                                ; nothing, and the symptom is a mouse that
+                                ; passes every step of the probe and is silent
+MOU_P2VEC   equ 0x74*4          ; int 74h's IVT offset
+
+MOU_P2TMO   equ 2               ; ticks one handshake step may take (~110ms).
+                                ; TICKS AND NOT A SPIN COUNT: a count sized on
+                                ; a 286 is some fifty times too short on a 486
+                                ; and one sized on a 486 is minutes on a 286,
+                                ; while [ticks] is the same quantity on both
+MOU_P2BAT   equ 5               ; ...and the reset's self-test, which the part
+                                ; is allowed half a second for, is that short
+                                ; wait RETRIED this many times rather than a
+                                ; second timeout to size
+
 CUR_W       equ 16              ; cursor cell size, px - the size of the two
 CUR_H       equ 16              ; bitmap TABLES, and nothing else
 
@@ -445,6 +479,17 @@ mouse_init:
     cmp bx, MOU_PEND
     jb .flush
 
+    ; --- ...and ONLY NOW the other socket (SPEC.md 9.9) ----------------------
+    ; Serial first, then PS/2. It is an order rather than a preference: the
+    ; serial half has no probe at all - only the identify burst and a contest -
+    ; and the burst alone is MOU_IDWIN of this routine, so it runs to
+    ; completion and this runs after it. Where both mice exist both end up
+    ; live, and SPEC.md 9.5's contest settles it exactly as it settles two
+    ; UARTs: the first complete packet wins.
+%ifdef KERN_BIG
+    call mou_p2_init
+%endif
+
     pop es
     pop si
     pop dx
@@ -682,6 +727,14 @@ mou_lockon:
     add bx, 2
     cmp bx, MOU_PEND
     jb .port
+%ifdef KERN_BIG
+    cmp byte [mou_port], MOU_P2ROW  ; ...and the same question asked of the
+    je .keep                        ; OTHER SOCKET: a serial port winning makes
+    call mou_p2_off                 ; the PS/2 mouse the loser, and a loser is
+.keep:                              ; silenced (SPEC.md 9.9.4). Row 4 is no
+                                    ; port, so when IT won the loop above has
+                                    ; just retired both UARTs on its behalf
+%endif
     pop cx
     pop bx
     pop ax
@@ -725,6 +778,15 @@ mou_hotplug:
     sub ax, [mou_hpt]           ; wrap-safe: elapsed since the state's stamp
     cmp byte [mou_hpst], 1
     je .low
+%ifdef KERN_BIG
+    cmp byte [mou_p2], 0        ; a PS/2 MOUSE answered its own reset (SPEC.md
+    jne .done                   ; 9.9.4), which is the same statement as the
+                                ; one below and a stronger one: there IS a
+                                ; mouse on this machine, so stop offering the
+                                ; serial ports power cycles under the user's
+                                ; hand. Beside [mou_idany] and in state 0 ONLY,
+                                ; for the reason spelled out there
+%endif
     cmp byte [mou_idany], 0     ; a port answered our reset edge like a mouse
     jne .done                   ; (SPEC.md 9.4.1), so there IS one and it must
                                 ; not be power-cycled under the user's hand.
@@ -819,6 +881,27 @@ mouse_unhook:
     cmp bx, MOU_PEND
     jb .port
 
+    ; --- ...and the AUXILIARY PORT, if a mouse ever answered on it (9.9.4) ---
+    ; mou_p2_off is a no-op unless the PS/2 mouse is live - it may already have
+    ; lost the contest and been retired - but the VECTOR is owed back either
+    ; way, which is why [mou_p2st] and not [mou_p2] is what gates it: 8 is the
+    ; step that installed it, and mou_p2_off clears [mou_p2] without touching
+    ; int 74h. It is int 09h's trap below, on the other line.
+%ifdef KERN_BIG
+    call mou_p2_off
+    cmp byte [mou_p2st], 8
+    jb .nop2
+    mov si, MOU_P2VEC
+    pushf
+    cli
+    mov ax, [mou_p2old]
+    mov [es:si], ax
+    mov ax, [mou_p2old+2]
+    mov [es:si+2], ax
+    popf
+.nop2:
+%endif
+
     ; --- AND INT 09h, WHICH NOTHING PUT BACK (SPEC.md 9.6.5) -----------------
     ; mouse_init hooks int 09h for keypad 5 and this is the only place that
     ; can undo it. It went missing because the loop above walks mou_ivecs and
@@ -852,6 +935,504 @@ mouse_unhook:
     pop bx
     pop ax
     ret
+
+%ifdef KERN_BIG
+; =============================================================================
+; The PS/2 mouse (SPEC.md 9.9)
+;
+; KERN_BIG ONLY, and that is SPEC.md 62.9.15's split used the way it is meant
+; to be: kern_small is the 128-256KB machine's kernel, every one of which is an
+; XT whose keyboard is an 8255 and whose [cpu_tier] would refuse all of this at
+; run time anyway. So it is compiled out there rather than carried as ~700
+; bytes that provably cannot execute - the STATE below stays in both builds, so
+; that SPEC.md 9.4.2's published block is the same shape whatever kernel a test
+; package is reading.
+;
+; The 8042 keyboard controller's AUXILIARY device port, on IRQ12 / int 74h,
+; which is where every machine above an XT puts its mouse.
+;
+; UNLIKE A SERIAL MOUSE, THIS ONE ANSWERS. SPEC.md 9.4 opens with "there is no
+; probe - a machine with no mouse is indistinguishable from one whose mouse has
+; not spoken yet", and that is a fact about a serial mouse and false here: a
+; reset the device acknowledges with 0xFA and completes with 0xAA is a probe in
+; exactly the sense the serial side has never had. So there is no run threshold
+; on this side and nothing to weigh against - the aux port carries ONE device -
+; and the first complete packet settles [mou_port] and is acted on, which is
+; SPEC.md 9.5's "one port is not a contest" reached by a stronger road.
+;
+; NOTHING HERE RUNS ON THE TARGET MACHINE. An 8088's keyboard is an 8255 PPI at
+; 60h-63h, 64h is not decoded at all, and what a write there reaches is a
+; question about one machine's address decoding that nobody should have to
+; answer to boot a desktop. The whole module is behind [cpu_tier], so on an XT
+; mou_p2_init is one compare and a ret (SPEC.md 9.9.2).
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; mou_p2wr - wait until the 8042's input buffer is empty, so a write is safe
+; ins:  none
+; outs: CF = 1 on timeout (all registers preserved)
+; -----------------------------------------------------------------------------
+mou_p2wr:
+    push ax
+    push cx
+    push dx
+    mov dx, [ticks]
+.w:
+    in  al, MOU_P2CMD
+    test al, 0x02               ; IBF: the controller has not taken the last
+    jz .ok                      ; byte yet
+    mov cx, [ticks]
+    sub cx, dx                  ; wrap-safe: elapsed since the wait began
+    cmp cx, MOU_P2TMO
+    jb .w
+    stc
+    jmp short .out
+.ok:
+    clc
+.out:
+    pop dx                      ; a pop does not touch the flags, so CF is the
+    pop cx                      ; answer all the way out
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; mou_p2rd - take the next byte the 8042 offers
+; ins:  none
+; outs: AL = the byte, CF = 1 on timeout. Every other register preserved.
+;
+; It takes whatever is in that buffer, and that is safe ONLY because every
+; caller runs inside mou_p2_init's 0xAD window: with the keyboard interface
+; disabled nothing but the auxiliary device can put a byte there. Outside that
+; window this would steal keystrokes from int 09h, which is why mou_p2_off
+; below - the one PS/2 routine that runs on the UI task - reads nothing.
+; -----------------------------------------------------------------------------
+mou_p2rd:
+    push cx
+    push dx
+    mov dx, [ticks]
+.w:
+    in  al, MOU_P2CMD
+    test al, 0x01               ; OBF: is there anything to take?
+    jnz .got
+    mov cx, [ticks]
+    sub cx, dx
+    cmp cx, MOU_P2TMO
+    jb .w
+    stc
+    jmp short .out
+.got:
+    in  al, MOU_P2DAT
+    clc
+.out:
+    pop dx
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; mou_p2cw / mou_p2dw - a command byte to 64h / a data byte to 60h
+; ins:  AL = the byte
+; outs: CF = 1 if the controller never took it (all registers preserved)
+; -----------------------------------------------------------------------------
+mou_p2cw:
+    call mou_p2wr
+    jc .out
+    out MOU_P2CMD, al
+    clc
+.out:
+    ret
+
+mou_p2dw:
+    call mou_p2wr
+    jc .out
+    out MOU_P2DAT, al
+    clc
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; mou_p2wcmd - write AL as the 8042's COMMAND BYTE (0x60, then the value)
+; ins:  AL = the new command byte
+; outs: CF = 1 if either half stalled (all registers preserved)
+; -----------------------------------------------------------------------------
+mou_p2wcmd:
+    push ax
+    mov al, 0x60
+    call mou_p2cw
+    pop ax
+    jc .out
+    call mou_p2dw
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; mou_p2dev - send AL to the AUXILIARY DEVICE and collect its acknowledgement
+; ins:  AL = the device command
+; outs: CF = 1 if the write stalled or the device did not answer 0xFA.
+;       AL destroyed; every other register preserved.
+; -----------------------------------------------------------------------------
+mou_p2dev:
+    push ax
+    mov al, 0xD4                ; "the next data byte is for the aux device"
+    call mou_p2cw
+    pop ax
+    jc .out
+    call mou_p2dw
+    jc .out
+    call mou_p2rd
+    jc .out
+    cmp al, 0xFA                ; ACK, and nothing else will do: 0xFE is a
+    je .out                     ; resend and 0xFF is a device that is not there
+    stc
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; mou_p2flush - empty the 8042's output buffer
+; ins:  none
+; outs: none (all registers preserved)
+; -----------------------------------------------------------------------------
+mou_p2flush:
+    push ax
+    push cx
+    mov cx, 16                  ; BOUNDED: a controller wedged with OBF stuck
+.f:                             ; set must not hang the boot
+    in  al, MOU_P2CMD
+    test al, 0x01
+    jz .out
+    in  al, MOU_P2DAT
+    loop .f
+.out:
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; mou_p2_init - probe the auxiliary port and, if a mouse answers, commit to it
+;
+; The five steps of SPEC.md 9.9.1, each a QUESTION whose wrong answer abandons
+; the whole thing and puts the controller back exactly as it was found, and
+; then the commitment - which nothing reaches until a device has answered
+; 0xFA 0xAA to a reset edge this kernel made.
+;
+; ins:  none
+; outs: none (all registers preserved). [mou_p2] = 1 if the mouse is live and
+;       [mou_p2st] = how far the handshake got either way (SPEC.md 9.4.4).
+; -----------------------------------------------------------------------------
+mou_p2_init:
+    cmp byte [cpu_tier], CPU_8086
+    je .none                    ; an XT has no 8042 - and this is the whole of
+                                ; what it costs there (SPEC.md 9.9.2). NOTHING
+                                ; below has run, so nothing has been written
+    push ax
+    push bx
+    push si
+    push es
+
+    in  al, 0xA1                ; IRQ12 MASKED BEFORE ANYTHING IS ASKED. The
+    or  al, MOU_P2SL            ; machine's BIOS may have left the line armed
+    out 0xA1, al                ; with a handler of its own, and that handler
+                                ; reading 60h takes the replies below out from
+                                ; under this routine - which reads exactly like
+                                ; a controller that stopped answering. It stays
+                                ; masked to the last instruction, so nothing
+                                ; here is ever racing an interrupt
+
+    mov al, 0xAD                ; THE KEYBOARD INTERFACE OFF, and not for
+    call mou_p2cw               ; tidiness: the 8042 has ONE output buffer and
+    jc .quit                    ; int 09h is live, so a keystroke landing in
+                                ; the middle of this raises IRQ1, the BIOS
+                                ; reads 60h, and the byte it takes is OUR
+                                ; device's reply. The keystroke is delivered
+                                ; out of the keyboard's own buffer when 0xAE
+                                ; puts the interface back below
+    call mou_p2flush
+
+    mov byte [mou_p2st], 1      ; the command byte as this machine's BIOS left
+    mov al, 0x20                ; it, banked: every write below goes over this
+    call mou_p2cw               ; value and every failure path restores it
+    jc .quit
+    call mou_p2rd
+    jc .quit
+    and al, 0xEF                ; ...WITHOUT bit 4, which is 0xAD's own doing
+    mov [mou_p2cmd0], al        ; two lines up. Banking it set would make every
+                                ; path that restores this byte disable the
+                                ; keyboard - and mou_p2_off does that on the UI
+                                ; task, long after the 0xAE below has run
+
+    mov byte [mou_p2st], 2      ; IS THERE AN AUXILIARY PORT HERE AT ALL?
+    mov al, 0xA8                ; enable it...
+    call mou_p2cw
+    jc .fail
+    mov al, 0xA9                ; ...and TEST it. 0 is "no error"; 0xFF is "no
+    call mou_p2cw               ; auxiliary interface"; anything else names a
+    jc .fail                    ; stuck clock or data line; and a controller
+    call mou_p2rd               ; that never heard of the command answers
+    jc .fail                    ; nothing and times out. This is what makes
+    or  al, al                  ; every write below safe on a machine with no
+    jnz .fail                   ; aux port - it is a question, and only 0
+                                ; licenses a single one of them
+
+    mov byte [mou_p2st], 3
+    mov al, [mou_p2cmd0]
+    and al, 0xDD                ; bit 5 clear: run the aux clock. Bit 1 clear:
+    call mou_p2wcmd             ; IRQ12 stays OFF until the vector is ours
+    jc .fail
+
+    mov byte [mou_p2st], 4      ; reset the device...
+    mov al, 0xFF
+    call mou_p2dev
+    jc .fail
+    mov byte [mou_p2st], 5      ; ...and wait out its self-test, which the part
+    mov bx, MOU_P2BAT           ; is allowed half a second for. The SHORT wait
+.bat:                           ; retried, rather than a second timeout to size
+    call mou_p2rd
+    jnc .bdone
+    dec bx
+    jnz .bat
+    jmp short .fail
+.bdone:
+    cmp al, 0xAA                ; BAT passed?
+    jne .fail
+    mov byte [mou_p2st], 6
+    call mou_p2rd               ; the device ID: BANKED AND PUBLISHED, never
+    jc .fail                    ; tested - a wheel mouse sitting in its 3-byte
+    mov [mou_p2id], al          ; boot mode is exactly the mouse this decoder
+                                ; wants, and refusing it would buy nothing
+
+    ; --- a mouse answered: from here it is commitment, not probing -----------
+    ; THE VECTOR FIRST, and that ordering is not tidiness - it is the defect
+    ; this was found with. Arming IRQ12 in the command byte while int 74h still
+    ; points at the machine's own BIOS hands the very next byte - the 0xF4
+    ; acknowledgement - to a handler that reads 60h and drops it, and the enable
+    ; then times out with [mou_p2st] stuck at this step. It looks exactly like
+    ; a controller that stopped answering, on a machine where every earlier
+    ; step passed.
+    mov byte [mou_p2st], 7
+    xor ax, ax
+    mov es, ax
+    mov si, MOU_P2VEC
+    pushf
+    cli
+    mov ax, [es:si]
+    mov [mou_p2old], ax
+    mov ax, [es:si+2]
+    mov [mou_p2old+2], ax
+    mov word [es:si], mou_p2_isr
+    mov [es:si+2], cs
+    popf
+    mov byte [mou_p2st], 8      ; ...and 8 is what says the vector is OURS,
+                                ; which is the one thing mouse_unhook has to
+                                ; know and [mou_p2] cannot tell it: mou_p2_off
+                                ; clears that byte when this mouse loses the
+                                ; contest, and the vector is still owed back
+
+    mov al, [mou_p2cmd0]
+    and al, 0xDF                ; the aux clock on...
+    or  al, 0x02                ; ...and IRQ12 armed AT THE CONTROLLER, still
+    call mou_p2wcmd             ; masked at the 8259 and now pointing at us
+    jc .fail
+    mov al, 0xF4                ; start data reporting
+    call mou_p2dev
+    jc .fail
+    mov byte [mou_p2st], 9      ; live
+
+    call mou_p2flush            ; before 0xAE, so a keystroke arriving as the
+    mov al, 0xAE                ; interface comes back is not flushed away
+    call mou_p2cw
+    in  al, 0xA1                ; IRQ12 at the SLAVE...
+    and al, 0xEF                ; ...clearing MOU_P2SL
+    out 0xA1, al
+    in  al, 0x21                ; ...and IRQ2 at the master, the CASCADE -
+    and al, 0xFB                ; clearing MOU_P2CASC. Without it the slave's
+    out 0x21, al                ; line reaches nothing, and the symptom is a
+                                ; mouse that passed every step above and is
+                                ; then silent for the session
+    mov byte [mou_p2], 1
+    jmp short .quit
+
+.fail:                          ; put the controller back the way it was found
+    mov al, 0xA7                ; the auxiliary port off again...
+    call mou_p2cw
+    mov al, [mou_p2cmd0]        ; ...and its command byte exactly as the BIOS
+    call mou_p2wcmd             ; had it. IRQ12 is deliberately LEFT masked:
+                                ; nothing else in this kernel uses that line,
+                                ; the port above is now unclocked so nothing
+                                ; can drive it, and a probe that failed has no
+                                ; business handing the line back to a handler
+                                ; whose device it just power-cycled. It
+                                ; self-heals - int 19h re-enters mouse_init,
+                                ; which unmasks on the path that succeeds
+.quit:
+    mov al, 0xAE                ; the keyboard interface, ON EVERY PATH - a
+    call mou_p2cw               ; boot that leaves it disabled is a machine
+    pop es                      ; with no keyboard, which is worse than every
+    pop si                      ; failure this routine is guarding against
+    pop bx
+    pop ax
+.none:
+    ret
+
+; -----------------------------------------------------------------------------
+; mou_p2_off - retire the PS/2 mouse: a serial port won the contest
+;
+; The mirror of mou_lockon's IER = 0 (SPEC.md 9.9.4). The vector is deliberately
+; LEFT installed, for the reason a retired UART keeps its base: mouse_unhook
+; still owes int 74h its own back, and a vector pointing into KERNEL_SEG after
+; the handoff is a vector nobody owns.
+;
+; NOTHING HERE READS 60h. This is the one PS/2 routine that runs on the UI task
+; rather than inside mouse_init's 0xAD window, so the keyboard interface is
+; live and a read there would take a keystroke away from int 09h. Switching the
+; auxiliary port off at the controller is enough: an unclocked device cannot
+; report, so there is nothing to acknowledge and nothing to drain.
+;
+; ins:  none
+; outs: none (all registers preserved)
+; -----------------------------------------------------------------------------
+mou_p2_off:
+    cmp byte [mou_p2], 0
+    je .out
+    push ax
+    mov byte [mou_p2], 0
+    in  al, 0xA1                ; IRQ12 masked at the slave...
+    or  al, MOU_P2SL
+    out 0xA1, al
+    mov al, 0xA7                ; ...the auxiliary port switched off, so the
+    call mou_p2cw               ; device is not even clocked...
+    mov al, [mou_p2cmd0]        ; ...and the command byte back as the BIOS had
+    call mou_p2wcmd             ; it, IRQ12 bit and all
+    pop ax
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; mou_p2_isr - IRQ12, int 74h (SPEC.md 9.9.3)
+;
+; The 8042 has ONE output buffer for two devices, so the first question here is
+; whose byte this is: status bit 5 set means the auxiliary device's. A KEYBOARD
+; BYTE IS LEFT WHERE IT IS - int 09h owns it, and reading 60h here would make
+; it vanish, which is a keystroke lost with nothing to show for it.
+;
+; IRQ12 is on the SLAVE 8259, so the EOI at the bottom is two of them: the
+; slave for the line itself and the master for the cascade.
+; Runs with IF = 0 throughout; never sti (SPEC.md 7).
+; -----------------------------------------------------------------------------
+mou_p2_isr:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push ds
+    push es
+    mov ax, KERNEL_SEG
+    mov ds, ax
+    cld
+    in  al, MOU_P2CMD
+    test al, 0x01               ; anything in the buffer at all?
+    jz .eoi
+    test al, 0x20               ; ...and is it the AUXILIARY device's?
+    jz .eoi
+    in  al, MOU_P2DAT           ; ...and THIS read is what drops the request
+    call mou_p2_byte
+.eoi:
+    mov al, 0x20                ; the SLAVE first and then the master: the BIOS
+    out 0xA0, al                ; handles IRQ12 for nobody, and a cascaded line
+    out 0x20, al                ; owes both controllers an EOI
+    pop es
+    pop ds
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    iret
+
+; -----------------------------------------------------------------------------
+; mou_p2_byte - one byte from the auxiliary device
+;
+;   byte 0    YV XV YS XS  1 MB RB LB
+;   byte 1    X movement, 8 bits, sign in byte 0's XS
+;   byte 2    Y movement, likewise - AND POSITIVE IS UP
+;
+; in:  AL = the byte; ISR context, IF = 0
+; -----------------------------------------------------------------------------
+mou_p2_byte:
+    cmp byte [mou_seen], 0
+    je .take                    ; nothing has won yet
+    cmp byte [mou_port], MOU_P2ROW
+    jne .out                    ; a serial port won: this device is on its way
+                                ; to being retired and its bytes are nobody's.
+                                ; The same instruction mou_byte uses, asked of
+                                ; the other socket
+.take:
+    cmp byte [mou_p2ph], 1
+    je .b1
+    ja .b2
+    test al, 0x08               ; byte 0's bit 3 is ALWAYS set, and it is the
+    jz .out                     ; only sync this protocol offers
+    mov [mou_p2b0], al
+    mov byte [mou_p2ph], 1
+    ret
+.b1:
+    mov [mou_p2b1], al
+    mov byte [mou_p2ph], 2
+    ret
+
+.b2:
+    mov byte [mou_p2ph], 0
+    mov bl, al                  ; BL = the Y magnitude
+    mov dh, [mou_p2b0]          ; DH = byte 0, and it stays there to the end
+    test dh, 0xC0               ; either overflow bit: the deltas are a LIE, so
+    jnz .out                    ; the packet is dropped WHOLE rather than
+                                ; clamped. A dropped packet costs one report of
+                                ; motion; a believed overflow flag costs a
+                                ; pointer that jumps the width of the screen
+
+    cmp byte [mou_seen], 0      ; the FIRST packet settles it and is acted on -
+    jne .go                     ; there is no run threshold on this side.
+    mov byte [mou_port], MOU_P2ROW  ; [mou_need] exists because a Hayes result
+    mov byte [mou_line], MOU_P2LINE ; code is a well-formed Microsoft packet
+    mov byte [mou_seen], 1      ; (SPEC.md 9.5.1); the aux port carries ONE
+                                ; device and it answered a reset before its
+                                ; interrupt was ever armed (SPEC.md 9.9.4).
+                                ; MOU_P2LINE is not a master-8259 bit, so
+                                ; mou_lockon masks both serial lines and
+                                ; neither of this mouse's own
+.go:
+    mov al, [mou_p2b1]          ; --- dx: 8 bits, sign in byte 0's bit 4 ------
+    xor ah, ah
+    test dh, 0x10
+    jz .xp
+    dec ah                      ; AH = 0FFh. Sign-extended BY HAND: an 8086 has
+.xp:                            ; no movsx, and cbw would take the magnitude's
+    mov si, ax                  ; own top bit for the sign
+
+    mov al, bl                  ; --- dy, AND POSITIVE IS UP ON THIS WIRE -----
+    xor ah, ah
+    test dh, 0x20
+    jz .yp
+    dec ah
+.yp:
+    neg ax                      ; ...so the screen's dy is its negation, and
+    mov bx, ax                  ; this one line is the whole difference. Getting
+                                ; it wrong looks exactly like a working mouse
+
+    mov cl, dh
+    and cl, 0x03                ; bit 0 = left, bit 1 = right: already
+                                ; mouse_btn's own order, so the shared back end
+                                ; needs no translation. The middle button (bit
+                                ; 2) is read and dropped - SPEC.md 10's event
+                                ; set has no record for it
+    mov ax, si
+    jmp mou_apply
+.out:
+    ret
+%endif                          ; KERN_BIG - the PS/2 mouse (SPEC.md 9.9)
 
 ; =============================================================================
 ; The keyboard mouse (SPEC.md 9.6)
@@ -1954,14 +2535,6 @@ mou_byte:
                                 ; lowercase letter is the LEFT BUTTON. The
                                 ; packet that SETTLES the port is acted on, so
                                 ; a one-port machine loses nothing at all
-    mov byte [blk_act], 1       ; ...and a packet this port is settled on IS
-                                ; user input (SPEC.md 64.1). Here rather than
-                                ; at the top of the decode for exactly the
-                                ; reason above: a modem losing the contest
-                                ; must not keep the screen awake all night.
-                                ; One store, no register - the UI task spends
-                                ; it, so nothing in an ISR touches a video
-                                ; port or reads a clock
     mov dh, [bx+mou_b0]         ; stage the packet out of this port's slot: BX
     mov dl, [bx+mou_b1]         ; belongs to the decode from here on
     mov bl, al                  ; BL = Y low bits, decoded below
@@ -1975,10 +2548,10 @@ mou_byte:
     and ah, 0x3F
     or  al, ah
     cbw                         ; AX = dx, signed
-    add ax, [mouse_x]
-    mov [mou_nx], ax            ; STAGED, not stored: the clamp is 2-D on a
-                                ; machine with two displays (SPEC.md 39.15.4)
-                                ; and cannot answer about x until y is known
+    mov si, ax                  ; ...banked, because mou_apply below wants both
+                                ; deltas at once. SI is the ISR's to spend - it
+                                ; is pushed - and it is the one register the
+                                ; y decode does not need
 
     ; --- dy = sign-extended {Y7Y6 from b0, Y5..Y0 from b2}; positive = down --
     mov al, dh
@@ -1988,35 +2561,77 @@ mou_byte:
     and bl, 0x3F
     or  al, bl
     cbw                         ; AX = dy, signed
+    mov bx, ax
+
+    ; --- buttons: b0 bit 5 = left, bit 4 = right -----------------------------
+    ; Into mouse_btn's OWN two bits here rather than inside mou_apply, because
+    ; this is the whole of what THIS protocol has to say about them - and the
+    ; PS/2 packet already carries them in that order (SPEC.md 9.9.3), so the
+    ; shared back end never has to know which mouse it is serving.
+    xor cl, cl
+    test dh, 0x20
+    jz .nol
+    or  cl, 0x01
+.nol:
+    test dh, 0x10
+    jz .nor
+    or  cl, 0x02
+.nor:
+    mov ax, si
+    jmp mou_apply               ; ...which ends in the ret this needs
+.bout:
+    ret
+
+; -----------------------------------------------------------------------------
+; mou_apply - one decoded report, whatever hardware carried it (SPEC.md 9.9.3)
+;
+; From the moment a packet is a signed dx, a signed dy and two button bits,
+; NOTHING about it is protocol-specific - so both mice end here: the staging
+; through mou_nx, mou_clamp's 2-D answer (SPEC.md 39.15.4), the event rules
+; including the binding fall-through that makes a both-buttons packet queue the
+; LEFT event only (SPEC.md 9), [blk_act] (SPEC.md 64.1), [cur_mvt] (SPEC.md
+; 7.1.4.3) and SPEC.md 7's draw-or-defer decision.
+;
+; A second copy of this would be a second place for that fall-through to be got
+; wrong, and it would be got wrong.
+;
+; ins:  AX = dx signed, BX = dy signed (POSITIVE IS DOWN - the PS/2 decoder
+;       negates its own), CL = the buttons (bit 0 left, bit 1 right).
+;       ISR context, IF = 0; the caller has already settled the contest.
+; outs: none
+; -----------------------------------------------------------------------------
+mou_apply:
+    mov byte [blk_act], 1       ; a packet on a SETTLED port IS user input
+                                ; (SPEC.md 64.1), and only a settled one: both
+                                ; callers do the contest before they get here,
+                                ; so a modem losing it cannot keep the screen
+                                ; awake all night. One store, no register - the
+                                ; UI task spends it, so nothing in an ISR
+                                ; touches a video port or reads a clock
+    add ax, [mouse_x]
+    mov [mou_nx], ax            ; STAGED, not stored: the clamp is 2-D on a
+                                ; machine with two displays (SPEC.md 39.15.4)
+                                ; and cannot answer about x until y is known
+    mov ax, bx
     add ax, [mouse_y]
     mov bx, ax
     mov ax, [mou_nx]
-    call mou_clamp              ; ...and DX is untouched by it, which the
+    call mou_clamp              ; ...and CX is untouched by it, which the
     mov [mouse_x], ax           ; button decode below relies on
     mov [mouse_y], bx
 %ifdef CURFIX
-    mov cx, [ticks]             ; THE HAND IS MOVING (SPEC.md 7.1.4.3), which
-    mov [cur_mvt], cx           ; is what decides whether the deferred hide is
-                                ; worth keeping. CX is dead here - it was the
-                                ; shift count above and the ISR pushed it -
-                                ; and DX is not, which is why it is not DX.
-                                ; Gated with its reader, so a DEFAULT build is
-                                ; the pre-7.1.4.2 ISR too and not that one with
-                                ; a dead store in it - an A/B disk carrying
-                                ; half of what it is testing is not an A/B
+    mov ax, [ticks]             ; THE HAND IS MOVING (SPEC.md 7.1.4.3), which
+    mov [cur_mvt], ax           ; is what decides whether the deferred hide is
+                                ; worth keeping. AX is dead here - the clamped
+                                ; x is already stored - and CL is NOT: it is
+                                ; still the buttons. Gated with its reader, so
+                                ; a DEFAULT build is the pre-7.1.4.2 ISR too
+                                ; and not that one with a dead store in it - an
+                                ; A/B disk carrying half of what it is testing
+                                ; is not an A/B
 %endif
 
-    ; --- buttons: b0 bit 5 = left, bit 4 = right -----------------------------
-    mov al, dh                  ; ...still the staged b0: nothing between here
-    xor bl, bl                  ; and evq_push touches DX
-    test al, 0x20
-    jz .nol
-    or  bl, 0x01
-.nol:
-    test al, 0x10
-    jz .nor
-    or  bl, 0x02
-.nor:
+    mov bl, cl                  ; the buttons, in mouse_btn's own two bits
     mov bh, [mouse_btn]
     mov [mouse_btn], bl
     xor bh, bl                  ; changed bits
@@ -2069,15 +2684,15 @@ mou_byte:
     cmp ax, [cur_drawn_x]       ; button-only packet: nothing to redraw
     jne .redraw
     cmp bx, [cur_drawn_y]
-    je .bout
+    je .out
 .redraw:
     call cur_move               ; SPEC.md 7.1.2: erase-old and draw-new as one
     mov byte [cur_dirty], 0
-    jmp .bout
+    ret
 
 .dirty:
     mov byte [cur_dirty], 1     ; cursor_show catches up later
-.bout:
+.out:
     ret
 
 mou_eoi:
@@ -3508,6 +4123,7 @@ mou_dbg_blk:
     dw 0x4F4D                   ; 'MO' - the magic, dsk_dbg_blk's 0x4444 idiom
     dw mou_bases                ; -> the probed bases, 2 words, 0 = no UART
     dw mou_run                  ; -> the state span below
+mou_dbg_cur:
     dw mouse_x                  ; -> the CURSOR: mouse_x, mouse_y, mouse_btn.
                                 ; APPENDED, so every offset above is unmoved
                                 ; and an older reader is unaffected.
@@ -3530,12 +4146,33 @@ mou_dbg_blk:
                                 ; scripted test exists to exercise. The packet
                                 ; still does all the work; this only says where
                                 ; it landed
+mou_dbg_p2:
+    dw mou_p2                   ; -> the PS/2 mouse's 7-byte span (SPEC.md
+                                ; 9.4.4). APPENDED, and APPENDED MEANS LAST:
+                                ; the first draft of this put it in front of
+                                ; the word above, which moved the one thing in
+                                ; the block that a HOST tool reads by a
+                                ; hard-coded offset - tools/os88mouse.py's
+                                ; blk+6 - and turned every scripted click into
+                                ; a read of two unrelated bytes. The two %errors
+                                ; below are what stops that being found again
+                                ; by a harness that has quietly stopped working
+
+; --- ...and the WORD POSITIONS, which are as readable-by-offset as the span --
+%if mou_dbg_cur - mou_dbg_blk != 6
+  %error "mouse: SPEC.md 9.4.3 block - the cursor word moved (os88mouse.py)"
+%endif
+%if mou_dbg_p2 - mou_dbg_blk != 8
+  %error "mouse: SPEC.md 9.4.4 block - the PS/2 word is not the fifth"
+%endif
 
 mou_run     db 0,0,0,0          ; clean packets in a row on this port
 
 mou_port    db 0                ; the mouse's row, settled by [mou_need] clean
                                 ; packets and never moved again (SPEC.md 9.5).
-                                ; A row index (0, 2), not a COM number
+                                ; A row index (0, 2), not a COM number - or
+                                ; MOU_P2ROW = 4, which is no serial row at all
+                                ; and means the PS/2 mouse won (SPEC.md 9.9.4)
 mou_need    db 1,0,1,0          ; the run a port must manage to be believed:
                                 ; 1 where the probe found one port, MOU_LOCKN
                                 ; where it found two - and 1 again on the one
@@ -3582,6 +4219,34 @@ mou_lfired  db 0                ; the line CURRENTLY being serviced, stamped by
                                 ; interrupt, meaningless outside it, and so not
                                 ; state anyone off-machine should read
 
+; --- the PS/2 mouse, and the span SPEC.md 9.4.4 publishes --------------------
+mou_p2      db 0                ; a PS/2 mouse answered and is LIVE. Cleared
+                                ; again by mou_p2_off if a serial port wins
+mou_p2st    db 0                ; ...and how far mou_p2_init's handshake got,
+                                ; which is what separates "this machine has no
+                                ; auxiliary port" from "it has one with nothing
+                                ; plugged in": 0 the tier or the 8042 refused
+                                ; it outright, 2 no aux port, 4/5/6 the device
+                                ; did not answer its reset, 8 int 74h is ours,
+                                ; 9 live (SPEC.md 9.9.1). It is the STEP and
+                                ; not a flag: mou_p2_off clears [mou_p2] and
+                                ; leaves this alone, because the vector is
+                                ; still owed back
+mou_p2id    db 0                ; the device ID it answered the reset with - 0
+                                ; is a plain mouse. Banked and published, never
+                                ; tested: a wheel mouse in its 3-byte boot mode
+                                ; is exactly the mouse this decoder wants
+mou_p2ph    db 0                ; packet state: 0 idle, 1 got b0, 2 got b1
+mou_p2b0    db 0                ; byte 0: YV XV YS XS 1 MB RB LB
+mou_p2b1    db 0                ; byte 1: the X magnitude
+mou_p2cmd0  db 0                ; the 8042's command byte AS THE BIOS LEFT IT,
+                                ; which every failure path above puts back and
+                                ; which no reading of this source can supply
+; --- ...and here THAT span ends. Scratch below it ---------------------------
+%ifdef KERN_BIG                 ; ...and this one really is the code's, so it
+mou_p2old   dw 0, 0             ; goes with it: int 74h's old vector, restored
+%endif                          ; by mouse_unhook
+
 ; --- what SPEC.md 9.4.2 says the published block IS --------------------------
 ; A test package reads these by offset, off a floppy, on a machine with no
 ; debugger. Every one of them is a number some reader will print as a
@@ -3608,6 +4273,21 @@ mou_lfired  db 0                ; the line CURRENTLY being serviced, stamped by
 %endif
 %if MOUDBG(mou_line)   != 33
   %error "mouse: SPEC.md 9.4.2 block - mou_line moved"
+%endif
+
+; --- ...and what SPEC.md 9.4.4 says the PS/2 span is ------------------------
+; Seven bytes, read by the same reader through the fifth word of the block
+; above, and asserted here for the identical reason: nothing in NASM notices a
+; member that moved, and the program that reads it is on a floppy.
+%define MOUP2(x) ((x) - mou_p2)
+%if MOUP2(mou_p2st) != 1 || MOUP2(mou_p2id)   != 2
+  %error "mouse: SPEC.md 9.4.4 block - mou_p2st/mou_p2id moved"
+%endif
+%if MOUP2(mou_p2ph) != 3 || MOUP2(mou_p2b0)   != 4
+  %error "mouse: SPEC.md 9.4.4 block - mou_p2ph/mou_p2b0 moved"
+%endif
+%if MOUP2(mou_p2b1) != 5 || MOUP2(mou_p2cmd0) != 6
+  %error "mouse: SPEC.md 9.4.4 block - mou_p2b1/mou_p2cmd0 moved"
 %endif
 
 section .bss

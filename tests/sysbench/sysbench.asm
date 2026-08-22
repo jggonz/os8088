@@ -1378,6 +1378,8 @@ sb_mouse:
     mov si, sb_s_h_mou
     call bl_sline
     mov si, sb_s_h_mou2
+    call bl_sline
+    mov si, sb_s_h_mou3
     call bl_sline   ; ...and NO bl_head: that heading names
                                     ; N/counts/us-per-op, and not one row here
                                     ; is a measurement
@@ -1389,6 +1391,10 @@ sb_mouse:
     mov [sb_mbase], ax              ; -> mou_bases, 2 words, 0 = no UART there
     mov ax, [es:bx+4]
     mov [sb_mstate], ax             ; -> the 34-byte state span
+    mov ax, [es:bx+8]               ; ...and the FIFTH word, which is the PS/2
+    mov [sb_p2state], ax            ; mouse's 7 bytes (SPEC.md 9.4.4). The
+                                    ; fourth is the cursor and is the HARNESS's
+                                    ; (SPEC.md 9.4.3) - nothing here reads it
 
     mov bx, [sb_mbase]              ; --- which ports exist at all ------------
     mov ax, [es:bx]
@@ -1438,17 +1444,46 @@ sb_mouse:
     call sb_mb
     mov si, sb_l_mpt
     mov al, 4                       ; mou_port: a ROW (0 or 2), not a COM number
+                                    ; - or 4, which is no serial port at all
+                                    ; and means the PS/2 mouse won (SPEC 9.9.4)
     call sb_mb
     mov si, sb_l_mln                ; mou_line: the 8259 bit the winning packets
     mov al, 33                      ; actually arrived on. Read it TOGETHER with
     call sb_mbx                     ; the row above - 10 with row 2, or 08 with
-                                    ; row 0, is a cross-wired card (SPEC 9.5.2.1)
+                                    ; row 0, is a cross-wired card (SPEC 9.5.2.1),
+                                    ; and FF is not a serial line at all
     mov si, sb_l_mrn0
     mov al, 0                       ; mou_run[0]: how far a LOSING port got
     call sb_mb
     mov si, sb_l_mrn1
     mov al, 2
     call sb_mb
+
+    ; --- and the OTHER SOCKET (SPEC.md 9.9 / 9.4.4) --------------------------
+    ; The step is the row that carries: a machine with no auxiliary port and a
+    ; machine with one and nothing plugged into it are 2 and 4, not one absent
+    ; mouse. On any 8088 this whole group is zeros and says so - kern_small
+    ; carries the state and not the code, so the block is the same shape here.
+    mov si, sb_l_p2st
+    mov bx, [sb_p2state]
+    mov al, [es:bx+1]               ; mou_p2st
+    xor ah, ah
+    call sb_num
+    mov si, sb_l_p2on
+    mov bx, [sb_p2state]
+    mov al, [es:bx]                 ; mou_p2 - 0 again once it LOST the contest
+    xor ah, ah
+    call sb_num
+    mov si, sb_l_p2id
+    mov bx, [sb_p2state]
+    mov al, [es:bx+2]               ; mou_p2id: 00 is a plain 3-byte mouse
+    xor ah, ah
+    call sb_hex
+    mov si, sb_l_p2cb
+    mov bx, [sb_p2state]
+    mov al, [es:bx+6]               ; mou_p2cmd0: what this machine's own BIOS
+    xor ah, ah                      ; had the 8042 set to, which is a fact no
+    call sb_hex                     ; reading of the source can supply
     jmp .out
 .nodbg:
     mov si, sb_s_mnone
@@ -5117,6 +5152,7 @@ sb_l_vdf:    db '     framebuffer (hex)', 0
 sb_l_vdead:  db '  dead zone, 100s of px', 0
 sb_s_h_mou:  db '-- the mouse: the port contest and the identify burst (SPEC.md 9.4.1) --', 0
 sb_s_h_mou2: db '   base and first byte are HEX. Identified reads 4D / 1 / stamp 0.', 0
+sb_s_h_mou3: db '   PS/2 step: 0 not an AT, 2 no aux port, 4-6 no answer, 9 live.', 0
 sb_s_mnone:  db '   this kernel publishes no mouse block (built before SPEC.md 9.4.2).', 0
 sb_l_mb0:    db '  COM1 base (0=absent)', 0
 sb_l_mb1:    db '  COM2 base (0=absent)', 0
@@ -5131,8 +5167,12 @@ sb_l_mnd1:   db '  packets needed COM2', 0
 sb_l_mhpt:   db '  poller stamp (0=nvr)', 0
 sb_l_mhps:   db '  poller state', 0
 sb_l_msn:    db '  mouse found', 0
-sb_l_mpt:    db '  winning row (0/2)', 0
-sb_l_mln:    db '  winning IRQ hex 10=4', 0
+sb_l_mpt:    db '  winning row 0/2/4=PS2', 0
+sb_l_mln:    db '  winning IRQ 10=4 FF=P2', 0
+sb_l_p2st:   db '  PS/2 step (9=live)', 0
+sb_l_p2on:   db '  PS/2 live now', 0
+sb_l_p2id:   db '  PS/2 device ID hex', 0
+sb_l_p2cb:   db '  8042 cmd byte hex', 0
 
 sb_s_h_fdd:  db '-- the floppies: is drive B really there? (SPEC.md 18.97) --', 0
 sb_s_h_fdd3: db '   stop 00 not run 01 TRK0 02 after seek 03 ABSENT 04 refused 05 ST0 ok.', 0
@@ -5478,6 +5518,10 @@ sb_rstr     equ os88_image_end + 176   ; word: ...and the stride it implies
 sb_rw       equ os88_image_end + 178   ; word: the working set being tried
 sb_rlast    equ os88_image_end + 180   ; word: the widest that stayed free
 sb_rfirst   equ os88_image_end + 182   ; word: ...and the first that missed
+sb_p2state  equ os88_image_end + 184   ; word: -> the PS/2 mouse's 7-byte span
+                                       ; (SPEC.md 9.4.4), the mouse block's
+                                       ; fifth word. In the gap at 184, which
+                                       ; the scalar map above leaves free
 sb_wseg     equ os88_image_end + 204   ; word: the write buffer's claim
 sb_wkb      equ os88_image_end + 206   ; word: ...and the KB it actually got
 sb_werr     equ os88_image_end + 208   ; word: the FERR_* a write refused with

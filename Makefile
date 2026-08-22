@@ -4674,6 +4674,17 @@ $(BUILD)/combo.img: $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) \
 #                               it - so it is the regression test for a bug
 #                               that took real hardware to find
 #   make test MOUSEPORT=com1irq3  the mirror image, for symmetry
+#   make test MOUSEPORT=ps2     NO SERIAL PORTS AT ALL, so the machine's only
+#                               pointing device is the PS/2 mouse the pc
+#                               machine has anyway (SPEC.md 9.9). This is the
+#                               positive test for the 8042 handshake: both
+#                               UART rows are rejected by the probe, so nothing
+#                               can win the serial contest and [mou_port] can
+#                               only settle on MOU_P2ROW. It is also the only
+#                               configuration here that says anything about
+#                               tools/mouse.py's other end - QEMU routes input
+#                               to one handler at a time, so with msmouse gone
+#                               there is exactly one thing it can reach
 #
 # `-serial` cannot set an IRQ, so these go through `-device isa-serial`, which
 # takes iobase= and irq= and is what makes a cross-wired card reproducible at
@@ -4690,6 +4701,8 @@ MOUSE := $(MOUSEQ) -device isa-serial,chardev=mq,iobase=0x3f8,irq=4 \
 else ifeq ($(MOUSEPORT),com1irq3)
 MOUSE := $(MOUSEQ) -device isa-serial,chardev=mq,iobase=0x2f8,irq=3 \
          -chardev msmouse,id=m0 -device isa-serial,chardev=m0,iobase=0x3f8,irq=3
+else ifeq ($(MOUSEPORT),ps2)
+MOUSE := -serial none
 else
 MOUSE := -chardev msmouse,id=m0 -serial chardev:m0
 endif
