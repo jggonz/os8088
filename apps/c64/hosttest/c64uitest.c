@@ -132,6 +132,12 @@ static int cov_hits;
 static int alive_calls, alive_after_destroy, win_destroyed;
 static jmp_buf alive_out;
 
+/* OSAPI_WM_CLOSE's two halves (SPEC.md 75.2), declared up here because plot()
+ * is what enforces the second: `closed` counts the calls and `close_drew`
+ * catches a package that draws AFTER asking to be closed. See os88_wm_close
+ * below for the argument. */
+static int closed, close_drew;
+
 static void need_lock(const char *who)
 {
     if (lock_depth != 1) {
@@ -184,14 +190,27 @@ static void plot(int x, int y, int v)
 {
     if (x < 0 || y < 0 || x >= GLW || y >= GLH)
         return;
-    if (!clip_armed && x >= cov_x1 && x <= cov_x2
-                    && y >= cov_y1 && y <= cov_y2) {
-        if (cov_hits < 3)
-            printf("c64uitest:   a pixel at (%d,%d) landed on the window "
-                   "COVERING us, with no clip armed (SPEC.md 11.3)\n", x, y);
-        cov_hits++;
-        return;                         /* the covering window's pixel stands */
+    if (x >= cov_x1 && x <= cov_x2 && y >= cov_y1 && y <= cov_y2) {
+        /* THE COVERING WINDOW'S PIXEL STANDS EITHER WAY, and that is the
+         * kernel: an ARMED clip region cuts the write in the kernel, and an
+         * unarmed one means the write reached the glass and is a DEFECT. The
+         * first version of this modelled only the second half - it let a
+         * covered write through whenever a clip happened to be armed - so a
+         * package that armed the clip and then drew outside the damage rect
+         * painted over its neighbour in the model and the audit below read
+         * those pixels as ours. Discard always; count only the illegal ones. */
+        if (!clip_armed) {
+            if (cov_hits < 3)
+                printf("c64uitest:   a pixel at (%d,%d) landed on the window "
+                       "COVERING us, with no clip armed (SPEC.md 11.3)\n",
+                       x, y);
+            cov_hits++;
+        }
+        return;
     }
+    if (closed)
+        close_drew = 1;                 /* 75.2: "call it and RETURN - do not
+                                         * draw afterwards" */
     glass[y][x] = (unsigned char)v;
 }
 
@@ -252,11 +271,15 @@ int os88_gfx_blit1(const void *bits, int stride, int x, int y, int w, int rows)
  * The refusals §5.5 names are modelled too, so nothing gates the package
  * against asking for one: dy == 0, |dy| >= the rect's height, an inverted or
  * empty rect, and x edges off a cell boundary. */
+static int scroll_dy;                   /* what the LAST scroll moved, so a
+                                         * row can assert the dy and not only
+                                         * the call count (9.8's 2x: k * 16) */
 int os88_gfx_scroll(int x1, int y1, int x2, int y2, int dy)
 {
     int x, y;
     need_lock("gfx_scroll");
-    n_scroll++;                         /* count the CALL, not the success:
+    n_scroll++;
+    scroll_dy = dy;                         /* count the CALL, not the success:
                                          * "one gfx_scroll per flush" is a
                                          * claim about what the flush asks
                                          * for (9.4) */
@@ -449,6 +472,25 @@ void os88_wm_destroy(void *win)
                                          * stays (LESSONS.md 6) */
     win_destroyed = 1;
 }
+/* os88_wm_close - OSAPI_WM_CLOSE (SPEC.md 75.2), the ONE door: the kernel's
+ * own close path, the same one the close box takes, so app_close_win repaints
+ * the dock strip and the tile goes. It is DEFERRED - it returns and the window
+ * dies on the next UI pass - and its contract is "call it and RETURN: do not
+ * draw afterwards, do not call it twice".
+ *
+ * BOTH HALVES ARE THE NEGATIVE CONTROL. `closed` counts, so a second call
+ * fails here rather than closing a slot that a new tenant may already own;
+ * and `close_drew` latches, so anything that draws after the call - which is
+ * what putting the close in the middle of os88_oncmd does, since os88_oncmd's
+ * tail kicks a wake that flushes - fails too. The lock may be held or not,
+ * so unlike wm_destroy this asserts nothing about it. */
+void os88_wm_close(void *win)
+{
+    if (closed++)
+        fail("os88_wm_close called twice - the second names a slot the "
+             "kernel may already have given to somebody else (75.2)");
+    close_drew = 0;
+}
 /* OSAPI_FULLSCREEN REPAINTS YOU WHOLE, SYNCHRONOUSLY, IN BOTH DIRECTIONS
  * (os88.h:604; kernel/wm.inc:4147 - wm_fullscreen calls wm_raise with AL = 1,
  * so W_PAINT runs NESTED inside this call). Modelling it as `return 0` is
@@ -456,11 +498,16 @@ void os88_wm_destroy(void *win)
  * Fullscreen, throwing away a shadow the kernel had just made true and
  * drawing the identical 25 bands again on the next wake. */
 static int fs_on;
+static int fs_w = 640, fs_h = 440;      /* the DESKTOP a fullscreen window
+                                         * fills, so a row can put the package
+                                         * on a 640x480 VGA or a 640x200 CGA
+                                         * and read 9.8's tier table off the
+                                         * geometry it computes */
 int  os88_fullscreen(void *win, int enter)
 {
     fs_on = enter;
-    geom_w = enter ? 640 : GW;
-    geom_h = enter ? 440 : GH;
+    geom_w = enter ? fs_w : GW;
+    geom_h = enter ? fs_h : GH;
     dmg_whole = 1;
     clip_armed = 1;                     /* wm_raise arms it for the nested
                                          * W_PAINT, as the kernel does */
@@ -530,7 +577,9 @@ int  os88_toast(const char *t, int ticks)
     strncpy(last_toast, t, sizeof(last_toast) - 1);
     return 0;
 }
-int  os88_cpu(void) { return OS88_CPU_8086; }
+static int h_cpu_tier = OS88_CPU_8086;   /* the target. A row sets it to say
+                                          * what a FASTER machine is told */
+int  os88_cpu(void) { return h_cpu_tier; }
 /* a VGA desktop: 640x480 with the dock at 440, so the window gets its whole
  * 245 and GH = 226 of content. The CGA case - a 200-line desktop that CANNOT
  * give C64_CONT_H - is driven as its own step below. */
@@ -701,7 +750,9 @@ char *os88_utoa(unsigned v, char *d) { sprintf(d, "%u", v); return d; }
 #define H_SCR_BASE 0xFFC0
 #define H_SCR_END  0x3A
 
-int c64_rd(unsigned a) { return ram[a & 0xFFFF]; }
+static long n_ram_rd;                   /* Edit > Copy's whole cost is this
+                                         * count: it draws nothing at all */
+int c64_rd(unsigned a) { n_ram_rd++; return ram[a & 0xFFFF]; }
 int c64_rd16(unsigned a) { return ram[a & 0xFFFF] | (ram[(a + 1) & 0xFFFF] << 8); }
 int c64_rom_rd(unsigned off) { return rom[off % 20480]; }
 /* EVERY SCRATCH ACCESS IS COUNTED, because the flush's cost is not only what
@@ -768,9 +819,17 @@ static void h_window(unsigned a)
     if (a > hi) { ram[H_SCR_BASE + 0x2E] = a & 0xFF; ram[H_SCR_BASE + 0x2F] = a >> 8; }
 }
 
+/* ...AND THE BYTES THE PASTE FEEDER TYPES, because the conversion is per BYTE
+ * and lives there now (C64-SPEC §7.7). $0277 has exactly one writer in this
+ * program - c64_paste_feed - so this counts the loop that converts, and
+ * cost_row prices it. */
+static long n_kbbuf;
+
 void c64_wr(unsigned a, int v)
 {
     a &= 0xFFFF;
+    if (a >= 0x0277 && a < 0x0277 + 10)
+        n_kbbuf++;
     if (a >= H_SCR_BASE && a < H_SCR_BASE + H_SCR_END)
         return;                             /* the scratch is not RAM (3.5) */
     ram[a] = (unsigned char)v;
@@ -782,8 +841,13 @@ void c64_dirty(unsigned a) { h_dirtybit(a & 0xFFFF); }
 
 void c64_zcopy_in(unsigned a, const void *src, unsigned n)
 { memmove(ram + (a & 0xFFFF), src, n); }
+/* ...AND EVERY BYTE OUT IS COUNTED, because Edit > Copy's whole cost is this
+ * call and the loop that walks what it brought back. c64_copy_screen is the
+ * only caller (C64-SPEC §7.7), so `bytes` IS the number of cells converted
+ * and cost_row prices the conversion from it. */
+static long n_zcopy_out, n_zcopy_bytes;
 void c64_zcopy_out(void *dst, unsigned a, unsigned n)
-{ memmove(dst, ram + (a & 0xFFFF), n); }
+{ n_zcopy_out++; n_zcopy_bytes += n; memmove(dst, ram + (a & 0xFFFF), n); }
 void c64_zzcopy_in(unsigned a, unsigned sseg, unsigned soff, unsigned n)
 { memmove(ram + (a & 0xFFFF), segbase(sseg) + soff, n); }
 void c64_zfill(unsigned a, int v, unsigned n)
@@ -881,8 +945,16 @@ void c64_x2init(void)
     }
 }
 
+static long n_x2_calls;                 /* ...and 9.8's 2x, which is the one
+                                         * thing in the flush that costs more
+                                         * than the compare it follows:
+                                         * C64BENCH_X2 is 20.19 ms for eight
+                                         * rows on tests/c64band, WHATEVER the
+                                         * span, because the doubler takes
+                                         * whole 40-byte rows */
 void c64_band_x2(unsigned char *dst, const unsigned char *src, int rows)
 {
+    n_x2_calls++;
     int r, c;
     for (r = 0; r < rows; r++) {
         for (c = 0; c < HB_STRIDE; c++) {
@@ -897,6 +969,39 @@ void c64_band_x2(unsigned char *dst, const unsigned char *src, int rows)
  * THE PROGRAM
  * ========================================================================*/
 #include "c64.c"
+
+/* c64_copy_row (c64mem.inc) - Edit > Copy's per-BYTE loop, in assembly on the
+ * target and transcribed here. It is the same three steps clipboard.c:41-100
+ * takes: the table index with the reverse-video bit masked off (charset.c:204),
+ * last_non_whitespace (:67), the trim (:81-85) and one '\n'. c64memtest.asm
+ * runs the REAL one on a real x86 with SS != DS; this models it. */
+static long n_cprow, n_cpcell;
+int c64_copy_row(unsigned dseg, unsigned doff, int n)
+{
+    unsigned char *d = segbase(dseg);
+    int i, last = 0, c;
+    n_cprow++;
+    n_cpcell += n;                      /* THE CONVERSION HAS ITS OWN COUNTER
+                                         * NOW. It used to be derived from the
+                                         * BYTES c64_zcopy_out moved, which was
+                                         * right only because c64_copy_screen
+                                         * was its one caller and moved one
+                                         * byte per converted cell. The mover
+                                         * is general - wave 4's bitmap rows
+                                         * and sprite fetches are exactly the
+                                         * shape that will use it - and a
+                                         * 320-byte pull would have been priced
+                                         * at 320 cells of conversion that does
+                                         * not exist. */
+    for (i = 0; i < n; i++) {
+        c = c64_sctab[c64_scrow[i] & 0x7F];
+        d[doff + i] = (unsigned char)c;
+        if (c != ' ')
+            last = i + 1;
+    }
+    d[doff + last] = '\n';
+    return last + 1;
+}
 
 /* c64cpu.inc's register file, which the C declares extern (4.1). It is
  * defined AFTER the include because the struct is c64.c's. */
@@ -1048,6 +1153,144 @@ int os88_snd_tone(int hz, int ticks, int prio)
     return 0;
 }
 
+/* ...AND THE CAPABILITY IS A SEPARATE QUESTION FROM THE GRANT (11.4). Every
+ * machine this OS boots has SND_CAP_TONE (kernel/snd.inc:804 ORs it in
+ * unconditionally), so the package's guard is unreachable on real hardware
+ * and reachable here: h_caps is what drives the row that shows the program
+ * NOT calling a slot whose capability the machine does not claim. */
+#define H_SND_CAP_TONE 0x01
+static int h_caps = H_SND_CAP_TONE;
+static int h_caps_asks;
+int os88_snd_caps(void)
+{
+    h_caps_asks++;
+    return h_caps;
+}
+
+/* ==========================================================================
+ * THE SYSTEM CLIPBOARD (SPEC.md 55), for Edit > Copy and Edit > Paste (7.7)
+ *
+ * One buffer for the whole machine, outliving the app that filled it - so the
+ * stub is one buffer too. Both directions can REFUSE, which is what makes the
+ * package's refusal paths reachable: clip_put answers -1 over CLIP_MAXKB or
+ * when the heap cannot fund it, and leaves the clipboard EMPTY rather than
+ * stale (kernel/clip.inc:84).
+ * ========================================================================*/
+#define H_CLIP_MAX (32 * 1024)
+static char h_clip[H_CLIP_MAX];
+static int h_clip_n = -1;               /* -1 = empty, as clip_size answers */
+static int h_clip_refuse;
+static int n_clip_put, n_clip_get;
+static long n_clip_put_bytes;           /* ...and what kernel/clip.inc:70-125
+                                         * actually moves, which is NOT free
+                                         * and happens under the caller's lock
+                                         * (C64-SPEC §7.7) */
+
+int os88_clip_put(const void *text, unsigned len)
+{
+    n_clip_put++;
+    n_clip_put_bytes += (long)len;
+    if (h_clip_refuse || len > H_CLIP_MAX) {
+        h_clip_n = -1;                  /* empty, not stale */
+        return -1;
+    }
+    if (len == 0) {
+        h_clip_n = -1;
+        return 0;
+    }
+    memcpy(h_clip, text, len);
+    h_clip_n = (int)len;
+    return 0;
+}
+
+/* THE ANSWER IS AX AND THE PACKAGE'S int IS 16 BITS, so the cast is the
+ * stub modelling the machine (LESSONS.md 7: a stub that does not model the
+ * real thing measures the wrong path). kernel/clip.inc:84 refuses only what
+ * is strictly ABOVE CLIP_MAXKB * 1024, so a clipboard of exactly 32,768 is
+ * legal and comes back to the package as 0x8000 - which its 16-bit int reads
+ * as -32,768. The host's int is 32 bits and cannot reproduce that on its own,
+ * so the one arithmetic the target does would be untestable without this. */
+int os88_clip_size(void) { return (int)(short)h_clip_n; }
+
+static long n_clip_get_bytes;           /* ...and what a Paste has to convert */
+
+/* The _seg forms (os88.h): the text lives in a HEAP CLAIM. They are what
+ * keeps 3,074 bytes of staging out of the package's bss, and the negative
+ * control is the claim's own CAPACITY - segbase()/segcap() model real claims,
+ * so a put or a get that runs off the end of a 2KB claim fails HERE instead of
+ * writing over the next claim on a real machine. A segment that is not live
+ * is a failure too: that is the use-after-free this whole scheme risks. */
+static unsigned char *seg_or_fail(unsigned seg, unsigned off, unsigned n,
+                                  const char *who)
+{
+    unsigned char *b = segbase(seg);
+    long cap = segcap(seg);
+    if (b == 0 || cap < 0) {
+        fail("a clipboard _seg call named a segment that is not a live claim");
+        return 0;
+    }
+    if ((long)off + (long)n > cap) {
+        printf("c64uitest:   %s(seg %04X, off %u, n %u) runs past the "
+               "claim's %ld bytes\n", who, seg, off, n, cap);
+        fail("a clipboard _seg call ran off the end of its claim");
+        return 0;
+    }
+    return b + off;
+}
+
+int os88_clip_put_seg(unsigned seg, unsigned off, unsigned len)
+{
+    unsigned char *p = seg_or_fail(seg, off, len, "clip_put_seg");
+    n_clip_put++;
+    n_clip_put_bytes += (long)len;
+    if (p == 0)
+        return -1;
+    if (h_clip_refuse || len > H_CLIP_MAX) {
+        h_clip_n = -1;                  /* empty, not stale */
+        return -1;
+    }
+    if (len == 0) {
+        h_clip_n = -1;
+        return 0;
+    }
+    memcpy(h_clip, p, len);
+    h_clip_n = (int)len;
+    return 0;
+}
+
+int os88_clip_get_seg(unsigned seg, unsigned off, unsigned cap)
+{
+    unsigned char *p;
+    unsigned n;
+    n_clip_get++;
+    if (h_clip_n <= 0)
+        return 0;
+    n = (unsigned)h_clip_n;
+    if (n > cap)
+        n = cap;
+    p = seg_or_fail(seg, off, n, "clip_get_seg");
+    if (p == 0)
+        return 0;
+    memcpy(p, h_clip, n);
+    n_clip_get_bytes += n;
+    return (int)(short)n;
+}
+
+int os88_clip_get(void *buf, unsigned cap)
+{
+    unsigned n;
+    n_clip_get++;
+    if (h_clip_n <= 0)
+        return 0;
+    n = (unsigned)h_clip_n;
+    if (n > cap)
+        n = cap;                        /* what FITS, which is why the package
+                                         * asks clip_size first (os88.h:787) */
+    memcpy(buf, h_clip, n);
+    n_clip_get_bytes += n;
+    return (int)(short)n;               /* CX, in the package's 16-bit int */
+}
+
 /* ==========================================================================
  * THE AUDIT: the glass shows what the shadow says it shows
  * ========================================================================*/
@@ -1167,6 +1410,19 @@ static void glass_moved_up(int k)
 static int b_blit, b_fill, b_scroll, b_frame, b_run, b_str, b_bandc, b_cells,
            b_span, b_sig;
 static long b_blit_bytes, b_run_cells, b_str_cells, b_scr_acc, b_scr_take;
+static long b_zc, b_zcb, b_psb, b_kb;
+
+/* THE OVERLAY BOUNDARY, WHICH THIS HARNESS COMPILES FLAT AND SO CANNOT COUNT.
+ * A shipped `ovl_*` is far-called both ways through crt0.asm's cc_ovthunk and
+ * every resident thing it calls goes back out through a shim, so one bridge
+ * crossing is PERFORMANCE.md's 46.7 us far call plus the 11 us near call the
+ * shim makes - C64COST_OVLCALL in c64scr.c. It is charged per row, from the
+ * STRUCTURE of the command, and the count is written down beside the row that
+ * charges it. Without this term the next ovl_* that loops gets priced at zero
+ * the way Edit > Copy's first draft was: 2,000 crossings reported as 1,000
+ * near calls. */
+static long n_ovlx, b_ovlx;
+static long b_cpb, b_cprow, b_cpcell, b_x2;
 
 static void cost_begin(void)
 {
@@ -1177,6 +1433,9 @@ static void cost_begin(void)
     b_blit_bytes = n_blit_bytes;
     b_run_cells = n_run_cells; b_str_cells = n_str_cells;
     b_scr_acc = n_scr_acc; b_scr_take = n_scr_take;
+    b_zc = n_zcopy_out; b_zcb = n_zcopy_bytes; b_psb = n_clip_get_bytes;
+    b_kb = n_kbbuf; b_ovlx = n_ovlx; b_cpb = n_clip_put_bytes;
+    b_cprow = n_cprow; b_cpcell = n_cpcell; b_x2 = n_x2_calls;
 }
 
 static void cost_row(const char *what)
@@ -1209,14 +1468,47 @@ static void cost_row(const char *what)
      * the one part of this table not taken on tests/c64band, because the
      * bench measures c64band.inc and these live in c64mem.inc. */
        + (long)(n_scr_acc - b_scr_acc) * C64COST_SCRACC
-       + (long)(n_scr_take - b_scr_take) * C64COST_TAKE;
+       + (long)(n_scr_take - b_scr_take) * C64COST_TAKE
+    /* ...AND THE TWO COMMANDS THAT TOUCH BYTES: Edit > Copy's matrix pull and
+     * its per-cell conversion, and Edit > Paste's per-byte one. These are the
+     * rows the wave-3 review found priced BELOW THE FLOOR - one near call for
+     * a loop that was making two far calls a cell - so they are charged here,
+     * in the one place, and the bridge term above is charged with them. */
+       + (long)(n_zcopy_out - b_zc) * C64COST_ZCALL
+       + (long)(n_zcopy_bytes - b_zcb) * C64COST_ZBYTE10 / 10
+       + (long)(n_cpcell - b_cpcell) * C64COST_CPCELL
+       + (long)(n_cprow - b_cprow) * C64COST_CPCALL
+       + (long)(n_x2_calls - b_x2) * C64BENCH_X2
+       + (long)(n_clip_get_bytes - b_psb) * C64COST_ZBYTE10 / 10
+       + (long)(n_kbbuf - b_kb) * C64COST_PSBYTE
+    /* ...AND THE ONE CALL IN A COMMAND THAT IS NOT THIS PACKAGE'S OWN CODE.
+     * os88_clip_put was charged ONE bridge crossing and nothing for its body,
+     * and its body is kernel/clip.inc:70-125: a clip_drop, a mem_claim and a
+     * `rep movsb` of every byte - 17 clocks a byte on the 8088's 8-bit bus,
+     * the same C64COST_ZBYTE10 the other movers are priced at, ~3.7 ms for
+     * Copy's 1,026. It runs inside the CALLER's gfx lock, so it is held-lock
+     * time like the rest of the row.
+     *
+     * THE mem_claim IS THE PART THIS CANNOT PRICE, and C64-SPEC §7.7 says so
+     * rather than leaving it out silently: clip_put reclaims whenever the
+     * rounded KB differs from the clipboard it already holds (clip.inc:96),
+     * so the FIRST Copy of a session always takes that path, and
+     * kernel/memory.inc:363 falls back to mem_compact and then mem_shed_one -
+     * whose own header prices a compaction at "a memcpy in tenths of a
+     * second". This package is precisely the one that fragments the arena: it
+     * holds a pinned 64KB and a pinned 20KB claim in the middle of it. The
+     * term is UNBOUNDED and is not modelled. */
+       + (long)(n_clip_put_bytes - b_cpb) * C64COST_ZBYTE10 / 10
+       + (long)(n_ovlx - b_ovlx) * C64COST_OVLCALL;
     printf("  %-32s %7.1f ms   %2d blit %2d fill %2d scroll  "
            "%3d cells in %2d compose call(s)  %3ld glyph cell(s)  "
-           "%2ld scratch\n",
+           "%2ld scratch  %4ld byte(s) converted, %ld bridge\n",
            what, us / 1000.0, n_blit - b_blit, n_fill - b_fill,
            n_scroll - b_scroll, n_band_cells - b_cells,
            n_band_calls - b_bandc, gcells,
-           (n_scr_acc - b_scr_acc) + (n_scr_take - b_scr_take));
+           (n_scr_acc - b_scr_acc) + (n_scr_take - b_scr_take),
+           (n_cpcell - b_cpcell) + (n_kbbuf - b_kb),
+           n_ovlx - b_ovlx);
 }
 
 /* ==========================================================================
@@ -1296,6 +1588,59 @@ static void do_cmd(int item, int menu, void *w)
 { os88_gfx_lock(); os88_oncmd(item, menu, w); os88_gfx_unlock(); }
 static void do_about(void *w)
 { os88_gfx_lock(); os88_about(w); os88_gfx_unlock(); }
+
+/* do_edit - EDIT > COPY AND EDIT > PASTE, DRIVEN THE WAY THE PRODUCT DRIVES
+ * THEM. Neither command does its own work any more: os88_oncmd is dispatched
+ * under the DESKTOP's gfx lock, and neither body is bounded by a count that
+ * can be stated there - Copy is ~103 ms of conversion and Paste is a 2KB heap
+ * claim, and both reach kernel/clip.inc's mem_claim, which may compact an
+ * arena holding this app's pinned 64KB and 20KB. So the command LATCHES and
+ * the top of the next wake runs c64_clip_service with no lock held.
+ *
+ * THE FIRST HALF OF THIS FUNCTION IS THE NEGATIVE CONTROL and it is the whole
+ * reason the helper exists rather than two lines at each call site: a command
+ * that goes back to doing the work itself moves the clipboard counters while
+ * lock_depth is 1, and fails HERE. The service is then called directly rather
+ * than through os88_onwake, so the rows below price the clipboard work and not
+ * a slice that would have run in the same wake. */
+/* do_reset - File > Reset machine CPU and Power cycle machine, driven the way
+ * the product drives them. Same shape and same reason as do_edit: the command
+ * LATCHES because the power cycle's RAM fill is 64KB - about a quarter of a
+ * second on the target - and os88_oncmd is dispatched under the desktop's gfx
+ * lock. The first half is the negative control: a command that goes back to
+ * filling RAM itself moves the machine's state while lock_depth is 1. */
+static void do_reset(int item, void *w)
+{
+    int st0 = c64_state, req0 = c64_reset_req;
+    do_cmd(item, C64_M_FILE, w);
+    if (c64_state != st0 || c64_reset_req == req0)
+        fail("File > Reset ran the reset from inside os88_oncmd, which the "
+             "kernel dispatches UNDER the gfx lock - a 64KB RAM fill there is "
+             "the whole desktop stopped (LESSONS.md 6)");
+    if (lock_depth != 0)
+        fail("do_reset: the command left the lock held");
+    c64_reset_service();                /* what the top of the next wake does */
+    if (lock_depth != 0)
+        fail("c64_reset_service took the gfx lock - it is called from the "
+             "wake and holds none (SPEC.md 74.1)");
+}
+
+static void do_edit(int item, void *w)
+{
+    int p0 = n_clip_put, g0 = n_clip_get, c0 = claims_live;
+    do_cmd(item, C64_M_EDIT, w);
+    if (n_clip_put != p0 || n_clip_get != g0 || claims_live != c0)
+        fail("an Edit command touched the clipboard or the heap from inside "
+             "os88_oncmd, which the kernel dispatches UNDER the gfx lock - "
+             "that is the whole desktop stopped for an unbounded operation "
+             "(LESSONS.md 6, C64-SPEC 7.7)");
+    if (lock_depth != 0)
+        fail("do_edit: the command left the lock held");
+    c64_clip_service(c64_mbase);        /* what the top of the next wake does */
+    if (lock_depth != 0)
+        fail("c64_clip_service took the gfx lock - it is called from the wake "
+             "and holds none (SPEC.md 74.1)");
+}
 
 /* --- SMART ATTACH, driven the way the product is (11.3) -------------------
  * os88_onfile refuses by SIZE and then calls ovl_load_prg, which claims
@@ -1434,6 +1779,41 @@ static int no_rom_main(void)
              "picks a black item and nothing happens and nothing is said "
              "(SPEC.md 47)");
 
+    /* ...AND SO ARE BOTH EDIT ITEMS, for two different reasons and the same
+     * rule. PASTE would queue bytes nothing will ever type. COPY would hand
+     * the SYSTEM clipboard 1,025 characters made out of c64_ram_pattern's
+     * factory fill - and the clipboard is kernel-owned and outlives this app
+     * (SPEC.md 55.3), so a user who mis-copied a disk would lose whatever
+     * they had copied somewhere else in exchange for a screen they cannot
+     * see. VICE's Copy always copies what is displayed; here there is
+     * nothing displayed. */
+    if (c64_edit_items[C64_I_COPY][0] != OS88_MENU_DIS)
+        fail("Edit > Copy is LIVE on a disk with no C64.ROM - it would "
+             "replace the system clipboard with the factory RAM pattern");
+    if (c64_edit_items[C64_I_PASTE][0] != OS88_MENU_DIS)
+        fail("Edit > Paste is LIVE on a disk with no C64.ROM - nothing ever "
+             "drains the queue in this state (SPEC.md 47)");
+    /* THE NEGATIVE CONTROL, and it is the one that matters: drive the CHORDS
+     * that os88_onkey dispatches itself and show that neither reaches the
+     * command. Without the guard Alt+Delete destroys the clipboard on a disk
+     * whose machine never started. */
+    {
+        int put0 = n_clip_put;
+        h_clip_n = 4;
+        memcpy(h_clip, "keep", 4);
+        c64_paste_n = 0;
+        os88_gfx_lock(); os88_onkey(0, 0xA3, win); os88_gfx_unlock();
+        os88_gfx_lock(); os88_onkey(0, 0xA2, win); os88_gfx_unlock();
+        if (n_clip_put != put0)
+            fail("Alt+Delete wrote the system clipboard on a ROM-less "
+                 "machine - the chord walked round the greying");
+        if (c64_paste_n != 0)
+            fail("Alt+Insert queued a paste on a ROM-less machine");
+        if (h_clip_n != 4 || memcmp(h_clip, "keep", 4) != 0)
+            fail("the system clipboard did not survive a ROM-less C64");
+        h_clip_n = -1;
+    }
+
     /* ...AND A PARTIAL EXPOSE OF IT IS REPAIRED. The notice has no shadow and
      * no per-row force records - the branch that draws it returns before the
      * band machinery - so the gate above has to be answered by the expose
@@ -1491,6 +1871,20 @@ int main(int argc, char **argv)
     if (!h_key_first_in_main)
         fail("the key-state map was armed from somewhere other than "
              "os88_main (7.2's rule 1)");
+
+    /* ...AND THE TWO CONVERSION TABLES ARE **NOT** BUILT YET, which is the
+     * frequency split's negative control. The code that fills them runs
+     * exactly once a launch, so it is ovl_conv_init's and lives in C64.OVL
+     * (SPEC.md 73.14); the .OVL cannot be resolved from os88_main at all
+     * (LESSONS.md 13), so the first WAKE is where it happens. If this ever
+     * passes here again, ~700 bytes of launch-only code has come back into
+     * the resident image beside the loops that index the tables a thousand
+     * times a Copy. */
+    if (c64_conv_ok)
+        fail("the PETSCII conversion tables were built from os88_main - "
+             "that code runs ONCE a launch and belongs in the overlay, and "
+             "the .OVL cannot be resolved from os88_main anyway "
+             "(SPEC.md 73.14, LESSONS.md 13)");
 
     /* ...and the KERNAL's own first screen. The scripted core writes it on
      * its first slice, which is what a real one does: wave 2 has no
@@ -1867,8 +2261,93 @@ int main(int argc, char **argv)
         fail("a status DELTA erased the row - only a full redraw may fill");
     if (n_blit - b_blit != 1)
         fail("a status delta was not exactly ONE band");
+
+    /* --- A SHORT MESSAGE MUST NOT ERASE THE WIDGETS BESIDE IT (§10.1) ---
+     * The row is 42 cells and the joystick widget starts at cell 25, so a
+     * message of 25 cells or fewer never reaches it - and the fill has to
+     * stop where the message does. This is a wave-3 defect before it is a
+     * saving: c64kbd.c raises `ScrollLock for joystick` FROM JOYSTICK USE, so
+     * the first deflection of the stick blanked the two indicators that
+     * report the stick, and the permanent JAM line (22 cells) blanked them
+     * for the rest of the session. */
+    {
+        int x3, y3, litj, litl;
+
+        c64_msg[0] = 0;
+        c64_st_ok = 0;
+        c64_dirty_any = 1;
+        flush_now();                        /* the whole row, widgets and all */
+        litj = 0;
+        for (y3 = 0; y3 < C64_STATH; y3++)
+            for (x3 = C64_ST_JOYX; x3 < C64_ST_DRVX; x3++)
+                if (glass[c64_gsty + y3][c64_gox + x3] == 1)
+                    litj++;
+        if (litj == 0)
+            fail("the joystick widget is not on the glass to begin with");
+
+        cost_begin();
+        c64_say("ScrollLock for joystick");  /* 23 cells: SHORT */
+        flush_now();
+        cost_row("a short message going up");
+        litl = 0;
+        for (y3 = 0; y3 < C64_STATH; y3++)
+            for (x3 = C64_ST_JOYX; x3 < C64_ST_DRVX; x3++)
+                if (glass[c64_gsty + y3][c64_gox + x3] == 1)
+                    litl++;
+        if (litl != litj)
+            fail("a SHORT status message erased the joystick widget - the "
+                 "message occupies at most 25 of the row's 42 cells and the "
+                 "widget starts at cell 25, so the fill must stop there. "
+                 "Wave 3 raises this very message FROM JOYSTICK USE, so the "
+                 "first deflection of the stick blanked the two indicators "
+                 "that report it (§10.1)");
+        if (n_run - b_run != 1)
+            fail("a short message going up drew something besides the "
+                 "message - the widgets right of it were already there");
+
+        /* ...AND IT COMES DOWN FOR THE PRICE OF THE TWO SPEED FIELDS, not a
+         * 37-cell rebuild of a row where 13 of the cells never changed. */
+        the_ticks += 120;
+        cost_begin();
+        flush_now();
+        cost_row("...and coming down again");
+        if (n_run_cells - b_run_cells > 24)
+            fail("a short message coming down rebuilt the whole row - only "
+                 "the cells it was standing on are stale");
+
+        /* THE NEGATIVE CONTROL: a LONG message still owns the whole field
+         * area, because there is nowhere else for it to go - and the flush
+         * after it comes down rebuilds the widgets it blanked. */
+        cost_begin();
+        c64_say("The clipboard refused to be read.");   /* 33 cells: LONG */
+        flush_now();
+        cost_row("a long message going up");
+        litl = 0;
+        for (y3 = 0; y3 < C64_STATH; y3++)
+            for (x3 = C64_ST_JOYX; x3 < C64_ST_DRVX; x3++)
+                if (glass[c64_gsty + y3][c64_gox + x3] == 1)
+                    litl++;
+        if (litl == litj)
+            fail("a 33-cell message did NOT take the widget's cells - then "
+                 "the short-message row above is not measuring anything");
+        the_ticks += 120;
+        flush_now();
+        litl = 0;
+        for (y3 = 0; y3 < C64_STATH; y3++)
+            for (x3 = C64_ST_JOYX; x3 < C64_ST_DRVX; x3++)
+                if (glass[c64_gsty + y3][c64_gox + x3] == 1)
+                    litl++;
+        if (litl != litj)
+            fail("the widgets a LONG message blanked did not come back when "
+                 "it expired");
+        c64_msg[0] = 0;
+        c64_st_ok = 0;
+        c64_dirty_any = 1;
+        flush_now();
+    }
+
     /* ...and a message REPLACING a message is the same field with different
-     * text: it must still be drawn (c64_say clears c64_st_ok for it). */
+     * text: it must still be drawn (c64_say clears c64_st_lok for it). */
     c64_say("Warp mode on.");
     flush_now();
     if (strcmp(last_toast, "Warp mode on.") != 0)
@@ -2193,6 +2672,162 @@ int main(int argc, char **argv)
     flush_now();
     if (n_blit - b_blit || n_band_calls - b_bandc)
         fail("the wake after LEAVING fullscreen redrew the screen again");
+
+    /* --- 9.8'S TIER TABLE: 2x, ON THE TIERS THAT CAN PAY FOR IT --------
+     * The rows above ran on the TARGET (h_cpu_tier is CPU_8086 by default and
+     * that is deliberate), where the table says 1:1 centred and the assertions
+     * above are what 1:1 looks like. This is the other half of the same table,
+     * and it is checked by reading the GEOMETRY the package computes rather
+     * than by trusting a flag: c64_scw and c64_sch are the glass pixels per
+     * C64 cell, and every cell<->pixel conversion in the package divides by
+     * them.
+     *
+     * THE FRAME SHADOW STAYS 320x200 THROUGHOUT. The doubling is at blit time
+     * and nowhere else, which is why none of the compare, signature or span
+     * rows above need a second version. */
+    h_cpu_tier = OS88_CPU_386;
+    c64_tier_init();
+    fs_w = 640; fs_h = 480;                 /* a VGA desktop */
+    memset(glass, 0x55, sizeof(glass));
+    cost_begin();
+    do_cmd(C64_I_FULLSCR, C64_M_PREF, win);
+    cost_row("entering fullscreen at 2x on VGA");
+    if (!fs_on)
+        fail("Preferences > Fullscreen did not enter fullscreen at 2x");
+    if (c64_scw != 16 || c64_sch != 16)
+        fail("a 640x480 fullscreen box did not magnify - 9.8's VGA row is "
+             "2x, 640x400 centred");
+    if (c64_gnrows != C64_ROWS)
+        fail("640x400 does not hold all 25 C64 rows at 2x");
+    if (c64_gsx != GX)
+        fail("the 2x picture is not flush with a content box it fills "
+             "exactly - the 1:1 border floor was applied at 2x and slid it "
+             "right, clipping the last column");
+    {
+        int x, y, lit = 0, unpainted = 0;
+        for (y = 0; y < 400; y++)
+            for (x = 0; x < 640; x++) {
+                if (glass[c64_gsy + y][GX + x] == 0x55)
+                    unpainted++;
+                else if (glass[c64_gsy + y][GX + x])
+                    lit++;
+            }
+        if (unpainted)
+            fail("the 2x picture left pixels of its own 640x400 unpainted");
+        if (lit == 0)
+            fail("the 2x picture is entirely dark - the doubled band never "
+                 "reached the glass");
+        /* AND IT IS REALLY DOUBLED, not stretched by the blit: each source
+         * pixel row appears TWICE and each source pixel column twice, so
+         * every 2x2 block of the magnified picture is uniform. A blit that
+         * read the 40-byte band at the wrong stride, or c64_band_x2 called
+         * with the wrong row count, breaks exactly this. */
+        for (y = 0; y < 400; y += 2)
+            for (x = 0; x < 640; x += 2)
+                if (glass[c64_gsy + y][GX + x] != glass[c64_gsy + y][GX + x + 1]
+                 || glass[c64_gsy + y][GX + x] != glass[c64_gsy + y + 1][GX + x]
+                 || glass[c64_gsy + y][GX + x]
+                        != glass[c64_gsy + y + 1][GX + x + 1]) {
+                    fail("the 2x picture is not pixel-doubled: a 2x2 block of "
+                         "the glass is not uniform");
+                    y = 400; x = 640;
+                }
+    }
+    cost_begin();
+    flush_now();
+    cost_row("the wake after entering fullscreen at 2x");
+    if (n_blit - b_blit || n_fill - b_fill || n_band_calls - b_bandc)
+        fail("the wake after OSAPI_FULLSCREEN at 2x redrew a screen the "
+             "kernel had already repainted");
+
+    /* ...AND A SCROLL STILL SCROLLS, at k * 16 rather than k * 8. The
+     * alternative the plan allowed was falling back to bands, which at 2x is
+     * 25 doubled rows - half a second - for what one gfx_scroll does. */
+    for (i = 0; i < C64_ROWS; i++)
+        for (k = 0; k < 40; k++)
+            c64_wr(0x0400 + i * 40 + k, (unsigned char)(1 + ((i * 3 + k) % 26)));
+    flush_now();
+    cost_begin();
+    memmove(ram + 0x0400, ram + 0x0400 + 40 * 3, 22 * 40);
+    for (k = 0; k < 3 * 40; k++)
+        ram[0x0400 + 22 * 40 + k] = 32;
+    for (i = 0x0400; i < 0x0400 + 1000; i++)
+        c64_dirty((unsigned)i);
+    for (i = 0; i < C64_ROWS; i++)
+        c64_rowd[i] = 1;
+    c64_dirty_any = 1;
+    flush_now();
+    cost_row("a k = 3 shift at 2x");
+    if (n_scroll - b_scroll != 1)
+        fail("a shift at 2x was not ONE gfx_scroll - the scroll path is in "
+             "GLASS pixels and k * 16 is a legal dy");
+    if (scroll_dy != 3 * 16)
+        fail("a k = 3 shift at 2x did not move the glass by 48 pixels");
+
+    /* --- CGA: 640x200, so 2x HORIZONTAL and 1x vertical (9.8's CGA row).
+     * A CGA pixel is already 2:1, so doubling X alone is what makes the
+     * picture the right SHAPE there - it is not half a job. */
+    do_cmd(C64_I_FULLSCR, C64_M_PREF, win); /* out... */
+    fs_w = 640; fs_h = 200;
+    memset(glass, 0x55, sizeof(glass));
+    do_cmd(C64_I_FULLSCR, C64_M_PREF, win); /* ...and in on a CGA desktop */
+    if (c64_scw != 16)
+        fail("a 640x200 fullscreen box did not double HORIZONTALLY - 640 "
+             "pixels hold the C64's 40 columns at 16 each exactly");
+    if (c64_sch != 16 - 8)
+        fail("a 640x200 fullscreen box doubled VERTICALLY - 400 rows do not "
+             "fit in 200 and the picture would be half off the glass");
+    if (c64_gnrows >= C64_ROWS || c64_gnrows < 20)
+        fail("the CGA 2x row does not show most of the screen above its "
+             "status row (9.1's standing clamp)");
+    {
+        int x, y, bad = 0;
+        for (y = 0; y < c64_gnrows * 8; y++)
+            for (x = 0; x < 640; x += 2)
+                if (glass[c64_gsy + y][GX + x] != glass[c64_gsy + y][GX + x + 1])
+                    bad++;
+        if (bad)
+            fail("the CGA 2x picture is not doubled in X");
+    }
+
+    /* --- THE NEGATIVE CONTROL, AND IT IS TWO. A tier that cannot pay stays
+     * at 1:1 - that is 9.8's CPU_8086 row and it is a FACT the code tests,
+     * not a guess about speed - and a kernel whose blit1 REFUSES comes down
+     * to 1:1 too, because 2x has no font fallback and a picture nobody can
+     * draw is the one outcome SPEC.md 47 exists to prevent. */
+    do_cmd(C64_I_FULLSCR, C64_M_PREF, win);
+    h_cpu_tier = OS88_CPU_8086;
+    c64_tier_init();
+    fs_w = 640; fs_h = 480;
+    do_cmd(C64_I_FULLSCR, C64_M_PREF, win);
+    if (c64_scw != 8 || c64_sch != 8)
+        fail("the CPU_8086 tier magnified - 9.8's table says 1:1 centred "
+             "there, and c64_band_x2 is 63 ms a screen ON TOP of the compose");
+    do_cmd(C64_I_FULLSCR, C64_M_PREF, win);
+
+    h_cpu_tier = OS88_CPU_386;
+    c64_tier_init();
+    blit_refuse = 1;
+    do_cmd(C64_I_FULLSCR, C64_M_PREF, win);
+    flush_now();
+    flush_now();
+    if (c64_scw != 8 || c64_sch != 8)
+        fail("blit1 refused at 2x and the package stayed at 2x - there is no "
+             "font fallback for a doubled band, so the picture never arrives");
+    blit_refuse = 0;
+    do_cmd(C64_I_FULLSCR, C64_M_PREF, win);
+    c64_no2x = 0;                           /* the latch is per SESSION on the
+                                             * target; the script clears it so
+                                             * the rows after this are not run
+                                             * against a package that has given
+                                             * up on 2x */
+    h_cpu_tier = OS88_CPU_8086;
+    c64_tier_init();
+    fs_w = 640; fs_h = 440;
+    c64_sh_inval();
+    dmg_whole = 1;
+    do_paint(win);
+    audit("after the 2x rows put the window back");
 
     /* --- A WINDOW COVERING US, AND THE CALLBACKS THAT DRAW (11.3) -------
      * The kernel arms the damage clip for W_PAINT and for nothing else, so
@@ -2946,6 +3581,72 @@ int main(int argc, char **argv)
         c64_state = C64_ST_RUN;
     }
 
+    /* --- THE SID'S HERTZ, AND THE NOTE A STOPPED MACHINE MUST NOT HOLD ----
+     * A 6581 at the PAL dot clock sounds Fn * 985248 / 2^24 Hz. The port used
+     * to round twice - into a 12-bit number and again on the way out - which
+     * near the bottom of the range is a whole hertz where a hertz is the
+     * unit, and the bottom of the range is exactly where the 20 Hz floor
+     * decides whether the note is played at all. */
+    {
+        int t0;
+        c64_state = C64_ST_RUN;
+        c64_pause = 0;
+        c64_abt = 0;
+        c64_msg[0] = 0;
+        c64_sid_said = 0;
+        h_tone_refuse = 0;
+        c64_io_wr(0xD400, 0xFF);            /* F = $FFFF, the top of the range */
+        c64_io_wr(0xD401, 0xFF);
+        c64_io_wr(0xD404, 0x11);            /* ...and the gate on */
+        os88_onwake(win);
+        if (h_tone_hz != 3848)
+            fail("F = $FFFF is 3,848 Hz (65535 * 985248 / 2^24 = 3848.6) and "
+                 "the port answered something else");
+        c64_io_wr(0xD400, 0x55);            /* F = $0155 = 341: 20.02 Hz, the
+                                             * first note ABOVE the floor */
+        c64_io_wr(0xD401, 0x01);
+        os88_onwake(win);
+        if (h_tone_hz != 20)
+            fail("F = $0155 is 20 Hz and must clear the 20 Hz floor - a "
+                 "second rounding answered 19 and the note was dropped");
+        c64_io_wr(0xD400, 0x54);            /* ...and one step below it */
+        os88_onwake(win);
+        if (h_tone_hz != 0)
+            fail("a note below the 20 Hz floor was played");
+
+        /* ...AND A STOPPED MACHINE IS QUIET. The tone is played with duration
+         * 0, which SPEC.md 34 holds until something takes it down, and the
+         * only thing that ever did was the guest closing the gate: Alt+P, a
+         * JAM, a reset and the About panel all left the last note sounding
+         * for ever. VICE suspends the sound at each of those points. */
+        c64_io_wr(0xD400, 0x00);
+        c64_io_wr(0xD401, 0x10);
+        os88_onwake(win);
+        if (h_tone_hz == 0)
+            fail("the fixture note never sounded, so the silence below "
+                 "proves nothing");
+        do_cmd(C64_I_PAUSE, C64_M_PREF, win);
+        if (h_tone_hz != 0)
+            fail("Alt+P left the last SID note sounding - a paused machine "
+                 "holds a tone with duration 0 for ever (11.4)");
+        t0 = h_tone_hz;
+        do_cmd(C64_I_PAUSE, C64_M_PREF, win);   /* ...and out again */
+        os88_onwake(win);
+        if (h_tone_hz == 0)
+            fail("resuming did not put the machine's CURRENT note back - the "
+                 "stop must re-arm c64_sid_dirty, not remember the note");
+        (void)t0;
+        /* ...and the JAM path, which is the same fact with no way back */
+        c64_jam();
+        if (h_tone_hz != 0)
+            fail("a JAM left the last SID note sounding - the 6510 is dead "
+                 "and nothing will ever close the gate");
+        c64_state = C64_ST_RUN;
+        c64_pause = 0;
+        c64_msg[0] = 0;
+        c64_menu_state();
+    }
+
     /* --- A REFUSED SPEAKER GRANT IS NOT PERMANENT (11.4, SPEC.md 34.3) ---
      * os88_snd_tone answers -1 when another instance holds the grant. The
      * driver cleared the latch BEFORE the call and threw all three returns
@@ -3116,6 +3817,31 @@ int main(int argc, char **argv)
                  "not (SPEC.md 47)");
         memset(h_keydown, 0, sizeof(h_keydown));
 
+        /* ...AND EDIT > PASTE IS GREYED ON A JAM WHILE EDIT > COPY IS NOT.
+         * c64_paste_feed runs only from the C64_ST_RUN arm of os88_onwake and
+         * c64_wants_wake answers 0 here, so a paste on a jammed machine is
+         * bytes queued in silence that NOTHING will ever type - for the rest
+         * of the session. Copy stays live because the frozen screen is real
+         * and VICE's Copy copies what is displayed. */
+        if (c64_edit_items[C64_I_PASTE][0] != OS88_MENU_DIS)
+            fail("Edit > Paste stayed LIVE on a JAMMED machine - the queue is "
+                 "drained only from the C64_ST_RUN arm of os88_onwake, so it "
+                 "is a silent no-op (SPEC.md 47)");
+        if (c64_edit_items[C64_I_COPY][0] == OS88_MENU_DIS)
+            fail("Edit > Copy was greyed on a JAM - the frozen screen is real "
+                 "and VICE copies what is displayed");
+        /* ...and the CHORD does not walk round it either (§7.5's Alt+Insert
+         * is dispatched by os88_onkey where the BIOS passes it). */
+        c64_paste_n = 0;
+        h_clip_n = 8;
+        memcpy(h_clip, "abcdefgh", 8);
+        os88_gfx_lock(); os88_onkey(0, 0xA2, win); os88_gfx_unlock();
+        if (c64_paste_n != 0)
+            fail("Alt+Insert queued a paste into a JAMMED machine while the "
+                 "item was GREYED");
+        h_clip_n = -1;
+        c64_msg[0] = 0;
+
         /* ...AND THE PRODUCT'S OWN WAY OUT OF A JAM IS THE ONE THAT HAS TO
          * UN-GREY IT. This row used to set c64_state itself and then call
          * c64_menu_state() by hand, so it modelled the fix rather than the
@@ -3125,7 +3851,7 @@ int main(int argc, char **argv)
          * later only when some unrelated latch happened to call
          * c64_menu_state. A greying whose fact is off the glass is exactly
          * what SPEC.md 47 forbids. */
-        do_cmd(C64_I_RESETCPU, C64_M_FILE, win);
+        do_reset(C64_I_RESETCPU, win);
         if (c64_state != C64_ST_RUN)
             fail("File > Reset machine CPU did not clear the JAM");
         if (c64_pref_items[C64_I_ADVANCE][0] == OS88_MENU_DIS)
@@ -3237,49 +3963,799 @@ int main(int argc, char **argv)
     do_paint(win);
     audit("after the wave-2 clock and keyboard checks");
 
-    /* --- File > Exit emulator: the lock contract, and spawn's 0 / -1 ----
-     * os88_oncmd is dispatched UNDER the gfx lock, so ovl_cmd must not take
-     * it - the stubs above make that an immediate exit rather than a hang -
-     * and os88_task_spawn answers 0 for success, -1 for a refusal that is
-     * NORMAL and transient. Both were wrong and both passed the first
-     * version of this harness. */
-    spawn_refuses = 1;
-    do_cmd(C64_I_EXIT, C64_M_FILE, win);
-    if (spawned != 0)
-        fail("a refused task_spawn still counted as a spawn");
-    if (c64_state == C64_ST_DEAD)
-        fail("a REFUSED task_spawn latched C64_ST_DEAD - the window is not "
-             "being closed by anybody and the machine is frozen");
-    spawn_refuses = 0;
-    do_cmd(C64_I_EXIT, C64_M_FILE, win);
-    if (spawned != 1)
-        fail("Exit emulator did not spawn the closer");
-    if (c64_state != C64_ST_DEAD)
-        fail("a SUCCESSFUL task_spawn left the machine running into a window "
-             "the worker is destroying");
+    /* ======================================================================
+     * WAVE 3 - EDIT > COPY AND EDIT > PASTE (C64-SPEC §7.7, §11.1)
+     * ==================================================================== */
+    {
+        int i3, j3, n3, fed;
+        unsigned char h_fed[64];
+        const char *ln;
 
-    /* ...AND THE WORKER IT SPAWNED MUST CALL os88_task_alive(). That call is
-     * what closes the package: the kernel tears the instance down inside it,
-     * freeing the task, the instance, the region and both claims (os88.h:622,
-     * apps/runcpm/runcpm.c:956-965). Without it - which is what wave 1
-     * shipped - File > Exit emulator destroyed the window and parked in a
-     * sleep loop, leaving a dead dock tile that answered no click, 84KB of
-     * claims and a task slot gone for the session; crt0.asm's net only fires
-     * if os88_worker RETURNS, and one that loops never does. The destroy
-     * needs the lock and task_alive forbids it, so the stubs check both. */
-    sleep_calls = 0;
-    if (setjmp(alive_out) == 0) {
-        os88_worker(win);
-        fail("os88_worker returned - it must never return (os88.h:388)");
+        c64_state = C64_ST_RUN;
+        c64_pause = 0;
+        c64_msg[0] = 0;
+        h_clip_n = -1;
+        h_clip_refuse = 0;
+
+        /* ...and by now the first wake HAS happened, so the tables are
+         * there. The two halves of this pair - not from os88_main, but from
+         * the first callback - are what the split actually promises. */
+        if (!c64_conv_ok)
+            fail("the PETSCII conversion tables were never built - "
+                 "ovl_conv_init is C64-SPEC §13.3's first-wake ovl_* call "
+                 "and it fills them");
+
+        /* --- Copy: the screen matrix, trimmed, one '\n' a row ------------
+         * The letters are the point. PETSCII $41-$5A is the LOWER case
+         * (charset.c:156-158), whichever character set the VIC is drawing, so
+         * `HELLO` on the glass is `hello` on the clipboard - VICE's answer,
+         * transcribed, and the one a remembered version of this gets wrong. */
+        for (i3 = 0; i3 < C64_CELLS; i3++)
+            c64_wr(c64_mbase + i3, 0x20);   /* screen code 0x20 is a space */
+        c64_wr(c64_mbase + 0, 0x08);        /* H */
+        c64_wr(c64_mbase + 1, 0x05);        /* E */
+        c64_wr(c64_mbase + 2, 0x0C);        /* L */
+        c64_wr(c64_mbase + 3, 0x0C);        /* L */
+        c64_wr(c64_mbase + 4, 0x8F);        /* O, REVERSED - the inverse bit is
+                                             * not a character (charset.c:204) */
+        c64_wr(c64_mbase + 5, 0x40);        /* ...AND ONE GRAPHICS CELL, which
+                                             * is the arm nothing used to
+                                             * drive. Screen code $40 is
+                                             * PETSCII $60, which
+                                             * petcii_fix_dupes takes to $C0 -
+                                             * outside every letter range and
+                                             * not printable ASCII - so it is
+                                             * the UNMAPPED arm, and VICE's
+                                             * unmapped is ASCII_UNMAPPED,
+                                             * which is '.' (charset.c:126).
+                                             * It is NOT '?': edit_copy_action
+                                             * substitutes one only for a byte
+                                             * that is neither \r/\n nor
+                                             * printable, and '.' is printable,
+                                             * so that pass never fires and
+                                             * VICE's Copy output cannot
+                                             * contain a '?' at all. Screen
+                                             * codes $40, $5B-$5F, $60 and
+                                             * $7B-$7F reach this arm - the
+                                             * graphics cells, i.e. what a user
+                                             * copying a game screen or a
+                                             * PETSCII drawing hits */
+        c64_wr(c64_mbase + 40 + 39, 0x21);  /* row 1, last column: a '!' that
+                                             * must survive the trim */
+        b_blit = n_blit; b_fill = n_fill; b_run = n_run;
+        n_ram_rd = 0;
+        cost_begin();
+        do_edit(C64_I_COPY, win);
+        /* ...AND THE COST ROW IS NOT TAKEN ON THIS FIXTURE. This screen is
+         * six characters and a '!' - a clipboard of 71 bytes - and the row is
+         * called `of the whole screen`, so it is taken below on a screen that
+         * is one. The put's own byte copy is real and is charged, and it does
+         * not show on a screen that is empty. */
+        /* EDIT > COPY DRAWS NOTHING, and its whole cost is the matrix pull,
+         * the per-cell conversion, the clipboard's own byte copy and the
+         * overlay bridge - FOUR crossings, counted from the structure because
+         * a host build has no overlay:
+         *
+         *   os88_oncmd  -> ovl_cmd          (the runtime's far entry)
+         *   ovl_cmd     -> ovl_copy         (module to module: the shipped
+         *                                    build makes this one too -
+         *                                    `call far [cc_ovm_ovl_copy]`,
+         *                                    build/c64.gen.asm - and the
+         *                                    hand-written 3 did not count it)
+         *   ovl_copy    -> c64_copy_screen  (out to the resident loop)
+         *   ovl_copy    -> os88_clip_put    (out to the SDK cell)
+         *
+         * The first draft made 2,000 of them, two a cell, and this model
+         * charged one near call for the lot (C64-SPEC §9.7). The arithmetic
+         * error in 3-vs-4 is 58 us of 83 ms; the term exists so that the NEXT
+         * ovl_* that loops cannot be priced at zero, and the enumeration
+         * beside each row is how the next author decides what to charge.
+         *
+         * ALL OF IT IS HELD-LOCK TIME: os88_oncmd is dispatched UNDER the gfx
+         * lock (os88.h:566), so this number is the desktop stopped, and it is
+         * why the loop is resident and table-driven rather than in the module
+         * with the command. */
+        if (n_blit != b_blit || n_fill != b_fill || n_run != b_run)
+            fail("Edit > Copy drew on the glass - it reads the matrix and "
+                 "hands the text to the clipboard, and the window it came "
+                 "from has not changed");
+        /* THE NEGATIVE CONTROL FOR THE WHOLE FIX: the matrix comes out one
+         * ROW per call and the conversion is a table, so a Copy makes 25
+         * c64_zcopy_out calls and NOT ONE c64_rd. A loop that goes back to a
+         * call per cell - which in the shipped build is a call per cell ACROSS
+         * THE SEGMENT BOUNDARY, ~63 us of bridge before any work - lands here
+         * as 1,000 reads and fails. */
+        if (n_zcopy_out - b_zc != C64_ROWS
+            || n_zcopy_bytes - b_zcb != C64_CELLS)
+            fail("Edit > Copy did not pull the 40x25 matrix one ROW per "
+                 "c64_zcopy_out call");
+        if (n_ram_rd != 0)
+            fail("Edit > Copy read the matrix a cell at a time again - that "
+                 "loop is in the OVERLAY, so every cell is two far calls "
+                 "(SPEC.md 73.14, C64-SPEC §7.7)");
+        if (h_clip_n <= 0) {
+            fail("Edit > Copy put nothing on the clipboard");
+        } else {
+            if (memcmp(h_clip, "hello.\n", 7) != 0)
+                fail("Edit > Copy's first row is not `hello.` + one line "
+                     "ending - either the trailing spaces were not trimmed "
+                     "(clipboard.c:81-85), or the case is wrong (PETSCII "
+                     "$41-$5A is the LOWER case, charset.c:156-158), or the "
+                     "graphics cell came back as '?' - VICE's unmapped is "
+                     "'.' (ASCII_UNMAPPED, charset.c:126) and its Copy "
+                     "output cannot contain a '?' at all, because "
+                     "edit_copy_action's pass (actions-clipboard.c:69-76) "
+                     "substitutes only for a byte that is neither a line "
+                     "ending nor printable");
+            /* row 1 keeps all 40 cells, because its last one is not a space */
+            if (h_clip_n < 7 + 40 + 1 || h_clip[7 + 39] != '!'
+                || h_clip[7 + 40] != '\n')
+                fail("Edit > Copy trimmed a row whose last cell is not a "
+                     "space, or lost its line ending");
+            /* ...and a blank row is one line ending and nothing else */
+            if (h_clip[7 + 41] != '\n')
+                fail("Edit > Copy did not reduce a blank row to a single "
+                     "line ending");
+            if (h_clip_n > C64_CELLS + C64_ROWS)
+                fail("Edit > Copy wrote past the 40x25 screen plus its 25 "
+                     "line endings");
+        }
+        if (c64_msg[0] != 0)
+            fail("Edit > Copy announced itself - VICE says nothing on a "
+                 "Copy and the window it came from has not changed");
+
+        /* --- AND NOW THE COST ROW, ON A SCREEN THAT IS FULL, because that
+         * is what the row is called and it is the worst case: 1,000 converted
+         * cells AND a clipboard of 1,025 bytes (40 cells + one line ending, 25
+         * times) for kernel/clip.inc's `rep movsb` to move. On the sparse
+         * fixture above the put is 71 bytes and the term the review found
+         * missing is invisible - which is how it went missing. */
+        for (i3 = 0; i3 < C64_CELLS; i3++)
+            c64_wr(c64_mbase + i3, 0x01);   /* screen code $01 is `A`, and no
+                                             * cell is a space, so nothing is
+                                             * trimmed */
+        b_blit = n_blit; b_fill = n_fill; b_run = n_run;
+        n_ram_rd = 0;
+        cost_begin();
+        do_edit(C64_I_COPY, win);
+        n_ovlx += 1;                        /* ONE crossing, and the change is
+                                             * the point: os88_oncmd -> ovl_cmd
+                                             * (the runtime's far entry) and
+                                             * back, and that is all. ovl_cmd
+                                             * now only LATCHES; the body runs
+                                             * from the wake in resident code,
+                                             * so ovl_cmd -> ovl_copy,
+                                             * ovl_copy -> c64_copy_screen and
+                                             * ovl_copy -> os88_clip_put are
+                                             * gone. The first draft made 2,000
+                                             * of them, two a cell. */
+        cost_row("Edit > Copy of the whole screen");
+        if (h_clip_n != C64_CELLS + C64_ROWS)
+            fail("a Copy of a screen with no space on it is not 40x25 cells "
+                 "plus 25 line endings");
+        if (n_clip_put_bytes - b_cpb != C64_CELLS + C64_ROWS)
+            fail("the clipboard put did not move the whole buffer - that "
+                 "`rep movsb` is kernel/clip.inc:118 and it runs inside THIS "
+                 "command's gfx lock (C64-SPEC §7.7)");
+        if (n_blit != b_blit || n_fill != b_fill || n_run != b_run)
+            fail("Edit > Copy of a full screen drew on the glass");
+        if (n_zcopy_out - b_zc != C64_ROWS
+            || n_zcopy_bytes - b_zcb != C64_CELLS)
+            fail("Edit > Copy did not pull the 40x25 matrix one ROW per "
+                 "c64_zcopy_out call");
+        if (n_ram_rd != 0)
+            fail("Edit > Copy read the matrix a cell at a time again");
+
+        /* THE NEGATIVE CONTROL: a clipboard that REFUSES is a fact and is
+         * said. kernel/clip.inc:84 leaves it EMPTY rather than stale, so a
+         * silent failure here is a user who pastes the PREVIOUS thing. */
+        h_clip_refuse = 1;
+        c64_msg[0] = 0;
+        do_edit(C64_I_COPY, win);
+        if (c64_msg[0] == 0)
+            fail("a REFUSED clipboard put said nothing - the clipboard is "
+                 "left empty and the user is not told (SPEC.md 47)");
+        h_clip_refuse = 0;
+
+        /* --- Paste: the clipboard, converted, then typed at the KERNAL's
+         * own pace. The line endings are the half a remembered version gets
+         * wrong: CRLF is TWO bytes and ONE line end (charset.c:49-63), and
+         * without the pair test a document written on a DOS machine types
+         * two RETURNs a line. */
+        n3 = 0;
+        for (i3 = 0; i3 < 20; i3++)
+            h_clip[n3++] = (char)('a' + (i3 % 26));
+        h_clip[n3++] = '\r';                /* CRLF - ONE line end */
+        h_clip[n3++] = '\n';
+        for (i3 = 0; i3 < 17; i3++)
+            h_clip[n3++] = (char)('A' + (i3 % 26));
+        h_clip[n3++] = '\n';                /* LF - one line end */
+        h_clip_n = n3;                      /* 40 host bytes -> 39 PETSCII */
+        c64_msg[0] = 0;
+        /* the whole matrix was just rewritten by the Copy rows above: let the
+         * glass settle, so the cost row below prices a paste and not that */
+        flush_now();
+        flush_now();
+        /* ...and the KERNAL has NOT drained its buffer, so the wake the
+         * command posts must feed nothing at all */
+        c64_wr(C64_KB_NDX, 3);
+        cost_begin();
+        do_edit(C64_I_PASTE, win);
+        flush_now();                        /* ...and this IS the driver: the
+                                             * feeder runs inside the wake */
+        /* ONE crossing: os88_oncmd -> ovl_cmd (the runtime's far entry) and
+         * back. ovl_cmd only LATCHES - the clipboard calls, the claim and the
+         * refusals are c64_clip_service's, which is resident and runs from the
+         * wake - so ovl_cmd -> ovl_paste, ovl_paste -> os88_clip_size and
+         * ovl_paste -> os88_clip_get are all gone. There is no conversion call
+         * in the command either: the byte map is the feeder's, ten a wake with
+         * no lock held, which is what the row below prices. */
+        n_ovlx += 1;
+        cost_row("Edit > Paste of 40 characters");
+        if (c64_paste_n != 40 || c64_paste_i != 0)
+            fail("Edit > Paste did not queue the 40 host bytes the clipboard "
+                 "holds - the queue is the HOST's bytes now and the byte map "
+                 "is the feeder's, ten a wake with no lock held (§7.7)");
+        if (n_band_cells - b_cells > C64_COLS)
+            fail("Edit > Paste composed more than one row's worth of cells - "
+                 "the command itself draws nothing at all; what reaches the "
+                 "glass is the machine's own echo");
+        if (n_kbbuf - b_kb != 0)
+            fail("Edit > Paste typed into $0277 from the COMMAND - the KERNAL "
+                 "buffer was not empty, so the feeder must have put nothing "
+                 "in this wake (kbdbuf.c:383)");
+
+        /* THE PACE. kbdbuf_flush (kbdbuf.c:383) puts NOTHING in while the
+         * machine's own buffer is not empty, and never more than the ten
+         * bytes it holds. Feeding on a schedule of our own instead would
+         * overrun $0277 and lose characters silently - which is the one
+         * failure a screendump of a paste cannot show, because what is left
+         * on the screen still looks like text. */
+        fed = 0;
+        c64_paste_feed();
+        if (c64_paste_i != 0 || c64_rd(C64_KB_NDX) != 3)
+            fail("the paste feeder wrote into a keyboard buffer that was "
+                 "NOT empty - kbdbuf_is_empty is the gate (kbdbuf.c:233)");
+        c64_wr(C64_KB_NDX, 0);
+        /* ...AND THIS IS WHERE A PASTE IS PRICED NOW: ten bytes converted and
+         * typed, in os88_onwake, with NO lock held. The command itself is one
+         * os88_clip_get (the row above), which is what took the conversion
+         * out from under the gfx lock. */
+        cost_begin();
+        c64_paste_feed();
+        cost_row("a wake typing ten pasted bytes");
+        if (c64_rd(C64_KB_NDX) != C64_KB_SIZE)
+            fail("the paste feeder did not put the buffer's full ten bytes "
+                 "in when it was empty");
+        if (c64_paste_i != C64_KB_SIZE)
+            fail("the paste feeder is not bounded at ten characters a wake");
+        /* ...AND WHAT IT PUT THERE IS THE CONVERSION. The queue holds the
+         * host's bytes, so this is the only place the byte map is visible -
+         * which is the point: it is what the MACHINE receives. */
+        for (i3 = 0; i3 < C64_KB_SIZE; i3++)
+            h_fed[fed++] = (unsigned char)c64_rd(C64_KB_BUF + i3);
+        for (i3 = 0; i3 < 40 && c64_paste_i < c64_paste_n; i3++) {
+            c64_wr(C64_KB_NDX, 0);          /* the machine drank them */
+            c64_paste_feed();
+            j3 = c64_rd(C64_KB_NDX);
+            if (j3 > C64_KB_SIZE)
+                fail("the paste feeder overran the KERNAL's ten-byte buffer");
+            for (n3 = 0; n3 < j3; n3++)
+                h_fed[fed++] = (unsigned char)c64_rd(C64_KB_BUF + n3);
+        }
+        if (c64_paste_n != 0)
+            fail("the paste never drained");
+        if (fed != 39)
+            fail("40 host bytes did not become 39 PETSCII ones - CRLF is TWO "
+                 "bytes and ONE line end (charset.c:49-63), and without the "
+                 "pair test a document written on a DOS machine types two "
+                 "RETURNs a line, which in BASIC is a listing with a blank "
+                 "line between every statement");
+        if (h_fed[0] != 0x41)
+            fail("the paste mapped 'a' to something other than PETSCII $41 "
+                 "(charset.c:186-188)");
+        if (h_fed[20] != 0x0D)
+            fail("the paste's line ending is not PETSCII CR");
+        if (h_fed[21] != 0xC1)
+            fail("the paste mapped 'A' to something other than PETSCII $C1 - "
+                 "the 0x61 duplicates are deliberately not used "
+                 "(charset.c:189-192)");
+        if (h_fed[38] != 0x0D)
+            fail("the paste lost the trailing LF's line ending");
+
+        /* ...AND A RESET EMPTIES THE QUEUE (kbdbuf.c:318). Without it the
+         * previous machine's paste types itself into the new one. */
+        c64_paste_n = 12;
+        c64_paste_i = 0;
+        do_reset(C64_I_POWER, win);
+        if (c64_paste_n != 0)
+            fail("a Power cycle left the previous machine's paste in the "
+                 "queue, still typing");
+        c64_state = C64_ST_RUN;
+        c64_pause = 0;
+        c64_msg[0] = 0;
+
+        /* ...AND PASTE GREYS WHILE THE MACHINE IS PAUSED, which is the state
+         * the greying was reasoned about and then missed. Pause is not a
+         * STATE, it is a flag on C64_ST_RUN: c64.c gates the feeder's arm on
+         * `!c64_pause || c64_adv` and c64_wants_wake answers 0 while paused,
+         * so a Paste taken here queues up to 2,048 bytes that nothing types
+         * and says nothing, until the user happens to resume. The pause latch
+         * calls c64_menu_state, so it greys and UN-greys with the state -
+         * SPEC.md 47 both ways round. */
+        do_cmd(C64_I_PAUSE, C64_M_PREF, win);
+        if (!c64_pause)
+            fail("Preferences > Pause emulation did not latch");
+        if (c64_edit_items[C64_I_PASTE][0] != OS88_MENU_DIS)
+            fail("Edit > Paste stayed LIVE on a PAUSED machine - nothing "
+                 "drains the queue while paused, so it is the same silent "
+                 "no-op the JAM greying exists to stop (SPEC.md 47)");
+        if (c64_edit_items[C64_I_COPY][0] == OS88_MENU_DIS)
+            fail("Edit > Copy was greyed on a PAUSED machine - the screen is "
+                 "there and VICE copies what is displayed");
+        /* ...and the CHORD does not walk round it either */
+        c64_paste_n = 0;
+        h_clip_n = 8;
+        memcpy(h_clip, "abcdefgh", 8);
+        os88_gfx_lock(); os88_onkey(0, 0xA2, win); os88_gfx_unlock();
+        if (c64_paste_n != 0)
+            fail("Alt+Insert queued a paste into a PAUSED machine while the "
+                 "item was GREYED");
+        do_cmd(C64_I_PAUSE, C64_M_PREF, win);
+        if (c64_pause)
+            fail("Preferences > Pause emulation did not unlatch");
+        if (c64_edit_items[C64_I_PASTE][0] == OS88_MENU_DIS)
+            fail("Edit > Paste stayed GREYED after the machine resumed - a "
+                 "greying must not outlive its fact (SPEC.md 47)");
+        h_clip_n = -1;
+        c64_msg[0] = 0;
+
+        /* ...AND AN EMPTY CLIPBOARD IS A FACT AND NOT A NO-OP (SPEC.md 47) */
+        h_clip_n = -1;
+        do_edit(C64_I_PASTE, win);
+        if (c64_paste_n != 0)
+            fail("Edit > Paste queued something out of an EMPTY clipboard");
+        if (c64_msg[0] == 0)
+            fail("Edit > Paste of an empty clipboard said nothing - a live "
+                 "item that is a silent no-op is what SPEC.md 47 forbids");
+        c64_msg[0] = 0;
+
+        /* ...AND A CLIPBOARD BIGGER THAN THE QUEUE IS TRUNCATED, SAID - and
+         * the message NAMES the number, so the two have to agree. C64_PASTEMAX
+         * is Paste's own bound and not Copy's (C64-SPEC §7.7): a paste is
+         * whatever the user put on the clipboard, and sizing its queue from
+         * what a COPY can produce was a justification that did not describe
+         * anything. */
+        for (i3 = 0; i3 < C64_PASTEMAX + 100; i3++)
+            h_clip[i3] = 'x';
+        h_clip_n = C64_PASTEMAX + 100;
+        c64_msg[0] = 0;
+        do_edit(C64_I_PASTE, win);
+        if (c64_paste_n != C64_PASTEMAX)
+            fail("Edit > Paste did not stop at its buffer");
+        if (c64_msg[0] == 0)
+            fail("a TRUNCATED paste said nothing");
+        {
+            char want[64];
+            sprintf(want, "Pasting the first %d bytes.", C64_PASTEMAX);
+            if (strcmp(c64_msg, want) != 0)
+                fail("the truncation message and C64_PASTEMAX have drifted "
+                     "apart - the message names the number and the number is "
+                     "in c64kbd.c");
+        }
+
+        /* ...AND A FULL CLIPBOARD IS NOT AN EMPTY ONE. kernel/clip.inc:84
+         * refuses only what is strictly ABOVE CLIP_MAXKB * 1024, so a put of
+         * exactly 32,768 succeeds and os88_clip_size answers 0x8000 - which
+         * the package's 16-bit int reads as -32,768. `sz <= 0` then reported
+         * `The clipboard is empty.` on a FULL clipboard, queued nothing, and
+         * made the truncation notice false in the same breath: the one
+         * message the user got was the untrue one. -1 is the only answer that
+         * means empty. */
+        h_clip_n = 32 * 1024;
+        c64_paste_n = 0;
+        c64_paste_i = 0;
+        c64_msg[0] = 0;
+        do_edit(C64_I_PASTE, win);
+        if (c64_paste_n != C64_PASTEMAX)
+            fail("a clipboard of exactly CLIP_MAXKB * 1024 pasted nothing - "
+                 "32,768 arrives in a 16-bit int as -32,768 (LESSONS: 16-bit "
+                 "arithmetic wraps)");
+        if (strcmp(c64_msg, "The clipboard is empty.") == 0)
+            fail("a FULL clipboard was reported as empty");
+
+        c64_paste_n = 0;
+        c64_paste_i = 0;
+        h_clip_n = -1;
+        c64_msg[0] = 0;
+        (void)ln;
     }
-    if (!win_destroyed)
-        fail("the worker did not destroy the window");
-    if (alive_after_destroy == 0)
-        fail("the worker never called os88_task_alive() after the destroy - "
-             "the task, the instance and both claims leak and the dock tile "
-             "is a corpse (os88.h:622)");
+
+    /* ======================================================================
+     * WAVE 3 - WARP IS THE SLICE CAP, NOT THE FLUSH RATE (C64-SPEC §4.4)
+     * ==================================================================== */
+    {
+        unsigned t3;
+        int i3, seen;
+
+        c64_state = C64_ST_RUN;
+        c64_pause = 0;
+        c64_warp = 0;
+        c64_budget = C64_SLICE_MAX;
+        h_cpu_mode = H_CPU_IDLE;
+        h_slow_wake = 0;
+
+        /* ...the cap holds without warp: four slices inside one host tick
+         * must NOT take the budget past C64_SLICE_MAX */
+        for (i3 = 0; i3 < 40; i3++)
+            os88_onwake(win);
+        if (c64_budget > C64_SLICE_MAX)
+            fail("the wall slice passed its cap with warp OFF");
+
+        do_cmd(C64_I_WARP, C64_M_PREF, win);
+        if (!c64_warp)
+            fail("Preferences > Warp mode did not latch");
+        for (i3 = 0; i3 < 40; i3++)
+            os88_onwake(win);
+        if (c64_budget <= C64_SLICE_MAX)
+            fail("Warp mode did not lift the wall slice's cap - warp is the "
+                 "only throttle this port has (C64-SPEC §4.4), and a warp "
+                 "that only slows the FLUSH down does not run the machine "
+                 "one cycle faster, it stops showing what it does");
+        if (c64_budget > C64_SLICE_WARP)
+            fail("the warped budget passed C64_SLICE_WARP - c64_m.cnt is a "
+                 "SIGNED word and a budget over 32,767 arrives negative");
+
+        /* ...AND THE RENDERING IS CAPPED AT 10 fps, WHICH IS THE OTHER HALF
+         * OF VICE'S WARP AND NOT A DIFFERENT FEATURE. src/vsync.c:339-340
+         * sets warp_render_tick_interval to a tenth of a second under `Limit
+         * warp rendering to 10fps` and :634-656 skips frames inside it while
+         * warp is on - `makes warp faster`. A pass of this port's review
+         * deleted the cap on the reading that drawing less is not warping;
+         * the reference says it is half of warping, and on this machine it is
+         * the EXPENSIVE half (a full expose is 306 ms against a 16,384-cycle
+         * slice, §9.7).
+         *
+         * TWO ROWS, BECAUSE THE CAP CAN ONLY SLOW A FLUSH DOWN. 10 fps at
+         * 18.2 Hz is two host ticks, so on the CPU_8086 tier - which already
+         * flushes every OTHER tick for §9.8's own reason - warp moves
+         * nothing, and that is why the message on that tier still says warp
+         * buys it nothing. On a 286 or a 386 (c64_flush_every = 1) the cap
+         * HALVES the drawing, which is what warp is worth there. */
+        if (c64_flush_every != 2)
+            fail("this block assumes the CPU_8086 tier's flush rate");
+        seen = 0;
+        c64_last_flush = the_ticks;
+        for (i3 = 0; i3 < 20; i3++) {
+            the_ticks++;
+            c64_dirty_any = 1;
+            t3 = c64_last_flush;
+            os88_onwake(win);
+            if (c64_last_flush != t3)
+                seen++;
+        }
+        if (seen != 10)
+            fail("warp changed the flush rate on the CPU_8086 tier - that "
+                 "tier already flushes every other tick, which is SLOWER "
+                 "than VICE's 10 fps warp cap, so the cap cannot bind "
+                 "(C64-SPEC §4.4)");
+        /* ...and the faster tiers, where it does bind. The negative control
+         * is the same twenty ticks with warp OFF: 20 flushes, not 10. */
+        c64_flush_every = 1;
+        seen = 0;
+        c64_last_flush = the_ticks;
+        for (i3 = 0; i3 < 20; i3++) {
+            the_ticks++;
+            c64_dirty_any = 1;
+            t3 = c64_last_flush;
+            os88_onwake(win);
+            if (c64_last_flush != t3)
+                seen++;
+        }
+        if (seen != 10)
+            fail("warp did not cap the rendering at VICE's 10 fps on a tier "
+                 "that flushes every tick (vsync.c:339-340, :634-656)");
+        c64_warp = 0;
+        c64_menu_state();
+        seen = 0;
+        c64_last_flush = the_ticks;
+        for (i3 = 0; i3 < 20; i3++) {
+            the_ticks++;
+            c64_dirty_any = 1;
+            t3 = c64_last_flush;
+            os88_onwake(win);
+            if (c64_last_flush != t3)
+                seen++;
+        }
+        if (seen != 20)
+            fail("the render cap outlived the warp it was granted for");
+        c64_warp = 1;
+        c64_menu_state();
+        c64_flush_every = 2;
+
+        /* ...AND ON THIS CPU IT SAYS SO. C64-SPEC §4.4 is honest that an
+         * 8088 never reaches the ceiling warp lifts - the budget adapts DOWN
+         * from a slice that overruns a host tick and never walks up to the
+         * cap - but the SPEC is not where the user is looking. An item whose
+         * whole visible effect is a message that is false is what SPEC.md 47
+         * exists to stop, and PERFORMANCE.md's "degrade by tier" gives the
+         * answer: os88_cpu() is a fact the code can test. */
+        if (strcmp(c64_msg, "Warp mode on - no change.") != 0)
+            fail("Warp mode on CPU_8086 announced a speed-up the machine "
+                 "does not deliver (§4.4, SPEC.md 47)");
+        /* ...AND ITS LENGTH IS CHECKED AT THE SOURCE, NOT ON THE COPY. This
+         * used to read `strlen(c64_msg) > C64_MSGCELLS` and could never
+         * fail: c64_say copies through os88_strcpy(c64_msg, s,
+         * C64_MSGCELLS + 1), and the stub truncates at cap - 1 exactly as
+         * the SDK does, so the thing measured was the clamp. The failure the
+         * row exists to catch - a message the user reads with its tail cut
+         * off - would have gone straight past it. The literals are walked
+         * below, once, against the same constant. */
+
+        do_cmd(C64_I_WARP, C64_M_PREF, win);
+        if (c64_warp)
+            fail("Preferences > Warp mode did not unlatch");
+        if (c64_budget > C64_SLICE_MAX)
+            fail("leaving warp left the budget above the ordinary cap - the "
+                 "only thing that lowers it is a slice that overruns a host "
+                 "tick, and one that fits never would");
+        /* THE NEGATIVE CONTROL FOR THE TIER: a 386 IS given the cap it can
+         * use, and is told the plain thing VICE says. Without this row the
+         * message above could be hard-coded and nothing would notice. */
+        h_cpu_tier = OS88_CPU_386;
+        c64_msg[0] = 0;
+        do_cmd(C64_I_WARP, C64_M_PREF, win);
+        if (strcmp(c64_msg, "Warp mode on.") != 0)
+            fail("a faster tier was told warp buys it nothing - it does: the "
+                 "cap is what binds there (§4.4)");
+        do_cmd(C64_I_WARP, C64_M_PREF, win);
+        h_cpu_tier = OS88_CPU_8086;
+        c64_msg[0] = 0;
+
+        c64_budget = C64_SLICE_MIN;
+        c64_dirty_any = 0;
+    }
+
+    /* ======================================================================
+     * EVERY MESSAGE LITERAL, AGAINST THE ROW THAT HAS TO SHOW IT (§10.1)
+     *
+     * The status row's field area is C64_MSGCELLS = 40 cells and the two
+     * lamps keep their own two beyond it. c64_say CLAMPS to that, so a
+     * message that is too long does not corrupt anything - it silently loses
+     * its tail on the glass, which is a defect a screendump shows only if
+     * somebody happens to trigger that message while looking.
+     *
+     * So the literals are the subject, not c64_msg. The list is every string
+     * this package passes to c64_say plus the two permanent lines c64_status
+     * draws itself; a new message that does not fit fails the BUILD.
+     *
+     * AND THE LIST CANNOT SILENTLY NARROW. Nothing here ties a hand-typed
+     * array to the sources, so a c64_say added in a later wave and not copied
+     * in was simply not checked - a gate that says nothing rather than a gate
+     * that fails, which is the same shape as a stale comment. apps/c64/build.sh
+     * extracts every c64_say literal out of apps/c64/*.c mechanically and
+     * fails if the set is not exactly the set below. Add a message, add it
+     * here, or the build stops.
+     * ==================================================================== */
+    {
+        static const char *msgs[] = {
+            "A file dialog is already open.",
+            "No memory for the copy.",
+            "No memory for the paste.",
+            "Advanced one frame.",
+            "Joysticks normal.",
+            "Joysticks swapped.",
+            "No bands here - text only.",
+            "No square voice here - no SID sound.",
+            "PRG over 65533 bytes.",
+            "PRG runs past $FFFF.",
+            "PRG too short.",
+            "PRG: cannot read it.",
+            "PRG: no heap for it.",
+            "Pasting the first 2048 bytes.",
+            "Paused.",
+            "Running.",
+            "ScrollLock for joystick",
+            "The clipboard is empty.",
+            "The clipboard refused the screen.",
+            "The clipboard refused to be read.",
+            "The speaker is busy - no SID sound.",
+            "Unable to load C64.OVL.",
+            "Warp mode off.",
+            "Warp mode on - no change.",
+            "Warp mode on.",
+            "C64.ROM missing - see README.TXT",   /* c64_status, msg == 2 */
+            "Main CPU: JAM at $FFFF"              /* ...and msg == 3 (§4.5) */
+        };
+        int mi;
+
+        for (mi = 0; mi < (int)(sizeof(msgs) / sizeof(msgs[0])); mi++) {
+            if ((int)strlen(msgs[mi]) > C64_MSGCELLS) {
+                printf("  the message `%s` is %d cells\n",
+                       msgs[mi], (int)strlen(msgs[mi]));
+                fail("a status-row message is longer than the row's 40 field "
+                     "cells - c64_say would clamp it and the user would read "
+                     "it with its tail cut off (§10.1)");
+            }
+        }
+    }
+
+    /* ======================================================================
+     * WAVE 3 - THE SOUND CAPABILITY (C64-SPEC §11.4)
+     * ==================================================================== */
+    {
+        int n0;
+
+        if (h_caps_asks == 0)
+            fail("os88_snd_caps was never asked - the package calls "
+                 "OSAPI_SND_TONE without establishing that the machine has a "
+                 "square voice (SPEC.md 73.11)");
+        /* THE NEGATIVE CONTROL, and it is the only way this path is
+         * reachable at all: kernel/snd.inc:804 ORs SND_CAP_TONE in
+         * unconditionally, so every machine this OS boots has it. */
+        n0 = n_tone;
+        c64_snd_tone = 0;
+        c64_sid_said = 0;
+        c64_sid_dirty = 1;
+        c64_msg[0] = 0;
+        c64_state = C64_ST_RUN;
+        c64_pause = 0;
+        os88_onwake(win);
+        if (n_tone != n0)
+            fail("a machine with NO square voice was still asked for a tone");
+        if (c64_sid_dirty)
+            fail("the SID latch was left raised on a machine with no tone - "
+                 "it would be re-asked every wake for ever");
+        if (c64_msg[0] == 0)
+            fail("a machine with no square voice said nothing about its SID "
+                 "(SPEC.md 47)");
+        /* ...and it is said ONCE a session, not once a wake */
+        c64_msg[0] = 0;
+        c64_sid_dirty = 1;
+        os88_onwake(win);
+        if (c64_msg[0] != 0)
+            fail("the no-square-voice fact was said a second time");
+        c64_snd_tone = 1;
+        c64_sid_said = 0;
+        c64_sid_dirty = 0;
+        c64_msg[0] = 0;
+    }
+
+    /* ======================================================================
+     * WAVE 3 - §7.6's MESSAGE, AND THE OBSERVABLE THAT ANSWERS IT
+     *
+     * The SDK cannot be asked "has a mouse spoken" - osapi_mouse tests
+     * [mou_seen] and reports x, y and the button (kernel/kernel.asm:3263) -
+     * so the package asks the question it CAN answer and that has the same
+     * answer: kbm_key intercepts a cursor key exactly when no mouse has
+     * spoken and ScrollLock is off, and an intercepted key never reaches
+     * os88_onkey. "The down-map says an arrow is held and os88_onkey has
+     * never delivered one" IS "the kernel is eating them".
+     * ==================================================================== */
+    {
+        int i3;
+
+        c64_kbd_init();
+        c64_msg[0] = 0;
+        memset(h_keydown, 0, sizeof(h_keydown));
+        h_keydown[KSC_UP] = 1;              /* the stick is deflected... */
+        for (i3 = 0; i3 < 3; i3++)
+            c64_kbd_poll();                 /* ...and no arrow ever ARRIVED */
+        if (strcmp(c64_msg, "ScrollLock for joystick") != 0)
+            fail("the stick was held with no cursor key ever delivered to "
+                 "os88_onkey and the row said nothing - on a mouseless "
+                 "machine those four keys are the kernel's pointer (SPEC.md "
+                 "9.6) and every deflection drags it about");
+        /* ...ONCE a session */
+        c64_msg[0] = 0;
+        for (i3 = 0; i3 < 10; i3++)
+            c64_kbd_poll();
+        if (c64_msg[0] != 0)
+            fail("§7.6's message was said a second time");
+
+        /* THE NEGATIVE CONTROL: a machine WITH a mouse delivers the arrow to
+         * os88_onkey, and then the message must never appear. */
+        c64_kbd_init();
+        c64_msg[0] = 0;
+        memset(h_keydown, 0, sizeof(h_keydown));
+        os88_onkey(0, KSC_UP, win);         /* the kernel passed it: a mouse
+                                             * has spoken, or ScrollLock is on */
+        h_keydown[KSC_UP] = 1;
+        for (i3 = 0; i3 < 10; i3++)
+            c64_kbd_poll();
+        if (c64_msg[0] != 0)
+            fail("§7.6's message went up on a machine that DELIVERS its "
+                 "cursor keys - the hint is wrong there and the control is "
+                 "what makes the row above mean anything");
+        memset(h_keydown, 0, sizeof(h_keydown));
+        c64_kbd_init();
+        c64_msg[0] = 0;
+        c64_state = C64_ST_RUN;
+    }
+
+    /* --- THE OVERLAY FENCE (13.3): a LOCKED callback never goes to the disk
+     * ------------------------------------------------------------------
+     * Reaching an `ovl_*` makes the runtime resolve C64.OVL, and if it is not
+     * resident that is a claim and a FILE READ - ~400 ms a floppy call - in
+     * whatever context asked. os88_oncmd, os88_about and os88_onfile are all
+     * dispatched under the desktop's gfx lock. So a locked caller crosses only
+     * when the first wake has already said the module is there.
+     *
+     * The harness compiles flat, so `ovl_*` can never actually refuse here;
+     * what is checked is the FENCE, by telling the package what the probe
+     * would have told it. */
+    c64_ovl_res = 0;
+    c64_msg[0] = 0;
+    c64_ovl_asked = 1;
+    do_cmd(C64_I_WARP, C64_M_PREF, win);
+    if (c64_msg[0] == 0)
+        fail("a menu command with C64.OVL not resident said nothing - it is "
+             "about to go to the FLOPPY with the gfx lock held (13.3)");
+    if (c64_ovl_asked != 0)
+        fail("the fence did not hand the retry back to the wake - the probe "
+             "is the one caller entitled to do the load, because it holds no "
+             "lock (SPEC.md 74.1)");
+    /* ...AND File > Exit emulator STILL WORKS THERE, because it is answered in
+     * the resident half: a machine the user cannot close by its own menu on
+     * exactly the disk where everything else refuses is not an acceptable
+     * corner. */
+    c64_exit_req = 0;
+    do_cmd(C64_I_EXIT, C64_M_FILE, win);
+    if (!c64_exit_req)
+        fail("File > Exit emulator was refused by the overlay fence - it is a "
+             "latch in the resident half and needs no module");
+    c64_exit_req = 0;
+    c64_ovl_res = 1;
+    c64_msg[0] = 0;
+
+    /* --- File > Exit emulator (Alt+Q): ONE DOOR, AND IT IS NOT wm_destroy
+     * ------------------------------------------------------------------
+     * The window closes through OSAPI_WM_CLOSE (SPEC.md 75.2) - the kernel's
+     * own close path, the same one the close box takes, which is what
+     * repaints the dock strip. The version this replaced hired a worker and
+     * called os88_wm_destroy: that frees the RECORD and nobody repaints the
+     * dock, so Alt+Q left a dead tile that answered neither click nor
+     * double-click, four cycles out of four, on both adapters. The old gate
+     * asserted the worker's own internals - the destroy, the task_alive - and
+     * so passed a package that left a corpse on the strip. It asserts the
+     * DOOR now.
+     *
+     * THE COMMAND MUST NOT CLOSE. os88_oncmd kicks a wake after ovl_cmd
+     * returns, and that wake runs a slice and flushes: closing inside the
+     * command means drawing after the close, which 75.2 forbids in as many
+     * words. So the command latches and the WAKE spends it. */
+    closed = 0;
+    close_drew = 0;
+    do_cmd(C64_I_EXIT, C64_M_FILE, win);
+    if (closed != 0)
+        fail("Exit emulator closed the window from inside os88_oncmd - "
+             "os88_oncmd's own tail then kicks a wake that draws into a "
+             "window that is going away (SPEC.md 75.2)");
+    if (c64_state == C64_ST_DEAD)
+        fail("the command latched C64_ST_DEAD before anything asked for the "
+             "close - a wake that never comes then leaves a frozen machine "
+             "in a window nobody is closing");
+
+    flush_now();                        /* the wake os88_oncmd kicked */
+    if (closed != 1)
+        fail("Exit emulator did not close the window - the dock tile stays "
+             "and the two claims leak for the session (SPEC.md 75.2)");
+    if (c64_state != C64_ST_DEAD)
+        fail("the machine is still running into a window that is closing");
+    if (close_drew)
+        fail("the package DREW after os88_wm_close - 75.2: call it and "
+             "RETURN, the window is gone on the next UI pass");
     if (lock_depth != 0)
-        fail("the worker left the gfx lock held");
+        fail("the exit wake left the gfx lock held");
+
+    /* ...AND EVERY LATER WAKE MUST BE A NO-OP. The close is deferred, so more
+     * wakes can be dispatched before it lands; a second os88_wm_close would
+     * name a slot the kernel may already have handed to a new tenant, and the
+     * stub fails on it. C64_ST_DEAD is what stops them. */
+    flush_now();
+    flush_now();
+    if (closed != 1)
+        fail("a wake after the close asked for the close again");
 
     c64_state = C64_ST_HALT;
     c64_msg[0] = 0;

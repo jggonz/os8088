@@ -52,6 +52,10 @@
 
 /* --- what the composer needs from the machine ---------------------------- */
 #define C64_BSTRIDE 40                      /* = c64band.inc's, one band row */
+#define C64_X2STRIDE 80                     /* ...and c64band.inc's doubled one
+                                             * (9.8). Both mirror a NASM equ in
+                                             * apps/c64/c64band.inc, which is
+                                             * the file that reads them */
 #define C64_SHBYTES 8000                    /* 320 x 200 bits (9.3) */
 /* The shift test is worth asking when MOST of the rows on the glass are
  * dirty - four fifths of them, which is the 20-of-25 measured in wave 1 and
@@ -65,6 +69,19 @@
 static unsigned char c64_sh[C64_SHBYTES];   /* the frame shadow: the pixels
                                              * last blitted, not a model */
 static unsigned char c64_bnd[C64_BSTRIDE * 8];  /* one composed band */
+/* ...AND ITS PIXEL-DOUBLED TWIN, WHICH IS THE WHOLE OF FULLSCREEN'S 2x (9.8).
+ * The frame shadow stays 320x200 and every compare, signature and span is
+ * still in C64 pixels: the doubling happens at BLIT TIME and nowhere else, so
+ * nothing above this line knows the picture is twice the size. 1,280 bytes,
+ * and they are bss for the life of the app rather than a claim because the
+ * flush cannot refuse. */
+static unsigned char c64_bx2[C64_X2STRIDE * 16];
+/* GLASS pixels per C64 cell: 8 or 16 a side (9.8's tier table). EVERY
+ * cell<->pixel conversion in this file and in c64.c reads these two and not
+ * the literal 8, which is the whole mechanism. c64_can2x is the TIER's answer
+ * (c64_tier_init) and c64_no2x is blit1's. */
+static int c64_scw = 8, c64_sch = 8;
+static int c64_can2x, c64_no2x;
 static unsigned c64_sig[C64_ROWS];          /* this frame's row signatures */
 static unsigned c64_shsig[C64_ROWS];        /* ...and the shadow's */
 static int c64_sig_ok;                      /* c64_sig[] was filled THIS flush */
@@ -125,7 +142,7 @@ static int c64_border_lit;
  * build fails loudly on any that is missed. */
 #ifdef C64_HOST
 static unsigned c64_n_blit, c64_n_fill, c64_n_scroll, c64_n_cell;
-static unsigned c64_n_dirtypg, c64_n_rows;
+static unsigned c64_n_dirtypg, c64_n_rows, c64_n_x2;
 #endif
 
 /* --- the status row's last state, for the delta draw (10) ---------------- */
@@ -143,6 +160,22 @@ static char c64_st_cpup[14];                /* ...and what is ON THE GLASS, so
                                              * that actually changed */
 static char c64_st_fpsp[14];
 static int c64_st_ok;                       /* the row on the glass is ours */
+/* ...AND TWO MORE, BECAUSE A MESSAGE DOES NOT NECESSARILY TOUCH THE WHOLE ROW
+ * (see c64_status). The row has two halves - the two SPEED fields at cells
+ * 0..24, and the JOYSTICK/drive/lamp widgets from cell 25 on - and a message
+ * of 25 cells or fewer stands on the first and not the second:
+ *
+ *   c64_st_ok     the row's pixels are OURS. Cleared by the three events that
+ *                 make them unknown: an expose, a damage rect that reaches
+ *                 this row, and c64_sh_inval. NOT by a message.
+ *   c64_st_lok    the LEFT half says what we last put there - which a new
+ *                 message makes false and nothing else does, so that is what
+ *                 c64_say clears.
+ *   c64_st_blank  a LONG message is standing where the widgets go, so the
+ *                 right half is blank-and-known. It is what tells the flush
+ *                 after that message comes down to rebuild them. */
+static int c64_st_lok;
+static int c64_st_blank;
 
 /* ==========================================================================
  * THE VIC-II's OWN LUMINANCE LADDER (src/vicii/vicii-color.c)
@@ -510,6 +543,50 @@ static void c64_watch_set(void)
 #define C64COST_SCRACC 38               /* one scratch thunk call, us */
 #define C64COST_TAKE  190               /* ...and the whole take, in one */
 
+/* ...AND THE FOUR WAVE 3 ADDED, FOR THE SAME REASON AND BY THE SAME METHOD:
+ * Edit > Copy and Edit > Paste touch BYTES, and the first model charged the
+ * whole of Copy as 1,000 near calls when the shipped loop was making two FAR
+ * calls a cell. These are models, not bench rows, and each is written out.
+ *
+ *   C64COST_OVLCALL  ONE OVERLAY BRIDGE CROSSING. crt0.asm's cc_ovthunk is
+ *                    reached by a far call (PERFORMANCE.md: 46.7 us) and makes
+ *                    a near call + ret to the body (11 us). Every ovl_* entry
+ *                    and every resident thing an ovl_* calls pays one. It is
+ *                    charged from the STRUCTURE of a command in the harness,
+ *                    because a host build has no overlay to count.
+ *   C64COST_ZCALL    c64_zcopy_out's call and shell - 11 us for the near call
+ *                    + ret and ~70 clocks of prologue, three segment loads and
+ *                    epilogue at 0.21 us.
+ *   C64COST_ZBYTE10  ...and one byte of its `rep movsb`, in TENTHS of a us:
+ *                    17 clocks a byte on the 8088's 8-bit bus.
+ *   C64COST_CPCELL   one cell of Edit > Copy's inner loop, WHICH IS NOW
+ *                    ASSEMBLY (c64mem.inc's c64_copy_row). Eleven
+ *                    instructions, 22 bytes, ~85 clocks of execution against a
+ *                    4.34-clock-a-byte fetch floor of ~95 -> ~95 clocks ->
+ *                    20 us. It was 75 while the loop was SmallerC's: 82
+ *                    instruction bytes of SS-relative word code reloading
+ *                    every local, ~356 clocks. Moving it is docs/C-TOOLCHAIN's
+ *                    rule ("the inner loop is assembly") and it took a
+ *                    full-screen Copy from ~83 ms to ~26.
+ *   C64COST_CPCALL   ...and c64_copy_row's own call and shell, once a ROW: 11
+ *                    us for the near call + ret and ~60 clocks of prologue,
+ *                    the segment load and the epilogue at 0.21 us.
+ *   C64COST_PSBYTE   the same measurement over c64_paste_feed's per-byte arm:
+ *                    135 bytes with the CR arm, ~105 on an ordinary character
+ *                    -> ~456 clocks -> 96 us, plus c64_wr's near call and its
+ *                    body (the window test and the dirty bit) at ~50. It is
+ *                    charged per byte the feeder TYPES, and the feeder runs in
+ *                    os88_onwake with NO lock held, ten bytes at a time.
+ *
+ * If either loop is rewritten, re-count the emitted bytes and change these,
+ * C64-SPEC §9.7's two rows and the harness together or not at all. */
+#define C64COST_OVLCALL 58              /* one bridge crossing, us */
+#define C64COST_ZCALL   26              /* c64_zcopy_out's call + shell */
+#define C64COST_ZBYTE10 36              /* ...and a byte moved, TENTHS of us */
+#define C64COST_CPCELL  20              /* one converted screen cell, ASM */
+#define C64COST_CPCALL  24              /* ...and c64_copy_row's own shell */
+#define C64COST_PSBYTE 145              /* one byte the paste feeder types */
+
 /* c64_flush_every (declared in c64.c) - host ticks between flushes, from the
  * tier and the numbers above. */
 static void c64_tier_init(void)
@@ -534,6 +611,15 @@ static void c64_tier_init(void)
         b = C64_SLICE_MAX;
     c64_budget = b;
     c64_fastn = 0;
+    /* ...AND THE FULLSCREEN TIER (9.8's table), decided ONCE and read by
+     * c64_geom. c64_band_x2 is 20.19 ms for eight rows on tests/c64band
+     * (C64BENCH_X2), so a full 25-row screen doubled is ~63 ms ON TOP of the
+     * compose - a fifth of a second a frame on the target 4.77 MHz 8088,
+     * against a machine that is already running at a fraction of real speed.
+     * The CPU_8086 tier therefore takes the 1:1 centred row, which is a FACT
+     * this code tests rather than a guess about speed (CLAUDE.md's rule 7),
+     * and every tier above it magnifies. */
+    c64_can2x = (os88_cpu() != OS88_CPU_8086);
 }
 
 /* ==========================================================================
@@ -815,9 +901,50 @@ static void c64_st_lamps(int ox, int y, int flags)
                   (flags & 2) ? OS88_WHITE : OS88_BLACK);
 }
 
+/* c64_slen - one message's length in CELLS. There is no strlen in this SDK.
+ *
+ * IT IS BOUNDED, AND THAT IS THE POINT RATHER THAN A MICRO-OPTIMISATION. The
+ * header used to say it was asked "once per row REBUILD - not per flush", and
+ * the code contradicted it: the caller evaluates it at the TOP of c64_status,
+ * above every early return, so it ran on every flush for as long as a message
+ * stood - on the path two lines below advertised as answering "nothing on the
+ * row moved" in ZERO drawing calls. SmallerC's `while (s[n] != 0) n++;` is
+ * ~22 instruction bytes of SS-relative code, fetch-bound at 4.34 clocks a
+ * byte, so ~20 us a character; a 33-cell message is ~0.66 ms per flush, and
+ * while a message stands the flush gate fires every `fe` ticks, which is
+ * 30-60 ms of pure strlen per message on the target for a string that cannot
+ * change.
+ *
+ * The whole question is `len <= C64_MSGSHORT`, so the scan stops at
+ * C64_MSGSHORT + 1: the answer is the same and the cost is capped at 26
+ * characters whatever the message. Caching the length in c64_say instead
+ * would be a word of bss and would have to be right for the two PERMANENT
+ * lines as well, which c64_say never sees. */
+static int c64_slen(const char *s, int cap)
+{
+    int n = 0;
+    while (n <= cap && s[n] != 0)
+        n++;
+    return n;
+}
+
+/* A MESSAGE THAT FITS LEFT OF THE JOYSTICK WIDGET DOES NOT ERASE IT.
+ * C64_ST_JOYX is 200, i.e. cell 25, so a message of 25 cells or fewer occupies
+ * only the two speed fields and the separator - and wave 3 made that the
+ * difference between a widget and a defect, because c64kbd.c now raises
+ * `ScrollLock for joystick` FROM JOYSTICK USE: the first deflection of the
+ * stick blanked the two indicators that report the stick, for five seconds.
+ * The permanent JAM line (§4.5, 22 cells) is short too, and used to blank them
+ * for the rest of the session.
+ *
+ * A LONGER MESSAGE STILL OWNS THE WHOLE FIELD AREA - `C64.ROM missing - see
+ * README.TXT` is 32 cells and there is nowhere else for it to go. */
+#define C64_MSGSHORT (C64_ST_JOYX / 8)
+
 static void c64_status(int ox, int y, int w)
 {
-    int msg, joy1, joy2, flags, full, sp;
+    const char *t;
+    int msg, joy1, joy2, flags, sp, mshort, lfull, rfull, wide, wchg, x2;
 
     /* THREE PERMANENT ROW STATES, NOT ONE. A message expires after five
      * seconds; `C64.ROM missing` and a JAMMED CPU do not, because neither is
@@ -829,67 +956,112 @@ static void c64_status(int ox, int y, int w)
     msg = (c64_msg[0] != 0) ? 1
         : (c64_state == C64_ST_JAM) ? 3
         : (c64_norom ? 2 : 0);
+    t = (msg == 1) ? c64_msg
+      : (msg == 2) ? "C64.ROM missing - see README.TXT"
+      : c64_jamline;
+    mshort = (msg != 0 && c64_slen(t, C64_MSGSHORT) <= C64_MSGSHORT) ? 1 : 0;
     joy1 = c64_joyswap ? c64_joy2 : c64_joy1;
     joy2 = c64_joyswap ? c64_joy1 : c64_joy2;
     flags = (c64_warp ? 1 : 0) | (c64_pause ? 2 : 0);
 
     sp = (c64_pct != c64_st_pct || c64_fps10 != c64_st_fps) ? 1 : 0;
-    full = !c64_st_ok || msg != c64_st_shown;
-    if (!full && (msg != 0 || (!sp && joy1 == c64_st_joy1 && joy2 == c64_st_joy2
-                               && flags == c64_st_flags)))
-        return;                             /* nothing on the row moved: the
-                                             * flush calls this every time and
-                                             * THIS is what makes that free */
+    wchg = (joy1 != c64_st_joy1 || joy2 != c64_st_joy2
+            || flags != c64_st_flags) ? 1 : 0;
 
-    if (full) {
-        /* THE ONE PLACE AN ERASE IS RIGHT: the row's pixels are unknown (a
-         * fresh window, an expose, a message going up or coming down changes
-         * every field at once). The delta path below draws over its own
+    /* THE RIGHT HALF IS REBUILT for one of two reasons: the row's pixels are
+     * not ours at all, or a LONG message was standing where the widgets go
+     * and is not standing there any more. The LEFT half is rebuilt for those,
+     * for a new message, and for a message going up or coming down. */
+    rfull = (!c64_st_ok || (c64_st_blank && !(msg != 0 && !mshort))) ? 1 : 0;
+    lfull = (rfull || !c64_st_lok || msg != c64_st_shown) ? 1 : 0;
+
+    if (!lfull && !rfull) {
+        /* nothing on the row moved: the flush calls this every time and THIS
+         * is what makes that free. Under a LONG message nothing else is on
+         * the glass to move; under a SHORT one the widgets are still there
+         * and still delta-draw, and only the speed fields - which the message
+         * is standing on - are held. */
+        if (msg != 0 && !mshort)
+            return;
+        if (!wchg && (msg != 0 || !sp))
+            return;
+    }
+
+    if (lfull) {
+        /* THE ONE PLACE AN ERASE IS RIGHT: those pixels are unknown (a fresh
+         * window, an expose, a message going up or coming down changes every
+         * field it covers at once). The delta path below draws over its own
          * field's cells and never erases first - font_run and blit1 both
-         * arrive in final polarity, which is why they exist (os88.h:442). */
+         * arrive in final polarity, which is why they exist (os88.h:442).
+         *
+         * AND IT ERASES WHAT IT IS ABOUT TO REDRAW, WHICH IS NOT ALWAYS THE
+         * ROW. A message of 25 cells or fewer reaches cell 24 and stops, so
+         * the fill stops there too: the joystick widget, the drive number and
+         * the two lamps stay on the glass and keep delta-drawing under it.
+         * That is a fix before it is a saving - wave 3 raises `ScrollLock for
+         * joystick` FROM JOYSTICK USE (c64kbd.c), so the first deflection of
+         * the stick used to blank the two indicators that report the stick,
+         * and the permanent JAM line blanked them for the session. */
+        wide = (rfull || (msg != 0 && !mshort)) ? 1 : 0;
+        x2 = wide ? (ox + w - 1) : (ox + C64_MSGSHORT * 8 - 1);
+        if (x2 > ox + w - 1)
+            x2 = ox + w - 1;                /* a content box narrower than the
+                                             * widget: §9.8's clamp reaches
+                                             * this row too */
         os88_set_color(OS88_BLACK);
-        os88_gfx_fill(ox, y, ox + w - 1, y + C64_STATH - 1);
+        os88_gfx_fill(ox, y, x2, y + C64_STATH - 1);
 #ifdef C64_HOST
         c64_n_fill++;
 #endif
         c64_st_shown = msg;
         c64_st_ok = 1;
+        c64_st_lok = 1;
     }
 
     if (msg != 0) {
-        /* THE MESSAGE OWNS THE 40 FIELD CELLS AND THE LAMPS KEEP THEIR TWO.
-         * msg == 2 is §1.4's permanent fact - the disk is what it is until
-         * someone changes it - and msg == 3 is a jammed CPU, VICE's own line
-         * at 22 glyphs (§4.5); neither expires. Every string here fits 40
-         * cells (c64_say clamps c64_msg to that), so nothing reaches the two
-         * cells at 320 and 328. */
-        const char *t;
-        if (msg == 1)
-            t = c64_msg;
-        else if (msg == 2)
-            t = "C64.ROM missing - see README.TXT";
-        else
-            t = c64_jamline;
-        os88_font_run(ox, y + 1, t, OS88_WHITE, OS88_BLACK);
-        c64_st_lamps(ox, y, flags);
-        c64_st_flags = flags;                /* ...so the delta path below
+        /* THE MESSAGE OWNS THE FIELD CELLS IT NEEDS AND THE LAMPS KEEP THEIR
+         * TWO. msg == 2 is §1.4's permanent fact - the disk is what it is
+         * until someone changes it - and msg == 3 is a jammed CPU, VICE's own
+         * line at 22 glyphs (§4.5); neither expires. Every string here fits
+         * 40 cells (c64_say clamps c64_msg to that, and the harness checks
+         * every literal against that number at its SOURCE), so nothing
+         * reaches the two cells at 320 and 328.
+         *
+         * It is lettered only on an `lfull`, which is the only time it is not
+         * already on the glass: a widget delta under a short message must not
+         * re-letter it. */
+        if (lfull)
+            os88_font_run(ox, y + 1, t, OS88_WHITE, OS88_BLACK);
+        if (!mshort) {
+            c64_st_lamps(ox, y, flags);
+            c64_st_flags = flags;            /* ...so the delta path below
                                               * does not have to redraw them
                                               * when the message comes down */
-        return;
+            c64_st_blank = 1;                /* ...and the widgets are NOT on
+                                              * the glass, which is what makes
+                                              * the flush after this message
+                                              * rebuild them */
+            return;
+        }
+        /* a SHORT message falls through: the widgets right of it are live */
     }
 
-    if (full || sp) {
+    if (msg == 0 && (lfull || sp)) {
         /* THE SPEED WIDGET'S TWO STRINGS, folded onto this one row and
          * LEFTMOST, as uistatusbar.c appends them - and they are REAL:
          * `% cpu` is emulated cycles over 985,248 and `fps` is emulated VIC
          * FRAMES, so at 100 %% it reads 50.1 (10.2). They delta-draw against
          * what was last on the glass, so a machine holding one speed costs
-         * nothing a second. */
+         * nothing a second. Under a message they are not drawn at all - the
+         * message is standing on them, and it is `lfull` that puts them back
+         * when it comes down. */
         c64_st_num(c64_st_cpu, 7, c64_pct, 0);
         c64_st_num(c64_st_fpsb, 8, c64_fps10, 1);
-        c64_st_field(ox + C64_ST_CPUX, y + 1, c64_st_cpu, c64_st_cpup, 7, full);
-        c64_st_field(ox + C64_ST_FPSX, y + 1, c64_st_fpsb, c64_st_fpsp, 8, full);
-        if (full) {
+        c64_st_field(ox + C64_ST_CPUX, y + 1, c64_st_cpu, c64_st_cpup, 7,
+                     lfull);
+        c64_st_field(ox + C64_ST_FPSX, y + 1, c64_st_fpsb, c64_st_fpsp, 8,
+                     lfull);
+        if (lfull) {
             /* the two literal tails, drawn ONCE with the row: they are 9 of
              * the 24 cells this used to repaint every second and not one of
              * them has ever changed */
@@ -901,7 +1073,7 @@ static void c64_status(int ox, int y, int w)
         c64_st_pct = c64_pct;
         c64_st_fps = c64_fps10;
     }
-    if (full) {
+    if (rfull) {
         os88_font_run(ox + C64_ST_JOYX, y + 1, "Joysticks:",
                       OS88_WHITE, OS88_BLACK);      /* uistatusbar.c:1763 */
         /* THE DRIVE NUMBER IS DRAWN PLAIN, AND §10.3 SAYS SO WITH THE
@@ -924,15 +1096,16 @@ static void c64_status(int ox, int y, int w)
         os88_font_run(ox + C64_ST_DRVX, y + 1, "8", OS88_WHITE, OS88_BLACK);
     }
 
-    if (full || joy1 != c64_st_joy1)
+    if (rfull || joy1 != c64_st_joy1)
         c64_st_band(joy1, ox + C64_ST_J1X, y + 3, 2);
-    if (full || joy2 != c64_st_joy2)
+    if (rfull || joy2 != c64_st_joy2)
         c64_st_band(joy2, ox + C64_ST_J2X, y + 3, 2);
-    if (full || flags != c64_st_flags)
+    if (rfull || flags != c64_st_flags)
         c64_st_lamps(ox, y, flags);
     c64_st_joy1 = joy1;
     c64_st_joy2 = joy2;
     c64_st_flags = flags;
+    c64_st_blank = 0;
 }
 
 /* ==========================================================================
@@ -988,21 +1161,62 @@ static int c64_geom(void *win)
      * AUTHOR a window taller than the desktop, and this reads what it got. */
     c64_gsty = org.y + sz.h - C64_STATH;
 
-    d = (sz.w - C64_SCRW) / 2;
-    if (d < C64_BORDER)
-        d = C64_BORDER;                     /* a window narrower than the C64:
-                                             * the right edge clips, as it did */
+    /* --- 9.8'S TIER TABLE, IN ONE PLACE. 2x is a FULLSCREEN-only thing: a
+     * framed window is authored 336 x 226 and there is nothing to fill. The
+     * two axes are decided separately because the adapters differ in exactly
+     * that way, and the rule is "double it if the box can hold it":
+     *
+     *   VGA 640x480       640 >= 640 and 470 >= 400  -> 2x both, 640x400
+     *                                                   centred, 25 rows
+     *   CGA 640x200       640 >= 640, 190 < 400      -> 2x HORIZONTAL only,
+     *                                                   640 wide exactly, and
+     *                                                   9.1's standing clamp
+     *                                                   gives 22 of 25 rows
+     *   Hercules 720x348  720 >= 640, 338 < 400      -> 2x horizontal, 640x200
+     *                                                   centred, all 25 rows
+     *   the CPU_8086 tier                            -> 1:1 centred (c64_can2x)
+     *
+     * A CGA pixel is already 2:1, so doubling X alone is what makes the
+     * picture the RIGHT SHAPE there - it is not half a job. */
+    c64_scw = 8;
+    c64_sch = 8;
+    if (c64_full && c64_can2x && !c64_no2x) {
+        if (sz.w >= C64_COLS * 16)
+            c64_scw = 16;
+        if (c64_scw == 16
+            && c64_gsty - org.y >= C64_ROWS * 16 + C64_BORDER * 2)
+            c64_sch = 16;
+    }
+
+    /* THE BORDER FLOOR IS A 1:1 THING AND MUST NOT SURVIVE INTO 2x. At 1:1
+     * the framed window is 336 wide and (336 - 320) / 2 IS C64_BORDER, so the
+     * floor changes nothing there and only catches a window narrower than the
+     * C64 - where the right edge clips, as it always did. At 2x on a 640-pixel
+     * screen the picture is 640 wide and the margin is 0: forcing 8 would slide
+     * it right and clip eight pixels off the last column. */
+    d = (sz.w - C64_COLS * c64_scw) / 2;
+    if (c64_scw == 8) {
+        if (d < C64_BORDER)
+            d = C64_BORDER;
+    } else if (d < 0) {
+        d = 0;
+    }
     c64_gsx = org.x + (d & ~7);
-    d = (c64_gsty - org.y - C64_SCRH) / 2;
-    if (d < C64_BORDER)
-        d = C64_BORDER;
+    d = (c64_gsty - org.y - C64_ROWS * c64_sch) / 2;
+    if (c64_sch == 8) {
+        if (d < C64_BORDER)
+            d = C64_BORDER;
+    } else if (d < 0) {
+        d = 0;
+    }
     c64_gsy = org.y + d;
 
-    n = (c64_gsty - c64_gsy) / 8;
+    n = (c64_gsty - c64_gsy) / c64_sch;
     if (n > C64_ROWS)
         n = C64_ROWS;
-    if (n > 0 && c64_gsy + n * 8 > c64_gsty - C64_BORDER)
-        n = (c64_gsty - C64_BORDER - c64_gsy) / 8;   /* leave the bottom border */
+    if (n > 0 && c64_gsy + n * c64_sch > c64_gsty - C64_BORDER)
+        n = (c64_gsty - C64_BORDER - c64_gsy) / c64_sch; /* keep the bottom
+                                                          * border */
     if (n < 0)
         n = 0;
     c64_gnrows = n;
@@ -1207,7 +1421,7 @@ static int c64_span_of(int i)
 
 static void c64_flush(void *win)
 {
-    int i, k, sp, f, l, df, dl, nrows, w, trust;
+    int i, k, sp, f, l, df, dl, nrows, w, trust, rc;
     int ox, oy, sx, sy, sty;
 
     if (c64_geom(win) < 0)
@@ -1282,7 +1496,7 @@ static void c64_flush(void *win)
     c64_dirty_scan();
 
     if (c64_border_dirty || !c64_sh_ok) {
-        c64_border(ox, oy, w, sy + nrows * 8, sty);
+        c64_border(ox, oy, w, sy + nrows * c64_sch, sty);
         c64_border_dirty = 0;
     }
 
@@ -1328,8 +1542,15 @@ static void c64_flush(void *win)
          * its own stub modelled the opposite convention too; both are fixed
          * together, and hosttest/c64uitest.c now checks the pixels MOVED UP
          * rather than only counting the calls. */
-        if (os88_gfx_scroll(sx, sy, sx + C64_SCRW - 1, sy + nrows * 8 - 1,
-                            k * 8) == 0) {
+        /* AND IT WORKS AT 2x: the rect and the dy are in GLASS pixels, so a
+         * k-row shift is k * c64_sch and the rect is C64_COLS * c64_scw wide.
+         * gfx_scroll refuses a rect whose x1 or x2+1 is not a multiple of 8
+         * (9.4) and both stay multiples of 8 at either scale, because c64_gsx
+         * is snapped and 40 * 16 is 640. A refusal falls back to bands here as
+         * it always did. */
+        if (os88_gfx_scroll(sx, sy, sx + C64_COLS * c64_scw - 1,
+                            sy + nrows * c64_sch - 1,
+                            k * c64_sch) == 0) {
 #ifdef C64_HOST
             c64_n_scroll++;
 #endif
@@ -1461,8 +1682,54 @@ static void c64_flush(void *win)
          * nothing saying why, which is the one outcome SPEC.md 47 exists to
          * prevent. c64_st_band three hundred lines up already tested its own
          * blit, so the file was inconsistent with itself. */
-        if (os88_gfx_blit1(c64_bnd + df, C64_BSTRIDE, sx + df * 8, sy + i * 8,
-                           (dl - df + 1) * 8, 8) < 0) {
+        /* THE ONE PLACE THE PICTURE IS MAGNIFIED (9.8). Everything above is
+         * in C64 pixels - the shadow, the signature, the span - and this is
+         * where 320x200 becomes what the tier can afford. c64_band_x2 doubles
+         * the WHOLE 40-byte row whatever the span is, so a one-cell change in
+         * fullscreen costs the full C64BENCH_X2 20.19 ms; that is what a 2x
+         * row costs and the cost table says so.
+         *
+         * ONE ROUTINE SERVES BOTH AXES. c64_band_x2 always emits 2 x rows of
+         * C64_X2STRIDE, each a duplicate of its neighbour, so X-ONLY doubling
+         * is the same buffer read at TWICE the stride: rows 0, 2, 4 ... are
+         * the eight source rows, doubled horizontally and not vertically. No
+         * second routine, no second table. */
+        if (c64_scw == 8) {
+            rc = os88_gfx_blit1(c64_bnd + df, C64_BSTRIDE,
+                                sx + df * 8, sy + i * 8,
+                                (dl - df + 1) * 8, 8);
+        } else {
+            c64_band_x2(c64_bx2, c64_bnd, 8);
+#ifdef C64_HOST
+            c64_n_x2++;
+#endif
+            rc = os88_gfx_blit1(c64_bx2 + df * 2,
+                                (c64_sch == 16) ? C64_X2STRIDE
+                                                : C64_X2STRIDE * 2,
+                                sx + df * c64_scw, sy + i * c64_sch,
+                                (dl - df + 1) * c64_scw, c64_sch);
+        }
+        if (rc < 0) {
+            /* 2x HAS NO FONT FALLBACK, and inventing one would be a second
+             * renderer for a case that is a kern_small kernel carrying the
+             * slot without the body (os88.h). So the picture comes DOWN to
+             * 1:1, where the font path exists, and stays there: c64_no2x is
+             * latched, the shadow is thrown away and the next flush lays the
+             * screen out again at the smaller scale. */
+            if (c64_scw != 8) {
+                c64_no2x = 1;
+                c64_sh_ok = 0;
+                c64_st_ok = 0;
+                c64_dirty_any = 1;
+                return;                     /* ...and RETURN rather than break:
+                                             * the tail of this function clears
+                                             * c64_dirty_any and sets
+                                             * c64_sh_ok, which is exactly the
+                                             * bookkeeping that must NOT stand
+                                             * for a screen that was not drawn.
+                                             * The next wake lays it out again
+                                             * at 1:1 */
+            }
             c64_row_font(i, df, dl, sx, sy + i * 8);    /* 9.5's font path */
             if (!c64_blit_said) {
                 c64_blit_said = 1;
@@ -1557,7 +1824,8 @@ static void c64_blank_rect(void *win, int x1, int y1, int x2, int y2)
         c64_dirty_any = 1;
         return;
     }
-    if (y1 < sy || x1 < sx || x2 >= sx + C64_SCRW || y2 >= sty - C64_BORDER)
+    if (y1 < sy || x1 < sx || x2 >= sx + C64_COLS * c64_scw
+        || y2 >= sty - C64_BORDER)
         c64_border_dirty = 1;               /* the rect reaches the border */
     if (y2 >= sty)
         c64_st_ok = 0;                      /* ...and the status row's pixels
@@ -1565,10 +1833,11 @@ static void c64_blank_rect(void *win, int x1, int y1, int x2, int y2)
 
     if (y2 < sy || x2 < sx)
         return;                             /* the rect misses the screen */
-    r0 = (y1 - sy) / 8;
-    r1 = (y2 - sy) / 8;
-    c0 = (x1 - sx) / 8;
-    c1 = (x2 - sx) / 8;
+    /* ...ON THE CELL GRID, WHICH IS 8 OR 16 PIXELS A SIDE (9.8). */
+    r0 = (y1 - sy) / c64_sch;
+    r1 = (y2 - sy) / c64_sch;
+    c0 = (x1 - sx) / c64_scw;
+    c1 = (x2 - sx) / c64_scw;
     if (y1 - sy < 0)
         r0 = 0;                             /* C truncates toward zero, so a
                                              * negative offset is not -1 */

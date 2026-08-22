@@ -36,7 +36,12 @@ header and carries the GPL-2-or-later attribution.
 The structural shape is RUNCPM's (SPEC.md §74.1): **no worker task and
 nothing blocking.** The machine runs on the UI task in wake-driven wall
 slices (`OSAPI_WM_WAKE` / `OSAPI_WM_ONWAKE`), and a C64 sitting at `READY.`
-costs nothing until a key or a tick arrives.
+costs nothing until a key or a tick arrives. **And that sentence is now
+literally true**, which it was not when it was written: the port carried
+RUNCPM's one worker — the self-close behind File > Exit emulator — until
+wave 3's fix pass found that the idiom closes the WINDOW and not the APP and
+replaced it with `os88_wm_close` (§15.2). `CC_HAS_WORKER` is gone and the
+package holds no task slot at all.
 
 ### 1.2 Licence and attribution
 
@@ -514,6 +519,13 @@ exactly (SPEC.md §74.1):
   millisecond of emulated work;
 - **256 to 16,384 cycles**, doubled when four slices fit inside one host
   tick, halved when one slice spans two tick boundaries;
+- **and the doubling is CLAMPED to the cap, not merely stopped below it.**
+  With one cap of 16,384 the test *"double only while the budget is under the
+  cap"* happened to land exactly on it; with warp's higher ceiling (below) it
+  lands on 32,768, and `int` is SIXTEEN BITS here — the budget arrives as
+  −32,768 and the core expires before its first fetch, so warp would have
+  stopped the machine dead. `hosttest/c64uitest.c` gates both ends of the
+  range; nothing on a glass would have shown it;
 - **only a genuinely EXHAUSTED slice adapts** — a wake that did not spend
   its budget leaves the estimate alone. On this machine there is no blocking
   console read to end a slice early (a C64 always has something to do), so
@@ -522,6 +534,96 @@ exactly (SPEC.md §74.1):
   LESSONS 13's finding: without the rule, typing into a paused machine walks
   the budget to its cap over a hundred wakes that ran no cycles at all, and
   the first wake after the resume is a second of stalled UI task.
+
+**WARP MODE IS THIS CEILING RAISED, AND NOTHING ELSE** (Alt+W, §11.1). It is
+worth being exact about, because a *"warp"* that does something else with the
+same name is worse than no warp at all. **Nothing in this port paces the
+machine against a wall clock** — that is SPEC.md §74.4's posture and it is why
+§11.2 greys VICE's whole Emulation speed section — so the only throttle
+between the 6510 and the host is the wall slice's ceiling: how many cycles a
+wake may run before it hands the UI task back. Warp raises that ceiling from
+16,384 to **30,000**, and 30,000 rather than 32,767 because `c64_m.cnt` is a
+signed word (§4.2) and the alarm model may round a budget UP by the cycles of
+the instruction in progress.
+
+**AND THE OTHER HALF IS THAT IT DRAWS LESS, WHICH IS ALSO VICE'S AND WAS
+NEARLY LOST.** One draft of this feature flushed every *ninth* host tick and
+did not touch the budget at all — that is warp's second half standing in for
+its first, and it is wrong. A review pass then removed the render throttle
+altogether, on the reading that flushing less often *"does not run the machine
+one cycle faster, it only stops showing what it does"*. **The reference
+disagrees, twice, in its own words.** `src/vsync.c:339-340` sets
+`warp_render_tick_interval = tick_per_second() / 10.0` under the comment
+*"Limit warp rendering to 10fps"*, and `vsync.c:634-656` skips every frame
+inside that interval while `warp_enabled` — *"Limit rendering fps if we're in
+warp mode. It's ugly enough for dqh to weep but makes warp faster."* Drawing
+less **is** half of VICE's warp, deliberately.
+
+So this port does both, and the render cap is VICE's number rather than an
+arbitrary one: **while warp is on, the flush rate is
+`max(c64_flush_every, 2)`** — 18.2 Hz / 10 fps is 1.82 host ticks, so two.
+The cap can only ever slow a flush down; the tier rate stands wherever it is
+already slower. On this machine the render half is the **expensive** half:
+§9.7 prices a full expose at 306 ms against a slice of 16,384 emulated
+cycles.
+
+**WHAT IT IS WORTH, MEASURED, AND WHERE IT IS WORTH NOTHING.** Under QEMU,
+with a `FOR`/`PRINT` loop running, the status row went **2,860 % / 1,433.7 fps
+→ 3,060 % / 1,534.8 fps of a real 6510**
+(`build/port-shots/wave3r2-07-nowarp-speed.png`,
+`wave3r2-06-warp-speed.png`) — **about 7 %**, which is the wake round trips
+and the repaints saved and not emulation getting faster. **That 7 % is the
+TWO HALVES TOGETHER — the lifted slice cap AND the render cap — and the
+figure this paragraph used to carry is what turns it into a measurement of the
+second one.** It read **2,070 % → 2,182 %, about 5 %**, off
+`wave3-39-nowarp-3.png` / `wave3-40-warp-3.png`, and those two shots were
+taken on the cap-only build, before the render throttle above was written.
+Same machine, same `FOR`/`PRINT` loop, same reading off the same widget: the
+delta between the two — 5 % with the slice cap alone, 7 % with both — is the
+render cap's own worth, measured rather than argued, which matters because the
+render cap is the half a review pass had already removed once on the argument
+that it cannot be worth anything. **On the target — `CPU_8086` — BOTH halves are
+no-ops, for two separate reasons**, and that is stated rather than discovered:
+
+- the **slice** cap is never reached. At 4.77 MHz a 16,384-cycle slice is far
+  more than one host tick of work, so the adaptation's halving arm settles the
+  budget near its 256-cycle floor and the CAP is not what binds. Lifting a
+  ceiling the machine never reaches changes nothing;
+- the **render** cap does not bind either. That tier already flushes every
+  OTHER host tick — 9.1 Hz, *slower* than VICE's 10 fps cap — for §9.8's own
+  reason: a full repaint there is ~300 ms, five host ticks. `max()` of the two
+  is the tier's own rate, unchanged.
+
+Both DO bind on a 286 or a 386, where `c64_flush_every` is 1: there the cap
+halves the drawing and the budget does walk up to the ceiling.
+**AND THE ITEM SAYS SO ON THE TIER WHERE IT IS WORTH NOTHING, because this
+document is not where the user is looking**: on `CPU_8086` the message is
+`Warp mode on - no change.` and on every other tier it is
+`Warp mode on.` — **this port's own status-row wording in both cases, not
+VICE's**, and an earlier draft of this paragraph called the second one *"VICE's
+plain `Warp mode on.`"*, which was drift of exactly the kind LESSONS.md 1
+warns about. **The 8088 wording used to be
+`Warp mode on - no faster on this CPU.` and it was 37 cells**, which is over
+§10.1's 25-cell threshold — so the one message this port shows on the one
+machine it is sized for took the LONG erase path and blanked `Joysticks:`,
+both port indicators and the drive number for five seconds. It is shortened to
+exactly 25 rather than reworded for taste, and §10.1 carries why the number is
+25. VICE reports warp with a LED widget labelled `warp:`
+(`uistatusbar.c:2607-2616`, `statusbar_led_widget_create`) and has no status
+message at all; the only *"Warp mode"* sentences in the reference are
+`autostart.c:703`'s log line `Turning Warp mode on.` and the monitor's
+`mon_parse.y:290` `Warp mode is on.` These two follow the convention
+`Paused.` / `Running.` already set on this row. The item
+is not GREYED — on a 286 or a 386 the cap is a ceiling that binds and warp
+does what VICE's does — but an item whose whole visible effect is a message
+that is false is the shape SPEC.md §47 exists to stop, and PERFORMANCE.md's
+*degrade by tier* already gives the port the means to answer: `os88_cpu()` is
+a fact the code can test, and `c64_tier_init` has read it before the menu is
+first drawn. The
+alternative — suspending the halving arm as well, which is the only other
+throttle there is — was considered and not taken: a 30,000-cycle slice on an
+8088 is on the order of a second of stalled desktop, and the halving arm
+exists precisely to prevent that (SPEC.md §74.1).
 
 **The floor is never a whole jiffy.** Every device phase — the cycle counter,
 each timer's remaining count, the raster position, the TOD accumulator — is
@@ -572,6 +674,18 @@ Two values only:
 |---|---|
 | `C64_RUN_SLICE` | the wall-slice cycle budget was spent between instructions |
 | `C64_RUN_JAM` | a `KIL`/`JAM` opcode; the machine stops, the status row says so, the window stays up |
+
+**AND ONE WAY OF REACHING IT IS AN OPEN DEFECT, FOUND IN WAVE 3 AND NOT FIXED
+THERE** (`docs/C64-PORT-PLAN.md`'s wave-3 record carries the reproduction).
+**Launching any second package jams the 6510**: with `NOTEPAD.O88` beside the
+`C64\` folder, launch C64, launch Note Pad, raise C64 again — the speed
+figures freeze for good, no keystroke echoes, and Preferences shows
+**Advance frame greyed**, which `c64_menu_state` does only for
+`c64_norom || c64_state == C64_ST_JAM`. It reproduces on the wave-2 build with
+none of wave 3's code exercised, it survives File > Reset machine CPU, and the
+`Main CPU: JAM at $XXXX` line never reaches the row either — two symptoms, and
+the second says the flush after a jam is not happening on this path. It wants
+an owner before wave 5 ships a disk that carries C64 beside every other app.
 
 **The line is VICE's and it is PERMANENT.** `Main CPU: JAM at $E5CF` — the
 format string of `src/maincpu.c:612` with `CPU_STR` from `src/6510core.c:45`
@@ -983,7 +1097,7 @@ kept while the menu item is the guaranteed route**:
 |---|---|---|
 | Alt+F12 | Power cycle machine | an 83-key XT keyboard **has no F12**; the menu item is the route |
 | Alt+D | Fullscreen | **implemented, both directions** (§9.8) — it is not in this table's "cannot deliver" sense but is listed here because it is the one chord the port must dispatch itself: a `WF_FULL` window has no menu bar, so it is the only way back |
-| Alt+Insert | Paste | an AT BIOS `int 16h AH=0` (`kernel/mouse.inc:1426`) drops the enhanced code `0x8B`/`0xA2`; the menu item is the route |
+| Alt+Insert | Paste | an AT BIOS `int 16h AH=0` drops the enhanced code `0x8B`/`0xA2`; the menu item is the route. The `int 16h` in question is `ui_task`'s own, `kernel/ui.inc:84-95` — the `AH=01h` peek and the `AH=00h` fetch that deliver every keystroke this package sees. (This row used to cite `kernel/mouse.inc:1426`, which is `mov ah, 1` inside `kbm_key`'s down-map bit builder and has nothing to do with `int 16h`; the citation had been copied into the shipping source, and in a repo where file:line IS the contract a citation pointing at an unrelated instruction is worse than none.) |
 | Alt+Delete | Copy | the same, code `0xA3` |
 
 They work where the BIOS passes them and are captioned exactly as VICE
@@ -1012,11 +1126,384 @@ that no mouse has spoken, the status row's message area should print
 **`ScrollLock for joystick`** — the fact, where the user is looking, instead
 of a joystick that silently does nothing.
 
-**IT IS NOT SHIPPED YET, AND §10.1 NO LONGER CITES IT AS A MESSAGE THIS PORT
-SHOWS** (the fix pass's correction). No such string exists anywhere in
-`apps/c64`: the joystick went live in wave 2 and the `os88_mouse()` test did
-not. This paragraph is the wave-3 item, and until it lands the row's messages
-are the ones §10.1 lists.
+**IT SHIPS IN WAVE 3 — AND `os88_mouse()` IS NOT WHAT ANSWERS IT.** The
+sentence above described a test the SDK cannot make: `osapi_mouse`
+(`kernel/kernel.asm:3263`) tests `[mou_seen]` to decide whether to poll the
+keyboard mouse and then answers x, y and the button. **It does not report
+whether a mouse has spoken, and no slot does** — and adding one spends kernel
+headroom, which SPEC.md §73.9 makes a decision rather than a build fix. So the
+package asks a question it CAN answer and that has the same answer:
+
+> `kbm_key` (`kernel/mouse.inc:934-941`) intercepts a cursor key **when, and
+> only when, no mouse has spoken AND ScrollLock is off** — and an intercepted
+> key never reaches `os88_onkey`. So *"the down-map says an arrow is held, and
+> `os88_onkey` has never once delivered an arrow"* **is** *"the kernel is
+> eating them"*, observed rather than inferred.
+
+Three consecutive polls are required before the row says anything, because a
+wake posted BEFORE a press is dispatched ahead of the key event queued behind
+it, so ONE poll can legitimately see the ISR's bit with the `W_ONKEY` still in
+the ring. `c64_arrow_typed` is a one-way latch: a machine that has ever
+delivered a cursor key is a machine whose keys the kernel is not taking, and
+it can never start taking them mid-session. The message is said **once a
+session** (SPEC.md §47), and `hosttest/c64uitest.c` carries both the row and
+the negative control — a machine that DELIVERS its arrows must never show it,
+because on that machine the hint is wrong.
+
+**AND THE JOYSTICK ITSELF WORKS EITHER WAY, WHICH IS WHY THIS IS A HINT AND
+NOT A REFUSAL.** `kbd_track` runs inside the int 09h ISR
+(`kernel/mouse.inc:1438`), *above* everything the UI task later decides, so
+`os88_key_down` reports a held cursor key on a mouseless machine exactly as it
+does on one with a mouse. What the user loses without ScrollLock is not the
+stick — it is the desktop pointer, which every deflection drags across the
+screen.
+
+### 7.7 Copy and Paste — PETSCII in and out
+
+**Edit > Copy (Alt+Delete)** and **Edit > Paste (Alt+Insert)** are VICE's two
+clipboard actions (`src/arch/gtk3/actions-clipboard.c`), on os8088's system
+clipboard (SPEC.md §55). Every conversion below is transcribed from
+`src/charset.c` and none of it was invented here.
+
+**AND EVERY PER-BYTE STEP OF BOTH IS RESIDENT, WHICH IS THE THING TO KNOW
+BEFORE READING THE REST.** The command *shells* — the clipboard calls, the
+refusals, the truncation notice — are `ovl_*` in `c64cmd.c`, because they run
+once per pick. The 40×25 walk, the two conversion tables and the line-ending
+fold are in `c64kbd.c` and are **resident**, because they run per BYTE.
+SPEC.md §73.14 splits by FREQUENCY and `docs/C-TOOLCHAIN.md` states the
+consequence in one line — *"the inner loop is assembly: anything that touches
+bytes per iteration is a hand-written proc that C calls once"*.
+
+**AND THE FIX PASS TOOK THAT SENTENCE THE WHOLE WAY: THE PER-CELL LOOP IS
+ASSEMBLY NOW, AND THE COMMAND BODIES CAME BACK RESIDENT WITH IT.** `ovl_cmd`
+sets a latch and returns; the bodies run from the wake, out of the lock (below).
+What is left in `c64cmd.c` is the pick — two compares and a flag — and what is
+left in `C64.OVL` for these two items is nothing at all.
+
+Wave 3 shipped it the other way round and the review caught it: `ovl_copy`'s
+inner loop was `call far [cc_ovv_c64_rd]` followed by
+`call far [cc_ovm_ovl_sc_ascii]` — **two bridge crossings per cell, 2,000 for
+one Copy**, each one a far call into `crt0.asm`'s `cc_ovthunk` (pop/pop, the
+three-word LIFO stash, `call bx`, unstash, two pushes, `retf`) before any work
+happened at all. `ovl_paste` had the same shape at one per byte. None of it
+was visible: the cost model charged **one near call** for the lot (§9.7).
+
+So, now:
+
+| the loop | where it runs | what it costs |
+|---|---|---|
+| the matrix out of the RAM claim | `c64_zcopy_out`, **one call a ROW** | 25 near calls, ~4.3 ms |
+| the row composed into the clipboard claim — table index, the reverse-video mask, the trailing-space trim, the `\n` and the store | **`c64_copy_row` (`c64mem.inc`), ASSEMBLY, one call a ROW** | ~20 µs a cell + 24 µs a row |
+| screen code → ASCII | `c64_sctab[128]`, a **table** | one indexed load a cell |
+| host byte → PETSCII | `c64_pettab[256]`, a **table** | one indexed load a byte |
+| the CRLF fold and the typing | `c64_paste_feed`, **ten bytes a wake, no lock held** | ~1.4 ms a wake |
+
+**THE COPY ROW IS ASSEMBLY BECAUSE OF WHAT SmallerC EMITS, AND THE NUMBER IS
+THE ARGUMENT.** The C loop it replaces was **82 instruction bytes of
+SS-relative word code reloading every local, ~356 clocks a cell — 75 µs**
+(§9.7's `C64COST_CPCELL`, which is what that constant used to be).
+`c64_copy_row` is **eleven instructions, 22 bytes, ~85 clocks of execution
+against the 8088's 4.34-clock-a-byte fetch floor of ~95 — so ~95 clocks,
+20 µs**, and it does the table index, the reverse-video mask
+(`charset.c:204`), `last_non_whitespace` (`clipboard.c:67`), the trim
+(`:81-85`), the `\n` and the store into the clipboard claim's own segment. The
+C above it is a 25-iteration loop. This is `docs/C-TOOLCHAIN.md`'s rule and not
+a preference, and the constant moving 75 → 20 µs is a **rewrite, not a
+re-measurement**: the same work, emitted by hand. `c64_copy_row` has its own
+case in `hosttest/c64memtest.asm` (section 4b) — the mask, the index, the store
+into ANOTHER SEGMENT, the trim, an all-spaces row, a row whose last cell is
+not a space, and `n = 0`.
+
+**Both tables are built once, IN THE OVERLAY, on the FIRST WAKE** —
+`ovl_conv_init` (`c64cmd.c`), which is also §13.3's first `ovl_*` call. The
+two conversions are written out inside its two loops, 128 and 256 iterations,
+~20 ms, off every hot path there is; the ARRAYS are bss and stay resident and
+DS-relative, which is the whole of what makes the move legal (SPEC.md §73.14:
+only code moves).
+
+They used to be three resident functions — `c64_sc_ascii`, `c64_a_petscii`
+and `c64_conv_init`, ~275 emitted instructions, **655 bytes of image** — and
+the wave-3 review found them sitting in the resident half beside the loops
+that index their output a thousand times a Copy. Once-per-launch is the *goes
+out* side of §73.14's line, and this is the frequency split applied to the
+port's own launch path rather than to a menu command. The three became one
+function because an `ovl_*` calling an `ovl_*` crosses the bridge: three
+functions would have been 384 far calls at ~58 µs each.
+
+**The tables are unreachable on a disk that has no `C64.OVL`**, which is what
+makes an unbuilt table safe: `c64_sctab` is read only by `ovl_copy`, and
+`c64_paste_feed` cannot have a queue until `ovl_paste` has run. A `c64_conv_ok`
+flag guards the Edit arm of `ovl_cmd` anyway, because a load refused for a
+TRANSIENT reason (no heap at that moment) and granted later would otherwise
+reach the loops with 128 zero bytes of table and put a screenful of NULs on
+the user's clipboard.
+
+**COPY IS `clipboard_read_screen_output` (`src/clipboard.c:41-100`).** The
+40×25 matrix is read a ROW at a time and converted one screen code at a time
+through three of VICE's functions composed in the order that file composes
+them, then through `edit_copy_action`'s own final pass:
+
+| step | file |
+|---|---|
+| screen code → PETSCII (`code & 0x7f`; `≤ $1F` +$40; `$40..$5F` +$20) | `charset_screencode_to_petscii`, `charset.c:202-210` |
+| the CHROUT duplicates onto the proper codes (`$60..$7F` → `$C0..$DF`) | `petcii_fix_dupes`, `charset.c:112-120` |
+| PETSCII → ASCII, `CONVERT_WITH_CTRLCODES` | `charset_p_toascii`, `charset.c:132-162` |
+| unmappable PETSCII → `.` (`ASCII_UNMAPPED`, `charset.c:126`); `edit_copy_action`'s own pass changes nothing on this path | `charset.c:122-127`, `actions-clipboard.c:69-76` |
+
+Trailing spaces come off each row (`clipboard.c:81-85`) and each row ends in
+one `\n` — the line ending every non-Windows VICE uses (`:54-58`).
+
+**AND AN UNMAPPABLE CELL COMES BACK AS `.`, NOT `?`, WHICH THIS PORT HAD
+BACKWARDS.** The table row above used to read *"anything not printable ASCII →
+`?` | `edit_copy_action`"*, on the reading that `charset.c`'s `.` is overridden
+by `actions-clipboard.c:74`'s `?` — *"the second wins"*. It does not win,
+because it never fires. `edit_copy_action`'s pass (`:69-76`) replaces a byte
+only when it is **neither** `\r`/`\n` **nor** `c < 127 && isprint(c)`, and `.`
+is printable; every byte `charset_p_toascii` can answer on this path is a
+letter, printable ASCII, `' '`, `.` or the line ending. **VICE's Copy output
+cannot contain a `?` at all.** `charset.c:122-127` gives the reason for `.` in
+VICE's own words: these bytes end up in host FILENAMES, so a wildcard is the
+one thing they must not become.
+
+It is not a corner. The values that reach the unmapped arm after
+`charset_screencode_to_petscii` + `petcii_fix_dupes` are `$C0` and `$DB-$DF`,
+i.e. screen codes `$40`, `$5B-$5F`, `$60` and `$7B-$7F` and their
+reverse-video twins — **the graphics cells**, which is exactly what a user
+copying a game screen or a PETSCII drawing hits. The port was also
+inconsistent with itself: its own font-fallback decoder already answers `.`
+for the same cells (`c64scr.c`'s `c64_ascii_of`). `hosttest/c64uitest.c`'s
+Copy fixture now puts screen code `$40` on the screen and requires `.` back,
+so the substitution has a negative control; the row it had asserted only
+letters, `!` and blank rows, and no graphics screen code was ever copied in a
+test.
+
+**AND THE LETTERS COME BACK LOWER CASE, WHICH IS VICE'S ANSWER AND NOT A
+DEFECT.** `charset_p_toascii` maps PETSCII `$41-$5A` to `'a'-'z'` (`:156-158`)
+and `$C1-$DA` to `'A'-'Z'` (`:153-155`), whatever character set the VIC is
+drawing — so a Copy of the boot screen puts
+
+```
+**** commodore 64 basic v2 ****
+```
+
+on the clipboard, in lower case. `build/port-shots/wave3-14-np-pasted-z.png`
+is that text read back by Note Pad. It is written down here because it is the
+one detail a remembered version of this gets wrong.
+
+**Copy says nothing on success**, because VICE says nothing: the result is on
+the clipboard and the window it came from has not changed. A refused
+`os88_clip_put` — over `CLIP_MAXKB`, or a heap that cannot fund it, and
+`kernel/clip.inc:84` then leaves the clipboard **empty rather than stale** —
+is a fact and is said on the status row (SPEC.md §47).
+
+**COPY AND PASTE HOLD THE GFX LOCK FOR NOTHING AT ALL, WHICH IS THE FIX
+PASS'S LARGEST SINGLE CHANGE.** `os88_oncmd` is dispatched **under the lock**
+(`apps/cc/os88.h:566`), so every millisecond of a menu command is the whole
+desktop stopped — LESSONS.md 6's *"no C between `gfx_lock` and `gfx_unlock`
+that is not bounded by a count you can state"*. This section used to state
+Copy's counts — 1,000 converted cells, 25 row pulls and **1,025 bytes handed
+to `os88_clip_put`** — put **83.2 ms** on the harness's model beside them, call
+it *"a floor, not a total"* because of the term below, and then argue that it
+could stay. The argument for keeping it was that *"every other package in this
+OS puts to the clipboard from `os88_oncmd` under the same lock"*, which is an
+argument about those packages and not about this one: none of them converts a
+thousand cells first.
+
+So **`ovl_cmd` sets a latch — `c64_copy_req` / `c64_paste_req` — and
+returns**, and a resident `c64_clip_service(base)` (`c64kbd.c`) runs the whole
+body from the **TOP of the next wake**, above the `c64_abt` gate and above the
+slice, with **no lock held**. **Nothing about the result changes, and the
+reason is that the 6510 advances only inside `os88_onwake`**: between the
+command's dispatch and the top of the next wake not one emulated cycle has
+run, so the matrix and `c64_mbase` are bit-identical to what the user was
+looking at when the item was picked. It is the same screen, copied a wake
+later. A PAUSED or a JAMMED machine services the request as well — the wake
+that serves it simply runs no slice afterwards — which is what keeps Copy live
+on a jam (below). The milliseconds in §9.7's two rows are now WAKE time:
+**28.6 ms for Copy, 0.7 ms for Paste, and zero held lock in both.**
+
+**AND `os88_clip_put` IS NOT ONE FAR CALL, WHICH IS WHAT THE FIRST MODEL
+CHARGED IT AS.** `kernel/clip.inc:70-125` is what runs there — a `clip_drop`,
+a `mem_claim`, and a `rep movsb` of every byte — ~3.7 ms for 1,025 of them at
+17 clocks a byte on the 8088's 8-bit bus, which is charged
+(`C64COST_ZBYTE10`, the same constant the port's other movers are priced at)
+and was the difference between the 79.4 and the 83.2 this section used to
+quote. The term is unchanged; what changed is that it is spent in the wake and
+not under the desktop's lock.
+
+**THE CLAIM IS THE PART THAT IS UNBOUNDED AND IS NOT MODELLED.** `clip_put`
+reclaims whenever the rounded KB differs from the clipboard it already holds
+(`clip.inc:96`), so the FIRST Copy of a session always takes that path; and
+`kernel/memory.inc:363` falls back to `mem_compact` and then `mem_shed_one`,
+whose own header prices a compaction at *"a memcpy in tenths of a second"*.
+This package is precisely the one that fragments the arena — it holds a
+pinned 64KB and a pinned 20KB claim in the middle of it. **The term still
+exists and is still not modelled, so §9.7's 28.6 ms is not a total either.
+WHAT CHANGED IS WHOSE MILLISECONDS THEY ARE.** It is no longer a FLOOR under a
+held lock — that phrasing was this section's own, and *"83.2 ms is a floor, not
+a total"* was written beside the sentence that the alternative *"— doing the
+put from `os88_onwake`, which holds no lock — is written down here as the move
+to make if a measurement on real hardware ever says otherwise"*. No measurement
+was needed to decide it: an unbounded term inside the DESKTOP's lock is the
+shape LESSONS.md 6 forbids by name, and the identical term inside a wake is the
+ordinary price of a heap claim that every package in this OS pays. The move
+that was written down is the move that was made, and the two claims of the
+section below are the rest of it.
+
+**BOTH ITEMS ARE GREYED BY STATE (SPEC.md §47), which wave 3 did not do.**
+`c64_menu_state` sets them from the same two facts that grey Advance frame:
+
+| item | greyed when | why |
+|---|---|---|
+| **Paste** | `c64_norom`, `C64_ST_JAM`, **or `c64_pause`** | `c64_paste_feed` is called only from the arm of `os88_onwake` that runs a slice — `C64_ST_RUN` **and** `!c64_pause \|\| c64_adv` — and `c64_wants_wake` answers 0 in every other case, so a paste there queues bytes **nothing will ever type**, in silence. PAUSE is the third and was missed, because pause is not a STATE, it is a flag on `C64_ST_RUN`: the first two last the session, the third self-heals when the user resumes, and it is greyed anyway because a command whose whole visible effect is nothing at all is the same defect either way. The pause latch in `ovl_cmd` already calls `c64_menu_state`, so the item greys and UN-greys with the state |
+| **Copy** | `c64_norom` only | the clipboard is kernel-owned and outlives this app (SPEC.md §55.3); with no machine the matrix holds `c64_ram_pattern`'s factory fill, so a Copy would **destroy whatever the user had copied somewhere else** in exchange for a screen they cannot see. On a JAM it stays LIVE: the frozen screen is real, and VICE's Copy always copies what is displayed |
+
+The fact that greys either is already the permanent line on the status row
+(§1.4, §4.5), so nothing new is said. **`os88_onkey` guards the two chords the
+same way** — the kernel never dispatches a disabled item, and Alt+Delete /
+Alt+Insert are dispatched by the package itself where the BIOS passes them
+(§7.5), so without the guard the chord walks round the greying.
+
+**PASTE IS `paste_callback` (`actions-clipboard.c:96-110`)**: the clipboard
+converted with `charset_petconvstring(CONVERT_TO_PETSCII)` and handed to
+`kbdbuf_feed`. The byte map is `charset_p_topetscii` (`charset.c:174-199`) —
+`'a'-'z'` → `$41+`, `'A'-'Z'` → `$C1+` and deliberately **not** the `$61`
+duplicates (`:189-192`), `` ` `` → `$27`, everything under `$20` or at or
+above `$7B` → `?` (`PETSCII_UNMAPPED`, `:172`). A consequence worth knowing,
+and it is a real machine's too: a listing pasted in lower case types as the
+BASIC keywords it looks like, and one pasted in UPPER case types as the
+graphics characters `$C1-$DA` draw.
+
+**THE LINE ENDINGS ARE TESTED BEFORE THE BYTE MAP, AND CRLF IS ONE LINE END.**
+`test_lineend` (`charset.c:49-63`) takes CRLF as two bytes and one ending, CR
+and LF as one each, and every one of them becomes a single PETSCII CR
+(`:72-74`). Without the pair test a document written on a DOS machine types
+two RETURNs a line, which in BASIC is a listing with a blank line between
+every statement. In this port the PAIR test is in the feeder and the
+single-byte answer is `c64_pettab[$0D] = c64_pettab[$0A] = $0D`, written over
+the byte map's own `PETSCII_UNMAPPED` in `ovl_conv_init` — because a line
+ending is not a byte-map entry, which is exactly what `charset_petconvstring`
+testing for it *first* means.
+
+**AND THE CONVERSION HAPPENS TEN BYTES AT A TIME IN THE FEEDER, NOT IN THE
+COMMAND.** VICE converts the whole clipboard up front and can afford to; here
+that loop is ~145 µs a byte of SmallerC's own code (§9.7) and `os88_oncmd`
+runs **under the gfx lock**, so a full 2,048-byte queue converted there would
+be ~300 ms of desktop stopped dead for a command that draws nothing. `os88_onwake` holds
+**no** lock and is already bounded by a count this section states — the ten
+bytes the KERNAL's buffer holds — so that is where the byte map runs. Nothing
+about it is observable from the machine's side: the same PETSCII arrives in
+the same order at the same pace, and what the wake that services the command
+does is one `os88_clip_get_seg` into the paste claim. **Edit > Paste is
+0.7 ms whatever the clipboard holds, and none of it is held lock** (§9.7) —
+the row read 0.9 ms of HELD LOCK while `ovl_paste` did the `clip_get` inside
+`os88_oncmd`. The split by frequency survives the move out of the lock
+unchanged: converting the whole queue in one go would still be ~300 ms in one
+wake, which is a stalled UI task rather than a stopped desktop, and the
+KERNAL's ten bytes are still the only count worth being bounded by.
+
+**AND THE TYPING IS THE KERNAL'S, NOT OURS.** `kbdbuf_flush`
+(`kbdbuf.c:370-410`) puts nothing into the machine while its own buffer is not
+empty — `kbdbuf_is_empty` is `mem_read($C6) == 0` (`:233-236`) — and never
+more than the ten bytes that buffer holds. The three numbers are
+`kbdbuf_init(631, 198, 10, …)` (`src/c64/c64.c:1124`): the buffer at
+**`$0277`**, the count at **`$C6`**, ten bytes. VICE calls that flush once a
+frame from the vsync handler; the equivalent here is **once per wake from the
+slice driver, before the slice**, so the machine drinks what it is given
+inside the same wake — at most ten `c64_wr` calls and one `c64_rd`, whatever
+the clipboard holds. A program that stops reading stops the paste, which is
+what happens when you type at a real one.
+`build/port-shots/wave3-34-paste-typing.png` is a paste caught mid-flight.
+
+**AND A PASTE STOPS AT AN EMBEDDED NUL, BECAUSE THAT IS WHAT ENDS THE STRING
+VICE CONVERTS.** `charset_petconvstring` is `while (*s)` (`charset.c:71`) and
+`kbdbuf_feed` takes a C string, so a NUL is where VICE's paste ends and the
+question never arises there. **It arises here, because this kernel's clipboard
+is BYTES and not a string** (SPEC.md §55): a package may be handed one, and
+without the test the byte map turned `$00` into `PETSCII_UNMAPPED` and the
+machine typed a screenful of `?` for whatever binary followed. What has already
+been produced STANDS — the bytes before the NUL are a real paste and are
+typed — and the claim goes back with the queue when it drains.
+
+**A RESET EMPTIES THE QUEUE** (`kbdbuf_abort`, `src/kbdbuf.c:312-320`, called
+from `machine_reset` at `src/machine.c:262`): without it the previous
+machine's paste types itself into the new one. **The citation used to be
+`kbdbuf.c:318`'s `num_pending = 0` inside `kbdbuf_reset`, and that is a
+different function** — `kbdbuf_reset` at `:297` re-initialises the buffer's
+LOCATION and SIZE and does not clear `num_pending` at all, so the line that
+was quoted for this rule is not the line that implements it. VICE's abort is
+conditional on `kbd_buf_cmdline`, which has no equivalent here; this port
+aborts unconditionally, and `c64_paste_stop` is the one place it happens.
+
+**TWO STAGING AREAS, SEPARATE ON PURPOSE, EACH SIZED FROM ITS OWN DIRECTION —
+AND NEITHER OF THEM IS BSS ANY MORE.** Copy's output and Paste's queue are
+separate because the queue outlives its command by however long the machine
+takes to drink it; one shared area would have let a Copy taken during a long
+paste silently rewrite what was still being typed. That much is unchanged.
+What changed is where the bytes live: **`c64_clip[1026]` and
+`c64_pastebuf[2048]` were 3,074 bytes of bss held for the life of the app so
+that two menu commands nobody may ever pick would have somewhere to put their
+bytes**, and §13.0.1 is where that showed up as a third of the wave's cost.
+Each is a **transient heap claim of 2KB** now:
+
+- **Copy's is taken and freed inside one wake** — `os88_mem_claim`, the 25
+  rows composed into it, `os88_clip_put_seg`, `os88_mem_free`, and it is gone
+  before the slice runs;
+- **Paste's is held from the command until the queue drains**, because that is
+  exactly how long the bytes are needed, and **`c64_paste_stop` is the ONE
+  place it goes back** — drained, a reset, or a second Paste over the first.
+  One route out, so there is one place to get it wrong.
+
+**A claim that cannot be had is a refusal that is SAID** — `No memory for the
+copy.` / `No memory for the paste.` — and the machine is untouched: nothing was
+converted, nothing was queued, the clipboard still holds whatever it held.
+This is CWORD's lesson taken at face value: **the next byte to save is a buffer
+moving to a claim**, and a buffer two rarely-picked commands share between them
+is the cheapest one in the program to move.
+
+**AND THE BYTES REACH A CLAIM THROUGH TWO NEW SDK THUNKS.**
+`os88_clip_put_seg(seg, off, len)` and `os88_clip_get_seg(seg, off, cap)` are
+`os88_file_read_seg`'s shape applied to `OSAPI_CLIP_PUT` / `OSAPI_CLIP_GET`,
+and they are cheap to have: both slots already take `ES:SI` / `ES:DI`, so what
+was needed was a thunk that loads `ES` from its argument instead of from `DS`.
+The feeder reads its queue with **`os88_peek`** over a 21-byte window —
+`C64_PFWIN = C64_KB_SIZE * 2 + 1`, because ten delivered bytes consume at most
+twenty when every one of them is a CRLF pair, **and the `+ 1` is the lookahead**:
+without it the pair test at the END of a window cannot see the `\n` that
+follows a `\r`, and the stray `\n` becomes a second RETURN on the next wake —
+this section's own two-RETURNs-a-line defect, reintroduced one window boundary
+at a time.
+
+| staging | bytes | what the number IS |
+|---|---|---|
+| Copy's claim (`C64_CLIPKB`) | **1,026** = `40 × 25 + 25 + 1` produced into a 2KB claim | the screen, one line ending a row and the NUL — the largest thing `clipboard_read_screen_output` can produce. This one really is Copy's bound |
+| Paste's claim (`C64_PASTEKB`, `C64_PASTEMAX`) | **2,048** in a 2KB claim | what ONE `os88_clip_get_seg` can be handed. `OSAPI_CLIP_GET` has no offset (`kernel/clip.inc:145-157`), so a clipboard cannot be read in chunks and the queue IS the staging; 2,048 is ~50 lines of a BASIC listing |
+
+Wave 3 sized the paste queue at 1,026 as well and justified it as *"the
+largest thing Copy can produce"* — which is true of Copy and **is not a bound
+on anything a paste can be handed**. VICE's own queue is `QUEUE_SIZE 16384`
+(`src/kbdbuf.c:60`) and this OS's clipboard ceiling is 32KB (SPEC.md §55.2);
+2,048 rather than either was a **bss decision taken against SPEC.md §73.9's
+55,000-byte trigger** with the VIC's wave-4 work still to land, and it is
+stated here rather than left as an accident. **It is a HEAP decision now and
+2,048 stands anyway**: the claim is transient, so the trigger no longer argues
+against it, and what argues for keeping it is that a 16KB queue would be a
+16KB claim a low-memory machine can refuse for a paste of forty characters. **A clipboard bigger than the
+queue is pasted as far as it fits and the truncation is said** — `Pasting the
+first 2048 bytes.` The message names the number and `hosttest/c64uitest.c`
+fails the build if the two ever drift apart.
+
+**AND A FULL CLIPBOARD IS NOT AN EMPTY ONE.** `os88_clip_size` answers `AX`
+and the package's `int` is 16 bits; `kernel/clip.inc:84` refuses only what is
+strictly *above* `CLIP_MAXKB * 1024`, so a clipboard of **exactly 32,768**
+bytes is legal and arrives as `0x8000` — **−32,768**. Wave 3 tested `sz <= 0`
+and so reported `The clipboard is empty.` on a full clipboard, queued nothing,
+and made the truncation notice false in the same breath: the one message the
+user got was the untrue one. The test is `sz == -1`, which is the only answer
+that means empty and is not a length any put can have, and the size comparison
+is unsigned. The harness drives a 32,768-byte clipboard, and the stub casts
+through `short` so that the host's 32-bit `int` cannot hide the one arithmetic
+the target does.
 
 ---
 
@@ -1509,6 +1996,43 @@ thunk, ~820 for the take's two `rep`s over 36 bytes). The rows that draw
 nothing are what this changes: a flush that composes nothing is **0.1 ms**
 where it used to read 0.0, and one that takes the dirty bitmap **0.5 ms**.
 
+**AND THE OVERLAY BOUNDARY IS PRICED NOW, WHICH IS WHY THE COPY ROW MOVED FROM
+25.0 ms TO 79.4.** Wave 3's two clipboard rows were written down *below the
+floor*: the model charged `c64_rd` at 25 µs as a NEAR call, and as built that
+call was a FAR call through a resident shim with a second far call to the
+conversion behind it — 2,000 crossings a Copy, and the loop body itself
+charged zero. Five constants pay for it now, all in `c64scr.c` beside
+`C64COST_SCRACC`, all **models** and each with its arithmetic written out
+there: `C64COST_OVLCALL` = **58 µs** a bridge crossing (PERFORMANCE.md's
+46.7 µs far call + the shim's 11 µs near call), `C64COST_ZCALL` = 26 µs and
+`C64COST_ZBYTE10` = 3.6 µs a byte for `c64_zcopy_out`, `C64COST_CPCELL` for
+one cell of the copy loop and `C64COST_PSBYTE` = **145 µs** for one byte the
+paste feeder types. The last two are **counted, not guessed**: the loop bodies
+were extracted from `build/c64.gen.asm` and assembled — 82 and ~105
+instruction bytes — and priced at the 8088's 4.34 clocks-per-byte fetch floor.
+Without a bridge constant the next `ovl_*` that loops would be priced the same
+way and nobody would see it.
+
+**AND `C64COST_CPCELL` IS 20 µs, NOT 75, BECAUSE THE LOOP WAS REWRITTEN AND NOT
+BECAUSE IT WAS RE-MEASURED.** The 75 µs was honest about 82 instruction bytes
+of SmallerC's SS-relative word code reloading every local, ~356 clocks a cell.
+Edit > Copy's per-cell loop is **assembly** now — `c64_copy_row` in
+`c64mem.inc`, eleven instructions, 22 bytes, ~85 clocks of execution against a
+~95-clock fetch floor, so **~95 clocks, 20 µs** (§7.7) — and a **new
+constant, `C64COST_CPCALL` = 24 µs**, pays for that proc's own call and shell
+once a ROW: 11 µs for the near call + `ret` and ~60 clocks of prologue,
+segment load and epilogue at 0.21 µs. A per-cell constant with no per-call
+constant beside it is how a proc that C calls 25 times gets its shell for
+free.
+
+**AND THE CONVERSION IS CHARGED FROM ITS OWN COUNTER NOW.** It used to be
+charged from the bytes `c64_zcopy_out` moved, which was right by
+**coincidence**: `c64_copy_screen` was that mover's only caller and moved
+exactly one byte per converted cell. Wave 4's VIC work is precisely the shape
+that breaks the coincidence — a bitmap row or a sprite fetch moves bytes
+through the same mover and converts nothing — and would have been priced at
+320 cells of a conversion that does not happen.
+
 **Re-taken after the wave's FIX pass.** Every row moved by about half a
 percent, because the two constants the model prices a compare and a signature
 from were re-measured with the bench (`C64BENCH_SPAN` 1530 → 1571 µs,
@@ -1549,10 +2073,19 @@ it quotes for a 78-cell line). Every row below that draws a string moved.
 | the About panel closing | **139.3 ms** | 13 composed rows — the panel's rect, not the screen |
 | a `k = 1` scroll on a CLAMPED window | **154.5 ms** | 1 scroll + 1 drawn row, on 15 rows of glass |
 | one joystick indicator changed | **1.4 ms** | **one** `blit1`, **no fill** — the status row's delta (§10.1), reached the way the product reaches it |
+| **a short message going up** | **22.8 ms** | 1 fill of the row's **first 25 cells only** and the message's 23 glyph cells — **the joystick widget, the drive number and the two lamps are not touched** (§10.1). It used to erase all 42 cells and put back the message and the lamps, which after wave 3 meant that DEFLECTING THE JOYSTICK blanked the two indicators that report the joystick |
+| **…and coming down again** | **26.0 ms** | 1 fill of the same 25 cells and the two speed fields rebuilt — **24 glyph cells, not 37**: the 13 cells right of the message never changed, so they are not redrawn |
+| **a long message going up** | **35.1 ms** | 1 fill of the whole row, 33 glyph cells and the two lamps — a 33-cell message has nowhere else to go, and this is the negative control that shows the row above is measuring something. The flush after it expires rebuilds the widgets it blanked (`c64_st_blank`) |
 | **the speed figures changed** | **3.7 ms** | **TWO** `font_run` calls, one per changed NUMBER field, and typically one glyph cell each — **no fill**. Each must land inside its own number and never on the literal tails (§10.2); the two cannot coalesce, because the fixed `% cpu` tail sits between them at x = 56..95. This is the program's only redraw on a TIMER, and the row that used to say **1.7 ms and one call** described a FIXTURE: it advanced the cycle counter and left the frame counter at zero, so only one field moved — which one fold of this program cannot do |
 | the same row with the delta switched off | **42.0 ms** | the negative control: 1 fill + 37 glyph cells, which is what the widget used to cost every second |
 | **entering fullscreen** | **306.4 ms** | one whole repaint, the kernel's own (§9.8) |
 | **the wake after entering fullscreen** | **0.3 ms** | **0 blits, 0 composes** — `OSAPI_FULLSCREEN` repaints synchronously in both directions, so the shadow already describes the new glass |
+| **entering fullscreen at 2× on VGA** | **892.0 ms** | the same repaint with `c64_band_x2` under every band: 25 doubled rows at 20.19 ms on top of the compose, against **306.4 ms** at 1:1 in the row above. This is the number that decides §9.8's tier table, and it is why the `CPU_8086` tier does not magnify |
+| **the wake after entering fullscreen at 2×** | **0.2 ms** | **0 blits, 0 composes** — the latch is not paid for twice at either scale (§9.8) |
+| **a `k = 3` shift at 2×** | **126.6 ms** | 1 `gfx_scroll` — `dy = k × c64_sch` = 48 glass pixels, not 24 — and `k` doubled rows drawn. The alternative the plan allowed, falling back to bands, is 25 doubled rows and about half a second for what one scroll does (§9.8) |
+| **Edit > Copy of the whole screen** | **28.6 ms** | **0 blits, 0 fills, 0 glyph runs**: Copy draws nothing at all, and **NO LOCK IS HELD for any of it** — the body runs from the top of the next wake (§7.7). 25 `c64_zcopy_out` row pulls, 25 `c64_copy_row` calls, 1,000 cells at 20 µs of ASSEMBLY, **1,025 bytes through `os88_clip_put`'s own `rep movsb`** (kernel/clip.inc:118, ~3.7 ms) and **ONE** overlay bridge crossing — `os88_oncmd` → `ovl_cmd` and back, the runtime's far entry, which is all that is left of a command whose body is resident. The row is taken on a screen with no space on it, because that is what it is called and it is the worst case; the sparse fixture the assertions run on puts 71 bytes on the clipboard and hides the copy entirely. **It is still not a total**: the claim and `clip_put` may compact the data arena and that term is not modelled — it is WAKE time now rather than desktop-stopped time, which is the whole of why it is acceptable (§7.7) |
+| **Edit > Paste of any clipboard** | **0.7 ms** | **0 blits, 0 fills, 0 composes, NO LOCK HELD**, and it does not depend on the length: one `os88_clip_get_seg` into the paste claim and **ONE** bridge crossing (`os88_oncmd` → `ovl_cmd`, which sets a latch and returns). The row read 0.9 ms and FOUR crossings while the body was an `ovl_paste`. The byte map is the feeder's, below |
+| **a wake typing ten pasted bytes** | **1.4 ms** | **NO LOCK HELD** — `os88_onwake`. Ten bytes converted and put in `$0277`, at 145 µs each, and only while a paste is draining (§7.7) |
 | a full bitmap frame | wave 4 | the **measured ms**, not the call count |
 | one sprite moved one cell | wave 4 | the spans it actually touched |
 | a slice with no tick boundary | **0.1 ms** | **0** (§9.3) |
@@ -1576,8 +2109,49 @@ Three decisions fall out of that table and each is a constant in `c64scr.c`:
 **a changed cell is 4.2 ms and a changed row 12.5 ms**, which is the whole
 reason the composer takes a span and the write window exists (§9.2); **a full
 repaint is ~300 ms, five host ticks**, so the `CPU_8086` tier flushes every
-OTHER tick (§9.8); and **2× is 20.19 ms for eight rows**, 63 ms for a screen
-on top of the compose, which is why no tier magnifies in wave 1 (§9.8).
+OTHER tick (§9.8); and **2× is 20.19 ms for eight rows**, which used to be
+read here as *"63 ms for a screen on top of the compose, which is why no tier
+magnifies in wave 1"* and is now read as the row above it: 892.0 ms to enter
+fullscreen magnified, against 306.4 at 1:1. **The tiers that can pay it
+magnify and the `CPU_8086` tier does not** (§9.8), and `c64_band_x2` doubling
+the whole 40-byte row whatever the span is — a one-cell change in fullscreen
+costs the full 20.19 ms — is why the fact the code tests is `os88_cpu()` and
+not a span count.
+
+**Re-taken a third time by wave 3's SECOND review pass**, which moved three
+rows and added three:
+
+- **`Edit > Copy` went 79.4 → 83.2 ms**, and the difference is
+  `os88_clip_put`'s own byte copy — the one call in that command which is not
+  this package's code, and which the model was charging one bridge crossing
+  and nothing else. The row is also taken on a FULL screen now, because that
+  is what it is called and because the sparse fixture the assertions run on
+  puts 71 bytes on the clipboard and hides the term entirely. §7.7 states the
+  part that cannot be priced at all.
+- **Copy's bridge count went 3 → 4.** `ovl_cmd` reaches `ovl_copy` with
+  `call far [cc_ovm_ovl_copy]` (`build/c64.gen.asm`) and the hand-written
+  count did not include it. 58 µs of 83 ms — but the term exists so that the
+  next `ovl_*` that loops cannot be priced at zero, and the enumeration beside
+  each row is how the next author decides what to charge.
+- **three status-row rows are new** — a short message going up, coming down,
+  and a long one — because wave 3 made the row's erase a correctness question
+  and not only a cost one (§10.1).
+
+**And re-taken a FOURTH time by wave 3's FIX pass, which moved the two
+clipboard rows further than any pass has moved a row of this table and added
+three:**
+
+- **`Edit > Copy` went 83.2 → 28.6 ms and its bridge count 4 → 1**, and
+  neither figure is the point: the point is that **none of the 28.6 is held
+  lock**. The body left `os88_oncmd` for the top of the next wake (§7.7), so
+  the crossings to `ovl_copy` and back are gone with it, and the per-cell
+  constant fell 75 → 20 µs because the loop is assembly now. **Edit > Paste
+  went 0.9 → 0.7 ms and 4 → 1** for the same reason. The enumeration beside
+  each row is what makes a crossing count checkable, and it is what caught
+  these two being four.
+- **three fullscreen rows are new** — entering at 2×, the wake after it, and a
+  `k = 3` shift at 2× — because 2× ships (§9.8) and the table it is written
+  from is this one.
 
 A change that moves a row of this table up is a regression against a
 documented number, and this table, `c64scr.c`'s constants and the harness
@@ -1602,14 +2176,120 @@ in the overlay: a keystroke is the frequent side of SPEC.md §73.14's split,
 and a chord that had to load `C64.OVL` to work would refuse on a disk without
 it — with the refusal printed on a bar the user cannot see.
 
-**WAVE 1 SHIPS THE 1:1 CENTRED ROW ON EVERY TIER AND DOES NOT MAGNIFY**, and
-that is stated here rather than left to be discovered on the glass. The item
-is LIVE and it works — the C64 screen is centred in the fullscreen content
-box, the border fills the rest of it and the status row runs the full width —
-it simply does not scale. The fact: `c64_band_x2` is **20.19 ms for eight
-rows** on `tests/c64band` (§9.7), 63 ms for a screen *on top of* the compose,
-and it needs a second shadow geometry; the scaler lands with the wave that can
-pay for it. Nothing here is faked and nothing is silently missing.
+**2× SHIPS, AND ON EVERY TIER THAT CAN PAY FOR IT.** This section used to say
+in capitals that **wave 1 ships the 1:1 centred row on every tier and does not
+magnify**, with the scaler *"landing with the wave that can pay for it"* and
+every 2× row of the table below marked *later*. Wave 3's fix pass wrote it,
+and what made it affordable was not a faster composer but the discovery that
+almost none of the program has to know: **the frame shadow stays 320×200 and
+every compare, every signature and every span is still in C64 pixels. The
+doubling happens at BLIT TIME and nowhere else** — which is why not one
+compare, signature or span path needed a second version, and why the second
+shadow geometry this section feared does not exist.
+
+**`c64_scw` and `c64_sch` are the GLASS pixels per C64 cell** — 8 or 16 a side
+— **decided in ONE place**, `c64_geom` (`c64scr.c`), and every cell↔pixel
+conversion in `c64scr.c`, `c64.c` and `c64about.c` divides by them. That is the
+whole of the mechanism: a magnified screen is the same program with two
+different numbers in it.
+
+**THE TWO AXES ARE DECIDED SEPARATELY, BY "DOUBLE IT IF THE BOX CAN HOLD IT."**
+Neither is a tier's preference; each is an arithmetic test against the live
+fullscreen content box, which is why the table below has a row per adapter and
+not a row per taste.
+
+**ONE ROUTINE SERVES BOTH AXES.** `c64_band_x2` (`c64band.inc`) always emits
+**2 × rows of `C64_X2STRIDE`**, each a duplicate of its neighbour — so
+**X-ONLY doubling is the same buffer read at TWICE THE STRIDE**: rows 0, 2,
+4 … are the eight source rows doubled horizontally and not vertically. No
+second routine, no second table, and nothing to keep in step. The doubled band
+is **1,280 bytes of bss** (`C64_X2STRIDE × 16`), and it is bss rather than a
+claim for the reason §7.7's two staging areas are claims read backwards: **the
+flush cannot refuse.** A Copy that cannot get memory says so and the machine is
+untouched; a flush that cannot get memory has no such answer.
+
+**AND THE SCROLL STILL SCROLLS AT 2×.** The rect and the `dy` handed to
+`OSAPI_GFX_SCROLL` are in GLASS pixels, so a `k`-row shift is `k × c64_sch`
+and the rect is `C64_COLS × c64_scw` wide; §9.4's rule that `x1` and `x2 + 1`
+must be multiples of 8 holds at either scale, because `c64_gsx` is snapped and
+`40 × 16` is 640. The alternative the plan allowed — falling back to bands
+whenever the screen is magnified — would have been 25 doubled rows, about half
+a second, for what one `gfx_scroll` does (§9.7's `a k = 3 shift at 2×` is
+126.6 ms with the scroll).
+
+**AND THE 1:1 BORDER FLOOR IS APPLIED AT 1:1 ONLY.** `if (d < C64_BORDER) d =
+C64_BORDER` is right when the picture is 320 wide on a 640-pixel screen and
+wrong when it is 640: the margin there is genuinely 0, and forcing 8 slides the
+picture right and clips eight pixels off the last column.
+
+**2× HAS NO FONT FALLBACK, AND THAT IS DELIBERATE.** §9.5's font path exists
+for a `kern_small` kernel that carries `OSAPI_GFX_BLIT1` without its body;
+inventing a doubled one would be a **second renderer** for that case. A refusal
+at 2× latches `c64_no2x`, throws the shadow away and **RETURNS from the
+flush** — not `break`: the tail of `c64_flush` clears `c64_dirty_any` and sets
+`c64_sh_ok`, which is exactly the bookkeeping that must not stand for a screen
+that was not drawn — and the next wake lays the screen out again at 1:1, where
+the font path is.
+
+**AND A REFUSED `os88_fullscreen` OWES A REPAINT, WHICH THE SUCCESS ARM DOES
+NOT.** The success arm is paid for by the kernel (below), so nothing draws
+there. On the REFUSED arm nothing repaints us **at all** — and
+`c64_fullscreen_toggle` has just taken the About panel down, so what the user
+was left with was a hole the size of the panel until something else damaged
+it. The refused arm sets `c64_dirty_any` and posts a wake.
+
+**AND THE FIRST 2× SCREENDUMP WAS ENTIRELY BLACK, WHICH IS THE PART OF THIS
+SECTION WORTH READING TWICE.** The cause was `c64_x2init` (`c64band.inc`), the
+loop that builds the byte → two-byte doubling table `c64_x2tab`: it had been in
+the tree for **two waves with nothing calling it** — 2× is its only consumer —
+and it answered a table of **256 zeros**. It was wrong in two independent
+places, and both are the ordinary shape of a bit-twiddling loop written from
+its own description rather than from the machine:
+
+- **`shl bx, 1` answers BIT 15 in `CF`**, and the byte was in the LOW half of
+  `BX`. The carry is therefore zero on all eight passes whatever the byte is.
+  The byte goes into the high half first now (`mov cx, 8` / `mov bx, si` /
+  `shl bx, cl`).
+- **The two result shifts must BOTH happen before the pair is set.** Setting
+  the pair between them puts it at bits 1–2 instead of 0–1, so after eight
+  passes the leftmost pair has walked out of the sixteen-bit result.
+
+**The host harness could not see either, and the reason is worth saying in as
+many words: `hosttest/c64uitest.c` MODELS the doubler in C rather than running
+the assembly.** That is LESSONS.md 7's trap exactly — *verify the stubs model
+what the machine does* — and a transcription that is correct is precisely what
+makes the real routine's defect invisible. It was found **on the glass and
+nowhere else**.
+
+**So the gate is new, and it runs the shipping text.**
+`hosttest/c64memtest.asm` section **(6b)** runs `c64_x2init` and
+`c64_band_x2` on a real x86 under `SS ≠ DS`. It checks five hand-computed
+entries — `$00 → $0000`, `$FF → $FFFF`, `$80 → $C000`, `$01 → $0003`,
+`$55 → $3333` — and then asserts over all 512 bytes that **every byte is a
+DOUBLED NIBBLE**, `(b & 0xAA) >> 1 == (b & 0x55)`, an identity that holds for
+the sixteen values a doubled nibble can take and for almost nothing a wrong
+loop produces. **Both halves are needed and neither is decorative**: the
+identity alone passes an all-zero table, and the hand-checked entries alone
+would not have caught a pair at the wrong bit position in the middle of the
+range. It also asserts that `c64_band_x2`'s second scan line is a COPY of the
+first — which is what lets the X-only tier read the same buffer at twice the
+stride — and that `rows = 1` writes no third row. **The negative control was
+taken**: with the old loop restored the case fails with a `D`, and passes with
+the fix.
+
+`build/port-shots/w3fix-16-fullscreen-2x-vga.png` is what it should have been
+all along — 640×400 centred, all 25 rows, the status row the full width — and
+`w3fix-19-fullscreen-2x-cga.png` is the other tier: 640 wide exactly, 1×
+vertical, the widget cluster intact. `w3fix-17-back-from-fullscreen-vga.png`
+and `w3fix-20-back-from-fullscreen-cga.png` are the way back, because §11.2.1's
+rule is that the key that got you there is the key that leaves.
+
+**THE COST IS WHY THE `CPU_8086` TIER DOES NOT MAGNIFY**, and it is a fact the
+code tests (`os88_cpu()`) rather than a guess about speed. `c64_band_x2`
+doubles the **whole 40-byte row** whatever the span is, so a one-cell change in
+fullscreen costs the full `C64BENCH_X2` = **20.19 ms**; §9.7 prices entering
+fullscreen at 2× on VGA at **892.0 ms** against 306.4 at 1:1. That is affordable
+on a 286 or a 386 and it is three seconds of nothing on an XT.
 
 Wave 1's review found the first draft doing something worse than either:
 `c64_flush` clamped its drawable width to `C64_W_W` (336) and anchored the
@@ -1622,17 +2302,30 @@ latch at all. The geometry is now computed in one place (`c64_geom`) and the
 screen's left edge is snapped to a multiple of 8, because `OSAPI_GFX_SCROLL`
 refuses a rect whose `x1` or `x2+1` is not (§9.4).
 
-The scaling, when it lands, is a **tier table in one place** (`c64scr.c`),
-written **from** `tests/c64band`'s measured milliseconds (§14.5) and from the
-machine figures, never from a guess:
+The scaling is a **tier table in one place** (`c64_geom`, `c64scr.c`), written
+**from** `tests/c64band`'s measured milliseconds (§14.5) and from the machine
+figures, never from a guess:
 
 | adapter / tier | fullscreen | wave |
 |---|---|---|
-| every tier | **1:1 centred** | **1 — shipping** |
-| CGA | 2×, **exactly 640×200** | later |
-| VGA | 2×, 640×400 centred — the band composed 16 rows deep | later |
-| Hercules | 2× horizontal, 640×200 centred, 1× vertical | later |
-| the `CPU_8086` tier | 1:1 centred | **1 — shipping** |
+| VGA 640×480 | **2× on BOTH axes**, 640×400 centred, all 25 rows — the band composed 16 rows deep | **3 — shipping** |
+| CGA 640×200 | **2× HORIZONTAL only**, 640 wide exactly — 400 rows do not fit in 200 — and §9.1's standing clamp gives **22 of the 25 rows** above the status row | **3 — shipping** |
+| Hercules 720×348 | 2× horizontal, 640×200 centred, all 25 rows, 1× vertical | **3 — shipping** |
+| the `CPU_8086` tier | **1:1 centred**, whatever the adapter can hold | **1 — shipping** |
+
+**THE CGA ROW USED TO PROMISE MORE THAN A 200-LINE SCREEN CAN GIVE.** It read
+*"2×, exactly 640×200"*, and 640 wide exactly is true; the height is not.
+A 200-line screen carrying **22 cell rows of 8 pixels plus the status row** is
+what §9.1's standing rule produces — *"a clamped window shows fewer C64 rows
+and keeps its status row, rather than showing 25 rows it does not have and
+losing the row that explains itself"* — and 640×200 of picture would have been
+the status row off the bottom, which is the one thing that rule exists to
+prevent.
+
+**AND DOUBLING X ALONE ON CGA IS THE WHOLE JOB THERE, NOT HALF OF ONE.** A CGA
+pixel is already 2:1, so a 320×200 picture drawn 1:1 is drawn HALF AS WIDE as
+it should be. X-only doubling is what makes the picture the **right shape** on
+that adapter, and it happens to be the only doubling its 200 lines can hold.
 
 The rest of the screen is a border fill. **A toast raised while fullscreen
 goes to the status row as well** — the bar a toast lands on is *under* a
@@ -1649,7 +2342,16 @@ threw that shadow away and the next wake drew the identical picture again —
 25 bands, ~300 ms, four host ticks of pure double-draw, and invisible in an
 emulator. `apps/runcpm/runcpm.c:1086-1095` records the same defect in its own
 words. The harness rows `entering fullscreen` and `the wake after entering
-fullscreen` (§9.7) are the gate.
+fullscreen` (§9.7) are the gate, at both scales.
+
+**AND THE HARNESS GATES THE MAGNIFICATION ITSELF**, because every way of
+getting it wrong draws a picture rather than failing: `c64_scw`/`c64_sch` are
+read off the computed geometry on a 640×480 box and on a 640×200 one; **every
+2 × 2 block of the magnified glass is asserted uniform**, which is exactly what
+a blit at the wrong stride or with the wrong row count breaks; the `k = 3`
+scroll's `dy` is asserted to be **48 and not 24**; and there are **two negative
+controls** — the `CPU_8086` tier must NOT magnify, and a refused `blit1` must
+come down to 1:1.
 
 ---
 
@@ -1727,18 +2429,104 @@ raising the flag by hand — a path the package could not take. The flag is
 gone; the row is examined on every flush and answers *"nothing moved"* in
 **zero drawing calls**, which is what the delta was built for.
 
+**AND `c64_slen` IS BOUNDED NOW, BECAUSE "ZERO DRAWING CALLS" IS NOT THE SAME
+AS ZERO WORK.** Its header said it was asked *"once per row REBUILD — not per
+flush"*, and its one caller evaluated it at the TOP of `c64_status`, **above
+every early return** — i.e. on the path two lines above, the one advertised as
+answering that nothing moved. So it ran on every flush for as long as a message
+stood, and SmallerC's `while (s[n] != 0) n++;` is ~22 instruction bytes of
+SS-relative code, fetch-bound at 4.34 clocks a byte: **~20 µs a character**, so
+~0.66 ms a flush for a 33-cell message and **30–60 ms over the message's five
+seconds on the target**, all of it re-measuring a string that cannot change.
+The whole question the length is asked is `len <= C64_MSGSHORT`, so the scan
+**stops at `C64_MSGSHORT + 1`** — the same answer, capped at 26 characters
+whatever the message is. Caching the length in `c64_say` was the other option
+and was refused: it is a word of bss, and it would have to be right for the two
+PERMANENT lines as well (§1.4, §4.5), which `c64_say` never sees — a cache that
+is correct for the messages and stale for the two strings that stand for the
+session is worse than the scan it replaces. A header that contradicts its
+caller is how this survived a review: the cost was written down as once a
+message and paid once a flush.
+
 **A MESSAGE OWNS THE ROW'S 40 FIELD CELLS — NOT THE ROW** (amended in the fix
-pass). The alternative, measured, is a seven-cell message area, and the
-longest strings this port shows are `C64.ROM missing - see README.TXT` (§1.4)
-at 32 and `Cannot start the closer - try again.` at 36; `c64_say` clamps the
-text to 40. **The two LAMPS at cells 40 and 41 are drawn under a message as
+pass). The alternative, measured, is a seven-cell message area; `c64_say`
+clamps the text to 40. **This paragraph used to name the longest string the
+port shows and it named one that no longer exists** —
+`Cannot start the closer - try again.` at 36, which went with the worker
+(§15.2) — so it stops naming one. The invariant is held mechanically instead,
+and that is what keeps it from going stale a second time:
+`hosttest/c64uitest.c` walks every message LITERAL against `C64_MSGCELLS`, and
+`apps/c64/build.sh` extracts every `c64_say` literal out of `apps/c64/*.c` to
+give it the list. A message this document does not know about is still
+measured. **The two LAMPS at cells 40 and 41 are drawn under a message as
 well**, because `P` is the one indicator that exists to report the PAUSE
 state and `Paused.` is a message: hiding it left the lamp off the glass for
 exactly as long as the machine was in the state it reports, and a machine the
-user stopped keeps its message until the next event (below). The joystick
-indicators and the speed fields are inside the message's 40 cells and are
-covered; they come back with the message. A message expires after about five
-seconds.
+user stopped keeps its message until the next event (below). A message expires
+after about five seconds.
+
+**AND A SHORT MESSAGE OWNS ONLY THE CELLS IT NEEDS, WHICH IS WAVE 3'S SECOND
+REVIEW PASS AND IS A CORRECTNESS FIX BEFORE IT IS A SAVING.** The joystick
+widget starts at `C64_ST_JOYX = 200`, i.e. **cell 25**, so a message of 25
+cells or fewer never reaches it — and the ERASE has to stop where the message
+does, which it did not. The row was filled black end to end and only the
+message and the two lamps put back, so `Joysticks:`, BOTH port indicators and
+the drive number were blank for the message's five seconds and permanently in
+the two non-expiring states. Wave 3 made that self-defeating: `c64kbd.c` now
+raises **`ScrollLock for joystick` FROM JOYSTICK USE** (§7.6), so the first
+deflection of the stick blanked the two widgets that report the stick.
+
+So the fill is `ox .. ox + 199` for a message of 25 cells or fewer, and the
+widgets right of it stay on the glass and keep delta-drawing under it. A
+LONGER message — `C64.ROM missing - see README.TXT` at 32,
+`Pasting the first 2048 bytes.` at 29 — still owns all 40 field cells, because
+there is nowhere else for it to go. The cost, from §9.7: **22.8 ms going up and 26.0 ms
+coming down**, against 36.8 + 42.0 for the erase-and-rebuild pair.
+
+**AND `C64_MSGSHORT` IS 25 CELLS, WHICH IS WHY THE WARP MESSAGE WAS
+SHORTENED RATHER THAN REWORDED** (§4.4). It read
+`Warp mode on - no faster on this CPU.` — **37 cells** — and that is the
+message this port shows on `CPU_8086` and nowhere else, i.e. **on the one
+machine the whole port is sized for**. So the one message the target tier
+raises took the LONG path and erased `Joysticks:`, both port indicators and the
+drive number for five seconds: **the precise defect the three-flag model below
+exists to stop, sitting in the string the model was written in the same wave
+as.** It survived because every screendump offered as evidence was taken on a
+386-class QEMU, where the string is the 13-cell `Warp mode on.` instead and
+nothing is erased — a tier-conditional message read on the wrong tier. It is
+now `Warp mode on - no change.`, **exactly 25**, which takes the short path.
+
+Three flags carry it, and they are three because they are three different
+facts: `c64_st_ok` (the row's pixels are ours — cleared by an expose, a damage
+rect that reaches this row, and `c64_sh_inval`, and by nothing else),
+`c64_st_lok` (the LEFT field cells say what we last put there — which is what
+`c64_say` and `c64_jam` clear, and clearing `c64_st_ok` there instead is
+exactly what erased the widgets), and `c64_st_blank` (a long message is
+standing where the widgets go, so the flush after it comes down has to rebuild
+them). `hosttest/c64uitest.c` counts the lit pixels in the widget's own band
+before and after, with a 33-cell message as the negative control.
+
+**Wave 3's messages, and what each of them is a fact ABOUT**: `The clipboard
+is empty.` and `Pasting the first 2048 bytes.` (§7.7 — an Edit > Paste that
+found nothing, and one truncated at the buffer); `The clipboard refused the
+screen.` and `The clipboard refused to be read.` (a refused `os88_clip_put` /
+`os88_clip_get`, which `kernel/clip.inc:84` leaves EMPTY rather than stale);
+`No square voice here - no SID sound.` (§11.4's capability, said once a
+session and never retried); `No memory for the copy.` and
+`No memory for the paste.` (§7.7 — a refused transient claim, with the machine
+untouched); **`Warp mode on - no change.`**, which
+is the plain `Warp mode on.` on every other tier (§4.4 — the item is live
+everywhere and on an 8088 neither half of warp binds, so saying only
+`Warp mode on.` there would be announcing a change the machine does not make,
+which is what SPEC.md §47 exists to stop; **both wordings are this port's own,
+following `Paused.` / `Running.`, and are NOT VICE's** — VICE reports warp with
+a `warp:` LED and no message at all); and
+**`ScrollLock for joystick`** (§7.6), which this section used to say the port
+did not show — and which is the message that made the erase width a
+correctness question, because it is raised BY the joystick. Edit > Copy on
+success says
+**nothing**, because VICE says nothing and the window it came from has not
+changed.
 
 **THERE ARE THREE PERMANENT ROW STATES AND A MESSAGE IS NOT ONE OF THEM.**
 `C64.ROM missing - see README.TXT` (§1.4) and `Main CPU: JAM at $XXXX` (§4.5)
@@ -1759,8 +2547,10 @@ it arrives"*). Routed through `c64_say`, `Main CPU: JAM at $XXXX` went up as
 row that blanks and re-letters five seconds after the event with nothing having
 happened. That is PERFORMANCE.md rule 2's erase-then-letter in the one place it
 is free to avoid. `c64_jam` therefore raises the three things a permanent row
-state needs — `c64_dirty_any`, `c64_st_ok = 0`, and the toast §9.8's
-both-routes rule wants — and never touches `c64_msg`. `hosttest/c64uitest.c`
+state needs — `c64_dirty_any`, `c64_st_lok = 0`, and the toast §9.8's
+both-routes rule wants — and never touches `c64_msg`. (`c64_st_lok` and not
+`c64_st_ok`: the jam line is 22 cells, so like every short message it leaves
+the widgets right of cell 24 alone.) `hosttest/c64uitest.c`
 gates it with the second draw as its negative control.
 
 **AND THE DEADLINE IS EXAMINED FIRST THING IN THE FLUSH**, before any branch
@@ -1787,8 +2577,9 @@ genuinely stops the machine and answers `Paused.`, and on a ROM-less disk
 tick boundary instead — that answers 0 at the moment the boundary has not
 arrived, no wake is posted and the message never comes down at all — and the
 alternative, a worker sleeping a tick to post 18 wakes a second, buys five
-seconds of expiry for a background task, a second spawn site and a merge with
-the exit worker. The next event is a keystroke, a click, a menu pick or an
+seconds of expiry for a background task and a spawn site — and it costs more
+than it did when this was written, because the port's other worker is gone
+(§15.2) and this would be the only task it has. The next event is a keystroke, a click, a menu pick or an
 expose, and every one of them flushes: the widgets and §1.4's permanent line
 come back on the next thing the user does. A flush with nothing dirty composes
 no row and `c64_status` answers "nothing moved" in **zero drawing calls**
@@ -2098,13 +2889,13 @@ Live items:
 | item | caption | note |
 |---|---|---|
 | File > Smart attach... | Alt+A | the Standard File dialog on `.PRG` (§11.3) |
-| File > Reset > Reset machine CPU | Alt+F9 | |
-| File > Reset > Power cycle machine | Alt+F12 | caption kept; the item is the route (§7.5). **RAM pattern fill: VICE's C64 factory pattern** (`src/ram.c:169-177` — `RAMInitStartValue` 0, `RAMInitValueInvert` 4, `RAMInitValueOffset` 2, `RAMInitPatternInvert` 16384, `RAMInitPatternInvertValue` 255, put through `ram_init_with_pattern` at `:257`), which is the eight-byte period `00 00 FF FF FF FF 00 00` with every other 16K block inverted — **not zeros**, which is what wave 1 first wrote here and at power-on. `Reset machine CPU` still does not touch RAM, which is the whole difference between the two items |
-| File > Exit emulator | Alt+Q | the worker self-close idiom |
-| Edit > Copy | Alt+Delete | **wave 3.** Caption kept, item guaranteed: the 40×25 screen, PETSCII → ASCII, to the clipboard. Greyed until then (rule 3) |
-| Edit > Paste | Alt+Insert | **wave 3.** Caption kept, item guaranteed: the clipboard typed through `$0277`, ten characters a jiffy. Greyed until then |
+| File > Reset > Reset machine CPU | Alt+F9 | **and it CLEARS THE PAUSE, which is VICE's own order**: `machine_reset_action` calls `ui_pause_disable()` straight after `machine_trigger_reset()` (`src/arch/gtk3/actions-machine.c:121`). Without it a Reset on a paused machine reset the 6510 and then ran nothing — no boot screen, Preferences > Pause emulation still checked, §10.2's `P` lamp still standing, and the user's only clue that anything happened was that the screen did not change. `c64_adv` is cleared with it and `c64_menu_state` re-runs, so the two checks on the menu tell the truth about the machine that is now running |
+| File > Reset > Power cycle machine | Alt+F12 | caption kept; the item is the route (§7.5). **RAM pattern fill: VICE's C64 factory pattern** (`src/ram.c:169-177` — `RAMInitStartValue` 0, `RAMInitValueInvert` 4, `RAMInitValueOffset` 2, `RAMInitPatternInvert` 16384, `RAMInitPatternInvertValue` 255, put through `ram_init_with_pattern` at `:257`), which is the eight-byte period `00 00 FF FF FF FF 00 00` with every other 16K block inverted — **not zeros**, which is what wave 1 first wrote here and at power-on. `Reset machine CPU` still does not touch RAM, which is the whole difference between the two items — and it clears the pause the same way, above. **AND THE FILL NO LONGER RUNS IN THE COMMAND**: `c64_ram_pattern` is 65,536 bytes through `c64_zfill`, about a quarter of a second on the target, and `os88_oncmd` is dispatched under the DESKTOP's gfx lock — a quarter-second of every task's drawing stopped for an item that draws nothing. The whole reset body is a latch now (`c64_reset_req`, 1 = CPU reset, 2 = power cycle) spent by `c64_reset_service()` at the top of the next wake, which is §7.7's argument for Copy and Paste applied to the third command that had a body worth measuring |
+| File > Exit emulator | Alt+Q | **`os88_wm_close`, the kernel's own close path — NOT the worker self-close idiom, which closed the window and left the app** (§15.2). Spent from the WAKE and not from `os88_oncmd`: `c64_exit_req` is set by the command, and the top of `os88_onwake` sets `C64_ST_DEAD` and calls it as the last thing that happens |
+| Edit > Copy | Alt+Delete | **LIVE as of wave 3, and GREYED WITH NO `C64.ROM`** (§7.7): the 40×25 screen through VICE's own screen-code → PETSCII → ASCII chain, to the system clipboard, silently — because VICE says nothing on a Copy. With no machine the matrix holds the factory RAM pattern and the clipboard is kernel-owned and outlives this app (SPEC.md §55.3), so the item would destroy what the user had copied elsewhere; on a JAM it stays live, because the frozen screen is real. **It holds the gfx lock for NOTHING**: the command sets a latch and the body runs from the top of the next wake, 28.6 ms with no lock held (§7.7, §9.7) — this row used to say 79 ms of held lock, and that was a fact about the desktop and not about Copy. It was greyed with the fact that greyed it (the tables were not written); wave 3 wrote them, so the greying's reason stopped being true and SPEC.md §47 does not let a greying outlive its reason. The caption is kept and the MENU ITEM is the guaranteed route (§7.5); where a BIOS passes the chord, `os88_onkey` dispatches scan **`0xA3`** to this item — a code no unmodified key produces, so it cannot be confused with the C64's own Del (`0x53`) |
+| Edit > Paste | Alt+Insert | **LIVE as of wave 3, and GREYED WITH NO `C64.ROM`, ON A JAM AND WHILE PAUSED** (§7.7): the clipboard queued, then converted to PETSCII and typed into the KERNAL's own buffer at `$0277` ten characters at a time and only while `$C6` is zero — the machine's pace, not ours, and the conversion is the feeder's so the command holds no lock at all and the wake that services it is 0.7 ms whatever the clipboard holds. In any of the three greyed states nothing drains the queue, so a live item would be a silent no-op (SPEC.md §47) — the row used to say *"either"*, before pause was counted. Same greying history, same caption rule; the chord is scan **`0xA2`**, against the C64's own Ins (`0x52`) |
 | Preferences > Fullscreen | Alt+D | §9.8. CHECK: rule 4's `*` |
-| Preferences > Warp mode | Alt+W | flush every 9 ticks instead of every tick. CHECK: rule 4's `*`, and §10.2's `W` lamp |
+| Preferences > Warp mode | Alt+W | **the wall slice's cap lifted from 16,384 to 30,000 cycles AND the flush capped at VICE's own 10 fps** (`max(c64_flush_every, 2)` ticks, `src/vsync.c:339-340`, `:634-656`) — §4.4 carries the whole of it, including what it is measured to be worth (**about 7 %** under QEMU, the two halves together — the row said about 5 %, which was the cap-only build measured before the render cap was written) and where it is worth nothing (the target, where NEITHER half binds: the slice cap is never reached and that tier already flushes slower than 10 fps). **On `CPU_8086` the message says so** — `Warp mode on - no change.`, 25 cells so that it takes §10.1's short-erase path — rather than announcing a change the machine does not make (§4.4, §10.1). CHECK: rule 4's `*`, and §10.2's `W` lamp |
 | Preferences > Pause emulation | Alt+P | CHECK: rule 4's `*`, and §10.2's `P` lamp |
 | Preferences > Advance frame | Alt+Shift+P | **LIVE as of wave 2, and it is VICE's action and not this port's idea of one.** `src/arch/gtk3/actions-speed.c:72-80` (identically `src/arch/gtk3/ui.c:2735-2743`) is the whole body — `if (ui_pause_active()) { vsyncarch_advance_frame(); } else { ui_pause_enable(); }` — with `vsyncarch_advance_frame` (`src/arch/gtk3/vsyncarch.c:56-60`) being `ui_pause_disable(); pause_pending = 1;` and `vsyncarch_postsync` re-pausing at the next frame end. So **from a RUNNING machine the item only PAUSES and advances nothing**; only from an already-paused machine does it run one frame (to the next VIC frame end, §6.3) and stop. The fix pass found the first version setting the request unconditionally, which ran 19,656 emulated cycles from a running machine and then paused — invented semantics for the one live item this wave added. It was greyed before with the fact *"there is no raster accumulator until the alarm model lands"*, and wave 2 landed the alarm model — `c64_frame_cyc` IS that accumulator and `C64_PAL_FRAME` is the frame end — so the fact stopped being true and SPEC.md §47 does not let a greying outlive its reason. **The command body raises a request and runs nothing:** `os88_oncmd` is dispatched under the gfx lock and a PAL frame is 19,656 emulated cycles, which on the target is a fraction of a second of stopped desktop; the slice driver serves it in the wall slices it already sizes, and re-posts while it is outstanding. **AND IT IS GREYED AGAIN WHENEVER THERE IS NO MACHINE TO ADVANCE** — a disk with no `C64.ROM` (`C64_ST_HALT`) or a JAMMED CPU — because `c64_advance_frame` answers those states by doing nothing at all, and a live black item that is a silent no-op is the one shape SPEC.md §47 forbids; the fact that greys it is already the permanent line on the status row (§1.4, §4.5). `c64_menu_state` swaps the two spellings, the way rule 4 swaps the check items. **The chord reads the shift level**: the BIOS hands Alt+Shift+P the same ascii/scan pair as Alt+P, so `os88_onkey` asks `os88_key_down(KSC_LSHIFT/KSC_RSHIFT)` and dispatches Advance frame or Pause emulation accordingly — without that the chord this row advertises RESUMED a paused machine, which is the opposite of VICE in the only state VICE advances from |
 | Preferences > Swap joysticks | Alt+J | §8. CHECK: rule 4's `*`, and the two status indicators swap with it |
@@ -2126,7 +2917,6 @@ Live items:
 | Preferences > Show status bar | the status row is the window's bottom row and is always drawn. A CHECK that is ON and cannot be turned off: it wears rule 4's `*` marker **and** `MENU_DIS` together (§11.1 rule 4) |
 | Preferences > Mouse grab (Alt+M) | no 1351 mouse in this build: the pointer is the desktop's |
 | Preferences > Allow keyset joysticks (Alt+Shift+J) | the keyset **is** the joystick here (the only joystick source this machine has); it wears rule 4's `*` marker ON **and** `MENU_DIS` together — it is on, and it cannot be turned off (§8) |
-| Edit > Copy (Alt+Delete), Edit > Paste (Alt+Insert) | neither the screen-code → PETSCII → ASCII table nor the `$0277` keyboard-buffer feeder is written: the command bodies arrive with the rest of `c64cmd.c`'s `ovl_*` commands (wave 3). The machine they act on exists as of wave 2, so *that* half of the old wording is retired |
 | Preferences > Settings... (Alt+O), Load/Save settings, Restore default settings | no resources file in this build: every setting this port has is on the Preferences menu itself |
 | Help > Browse manual, Command line options, Compile time features, Hotkeys | no manual on this floppy and no command line in this OS; the hotkeys are the menu captions |
 | Machine model other than C64 PAL (C64C, NTSC variants, Drean, SX, Japanese, GS, PET64, MAX) | one ROM set and one timing are carried: PAL 985248 Hz, 312 lines, 19,656 cycles a frame (`c64.h`) |
@@ -2137,9 +2927,34 @@ Live items:
 | Status bar: the `Tape:` field, drive 8's LED and track field | no tape, no drive (above) — drawn with SPEC.md §47's pen |
 | Power cycle (Alt+F12), Paste (Alt+Insert), Copy (Alt+Delete) **as chords** | §7.5 — the caption is VICE's and the menu item is the route |
 
+**AND THREE ITEMS ARE GREYED BY STATE RATHER THAN BY THE BUILD**, which is the
+same rule reached from the other side: the fact that greys them is on the
+status row and it can stop being true, so `c64_menu_state()` re-runs on every
+path that changes the state.
+
+| item | greyed while | and the fact is |
+|---|---|---|
+| Preferences > Advance frame | `c64_norom` or `C64_ST_JAM` | §1.4's or §4.5's permanent line |
+| Edit > Paste | `c64_norom`, `C64_ST_JAM` **or `c64_pause`** | for the first two, §1.4's or §4.5's permanent line — and in **any** of the three, nothing would ever drain the queue (§7.7), which is why the sentence here used to read *"in either greyed state"* and now reads any. **The PAUSED state's fact is not a message**: `Paused.` is a `c64_say` and expires after ~5 s, so what stands for as long as the pause does is §10.2's **`P` lamp** on the status row and the check beside Preferences > Pause emulation. **This is a deliberate departure from VICE**, which queues a paste on a paused machine and delivers it on resume: there the queue is drained by the vsync handler, which runs whatever the machine is doing, and here `c64_paste_feed` is called only from the RUNNING arm of `os88_onwake` — so nothing would ever drink it |
+| Edit > Copy | `c64_norom` | the same — and the system clipboard is not this app's to spend (§7.7). Copy is **not** greyed by a pause or a jam: the frozen screen is real, and the body runs from the wake whatever the machine's state is |
+
+**The chords are guarded with them.** `os88_onkey` dispatches Alt+Shift+P,
+Alt+Delete and Alt+Insert itself (§7.5), and the kernel's *"a disabled item is
+never dispatched"* does not reach a chord the package delivers: each tests the
+item's own first byte for `OS88_MENU_DIS` before calling `os88_oncmd`.
+
 ### 11.3 Program loading
 
 **File > Smart attach... (Alt+A)** opens the Standard File dialog on `.PRG`.
+
+**AND IT READS THE DIALOG'S ANSWER, WHICH IT USED TO DISCARD.**
+`os88_file_dlg` answers **−1** when another modal dialog already owns the
+screen — one at a time, machine-wide — and the return was thrown away, so
+picking Smart attach while a dialog was up **did nothing and said nothing**:
+the silent no-op SPEC.md §47 forbids, in the one item on File that is live.
+It now says `A file dialog is already open.` on the row, which is a fact about
+the machine and not about this app.
+
 `os88_onfile` — **resident**, because the runtime reaches a callback by a
 near offset (§13.1) — refuses by size before touching the disk: a file whose
 2-byte load address plus length passes `$FFFF` is refused with that fact, and
@@ -2198,6 +3013,47 @@ line above is what it prints.
 **SID voice 1's frequency and gate** go to `os88_snd_tone`
 (`OSAPI_SND_TONE`, slot `0x00E8`) once per slice, and only when they changed
 — one far call.
+
+**AND THE HERTZ IS ONE ROUNDING, NOT TWO** (amended in the fix pass). A 6581 at
+the PAL dot clock sounds `Fn × 985248 / 2^24` Hz — **0.0587257 Hz a step**.
+This port computed it as `(raw >> 4) × 15 / 16`, which is the same factor to a
+quarter of a percent and is **wrong for a different reason: it rounds TWICE**,
+once into a 12-bit number and again on the way out. Near the bottom of the
+range that is a whole hertz where a hertz is the unit — `F = 341` answered
+**19** and the true figure is **20**, which is the difference between the 20 Hz
+floor REFUSING the note and playing it. It is `c64_muldiv(f, 3848, 0xFFFF)`
+now: the product is kept in 32 bits, which a 16-bit C cannot express and
+`c64mem.inc` can, and 3848/65535 is 0.0587166 — within **0.015 %** of the real
+constant across the whole range, `$FFFF` answering 3848 Hz where the ratio says
+3848.6. (The divisor is spelled `0xFFFF` because SmallerC's `int` is 16-bit
+SIGNED and a decimal 65535 is *"Constant too big for 16-bit signed type"*.)
+The harness asserts both ends of the range and the floor.
+
+**AND A HELD NOTE DOES NOT SURVIVE A STOP.** The tone is played with
+**duration 0**, which SPEC.md §34 holds until something takes it down — and
+the only thing that ever did was the guest closing the gate. So Alt+P, a JAM, a
+reset and the About panel (which pauses the machine and owns the glass) each
+left the last note sounding **for ever**, on a desktop the user had gone back
+to. `c64_sound_stop()` is the one place it comes down: it silences the speaker
+and raises `c64_sid_dirty`, so the wake re-reads the CURRENT SID registers on
+the way out and plays **what the machine actually holds** rather than
+remembering the note it took away — remembering it would be a second model of
+the SID, kept in step with the first by hand. It is called on entering WARP as
+well, which is what VICE does: `vsync.c:181`'s warp arm calls `sound_suspend`
+(`sound.c:1819`), because a machine at 3,000 % has nothing meaningful to play.
+
+**AND THE CAPABILITY IS ESTABLISHED BEFORE THE SLOT IS CALLED**, once, in
+`os88_main`: `os88_snd_caps() & SND_CAP_TONE` (`OSAPI_SND_CAPS`, slot
+`0x00E0`). A capability is a fact to test rather than a guess (SPEC.md
+§73.11), and this one is worth being honest about in both directions: **every
+machine this OS boots answers yes** — `kernel/snd.inc:804` ORs `SND_CAP_TONE`
+in unconditionally — so the guard is not a path a user will meet. It is
+written anyway, and it is *reachable in the harness*, whose stub can clear the
+bit: a machine with no square voice is never asked for a tone at all, the SID
+latch is dropped rather than left raised to be re-asked every wake, and the
+fact is said once a session — `No square voice here - no SID sound.` That is a
+different sentence from the busy-speaker one below, because it is a different
+fact and it is not retried.
 
 **AND A REFUSED GRANT IS NOT PERMANENT** (amended in the fix pass).
 `os88_snd_tone` answers **-1 refused** when another instance holds the
@@ -2362,31 +3218,105 @@ every memory access a `call c64_rd_bx`, which is the trade this core makes
 deliberately (image against a near call per access, on a machine where
 correctness was the stated posture). And `C64.OVL` is **1,424** rather than
 6,000 — **not because the split has subsystems still to receive**, which is
-what this paragraph used to say: `ovl_probe`, `ovl_cmd`, `ovl_load_prg` and
-`ovl_about_show` are already the only four functions in `.modc`
-(`build/c64.gen.asm`) — and `ovl_probe` is not decorative, it is the whole of
-§13.3's first-wake probe. What is thin is their BODIES, because waves 3 and 4
+what this paragraph used to say: `ovl_conv_init`, `ovl_cmd`, `ovl_copy`,
+`ovl_paste`, `ovl_load_prg` and `ovl_about_show` are already the only six
+functions in `.modc` (`build/c64.gen.asm`) — and `ovl_conv_init` is not
+decorative, it is §13.3's first-wake probe **and** the two PETSCII conversion
+tables, which are the port's own once-per-launch code (§7.7). What is thin is their BODIES, because waves 3 and 4
 have not written the features they carry — Copy/Paste, the disk work, the
 panel's grown contents. The figure grows **inside the module** as they are
 written, and the resident image does not, which is the whole point of having
 put them there before they were big.
 
+### 13.0.1 The measured line — wave 3 (2026-08-22)
+
+Edit > Copy and Edit > Paste with VICE's own conversions and the KERNAL's own
+pacing, warp as the wall slice's cap **and VICE's 10 fps render cap**, the
+sound capability established before the slot is called, §7.6's ScrollLock
+hint on an observable the SDK can actually be asked for — and, after the fix
+pass, both clipboard commands out of the desktop's lock (§7.7), the per-cell
+loop in assembly (§9.7) and **fullscreen at 2×** (§9.8).
+
+**The line, from a clean rebuild:**
+
+```
+cc8086: build/c64.raw.asm: 92 function(s), 34 frame byte(s) max, lowered 846 site(s)
+cc8086: overlay - 4 moved to .modc, 4 entry vectors, 20 resident shims, 5 loading call sites
+os88ovl: build/c64.bin -> build/c64.trim.bin (39384 resident) + build/C64.OVL (2149 on demand)
+os88pkg: 'C64' entry=+0x0060 image=39384 bss=13106 icon=yes assoc=0
+```
+
+| | measured | of |
+|---|---|---|
+| resident image | **39,384** | +2,950 on wave 2, **+1,106** on this wave's pre-fix-pass build |
+| bss | **13,106** | +1,760 on wave 2, **−1,756** on the pre-fix-pass build — the two clipboard staging buffers left it for heap claims (−3,074, §7.7) and fullscreen's doubled band arrived in it (+1,280, §9.8) |
+| **resident total** | **52,490** | **61,440** — 8,950 spare, and **2,510 UNDER §73.9's 55,000 trigger. THIS IS THE MARGIN; every other mention of it in this document points here** |
+| `C64.OVL` | **2,149** | on demand; −226, because Copy's and Paste's bodies came back resident with the lock fix |
+| resident overlay shims | **20** | −10, same reason: 4 functions in `.modc`, 4 entry vectors, 5 loading call sites |
+| largest C frame | **34 bytes** | +2, and still comfortably inside the 96 SPEC.md §73 allows |
+
+**THE MOVEMENT IS NOT ONE THING, AND IT IS WORTH SAYING WHICH.** The
+pre-fix-pass build of this wave measured **38,278 + 14,862 = 53,140, 1,860
+under the trigger**, and that is the figure this section carried. bss FELL by
+**1,756 net** — 3,074 of clipboard staging out to transient claims, 1,280 of
+doubled band in — while the resident image ROSE by **1,106**, because Edit >
+Copy's and Edit > Paste's bodies moved OUT of `C64.OVL` and back into the
+resident half (they run from the wake now, §7.7), the assembly row composer
+arrived, and the whole 2× path is resident code. The overlay shrank with them.
+**The net is 650 bytes recovered, and, more to the point, 2,510 of headroom for
+wave 4** — the bitmap modes, multicolour, the sprites, the PRG loader — where
+there were 1,860.
+
+**What the second review pass did to those figures.** It moved the two PETSCII
+conversions out of the resident image (`ovl_conv_init`, §7.7) — **655 bytes
+back**, measured off a `nasm -l` listing — and spent about 560 of them on the
+status row's three-flag erase model (§10.1), the warp render cap (§4.4), the
+`c64_conv_ok` guard and Paste's third greying. Net **−94 image, +6 bss**, and
+`C64.OVL` +658. That is an honest accounting rather than a headline: the
+frequency split recovered real bytes and a correctness fix in the row spent
+most of them, and **wave 4's first job is still a split**, because the VIC
+work it carries is per-FRAME and therefore resident by nature.
+
+**These are the figures after the wave's review AND its fix pass**, and both
+are why they moved. The first build put the conversions and both loops in `C64.OVL`
+(2,549 bytes) and reported 50,614 resident — a smaller number bought by
+putting a **per-byte loop across the segment boundary**, 2,000 far calls for
+one Edit > Copy (§7.7, §9.7). The split is by FREQUENCY and not by size
+(SPEC.md §73.14): the loops came back resident, the shells stayed out, and
+`C64.OVL` is smaller than it was because what is out there is now only the
+part that runs once per pick.
+
+**bss WAS the wave's real cost, and the fix pass spent the saving it named.**
+The list this paragraph carried was `c64_clip` 1,026 + `c64_pastebuf` 2,048 +
+`c64_sctab` 128 + `c64_pettab` 256 + `c64_scrow` 40, with LESSONS.md 5's
+*"bss is the cheap half"* to make it affordable and the observation that **the
+paste queue is the one figure in the list that could be given back**. Both
+clipboard buffers were given back, and not only the queue: each is a transient
+2KB heap claim now (§7.7), which is CWORD's lesson — *the next byte to save is
+a buffer moving to a claim* — applied to 3,074 bytes held for the life of the
+app so that two menu commands nobody may ever pick would have somewhere to put
+their bytes. What is left is the two conversion tables, the matrix row and
+fullscreen's doubled band, and the band is bss on purpose because a flush
+cannot refuse (§9.8). The margin is the table above. Wave 4's VIC work is
+per-FRAME and therefore resident by nature, so the split it will need is a real
+one, and that table is the number to watch.
+
 ### 13.1 The file split
 
 | file | holds | resident |
 |---|---|---|
-| `apps/c64/c64.c` | the translation unit's root: the GPL-2 + VICE header, prototypes, the key ring, `os88_main` (window, the five-menu set, `about_set`, `onwake` install, the RAM and ROM claims + `read_seg`, **`os88_key_down` armed here**, §7.2), `os88_paint`, `os88_onkey`, `os88_onclick`, **`os88_onfile`** (§11.3), **`os88_onwake` — the slice driver** (§4.4), `os88_worker` (the Exit self-close), the `#include`s in order | yes |
+| `apps/c64/c64.c` | the translation unit's root: the GPL-2 + VICE header, prototypes, the key ring, `os88_main` (window, the five-menu set, `about_set`, `onwake` install, the RAM and ROM claims + `read_seg`, **`os88_key_down` armed here**, §7.2), `os88_paint`, `os88_onkey`, `os88_onclick`, **`os88_onfile`** (§11.3), **`os88_onwake` — the slice driver** (§4.4), the three latches the wake spends before the slice — `c64_exit_req` (File > Exit, through `os88_wm_close`, §15.2), `c64_reset_req` (§11.1) and the clipboard pair (§7.7) — the `#include`s in order. **There is no `os88_worker`**: the self-close idiom went with wave 3's fix pass | yes |
 | `apps/c64/c64io.c` | the `$D000-$DFFF` register files and the cdecl dispatch the core calls (§3.4); **the alarm scheduler `_c64_alarm` and "cycles to the next event"** (§4.4); VIC, SID, colour RAM, CIA1/CIA2, the IRQ and NMI lines, the `$00`/`$01` port and the bank-map index (§3.2) | yes |
-| `apps/c64/c64kbd.c` | the 152-entry `gtk3_sym.vkm` table (`.data`), the cached matrix and the 16-entry down-list, the once-per-wake rebuild, the scan-routed Ctrl+H/I/M, the Ctrl-held digit poll, RESTORE with the Esc read, the joystick keyset, the PETSCII↔ASCII tables | yes |
+| `apps/c64/c64kbd.c` | the 152-entry `gtk3_sym.vkm` table (`.data`), the cached matrix and the 16-entry down-list, the once-per-wake rebuild, the scan-routed Ctrl+H/I/M, the Ctrl-held digit poll, RESTORE with the Esc read, the joystick keyset, **both of Copy's and Paste's per-byte loops** (§7.7) and the two conversion TABLES they index (filled by `ovl_conv_init`, which is not here), **`c64_clip_service` — the whole of both commands' bodies, run from the top of the wake with no lock held** — and the `$0277` feeder. **The two clipboard staging buffers are not here any more**: each is a transient heap claim (§7.7), and the row composer they fill is `c64mem.inc`'s | yes |
 | `apps/c64/c64scr.c` | the dirty-page → cell-row mapping, the 1bpp frame shadow, the flush, the `k`-row shift test, the tier table, the EGA-16 luminance table, the border fills, the status row, the dirty-pages-per-wake counter | yes |
 | `apps/c64/c64menu.c` | the five menu tables with every string and caption, the `OS88_MENU_DIS` greying with its fact in a comment beside it, the menu-set struct, the `oncmd` dispatcher (two compares, then an `ovl_`) | yes |
-| `apps/c64/c64cmd.c` | `ovl_*`: every menu command body — reset, power cycle, Exit, Copy, Paste, warp/pause/advance-frame, swap joysticks, the greyed items' refusal toasts | **no** |
+| `apps/c64/c64cmd.c` | `ovl_*`: §13.3's first-wake probe **and the two PETSCII conversions it runs once a launch** (`ovl_conv_init`), then every menu command SHELL — warp/pause/advance-frame, swap joysticks, the greyed items' refusal toasts. **The per-byte loops are not here** (§7.7): a loop written in this file crosses the segment boundary every iteration. **Nor are the four commands with a body worth measuring**: Copy, Paste, reset and power cycle set a latch here and the WAKE spends it, out of the desktop's lock (§7.7, §11.1). **File > Exit emulator is answered in the RESIDENT half** (`os88_oncmd`) and not here at all, because it is the one command that must work on a disk whose `C64.OVL` is missing | **no** |
 | `apps/c64/c64load.c` | `ovl_*`: the Smart-attach body and the autostart state machine's setup, called by the resident `os88_onfile` (§11.3) | **no** |
 | `apps/c64/c64about.c` | `ovl_about_show` (§12) | **no** |
 | `apps/c64/c64cpu.inc` | the 6510 core (§4) | yes |
 | `apps/c64/c64mem.inc` | the movers (§3.6) | yes |
 | `apps/c64/c64band.inc` | the composers (§9.5) | yes |
-| `apps/c64/c64.asm` | the shim: `CC_PKG_NAME 'C64'`, `CC_HAS_ONKEY`/`ONCLICK`/`ABOUT`/`ONWAKE`/`MENUS`/`FDLG`/`WORKER`/`OVL`, `CC_ICON`, `%include cc/crt0.asm`, `c64.gen.asm`, then the three `.inc`s, `CC_IMAGE_END` | yes |
+| `apps/c64/c64.asm` | the shim: `CC_PKG_NAME 'C64'`, `CC_HAS_ONKEY`/`ONCLICK`/`ABOUT`/`ONWAKE`/`MENUS`/`FDLG`/`OVL` (**no `WORKER`**, §15.2), `CC_ICON`, `%include cc/crt0.asm`, `c64.gen.asm`, then the three `.inc`s, `CC_IMAGE_END` | yes |
 | `apps/c64/icon.inc` | the 16×16 1-bit breadbin, drawn for this port | yes |
 | `apps/c64/COPYING` | VICE's GPL-2 text (§1.2) — in the repo, not on the floppy | — |
 | `apps/c64/rom/` | the three ROM binaries + `README.md` (§1.3) | — |
@@ -2406,7 +3336,7 @@ about (LESSONS 9).
 | resident image | **39,000** (range 38,000–40,000) |
 | bss | **13,600** |
 | `C64.OVL` | **6,000** |
-| **resident total** | **52,600** of 61,440 — 2,400 under SPEC.md §73.9's 55,000 trigger, 8,840 under the cap |
+| **resident total** | **52,600** of 61,440 — 2,400 under SPEC.md §73.9's 55,000 trigger, 8,840 under the cap. **This is what was PLANNED; the margin that binds is the measured one in §13.0.1's table** |
 
 **Basis** — measured ratios, not cword's 5.9 bytes/line. RUNCPM ships image
 39,412 + `RUNCPM.OVL` 7,389 for 4,679 lines of C once ~9.6KB of
@@ -2450,21 +3380,39 @@ C64's own RAM (§3.5).
 - **Split by FREQUENCY, never by size** (SPEC.md §73.14): a keystroke's path
   stays resident, a menu command's goes out.
 - **Every callback is resident** — `os88_paint`, `os88_onkey`, `os88_onclick`,
-  `os88_onwake`, `os88_onfile`, `os88_worker` — because the runtime reaches
-  one by a near offset. A callback that needs overlay code calls an
-  already-loaded `ovl_*` helper (§11.3).
+  `os88_onwake`, `os88_onfile`, `os88_oncmd`, `os88_about` — because the
+  runtime reaches one by a near offset. A callback that needs overlay code
+  calls an already-loaded `ovl_*` helper (§11.3). (`os88_worker` was on this
+  list until wave 3's fix pass took the worker out, §15.2.)
+- **AND A LOCKED CALLBACK NEVER CROSSES INTO `C64.OVL` UNLESS THE MODULE IS
+  ALREADY RESIDENT.** Reaching an `ovl_*` makes the runtime RESOLVE the
+  module, and if it is not resident that resolution is an `OSAPI_MEM_CLAIM`
+  and an `OSAPI_FILE_READ` — **a floppy seek, ~400 ms a call** — inside
+  whatever context asked for it. `os88_oncmd`, `os88_about` and `os88_onfile`
+  are all dispatched **under the desktop's gfx lock**, so a first-wake probe
+  that failed for a transient reason left every later menu pick able to go to
+  the DISK with the whole machine stopped behind it. `c64_ovl_ready(win)` is
+  the fence: it refuses, says `Unable to load C64.OVL.` on the row, clears
+  `c64_ovl_asked` and kicks a wake — and **the WAKE, which holds no lock and
+  may call the file slots by contract (SPEC.md §74.1), is what retries the
+  load.** The rule is the overlay's half of §7.7's: the lock decides where the
+  work runs, not the convenience of the call site.
 - **The `.OVL` cannot be loaded from `os88_main`** (LESSONS 13) — there is no
   instance yet. The first `ovl_*` call is made **from the first wake**, and
   its refusal prints **`Unable to load C64.OVL.`** in the status row *and*
   toasts, because a toast under a fullscreen window is not where the user is
-  looking (§9.8). That call is `ovl_probe()`, whose body is `return 1`: the
-  point of it is the far call the RUNTIME makes on the way in, which is what
-  loads the module — asked once, for nothing, at the first moment there is an
-  instance to resolve it against, rather than discovered when a user picks a
-  menu item. Wave 1 did not have it, and every overlay wrapper's 0 returned
-  silently: `os88_oncmd` and `os88_about` now say the same sentence, because
-  every body in `c64cmd.c` returns 1 and a 0 therefore never came from one of
-  them.
+  looking (§9.8). That call is **`ovl_conv_init()`** — the far call the
+  RUNTIME makes on the way in is what loads the module, so the probe is asked
+  once at the first moment there is an instance to resolve it against, rather
+  than discovered when a user picks a menu item. Wave 1 did not have it, and
+  every overlay wrapper's 0 returned silently: `os88_oncmd` and `os88_about`
+  now say the same sentence, because every body in `c64cmd.c` returns 1 and a
+  0 therefore never came from one of them.
+- **…and the probe does the port's once-per-launch WORK while it is there.**
+  Its body used to be `return 1`. It now builds `c64_sctab` and `c64_pettab`
+  (§7.7) — the one thing in this program that runs exactly once, and therefore
+  the one thing besides a menu command that §73.14 sends out. The tables
+  themselves are bss and stay resident: only code moves.
 - `C64.O88`, `C64.OVL` and `C64.ROM` are **three files in one folder** on
   every disk they share (SPEC.md §19.2.1, SPEC.md §19.9) — §14.2.
 
@@ -2561,10 +3509,10 @@ something to load.
 
 | | what it does |
 |---|---|
-| `apps/c64/hosttest/c64uitest.c` | the whole program over a stub `os88.h` with a **PIXEL** model of the glass — `gfx_blit1` writes real pixels, and `gfx_scroll` moves them and fills the vacated rows with GARBAGE, which is what catches a flush that trusts a stale shadow for a row the scroll vacated. After every step it asserts, pixel for pixel over the whole 320×200 screen, that **the glass shows what the shadow says it shows**; it prints §9.7's cost table in milliseconds and the dirty-pages-per-wake counter, and it dumps the machine and the composed frame for `tools/c64ref.py`. It compiles this same C with **`-DC64_HOST`**, which is what keeps those counters out of the shipping image (§9.7): nothing in `apps/c64/*.c` reads one. Wave 2 adds the scripted core, the level keyboard and the alarm path behind it. Run by `build.sh` before every build. **The assembly half cannot run on the host**, so the routines it substitutes are transcriptions — which makes `c64ref.py` a check on the ALGORITHM and not on the 8086 encoding; the encoding is gated by `c64memtest.sh`, by `tests/c64band`'s identity rows and by the QEMU screendumps, all of which run the shipping text. It also **enforces the clip** — a pixel written outside an armed region while no clip is armed is a failure with its coordinates, which is what makes SPEC.md §11.3 checkable for the callbacks that are not `W_PAINT` — and it models `os88_task_alive` as a call that never returns, which is what makes File > Exit emulator's teardown checkable at all. **`--no-rom` is a second process**: `os88_main` decides the refusal surface once per launch, so the screen a user of a mis-copied disk actually sees needs its own run |
+| `apps/c64/hosttest/c64uitest.c` | the whole program over a stub `os88.h` with a **PIXEL** model of the glass — `gfx_blit1` writes real pixels, and `gfx_scroll` moves them and fills the vacated rows with GARBAGE, which is what catches a flush that trusts a stale shadow for a row the scroll vacated. After every step it asserts, pixel for pixel over the whole 320×200 screen, that **the glass shows what the shadow says it shows**; it prints §9.7's cost table in milliseconds and the dirty-pages-per-wake counter, and it dumps the machine and the composed frame for `tools/c64ref.py`. It compiles this same C with **`-DC64_HOST`**, which is what keeps those counters out of the shipping image (§9.7): nothing in `apps/c64/*.c` reads one. Wave 2 adds the scripted core, the level keyboard and the alarm path behind it. Run by `build.sh` before every build. **The assembly half cannot run on the host**, so the routines it substitutes are transcriptions — which makes `c64ref.py` a check on the ALGORITHM and not on the 8086 encoding; the encoding is gated by `c64memtest.sh`, by `tests/c64band`'s identity rows and by the QEMU screendumps, all of which run the shipping text. It also **enforces the clip** — a pixel written outside an armed region while no clip is armed is a failure with its coordinates, which is what makes SPEC.md §11.3 checkable for the callbacks that are not `W_PAINT` — and it models `os88_wm_close` as the deferred close it is — the call RETURNS and the state must be `C64_ST_DEAD` with nothing drawn after it — which is what makes File > Exit emulator's teardown checkable at all (it modelled `os88_task_alive` as a call that never returns while the port still had a worker, §15.2). **`--no-rom` is a second process**: `os88_main` decides the refusal surface once per launch, so the screen a user of a mis-copied disk actually sees needs its own run. **Wave 3 adds a stub clipboard that can refuse, a stub `os88_snd_caps` whose TONE bit a row can clear, and counters for the matrix read, the row pulls and the bytes the paste feeder types** — because a cost row with no drawing in it would otherwise print 0.0 ms, which is LESSONS.md 7's *"a stub that always refuses measures the fallback path"* read the other way round. **The review's fix pass added four things to it, and each is a row that would have failed before**: `os88_clip_size` now casts through `short`, so the host's 32-bit `int` cannot hide what the target's 16-bit one does with a 32,768-byte clipboard; a Copy that reads the matrix a CELL at a time (which in the shipped build is a cell per far call) fails on the `c64_rd` counter; the overlay boundary is a term in the cost model with the crossing count written beside each row; and the truncation message is compared against `C64_PASTEMAX` so the two cannot drift. The `--no-rom` run drives Alt+Delete and Alt+Insert and asserts that **the system clipboard survives**. **The SECOND review pass added six more**: the conversion tables must NOT exist after `os88_main` and must exist after the first wake (the frequency split's own negative control, §7.7); a GRAPHICS screen code is copied and `.` required back (§7.7 — the fixture had only letters, so the substitution was untested); `os88_clip_put`'s byte count is a term in the cost model and the Copy row is taken on a FULL screen, because the sparse one hides it; the warp render cap is asserted on BOTH tiers with warp OFF as the control (§4.4); a SHORT message is required to leave the joystick widget's pixels untouched, with a 33-cell message as the control (§10.1); and every message LITERAL is walked against `C64_MSGCELLS` — the row that used to do this measured `c64_msg` *after* `c64_say`'s clamp and could never fail, and `apps/c64/build.sh` now extracts the literals to walk mechanically out of `apps/c64/*.c`, so a message this document never heard of is measured too (§10.1). **The FIX pass added the magnification's gates**: `c64_scw`/`c64_sch` read off the computed geometry on a 640×480 box and a 640×200 one, every 2 × 2 block of the magnified glass asserted uniform, the `k = 3` scroll's `dy` asserted to be 48 and not 24, and two negative controls — the `CPU_8086` tier must not magnify and a refused `blit1` must come down to 1:1 (§9.8) — plus the SID's hertz at both ends of the range and at the 20 Hz floor (§11.4) |
 | **`tools/c64ref.py`** | **an independent, pixel-level reference compositor.** Python, written from VIC-II documentation and VICE's `src/vicii/` as the authority, **not** from `c64band.inc`: it renders the same C64 memory to a 320×200 1bpp image, and the harness compares it **bit for bit** against what the package composed. This is what validates hires bitmap, multicolour, a custom character set, the cell transpose and sprite priority/expansion — a cell-identity glass model provably cannot. **`--lumcheck` is the other half**: the package's 16-byte luminance table against `vicii_colors_6569r5`'s own Y column, held here as parts per thousand straight off `vicii-color.c:441`, over all 256 ORDERED PAIRS — which is the only way to ask about §9.6's seven equal-luminance pairs in both directions, since a rendered frame carries one background at a time. The oracle derived its luminance from `vice.vpl` until this wave's fix pass, i.e. it kept the defect the package had already had removed |
 | `apps/c64/hosttest/c64cputest.asm` + `.sh` | §4.6's **twelve** rows with their negative controls — `make c64cputest`, minutes, not in `build.sh`. Rows 11 and 12 and the rebuilds of rows 4, 8 and 9 are wave 2's third fix pass: a row that names a family it does not execute is a row that passes over the defect, and four of them did |
-| `apps/c64/hosttest/c64memtest.asm` + `.sh` | §3.6 — `c64mem.inc` **and** `c64band.inc`'s cross-segment entry points under `SS ≠ DS` with an `ES` sentinel: the movers, `c64_rowspan`/`c64_rowcopy`, and **`c64_band1` composing out of both claims and `c64_rowsig` signing out of one**, which nothing called until this wave's fix pass. **Four negative controls, one per thing the discipline check claims to check** — ES, DF, BP and DS. The BP and DS ones are new because both checks were inoperative: BP was recorded AFTER the call and compared with itself, and the checker did its own bookkeeping through whatever DS the routine under test had left behind. Run by `build.sh` |
+| `apps/c64/hosttest/c64memtest.asm` + `.sh` | §3.6 — `c64mem.inc` **and** `c64band.inc`'s cross-segment entry points under `SS ≠ DS` with an `ES` sentinel: the movers, `c64_rowspan`/`c64_rowcopy`, and **`c64_band1` composing out of both claims and `c64_rowsig` signing out of one**, which nothing called until this wave's fix pass. **Four negative controls, one per thing the discipline check claims to check** — ES, DF, BP and DS. The BP and DS ones are new because both checks were inoperative: BP was recorded AFTER the call and compared with itself, and the checker did its own bookkeeping through whatever DS the routine under test had left behind. **Section 4b is `c64_copy_row`'s** (§7.7): the reverse-video mask, the table index, the store into ANOTHER SEGMENT, the trim, an all-spaces row, a row whose last cell is not a space, and `n = 0` — a proc that composes into a heap claim is exactly the shape that passes on the host and writes into the wrong segment on the target. **Section 6b is `c64_x2init` and `c64_band_x2`'s** (§9.8), and it exists because the harness above MODELS the doubler in C: five hand-computed `c64_x2tab` entries, the doubled-nibble identity over all 512 bytes, the second scan line asserted to be a copy of the first, and `rows = 1` writing no third row — the identity alone passes the all-zero table the shipped loop actually built, so both halves are the case. Run by `build.sh` |
 | `tests/c64band` | `make c64bandbench` — the icount bench pricing `c64_band1` (text, bitmap, multicolour) **per cell and per call**, `c64_band_x2` at 8 and 16 rows, `c64_rowspan` and `c64_rowshift`. **§9.7's milliseconds and §9.8's tier table are written from these numbers**, and they become a new Set in PERFORMANCE.md. It **arms the clip** on its rerun callbacks (they are `W_ONKEY`/`W_ONCLICK`, not `W_PAINT`), which is both correct and 28% of the `FONT_RUN` bar; it **saves ES** around every blit, because a callback returns `ES = KERNEL_SEG`; and it **preflights `OSAPI_GFX_BLIT1`**, so a kernel that refuses bands prints `REFUSED (CF=1)` on the rows that contain one instead of timing a call that draws nothing |
 | QEMU + QMP | `make test TESTAPPS=build/c64.img`, `tools/mouse.py`, `tools/qmp.py sendkey`, `tools/shot.py --crop --zoom`; `VIDEO=cga` with `--screen 640x200`, `VIDEO=herc` with `tools/hercshot.py`. Every screendump assertion lives here |
 
@@ -2584,8 +3532,18 @@ gate — a `make` target that launches a GUI emulator cannot assert a boot.
 
 ## 15. What this port adds to the kernel and the SDK
 
-**One thunk.** Nothing else in the kernel changes, and no budget constant
-moves.
+**FOUR THUNKS — and still nothing in the kernel.** No slot is added, no kernel
+`.text` moves and no budget constant moves: each of the four is a wrapper in
+`apps/cc/os88thunk.asm` + `apps/cc/os88.h` (**and the `hosttest/os88.h` stub in
+the SAME edit**) over a slot the kernel already publishes. This section said
+*"one thunk"* until wave 3's fix pass, and the three that joined it are named
+where the fact that needed them is:
+
+| thunk | slot | the fact that needed it |
+|---|---|---|
+| `os88_key_down` | `OSAPI_KEY_DOWN` `0x03F0` | §15.1 — the level keyboard |
+| `os88_wm_close` | `OSAPI_WM_CLOSE` `0x0470` | §15.2 — the worker idiom closes the WINDOW, not the APP |
+| `os88_clip_put_seg`, `os88_clip_get_seg` | `OSAPI_CLIP_PUT` / `_GET` | §7.7 — clipboard staging in a CLAIM rather than in bss |
 
 ### 15.1 `os88_key_down` — the level keyboard's state
 
@@ -2607,7 +3565,7 @@ moves.
 | a scroll moved, not redrawn | `OSAPI_GFX_SCROLL` slot `0x01F8` (wrapped) | §9.4; falls back to spans on −1 |
 | a composed span down in one call | `OSAPI_GFX_BLIT1` slot `0x0418` (wrapped) | §9.5; glyphs come from CHARGEN or the RAM charset, not `OSAPI_FONT_GLYPHS` |
 | voice 1 | `OSAPI_SND_TONE` slot `0x00E8` (wrapped) | §11.4 |
-| a self-close for Exit emulator | `OSAPI_WM_CLOSE` slot `0x0470` exists **unwrapped** | keep RUNCPM's worker idiom (`CC_HAS_WORKER`); a `WM_CLOSE` thunk is a follow-up, not a requirement |
+| a self-close for Exit emulator | `OSAPI_WM_CLOSE` slot `0x0470`, **WRAPPED — `void os88_wm_close(void *win)`, `CC_T_WIN`-shaped, in `apps/cc/os88thunk.asm` and `apps/cc/os88.h` with a stub in `apps/c64/hosttest/os88.h`** | **THIS ROW IS REVERSED, and it is the one row of this table that is.** It read *"exists **unwrapped** — keep RUNCPM's worker idiom (`CC_HAS_WORKER`); a `WM_CLOSE` thunk is a follow-up, not a requirement"*, and that decision was wrong on the glass. The worker idiom — `os88_wm_destroy` under the lock, then `os88_task_alive` outside it, which is what every C package in this tree does — **closes the WINDOW and does not close the APP**: `wm_destroy` frees the record and **nothing repaints the dock**, so Alt+Q left a **dead tile on the dock strip that answered neither a click nor a double-click**, four cycles out of four, on both adapters. The close BOX was always clean, because it goes through the kernel's own `app_close_win` — which is the same path this thunk asks for. The package now has **no worker at all** (`CC_HAS_WORKER` is gone) and no task slot. **It is spent from the WAKE and not from `os88_oncmd`**: the slot returns and closes on the next UI pass, so it may legally be called under a command's lock, but its contract is *call it and RETURN, do not draw afterwards* — and `os88_oncmd`'s own tail kicks a wake that runs a slice and flushes into a window that is going away. So File > Exit sets `c64_exit_req`, and the top of `os88_onwake` spends it, sets `C64_ST_DEAD` and returns with the call as the last thing that happens |
 | a `.PRG` read to an arbitrary, non-512-aligned address | `OSAPI_FILE_READ_AT` slot `0x0358` exists unwrapped | **no new slot**: §11.3 does it in the package with a scratch claim and `c64_zzcopy_in`. The ROM claim is `read_seg`'d directly — 20,480 is 512-aligned and starts at the claim's base (§1.4) |
 
 ### 15.3 The slot that is NOT added

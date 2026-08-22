@@ -489,6 +489,23 @@ void os88_wm_destroy(void *win);                 /* the RECORD, not the pixels
                                                   * own; your own closes with
                                                   * the instance */
 
+/* os88_wm_close - CLOSE YOUR OWN WINDOW, the way your close box does (SPEC.md
+ * 75.2). This is what a File > Exit / File > Quit item wants, and it is not
+ * os88_wm_destroy: destroy frees the RECORD and nobody repaints the dock, so
+ * a package that destroys its own window and then parks leaves a dead tile on
+ * the strip that answers no click. This goes through the kernel's own close
+ * path - the negotiator retired, app_close_win, the dock repainted, the
+ * instance and every claim freed.
+ *
+ * IT RETURNS, AND YOUR WINDOW GOES A MOMENT LATER: the close is deferred to
+ * the next UI pass, because the kernel is about to free the very segment you
+ * are standing in. So CALL IT AND RETURN - do not draw afterwards, do not
+ * call it twice, do not assume when it lands. The gfx lock may be held or
+ * not, which means a menu command may call it directly; the tidiest place is
+ * still a callback that draws nothing after it, and os88_onwake() is that.
+ * Your close negotiator is NOT asked again - this call IS the answer. */
+void os88_wm_close(void *win);
+
 void os88_wm_content(void *win, struct os88_pt *origin);   /* content origin */
 int  os88_wm_geom(void *win, struct os88_size *sz);        /* content size;
                                                   * -1 = not visible. Prefer
@@ -787,6 +804,15 @@ int os88_clip_put(const void *text, unsigned len);   /* len 0 EMPTIES it */
 int os88_clip_get(void *buf, unsigned cap);          /* bytes copied; ask
                                                       * os88_clip_size() first
                                                       * and grow your buffer */
+/* ...and the _seg forms, which os88_file_read_seg is the model for: the text
+ * lives in a HEAP CLAIM rather than in your own segment, so a 1KB or 2KB
+ * clipboard staging area costs you a claim while the command runs instead of
+ * bss for the life of the app. Claim, fill (os88_poke or a mover of your
+ * own), put, free. A _seg base needs no alignment - this is memory, not a
+ * disk transfer. */
+int os88_clip_put_seg(unsigned seg, unsigned off, unsigned len);
+int os88_clip_get_seg(unsigned seg, unsigned off, unsigned cap);
+
 int os88_clip_size(void);                            /* -1 = empty */
 
 /* --- a message that costs your window no pixels (SPEC.md 59) -------------

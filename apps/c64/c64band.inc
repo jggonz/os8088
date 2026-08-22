@@ -397,6 +397,25 @@ _c64_rowsig:
 
 ; -----------------------------------------------------------------------------
 ; void c64_x2init(void) - build c64_x2tab once (see its declaration above).
+;
+; IT WAS WRONG IN TWO PLACES AND NOTHING COULD SEE IT, because nothing called
+; the table until fullscreen 2x shipped (C64-SPEC 9.8) and the host harness
+; models the doubler in C rather than running this. It answered a table of
+; 256 ZEROS, which on the glass is a fullscreen picture that is entirely
+; black - found on the glass and nowhere else, LESSONS.md 7's trap exactly.
+; Both bugs are worth naming, because both are the ordinary shape of a
+; bit-twiddling loop written from the description:
+;
+;  - `shl bx, 1` answers BIT 15 in CF, not bit 7. With the byte in the LOW
+;    half of BX the carry is zero for all eight passes whatever the byte is,
+;    so every entry came out 0. The byte goes into the HIGH half first.
+;  - the two result shifts must BOTH happen before the pair is set. Setting
+;    the pair between them puts it at bits 1-2 instead of 0-1, so after eight
+;    passes the leftmost pair has walked out of the sixteen-bit result.
+;
+; c64memtest.asm section (6b) now runs it on a real x86 and checks four
+; entries plus the identity that every result byte is one of the 16 values a
+; doubled nibble can take.
 ; -----------------------------------------------------------------------------
 _c64_x2init:
     push bp
@@ -406,16 +425,19 @@ _c64_x2init:
     mov di, c64_x2tab
     xor si, si                      ; the byte being doubled, 0..255
 .byte:
-    mov bx, si
-    xor dx, dx                      ; DH = the high result byte, DL = the low
     mov cx, 8
+    mov bx, si
+    shl bx, cl                      ; the byte into the HIGH half, so that
+                                    ; `shl bx, 1` below answers ITS bit 7 in CF
+    xor dx, dx                      ; DH = the high result byte, DL = the low
 .bit:
     shl dx, 1
-    shl bx, 1                       ; bit 7 of the byte -> CF (BX is 0..255)
+    shl dx, 1                       ; two result bits per source bit, and BOTH
+                                    ; shifts before the pair is set
+    shl bx, 1
     jnc .zero
     or dl, 3                        ; a set source bit is two set result bits
 .zero:
-    shl dx, 1
     loop .bit
     ; DX now holds the sixteen doubled bits, bit 15 leftmost
     mov [di], dh

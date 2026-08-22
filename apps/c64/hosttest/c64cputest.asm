@@ -859,7 +859,7 @@ row_bound:
     ; --- (f) ...AND THE SAME RUN WENT BACKWARDS OUT OF THE KERNAL INTO RAM.
     ; A JMP from $E004 to $0400 leaves PC BELOW the biased region, which a
     ; one-compare ceiling guard cannot see: it would have gone on fetching
-    ; RAM through the KERNAL's bias. This is §4.3's LOW edge.
+    ; RAM through the KERNAL's bias. This is C64-SPEC §4.3's LOW edge.
     mov bx, 0x0925
     call ram_rd
     cmp al, 0x5D
@@ -1956,10 +1956,11 @@ dormann_main:
     mov si, msg_neg
     call puts
 %endif
-    ; 30,000 AND NOT 60,000: the countdown is a SIGNED word (C64-SPEC
-    ; §4.2), so a budget above 32,767 is negative on arrival and the core
+    ; 30,000 AND NOT 60,000: the countdown is a SIGNED word
+    ; (C64-SPEC §4.2), so a budget over 32,767 arrives negative and the core
     ; expires before its first fetch - which reads exactly like a test that
-    ; will not start. The package's own cap is 16,384 for the same reason.
+    ; will not start. The package's own cap is 16,384, and 30,000 under warp
+    ; for the same reason.
     mov cx, 20000                   ; outer passes of 30,000 cycles each
 .run:
     push cx

@@ -97,6 +97,7 @@ void os88_wm_ownbg(void *win, int on);
 void os88_wm_onwake(void *win);
 int  os88_wm_wake(void *win);
 void os88_wm_destroy(void *win);
+void os88_wm_close(void *win);   /* SPEC.md 75.2 - close YOUR OWN window */
 int  os88_fullscreen(void *win, int enter);
 void os88_menu_set(void *win, struct os88_menuset *set);
 void os88_about_set(void *win);
@@ -112,7 +113,15 @@ unsigned os88_ticks(void);
  * always answers 0 (C64-SPEC §7.2's rule 1: it is asked once, from
  * os88_main). Advice, not an oracle. The harness models both. */
 int  os88_key_down(int scan);
+int  os88_snd_caps(void);                        /* SND_CAP_* bits (11.4) */
 int  os88_snd_tone(int hz, int ticks, int prio);
+
+/* the system clipboard (SPEC.md 55) - Edit > Copy and Edit > Paste (7.7) */
+int  os88_clip_put(const void *text, unsigned len);
+int  os88_clip_get(void *buf, unsigned cap);
+int  os88_clip_put_seg(unsigned seg, unsigned off, unsigned len);
+int  os88_clip_get_seg(unsigned seg, unsigned off, unsigned cap);
+int  os88_clip_size(void);
 
 unsigned os88_mem_claim(int kb);
 int      os88_mem_free(unsigned seg);

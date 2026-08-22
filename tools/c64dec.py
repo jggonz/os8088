@@ -6,7 +6,7 @@
 
 Klaus Dormann's `6502_decimal_test` is published as SOURCE only - the
 project's `bin_files/` carries the FUNCTIONAL test's binary and the 65C02
-one, and nothing else - so docs/C64-SPEC.md §4.6's decimal row cannot be a
+one, and nothing else - so C64-SPEC §4.6's decimal row cannot be a
 fetched binary at a pinned hash the way its functional row is. This file is
 what replaces it, and it is a stronger check rather than a weaker one:
 

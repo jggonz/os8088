@@ -33,23 +33,202 @@
  * because a toast under a fullscreen window is not where the user is looking.
  * ==========================================================================*/
 
-/* ovl_probe - C64-SPEC §13.3's FIRST `ovl_*` CALL, made from the first wake.
+/* ovl_conv_init - C64-SPEC §13.3's FIRST `ovl_*` CALL, made from the first
+ * wake, AND the two conversion tables Copy and Paste index.
  *
- * The .OVL cannot be loaded from os88_main (LESSONS.md 13: there is no
- * instance yet to resolve a module for), so the module's availability is not
- * known until some callback needs it - and the first callback that needs it
- * is a menu command, which is exactly the moment when finding out is too
- * late to be useful. So the first wake asks, for nothing: the body is a
- * `return 1` and the whole point is the far call the RUNTIME makes on the way
- * in, which is what loads the module. A 0 is the runtime refusing the load -
- * no C64.OVL on the disk, a stale module, no heap - and c64.c prints
- * `Unable to load C64.OVL.` in the status row as well as toasting it, because
- * a toast under a fullscreen window is not where the user is looking (§9.8).
- * That is §13.3's sentence, implemented. */
-static int ovl_probe(void)
+ * TWO JOBS IN ONE FUNCTION, AND BOTH ARE THE SAME FACT ABOUT FREQUENCY.
+ *
+ *  - The .OVL cannot be loaded from os88_main (LESSONS.md 13: there is no
+ *    instance yet to resolve a module for), so the module's availability is
+ *    not known until some callback needs it - and the first callback that
+ *    needs it is a menu command, which is exactly the moment when finding out
+ *    is too late to be useful. So the first wake asks. A 0 is the runtime
+ *    refusing the load - no C64.OVL on the disk, a stale module,
+ *    no heap - and c64.c prints `Unable to load C64.OVL.` in the status row as
+ *    well as toasting it, because a toast under a fullscreen window is not
+ *    where the user is looking (§9.8).
+ *  - And what it does while it is here is the ONE thing in this program that
+ *    runs exactly once: VICE's three transcribed conversions, called 128 and
+ *    256 times into c64_sctab and c64_pettab (c64kbd.c). They used to be
+ *    three resident functions - ~275 emitted instructions, ~700 bytes of
+ *    image - sitting beside the loops that index their output a thousand
+ *    times a Copy. SPEC.md 73.14 splits by FREQUENCY, and once-per-launch is
+ *    the side that goes out; the TABLES are bss and stay resident, which is
+ *    what makes the move legal (only code moves).
+ *
+ * THE TWO LOOPS ARE WRITTEN OUT INLINE AND NOT AS THREE FUNCTIONS, and that
+ * is a boundary decision rather than a style one: a function an ovl_* calls
+ * is either resident (and this move buys nothing) or in the module (and every
+ * one of the 384 calls is `call far [cc_ovm_...]`, ~58 us of bridge before
+ * any work). One function, two loops, no calls.
+ *
+ * IT IS THE ONE PLACE VICE'S ARITHMETIC IS WRITTEN, and the tables are still
+ * derived from it rather than being magic arrays somebody typed. */
+static int ovl_conv_init(void)
 {
+    int i, c;
+
+    /* --- screen code -> host ASCII, which is three of VICE's functions
+     * composed in the order src/clipboard.c:73 composes them:
+     *
+     *   charset_screencode_to_petscii  (charset.c:202-210)
+     *   petcii_fix_dupes               (charset.c:112-120)
+     *   charset_p_toascii              (charset.c:132-162, WITH ctrl codes)
+     *
+     * edit_copy_action's own final pass (actions-clipboard.c:69-76) is NOT a
+     * fourth step here, and the first draft of this port thought it was. That
+     * pass replaces a byte only when it is neither `\r`/`\n` NOR printable
+     * ASCII - and every byte charset_p_toascii can answer on this path is one
+     * of those, so it never fires. See the unmapped arm below.
+     *
+     * The index is 0..127 because the reverse-video bit is not a character
+     * (charset.c:204) and the copy loop masks it off. */
+    for (i = 0; i < 128; i++) {
+        if (i <= 0x1F)
+            c = i + 0x40;
+        else if (i >= 0x40 && i <= 0x5F)
+            c = i + 0x20;
+        else
+            c = i;
+        if (c >= 0x60 && c <= 0x7F)         /* petcii_fix_dupes: the CHROUT
+                                             * duplicates onto the proper
+                                             * codes (charset.c:114-115) */
+            c = c - 0x60 + 0xC0;
+        if (c == 0x0D)
+            c = '\n';
+        else if (c == 0x0A)
+            c = '\r';
+        else if (c == 0xA0)                 /* PETSCII shifted space */
+            c = ' ';
+        else if (c >= 0xC1 && c <= 0xDA)
+            c = 'A' + (c - 0xC1);
+        else if (c >= 0x41 && c <= 0x5A)
+            c = 'a' + (c - 0x41);           /* ...and this is the LOWER case,
+                                             * charset.c:156-158 */
+        else if (c < 0x20 || c > 0x7E)
+            /* ASCII_UNMAPPED IS '.', NOT '?' (charset.c:126), AND THE COMMENT
+             * THAT USED TO SAY OTHERWISE READ THE REFERENCE BACKWARDS.
+             * charset.c:122-127 gives the reason in VICE's own words - these
+             * bytes end up in host FILENAMES, so a wildcard is the one thing
+             * they must not become - and edit_copy_action's mangle
+             * (actions-clipboard.c:69-76) never touches a '.', because '.' is
+             * printable. VICE's Copy output cannot contain a '?' at all.
+             *
+             * WHICH CELLS ARE THESE? After the two steps above, screen codes
+             * $40, $5B-$5F, $60 and $7B-$7F (and their reverse twins) - the
+             * GRAPHICS cells, which is exactly what a user copying a game
+             * screen or a PETSCII drawing hits, so it is not a corner. The
+             * port's own font fallback already answers '.' for the same cells
+             * (c64scr.c:1146) and the two now agree. */
+            c = '.';
+        c64_sctab[i] = (unsigned char)c;
+    }
+
+    /* --- host byte -> PETSCII: charset_p_topetscii (charset.c:174-199). The
+     * line endings are NOT part of the map - charset_petconvstring tests for
+     * them FIRST (:72-74) - so the pair test is c64_paste_feed's and the
+     * single-byte answer is written over the map below. */
+    for (i = 0; i < 256; i++) {
+        if (i <= 0x1F)
+            c = 0x3F;                       /* PETSCII_UNMAPPED, charset.c:172
+                                             * - and here it IS '?', because
+                                             * this direction is the one whose
+                                             * comment (charset.c:164-171)
+                                             * says '.' breaks `foobar~1.prg`
+                                             * style names */
+        else if (i == '`')
+            c = 0x27;
+        else if (i >= 'a' && i <= 'z')
+            c = 0x41 + (i - 'a');
+        else if (i >= 'A' && i <= 'Z')
+            c = 0xC1 + (i - 'A');           /* NOT the 0x61 duplicates
+                                             * (charset.c:190-191) */
+        else if (i >= 0x7B)
+            c = 0x3F;
+        else if (i >= 0x60 && i <= 0x7F)    /* petcii_fix_dupes again, which is
+                                             * what :199 returns through */
+            c = i - 0x60 + 0xC0;
+        else
+            c = i;
+        c64_pettab[i] = (unsigned char)c;
+    }
+    /* ...AND THE TWO LINE ENDINGS ARE OVERWRITTEN, because they are not byte
+     * map entries at all: charset_petconvstring tests for a line ending
+     * BEFORE the map (charset.c:72-74) and answers ONE PETSCII CR for CR, for
+     * LF and for the CR LF pair. charset_p_topetscii sends both to
+     * PETSCII_UNMAPPED, which is right for the map and wrong for the string,
+     * so the string's answer goes in here and the feeder tests only for the
+     * PAIR. */
+    c64_pettab[0x0D] = 0x0D;
+    c64_pettab[0x0A] = 0x0D;
+
+    c64_conv_ok = 1;                        /* ...and THIS is what the two
+                                             * commands check, not the probe's
+                                             * `asked once` flag: a load that
+                                             * was refused for a TRANSIENT
+                                             * reason (no heap) and succeeded
+                                             * later would otherwise reach
+                                             * ovl_copy with 128 zero bytes of
+                                             * table and put a screenful of
+                                             * NULs on the user's clipboard */
     return 1;
 }
+
+/* ==========================================================================
+ * EDIT > COPY AND EDIT > PASTE (11.1, 7.7)
+ *
+ * ONLY THE COMMAND SHELL IS HERE. The clipboard calls, the refusals and the
+ * truncation notice run once per pick and belong in the module; the 40x25
+ * walk, the table LOOKUPS and the CRLF fold run PER BYTE and are resident
+ * (c64kbd.c's c64_copy_screen / c64_paste_feed), because SPEC.md 73.14
+ * splits by FREQUENCY and every iteration of a loop written here would cross
+ * the segment boundary - twice a cell, as the first draft of this file did:
+ * 2,000 far-call round trips for one Copy, ~110 ms, all of it under the gfx
+ * lock. c64kbd.c's own header carries the whole finding.
+ *
+ * The two TABLES those lookups index are bss and resident; the code that
+ * FILLS them is ovl_conv_init above, because filling them happens once a
+ * launch and the same rule sends it the other way.
+ *
+ * Both conversions are VICE's, transcribed from src/charset.c, and neither is
+ * a table this port invented. The one thing worth knowing before reading them
+ * is that the answer is NOT the letters you can see: PETSCII $41-$5A is the
+ * LOWER case (charset_p_toascii, charset.c:156-158) and $C1-$DA the upper
+ * (:153-155), whichever character set the VIC is drawing - so a Copy of the
+ * boot screen puts `**** commodore 64 basic v2 ****` on the clipboard, in
+ * lower case, exactly as VICE does. That is transcribed and not chosen, and
+ * C64-SPEC §7.7 states it so nobody files it as a defect.
+ * ========================================================================*/
+
+/* ovl_copy / ovl_paste - Edit > Copy (Alt+Delete) and Edit > Paste
+ * (Alt+Insert): clipboard_read_screen_output (src/clipboard.c:41-100) and
+ * paste_callback (actions-clipboard.c:96-110).
+ *
+ * BOTH ARE A LATCH AND NOTHING ELSE. os88_oncmd is dispatched under the
+ * DESKTOP's gfx lock, and neither body is bounded by a count that can be
+ * stated there: Copy is ~103 ms of conversion, Paste is a 2KB heap claim and
+ * an os88_clip_get, and both reach kernel/clip.inc's mem_claim, which may
+ * compact an arena holding this app's pinned 64KB and pinned 20KB. The
+ * bodies are c64_clip_service (c64kbd.c), run from the top of the next wake
+ * with no lock held; that function's header carries the whole argument, and
+ * the wake that spends the latch is the one os88_oncmd posts after this
+ * returns.
+ *
+ * COPY SAYS NOTHING ON SUCCESS, because VICE says nothing: the result is on
+ * the clipboard and the window it came from has not changed. Every refusal -
+ * no heap for the staging claim, the clipboard over CLIP_MAXKB, an empty
+ * clipboard, a truncated paste - is a fact and is said, on the row, by the
+ * service.
+ *
+ * COPY IS NOT REACHABLE WITH NO MACHINE and PASTE is greyed with no machine,
+ * on a JAM and while PAUSED. c64menu.c's c64_menu_state carries each fact:
+ * with c64_norom the matrix holds nothing but c64_ram_pattern's factory fill
+ * and the clipboard is KERNEL-OWNED and outlives this app (SPEC.md 55.3), so
+ * a Copy there would destroy what the user copied elsewhere in exchange for a
+ * screen they cannot see. Copy stays LIVE on a JAM - the frozen screen is
+ * real, and VICE copies what is displayed - while a paste there would be
+ * bytes queued in silence for the rest of the session, because c64_paste_feed
+ * is called only from the C64_ST_RUN, not-paused arm of os88_onwake. */
 
 /* ovl_cmd - one command. The kernel never dispatches a disabled item, so
  * every case below is one of C64-SPEC §11.1's LIVE items; the greyed
@@ -60,93 +239,63 @@ static int ovl_cmd(int menu, int item, void *win)
         if (item == C64_I_ATTACH) {
             /* File > Smart attach... (Alt+A) on .PRG, through the Standard
              * File dialog. It does not block: the answer arrives at
-             * os88_onfile (11.3). */
-            os88_file_dlg(OS88_FDLG_OPEN, win, "*.PRG");
+             * os88_onfile (11.3).
+             *
+             * AND THE REFUSAL IS READ. os88_file_dlg answers -1 when another
+             * modal dialog already owns the screen (os88.h) - one dialog at a
+             * time, machine-wide - and the first draft discarded it, so
+             * picking Smart attach... with somebody else's Save box up did
+             * nothing at all and said nothing at all, which is the silent
+             * no-op SPEC.md 47 forbids. */
+            if (os88_file_dlg(OS88_FDLG_OPEN, win, "*.PRG") < 0)
+                c64_say("A file dialog is already open.");
             return 1;
         }
         if (item == C64_I_RESETCPU || item == C64_I_POWER) {
             /* Reset machine CPU vs Power cycle machine: on a real machine the
-             * difference is the RAM, and this port keeps that difference -
-             * the power cycle fills RAM the way a cold machine comes up and
-             * the CPU reset does not.
+             * difference is the RAM, and this port keeps that difference.
              *
-             * AND "THE WAY A COLD MACHINE COMES UP" IS NOT ZEROS. VICE gives
-             * the C64 the factory pattern at src/ram.c:169-177 - 00 00 00 00
-             * FF FF FF FF, offset by two bytes and inverted every 16K - and
-             * c64_ram_pattern (c64.c) is that arithmetic. A zero fill is
-             * harmless while there is no core, and wrong the moment there is
-             * one: the KERNAL's RAM test and any program that reads
-             * uninitialised memory both see it. */
-            if (item == C64_I_POWER)
-                c64_ram_pattern();
-            c64_reset_regs();
-            c64_lum_update();
-            c64_frame_regs();
-            c64_reset_cpu();                /* the 6510 out of reset: I set,
-                                             * PC from $FFFC under the KERNAL
-                                             * (11.1) - and the KERNAL draws
-                                             * its own boot screen from here */
-            if (!c64_norom)
-                c64_state = C64_ST_RUN;
-            /* AND THE MENU IS RE-SPELLED, BECAUSE THIS IS A PATH OUT OF
-             * C64_ST_JAM. c64_jam() greys Preferences > Advance frame - there
-             * is no machine left to advance (SPEC.md 47) - and the FACT that
-             * greys it is the permanent `Main CPU: JAM at $XXXX` line on the
-             * status row. A reset clears the state, so c64_status stops
-             * drawing that line at once; without this call the greying
-             * outlived the fact by the rest of the session, and then un-greyed
-             * itself at random, because the only other callers of
-             * c64_menu_state are the Warp/Pause/Swap/Fullscreen latches - so
-             * whether Advance frame worked depended on which UNRELATED menu
-             * item you had last picked. Every path that leaves C64_ST_JAM
-             * re-runs it; it is harmless on the c64_norom path, where the
-             * state does not change and the greying is still owed. */
-            c64_menu_state();
-            c64_dirty_all();
-            c64_kick = 1;
-            /* AND NOT c64_sh_inval(). Nothing covered the glass across a
-             * reset, so the shadow is still true, and c64_dirty_all is the
-             * RECOMPOSE. sh_inval is the FORCE, and forcing switches off the
-             * frame compare that exists to answer "the picture did not
-             * change, draw nothing": a reset from the boot screen back to the
-             * boot screen is exactly that case, and it cost 25 forced blits,
-             * ~266 ms, four host ticks. c64scr.c's own header states the
-             * distinction. */
-            return 1;
-        }
-        if (item == C64_I_EXIT) {
-            /* Exit emulator (Alt+Q). There is no self-close slot, so this is
-             * cword's File > Close idiom: a worker that sleeps and destroys
-             * the window (SPEC.md 74).
-             *
-             * TWO CONTRACTS, AND THE FIRST DRAFT BROKE BOTH.
-             *
-             *  - os88_task_spawn wants the gfx lock HELD, and it is: we are
-             *    reached from os88_oncmd, which the kernel dispatches UNDER
-             *    the lock (apps/cc/crt0.asm's cc_oncmd: "you must never take
-             *    the lock"). Taking it here spun on a NON-RECURSIVE lock this
-             *    task was already standing on - kernel/ui.inc's
-             *    ui_post_cmd names the outcome: "hang the machine dead: no
-             *    beep, no watchdog, no recovery".
-             *  - IT ANSWERS 0 FOR SUCCESS and -1 for a refusal (os88.h). A
-             *    refusal is the 12-slot task table being full, which the SDK
-             *    calls "NORMAL and transient": the right response is to leave
-             *    the state alone so the next Exit retries, not to latch
-             *    C64_ST_DEAD on a window nothing is closing. */
-            if (os88_task_spawn(win) == 0)
-                c64_state = C64_ST_DEAD;    /* the worker owns the window now:
-                                             * stop flushing into it */
-            else
-                c64_say("Cannot start the closer - try again.");
+             * THE BODY IS A LATCH, for the reason Copy's and Paste's are.
+             * Power cycle's RAM fill is 65,536 bytes through c64_zfill - two
+             * calls per 128 bytes of VICE's factory pattern - and os88_oncmd
+             * is dispatched under the DESKTOP's gfx lock, so doing it here was
+             * about a quarter of a second of every other task's drawing, the
+             * mouse and the dock stopped dead for a command that draws
+             * nothing. c64_reset_service (c64.c) runs the whole thing from the
+             * top of the next wake with no lock held, and no emulated cycle
+             * runs in between, so the machine the user reset is the machine
+             * that is reset. */
+            c64_reset_req = (item == C64_I_POWER) ? 2 : 1;
             return 1;
         }
         return 1;
     }
 
-    /* C64_M_EDIT has no live item in this wave: Copy and Paste are GREYED
-     * with their fact beside them in c64menu.c (SPEC.md 47), so the kernel
-     * never dispatches either and there is no case for them here. An item
-     * that is live and then toasts a refusal is exactly what 47 forbids. */
+    if (menu == C64_M_EDIT) {
+        /* LIVE AS OF WAVE 3. Both were greyed with the fact that greyed them
+         * - neither conversion table nor the $0277 feeder was written - and
+         * this wave wrote all three, so SPEC.md 47 does not let the greying
+         * outlive its reason. The captions are still VICE's and the MENU ITEM
+         * is still the guaranteed route: an AT BIOS int 16h AH=0 drops the
+         * enhanced codes Alt+Delete and Alt+Insert carry (7.5), and where a
+         * BIOS does pass them os88_onkey dispatches them straight here. */
+        /* ...AND THE TABLES ARE THERE, WHICH IS NOT THE SAME QUESTION AS
+         * `the module loaded once`. ovl_conv_init runs on the first wake and
+         * its refusal is a fact the user has already been told (§13.3), but a
+         * load refused for a TRANSIENT reason - no heap at that moment - and
+         * granted later would reach the loops below with 128 zero bytes of
+         * table and put a screenful of NULs on the user's clipboard. One
+         * compare, and the retry costs one bridge crossing in a case nobody
+         * will meet: if we are running at all, this module is resident, so
+         * this call cannot itself be refused. */
+        if (!c64_conv_ok)
+            ovl_conv_init();
+        if (item == C64_I_COPY)
+            c64_copy_req = 1;               /* the WAKE does it (c64kbd.c) */
+        else if (item == C64_I_PASTE)
+            c64_paste_req = 1;
+        return 1;
+    }
 
     if (menu == C64_M_PREF) {
         /* THE FOUR LIVE ITEMS HERE ARE VICE'S CHECK ITEMS
@@ -186,13 +335,90 @@ static int ovl_cmd(int menu, int item, void *win)
             return 1;
         }
         if (item == C64_I_WARP) {
+            /* WARP IS TWO THINGS IN VICE AND IT IS THE SAME TWO HERE
+             * (C64-SPEC §4.4). The throttle comes off - here that is the wall
+             * slice's ceiling, 16,384 -> 30,000, because nothing in this port
+             * paces the machine against a wall clock and the ceiling is the
+             * only throttle there is - AND THE RENDERING IS CAPPED AT 10 fps.
+             *
+             * THE SECOND HALF IS VICE'S, IN VICE'S WORDS, and one pass of
+             * this review deleted it on the reading that a warp which draws
+             * less is `a different feature with the same name`. src/vsync.c
+             * says otherwise twice: :339-340 sets
+             * `warp_render_tick_interval = tick_per_second() / 10.0` under
+             * `Limit warp rendering to 10fps`, and :634-656 skips frames
+             * while `warp_enabled` under `Limit rendering fps if we're in
+             * warp mode. It's ugly enough for dqh to weep but makes warp
+             * faster.` Drawing less IS half of what VICE's warp does, and on
+             * this machine it is the expensive half: §9.7 prices a full
+             * expose at 306 ms against a slice of 16,384 emulated cycles.
+             * c64.c's flush gate is where the cap lives - 18.2 Hz / 10 = 1.82
+             * ticks, so two - and it can only ever SLOW the flush down, which
+             * is why the 8086 tier (already every other tick, 9.1 Hz) is
+             * unmoved by it and the message below is still true there.
+             *
+             * AND THE CAP COMES BACK DOWN WITH IT. An adapted budget above
+             * C64_SLICE_MAX would otherwise outlive the warp it was granted
+             * for - the only thing that lowers it is a slice that overruns a
+             * host tick, and one that fits never would. */
             c64_warp = !c64_warp;
+            if (c64_warp)
+                c64_sound_stop();           /* VICE suspends the sound on the
+                                             * way into warp (src/vsync.c:181
+                                             * -> src/sound.c:1819): a machine
+                                             * running at 3,000 % has nothing
+                                             * meaningful to play, and the note
+                                             * it was holding would simply
+                                             * stand for the whole warp */
+            if (!c64_warp && c64_budget > C64_SLICE_MAX)
+                c64_budget = C64_SLICE_MAX;
             c64_menu_state();
-            c64_say(c64_warp ? "Warp mode on." : "Warp mode off.");
+            /* ...AND ON THE TARGET IT SAYS SO, AND THE RENDER CAP DOES NOT
+             * CHANGE THAT. BOTH of warp's halves are no-ops on CPU_8086, for
+             * two separate reasons, and C64-SPEC §4.4 states each:
+             *
+             *  - the SLICE cap is never reached. At 4.77 MHz a 16,384-cycle
+             *    slice is far more than one host tick of work, so the
+             *    adaptation's halving arm settles the budget near its
+             *    256-cycle floor and the ceiling is not what binds. Lifting a
+             *    ceiling the machine never reaches changes nothing.
+             *  - the RENDER cap is 10 fps, and this tier already flushes
+             *    every OTHER host tick - 9.1 Hz, SLOWER than VICE's cap, for
+             *    §9.8's own reason (a full repaint here is ~300 ms). The cap
+             *    is max(c64_flush_every, 2) and cannot speed anything up, so
+             *    on this tier it changes nothing either.
+             *
+             * BOTH DO BIND ON A 286 OR A 386, which is why the item is not
+             * greyed: there c64_flush_every is 1, so the cap halves the
+             * drawing, and the budget does walk up to the ceiling. A message
+             * that announced a speed-up the machine does not deliver is the
+             * shape SPEC.md 47 exists to stop, and PERFORMANCE.md's "degrade
+             * by tier" gives the port the means to answer: os88_cpu() is a
+             * FACT the code can test, and c64_tier_init has read it before
+             * the menu is first drawn.
+             *
+             * THE THREE SENTENCES BELOW ARE THIS PORT'S OWN, not VICE's, and
+             * saying otherwise was drift: VICE reports warp with a LED
+             * labelled `warp:` (uistatusbar.c:2607-2616) and has no status
+             * message at all. The only `Warp mode` sentences in the reference
+             * are a log line (autostart.c:703) and the monitor's
+             * `Warp mode is on.` (mon_parse.y:290). These follow the status
+             * row's own convention, the one `Paused.` / `Running.` two items
+             * below already set. */
+            if (!c64_warp)
+                c64_say("Warp mode off.");
+            else if (os88_cpu() == OS88_CPU_8086)
+                c64_say("Warp mode on - no change.");
+            else
+                c64_say("Warp mode on.");
             return 1;
         }
         if (item == C64_I_PAUSE) {
             c64_pause = !c64_pause;
+            c64_sound_stop();               /* both directions: quiet going in,
+                                             * and coming out the wake re-reads
+                                             * the SID and plays what the
+                                             * machine actually holds (11.4) */
             c64_menu_state();
             c64_say(c64_pause ? "Paused." : "Running.");
             return 1;

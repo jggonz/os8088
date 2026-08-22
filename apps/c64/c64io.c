@@ -1022,9 +1022,29 @@ static int c64_sid_voice1(void)
         os88_snd_tone(0, 0, 0x40);
         return 0;
     }
+    /* THE SID'S OWN ARITHMETIC, AND IT IS ONE ROUNDING AND NOT TWO. A 6581 at
+     * the PAL dot clock sounds `Fn * 985248 / 2^24` Hz - 0.0587257 a step -
+     * and this used to be `(raw >> 4) * 15 / 16`, which is the same factor to
+     * a quarter of a percent but rounds TWICE, once into a 12-bit number and
+     * again on the way out. Near the bottom of the range that is a whole hertz
+     * where a hertz is the unit: middle-of-nowhere F = 341 answered 19 and the
+     * true figure is 20, which is the difference between the 20 Hz floor below
+     * REFUSING the note and playing it.
+     *
+     * c64_muldiv keeps the product in 32 bits (c64mem.inc), which is what a
+     * 16-bit C cannot express: 3848 / 65535 is 0.0587166, within 0.015 % of
+     * the real constant across the whole range, and F = $FFFF answers 3848 Hz
+     * where the ratio says 3848.6. hosttest/c64uitest.c asserts both ends and
+     * the floor.
+     *
+     * AND THE DIVISOR IS SPELLED 0xFFFF: SmallerC's `int` is 16 bits and
+     * SIGNED, so a decimal 65535 in the source is "Constant too big for
+     * 16-bit signed type" and stops the build (docs/C-TOOLCHAIN.md's rule 4's
+     * near neighbour). The hex form is the unsigned bit pattern and reaches
+     * c64_muldiv, whose arithmetic is unsigned, as 65,535. */
+#define C64_SIDDIV 0xFFFF
     f = ((unsigned)c64_sid[0x00]) | (((unsigned)c64_sid[0x01]) << 8);
-    f = f >> 4;
-    hz = (int)((((f << 4) - f) >> 4));      /* * 15, as a shift and a subtract */
+    hz = (int)c64_muldiv(f, 3848, C64_SIDDIV);
     if (hz < 20 || hz > 12000) {
         os88_snd_tone(0, 0, 0x40);
         return 0;

@@ -1044,12 +1044,25 @@ machines (Decision 21).
   5-dot indicators delta-drawn; the warp and pause lamps `W`/`P`
 - SID voice 1 → `os88_snd_tone` per slice on change; the rest greyed
 
-**Files:** `apps/c64/c64cmd.c`, `c64.c`, `c64kbd.c`, `c64scr.c`,
-`c64band.inc`, `hosttest/{os88.h, c64uitest.c}`, `docs/C64-SPEC.md`
+**Files:** `apps/c64/c64cmd.c`, `c64.c`, `c64io.c`, `c64kbd.c`, `c64menu.c`,
+`c64scr.c`, `c64about.c`, `c64.asm`, `c64band.inc`, `c64mem.inc`, `build.sh`,
+`hosttest/{os88.h, c64uitest.c, c64memtest.asm}`, `docs/C64-SPEC.md` — and,
+because the fix pass found the wake's promise broken in the KERNEL rather than
+in the port, `kernel/wm.inc` + `kernel/ui.inc` (`wm_wake_sweep`), and the SDK
+for the three thunks the port needed and did not have:
+`apps/cc/{os88.h, os88thunk.asm}` (`os88_wm_close`, `os88_clip_put_seg`,
+`os88_clip_get_seg`)
 
 **Done when:**
 screendumps: Alt+D on `VIDEO=cga` (`mouse.py --screen 640x200`) shows the C64
-screen filling 640×200 exactly, and on VGA 640×400 centred;
+screen **640 pixels wide exactly** — 2× horizontal, which is the whole job on
+an adapter whose pixel is already 2:1, with C64-SPEC §9.1's standing clamp giving 22 of
+the 25 rows above the status row rather than the "filling 640×200" this line
+first promised, because a 200-line screen cannot hold 25 rows AND the status
+row (`build/port-shots/w3fix-19-fullscreen-2x-cga.png`) — and on VGA 640×400
+centred with all 25 (`w3fix-16-fullscreen-2x-vga.png`); on the `CPU_8086` tier
+1:1 centred, which is C64-SPEC §9.8's tier table and a fact `os88_cpu()`
+answers rather than a guess about speed;
 the harness asserts **Alt+D costs 0 flush calls either way** (SPEC.md §74.2's
 zero) and prices a fullscreen frame in ms;
 a typed `FOR` loop pauses on Alt+P and resumes (two screendumps), and Advance
@@ -1063,6 +1076,194 @@ an image with `C64.OVL` removed shows `Unable to load C64.OVL.` in the status
 row (screendump), and every menu command then refuses politely;
 `cc8086.py`'s counters show the `ovl_` functions moved, and the **five-figure**
 size line — resident shims counted — is quoted.
+
+**What wave 3 measured, and what it changed** (2026-08-22). Copy and Paste are
+live, warp is the wall slice's cap, the sound capability is established before
+the slot is called, and `C64-SPEC` §7.6's ScrollLock hint ships on an
+observable the SDK
+can actually be asked for. **Size: resident image 37,204 + bss 13,410 = 50,614
+of 61,440, `C64.OVL` 2,549, 29 resident shims, largest frame 32** — 4,386
+under SPEC.md §73.9's 55,000 trigger. `C64-SPEC` §13.0.1 carries the per-figure
+delta.
+
+Six things the plan could not know, each written back into `docs/C64-SPEC.md`
+rather than left in the code:
+
+1. **`os88_mouse()` cannot be asked whether a mouse has spoken**, which is
+   what `C64-SPEC` §7.6 said to do. `osapi_mouse`
+   (`kernel/kernel.asm:3263`) tests `[mou_seen]` to decide whether to poll the
+   keyboard mouse and then answers x, y and the button; no slot reports the
+   flag, and adding one spends kernel headroom. The package asks a question it
+   CAN answer and that has the same answer: `kbm_key`
+   (`kernel/mouse.inc:934-941`) intercepts a cursor key exactly when no mouse
+   has spoken **and** ScrollLock is off, and an intercepted key never reaches
+   `os88_onkey` — so *"an arrow is held and `os88_onkey` has never delivered
+   one"* IS *"the kernel is eating them"*, observed. Three consecutive polls,
+   because a wake posted before a press is dispatched ahead of the key event
+   behind it. `C64-SPEC` §7.6.
+2. **A warp that slows the FLUSH down is not a warp.** The plan said *"flush
+   every 9 ticks"*; that does not run the machine one cycle faster, it stops
+   showing what it does. The user's decision — cap lifted, flush rate
+   unchanged — is what shipped, and `C64-SPEC` §4.4 states what it is measured
+   to be worth (**2,070 % → 2,182 %** under QEMU, which is the saved wake
+   round trips) and where it is worth **nothing**: on a 4.77 MHz target the
+   adaptation's halving arm settles the budget near its floor and the cap is
+   not what binds. Lifting a ceiling the machine never reaches changes
+   nothing, and that is said rather than left to be discovered.
+3. **The budget's doubling had to be CLAMPED, not merely stopped below the
+   cap.** With one cap of 16,384 the old test landed exactly on it; with
+   warp's 30,000 it lands on 32,768, and `int` is sixteen bits — the budget
+   arrives as −32,768 and the core expires before its first fetch, so warp
+   would have stopped the machine dead. The harness found it; nothing on a
+   glass would have. `C64-SPEC` §4.4.
+4. **A Copy comes back in LOWER CASE, and that is VICE's answer.**
+   `charset_p_toascii` maps PETSCII `$41-$5A` to `'a'-'z'` and `$C1-$DA` to
+   `'A'-'Z'` whatever the VIC is drawing, so the boot screen copies as
+   `**** commodore 64 basic v2 ****`. Transcribed, not chosen, and written
+   down so nobody files it. `C64-SPEC` §7.7.
+5. **CRLF is TWO bytes and ONE line end** (`charset.c:49-63`), and without the
+   pair test a document written on a DOS machine types two RETURNs a line —
+   in BASIC, a listing with a blank line between every statement. The harness
+   row is a 40-byte clipboard with one CRLF and one LF that must queue **39**
+   PETSCII bytes.
+6. **The paste queue and the copy buffer cannot be one buffer.** A Copy taken
+   during a long paste would otherwise rewrite what was still being typed.
+   They are also **not the same size**, which the first draft got wrong — see
+   the fix pass below. `C64-SPEC` §7.7.
+
+**THE REVIEW'S FIX PASS (2026-08-22), and its finding is the one this port
+should carry into every later wave.** *A `ovl_*` function is a SEGMENT, and a
+loop written inside one crosses the boundary every iteration.* Wave 3 put
+Copy's 40×25 walk and Paste's byte map in `c64cmd.c` — so the shipped inner
+loop was `call far [cc_ovv_c64_rd]` **and** `call far [cc_ovm_ovl_sc_ascii]`,
+two bridge round trips a cell, **2,000 for one Edit > Copy**, every one of
+them through `crt0.asm`'s `cc_ovthunk` before any work happened — and all of
+it under the gfx lock, which is where `os88_oncmd` runs. It assembled, it
+booted, it was demonstrated on the glass twice, and **the cost table reported
+it as 25.0 ms** because the model charged one NEAR call per cell and charged
+the conversion and the loop body nothing at all. That is exactly
+`docs/C-TOOLCHAIN.md`'s *"the counters live in the drawing primitives... the
+part no counter is watching"*. What the fix pass changed:
+
+- **the loops came home.** `c64_sc_ascii`/`c64_a_petscii` are resident and are
+  now called 384 times AT LAUNCH to build a 128- and a 256-byte table, so
+  neither loop makes a call per byte; the matrix comes out **one row per
+  `c64_zcopy_out`**; the command shells stay `ovl_*`. **3 bridge crossings for
+  a Copy, not 2,000** — and `C64.OVL` got SMALLER (2,549 → 1,717) while the
+  resident image grew, which is what a frequency split looks like when it is
+  done right.
+- **Paste's byte map moved into the FEEDER**, ten bytes a wake with **no lock
+  held**, because SmallerC emits ~145 µs a byte and converting a full queue
+  under the lock would be ~300 ms of stopped desktop. Nothing about it is
+  observable from the machine's side. The command is now **0.9 ms of held
+  lock whatever the clipboard holds**, and Copy is **79.4 ms** — stated, and
+  under the 100 ms at which it would have had to become a wake-driven request.
+- **the cost model learned the boundary.** `C64COST_OVLCALL` (58 µs a
+  crossing) plus per-cell and per-byte constants **counted from the emitted
+  code** — the loop bodies were extracted from `build/c64.gen.asm`, assembled,
+  and priced at the 8088's 4.34 clocks-a-byte fetch floor. The harness now
+  fails if a Copy ever reads the matrix a cell at a time again.
+- **Copy and Paste are greyed by state.** Paste with no `C64.ROM` and on a
+  JAM (nothing drains the queue in either); Copy with no `C64.ROM` (the
+  clipboard is kernel-owned and outlives the app — a Copy there would spend
+  the user's clipboard on the factory RAM pattern). The chords are guarded
+  with the items.
+- **a clipboard of exactly 32,768 bytes is not an empty one.**
+  `kernel/clip.inc:84` accepts it and `os88_clip_size` answers `0x8000`, which
+  a 16-bit `int` reads as −32,768: `sz <= 0` said *"The clipboard is empty."*
+  on a full clipboard. The test is `sz == -1`, and the harness stub casts
+  through `short` so the host's 32-bit `int` cannot hide it.
+- **the paste queue is sized from what a PASTE is** — 2,048 bytes, not the
+  1,026 that is Copy's bound — and the limit is in `README.TXT` and in the
+  message, which names the number and is checked against the constant.
+- **Warp says what it does on the target**: `Warp mode on - no faster on this
+  CPU.` on `CPU_8086`, VICE's plain `Warp mode on.` elsewhere.
+  `C64-SPEC` §4.4 was honest; the glass was not.
+- **`kernel/mouse.inc:1426` was not the citation for `int 16h AH=0`** and had
+  been copied out of `C64-SPEC` §7.5 into the shipping source. Both now point
+  at `kernel/ui.inc:84-95`, which is `ui_task`'s own peek-and-fetch.
+
+**Size after the fix pass: resident image 38,372 + bss 14,856 = 53,228 of
+61,440, `C64.OVL` 1,717, 30 resident shims, largest frame 32** — 1,772 under
+SPEC.md §73.9's 55,000 trigger, which is the tightest this port has been and
+is called out in `C64-SPEC` §13.0.1 with the one figure that could be given
+back.
+
+**THE REVIEW'S SECOND FIX PASS (2026-08-22).** Four majors and six minors,
+one of which was refused with its reason. What it changed:
+
+- **the port's own once-per-launch code went out.** `c64_sc_ascii`,
+  `c64_a_petscii` and `c64_conv_init` — ~275 emitted instructions, **655
+  bytes**, measured off a `nasm -l` listing — ran exactly once, from
+  `os88_main`, and sat in the resident half beside the loops that index their
+  output a thousand times a Copy. They are now ONE `ovl_conv_init`, called
+  from the first wake beside the probe it replaces: three functions would have
+  been 384 far calls, because an `ovl_*` calling an `ovl_*` crosses the
+  bridge. The tables stay resident and DS-relative, which is what makes it
+  legal. `SPEC.md §73.14` splits by FREQUENCY and once-per-launch is the side
+  that goes out — the rule read as a fact about this port's own launch path
+  and not only about menu commands.
+- **`Edit > Copy` substituted `?` where VICE substitutes `.`**, on a reading
+  of the reference that was backwards: `edit_copy_action`'s mangle
+  (`actions-clipboard.c:69-76`) replaces a byte only when it is neither a line
+  ending nor printable, and `ASCII_UNMAPPED` is `'.'` (`charset.c:126`), which
+  IS printable — so **VICE's Copy output cannot contain a `?` at all**. The
+  cells that reach that arm are the GRAPHICS cells (screen codes `$40`,
+  `$5B-$5F`, `$60`, `$7B-$7F`), i.e. what a user copying a game screen hits;
+  the port's own font fallback already answered `.` for them. The harness had
+  never copied one, and now does.
+- **the cost model was charging `os88_clip_put` one far call and nothing for
+  its body.** `kernel/clip.inc:70-125` is a `clip_drop`, a `mem_claim` and a
+  `rep movsb` of every byte, inside the caller's lock: the copy alone is
+  ~3.7 ms for Copy's 1,025 bytes, and the CLAIM can reach `mem_compact`,
+  which `kernel/memory.inc` prices at *"a memcpy in tenths of a second"*. The
+  copy is charged (Copy: **79.4 → 83.2 ms**, taken on a FULL screen now) and
+  the compaction is stated as UNBOUNDED and unmodelled — which is the fact
+  that decides synchronous-vs-wake-driven, not the 83.2.
+- **warp's render cap came back, as VICE's own number.** The previous pass
+  deleted the frame skip on the reading that drawing less is *"a different
+  feature with the same name"*; `src/vsync.c:339-340` and `:634-656` say it is
+  half of VICE's warp, deliberately (*"makes warp faster"*). The flush is now
+  `max(c64_flush_every, 2)` ticks while warping — 18.2 Hz / 10 fps — and on
+  `CPU_8086` that changes nothing, because the tier already flushes every
+  other tick, which is SLOWER than the cap. So both halves of warp are still
+  no-ops on the target, for two separate reasons, and the tier message stands
+  — but it is now labelled as this port's own wording, because `Warp mode on.`
+  is nowhere in VICE either (VICE has a `warp:` LED and no message).
+- **a message stopped erasing the widgets beside it.** The row filled all 42
+  cells for any message and put back only the message and the two lamps, so
+  `Joysticks:`, both indicators and the drive number were blank for five
+  seconds — and wave 3 made that self-defeating, because `ScrollLock for
+  joystick` is raised BY joystick use. A message of 25 cells or fewer now
+  erases only the cells it needs (**22.8 ms up, 26.0 ms down, against 36.8 +
+  42.0**), a longer one still owns the field area, and three flags carry the
+  distinction because they are three different facts.
+- **Paste greys while PAUSED** — the state the greying was reasoned about and
+  missed, because pause is not a state but a flag on `C64_ST_RUN`. Copy's
+  four-crossing bridge count, the two `c64_paste_convert` citations to a
+  function that does not exist, and a message-length gate that could never
+  fail (it measured the clamp, not the literal) were the other minors.
+
+**Size after this pass: resident image 38,278 + bss 14,862 = 53,140 of
+61,440, `C64.OVL` 2,375, 30 resident shims, largest frame 32** — 1,860 under
+SPEC.md §73.9's 55,000 trigger. The frequency move gave 655 bytes back and the
+status row's correctness fix spent about 560 of them; `C64-SPEC` §13.0.1
+carries that accounting rather than a headline.
+
+**And one defect found and NOT fixed here, because it is wave 2's and it is
+not small.** **Launching any second package JAMS the emulated 6510.** Boot
+`build/c64.img` with `NOTEPAD.O88` beside the `C64\` folder, launch C64 (the
+status row counts up normally), then launch Note Pad and raise C64 again: the
+speed figures freeze for good, no keystroke echoes, and Preferences shows
+**Advance frame greyed**, which `c64_menu_state` only does for
+`c64_norom || c64_state == C64_ST_JAM` — so the core has hit a `KIL`. It is
+**reproducible on the wave-2 build with none of wave 3's code exercised**
+(`build/port-shots/wave3-70-w2-a.png` … `wave3-73-w2-pref.png`, taken against
+`git checkout`ed sources), so it is not a wave-3 regression; and it survives
+File > Reset machine CPU. The `Main CPU: JAM at $XXXX` line never reaches the
+row either, which is a second symptom worth chasing beside the first. Left
+reported rather than fixed (LESSONS.md 12), and it wants an owner before
+wave 5 ships disks that carry C64 beside every other app.
 
 ### Wave 4 — Programs: Smart attach, autostart, bitmap modes and sprites
 

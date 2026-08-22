@@ -91,3 +91,29 @@ python3 tools/c64ref.py --lumcheck $BUILD/c64ref-lum.bin
 
 # The movers and the composer's string loops, on a real x86 with SS != DS.
 apps/c64/hosttest/c64memtest.sh
+
+# THE MESSAGE-LENGTH GATE'S LIST, TIED TO THE SOURCES (§10.1). c64uitest.c
+# walks a hand-typed msgs[] array and asserts every entry fits C64_MSGCELLS;
+# nothing tied that array to the code, so a c64_say() added in a later wave and
+# not copied in was simply NOT CHECKED - a gate that silently narrows instead
+# of failing. This extracts every c64_say literal out of apps/c64/*.c and
+# requires the array to contain each one. The two permanent lines c64_status
+# draws itself are not c64_say calls and stay in the array by hand.
+python3 - <<'PY'
+import re, sys, glob
+said = set()
+for f in glob.glob('apps/c64/*.c'):
+    src = open(f).read()
+    for m in re.finditer(r'c64_say\(\s*"((?:[^"\\]|\\.)*)"', src):
+        said.add(m.group(1))
+h = open('apps/c64/hosttest/c64uitest.c').read()
+i = h.index('static const char *msgs[] = {')
+listed = set(re.findall(r'"((?:[^"\\]|\\.)*)"', h[i:h.index('};', i)]))
+missing = sorted(said - listed)
+if missing:
+    for s in missing:
+        print('c64msgs: c64_say("%s") is not in c64uitest.c\'s msgs[] - the '
+              'length gate never sees it' % s)
+    sys.exit(1)
+print('c64msgs: %d c64_say literal(s), every one in the length gate' % len(said))
+PY

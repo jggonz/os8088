@@ -101,7 +101,9 @@ static int ovl_about_show(void *win)
     if (y + c64_abt_h > c64_goy + c64_gh)
         y = c64_goy + c64_gh - c64_abt_h;
     if (y > c64_gsy)
-        y = c64_gsy + (((y - c64_gsy) >> 3) << 3);   /* onto the cell grid */
+        y = c64_gsy + ((y - c64_gsy) / c64_sch) * c64_sch;  /* onto the cell
+                                                            * grid, which is 8
+                                                            * or 16 px (9.8) */
     c64_abt_x = x;
     c64_abt_y = y;
 

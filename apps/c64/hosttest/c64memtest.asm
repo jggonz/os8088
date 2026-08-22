@@ -410,8 +410,111 @@ body:
     cmp byte [es:0x0500], 0
     jne .f4e
     pop es
+    ; --- (4b) c64_copy_row: Edit > Copy's per-BYTE loop (C64-SPEC 7.7) ------
+    ; The table index with the reverse-video bit masked off (charset.c:204),
+    ; last_non_whitespace (clipboard.c:67), the trim (:81-85) and one '\n' -
+    ; all of it in assembly, because a per-byte loop in C is what
+    ; docs/C-TOOLCHAIN.md refuses. The row is composed into ANOTHER SEGMENT,
+    ; so this exercises the ES load and its restoration too, and the answer is
+    ; a LENGTH: the bytes past it are scratch, because the trim winds DI back
+    ; over the trailing spaces rather than erasing them - which is exactly
+    ; what clipboard.c:81-85 does with its index.
+    mov byte [_c64_sctab+0], ' '            ; screen code 0 is a space...
+    mov byte [_c64_sctab+1], 'X'
+    mov byte [_c64_sctab+2], 'Y'
+    mov cx, 40                              ; a row of spaces...
+    mov bx, _c64_scrow
+.crfill:
+    mov byte [bx], 0
+    inc bx
+    loop .crfill
+    mov byte [_c64_scrow+0], 1              ; ...with X Y X at the front and
+    mov byte [_c64_scrow+1], 2              ; 37 trailing spaces to trim. The
+    mov byte [_c64_scrow+2], 0x81           ; third cell carries the REVERSE
+                                            ; bit and must still read as 'X'
+    call ramclear
+    mov word [pushes], 3
+    PUSHI 40
+    PUSHI 0x0500
+    PUSHI SEG_RAM
+    call disc_call
+    dw _c64_copy_row
+    cmp word [disc_ax], 4                   ; XYX + the line ending
+    jne .f4b
+    push es
+    mov ax, SEG_RAM
+    mov es, ax
+    cmp byte [es:0x0500], 'X'
+    jne .f4be
+    cmp byte [es:0x0501], 'Y'
+    jne .f4be
+    cmp byte [es:0x0502], 'X'
+    jne .f4be
+    cmp byte [es:0x0503], 0x0A
+    jne .f4be
+    cmp byte [es:0x0504], ' '               ; ...and the scratch past the
+    jne .f4be                               ; answer is the trimmed spaces
+    pop es
+    ; ...and a row whose LAST cell is not a space keeps all 40
+    mov byte [_c64_scrow+39], 2
+    call ramclear
+    mov word [pushes], 3
+    PUSHI 40
+    PUSHI 0x0500
+    PUSHI SEG_RAM
+    call disc_call
+    dw _c64_copy_row
+    cmp word [disc_ax], 41
+    jne .f4b
+    push es
+    mov ax, SEG_RAM
+    mov es, ax
+    cmp byte [es:0x0500+38], ' '            ; nothing was trimmed
+    jne .f4be
+    cmp byte [es:0x0500+39], 'Y'
+    jne .f4be
+    cmp byte [es:0x0500+40], 0x0A
+    jne .f4be
+    pop es
+    ; ...and a row that is ALL spaces is one line ending and nothing else
+    mov byte [_c64_scrow+0], 0
+    mov byte [_c64_scrow+1], 0
+    mov byte [_c64_scrow+2], 0
+    mov byte [_c64_scrow+39], 0
+    call ramclear
+    mov word [pushes], 3
+    PUSHI 40
+    PUSHI 0x0500
+    PUSHI SEG_RAM
+    call disc_call
+    dw _c64_copy_row
+    cmp word [disc_ax], 1
+    jne .f4b
+    push es
+    mov ax, SEG_RAM
+    mov es, ax
+    cmp byte [es:0x0500], 0x0A
+    jne .f4be
+    pop es
+    ; ...and n = 0 writes the line ending and nothing before it
+    call ramclear
+    mov word [pushes], 3
+    PUSHI 0
+    PUSHI 0x0500
+    PUSHI SEG_RAM
+    call disc_call
+    dw _c64_copy_row
+    cmp word [disc_ax], 1
+    jne .f4b
     mov al, '.'
     call putc
+    jmp .band
+.f4be:
+    pop es
+.f4b:
+    mov al, 'C'
+    call putc
+    inc bp
     jmp .band
 .f4e:
     pop es
@@ -577,9 +680,113 @@ body:
     mov byte [colrow+5], 0
     mov al, '.'
     call putc
-    jmp .neg
+    jmp .x2
 .f6:
     mov al, '6'
+    call putc
+    inc bp
+
+    ; --- (6b) c64band.inc's PIXEL DOUBLER (C64-SPEC 9.8's 2x) ----------------
+    ; NOTHING CALLED EITHER OF THESE UNTIL FULLSCREEN 2x SHIPPED, and both had
+    ; been in the tree for two waves: c64_x2init answered a table of 256 ZEROS
+    ; (`shl bx, 1` reads bit 15, and the byte was in the LOW half; and the pair
+    ; was set BETWEEN the two result shifts, so it walked out of the sixteen
+    ; bits). On the glass that is a fullscreen picture that is entirely black,
+    ; and the host harness could not see it because it models the doubler in C
+    ; rather than running this - LESSONS.md 7's trap. So it is run here.
+.x2:
+    mov word [pushes], 0
+    call disc_call
+    dw _c64_x2init
+    ; four entries by hand: 0 doubles to nothing, $FF to everything, and the
+    ; two single-bit ends prove which way round the bits go
+    cmp word [c64_x2tab+0*2], 0x0000
+    jne .f6b
+    cmp byte [c64_x2tab+0xFF*2], 0xFF
+    jne .f6b
+    cmp byte [c64_x2tab+0xFF*2+1], 0xFF
+    jne .f6b
+    cmp byte [c64_x2tab+0x80*2], 0xC0       ; the LEFTMOST source bit becomes
+    jne .f6b                                ; the leftmost PAIR
+    cmp byte [c64_x2tab+0x80*2+1], 0x00
+    jne .f6b
+    cmp byte [c64_x2tab+0x01*2], 0x00       ; ...and the rightmost the
+    jne .f6b                                ; rightmost pair
+    cmp byte [c64_x2tab+0x01*2+1], 0x03
+    jne .f6b
+    cmp byte [c64_x2tab+0x55*2], 0x33       ; an alternating byte, both halves
+    jne .f6b
+    cmp byte [c64_x2tab+0x55*2+1], 0x33
+    jne .f6b
+    ; ...AND EVERY BYTE OF THE TABLE IS A DOUBLED NIBBLE. There are only 16
+    ; values a doubled nibble can take and every one has its bit pairs equal,
+    ; so `(b & 0xAA) >> 1 == (b & 0x55)` holds for all 512 bytes and for
+    ; nothing a wrong loop is likely to produce. A single hand-checked entry
+    ; would not have caught the all-zero table either, because 0 passes it.
+    mov si, c64_x2tab
+    mov cx, 512
+.x2chk:
+    mov al, [si]
+    mov ah, al
+    and al, 0xAA
+    shr al, 1
+    and ah, 0x55
+    cmp al, ah
+    jne .f6b
+    inc si
+    loop .x2chk
+
+    ; c64_band_x2: one source row of C64_BSTRIDE bytes becomes TWO rows of
+    ; C64_X2STRIDE, and the second is a copy of the first - which is what lets
+    ; the X-ONLY tier read the same buffer at twice the stride (9.8).
+    mov cx, 320                     ; a source band with a known first row
+    mov di, banda
+    xor al, al
+.x2fill:
+    mov [di], al
+    inc di
+    loop .x2fill
+    mov byte [banda+0], 0x80
+    mov byte [banda+1], 0x01
+    mov byte [banda+2], 0x55
+    mov cx, 240                     ; ...and the destination, cleared: THREE
+    mov di, bandb                   ; doubled rows, so that "rows = 1 wrote no
+                                    ; third" is a real question and the clear
+                                    ; itself stays inside bandb's 320 bytes
+    xor al, al
+.x2clr:
+    mov [di], al
+    inc di
+    loop .x2clr
+    mov word [pushes], 3
+    PUSHI 1                         ; rows = 1
+    PUSHI banda
+    PUSHI bandb
+    call disc_call
+    dw _c64_band_x2
+    cmp byte [bandb+0], 0xC0
+    jne .f6b
+    cmp byte [bandb+1], 0x00
+    jne .f6b
+    cmp byte [bandb+2], 0x00
+    jne .f6b
+    cmp byte [bandb+3], 0x03
+    jne .f6b
+    cmp byte [bandb+4], 0x33
+    jne .f6b
+    cmp byte [bandb+5], 0x33
+    jne .f6b
+    cmp byte [bandb+C64_X2STRIDE+0], 0xC0   ; the duplicated scan line
+    jne .f6b
+    cmp byte [bandb+C64_X2STRIDE+5], 0x33
+    jne .f6b
+    cmp byte [bandb+C64_X2STRIDE*2], 0      ; ...and rows = 1 wrote no third
+    jne .f6b
+    mov al, '.'
+    call putc
+    jmp .neg
+.f6b:
+    mov al, 'D'
     call putc
     inc bp
 
@@ -889,6 +1096,14 @@ section .text
 section .data
 _c64_cmask: times 32 db 0xFF
 _c64_bgfill: db 0
+; Edit > Copy's two package globals (c64kbd.c bss on the target). The real
+; c64_sctab is built by ovl_conv_init from VICE's three transcribed
+; conversions; here it is whatever the case below writes, because what is
+; under test is c64_copy_row's LOOP - the mask, the index, the store into
+; somebody else's segment, last_non_whitespace and the trim.
+_c64_scrow: times 40 db 0
+            times 4 db 0xCC
+_c64_sctab: times 128 db 0
 section .text
 
 ; ...and c64cpu.inc calls OUT to the compiled C for every $D000-$DFFF access

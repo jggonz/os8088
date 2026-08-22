@@ -415,6 +415,67 @@ _c64_zzcopy_in:
     ret
 
 ; -----------------------------------------------------------------------------
+; int c64_copy_row(unsigned dseg, unsigned doff, int n)
+;     - ONE row of Edit > Copy, end to end (C64-SPEC 7.7): the n screen codes
+;       already in c64_scrow, converted through c64_sctab, written into the
+;       CLAIM at dseg:doff with the trailing spaces trimmed and one '\n'
+;       appended. Answers the number of bytes written, which is at most n + 1.
+;
+; THIS IS THE per-BYTE LOOP, AND THAT IS WHY IT IS HERE. docs/C-TOOLCHAIN.md's
+; rule in one line: "the inner loop is assembly - anything that touches bytes
+; per iteration is a hand-written proc that C calls once". The C version was
+; a table index and an os88_poke per cell - ~95 us a cell, ~95 ms for the
+; screen - against 25 calls into this, which is ~20 clocks a cell and about
+; 4 ms for all 1,000. clipboard_read_screen_output (src/clipboard.c:41-100) is
+; the behaviour, last_non_whitespace (:67) and the trim (:81-85) included.
+;
+; DS is the package's (c64_scrow and c64_sctab are its bss); ES is the claim
+; and is restored. The reverse-video bit is masked off because it is not a
+; character (charset.c:204).
+; -----------------------------------------------------------------------------
+_c64_copy_row:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push es
+    mov ax, [bp+4]
+    mov es, ax                      ; ES = the claim  (cc8086:allow loaded
+                                    ; here on purpose and restored below)
+    mov di, [bp+6]
+    mov dx, di                      ; DX = one past the last non-space
+    mov cx, [bp+8]
+    mov si, _c64_scrow
+    xor bh, bh
+    or cx, cx
+    jz .end
+.cell:
+    mov bl, [si]
+    inc si
+    and bl, 0x7F
+    mov al, [_c64_sctab+bx]
+    mov [es:di], al
+    inc di
+    cmp al, ' '
+    je .sp
+    mov dx, di                      ; a non-space: the row keeps this far
+.sp:
+    dec cx
+    jnz .cell
+.end:
+    mov di, dx                      ; the trailing spaces come off
+    mov byte [es:di], 0x0A          ; ...and the line ending is '\n', which is
+    inc di                          ; what every non-Windows VICE build uses
+                                    ; (actions-clipboard.c:54-58)
+    mov ax, di
+    sub ax, [bp+6]
+    pop es
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
 ; void c64_zfill(unsigned a, int v, unsigned n) - n bytes of v into the C64's
 ; RAM at a. The power-cycle RAM pattern (C64-SPEC §11.1) is two of
 ; these per 128 bytes; a screen clear is one.

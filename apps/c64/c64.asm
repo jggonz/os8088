@@ -41,9 +41,14 @@
                                     ; 'VICE'
 %define CC_HAS_FDLG                 ; void os88_onfile(...) - File > Smart
                                     ; attach... on .PRG (C64-SPEC 11.3)
-%define CC_HAS_WORKER               ; void os88_worker(void *) - hired only to
-                                    ; close the window for Exit emulator:
-                                    ; there is no self-close slot
+                                    ; NO CC_HAS_WORKER. File > Exit emulator
+                                    ; used to hire one - wm_destroy under the
+                                    ; lock, then task_alive - and that closes
+                                    ; the WINDOW without closing the APP: the
+                                    ; dock tile stayed, dead, and answered no
+                                    ; click. OSAPI_WM_CLOSE (SPEC.md 75.2) is
+                                    ; the kernel's own close path and needs no
+                                    ; task at all (c64.c's os88_onwake)
 %define CC_HAS_OVL                  ; C64.OVL (SPEC.md 73.14) - ON FROM THE
                                     ; FIRST COMMIT (C64-SPEC 13.1). The
                                     ; alternative is discovering at 55,000

@@ -187,33 +187,68 @@ static const char *c64_file_items[] = {
     "Exit emulator  Alt+Q"                  /* :527  + hotkeys.vhk <Alt>q */
 };
 
-/* --- Edit (edit_menu) ---------------------------------------------------- */
+/* --- Edit (edit_menu) ----------------------------------------------------
+ * BOTH ITEMS ARE GREYED BY STATE, in c64_menu_state() below, and the two
+ * spellings are here for the same reason c64_s_adv's are (rule 4's machinery,
+ * rule 3's meaning):
+ *
+ *  - PASTE greys with no C64.ROM, on a JAM, AND WHILE THE MACHINE IS PAUSED.
+ *    c64_paste_feed is called only from the arm of os88_onwake that runs a
+ *    slice - C64_ST_RUN, and `!c64_pause || c64_adv` - and c64_wants_wake
+ *    answers 0 in every other case, so a paste in any of the three queues
+ *    bytes that NOTHING WILL EVER TYPE, which is the one shape SPEC.md 47
+ *    exists to stop. The first two last the session; the third self-heals the
+ *    moment the user resumes, and is greyed anyway because a command whose
+ *    whole visible effect is nothing at all is the same defect either way.
+ *  - COPY greys with no C64.ROM ONLY. The clipboard is kernel-owned and
+ *    outlives this app (SPEC.md 55.3), and with no machine the matrix holds
+ *    c64_ram_pattern's factory fill, so a Copy there would replace whatever
+ *    the user had copied elsewhere with 1,025 characters of noise from a
+ *    screen they cannot see. On a JAM it stays LIVE: the frozen screen is
+ *    real and VICE's Copy always copies what is displayed.
+ *
+ * THE FACT THAT GREYS EACH, AND THERE ARE NOW THREE OF THEM. Two are the
+ * permanent line on the status row - `C64.ROM missing - see README.TXT`
+ * (§1.4) or `Main CPU: JAM at $xxxx` (§4.5) - and the third, PAUSED, has no
+ * line: `Paused.` is a c64_say and expires after ~5 s. Its permanent facts are
+ * §10.2's `P` lamp on the status row and the check beside Preferences > Pause
+ * emulation, which stand for as long as the pause does. §11.2's table names
+ * all three. This is a deliberate departure from VICE, which queues a paste on
+ * a paused machine and delivers it on resume; here nothing would ever drink
+ * it, because c64_paste_feed is called only from the running arm of
+ * os88_onwake. */
+static const char *c64_s_copy[2] = { "Copy  Alt+Delete",
+                                     D "Copy  Alt+Delete" };
+static const char *c64_s_paste[2] = { "Paste  Alt+Insert",
+                                      D "Paste  Alt+Insert" };
+
+/* NOT const: c64_menu_state() writes these entries, exactly as it writes
+ * c64_pref_items'. */
 static const char *c64_edit_items[] = {
-    D "Copy  Alt+Delete",                   /* :540  + hotkeys.vhk edit-copy */
-    D "Paste  Alt+Insert"                   /* :544  + hotkeys.vhk edit-paste.
-                                             * Both captions are kept and both
-                                             * MENU ITEMS are the guaranteed
-                                             * route: an AT BIOS int 16h AH=0
-                                             * drops the enhanced codes (7.5).
-                                             * GREYED, BOTH, by rule 3: Copy
-                                             * needs the screen-code -> PETSCII
-                                             * -> ASCII tables and Paste the
-                                             * $0277 keyboard-buffer feeder
-                                             * with $C6's count, and NEITHER
-                                             * table is written: the command
-                                             * bodies arrive with the rest of
-                                             * c64cmd.c's ovl_* commands
-                                             * (docs/C64-PORT-PLAN.md wave 3).
-                                             * The machine they act on exists
-                                             * as of wave 2 - the fact that
-                                             * greys them is the tables, and a
-                                             * greying that names a reason
-                                             * which has stopped being true is
-                                             * exactly what 47 forbids.
-                                             * They were live and toasted
-                                             * "Copy/Paste: no machine yet.",
-                                             * which is the one thing 47 is
-                                             * for */
+    "Copy  Alt+Delete",                     /* :540  + hotkeys.vhk edit-copy */
+    "Paste  Alt+Insert"                     /* :544  + hotkeys.vhk edit-paste.
+                                             * LIVE AS OF WAVE 3, and greyed
+                                             * before it with the fact that
+                                             * greyed them: neither the
+                                             * screen-code -> PETSCII -> ASCII
+                                             * table nor the $0277 feeder with
+                                             * $C6's count was written. All
+                                             * three are written now
+                                             * (c64cmd.c's ovl_conv_init and
+                                             * c64kbd.c's c64_paste_feed), so
+                                             * the fact
+                                             * stopped being true and SPEC.md
+                                             * 47 does not let a greying
+                                             * outlive its reason.
+                                             * Both captions are still VICE's
+                                             * and both MENU ITEMS are still
+                                             * the guaranteed route: an AT
+                                             * BIOS int 16h AH=0 drops the
+                                             * enhanced codes those two chords
+                                             * carry (7.5), and where a BIOS
+                                             * passes them os88_onkey
+                                             * dispatches 0xA3 and 0xA2 to
+                                             * these same two items */
 };
 
 /* --- Snapshot (snapshot_menu). Every item is greyed by ONE fact: a VSF
@@ -398,4 +433,23 @@ static void c64_menu_state(void)
      * this, which is what makes the two states reachable here. */
     c64_pref_items[C64_I_ADVANCE] =
         c64_s_adv[(c64_norom || c64_state == C64_ST_JAM) ? 1 : 0];
+    /* ...and the Edit menu's two, for the reasons written beside their
+     * spellings above: Paste is dead in all THREE of its states, Copy only
+     * without a machine. Every path that leaves C64_ST_JAM re-runs this
+     * (ovl_cmd's reset arm), and c64_jam() enters it through the same call.
+     *
+     * AND PAUSE IS THE THIRD, WHICH IS THE ONE THE REASONING MISSED. Pause is
+     * not a state, it is a FLAG ON C64_ST_RUN - c64.c gates the feeder's arm
+     * on `(!c64_pause || c64_adv)` and c64_wants_wake answers 0 while paused
+     * - so a Paste taken on a paused machine queues up to 2,048 bytes that
+     * nothing types and says nothing, until the user happens to resume. That
+     * is the same silent no-op the JAM greying exists to stop; it merely
+     * self-heals instead of lasting the session. The pause latch in ovl_cmd
+     * already calls this routine, so the item greys and un-greys with the
+     * state (SPEC.md 47: a greying must not outlive its fact). */
+    c64_edit_items[C64_I_COPY] =
+        c64_s_copy[c64_norom ? 1 : 0];
+    c64_edit_items[C64_I_PASTE] =
+        c64_s_paste[(c64_norom || c64_state == C64_ST_JAM || c64_pause)
+                    ? 1 : 0];
 }

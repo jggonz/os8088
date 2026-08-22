@@ -331,6 +331,40 @@ static int c64_joy1, c64_joy2;
 static int c64_shift_down;                  /* the HOST's shift keys, polled */
 static int c64_ctrl_down;                   /* ...and its Ctrl */
 
+/* --- 7.6's fact, and the observable that answers it ----------------------
+ * SPEC.md 9.6: on a machine with NO MOUSE the arrow keys ARE the pointer, and
+ * ScrollLock hands them back. That matters here more than anywhere, because
+ * those four keys are also this port's joystick (8): with no mouse the stick
+ * works - kbd_track runs in the int 09h ISR and fills os88_key_down's map
+ * whatever the UI task then does with the key (kernel/mouse.inc:1438) - but
+ * every deflection ALSO drags the desktop pointer about, which is what the
+ * message exists to explain.
+ *
+ * THE SDK CANNOT BE ASKED "HAS A MOUSE SPOKEN". C64-SPEC §7.6 said to read it
+ * out of os88_mouse(), and os88_mouse answers x, y and the button and nothing
+ * else - kernel/kernel.asm:3263's osapi_mouse tests [mou_seen] and does not
+ * report it. Adding a slot for it spends kernel headroom (SPEC.md 73.9's
+ * KERN_BUDGET is a decision and not a build fix), so this asks a question the
+ * package CAN answer and that has the same answer:
+ *
+ *   kbm_key (kernel/mouse.inc:934-941) intercepts a cursor key when, and only
+ *   when, no mouse has spoken AND ScrollLock is off - and an intercepted key
+ *   never reaches os88_onkey. So "the down-map says an arrow is held, and
+ *   os88_onkey has never once delivered an arrow" IS "the kernel is eating
+ *   them", observed rather than inferred.
+ *
+ * Three consecutive polls are required because a wake posted BEFORE the press
+ * is dispatched before the key event behind it, so one poll can legitimately
+ * see the ISR's bit with the W_ONKEY still queued. The latch is one way and
+ * the message is said once a session (SPEC.md 47). */
+static int c64_arrow_typed;                 /* os88_onkey delivered a cursor
+                                             * key: the kernel is not taking
+                                             * them, and it never will be */
+static int c64_arrow_held;                  /* consecutive polls with the
+                                             * stick deflected and no arrow
+                                             * ever typed */
+static int c64_slock_said;
+
 /* the key ring: os88_onkey pushes and the slice driver's poll drains it into
  * the down-list, so a key pressed between two wakes is not eaten. */
 #define C64K_RING 32
@@ -354,11 +388,20 @@ static void c64_kbd_init(void)
     c64_joy2 = 0;
     c64_shift_down = 0;
     c64_ctrl_down = 0;
+    c64_arrow_typed = 0;
+    c64_arrow_held = 0;
+    c64_slock_said = 0;
 }
 
 static void c64_key_push(int ascii, int scan)
 {
     int n = (c64_ring_t + 1) & (C64K_RING - 1);
+    if (scan == KSC_UP || scan == KSC_DOWN
+        || scan == KSC_LEFT || scan == KSC_RIGHT)
+        c64_arrow_typed = 1;                /* the kernel's keyboard mouse is
+                                             * not taking these (7.6) - and it
+                                             * cannot start to, so this latch
+                                             * is one way */
     if (n == c64_ring_h)
         return;                             /* the ring is full: the key is
                                              * dropped, not written past it */
@@ -668,6 +711,20 @@ static void c64_kbd_poll(void)
     c64_joy2 = j;
     c64_joy1 = 0;                           /* port 1 is empty (8) */
 
+    /* ...and 7.6's message, at the one moment it is worth saying: the stick
+     * is deflected and the four keys doing it have never once arrived as a
+     * keystroke, which is kbm_key eating them. It costs one compare a poll
+     * after it has been said. */
+    if ((j & 0x0F) == 0) {
+        c64_arrow_held = 0;
+    } else if (!c64_slock_said && !c64_arrow_typed) {
+        c64_arrow_held++;
+        if (c64_arrow_held >= 3) {
+            c64_slock_said = 1;
+            c64_say("ScrollLock for joystick");
+        }
+    }
+
     c64_kbd_build();
 }
 
@@ -717,4 +774,381 @@ static int c64_kbd_pb(void)
     }
     v &= ~c64_joy_bits(1);
     return v & 0xFF;
+}
+
+/* ==========================================================================
+ * COPY, PASTE AND THE KEYBOARD-BUFFER FEEDER (11.1's Edit menu, 7.7)
+ *
+ * The two buffers and the feeder are HERE, with the keyboard, because that is
+ * what a paste is on this machine: VICE does not type into a window, it puts
+ * PETSCII into the KERNAL's OWN ten-byte keyboard buffer at $0277 with the
+ * count at $C6 (kbdbuf_init's three numbers, src/c64/c64.c:1124) and lets the
+ * machine's own scanner take it from there.
+ *
+ * THE PACE IS THE KERNAL'S AND NOT OURS. kbdbuf_flush (src/kbdbuf.c:370-410)
+ * refuses to put anything in while the buffer is NOT EMPTY - `kbdbuf_is_empty`
+ * is `mem_read($C6) == 0` (:233-236) - and never puts in more than the buffer
+ * holds. So a paste is ten characters, then nothing at all until BASIC's
+ * GETIN has drained them, then ten more; a program that stops reading stops
+ * the paste, which is exactly what happens when you type at a real one.
+ *
+ * AND IT IS BOUNDED PER WAKE, which is this OS's half of the rule: VICE calls
+ * kbdbuf_flush once a frame from the vsync handler, and the equivalent here is
+ * once per wake from the slice driver - at most ten c64_wr calls and one
+ * c64_rd, whatever the clipboard holds.
+ *
+ * The two buffers are SEPARATE on purpose. c64_clip is COPY's output and
+ * c64_pastebuf is PASTE's queue, which outlives the command by however long
+ * the machine takes to drink it. One buffer would have made a Copy taken
+ * during a long paste silently rewrite what was still being typed - and each
+ * is now sized from ITS OWN direction, which the first draft was not: it
+ * staged the host's clipboard in c64_clip and so bounded a paste by what a
+ * COPY can produce, which is not a bound on anything a paste can be handed.
+ *
+ * ----------------------------------------------------------------------------
+ * AND EVERY PER-BYTE STEP OF BOTH IS RESIDENT AND TABLE-DRIVEN. THAT IS THE
+ * WHOLE REASON THIS BLOCK IS SHAPED THE WAY IT IS.
+ * ----------------------------------------------------------------------------
+ * The first draft put the 40x25 walk and the conversion loop in c64cmd.c,
+ * which is C64.OVL - so the inner loop crossed the segment boundary TWICE a
+ * cell: `call far [cc_ovv_c64_rd]` into the resident shim (crt0.asm's
+ * cc_ovthunk: pop/pop, the three-word LIFO stash, `call bx`, unstash, two
+ * pushes, retf) and `call far [cc_ovm_ovl_sc_ascii]` back into the module,
+ * ~500 clocks of pure bridge per cell on top of the work. 2,000 crossings for
+ * one Edit > Copy, ~110 ms, ALL OF IT under the gfx lock - and the harness's
+ * cost row charged one NEAR call for the lot. SPEC.md 73.14 splits by
+ * FREQUENCY: what runs once per command goes out, what runs per BYTE stays
+ * in, and docs/C-TOOLCHAIN.md says it in one line - "the inner loop is
+ * assembly: anything that touches bytes per iteration is a hand-written proc
+ * that C calls once".
+ *
+ * So the command is a LATCH in the module and the work is resident. A Copy is
+ * ONE bridge crossing now - os88_oncmd -> ovl_cmd, the runtime's far entry,
+ * and back - and a Paste is one, because c64_clip_service and the feeder are
+ * both this side of the boundary and the clipboard calls are theirs. The
+ * enumeration matters because the next ovl_* that loops gets priced from it:
+ * the previous shape crossed FOUR times a command (os88_oncmd -> ovl_cmd,
+ * ovl_cmd -> ovl_copy, ovl_copy -> c64_copy_screen, ovl_copy ->
+ * os88_clip_put) and the first draft of all crossed 2,000 times, two a cell.
+ * Inside the resident half:
+ *
+ *  - THE ROW ITSELF IS COMPOSED IN ASSEMBLY. c64_copy_row (c64mem.inc) does
+ *    the table index, the reverse-video mask, last_non_whitespace, the trim
+ *    and the store into the clipboard claim - 25 calls for the screen, ~20 us
+ *    a cell against the ~95 the same loop cost as SmallerC emitted it with an
+ *    os88_poke per byte. docs/C-TOOLCHAIN.md's rule, not a preference.
+ *  - THE MATRIX COMES OUT ONE ROW PER CALL, not one cell per call.
+ *    c64_zcopy_out is c64mem.inc's `rep movsb` out of the RAM claim (the same
+ *    claim c64_rd's fast path reads, so this is the same bytes by a cheaper
+ *    route and not a different memory), 25 near calls for the screen.
+ *  - THE TWO CONVERSIONS ARE 128- AND 256-BYTE TABLES, built once at launch
+ *    from the transcribed functions below, so the loop body is an index and
+ *    not a call. The functions stay as VICE wrote them - they are the
+ *    provenance, and building the table from them is what keeps one copy of
+ *    the arithmetic.
+ * ========================================================================*/
+#define C64_CLIPMAX (C64_CELLS + C64_ROWS + 1)  /* 1,026: COPY's OWN bound -
+                                                 * the 40x25 screen, one line
+                                                 * ending a row and the NUL,
+                                                 * which is the largest thing
+                                                 * clipboard_read_screen_output
+                                                 * can produce */
+#define C64_PASTEMAX 2048                   /* ...and PASTE's, which is a
+                                             * different question: it is what
+                                             * ONE os88_clip_get can be given,
+                                             * because OSAPI_CLIP_GET has no
+                                             * offset (kernel/clip.inc:145-157)
+                                             * and so cannot be read in chunks.
+                                             * 2,048 is ~50 lines of a BASIC
+                                             * listing; a clipboard longer than
+                                             * it is pasted as far as it fits
+                                             * and the truncation is SAID
+                                             * (SPEC.md 47). The message names
+                                             * this number and c64uitest.c
+                                             * checks that it still does */
+#define C64_KB_BUF   0x0277                 /* kbdbuf_init(631, 198, 10, ...) */
+#define C64_KB_NDX   0x00C6                 /* src/c64/c64.c:1124 */
+#define C64_KB_SIZE  10
+
+/* NEITHER BUFFER IS bss ANY MORE, AND THAT IS THE POINT (C64-SPEC §13.0.1).
+ * 1,026 + 2,048 = 3,074 bytes held for the life of the app so that two menu
+ * commands nobody may ever pick would have somewhere to put their bytes -
+ * and this port's resident figure is what wave 4 (the bitmap modes, the
+ * sprites, the PRG loader) has to fit under. CWORD's lesson, in one line: the
+ * next byte to save is a buffer moving to a claim. So each is a TRANSIENT
+ * HEAP CLAIM, 2KB, taken when the command runs and freed the moment it is
+ * spent - Copy's inside one wake, Paste's when the queue drains or the next
+ * reset empties it. A claim that cannot be had is a refusal that is SAID
+ * (SPEC.md 47), and the machine is untouched.
+ *
+ * The two are still SEPARATE claims for the reason they were separate arrays:
+ * c64_clip is COPY's output and the paste queue outlives its command by
+ * however long the machine takes to drink it, so a Copy during a long Paste
+ * must not rewrite what is still being typed.
+ *
+ * The bytes get into and out of the claims WITHOUT a per-byte C loop, which
+ * is the toolchain's rule and not a preference (docs/C-TOOLCHAIN.md). Copy
+ * composes a whole row inside c64_copy_row (c64mem.inc) - table index, trim
+ * and store, 25 calls for the screen; the feeder peeks its 21-byte window out
+ * of the paste claim with os88_peek, which is ~0.4 ms once a wake and is not
+ * an inner loop by any reading. c64uitest.c prices both. */
+#define C64_CLIPKB   2                      /* ceil(1,026 / 1024) */
+#define C64_PASTEKB  2                      /* ...and 2,048 exactly */
+#define C64_PFWIN    (C64_KB_SIZE * 2 + 1)  /* the feeder's peek window: ten
+                                             * delivered bytes consume at most
+                                             * twenty (every one a CRLF pair),
+                                             * and the +1 is the LOOKAHEAD, so
+                                             * the pair test at the end of a
+                                             * window always has the byte it
+                                             * needs and can never leave a
+                                             * stray LF to become a second
+                                             * RETURN on the next wake */
+
+static unsigned c64_paste_seg;              /* Paste's claim, 0 = none */
+static unsigned char c64_pbuf[C64_PFWIN];   /* ...and the window peeked out of
+                                             * it once per wake */
+static int c64_paste_n;                     /* host bytes in the queue */
+static int c64_paste_i;                     /* ...and how many are spent */
+static unsigned char c64_scrow[C64_COLS];   /* one matrix row, one call */
+static unsigned char c64_sctab[128];        /* screen code -> host ASCII */
+static unsigned char c64_pettab[256];       /* host byte -> PETSCII */
+
+/* THE TWO TABLES ARE BUILT IN THE OVERLAY, ONCE, AND THAT IS WHY THEY ARE
+ * DECLARED HERE AND FILLED THERE. `ovl_conv_init` (c64cmd.c) carries VICE's
+ * three transcribed conversions - charset_screencode_to_petscii,
+ * petcii_fix_dupes, charset_p_toascii and charset_p_topetscii - and runs them
+ * 128 and 256 times on the FIRST WAKE. The arrays above are bss, so they stay
+ * RESIDENT and DS-relative, which is the whole of what makes the move legal
+ * (SPEC.md 73.14: only code moves).
+ *
+ * IT IS THE FREQUENCY SPLIT APPLIED TO THIS PORT'S OWN LAUNCH PATH. ~275
+ * emitted instructions that run EXACTLY ONCE were sitting in the resident
+ * half beside the loops that run a thousand times a Copy; once-per-launch is
+ * the `goes out` side of that line, and the recovery is ~700 bytes of image
+ * against §13.0.1's headroom. Every per-byte path in this file indexes the
+ * tables and calls nothing.
+ *
+ * A disk with no C64.OVL is unaffected: c64_sctab is read only by ovl_copy
+ * and c64_pettab only by the feeder, which cannot have a queue until
+ * ovl_paste has run - so an unbuilt table is unreachable on exactly the disks
+ * where it is unbuilt. */
+
+/* c64_copy_screen - clipboard_read_screen_output (src/clipboard.c:41-100),
+ * RESIDENT and called ONCE per Edit > Copy. `base` is the caller's c64_mbase,
+ * which is mem_get_screen_parameter's answer ($D018 and CIA2's bank,
+ * clipboard.c:55) - passed in rather than read here because c64_mbase is
+ * declared in c64scr.c, which this file precedes.
+ *
+ * The answer is the byte count in c64_clip; the line ending is `\n`, which is
+ * what every non-Windows build uses (actions-clipboard.c:54-58).
+ *
+ * COST, AND IT IS NO LONGER HELD-LOCK TIME: 50 calls for the screen - one
+ * c64_zcopy_out and one c64_copy_row a row - and it runs from os88_onwake
+ * with NO lock held (c64_clip_service below). Nothing is drawn. The C here
+ * is a 25-iteration loop and NOT a per-cell one: the table index, the
+ * last_non_whitespace test, the trim and the store into the claim are all
+ * inside c64_copy_row (c64mem.inc), which is the toolchain's own rule -
+ * anything that touches bytes per iteration is assembly that C calls once. */
+static int c64_copy_screen(unsigned seg, unsigned base)
+{
+    int row, n;
+
+    n = 0;
+    for (row = 0; row < C64_ROWS; row++) {
+        c64_zcopy_out(c64_scrow, base, C64_COLS);
+        base += C64_COLS;
+        n += c64_copy_row(seg, (unsigned)n, C64_COLS);
+    }
+    return n;
+}
+
+/* c64_clip_service - EDIT > COPY AND EDIT > PASTE, RUN FROM THE WAKE.
+ *
+ * WHY NEITHER RUNS IN ITS MENU COMMAND. os88_oncmd is dispatched under the
+ * kernel's gfx lock (os88.h) - "you may draw, you must not take the lock" -
+ * so every instruction a command executes is the WHOLE DESKTOP stopped: every
+ * other task's drawing, the mouse cursor, the dock. Copy's body is 25
+ * c64_zcopy_out calls, 1,000 table-driven cells at ~75 us each and 1,026
+ * pokes: ~103 ms, nearly two host ticks, for a command that draws nothing.
+ * On top of that both clipboard calls and the claims reach kernel/clip.inc's
+ * mem_claim, which may compact an arena this app has a pinned 64KB and a
+ * pinned 20KB sitting in - "a memcpy in tenths of a second", memory.inc's own
+ * words, and a term nobody can bound from here. LESSONS.md 6 forbids exactly
+ * that: "no C between gfx_lock and gfx_unlock that is not bounded by a count
+ * you can state."
+ *
+ * Paste's per-byte work was moved out to the wake for this reason in the same
+ * wave the two commands landed. This is the same argument applied to the
+ * other half of the pair, and to the claims both now take.
+ *
+ * NOTHING ABOUT THE RESULT CHANGES. The 6510 advances only inside
+ * os88_onwake, and this runs at the TOP of one, before the slice: between the
+ * command's dispatch and here not one emulated cycle has run, so the matrix
+ * and c64_mbase are bit-identical to what the user was looking at when they
+ * picked the item. `base` is the caller's c64_mbase - $D018 and CIA2's bank,
+ * mem_get_screen_parameter's answer (clipboard.c:55) - passed in because
+ * c64_mbase is declared in c64scr.c, which this file precedes.
+ *
+ * Both latches are spent whatever the machine's state, so a paused or jammed
+ * machine still services the Copy that is on the glass in front of it. */
+static void c64_clip_service(unsigned base)
+{
+    unsigned seg;
+    int n, got;
+
+    if (c64_copy_req) {
+        c64_copy_req = 0;
+        seg = os88_mem_claim(C64_CLIPKB);
+        if (seg == 0) {
+            c64_say("No memory for the copy.");
+        } else {
+            n = c64_copy_screen(seg, base);
+            if (os88_clip_put_seg(seg, 0, (unsigned)n) != 0)
+                c64_say("The clipboard refused the screen.");
+            os88_mem_free(seg);             /* ...and it is gone before the
+                                             * slice runs: the claim lives for
+                                             * one wake and no longer */
+        }
+    }
+
+    if (c64_paste_req) {
+        c64_paste_req = 0;
+        n = os88_clip_size();
+        if (n == -1) {                      /* the ONE answer that means empty
+                                             * - a full 32,768-byte clipboard
+                                             * arrives as 0x8000, which a
+                                             * 16-bit int reads as -32,768 */
+            c64_say("The clipboard is empty.");
+            return;
+        }
+        c64_paste_stop();                   /* a second Paste over the first:
+                                             * the old claim goes back before
+                                             * the new one is asked for */
+        seg = os88_mem_claim(C64_PASTEKB);
+        if (seg == 0) {
+            c64_say("No memory for the paste.");
+            return;
+        }
+        c64_paste_seg = seg;
+        got = os88_clip_get_seg(seg, 0, (unsigned)C64_PASTEMAX);
+        if (got <= 0) {
+            c64_say("The clipboard refused to be read.");
+            c64_paste_stop();               /* which frees the claim */
+            return;
+        }
+        c64_paste_i = 0;
+        c64_paste_n = got;                  /* WHAT FITS, which is CX and not
+                                             * the clipboard's whole length */
+        if ((unsigned)n > (unsigned)C64_PASTEMAX)
+            c64_say("Pasting the first 2048 bytes.");  /* C64_PASTEMAX, spelled
+                                                        * out; hosttest checks
+                                                        * the two still agree */
+    }
+}
+
+/* c64_paste_stop - a reset empties the queue, as VICE's kbdbuf_abort does
+ * (src/kbdbuf.c:312-320, called from machine_reset at src/machine.c:262 -
+ * kbdbuf_reset at :297 is a DIFFERENT function that re-initialises the
+ * buffer's location and size and does not clear num_pending). Without it a
+ * Power cycle left the previous machine's paste typing itself into the new
+ * one. VICE's abort is conditional on kbd_buf_cmdline, which has no
+ * equivalent here.
+ *
+ * ...AND IT IS ALSO WHERE THE CLAIM GOES BACK. It is called on every route
+ * out of a queue - drained, reset, or a second Paste over the top of the
+ * first - so the 2KB is held for exactly as long as there are bytes to type
+ * and never a wake longer. */
+static void c64_paste_stop(void)
+{
+    c64_paste_n = 0;
+    c64_paste_i = 0;
+    if (c64_paste_seg != 0) {
+        os88_mem_free(c64_paste_seg);
+        c64_paste_seg = 0;
+    }
+}
+
+/* c64_paste_feed - kbdbuf_flush, on this machine's clock. Called once per
+ * wake from the slice driver, BEFORE the slice, so the machine consumes what
+ * it is given inside the same wake.
+ *
+ * AND THE CONVERSION IS HERE, TEN BYTES AT A TIME, NOT IN THE COMMAND.
+ * charset_petconvstring converts VICE's whole clipboard up front and can
+ * afford to; here that loop is ~145 us a byte of SmallerC's own code
+ * (C64COST_PSBYTE, C64-SPEC §9.7) and os88_oncmd is dispatched UNDER THE GFX
+ * LOCK (os88.h:566), so a full 2,048-byte queue converted in the command
+ * would be ~300 ms of desktop
+ * stopped dead - LESSONS.md 6's "no C between gfx_lock and gfx_unlock that is
+ * not bounded by a count you can state". os88_onwake holds NO lock, and this
+ * is already bounded by a count that is stated: the ten bytes the KERNAL's
+ * buffer holds. Nothing about it is visible from the machine's side - the
+ * same PETSCII arrives in the same order at the same pace - and what the
+ * command now holds the lock for is one os88_clip_get.
+ *
+ * THE LINE ENDINGS ARE STILL TESTED BEFORE THE MAP (charset.c:72-74): the
+ * PAIR test is here and the single-byte answer is in c64_pettab. */
+static void c64_paste_feed(void)
+{
+    int n, c, k, m;
+
+    if (c64_paste_i >= c64_paste_n)
+        return;
+    if (c64_rd(C64_KB_NDX) != 0)
+        return;                             /* kbdbuf_is_empty said no: the
+                                             * KERNAL has not drained the last
+                                             * ten yet (kbdbuf.c:383) */
+    /* THE WINDOW COMES OUT OF THE CLAIM ONCE, not a peek per byte tested:
+     * at most 21 os88_peeks a wake (C64_PFWIN), which is ~0.4 ms. */
+    m = c64_paste_n - c64_paste_i;
+    if (m > C64_PFWIN)
+        m = C64_PFWIN;
+    for (k = 0; k < m; k++)
+        c64_pbuf[k] = (unsigned char)os88_peek(c64_paste_seg,
+                                               (unsigned)(c64_paste_i + k));
+    n = 0;
+    k = 0;
+    while (n < C64_KB_SIZE && k < m) {
+        c = (int)c64_pbuf[k];
+        k++;
+        /* A NUL ENDS THE PASTE, because it ends the STRING VICE converts:
+         * charset_petconvstring is `while (*s)` (src/charset.c:71) and
+         * kbdbuf_feed takes a C string, so a clipboard with a NUL in it is
+         * fed as far as the NUL and no further. The kernel's clipboard is
+         * bytes and not a string (SPEC.md 55), so this port can be handed
+         * one; without this test the map turns it into PETSCII $3F and the
+         * machine types a screenful of `?` for whatever binary followed. What
+         * has already been produced stands - the KERNAL drinks it - and the
+         * claim goes back with the queue. */
+        if (c == 0) {
+            c64_paste_n = c64_paste_i + k;  /* nothing beyond it is typed */
+            break;
+        }
+        /* ...AND THE PAIR TEST IS NESTED RATHER THAN ONE `&&` CHAIN, which is
+         * a code-size decision and not a style one: SmallerC lowers every
+         * relational into a setcc sequence and an `&&` evaluates the whole
+         * chain, so three of them rode on EVERY byte. Nested, an ordinary
+         * character pays one compare and jumps over the rest - ~20 bytes of
+         * 8088 fetch a byte, which is what this loop is priced in
+         * (C64COST_PSBYTE, c64scr.c). */
+        if (c == 0x0D) {                    /* test_lineend (charset.c:49-63):
+                                             * CRLF is TWO bytes and ONE line
+                                             * end. Without the pair test a
+                                             * document written on a DOS
+                                             * machine types two RETURNs a
+                                             * line, which in BASIC is a
+                                             * listing with a blank line
+                                             * between every statement */
+            if (k < m) {                /* the +1 of C64_PFWIN is what makes
+                                         * this lookahead always available */
+                if (c64_pbuf[k] == 0x0A)
+                    k++;
+            }
+        }
+        c64_wr(C64_KB_BUF + n, (int)c64_pettab[c]);
+        n++;
+    }
+    c64_paste_i += k;                       /* what the window ACTUALLY spent */
+    c64_wr(C64_KB_NDX, n);
+    if (c64_paste_i >= c64_paste_n)
+        c64_paste_stop();                   /* ...and the claim goes with it */
 }
