@@ -50,9 +50,9 @@ MANIFEST = [
                               "There is no 1.44MB or 720KB version -- at those sizes it is "
                               "already on the software disk."),
     ("apps-all.img",   False, "Every program on one 1.44MB software disk, including both "
-                              "word processors, the story reader and the CP/M emulator. "
-                              "Use this instead of apps.img if you would rather swap one "
-                              "disk than four."),
+                              "word processors, the story reader, the CP/M emulator and "
+                              "the Commodore 64. Use this instead of apps.img if you "
+                              "would rather swap one disk than five."),
     ("word.img",       False, "Word processor disk, 1.44MB."),
     ("word720.img",    False, "Word processor disk, 720KB."),
     ("word360.img",    False, "Word processor disk, 360KB."),
@@ -128,7 +128,7 @@ THE FILES
 CHECKING WHAT YOU GOT
 ---------------------
 
-SHA256SUMS lists a checksum for every image here. On macOS or Linux:
+SHA256SUMS lists a checksum for every file here. On macOS or Linux:
 
   shasum -a 256 -c SHA256SUMS
 
