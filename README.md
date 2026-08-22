@@ -69,6 +69,10 @@ make runcpmdisk # build the RunCPM floppies - the CP/M 2.2 emulator, its
 make xt-runcpm  # 86Box: the 4.77MHz XT with the 360KB RunCPM disk in B:
 make 286-runcpm # 86Box: the 12.5MHz 286 with the 720KB one - arcade games
 make 386-runcpm # 86Box: the 386DX with the 1.44MB one - everything
+make c64disk  # build the C64 floppy - a Commodore 64: the package, its
+              # overlay and C64.ROM, the KERNAL/BASIC/CHARGEN sidecar
+              # (make c64rom builds that from the ROMs in apps/c64/rom/)
+make 386-c64  # 86Box: the 386DX with the C64 disk in B:
 make allapps  # one 1.44MB floppy with every program on it, both word
               # processors, Frotz and RunCPM included
 make test     # boot headless with a QMP socket for scripted testing

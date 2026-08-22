@@ -54,7 +54,8 @@ The VIC-II, the two CIAs, the keyboard matrix, the joystick, PRG autostart,
 the menus and About are reimplemented in SPEC.md §73's C subset from the named
 VICE files; what carries is **tables and behaviour** — opcode semantics and
 cycle costs, the seven cartridge-less bank maps, the `$00`/`$01` processor
-port, the CIA and VIC register files, `gtk3_sym.vkm`, `vice.vpl`,
+port, the CIA and VIC register files, `gtk3_sym.vkm`, the VIC-II's own
+luminance ladder (`vicii-color.c`),
 `autostart-prg.c`'s injection, `uimachinemenu.c`'s strings, every
 `hotkeys*.vhk` caption. The keyboard is a **level** model as VICE's
 `keyboard.c` is: `OSAPI_KEY_DOWN` armed once in `os88_main`, host key state
@@ -269,7 +270,8 @@ that goes stale.
 Its rows, by subject: the menu bar and every item string
 (`uimachinemenu.c`); every hotkey caption, live or greyed (`hotkeys.vhk` and
 its includes); the keyboard map (`gtk3_sym.vkm`, all 152 entries); the level
-keyboard model (`keyboard.c`); the 16 colours (`vice.vpl`); the window title
+keyboard model (`keyboard.c`); the 16 colours and their luminance ladder
+(`vicii-color.c`, `vicii_colors_6569r5` — NOT `vice.vpl`, C64-SPEC §2); the window title
 (`ui.c:1842` + `c64.c:179`); the status bar (`uistatusbar.c`,
 `statusbarspeedwidget.c:572`/`:653`); the About box (`uiabout.c`,
 `configure.ac`, `README` 186–290, `COPYING`); the machine model
@@ -357,7 +359,8 @@ the os8088 precedent every non-VICE surface follows (SPEC.md §74, §74.1,
 - **Status bar** under the screen: message area, Joysticks indicators, drive 8
   + track (greyed), the speed widget's two strings folded on one row —
   `% cpu` from emulated cycles ÷ 985,248 and `fps` from emulated VIC frames,
-  both from two-word counters — delta-drawn, warp and pause as two LED dots
+  both from two-word counters — delta-drawn, warp and pause as two labelled
+  lamps `W`/`P`
 - **SID**: voice 1's frequency and gate to `os88_snd_tone` once per slice on
   change (one far call); voices 2–3, waveforms, ADSR and filters greyed
 - **Fullscreen**: `os88_fullscreen` on Alt+D both ways, stated as the
@@ -649,6 +652,148 @@ table cites those numbers by value;
 `python3 tools/checkdocs.py` is clean.
 **No size line is quoted this wave** (Decision 15).
 
+**What wave 1 measured, and what it changed** (2026-08-21). Six things the
+plan could not know, each found by a harness or a screendump and each written
+back into `docs/C64-SPEC.md` rather than left in the code:
+
+1. **A 256-page dirty bitmap cannot reach `C64-SPEC` §9.7's "one changed cell
+   composes one cell"** — a page is 6.4 character rows. The core now keeps a
+   WRITE WINDOW beside the bitmap (lowest and highest address written), four
+   instructions on the write path, and one changed cell costs **3.7 ms**
+   instead of 28. `C64-SPEC` §9.2.
+2. **The shift test is a SIGNATURE test on the row's sources, and it is a
+   hint.** Composing 25 rows to discover a scroll is the cost the scroll
+   exists to avoid; a collision is harmless because the span compare still
+   runs against the moved shadow. Its threshold is 20 dirty rows, and 8 was
+   measured wrong: a one-row change found a spurious match and cost 1 scroll
+   plus 24 blits where 1 blit was the answer. `C64-SPEC` §9.4.
+3. **Re-signing all 25 rows at the end of every flush cost 25.8 ms** — half a
+   host tick, on every flush, for a keystroke that touched one row. Only
+   recomposed rows are re-signed now. Found by the harness's cost table.
+4. **`MENU_POPMAX` is 11 items and `MENU_MAXCH` is 24 glyphs.** VICE's File
+   menu is 15 items with four submenus; the folds, and which items lose their
+   `.vhk` caption to the 24-glyph cell, are `C64-SPEC` §11.1's three rules.
+5. **42 cells do not hold VICE's status bar.** The two speed strings are 24 of
+   them; `Tape:` and drive 8's track counter are dropped with the arithmetic,
+   and a message owns the whole row while it is up. `C64-SPEC` §10.1 and
+   `C64-SPEC` §10.3.
+6. **A refused launch's toast is the KERNEL's.** `os88_main` returning 0 put
+   `Load failed` on the glass over the package's own `no C64.ROM`. The window
+   comes up and says which file is missing instead — LESSONS.md 13's RUNCPM
+   shape. `C64-SPEC` §1.4.
+
+And two numbers the bench answered: **a composed cell is 184 µs and the call
+floor 175 µs**, so a changed row is 11.9 ms and a full 25-row repaint ~270 ms
+— four host ticks, which is why the `CPU_8086` tier flushes every other tick.
+`C64-SPEC` §9.7 carries the whole table and `apps/c64/c64scr.c`'s constants
+cite it by value.
+
+**What wave 1's REVIEW changed** (2026-08-21, same day). Four blockers and
+eight majors, every one of them a thing that assembled, booted and was wrong.
+Each is written back into `docs/C64-SPEC.md` beside the design it corrects:
+
+1. **`ovl_cmd` took the gfx lock**, from `os88_oncmd`, which the kernel
+   dispatches with it already held — a non-recursive spin standing on itself,
+   `kernel/ui.inc:1997`'s "no beep, no watchdog, no recovery". And the
+   `os88_task_spawn` test was **inverted**, latching `C64_ST_DEAD` on the
+   refusal the SDK calls normal and transient. Both passed the host harness,
+   because the harness modelled the lock as two empty functions and spawn as
+   `return 1`. **The harness now keeps `lock_depth`**, asserts every drawing
+   stub is at exactly 1, models spawn's real 0/−1 with a refusal control, and
+   drives File > Exit emulator under the lock — `rcuitest.c`'s shape.
+   `C64-SPEC` §14.5.
+2. **The write window was taken over the whole address space**, which is
+   exact while `c64_poke_boot` is the only writer and useless from the first
+   slice of a core: a JSR writes `$01xx`, a BASIC statement zero page and
+   `$0800+`, so the window spans every matrix row and the mechanism
+   degenerates to "recompose 40 cells". It is now taken over a **watch
+   range** the C writes from `c64_frame_regs`, and the dirty ROWS come from
+   the window rather than from 6.4-row pages. `C64-SPEC` §9.2.
+3. **`c64_dirty_all` also FORCED**, so every write to `$D011`, `$D016`,
+   `$D018` or `$DD00` was 25 forced full-width blits — ~234 ms — with the
+   frame compare switched off, on registers a raster IRQ writes 50 times a
+   second and the KERNAL's serial bit-banging touches per bit. The flags are
+   split (sources changed / glass unknown), the registers are guarded by
+   value and `$DD00` by its two bank bits. `C64-SPEC` §9.3.
+4. **The shift test compared 25 rows and the flush only signed `nrows`**, so
+   on any window `wm_fit` clamped — the CGA XT, the target — no scroll could
+   ever be detected. And **the status row was at a fixed 216 from the top**,
+   which a 200-line desktop cannot give: the row carrying `C64-SPEC` §1.4's
+   permanent fact was off the glass. The window now asks `os88_video()` and the flush
+   anchors the row to the live bottom. `C64-SPEC` §9.1, §9.4.
+5. **`c64_say` set `c64_st_dirty` and not `c64_dirty_any`**, and the wake's
+   flush is gated on the latter — so no message written from a menu command
+   or a Smart attach ever reached the glass. `C64-SPEC` §10.1.
+6. **Every row signature was taken twice on the scroll path** (25.8 ms), the
+   About panel's close cost a full-screen repaint where its own rect was the
+   answer, and the panel double-drew the rows under it on an expose.
+   `C64-SPEC` §9.4, §12.
+7. **Fidelity**: the About row said `1bpp, no drive` — how the build renders,
+   which LESSONS 8 puts in the SPEC and the greyed items; the status row was
+   in the REVERSE of `uistatusbar.c:2816`'s order; six `UI_MENU_TYPE_ITEM_CHECK`
+   items showed no state at all while a comment claimed one was "shown
+   CHECKED"; and Copy, Paste and Advance frame were live items that only
+   toasted a refusal. `C64-SPEC` §10.1, §11.1, §12.
+
+Two numbers moved as a result, and `C64-SPEC` §9.7's table is re-taken: a
+`k = 9` shift **281.7 → 256.0 ms**, and a full expose **271.6 → 266.3 ms**
+(ten dot fills on the status row became three `blit1` bands). Two new rows
+gate what the review found: **eight `$D011` writes that change nothing draw
+nothing**, and **a `$D016` change that composes the same picture blits
+nothing**.
+
+**What wave 1's SECOND review pass changed** (2026-08-21, same day). Nine
+majors and six minors, and the three that matter most were each a thing the
+first pass's own fixes had made reachable:
+
+1. **Fullscreen was live and unimplemented.** `c64_flush` clamped its width to
+   336 and anchored the screen at `org.x + 8`, while `kernel/wm.inc:7295`
+   records that a `WF_FULL` window's frame is filled white *with no opt-out* —
+   so Alt+D on a 640×480 desktop put a 320×200 picture in the corner of a
+   white screen with a 336-pixel status strip under it, and nothing read
+   `c64_full` at all. The geometry is now one function (`c64_geom`), the
+   screen is CENTRED with its left edge on a multiple of 8 (`gfx_scroll`
+   refuses anything else), and the border and status row fill the whole box.
+   `C64-SPEC` §9.8 states that wave 1 does not MAGNIFY, with `c64_band_x2`'s
+   20.19 ms per eight rows as the fact. None of the first pass's 24
+   screendumps was a fullscreen one, which is how it survived.
+2. **`OSAPI_FULLSCREEN` was paid for twice.** It repaints the window whole,
+   synchronously, in both directions (`wm_fullscreen` → `wm_raise` `AL = 1`),
+   so the `c64_sh_inval()` on its success arm threw away a shadow the kernel
+   had just made true: 25 bands, ~300 ms, four host ticks of double-draw.
+   `apps/runcpm/runcpm.c:1086-1095` records the identical defect in its own
+   words. The harness now models the nested repaint and gates it.
+3. **The cost model priced no text.** `font_run`/`font_str` were counted and
+   left out of the sum, so the About panel's 160 glyph cells read as 0.0 ms
+   against PERFORMANCE.md's ~153. Every row of §9.7 that draws a string is
+   re-taken, and the panel is now redrawn only when the damage rect reaches
+   it (**16.5 ms** for an expose that misses it, against 322.0 for one that
+   does not).
+
+And six more: the write window is now INTERSECTED with the dirty-page bitmap,
+so two pokes in distant rows cost 13 rows and 125.6 ms instead of 25 and 299
+(`C64-SPEC` §9.2); `ovl_about_show`'s STATUS is the `c64_abt` latch, so a
+refused overlay load no longer parks the slice driver with nothing on the
+glass; the luminance table is the VIC-II's own ladder
+(`vicii-color.c:441`'s `vicii_colors_6569r5`, which is what VICE compiles) and
+not `vice.vpl`'s, which VICE does not read — nine levels shared in seven
+pairs, so the mono glass stops inventing contrast the machine does not show;
+the warp and pause LEDs are labelled lamps `W`/`P` rather than two unlabelled
+specks, with VICE's real LED row cited; `apps/c64/COPYING` ships **on the
+floppy**, which `README.TXT` already claimed; and three menu heads lost
+captions belonging to actions inside their submenus (`Attach disk image`,
+`Flip list`, `Printer/plotter`), with `Flip list` and two milestone items
+folding into their sections by rule 1 — File is 10 items and Snapshot 8.
+
+The minors: the reset command no longer FORCES (`c64_poke_boot`'s
+`c64_dirty_all` is the correct call); the About panel is snapped to the cell
+grid so the hold rows are exact at both ends; the message deadline compares a
+DIFFERENCE, not two 16-bit tick values; `c64_dirty_all` no longer dirties the
+border and `c64_lum_update` raises it only when the border's level flips;
+`c64_status` is called from every flush so its delta is reachable from the
+product (`c64_st_dirty` is gone); and the C's span pair is `c64_cspf`/
+`c64_cspl`, because `c64band.inc` already owns `c64_spf`/`c64_spl`.
+
 ### Wave 2 — The 6510 core, the cycle clock, the alarm scheduler, the CIAs, the level keyboard — BASIC at `READY.`
 
 - `c64cpu.inc` complete: every opcode `6510core.c` implements, BCD, **the
@@ -729,7 +874,7 @@ SPEC.md §73.9's 55,000 trigger.
 - Alt+D fullscreen via `os88_fullscreen` with `c64_band_x2` where the tier
   table allows; 1:1 centred otherwise; border fill of the rest of the screen
 - the joystick: port 2 on arrows + Ctrl from the cached key state; the two
-  5-dot indicators delta-drawn; the warp and pause LED dots
+  5-dot indicators delta-drawn; the warp and pause lamps `W`/`P`
 - SID voice 1 → `os88_snd_tone` per slice on change; the rest greyed
 
 **Files:** `apps/c64/c64cmd.c`, `c64.c`, `c64kbd.c`, `c64scr.c`,

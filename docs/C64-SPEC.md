@@ -101,10 +101,19 @@ against SPEC.md §73's 61,440 cap, refused before a line was written.
 committed inputs, so `make` produces it on any checkout with no network and
 no VICE tree.
 
-**A disk without `C64.ROM` refuses at launch**, naming the file — the machine
-is not started and the refusal quotes the file name, or
-`os88_mem_largest_kb()` when the claim rather than the file was what failed
-(§3.1).
+**A disk without `C64.ROM` says so on the glass**, naming the file. The
+machine is not started; the window IS.
+
+That is a wave-1 amendment and it was made by a screendump. The first build
+returned 0 from `os88_main` and toasted `C64: no C64.ROM` — and what reached
+the glass was the KERNEL's own `Load failed`, because a refused launch raises
+its own toast over the package's. So the refusal now takes LESSONS.md 13's
+RUNCPM shape: the window comes up, the screen area says which file is missing
+and what it is for, the status row carries `C64.ROM missing - see README.TXT`
+as a permanent line rather than a message that expires, and the toast goes out
+as well (§9.8's both-routes rule). A claim that cannot be had is still a
+refused launch and still quotes `os88_mem_largest_kb()` (§3.1): there is
+nothing to put a window on when the memory is not there.
 
 ---
 
@@ -120,9 +129,9 @@ dependency (§1.3).
 | hotkey captions on EVERY item, live or greyed: Alt+A smart attach, Alt+F9 reset CPU, Alt+F12 power cycle, Alt+Q exit, Alt+D fullscreen, Alt+W warp, Alt+P pause, Alt+Shift+P advance frame, Alt+J swap joysticks, Alt+Shift+J keyset toggle, Alt+Insert paste, Alt+Delete copy, Alt+H monitor, Alt+L/S snapshots, Alt+F10/F11 quick snapshots, Alt+E/U milestones, Alt+Shift+R/S media, Pause screenshot, Alt+R restore display, Alt+B decorations, Alt+M mouse grab, Alt+O / Alt+Shift+O settings, Alt+C / Alt+Shift+C / Alt+Z cartridge, Alt+T / Alt+Shift+T tape, Alt+I/K/N/Shift+Alt+N fliplist, Alt+8/9/0/1 drive attach, Alt+3/4/5/6 printer formfeed — every binding in `hotkeys.vhk` and its `!include`s, transcribed, so a greyed item is never captioned from memory | `data/hotkeys/hotkeys.vhk` + every `!include`'d `hotkeys-*.vhk` (drive, tape, cartridge, printer, ...) |
 | keyboard map: PC key → (row, col, shiftflag) of the 8×8 matrix, the `!LSHIFT`/`!RSHIFT`/`!LCBM`/`!LCTRL` positions, RESTORE on Page_Up, Tab = C=, Escape = RUN/STOP | `data/C64/gtk3_sym.vkm` (152 entries; transcribed whole to a static table keyed by ascii 32..126 and by scan code for the rest) |
 | the keyboard's LEVEL model: a key is in the matrix while it is down, released when it goes up | `src/keyboard.c` (`keyboard_key_pressed`/`keyboard_key_released` → the matrix `c64cia1.c` reads); os8088 side: SPEC.md §9.7 `OSAPI_KEY_DOWN`, `kernel/mouse.inc:1438` `kbd_track` (break code clears the bit) |
-| the 16 colours and their order | `data/C64/vice.vpl` (to 1bpp by luminance on every adapter in this port; the EGA-16 map kept in `c64scr.c` for the day colour bands exist — §9.6) |
+| the 16 colours, their order and their LUMINANCE ladder | `src/vicii/vicii-color.c` — `vicii_colors_6569r5` (`:441`), which is what VICE 3.10 as shipped compiles and selects for a PAL C64: `TOBIAS_COLORS` is defined (`:52`) and `PEPTO_COLORS`/`COLODORE_COLORS`/`MARKO_LUMAS` are not (`:43-49`), so the switch at `:672` picks it for `VICII_MODEL_6569`. **NOT `data/C64/vice.vpl`**: an external palette file is loaded only when `${CHIP}ExternalPalette` is set and that resource factory-defaults to 0 (`src/video/video-resources.c:393`; `pepto-pal` at `src/vicii/vicii-resources.c:170` is only the name it would take). To 1bpp by luminance on every adapter in this port; the EGA-16 map kept in `c64scr.c` for the day colour bands exist — §9.6 |
 | window title `VICE (C64)` | `src/arch/gtk3/ui.c:1842` (`"VICE (%s)"`, `machine_get_name()`) + `src/c64/c64.c:179` (`machine_name = "C64"`) |
-| status bar: message area, `Tape:` (greyed), `Joysticks:` two 5-dot indicators, drive 8 with its track counter ` 18.5` (greyed), the speed widget's two labels `%7.0f%% cpu` and `%8.1f fps` (`CPU_DECIMAL_PLACES` 0, `FPS_DECIMAL_PLACES` 1) folded onto one row, warp and pause LEDs as two dots (SPEC.md §47 pen when off); Recording, Volume, CRT and Mixer dropped with the row-width fact stated in §10.3 | `src/arch/gtk3/uistatusbar.c` (line 1403 track counter, 1961/1971 volume, 2594 recording, 2670/2679 CRT/Mixer), `src/arch/gtk3/widgets/statusbarspeedwidget.c:572`, `:653`, `:467`, `warp_led_set_active`/`pause_led_set_active` |
+| status bar: message area, `Tape:` (greyed), `Joysticks:` two 5-dot indicators, drive 8 with its track counter ` 18.5` (greyed), the speed widget's two labels `%7.0f%% cpu` and `%8.1f fps` (`CPU_DECIMAL_PLACES` 0, `FPS_DECIMAL_PLACES` 1) folded onto one row, the warp and pause LEDs as two labelled lamps `W` and `P`, inverted when lit (§10.2); Recording, Volume, CRT and Mixer dropped with the row-width fact stated in §10.3 | `src/arch/gtk3/uistatusbar.c` (line 1403 track counter, 1961/1971 volume, 2594 recording, 2670/2679 CRT/Mixer; the LEDs are created at `:2607-2616` and appended by `statusbar_append_led` `:2339-2362` into `led_row_grid` — a SEPARATE row at column 0, not the speed widget's cell — each carrying a text label, `statusbar_led_widget_create("warp:", …)` / `("pause:", …)`), `src/arch/gtk3/widgets/statusbarspeedwidget.c:572`, `:653`, `:467` |
 | About box: `About VICE`, `The Commodore 64 Emulator`, version 3.10, `Copyright 1996-2025, VICE team`, GPL-2-or-later, the ROM copyright line | `src/arch/gtk3/uiabout.c` (title, model string `Commodore 64`), `configure.ac` (`vice_version` 3.10), `README` lines 186–290 (copyright notice, "The ROM files ... are Copyright © by Commodore Business Machines"), `COPYING` (copied verbatim to `apps/c64/COPYING`) |
 | machine model: C64 PAL, 985248 Hz, 63 cycles/line, 312 lines, 50.12 Hz (the default; NTSC greyed) | `src/c64/c64.h:35-40`, `src/c64/c64model.c` (default model), `src/arch/gtk3/c64ui.c` (model names) |
 | 6510 opcode semantics incl. illegal opcodes, BCD, **per-opcode cycle costs with the page-cross and taken-branch penalties**, IRQ/NMI entry | `src/6510core.c`, `src/c64/c64pla.c`, `src/interrupt.c`; the oracle is Klaus Dormann's `6502_functional_test` + `6502_decimal_test` (fetched, pinned SHA, never committed) |
@@ -613,11 +622,22 @@ kept while the menu item is the guaranteed route**:
 | chord | VICE's item | what happens here |
 |---|---|---|
 | Alt+F12 | Power cycle machine | an 83-key XT keyboard **has no F12**; the menu item is the route |
+| Alt+D | Fullscreen | **implemented, both directions** (§9.8) — it is not in this table's "cannot deliver" sense but is listed here because it is the one chord the port must dispatch itself: a `WF_FULL` window has no menu bar, so it is the only way back |
 | Alt+Insert | Paste | an AT BIOS `int 16h AH=0` (`kernel/mouse.inc:1426`) drops the enhanced code `0x8B`/`0xA2`; the menu item is the route |
 | Alt+Delete | Copy | the same, code `0xA3` |
 
 They work where the BIOS passes them and are captioned exactly as VICE
-captions them either way. **The chord table** — Alt+D, Alt+F9, Alt+F12,
+captions them either way.
+
+**EVERY OTHER CHORD THE MENU ADVERTISES IS DISPATCHED BY `os88_onkey`**, and
+that is a wave-1 fix: a caption is not an accelerator in this kernel — SPEC.md
+§12.2's bar binds none of them — so `Alt+A`, `Alt+F9`, `Alt+Q`, `Alt+W`,
+`Alt+P` and `Alt+J` were printed beside their items and fell straight into the
+C64's key ring, which is a promise on the glass that the machine did not keep.
+They go to `os88_oncmd`, the same helper a menu pick reaches, so a chord and a
+pick cannot drift apart; an Alt chord is as rare as the command it stands for,
+so the overlay call it makes is on the right side of SPEC.md §73.14's
+frequency split. **The chord table** — Alt+D, Alt+F9, Alt+F12,
 Alt+Insert, Alt+Delete, Ctrl+letter, Ctrl+digit, Alt+Q, Alt+J, each recorded
 *arrives* / *does not* on `vm/386-c64` and `vm/xt-c64` under 86Box — belongs
 in this section and is filled in **by hand, from those machines** (§14.6),
@@ -659,12 +679,49 @@ holding Ctrl to type a colour code also fires port 2. Stated, not fixed.
 
 ### 9.1 The window
 
-Authored **336 × (`TITLE_H` + 216 + 10 + 1)** at (7, 20): 320×200 of C64
-screen, an 8-pixel border on every side, and a 10-pixel status row. **The
-content height is `W_H − TITLE_H − 1`** — LESSONS 13's finding, where a window
-authored `TITLE_H + 200` showed 24 rows and a sliver. `wm_snap` puts the
-content x on a cell boundary, which is what lets `OSAPI_GFX_SCROLL` accept the
-rect (§9.4).
+Authored **338 × (`TITLE_H` + 226 + 1)** at (7, 20) for a **CONTENT box of
+336 × 226**: 320×200 of C64 screen, an 8-pixel border on every side, and a
+10-pixel status row. **The content height is `W_H − TITLE_H − 1`** —
+LESSONS 13's finding, where a window authored `TITLE_H + 200` showed 24 rows
+and a sliver. `wm_snap` puts the content x on a cell boundary, which is what
+lets `OSAPI_GFX_SCROLL` accept the rect (§9.4).
+
+**AND THE CONTENT WIDTH IS `W_W − 2`, WHICH IS WHY THE FRAME IS 338** (amended
+in wave 1's review, which found this on the glass). `os88_wm_create` authors a
+FRAME and `os88_wm_geom` answers the CONTENT box: `kernel/wm.inc:5442` is
+`sub cx, 2`, the window's two 1-pixel side borders. The first draft authored
+336 as the frame and then laid §10.1's 42-cell = 336-pixel status row inside
+the 334 pixels that left, so the last cell — the pause lamp `P` at 328..335 —
+needed pixels the box does not have: on the first paint, whose clip is the
+frame, it spilled two pixels onto the window's right border, and on every
+later flush-driven redraw, whose clip is the content, it was dropped
+entirely. **`P` was never on the glass in a windowed C64**
+(`build/port-shots/w1r2-lamps-on.png` shows the row reading `8` + an inverted
+`W` and nothing after it). The centring said the same from the other side:
+`(334 − 320) / 2 = 7`, clamped up to the 8-pixel border, so the border was 8
+left and 6 right against this section's own sentence. With 336 of content the
+row is 42 whole cells, the border is 8 on every side again, and the scroll
+rect's `x1` and `x2 + 1` are both multiples of 8 by construction rather than
+by `c64_geom`'s `& ~7` clamp. `hosttest/c64uitest.c` asserts
+`C64_W_W − 2 == GW`, because its own `GW` was the frame width and that is
+exactly why nothing could see this.
+
+**226 of content is a 480-line number, and the window ASKS the adapter before
+it authors one** (amended in wave 1's review). `os88_main` calls
+`os88_video()` and clamps the height to `dock_top − 20`; a 200-line CGA
+desktop cannot give 226, and authoring it anyway left `wm_fit` to clamp the
+window with the **status row off the bottom** — the row that carries §1.4's
+permanent `C64.ROM missing` fact and every refusal
+(`build/port-shots/wave1-cga-launch.png` is the first draft doing exactly
+that). The flush then reads the LIVE content box every time it runs:
+
+- the status row is at `content.y + content.h − 10`, whatever that is;
+- the cell rows drawn are `(status_y − border − content.y − border) / 8`,
+  clamped to 25;
+- the bottom border fills between the last drawn row and the status row.
+
+So a clamped window shows fewer C64 rows and keeps its status row, rather than
+showing 25 rows it does not have and losing the row that explains itself.
 
 ### 9.2 Dirty tracking — a 256-page bitmap, set by the core
 
@@ -687,6 +744,57 @@ So the core does the tracking:
   every row by itself.
 - The bitmap is cleared by the flush, under the same lock, so nothing is
   lost between a write and a read of it.
+
+**And the core keeps a WRITE WINDOW beside the bitmap** — the lowest and the
+highest address written since the last flush, two words of scratch (§3.5) and
+a few instructions on the write path. This is a wave-1 amendment, and the
+reason is arithmetic: a 256-byte page is 6.4 character rows, so a page-granular
+bitmap alone can only ever say *"recompose these seven rows, all forty
+cells"*, and §9.7's `one changed cell composes one cell` is unreachable by
+construction. Measured on the harness, that is the difference between
+**3.7 ms and 28 ms** for one changed cell. Colour RAM keeps its own window in
+the package, because colour RAM is not in the claim (§3.1).
+
+**THE WINDOW IS TAKEN OVER A WATCH RANGE, NOT OVER THE ADDRESS SPACE**
+(amended in wave 1's review, and the review was right that the first draft
+degenerates the day the core runs). Two more scratch words, `C64_SCR_WATLO`
+and `C64_SCR_WATHI`, hold `mbase .. mbase+999` — the screen matrix — written
+by the C from `c64_frame_regs` and re-written the moment `$D011`, `$D016`,
+`$D018` or CIA2 `$DD00`'s bank bits move the matrix. `_c64_wr` widens the
+window only for an address inside that range: two compares and a branch, the
+same order of cost the four unconditional updates already paid.
+
+Without it the mechanism is exact while the only writer is `c64_poke_boot`
+and **useless from the first slice of a real machine**: every `JSR` writes the
+stack at `$01xx`, every BASIC statement writes zero page and the variables
+above `$0800`, so within one slice the window is `[~$0100, >$0800]` and spans
+every matrix row in full. The per-row intersection then always answers "all
+forty cells", the four instructions and the four scratch bytes buy nothing,
+and every per-cell figure in §9.7 describes a machine with no CPU in it.
+
+**And the dirty ROWS of the matrix are the window INTERSECTED WITH the pages.**
+Neither structure can do it alone, and the first draft used one of them:
+
+- The **pages** alone are 6.4 character rows each, so one changed cell marks
+  seven rows and §9.7's *one changed cell composes one cell* is unreachable.
+- The **window** alone is ONE `lo/hi` pair over the whole matrix, so two pokes
+  in distant rows — a score at row 0 and a status line at row 24, which is
+  what a game and the KERNAL both do inside one flush interval — span every
+  row between them. Measured: **25 recomposed rows, 1000 cells, ~299 ms** for
+  two changed bytes.
+
+Row `i`'s forty matrix bytes lie in **at most two** 256-byte pages, so row `i`
+is dirty when the window's row range `(wlo − mbase) / 40 .. (whi − mbase) / 40`
+covers it **and** one of those two pages has its bit set. The window then
+still narrows the SPAN inside each dirty row (`c64_span_of`), so one changed
+cell is one cell, and the two distant pokes cost the seven rows of page 4 plus
+the six of page 7 — **13 rows, 481 cells, 125.6 ms and 2 blits**, the harness
+row `two pokes, rows 0 and 24`. That row is the gate: it fails if the
+intersection is dropped.
+
+The page bitmap also stays for what the window cannot see — a RAM character
+set today, bitmap and sprite sources in wave 4 — and for the "dirty pages per
+wake" counter.
 
 The counter the harness prints is **dirty pages per wake**. There is no
 per-tick compare of a 2,000-byte shadow anywhere in this design; that idea
@@ -714,15 +822,118 @@ Because the shadow is pixels, it validates the composer as well as the model:
 if the composed row equals the shadow, nothing is drawn, whatever the model
 believed.
 
+**TWO FLAGS, AND THEY MEAN DIFFERENT THINGS** (amended in wave 1's review).
+`c64_rowd` says THE SOURCES changed — `0` clean, `1` a span inside the write
+window, `2` the whole row, which is what a frame-register write sets because
+the window says nothing about it. `c64_force` says THE GLASS is unknown, over
+a **cell span** `c64_fc0..c64_fc1`: a scroll's vacated rows, a partial expose,
+the rect an About panel has stopped covering.
+
+Setting both for a register write — which the first draft did — makes every
+write to `$D011`, `$D016`, `$D018` or `$DD00` cost **25 forced full-width
+blits, ~234 ms**, with the frame compare that exists to answer *"nothing
+changed, draw nothing"* switched off. Two ordinary things reach it: a raster
+interrupt's `LDA #$1B / STA $D011` fifty times a second, and a smooth-scroll
+program writing `$D016` once a frame. So:
+
+- **every one of those registers is guarded by VALUE** — a write that stores
+  the byte already there returns without dirtying anything;
+- **`$DD00` is guarded by its two BANK BITS**, because the KERNAL bit-bangs
+  the serial bus through that register's other six and a `LOAD` from drive 8
+  was hundreds of full-screen repaints a second;
+- a genuine change sets `c64_rowd = 2` and **not** `c64_force`: the row is
+  recomposed and then compared, so a `$D016` write that draws the same
+  picture composes 25 rows and draws **nothing**. That is the harness row
+  `a $D016 change that draws the same picture — 0 blit`.
+
+`c64_force`'s cell span matters for the same reason: a menu closing over this
+window is a damage rect about 190 px wide (`MENU_MAXCH` is 24 glyphs), and
+forcing its thirteen rows full width composed 13 × 40 cells where 13 × 24 was
+the answer — 122 ms against 75. **And the force path does not FILL first:**
+the composed band arrives in final screen polarity, so filling the damage
+black and blitting over it is the erase-then-letter pair PERFORMANCE.md's
+rule 2 names.
+
 ### 9.4 The scroll test — a shift of **k = 1..24** rows
 
 Flushing once per host tick means several rows can have scrolled since the
 last one. So the shift test is not the one-row test:
 
-- For `k = 1..24`, test whether composed cell row *i* equals shadow cell row
-  *i + k* for every *i* below `25 − k`.
+- For `k = 1..24`, test whether cell row *i* matches shadow row *i + k*. The
+  test is on a 16-bit **signature of the row's SOURCES** — its forty matrix
+  bytes and its forty colour nibbles, `c64_rowsig` (§9.5) — and not on
+  composed pixels, because composing 25 rows to find out is the cost the
+  scroll exists to avoid. Within one frame the character generator and the
+  background are fixed, so equal sources compose to equal pixels.
+- **The signature is a HINT and nothing rests on it.** A 16-bit signature can
+  collide. After the scroll is emitted the shadow is moved with it and every
+  row still goes through `c64_rowspan` against the moved shadow, so a row that
+  did not really shift simply compares unequal and is drawn. The scroll is an
+  optimisation whose failure mode is a redraw, never a wrong screen.
+- **It is only asked when at least four fifths of the rows ON THE GLASS are
+  dirty** (`C64_SHIFT_NUM`/`C64_SHIFT_DEN`, which is 20 of 25 on a full
+  window), and that threshold is measured rather than tasteful. It is a
+  FRACTION and not the count the first draft used, because `nrows` is not 25
+  on every adapter: on a clamped 200-line window an absolute 20 is a
+  threshold the screen can never reach, so **no scroll would ever be detected
+  on the target machine** and every BASIC scroll would pay the whole-frame
+  path. A
+  scroll dirties the whole matrix by definition — the KERNAL moves 960 bytes
+  and clears 40. A one-row change dirties the rows of the two pages it
+  touches, which is fourteen of them; at a threshold of eight the test ran,
+  found a spurious match on a screen with several blank rows, and emitted a
+  scroll the span compare then had to undo — 1 scroll and 24 blits where 1
+  blit was the answer. Correctness survived it. The cost did not.
+- **The test runs over the rows ON THE GLASS, `0..nrows-1`,** and so does the
+  compose loop and the re-signing. The flush never writes `c64_shsig[]` past
+  `nrows`, so a test over all 25 compares live signatures against power-on
+  zeros and fails for every `k` — the defect above, stated as its mechanism.
+- **The row signatures are updated only for rows the flush RECOMPOSED.**
+  Re-signing all 25 at the end of every flush cost 25 × 1.03 ms — half a host
+  tick, on every flush, for a keystroke that touched one row. A row that was
+  not recomposed did not change its sources either.
+- **And when the shift test has run, its signatures are READ rather than
+  taken again.** The test fills `c64_sig[]` from the live sources; the
+  compose loop then wrote the identical value per recomposed row — the gfx
+  lock is held for the whole flush, so nothing can have moved in between —
+  which is another 25 × 1.03 ms on the one path that recomposes everything.
+  The post-scroll slide of `c64_shsig[]` is the same copy and costs no
+  `c64_rowsig` call at all. Measured: a `k = 9` shift, **281.7 ms → 256.0 ms**.
+
 - On a hit, emit **one `OSAPI_GFX_SCROLL` (slot `0x01F8`) plus the `k`
   vacated rows** — `k + 1` calls, not 25.
+- **THE `dy` IS POSITIVE, BECAUSE POSITIVE MOVES THE CONTENT UP** (SPEC.md
+  §5.5, `os88.h:437`, `kernel/vga12.inc:3927`, and `apps/runcpm/rcterm.c:631`
+  passing `rc_scr_n << 3` with its vacated rows at `rows − n`). Wave 1's first
+  draft passed `−k * 8` — the one argument negated in a block otherwise
+  written entirely for content-up — so a BASIC scroll slid the picture DOWN,
+  left the top `k` rows unspecified and never forced them, and left the shadow
+  claiming the opposite slide, which switches the span compare off for every
+  row of every later frame. It shipped because **the harness's own
+  `os88_gfx_scroll` stub modelled the opposite convention** (it implemented
+  only the `dy < 0` branch, as content-up, with the sentinel at the bottom),
+  so the package and the model were wrong together and the call counts
+  matched. The stub is now §5.5's, both directions and all four refusals, and
+  the k = 9 step checks that **the pixels moved UP** against a snapshot taken
+  before the scroll — a count cannot see a direction.
+- **AND EVERY SHIFTED ROW IS STILL COMPOSED AND COMPARED**, which is the
+  bullet above stated as a cost that is not negotiable. Skipping the rows the
+  test matched — 16 of them on a `k = 9` scroll, 188 ms of compose and 24 ms
+  of compare — was proposed on the grounds that the shadow bytes for those
+  rows were composed from those same sources and just `memcpy`'d into place.
+  It makes the 16-bit signature PROOF, and a collision is trivial to build:
+  `c64_rowsig` is an XOR under a per-cell rotate, so a cell's contribution is
+  `rol(v, 40 − i)` and two rows differing in one cell each, one column apart,
+  collide whenever the second difference is the first rotated once — screen
+  code 34 in column 5 against screen code 36 in column 6, over an otherwise
+  blank row, is such a pair, and they are different glyphs. The scroll is
+  emitted (that is what the hint is for) and the row that did not really
+  shift is then the only thing standing between the shadow and a wrong row
+  **that never repairs itself**, because after that flush nothing is dirty.
+  `hosttest/c64uitest.c` drives that exact pair and checks the glass against
+  the row's own SOURCES — the one question `audit()` cannot ask, since a
+  package that slides its shadow the same wrong way agrees with itself. The
+  signature saves the SCROLL, not the compare.
 - `OSAPI_GFX_SCROLL` refuses when the clip does not contain the rect; on a −1
   the flush **falls back to spans and the shadow stays true** (nothing
   moved), exactly as `rcterm.c` does.
@@ -743,8 +954,9 @@ point taking explicit `(segment, offset)` pairs for anything in a claim
 | `c64_band1(dst, first, last, matrix_seg:off, colour_seg:off, chargen_seg:off, mode, bg)` | composes cells `first..last` × 8 rows into a 1bpp band — text by glyph, XOR'd by fg/bg luminance; bitmap by the cell transpose; multicolour by threshold |
 | `c64_band_sprites(band, first, last, sprite_regs, ram_seg)` | overlays the visible sprite rows into a composed band |
 | `c64_band_x2(band, rows)` | pixel-doubles a band through a 256-entry byte→word table, 8 or 16 rows deep, for fullscreen |
-| `c64_rowspan(a_seg:off, b_seg:off, n)` | compares a composed row against the shadow and answers `(first, last)` differing cell, or "same" |
-| `c64_rowshift(a_seg:off, b_seg:off)` | §9.4's shift test |
+| `c64_rowspan(a, b, n)` | compares a composed band against the frame shadow — eight pixel rows of `n` bytes at stride 40, both in the package's own segment — and answers `(first << 8) \| last`, the differing CELL columns, or −1 for "same". Both scans are `repe cmpsb` and the second sets `DF` on purpose, which is why §3.6's harness covers this file |
+| `c64_rowcopy(dst, src, n)` | brings the shadow up to date with what was drawn |
+| `c64_rowsig(mseg, moff, col, n)` | §9.4's shift test: a 16-bit signature of one row's SOURCES. Named `c64_rowshift` in the draft; it takes a row and answers a number, because the k-loop belongs in the C where it costs nothing |
 
 **The composer takes a span, never "always 40 cells."** A one-cell change
 composes one cell. This is the difference between a keystroke costing
@@ -755,14 +967,42 @@ character set the VIC is pointed at — never from `OSAPI_FONT_GLYPHS`. This is
 a C64 face.
 
 Each composed span goes down in **one `OSAPI_GFX_BLIT1`** (slot `0x0418`); a
-−1 (a `kern_small` kernel) falls back to the font path.
+−1 (a `kern_small` kernel, or a broken argument) falls back to the font path
+— **and that is a DRAW, not a deferral.** `c64_row_font` maps the row's screen
+codes to the kernel's own face and emits the span as one `os88_font_run`, once,
+and the shadow is updated with the composed band anyway: on this path the
+shadow stops being "the pixels on the glass" and becomes a proxy for THE
+SOURCES, which is still exactly what the compare needs — if the composed band
+equals it, the sources decode the same way and the font path would draw the
+same characters. Wave 1 shipped two wrong answers before this one and the
+harness gates both: discarding the −1 and updating the shadow anyway (a
+permanently blank screen the compare then refuses to repair — the outcome
+SPEC.md §47 exists to prevent), and keeping the row OWED (the wake re-posts,
+the row recomposes, and is refused again, for ever). What the fallback cannot
+carry is stated rather than faked: it is not the C64's face, a reverse-video
+cell is drawn plain, and a graphics cell has no glyph in this face and is
+drawn as a dot — so the status row says `No bands here - text only.` the first
+time it happens, on both routes (§9.8).
 
 ### 9.6 Monochrome, by luminance, on every adapter — **a fact, not a limitation being worked around**
 
 **The C64 screen is 1bpp through `OSAPI_GFX_BLIT1` on every adapter, VGA
-included.** Every one of VICE's 16 colours (`data/C64/vice.vpl`) is resolved
-to black or white by a luminance threshold, and multicolour text, multicolour
-bitmap and multicolour sprites are thresholded the same way.
+included.** Every one of the C64's 16 colours is resolved to black or white by
+a luminance threshold, and multicolour text, multicolour bitmap and
+multicolour sprites are thresholded the same way.
+
+**The luminances are the VIC-II's own ladder and not a palette file's.** The
+table is `vicii_colors_6569r5`'s Y column (`src/vicii/vicii-color.c:441`) —
+the one VICE 3.10 as shipped compiles and picks for a PAL C64 (§2's authority
+row has the `#ifdef` chain). **It has NINE levels for sixteen colours, shared
+in seven pairs**: blue = brown (0.237), red = dark grey (0.306), purple =
+orange (0.363), medium grey = light blue (0.461), green = light red (0.500),
+cyan = light grey (0.639), yellow = light green (0.763). The first draft
+derived the table from `data/C64/vice.vpl` — a file VICE does not read by
+default — which made all sixteen distinct (yellow 212 against light green
+185), so the mono glass showed contrast in seven places where a real C64 and
+VICE show a flat field, and `c64_lum_update`'s *"the same colour: a uniform
+cell"* branch, written for exactly this case, was unreachable code.
 
 The fact that decides it: **SPEC.md §5.4.1 — VGA keeps the span writer.**
 `gfx_blit4` therefore prices a band by its colour *runs*, at ~215 µs a run
@@ -793,21 +1033,110 @@ criterion.**
 (§14.5) — compose instructions, cells and the resulting µs — with the call
 count reported beside them as a secondary figure:
 
-| operation | gated on |
-|---|---|
-| one changed cell | compose 1 cell; 1 blit call |
-| one changed row | compose `last − first + 1` cells; 1 blit call |
-| a `k`-row scroll | 1 scroll + `k` composed rows; **1 scroll per flush** |
-| a full expose | ≤ 25 composed rows + 1 fill + border; the **measured ms** on the target from the bench, written here when the bench answers |
-| a full bitmap frame | the **measured ms**, not the call count |
-| one sprite moved one cell | the spans it actually touched |
-| Alt+D, either direction | **0 flush calls** (SPEC.md §74.2's zero — the latch does its own paint) |
-| a slice with no tick boundary | **0** (§9.3) |
+**`tests/c64band` answered on 2026-08-21 and was RE-TAKEN on 2026-08-22 under
+an armed clip**, under `-icount shift=3,sleep=off` where one PIT count is
+0.359 ms of real 4.77 MHz XT (PERFORMANCE.md Part 4) and the bench takes
+N = 8 iterations a row.
+
+**THE CLIP IS THE RE-TAKE, and it is 28% of a line of text.** The bench's
+rerun draws from `W_ONKEY` and `W_ONCLICK`, and the kernel arms a clip region
+for `W_PAINT` and for nothing else (SPEC.md §11.3) — so the first draft drew
+over anything covering it and timed the kernel's *unclipped* paths, which
+`c64_flush` never takes: `os88_onwake` arms the clip before it, and a paint
+arrives with one armed. Measured both ways in one session: a 40-cell
+`font_run` is 718 counts unclipped and **922 clipped**, a 320×8 `blit1` 40 and
+**47**; the composer's own rows do not move at all, because they are package
+code and never ask the kernel.
+
+The `FONT_RUN` row is the bar taken in the same run, and it is also the
+calibration check: 922 counts ÷ 8 × 0.359 = **41.4 ms** against
+PERFORMANCE.md's model of 40 × 900 µs + 756 = 36.8 ms for the same forty
+cells. The model is the machine to 12%, and the 12% is the clip.
+
+| the bench row | counts | per operation |
+|---|---|---|
+| `FONT_RUN` 40 aligned — the bar | 922 | 41.4 ms |
+| `c64_band1` 40 cells | 168 | 7.54 ms |
+| `c64_band1` 1 cell | 8 | 0.36 ms |
+| `OSAPI_GFX_BLIT1` 320×8 stride 40 | 47 | 2.11 ms |
+| `c64_rowspan` 40 equal | 35 | 1.57 ms |
+| `c64_rowspan` 40 differing | 38 | 1.71 ms |
+| `c64_rowcopy` 40 | 35 | 1.57 ms |
+| `c64_rowsig` 40 | 24 | 1.08 ms |
+| `c64_band_x2` 8 rows | 450 | 20.19 ms |
+
+**And the bench SAVES ES around every `OSAPI_GFX_BLIT1` now**, because a
+window callback is entered with `ES = KERNEL_SEG` (SPEC.md §20.1) and must
+return it that way: the first draft did `push ds / pop es` at all three blit
+sites and never put it back, so it returned the wrong ES into the kernel and
+timed a body that omits the preservation the shipping code has to do. **It
+also PREFLIGHTS the blit**: `OSAPI_GFX_BLIT1` answers CF = 1 refused with
+nothing drawn, and the timed bodies ignored that — so on a `kern_small`
+kernel the bench printed attractive numbers for a call that draws nothing and
+published them as the cost of drawing a band. Every row whose body contains a
+blit now prints `REFUSED (CF=1)` instead of a number.
+
+Solving the two `c64_band1` rows — which the clip does not touch: **a composed
+CELL is 184 µs and the call floor is 175 µs.** Those two are `C64BENCH_CELL` and `C64BENCH_CALL` in
+`c64scr.c`, and `hosttest/c64uitest.c` prices its whole cost table from them —
+a gfx call at PERFORMANCE.md's 756 µs floor plus 3.4 µs a band byte, which is
+what the 320×8 row above says a blit's pixels cost.
+
+**Re-taken after the wave's FIX pass.** Every row moved by about half a
+percent, because the two constants the model prices a compare and a signature
+from were re-measured with the bench (`C64BENCH_SPAN` 1530 → 1571 µs,
+`C64BENCH_SIG` 1030 → 1077 µs); the two scroll rows are now measurements of a
+scroll that goes the right way, which the earlier ones were not; and two rows
+are new — the signature collision, and a changed cell on a kernel whose
+`blit1` refuses.
+
+**Re-measured after wave 1's review**, with the harness now writing the stack,
+zero page and BASIC's variables between flushes (`h_noise`) so that the
+per-cell rows describe a machine with a core rather than one without — **and
+re-taken again after the review's second pass, which found the model priced
+NO TEXT.** `os88_font_run` and `os88_font_str` were counted and then left out
+of the sum, so every glyph this package draws was charged zero: the About
+panel's 160 cells in 9 calls read as 0.0 ms where PERFORMANCE.md prices them
+at ~153 ms. The cost model now charges a font call the same 756 µs floor as
+any other `gfx_*` call **plus 900 µs a glyph cell**, which is
+PERFORMANCE.md's own arithmetic (756 + 78 × 900 = 70.9 ms against the ~71 ms
+it quotes for a 78-cell line). Every row below that draws a string moved.
+
+| operation | measured, on the harness | gated on |
+|---|---|---|
+| one changed cell | **3.8 ms** | compose 1 cell; 1 blit call |
+| one changed row | **12.0 ms** | compose `last − first + 1` cells; 1 blit call |
+| a `k = 9` scroll | **257.8 ms** | 1 scroll + `k` drawn rows; **1 scroll per flush** — and all 25 rows composed and compared, which is §9.4's guarantee and not a miss |
+| **a `k = 1` shift the signature got WRONG** | **256.4 ms** | 1 scroll, and the colliding row DRAWN: the glass matches the row's own sources (§9.4) |
+| a `k = 3` scroll, `gfx_scroll` refusing | **301.4 ms** | spans, and the shadow stays true |
+| **two pokes, rows 0 and 24** | **126.8 ms** | 13 composed rows, **2 blits** — the window ∩ the pages (§9.2); the window alone made this 25 rows and 299 ms |
+| a full expose, 25 rows | **304.6 ms** | ≤ 25 composed rows + the border + the status row's 37 glyph cells |
+| 25 rows changed, not a shift | **300.7 ms** | no scroll emitted |
+| a `$D020`-only change | **3.0 ms** | fills only, **no band composed** |
+| **a changed cell, `blit1` REFUSING** | **29.6 ms** | §9.5's font path, ONCE — the row is drawn with the kernel's face and not retried, and the fact is said (a `kern_small` kernel) |
+| 8 × `$D011`, `$D016`, a `$DD00` serial edge | **0.0 ms** | **0 blits, 0 composes** — a register write that changes nothing costs nothing (§9.3) |
+| a `$D016` change that draws the same picture | **254.6 ms** | 25 composed rows, **0 blits, 0 fills** — recompose, then ASK the shadow; and a frame register does not touch the border |
+| an expose with the About panel up | **322.6 ms** | 12 composed rows: the 13 the panel covers are not drawn under it. It is MORE than a full expose because the panel itself is 198 glyph cells — which is why the row below exists |
+| **an expose that misses the panel** | **16.7 ms** | the panel is redrawn only when the damage rect reaches it |
+| the About panel closing | **139.0 ms** | 13 composed rows — the panel's rect, not the screen |
+| a `k = 1` scroll on a CLAMPED window | **153.8 ms** | 1 scroll + 1 drawn row, on 15 rows of glass |
+| one joystick indicator changed | **0.8 ms** | **one** `blit1`, **no fill** — the status row's delta (§10.1), reached the way the product reaches it |
+| **entering fullscreen** | **304.6 ms** | one whole repaint, the kernel's own (§9.8) |
+| **the wake after entering fullscreen** | **0.0 ms** | **0 blits, 0 composes** — `OSAPI_FULLSCREEN` repaints synchronously in both directions, so the shadow already describes the new glass |
+| a full bitmap frame | wave 4 | the **measured ms**, not the call count |
+| one sprite moved one cell | wave 4 | the spans it actually touched |
+| a slice with no tick boundary | **0.0 ms** | **0** (§9.3) |
+
+Three decisions fall out of that table and each is a constant in `c64scr.c`:
+**a changed cell is 3.7 ms and a changed row 11.9 ms**, which is the whole
+reason the composer takes a span and the write window exists (§9.2); **a full
+repaint is ~300 ms, five host ticks**, so the `CPU_8086` tier flushes every
+OTHER tick (§9.8); and **2× is 20.19 ms for eight rows**, 63 ms for a screen
+on top of the compose, which is why no tier magnifies in wave 1 (§9.8).
 
 A change that moves a row of this table up is a regression against a
-documented number, and this table and the harness change together or not at
-all. **The numbers are written in from the bench, wave by wave; until then
-each cell says so.**
+documented number, and this table, `c64scr.c`'s constants and the harness
+change together or not at all.
 
 ### 9.8 Fullscreen, and the tier table
 
@@ -816,40 +1145,188 @@ directions — VICE's own binding. **This is a stated exception to
 SPEC.md §11.2.1**, taken the way SPEC.md §74.2 takes Alt+F for a terminal:
 the C64 owns F and Esc, so neither can carry the latch here.
 
-The scaling is a **tier table in one place** (`c64scr.c`), written **from**
-`tests/c64band`'s measured milliseconds (§14.5) and from the machine figures,
-never from a guess:
+**AND THE CHORD IS IMPLEMENTED, BECAUSE IN FULLSCREEN IT IS THE ONLY DOOR.**
+SPEC.md §11.2 is explicit that `wm_draw_win` draws **no chrome at all** for a
+`WF_FULL` window — no menu bar — so Preferences > Fullscreen, the item that
+got the user in, is not on the glass any more, and §11.2.1's rule (*"the key
+that got you there is the key that leaves"*) is the whole reason the exception
+had to name a key rather than only a caption. `os88_onkey` tests
+`ascii == 0 && scan == 0x20` and calls the same resident
+`c64_fullscreen_toggle` the menu item calls. The body is **resident** and not
+in the overlay: a keystroke is the frequent side of SPEC.md §73.14's split,
+and a chord that had to load `C64.OVL` to work would refuse on a disk without
+it — with the refusal printed on a bar the user cannot see.
 
-| adapter / tier | fullscreen |
-|---|---|
-| CGA | 2×, **exactly 640×200** |
-| VGA | 2×, 640×400 centred — the band composed 16 rows deep |
-| Hercules | 2× horizontal, 640×200 centred, 1× vertical |
-| the `CPU_8086` tier | 1:1 centred |
+**WAVE 1 SHIPS THE 1:1 CENTRED ROW ON EVERY TIER AND DOES NOT MAGNIFY**, and
+that is stated here rather than left to be discovered on the glass. The item
+is LIVE and it works — the C64 screen is centred in the fullscreen content
+box, the border fills the rest of it and the status row runs the full width —
+it simply does not scale. The fact: `c64_band_x2` is **20.19 ms for eight
+rows** on `tests/c64band` (§9.7), 63 ms for a screen *on top of* the compose,
+and it needs a second shadow geometry; the scaler lands with the wave that can
+pay for it. Nothing here is faked and nothing is silently missing.
+
+Wave 1's review found the first draft doing something worse than either:
+`c64_flush` clamped its drawable width to `C64_W_W` (336) and anchored the
+screen at `org.x + C64_BORDER`, while `kernel/wm.inc:7295` records that
+`wm_draw_win`'s SPEC.md §11.2 branch fills **the whole frame white** for a
+`WF_FULL` window *and has no opt-out*. Alt+D on a 640×480 desktop therefore
+left a 320×200 picture in the corner of a white 640×480 screen with a
+336-pixel status strip under it, and nothing in the package read the `c64_full`
+latch at all. The geometry is now computed in one place (`c64_geom`) and the
+screen's left edge is snapped to a multiple of 8, because `OSAPI_GFX_SCROLL`
+refuses a rect whose `x1` or `x2+1` is not (§9.4).
+
+The scaling, when it lands, is a **tier table in one place** (`c64scr.c`),
+written **from** `tests/c64band`'s measured milliseconds (§14.5) and from the
+machine figures, never from a guess:
+
+| adapter / tier | fullscreen | wave |
+|---|---|---|
+| every tier | **1:1 centred** | **1 — shipping** |
+| CGA | 2×, **exactly 640×200** | later |
+| VGA | 2×, 640×400 centred — the band composed 16 rows deep | later |
+| Hercules | 2× horizontal, 640×200 centred, 1× vertical | later |
+| the `CPU_8086` tier | 1:1 centred | **1 — shipping** |
 
 The rest of the screen is a border fill. **A toast raised while fullscreen
 goes to the status row as well** — the bar a toast lands on is *under* a
 `WF_FULL` window (LESSONS 13), so every refusal in this port takes both
 routes.
 
+**AND THE LATCH IS NOT PAID FOR TWICE.** `OSAPI_FULLSCREEN` repaints the
+window whole, synchronously, in *both* directions — `os88.h:604` says so and
+`kernel/wm.inc:4147` shows it (`wm_fullscreen` calls `wm_raise` with `AL = 1`,
+so `W_PAINT` runs nested inside the call and has already invalidated the
+shadow and drawn all 25 rows for the new geometry). The success arm of
+Preferences > Fullscreen therefore does **nothing**: an `c64_sh_inval()` there
+threw that shadow away and the next wake drew the identical picture again —
+25 bands, ~300 ms, four host ticks of pure double-draw, and invisible in an
+emulator. `apps/runcpm/runcpm.c:1086-1095` records the same defect in its own
+words. The harness rows `entering fullscreen` and `the wake after entering
+fullscreen` (§9.7) are the gate.
+
 ---
 
 ## 10. The status bar
 
-One 10-pixel row under the screen, **336 pixels wide = 42 cells**, delta-drawn.
+One 10-pixel row under the screen, **336 pixels wide = 42 cells**, delta-drawn
+— 336 being the CONTENT width, which is why the window is authored 338
+(§9.1).
 
 ### 10.1 What is on it
 
-Left to right: the **message area**, `Tape:` (greyed), `Joysticks:` with two
-5-dot indicators, drive **8** with its track counter ` 18.5` (greyed), and
-the speed widget.
+**42 cells is the whole design constraint, and wave 1 measured it.** VICE's
+two speed strings are 12 cells each with their own field widths (§10.2), so
+24 of the 42 are spoken for before anything else is on the row.
+
+**THE ORDER IS VICE'S**, and wave 1's review found the first draft had it
+reversed. `uistatusbar.c:2816-2826` appends the SPEED widget first — leftmost
+— then the checkboxes, then tape + joysticks, then the drive units, with the
+volume button at the far end. So, in pixels from the content origin:
+
+| x | field | width | |
+|---|---|---|---|
+| 0 | `%7.0f%% cpu` | 12 cells | the SPEED widget, which `uistatusbar.c:2816` appends first |
+| 96 | `%8.1f fps` | 12 cells | |
+| 192 | — | 1 cell | **the one separator cell the row can afford** |
+| 200 | `Joysticks:` | 10 cells | the JOYSTICK widget (`uistatusbar.c:1763`) |
+| 280 | control port 1's `+` | 2 cells, **one** `blit1` | `draw_joyport_cb`, `uistatusbar.c:780` |
+| 296 | control port 2's `+` | 2 cells, **one** `blit1` | |
+| 312 | the drive number `8` | 1 cell | the three single-glyph state indicators, clustered at the right end |
+| 320 | the warp lamp `W` | 1 cell, one `font_run` | §10.2 |
+| 328 | the pause lamp `P` | 1 cell, one `font_run` | |
+
+42 cells exactly — 41 of them fields, which is why there is exactly one
+separator and it is spent after `fps`. The lamps were first placed at 192 and
+the row read `0.0 fpsWPJoysticks:` on the glass, with the two lamps
+indistinguishable from the text either side; VICE's LEDs are on a **different
+row** from the speed widget (§10.2), so folding both rows onto one is this
+port's decision and there is no VICE order to break by moving them. Volume is dropped (§10.3), and the CRT/Mixer checkboxes
+`uistatusbar.c:2818` appends between the speed and the joysticks are dropped
+too (§10.3 already said so).
+
+**EACH INDICATOR IS VICE'S PLUS, NOT A ROW OF DOTS** (amended in the wave's
+fix pass). `draw_joyport_cb` (`uistatusbar.c:780-860`) draws five squares
+arranged in a `+` — up above, left and right beside, fire in the centre, down
+below. The first draft laid the same five bits in a straight horizontal line
+at a 3-pixel pitch and started port 2 sixteen pixels after port 1, so on the
+glass the ten off-dots read as one continuous leader `..........` between
+`Joysticks:` and the drive number, with nothing saying which dot was a
+direction, which was fire, or where port 1 ended. The plus is three 2-pixel
+columns inside the same 16 × 3 band — 6 pixels of shape — which also leaves
+~10 pixels of real gap between the two ports. VICE's bit order is already this
+port's (0 up, 1 down, 2 left, 3 right, 4 fire, §8), and the cost is unchanged:
+one `blit1` a group.
+
+**A DOT IS NOT A `gfx_fill`.** Ten dots drawn one fill each is 7.6 ms — a
+drawing call costs 756 µs whatever it draws — and a whole status redraw was
+more than two host ticks, for a row wave 2 wants to touch once a second. Each
+five-dot group is composed into a band in the package's own RAM and goes down
+in one call; an OFF dot is its centre pixel rather than nothing, because a
+band carries no pen for SPEC.md §47's grey to survive in.
+
+**And the row DELTA-DRAWS**, which is what wave 1 claimed and did not do
+(`c64_st_joy1`/`c64_st_joy2` were declared for it and never read). A full
+redraw — a fresh window, an expose, a message going up or coming down —
+erases the row first, because those are the cases where its pixels are
+unknown. Every other repaint draws only the field that changed, over its own
+cells, with no erase: `font_run` and `blit1` both arrive in final polarity.
+
+**`c64_status` IS CALLED FROM EVERY FLUSH AND ITS OWN COMPARE IS THE GATE.**
+The review's second pass found the delta unreachable from the product: it was
+called only under `if (c64_st_dirty)`, and every setter of that flag either
+also cleared `c64_st_ok` (so the row redrew whole) or changed a field the
+compare already sees. The `0.8 ms` row of §9.7 was produced by the harness
+raising the flag by hand — a path the package could not take. The flag is
+gone; the row is examined on every flush and answers *"nothing moved"* in
+**zero drawing calls**, which is what the delta was built for.
+
+**A MESSAGE OWNS THE WHOLE ROW while it is up.** The alternative, measured,
+is a seven-cell message area — and the two messages this port has to show,
+`ScrollLock for joystick` (§7.6) and `C64.ROM missing - see README.TXT`
+(§1.4), are 23 and 32 characters. A message expires after about five seconds
+and the widgets come back, so nothing is permanently hidden; §1.4's fact is a
+permanent line rather than a message, for the same reason.
+
+**AND TAKING IT DOWN IS WORK NOBODY ELSE ASKS FOR**, which wave 1's review
+found on the glass: the deadline is examined *inside* the flush, and the flush
+ran only while something was dirty. `c64_say` raised the flag, the flush drew
+the message and cleared it, and with no core running — `C64_ST_HALT`, which is
+every state wave 1 has — no further wake was posted, so five seconds never
+arrived and `Warp mode on.` owned the row until the next keystroke. So
+`os88_onwake` treats *a message being up* as a reason both to re-post the wake
+and to flush; a flush with nothing dirty composes no row and `c64_status`
+answers "nothing moved" in **zero drawing calls** (§9.7's `a wake with no tick
+boundary`), so what it costs is the wake.
 
 ### 10.2 The speed widget — VICE's own strings, and what they count
 
 `statusbarspeedwidget.c` prints `%7.0f%% cpu` (`:572`, `CPU_DECIMAL_PLACES`
 0) and `%8.1f fps` (`:653`, `FPS_DECIMAL_PLACES` 1). **Both are folded onto
-this one row**, e.g. `   100% cpu    50.1 fps`, and the warp and pause LEDs
-become **two dots**, drawn with SPEC.md §47's pen when off.
+this one row**, LEFTMOST as VICE appends them (§10.1), e.g.
+`   100% cpu    50.1 fps`.
+
+**THE WARP AND PAUSE LEDs ARE TWO LABELLED LAMPS, `W` AND `P`, INVERTED WHEN
+LIT.** In VICE they are not part of the speed widget at all: they are made at
+`uistatusbar.c:2607-2616` and appended by `statusbar_append_led`
+(`:2339-2362`) into `led_row_grid` — a **separate row** of the status bar at
+column 0 — and each is `statusbar_led_widget_create("warp:", …)` /
+`("pause:", …)`, so **each carries a text label beside its lamp**
+(`statusbarledwidget.c:342-348`). Wave 1's first draft cited
+`statusbarspeedwidget.c:406-415`, which is inside two `#if 0` blocks and is
+not compiled, and drew two unlabelled three-pixel dots wedged between `fps`
+and `Joysticks:` — two specks with nothing on the glass saying what they were.
+
+`warp:` + lamp + `pause:` + lamp is 13 cells and the row has 42, of which the
+two speed strings take 24, `Joysticks:` 10, the two joystick indicators 4 and
+the drive number 1. **VICE's label text does not fit, so the lamp and its
+label are folded into ONE GLYPH each**: the letter is always drawn — the label
+never disappears — and its cell is **inverted, black on white, while the latch
+is on**, which is the lamp. It costs the same two cells the unlabelled dots
+cost, and it reads the same on a 1bpp adapter as on VGA, which a grey would
+not (SPEC.md §39.4). VICE's `warp:`/`pause:` label TEXT is therefore in
+§10.3's dropped list with the width as its fact.
 
 - **cpu %** = emulated 6510 cycles delivered per second ÷ 985,248. 100% *is*
   a real C64. Nothing throttles, so this number is the machine's honest
@@ -871,10 +1348,38 @@ performance rule 3).
 ### 10.3 What is dropped rather than greyed
 
 **Recording, Volume, CRT and Mixer** are not on the row at all
-(`uistatusbar.c` 1961/1971, 2594, 2670/2679). The fact is the width: 42 cells
-hold the message area, `Joysticks:`, drive 8 and the two speed strings and
-nothing more. Dropped is stated here; everything else missing is greyed with
-its fact (§11.2).
+(`uistatusbar.c` 1961/1971, 2594, 2670/2679). **And, measured in wave 1, so
+are the `Tape:` field and drive 8's track counter ` 18.5`** — the drive
+NUMBER stays, because that is the one of them a user looks for. The
+fact is the width, and here is the arithmetic: 42 cells, minus 24 for the two
+speed strings, minus 10 for `Joysticks:`, minus 6 for its two indicators,
+minus 1 for the drive number, minus 2 for §10.2's warp and pause lamps, leaves
+**nothing**. `Tape:` is 5 and ` 18.5` is 5.
+
+**AND THE DRIVE NUMBER IS DRAWN PLAIN, NOT GREYED** (amended in the wave's fix
+pass, on the evidence of `build/port-shots/w1r2-cga-status.png`, where that
+cell is simply EMPTY). `os88_gfx_pen(1)` buys a checkerboard on a 1bpp
+adapter, and the checkerboard is laid in `[gfx_disink]`, which
+`kernel/vga12.inc:3414` sets to `CBLACK` for every content pen because a
+window's content is white in both themes. **This row's paper is black**, so a
+greyed glyph on it is a black stipple on black: gone on CGA and Hercules, and
+nearly gone on VGA. `font_str` does exactly the same thing — the pen is not
+the problem, the surface is. It is the same fact that made §10.2 refuse a grey
+for the two lamps, and the same one behind an OFF dot being a pixel rather
+than nothing: **this row has no vocabulary for grey.** Inverting the cell was
+the other candidate and is worse — on this row an inverted cell means a LIT
+LAMP, and a drive permanently lit says something false rather than nothing. So
+the unit number is drawn, white, and never lights; that there is no drive is
+carried where SPEC.md §47 wants it, on the greyed File > Attach/Detach items
+(§11.2).
+
+**VICE's `warp:` and `pause:` LED label TEXT is dropped for the same reason**
+and by the same arithmetic — 13 cells for the labelled pair against the 2 the
+row has — and what replaces it is a labelled lamp rather than a bare one
+(§10.2), so nothing on the row is unexplained.
+
+Dropped is stated here; everything else missing is greyed with its fact
+(§11.2).
 
 ---
 
@@ -889,39 +1394,151 @@ greyed.
 
 Every item string is `uimachinemenu.c`'s and every hotkey caption is a
 `hotkeys*.vhk` line, transcribed (§2). Submenus are folded into their head
-item. Live items:
+item.
+
+**TWO KERNEL LIMITS SHAPE EVERY LINE OF `c64menu.c`, and wave 1 measured
+both**: a pull-down is at most `MENU_POPMAX` = **11 items** and each item is
+truncated to `MENU_MAXCH` = **24 glyphs** (`kernel/menu.inc:195`, `:207`).
+They are facts about the machine, and they are measured on the SMALLEST
+screen: `vid_popmax` is `(vid_h − 22) / 16`, which is 11 on a 200-line CGA and
+clamped to 11 above it. Three rules follow:
+
+1. **A section that is ENTIRELY unavailable folds into ONE item, and that item
+   is the section's FIRST** — its submenu head label where it has one,
+   otherwise the first item of the section, which is the action the section
+   exists for. Never a word invented to summarise it, and **never the
+   section's last item**: wave 1's review found the tape section folded onto
+   `Datasette controls` (`:327`, its last) and the cartridge section onto
+   `Cartridge freeze` (`:402`, its last), so a user looking for tape or
+   cartridge support read a greyed *controls* or *freeze* rather than a greyed
+   *attach*. A section with a LIVE item in it is **not folded** — folding it
+   would take the working item away, which is why `reset_submenu` (`:244`,
+   head label `Reset` at `:521`) contributes three of File's ten slots
+   rather than one.
+   **And the fold is per SECTION, taken to its end.** The review's second pass
+   found two places where a section had been carved instead: File's disk
+   section is ONE section between separators (`:286-:301` — Attach disk image,
+   Create and attach..., Detach disk image, Flip list), so `Flip list` is not
+   an item of its own; and Snapshot's event section is ONE section with no
+   separator inside it (`:576-:598`, six items), so `Set recording milestone`
+   and `Return to milestone` are not either. File is **10 items** and Snapshot
+   **8**.
+   **The one exception, and it is taken twice**: where the section's first
+   item does not FIT `MENU_MAXCH`, the fold lands on the first item of the
+   section that does, because `menu_trunc` would otherwise print a *shortened*
+   label and rule 2 forbids that. `Attach datasette image...` (`:313`),
+   `Attach cartridge image...` (`:393`) and `Detach cartridge image(s)`
+   (`:398`) are all **25 glyphs against 24** — the first of them measured on
+   the glass, printed `Attach datasette image..`. So the tape section folds
+   onto `Detach datasette image` (`:319`, 22 glyphs, and it still names the
+   medium a reader is looking for) and the cartridge section onto `Cartridge
+   freeze` (`:402`, 16).
+2. **The label is VICE's and is never shortened.** Where the label plus its
+   `.vhk` caption passes 24 glyphs the CAPTION is dropped and the label stands
+   alone; **the chord is then in §11.2's table**, which lists every dropped
+   caption beside the fact that greys its item. (This rule used to point at
+   §7.5, and §7.5 is a three-row table of the chords the XT/AT BIOS cannot
+   DELIVER — a different question, and it contains none of them.)
+   `Power cycle machine`, `Load`/`Save snapshot image...`,
+   `Quickload`/`Quicksave snapshot`, `Advance frame` and `Datasette controls`
+   are the items this costs a caption.
+   **The one exception:** where dropping the caption would take away the only
+   chord a LIVE item has, the SEPARATOR gives instead — one space rather than
+   two. The label is still VICE's, entire. `Reset machine CPU Alt+F9` is 24
+   glyphs that way and 25 with the two spaces every other captioned item uses.
+   It is taken once.
+   **AND A CAPTION IS ONLY TAKEN FROM AN ITEM THAT HAS ONE.** A VICE hotkey
+   binds to an `.action`; a `UI_MENU_TYPE_SUBMENU` entry has a `.submenu` and
+   no `.action`, so VICE prints no chord on it. Wave 1's review found three
+   heads captioned with a chord belonging to an item *inside* their submenu —
+   `Attach disk image` with `<Alt>8` (`drive-attach-8:0`,
+   `hotkeys-drive.vhk:9`), `Flip list` with `<Alt>i` (`fliplist-add-8:0`,
+   `hotkeys-fliplist.vhk:10`) and `Printer/plotter` with `<Alt>4`
+   (`printer-formfeed-4`, `hotkeys.vhk:52`) — which told the reader that
+   Alt+8 opens a list when in VICE it attaches to drive 8. All three heads
+   carry the label alone.
+3. **A present-but-impossible item wears `OS88_MENU_DIS` and the fact that
+   greys it is in a comment beside the string** (§11.2, SPEC.md §47) — **and
+   nothing is LIVE that only toasts a refusal.** An item a user can pick and
+   that answers *"not yet"* is the one thing §47 exists to stop, and wave 1
+   shipped three of them: Edit > Copy, Edit > Paste and
+   Preferences > Advance frame. All three are greyed with their fact.
+4. **A CHECK item's state is a `*` in the label**, and the item pointer is
+   swapped between the two spellings (`c64_menu_state`). **Eight** of these
+   items are `UI_MENU_TYPE_ITEM_CHECK` in `uimachinemenu.c` — `:682`
+   Fullscreen, `:692` Show menu/status in fullscreen, `:704` Warp mode,
+   `:708` Pause emulation, `:732` Show status bar
+   (`settings_menu_statusbar_primary`), `:757` Mouse grab, `:771` Swap
+   joysticks, `:786` Allow keyset joysticks; wave 1 counted six and left out
+   `:692` and the statusbar item, and `Show status bar` was greyed with no
+   state while the item below it wore one. It is the identical case as
+   `Allow keyset joysticks`: a CHECK that is ON and cannot be turned off, so
+   it wears rule 4's marker ON **and** `MENU_DIS` together. In VICE the
+   checkbox **is** how the state is read; this kernel's menu has no check mark and its face has no
+   glyph for one (LESSONS 8). The `*` is `apps/tracker`'s idiom
+   (`tracker.asm:2135-2150`) and **not** `apps/solitaire`'s MENU_DIS twin, for
+   the reason tracker states there: `MENU_DIS` is §47's *"you cannot have
+   this"*, so greying the item that is ON would report the feature as
+   unavailable and make it impossible to turn off. The marker is two glyphs
+   so both spellings are the same width; the longest,
+   `* Pause emulation  Alt+P`, is exactly 24. The kernel reads the item
+   strings through the set's `items` pointer at draw time
+   (`kernel/menu.inc:1977`), so swapping a pointer is enough and
+   `os88_menu_set` is not called again.
+
+**AND THE ORDER INSIDE A MENU IS `ui_machine_menu_bar_create`'s** (amended in
+the wave's fix pass). `uimachinemenu.c:1153-1160` adds `settings_menu_head`,
+then `settings_menu_statusbar_primary`, then `settings_menu_speed` — so
+**`Show status bar` is the item immediately after the head section, BEFORE
+`Warp mode`**, not after `Emulation speed` where the first draft put it. The
+Preferences menu is therefore, in order: `Fullscreen`, `Restore display
+state`, `Show status bar`, `Warp mode`, `Pause emulation`, `Advance frame`,
+`Emulation speed`, `Mouse grab`, `Swap joysticks`, `Allow keyset joysticks`,
+`Settings...` — 11 items, which is `MENU_POPMAX` exactly.
+
+**That 11 is also why `:692` (`Show menu/status in fullscreen`) is folded onto
+`Restore display state` rather than carried**, even though rule 1's fold is
+for a section that is entirely unavailable and this section has a live item in
+it. Both are greyed and both are display-state items the kernel owns; carrying
+`:692` separately would make the menu 12 items against a hard 11, and rule 2
+forbids shortening something else to make room. It is stated here because it
+is a departure from rule 1 taken for a measured reason, not an oversight.
+
+Live items:
 
 | item | caption | note |
 |---|---|---|
 | File > Smart attach... | Alt+A | the Standard File dialog on `.PRG` (§11.3) |
 | File > Reset > Reset machine CPU | Alt+F9 | |
-| File > Reset > Power cycle machine | Alt+F12 | caption kept; the item is the route (§7.5). RAM pattern fill |
+| File > Reset > Power cycle machine | Alt+F12 | caption kept; the item is the route (§7.5). **RAM pattern fill: VICE's C64 factory pattern** (`src/ram.c:169-177` — `RAMInitStartValue` 0, `RAMInitValueInvert` 4, `RAMInitValueOffset` 2, `RAMInitPatternInvert` 16384, `RAMInitPatternInvertValue` 255, put through `ram_init_with_pattern` at `:257`), which is the eight-byte period `00 00 FF FF FF FF 00 00` with every other 16K block inverted — **not zeros**, which is what wave 1 first wrote here and at power-on. `Reset machine CPU` still does not touch RAM, which is the whole difference between the two items |
 | File > Exit emulator | Alt+Q | the worker self-close idiom |
-| Edit > Copy | Alt+Delete | caption kept, item guaranteed: the 40×25 screen, PETSCII → ASCII, to the clipboard |
-| Edit > Paste | Alt+Insert | caption kept, item guaranteed: the clipboard typed through `$0277`, ten characters a jiffy |
-| Preferences > Fullscreen | Alt+D | §9.8 |
-| Preferences > Warp mode | Alt+W | flush every 9 ticks instead of every tick |
-| Preferences > Pause emulation | Alt+P | shown checked by text swap |
-| Preferences > Advance frame | Alt+Shift+P | run to the next VIC frame end (§6.3), then stop |
-| Preferences > Swap joysticks | Alt+J | §8 |
+| Edit > Copy | Alt+Delete | **wave 3.** Caption kept, item guaranteed: the 40×25 screen, PETSCII → ASCII, to the clipboard. Greyed until then (rule 3) |
+| Edit > Paste | Alt+Insert | **wave 3.** Caption kept, item guaranteed: the clipboard typed through `$0277`, ten characters a jiffy. Greyed until then |
+| Preferences > Fullscreen | Alt+D | §9.8. CHECK: rule 4's `*` |
+| Preferences > Warp mode | Alt+W | flush every 9 ticks instead of every tick. CHECK: rule 4's `*`, and §10.2's `W` lamp |
+| Preferences > Pause emulation | Alt+P | CHECK: rule 4's `*`, and §10.2's `P` lamp |
+| Preferences > Advance frame | Alt+Shift+P | **wave 2.** Run to the next VIC frame end (§6.3), then stop — there is no raster accumulator until the alarm model lands. Greyed until then |
+| Preferences > Swap joysticks | Alt+J | §8. CHECK: rule 4's `*`, and the two status indicators swap with it |
 | Help > About VICE... | | `uimachinemenu.c:988`; the kernel's name pull-down About opens the same panel (§12) |
 
 ### 11.2 Present and greyed — the fact that greys it (SPEC.md §47)
 
 | item | the fact |
 |---|---|
-| File > Attach disk image / Detach disk image / Create and attach an empty disk image / Flip list (folded to one item each; captions Alt+8/9/0/1, Alt+I/K/N kept) | no 1541 in this build: a D64 needs the drive's directory walk and the KERNAL serial traps, and this port loads `.PRG` files only (Smart attach) |
+| File > Attach disk image (ONE item: the whole disk section — Create and attach..., Detach disk image and Flip list — folds into it, §11.1 rule 1). **No caption**: it is a `UI_MENU_TYPE_SUBMENU` with no `.action`, so VICE prints none; Alt+8/9/0/1 and Alt+I/K/N belong to items *inside* those submenus (`drive-attach-8:0`, `fliplist-add-8:0`, …) | no 1541 in this build: a D64 needs the drive's directory walk and the KERNAL serial traps, and this port loads `.PRG` files only (Smart attach) |
 | File > Attach/Create/Detach datasette image, Datasette controls (Alt+T captions kept) | no tape emulation in this build: T64/TAP are not read |
 | File > Attach cartridge image..., Detach cartridge image(s), Cartridge freeze (Alt+C / Alt+Z captions kept) | no cartridge port in this build: the bank maps carry the cartridge-less 7 of VICE's 32 (`exrom = game = 1`, §3.3) |
-| File > Printer/plotter formfeed items (Alt+3/4/5/6 captions kept) | no printer path in this OS |
+| File > Printer/plotter (ONE item, a `UI_MENU_TYPE_SUBMENU` with no `.action` and therefore **no caption**; Alt+3/4/5/6 are the `printer-formfeed-*` actions inside it, `hotkeys.vhk:52`, `:56`) | no printer path in this OS |
 | File > Activate monitor (Alt+H) | no monitor in this build: VICE's monitor is 30,000 lines of host C |
 | File > Reset drive #8..#11 | no drives in this build |
-| Snapshot > every item (load/save Alt+L/S, quick snapshots Alt+F10/F11, event recording, milestones Alt+E/U, media recording Alt+Shift+R/S, quicksave screenshot on Pause) | no snapshot format in this build: a VSF carries every chip's state and this machine's chips are not VICE's |
+| Snapshot > every item (load/save Alt+L/S, quick snapshots Alt+F10/F11, the six-item event section folded onto `Start recording events` including the milestones Alt+E/U, media recording Alt+Shift+R/S, quicksave screenshot on Pause) — the chords are here because rule 2 drops the captions that do not fit 24 glyphs | no snapshot format in this build: a VSF carries every chip's state and this machine's chips are not VICE's |
 | Preferences > Restore display state (Alt+R), Fullscreen decorations (Alt+B), Show menu/status in fullscreen | the window is os8088's: the kernel places it, and the bar is under a fullscreen window (SPEC.md §11.2) |
 | Preferences > Emulation speed (200%..10%, Custom CPU speed), 50/60/Custom FPS | nothing throttles here: the machine delivers what the 8088 can and the status bar prints it (§10.2; SPEC.md §74.4's `F_CPUSPEED` reasoning) |
-| Preferences > Show status bar | the status row is the window's bottom row and is always drawn |
+| Preferences > Show status bar | the status row is the window's bottom row and is always drawn. A CHECK that is ON and cannot be turned off: it wears rule 4's `*` marker **and** `MENU_DIS` together (§11.1 rule 4) |
 | Preferences > Mouse grab (Alt+M) | no 1351 mouse in this build: the pointer is the desktop's |
-| Preferences > Allow keyset joysticks (Alt+Shift+J) | the keyset **is** the joystick here (the only joystick source this machine has); shown **checked and disabled** (§8) |
+| Preferences > Allow keyset joysticks (Alt+Shift+J) | the keyset **is** the joystick here (the only joystick source this machine has); it wears rule 4's `*` marker ON **and** `MENU_DIS` together — it is on, and it cannot be turned off (§8) |
+| Edit > Copy (Alt+Delete), Edit > Paste (Alt+Insert) | the screen-code → PETSCII → ASCII tables and the `$0277` keyboard-buffer feeder arrive with the machine that HAS a keyboard buffer (wave 3) |
+| Preferences > Advance frame (Alt+Shift+P) | there is no raster accumulator until the alarm model lands with the core (wave 2) |
 | Preferences > Settings... (Alt+O), Load/Save settings, Restore default settings | no resources file in this build: every setting this port has is on the Preferences menu itself |
 | Help > Browse manual, Command line options, Compile time features, Hotkeys | no manual on this floppy and no command line in this OS; the hotkeys are the menu captions |
 | Machine model other than C64 PAL (C64C, NTSC variants, Drean, SX, Japanese, GS, PET64, MAX) | one ROM set and one timing are carried: PAL 985248 Hz, 312 lines, 19,656 cycles a frame (`c64.h`) |
@@ -959,8 +1576,14 @@ by there being no 1541:
    only at `$0801` (`autostart-prg.c:383`);
 5. type `RUN\r` into `$0277` with the count at `$C6`.
 
-**`LOAD"*",8` answers `?DEVICE NOT PRESENT`.** That is the honest machine
-with no drive, and it is written here so nobody files it as a defect.
+**`LOAD"*",8` answers with the `?DEVICE NOT PRESENT` error.** That is the
+honest machine with no drive, and it is written here so nobody files it as a
+defect. **The screen LINE is deliberately not quoted** — the KERNAL prints its
+error text followed by ` ERROR`, and a `SEARCHING FOR *` line before it, so a
+shortened quote here and in `README.TXT` would invite the bug report it exists
+to prevent. There is no string to transcribe in the VICE tree: the ROM is the
+authority, and wave 2 is the first wave that can run it. Transcribe what the
+machine actually prints then, into both places.
 
 ### 11.4 Sound
 
@@ -974,10 +1597,11 @@ are driver verb protocols deliberately not wrapped for C.
 
 ## 12. The About panel
 
-`ovl_about_show` in `c64about.c` — 12 rows, modal, the machine **paused while
-it is up**, its close drawn as damage and not as a repaint (the `rcabout.c`
-shape; the close and hit test stay resident in `c64.c`). Reached from **Help >
-About VICE...** and from the kernel's own About item alike (`about_set`).
+`ovl_about_show` in `c64about.c` — **eight rows**, modal, the machine
+**paused while it is up**, its close drawn as damage and not as a repaint
+(the `rcabout.c` shape; the close and hit test stay resident in `c64.c`).
+Reached from **Help > About VICE...** and from the kernel's own About item
+alike (`about_set`).
 
 The rows, from `uiabout.c`, `configure.ac` and `README` 186–290:
 
@@ -985,16 +1609,66 @@ The rows, from `uiabout.c`, `configure.ac` and `README` 186–290:
 About VICE
 The Commodore 64 Emulator
 VICE 3.10
-<what this port is>
+os8088 port: PAL
 Copyright 1996-2025, VICE team
-GPL-2 or later
-ROMs Copyright Commodore Business Machines
+GPL-2 or later - see COPYING
+ROMs Copyright Commodore
+Business Machines
                                     [ OK ]
 ```
 
+**THE FOURTH ROW SAYS WHAT THE PORT IS AND NOTHING ABOUT HOW IT RENDERS.**
+PAL is a fact about the emulated MACHINE (§5.2's 63 × 312 = 19,656-cycle
+frame). Wave 1 shipped `os8088 port: PAL, 1bpp, no drive`, and LESSONS 8
+forbids both additions verbatim: `1bpp` is how the build draws and `no drive`
+is a thing it cannot do, and both belong in this document and in the greyed
+items that name them — where they already are, at §9.6 and at
+File > Attach disk image / Reset drive #8 (§11.2).
+
+**The panel is 336 wide — the C64 screen and its border — SNAPPED TO THE CELL
+GRID, and that is a redraw decision.** At 280 px in a 336-px box it left a
+28-px strip of C64 screen down each side, so an expose while the panel was up
+had to compose and blit every row the panel covered — all forty cells of each
+— and then paint the panel over the middle of what it had just drawn. 336
+makes *"the rows the panel covers"* exact horizontally, so `os88_paint` skips
+them entirely (`c64_hold_r0`/`c64_hold_r1`) and nothing under the panel is
+drawn at all: **322.0 ms for a whole expose with the panel up, 12 composed
+rows of 25** (and `os88_paint` checks the horizontal cover rather than
+assuming it, because a window narrower than 336 clamps the panel).
+
+**The GRID SNAP is the vertical half of the same statement**, and the review's
+second pass found it missing. `c64_hold_r0`/`r1` are `(y − screen_y) / 8` and
+C truncates toward zero, so an unsnapped panel left the partly covered cell
+row at each end *held but uncovered*: with the shipped geometry, six pixel
+rows above the panel and four below it were inside a held row and outside the
+panel, and `WF_OWNBG` means nobody whitens them — two full-width strips of
+whatever damaged them, until the panel closed. `ovl_about_show` now rounds the
+panel's height up to a whole cell and its origin down onto the grid.
+
+**AND IT IS REDRAWN ONLY WHEN THE DAMAGE REACHES IT.** The panel is 1 fill +
+2 frames + 9 `font_str` over 160 glyph cells — **~153 ms**, which the cost
+model used to charge as zero (§9.7) — so redrawing it on every paint made an
+expose with the panel up cost *more* than the full expose the hold rows exist
+to beat, and a menu closing over one corner of the window paid all of it. An
+expose that misses the panel is **16.5 ms** (§9.7).
+
+**`ovl_about_show` ANSWERS A STATUS AND THE LATCH IS THAT ANSWER.** 0 means a
+refused overlay load — no `C64.OVL` on the disk, a stale module, no heap —
+which `c64cmd.c`'s own rule calls a normal path. Latching `c64_abt = 1` over
+it left `os88_onwake` returning early with no panel on the glass, `os88_paint`
+holding rows for a panel that does not exist, and the click that clears it
+running `c64_blank_rect` over a rect never assigned: the machine looked
+frozen and the toast that said why had expired.
+
+**Its close is `c64_blank_rect` over the panel's own rect**, not
+`c64_sh_inval`. Wave 1's comment said "damage, not a repaint" on the line
+above a call that forced all 25 rows, the border and the status row — ~271 ms
+for a thirteen-row panel. Measured after: **138.3 ms, 13 composed rows.**
+
 It must fit CGA's ~136-row framed content box with OK inside the panel and
 the panel inside the content box — the constraint RUNCPM's panel is measured
-against in SPEC.md §74.4.
+against in SPEC.md §74.4 — and both the panel's width and its height are
+clamped to the live content box, with the OK button clamped inside the panel.
 
 ---
 
@@ -1034,7 +1708,11 @@ end of wave 2, with the whole core in.**
 
 **`CC_HAS_OVL` is on from the first commit** and `C64.OVL` exists from wave
 1 — the alternative is discovering at 55,000 that the code is not the kind
-that can move (LESSONS 5).
+that can move (LESSONS 5). Every file in the table above exists from wave 1,
+`c64cmd.c`, `c64load.c` and `c64about.c` included, and every one of them is a
+written prerequisite in the Makefile: make cannot see through a `#include` or
+a `%include`, and a file a later wave adds is a build the tree does not know
+about (LESSONS 9).
 
 ### 13.2 The planning figures
 
@@ -1094,7 +1772,14 @@ C64's own RAM (§3.5).
   instance yet. The first `ovl_*` call is made **from the first wake**, and
   its refusal prints **`Unable to load C64.OVL.`** in the status row *and*
   toasts, because a toast under a fullscreen window is not where the user is
-  looking (§9.8).
+  looking (§9.8). That call is `ovl_probe()`, whose body is `return 1`: the
+  point of it is the far call the RUNTIME makes on the way in, which is what
+  loads the module — asked once, for nothing, at the first moment there is an
+  instance to resolve it against, rather than discovered when a user picks a
+  menu item. Wave 1 did not have it, and every overlay wrapper's 0 returned
+  silently: `os88_oncmd` and `os88_about` now say the same sentence, because
+  every body in `c64cmd.c` returns 1 and a 0 therefore never came from one of
+  them.
 - `C64.O88`, `C64.OVL` and `C64.ROM` are **three files in one folder** on
   every disk they share (SPEC.md §19.2.1, SPEC.md §19.9) — §14.2.
 
@@ -1121,8 +1806,29 @@ wave 1 (LESSONS 1's rule about two programs sharing an ambition).
 
 Three geometries, each `os88disk.py --verify`'d in the recipe. Each carries
 **`C64.O88` + `C64.OVL` + `C64.ROM` in one folder**, plus a `README.TXT`
-naming the licence and pointing at `apps/c64/COPYING` and carrying the ROM
-copyright line (§1.2, §1.3).
+naming the licence and carrying the ROM copyright line (§1.2, §1.3).
+
+**AND `COPYING` TRAVELS WITH THE BINARY.** The floppy is the distributed form
+of a GPL-2-or-later program, `apps/runcpm`'s disks ship their upstream licence
+beside the CCP for the same reason, and `README.TXT` on this disk says the
+full licence text accompanies every release — which was not true of the disk
+that said it. `apps/c64/COPYING` is now a prerequisite of the image and a file
+on it, and `README.TXT` points at it *on the disk* as well as in the source
+tree.
+
+**Which geometries carry it, with the arithmetic:**
+
+| geometry | clusters | `C64.O88` + `C64.OVL` + `C64.ROM` + `README.TXT` | `COPYING` (17,989 B) | carries it |
+|---|---|---|---|---|
+| 1.44MB | 2,847 × 512 B | ~78 | 36 | **yes** |
+| 720KB | 713 × 1KB | ~40 | 18 | **yes** |
+| 360KB | 354 × 1KB | ~40 | 18 | **yes** — 58 of 354, and the disk has no other software on it |
+
+All three carry it; the 360KB disk has room because it carries nothing but
+this package. If a later wave puts anything else on the 360KB image and
+`COPYING` no longer fits, the rule is **the licence stays and the other thing
+goes**, and `README.TXT` on that geometry says where the text is. Nothing
+ships a GPL binary with the licence dropped.
 
 **No `.PRG` programs ship.** VICE's tree contains none to ship, every
 candidate needs its own licence check, and what is worth shipping depends on
@@ -1170,11 +1876,11 @@ something to load.
 
 | | what it does |
 |---|---|
-| `apps/c64/hosttest/c64uitest.c` | the whole program over a stub `os88.h` with a model of the glass and a **scripted core** (the real `c64io.c` behind it): drives the level keyboard press-poll-release, the alarm path, the autostart state machine, Copy/Paste and the About panel key by key; asserts glass == model == 1bpp shadow after every step; prints §9.7's cost table and the dirty-pages-per-wake counter. Run by `build.sh` before every build |
-| **`tools/c64ref.py`** | **an independent, pixel-level reference compositor.** Python, written from VIC-II documentation and VICE's `src/vicii/` as the authority, **not** from `c64band.inc`: it renders the same C64 memory to a 320×200 1bpp image, and the harness compares it **bit for bit** against what the package composed. This is what validates hires bitmap, multicolour, a custom character set, the cell transpose and sprite priority/expansion — a cell-identity glass model provably cannot |
+| `apps/c64/hosttest/c64uitest.c` | the whole program over a stub `os88.h` with a **PIXEL** model of the glass — `gfx_blit1` writes real pixels, and `gfx_scroll` moves them and fills the vacated rows with GARBAGE, which is what catches a flush that trusts a stale shadow for a row the scroll vacated. After every step it asserts, pixel for pixel over the whole 320×200 screen, that **the glass shows what the shadow says it shows**; it prints §9.7's cost table in milliseconds and the dirty-pages-per-wake counter, and it dumps the machine and the composed frame for `tools/c64ref.py`. Wave 2 adds the scripted core, the level keyboard and the alarm path behind it. Run by `build.sh` before every build. **The assembly half cannot run on the host**, so the routines it substitutes are transcriptions — which makes `c64ref.py` a check on the ALGORITHM and not on the 8086 encoding; the encoding is gated by `c64memtest.sh`, by `tests/c64band`'s identity rows and by the QEMU screendumps, all of which run the shipping text. It also **enforces the clip** — a pixel written outside an armed region while no clip is armed is a failure with its coordinates, which is what makes SPEC.md §11.3 checkable for the callbacks that are not `W_PAINT` — and it models `os88_task_alive` as a call that never returns, which is what makes File > Exit emulator's teardown checkable at all. **`--no-rom` is a second process**: `os88_main` decides the refusal surface once per launch, so the screen a user of a mis-copied disk actually sees needs its own run |
+| **`tools/c64ref.py`** | **an independent, pixel-level reference compositor.** Python, written from VIC-II documentation and VICE's `src/vicii/` as the authority, **not** from `c64band.inc`: it renders the same C64 memory to a 320×200 1bpp image, and the harness compares it **bit for bit** against what the package composed. This is what validates hires bitmap, multicolour, a custom character set, the cell transpose and sprite priority/expansion — a cell-identity glass model provably cannot. **`--lumcheck` is the other half**: the package's 16-byte luminance table against `vicii_colors_6569r5`'s own Y column, held here as parts per thousand straight off `vicii-color.c:441`, over all 256 ORDERED PAIRS — which is the only way to ask about §9.6's seven equal-luminance pairs in both directions, since a rendered frame carries one background at a time. The oracle derived its luminance from `vice.vpl` until this wave's fix pass, i.e. it kept the defect the package had already had removed |
 | `apps/c64/hosttest/c64cputest.asm` + `.sh` | §4.6's nine rows with their negative controls — `make c64cputest`, minutes, not in `build.sh` |
-| `apps/c64/hosttest/c64memtest.asm` + `.sh` | §3.6 — `c64mem.inc` **and** `c64band.inc`'s string loops under `SS ≠ DS` with an `ES` sentinel and an ES-not-restored negative control. Run by `build.sh` |
-| `tests/c64band` | `make c64bandbench` — the icount bench pricing `c64_band1` (text, bitmap, multicolour) **per cell and per call**, `c64_band_x2` at 8 and 16 rows, `c64_rowspan` and `c64_rowshift`. **§9.7's milliseconds and §9.8's tier table are written from these numbers**, and they become a new Set in PERFORMANCE.md |
+| `apps/c64/hosttest/c64memtest.asm` + `.sh` | §3.6 — `c64mem.inc` **and** `c64band.inc`'s cross-segment entry points under `SS ≠ DS` with an `ES` sentinel: the movers, `c64_rowspan`/`c64_rowcopy`, and **`c64_band1` composing out of both claims and `c64_rowsig` signing out of one**, which nothing called until this wave's fix pass. **Four negative controls, one per thing the discipline check claims to check** — ES, DF, BP and DS. The BP and DS ones are new because both checks were inoperative: BP was recorded AFTER the call and compared with itself, and the checker did its own bookkeeping through whatever DS the routine under test had left behind. Run by `build.sh` |
+| `tests/c64band` | `make c64bandbench` — the icount bench pricing `c64_band1` (text, bitmap, multicolour) **per cell and per call**, `c64_band_x2` at 8 and 16 rows, `c64_rowspan` and `c64_rowshift`. **§9.7's milliseconds and §9.8's tier table are written from these numbers**, and they become a new Set in PERFORMANCE.md. It **arms the clip** on its rerun callbacks (they are `W_ONKEY`/`W_ONCLICK`, not `W_PAINT`), which is both correct and 28% of the `FONT_RUN` bar; it **saves ES** around every blit, because a callback returns `ES = KERNEL_SEG`; and it **preflights `OSAPI_GFX_BLIT1`**, so a kernel that refuses bands prints `REFUSED (CF=1)` on the rows that contain one instead of timing a call that draws nothing |
 | QEMU + QMP | `make test TESTAPPS=build/c64.img`, `tools/mouse.py`, `tools/qmp.py sendkey`, `tools/shot.py --crop --zoom`; `VIDEO=cga` with `--screen 640x200`, `VIDEO=herc` with `tools/hercshot.py`. Every screendump assertion lives here |
 
 ### 14.6 Manual evidence — and the line between them
