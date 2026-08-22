@@ -675,17 +675,19 @@ Two values only:
 | `C64_RUN_SLICE` | the wall-slice cycle budget was spent between instructions |
 | `C64_RUN_JAM` | a `KIL`/`JAM` opcode; the machine stops, the status row says so, the window stays up |
 
-**AND ONE WAY OF REACHING IT IS AN OPEN DEFECT, FOUND IN WAVE 3 AND NOT FIXED
-THERE** (`docs/C64-PORT-PLAN.md`'s wave-3 record carries the reproduction).
-**Launching any second package jams the 6510**: with `NOTEPAD.O88` beside the
-`C64\` folder, launch C64, launch Note Pad, raise C64 again — the speed
-figures freeze for good, no keystroke echoes, and Preferences shows
-**Advance frame greyed**, which `c64_menu_state` does only for
-`c64_norom || c64_state == C64_ST_JAM`. It reproduces on the wave-2 build with
-none of wave 3's code exercised, it survives File > Reset machine CPU, and the
-`Main CPU: JAM at $XXXX` line never reaches the row either — two symptoms, and
-the second says the flush after a jam is not happening on this path. It wants
-an owner before wave 5 ships a disk that carries C64 beside every other app.
+**AND ONE WAY OF "REACHING" IT WAS NOT A JAM AT ALL — found in wave 3,
+fixed in the KERNEL** (`kernel/wm.inc` `wm_wake_sweep`, commit `0bc11cc`;
+`docs/C64-PORT-PLAN.md`'s wave-3 record carries the reproduction). Launching a
+second package — or any drag, or a launch from a Disk window — froze the speed
+figures for good with no keystroke echoing, and Preferences showed **Advance
+frame greyed**, which read as `C64_ST_JAM`. The 6510 had not jammed: the
+package's `EVT_WAKE` had been drained off the event ring by one of six kernel
+loops (`fm_dgstart`'s drag-detect among them) while `wm_wake`'s per-slot
+coalescing flag stayed set, so every later post answered "already queued" and
+the slice driver was never driven again — until a key or a click posted a
+wake through the same flag. The flag is now the promise and the idle arm
+sweeps it (SPEC.md §74.1); the wave-3 verifier saw the C64 and RUNCPM both
+keep counting across a second launch and a drag.
 
 **The line is VICE's and it is PERMANENT.** `Main CPU: JAM at $E5CF` — the
 format string of `src/maincpu.c:612` with `CPU_STR` from `src/6510core.c:45`
@@ -2309,13 +2311,13 @@ figures, never from a guess:
 | adapter / tier | fullscreen | wave |
 |---|---|---|
 | VGA 640×480 | **2× on BOTH axes**, 640×400 centred, all 25 rows — the band composed 16 rows deep | **3 — shipping** |
-| CGA 640×200 | **2× HORIZONTAL only**, 640 wide exactly — 400 rows do not fit in 200 — and §9.1's standing clamp gives **22 of the 25 rows** above the status row | **3 — shipping** |
+| CGA 640×200 | **2× HORIZONTAL only**, 640 wide exactly — 400 rows do not fit in 200 — and §9.1's standing clamp gives **21 of the 25 rows** above the status row (8 px of border top and bottom and the 10-row status strip leave 174 lines) | **3 — shipping** |
 | Hercules 720×348 | 2× horizontal, 640×200 centred, all 25 rows, 1× vertical | **3 — shipping** |
 | the `CPU_8086` tier | **1:1 centred**, whatever the adapter can hold | **1 — shipping** |
 
 **THE CGA ROW USED TO PROMISE MORE THAN A 200-LINE SCREEN CAN GIVE.** It read
 *"2×, exactly 640×200"*, and 640 wide exactly is true; the height is not.
-A 200-line screen carrying **22 cell rows of 8 pixels plus the status row** is
+A 200-line screen carrying **21 cell rows of 8 pixels plus the status row**, with `C64_BORDER` kept above and below (the clamp re-computes `n` so the bottom border survives), is
 what §9.1's standing rule produces — *"a clamped window shows fewer C64 rows
 and keeps its status row, rather than showing 25 rows it does not have and
 losing the row that explains itself"* — and 640×200 of picture would have been

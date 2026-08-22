@@ -1056,7 +1056,7 @@ for the three thunks the port needed and did not have:
 **Done when:**
 screendumps: Alt+D on `VIDEO=cga` (`mouse.py --screen 640x200`) shows the C64
 screen **640 pixels wide exactly** — 2× horizontal, which is the whole job on
-an adapter whose pixel is already 2:1, with C64-SPEC §9.1's standing clamp giving 22 of
+an adapter whose pixel is already 2:1, with C64-SPEC §9.1's standing clamp giving 21 of
 the 25 rows above the status row rather than the "filling 640×200" this line
 first promised, because a 200-line screen cannot hold 25 rows AND the status
 row (`build/port-shots/w3fix-19-fullscreen-2x-cga.png`) — and on VGA 640×400
@@ -1250,20 +1250,24 @@ SPEC.md §73.9's 55,000 trigger. The frequency move gave 655 bytes back and the
 status row's correctness fix spent about 560 of them; `C64-SPEC` §13.0.1
 carries that accounting rather than a headline.
 
-**And one defect found and NOT fixed here, because it is wave 2's and it is
-not small.** **Launching any second package JAMS the emulated 6510.** Boot
-`build/c64.img` with `NOTEPAD.O88` beside the `C64\` folder, launch C64 (the
-status row counts up normally), then launch Note Pad and raise C64 again: the
-speed figures freeze for good, no keystroke echoes, and Preferences shows
-**Advance frame greyed**, which `c64_menu_state` only does for
-`c64_norom || c64_state == C64_ST_JAM` — so the core has hit a `KIL`. It is
-**reproducible on the wave-2 build with none of wave 3's code exercised**
-(`build/port-shots/wave3-70-w2-a.png` … `wave3-73-w2-pref.png`, taken against
-`git checkout`ed sources), so it is not a wave-3 regression; and it survives
-File > Reset machine CPU. The `Main CPU: JAM at $XXXX` line never reaches the
-row either, which is a second symptom worth chasing beside the first. Left
-reported rather than fixed (LESSONS.md 12), and it wants an owner before
-wave 5 ships disks that carry C64 beside every other app.
+**And one defect found here that turned out to be the KERNEL's, and was
+fixed there** (`kernel/wm.inc` + `kernel/ui.inc`, `wm_wake_sweep`, its own
+commit `0bc11cc`). **Launching any second package looked like a JAM of the
+emulated 6510.** Boot `build/c64.img` with `NOTEPAD.O88` beside the `C64\`
+folder, launch C64 (the status row counts up normally), then launch Note Pad
+and raise C64 again: the speed figures froze for good, no keystroke echoed,
+and Preferences showed **Advance frame greyed**. It reproduced on the wave-2
+build with none of wave 3's code exercised (`build/port-shots/wave3-70-w2-a.png`
+… `wave3-73-w2-pref.png`), survived File > Reset machine CPU, and the
+`Main CPU: JAM at $XXXX` line never reached the row — which was the clue: no
+jam line because there was no jam. The package's wake had been drained off the
+event ring by a kernel loop and the coalescing flag left set, so nothing was
+ever delivered again (`C64-SPEC` §4.5 has the mechanism, SPEC.md §74.1 the
+rule). It is why "press Enter to get into BASIC" was ever a thing: the key
+posted the wake the launch had lost. RUNCPM had the same defect and the same
+fix; the verifier saw both keep running across a second launch and a drag.
+The fix crossed an image rung (119 → 120 steps; `KERN_BUDGET` spare 1,536 →
+1,024), and `docs/KERNEL-MEMORY.md` has not yet been updated for it.
 
 ### Wave 4 — Programs: Smart attach, autostart, bitmap modes and sprites
 

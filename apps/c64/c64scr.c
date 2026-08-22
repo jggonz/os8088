@@ -1171,7 +1171,7 @@ static int c64_geom(void *win)
      *   CGA 640x200       640 >= 640, 190 < 400      -> 2x HORIZONTAL only,
      *                                                   640 wide exactly, and
      *                                                   9.1's standing clamp
-     *                                                   gives 22 of 25 rows
+     *                                                   gives 21 of 25 rows
      *   Hercules 720x348  720 >= 640, 338 < 400      -> 2x horizontal, 640x200
      *                                                   centred, all 25 rows
      *   the CPU_8086 tier                            -> 1:1 centred (c64_can2x)
