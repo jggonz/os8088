@@ -131,6 +131,8 @@ VM286RUNCPM := $(CURDIR)/vm/286-runcpm
 VM386C64 := $(CURDIR)/vm/386-c64
 VMXTC64 := $(CURDIR)/vm/xt-c64
 VM286C64 := $(CURDIR)/vm/286-c64
+VMXTC64 := $(CURDIR)/vm/xt-c64
+VM286C64 := $(CURDIR)/vm/286-c64
 
 # VIDEO=cga|herc|vga forces the adapter instead of probing for it (SPEC.md
 # 39.1). The shipped images are always built without it, so they auto-detect;
@@ -792,7 +794,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc
         runcpm-src cpmsw rcz80test rcmemtest rczex 386-runcpm \
         xt-runcpm 286-runcpm \
         allapps rcbandbench \
-        c64 c64disk c64rom c64bandbench c64cputest c64memtest 386-c64 \
+        c64 c64disk c64rom c64bandbench c64cputest c64memtest 386-c64 xt-c64 286-c64 \
         checkdocs test-fast test-full test-soak clean clean-cc clean-marty distclean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
@@ -2673,17 +2675,28 @@ c64rom: $(BUILD)/c64-rom/C64.ROM
 # (the rule at the $(RUNCPMDISK) recipe above). COPYING is 17,989 bytes, which
 # is ~50 of a 360KB disk's 354 clusters - C64-SPEC §14.2 says which of the
 # three geometries carries it and what README.TXT says where it cannot.
-# Wave 1 builds the 1.44MB geometry; 720KB and 360KB land in the final wave
-# with the other two machines (C64-SPEC §14.2).
+# All three geometries (C64-SPEC §14.2): the same five files in one C64/
+# folder on each - ~62KB, so even the 360KB disk carries the licence. One
+# disk per 86Box machine: c64.img for the 386, c64720.img for the 286,
+# c64360.img for the XT (runcpmdisk's arrangement, §74.5).
 C64DISK := $(BUILD)/c64.o88 $(BUILD)/C64.OVL $(BUILD)/c64-rom/C64.ROM \
-           apps/c64/COPYING
-c64disk: $(BUILD)/c64.img
-
-$(BUILD)/c64.img: $(C64DISK) apps/c64/README.TXT tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 \
+           apps/c64/COPYING apps/c64/README.TXT tools/os88disk.py
+C64IMG = python3 tools/os88disk.py -o $(1) --size $(2) \
 	    C64:$(BUILD)/c64.o88 C64:$(BUILD)/C64.OVL \
 	    C64:$(BUILD)/c64-rom/C64.ROM C64:apps/c64/README.TXT \
 	    C64:apps/c64/COPYING
+c64disk: $(BUILD)/c64.img $(BUILD)/c64720.img $(BUILD)/c64360.img
+
+$(BUILD)/c64.img: $(C64DISK)
+	$(call C64IMG,$@,1440)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/c64720.img: $(C64DISK)
+	$(call C64IMG,$@,720)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/c64360.img: $(C64DISK)
+	$(call C64IMG,$@,360)
 	@python3 tools/os88disk.py --verify $@
 
 # THE COMPOSER'S BENCH (C64-SPEC §14.5, 9.7). The package's own
@@ -2734,6 +2747,19 @@ c64cputest: apps/c64/hosttest/c64cputest.asm apps/c64/hosttest/c64cputest.sh \
 386-c64: $(IMG) $(BUILD)/c64.img
 	@$(UNPROTECT) $(VM386C64)/86box.cfg
 	$(BOX) -P $(VM386C64) -N
+
+# ...and the XT and the 286, one per floppy geometry exactly as the RUNCPM
+# machines are (§74.5): vm/xt-runcpm / vm/286-runcpm with B: = the 360KB /
+# 720KB C64 disk and the uuid changed and nothing else. The XT is the
+# machine this OS is for, and it is where C64-SPEC §4.4's speed figure is
+# read - by a person, off the status row (C64-SPEC §14.6).
+xt-c64: $(IMG360) $(BUILD)/c64360.img
+	@$(UNPROTECT) $(VMXTC64)/86box.cfg
+	$(BOX) -P $(VMXTC64) -N
+
+286-c64: $(IMG) $(BUILD)/c64720.img
+	@$(UNPROTECT) $(VM286C64)/86box.cfg
+	$(BOX) -P $(VM286C64) -N
 
 # =============================================================================
 # FROTZ and its story floppy (SPEC.md 61) - ON DEMAND: `make zdisk`
