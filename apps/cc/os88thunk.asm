@@ -824,6 +824,27 @@ _os88_mouse:
     ret
 
 CC_T_AX   _os88_evq_pending,   OSAPI_EVQ_PENDING
+
+; int os88_key_down(int scan) - AL = a make scancode; out CF = 1 that key is
+; DOWN right now, 0 it is up; the slot keeps every register (SPEC.md 9.7).
+; ASKING IS WHAT ARMS IT: the first call clears and arms the map and always
+; answers "up", so ask once in os88_main() and ignore that answer - asking
+; first from a callback erases the make os88_onkey has already seen. It is
+; ADVICE, NOT AN ORACLE: a break code lost inside a long interrupts-off window
+; leaves that key reading down until it is pressed again, so bound what a
+; "yes" makes you do rather than trusting it to end on its own.
+_os88_key_down:
+    push bp
+    mov bp, sp
+    mov ax, [bp+4]
+    call OSAPI_KEY_DOWN
+    mov ax, 0                       ; MOV: CF is the answer, and the slot kept
+    jnc .up                         ; AL, so XOR would throw the carry away
+    inc ax
+.up:
+    pop bp
+    ret
+
 CC_T_A1   _os88_srand,         OSAPI_SRAND, ax
 CC_T_AX   _os88_rand,          OSAPI_RAND
 

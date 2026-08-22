@@ -115,14 +115,33 @@ static int c64_chr_isram;
 static int c64_mode;                        /* 0 = standard text (5.1) */
 static int c64_border_lit;
 
-/* --- the cost counters the harness prints (9.7) -------------------------- */
+/* --- the cost counters the harness prints (9.7) --------------------------
+ * THEY ARE NOT IN THE SHIPPING IMAGE. Nothing in apps/c64/*.c reads one:
+ * hosttest/c64uitest.c does, and it compiles this same C with -DC64_HOST
+ * (apps/c64/build.sh). Left unguarded they were ~14 bytes of bss and
+ * seventeen `inc word [mem]` in the flush's own path, on a package measured
+ * against 61,440 - and neither apps/cword nor apps/runcpm ships any such
+ * counter. Every increment below is guarded the same way, and the SmallerC
+ * build fails loudly on any that is missed. */
+#ifdef C64_HOST
 static unsigned c64_n_blit, c64_n_fill, c64_n_scroll, c64_n_cell;
 static unsigned c64_n_dirtypg, c64_n_rows;
+#endif
 
 /* --- the status row's last state, for the delta draw (10) ---------------- */
 static int c64_st_joy1, c64_st_joy2;        /* the direction masks last drawn */
 static int c64_st_flags;                    /* warp | pause << 1, last drawn */
 static int c64_st_shown;                    /* a message was on the row */
+static int c64_st_pct = -1;                 /* the two speed figures last */
+static int c64_st_fps = -1;                 /*   DRAWN - the row delta-draws */
+static char c64_st_cpu[14];                 /* `%7.0f` - the NUMBER only; the
+                                             * `% cpu` tail is a constant and
+                                             * is drawn once, with the row */
+static char c64_st_fpsb[14];                /* `%8.1f`, and ` fps` likewise */
+static char c64_st_cpup[14];                /* ...and what is ON THE GLASS, so
+                                             * a second only redraws the cells
+                                             * that actually changed */
+static char c64_st_fpsp[14];
 static int c64_st_ok;                       /* the row on the glass is ours */
 
 /* ==========================================================================
@@ -299,7 +318,12 @@ static void c64_sh_inval(void)
  * The page bitmap also sees the sources the window cannot: a RAM character
  * set today, bitmap and sprite data in wave 4. */
 static unsigned c64_wlo, c64_whi;
-static unsigned char c64_dpg[32];           /* this flush's page bitmap */
+/* THIS FLUSH'S PAGE BITMAP AND WRITE WINDOW, TAKEN IN ONE CALL.
+ * dst[0..31] is the bitmap, dst[32..35] the window's two words - the layout
+ * c64_dirty_take (c64mem.inc) fills, and the reason it exists: the same 36
+ * bytes used to come back through ~50 near calls into the scratch, ~1.8 ms a
+ * flush on the target, spent before a single pixel is decided. */
+static unsigned char c64_dpg[36];
 
 static int c64_pg_dirty(unsigned page)
 {
@@ -312,24 +336,14 @@ static void c64_dirty_scan(void)
     unsigned a0, a1;
     unsigned v;
 
-    c64_wlo = (unsigned)c64_scr_rd(C64_SCR_WLO)
-            | ((unsigned)c64_scr_rd(C64_SCR_WLO + 1) << 8);
-    c64_whi = (unsigned)c64_scr_rd(C64_SCR_WHI)
-            | ((unsigned)c64_scr_rd(C64_SCR_WHI + 1) << 8);
-    c64_scr_wr(C64_SCR_WLO, 0xFF);
-    c64_scr_wr(C64_SCR_WLO + 1, 0xFF);
-    c64_scr_wr(C64_SCR_WHI, 0);
-    c64_scr_wr(C64_SCR_WHI + 1, 0);
-    c64_scr_wr(C64_SCR_ANY, 0);
-
-    /* the bitmap FIRST, read and cleared under the same lock, so the matrix
-     * pass below can ask it per row */
-    for (b = 0; b < 32; b++) {
-        v = (unsigned)c64_scr_rd(C64_SCR_DIRTY + b);
-        c64_dpg[b] = (unsigned char)v;
-        if (v != 0)
-            c64_scr_wr(C64_SCR_DIRTY + b, 0);
-    }
+    /* THE WHOLE TAKE IS ONE CALL (c64mem.inc). The bitmap, the write window
+     * and the ANY byte are read into the package and the scratch is reset in
+     * the same pass, under the same lock - so nothing is lost between the
+     * core's write and this read (9.2) - and the matrix pass below asks the
+     * package's copy per row, at no call at all. */
+    c64_dirty_take(c64_dpg);
+    c64_wlo = (unsigned)c64_dpg[32] | ((unsigned)c64_dpg[33] << 8);
+    c64_whi = (unsigned)c64_dpg[34] | ((unsigned)c64_dpg[35] << 8);
 
     /* the matrix: the window's row range AND the row's own pages */
     if (c64_whi >= c64_wlo && c64_whi >= c64_mbase
@@ -354,7 +368,9 @@ static void c64_dirty_scan(void)
         for (bit = 0; bit < 8; bit++) {
             if ((v & (0x80 >> bit)) == 0)
                 continue;
+#ifdef C64_HOST
             c64_n_dirtypg++;
+#endif
             page = b * 8 + bit;
             a0 = (unsigned)page << 8;
             a1 = a0 + 255;
@@ -378,7 +394,7 @@ static void c64_frame_regs(void)
 {
     unsigned bank, cb, co;
 
-    bank = (unsigned)((~c64_cia2[0x00]) & 3) << 14;
+    bank = (unsigned)((~c64_cia[1][0x00]) & 3) << 14;
     c64_mbase = bank + ((unsigned)((c64_vic[0x18] >> 4) & 15) << 10);
     cb = ((unsigned)((c64_vic[0x18] >> 1) & 7) << 11);
     co = cb;
@@ -482,11 +498,42 @@ static void c64_watch_set(void)
 #define C64BENCH_SIG  1077              /* c64_rowsig over one row's sources */
 #define C64BENCH_X2   20190             /* c64_band_x2, eight rows */
 
+/* ...AND THE TWO THE HARNESS PRICES THE SCRATCH FROM, WHICH ARE MODELS AND
+ * NOT BENCH ROWS. tests/c64band measures c64band.inc; these two live in
+ * c64mem.inc and are computed from PERFORMANCE.md's own constants - 11 us for
+ * a near call + ret, and the body's clocks at 0.21 us each on a 4.77 MHz
+ * 8088, whose 8-bit bus adds 4 clocks to every word access:
+ *   a c64_scr_rd / c64_scr_wr thunk   ~125 clocks of body  ->  ~38 us
+ *   c64_dirty_take   rep movsw 16 + rep stosw 16 + shell   -> ~190 us
+ * They are here beside the bench figures because §9.7's table, this file's
+ * constants and hosttest/c64uitest.c change together or not at all. */
+#define C64COST_SCRACC 38               /* one scratch thunk call, us */
+#define C64COST_TAKE  190               /* ...and the whole take, in one */
+
 /* c64_flush_every (declared in c64.c) - host ticks between flushes, from the
  * tier and the numbers above. */
 static void c64_tier_init(void)
 {
+    int b;
+
     c64_flush_every = (os88_cpu() == OS88_CPU_8086) ? 2 : 1;
+    /* ...AND THE WALL SLICE IS SEEDED FROM THE SAME FACT, which C64-SPEC §4.4
+     * says and this did not do: the budget always began at C64_SLICE_MIN and
+     * walked up four slices at a time, so a 386 spent its first dozen wakes
+     * running 256-cycle slices - each with a full alarm query, a c64_run
+     * shell and a c64_advance over both CIAs, the VIC and the TOD around
+     * about a quarter of a millisecond of emulated work.
+     * apps/runcpm/runcpm.c:1215 is the shape: `512 << os88_cpu()` - 512 on an
+     * 8086, 1024 on a 286, 2048 on a 386 - clamped into this core's own
+     * range, which is narrower because the countdown is a SIGNED word (4.2).
+     * The adaptation still owns it from the first exhausted slice. */
+    b = 512 << os88_cpu();
+    if (b < C64_SLICE_MIN)
+        b = C64_SLICE_MIN;
+    if (b > C64_SLICE_MAX)
+        b = C64_SLICE_MAX;
+    c64_budget = b;
+    c64_fastn = 0;
 }
 
 /* ==========================================================================
@@ -565,11 +612,16 @@ static void c64_tier_init(void)
  * PLAIN and never lit, because grey does not survive on a black row (see
  * c64_status).
  *
- * AND A MESSAGE OWNS THE WHOLE ROW while it is up. The alternative, measured
- * above, is a seven-character message area, and the messages this port has to
- * show - `ScrollLock for joystick` (7.6), `Unable to load C64.OVL.` (13.3) -
- * are 23 characters. A message expires after ~5 seconds and the widgets come
- * back, so nothing is permanently hidden by it.
+ * AND A MESSAGE OWNS THE ROW'S 40 FIELD CELLS - NOT THE ROW. The alternative,
+ * measured above, is a seven-character message area, and the messages this
+ * port has to show - `C64.ROM missing - see README.TXT` (1.4),
+ * `Unable to load C64.OVL.` (13.3), `Cannot start the closer - try again.` -
+ * are 32, 23 and 36. The two LAMPS at 320 and 328 are drawn under a message
+ * as well, because `P` is the one indicator that exists to report the pause
+ * state and `Paused.` is a message: hiding it left the lamp off the glass for
+ * exactly as long as the machine was in the state it reports, and a machine
+ * the user stopped keeps its message until the next event (10.1). A message
+ * expires after ~5 seconds and the fields come back.
  *
  * TEN FILLS FOR TEN DOTS WAS 7.6 ms, and a whole status redraw was more than
  * two host ticks - for a row wave 2 wants to touch once a second. A dot is
@@ -585,7 +637,9 @@ static void c64_tier_init(void)
 #define C64_ST_JOYX 200                     /* 10 cells */
 #define C64_ST_J1X  280                     /* 2 cells */
 #define C64_ST_J2X  296                     /* 2 cells */
-#define C64_ST_DRVX 312                     /* 1 cell, greyed */
+#define C64_ST_DRVX 312                     /* 1 cell, drawn PLAIN white and
+                                             * never greyed (§10.3, and the
+                                             * twenty lines below) */
 #define C64_ST_WRPX 320                     /* 1 cell: the warp lamp, `W` */
 #define C64_ST_PAUX 328                     /* 1 cell: the pause lamp, `P` */
 
@@ -653,10 +707,14 @@ static void c64_st_band(int mask, int x, int y, int nb)
          * says something rather than nothing. */
         os88_set_color(mask ? OS88_WHITE : OS88_DGRAY);
         os88_gfx_fill(x, y + 1, x + nb * 8 - 1, y + 1);
+#ifdef C64_HOST
         c64_n_fill++;
+#endif
         return;
     }
+#ifdef C64_HOST
     c64_n_blit++;
+#endif
 }
 
 /* c64_status - the row, at `y`, delta-drawn. `y` is the LIVE bottom of the
@@ -664,17 +722,120 @@ static void c64_st_band(int mask, int x, int y, int nb)
  * wm_fit clamps the window and a fixed offset put this row - which carries
  * §1.4's permanent `C64.ROM missing` fact and every refusal - off the glass
  * entirely (build/port-shots/wave1-cga-launch.png). */
+/* c64_st_num - one right-justified unsigned into a fixed field, which is what
+ * `%7.0f` and `%8.1f` mean once the float is gone (10.2). `tenths` splits the
+ * last digit off behind a point. */
+static void c64_st_num(char *dst, int width, int v, int tenths)
+{
+    int i, d;
+
+    for (i = 0; i < width; i++)
+        dst[i] = ' ';
+    if (v < 0)
+        v = 0;
+    i = width - 1;
+    if (tenths) {
+        d = v % 10;
+        v = v / 10;
+        dst[i] = (char)('0' + d);
+        i--;
+        dst[i] = '.';
+        i--;
+    }
+    for (;;) {
+        dst[i] = (char)('0' + (v % 10));
+        v = v / 10;
+        if (v == 0 || i == 0)
+            break;
+        i--;
+    }
+}
+
+/* c64_st_field - draw only the cells of `now` that differ from what is on the
+ * glass, and remember what was drawn.
+ *
+ * THE ROW'S NUMBERS CHANGE A DIGIT AND WERE COSTING TWELVE CELLS EACH. Both
+ * fields were rebuilt in place and re-run whole every second - 24 glyph cells
+ * and 2 call floors, ~23 ms, permanently, about ten times what a keystroke
+ * costs - and nine of those cells were the two literal tails that never
+ * change. The tails are now drawn once with the row and this walks the span
+ * between the first and last differing cell, which is c64_rowspan's idea one
+ * size down. A typical second is one or two cells. */
+static void c64_st_field(int x, int y, char *now, char *prev, int n, int force)
+{
+    int i, f, l;
+    char save;
+
+    if (force) {
+        f = 0;
+        l = n - 1;
+    } else {
+        f = -1;
+        l = -1;
+        for (i = 0; i < n; i++) {
+            if (now[i] != prev[i]) {
+                if (f < 0)
+                    f = i;
+                l = i;
+            }
+        }
+        if (f < 0)
+            return;                         /* the field did not move */
+    }
+    save = now[l + 1];                      /* font_run wants a NUL, and the
+                                             * buffer is 14 for an 8-cell
+                                             * field, so l+1 is always inside */
+    now[l + 1] = 0;
+    os88_font_run(x + f * 8, y, now + f, OS88_WHITE, OS88_BLACK);
+    now[l + 1] = save;
+    for (i = f; i <= l; i++)
+        prev[i] = now[i];
+}
+
+/* c64_st_lamps - the two labelled lamps, `W` and `P` (§10.2). The letter IS
+ * the label and is always drawn; the cell is inverted while the latch is on,
+ * and that inversion is the LED.
+ *
+ * IT IS A ROUTINE OF ITS OWN BECAUSE A MESSAGE MUST NOT HIDE IT. The row used
+ * to return straight after drawing a message, so `P` - the one indicator that
+ * exists to report the pause state - was off the glass for exactly as long as
+ * the machine was paused: Alt+P answers `Paused.`, and a machine the user
+ * stopped keeps its message until the next event (§10.1), so the lamp was
+ * missing for the whole of the state it reports
+ * (build/port-shots/wave2fix2-07-paused-msg-persists.png). The message now
+ * owns the row's 40 FIELD cells and the two lamps keep their own two, on both
+ * paths. */
+static void c64_st_lamps(int ox, int y, int flags)
+{
+    os88_font_run(ox + C64_ST_WRPX, y + 1, "W",
+                  (flags & 1) ? OS88_BLACK : OS88_WHITE,
+                  (flags & 1) ? OS88_WHITE : OS88_BLACK);
+    os88_font_run(ox + C64_ST_PAUX, y + 1, "P",
+                  (flags & 2) ? OS88_BLACK : OS88_WHITE,
+                  (flags & 2) ? OS88_WHITE : OS88_BLACK);
+}
+
 static void c64_status(int ox, int y, int w)
 {
-    int msg, joy1, joy2, flags, full;
+    int msg, joy1, joy2, flags, full, sp;
 
-    msg = (c64_msg[0] != 0) ? 1 : (c64_norom ? 2 : 0);
+    /* THREE PERMANENT ROW STATES, NOT ONE. A message expires after five
+     * seconds; `C64.ROM missing` and a JAMMED CPU do not, because neither is
+     * a thing that stops being true (§1.4 says so for the first, §4.5 for the
+     * second). Without the jam case the glass showed a dead machine and an
+     * idle one identically - the ordinary widget row, `0% cpu  0.0 fps`, with
+     * nothing saying the CPU had stopped (build/port-shots/wave2-05-jam.png).
+     * The message still goes up first: it is how the jam ARRIVES. */
+    msg = (c64_msg[0] != 0) ? 1
+        : (c64_state == C64_ST_JAM) ? 3
+        : (c64_norom ? 2 : 0);
     joy1 = c64_joyswap ? c64_joy2 : c64_joy1;
     joy2 = c64_joyswap ? c64_joy1 : c64_joy2;
     flags = (c64_warp ? 1 : 0) | (c64_pause ? 2 : 0);
 
+    sp = (c64_pct != c64_st_pct || c64_fps10 != c64_st_fps) ? 1 : 0;
     full = !c64_st_ok || msg != c64_st_shown;
-    if (!full && (msg != 0 || (joy1 == c64_st_joy1 && joy2 == c64_st_joy2
+    if (!full && (msg != 0 || (!sp && joy1 == c64_st_joy1 && joy2 == c64_st_joy2
                                && flags == c64_st_flags)))
         return;                             /* nothing on the row moved: the
                                              * flush calls this every time and
@@ -688,32 +849,59 @@ static void c64_status(int ox, int y, int w)
          * arrive in final polarity, which is why they exist (os88.h:442). */
         os88_set_color(OS88_BLACK);
         os88_gfx_fill(ox, y, ox + w - 1, y + C64_STATH - 1);
+#ifdef C64_HOST
         c64_n_fill++;
+#endif
         c64_st_shown = msg;
         c64_st_ok = 1;
     }
 
-    if (msg == 1) {
-        os88_font_run(ox, y + 1, c64_msg, OS88_WHITE, OS88_BLACK);
-        return;
-    }
-    if (msg == 2) {
-        /* a permanent fact, not a message that expires: the disk is what it
-         * is until someone changes it */
-        os88_font_run(ox, y + 1, "C64.ROM missing - see README.TXT",
-                      OS88_WHITE, OS88_BLACK);
+    if (msg != 0) {
+        /* THE MESSAGE OWNS THE 40 FIELD CELLS AND THE LAMPS KEEP THEIR TWO.
+         * msg == 2 is §1.4's permanent fact - the disk is what it is until
+         * someone changes it - and msg == 3 is a jammed CPU, VICE's own line
+         * at 22 glyphs (§4.5); neither expires. Every string here fits 40
+         * cells (c64_say clamps c64_msg to that), so nothing reaches the two
+         * cells at 320 and 328. */
+        const char *t;
+        if (msg == 1)
+            t = c64_msg;
+        else if (msg == 2)
+            t = "C64.ROM missing - see README.TXT";
+        else
+            t = c64_jamline;
+        os88_font_run(ox, y + 1, t, OS88_WHITE, OS88_BLACK);
+        c64_st_lamps(ox, y, flags);
+        c64_st_flags = flags;                /* ...so the delta path below
+                                              * does not have to redraw them
+                                              * when the message comes down */
         return;
     }
 
+    if (full || sp) {
+        /* THE SPEED WIDGET'S TWO STRINGS, folded onto this one row and
+         * LEFTMOST, as uistatusbar.c appends them - and they are REAL:
+         * `% cpu` is emulated cycles over 985,248 and `fps` is emulated VIC
+         * FRAMES, so at 100 %% it reads 50.1 (10.2). They delta-draw against
+         * what was last on the glass, so a machine holding one speed costs
+         * nothing a second. */
+        c64_st_num(c64_st_cpu, 7, c64_pct, 0);
+        c64_st_num(c64_st_fpsb, 8, c64_fps10, 1);
+        c64_st_field(ox + C64_ST_CPUX, y + 1, c64_st_cpu, c64_st_cpup, 7, full);
+        c64_st_field(ox + C64_ST_FPSX, y + 1, c64_st_fpsb, c64_st_fpsp, 8, full);
+        if (full) {
+            /* the two literal tails, drawn ONCE with the row: they are 9 of
+             * the 24 cells this used to repaint every second and not one of
+             * them has ever changed */
+            os88_font_run(ox + C64_ST_CPUX + 7 * 8, y + 1, "% cpu",
+                          OS88_WHITE, OS88_BLACK);
+            os88_font_run(ox + C64_ST_FPSX + 8 * 8, y + 1, " fps",
+                          OS88_WHITE, OS88_BLACK);
+        }
+        c64_st_pct = c64_pct;
+        c64_st_fps = c64_fps10;
+    }
     if (full) {
-        /* the speed widget's two strings, folded onto this one row and
-         * LEFTMOST, as uistatusbar.c appends them. Wave 1 has no core, so both
-         * are honestly zero; wave 2 computes them from emulated cycles and
-         * emulated VIC frames, out of two-word counters (10.2). */
-        os88_font_run(ox + C64_ST_CPUX, y + 1, "      0% cpu",
-                      OS88_WHITE, OS88_BLACK);
-        os88_font_run(ox + C64_ST_FPSX, y + 1, "     0.0 fps",
-                      OS88_WHITE, OS88_BLACK);
         os88_font_run(ox + C64_ST_JOYX, y + 1, "Joysticks:",
                       OS88_WHITE, OS88_BLACK);      /* uistatusbar.c:1763 */
         /* THE DRIVE NUMBER IS DRAWN PLAIN, AND §10.3 SAYS SO WITH THE
@@ -740,15 +928,8 @@ static void c64_status(int ox, int y, int w)
         c64_st_band(joy1, ox + C64_ST_J1X, y + 3, 2);
     if (full || joy2 != c64_st_joy2)
         c64_st_band(joy2, ox + C64_ST_J2X, y + 3, 2);
-    if (full || flags != c64_st_flags) {
-        /* the two lamps: the letter is the label, the inversion is the LED */
-        os88_font_run(ox + C64_ST_WRPX, y + 1, "W",
-                      (flags & 1) ? OS88_BLACK : OS88_WHITE,
-                      (flags & 1) ? OS88_WHITE : OS88_BLACK);
-        os88_font_run(ox + C64_ST_PAUX, y + 1, "P",
-                      (flags & 2) ? OS88_BLACK : OS88_WHITE,
-                      (flags & 2) ? OS88_WHITE : OS88_BLACK);
-    }
+    if (full || flags != c64_st_flags)
+        c64_st_lamps(ox, y, flags);
     c64_st_joy1 = joy1;
     c64_st_joy2 = joy2;
     c64_st_flags = flags;
@@ -855,20 +1036,28 @@ static void c64_border(int ox, int oy, int w, int sbot, int stat_y)
     os88_set_color(c64_border_lit ? OS88_WHITE : OS88_BLACK);
     if (sy > oy) {
         os88_gfx_fill(ox, oy, ox + w - 1, sy - 1);
+#ifdef C64_HOST
         c64_n_fill++;
+#endif
     }
     if (sbot <= stat_y - 1) {
         os88_gfx_fill(ox, sbot, ox + w - 1, stat_y - 1);
+#ifdef C64_HOST
         c64_n_fill++;
+#endif
     }
     if (sbot > sy) {
         if (sx > ox) {
             os88_gfx_fill(ox, sy, sx - 1, sbot - 1);
+#ifdef C64_HOST
             c64_n_fill++;
+#endif
         }
         if (sx + C64_SCRW < ox + w) {
             os88_gfx_fill(sx + C64_SCRW, sy, ox + w - 1, sbot - 1);
+#ifdef C64_HOST
             c64_n_fill++;
+#endif
         }
     }
 }
@@ -1032,6 +1221,27 @@ static void c64_flush(void *win)
     nrows = c64_gnrows;
     c64_sig_ok = 0;
 
+    /* --- THE MESSAGE DEADLINE, AT THE TOP, BEFORE ANY BRANCH CAN RETURN ---
+     * It used to live down beside the status row, AFTER the ROM-less branch
+     * below returns - so on a disk with no C64.ROM nothing ever cleared
+     * c64_msg and the first menu command a user picked owned the row for the
+     * rest of the session, hiding §1.4's permanent `C64.ROM missing - see
+     * README.TXT` behind `Warp mode on.` for ever (c64_status picks msg == 1
+     * over msg == 2). The JAM half of the same rule worked only because a
+     * jammed machine is not c64_norom and its flush reached the far end.
+     * There is exactly one writer of c64_msg (c64_say) and this is its one
+     * reader of the clock: it belongs where EVERY flush passes through it.
+     *
+     * os88_ticks() is a 16-bit 18.2 Hz counter that wraps about once an hour
+     * (os88.h:612), so `ticks > until` takes a message down AT ONCE when it
+     * was raised in the last five seconds before the wrap - the difference is
+     * compared, as c64.c's flush gate compares it. */
+    if (c64_msg[0] != 0
+        && (unsigned)(os88_ticks() - c64_msg_until) < 0x8000u)
+        c64_msg[0] = 0;                     /* and `msg != c64_st_shown` in
+                                             * c64_status is what redraws the
+                                             * widgets under it */
+
     /* the machine that was never started: the fact, on the glass, in the
      * kernel's own face because the C64's is in the file that is missing */
     if (c64_norom) {
@@ -1058,7 +1268,9 @@ static void c64_flush(void *win)
                           OS88_WHITE, OS88_BLACK);
             os88_font_run(sx, sy + 76, "ROMs. Put C64.ROM in this folder.",
                           OS88_WHITE, OS88_BLACK);
+#ifdef C64_HOST
             c64_n_fill++;
+#endif
         }
         c64_dirty_any = 0;
         c64_sh_ok = 1;
@@ -1118,7 +1330,9 @@ static void c64_flush(void *win)
          * rather than only counting the calls. */
         if (os88_gfx_scroll(sx, sy, sx + C64_SCRW - 1, sy + nrows * 8 - 1,
                             k * 8) == 0) {
+#ifdef C64_HOST
             c64_n_scroll++;
+#endif
             os88_memcpy(c64_sh, c64_sh + C64_X320(k),
                         C64_X40((nrows - k) * 8));
             /* the k vacated rows: gfx_scroll leaves them for us, so they are
@@ -1207,8 +1421,10 @@ static void c64_flush(void *win)
                   c64_mbase + C64_X40(i),
                   c64_col + C64_X40(i),
                   c64_chr_seg, c64_chr_off, c64_mode, c64_vic[0x21] & 15);
+#ifdef C64_HOST
         c64_n_cell += (unsigned)(l - f + 1);
         c64_n_rows++;
+#endif
         /* the shadow's SIGNATURE is updated HERE, with the row that was just
          * recomposed, and nowhere else. Re-signing all 25 rows at the end of
          * every flush cost 25 x C64BENCH_SIG = 25.8 ms - half a host tick on
@@ -1253,7 +1469,9 @@ static void c64_flush(void *win)
                 c64_say("No bands here - text only.");
             }
         } else {
+#ifdef C64_HOST
             c64_n_blit++;
+#endif
         }
         c64_rowcopy(c64_sh + C64_X320(i) + df, c64_bnd + df, dl - df + 1);
     }
@@ -1271,17 +1489,10 @@ static void c64_flush(void *win)
     c64_sh_ok = 1;
 
     /* --- the status row, delta-drawn ------------------------------------
-     * THE DIFFERENCE, NOT THE VALUES. os88_ticks() is a 16-bit 18.2 Hz
-     * counter that wraps about once an hour (os88.h:612), so `ticks > until`
-     * takes a message down AT ONCE when it was raised in the last five
-     * seconds before the wrap - and this is the one place a refusal is meant
-     * to be readable under a fullscreen window (§9.8's both-routes rule).
-     * c64.c's own flush gate already compares the difference; so does this. */
-    if (c64_msg[0] != 0
-        && (unsigned)(os88_ticks() - c64_msg_until) < 0x8000u)
-        c64_msg[0] = 0;                     /* and `msg != c64_st_shown` in
-                                             * c64_status is what redraws the
-                                             * widgets under it */
+     * The message's deadline was examined at the TOP of this function, before
+     * the ROM-less branch could return past it (§10.1). This is the one place
+     * a refusal is meant to be readable under a fullscreen window (§9.8's
+     * both-routes rule). */
     /* AND IT IS CALLED UNCONDITIONALLY. Gating it on c64_st_dirty made the
      * delta path unreachable from the product: nothing but c64_say, Swap
      * joysticks, c64_blank_rect and c64_sh_inval ever raised that flag, and

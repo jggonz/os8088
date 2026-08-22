@@ -199,6 +199,69 @@ _c64_scr_wr:
     ret
 
 ; -----------------------------------------------------------------------------
+; void c64_dirty_take(unsigned char *dst) - THE WHOLE OF WHAT A FLUSH HAS TO
+; READ OUT OF THE CORE'S SCRATCH, in ONE call: 36 bytes into the package's own
+; memory, and the scratch reset in the same pass.
+;
+;   dst[0..31]  the 256-page dirty bitmap (C64-SPEC §9.2), and the scratch's
+;               copy is zeroed
+;   dst[32..33] the write window's LOW word, and the scratch's is reset to
+;               $FFFF
+;   dst[34..35] ...its HIGH word, reset to 0
+;   and C64_SCR_ANY is cleared, because this IS the read of it
+;
+; WHY IT EXISTS. c64_dirty_scan read all of that a BYTE AT A TIME through
+; _c64_scr_rd / _c64_scr_wr: 32 bitmap reads, up to 32 clears, four window
+; reads and five window writes - about fifty near calls whose bodies are ten
+; instructions each. PERFORMANCE.md prices a bare near call + ret at 11 us and
+; the 8088 fetches at 4.34 clocks a byte, so each of those is ~35 us: ~1.8 ms
+; a flush, comparable to the WHOLE 3.8 ms of §9.7's `one changed cell` row,
+; spent before a single pixel is decided - and invisible to a cost model that
+; counts only gfx calls. Two `rep` instructions over 32 bytes is ~150 us.
+; PERFORMANCE.md's rule is that a redraw is priced by the calls it makes.
+;
+; The flush holds the gfx lock across this, so nothing is lost between the
+; core's write and this read (9.2).
+; -----------------------------------------------------------------------------
+_c64_dirty_take:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push ds
+    push es
+    cld
+    mov bx, [_c64_m+CM_RAMSEG]      ; ...through the PACKAGE's DS, BEFORE it
+                                    ; goes: [_c64_m] is a package-DS reference
+    mov di, [bp+4]                  ; dst is a package pointer, so ES = DS
+    mov ax, ds
+    mov es, ax
+    mov ds, bx                      ; ...AFTER every [bp+n] is read: [bp+n] is
+                                    ; SS-relative, so DS may go now
+    mov si, C64_SCR_BASE + C64_SCR_DIRTY
+    mov cx, 16
+    rep movsw                       ; cc8086:allow both segments loaded here
+                                    ; on purpose and both restored below
+    mov si, C64_SCR_BASE + C64_SCR_WLO
+    movsw                           ; the window's two words follow the bitmap
+    movsw                           ; in dst[32..35]
+    mov es, bx                      ; ES = the RAM claim: the same pass CLEARS
+    mov di, C64_SCR_BASE + C64_SCR_DIRTY
+    xor ax, ax
+    mov cx, 16
+    rep stosw                       ; cc8086:allow ES is the RAM claim, loaded
+                                    ; two lines above and restored below
+    mov word [C64_SCR_BASE + C64_SCR_WLO], 0xFFFF   ; DS is the claim here too
+    mov [C64_SCR_BASE + C64_SCR_WHI], ax
+    mov [C64_SCR_BASE + C64_SCR_ANY], al
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
 ; int c64_rom_rd(unsigned off) - a byte of the ROM claim, off 0..20479, in
 ; C64.ROM's fixed layout (C64-SPEC §1.4): KERNAL at 0, BASIC at $2000,
 ; CHARGEN at $4000.
@@ -212,6 +275,59 @@ _c64_rom_rd:
     mov al, [es:bx]
     xor ah, ah
     pop es
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; unsigned c64_div32(unsigned hi, unsigned lo, unsigned d) - (hi:lo) / d.
+;
+; The two-word counters of C64-SPEC §10.2 have to be divided to become a
+; percentage and a frame rate, and "no long" is a C RULE and not a no-32-bit
+; rule (Decision 19): SmallerC cannot express this and the 8086 does it in one
+; instruction. A quotient that will not fit in 16 bits, and a divisor of zero,
+; both answer 0xFFFF rather than raising #DE - a status row is not worth a
+; trap, and the caller clamps.
+; -----------------------------------------------------------------------------
+_c64_div32:
+    push bp
+    mov bp, sp
+    mov dx, [bp+4]
+    mov ax, [bp+6]
+    mov bx, [bp+8]
+    or bx, bx
+    jz .over
+    cmp dx, bx
+    jae .over
+    div bx
+    pop bp
+    ret
+.over:
+    mov ax, 0xFFFF
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; unsigned c64_muldiv(unsigned a, unsigned b, unsigned d) - (a * b) / d, with
+; the product kept in 32 bits. `frames * 182 / elapsed` overflows 16 bits at
+; five seconds and `%` of a real 6510 needs the same shape; the 8086 does both
+; in two instructions and a 16-bit C cannot express either. Overflow and a
+; zero divisor answer 0xFFFF, as c64_div32 does.
+; -----------------------------------------------------------------------------
+_c64_muldiv:
+    push bp
+    mov bp, sp
+    mov ax, [bp+4]
+    mov bx, [bp+8]
+    or bx, bx
+    jz .over
+    mul word [bp+6]
+    cmp dx, bx
+    jae .over
+    div bx
+    pop bp
+    ret
+.over:
+    mov ax, 0xFFFF
     pop bp
     ret
 

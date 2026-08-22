@@ -38,6 +38,15 @@
  * says what it did and nothing claims to have run anything.
  * ==========================================================================*/
 
+/* AND ITS 0 MEANS ONE THING ONLY: THE RUNTIME REFUSED THE LOAD.
+ * c64cmd.c's header rule - every body returns 1, so a 0 at a call site can
+ * only be no C64.OVL on the disk, a stale module or no heap - applies here
+ * too, and this function used to break it: its four own refusals, each of
+ * which has ALREADY been said on the status row, also answered 0. A caller
+ * therefore could not act on the answer even if it read it, and os88_onfile
+ * did not read it at all - so a runtime refusal on Smart attach reached the
+ * toast only, under a WF_FULL window where the toast is not where the user is
+ * looking (9.8, 13.3). */
 static int ovl_load_prg(const char *name, unsigned size_lo)
 {
     static char msg[C64_MSGMAX];
@@ -45,7 +54,8 @@ static int ovl_load_prg(const char *name, unsigned size_lo)
 
     if (size_lo < 3) {
         c64_say("PRG too short.");
-        return 0;
+        return 1;                            /* SAID. 0 is the runtime's
+                                             * refusal alone (the header) */
     }
     /* CEILING IN 16 BITS, and this is not the obvious `(size + 1023) >> 10`:
      * `size_lo` is `unsigned` and that is SIXTEEN bits on the target, so the
@@ -57,13 +67,15 @@ static int ovl_load_prg(const char *name, unsigned size_lo)
     seg = os88_mem_claim((int)kb);
     if (seg == 0) {
         c64_say("PRG: no heap for it.");
-        return 0;
+        return 1;                            /* SAID. 0 is the runtime's
+                                             * refusal alone (the header) */
     }
     got = os88_file_read_seg(name, seg, size_lo);
     if (got != size_lo) {
         os88_mem_free(seg);
         c64_say("PRG: cannot read it.");
-        return 0;
+        return 1;                            /* SAID. 0 is the runtime's
+                                             * refusal alone (the header) */
     }
     /* the two-byte load address, little-endian, and the refusal 11.3 states:
      * a file whose end passes $FFFF is refused with the fact */
@@ -81,7 +93,8 @@ static int ovl_load_prg(const char *name, unsigned size_lo)
     if (n != 0 && (unsigned)(n - 1) > (unsigned)(0xFFFFu - load)) {
         os88_mem_free(seg);
         c64_say("PRG runs past $FFFF.");
-        return 0;
+        return 1;                            /* SAID. 0 is the runtime's
+                                             * refusal alone (the header) */
     }
     c64_zzcopy_in(load, seg, 2, n);
     os88_mem_free(seg);

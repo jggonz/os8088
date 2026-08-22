@@ -2627,6 +2627,10 @@ C64INC := apps/c64/c64cpu.inc apps/c64/c64mem.inc apps/c64/c64band.inc
 C64HOST := apps/c64/build.sh apps/c64/hosttest/os88.h \
            apps/c64/hosttest/c64uitest.c apps/c64/hosttest/c64memtest.asm \
            apps/c64/hosttest/c64memtest.sh tools/c64ref.py $(C64INC)
+# ...and the core's own gate, which is NOT in build.sh (it takes minutes) but
+# is a prerequisite of nothing either - `make c64cputest` runs it on demand,
+# the way `make rcz80test` does. Listed here so the file names are in one
+# place: apps/c64/hosttest/c64cputest.asm, c64cputest.sh and tools/c64dec.py.
 $(BUILD)/c64.raw.asm: $(C64SRC) $(BUILD)/.c64-hostchecks
 $(BUILD)/c64.bin: $(C64INC) apps/c64/icon.inc
 
@@ -2708,15 +2712,15 @@ $(BUILD)/c64band.img: $(BUILD)/c64bband.o88 tools/os88disk.py
 # THE TWO BOOT-SECTOR GATES (C64-SPEC §3.6, 4.6). c64memtest runs the
 # SHIPPING c64mem.inc and c64band.inc on a real x86 with SS != DS and an ES
 # sentinel, with negative controls, and IS in build.sh because it takes
-# seconds. c64cputest is the core's nine rows and is NOT, because it takes
+# seconds. c64cputest is the core's twelve rows and is NOT, because it takes
 # minutes - the rcz80test precedent. Wave 1 ships the first; the second
 # arrives with the core it gates (docs/C64-PORT-PLAN.md wave 2).
 c64memtest:
 	apps/c64/hosttest/c64memtest.sh
 
-c64cputest:
-	@echo "c64cputest: the core's nine-row gate lands with the core (wave 2)."
-	@echo "            C64-SPEC §4.6 says what the nine rows are."
+c64cputest: apps/c64/hosttest/c64cputest.asm apps/c64/hosttest/c64cputest.sh \
+            tools/c64dec.py $(C64INC)
+	apps/c64/hosttest/c64cputest.sh
 
 # THE 386 C64 MACHINE (C64-SPEC §14.3): vm/386-runcpm with B: =
 # build/c64.img and the uuid changed and NOTHING else, for the reason

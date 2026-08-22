@@ -130,6 +130,7 @@ dependency (§1.3).
 | keyboard map: PC key → (row, col, shiftflag) of the 8×8 matrix, the `!LSHIFT`/`!RSHIFT`/`!LCBM`/`!LCTRL` positions, RESTORE on Page_Up, Tab = C=, Escape = RUN/STOP | `data/C64/gtk3_sym.vkm` (152 entries; transcribed whole to a static table keyed by ascii 32..126 and by scan code for the rest) |
 | the keyboard's LEVEL model: a key is in the matrix while it is down, released when it goes up | `src/keyboard.c` (`keyboard_key_pressed`/`keyboard_key_released` → the matrix `c64cia1.c` reads); os8088 side: SPEC.md §9.7 `OSAPI_KEY_DOWN`, `kernel/mouse.inc:1438` `kbd_track` (break code clears the bit) |
 | the 16 colours, their order and their LUMINANCE ladder | `src/vicii/vicii-color.c` — `vicii_colors_6569r5` (`:441`), which is what VICE 3.10 as shipped compiles and selects for a PAL C64: `TOBIAS_COLORS` is defined (`:52`) and `PEPTO_COLORS`/`COLODORE_COLORS`/`MARKO_LUMAS` are not (`:43-49`), so the switch at `:672` picks it for `VICII_MODEL_6569`. **NOT `data/C64/vice.vpl`**: an external palette file is loaded only when `${CHIP}ExternalPalette` is set and that resource factory-defaults to 0 (`src/video/video-resources.c:393`; `pepto-pal` at `src/vicii/vicii-resources.c:170` is only the name it would take). To 1bpp by luminance on every adapter in this port; the EGA-16 map kept in `c64scr.c` for the day colour bands exist — §9.6 |
+| the JAM line on the status row, `Main CPU: JAM at $E5CF` — VICE's own format string with its three leading and trailing padding spaces (the `D'OH!` dialog's, not this row's) dropped; 22 glyphs | `src/maincpu.c:612` (`"   " CPU_STR ": JAM at $%04X   "`) + `src/6510core.c:45` (`CPU_STR` = `Main CPU`); the dialog it is shown in is `src/arch/gtk3/widgets/jamdialog.c:72` |
 | window title `VICE (C64)` | `src/arch/gtk3/ui.c:1842` (`"VICE (%s)"`, `machine_get_name()`) + `src/c64/c64.c:179` (`machine_name = "C64"`) |
 | status bar: message area, `Tape:` (greyed), `Joysticks:` two 5-dot indicators, drive 8 with its track counter ` 18.5` (greyed), the speed widget's two labels `%7.0f%% cpu` and `%8.1f fps` (`CPU_DECIMAL_PLACES` 0, `FPS_DECIMAL_PLACES` 1) folded onto one row, the warp and pause LEDs as two labelled lamps `W` and `P`, inverted when lit (§10.2); Recording, Volume, CRT and Mixer dropped with the row-width fact stated in §10.3 | `src/arch/gtk3/uistatusbar.c` (line 1403 track counter, 1961/1971 volume, 2594 recording, 2670/2679 CRT/Mixer; the LEDs are created at `:2607-2616` and appended by `statusbar_append_led` `:2339-2362` into `led_row_grid` — a SEPARATE row at column 0, not the speed widget's cell — each carrying a text label, `statusbar_led_widget_create("warp:", …)` / `("pause:", …)`), `src/arch/gtk3/widgets/statusbarspeedwidget.c:572`, `:653`, `:467` |
 | About box: `About VICE`, `The Commodore 64 Emulator`, version 3.10, `Copyright 1996-2025, VICE team`, GPL-2-or-later, the ROM copyright line | `src/arch/gtk3/uiabout.c` (title, model string `Commodore 64`), `configure.ac` (`vice_version` 3.10), `README` lines 186–290 (copyright notice, "The ROM files ... are Copyright © by Commodore Business Machines"), `COPYING` (copied verbatim to `apps/c64/COPYING`) |
@@ -183,13 +184,23 @@ the fast path and the slow path alike. They are the 6510's processor port
   re-evaluates the bank map at once**, together with the fetch segment and
   the next-boundary word (§4.3). The core never executes one instruction
   under a stale map.
-- **Read-back of `$01`.** Bits 0–2 read what was written where `$00` makes
-  them outputs, and the pulled-up level otherwise. There is no datassette in
-  this build (§11.2), so bit 4 (cassette sense) reads **1**; bits 3 and 5
-  read back what was written when they are outputs and 0 when they are not;
-  bits 6–7 are unconnected and read 0. Stated, because a program that reads
-  `$01` to discover the bank sees this table and not a real 6510's decay
-  behaviour.
+- **Read-back of `$01`, and it is ONE formula.** VICE's is
+  `data_read = (data | ~dir) & (data_out | pullup)` (`c64pla.c:55`) with the
+  C64's `pullup` = `$17` (`c64mem.c:222`), which on a machine with no
+  datasette reduces exactly to **`(data & dir) | (~dir & $17)`**: an OUTPUT
+  bit reads what was written to it, and an INPUT bit reads the pull-up where
+  the board has one and **0** where it has none. So bits 0–2 (the bank lines,
+  pulled up) read 1 as inputs; **bit 3** (cassette write) has no pull-up and
+  reads **0**; bit 4 (cassette sense) is pulled up and stays 1 because
+  `tape_sense` is 0 with no datasette (`c64pla.c:66`); **bit 5** (the motor)
+  is cleared for an input unconditionally (`c64pla.c:61`) and reads **0**;
+  bits 6–7 are unconnected and their capacitor has discharged
+  (`c64mem.c:325-335`), so they read 0 as inputs. **Wave 2's fix pass found
+  the code using `~ddr & $1F`**, which pulled bits 3 and 5 HIGH as inputs —
+  two bits of the register the KERNAL reads to find the datasette, and two
+  bits this section already described correctly. Stated, because a program
+  that reads `$01` to discover the bank sees this table and not a real 6510's
+  decay behaviour.
 
 Underneath the port, RAM `$0000`/`$0001` still exists and is still what the
 VIC and any DMA-less read of those bytes would see; this port keeps the two
@@ -253,12 +264,29 @@ memory, BELOW the six vector bytes**: `$FFFA-$FFFF` (NMI, RESET, IRQ) stay
 real RAM, because a program that banks the KERNAL out (`$01 = $35`) puts its
 own vectors there and the core fetches them from RAM in that map.
 
-| what | §  |
-|---|---|
-| the 32-byte page dirty bitmap | §9.2 |
-| the emulated-cycle counter (two words) and the current slice deadline | §4.2, §4.4 |
-| the next-mapping-boundary-above-PC word and the cached fetch `ES` | §4.3 |
-| the pending IRQ/NMI flags | §4.4 |
+| offset | what | § |
+|---|---|---|
+| `$00` (32 bytes) | the page dirty bitmap | §9.2 |
+| `$20` | `BLO` — the low edge of the region `ES` is biased for | §4.3 |
+| `$22` | `CARRY` — cycles `c64_cut()` took out of the countdown | §4.4 |
+| `$24` | `DEAD` — **the countdown**, the one hot counter | §4.2 |
+| `$26` | `BOUND` — the high edge of that region | §4.3 |
+| `$28` | the cached fetch `ES` | §4.3 |
+| `$2A` | the IRQ level and the NMI edge | §4.4 |
+| `$2C`, `$2E` | the write window | §9.2 |
+| `$30` | "the core wrote something" | §9.2 |
+| `$32`, `$34` | the watch range | §9.2 |
+| `$36`–`$38` | the three bank-map bytes the core reads above `$A000` | §3.3 |
+
+**Wave 2 amended two rows of that table.** The *hot* counter is the
+COUNTDOWN and nothing else — one `sub` and one `sbb` per instruction — and
+the 32-bit total of emulated cycles the status bar divides (§10.2) is a
+two-word counter in the package's own C, folded **once per `c64_run` call**
+and therefore not hot at all. Putting it in the scratch would have cost two
+near calls per figure to read it back for no gain. And the three bank-map
+bytes moved IN, from the package's bss: the core reads one of them on every
+access above `$A000`, DS-relative with no segment override, which is the
+whole reason the scratch exists.
 
 That address is chosen because the KERNAL's vectors sit there **in ROM** in
 every map that runs KERNAL code, and nothing in the KERNAL or BASIC uses the
@@ -270,6 +298,13 @@ is:
   RAM the emulated machine wrote.
 - **A write to `$FFC0-$FFF9` is dropped.** The write path already tests the
   high byte; only the `$E0-$FF` branch pays the extra compare.
+
+A third consequence surfaced in wave 2 and belongs here: **anything that
+loads a whole 64KB image into the claim lands ON TOP of the scratch** and has
+to clear it afterwards. `os88_main` does (`c64_scratch_clear`), and so does
+`hosttest/c64cputest.asm` after it reads Dormann's 64KB fixture in — the first
+run without it took an NMI nobody raised, because the fixture's own bytes at
+`$FFCA` became the pending-interrupt flags.
 
 The mask table the dirty bitmap needs is `cs:`-resident and **read-only** —
 reads of a translated page are not the TCG hazard, only writes are.
@@ -310,19 +345,34 @@ shim (§13.1).
 | P (N, Z, C) | `AH` | `lahf` layout, so the host flags carry them |
 | P (V, D, I, B) | `CH` | NEVER `cs:` statics — a write into the package's own code page is the TCG slow path of LESSONS 13, and V moves on every ADC/SBC/BIT |
 | X | `CL` | indexed addressing is `add bl,cl / adc bh,0`, whose carry IS the page-cross penalty §4.2 charges — so `CH` is free for the flags at no cost |
-| Y | `DX` | `DH` held 0 |
+| Y | `DL` | and **`DH` is the memory-data byte and a free scratch**: Y is indexed with `add bl,dl / adc bh,0`, so nothing ever needs `DX` as a word, and a read that had to return through a saved register would have needed one more push per access |
 | PC | `SI` | |
-| S | `DI` | the stack page is `[di+0x100]` |
+| S | `DI` | held as the FULL stack address `$0100 + S`, so a push is `mov [di],v / dec di / or di,0x0100` and the page wrap is one instruction rather than a mask and an add |
 | dispatch scratch / effective address | `BX` | |
-| the fetch scratch / boundary compare | `BP` | `ds:` override where it addresses memory |
+| the cdecl frame, and 12 bytes of scratch below it | `BP` | `[bp+disp]` addresses **SS**, deliberately (CLAUDE.md's SS ≠ DS rule): the decimal ADC/SBC of §4.2 needs more temporaries than this plan has registers, and a push inside a handler would put them where a fetch cannot reach them |
 | RAM | `DS` | the 64KB claim |
 | the fetch segment | `ES` | §4.3 |
 
 The dispatch is a 256-entry table: `xor bh,bh / mov bl,[es:si] / inc si /
 shl bx,1 / jmp [cs:bx+tab]`.
 
-The cycle counter and the boundary word are **not** registers and **not**
-bss: they are in the emulated machine's own scratch (§3.5).
+The countdown and the boundary words are **not** registers and **not** bss:
+they are in the emulated machine's own scratch (§3.5), and because `DS` is
+the C64's RAM for the whole of `_c64_run` each of them is a bare
+`[disp16]` with no segment override.
+
+**`P` is a real 6502 `P` byte in `c64_m`, in both directions.** The core
+unpacks it into `AH`/`CH` on entry and packs it back on exit — eight
+instructions each way, ONCE PER CALL — so the C and the harness read the
+register the machine has rather than this file's layout. PHP, PLP, BRK, RTI
+and interrupt entry go through the same two helpers.
+
+**The stack wrap is `and di,0x00FF / or di,0x0100` and not `and di,0x01FF`.**
+The one-line form is wrong and silently so: `0x0200 & 0x01FF` is `0x0000`,
+not `0x0100`, so a pull with `S = $FF` read byte zero of the address space
+and left every later push writing at `$0000` downwards. BASIC boots straight
+through that defect — the KERNAL never wraps the stack — and Klaus Dormann's
+"proper stack wrap around" test at `$0D89` is what caught it (§4.6).
 
 ### 4.2 Time is 6510 CYCLES
 
@@ -334,6 +384,19 @@ branch-page-cross penalties**, and the core decrements **one cycle counter**
 
 That counter is **both** the wall-clock slice budget (§4.4) and the device
 clock (§6.3). It is the only time in this machine.
+
+**It is a SIGNED word, and that sets the cap on every budget in this port.**
+The check between instructions is `cmp word [DEAD],0 / jle` — two
+instructions, and no per-instruction test of anything else — so a budget
+above 32,767 arrives negative and the core expires before its first fetch.
+`C64_SLICE_MAX` is 16,384 for that reason and the CPU harness runs Dormann in
+30,000-cycle passes for the same one.
+
+The countdown is checked **between** instructions and never inside one, so
+`c64_run` may overrun what it was asked for by at most one instruction's
+cost. What was NOT spent is left in `c64_m.cnt` — negative by up to seven —
+and the caller's `ran = asked - cnt` is therefore exact rather than
+approximate. Nothing is lost or double-counted at a slice boundary.
 
 A count of *control transfers* is not a cycle count and is not used as one:
 an unrolled straight-line sequence and a tight branch loop execute the same
@@ -355,12 +418,22 @@ not merely at control transfers.** Falling through from `$9FFF` to `$A000`,
 visible bank with no branch in sight, and an instruction *beginning* at
 `$9FFE` fetches operand bytes from the other side. So:
 
-- The core keeps a **"next mapping boundary above PC" word** in its scratch
-  (§3.5). The boundaries are `$A000`, `$C000`, `$D000`, `$E000` and the wrap
-  to `$0000`.
-- **One `cmp` per instruction fetch** against that word. When PC reaches or
-  passes it, the map is consulted, `ES` and the boundary word are recomputed.
-  Operand fetches use the same guarded fetch.
+- The core keeps the **region `ES` is currently biased for** in its scratch
+  (§3.5) — a LOW edge and a HIGH edge, `BLO` and `BOUND`. The boundaries are
+  `$A000`, `$C000`, `$D000`, `$E000` and the last byte of the address space.
+- **Two `cmp`s per fetch**, and the second one is the amendment wave 2 made
+  to this paragraph. A ceiling alone is only correct while PC increases: a
+  `JMP` back from `$E000` to `$0400` leaves PC BELOW the biased region, not
+  above it, and a one-compare guard would have fetched the KERNAL's bias over
+  RAM with no warning. The alternative — re-biasing on every control transfer
+  — costs twenty instructions on the most frequent path in the machine, where
+  a range check costs two. When PC leaves the region, the map is consulted
+  and `ES`, `BLO` and `BOUND` are recomputed. Operand fetches use the same
+  guarded fetch.
+- **A fetch from `$0000`/`$0001`, and from `$D000-$DFFF` with I/O mapped,
+  takes the slow path** and leaves the region EMPTY, so every fetch there
+  re-enters the same routine. That is what a fetch out of a register file
+  costs and what it is meant to cost.
 - **Every write to `$00` or `$01`** recomputes both (§3.2).
 - **Every cdecl call out of the core saves and reloads the cached `ES`**
   (§3.4) — the C ABI clobbers it.
@@ -374,26 +447,81 @@ VICE's own structure (`src/alarm.c`, `maincpu.c`): **run to the next device
 event, service it, compute the next one.** There is no fixed quantum
 anywhere in this machine.
 
-**The alarm.** Before each run, `c64io.c` computes *cycles to the next event*
-as the minimum of: CIA1 timer A underflow, CIA1 timer B underflow, CIA2
-timer A, CIA2 timer B, the VIC raster compare, the end of the current raster
-line (so `$D012` steps), the end of the frame, and the CIA TOD tick. The core
-runs until the cycle counter reaches that deadline and then makes **one cdecl
-call to `_c64_alarm()`**, which services what is due, raises IRQ or NMI on
-the pending flags, and answers the next deadline. Interrupt entry is taken
-between instructions on the pending flags.
+**The alarm.** Before each run, `c64_alarm_next()` computes *cycles to the
+next event* as the minimum of: CIA1 timer A underflow, CIA1 timer B
+underflow, CIA2 timer A, CIA2 timer B, the VIC raster compare and the end of
+the frame. The core runs exactly that far and RETURNS; `c64_advance(ran)`
+then moves every device phase by what actually ran, and the loop computes the
+next deadline. `os88_onwake` is that loop (§13.1).
+
+**Two amendments wave 2 made to this paragraph, and the reason for each.**
+
+- *The service is a return, not a call out of the core.* The core keeps the
+  whole 6510 in registers; a cdecl call from inside it has to save and reload
+  every one of them, which is the same work as the entry/exit shell — so a
+  call out would cost what a return costs and be harder to read. The
+  structure, the phase retention and the absence of a quantum are unchanged;
+  only who is on top of the stack is.
+- *The end of a raster LINE is not an alarm.* `$D012` is computed from the
+  cycle counter when it is READ, which is exact and costs nothing; a per-line
+  alarm would have ended the run 312 times a frame for a register most
+  programs never touch. The raster COMPARE and the frame end are alarms, so a
+  raster interrupt still fires on the line it was armed for and in the right
+  order against every CIA interrupt.
+
+**Interrupts are taken between instructions, and the cost of that is zero
+per instruction.** The core checks the pending flags at the top of `_c64_run`
+and at the three instructions that can UNMASK a line — `CLI`, `PLP` and
+`RTI`. Everything else that can raise one is an alarm, and an alarm is what
+ended the run, so an alarm-raised IRQ is taken with no latency at all. The
+one exception is an I/O write that unmasks a flag already set (`STA $DC0D`),
+which happens inside a run: `c64_cut()` ends that run at once and moves the
+unspent countdown into `CARRY`, so ending early costs nothing in the cycle
+accounting. **AND THE I FLAG'S ONE-INSTRUCTION TIMING IS CARRIED, in both
+directions** — this paragraph used to state the opposite as a deviation, and
+the fix pass retired it. VICE records the transition in the last opcode's info
+and the interrupt check reads it (`6510core.c:1052` CLI, `:1493` PLP, `:1760`
+SEI, `:445`, `mainc64cpu.c:702`): an IRQ *unmasked* by CLI or PLP is taken
+only after ONE more instruction, and an IRQ that was visible under the OLD I
+value is still taken at the end of a SEI or a PLP that masks it. RTI has
+neither delay and VICE says why at `:1652`. The delay is implemented by
+ENDING THE RUN after that one instruction rather than by a flag the dispatch
+has to test — the countdown is set to 1, the unspent budget moves into `CARRY`
+exactly as `c64_cut` does, and the C's slice loop re-enters `c64_run`, whose
+first act is the interrupt check. **The one corner, stated**: where the
+countdown is already 1 or less the run is ending anyway and the IRQ is taken
+at the top of the next run with no instruction in between — one instruction
+early, at a slice boundary the C chose, and the alternative is a compare on
+the hottest path in the machine.
+
+**BRK IS SEVEN CYCLES AND IT IS CHARGED ONCE** (`6510core.c:998`). It is an
+opcode, so the dispatch charges its table entry; entering the vector path
+charged seven more, and **14** is what a BRK cost until the fix pass. A
+machine boots straight through that, and §4.6's cycle row could not see it
+until the row became table-driven.
 
 **The wall slice.** Separately and independently, the core is given a **raw
 cycle budget** for how long it may hold the UI task. RUNCPM's structure,
 exactly (SPEC.md §74.1):
 
-- seeded from `os88_cpu()` (`OSAPI_CPU_INFO`, slot `0x0188`);
+- seeded from `os88_cpu()` (`OSAPI_CPU_INFO`, slot `0x0188`) — `512 <<
+  os88_cpu()` clamped into the range below, which is
+  `apps/runcpm/runcpm.c:1215`'s own line. **The fix pass found this sentence
+  true of the plan and false of the code**: the budget always began at 256 and
+  walked up four slices at a time, so the first dozen wakes of a 386 ran
+  256-cycle slices with a full alarm query, a `c64_run` shell and a
+  `c64_advance` over both CIAs, the VIC and the TOD around a quarter of a
+  millisecond of emulated work;
 - **256 to 16,384 cycles**, doubled when four slices fit inside one host
   tick, halved when one slice spans two tick boundaries;
-- **only a genuinely EXHAUSTED slice adapts** — a slice that ends early
-  (paused, jammed, the alarm handler stopped it) leaves the estimate alone.
-  LESSONS 13's finding: without that, ordinary idling walks the budget to its
-  cap and the next busy slice is a second of stalled UI task.
+- **only a genuinely EXHAUSTED slice adapts** — a wake that did not spend
+  its budget leaves the estimate alone. On this machine there is no blocking
+  console read to end a slice early (a C64 always has something to do), so
+  the two ways a wake can end without spending its budget are the machine
+  being PAUSED and the machine having JAMMED, and the harness drives both.
+  LESSONS 13's finding: without the rule, typing into a paused machine walks
+  the budget to its cap over a hundred wakes that ran no cycles at all, and
+  the first wake after the resume is a second of stalled UI task.
 
 **The floor is never a whole jiffy.** Every device phase — the cycle counter,
 each timer's remaining count, the raster position, the TOD accumulator — is
@@ -401,9 +529,40 @@ retained across slices and across wakes, so a slice may end anywhere. At the
 8% of a real C64 that this port may turn out to run at, a whole emulated
 jiffy would be ~200 ms of UI task; a 256-cycle floor is ~3 ms.
 
-The wake is re-posted only **while the machine is running**; pause and a JAM
-stop it, and `os88_onkey` / `os88_onclick` kick it so a wake the full event
-ring dropped cannot park a running machine.
+The wake is re-posted only **while the machine is running**, and PAUSE is
+part of that condition, not only `c64_state`. Alt+P sets `c64_pause` and
+leaves the state `C64_ST_RUN`, so a re-post condition written on the state
+alone ran nothing, drew nothing and re-posted anyway — SPEC.md §74.1's own
+sentence: *"a handler that always re-posts spins the UI task at ~1,400 wakes
+a second"*, here for a machine the user deliberately stopped, at ~1 ms of far
+calls and a task switch per empty round trip. It is one function,
+`c64_wants_wake()`, after `apps/runcpm/runcpm.c:847`: something dirty, an
+outstanding Advance frame, or a running and un-paused machine. **A MESSAGE
+BEING UP IS NOT ON THAT LIST**, and §10.1 records why: it was the first term,
+so a stopped machine spun the shared UI task for the whole five-second life of
+every message with nothing to do inside the wake, which is this rule inverted.
+A JAM stops it too, and `os88_onkey` / `os88_onclick` / `os88_oncmd` kick it
+so a wake the full event ring dropped cannot park a running machine.
+
+**EVERY 16-BIT COUNTER COMPARED AGAINST A CYCLE COUNT IS COMPARED UNSIGNED.**
+`unsigned` is 16 bits here and a CIA counter's whole range is legal: `$FFFF`
+is the reset-default latch AND the standard free-running-timer idiom
+(`LDA #$FF / STA $DC04 / STA $DC05 / LDA #$11 / STA $DC0E`). Cast to `int`
+that is `-1`, so `while (n > (int)c) { n -= (int)c + 1; … }` was true for
+every n and subtracted NOTHING — an **infinite loop** inside `c64_advance`,
+inside `os88_onwake`, on the UI task, raising an underflow flag for ever; any
+latch in `$8000..$FFFE` was the same defect one step slower, because a
+negative `(int)c` INCREASES n. In the scheduler the same wrap made
+`(int)(c64_ta[k] + 1)` either 0 or negative, which always won the minimum, so
+`c64_alarm_next()` answered 1 and the driver ran the core **one cycle at a
+time** — a full alarm query, run shell and `c64_advance` per emulated cycle.
+The rules: **compare unsigned**, and **a counter at or above `$7FFF` is
+skipped rather than cast**, because the frame end is never more than 19,656
+cycles away so such a counter can never be the nearest alarm. Neither showed
+on the host (`int` is 32 bits there and nothing wraps) or in the core's gate,
+which never uses a latch above `$7FFF`; the harness now carries the row with
+a `short`/`unsigned short` model of the target's widths as its negative
+control.
 
 ### 4.5 What `_c64_run` answers
 
@@ -414,6 +573,17 @@ Two values only:
 | `C64_RUN_SLICE` | the wall-slice cycle budget was spent between instructions |
 | `C64_RUN_JAM` | a `KIL`/`JAM` opcode; the machine stops, the status row says so, the window stays up |
 
+**The line is VICE's and it is PERMANENT.** `Main CPU: JAM at $E5CF` — the
+format string of `src/maincpu.c:612` with `CPU_STR` from `src/6510core.c:45`
+and VICE's dialog padding dropped (§2's row). It goes up as a message,
+because that is how it arrives, and then it **stays**: `C64_ST_JAM` is a
+permanent status-row state beside §1.4's `C64.ROM missing`, for the same
+reason — neither is a thing that stops being true, and a five-second message
+left a dead machine and an idle one showing the identical widget row
+(`build/port-shots/wave2-05-jam.png` was that defect;
+`wave2fix-18-jam-permanent.png` is the row eight seconds after the message
+expired). §10.1 carries the rule for the row.
+
 Alarms and I/O are **calls out of the core, not exits from it** (§3.4, §4.4),
 so there is no mid-instruction exit and no caller ever has to resume a
 half-executed opcode.
@@ -423,30 +593,122 @@ half-executed opcode.
 `apps/c64/hosttest/c64cputest.asm` + `.sh`, run by **`make c64cputest`**
 (minutes, like `make rcz80test`; deliberately *not* in `build.sh`): the
 **shipping `c64cpu.inc`**, in a boot sector, in raw QEMU, under `SS ≠ DS`.
-It is not a Dormann wrapper — Dormann is one row of it:
+It is not a Dormann wrapper — Dormann is one row of it. **There are TWELVE
+rows.** `docs/C64-PORT-PLAN.md`'s Decision 22 says nine; the tenth is the
+split at row 10 below (decimal `ADC`/`SBC` came out of Dormann's row and
+became a row of its own when the fixture for it turned out not to exist as a
+binary), and rows 11 and 12 are the fix pass's, each written because an
+outside review found the row that was supposed to cover it claiming families
+it did not execute. The rows:
 
-1. **Klaus Dormann's `6502_functional_test` and `6502_decimal_test`** to
-   their success loops (fetched at pinned SHA-256s, **never committed**).
+1. **Klaus Dormann's `6502_functional_test`** to its success trap at `$3469`
+   — the 65,536-byte binary, fetched at a pinned SHA-256 and **never
+   committed**, read straight into the C64's RAM and started at `$0400`. The
+   judgement is where the program counter SETTLES, which is how the test
+   documents itself; the harness prints the address and the machine's
+   registers, so a failure names its trap.
 2. **Each of the seven bank maps** (§3.3): the right byte visible in each
    4KB region for each `$01` value.
 3. **`$0000` and `$0001`**: DDR-derived banking, the read-back rules of §3.2,
    and a re-bank taking effect on the very next fetch.
 4. **Reads, writes and FETCHES at `$9FFF`, `$A000`, `$BFFF`, `$C000`,
    `$CFFF`, `$D000`, `$DFFF`, `$E000`** — including an instruction that
-   begins on one side of a boundary and takes its operand from the other
-   (§4.3).
+   begins on one side of a boundary and takes its OPERAND from the other
+   (§4.3), which is the case the first draft of this row claimed and did not
+   contain: it put two whole instructions either side of `$A000` and tested
+   no other boundary at all. Seven cases now: the two-instruction one, an
+   immediate straddling `$9FFF`/`$A000`, one straddling `$BFFF`/`$C000`, a
+   `JMP` whose HIGH byte comes from `$D000` — a register file, so the same
+   case is the **slow I/O fetch** — one straddling `$DFFF`/`$E000` between
+   CHARGEN and the KERNAL, a **backward `JMP`** from the KERNAL into RAM
+   (§4.3's LOW edge, which a ceiling-only guard cannot see), and a **`$01`
+   remap in the middle of the instruction stream**, where the program banks
+   BASIC out and the next instruction must come from the RAM underneath.
 5. **Real I/O stub returns**, not park-at-FAIL: the stubs answer values the
    test then checks, so the cdecl convention, the `DS` swap and the `ES`
    save/reload are all exercised rather than merely forbidden.
 6. **`ES`/`DS` restoration checks** after every call out.
 7. **IRQ and NMI entry**, including entry while a bank switch is pending.
-8. **The illegal opcodes** `6510core.c` implements.
+8. **The illegal opcodes** `6510core.c` implements — and it EXECUTES every
+   family it names, which the first draft did not: it contained LAX, SAX and
+   DCP, so the missing decimal ARR and the wrong ANE magic constant both
+   passed it for a whole wave. ARR in both modes with its flags, ANE, ALR,
+   ANC, SBX and the four stores of row 11 are all driven, each with an answer
+   only that opcode produces.
 9. **Cycle totals per opcode family** against `6510core.c`'s table, page-cross
-   and taken-branch penalties included (§4.2).
+   and taken-branch penalties included (§4.2). **It is table-driven**, and
+   that is the fix pass's: three shapes (LDA immediate, LDA `abs,X` either
+   side of a page, one branch) left almost every family unchecked, and the
+   branch in it started at `$0800` so its "page cross" never crossed. Eighteen
+   entries now — every addressing mode of LDA, a store, three RMW forms, the
+   stack pair, `JSR`/`RTS`, both `JMP`s, a branch taken, not taken and
+   **taken across a real page boundary at `$08FD`** — plus **BRK's seven
+   cycles** and an IRQ entry's seven, which is the row that catches §4.4's
+   double charge.
+10. **Decimal ADC and SBC over all 262,144 cases** — every accumulator, every
+   operand, carry both ways, both instructions — against **`tools/c64dec.py`**,
+   an independent implementation of the documented NMOS rules written in
+   Python, exactly as `tools/c64ref.py` stands to the composer. The answer it
+   hands the harness is four 16-bit checksums, because 262,144 expected
+   results will not fit in a boot sector and any one wrong result changes the
+   checksum it belongs to.
 
-**Every row carries a negative control** — a deliberately wrong flag
-finisher, a deliberately stale `ES`, a deliberately missing branch penalty —
-and the harness must report failure for each, or it is proving nothing.
+   **This row replaces "Dormann's decimal test" and the reason is a fact
+   about the world.** `6502_decimal_test` is published as SOURCE only: the
+   project's `bin_files/` carries the functional test's binary and the 65C02
+   one and nothing else. An independent reference over the same space is what
+   that row was asking for, and this is it.
+
+   **AND IT IS A STATED DEPARTURE FROM THE WAVE'S DECISION, recorded here
+   where the decision is.** The user's brief for wave 2 named the decimal
+   fixture as *"fetched at a pinned SHA-256, never committed"*, and
+   `tools/c64dec.py` is neither: it is a model written in this tree. A
+   reference written by the same hand as the core is weaker evidence than a
+   fetched one — that is the trade, taken because no fetched one exists —
+   and the mitigation is that `c64dec.py` implements the documented NMOS
+   rules directly and shares no line with `c64cpu.inc`'s decimal path, which
+   is the same footing `tools/c64ref.py` stands on for the composer.
+
+11. **The four unstable stores** — SHA, SHX, SHY and SHS. The mask comes from
+   the **unindexed** base's high byte plus one (`6510core.c:1769`, `:1797`,
+   `:1806`, `:1815`) and a page cross puts the VALUE in the target's high
+   byte (`STORE_ABS_SH_*`, `:699-711`). This port used the INDEXED high byte
+   — one more than VICE's whenever the index carried — and did not corrupt
+   the address at all, which §4's header called a stated deviation and which
+   VICE compiles. Five cases, each with a value the old code could not
+   produce, and one where the store lands at `$0008` instead of `$2008`.
+12. **What an interrupt puts on the stack, and what RTI takes off.** Row 7
+   asks whether the handler ran and whether `I` is set afterwards, and both
+   pass with the pushed bytes in any order and `B` either way. This row reads
+   `$01FD`, `$01FC` and `$01FB` by name — PC high, PC low, then the status
+   byte with **`B` clear** for an IRQ and an NMI (`6510core.c:456`) and
+   **`B` set** for BRK — checks `S` landed at `$FA`, and then brings a BRK
+   back through `RTI` to its own `PC + 2` with the stack restored.
+
+**Every row carries a negative control** and the harness FAILS if a control
+passes:
+
+| row | the control |
+|---|---|
+| 1 Dormann | `ADC #` dispatched to `ORA #` — it must not reach `$3469` |
+| 2 bank maps | the map row is shifted |
+| 3 `$00`/`$01` | the re-bank does not take effect |
+| 4 the boundary | the bank above it is made RAM |
+| 5 I/O returns | the stub answers a constant |
+| 6 `ES`/`DS` | the reload is NOPped out of the shipping text at runtime |
+| 7 IRQ/NMI | nothing is pending |
+| 8 illegals | `LAX abs` dispatched to `NOP` |
+| 9 cycles | one opcode costs one cycle less |
+| 10 decimal | `SED` dispatched to `CLD` |
+| 8 illegals, again | `ARR #` dispatched to `AND #`, which has the same operand and a plausible answer |
+| 11 unstable stores | `SHA abs,Y` dispatched to a plain `STA abs,Y` |
+| 12 the interrupt stack | `BRK` dispatched to `NOP`: nothing is pushed and RTI has nothing to take back |
+
+Every perturbation reaches the ENVIRONMENT or the core's own tables at
+runtime, never the source: what is assembled is byte for byte what ships. And
+two of them only started failing once the harness learned to CLEAR the bytes
+a row reads before it runs — a control that read the value the positive run
+had left at the same address passed, which is a control proving nothing.
 
 ---
 
@@ -464,7 +726,17 @@ and the harness must report failure for each, or it is proving nothing.
 - `$D011`/`$D016` fine scroll honoured as a **whole-cell offset only**
   (stated deviation).
 - `$D012` raster read, `$D019` flag, `$D01A` mask, and the raster compare —
-  all off the cycle clock (§5.2).
+  all off the cycle clock (§5.2). **The STATUS latches whether or not the
+  interrupt is unmasked, and only the LINE is gated**: `vicii_irq_raster_set`
+  (`vicii-irq.c:64`) sets `$D019` bit 0 unconditionally and
+  `vicii_irq_set_line` (`:42-51`) is the only thing that reads `$D01A` —
+  **and it both SETS and CLEARS `$D019` bit 7** from `irq_status & regs[0x1a]`.
+  The fix pass found this port scheduling the compare only while `$D01A`
+  bit 0 was set, so the commonest raster wait there is — `LDA $D019 /
+  AND #$01` with interrupts disabled — never saw the bit at all; and bit 7,
+  once raised, was never lowered, so `$D019` read `$8x` for the rest of the
+  session after one acknowledged interrupt. The compare is now an alarm on
+  every frame, which is one extra run boundary in 19,656 cycles.
 - **8 hires sprites**: position, enable, priority against the background,
   x-expand and y-expand, composed into the rows they touch. Multicolour
   sprites are drawn by luminance threshold (§9.6).
@@ -475,11 +747,15 @@ The PAL frame is **63 cycles × 312 lines = 19,656 cycles = 50.123 Hz**
 (`c64.h:35-40`, `vicii-timing.h`). It has nothing to do with the 60 Hz jiffy,
 which is a thing the KERNAL programs a CIA to produce (§6.3).
 
-The raster counter is an **alarm** (§4.4): the end of each raster line is a
-scheduled event, so `$D012` reads the line the cycle counter has actually
-reached, and a raster compare fires at the line it was armed for, in the
-right order relative to every CIA interrupt. A program arming two raster
-interrupts in a frame gets both.
+The raster counter is **computed from the cycle counter when it is read** —
+`$D012` is `frame_cycles / 63` — and the raster COMPARE and the frame end are
+alarms (§4.4). That is wave 2's amendment to this paragraph: the end of each
+raster LINE was to have been an alarm, and scheduling one would have ended
+the run 312 times a frame to keep a register up to date that reading it keeps
+up to date for nothing. `$D012` still reads the line the cycle counter has
+actually reached, a raster compare still fires at the line it was armed for
+and in the right order relative to every CIA interrupt, and a program arming
+two raster interrupts in a frame still gets both.
 
 **What is still not there** is *sub-line* fidelity: the VIC is serviced at
 line granularity, so a register written part-way along a line takes effect
@@ -514,11 +790,57 @@ timer underflows when the cycle clock says it does. `TI$`, the cursor blink
 and the keyboard scanner then run at the rate the emulated machine chose,
 which is what makes a program that reprograms timer A behave.
 
+**FOUR THINGS A CIA HAS THAT A PAIR OF COUNTERS DOES NOT**, all four found by
+the fix pass's outside review and each cited where VICE has it:
+
+- **The two timers are advanced INDEPENDENTLY from the same elapsed count**
+  (`ciacore.c:937`). Timer A's loop used to consume the count and timer B
+  then advanced by what was LEFT of it, so a timer B counting φ2 lost every
+  cycle timer A had already counted — and a one-shot timer A that stopped
+  took timer B's whole slice with it. Only the CASCADE mode (CRB `INMODE`
+  = 10) consumes timer A's underflows, which is what cascade means.
+- **A raised interrupt is not cancelled by a MASK change.** The line used to
+  be recomputed from `flags & mask` on every touch, so `LDA #$01 / STA $DC0D`
+  — what a handler writes when it is finished with the timer — dropped the
+  IRQ before the handler's own `LDA $DC0D` had acknowledged it, and
+  re-enabling CIA2's mask manufactured a second NMI **edge** out of a flag
+  nothing had read. VICE raises the output from the flags and drops it in the
+  ICR **read** (`ciacore.c:950`'s *"Both pending interrupts and currently
+  active interrupts are never cancelled or cleared"*, and `my_set_int(false)`
+  at `:1345`), so the asserted output is a state of its own here.
+- **The TOD is a clock, an ALARM, a read LATCH and a stop bit.** CRB bit 7
+  selects which set of four registers a write lands in (`cia.h:90`,
+  `ciacore.c:876`) — with no alarm registers there was no way to set an alarm
+  at all, and code that tried set the TIME instead; a match raises ICR bit 2
+  (`:236-242`). Reading HOURS latches all four and reading TENTHS releases
+  them (`:1249-1270`), so a program cannot read 10:59:59.9 as 10:00:00.0.
+  Writing HOURS **stops** the clock and writing TENTHS restarts it (`:848`,
+  `:886-893`), which is how the four stores are made atomic. And the hours
+  are **12-hour BCD with an AM/PM bit that toggles at 12** (`:1961-1977`):
+  `09 → 10` and `12 → 01` are the two carries out of the units digit and both
+  are `hl = hh; hh ^= 1`. A plain BCD increment with a `> $12` clamp — what
+  this port had — runs `09, 0A … 0F, 10`, six hours that do not exist, and
+  never touches AM/PM.
+- **CRA/CRB bit 4 is a STROBE and is stored as 0** (`ciacore.c:1056`,
+  `:1097`): VICE stores `byte & 0xEF`, so a program that reads a control
+  register back, ORs a start bit in and writes it does not force-load the
+  timer a second time.
+
 ### 6.2 CIA2 (`$DD00-$DDFF`)
 
 Timers, TOD, ICR, **PRA bits 0–1 = the VIC bank** (inverted, as the hardware
 has them), and **NMI from timer underflow**. The NMI line is CIA2's ICR ORed
 with RESTORE (§7.4).
+
+**PRA IS ALSO THE SERIAL BUS, AND IT IS READ BACK, NOT STORED.** Bits 3–5 are
+ATN, CLK and DATA OUT; bits 6–7 are CLK and DATA IN. With no true drive VICE
+answers `((PRA | ~DDRA) & 0x3F) | ((iec_fast_1541 & 0x30) << 2)` where
+`iec_fast_1541` is `~(PRA | ~DDRA)` (`c64cia2.c:200-231`, `:150-162`,
+`iecbus/iecbus.c:212-217`, `core/ciacore.c:805`) — so **CLK IN and DATA IN are
+the INVERSE of CLK OUT and DATA OUT**: an empty bus reads back what this
+machine drives. Answering the raw register instead reads DATA IN low, which is
+a device replying, and `LOAD"*",8` then waits for it for ever instead of
+timing out (§11.3).
 
 ### 6.3 Three independent phase accumulators
 
@@ -571,12 +893,50 @@ Four rules, each of which exists because getting it wrong is silent:
    incrementally.** Several `.vkm` mappings share the synthetic SHIFT, CTRL
    and C= bits, so clearing one key's bits can clear another key's; rebuilding
    from what is still down is the only correct operation.
-4. **A fresh press is guaranteed at least one slice in the matrix before
-   release polling can clear it**, or a quick press is cleared before the
-   emulated machine ever scans the keyboard.
+4. **A fresh press is guaranteed one emulated KEYBOARD-SCAN INTERVAL in the
+   matrix before release polling can clear it — and the unit is EMULATED
+   CYCLES, not wakes.** `C64K_FRESH_CYC` is 20,000 6510 cycles: one CIA1
+   timer-A period (16,421 at the KERNAL's own `$4025`) plus margin, stamped
+   from `c64_cyc_lo` when the press is added and checked at every poll.
+
+   **"One wake" is the wrong unit and it is a TARGET-ONLY defect.** A wake is
+   one wall slice — 256..16,384 cycles (§4.4), floor 256 — against a scan
+   every ~16,421, so a one-wake guarantee is between 1/64 and 1 of a single
+   scan. Under QEMU the core runs at some thousands of per cent, an emulated
+   jiffy is well under a millisecond of real time, and every press is scanned
+   many times over; on a 4.77 MHz 8088 the core runs at a few per cent, a
+   200 ms keypress buys a few thousand emulated cycles, and typing loses
+   characters at random. That is PERFORMANCE.md's third emulator-invisible
+   defect — input overrun — with the emulator-versus-target speed ratio as its
+   cause, and no screendump can show it.
+
+   **It is BOUNDED on purpose**: the entry ages on the emulated clock and not
+   on being read, so a program that never scans the matrix cannot make a key
+   stick. The harness asserts the rule in cycles (a press whose host key is
+   already up survives several polls at 4,000 cycles and is gone one poll
+   after 20,001), and the row it replaced asserted the defect.
 
 The **down-list is 16 entries** and its overflow path is bounded and tested:
 the 17th simultaneous key is dropped, not written past the end.
+
+**The modifier keys never arrive through `os88_onkey` at all**, and that is
+why the poll reads them directly: a bare Shift or Ctrl press produces no
+`int 16h` event, so the host's shift state is `os88_key_down(KSC_LSHIFT) ||
+os88_key_down(KSC_RSHIFT)` and nothing else.
+
+**AND A BARE SHIFT AND A BARE CTRL ARE MATRIX KEYS IN THEIR OWN RIGHT**
+(amended in the fix pass). `keyboard_latch_modifier_states`
+(`src/keyboard.c:474-482`, `:505-512`) puts the left-shift and left-ctrl
+positions into the matrix whenever the PHYSICAL key is down —
+`left_shift_down > 0 && !virtual_deshift`, `left_ctrl_down > 0` — with no
+other key needed. This port set SHIFT only when some OTHER key's mapping
+asked for it and CTRL only for a recognised Ctrl chord or digit, so a game
+polling `$DC01` for the shift key — the second fire button of a thousand of
+them — saw nothing at all. The `.vkm`'s DESHIFT still wins, which is VICE's
+`!virtual_deshift` in the same expression. It is what makes SHIFT+letter
+the graphics character it is on the machine — the `.vkm` marks a letter
+"optionally shifted" and the shift has to come from the host's own key, not
+from the ASCII the BIOS folded it into.
 
 **The map is advice, not an oracle** (SPEC.md §9.7). A key whose break code
 the ISR missed stays in the matrix until its next press. That is stated here
@@ -648,9 +1008,15 @@ never from QEMU's SeaBIOS, which passes enhanced codes an AT BIOS drops.
 SPEC.md §9.6 stands, and this document states it the way SPEC.md §74.2 does:
 **on a machine with no mouse the arrows, Space, keypad 0/5 and Del are the
 kernel's mouse; ScrollLock hands them back.** When `os88_mouse()` reports
-that no mouse has spoken, the status row's message area prints
+that no mouse has spoken, the status row's message area should print
 **`ScrollLock for joystick`** — the fact, where the user is looking, instead
 of a joystick that silently does nothing.
+
+**IT IS NOT SHIPPED YET, AND §10.1 NO LONGER CITES IT AS A MESSAGE THIS PORT
+SHOWS** (the fix pass's correction). No such string exists anywhere in
+`apps/c64`: the joystick went live in wave 2 and the `os88_mouse()` test did
+not. This paragraph is the wave-3 item, and until it lands the row's messages
+are the ones §10.1 lists.
 
 ---
 
@@ -668,10 +1034,34 @@ of a joystick that silently does nothing.
 - **Alt+J, Swap joysticks**, swaps the ports, as VICE's item does.
 - The status row carries VICE's two 5-dot indicators (§10.1).
 
-**Ctrl is both fire and the CTRL key.** A game reading CTRL+letter from the
-matrix while the joystick fires sees both — which is exactly what a real
-machine with a keyboard and a joystick plugged in does — but a BASIC user
-holding Ctrl to type a colour code also fires port 2. Stated, not fixed.
+**A KEYSET KEY DRIVES THE STICK AND IS NOT TYPED** (amended in the fix pass,
+and it is the rule this section shipped without). `keyboard_key_pressed`
+(`src/keyboard.c:788-798`) walks the ports mapped to NUMPAD/KEYSET1/KEYSET2,
+calls `joystick_check_set` for each and **`return`s before
+`kbd_queue_pushkey`** when one takes the key. Without it the four cursor keys
+drove port 2 **and** entered the matrix at the same time: a game polling
+`$DC00` for the stick also got phantom cursor presses out of `$DC01`, and
+moving the stick in BASIC walked the cursor. The consumption is applied where
+the matrix is BUILT, so the entry stays in the down-list and its release is
+still tracked by the ordinary poll — the matrix is all CIA1 can see, and it
+is what VICE's early return protects. **`joykeys_enable` is the flag VICE
+tests first** (`joystick.c:598-601`) and it is a variable here too, so the
+harness can turn the keyset off and show the same key reaching the matrix
+again — the negative control the rule needs.
+
+**A CONSEQUENCE, STATED: the four cursor keys no longer move the BASIC
+cursor.** That is what a real machine with a keyset joystick on port 2 does,
+and it is why `KeySetEnable` is a resource in VICE at all. The C64's own two
+arrow KEYS — `←` on End and `↑` on Page_Down (§7.1) — are unaffected, and the
+KERNAL's repeat is still visible on the space bar and INST/DEL, which are the
+other two keys it repeats.
+
+**Ctrl is both fire and the CTRL key, and it is the ONE departure from the
+consumption rule.** A game reading CTRL+letter from the matrix while the
+joystick fires sees both — which is exactly what a real machine with a
+keyboard and a joystick plugged in does — but a BASIC user holding Ctrl to
+type a colour code also fires port 2. Stated, not fixed: the CTRL+digit and
+CTRL+letter paths of §7.3 need it in the matrix.
 
 ---
 
@@ -744,6 +1134,20 @@ So the core does the tracking:
   every row by itself.
 - The bitmap is cleared by the flush, under the same lock, so nothing is
   lost between a write and a read of it.
+- **AND THE FLUSH TAKES ALL OF IT IN ONE CALL** (amended in the fix pass).
+  `c64_dirty_scan` read the 32-byte bitmap, the write window's two words and
+  the ANY byte **one byte at a time** through `c64_scr_rd`/`c64_scr_wr` —
+  C-callable near thunks into the emulated machine's memory, about **fifty of
+  them per flush**. PERFORMANCE.md prices a bare near call + `ret` at 11 µs
+  and the 8088 fetches at 4.34 clocks a byte, so each is ~38 µs: **~1.8 ms a
+  flush**, comparable to the whole of §9.7's `one changed cell` row, spent
+  before a single pixel is decided — and invisible to a cost model that
+  counts drawing calls. `c64_dirty_take` (`c64mem.inc`) is one `rep movsw`
+  and one `rep stosw` over 36 bytes, ~190 µs, and it resets the scratch in
+  the same pass. `hosttest/c64memtest.asm`'s case 3b runs it on a real x86
+  with `SS ≠ DS`, checks the documented slots — `dst[0..31]` the bitmap,
+  `dst[32..35]` the window — and checks the 37th byte is a guard it never
+  reaches.
 
 **And the core keeps a WRITE WINDOW beside the bitmap** — the lowest and the
 highest address written since the last flush, two words of scratch (§3.5) and
@@ -1039,14 +1443,23 @@ an armed clip**, under `-icount shift=3,sleep=off` where one PIT count is
 N = 8 iterations a row.
 
 **THE CLIP IS THE RE-TAKE, and it is 28% of a line of text.** The bench's
-rerun draws from `W_ONKEY` and `W_ONCLICK`, and the kernel arms a clip region
-for `W_PAINT` and for nothing else (SPEC.md §11.3) — so the first draft drew
-over anything covering it and timed the kernel's *unclipped* paths, which
-`c64_flush` never takes: `os88_onwake` arms the clip before it, and a paint
-arrives with one armed. Measured both ways in one session: a 40-cell
+rerun draws from `W_ONKEY` and `W_ONCLICK`, and **this package arms a clip
+region itself** in `os88_onwake`, `os88_onclick` and `os88_about`, because
+none of those is a paint. Measured both ways in one session: a 40-cell
 `font_run` is 718 counts unclipped and **922 clipped**, a 320×8 `blit1` 40 and
 **47**; the composer's own rows do not move at all, because they are package
 code and never ask the kernel.
+
+**AND THE KERNEL ARMS NO CLIP FOR `W_PAINT`** — this paragraph used to say the
+opposite, and it was wrong about the kernel in a way the next person would
+have built on. SPEC.md §11.3 rule 3 is explicit that *"the repaint path must
+stay unclipped"*, and `kernel/wm.inc:9642` clears `wm_clip_n` before the title
+bar, which is before the `W_PAINT` dispatch below it. So the four paint-path
+rows in the table — `a full expose`, `an expose with the About panel up`,
+`the About panel closing`, `entering fullscreen` — are priced with the wake
+path's CLIPPED constants and are therefore an **upper bound**, over-reported
+by up to a quarter of their `font_run` and blit content. The wake-driven rows,
+which are the ones a running machine actually pays, are exact.
 
 The `FONT_RUN` row is the bar taken in the same run, and it is also the
 calibration check: 922 counts ÷ 8 × 0.359 = **41.4 ms** against
@@ -1082,6 +1495,20 @@ CELL is 184 µs and the call floor is 175 µs.** Those two are `C64BENCH_CELL` a
 a gfx call at PERFORMANCE.md's 756 µs floor plus 3.4 µs a band byte, which is
 what the 320×8 row above says a blit's pixels cost.
 
+**AND THE SCRATCH IS PRICED NOW, WHICH IS WHY EVERY ROW BELOW MOVED.** A
+flush's cost is not only what it draws: it reads the core's scratch through
+near thunks, and `c64_dirty_scan` used to make about fifty of them (§9.2).
+`C64COST_SCRACC` = **38 µs** a `c64_scr_rd`/`c64_scr_wr` and `C64COST_TAKE` =
+**190 µs** for `c64_dirty_take` are the two constants that pay for it, and
+they are **MODELS, not bench rows** — the only figures in this table that are
+— because `tests/c64band` measures `c64band.inc` and these live in
+`c64mem.inc`. They are computed from PERFORMANCE.md's own constants: 11 µs
+for a near call + `ret`, plus the body's clocks at 0.21 µs each on a 4.77 MHz
+8088 whose 8-bit bus adds 4 clocks to every word access (~125 clocks for a
+thunk, ~820 for the take's two `rep`s over 36 bytes). The rows that draw
+nothing are what this changes: a flush that composes nothing is **0.1 ms**
+where it used to read 0.0, and one that takes the dirty bitmap **0.5 ms**.
+
 **Re-taken after the wave's FIX pass.** Every row moved by about half a
 percent, because the two constants the model prices a compare and a signature
 from were re-measured with the bench (`C64BENCH_SPAN` 1530 → 1571 µs,
@@ -1104,31 +1531,49 @@ it quotes for a 78-cell line). Every row below that draws a string moved.
 
 | operation | measured, on the harness | gated on |
 |---|---|---|
-| one changed cell | **3.8 ms** | compose 1 cell; 1 blit call |
-| one changed row | **12.0 ms** | compose `last − first + 1` cells; 1 blit call |
-| a `k = 9` scroll | **257.8 ms** | 1 scroll + `k` drawn rows; **1 scroll per flush** — and all 25 rows composed and compared, which is §9.4's guarantee and not a miss |
-| **a `k = 1` shift the signature got WRONG** | **256.4 ms** | 1 scroll, and the colliding row DRAWN: the glass matches the row's own sources (§9.4) |
-| a `k = 3` scroll, `gfx_scroll` refusing | **301.4 ms** | spans, and the shadow stays true |
-| **two pokes, rows 0 and 24** | **126.8 ms** | 13 composed rows, **2 blits** — the window ∩ the pages (§9.2); the window alone made this 25 rows and 299 ms |
-| a full expose, 25 rows | **304.6 ms** | ≤ 25 composed rows + the border + the status row's 37 glyph cells |
-| 25 rows changed, not a shift | **300.7 ms** | no scroll emitted |
-| a `$D020`-only change | **3.0 ms** | fills only, **no band composed** |
-| **a changed cell, `blit1` REFUSING** | **29.6 ms** | §9.5's font path, ONCE — the row is drawn with the kernel's face and not retried, and the fact is said (a `kern_small` kernel) |
-| 8 × `$D011`, `$D016`, a `$DD00` serial edge | **0.0 ms** | **0 blits, 0 composes** — a register write that changes nothing costs nothing (§9.3) |
-| a `$D016` change that draws the same picture | **254.6 ms** | 25 composed rows, **0 blits, 0 fills** — recompose, then ASK the shadow; and a frame register does not touch the border |
-| an expose with the About panel up | **322.6 ms** | 12 composed rows: the 13 the panel covers are not drawn under it. It is MORE than a full expose because the panel itself is 198 glyph cells — which is why the row below exists |
-| **an expose that misses the panel** | **16.7 ms** | the panel is redrawn only when the damage rect reaches it |
-| the About panel closing | **139.0 ms** | 13 composed rows — the panel's rect, not the screen |
-| a `k = 1` scroll on a CLAMPED window | **153.8 ms** | 1 scroll + 1 drawn row, on 15 rows of glass |
-| one joystick indicator changed | **0.8 ms** | **one** `blit1`, **no fill** — the status row's delta (§10.1), reached the way the product reaches it |
-| **entering fullscreen** | **304.6 ms** | one whole repaint, the kernel's own (§9.8) |
-| **the wake after entering fullscreen** | **0.0 ms** | **0 blits, 0 composes** — `OSAPI_FULLSCREEN` repaints synchronously in both directions, so the shadow already describes the new glass |
+| one changed cell | **4.2 ms** | compose 1 cell; 1 blit call |
+| one changed row | **12.5 ms** | compose `last − first + 1` cells; 1 blit call |
+| a `k = 9` scroll | **258.4 ms** | 1 scroll + `k` drawn rows; **1 scroll per flush** — and all 25 rows composed and compared, which is §9.4's guarantee and not a miss |
+| **a `k = 1` shift the signature got WRONG** | **256.9 ms** | 1 scroll, and the colliding row DRAWN: the glass matches the row's own sources (§9.4) |
+| a `k = 3` scroll, `gfx_scroll` refusing | **302.0 ms** | spans, and the shadow stays true |
+| **two pokes, rows 0 and 24** | **127.2 ms** | 13 composed rows, **2 blits** — the window ∩ the pages (§9.2); the window alone made this 25 rows and 299 ms |
+| a full expose, 25 rows | **306.4 ms** | ≤ 25 composed rows + the border + the status row's 37 glyph cells |
+| 25 rows changed, not a shift | **301.1 ms** | no scroll emitted |
+| a `$D020`-only change | **3.5 ms** | fills only, **no band composed** — and the write must cross the background's luminance, which is the only $D020 write that changes a pixel (§9.6) |
+| **a `$D020` change that keeps the LEVEL** | **0.5 ms** | **0 fills, 0 composes** — colour 14 to 15 over background 6 is still lighter than the paper, so `c64_lum_update`'s flip test says nothing moved. `c64_io_wr` used to raise `c64_border_dirty` unconditionally one line after calling the routine whose whole job is to decide it, which made the guard dead code and cost four `gfx_fill` calls on the next flush after EVERY `$D020` write — many a frame, in the rasterbars and loader flashes that are among the commonest things C64 software does |
+| **a changed cell, `blit1` REFUSING** | **33.3 ms** | §9.5's font path, ONCE — the row is drawn with the kernel's face and not retried, and the fact is said (a `kern_small` kernel) |
+| 8 × `$D011`, `$D016`, a `$DD00` serial edge | **0.1 ms** | **0 blits, 0 composes** — a register write that changes nothing costs nothing (§9.3) |
+| a `$D016` change that draws the same picture | **255.3 ms** | 25 composed rows, **0 blits, 0 fills** — recompose, then ASK the shadow; and a frame register does not touch the border |
+| an expose with the About panel up | **324.5 ms** | 12 composed rows: the 13 the panel covers are not drawn under it. It is MORE than a full expose because the panel itself is 198 glyph cells — which is why the row below exists |
+| **an expose that misses the panel** | **17.0 ms** | the panel is redrawn only when the damage rect reaches it |
+| the About panel closing | **139.3 ms** | 13 composed rows — the panel's rect, not the screen |
+| a `k = 1` scroll on a CLAMPED window | **154.5 ms** | 1 scroll + 1 drawn row, on 15 rows of glass |
+| one joystick indicator changed | **1.4 ms** | **one** `blit1`, **no fill** — the status row's delta (§10.1), reached the way the product reaches it |
+| **the speed figures changed** | **3.7 ms** | **TWO** `font_run` calls, one per changed NUMBER field, and typically one glyph cell each — **no fill**. Each must land inside its own number and never on the literal tails (§10.2); the two cannot coalesce, because the fixed `% cpu` tail sits between them at x = 56..95. This is the program's only redraw on a TIMER, and the row that used to say **1.7 ms and one call** described a FIXTURE: it advanced the cycle counter and left the frame counter at zero, so only one field moved — which one fold of this program cannot do |
+| the same row with the delta switched off | **42.0 ms** | the negative control: 1 fill + 37 glyph cells, which is what the widget used to cost every second |
+| **entering fullscreen** | **306.4 ms** | one whole repaint, the kernel's own (§9.8) |
+| **the wake after entering fullscreen** | **0.3 ms** | **0 blits, 0 composes** — `OSAPI_FULLSCREEN` repaints synchronously in both directions, so the shadow already describes the new glass |
 | a full bitmap frame | wave 4 | the **measured ms**, not the call count |
 | one sprite moved one cell | wave 4 | the spans it actually touched |
-| a slice with no tick boundary | **0.0 ms** | **0** (§9.3) |
+| a slice with no tick boundary | **0.1 ms** | **0** (§9.3) |
+
+**Re-taken again by wave 2's SECOND fix pass**, which is where the `scratch`
+column of the harness's own print comes from: every row gained the 0.1–0.6 ms
+of scratch access the model had not been charging, the `$D020` pair became two
+rows, and `the speed figures changed` more than doubled because the row now
+measures what the product does rather than a fixture. **The whole table is
+re-taken whenever it is quoted, and the first fix pass found three rows a
+build stale** — the two constants `C64BENCH_SPAN` and
+`C64BENCH_SIG` moved (1530 → 1571 µs, 1030 → 1077 µs) after the rows that
+price 25 compare passes had been written down, which is 1.5 ms on every
+25-row row. **The two speed rows above are the wave's one recurring redraw**
+and they are the reason `hosttest/c64uitest.c` now HOLDS the once-a-second
+fold for every other row: a timer landing inside an unrelated cost row prices
+the status widget as part of it, and `one joystick indicator changed` came out
+at 5.9 ms with four glyph cells in it that had nothing to do with a joystick.
 
 Three decisions fall out of that table and each is a constant in `c64scr.c`:
-**a changed cell is 3.7 ms and a changed row 11.9 ms**, which is the whole
+**a changed cell is 4.2 ms and a changed row 12.5 ms**, which is the whole
 reason the composer takes a span and the write window exists (§9.2); **a full
 repaint is ~300 ms, five host ticks**, so the `CPU_8086` tier flushes every
 OTHER tick (§9.8); and **2× is 20.19 ms for eight rows**, 63 ms for a screen
@@ -1282,23 +1727,72 @@ raising the flag by hand — a path the package could not take. The flag is
 gone; the row is examined on every flush and answers *"nothing moved"* in
 **zero drawing calls**, which is what the delta was built for.
 
-**A MESSAGE OWNS THE WHOLE ROW while it is up.** The alternative, measured,
-is a seven-cell message area — and the two messages this port has to show,
-`ScrollLock for joystick` (§7.6) and `C64.ROM missing - see README.TXT`
-(§1.4), are 23 and 32 characters. A message expires after about five seconds
-and the widgets come back, so nothing is permanently hidden; §1.4's fact is a
-permanent line rather than a message, for the same reason.
+**A MESSAGE OWNS THE ROW'S 40 FIELD CELLS — NOT THE ROW** (amended in the fix
+pass). The alternative, measured, is a seven-cell message area, and the
+longest strings this port shows are `C64.ROM missing - see README.TXT` (§1.4)
+at 32 and `Cannot start the closer - try again.` at 36; `c64_say` clamps the
+text to 40. **The two LAMPS at cells 40 and 41 are drawn under a message as
+well**, because `P` is the one indicator that exists to report the PAUSE
+state and `Paused.` is a message: hiding it left the lamp off the glass for
+exactly as long as the machine was in the state it reports, and a machine the
+user stopped keeps its message until the next event (below). The joystick
+indicators and the speed fields are inside the message's 40 cells and are
+covered; they come back with the message. A message expires after about five
+seconds.
 
-**AND TAKING IT DOWN IS WORK NOBODY ELSE ASKS FOR**, which wave 1's review
-found on the glass: the deadline is examined *inside* the flush, and the flush
-ran only while something was dirty. `c64_say` raised the flag, the flush drew
-the message and cleared it, and with no core running — `C64_ST_HALT`, which is
-every state wave 1 has — no further wake was posted, so five seconds never
-arrived and `Warp mode on.` owned the row until the next keystroke. So
-`os88_onwake` treats *a message being up* as a reason both to re-post the wake
-and to flush; a flush with nothing dirty composes no row and `c64_status`
-answers "nothing moved" in **zero drawing calls** (§9.7's `a wake with no tick
-boundary`), so what it costs is the wake.
+**THERE ARE THREE PERMANENT ROW STATES AND A MESSAGE IS NOT ONE OF THEM.**
+`C64.ROM missing - see README.TXT` (§1.4) and `Main CPU: JAM at $XXXX` (§4.5)
+are LINES, not messages: neither is a thing that stops being true after five
+seconds, and a jam that expired left the ordinary widget row up — `0% cpu
+0.0 fps` — which is what an IDLE machine looks like, so the glass could not
+tell a dead machine from a stopped one (pause at least inverts `P`). The row's
+selector is therefore three-way: a message while one is up, then the jam line,
+then `C64.ROM missing`, then the widgets.
+
+**AND A PERMANENT LINE DOES NOT ARRIVE AS A MESSAGE**, which is the fix pass's
+correction to the sentence that used to stand here (*"the message is only how
+it arrives"*). Routed through `c64_say`, `Main CPU: JAM at $XXXX` went up as
+`msg == 1`; five seconds later the deadline cleared it, `msg` became 3,
+`msg != c64_st_shown` forced the full path, and the row was filled black and
+**re-lettered with the same 22 glyphs at the same place** — 1 fill + 1
+`font_run` + 22 cells, **~21 ms that change not one pixel**, and on the glass a
+row that blanks and re-letters five seconds after the event with nothing having
+happened. That is PERFORMANCE.md rule 2's erase-then-letter in the one place it
+is free to avoid. `c64_jam` therefore raises the three things a permanent row
+state needs — `c64_dirty_any`, `c64_st_ok = 0`, and the toast §9.8's
+both-routes rule wants — and never touches `c64_msg`. `hosttest/c64uitest.c`
+gates it with the second draw as its negative control.
+
+**AND THE DEADLINE IS EXAMINED FIRST THING IN THE FLUSH**, before any branch
+can return past it. It used to sit down beside the status row, past
+`c64_flush`'s ROM-less early return — so on a disk with **no `C64.ROM`**
+nothing ever cleared `c64_msg`, and the first menu command a user picked owned
+the row for the rest of the session with §1.4's permanent
+`C64.ROM missing - see README.TXT` behind it. There is exactly one writer of
+`c64_msg` (`c64_say`) and one reader of the clock, and it belongs where every
+flush passes through it.
+
+**BUT A MESSAGE IS NOT A REASON TO ASK FOR ANOTHER WAKE.** A running machine
+already asks, so its messages expire on the ordinary flush cadence. **A machine
+the user stopped — paused, jammed, or a disk with no `C64.ROM` — keeps its
+message until the next event**, and that is a decision rather than an
+oversight: `c64_msg[0] != 0` used to be the first term of `c64_wants_wake`, so
+a stopped machine re-posted for the whole five-second life of every message
+with nothing inside the wake but a re-read of the clock — SPEC.md §74.1's
+~1,400 round trips a second at 693 µs each, ~7,000 of them, about **4.8 seconds
+of the shared UI task**, which is the very rule the function exists to enforce,
+inverted. Wave 2 made it newly reachable at the worst moment: Alt+P now
+genuinely stops the machine and answers `Paused.`, and on a ROM-less disk
+*every* menu command ends in a `c64_say`. It cannot be gated on the flush's
+tick boundary instead — that answers 0 at the moment the boundary has not
+arrived, no wake is posted and the message never comes down at all — and the
+alternative, a worker sleeping a tick to post 18 wakes a second, buys five
+seconds of expiry for a background task, a second spawn site and a merge with
+the exit worker. The next event is a keystroke, a click, a menu pick or an
+expose, and every one of them flushes: the widgets and §1.4's permanent line
+come back on the next thing the user does. A flush with nothing dirty composes
+no row and `c64_status` answers "nothing moved" in **zero drawing calls**
+(§9.7's `a wake with no tick boundary`).
 
 ### 10.2 The speed widget — VICE's own strings, and what they count
 
@@ -1306,6 +1800,50 @@ boundary`), so what it costs is the wake.
 0) and `%8.1f fps` (`:653`, `FPS_DECIMAL_PLACES` 1). **Both are folded onto
 this one row**, LEFTMOST as VICE appends them (§10.1), e.g.
 `   100% cpu    50.1 fps`.
+
+**THE TWO LITERAL TAILS ARE DRAWN ONCE, AND THE NUMBERS DELTA AGAINST THE
+GLASS.** `% cpu` and `fps` change on nearly every fold on a machine whose
+speed fluctuates, and drawing both fields whole was 24 glyph cells and 2 call
+floors — ~23 ms EVERY SECOND, ten times what a keystroke costs (§9.7) — of
+which nine cells were the two constants and most of the rest were leading
+blanks re-inked. So `% cpu` and ` fps` are drawn only with the row itself, and
+each numeric field is compared against what was last drawn and re-run over the
+span between the first and last differing cell (`c64_st_field`, the idea
+`c64_rowspan` already uses on a band). A typical second is one or two cells
+**per field**, and it is **measured, not claimed**: §9.7's `the speed figures
+changed` row is **3.7 ms — TWO `font_run` calls, one per changed number, no
+fill** — with an assertion that each landed inside its OWN number and not on
+either literal tail, and `the same row with the delta switched off` beside it
+as the negative control at **42.0 ms**, which is what the whole-row path
+costs. **Two, not one, and the row used to say one**: both figures come from
+ONE fold of one clock, so a second that moves `% cpu` moves `fps` as well —
+the old row advanced the cycle counter and left the frame counter at zero,
+which is a fixture this program cannot produce. The two runs cannot coalesce
+either: the fixed `% cpu` tail sits between the fields at x = 56..95. This is the
+first thing in this program that draws on a TIMER rather than on an event, so
+it is the row that has to be gated.
+
+**AND THE WIDGET'S OWN DELTA IS PART OF THE FLUSH GATE.** The flush ran only
+while the C64 screen was dirty, and `c64_dirty_any` comes from a RAM WRITE:
+a machine that runs without writing RAM — an ML poll loop on `$D012`, a
+`WAIT` — froze the figures at whatever they were when it last wrote, which is
+precisely the moment somebody is looking at them. `c64_pct`/`c64_fps10`
+differing from what is on the glass is a reason to flush; it costs nothing
+when nothing moved, because `c64_status` answers in zero drawing calls.
+
+**THE CLAMP IS BEFORE THE CAST, ON BOTH FIELDS.** `c64_div32` answers up to
+`$FFFF` and `unsigned` is 16 bits: a quotient of 32,768 or more was already
+NEGATIVE by the time a `raw > 30000` test saw it, sailed past the clamp, and
+came back as a `c64_pct` that prints a flat `      0% cpu` beside a live `fps`
+— the pair of numbers that could not both be true, one cast earlier than where
+the wave first fixed it. **`fps` had exactly the same defect one field to the
+right**, and the fix pass found it: `c64_muldiv` answers `$FFFF` on overflow
+(`c64mem.inc:266`), the cast makes that −1, and `c64_st_num` prints
+`     0.0 fps` beside a live `% cpu`. Both clamps are applied while the value
+is still unsigned, to the same 30,000. The harness row drives one scenario
+through **both** fields — 183,500,800 emulated cycles and the 9,335 VIC frames
+that speed implies — and asserts both read their cap; zeroing the frame
+counter is how the first version of that row walked past its own defect.
 
 **THE WARP AND PAUSE LEDs ARE TWO LABELLED LAMPS, `W` AND `P`, INVERTED WHEN
 LIT.** In VICE they are not part of the speed widget at all: they are made at
@@ -1344,6 +1882,53 @@ quantities: a cycle count over a second, or `cycles × 100` before a division,
 overflows 16 bits on any machine faster than an XT, and a 16-bit counter that
 laps produces small plausible numbers rather than an error (CLAUDE.md's
 performance rule 3).
+
+**The arithmetic, exactly, because a percentage with no float in it is where
+a plausible wrong number comes from.** 985,248 cycles a second over 18.2 host
+ticks is 5,413.45 cycles per hundredth of a tick, so
+
+    raw = c64_div32(cycles_hi, cycles_lo, 5413)      one `div`
+    % cpu     = c64_muldiv(raw, 10, elapsed_ticks)   one `mul`, one `div`
+    fps × 10  = c64_muldiv(frames, 182, elapsed_ticks)
+
+`c64_div32` and `c64_muldiv` are four lines each in `c64mem.inc` — a 16-bit C
+cannot express either and the 8086 does both in one instruction. Both answer
+`0xFFFF` on overflow or a zero divisor rather than raising `#DE`: a status row
+is not worth a trap, and the caller clamps. The window is one second
+(`elapsed ≥ 18`) and is RESTARTED rather than published if the wakes stopped
+for ten (`elapsed > 182`), because that window measures nothing.
+
+**Both figures are quantised by the window**, and the fps one visibly so: it
+counts whole emulated frames, so at 100 % over eighteen ticks it reads 49.5
+or 50.6 and only settles on 50.1 over a longer one. That is the honest
+resolution of "frames per second" measured in frames.
+
+**AND THE TWO CLAMPS SATURATE AT DIFFERENT EMULATED SPEEDS, WHICH IS STATED
+RATHER THAN HIDDEN.** They are the same constant in different units: `raw` is
+capped at 30,000, which at `el = 18` caps `% cpu` at 30000 × 10 / 18 ≈
+**16,666 %**; `c64_fps10` is capped at the same 30,000, which is **3,000.0
+fps** — 5,985 % on a PAL machine. Between roughly 5,985 % and 16,666 % the fps
+field therefore sits at its cap while `% cpu` goes on climbing. The sentence
+below used to say the only cap needed was the one that keeps a 16-bit `int`
+positive, and that is true of `raw` and false of `fps10`. **It cannot be
+resolved by clamping both at the same emulated speed**: the fps field is in
+TENTHS, so 16,666 % is 83,497 tenths and does not fit a 16-bit `int` at all —
+one of the two fields has to saturate first, and the honest thing is to say
+which and where. The measured host runs at ~2,900 %, so a host about twice as
+fast reaches the fps cap.
+
+**THE FRAME COUNTER IS ONE WORD, and that is deliberate.** `fps` is the
+DIFFERENCE over a one-second window, taken masked to 16 bits, so it is exact
+for any window under 65,536 frames — twenty-two minutes. A high word was kept
+beside it and read by nobody; the fix pass dropped it.
+
+**The clamp on `raw` is 30,000 and not a small number.** Wave 2's first draft
+capped it at 3,200 — "320 % of a real 6510, and nothing this port runs on
+will see it" — and under QEMU the core runs at some **thousands** of per
+cent, so the cap clipped an honest figure into a wrong one that still looked
+like a number (`1777% cpu` beside `1195.1 fps`, two figures that could not
+both be true). The only cap that is needed is the one that keeps a 16-bit
+`int` positive.
 
 ### 10.3 What is dropped rather than greyed
 
@@ -1462,7 +2047,11 @@ clamped to 11 above it. Three rules follow:
    nothing is LIVE that only toasts a refusal.** An item a user can pick and
    that answers *"not yet"* is the one thing §47 exists to stop, and wave 1
    shipped three of them: Edit > Copy, Edit > Paste and
-   Preferences > Advance frame. All three are greyed with their fact.
+   Preferences > Advance frame. All three were greyed with their fact; wave 2
+   made Advance frame LIVE, because the fact that greyed it — no raster
+   accumulator — stopped being true when the alarm model landed. **A greying
+   is retired the moment its fact is,** and that is the same rule read the
+   other way round.
 4. **A CHECK item's state is a `*` in the label**, and the item pointer is
    swapped between the two spellings (`c64_menu_state`). **Eight** of these
    items are `UI_MENU_TYPE_ITEM_CHECK` in `uimachinemenu.c` — `:682`
@@ -1517,7 +2106,7 @@ Live items:
 | Preferences > Fullscreen | Alt+D | §9.8. CHECK: rule 4's `*` |
 | Preferences > Warp mode | Alt+W | flush every 9 ticks instead of every tick. CHECK: rule 4's `*`, and §10.2's `W` lamp |
 | Preferences > Pause emulation | Alt+P | CHECK: rule 4's `*`, and §10.2's `P` lamp |
-| Preferences > Advance frame | Alt+Shift+P | **wave 2.** Run to the next VIC frame end (§6.3), then stop — there is no raster accumulator until the alarm model lands. Greyed until then |
+| Preferences > Advance frame | Alt+Shift+P | **LIVE as of wave 2, and it is VICE's action and not this port's idea of one.** `src/arch/gtk3/actions-speed.c:72-80` (identically `src/arch/gtk3/ui.c:2735-2743`) is the whole body — `if (ui_pause_active()) { vsyncarch_advance_frame(); } else { ui_pause_enable(); }` — with `vsyncarch_advance_frame` (`src/arch/gtk3/vsyncarch.c:56-60`) being `ui_pause_disable(); pause_pending = 1;` and `vsyncarch_postsync` re-pausing at the next frame end. So **from a RUNNING machine the item only PAUSES and advances nothing**; only from an already-paused machine does it run one frame (to the next VIC frame end, §6.3) and stop. The fix pass found the first version setting the request unconditionally, which ran 19,656 emulated cycles from a running machine and then paused — invented semantics for the one live item this wave added. It was greyed before with the fact *"there is no raster accumulator until the alarm model lands"*, and wave 2 landed the alarm model — `c64_frame_cyc` IS that accumulator and `C64_PAL_FRAME` is the frame end — so the fact stopped being true and SPEC.md §47 does not let a greying outlive its reason. **The command body raises a request and runs nothing:** `os88_oncmd` is dispatched under the gfx lock and a PAL frame is 19,656 emulated cycles, which on the target is a fraction of a second of stopped desktop; the slice driver serves it in the wall slices it already sizes, and re-posts while it is outstanding. **AND IT IS GREYED AGAIN WHENEVER THERE IS NO MACHINE TO ADVANCE** — a disk with no `C64.ROM` (`C64_ST_HALT`) or a JAMMED CPU — because `c64_advance_frame` answers those states by doing nothing at all, and a live black item that is a silent no-op is the one shape SPEC.md §47 forbids; the fact that greys it is already the permanent line on the status row (§1.4, §4.5). `c64_menu_state` swaps the two spellings, the way rule 4 swaps the check items. **The chord reads the shift level**: the BIOS hands Alt+Shift+P the same ascii/scan pair as Alt+P, so `os88_onkey` asks `os88_key_down(KSC_LSHIFT/KSC_RSHIFT)` and dispatches Advance frame or Pause emulation accordingly — without that the chord this row advertises RESUMED a paused machine, which is the opposite of VICE in the only state VICE advances from |
 | Preferences > Swap joysticks | Alt+J | §8. CHECK: rule 4's `*`, and the two status indicators swap with it |
 | Help > About VICE... | | `uimachinemenu.c:988`; the kernel's name pull-down About opens the same panel (§12) |
 
@@ -1537,8 +2126,7 @@ Live items:
 | Preferences > Show status bar | the status row is the window's bottom row and is always drawn. A CHECK that is ON and cannot be turned off: it wears rule 4's `*` marker **and** `MENU_DIS` together (§11.1 rule 4) |
 | Preferences > Mouse grab (Alt+M) | no 1351 mouse in this build: the pointer is the desktop's |
 | Preferences > Allow keyset joysticks (Alt+Shift+J) | the keyset **is** the joystick here (the only joystick source this machine has); it wears rule 4's `*` marker ON **and** `MENU_DIS` together — it is on, and it cannot be turned off (§8) |
-| Edit > Copy (Alt+Delete), Edit > Paste (Alt+Insert) | the screen-code → PETSCII → ASCII tables and the `$0277` keyboard-buffer feeder arrive with the machine that HAS a keyboard buffer (wave 3) |
-| Preferences > Advance frame (Alt+Shift+P) | there is no raster accumulator until the alarm model lands with the core (wave 2) |
+| Edit > Copy (Alt+Delete), Edit > Paste (Alt+Insert) | neither the screen-code → PETSCII → ASCII table nor the `$0277` keyboard-buffer feeder is written: the command bodies arrive with the rest of `c64cmd.c`'s `ovl_*` commands (wave 3). The machine they act on exists as of wave 2, so *that* half of the old wording is retired |
 | Preferences > Settings... (Alt+O), Load/Save settings, Restore default settings | no resources file in this build: every setting this port has is on the Preferences menu itself |
 | Help > Browse manual, Command line options, Compile time features, Hotkeys | no manual on this floppy and no command line in this OS; the hotkeys are the menu captions |
 | Machine model other than C64 PAL (C64C, NTSC variants, Drean, SX, Japanese, GS, PET64, MAX) | one ROM set and one timing are carried: PAL 985248 Hz, 312 lines, 19,656 cycles a frame (`c64.h`) |
@@ -1576,20 +2164,58 @@ by there being no 1541:
    only at `$0801` (`autostart-prg.c:383`);
 5. type `RUN\r` into `$0277` with the count at `$C6`.
 
-**`LOAD"*",8` answers with the `?DEVICE NOT PRESENT` error.** That is the
-honest machine with no drive, and it is written here so nobody files it as a
-defect. **The screen LINE is deliberately not quoted** — the KERNAL prints its
-error text followed by ` ERROR`, and a `SEARCHING FOR *` line before it, so a
-shortened quote here and in `README.TXT` would invite the bug report it exists
-to prevent. There is no string to transcribe in the VICE tree: the ROM is the
-authority, and wave 2 is the first wave that can run it. Transcribe what the
-machine actually prints then, into both places.
+**`LOAD"*",8` answers with the KERNAL's `?DEVICE NOT PRESENT  ERROR`.** That
+is the honest machine with no drive, and it is written here so nobody files it
+as a defect. There is no string to transcribe in the VICE tree — the ROM is
+the authority — so wave 2 ran it and transcribed what the machine actually
+prints, here and in `README.TXT` (`build/port-shots/wave2fix-11-load.png`):
+
+```
+LOAD"*",8
+
+SEARCHING FOR *
+?DEVICE NOT PRESENT  ERROR
+READY.
+```
+
+**Two spaces before `ERROR`**, which is the KERNAL's own spacing and the one
+detail a remembered quote gets wrong.
+
+**AND GETTING THERE NEEDED CIA2 PRA MODELLED, NOT STORED.** Typing that LOAD
+was the first time this port ever did, and the machine sat at `SEARCHING FOR
+*` for ever: `$DD00` answered the raw register file, so DATA IN read LOW — a
+device answering — and the KERNAL waited for it exactly as it is meant to.
+The serial bus with nothing on it reads back what the machine itself drives,
+INVERTED: VICE hands the CPU `(iec_fast_1541 & 0x30) << 2`
+(`iecbus/iecbus.c:212-217`, the no-true-drive configuration) and
+`store_ciapa` put `~(PRA | ~DDRA)` there (`c64cia2.c:150-162`,
+`core/ciacore.c:805`), so CLK IN and DATA IN are the inverse of CLK OUT and
+DATA OUT (§6.2). Released DATA then reads high, the KERNAL times out, and the
+line above is what it prints.
 
 ### 11.4 Sound
 
 **SID voice 1's frequency and gate** go to `os88_snd_tone`
 (`OSAPI_SND_TONE`, slot `0x00E8`) once per slice, and only when they changed
-— one far call. Voices 2 and 3, every waveform beyond the gate, ADSR and the
+— one far call.
+
+**AND A REFUSED GRANT IS NOT PERMANENT** (amended in the fix pass).
+`os88_snd_tone` answers **-1 refused** when another instance holds the
+speaker, which SPEC.md §34.3 allows; all three returns were discarded and the
+latch was cleared BEFORE the call. The latch is raised in exactly one place —
+a write to `$D400-$D41C` — so a single refusal at the wrong moment (a toast
+tone, another app's grant) silenced the emulated SID until the guest next
+poked a SID register, which for the ordinary *set the frequency, gate on,
+leave it* is never: the machine then played nothing for the rest of the
+session and said nothing about it, which is the shape SPEC.md §47 forbids. So
+the latch is cleared only when the grant takes; the retry is **bounded at
+eight wakes** and then dropped, and the next SID register write re-arms it —
+a machine whose speaker is held for good costs eight far calls, not one a
+wake for ever. The give-up is said ONCE a session, on the status row and in a
+toast: `The speaker is busy - no SID sound.`
+`hosttest/c64uitest.c`'s stub can refuse, which is what makes any of this
+checkable, and the row's negative control is the shipped behaviour: shown
+staying silent. Voices 2 and 3, every waveform beyond the gate, ADSR and the
 filters are greyed with §11.2's fact: `OSAPI_SND_FM` and the streaming path
 are driver verb protocols deliberately not wrapped for C.
 
@@ -1685,6 +2311,65 @@ size line** — a core with only the LDA/STA/ADC/branch families assembled is
 not an honest measurement of a core, and quoting one would set a budget
 against a number nobody can reproduce. **The first honest size line is at the
 end of wave 2, with the whole core in.**
+
+### 13.0 The measured line — wave 2 (2026-08-22)
+
+The whole 6510 is in: 256 opcodes with the illegal ones, decimal ADC and SBC,
+the seven bank maps, the boundary-guarded fetch, the alarm scheduler, both
+CIAs with their timers, TOD and ICR, the level keyboard, and BASIC booting to
+`READY.` off the real ROMs.
+
+| | measured | of |
+|---|---|---|
+| resident image | **36,434** | |
+| bss | **11,346** | |
+| **resident total** | **47,780** | **61,440** — 13,660 spare, **7,220 under §73.9's 55,000 trigger** |
+| `C64.OVL` | **1,424** | on demand |
+| resident overlay shims | **24** | counted inside the image above |
+| largest C frame | **32 bytes** | of the 96 SPEC.md §73 allows |
+
+(The wave's THREE fix passes moved it from 33,306 + 11,270 = 44,576, and each
+carries its own figures rather than the total.
+
+**The first: +988 image, +62 bss, +18 overlay, one more shim** — the unsigned
+timer and alarm rules, `c64_wants_wake`, the JAM line as a permanent row
+state, the keyboard's freshness stamp in emulated cycles, the status row's
+per-field delta, Advance frame going live, and CIA2 PRA read back rather than
+stored.
+
+**The second: +188 image, and nothing else moved** — the message deadline
+hoisted to the top of the flush, the `fps` clamp beside the `% cpu` one, the
+JAM line off the message route, the message term out of `c64_wants_wake`,
+VICE's real Advance-frame action with its greying and its shift-read chord.
+
+**The third — this one: +1,952 image, +14 bss, +4 overlay, no new shim.** It
+is the largest of the three and all of it is fidelity: the CLI/SEI/PLP I-flag
+timing, BRK's cycles, the RMW dummy write, decimal ARR, the four unstable
+stores' real masks and address corruption, the CIA timers' independent
+advance, the TOD's alarm/latch/stop/12-hour rollover, the asserted-interrupt
+latch, the raster status ungated, `$01`'s read-back, the keyset's consumption
+and the bare modifiers, `c64_dirty_take`, and the SID's bounded retry. Two
+things came OUT in the same pass — the harness-only cost counters, which are
+`#ifdef C64_HOST` now, and the frame counter's unread high word — for −128
+image and −16 bss of it.)
+
+**The plan's estimate was 39,000 + 13,600 + 6,000 and the machine is
+smaller than that on all three.** The two that moved most are worth naming.
+`c64cpu.inc` was budgeted at `rcz80.inc`'s measured ~9.6KB and assembles at
+**6,518 bytes with `c64mem.inc` beside it** — a 6510 handler really is
+smaller than a Z80 one once every addressing mode is a `call c64_ea_*` and
+every memory access a `call c64_rd_bx`, which is the trade this core makes
+deliberately (image against a near call per access, on a machine where
+correctness was the stated posture). And `C64.OVL` is **1,424** rather than
+6,000 — **not because the split has subsystems still to receive**, which is
+what this paragraph used to say: `ovl_probe`, `ovl_cmd`, `ovl_load_prg` and
+`ovl_about_show` are already the only four functions in `.modc`
+(`build/c64.gen.asm`) — and `ovl_probe` is not decorative, it is the whole of
+§13.3's first-wake probe. What is thin is their BODIES, because waves 3 and 4
+have not written the features they carry — Copy/Paste, the disk work, the
+panel's grown contents. The figure grows **inside the module** as they are
+written, and the resident image does not, which is the whole point of having
+put them there before they were big.
 
 ### 13.1 The file split
 
@@ -1876,9 +2561,9 @@ something to load.
 
 | | what it does |
 |---|---|
-| `apps/c64/hosttest/c64uitest.c` | the whole program over a stub `os88.h` with a **PIXEL** model of the glass — `gfx_blit1` writes real pixels, and `gfx_scroll` moves them and fills the vacated rows with GARBAGE, which is what catches a flush that trusts a stale shadow for a row the scroll vacated. After every step it asserts, pixel for pixel over the whole 320×200 screen, that **the glass shows what the shadow says it shows**; it prints §9.7's cost table in milliseconds and the dirty-pages-per-wake counter, and it dumps the machine and the composed frame for `tools/c64ref.py`. Wave 2 adds the scripted core, the level keyboard and the alarm path behind it. Run by `build.sh` before every build. **The assembly half cannot run on the host**, so the routines it substitutes are transcriptions — which makes `c64ref.py` a check on the ALGORITHM and not on the 8086 encoding; the encoding is gated by `c64memtest.sh`, by `tests/c64band`'s identity rows and by the QEMU screendumps, all of which run the shipping text. It also **enforces the clip** — a pixel written outside an armed region while no clip is armed is a failure with its coordinates, which is what makes SPEC.md §11.3 checkable for the callbacks that are not `W_PAINT` — and it models `os88_task_alive` as a call that never returns, which is what makes File > Exit emulator's teardown checkable at all. **`--no-rom` is a second process**: `os88_main` decides the refusal surface once per launch, so the screen a user of a mis-copied disk actually sees needs its own run |
+| `apps/c64/hosttest/c64uitest.c` | the whole program over a stub `os88.h` with a **PIXEL** model of the glass — `gfx_blit1` writes real pixels, and `gfx_scroll` moves them and fills the vacated rows with GARBAGE, which is what catches a flush that trusts a stale shadow for a row the scroll vacated. After every step it asserts, pixel for pixel over the whole 320×200 screen, that **the glass shows what the shadow says it shows**; it prints §9.7's cost table in milliseconds and the dirty-pages-per-wake counter, and it dumps the machine and the composed frame for `tools/c64ref.py`. It compiles this same C with **`-DC64_HOST`**, which is what keeps those counters out of the shipping image (§9.7): nothing in `apps/c64/*.c` reads one. Wave 2 adds the scripted core, the level keyboard and the alarm path behind it. Run by `build.sh` before every build. **The assembly half cannot run on the host**, so the routines it substitutes are transcriptions — which makes `c64ref.py` a check on the ALGORITHM and not on the 8086 encoding; the encoding is gated by `c64memtest.sh`, by `tests/c64band`'s identity rows and by the QEMU screendumps, all of which run the shipping text. It also **enforces the clip** — a pixel written outside an armed region while no clip is armed is a failure with its coordinates, which is what makes SPEC.md §11.3 checkable for the callbacks that are not `W_PAINT` — and it models `os88_task_alive` as a call that never returns, which is what makes File > Exit emulator's teardown checkable at all. **`--no-rom` is a second process**: `os88_main` decides the refusal surface once per launch, so the screen a user of a mis-copied disk actually sees needs its own run |
 | **`tools/c64ref.py`** | **an independent, pixel-level reference compositor.** Python, written from VIC-II documentation and VICE's `src/vicii/` as the authority, **not** from `c64band.inc`: it renders the same C64 memory to a 320×200 1bpp image, and the harness compares it **bit for bit** against what the package composed. This is what validates hires bitmap, multicolour, a custom character set, the cell transpose and sprite priority/expansion — a cell-identity glass model provably cannot. **`--lumcheck` is the other half**: the package's 16-byte luminance table against `vicii_colors_6569r5`'s own Y column, held here as parts per thousand straight off `vicii-color.c:441`, over all 256 ORDERED PAIRS — which is the only way to ask about §9.6's seven equal-luminance pairs in both directions, since a rendered frame carries one background at a time. The oracle derived its luminance from `vice.vpl` until this wave's fix pass, i.e. it kept the defect the package had already had removed |
-| `apps/c64/hosttest/c64cputest.asm` + `.sh` | §4.6's nine rows with their negative controls — `make c64cputest`, minutes, not in `build.sh` |
+| `apps/c64/hosttest/c64cputest.asm` + `.sh` | §4.6's **twelve** rows with their negative controls — `make c64cputest`, minutes, not in `build.sh`. Rows 11 and 12 and the rebuilds of rows 4, 8 and 9 are wave 2's third fix pass: a row that names a family it does not execute is a row that passes over the defect, and four of them did |
 | `apps/c64/hosttest/c64memtest.asm` + `.sh` | §3.6 — `c64mem.inc` **and** `c64band.inc`'s cross-segment entry points under `SS ≠ DS` with an `ES` sentinel: the movers, `c64_rowspan`/`c64_rowcopy`, and **`c64_band1` composing out of both claims and `c64_rowsig` signing out of one**, which nothing called until this wave's fix pass. **Four negative controls, one per thing the discipline check claims to check** — ES, DF, BP and DS. The BP and DS ones are new because both checks were inoperative: BP was recorded AFTER the call and compared with itself, and the checker did its own bookkeeping through whatever DS the routine under test had left behind. Run by `build.sh` |
 | `tests/c64band` | `make c64bandbench` — the icount bench pricing `c64_band1` (text, bitmap, multicolour) **per cell and per call**, `c64_band_x2` at 8 and 16 rows, `c64_rowspan` and `c64_rowshift`. **§9.7's milliseconds and §9.8's tier table are written from these numbers**, and they become a new Set in PERFORMANCE.md. It **arms the clip** on its rerun callbacks (they are `W_ONKEY`/`W_ONCLICK`, not `W_PAINT`), which is both correct and 28% of the `FONT_RUN` bar; it **saves ES** around every blit, because a callback returns `ES = KERNEL_SEG`; and it **preflights `OSAPI_GFX_BLIT1`**, so a kernel that refuses bands prints `REFUSED (CF=1)` on the rows that contain one instead of timing a call that draws nothing |
 | QEMU + QMP | `make test TESTAPPS=build/c64.img`, `tools/mouse.py`, `tools/qmp.py sendkey`, `tools/shot.py --crop --zoom`; `VIDEO=cga` with `--screen 640x200`, `VIDEO=herc` with `tools/hercshot.py`. Every screendump assertion lives here |
@@ -1909,6 +2594,7 @@ moves.
 | **need** | key STATE for the level keyboard model (§7.2), the joystick (§8) and CTRL+digit (§7.3). `os88_onkey` delivers presses only |
 | **slot** | `OSAPI_KEY_DOWN` — slot `0x03F0`, SPEC.md §9.7. `AL` = a make scancode, `CF` = down, every register kept; **asking is what arms it, and the first ask clears the map** (§7.2's rule 1); advice, not an oracle. The kernel already tracks every break code (`kernel/mouse.inc:1438`, `kbd_track`, `KBD_MAPSZ` 16 = all 128 make codes), and `apps/arkanoid` and `apps/cyclone` already use it |
 | **action** | add `int os88_key_down(int scan)` to `apps/cc/os88thunk.asm` and `apps/cc/os88.h` (`CC_T_A1`-shaped, CF → 1/0, about a dozen lines) **and the `hosttest/os88.h` stub in the SAME edit** |
+| **what it cost** | **18 bytes in every C package**, measured: CWORD's image went 35,938 → 35,956 with it in. `nasm -f bin` has no dead-code elimination, so a thunk nobody calls is still image — which is why the SDK's thunk file is a place to be careful. CWORD, the tightest C package in the tree, keeps 973 bytes of its 61,440 |
 
 ### 15.2 Slots used as they stand — no change
 

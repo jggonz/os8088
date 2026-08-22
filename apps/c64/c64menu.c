@@ -44,8 +44,9 @@
  *     say §7.5, and §7.5 is a three-row table of the chords the XT/AT BIOS
  *     cannot DELIVER - Alt+F12, Alt+Insert, Alt+Delete - which is a different
  *     question and contains none of them.) Power cycle machine, Load/Save
- *     snapshot image... and Quickload/Quicksave snapshot are the items this
- *     costs a caption.
+ *     snapshot image..., Quickload/Quicksave snapshot, Advance frame and
+ *     Datasette controls are the FIVE items this costs a caption, which is
+ *     the same five C64-SPEC §11.1 rule 2 names.
  *     THE ONE EXCEPTION: where dropping the caption would lose the ONLY
  *     chord a LIVE item has, the SEPARATOR is squeezed from two spaces to one
  *     instead - the label is still VICE's, entire, and it is the gap that
@@ -198,10 +199,17 @@ static const char *c64_edit_items[] = {
                                              * needs the screen-code -> PETSCII
                                              * -> ASCII tables and Paste the
                                              * $0277 keyboard-buffer feeder
-                                             * with $C6's count, and both
-                                             * arrive with the machine that HAS
-                                             * a keyboard buffer
+                                             * with $C6's count, and NEITHER
+                                             * table is written: the command
+                                             * bodies arrive with the rest of
+                                             * c64cmd.c's ovl_* commands
                                              * (docs/C64-PORT-PLAN.md wave 3).
+                                             * The machine they act on exists
+                                             * as of wave 2 - the fact that
+                                             * greys them is the tables, and a
+                                             * greying that names a reason
+                                             * which has stopped being true is
+                                             * exactly what 47 forbids.
                                              * They were live and toasted
                                              * "Copy/Paste: no machine yet.",
                                              * which is the one thing 47 is
@@ -243,6 +251,17 @@ static const char *c64_s_paus[2] = { OFF "Pause emulation  Alt+P",
                                      ON  "Pause emulation  Alt+P" };
 static const char *c64_s_swap[2] = { OFF "Swap joysticks  Alt+J",
                                      ON  "Swap joysticks  Alt+J" };
+/* ...and ONE item that is greyed by STATE rather than checked by it. Advance
+ * frame is live while there is a machine to advance and greyed when there is
+ * not - a disk with no C64.ROM (C64_ST_HALT) or a JAMMED CPU - because
+ * c64_advance_frame answers those states by doing nothing at all, and SPEC.md
+ * 47 forbids exactly that shape: a live black item that is a silent no-op is
+ * worse than one that says "not yet". The FACT that greys it is already on
+ * the glass and permanent: `C64.ROM missing - see README.TXT` (§1.4) or
+ * `Main CPU: JAM at $xxxx` (§4.5), on the status row, which is the window's
+ * bottom row and is always drawn. */
+static const char *c64_s_adv[2] = { "Advance frame",
+                                    D "Advance frame" };
 
 /* NOT const: c64_menu_state() writes these entries. The kernel keeps a COPY
  * of the SET (SPEC.md 12.2) but reads the ITEM STRINGS through the `items`
@@ -292,15 +311,24 @@ static const char *c64_pref_items[] = {
                                              * CHECK, and the second status
                                              * dot. `* Pause emulation  Alt+P`
                                              * is exactly 24 glyphs */
-    D "Advance frame",                      /* :712. <Alt><Shift>p is 11
-                                             * glyphs and does not fit.
-                                             * GREYED by rule 3: it runs to the
-                                             * next VIC frame end, and there is
-                                             * no raster accumulator until the
-                                             * alarm model lands with the core
-                                             * (docs/C64-PORT-PLAN.md wave 2).
-                                             * It was live and toasted
-                                             * "Advance frame: no VIC yet." */
+    "Advance frame",                        /* :712. <Alt><Shift>p is 11
+                                             * glyphs and does not fit, so the
+                                             * caption is dropped by rule 2 and
+                                             * the chord is in C64-SPEC §11.1's
+                                             * live-items table - os88_onkey
+                                             * dispatches it, reading the
+                                             * shift level to tell it from
+                                             * Alt+P, which the BIOS delivers
+                                             * identically. LIVE as of wave 2:
+                                             * it was
+                                             * greyed because "there is no
+                                             * raster accumulator until the
+                                             * alarm model lands with the
+                                             * core", and the alarm model
+                                             * landed - c64_frame_cyc IS that
+                                             * accumulator. A greying names a
+                                             * FACT (SPEC.md 47) and this one
+                                             * stopped being one. */
     D "Emulation speed",                    /* :719. Nothing throttles here:
                                              * the machine delivers what the
                                              * 8088 can and the status bar
@@ -364,4 +392,10 @@ static void c64_menu_state(void)
     c64_pref_items[C64_I_WARP]    = c64_s_warp[c64_warp ? 1 : 0];
     c64_pref_items[C64_I_PAUSE]   = c64_s_paus[c64_pause ? 1 : 0];
     c64_pref_items[C64_I_SWAPJOY] = c64_s_swap[c64_joyswap ? 1 : 0];
+    /* ...and the fifth entry is a GREYING, not a check (§47): with no machine
+     * running there is nothing to advance, and the reason is already the
+     * permanent line on the status row. c64_jam() and os88_main both call
+     * this, which is what makes the two states reachable here. */
+    c64_pref_items[C64_I_ADVANCE] =
+        c64_s_adv[(c64_norom || c64_state == C64_ST_JAM) ? 1 : 0];
 }

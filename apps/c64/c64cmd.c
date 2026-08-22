@@ -81,15 +81,37 @@ static int ovl_cmd(int menu, int item, void *win)
                 c64_ram_pattern();
             c64_reset_regs();
             c64_lum_update();
-            c64_poke_boot();
+            c64_frame_regs();
+            c64_reset_cpu();                /* the 6510 out of reset: I set,
+                                             * PC from $FFFC under the KERNAL
+                                             * (11.1) - and the KERNAL draws
+                                             * its own boot screen from here */
+            if (!c64_norom)
+                c64_state = C64_ST_RUN;
+            /* AND THE MENU IS RE-SPELLED, BECAUSE THIS IS A PATH OUT OF
+             * C64_ST_JAM. c64_jam() greys Preferences > Advance frame - there
+             * is no machine left to advance (SPEC.md 47) - and the FACT that
+             * greys it is the permanent `Main CPU: JAM at $XXXX` line on the
+             * status row. A reset clears the state, so c64_status stops
+             * drawing that line at once; without this call the greying
+             * outlived the fact by the rest of the session, and then un-greyed
+             * itself at random, because the only other callers of
+             * c64_menu_state are the Warp/Pause/Swap/Fullscreen latches - so
+             * whether Advance frame worked depended on which UNRELATED menu
+             * item you had last picked. Every path that leaves C64_ST_JAM
+             * re-runs it; it is harmless on the c64_norom path, where the
+             * state does not change and the greying is still owed. */
+            c64_menu_state();
+            c64_dirty_all();
+            c64_kick = 1;
             /* AND NOT c64_sh_inval(). Nothing covered the glass across a
-             * reset, so the shadow is still true, and c64_poke_boot already
-             * ends in c64_dirty_all() - which is the RECOMPOSE. sh_inval is
-             * the FORCE, and forcing switches off the frame compare that
-             * exists to answer "the picture did not change, draw nothing":
-             * a reset from the boot screen back to the boot screen is exactly
-             * that case, and it cost 25 forced blits, ~266 ms, four host
-             * ticks. c64scr.c's own header states the distinction. */
+             * reset, so the shadow is still true, and c64_dirty_all is the
+             * RECOMPOSE. sh_inval is the FORCE, and forcing switches off the
+             * frame compare that exists to answer "the picture did not
+             * change, draw nothing": a reset from the boot screen back to the
+             * boot screen is exactly that case, and it cost 25 forced blits,
+             * ~266 ms, four host ticks. c64scr.c's own header states the
+             * distinction. */
             return 1;
         }
         if (item == C64_I_EXIT) {
@@ -175,10 +197,25 @@ static int ovl_cmd(int menu, int item, void *win)
             c64_say(c64_pause ? "Paused." : "Running.");
             return 1;
         }
-        /* C64_I_ADVANCE is GREYED with its fact in c64menu.c: there is no
-         * raster accumulator until the alarm model lands with the core
-         * (docs/C64-PORT-PLAN.md wave 2), so the kernel never dispatches it
-         * and it has no case here either. */
+        if (item == C64_I_ADVANCE) {
+            /* LIVE AS OF WAVE 2 (§11.1). It was greyed with the fact that
+             * greyed it - "there is no raster accumulator until the alarm
+             * model lands with the core" - and this wave landed the alarm
+             * model, so the fact stopped being true and SPEC.md 47 does not
+             * let a greying outlive its reason. The body raises a request:
+             * this handler runs under the gfx lock and a PAL frame is 19,656
+             * emulated cycles, which is not a thing to hold the desktop for.
+             *
+             * AND IT IS NOT A CHECK ITEM: src/arch/gtk3/actions-speed.c:72-80
+             * (identically src/arch/gtk3/ui.c:2735-2743) PAUSES a running
+             * machine and advances only an already-paused one, so from a
+             * running machine this item runs no frame at all. c64.c's
+             * c64_advance_frame is that action, transcribed; and with no
+             * machine at all - no C64.ROM, or a JAM - c64_menu_state greys
+             * the item rather than let it be a silent no-op (§47). */
+            c64_advance_frame();
+            return 1;
+        }
         if (item == C64_I_SWAPJOY) {
             c64_joyswap = !c64_joyswap;  /* the row's two indicators swap,
                                           * which its own field compare sees */

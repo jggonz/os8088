@@ -34,12 +34,17 @@ distributes them.
 
 WHAT THIS MACHINE IS NOT
 ------------------------
-There is no 1541, no datasette and no cartridge port, so LOAD"*",8 answers
-with the ?DEVICE NOT PRESENT error - which is the honest machine, not a
-defect. (What the screen prints is the KERNAL's own wording, and it is not
-quoted here until wave 2 runs the ROM and it can be transcribed rather than
-remembered.) Programs are
-loaded with File > Smart attach... from a .PRG file. The screen is monochrome
-on every adapter, VGA included, resolved from the C64's 16 colours by
-luminance. Every menu item that cannot work in this build is present, greyed,
-and names the fact that greys it.
+There is no 1541, no datasette and no cartridge port, so a LOAD from drive 8
+answers the way a C64 with nothing plugged into the serial port answers -
+which is the honest machine, not a defect. Typed at this machine, verbatim:
+
+    LOAD"*",8
+
+    SEARCHING FOR *
+    ?DEVICE NOT PRESENT  ERROR
+    READY.
+
+Programs are loaded with File > Smart attach... from a .PRG file. The screen
+is monochrome on every adapter, VGA included, resolved from the C64's 16
+colours by luminance. Every menu item that cannot work in this build is
+present, greyed, and names the fact that greys it.

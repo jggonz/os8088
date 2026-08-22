@@ -108,6 +108,11 @@ int  os88_toast(const char *text, int ticks);
 int  os88_cpu(void);
 void os88_video(struct os88_video *v);
 unsigned os88_ticks(void);
+/* os88_key_down - SPEC.md 9.7's key-state map. The first call arms it and
+ * always answers 0 (C64-SPEC §7.2's rule 1: it is asked once, from
+ * os88_main). Advice, not an oracle. The harness models both. */
+int  os88_key_down(int scan);
+int  os88_snd_tone(int hz, int ticks, int prio);
 
 unsigned os88_mem_claim(int kb);
 int      os88_mem_free(unsigned seg);

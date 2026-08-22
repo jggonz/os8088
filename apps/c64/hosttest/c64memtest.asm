@@ -37,10 +37,16 @@
 ;      (a JSR writes $01xx, a BASIC statement zero page and $0800+) leaves the
 ;      window spanning the whole matrix and the flush recomposes forty cells
 ;      of every dirty row, forever;
+;   3b. c64_dirty_take, the ONE call a flush now makes for all of that: the
+;      32-byte bitmap and the window's two words land in the PACKAGE's memory
+;      in the documented slots (dst[0..31], dst[32..35]), the 37th byte is a
+;      guard it must not reach, and the scratch is RESET in the same pass -
+;      bitmap zeroed, window re-opened to $FFFF/0, ANY cleared. It replaced
+;      ~50 near thunk calls a flush, ~1.8 ms on the target (9.2, 9.7);
 ;   4. every mover leaves the destination equal to the source byte for byte,
 ;      including a block laid across the 64KB wrap, and touches nothing
 ;      outside it (a guard byte each side);
-;   5a. c64band.inc's CROSS-SEGMENT pair, which §3.6's rule is actually about:
+;   5a. c64band.inc's CROSS-SEGMENT pair, which C64-SPEC §3.6's rule is actually about:
 ;      c64_band1 composing three cells out of a matrix row in the RAM claim
 ;      and a character generator in the ROM claim - one cell per branch of the
 ;      luminance mask, including the uniform one an XOR cannot express - and
@@ -276,10 +282,56 @@ body:
     pop es
     mov al, '.'
     call putc
-    jmp .movers
+    jmp .take
 .f3e:
     pop es
     mov al, '3'
+    call putc
+    inc bp
+
+    ; --- (3b) c64_dirty_take: the whole flush read, in ONE call --------------
+    ; The scratch state case 3 just left behind is the fixture: bitmap byte 0
+    ; = 0x4C, byte 17 = 0x20, the window $0400..$0512, ANY = 1. The routine
+    ; must bring all of that into the PACKAGE's memory - which is a different
+    ; segment from the claim, which is the whole reason it is in this file -
+    ; and RESET the scratch in the same pass, or the next flush recomposes
+    ; what this one already drew.
+.take:
+    mov word [pushes], 1
+    PUSHI take
+    call disc_call
+    dw _c64_dirty_take
+    cmp byte [take + 0], 0x4C               ; the bitmap came across...
+    jne .f3be
+    cmp byte [take + 17], 0x20
+    jne .f3be
+    cmp word [take + 32], 0x0400            ; ...and the window's two words,
+    jne .f3be                               ;   in the documented slots
+    cmp word [take + 34], 0x0512
+    jne .f3be
+    cmp byte [take + 36], 0xA5              ; ...and NOT one byte past 36
+    jne .f3be
+    push es
+    mov ax, SEG_RAM
+    mov es, ax
+    cmp byte [es:0xFFC0 + 0], 0             ; the scratch is RESET by the same
+    jne .f3bp                               ;   pass: bitmap zeroed...
+    cmp byte [es:0xFFC0 + 17], 0
+    jne .f3bp
+    cmp word [es:0xFFC0 + 0x2C], 0xFFFF     ; ...the window re-opened...
+    jne .f3bp
+    cmp word [es:0xFFC0 + 0x2E], 0
+    jne .f3bp
+    cmp byte [es:0xFFC0 + 0x30], 0          ; ...and ANY cleared, because this
+    jne .f3bp                               ;   IS the read of it
+    pop es
+    mov al, '.'
+    call putc
+    jmp .movers
+.f3bp:
+    pop es
+.f3be:
+    mov al, 'K'                     ; 'T' is the totals marker below
     call putc
     inc bp
 
@@ -419,7 +471,7 @@ body:
     inc bp
 
     ; --- (6) c64band.inc's CROSS-SEGMENT pair: the composer and the
-    ;         signature. §3.6 says every cross-segment entry point is
+    ;         signature. C64-SPEC §3.6 says every cross-segment entry point is
     ;         exercised here with SS != DS and an ES sentinel, and these two
     ;         are the ones that read a CLAIM: c64_band1 takes the matrix
     ;         through mseg:moff and the character generator through gseg:goff,
@@ -839,6 +891,18 @@ _c64_cmask: times 32 db 0xFF
 _c64_bgfill: db 0
 section .text
 
+; ...and c64cpu.inc calls OUT to the compiled C for every $D000-$DFFF access
+; and for $0000/$0001 (C64-SPEC §3.4). This harness tests the MOVERS,
+; not the core, so the two are stubs - but they have to EXIST, because a
+; `call` to an undefined symbol assembles at a different size on the second
+; pass and nasm then refuses the whole file. The core's own gate is
+; hosttest/c64cputest.asm, where these two answer values the test checks.
+_c64_io_rd:
+    mov ax, 0x00FF
+    ret
+_c64_io_wr:
+    ret
+
 putc:
     push ax
     push dx
@@ -912,6 +976,9 @@ disc_ax:     dw 0
 disc_es:     dw 0
 disc_ds:     dw 0
 disc_fl:     dw 0
+take:        times 36 db 0
+             db 0xA5                    ; the guard c64_dirty_take must not
+             times 3 db 0xCC            ;   reach: it takes exactly 36 bytes
 src:         times 24 db 0
              times 4 db 0xCC
 dst:         times 24 db 0

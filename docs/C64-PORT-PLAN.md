@@ -802,8 +802,9 @@ product (`c64_st_dirty` is gone); and the C's span pair is `c64_cspf`/
   crossing, the true slow fetch path for I/O, the cdecl calls out with `ES`
   save/reload, the dirty-bit `or` on every write, the scratch at
   `$FFC0-$FFF9`, IRQ/NMI/BRK entry, `C64_RUN_SLICE` / `C64_RUN_JAM`
-- `hosttest/c64cputest.sh` — the **nine rows** of Decision 22 with a negative
-  control on each; `make c64cputest`
+- `hosttest/c64cputest.sh` — the **twelve rows** of Decision 22 with a negative
+  control on each; `make c64cputest` (the decision said nine: decimal
+  `ADC`/`SBC` came out of Dormann's row into one of its own, `C64-SPEC` §4.6)
 - `c64io.c`: the alarm scheduler and cycles-to-next-event; CIA1/CIA2 timers,
   ICR, TOD on its own 50 Hz accumulator; the VIC raster line and frame-end
   alarms, `$D012`, the raster compare, `$D019`/`$D01A`; the IRQ and NMI lines
@@ -828,11 +829,12 @@ product (`c64_st_dirty` is gone); and the C's span pair is `c64_cspf`/
   shims / largest frame
 
 **Files:** `apps/c64/c64cpu.inc`, `c64io.c`, `c64kbd.c`, `c64.c`, `c64scr.c`,
-`hosttest/{os88.h, c64cputest.asm, c64cputest.sh, c64uitest.c}`,
-`apps/cc/os88thunk.asm`, `apps/cc/os88.h`, `Makefile`, `docs/C64-SPEC.md`
+`c64cmd.c`, `c64mem.inc`, `hosttest/{os88.h, c64cputest.asm, c64cputest.sh,
+c64memtest.asm, c64uitest.c}`, `tools/c64dec.py`, `apps/cc/os88thunk.asm`,
+`apps/cc/os88.h`, `Makefile`, `docs/C64-SPEC.md`
 
 **Done when:**
-`make c64cputest` passes **all nine rows** — Dormann functional and decimal,
+`make c64cputest` passes **all twelve rows** — Dormann functional and decimal,
 the seven bank maps, `$0000`/`$0001`, fetches and accesses at every mapping
 boundary including an instruction that straddles one, real I/O stub returns,
 `ES`/`DS` restoration, IRQ/NMI entry, the illegal opcodes, and per-family
@@ -843,8 +845,11 @@ a blinking cursor;
 a `FOR` loop of 1000 `PRINT`s scrolls with the harness asserting **one
 `gfx_scroll` per FLUSH** and `k` composed rows (never one scroll per printed
 line), and one keystroke echo composing only its span;
-holding a cursor key repeats at the KERNAL's own rate and Esc+PgUp warm-starts
-to `READY.` (screendump sequence);
+holding a key the KERNAL repeats — the space bar or INST/DEL — repeats at its
+own rate, and Esc+PgUp warm-starts to `READY.` (screendump sequence). **The
+cursor keys are no longer that key**: the fix pass made the keyset consume
+them, which is what VICE does with a keyset on port 2 (`C64-SPEC` §8), so they
+drive the stick and do not type;
 the harness asserts: `% cpu` is computed from emulated cycles (a scripted core
 delivering exactly 985,248 cycles in a second prints `100`), `fps` from
 emulated VIC frames (19,656 cycles a frame → 50.1 at 100%), and flushes/s is a
@@ -860,14 +865,176 @@ rather than written past the end;
 the **five-figure size line** is in the wave report against 61,440 and
 SPEC.md §73.9's 55,000 trigger.
 
+**What wave 2 measured, and what it changed** (2026-08-22). BASIC boots to
+`READY.` off the real ROMs, `PRINT 2+2` prints `4`, a `FOR` loop of 1,000
+`PRINT`s scrolls, RUN/STOP breaks it and RUN/STOP+RESTORE warm-starts.
+**The first honest size line, after the wave's three fix passes: resident
+image 36,434 + bss 11,346 = 47,780 of 61,440, `C64.OVL` 1,424, 24 resident
+shims, largest frame 32 bytes** — 7,220 under SPEC.md §73.9's 55,000 trigger,
+and smaller than the plan's estimate on all three figures (`C64-SPEC` §13.0
+carries a per-pass delta, and says which two of the plan's figures moved and
+why).
+
+Nine things the plan could not know, each written back into
+`docs/C64-SPEC.md` rather than left in the code:
+
+1. **The boundary guard is a RANGE, not a ceiling.** `C64-SPEC` §4.3's one `cmp` per
+   fetch is only correct while PC increases: a `JMP` back from `$E000` to
+   `$0400` leaves PC BELOW the biased region and a one-compare guard fetches
+   the KERNAL's bias over RAM. Two compares cost two instructions on the most
+   frequent path in the machine; re-biasing on every control transfer, which
+   is the other way to be correct, costs twenty. `C64-SPEC` §4.3.
+2. **`and di,0x01FF` is the wrong stack wrap and BASIC does not notice.**
+   `0x0200 & 0x01FF` is `0x0000`, not `0x0100`, so a pull with `S = $FF` read
+   byte zero of the address space and left every later push writing at
+   `$0000` downwards. The machine booted, ran BASIC and answered `PRINT 2+2`
+   with that defect in it. **Klaus Dormann's "proper stack wrap around" test
+   at `$0D89` is what caught it** — which is the whole argument for the gate
+   being twelve rows and a fetched fixture rather than a boot screenshot.
+   `C64-SPEC` §4.1.
+3. **The countdown is a SIGNED word, so 32,767 is the cap on every budget.**
+   A 60,000-cycle pass arrives negative and the core expires before its first
+   fetch, which reads exactly like a test that will not start. `C64-SPEC` §4.2.
+4. **The alarm's service is a RETURN to the C, not a call out of the core**,
+   and **the end of a raster LINE is not an alarm**: `$D012` is computed from
+   the cycle counter when it is read. The first would have cost what the
+   entry/exit shell costs anyway; the second would have ended the run 312
+   times a frame for a register most programs never touch. `C64-SPEC` §4.4
+   and `C64-SPEC` §5.2.
+5. **`os88_wm_onwake` INSTALLS the handler; it does not post a wake.** The
+   machine sat at its reset vector with `0% cpu` on the status row until the
+   user pressed a key, and then booted perfectly - which reads as a reset bug
+   rather than a wake loop that was never started. `os88_main` posts the first
+   kick (`build/port-shots/wave2-03-launch.png` is the defect).
+6. **`% cpu` needs a cap that keeps an `int` positive and nothing tighter.**
+   A "320 % of a real 6510 and nothing will see it" clamp clipped an honest
+   figure into a wrong one that still looked like a number — `1777% cpu`
+   beside `1195.1 fps`, two figures that could not both be true. Under QEMU
+   this core runs at some **thousands** of per cent. `C64-SPEC` §10.2.
+7. **Dormann's decimal test does not exist as a binary.** The project
+   publishes the functional test's binary and the 65C02 one and nothing else,
+   so `tools/c64dec.py` computes the reference for all 262,144 decimal cases
+   in Python from the documented NMOS rules — the posture `tools/c64ref.py`
+   already takes toward the composer. `C64-SPEC` §4.6 row 10.
+8. **A negative control that reads a stale answer passes.** Two of the ten
+   controls "worked" because the row's output byte still held what the
+   POSITIVE run had written there. Every row clears its answer bytes first.
+9. **A 64KB fixture lands on top of the core's scratch.** Dormann's image
+   overwrites `$FFC0-$FFF9`, so its own bytes became the pending-interrupt
+   flags and the first run took an NMI nobody raised. `C64-SPEC` §3.5.
+
+**And seven more the wave's review found, every one of them silent on the
+glass:**
+
+10. **`(int)0xFFFF` is `-1`, and a CIA latch of `$FFFF` is the RESET DEFAULT.**
+    `while (n > (int)c) { n -= (int)c + 1; … }` in the timer step never
+    terminated for the standard free-running-timer idiom — an infinite loop on
+    the UI task — and the same wrap in `c64_alarm_next` made such a counter
+    look one cycle away, so the driver ran the core one emulated cycle per
+    alarm query. Compare unsigned; skip a counter at or above `$7FFF` instead
+    of casting it. **Neither reproduces on the host** (`int` is 32 bits
+    there), which is why the harness's row carries a `short` model of the
+    target's widths as its negative control. `C64-SPEC` §4.4.
+11. **A PAUSED machine is still `C64_ST_RUN`, and re-posting on the state
+    alone spins the UI task** at SPEC.md §74.1's ~1,400 wakes a second, for a
+    machine the user deliberately stopped. One `c64_wants_wake()`, after
+    `runcpm.c:847`. `C64-SPEC` §4.4.
+12. **The fresh-key guarantee was counted in WAKES, and a wake is 1/64 of an
+    emulated keyboard scan at the slice floor.** Under QEMU every press is
+    scanned many times over; on the target typing loses characters at random —
+    PERFORMANCE.md's input overrun, with the emulator-versus-target speed
+    ratio as its cause. It is counted in emulated cycles now, and bounded.
+    `C64-SPEC` §7.2 rule 4.
+13. **A JAM was invented text and a five-second message.** VICE has the string
+    (`maincpu.c:612` + `6510core.c:45` → `Main CPU: JAM at $E5CF`), and a
+    jammed machine is a PERMANENT row state beside `C64.ROM missing` — the
+    glass showed a dead machine and an idle one identically.
+    `C64-SPEC` §4.5 and `C64-SPEC` §10.1.
+14. **A greying is retired the moment its fact is.** Advance frame was greyed
+    with "there is no raster accumulator until the alarm model lands" and this
+    wave landed the alarm model. It is live, and its body raises a REQUEST the
+    slice driver serves — `os88_oncmd` runs under the gfx lock and a PAL frame
+    is 19,656 emulated cycles. `C64-SPEC` §11.1.
+15. **The speed widget repainted 24 glyph cells a second where at most four
+    change** (~23 ms every second, ten times a keystroke), nine of them two
+    literal tails that never change — and its own figures were not a reason to
+    flush, so a machine that runs without writing RAM froze them. Tails once,
+    numbers delta-drawn, the widget's delta in the flush gate.
+    `C64-SPEC` §10.2.
+16. **`LOAD"*",8` hung at `SEARCHING FOR *`, and nobody had ever typed one.**
+    `$DD00` answered the raw register file, so DATA IN read low — a device
+    replying. An empty serial bus reads back what the machine drives,
+    INVERTED (`iecbus.c:212-217` + `c64cia2.c:150-162`). With that modelled
+    the KERNAL prints `?DEVICE NOT PRESENT  ERROR`, which is what §11.3 and
+    `README.TXT` had been promising unread. `C64-SPEC` §6.2, §11.3.
+
+**And six more the SECOND review found — every one of them in what the FIRST
+fix pass had just added, which is the shape to expect of a fix pass:**
+
+17. **A ROM-less machine's message never expired, and the new
+    `c64_wants_wake` turned that into an unbounded wake spin.** The deadline
+    was examined at the far end of `c64_flush`, past the `if (c64_norom)`
+    early return, so on a disk with no `C64.ROM` the first menu command a user
+    picked owned the status row for the session — with `C64-SPEC` §1.4's line
+    behind it — while the handler re-posted ~1,400 times a second for ever.
+    The deadline is now the first thing in the flush. `C64-SPEC` §10.1.
+18. **A message is not work, and `c64_wants_wake` tested it FIRST.** A paused,
+    jammed or ROM-less machine re-posted for the whole five-second life of
+    every message with nothing inside the wake but a re-read of the clock:
+    ~7,000 round trips, ~4.8 s of the SHARED UI task — SPEC.md §74.1's rule
+    inverted, and newly reachable because Alt+P now genuinely stops the
+    machine. A machine the user stopped keeps its message until the next
+    event, and that is stated rather than silent. `C64-SPEC` §10.1.
+19. **`fps` had the `% cpu` defect, one field to the right.** `c64_muldiv`
+    answers `$FFFF` on overflow and the cast makes that −1, so `     0.0 fps`
+    beside a live `% cpu`. The harness row that "proved" the `% cpu` clamp
+    zeroed the frame counter and never evaluated the other half of its own
+    scenario. Both clamps are before both casts now, and the row drives both.
+    `C64-SPEC` §10.2.
+20. **One JAM drew the status row twice, identically, with an erase between.**
+    Routed through `c64_say` the line went up as a message; five seconds later
+    the deadline cleared it, the selector moved to the permanent state, and
+    the row was filled black and re-lettered with the same 22 glyphs at the
+    same place — ~21 ms for no pixel, and a visible blank-and-re-letter five
+    seconds after the event. A permanent row state does not arrive as a
+    message. `C64-SPEC` §10.1.
+21. **Preferences > Advance frame did not do what VICE's Advance frame does.**
+    `actions-speed.c:72-80` PAUSES a running machine and advances only an
+    already-paused one; the port ran a frame from a running machine and then
+    paused. The one live item the wave added was the one item whose body had
+    not been transcribed (LESSONS.md 1). It is also **greyed again whenever
+    there is no machine to advance** — a live black item that is a silent
+    no-op is what SPEC.md §47 forbids — and the Alt+Shift+P chord now reads
+    the shift level, because the BIOS delivers it identically to Alt+P and it
+    was RESUMING a paused machine. `C64-SPEC` §11.1.
+22. **The wave's one recurring redraw was unmeasured.** The speed widget is
+    the first thing in this program that draws on a TIMER, and §9.7 had no row
+    for it. It has two now — **1.7 ms, one `font_run` of one glyph cell**, and
+    the whole-row path beside it at **41.7 ms** as the negative control — and
+    the harness HOLDS the once-a-second fold for every other cost row, because
+    a timer landing inside an unrelated row was pricing the status widget as
+    part of it. `C64-SPEC` §9.7 and `C64-SPEC` §10.2.
+
+And one number the glass answered: **under QEMU the core runs at ~2,700 % of
+a real C64 and ~1,350 emulated VIC frames a second** (the two figures agree to
+the ratio 19,656 / 98,516, which is itself the check that they come from the
+same clock). That is a fact about QEMU and **not** a claim about an 8088 —
+CLAUDE.md's "exact about how much work the guest does and useless about how
+long it takes" — and the target's figure is manual evidence off the 86Box
+machines (Decision 21).
+
 ### Wave 3 — The commands: reset, exit, pause, warp, fullscreen, copy/paste, joystick, SID
 
 - `c64cmd.c` as `ovl_*`: Reset machine CPU (Alt+F9), Power cycle (menu; Alt+F12
   where the BIOS passes it), Exit emulator (Alt+Q, the worker self-close),
-  Pause (Alt+P, shown checked by text swap), Advance frame (Alt+Shift+P: run
-  to the next VIC frame end), Warp (Alt+W: flush every 9 ticks), Swap
+  Pause (Alt+P, shown checked by text swap), Warp (Alt+W: flush every 9
+  ticks), Swap
   joysticks (Alt+J), Copy (screen PETSCII → ASCII → `os88_clip_put`), Paste
   (`os88_clip_get` → the `$0277` feeder, 10 characters a jiffy)
+  (**Advance frame is NOT here**: it went live in wave 2's fix pass, because
+  the fact that greyed it — no raster accumulator — stopped being true the
+  moment the alarm model landed. `C64-SPEC` §11.1 is the contract and this
+  list used to contradict it)
 - **the first `ovl_` call from the first wake** (the `.OVL` cannot load from
   `os88_main`); `Unable to load C64.OVL.` printed in the status row as well as
   toasted (the toast is under a fullscreen window)
@@ -1009,7 +1176,7 @@ named.
   provably cannot
 - **`hosttest/c64cputest.sh`** (`make c64cputest`, minutes, not in
   `build.sh`): the shipping `c64cpu.inc` in a boot sector in raw QEMU under
-  `SS != DS`, running Decision 22's nine rows with a negative control on each.
+  `SS != DS`, running Decision 22's twelve rows with a negative control on each.
   Klaus Dormann's `6502_functional_test.bin` and `6502_decimal_test.bin` are
   fetched at pinned SHA-256s and never committed
 - **`hosttest/c64memtest.sh`**: `c64mem.inc` **and** `c64band.inc`'s string

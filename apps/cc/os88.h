@@ -627,6 +627,16 @@ void os88_task_alive(void *win);
 
 /* --- input, video, the machine ------------------------------------------- */
 void os88_mouse(struct os88_mouse *m);
+/* os88_key_down - is that make scancode down RIGHT NOW (SPEC.md 9.7)? 1 down,
+ * 0 up. os88_onkey delivers PRESSES only, so this is the only way to model a
+ * key as a LEVEL - a held cursor key, a joystick keyset, Ctrl+digit.
+ * ASKING IS WHAT ARMS IT: the first call clears and arms the kernel's map and
+ * always answers 0. Ask it ONCE from os88_main() and ignore that answer;
+ * arming it from a callback erases the make os88_onkey has already seen.
+ * It is ADVICE, NOT AN ORACLE: a break code the ISR missed leaves that key
+ * reading down until it is pressed again. Bound what a "yes" makes you do. */
+int  os88_key_down(int scan);
+
 int  os88_evq_pending(void);                     /* events queued BEHIND the
                                                   * one being dispatched (13.4)
                                                   * - "am I about to be asked

@@ -335,10 +335,64 @@ static int col_v(int colour)
     return colour == OS88_BLACK ? 0 : 1;
 }
 
+static char h_last_run[80];             /* the LAST text this row drew, so a
+                                         * permanent status line can be read
+                                         * back off the glass rather than
+                                         * asserted about in the abstract */
+static int h_last_run_x;                /* ...and WHERE it landed, which is
+                                         * how a delta-drawn field is told
+                                         * from the literal tail beside it:
+                                         * `% cpu` and ` fps` never change and
+                                         * a repaint that touches their cells
+                                         * is the whole-field redraw coming
+                                         * back (§9.7) */
+
+/* ...AND EVERY RUN SINCE h_runs_clear(), BY THE x IT LANDED ON. One `last
+ * run` stopped being enough the moment the status row drew more than one
+ * thing per pass: a message now shares the row with the two LAMPS (§10.1), so
+ * the last run on a jammed machine is `P` and not the jam line, and asking
+ * `did the row say X` needs the run at X's own x. */
+#define H_RUNMAX 24
+static char h_run_txt[H_RUNMAX][80];
+static int h_run_x[H_RUNMAX];
+static int h_run_ink[H_RUNMAX];
+static int h_nrun;
+
+static void h_runs_clear(void) { h_nrun = 0; }
+
+static const char *h_run_at(int x)      /* the run drawn at exactly x, or 0 */
+{
+    int i;
+    for (i = h_nrun - 1; i >= 0; i--)
+        if (h_run_x[i] == x)
+            return h_run_txt[i];
+    return 0;
+}
+
+static int h_run_ink_at(int x)          /* ...and its ink, which is how an
+                                         * INVERTED cell - a lit lamp - is
+                                         * told from an unlit one (§10.2) */
+{
+    int i;
+    for (i = h_nrun - 1; i >= 0; i--)
+        if (h_run_x[i] == x)
+            return h_run_ink[i];
+    return -1;
+}
 void os88_font_run(int x, int y, const char *s, int ink, int paper)
 {
     int i;
     need_lock("font_run");
+    strncpy(h_last_run, s, sizeof(h_last_run) - 1);
+    h_last_run[sizeof(h_last_run) - 1] = 0;
+    h_last_run_x = x;
+    if (h_nrun < H_RUNMAX) {
+        strncpy(h_run_txt[h_nrun], s, sizeof(h_run_txt[0]) - 1);
+        h_run_txt[h_nrun][sizeof(h_run_txt[0]) - 1] = 0;
+        h_run_x[h_nrun] = x;
+        h_run_ink[h_nrun] = ink;
+        h_nrun++;
+    }
     n_run++;
     n_run_cells += (long)strlen(s);
     for (i = 0; s[i]; i++)
@@ -650,8 +704,43 @@ char *os88_utoa(unsigned v, char *d) { sprintf(d, "%u", v); return d; }
 int c64_rd(unsigned a) { return ram[a & 0xFFFF]; }
 int c64_rd16(unsigned a) { return ram[a & 0xFFFF] | (ram[(a + 1) & 0xFFFF] << 8); }
 int c64_rom_rd(unsigned off) { return rom[off % 20480]; }
-int c64_scr_rd(unsigned off) { return ram[H_SCR_BASE + off]; }
-void c64_scr_wr(unsigned off, int v) { ram[H_SCR_BASE + off] = (unsigned char)v; }
+/* EVERY SCRATCH ACCESS IS COUNTED, because the flush's cost is not only what
+ * it draws. c64_scr_rd / c64_scr_wr are C-callable NEAR THUNKS into the
+ * emulated machine's memory (c64mem.inc): ten instructions and a segment load
+ * each, ~38 us on the target, and c64_dirty_scan used to make about fifty of
+ * them per flush - ~1.8 ms, comparable to the WHOLE of §9.7's `one changed
+ * cell` row, and reported as 0.0 ms by a model that counted gfx calls only.
+ * cost_row prices them now, and c64_dirty_take is the one call that replaced
+ * the fifty. */
+static long n_scr_acc, n_scr_take;
+
+int c64_scr_rd(unsigned off) { n_scr_acc++; return ram[H_SCR_BASE + off]; }
+void c64_scr_wr(unsigned off, int v)
+{ n_scr_acc++; ram[H_SCR_BASE + off] = (unsigned char)v; }
+
+/* c64mem.inc's _c64_dirty_take: the 32-byte page bitmap and the write
+ * window's two words into the package's own memory, and the scratch reset in
+ * the same pass. The layout IS the contract - dst[0..31] bitmap,
+ * dst[32..35] the window - and hosttest/c64memtest.asm runs the shipping
+ * assembly against it on a real x86 with SS != DS. */
+void c64_dirty_take(unsigned char *dst)
+{
+    int i;
+    n_scr_take++;
+    for (i = 0; i < 32; i++) {
+        dst[i] = ram[H_SCR_BASE + 0x00 + i];
+        ram[H_SCR_BASE + 0x00 + i] = 0;
+    }
+    dst[32] = ram[H_SCR_BASE + 0x2C];
+    dst[33] = ram[H_SCR_BASE + 0x2D];
+    dst[34] = ram[H_SCR_BASE + 0x2E];
+    dst[35] = ram[H_SCR_BASE + 0x2F];
+    ram[H_SCR_BASE + 0x2C] = 0xFF;
+    ram[H_SCR_BASE + 0x2D] = 0xFF;
+    ram[H_SCR_BASE + 0x2E] = 0;
+    ram[H_SCR_BASE + 0x2F] = 0;
+    ram[H_SCR_BASE + 0x30] = 0;         /* ANY: this IS the read of it */
+}
 
 static void h_dirtybit(unsigned a)
 {
@@ -700,8 +789,6 @@ void c64_zzcopy_in(unsigned a, unsigned sseg, unsigned soff, unsigned n)
 void c64_zfill(unsigned a, int v, unsigned n)
 { memset(ram + (a & 0xFFFF), v, n); }
 
-int c64_run(unsigned cycles) { n_cpu++; return 1; /* C64_RUN_JAM: wave 1's
-                                                   * core has no opcodes */ }
 
 /* c64band.inc, transcribed. The composer is c64_band1's phase A and B: read
  * the character and the colour, index the character generator, and put the
@@ -814,6 +901,152 @@ void c64_band_x2(unsigned char *dst, const unsigned char *src, int rows)
 /* c64cpu.inc's register file, which the C declares extern (4.1). It is
  * defined AFTER the include because the struct is c64.c's. */
 struct c64_mach c64_m;
+
+/* ==========================================================================
+ * THE SCRIPTED CORE (C64-SPEC §14.5)
+ *
+ * c64cpu.inc is 8086 and cannot run here; what it OWES the C is a contract -
+ * "spend at most `cycles`, leave what you did NOT spend in c64_m.cnt, answer
+ * SLICE or JAM" - and this is that contract, scriptable, so the slice driver,
+ * the alarm model, the two-word counters and the adaptation are driven rather
+ * than reasoned about. The real core's own nine-row gate is
+ * hosttest/c64cputest.sh, on a real x86 (§4.6).
+ * ========================================================================*/
+#define H_CPU_IDLE  0                       /* spend the budget, write nothing */
+#define H_CPU_EARLY 1                       /* end after h_cpu_early cycles */
+#define H_CPU_JAM   2
+static int h_cpu_mode = H_CPU_IDLE;
+static int h_slow_wake;                     /* host ticks the scripted core
+                                             * burns per call, so a test can
+                                             * make ONE slice span two tick
+                                             * boundaries - the halving arm of
+                                             * the adaptation (4.4) */
+static int h_cpu_early = 1;
+static unsigned h_cpu_ran;                  /* cycles this core has delivered */
+static int h_booted;
+
+static void h_boot_screen(void);
+
+int c64_run(unsigned cycles)
+{
+    int n = (int)cycles;
+
+    n_cpu++;
+    the_ticks += (unsigned)h_slow_wake;
+    if (!h_booted) {
+        h_booted = 1;
+        h_boot_screen();                    /* what the KERNAL writes first */
+    }
+    if (h_cpu_mode == H_CPU_JAM) {
+        c64_m.cnt = 0;
+        return 1;
+    }
+    if (h_cpu_mode == H_CPU_EARLY && h_cpu_early < n) {
+        c64_m.cnt = (unsigned)(n - h_cpu_early);
+        h_cpu_ran += (unsigned)h_cpu_early;
+        return 0;
+    }
+    c64_m.cnt = 0;
+    h_cpu_ran += (unsigned)n;
+    return 0;
+}
+
+/* the banked reader, the cut and the re-bank. The vector table lives in the
+ * modelled ROM image, which is what makes c64_reset_cpu's $FFFC read real. */
+int c64_bread(unsigned a)
+{
+    a &= 0xFFFF;
+    if (a >= 0xE000 && ram[H_SCR_BASE - 1] == ram[H_SCR_BASE - 1]) {
+        /* the KERNAL is mapped in every state this harness reaches */
+        int m = ram[H_SCR_BASE + 0x38];
+        if (m == 2)
+            return rom[a - 0xE000];
+    }
+    if (a >= 0xA000 && a < 0xC000 && ram[H_SCR_BASE + 0x36] == 1)
+        return rom[0x2000 + (a - 0xA000)];
+    if (a >= 0xD000 && a < 0xE000) {
+        int m = ram[H_SCR_BASE + 0x37];
+        if (m == 4)
+            return c64_io_rd(a);
+        if (m == 3)
+            return rom[0x4000 + (a - 0xD000)];
+    }
+    if (a < 2)
+        return c64_io_rd(a);
+    return ram[a];
+}
+
+static int n_cut;
+void c64_cut(void) { n_cut++; }
+static int n_rebank;
+void c64_rebank(void) { n_rebank++; }
+
+unsigned c64_muldiv(unsigned a, unsigned b, unsigned d)
+{
+    unsigned long v;
+    if (d == 0)
+        return 0xFFFFu;
+    v = ((unsigned long)a * b) / d;
+    if (v > 0xFFFFu)
+        return 0xFFFFu;
+    return (unsigned)v;
+}
+
+unsigned c64_div32(unsigned hi, unsigned lo, unsigned d)
+{
+    unsigned long v = ((unsigned long)hi << 16) | lo;
+    if (d == 0)
+        return 0xFFFFu;
+    v = v / d;
+    if (v > 0xFFFFu)
+        return 0xFFFFu;
+    return (unsigned)v;
+}
+
+/* ==========================================================================
+ * OSAPI_KEY_DOWN, MODELLED (C64-SPEC §7.2)
+ *
+ * The kernel's map: ASKING IS WHAT ARMS IT, and the first ask clears it and
+ * answers "up". A stub that always answers 0 would measure nothing, so this
+ * one has a state a test sets and an ARMED latch a test can check - because
+ * arming it from the first slice instead of from os88_main is exactly the
+ * defect rule 1 exists to prevent, and it is invisible on any glass.
+ * ========================================================================*/
+static unsigned char h_keydown[128];
+static int h_key_armed;
+static int h_key_asks;
+static int h_key_first_in_main;
+static int h_in_main;
+
+int os88_key_down(int scan)
+{
+    h_key_asks++;
+    if (!h_key_armed) {
+        h_key_armed = 1;
+        h_key_first_in_main = h_in_main;
+        memset(h_keydown, 0, sizeof(h_keydown));
+        return 0;                           /* the first ask always says up */
+    }
+    if (scan < 0 || scan > 127)
+        return 0;
+    return h_keydown[scan] ? 1 : 0;
+}
+
+/* ...AND THE SPEAKER CAN REFUSE, WHICH IS THE WHOLE POINT OF THE STUB.
+ * os88_snd_tone answers -1 when another instance holds the grant (os88.h,
+ * SPEC.md 34.3), and a stub that only ever grants measures the success path:
+ * the package discarded all three returns and one refusal silenced the
+ * emulated SID for the rest of the session, because the latch that asks is
+ * raised only by a SID REGISTER WRITE. */
+static int n_tone, h_tone_hz, h_tone_refuse;
+int os88_snd_tone(int hz, int ticks, int prio)
+{
+    n_tone++;
+    if (h_tone_refuse)
+        return -1;
+    h_tone_hz = hz;
+    return 0;
+}
 
 /* ==========================================================================
  * THE AUDIT: the glass shows what the shadow says it shows
@@ -933,7 +1166,7 @@ static void glass_moved_up(int k)
  * ========================================================================*/
 static int b_blit, b_fill, b_scroll, b_frame, b_run, b_str, b_bandc, b_cells,
            b_span, b_sig;
-static long b_blit_bytes, b_run_cells, b_str_cells;
+static long b_blit_bytes, b_run_cells, b_str_cells, b_scr_acc, b_scr_take;
 
 static void cost_begin(void)
 {
@@ -943,6 +1176,7 @@ static void cost_begin(void)
     b_span = n_span_calls; b_sig = n_sig_calls;
     b_blit_bytes = n_blit_bytes;
     b_run_cells = n_run_cells; b_str_cells = n_str_cells;
+    b_scr_acc = n_scr_acc; b_scr_take = n_scr_take;
 }
 
 static void cost_row(const char *what)
@@ -966,12 +1200,23 @@ static void cost_row(const char *what)
        + (long)(n_band_calls - b_bandc) * C64BENCH_CALL
        + (long)(n_band_cells - b_cells) * C64BENCH_CELL
        + (long)(n_span_calls - b_span) * C64BENCH_SPAN
-       + (long)(n_sig_calls - b_sig) * C64BENCH_SIG;
+       + (long)(n_sig_calls - b_sig) * C64BENCH_SIG
+    /* ...AND THE SCRATCH, WHICH IS NOT DRAWING AND IS NOT FREE. These two are
+     * MODEL figures and say so (C64-SPEC §9.7): PERFORMANCE.md's 11 us for a
+     * near call + ret plus the body's own clocks - ~125 for a scr_rd's ten
+     * instructions and a segment load, ~820 for c64_dirty_take's two `rep`s
+     * over 32 bytes on the 8088's 8-bit bus - at 0.21 us a clock. They are
+     * the one part of this table not taken on tests/c64band, because the
+     * bench measures c64band.inc and these live in c64mem.inc. */
+       + (long)(n_scr_acc - b_scr_acc) * C64COST_SCRACC
+       + (long)(n_scr_take - b_scr_take) * C64COST_TAKE;
     printf("  %-32s %7.1f ms   %2d blit %2d fill %2d scroll  "
-           "%3d cells in %2d compose call(s)  %3ld glyph cell(s)\n",
+           "%3d cells in %2d compose call(s)  %3ld glyph cell(s)  "
+           "%2ld scratch\n",
            what, us / 1000.0, n_blit - b_blit, n_fill - b_fill,
            n_scroll - b_scroll, n_band_cells - b_cells,
-           n_band_calls - b_bandc, gcells);
+           n_band_calls - b_bandc, gcells,
+           (n_scr_acc - b_scr_acc) + (n_scr_take - b_scr_take));
 }
 
 /* ==========================================================================
@@ -985,7 +1230,7 @@ static void dump_for_ref(const char *state_path, const char *frame_path)
     fwrite(ram, 1, 65536, f);
     fwrite(c64_col, 1, 1024, f);
     fwrite(c64_vic, 1, 64, f);
-    fwrite(c64_cia2, 1, 16, f);
+    fwrite(c64_cia[1], 1, 16, f);
     fwrite(rom + 0x4000, 1, 4096, f);       /* CHARGEN, C64.ROM's layout */
     fclose(f);
     f = fopen(frame_path, "wb");
@@ -997,8 +1242,18 @@ static void dump_for_ref(const char *state_path, const char *frame_path)
 /* ==========================================================================
  * THE SCRIPT
  * ========================================================================*/
+/* THE ONCE-A-SECOND SPEED FOLD IS A TIMER, and a timer that lands inside an
+ * unrelated cost row prices the status widget as part of whatever that row
+ * names - `one joystick indicator changed` came out at 5.9 ms with four glyph
+ * cells in it that had nothing to do with a joystick. It is HELD by default,
+ * so every cost row measures the thing it is named after; the speed rows
+ * below let it go deliberately. */
+static int h_speed_hold = 1;
+
 static void flush_now(void)
 {
+    if (h_speed_hold)
+        c64_sp_tick = the_ticks;            /* el = 4 < 18: no fold this wake */
     the_ticks += 4;
     os88_onwake(the_win);                   /* the wake runs with the lock NOT
                                              * held and takes it itself (74.1) */
@@ -1010,6 +1265,29 @@ static void flush_now(void)
 /* W_PAINT IS THE ONE CALLBACK THE KERNEL ARMS THE CLIP FOR (11.3), so the
  * script arms it here and nowhere else - which is the whole point of
  * modelling it. */
+static void h_boot_screen(void)
+{
+    static const char *l1 = "**** COMMODORE 64 BASIC V2 ****";
+    static const char *l2 = "64K RAM SYSTEM  38911 BASIC BYTES FREE";
+    static const char *l3 = "READY.";
+    const char *p;
+    unsigned a;
+    int i;
+
+    for (i = 0; i < 1000; i++)
+        c64_wr(0x0400 + i, 32);
+    for (i = 0; i < 1000; i++)
+        c64_col[i] = 14;
+    a = 0x0400 + 40 + 4;
+    for (p = l1; *p; p++) c64_wr(a++, (*p >= 'A' && *p <= 'Z') ? *p - 64 : *p);
+    a = 0x0400 + 3 * 40 + 1;
+    for (p = l2; *p; p++) c64_wr(a++, (*p >= 'A' && *p <= 'Z') ? *p - 64 : *p);
+    a = 0x0400 + 5 * 40;
+    for (p = l3; *p; p++) c64_wr(a++, (*p >= 'A' && *p <= 'Z') ? *p - 64 : *p);
+    c64_wr(0x0400 + 6 * 40, 32 + 128);
+    c64_dirty_all();
+}
+
 static void do_paint(void *w)
 { os88_gfx_lock(); clip_armed = 1; os88_paint(w); os88_gfx_unlock(); }
 static void do_click(int x, int y, void *w)
@@ -1107,12 +1385,59 @@ static int no_rom_main(void)
     if (n_fill - b_fill > 1 || (n_run_cells - b_run_cells) > 40)
         fail("the ROM-less notice was repainted by a message going up");
 
+    /* ...AND THE MESSAGE COMES DOWN BY ITSELF, WHICH ON THIS DISK IT NEVER
+     * DID. The deadline used to be examined at the FAR END of c64_flush, past
+     * the `if (c64_norom) ... return` above - so on a disk with no C64.ROM
+     * nothing ever cleared c64_msg, the first menu command a user picked
+     * owned the row for the rest of the session (c64_status picks msg == 1
+     * over §1.4's permanent msg == 2), and `c64_wants_wake` re-posted for
+     * ever with nothing to do. This row used to CLEAR c64_msg BY HAND here
+     * and then advance the clock, which is why nothing saw it. */
+    if (c64_msg[0] == 0)
+        fail("the fixture lost its message before the deadline row could "
+             "test it");
+    /* THE NEGATIVE CONTROL, FIRST: the branch the deadline used to sit past
+     * is still there and still returns before the band machinery, so the row
+     * below is measuring the fix and not a branch that stopped existing. */
+    cost_begin();
+    flush_now();
+    if (n_band_calls - b_bandc != 0 || n_span_calls - b_span != 0)
+        fail("the ROM-less flush reached the band machinery - the early "
+             "return the deadline used to sit past is gone, so this row's "
+             "control is not modelling anything");
+    /* ...and the second half of the same defect: a message is NOT a reason to
+     * ask for another wake. Wave 2's shipped condition asked in this exact
+     * state, at ~1,400 round trips a second of the shared UI task. */
+    if (!(c64_dirty_any || c64_msg[0] != 0))
+        fail("the negative control did not re-post: the shipped condition is "
+             "no longer being modelled here");
+    if (c64_wants_wake())
+        fail("a ROM-less machine asked for another wake with nothing up but "
+             "a message - one round trip is a task switch (693 us) and there "
+             "is nothing inside the wake but a re-read of the clock "
+             "(SPEC.md 74.1)");
+    the_ticks += 200;
+    flush_now();
+    if (c64_msg[0] != 0)
+        fail("a message never expired on a ROM-less machine - the deadline "
+             "is past the early return, so §1.4's permanent "
+             "`C64.ROM missing - see README.TXT` never comes back");
+    if (c64_kick)
+        fail("the ROM-less machine went on posting wakes after its message "
+             "had come down");
+
+    /* ...AND Preferences > Advance frame IS GREYED HERE. There is no machine
+     * to advance, c64_advance_frame answers that state by doing nothing at
+     * all, and SPEC.md 47 forbids a live item that is a silent no-op. */
+    if (c64_pref_items[C64_I_ADVANCE][0] != OS88_MENU_DIS)
+        fail("Advance frame is LIVE on a disk with no C64.ROM - the user "
+             "picks a black item and nothing happens and nothing is said "
+             "(SPEC.md 47)");
+
     /* ...AND A PARTIAL EXPOSE OF IT IS REPAIRED. The notice has no shadow and
      * no per-row force records - the branch that draws it returns before the
      * band machinery - so the gate above has to be answered by the expose
      * path, or an exposed strip of it stays blank for ever. */
-    c64_msg[0] = 0;
-    the_ticks += 200;
     flush_now();
     for (y = 0; y < 40; y++)
         for (x = 0; x < 160; x++)
@@ -1150,8 +1475,28 @@ int main(int argc, char **argv)
     memset(glass, 0x55, sizeof(glass));     /* nothing is drawn yet, and 0x55
                                              * is neither lit nor dark */
 
+    h_in_main = 1;
     win = os88_main();
+    h_in_main = 0;
     if (win == 0) { fail("os88_main refused with the ROM present"); return 1; }
+
+    /* THE KEY-STATE MAP MUST BE ARMED BEFORE THE FIRST os88_onkey (7.2's
+     * rule 1). Its first call clears the map and always answers "up", so a
+     * package that asks first from a callback erases the make os88_onkey has
+     * already seen - the first key of the session, gone, and nothing on any
+     * glass says so. */
+    if (!h_key_armed)
+        fail("os88_key_down was never asked from os88_main - the key-state "
+             "map is unarmed and the first key of the session is lost");
+    if (!h_key_first_in_main)
+        fail("the key-state map was armed from somewhere other than "
+             "os88_main (7.2's rule 1)");
+
+    /* ...and the KERNAL's own first screen. The scripted core writes it on
+     * its first slice, which is what a real one does: wave 2 has no
+     * hand-poked boot screen any more (c64.c's head). */
+    c64_run(1);
+    c64_advance(1);
 
     /* THE MODEL IS THE MACHINE'S WIDTH, and this is the one line that makes
      * that true. os88_wm_create authors a FRAME; os88_wm_geom answers
@@ -1403,10 +1748,19 @@ int main(int argc, char **argv)
     if (n_scroll - b_scroll != 0)
         fail("a non-shift change emitted a scroll");
 
-    /* --- a $D020-only change: fills only, no bands ---------------------- */
+    /* --- a $D020-only change: fills only, no bands ----------------------
+     * AND THE LEVEL HAS TO ACTUALLY FLIP, which is what the pair of rows
+     * below is about. c64_border draws the strips `lit` or not (9.6), so the
+     * only $D020 write that changes a pixel is one that crosses the
+     * background's luminance. Colour 0 is 0 and colour 1 is 255 against
+     * background 6's 60: dark, then light. */
+    c64_io_wr(0xD021, 6);                   /* the KERNAL's own background */
+    c64_io_wr(0xD020, 0);                   /* ...and a DARK border to start */
+    flush_now();
     cost_begin();
     h_noise();
-    c64_io_wr(0xD020, 1);                   /* the border to white */
+    c64_io_wr(0xD020, 1);                   /* the border to white: the mono
+                                             * level flips, so it is drawn */
     flush_now();
     cost_row("a $D020 change");
     audit("after a $D020 change");
@@ -1414,6 +1768,29 @@ int main(int argc, char **argv)
         fail("a border change composed a band");
     if (n_fill - b_fill == 0)
         fail("a border change filled nothing");
+
+    /* --- THE NEGATIVE CONTROL, AND IT IS THE COMMON CASE: a $D020 write
+     * that moves the REGISTER and not the mono LEVEL. Colours 14 (118) and
+     * 15 (163) are both lighter than background 6 (60), so the border looks
+     * identical either way - and c64_lum_update's flip test is the only thing
+     * that may raise c64_border_dirty. c64_io_wr used to raise it
+     * unconditionally one line later, which made that guard dead code and
+     * cost four os88_gfx_fill calls - 3.0 ms - on the next flush after EVERY
+     * $D020 write. Rasterbars, loader flashes and $D020 cycling are many
+     * writes a frame. */
+    cost_begin();
+    h_noise();
+    c64_io_wr(0xD020, 14);
+    c64_io_wr(0xD020, 15);
+    flush_now();
+    cost_row("a $D020 change that keeps the level");
+    audit("after a $D020 change that keeps the level");
+    if (n_fill - b_fill != 0)
+        fail("a $D020 write that does not change the mono LEVEL still drew "
+             "the border - c64_lum_update's flip test is the only thing that "
+             "may raise c64_border_dirty (9.6)");
+    if (n_band_calls - b_bandc != 0)
+        fail("a $D020 write composed a band");
 
     /* --- a register write that changes NOTHING draws nothing ----------- */
     cost_begin();
@@ -1470,7 +1847,13 @@ int main(int argc, char **argv)
     c64_dirty_any = 1;
     flush_now();                            /* a full row, erased and drawn */
     cost_begin();
-    c64_joy1 = 0x11;                        /* up + fire on control port 1 */
+    /* ...through the PRODUCT'S OWN PATH: the keyset is polled once per wake
+     * out of os88_key_down (7.2, 8), so the test presses keys and lets the
+     * poll find them. Assigning c64_joy2 by hand measured a path nothing in
+     * the package could reach - and once the poll existed it overwrote the
+     * assignment on the very next wake. */
+    h_keydown[KSC_UP] = 1;
+    h_keydown[KSC_CTRL] = 1;                /* up + fire on control port 2 */
     c64_dirty_any = 1;                      /* ...and nothing else: the
                                              * flush calls c64_status every
                                              * time and the FIELD COMPARE is
@@ -1495,11 +1878,12 @@ int main(int argc, char **argv)
     flush_now();
     if (n_run - b_run == 0)
         fail("a message replacing a message did not reach the row");
-    /* ...AND IT COMES DOWN BY ITSELF. The wake must keep re-posting while a
-     * message is up, or the deadline is never reached with no core running
-     * and the message owns the row for ever (C64-SPEC §10.1). */
+    /* ...AND IT COMES DOWN BY ITSELF ON A RUNNING MACHINE, which asks for
+     * the next wake because it is running and not because a message is up
+     * (C64-SPEC §10.1: a machine the user STOPPED keeps its message until the
+     * next event, and c64_wants_wake's row further down asserts that half). */
     if (!c64_kick)
-        fail("no wake was posted while a message was up - the message can "
+        fail("no wake was posted by a RUNNING machine - the message can "
              "never expire");
     the_ticks += 120;                       /* past the ~5 s deadline */
     flush_now();
@@ -1514,6 +1898,131 @@ int main(int argc, char **argv)
     c64_st_ok = 0;
     c64_dirty_any = 1;
     flush_now();
+
+    /* --- THE SPEED FIGURES ARE A DELTA, and they are this program's ONE
+     * RECURRING REDRAW: the first thing in it that draws on a TIMER rather
+     * than on an event (§9.7). Both fields were rebuilt in place and re-run
+     * whole every second - 24 glyph cells and 2 call floors, ~23 ms,
+     * permanently, about ten times what a keystroke costs - and nine of those
+     * cells were the two literal tails that never change. */
+    {
+        int spx;
+
+        c64_msg[0] = 0;
+        c64_state = C64_ST_RUN;
+        c64_pause = 1;                      /* the scripted core stays out of
+                                             * the way: the counters are the
+                                             * fixture here */
+        h_speed_hold = 0;                   /* ...and THIS row is the one that
+                                             * wants the fold to happen */
+        c64_cyc_lo = 0; c64_cyc_hi = 0;
+        c64_frames_lo = 0;
+        c64_sp_lo = 0; c64_sp_hi = 0; c64_sp_fr = 0;
+        c64_sp_tick = the_ticks - 14;       /* flush_now adds 4 before the
+                                             * wake, so the fold sees exactly
+                                             * el = 18 - one second */
+        c64_st_ok = 0;
+        c64_dirty_any = 1;
+        flush_now();                        /* the row full: `      0% cpu`,
+                                             * `     0.0 fps`, tails and all */
+        if (c64_pct != 0 || c64_fps10 != 0)
+            fail("the speed fixture did not start from zero");
+        /* THE PRODUCT'S OWN RECURRING SECOND, AND BOTH FIELDS MOVE IN IT.
+         * The row this replaced advanced the cycle counter and left the
+         * frame counter at zero, with the comment "the fps field does not
+         * move at all, because no VIC frame was completed" - which is a
+         * FIXTURE and not this program: one fold computes BOTH figures off
+         * the same clock (§10.2), the frame count is an integer over an
+         * 18-or-19-tick window, and it jitters every second at any speed. So
+         * the gate asserted ONE font_run and the shipped behaviour - two -
+         * would have failed it. The two fields cannot coalesce into one run
+         * either: the fixed `% cpu` tail sits between them at x = 56..95.
+         *
+         * A REAL SECOND, TWICE. First a second of a machine at ~100 %:
+         * 985,248 cycles is 985248 / 5413 = 182, and 182 * 10 / 18 = 101 %;
+         * 50 VIC frames is 50 * 182 / 18 = 505, `    50.5`. Then the second
+         * after it, one per cent and one frame different - which is what a
+         * running machine's row actually does, and what this row measures. */
+        c64_cyc_hi = 15; c64_cyc_lo = 2208;         /* 985,248 */
+        c64_frames_lo = 50;
+        c64_sp_tick = the_ticks - 14;
+        c64_dirty_any = 0;
+        flush_now();
+        if (c64_pct != 101 || c64_fps10 != 505)
+            fail("the speed fixture's first second is not a ~100 % machine - "
+                 "985,248 cycles and 50 VIC frames is what one second of a "
+                 "real PAL C64 is (§10.2)");
+        c64_cyc_hi = 30; c64_cyc_lo = 15168;        /* +996,000 cycles */
+        c64_frames_lo = 101;                        /* ...and +51 frames */
+        c64_sp_tick = the_ticks - 14;
+        c64_dirty_any = 0;                  /* ...and NOTHING else asks for
+                                             * this flush: the widget's own
+                                             * delta is the gate (c64.c) */
+        cost_begin();
+        h_last_run[0] = 0;
+        h_last_run_x = -1;
+        h_runs_clear();
+        flush_now();
+        cost_row("the speed figures changed");
+        if (c64_pct != 102 || c64_fps10 != 515)
+            fail("the speed fixture's second second did not move BOTH "
+                 "fields");
+        if (n_fill - b_fill != 0)
+            fail("a speed-figure change ERASED the status row - only a full "
+                 "redraw may fill (PERFORMANCE.md rule 2)");
+        if (n_run - b_run != 2)
+            fail("a speed-figure change was not exactly TWO font_runs - one "
+                 "per changed NUMBER field. The whole-row path is four calls "
+                 "and 24 cells, once a second, for ever (§9.7)");
+        if (n_run_cells - b_run_cells > 4)
+            fail("a speed-figure change drew more than four glyph cells - a "
+                 "typical second is one or two per field");
+        spx = c64_gox + C64_ST_CPUX;
+        /* ...AND EACH RUN LANDED INSIDE ITS OWN NUMBER, never on a literal
+         * tail: `% cpu` and ` fps` are drawn once with the row and have never
+         * changed. */
+        {
+            int r, incpu = 0, infps = 0, fpx = c64_gox + C64_ST_FPSX;
+            for (r = 0; r < h_nrun; r++) {
+                if (h_run_x[r] >= spx && h_run_x[r] < spx + 7 * 8)
+                    incpu++;
+                else if (h_run_x[r] >= fpx && h_run_x[r] < fpx + 8 * 8)
+                    infps++;
+                else
+                    fail("the speed delta landed outside both NUMBER fields "
+                         "- the literal tails `% cpu` and ` fps` are drawn "
+                         "once with the row and have never changed");
+            }
+            if (incpu != 1 || infps != 1)
+                fail("the two speed fields did not draw one run each - the "
+                     "`% cpu` tail between them means they can never "
+                     "coalesce (§10.2)");
+        }
+        /* THE NEGATIVE CONTROL: switch the delta off - the full path is what
+         * `!c64_st_ok` selects - and show the 24 cells and the erase coming
+         * back, so the row above is measuring the delta and not an empty
+         * flush. */
+        cost_begin();
+        c64_st_ok = 0;
+        c64_dirty_any = 1;
+        flush_now();
+        cost_row("the same row with the delta switched off");
+        if (n_fill - b_fill != 1)
+            fail("the negative control did not erase: the full path this row "
+                 "exists to be cheaper than is no longer reachable");
+        if (n_run_cells - b_run_cells < 24)
+            fail("the negative control drew fewer than the 24 glyph cells "
+                 "the whole-row path costs - it is not modelling the redraw "
+                 "this delta replaced");
+        h_speed_hold = 1;
+        c64_pause = 0;
+        c64_cyc_lo = 0; c64_cyc_hi = 0;
+        c64_sp_lo = 0; c64_sp_hi = 0; c64_sp_fr = 0;
+        c64_sp_tick = the_ticks;
+        c64_st_ok = 0;
+        c64_dirty_any = 1;
+        flush_now();
+    }
 
     /* --- the About panel owns its rows, and closing it is DAMAGE ------- */
     c64_msg[0] = 0;
@@ -1840,6 +2349,893 @@ int main(int argc, char **argv)
     dmg_whole = 1;
     do_paint(win);
     audit("after the ROM-less banner came down");
+
+    /* ======================================================================
+     * WAVE 2: THE CLOCK, THE ALARM MODEL, THE WALL SLICE AND THE KEYBOARD
+     *
+     * Every one of these is a rule whose violation is SILENT - the glass says
+     * nothing about a jiffy that is 20 per cent wrong, a budget that walked to
+     * its cap while the user typed, or a SHIFT bit another key's release took
+     * away with it.
+     * ==================================================================== */
+
+    /* --- the speed widget's two figures come off EMULATED CYCLES and
+     * EMULATED VIC FRAMES (10.2), and the arithmetic is checked against
+     * numbers with a known answer: exactly one real PAL second's worth of
+     * cycles, over exactly one real second of host ticks, is 100 %; and
+     * 19,656 cycles is one PAL frame, so the same run is 50.1 fps. */
+    {
+        int i2;
+        c64_pause = 1;                      /* the scripted core stays out of
+                                             * the way while the counters are
+                                             * driven by hand */
+        c64_cyc_lo = 0; c64_cyc_hi = 0;
+        c64_frames_lo = 0;
+        c64_frame_cyc = 0;
+        c64_sp_tick = the_ticks;
+        c64_sp_lo = 0; c64_sp_hi = 0; c64_sp_fr = 0;
+        /* ten seconds of host ticks, and ten seconds of a real 6510 fed
+         * through the SAME c64_advance the machine uses - so the frame
+         * counter is the VIC's own and not a second opinion */
+        for (i2 = 0; i2 < 1002; i2++)
+            c64_advance(9832);              /* 1002 * 9,832 = 9,851,664 */
+        the_ticks += 182;                   /* 182 ticks = 10.0 s at 18.2 Hz */
+        c64_speed_fold();
+        if (c64_pct != 100)
+            fail("`% cpu` is not emulated cycles over 985,248 - one real "
+                 "PAL second's worth of cycles in one real second did not "
+                 "read 100");
+        if (c64_fps10 != 501)
+            fail("`fps` is not EMULATED VIC FRAMES - 19,656 cycles a frame "
+                 "at 100 % is 50.1, and the widget said otherwise");
+        /* ...and a two-word counter fed 100,000 cycles a tick for 60 ticks
+         * does not lap. `unsigned` is 16 bits on the target: 6,000,000 cycles
+         * is ninety-one wraps of the low word, and a counter that lost them
+         * would read a plausible small number rather than failing. */
+        c64_cyc_lo = 0; c64_cyc_hi = 0;
+        for (i2 = 0; i2 < 60; i2++) {
+            c64_advance(19656);             /* the alarm never hands the core
+                                             * more than a frame */
+            c64_advance(19656);
+            c64_advance(19656);
+            c64_advance(19656);
+            c64_advance(19656);
+            c64_advance(1720);              /* 5 * 19,656 + 1,720 = 100,000 */
+        }
+        if (c64_cyc_hi != (6000000u >> 16) || c64_cyc_lo != (6000000u & 0xFFFFu))
+            fail("the two-word cycle counter lapped: 100,000 cycles a tick "
+                 "for 60 ticks is 6,000,000 and it did not say so");
+        c64_pause = 0;
+    }
+
+    /* --- the ALARM MODEL: nothing quantises to a jiffy, and the 60 Hz jiffy
+     * EMERGES from the KERNAL programming CIA1 timer A (6.1, 6.3). */
+    {
+        int d, fired;
+        c64_reset_regs();
+        c64_map_publish();
+        /* the frame end is always armed, and it is 19,656 cycles - the PAL
+         * frame - not a jiffy and not a host tick */
+        c64_frame_cyc = 0;
+        d = c64_alarm_next();
+        if (d != C64_PAL_FRAME)
+            fail("with no timer running the next alarm is not the PAL frame "
+                 "end - something has quantised the clock");
+        /* now do what the KERNAL does: $4025 into CIA1 timer A, continuous,
+         * interrupt on underflow. 16,421 cycles is 59.98 Hz on a PAL 6510,
+         * and NOTHING in this port knows that number. */
+        c64_io_wr(0xDC04, 0x25);
+        c64_io_wr(0xDC05, 0x40);
+        c64_io_wr(0xDC0D, 0x81);            /* unmask timer A */
+        c64_io_wr(0xDC0E, 0x11);            /* force load, start, continuous */
+        d = c64_alarm_next();
+        if (d != 16422)
+            fail("CIA1 timer A's underflow is not the next alarm at its own "
+                 "latch + 1 - the jiffy is not emerging from the timer");
+        c64_scr_wr(C64_SCR_IRQ, 0);
+        c64_advance(16422);                 /* the counter reaches 0 and then
+                                             * underflows: latch + 1 */
+        if ((c64_scr_rd(C64_SCR_IRQ) & 1) == 0)
+            fail("CIA1 timer A underflowed and no IRQ line came up");
+        if ((c64_icd[0] & 0x01) == 0)
+            fail("the timer A underflow did not set its ICR flag");
+        /* reading the ICR clears the flags AND the line, as ciacore.c does */
+        fired = c64_io_rd(0xDC0D);
+        if ((fired & 0x81) != 0x81)
+            fail("the ICR read did not answer bit 7 with the flag");
+        if ((c64_scr_rd(C64_SCR_IRQ) & 1) != 0)
+            fail("reading the ICR did not drop the IRQ line");
+        /* ...and the SECOND underflow is a whole latch later, not a whole
+         * host tick: the timer reloaded from its own latch and its phase is
+         * retained. (The nearest ALARM at this point is the frame end, which
+         * is the other accumulator doing its own thing - which is the point
+         * of 6.3.) */
+        if (c64_ta[0] != 16421)
+            fail("the timer did not reload from its latch: its phase was "
+                 "lost across the underflow");
+        d = c64_alarm_next();
+        if (d != C64_PAL_FRAME - 16422)
+            fail("the frame end stopped being an independent accumulator");
+        /* an I/O write that raises a line CUTS the run in progress (4.4) */
+        n_cut = 0;
+        c64_in_run = 1;
+        c64_advance(16422);                 /* the flag comes back... */
+        c64_io_rd(0xDC0D);
+        c64_icd[0] |= 0x01;                 /* ...a flag already set... */
+        c64_io_wr(0xDC0D, 0x81);            /* ...and now unmasked */
+        c64_in_run = 0;
+        if (n_cut == 0)
+            fail("an I/O write that raised the IRQ line did not cut the run "
+                 "- the interrupt waits for the next alarm");
+        /* the VIC raster is the OTHER accumulator, and it is 63 cycles a
+         * line: $D012 reads the line the cycle counter has reached */
+        c64_frame_cyc = 100 * 63 + 7;
+        if (c64_io_rd(0xD012) != 100)
+            fail("$D012 is not the raster line the cycle counter reached");
+        c64_reset_regs();
+        c64_map_publish();
+        c64_scr_wr(C64_SCR_IRQ, 0);
+    }
+
+    /* --- THE FREE-RUNNING TIMER, WHICH IS WHERE A SIGNED COMPARE HANGS.
+     * `LDA #$FF / STA $DC04 / STA $DC05 / LDA #$11 / STA $DC0E` is the
+     * standard C64 free-running-timer / RNG idiom AND the state
+     * c64_reset_regs leaves behind, so a $FFFF latch is not an exotic input.
+     * `(int)0xFFFF` is -1: the compare was true for every n and the subtract
+     * took nothing off, which is an INFINITE LOOP on the UI task, and
+     * `(int)(0xFFFF + 1)` is 0, which made the same counter look like the
+     * nearest alarm and ran the core one cycle at a time. Nothing else in
+     * this file or in c64cputest uses a latch above $7FFF. */
+    {
+        int i2, spun;
+        short n2;
+        unsigned short c2;
+        c64_reset_regs();
+        c64_map_publish();
+        c64_scr_wr(C64_SCR_IRQ, 0);
+        c64_io_wr(0xDC04, 0xFF);
+        c64_io_wr(0xDC05, 0xFF);
+        c64_io_wr(0xDC0E, 0x11);            /* force load, start, continuous */
+        if (c64_ta[0] != 0xFFFFu)
+            fail("a $FFFF latch did not load into timer A");
+        c64_frame_cyc = 0;
+        if (c64_alarm_next() != C64_PAL_FRAME)
+            fail("a $FFFF timer counter was taken for the nearest alarm - it "
+                 "is 65,536 cycles away and the frame end is at most 19,656, "
+                 "so the scheduler cast a wrapped value and the slice driver "
+                 "then ran the core ONE CYCLE at a time");
+        c64_icd[0] = 0;
+        c64_advance(C64_PAL_FRAME);         /* ...AND THIS RETURNS */
+        if (c64_ta[0] != (unsigned)(0xFFFFu - (unsigned)C64_PAL_FRAME))
+            fail("a $FFFF timer did not simply count down by the cycles run");
+        if ((c64_icd[0] & 0x01) != 0)
+            fail("a $FFFF timer raised an underflow flag inside one frame - "
+                 "65,536 is more than 19,656 and it cannot have underflowed");
+        /* THE NEGATIVE CONTROL, and it is modelled rather than run for two
+         * reasons. The defect it stands for DOES NOT TERMINATE, so it cannot
+         * be called; and it is a SIXTEEN-BIT fact - `int` is 32 bits on this
+         * host, where `(int)0xFFFF` is a perfectly ordinary 65,535 and
+         * nothing wraps at all, which is exactly why every assertion above
+         * passed on the host while the target hung. So the control spells the
+         * target's widths out with `short`/`unsigned short`: `(short)0xFFFF`
+         * is -1, the compare is true for every n, and the subtract takes
+         * NOTHING off. If it ever stops inside the cap, this row has stopped
+         * testing anything. */
+        spun = 0;
+        n2 = C64_PAL_FRAME;
+        c2 = 0xFFFFu;
+        for (i2 = 0; i2 < 1000; i2++) {
+            if (!((short)n2 > (short)c2))
+                break;
+            n2 -= (short)c2 + 1;            /* subtracts ZERO */
+            spun++;
+        }
+        if (spun < 1000)
+            fail("the negative control terminated: the signed compare this "
+                 "row exists to catch is no longer being modelled");
+        c64_reset_regs();
+        c64_map_publish();
+    }
+
+    /* --- ...AND THE SAME WRAP IN THE OTHER DIRECTION: a `% cpu` quotient
+     * over 32,767 must come back as the CAP, never as a flat 0 beside a live
+     * fps. c64_div32 answers up to $FFFF and the clamp has to happen while
+     * the value is still unsigned. */
+    {
+        c64_pause = 1;
+        c64_cyc_lo = 0; c64_cyc_hi = 0;
+        c64_frames_lo = 0;
+        c64_frame_cyc = 0;
+        c64_sp_tick = the_ticks;
+        c64_sp_lo = 0; c64_sp_hi = 0; c64_sp_fr = 0;
+        c64_cyc_hi = 2800;                  /* 2,800 * 65,536 = 183,500,800
+                                             * emulated cycles in one second:
+                                             * / 5,413 is 33,900, which is past
+                                             * 32,767 and NEGATIVE once cast */
+        c64_cyc_lo = 0;
+        /* ...AND THE FRAMES THAT SPEED IMPLIES, so the OTHER field of the
+         * same scenario is evaluated too. 183,500,800 / 19,656 is 9,335 VIC
+         * frames, and 9,335 * 182 / 18 is 94,387 - c64_muldiv answers $FFFF
+         * on overflow (c64mem.inc:266) and the cast makes that -1, which
+         * c64_st_num prints as a flat `     0.0 fps` beside a live
+         * `16666% cpu`: the pair of numbers that could not both be true, one
+         * field to the right of where the clamp was put. Zeroing this counter
+         * is how the row used to walk past its own defect. */
+        c64_frames_lo = 9335;
+        the_ticks += 18;
+        c64_speed_fold();
+        if (c64_pct <= 0)
+            fail("a `% cpu` quotient over 32,767 printed 0 - the clamp ran "
+                 "AFTER the cast, so the value was already negative when it "
+                 "was tested, and the row said 0 % beside a live fps (10.2)");
+        if (c64_pct != 16666)               /* 30,000 capped, * 10 / 18 */
+            fail("a `% cpu` quotient over the cap did not read the cap");
+        if (c64_fps10 <= 0)
+            fail("an `fps` quotient past c64_muldiv's range printed 0.0 - "
+                 "the clamp is missing on the second field, so the row said "
+                 "`16666% cpu` beside `0.0 fps` (10.2)");
+        if (c64_fps10 != 30000)             /* the same cap, the same place */
+            fail("an `fps` quotient over the cap did not read the cap");
+        c64_pause = 0;
+        c64_cyc_lo = 0; c64_cyc_hi = 0;
+        c64_sp_lo = 0; c64_sp_hi = 0;
+        c64_sp_tick = the_ticks;
+    }
+
+    /* --- THE WALL SLICE ADAPTS ONLY ON A GENUINELY EXHAUSTED SLICE (4.4).
+     * Without that rule ordinary typing walks the budget to its cap and the
+     * next busy slice is a second of stalled UI task (LESSONS.md 13) - and
+     * nothing on the glass says which of the two happened. */
+    {
+        int seed, i2;
+        c64_state = C64_ST_RUN;
+        /* ...AND IT IS SEEDED FROM THE TIER, which C64-SPEC §4.4 says and the
+         * code did not do: the budget began at C64_SLICE_MIN on every machine
+         * and walked up four slices at a time, so the first dozen wakes of a
+         * 386 ran 256-cycle slices with a full alarm query, a c64_run shell
+         * and a c64_advance over both CIAs, the VIC and the TOD around each.
+         * apps/runcpm/runcpm.c:1215's `512 << os88_cpu()`, clamped. */
+        c64_budget = 0;
+        c64_fastn = 3;
+        c64_tier_init();
+        if (c64_budget != 512)
+            fail("the wall slice was not seeded from os88_cpu() - it is "
+                 "`512 << os88_cpu()` clamped into 256..16,384 (§4.4)");
+        if (c64_fastn != 0)
+            fail("the tier seed left the fast-slice counter where it was");
+        c64_budget = C64_SLICE_MIN;
+        c64_fastn = 0;
+        seed = c64_budget;
+        /* A SLICE THAT DID NOT RUN DOES NOT ADAPT. On this machine there is
+         * no blocking console read to end a slice early - a C64 always has
+         * something to do - so the two ways a wake can end without spending
+         * its budget are the machine being PAUSED and the machine having
+         * JAMMED, and both are here. Typing into a paused machine is exactly
+         * LESSONS.md 13's failure: without the rule, a hundred wakes that ran
+         * no cycles at all walk the budget to its cap, and the next wake
+         * after the resume is a second of stalled UI task. */
+        c64_pause = 1;
+        for (i2 = 0; i2 < 100; i2++) {
+            os88_onkey('a', 0x1E, win);
+            the_ticks += 1;
+            os88_onwake(win);
+        }
+        c64_pause = 0;
+        if (c64_budget != seed)
+            fail("100 wakes that ran NO cycles moved the wall budget - only "
+                 "an EXHAUSTED slice may adapt (4.4)");
+        h_cpu_mode = H_CPU_JAM;
+        c64_fastn = 0;
+        for (i2 = 0; i2 < 8; i2++)
+            os88_onwake(win);
+        if (c64_budget != seed)
+            fail("a JAMMED machine's wakes moved the wall budget");
+        if (c64_state != C64_ST_JAM)
+            fail("a JAM did not stop the machine");
+        c64_state = C64_ST_RUN;
+        c64_msg[0] = 0;
+        /* ...and four exhausted slices inside ONE host tick double it */
+        h_cpu_mode = H_CPU_IDLE;
+        c64_fastn = 0;
+        c64_budget = C64_SLICE_MIN;
+        for (i2 = 0; i2 < 4; i2++)
+            os88_onwake(win);               /* the_ticks does not move */
+        if (c64_budget != C64_SLICE_MIN * 2)
+            fail("four exhausted slices inside one host tick did not double "
+                 "the wall budget");
+        /* ...and one slice spanning two tick boundaries halves it */
+        c64_fastn = 0;
+        h_slow_wake = 2;
+        os88_onwake(win);
+        h_slow_wake = 0;
+        if (c64_budget != C64_SLICE_MIN)
+            fail("a slice that spanned two host ticks did not halve the "
+                 "wall budget");
+        h_cpu_mode = H_CPU_IDLE;
+    }
+
+    /* --- THE KEYBOARD'S FOUR RULES (7.2) ------------------------------- */
+    {
+        int i2, before;
+        c64_kbd_init();
+        memset(h_keydown, 0, sizeof(h_keydown));
+
+        /* RULE 4, AND ITS UNIT IS EMULATED CYCLES. A fresh press survives in
+         * the matrix until the emulated machine has had one keyboard-scan
+         * interval to see it, even when the key-state map already says the
+         * key is up - which is what a press and release between two wakes
+         * looks like.
+         *
+         * THE OLD ROW MEASURED WAKES AND ENSHRINED THE DEFECT: it asserted
+         * the key was gone at the SECOND poll. A wake is one wall slice,
+         * 256..16,384 cycles against the KERNAL's ~16,421-cycle scan period,
+         * so "one wake" is between 1/64 and 1 of a single scan. Under QEMU
+         * the core runs thousands of per cent and every press is scanned many
+         * times over; on the 4.77 MHz target it runs a few per cent and
+         * typing loses characters at random - PERFORMANCE.md's input overrun,
+         * which no screendump can show. */
+        c64_cyc_lo = 0;
+        os88_onkey('a', 0x1E, win);
+        c64_kbd_poll();
+        if ((c64_matrix[1] & (1 << 2)) == 0)
+            fail("a fresh press was not in the matrix at all");
+        c64_cyc_lo = 4000;                  /* a quarter of a scan interval:
+                                             * several polls' worth of slices
+                                             * at the 256-cycle floor */
+        c64_kbd_poll();
+        c64_kbd_poll();
+        c64_kbd_poll();
+        if ((c64_matrix[1] & (1 << 2)) == 0)
+            fail("a press whose host key is already UP was dropped before "
+                 "the emulated machine had scanned the matrix once - the "
+                 "freshness guarantee is being counted in WAKES, and one wake "
+                 "can be 1/64 of a scan (7.2's rule 4)");
+        c64_cyc_lo = (unsigned)C64K_FRESH_CYC + 1;
+        c64_kbd_poll();
+        if ((c64_matrix[1] & (1 << 2)) != 0)
+            fail("a key whose scancode reads UP stayed in the matrix past a "
+                 "whole emulated scan interval - the guarantee is not "
+                 "BOUNDED, so a program that never reads the matrix makes a "
+                 "key stick for ever");
+        /* ...and the entry does leave: the down-list is empty, not merely
+         * masked out of the matrix */
+        if (c64_ndown != 0)
+            fail("the released key was left on the down-list");
+        c64_cyc_lo = 0;
+
+        /* RULE 3: the matrix is REBUILT from the whole down-list. Two keys
+         * that both want the synthetic SHIFT, one released: the survivor
+         * must still have it. `!` is 7/0 with SHIFT and `"` is 7/3 with
+         * SHIFT (gtk3_sym.vkm), and clearing one key's bits incrementally
+         * takes the other's shift with it. */
+        c64_kbd_init();
+        h_keydown[0x02] = 1;                /* the `1` key, for `!` */
+        h_keydown[0x03] = 1;                /* the `2` key, for `"` */
+        os88_onkey('!', 0x02, win);
+        os88_onkey('"', 0x03, win);
+        c64_kbd_poll();
+        c64_kbd_poll();
+        if ((c64_matrix[C64K_LSHIFT_R] & (1 << C64K_LSHIFT_C)) == 0)
+            fail("two shifted keys did not put SHIFT in the matrix");
+        h_keydown[0x03] = 0;                /* release the `2` */
+        c64_kbd_poll();
+        if ((c64_matrix[7] & (1 << 0)) == 0)
+            fail("releasing one key took the other out of the matrix");
+        if ((c64_matrix[C64K_LSHIFT_R] & (1 << C64K_LSHIFT_C)) == 0)
+            fail("releasing one shifted key cleared the SHIFT bit the OTHER "
+                 "one still needs - the matrix was cleared incrementally "
+                 "instead of rebuilt (7.2's rule 3)");
+
+        /* the bounded overflow: the 17th simultaneous key is DROPPED, not
+         * written past the end of a 16-entry list */
+        c64_kbd_init();
+        for (i2 = 0; i2 < 20; i2++) {
+            h_keydown[0x10 + i2] = 1;
+            os88_onkey('a' + i2, 0x10 + i2, win);
+        }
+        before = c64_ndrop;
+        c64_kbd_poll();
+        if (c64_ndown != C64K_DOWNMAX)
+            fail("the down-list did not fill to exactly 16");
+        if (c64_ndrop == before)
+            fail("the 17th simultaneous key was not counted as dropped - it "
+                 "was written past the end of a 16-entry list, or lost "
+                 "without anybody noticing");
+        for (i2 = 0; i2 < 20; i2++)
+            h_keydown[0x10 + i2] = 0;
+
+        /* CTRL+digit comes from the POLL and not from a chord (7.3), which
+         * is what keeps VICE's Alt+digit captions */
+        c64_kbd_init();
+        h_keydown[KSC_CTRL] = 1;
+        h_keydown[0x03] = 1;                /* the `2` key */
+        c64_kbd_poll();
+        if ((c64_matrix[C64K_LCTRL_R] & (1 << C64K_LCTRL_C)) == 0
+            || (c64_matrix[7] & (1 << 3)) == 0)
+            fail("CTRL+2 did not reach the matrix from the once-per-wake "
+                 "poll - a colour code needs a chord this port refuses to "
+                 "steal");
+        h_keydown[KSC_CTRL] = 0;
+        h_keydown[0x03] = 0;
+
+        /* Ctrl+H, Ctrl+I and Ctrl+M are told from BS, Tab and CR by their
+         * SCAN CODE and by nothing else (7.3) */
+        c64_kbd_init();
+        os88_onkey(9, KSC_TAB, win);        /* Tab = C= */
+        c64_kbd_poll();
+        if ((c64_matrix[C64K_LCBM_R] & (1 << C64K_LCBM_C)) == 0)
+            fail("Tab did not reach the C= key");
+        c64_kbd_init();
+        os88_onkey(9, KSC_CTRLI, win);      /* the same ascii, Ctrl+I */
+        c64_kbd_poll();
+        if ((c64_matrix[C64K_LCTRL_R] & (1 << C64K_LCTRL_C)) == 0)
+            fail("Ctrl+I arrived as Tab - the BIOS fold was not resolved on "
+                 "the scan code (7.3)");
+
+        /* A BARE SHIFT AND A BARE CTRL ARE IN THE MATRIX (keyboard.c:474,
+         * :505). No other key is needed: a game polling $DC01 for the shift
+         * key - the second fire button of a thousand of them - used to see
+         * nothing at all, because SHIFT went in only when some other key's
+         * mapping asked for it. */
+        c64_kbd_init();
+        memset(h_keydown, 0, sizeof(h_keydown));
+        h_keydown[KSC_LSHIFT] = 1;
+        c64_kbd_poll();
+        if ((c64_matrix[C64K_LSHIFT_R] & (1 << C64K_LSHIFT_C)) == 0)
+            fail("a bare SHIFT is not in the matrix - VICE latches the "
+                 "physical modifier with no other key down (keyboard.c:474)");
+        h_keydown[KSC_LSHIFT] = 0;
+        h_keydown[KSC_CTRL] = 1;
+        c64_kbd_poll();
+        if ((c64_matrix[C64K_LCTRL_R] & (1 << C64K_LCTRL_C)) == 0)
+            fail("a bare CTRL is not in the matrix (keyboard.c:505)");
+        if ((c64_matrix[C64K_LSHIFT_R] & (1 << C64K_LSHIFT_C)) != 0)
+            fail("SHIFT stayed in the matrix after the host key came up - "
+                 "the modifier is a LEVEL, not a latch");
+        h_keydown[KSC_CTRL] = 0;
+        /* ...AND DESHIFT STILL WINS. `*` is 6/1 with the .vkm's 0x10, which
+         * means SHIFT actively RELEASED, and that is VICE's
+         * `!virtual_deshift` in the same expression. */
+        c64_kbd_init();
+        memset(h_keydown, 0, sizeof(h_keydown));
+        h_keydown[KSC_LSHIFT] = 1;
+        os88_onkey('*', 0x09, win);
+        c64_kbd_poll();
+        if ((c64_matrix[C64K_LSHIFT_R] & (1 << C64K_LSHIFT_C)) != 0)
+            fail("a DESHIFT mapping did not clear the host's own SHIFT");
+        c64_kbd_init();
+        memset(h_keydown, 0, sizeof(h_keydown));
+
+        /* THE KEYSET TAKES ITS KEYS, AND THEY DO NOT REACH THE MATRIX.
+         * VICE's keyboard_key_pressed (src/keyboard.c:788-798) walks the
+         * ports mapped to a keyset, calls joystick_check_set for each and
+         * RETURNS before kbd_queue_pushkey when one takes the key: a keyset
+         * key drives the stick and is not typed. This port shipped the
+         * joystick without that rule, so the four cursor keys drove port 2
+         * AND entered the matrix at the same time - a game polling $DC00 got
+         * phantom cursor presses out of $DC01, and moving the stick in BASIC
+         * walked the cursor. Right is 0/2 in the .vkm and Down is 0/7. */
+        c64_kbd_init();
+        memset(h_keydown, 0, sizeof(h_keydown));
+        h_keydown[KSC_RIGHT] = 1;
+        os88_onkey(0, KSC_RIGHT, win);
+        c64_kbd_poll();
+        if ((c64_joy2 & (1 << 3)) == 0)
+            fail("the right cursor key did not drive port 2 RIGHT (§8)");
+        if ((c64_matrix[0] & (1 << 2)) != 0)
+            fail("a keyset key ALSO entered the keyboard matrix - VICE "
+                 "returns before kbd_queue_pushkey for a key a keyset took "
+                 "(keyboard.c:788-798), so the stick does not type");
+        /* THE NEGATIVE CONTROL, and it is VICE's own first test in
+         * joystick_check_set (joystick.c:598-601): with the keyset DISABLED
+         * the very same key falls through to the matrix. */
+        c64_keyset = 0;
+        c64_kbd_poll();
+        if ((c64_matrix[0] & (1 << 2)) == 0)
+            fail("with the keyset OFF the cursor key did not reach the "
+                 "matrix - the consumption is unconditional, so the row "
+                 "above proves nothing");
+        if (c64_joy2 != 0)
+            fail("with the keyset OFF the cursor key still drove port 2");
+        c64_keyset = 1;
+        /* ...AND CTRL IS THE ONE DEPARTURE §8 STATES: it is both fire and
+         * the CTRL key, so it still reaches the matrix. */
+        c64_kbd_init();
+        memset(h_keydown, 0, sizeof(h_keydown));
+        h_keydown[KSC_CTRL] = 1;
+        h_keydown[0x03] = 1;                /* Ctrl+2, a colour code */
+        c64_kbd_poll();
+        if ((c64_joy2 & (1 << 4)) == 0)
+            fail("Ctrl did not fire port 2");
+        if ((c64_matrix[C64K_LCTRL_R] & (1 << C64K_LCTRL_C)) == 0
+            || (c64_matrix[7] & (1 << 3)) == 0)
+            fail("the keyset consumed CTRL - it is both fire and the CTRL "
+                 "key, which is the one departure §8 states");
+        c64_kbd_init();
+        memset(h_keydown, 0, sizeof(h_keydown));
+
+        /* RESTORE is not a matrix key: Page_Up raises an NMI EDGE (7.4) */
+        c64_kbd_init();
+        c64_scr_wr(C64_SCR_IRQ, 0);
+        os88_onkey(0, KSC_PGUP, win);
+        c64_kbd_poll();
+        if ((c64_scr_rd(C64_SCR_IRQ) & 0x02) == 0)
+            fail("Page_Up did not raise the RESTORE NMI (7.4)");
+        c64_scr_wr(C64_SCR_IRQ, 0);
+        c64_kbd_init();
+        memset(h_keydown, 0, sizeof(h_keydown));
+    }
+
+    /* --- what CIA1 answers, which is the only reason the matrix exists --- */
+    {
+        c64_kbd_init();
+        c64_reset_regs();
+        c64_map_publish();
+        c64_cia[0][0x02] = 0xFF;            /* PRA all outputs */
+        c64_cia[0][0x03] = 0x00;            /* PRB all inputs */
+        h_keydown[0x1E] = 1;
+        os88_onkey('a', 0x1E, win);         /* A is row 1, column 2 */
+        c64_kbd_poll();
+        c64_cia[0][0x00] = (unsigned char)~(1 << 1);   /* select row 1 */
+        if ((c64_kbd_pb() & (1 << 2)) != 0)
+            fail("CIA1 PRB did not pull column 2 low with A held down");
+        c64_cia[0][0x00] = (unsigned char)~(1 << 0);   /* the wrong row */
+        if ((c64_kbd_pb() & (1 << 2)) == 0)
+            fail("CIA1 PRB pulled a column low for a row nothing selected");
+        h_keydown[0x1E] = 0;
+        c64_kbd_init();
+        memset(h_keydown, 0, sizeof(h_keydown));
+        c64_reset_regs();
+        c64_map_publish();
+    }
+
+    /* --- A PAUSED MACHINE DOES NOT SPIN THE UI TASK (SPEC.md 74.1) -------
+     * "A handler re-posts itself only while it has work - a wake round trip
+     * is at least one task switch (693 us), so a handler that always
+     * re-posts spins the UI task at ~1,400 wakes a second." Alt+P sets
+     * c64_pause and NOT c64_state, so a paused machine is still C64_ST_RUN:
+     * it ran nothing, drew nothing, and re-posted anyway. */
+    {
+        c64_state = C64_ST_RUN;
+        c64_pause = 1;
+        c64_msg[0] = 0;
+        c64_dirty_any = 0;
+        /* THE NEGATIVE CONTROL FIRST: the condition wave 2 shipped, in this
+         * exact state, must ask for a wake - otherwise the row below proves
+         * nothing about the fix. */
+        if (!(c64_dirty_any || c64_state == C64_ST_RUN || c64_msg[0] != 0))
+            fail("the negative control did not re-post: the shipped "
+                 "condition is no longer being modelled here");
+        if (c64_wants_wake())
+            fail("a PAUSED machine asked for another wake - one wake round "
+                 "trip is a task switch and ~1 ms of far calls, for a "
+                 "machine the user deliberately stopped (SPEC.md 74.1)");
+        c64_kick = 1;
+        os88_onwake(win);
+        if (c64_kick)
+            fail("the slice driver re-posted from a paused machine");
+        c64_pause = 0;
+        if (!c64_wants_wake())
+            fail("a RUNNING machine stopped asking for wakes");
+        c64_msg[0] = 0;
+        c64_dirty_any = 0;
+        c64_state = C64_ST_JAM;
+        if (c64_wants_wake())
+            fail("a JAMMED machine asked for another wake");
+        /* ...AND A MESSAGE IS NOT WORK. `c64_msg[0] != 0` used to be tested
+         * FIRST, above both of those, so a stopped machine re-posted for the
+         * whole five-second life of every message with nothing inside the
+         * wake but a re-read of the clock: ~7,000 round trips, ~4.8 s of the
+         * SHARED UI task, and Alt+P made it reachable on purpose. */
+        c64_dirty_any = 0;
+        strcpy(c64_msg, "Paused.");
+        c64_msg_until = the_ticks + 90;
+        if (!(c64_dirty_any || c64_msg[0] != 0))
+            fail("the negative control did not re-post: the shipped "
+                 "condition is no longer being modelled here");
+        if (c64_wants_wake())
+            fail("a JAMMED machine asked for a wake because a MESSAGE was "
+                 "up - there is nothing to do inside it and a round trip is "
+                 "693 us (SPEC.md 74.1, C64-SPEC §10.1)");
+        c64_state = C64_ST_RUN;
+        c64_pause = 1;
+        if (c64_wants_wake())
+            fail("a PAUSED machine asked for a wake because a MESSAGE was up");
+        c64_pause = 0;
+        c64_msg[0] = 0;
+        c64_state = C64_ST_RUN;
+    }
+
+    /* --- A REFUSED SPEAKER GRANT IS NOT PERMANENT (11.4, SPEC.md 34.3) ---
+     * os88_snd_tone answers -1 when another instance holds the grant. The
+     * driver cleared the latch BEFORE the call and threw all three returns
+     * away - and the latch is raised in exactly ONE place, a write to
+     * $D400-$D41C - so a single refusal at the wrong moment silenced the
+     * emulated SID until the guest next poked a SID register, which for the
+     * ordinary `set the frequency, gate on, leave it` is never. Permanent
+     * silence with nothing said about it is what SPEC.md 47 forbids. */
+    {
+        int t0, i3;
+        c64_state = C64_ST_RUN;
+        c64_pause = 0;
+        c64_msg[0] = 0;
+        c64_sid_said = 0;
+        c64_sid_tries = 0;
+        h_tone_refuse = 1;
+        c64_io_wr(0xD401, 0x10);            /* voice 1's frequency high byte */
+        c64_io_wr(0xD404, 0x11);            /* ...and the gate on */
+        if (!c64_sid_dirty)
+            fail("a SID register write did not raise the tone latch");
+        t0 = n_tone;
+        os88_onwake(win);
+        if (n_tone == t0)
+            fail("the wake did not ask for the tone at all");
+        if (!c64_sid_dirty)
+            fail("a REFUSED os88_snd_tone cleared the latch - the emulated "
+                 "SID is then silent for the rest of the session, because "
+                 "only a SID REGISTER WRITE ever raises it again (11.4)");
+        h_tone_refuse = 0;                  /* the other instance let go */
+        t0 = n_tone;
+        os88_onwake(win);
+        if (n_tone == t0)
+            fail("the refused tone was not re-asked on the next wake");
+        if (c64_sid_dirty)
+            fail("a GRANTED tone left the latch up - one far call a wake, "
+                 "for ever");
+        /* ...AND THE RETRY IS BOUNDED. A speaker held for good must cost
+         * C64_SID_TRIES far calls and not one a wake for the session, and
+         * the fact is said ONCE (SPEC.md 47), never once a wake. */
+        h_tone_refuse = 1;
+        c64_io_wr(0xD401, 0x20);
+        for (i3 = 0; i3 < 60 && c64_sid_dirty; i3++)
+            os88_onwake(win);
+        if (c64_sid_dirty)
+            fail("the retry never gave up - a machine whose speaker is held "
+                 "asks once a wake for ever");
+        if (i3 < 2)
+            fail("the retry gave up on the FIRST refusal - that is the "
+                 "permanent silence this row exists to catch");
+        if (strcmp(last_toast, "The speaker is busy - no SID sound.") != 0)
+            fail("the SID gave up SILENTLY - a refusal the user cannot see "
+                 "is the shape SPEC.md 47 forbids");
+        t0 = n_tone;
+        for (i3 = 0; i3 < 10; i3++)
+            os88_onwake(win);
+        if (n_tone != t0)
+            fail("the driver went on asking for the tone after it had given "
+                 "up - the bound is not a bound");
+        /* ...and the NEXT SID register write re-arms it, which is the one
+         * event that means the guest still wants a sound. */
+        c64_io_wr(0xD401, 0x30);
+        if (!c64_sid_dirty)
+            fail("a SID write after a give-up did not re-arm the retry");
+        h_tone_refuse = 0;
+        os88_onwake(win);
+        if (c64_sid_dirty)
+            fail("the re-armed retry did not take the grant");
+        c64_msg[0] = 0;
+        c64_st_ok = 0;
+        c64_sh_inval();
+        dmg_whole = 1;
+        do_paint(win);
+    }
+
+    /* --- A JAM SAYS SO IN VICE'S OWN WORDS, AND GOES ON SAYING IT (4.5,
+     * 10.1). src/maincpu.c:612 formats `"   " CPU_STR ": JAM at $%04X   "`
+     * with CPU_STR = `Main CPU` (src/6510core.c:45); the padding is the
+     * D'OH! dialog's, the line is not ours to invent. And it is a PERMANENT
+     * row state beside `C64.ROM missing`, not a five-second message: the
+     * glass showed a jammed machine and an idle one identically. */
+    {
+        c64_state = C64_ST_RUN;
+        c64_pause = 0;
+        c64_msg[0] = 0;
+        h_cpu_mode = H_CPU_JAM;
+        c64_m.pc = 0xE5CF;
+        os88_onwake(win);
+        h_cpu_mode = H_CPU_IDLE;
+        if (c64_state != C64_ST_JAM)
+            fail("a JAM did not stop the machine");
+        if (strcmp(c64_jamline, "Main CPU: JAM at $E5CF") != 0)
+            fail("the JAM line is not VICE's own (src/maincpu.c:612 + "
+                 "src/6510core.c:45) - it was typed rather than read");
+        /* AND IT IS NOT ALSO A MESSAGE. Routed through c64_say the same 22
+         * glyphs went up as msg == 1, and five seconds later the deadline
+         * cleared them, msg became 3, `msg != c64_st_shown` forced the full
+         * path, and the row was filled BLACK and re-lettered with THE SAME
+         * LINE AT THE SAME PLACE - ~21 ms that change no pixel, and on the
+         * glass a row that blanks and re-letters five seconds after the
+         * event (PERFORMANCE.md rule 2's erase-then-letter). */
+        if (c64_msg[0] != 0)
+            fail("the JAM line went up as a five-second MESSAGE as well as "
+                 "the permanent row state - the row is then drawn TWICE, "
+                 "identically, with a black fill between");
+        if (strcmp(last_toast, c64_jamline) != 0)
+            fail("the JAM line did not take §9.8's second route - c64_say "
+                 "was carrying the toast and it went with it");
+        c64_st_ok = 0;
+        c64_sh_inval();
+        dmg_whole = 1;
+        h_last_run[0] = 0;
+        h_runs_clear();
+        do_paint(win);
+        {
+            const char *line = h_run_at(c64_gox);
+            if (line == 0 || strcmp(line, c64_jamline) != 0)
+                fail("the status row does not carry the jam line - a jammed "
+                     "machine reads exactly like an idle one, and a permanent "
+                     "condition is a LINE and not a message (§1.4's rule, "
+                     "§4.5)");
+            /* ...AND THE TWO LAMPS ARE STILL ON THE ROW UNDER IT (§10.1). A
+             * message used to own the whole row, so `P` - the one indicator
+             * that reports the PAUSE state - was off the glass for exactly as
+             * long as the machine was paused. */
+            if (h_run_at(c64_gox + C64_ST_WRPX) == 0
+                || h_run_at(c64_gox + C64_ST_PAUX) == 0)
+                fail("a permanent row LINE hid the warp and pause lamps - "
+                     "the row's 40 field cells are the message's, the two "
+                     "lamp cells are not (§10.1)");
+        }
+        /* ...AND IT IS DRAWN ONCE. Five seconds of nothing happening must
+         * cost nothing at all on this row. */
+        cost_begin();
+        the_ticks += 200;
+        flush_now();
+        if (n_fill - b_fill != 0 || n_run - b_run != 0)
+            fail("the jam row repainted itself when five seconds it never "
+                 "used were up - 1 fill + 22 identical glyph cells, ~21 ms "
+                 "for no pixel");
+        /* THE NEGATIVE CONTROL: put the row in exactly the state the message
+         * route left it in - drawn as msg == 1, then found as msg == 3 - and
+         * show that it DOES repaint, so the row above proves something. */
+        cost_begin();
+        c64_st_shown = 1;
+        c64_dirty_any = 1;
+        flush_now();
+        if (n_fill - b_fill == 0 || n_run_cells - b_run_cells < 22)
+            fail("the negative control did not repaint: the second draw this "
+                 "row exists to catch is no longer reachable, so the row "
+                 "above is not measuring it");
+        /* ...and Advance frame is GREYED on a jammed machine (§47) */
+        if (c64_pref_items[C64_I_ADVANCE][0] != OS88_MENU_DIS)
+            fail("Advance frame stayed LIVE on a JAMMED machine - a black "
+                 "item whose body returns in silence is the one shape "
+                 "SPEC.md 47 forbids");
+        /* ...AND THE CHORD DOES NOT WALK ROUND THE GREYING. The kernel never
+         * dispatches a disabled item, but os88_onkey dispatches Alt+Shift+P
+         * itself (§7.5) - and it used to reach c64_advance_frame's state
+         * guard and return in silence, which is §47's shape by the other
+         * route. */
+        c64_adv = 0;
+        memset(h_keydown, 0, sizeof(h_keydown));
+        h_keydown[KSC_LSHIFT] = 1;
+        os88_gfx_lock(); os88_onkey(0, 0x19, win); os88_gfx_unlock();
+        if (c64_adv)
+            fail("Alt+Shift+P reached Advance frame while the item was "
+                 "GREYED - the chord must not dispatch what the menu will "
+                 "not (SPEC.md 47)");
+        memset(h_keydown, 0, sizeof(h_keydown));
+
+        /* ...AND THE PRODUCT'S OWN WAY OUT OF A JAM IS THE ONE THAT HAS TO
+         * UN-GREY IT. This row used to set c64_state itself and then call
+         * c64_menu_state() by hand, so it modelled the fix rather than the
+         * program: File > Reset machine CPU cleared C64_ST_JAM - and with it
+         * the permanent line that was the FACT behind the greying - and left
+         * Advance frame black for the rest of the session, un-greying itself
+         * later only when some unrelated latch happened to call
+         * c64_menu_state. A greying whose fact is off the glass is exactly
+         * what SPEC.md 47 forbids. */
+        do_cmd(C64_I_RESETCPU, C64_M_FILE, win);
+        if (c64_state != C64_ST_RUN)
+            fail("File > Reset machine CPU did not clear the JAM");
+        if (c64_pref_items[C64_I_ADVANCE][0] == OS88_MENU_DIS)
+            fail("Advance frame stayed GREYED after a Reset cleared the JAM "
+                 "- and the jam LINE, which is the fact that greyed it, had "
+                 "already left the row (SPEC.md 47)");
+        h_runs_clear();
+        c64_st_ok = 0;
+        c64_dirty_any = 1;
+        flush_now();
+        if (h_run_at(c64_gox) != 0
+            && strcmp(h_run_at(c64_gox), c64_jamline) == 0)
+            fail("the jam line survived the reset that cleared the jam");
+        c64_msg[0] = 0;
+        c64_st_ok = 0;
+    }
+
+    /* --- Preferences > Advance frame is LIVE (§11.1): it runs to the next
+     * VIC frame end and stops, which is what the alarm model this wave
+     * landed made possible - and it is why the item stopped being greyed. */
+    {
+        int i2;
+        c64_state = C64_ST_RUN;
+        c64_pause = 0;
+        c64_adv = 0;
+        c64_frame_cyc = 5000;
+        c64_frames_lo = 0;
+        c64_msg[0] = 0;
+        /* FROM A RUNNING MACHINE THE ITEM ONLY PAUSES, AND ADVANCES NOTHING.
+         * VICE's action is the whole of src/arch/gtk3/actions-speed.c:72-80
+         * (identically src/arch/gtk3/ui.c:2735-2743):
+         *   if (ui_pause_active()) vsyncarch_advance_frame(); else
+         *   ui_pause_enable();
+         * The first draft set the request unconditionally, so from a running
+         * machine this port ran 19,656 emulated cycles and THEN paused -
+         * invented semantics for the one live item wave 2 added, and the one
+         * whose body had not been read (LESSONS.md 1). */
+        do_cmd(C64_I_ADVANCE, C64_M_PREF, win);
+        if (!c64_pause)
+            fail("Advance frame did not PAUSE a running machine - VICE's "
+                 "action pauses when the machine is running and advances "
+                 "only an already-paused one (actions-speed.c:72-80)");
+        if (c64_adv)
+            fail("Advance frame raised a frame request from a RUNNING "
+                 "machine");
+        if (c64_frames_lo != 0)
+            fail("Advance frame ran emulated cycles from a running machine");
+        if (strcmp(last_toast, "Paused.") != 0)
+            fail("Advance frame pausing a running machine said nothing");
+        /* ...AND FROM THE PAUSED MACHINE IT RUNS ONE FRAME AND STOPS. THE
+         * COMMAND RAISES A REQUEST AND RUNS NOTHING: os88_oncmd is dispatched
+         * under the gfx lock and a PAL frame is 19,656 emulated cycles, which
+         * on the target is a fraction of a second of stopped desktop. The
+         * slice driver serves it, in the wall slices it already sizes - so it
+         * may take more than one wake, and the driver must go on asking for
+         * them while it does. */
+        do_cmd(C64_I_ADVANCE, C64_M_PREF, win);
+        if (!c64_adv)
+            fail("Advance frame did not raise a request from a PAUSED "
+                 "machine - it is the only state VICE advances from");
+        if (c64_frames_lo != 0)
+            fail("Advance frame ran the frame under the menu's gfx lock");
+        for (i2 = 0; i2 < 200 && c64_adv; i2++) {
+            if (!c64_wants_wake())
+                fail("the driver stopped asking for wakes with an Advance "
+                     "frame still outstanding - the frame never finishes");
+            the_ticks += 1;
+            os88_onwake(win);
+        }
+        if (c64_adv)
+            fail("Advance frame never reached the frame end");
+        if (!c64_pause)
+            fail("Advance frame did not leave the machine paused");
+        if (c64_frames_lo != 1)
+            fail("Advance frame did not reach the next VIC frame end - it is "
+                 "one alarm query, and greying it named a raster accumulator "
+                 "that this wave landed (SPEC.md 47)");
+        /* ...AND THE CHORD IS THE OTHER ROUTE. The BIOS hands Alt+Shift+P the
+         * same ascii/scan pair as Alt+P, so without reading the shift level
+         * the chord §11.1 advertises for Advance frame RESUMED a paused
+         * machine - the opposite of VICE, in the one state it advances from
+         * (§7.5: every chord the menu advertises is dispatched here). */
+        c64_adv = 0;
+        c64_pause = 1;
+        c64_frames_lo = 0;
+        c64_frame_cyc = 5000;
+        memset(h_keydown, 0, sizeof(h_keydown));
+        h_keydown[KSC_LSHIFT] = 1;
+        os88_onkey(0, 0x19, win);
+        if (!c64_pause || !c64_adv)
+            fail("Alt+Shift+P resumed the machine instead of advancing one "
+                 "frame - it is Advance frame's chord (§11.1)");
+        memset(h_keydown, 0, sizeof(h_keydown));
+        c64_adv = 0;
+        os88_onkey(0, 0x19, win);           /* ...and plain Alt+P still is
+                                             * Pause emulation */
+        if (c64_pause)
+            fail("Alt+P stopped toggling Pause emulation");
+        c64_pause = 0;
+        c64_adv = 0;
+        c64_msg[0] = 0;
+        c64_state = C64_ST_RUN;
+        c64_kbd_init();
+    }
+
+    c64_state = C64_ST_RUN;
+    c64_sh_inval();
+    dmg_whole = 1;
+    do_paint(win);
+    audit("after the wave-2 clock and keyboard checks");
 
     /* --- File > Exit emulator: the lock contract, and spawn's 0 / -1 ----
      * os88_oncmd is dispatched UNDER the gfx lock, so ovl_cmd must not take

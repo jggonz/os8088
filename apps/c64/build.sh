@@ -37,8 +37,8 @@
 #                                  in raw QEMU, with negative controls (3.6)
 #
 # NOT here, because it takes minutes: hosttest/c64cputest.sh runs the 6510 core
-# against Klaus Dormann's tests and the eight other rows of 4.6 (`make
-# c64cputest`) - the rcz80test precedent.
+# against Klaus Dormann's functional test and the eleven other rows of 4.6 -
+# twelve rows in all (`make c64cputest`) - the rcz80test precedent.
 #
 # The compiler for the TARGET is not in this tree: tools/setup-cc.sh fetches
 # SmallerC at its pinned commit into build/cc/ (gitignored). The checks below
@@ -66,7 +66,11 @@ python3 tools/c64rom.py --check
 # The UI harness includes c64.c itself, with apps/c64/hosttest ahead of apps/cc
 # on the include path so that its stub os88.h is the one that resolves. -w
 # because the stubs deliberately ignore arguments; the checks are the point.
-$HOSTCC -O1 -w -I apps/c64/hosttest -I apps/c64 \
+# -DC64_HOST is what keeps the cost counters (c64scr.c's c64_n_*, c64kbd.c's
+# c64_ndrop) OUT of the shipping image: nothing in apps/c64/*.c reads one, the
+# Makefile's smlrcc line never defines it, and this harness is their only
+# reader (§9.7). The build fails loudly on any increment left unguarded.
+$HOSTCC -O1 -w -DC64_HOST -I apps/c64/hosttest -I apps/c64 \
     -o $BUILD/c64uitest apps/c64/hosttest/c64uitest.c
 $BUILD/c64uitest
 # ...and the ROM-LESS machine, which is a SECOND PROCESS because os88_main
