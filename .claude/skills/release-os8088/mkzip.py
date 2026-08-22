@@ -72,7 +72,7 @@ MANIFEST = [
 ]
 
 # Files packed beside the images, when the image they belong to is here.
-# THE C64 IS GPL-2-OR-LATER because VICE is, and docs/C64-SPEC.md 1.2 says in
+# THE C64 IS GPL-2-OR-LATER because VICE is, and C64-SPEC 1.2 says in
 # as many words that "the release zip carries COPYING". Its own floppies carry
 # it too -- this is the second copy, for a reader who unpacks the zip and never
 # mounts a disk. (trigger image, source path, name in the zip, description)
