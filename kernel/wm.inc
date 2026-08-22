@@ -2686,6 +2686,9 @@ wm_wake:
     cmp ax, EVQ_CAP
     jae .full                   ; evq_push would drop it silently; say so
     mov byte [wm_wkq+si], 1
+    mov byte [wm_wkany], 1      ; ...and arm the idle backstop (wm_wake_sweep):
+                                ; the ring can lose this record to any of the
+                                ; drains that pop everything but what they want
     mov word [wm_wk_rec+EV_TYPE], EVT_WAKE
     mov [wm_wk_rec+EV_A], bx
     mov si, wm_wk_rec
@@ -2733,6 +2736,63 @@ wm_wake_disp:
                                 ; carried and meaningless here
 .out:
     ret
+
+; -----------------------------------------------------------------------------
+; wm_wake_sweep - deliver a wake whose RECORD was drained by somebody else
+; in:  nothing; the UI task's idle section (evq_pop said EMPTY), NO lock held
+; out: nothing (all registers preserved)
+;
+; THE FLAG IS THE PROMISE, NOT THE RECORD - and this is what makes that true.
+; wm_wake's coalescing flag says "a wake is owed to this slot"; it is cleared
+; by wm_wake_disp and by wm_destroy, and by nothing else. But EVT_WAKE rides
+; the one event ring, and six places in this kernel drain that ring of
+; everything that is not the record they are waiting for: ui_drag's .track and
+; ui_grow's, fm_dgstart's .wait and .track (files.inc), snd's click-abort drain
+; and fsx_restore's - plus evq_init in blk_pass. Any of them can swallow a
+; package's wake. The flag then stands for ever, so wm_wake answers "one is
+; already in the ring: same promise" (CF=0) to every later post and NOTHING is
+; ever delivered again: an emulator's slice driver simply stops being driven,
+; with no error anywhere and no user input able to restart it, because a
+; package's kick from os88_onkey/os88_onclick posts through the same flag.
+; That was a launch from a file-manager window - fm_dgstart's drag-detect drain
+; - stopping RUNCPM's Z80 and the C64's 6510 dead.
+;
+; So the ring is an OPTIMISATION for delivering the promise, and this is the
+; backstop: when the ring is empty every promise in it has been kept or lost,
+; and a slot whose flag is still set is one that was lost. One byte of hint
+; (wm_wkany) keeps the idle path at ONE compare - the scan runs only after a
+; post has happened at all, and clears the hint when it finds nothing owed.
+; The hint is cleared BEFORE the scan, so a post landing during it re-arms
+; rather than being erased by it.
+;
+; A wake delivered here that the ring was ALSO about to deliver is one extra
+; wake, which SPEC.md 74.1 already requires every handler to tolerate ("it is
+; a KICK, not a message").
+; -----------------------------------------------------------------------------
+; It CLOBBERS what wm_wake_disp clobbers and saves nothing, because its one
+; caller is ui_task's .empty arm - the same arm .wake calls wm_wake_disp bare
+; from, and both jump straight to .yield.
+; -----------------------------------------------------------------------------
+wm_wake_sweep:
+    cmp byte [wm_wkany], 0
+    je .out                     ; nothing has posted since the last clean scan
+    mov byte [wm_wkany], 0      ; BEFORE the scan (see above)
+    xor bx, bx
+    mov si, wm_wins
+.scan:
+    cmp byte [wm_wkq+bx], 0
+    jne .found
+    add si, WIN_SIZE
+    inc bx
+    cmp bx, MAX_WIN
+    jb .scan
+.out:
+    ret
+.found:
+    mov byte [wm_wkany], 1      ; a second owed slot may be behind this one:
+                                ; the next idle pass scans again and clears
+    jmp wm_wake_disp            ; tail call: SI = the window. It clears the
+                                ; flag, then calls the handler
 
 ; -----------------------------------------------------------------------------
 ; wm_ask_size - put a proposed size to the window before committing it
@@ -10398,8 +10458,15 @@ wm_clreq:   resw 1                  ; the window a package asked to have closed
                                     ; nothing can queue a second inside one
 wm_clask:   resw 1                  ; the window whose negotiator is running
                                     ; RIGHT NOW, 0 = none: the re-entry fence
-wm_wkq:     resb MAX_WIN            ; per slot: 1 = an EVT_WAKE for this window
-                                    ; is in the ring (wm_wake coalesces on it)
+wm_wkq:     resb MAX_WIN            ; per slot: 1 = a wake is OWED to this window
+                                    ; (wm_wake coalesces on it). Normally that
+                                    ; means the record is in the ring; when
+                                    ; something drained the ring it means the
+                                    ; record is gone and wm_wake_sweep owes the
+                                    ; delivery
+wm_wkany:   resb 1                  ; 1 = at least one wake has been posted since
+                                    ; the last clean sweep. The hint that keeps
+                                    ; the idle backstop at one compare
 wm_wk_rec:  resb EVQ_RECSIZE        ; the one wake record, filled under cli
 wm_owner:   resb MAX_WIN            ; instance index owning each window slot
                                     ; (SPEC.md 29), 0xFF = unowned; NOT part
