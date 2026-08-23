@@ -17062,6 +17062,157 @@ answers a question nobody asked; a caller wants to know whether it can go in a
 loop. Every published cell that is O(anything) says so here now, and
 `OSAPI_FILE_DFREE` is the worked example of what happens when one does not.
 
+### 18.93.1 The canary: verify the TRANSFER, never the table
+
+§18.91.1 lets one `int 13h` span a whole **cylinder** rather than a track, and
+it is only in LBA order because the FDC's multi-track bit carries the read onto
+the other head when it finishes the sector numbered **EOT**. §18.92/§18.93 set
+that EOT by patching the machine's diskette parameter table and repointing
+`int 1Eh` at the copy.
+
+**A BIOS that keeps its own table ignores the patch.** It then flips at 8 on a
+9-sector track and returns the other head's sectors in place of head 0's — with
+`CF = 0` and the full count, which is to say silently. The loader cannot tell,
+the bar reaches 92%, and the kernel it jumps into is scrambled.
+
+**Reading the table back does not detect this.** The loader wrote those bytes to
+its own RAM; reading them back proves the write worked, which it always did. It
+says nothing about whether the BIOS consulted them. The only thing worth
+verifying is the **transfer**.
+
+So the build reads a word out of `KERNEL.SYS` at **`KSIG_OFF` = 18432** and
+injects it as `KSIG`. After the load the boot sector compares, and on a mismatch
+drops `run_max` to `SPT` and **does the whole load again**. A boot 2.2s slower
+beats a kernel that is quietly wrong.
+
+**THE OFFSET MUST NAME A SECTOR THAT CROSSES A HEAD**, and "past the first
+flip" is not the same statement. A run transfers correctly up to the head
+boundary and only goes wrong after it, so a canary sitting in any run's FIRST
+half is loaded correctly on precisely the machine it exists to catch. The first
+version of this used file sector 32, which is in a first half in all three
+geometries; it passed on the failing machine and shipped a kernel that was
+still scrambled.
+
+File sector 36 crosses in all three shipped geometries — 360KB (data at LBA 12),
+720KB (LBA 14), 1.44MB (LBA 33) — and sits mid-band in the common run 33..38, so
+three sectors of margin survive a BPB change. It is inside the first 64KB, so the
+compare reuses the `ES` the handoff already loads, and the word is the same for
+every geometry because `KERNEL.SYS` is one file. `tests/suite.py`'s `canary` row
+asserts all of that against the images `make` just built, so it cannot drift.
+
+The retry cannot loop: the second pass is track-bounded, so the canary is
+skipped by the `run_max == SPT` test that guards it — and that skip is also the
+path that leaves `boot_cylrun` zero, so a machine that fell back tells the
+kernel so by saying nothing. `[done]` is deliberately
+not reset — the sector has no bytes for it, so `spl_tick` clamps instead and the
+bar sits at 100% through the second read.
+
+**The kernel inherits the answer rather than probing for it.** The loader writes
+`0060:0004` (`boot_cylrun`) **on one path and no other**: the path where a run
+crossed a head and the canary came back right. Every other way out of the block
+leaves the kernel image's own **zero** — it fell back, it was too small to have
+crossed, it was built `TRACKRUN=1`, §18.93.2's gate said this is not an XT, or
+the boot sector predates the canary. All of those want the cautious answer and
+all of them get it from the same test. `dsk_bpb_check` — the last thing `disk_mount` does before a
+volume's geometry becomes `disk_read`'s own — turns **non-zero** into
+`[dsk_cylrun] = 1`, and `dsk_xfer` tests that byte where it used to test
+`%ifndef TRACK_RUN`. A probe of its own would cost two more `int 13h` at every
+boot to learn what the loader already knows.
+
+**It is a fact about the MACHINE, and it must not be re-derived per volume.**
+The first version published the run bound as a number and compared it against
+the *mounted* volume's SPT — greater meant "crossed". That is correct on the one
+volume the loader loaded from and wrong on any other, because the two numbers
+come from different disks. A 286 with the failing BIOS booting a 1.44MB disk
+publishes **18**, which is a *track* there; mount a 360KB floppy (SPT 9) or a
+17-sector hard disk and `18 > SPT` is true, `[dsk_cylrun]` goes back to 1, and
+the crossing this section exists to prevent is switched on again — on the one
+BIOS class that cannot do it, at the first mount of a second volume. A boolean
+written on one path has no such reading. **Do not turn it back into a compare.**
+
+**Measured, not argued.** QEMU is a 286-and-up CPU, so §18.93.2's gate takes
+its non-XT arm there — which is what makes it the instrument for this, on the
+closed list's own first row. Booting the 1.44MB image with the 360KB apps disk
+in B: (`make test TESTAPPS=build/apps360.img`) and reading the two words after
+opening `Disk B`:
+
+| | published-number build | boolean build |
+|---|---|---|
+| `boot_cylrun` at the desktop | 18 | **0** |
+| `[dsk_cylrun]` at the desktop (A: mounted, SPT 18) | 0 | 0 |
+| `[dsk_cylrun]` after `Disk B` mounts (SPT 9) | **1** | **0** |
+
+One mount of a second volume was the whole distance between the gate holding
+and the gate gone, and nothing on the screen changed when it went.
+
+`make TRACKRUN=1` still forces the track bound in both loops, and remains the
+A/B for §18.91.1 itself.
+
+**Found on an MR BIOS 286 (86Box `mr286`) that boots every other way.** The
+splash always drew correctly, which is what made it so hard to read: the splash
+module is file sectors 0–8, and on a 360KB disk the first head flip is at LBA 27
+— file sector 15. Everything the screen could show was loaded before the first
+sector that could be wrong.
+
+### 18.93.2 The XT gate: who PAYS for the discovery
+
+§18.93.1's canary makes a cylinder run safe on any machine, but not free. A
+machine whose FDC will not cross a head loads the whole kernel wrong, notices,
+and loads it again — two full reads to arrive where one track-bounded read would
+have.
+
+So the boot sector asks the cheap question first:
+
+```
+    push sp
+    pop  ax
+    cmp  ax, sp
+```
+
+The 8086 and 8088 push SP as it is **after** the decrement; every later part
+pushes it as it was before. Eleven bytes, no flags trick and no table. An 8086
+gets the cylinder bound; a 286 and up keeps the track bound and never pays for
+the discovery.
+
+**This is a bet about a population, not a fact about the machine** — which is
+exactly why the canary still runs and can still lower the bound underneath it.
+The gate decides who pays; the canary decides who is right. An XT-class clone
+whose controller cannot flip is still caught, because nothing about the gate
+turns the check off.
+
+**The bet is recorded rather than assumed.** docs/FIELD-NOTES.md 31 carries the
+survey it rests on — `rdiag` booted on each BIOS under MartyPC, 206 sectors
+each. Four XT-class ROMs cross a head correctly (IBM 5150/5160, GLaBIOS, Compaq
+Deskpro Rev H, Eagle PC Spirit 1.9), one XT-class clone could not be brought up
+to test at all, and the single failure is a 286. That note also carries what the
+gate costs, measured: a 286 with the failing BIOS boots in the same ~9s doing
+24 `int 13h` calls that the 5150 takes doing 13, because the drive is not its
+whole boot.
+
+What it gives up is the smallest win available. Against the 207-sector kernel:
+
+| geometry | cylinder | track | saved |
+|---|---|---|---|
+| 360KB | 13 | 24 | 11 calls |
+| 720KB | 13 | 24 | 11 calls |
+| 1.44MB | 7 | 13 | 6 calls |
+
+The 1.44MB row is the one surrendered, and it is both the smallest count and the
+fastest drive — a 500 kbps 3.5" mechanism against a 250 kbps 5.25" one. The
+machines that keep the win are the ones a revolution actually costs.
+
+`run_max` therefore defaults to **`SPT`**, not `SPT * HEADS`: the cautious bound
+is the one in force before anybody has asked, so every path that reaches the
+load without passing the gate — and every geometry with one head — is safe by
+construction rather than by argument.
+
+Paid for inside 512 bytes without giving up either failure message, by three
+things that were already true and unused: `div` leaves `BX` alone, so the run
+bound is reloaded with a register move; a divide by two heads is a shift, with
+the head falling out in `CF`; and `DH` needs no clearing before that shift
+because the divide by `SPT` above left a remainder below `SPT` in `DX`. The
+general `HEADS != 2` form still assembles.
+
 ### 18.94 The transfer instrument, published at a fixed offset
 
 **`make DISKCNT=1`, which is now every FIELD kernel and no shipped one.** The
@@ -18628,6 +18779,28 @@ state (§18.99.1) because **the file API reads a name through `DS`**, and `DS` i
 `KERNEL_SEG`. The dialog's completion proc stages it there and the image reads
 it, which is also why `clo_line` has a second, DS-side `clo_dscat`: which
 segment a string is in is a property of the string, not of the moment.
+
+##### FIELD REPORT, OPEN: a disk written by this came back with a damaged FORMAT
+
+**docs/FIELD-NOTES.md note 32.** One 360 KB floppy written by `Write Img...`
+did not boot, and DOS's `dskimage` then **refused the same physical disk** —
+*"unable to use sector 22"* — until it was reformatted under DOS. A write tool
+refusing a sector number is being refused by the **ID address marks**, which a
+format writes and a write never does, so the damage is below the filesystem.
+
+This system issues no `AH = 05h` format call anywhere, so nothing here writes
+an ID field on purpose. The three candidates and the tests that separate them
+are in the note; the one this section owns is that **§18.92 points `int 1Eh` at
+`dsk_dpt` permanently**, which on a BIOS that swaps tables per media type stops
+it doing so — and the media a raw image write goes to is exactly where a
+machine is most likely to be holding media its boot drive's parameters do not
+describe.
+
+**Reported once, not reproduced, and no emulator in this tree can reproduce
+it**: all three present a floppy as an array of sectors, so a write with the
+wrong gap length or track width lands in the right slot and the image is
+correct afterwards. A green run says nothing about this. Until the note closes,
+`Write Img...` is unsafe on media anyone minds losing.
 
 #### 18.99.9 The window is whole CYLINDERS, and why the DMA page is not
 

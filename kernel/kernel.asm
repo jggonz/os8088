@@ -1730,10 +1730,26 @@ DBG_TAG_BPROF equ 0x5042          ; 'BP' - SPEC.md 15.5, BOOTPROF=1
 cold_entry:
     jmp kmain
 
-    times 0x08 - ($ - $$) db 0   ; 0x03..0x07 are free again: the mouse
-                                ; instrument used to have a fixed word of its
-                                ; own at 0x0006 and is now an entry in the
-                                ; registry at 0x000E (SPEC.md 57)
+    times 0x04 - ($ - $$) db 0
+boot_cylrun:                    ; 0060:0004 - THE BOOT SECTOR'S FINDING about
+    dw 0                        ; this machine's FDC (SPEC.md 18.93.1): NON-ZERO
+                                ; means a transfer run crossed a head and came
+                                ; back RIGHT, so dsk_xfer may do the same. The
+                                ; loader writes it on that one path and on no
+                                ; other, so ZERO - the image's own value - is
+                                ; every other case at once: it fell back, it was
+                                ; too small to have crossed, it was built
+                                ; TRACKRUN=1, the machine is not an XT, or the
+                                ; boot sector predates the canary. All of them
+                                ; want the cautious answer and all of them get
+                                ; it. **Do not turn this back into a compare
+                                ; against a volume's spt** - the loader loaded
+                                ; from ONE volume and the kernel mounts others.
+                                ;
+                                ; 0x06..0x07 stay free: the mouse instrument
+                                ; used to have a fixed word at 0x0006 and is
+                                ; now an entry in the registry at 0x000E (57)
+    times 0x08 - ($ - $$) db 0
     jmp near spl_tick           ; 0800:0008 - boot splash tick (SPEC.md 15)
 
     times 0x0C - ($ - $$) db 0
@@ -3200,6 +3216,27 @@ api_sysap:  db 0                ; which verb the shared fenced cell runs:
 ; kept in step with it. bprof_mark preserves the flags as well as every
 ; register, so a mark may go between any two calls here without changing what
 ; either of them did.
+
+%macro MARK 1
+%ifdef BOOT_MARK
+%if ((%1) % 5) == 0
+    mov al, (%1) | 0x80
+%else
+    mov al, (%1)
+%endif
+    call mark_stamp
+%ifdef BOOT_HALT
+%if (%1) == BOOT_HALT
+    cli                         ; `make BOOTHALT=n`: STOP here, so a machine
+%%hlt:                          ; that would otherwise reset or loop cannot -
+    hlt                         ; the screen stays up to be read, and a boot
+    jmp short %%hlt             ; that still goes round proves this was never
+%endif                          ; reached
+%endif
+%endif
+%endmacro
+
+
 %macro BPMARK 1
 %ifdef BOOT_PROFILE
     mov al, %1
@@ -3209,15 +3246,31 @@ api_sysap:  db 0                ; which verb the shared fenced cell runs:
 
 kmain:
     cli
+%ifdef BOOT_MARK
+    call mark_beacon            ; BEFORE anything: no state of ours is needed
+%endif
     mov ax, KERNEL_SEG          ; the boot sector jumped here with its own
     mov ds, ax                  ; segments; setting ours up is our job
     mov es, ax
+%ifdef BOOT_MARK
+    MARK 50                     ; ...and the first one down the ORDINARY path,
+                                ; while SS is still the boot sector's. A corner
+                                ; with no 50 beside it means the drawing helpers
+                                ; are what is broken, not the boot
+%endif
     mov ax, LOW_SEG             ; SS is NOT KERNEL_SEG (SPEC.md 2.1): the task
     mov ss, ax                  ; stacks sit in their own segment just above
     mov sp, STK0_TOP            ; the image, so a stack offset stays small and
     sti                         ; the kernel's own 64KB window stays for code
     cld
 
+%ifdef BOOT_MARK
+    call mark_prev              ; what the PREVIOUS boot reached, if this machine
+                                ; went round rather than stopping...
+    call mark_hook              ; ...and take the fault vectors, so the next one
+                                ; stops with its number up instead of resetting
+%endif
+    MARK 0
     call dsk_boot_from          ; WHICH VOLUME DID WE COME OFF? (SPEC.md
                                 ; 52.10.3) DL and BX:CX are the boot sector's
                                 ; handoff and nothing above touches them - the
@@ -3230,6 +3283,7 @@ kmain:
                                 ; what lets the kernel read SYSTEM.CFG and
                                 ; load HDD.DRV off the volume that driver
                                 ; would otherwise have been needed to reach
+    MARK 1
 
     call FAT_SEG:ovl_cpu_detect ; CPU tier + memory above 1MB (SPEC.md 41),
                                 ; here and nowhere else: BEFORE sched_init,
@@ -3240,6 +3294,7 @@ kmain:
                                 ; that may fire in it are the BIOS's own, and
                                 ; a tick lost here costs nothing ([ticks] is
                                 ; zeroed by sched_init anyway)
+    MARK 2
 %ifdef KERN_BIG                 ; the store above 1MB is kern_big's alone
                                 ; (SPEC.md 41.11). kern_small is the
                                 ; 128KB-floor product and neither sniffs nor
@@ -3263,12 +3318,15 @@ kmain:
                                 ; for D1h/DFh to be told there was nothing up
                                 ; there. AH=88h reads CMOS and needs no gate
 %endif
+    MARK 3
 
     call dsk_dpt_init           ; int 1Eh becomes ours (SPEC.md 18.92) before
                                 ; any transfer: the ROM's EOT is 8, and every
                                 ; multi-sector read past it silently returns
                                 ; the OTHER HEAD's sectors
+    MARK 4
     call sched_init             ; pre-emption live from here on
+    MARK 5
 %ifdef SCH_QUANTUM
     mov al, SCH_QUANTUM         ; `make QUANTUM=` - SPEC.md 53.2.1's sub-tick,
     call sch_fast_on            ; armed system-wide instead of per bracket
@@ -3278,15 +3336,18 @@ kmain:
                                 ; era - the boot sector's load and the three
                                 ; calls above it
     call evq_init
+    MARK 6
     call FAT_SEG:ovl_clk_init   ; system clock (SPEC.md 37): probe the RTC,
                                 ; or fall back to the fixed date - before the
                                 ; mode set, so the very first menu bar paint
                                 ; already carries a valid clock
+    MARK 7
     call vid_init               ; video adapter (SPEC.md 39): probe, publish
                                 ; the runtime geometry. Re-runs what the
                                 ; splash already did, EXCEPT the mode set -
                                 ; the loading screen stays up and keeps
                                 ; ticking until spl_finish below (15.3)
+    MARK 8
 %ifdef KERN_BIG
     call vid_ctx_init           ; ...and bank that geometry as display 0's
                                 ; (SPEC.md 39.12). AFTER vid_apply and never
@@ -3295,6 +3356,7 @@ kmain:
                                 ; the floppy, and a call from there into
                                 ; vidsel.inc executes what has not loaded yet
 %endif
+    MARK 9
     call vid_probe_avail        ; ...and which OTHER adapters this machine has
                                 ; (SPEC.md 39.11.1). AFTER the mode is set, and
                                 ; that is the whole correctness argument: a VGA
@@ -3304,6 +3366,7 @@ kmain:
                                 ; came up in mono text answers at B000 as
                                 ; ITSELF and reports a Hercules that is not
                                 ; there
+    MARK 10
 %ifdef KERN_BIG
     call vid_disp_init          ; ...and if it has BOTH mono cards, programme
                                 ; the second one too (SPEC.md 39.13). Here
@@ -3312,9 +3375,11 @@ kmain:
                                 ; and draws nothing, so the second monitor comes
                                 ; up scanning our raster and black
 %endif
+    MARK 11
     call mem_init               ; the claim heap (SPEC.md 50): int 12h, the
                                 ; empty map. FIRST of the memory users -
                                 ; every claim below goes through it
+    MARK 12
     BPMARK 1                    ; ...the clock, the adapter and the heap
 %ifdef DIRTYRAM
     ; --- DIAGNOSTIC ONLY (make DIRTYRAM=1): fill the heap with a pattern -----
@@ -3360,6 +3425,7 @@ kmain:
                                 ; table itself, and the rule for a thing that
                                 ; makes a jump target safe is that it cannot
                                 ; be after anything that could jump
+    MARK 13
     BPMARK 2                    ; ...the claim heap and the module table
 %ifdef BAKED_FONT
     call FAT_SEG:ovl_font_init  ; the typeface this BUILD carries (SPEC.md
@@ -3369,15 +3435,21 @@ kmain:
 %else
     call font_init              ; needs int 10h, so after the mode is set
 %endif
+    MARK 14
     BPMARK 3                    ; ...the typeface
     call wm_init
+    MARK 15
     call menu_init              ; menu bar owner (SPEC.md 12): Locator, so
                                 ; the first wm_paint_all already has a bar
+    MARK 16
     call inst_init              ; instance table (SPEC.md 29) - clean boot:
                                 ; no app instances exist until launched
+    MARK 17
     BPMARK 4                    ; ...the window manager, the bar, the table
     call spl_step               ; a notch: the mode set and the font are done
+    MARK 18
     call mouse_init             ; IRQ4 live; cursor stays hidden until shown
+    MARK 19
     BPMARK 5                    ; ...and SPEC.md 9.4.1's two waits, which are
                                 ; the largest phase of a boot that is not
                                 ; the disk
@@ -3385,13 +3457,19 @@ kmain:
                                 ; DTR/RTS low for MOU_RSTLOW ticks (~165ms),
                                 ; which is the only non-I/O phase up here
                                 ; long enough to see (SPEC.md 15.3)
+    MARK 20
     call FAT_SEG:ovl_desk_init  ; volume zones for the desktop (SPEC.md 26.1)
+    MARK 21
     call dock_init              ; dock strip scratch (SPEC.md 30)
+    MARK 22
     call files_init             ; Disk module state (no window at boot)
+    MARK 23
     call loader_init            ; package loader state
+    MARK 24
     call drv_init               ; the driver table (SPEC.md 51) - BEFORE
                                 ; snd_init, whose tone route reads the
                                 ; published service table on its first tick
+    MARK 25
     call FAT_SEG:drv_snd_sniff  ; is there an FM chip at 388h? (SPEC.md
                                 ; 51.3.1) If so, row 0 becomes WANTED by
                                 ; DEFAULT - which a SYSTEM.CFG that says
@@ -3400,15 +3478,18 @@ kmain:
                                 ; been asked. HERE and not inside drv_boot,
                                 ; because the overlay this lives in is dead by
                                 ; then: drv_boot's own mount writes over it
+    MARK 26
     call FAT_SEG:ovl_snd_init   ; sound layer (SPEC.md 34.7): saves the 61h
                                 ; boot bits, stores its .bss state, publishes
                                 ; snd_live LAST - snd_tick has been running
                                 ; gated since sched_init hooked int 08h
+    MARK 27
     BPMARK 6                    ; ...the desktop, the dock, the driver table
 
     call spl_step               ; a notch, and the last one kmain spends by
                                 ; hand: everything below is sectors, and
                                 ; dsk_xfer ticks the bar itself (SPEC 15.3)
+    MARK 28
 
     call drv_boot               ; ...and load what SYSTEM.CFG asks for
                                 ; (SPEC.md 51.3). Before the first paint, so
@@ -3417,6 +3498,7 @@ kmain:
                                 ; can stop the boot. NOTHING loads that the
                                 ; settings file did not ask for - a driver is
                                 ; several seconds of floppy on this machine
+    MARK 29
     BPMARK 7                    ; ...SYSTEM.CFG and whatever it asked for
 
 %ifdef KERN_BIG
@@ -3430,6 +3512,7 @@ kmain:
                                 ; still before the first paint. A failure is
                                 ; silent by design (SPEC.md 41.12.4)
 %endif
+    MARK 30
 
 %ifdef OS88_THEME
     mov al, [thm_kind]          ; RESOLVE THE PALETTE FROM THE KIND, once, before
@@ -3445,10 +3528,12 @@ kmain:
                                 ; from a VGA machine to this one, [vid_kind]
                                 ; being long since probed
 %endif
+    MARK 31
 
     call spl_finish             ; the bar to 100% and the screen handed back:
                                 ; the paint below covers every pixel of it,
                                 ; so the loading screen needs no erase
+    MARK 32
     BPMARK 8                    ; ...the store above 1MB, the palette, the bar
 
     call gfx_lock
@@ -3960,6 +4045,279 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
                                 ; sched.inc (the freeze bytes), instance.inc
                                 ; (the fence), snd.inc (the release walk)
                                 ; and viddet.inc (the mode leaves)
+
+; =============================================================================
+; BOOTMARK=1's blocks (see the MARK macro above)
+;
+; DOWN HERE for the shims' reason, which the block below spells out: this is
+; .text, and .text above the %includes pushes splash.inc out of the image's
+; first SPL_RESIDENT sectors. Putting it here cost one build to learn and the
+; error names splash rather than this.
+; =============================================================================
+%ifdef BOOT_MARK
+; -----------------------------------------------------------------------------
+; MARK / mark_stamp - `make BOOTMARK=1`: stamp one block into the bottom of the
+;                     screen for a call in kmain that RETURNED
+;
+; in:  AL = the block's index, bit 7 set for a tall one
+; out: nothing - every register and the flags preserved, for BPMARK's reason:
+;      a mark may go between any two calls below without changing what either
+;      of them did
+;
+; It is for ONE question, and it is the question no other instrument here can
+; answer: a machine that reaches the loading screen and then STOPS. The splash
+; bar cannot say where - it is one number, and kmain only moves it three times
+; - BOOTPROF's phase table needs a boot that reaches a desktop to print it on,
+; and 86Box has no debugger to attach to the machine that shows the fault.
+;
+; Nothing in here reads state the boot could already have broken: the geometry
+; is the SPLASH's, published before the handoff and known good because the bar
+; is on screen, and the fill is spl_bar's own routine. A marker that needed a
+; working kernel would not survive the boot it exists to diagnose.
+;
+; The blocks are COUNTED, not read: N blocks means N calls returned, so the
+; freeze is in call N+1 of the table in the commit message.
+; -----------------------------------------------------------------------------
+MARK_X0     equ 4               ; the first block's byte column - 32 pixels in,
+                                ; which clears the dialog on every adapter
+MARK_UP     equ 14              ; rows up from the bottom of WHATEVER screen we
+                                ; got: 466 on VGA, 334 on Hercules, and the
+                                ; loading screen draws on neither
+MARK_H      equ 6               ; a block...
+MARK_H5     equ 12              ; ...and every fifth, so thirty of them are
+                                ; countable without a ruler
+MARK_PREVUP equ MARK_UP + 10     ; ...and ten rows above that, the mark the
+                                ; PREVIOUS boot reached - the row that answers a
+                                ; machine which RESETS instead of stopping
+MARK_MAXIDX equ 67              ; the largest index any MARK uses
+MARK_SLOT   equ 0x0590          ; 0000:0590 - beside the boot sector's own DPT
+                                ; copy at 0x0580 and inside the same page it
+                                ; already argues is free (boot/boot.asm), which
+                                ; is below the kernel and above the BIOS data
+                                ; area, so nothing here or in the BIOS owns it
+MARK_MAGIC  equ 0x8088          ; ...and a signature, because a BIOS that
+                                ; cleared RAM on the way round must read as NO
+                                ; answer rather than as marker zero
+mark_stamp:
+    pushf
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov bx, MARK_H
+    test al, 0x80               ; bit 7: one of the tall every-fifth ones
+    jz .plain
+    mov bx, MARK_H5
+.plain:
+    and ax, 0x007F              ; ...and the rest of it is the index
+    mov si, ax                  ; banked: gfx_rowbase spends AX, CX and DX
+    mov ax, [vid_seg]
+    mov es, ax
+    mov ax, [vid_h]             ; the LIVE height (SPEC.md 39), never a
+    sub ax, MARK_UP             ; reference constant - this runs on all three
+    call gfx_rowbase            ; adapters and two of them are not 640x480
+    add ax, si
+    add ax, MARK_X0
+    mov di, ax
+    mov cx, 1                   ; one byte = eight pixels
+    mov al, 0xFF
+    cld
+    call spl_fill
+    call mark_note              ; SI is still the index: nothing above spends it
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
+; mark_note - bank the index in SI where a RESET cannot reach it
+; -----------------------------------------------------------------------------
+mark_note:
+    push ax
+    push es
+    xor ax, ax
+    mov es, ax
+    mov word [es:MARK_SLOT], MARK_MAGIC
+    mov [es:MARK_SLOT+2], si
+    pop es
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; mark_prev - stamp what the previous boot reached, one row above this one
+;
+; A machine that RESETS rather than stops erases the whole band on its way
+; round, so the run of blocks says nothing: every cycle starts from none. This
+; is the one block that survives it, and in a boot LOOP it is the answer -
+; it settles on the same column every cycle, and that column is the call.
+; -----------------------------------------------------------------------------
+mark_prev:
+    pushf
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    xor ax, ax
+    mov es, ax
+    cmp word [es:MARK_SLOT], MARK_MAGIC
+    jne .out                    ; never written, or a POST that cleared it
+    mov ax, [es:MARK_SLOT+2]
+    cmp ax, MARK_MAXIDX
+    ja .out
+    mov si, ax
+    mov ax, [vid_seg]
+    mov es, ax
+    mov ax, [vid_h]
+    sub ax, MARK_PREVUP
+    call gfx_rowbase
+    add ax, si
+    add ax, MARK_X0
+    mov di, ax
+    mov cx, 1
+    mov bx, MARK_H5             ; always tall: there is only ever one of these
+    mov al, 0xFF
+    cld
+    call spl_fill
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
+; mark_hook / mark_faulted - take the CPU's own exception vectors, so a fault
+;                            STOPS with its number on screen instead of
+;                            cascading to a shutdown and resetting the machine
+;
+; A 286 answers a fault it cannot deliver with a shutdown cycle, and the board
+; wires that to RESET - so the defect erases its own evidence. These stubs stop
+; instead, and the block they leave in the 60..67 band names the vector.
+;
+; NOT vector 2: that is NMI and a parity report is not ours to swallow. Not 8
+; upwards either - on a PC those are the remapped IRQs, so the machine's timer
+; and its sound card own them, not the CPU.
+; -----------------------------------------------------------------------------
+%macro MARKFSTUB 1
+    mov al, (%1) | 0x80
+    jmp short mark_faulted
+%endmacro
+
+mark_fstubs:                    ; FOUR BYTES each, indexed by vector number -
+    MARKFSTUB 60                ; which is the IVT's stride too, so the same
+    MARKFSTUB 61                ; multiply lands in both tables
+    MARKFSTUB 62
+    MARKFSTUB 63
+    MARKFSTUB 64
+    MARKFSTUB 65
+    MARKFSTUB 66
+    MARKFSTUB 67
+
+; -----------------------------------------------------------------------------
+; mark_beacon - the crudest "we got here" this machine can be asked for
+;
+; It depends on NOTHING: not DS, not [vid_seg], not [vid_h], not gfx_rowbase,
+; not spl_fill, not a mode set. Four bytes at offset 0 of all three framebuffer
+; segments, so whichever one this adapter answers at gets a short white run in
+; the TOP-LEFT CORNER and the other two write to RAM nobody reads.
+;
+; It exists because the band at the bottom said nothing, and a marker that says
+; nothing has two readings - the code never ran, or the marker never drew. This
+; separates them: corner AND band = both work; corner ALONE = kmain is running
+; and the drawing path is what is broken; NEITHER = kmain was never entered and
+; the fault is above it, in the loader's tail or the far jump itself.
+;
+; Needs a stack for the call, and at the top of kmain that is still the BOOT
+; SECTOR's - which the loader has been running on all along, so it is known
+; good at exactly the moment this is asked.
+; -----------------------------------------------------------------------------
+mark_beacon:
+    push ax
+    push cx
+    push di
+    push es
+    mov ax, 0xA000              ; VGA planar FIRST, and the order is the point:
+    call .one                   ; a VGA in mode 12h decodes A000 alone, so the
+    mov ax, 0xB000              ; other two are writes onto a bus with nothing
+    call .one                   ; on it. Harmless on every machine seen here -
+    mov ax, 0xB800              ; but if one of them ever is not, the corner is
+    call .one                   ; already drawn by the time we find out
+    pop es
+    pop di
+    pop cx
+    pop ax
+    ret
+.one:
+    mov es, ax
+    xor di, di
+    mov cx, 4
+    mov al, 0xFF
+    cld
+    rep stosb
+    ret
+
+mark_faulted:
+    cli
+    push cs
+    pop ds
+    call mark_stamp
+.h:
+    hlt                         ; and STAY here: the screen is the report
+    jmp short .h
+
+mark_hook:
+    pushf
+    cli
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    xor ax, ax
+    mov es, ax
+    mov si, mark_fvec
+    mov cx, MARK_FNVEC
+.v:
+    lodsb                       ; AL = the vector to take
+    xor ah, ah
+    mov di, ax
+    shl di, 1
+    shl di, 1                   ; DI = vector * 4: the IVT slot...
+    mov bx, di
+    add bx, mark_fstubs         ; ...and its stub, at the same stride
+    mov [es:di], bx
+    mov [es:di+2], cs
+    loop .v
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    popf
+    ret
+
+mark_fvec   db 0, 1, 3, 4, 5, 6, 7
+MARK_FNVEC  equ $ - mark_fvec
+%endif
 
 ; =============================================================================
 ; The cold segment's shims (SPEC.md 2.6)

@@ -77,6 +77,7 @@ rm -rf "$RUN"
 cp -r "$SRC/install" "$RUN"
 mkdir -p "$RUN/media/roms" "$RUN/media/floppies"
 cat "$HERE/configs/os8088_machines.toml" >> "$RUN/configs/machines/ibm5150.toml"
+cp "$HERE/configs/os8088_field_roms.toml" "$RUN/configs/rom_definitions/"
 
 # The IBM BIOS is IBM's. It is not in this tree and cannot be - CONTRIBUTING.md
 # puts the whole tree under one MIT file, and IBM has never licensed this ROM

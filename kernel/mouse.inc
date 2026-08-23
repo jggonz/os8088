@@ -315,6 +315,7 @@ mouse_init:
     push si
     push es
 
+    MARK 40
     ; --- which ports are actually there? (SPEC.md 9.5) -----------------------
     xor bx, bx
 .probe:
@@ -349,6 +350,7 @@ mouse_init:
     mov [mou_need], al          ; per port (SPEC.md 9.4.1): the identify burst
     mov [mou_need+2], al        ; below may lower ONE of them again
 
+    MARK 41
     ; --- save each present port's old vector, install ours -------------------
     xor ax, ax
     mov es, ax
@@ -390,6 +392,7 @@ mouse_init:
     mov [es:0x26], cs
     popf
 
+    MARK 42
     ; --- UART: 1200 baud, 7 data bits, no parity, 1 stop ---------------------
     mov ax, 0x0382              ; LCR: DLAB=1 + 7N1 bits
     call mou_pall
@@ -400,6 +403,7 @@ mouse_init:
     mov ax, 0x0302              ; LCR: DLAB=0, 7N1
     call mou_pall
 
+    MARK 43
     ; --- reset the mouse: DTR/RTS LOW, hold, then raise ----------------------
     ; A serial mouse is POWERED by DTR/RTS and resets itself on the RISING
     ; edge. Writing the final MCR value straight away only makes that edge on
@@ -423,6 +427,7 @@ mouse_init:
     call mou_pall               ; gates the IRQ onto the bus; this rising
                                 ; edge is the mouse's reset
 
+    MARK 44
     ; --- drain the identify burst (IER still 0, the IRQs still masked) -------
     ; The DTR/RTS edge makes a real Microsoft mouse announce itself: 'M',
     ; maybe '3', maybe a whole PnP string - bytes with bit 6 set that the
@@ -479,6 +484,7 @@ mouse_init:
     call mou_newround           ; ...before anything is unmasked, or the store
                                 ; could land on a packet already in progress
 
+    MARK 45
     ; --- flush whatever is stale, then unmask (in that order, per port) ------
     xor bx, bx
 .flush:
@@ -500,6 +506,7 @@ mouse_init:
     cmp bx, MOU_PEND
     jb .flush
 
+    MARK 46
     ; --- ...and ONLY NOW the other socket (SPEC.md 9.9) ----------------------
     ; Serial first, then PS/2. It is an order rather than a preference: the
     ; serial half has no probe at all - only the identify burst and a contest -
@@ -508,8 +515,11 @@ mouse_init:
     ; live, and SPEC.md 9.5's contest settles it exactly as it settles two
     ; UARTs: the first complete packet wins.
 %ifdef KERN_BIG
+%ifndef NO_PS2
     call mou_p2_init
 %endif
+%endif
+    MARK 47
 
     pop es
     pop si

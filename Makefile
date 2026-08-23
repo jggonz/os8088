@@ -345,6 +345,78 @@ VIDDEF += -DTRACK_RUN
 BOOTDEF += -DTRACK_RUN
 endif
 
+# BOOTMARK=1 stamps a block into the bottom row of the screen after every call
+# in kmain, from the boot sector's handoff to spl_finish (SPEC.md 15.3). It is
+# for ONE question: a machine that reaches the loading screen and then stops,
+# where the splash bar cannot say which call it stopped in and no emulator
+# under this tree can be attached to the machine that shows it.
+#
+# The blocks are counted, not read: each is 8 pixels wide on the row 14 up from
+# the bottom, laid left to right in kmain's own order, and every fifth is drawn
+# tall so a run of thirty is countable without a ruler. The last block on
+# screen is the last call that RETURNED, so the freeze is in the one after it.
+#
+# Deliberately NOT a superset of BOOTPROF=1: that publishes a phase TABLE on
+# the desktop and so needs a boot that reaches one. This needs nothing but a
+# framebuffer the splash has already set up, which is why it can answer where
+# the profile cannot.
+ifneq ($(BOOTMARK),)
+VIDDEF += -DBOOT_MARK
+endif
+
+# NOPS2=1 leaves SPEC.md 9.9's auxiliary-port probe out of the build entirely,
+# so mouse_init ends at the serial half exactly as it did before 9.9 landed.
+#
+# It is the A/B for the one machine class nothing here can host: a NON-XT whose
+# keyboard controller has NO aux port. MartyPC is an 8088, so mou_p2_init
+# returns at its first compare and the probe never runs; QEMU's i8042 always
+# HAS an aux port with a mouse on it; and an 86Box machine that offers a PS/2
+# mouse in its settings has one too. A board that is neither - a 286 clone whose
+# 8042 never heard of 0xA8/0xA9 - reaches every write in that routine and is
+# tested by nothing in this tree.
+ifneq ($(NOPS2),)
+VIDDEF += -DNO_PS2
+endif
+
+# BOOTHALT=<n> stops the boot dead the instant BOOTMARK's marker <n> is drawn:
+# cli, then hlt in a loop. It is for a machine that RESETS or LOOPS rather than
+# stopping, where the band is erased on the way round and every reading of it is
+# "nothing". Halted, the screen keeps whatever was drawn up to n - and a machine
+# that STILL goes round has proved that marker n was never reached, which is the
+# one thing an empty band on its own cannot say.
+ifneq ($(BOOTHALT),)
+VIDDEF += -DBOOT_HALT=$(BOOTHALT)
+endif
+
+# BOOTSTOP=1 halts the BOOT SECTOR one instruction short of the handoff jump.
+# Four bytes - which is exactly what the sector has spare - and it splits the
+# one question BOOTHALT cannot: a machine that never reaches kmain either failed
+# ON the far jump, or failed DURING the load and never got that far. Halted, the
+# splash stays up; still looping, the fault is inside the load.
+ifneq ($(BOOTSTOP),)
+BOOTDEF += -DBOOT_STOP=$(BOOTSTOP)
+endif
+
+# THE CANARY (SPEC.md 18.93.1). The boot sector cannot verify that the machine
+# HONOURS the diskette parameter table it patched - reading the table back
+# proves only that our own write to our own RAM worked - so it verifies the
+# TRANSFER instead, against a word the build reads out of the image itself.
+#
+# THE OFFSET MUST NAME A SECTOR THAT CROSSES A HEAD, and "past the first flip"
+# is NOT the same thing - that was the first version of this and it read the one
+# part of the disk that is always right. A run reads correctly up to the head
+# boundary and only goes wrong after it, so a canary in a run's FIRST half is
+# loaded correctly on exactly the machine it exists to catch.
+#
+# File sector 36 crosses in all three shipped geometries - 360KB (data at LBA
+# 12), 720KB (LBA 14) and 1.44MB (LBA 33) - and sits in the middle of the common
+# band 33..38, so it keeps three sectors of margin if a BPB ever moves. It is
+# inside the first 64KB, so the compare reuses the ES the handoff already loads,
+# and the word is the same for every geometry because KERNEL.SYS is one file.
+# tests/suite.py's `canary` row is what keeps all of that true.
+KSIG_OFF := 18432
+KSIGDEF = -DKSIG_OFF=$(KSIG_OFF) -DKSIG=$$(python3 -c "import sys; d = open(sys.argv[1], 'rb').read(); o = $(KSIG_OFF); print(int.from_bytes(d[o:o+2], 'little') if len(d) > o + 1 else 0)" $(1))
+
 # DIRW1=1 never takes SPEC.md 18.95's sector cache, so every read moves exactly
 # the sectors asked for again - the pre-18.95 behaviour, reached through the
 # same refusal path a machine with no room takes. The A/B for the whole cache,
@@ -831,11 +903,11 @@ KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
                              SNAPAUDIT SCROLLROW QUANTUM \
                              CURFIX \
                              FONT INSTCHUNK PICOMEM PM_BASE PM_SB_PORT ANIMOFF DISINK0 \
-                             BOOTPROF MOUIDSLOW TRACKRUN SBDRAGOFF SBRATE \
+                             BOOTPROF BOOTMARK BOOTHALT BOOTSTOP NOPS2 MOUIDSLOW TRACKRUN SBDRAGOFF SBRATE \
                              ETHPROF FTPDSLOW FTPDBG \
                              KERN_SMALL FSNOSTAMP THEMEDARK,\
                              $(if $($(k)),$(k)=$($(k)))))
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(STRAD),-st$(STRAD))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(QUANTUM),-q$(QUANTUM))$(if $(DIRTYRAM),-dr$(DIRTYRAM))$(if $(FSNOSTAMP),-fn$(FSNOSTAMP))$(if $(ANIMOFF),-ao$(ANIMOFF))$(if $(THEMEDARK),-td$(THEMEDARK))$(if $(DISINK0),-di$(DISINK0))$(if $(BOOTPROF),-bp$(BOOTPROF))$(if $(MOUIDSLOW),-mis$(MOUIDSLOW))$(if $(TRACKRUN),-tr$(TRACKRUN))$(if $(SBDRAGOFF),-sbo$(SBDRAGOFF))$(if $(SBRATE),-sbr$(SBRATE))
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(STRAD),-st$(STRAD))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(QUANTUM),-q$(QUANTUM))$(if $(DIRTYRAM),-dr$(DIRTYRAM))$(if $(FSNOSTAMP),-fn$(FSNOSTAMP))$(if $(ANIMOFF),-ao$(ANIMOFF))$(if $(THEMEDARK),-td$(THEMEDARK))$(if $(DISINK0),-di$(DISINK0))$(if $(BOOTPROF),-bp$(BOOTPROF))$(if $(BOOTMARK),-bm$(BOOTMARK))$(if $(BOOTHALT),-bh$(BOOTHALT))$(if $(BOOTSTOP),-bs$(BOOTSTOP))$(if $(NOPS2),-np$(NOPS2))$(if $(MOUIDSLOW),-mis$(MOUIDSLOW))$(if $(TRACKRUN),-tr$(TRACKRUN))$(if $(SBDRAGOFF),-sbo$(SBDRAGOFF))$(if $(SBRATE),-sbr$(SBRATE))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/kernel-full.bin \
@@ -1099,9 +1171,15 @@ $(KMODS): $(BUILD)/kernel.bin ;
 # The boot sector needs to know how many sectors to read, so we measure the
 # kernel at build time and assemble the count in. Reading exactly what exists
 # means a short kernel never waits on phantom sectors.
-$(BUILD)/boot.bin: boot/boot.asm $(BUILD)/kernel.bin | $(BUILD)
+# EVERY boot.asm rule depends on the MAKEFILE, and that is not tidiness. The
+# sector's KSIG_OFF, KSIG and KERNEL_SECTORS are injected on the command line
+# and appear nowhere in boot/boot.asm, so moving the canary (SPEC.md 18.93.1)
+# left `make` looking at an up-to-date boot360.bin and shipping the OLD offset.
+# It reads exactly like the canary not working, and cost a test round to find.
+$(BUILD)/boot.bin: boot/boot.asm $(BUILD)/kernel.bin Makefile | $(BUILD)
 	$(NASM) -f bin $(BOOTDEF) \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/kernel.bin) + 511 ) / 512 )) \
+		$(call KSIGDEF,$(BUILD)/kernel.bin) \
 		-o $@ boot/boot.asm
 	@test $(call FILESIZE,$@) -eq 512 || { echo "boot sector is not 512 bytes"; exit 1; }
 
@@ -1118,11 +1196,49 @@ $(BUILD)/boot.bin: boot/boot.asm $(BUILD)/kernel.bin | $(BUILD)
 # bytes when it builds the image. A boot720.bin would therefore be a
 # byte-identical second artifact that can only ever say what this one already
 # says.
-$(BUILD)/boot360.bin: boot/boot.asm $(BUILD)/kernel.bin | $(BUILD)
+$(BUILD)/boot360.bin: boot/boot.asm $(BUILD)/kernel.bin Makefile | $(BUILD)
 	$(NASM) -f bin -DSPT=9 -DHEADS=2 $(BOOTDEF) \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/kernel.bin) + 511 ) / 512 )) \
+		$(call KSIGDEF,$(BUILD)/kernel.bin) \
 		-o $@ boot/boot.asm
 	@test $(call FILESIZE,$@) -eq 512 || { echo "boot sector is not 512 bytes"; exit 1; }
+
+# rdiag (SPEC.md 18.93.1) - WHICH sectors landed wrong, not whether one did
+#
+# The canary asks one question at one offset, and picking that offset wrongly is
+# silent: a canary in a transfer run's FIRST half is loaded correctly on exactly
+# the machine it exists to catch. This is the instrument for when that is still
+# in doubt. The payload is the SAME SECTOR COUNT as KERNEL.SYS, so boot.asm cuts
+# it into exactly the same runs, and every sector past the first carries its own
+# index. Sector 0 - always ahead of any head boundary, so always correct - walks
+# the rest and draws a map: '.' arrived, 'X' did not.
+#
+# The shape of the X's is the diagnosis. In the tail of every run: the BIOS
+# transferred short and answered CF=0 for the whole request (18.91). Holding
+# index+1: the flip is off by a sector. Holding the other head's index: EOT was
+# ignored (18.92). ON DEMAND - nothing in `all` builds it.
+$(BUILD)/rdiag.bin: tests/rdiag.asm | $(BUILD)
+	$(NASM) -f bin -w+error -DSECS=207 -o $(BUILD)/rdiag0.bin tests/rdiag.asm
+	@python3 -c "import sys; o = bytearray(open('$(BUILD)/rdiag0.bin','rb').read()); \
+	  [o.extend(k.to_bytes(2,'little') * 256) for k in range(1, 207)]; \
+	  open('$@','wb').write(o); \
+	  print('rdiag: %d sectors, every one of them named' % (len(o) // 512))"
+
+# ...and its boot sector, with the canary aimed at SECTOR 0 - which always loads
+# correctly - so it can never fire and hide the very corruption being mapped.
+$(BUILD)/rdboot360.bin: boot/boot.asm $(BUILD)/rdiag.bin Makefile | $(BUILD)
+	$(NASM) -f bin -w+error -DSPT=9 -DHEADS=2 $(BOOTDEF) \
+		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/rdiag.bin) + 511 ) / 512 )) \
+		-DKSIG_OFF=2 -DKSIG=$$(python3 -c "print(int.from_bytes(open('$(BUILD)/rdiag.bin','rb').read()[2:4],'little'))") \
+		-o $@ boot/boot.asm
+
+rdiag: $(BUILD)/rdiag360.img
+$(BUILD)/rdiag360.img: $(BUILD)/rdboot360.bin $(BUILD)/rdiag.bin
+	python3 tools/os88disk.py -o $@ --size 360 \
+		--boot $(BUILD)/rdboot360.bin --kernel $(BUILD)/rdiag.bin
+	@echo "rdiag: $@ - boot it. '.' is a sector that arrived, 'X' one that did"
+	@echo "       not; the tail line gives the count, the first bad sector and"
+	@echo "       what it held instead."
 
 # The system disk is a FAT12 volume with the kernel in its RESERVED AREA
 # (SPEC.md 19.3). The boot sector still reads LBA 1..K raw - reserved sectors
@@ -4363,14 +4479,16 @@ $(BUILD)/comscan.bin: tests/comscan/comscan.asm | $(BUILD)
 
 # Its own boot sectors, because the count of sectors to read is assembled in
 # and comscan is a great deal smaller than the kernel.
-$(BUILD)/csboot360.bin: boot/boot.asm $(BUILD)/comscan.bin | $(BUILD)
+$(BUILD)/csboot360.bin: boot/boot.asm $(BUILD)/comscan.bin Makefile | $(BUILD)
 	$(NASM) -f bin -DSPT=9 -DHEADS=2 $(BOOTDEF) \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/comscan.bin) + 511 ) / 512 )) \
+		$(call KSIGDEF,$(BUILD)/comscan.bin) \
 		-o $@ boot/boot.asm
 
-$(BUILD)/csboot144.bin: boot/boot.asm $(BUILD)/comscan.bin | $(BUILD)
+$(BUILD)/csboot144.bin: boot/boot.asm $(BUILD)/comscan.bin Makefile | $(BUILD)
 	$(NASM) -f bin $(BOOTDEF) \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/comscan.bin) + 511 ) / 512 )) \
+		$(call KSIGDEF,$(BUILD)/comscan.bin) \
 		-o $@ boot/boot.asm
 
 $(BUILD)/comscan.img: $(BUILD)/csboot360.bin $(BUILD)/comscan.bin \
@@ -4416,14 +4534,16 @@ $(BUILD)/lptlink.bin: tests/lptlink/lptlink.asm drivers/net/lplink.inc | $(BUILD
 
 # Its own boot sectors, because the sector count is assembled in and lptlink
 # is a great deal smaller than the kernel.
-$(BUILD)/llboot360.bin: boot/boot.asm $(BUILD)/lptlink.bin | $(BUILD)
+$(BUILD)/llboot360.bin: boot/boot.asm $(BUILD)/lptlink.bin Makefile | $(BUILD)
 	$(NASM) -f bin -DSPT=9 -DHEADS=2 $(BOOTDEF) \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/lptlink.bin) + 511 ) / 512 )) \
+		$(call KSIGDEF,$(BUILD)/lptlink.bin) \
 		-o $@ boot/boot.asm
 
-$(BUILD)/llboot144.bin: boot/boot.asm $(BUILD)/lptlink.bin | $(BUILD)
+$(BUILD)/llboot144.bin: boot/boot.asm $(BUILD)/lptlink.bin Makefile | $(BUILD)
 	$(NASM) -f bin $(BOOTDEF) \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/lptlink.bin) + 511 ) / 512 )) \
+		$(call KSIGDEF,$(BUILD)/lptlink.bin) \
 		-o $@ boot/boot.asm
 
 # THE DOS-LITE HARNESS (tests/dosstub): a bootable floppy that runs
@@ -4486,9 +4606,10 @@ $(DSSTAMP): | $(BUILD)
 	@rm -f $(BUILD)/.dosstub-*
 	@touch $@
 
-$(BUILD)/dsboot.bin: boot/boot.asm $(BUILD)/dosstub.bin | $(BUILD)
+$(BUILD)/dsboot.bin: boot/boot.asm $(BUILD)/dosstub.bin Makefile | $(BUILD)
 	$(NASM) -f bin -DSPT=9 -DHEADS=2 $(BOOTDEF) \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/dosstub.bin) + 511 ) / 512 )) \
+		$(call KSIGDEF,$(BUILD)/dosstub.bin) \
 		-o $@ boot/boot.asm
 
 $(BUILD)/dosstub.img: $(BUILD)/dsboot.bin $(BUILD)/dosstub.bin tools/os88disk.py

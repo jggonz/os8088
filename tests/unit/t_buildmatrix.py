@@ -16,7 +16,7 @@ naming one), and nothing builds them until somebody types the knob by hand:
     `RAMKB=`, `FLOPPY1=`, `DISKCNT=`, `DIRTYRAM=`, `FSNOSTAMP=`, `DISKAL=`,
     `REDRAWFULL=`, `HEAPCOMPACT=`, `FDDPROBE=`, `SNAPAUDIT=`, `BOOTPROF=`,
     `MOUIDSLOW=`, `TRACKRUN=`, `QUANTUM=`, `SBDRAGOFF=`/`SBRATE=`,
-    `DIRW1=`, `PICOMEM=`.
+    `DIRW1=`, `PICOMEM=`, `BOOTMARK=`/`BOOTHALT=`/`BOOTSTOP=`, `NOPS2=`.
     Each one is
     `%ifdef`'d code that no ordinary build compiles, so it rots in silence -
     and every one of them is the A/B half of a gate somewhere in `tests/`.
@@ -79,6 +79,16 @@ KNOBS = [
     ("bootprof",    ["BOOTPROF=1"]),
     ("mouidslow",   ["MOUIDSLOW=1"]),
     ("trackrun",    ["TRACKRUN=1"]),
+    # SPEC.md 18.93.1/18.93.2's instruments. BOOTMARK= puts a MARK expansion
+    # into ~60 places in kmain that expand to NOTHING in every other build, so
+    # nothing else assembles them; BOOTHALT= is the arm inside that macro;
+    # BOOTSTOP= and NOPS2= are the boot sector's and mouse_init's own %ifdefs.
+    # A boot that stops is exactly when these get reached for, which is the
+    # worst moment to find out one of them no longer assembles.
+    ("bootmark",    ["BOOTMARK=1"]),
+    ("boothalt",    ["BOOTMARK=1", "BOOTHALT=20"]),
+    ("bootstop",    ["BOOTSTOP=2"]),
+    ("nops2",       ["NOPS2=1"]),
     # QUANTUM= is stamp-tracked (SPEC.md 53.2.1's sub-tick) and its
     # %ifdef SCH_QUANTUM arm compiles in no other configuration - the same
     # sentence as every row above. 4 is the deepest setting, so it is the

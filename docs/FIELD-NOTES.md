@@ -3477,3 +3477,318 @@ Three things this is worth keeping for:
 fine. There was no drag lag, or drag slowdown."* The experiment the bug had
 been attributed to was removed on the strength of that run (SPEC.md §72.19).
 
+
+---
+
+## 31. A 286 clone loads a scrambled kernel and freezes at 92% (FIXED, SPEC.md 18.93.1/18.93.2 — and the BIOS survey is recorded here, not guessed)
+
+**Reported on 86Box `mr286` — an MR BIOS 286 clone — and on no physical
+machine.** The splash drew perfectly, the bar reached 92%, and the machine then
+froze, cold-reset, warm-rebooted or bootstrapped back to the splash depending on
+which build was running. Four instrumented builds gave four different symptoms,
+which is what a scrambled kernel looks like: the garbage differs with the image.
+
+**Mechanism, measured rather than theorised.** `make rdiag` builds a payload the
+same sector count as `KERNEL.SYS` where every sector names itself; sector 0 walks
+the rest and draws a map. It reported **92 bad, first at file sector 15, each one
+holding 0000** — and a simulation of `read_run` against the model "the BIOS stops
+at the head boundary and answers CF = 0 for the whole request" reproduces all
+three numbers exactly. So this controller **will not do the multi-track flip at
+all**, and SPEC.md 18.91.1's cylinder-bounded run leaves the back half of every
+crossing run *never written*. It is note 7's hazard — a short transfer taken as
+a complete one — reached through a different door than note 5's wrong EOT.
+
+Why it hid so well: the splash module is file sectors 0-8, and on a 360KB disk
+the first head flip is at LBA 27, **file sector 15**. Everything the screen could
+show was loaded before the first sector that could be wrong.
+
+**Fixed** by SPEC.md 18.93.1's canary — the loader verifies the *transfer*
+against a word the build reads out of the image, and repeats the load
+track-bounded if it fails — and 18.93.2's XT gate, so a 286 takes the safe bound
+from the start instead of paying for the discovery.
+
+### The BIOS survey — what was actually tested
+
+`build/rdiag360.img` on MartyPC, one boot per BIOS, 206 sectors each. The three
+clone ROMs are in `tools/martypc/roms/` (untracked, for the IBM BIOS's reason)
+and their machines are `os8088_compaq_revh`, `os8088_eagle_spirit` and
+`os8088_columbia_mpc`.
+
+| BIOS | class | result |
+|---|---|---|
+| IBM 5150 / 5160 | XT | **crosses a head correctly** |
+| GLaBIOS 0.2.6 | XT | **crosses a head correctly** |
+| Compaq Deskpro Rev H (106265-001, 11/10/86) | XT clone | **crosses a head correctly** |
+| Eagle PC Spirit 1.9 | XT clone | **crosses a head correctly** |
+| Columbia MPC 1600 3.02 REVB | XT clone | **could not be tested** — halts at 0000:0407 on MartyPC's 5160 hardware, before reaching the loader. Not a pass and not a failure |
+| MR BIOS 286 (86Box `mr286`) | 286 clone | **WILL NOT CROSS A HEAD** — 92 of 206 sectors never written |
+
+Four XT-class BIOSes pass and the one failure is a 286 — which is the evidence
+18.93.2's gate rests on. It is a small sample and it is not proof: the gate is
+still a bet about a population, which is why the canary runs underneath it and
+can still lower the bound on an XT that turns out to be the exception.
+
+### CONFIRMED ON THE 5150: §18.91.1 is worth 2,197 ms
+
+**This is the number CLAUDE.md said no 5150 had ever seen.** It has now seen it.
+
+| row | P1 cylinder | P2/P3 track | delta |
+|---|---|---|---|
+| **boot + early init** | **7,416** | **9,613** | **+2,197 ms** |
+| clock + video + heap | 8 | 7 | |
+| mouse_init | 590 | 591 / 1,195 | see below |
+| desktop + drivers | 1,881 | 1,881 | 0 |
+| drv_boot | 3,535 | 3,574 / 3,511 | ±60 |
+| first paint | 223 | 223 | 0 |
+| **TOTAL, OS only** | **13,623** | 15,875 / 16,425 | |
+
+`boot + early init` read **9,613 ms in both track-bounded runs** — the same
+figure twice, on a disk the owner describes as perfectly consistent — against
+7,416 ms cylinder-bounded. So §18.91.1 saves **2.197 s** on the target machine,
+which is the 2.2 s the emulators predicted and slightly more than MartyPC's
+1,923 ms (−12% on the delta, against +30% on the absolute load time — the delta
+travels better than the level does).
+
+To be unambiguous about direction, because it is easy to get backwards and was:
+**P1 is the FAST disk.** Its boot sector carries §18.93.2's gate, which raises
+`run_max` to 18 on an 8088 — verified in the shipped bytes, not inferred from
+the filename. P2 and P3 are `TRACKRUN=1`, `run_max` fixed at 9, the pre-§18.91.1
+loader.
+
+**The mouse row is not noise and not the disk.** 591 ms against 1,195 ms across
+two runs of the *same* build is §9.4.5's identify window ending early or running
+to its full 1,200 ms — the behaviour `MOUIDSLOW=1` exists to bracket. It accounts
+for 604 of the 550 ms between the two totals; everything else is rounding.
+
+### CORRECTION: TRACKRUN=1 was never broken — our own imaging tool wrote a bad disk
+
+The previous revision of this note recorded that P2 "does not boot the 5150 at
+all", with a theory about track-bounded runs beginning on head 1. **That was
+wrong**, and the correction matters more than the theory did.
+
+The P2 floppy had been written with **os8088's own disk imaging utility**, and
+that **corrupted the disk's sector format**. DOS's `dskimage` then refused the
+same floppy — *"unable to use sector 22"* — until the disk was reformatted under
+DOS. Rewritten with `dskimage` onto a freshly formatted disk, **both P2 and P3
+boot the 5150 to a desktop**.
+
+So the failure I attributed to the run bound was media, and the media was damaged
+by us. The instinct in that entry — *"whether the failure is repeatable at the
+same point separates a logic fault from marginal media"* — was the right question
+and the answer was media; I should have waited for it rather than writing the
+head-1 theory up first.
+
+**That leaves a real, unfixed bug of its own, and a worse one: os8088 can damage
+a floppy's low-level format while writing an image to it.** Not a data-integrity
+bug in a file — the *format*, recoverable only by reformatting under another OS.
+Recorded as note 32.
+
+### A SECOND way the same corruption came back, found while checking the gate
+
+The owner asked the right question about the shipped fix: *"once into the OS,
+on a 286+, we're not going to corrupt reads by trying to use the head switch
+command on a bios like the mr286?"* — and the honest answer was **we were**,
+by a different door.
+
+The loader published its final `run_max` as a **number**, and the kernel turned
+that into "may a run cross a head" by comparing it against **the mounted
+volume's** SPT: greater meant crossed. That reads correctly on the volume the
+loader loaded from and wrongly on any other, because the two numbers come off
+different disks. A 286 boots a 1.44MB disk track-bounded and publishes **18** —
+a *track* there — and then the first mount of a 360KB floppy (SPT 9) or a
+17-sector hard disk makes `18 > SPT` true and switches the crossing back on. On
+the MR BIOS that is the original defect exactly, arriving after the desktop is
+up instead of during the load, and just as silently.
+
+**Reproduced and fixed before shipping.** QEMU is a 286-and-up CPU, so
+§18.93.2's gate takes its non-XT arm there — this is the closed list's first
+row doing its job. `make test TESTAPPS=build/apps360.img` puts a 1.44MB system
+disk in A: and a 360KB apps disk in B:, and reading the two words at the
+desktop and again after opening `Disk B`:
+
+| | before the fix | after |
+|---|---|---|
+| `boot_cylrun` at the desktop | 18 | **0** |
+| `[dsk_cylrun]`, A: mounted (SPT 18) | 0 | 0 |
+| `[dsk_cylrun]`, after `Disk B` mounts (SPT 9) | **1** | **0** |
+
+The fix is that the loader now writes that word **on one path only** — the path
+where a run crossed a head and the canary came back right — so zero is every
+other case at once and the kernel's test is `!= 0` rather than a comparison
+against a geometry. It costs the boot sector nothing: the `je` that skipped the
+check now skips the publish with it. §18.93.1 carries the rule.
+
+**What this cost is worth writing down.** The published number was a *fact about
+one disk* being read as a *fact about the machine*, and it passed review twice
+because on the boot volume the two readings agree. The general form: a
+measurement taken on one subject and stored as a machine-wide truth needs to
+say which subject it came from, or be reduced to a boolean before it is stored.
+
+### ANSWERED: what the cylinder bound is worth, on iron
+
+This section stood open for one round. The section above closes it: **2,197 ms
+on the 5150**, from the plain-`make` against `make TRACKRUN=1` A/B it asked
+for. CLAUDE.md's standing caveat on §18.91.1 — *"a 2.2 s win two emulators
+agree on and no 5150 has yet seen"* — is retired, and the row now records the
+measurement instead.
+
+The 86Box figure it was reasoning from **splits cleanly**, which is worth
+keeping because it is the only cross-check the two instruments allow: 86Box
+showed the 5150 going ~12 s → ~9 s with the cylinder bound and §9.4.5's halved
+mouse identify window *together*, ~3,000 ms for the pair. On the iron the pair
+measures **2,197 ms of disk plus 604 ms of mouse = 2,801 ms**. An emulator
+that models the CALL and not the REVOLUTION got the *split* right to within
+7%, having got the absolute boot time wrong by 30%. That is PERFORMANCE.md
+rule 5's blind spot behaving exactly as Part 4 says it does — a delta travels,
+a level does not — and it is a reason to keep quoting deltas from emulators
+and levels only from the field.
+
+The separate observation is about the GATE, not the bound, and it is unchanged:
+a 286 with the bad BIOS boots in ~9 s doing **24** `int 13h` calls, and the
+5150 boots in ~9 s doing **13**. The 286 keeps up while paying twice the calls
+— it is a faster machine and its drive is not its whole boot. That is the
+evidence that §18.93.2 gives up little by taking the cylinder bound away from
+286-class machines, and it says nothing against the bound itself.
+
+---
+
+## 32. os8088's own `Write Img...` left a floppy whose LOW-LEVEL FORMAT was damaged (OPEN — reported once, not reproduced here, and NOT reproducible on any emulator in this tree)
+
+This came out of note 31's A/B and is the more serious of the two findings in
+it. It is recorded separately because it is not a disk-run-bound bug and
+nothing above it depends on it.
+
+### The report
+
+Verbatim, from the 5150's owner:
+
+> I wrote P1 in dos, with dskimage. I had written the P2 disk image with
+> os8088's new disk image utility - and apparently that corrupted the sector
+> format on the disk. Tried to write P3 with dskimage from dos, and it was
+> unable to use sector 22. Formatted the disk it in dos, wrote P3 with
+> dskimage, and goes to desktop fine.
+
+So the sequence on **one physical 360 KB floppy** was:
+
+1. os8088's `Write Img...` (§18.99.8) wrote an image to it. It did not boot.
+2. DOS's `dskimage` was then pointed at the same disk and **refused it** —
+   *"unable to use sector 22"*.
+3. A DOS `FORMAT` recovered the disk. `dskimage` then wrote it and it booted
+   to a desktop.
+
+### Why this is a FORMAT fault and not a data fault
+
+Step 2 is the whole finding. Bad *data* written by us is overwritten by the
+next tool that writes the disk; `dskimage` would not have noticed, and step 3
+would not have needed a format. A write tool that cannot use a particular
+sector number is being refused by the **ID address marks on the media** — the
+sector's low-level identity, which is written by a FORMAT and never by a
+write. And a plain DOS `FORMAT` put it back, which is what says the platter is
+serviceable and the *format* was what was wrong.
+
+**Severity, plainly: this is data loss on media the user did not ask us to
+touch the format of.** A user who images a floppy expects that floppy's
+contents replaced, not the disk rendered unusable until reformatted somewhere
+else — and os8088 has no format command of its own to recover it with, so the
+recovery path requires a second operating system.
+
+### What the source says, and it does not obviously do this
+
+Facts, from the tree rather than from reasoning:
+
+- **os8088 never formats.** Every `int 13h` this system issues on a floppy is
+  `AH = 02h` read or `AH = 03h` write — `dsk_op` is one byte and takes exactly
+  those two values (`kernel/disk.inc:938/941`) — plus `AH = 00h` reset on a
+  retry and `AH = 08h` geometry in `clone.inc`. There is **no `AH = 05h`
+  format-track call anywhere in the tree**, and no `AH = 17h`/`18h`
+  set-media-type either. *That last absence is a candidate, not an
+  exoneration — see below.*
+- **The geometry `Write Img...` writes with comes from the image's SIZE**
+  (§18.99.8), not from the target drive, and for these disks it was right: a
+  368,640-byte file is 9 SPT / 2 heads / 40 cylinders, which is what the media
+  is.
+- **The diskette parameter table is COPIED from the ROM's** (`dsk_dpt_init`,
+  §18.92) and only byte 4 (EOT) is ever rewritten. So the step rate, head
+  load/unload, gap lengths and format gap in use are *that machine's own BIOS
+  values*, not guesses of ours.
+
+### Candidates, in the order the evidence ranks them
+
+**0. The disk was already failing, and our write was simply the first thing to
+touch it.** The null hypothesis, and it is the FRONT-RUNNER: a marginal
+40-year-old floppy presents exactly like this, and a reformat "fixes" one of
+those too. The owner adds the fact that promotes it — *"I've written
+successfully with that tool before, to this exact same disk"* — so `Write
+Img...` and this platter have a working history and only this one write went
+wrong. *Discriminating test:* point `Write Img...` at a **fresh, known-good,
+DOS-formatted** disk and then read it with `dskimage`. If that disk survives,
+this note is about one tired floppy and closes.
+
+**1. We freeze int 1Eh at the BOOT media's parameters, and an AT-class BIOS
+expects to swap that table per media.** §18.92 points `0000:0078` at
+`dsk_dpt` **permanently**, on every machine. On an XT with one drive and one
+media type that is exactly right and is why it has never bitten. On a BIOS
+that keeps several tables and re-points the vector when it detects a different
+media — 360 KB media in a 1.2 MB drive being the classic case — our takeover
+**prevents the swap**, and the FDC is then handed the wrong gap length and the
+wrong step behaviour for the media actually in the drive. A write under a
+too-long read/write gap (byte 5) can run the write gate past the data field
+and over the **following sector's ID address mark**, which is a documented µPD765
+behaviour and is precisely the damage observed. *Discriminating test:* which
+drive was the disk written in, and is the machine's BIOS AT-class? If it was a
+1.2 MB drive, this is the leading candidate; if it was a genuine 360 KB drive
+on an XT BIOS, it is close to ruled out.
+
+**2. We never set the media type before writing** (`AH = 17h`/`18h`). DOS's
+own `FORMAT` and `DISKCOPY` do, and step 6 of the seven-step path in
+docs/FIELD-MACHINES.md already warns in this same area: *"It has to be a real
+360 KB drive — head geometry differs between 360 KB and 1.2 MB drives, and a
+360 KB disk written in a 1.2 MB drive is not reliably readable in one."* That
+warning is about the *track width* a 96-tpi head writes over 48-tpi tracks,
+which leaves the old ID fields partly intact under the new ones — again
+exactly the symptom. This is really candidate 1's twin and the same test
+separates them.
+
+**3. Something in `clone.inc`'s window arithmetic writes off the end of a
+track.** §18.99.9 rounds the transfer window down to a whole number of
+cylinders using the **live** `[disk_spt] × [disk_heads]`, and `clo_span` sets
+those from the image size for the duration of the write (`clone.inc:508/599`).
+**Weak, and here is why**: §18.91.3 already bounds every WRITE run at the
+track — the cylinder bound is reads only, measured rather than cautious — so a
+clone's writes never carry the multi-track bit past a head in the first place,
+whatever `clo_span` rounded the window to. What is left of this candidate is
+only an arithmetic slip inside one track, and that is still worth one cheap
+check: a `DISKCNT=1` clone of a 360 KB image, with the CHS of every write
+logged and compared against the image's own geometry. It cannot show the
+*damage* — see below — but it can show a write aimed at a sector that should
+not exist.
+
+### No emulator in this tree can reproduce it, and that is a property of the bug
+
+86Box, QEMU and MartyPC all present a floppy as an **array of sectors**. A
+write with a wrong gap length, a wrong data rate or a wrong track width lands
+in the right array slot in all three and the image is correct afterwards. The
+damage here is to the **flux on the platter**, and none of these model flux for
+a raw `.img`. So:
+
+- **candidate 3 can be tested here** (it is arithmetic, and a wrong CHS shows
+  up in a call log);
+- **candidates 1 and 2 can only be tested on iron**, and the test costs a
+  floppy;
+- a green `make test-full` says nothing about this note, and neither does a
+  successful `Write Img...` under any emulator. Do not close this on one.
+
+### What the next report needs to say
+
+Batched, because each answer is a trip (docs/FIELD-MACHINES.md):
+
+1. **Which machine and which drive** did `Write Img...` run on — 5150 #1, 5150
+   #2 with the Picomem, or the writer box? A genuine 360 KB drive or a 1.2 MB
+   one? This is the question that ranks candidates 1 and 2 against 0.
+2. **Was the target disk freshly formatted before we wrote it**, or an old one?
+3. **Does it happen again** on a known-good disk — and if it does, is it the
+   same sector number each time? A repeatable sector number is arithmetic
+   (candidate 3); a wandering one is the media/timing pair.
+
+Until (1) and (3) are answered this note stays open, and **`Write Img...`
+should be treated as unsafe on media anyone minds losing.**

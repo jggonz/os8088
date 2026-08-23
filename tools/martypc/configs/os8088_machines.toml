@@ -1042,3 +1042,58 @@ overlays = [
     io_base = 0x220
     irq = 7
     dsp_version = [2, 1]
+
+# os8088_field.toml
+#
+# XT-class CLONE machines, for SPEC.md 18.93.2. Same 5160 hardware and the same
+# two 360KB drives as os8088_xt_vga; only the BIOS differs. Boot build/rdiag360.img
+# on each and read the map: 206 dots is a controller that crosses a head, any X
+# is one that does not and would have needed the canary.
+
+[[machine]]
+name = "os8088_compaq_revh"
+type = "Ibm5160"
+rom_set = "os8088_compaq_revh"
+speaker = true
+overlays = ["pcxt_2_360k_floppies", "us_modelf_keyboard"]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Default"
+
+[[machine]]
+name = "os8088_eagle_spirit"
+type = "Ibm5160"
+rom_set = "os8088_eagle_spirit"
+speaker = true
+overlays = ["pcxt_2_360k_floppies", "us_modelf_keyboard"]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Default"
+
+[[machine]]
+name = "os8088_columbia_mpc"
+type = "Ibm5160"
+rom_set = "os8088_columbia_mpc"
+speaker = true
+overlays = ["pcxt_2_360k_floppies", "us_modelf_keyboard"]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Default"

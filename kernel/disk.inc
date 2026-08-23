@@ -208,6 +208,11 @@ dsk_mbit:    db 1, 2, 4, 8
 disk_drive:  db 1                ; current VOLUME (0 = A:, 1 = B:), init B:
 disk_spt:    dw 9                ; sectors per track  } fallback geometry,
 disk_heads:  dw 2                ; heads              } replaced at mount
+dsk_cylrun:  db 0                ; may a transfer run cross a HEAD on this
+                                 ; machine? (SPEC.md 18.93.1) Set at mount from
+                                 ; the boot sector's canary; 0 until then, so
+                                 ; the cautious answer is the one in force
+                                 ; before anybody has asked
 disk_nfiles: dw 0                ; file count, valid after a good mount
 
 ; The diskette parameter table (SPEC.md 18.92) - int 1Eh's, ours from
@@ -1146,6 +1151,10 @@ dsk_xfer:
     ; the head and CH the cylinder, so both are banked across the sum.
     push ax                     ; the head, wanted for DH below
 %ifndef TRACK_RUN
+    cmp byte [dsk_cylrun], 0    ; ...but ONLY on a machine whose FDC was seen
+    je .runtrk_only             ; to do it (SPEC.md 18.93.1). The boot sector
+                                ; settled that with a canary before we ran, so
+                                ; there is no probe to pay for here
     ; ...to the end of the CYLINDER (SPEC.md 18.91.1): the FDC's multi-track
     ; bit carries a run onto the other head at EOT, so the bound a CHS call
     ; must not cross is the cylinder and not the track. That is
@@ -3293,6 +3302,26 @@ dsk_bpb_check:
     mov [disk_spt], ax
     mov ax, [dsk_bpb+DSK_B_HEADS]
     mov [disk_heads], ax
+
+    ; ...and whether a transfer run may cross a HEAD on this machine (SPEC.md
+    ; 18.93.1). The boot sector already paid for the answer - a canary over its
+    ; own load - so this is a test of one word, not a probe.
+    ;
+    ; It is a fact about THE MACHINE'S BIOS and not about this volume, which is
+    ; why nothing here looks at [disk_spt]. It did, once: the loader published
+    ; its run bound and this compared that against the mounted volume's spt.
+    ; That reads correctly on the volume the loader loaded from and wrongly on
+    ; any other - a 286 booting 1.44MB publishes 18 (a TRACK there), and
+    ; mounting a 360KB disk or a 17-sector hard disk made 18 > spt true and
+    ; turned the crossing back ON, on the one BIOS class that cannot do it.
+    mov byte [dsk_cylrun], 0
+    cmp word [boot_cylrun], 0   ; the loader writes that word on ONE path: the
+    je .nocyl                   ; one where a run crossed a head and the canary
+    mov byte [dsk_cylrun], 1    ; came back right. Zero is the kernel image's
+.nocyl:                         ; own value, so "it fell back", "it never had
+                                ; cause to look" and "this image predates the
+                                ; canary" are one answer and it is the cautious
+                                ; one.
     clc
     jmp short .out
 .fail:

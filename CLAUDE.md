@@ -155,9 +155,13 @@ make clean
 | `ADLIB=1` / `SB16=1` | give the sound driver a card to attach to |
 | `HDD=<MB>` | give the hard-disk driver a disk |
 | `TESTAPPS=build/<x>.img` | swap the B: floppy for a scratch image |
-| `TRACKRUN=1` | put a transfer run's bound back at the TRACK, not the cylinder (SPEC.md §18.91.1) — 9 sectors an `int 13h` instead of 18, both loops. The pre-§18.91.1 transfer, and the bracket for a 2.2 s win two emulators agree on and no 5150 has yet seen |
+| `TRACKRUN=1` | put a transfer run's bound back at the TRACK, not the cylinder (SPEC.md §18.91.1) — 9 sectors an `int 13h` instead of 18, both loops. The pre-§18.91.1 transfer, and the bracket that **MEASURED §18.91.1's win on the 5150 at 2,197 ms** (docs/FIELD-NOTES.md §31): `boot + early init` 7,416 ms cylinder-bound against 9,613 ms track-bound, the second figure identical across two runs. The 2.2 s the emulators predicted, confirmed on iron at last |
 | `MOUIDSLOW=1` | always spend the whole of SPEC.md §9.4.1's identify window — the pre-§9.4.5 `mouse_init`, 1,200 ms rather than 596. The bracket for the one case no emulator here can show: a MODEM on the other port |
 | `BOOTPROF=1` | SPEC.md §15.5's boot phase table, drawn on the desktop and published as §57's `BP` — the profile a machine with **no debugger** can take. Refuses to build with `QUANTUM=` |
+| `BOOTMARK=1` | one block along the bottom of the screen per call in `kmain` that RETURNED — for a machine that reaches the loading screen and then STOPS. Count the blocks: the freeze is in the call after the last one. Where `BOOTPROF=1` needs a boot that reaches a desktop to print its table on, this needs only the framebuffer the splash already set up |
+| `BOOTHALT=<n>` | with `BOOTMARK=1`: **stop dead** at marker `n` instead of carrying on — for a machine that resets or loops rather than freezing, where the blocks scroll away before they can be read. A boot that still goes round proves marker `n` was never reached |
+| `BOOTSTOP=1\|2` | the same idea one level down, in the **boot sector**: halt one instruction short of the handoff, so "did the LOADER finish?" is answered without kmain being entered at all. `2` also skips the splash, and prints `*` on the text screen the splash never took over |
+| `NOPS2=1` | leave SPEC.md §9.9's auxiliary-port probe out of the build, so `mouse_init` ends at the serial half. The A/B for the machine class nothing here can host: a **non-XT whose 8042 has no aux port**. MartyPC is an 8088 so the probe returns at its first compare; QEMU's i8042 always has an aux port with a mouse on it; and an 86Box machine that offers a PS/2 mouse in its settings has one too |
 
 All are stamp-tracked, so changing one rebuilds the kernel. Without that, make
 sees an up-to-date `kernel.bin`, boots the previous configuration, and it reads

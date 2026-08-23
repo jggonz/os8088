@@ -117,9 +117,13 @@ spl_tick:
     push cs
     pop ds                      ; our data lives in the kernel segment
 
-    mov [spl_done], ax
     add dx, SPL_POST            ; kmain's tail is on this bar too (SPEC 15.3)
     mov [spl_total], dx
+    cmp ax, dx                  ; ...and CLAMP, because the loader may load the
+    jbe .cnt                    ; kernel TWICE: the canary's fallback repeats
+    mov ax, dx                  ; the whole read with a track-bounded run
+.cnt:                           ; (SPEC.md 18.93.1) without resetting its own
+    mov [spl_done], ax          ; counter, which it has no bytes to spare for
 
     cmp byte [spl_on], 0
     jne .running

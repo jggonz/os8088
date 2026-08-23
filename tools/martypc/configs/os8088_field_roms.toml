@@ -1,0 +1,44 @@
+# romdef_os8088_field.toml
+#
+# XT-class CLONE BIOSes, for SPEC.md 18.93.2's question: does this machine's
+# FDC do the multi-track flip a cylinder-bounded run depends on?
+#
+# The gate bets that XT-class means IBM-compatible enough. These are the ROMs
+# that test the bet rather than restating it. Load addresses are not guessed -
+# each comes from the ROM's own reset vector at 0xFFFF0.
+
+[[romset]]
+alias = "os8088_compaq_revh"
+desc = "Compaq Deskpro BIOS Revision H (106265-001, dated 11/10/86)"
+priority = 10
+provides = ["bios", "ibm5160"]
+rom = [
+    # reset vector: jmp F000:E05B - an 8KB ROM in the top 8KB
+    { md5 = "8beb3bb0ff1df49b415d9330cbe9e140", addr = 0xFE000, size = 8192 },
+]
+
+[[romset]]
+alias = "os8088_eagle_spirit"
+desc = "Eagle PC Spirit motherboard BIOS 1.9"
+priority = 10
+provides = ["bios", "ibm5160"]
+rom = [
+    # U1101's reset vector is jmp FE00:0000 - it IS the top 8KB, so U1103 is
+    # the 8KB below it
+    { md5 = "38d46f6ebadcd2b10565aa6cfb098a13", addr = 0xFE000, size = 8192 },
+    { md5 = "3c59e52a51084ce7fffb56321504ef2b", addr = 0xFC000, size = 8192 },
+]
+
+[[romset]]
+alias = "os8088_columbia_mpc"
+desc = "Columbia Data Products MPC 1600 BIOS 3.02 REVB"
+priority = 10
+provides = ["bios", "ibm5160"]
+rom = [
+    # U45 carries the reset vector, so it is the top 4KB; that vector says
+    # jmp FC00:0000 and U48 begins with CLI, so U48 is the bottom one
+    { md5 = "4f092f7bde1fbf2776e5f88e0876439a", addr = 0xFC000, size = 4096 },
+    { md5 = "ecdc5ce0909d1a0d6724c451ccc98c88", addr = 0xFD000, size = 4096 },
+    { md5 = "8eb9c95a8a3e73cbc9d4765f526c4e14", addr = 0xFE000, size = 4096 },
+    { md5 = "8c505e383903f88764aff0a4b663cc28", addr = 0xFF000, size = 4096 },
+]

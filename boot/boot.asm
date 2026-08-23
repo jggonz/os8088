@@ -77,6 +77,12 @@ RELOC_ADJ    equ 0x07E0         ; int 12h answers KB; KB*64 is the paragraph
                                 ; byte. Getting only the first term right
                                 ; boots on any machine with a spare page above
                                 ; int 12h's answer and dies on one without
+%ifdef BOOT_STOP
+ %if BOOT_STOP == 2
+  %define BOOT_NOSPLASH        ; BOOTSTOP=2: the load, with NO splash call at
+ %endif                        ; all - so a fault inside the splash cannot be
+%endif                         ; reached and read_run is on its own
+
 SPLASH_OFF   equ 0x0008         ; the kernel's boot splash far entry (SPEC.md 15)
 SPL_RESIDENT equ 9              ; splash is fully aboard after this many
 
@@ -276,6 +282,29 @@ entry:
     pop es
     pop ds
 
+%ifndef TRACK_RUN               ; TRACKRUN=1 never crosses a head, so there is
+                                ; nothing here to gate and this is the loader
+                                ; as it stood before 18.91.1 - which is the
+                                ; whole point of that knob as an A/B
+    ; --- may this machine's FDC cross a head? (SPEC.md 18.93.2) -------------
+    ; `push sp` is the entire test: the 8086 and 8088 push SP as it is AFTER
+    ; the decrement, every later part pushes it as it was before. Eleven bytes,
+    ; no flags trick and no table.
+    ;
+    ; It is a bet about a POPULATION, not a fact about this machine - which is
+    ; why the canary below still runs and can still lower the bound. What the
+    ; gate buys is that a 286 never PAYS for the discovery: it takes the track
+    ; bound from the start instead of loading the whole kernel wrong and then
+    ; loading it again. The win it gives up is the smallest one there is - 6
+    ; calls on a 1.44MB drive against 11 on a 360KB one, and the faster drive.
+    push sp
+    pop ax
+    cmp ax, sp
+    je .trkbound                ; 286 and up: leave run_max at the TRACK
+    mov byte [run_max], RUN_SECS
+.trkbound:
+%endif
+
     ; --- copy KERNEL_SECTORS sectors, the kernel FILE, to KERNEL_SEG:0000 ---
     ; It starts at the first data cluster, so its LBA is where the data area
     ; begins and the BPB above says where that is:
@@ -292,6 +321,7 @@ entry:
     ; at zero, so the pointer can never wrap inside a segment and every
     ; transfer starts at a 512-aligned linear address. A RUN can still cross a
     ; 64KB DMA page, though, which is one of the four bounds read_run applies.
+.reload:
     mov al, [bpb_nfat]
     xor ah, ah
     mul word [bpb_fatsz]        ; AX = both FATs (DX is 0: 2 x 9 at the most)
@@ -316,11 +346,13 @@ entry:
     shl ax, cl                  ; 0x20 paragraphs a sector...
     add [dest_seg], ax          ; ...so the destination follows the run
 
+%ifndef BOOT_NOSPLASH
     mov ax, [done]              ; tick the splash once it is fully resident:
     cmp ax, SPL_RESIDENT        ; AX = sectors done, DX = total (SPEC.md 15).
     jb .no_tick                 ; Counted on its own, NOT from [lba] - that is
     mov dx, KERNEL_SECTORS      ; an absolute LBA into the data area now, and
     call KERNEL_SEG:SPLASH_OFF  ; it starts past SPL_RESIDENT on both
+%endif
 .no_tick:                       ; geometries, so the splash would be called
                                 ; before a byte of it had landed. ONE call a
                                 ; run, not one a sector: the bar is an
@@ -333,7 +365,70 @@ entry:
     mov es, ax                  ; kernel keeps for it (SPEC.md 15.4). It has to
     mov [es:0x000C], bp         ; be written AFTER the load, or the sectors
                                 ; landing here would overwrite it
+%ifndef TRACK_RUN               ; ...and TRACKRUN=1 crosses no head, so there is
+                                ; nothing for the canary to verify either: the
+                                ; run_max == SPT test below would skip it on
+                                ; every pass. Out, for the gate's reason - that
+                                ; build is the loader as it stood before any of
+                                ; 18.93, which is what makes it an A/B
+%if KERNEL_SECTORS > 32
+%ifndef KSIG
+%error "an image over 32 sectors crosses a head: the canary needs -DKSIG/-DKSIG_OFF (SPEC.md 18.93.1)"
+%endif
+    ; --- THE CANARY (SPEC.md 18.93.1) ---------------------------------------
+    ; int 13h answered CF=0 and the full count for every run above. That is NOT
+    ; the same as the right BYTES: a run bounded by the CYLINDER only lands in
+    ; LBA order because the FDC's multi-track bit carries it onto the other head
+    ; at EOT, and EOT is the byte we patched into the machine's diskette
+    ; parameter table. A BIOS that keeps its own table ignores that patch, flips
+    ; at 8 instead of 9, and returns the other head's sectors - silently.
+    ;
+    ; So verify the TRANSFER, never the table: reading our own patch back proves
+    ; only that our own write to our own RAM worked, which it always does.
+    ; KSIG is the word the BUILD read out of KERNEL.SYS at KSIG_OFF - offset
+    ; 18432, file sector 36, which lands in the SECOND HALF of a crossing run in
+    ; every geometry - the half that is on the far head, and so the half a BIOS
+    ; that will not flip never writes - and inside the 64KB ES already names.
+    ; tests/unit/t_canary.py re-derives that from each image's own BPB and
+    ; rejects the offset this started at, which was in the first half.
+    ;
+    ; Failing it costs a whole second load, and that is the right price: a boot
+    ; that is 2.2s slower beats a kernel that is quietly wrong.
+    cmp word [run_max], SPT     ; already track-bounded? then no run has crossed
+    je .nocross                 ; a head and there is nothing to check
+    cmp word [es:KSIG_OFF], KSIG
+    je .crossed
+    mov byte [run_max], SPT     ; ...the bound the FDC cannot get wrong,
+    mov word [dest_seg], KERNEL_SEG
+    jmp .reload                 ; ...and do the whole load again. [done] is NOT
+                                ; reset: the bar is at 100% and stays there,
+                                ; which is what spl_tick's clamp is for
+.crossed:
+    mov ax, [run_max]           ; ...and tell the kernel what we learned, so
+    mov [es:0x0004], ax         ; dsk_xfer needs no probe of its own (18.93.1).
+                                ; The word is written ONLY here, on the one
+                                ; path that has seen a head crossed and come
+                                ; back right: every other way out of this block
+                                ; leaves the kernel image's own ZERO, which is
+                                ; what makes the kernel's test `!= 0` and not a
+                                ; compare against some volume's spt. A compare
+                                ; is what a second volume of a DIFFERENT
+                                ; geometry gets wrong (18.93.1)
+.nocross:
+%endif
+%endif
     mov dl, [boot_drive]        ; kernel may want to know the boot drive
+%ifdef BOOT_STOP
+%ifdef BOOT_NOSPLASH
+    mov ax, 0x0E2A              ; '*' on the text screen the splash never took
+    mov bx, 7                   ; over, so a HALT is legible where a machine
+    int 0x10                    ; that went round leaves nothing behind
+%endif
+    cli                         ; STOP one instruction short of the handoff:
+.stop:                          ; did the LOADER finish? Halted, the screen
+    hlt                         ; stays; still looping, the fault is above this
+    jmp short .stop
+%endif
     jmp KERNEL_SEG:0x0000
 
 ; -----------------------------------------------------------------------------
@@ -370,10 +465,10 @@ read_run:
     ; exactly where a CHS call had to anyway.
     mov ax, [lba]
     xor dx, dx
-    mov bx, RUN_SECS
-    div bx                      ; DX = the LBA's index within a run's span
-    mov di, RUN_SECS
-    sub di, dx                  ; DI = sectors to the end of it
+    mov bx, [run_max]           ; RUNTIME now (SPEC.md 18.93.1/18.93.2): the
+    div bx                      ; gate below sets it and the canary can lower it
+    mov di, bx                  ; div spends AX and DX and leaves BX, so this
+    sub di, dx                  ; costs a register move instead of a reload
     cmp di, [left]
     jbe .page
     mov di, [left]
@@ -389,12 +484,13 @@ read_run:
     shr ax, cl
     cmp ax, di
     jae .have
-    or ax, ax
-    jz .one                     ; unreachable from a 512-aligned base, which
-    mov di, ax                  ; every destination here is
-    jmp short .have
-.one:
-    mov di, 1
+    mov di, ax                  ; ...and never zero: every destination here is
+                                ; 512-ALIGNED (ES starts at KERNEL_SEG and
+                                ; advances 32 paragraphs a sector), so the
+                                ; remainder is a multiple of 512 and the shift
+                                ; can only reach 0 from an AX the jz above has
+                                ; already taken. boothd.asm's copy is built the
+                                ; same way and is track-bounded besides
 .have:
 %ifdef FLOPPY_ONE
     mov di, 1                   ; FLOPPY1=1: one sector a call, the transfer
@@ -412,11 +508,20 @@ read_run:
     div bx
     inc dx
     mov cl, dl                  ; CL = sector (1-based)
+%if HEADS == 2
+    shr ax, 1                   ; a divide by two is a shift, and the head falls
+    mov ch, al                  ; out in CF. DH needs no clearing: the divide by
+    rcl dh, 1                   ; SPT above left a remainder BELOW SPT in DX, so
+                                ; its high byte cannot be set. Every geometry
+                                ; this ships is two-headed; the general form
+                                ; below still assembles for one that is not
+%else
     xor dx, dx
     mov bx, HEADS
     div bx
     mov ch, al                  ; CH = cylinder (low 8 bits; we never exceed 255)
     mov dh, dl                  ; DH = head
+%endif
     xor bx, bx                  ; ES:BX - the offset is always zero
     mov dl, [boot_drive]
     mov ax, [run]               ; AL = the run...
@@ -512,13 +617,20 @@ done        dw 0
 left        dw 0
 run         dw 0
 dest_seg    dw KERNEL_SEG
+run_max     dw SPT           ; the live run bound (SPEC.md 18.93.1). The
+                             ; TRACK unless SPEC.md 18.93.2's gate raises
+                             ; it, so the cautious answer is the default
 
 %ifdef BOOT_DIAG
 diag_ah     db 0                ; the int 13h status, banked before the reset
 %else
-msg_err     db 'os8088: disk error', 13, 10, 0
+msg_err     db 'DSK', 0        ; three characters and no newline, for
+                                ; msg_mem's reason - the sector has no room
+                                ; for prose. BOOTDIAG=1 prints int 13h's
+                                ; STATUS here instead, and `make cqdisk`
+                                ; builds the disk that carries it
 %endif
-msg_mem     db 'RAM', 13, 10, 0  ; three characters because three is what is
+msg_mem     db 'RAM', 0         ; three characters because three is what is
                                  ; left in 512 bytes, and a machine that says
                                  ; RAM and stops is diagnosable where a black
                                  ; screen is not

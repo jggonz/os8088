@@ -83,6 +83,11 @@ FAST = [
     Row("diskverify", "fast", py("tests/unit/t_diskverify.py"), 0.6,
         "the tree's own fsck, pointed at the seven images `make` ships and "
         "never ran on"),
+    Row("canary", "fast", py("tests/unit/t_canary.py"), 0.2,
+        "SPEC.md 18.93.1's canary offset re-derived from every shipped image's "
+        "own BPB: it has to name a sector a transfer run reads AFTER the head "
+        "boundary, because the half before it loads correctly on exactly the "
+        "machine the canary is for - which is how the first one shipped wrong"),
     Row("registry", "fast", py("tests/unit/t_registry.py"), 0.2,
         "every test in tests/ is registered in a tier or says why not - the row "
         "that stops this suite going back to a directory nobody can enumerate"),
