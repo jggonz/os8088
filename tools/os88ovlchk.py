@@ -40,7 +40,11 @@ CALL = re.compile(r'\b(?:call|jmp|j[a-z]{1,3}|loop[a-z]{0,2})\s+'
 # an API cell macro whose body near-calls its LAST argument
 CELL = re.compile(r'^\s*OSAPI_(?:SLOT|NSTUB|XSTUB)\s+(?:\w+\s*,\s*)?'
                   r'([A-Za-z_]\w*)\s*$')
-MODS = ('.modc', '.modf')   # on-demand module images (SPEC.md 2.8)
+MODS = ('.modc', '.modf', '.modl')   # on-demand module images (SPEC.md 2.8).
+# **A section added here and nowhere else is a section NOTHING below checks**,
+# which is how `.modl` shipped once with the near-call check blind to it - the
+# clone module's every `call COLD_SEG:` was correct, and would not have been
+# reported had one been near.
 FAR = ('.ovl', '.cold') + MODS   # sections with a vstart of their own
 
 
@@ -117,6 +121,16 @@ def main():
     # reaching it through CS is the correct idiom there and two places use it
     # (font.inc's glyph copy does `push cs / pop ds`, drv_snd_sniff uses
     # `cs lodsw`).
+    #
+    # **AND NEITHER ARE THE MODULE SECTIONS, SINCE SPEC.md 2.8.6.** They used
+    # to be, on rule 1's premise that a module carries no data - and when that
+    # premise was true the check was exact. A module may now carry its own
+    # STRINGS and read them through CS, which is what took the cloner's and
+    # the formatter's prompts out of the kernel entirely, so `[cs:si]` in a
+    # `.mod*` section is the correct idiom exactly as it is in `.ovl`. What is
+    # lost with it is the guard against `mov ax, cs` meaning KERNEL_SEG inside
+    # a module; that is now a review rule, and the cheap half of it is the
+    # `lods` refusal further down.
     CS = re.compile(r'\b(?:push\s+cs|mov\s+\w+\s*,\s*cs|cs\s*:'
                     r'|cs\s+(?:lods|movs|stos|scas))', re.I)
     # SCOPED TO kernel/, and EXTRA's files are deliberately left out. A
@@ -131,7 +145,7 @@ def main():
     cs_bad = []
     for f in kfiles:
         for sect, n, line in sections(f):
-            if sect in ('.cold',) + MODS and CS.search(line):
+            if sect == '.cold' and CS.search(line):
                 cs_bad.append((f, n, line.strip()[:60]))
     for f, n, src in cs_bad:
         print("%s:%d: .cold assumes CS: %s" % (f, n, src), file=sys.stderr)
@@ -188,26 +202,41 @@ def main():
     # instruction is the header, and data after it is the bug rule 1 describes.
     # Without this the module sections would be the one place in the kernel
     # where a stray `dw` is not refused by anything.
+    # **THIS CHECK IS GONE, and SPEC.md 2.8.6 is why.** A module may now carry
+    # its own strings, so `db` past the header is the new normal rather than
+    # the bug it was - and the paragraph above describes what that costs. What
+    # replaces it is narrower and still catches the thing that actually goes
+    # wrong: **`lodsb` in a module image**.
+    #
+    # The failure a module's data can produce is one-sided. Nothing can read
+    # module data too EARLY (the image is loaded before anything far-calls
+    # into it) and nothing can read it from the wrong OFFSET (one assembly
+    # fixes both ends). What is left is reading it through the wrong SEGMENT -
+    # DS, which is KERNEL_SEG - and the one instruction that does that without
+    # naming a segment is `lods`. It is also exactly the instruction somebody
+    # reaches for when writing a string copier, which is what a module's data
+    # is for. `mov al, [cs:si]` is the spelling that works.
+    #
+    # `movs`, `stos`, `cmps` and `scas` are NOT refused: all four take an
+    # explicit pointer setup that a module already has to get right for other
+    # reasons, and every use of them in the tree's modules is over a heap
+    # claim or LOW_SEG rather than over the image (clo_keepboot, clo_fin,
+    # clo_issrc, clo_zerohdr). Refusing them would refuse correct code.
+    LODS = re.compile(r'^\s*(?:[A-Za-z_]\w*:\s*)?(?:rep\w*\s+)?lods[bwd]?\b',
+                      re.I)
     m_bad = []
-    CODEISH = re.compile(r'^\s*(?:[A-Za-z_]\w*:\s*)?(?:call|jmp|ret|retf|push|'
-                         r'pop|mov|cmp|add|sub|xor|or|and|test|inc|dec|les|lds)\b',
-                         re.I)
     for f in kfiles:
-        seen_code = {}
         for sect, n, line in sections(f):
-            if sect not in MODS:
-                continue
-            if CODEISH.match(line):
-                seen_code[sect] = True
-            elif DATA.match(line) and seen_code.get(sect):
+            if sect in MODS and LODS.match(line):
                 m_bad.append((f, n, sect, line.strip()[:50]))
     for f, n, sect, src in m_bad:
-        print("%s:%d: data in %s after its header: %s" % (f, n, sect, src),
-              file=sys.stderr)
+        print("%s:%d: lods in %s reads DS:SI, which is the KERNEL: %s"
+              % (f, n, sect, src), file=sys.stderr)
     if m_bad:
-        sys.exit("os88ovlchk: %d data directive(s) past a module header - "
-                 "SPEC.md 2.8 (a module's data stays in .text)" % len(m_bad))
-    print("os88ovlchk: no data past a module header")
+        sys.exit("os88ovlchk: %d lods in a module image - SPEC.md 2.8.6 (a "
+                 "module's own data is CS-relative: mov al, [cs:si])"
+                 % len(m_bad))
+    print("os88ovlchk: no module image reads its data through DS")
 
     # --- and no TAIL CALL to a cw_ shim -------------------------------------
     # A cw_ shim is `call <target>` / `retf`: it exists to turn a far CALL

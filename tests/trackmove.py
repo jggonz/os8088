@@ -101,6 +101,11 @@ def main():
         return os88sym.linear(name, ("NOPARKLK",) if a.expect_nolk else ())
     P = pkg_syms("apps/tracker/tracker.asm")
 
+    # `make bench` shapes this disk; a suite row cannot assume somebody ran
+    # it. One make of the exact artifact is cheap and idempotent.
+    if not os.path.exists("build/trackmove360.img"):
+        subprocess.check_call(["make", "build/trackmove360.img"])
+
     with os88marty.launch("build/os8088-360.img", apps="build/trackmove360.img",
                           machine=a.machine, boot=False) as m:
         m.run()

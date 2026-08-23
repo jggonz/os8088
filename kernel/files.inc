@@ -90,6 +90,24 @@ FM_ROW_H    equ 16              ; list row height, px
 FM_ROW_Y0   equ 22              ; row area top (both views)
 FM_DBLCLK   equ 9               ; double-click window, ticks
 FM_SB_W     equ 14              ; scroll bar width
+
+%ifdef OS88UI_SBDRAG
+; THE DISK WINDOW'S THUMB-DRAG POLICY (SPEC.md 13.10.5.4), and both halves of
+; it are the WINDOW's rather than the element's - which is 13.10.1's rule
+; still holding.
+;
+; **THE RATE DEFAULTS TO 0 AND THAT IS NOT A COP-OUT.** A scroll here is
+; fm_scroll_by - a gfx_scroll blit plus a relettering of every newly exposed
+; row - and PERFORMANCE.md prices one 78-cell row at ~71 ms on a 4.77 MHz
+; 8088. A thumb dragged the length of a 200-file listing with the view
+; following would be seconds of repaint behind a hand that had already
+; stopped: PERFORMANCE.md Part 1's VISIBLE REDRAW, which is invisible in an
+; emulator and is exactly why the rate is a number rather than a cadence.
+; `make SBRATE=2` is the one to try on a fast machine.
+%ifndef FM_SBRATE
+%define FM_SBRATE 0             ; ticks between commits; 0 = the release
+%endif                          ; commits and nothing before it
+%endif
 ; --- the band under the rows: the edge, then the status line (SPEC.md 22.20)
 ; The row area is UNCHANGED by all three of these - [fm_listb] is still
 ; ch-19, so fm_fit is what it always was and not one row of files was spent
@@ -1441,17 +1459,17 @@ fm_s_delq:    db '? Del=yes Esc=no', 0   ; the DELETE key, not Enter (SPEC.md
                                     ; 22): the key that asked is the key that
                                     ; answers, and it carries no ASCII, so no
                                     ; keystroke a name is made of can reach it
-fm_s_fmtpr2:  db 'ERASE and format ', 0  ; ...when the volume MOUNTED, which is
-                                    ; the whole of what removing 22.12's old
-                                    ; refusal costs: the disk has files on it
-                                    ; and the question has to say so
-fm_s_fmtpr:   db 'Format ', 0       ; TWO lines (SPEC.md 22.12): 'Format A: as
-fm_s_fmtas:   db ': as ', 0         ; 720K?' in the row above, the answers on
-fm_s_fmtq:    db 'K?', 0            ; the status line itself - as one line it
-                                    ; is 44 characters and fm_stat_line
-                                    ; truncates at ([fm_cw]-12)/8 = 38 on the
-                                    ; 320px template, losing 'Esc=no'
-fm_s_fmtk:    db 'Enter=yes  Esc=no', 0
+; **The formatter's own prompts are NOT here** (SPEC.md 2.8.6). 'Format A: as
+; 720K?', its two key lines, `Insert the disk to format, then Enter`,
+; `Formatted B:` and `Made 360K, not 720K` are all in FORMAT.DRV, lettered by
+; the composer that went with them - so a kernel that never formats a disk
+; carries none of them, and the pair that has to agree (the line naming the
+; Space key, and the key) is one file rather than two.
+;
+; What is below is the three shapes that could not go, which are §2.8.6's own
+; list: the step-0 swap prompt and its key line, up BECAUSE the image could
+; not be read; the toast beside them; and the menu item further down, whose
+; bar is built by the press that leads to loading.
 
 ; The DISK SWAP the module costs a one-floppy machine (SPEC.md 2.8.5). The
 ; formatter is a file on the system disk now, and the disk this operation is
@@ -1466,7 +1484,6 @@ fm_s_fmtk:    db 'Enter=yes  Esc=no', 0
 fm_s_swap1:   db 'Insert the system disk in ', 0
 fm_s_swapd:   db 'A:', 0        ; stamped by dsk_bootltr like every other
                                 ; message that names the system volume
-fm_s_swap2:   db 'Insert the disk to format, then Enter', 0
 fm_s_swapk:   db 'Enter=ready  Esc=no', 0
 fm_s_swapno:  db 'Format needs disk '  ; ...and this one is a TOAST, so it is
 fm_s_swapnd:  db 'A:', 0        ; bounded by TOAST_MAX = 23 rather than by the
@@ -1476,20 +1493,31 @@ fm_s_swapnd:  db 'A:', 0        ; bounded by TOAST_MAX = 23 rather than by the
                                 ; Stamped, same rule as the two above it
 fm_swaptab:   dw 0, fm_s_swapno ; toast_say never uses index 0
 FM_NSWAP  equ 2
-fm_s_fmtk2:   db 'Spc=size  Enter=yes  Esc=no', 0   ; ...when there IS another
-                                    ; size to offer (rows 2 and 3 alone)
-fm_s_fmtok:   db 'Formatted ', 0    ; ...and the verdict, SPEC.md 59.6's own
-                                    ; reasoning: a format is seconds of floppy
-                                    ; the user waited for, so success speaks
-                                    ; rather than only failure
-fm_s_fmtbad:  db 'Made 360K, not 720K', 0   ; the OUTCOME, where this said the
-                                    ; cause first and the outcome last
-                                    ; ('Drive cannot reach 720K - made 360K')
-                                    ; and had 40 characters to do it in. What
-                                    ; the user has to know is which disk they
-                                    ; are now holding (SPEC.md 59.8)
-fm_fmtbadt:   dw 0, fm_s_fmtbad     ; toast_say never uses index 0, so a
-FM_NFMTBAD    equ 2                 ; one-message table is two slots (59.5)
+; --- what the cloner leaves behind (SPEC.md 2.8.6, 22.21) --------------------
+; **Its prompts are not here. They are in CLONE.DRV**, read out of the image
+; through CS by the composer that is also in it - which is what SPEC.md 2.8.6
+; is, and it is the difference between this feature costing the kernel ~200
+; bytes of `.text` forever and costing it these three lines.
+;
+; What could NOT go, and the reason is the same each time: something reads it
+; when the image is not there.
+;
+;   * the ERROR strings - `fm_clone_res` says them AFTER `fm_edit_end`, which
+;     is what drops the image, and four of the five are the FERR_* table's
+;     own anyway: the same failure said the same way (SPEC.md 22);
+;   * the MENU ITEM below - the bar is built when the user PRESSES it, which
+;     is the gesture that leads to loading.
+fm_s_clsml:   db 'Target too small', 0
+fm_s_defimg:  db 'DISK.IMG', 0      ; the Save box's default (SPEC.md 18.99.8)
+fm_s_notimg:  db 'Not a disk image', 0   ; ...a file whose length is not one of
+                                    ; the four standard floppies (SPEC.md
+                                    ; 18.99.8), which is the only validation
+                                    ; an exact image admits of
+fm_s_clsame2: db 'Pick another disk', 0  ; ...the image may not live on the
+                                    ; disk it is of (SPEC.md 18.99.8)
+fm_clotab:    dw fm_s_empty, fm_s_dskerr, fm_s_ewprot, fm_s_nomem
+              dw fm_s_enodisk, fm_s_clsml, fm_s_efull, fm_s_notimg
+              dw fm_s_clsame2
 fm_s_delq2:   db ' +contents? Del=yes Esc=no', 0   ; ...for a folder
 fm_s_size:    db 'Size ', 0         ; ...and the resting status line, which
 fm_s_free:    db '   Free ', 0      ; carries both figures (SPEC.md 22.7)
@@ -1546,6 +1574,16 @@ fm_s_pastin:  db 'Paste Into', 0
 fm_s_fsep:    db MENU_DIS, '--------------', 0
 fm_s_format:  db 'Format Disk...', 0
 fm_s_formatx: db MENU_DIS, 'Format Disk...', 0
+; Clone's twin is the SAME BYTES with one in front of them (SPEC.md 22.21):
+; a disabled item is MENU_DIS then the string, so the live label can be the
+; tail of the greyed one and the pair costs fourteen bytes rather than
+; twenty-eight. It is spelled as two labels over one `db` and not as
+; `fm_s_clonex equ fm_s_clone-1`, so that nothing between them can be
+; inserted without the arithmetic breaking visibly.
+fm_s_clonex:  db MENU_DIS
+fm_s_clone:   db 'Clone Disk...', 0
+fm_s_wimgx:   db MENU_DIS       ; ...and the same pair for the WRITE side
+fm_s_wimg:    db 'Write Img...', 0
 fm_s_refr:    db 'Refresh', 0
 fm_s_up:      db 'Up One Folder', 0
 fm_s_rootf:   db 'Root Folder', 0
@@ -1560,11 +1598,13 @@ fm_s_opennew: db 'Open in New Window', 0
 
 fm_items_file:
     dw fm_s_open, fm_s_mkdir, fm_s_rename, fm_s_delete
-    dw fm_s_fsep, fm_s_format   ; fm_bar_gate rewrites this last word
-FM_IFMT     equ 5               ; ...at this item index, which is also
-                                ; FMC_FORMAT - FMC_OPEN, and is written down
-                                ; once rather than being counted at the store
-FM_NFILE    equ 6               ; items in the File menu
+    dw fm_s_fsep, fm_s_format   ; fm_bar_gate rewrites these last three words
+    dw fm_s_clone, fm_s_wimg
+FM_IFMT     equ 5               ; ...at these item indices, which are also
+FM_ICLONE   equ 6               ; FMC_FORMAT/FMC_CLONE/FMC_WIMG - FMC_OPEN,
+FM_IWIMG    equ 7               ; and are written down once rather than being
+                                ; counted at the store
+FM_NFILE    equ 8               ; items in the File menu (MENU_POPMAX is 11)
 fm_items_edit:
     dw fm_s_cut, fm_s_copy, fm_s_paste
 fm_items_nav:
@@ -1835,7 +1875,10 @@ fm_bar_gate_x:
     push ax
     push bx
     push di
-    mov ax, fm_s_formatx        ; greyed unless every test below passes
+    mov ax, fm_s_formatx        ; greyed unless every test below passes -
+                                ; and Clone follows Format exactly, off ONE
+                                ; predicate, so the two can never disagree
+                                ; about one disk (SPEC.md 22.21)
     mov bx, [menu_win]
     or bx, bx
     jz .set                     ; Locator owns the bar: no window, no disk
@@ -1852,6 +1895,15 @@ fm_bar_gate_x:
     mov ax, fm_s_format
 .set:
     mov [fm_items_file + FM_IFMT*2], ax
+    mov ax, fm_s_clonex
+    mov di, fm_s_wimgx
+    cmp word [fm_items_file + FM_IFMT*2], fm_s_format
+    jne .setclone
+    mov ax, fm_s_clone
+    mov di, fm_s_wimg
+.setclone:
+    mov [fm_items_file + FM_ICLONE*2], ax
+    mov [fm_items_file + FM_IWIMG*2], di
     pop di
     pop bx
     pop ax
@@ -2313,6 +2365,12 @@ fm_sbset:
     mov ax, [fm_lscr]
     mov [os88ui_ksb+12], ax
     mov bx, os88ui_ksb
+%ifdef OS88UI_SBDRAG
+    call os88ui_sbfix           ; ...and while a thumb drag is live, word 6 is
+                                ; the HAND's pos rather than the view's
+                                ; (SPEC.md 13.10.5.6). One line here and no
+                                ; reader downstream knows a drag exists
+%endif
     pop ax
     ret
 
@@ -2386,6 +2444,24 @@ fm_onclick_x:
     push dx
     push di
 
+%ifdef OS88UI_SBDRAG
+    ; A PRESS CANNOT ARRIVE DURING A LIVE DRAG, so one that does means the
+    ; release never came (SPEC.md 13.10.5.7). Two ways for that: the event ring
+    ; was full, and ui_arm_chk then drops a region-0 arm WITHOUT dispatching
+    ; W_ONMOUSEUP; or the window went away between the two passes, which
+    ; .mup_pkg tests for and skips. Either leaves the drag byte set, and a set
+    ; byte is not inert - os88ui_sbfix would fix a stale pos into EVERY Disk
+    ; window's bar for the rest of the session, thumb and hit test alike. This
+    ; is the same shape ui_arm_chk itself is: the cheap test on the path that
+    ; proves the state is stale.
+    call os88ui_sbdragging
+    jc .nostale
+    mov bx, si
+    call fm_layout              ; preserves every register, CX/DX included
+    call fm_sbset
+    call os88ui_sbdrop          ; ...which takes the overlay off with it
+.nostale:
+%endif
     mov bx, si                  ; publish the clicked window BEFORE anything
     call fm_vp_set              ; reads or writes per-window state
 
@@ -2494,8 +2570,22 @@ fm_onclick_x:
     add dx, [fm_cy]
     call fm_sbset
     call os88ui_sbhit
+%ifdef OS88UI_SBDRAG
+    cmp al, OS88UI_SBTHUMB      ; SPEC.md 13.10.5: the thumb is DRAGGED here
+    jne .nograb                 ; now, where it used to page down. BX is still
+    mov al, FM_SBRATE           ; the block and DX still the press, absolute
+    call os88ui_sbgrab          ; CF = 1: no thumb to take after all, so the
+    mov al, OS88UI_SBTHUMB      ; ladder below pages exactly as it did
+    jc .nograb
+    mov al, 0xFF                ; taken: this click scrolls NOTHING yet - the
+.nograb:                        ; rate decides when the view follows (13.10.5.4)
+%endif
     pop dx
     pop cx
+%ifdef OS88UI_SBDRAG
+    cmp al, 0xFF
+    je .quiet                   ; ...and not one pixel outside the bar changed
+%endif
     cmp al, OS88UI_SBNONE
     je .rows                    ; not on the bar at all
     cmp al, OS88UI_SBUP
@@ -2630,6 +2720,20 @@ fm_onup_x:
     push dx
     push si
     push di
+%ifdef OS88UI_SBDRAG
+    call os88ui_sbdragging      ; SPEC.md 13.10.5: the release COMMITS, and it
+    jc .btn                     ; commits unconditionally - a position the rate
+    mov bx, si                  ; refused mid-drag is never lost, and a release
+    call fm_layout              ; that landed off the screen entirely still
+    call fm_sbset               ; ends the gesture (13.7's second rule).
+    call os88ui_sbdrop          ; fm_sbset FIRST: the overlay's erase reads the
+    jc .btn                     ; block's geometry. CF = 1 = the gesture was
+    sub ax, [fm_lscr]           ; the DIALOG's bar (13.10.5.10) - spent by the
+    call fm_scroll_by           ; call above, and this release is the button
+    jc .paint                   ; arm's
+    jmp short .out
+.btn:
+%endif
     call os88ui_fire            ; AX = what the press armed, and it is CLEARED
     or ax, ax
     jz .out
@@ -2686,6 +2790,23 @@ fm_ondrag_x:
     push dx
     push si
     push di
+%ifdef OS88UI_SBDRAG
+    call os88ui_sbdragging      ; SPEC.md 13.10.5: a live thumb drag owns this
+    jc .btn                     ; movement whole - a header button cannot also
+    mov bx, si                  ; be armed, but asking costs one compare and
+    call fm_layout              ; says so
+    call fm_sbset               ; BX = the block; DX is still the pointer's y
+    call os88ui_sbtrack         ; CF = 1: the thumb moved and the view is not
+    jc .out                     ; owed a thing yet (the rate, or the same row)
+    sub ax, [fm_lscr]           ; ...as a DELTA, which is what fm_scroll_by
+    call fm_scroll_by           ; takes (SPEC.md 22.11)
+    jc .drpaint                 ; 11.3's granularity refusal
+    jmp short .out
+.drpaint:
+    call fm_repaint             ; SI still = window ptr
+    jmp short .out
+.btn:
+%endif
     call os88ui_armed           ; PEEK: the arm is the release's to spend
     or ax, ax
     jz .out
@@ -2872,6 +2993,22 @@ fm_onkey_x:
                                 ; second press
 .edkey:
     call fm_editkey
+    cmp word [fdlg_win], 0
+    jne .out                    ; **THIS KEYSTROKE PUT A MODAL DIALOG UP**
+                                ; (SPEC.md 18.99.8/38.2), so everything it
+                                ; changed about this window is behind one now
+                                ; and drawing it would draw OVER the dialog -
+                                ; measured, as a Disk window repainted whole
+                                ; on top of a Save box it had just opened. A
+                                ; self-initiated repaint clips to the window
+                                ; and not to what is above it, which is right
+                                ; everywhere else because a window that has
+                                ; the keyboard is the window on top. The
+                                ; modal dialog is the one exception and this
+                                ; is the general test for it - no flag, and
+                                ; it cannot fire wrongly: a dialog that was
+                                ; already up would have taken this key
+                                ; (fdlg_top)
     jc .redraw                  ; it changed the listing or the mode
     call fm_status_only         ; ...otherwise the name being typed lives on
     jc .redraw                  ; the status line and that is ALL that moved.
@@ -3481,18 +3618,20 @@ FMC_FMTSEP  equ 4               ; the RULE between Delete and Format. It is a
                                 ; that entry is a bare `ret` because a body
                                 ; may not assume which surface picked it
 FMC_FORMAT  equ 5
-FMC_CUT     equ 6               ; Edit
-FMC_COPY    equ 7
-FMC_PASTE   equ 8
-FMC_NEWWIN  equ 9               ; Nav
-FMC_OPENNEW equ 10
-FMC_REFRESH equ 11
-FMC_UP      equ 12
-FMC_ROOT    equ 13
-FMC_DRVA    equ 14
-FMC_DRVB    equ 15
-FMC_LIST    equ 16              ; no menu CELL of its own since SPEC.md 22.15
-FMC_ICONS   equ 17              ; retired View: the context menu (fm_cxc_dir)
+FMC_CLONE   equ 6               ; SPEC.md 22.21, and the paragraph above is the
+FMC_WIMG    equ 7               ; licence for the renumber below it - twice
+FMC_CUT     equ 8               ; Edit
+FMC_COPY    equ 9
+FMC_PASTE   equ 10
+FMC_NEWWIN  equ 11              ; Nav
+FMC_OPENNEW equ 12
+FMC_REFRESH equ 13
+FMC_UP      equ 14
+FMC_ROOT    equ 15
+FMC_DRVA    equ 16
+FMC_DRVB    equ 17
+FMC_LIST    equ 18              ; no menu CELL of its own since SPEC.md 22.15
+FMC_ICONS   equ 19              ; retired View: the context menu (fm_cxc_dir)
                                 ; and the in-window toggle button are the two
                                 ; surfaces left, and both reach these BY NAME.
                                 ; Nothing renumbers - a base + item sum simply
@@ -3500,19 +3639,19 @@ FMC_ICONS   equ 17              ; retired View: the context menu (fm_cxc_dir)
                                 ; that produced it left fm_menu_base and every
                                 ; other base is a VALUE that did not move
                                 ; (SPEC.md 12.7's FMC_CLOSEW reasoning)
-FMC_TIMER   equ 18              ; Builtins (SPEC.md 12.3.1) - the same three
-FMC_BOUNCE  equ 19              ; commands Locator's own Builtins menu has,
-FMC_DISK    equ 20              ; in the same order. Restart is NOT among them
+FMC_TIMER   equ 20              ; Builtins (SPEC.md 12.3.1) - the same three
+FMC_BOUNCE  equ 21              ; commands Locator's own Builtins menu has,
+FMC_DISK    equ 22              ; in the same order. Restart is NOT among them
                                 ; any more: it moved to the System menu, which
                                 ; is cell 0 of every application, so a Disk
                                 ; window reaches it there like everything else
-FMC_PASTEIN equ 21              ; no menu CELL of its own: the context menu's
+FMC_PASTEIN equ 23              ; no menu CELL of its own: the context menu's
                                 ; "paste into the folder under the pointer"
                                 ; (SPEC.md 22.3), which the bar cannot offer
                                 ; because the bar has no pointer. It sits
                                 ; PAST every menu's range so no base + item
                                 ; sum can reach it by accident.
-FMC_COUNT   equ 22
+FMC_COUNT   equ 24
 
 ; --- how much of the acting window did the command change? (SPEC.md 22.13) ---
 ; fm_docmd stamps FMD_ALL before every dispatch, so a body that says nothing -
@@ -3551,6 +3690,11 @@ fm_jmp:
                                 ;         Refresh; arms the CONFIRM line, and
                                 ;         the disk is WRITTEN at Enter -
                                 ;         SPEC.md 22.12)
+    dw fm_c_clone               ; inline (ditto, and the WHOLE transfer is at
+                                ;         Enter too - SPEC.md 22.21.2)
+    dw fm_c_wimg                ; inline (opens the file dialog, which is what
+                                ;         fdlg_open exists to be called with
+                                ;         the lock held - SPEC.md 38.6)
     dw fm_c_cut                 ; inline (the clipboard is a memory write)
     dw fm_c_copy                ; inline (ditto)
     dw fm_c_paste               ; inline (disk I/O under the lock, like
@@ -3965,6 +4109,10 @@ fm_c_format:                    ; File > Format Disk... (SPEC.md 22.12)
     pop ax
     jnc fm_fmt_go
     mov byte [fm_fmtstep], 0    ; ...and if it could not: the swap prompt
+    mov byte [fm_swapwho], 0    ; on the FORMATTER's behalf (SPEC.md 22.21.4).
+                                ; .bss arrives as whatever was in memory, so
+                                ; both bytes are written by whoever arms the
+                                ; prompt rather than trusted from last time
     mov di, [fm_vp]
     mov al, 6
     jmp fm_edit_arm
@@ -4001,6 +4149,319 @@ fm_fmt_go:                      ; the image is here; the drive is the user's
     pop cx
     pop bx
 .no:
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_c_clone - File > Clone Disk... (SPEC.md 22.21)
+;
+; fm_c_format's shape, and deliberately: THE IMAGE COMES FIRST (SPEC.md 2.8.5),
+; before anything touches the drive, because what the operation is about is the
+; disk in it and the code is on the system disk. Where the two are one drive
+; the user is asked to swap; where they are not, or where CLONE.DRV is still
+; loaded from a previous clone, this is six compares and nothing is asked.
+; -----------------------------------------------------------------------------
+fm_c_clone:
+    mov di, [fm_vp]
+    call fm_fmt_ok              ; THE SAME predicate Format greys from - "this
+    jc .no                      ; window's volume is a BIOS floppy" is exactly
+                                ; what a clone needs too, so the two items can
+                                ; never disagree about one disk (SPEC.md 47
+                                ; rule 2)
+    push ax
+    mov al, MOD_CLONE
+    call mod_need
+    pop ax
+    jnc fm_clone_go
+    mov byte [fm_fmtstep], 0    ; ...and if it could not: the swap prompt,
+    mov byte [fm_swapwho], 1    ; asking for the system disk on the CLONER's
+    mov di, [fm_vp]             ; behalf (SPEC.md 22.21.4)
+    mov al, 6
+    jmp fm_edit_arm
+.no:
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_clone_go - the image is here; probe, plan and ask (SPEC.md 22.21)
+;
+; A label of its own because the swap prompt's second Enter arrives here too -
+; fm_fmt_go's reason exactly.
+; -----------------------------------------------------------------------------
+fm_clone_go:
+    ; A MOUNT and not an fmv_sync (SPEC.md 22.21.4). The user may have just
+    ; swapped a disk in for the module, and fmv_sync's "we are already
+    ; standing here" early-out compares (drive, cwd) - which have not moved -
+    ; and would hand the cloner the PREVIOUS disk's BPB as this one's
+    ; geometry. It may or may not mount, and both are cloneable: the whole
+    ; point of a sector copy is that the file system is never consulted.
+    mov di, [fm_vp]
+    mov al, [di+FS_DRV]
+    mov dx, [di+FS_CWD]
+    call fmv_load
+    mov di, [fm_vp]
+    mov al, [di+FS_DRV]
+    mov ah, [dsk_mntok]         ; ...and THE MOUNT'S OWN VERDICT, which is the
+                                ; global fmv_take records into FS_MOK: whether
+                                ; the BPB has already answered the geometry
+                                ; question (SPEC.md 18.99.5)
+    mov dl, CLV_START
+    call clo_call               ; CF=1 with AX = CERR_*; READS ONLY until the
+    jc fm_clone_bad             ; user agrees, so a refusal has changed nothing
+    mov di, [fm_vp]             ; - and the refusal's whole body is a `ret`
+    mov al, 7                   ;   away, so this is a tail jump
+    jmp fm_edit_arm
+
+; -----------------------------------------------------------------------------
+; fm_clone_bad - a cloner refusal, said and cleaned up (SPEC.md 22.21.2)
+; in:  AX = CERR_*
+; out: nothing; every register but AX preserved
+;
+; Shared by the two places a refusal can arrive before anything is armed -
+; fm_clone_go's probe and fm_img_done's Write Img (SPEC.md 18.99.8) - and it
+; is a proc rather than two copies because the SECOND copy is what made
+; kern_small's cold segment cross a rung (docs/KERNEL-MEMORY.md).
+; -----------------------------------------------------------------------------
+fm_clone_bad:
+    push bx                     ; a verdict about what just happened, so it is
+    push cx                     ; a toast (SPEC.md 59.5) - and nothing is
+    mov bx, fm_clotab           ; armed, so the window is left as it was
+    mov cx, CLO_NERR
+    call KERNEL_SEG:cw_toast_say
+    pop cx
+    pop bx
+    call clo_drop               ; ...and the image goes back HERE, because no
+    ret                         ; mode was armed and fm_edit_end will therefore
+                                ; never be reached with one to drop it from
+                                ; (SPEC.md 2.8.3)
+
+; -----------------------------------------------------------------------------
+; fm_clone_res - a clone ENDED: say what happened and re-list (SPEC.md 22.21.3)
+; in:  AL = CLA_DONE / CLA_STOP / CLA_ERR, AH = CERR_* when it is CLA_ERR,
+;      BL/BH = the source and target volumes when it is CLA_DONE; gfx lock
+;      held, [fm_vp] published
+; out: nothing; the mode is ended and the acting window owes a full repaint
+;
+; **fm_edit_end FIRST, before the re-list**, because that is what frees the
+; cloner's claim and drops its image (SPEC.md 22.21.2) - and what follows is a
+; mount, which wants the heap back.
+; -----------------------------------------------------------------------------
+fm_clone_res:
+    push cx
+    push dx
+    push si
+    push di
+    push ax                     ; the outcome and its code...
+    push bx                     ; ...both banked across a teardown that spends
+    cmp al, CLA_DONE            ; every register it likes
+    jne .noverdict
+    mov di, fm_hdrbuf           ; 'Cloned A: to B:' is staged WHILE THE IMAGE
+    mov al, 2                   ; IS STILL LOADED (SPEC.md 22.21.3), which is
+    mov dl, CLV_LINE            ; before fm_edit_end below and therefore before
+    call clo_call               ; the drop. fm_hdrbuf is free by now and
+.noverdict:                     ; toast_show copies out of it
+    call fm_edit_end            ; ...and THIS is what frees the claim and drops
+    pop bx                      ; CLONE.DRV (SPEC.md 2.8.3)
+    pop ax
+    cmp al, CLA_STOP
+    je .out                     ; the user said it, so nothing is said back:
+                                ; a verdict is a report of what happened, and
+                                ; nothing did (SPEC.md 59.5)
+    push ax
+    push bx
+    cmp al, CLA_DONE
+    jne .relist                 ; a half-cloned target is still a changed
+    mov al, bh                  ; volume, so an error re-lists too. On success
+    call fm_fmt_home            ; every window on the TARGET goes to its root:
+                                ; its FS_CWD names a cluster on a disk that no
+                                ; longer exists. A same-drive clone has one
+                                ; volume, so this call covers both ends
+.relist:
+    mov di, [fm_vp]
+    mov al, [di+FS_DRV]
+    xor dx, dx
+    call fmv_load
+    push si
+    xor si, si                  ; 'Disk' is the one name fm_settitle can always
+    call fm_settitle            ; derive, and the volume is a new one now
+    pop si
+    pop bx
+    pop ax
+    cmp al, CLA_DONE
+    je .said
+    push bx                     ; CLA_ERR: AH is the code, and four of the six
+    push cx                     ; strings are the FERR_* table's own
+    mov al, ah
+    mov bx, fm_clotab
+    mov cx, CLO_NERR
+    call KERNEL_SEG:cw_toast_say
+    pop cx
+    pop bx
+    jmp short .out
+.said:
+    push cx                     ; SPEC.md 59.6's reasoning at its strongest: a
+    push es                     ; clone is minutes of floppy the user stood
+    mov ax, KERNEL_SEG          ; over, sometimes with a swap in the middle, so
+    mov es, ax                  ; the success is worth saying and not only the
+    mov si, fm_hdrbuf           ; failure. NOT `push cs`: this is `.cold`
+    xor cx, cx                  ; (SPEC.md 2.6), so CS here is COLD_SEG and
+    call KERNEL_SEG:cw_toast_show   ; the buffer is KERNEL_SEG
+    pop es
+    pop cx
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_c_wimg - File > Write Img... (SPEC.md 18.99.8)
+;
+; The one command in this file that starts with a DIALOG. There is nothing to
+; probe first: the disk in the drive is about to be overwritten, so what it
+; currently holds is not a question worth asking, and the geometry to write
+; with comes from the IMAGE rather than from the platter. So the first thing
+; that happens is "which file", and everything else is decided in the
+; completion proc.
+;
+; **CLONE.DRV is not loaded here**, and that is deliberate: a cancelled dialog
+; calls nothing back (SPEC.md 38.2 - fdlg_close, no commit), so an image
+; loaded on this side would be left resident with nothing to drop it. The
+; completion proc loads it, which costs a disk read the user is already
+; standing over.
+; -----------------------------------------------------------------------------
+fm_c_wimg:
+    mov di, [fm_vp]
+    call fm_fmt_ok              ; the same predicate Format and Clone grey
+    jc .no                      ; from - a BIOS floppy, and nothing else
+    push ax
+    push bx
+    push si
+    push di
+    call fmv_winof              ; BX = this block's window; CF=1 = no live
+    jc .nowin                   ; record owns it, which fdlg_open would refuse
+    mov di, fm_img_done         ; THE RESIDENT THUNK, not the body: wm_pkgcall
+                                ; dispatches a kernel window's completion proc
+                                ; as a near call in KERNEL_SEG (SPEC.md 38.6),
+                                ; and this file is `.cold`. drv_dlg_done is
+                                ; armed the same way for the same reason
+    xor si, si                  ; no default name: SPEC.md 38.10's remembered
+    xor al, al                  ; one is the better answer here
+    call fdlg_open_x            ; near - fdlg.inc is `.cold` too
+    mov byte [fm_cmdchg], FMD_NONE  ; ...and NOT ONE PIXEL of this window is
+.nowin:                         ; owed: what changed is a modal dialog that
+                                ; drew itself, and a repaint would land on top
+                                ; of it (SPEC.md 22.13)
+    pop di
+    pop si
+    pop bx
+    pop ax
+.no:
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_img_done - the file dialog answered (SPEC.md 18.99.8)
+; in:  AL = 0 the OPEN form (Write Img) / 1 the SAVE form (Clone to an image),
+;      DX:CX = the chosen file's size, [fdlg_name] = the name. The gfx lock is
+;      held and the dialog is already down; the FILE's volume is mounted and
+;      its folder is current, which is what the dialog left behind and what
+;      both halves below depend on.
+; out: nothing
+;
+; ONE completion proc for both, because the MODE tells them apart and only one
+; dialog can ever be up (SPEC.md 38.2). A cancelled dialog does not arrive
+; here at all.
+; -----------------------------------------------------------------------------
+fm_img_done_x:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, si                  ; SI = the REQUESTER window, fdlg_commit's
+    call fm_vp_set              ; contract (SPEC.md 38.6) - and [fm_vp] is
+                                ; re-aimed at ITS view FIRST, because the
+                                ; dialog's teardown repaints whatever sat
+                                ; under it BEFORE this callback runs, and any
+                                ; Disk window's W_PAINT republishes [fm_vp]:
+                                ; with two Disk windows open it could name
+                                ; the WRONG one here
+    push cx                     ; **THE SIZE, BANKED**: the copy below spends
+    push dx                     ; CX as a counter, and DX:CX is the only thing
+                                ; that says which floppy this file is a
+                                ; picture of (SPEC.md 18.99.8). Without this
+                                ; a 720KB image arrives as 13 bytes and is
+                                ; refused as 'Not a disk image'
+    mov si, fdlg_name           ; the name goes where the file API can read it
+    mov di, clo_fnbuf           ; (SPEC.md 18.99.8): DS-relative, resident, and
+    mov cx, 13                  ; the one thing about this feature that is not
+.cp:                            ; in the image
+    mov bl, [si]                ; mov/inc, never movsb: wm_pkgcall does not
+    mov [di], bl                ; point ES anywhere for a KERNEL window's
+    or bl, bl                   ; callback - it is the PACKAGE path that does
+    jz .named                   ; (SPEC.md 38.6)
+    inc si
+    inc di
+    loop .cp
+    mov byte [di], 0
+.named:
+    pop dx                      ; ...and the size back
+    pop cx
+    or al, al
+    jnz .save
+
+    ; --- the OPEN form: Write Img ------------------------------------------
+    push ax
+    mov al, MOD_CLONE
+    call mod_need               ; loaded HERE, not before the dialog: a cancel
+    pop ax                      ; never comes back to drop it
+    jc .nodrv
+    mov di, [fm_vp]
+    mov al, [di+FS_DRV]
+    mov bx, dx                  ; **BX:CX, NOT DX:CX** - DL is the verb, and
+    mov dl, CLV_WIMG            ; writing it over the size's high half turns
+    call clo_call               ; 737,280 into 344,064 and refuses a perfectly
+                                ; good 720KB image as 'Not a disk image'.
+                                ; Measured, exactly that way round
+    jc .bad
+    mov di, [fm_vp]
+    mov al, 7                   ; ...and the confirmation, in the cloner's own
+    call fm_edit_arm            ; mode (SPEC.md 22.21.1)
+    jmp short .paint            ; ...drawn by the shared tail below
+
+    ; --- the SAVE form: Clone Disk, with an image as the target -------------
+    ; The prompt is still armed and the claim is still live - the dialog was
+    ; opened from inside CLV_KEY and nothing has ended the mode - so this is
+    ; the same operation resuming, and it runs to completion here.
+.save:
+    mov dl, CLV_SAVED
+    call clo_call               ; AL = CLA_*, exactly as a keystroke answers
+    call fm_clone_res
+
+    ; ONE tail, and it is a REPAINT for both halves. Nothing here can get
+    ; away with less: fdlg_commit destroys the dialog before it calls back
+    ; (SPEC.md 38.6), so what this window owes is the rectangle the dialog was
+    ; covering - which is the whole of it or none of it, and 11.3's
+    ; granularity refusal answers that the same way a mount does. The prompt
+    ; the OPEN half just armed rides along in it.
+.paint:
+    mov di, [fm_vp]
+    call fmv_winof              ; SI = the window, which nothing here had put
+    jc .out                     ; there
+    mov si, bx
+    call fm_repaint
+    jmp short .out
+.nodrv:
+    mov ax, CERR_NODISK
+.bad:
+    call fm_clone_bad           ; AX = CERR_*; nothing is armed, so the window
+.out:                           ; is left exactly as it was
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 fm_c_cut:                       ; File > Cut - the selection, onto the
@@ -4430,6 +4891,11 @@ fm_editkey:
     mov di, [fm_vp]
     cmp byte [di+FS_EDIT], 4
     je .replace
+    cmp byte [di+FS_EDIT], 7
+    je .clone                   ; the cloner (SPEC.md 22.21.2), and the ONE
+                                ; place in this file it is answered: four
+                                ; prompts, one FS_EDIT value, and the step
+                                ; lives in the cloner's own claim
     cmp byte [di+FS_EDIT], 6
     je .swap                    ; the disk-swap prompt (SPEC.md 2.8.5)
     cmp byte [di+FS_EDIT], 5
@@ -4502,7 +4968,8 @@ fm_editkey:
     mov al, ah
     call fcp_answer             ; AL = FCPS_* on the way back
     call fm_paste_res
-    jmp short .out
+    jmp .out                    ; NEAR: the clone's branch (SPEC.md 22.21.2)
+                                ; sits between here and the tail now
 
     ; Format's confirmation takes ONE key the other two do not: Space offers
     ; the other row with the same media sectors-per-track (SPEC.md 18.96).
@@ -4522,10 +4989,53 @@ fm_editkey:
     pop ax                      ; from, so the two cannot disagree
     jc .confirm                 ; nothing to offer: Space still means no
     xor byte [fm_fmtrow], 1
-    jmp short .lineonly         ; the size on the line IS [fm_fmtrow], so the
+    jmp .lineonly               ; the size on the line IS [fm_fmtrow], so the
                                 ; redraw is the one a typed rename character
                                 ; already takes - nothing else on the window
                                 ; moved
+    ; The clone (SPEC.md 22.21.2). THE TRANSFER HAPPENS INSIDE clo_call:
+    ; Enter on the source prompt IS the read pass and Enter on the target
+    ; prompt IS the identity check and the write pass, so a keystroke here can
+    ; be a minute of frozen machine with SPEC.md 12.8's bar on it. That is the
+    ; same side of the gfx lock every other file operation in this module is
+    ; already on, and the same one Format's own Enter is on.
+    ;
+    ; CLA_LINE is `.lineonly` - CF = 0, "the prompt changed and the window did
+    ; not" - for a keystroke that may have just moved 360KB, and it is right
+    ; for Format's Space's reason: the LISTING did not move.
+.clone:
+    mov dl, CLV_KEY
+    call clo_call               ; AL = CLA_*, AH = CERR_*, BL/BH = the volumes
+    cmp al, CLA_SAVE
+    je .clone_save
+    cmp al, CLA_LINE
+    jne .clone_end
+    jmp .lineonly               ; NEAR: three prompts' worth of code sits
+.clone_end:                     ; between here and it
+    call fm_clone_res           ; the verdict, the re-home and the re-list -
+    jmp .out                    ; and fm_edit_end inside it is what frees the
+                                ; claim and drops the image (SPEC.md 2.8.3)
+
+    ; The image target wants a NAME (SPEC.md 18.99.8), and the dialog is
+    ; opened from HERE rather than from inside the image: fdlg_open fences on
+    ; a live owned window and dispatches a kernel window's completion proc as
+    ; a near call in KERNEL_SEG, and a module can be neither of those things.
+    ;
+    ; The mode stays armed across it. A cancelled dialog calls nothing back
+    ; (SPEC.md 38.2), so what the user comes back to is the pick prompt they
+    ; left - where Space still offers the drives and Esc still cancels.
+.clone_save:
+    push si
+    call fmv_winof              ; BX = the window this block belongs to; DI is
+    jc .clone_savex             ; the block, which is what fm_editkey holds
+    mov si, fm_s_defimg
+    mov di, fm_img_done
+    mov al, 1                   ; the SAVE form
+    call fdlg_open_x            ; CF=1 is refused - a dialog already up, which
+.clone_savex:                   ; cannot happen from a keystroke this window
+    pop si                      ; owns. The prompt is left as it was either
+    jmp .out                    ; way, which is the right answer for both
+
 .swap:
     ; Enter advances a step and anything else abandons the whole operation -
     ; mode 5's asymmetry, for mode 5's reason. Step 0 asks for the system disk
@@ -4536,13 +5046,24 @@ fm_editkey:
     cmp byte [fm_fmtstep], 0
     jne .swapgo
     push ax
-    mov al, MOD_FMT
+    mov al, MOD_FMT             ; ...or the CLONER's, which is the whole of
+    cmp byte [fm_swapwho], 0    ; what SPEC.md 22.21.4 costs this prompt: one
+    je .swapneed                ; byte and one branch, rather than a second
+    mov al, MOD_CLONE           ; mode every ladder in this file would have to
+.swapneed:                      ; learn about
     call mod_need               ; the system disk is in NOW - or it is not
     pop ax
     jc .swapno
+    cmp byte [fm_swapwho], 0
+    jne .swapclone              ; the cloner asks for its OWN disks itself, so
+                                ; there is no second step for it
     mov byte [fm_fmtstep], 1
     mov al, 6                   ; re-arm the same mode; only the line changes
     jmp .swaparm
+.swapclone:
+    mov byte [fm_fmtstep], 1    ; ...and the cloner wants its own step 1 for
+    mov al, 6                   ; the formatter's reason: the disk in the
+    jmp .swaparm                ; drive is the SYSTEM disk now
 .swapno:
     push bx                     ; it still could not be read: say which disk
     push cx                     ; and leave the window as it was (SPEC.md 59)
@@ -4554,8 +5075,13 @@ fm_editkey:
     pop bx
     jmp short .cancelfull
 .swapgo:
-    call fm_edit_end            ; the prompt is spent; fm_fmt_go arms the
-    call fm_fmt_go              ; confirmation, or toasts an unreadable medium
+    call fm_edit_end            ; the prompt is spent; each of these arms its
+    cmp byte [fm_swapwho], 0    ; own prompt, or toasts what it could not read
+    jne .swapgoc
+    call fm_fmt_go
+    jmp .out
+.swapgoc:
+    call fm_clone_go
     jmp .out
 .swaparm:
     call fm_edit_arm
@@ -4595,6 +5121,10 @@ fm_editkey:
     je .cancelfull
     cmp byte [di+FS_EDIT], 6    ; the swap prompt is two lines too
     je .cancelfull
+                                ; ...and mode 7 is not tested here at all,
+                                ; deliberately: clo_call answers Esc itself
+                                ; (SPEC.md 22.21.2), so the clone's prompts
+                                ; never reach this ladder
     call fm_edit_end
 .lineonly:
     clc                         ; CF = 0: the typed name is ON the status line
@@ -4772,16 +5302,16 @@ fm_edit_commit:
     ; this is just the tidier order now - the verdict after the work.
     pop ax                      ; ...the banked verdict
     or al, al
-    jnz .fmtfell                ; it could not reach 720K and made 360K
-    mov al, [di+FS_DRV]
-    add al, 'A'
-    mov ah, al                  ; banked: fm_scat spends AL and not AH
-    mov di, fm_hdrbuf           ; borrowed - toast_show COPIES into toast_buf,
-    mov si, fm_s_fmtok          ; and the painter stages this afresh later
-    call fm_scat
-    mov [di], ah
-    mov byte [di+1], ':'
-    mov byte [di+2], 0
+    mov ah, [di+FS_DRV]         ; the WINDOW's drive, which is what the image
+    mov di, fm_hdrbuf           ; letters (SPEC.md 2.8.6) - borrowed, because
+                                ; toast_show COPIES into toast_buf and the
+                                ; painter stages this afresh later
+    mov al, 2                   ; 'Formatted B:'...
+    jz .fmtsay
+    mov al, 4                   ; ...or 'Made 360K, not 720K' (SPEC.md 18.96.2)
+.fmtsay:
+    call dskw_fmt_line          ; and THIS is before .done's fm_edit_end, so
+                                ; the image is still loaded
     push cx
     push es
     mov ax, KERNEL_SEG          ; NOT `push cs`: this is `.cold` (SPEC.md
@@ -4791,16 +5321,6 @@ fm_edit_commit:
     call KERNEL_SEG:cw_toast_show
     pop es
     pop cx
-    jmp short .bcast
-.fmtfell:                       ; ...the OTHER verdict (SPEC.md 18.96.2), said
-    push bx                     ; here for 22.12.1's reason, which since 59.8
-    push cx                     ; is an ordering rather than a requirement
-    mov al, 1
-    mov bx, fm_fmtbadt
-    mov cx, FM_NFMTBAD
-    call KERNEL_SEG:cw_toast_say
-    pop cx
-    pop bx
     jmp short .bcast
 .del:
     call fmv_sync_x
@@ -4873,7 +5393,7 @@ fm_drag:
     mov [fm_startx], cx
     mov [fm_starty], dx
     mov byte [fm_dgon], 0
-    cmp byte [mou_seen], 0      ; ...but there is nothing to disambiguate with
+    cmp byte [mou_ptr], 0       ; ...but there is nothing to disambiguate with
     je .click                   ; no mouse on the machine (SPEC.md 9.6.1). The
                                 ; keyboard's button is latched for the whole
                                 ; W_ONCLICK dispatch and the pointer cannot
@@ -4888,7 +5408,14 @@ fm_drag:
     call KERNEL_SEG:cw_evq_pop
     jc .noev
     cmp word [ui_ev + EV_TYPE], EVT_MUP
-    jne .wait
+    je .wclick                  ; anything else is DISCARDED - and a discard
+    call KERNEL_SEG:cw_wm_wake_eaten ; owes the wake bookkeeping (74.1.1): DI
+    jmp short .wait             ; is still the record. This drain and .track's
+                                ; were the two 1f1bd7e missed - far calls the
+                                ; wakedrain lint could not see - and a drag
+                                ; here during an FTP transfer deafened the
+                                ; server's window for the session
+.wclick:
     jmp .click
 .noev:
     test byte [mouse_btn], 1
@@ -4938,8 +5465,9 @@ fm_drag:
     call KERNEL_SEG:cw_evq_pop
     jc .nomup
     cmp word [ui_ev + EV_TYPE], EVT_MUP
-    jne .track
-    jmp short .drop
+    je .drop                    ; the discard owes the wake bookkeeping
+    call KERNEL_SEG:cw_wm_wake_eaten ; (74.1.1), exactly as .wait's above
+    jmp short .track
 .nomup:
     test byte [mouse_btn], 1    ; the fallback ui_drag documents: a dropped
     jz .drop                    ; EVT_MUP still ends the drag by level
@@ -5499,12 +6027,31 @@ fm_edit_end:
     ; rename or delete ending costs a compare. fm_edit_arm calls this too, so
     ; without the gate arming the confirmation would drop the image the probe
     ; had just loaded and the status line would read it back off the floppy.
-    cmp byte [di+FS_EDIT], 5
-    je .fmtgone
-    cmp byte [di+FS_EDIT], 6
-    jne .clrit
+    cmp byte [di+FS_EDIT], 7
+    je .clonegone               ; ...and a CLONE ending is where its claim and
+    cmp byte [di+FS_EDIT], 5    ; CLONE.DRV both go back (SPEC.md 22.21.2),
+    je .fmtgone                 ; here for the same reason and in the same
+    cmp byte [di+FS_EDIT], 6    ; order: CLV_FREE before the drop, because
+    jne .clrit                  ; dropping first frees the code that frees
+                                ; the claim
+    cmp byte [fm_swapwho], 0    ; mode 6 serves TWO modules (SPEC.md 22.21.4)
+    je .fmtgone                 ; and a cancel owes the one that was ASKED FOR
+    cmp byte [fm_fmtstep], 0    ; the cloner's: step 1 means the step-0 Enter
+    je .clrit                   ; loaded CLONE.DRV - dropping MOD_FMT here
+    jmp short .clonegone        ; instead left its 4KB claim resident forever.
+                                ; Step 0 loaded NOTHING, and .clonegone's
+                                ; clo_call would LOAD the module to free it
 .fmtgone:
     call fm_fmt_drop
+    jmp short .clrit
+.clonegone:
+    push ax
+    push dx
+    mov dl, CLV_FREE
+    call clo_call
+    call clo_drop
+    pop dx
+    pop ax
 .clrit:
     mov byte [di+FS_EDIT], 0
     add di, FS_SIZE
@@ -6118,8 +6665,8 @@ fm_more_mark:
 fm_2line:
     cmp al, 4
     jb .no
-    cmp al, 6
-    ja .no
+    cmp al, 7                   ; 4..7: replace, format, the module swap and
+    ja .no                      ; the clone (SPEC.md 22.21.1)
     stc
     ret
 .no:
@@ -6829,6 +7376,11 @@ fm_draw_status:
     je .fs_st_fmt
     cmp al, 6
     je .fs_st_swap              ; the disk-swap prompt (SPEC.md 2.8.5)
+    cmp al, 7
+    je .fs_st_clone             ; the cloner's four (SPEC.md 22.21.1), all of
+                                ; which the IMAGE composes: the ladder is
+                                ; code and the strings are data, so this is
+                                ; the half that can leave
     mov si, fm_s_newfld
     cmp al, 1
     je .fs_st_prompt
@@ -6862,54 +7414,47 @@ fm_draw_status:
     ; naming it: dskw_fmt_probe cannot always tell 360K media from
     ; 720K in a 1.2MB drive, and this line is the one place the user can
     ; catch that before it costs them anything.
+    ; "Format A: as 720K?" over "Spc=size  Enter=yes  Esc=no" (SPEC.md 22.12),
+    ; the replace question's own two-line shape - and EVERY BYTE OF BOTH LINES
+    ; IS IN FORMAT.DRV (SPEC.md 2.8.6), which is where the strings went with
+    ; the code that letters them. The image is loaded by construction: the
+    ; confirmation was armed by a probe that loaded it and is taken down by
+    ; the fm_edit_end that drops it.
 .fs_st_fmt:
-    push bx
-    mov si, fm_s_fmtpr
-    cmp byte [fm_lmok], 0       ; it mounted: name the ERASURE (22.12)
-    je .fs_fmtpr
-    mov si, fm_s_fmtpr2
-.fs_fmtpr:
-    call fm_scat
-    mov al, [fm_ldrv]
-    add al, 'A'
-    mov [di], al
-    inc di
-    mov si, fm_s_fmtas
-    call fm_scat
-    mov al, [fm_fmtrow]
-    call dskw_fmt_row           ; SI = the row it is about to write
-    mov ax, [si+DFMT_KB]
-    call fm_utoa
-    pop bx
-    mov si, fm_s_fmtq
-    call fm_scat
-    mov byte [di], 0            ; line one, in the row area - the replace
-    mov dx, [fm_cy]             ; question's own shape (22.3), and the reason
-    add dx, [fm_staty]          ; fm_stat_line is a proc rather than the tail
-    sub dx, FM_STAT2_DY         ; of fm_draw_status
+    xor al, al                  ; line one, in the row area
+    call dskw_fmt_line
+    mov dx, [fm_cy]
+    add dx, [fm_staty]
+    sub dx, FM_STAT2_DY
     call fm_stat_row
     mov di, fm_hdrbuf           ; ...and line two, the answers, where every
-    mov si, fm_s_fmtk           ; other status line goes
-    push ax
-    mov al, [fm_ldrv]
-    call fm_fmt_sizeable        ; ...and the key is named only where it does
-    pop ax                      ; something (SPEC.md 18.96.2)
-    jc .fs_stat
-    mov si, fm_s_fmtk2
-    jmp short .fs_stat
+    mov al, 1                   ; other status line goes
+    call dskw_fmt_line
+    jmp .fs_stat_drawn
 .fs_st_swap:
     ; The swap prompt (SPEC.md 2.8.5): the row above says which disk is wanted
     ; and the status line says the keys, which is the format question's own
     ; two-line shape. [fm_fmtstep] picks the first line, so one mode does both
     ; halves and no ladder in this file gained a second value to know about.
-    mov si, fm_s_swap2
     cmp byte [fm_fmtstep], 0
-    jne .fs_swapl
+    je .fs_swap0
+    cmp byte [fm_swapwho], 0    ; step 1 names the disk the OPERATION is about,
+    jne .fs_swapc               ; and BOTH images are loaded by the time it is
+    mov al, 3                   ; up - step 0 is the one that exists because
+    call dskw_fmt_line          ; they are not (SPEC.md 2.8.6). Each says it
+    jmp short .fs_swaprow       ; out of its own strings
+.fs_swapc:
+    mov al, 3                   ; ...and the clone's is its source disk, which
+    mov dl, CLV_LINE            ; is the same line CLS_SRC uses (SPEC.md
+    call clo_call               ; 22.21.4). Both leave DI on the NUL, exactly
+    jmp short .fs_swaprow       ; as fm_scat would have
+.fs_swap0:
     mov si, fm_s_swap1
     call fm_scat
     mov si, fm_s_swapd          ; ...the drive letter, stamped
 .fs_swapl:
     call fm_scat
+.fs_swaprow:
     mov byte [di], 0
     mov dx, [fm_cy]
     add dx, [fm_staty]
@@ -6918,6 +7463,26 @@ fm_draw_status:
     mov di, fm_hdrbuf
     mov si, fm_s_swapk
     jmp .fs_stat
+
+    ; The clone's prompts (SPEC.md 22.21.1), in the two-line shape the replace
+    ; question and the format confirmation already use. Which of the four is
+    ; up is CL_STEP, inside the cloner's own claim, so this branch is the same
+    ; six instructions whichever it is - and CLONE.DRV is loaded by
+    ; construction, the prompt having been armed after mod_need and dropped
+    ; with fm_edit_end.
+.fs_st_clone:
+    xor al, al                  ; line one, in the row area
+    mov dl, CLV_LINE
+    call clo_call
+    mov dx, [fm_cy]
+    add dx, [fm_staty]
+    sub dx, FM_STAT2_DY
+    call fm_stat_row
+    mov di, fm_hdrbuf           ; ...and line two, the keys, where every other
+    mov al, 1                   ; status line goes
+    mov dl, CLV_LINE
+    call clo_call
+    jmp short .fs_stat_drawn
 
 .fs_st_del:
     mov si, fm_s_delpr          ; "Delete NAME? Del=yes Esc=no", or
@@ -7272,6 +7837,13 @@ fm_cmdchg:  resb 1              ; FMD_*: how much of the acting window the
                                 ; described one of its values rather than
                                 ; what it held, which is the shape SPEC.md
                                 ; 48.22.1 is about
+fm_swapwho: resb 1              ; mode 6 serves TWO modules now (SPEC.md
+                                ; 22.21.4): 0 = the formatter, 1 = the
+                                ; cloner. Written by whichever command armed
+                                ; the prompt and read by its one Enter, so
+                                ; there is no state to go stale - and one byte
+                                ; against a second FS_EDIT value that four
+                                ; ladders in this file would have to know
 fm_fmtstep: resb 1              ; the swap prompt's step (SPEC.md 2.8.5):
                                 ; 0 = the system disk is wanted, 1 = the disk
                                 ; to be formatted. Not per window for
@@ -7368,6 +7940,14 @@ section .cold                   ; far entries (SPEC.md 2.6): the resident
 fmf_files_init:         call files_init_x
                     retf
 fmf_fm_bar_gate:        call fm_bar_gate_x
+                    retf
+; ...and one an on-demand MODULE calls rather than the kernel (SPEC.md 2.8.6):
+; FORMAT.DRV letters its own confirmation now and needs a decimal formatter to
+; do it. Six resident bytes against a second copy of real code in the image,
+; which is the one place that trade goes the other way.
+fmf_fm_img_done:        call fm_img_done_x
+                    retf
+fmf_fm_utoa:            call fm_utoa
                     retf
 fmf_files_open:         call files_open_x
                     retf

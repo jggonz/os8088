@@ -282,13 +282,16 @@ wm_init:
     mov word [wm_fs], 0         ; no fullscreen window (SPEC.md 11.2); .bss
                                 ; is never zeroed at boot, so this is not
                                 ; redundant
-    xor ax, ax                  ; the close negotiators and the two words of
-    mov di, wm_oncl             ; SPEC.md 75.2's request (contiguous in .bss).
-    mov cx, MAX_WIN*2 + 4       ; UNLIKE wm_onwk and wm_onsz above, these ARE
-    rep stosb                   ; read before any wm_create writes them:
-                                ; wm_ask_close asks EVERY window on its way
-                                ; out, handler or not, and wm_close_pass reads
-                                ; [wm_clreq] on the machine's first UI pass
+    xor ax, ax                  ; the close negotiators, the right-click
+    mov di, wm_oncl             ; handlers and the two words of SPEC.md 75.2's
+    mov cx, MAX_WIN*4 + 4       ; request (contiguous in .bss). UNLIKE wm_onwk
+    rep stosb                   ; and wm_onsz above, these ARE read before any
+                                ; wm_create writes them: wm_ask_close asks
+                                ; EVERY window on its way out, handler or not,
+                                ; ui_rdown reads wm_onrc for every frontmost
+                                ; window a right press lands on (SPEC.md
+                                ; 13.11), and wm_close_pass reads [wm_clreq]
+                                ; on the machine's first UI pass
     pop es
     pop di
     pop cx
@@ -2499,6 +2502,57 @@ wm_clh_slot:
     ret
 
 ; -----------------------------------------------------------------------------
+; wm_onrclick - install (or clear) a window's RIGHT-CLICK handler (SPEC.md
+;               13.11, slot OSAPI_WM_ONRCLICK)
+; in:  BX = window ptr, AX = near ptr in the window's OWN segment, 0 to clear
+; out: nothing (all registers preserved)
+;
+; wm_onwake's shape and reason - a SIDE TABLE, not a word in the record,
+; because WIN_SIZE is the stride every reader of a window pays and growing it
+; costs every existing .o88 a rebuild. Cleared by wm_destroy, so a reused slot
+; never inherits a stranger's near pointer, and by wm_init, because like
+; wm_oncl this word is read for a window that never installed anything.
+;
+; It is in kern_small too: a side table is 24 bytes of .bss and the dispatch
+; is a word read on a path that today does nothing at all for a package
+; window - the record-growing that made SPEC.md 13.8.2 and 13.9 kern_big's
+; alone is exactly what this does not do.
+;
+; The FLAGS are preserved as well, which wm_onwake does not promise and
+; wm_onclose does: this is installed from an entry proc, where the CF a
+; package owes the loader is still riding in them (SPEC.md 21), and
+; wm_ptr2idx's div writes them.
+; -----------------------------------------------------------------------------
+wm_onrclick:
+    pushf
+    push si
+    call wm_rch_slot
+    mov [si], ax
+    pop si
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_rch_slot - SI -> this window's right-click handler word (module internal)
+; in:  BX = window ptr
+; out: SI = wm_onrc + index*2; every other register preserved
+; clobbers: flags
+;
+; wm_clh_slot's answer plus the distance between the two tables, rather than a
+; second copy of the index arithmetic: they are adjacent in .bss and declared
+; adjacent on purpose (wm_init zeroes them in one run), so the distance is a
+; constant NASM computes. kern_small had 68 bytes of image rung left before
+; this feature and has 1 after it, which is the whole reason five bytes were
+; worth writing down - and is the number the next change here has to beat.
+; -----------------------------------------------------------------------------
+wm_rch_slot:
+    push ax                     ; wm_clh_slot spends it; the caller's AX is
+    call wm_clh_slot            ; the handler being installed
+    pop ax
+    add si, wm_onrc - wm_oncl
+    ret
+
+; -----------------------------------------------------------------------------
 ; wm_ask_close - put the close to the window before it happens (SPEC.md 75.1)
 ; in:  BX = window ptr; the caller HOLDS the gfx lock and is the UI task
 ; out: CF = 1 the window REFUSED and nothing may be torn down; CF = 0 go
@@ -2672,7 +2726,20 @@ wm_wkh_slot:
 ; mouse. The flag is per SLOT (wm_wkq), set here and cleared by wm_wake_disp
 ; BEFORE the handler runs, so a handler that re-posts itself gets exactly one
 ; more record.
+;
+; **THE FLAG AND THE RECORD ARE ONE FACT, AND A DRAIN CAN BREAK THEM APART**
+; (SPEC.md 74.1.1). Four loops pop records they are not interested in and
+; throw them away - ui_drag and ui_grow drain everything that is not an
+; EVT_MUP, fsx and snd empty the ring outright - and an EVT_WAKE eaten there
+; used to leave this flag set with no record behind it. The window is then
+; DEAF FOR THE REST OF ITS LIFE: every wm_wake after it reads "one is already
+; queued" and answers CF=0, a promise nothing will ever keep. So the flag has
+; three states and every drain calls wm_wake_eaten.
 ; -----------------------------------------------------------------------------
+WKQ_NONE    equ 0               ; nothing owed
+WKQ_RING    equ 1               ; ...owed, and the record is in the ring
+WKQ_EATEN   equ 2               ; ...owed, and a drain ate the record
+
 wm_wake:
     push ax
     push si
@@ -2680,15 +2747,15 @@ wm_wake:
     mov si, ax
     pushf
     cli
-    cmp byte [wm_wkq+si], 0
-    jne .queued                 ; one is already in the ring: same promise
+    cmp byte [wm_wkq+si], WKQ_RING
+    je  .queued                 ; one is already in the ring: same promise.
+                                ; **`je 1`, NOT `jne 0`** - WKQ_EATEN is the
+                                ; state where the promise is owed and the
+                                ; record is GONE, and that one has to post
     mov ax, [evq_count]
     cmp ax, EVQ_CAP
     jae .full                   ; evq_push would drop it silently; say so
-    mov byte [wm_wkq+si], 1
-    mov byte [wm_wkany], 1      ; ...and arm the idle backstop (wm_wake_sweep):
-                                ; the ring can lose this record to any of the
-                                ; drains that pop everything but what they want
+    mov byte [wm_wkq+si], WKQ_RING
     mov word [wm_wk_rec+EV_TYPE], EVT_WAKE
     mov [wm_wk_rec+EV_A], bx
     mov si, wm_wk_rec
@@ -2703,6 +2770,82 @@ wm_wake:
 .out:
     pop si
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_wake_eaten - a drain threw a record away; if it was a wake, say so
+; in:  DI = the record evq_pop just filled
+; out: nothing. EVERY register preserved, because every caller is a loop that
+;      is in the middle of deciding something else.
+;
+; Called by all four drains (SPEC.md 74.1.1). It is cheap on the common path -
+; one word compare - and it is what keeps wm_wkq honest: the flag drops from
+; WKQ_RING to WKQ_EATEN, which is "still owed, no record", and wm_wake_redo
+; puts a fresh record in the ring the moment the drain's owner is done.
+;
+; A wake for a window that has since died is marked all the same: wm_wake_redo
+; posts it, wm_wake_disp sees a free record and calls nothing. That is the
+; existing "a wake for the dead" path and it costs one ring slot, once.
+; -----------------------------------------------------------------------------
+wm_wake_eaten:
+    cmp word [di+EV_TYPE], EVT_WAKE
+    jne .out
+    push ax
+    push bx
+    push si
+    mov bx, [di+EV_A]
+    call wm_ptr2idx             ; AL = index (AH = 0)
+    mov si, ax
+    cmp byte [wm_wkq+si], WKQ_RING
+    jne .pop                    ; not ours to downgrade: a stale record for a
+                                ; slot already re-promised, or already eaten
+    mov byte [wm_wkq+si], WKQ_EATEN
+    mov byte [wm_wkdef], 1      ; ...and the one byte ui_task tests per pass
+.pop:
+    pop si
+    pop bx
+    pop ax
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_wake_redo - put back every wake a drain ate. Called once per ui_task pass
+; out: nothing. Every register preserved.
+;
+; NOT called from inside a drain: re-posting there would be popped and eaten
+; again by the same loop, and with nothing else in the ring that is a spin
+; rather than a recovery. The right moment is the top of the pass AFTER the
+; drag, resize, full-screen app or sound bracket has finished - which is here,
+; and is why the wake is only ever DELAYED by one of those and never lost.
+; -----------------------------------------------------------------------------
+wm_wake_redo:
+    cmp byte [wm_wkdef], 0
+    je  .out                    ; the whole cost on every other pass
+    push ax
+    push bx
+    push cx
+    push si
+    mov byte [wm_wkdef], 0
+    xor si, si
+    mov cx, MAX_WIN
+.l:
+    cmp byte [wm_wkq+si], WKQ_EATEN
+    jne .n
+    mov byte [wm_wkq+si], WKQ_NONE  ; ...so wm_wake below really posts
+    mov ax, si
+    call wm_idx2ptr             ; BX = the window record
+    call wm_wake
+    jnc .n
+    mov byte [wm_wkq+si], WKQ_EATEN ; the ring was full: still owed, and the
+    mov byte [wm_wkdef], 1          ; next pass tries again
+.n:
+    inc si
+    loop .l
+    pop si
+    pop cx
+    pop bx
+    pop ax
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2736,63 +2879,6 @@ wm_wake_disp:
                                 ; carried and meaningless here
 .out:
     ret
-
-; -----------------------------------------------------------------------------
-; wm_wake_sweep - deliver a wake whose RECORD was drained by somebody else
-; in:  nothing; the UI task's idle section (evq_pop said EMPTY), NO lock held
-; out: nothing (all registers preserved)
-;
-; THE FLAG IS THE PROMISE, NOT THE RECORD - and this is what makes that true.
-; wm_wake's coalescing flag says "a wake is owed to this slot"; it is cleared
-; by wm_wake_disp and by wm_destroy, and by nothing else. But EVT_WAKE rides
-; the one event ring, and six places in this kernel drain that ring of
-; everything that is not the record they are waiting for: ui_drag's .track and
-; ui_grow's, fm_dgstart's .wait and .track (files.inc), snd's click-abort drain
-; and fsx_restore's - plus evq_init in blk_pass. Any of them can swallow a
-; package's wake. The flag then stands for ever, so wm_wake answers "one is
-; already in the ring: same promise" (CF=0) to every later post and NOTHING is
-; ever delivered again: an emulator's slice driver simply stops being driven,
-; with no error anywhere and no user input able to restart it, because a
-; package's kick from os88_onkey/os88_onclick posts through the same flag.
-; That was a launch from a file-manager window - fm_dgstart's drag-detect drain
-; - stopping RUNCPM's Z80 and the C64's 6510 dead.
-;
-; So the ring is an OPTIMISATION for delivering the promise, and this is the
-; backstop: when the ring is empty every promise in it has been kept or lost,
-; and a slot whose flag is still set is one that was lost. One byte of hint
-; (wm_wkany) keeps the idle path at ONE compare - the scan runs only after a
-; post has happened at all, and clears the hint when it finds nothing owed.
-; The hint is cleared BEFORE the scan, so a post landing during it re-arms
-; rather than being erased by it.
-;
-; A wake delivered here that the ring was ALSO about to deliver is one extra
-; wake, which SPEC.md 74.1 already requires every handler to tolerate ("it is
-; a KICK, not a message").
-; -----------------------------------------------------------------------------
-; It CLOBBERS what wm_wake_disp clobbers and saves nothing, because its one
-; caller is ui_task's .empty arm - the same arm .wake calls wm_wake_disp bare
-; from, and both jump straight to .yield.
-; -----------------------------------------------------------------------------
-wm_wake_sweep:
-    cmp byte [wm_wkany], 0
-    je .out                     ; nothing has posted since the last clean scan
-    mov byte [wm_wkany], 0      ; BEFORE the scan (see above)
-    xor bx, bx
-    mov si, wm_wins
-.scan:
-    cmp byte [wm_wkq+bx], 0
-    jne .found
-    add si, WIN_SIZE
-    inc bx
-    cmp bx, MAX_WIN
-    jb .scan
-.out:
-    ret
-.found:
-    mov byte [wm_wkany], 1      ; a second owed slot may be behind this one:
-                                ; the next idle pass scans again and clears
-    jmp wm_wake_disp            ; tail call: SI = the window. It clears the
-                                ; flag, then calls the handler
 
 ; -----------------------------------------------------------------------------
 ; wm_ask_size - put a proposed size to the window before committing it
@@ -3340,6 +3426,11 @@ wm_destroy:
                                 ; a jump into the middle of its image
     mov word [wm_onwk+si], 0    ; ...and its wake handler (SPEC.md 74.1), the
                                 ; same rule a third time
+    mov word [wm_onrc+si], 0    ; ...and its right-click handler (SPEC.md
+                                ; 13.11), which ui_rdown reads for every
+                                ; frontmost window a right press lands on -
+                                ; so a stale one is a far call into a new
+                                ; tenant's image, exactly as below
     mov word [wm_oncl+si], 0    ; ...and its close negotiator (SPEC.md 75.1),
                                 ; a fourth - and here the rule is sharper than
                                 ; elsewhere, because wm_ask_close reads this
@@ -10452,21 +10543,23 @@ wm_onwk:    resw MAX_WIN            ; per-slot WAKE handler offset, 0 = none
 wm_oncl:    resw MAX_WIN            ; per-slot CLOSE negotiator offset, 0 = none
                                     ; (SPEC.md 75.1); wm_onwk's shape and reason
                                     ; a fourth time
+wm_onrc:    resw MAX_WIN            ; per-slot RIGHT-CLICK handler offset, 0 =
+                                    ; none (SPEC.md 13.11); the same shape a
+                                    ; fifth time, and inside wm_init's zero run
+                                    ; below for wm_oncl's reason: ui_rdown reads
+                                    ; this word for EVERY frontmost window a
+                                    ; right press lands on, handler or not
 wm_clreq:   resw 1                  ; the window a package asked to have closed
                                     ; (SPEC.md 75.2), 0 = none. ONE, because the
                                     ; request is spent on the next UI pass and
                                     ; nothing can queue a second inside one
 wm_clask:   resw 1                  ; the window whose negotiator is running
                                     ; RIGHT NOW, 0 = none: the re-entry fence
-wm_wkq:     resb MAX_WIN            ; per slot: 1 = a wake is OWED to this window
-                                    ; (wm_wake coalesces on it). Normally that
-                                    ; means the record is in the ring; when
-                                    ; something drained the ring it means the
-                                    ; record is gone and wm_wake_sweep owes the
-                                    ; delivery
-wm_wkany:   resb 1                  ; 1 = at least one wake has been posted since
-                                    ; the last clean sweep. The hint that keeps
-                                    ; the idle backstop at one compare
+wm_wkq:     resb MAX_WIN            ; per slot: WKQ_NONE / WKQ_RING (a record is
+                                    ; in the ring) / WKQ_EATEN (a drain took
+                                    ; the record; wm_wake_redo owes one back)
+wm_wkdef:   resb 1                  ; ...1 = at least one slot is WKQ_EATEN, so
+                                    ; ui_task's per-pass check is ONE compare
 wm_wk_rec:  resb EVQ_RECSIZE        ; the one wake record, filled under cli
 wm_owner:   resb MAX_WIN            ; instance index owning each window slot
                                     ; (SPEC.md 29), 0xFF = unowned; NOT part

@@ -43,6 +43,21 @@
 
 %include "os88api.inc"
 
+; SPEC.md 13.10.5's thumb GESTURE, and it SHIPS (13.10.7);
+; `make SBDRAGOFF=1` compiles it out.
+;
+; **AT THE TOP, NOT BESIDE THE %include THAT PULLS os88ui.inc IN.** A %ifdef is
+; a PREPROCESSOR test answered in FILE ORDER, and that include sits ~10,000
+; lines below here - so a define made down there is not made yet at the window
+; entry, the setter, the bar ladder or the two edge handlers, and every one of
+; those blocks vanishes while the element's drag body assembles perfectly.
+; The binary grows, nothing errors, and the thumb simply does not move
+; (SPEC.md 13.10.7.4). kernel.asm carries the identical note for the identical
+; reason.
+%ifndef SBDRAGOFF
+%define OS88UI_SBDRAG
+%endif
+
     OS88_HEADER 'NOTEPAD', np_entry, 1
 
 ; --- embedded 16x16 icon (SPEC.md 20.2, flags bit 0) ---------------------------
@@ -217,6 +232,18 @@ NP_SB_W      equ 14             ; scroll bar width, the Disk window's
                                 ; count, which depends on the wrap width,
                                 ; which would depend on the bar
 NP_SB_ARR    equ 11             ; ...and the arrow cells at each end of it
+%ifdef OS88UI_SBDRAG
+; THIS WINDOW'S THUMB-DRAG POLICY (SPEC.md 13.10.5.4). RATE 0: a scroll here
+; ends in np_redraw, which re-letters every row the view moved past, and
+; PERFORMANCE.md prices a row of text in tens of milliseconds on a 4.77 MHz
+; 8088 - so a view that followed the hand would be seconds behind it. The
+; thumb follows; the text arrives when the button comes up.
+%ifndef SB_RATE
+%define SB_RATE 0
+%endif
+NP_SBRATE   equ SB_RATE
+%endif
+
 NP_SB_STEP   equ 4              ; rows an arrow cell steps. The Disk window
                                 ; steps one, but its rows are 16px list
                                 ; entries and these are 8px lines of prose:
@@ -405,6 +432,21 @@ np_entry:
                                     ; to open at content x = 61 there, skew 5,
                                     ; which typebench prices at 9.4% of every
                                     ; keystroke (SPEC.md 11.94)
+%ifdef OS88UI_SBDRAG
+    pushf                           ; THE ENTRY STILL OWES THE LOADER
+                                    ; wm_create's CF, and OSAPI_WM_ONDRAG
+                                    ; STATES a flag of its own (SPEC.md
+                                    ; 13.8.2) - so the two installs go inside
+                                    ; a pushf exactly as the CPU_INFO block
+                                    ; below does
+    mov ax, np_onup                 ; SPEC.md 13.7 / 13.8.2: the release and
+    call OSAPI_WM_ONMOUSEUP         ; the tracking edge, both AFTER wm_create
+    mov ax, np_ondrag               ; and neither a template word
+    call OSAPI_WM_ONDRAG
+    sbb al, al                      ; CF = 1 on kern_small: 0xFF into the byte
+    mov [np_nodrag], al             ; the grab site tests
+    popf
+%endif
     mov ax, np_onclose              ; SPEC.md 75.1: the kernel asks before it
     call OSAPI_WM_ONCLOSE           ; closes us, and a note with unsaved work
                                     ; answers. A side table, so this goes here
@@ -611,10 +653,23 @@ np_sbset:
     mov ax, [np_top]
     mov [np_sb+12], ax
     mov bx, np_sb
+%ifdef OS88UI_SBDRAG
+    call os88ui_sbfix           ; ...and while a thumb drag is live, word 6 is
+%endif                          ; the HAND's row rather than the view's
+                                ; (SPEC.md 13.10.5.6)
     pop ax
     ret
 
 np_sb:      dw 0,0,0,0,0,0,0
+np_sbmoved: db 0                ; np_sbclick's SECOND answer (SPEC.md 27.7.10):
+                                ; CF says the bar took the click, this says
+                                ; whether the VIEW moved because of it
+%ifdef OS88UI_SBDRAG
+np_nodrag:  db 0                ; 0xFF = this kernel has no tracking edge
+                                ; (SPEC.md 13.8.2 - kern_small answers CF = 1),
+                                ; so the thumb stays inert there rather than
+                                ; taking a gesture nothing will ever feed
+%endif
 
 np_sbar:
     push ax
@@ -635,15 +690,38 @@ np_sbar:
 ; -----------------------------------------------------------------------------
 np_sbcheck:
     push ax
-    mov ax, [np_top]
-    cmp ax, [np_sbtop]
-    jne .draw
+    push bx
     mov ax, [np_drows]
     cmp ax, [np_sbrows]
-    je .out
-.draw:
+    jne .full                       ; the TOTAL moved, so the thumb's HEIGHT
+    mov ax, [np_top]                ; did: only a full draw can resize it
+    cmp ax, [np_sbtop]
+    je .out                         ; neither moved: draw nothing at all
+%ifdef OS88UI_SBDRAG
+    call os88ui_sbdragging          ; ...unless the hand is on the thumb, in
+    jnc .full                       ; which case it is drawn where the HAND is
+                                    ; and not at [np_sbtop] (SPEC.md 13.10.5.6)
+                                    ; - so the "where it was" this needs is not
+                                    ; the one banked here, and the full draw is
+                                    ; the one that is right either way
+%endif
+    call np_sbset                   ; BX = the block, holding the NEW pos...
+    mov ax, [np_sbtop]              ; ...and this is where the thumb is DRAWN
+    call os88ui_sbmove              ; THREE drawing calls against the bar's
+                                    ; sixteen (SPEC.md 13.10.3): a scroll moves
+                                    ; neither total nor fit, so the frame, both
+                                    ; rules, both arrow glyphs and all of the
+                                    ; track the thumb did not cover are exactly
+                                    ; where they were. ~10 ms a scroll on the
+                                    ; target machine, and this app scrolls on
+                                    ; every arrow key
+    mov ax, [np_top]
+    mov [np_sbtop], ax
+    jmp short .out
+.full:
     call np_sbar
 .out:
+    pop bx
     pop ax
     ret
 
@@ -685,6 +763,7 @@ np_sbclick:
     push ax
     push bx
     push dx
+    mov byte [np_sbmoved], 0        ; ...until something actually moves
     call np_sbhit
     jc .no
     mov bx, dx                      ; BX = the click's y
@@ -704,6 +783,14 @@ np_sbclick:
     je .pageup
     cmp al, OS88UI_SBPGDN
     je .pagedn
+%ifdef OS88UI_SBDRAG
+    cmp al, OS88UI_SBTHUMB          ; SPEC.md 13.10.5: the thumb is DRAGGED
+    jne .yes                        ; now, where it was inert. BX is still the
+    cmp byte [np_nodrag], 0         ; block and DX still the press, absolute
+    jne .yes
+    mov al, NP_SBRATE
+    call os88ui_sbgrab              ; CF = 1 = no thumb after all; either way
+%endif                              ; this click scrolls nothing
     jmp short .yes                  ; the thumb itself, or an inert track
 .lineup:
     mov ax, [np_top]
@@ -739,7 +826,9 @@ np_sbclick:
     call np_height
     pop si
 .doset:
-    call np_scrollto
+    call np_scrollto                ; CF = 1: an END STOP - it did not move,
+    jc .yes                         ; so there is nothing to draw
+    mov byte [np_sbmoved], 1
 .yes:
     clc
     jmp short .out
@@ -750,6 +839,60 @@ np_sbclick:
     pop bx
     pop ax
     ret
+
+%ifdef OS88UI_SBDRAG
+; -----------------------------------------------------------------------------
+; np_ondrag / np_onup - the thumb gesture's other two edges (SPEC.md 13.10.5)
+; in:  CX = x, DX = y (ABSOLUTE), SI = window ptr; gfx lock held
+; out: nothing; preserves all registers
+;
+; One body with two names and one difference - track against drop - because
+; everything either of them has to do before and after that call is the same.
+; The release COMMITS unconditionally (13.10.5.4): a position the rate refused
+; is never lost.
+;
+; np_bounds first, because the block's rect and both of its counts come from
+; the live window record and this app is resizable.
+; -----------------------------------------------------------------------------
+np_ondrag:
+    push ax
+    push bx
+    push cx
+    push dx
+    call os88ui_sbdragging
+    jc np_sbd_out
+    call np_bounds
+    call np_sbset               ; BX = the block; DX is still the pointer's y
+    call os88ui_sbtrack         ; CF = 1: nothing owed - the rate, or the same
+    jc np_sbd_out               ; row
+    jmp short np_sbd_go
+np_onup:
+    push ax
+    push bx
+    push cx
+    push dx
+    call os88ui_sbdragging
+    jc np_sbd_out
+    call np_bounds
+    call np_sbset
+    call os88ui_sbdrop
+    jc np_sbd_out
+np_sbd_go:                      ; FLAT labels and not `.go`/`.out`: the two
+                                ; entries share one tail, and a local label
+                                ; belongs to whichever non-local one preceded
+                                ; it - so np_ondrag's `.out` and np_onup's are
+                                ; two different symbols and only one of them
+                                ; exists
+    call np_scrollto            ; AX = the row the hand is on, SI = the window
+    jc np_sbd_out               ; an end stop: not one pixel changes
+    call np_redraw
+np_sbd_out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
 
 ; =============================================================================
 ; Scrolling the PIXELS (SPEC.md 27.7.2)
@@ -4536,6 +4679,18 @@ np_hmove:
 np_onclick:
     push ax
     push dx
+%ifdef OS88UI_SBDRAG
+    call os88ui_sbdragging      ; A PRESS CANNOT ARRIVE DURING A LIVE DRAG, so
+    jc .nostale                 ; one that does means the release never came
+    push cx                     ; (SPEC.md 13.10.5.7)
+    push dx
+    call np_bounds
+    call np_sbset
+    call os88ui_sbdrop          ; ...which takes the overlay off with it
+    pop dx
+    pop cx
+.nostale:
+%endif
     mov [np_hitx], cx
     mov [np_hity], dx
     mov word [np_wanty], 0xFFFF
@@ -4562,6 +4717,16 @@ np_onclick:
     call np_sbclick                 ; ...and the scroll bar is not the note
     jc .text
     pop dx
+    ; **A CLICK THE BAR TOOK IS NOT A CLICK THAT SCROLLED** (SPEC.md 27.7.10).
+    ; np_sbclick answers CF = 0 for every press that landed on the bar, and
+    ; this used to send all of them to np_redraw - so a press on the THUMB, or
+    ; an arrow click already at an end stop, repainted the whole note to show
+    ; the pixels that were already there. On a maximized window that is every
+    ; visible row lettered: reported from the field as half a second to a
+    ; second of dead time before a dragged thumb would move, which is exactly
+    ; what it is.
+    cmp byte [np_sbmoved], 0
+    je .out                         ; not one pixel changed
     call OSAPI_EVQ_PENDING          ; is another click right behind this one?
     or ax, ax                       ; then this scroll position is already
     jz .drawscroll                  ; superseded and drawing it is work the
@@ -10348,6 +10513,10 @@ np_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
 ; relies on.
 ; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
 %define OS88UI_SCROLL           ; SPEC.md 13.10: the shared scroll bar
+                                ; OS88UI_SBDRAG is NOT defined here - it is at
+                                ; the TOP of this file, and SPEC.md 13.10.7.4
+                                ; says why in one sentence: this line is 10,000
+                                ; lines below the %ifdefs that read it
 %define OS88UI_ALERT            ; ...and SPEC.md 75.3's alert, which is a
                                 ; PACKAGE's and not the kernel's - a windowed
                                 ; dialog has a floor of ~800 bytes wherever it

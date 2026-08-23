@@ -114,6 +114,15 @@ HIW_MINSEC   equ 4096           ; 2MB in sectors
 ; large costs a compare.
 HIA_VMAX     equ 16
 
+; How deep the copy walks, counting the root as level 0 (SPEC.md 52.10.13).
+; It is the size of hd_icopy_tree's explicit level stack and therefore a real
+; bound: a folder deeper than this is REFUSED BY NAME rather than skipped,
+; because a walk that silently stops copying is the defect this depth exists
+; to fix. The deepest folder any disk in this tree carries is RUNCPM/A/0 on
+; the combined apps floppy (SPEC.md 74.6) at three levels below the root, and
+; six is that with room for a user's own disk.
+HIW_DEPTH    equ 6
+
 HII_IDLE     equ 0
 HII_ARMED    equ 1
 HII_SYSDONE  equ 2
@@ -1640,6 +1649,9 @@ hd_inst_sys:
 %endif
     call hd_inst_mount
     jc .failed
+    call hd_ilvl_root           ; ...which stands at the ROOT of both volumes,
+                                ; and hd_icopy_one stands where the level stack
+                                ; says (SPEC.md 52.10.13)
     mov si, hd_s_kernel         ; KERNEL.SYS FIRST and alone, before the walk:
     call hd_icopy_one           ; SPEC.md 52.10.2 needs it at cluster 2
     jc .failed
@@ -2183,14 +2195,15 @@ hd_iapps_find:
     jmp short hd_iapps_scan
 
 ; -----------------------------------------------------------------------------
-; hd_isrc / hd_isrc_sub / hd_idst / hd_idst_sub - stand somewhere (internal)
+; hd_isrc / hd_idst - stand in the ROOT of one volume or the other (internal)
 ;
 ; A driver has no folder of its own and uses the machine's (SPEC.md 19.2.1),
 ; so these move the GLOBAL volume and every file call afterwards resolves
 ; there. Each is a REMOUNT, which is why the copy is structured to make as
 ; few of them as it can - one per file, not one per chunk.
 ; -----------------------------------------------------------------------------
-; ALL FOUR TAKE THE QUIET GOTO (SPEC.md 19.2.2), and the reason they may is
+; They and their level-stack twins hd_isrc_here / hd_idst_here (SPEC.md
+; 52.10.13) ALL TAKE THE QUIET GOTO (SPEC.md 19.2.2), and the reason they may is
 ; that nothing in this file ever SHOWS a folder: it reads and writes by name,
 ; and OSAPI_FILE_FIND walks raw directory sectors (dsk_find) rather than the
 ; mount listing. So the directory scan, the sort and the icon harvest a full
@@ -2216,24 +2229,18 @@ hd_iapps_find:
 ; mount there would leave the global listing empty with [dsk_lstale] owed for
 ; whatever they do next. Quiet inside the loop, full at the boundary.
 ; hd_iapps_find's probe keeps it too - it runs once, so it buys nothing.
+;
+; There were four of these: hd_isrc_sub and hd_idst_sub stood in THE folder,
+; singular, which is all a one-level walk ever had to name. The level stack
+; replaced them with hd_isrc_here / hd_idst_here, which stand in whichever
+; folder the walk is in - and cluster 0 is a root to OSAPI_FILE_GOTO, so those
+; two subsume these as well.
 hd_isrc:
     push ax
     push bx
     push dx
     mov bl, [hd_isrcdrv]        ; the source is where the user was: A: on a
     xor dx, dx                  ; one-floppy machine, at its ROOT
-    call OSAPI_FILE_GOTO_Q      ; QUIET (SPEC.md 19.2.2)
-    pop dx
-    pop bx
-    pop ax
-    ret
-
-hd_isrc_sub:
-    push ax
-    push bx
-    push dx
-    mov bl, [hd_isrcdrv]
-    mov dx, [hd_isubc]
     call OSAPI_FILE_GOTO_Q      ; QUIET (SPEC.md 19.2.2)
     pop dx
     pop bx
@@ -2252,25 +2259,28 @@ hd_idst:
     pop ax
     ret
 
-hd_idst_sub:
-    push ax
-    push bx
-    push dx
-    mov bl, [hd_idrv]
-    mov dx, [hd_idsubc]
-    call OSAPI_FILE_GOTO_Q      ; QUIET (SPEC.md 19.2.2)
-    pop dx
-    pop bx
-    pop ax
-    ret
-
 ; -----------------------------------------------------------------------------
-; hd_icopy_tree - the current source volume's root, and one folder level
+; hd_icopy_tree - the source volume's tree, folders and folders inside them
 ;
-; Root files, then one level of folders, which is what os88disk.py builds and
-; what both shipped disks are (SPEC.md 19.2). Deeper nesting is NOT walked and
-; that is a stated limit rather than an oversight: this runs on the UI task's
-; stack and open recursion is how you overrun one.
+; ITERATIVE, over an explicit stack of at most HIW_DEPTH levels (SPEC.md
+; 52.10.13). It was two hand-unrolled loops - the root's files, then one level
+; of folders and THEIR files - and the thing that shape could not say is "a
+; folder inside a folder". SYSTEM/APPDATA (SPEC.md 19.9) is exactly that, and
+; it is EMPTY, so an install produced a machine on which every application's
+; own state folder was missing: each one kept its settings in memory and said
+; nothing, which is the tolerant behaviour SPEC.md 19.9 asks for and reads as
+; "preferences do not stick on a hard-disk machine". SYSTEM/DOS/OS88NET.COM
+; (SPEC.md 62) went the same way with no error anywhere.
+;
+; THE RECURSION THOSE TWO LOOPS WERE AVOIDING IS STILL AVOIDED, and that was
+; the right instinct: this runs on the UI task's stack (SPEC.md 20.6) and open
+; recursion is how you overrun one. A descent here pushes six bytes onto three
+; arrays and a return pops them, so the stack depth is the same at level 5 as
+; at level 0 and the bound is a number rather than a hope.
+;
+; Level 0 is the ROOT of both volumes: cluster 0 is what OSAPI_FILE_GOTO takes
+; for a root, so the root is an ordinary level and nothing below here carries a
+; special case for it.
 ; -----------------------------------------------------------------------------
 hd_icopy_tree:
     push ax
@@ -2279,59 +2289,101 @@ hd_icopy_tree:
     push dx
     push si
     push di
-    xor cx, cx
-    mov [hd_iord], cx
+    call hd_ilvl_root
 .entry:
-    call hd_isrc                ; back to the source root: the copy moved us
-    jc .fail
-    mov cx, [hd_iord]
+    call hd_isrc_here           ; back to THIS level's folder on the source:
+    jc .fail                    ; the copy moved us
+    call hd_ilvl_bx
+    mov cx, [hd_iordv+bx]
     push es
     push cs
     pop es
     mov di, hd_ient
-    call OSAPI_FILE_FIND        ; the walk is stateless and this is all of its
-    pop es                      ; state (SPEC.md 19.7.1)
-    jc .done                    ; FERR_NOENT: the end of the directory
-    mov [hd_iord], cx
+    call OSAPI_FILE_FIND        ; the walk is stateless and the ordinal is all
+    pop es                      ; of its state (SPEC.md 19.7.1)
+    jc .up                      ; FERR_NOENT: the end of THIS directory
+    call hd_ilvl_bx
+    mov [hd_iordv+bx], cx
     mov ax, [hd_ient+14]
     cmp ax, OSAPI_FT_UP
     je .entry                   ; the synthesized '..' is not ours to copy
     cmp ax, OSAPI_FT_DIR
-    je .folder                  ; ...and anything else is a file, package or
-                                ; not: this loop had that right and the
-                                ; sub-folder one did not
-    mov si, hd_ient             ; ...and NEITHER IS KERNEL.SYS, which
-    mov di, hd_s_kernel         ; hd_inst_sys has already written FIRST so
-    call hd_iname_same          ; that it lands on cluster 2 (SPEC.md
-    jc .entry                   ; 52.10.2). Copying it again is a REPLACE: it
-                                ; allocates a fresh chain at the end of the
+    je .folder                  ; ...and anything BELOW FT_DIR is a file,
+                                ; package or not. The sub-folder loop this
+                                ; replaces asked `cmp ax, OSAPI_FT_PKG`, which
+                                ; is type 1 - a PACKAGE - so one level down
+                                ; only *.O88 was copied and MEDIA/BEVERLY.MOD
+                                ; was silently left behind (SPEC.md 19.7.1)
+    cmp byte [hd_ilvl], 0
+    jne .file                   ; ...and NEITHER IS KERNEL.SYS IN THE ROOT,
+    mov si, hd_ient             ; which hd_inst_sys has already written FIRST
+    mov di, hd_s_kernel         ; so that it lands on cluster 2 (SPEC.md
+    call hd_iname_same          ; 52.10.2). Copying it again is a REPLACE: it
+    jc .entry                   ; allocates a fresh chain at the end of the
                                 ; volume and frees the one at the front, so
                                 ; the kernel ended up at cluster 40 with
                                 ; MEDIA sitting on cluster 2 - a volume that
                                 ; is perfectly good and cannot be booted,
                                 ; because the boot sector reads a flat run
                                 ; from the start of the data area rather than
-                                ; walking a chain
+                                ; walking a chain.
+                                ;
+                                ; IN THE ROOT, because the root is where the
+                                ; one it wrote went. The test was implicitly
+                                ; root-only when only the root loop ran it;
+                                ; now that one loop walks every level it has
+                                ; to say so, or a user's own KERNEL.SYS in a
+                                ; folder of their own would be skipped for
+                                ; sharing a name with the kernel
+.file:
     mov si, hd_ient
     call hd_icopy_one
     jc .failm                   ; it named the FILE; do not talk over it
-    jmp short .entry
+    jmp .entry
 .folder:
+    mov al, [hd_ilvl]           ; is there room to go down? The stack is a
+    inc al                      ; real bound and this is where it binds
+    cmp al, HIW_DEPTH
+    jae .deep
     mov ax, [hd_ient+16]
-    mov [hd_isubc], ax          ; its cluster on the SOURCE, for the descent
-    call hd_idst
+    mov [hd_ichildc], ax        ; its cluster on the SOURCE, for the descent
+    mov si, hd_ient             ; ...and bank its NAME, because hd_ient is
+    mov di, hd_iname2           ; rewritten by the lookup below and by every
+    mov cx, 13                  ; file underneath it
+    call hd_iname_copy
+    call hd_idst_here           ; stand in the PARENT on the destination...
     jc .fail
-    mov si, hd_ient
-    call OSAPI_FILE_MKDIR       ; make it on the destination (SPEC.md 18.5.1)
+    mov si, hd_iname2
+    call OSAPI_FILE_MKDIR       ; ...and make it there (SPEC.md 18.5.1)
     jc .mkchk
 .mkok:
-    call hd_icopy_sub
-    jc .failm                   ; ...and so may this, one level down
-    jmp short .entry
+    call hd_idst_child          ; AX = where it landed. LOOKED UP rather than
+    jc .fail                    ; remembered, because a re-install finds one
+                                ; that already exists - and looked up once per
+                                ; FOLDER now, where hd_idst_findsub paid for
+                                ; the same scan once per FILE
+    inc byte [hd_ilvl]          ; ...and down
+    push ax
+    call hd_ilvl_bx
+    pop ax
+    mov [hd_idstc+bx], ax
+    mov ax, [hd_ichildc]
+    mov [hd_isrcc+bx], ax
+    xor ax, ax
+    mov [hd_iordv+bx], ax
+    jmp .entry
 .mkchk:
     cmp ax, FERR_EXIST          ; a re-install finds its own folders: that is
     je .mkok                    ; not a failure, it is the second time
     jmp short .fail
+.up:
+    cmp byte [hd_ilvl], 0       ; the end of a folder is a RETURN to its
+    je .done                    ; parent, whose own ordinal is already one
+    dec byte [hd_ilvl]          ; past the entry we came in through
+    jmp .entry
+.deep:
+    mov word [hd_imsg], hd_s_ideep  ; SPEC.md 52.10.13: a folder we cannot
+    jmp short .failm                ; walk is NAMED, not walked past
 .done:
     clc
     jmp short .out
@@ -2364,65 +2416,30 @@ hd_icopy_tree:
     ret
 
 ; -----------------------------------------------------------------------------
-; hd_icopy_sub - the FILES of one folder (module internal)
-; in:  [hd_isubc] = its cluster on the source, hd_ient = its entry
+; hd_ilvl_root / hd_ilvl_bx - the walk's level stack (SPEC.md 52.10.13)
+;
+; hd_ilvl_root puts the walk at level 0, which is the ROOT of both volumes -
+; and it is called by hd_inst_sys as well, because KERNEL.SYS is copied on its
+; own before the walk starts and hd_icopy_one stands where the stack says.
+;
+; hd_ilvl_bx answers BX = the current level's index into the three arrays. It
+; is a call rather than three inline instructions because every site that
+; wants one of them wants it after something that clobbered BX.
 ; -----------------------------------------------------------------------------
-hd_icopy_sub:
+hd_ilvl_root:
     push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov si, hd_ient             ; bank its name in hd_iname2, NOT hd_iname:
-    mov di, hd_iname2           ; hd_icopy_one overwrites that one with each
-    mov cx, 13                  ; FILE's name, and hd_idst_findsub needs the
-    call hd_iname_copy          ; FOLDER's to find it on the destination
-    xor cx, cx
-    mov [hd_isord], cx
-.entry:
-    call hd_isrc_sub
-    jc .failg                   ; a mount, with no file to blame
-    mov cx, [hd_isord]
-    push es
-    push cs
-    pop es
-    mov di, hd_ient
-    call OSAPI_FILE_FIND
-    pop es
-    jc .done
-    mov [hd_isord], cx
-    mov ax, [hd_ient+14]
-    cmp ax, OSAPI_FT_DIR
-    jae .entry                  ; a FOLDER (this walk is one level deep) or the
-                                ; synthesized '..'; everything below FT_DIR is
-                                ; a file, package or not (SPEC.md 19.7.1). This
-                                ; read `cmp ax, OSAPI_FT_PKG / jne`, which is
-                                ; type 1 - PACKAGE - so one level down only
-                                ; *.O88 was copied and MEDIA/BEVERLY.MOD was
-                                ; silently left behind. The root loop in
-                                ; hd_icopy_tree always had it right
-    mov byte [hd_iinsub], 1
-    mov si, hd_ient
-    call hd_icopy_one
-    mov byte [hd_iinsub], 0
-    jc .fail
-    jmp short .entry
-.done:
-    clc
-    jmp short .out
-.failg:                         ; nothing better to say than the generic line;
-    mov word [hd_imsg], hd_s_ierr   ; hd_icopy_one's failure keeps its own
-.fail:
-    mov byte [hd_iinsub], 0
-    stc
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
+    xor ax, ax
+    mov [hd_ilvl], al
+    mov [hd_isrcc], ax
+    mov [hd_idstc], ax
+    mov [hd_iordv], ax
     pop ax
+    ret
+
+hd_ilvl_bx:
+    mov bl, [hd_ilvl]
+    xor bh, bh
+    shl bx, 1
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2838,9 +2855,9 @@ hd_isrc_ck:
     ret
 
 ; hd_isrc_ck_one - KERNEL.SYS in [hd_isrcdrv]'s root? (module internal)
-; The root, always: [hd_iinsub] belongs to the tree walk and nothing has set
-; it yet, but saying so costs nothing and this must not follow it if it ever
-; does.
+; The root, always, and hd_isrc rather than hd_isrc_here: the level stack
+; belongs to the tree walk and nothing has set it yet, but saying so costs
+; nothing and this must not follow it if it ever does.
 hd_isrc_ck_one:
     push si
     call hd_isrc                ; the ROOT of the source volume
@@ -2852,31 +2869,62 @@ hd_isrc_ck_one:
     ret
 
 ; -----------------------------------------------------------------------------
-; hd_isrc_here / hd_idst_here - the folder this file lives in (module internal)
-; A root file goes to the root; a file inside a folder goes to that folder on
-; both volumes, which [hd_iinsub] is what distinguishes.
+; hd_isrc_here / hd_idst_here - the folder the walk is IN (module internal)
+;
+; The level stack says which one on each volume (SPEC.md 52.10.13), and
+; cluster 0 is a root to OSAPI_FILE_GOTO - so a root file and a file five
+; folders down take the same two routines and neither has a special case.
+;
+; They read [hd_ilvl] rather than a "am I in a folder" flag, which is what
+; [hd_iinsub] was: one bit can distinguish the root from THE folder and cannot
+; distinguish two folders, so every file below the first level went to the
+; wrong place or nowhere. hd_inst_sys's lone KERNEL.SYS copy arrives here with
+; the stack at level 0 because it calls hd_ilvl_root first.
 ; -----------------------------------------------------------------------------
 hd_isrc_here:
-    cmp byte [hd_iinsub], 0
-    jne hd_isrc_sub
-    jmp hd_isrc
+    push ax
+    push bx
+    push dx
+    call hd_ilvl_bx
+    mov dx, [hd_isrcc+bx]
+    mov bl, [hd_isrcdrv]
+    call OSAPI_FILE_GOTO_Q      ; QUIET (SPEC.md 19.2.2)
+    pop dx
+    pop bx
+    pop ax
+    ret
 
 hd_idst_here:
-    cmp byte [hd_iinsub], 0
-    jne hd_idst_findsub
-    jmp hd_idst
+    push ax
+    push bx
+    push dx
+    call hd_ilvl_bx
+    mov dx, [hd_idstc+bx]
+    mov bl, [hd_idrv]
+    call OSAPI_FILE_GOTO_Q      ; QUIET (SPEC.md 19.2.2)
+    pop dx
+    pop bx
+    pop ax
+    ret
 
+; -----------------------------------------------------------------------------
+; hd_idst_child - the cluster of the folder named in hd_iname2 (internal)
+; in:  the DESTINATION's parent folder is current
+; out: CF=0 and AX = its first cluster; CF=1 = it is not there, and that is a
+;      real failure - it was made a moment ago or found to exist already
+;
 ; The destination folder's cluster is not known until it has been made, and a
 ; re-install finds one that already exists - so it is LOOKED UP by name rather
 ; than remembered from the mkdir, which would have to distinguish those cases.
-hd_idst_findsub:
-    push ax
+;
+; ONCE PER FOLDER, at the descent, where hd_idst_findsub ran this same scan for
+; every FILE in the folder: the walk had nowhere to keep the answer and the
+; level stack is that place.
+; -----------------------------------------------------------------------------
+hd_idst_child:
     push cx
-    push dx
     push si
     push di
-    call hd_idst
-    jc .out
     xor cx, cx
 .next:
     push es
@@ -2885,22 +2933,17 @@ hd_idst_findsub:
     mov di, hd_ifind
     call OSAPI_FILE_FIND
     pop es
-    jc .out                     ; CF=1: the folder is not there, which is a
-    mov si, hd_iname2           ; real failure and the caller reports it
-    push di
+    jc .out
+    mov si, hd_iname2
     mov di, hd_ifind
     call hd_iname_same
-    pop di
     jnc .next
     mov ax, [hd_ifind+16]
-    mov [hd_idsubc], ax
-    call hd_idst_sub
+    clc
 .out:
     pop di
     pop si
-    pop dx
     pop cx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3410,6 +3453,7 @@ hd_itab:      dw hd_s_iready, hd_s_ismall, hd_s_ialien, hd_s_inone, hd_s_ilive
     HIMSG hd_s_imnt, 'Formatted, but it would not mount'
     HIMSG hd_s_ierr, 'Disk error - the install stopped'
     HIMSG hd_s_inboot, 'Copied, but it will not boot'
+    HIMSG hd_s_ideep, 'Folders nested too deep to copy'
 %ifdef INSTBENCH
     HIMSG hd_s_bdone, '     fC   fS   dC   dS   tk  done'
 %endif
@@ -3445,11 +3489,24 @@ hd_iautod:    db 0xFF           ; the auto-detected apps drive, 0xFF = none.
                                 ; .text with a real initialiser, hd_iwin's
                                 ; reason: -f bin zeroes nothing and 0 here is
                                 ; drive A:
-hd_iord:      dw 0              ; the root walk's ordinal (SPEC.md 19.7.1)
-hd_isord:     dw 0              ; ...and the sub-folder walk's
-hd_isubc:     dw 0              ; the source folder's cluster
-hd_idsubc:    dw 0              ; ...and the destination folder's
-hd_iinsub:    db 0              ; 1 = the file being copied is in a folder
+hd_ilvl:      db 0              ; THE WALK'S LEVEL STACK (SPEC.md 52.10.13):
+hd_isrcc:     times HIW_DEPTH dw 0    ; which folder each level is on the
+hd_idstc:     times HIW_DEPTH dw 0    ; source and on the destination (0 = the
+hd_iordv:     times HIW_DEPTH dw 0    ; root), and how far OSAPI_FILE_FIND has
+                                ; walked it (SPEC.md 19.7.1). Six bytes a level
+                                ; instead of a stack frame, which is what keeps
+                                ; a deep tree off the UI task's stack.
+                                ;
+                                ; It replaces four words and a flag - one
+                                ; ordinal for the root, one for "the" folder, a
+                                ; cluster each side and a bit saying which of
+                                ; the two the current file was in. That shape
+                                ; could not name a folder inside a folder, so
+                                ; SYSTEM/APPDATA was never made on an installed
+                                ; volume (SPEC.md 19.9)
+hd_ichildc:   dw 0              ; a folder's cluster on the SOURCE, held from
+                                ; the entry that named it to the push that
+                                ; takes it - hd_ient is rewritten in between
 hd_iphase:    db 0              ; 0 = the SYSTEM phase, 1 = the APPS phase.
                                 ; Only hd_icopy_one reads it, and only to
                                 ; refuse a hidden+system source file in phase

@@ -263,6 +263,31 @@ fpg_arm:
     jne .yes
     cmp byte [spl_live], 0      ; boot: the splash owns screen and mode
     jne .no
+    cmp byte [gfx_lock_flag], 0 ; **ANOTHER TASK OWNS THE SCREEN** - and this
+    je .free                    ; routine COMPOSES THE BAR (menu_draw_bar
+    push ax                     ; below), which is drawing, so arming here
+    mov al, [sch_cur]           ; would put two painters on one strip of glass
+    cmp al, [gfx_lock_own]      ; (SPEC.md 59.1) without the mutex that exists
+    pop ax                      ; to prevent exactly that.
+    jne .no                     ;
+.free:                          ; A package's file write does not hold the
+                                ; mutex - it does not freeze the UI and has no
+                                ; reason to - so FTPD writing a received file
+                                ; armed the widget from task 0 while task 1 was
+                                ; already inside menu_bar_text. That
+                                ; composition LOWERED [menu_bn] by FPG_CELLS
+                                ; (SPEC.md 12.8.3) under the other one's feet,
+                                ; and the field caught the result: menu_bpadc
+                                ; padding to a bound menu_bput had begun
+                                ; dropping, spinning forever with the mutex
+                                ; held. That loop now re-reads the bound and
+                                ; cannot hang (SPEC.md 59.7); this is the same
+                                ; defect at its cause rather than its symptom.
+                                ;
+                                ; Held by US is fine and is the normal case:
+                                ; the freeze the widget reports IS a mutex
+                                ; hold (SPEC.md 12.8.3), and fpg_finish runs
+                                ; from inside gfx_unlock
     call wm_fs_vis              ; the bar is under a fullscreen window
     jc .no
 

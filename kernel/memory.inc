@@ -100,6 +100,10 @@ MEM_K_MOD  equ 0xFF08           ; an on-demand kernel module's image (SPEC.md
                                 ; because its base IS its CS and so it can
                                 ; never move, and freed by the feature that
                                 ; asked for it rather than by a teardown
+MEM_K_CLONE equ 0xFF09          ; the disk cloner's buffer (SPEC.md 18.99) -
+                                ; the job block AND the sectors in flight, so
+                                ; freeing it is the whole of the operation's
+                                ; teardown; held for exactly one clone
 MEM_K_CLIP equ 0xFF07           ; the system clipboard's text (SPEC.md 55) -
                                 ; sized to what is in it, freed when it is
                                 ; emptied, and deliberately NOT an instance's,

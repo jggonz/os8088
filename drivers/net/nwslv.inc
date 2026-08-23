@@ -163,6 +163,50 @@ nw_s_accept:
 .io:
     ret
 
+; --- NW_ADDR: - -> status, four IP bytes ------------------------------------
+; The address the MASTER should publish is this machine's, because this is the
+; machine an inbound connection reaches (docs/NET-STACK-PLAN.md 1.5). It is
+; eth_v_addr's own answer, so the two transports cannot come to differ.
+;
+; FOUR BYTES WHATEVER THE STATUS SAYS - the fixed-frame rule, and the failure
+; path is the one nothing exercises (this file's header).
+nw_s_addr:
+    push cx
+    push di
+    mov word [nw_ip], 0
+    mov word [nw_ip+2], 0
+    call nw_ready
+    jc  .down
+    push es
+    mov ax, ds
+    mov es, ax                  ; eth_v_addr writes through ES:DI, and here the
+    mov di, nw_ip               ; caller is us
+    call eth_v_addr
+    pop es
+    jc  .no
+    mov byte [nw_st], 0
+    jmp short .reply
+.down:
+    mov al, NETE_NOLINK
+.no:
+    mov [nw_st], al
+.reply:
+    mov al, [nw_st]
+    call lp_sbyte
+    jc  .io
+    xor di, di
+    mov cx, 4
+.sd:
+    mov al, [nw_ip+di]
+    call lp_sbyte
+    jc  .io
+    inc di
+    loop .sd
+.io:
+    pop di
+    pop cx
+    ret
+
 ; --- NW_STAT: handle byte -> status, state byte, ready word -----------------
 nw_s_stat:
     call lp_rbyte
@@ -342,6 +386,8 @@ nw_hnd:     db 0
 nw_st:      db 0
 nw_state:   db 0
 nw_rdy:     dw 0
+nw_ip:      times 4 db 0        ; NW_ADDR's answer, staged so the reply frame
+                                ; is four bytes on the refusal path too
 nw_len:     dw 0
 nw_ann:     dw 0                ; what NW_SEND's master ANNOUNCED, which may be
                                 ; more than nw_len: the drain is by this

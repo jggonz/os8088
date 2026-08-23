@@ -31,8 +31,8 @@
 ; your data. A pointer held in BP needs an explicit `ds:` override. That has
 ; always been true inside a callback (you run on the UI task's stack) and
 ; matters more now that a package can own a worker task of its own
-; (OSAPI_TASK_SPAWN below), whose 256-byte stack is likewise in LOW_SEG -
-; and 256 is a budget to respect, not a suggestion: the tick, the mouse and
+; (OSAPI_TASK_SPAWN below), whose 384-byte stack is likewise in LOW_SEG -
+; and 384 is a budget to respect, not a suggestion: the tick, the mouse and
 ; any sound IRQ land their frames on it while your worker runs (SPEC.md
 ; 20.6 rule 6; tests/stackprobe measures the real cost on real hardware).
 ;
@@ -76,6 +76,7 @@ DBG_TAG_CLOCK equ 0x4B43          ; 'CK' - SPEC.md 37.92, unconditional
 DBG_TAG_VIDEO equ 0x4456          ; 'VD' - SPEC.md 57.4, unconditional
 DBG_TAG_FDD   equ 0x4446          ; 'FD' - SPEC.md 57.5, unconditional
 DBG_TAG_BUILD equ 0x4449          ; 'ID' - SPEC.md 57.6, unconditional
+DBG_TAG_BPROF equ 0x5042          ; 'BP' - SPEC.md 15.5, `make BOOTPROF=1`
 
 ; What OSAPI_VOL_KIND answers (SPEC.md 18.7.2). The MEDIUM and the TRANSPORT
 ; are two questions: "is this a hard disk" is the first, and inferring it from
@@ -363,7 +364,18 @@ SND_OPENF_RING   equ 1           ; ring mode (SPEC.md 34.5): SI = ring base,
 %define OSAPI_FILE_DELETE   KERNEL_SEG:0x0130   ; SI = name; out CF=0 AX=0, else FERR_*
 %define OSAPI_FILE_RENAME   KERNEL_SEG:0x0138   ; SI = old name, DI = new name; out as above
 %define OSAPI_FILE_DFREE    KERNEL_SEG:0x0140   ; out CF=0, DX:AX = free bytes, BX =
-                                 ; SECTORS per cluster; no disk I/O
+                                 ; SECTORS per cluster.
+                                 ;
+                                 ; NO DISK I/O - AND THAT IS NOT THE SAME AS
+                                 ; CHEAP (SPEC.md 18.4.5). It is answered from
+                                 ; the resident FAT snapshot by COUNTING EVERY
+                                 ; ENTRY IN IT, so the cost is O(clusters) of
+                                 ; CPU: about 105ms per call on a 20MB hard
+                                 ; disk on a 4.77MHz 8088. Ask it when you are
+                                 ; about to decide something, NOT once per
+                                 ; chunk of a copy loop - apps/ftpd did the
+                                 ; latter and spent 44% of an upload here
+                                 ; (SPEC.md 77.40).
 
 ; --- menus (SPEC.md 12.2) ------------------------------------------------------
 ; Every application owns the menu bar while its window is frontmost: the
@@ -963,7 +975,7 @@ SK_KCLAIM  equ 18               ; word: ...of which the kernel's own
 SK_XMS     equ 20               ; word: the pool above 1MB, 0 with no store
 SYSKB_SIZE equ 22
 
-MAX_TASKS  equ 12               ; the scheduler's slots (SPEC.md 8) - a bound
+MAX_TASKS  equ 8                ; the scheduler's slots (SPEC.md 8) - a bound
 INST_MAX   equ 12               ; running instances (SPEC.md 29.1)   on the
 MEM_MAX    equ 32               ; claim records (SPEC.md 50)         buffers
                                 ; above, and each call answers the live figure
@@ -1164,6 +1176,27 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
 ; at one another and nothing would have said so until a package called one and
 ; got the other. The check is mechanical and belongs after every merge - sort
 ; the %defines by address and look for a duplicate (docs/UPSTREAM.md).
+%define OSAPI_DRV_CALL_AT   KERNEL_SEG:0x04A0   ; OSAPI_DRV_CALL, EXCEPT ES IS
+                                 ; YOURS (SPEC.md 20.11.2). Same class, same
+                                 ; verbs, same answers, same routine - the only
+                                 ; difference is that the cell below overwrites
+                                 ; ES with your DS and this one leaves it
+                                 ; exactly as you set it.
+                                 ;
+                                 ; FOR A BUFFER THAT IS NOT IN YOUR OWN
+                                 ; SEGMENT: a heap claim, so an optional buffer
+                                 ; can be claimed when the memory is there and
+                                 ; done without when it is not, instead of
+                                 ; growing your image for it.
+                                 ;
+                                 ; **YOU OWN THE ES YOU PASS, AND A WRONG ONE
+                                 ; IS NOT CAUGHT.** ES on entry to every
+                                 ; callback is KERNEL_SEG, so forgetting to set
+                                 ; it points a RECEIVING verb at the kernel and
+                                 ; nothing refuses. Use OSAPI_DRV_CALL unless
+                                 ; you specifically need this; the claim must
+                                 ; also be PINNED (the default, SPEC.md 66), or
+                                 ; a compaction moves it under the driver.
 %define OSAPI_DRV_CALL      KERNEL_SEG:0x0448   ; in BH = a DRVC_* class,
                                  ; BL = a verb THAT DRIVER defines; AX, CX, DX,
                                  ; SI and DI are the driver's to define too.
@@ -2473,6 +2506,33 @@ CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
                                  ; it, and an unused slot is a promise for
                                  ; nothing (SPEC.md 20.8 rule 4)
 
+%define OSAPI_FILE_RMDIR    KERNEL_SEG:0x0498   ; SI = a NUL 8.3 name in your
+                                 ; current directory, AL = 0 remove it only if
+                                 ; it is EMPTY / non-zero remove it AND
+                                 ; EVERYTHING UNDER IT (SPEC.md 18.6). out
+                                 ; CF=0 AX=0, else AX = FERR_* (FERR_NOENT no
+                                 ; such folder, FERR_EXIST it is not empty and
+                                 ; you asked for the strict form, FERR_PROT a
+                                 ; hidden or system entry).
+                                 ;
+                                 ; **AL = 0 IS THE ONE TO REACH FOR**, and the
+                                 ; flag exists because the two callers want
+                                 ; opposite things: FTP's RMD is specified to
+                                 ; FAIL on a non-empty directory, so a server
+                                 ; that quietly emptied one would be destroying
+                                 ; data the client believed it was protecting -
+                                 ; while an `rm -r` in a shell means the tree
+                                 ; and says so. There is no undo on this
+                                 ; system, which is why the recursive form is a
+                                 ; deliberate second argument rather than the
+                                 ; default.
+                                 ;
+                                 ; The recursive walk is ITERATIVE and uses the
+                                 ; disk's own '..' links rather than a stack, so
+                                 ; it costs no depth on your 384-byte worker
+                                 ; slice - but it is a FILE SLOT, so it is
+                                 ; UI-task/window-callback context like every
+                                 ; other one, and a deep tree is a long freeze.
 %define OSAPI_FILE_GOTO_Q   KERNEL_SEG:0x0370   ; DX = a folder's first cluster
                                  ; (0 = the root), BL = the volume. out CF=0
                                  ; and AX=0, else AX = FERR_*.
@@ -2667,6 +2727,47 @@ OSAPI_FT_UP   equ 3             ; the synthesized '..' (SPEC.md 19.5)
                                  ; Do NOT also poll OSAPI_MOUSE in a tracking
                                  ; loop from the same W_ONCLICK: that loop
                                  ; consumes its own release. Pick one.
+%define OSAPI_WM_ONRCLICK   KERNEL_SEG:0x0490   ; BX = win ptr, AX = a near proc
+                                 ; in YOUR segment (0 clears it): the RIGHT
+                                 ; button, pressed in your content
+                                 ; (SPEC.md 13.11). Call it from your entry
+                                 ; proc after OSAPI_WM_CREATE, like
+                                 ; OSAPI_WM_ONWAKE - it is a side table, not a
+                                 ; template word.
+                                 ;
+                                 ; The kernel calls it with CX = x, DX = y,
+                                 ; SI = your window, in W_ONCLICK's environment
+                                 ; exactly: the UI task, under the gfx lock,
+                                 ; billed to your instance. You may draw.
+                                 ;
+                                 ; THREE RULES, and they are the whole of it:
+                                 ;   - PRESS EDGE ONLY. There is no release
+                                 ;     half and no EVT_RUP to build one from
+                                 ;     (SPEC.md 9): the right button is a
+                                 ;     single-shot verb here, not a gesture.
+                                 ;     W_ONMOUSEUP and W_ONDRAG belong to the
+                                 ;     LEFT button and are not armed by this.
+                                 ;   - FRONTMOST ONLY. A right press on a
+                                 ;     background window RAISES it and stops,
+                                 ;     exactly as it did before this slot
+                                 ;     existed; the press that raises you is
+                                 ;     not delivered.
+                                 ;   - CONTENT ONLY. The chrome - title bar,
+                                 ;     close, minimize and grow boxes - has no
+                                 ;     right-button path at all, and the menu
+                                 ;     bar is skipped whole. CX/DX are SCREEN
+                                 ;     coordinates: subtract your content
+                                 ;     origin (OSAPI_WM_CONTENT) as you do in
+                                 ;     W_ONCLICK.
+                                 ;
+                                 ; Taking it means taking it WHOLE: a window
+                                 ; with a handler installed never sees the
+                                 ; kernel's own right-button behaviour, and a
+                                 ; window without one is unchanged in every
+                                 ; way. Nothing here is a context menu - there
+                                 ; is no API slot through which a package can
+                                 ; supply popup items (SPEC.md 12.4) - so what
+                                 ; you do with the press is your own drawing.
 %define OSAPI_WM_ONRESIZE   KERNEL_SEG:0x03D8   ; BX = win ptr, AX = a near proc
                                  ; in YOUR segment (0 clears it): "your content
                                  ; box CHANGED, and you did not ask"

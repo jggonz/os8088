@@ -324,15 +324,21 @@ def main():
         # for. The bytes are CHECKED before they are overwritten, so a kernel
         # that has moved fails here loudly instead of being patched somewhere
         # else.
-        step0 = m.read(S("ui_task"), 15)
-        want = bytes([0x80, 0x3E, SY["ui_rebootq"] & 0xFF,
-                      SY["ui_rebootq"] >> 8, 0x00, 0x74, 0x08, 0xC6, 0x06,
-                      SY["ui_rebootq"] & 0xFF, SY["ui_rebootq"] >> 8, 0x00])
-        if step0[:12] != want or step0[12] != 0xE8:
-            sys.exit("ui_task step 0 is not the expected 15 bytes: %s"
+        # Step 0 grew when the flag became a REQUEST byte (UI_RBQ_*): the
+        # cmp/je pair now shelters a mov al / sub al / clear before the call,
+        # so the fingerprint is 18 bytes and the je hops 0x0D. The bytes are
+        # still CHECKED before they are overwritten, for the same reason.
+        step0 = m.read(S("ui_task"), 18)
+        want = bytes([0x80, 0x3E, SY["ui_rebootq"] & 0xFF, SY["ui_rebootq"] >> 8, 0x00,          # cmp [q], 0
+                      0x74, 0x0D,                            # je .keys
+                      0xA0, SY["ui_rebootq"] & 0xFF, SY["ui_rebootq"] >> 8,                      # mov al, [q]
+                      0x2C, 0x01,                            # sub al, RBQ_FLUSH
+                      0xC6, 0x06, SY["ui_rebootq"] & 0xFF, SY["ui_rebootq"] >> 8, 0x00])         # mov byte [q], 0
+        if step0[:17] != want or step0[17] != 0xE8:
+            sys.exit("ui_task step 0 is not the expected 18 bytes: %s"
                      % hexd(step0))
         if NOP:
-            m.write(S("ui_task"), b"\x90" * 15)
+            m.write(S("ui_task"), b"\x90" * 20)             # ...call included
             print("ui_task step 0 NOPped: the flag is now sticky and the "
                   "reboot cannot fire")
         else:
@@ -348,8 +354,8 @@ def main():
             # the flag really was set; AL ZERO means `cmp al,0` set ZF and the
             # `je` was taken, so control cannot have come through this pair at
             # all and the entry is from somewhere else.
-            # ...and `74 08` (je .keys) becomes `EB 08` (jmp .keys), so the
-            # branch is ALWAYS taken: the clear at +7 and the call at +12 are
+            # ...and `74 0D` (je .keys) becomes `EB 0D` (jmp .keys), so the
+            # branch is ALWAYS taken: the read/sub/clear at +7 and the call at +17 are
             # both unreachable, the flag STICKS once written, and the reboot
             # cannot fire. Two bytes for two bytes and the same instruction
             # count, which is why this is the patch to use rather than 15
@@ -357,7 +363,7 @@ def main():
             # them produced no write at all.
             m.write(S("ui_task"), bytes([0xA0, SY["ui_rebootq"] & 0xFF,
                                          SY["ui_rebootq"] >> 8, 0x3C, 0x00,
-                                         0xEB, 0x08]))
+                                         0xEB, 0x0D]))
             print("ui_task step 0 patched: AL carries the byte read, and the "
                   "branch is unconditional so the flag sticks")
 

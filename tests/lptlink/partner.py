@@ -94,6 +94,9 @@ TURN = 40
 # the second copy - there is no way for a Python far end to include an asm
 # header, which is exactly why every one of these carries its name from there.
 NET_VER_SOCK = 2                 # the version byte that says "I speak sockets"
+NET_VER_ADDR = 3                 # ...and this one adds NW_ADDR (nwire.inc). A
+                                 # version is a FLOOR, not a set: NET.DRV
+                                 # compares with `jb`, so 3 implies 2
 NET_HOSTMAX = 64                 # the fixed host field on the wire
 NET_SOCKS = 4                    # simultaneous handles
 NET_SKMAX = 1024                 # the most one SEND or RECV moves
@@ -400,7 +403,7 @@ class Partner(object):
         raise LinkTimeout('no magic in %d nibbles (window %08X, wanted %08X)'
                           % (limit * 2, win, want))
 
-    def hello(self, version=NET_VER_SOCK):
+    def hello(self, version=NET_VER_ADDR):
         """mst_hello's other half: hunt for 'O88?', answer 'O88!' + version.
 
         THE VERSION BYTE IS THE SOCKET PROBE (SPEC.md 62.11): a far side that
@@ -927,6 +930,18 @@ class Partner(object):
                 h = self.recv_byte()
                 st = NETE_REFUSED if sox is None else sox.close(h)
                 self.send_byte(st)
+            elif c == ord('i'):             # NW_ADDR: nothing in
+                # FOUR BYTES WHATEVER THE STATUS SAYS - the fixed frame, and
+                # the refusal path is the one nothing exercises. A real slave
+                # answers with the DOS box's own address, because that is the
+                # machine an inbound connection reaches (netpkg.inc).
+                ip = None if sox is None else sox.addr()
+                if ip is None:
+                    self.send_byte(NETE_NOLINK)
+                    self.send(b'\0\0\0\0')
+                else:
+                    self.send_byte(0)
+                    self.send(bytes(ip))
             else:
                 raise LinkTimeout('unknown command %r after %r'
                                   % (chr(c), ''.join(seen)))
@@ -989,6 +1004,8 @@ class SocketBox(object):
                                      # a caller must not read as an end, and
                                      # the one a test has to be able to WAIT
                                      # FOR rather than hope for
+        self.ip = (127, 0, 0, 1)     # what NW_ADDR answers. A test that wants
+                                     # the no-address case sets it to None
 
     # --- housekeeping -----------------------------------------------------
     def _free(self):
@@ -1149,6 +1166,18 @@ class SocketBox(object):
             pass
         self.log.append('CLOSE %d' % h)
         return NETE_OK
+
+    def addr(self):
+        """NW_ADDR: this machine's own IPv4, as four ints, or None.
+
+        The real slave answers with the DOS box's `eth_ip`, because that is
+        the machine an inbound connection reaches and forwards down the cable
+        (docs/NET-STACK-PLAN.md 1.5). Here it is the loopback the tests run
+        against, which is the same claim: the address a client should dial to
+        reach the sockets this object is serving.
+        """
+        self.log.append('ADDR')
+        return self.ip
 
 
 class FileTree(object):

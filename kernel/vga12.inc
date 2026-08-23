@@ -134,6 +134,14 @@ gfx_lock_own    db 0xFF         ; ...and WHICH task holds it ([sch_cur] at the
                                 ; take, 0xFF = nobody). toast_now's whole test
                                 ; (SPEC.md 59.4): the flag alone says somebody
                                 ; holds it, never that the CALLER does.
+gfx_lock_want   db 0            ; SPEC.md 7.3: SOMEBODY IS BLOCKED ON IT. Set by
+                                ; a waiter on its way to task_yield, spent by
+                                ; the last owner's next acquire. Initialized
+                                ; data for gfx_lock_flag's reason.
+gfx_lock_last   db 0xFF         ; ...and who took it last, which gfx_lock_own
+                                ; cannot say: gfx_unlock stamps 0xFF over it,
+                                ; and 7.3's whole question is about a task
+                                ; that has ALREADY let go.
 
 ; -----------------------------------------------------------------------------
 ; GFXCLIP - the clip hook, at a public rect entry (SPEC.md 11.3)
@@ -1080,8 +1088,14 @@ gfx_ls_addr:
     mov di, ax
     mov ax, si
     mov cl, 3
-    shr ax, cl
-    add di, ax
+    sar ax, cl                  ; ARITHMETIC: a walk entering the screen from
+    add di, ax                  ; the LEFT has x < 0 here, and `shr` puts that
+                                ; 8,190 bytes along the row instead of one
+                                ; byte before it. The address is not drawn
+                                ; through until x reaches the box, and this is
+                                ; what makes it right when it does - the bit
+                                ; mask below already was, x & 7 being the
+                                ; correct bit for any x
     mov cx, si
     and cl, 7
     mov bl, 0x80
@@ -1207,6 +1221,113 @@ gfx_ls_ly:
 %endif
     ret
 
+
+; -----------------------------------------------------------------------------
+%ifdef KERN_BIG
+; SPEC.md 5.6.4.1's three facts, in BH: which axis is the major one, whether
+; the ink sets bits or clears them, and which way x runs. They pick the walk.
+LF_STEEP    equ 1
+LF_WHITE    equ 2
+LF_XPOS     equ 4
+
+; ...and the length below which the walk is not worth arriving at. The setup
+; is ~1,700 cycles against the general walk's ~600, and a pixel is 152 against
+; 723 (PERFORMANCE.md Set 69), so the two cross at about three pixels. Under
+; it the general walk is CHEAPER and keeps the line, which is what stops this
+; being a win on average and a regression on the short case.
+LF_MINMAJ   equ 4
+
+; GFX_LFWALK - one drawn run of SPEC.md 5.6.4.1's walk, and the whole reason
+; there are eight of them: on an 8088 the three things that vary here are an
+; OPCODE, a BRANCH CONDITION and an inc/dec, none of which a register can hold.
+;
+;   %1  1 = y-major (steep), 0 = x-major (shallow)
+;   %2  1 = x increasing, 0 = x decreasing
+;   %3  1 = white ink, 0 = black
+;
+; registers, on entry and throughout:
+;   AX = d                  BL = the bit mask, INVERTED when the ink is black
+;   DX = 2 * major delta    DI = the framebuffer byte
+;   SI = 2 * minor delta    BP = vid_rowadd
+;   CX = pixels to draw     ES = the framebuffer
+;
+; THE MASK ROTATES, IT DOES NOT SHIFT, and that is what lets one shape serve
+; the inverted mask too: `ror`/`rol` put the leaving bit in CF, so the byte
+; boundary is a carry rather than a zero. Going right the plain mask leaves a
+; 1 exactly at 0x01 and the inverted one leaves a 0 exactly at 0xFE - the same
+; test, read the other way round, which is the only thing %3 changes besides
+; `or` against `and`.
+; -----------------------------------------------------------------------------
+%macro GFX_LFWALK 3
+  %if %3
+    %define LFOP or
+    %define LFNW jnc                ; plain mask: the boundary IS the carry
+  %else
+    %define LFOP and
+    %define LFNW jc                 ; inverted mask: the boundary is its absence
+  %endif
+  %if %2
+    %define LFROT ror
+    %define LFADJ inc di
+  %else
+    %define LFROT rol
+    %define LFADJ dec di
+  %endif
+  %if %1
+%%px:
+    LFOP [es:di], bl
+    or ax, ax                       ; d > 0: the minor axis steps
+    jg %%xs
+%%noxs:
+    add ax, si                      ; d += 2*minor, and one row down - the
+    add di, bp                      ; major axis steps every pixel, untested
+    test di, [cs:vid_wrapbit]       ; gfx_nextrow, inlined
+    jnz %%wrap
+%%back:
+    loop %%px
+    clc
+    ret
+%%xs:
+    sub ax, dx
+    LFROT bl, 1
+    LFNW %%noxs
+    LFADJ
+    jmp short %%noxs
+%%wrap:
+    add di, [cs:vid_wrapfix]
+    jmp short %%back
+  %else
+%%px:
+    LFOP [es:di], bl
+    or ax, ax
+    jg %%ys
+%%noys:
+    add ax, si
+    LFROT bl, 1
+    LFNW %%back
+    LFADJ
+%%back:
+    loop %%px
+    clc
+    ret
+%%ys:
+    sub ax, dx
+    add di, bp
+    test di, [cs:vid_wrapbit]
+    jnz %%wrap
+    jmp short %%noys
+%%wrap:
+    add di, [cs:vid_wrapfix]
+    jmp short %%noys
+  %endif
+  %undef LFOP
+  %undef LFNW
+  %undef LFROT
+  %undef LFADJ
+%endmacro
+%endif
+
+
 ; -----------------------------------------------------------------------------
 ; gfx_line - an arbitrary-angle line in [gfx_color] (SPEC.md 5.6)
 ;
@@ -1303,6 +1424,10 @@ gfx_line:
     call gfx_ink
     cmp al, 1
     je .passes
+%ifdef KERN_BIG
+    call gfx_lf_wide3           ; SPEC.md 5.6.6.1: ...and on this kernel the
+    jnc .passes                 ; wide walk is the FALLBACK, not the win
+%endif
     mov byte [gfx_ln_wide], 1
     mov word [gfx_ln_np], 1
     inc word [gfx_ln_x1]        ; undo the shift: the mask spans both sides
@@ -1385,6 +1510,67 @@ gfx_line:
     call gfx_vline
     jmp short .out
 
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; gfx_lf_wide3 - would SPEC.md 5.6.4.1's walk take all THREE passes of this
+;                dilated steep line?
+;
+; in:       the staged line, with x1/x2 already shifted one column LEFT for
+;           pass 0, and 5.6.6's ink and adapter tests already passed
+; out:      CF clear = yes, so 5.6.6's wide walk is not wanted
+;           CF set   = not sure; take the wide walk
+; clobbers: AX, BX, flags
+;
+; SPEC.md 5.6.6.1. 5.6.6's wide walk was an optimisation against 5.6.4's
+; general loop and it still is - but three of 5.6.4.1's passes beat it, and
+; not slightly: on a 193-pixel trail erase, the shape SPEC.md 48 actually
+; draws, the wide walk is 40.5 ms and three fast passes are 20.3. So the wide
+; walk is now what happens when the fast walk would REFUSE a pass, and the
+; only question here is which.
+;
+; IT IS CONSERVATIVE IN THE SAFE DIRECTION. Both answers draw the identical
+; pixels - 5.6.6's own argument is that its walk IS those three passes - so a
+; wrong guess costs time and never a pixel, and "not sure" is spelled CF set.
+; That is why a fragmented region and a second display are declined rather
+; than reasoned about: the fast walk's box is a clip rect translated per
+; fragment, and reproducing that rule here would be keeping a copy of
+; 5.6.4.1's eligibility in a second place, which is the thing that drifts.
+; -----------------------------------------------------------------------------
+gfx_lf_wide3:
+    cmp word [gfx_ln_dy], LF_MINMAJ ; too short to pay for the setup, three
+    jl .no                          ; times over
+    cmp byte [vid_ndisp], 1         ; 39.14: a fragment on a second display is
+    ja .no                          ; translated, and this is not
+    mov ax, [gfx_ln_x1]             ; the span all three passes together cover
+    mov bx, [gfx_ln_x2]
+    cmp ax, bx
+    jle .ord
+    xchg ax, bx
+.ord:
+    add bx, 2                       ; ...pass 2 being two columns right of 0
+    cmp word [wm_clip_n], 0
+    jne .armed
+    or ax, ax                       ; disarmed: the box is the screen
+    js .no
+    cmp bx, [vid_cwm1]
+    jg .no
+    clc
+    ret
+.armed:
+    cmp word [wm_clip_n], 1         ; one rect: the box is that rect, and the
+    jne .no                         ; whole line meets it or none of it does
+    cmp ax, [wm_clip_tab + WCR_X1]
+    jl .no
+    cmp bx, [wm_clip_tab + WCR_X2]
+    jg .no
+    clc
+    ret
+.no:
+    stc
+    ret
+%endif
+
+; -----------------------------------------------------------------------------
 ; gfx_line_raw - internal: one pass over the line, drawing only inside the
 ;                box in gfx_ln_c*. The Bresenham state is already staged.
 ; clobbers: everything but the segment registers
@@ -1394,26 +1580,72 @@ gfx_line_raw:
     cmp byte [vid_planes], 1    ; one and gets major-axis runs, still fewer
     jne gfx_line_runs           ; calls than the app-side horizontal-only
                                 ; coalescing this replaces
-; --- the 1bpp per-pixel walk -------------------------------------------------
+%ifdef KERN_BIG
+    call gfx_line_fast          ; SPEC.md 5.6.4.1 - the same pixels, 4.9x, when
+    jc gfx_line_mono            ; the line's shape lets the box be spent up
+    ret                         ; front. CF set = it refused; walk it the long
+                                ; way, which is what stays below. NOT ON
+                                ; kern_small (5.6.4.4): it is 686 bytes of
+                                ; .text and that machine is short of the thing
+                                ; it would be spent from
+%endif
+; -----------------------------------------------------------------------------
+; gfx_lm_pre - advance the walk to the box's top edge, drawing nothing
+;
+; in:       SI = x, DX = y, CX = err       out: the same, at y >= [gfx_ln_cy1]
+;                                               (or at y2, if the line ends
+;                                               above the box)
+; clobbers: AX, flags
+;
+; SPEC.md 5.6.4.3. THE FRAMEBUFFER HAS NO ROW ABOVE ZERO and, on a banked
+; adapter, not even the arithmetic for one: `gfx_rowbase(-5)` is not row 0
+; minus a stride, it is bank 3 of a 16-bit product that wrapped, and stepping
+; five rows down from it does not arrive at row 0 - measured, it arrives 90
+; bytes past it, so a line entering the screen from the top drew four rows low
+; on Hercules with nothing to say so. The walk skipped those pixels correctly
+; and addressed the rest wrongly.
+;
+; So the fix is not in the addressing, it is here: every pixel above the box
+; was going to be skipped anyway, and stepping the state without an address is
+; what the walk should have done from the start. It costs the general path one
+; call, and a line that starts inside the box - almost all of them - returns
+; on the first compare.
+; -----------------------------------------------------------------------------
+gfx_lm_pre:
+    cmp dx, [gfx_ln_cy1]
+    jge .out
+    cmp dx, [gfx_ln_y2]         ; ...and never past the end of the line
+    jge .out
+    mov ax, cx                  ; exactly .pixel's step, without the pixel
+    add ax, ax
+    mov [gfx_ln_e2], ax
+    mov ax, [gfx_ln_dy]
+    neg ax
+    cmp [gfx_ln_e2], ax
+    jle .noxs
+    sub cx, [gfx_ln_dy]
+    add si, [gfx_ln_sx]
+.noxs:
+    mov ax, [gfx_ln_e2]
+    cmp ax, [gfx_ln_dx]
+    jge gfx_lm_pre
+    add cx, [gfx_ln_dx]
+    inc dx
+    jmp short gfx_lm_pre
+.out:
+    ret
+
+; --- the 1bpp per-pixel walk - the GENERAL case (SPEC.md 5.6.4) --------------
 gfx_line_mono:
     mov al, [gfx_color]
     call gfx_ink                ; AL = 00 black / FF white / 01 the dither
     mov [gfx_ln_ink], al
     mov es, [vid_rseg]
-    mov ax, [gfx_ln_y1]
-    call gfx_rowbase            ; clobbers AX/CX/DX, preserves BX
-    mov di, ax
-    mov ax, [gfx_ln_x1]
-    mov cl, 3
-    shr ax, cl
-    add di, ax
-    mov cx, [gfx_ln_x1]         ; BL = the rotating bit mask
-    and cl, 7
-    mov bl, 0x80
-    shr bl, cl
     mov si, [gfx_ln_x1]         ; SI = x, DX = y, CX = err
     mov dx, [gfx_ln_y1]
     mov cx, [gfx_ln_err]
+    call gfx_lm_pre             ; ...to the box's top edge, if it starts above
+    call gfx_ls_addr            ; DI = the byte, BL = its bit
 .pixel:
     cmp dx, [gfx_ln_cy2]        ; y only ever grows, so past the box's bottom
     jg .done                    ; there is nothing left to draw
@@ -1538,6 +1770,241 @@ gfx_line_mono:
     sub di, bp
 .wout:
     jmp .step
+
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; SPEC.md 5.6.4.1 - the 1bpp walk with its state in REGISTERS
+;
+; PERFORMANCE.md Set 69 priced the general walk above at 723 cycles a pixel and
+; said where every one of them goes: 170 in the per-pixel clip test, ~270 in a
+; Bresenham whose every term is a word in .bss, ~134 in `call gfx_nextrow`, and
+; 38 in the pixel. Forty instructions a pixel at 17.7 cycles each - and 17.7 is
+; what a DIRECT MEMORY OPERAND costs on an 8088, not a slow instruction set.
+;
+; This is the same rasterisation with none of that. Three things buy it and
+; they pay for each other:
+;
+;   SPLIT BY OCTANT. The major axis then steps EVERY pixel, so it needs no test
+;   at all, and the minor axis's whole decision is the sign of one register:
+;
+;       steep:   d = 2dx - dy;  plot; if d>0 {x+=sx; d-=2dy}; d+=2dx; y++
+;       shallow: d = 2dy - dx;  plot; if d>0 {y++;   d-=2dx}; d+=2dy; x+=sx
+;
+;   That is not an approximation of gfx_line_mono, it IS gfx_line_mono with the
+;   invariants folded in - tools/os88linecost.py --model checks the two lay the
+;   identical pixel set over 9,480 endpoint pairs, and tests/linetest is the
+;   gate on the glass.
+;
+;   SPEND THE BOX AS AN INTERVAL. 5.6.3 refuses to clip because clipping the
+;   ENDPOINTS moves the lattice; this moves neither endpoint. The pixels of a
+;   monotone line inside an axis-aligned rect are a CONTIGUOUS range of major-
+;   axis steps, so the box becomes a first and a count, computed once. The
+;   minor axis is handled by refusing outright (below) rather than by testing.
+;
+;   INLINE THE ROW STEP. `add di,bp` and one test, against a call and a ret.
+;
+;   x AND y ARE THEN NOT TRACKED AT ALL - DI and BL carry the position - which
+;   is what frees the two registers the interval made spare. The three are one
+;   change; keeping the per-pixel test would put dx/dy back in .bss and the
+;   modelled result is ~2.1x rather than 4.9x.
+;
+; WHAT IT REFUSES, and every refusal falls through to the walk above rather
+; than drawing anything wrong:
+;
+;   - 5.6.6's dilated STEEP line, which is a three-column mask walk and a
+;     different shape entirely;
+;   - 39.4's DITHER ink, which is a per-pixel decision by definition;
+;   - a line whose MINOR extent leaves the box. The major axis is clipped
+;     exactly, the minor one is all-or-nothing, and that is the whole of the
+;     compromise: a line crossing a clip rect's left or right edge (steep) or
+;     its top or bottom (shallow) is walked the old way and costs what it
+;     always did. Nothing is ever slower than before.
+;
+; in:       the staged Bresenham gfx_line_raw hands gfx_line_mono - x1/y1,
+;           x2/y2, dx, dy, sx - and this pass's box in gfx_ln_c*
+; out:      CF clear = drawn (which includes "no pixel of it is in this box").
+;           CF set   = refused; the caller walks it.
+; clobbers: everything but the segment registers
+; -----------------------------------------------------------------------------
+gfx_line_fast:
+    cmp byte [gfx_ln_wide], 0   ; 5.6.6's three-column walk, not this shape
+    jne .refuse
+    ; ONE BYTE CARRIES THE THREE FACTS THE LOOPS ARE PICKED BY: which axis is
+    ; the major one, whether the ink sets bits or clears them, and which way x
+    ; runs. It is settled once here, in .bss, because the setup below needs
+    ; every register it has - and it is read into BH for the walk, which is
+    ; the one register no loop touches.
+    xor bx, bx                  ; ...built in BL, where a bit is `or bl,imm` at
+    mov al, [gfx_color]         ; four clocks rather than a read-modify-write
+    call gfx_ink                ; on .bss at twenty-two. gfx_ink keeps BX
+    cmp al, 1
+    je .refuse                  ; the dither is a per-pixel decision (39.4)
+    or al, al
+    jz .blk
+    or bl, LF_WHITE
+.blk:
+    cmp word [gfx_ln_sx], 0
+    jl .xneg
+    or bl, LF_XPOS
+.xneg:
+    mov ax, [gfx_ln_dx]
+    cmp ax, [gfx_ln_dy]
+    jae .shal
+
+    ; --- y-major: the minor extent is the line's whole x span ---------------
+    or bl, LF_STEEP
+    mov ax, [gfx_ln_x1]
+    mov cx, [gfx_ln_x2]         ; CX and not BX: BL is still the flags
+    test bl, LF_XPOS
+    jnz .xord
+    xchg ax, cx                 ; AX = leftmost, CX = rightmost
+.xord:
+    cmp ax, [gfx_ln_cx1]
+    jl .refuse
+    cmp cx, [gfx_ln_cx2]
+    jg .refuse
+    mov [gfx_ln_flg], bl        ; ...and .span wants BX now
+    mov ax, [gfx_ln_cy1]        ; the box, as a range of STEPS: step i is at
+    sub ax, [gfx_ln_y1]         ; y1 + i, and 5.6.2 says i only ever grows
+    mov bx, [gfx_ln_cy2]
+    sub bx, [gfx_ln_y1]
+    mov cx, [gfx_ln_dx]         ; minor delta
+    mov dx, [gfx_ln_dy]         ; major delta
+    jmp short .span
+.refuse:
+    stc
+    ret
+
+    ; --- x-major: ...and the minor extent is the whole y span, which 5.6.2
+    ; has already ordered for us --------------------------------------------
+.shal:
+    mov ax, [gfx_ln_y1]
+    cmp ax, [gfx_ln_cy1]
+    jl .refuse
+    mov ax, [gfx_ln_y2]
+    cmp ax, [gfx_ln_cy2]
+    jg .refuse
+    mov [gfx_ln_flg], bl        ; ...and .span wants BX now
+    mov ax, [gfx_ln_cx1]        ; step i is at x1 + sx*i, so walking LEFT the
+    sub ax, [gfx_ln_x1]         ; box's interval is the same one mirrored
+    mov bx, [gfx_ln_cx2]
+    sub bx, [gfx_ln_x1]
+    test byte [gfx_ln_flg], LF_XPOS
+    jnz .sord
+    neg ax
+    neg bx
+    xchg ax, bx
+.sord:
+    mov cx, [gfx_ln_dy]
+    mov dx, [gfx_ln_dx]
+
+    ; --- the step interval, and the staging both octants share --------------
+    ; AX = lo, BX = hi, CX = minor delta, DX = major delta
+.span:
+    cmp dx, LF_MINMAJ           ; a line too short to pay for the setup goes
+    jl .refuse                  ; the old way (5.6.4.2)
+    or ax, ax                   ; first = max(0, lo)
+    jns .lo
+    xor ax, ax
+.lo:
+    cmp bx, dx                  ; last = min(major, hi)
+    jle .hi
+    mov bx, dx
+.hi:
+    mov [gfx_ln_first], ax
+    sub bx, ax
+    jl .empty                   ; no step of this line is inside this box
+    inc bx
+    mov [gfx_ln_cnt], bx
+    mov si, cx                  ; the staged walk, into the registers the skip
+    add si, si                  ; below wants it in - SI = 2 * minor...
+    mov [gfx_ln_add2], si
+    mov cx, ax                  ; ...CX = the steps to skip...
+    mov ax, si
+    sub ax, dx                  ; ...AX = d = 2*minor - major...
+    add dx, dx                  ; ...DX = 2 * major
+    mov [gfx_ln_sub2], dx
+
+    ; --- the steps in front of the box, advanced but not drawn --------------
+    ; The state and nothing else: no framebuffer, no mask, no address - so one
+    ; loop serves both octants and both inks, at ~35 cycles a skipped step
+    ; against the 723 the general walk spends testing each one.
+    xor di, di                  ; DI = minor steps taken while skipping
+    jcxz .at
+.skip:
+    or ax, ax
+    jle .sn
+    sub ax, dx
+    inc di
+.sn:
+    add ax, si
+    loop .skip
+.at:
+    mov [gfx_ln_d], ax          ; ...and gfx_ls_addr is about to take AX
+
+    ; --- the entry pixel ----------------------------------------------------
+    mov bh, [gfx_ln_flg]        ; BX is free from here, and BH survives
+    mov si, [gfx_ln_x1]         ; gfx_ls_addr, which writes only BL
+    mov dx, [gfx_ln_y1]
+    mov ax, di
+    test bh, LF_STEEP
+    jz .esh
+    add dx, [gfx_ln_first]      ; steep: y by the whole skip, x by the minor
+    jmp short .ex               ; steps the skip actually took
+.esh:
+    add dx, ax                  ; shallow: the other way round
+    mov ax, [gfx_ln_first]
+.ex:
+    test bh, LF_XPOS
+    jnz .exp
+    neg ax
+.exp:
+    add si, ax
+    call gfx_ls_addr            ; DI = the byte, BL = the bit
+    test bh, LF_WHITE
+    jnz .ld
+    not bl                      ; black CLEARS, so it carries the mask
+.ld:                            ; inverted and plots with `and`
+    mov es, [vid_rseg]
+    mov bp, [vid_rowadd]
+    mov ax, [gfx_ln_d]
+    mov dx, [gfx_ln_sub2]
+    mov si, [gfx_ln_add2]
+    mov cx, [gfx_ln_cnt]
+    test bh, LF_STEEP
+    jz .lshal
+    test bh, LF_XPOS
+    jz .lsleft
+    test bh, LF_WHITE
+    jz .lsrb
+    GFX_LFWALK 1, 1, 1
+.lsrb:
+    GFX_LFWALK 1, 1, 0
+.lsleft:
+    test bh, LF_WHITE
+    jz .lslb
+    GFX_LFWALK 1, 0, 1
+.lslb:
+    GFX_LFWALK 1, 0, 0
+.lshal:
+    test bh, LF_XPOS
+    jz .lhleft
+    test bh, LF_WHITE
+    jz .lhrb
+    GFX_LFWALK 0, 1, 1
+.lhrb:
+    GFX_LFWALK 0, 1, 0
+.lhleft:
+    test bh, LF_WHITE
+    jz .lhlb
+    GFX_LFWALK 0, 0, 1
+.lhlb:
+    GFX_LFWALK 0, 0, 0
+.empty:
+    clc
+    ret
+%endif
+
 
 ; --- major-axis runs, one gfx_fill_raw each ----------------------------------
 ; gfx_fill_raw and not gfx_fill: the region has already been spent above, and
@@ -3455,7 +3922,12 @@ gfx_lock:
 .retry:
     cli
     cmp byte [gfx_lock_flag], 0
-    je .take
+    je .free
+    mov byte [gfx_lock_want], 1 ; SPEC.md 7.3: say so BEFORE the sti, inside
+                                ; the cli window that read the flag - a store
+                                ; after it can land behind the very unlock it
+                                ; was meant to be seen by
+.block:
     sti
 %ifndef NOPARKLK
     call inst_park_lk           ; BLOCKED HERE HOLDS NOTHING, if the package
@@ -3465,12 +3937,26 @@ gfx_lock:
     call inst_park_unlk
 %endif
     jmp .retry
+
+.free:                          ; the flag is clear - but SPEC.md 7.3 asks one
+    push ax                     ; more question first. The save and the
+    mov al, [sch_cur]           ; [sch_cur] read are .take's, made one step
+    cmp byte [gfx_lock_want], 0 ; early and shared, so the fast path pays a
+    je .take                    ; compare and a branch and nothing else
+    cmp al, [gfx_lock_last]     ; somebody IS blocked. Am I the task that just
+    jne .take                   ; let go? Then taking it again here IS the
+    pop ax                      ; starvation: a worker that unlocks and
+    mov byte [gfx_lock_want], 0 ; re-locks inside one slice wins every race
+    jmp short .block            ; against a waiter that has to be SCHEDULED
+                                ; before it can even look. The debt is one
+                                ; scheduling window and it is spent HERE, so
+                                ; the same task cannot starve a waiter twice
+                                ; running
 .take:
-    mov byte [gfx_lock_flag], 1
-    push ax
-    mov al, [sch_cur]           ; the owner is stamped inside the cli window,
-    mov [gfx_lock_own], al      ; so flag and owner can never disagree
-    pop ax
+    mov byte [gfx_lock_flag], 1 ; AX is saved and AL = [sch_cur] already
+    mov [gfx_lock_own], al      ; the owner is stamped inside the cli window,
+    mov [gfx_lock_last], al     ; so flag and owner can never disagree - and
+    pop ax                      ; this second one outlives the hold (SPEC 7.3)
     sti
     mov byte [cur_lazy], 1      ; PROMISE the hide (SPEC.md 7.1.4) - the ISR
     ret                         ; will not move the arrow while the flag is
@@ -3902,6 +4388,15 @@ gfx_ln_rs       resw 1          ; runs path: the open run's near end, on the
 gfx_ln_np       resw 1          ; passes still owed: 1 thin, 3 fat (5.6.5)
 gfx_ln_fdx      resw 1          ; ...and the step between them, which is one
 gfx_ln_fdy      resw 1          ; pixel across the MINOR axis
+%ifdef KERN_BIG
+gfx_ln_d        resw 1          ; SPEC.md 5.6.4.1's register walk, staged
+gfx_ln_sub2     resw 1          ; across gfx_ls_addr: 2*major and 2*minor, the
+gfx_ln_add2     resw 1          ; step interval's start, and how many pixels of
+gfx_ln_first    resw 1          ; it are inside this pass's box
+gfx_ln_cnt      resw 1
+gfx_ln_flg      resb 1          ; ...and LF_STEEP / LF_WHITE / LF_XPOS, which
+                                ; pick which of 5.6.4.2's eight walks runs
+%endif
 gfx_ln_ink      resb 1          ; mono path: gfx_ink's 00 / FF / 01
 gfx_ln_wide     resb 1          ; 1 = the 1bpp three-column walk (5.6.6)
 gfx_ln_majx     resb 1          ; runs path: 1 = the major axis is x
@@ -4132,9 +4627,13 @@ gfx_blit1_x:
 .row:
     mov cx, [bp+8]
     push di
-    rep movsb                   ; no segment override on a rep: an 8086 loses
-    pop di                      ; the prefix to an interrupt (SPEC.md 5.7)
-    add si, [bp+6]
+    shr cx, 1                   ; WORDS: `rep movsw` is 12.5 clocks a byte on
+    rep movsw                   ; an 8088 against `rep movsb`'s 17, and the
+    jnc .even                   ; carry out of the shift is the odd byte. A
+    movsb                       ; string op writes no flag and neither does
+.even:                          ; `rep`, so it survives the move (SPEC.md
+    pop di                      ; 5.4.2). No segment override on a rep: an
+    add si, [bp+6]              ; 8086 loses the prefix to an interrupt (5.7)
     add di, [bp+4]
     test di, [bp+2]
     jz .nowrap

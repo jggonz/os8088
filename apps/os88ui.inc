@@ -91,6 +91,9 @@
   %macro UI_GRAY 0
     call KERNEL_SEG:cw_gfx_fill_gray
   %endmacro
+  %macro UI_TICKS 0
+    mov ax, [ticks]
+  %endmacro
 %else
   %macro UI_FRAME 0
     call OSAPI_GFX_FRAME
@@ -130,6 +133,9 @@
   %endmacro
   %macro UI_GRAY 0
     call OSAPI_GFX_FILL_GRAY
+  %endmacro
+  %macro UI_TICKS 0
+    call OSAPI_GET_TICKS
   %endmacro
 %endif
 
@@ -191,6 +197,28 @@ OS88UI_DOWN equ 16              ; THE PRESSED LOOK (SPEC.md 13.8): interior
                                 ; caption in it, which says "pressed" about a
                                 ; control that will refuse.
 
+; --- OS88UI_BARONLY - the bar WITHOUT the button (SPEC.md 13.10.6.5) ---------
+; An OPT-OUT, and it is 13.10.4's own rule pointed the other way: that section
+; gates the scroll bar so "a package which never draws a bar does not carry
+; one", and the button had no such gate - so a package that wanted only the
+; bar paid for os88ui_btn, os88ui_bhit, os88ui_glyph, four 12x12 bitmaps and
+; the click machinery as well.
+;
+; **MEASURED ON FROTZ, WHICH DRAWS NO STANDARD BUTTON AT ALL**: including this
+; file cost it 1,132 bytes where Word - which already had it, for its buttons -
+; paid 565 for the same bar. The difference is exactly this block.
+;
+; It is an opt-out rather than an opt-in so that every existing consumer is
+; byte-identical, which is checked rather than asserted.
+%ifdef OS88UI_BARONLY
+ %ifndef OS88UI_SCROLL
+  %error "OS88UI_BARONLY without OS88UI_SCROLL includes no drawing code at all"
+ %endif
+ %ifdef OS88UI_KERNEL
+  %error "OS88UI_BARONLY is a PACKAGE's: both kernel dialogs draw buttons"
+ %endif
+%endif
+%ifndef OS88UI_BARONLY
 ; -----------------------------------------------------------------------------
 ; os88ui_btn - draw one standard button
 ; in:  BX = rect {x1,y1,x2,y2} inclusive, SI = NUL label, DI = OS88UI_* flags
@@ -623,6 +651,7 @@ os88ui_g_con:                   ; check, set: the same square, crossed
 %if (OS88UI_GRADIO | OS88UI_GON) != 1 || OS88UI_GCHECK != 2
   %error "os88ui: the glyph indices no longer walk the array in order"
 %endif
+%endif                          ; OS88UI_BARONLY
 %ifdef OS88UI_KERNEL
 section .cold
 %endif
@@ -639,9 +668,9 @@ section .cold
   %ifdef KERN_BIG
     %define OS88UI_ARM
   %endif
-%else
-  %define OS88UI_ARM
-%endif
+%elifndef OS88UI_BARONLY        ; ...and NOT under OS88UI_BARONLY: os88ui_bfind
+  %define OS88UI_ARM             ; walks a button table by calling os88ui_bhit,
+%endif                           ; which the block above has just taken out
 %ifdef OS88UI_ARM
 
 ; --- ...and it is BOTH WORLDS' now -------------------------------------------
@@ -835,11 +864,17 @@ os88ui_sbthumb:
     jge .hok
     mov ax, OS88UI_SBMINH
 .hok:
+    push bp
+    mov bp, cx                  ; BP = track - height: the thumb's TRAVEL,
+    sub bp, ax                  ; which is what a drag can actually walk
     push ax                     ; ...banked, because the offset needs the mul
-    mov ax, [ds:bx+12]          ; pos * track / total = the offset down it
-    mul cx
-    div word [ds:bx+8]
-    pop dx                      ; DX = the height
+    mov ax, [ds:bx+12]          ; pos * travel / (total - fit): pos runs
+    mul bp                      ; 0..total-fit and the top runs 0..travel,
+    mov bp, [ds:bx+8]           ; end meeting end. The old pos*track/total
+    sub bp, [ds:bx+10]          ; form disagreed with its own inverse the
+    div bp                      ; moment the MINH clamp above fired, and the
+    pop dx                      ; view could never reach the end of a long
+    pop bp                      ; listing by the thumb (13.10.5.3)
     add ax, si                  ; ...and AX the top
     add cx, si                  ; clamp: top <= track end - height + 1
     sub cx, dx
@@ -958,6 +993,25 @@ os88ui_sbcx:
 ; -----------------------------------------------------------------------------
 ; os88ui_sbthdraw - draw the thumb: a white body in a black frame (internal)
 ; in:  DI = the block, AX = its top, DX = its height; pen BLACK on the way out
+;
+; THE BORDER GOES DOWN FIRST AND THE FILL IS THE INTERIOR IT ENCLOSES, which
+; is the same two calls and the same pixels and is NOT the same picture while
+; they are running (SPEC.md 13.10.5.9).
+;
+; It used to be a white fill over the whole thumb and then a frame around it -
+; identical output, and between the two calls the thumb was a BORDERLESS WHITE
+; SLAB, because the fill had just erased the border the frame was about to put
+; back. On a 4.77 MHz 8088 a drawing call is ~756 us whatever it draws, so that
+; state is held for the better part of a millisecond every time the thumb
+; moves; caught in the act with a breakpoint inside this routine, the old thumb
+; and the new one merge into one unbordered mass twice the thumb's height. That
+; is PERFORMANCE.md Part 1's DOUBLE-DRAW FLASH exactly - drawn twice, invisible
+; in an emulator, and the reason a dragged thumb shimmered.
+;
+; This way every lit region on the bar is bounded by a border at every instant.
+; Mid-move you see two framed boxes for the width of one call, which is
+; SPEC.md 42.7.1's own argument: a doubled thumb reads as movement where an
+; absent - or an unbordered - one reads as a blink.
 ; -----------------------------------------------------------------------------
 os88ui_sbthdraw:
     push ax
@@ -971,10 +1025,20 @@ os88ui_sbthdraw:
     add ax, 2
     mov cx, [ds:di+4]
     sub cx, 2
+    UI_BLACK
+    UI_FRAME                    ; the border...
+    inc ax                      ; ...and the interior INSIDE it, which is what
+    dec cx                      ; keeps the border off the fill's rect
+    inc bx
+    dec dx
+    cmp ax, cx
+    jg .out                     ; a bar narrow enough to have no interior is
+    cmp bx, dx                  ; all border, and the frame above already drew
+    jg .out                     ; it. Nothing here requires a 14px bar (13.10.2)
     UI_WHITE
     UI_FILL
-    UI_BLACK
-    UI_FRAME
+    UI_BLACK                    ; the header's promise: the pen leaves BLACK
+.out:
     pop dx
     pop cx
     pop bx
@@ -1132,6 +1196,309 @@ os88ui_sbmove:
     pop bx
     pop ax
     ret
+
+%ifdef OS88UI_SBDRAG
+; =============================================================================
+; THE THUMB DRAG (SPEC.md 13.10.5) - a KNOB, and KERN_BIG's
+;
+; A scroll bar's gesture is not one press. It is a press, a stream of
+; movements and a release, and SPEC.md 13.7 forbids a package answering that
+; with a polling loop - so until the three edges existed (W_ONCLICK,
+; W_ONDRAG, W_ONMOUSEUP) neither kernel bar COULD drag its thumb, whatever it
+; wanted to do with one. This is ui_drag's substance without ui_drag's shape:
+; the same tracking, spread across three callbacks instead of held inside one
+; modal loop with the gfx lock down for the whole gesture.
+;
+; IT IS STILL GEOMETRY AND NOT POLICY (13.10.1). What is owned here is the
+; gesture's ARITHMETIC - the anchor, the clamp, the pointer-to-pos inverse and
+; the overlay - and the one question it answers is "the pointer is here, so
+; the view belongs at pos". Whether the caller can AFFORD to go there now is
+; the caller's, which is what the rate is (13.10.5.4).
+;
+; x IS NEVER READ (13.10.5.2). os88ui_sbtrack takes DX and does not take CX,
+; so the thumb is locked to the bar's vertical extent wherever the hand goes -
+; deliberately NOT the Macintosh's snap-back, which needs a width to measure a
+; tolerance against and a cancel path to get wrong.
+;
+; THE STATE IS A STATIC OF THE ELEMENT'S and the seven-word block does not
+; grow (13.10.5.6): one drag at a time on the one UI task, os88ui_ksb's
+; argument exactly - and a block that grew would move every caller's .bss and
+; rebuild every package that ever declared one.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; os88ui_sbgrab - take the thumb: a press landed on it and the hand has it now
+; in:  BX = the block, DX = the press's y (ABSOLUTE), AL = the rate in TICKS
+;      (0 = the view does not follow at all until the release, 13.10.5.4)
+; out: CF = 1 = there is no thumb to take and NOTHING was armed; CF = 0 = the
+;      gesture is live. Every register preserved.
+;
+; The anchor is banked as press_y - thumb_top, so the thumb does not jump
+; under the finger on the first movement.
+; -----------------------------------------------------------------------------
+os88ui_sbgrab:
+    push ax
+    push cx
+    push dx
+    mov [os88ui_sbd_rate], al
+    mov cx, dx                  ; CX = the press's y; sbthumb answers in DX
+    call os88ui_sbthumb         ; AX = the thumb's top, DX = its height
+    jc .none                    ; everything fits, or the track is too short
+    sub cx, ax
+    mov [os88ui_sbd_off], cx    ; THE ANCHOR
+    mov ax, [ds:bx+12]
+    mov [os88ui_sbd_pos], ax    ; the drag starts where the view already is
+    mov ax, [ds:bx+0]           ; ...and WHICH BAR it was taken on (13.10.5.10)
+    mov [os88ui_sbd_id], ax
+    mov ax, [ds:bx+2]
+    mov [os88ui_sbd_id+2], ax
+    mov byte [os88ui_sbd_on], 1
+    UI_TICKS                    ; AX = the tick the rate is measured from
+    mov [os88ui_sbd_last], ax
+    clc
+    jmp short .out
+.none:
+    stc
+.out:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; os88ui_sbtrack - the pointer moved and the press is still down
+; in:  BX = the block, DX = the pointer's y (ABSOLUTE). CX IS NOT TAKEN
+; out: CF = 0 and AX = the pos the view is owed; CF = 1 = nothing is owed.
+;      AX is clobbered either way; every other register preserved.
+;
+; Three ways to be owed nothing, and they are different: no drag is live; the
+; hand moved but not far enough to change a row (13.10.5.3's quantisation);
+; or the RATE says not yet. Only the first draws nothing at all - the other
+; two have already moved the thumb or the overlay, which is the point of
+; having a rate rather than a cadence.
+; -----------------------------------------------------------------------------
+os88ui_sbtrack:
+    call os88ui_sbmine
+    jc .no
+    push cx
+    push dx
+    push si
+    push di
+    call os88ui_sbpos           ; DI = where the hand puts the view
+    cmp di, [os88ui_sbd_pos]
+    je .nothing                 ; the same row: not one pixel changes
+    mov ax, [os88ui_sbd_pos]    ; os88ui_sbmove wants the old pos in AX and the
+    mov [os88ui_sbd_pos], di    ; new one in the block, and os88ui_sbfix has
+    mov [ds:bx+12], di          ; already put the old one there - so the two
+    call os88ui_sbmove          ; agree by construction
+.owed:
+    cmp byte [os88ui_sbd_rate], 0
+    je .nothing                 ; RATE 0: the release commits and nothing else
+    push bx                     ; does (13.10.5.4)
+    UI_TICKS
+    mov si, ax
+    sub ax, [os88ui_sbd_last]   ; wrap-safe (SPEC.md 8)
+    mov bl, [os88ui_sbd_rate]
+    xor bh, bh
+    cmp ax, bx
+    pop bx
+    jb .nothing                 ; too soon: the thumb moved, the view waits
+    mov [os88ui_sbd_last], si   ; the deadline is banked at the COMMIT, so a
+    mov ax, di                  ; hand that pauses and moves again is served
+    clc                         ; at once rather than waiting out a window it
+    jmp short .out              ; already sat through
+.nothing:
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    ret
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; os88ui_sbdrop - the button came up: the gesture is over
+; in:  BX = the block, which 13.10.5.10 matches against the gesture's own
+; out: CF = 0 and AX = the FINAL pos, which the caller owes the view
+;      unconditionally; CF = 1 = no drag was live and AX is untouched.
+;      Every other register preserved.
+;
+; -----------------------------------------------------------------------------
+os88ui_sbdrop:
+    cmp byte [os88ui_sbd_on], 0
+    je .no
+    call os88ui_sbmine          ; a DIFFERENT bar's gesture (13.10.5.10): it is
+    jc .spend                   ; spent either way - one nobody will release
+                                ; must not outlive this press - but the pos
+                                ; below is not this caller's to scroll to
+    mov byte [os88ui_sbd_on], 0
+    mov ax, [os88ui_sbd_pos]
+    clc
+    ret
+.spend:
+    mov byte [os88ui_sbd_on], 0
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; os88ui_sbdragging - is a thumb drag live?
+; out: CF = 1 = no. Every register preserved.
+;
+; One instruction, and it is a compare against 1 rather than against 0 so that
+; the borrow IS the answer: a caller's whole test is a call and a jc.
+; -----------------------------------------------------------------------------
+os88ui_sbdragging:
+    cmp byte [os88ui_sbd_on], 1
+    ret
+
+; -----------------------------------------------------------------------------
+; os88ui_sbmine - is the block in BX the bar this gesture was taken on?
+; in:  BX = a block
+; out: CF = 1 = no drag, or a DIFFERENT bar's. Every register preserved.
+;
+; SPEC.md 13.10.5.10. There is one gesture record and there are two kernel
+; bars, so "a drag is live" and "a drag is live ON THIS BAR" stopped being the
+; same question the moment the file dialog was wired. Without this,
+; os88ui_sbfix would fix the Disk window's dragged pos into the DIALOG's block
+; - a thumb drawn where nothing is, and a hit test that agrees with it.
+;
+; The identity is (x1, y1), which is enough: two bars on screen at the same
+; time cannot share a top-left corner.
+; -----------------------------------------------------------------------------
+os88ui_sbmine:
+    cmp byte [os88ui_sbd_on], 0
+    je .no
+    push ax
+    mov ax, [ds:bx+0]
+    cmp ax, [os88ui_sbd_id]
+    jne .other
+    mov ax, [ds:bx+2]
+    cmp ax, [os88ui_sbd_id+2]
+    jne .other
+    pop ax
+    clc
+    ret
+.other:
+    pop ax
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; os88ui_sbfix - the caller has just filled its block: put the DRAGGED pos in
+; in:  BX = the block
+; out: nothing; every register preserved
+;
+; SPEC.md 13.10.5.6. While a drag is live the thumb is drawn where the HAND is
+; and the content is where the VIEW is, and at rate 0 those disagree for the
+; whole gesture. That is one fact in two places - 13.8.2's "the glass and the
+; byte cannot part" in another costume - and it is answered HERE, once, rather
+; than at every drawing site: every reader downstream sees one coherent block
+; and none of them knows a drag exists.
+;
+; -----------------------------------------------------------------------------
+os88ui_sbfix:
+    call os88ui_sbmine          ; ...on THIS bar (13.10.5.10)
+    jc .out
+    push ax
+    mov ax, [os88ui_sbd_pos]
+    mov [ds:bx+12], ax
+    pop ax
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; os88ui_sbpos - where the hand puts the view (internal)
+; in:  BX = the block, DX = the pointer's y (ABSOLUTE)
+; out: DI = the pos; every other register preserved
+;
+; THE INVERSE of os88ui_sbthumb, and 13.10.5.3 is the proof that its div
+; cannot overflow: the clamp holds (top - track_top) to at most track_h, so
+; the quotient is at most total. Reached only with a live drag, which means
+; sbthumb said yes at the press - but total and fit are the CALLER's and can
+; change under the gesture, so a refusal now keeps the pos it already had.
+; -----------------------------------------------------------------------------
+os88ui_sbpos:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push bp
+    mov bp, dx                  ; BP = the pointer's y
+    call os88ui_sbthumb         ; DX = the thumb's height
+    jc .keep
+    mov di, dx                  ; ...banked: mul is about to want DX
+    mov si, [ds:bx+2]
+    add si, OS88UI_SBCELL+1     ; SI = the track's top
+    mov cx, [ds:bx+6]
+    sub cx, OS88UI_SBCELL+1
+    sub cx, si
+    inc cx                      ; CX = the track's height
+    sub bp, [os88ui_sbd_off]    ; the wanted TOP (13.10.5.2)...
+    sub bp, si                  ; ...rebased onto the track
+    jns .lo
+    xor bp, bp
+.lo:
+    mov ax, cx
+    sub ax, di                  ; the last legal top, rebased
+    jns .hi
+    xor ax, ax
+.hi:
+    cmp bp, ax
+    jle .hok
+    mov bp, ax
+.hok:
+    mov cx, ax                  ; CX = the TRAVEL (track - height): the clamp
+    jcxz .keep                  ; above already put BP inside it. No travel -
+                                ; a MINH thumb on a MINH track - is nowhere
+                                ; to drag and a zero divisor: keep the pos
+    mov ax, [ds:bx+8]
+    sub ax, [ds:bx+10]          ; AX = total - fit (sbthumb refused
+                                ; everything-fits with CF long before here)
+    mul bp                      ; x the wanted top -> DX:AX
+    div cx                      ; / the travel (13.10.5.3) - the exact
+                                ; inverse of sbthumb's pos -> top, clamp
+                                ; included, so the two agree at both ends
+    mov di, ax
+    mov ax, [ds:bx+8]           ; ...and never past the last page
+    sub ax, [ds:bx+10]
+    jns .cl
+    xor ax, ax
+.cl:
+    cmp di, ax
+    jbe .out
+    mov di, ax
+    jmp short .out
+.keep:
+    mov di, [os88ui_sbd_pos]
+.out:
+    pop bp
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+%ifndef OS88UI_KERNEL
+; A PACKAGE's state is inline DATA (SPEC.md 2.6 rule 1) - os88ui_armw's
+; precedent above. The kernel's is in .bss at the bottom of this file, and
+; that is a RULE and not a preference: this file assembles into .cold there,
+; whose CS is COLD_SEG while DS stays KERNEL_SEG, so a word declared here and
+; read through DS would be whatever lives at the same offset in .text.
+os88ui_sbd_on:   db 0
+os88ui_sbd_rate: db 0
+os88ui_sbd_off:  dw 0
+os88ui_sbd_pos:  dw 0
+os88ui_sbd_last: dw 0
+os88ui_sbd_id:   dw 0, 0
+%endif
+%endif                          ; OS88UI_SBDRAG
 
 %endif                          ; OS88UI_SCROLL
 
@@ -1662,6 +2029,18 @@ os88ui_krect: resw 4
 ; declares its own (the block is seven words of anything).
 ; -----------------------------------------------------------------------------
 os88ui_ksb: resw 7
+%ifdef OS88UI_SBDRAG
+; The thumb drag's state (SPEC.md 13.10.5.6), and it is one for os88ui_ksb's
+; reason: one gesture at a time on the one UI task. .bss and not .cold - see
+; os88ui_krect's comment above for what forgetting that costs.
+os88ui_sbd_on:   resb 1         ; 1 = a thumb drag is live
+os88ui_sbd_rate: resb 1         ; the window's throttle, in ticks; 0 = the
+                                ; release commits and nothing before it
+os88ui_sbd_off:  resw 1         ; the anchor: press y - thumb top
+os88ui_sbd_pos:  resw 1         ; the pos the HAND is at (not the view's)
+os88ui_sbd_last: resw 1         ; [ticks] at the last commit
+os88ui_sbd_id:   resw 2         ; WHICH BAR: its x1 and y1 (SPEC.md 13.10.5.10)
+%endif
 %endif
 
 ; -----------------------------------------------------------------------------

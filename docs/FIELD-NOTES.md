@@ -2774,3 +2774,706 @@ refuses, the answer is §11.100.4: a window that has DECLARED a size for that
 adapter is handed it and told, and `apps/modplug` is the first — its compact
 face onto the CGA and its full one home, **0 differing pixels** against a
 forced full repaint.
+
+---
+
+## 27. A window that draws every frame starves the pointer — REPRODUCED; the LOCKOUT is fixed, the starvation is not
+
+**Reported** while looking at `apps/wire` (SPEC.md §78) on the field machine:
+*"we are only getting mouse input when not drawing, and edge-then-repair is
+always drawing. I could not even click to close the window, after over a
+minute of trying."* The same reporter names `apps/paint` as the program this
+has always been worst in, and that is the reason to write it down rather than
+file it under the demo.
+
+**The arithmetic says it should happen and that is not the same as reproducing
+it.** §78's worker takes the gfx lock for one burst a frame. At `Medium` /
+`Edge at a time` that burst is ~52 ms of a 54.9 ms tick; at `Edge, then
+repair` it is ~82 ms of an 82 ms period — 1.5× the line work and no sleep left
+at all (PERFORMANCE.md Set 73's 12.1 fps). Whatever the UI task needs the lock
+for is then waiting on a routine that never lets go for longer than it takes
+to re-take it.
+
+### 27.1 Reproduced, and it is all three of the old candidates at once
+
+`apps/wire` at any draw order, on `os8088_5150_herc`. The pointer moves
+throughout; the clicks do not arrive.
+
+**Liveness first, with `tests/dispfreeze.py`'s own instrument** — a MEMORY
+breakpoint on the byte `ui_task` step 0 reads, which is the only honest pass
+counter (an exec breakpoint fires on the 8088's prefetch, and `[ticks]` is
+bumped from inside IRQ0 so it advances through a UI task that has stopped):
+
+| | `ui_task` passes, per second of GUEST time |
+|---|---:|
+| desktop, nothing running | **650** |
+| `apps/wire`, Whole figure | **18** |
+| `apps/wire`, Edge at a time | **18** |
+| `apps/wire`, Edge, then repair | **18** |
+
+**18 is the tick.** The UI task is not dead — it is making exactly one pass
+per tick, a **36× drop**, and the number is the same for all three draw
+orders because all three hold the lock for very nearly the whole frame.
+
+**And a pass pops ONE event.** `ui_task` step 2 is a single `evq_pop` and then
+the pass runs its end-of-pass housekeeping (`kbm_ui`, `ui_arm_chk`,
+`ui_timer_pass`, `fdlg_reap`, `wm_close_pass`, the deferred launch) before
+looking again. So the drain rate is **18 events a second at best** — and worse
+whenever a pass actually dispatches something, because that pass then blocks
+on `gfx_lock` for a whole frame.
+
+**The ring is 16 records and a full one drops the NEWEST** (SPEC.md §10,
+`evq_push`'s `cmp word [evq_count], EVQ_CAP` / `jae .full`). Measured while
+clicking as fast as the packets go:
+
+```
+evq depth: peak 16 of 16, last ten [16, 16, 16, 16, 16, 16, 16, 15, 16, 16]
+closed on click NEVER (40 tries)          ...and 35 on a second run
+```
+
+**Then stop clicking, and it cures itself:**
+
+```
+after 3.6s of not clicking: evq depth 0
+one calm click: CLOSED
+```
+
+Which is the report exactly — sixty seconds of clicking with nothing getting
+through — and it is also the workaround: **take your hand off the mouse for a
+second.**
+
+### 27.2 Three defects, and the fix for any one of them would have hidden the others
+
+1. **`gfx_lock` has no fairness** (`kernel/vga12.inc`): `.retry` is `cli`,
+   test, `sti`, `task_yield`, round again. No queue, no ticket. A worker that
+   releases and immediately re-takes wins against a UI task that has to be
+   scheduled first, so a 95%-duty worker starves it 36×. **Right, and FIXED —
+   SPEC.md §7.3. §27.4 below says how nearly it was thrown away.**
+2. **The UI task drains one event a pass.** At 650 passes a second nobody
+   would ever notice; at 18 it is the whole bandwidth of the machine's input.
+3. **A full ring drops the NEWEST press.** For input this is the wrong end:
+   dropping the newest means a *sustained* burst locks the user out for as
+   long as they keep trying, where dropping the oldest would always keep the
+   press they most recently meant. It is why clicking harder makes it worse.
+
+Paint's symptom is the same three seen from the other side and is **not** a
+lost press: the ISR keeps `mouse_x`/`mouse_y` fresh, so the *positions* are
+right and the cursor tracks — what is lost is the intermediate motion between
+one UI pass and the next, which is why a fast swing draws one long straight
+segment ("ziggy and zaggy") and a stroke ends a little short of where the hand
+stopped rather than nowhere near it.
+
+**It is not caused by SPEC.md §5.6.4.1** — the same starvation arithmetic
+holds for any worker that fills its tick, and `apps/paint` predates all of it.
+What §5.6.4.1 changed is that a *line-drawing* program can now fill its tick
+with far more drawing, which is why this surfaced now.
+
+### 27.3 Defects 2 and 3 are fixed, and it was 2 that mattered
+
+SPEC.md §10.1 turned the full-ring policy round and §10.2 made the pass drain
+the ring instead of sipping one record. Defect 1 is untouched: the UI task
+still gets 18 passes a second under a drawing worker, and nothing here claims
+otherwise.
+
+**The reproduction.** `apps/wire` at `Edge at a time`, its close box hammered
+sixty times with no pause between press and release — as close to the reported
+hand as a script gets — on `os8088_5150_herc`. "Closed" is the window actually
+going away; "last-popped" samples `ui_ev`'s type once per click, so it says
+which half of each gesture `ui_task` was getting.
+
+| | last-popped types | result |
+|---|---|---|
+| as shipped before this (one record a pass, drop newest) | `{MDOWN: 60}` | **never closed** |
+| §10.1 alone (one record a pass, drop oldest) | `{MDOWN: 9, MUP: 51}` | **never closed** |
+| §10.2 (drain), either ring policy | mixed | **closed in 13–40 clicks, 1.8–5.8 guest s** |
+
+The first two rows are the finding, and neither was predicted. **One record a
+pass separates a press from its release, and which half survives is decided by
+the queue's arithmetic rather than by anything about the user.**
+
+- Refusing the newest leaves exactly one free slot per dispatch and the
+  *press* wins it every time, because a press is what a hand does next. Sixty
+  hammered clicks produced sixty dispatched `EVT_MDOWN`s and not one
+  `EVT_MUP`: the close box was armed sixty times and spent none. That is
+  precisely *"I could not even click to close the window, after over a minute
+  of trying"*, and precisely why it comes right the moment the hand stops.
+- Discarding the oldest lands on the other parity — the drop and the pop both
+  take the head — so the releases arrive and the presses are eaten. Same
+  outcome, opposite half.
+
+So §10.1 is not what fixed this; §10.2 is. §10.1 is kept because bounded
+staleness is right on its own terms and measured no worse: with the drain in,
+the two policies close the window in 27/36 clicks and 13/40 clicks
+respectively, which is one distribution.
+
+**Paint is not fixed.** Its symptom is defect 1 — the UI task not running
+often enough to sample the pointer — and the drain does nothing for a stream
+of positions that were never queued in the first place. Expect it to still be
+ziggy and to still stop short.
+
+### 27.4 Defect 1 was nearly thrown away on a measurement taken at the wrong moment
+
+This section said the opposite for one round, and the way it got there is worth
+more than the conclusion.
+
+Three counters went into `gfx_lock` — acquires, blocks, handovers — and were
+sampled per guest second with `apps/wire` drawing. They reported **0 blocks a
+second** at every draw order. A fairness handover was built, measured against
+that, found to fire zero times, and **reverted as dead weight**.
+
+The counters were right. The measurement was taken with **no input pending**,
+and the UI task only asks for the lock when it has something to draw. So it was
+taken at precisely the moment the defect cannot appear. A worker drawing to an
+empty desk contends with nobody, and *that* is what 0 blocks a second means.
+
+What exposed it was building an instrument for the thing actually being
+complained about — latency — rather than for the thing suspected. A memory
+breakpoint on `evq_tail` (the mouse ISR queueing the press) and one on
+`menu_ent` (`menu_track` with the pull-down up), reading `cycles` at each:
+
+| | press queued → menu up | blocks, across that window |
+|---|---|---:|
+| idle desktop | 1–2 ms | 0 |
+| wire drawing, no fairness | **1,382 – 14,722 ms** | 26 – 268 |
+| wire drawing, §7.3's handover | **37 – 70 ms** | **1** |
+
+The same counters, counted across the click instead of across the second, say
+the UI task was blocking once per pass, every pass, for seconds. **Contention
+is a property of the moment a click lands.** Counting it anywhere else answers
+a question nobody asked.
+
+The quantum work (§27.4.1) came out of the wrong diagnosis and survives it: it
+is real, it is measured, and with §7.3 in place it is no longer the lever.
+
+#### 27.4.1 The quantum is real, and it is not the lever
+
+`ui_task` yields the moment its pass is done; a drawing worker spends its whole
+55 ms slice; so the UI task gets one pass per timer tick. That is why the pass
+count is 18 for all three of wire's draw orders and why it is *exactly* the
+tick. SPEC.md §53.2.1's sub-tick already fixes it — `sch_fast_on` makes IRQ0
+arrive N times a tick with `[ticks]` unchanged — and `make QUANTUM=2|3|4` arms
+it system-wide:
+
+| | ui passes/s | wire fps (whole / edge / repair) |
+|---|---:|---|
+| 55 ms quantum, as shipped | 18 | 18.2 / 18.2 / 12.1 |
+| 18 ms quantum, `QUANTUM=3` | **54** | 17.1 / 16.1 / 12.1 |
+
+Before §7.3 that was the only thing that moved the field symptom at all: it
+took a machine on which a menu could not be opened to one where it could,
+reported as *"it functions, but 2-3s before anything happens"*. The latency
+instrument explains both halves — 3× the passes against a defect that costs
+seconds is still seconds.
+
+On top of §7.3 it measures 16–61 ms against 37–70, which is inside the noise.
+So it stays a knob and stays off: with the handover in place the UI task does
+not need more passes, it needs the one it gets to succeed.
+
+### 27.5 The press-and-hold report does NOT reproduce here
+
+Reported after §10.1/§10.2 landed: a click now works, but *"click, hold down,
+move across the screen, let up — did nothing"*, and on the menu bar
+*"clicking and releasing makes the menu flash; clicking and holding did not
+bring and keep the menu open."* The reporter's own reading is that a dropped
+event makes a hold look like a click, which is the right shape: every
+press-and-hold path in this kernel (`menu_track`, `ui_drag`, `ui_grow`,
+`fm_drag`) asks a LIVE question — the queued `EVT_MUP`, or `mouse_btn`'s level
+— so a press dispatched *after* the hand let go collapses instantly.
+
+Four instruments, on `os8088_5150_herc` with `apps/wire` drawing at both fast
+draw orders, and none of them shows it:
+
+- **menu press-and-hold**: press on the chip menu, hold 1.6 guest seconds
+  without releasing, sample `menu_ent` every two frames — **menu up in 40 of
+  40 samples**, idle and loaded alike.
+- **title-bar drag**: wire's own window dragged +40/+20 — arrives at
+  +40/+29, the same overshoot the no-worker control shows, so the drag tracks.
+- **single unverified packets**: `os88mouse._edge` resends the button packet up
+  to twenty times and proves it landed, which a real serial mouse never does —
+  so every scripted gesture in this tree is immune to a defect a hand is not.
+  Sending **one** raw packet per edge: press seen 25/25, release seen 25/25,
+  idle and loaded.
+- **the lock**: 0 blocks a second (§27.4).
+
+Every one of those four is measured through `tools/os88mouse.py`, whose
+injection path costs ~0.51 guest seconds flat (SPEC.md §7.3.1) — three of them
+also *resend until the guest agrees*, which a hand never does. So they proved
+the packets arrive and the handlers work, and were blind by construction to the
+one thing being reported, which was how long it all took.
+
+**It was the latency, and §7.3 is the fix.** The `QUANTUM=3` A/B is what said
+so: on the field machine it took a wire window whose menu would not open and
+whose title bar would not drag to one where both work, *"still painfully
+unresponsive — 2-3s before anything happens after clicking — but it functions"*.
+Three times the passes against a defect that costs seconds is still seconds,
+and the second half of that sentence is the defect. §7.3 takes the same click
+from 1,382–14,722 ms to 37–70 ms.
+
+`apps/paint` was expected to be unchanged by all of this and was reported
+unchanged. **It is a separate defect and it is mostly fixed in SPEC.md
+§42.8.1** (and §42.8.2 is what the field said it was worth, including one
+prediction it contradicted): not
+the UI task's pass rate at all, but `pt_stroke`'s own wait. Its idle branch
+spun to the next `[ticks]` boundary whenever the pointer was where it already
+was — and at 1200 baud that means "the next report has not arrived yet", not
+"the hand stopped", so a 40 Hz mouse was aliased to 18.2 Hz. Measured 20
+samples a second, which is the tick to the digit; 88 after. The reporter's
+`hello world` GIF is a hand drawing a letter in half a second and getting ten
+samples.
+
+## 28. CURFIX still reads wrong to the eye — OPEN, second report
+
+SPEC.md §7.1.4.4 left §7.1.4.2 + §7.1.4.3 behind `make CURFIX=1` because the
+instruments and the eye disagreed, and asked for the pair to be judged on a
+real machine. It has now been judged twice, by the same reader, on an
+`os8088_5150_herc`-class field machine, and the answer both times is a
+qualified no:
+
+> *"I once again think curfix feels 'slightly weird'. Almost like the
+> acceleration is wrong, even though we shouldn't have changed that. And it
+> flashes just as much with wire running as no-curfix."*
+
+Two separate claims and they are worth keeping apart.
+
+- **"The acceleration is wrong."** Nothing in either section touches
+  `mou_isr`'s deltas — §7.1.4.3 adds one store of `[ticks]` into `[cur_mvt]`
+  and reads it in `cur_lazyck`, and that is the whole of the arithmetic. So
+  either the report is about *when the arrow is redrawn* rather than where —
+  a pointer hidden through a draw and put back at the new place reads as a
+  jump, which is §7.1.4.3's own "hidden and stuck" — or it is something not
+  yet found. **It is a claim about motion, and §7.1.4.4 already says the four
+  instruments in `tools/` all park the pointer.** The missing instrument is
+  still missing.
+- **"It flashes just as much with wire running."** `apps/wire` holds the gfx
+  lock for very nearly the whole frame (note 27), and the mouse ISR does not
+  move the arrow while it is held (§7.1). Neither knob changes that, so a
+  cursor over a window that is drawing every tick is expected to behave the
+  same on both builds — this half is consistent rather than surprising, and
+  it means the wire case cannot discriminate between them.
+
+**The default does not move.** Both disks were built at one commit with only
+the knob between them and a marker file in each root, which is the comparison
+§7.1.4.4 asks for; the pair stays available and stays off. The next step is an
+instrument that reads a MOVING pointer, not another A/B of the same two disks.
+
+
+---
+
+## 29. The 5150 hard-freezes on an FTP upload to the hard disk (TWO FAULTS found and fixed; the stack one is MEASURED at 220 of 256 and is a margin decision now, not a bug)
+
+**Observed.** With the FTP server (§77) running and its Root pointed at
+`C:/`, a client connects, logs in, and the machine hard-freezes. The last
+line on the FTP window's log is **`CWD`**. No error, no toast, no cursor —
+the guest stops.
+
+**The one fact that shapes the whole investigation.** It reproduces on
+**every build tried, including ones that demonstrably worked earlier the same
+session**:
+
+| build | what it did before | now |
+|---|---|---|
+| `3969745` | ran a full transfer at 8720 B/s | — |
+| `9c11182` | produced the first complete profile, 36,080 ms wall | **freezes on CWD** |
+| `0c12f31` | a transfer in 24,565 ms | — |
+| `45ee710` | a transfer in 22,891 ms | — |
+| `4322e5f` | — | **freezes on CWD** |
+
+`9c11182` is the reference build: it was cut *before* `rep movsb` (§72.16),
+it carries the profiler, and it completed a 297 KB upload on this machine an
+hour before it started freezing. **A build cannot regress against itself.**
+So the change is in the machine, not in the tree.
+
+**Ruled out.**
+
+- **`rep movsb` (§72.16).** The reference build predates it and freezes too.
+- **`netbench`.** The freezing run had no benchmark window open at all.
+- **The profiler being on or off.** It froze with it never started.
+- **The report save.** Driven under QEMU with the FTP server running: `W`
+  pressed, the system tick kept advancing for twenty seconds afterwards, the
+  server still answered a fresh `LIST`, and the `NETBENCH.TXT` recovered off
+  the field's own disk is complete and well-formed to its last byte. The save
+  works.
+- **The full client opening sequence.** `SYST`, `FEAT`, `PWD`, `TYPE I`,
+  three `CWD`s, `LIST` and a 64 KB `STOR`, with `netbench` open and the
+  profiler deliberately *not* armed — clean under QEMU.
+- **A cross-linked directory chain cycling forever.** `dsk_dirw_*` already
+  caps any one directory walk at `DSK_DIRW_MAX` = 256 sectors, and that guard
+  exists precisely for a hostile FAT.
+
+**Standing theory: the hard disk.** `CWD` with a `C:/` root is a *mount* of a
+hard-disk directory — `dsk_chdir` → `disk_mount` → `int 13h` on the ST-225.
+Nothing above that layer is unbounded, but `int 13h` itself is: a BIOS
+spinning on a controller status bit that never comes is a hard freeze with no
+code involved. The machine has been serving FTP writes for hours, and every
+freeze since the first one has left the volume mid-write, which is a
+mechanism for the fault to feed itself.
+
+**The one-move test came back, and it is the disk.** With the server's Root
+on the **floppy**: half a dozen connects, no freeze. Mounting the hard drive:
+**instant freeze**. So it is not the socket stack, not the FTP server and not
+the client — it is the hard-disk path, and the FTP server was only ever the
+thing that made the machine touch it.
+
+### 29.1 ...and the disk itself is NOT corrupt
+
+The 20MB image came off the machine and was checked end to end. It is clean:
+
+```
+partition table at physical sector 68 - 68 reserved sectors in front of it
+partition 0 type 0x04 at LBA 17, 41667 sectors: FAT16, 10388 clusters of 2048
+verify-hdd OK: 53 file(s), FATs agree, no loops, no cross-links,
+               every chain matches its size
+```
+
+**Raw sector 0 is not the MBR on this drive**, and reading it as one is how
+this looked, for an hour, like a destroyed partition table. A **Seagate
+ST-11M** controller reserves the front of the drive for itself and presents
+the sector after its area as the BIOS's LBA 0 — so the real table is 68
+sectors in, and every partition LBA is relative to there. Raw sector 0 holds
+the controller's own geometry block (`SEAGATE`, `ST-225`, 615 cylinders, 4
+heads, 17 sectors), repeated at sectors 1, 17 and 18, and it looks exactly
+like garbage written over an MBR. The tell is that the partition's `hidden`
+field agrees with the table entry **only** at the right offset: 17 both ways.
+
+Two files on it do not match the current build — `ETHER.DRV` 21,411 bytes
+against 17,052, and `NET.DRV` 5,592 against 5,599. **Both are internally
+consistent**: each driver header's own image-size word equals the file's
+length, so neither is a truncated or over-written file. The install on that
+disk is simply old; the machine boots from floppies and mounts the disk only
+to write to it.
+
+`python3 tools/os88disk.py --verify-hdd IMG` is that check, kept rather than
+thrown away — `--verify` is a floppy's and refuses a FAT16 volume and any
+geometry that is not one of six real floppy shapes, so there was no way to
+ask this question without a throwaway script, which is how a throwaway answer
+gets trusted.
+
+### 29.2 FOUND: a 512-alignment violation the 37KB claim moved onto a page boundary
+
+A **brand-new** hard-disk image, connect, list the directory — fine — start an
+upload: **instant freeze**. So it is not corruption of any kind, and it is
+writing rather than reading. The field named the mechanism in the same
+message: *"Think we just moved some memory around with the 37KB buffer
+additions, and now we're crossing a 64KB?"*
+
+`fd_stage`, the FTP server's 8KB staging buffer and the only buffer in that
+package `int 13h` ever touches, sat at package offset **0x4233 — 51 bytes
+into a sector**. A region base is a whole number of KB, so its linear address
+was 51 mod 512 too. That breaks the project's one-line hard rule, and the
+kernel comments on it at the very instruction that hands the BIOS a sector
+which crosses a 64KB page (`dsk_runcap`'s `mov ax, 1`: *"only reachable from a
+base that is not 512-aligned, which SPEC.md 2.4 forbids"*).
+
+It was harmless until §72.13 made the socket rings a 37KB heap claim, which
+moved every region above it — and where in a 64KB page an 8KB buffer lands is
+precisely what decides whether it crosses one. **Nothing about the FTP server
+changed; its buffer was standing somewhere else.** Fixed in SPEC.md §77.31,
+with a `%error` beside the offset so a scalar added above cannot move it back.
+
+`apps/cyclone`'s high-score buffer had the same violation and is fixed with
+it. `apps/cc/os88thunk.asm` has it structurally — a C caller's pointer is not
+this layer's to align — and is recorded rather than patched.
+
+**What is still not proven** is why the floppy survived it: a floppy BIOS
+answers a straddle with error 09h, which is a failed write and not a stopped
+machine, and HDD.DRV's BIOS rung reaches a controller that evidently does
+something worse. The buffer violated a documented rule on the exact operation
+that froze; that is enough to fix it and not enough to close this note.
+
+### 29.4 ...and at least one "freeze" was the machine being BUSY
+
+Immediately after: *"Ok, I just went back to the VM and its NOT frozen. I
+might just have not waited long enough for the text file save? I waited a
+good 10 seconds, but..."*
+
+Ten seconds is not obviously enough. `bl_save` writes the report with
+`OSAPI_FILE_WRITE`, which creates or truncates a file, updates two FAT copies
+and a directory entry — several `int 13h` calls, and PERFORMANCE.md prices one
+at **~400 ms** on this machine whatever it moves. Then `bl_paint` redraws 29
+rows at ~71 ms a row. All of it inside one window callback, so **the gfx lock
+is held for the whole thing**: the cursor is parked, nothing on screen moves,
+and the machine is indistinguishable from a dead one.
+
+**`bl_progress` exists for exactly this** and its header says so —
+*"a machine that has stopped answering is indistinguishable from a machine
+that has died, and the first thing a user does about the second is reach for
+the power switch"* — and `bl_save` was the one path in the file not using it.
+It says `WRITING THE REPORT - a floppy write is seconds on this machine` now,
+painted before the write starts. That is PERFORMANCE.md Part 6 rule 6 (*do not
+ship a feature that silently costs seconds on the target*) applied to the
+harness itself, and it cost this investigation two rounds.
+
+**A later save on the same file did NOT come back after 60 seconds**, and that
+is not explained by slowness. The second `W` overwrites rather than creates,
+which frees the old chain and reallocates — a different path. Driven under
+QEMU with the FTP server running, `W` pressed twice with a wait between: the
+system tick kept advancing through both, and the server answered a fresh
+`LIST` afterwards. So the overwrite path is not broken in a way QEMU can see.
+
+**That is where this stands, and the two halves must not be merged.** The
+512-alignment violation (§27.2) was real, is fixed, and was on the exact
+operation that froze an upload. The save is a separate symptom, at least once
+was ordinary slowness with no indication, and once was something else that is
+still open.
+
+### 29.5 The instrument for the next round, and the one thing it must not be
+
+The freeze is still here after §27.2's fix: the most recent one is on a bare
+`PWD`, with `netbench` open behind and nothing transferring. So the next round
+is instrumentation, and the shape of it is already settled by the field:
+
+> *"that 30s task pass never fired - the isr was frozen and gone with
+> everything else. The end tool was one that constantly printed state, and we
+> tracked it down from the 'last printout'."*
+
+**That rules out every watchdog.** `KHB_STUCK`'s thirty-second report
+(kernel/sched.inc) is printed by `sch_isr` — so a freeze that takes the timer
+interrupt with it never prints anything, and the report's absence says only
+that the report did not run. The instrument has to be one that is **already on
+the glass** when the machine stops.
+
+`KFZ=1` is that instrument and it is already built. `sch_isr` paints fifteen
+bytes of kernel state into the top-left of the menu bar from IRQ0, **twice per
+tick** — once at entry and once after the BIOS `int 08h` chain returns — so
+the last picture on a stopped screen is a reading rather than a guess. It
+found §9.6.5's int 09h self-jump, which is the same shape of failure: the
+machine dead inside an interrupt gate with `IF` clear, nothing running, and
+the screen holding whatever was on it.
+
+| | reads |
+|---|---|
+| `beat`, `chain` | entries to `sch_isr` and returns from the BIOS chain. **One apart = it died inside the timer interrupt**; equal = it ran to the end and the fault is out in task code |
+| `CS hi`, `IP hi`, `IP lo` | the interrupted address — `nasm -l` turns it back into a routine. CS high 00 = kernel, 0D = cold, anything else = a package |
+| `sch_cur`, `sch_lock` | which task, and whether the scheduler is held |
+| `gfx_lock_flag`, `gfx_lock_own` | the mutex and its holder |
+| `SP hi/lo`, `stk0 bad` | the stack, and whether task 0's floor canary is still there |
+| `PIC mask`, `PIC in-service` | is IRQ0 still let in, and is an interrupt still in service with no EOI behind it |
+
+`tools/kfzread.py` decodes it out of a screenshot, so the reading is
+mechanical: four pixels per bit and four rows tall is what makes a photograph
+legible, and it was still read by eye before.
+
+**It is MONO ONLY** — the paint is Hercules/CGA banked and is not done on VGA
+at all — which suits the field machine, a 5150 on a green monitor.
+
+    make KFZ=1
+    ...freeze it, screenshot it...
+    python3 tools/kfzread.py shot.png
+
+### 29.3 What is left, and the next one-move test
+
+A mount is `dsk_chdir` → `disk_mount` → `int 13h`, and the volume under it is
+provably well-formed, so a wrong LBA computed from a bad BPB is ruled out
+too. What is not ruled out is the layer below: `int 13h` is the one
+unbounded thing in the path, and a controller that never raises its
+completion bit is a hard freeze with no code involved.
+
+**The test:** boot the floppy, do **not** start the FTP server and do not
+load `ETHER.DRV` at all (take it out of `SYSTEM.CFG`), then mount C: from the
+Disk window. If it still freezes, nothing in this session's work is
+involved and this is a hard-disk-path bug that has been there all along; if
+it does not, the difference is what else is resident, and that is a memory
+question rather than a disk one.
+
+**Do not "fix" this from the tree until that answer comes back.** Four
+rounds of evidence say the code that keeps being blamed worked on this
+machine the same afternoon.
+
+### 29.6 THE INSTRUMENT ANSWERED, and there were two faults wearing one symptom
+
+Two `KFZ=1` screenshots came back from the field within half an hour of each
+other, both called "hard freeze". They are **not the same failure**, and the
+first cell of the strip is what separates them: the field's own note — *"the
+animating dots at the top completely stopped"* on one and *"the top bar is
+still animating in what looks like a loop"* on the other — turned out to be
+the diagnosis rather than a description.
+
+`tools/kfzread.py` needed two fixes before it could read either. The captures
+are of the monitor **window**, 2x and filtered, off a green phosphor: the
+reader took the RED channel (in which the lit background is 0x39 and the whole
+picture reads as black) and required each bit to be four *solid* pixels (which
+a filtered edge never is). It reads the brightest channel and the middle half
+of each cell now, with the threshold taken from the image.
+
+#### The one where the dots stopped: `sch_stkdie`
+
+```
+beat F7  chain F7   sch_cur 01   SP 0314   CS:IP 97:0184   stk0 bad 00
+```
+
+...and **eight solid black bytes at framebuffer byte 20**, which is `KHB_STK`
+and nothing else: `sch_stkdie`'s bar. **A task overran its 256-byte stack
+slice and the kernel halted itself** (`cli`/`hlt`, the only one in the tree) —
+so the timer interrupt really is gone, and every instrument with it. That is
+why the dots stopped, and it is what the field has been calling a hard freeze
+all along.
+
+The arithmetic is unambiguous. `sch_stacks` is at `0x0300` in `LOW_SEG` and
+slot 1 owns the first slice, `0x0300`–`0x03FF`. `SP` = `0x0314` is read in the
+heartbeat block **after** `sch_isr`'s 9 pushed words and the block's own 8, so
+the interrupted task's own SP was `0x0314 + 34 + 6` = `0x033C` — **196 of its
+256 bytes already spent, in the package at `97xx:0184`, before the tick
+arrived**. `khb_paint`'s 8 words take it to `0x0304`, and the BIOS `int 08h`
+chain then runs on that same stack and goes straight through the canary.
+
+**`SCH_STACK` = 256 was sized at 1.8× a 142-byte mark, and that mark was taken
+before `ETHER.DRV` existed** (docs/KERNEL-MEMORY.md, "Task stacks"). The
+projection recorded there — ~160–170 of 256 worst case on real hardware — is
+now beaten by 30 bytes by the task's own frames alone. `KFZ=1` makes it 16
+bytes likelier by adding `khb_paint`'s frame, but it does not *cause* it: at
+196 + 40 the shipping kernel overruns too, silently, into `cli`/`hlt`.
+
+**And it reproduces here, without the field.** `task_spawn` fills every slice
+with `0xCC` under `KFZ=1` now, and `tools/stkwater.py` reads the slices back
+out of `LOW_SEG`; `python3 tests/ftpd.py --kfz` drives a whole session —
+connect, LIST, STOR, RETR, ABOR, a 20,000-byte upload — and reports:
+
+```
+slot 1   232 used   24 free       deepest 232 of 256 (91%)
+```
+
+Slot 1 is `ETHER.DRV`'s service worker and it is the only slice this
+configuration spawns. **232 of 256 under QEMU**, which is the understating
+end: SeaBIOS services its interrupt entries on a stack of its own where an
+IBM ROM runs `int 08h` on the current task's, worth ~20 bytes
+(docs/KERNEL-MEMORY.md) — so **~252 of 256 on the 5150**, and the field went
+through the remaining four.
+
+**This one is NOT fixed, and it is a memory decision rather than a bug fix.**
+`.lowbss` has 362 bytes left in its rung and `KERN_SIZE` 1,024 under
+`KERN_BUDGET`, so doubling every slice — 2,816 bytes — does not fit; the four
+ways to pay for it are tabulated in docs/KERNEL-MEMORY.md under "Task stacks",
+and raising `KERN_BUDGET` is a decision to take with whoever asked for the
+feature (CLAUDE.md).
+
+#### The one where the dots kept going: a livelock in `menu_bpadc`
+
+The second capture had the thirty-second watchdog's own text line on the
+glass, which is only printed by `sch_isr` — so the timer interrupt was alive
+and this is a different animal entirely:
+
+```
+AT 00:9402 OWN 01 CUR 01 SP 0384 R 93E7 0003 003C M AC V 01 F 02 BK 1514
+```
+
+`00:9402` is `menu_bput`'s entry; `93E7` on the interrupted stack is the
+return address of the `call menu_bput` inside `menu_bpadc`'s pad loop; `F 02`
+says interrupts were enabled, so nothing is masked or wedged. **Task 1 is
+spinning in the pad loop holding the drawing mutex** (`OWN 01`), and the UI
+task is blocked on `gfx_lock` behind it. The strip agrees independently:
+`gfx_lock_flag` 1, `gfx_lock_own` 1, `IP 9407`.
+
+The saved `AX` two words further up the stack is `003C` — the pad target,
+**60 cells** — and that is `[menu_bn]` as it was when `menu_bpadc` clamped to
+it. `menu_bput` drops a cell at or past `[menu_bn]` *without advancing DI*, so
+the loop only terminates while the bound it cached is still the bound the drop
+rule uses. §12.8's progress widget lowers `[menu_bn]` by `FPG_CELLS` at the
+next composition, and `fpg_arm` forces one — **from whichever task is writing
+a file**, which needs no mutex and in this session is FTPD committing an
+upload on task 0 while task 1 was already inside `menu_bar_text`.
+
+Both halves are fixed (SPEC.md §59.7.1, §12.8.3): the loop re-reads
+`[menu_bn]` every pass, so no bound can leave it spinning; and `fpg_arm`
+refuses to arm while another task owns the screen, so the second painter stops
+existing. This is almost certainly the *"file progress bar completes, then it
+stays frozen 7–10 s, then a second write never unlocks"* the field reported
+against `netbench` — that bar **is** the widget.
+
+#### And the instrument had broken the mouse
+
+Same round, same build: *"the mouse was not detected on this build at all"*,
+and on a reboot *"sometimes it gets the mouse, sometimes not; when it does,
+it's hard to move."* `khb_paint` was ~10 ms per call with `IF` clear, twice a
+tick, against a 1200-baud mouse byte every 7.5 ms into a one-byte 8250 — so
+packets arrived with holes and `mou_claim`'s run never completed. It composes
+the row once and blits it now, ~2 ms (SPEC.md §9.6.5) — and A/B'd on MartyPC's
+4.77 MHz 5150 with the period serial mouse, 60 injected packets of `dx = 5`
+moved `[mouse_x]` **113 pixels of 300 before and 300 of 300 after**. Sixty-two
+per cent of the hand's movement was going in the bin, which is exactly the
+*"hard to move it"* half of the report.
+
+**An instrument that changes what it measures cost this investigation a round.**
+
+### 29.7 …and the margin is 36 bytes, measured on the machine
+
+`tests/stackprobe` reads every slice on the shipping kernel now (SPEC.md
+§8.3), so the question stopped needing a photograph. On the 5150, during a
+300KB WinSCP upload with the mouse moving and keys held down:
+
+```
+High water:  146 of 256          the probe's own slice
+Other tasks: 220 slot 002        FTPD's worker
+```
+
+**220 of 256 — thirty-six bytes, 1.16×**, and 208 before the keyboard was
+touched, so `int 09h` nesting on the tick is worth about twelve. Many
+transfers, no overflow: the driver going from 150 bytes to 118 (SPEC.md
+§72.16.4) is what bought that.
+
+**It is an observation and not a bound**, and the distinction is the whole
+finding. The deepest chain a socket-using worker can take prices at ~200
+before any interrupt; the 220 that was seen is a tick landing 168 bytes in.
+A tick landing at the *bottom* — inside `ne_dma_write`'s byte loop, which is
+also where the driver spends most of its time — puts it at 250–270.
+
+So this note closes as a **margin decision** rather than a defect:
+docs/KERNEL-MEMORY.md's table prices the alternatives, and 8 tasks × 384 bytes
+costs nothing at all.
+
+## 30 A window drag during an FTP upload kills the transfer, permanently
+
+**Reproduced, root-caused, fixed — and it is a KERNEL bug that presents as a
+network one.** Recorded here because of how it was found, not because it is
+still open.
+
+The field, on the 5150, during a 304552-byte WinSCP STOR:
+
+> *"Dragging the window during the write was smooth on B, but it also killed
+> the transfer — the file progress stops popping up, the writes stop, and the
+> client eventually times out on a control connection error."*
+
+Then, an hour later:
+
+> *"It did not ever free up, even after 200s. Stopping then starting the ftp
+> server allowed the client to reach 'pwd', but then it timed out."*
+
+And finally the sentence that placed it:
+
+> *"I went back to A — the unmodified one — and tested, and a drag there ALSO
+> kills the transfer."*
+
+**Two rounds were spent inside `ETHER.DRV` before that.** The bug arrived
+alongside an experiment (the `ETHPUMP` pump worker, SPEC.md §72.19) and every
+symptom fitted the experiment: a stalled transfer looks exactly like card-mutex
+contention, and a dead listener looks exactly like a driver that has wedged.
+A real defect *was* found down there on the way — the worker's frame budget
+was the last frame's length rather than eight (§72.19) — which made the wrong
+theory more convincing, not less, because fixing it moved the number.
+
+The actual cause is SPEC.md §74.1.1: `ui_drag` drains every event that is not
+an `EVT_MUP`, `wm_wake`'s per-slot coalescing flag stayed set with no record
+behind it, and **the window never received another wake for the rest of its
+life**. ftpd's worker stages and its UI task commits, so the commit that was
+in flight when the drag began never happened; the worker waited on a handshake
+byte that would never clear, the session was never released, and `NET_SOCKS`'s
+four handles were gone — which is the "cannot reconnect".
+
+Three things this is worth keeping for:
+
+- **A control experiment is cheap and it was the whole answer.** One run of the
+  unmodified build settled two rounds of theory. Ask for it first when a
+  symptom appears next to a change.
+- **A bug found while chasing another one does not confirm the theory that led
+  you there.** The budget bug was real, the fix moved the throughput, and the
+  drag kept killing the transfer — that gap was the evidence and it was one
+  more round before it was read that way.
+- **It was never FTP's, and it is not fixed only for FTP.** Any package built
+  on `OSAPI_WM_WAKE` across a worker boundary was one window drag, resize,
+  full-screen app or sound bracket away from the same silence.
+
+**Confirmed on the 5150**, on the plain build with no driver worker in it:
+*"Drug the window around many times, including one drag that I held for a good
+10 seconds. The transfer smoothly continued, no disconnect. Dragging was just
+fine. There was no drag lag, or drag slowdown."* The experiment the bug had
+been attributed to was removed on the strength of that run (SPEC.md §72.19).
+

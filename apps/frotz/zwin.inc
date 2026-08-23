@@ -80,7 +80,6 @@ ZW_STNAME    equ 48                 ; status-line name, captured (Standard
 ZW_STRIGHT   equ 56                 ; where the right-hand field is composed
 
 ; --- the scroll bar, matching Note Pad's so the two look like one machine ----
-ZW_SB_ARR    equ 11                 ; arrow cell at each end
 ZW_SB_STEP   equ 3                  ; rows an arrow click steps
 ZW_GROW      equ 13                 ; the kernel's grow box, bottom right
 
@@ -461,6 +460,35 @@ zw_run:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; zw_lowrect - the lower window's band, as OSAPI_GFX_SCROLL takes it
+; out: AX = x1, BX = y1, CX = x2, DX = y2, inclusive and absolute; SI and DI
+;      untouched, which is what lets a caller hold the blit's dy across it
+;
+; ONE description of the band, where there were two the moment a second thing
+; wanted to blit it. x1 is [zw_tx], which zw_bounds has already rounded UP to a
+; multiple of 8 for exactly this - SPEC.md 5.5 refuses an x-range that is not
+; byte-aligned, and Frotz does not ask for WF_SNAP.
+; -----------------------------------------------------------------------------
+zw_lowrect:
+    call zw_lowtop
+    call zw_rowy
+    mov bx, dx                      ; BX = y1, the band's top
+    call zw_lowrows
+    mov cx, ZF_LEAD
+    mul cx
+    add ax, bx
+    dec ax
+    mov dx, ax                      ; DX = y2, its last pixel row
+    mov ax, [zw_cols]
+    mov cl, 3
+    shl ax, cl
+    add ax, [zw_tx]
+    dec ax
+    mov cx, ax                      ; CX = x2
+    mov ax, [zw_tx]                 ; AX = x1
+    ret
+
 ; zw_rowdraw - in AX = screen row; draws zw_rbuf across it. ONE primitive call.
 zw_rowdraw:
     push ax
@@ -808,22 +836,7 @@ zw_scroll1:
     call zw_paint
     jmp .out
 .band:
-    call zw_lowtop
-    call zw_rowy
-    mov bx, dx                      ; BX = y1, the band's top
-    call zw_lowrows
-    mov cx, ZF_LEAD
-    mul cx
-    add ax, bx
-    dec ax
-    mov dx, ax                      ; DX = y2, its last pixel row
-    mov ax, [zw_cols]
-    mov cl, 3
-    shl ax, cl
-    add ax, [zw_tx]
-    dec ax
-    mov cx, ax                      ; CX = x2
-    mov ax, [zw_tx]                 ; AX = x1
+    call zw_lowrect                 ; AX/BX/CX/DX = the band
     mov si, ZF_LEAD                 ; positive scrolls the content UP
     call OSAPI_GFX_SCROLL
     jc .refuse
@@ -1524,17 +1537,40 @@ zw_low_draw:
     push bx
     push cx
     push dx
+    call zw_lowrows
+    mov cx, ax
+    call zw_lowtop
+    mov dx, ax                      ; DX = the first screen row
+    mov bx, [zw_sbtop]              ; BX = the first logical line
+    call zw_low_rows
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; zw_low_rows - draw a RANGE of the lower window's rows (SPEC.md 61.15)
+; in:  DX = the first screen row, BX = the first logical line, CX = how many
+;      (0 draws nothing); gfx lock held
+; out: nothing; preserves all
+;
+; zw_low_draw's loop, with its three starting values as arguments instead of
+; derived. That is the whole of what a scroll needed: a blit moves the rows
+; that are still good and this letters the |d| that are not, where a scroll
+; used to reach zw_paint and letter FORTY-SIX (SPEC.md 61.15).
+; -----------------------------------------------------------------------------
+zw_low_rows:
+    push ax
+    push bx
+    push cx
+    push dx
     push si
     push di
     push es
     mov al, [zw_style]
     mov [zw_lstyle], al
-    call zw_lowrows
-    mov cx, ax
     jcxz .done
-    call zw_lowtop
-    mov dx, ax                      ; DX = screen row
-    mov bx, [zw_sbtop]              ; BX = logical line
 .row:
     call zw_rowfill
     mov byte [zw_style], ZST_ROMAN
@@ -2368,64 +2404,51 @@ zw_sbtotal:
     inc ax
     ret
 
-; zw_trackh - out BX = the grey track's height, between the two arrow cells
-zw_trackh:
+; -----------------------------------------------------------------------------
+; zw_sbset - fill zw_sb with this window's bar (SPEC.md 13.10)
+; out: BX = the block; every other register preserved
+;
+; **THIS BAR WAS PIXEL-IDENTICAL TO THE SHARED ELEMENT** and its own header
+; said why - "SPEC.md 22's geometry, so it looks like the Disk window's". It
+; was the last of the seven private copies (SPEC.md 13.10.6.5). Checked rule by
+; rule before anything moved: arrow-cell rules at ty+10 and sbb-10, the track
+; between ty+11 and sbb-11, the arrow glyphs on x1+6 (the element COMPUTES
+; x1 + (x2-x1)/2, which is 6 on a 14px bar), an 8px minimum thumb and an 8px
+; minimum track, view*track/total for the height and pos*track/total for the
+; top, and the same clamp keeping its bottom inside the track.
+;
+; The three numbers are this app's own idea of a view: the ring plus the live
+; line is the total, the low window's rows are the fit, and [zw_sbtop] is the
+; position (SPEC.md 61).
+; -----------------------------------------------------------------------------
+zw_sbset:
     push ax
-    mov bx, [zw_sbb]
-    sub bx, [zw_ty]
-    inc bx
-    sub bx, ZW_SB_ARR*2
+    mov ax, [zw_sbr]
+    sub ax, ZF_SBW-1
+    mov [zw_sb+0], ax
+    mov ax, [zw_ty]
+    mov [zw_sb+2], ax
+    mov ax, [zw_sbr]
+    mov [zw_sb+4], ax
+    mov ax, [zw_sbb]
+    mov [zw_sb+6], ax
+    call zw_sbtotal
+    mov [zw_sb+8], ax
+    call zw_lowrows
+    mov [zw_sb+10], ax
+    mov ax, [zw_sbtop]
+    mov [zw_sb+12], ax
+    mov bx, zw_sb
+%ifdef OS88UI_SBDRAG
+    call os88ui_sbfix           ; ...and while a thumb drag is live, word 6 is
+%endif                          ; the HAND's line (SPEC.md 13.10.5.6)
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; zw_thumb - out CF=1 no thumb; else AX = its top (absolute y), DX = its height
-; Shared by the painter and the hit test, so the two cannot disagree about
-; where it is.
-; -----------------------------------------------------------------------------
-zw_thumb:
-    push bx
-    push cx
-    call zw_sbtotal
-    mov cx, ax
-    call zw_lowrows
-    cmp cx, ax
-    jbe .none                       ; it all fits
-    push ax
-    call zw_trackh                  ; BX = track height
-    pop ax
-    cmp bx, 8
-    jl .none
-    mul bx
-    div cx                          ; AX = view*track/total
-    cmp ax, 8
-    jge .hok
-    mov ax, 8
-.hok:
-    push ax                         ; the height
-    mov ax, [zw_sbtop]
-    mul bx
-    div cx
-    add ax, [zw_ty]
-    add ax, ZW_SB_ARR
-    mov dx, [zw_ty]                 ; clamp: top <= track top + track - height
-    add dx, ZW_SB_ARR
-    add dx, bx
-    pop cx                          ; CX = the height again
-    sub dx, cx
-    cmp ax, dx
-    jle .tok
-    mov ax, dx
-.tok:
-    mov dx, cx
-    clc
-    jmp short .out
-.none:
-    stc
-.out:
-    pop cx
-    pop bx
-    ret
+zw_sb:      dw 0,0,0,0,0,0,0
+%ifdef OS88UI_SBDRAG
+zw_nodrag:  db 0                ; 0xFF = this kernel has no tracking edge
+%endif                          ; (SPEC.md 13.8.2/13.10.7.1)
 
 ; -----------------------------------------------------------------------------
 ; zw_sbar - draw the bar
@@ -2436,103 +2459,25 @@ zw_sbar:
     push bx
     push cx
     push dx
-    push si
-    push di
-    mov di, [zw_sbr]
-    sub di, ZF_SBW-1                ; DI = the bar's left column, absolute
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-
-    mov ax, di
     mov bx, [zw_ty]
-    mov cx, [zw_sbr]
     mov dx, [zw_sbb]
     cmp bx, dx
-    jge .done
-    call OSAPI_GFX_FRAME
-
-    mov ax, di                      ; the two arrow-cell rules
-    mov bx, [zw_sbr]
-    mov dx, [zw_ty]
-    add dx, ZW_SB_ARR-1
-    call OSAPI_GFX_HLINE
-    mov ax, di
-    mov bx, [zw_sbr]
-    mov dx, [zw_sbb]
-    sub dx, ZW_SB_ARR-1
-    call OSAPI_GFX_HLINE
-
-    xor si, si                      ; up glyph: 5 rows, widths 1..9
-    mov dx, [zw_ty]
-    add dx, 3
-.up:
-    mov ax, di
-    add ax, 6
-    sub ax, si
-    mov bx, di
-    add bx, 6
-    add bx, si
-    call OSAPI_GFX_HLINE
-    inc dx
-    inc si
-    cmp si, 5
-    jb .up
-
-    mov si, 4                       ; down glyph: 5 rows, widths 9..1
-    mov dx, [zw_sbb]
-    sub dx, 7
-.dn:
-    mov ax, di
-    add ax, 6
-    sub ax, si
-    mov bx, di
-    add bx, 6
-    add bx, si
-    call OSAPI_GFX_HLINE
-    inc dx
-    dec si
-    jns .dn
-
-    mov ax, di                      ; the track
-    inc ax
-    mov bx, [zw_ty]
-    add bx, ZW_SB_ARR
-    mov cx, [zw_sbr]
-    dec cx
-    mov dx, [zw_sbb]
-    sub dx, ZW_SB_ARR
-    cmp bx, dx
-    jg .done                        ; degenerate track: leave it framed
-    call OSAPI_GFX_FILL_GRAY
-
-    call zw_thumb
-    jc .done
-    mov bx, ax
-    add dx, ax
-    dec dx
-    mov ax, di
-    add ax, 2
-    mov cx, [zw_sbr]
-    sub cx, 2
-    push ax
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    pop ax
-    call OSAPI_GFX_FILL
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov ax, di
-    add ax, 2
-    mov cx, [zw_sbr]
-    sub cx, 2
-    call OSAPI_GFX_FRAME
+    jge .done                       ; DEGENERATE: a bar whose top is at or
+                                    ; below its bottom draws NOTHING here, not
+                                    ; even a frame - the private painter's own
+                                    ; guard, kept because the shared element
+                                    ; has no opinion about an inverted rect and
+                                    ; would hand one to gfx_frame
+    call zw_sbset
+    call os88ui_sbar
 .done:
-    mov ax, [zw_sbtop]              ; bank what is on screen, so a redraw that
-    mov [zw_bktop], ax              ; moved neither number draws nothing
-    mov ax, [zw_sbcount]
-    mov [zw_bkcnt], ax
-    pop di
-    pop si
+    mov ax, [zw_sbtop]              ; banked, and NOT yet read by anything: the
+    mov [zw_bktop], ax              ; "redraw only if it changed" wrapper these
+    mov ax, [zw_sbcount]            ; were written for does not exist, because
+    mov [zw_bkcnt], ax              ; zw_sbar's one caller is the whole-window
+                                    ; repaint and skipping the bar inside one
+                                    ; would leave the rect it just erased
+                                    ; (SPEC.md 13.10.6.5)
     pop dx
     pop cx
     pop bx
@@ -2577,23 +2522,27 @@ zw_click:
     jc .out
     call zw_sbhit
     jc .out
-    mov bx, dx                      ; BX = the click's y; zw_thumb wants DX
-    mov ax, [zw_ty]
-    add ax, ZW_SB_ARR
-    cmp bx, ax
-    jb .lineup
-    mov ax, [zw_sbb]
-    sub ax, ZW_SB_ARR
-    cmp bx, ax
-    ja .linedn
-    call zw_thumb
-    jc .out                         ; it all fits: the bar is inert but ours
-    cmp bx, ax
-    jb .pageup
-    add ax, dx
-    cmp bx, ax
-    jae .pagedn
-    jmp short .out                  ; on the thumb itself
+    call zw_sbset                   ; the SHARED element's parts (SPEC.md
+    call os88ui_sbhit               ; 13.10) - BX = the block zw_sbset just
+                                    ; filled, and CX/DX are still the point,
+                                    ; absolute, as it takes them
+    cmp al, OS88UI_SBUP
+    je .lineup
+    cmp al, OS88UI_SBDOWN
+    je .linedn
+    cmp al, OS88UI_SBPGUP
+    je .pageup
+    cmp al, OS88UI_SBPGDN
+    je .pagedn
+%ifdef OS88UI_SBDRAG
+    cmp al, OS88UI_SBTHUMB          ; SPEC.md 13.10.5: the thumb is DRAGGED
+    jne .out                        ; now. BX is still the block and DX still
+    cmp byte [zw_nodrag], 0         ; the press, absolute
+    jne .out
+    mov al, ZF_SBRATE
+    call os88ui_sbgrab
+%endif
+    jmp short .out                  ; the thumb itself, or an inert track
 .lineup:
     mov ax, [zw_sbtop]
     sub ax, ZW_SB_STEP
@@ -2618,6 +2567,76 @@ zw_click:
     pop bx
     pop ax
     ret
+
+%ifdef OS88UI_SBDRAG
+; -----------------------------------------------------------------------------
+; zw_sbtrack / zw_sbcommit / zw_sbdrop - the thumb gesture, from zf_ondrag,
+;   zf_onup and zf_onclick's stale net (SPEC.md 13.10.5)
+; in:  DX = the pointer's y (ABSOLUTE) for zw_sbtrack; gfx lock held
+; out: nothing; preserves all registers
+;
+; zw_bounds first, because the block's rect and both of its counts come from
+; the live window and this app re-wraps to whatever width the user drags to.
+; zw_scrollto does the clamp and the paint, so the tier 61.15 built is what a
+; dragged thumb rides on: a blit and |d| rows, not a whole window.
+; -----------------------------------------------------------------------------
+zw_sbtrack:
+    push ax
+    push bx
+    push cx
+    push dx
+    call os88ui_sbdragging
+    jc .out
+    call zw_bounds
+    jc .out
+    call zw_sbset               ; BX = the block; DX is still the pointer
+    call os88ui_sbtrack         ; CF = 1: nothing owed - the rate, or the same
+    jc .out                     ; line
+    call zw_scrollto
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+zw_sbcommit:
+    push ax
+    push bx
+    push cx
+    push dx
+    call os88ui_sbdragging
+    jc .out
+    call zw_bounds
+    jc .out
+    call zw_sbset
+    call os88ui_sbdrop          ; the release COMMITS, unconditionally: a
+    jc .out                     ; position the rate refused is never lost
+    call zw_scrollto
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; ...and the same without the commit, for a press that found one still live
+zw_sbdrop:
+    push ax
+    push bx
+    push cx
+    push dx
+    call zw_bounds
+    jc .out
+    call zw_sbset
+    call os88ui_sbdrop
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; zw_scrollpage - in AX = a SIGNED number of pages (PgUp is -1)
@@ -2674,10 +2693,147 @@ zw_scrollto:
 .set:
     cmp ax, [zw_sbtop]
     je .out
+    mov bx, ax
+    sub bx, [zw_sbtop]              ; BX = the SIGNED line delta...
     mov [zw_sbtop], ax
-    call zw_paint
+    mov ax, bx
+    call zw_sbpaint                 ; ...and this is what it costs now
 .out:
     pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; zw_sbpaint - the scrollback moved: the LOW WINDOW and the THUMB (SPEC.md
+;              61.15), where this used to be zw_paint
+; in:  AX = the signed line delta, [zw_sbtop] already the new one; gfx lock
+;      held
+; out: nothing; preserves all
+;
+; **A SCROLL-BAR ACTION USED TO REPAINT THE WHOLE WINDOW**, and zw_paint's own
+; header prices that: "a full repaint is 46 rows of glyphs, ~2.9 s on a
+; 4.77 MHz 8088. It runs on an uncover, a resize, a SCROLL-BAR ACTION and a
+; refused blit." Three of those four are unavoidable. This one was not: a
+; scroll changes the lower window and the thumb, and the status line, the
+; upper window and the grow box are all exactly where they were.
+;
+; So the low window MOVES instead of being re-lettered - the same blit the
+; per-line path already made for one line (zw_lowrect is now one description
+; for both), with the |d| rows the blit could not know lettered after it. An
+; arrow step is 3 rows against 46 - arithmetic says ~0.19 s against ~2.9 s, and
+; SPEC.md 61.15 says plainly that the figure is PREDICTED rather than measured,
+; because three attempts to take it here measured the instrument instead.
+;
+; A PAGE ALWAYS TAKES THE FALLBACK, by construction: zw_scrollpage moves by
+; exactly lowrows lines, so PgUp, PgDn and a track click are each a windowful
+; and there is nothing for a blit to move. The arrow cells are what this is
+; for - the case a hand holds down.
+;
+; It falls back to zw_low_draw for those, and for a REFUSED blit (SPEC.md 5.5's byte-column rule, an
+; armed clip region, an edge off the screen) - and even that path is cheaper
+; than before, because it is still not the status line, the upper window or
+; the grow box.
+; -----------------------------------------------------------------------------
+zw_sbpaint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call zw_bounds                  ; preserves AX, so the delta survives
+    jc .out
+    mov di, ax                      ; DI = d, signed
+    or di, di
+    jz .bar                         ; no movement: the thumb, and nothing else
+    call zw_lowrows
+    mov cx, ax                      ; CX = the rows the low window shows
+    mov ax, di                      ; ...against |d|. THE `or` IS NOT
+    or ax, ax                       ; DECORATION: `mov` sets no flags, so a
+    jns .pos                        ; jns after it tests whatever zw_lowrows
+    neg ax                          ; happened to leave
+.pos:
+    cmp ax, cx
+    jae .whole                      ; a windowful or more: every row is new
+    mov ax, di                      ; SI = the signed PIXEL delta
+    mov cx, ZF_LEAD
+    imul cx
+    mov si, ax
+    call zw_lowrect                 ; AX/BX/CX/DX = the band; SI survives
+    call OSAPI_GFX_SCROLL
+    jc .whole                       ; refused: letter the lot (SPEC.md 5.5)
+    call zw_lowrows
+    mov cx, ax
+    call zw_lowtop
+    mov dx, ax                      ; DX = the first screen row
+    mov bx, [zw_sbtop]              ; BX = the first logical line
+    or di, di
+    js .back
+    mov ax, cx                      ; FORWARD: the exposed rows are the LAST d
+    sub ax, di
+    add dx, ax
+    add bx, ax
+    mov cx, di
+    jmp short .rows
+.back:
+    mov cx, di                      ; BACK: they are the FIRST |d|, and the
+    neg cx                          ; two starting values are already right
+.rows:
+    call zw_low_rows
+    jmp short .bar
+.whole:
+    call zw_low_draw
+.bar:
+    call zw_sbtrans
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; zw_sbtrans - the thumb moved: TRANSLATE it (SPEC.md 13.10.3)
+; in:  gfx lock held, zw_bounds run; out: nothing; preserves all
+;
+; **AND THIS IS WHAT [zw_bktop]/[zw_bkcnt] WERE FOR.** zw_sbar has banked them
+; since the bar existed, under a comment saying they are "what is on screen,
+; so a redraw that moved neither number draws nothing" - and until this routine
+; nothing read either of them, because zw_sbar's only caller was the
+; whole-window repaint and skipping the bar inside one would leave the rect it
+; had just erased.
+;
+; A scroll moves neither the total nor the fit, so the thumb's HEIGHT is
+; unchanged and only its top moves: three drawing calls against the bar's
+; sixteen. The count changing is the case that cannot translate - a new line
+; of output resizes the thumb - so that one still draws the bar whole.
+; -----------------------------------------------------------------------------
+zw_sbtrans:
+    push ax
+    push bx
+    mov ax, [zw_sbcount]
+    cmp ax, [zw_bkcnt]
+    jne .full                       ; the TOTAL moved: the height moved with it
+    mov ax, [zw_sbtop]
+    cmp ax, [zw_bktop]
+    je .out                         ; neither moved: draw nothing at all
+    mov bx, [zw_ty]
+    cmp bx, [zw_sbb]
+    jge .out                        ; degenerate, zw_sbar's own guard
+    call zw_sbset                   ; BX = the block, holding the NEW pos...
+    mov ax, [zw_bktop]              ; ...and this is where the thumb is DRAWN
+    call os88ui_sbmove
+    mov ax, [zw_sbtop]
+    mov [zw_bktop], ax
+    jmp short .out
+.full:
+    call zw_sbar
+.out:
     pop bx
     pop ax
     ret

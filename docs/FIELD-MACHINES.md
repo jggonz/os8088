@@ -476,6 +476,17 @@ as it applies between iron and an emulator.
 | floppy | **one 1.2MB 5.25"**, and it boots the **360KB** images — so `make field`'s disks and `make comscan`'s `comscan.img` are the ones to send, not the 1.44MB pair |
 | everything else | **not recorded, because it has not been measured.** Do not fill this table in from what a Portable III generally has — ask, or read it off `comscan` |
 
+**IT OWES ONE MEASUREMENT, and it is the only machine that can take it.**
+SPEC.md §9.4.4 closes the mouse identify window as soon as a port has answered
+like a mouse and gone quiet — 1,200 ms of `mouse_init` down to 596 — and that
+window's *other* job is draining a modem's banner before the ISR reads it as
+packet headers (§9.5.1). **A 1200 baud modem on COM1 with the mouse on the
+other port is exactly the case**, and no emulator in this tree has a modem at
+all. The run is two boots of the `BOOTPROF=1` disks, `MOUIDSLOW=1` against
+the default, checking that the mouse still comes up and that nothing phantom
+arrives from the modem side; the numbers are on the screen. Until it has been
+done, §9.4.4's three fences are an argument.
+
 **A 1.2MB drive writing a 360KB disk is a known hazard and the owner is
 handling it by keeping those disks separate** — a 1.2M drive's head is
 narrower than a 360K drive's track, so a disk it has *written* may be

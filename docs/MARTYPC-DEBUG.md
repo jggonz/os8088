@@ -159,6 +159,62 @@ batching properly; **`read_sectors` far above the payload** is §18.91's shape;
 **`resets`** is a BIOS giving up, which is how GLaBIOS's 250 ms limit was
 found.
 
+### Where a whole BOOT goes: `tools/os88boot.py`
+
+`m.disk()` says what the drive was asked for; this says what the *boot* spent,
+phase by phase, and it needs no knob kernel either.
+
+```
+python3 tools/os88boot.py --apps build/apps360.img --json build/boot.json
+```
+
+It is a **stopwatch and not a sampler** (`tools/os88prof.py` is the sampler,
+and is the right instrument for a package that loops). A boot is a straight
+line of named phases that each run once, so the exact instrument is a
+breakpoint on the RETURN ADDRESS of every `call` in `kmain` — the address a
+phase reaches exactly once, where a breakpoint on the callee would fire for
+every other caller of `gfx_lock`, `spl_step` and `vid_init` too — with the
+cycle counter and the FDC counters read at each. The addresses come out of the
+kernel's own listing, asserted byte-identical to `build/kernel-full.bin` on the
+way, and the marks are armed one at a time so a mark that is never reached is
+a timeout naming itself rather than a silent skip.
+
+Two phases are opened further, because between them they are most of a boot
+and neither is one thing. The machine's ROM `int 13h` and the loading bar are
+both bracketed inside the boot sector, by taking their return address off the
+**guest's own stack** at the entry: the sector relocates itself to the top of
+whatever `int 12h` reported, so its addresses are a property of the machine's
+memory size and there is nothing here to derive them from — and a far `call`
+and an `int` leave CS:IP as the bottom two words of the frame, so one read
+serves both.
+
+**Cycles are the answer and the host does not enter into it**: `cycles /
+4772727` is seconds on the field machine, the drive's mechanics included (the
+model above). Two full runs agree on every row to the cycle.
+
+The walk cross-checks itself and prints the result. SPEC.md §15.4's boot timer
+is stamped by the boot sector from BIOS ticks, so it measures everything below
+`post`; a complete walk agrees with it to under one 54.9 ms tick, and a walk
+that has lost a phase does not.
+
+**On IRON, the knob instead.** None of the above exists on a 5150 — no debug
+socket, no cycle counter, no symbol map — so `make BOOTPROF=1` (SPEC.md §15.5)
+asks the same question from inside and draws the answer on the desktop when
+the first frame is up. Eleven PIT stamps through `kmain`, so the sub-3 ms
+phases are real numbers rather than the zero a 54.9 ms tick would report;
+everything before `sched_init` is one row in ticks, because the clock does not
+exist yet. Boot it, photograph the box, and the first repaint takes it away.
+The two instruments agreed row for row on `os8088_5150_cga` — `first paint`
+178 ms against 178.2, `mouse_init` 1200 against 1196.7 — which is the check
+that neither is measuring something of its own.
+
+**And the machine still decides whether the number may be quoted.** Two of the
+four things a boot spends time on are the ROM's own code, so the section
+below binds this tool exactly as it binds `m.disk()`: a GLaBIOS twin boots
+faster than any 5150 ever did, and only `os8088_5150_cga` and its IBM-ROM
+siblings answer for the field machine. What does *not* move with the ROM is
+the mechanical column, which is the FDC model Set 37 calibrated.
+
 ### GLaBIOS gives up on a floppy op after ~250 ms, and that is still true
 
 It no longer forces a config difference — every machine here carries the same
@@ -351,16 +407,54 @@ to `build/hello.o88`.
 Needs `cargo` (Rust) and, on Linux, `libudev-dev` + `pkg-config` — MartyPC
 depends on `serialport`, whose build script hard-fails without them.
 
-**In a fresh container, `apt-get update` FIRST.** The shipped index names
+### Installing the deps in a fresh Ubuntu container
+
+**This whole subsection is about ONE environment**: a fresh Ubuntu container,
+which is what an agent session gets. **A Mac has never had either problem** —
+`tools/setup-macos.sh` installs through Homebrew and neither of the two apt
+failures below exists there. (What the Mac script does *not* install is Rust,
+so `make marty` on a Mac wants `cargo` put in front of it by hand.)
+
+**`apt-get update` FIRST, before anything else.** The shipped index names
 `libudev-dev_255.4-1ubuntu8.14`, which has been superseded and removed from
 the pool, so installing it straight off 404s — and since this is the default
 test target, that 404 is the first thing a session hits. A refresh is the
 whole fix; it resolves to a version that exists (`…8.16` today) and installs.
-**Do not pin a version here.** CLAUDE.md's QEMU recipe pins one deliberately,
-for the opposite reason — there the `-updates` build is the broken one and an
-older version is wanted — and applying that shape to `libudev-dev` reinstates
-the same 404. Skipping the deps entirely does not fail at apt at all: it fails
-minutes later inside cargo, on `serialport`.
+
+```sh
+apt-get update                       # the shipped index is stale; this is slow
+apt-get install -y --no-install-recommends libudev-dev pkg-config
+```
+
+**Do not pin a version here.** Skipping the deps entirely does not fail at apt
+at all: it fails minutes later inside cargo, on `serialport`.
+
+**`qemu-system-x86` fails the same way and needs the OPPOSITE fix**, which is
+why the two are written down together — the shapes look identical and the
+cures are inverted. The index lists the `noble-updates` build, whose `.deb`
+404s on `archive.ubuntu.com` and then times out against
+`security.ubuntu.com`, so a plain install burns several minutes and fails.
+Pin all three packages to the **base** noble version:
+
+```sh
+V='1:8.2.2+ds-0ubuntu1'              # the BASE version, NOT -updates
+apt-get install -y --no-install-recommends \
+        "qemu-system-x86=$V" "qemu-system-common=$V" "qemu-system-data=$V"
+```
+
+`-t noble` is **not** enough — it still resolves to the `-updates` version.
+`--no-install-recommends` skips the gstreamer/libcaca display extras, which
+404 the same way and which a headless `-display none` run never touches.
+
+So: **`libudev-dev` wants the NEWER version a refreshed index names, because
+the stale entry has been superseded; QEMU wants an OLDER one than the index
+names, because the `-updates` build is the broken one.** Applying either
+cure to the other package reinstates exactly the 404 you are trying to
+escape. `pkg-config` installs normally either way.
+
+If a previous attempt is wedged, clear `/var/lib/dpkg/lock-frontend` and run
+`dpkg --configure -a` first — and **do not `pkill -f apt-get` from inside a
+Bash tool call**, because the pattern matches the calling shell and kills it.
 
 ```sh
 tools/martypc/build.sh              # clone at the pin, patch, stage, build

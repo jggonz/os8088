@@ -7045,3 +7045,502 @@ is where §71.2's same-row cursor split sits. The identity rows — the string
 lettered, the same string composed and blitted under it, and a third with
 every eighth cell reverse-video so the attribute byte's wrap is on the glass
 — are the correctness check, by screendump.
+
+### Set 69 — what a LINE pixel costs, decomposed (SPEC.md §5.6)
+
+| | |
+|---|---|
+| machine | MartyPC, `os8088_5150_herc` and `os8088_5150_cga` — a cycle-accurate 4.77 MHz 8088 with the real IBM 5150 ROM |
+| harness | `tools/os88linecost.py`, which is new and is **not** a package: the CPU is parked on a stub written into `gfx_pairtab0` (256 idle `.bss` bytes inside KERNEL_SEG) and `status()["cycles"]` is read either side, with IF = 0 |
+| build | `elendilon` at the branch point, shipped kernel, no knobs |
+| date | 2026-08-21 |
+
+It exists because rule 4 was owed: §5.6.1 puts the `gfx_line`/`gfx_fill`
+crossover at "~27px" from an instruction estimate, Set 4 measured a dilated
+trail pixel at 500 µs and could not say what the 500 was made of, and Set 5/6
+left "something in `mc_wipe_trails` beyond the walk is unaccounted for".
+
+#### The line, as a straight line
+
+Three lengths per geometry, fitted:
+
+| | arrival | per pixel |
+|---|---:|---:|
+| steep (y-major) | 1,822 cyc = **382 µs** | 723.1 cyc = **151.5 µs** |
+| shallow (x-major) | 1,905 cyc = **399 µs** | 657.1 cyc = **137.7 µs** |
+
+The fit is exact to one cycle at the middle length, so this really is
+`a + b·pixels` and not a curve. The 10% steep/shallow gap is Set 11's, still
+there, still `gfx_rowbase` per step against a pointer add. **The arrival is
+382 µs and not §5.7's ~756**: this calls the near kernel entry directly, so it
+is the routine without the far call and without `gfx_lock`.
+
+Cross-check against iron: Set 11's `GFX_LINE steep thin` on the field 5150 is
+**21,184 µs** for the same 32×127 geometry and this reports **19,775** for it
+without gfxbench's far call and wrapper — 7% apart, in the direction the
+missing wrapper predicts.
+
+**A dilated erase is 1.36× a thin draw when it is steep and 2.98× when it is
+shallow** (128 px: 26,844 µs against 19,775; 53,767 against 18,023). That is
+§5.6.6's one-walk path confirmed from outside: three passes would be three
+times, and steep is not.
+
+#### Where the 723 cycles go — measured, one piece at a time
+
+Each piece run 500 times in a `loop`, net of the `loop` itself:
+
+| piece | cyc | ins |
+|---|---:|---:|
+| the five per-pixel guard compares (§5.6.3's clip box + §5.6.6's `gfx_ln_wide`) | **170.0** | 10 |
+| the `e2` block — `e2 = 2*err` and both Bresenham tests, through `.bss` | **298.0** | 17 |
+| ...the same decision in registers | 116.0 | 9 |
+| `call gfx_nextrow`, as the walk makes it | **159.0** | 6 |
+| ...the same three instructions INLINE | 100.0 | 4 |
+
+(The `e2` rows and the register row each carry one `push`/`pop` pair of
+harness, ~30 cyc; the `gfx_nextrow` rows carry a `sub di,[vid_rowadd]` undo,
+~25.)
+
+So a steep line pixel is roughly **170 guard + 270 bookkeeping + 134 row step
++ 38 store + ~110 the rest**. Nothing is anomalous and nothing is missing:
+Set 5/6's unaccounted remainder was the guard block and the call.
+
+#### The finding, in one line
+
+**40.8 instructions per pixel at 17.7 cycles each.** The cycles-per-
+instruction is not the problem — a register-resident candidate measures 15.7
+— and 17.7 is simply what a **direct memory operand** costs on an 8088:
+`cmp si,[gfx_ln_cx1]` is 4 bytes and a word read, 15 clocks of execution, 4
+more for the 8-bit bus, and 4 clocks a byte of prefetch that the queue cannot
+hide across eight taken branches. Every one of `dx`, `dy`, `err`, `e2`, `sx`,
+`x2`, `y2`, the four clip edges, the wide flag and the ink is a word in
+`.bss`. Part 2's `max(clocks, 4.34 × bytes)` floor is the whole story and the
+110-byte loop body is over it.
+
+#### The candidate, measured on both 1bpp adapters
+
+An octant-split walk — `d = 2dx − dy`, the major axis stepping every pixel so
+it needs no test, `d` and `2dx` and `2dy` in registers, the clip spent before
+the loop, the row step inline. `tools/os88linecost.py --model` proves it lays
+the **identical** pixel set over 9,480 endpoint pairs, and the harness diffs
+the framebuffer to prove it again on the glass.
+
+| 128 px | Hercules | CGA |
+|---|---:|---:|
+| `gfx_line` | 94,383 cyc | 86,063 |
+| candidate, portable row step | **19,415 (4.86×)** | **20,244 (4.69×)** |
+| ...with the Hercules-only `js` wrap | 16,086 (5.87×) | *lays a different line* |
+| ...with the framebuffer store removed | 11,223 | 12,894 |
+
+Every "identical" row above is byte-for-byte identical framebuffer. The `js`
+row is the reason the harness diffs at all: Hercules' `vid_wrapbit` is 0x8000
+and IS the sign bit, CGA's is 0x4000, and the shortcut is silently wrong
+there — 64 bytes different, no error, a plausible-looking line.
+
+**147 cyc/px portable = 30.8 µs a pixel, against 151.5.** The store is
+38 cyc/px of it (5% of the old loop, 26% of the new one).
+
+#### What did NOT pay, and it is the interesting half
+
+**Accumulating a framebuffer byte instead of one read-modify-write per pixel
+is worth 10%, not the 8× the store count suggests** (112.1 cyc/px against
+124.9 on a 127×32 line, both identical pixels). A shallow line only holds
+eight pixels in one byte if it is shallow enough that `gfx_line` already sends
+it to `gfx_hline` (§5.6.1); at 127×32 the row changes every fourth pixel and
+the byte has to be spent then anyway. Rule 5 in miniature — the optimisation's
+*shape* was right and its *reason* was not present.
+
+`docs/LINE-PERF-PLAN.md` is what this would cost to build, and what has to
+move with it.
+
+### Set 70 — §5.6.4.1 built and measured, and one defect it found
+
+| | |
+|---|---|
+| machine | MartyPC, `os8088_5150_herc` and `_cga`, real IBM 5150 ROM |
+| harness | `tools/os88linecost.py gfx_line`, three lengths per geometry, fitted |
+| build | the fast walk in the kernel, against Set 69's numbers for the same rows |
+| date | 2026-08-21 |
+
+| | Set 69 | now | |
+|---|---:|---:|---|
+| steep, per pixel | 723.1 cyc | **151.9** | **4.76×** |
+| shallow, per pixel | 657.1 | **128.2** | **5.13×** |
+| a 128 px steep line, whole | 94,382 | **22,845** | 4.13× |
+| a 128 px shallow line, whole | 86,017 | **19,815** | 4.34× |
+| a **dilated** shallow erase, 128 px | 256,617 | **58,011** | 4.42× |
+| the arrival | 1,822 | **3,405** | 0.54× |
+
+**The arrival nearly doubled and that is the trade.** The eligibility tests,
+the interval and `gfx_ls_addr` are ~1,700 cycles where the general walk's
+header was ~600, so the two cross at **2.8 pixels** — which is why `LF_MINMAJ`
+refuses a line shorter than four and the change is a win at every length
+rather than a win on average. A dilated **steep** erase is untouched: §5.6.6's
+three-column walk is a different shape and the fast walk refuses it.
+
+**The pixels are identical and that is checked twice**: `tests/linefast.py`
+against the same kernel with the dispatch poked out, on both 1bpp adapters,
+clipped and not; and `os88linecost.py candidate`, which still reports
+`identical` against the independent stub Set 69 validated.
+
+#### The defect the comparison found (SPEC.md §5.6.4.3)
+
+The two walks disagreed on every line entering the screen **from the top**,
+and the fast one was right. `gfx_line_mono` called `gfx_rowbase(y1)` with
+`y1 = -5`; `gfx_rowbase` is banked, so that is bank 3 of a 16-bit product that
+wrapped, and five `gfx_nextrow` steps from it land **90 bytes past row 0**
+rather than at it — a line drawn **four rows low on Hercules**, silently, for
+as long as the primitive has existed. The walk skipped the pixels above the
+box correctly and addressed every pixel after them wrongly.
+
+`gfx_lm_pre` steps the state to the box's top edge before any address is
+computed; `gfx_ls_addr` uses `sar` so the left edge works the same way. 54
+bytes, on both kernels, and it changes nothing for a line that starts on
+screen — which is every line any shipped package draws today, which is why
+nobody had seen it.
+
+**Price: `.text` +686, one 512-byte image rung**, `KERN_BUDGET` spare 1,024 →
+512. `kern_small` does not get it (§5.6.4.4) — it did not fit, and the guard
+said so rather than anybody noticing.
+
+### Set 71 — the frame rate of a program that only draws lines (SPEC.md §78)
+
+| | |
+|---|---|
+| machine | MartyPC, `os8088_5150_herc` and `_cga`, real IBM 5150 ROM |
+| harness | `tests/wirefps.py` — **the program reading its own answer** |
+| build | shipped kernel and shipped `WIRE.O88`, one boot each |
+| date | 2026-08-21 |
+
+Sets 69 and 70 priced a line pixel. This is what that is worth to something
+that draws lines for a living: `apps/wire` tumbles a wireframe cube with
+nothing but `OSAPI_GFX_LINE` — twelve edges drawn and twelve erased a frame —
+and keeps its own frame rate in `wr_fps`. The two runs are **the same boot and
+the same binary**: three bytes of `gfx_line_raw` are poked to `stc`/`nop`/`nop`
+and every line goes down §5.6.4's general walk instead, with nothing else
+different, and then poked back.
+
+| | general walk | fast walk | back |
+|---|---:|---:|---:|
+| Hercules 720×348 | 8.1 fps | **18.2** | 18.2 |
+| CGA 640×200 | 11.4 | **18.2** | 17.1 |
+
+**18.2 fps is the system tick.** On both adapters the fast walk stops being
+what limits the frame rate, which is the only form of "fast enough" that means
+anything here — and `View → Medium` is sized so it lands there rather than
+past it.
+
+**CGA's ratio is lower and that is the arrival, not the walk.** Its window is
+clamped to a 200-row desktop, so the figure is smaller, so fewer of the
+frame's cycles are pixels and more are the 24 per-call arrivals Set 70 priced
+at ~713 µs each. The same change looks smaller the less drawing there is to do
+— which is the honest shape of a per-pixel optimisation and worth having a
+second adapter say out loud.
+
+**The "back" column is the control.** It is the point of poking rather than
+building twice: a figure that did not return would mean the two samples had
+drifted apart for some other reason. 17.1 on CGA against 18.2 is one frame in
+a six-second window, which is the tenth `wr_fps` is quantised to.
+
+### Set 72 — the erase's SPREAD by angle, which is what a player sees
+
+| | |
+|---|---|
+| machine | MartyPC, `os8088_5150_herc`, real IBM 5150 ROM |
+| harness | `tools/os88linecost.py`'s rig, driven by hand; three configurations poked on one boot |
+| geometry | **193 pixels dilated**, steep and shallow — Set 4's own measured whole-trail erase length |
+| date | 2026-08-21 |
+
+Reported from the field after Set 70 shipped: Missile Command's trails "speed
+up and slow down". They do, and it is not the arrival — every `gfx_line` call
+pays the same one. It is that §5.6.4.1 made the **shallow** dilated erase 4.6×
+cheaper and left the **steep** one exactly where it was, because §5.6.6's wide
+walk is the one shape the fast walk refuses.
+
+| a 193 px dilated whole-trail erase | before Set 70 | after Set 70 | after §5.6.6.1 |
+|---|---:|---:|---:|
+| steep | 40,456 µs | 40,474 | **20,438** |
+| shallow | 81,092 | 17,446 | 17,446 |
+| **spread** | 40,636 | **23,028** | **2,992** |
+
+Set 4 counted **38% of a real run's erases steep**, so after Set 70 a
+whole-trail erase cost 40 ms or 17 ms depending on the angle, two frames in
+five drawing the long straw. 23 ms is **42% of a 54.9 ms tick**, and a frame
+budget that swings by nearly half a tick on a property of the geometry is
+exactly what "speeds up and slows down" looks like.
+
+**The absolute numbers all improved and the experience got worse**, which is
+the finding worth keeping: 40/81 has a spread of 40 ms too, but both arms are
+over the tick, so every frame stutters and none of them stands out. Set 70
+took the common arm under the tick and left the other one over it. **Variance
+against a smooth baseline is more visible than variance against a rough one**,
+and a mean is not a frame rate.
+
+Clipped against a single window rect — the way §48 actually draws — the same
+three columns are 20,577 / 17,570 / 89,392, the last being what three passes
+cost when the fast walk is refused and the reason `gfx_lf_wide3` asks rather
+than assuming (§5.6.6.1): dropping the wide walk unconditionally would be
+2.2× **worse** on exactly the lines it still serves.
+
+### Set 73 — the flicker, as ink on the glass (SPEC.md §78.5)
+
+| | |
+|---|---|
+| machine | MartyPC, `os8088_5150_herc`, real IBM 5150 ROM |
+| harness | `tests/wireflick.py` — the object area sampled once per DISPLAYED frame, its ink counted |
+| build | `apps/wire`, Medium, twelve edges |
+| date | 2026-08-21 |
+
+`m.flicker()` (Part 3.1) is the wrong instrument here and says so: it requires
+the screen to **settle**, and the whole point of this window is that it never
+does again. So the thing a person actually reacts to is measured instead —
+**the figure going away** — by counting the object area's lit pixels frame by
+frame.
+
+| draw order | emptiest frame | mean ink | frames under half full | fps |
+|---|---:|---:|---:|---:|
+| Whole figure — erase all, then draw all | **0%** | 48% | **56%** | 17.1 |
+| Edge at a time — erase old[i], draw new[i] | **72%** | 90% | **0%** | **17.1** |
+| Edge, then repair — and a third pass | 53% | 92% | 0% | 12.1 |
+
+**Erase-all-then-draw-all empties the window completely on more than half the
+frames a viewer sees**, and the fix is free: the same twenty-four line calls
+in a different order, plus twenty-two `SET_COLOR`s, about a millisecond. The
+floor goes 0% → 72% and the blank frames go 56% → 0% for no frame rate at all.
+It is the default now.
+
+**The repair pass is dominated, and instructively.** It costs 5 fps to buy 2%
+more ink — the nicks are that small — and its *emptiest* frame is **worse**,
+53% against 72%, because a third walk makes the frame half again as long and a
+sample is likelier to land mid-pair. **A change that improves the mean and
+worsens the floor**: Set 72's lesson one round later, in a different
+mechanism, and the reason both columns are reported.
+
+#### The API this rules out
+
+"Pair the erase with the draw in the kernel" is the obvious suggestion and it
+does not work, for a reason worth recording. To leave a *shared* pixel alone
+the kernel has to know it is shared, which means walking both lines in
+**lockstep** — and two Bresenham states do not fit in eight registers, so they
+go back to `.bss` at §5.6.4's 723 cycles a pixel. That is **4.6× what two
+§5.6.4.1 walks cost** (Set 70): the flicker would be paid for by making every
+line on the machine slower. A paired *call* is still worth Set 11's measured
+**128.7 µs** of arrival an edge, but that is not a flicker saving — the erase
+still precedes the draw inside it.
+
+The ordering is the caller's, and one millisecond of `SET_COLOR` is what it
+costs to get it right.
+
+### Set 74 — can a wireframe be moved by writing DIFFERENCES? (SPEC.md §78.5)
+
+| | |
+|---|---|
+| machine | MartyPC, `os8088_5150_herc_gla_144`, cycle-accurate 4.77 MHz 8088 |
+| harness | `gfxbench`, two rows added for the candidates |
+| date | 2026-08-22 |
+
+§78.5 offers three draw orders and says none of them is free. This set asks
+whether there is a fourth shape that is: **rasterise the figure into a private
+1bpp mask, and commit the frame as the XOR of that mask against last frame's,
+so the framebuffer is touched only where the two differ.** A pixel the two
+frames share is then never written at all, which is exactly the fracture
+§78.5 pays for.
+
+**The premise it was proposed on is false, and Set 1 already said so.** The
+suggestion is usually phrased as *buffer the pixels in RAM and batch the
+write*, on the assumption that video memory is the expensive part. It is not:
+Set 1 measured the framebuffer at **1.09× RAM** for a read-modify-write and
+1.57× for `rep stosw`, because on a 4.77 MHz 8088 the instructions are the
+bottleneck and the card's wait states hide inside them. Moving pixels to RAM
+and back saves nothing. Any win has to come from **issuing fewer operations**,
+not from where they land.
+
+| row | N | µs/op | per pixel |
+|---|---:|---:|---:|
+| `GFX_LINE shallow thin` (127×32) | 24 | 4,753.23 | 37.1 µs |
+| …the same, less Set 11's 714 µs arrival | | 4,039 | **31.6 µs** = 151 clocks |
+| **`mask line 127x32`** — the candidate rasteriser | 24 | **3,147.90** | **24.6 µs** = 117 clocks |
+| **`xordiff 128x128`** — the candidate commit | 24 | **27,690.71** | 27.0 µs a WORD |
+
+**The rasteriser is the good news: 1.29× faster per pixel, and no arrival at
+all.** What it drops is everything `gfx_line` does that a caller compositing
+its own figure does not need — clipping, the ink, the dither table, the
+per-row `gfx_rowbase`. Priced against the cube saver's frame, which is 24
+whole lines of ~45 px:
+
+| | |
+|---|---|
+| now — 24 × (714 µs arrival + 45 × 31.6 µs) | **51.3 ms** (measured whole: 56) |
+| rasterise 12 edges into a mask, 540 px × 24.6 µs | **13.3 ms** |
+
+**And the commit is the bad news, and it is the whole finding: 27.7 ms.** The
+scan is priced by the box's AREA and not by its ink — 1,024 words at 27 µs
+each — so on a 128×128 box it costs more than the rasteriser saves. The naive
+loop is nine instructions a word and the 8088's 4.34 clocks per instruction
+byte does the rest. A cube's ink is 540 pixels in 12,100; **99% of that scan
+finds nothing and pays full price for it.**
+
+So the fourth order works and the obvious implementation of it does not:
+41 ms against 56, for two 2 KB buffers and a new kernel primitive — and the
+next subsection is what to do instead.
+
+**The next move looked like a hierarchy** — a 1-bit-per-word dirty summary, so
+the scan is priced by ink instead of area. It was going to be measured next.
+It should not be, and the reason is the row that was measured instead.
+
+#### The diff was the wrong question: `gfx_blit1` already does the commit
+
+§5.4.2's `OSAPI_GFX_BLIT1` puts a 1bpp band down in **one arrival**, byte-
+aligned, **in final screen polarity**. For a figure on a plain ground that IS
+the commit: the band *replaces* the box, so the old figure goes and the new one
+arrives in the same pass, no pixel is ever read, and no pixel is ever written
+twice. It was built for proportional text a package sets itself. It has been
+shipped all along.
+
+| row | N | µs/op |
+|---|---:|---:|
+| `xordiff 128x128` — read A, read B, write the difference | 24 | 27,698.78 |
+| **`GFX_BLIT1 128x128`** — write the whole box, blind | 24 | **16,609.98** |
+| `clear mask 2048` — `rep stosw`, the other half of the frame | 24 | **3,113.08** |
+
+**Writing the whole box blind beats computing which parts of it changed, by
+1.7×.** That is the shape of every read-modify-write on this machine: the diff
+has to *read* both masks to find out it has nothing to do, and a read it acts
+on is no cheaper than a write it did not need to think about. A hierarchy would
+have been an elaborate way to make the losing option lose by less.
+
+So the cube saver's frame, every term measured:
+
+| | |
+|---|---|
+| clear the mask | 3.1 ms |
+| rasterise 12 edges, 540 px × 24.6 µs | 13.3 ms |
+| `gfx_blit1` the box | 16.6 ms (12.3 at the cube's real 110×110) |
+| **total** | **~29 ms**, against **56** now |
+
+...and it is **constant**, which the current frame is not: the cost is the box
+and the ink, not the attitude. **No pixel is ever dark that should be lit**,
+because the band carries both figures' pixels in one pass. What survives is a
+horizontal shear while the band goes down — the figure a few rows behind
+itself, never disconnected from itself.
+
+**`gfx_blit1` itself had room in it, and less than the clocks said.** Its row
+loop was `rep movsb`; an 8088 moves a byte in 17 clocks that way and 12.5 as
+`rep movsw`, which predicted 1.36×.
+
+| `GFX_BLIT1 128x128` | µs/op |
+|---|---:|
+| `rep movsb` | 16,609.98 |
+| **`rep movsw`** | **15,124.87** |
+
+**1.10×.** The prediction was high because the `rep` is not the whole row: the
+loop around it — the count, the `push`/`pop di`, the band step, the row step,
+the wrap test — is fixed, and at 16 bytes a row halving the iterations saves
+72 clocks of about 619. It is a five-byte change that leaves `.cold` **one
+byte** free, it is every `gfx_blit1` in the OS, and it was verified the only
+way that means anything: Word rendering `WELCOME.DOC` produces a
+**byte-identical framebuffer** before and after (sha1 `7c625283…`, 105,116 lit
+pixels), which exercises the odd-bytes-per-row path a proportional glyph run
+produces.
+
+At 8.1 µs a byte before and 7.4 after, against Set 1's 2.76 for a framebuffer
+`rep stosw`, most of what is left is that fixed per-row work and not the bus.
+
+**One limit is structural.** The technique is priced by the bounding box, so it
+suits a compact figure and not a sprawling one: §79.5's geometry mode has a
+236×236 box, four times this row's area. That mode does not want it anyway —
+it never erases and redraws, it accumulates.
+
+#### A line drawn as byte-aligned RUNS — not for this, and possibly for a horizon
+
+Microsoft Flight Simulator 1.0 on a 5150 manages about 5 fps at half screen,
+and its lines look *stepped*: long straight runs with a visible jog between
+them, where ours are even. Most of that is resolution — it is CGA 320×200 in
+four colours against our 640×200 mono, so every pixel is twice as wide before
+anything else is different.
+
+But the technique the look suggests is real and we do not have it. **Draw a
+shallow line as per-row horizontal RUNS and round the run boundaries to byte
+edges**, and each run becomes a `stos` instead of eight read-modify-writes.
+§5.6.1 already sends a sufficiently shallow line to `gfx_hline`; this is the
+general case of that, and the error it introduces is where the y step *lands
+along the run*, up to ±4 px — which on a near-horizontal line is a
+perpendicular error of almost nothing, and on a steep one is ruinous.
+
+**So it is the wrong answer for a wireframe** — a cube's edges would stop
+meeting at its corners — and it is plausibly the right one for a **horizon, a
+ground grid, or a road**, where the lines are long, nearly horizontal, and
+nobody can see a step land four pixels early. Noted here rather than built:
+the shape that wants it is a first-person 3D game, and there isn't one yet.
+
+Whether Artwick's code did this is not something this note claims. The
+screenshot shows a resolution and a shape; it does not show an algorithm.
+
+### Set 75 — where a composited frame's time actually goes (SPEC.md §78.8.1)
+
+Set 74 left `Composed` shipping as a menu entry that lost to `Edge at a time`
+in a window and won on a full screen, with the difference recorded as
+*unexplained* and a named guess: the size of the thing being swept. **The guess
+was right and the reasoning under it was wrong**, which is this set's point.
+
+Taken on MartyPC, `os8088_5150_cga_gla`, WIREFRAME in `Draw ▸ Composed`, with
+an exec breakpoint on `wr_compose`, `wr_put` and `wr_keep`. **Every stop is
+labelled by its `ip`** rather than assumed to alternate, and the three spans
+sum to the frame — which is the check that the labelling is right, and the
+reason the first version of this measurement is not in the table.
+
+| span | band = 128 × 120 | band = the figure's box |
+|---|---:|---:|
+| `wr_compose` → `wr_put`, rasterise the mask | 17.0 ms | **15.9 ms** |
+| `wr_put` → `wr_keep`, the blit | 14.3 ms | **5.3 ms** |
+| idle, waiting for the tick | 23.6 ms | **33.7 ms** |
+| **frame** | **54.9 ms** | **54.9 ms** |
+| band, mean bytes | 1,920 | **426** |
+
+**The entire win is the blit — 2.7x — and compose barely moves.** The band was
+sized to the window and the figure to the geometry, and nothing connected the
+two; sizing it to the union of this frame's bounding box and the one already on
+the glass (the union, because the band erases by covering) is 4.5x fewer bytes
+of glass swept. Compose does not care: `wr_mline` walks one pixel at a time
+with a loop count of `max(dx, dy) + 1`, so the band never enters it, and the
+1.1 ms it does drop is exactly the smaller mask clear (2,048 bytes to ~944).
+
+**The idle column is the flicker budget.** It reads like room for a bigger
+figure or a second one, and it is — but every byte added to the band moves from
+the idle column into the blit column, which is the only span where the glass is
+incoherent. The frame rate would not improve either: 18.2 Hz is the tick.
+
+**Three lessons, and the third is the one that cost a wrong number.**
+
+**Rule 4 again, sharper: a diff is not a timer.** The first instrument here
+compared the glass against the mask that was supposed to be on it, and reported
+**72% of samples torn**. It is a good instrument for the *mechanism* — it found
+the 116 px of stale ink that is §78.8's "third shade", which no aggregate would
+have shown — and a bad one for the *cost*, because during `wr_compose` the mask
+is half-rebuilt while the glass holds the previous frame **complete**. That is
+not a flicker and the diff counts it as one. The true figure is the blit alone:
+26% of frames caught mid-sweep before, **10%** after.
+
+**LABEL EVERY BREAKPOINT STOP, and never infer one from alternation.** The
+first version of the `before` column read compose = 37.8 ms and idle = 2.8 ms,
+and the conclusion drawn from it — *the app is 95% busy* — was wrong and
+plausible, which is the dangerous combination. Two exec breakpoints were armed
+and the stops assumed to alternate `A, B, A, B`; the run happened to begin on
+`B`, so every "A → B" gap was really `B → A`, and 37.8 ms is `put → keep →
+compose` (14.3 + 23.6) read as compose. The off-by-one was noticed and then
+argued away: *if both pairs were offset the totals would not reconcile* — true,
+and useless, because only ONE of the two pairs was offset. Both reconciled to
+54.9 ms and both looked right. **The fix is one line** — read `ip` at each stop
+and label it — and it is the only thing that distinguishes the two readings.
+The corrected table above came from a re-run that does it; the number that
+survived unchanged from the bad run is the blit, because that pair happened to
+start on the right address.
+
+**A fixed-size scratch buffer is a performance decision in disguise.** `WR_BW`
+and `WR_BH` read as capacity constants — how big a mask can this package hold —
+and were silently also the per-frame cost, because the whole buffer was cleared
+and the whole band blitted whatever the figure needed. Nothing in the code said
+so and nothing in §78.8 said so. They are now the mask's capacity and only
+that; `wr_bw`/`wr_bh` carry the frame's. Worth checking wherever a package
+composes into a buffer it declared once — the saver's cube (§79.5.6) has the
+same shape, and there the figure genuinely does fill its band.

@@ -8061,7 +8061,23 @@ CY_TWORDS equ 14
     CBYTE cy_ient                   ; initials entry is up
     CBYTE cy_ipos                   ; ...and how many characters are in
     CBUF  cy_ibuf, 4
-    CBUF  cy_hsbuf, CY_HSFSZ        ; the file, staged
+    ; **512-ALIGNED, because int 13h reads it** (SPEC.md 2.4, 77.31). It is a
+    ; few hundred bytes and it still matters: a single sector transferred from
+    ; an unaligned base can straddle a 64KB physical page, dsk_runcap's floor
+    ; hands that one sector to the BIOS anyway, and the DMA controller answers
+    ; a straddle with error 09h. Whether this buffer lands on such a page is
+    ; decided by where the heap put the region, which is not this file's to
+    ; know - so it is aligned rather than hoped for.
+    ;
+    ; The 511 of slack is what the rounding below spends: CY_BSS is a
+    ; PREPROCESSOR count and os88_image_end is not defined until after it, so
+    ; the alignment cannot be done by bumping the count - it is done in the
+    ; label, and the room for it has to be reserved here.
+%assign CY_HSRAWOFF CY_BSS          ; ...and its offset, banked as a NUMBER:
+    CBUF  cy_hsraw, CY_HSFSZ + 511  ; a CBUF label is a forward reference to
+                                    ; os88_image_end and stays non-scalar, so
+                                    ; the rounding past OS88_IMAGE_END cannot
+                                    ; be written in terms of the label
     CBUF  cy_dfind, OSAPI_FIND_SZ   ; one OSAPI_FILE_FIND record (SPEC.md 19.9)
     CWORD cy_dbclus                 ; where we were standing before the visit
     CBYTE cy_dbdrv
@@ -8069,4 +8085,12 @@ CY_TWORDS equ 14
 
     OS88_BSS CY_BSS
     OS88_IMAGE_END
+
+; ...and the rounding goes HERE, past OS88_IMAGE_END, because os88_image_end
+; has to be defined before `cy_hsraw - $$` is a scalar NASM will let `&` touch.
+CY_HSOFF    equ ((os88_image_end - $$) + CY_HSRAWOFF + 511) & ~511
+cy_hsbuf    equ $$ + CY_HSOFF
+%if (CY_HSOFF & 511) != 0
+  %error "cyclone: cy_hsbuf must be 512-aligned - int 13h reads it (SPEC.md 2.4)"
+%endif
 

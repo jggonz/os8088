@@ -101,6 +101,11 @@ eth_bases:  dw 0x300, 0x320, 0x340, 0x280, 0x2C0, 0x240, 0x360, 0
 eth_fixed:  dw ETH_BASE
 %endif
 
+%include "ethprof.inc"          ; the stage timers (SPEC.md 72.15), and HERE
+                                ; rather than beside the other includes below:
+                                ; it defines the PROF_ macros, and eth_pkg uses
+                                ; them a hundred lines before that block
+
 ; =============================================================================
 ; ENTRY
 ; =============================================================================
@@ -140,8 +145,10 @@ eth_attach:
     call ne_probe
     jc  .try
 .found:
-    call ne_init
-    mov byte [eth_up], 1
+    call sk_claim               ; THE RINGS, before the card can deliver into
+    jc  .noring                 ; them (SPEC.md 72.13). A card with no buffers
+    call ne_init                ; cannot serve a socket, so this is the one
+    mov byte [eth_up], 1        ; memory failure that refuses the attach
     mov di, eth_ip              ; a fresh attach starts with no address: a
     mov cx, 16                  ; second one must not inherit the first's
     call mem_zero
@@ -159,6 +166,15 @@ eth_attach:
     pop bx
     pop ax
     clc
+    ret
+.noring:
+    mov word [eth_base], 0      ; the card is real and the memory is not: the
+    mov byte [eth_up], 0        ; Drivers page reports a refusal either way,
+    pop di                      ; and a stack with no window is not a stack
+    pop cx
+    pop bx
+    pop ax
+    stc
     ret
 .none:
     mov word [eth_base], 0
@@ -184,7 +200,10 @@ eth_ready:
     cmp byte [eth_up], 0
     je  .out
     call eth_cfg_load           ; a MANUAL address the user set and the panel
-    jnc .out                    ; remembered (SPEC.md 72.7) needs no server
+    pushf                       ; remembered (SPEC.md 72.7) needs no server
+    call eth_buf_apply          ; ...and the socket buffer rung it remembered
+    popf                        ; too, which is a setting and not an address:
+    jnc .out                    ; it is wanted on every path out of the load
     cmp byte [dhcp_st], DH_BOUND
     je  .out                    ; ...and neither does a baked-in one
     call eth_dhcp_wait
@@ -244,6 +263,7 @@ eth_dhcp_wait:
     pop ax
     ret
 
+
 ; -----------------------------------------------------------------------------
 ; DRVV_DETACH - cannot fail (SPEC.md 51.6 rule 1)
 ; -----------------------------------------------------------------------------
@@ -267,6 +287,9 @@ eth_detach:
     call eth_dropall
     call ne_stop
     mov byte [eth_up], 0
+    call sk_release             ; ...and the rings go back: a driver's claims
+                                ; are not an instance's, so nothing frees them
+                                ; for us (SPEC.md 72.13)
 .out:
     mov byte [eth_busy], 0      ; ...and the flag does not outlive the driver:
                                 ; a claim left standing would refuse every
@@ -361,6 +384,10 @@ eth_pkg:
 .up:
     xor bh, bh
     shl bx, 1
+    PROF_B PF_VERB              ; the whole verb, so a profile can say how much
+                                ; of a transfer was inside the driver at all
+                                ; and how much was the package and the disk
+                                ; above it (SPEC.md 72.15)
     call [eth_vtab+bx]          ; **THROUGH MEMORY, NOT THROUGH A REGISTER.**
                                 ; `mov di, [eth_vtab+bx] / call di` is the
                                 ; obvious form and it destroys DI - which is
@@ -372,6 +399,8 @@ eth_pkg:
                                 ; failure somewhere else. The kernel's own
                                 ; drv_pkg_call_x had this bug in stage C
                                 ; (SPEC.md 20.11) and it is the same one twice
+    PROF_E PF_VERB, 0           ; ...and it preserves CF and AX, which are the
+                                ; verb's answer on their way out
     jmp short .out
 .verb:
     mov ax, NETE_VERB
@@ -428,6 +457,9 @@ eth_vtab:
     dw eth_v_listen             ; 7 NETV_LISTEN
     dw eth_v_accept             ; 8 NETV_ACCEPT
     dw eth_v_none               ; 9 NETV_RESOLVE - RESERVED (netpkg.inc)
+    dw eth_v_addr               ; 10 NETV_ADDR
+    dw eth_v_abort              ; 11 NETV_ABORT
+    dw eth_v_prof               ; 12 NETV_PROF - the stage timers (72.15)
 eth_vtab_end:
 %if (eth_vtab_end - eth_vtab) / 2 != NETV_MAX + 1
   %error "ether: the verb table and NETV_MAX disagree"

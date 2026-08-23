@@ -1470,6 +1470,16 @@ bl_save:
     xor dx, dx
     mov bx, bl_out
     pop si                      ; the name
+    push si                     ; **SAY SO FIRST** - bl_progress exists for
+    push cx                     ; this and this is the one place that was not
+    push dx                     ; using it. A write creates or truncates a
+    push bx                     ; file, updates two FAT copies and a directory
+    mov si, bl_s_writing        ; entry: on a 4.77MHz machine with a floppy
+    call bl_progress            ; that is SEVERAL SECONDS with the gfx lock
+    pop bx                      ; held, the cursor parked and nothing moving -
+    pop dx                      ; which is indistinguishable from a hung
+    pop cx                      ; machine, and was read as one twice in one
+    pop si                      ; afternoon (docs/FIELD-NOTES.md 27.4)
     call OSAPI_FILE_WRITE       ; ES:BX = the text, DX:CX = the count
     mov byte [bl_saved], 1
     mov word [bl_savemsg], bl_s_wrote
@@ -1562,6 +1572,7 @@ bl_s_dash:  db '-', 0
 bl_s_of:    db 'of', 0
 bl_s_keys:  db 'Spc/PgDn PgUp Up Dn Home End', 0
 bl_s_trunc: db 'REPORT TRUNCATED', 0
+bl_s_writing: db 'WRITING THE REPORT - a floppy write is seconds on this machine', 0
 bl_s_wrote: db 'saved', 0
 bl_s_werr:  db 'SAVE FAILED', 0
 

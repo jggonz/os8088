@@ -36,8 +36,12 @@ EU_BY       equ 108             ; ...and the button sits BELOW the counters
                                 ; run to 99
 EU_BW       equ 68
 EU_B2X      equ 76             ; ...and the second button beside it
+EU_B3X      equ 150            ; ...and the third, which ends at 217 of the
+                               ; pane's 221 - the row is full and a fourth
+                               ; would have to go somewhere else
 EU_BRENEW   equ 1              ; what the press arms (os88ui_arm's token)
 EU_BSETUP   equ 2
+EU_BBUF     equ 3
 EU_BH       equ 16
 
 ; -----------------------------------------------------------------------------
@@ -185,9 +189,15 @@ eth_cp_click:
     call eth_bhit
     jc  .out
     cmp al, EU_BRENEW           ; a greyed control refuses in ONE place, and
-    jne .arm                    ; that place is the same predicate the greying
+    jne .nbuf                   ; that place is the same predicate the greying
     cmp byte [eth_mode], ECM_MAN    ; reads (SPEC.md 47 rule 5). A refused
     je  .out                        ; click says nothing more - rule 6
+    jmp short .arm
+.nbuf:
+    cmp al, EU_BBUF
+    jne .arm
+    call sk_busy                ; ...and the buffer button's predicate is
+    jc  .out                    ; sk_busy, in eth_draw_btns and here alone
 .arm:
     xor ah, ah                  ; ...and the press only ARMS and DRAWS: both
     push ax                     ; of these want the RELEASE (SPEC.md 13.8.4),
@@ -245,9 +255,28 @@ eth_cp_up:
                                 ; as the flash
     cmp al, EU_BSETUP
     je  .setup
+    cmp al, EU_BBUF
+    je  .buf
     call eth_dhcp_wait          ; Renew: and it WAITS, because nothing else
     call eth_cp_pane            ; pumps the ring (SPEC.md 72.2.1)
     jmp short .out
+.buf:
+    mov al, 1
+    xchg al, [eth_busy]         ; the mutex every VERB takes (SPEC.md 72.2.2):
+    or al, al                   ; this arm re-sizes the ring claim on the UI
+    jnz .bfheld                 ; task while a worker's verb may hold the
+                                ; driver - the one mutator that skipped the
+                                ; lock every other mutator takes. Held: the
+                                ; request is left un-stepped and the next
+                                ; click asks again
+    call eu_bufnext             ; the new REQUEST, and then the heap's answer
+    call sk_reclaim             ; to it - the caption is redrawn from what was
+    mov byte [eth_busy], 0      ; ...released BEFORE the pane paints: a paint
+    mov byte [ec_dirty], 1      ; is milliseconds a verb should not wait out
+.bfheld:
+    call eth_cp_pane            ; so an 8K the machine cannot fund reads 4K
+    jmp short .out              ; the moment it is asked for (remembered when
+                                ; the panel closes, 31.8)
 .setup:
     call eth_cp_pane            ; the pane FIRST, so the button it was pressed
     call eth_cfg_open           ; with comes back upright - and the Setup
@@ -327,13 +356,20 @@ eth_brects:
     mov [eth_r2], ax
     add ax, EU_BW - 1
     mov [eth_r2+4], ax
+    mov ax, [eth_px]
+    add ax, EU_B3X
+    mov [eth_r3], ax
+    add ax, EU_BW - 1
+    mov [eth_r3+4], ax
     mov ax, [eth_py]
     add ax, EU_BY
     mov [eth_r1+2], ax
     mov [eth_r2+2], ax
+    mov [eth_r3+2], ax
     add ax, EU_BH - 1
     mov [eth_r1+6], ax
     mov [eth_r2+6], ax
+    mov [eth_r3+6], ax
     pop bx
     pop ax
     ret
@@ -359,8 +395,14 @@ eth_bhit:
 .try2:
     mov bx, eth_r2
     call os88ui_bhit
-    jc  .out
+    jc  .try3
     mov al, EU_BSETUP
+    jmp short .out
+.try3:
+    mov bx, eth_r3
+    call os88ui_bhit
+    jc  .out
+    mov al, EU_BBUF
 .out:
     pop dx
     pop cx
@@ -419,6 +461,19 @@ eth_draw_btns:
     jne .sdraw
     or  di, OS88UI_DOWN
 .sdraw:
+    call os88ui_btn
+    mov bx, eth_r3
+    call eu_bufcap              ; the caption IS the readout: whatever the
+    mov di, OS88UI_FILL         ; ladder actually got, not what was asked for
+    call sk_busy                ; ...and a live socket's data is IN the rings,
+    jnc .bdown                  ; so resizing them is not available while there
+    or  di, OS88UI_DIS          ; is one - a FACT, which is what SPEC.md 47
+    jmp short .bdraw            ; rule 3 lets a control grey itself on
+.bdown:
+    cmp byte [eth_down], EU_BBUF
+    jne .bdraw
+    or  di, OS88UI_DOWN
+.bdraw:
     call os88ui_btn
     pop di
     pop si
@@ -718,11 +773,64 @@ eu_s_nosrv: db 'No server', 0
 eu_s_renew: db 'Renew', 0
 eu_s_setup: db 'Set Up', 0
 eu_s_manual: db 'Manual', 0
+eu_s_b1:    db 'Buf 1K', 0    ; the socket rings (SPEC.md 72.13.2), and the
+eu_s_b4:    db 'Buf 4K', 0    ; caption is the LIVE size rather than the
+eu_s_b8:    db 'Buf 8K', 0    ; request: a machine that could not fund what
+eu_s_bnone: db 'Buf --', 0    ; was asked says so here and nowhere else
+
+; -----------------------------------------------------------------------------
+; eu_bufcap - SI = the caption for the buffer button, from the LIVE rings
+; -----------------------------------------------------------------------------
+eu_bufcap:
+    mov si, eu_s_bnone
+    cmp word [sk_seg], 0        ; no claim at all: the driver attached without
+    je  .out                    ; rings, so every socket verb is refusing
+    mov si, eu_s_b1
+    cmp word [sk_rxcap], SK_RXCAP0
+    je  .out
+    mov si, eu_s_b4
+    cmp word [sk_rxcap], SK_RXMID
+    je  .out
+    mov si, eu_s_b8
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; eu_bufnext - the next request in the cycle: auto -> 1K -> 4K -> 8K -> auto
+;
+; It walks from what is CURRENTLY REQUESTED and not from what is held, so the
+; cycle is four steps whatever the ladder did - stepping from the live size
+; would make `auto` unreachable on any machine where auto lands on a rung.
+; -----------------------------------------------------------------------------
+eu_bufnext:
+    push ax
+    mov ax, [sk_want]
+    cmp ax, SK_RXCAP0
+    jb  .to1
+    cmp ax, SK_RXMID
+    jb  .to4
+    cmp ax, SK_RXMAX
+    jb  .to8
+    xor ax, ax                  ; ...and round to AUTO, which is the default a
+    jmp short .set              ; fresh machine boots with
+.to1:
+    mov ax, SK_RXCAP0
+    jmp short .set
+.to4:
+    mov ax, SK_RXMID
+    jmp short .set
+.to8:
+    mov ax, SK_RXMAX
+.set:
+    mov [sk_want], ax
+    pop ax
+    ret
 
 eth_px:     dw 0
 eth_py:     dw 0
-eth_r1:     dw 0, 0, 0, 0     ; Renew's rect, and Set Up's - one
+eth_r1:     dw 0, 0, 0, 0     ; Renew's rect, Set Up's and the buffer's - one
 eth_r2:     dw 0, 0, 0, 0     ; description, drawn and clicked from
+eth_r3:     dw 0, 0, 0, 0
 eth_down:   db 0             ; which one is drawn PRESSED (SPEC.md 13.8.4)
 eu_buf:     times 20 db 0
 eu_st:      db 0                ; eu_digit: has anything been written yet?

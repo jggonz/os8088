@@ -158,7 +158,7 @@ mem_zero:
 ; byte of the value - so `xor ah,ah / mov al,[si]` is exactly right, in the
 ; swapped arithmetic this file's header licenses.
 ; -----------------------------------------------------------------------------
-ip_ck_part:
+ip_ck_part_i:
     push ax
     push cx
     push si
@@ -175,14 +175,58 @@ ip_ck_part:
     add bx, ax
     adc bx, 0
 .even:
-    clc
-    jcxz .out
-.w:
+    ; --- EIGHT WORDS AT A TIME (SPEC.md 72.16.6) ------------------------
+    ; `lodsw` is 16 clocks plus the 8088's 4-clock word-access penalty, and
+    ; `adc bx,ax` is 3 - so the body is 23 against `loop`'s SEVENTEEN. The
+    ; bookkeeping was 42% of the tightest loop in the stack, and netbench
+    ; priced the whole of it at 24,195 us/KB: the worst rate in its table by
+    ; a factor of two, on the smallest byte count.
+    ;
+    ; **THE END-AROUND CARRY IS CF, SO NOTHING INSIDE THE SUM MAY TOUCH IT.**
+    ; That is the entire shape of this routine and it is why the counting is
+    ; ALL done before the `clc`: `and`, `shr` and `sub` clobber the carry,
+    ; while `mov`, `xchg`, `jcxz` and `loop` - the only four used once the
+    ; sum starts - do not. The first draft of this banked CF across the
+    ; shifts with pushf/popf and banked the SHIFTED-OUT BIT instead, which
+    ; is a checksum that is wrong about one packet in two and silent.
+    push dx
+    mov dx, cx
+    and dx, 7                   ; DX = the leftover words...
+    shr cx, 1
+    shr cx, 1
+    shr cx, 1                   ; ...and CX the whole eights
+    xchg cx, dx                 ; CX = leftover, DX = eights
+    clc                         ; THE SUM STARTS HERE
+    jcxz .oct
+.t:
     lodsw
     adc bx, ax
-    loop .w
+    loop .t
+.oct:
+    mov cx, dx
+    jcxz .fold
+.e:
+    lodsw
+    adc bx, ax
+    lodsw
+    adc bx, ax
+    lodsw
+    adc bx, ax
+    lodsw
+    adc bx, ax
+    lodsw
+    adc bx, ax
+    lodsw
+    adc bx, ax
+    lodsw
+    adc bx, ax
+    lodsw
+    adc bx, ax
+    loop .e
+.fold:
     adc bx, 0
     adc bx, 0
+    pop dx
 .out:
     pop si
     pop cx
@@ -534,9 +578,8 @@ ip_route:
 ; every caller in this driver already does, because a network is a thing that
 ; loses packets whether or not the ARP cache is warm.
 ; -----------------------------------------------------------------------------
-ip_start:
-    push ax
-    push bx
+ip_start:                       ; STKDEPTH-NOSAVE: bx
+    push ax                     ; BX is not saved - see eth_pump_i
     push cx
     push si
     mov [eth_pr], al
@@ -561,7 +604,6 @@ ip_start:
     call arp_req
     pop si
     pop cx
-    pop bx
     pop ax
     stc
     ret
@@ -603,7 +645,6 @@ ip_start:
     mov di, eth_txb + IP_PAY
     pop si
     pop cx
-    pop bx
     pop ax
     clc
     ret
@@ -816,9 +857,8 @@ udp_send:
 ; -----------------------------------------------------------------------------
 ; eth_frame - one frame is in eth_rxb, CX bytes of it
 ; -----------------------------------------------------------------------------
-eth_frame:
-    push ax
-    push bx
+eth_frame_i:                    ; STKDEPTH-NOSAVE: bx
+    push ax                     ; BX is not saved - see eth_pump_i above
     push cx
     push si
     push di
@@ -901,7 +941,6 @@ eth_frame:
     pop di
     pop si
     pop cx
-    pop bx
     pop ax
     ret
 
@@ -917,34 +956,58 @@ eth_frame:
 ; -----------------------------------------------------------------------------
 ETH_BUDGET  equ 8
 
-eth_pump:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+eth_pump_i:                     ; STKDEPTH-NOSAVE: ax bx dx si di
+    push cx                     ; **ONLY CX AND BP.** CX is ne_rx's output and
+    push bp                     ; is live across `call eth_frame`; BP is the
+                                ; budget. The other five are given back by
+                                ; every callee - dhcp_timer and dns_timer save
+                                ; them for exactly this reason - and
+                                ; `stkdepth.py --check` fails the build the day
+                                ; one stops. TEN BYTES off the deepest chain in
+                                ; the driver, and the routine still preserves
+                                ; everything it always did (SPEC.md 72.16.4)
     cmp byte [eth_up], 0
     je  .out
     mov bp, ETH_BUDGET
 .f:
-    call ne_rx
+    call eth_pump1
     jc  .timers
-    inc word [eth_nrx]
-    call eth_frame
     dec bp
     jnz .f
 .timers:
+    call eth_ptimers
+.out:
+    pop bp
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; eth_pump1 - ONE frame off the ring, if there is one
+; out: CF=1 = the ring was empty. CX is ne_rx's length and eth_frame's input,
+;      so it flows between them and is the caller's to save.
+;
+; Split out of the loop above so that a caller can put the CARD MUTEX round one
+; frame instead of round a whole drain (SPEC.md 72.19). A drain of eight frames
+; is up to eighty milliseconds of byte-at-a-time DMA, and every package verb
+; that lands in that window gets NETE_BUSY; one frame is ten.
+; -----------------------------------------------------------------------------
+eth_pump1:
+    call ne_rx
+    jc  .none
+    inc word [eth_nrx]
+    call eth_frame
+    clc
+    ret
+.none:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; eth_ptimers - the retransmit, DNS and DHCP clocks. Cheap when idle; each one
+;               is a compare against [ticks] on nearly every call.
+; -----------------------------------------------------------------------------
+eth_ptimers:
     call tcp_timers
     call dns_timer
     call dhcp_timer
-.out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret

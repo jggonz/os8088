@@ -1931,5 +1931,11 @@ net_sstate: db 0                ; and its socket state - or, in nsk_reply_h,
                                 ; AL and says nothing about the high half
 net_slen:   dw 0                ; bytes in flight
 net_scap:   dw 0                ; ...and what we told it we could take
+net_addr:   times 4 db 0        ; NETV_ADDR's four bytes, STAGED. They arrive
+                                ; one at a time and the frame is fixed, so a
+                                ; refusal delivers four of them too - copying
+                                ; straight into the caller's buffer would put
+                                ; a failed answer's bytes there and then
+                                ; report the failure
 
     OS88_DRV_END

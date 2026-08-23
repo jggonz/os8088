@@ -191,12 +191,10 @@ dhcp_params:
 ; -----------------------------------------------------------------------------
 ; dhcp_bcast - send the frame at eth_txb's UDP payload, DI bytes past its start
 ; -----------------------------------------------------------------------------
-dhcp_bcast:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
+dhcp_bcast:                     ; STKDEPTH-NOSAVE: ax bx
+    push cx                     ; AX and BX are given back by udp_send, the
+    push dx                     ; only thing below here; checked by
+    push si                     ; `stkdepth.py --check` (SPEC.md 72.16.4)
     push bp
     mov cx, di
     sub cx, eth_txb + IP_PAY + UD_HLEN
@@ -212,8 +210,6 @@ dhcp_bcast:
     pop si
     pop dx
     pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -480,7 +476,16 @@ dhcp_in:
 ; dhcp_timer
 ; -----------------------------------------------------------------------------
 dhcp_timer:
-    push ax
+    push ax                     ; **THE FULL SET, and it is not this routine's
+    push bx                     ; own need.** It clobbers only AX; the four
+    push dx                     ; below are saved so that ETH_PUMP_I - which
+    push si                     ; calls it - can stop saving them (SPEC.md
+    push di                     ; 72.16.4). The saving is the same work either
+                                ; way and this is where it is CHEAP: eth_pump_i
+                                ; holds its set across a 108-byte subtree,
+                                ; where these four sit twenty bytes into the
+                                ; chain. Pushing a save DOWN to a shallow
+                                ; callee is free depth
     cmp byte [dhcp_st], DH_DISCOVER
     je  .live
     cmp byte [dhcp_st], DH_REQUEST
@@ -503,9 +508,17 @@ dhcp_timer:
 .rereq:
     call dhcp_request
 .keep:
+    pop di
+    pop si
+    pop dx
+    pop bx
     pop ax
     ret
 .out:
+    pop di
+    pop si
+    pop dx
+    pop bx
     pop ax
     ret
 
@@ -809,6 +822,9 @@ dns_timer:
     push cx
     push dx
     push si
+    push di                     ; DI is not this routine's need either - it is
+                                ; saved so eth_pump_i can stop saving it, for
+                                ; dhcp_timer's reason above (SPEC.md 72.16.4)
     cmp byte [dns_sk], 0xFF
     jne .live
 
@@ -864,6 +880,7 @@ dns_timer:
 .give:
     call dns_fail
 .out:
+    pop di
     pop si
     pop dx
     pop cx

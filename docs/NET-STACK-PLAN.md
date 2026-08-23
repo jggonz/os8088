@@ -700,7 +700,7 @@ so that when the card lands the only new thing is the card.
 | **D** | ✅ **BUILT** — `apps/browser/brnet.inc`, a location bar and `File ▸ Open Location…` | the rendering half needed **no change at all** to gain a network, which is what the plan claimed when it kept fetching out of the layout work. HTTP/1.0 + `Connection: close`, so no chunked decoder. SPEC.md §71. **Measured**: seven wire commands for a page, `GET /net.htm HTTP/1.0` as the SERVER saw it, `br_nlines` = 14 |
 | **D′** | **the first real site** — and the code for it is IN | a search on frogfind.com: `GET`, a form, and simple markup. `br_submit` composes the URL (BROWSER-PLAN §7.4) and now FETCHES it, so what is left is a partner with a route to the internet rather than any more browser |
 | **E** | ✅ **BUILT** — SPEC.md §31.1.1's scrolling driver list, then `ETHER.DRV`: an 8390 core, ARP/IP/ICMP/UDP, stop-and-wait TCP, DHCP and DNS, a Control Panel page, and §72.7's Setup window for a LAN with no DHCP server. SPEC.md §72 | the same `NETV_*` verbs from a card. **Measured**: DHCP binds 10.0.2.15, and the browser fetches a page over TCP with `GET /eth.htm HTTP/1.0` as the SERVER saw it and `br_nlines` = 14. The "without one byte changing" claim came within ONE question of holding — see below |
-| **F** | **the FTP server** | §1.5 — `LISTEN`/`ACCEPT`, four handles and the stage-and-commit pattern, all of which A put in place. It is the first thing here that makes os8088 a *server*, and the answer to docs/FIELD-MACHINES.md's seven-step path in the other direction |
+| **F** | ✅ **BUILT** — `apps/ftpd/ftpd.asm`, `NETV_ADDR`, `tests/ftpd.py`. SPEC.md §77 | §1.5 — `LISTEN`/`ACCEPT`, four handles and the stage-and-commit pattern, all of which A put in place. It is the first thing here that makes os8088 a *server*, and the answer to docs/FIELD-MACHINES.md's seven-step path in the other direction. **Measured**: a real `ftplib` client lists, downloads byte-exact (text *and* every byte value), uploads 20,000 bytes through the stage-and-commit loop, and the file is read back off the image by a FAT12 reader that shares no code with the writer. §1.5.1's "central design problem" is `OSAPI_WM_ONWAKE` — the worker stages, the UI task commits, `[fd_req]` is the whole handshake. **It needed one verb and found two bugs**: PASV cannot be answered without the machine's own address (§1.3 promised it in `NETV_STATE` and never delivered it), and nothing in this tree had ever LISTENED, so closing a listener did not destroy its pending queue — one refused transfer stranded the fourth handle and the *next* transfer hung |
 
 **A and B are small and the browser is not**, so the two lines should run in
 parallel rather than in sequence: the browser's own steps 0–4
@@ -826,9 +826,8 @@ predicted:
    own?** That change is the real kernel cost of Ethernet and it benefits
    every future driver. It should be asked for with a measured `kernsize`
    line, not folded silently into `ETHER.DRV`'s commit.
-5. **Is the FTP server os8088 serving, or os8088 connecting out?** §1.5 is
-   written for the harder reading — os8088 as the server, so a modern machine
-   can reach the 5150's disks — because that is what "do file operations
-   remotely" most usefully means and because a client is a strict subset of
-   it. If a client is what is wanted, `LISTEN`/`ACCEPT` and most of §1.5 are
-   not needed, and the whole thing is smaller.
+5. **Is the FTP server os8088 serving, or os8088 connecting out?**
+   **SETTLED: serving.** §1.5's harder reading was the one built — os8088 as
+   the server, so a modern machine can reach the 5150's disks — because that
+   is what "do file operations remotely" most usefully means and because a
+   client is a strict subset of it. SPEC.md §77.

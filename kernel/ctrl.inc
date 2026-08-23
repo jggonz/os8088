@@ -132,7 +132,21 @@ CPH_A0Y1  equ CPH_A0Y - 4                   ; 78: anim row 0 top
 CPH_A0Y2  equ CPH_A0Y + CP_GW + 1           ; 79: ...bottom
 CPH_A1Y2  equ CPH_A1Y + CP_GW + 1           ; 95: anim row 1 bottom
 
-%if CPH_A1Y + CP_GW > CP_CH
+; ...and the SCREEN SAVER button (SPEC.md 79.7), under both groups in the last
+; band of the pane the two radio groups leave: row 1's glyph ends at 110 and
+; the content box is CP_CH tall, so a 16px button at 114 ends at 129 with two
+; rows to spare. It is a BUTTON and not a third group because what is behind
+; it is four checkboxes and two numbers, which is a window's worth (SPEC.md
+; 79.7) - the same call HDD.DRV's page makes for its disk tool and ETHER.DRV's
+; for its addresses (SPEC.md 52.2, 72.7).
+CPH_BTX   equ CP_PGX
+CPH_BTY   equ 114
+CPH_BTW   equ 104                           ; 'Screen Saver' is 96px of glyph
+CPH_BTH   equ 16
+CPH_CSAVE equ 6                             ; its control id: 1..3 are the
+                                            ; theme rows and 4..5 the zoom's
+
+%if CPH_BTY + CPH_BTH > CP_CH
 %error "ctrl: the Theme page runs past its pane - see SPEC.md 76.4"
 %endif
 
@@ -399,6 +413,14 @@ cp_s_tanim: db 'Window Animations', 0
 cp_s_ton:   db 'On', 0
 cp_s_toff:  db 'Off', 0
 %endif
+%ifdef KERN_BIG
+cp_s_tsave: db 'Screen Saver', 0    ; the button, SPEC.md 79.7. The only
+                                    ; .text this whole feature costs the
+                                    ; Control Panel: the settings window's own
+                                    ; eleven strings are in SAVER.DRV, which
+                                    ; is a segment of its own and is on the
+                                    ; disk (SPEC.md 79.2)
+%endif
 
 %endif
 
@@ -579,14 +601,26 @@ CP_NSAVE  equ 4
 
 ; ...and the other end of the same conversation (SPEC.md 2.8.4): the panel's
 ; own code is a file on the system disk now, so OPENING it can fail for the
-; same reason SAVING it can. This one keeps its subject and spends the outcome
-; instead, because there is nothing on screen to infer the subject FROM - the
-; panel never opened. It says the DISK and the DRIVE both, which is what the
-; 24-cell field will just carry: the disk because that is what is wanted, and
-; the letter because mod_need looks on exactly one volume - [dsk_bootvol] -
-; and telling the user which one is the difference between a message they can
-; act on and one they have to guess at.
-cp_s_noload: db 'Panel Needs Sys Disk '
+; same reason SAVING it can. It says the DISK and the DRIVE both, which is
+; what the 24-cell field will just carry: the disk because that is what is
+; wanted, and the letter because the load looks on exactly one volume -
+; [dsk_bootvol] - and telling the user which one is the difference between a
+; message they can act on and one they have to guess at.
+;
+; **IT USED TO NAME ITS SUBJECT AND NO LONGER CAN**, which is a change worth
+; explaining rather than quietly making. It read `Panel Needs Sys Disk A:`,
+; and the argument for the word `Panel` was that there is nothing on screen to
+; infer the subject from - the panel never opened. There are TWO subjects now:
+; the panel's own image (mod_need, SPEC.md 2.8) and SAVER.DRV behind the
+; Screen Saver button (SPEC.md 79.7), and the second one fails with the panel
+; plainly open and the button plainly just clicked. One message that names the
+; wrong subject is worse than one that names none - which is this string's own
+; argument about the drive letter, turned round - and what BOTH readers
+; actually need is identical: put the system disk in that drive. A second
+; string and a second table slot would have been 26 bytes of an image rung
+; with 27 in it (docs/KERNEL-MEMORY.md), so this is also the affordable
+; answer, and it is the right one first.
+cp_s_noload: db 'Needs Sys Disk '
 cp_s_nodrv:  db 'A:', 0         ; stamped beside cp_s_dsdrv, same rule
 cp_opentab: dw 0, cp_s_noload
 CP_NOPEN  equ 2
@@ -1276,7 +1310,9 @@ cp_ctlpaint:
 %ifdef OS88_THEME
 .thm:
     call cp_thm_radios          ; the whole group: a radio glyph is one
-    jmp short .out              ; os88ui_glyph_f and the page has five of them
+    call cp_thm_btn             ; os88ui_glyph_f and the page has five of them
+    jmp short .out              ; ...and the button, which is the only control
+                                ; here whose pressed look ever moves
 %endif
 .drv:
     mov al, bh                  ; the one coming UP first, then the one going
@@ -2059,11 +2095,61 @@ cp_thm_paint:
 
 
     call cp_thm_radios
+%ifdef KERN_BIG
+    call cp_thm_btn             ; ...and the Screen Saver button (SPEC.md 79.7)
+%endif
 
     pop si
     pop dx
     pop cx
     ret
+
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; cp_thm_btn - the Screen Saver button (SPEC.md 79.7)
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved)
+;
+; OS88UI_FILL, because a RELEASE redraws this button over a PRESSED one and
+; nothing else erases it; on a full page paint cp_page has already whited the
+; pane, so the fill is over white and costs one gfx_fill either way.
+;
+; IT DOES NOT GREY (SPEC.md 47 rule 3). Whether SAVER.DRV can be read is not a
+; fact anybody holds - it is a mount, a directory search and a heap claim, and
+; the only honest test is doing the thing. The press does it and says so with
+; the toast the panel's own load refusal already uses.
+; -----------------------------------------------------------------------------
+cp_thm_btn:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov ax, di
+    add ax, CPH_BTX
+    mov [os88ui_krect+0], ax    ; THE kernel's one button rect (SPEC.md
+    add ax, CPH_BTW - 1         ; 20.5.1): every caller of it is the UI task
+    mov [os88ui_krect+4], ax    ; under the gfx lock, so one is enough and a
+    mov ax, bp                  ; second is .bss nobody needs
+    add ax, CPH_BTY
+    mov [os88ui_krect+2], ax
+    add ax, CPH_BTH - 1
+    mov [os88ui_krect+6], ax
+    mov bx, os88ui_krect
+    mov si, cp_s_tsave
+    mov di, OS88UI_FILL
+    mov al, CPH_CSAVE
+    call cp_dnbtn               ; ...pressed if it is the one down (13.8.3)
+    call COLD_SEG:os88ui_btn_f
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
 
 ; cp_thm_colpen - the pen for the Color row: greyed unless this machine has
 ;                 an adapter that can show it (SPEC.md 76.12.1)
@@ -2114,6 +2200,33 @@ cp_thm_lbl:
 cp_thm_click:
     push ax
 
+%ifdef KERN_BIG
+    cmp dx, CPH_BTY             ; --- the Screen Saver button, tested FIRST
+    jl .groups                  ; because it is the lowest band on the page
+    cmp dx, CPH_BTY + CPH_BTH - 1
+    jg .done
+    cmp cx, CPH_BTX
+    jl .done
+    cmp cx, CPH_BTX + CPH_BTW - 1
+    jg .done
+    mov al, CPH_CSAVE
+    call cp_ctl                 ; ...and it FIRES ON THE RELEASE (SPEC.md
+    jc .done                    ; 13.8.3): opening a window is not a safe
+                                ; prefix action, so a mis-aimed press has to
+                                ; be cancellable by sliding off
+    call COLD_SEG:ssf_cfg       ; the overlay, and then its window (79.7)
+    jnc .done
+    push bx                     ; ...and the ONE refusal on this page that the
+    push cx                     ; user is standing in front of, so it is said
+    mov al, 1                   ; out loud rather than swallowed the way every
+    mov bx, cp_opentab          ; other one in SPEC.md 79 is (SPEC.md 2.8.4,
+    mov cx, CP_NOPEN            ; 47 rule 3)
+    call KERNEL_SEG:cw_toast_say
+    pop cx
+    pop bx
+    jmp .done
+.groups:
+%endif
     cmp dx, CPH_B0Y1
     jl .done
 %ifdef KERN_BIG
@@ -3966,6 +4079,11 @@ cp_drv_paint:
     add dx, CP_PHY
     call KERNEL_SEG:cw_font_str
 
+    call cp_drv_mempar              ; ...and one bit for the whole page before
+                                    ; any row is lettered: do the memory
+                                    ; figures fit with their brackets
+                                    ; (SPEC.md 31.6.2)
+
     mov bl, [cp_dtop]               ; BX = the drv_tab row, from the top of the
     xor bh, bh                      ; WINDOW rather than of the table
 .row:
@@ -3984,6 +4102,11 @@ cp_drv_paint:
     add dx, CP_PLDY
     call KERNEL_SEG:cw_font_str                   ; the driver's name
     pop bx
+
+    pop ax                          ; ...roughly what it costs to run, right of
+    push ax                         ; the name on the name's own line
+    call cp_drv_mem1                ; (SPEC.md 31.6.2). BX survives it, and the
+                                    ; status call below still wants the row
 
     call COLD_SEG:drvf_drv_status                 ; ...and what it is doing right now
     pop ax
@@ -4066,6 +4189,31 @@ CP_DSX1   equ 200
 CP_DSX2   equ CP_DSX1 + CP_DSW - 1
 CP_DSAH   equ 14              ; each arrow cell is square
 
+; The MEMORY COLUMN (SPEC.md 31.6.2): roughly what a driver holds while it is
+; doing its job, on the name's own line and right of it. It is a compile-time
+; figure out of drv_memk, so it is drawn by cp_drv_paint and by nothing else -
+; a click cannot change it, and the click path stays at the two controls
+; SPEC.md 31.6.1 costed.
+;
+; The 'K' is what the rows ALIGN ON rather than the string's end, so a row
+; carrying the RAM disk's trailing '+' keeps its digits under everybody
+; else's. Nothing is padded with spaces: the x is computed from the string's
+; own length, because a blank cell costs the same ~900us as a lettered one
+; (PERFORMANCE.md Part 2) and four of them a row is 3.6ms of the field
+; machine's time to draw nothing.
+CP_DMKX   equ 160             ; the 'K' cell's LEFT edge, pane-relative. 160 and not
+                              ; 168: the RAM disk's trailing '+' pushes its
+                              ; bracket to 191, and eight pixels off the
+                              ; scroll arrows at CP_DSX1 reads as touching
+                              ; them
+CP_DMGAP  equ 8               ; the least air between the longest driver name
+                              ; and the column's first glyph, below which
+                              ; cp_drv_mempar takes the brackets off
+CP_DMMAX  equ 12              ; cp_dmbuf: '(~' + 5 digits + 'K+)' + NUL is 11
+%if CP_DMKX + 8 * 3 > CP_DSX1
+  %error "the driver memory column runs into the scroll arrows: 'K', '+' and ')'"
+%endif
+
 ; The Drivers page's control ids (SPEC.md 13.8.3). A ROW is its table index
 ; plus one, so rows occupy 1..DRV_MAX and the arrows take the two above them -
 ; the id space is per PAGE, so nothing else has to be consulted.
@@ -4089,6 +4237,214 @@ cp_drv_rowy:
     add ax, bp
     mov dx, ax
     pop cx
+    pop ax
+    ret
+
+
+; -----------------------------------------------------------------------------
+; cp_drv_mempar - is there room for the brackets? (SPEC.md 31.6.2)
+; in:  nothing
+; out: [cp_dmpar] = 1 = yes; all registers preserved
+;
+; Over the WHOLE table and not the four rows on screen, so the answer cannot
+; change under a scroll: a column that gained brackets halfway down the list
+; would read as two different columns. No drawing call and no disk - it is a
+; walk of five rows and two string lengths, which is why it can afford to be
+; recomputed on every paint rather than cached and invalidated.
+;
+; Today it always says yes: 'Hard Drive' is ten cells and ends at 102, and a
+; bracketed three-digit figure starts at 136. It exists for the driver whose
+; name is longer than that, and it answers ONE bit for the page rather than
+; one per row for exactly that reason.
+; -----------------------------------------------------------------------------
+cp_drv_mempar:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov byte [cp_dmnw], 0
+    mov byte [cp_dmdg], 1       ; a one-digit figure at the very least
+    xor bx, bx
+.row:
+    push bx
+    mov al, bl
+    call COLD_SEG:drvf_drv_row  ; BX = the drv_tab row (AX preserved)
+    cmp word [bx+DRVR_FILE], 0
+    je .next                    ; an empty row names nothing and costs nothing
+    mov si, [bx+DRVR_TITLE]
+    xor cx, cx
+.name:
+    cmp byte [si], 0            ; the font is a fixed 8x8 (font_width), so a
+    je .named                   ; length IS a width and there is no thunk to
+    inc si                      ; reach for
+    inc cx
+    jmp short .name
+.named:
+    cmp cl, [cp_dmnw]
+    jbe .num
+    mov [cp_dmnw], cl
+.num:
+    pop si                      ; the ROW INDEX again, for drv_memk
+    push si
+    shl si, 1
+    mov ax, [drv_memk + si]
+    and ah, 0x7F                ; DRVM_PLUS is a flag, not a digit
+    or ax, ax
+    jz .next                    ; a row with no figure at all
+    mov si, 10
+    xor cx, cx
+.dig:
+    xor dx, dx
+    div si
+    inc cx
+    or ax, ax
+    jnz .dig
+    cmp cl, [cp_dmdg]
+    jbe .next
+    mov [cp_dmdg], cl
+.next:
+    pop bx
+    inc bx
+    cmp bx, DRV_MAX
+    jb .row
+
+    mov al, [cp_dmdg]           ; where a BRACKETED field would start...
+    add al, 2                   ; ...'(' and '~' in front of the digits
+    xor ah, ah
+    mov cl, 3
+    shl ax, cl                  ; cells -> pixels
+    mov dx, CP_DMKX
+    sub dx, ax
+    mov al, [cp_dmnw]           ; ...against where the longest name ends
+    xor ah, ah
+    shl ax, cl
+    add ax, CP_PLX + CP_DMGAP
+    mov byte [cp_dmpar], 1
+    cmp ax, dx
+    jbe .out
+    mov byte [cp_dmpar], 0      ; two cells narrower without them, and the
+                                ; digits still align on the 'K'
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_drv_memstr - one drv_memk word as text (module internal)
+; in:  AX = the drv_memk word, [cp_dmpar]
+; out: cp_dmbuf = the NUL string, [cp_dmkc] = cells up to and including the
+;      'K'; all registers preserved
+;
+; '(~34K)', or '~34K' where cp_drv_mempar found no room, or '(~21K+)' for the
+; RAM disk - whose store is the USER's number and is shown where it is chosen
+; (SPEC.md 62.9.10.1), so its row prices the driver and says '+' for the rest.
+; -----------------------------------------------------------------------------
+cp_drv_memstr:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov [cp_dmplus], ah         ; the flag rides bit 15, out of the way of the
+    and ah, 0x7F                ; divide below
+    mov di, cp_dmbuf
+    cmp byte [cp_dmpar], 0
+    je .tilde
+    mov byte [di], '('
+    inc di
+.tilde:
+    mov byte [di], '~'          ; SPEC.md 31.6.2: the figure is the SHAPE of
+    inc di                      ; the cost and not a reading
+    mov bx, 10
+    xor cx, cx
+.dv:
+    xor dx, dx
+    div bx                      ; AX = the quotient, DX = one digit
+    push dx
+    inc cx
+    or ax, ax
+    jnz .dv                     ; a zero figure still emits one '0'
+.em:
+    pop ax
+    add al, '0'
+    mov [di], al
+    inc di
+    loop .em
+    mov byte [di], 'K'
+    inc di
+    mov cx, di
+    sub cx, cp_dmbuf            ; ...the alignment column, banked before the
+    mov [cp_dmkc], cl           ; two that may follow it
+    test byte [cp_dmplus], 0x80
+    jz .close
+    mov byte [di], '+'
+    inc di
+.close:
+    cmp byte [cp_dmpar], 0
+    je .term
+    mov byte [di], ')'
+    inc di
+.term:
+    mov byte [di], 0
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_drv_mem1 - one driver row's memory column (SPEC.md 31.6.2)
+; in:  AL = row index, DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved; leaves [gfx_color] = CBLACK)
+;
+; Called from cp_drv_paint's row loop and from nowhere else. The figure is a
+; constant, so a load or an unload cannot change it and cp_drv_click still
+; redraws exactly the checkbox and the reason line (SPEC.md 31.6.1) - which is
+; the whole reason this can be five or six glyph cells without showing up in
+; the click budget.
+; -----------------------------------------------------------------------------
+cp_drv_mem1:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov bl, al
+    xor bh, bh
+    shl bx, 1
+    mov bx, [drv_memk + bx]
+    or bx, bx
+    jz .out                     ; a row with no figure says nothing rather
+                                ; than '~0K'
+    call cp_drv_rowy            ; DX = this row's glyph top (AL = the row)
+    add dx, CP_PLDY             ; ...and the NAME's baseline: this is a column
+                                ; on that line, not a second caption
+    mov ax, bx
+    call cp_drv_memstr
+    mov cl, [cp_dmkc]
+    dec cl                      ; cells BEFORE the 'K'...
+    xor ch, ch
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1                   ; ...in pixels (cpu 8086: no shl by an
+                                ; immediate other than 1)
+    mov ax, CP_DMKX
+    sub ax, cx                  ; so every row's 'K' lands on one column
+    add ax, di
+    mov cx, ax
+    mov si, cp_dmbuf
+    mov byte [gfx_color], CBLACK
+    call KERNEL_SEG:cw_font_str
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -4446,6 +4802,22 @@ cp_darr_dn:  db 0               ; is the arrow being drawn the one HELD? In
                                 ; memory for cp_dtri_n's reason below, and
                                 ; because CF is already this routine's
                                 ; argument and AL its direction
+; --- the memory column's scratch (SPEC.md 31.6.2) ---------------------------
+; In memory rather than in registers for cp_dtri_n's reason: the panel runs on
+; the UI task under the gfx lock, so a scratch byte here has exactly one user
+; at a time - and cp_drv_memstr has a divide, which spends DX:AX, and a digit
+; stack, which spends CX.
+cp_dmbuf:    times CP_DMMAX db 0 ; the figure as text, built per row
+cp_dmkc:     db 0               ; ...cells in it up to AND INCLUDING the 'K',
+                                ; which is what cp_drv_mem1 aligns on
+cp_dmplus:   db 0               ; DRVM_PLUS, parked out of AX for the divide
+cp_dmpar:    db 1               ; 1 = there is room for the brackets, decided
+                                ; once per paint by cp_drv_mempar and the same
+                                ; for every row on the page
+cp_dmnw:     db 0               ; its two working maxima, in 8px cells: the
+cp_dmdg:     db 1               ; longest name in drv_tab, and the most digits
+                                ; any drv_memk figure needs
+
 cp_dtri_n:   db 0               ; the row counter. In memory because every
                                 ; general register is spoken for - DI is the
                                 ; centre, SI the table, BX the row, and the

@@ -17,6 +17,7 @@ NW_STAT     equ 's'             ; handle byte      -> st, state byte, ready word
 NW_SEND     equ 'w'             ; handle, len word, bytes     -> st, taken word
 NW_RECV     equ 'r'             ; handle, cap word    -> st, len word, len bytes
 NW_CLOSE    equ 'c'             ; handle byte                 -> st
+NW_ADDR     equ 'i'             ; -                     -> st, four IP bytes
 
 ; The status byte on the wire IS the NETE_* a package gets, which is one fewer
 ; mapping to keep in step - the far side is written against netpkg.inc like
@@ -34,3 +35,30 @@ NET_VER_SOCK equ 2              ; THE VERSION BYTE IS THE PROBE, and it costs
                                 ; behaviour for an unknown letter is not part
                                 ; of any contract - which is how a probe
                                 ; breaks the link it is probing
+NET_VER_ADDR equ 3              ; ...and NW_ADDR is why there is a THIRD, which
+                                ; is that same paragraph collecting on its own
+                                ; warning. An unknown letter reaches os88net's
+                                ; dispatch ladder, matches nothing, and falls
+                                ; through to the top of the loop **without
+                                ; sending a reply** - so a new driver asking an
+                                ; old OS88NET.COM for an address would not get
+                                ; a refusal, it would get a master blocked in
+                                ; lp_rbyte until the deadline and then a
+                                ; NETE_IO that drops every handle on the link.
+                                ;
+                                ; So NETV_ADDR is gated on this rather than on
+                                ; NET_VER_SOCK, and the gate is in nsk_addr
+                                ; rather than in nsk_do's ladder: every other
+                                ; verb is happy with a version-2 partner and
+                                ; must stay that way. An old .COM answers
+                                ; NETE_NOLINK - "there is no address to be
+                                ; had" - which is exactly what a caller does
+                                ; with a cable whose partner has no stack, and
+                                ; the FTP server says so instead of hanging.
+                                ;
+                                ; **THE .COM IS THE HALF THAT HAS TO TRAVEL**
+                                ; (docs/FIELD-MACHINES.md): bumping this means
+                                ; the DOS end must be rebuilt and carried to
+                                ; the machine, and a field run pairing a new
+                                ; driver with a stale .COM is the case the
+                                ; gate above exists for

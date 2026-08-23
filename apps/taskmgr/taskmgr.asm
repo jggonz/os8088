@@ -5163,86 +5163,94 @@ tm_put3:
 ; cleared by hand at every kinit, because .bss survives between instances of a
 ; kind; a package gets a fresh image and a zeroed bss per launch instead.
 
-tm_win      equ os88_image_end + 0     ; word: our window ptr
+tm_win      equ os88_image_end     ; word: our window ptr
 
 ; --- what the API cells fill (SPEC.md 20.9) ----------------------------------
 ; Three buffers this module owns and the kernel writes through ES:DI.
 ; tm_snapshot is unpacked into the per-slot arrays below the moment it lands (see
 ; tm_sample); tm_claims and tm_kb are read where they sit.
-tm_snapshot equ os88_image_end + 2     ; osapi_sys_snapshot: scheduler + instance table
-tm_claims   equ os88_image_end + 428   ; osapi_claim_snapshot: the claim map
-tm_kb       equ os88_image_end + 620   ; osapi_sys_kb: the kernel's footprint and the
+tm_snapshot equ tm_win + 2     ; osapi_sys_snapshot: scheduler + instance table
+tm_claims   equ tm_snapshot + SYS_SNAPSHOT_SIZE   ; osapi_claim_snapshot: the claim map
+tm_kb       equ tm_claims + CLAIM_SNAPSHOT_SIZE   ; osapi_sys_kb: the kernel's footprint and the
                                 ; heap's totals, refreshed by tm_view_begin
                                 ; and by every sample
 
-tm_hist     equ os88_image_end + 642   ; history ring: column heights 0..40
+tm_hist     equ tm_kb + SYSKB_SIZE   ; history ring: column heights 0..40,
+                                ; TM_GW of them - the hand-chained map gave it
+                                ; NINE MORE than the ring can ever use, which
+                                ; is the sort of thing a literal hides and a
+                                ; derivation cannot
 
-; The three buffer slices above are hand-chained literals; these pin them to
-; the SDK's derived sizes, so a kernel table growing (MAX_TASKS, INST_MAX,
-; MEM_MAX, a record gaining a field) fails THIS assembly instead of letting
-; osapi_sys_snapshot write through tm_claims/tm_kb/tm_hist with no diagnostic.
-%if (tm_claims - tm_snapshot) != SYS_SNAPSHOT_SIZE
-  %error "tm_snapshot's slice != SYS_SNAPSHOT_SIZE - re-derive the bss map below"
-%endif
-%if (tm_kb - tm_claims) != CLAIM_SNAPSHOT_SIZE
-  %error "tm_claims' slice != CLAIM_SNAPSHOT_SIZE - re-derive the bss map below"
-%endif
-%if (tm_hist - tm_kb) != SYSKB_SIZE
-  %error "tm_kb's slice != SYSKB_SIZE - re-derive the bss map below"
-%endif
-tm_pos      equ os88_image_end + 867   ; sweep index = next column to write
-tm_lastcol  equ os88_image_end + 869   ; column written by the latest sample
-tm_cnt      equ os88_image_end + 871   ; interval spin count, dword
-tm_cmax     equ os88_image_end + 875   ; calibration max, current epoch, dword
-tm_pmax     equ os88_image_end + 879   ; calibration max, previous epoch, dword
-tm_epc      equ os88_image_end + 883   ; samples into the current epoch
-tm_t0       equ os88_image_end + 884   ; interval start tick
-tm_load     equ os88_image_end + 886   ; latest load, 0..100
-tm_told     equ os88_image_end + 888   ; previous sch_cycles snapshot
-tm_tnew     equ os88_image_end + 936   ; current snapshot
-tm_tdif     equ os88_image_end + 984   ; per-task interval cycles
-tm_state    equ os88_image_end + 1032  ; T_STATE snapshot
-tm_pstate   equ os88_image_end + 1044  ; previous sample's T_STATE (appeared rule)
-tm_self     equ os88_image_end + 1056  ; our own slot ([sch_cur] at snapshot)
-tm_iold     equ os88_image_end + 1057  ; previous I_CYC snapshot
-tm_inew     equ os88_image_end + 1105  ; current snapshot
-tm_idif     equ os88_image_end + 1153  ; per-instance interval callback cycles
-tm_ist      equ os88_image_end + 1201  ; I_STATE snapshot
-tm_pist     equ os88_image_end + 1213  ; previous sample's I_STATE (appeared rule)
-tm_itsk     equ os88_image_end + 1225  ; I_TASK snapshot (owning task or 0xFF)
-tm_isz      equ os88_image_end + 1237  ; I_SIZE snapshot, bytes
-tm_ispt     equ os88_image_end + 1261  ; I_SPTR snapshot (memory view, SPEC.md 28)
-tm_iknd     equ os88_image_end + 1285  ; I_KIND snapshot: the Builtins/Packages split
+; **EVERY OFFSET BELOW IS DERIVED, and that is the whole of what makes
+; MAX_TASKS a constant and a rebuild.** It was a chain of hand-written
+; literals - `tm_claims equ os88_image_end + 428` - so a kernel table changing
+; size renumbered sixty-odd of them by hand, and two fields at the end are
+; still sitting out of subject order because inserting one mid-block was too
+; expensive to contemplate. Dropping MAX_TASKS from 12 to 10 shrank
+; SYS_SNAPSHOT_SIZE by ten bytes and the `%error` guards that used to stand
+; here fired, correctly, on every one below it.
+;
+; Each field now names the one before it plus that one's SIZE, and every size
+; that depends on a kernel table says so - MAX_TASKS, INST_MAX, MEM_MAX,
+; TM_ROWS, TM_NCK. Change the constant, rebuild, done. The guards are gone
+; because there is nothing left for them to catch: the thing they checked is
+; now the way the offsets are computed.
+;
+; Proven equal to the literals it replaced: with the one deliberate difference
+; below held back, the assembled package was byte-for-byte the old one.
+tm_pos      equ tm_hist + TM_GW   ; sweep index = next column to write
+tm_lastcol  equ tm_pos + 2   ; column written by the latest sample
+tm_cnt      equ tm_lastcol + 2   ; interval spin count, dword
+tm_cmax     equ tm_cnt + 4   ; calibration max, current epoch, dword
+tm_pmax     equ tm_cmax + 4   ; calibration max, previous epoch, dword
+tm_epc      equ tm_pmax + 4   ; samples into the current epoch
+tm_t0       equ tm_epc + 1   ; interval start tick
+tm_load     equ tm_t0 + 2   ; latest load, 0..100
+tm_told     equ tm_load + 2   ; previous sch_cycles snapshot
+tm_tnew     equ tm_told + MAX_TASKS * 4   ; current snapshot
+tm_tdif     equ tm_tnew + MAX_TASKS * 4   ; per-task interval cycles
+tm_state    equ tm_tdif + MAX_TASKS * 4  ; T_STATE snapshot
+tm_pstate   equ tm_state + MAX_TASKS  ; previous sample's T_STATE (appeared rule)
+tm_self     equ tm_pstate + MAX_TASKS  ; our own slot ([sch_cur] at snapshot)
+tm_iold     equ tm_self + 1  ; previous I_CYC snapshot
+tm_inew     equ tm_iold + INST_MAX * 4  ; current snapshot
+tm_idif     equ tm_inew + INST_MAX * 4  ; per-instance interval callback cycles
+tm_ist      equ tm_idif + INST_MAX * 4  ; I_STATE snapshot
+tm_pist     equ tm_ist + INST_MAX  ; previous sample's I_STATE (appeared rule)
+tm_itsk     equ tm_pist + INST_MAX  ; I_TASK snapshot (owning task or 0xFF)
+tm_isz      equ tm_itsk + INST_MAX  ; I_SIZE snapshot, bytes
+tm_ispt     equ tm_isz + INST_MAX * 2  ; I_SPTR snapshot (memory view, SPEC.md 28)
+tm_iknd     equ tm_ispt + INST_MAX * 2  ; I_KIND snapshot: the Builtins/Packages split
                                 ; (SPEC.md 28) needs bit 7, and the CLAIM
                                 ; column needs to know which owner word an
                                 ; instance's claims carry (SPEC.md 50.2)
-tm_ikb      equ os88_image_end + 1297  ; ...and the KB it holds off the heap, which
+tm_ikb      equ tm_iknd + INST_MAX  ; ...and the KB it holds off the heap, which
                                 ; the kernel derives from that same rule
-tm_coop     equ os88_image_end + 1321  ; the scheduler mode at the last sample
-tm_mrow     equ os88_image_end + 1322  ; the memory view's row cursor
-tm_mfit     equ os88_image_end + 1324  ; ...and whether the row it names is on screen
-tm_sqox     equ os88_image_end + 1325  ; ...and where its legend square starts
-tm_sqp      equ os88_image_end + 1327  ; ...and its texture, or 0 for no square. A
+tm_coop     equ tm_ikb + INST_MAX * 2  ; the scheduler mode at the last sample
+tm_mrow     equ tm_coop + 1  ; the memory view's row cursor
+tm_mfit     equ tm_mrow + 2  ; ...and whether the row it names is on screen
+tm_sqox     equ tm_mfit + 1  ; ...and where its legend square starts
+tm_sqp      equ tm_sqox + 2  ; ...and its texture, or 0 for no square. A
                                 ; REQUEST, not a draw: tm_mrow_close erases
                                 ; the band before it letters it, so a square
                                 ; drawn while the row was being composed
                                 ; would be erased again
-tm_elck     equ os88_image_end + 1329  ; the last drawn state of the non-row
+tm_elck     equ tm_sqp + 2  ; the last drawn state of the non-row
                                 ; elements, one word each (TMC_*)
-tm_rowx     equ os88_image_end + 1347  ; the left edge of the row being drawn: tm_cx
+tm_rowx     equ tm_elck + TMC_N * 2  ; the left edge of the row being drawn: tm_cx
                                 ; for column 0, one TM_COLW on for column 1
-tm_xbarw    equ os88_image_end + 1349  ; the XMS bar's black run, px (TMC_XBAR)
-tm_penx     equ os88_image_end + 1351  ; where the row's text starts: the process
+tm_xbarw    equ tm_rowx + 2  ; the XMS bar's black run, px (TMC_XBAR)
+tm_penx     equ tm_xbarw + 2  ; where the row's text starts: the process
                                 ; list letters from tm_rowx+6 and the memory
                                 ; list from tm_rowx+16, and tm_row_draw has to
                                 ; be told which - drawing a process row at the
                                 ; memory list's pen puts it 10px right of the
                                 ; text it is replacing
-tm_ci       equ os88_image_end + 1353  ; tm_row_draw's chunk index (BP is the task's
+tm_ci       equ tm_penx + 2  ; tm_row_draw's chunk index (BP is the task's
                                 ; instance record and cannot be borrowed)
-tm_ckb      equ os88_image_end + 1355  ; ...and the running check-word pointer, for
+tm_ckb      equ tm_ci + 2  ; ...and the running check-word pointer, for
                                 ; the same reason
-tm_rowck    equ os88_image_end + 1357  ; the last drawn content of each row, a
+tm_rowck    equ tm_ckb + 2  ; the last drawn content of each row, a
                                 ; word per CHUNK (tm_chunksum), plus one
                                 ; virtual row for the CPU caption (TMR_CPU).
                                 ; Shared by all THREE pages, so it is sized
@@ -5254,13 +5262,13 @@ tm_rowck    equ os88_image_end + 1357  ; the last drawn content of each row, a
                                 ; cleared as one span on the strength of
                                 ; being declared adjacent, which they have
                                 ; not been for some time
-tm_view     equ os88_image_end + 1837  ; 0 = performance, 1 = memory, 2 = heap
-tm_inm      equ os88_image_end + 1838  ; I_NAME snapshots
-tm_rcyc     equ os88_image_end + 2030  ; per-ROW cycles: task + instance, dword
-tm_total    equ os88_image_end + 2082  ; sum of the rows, dword
-tm_pct      equ os88_image_end + 2086  ; per-row share, 0..100
-tm_usedk    equ os88_image_end + 2099  ; used RAM, KB
-tm_barw     equ os88_image_end + 2101  ; RAM bar black width, 0..TM_GW
+tm_view     equ tm_rowck + TM_NCK * TM_NCHUNK * 2  ; 0 = performance, 1 = memory, 2 = heap
+tm_inm      equ tm_view + 1  ; I_NAME snapshots
+tm_rcyc     equ tm_inm + INST_MAX * 16  ; per-ROW cycles: task + instance, dword
+tm_total    equ tm_rcyc + TM_ROWS * 4  ; sum of the rows, dword
+tm_pct      equ tm_total + 4  ; per-row share, 0..100
+tm_usedk    equ tm_pct + TM_ROWS  ; used RAM, KB
+tm_barw     equ tm_usedk + 2  ; RAM bar black width, 0..TM_GW
 
 ; --- worked out once by tm_init, before the window exists --------------------
 ; These used to need saying out loud, because a built-in's .bss survives
@@ -5269,50 +5277,47 @@ tm_barw     equ os88_image_end + 2101  ; RAM bar black width, 0..TM_GW
 ; first launch. It cost a divide by zero the first time the window was opened,
 ; tm_colrows being a divisor. A package has no such hazard: the bss is zeroed
 ; once per launch, before the entry proc runs, and tm_init runs inside it.
-tm_cols     equ os88_image_end + 2103  ; process-list columns, 1 or 2 (SPEC.md 28.1)
-tm_colrows  equ os88_image_end + 2105  ; rows in COLUMN 0, which starts under the maps
-tm_col2rows equ os88_image_end + 2107  ; rows in each LATER column, which starts at the
+tm_cols     equ tm_barw + 2  ; process-list columns, 1 or 2 (SPEC.md 28.1)
+tm_colrows  equ tm_cols + 2  ; rows in COLUMN 0, which starts under the maps
+tm_col2rows equ tm_colrows + 2  ; rows in each LATER column, which starts at the
                                 ; top and so holds more - A DIVISOR, never 0
-tm_maxrow   equ os88_image_end + 2109  ; rows this SCREEN shows, <= TMM_ROWS: derived
+tm_maxrow   equ tm_col2rows + 2  ; rows this SCREEN shows, <= TMM_ROWS: derived
                                 ; from [vid_dock_y0] so the window never
                                 ; overlaps the dock (SPEC.md 28.1)
-tm_totkb    equ os88_image_end + 2111  ; total conventional RAM (int 12h, boot)
-tm_vw       equ os88_image_end + 2113  ; the live screen width and the dock strip's
-tm_vdock    equ os88_image_end + 2115  ; top row (osapi_video, SPEC.md 39.2), banked
+tm_totkb    equ tm_maxrow + 2  ; total conventional RAM (int 12h, boot)
+tm_vw       equ tm_totkb + 2  ; the live screen width and the dock strip's
+tm_vdock    equ tm_vw + 2  ; top row (osapi_video, SPEC.md 39.2), banked
                                 ; at boot: the template's whole geometry is
                                 ; derived from them
-tm_cx       equ os88_image_end + 2117  ; cached content origin (draw paths only,
-tm_cy       equ os88_image_end + 2119  ; always under the gfx lock)
-tm_ord      equ os88_image_end + 2121  ; tm_order: display row - 1 -> instance slot
-tm_rowi     equ os88_image_end + 2133  ; ...the one tm_rows is drawing right now
-tm_rowy     equ os88_image_end + 2134  ; tm_rows/tm_rows_mem scratch: current row y
-tm_ylim     equ os88_image_end + 2136  ; ...and the lowest row top the frame holds
+tm_cx       equ tm_vdock + 2  ; cached content origin (draw paths only,
+tm_cy       equ tm_cx + 2  ; always under the gfx lock)
+tm_ord      equ tm_cy + 2  ; tm_order: display row - 1 -> instance slot
+tm_rowi     equ tm_ord + INST_MAX  ; ...the one tm_rows is drawing right now
+tm_rowy     equ tm_rowi + 1  ; tm_rows/tm_rows_mem scratch: current row y
+tm_ylim     equ tm_rowy + 2  ; ...and the lowest row top the frame holds
                                 ; (tm_view_begin): the row lists are fixed-pitch
                                 ; and nothing clips a draw to a window
-tm_liny     equ os88_image_end + 2138  ; tm_txt_ram_y scratch: the line's y
-tm_str      equ os88_image_end + 2140  ; line-format scratch
+tm_liny     equ tm_ylim + 2  ; tm_txt_ram_y scratch: the line's y
+tm_str      equ tm_liny + 2  ; line-format scratch
 
-tm_spawned  equ os88_image_end + 2168  ; byte: 1 = this instance owns its
+tm_spawned  equ tm_str + TM_STRMAX  ; byte: 1 = this instance owns its
                                        ; worker. Latches on SUCCESS only, so
                                        ; every paint retries until a task slot
                                        ; frees up (SPEC.md 20.6)
 
-; Appended here rather than beside [tm_colrows] where it belongs by subject:
-; the offsets above are hand-chained literals, so a word inserted mid-block
-; renumbers every one below it.
-tm_avl      equ os88_image_end + 2171  ; OSAPI_MEM_AVAIL's pair, banked once a
-tm_maxrun   equ os88_image_end + 2173  ; refresh by tm_hsnap: total available,
+tm_hcolrows equ tm_spawned + 1  ; the HEAP page's column-0 depth
+                                       ; (SPEC.md 28.4) - its list starts
+                                       ; higher than the memory view's, so it
+                                       ; wraps later. Frame-derived, never
+                                       ; dock-derived: see tm_init
+tm_avl      equ tm_hcolrows + 2  ; OSAPI_MEM_AVAIL's pair, banked once a
+tm_maxrun   equ tm_avl + 2  ; refresh by tm_hsnap: total available,
                                        ; and the largest single run of it.
                                        ; Both captions read them and mem_avail
                                        ; walks the claim table once per
                                        ; candidate, so it is not a call to
                                        ; make twice (SPEC.md 28.4.1)
-tm_hcolrows equ os88_image_end + 2169  ; the HEAP page's column-0 depth
-                                       ; (SPEC.md 28.4) - its list starts
-                                       ; higher than the memory view's, so it
-                                       ; wraps later. Frame-derived, never
-                                       ; dock-derived: see tm_init
-tm_xoff     equ os88_image_end + 2175  ; 0, or TMM_XSHIFT on a machine with no
+tm_xoff     equ tm_maxrun + 2  ; 0, or TMM_XSHIFT on a machine with no
                                        ; store above 1MB: how far the memory
                                        ; view's header, rows and frame rise
                                        ; where the XMS bar would have been.
@@ -5321,8 +5326,5 @@ tm_xoff     equ os88_image_end + 2175  ; 0, or TMM_XSHIFT on a machine with no
                                        ; so a value that could change under a
                                        ; live window would leave the height
                                        ; and the row placement disagreeing.
-                                       ; Appended at the end of the block on
-                                       ; purpose: the offsets above are
-                                       ; hand-chained, and inserting renumbers
 
-TM_BSS_TOTAL equ 2177
+TM_BSS_TOTAL equ tm_xoff + 2 - os88_image_end

@@ -96,6 +96,24 @@ def _parse_map(path):
     return off, sect, equ
 
 
+_DEFAULT = ()
+
+
+def default_defines(*names):
+    """The --define set every call below falls back to when given none.
+
+    A knob kernel in `build/` is a DIFFERENT kernel, and this module refuses an
+    address unless the map it built matches it byte for byte - so a harness
+    driving a `KFZ=1` or `VIDEO=` build has to pass that knob to every lookup
+    it makes, and there are dozens of them scattered across the test tree. One
+    call here is what stops each of those being a place to forget it: set it
+    once beside the knob that built the image, and the refusal stays exact
+    rather than being worked around.
+    """
+    global _DEFAULT
+    _DEFAULT = tuple(names)
+
+
 def syms(defines=(), check=True):
     """{name: offset within its OWN segment} for every label in the kernel.
 
@@ -107,17 +125,28 @@ def syms(defines=(), check=True):
     last `make`, and every address below would describe a kernel that is not
     the one running.
     """
-    return _load(defines, check)[0]
+    return _load(defines or _DEFAULT, check)[0]
 
 
 def sections(defines=(), check=True):
     """{name: the section it is in}, for anything that needs to know."""
-    return _load(defines, check)[1]
+    return _load(defines or _DEFAULT, check)[1]
+
+
+def equates(defines=(), check=True):
+    """{name: value} for every `equ` - the CONSTANTS, not the addresses.
+
+    `syms()` answers labels and nothing else, so a tool that wanted SCH_STACK
+    got its own default back and quietly reported a 256-byte slice whatever the
+    kernel had been built with. A constant a tool mirrors is a constant that
+    goes stale; this is the one that cannot.
+    """
+    return _load(defines or _DEFAULT, check)[2]
 
 
 def segment_of(name, defines=(), check=True):
     """The segment `name` is addressed through at run time."""
-    off, sect, equ = _load(defines, check)
+    off, sect, equ = _load(defines or _DEFAULT, check)
     if name not in off:
         raise KeyError("no kernel symbol %r" % name)
     s = sect[name]

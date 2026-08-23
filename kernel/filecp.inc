@@ -1946,4 +1946,16 @@ fcp_need:   resw 2              ; the whole file, banked across dskw_dfree -
                                 ; register the count arrives in
 fcp_flen:   resw 1              ; ...and the byte count dskw_read reported
 
+section .cold
+; -----------------------------------------------------------------------------
+; The one far entry this module publishes (SPEC.md 2.6), and it is for an
+; ON-DEMAND MODULE rather than for the kernel: CLONE.DRV has a FILE at one end
+; of a sector copy (SPEC.md 18.99.8), so between two raw transfers it has to
+; put the machine back where the file lives - which is exactly what fcp_goto
+; is, including the free case where the volume has not moved and only
+; [dsk_cwd] has to be re-aimed.
+; -----------------------------------------------------------------------------
+fcpf_fcp_goto:          call fcp_goto
+                    retf
+
 section .text

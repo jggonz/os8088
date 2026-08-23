@@ -27,18 +27,21 @@
 ; a one-floppy machine every load is a DISK SWAP. The Control Panel qualifies
 ; because it writes SYSTEM.CFG to that disk when it closes; the floppy
 ; formatter qualifies because preparing a disk is an operation with a trip to
-; the disk box already in it. The Standard File dialog and Cut/Copy/Paste do
-; not, and no amount of seam width changes that.
+; the disk box already in it; the disk CLONER (SPEC.md 18.99) qualifies for
+; the formatter's reason with one more term in its favour, since a same-drive
+; clone has TWO trips in it already. The Standard File dialog and
+; Cut/Copy/Paste do not, and no amount of seam width changes that.
 ;
 ; NOTHING HERE CAN STOP ANYTHING. Every failure - no system disk, no heap, a
 ; short read, a stamp mismatch - is CF = 1 out of mod_need, and every caller
 ; owes a refusal the user can act on (SPEC.md 47 rule 3, and 59's toast is
-; where both of the current two say it).
+; where all three of the current ones say it).
 ; =============================================================================
 
-MOD_MAX     equ 2               ; rows in mod_tab
+MOD_MAX     equ 3               ; rows in mod_tab
 MOD_CTRL    equ 0               ; the Control Panel (SPEC.md 31)
 MOD_FMT     equ 1               ; the floppy formatter (SPEC.md 18.96)
+MOD_CLONE   equ 2               ; the disk cloner (SPEC.md 18.99)
 
 MOD_NENT    equ 8               ; far-pointer slots reserved per module. A
                                 ; fixed stride, so a thunk's
@@ -140,6 +143,7 @@ section .text
 
 mod_f_ctrl: db 'CTRL.DRV', 0    ; .DRV for the attributes and nothing else
 mod_f_fmt:  db 'FORMAT.DRV', 0  ; (SPEC.md 19.6): os88disk.py stamps anything
+mod_f_clon: db 'CLONE.DRV', 0   ; ...and a third of them (SPEC.md 18.99)
                                 ; ending DRV read-only + hidden + system by
                                 ; EXTENSION, the installer's `*.DRV` copy rule
                                 ; picks it up, and neither of these is in
@@ -149,6 +153,7 @@ mod_f_fmt:  db 'FORMAT.DRV', 0  ; (SPEC.md 19.6): os88disk.py stamps anything
 mod_tab:
     dw 0, mod_f_ctrl, 0, 0      ; MOD_CTRL
     dw 0, mod_f_fmt,  0, 0      ; MOD_FMT
+    dw 0, mod_f_clon, 0, 0      ; MOD_CLONE
 
 section .cold                   ; ...and the loader itself
 

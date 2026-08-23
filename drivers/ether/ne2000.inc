@@ -177,33 +177,88 @@ ne_dma_read:
     push cx
     push dx
     mov cx, ax
-    mov ax, (NE_STA | NE_RD_ABORT) << 8 | NE_CR
-    call ne_out
-    mov al, NE_RBCR0
-    mov ah, cl
-    call ne_out
-    mov al, NE_RBCR1
-    mov ah, ch
-    call ne_out
-    mov al, NE_RSAR0
-    mov ah, bl
-    call ne_out
-    mov al, NE_RSAR1
-    mov ah, bh
-    call ne_out
-    mov ax, (NE_STA | NE_RD_READ) << 8 | NE_CR
-    call ne_out
-    mov dx, [eth_base]
-    add dx, NE_DATA
+    ; --- THE CARD'S ADDRESS, HELD ONCE (SPEC.md 72.16.1) ---------------------
+    ; This used to be six `call ne_out`, and each one recomputed base+register
+    ; from scratch behind a push/pop pair. DX walks the register file instead:
+    ; one load, then `add dx, delta` between neighbours, which is three bytes
+    ; and four clocks against ne_out's ninety - and, on the stack, SIX BYTES
+    ; LESS AT THE DEEPEST POINT IN THE DRIVER, because this is the bottom of
+    ; the transmit chain (docs/KERNEL-MEMORY.md, "Task stacks"). The deltas are
+    ; signed and NE's register file is sixteen bytes, so the walk never leaves
+    ; the card whatever base it answered on.
+    mov dx, [eth_base]              ; DX = base + NE_CR (which is 0)
+    mov al, NE_STA | NE_RD_ABORT
+    out dx, al
+    add dx, NE_RBCR0 - NE_CR
+    mov al, cl
+    out dx, al
+    inc dx                          ; NE_RBCR1
+    mov al, ch
+    out dx, al
+    add dx, NE_RSAR0 - NE_RBCR1
+    mov al, bl
+    out dx, al
+    inc dx                          ; NE_RSAR1
+    mov al, bh
+    out dx, al
+    add dx, NE_CR - NE_RSAR1
+    mov al, NE_STA | NE_RD_READ
+    out dx, al
+    add dx, NE_DATA - NE_CR
     jcxz .done
-.byte:
+    push es                     ; `stosb` is the store AND the increment in one
+    push ds                     ; byte, where `mov [di],al / inc di` is three -
+    pop es                      ; and on an 8088 the instruction fetch is half
+    cld                         ; the cost of a loop this tight (72.16)
+    ; --- EIGHT AT A TIME (SPEC.md 72.16.5) ---------------------------------
+    ; `loop` is SEVENTEEN CLOCKS against `in al,dx` + `stosb`'s nineteen, so
+    ; the bookkeeping was very nearly half of this loop - and this loop is
+    ; 12% of an upload (docs/FTP-PERF.md 4), the largest single line in the
+    ; driver. Eight copies leave one `loop` per eight bytes instead of one
+    ; per byte. The field's card is an 8-bit NE1000, so a word read is not
+    ; the answer available here; the count is a frame length and is odd as
+    ; often as not, so the REMAINDER goes first and the octets follow.
+    mov bx, cx                  ; BX is free: it carried the card address into
+    and cx, 7                   ; the RSAR pair above and is spent
+    jz  .oct
+.tail:
     in  al, dx
-    mov [di], al
-    inc di
-    loop .byte
+    stosb
+    loop .tail
+.oct:
+    mov cl, 3
+    shr bx, cl                  ; ...and how many whole eights are left
+    mov cx, bx
+    jcxz .rdone
+.eight:
+    in  al, dx
+    stosb
+    in  al, dx
+    stosb
+    in  al, dx
+    stosb
+    in  al, dx
+    stosb
+    in  al, dx
+    stosb
+    in  al, dx
+    stosb
+    in  al, dx
+    stosb
+    in  al, dx
+    stosb
+    loop .eight
+.rdone:
+    pop es
 .done:
-    mov ax, NE_RDC << 8 | NE_ISR        ; the DMA is complete: say so, or the
-    call ne_out                         ; next one starts on a stale flag
+    add dx, NE_ISR - NE_DATA            ; the DMA is complete: say so, or the
+                                        ; next one starts on a stale flag. DX
+                                        ; is base+NE_DATA on every path here -
+                                        ; the jcxz above and both copy loops -
+                                        ; so one add replaces a seven-byte
+                                        ; reload on the per-packet path
+    mov al, NE_RDC
+    out dx, al
     pop dx
     pop cx
     pop bx
@@ -220,43 +275,77 @@ ne_dma_write:
     push cx
     push dx
     mov cx, ax
-    mov ax, (NE_STA | NE_RD_ABORT) << 8 | NE_CR
-    call ne_out
-    mov ax, NE_RDC << 8 | NE_ISR
-    call ne_out
-    mov al, NE_RBCR0
-    mov ah, cl
-    call ne_out
-    mov al, NE_RBCR1
-    mov ah, ch
-    call ne_out
-    mov al, NE_RSAR0
-    mov ah, bl
-    call ne_out
-    mov al, NE_RSAR1
-    mov ah, bh
-    call ne_out
-    mov ax, (NE_STA | NE_RD_WRITE) << 8 | NE_CR
-    call ne_out
-    mov dx, [eth_base]
-    add dx, NE_DATA
-    jcxz .wait
-.byte:
-    mov al, [si]
-    inc si
+    mov dx, [eth_base]              ; ne_dma_read's walk, and for its reasons
+    mov al, NE_STA | NE_RD_ABORT    ; DX = base + NE_CR (0)
     out dx, al
-    loop .byte
+    add dx, NE_ISR - NE_CR
+    mov al, NE_RDC
+    out dx, al
+    add dx, NE_RBCR0 - NE_ISR
+    mov al, cl
+    out dx, al
+    inc dx                          ; NE_RBCR1
+    mov al, ch
+    out dx, al
+    add dx, NE_RSAR0 - NE_RBCR1
+    mov al, bl
+    out dx, al
+    inc dx                          ; NE_RSAR1
+    mov al, bh
+    out dx, al
+    add dx, NE_CR - NE_RSAR1
+    mov al, NE_STA | NE_RD_WRITE
+    out dx, al
+    add dx, NE_DATA - NE_CR
+    jcxz .wait
+    cld                         ; `lodsb` for the same reason `stosb` is used
+                                ; on the way in: one byte and twelve clocks
+                                ; against `mov al,[si] / inc si`'s three and
+                                ; fifteen, and DS:SI is what both address
+    mov bx, cx                  ; ...and the same unroll (SPEC.md 72.16.5):
+    and cx, 7                   ; BX carried the card address above and is
+    jz  .woct                   ; spent
+.wtail:
+    lodsb
+    out dx, al
+    loop .wtail
+.woct:
+    mov cl, 3
+    shr bx, cl
+    mov cx, bx
+    jcxz .wait
+.weight:
+    lodsb
+    out dx, al
+    lodsb
+    out dx, al
+    lodsb
+    out dx, al
+    lodsb
+    out dx, al
+    lodsb
+    out dx, al
+    lodsb
+    out dx, al
+    lodsb
+    out dx, al
+    lodsb
+    out dx, al
+    loop .weight
 .wait:
+    mov dx, [eth_base]          ; ...and the completion poll, on ONE address
+    add dx, NE_ISR              ; rather than through ne_in every spin
     mov cx, NE_RDCSPIN          ; bounded: a card that never raises RDC is one
 .rdc:                           ; that has gone away, and this must not hang
-    mov al, NE_ISR
-    call ne_in
+    in  al, dx
     test al, NE_RDC
     jnz .done
     loop .rdc
 .done:
-    mov ax, NE_RDC << 8 | NE_ISR
-    call ne_out
+    mov al, NE_RDC              ; clear RDC on the way out - DX still holds
+    out dx, al                  ; base+NE_ISR from the poll above, on every
+                                ; path here, so the reload it used to do was
+                                ; six bytes of fetch per packet for nothing
     pop dx
     pop cx
     pop bx
@@ -516,7 +605,7 @@ ne_curr:
 ; This is the split the header names. The card's remote DMA walks straight
 ; past PSTOP; the frame it is carrying does not.
 ; -----------------------------------------------------------------------------
-ne_ring_read:
+ne_ring_read_i:
     push ax
     push bx
     push cx
@@ -694,7 +783,7 @@ ne_overflow:
 ; transmit rather than this one: nothing here needs the completion, and
 ; waiting for it costs a millisecond of a machine that has 209 of them a tick.
 ; -----------------------------------------------------------------------------
-ne_tx:
+ne_tx_i:
     push ax
     push bx
     push cx

@@ -96,10 +96,40 @@ SK_SZ       equ 128             ; A POWER OF TWO ON PURPOSE - `sk_ptr` is a
   %error "ether: the socket record does not fit SK_SZ"
 %endif
 
-SK_RXCAP    equ 1024            ; and their shifts, below
-SK_TXCAP    equ 512
-SK_RXSH     equ 10
-SK_TXSH     equ 9
+; --- the ring sizes are RUNTIME now (SPEC.md 72.13) -------------------------
+; These are the DEFAULTS the driver starts at and the floor it falls back to;
+; [sk_rxcap]/[sk_txcap] and their shifts in ethstate.inc are what the code
+; reads. Every size is a power of two so the walk stays a shift and a compare.
+SK_RXCAP0   equ 1024            ; the floor: what a machine that can spare
+SK_TXCAP0   equ 512             ; nothing else still gets
+SK_RXSH0    equ 10
+SK_TXSH0    equ 9
+
+SK_RXMAX    equ 8192            ; **AND THE CEILING IS THE SEGMENT.** Four
+SK_TXMAX    equ 1024            ; sockets at 8192+1024 is 36,864 bytes; the
+SK_RXMAXSH  equ 13              ; next step up is 69,632 and the offsets into
+SK_TXMAXSH  equ 10              ; the claim are SIXTEEN BITS
+
+SK_RXMID    equ 4096            ; the middle rung, and the one the arithmetic
+SK_TXMID    equ 512             ; says is the sweet spot: ~29 KB/s predicted
+SK_RXMIDSH  equ 12              ; against a ~155 KB/s per-byte ceiling, so it
+SK_TXMIDSH  equ 9               ; is fast without crowding the CPU
+
+; What the two MEASURED rungs cost, in KB. Derived from the sizes above and
+; from NET_SOCKS rather than written down beside them, because a number
+; written twice is a number that disagrees with itself later. The floor has no
+; entry here on purpose: it is not measured against anything (see sk_claim).
+SK_KBMAX    equ (NET_SOCKS * (SK_RXMAX + SK_TXMAX) + 1023) / 1024
+SK_KBMID    equ (NET_SOCKS * (SK_RXMID + SK_TXMID) + 1023) / 1024
+SK_SHARESH  equ 2               ; ...and a rung the user did not ASK for may
+                                ; take at most a 1/(1<<2) - a QUARTER - of the
+                                ; free heap. It is a SHIFT and not a divisor
+                                ; because the test is one `shr` on an 8088. A
+                                ; card is not the reason the machine has
+                                ; memory, and 37KB out of a 128KB machine's
+                                ; heap is a package that then will not load -
+                                ; a failure nothing connects to the network
+                                ; card, because the card works perfectly
 
 SKF_FIN     equ 0x01            ; the application has closed: send a FIN once
                                 ; everything it wrote has been acknowledged
@@ -117,11 +147,21 @@ SKF_ACPT    equ 0x20            ; a listener made this and NETV_ACCEPT has not
                                 ; frees a slot whose peer went away before
                                 ; anybody asked for it
 
-TCP_MSS     equ SK_TXCAP        ; we never send more than one buffer's worth,
+TCP_MSS     equ SK_TXMAX        ; we never send more than one buffer's worth,
                                 ; so this is the honest number to advertise -
                                 ; and it is under the 1460 an Ethernet path
                                 ; allows, so nothing here can provoke a
-                                ; fragment (inet.inc drops those)
+                                ; fragment (inet.inc drops those).
+                                ;
+                                ; **THE MAXIMUM AND NOT THE CURRENT ONE**, now
+                                ; that the buffer is sized at attach: the MSS
+                                ; is announced in the SYN, once, and a peer
+                                ; that has been told 1024 may send 1024 for
+                                ; the life of the connection. Advertising the
+                                ; live [sk_txcap] would be advertising a
+                                ; number that was chosen before the ring was,
+                                ; and it bounds what WE send, which tcp_out
+                                ; already clamps to the real one
 TCP_RTO0    equ 9               ; ticks: half a second, doubling
 TCP_RTMAX   equ 7               ; ...seven doublings is about a minute
 TCP_CONNTMO equ 550             ; ticks: 30 seconds to get connected
@@ -154,29 +194,396 @@ sk_rxbase:
     mov al, [bx+SKO_IDX]
     xor ah, ah
     mov di, ax
-    mov cl, SK_RXSH
+    mov cx, [sk_rxsh]
     shl di, cl
-    add di, sk_rxb
-    pop cx
-    pop ax
-    ret
-
-sk_txbase:
+    add di, [sk_base]
+    pop cx                          ; **AN OFFSET IN [sk_seg], not in DS.** The
+    pop ax                          ; rings moved out of the driver's bss into
+    ret                             ; a claim (SPEC.md 72.13), so the RX area
+                                    ; starts at 0 and every caller supplies the
+sk_txbase:                          ; segment itself
     push ax
     push cx
     mov al, [bx+SKO_IDX]
     xor ah, ah
     mov di, ax
-    mov cl, SK_TXSH
+    mov cx, [sk_txsh]
     shl di, cl
-    add di, sk_txb
+    add di, [sk_txoff]              ; ...and TX sits above every RX ring
+    add di, [sk_base]
     pop cx
     pop ax
+    ret
+
+; =============================================================================
+; THE THREE RING COPIES (SPEC.md 72.13)
+;
+; mem_copy and usr_read move DS->DS and ES->DS, and the ring is in NEITHER
+; segment now. Rather than juggle segment registers at four call sites - which
+; is how a wrong ES gets written once and read back wrong for ever - the three
+; shapes the driver actually needs are named here, and every one of them
+; leaves DS and ES as it found them.
+;
+; **THEY ARE `rep movsb` NOW** (SPEC.md 72.16), and the note that used to stand
+; here said the opposite: that a byte loop was right because movsb wants ES for
+; the destination and one of these has the CALLER's segment in it already. That
+; was not a reason, it was an inconvenience - each of them SETS both segments
+; itself, which is one `mov` and the direction movsb moves in. The field
+; profile priced the loop it excused at 83 clocks a byte against movsb's 17.
+;
+; The three shapes differ only in where the two segments come from:
+;   ring_in    DS = the caller's ([eth_useg]),  ES = the claim
+;   ring_out   DS = the claim,                  ES = ours
+;   ring_move  DS = ES = the claim
+; =============================================================================
+
+; --- ring_in - the CALLER's buffer at SI -> the ring at DI, CX bytes --------
+; **IT SETS ES ITSELF**, exactly as the usr_read it replaces did. That was
+; not decoration there and it is not here: the caller of eth_v_send has been
+; through the package door, and the segment to read from is the one banked in
+; [eth_useg] rather than whatever ES happens to hold. Assuming the caller had
+; loaded it cost one timed-out transfer to find.
+ring_in_i:
+    push ax
+    push dx
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    jcxz .out
+    cmp word [sk_seg], 0        ; both reads BEFORE DS moves - neither word is
+    je  .out                    ; reachable once it has
+    mov ax, [sk_seg]
+    mov dx, [eth_useg]
+    mov es, ax                  ; **ES:DI = the ring, DS:SI = the caller's** -
+    mov ds, dx                  ; the two the OTHER way round from what this
+    cld                         ; used to do, because that is the direction
+    rep movsb                   ; `movsb` moves in (72.16)
+.out:
+    pop ds
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop dx
+    pop ax
+    ret
+
+; --- ring_out - the ring at SI -> DS:DI (a driver buffer), CX bytes ---------
+ring_out_i:
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    push ds                     ; DS moves below, so it is banked HERE and not
+    jcxz .out                   ; on the arm that moves it - an unbalanced
+    cmp word [sk_seg], 0        ; stack on the jcxz path is a `ret` to the
+    je  .out                    ; wrong place, not a wrong answer
+    mov ax, [sk_seg]
+    push ds
+    pop es                      ; ES:DI = ours...
+    mov ds, ax                  ; ...and DS:SI the ring, which is the direction
+    cld                         ; `movsb` moves in (72.16)
+    rep movsb
+.out:
+    pop ds
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; --- ring_move - within the ring, SI -> DI, CX bytes ------------------------
+; Forward, and every caller has dest < src, so an overlapping move is safe -
+; the same guarantee the mem_copy it replaces relied on.
+ring_move:
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    jcxz .out
+    cmp word [sk_seg], 0
+    je  .out
+    mov ax, [sk_seg]
+    mov es, ax                  ; BOTH segments are the ring: `movsb` reads
+    mov ds, ax                  ; through DS and writes through ES, and here
+    cld                         ; they are the same block (72.16)
+    rep movsb
+.out:
+    pop ds
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+%ifndef ETH_NOEMIT
+; THE CLAIM IS THE OS's ONLY. The DOS partner (SPEC.md 62.11.1) shares every
+; line of the ring code above but has no OSAPI_MEM_CLAIM to call - it is a
+; .COM with megabytes and fixed bss - so it points [sk_seg]/[sk_base] at its
+; own buffers in net_bss_clear and never comes here.
+; =============================================================================
+; sk_claim - take the rings, as big as the machine will give (SPEC.md 72.13)
+; out: CF=0 and [sk_seg] set; CF=1 = not one rung was affordable
+;
+; A LADDER AND NOT A DEMAND. The driver used to carry 6KB of bss for these
+; whatever the machine was, and could not have been given more; now it asks
+; for the best rung and steps down until the heap says yes. The rungs are the
+; three the arithmetic picks out:
+;
+;   8192 RX - measured against a ~155 KB/s per-byte ceiling, this is where
+;             the window stops being the constraint and the CPU starts
+;   4096 RX - the sweet spot: ~29 KB/s predicted, room to spare
+;   1024 RX - the floor, and what the driver did before any of this
+;
+; **THE FLOOR STILL WORKS**, which is what makes the ladder honest: a machine
+; that can spare 6KB gets exactly the stack it had, not a refusal to load.
+; Only a machine that cannot spare even that is told no - and a NIC with no
+; buffers cannot serve a socket, so that refusal is the true one.
+;
+; The user's choice in [sk_want] is tried FIRST and is not a floor: asking for
+; 8192 on a machine that cannot hold it gets 4096 rather than nothing, because
+; a slower network is a better answer than no network.
+;
+; **THE AUTO LADDER MEASURES THE HEAP; THE USER'S CHOICE DOES NOT.** Left to
+; itself the ladder takes at most a QUARTER of the free heap (SK_SHARESH), so a
+; 128KB machine gets the floor and a 640KB one gets the ceiling without anybody
+; being asked - which is what "a sane default based on total RAM" means here.
+; An explicit [sk_want] skips that test on purpose: a user who has opened the
+; Control Panel and picked 8K has said something about their machine that the
+; arithmetic does not know, and the claim itself is still the thing that can
+; refuse. Only if the asked-for rung will not fit does the ladder run.
+; =============================================================================
+sk_claim:
+    push ax
+    push bx
+    push cx
+    push dx
+    cmp word [sk_seg], 0
+    jne .have                       ; a second attach must not claim twice
+    mov bx, [sk_want]               ; the user's rung, if there is one
+    or bx, bx
+    jz .auto
+    call sk_try
+    jnc .done
+.auto:
+    call OSAPI_MEM_AVAIL        ; **AX = the largest run, BX = the TOTAL free**
+    mov ax, bx                  ; (SPEC.md 50.3), and it is the total this
+    mov cl, SK_SHARESH          ; measures against: the largest run is what the
+    shr ax, cl                  ; claim itself will test, and a card that fits
+                                ; in the biggest hole on a machine with no
+                                ; other memory left has still taken the machine
+    mov bx, SK_RXMAX            ; AX = a quarter of the free heap, in KB
+    cmp ax, SK_KBMAX
+    jb  .mid
+    call sk_try
+    jnc .done
+.mid:
+    mov bx, SK_RXMID
+    cmp ax, SK_KBMID
+    jb  .floor
+    call sk_try
+    jnc .done
+.floor:
+    mov bx, SK_RXCAP0           ; THE FLOOR IS NOT MEASURED. 6KB is what the
+    call sk_try                 ; driver's bss used to be, so a machine that
+    jnc .done                   ; cannot spare it could not have loaded the
+                                ; driver at all a version ago
+    pop dx                          ; not one rung: [sk_seg] stays 0 and every
+    pop cx                          ; socket verb refuses at sk_ring
+    pop bx
+    pop ax
+    stc
+    ret
+.have:
+.done:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+
+; --- sk_release - hand the rings back ---------------------------------------
+sk_release:
+    push ax
+    push dx
+    mov dx, [sk_seg]
+    or dx, dx
+    jz .out
+    mov word [sk_seg], 0        ; FIRST: [sk_seg] is the one value every ring
+                                ; reader refuses on, so a pre-emption between
+                                ; here and the free meets a refusal instead
+                                ; of a freed segment taking TCP payload. The
+                                ; old order zeroed LAST so a failed free
+                                ; could not orphan a live segment - but a
+                                ; freed-and-still-named segment is the worse
+                                ; side of that trade: the failure it leaves
+                                ; is a leak nothing references, not a write
+    call OSAPI_MEM_FREE
+.out:
+    pop dx
+    pop ax
+    ret
+
+; --- sk_busy - CF=1 if any socket is in use ---------------------------------
+; The rings ARE the sockets' data: half a connection's receive queue and its
+; unacknowledged send bytes both live in the claim, so freeing it under a live
+; socket loses a transfer in progress and leaves TCP acknowledging bytes it can
+; no longer produce. Every path that RESIZES asks this first.
+sk_busy:
+    push ax
+    push bx
+    push cx
+    xor al, al
+    mov cx, NET_SOCKS
+.l:
+    call sk_ptr
+    cmp byte [bx+SKO_ST], NSK_FREE
+    jne .yes
+    inc al
+    loop .l
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.yes:
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; --- sk_reclaim - take [sk_want]'s rung instead of the one we hold ----------
+; out: CF=0 and [sk_rxcap] is whatever the ladder could get; CF=1 = nothing
+;      was touched, because a socket is live (sk_busy)
+;
+; A FREE AND A CLAIM AND NOT A REGROW, deliberately: mem_regrow can move a
+; block, and everything that reads a ring reads [sk_seg] fresh through sk_ring,
+; so a move would be safe - but the sizes and the shifts change with the rung
+; and every ring's CONTENTS would then be at the wrong offsets inside it.
+; There is nothing to preserve, because sk_busy has just said there is no
+; socket, so the cheap thing and the correct thing are the same one.
+sk_reclaim:
+    call sk_busy
+    jc  .no
+    call sk_release             ; and the ladder always ends at the floor,
+    call sk_claim               ; which is the 6KB we have just handed back -
+    ret                         ; so this cannot leave the driver with none
+.no:
+    stc
+    ret
+
+; --- sk_try - BX = an RX size: claim it, or CF=1 ----------------------------
+; The TX size and both shifts follow the RX rung rather than being chosen
+; separately - there is one knob, and a machine generous enough for a big
+; receive window is not the one to economise on the send buffer.
+sk_try:
+    push ax
+    push cx
+    push dx
+    mov cx, SK_TXCAP0               ; the rung's TX size and shifts
+    mov ax, SK_RXSH0
+    mov dx, SK_TXSH0
+    cmp bx, SK_RXMAX
+    jne .nmax
+    mov cx, SK_TXMAX
+    mov ax, SK_RXMAXSH
+    mov dx, SK_TXMAXSH
+    jmp short .got
+.nmax:
+    cmp bx, SK_RXMID
+    jne .got
+    mov cx, SK_TXMID
+    mov ax, SK_RXMIDSH
+    mov dx, SK_TXMIDSH
+.got:
+    mov [sk_rxsh], ax
+    mov [sk_txsh], dx
+    mov [sk_rxcap], bx
+    mov [sk_txcap], cx
+    ; --- KB wanted: NET_SOCKS * (rx + tx), rounded up ----------------------
+    mov ax, bx
+    add ax, cx
+    mov cl, 2                       ; NET_SOCKS is 4 (netpkg.inc), and this is
+    shl ax, cl                      ; the one place that assumes it
+    add ax, 1023
+    mov cl, 10
+    shr ax, cl                      ; AX = KB
+    call OSAPI_MEM_CLAIM            ; out DX = the base segment
+    jc .no
+    mov [sk_seg], dx
+    mov ax, bx                      ; TX starts above all four RX rings
+    mov cl, 2
+    shl ax, cl
+    mov [sk_txoff], ax
+    pop dx
+    pop cx
+    pop ax
+    clc
+    ret
+.no:
+    pop dx
+    pop cx
+    pop ax
+    stc
+    ret
+
+%endif  ; ETH_NOEMIT
+
+; --- sk_ring - ES = the claim, or CF=1 if there is not one -------------------
+; Every ring access goes through this rather than loading [sk_seg] by hand,
+; because a zero there means the claim was refused and the ring does not
+; exist - and a copy into segment 0 is the interrupt vector table.
+sk_ring:
+    push ax
+    mov ax, [sk_seg]
+    or ax, ax
+    jz .no
+    mov es, ax
+    pop ax
+    clc
+    ret
+.no:
+    pop ax
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
 ; sk_alloc - a free slot
 ; out: CF=0 and BX = a zeroed record, AL = its 1-based HANDLE; CF=1 = none
+;
+; **AND A TIME-WAIT SLOT IS FREE ENOUGH WHEN THERE IS NOTHING ELSE** (SPEC.md
+; 72.14). That is not a corner: it is what an FTP server does on every single
+; transfer, and it is the bug the field measured as a 6-7 second hole at the
+; START of an upload, before one byte of disk work.
+;
+; Four slots and an FTP session accounts for all four - the port-21 listener,
+; the control connection, the passive data listener and the data connection
+; itself - so the moment a transfer's data socket closes it goes into
+; TCP_TWTMO's two-second hold holding the fourth. The client's NEXT transfer
+; starts inside those two seconds, every time: PASV takes a slot for the new
+; listener, the client connects, and the SYN that arrives has nowhere to go.
+; It is dropped, and what the user sees is the client's own retransmit backoff
+; - one second, then two, then four - before anything happens at all.
+;
+; TIME-WAIT exists to absorb a stray retransmitted FIN from a peer that is
+; already finished with. Under pressure that is worth exactly less than a
+; connection somebody is waiting for, and reusing the slot is safe for the
+; reason the state is cheap to give up: delivery matches the four-tuple, so a
+; straggler for the dead connection does not match the live one unless the
+; ports collide too.
+;
+; The FIRST one found is taken and not the oldest. With four slots there is
+; one, rarely two, and a deadline compare to choose between them would cost
+; more than it could ever save.
 ; -----------------------------------------------------------------------------
 sk_alloc:
     push cx
@@ -189,6 +596,14 @@ sk_alloc:
     je  .got
     inc al
     loop .l
+    xor al, al                  ; nothing free: the second walk, for a slot
+    mov cx, NET_SOCKS           ; that is only being held out of politeness
+.tw:
+    call sk_ptr
+    cmp byte [bx+SKO_TS], TS_TIMEWT
+    je  .got
+    inc al
+    loop .tw
     stc
     jmp short .out
 .got:
@@ -281,7 +696,7 @@ q_get:
 ; sk_rxfree - BX = a socket -> AX = bytes it could still take
 ; -----------------------------------------------------------------------------
 sk_rxfree:
-    mov ax, SK_RXCAP
+    mov ax, [sk_rxcap]
     sub ax, [bx+SKO_RXN]
     ret
 
@@ -289,38 +704,58 @@ sk_rxfree:
 ; sk_rxput - CX bytes at DS:SI into socket BX's ring
 ; out: CX = how many were taken (the rest are dropped and NOT acknowledged)
 ; -----------------------------------------------------------------------------
-sk_rxput:
+sk_rxput_i:
     push ax
     push dx
     push si
     push di
+    push bp
+    push es
     call sk_rxfree
     cmp cx, ax
     jbe .fits
     mov cx, ax
 .fits:
-    jcxz .out
-    add [bx+SKO_RXN], cx
-    call sk_rxbase              ; DI = the ring
-    mov dx, cx
-.l:
-    mov ax, [bx+SKO_RXH]
-    push di
-    add di, ax
-    mov al, [si]
-    mov [di], al
-    pop di
-    inc si
-    mov ax, [bx+SKO_RXH]
-    inc ax
-    cmp ax, SK_RXCAP
-    jb  .wrap
-    xor ax, ax
-.wrap:
+    jcxz .zero
+    call sk_ring                ; **THE RING IS IN [sk_seg]** (SPEC.md 72.13),
+    jc  .zero                   ; so the store needs the override - without it
+    add [bx+SKO_RXN], cx        ; this writes the driver's own bss at the
+    push cx                     ; ring's old offsets, which assembles
+    call sk_rxbase              ; perfectly and corrupts whatever is there
+    mov bp, di                  ; BP = the ring's base...
+    mov dx, bp
+    add dx, [sk_rxcap]          ; ...and DX one past its end
+    add di, [bx+SKO_RXH]        ; DI = where the writer stands
+    mov ax, [bx+SKO_RXH]        ; ...and the new head, computed ONCE. CX cannot
+    add ax, cx                  ; exceed sk_rxfree, so head + cx is under two
+    cmp ax, [sk_rxcap]          ; capacities and one subtract is the whole wrap
+    jb  .nw
+    sub ax, [sk_rxcap]
+.nw:
     mov [bx+SKO_RXH], ax
-    loop .l
-    mov cx, dx
-.out:
+    cld                         ; **TWO `rep movsb` RUNS, SPLIT AT THE WRAP**
+    mov ax, dx                  ; (SPEC.md 72.16). ne_ring_read has always cut
+    sub ax, di                  ; the card's ring this way; the socket ring's
+    cmp cx, ax                  ; own copies were a hand loop until the
+    jbe .one                    ; profiler priced them
+    sub cx, ax                  ; CX = what is left after the end...
+    push cx
+    mov cx, ax                  ; ...and AX was the run up to it
+    rep movsb
+    pop cx
+    mov di, bp                  ; round to the base for the remainder
+    rep movsb
+    jmp short .fin
+.one:
+    rep movsb
+.fin:
+    pop cx                      ; the answer, banked before the move spent CX
+    jmp short .out
+.zero:
+    xor cx, cx                  ; no claim, or a full ring: the same answer,
+.out:                           ; and every caller already handles it
+    pop es
+    pop bp
     pop di
     pop si
     pop dx
@@ -332,43 +767,80 @@ sk_rxput:
 ; in:  DI = the caller's offset, CX = its capacity
 ; out: CX = how many were delivered
 ; -----------------------------------------------------------------------------
-sk_rxget:
+; **THE RECORD COMES OUT OF THE LOOP** (SPEC.md 72.13). This copied one byte
+; at a time and read [bx+SKO_RXT] on every one of them, which was affordable
+; while the ring and the record shared the driver's DS. They do not any more:
+; the ring is in the claim and the destination is the CALLER's, so the loop
+; needs both segment registers and the record can be reached from neither.
+;
+; So the tail is advanced ONCE, before DS moves, and the loop walks a plain
+; pointer with the ring's end and base in registers. It is also four
+; instructions a byte shorter than what it replaces, which is not the reason
+; but is not nothing at 4.77MHz.
+sk_rxget_i:
     push ax
     push dx
     push si
     push di
+    push bp
     push es
+    push ds
     mov ax, [bx+SKO_RXN]
     cmp cx, ax
     jbe .fits
     mov cx, ax
 .fits:
-    jcxz .out
+    jcxz .none
+    cmp word [sk_seg], 0
+    je  .none                   ; no claim, so no ring: nothing to give
     sub [bx+SKO_RXN], cx
-    mov dx, cx
-    push di
-    call sk_rxbase
-    mov si, di                  ; SI = the ring
-    pop di
-    mov es, [eth_useg]
-.l:
-    push si
-    add si, [bx+SKO_RXT]
-    mov al, [si]
-    pop si
-    mov [es:di], al
-    inc di
-    mov ax, [bx+SKO_RXT]
-    inc ax
-    cmp ax, SK_RXCAP
-    jb  .wrap
-    xor ax, ax
-.wrap:
+    push cx                     ; THE ANSWER, banked before CX is spent
+    push di                     ; ...and the destination offset
+    call sk_rxbase              ; DI = this socket's ring, in the claim
+    mov bp, di                  ; BP = base
+    mov si, bp
+    add si, [bx+SKO_RXT]        ; SI = where the reader stands
+    mov dx, bp
+    add dx, [sk_rxcap]          ; DX = one past the end
+    mov ax, [bx+SKO_RXT]        ; ...and the new tail, while the record is
+    add ax, cx                  ; still addressable
+    cmp ax, [sk_rxcap]
+    jb  .nw
+    sub ax, [sk_rxcap]
+.nw:
     mov [bx+SKO_RXT], ax
-    loop .l
-    mov cx, dx
+    mov ax, [sk_seg]            ; the ring's segment into a REGISTER first -
+    pop di                      ; [sk_seg] is unreachable once DS moves
+    mov es, [eth_useg]          ; ES:DI = the caller's buffer
+    mov ds, ax                  ; DS:SI = the ring. NOTHING BELOW THIS LINE
+                                ; may name a driver variable - and it does not
+                                ; have to: DX, BP and the two pointers are all
+                                ; registers, which is what lets `movsb` reach
+                                ; across the two segments at all (72.16)
+    cld
+    mov ax, dx
+    sub ax, si                  ; AX = bytes to the ring's end
+    cmp cx, ax
+    jbe .one
+    sub cx, ax
+    push cx
+    mov cx, ax
+    rep movsb
+    pop cx
+    mov si, bp                  ; ...round to the base
+    rep movsb
+    jmp short .fin
+.one:
+    rep movsb
+.fin:
+    pop cx                      ; the answer
+    jmp short .out
+.none:
+    xor cx, cx
 .out:
+    pop ds
     pop es
+    pop bp
     pop di
     pop si
     pop dx
@@ -433,7 +905,7 @@ tcp_out:
     call sk_txbase
     mov si, di
     mov di, eth_txb + IP_PAY + TC_HLEN
-    call mem_copy
+    call ring_out               ; the ring is the CLAIM's, the frame is ours
 .nodata:
     mov cx, [eth_dlen]
     add cx, TC_HLEN
@@ -656,6 +1128,64 @@ tcp_abort:
     mov byte [bx+SKO_ST], NSK_FREE
     ret
 
+; -----------------------------------------------------------------------------
+; sk_reap_kids - a LISTENER is closing, so its un-accepted children go with it
+; in:  BX = the listening socket
+; out: nothing; every register preserved
+;
+; **CLOSING A LISTENER MUST DESTROY ITS PENDING QUEUE.** That is what every
+; sockets implementation does and what this one did not, because until an FTP
+; server (SPEC.md 77) there was nothing in the tree that listened at all - so
+; the path had never been walked with a connection sitting on it.
+;
+; A connection the stack has completed but NETV_ACCEPT has not taken is marked
+; SKF_ACPT and belongs to NOBODY: the package was never given a handle for it,
+; so it cannot close it, and eth_v_accept will not hand it over once the peer
+; has closed, because it matches on NSK_UP. So it sat in the table until the
+; machine was turned off.
+;
+; **THE FOURTH HANDLE IS WHAT MAKES THAT FATAL RATHER THAN UNTIDY** (netpkg.inc
+; keeps NET_SOCKS at 4 precisely for a server). Measured: an FTP server that
+; refused ONE transfer - a read-only STOR - stranded the data connection the
+; client had already dialled, and the NEXT transfer had no slot to accept
+; into. The symptom is a server answering 227 and 150 perfectly and then never
+; sending a byte, several commands after the one that actually broke, with
+; every counter clean and no error anywhere.
+;
+; tcp_abort already does the right thing once it is reached: SKF_ACPT sends it
+; straight to .free, on its own reasoning that "nobody ever asked for this
+; one, so there is nobody to tell". The bug was that nothing ever reached it.
+; -----------------------------------------------------------------------------
+sk_reap_kids:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, [bx+SKO_LP]         ; children carry the LISTENER's local port,
+    xor dl, dl                  ; which is how eth_v_accept finds them too
+    mov cx, NET_SOCKS
+.l:
+    mov al, dl
+    call sk_ptr
+    cmp byte [bx+SKO_ST], NSK_FREE
+    je  .next
+    test byte [bx+SKO_FL], SKF_ACPT
+    jz  .next                   ; somebody owns this one
+    cmp si, [bx+SKO_LP]
+    jne .next
+    mov al, NSK_FAILED          ; ...which nobody ever reads, SKF_ACPT taking
+    call tcp_abort              ; tcp_abort to .free
+.next:
+    inc dl
+    loop .l
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; =============================================================================
 ; CONNECTING
 ; =============================================================================
@@ -827,14 +1357,16 @@ tcp_listener:
 ; -----------------------------------------------------------------------------
 ; tcp_in - a TCP segment is in eth_rxb, CX bytes of IP payload
 ; -----------------------------------------------------------------------------
-tcp_in:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    cmp cx, TC_HLEN
+tcp_in:                         ; STKDEPTH-NOSAVE: dx si di
+    push ax                     ; DX, SI and DI are NOT saved here and that is
+    push bx                     ; checked rather than asserted: this routine
+    push cx                     ; touches none of the three itself, every
+    cmp cx, TC_HLEN             ; callee below gives all three back, and
+                                ; `tools/stkdepth.py --check` fails the build
+                                ; the day one of them stops. Six bytes, held
+                                ; across the deepest chain in the driver -
+                                ; SPEC.md 1's blanket save is right everywhere
+                                ; else and is what this trades away here
     jb  .out
     mov [eth_tlen], cx
 
@@ -867,13 +1399,12 @@ tcp_in:
 .have:
     call tcp_seg
 .out:
-    pop di
-    pop si
-    pop dx                      ; **DX**, and it was missing: the `ret` below
-    pop cx                      ; then took the saved DX as its return address
-    pop bx                      ; and the machine ran off into this driver's
-    pop ax                      ; own data with everything else still working
-    ret
+    pop cx                      ; ...and DX/SI/DI are not popped either. The
+    pop bx                      ; pair has to move TOGETHER: DX's pop was once
+    pop ax                      ; missing here on its own and the `ret` took
+    ret                         ; the saved DX as its return address, with the
+                                ; machine running off into this driver's data
+                                ; and everything else still working
 
 ; -----------------------------------------------------------------------------
 ; tcp_accept_in - a SYN arrived for the listener in BX
@@ -1151,7 +1682,7 @@ tcp_ackin:
     mov si, di
     add si, ax
     mov cx, [bx+SKO_TXN]
-    call mem_copy                       ; forward, and dest < src, so an
+    call ring_move                      ; forward, and dest < src, so an
     pop ax                              ; overlapping move is safe
     pop cx
 .nodata:

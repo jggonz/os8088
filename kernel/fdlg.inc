@@ -1238,8 +1238,28 @@ fdlg_actok:
 ; cold in its entirety; ctrl.inc is cold too and calls it directly, and
 ; apps.inc is .text and reaches it through os88ui_btn_f.
 ; =============================================================================
+%ifdef OS88UI_SBDRAG
+; THE DIALOG'S THUMB-DRAG POLICY (SPEC.md 13.10.5.4), and it is the WINDOW's
+; rather than the element's, exactly as the Disk window's is.
+;
+; RATE 0, and here the argument is stronger than the Disk window's: this
+; dialog has no incremental scroll at all. Every change to fdlg_scrl repaints
+; the whole list through fdlg_draw_list - a fill, FD_ROWS rows of filename and
+; the bar entire - where files.inc at least has gfx_scroll and a rows-only
+; tier. So a following view is a full list repaint per pointer movement, and
+; PERFORMANCE.md prices a row of text in tens of milliseconds on the target.
+%ifndef FD_SBRATE
+%define FD_SBRATE 0             ; ticks between commits; 0 = the release
+%endif                          ; commits and nothing before it
+%endif
+
 %define OS88UI_KERNEL
 %define OS88UI_SCROLL          ; SPEC.md 13.10: both kernel bars use it
+                               ; OS88UI_SBDRAG - SPEC.md 13.10.5's thumb drag -
+                               ; is NOT defined here. It has to be resolved
+                               ; before files.inc, which is included first;
+                               ; kernel.asm carries it beside WM_ANIM and
+                               ; OS88_THEME and says why
 %include "os88ui.inc"
 
 ; -----------------------------------------------------------------------------
@@ -1836,6 +1856,11 @@ fdlg_sbset:
     mov ax, [fdlg_scrl]
     mov [os88ui_ksb+12], ax
     mov bx, os88ui_ksb
+%ifdef OS88UI_SBDRAG
+    call os88ui_sbfix           ; ...and while a thumb drag is live ON THIS
+                                ; BAR, word 6 is the HAND's pos rather than
+                                ; the view's (SPEC.md 13.10.5.6)
+%endif
     pop ax
     ret
 
@@ -2463,6 +2488,17 @@ fdlg_onup_x:
     push dx
     push di
     call fdlg_pt                ; CX = content y, DX = content x
+%ifdef OS88UI_SBDRAG
+    call os88ui_sbdragging      ; SPEC.md 13.10.5: the release COMMITS, and
+    jc .btn                     ; unconditionally - a position the rate refused
+    call fdlg_sbset             ; mid-drag is never lost, and a release that
+    call os88ui_sbdrop          ; landed anywhere still ends the gesture
+    jc .btn                     ; CF = 1 = it was the Disk window's bar
+    mov [fdlg_scrl], ax
+    call fdlg_draw_list
+    jmp short .out
+.btn:
+%endif
     call os88ui_fire            ; AX = what the press armed, and it is CLEARED
     or ax, ax
     jz .out
@@ -2526,6 +2562,20 @@ fdlg_ondrag_x:
     push cx
     push dx
     push di
+%ifdef OS88UI_SBDRAG
+    call os88ui_sbdragging      ; SPEC.md 13.10.5: a live thumb drag owns this
+    jc .btn                     ; movement whole
+    push dx                     ; the pointer's ABSOLUTE y - fdlg_pt eats DX,
+    call fdlg_pt                ; and it is also what refreshes [fdlg_cx]/[cy]
+    call fdlg_sbset             ; for the setter
+    pop dx
+    call os88ui_sbtrack         ; CF = 1: nothing owed yet - the rate, the same
+    jc .out                     ; row, or another bar's gesture
+    mov [fdlg_scrl], ax
+    call fdlg_draw_list         ; no incremental tier here: the list and its
+    jmp short .out              ; bar, whole (SPEC.md 13.10.6.2)
+.btn:
+%endif
     call os88ui_armed
     or ax, ax
     jz .out                     ; the press landed on nothing: nothing to track
@@ -2735,6 +2785,17 @@ fdlg_onclick_x:
     push di
 
     call fdlg_pt                ; CX = content y, DX = content x
+%ifdef OS88UI_SBDRAG
+    push cx                     ; A PRESS CANNOT ARRIVE DURING A LIVE DRAG, so
+    push dx                     ; one that does means the release never came
+    call os88ui_sbdragging      ; (SPEC.md 13.10.5.7) - fm_onclick's net, and
+    jc .nostale                 ; the dialog needs its own because it is MODAL:
+    call fdlg_sbset             ; while it is up fdlg_grab swallows the clicks
+    call os88ui_sbdrop          ; that would otherwise reach the other one
+.nostale:
+    pop dx
+    pop cx
+%endif
 
     ; --- the button column ---------------------------------------------
     ; kern_big: the press ARMS and draws down and acts on NOTHING (SPEC.md
@@ -2800,6 +2861,15 @@ fdlg_onclick_x:
     add dx, [fdlg_cy]
     call fdlg_sbset
     call os88ui_sbhit
+%ifdef OS88UI_SBDRAG
+    cmp al, OS88UI_SBTHUMB      ; SPEC.md 13.10.5: the thumb is DRAGGED here
+    jne .nograb2                ; now, where it did nothing at all. BX is
+    push ax                     ; still the block and DX still the press,
+    mov al, FD_SBRATE           ; absolute - and AL has to survive, because a
+    call os88ui_sbgrab          ; unchanged and fall through to .out, which is
+    pop ax                      ; what a thumb press has always done here
+.nograb2:
+%endif
     pop dx
     pop cx
     cmp al, OS88UI_SBUP

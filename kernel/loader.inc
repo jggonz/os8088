@@ -710,8 +710,6 @@ section .cold                   ; far entries (SPEC.md 2.6): the resident
                                 ; thunks in kernel.asm far-call these, and
                                 ; these near-call the bodies above - so every
                                 ; routine here keeps its ordinary near `ret`
-ldf_ld_run_body:        call ld_run_body_x
-                    retf
 ldf_ld_run_name:        call ld_run_name_x
                     retf
 ldf_loader_init:        call loader_init_x

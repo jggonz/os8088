@@ -1102,7 +1102,10 @@ osapi_snd_play:
 .drain:                         ; click abort: drain the aborting mouse
     mov di, snd_evtmp           ; events - and everything queued while the
     call evq_pop                ; screen was frozen - before returning
-    jnc .drain                  ; (SPEC.md 34.4, binding)
+    jc .drained                 ; (SPEC.md 34.4, binding)
+    call wm_wake_eaten          ; ...a wake in there is owed back, not dropped
+    jmp short .drain            ; (SPEC.md 74.1.1)
+.drained:
 .e5:
     dec byte [sch_lock]         ; the router's raise ends here on every
     mov ax, 5                   ; abort path (drained or flag)

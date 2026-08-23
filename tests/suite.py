@@ -70,6 +70,10 @@ FAST = [
     Row("mirror", "fast", py("tests/unit/t_mirror.py"), 0.2,
         "a constant written down in two files must agree in both; there is no "
         "linker here to notice"),
+    Row("drvmem", "fast", py("tests/unit/t_drvmem.py"), 0.2,
+        "the Drivers page's memory column (SPEC.md 31.6.2) re-derived: every "
+        "image term against the .drv this build made, every claim term against "
+        "the constant in the driver that takes it"),
     Row("image", "fast", py("tests/unit/t_image.py"), 0.2,
         "the shipped floppies read by an independent FAT12 walker: contiguity, "
         "the standard BPB, SPEC.md 19.6's attributes"),
@@ -85,6 +89,9 @@ FAST = [
     Row("asmrules", "fast", py("tests/unit/t_asmrules.py"), 0.5,
         "unreachable code after an unconditional jump, and a `cpu 8086` "
         "reachable from every root"),
+    Row("wakedrain", "fast", py("tests/unit/t_wakedrain.py"), 0.3,
+        "every event-queue drain gives a package's wake back - one that eats "
+        "it deafens the window for the rest of its life (SPEC.md 74.1.1)"),
     Row("checkdocs", "fast", py("tools/checkdocs.py"), 1.0,
         "stale SPEC.md citations and slot numbers in prose (already in `make`; "
         "here too so the suite is a complete statement)"),
@@ -94,6 +101,12 @@ FAST = [
     Row("ovlchk", "fast", py("tools/os88ovlchk.py"), 1.0,
         "no near call crosses a section boundary - it assembles cleanly and "
         "runs wrong"),
+    Row("stknosave", "fast",
+        py("tools/stkdepth.py", "drivers/ether/ether.asm", "--check"), 1.5,
+        "every `; STKDEPTH-NOSAVE:` in ETHER.DRV still holds: the routines "
+        "that stopped saving a register to fit a 256-byte task slice (SPEC.md "
+        "72.16.4) still get it back from every callee. Without this the trade "
+        "is a landmine for whoever edits the TCP stack next"),
 ]
 
 # --------------------------------------------------------------------------
@@ -101,7 +114,7 @@ FAST = [
 # --------------------------------------------------------------------------
 FULL = [
     Row("buildmatrix", "full", py("tests/unit/t_buildmatrix.py"), 45.0,
-        "the eighteen knob kernels and kern_small - every configuration `all` "
+        "the knob kernels and kern_small - every configuration `all` "
         "does not build, and so the only thing that keeps them assembling"),
     Row("ctoolchain", "full", py("tests/unit/t_ctoolchain.py"), 8.0,
         "the C toolchain still produces a package - the OTHER thing `all` "
@@ -129,6 +142,12 @@ SOAK = [
     Row("cpup", "soak", py("tests/cpup.py"), 41.3,
         "SPEC.md 13.8.3: the Control Panel acts on the RELEASE, not the"
         "press.",
+        needs=("marty",), serial=True),
+    Row("saver", "soak", py("tests/saver.py"), 95.0,
+        "the animated screen saver end to end (SPEC.md 79): every mode draws, "
+        "the overlay is loaded and freed, the wake puts the whole desktop back "
+        "including the bar and the dock, no block is left in the menu bar, and "
+        "all three fallbacks reach the blanker with the framebuffer untouched",
         needs=("marty",), serial=True),
     Row("cycweb", "soak", py("tests/cycweb.py"), 51.4,
         "Does the claw eat the web it slides over? (SPEC.md 67.5.3.1)",
@@ -237,6 +256,32 @@ SOAK = [
         "SPEC.md 11.2 fullscreen with the window's CENTRE on the second"
         "display",
         needs=("marty",), serial=True),
+    Row("wireflick", "soak", py("tests/wireflick.py"), 120.0,
+        "SPEC.md 78.5's three draw orders, as ink on the glass per displayed"
+        "frame - the flicker measured rather than argued about",
+        needs=("marty",), serial=True),
+    Row("wirefps", "soak", py("tests/wirefps.py"), 90.0,
+        "What SPEC.md 5.6.4.1 is worth to a program that draws lines - apps/wire"
+        "reading its own frame rate, with the dispatch poked out and back",
+        needs=("marty",), serial=True),
+    Row("paintrate", "soak", py("tests/paintrate.py"), 120.0,
+        "SPEC.md 42.8.1: is Paint's brush stroke still sampled at the TICK? The"
+        "facets in a hand-drawn curve were one 55ms sleep each",
+        needs=("marty",), serial=True),
+    Row("uilat", "soak", py("tests/uilat.py"), 120.0,
+        "SPEC.md 7.3: how long a click waits while a worker draws, bracketed"
+        "by two memory breakpoints because the mouse harness has a half-second"
+        "floor and cannot see it (7.3.1)",
+        needs=("marty",), serial=True),
+    Row("evqfull", "soak", py("tests/evqfull.py"), 60.0,
+        "SPEC.md 10.1: a full event ring discards its OLDEST input, and never"
+        "a coalesced WAKE - asked of evq_push directly, with the CPU parked",
+        needs=("marty",), serial=True),
+    Row("linefast", "soak", py("tests/linefast.py"), 60.0,
+        "Does SPEC.md 5.6.4.1's fast walk lay 5.6.4's pixels? Both inks, all"
+        "eight octants, clipped and not - against the same kernel with the"
+        "dispatch poked out",
+        needs=("marty",), serial=True),
     Row("dispmine", "soak", py("tests/dispmine.py"), 60.0,
         "Can Minesweeper's bottom row be PLAYED on a CGA? (SPEC.md 11.93)",
         needs=("marty",), serial=True),
@@ -279,7 +324,7 @@ SOAK = [
     Row("drvup", "soak", py("tests/drvup.py"), 60.0,
         "SPEC.md 13.8.4: a DRIVER's Control Panel page acts on the RELEASE.",
         needs=("marty",), serial=True),
-    Row("editmove", "soak", py("tests/editmove.py"), 60.0,
+    Row("editmove", "soak", py("tests/editmove.py", "--app", "notepad"), 60.0,
         "Compact the heap out from under a live app that is holding a big"
         "claim",
         needs=("marty",), serial=True),
@@ -291,6 +336,29 @@ SOAK = [
         "SPEC.md 13.8.3: the Standard File dialog's buttons fire on the"
         "RELEASE.",
         needs=("marty",), serial=True),
+    Row("fmthumb", "soak", py("tests/fmthumb.py"), 60.0,
+        "SPEC.md 13.10.5: the Disk window's scroll-bar THUMB is dragged, and"
+        "x is never read.",
+        needs=("marty",), serial=True),
+    Row("fdlgthumb", "soak", py("tests/fdlgthumb.py"), 90.0,
+        "SPEC.md 13.10.5: ...and the Standard File dialog's, which is the"
+        "second bar one gesture record has to tell apart (13.10.5.10).",
+        needs=("marty",), serial=True),
+    Row("pkgthumb-np", "soak", py("tests/pkgthumb.py", "notepad"), 90.0,
+        "SPEC.md 13.10.7: the thumb gesture inside a PACKAGE - Note Pad.",
+        needs=("marty",), serial=True),
+    Row("pkgthumb-br", "soak", py("tests/pkgthumb.py", "browser"), 90.0,
+        "SPEC.md 13.10.7: ...the Browser.",
+        needs=("marty",), serial=True),
+    Row("pkgthumb-wd", "soak", py("tests/pkgthumb.py", "word"), 120.0,
+        "SPEC.md 13.10.7: ...and Word, which needed 13.10.6.4 settling first -"
+        "its menus are a modal poll and the thumb's two edges are disjoint"
+        "from them.",
+        needs=("marty",), serial=True),
+    Row("pkgthumb-tp", "soak", py("tests/pkgthumb.py", "texpad"), 90.0,
+        "SPEC.md 13.10.7.2: ...and TexPad, whose TWO bars share one gesture"
+        "record. --bar=1 drives the preview pane's.",
+        needs=("marty",), serial=True),
     Row("fmbtn", "soak", py("tests/fmbtn.py"), 60.0,
         "SPEC.md 22.18: the Disk window's two header buttons fire on the"
         "RELEASE.",
@@ -299,7 +367,14 @@ SOAK = [
         "Does an fsx bracket take ONE display and dark the others? (SPEC.md"
         "39.18)",
         needs=("marty",), serial=True),
-    Row("hddcp", "soak", py("tests/hddcp.py"), 60.0,
+    Row("instdeep", "soak", py("tests/instdeep.py"), 240.0,
+        "SPEC.md 52.10.13: an install reproduces the source disk's WHOLE "
+        "tree - the empty SYSTEM/APPDATA and SYSTEM/DOS/OS88NET.COM included, "
+        "which one folder level could not reach. It ERASES the VHD.",
+        needs=("marty",), serial=True, timeout=1200),
+    Row("hddcp", "soak",
+        py("tests/hddcp.py", "build/os8088-360.img", "build/hddcp-out.bin"),
+        60.0,
         "The hard-disk driver's Control Panel page, and the two windows"
         "behind it.",
         needs=("marty",), serial=True),
@@ -311,6 +386,11 @@ SOAK = [
         "mkclick - generate CLICK.MOD, a metronome for judging A/V sync by"
         "eye and ear.",
         needs=(), serial=False),
+    Row("minesrc", "soak", py("tests/minesrc.py"), 180.0,
+        "SPEC.md 13.11's right button: it flags a Minesweeper cell, and it "
+        "does nothing on the strip, on an open cell or on a window that was "
+        "not already frontmost.",
+        needs=("qemu", "nasm"), serial=True, timeout=900),
     Row("mouseup", "soak", py("tests/mouseup.py"), 60.0,
         "SPEC.md 13.7's release, apps/os88ui.inc's arm, and MOUSEUP-PLAN"
         "4.2's guard.",
@@ -326,6 +406,18 @@ SOAK = [
         "Compact the heap out from under the RAM disk's store (SPEC.md"
         "66.5.10).",
         needs=("marty",), serial=True),
+    Row("modstr", "soak", py("tests/modstr.py"), 90.0,
+        "modstr - a module's own strings letter correctly (SPEC.md 2.8.6). "
+        "The bytes, out of fm_hdrbuf and toast_buf, because a string read "
+        "through DS instead of CS lands in kernel code and letters plausible "
+        "rubbish rather than faulting",
+        needs=("marty",), serial=True),
+    Row("diskclone", "soak", py("tests/diskclone.py"), 90.0,
+        "diskclone - Clone Disk... (SPEC.md 18.99/22.21) driven end to end, "
+        "with the assertion that cannot pass for the wrong reason: the two "
+        "floppies read back off the guest and diffed byte for byte. Cross "
+        "drive, same drive, the un-swapped-disk guard and Esc",
+        needs=("marty",), serial=True),
     Row("rdup", "soak", py("tests/rdup.py"), 60.0,
         "SPEC.md 62.9.11.3: the Ram Disk page acts on the RELEASE.",
         needs=("marty",), serial=True),
@@ -338,6 +430,10 @@ SOAK = [
         needs=("marty",), serial=True),
     Row("trackmove", "soak", py("tests/trackmove.py"), 60.0,
         "Compact the heap out from under a LOADED module (SPEC.md 66.5.2/45).",
+        needs=("marty",), serial=True),
+    Row("tpdraw", "soak", py("tests/tpdraw.py"), 300.0,
+        "Does TeXPad's INCREMENTAL source redraw draw what a full repaint"
+        "draws? (SPEC.md 69.8)",
         needs=("marty",), serial=True),
     Row("trkrate", "soak", py("tests/trkrate.py"), 60.0,
         "trkrate - XT mode's second rate, and the surface it refuses (SPEC.md"

@@ -208,13 +208,23 @@ def main():
         # - Back, Forward, Reload and the state - is above it. Clicking the old
         # row landed on Forward, so the bar never took focus and the URL was
         # typed into the page.
+        #
+        # AND THE BAR IS NOT EMPTY: it opens holding `http://` with the caret
+        # at the end (br_entry's os88line_set - the scheme is mandatory and
+        # the pre-fill is how the browser says so). A URL typed over that
+        # composes `http:/http://...`, which br_split reads as host `http` -
+        # this test shipped in the same round as the pre-fill and was never
+        # re-run against it. Click PAST the text (os88line_click clamps to
+        # the end), then backspace the pre-fill away - a backspace at the
+        # start of an empty field is a no-op the field owns, so overshooting
+        # is free.
         BR_LPAD, BR_TBH, BR_TBG, BR_LBAR = 3, 13, 1, 15
         bx0, by0, bww, bhh = dispcp.win_rect(m, S, bw)
-        mo.click(bx0 + 60,
+        mo.click(bx0 + bww - 40,
                  by0 + dispcp.TITLE_H + 1 + BR_LPAD + BR_TBH + BR_TBG
                  + BR_LBAR // 2)
         os88marty.settle(m)
-        m.type_text(url)
+        m.type_text("\b" * 12 + url)
         os88marty.settle(m)
         typed = field(b"http://127.0.0.1")
         say("location bar holds %r" % typed)

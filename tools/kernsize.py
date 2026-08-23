@@ -134,23 +134,32 @@ RESIDUAL = "kernel.asm"
 # exists entirely for file operations: it is a widget in the menu bar
 # (SPEC.md 12.8), and the theme is about where the code lives in the design.
 THEMES = (
+    # clone.inc (SPEC.md 18.99) is the file system's and not hardware's for
+    # fprog.inc's reason turned around: it drives int 13h directly and knows
+    # nothing about FAT, but what it IS to a reader is a File Manager command
+    # on a volume, which is where disk.inc and diskw.inc already live.
     ("the file system, end to end",
      ("disk.inc", "diskw.inc", "files.inc", "filecp.inc", "fdlg.inc",
-      "loader.inc", "assoc.inc")),
+      "loader.inc", "assoc.inc", "clone.inc")),
     ("the window system and its furniture",
      ("wm.inc", "ui.inc", "menu.inc", "instance.inc", "desk.inc", "dock.inc",
       "fsx.inc", "clip.inc", "fprog.inc", "toast.inc")),
     ("hardware: drivers, clock, mouse, sound, CPU, XMS",
-     ("mouse.inc", "clock.inc", "driver.inc", "snd.inc", "cpudet.inc",
-      "xmem.inc")),
+     ("mouse.inc", "clock.inc", "driver.inc", "snd.inc",
+      "cpudet.inc", "xmem.inc")),
     # blank.inc (SPEC.md 64) is here and not under hardware, although all it
     # does is write a video port: what it owns is whether the SIGNAL is on,
     # which is a property of the adapter the rest of this group programs.
     ("drawing: adapters, primitives, glyphs, icons",
      ("vga12.inc", "softgfx.inc", "font.inc", "icons.inc", "viddet.inc",
       "vidsel.inc", "splash.inc", "blank.inc")),
+    # bootprof.inc (SPEC.md 15.5) is here because what it measures is kmain's
+    # own phase sequence, which lives in kernel.asm - and because it is not in
+    # a shipped build at all (`make BOOTPROF=1`), so no other theme's figure
+    # should move when it is compiled in.
     ("the kernel proper: API table, heap, scheduler, events",
-     (RESIDUAL, "memory.inc", "sched.inc", "events.inc", "mod.inc")),
+     (RESIDUAL, "memory.inc", "sched.inc", "events.inc", "mod.inc",
+      "bootprof.inc")),
     ("the Control Panel", ("ctrl.inc",)),
     ("the three built-in kinds", ("apps.inc",)),
 )

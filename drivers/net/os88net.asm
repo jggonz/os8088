@@ -113,6 +113,8 @@ OSAPI_RAND      equ dos_rand
                                 ; SAME on both ends by construction
 PKGV_IDENT  equ 0               ; apps/os88api.inc's, which a .COM does not
                                 ; include - netpkg.inc names it
+%include "ethprof.inc"          ; ...which under ETH_NOEMIT emits NOTHING and
+                                ; only aliases the renamed bodies (72.15)
 %include "ethsock.inc"
 %include "ethusr.inc"
 %include "pktdrv.inc"           ; ...where ne2000.inc would be
@@ -339,6 +341,18 @@ net_bss_clear:
     xor ax, ax
     cld
     rep stosw
+    ; --- and POINT THE RING CODE AT THEM (SPEC.md 72.13) -------------------
+    ; tcp.inc walks the rings through [sk_seg]:[sk_base] now, because in the
+    ; OS they are a heap claim. Here they are plain bss in this .COM's own
+    ; segment, so this is where that indirection is told so - after the clear,
+    ; which would otherwise zero the very words that find them.
+    mov [sk_seg], ds
+    mov word [sk_base], sk_rxb
+    mov word [sk_rxcap], SK_RXMID
+    mov word [sk_txcap], SK_TXMID
+    mov word [sk_rxsh], SK_RXMIDSH
+    mov word [sk_txsh], SK_TXMIDSH
+    mov word [sk_txoff], NET_SOCKS * SK_RXMID
     pop es
     pop di
     pop cx
@@ -366,7 +380,12 @@ net_start:
     call puts
     call nw_up
     jc  .no
-    mov byte [lp_myver], NET_VER_SOCK
+    mov byte [lp_myver], NET_VER_ADDR   ; ...which IMPLIES NET_VER_SOCK: the
+                                        ; comparisons are `jb`, so a version
+                                        ; is a floor and not a set. A .COM
+                                        ; older than this one still says 2 and
+                                        ; os8088 refuses NETV_ADDR alone
+                                        ; (nwire.inc)
     mov si, s_nwok
     call puts
     mov si, eth_ip              ; ...and WHICH address, because a machine with
@@ -565,6 +584,8 @@ serve:
     je  .nwrecv
     cmp al, NW_CLOSE
     je  .nwclose
+    cmp al, NW_ADDR
+    je  .nwaddr
     jmp .cmd                    ; ...NEAR: the socket handlers below sit
                                 ; between here and the top of the loop
 
@@ -588,6 +609,9 @@ serve:
     jmp .cmd
 .nwclose:
     call nw_s_close
+    jmp .cmd
+.nwaddr:
+    call nw_s_addr
     jmp .cmd
 
 .fwrite:
@@ -4378,8 +4402,17 @@ dtabuf:     times 48 db 0       ; OUR DTA, and not DOS's at PSP:0080 - that is
     absolute $
 net_bss0:
 sk_tab:     resb NET_SOCKS * SK_SZ
-sk_rxb:     resb NET_SOCKS * SK_RXCAP
-sk_txb:     resb NET_SOCKS * SK_TXCAP
+; **THE PARTNER HAS NO CLAIM HEAP** (SPEC.md 72.13): it is a DOS .COM, so its
+; rings are ordinary bss at a fixed size and it points [sk_seg]/[sk_base] at
+; them itself. The machine has megabytes; THE SEGMENT DOES NOT: a .COM is one
+; 64KB segment holding code, bss and DOS's own stack at its top, and the top
+; rung beside pk_ring put net_bss1 at 0x103F7 - a kilobyte PAST the segment,
+; wrapping nw_buf over the PSP and net_bss_clear over the live stack. So the
+; partner takes the MIDDLE rung - the one tcp.inc's arithmetic calls the
+; sweet spot - and the %error below is what keeps this ceiling from being
+; discovered on a field machine again.
+sk_rxb:     resb NET_SOCKS * SK_RXMID
+sk_txb:     resb NET_SOCKS * SK_TXMID
 eth_rxh:    resb 4
 eth_rxb:    resb NE_FRAME + 4
 eth_txb:    resb NE_FRAME + 4
@@ -4390,4 +4423,7 @@ net_bss1:
 os88net_tail:
 %if os88net_tail > net_bss0
   %error "os88net: something is emitted AFTER the absolute block - it and the reserved buffers overlap, and net_bss_clear will zero it"
+%endif
+%if (net_bss1 - $$) + 0x100 > 0xF000
+  %error "os88net: bss runs past 0xF000 - a .COM is ONE 64KB segment and DOS's stack lives at its top, so this ceiling is the difference between a ring buffer and net_bss_clear zeroing the return address it is using"
 %endif

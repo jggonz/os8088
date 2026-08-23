@@ -382,8 +382,12 @@ dskw_rename_x:
 ;      16 bits at the SPEC.md 18.2-legal spc = 128); CF=1, AX = FERR_*
 ; clobbers: AX/BX/DX (the outputs), CF
 ;
-; Answered entirely from the resident FAT snapshot - no disk I/O, so a
-; package may call it as freely as it likes.
+; Answered entirely from the resident FAT snapshot - NO DISK I/O, WHICH IS NOT
+; THE SAME AS CHEAP. dsk_free_clus_x counts every entry in that snapshot, so
+; this is O(clusters) of CPU: ~105ms a call on a 20MB hard disk on the field's
+; 4.77MHz 8088, measured (SPEC.md 18.4.5). The sentence that used to be here -
+; "so a package may call it as freely as it likes" - is what apps/ftpd read
+; before asking it once per chunk and spending 44% of an upload in it.
 ; -----------------------------------------------------------------------------
 dskw_dfree_x:
     push cx
@@ -3823,7 +3827,11 @@ FME_PROBE   equ 0
 FME_FORMAT  equ 1
 FME_REACH   equ 2
 FME_ROW     equ 3
-FM_NENT     equ 4
+FME_LINE    equ 4               ; the status line's own composer (SPEC.md
+                                ; 2.8.6): every string the confirmation, the
+                                ; swap prompt and the two verdicts letter is
+                                ; in THIS FILE now, read through CS
+FM_NENT     equ 5
 FMFP        equ mod_fp + MOD_FMT * MODFP_STRIDE
 
 section .modf                   ; the on-demand image (SPEC.md 2.8)
@@ -3839,6 +3847,7 @@ modf_hdr:
     dw modf_e_format            ; is reached by `call far`, so it has to end
     dw modf_e_reach             ; in a retf, and every body below keeps the
     dw modf_e_row               ; near `ret` cold code has always had
+    dw modf_e_line
     times MOD_NENT - FM_NENT dw 0
 
 modf_e_probe:   call dskw_fmt_probe_x
@@ -3848,6 +3857,8 @@ modf_e_format:  call dskw_format_x
 modf_e_reach:   call dskw_fmt_reach_x
             retf
 modf_e_row:     call dskw_fmt_row_x
+            retf
+modf_e_line:    call dskw_fmt_line_x
             retf
 
 ; -----------------------------------------------------------------------------
@@ -3912,6 +3923,189 @@ dskw_fmt_row_x:
     mov si, dskw_fmt_tab
     add si, ax
     pop dx
+    pop ax
+    ret
+
+; =============================================================================
+; The formatter's own STRINGS and the composer that letters them (SPEC.md
+; 2.8.6). None of this is in KERNEL.SYS.
+;
+; Every line below goes on screen only while a format confirmation or its swap
+; prompt is up, and both are armed after `mod_need` succeeds and taken down by
+; the `fm_edit_end` that drops this image - so there is no moment at which one
+; is on screen and the image is not. That is the ordering §2.8.6 asks for, and
+; here it holds by construction rather than by care.
+;
+; Three of the formatter's strings STAYED in `files.inc`, and each is one of
+; §2.8.6's three shapes: the menu item (the bar is built by the press that
+; leads to loading), the swap prompt's step 0 and its key line (that prompt
+; exists BECAUSE this file could not be read), and the `Format needs disk A:`
+; toast beside it.
+; =============================================================================
+dskf_s_pr2:  db 'ERASE and format ', 0  ; ...when the volume MOUNTED, which is
+                                ; the whole of what removing §22.12's old
+                                ; refusal costs: the disk has files on it and
+                                ; the question has to say so
+dskf_s_pr:   db 'Format ', 0    ; TWO lines (SPEC.md 22.12): 'Format A: as
+dskf_s_as:   db ': as ', 0      ; 720K?' in the row above, the answers on the
+dskf_s_q:    db 'K?', 0         ; status line itself - as one line it is 44
+                                ; characters and fm_stat_line truncates at
+                                ; ([fm_cw]-12)/8 = 38 on the 320px template,
+                                ; losing 'Esc=no'
+dskf_s_k:    db 'Enter=yes  Esc=no', 0
+dskf_s_k2:   db 'Spc=size  Enter=yes  Esc=no', 0  ; ...when there IS another
+                                ; size to offer (rows 2 and 3 alone)
+dskf_s_swap: db 'Insert the disk to format, then Enter', 0   ; mode 6 step 1,
+                                ; which runs AFTER this image is loaded
+dskf_s_ok:   db 'Formatted ', 0 ; ...and the verdict, SPEC.md 59.6's own
+                                ; reasoning: a format is seconds of floppy the
+                                ; user waited for, so success speaks rather
+                                ; than only failure
+dskf_s_bad:  db 'Made 360K, not 720K', 0    ; the OUTCOME, where this said the
+                                ; cause first and the outcome last and had 40
+                                ; characters to do it in. What the user has to
+                                ; know is which disk they are now holding
+                                ; (SPEC.md 59.8)
+dskf_s_col:  db ':', 0
+
+; -----------------------------------------------------------------------------
+; dskw_fmt_cat - fm_scat over THIS IMAGE's strings (SPEC.md 2.8.6)
+; in:  SI = a NUL string in this segment, DI = where it goes in KERNEL_SEG
+; out: DI -> the terminator's place; SI past the NUL
+; clobbers: AL, SI, DI, flags
+;
+; `[cs:si]`, and clone.inc's `clo_cat` is the same eleven bytes for the same
+; reason - duplicated rather than shared because the two live in different
+; images and a far call between two on-demand modules is a thing this
+; mechanism deliberately cannot do (only one of them need be loaded).
+; -----------------------------------------------------------------------------
+dskw_fmt_cat:
+    mov al, [cs:si]
+    inc si
+    mov [di], al
+    or al, al
+    jz .done
+    inc di
+    jmp short dskw_fmt_cat
+.done:
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_fmt_sizeable - may this volume's size be overruled? (SPEC.md 18.96.2)
+; in:  AL = the volume, [fm_fmtrow] live
+; out: CF=0 = there is another size to offer; CF=1 = there is not
+; clobbers: flags
+;
+; files.inc's `fm_fmt_sizeable` verbatim, in the image, because the LINE that
+; names the Space key and the KEY that acts on it must not disagree and only
+; one of them is resident now. Five instructions; a far entry for them would
+; be a resident byte per instruction saved.
+; -----------------------------------------------------------------------------
+dskw_fmt_sizeable:
+    cmp byte [fm_fmtrow], 2     ; the 9-sector pair, and only it
+    jb .no
+    push bx
+    mov bl, al
+    call COLD_SEG:dskf_dsk_vol_row
+    jc .nopop
+    cmp byte [bx+DV_UNIT], 2    ; ...on an EXTERNAL drive, and only there
+    jb .nopop
+    pop bx
+    clc
+    ret
+.nopop:
+    pop bx
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_fmt_line_x - stage one of the formatter's lines (SPEC.md 2.8.6)
+; in:  AL = which, AH = the volume (selector 2 alone), DI = the destination in
+;      KERNEL_SEG; [fm_fmtrow], [fm_ldrv] and [fm_lmok] published by the
+;      caller's own paint for the two that are PROMPTS
+; out: DI -> the NUL it wrote
+; clobbers: DI (the output), flags
+;
+;   0  the confirmation's row line   'ERASE and format A: as 720K?'
+;   1  the confirmation's key line   'Enter=yes  Esc=no' / with 'Spc=size'
+;   2  the success verdict           'Formatted B:'
+;   3  mode 6 step 1's row line      'Insert the disk to format, then Enter'
+;   4  the fell-back verdict         'Made 360K, not 720K'
+;
+; 2 and 4 are TOASTS rather than prompt lines, and they are here for §2.8.6's
+; own reason: `fm_edit_commit` composes them before its `fm_edit_end`, so the
+; image is still loaded, and `toast_show` copies the buffer - so the message
+; outlives the module without the module's bytes outliving it.
+; -----------------------------------------------------------------------------
+dskw_fmt_line_x:
+    push ax
+    push bx
+    push cx
+    push si
+    mov bl, ah                  ; the VERDICT's volume comes from the caller
+                                ; and not from [fm_ldrv]: that word is a
+                                ; PAINT's snapshot, and a verdict is composed
+                                ; on a keystroke, after which any window may
+                                ; have painted (SPEC.md 22.9)
+    cmp al, 1
+    je .keys
+    cmp al, 2
+    je .ok
+    cmp al, 3
+    je .swap
+    cmp al, 4
+    je .fell
+
+    mov si, dskf_s_pr           ; the confirmation. The SIZE is the point of
+    cmp byte [fm_lmok], 0       ; naming it: dskw_fmt_probe cannot always tell
+    je .pr                      ; 360K media from 720K in a 1.2MB drive, and
+    mov si, dskf_s_pr2          ; this line is the one place the user can
+.pr:                            ; catch that before it costs them anything
+    call dskw_fmt_cat
+    mov al, [fm_ldrv]
+    add al, 'A'
+    mov [di], al
+    inc di
+    mov si, dskf_s_as
+    call dskw_fmt_cat
+    mov al, [fm_fmtrow]
+    call dskw_fmt_row_x         ; SI = the row it is about to write
+    mov ax, [si+DFMT_KB]
+    call COLD_SEG:fmf_fm_utoa   ; the one thing this image does NOT carry: a
+                                ; decimal formatter is real code and a second
+                                ; copy of it is a second thing to be wrong
+    mov si, dskf_s_q
+    jmp short .tail
+.keys:
+    mov si, dskf_s_k
+    push ax
+    mov al, [fm_ldrv]
+    call dskw_fmt_sizeable      ; ...and the key is named only where it does
+    pop ax                      ; something (SPEC.md 18.96.2/47)
+    jc .tail
+    mov si, dskf_s_k2
+    jmp short .tail
+.ok:
+    mov si, dskf_s_ok
+    call dskw_fmt_cat
+    mov al, bl
+    add al, 'A'
+    mov [di], al
+    inc di
+    mov si, dskf_s_col
+    jmp short .tail
+.fell:
+    mov si, dskf_s_bad
+    jmp short .tail
+.swap:
+    mov si, dskf_s_swap
+.tail:
+    call dskw_fmt_cat
+    mov byte [di], 0
+    pop si
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -4640,7 +4834,26 @@ dskw_fmt_row:
     ret                         ; image went away letters a number instead of
                                 ; reading a garbage pointer. It cannot happen -
                                 ; see the note above - and this is what makes
-                                ; that a fact rather than a claim
+                                ; that a fact
+
+; dskw_fmt_line - the formatter's own status line (SPEC.md 2.8.6)
+;
+; dskw_fmt_row's twin in every respect, including the one that matters: it is
+; called from the STATUS LINE's composer, once per repaint while a format
+; prompt is up, and the prompt can only have been armed by a probe that
+; already loaded the image. Its refusal writes an empty string, so a line
+; composed after the image somehow went away is BLANK rather than rubbish.
+dskw_fmt_line:
+    push ax
+    mov al, MOD_FMT
+    call mod_need
+    pop ax
+    jc .l_no
+    call far [FMFP + FME_LINE*4]
+    ret
+.l_no:
+    mov byte [di], 0
+    ret
 
 ; fm_fmt_drop - the formatter is finished with (SPEC.md 2.8.3)
 ;
@@ -4760,6 +4973,15 @@ dwf_dskw_read_at:       call dskw_read_at_x
 dwf_dskw_append:        call dskw_append_x
                     retf
 dwf_dskw_append_sys:    call dskw_append_sys_x
+                    retf
+; THE AL DISPATCH IS HERE, in the COLD far entry, and not in a second resident
+; thunk: both bodies are already cold, so branching here costs one far entry
+; and one `.text` thunk instead of two of each (SPEC.md 18.6).
+dwf_dskw_rmany:         or  al, al
+                    jz  .empty
+                    call dskw_rmtree
+                    retf
+.empty:             call dskw_rmdir
                     retf
 
 section .text

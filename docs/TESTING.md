@@ -29,9 +29,28 @@ argue yourself into:
    IRQ4 card, and a modem chattering on the other port (`MOUSEPORT=com2`,
    `com2irq4`, a socket chardev). MartyPC can put its mouse on either port,
    but the cross-wired and modem cases are not built.
+4. **The PS/2 mouse** (SPEC.md §9.9). MartyPC is an 8088 and an IBM PC/XT has
+   an 8255 PPI, not an 8042 with an auxiliary port, so the backend cannot be
+   hosted on it at all — `mou_p2_init` there reads `[cpu_tier]`, finds
+   `CPU_8086` and returns having done nothing, which is correct behaviour and
+   is not a test of anything. `make test MOUSEPORT=ps2` is the harness (see
+   the recipe below): no serial ports at all, relative motion over QMP
+   `input-send-event` (`{"type":"rel",...}`, **not** the absolute events
+   `tools/mouse.py` sends to the serial mouse). 86Box's `286`/`386`/`486`
+   can host it too and has no automation socket, so QEMU is the one that can
+   read a result back.
+5. **The Ethernet card and the TCP/IP stack** (SPEC.md §72). MartyPC has no
+   NIC of **any** kind, so `ETHER.DRV` cannot be hosted on it at all — the
+   only harness there is is QEMU's `ne2k_isa` on `-netdev user`
+   (`make ethertest`, `tests/ethernet.py`). This entry was added by following
+   the instruction below: the matrix's own `ethernet` row already said the
+   gate "is on the short list beside the 286/386 targets and §52.1's IDE rung
+   1", and the list had three items. **Every assertion over that transport is
+   about behaviour and none about speed**, because the machine under it is
+   not an 8088.
 
 That is the list. **"It is quicker to type" is not on it, and neither is
-"I already know the QMP commands."** If you find a fourth entry, add it here
+"I already know the QMP commands."** If you find a fifth entry, add it here
 rather than treating the rule as advisory.
 
 That ordering is a **reversal**, and it is written down because the old one
@@ -48,8 +67,8 @@ A tool that is wrong in the flattering direction does not announce itself.
 | reach for | when | why |
 |---|---|---|
 | **MartyPC** | **the default** — any 8088 machine, any of the three adapters, and any question of the form *what is the machine doing* | cycle-accurate CPU, a real BIOS ROM, real CGA/Hercules/VGA cards, and a debugger that perturbs nothing |
-| **QEMU** | the three-item fallback list above, and nothing else | on an 8088, MartyPC covers all three adapters, input, screenshots and sound. QMP and `tools/mouse.py` remain the harness for what is genuinely left |
-| **86Box** | a machine that is **not an 8088** (the 286 and 386 targets), real sound cards on a period bus, a second opinion on the video probe | period-correct whole machines, and the widest hardware library |
+| **QEMU** | the five-item fallback list above, and nothing else | on an 8088, MartyPC covers all three adapters, input, screenshots and sound. QMP and `tools/mouse.py` remain the harness for what is genuinely left |
+| **86Box** | a machine that is **not an 8088** (the 286 and 386 targets), real sound cards on a period bus, a second opinion on the video probe — **and only where a person is watching**: no debugger and no automation socket, so a session can start one and cannot read the result. Do not plan a scripted check around it | period-correct whole machines, and the widest hardware library |
 | **the 5150** | anything with a **disk** in it, and the three defects no emulator shows | docs/FIELD-MACHINES.md |
 
 ## The one rule that outranks the table: a disk number lands on the 5150
@@ -1345,6 +1364,30 @@ make test                            TESTAPPS=build/bench.img
 make test VIDEO=cga                  TESTAPPS=build/bench.img
 make test VIDEO=herc HERCSEG=0x7000  TESTAPPS=build/bench.img
 ```
+
+`netbench` is the fifth and it is a different animal: it measures **nothing
+itself**. ETHER.DRV brackets its own ten stages with the PIT (SPEC.md §72.15)
+because that is the only place the stages exist, and `netbench` is the window
+that starts the profiler, stops it and renders the block. It rides its own
+disk **with the FTP server**, because the two are used together — and the
+whole exercise is a real transfer from a real client, which is the only way to
+get a receive path to run at all.
+
+```sh
+make netbench                      # NETBENCH.O88 beside FTPD.O88, 3 geometries
+make test TESTAPPS=build/netbench.img
+```
+
+Open both windows, press **S** (start, and zero), do the transfer, press **X**
+(stop) then **R** (read). **W** writes `NETBENCH.TXT`. `wall clock` minus
+`NOT in the driver` is the headline: if most of a transfer was never inside
+ETHER.DRV then nothing in the stage table can move it.
+
+**This one has no MartyPC column and never will** — MartyPC has no network
+card of any kind, so it cannot host the driver under test. Under QEMU the
+`calls` and `KB` columns are exact and the `ms` column is the host's speed
+(PERFORMANCE.md Part 4); `build/netbench360.img` on 86Box or a real 5150 is
+where the milliseconds mean milliseconds.
 
 ### A benchmark that is meant for the FIELD is ONE BOOTABLE DISK
 

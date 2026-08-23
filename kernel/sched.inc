@@ -43,7 +43,7 @@
 ; =============================================================================
 
 ; --- task table (SPEC.md 8) --------------------------------------------------
-MAX_TASKS   equ 12              ; mirrored in apps/os88api.inc, which sizes
+MAX_TASKS   equ 8               ; mirrored in apps/os88api.inc, which sizes
                                 ; every package's snapshot buffer from it
                                 ; (SPEC.md 20.9) - change them together and
                                 ; rebuild every .o88
@@ -63,7 +63,7 @@ TF_SERVICE  equ 1               ; survives the fullscreen-exclusive freeze:
                                 ; would starve a Sound Blaster stream mid-
                                 ; game (SPEC.md 53.2)
 
-SCH_STACK   equ 256             ; per-task stack bytes. It was 1,536 when the
+SCH_STACK   equ 384             ; per-task stack bytes. It was 1,536 when the
                                 ; stacks were the only thing in .lowbss, then
                                 ; 512. A 0xCC fill probe under the heaviest
                                 ; load the machine can carry - Timer, two
@@ -78,13 +78,22 @@ SCH_STACK   equ 256             ; per-task stack bytes. It was 1,536 when the
                                 ; SCH_MAGIC below makes an overrun a CAUGHT
                                 ; failure instead of a silent one.
                                 ;
-                                ; It must stay a power of two: sch_switch
-                                ; turns the slot index into the slice's base
-                                ; with a byte swap rather than a multiply,
-                                ; which is what makes the canary check nearly
-                                ; free on the switch path
-%if SCH_STACK != 256
-  %error "sch_switch's canary check assumes SCH_STACK = 256 (a byte swap)"
+                                ; **IT IS A CONSTANT AND A REBUILD.** It used
+                                ; to have to be 256 exactly, because
+                                ; sch_switch turned the slot index into the
+                                ; slice's base with a byte swap; that path is
+                                ; still there for 256 and there is a general
+                                ; one beside it for any multiple of 128, so
+                                ; changing this and MAX_TASKS is the whole of
+                                ; the change (docs/KERNEL-MEMORY.md, "Task
+                                ; stacks"). apps/taskmgr's bss map used to be
+                                ; hand-chained literals and was the other half
+                                ; of why nobody could; it derives now
+%if (SCH_STACK % 128) != 0
+  %error "SCH_STACK must be a multiple of 128 - sch_switch's canary base below"
+%endif
+%if (MAX_TASKS - 1) * SCH_STACK > 65535
+  %error "the task slices no longer fit one segment"
 %endif
 SCH_MAGIC   equ 0x5A57          ; the word at the BOTTOM of every slice. A
                                 ; stack that reaches it has overrun, and the
@@ -405,6 +414,37 @@ task_spawn:
     mov di, ax                  ; SCH_STACK below
     mov ax, LOW_SEG
     mov es, ax
+    ; --- THE 0xCC FILL, and it is NOT a debug build's (SPEC.md 8.3) --------
+    ; Every byte of the slice, so the deepest one anything ever touched can be
+    ; read back out of LOW_SEG. The canary and the frame are written OVER this,
+    ; below and above it, so nothing here has to know where either ends up.
+    ;
+    ; **UNCONDITIONAL, and that is the point.** It was `%ifdef KFZTRACE`, which
+    ; meant the only kernel whose margin could be measured was one nobody runs -
+    ; and the margin is the thing this project has just spent a week being
+    ; wrong about (docs/FIELD-NOTES.md 29.6). It costs ONE `rep stosb` of
+    ; SCH_STACK bytes per SPAWN - a few hundred microseconds, once, against a
+    ; launch that has already been through int 13h - and it turns
+    ; tests/stackprobe from a probe of its own slice into one that can read
+    ; EVERY task's high water on the shipping kernel, on the real machine,
+    ; while the thing under suspicion is running.
+    push cx                     ; CX is the slot index and is still needed
+    push di
+    push ax
+%if SCH_STACK % 2
+  %error "the word fill below wants an even SCH_STACK"
+%endif
+    mov cx, SCH_STACK / 2
+    mov ax, 0xCCCC
+    cld
+    rep stosw                   ; ES:DI = the slice base, upwards - words,
+                                ; 12.5 clocks a byte against stosb's 17, and
+                                ; this whole fill runs inside the spawn's cli
+                                ; (the base is even: sch_stacks is aligned
+                                ; and slices are multiples of 128)
+    pop ax
+    pop di
+    pop cx
     mov word [es:di], SCH_MAGIC
     pop ax
     sub ax, SCH_FRAME           ; carve the fake frame at the very top
@@ -860,6 +900,23 @@ khb_flg:    db 0                ; that stops moving, and IRQ0 is the only thing
                                 ; running with interrupts off. The fourth, a
                                 ; reprogrammed PIT, is what a beat that stops
                                 ; while these three read normal would leave.
+khb_deep:   db 0                ; --- THE DEEPEST A BACKGROUND TASK HAS BEEN,
+khb_dcur:   db 0                ; and WHERE. tools/stkwater.py's 0xCC fill says
+khb_dcsh:   db 0                ; how deep the slice went; it cannot say what
+khb_diph:   db 0                ; was running, and the two answers turned out
+khb_dipl:   db 0                ; to disagree: cutting 32 bytes off the
+                                ; driver's STATIC worst chain moved the
+                                ; measured high water by six, because the
+                                ; runtime path is not the static one (an ARP
+                                ; cache that hits, a DHCP timer that does
+                                ; nothing). This is one byte of depth and the
+                                ; interrupted CS:IP at the moment it was
+                                ; reached, sampled every tick - so the next cut
+                                ; is aimed at the chain the machine is actually
+                                ; in. Depth, not SP: slices are 256-aligned, so
+                                ; `neg` of SP's low byte IS how far down the
+                                ; slice it is, and the answer compares across
+                                ; slots
 khb_wide:   db 0x00, 0x0F, 0xF0, 0xFF   ; two bits -> four pixels each
 khb_stuck:  dw 0                ; consecutive ticks with NO ui_task pass
 khb_uipass: dw 0                ; bumped once per ui_task loop
@@ -909,12 +966,38 @@ khb_hex:
 khb_srcs:   dw khb_beat, khb_chain, khb_kfz, sch_cur, sch_lock, gfx_lock_flag
             dw gfx_lock_own, khb_sph, khb_spl, khb_bad, khb_csh, khb_iph
             dw khb_ipl, khb_imr, khb_pisr, 0
-                                ; FIFTEEN cells is 75 of a CGA row's 80 bytes.
+khb_srcend:                     ; FIFTEEN cells is 75 of a CGA row's 80 bytes.
                                 ; khb_flg is deliberately NOT here: IRQ0 is
                                 ; delivered only with IF set, so the one bit
                                 ; anybody would read it for is a CONSTANT in
                                 ; this context. It stays in the text report,
                                 ; where the width costs nothing, for DF and OF
+KHB_CELLS   equ ((khb_srcend - khb_srcs) / 2) - 1   ; derived off the table, so
+KHB_ROWB    equ ((KHB_CELLS * 5) + 1) & ~1          ; a cell added above cannot
+                                ; leave the row behind it: five bytes a cell,
+                                ; rounded UP to a word because the blit moves
+                                ; words, and the odd byte it rounds through is
+                                ; the trailing gap nobody reads
+%if KHB_ROWB > 80               ; a CGA row is 80 bytes, a Hercules row 90, and
+  %error "the heartbeat strip no longer fits a CGA row"
+%endif
+khb_row:    times KHB_ROWB db 0xFF   ; THE STRIP, COMPOSED HERE AND NOT ON THE
+                                ; SCREEN. Four bytes per value are decoded once
+                                ; into this row and the row is then blitted into
+                                ; each of the four banks - 60 nibble decodes and
+                                ; four rep movsw, against 240 decodes written
+                                ; straight at the framebuffer. THAT COST THE
+                                ; MACHINE ITS MOUSE: the old loop was ~10ms per
+                                ; call on a 4.77MHz 8088 and it is called TWICE
+                                ; a tick with IF=0, while a 1200-baud mouse byte
+                                ; lands in the 8250's ONE-byte buffer every
+                                ; 7.5ms - so every packet lost bytes, every run
+                                ; broke on the resync rule (SPEC.md 9.5), and
+                                ; the field reported no mouse at all. The blank
+                                ; byte between values is never written, so the
+                                ; 0xFF it is born with is what shows: WHITE, and
+                                ; guaranteed white rather than whatever the menu
+                                ; bar had there
 
 ; -----------------------------------------------------------------------------
 ; khb_paint - the strip (KFZ only). Preserves every register and the flags.
@@ -948,42 +1031,45 @@ khb_paint:
                                 ; publishes it - so an unguarded paint lands at
                                 ; segment 0, which is the INTERRUPT VECTOR TABLE
     mov es, bx
-    xor dx, dx
-.bank:
+    cld                         ; the blit below is a string op in an ISR
+
+    ; --- decode the fifteen values ONCE, into khb_row (SPEC.md 9.6.5) --------
+    ; Sixty nibbles, not two hundred and forty. DS is KERNEL_SEG here, so the
+    ; row is plain [di]; the framebuffer is not touched until the blit.
     mov si, khb_srcs
-    mov di, dx
-    add di, KHB_X
+    mov di, khb_row
+    mov cl, 2                   ; the rotate count, set ONCE - the old loop
+                                ; spent a push/pop pair per shift for it
 .cell:
     mov bx, [cs:si]
     or bx, bx
-    jz .next                    ; 0 ends the table
+    jz .blit                    ; 0 ends the table
     inc si
     inc si
-    mov al, [cs:bx]
-    mov cx, 4                   ; four bytes per value, two bits each
+    mov ah, [cs:bx]             ; the value, rotated two bits at a time...
+    xor bh, bh                  ; ...and BH is 0 from here on: BL is the only
+    mov ch, 4                   ; half khb_wide is ever indexed by
 .nib:
-    mov ah, al
-    push cx
-    mov cl, 6
-    shr ah, cl
-    pop cx
-    and ah, 3
-    push bx
+    rol ah, cl                  ; the next two bits, high pair first, into 1:0 -
+                                ; four of these put AH back as it started
     mov bl, ah
-    xor bh, bh
-    mov ah, [cs:khb_wide+bx]
-    pop bx
-    not ah                      ; a set bit is black on the white bar
-    mov [es:di], ah
+    and bl, 3
+    mov al, [cs:khb_wide+bx]
+    not al                      ; a set bit is black on the white bar
+    mov [di], al
     inc di
-    push cx
-    mov cl, 2
-    shl al, cl
-    pop cx
-    loop .nib
-    inc di                      ; one blank byte between values
-    jmp short .cell
-.next:
+    dec ch
+    jnz .nib
+    inc di                      ; one blank byte between values, left at the
+    jmp short .cell             ; 0xFF khb_row is born with
+.blit:
+    xor dx, dx
+.bank:
+    mov si, khb_row
+    mov di, dx
+    add di, KHB_X
+    mov cx, KHB_ROWB / 2
+    rep movsw                   ; DS:SI = the row, ES:DI = the bank
     add dx, 0x2000
     cmp dx, 0x8000
     jb .bank
@@ -1067,6 +1153,31 @@ sch_isr:
     mov ax, sp                  ; the depth of the stack we interrupted; the
     mov [cs:khb_spl], al        ; frames above it are a constant
     mov [cs:khb_sph], ah
+    ; --- ...and the DEEPEST it has ever been, with the code that took it there
+    cmp byte [sch_cur], 0       ; task 0's stack is not a slice of sch_stacks
+    je .khbnodeep               ; and its SP means something else entirely
+    push bx                     ; the old `neg al` depth assumed 256-byte
+    push dx                     ; 256-ALIGNED slices; SCH_STACK is 384 now, so
+    mov al, [sch_cur]           ; odd slots sit at 128 mod 256 and the byte it
+    xor ah, ah                  ; produced was garbage on the instrument that
+    mov bx, SCH_STACK           ; aims the next stack cut. The slice TOP is
+    mul bx                      ; sch_stacks + cur*SCH_STACK (slot n's base is
+    add ax, sch_stacks          ; (n-1)*SCH_STACK), and depth = top - SP -
+    sub ax, sp                  ; stored HALVED, so one byte holds 0..384 and
+    shr ax, 1                   ; tools/stkwater.py doubles it back
+    pop dx
+    pop bx
+    cmp al, [cs:khb_deep]
+    jbe .khbnodeep
+    mov [cs:khb_deep], al
+    mov al, [sch_cur]
+    mov [cs:khb_dcur], al
+    mov ax, [ss:bx+KHB_IPOFF]   ; BX is still SP from the IP read above
+    mov [cs:khb_dipl], al
+    mov [cs:khb_diph], ah
+    mov ax, [ss:bx+KHB_IPOFF+2]
+    mov [cs:khb_dcsh], ah
+.khbnodeep:
     mov al, 0
     cmp word [ss:STK0_BOT], SCH_MAGIC
     je .khbcan
@@ -1304,15 +1415,31 @@ sch_switch:
     ; the switch path. Task 0 owns no slice of sch_stacks and is skipped. SS
     ; is LOW_SEG, so the read needs no segment set-up. sch_stacks is NOT at
     ; .lowbss offset 0 (font's glyph block precedes it); the math here is
-    ; symbol-relative and does not care, but the alignb at the declaration
-    ; keeps the slices 256-ALIGNED, which SP-only arithmetic (tests/
-    ; stackprobe) does depend on.
+    ; symbol-relative and does not care. The alignb at the declaration
+    ; aligns only the BLOCK: with SCH_STACK = 384 the individual slices are
+    ; 128-aligned, and nothing may derive a slice base from SP's low bits
+    ; alone - the khb deep sampler and tests/stackprobe both did, and both
+    ; read garbage until they derived from sch_stacks + slot * SCH_STACK.
     mov bl, [sch_cur]
     or bl, bl
     jz .nocanary                ; task 0: its stack is above .lowbss, not in it
     dec bl
-    mov bh, bl                  ; BX = (cur-1) * 256
-    xor bl, bl
+%if SCH_STACK == 256
+    mov bh, bl                  ; BX = (cur-1) * 256: the slot index in the HIGH
+    xor bl, bl                  ; byte and nothing else. Two instructions - and
+                                ; NOT the shipping configuration since the
+                                ; 8 x 384 move: the %else below is what ships
+%else
+    xor bh, bh                  ; ...and for any OTHER slice size, one 8-bit
+    mov ax, bx                  ; multiply: SCH_STACK is a multiple of 128 by
+    mov ah, SCH_STACK / 128     ; the guard above, so (cur-1) * (SCH_STACK/128)
+    mul ah                      ; shifted left 7 is the base. AX and CX are both
+    mov cl, 7                   ; free here - the outgoing task's copies are on
+    shl ax, cl                  ; the stack sch_resume pops from - and ~75
+    mov bx, ax                  ; clocks at 18.2 switches a second is 0.03% of
+%endif                          ; the machine. SCH_STACK is a CONSTANT AND A
+                                ; REBUILD now, which is what a change to it has
+                                ; to be if it is ever going to be taken
     cmp word [ss:bx+sch_stacks], SCH_MAGIC
     jne sch_stkdie
 .nocanary:
@@ -1405,10 +1532,17 @@ sch_stkdie:
     mov cx, 8                   ; a 64px black bar: THE CANARY DIED
     xor al, al
     rep stosb
-    inc di                      ; ...one white cell, then WHICH TASK overran
-    mov al, [sch_cur]
-    not al
-    mov [es:di], al
+    inc di                      ; ...and one white cell. WHICH TASK is NOT
+                                ; painted here: it is cell 3 of the strip
+                                ; (sch_cur), the bar lands nowhere near it, and
+                                ; nothing has switched between the last
+                                ; heartbeat and this halt - so a second copy
+                                ; would be a second thing to keep in step. The
+                                ; first version put it in ONE framebuffer byte,
+                                ; one pixel a bit, which is exactly the width
+                                ; the heartbeat spends four pixels to avoid:
+                                ; tools/kfzread.py read that pixel as 0 and as 1
+                                ; depending on where the threshold fell
     add dx, 0x2000
     cmp dx, 0x8000
     jb .skbank
@@ -1438,7 +1572,7 @@ resb (256 - (($-$$) % 256)) % 256       ; keep every slice on a 256-byte
                                         ; today: font's 768-byte block
                                         ; precedes this one and 768 is
                                         ; already a multiple
-sch_stacks: resb (MAX_TASKS-1) * SCH_STACK ; slots 1..11 only: slot n's stack
+sch_stacks: resb (MAX_TASKS-1) * SCH_STACK ; slots 1..MAX_TASKS-1: slot n's stack
                                         ; top at n*SCH_STACK relative to
                                         ; sch_stacks, which is NOT offset 0
                                         ; of .lowbss (font_glyphs precedes

@@ -24,6 +24,8 @@ comes up on B:\\MEDIA with the GIF the only thing in it - SPEC.md 38.10's
 default, and it removes every navigation click from the measurement.
 """
 import argparse
+import os
+import subprocess
 import sys
 import time
 
@@ -49,6 +51,14 @@ def main():
                     help="extend the desktop onto the second display first - "
                          "the field says the slowdown needs this")
     a = ap.parse_args()
+
+    # The docstring's recipe, RUN rather than transcribed: a registered row
+    # that only passes after a human builds its disk by hand is a row that
+    # fails for a reason the summary line cannot name.
+    if a.apps == "/tmp/paintbench.img" and not os.path.exists(a.apps):
+        subprocess.check_call(
+            [sys.executable, "tools/os88disk.py", "-o", a.apps, "--size",
+             "360", "APPS:build/paint.o88", "MEDIA:build/OS8088.GIF"])
 
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
                           boot=False) as m:

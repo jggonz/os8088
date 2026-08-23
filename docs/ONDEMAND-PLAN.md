@@ -800,3 +800,82 @@ not a regression; CGA, Hercules and `kern_small` are each driven end to end.
 And the swap prompt's *first* step — the one a one-floppy machine hits — is
 built and reasoned about but has only been exercised on the path where
 `mod_need` succeeds; the machine that needs it is the field machine.
+
+## 13. The third module: the disk cloner (SPEC.md 18.99)
+
+Written after the fact, like §12, because the mechanism this plan built turned
+out to have one more obvious tenant.
+
+**It passes §1 the way Format does, with one more term.** Preparing a disk has
+a trip to the disk box in it; *cloning* one has two, because a one-drive
+machine has to be handed the source and then the target. So the load is not an
+interruption of the task — the task is already a sequence of disk swaps, and
+`CLONE.DRV` costs one more.
+
+**It is the first tenant that pays the resident cost this plan predicted, and
+the first to route around it.** §5 records that a module's *data* stays
+resident: cold code carries none and reads through `DS = KERNEL_SEG`, so
+`dskw_fmt_tab` is in `.text` even though every instruction that reads it left.
+The cloner has about thirty words of state and a 512-byte keep of the source's
+boot sector, and it pays for none of them — they live in the head of the heap
+claim it takes for the buffer (SPEC.md 18.99.1), so `[clo_seg]` is the whole
+resident footprint of the operation and a machine that has never cloned a disk
+carries two bytes. **That is the shape to copy**: a module whose feature has a
+natural allocation should keep its state inside it.
+
+The status line's own composer went into the image for the same reason. It is
+*code* — the strings it stages are data and stay behind — and a clone prompt
+can only ever be on screen while the image is loaded, which is what makes the
+far call safe rather than clever.
+
+**One entry, not four.** §5's `mod_fp` is a far pointer per entry and a thunk
+per entry, at about twenty bytes of `.cold` each. The cloner has four verbs
+and publishes **one** entry: the verb rides in `DL` and the image dispatches
+on it internally. Nothing about §5 changes; the four-verb surface simply costs
+one slot and one thunk instead of four of each. `MOD_NENT` is still 8.
+
+**§3.3's swap prompt was not general, and now is.** Mode 6 asked for the
+system disk and then, at step 1, for *the disk to format*. The clone needs
+exactly that sequence and a different second line, so mode 6 gained a
+`[fm_swapwho]` byte — one byte, one branch, and no ladder in `files.inc`
+learned a new mode. **Both steps are wanted**: a cloner that probed
+immediately after step 0 would take the *system* disk's geometry for the
+source's, which is §3.3's own hazard arriving a second time in a feature
+written by somebody who had read §3.3.
+
+There is a third instance of the same hazard that §3.3 does not cover, and it
+cost a debugging session on the format path too: `fmv_sync` compares
+(drive, cwd), finds neither has moved, and returns **without touching the
+drive** — so after a swap it hands the caller the previous disk's BPB.
+`fm_clone_go` mounts outright.
+
+**MOD_MAX is 3.** `mod_fp` grew by one `MODFP_STRIDE` (32 bytes of `.bss`),
+which is the per-module cost §5 costed and the only one that scaled.
+
+## 14. …and the formatter took the same treatment
+
+§13's `[cs:si]` is not the cloner's trick; it is the mechanism's, and it was
+applied to `FORMAT.DRV` in the same change. `dskw_fmt_line_x` is a fifth entry
+that letters the confirmation's two lines, mode 6's step-1 line and both
+verdicts out of strings that are now in the image — so `files.inc`'s
+`.fs_st_fmt` went from ninety bytes of composition to two calls, and 'Format
+A: as 720K?', `Spc=size  Enter=yes  Esc=no`, `Insert the disk to format`,
+`Formatted B:` and `Made 360K, not 720K` all left the kernel.
+
+**What §5 costed as unavoidable was the strings, and it is not.** This plan's
+own §5 said a module keeps cold code's properties "minus where it lives", and
+took "DS still KERNEL_SEG" to mean the data has to stay — which was true of
+every module until one was written whose feature is *mostly text*. Between
+them the two modules gave back **315 bytes of `.text` and 84 of `.cold`**,
+which is more than the whole clone feature cost the kernel in the first place.
+
+Three shapes could not go, and they are the same three in both modules: the
+menu item, the step-0 swap prompt that exists *because* the image is not
+there, and a message said after the drop. The third has a way out — compose it
+while the image is loaded and let `toast_show` copy the buffer — and both
+modules take it. The first two do not, and that is the residue.
+
+`dskw_fmt_tab` stayed behind on purpose. §2.8.6 has the argument: a string has
+one reader and a table has several, and each of the formatter's `[si+DFMT_*]`
+dereferences is a place to get the segment wrong inside the code that erases
+disks.

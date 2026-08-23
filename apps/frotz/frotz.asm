@@ -51,6 +51,17 @@
 
 %include "os88api.inc"
 
+; SPEC.md 13.10.5's thumb GESTURE. AT THE TOP (13.10.7.4): os88ui.inc is
+; included at the very bottom of this file and a %ifdef is answered in FILE
+; ORDER.
+%ifndef SBDRAGOFF
+%define OS88UI_SBDRAG
+%ifndef SB_RATE
+%define SB_RATE 0               ; RATE 0 (13.10.5.4): a scrollback step
+%endif                          ; re-letters rows out of the ring
+ZF_SBRATE   equ SB_RATE
+%endif
+
     OS88_HEADER 'FROTZ', zf_entry, 3    ; bit0 = icon, bit1 = association block
 
 ; --- the 16x16 icon: a lamp, which is what you are carrying ------------------
@@ -211,6 +222,18 @@ zf_entry:
     pop cx                          ; negotiator is consulted by the grow box
                                     ; and by OSAPI_WM_RESIZE, and by neither of
                                     ; the two clamps that had no floor at all
+%ifdef OS88UI_SBDRAG
+    pushf                           ; the entry still owes the loader
+    push ax                         ; wm_create's CF (SPEC.md 13.10.7.1)
+    mov ax, zf_onup                 ; SPEC.md 13.10.6.4: the THUMB's alone.
+    call OSAPI_WM_ONMOUSEUP         ; zwin6.inc's v6 input poll owns a gesture
+    mov ax, zf_ondrag               ; that cannot be live at the same time as a
+    call OSAPI_WM_ONDRAG            ; bar drag, so 13.7's no-mixing rule is
+    sbb al, al                      ; satisfied by "not at the same time"
+    mov [zw_nodrag], al
+    pop ax
+    popf
+%endif
     mov ax, zf_onresize             ; ...and TELL US when the adapter moves
     call OSAPI_WM_ONRESIZE          ; (SPEC.md 11.98)
 
@@ -470,6 +493,16 @@ zf_onclick:
     push dx
     cmp byte [zf_state], ZFS_RUN
     jne .out
+%ifdef OS88UI_SBDRAG
+    call os88ui_sbdragging          ; A PRESS CANNOT ARRIVE DURING A LIVE DRAG,
+    jc .nostale                     ; so one that does means the release never
+    push cx                         ; came (SPEC.md 13.10.5.7)
+    push dx
+    call zw_sbdrop
+    pop dx
+    pop cx
+.nostale:
+%endif
     call zw_click
 .out:
     pop dx
@@ -477,6 +510,40 @@ zf_onclick:
     pop bx
     pop ax
     ret
+
+%ifdef OS88UI_SBDRAG
+; -----------------------------------------------------------------------------
+; zf_ondrag / zf_onup - the thumb gesture's other two edges (SPEC.md 13.10.5)
+; in:  CX = x, DX = y (ABSOLUTE), SI = window ptr; gfx lock held
+; out: nothing; preserves all registers
+;
+; THE THUMB'S ALONE, like Word's (13.10.6.4): this app has no other use for
+; either edge, so a release with no drag live falls straight out.
+; -----------------------------------------------------------------------------
+zf_ondrag:
+    push ax
+    push bx
+    push cx
+    push dx
+    cmp byte [zf_state], ZFS_RUN
+    jne zf_sbd_out
+    call zw_sbtrack                 ; DX is still the pointer's y
+    jmp short zf_sbd_out
+zf_onup:
+    push ax
+    push bx
+    push cx
+    push dx
+    cmp byte [zf_state], ZFS_RUN
+    jne zf_sbd_out
+    call zw_sbcommit                ; the release COMMITS, unconditionally
+zf_sbd_out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
 
 ; =============================================================================
 ; zf_onresize - OSAPI_WM_ONRESIZE (SPEC.md 11.98): the ADAPTER moved under us
@@ -687,6 +754,20 @@ zf_splash_lines:
 zf_p1: db 'Frotz', 0
 zf_p2: db 0
 zf_p3: db 'File > Open Story... to begin.', 0
+
+; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
+; AT THE END OF THE CODE, just before OS88_BSS, which is os88ui.inc's own rule:
+; the package header and an OS88_ICON16 block are at FIXED OFFSETS in the image
+; (SPEC.md 20.2), so code emitted between them fails the icon macro's assertion.
+;
+; Only the scroll bar - this app draws no standard buttons. It had the LAST
+; private implementation of that widget (SPEC.md 13.10.6), and zw_thumb's own
+; header said what it was.
+%define OS88UI_SCROLL
+%define OS88UI_BARONLY          ; ...and NOTHING ELSE (SPEC.md 13.10.6.5): this
+                                ; app draws no standard button, and carrying
+                                ; one cost 567 bytes of a floppy
+%include "os88ui.inc"
 
 ; =============================================================================
 ; bss (SPEC.md 21 step 5: the loader zeroes exactly OS88_BSS bytes)

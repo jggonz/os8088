@@ -1270,6 +1270,22 @@ menu_bpadc:
                                 ; UI. Clamping here rather than at the two
                                 ; callers is what keeps the invariant a
                                 ; property of the routine
+    cmp di, [menu_bn]           ; **AND THE BOUND IS RE-READ EVERY PASS.** The
+    jae .d                      ; clamp above caches [menu_bn] in BX, and the
+                                ; field hung a machine right here with the bar
+                                ; padded to 60 cells and [menu_bn] BELOW the
+                                ; pen: menu_bput drops a cell at or past it
+                                ; without advancing DI, so the loop had no
+                                ; terminator left. Only a composition writes
+                                ; [menu_bn] and fpg_arm/fpg_finish each force
+                                ; one (SPEC.md 12.8.3) - so the value the
+                                ; clamp read is not the value the drop rule
+                                ; uses, and a cached bound cannot be made
+                                ; safe. This test IS menu_bput's drop rule,
+                                ; asked before the call instead of inferred
+                                ; from it: the pad stops where the cells stop,
+                                ; whenever the bound moved and whoever moved
+                                ; it. One compare a cell (SPEC.md 59.7)
     mov al, ' '
     call menu_bput
     jmp short .p

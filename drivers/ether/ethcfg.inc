@@ -59,12 +59,23 @@
 ; =============================================================================
 
 EC_MAGIC    equ 'EN'            ; the file: magic, version, mode, four addresses
-EC_VER      equ 1
-EC_F_MAGIC  equ 0
+EC_VER      equ 2               ; ...and, at version 2, the socket buffer rung
+EC_F_MAGIC  equ 0               ; the user picked (SPEC.md 72.13.2)
 EC_F_VER    equ 2
 EC_F_MODE   equ 3
 EC_F_IP     equ 4
-EC_F_SIZE   equ 20
+EC_F_BUF    equ 20              ; KB per receive ring: 0 = auto, 1, 4 or 8
+EC_F_SIZE   equ 21
+EC_F_SIZE1  equ 20              ; **VERSION 1 IS STILL READ**, because the file
+                                ; it is in carries the manual ADDRESS of a
+                                ; machine on a LAN with no DHCP server - the
+                                ; one case this whole window exists for - and
+                                ; refusing it would lose that to gain a
+                                ; setting the same file is about to be
+                                ; rewritten with. SPEC.md 51.5 rule 2 says an
+                                ; unknown version leaves the defaults; a
+                                ; version that is a PREFIX of this one is not
+                                ; unknown, it is short
 
 ; --- the window ---------------------------------------------------------------
 ; 216 x 141 INCLUDING the frame, which is what a template's w/h are, AT y = 30 -
@@ -960,20 +971,27 @@ eth_cfg_load:
     pop es
     mov si, ec_s_file
     mov bx, ec_fbuf
-    mov cx, EC_F_SIZE
-    xor dx, dx
-    call OSAPI_FILE_READ
+    mov cx, EC_F_SIZE           ; a version 1 file is SHORTER and the read
+    xor dx, dx                  ; answers with what it found, which is what
+    call OSAPI_FILE_READ        ; tells the two apart below
     push ax
     call ec_vol_back
     pop ax
     jc  .no
-    cmp ax, EC_F_SIZE
-    jne .no
     cmp word [ec_fbuf+EC_F_MAGIC], EC_MAGIC
     jne .no
     cmp byte [ec_fbuf+EC_F_VER], EC_VER
-    jne .no                     ; a version this driver does not know leaves
-                                ; the defaults, which is SPEC.md 51.5 rule 2
+    jne .v1
+    cmp ax, EC_F_SIZE
+    jne .no
+    call ec_buf_take            ; the rung FIRST and outside every exit below:
+    jmp short .mode             ; it is wanted whether the address is manual,
+.v1:                            ; automatic or absent, and .no is three of
+    cmp byte [ec_fbuf+EC_F_VER], 1  ; those four paths
+    jne .no
+    cmp ax, EC_F_SIZE1
+    jne .no
+.mode:
     mov al, [ec_fbuf+EC_F_MODE]
     cmp al, ECM_MAN
     jne .no                     ; stored as Automatic: nothing to restore, and
@@ -1033,6 +1051,7 @@ eth_cfg_save:
     mov di, ec_fbuf + EC_F_IP
     mov cx, 16
     call mem_copy
+    call ec_buf_put
     call ec_vol_bank
     jc  .back
     push ds
@@ -1051,6 +1070,68 @@ eth_cfg_save:
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ec_buf_take / ec_buf_put - the stored rung <-> [sk_want]
+;
+; **STORED IN KB AND NOT IN BYTES**, so the file says 8 where the driver says
+; 8192. That is not tidiness: the byte is one byte, and a future rung that is
+; not a power of two in bytes is still a whole number of KB. An unrecognised
+; value is AUTO rather than a refusal - the same rule the version gets, one
+; field down.
+; -----------------------------------------------------------------------------
+ec_buf_take:
+    push ax
+    push cx
+    mov al, [ec_fbuf+EC_F_BUF]
+    xor ah, ah
+    cmp al, SK_RXCAP0 / 1024
+    je  .ok
+    cmp al, SK_RXMID / 1024
+    je  .ok
+    cmp al, SK_RXMAX / 1024
+    je  .ok
+    xor ax, ax                  ; anything else, 0 included, is auto
+.ok:
+    mov cl, 10
+    shl ax, cl
+    mov [sk_want], ax
+    pop cx
+    pop ax
+    ret
+
+ec_buf_put:
+    push ax
+    push cx
+    mov ax, [sk_want]
+    mov cl, 10
+    shr ax, cl
+    mov [ec_fbuf+EC_F_BUF], al
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; eth_buf_apply - the rung the file asked for, once the file has been read
+;
+; DRVV_READY and not DRVV_ATTACH, and the ordering is the whole point:
+; sk_claim runs at ATTACH because a card with no rings cannot be brought up at
+; all, and ETHER.CFG cannot be read that early - the volume the driver booted
+; from is not mounted yet. So the ladder's automatic answer is taken first and
+; the user's stored choice replaces it here, before any package has had the
+; chance to open a socket.
+; -----------------------------------------------------------------------------
+eth_buf_apply:
+    push ax
+    mov ax, [sk_want]
+    or  ax, ax
+    jz  .out                    ; auto: the ladder's answer stands
+    cmp ax, [sk_rxcap]
+    je  .out                    ; ...and so does an answer that already agrees
+    call sk_reclaim
+.out:
     pop ax
     ret
 

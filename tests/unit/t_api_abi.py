@@ -80,6 +80,10 @@ COMPAT = {0x01B8: "main's OSAPI_MEM_ALLOC (paragraphs)",
 # deliberate ABI decision; adding one means the SDK and the kernel have
 # parted on purpose. Keep the reason short and true.
 ALIAS = {
+    # Two cells, one routine, on purpose: the difference is the STUB, not the
+    # body - 0x0448 goes through OSAPI_XSTUB and overwrites ES, 0x04A0 through
+    # the ordinary SLOT and does not (SPEC.md 20.11.2).
+    "OSAPI_DRV_CALL_AT":  "drv_pkg_call_x",
     "OSAPI_KEY_DOWN":     "kbd_down",
     "OSAPI_FULLSCREEN":   "wm_fullscreen",
     "OSAPI_WM_GROW":      "wm_grow_paint",

@@ -15,6 +15,14 @@
 ; driver and what counts as a link are the one thing the two ends genuinely
 ; disagree about.
 ; =============================================================================
+
+; --- THE VERB'S OWN PUMP ------------------------------------------------------
+; Every verb below starts by draining the ring, because the only thing that can
+; advance the stack is a package asking the driver something.
+;
+; A driver-side WORKER doing it instead was built, measured on the 5150 and
+; REMOVED - SPEC.md 72.19 is the record and docs/FTP-PERF.md 6.1 the numbers.
+
 ; --- NETV_OPEN ---------------------------------------------------------------
 ; in ES:SI = a NUL host, CX = the port; out AX = a handle
 eth_v_open:
@@ -120,7 +128,7 @@ eth_v_send:
     mov ax, NETE_HANDLE
     jmp short .no
 .ok:
-    mov ax, SK_TXCAP
+    mov ax, [sk_txcap]
     sub ax, [bx+SKO_TXN]
     cmp cx, ax
     jbe .room
@@ -129,7 +137,8 @@ eth_v_send:
     jcxz .none
     call sk_txbase
     add di, [bx+SKO_TXN]
-    call usr_read
+    call ring_in                ; ...INTO THE CLAIM, not the driver's bss:
+                                ; usr_read wrote through DS (SPEC.md 72.13)
     add [bx+SKO_TXN], cx
     push cx
     call tcp_kick
@@ -165,7 +174,11 @@ eth_v_recv:
     jz  .out
     cmp byte [bx+SKO_ST], NSK_UP        ; **THE WINDOW JUST OPENED.** Without
     jne .out                            ; this a peer that filled the ring is
-    cmp dx, SK_RXCAP / 2                ; waiting on an advertisement nothing
+    push ax                             ; waiting on an advertisement nothing
+    mov ax, [sk_rxcap]
+    shr ax, 1
+    cmp dx, ax
+    pop ax
     jb  .out                            ; else in this driver would ever send,
     push cx                             ; and the transfer stops for good
     call tcp_ack
@@ -193,6 +206,10 @@ eth_v_close:
     call eth_pump
     call sk_h2p
     jc  .no
+    cmp byte [bx+SKO_TS], TS_LISTEN ; a LISTENER takes its un-accepted children
+    jne .mine                       ; with it - see sk_reap_kids, and the FTP
+    call sk_reap_kids               ; server it was found by (SPEC.md 77)
+.mine:
     or  byte [bx+SKO_FL], SKF_ORPH
     cmp byte [bx+SKO_TS], TS_ESTAB
     je  .fin
@@ -222,6 +239,89 @@ eth_v_close:
     pop ax
     clc                                 ; a close of a handle that is already
     ret                                 ; gone is not an error
+
+; --- NETV_ABORT --------------------------------------------------------------
+; AL = a handle: the connection is dropped and THE SLOT COMES BACK NOW
+;
+; eth_v_close hands an ESTABLISHED socket to TCP and keeps the slot until the
+; FIN handshake finishes, which is right when the peer is still there and
+; ruinous when it is not: the retransmit timer is TCP_RTMAX doublings, about
+; a minute, and NET_SOCKS is four. The FTP server hit exactly that in the
+; field - a client that timed out mid-upload left its data socket finishing a
+; handshake with nobody, and the next session's LIST had no slot for
+; NETV_ACCEPT to make a data connection from, so it sat at its 150 until that
+; client timed out too (SPEC.md 77.25).
+;
+; The state teardown is eth_v_close's, minus the FIN: SKF_ORPH marks the slot
+; as nobody's, sk_reap_kids takes a listener's pending queue with it, and
+; tcp_abort does the rest and frees.
+eth_v_abort:
+    push ax
+    push bx
+    call eth_pump
+    call sk_h2p
+    jc  .no                             ; already gone: not an error, exactly
+    cmp byte [bx+SKO_TS], TS_LISTEN     ; as eth_v_close is not
+    jne .mine
+    call sk_reap_kids
+.mine:
+    and byte [bx+SKO_FL], ~SKF_RES      ; a name still being looked up dies
+    mov ah, [bx+SKO_IDX]                ; with the slot, and [dns_sk] lives
+    cmp ah, [dns_sk]                    ; OUTSIDE the record, so sk_alloc's
+    jne .nores                          ; mem_zero cannot reach it and the
+    mov byte [dns_sk], 0xFF             ; reply would land on whoever the slot
+    mov word [dns_lport], 0             ; went to next
+.nores:
+    or  byte [bx+SKO_FL], SKF_ORPH      ; ...which is what sends tcp_abort to
+    mov al, NSK_FREE                    ; its .free arm
+    call tcp_abort
+.no:
+    pop bx
+    pop ax
+    clc
+    ret
+
+; --- NETV_ADDR ---------------------------------------------------------------
+; out ES:DI (the CALLER's) = four bytes of IPv4; CF=1 / NETE_NOLINK if none yet
+;
+; **SHARED RATHER THAN HOSTED, unlike NETV_IDENT and NETV_STATE.** This file's
+; header keeps those two with their ends because what identifies a driver and
+; what counts as a link are the one thing the cable and the card genuinely
+; disagree about. An ADDRESS is not: both ends answer with the IP of the
+; machine the stack is running on, and over the cable that machine is the DOS
+; box - which is the true answer there, because an inbound connection arrives
+; there and is forwarded (docs/NET-STACK-PLAN.md 1.5). One body, so the two
+; transports cannot come to differ about it.
+;
+; **The zero test is not a formality.** `eth_ip` is four zeroes until DHCP
+; binds or Setup is filled in, and 0.0.0.0 in an FTP 227 reply tells the
+; client to connect to ITSELF - which fails somewhere it cannot explain. The
+; refusal is what lets a server say "no address yet" instead.
+eth_v_addr:
+    push cx
+    push si
+    push di
+    mov si, eth_ip
+    call ip_zero
+    jz  .none
+    mov cx, 4
+    call usr_write              ; SI = ours, DI = theirs, through [eth_useg] -
+                                ; which is the caller's ES in the driver and
+                                ; the program's own DS on the DOS side
+                                ; (ethusr.inc)
+    xor ax, ax
+    pop di
+    pop si
+    pop cx
+    clc
+    ret
+.none:
+    mov ax, NETE_NOLINK
+    pop di
+    pop si
+    pop cx
+    stc
+    ret
 
 ; --- NETV_LISTEN -------------------------------------------------------------
 ; in CX = a port; out AX = a listening handle

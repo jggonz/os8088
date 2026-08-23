@@ -188,8 +188,13 @@ def main():
         return os88sym.linear(name, tuple(d))
 
     rows = cfg.get("rows", PKG)
+    # The docstring's `make build/editmove360.img`, run rather than assumed -
+    # a registered row cannot depend on a human having read it.
+    img = cfg.get("img", "build/editmove360.img")
+    if not os.path.exists(img):
+        subprocess.check_call(["make", img])
     with os88marty.launch("build/os8088-360.img",
-                          apps=cfg.get("img", "build/editmove360.img"),
+                          apps=img,
                           machine=a.machine, boot=False) as m:
         m.run()
         os88marty.settle(m, gate=os88marty.desktop_up)

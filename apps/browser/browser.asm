@@ -38,6 +38,18 @@
 ; =============================================================================
 
 %include "os88api.inc"
+
+; SPEC.md 13.10.5's thumb GESTURE, and it SHIPS (13.10.7);
+; `make SBDRAGOFF=1` compiles it out.
+; AT THE TOP, not beside the %include that pulls os88ui.inc in - 13.10.7.4
+; says why, and it is the second time this tree has paid for it.
+%ifndef SBDRAGOFF
+%define OS88UI_SBDRAG
+%ifndef SB_RATE
+%define SB_RATE 0               ; RATE 0 (13.10.5.4): a scrolled line is ~90 ms
+%endif                          ; here (br_scroll_by's own note), so a view
+BR_SBRATE   equ SB_RATE         ; that followed the hand IS input overrun
+%endif
 %include "netpkg.inc"          ; the SOCKET ABI (SPEC.md 62.11) - the
                                 ; same file drivers/net/net.asm
                                 ; includes, so the two ends of it
@@ -243,6 +255,18 @@ br_entry:
     mov si, br_menus
     call OSAPI_MENU_SET
     mov [br_win], bx
+%ifdef OS88UI_SBDRAG
+    pushf                           ; the entry still owes the loader
+    push ax                         ; wm_create's CF (SPEC.md 13.10.7.1)
+    mov ax, br_onup
+    call OSAPI_WM_ONMOUSEUP
+    mov ax, br_ondrag
+    call OSAPI_WM_ONDRAG
+    sbb al, al                      ; CF = 1 on kern_small: no tracking edge,
+    mov [br_nodrag], al             ; so the thumb stays inert there
+    pop ax
+    popf
+%endif
     mov word [br_loc + LN_BUF], br_ubuf     ; **THE BLOCK'S BUFFER WORDS, and
     mov word [br_loc + LN_MAX], BR_UBUF     ; they are not optional**: bss
                                             ; arrives ZEROED (SPEC.md 21 step
@@ -1092,6 +1116,9 @@ br_sbfill:
     mov ax, [br_top]
     mov [br_sb+12], ax              ; pos
     mov bx, br_sb
+%ifdef OS88UI_SBDRAG
+    call os88ui_sbfix               ; ...and while a thumb drag is live, word 6
+%endif                              ; is the HAND's line (SPEC.md 13.10.5.6)
     pop ax
     ret
 
@@ -1132,6 +1159,57 @@ br_scroll_by:
     call br_flush
 .out:
     ret
+
+%ifdef OS88UI_SBDRAG
+br_nodrag:  db 0                    ; 0xFF = this kernel has no tracking edge
+                                    ; (SPEC.md 13.8.2/13.10.7.1)
+
+; -----------------------------------------------------------------------------
+; br_ondrag / br_onup - the thumb gesture's other two edges (SPEC.md 13.10.5)
+; in:  CX = x, DX = y (ABSOLUTE), SI = window ptr; gfx lock held
+; out: nothing; preserves all registers
+;
+; br_measure first, for br_sbfill's reason at the click: every rect this app
+; tests is derived from the content box, and the content box moves whenever
+; the window does. FLAT labels for the shared tail (13.10.7.4).
+; -----------------------------------------------------------------------------
+br_ondrag:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    call os88ui_sbdragging
+    jc br_sbd_out
+    call br_measure
+    call br_sbfill                  ; BX = the block; DX is still the pointer
+    call os88ui_sbtrack             ; CF = 1: nothing owed - the rate, or the
+    jc br_sbd_out                   ; same line
+    jmp short br_sbd_go
+br_onup:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    call os88ui_sbdragging
+    jc br_sbd_out
+    call br_measure
+    call br_sbfill
+    call os88ui_sbdrop
+    jc br_sbd_out
+br_sbd_go:
+    sub ax, [br_top]                ; ...as the signed DELTA br_scroll_by takes
+    jz br_sbd_out
+    call br_scroll_by
+br_sbd_out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; br_coalesce - CF=1 if this redraw may be skipped
@@ -1515,6 +1593,18 @@ br_onclick:
     push cx
     push dx
     push si
+%ifdef OS88UI_SBDRAG
+    call os88ui_sbdragging      ; A PRESS CANNOT ARRIVE DURING A LIVE DRAG, so
+    jc .nostale                 ; one that does means the release never came
+    push cx                     ; (SPEC.md 13.10.5.7)
+    push dx
+    call br_measure
+    call br_sbfill
+    call os88ui_sbdrop
+    pop dx
+    pop cx
+.nostale:
+%endif
     call br_abdismiss               ; the credit card is dismissed by the click
     jc .out                         ; that dismisses it, and that click does
                                     ; nothing else (SPEC.md 12.2's shape, and
@@ -1605,6 +1695,14 @@ br_onclick:
     je .pageup
     cmp al, OS88UI_SBPGDN
     je .pagedn
+%ifdef OS88UI_SBDRAG
+    cmp al, OS88UI_SBTHUMB          ; SPEC.md 13.10.5: the thumb is DRAGGED
+    jne .out                        ; now, where it was inert. BX is the block
+    cmp byte [br_nodrag], 0         ; and DX the press, absolute, exactly as
+    jne .out                        ; os88ui_sbhit just took them
+    mov al, BR_SBRATE
+    call os88ui_sbgrab
+%endif
     jmp .out                        ; the thumb, or nowhere: this app pages
                                     ; from the TRACK only, which the shared
                                     ; element leaves to the caller because
@@ -6410,6 +6508,8 @@ br_ttl:     db 'Browser', 0
 br_s_big:   db 'Page too large', 0
 br_s_bad:   db 'Cannot open page', 0
 
+                                ; OS88UI_SBDRAG is at the TOP of this file, not
+                                ; here: SPEC.md 13.10.7.4
 %define OS88UI_SCROLL           ; SPEC.md 13.10: the shared scroll bar - OPT IN,
                                 ; so a package that draws no bar pays none of
                                 ; its bytes

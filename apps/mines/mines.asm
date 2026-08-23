@@ -6,8 +6,9 @@
 ; the os8088 API jump table (os88api.inc). 9x9 board, 10 mines, 16px cells,
 ; a 20px status strip above the board. Mines are placed lazily on the first
 ; reveal (never under it); zero-count reveals flood-fill through an explicit
-; queue (no recursion - the UI task's stack is 1536 bytes). 'F' toggles flag
-; mode, 'N' starts a new game.
+; queue (no recursion - the UI task's stack is 1536 bytes). RIGHT-CLICKING a
+; cell flags it (SPEC.md 13.11); 'F' toggles flag mode for the left button on
+; a one-button mouse, and 'N' starts a new game.
 ;
 ; While its window is frontmost it owns the menu bar (SPEC.md 12.2) as
 ; "Mines", with one menu - Game: "New Game", "Flag Mode". Both items are the
@@ -17,9 +18,10 @@
 ;
 ; The entry point only creates the window (wm_create is lock-free), registers
 ; the menu set on it and returns BX = window ptr / CF clear; the loader shows
-; it. Everything else runs inside W_PAINT / W_ONKEY / W_ONCLICK and the menu
-; handler, all of which the kernel calls with the gfx lock already held - so
-; they draw directly and never lock, block or spawn. Every handler fetches
+; it. Everything else runs inside W_PAINT / W_ONKEY / W_ONCLICK / W_ONRCLICK
+; and the menu handler, all of which the kernel calls with the gfx lock
+; already held - so they draw directly and never lock, block or spawn.
+; Every handler fetches
 ; the content origin via wm_content on entry (the window moves). All state
 ; lives in loader-zeroed bss after the image; the all-zeroes state is exactly
 ; a fresh game.
@@ -130,6 +132,12 @@ mn_entry:
     jc .full
     mov si, mn_menus
     call OSAPI_MENU_SET              ; BX = the window, SI = our set
+    mov ax, mn_onrclick              ; ...and it takes the RIGHT button in its
+    call OSAPI_WM_ONRCLICK           ; content (SPEC.md 13.11): a side table,
+                                     ; not a template word, so it is installed
+                                     ; here beside the menus and for the same
+                                     ; reason - BX is still the fresh window.
+                                     ; Flags preserved, like menu_win_set
     mov al, 1                        ; ...and it PROMISES its content stands
     call OSAPI_WM_SAVEU              ; still while it is not drawing (SPEC.md
                                      ; 11.96.1): no worker, and NO GAME CLOCK -
@@ -289,38 +297,8 @@ mn_onclick:
     push dx
     push si
     push di
-    cmp byte [mn_mode], MN_M_LOST
-    jae .out                        ; board is dead after win/lose until 'N'
-    mov bx, si
-    push cx
-    push dx
-    call OSAPI_WM_CONTENT            ; AX = content left, DX = content top
-    mov [mn_ox], ax
-    mov [mn_oy], dx
-    pop dx
-    pop cx
-    sub cx, [mn_ox]                 ; -> content-relative click
-    sub dx, [mn_oy]
-    sub dx, MN_STRIP_H
-    js .out                         ; click landed in the status strip
-    mov ax, cx                      ; column = x / 16
-    mov cl, 4
-    shr ax, cl
-    cmp ax, MN_COLS
-    jae .out
-    mov di, ax
-    mov ax, dx                      ; row = y / 16
-    shr ax, cl
-    cmp ax, MN_COLS
-    jae .out
-    mov bx, ax                      ; cell = row*9 + column
-    add ax, ax
-    add ax, ax
-    add ax, ax
-    add ax, bx
-    add ax, di
-    mov bx, ax
-
+    call mn_hitcell                 ; BX = the cell under the point, CF = none
+    jc .out
     cmp byte [mn_flagmode], 0
     jne .flag
 
@@ -350,19 +328,7 @@ mn_onclick:
 
     ; --- flag mode --------------------------------------------------------------
 .flag:
-    cmp byte [mn_state+bx], MN_S_OPEN
-    je .out                         ; can't flag an open cell
-    cmp byte [mn_state+bx], MN_S_FLAG
-    je .unflag
-    mov byte [mn_state+bx], MN_S_FLAG
-    inc byte [mn_flags]
-    jmp .flagupd
-.unflag:
-    mov byte [mn_state+bx], MN_S_COVER
-    dec byte [mn_flags]
-.flagupd:
-    call mn_draw_cell
-    call mn_draw_status             ; mines-remaining counter changed
+    call mn_flag_toggle
 
 .out:
     pop di
@@ -371,6 +337,119 @@ mn_onclick:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; mn_onrclick - the RIGHT button in the content (SPEC.md 13.11): flag or
+; unflag the cell hit, whatever flag mode says
+; in:  CX = x, DX = y (absolute screen), SI = window ptr; gfx lock held
+; out: nothing; preserves all registers
+;
+; W_ONCLICK's environment exactly, so this draws directly and never locks,
+; blocks or spawns - and it is the same two routines the left button's flag
+; branch runs, not copies of them (mn_cmd_flag's rule). What the right button
+; adds is that flagging no longer needs a MODE - and the mode, the 'F' key and
+; the Game menu item all stay exactly as they were, because a one-button mouse
+; is still a machine this runs on. (SPEC.md 9.6.4's KEYBOARD mouse arrives
+; here too: its right button is Del, and it queues the same EVT_RDOWN.)
+;
+; A right press that merely raises the window never arrives here (13.11), so
+; the first right click on a background Minesweeper raises it and the second
+; plants a flag - which is what the left button already did.
+; -----------------------------------------------------------------------------
+mn_onrclick:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call mn_hitcell                 ; BX = the cell under the point, CF = none
+    jc .out
+    call mn_flag_toggle
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; mn_hitcell - which cell is this point in? (both buttons' first act)
+; in:  CX = x, DX = y (absolute screen), SI = window ptr
+; out: CF = 0 and BX = cell index; CF = 1 = no cell, and BX is undefined
+;      ([mn_ox]/[mn_oy] refreshed either way, unless the board is dead)
+; clobbers: AX, CX, DX, DI
+;
+; The window moves, so the content origin is re-fetched here rather than
+; trusted - the same reason W_ONKEY re-fetches it. A dead board (won or lost
+; until 'N') answers "no cell" for both buttons at once, which is where the
+; rule belongs: it is a fact about the board, not about the button.
+; -----------------------------------------------------------------------------
+mn_hitcell:
+    cmp byte [mn_mode], MN_M_LOST
+    jae .none                       ; board is dead after win/lose until 'N'
+    mov bx, si
+    push cx
+    push dx
+    call OSAPI_WM_CONTENT            ; AX = content left, DX = content top
+    mov [mn_ox], ax
+    mov [mn_oy], dx
+    pop dx
+    pop cx
+    sub cx, [mn_ox]                 ; -> content-relative point
+    sub dx, [mn_oy]
+    sub dx, MN_STRIP_H
+    js .none                        ; it landed in the status strip
+    mov ax, cx                      ; column = x / 16
+    mov cl, 4
+    shr ax, cl
+    cmp ax, MN_COLS
+    jae .none
+    mov di, ax
+    mov ax, dx                      ; row = y / 16
+    shr ax, cl
+    cmp ax, MN_COLS
+    jae .none
+    mov bx, ax                      ; cell = row*9 + column
+    add ax, ax
+    add ax, ax
+    add ax, ax
+    add ax, bx
+    add ax, di
+    mov bx, ax
+    clc
+    ret
+.none:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; mn_flag_toggle - plant or lift the flag on cell BX
+; in:  BX = cell index ([mn_ox]/[mn_oy] already name the content origin)
+; out: nothing; clobbers AX, CX, DX, SI, DI (a drawing routine)
+;
+; ONE CELL and the status strip, never the board: the counter at the left of
+; the strip is 10 minus the flags placed, so it is the only other thing this
+; can change (SPEC.md 23, and PERFORMANCE.md's rule 1).
+; -----------------------------------------------------------------------------
+mn_flag_toggle:
+    cmp byte [mn_state+bx], MN_S_OPEN
+    je .done                        ; can't flag an open cell
+    cmp byte [mn_state+bx], MN_S_FLAG
+    je .lift
+    mov byte [mn_state+bx], MN_S_FLAG
+    inc byte [mn_flags]
+    jmp .upd
+.lift:
+    mov byte [mn_state+bx], MN_S_COVER
+    dec byte [mn_flags]
+.upd:
+    call mn_draw_cell
+    call mn_draw_status             ; mines-remaining counter changed
+.done:
     ret
 
 ; -----------------------------------------------------------------------------

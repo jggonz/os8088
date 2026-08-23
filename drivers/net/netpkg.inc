@@ -116,7 +116,97 @@ NETV_RESOLVE equ 9              ; RESERVED, AND NOT IMPLEMENTED. It is in the
                                 ; never the address - and a verb whose only
                                 ; caller is hypothetical is a contract to get
                                 ; wrong for free
-NETV_MAX     equ 9              ; ...and anything above it is refused. A verb
+NETV_ADDR    equ 10             ; out ES:DI = filled with FOUR bytes, this
+                                ; machine's own IPv4 in wire order, and AX =
+                                ; 0. CF=1 with AX = NETE_NOLINK when there is
+                                ; no address yet (DHCP has not bound, or the
+                                ; cable has no partner) - which is an ORDINARY
+                                ; answer a server should SAY rather than a
+                                ; failure, exactly as NETV_STATE's cleared
+                                ; NSTF_LINK is.
+                                ;
+                                ; **THIS IS PASV'S VERB AND IT EXISTS FOR
+                                ; NOTHING ELSE.** RFC 959's passive reply
+                                ; carries the address the client should come
+                                ; back to - `227 ... (h1,h2,h3,h4,p1,p2)` -
+                                ; so a server that cannot name its own address
+                                ; cannot answer PASV at all, and PASV is what
+                                ; every FTP client made this century tries
+                                ; first. Nothing else in this tree has ever
+                                ; needed it: a client connecting OUT is told
+                                ; where to go and never has to say where it
+                                ; is, which is why five verbs' worth of
+                                ; networking got built without one.
+                                ;
+                                ; docs/NET-STACK-PLAN.md 1.3 always said
+                                ; NETV_STATE "reports whether there is a stack
+                                ; and what its address is", and the half after
+                                ; the `and` was never built - AL is flags and
+                                ; AH is a free-handle count, with no room left
+                                ; in either. So this is that promise kept at a
+                                ; verb of its own rather than a contract
+                                ; change at a live number (SPEC.md 20.8 rule
+                                ; 4): appending cannot invalidate a caller,
+                                ; and every package built before it keeps
+                                ; working untouched.
+                                ;
+                                ; **ON THE CABLE THE ANSWER IS THE DOS BOX'S**
+                                ; and that is the honest answer rather than a
+                                ; convenient one (docs/NET-STACK-PLAN.md 1.5):
+                                ; mTCP on the far end owns the IP, an inbound
+                                ; connection arrives THERE and is forwarded,
+                                ; so the address a client must dial really is
+                                ; the partner's. A server reporting 0.0.0.0 or
+                                ; its own nonexistent address would be telling
+                                ; the client to connect somewhere nothing is
+                                ; listening
+NETV_ABORT   equ 11             ; AL = a handle: DROP IT NOW and give the slot
+                                ; back, where NETV_CLOSE hands the connection
+                                ; to TCP and keeps the slot until the FIN
+                                ; handshake finishes (SPEC.md 77.25).
+                                ;
+                                ; **IT IS FOR A PEER THAT HAS ALREADY GONE.**
+                                ; A close against one that never answers holds
+                                ; its slot for the retransmit timer's whole
+                                ; run - about a minute - and with NET_SOCKS
+                                ; four, one of those is the difference between
+                                ; a server that works and one that cannot open
+                                ; a data connection until it expires. That is
+                                ; a real failure the FTP server hit in the
+                                ; field, not a tidiness.
+                                ;
+                                ; NO RST IS SENT, and the omission is
+                                ; deliberate: building one needs the socket's
+                                ; own sequence state where tcp_rst answers a
+                                ; RECEIVED segment, and the peer this is used
+                                ; against is not listening anyway. It learns
+                                ; the connection is gone the next time it
+                                ; sends, which tcp_rst then answers properly.
+                                ;
+                                ; NEVER on a transfer that SUCCEEDED: closing
+                                ; the data connection is how FTP signals
+                                ; end-of-file, and an abort there truncates
+                                ; whatever the peer had not yet read.
+                                ; out CF=0 always - aborting a handle that is
+                                ; already gone is not an error
+NETV_PROF    equ 12             ; THE STAGE PROFILER (SPEC.md 72.15), and it is
+                                ; a verb rather than a build knob because the
+                                ; only machine that can answer the question is
+                                ; the 4.77MHz one somebody is holding.
+                                ;
+                                ;   AL = 0  stop, and bank the wall clock
+                                ;   AL = 1  zero everything and start
+                                ;   AL = 2  read: ES:DI = a buffer of at least
+                                ;           PF_BLK bytes -> CX = how many were
+                                ;           written
+                                ;
+                                ; CF=1 with AX = NETE_VERB from a driver that
+                                ; has no profiler, which is the CABLE: it
+                                ; shares every line of the stack and none of
+                                ; the instrument (SPEC.md 62.11.1), and a
+                                ; reporter must SAY that rather than draw a
+                                ; table of zeroes.
+NETV_MAX     equ 12             ; ...and anything above it is refused. A verb
                                 ; table indexed by an unchecked verb is a wild
                                 ; near call inside the driver
 

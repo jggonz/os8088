@@ -26,7 +26,16 @@
 ; Numbers to read: HIGH WATER is bytes used from the slice top, the worker's
 ; own few frames plus every ISR that landed (the kernel switch frame is 24
 ; of them); UNTOUCHED is what is left above the canary. Hold keys down, mash
-; the mouse, play a Tracker module - then compare HIGH WATER against 256.
+; the mouse, play a Tracker module - then compare HIGH WATER against 384.
+;
+; **AND `OTHER TASKS` IS EVERY SLICE THAT IS NOT OURS**, with the slot it was
+; found in. That is the line to watch while something else works: our own
+; reading is the ISR cost and says nothing about how deep the network stack, a
+; Tracker worker, or a package's own callback chain goes. It can do this
+; because `task_spawn` fills EVERY slice with 0xCC on the shipping kernel now
+; (SPEC.md 8.3) - so each one already carries its own high water and this only
+; has to walk them. A slice with no canary was never spawned; one whose task
+; has exited still reads true until the slot is reused.
 ; The canary line mirrors SPEC.md 8's SCH_MAGIC: if the probe cannot find it
 ; where the 256-aligned arithmetic says the slice bottom is, it says SLICE?
 ; and falls back to watching a 200-byte window under its own SP rather than
@@ -46,7 +55,13 @@
 
 SPB_MAGIC   equ 0x5A57          ; SPEC.md 8's SCH_MAGIC, mirrored: the word
                                 ; at the bottom of every slice
-SPB_SLICE   equ 256             ; SCH_STACK, mirrored (SPEC.md 8)
+SPB_SLICE   equ 384             ; SCH_STACK, mirrored (SPEC.md 8) - and it has
+                                ; to move WITH it: the SDK publishes MAX_TASKS
+                                ; and not the slice size, so this is the one
+                                ; number in here a kernel change can falsify.
+                                ; The canary test is what notices - a wrong
+                                ; SPB_SLICE puts the base somewhere with no
+                                ; SCH_MAGIC in it and the window says SLICE?
 SPB_FILL    equ 0xCC            ; the fill byte, the kernel probe's own
 SPB_WINF    equ 200             ; fallback watch window when the canary is
                                 ; not where the aligned math says (bytes
@@ -117,13 +132,13 @@ spb_paint:
     mov cx, [spb_cx]
     add cx, 8
     mov dx, [spb_cy]
-    add dx, 58
+    add dx, 62
     mov si, spb_s_hint1
     call OSAPI_FONT_STR
     mov cx, [spb_cx]
     add cx, 8
     mov dx, [spb_cy]
-    add dx, 68
+    add dx, 72
     mov si, spb_s_hint2
     call OSAPI_FONT_STR
 
@@ -199,6 +214,21 @@ spb_lines:
     mov si, spb_s_scan
     call OSAPI_FONT_RUN
 
+    mov ax, [spb_any]           ; "Other tasks: NNN slot NNN" - EVERY OTHER
+    mov si, spb_n_any           ; slice's high water, not just the one we are
+    call spb_utoa               ; spinning in (SPEC.md 8.3)
+    mov al, [spb_anyt]
+    xor ah, ah
+    mov si, spb_n_anyt
+    call spb_utoa
+    mov cx, [spb_cx]
+    add cx, 8
+    mov dx, [spb_cy]
+    add dx, 50
+    mov si, spb_s_any
+    mov ax, 0x0F00
+    call OSAPI_FONT_RUN
+
     pop si
     pop dx
     pop cx
@@ -215,13 +245,14 @@ spb_lines:
 ; -----------------------------------------------------------------------------
 spb_worker:
     ; --- find the slice: top = SP rounded UP to 256, base = top - 256 -------
-    mov ax, sp                  ; SP == slice top at worker entry, before our
-    dec ax                      ; first push, and strictly below it after -
-    or  ax, 0x00FF              ; (SP-1) | 255, +1 is the top either way
-    inc ax                      ; (sch_stacks is 256-aligned: SPEC.md 8)
-    mov [spb_top], ax
-    sub ax, SPB_SLICE
-    mov [spb_base], ax
+    mov ax, sp                  ; SP IS the slice top at worker entry: the
+    mov [spb_top], ax           ; scheduler pops the spawn frame before the
+    sub ax, SPB_SLICE           ; proc runs, and nothing is pushed yet. The
+    mov [spb_base], ax          ; old (SP-1)|255,+1 round-up assumed 256-
+                                ; aligned tops; slices are 384 apart now and
+                                ; odd slots sit at 128 mod 256, so it invented
+                                ; a top 128 high and read mid-slice 0xCC where
+                                ; the canary lives - SLICE? on a healthy slot
 
     mov bx, ax                  ; the canary should be the word at [ss:base]
     mov ax, [ss:bx]
@@ -233,6 +264,33 @@ spb_worker:
     mov [spb_flo], ax
     mov ax, [spb_top]
     mov [spb_ceil], ax
+
+    ; --- ...and WHERE THE SLICES START, so every one can be read ------------
+    ; Slot n's slice is sch_stacks + (n-1)*SCH_STACK and they are contiguous,
+    ; so walking DOWN from ours while a canary keeps appearing lands on slot
+    ; 1's. Bounded by MAX_TASKS, because below sch_stacks is the font's glyph
+    ; block and 0x5A57 can occur in it by chance - one step too far would
+    ; invent a slice and read the glyphs as a stack.
+    mov bx, [spb_base]
+    mov cx, MAX_TASKS
+.down:
+    mov si, bx                  ; SI probes, BX keeps the last CONFIRMED base -
+    sub si, SPB_SLICE           ; the first version stepped BX itself and left
+    cmp word [ss:si], SPB_MAGIC ; it one slice BELOW sch_stacks on the way out,
+    jne .bottom                 ; so every slot was numbered one high and the
+    mov bx, si                  ; probe skipped the wrong one as "ours"
+    loop .down
+.bottom:
+    mov [spb_first], bx
+    mov ax, [spb_base]          ; ...and which slot WE are, so the reading
+    sub ax, bx                  ; below can leave us out: the slices are
+    xor cx, cx                  ; SPB_SLICE apart, and SPB_SLICE is 384 -
+.slot:                          ; the old high-byte trick divided by 256 and
+    inc cx                      ; numbered every slot past 2 wrong, so the
+    sub ax, SPB_SLICE           ; scan excluded the wrong slot as 'ours'.
+    jnc .slot                   ; A subtract loop is the 8086's div here:
+    mov ax, cx                  ; MAX_TASKS iterations at most
+    mov [spb_slot], al
     jmp short .fill
 .window:                        ; canary not found: the aligned math missed
     mov byte [spb_mode], 0      ; (SLICE? on screen) - watch a window under
@@ -295,6 +353,15 @@ spb_worker:
     mov [spb_free], ax
     inc word [spb_scans]
 
+    call spb_scan_all           ; every OTHER slice, which is the whole reason
+                                ; this probe is worth running while something
+                                ; else is busy (SPEC.md 8.3). BEFORE the canary
+                                ; block below and not after it: both of that
+                                ; block's exits are `je .draw`, so a call
+                                ; appended to its tail runs ONLY when the
+                                ; canary has died - which reads exactly like a
+                                ; scan that finds nothing
+
     cmp byte [spb_mode], 1      ; re-verify the canary while we are here -
     jne .draw                   ; if it ever dies the next switch halts the
     mov bx, [spb_base]          ; machine (sch_stkdie), so this line mostly
@@ -312,6 +379,70 @@ spb_worker:
 .undraw:
     call OSAPI_GFX_UNLOCK
     jmp .loop
+
+; -----------------------------------------------------------------------------
+; spb_scan_all - the deepest of every slice that is NOT ours
+;
+; **This is what makes the probe worth running while something else works.**
+; The line above it reports OUR slice, which is where every interrupt lands
+; while we spin - a good reading of what the ISRs cost and no reading at all of
+; what the network stack, or a Tracker worker, or a package's own callback
+; chain is doing. `task_spawn` fills every slice with 0xCC (SPEC.md 8.3), so
+; each one already carries its own high water; this walks them.
+;
+; A slice with no canary was never spawned and is skipped. A slice whose task
+; has EXITED keeps its fill and still reads true - the deepest that task got -
+; until the slot is reused, when the next spawn refills it. So the number is
+; live rather than latched, and a re-launch legitimately resets it.
+;
+; in:  [spb_first] = slot 1's base, [spb_slot] = ours (spb_worker's set-up)
+; out: [spb_any] = the deepest, [spb_anyt] = whose. Preserves nothing.
+; -----------------------------------------------------------------------------
+spb_scan_all:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov word [spb_any], 0
+    mov byte [spb_anyt], 0
+    mov bx, [spb_first]
+    mov dl, 1                   ; DL = the slot BX is the base of
+.slice:
+    cmp dl, [spb_slot]
+    je  .next                   ; ours: the High water line already has it
+    cmp word [ss:bx], SPB_MAGIC
+    jne .next                   ; never spawned - no canary, no fill
+    mov si, bx
+    inc si
+    inc si                      ; ...and never read the canary word itself
+.byte:
+    cmp byte [ss:si], SPB_FILL
+    jne .depth
+    inc si
+    mov ax, si
+    sub ax, bx
+    cmp ax, SPB_SLICE
+    jb  .byte
+.depth:
+    mov ax, bx                  ; depth = top - the first byte anything touched
+    add ax, SPB_SLICE
+    sub ax, si
+    cmp ax, [spb_any]
+    jbe .next
+    mov [spb_any], ax
+    mov [spb_anyt], dl
+.next:
+    add bx, SPB_SLICE
+    inc dl
+    cmp dl, MAX_TASKS
+    jb  .slice
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; spb_utoa - AX unsigned -> 3 right-aligned decimal digits at DS:SI
@@ -348,17 +479,20 @@ spb_utoa:
 spb_tpl:    dw 150, 120, 272, 112, spb_s_wt, spb_paint, 0, 0
 spb_s_wt:   db 'Stack Probe', 0
 
-spb_s_title: db 'Worker slice: 256 bytes', 0
+spb_s_title: db 'Worker slice: 384 bytes', 0
 spb_s_used: db 'High water:  '
-spb_n_used: db '  0 of 256', 0
+spb_n_used: db '  0 of 384', 0
 spb_s_free: db 'Untouched:   '
 spb_n_free: db '  0', 0
 spb_s_cok:  db 'Canary OK   ', 0
 spb_s_cbad: db 'SLICE?      ', 0
 spb_s_scan: db 'x'
 spb_n_scan: db '  0', 0
-spb_s_hint1: db 'Type, mash the mouse, play a', 0
-spb_s_hint2: db 'module - then read High water.', 0
+spb_s_any:   db 'Other tasks: '
+spb_n_any:   db '  0 slot '
+spb_n_anyt:  db '  0', 0
+spb_s_hint1: db 'Type, mouse, transfer - then', 0
+spb_s_hint2: db 'read the two numbers.', 0
 
 ; --- state (image data, not bss: a fresh copy per launch either way) ---------
 spb_win:     dw 0
@@ -371,6 +505,10 @@ spb_ceil:    dw 0               ; one past the watch (SP at fill / slice top)
 spb_max:     dw 0               ; deepest high water ever seen, bytes
 spb_free:    dw 0               ; untouched bytes above the floor, latest
 spb_scans:   dw 0
+spb_first:   dw 0               ; slot 1's slice base - the bottom of sch_stacks
+spb_slot:    db 0               ; ...and which slot WE are, so the line below
+spb_any:     dw 0               ; can leave us out: the deepest OTHER slice,
+spb_anyt:    db 0               ; and whose
 spb_lastt:   dw 0
 spb_cx:      dw 0               ; content origin, banked by the last paint
 spb_cy:      dw 0

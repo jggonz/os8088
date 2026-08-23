@@ -3,17 +3,21 @@
 
     python3 tests/unit/t_buildmatrix.py [-j N]
 
-`all` builds ONE kernel.  The tree has eighteen more, and nothing builds them
-until somebody types the knob by hand:
+`all` builds ONE kernel.  The tree has two dozen more (KNOBS below is the
+roster, and the count in this sentence went stale twice before it stopped
+naming one), and nothing builds them until somebody types the knob by hand:
 
   * `kern_small` - the 128-256KB machine's kernel (SPEC.md 62.9.15), a
     genuinely different binary with its own `KERN_BUDGET`, its own driver set
     and whole features compiled out behind `%ifdef KERN_BIG`. `make small` is
     a separate target and `all` does not depend on it, so a change that breaks
     it is invisible until a release.
-  * the fifteen testing knobs CLAUDE.md documents - `VIDEO=`, `RTC=`,
+  * the testing knobs - `VIDEO=`, `RTC=`,
     `RAMKB=`, `FLOPPY1=`, `DISKCNT=`, `DIRTYRAM=`, `FSNOSTAMP=`, `DISKAL=`,
-    `REDRAWFULL=`, `HEAPCOMPACT=`, `FDDPROBE=`, `SNAPAUDIT=`. Each one is
+    `REDRAWFULL=`, `HEAPCOMPACT=`, `FDDPROBE=`, `SNAPAUDIT=`, `BOOTPROF=`,
+    `MOUIDSLOW=`, `TRACKRUN=`, `QUANTUM=`, `SBDRAGOFF=`/`SBRATE=`,
+    `DIRW1=`, `PICOMEM=`.
+    Each one is
     `%ifdef`'d code that no ordinary build compiles, so it rots in silence -
     and every one of them is the A/B half of a gate somewhere in `tests/`.
     A knob that no longer assembles takes its gate with it, and the gate is
@@ -72,6 +76,19 @@ KNOBS = [
     ("snapaudit",   ["SNAPAUDIT=1"]),
     ("dirw1",       ["DIRW1=1"]),
     ("picomem",     ["PICOMEM=1"]),
+    ("bootprof",    ["BOOTPROF=1"]),
+    ("mouidslow",   ["MOUIDSLOW=1"]),
+    ("trackrun",    ["TRACKRUN=1"]),
+    # QUANTUM= is stamp-tracked (SPEC.md 53.2.1's sub-tick) and its
+    # %ifdef SCH_QUANTUM arm compiles in no other configuration - the same
+    # sentence as every row above. 4 is the deepest setting, so it is the
+    # one that keeps the divider arithmetic honest too.
+    ("quantum",     ["QUANTUM=4"]),
+    # SPEC.md 13.10.5's thumb drag SHIPS, so what needs keeping alive is the
+    # configuration nobody builds: the reference kernel WITHOUT it, and the
+    # rate constant, which only the second of these reaches.
+    ("sbdragoff",   ["SBDRAGOFF=1"]),
+    ("sbrate",      ["SBRATE=2"]),
 ]
 
 

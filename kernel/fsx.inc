@@ -298,7 +298,10 @@ fsx_restore:
 .ed:
     mov di, fsx_evtmp           ; drain the event queue
     call evq_pop
-    jnc .ed
+    jc .edone
+    call wm_wake_eaten          ; ...but a package's wake is OWED, not dropped
+    jmp short .ed               ; (SPEC.md 74.1.1)
+.edone:
     pushf
     cli
     mov byte [fsx_task], 0xFF   ; disarm - sleepers marked ready during the

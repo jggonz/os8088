@@ -143,20 +143,35 @@ ui_task:
     call gfx_unlock
     KFZ 9                       ; 9: a healthy keystroke, start to finish
 
-    ; --- 2. events: pop one, act on EVT_MDOWN ---------------------------------
+    ; --- 2. events: DRAIN the ring, acting on each record (SPEC.md 10.2) ------
 .events:
     call blk_pass               ; spend the mouse ISR's activity flag, and dark
                                 ; every monitor once the idle period is up
                                 ; (SPEC.md 64.1). AHEAD of evq_pop and not
-                                ; down in .yield: the press that woke the
+                                ; down in .tail: the press that woke the
                                 ; screen is still in the ring here, and this
                                 ; is what drains it rather than letting it be
                                 ; dispatched at a window nobody could see
+    call wm_wake_redo           ; anything a drag, a resize, a full-screen app
+                                ; or a sound bracket ate goes back in the ring
+                                ; HERE (SPEC.md 74.1.1) - one byte compare on
+                                ; every pass that ate nothing, which is all of
+                                ; them. Before evq_pop, so a wake put back this
+                                ; pass is dispatched by this pass - and ONCE
+                                ; per pass, so it belongs above .evloop rather
+                                ; than inside SPEC.md 10.2's drain
+    mov word [ui_drain], EVQ_CAP    ; SPEC.md 10.2: this pass will empty the
+                                ; ring, not sip one record from it - bounded
+                                ; at the ring's own size, because the mouse
+                                ; ISR can push while we dispatch and an
+                                ; unbounded drain would starve .tail's ladder
+.evloop:
     mov di, ui_ev
     call evq_pop
-    jc .empty                   ; queue empty: and an EMPTY ring is the moment
-                                ; a wake whose record somebody else drained can
-                                ; be told apart from one still waiting its turn
+    jc .yield                   ; queue empty. A wake whose record a drain ate
+                                ; needs nothing here: it is WKQ_EATEN, and
+                                ; wm_wake_redo at the top of the pass already
+                                ; put it back in the ring (SPEC.md 74.1.1)
     mov ax, [ui_ev + EV_TYPE]
     cmp ax, EVT_RDOWN           ; the right button goes its own, much
     je .rdown                   ; narrower way (SPEC.md 12.4/13)
@@ -418,15 +433,6 @@ ui_task:
     call ui_drag                ; in: BX = window, CX/DX = mousedown x/y
     jmp short .yield
 
-.empty:
-    call wm_wake_sweep          ; SPEC.md 74.1's promise, kept when the RECORD
-                                ; was lost: six loops in this kernel drain the
-                                ; ring of everything they are not waiting for,
-                                ; and a package whose wake they swallowed can
-                                ; never post another (wm.inc). One compare when
-                                ; nothing has posted since the last clean scan
-    jmp short .yield
-
 .wake:
     mov si, [ui_ev + EV_A]      ; the window that asked; NO lock is taken -
     call wm_wake_disp           ; the handler takes it itself for a stated
@@ -442,7 +448,12 @@ ui_task:
     call ui_rdown               ; in: [ui_ev]; the context-menu path (12.4)
 
     ; --- 3. deferred work (SPEC.md 13/21/29): OUTSIDE the gfx lock ------------
-.yield:
+.yield:                         ; SPEC.md 10.2 - every dispatch above lands here,
+    dec word [ui_drain]         ; and the ring is asked again before the tail
+    jz .tail                    ; runs. Two words of work when the queue is
+    cmp word [evq_count], 0     ; empty, which is nearly every pass
+    jne .evloop
+.tail:
     call kbm_ui                 ; the keyboard mouse's end-of-pass service
                                 ; (SPEC.md 9.6.1): a press held the button so
                                 ; that whatever this pass dispatched could
@@ -569,6 +580,18 @@ ui_task:
     call wm_fs_vis              ; fullscreen (SPEC.md 11.2): the bar and any
     jc .idle                    ; Date/Time page are covered - time is kept,
                                 ; nothing is drawn. The predicate, 39.17.1
+%ifdef KERN_BIG
+    cmp byte [blk_sv], 0        ; ...and a SAVER SESSION covers them the same
+    jne .idle                   ; way (SPEC.md 79.5). It is the same two
+                                ; instructions for the same reason and it is
+                                ; not tidiness: the bar cell is re-lettered
+                                ; once a minute and nothing in a saver mode
+                                ; erases it reliably, so a machine left all
+                                ; night would burn the one static bright
+                                ; patch this whole feature exists to prevent.
+                                ; ss_stop_x's wm_paint_all is what puts the
+                                ; right time back on the way out
+%endif
     test al, 2
     jnz .clk_lock
     call cp_tick_due            ; CF = 1: a live Date/Time page is showing
@@ -918,7 +941,9 @@ ui_lit_go:
 ; ui_rdown - act on one EVT_RDOWN: the context-menu path (SPEC.md 12.4/13)
 ; in:  [ui_ev] holds the record
 ; out: nothing
-; clobbers: AX, BX, CX, DX, SI, DI (internal helper of the UI task)
+; clobbers: AX, BX, CX, DX, SI, DI, BP (internal helper of the UI task, and BP
+;           is the handler on SPEC.md 13.11's path - the same register the
+;           left button's .content_front loads, in the same task)
 ;
 ; Deliberately far narrower than the mouse-down ladder above, and it shares
 ; none of it. Three things it must NOT do, each one a bug waiting to happen:
@@ -938,9 +963,11 @@ ui_lit_go:
 ;   - open anything on a background window. It raises it and stops: the
 ;     popup always belongs to the window you can already see.
 ;
-; The bar is skipped whole, clock cell included. Of the WINDOWS only a
-; file-manager one answers - the ones carrying fm_menus - so no package's
-; window changes behaviour and no shipped .o88 needs rebuilding.
+; The bar is skipped whole, clock cell included. Of the WINDOWS a package one
+; answers only if it INSTALLED a right-click handler (SPEC.md 13.11, and
+; wm_create installs none), and otherwise only a file-manager one does - the
+; ones carrying fm_menus - so no existing package's window changes behaviour
+; and no shipped .o88 needs rebuilding.
 ; -----------------------------------------------------------------------------
 ui_rdown:
     mov cx, [ui_ev + EV_A]      ; CX = press x, DX = press y. NO [ui_click_t]
@@ -977,6 +1004,24 @@ ui_rdown:
     or al, al
     jnz .ret                    ; title bar, close/minimize/grow box: the
                                 ; chrome has no context menu
+
+    push si                     ; A WINDOW THAT ASKED FOR THE RIGHT BUTTON
+    call wm_rch_slot            ; ITSELF (SPEC.md 13.11) gets it before any of
+    mov bp, [si]                ; the below, and instead of it: the handler is
+    pop si                      ; a side-table word, so a window that never
+                                ; installed one costs this path one read. BX
+                                ; is already SI - the compare above is what
+                                ; brought us here - so wm_rch_slot's input is
+                                ; loaded and there is nothing to set up
+    or bp, bp
+    jz .ctxwin
+    call gfx_lock               ; W_ONCLICK's environment exactly - CX = x,
+    call ui_ptcall              ; DX = y, SI = window, billed to the owning
+    call gfx_unlock             ; instance (CX/DX survived wm_hit/wm_top)
+    ret                         ; and NOTHING ELSE sees this press: a package
+                                ; that takes the right button owns it whole,
+                                ; the way it owns the left one
+.ctxwin:
     cmp word [si + W_SEG], 0    ; a kernel window whose set is fm_menus -
     jne .ret                    ; the OFFSET alone is not identity: a
     cmp word [si + W_MENUS], fm_menus
@@ -1101,8 +1146,11 @@ ui_drag:
     call evq_pop
     jc .no_evt
     cmp word [ui_ev + EV_TYPE], EVT_MUP
-    jne .track                  ; drain anything else queued mid-drag
-    jmp .release                ; exits with outline drawn + lock held
+    je .release                 ; exits with outline drawn + lock held
+    call wm_wake_eaten          ; ...and ANYTHING ELSE is dropped on the floor
+    jmp .track                  ; here (SPEC.md 74.1.1): a package's wake among
+                                ; them, whose promise would otherwise outlive
+                                ; its record and deafen the window for good
 .no_evt:
     test byte [mouse_btn], 1    ; fallback: the EVT_MUP was dropped
     jz .release                 ; (queue full) - the level still says so
@@ -1632,8 +1680,9 @@ ui_grow:
     call evq_pop                ; release + fast re-press inside one pass
     jc .no_evt                  ; must still end the resize
     cmp word [ui_ev + EV_TYPE], EVT_MUP
-    jne .track                  ; drain anything else queued mid-resize
-    jmp .release                ; exits with outline drawn + lock held
+    je .release                 ; exits with outline drawn + lock held
+    call wm_wake_eaten          ; ...drained mid-resize, and a wake among them
+    jmp .track                  ; is owed back (SPEC.md 74.1.1)
 .no_evt:
     test byte [mouse_btn], 1    ; fallback: the EVT_MUP was dropped
     jz .release
@@ -2108,31 +2157,32 @@ ui_tm_open:
                                 ; machine, where this byte is 0 and this is
                                 ; the `xor dl, dl` it replaced, and the
                                 ; installed PARTITION on a machine that boots
-                                ; from its hard disk (SPEC.md 52.10.3).
-                                ;
-                                ; This one mounts for itself rather than going
-                                ; through drv_mounted, because it is the one
-                                ; caller that needs a LISTING - it hands the
-                                ; loader a directory index - so it has its own
-                                ; copy of the question and needed its own fix
-    call disk_mount
+                                ; from its hard disk (SPEC.md 52.10.3)
+    xor ax, ax                  ; ...at its root, where SYSTEM lives
+    call dsk_chdir_q            ; QUIET (SPEC.md 18.9/28.3.1), which this could
+                                ; not be until ld_run_name existed. It was a
+                                ; full disk_mount, and the reason written here
+                                ; was that this is the one caller that needs a
+                                ; LISTING - it handed the loader a directory
+                                ; index. SPEC.md 21.4 took that away and
+                                ; nobody re-asked the question, so all three
+                                ; of this routine's mounts went on paying for
+                                ; a scan, a sort, an ASSOC.DAT read and an
+                                ; icon harvest that nothing below looks at
     mov si, ui_s_nodisk
     jc .fail
     call ui_tm_sysdir           ; into SYSTEM (SPEC.md 28.3); CF=1 = no such
     mov si, ui_s_nofile         ; folder, which reads to the user as the file
     jc .fail                    ; not being there, because it is not
-    mov si, ui_s_tmfile
-    call dsk_find_name          ; AX = its directory index
-    mov si, ui_s_nofile
-    jc .fail
 
     mov word [ld_pwin], 0       ; no poster: this is not a Disk window's load,
-    call ld_run_body            ; and so not loader_run either - there is no
-                                ; listing to refresh and no status line to
-                                ; correct ([ld_status] is loader_run's to
-                                ; write; storing it here would retitle an
-                                ; open Disk window's status line for a load
-                                ; it never posted). AL = LD_*; it shows the
+    mov si, ui_s_tmfile         ; and so not loader_run either - there is no
+    call ld_run_name            ; BY NAME (SPEC.md 21.4): no listing to build
+                                ; and none to refresh, and no status line to
+                                ; correct either ([ld_status] is loader_run's
+                                ; to write; storing it here would retitle an
+                                ; open Disk window's status line for a load it
+                                ; never posted). AL = LD_*; it shows the
                                 ; window itself on the way out
     push ds
     pop es                      ; ld_run_body's failure exits leave ES aimed
@@ -2140,8 +2190,19 @@ ui_tm_open:
                                 ; list above); nothing below may inherit that
     or al, al
     jz .back                    ; LD_OK
-    mov bl, al                  ; the reason, out of the same codes a Disk
-    xor bh, bh                  ; window's status line uses
+    push ax                     ; ...and the reason, out of the same codes a
+    cmp al, LD_EBAD             ; Disk window's status line uses - EXCEPT that
+    jne .code                   ; ld_res_name answers LD_EBAD both for a file
+    mov si, ui_s_tmfile         ; that is not a package and for a file that is
+    call dskw_stat              ; not THERE (SPEC.md 21.4), and those are not
+    jnc .code                   ; one message to a user (SPEC.md 28.3). The
+    pop ax                      ; index resolver could tell them apart because
+    mov si, ui_s_nofile         ; dsk_find_name failed first; by name they
+    jmp short .fail             ; arrive as one code, so ask - on the FAILURE
+.code:                          ; path only, still standing in SYSTEM, and for
+    pop ax                      ; the sector ld_res_name has just read
+    mov bl, al
+    xor bh, bh
     shl bx, 1
     mov si, [bx + ui_tm_errs]
 .fail:
@@ -2170,25 +2231,29 @@ ui_tm_open:
 ; in:  the volume is mounted and standing in its root
 ; out: CF = 0 and the volume is inside SYSTEM; CF = 1 = there is no SYSTEM
 ;      folder here, or entering it failed
-; clobbers: AX, DL, SI, flags (ui_tm_open has banked all three)
+; clobbers: AX, BX, CX, DX, SI, flags (ui_tm_open has banked them all)
 ;
-; The entry has to be LISTED before its first cluster is known, which is why
-; this is a second mount and not an extra argument to the first: dsk_find_name
-; reads the snapshot the mount published (no I/O at all), and dsk_chdir then
-; re-runs the one validated pipeline over the folder (SPEC.md 19.2).
+; The folder's first cluster comes out of dskw_stat, which walks the directory
+; SECTORS, and not out of dsk_find_name, which reads the snapshot a FULL mount
+; published. That is drv_find's move (SPEC.md 19.6) for the same reason: the
+; listing is the expensive half of a mount and this is the only thing that
+; ever wanted it here. dsk_chdir_q then re-runs the validated pipeline over
+; the folder with the scan, the sort and the icon harvest skipped, because
+; ld_run_name does not read a listing either (SPEC.md 21.4).
 ;
-; The type test is what stops a FILE called SYSTEM being walked as a
-; directory: dsk_synth writes 1 for a file and 2 for a subdirectory, and 3 is
-; the synthesized '..' (SPEC.md 19.5), which cannot carry this name.
+; The attribute test is what stops a FILE called SYSTEM being walked as a
+; directory. It is the RAW byte off the disk rather than dsk_synth's type
+; word, so - exactly as with a hidden .DRV - a SYSTEM folder that is marked
+; hidden or system is found here where the listing's species filter would
+; have dropped it (SPEC.md 19.6).
 ; -----------------------------------------------------------------------------
 ui_tm_sysdir:
     mov si, ui_s_tmdir
-    call dsk_find_name          ; AX = its index in the root's listing
+    call dskw_stat              ; AL = the raw attribute, BX = first cluster
     jc .no
-    call dsk_get_dir            ; SI -> the staged 32-byte entry (SPEC.md 19)
-    cmp word [si+16], 2         ; its type: a folder, not a file of that name
-    jb .no
-    mov ax, [si+18]             ; its first cluster
+    test al, 0x10               ; a subdirectory, not a file of that name
+    jz .no
+    mov ax, bx                  ; its first cluster
     or ax, ax
     jz .no                      ; 0 is the root: a directory entry naming it
     mov dl, [dsk_bootvol]       ; would be a loop, not a folder.
@@ -2199,7 +2264,7 @@ ui_tm_sysdir:
                                 ; On an installed machine it walked into
                                 ; SYSTEM's cluster on the FLOPPY, which reads
                                 ; to the user as the file not being there
-    jmp dsk_chdir               ; CF is its answer, and it is ours
+    jmp dsk_chdir_q             ; CF is its answer, and it is ours
 .no:
     stc
     ret
@@ -2213,7 +2278,16 @@ ui_tm_back:
     push dx
     mov ax, [ui_tm_cwd]
     mov dl, [ui_tm_drv]
-    call dsk_chdir
+    call dsk_chdir_q            ; QUIET, on drv_vol_back's terms (SPEC.md
+                                ; 51.5.2): putting the user's VOLUME back is
+                                ; not putting a LISTING on screen. Every Disk
+                                ; window paints from its own view cache
+                                ; (SPEC.md 22.1), so nothing here is drawn
+                                ; from the global snapshot, and whoever reads
+                                ; it next pays for the rebuild if it is ever
+                                ; needed. dsk_here_ok makes the common case -
+                                ; the user was already standing in the boot
+                                ; volume's root - cost no I/O at all
     pop dx
     pop ax
     ret
@@ -2576,6 +2650,7 @@ ui_armw:    resw 1              ; SPEC.md 13.5: the window a chrome press is
                                 ; is never 0, so 0 is the sentinel and .bss
                                 ; arrives zeroed (kernel.asm) - ui_tclkw's
                                 ; convention exactly
+ui_drain:   resw 1              ; SPEC.md 10.2: dispatches left in this pass
 ui_armr:    resb 1              ; ...and which box: wm_hit's AL, 2 = close,
                                 ; 3 = minimize. Both halves are compared at the
                                 ; release, because the two boxes share a title

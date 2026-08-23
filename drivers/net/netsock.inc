@@ -111,6 +111,25 @@ nsk_tab:
                                 ; absent from the driver, and a cell here
                                 ; rather than a hole so the bound above is the
                                 ; only thing that has to be right
+    dw nsk_addr                 ; NETV_ADDR
+    dw nsk_close                ; NETV_ABORT - **THE CABLE'S ABORT IS A
+                                ; CLOSE**, and honestly so. The verb exists
+                                ; because a TCP socket's slot outlives its
+                                ; close by a FIN handshake (SPEC.md 77.25);
+                                ; over the cable there is no handshake to
+                                ; outlive - the partner frees its end when
+                                ; told - so the two are already the same
+                                ; operation and a second body would be a
+                                ; second thing to keep in step for nothing
+    dw nsk_noprof               ; NETV_PROF - **THE CABLE HAS NO PROFILER**
+                                ; (SPEC.md 72.15). It shares every line of the
+                                ; stack and none of the instrument: the stages
+                                ; are bracketed in ETHER.DRV's own wrappers,
+                                ; and the DOS partner that runs the other half
+                                ; of this transport carries none of them. A
+                                ; refusal is the only honest answer - a table
+                                ; of zeroes would read as a stack doing no
+                                ; work at all
 %if ($ - nsk_tab) / 2 != NETV_MAX + 1
   %error "net: nsk_tab does not cover NETV_0..NETV_MAX"
 %endif
@@ -481,6 +500,71 @@ nsk_accept:
     ret
 
 ; -----------------------------------------------------------------------------
+; NETV_ADDR - out ES:DI = four IP bytes; CF=1 / NETE_NOLINK if there is none
+;
+; **THE ADDRESS IS THE PARTNER'S AND THAT IS THE TRUE ANSWER**, not a stand-in
+; for one we do not have. The DOS box owns the IP, an inbound connection
+; arrives there and is forwarded down the cable, so the address an FTP client
+; must dial for a passive transfer really is the far end's
+; (docs/NET-STACK-PLAN.md 1.5). Reporting anything else would put an
+; unreachable quad in a 227 reply.
+;
+; Gated on NET_VER_ADDR and not on nsk_do's NET_VER_SOCK: a version-2 partner
+; serves every other verb perfectly and only this letter is new to it, and an
+; unknown letter is a hung wire rather than a refusal (nwire.inc).
+; -----------------------------------------------------------------------------
+nsk_addr:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp byte [lp_ver], NET_VER_ADDR
+    jb  .old
+    mov al, NW_ADDR
+    mov [net_cmdip], al
+    call lp_sbyte
+    jc  .io
+    call lp_rbyte               ; the status...
+    jc  .io
+    mov [net_sst], al
+    mov cx, 4                   ; ...and FOUR BYTES WHATEVER IT SAID, because
+    mov bx, 0                   ; the frame is fixed (SPEC.md 62.10.1)
+.rd:
+    call lp_rbyte
+    jc  .io
+    mov [net_addr+bx], al
+    inc bx
+    loop .rd
+    cmp byte [net_sst], 0
+    jne .refused
+    mov si, net_addr            ; staged, then handed over: the four bytes are
+    mov cx, 4                   ; read one at a time off the wire and only a
+    cld                         ; whole answer is worth copying out
+    rep movsb
+    xor ax, ax
+    clc
+    jmp short .out
+.refused:
+    mov al, [net_sst]
+    xor ah, ah
+    stc
+    jmp short .out
+.old:
+    mov ax, NETE_NOLINK
+    stc
+    jmp short .out
+.io:
+    call nsk_io
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
 ; nsk_reply_h - the status-plus-handle reply that OPEN, LISTEN and ACCEPT share
 ; in:  AH = the state to record for a handle that comes back non-zero
 ; out: CF=0 and AX = the handle (0 = ACCEPT's "nobody yet");
@@ -754,4 +838,10 @@ nsk_close:
     pop si
     pop dx
     pop bx
+    ret
+
+; --- nsk_noprof - NETV_PROF over the cable ----------------------------------
+nsk_noprof:
+    mov ax, NETE_VERB
+    stc
     ret

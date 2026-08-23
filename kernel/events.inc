@@ -2,7 +2,9 @@
 ; os8088 - events.inc
 ;
 ; The system event queue (SPEC.md 10): a single ring of 16 fixed 8-byte
-; records in .bss. Producers may be ISRs (the mouse ISR pushes button
+; records in .bss. A FULL ring discards its OLDEST INPUT rather than refusing
+; the newest (SPEC.md 10.1) - see evq_push, and the one exception it makes.
+; Producers may be ISRs (the mouse ISR pushes button
 ; events with IF=0), consumers are tasks (the UI task pops), so both push
 ; and pop guard their whole read-modify-write with pushf/cli ... popf -
 ; the caller's interrupt flag is preserved and never a bare sti.
@@ -80,8 +82,22 @@ evq_push:
     cli
 
     cmp word [evq_count], EVQ_CAP
-    jae .full                   ; full: drop silently
-
+    jb .room
+    ; --- SPEC.md 10.1: full, so something is lost. Lose the OLDEST ----------
+    mov di, [evq_head]          ; ...unless the oldest is a WAKE, which is a
+    add di, evq_buf             ; PROMISE and not a sample: wm_wake coalesces
+    cmp word [di + EV_TYPE], EVT_WAKE   ; on a per-window flag that only a
+    je .full                    ; DISPATCH clears, so discarding one hangs
+                                ; that window's handshake for the session.
+                                ; A ring full of input has input at its head,
+                                ; so this falls back to dropping the newest
+                                ; about as often as a wake is the oldest
+    mov ax, [evq_head]
+    add ax, EVQ_RECSIZE
+    and ax, EVQ_MASK
+    mov [evq_head], ax
+    dec word [evq_count]        ; ...and the copy below puts it straight back
+.room:
     mov ax, ds                  ; copy runs DS:SI -> ES:DI within the kernel
     mov es, ax
     mov di, [evq_tail]

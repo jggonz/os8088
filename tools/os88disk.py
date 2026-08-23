@@ -4,6 +4,7 @@
     python3 tools/os88disk.py -o OUT.img --size {1440,720,360}
                              [--folder PATH ...] [[DIR[/DIR...]:]PKG.o88 ...]
     python3 tools/os88disk.py --verify IMG
+    python3 tools/os88disk.py --verify-hdd HDD.img
 
 The image is a canonical DOS FAT floppy (SPEC.md section 19): boot sector
 with a full BPB (OEM "MSDOS5.0", boot signature 0x29, fixed serial
@@ -729,6 +730,205 @@ def build(args) -> int:
     return 0
 
 
+def verify_hdd(path: str) -> int:
+    """Structural fsck for a PARTITIONED image - a hard disk, not a floppy.
+
+    `--verify` is a floppy's: it fails a BPB whose geometry is not one of six
+    real floppy shapes, and a FAT bigger than DSK_FAT_SECS. Neither rule
+    applies to a driver-backed volume (SPEC.md 18.7/52.4), and the machine
+    this project is calibrated against has a 20MB ST-225 in it, so there was
+    no way to answer "is the hard disk corrupt?" without writing a throwaway
+    script - which is how a throwaway answer gets trusted.
+
+    **THE MBR IS FOUND, NOT ASSUMED AT LBA 0.** A Seagate ST-11M reserves the
+    first sectors of the drive for itself and presents the one after them as
+    the BIOS's LBA 0, so a raw image of that drive has its partition table 68
+    sectors in and every partition LBA is relative to there. Read the raw
+    sector 0 of one and you get the controller's own geometry block - which
+    looks exactly like a destroyed MBR, and was read as one for a while. The
+    tell is that the partition's `hidden` field agrees with its table entry
+    only at the right offset, and that is what this searches for.
+    """
+    errors = []
+    try:
+        with open(path, "rb") as f:
+            img = f.read()
+    except OSError as e:
+        fail(f"cannot read {path}: {e}")
+
+    def sig_at(base):
+        o = base * SECTOR
+        return len(img) >= o + SECTOR and img[o + 510:o + 512] == b"\x55\xaa"
+
+    def parts_at(base):
+        o = base * SECTOR
+        out = []
+        for i in range(4):
+            e = img[o + 446 + i * 16:o + 446 + i * 16 + 16]
+            typ = e[4]
+            lba, cnt = struct.unpack("<II", e[8:16])
+            # The physical extent is base + lba + cnt: partition LBAs are
+            # relative to the table's own sector on these images, so a bound
+            # that omits base admits a partition reaching past a truncated
+            # image - which then dies in psec() with an IndexError traceback
+            # instead of a diagnostic.
+            if typ and cnt and base + lba + cnt <= len(img) // SECTOR:
+                out.append((i, typ, lba, cnt))
+        return out
+
+    base = None
+    for cand in range(0, 129):               # 68 on an ST-11M; 0 on anything
+        if not sig_at(cand):                 # sane. The agreement test below
+            continue                         # is what makes the search safe
+        ps = parts_at(cand)
+        if not ps:
+            continue
+        ok = True
+        for _, _, lba, _ in ps:
+            b = img[(cand + lba) * SECTOR:(cand + lba) * SECTOR + SECTOR]
+            if len(b) < SECTOR or b[510:512] != b"\x55\xaa":
+                ok = False
+                break
+            hid, = struct.unpack_from("<I", b, 28)
+            if hid != lba:                   # the volume's own opinion of
+                ok = False                   # where it starts must match the
+                break                        # table's, or this is not it
+        if ok:
+            base = cand
+            break
+    if base is None:
+        fail(f"{path}: no partition table whose entries agree with their "
+             "volumes, at any offset in the first 128 sectors")
+    if base:
+        print(f"os88disk: verify-hdd: {path}: partition table at physical "
+              f"sector {base} - {base} reserved sectors in front of it "
+              "(an ST-11M-style controller area)")
+
+    total_files = 0
+    for idx, typ, plba, pcnt in parts_at(base):
+        o = (base + plba) * SECTOR
+        bs = img[o:o + SECTOR]
+        bps, = struct.unpack_from("<H", bs, 11)
+        spc = bs[13]
+        rsvd, = struct.unpack_from("<H", bs, 14)
+        nfats = bs[16]
+        root_ent, = struct.unpack_from("<H", bs, 17)
+        tot, = struct.unpack_from("<H", bs, 19)
+        fatsz, = struct.unpack_from("<H", bs, 22)
+        if not tot:
+            tot, = struct.unpack_from("<I", bs, 32)
+        rootsecs = (root_ent * 32 + bps - 1) // bps
+        data_lba = rsvd + nfats * fatsz + rootsecs
+        nclus = (tot - data_lba) // spc if spc else 0
+        fat16 = nclus >= 4085
+        print(f"os88disk: verify-hdd: {path}: partition {idx} type 0x{typ:02X} "
+              f"at LBA {plba}, {pcnt} sectors: {'FAT16' if fat16 else 'FAT12'}, "
+              f"{nclus} clusters of {spc * bps} bytes")
+        if bps != 512:
+            errors.append(f"partition {idx}: BPB_BytsPerSec {bps} != 512")
+            continue
+
+        def psec(n, count=1):
+            a = o + n * SECTOR
+            return img[a:a + SECTOR * count]
+
+        f1 = psec(rsvd, fatsz)
+        f2 = psec(rsvd + fatsz, fatsz) if nfats > 1 else f1
+
+        def ent(fat, n):
+            if fat16:
+                return struct.unpack_from("<H", fat, n * 2)[0]
+            b = n + n // 2
+            v = fat[b] | (fat[b + 1] << 8)
+            return (v >> 4) if (n & 1) else (v & 0xFFF)
+
+        eoc = 0xFFF8 if fat16 else 0xFF8
+        if nfats > 1:
+            d = [n for n in range(nclus + 2) if ent(f1, n) != ent(f2, n)]
+            if d:
+                errors.append(f"partition {idx}: FAT1 and FAT2 differ at "
+                              f"{len(d)} entries, first {d[:8]}")
+
+        owner = {}
+
+        def chain(start, name):
+            c, n, seen = start, 0, set()
+            while True:
+                if c < 2 or c > nclus + 1:
+                    if c and c < eoc:
+                        errors.append(f"{name}: chain ends on cluster "
+                                      f"0x{c:04X}, outside 2..{nclus + 1}")
+                    return n
+                if c in seen:
+                    errors.append(f"{name}: CLUSTER LOOP at {c}")
+                    return n
+                if c in owner:
+                    errors.append(f"{name}: CROSS-LINKED with {owner[c]} "
+                                  f"at cluster {c}")
+                    return n
+                seen.add(c)
+                owner[c] = name
+                n += 1
+                c = ent(f1, c)
+
+        def walk(start, path_, is_root):
+            nonlocal total_files
+            if is_root:
+                d = psec(rsvd + nfats * fatsz, rootsecs)
+            else:
+                d, c, guard, seen = b"", start, 0, set()
+                while 2 <= c <= nclus + 1 and guard < 4096:
+                    if c in seen:
+                        errors.append(f"{path_}: DIRECTORY CHAIN LOOP at {c}")
+                        break
+                    seen.add(c)
+                    d += psec(data_lba + (c - 2) * spc, spc)
+                    c = ent(f1, c)
+                    guard += 1
+            subs = []
+            for i in range(0, len(d), 32):
+                e = d[i:i + 32]
+                if not e or e[0] == 0:
+                    break
+                if e[0] == 0xE5:
+                    continue
+                attr = e[11]
+                if attr & 0x08 and not attr & 0x10:
+                    continue
+                nm = e[0:8].decode("latin-1").rstrip()
+                ex = e[8:11].decode("latin-1").rstrip()
+                if nm in (".", ".."):
+                    continue
+                clus, = struct.unpack_from("<H", e, 26)
+                size, = struct.unpack_from("<I", e, 28)
+                full = path_ + nm + ("." + ex if ex else "")
+                if attr & 0x10:
+                    if clus:
+                        chain(clus, full + "/ (dir)")
+                    subs.append((clus, full + "/"))
+                else:
+                    total_files += 1
+                    got = chain(clus, full) if clus else 0
+                    want = (size + spc * bps - 1) // (spc * bps)
+                    if got != want:
+                        errors.append(f"{full}: size {size} needs {want} "
+                                      f"cluster(s), the chain has {got}")
+            for c, p in subs:
+                walk(c, p, False)
+
+        walk(0, "/", True)
+
+    for e in errors:
+        print(f"os88disk: verify-hdd: {path}: {e}", file=sys.stderr)
+    if errors:
+        print(f"os88disk: verify-hdd FAILED: {path}: {len(errors)} problem(s)",
+              file=sys.stderr)
+        return 1
+    print(f"os88disk: verify-hdd OK: {path}: {total_files} file(s), FATs "
+          "agree, no loops, no cross-links, every chain matches its size")
+    return 0
+
+
 def verify(path: str) -> int:
     """Standalone structural fsck; exit 0 iff the image is coherent."""
     errors = []
@@ -917,6 +1117,12 @@ def main() -> int:
                          "80 and 40 cylinders)")
     ap.add_argument("--scramble", action="store_true",
                     help="fragment cluster chains round-robin (test only)")
+    ap.add_argument("--verify-hdd", metavar="IMG",
+                    help="structural fsck of a PARTITIONED image (a hard "
+                         "disk). Finds the partition table even behind an "
+                         "ST-11M-style reserved area, and allows the FAT16 "
+                         "and geometry a driver volume has and a floppy "
+                         "cannot")
     ap.add_argument("--verify", metavar="IMG",
                     help="structural fsck of an existing image (no build)")
     ap.add_argument("--boot", metavar="BOOT.bin",
@@ -949,6 +1155,11 @@ def main() -> int:
                          "folder above it too")
     args = ap.parse_args()
 
+    if args.verify_hdd:
+        if args.output or args.size or args.scramble or args.packages \
+                or args.folder or args.dir_slots or args.verify:
+            ap.error("--verify-hdd takes no other arguments")
+        return verify_hdd(args.verify_hdd)
     if args.verify:
         if args.output or args.size or args.scramble or args.packages \
                 or args.folder or args.dir_slots:

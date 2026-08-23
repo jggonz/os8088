@@ -51,6 +51,14 @@ from harness import check, done                           # noqa: E402
 ASM = ["kernel/kernel.asm", "kernel/splash.inc", "boot/boot.asm",
        "boot/boothd.asm", "apps/os88api.inc", "apps/os88ui.inc",
        "drivers/os88drv.inc",
+       # The screen saver's private ABI (SPEC.md 79.3): five verbs, the
+       # settings block's four offsets, the mode bits and the minutes clamp,
+       # all written out in the kernel AND in the overlay because an overlay
+       # cannot include a kernel header.  That is exactly the shape this file
+       # exists for, and it was the first ABI in the tree with nothing at all
+       # watching it.
+       "kernel/blank.inc", "drivers/saver/saver.asm",
+       "drivers/saver/svcfg.inc",
        # apps/c64 is a C package whose assembly half and C half type the same
        # constants out twice (docs/C64-SPEC.md, its memory and screen
        # sections): the core's scratch offsets, the composer's band stride.

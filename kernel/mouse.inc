@@ -83,6 +83,14 @@ MOU_IDSTRICT equ 3              ; ...and THIS many to lower [mou_need], which
                                 ; mouse off for the session - 9.5.1's original
                                 ; bug. 3 is 'M', 'M3' and 'MZ@' and nothing
                                 ; with room for a banner in it
+MOU_IDFLOOR equ 8               ; SPEC.md 9.4.5: the earliest
+                                ; tick the window may close, ~440ms. It is a
+                                ; floor on the DRAIN and not on the identify:
+                                ; a modem answers the same DTR/RTS raise the
+                                ; mouse does, so anything that is going to talk
+                                ; at all has started by here - and a port that
+                                ; has started keeps the window open on its own
+                                ; through MOU_IDQUIET below
 MOU_IDQUIET equ 4               ; ...and nothing for the last ~220ms of the
                                 ; window. This is the test that separates a
                                 ; burst from a stream, and MOU_IDMAX alone
@@ -448,8 +456,21 @@ mouse_init:
     jb .sport
     mov ax, [ticks]
     sub ax, cx
-    cmp ax, MOU_IDWIN
+%ifndef MOU_ID_SLOW
+    cmp ax, MOU_IDWIN           ; the ceiling is unchanged: nothing waits longer
+    jae .settled                ; than the window always did (SPEC.md 9.4.5)
+    cmp ax, MOU_IDFLOOR         ; ...below the floor, never close early
     jb .settle
+    call mou_idquiet            ; ...above it, CF = 1 means every port that has
+    jnc .settle                 ; spoken has finished and one of them sounded
+.settled:                       ; like a mouse
+%else
+    cmp ax, MOU_IDWIN           ; MOUIDSLOW=1: always spend the whole window.
+    jb .settle                  ; The two arms are written out in full rather
+%endif                          ; than sharing the compare, so this one emits
+                                ; the same two instructions the pre-9.4.5
+                                ; kernel did - a 2-byte drift here moves every
+                                ; address in .text after it
 
     call mou_idjudge            ; ...and who sounded like a mouse?
 
@@ -528,6 +549,75 @@ mou_idbyte:
     pop ax
     ret
 
+%ifndef MOU_ID_SLOW
+; -----------------------------------------------------------------------------
+; mou_idquiet - may the identify window close now? (SPEC.md 9.4.5)
+;
+; THE DEFAULT since SPEC.md 9.4.5 shipped it - `make MOUIDSLOW=1` is the knob
+; now, and it brings back the FULL window, not this. (The paragraph that stood
+; here said the opposite - "MOUIDFAST=1 ONLY... it ships OFF" - the polarity
+; of a knob that no longer exists, kept long enough to mislead.) The window
+; has TWO jobs and this shortens only one of them safely. The identify half
+; is finished the moment a port has said its piece and gone quiet -
+; mou_idjudge's rules 3 and 4 are exactly that question, and asking them
+; early asks nothing new. The DRAIN half is what protects a machine with a
+; modem on the other port: bytes still in flight when IER goes on are
+; bit-6-set and the ISR's resync rule reads them as packet headers, which is
+; phantom clicks (SPEC.md 9.5.1). So the early close is bounded from BELOW by
+; MOU_IDFLOOR as well as gated on quiet, and MOU_IDWIN remains the ceiling: a
+; port that is still talking holds the window exactly as long as it ever did.
+;
+; The A/B is `make MOUIDSLOW=1` against the default, on the field machine -
+; MartyPC has one serial mouse and no modem, and SPEC.md 9.5's awkward cases
+; are the QEMU list (docs/TESTING.md).
+;
+; ins:  none (the test is per port, against each port's own last byte)
+; outs: CF = 1 if the window may close; all registers preserved
+; -----------------------------------------------------------------------------
+mou_idquiet:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov dx, [ticks]
+    xor cx, cx                  ; CL = has a port answered LIKE A MOUSE and
+    xor bx, bx                  ; finished? CH is spare
+.port:
+    cmp word [bx+mou_bases], 0
+    je  .next                   ; a port the probe rejected cannot answer
+    mov al, [bx+mou_idn]
+    or  al, al
+    jz  .next                   ; silent so far - MOU_IDFLOOR covers this one,
+                                ; and mou_idjudge's rule 1 refuses it anyway
+    mov ax, dx
+    sub ax, [bx+mou_idlast]     ; wrap-safe, like every other elapsed here
+    cmp ax, MOU_IDQUIET
+    jb  .talking                ; STILL ARRIVING on this port: hold the window
+                                ; open, exactly as long as today would
+    cmp byte [bx+mou_idb0], MOU_IDBYTE
+    jne .next                   ; it spoke and stopped, but not like a mouse -
+    mov al, [bx+mou_idn]        ; a short modem banner lands here, and gets the
+    cmp al, MOU_IDMAX           ; FULL window rather than an early close
+    ja  .next
+    mov cl, 1                   ; mou_idjudge's rules 1-3, asked early. Rule 4
+.next:                          ; is the quiet test above, and it is the same
+    add bx, 2                   ; comparison against the same word
+    cmp bx, MOU_PEND
+    jb  .port
+    or  cl, cl                  ; no mouse yet: there is nothing to close the
+    jz  .talking                ; window FOR, so wait for the ceiling
+    stc
+    jmp short .out
+.talking:
+    clc
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+%endif
 ; -----------------------------------------------------------------------------
 ; mou_idjudge - which ports answered like a mouse? (SPEC.md 9.4.1)
 ;
@@ -657,6 +747,8 @@ mou_claim:
     jb .out
     mov [mou_port], bl          ; settled. mou_hotplug's next pass retires
     mov byte [mou_seen], 1      ; every other port
+    mov byte [mou_ptr], 1       ; ...and the machine HAS a pointer, which is
+                                ; the other question (SPEC.md 9.6.6)
     mov al, [mou_lfired]        ; ...and THIS is the line those packets came in
     mov [mou_line], al          ; on, which the base cannot say (SPEC 9.5.2.1)
 .out:
@@ -1397,6 +1489,10 @@ mou_p2_byte:
     jne .go                     ; there is no run threshold on this side.
     mov byte [mou_port], MOU_P2ROW  ; [mou_need] exists because a Hayes result
     mov byte [mou_line], MOU_P2LINE ; code is a well-formed Microsoft packet
+    mov byte [mou_ptr], 1       ; ...and the machine HAS a pointer (SPEC.md
+                                ; 9.6.6): the keyboard mouse asks THIS, not
+                                ; "who won the serial contest", so it stands
+                                ; down beside a PS/2 winner too
     mov byte [mou_seen], 1      ; (SPEC.md 9.5.1); the aux port carries ONE
                                 ; device and it answered a reset before its
                                 ; interrupt was ever armed (SPEC.md 9.9.4).
@@ -1517,7 +1613,7 @@ KBM_NDIR    equ 8
 ;      (all registers preserved)
 ; -----------------------------------------------------------------------------
 kbm_key:
-    cmp byte [mou_seen], 0
+    cmp byte [mou_ptr], 0
     jne kbm_pass                ; a real mouse has spoken: never intercept
     call kbm_slock              ; ...or ScrollLock is on and the user has asked
     jnz kbm_pass                ; for the keys back
@@ -1665,10 +1761,11 @@ kbm_move:
     add ax, [mouse_x]
     push ax                     ; banked on OUR stack until y is ready, for
                                 ; mou_clamp's 2-D reason (SPEC.md 39.15.4).
-                                ; NOT in [mou_nx]: that word is the IRQ4
-                                ; ISR's staging area, and a serial byte
-                                ; landing between our store and read-back
-                                ; paired the ISR's x with our y
+                                ; On OUR stack and not in a shared word:
+                                ; the ISR decodes on the same invariant, and a
+                                ; packet landing between a store and its read
+                                ; back would pair its x with our y. That is
+                                ; what retired [mou_nx] (SPEC.md 9.9)
     mov al, [bx+2]              ; dy, the same way
     imul dl
     add ax, [mouse_y]
@@ -1894,16 +1991,33 @@ kbm_isr:
     mov ah, [kbd_armed]         ; SPEC.md 9.7's key-state map wants every byte
     or ah, ah                   ; that arrives; the keypad-5 half wants one
     jnz .peek                   ; byte on a mouseless machine. EITHER is a
-    cmp byte [mou_seen], 0      ; reason to read the port, and neither being
+    cmp byte [mou_ptr], 0       ; reason to read the port, and neither being
     jne .chain                  ; one is what keeps an idle machine off it
 .peek:
+%ifdef KERN_BIG
+    ; --- ...and on an 8042, is the byte waiting even the KEYBOARD's? --------
+    ; SPEC.md 9.6.6. One data register serves both devices and only status
+    ; bit 5 says which, so a bare read here can judge a MOUSE byte as a
+    ; scancode - which on the key-state map (9.7) sets a bit for a key nobody
+    ; touched. Gated on [mou_p2] and not on [cpu_tier]: an XT has an 8255
+    ; and no status register at 0x64 at all, so the machine this OS is for
+    ; must not read that port, and a machine with no aux device has nothing
+    ; the test could ever catch. AL is dead here - it is about to be loaded
+    ; from 0x60 - and AH ([kbd_armed]) is what must survive.
+    cmp byte [mou_p2], 0
+    je .peek60
+    in  al, MOU_P2CMD
+    test al, 0x20               ; status bit 5: the AUXILIARY device's byte
+    jnz .chain                  ; the mouse's, and LEFT for mou_p2_isr to take
+.peek60:
+%endif
     in al, 0x60                 ; PEEK - see above: the 8255 holds it until the
                                 ; BIOS acks, so this consumes nothing
     or ah, ah
     jz .p5                      ; nobody is tracking keys: keypad 5 only
     call kbd_track              ; SPEC.md 9.7 - preserves AL
 .p5:
-    cmp byte [mou_seen], 0
+    cmp byte [mou_ptr], 0
     jne .chain                  ; a real mouse has spoken: never intercept
     cmp al, KBM_5SCAN
     jne .chain
@@ -2324,7 +2438,7 @@ kbm_poll0:
 ;      promising more than it keeps costs here.
 ; -----------------------------------------------------------------------------
 kbm_ui:
-    cmp byte [mou_seen], 0
+    cmp byte [mou_ptr], 0
     jne .out                    ; a machine with a mouse pays this compare
     xor al, al                  ; AL = the ScrollLock level, 0 or 1. kbm_slock
     call kbm_slock              ; preserves AX and answers in ZF, and the pops
@@ -4079,6 +4193,8 @@ cur_shchk   db 0                ; "the window under the pointer may have
 cur_shx     dw -1               ; the position cur_shape_pass last answered
 cur_shy     dw -1               ; for; -1 cannot be a clamped mouse position
 cur_level   db -1               ; refcount; < 0 = hidden (boot state)
+mou_nx      dw 0                ; the candidate x, staged across the y decode
+                                ; because mou_clamp is 2-D (SPEC.md 39.15.4)
 cur_dirty   db 0                ; set when the ISR could not move the cursor
 cur_drawn_x dw 0                ; where the cursor pixels actually are, in
 cur_drawn_y dw 0                ; VIRTUAL coordinates (SPEC.md 39.15) - the
@@ -4089,8 +4205,6 @@ cur_drawn_y dw 0                ; VIRTUAL coordinates (SPEC.md 39.15) - the
                                 ; one into an ADDRESS, and the only two that
                                 ; subtract a display's origin.
                                 ; (valid only while cur_level >= 0)
-mou_nx      dw 0                ; the candidate x, staged across the y decode
-                                ; because mou_clamp is 2-D (SPEC.md 39.15.4)
 %ifdef KERN_BIG
 cur_disp    db 0                ; which display the arrow is ON, and cur_dprev
 cur_dprev   db 0                ; the one to put back afterwards (39.15.2).
@@ -4218,6 +4332,19 @@ mou_lfired  db 0                ; the line CURRENTLY being serviced, stamped by
                                 ; the ISR entry. Live for the length of one
                                 ; interrupt, meaningless outside it, and so not
                                 ; state anyone off-machine should read
+mou_ptr     db 0                ; A POINTING DEVICE HAS PROVEN ITSELF, whichever
+                                ; backend it was (SPEC.md 9.6.6). NOT the same
+                                ; question as [mou_seen], which is "the serial
+                                ; CONTEST is settled and this is the winning
+                                ; port" - a distinction with no difference for
+                                ; as long as serial was the only backend, and
+                                ; the reason the keyboard mouse stayed switched
+                                ; on next to a working PS/2 one. Set beside
+                                ; [mou_seen] in mou_claim and in mou_p2_byte at
+                                ; its settle; never cleared. BELOW
+                                ; the published span on purpose: 9.4.2's block
+                                ; is read by offset off a floppy and nothing
+                                ; may be inserted into it
 
 ; --- the PS/2 mouse, and the span SPEC.md 9.4.4 publishes --------------------
 mou_p2      db 0                ; a PS/2 mouse answered and is LIVE. Cleared

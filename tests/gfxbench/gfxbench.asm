@@ -1215,6 +1215,25 @@ gb_prims:
     mov [gb_tlshf], ax
     mov [gb_tlshf+2], dx
 
+    ; --- SPEC.md 79.5.6: the private mask, against the kernel's own line -------
+    mov word [bl_body], gb_b_mline
+    mov si, gb_r_mline
+    xor al, al
+    call bl_run
+    call gb_maskfill                ; a realistic density for the row below
+    mov word [bl_body], gb_b_xdiff
+    mov si, gb_r_xdiff
+    xor al, al
+    call bl_run
+    mov word [bl_body], gb_b_blit1
+    mov si, gb_r_blit1
+    xor al, al
+    call bl_run
+    mov word [bl_body], gb_b_mclr
+    mov si, gb_r_mclr
+    xor al, al
+    call bl_run
+
     ; --- many walks, one arrival (SPEC.md 5.6.8) -----------------------------
     ; The resumable walk (5.6.7) gives a moving line a cheap PIXEL and does
     ; nothing about the ARRIVAL, which for a caller stepping eight live trails
@@ -2255,6 +2274,147 @@ gb_b_lsteep:
     call OSAPI_GFX_LINE
     ret
 
+; --- SPEC.md 79.5.6's two candidates -------------------------------------------
+; gb_b_mline rasterises ONE line into a private 1bpp mask, with no clipping, no
+; ink, no dither table and no arrival - everything gfx_line does that a
+; caller compositing its own figure does not need. Against `GFX_LINE shallow
+; thin`, which draws the identical 127 x 32 line, the difference IS what the
+; kernel's generality costs.
+;
+; gb_b_xdiff is the commit: the whole box walked a word at a time, XORing this
+; frame's mask against last frame's, and writing only where they differ. It
+; writes into gb_ram rather than the framebuffer, and that substitution is
+; sound rather than convenient - Set 1 measured the framebuffer at 1.09x RAM
+; for a read-modify-write, and only about one word in seven here is written at
+; all. It does NOT clear as it goes, because bl_run runs it many times and a
+; self-clearing loop would measure an empty buffer from the second iteration
+; on; a real caller pays a `rep stosw` of GB_MSZ bytes on top, which Set 1
+; prices at 1.76 us a byte.
+gb_b_mline:
+    push bp
+    xor di, di                  ; DI = the byte, BL = the bit, at (0,0)
+    mov bl, 80h
+    mov si, GB_MDX + 1
+    mov bp, GB_MDY * 2 - GB_MDX
+.px:
+    or [gb_maska + di], bl
+    shr bl, 1                   ; ...one column on
+    jnz .nx
+    mov bl, 80h
+    inc di
+.nx:
+    add bp, GB_MDY * 2          ; ...and Bresenham's minor axis
+    jle .no
+    sub bp, GB_MDX * 2
+    add di, GB_MST
+.no:
+    dec si
+    jnz .px
+    pop bp
+    ret
+
+gb_b_xdiff:
+    mov si, gb_maska
+    mov di, gb_maskb
+    mov bx, gb_ram
+    mov cx, GB_MSZ / 2
+.w:
+    mov ax, [si]
+    xor ax, [di]
+    jz .skip                    ; ...and most words ARE the same
+    xor [bx], ax
+.skip:
+    add si, 2
+    add di, 2
+    add bx, 2
+    dec cx
+    jnz .w
+    ret
+
+; gb_maskfill - GB_MNL lines into each mask, the second lot shifted one row, so
+; the diff row above runs over a real density rather than an empty box. It is
+; if anything DENSER than a cube: twelve 128-pixel lines put ink in about half
+; the words, where a cube's twelve short edges reach nearer a sixth - so the
+; xordiff figure is a pessimistic bound on that shape and not a typical one.
+gb_maskfill:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov cx, GB_MNL
+    xor dx, dx                  ; DX = the row this edge starts on
+.one:
+    push cx
+    mov di, dx                  ; ...into mask A at row DX
+    mov bl, 80h
+    mov si, GB_MDX + 1
+    mov bp, GB_MDY * 2 - GB_MDX
+.pa:
+    or [gb_maska + di], bl
+    or [gb_maskb + di + GB_MST], bl     ; B is the same figure, one row down
+    shr bl, 1
+    jnz .na
+    mov bl, 80h
+    inc di
+.na:
+    add bp, GB_MDY * 2
+    jle .noa
+    sub bp, GB_MDX * 2
+    add di, GB_MST
+.noa:
+    dec si
+    jnz .pa
+    add dx, GB_MST * 8          ; the next edge, eight rows down
+    pop cx
+    dec cx
+    jnz .one
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; ...and the third candidate, which needs no new kernel call at all:
+; OSAPI_GFX_BLIT1 (SPEC.md 5.4.2) already puts a 1bpp band down in one arrival,
+; byte-aligned, in final screen polarity. For a figure on a plain ground that
+; IS the commit - the band replaces the box, so the old figure goes and the new
+; one arrives in the same pass and no pixel is ever read. gb_b_mclr is the
+; other half of that frame: the mask has to be wiped before it is drawn into.
+gb_b_blit1:
+    push bp
+    push es
+    push ds
+    pop es
+    mov si, gb_maska
+    mov bp, GB_MST
+    mov ax, [gb_x]
+    and ax, 0FFF8h              ; BLIT1 refuses an x that is not a multiple of 8
+    mov bx, [gb_y]
+    mov cx, GB_MW
+    mov dx, GB_MH
+    call OSAPI_GFX_BLIT1
+    pop es
+    pop bp
+    ret
+
+gb_b_mclr:
+    push es
+    push ds
+    pop es
+    mov di, gb_maska
+    mov cx, GB_MSZ / 2
+    xor ax, ax
+    cld
+    rep stosw
+    pop es
+    ret
+
 gb_b_lshal:
     mov ax, [gb_x]
     mov cx, ax
@@ -2763,6 +2923,10 @@ gb_r_lst:  db 'GFX_LINE steep thin', 0
 gb_r_lstf: db 'GFX_LINE steep fat', 0
 gb_r_lsh:  db 'GFX_LINE shallow thin', 0
 gb_r_lshf: db 'GFX_LINE shallow fat', 0
+gb_r_mline:db 'mask line 127x32', 0
+gb_r_xdiff:db 'xordiff 128x128', 0
+gb_r_blit1:db 'GFX_BLIT1 128x128', 0
+gb_r_mclr: db 'clear mask 2048', 0
 gb_r_ls8:  db 'GFX_LSTEP x8 (8 calls)', 0
 gb_r_lsv8: db 'GFX_LSTEPV x8 (1 call)', 0
 gb_r_frow: db 'GFX_FILL 256x1', 0
@@ -2871,7 +3035,20 @@ GB_O_RROW   equ GB_O_VROW + GB_BWROWS * 2
 GB_O_RAM    equ GB_O_RROW + GB_BWROWS * 2
 GB_O_SOLID  equ GB_O_RAM + GB_BWBYTES
 GB_O_STRIPE equ GB_O_SOLID + GB_BLITSZ
-GB_BSS_OWN  equ ((GB_O_STRIPE + GB_BLITSZ + 511) / 512) * 512   ; benchlib's base must be
+; --- SPEC.md 79.5.6's candidate: a figure rasterised into a PRIVATE 1bpp mask,
+; and the frame committed as the XOR of this mask against last frame's. The
+; question these two rows answer is whether a wireframe can be moved by
+; writing WORDS of difference instead of pixels of erase-and-draw.
+GB_MW       equ 128             ; the mask, which is a cube's bounding box
+GB_MH       equ 128
+GB_MST      equ GB_MW / 8       ; 16 bytes a row
+GB_MSZ      equ GB_MST * GB_MH  ; 2,048
+GB_MDX      equ 127             ; ...and the same 127 x 32 line the GFX_LINE
+GB_MDY      equ 32              ; rows draw, so the two are comparable
+GB_MNL      equ 12              ; edges of a cube, for the diff row's density
+GB_O_MASKA  equ GB_O_STRIPE + GB_BLITSZ
+GB_O_MASKB  equ GB_O_MASKA + GB_MSZ
+GB_BSS_OWN  equ ((GB_O_MASKB + GB_MSZ + 511) / 512) * 512   ; benchlib's base must be
                                         ; 512-ALIGNED: bl_out is an int 13h target
 
     align 512                   ; ...and os88_image_end likewise, which this
@@ -2959,5 +3136,7 @@ gb_rrow     equ os88_image_end + GB_O_RROW     ; ...and the RAM ones
 gb_ram      equ os88_image_end + GB_O_RAM      ; the RAM bandwidth target
 gb_bsolid   equ os88_image_end + GB_O_SOLID    ; the two blit sources
 gb_bstripe  equ os88_image_end + GB_O_STRIPE
+gb_maska    equ os88_image_end + GB_O_MASKA   ; the two figure masks
+gb_maskb    equ os88_image_end + GB_O_MASKB
 
     BL_BSS os88_image_end + GB_BSS_OWN

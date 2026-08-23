@@ -472,7 +472,17 @@ CFG_ANIM    equ 10              ; db: [wm_animon], SPEC.md 11.99's zoom
                                 ; (SPEC.md 76.11). Carried in EVERY build,
                                 ; including one with no animation in it, so a
                                 ; kernel swap does not silently turn it back on
-CFG_DBLOB   equ 11              ; DRV_BLOB_SZ bytes: A DRIVER'S OWN SETTINGS,
+CFG_SSM     equ 11              ; db: [ss_modes], which screen-saver modes the
+                                ; picker may choose from (SPEC.md 79.4)
+CFG_SSS     equ 12              ; db: [ss_secs], seconds one of them runs
+CFG_SSN     equ 13              ; db: [ss_mins], minutes of idle before any of
+                                ; it starts, 0 = never. ALL THREE ARE CARRIED
+                                ; IN EVERY BUILD, CFG_ANIM's rule one setting
+                                ; over: kern_small has no SAVER.DRV and still
+                                ; honours the period, and a floppy carried
+                                ; between the two kernels must not come back
+                                ; with the modes silently re-ticked
+CFG_DBLOB   equ 14              ; DRV_BLOB_SZ bytes: A DRIVER'S OWN SETTINGS,
                                 ; and the kernel does not know what is in
                                 ; them (SPEC.md 51.9). It knows the NAME and
                                 ; the LENGTH, carries them to disk and back,
@@ -522,13 +532,22 @@ drv_cfg_keys:
                                 ; as written - and every other key in the file
                                 ; still loads, keys being matched by name one
                                 ; at a time
-    dw 'TH'                     ; THeme - Bright or Dark, then SPEC.md 11.99's
-    db 2, 2, CFG_THM            ; zoom (SPEC.md 76.11). ver 2 because it WAS
-                                ; one byte: an old record's TH stops matching
-                                ; and the defaults stand, which is this
-                                ; table's whole compatibility story used as
-                                ; written - and every other key still loads,
-                                ; keys being matched by name one at a time
+    dw 'TH'                     ; THeme - Bright or Dark, SPEC.md 11.99's zoom
+    db 3, 5, CFG_THM            ; (SPEC.md 76.11), and the screen saver's three
+                                ; (SPEC.md 79.4). ver 3 because it WAS two
+                                ; bytes and ONE before that: an old record's TH
+                                ; stops matching and the defaults stand, which
+                                ; is this table's whole compatibility story
+                                ; used as written - and every other key still
+                                ; loads, keys being matched by name one at a
+                                ; time. What an upgrade costs is the theme and
+                                ; the zoom going back to their defaults ONCE,
+                                ; which is the price of not spending a key
+                                ; entry and a record header (nine bytes of a
+                                ; rung with 49 in it) on a setting that is
+                                ; reached from the Theme page and belongs to
+                                ; the same question: what the machine spends
+                                ; on looking like itself
     dw 'HD'                     ; Hard Disk - the DRIVER's own blob (51.9)
     db 1, DRV_BLOB_SZ, CFG_DBLOB
 %ifdef KERN_BIG
@@ -567,7 +586,13 @@ drv_cfg_map:
     dw thm_kind
     db CFG_ANIM
     dw wm_animon
-DRV_CFG_MAPN equ 5
+    db CFG_SSM
+    dw ss_modes
+    db CFG_SSS
+    dw ss_secs
+    db CFG_SSN
+    dw ss_mins
+DRV_CFG_MAPN equ 8
 
 ; --- whose blob is whose (SPEC.md 51.9.1) ------------------------------------
 ; row index, size, offset into the struct. The ROW and not the class, for the
@@ -787,6 +812,79 @@ drv_tab:
                                 ; printer on it is a real machine
     db DRVE_OK
     db 0
+
+
+; =============================================================================
+; What a driver costs to RUN, in KB (SPEC.md 31.6.2)
+;
+; A table PARALLEL to drv_tab rather than a field inside it, for two reasons
+; that point the same way: DRVR_SIZE is 16 and drv_row reaches a row with
+; `shl` by 4 (a 17th byte would cost a multiply on every single dispatch), and
+; every value here is a COMPILE-TIME CONSTANT where every field in the row
+; proper is state the machine writes. Nothing at runtime ever stores here.
+;
+; The figure is what the driver holds while performing its PRIMARY FUNCTION:
+; its image, which is a heap claim like any other (DRVR_KB), plus the claims it
+; takes to do the job. It is NOT what it holds while being configured - the
+; hard disk's Install path claims up to HIW_KMAXKB and pulls HDDTOOL.DRV in
+; beside it, and pricing a driver at what its dialogs cost is not the question
+; the user is asking - and it is not a purgeable claim either (SPEC.md 50.6),
+; which the heap can take back and so is not a cost. A claim the driver sizes
+; to the machine is at its CEILING, because the number is read by somebody
+; deciding whether the machine can afford the tick.
+;
+; The IMAGE terms are named separately below because tests/unit/t_drvmem.py
+; checks each of them against the .drv the build just produced, and each claim
+; term against the constant in the driver's own source. There is no linker
+; here (SPEC.md 1): a driver that grows a kilobyte is otherwise a number on
+; screen that quietly stops being true.
+; =============================================================================
+DRVM_PLUS    equ 0x8000         ; "...and the store you size on its own page",
+                                ; drawn as a '+'. The RAM disk's alone: its
+                                ; arena is [rd_kb], which is the USER's number
+                                ; and not the driver's or the machine's, and
+                                ; RD_MAXKB is 16,384 - a column showing that
+                                ; would be arithmetic rather than advice
+
+DRVM_IMG_SND equ 6              ; ceil(build/sound.drv   / 1024) - t_drvmem
+DRVM_IMG_HDD equ 8              ; ceil(build/hdd.drv     / 1024)   checks
+DRVM_IMG_ETH equ 16             ; ceil(build/ether.drv   / 1024)   every one
+DRVM_IMG_RAM equ 9              ; ceil(build/ramdisk.drv / 1024)   of these
+DRVM_IMG_NET equ 6              ; ceil(build/net.drv     / 1024)
+
+DRVM_SND     equ DRVM_IMG_SND + 8 + 20    ; SBL_DMASZ (the DMA-visible double
+                                ; buffer and record ring) + SBL_POOLKB (the
+                                ; staging pool, taken on the first grant). The
+                                ; pool walks DOWN by SBL_POOLSTEP when the heap
+                                ; will not fund it; 20 is the top rung
+DRVM_HDD     equ DRVM_IMG_HDD + 4 * 6     ; HD_MAXVOL listing claims of
+                                ; HDD_LISTKB - one per mounted volume, and four
+                                ; is what the driver will mount at once
+DRVM_ETH     equ DRVM_IMG_ETH + 36        ; NET_SOCKS * (SK_RXMAX + SK_TXMAX),
+                                ; rounded up: 4 * 9,216 = 36,864. sk_claim is a
+                                ; ladder down to SK_RXCAP0 and this is its top
+DRVM_RAM     equ (DRVM_IMG_RAM + 4 + 8) | DRVM_PLUS
+                                ; RD_TABMAXKB (the chain table) + RD_EXTMAXKB
+                                ; (the bounce, which the extended store lends
+                                ; as its image block). The two paths are
+                                ; exclusive - conventional takes an arena
+                                ; instead of a bounce - so this is the larger,
+                                ; and the arena is what the '+' stands for
+DRVM_NET     equ DRVM_IMG_NET   ; the parallel link claims NOTHING: its packet
+                                ; buffers are bss, and a driver's bss ships
+                                ; INSIDE its image (DRV_H_IMG)
+
+drv_memk:                       ; one word per drv_tab row, in the same order
+    dw DRVM_SND                 ; row 0: sound
+    dw DRVM_HDD                 ; row 1: hard disk
+    dw DRVM_ETH                 ; row 2: the Ethernet card
+%ifdef KERN_BIG
+    dw DRVM_RAM                 ; row 3: the RAM disk (kern_big alone)
+%endif
+    dw DRVM_NET                 ; the parallel link, last on both builds
+%if ($ - drv_memk) / 2 != DRV_MAX
+  %error "drv_memk has drifted from drv_tab: one word per row, same order"
+%endif
 
 drv_errstr:                     ; DRVE_* -> what the user is told
     dw drv_e0, drv_e1, drv_e2, drv_e3, drv_e4, drv_e5, drv_e6, drv_e7
@@ -1152,7 +1250,10 @@ drv_call:
 %ifdef KERN_BIG
     cmp bx, xm_row              ; **...AND drv_tab IS NOT THE WHOLE LIST OF
     je .row                     ; LEGITIMATE ROWS** (SPEC.md 41.12.5). xm_row
-%endif                          ; is a DRVR_-shaped record with no drv_tab
+    cmp bx, ss_row              ; ...and ss_row is the SECOND (SPEC.md 79.2),
+    je .row                     ; which is why this is a list and not a pair of
+%endif                          ; compares somebody has to remember to widen.
+                                ; xm_row is a DRVR_-shaped record with no drv_tab
                                 ; entry by design - no Drivers tick, no
                                 ; publication slot, drv_load_at's whole reason
                                 ; for existing - so the range test above
@@ -2104,10 +2205,16 @@ drv_mounted:
                                 ; dskw_write_sys, none of which look at the
                                 ; listing - so the scan, the sort and one
                                 ; icon-harvest read per file in A:'s root are
-                                ; all bought for nothing. ui_tm_open is the
-                                ; caller that DOES need a listing (it hands
-                                ; the loader a directory index) and it mounts
-                                ; A: itself rather than coming through here
+                                ; all bought for nothing. ui_tm_open used to
+                                ; be named here as the caller that DOES need
+                                ; a listing, because it handed the loader a
+                                ; directory index; SPEC.md 21.4 gave it
+                                ; ld_run_name and SPEC.md 28.3.1 spent it, so
+                                ; that exception is gone and every mount on
+                                ; the path to a system file is quiet. It still
+                                ; mounts for itself rather than coming through
+                                ; here, because it has to reach a SUBDIRECTORY
+                                ; (SPEC.md 28.3) and this stops at the root
     pop dx
     pop ax
     ret
@@ -3082,6 +3189,10 @@ drv_cfg_unpack:
 %endif
     mov ax, [drv_cfg+CFG_WANT]
     call drv_want_set
+    call ss_mins2idle           ; the map above stored [ss_mins]; the TICKS
+                                ; blk_pass compares against are derived from
+                                ; it and clamped (SPEC.md 79.4), which is not
+                                ; a store and so cannot be a map row
     mov al, [drv_cfg+CFG_SCH]
     cmp al, 1
     ja .out                     ; a byte from a future version: leave the

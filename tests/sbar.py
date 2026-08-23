@@ -260,8 +260,13 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     M.settle(m)
     check("...and above it pages up", scrl() < paged, f"(FS_SCRL {scrl()})")
 
-    # A click ON the thumb pages DOWN in this window - files.inc always did,
-    # and 13.10.1 is the element declining to choose for it.
+    # A click ON the thumb used to page DOWN in this window - files.inc always
+    # did, and 13.10.1 was the element declining to choose for it. THE THUMB
+    # IS A GESTURE NOW (13.10.5, and it ships): the press GRABS, a release in
+    # place commits the unmoved pos, and fmthumb's case A asserts exactly
+    # that. This gate kept the pre-ship expectation and was red from the day
+    # the drag landed - the two bars still being ONE element is what it is
+    # here to prove, so it now asserts the gesture's answer on this bar too.
     r = rows(m)
     body = [y for y in range(trk1, trk2 + 1)
             if all(px(r, x, y) for x in range(x1 + 3, x2 - 2))]
@@ -269,8 +274,8 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     if body:
         mo.click(ccx, body[len(body) // 2])
         M.settle(m)
-        check("a click ON the thumb pages down HERE (13.10.1)", scrl() != was,
-              f"(FS_SCRL {was} -> {scrl()}; the dialog does nothing there)")
+        check("a click ON the thumb GRABS, not pages (13.10.5)", scrl() == was,
+              f"(FS_SCRL {was} -> {scrl()}; a page would have moved it)")
 
 print()
 if fails:

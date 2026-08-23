@@ -15,10 +15,16 @@ timing here means anything. So every assertion below is about BEHAVIOUR and
 none is about speed. There is no number in this file for PERFORMANCE.md to
 want off the 5150, which is the honest position rather than a limitation.
 
-FIVE ASSERTIONS, and they climb the stack.
+SIX ASSERTIONS, and they climb the stack.
 
 1. THE CARD. A base was found, a station address came out of the PROM, and it
    is a plausible one - not all zero, not all ones, not multicast.
+
+1b. THE RINGS. `sk_seg` is non-zero and the ladder landed on its TOP rung
+   (SPEC.md 72.13.2). This machine has the whole heap free when the driver
+   attaches, so anything lower is the ladder failing and not the machine
+   refusing - and the field spent a round unable to tell those apart, because
+   nothing anywhere said which rung had been taken.
 
 2. THE ADDRESS. `dhcp_st` is DH_BOUND and `eth_ip` is 10.0.2.15, the gateway
    10.0.2.2 and the name server 10.0.2.3 - all three read out of the driver's
@@ -66,6 +72,7 @@ PORT = 8090
 PATH = "/eth.htm"
 URL = "http://10.0.2.2:%d%s" % (PORT, PATH)
 
+SK_RXMAX, SK_TXMAX = 8192, 1024         # tcp.inc's top rung (SPEC.md 72.13)
 ETH_ROW, DRVR_SZ, DRVR_SEG = 2, 16, 2   # drv_tab row 2 since SPEC.md 31.1's
                                         # reorder (sound, hdd, ETHER, ram, net)
 DH_BOUND = 3
@@ -94,6 +101,21 @@ def say(*a):
 # binary it describes is byte-identical to the one on the disk under test. A
 # map of a different build is worse than no map - every offset is plausible.
 # -----------------------------------------------------------------------------
+_ETHDEF = []
+
+
+def ether_defines(*names):
+    """The -D set ether_syms() assembles with, set once beside the knob.
+
+    A knob build of the driver is a DIFFERENT driver, and the check below
+    refuses a map that does not match `build/ether.bin` byte for byte - so a
+    harness driving `ETHPROF=1` has to say so here or every lookup is refused.
+    os88sym.default_defines() is the same arrangement for the kernel.
+    """
+    global _ETHDEF
+    _ETHDEF = list(names)
+
+
 def ether_syms():
     with tempfile.TemporaryDirectory() as d:
         src = os.path.join(d, "e.asm")
@@ -102,9 +124,10 @@ def ether_syms():
         shutil.copy("drivers/ether/ether.asm", src)
         with open(src, "a") as f:
             f.write("\n[map all %s]\n" % mp)
-        subprocess.run(["nasm", "-f", "bin", "-w+error",
-                        "-I", "drivers/ether/", "-I", "drivers/net/",
-                        "-I", "drivers/", "-I", "apps/", "-o", out, src],
+        subprocess.run(["nasm", "-f", "bin", "-w+error"]
+                       + ["-D" + n for n in _ETHDEF]
+                       + ["-I", "drivers/ether/", "-I", "drivers/net/",
+                          "-I", "drivers/", "-I", "apps/", "-o", out, src],
                        check=True)
         if open(out, "rb").read() != open("build/ether.bin", "rb").read():
             sys.exit("ethernet: the mapped build is not build/ether.bin - "
@@ -390,6 +413,27 @@ def main():
         if mac[0] & 1:
             fails.append("the station address %s is MULTICAST, so it is not a "
                          "station address" % mac.hex())
+
+        # --- 1b. THE RINGS, AND WHICH RUNG THE LADDER LANDED ON ------------
+        # SPEC.md 72.13.2. The rung was chosen in silence and the field could
+        # only GUESS which one it got - which is how a change that did nothing
+        # and a change that never ran look the same. This machine has a whole
+        # heap free at attach, so the ceiling is the only right answer, and a
+        # floor here is the ladder failing rather than the machine refusing.
+        skseg, rxcap, txcap = dw("sk_seg"), dw("sk_rxcap"), dw("sk_txcap")
+        say("rings at %04X, rx %d tx %d" % (skseg, rxcap, txcap))
+        if not skseg:
+            fails.append("sk_seg is 0: the rings were never claimed, so every "
+                         "socket verb is refusing")
+        if rxcap != SK_RXMAX:
+            fails.append("the receive ring is %d and not %d on a machine with "
+                         "the heap empty at attach: the ladder stepped down "
+                         "for a reason that is not memory (SPEC.md 72.13.2)"
+                         % (rxcap, SK_RXMAX))
+        if txcap != SK_TXMAX:
+            fails.append("the send ring is %d and not %d: the TX size follows "
+                         "the RX rung and these two have come apart"
+                         % (txcap, SK_TXMAX))
 
         for _ in range(80):                     # DHCP_WAIT is 110 ticks
             if db("dhcp_st") == DH_BOUND:

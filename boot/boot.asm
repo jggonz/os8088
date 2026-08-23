@@ -79,6 +79,30 @@ RELOC_ADJ    equ 0x07E0         ; int 12h answers KB; KB*64 is the paragraph
                                 ; int 12h's answer and dies on one without
 SPLASH_OFF   equ 0x0008         ; the kernel's boot splash far entry (SPEC.md 15)
 SPL_RESIDENT equ 9              ; splash is fully aboard after this many
+
+; --- how far ONE int 13h may run (SPEC.md 18.91.1) -------------------------------
+; A run is bounded by the end of the CYLINDER, not the end of the track, which
+; on a two-headed floppy doubles it: 18 sectors a call rather than 9. It costs
+; the sector NOTHING - the two `mov`s below take an immediate either way.
+;
+; It works because the BIOS issues READ DATA with the MULTI-TRACK bit set
+; (command E6h), so when the FDC finishes the sector numbered EOT it flips to
+; the other head and carries on from sector 1 of the same cylinder. That is not
+; a hopeful reading of a datasheet: it is exactly the behaviour SPEC.md 18.92
+; was written to FIX, where an EOT of 8 on a 9-sector track silently returned
+; head 1's sector 1 in place of head 0's sector 9. Here the same mechanism is
+; asked for on purpose, and it lines up with LBA order by construction - the
+; LBA->CHS map below is sector-within-track, then head, then cylinder, so head
+; 0's whole track is followed by head 1's, which is what the FDC does.
+;
+; `make TRACKRUN=1` puts the bound back at the track - the pre-18.91.1
+; transfer, in both loops together, for A/B-ing this on real iron the way
+; FLOPPY1=1 brackets 18.91.
+%ifdef TRACK_RUN
+RUN_SECS     equ SPT
+%else
+RUN_SECS     equ SPT * HEADS
+%endif
                                 ; sectors - must match kernel/splash.inc
 
 BPB_END      equ 62             ; where a DOS BPB stops and our code starts
@@ -330,23 +354,26 @@ entry:
 ;
 ; A run stops at the first of three bounds, and the third is the one that is
 ; easy not to think of:
-;   1. the end of the track - a CHS call must not cross one, and since entry
-;      set the diskette parameter table's EOT to SPT (SPEC.md 18.92/18.93)
-;      this is the FDC's bound too, so there is no separate test for it
+;   1. RUN_SECS - the end of the cylinder, or with TRACKRUN=1 the end of the
+;      track (SPEC.md 18.91.1). Either way EOT stays SPT: at the cylinder
+;      bound it is EOT that makes the FDC change heads and keep going, and at
+;      the track bound it is the FDC's bound too, so no separate test is
+;      needed there either (SPEC.md 18.92/18.93)
 ;   2. the sectors still wanted
 ;   3. the 64KB DMA page - a single 512-aligned sector cannot cross one, a
 ;      run can, and the controller answers a straddle with error 09h
 ; -----------------------------------------------------------------------------
 read_run:
-    ; --- 1 and 2: the track, and what is left to read -----------------------
-    ; The track bound is ALSO the EOT bound: entry above set the table's EOT
-    ; to SPT, so the FDC stops exactly where a CHS call had to anyway.
+    ; --- 1 and 2: RUN_SECS, and what is left to read -------------------------
+    ; The EOT is what carries the read onto the other head (see RUN_SECS).
+    ; With TRACKRUN=1 the two are the same number again and the FDC stops
+    ; exactly where a CHS call had to anyway.
     mov ax, [lba]
     xor dx, dx
-    mov bx, SPT
-    div bx                      ; DX = sector - 1, its index in the track
-    mov di, SPT
-    sub di, dx                  ; DI = sectors to the end of this track
+    mov bx, RUN_SECS
+    div bx                      ; DX = the LBA's index within a run's span
+    mov di, RUN_SECS
+    sub di, dx                  ; DI = sectors to the end of it
     cmp di, [left]
     jbe .page
     mov di, [left]

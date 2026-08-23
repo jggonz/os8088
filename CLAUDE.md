@@ -24,19 +24,34 @@ nothing here duplicates it — a second copy is a copy that goes stale.
 | **[docs/NET-STACK-PLAN.md](docs/NET-STACK-PLAN.md)** | anything on the wire (§72) — the stack's stages, what each layer refuses, and why TLS is not on this machine |
 | **[docs/BROWSER-PLAN.md](docs/BROWSER-PLAN.md)** | the browser (§71) — the renderer's steps, and `tools/htmsim.py` is its reference implementation |
 | **[docs/PROXY-PLAN.md](docs/PROXY-PLAN.md)** | the host-side proxy — it exists because an RSA-2048 private operation is *minutes* on a 4.77 MHz 8088, so TLS terminates off the machine |
+| **[docs/MARTYPC-DEBUG.md](docs/MARTYPC-DEBUG.md)** | driving the emulator — `launch`/`settle`/`sym`, the debug server, reading the guest's floppy back on the host, and installing the deps in a fresh Ubuntu container |
+| **[docs/UPSTREAM.md](docs/UPSTREAM.md)** | any claim about what is ahead, behind, merged or unrelated. **Its Rule 0: a fresh clone is SHALLOW, and git answers ancestry questions confidently and wrongly on one** |
+| **[docs/FIELD-MACHINES.md](docs/FIELD-MACHINES.md)** | asking for a field run — who has the hardware, what is in it, what a run costs them, and the two rules that bind whoever reads a result |
+| **[docs/FIELD-NOTES.md](docs/FIELD-NOTES.md)** | a bug that reproduces on hardware and not here — open, reproduced, unfixed, with what has already been ruled out for each |
+| **[docs/FTP-PERF.md](docs/FTP-PERF.md)** | picking the FTP server's speed back up (§77, §72.15) — what moved it from 7 to 15 KB/s, the four things that did NOT work, where the time goes now (57% of it is ABOVE the driver), and the next five candidates in the order the evidence ranks them |
 
 ## Commands
 
-Needs `nasm`, `qemu-system-i386`, `python3`; `tools/setup-macos.sh` installs
-them on a Mac. No linker — everything is `nasm -f bin` flat binaries,
-deliberately, to keep Apple's Mach-O-only toolchain out of it.
+Needs `nasm`, `python3`, and **`cargo` for `make marty`** (plus `libudev-dev`
+and `pkg-config` on Linux). `qemu-system-i386` is for the short list in
+Testing and nothing else. `tools/setup-macos.sh` installs the Mac set but
+**not Rust**, so `make marty` there wants `cargo` in front of it. No linker —
+everything is `nasm -f bin` flat binaries, deliberately, to keep Apple's
+Mach-O-only toolchain out of it.
 
 ```
 make          # build every floppy image into build/ (also runs tools/checkdocs.py)
 make run      # boot in QEMU with an emulated serial mouse. RUNAPPS=<img>
               # swaps the B: floppy, so a disk built on demand can be LOOKED
               # at (`make bench && make run RUNAPPS=build/bench.img`)
-make test     # boot headless, QMP socket at build/qmp.sock — this is how you drive it
+make marty    # a cycle-accurate 4.77MHz 8088 with a real period BIOS and a
+              # debugger that costs the guest nothing — the default
+              # instrument (docs/MARTYPC-DEBUG.md). Needs cargo; build it at
+              # the START of a session, not when you first need it. A RUN
+              # PAST ~180s HAS FROZEN rather than slowed — the guest runs at
+              # over 4x real time, so the overrun is the finding: diagnose it
+              # rather than raising the timeout
+make test     # boot headless, QMP socket at build/qmp.sock — the fallback (see Testing)
 make test-snd # ...plus PC speaker capture to build/snd.wav (verify: tools/sndcheck.py)
 make debug    # boot halted, waiting for gdb on :1234
 make bench    # build the tests/ apps — ON DEMAND ONLY; nothing under tests/ ships
@@ -107,6 +122,13 @@ make c64disk    #   3.10's x64 as a windowed Commodore 64 — a 6510 in a 64KB
                 #   in raw QEMU), `make c64bandbench` the composer's bench, and
                 #   `make c64cputest` the 6510's — it arrives with the core.
                 #   THE CONTRACT IS docs/C64-SPEC.md, not a section of SPEC.md
+make netbench   # THE STACK'S PROFILER (SPEC.md 72.15): NETBENCH.O88 beside
+                #   FTPD.O88 on one disk, in all three geometries. ETHER.DRV
+                #   brackets its own ten stages with the PIT and this is the
+                #   window that reads them - S start, X stop, R read, W write.
+                #   MartyPC has NO NIC, so the milliseconds are only real on
+                #   86Box or the 5150; under QEMU the calls and bytes are
+                #   exact and the times are the host's
 make ethertest  # THE ETHERNET GATE'S DISK (§72.9): a SYSTEM.CFG that already
                 #   asks for ETHER.DRV, so the card is up and DHCP has run
                 #   before the first paint and the test reads state instead of
@@ -133,6 +155,9 @@ make clean
 | `ADLIB=1` / `SB16=1` | give the sound driver a card to attach to |
 | `HDD=<MB>` | give the hard-disk driver a disk |
 | `TESTAPPS=build/<x>.img` | swap the B: floppy for a scratch image |
+| `TRACKRUN=1` | put a transfer run's bound back at the TRACK, not the cylinder (SPEC.md §18.91.1) — 9 sectors an `int 13h` instead of 18, both loops. The pre-§18.91.1 transfer, and the bracket for a 2.2 s win two emulators agree on and no 5150 has yet seen |
+| `MOUIDSLOW=1` | always spend the whole of SPEC.md §9.4.1's identify window — the pre-§9.4.5 `mouse_init`, 1,200 ms rather than 596. The bracket for the one case no emulator here can show: a MODEM on the other port |
+| `BOOTPROF=1` | SPEC.md §15.5's boot phase table, drawn on the desktop and published as §57's `BP` — the profile a machine with **no debugger** can take. Refuses to build with `QUANTUM=` |
 
 All are stamp-tracked, so changing one rebuilds the kernel. Without that, make
 sees an up-to-date `kernel.bin`, boots the previous configuration, and it reads
@@ -163,7 +188,10 @@ runcpmdisk` the RUNCPM disks (`tools/getruncpm.py` fetches RunCPM's CCP and
 master disk at a pinned commit and `tools/getcpmsw.py` the CP/M games and
 applications that ride beside it, §74.6 — never committed, either of them;
 `make rczex` and `make rcz80test` are the Z80 core's ZEXDOC gates, in the OS
-and in raw QEMU).
+and in raw QEMU). **`make wiredisk`** is the same shape for a package that
+DOES NOT SHIP: WIREFRAME is an instrument rather than an application (§78.9),
+so `all` builds `wire.o88` and no shipped floppy carries it, and the three
+tests that drive it — `wireflick`, `wirefps`, `uilat` — default to that disk.
 `make allapps` collapses all of them onto one 1.44MB floppy (§19.10).
 
 **`RESET=` clears a machine's non-volatile state on the way in**, and it
@@ -223,6 +251,12 @@ binds both.
   one 64KB window because offsets are 16 bits. They are relieved by different
   mechanisms. **Raising either is a decision to take with whoever asked for the
   feature, not a build fix.**
+- **A heap claim can MOVE, and the default is that it may not** (§66). A record
+  is born `MC_RLOC` = 0, PINNED; `OSAPI_MEM_MOVABLE` opts one in and takes a
+  relocation **proc**, not the address of the word naming the block — a holder
+  can have more than one such word, and segments derived from a base are
+  reached by no poke at all. Opting in and forgetting the proc is silent until
+  the next compaction, which by construction happens on a busy heap.
 - **The package boundary is solved once, not per call site** (§20): calling out
   is a far call through an API cell that switches DS; calling in goes through
   the three-byte dispatcher in the package header, so every callback is a near
@@ -235,6 +269,16 @@ binds both.
   the kernel learns nothing about TCP and a machine with no card refuses at the
   one fence. `apps/os88sock.inc` is that ABI written once; `apps/os88line.inc`
   is the line discipline Telnet and the browser share.
+  **A socket buffer must live in the package's own segment**: `OSAPI_DRV_CALL`
+  is an X stub and puts the caller's segment in ES, so a staging buffer in a
+  heap claim is read out of the package's own image instead — which reads as
+  memory corruption rather than as a wrong segment register, because the bytes
+  really are ours (§77.10).
+- **A worker may not touch a file** (§20.6 rule 7), so a package that is
+  socket-to-file by definition is shaped around `OSAPI_WM_ONWAKE`: the worker
+  stages, the UI task commits, and a single byte written last by the producer
+  and cleared last by the consumer is the whole handshake — no lock, because
+  the worker may not take one. `apps/ftpd/` (§77) is the worked example.
 - **A C package that does not fit gets a second segment, not a bigger one**
   (§73.14): a function named `ovl_*` has its CODE emitted into a module that
   ships beside the package (`CWORD.OVL`) and is far-called both ways, while
@@ -330,7 +374,40 @@ rows are host-side invariant checks over what `make` just built, the build
 configurations `all` never builds, and whole scripted sessions driven through
 an emulator.
 
-Everything else is still boot `make test`, then drive it over QMP.
+**MartyPC is the default instrument; QEMU is a fallback with a closed list.**
+docs/TESTING.md's opening owns the rule and the reasoning. The list is
+repeated here on purpose — one you have to go and open is one you will argue
+past:
+
+1. 286 and 386
+2. rung 1 of the hard-disk driver (§52.1) — gated on `CPU_286`
+3. §9.5's awkward mouse cases — COM2, the cross-wired IRQ4 card, a modem
+4. the PS/2 mouse (§9.9) — MartyPC is an 8088, and an XT has an 8255 PPI
+   rather than an 8042 with an aux port
+5. the Ethernet card (§72) — MartyPC has no NIC of any kind
+
+**"It is quicker to type" is not on it, and neither is "I already know the QMP
+commands."** Everything else that runs on an 8088 — all three of §39's
+adapters, input, screenshots, sound — is `make marty`, which agrees with the
+field machine to 0–4% on 45 of 47 `gfxbench` rows.
+
+**Without MartyPC the list still binds**: QEMU does not become the answer in
+its absence. QEMU counts work exactly and cannot time it; 86Box has no
+debugger and no automation socket, so a session can start one and cannot read
+the result. That leaves the table above and arithmetic — which is precisely
+rule 5's blind spot. Say when a number is predicted rather than measured, and
+get it checked on the 5150 (docs/FIELD-MACHINES.md).
+
+Driving MartyPC — **`os88mouse.py`, never `os88marty.py mouse`**: it reads the
+cursor back instead of dead-reckoning, and `dblclick` is a verb of its own.
+
+```
+python3 tools/os88mouse.py 127.0.0.1:9001 click 445 153
+python3 tools/os88mouse.py 127.0.0.1:9001 dblclick 150 90   # NOT two clicks
+python3 tools/os88marty.py 127.0.0.1:9001 shot out.png --rendered
+```
+
+Driving QEMU, for the five cases above and for a host with no MartyPC:
 
 ```
 python3 tools/mouse.py build/qmp.sock click 180 150        # absolute click
@@ -360,7 +437,11 @@ Three traps not written down elsewhere:
   `build/qmp.sock` — every screendump succeeds and shows the OLD kernel, which
   reads exactly like a change that did nothing. If the error scrolls past,
   `ps aux | grep qemu-system` and compare its start time against
-  `build/kernel.bin`'s mtime.
+  `build/kernel.bin`'s mtime. **Kill it with `pkill -f "[q]emu-system"`, in a
+  command that does not itself mention QEMU** — `-f` matches the killing
+  shell's own command line, so the bare pattern kills that shell and so does
+  the bracketed one if a relaunch shares the line: exit 144, no error text,
+  nothing dead, and every command after it silently skipped.
 - **A small change is easy to misread as "nothing happened"** in a full-screen
   dump. Crop and zoom (`shot.py --crop --zoom`) before concluding a click was
   lost.
@@ -388,12 +469,19 @@ in docs/TESTING.md, per capability.
   (pass/fail) and benchmarks (how fast). Built only by their own targets.
 - `apps/browser/`, `apps/telnet/` — the network clients (§71, §70), over
   `os88sock.inc`. `tools/os88proxy.py` is the host-side other end and
-  `os88proxygui.py` its desk-side front.
+  `os88proxygui.py` its desk-side front. `apps/ftpd/` is the FTP **server**
+  (§77) — the same ABI listening rather than connecting, and the last stage of
+  docs/NET-STACK-PLAN.md.
 - `tools/` — host-side Python: `os88pkg.py` (validates/stamps `.bin` → `.o88`),
   `os88disk.py` (builds FAT12 images; `--verify` is a structural fsck),
   `checkdocs.py` (the doc gate every `make` runs), `os88test.py` (the suite
-  runner, off `tests/suite.py`), `qmp.py`/`mouse.py`/`shot.py` (test drivers),
-  `setup-cc.sh` + `cc8086.py` (the C toolchain's fetch and its gate, §73).
+  runner, off `tests/suite.py`), `os88boot.py` (where a whole boot goes, phase
+  by phase, off MartyPC's cycle counter and the FDC's - docs/MARTYPC-DEBUG.md),
+  `qmp.py`/`mouse.py`/`shot.py` (test drivers),
+  `setup-cc.sh` + `cc8086.py` (the C toolchain's fetch and its gate, §73);
+  `stkwater.py`/`stkdepth.py` (how deep a task stack HAS been, and which
+  call chain took it there - docs/KERNEL-MEMORY.md's "Task stacks");
+  `kfzread.py` (the KFZ heartbeat out of a field screenshot).
 - `docs/` — the maintained accounts. `*-PLAN.md` are design records for work
   that has landed; `FIELD-NOTES.md`/`FIELD-MACHINES.md` are what real hardware
   said.
