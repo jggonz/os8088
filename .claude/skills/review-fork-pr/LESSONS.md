@@ -1,7 +1,7 @@
-# What seven of these reviews cost to learn
+# What eight of these reviews cost to learn
 
 Read before step 2 of [`SKILL.md`](SKILL.md). Every item below happened on a
-real incoming PR to this repository — #47, #54, #61, #66, #73, #80 and #92 —
+real incoming PR to this repository — #47, #54, #61, #66, #73, #80, #92 and #112 —
 and every one of them was silent: the build passed, git reported nothing, and
 the emulator looked right.
 
@@ -229,6 +229,29 @@ a review assignment.
 
 ## 9. Verification that has actually caught things
 
+- **Re-run the PR's own claimed gate at its HEAD, before reviewing a line.**
+  A commit message that says "`make test-full` green, 16/16" is a claim about
+  the commit it is attached to, not about the branch. #112's was honest at the
+  squash and false two commits later: `kern_small` measured **106,496 of
+  106,496 — zero spare, one byte left inside the image rung** — and the boot
+  fix that followed added six bytes, crossed a whole 512-byte rung, and put it
+  512 over. `make small` then did not assemble at all and `buildmatrix` failed,
+  which is the documented pre-merge gate failing on the tree you are asked to
+  merge. Two minutes of `python3 tools/os88test.py full` answers it. And when
+  the answer is a size guard, `git checkout <their earlier commit>` and measure
+  there too: *which* commit crossed the rung is the difference between a
+  contributor who did not run the gate and one whose gate was green when they
+  ran it.
+- **A guard is only worth what its rows actually build.** #112 broke four
+  documented knob builds — `FLOPPY1=1`, `DISKAL=1`, `BOOTDIAG=1`, `BOOTSTOP=1`
+  — every one dying with `boot/boot.asm: TIMES value -N is negative` because
+  the sector had reached 510 of 510. `make field` was dead with them, and that
+  takes `cqdiag.img` with it: the diagnostic floppy for a machine that will not
+  start, killed by the commit whose whole subject is machines that will not
+  start. `t_buildmatrix` could not see any of it, because its rows ask make for
+  `<out>/kernel.bin` and never for a boot sector. So: when a PR touches
+  `boot/boot.asm`, assemble **every** knob that reaches `BOOTDEF` yourself —
+  and check what the gate's rows actually name before believing its green.
 - `make` **and** `make KERN_SMALL=1`. A change can fit one kernel and not the
   other, and a symbol can exist only in the big one — a fix that used
   `vid_disp_find` broke `kern_small`, which has no second display, until it
@@ -313,7 +336,9 @@ The reader is the contributor, in a browser, semi-technical. What has worked:
 [ ] review units written; every finding adversarially verified; blockers read by eye
 [ ] plan presented; user approved before anything was written
 [ ] fixes minimal, SPEC updated with them, no guard relieved
+[ ] the PR's own claimed gate re-run at ITS HEAD, not trusted from the message
 [ ] make; make KERN_SMALL=1; kernsize --bless both; disk --verify; boot; VIDEO=cga
+[ ] every knob build the changed files reach - a gate's rows may name the wrong target
 [ ] the PR's own gate run; the feature exercised end to end
 [ ] re-fetched the fork; fast-forward proven; pushed to the FORK, not origin
 [ ] PR comment posted: per-fix consequence, mechanism, sha; flagged section
