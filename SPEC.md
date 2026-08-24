@@ -16873,6 +16873,35 @@ rather than as an invariant.
 There is **no guard on the vector**, deliberately: the BIOS read the boot
 sector through it, so a machine that could not use it never got here.
 
+**A run that ERRORS shortens and loads again, once.** Three attempts at the same
+width with a controller reset between them is what a spuriously bad floppy read
+needs. It is not what a controller that refuses a multi-track read *outright*
+needs, and §18.91.1 made this loop ask for one. That machine answers `CF = 1`
+rather than lying, so §18.93.1's canary cannot see it at all — the canary only
+ever runs after a load in which every call answered `CF = 0`. So on the third
+failure the loader drops `run_max` to `SPT`, re-establishes `SP` and the
+destination segment, and repeats the whole load from `.reload`; only a failure
+at the track bound prints `DSK` and halts. It is `dsk_xfer`'s own ladder
+(§18.91, and §18.91.3's 360KB clone that answered status 0x80 to a crossing
+write) one level down, and it shares §18.93.1's fallback block byte for byte —
+two ways a crossing run can be wrong, one way back. It is **one-shot by
+construction**: the block can only be entered while `run_max` is still wider
+than a track, so a genuinely dead drive reaches the halt on the second pass
+rather than retrying for ever. `FLOPPY1=1` is excluded, because that build asks
+for one sector a call and has crossed nothing.
+
+**510 bytes is a budget, and the knobs spend it.** `BOOTDIAG=1`, `DISKAL=1`,
+`FLOPPY1=1` and `BOOTSTOP=1` each add to this sector, and a kernel that
+assembles says nothing about whether its boot sector still fits — `make
+FLOPPY1=1 build/kernel.bin` succeeds while `make FLOPPY1=1
+build/boot360.bin` dies with `TIMES value -3 is negative`. So
+`tests/unit/t_buildmatrix.py` asks those rows for `boot360.bin` rather than
+`kernel.bin` (it depends on the kernel, so the row still covers both), and
+`BOOTDIAG=1` — the largest single spender, and a disk built for a machine that
+will not start at all — compiles §18.93.1's canary OUT to pay for its hex
+digits. It keeps the fallback above, which is the half of this section a disk
+that will not boot actually meets.
+
 Simulating the splitter exactly, for a 131-sector kernel:
 
 | geometry | EOT | int 13h calls | runs |
@@ -17103,9 +17132,15 @@ asserts all of that against the images `make` just built, so it cannot drift.
 The retry cannot loop: the second pass is track-bounded, so the canary is
 skipped by the `run_max == SPT` test that guards it — and that skip is also the
 path that leaves `boot_cylrun` zero, so a machine that fell back tells the
-kernel so by saying nothing. `[done]` is deliberately
-not reset — the sector has no bytes for it, so `spl_tick` clamps instead and the
-bar sits at 100% through the second read.
+kernel so by saying nothing. **The bar climbs from 0 again**, because the sector
+no longer counts the sectors done alongside `[left]` — it derives them,
+`KERNEL_SECTORS - [left]`, and `.reload` re-arms `[left]`. That is a word of the
+sector recovered and the honest reading besides: the second pass re-reads
+`splash.inc`'s own bytes, `spl_on` among them, so the chrome IS redrawn once —
+one mode set, one dialog — whatever a counter says. A bar frozen at 100% that
+then repaints itself half way is the thing that reads like a fault. `spl_tick`'s
+clamp stays as a bound on what a *caller* may pass, not as a repair for a stale
+counter.
 
 **The kernel inherits the answer rather than probing for it.** The loader writes
 `0060:0004` (`boot_cylrun`) **on one path and no other**: the path where a run

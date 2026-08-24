@@ -221,7 +221,7 @@ It no longer forces a config difference — every machine here carries the same
 1:1 media (Set 37) — but it is why a disk number must not be taken off a
 GLaBIOS machine. Measured here: **that BIOS abandons a floppy operation after
 ~250 ms and resets the controller**, three times in a row, after which the
-boot sector prints `os8088: disk error` — status **80**, a timeout, which
+boot sector prints `DSK` — status **80**, a timeout, which
 `make BOOTDIAG=1` puts on the screen as two hex digits. It surfaced when the
 IBM machines were briefly given 2:1 media, where a 9-sector run takes 372 ms
 and can never finish under that BIOS; at 1:1 nothing here reaches the limit

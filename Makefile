@@ -319,9 +319,11 @@ BOOTDEF += -DDISK_TRUST_AL
 endif
 
 # BOOTDIAG=1 makes the boot sector print int 13h's STATUS as two hex digits
-# instead of 'os8088: disk error'. The sector has four spare bytes, so this
-# is a knob and not a default: the message is worth more on a machine that
-# boots and the status is worth more on one that does not.
+# instead of 'DSK'. It is a knob and not a default because 510 bytes will not
+# hold both: the message is worth more on a machine that boots and the status is
+# worth more on one that does not, and this build also gives up SPEC.md
+# 18.93.1's canary to pay for the hex digits. What it keeps is 18.93's
+# shorten-on-error fallback, which is the half a disk that will not boot meets.
 ifneq ($(BOOTDIAG),)
 BOOTDEF += -DBOOT_DIAG
 endif
@@ -415,7 +417,20 @@ endif
 # and the word is the same for every geometry because KERNEL.SYS is one file.
 # tests/suite.py's `canary` row is what keeps all of that true.
 KSIG_OFF := 18432
-KSIGDEF = -DKSIG_OFF=$(KSIG_OFF) -DKSIG=$$(python3 -c "import sys; d = open(sys.argv[1], 'rb').read(); o = $(KSIG_OFF); print(int.from_bytes(d[o:o+2], 'little') if len(d) > o + 1 else 0)" $(1))
+#
+# A PAYLOAD SHORTER THAN THE OFFSET DEFINES NO KSIG AT ALL, and that is the
+# whole of this line's second job. It used to answer 0, and a fabricated zero is
+# worse than no signature: boot/boot.asm's %error only fires when KSIG is
+# UNDEFINED, so a 0 sails straight through it, and uninitialised RAM at that
+# offset reading back as 0 then makes the canary PASS - which publishes
+# `boot_cylrun` for a head crossing that nothing ever verified. Omitting the
+# -D instead routes the impossible case (an image long enough to compile the
+# canary in, short enough to have no word there) to that %error, and leaves the
+# ORDINARY short payload - comscan, lptlink - building silently, because the
+# sector's own gate compiles no canary for it to need. The gate is the other
+# half of the same fence: KERNEL_SECTORS > KSIG_OFF/512, not > 32, so the
+# compare is only assembled when the sector it names was loaded.
+KSIGDEF = -DKSIG_OFF=$(KSIG_OFF) $$(python3 -c "import sys; d = open(sys.argv[1], 'rb').read(); o = $(KSIG_OFF); print('-DKSIG=%d' % int.from_bytes(d[o:o+2], 'little')) if len(d) > o + 1 else None" $(1))
 
 # DIRW1=1 never takes SPEC.md 18.95's sector cache, so every read moves exactly
 # the sectors asked for again - the pre-18.95 behaviour, reached through the
@@ -4408,12 +4423,12 @@ $(BUILD)/flop1.img: $(DRIVERS) $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
 # and do again on a different floppy.
 #
 # ...and the DIAGNOSTIC disk, for a machine that will not boot. BOOTDIAG=1
-# trades the boot sector's 'os8088: disk error' for int 13h's STATUS as two
-# hex digits, which is the whole diagnosis in one boot instead of a bisect:
-# 0C is a media type the drive could not identify (a 360KB disk in a 1.2MB
-# drive), 04 a sector the FDC never found (EOT / the multi-track flip), 09 a
-# transfer that crossed a 64KB DMA page, 80 a drive that never answered.
-# The sector has four spare bytes, which is why this is a knob.
+# trades the boot sector's 'DSK' for int 13h's STATUS as two hex digits, which
+# is the whole diagnosis in one boot instead of a bisect: 0C is a media type
+# the drive could not identify (a 360KB disk in a 1.2MB drive), 04 a sector the
+# FDC never found (EOT / the multi-track flip), 09 a transfer that crossed a
+# 64KB DMA page, 80 a drive that never answered. 510 bytes will not hold that
+# and SPEC.md 18.93.1's canary as well, which is why this is a knob.
 # its kernel is $(CQDIR)'s, so its modules are too
 $(BUILD)/cqdiag.img: KMODDIR := $(CQDIR)
 

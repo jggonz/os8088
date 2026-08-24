@@ -293,7 +293,7 @@ RAM
   has too little memory to
   run os8088.
 
-os8088: disk error
+DSK
   (at start-up) The system
   disk could not be read.
   Try again, or use another

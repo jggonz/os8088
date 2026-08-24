@@ -46,6 +46,14 @@ org 0x7C00
 %define KERNEL_SECTORS 16
 %endif
 
+; SPEC.md 18.93.1's own offset, so the canary's gate below has a number to
+; compare KERNEL_SECTORS against even when nothing passed one. KSIG itself is
+; NEVER defaulted - the %error down there is what asks for it, and a fabricated
+; signature is the one failure the canary cannot survive.
+%ifndef KSIG_OFF
+%define KSIG_OFF 18432
+%endif
+
 ; Floppy geometry. Defaults describe a 1.44MB 3.5" disk; the Makefile
 ; overrides them to 9/2 for the 360KB 5.25" build that 8086-era machines
 ; can actually read.
@@ -179,7 +187,7 @@ entry:
     ; heap must agree about where memory ends, and the cheapest way to
     ; guarantee that is for both to ask the same question the same way.
     mov si, STACK_TOP
-    mov di, STACK_TOP
+    mov di, si
 %ifdef RAM_KB
     mov ax, RAM_KB              ; make RAMKB=<n>: pretend, because QEMU always
 %else                           ; answers 639 and the interesting cases are
@@ -218,8 +226,7 @@ entry:
     retf                        ; off it as CS:IP
 .nomem:
     mov si, msg_mem             ; DS is 0 and we are still where the BIOS put
-    call print                  ; us, so every label here resolves
-    jmp read_run.halt
+    jmp read_run.halt           ; us, so every label here resolves
 .moved:
     mov ax, cs
     mov ds, ax
@@ -322,6 +329,12 @@ entry:
     ; transfer starts at a 512-aligned linear address. A RUN can still cross a
     ; 64KB DMA page, though, which is one of the four bounds read_run applies.
 .reload:
+    mov word [dest_seg], KERNEL_SEG ; the destination goes back to the start
+                                ; with the LBA, so both of the ways a load is
+                                ; asked for a SECOND time - the canary below
+                                ; and read_run's shortened retry (SPEC.md
+                                ; 18.93/18.93.1) - re-establish it here rather
+                                ; than each carrying its own copy
     mov al, [bpb_nfat]
     xor ah, ah
     mul word [bpb_fatsz]        ; AX = both FATs (DX is 0: 2 x 9 at the most)
@@ -336,29 +349,34 @@ entry:
     mov word [left], KERNEL_SECTORS
 
 .load_next:
-    mov es, [dest_seg]
-    xor bx, bx
-    call read_run               ; AX = sectors this call actually moved
+    mov es, [dest_seg]          ; BX is read_run's own business - it zeroes it
+    call read_run               ; on every attempt. AX = sectors it moved
     add [lba], ax
-    add [done], ax
     sub [left], ax
+    pushf                       ; the loop test, banked past the splash call
     mov cl, 5
     shl ax, cl                  ; 0x20 paragraphs a sector...
     add [dest_seg], ax          ; ...so the destination follows the run
 
 %ifndef BOOT_NOSPLASH
-    mov ax, [done]              ; tick the splash once it is fully resident:
-    cmp ax, SPL_RESIDENT        ; AX = sectors done, DX = total (SPEC.md 15).
-    jb .no_tick                 ; Counted on its own, NOT from [lba] - that is
-    mov dx, KERNEL_SECTORS      ; an absolute LBA into the data area now, and
-    call KERNEL_SEG:SPLASH_OFF  ; it starts past SPL_RESIDENT on both
-%endif
-.no_tick:                       ; geometries, so the splash would be called
-                                ; before a byte of it had landed. ONE call a
-                                ; run, not one a sector: the bar is an
-                                ; absolute position, so it needs no repeats
-    cmp word [left], 0
-    jne .load_next
+    mov dx, KERNEL_SECTORS      ; tick the splash once it is fully resident:
+    mov ax, dx                  ; AX = sectors done, DX = total (SPEC.md 15).
+    sub ax, [left]              ; DERIVED from what is left rather than counted
+    cmp ax, SPL_RESIDENT        ; alongside it - a word of the sector that does
+    jb .no_tick                 ; not have to be spent, and a load asked for a
+    call KERNEL_SEG:SPLASH_OFF  ; second time re-arms the bar with [left] and
+%endif                          ; climbs from 0 again (SPEC.md 18.93.1). NOT
+.no_tick:                       ; from [lba] - that is an absolute LBA into the
+                                ; data area now, and it starts past
+                                ; SPL_RESIDENT on both geometries, so the
+                                ; splash would be called before a byte of it
+                                ; had landed. ONE call a run, not one a sector:
+                                ; the bar is an absolute position, so it needs
+                                ; no repeats
+    popf                        ; ...and the flags `sub [left], ax` set, which
+    jne .load_next              ; is the loop test three bytes cheaper than
+                                ; asking [left] again. The far call above is
+                                ; balanced, so the pushed word is still ours
 
     ; --- hand off ------------------------------------------------------------
     mov ax, KERNEL_SEG          ; the boot timer's t=0, into the fixed word the
@@ -371,9 +389,17 @@ entry:
                                 ; every pass. Out, for the gate's reason - that
                                 ; build is the loader as it stood before any of
                                 ; 18.93, which is what makes it an A/B
-%if KERNEL_SECTORS > 32
+%ifndef BOOT_DIAG               ; ...and BOOTDIAG=1 leaves it out as well, for
+                                ; space: that build's whole question is int
+                                ; 13h's STATUS on a machine that never boots,
+                                ; and 510 bytes will not hold both. What it
+                                ; does NOT give up is the fallback below - a
+                                ; run that ERRORS still shortens and reloads,
+                                ; which is the half of 18.93 a diagnostic disk
+                                ; actually meets
+%if KERNEL_SECTORS > (KSIG_OFF / 512)
 %ifndef KSIG
-%error "an image over 32 sectors crosses a head: the canary needs -DKSIG/-DKSIG_OFF (SPEC.md 18.93.1)"
+%error "an image past KSIG_OFF crosses a head: the canary needs -DKSIG/-DKSIG_OFF (SPEC.md 18.93.1)"
 %endif
     ; --- THE CANARY (SPEC.md 18.93.1) ---------------------------------------
     ; int 13h answered CF=0 and the full count for every run above. That is NOT
@@ -394,18 +420,17 @@ entry:
     ;
     ; Failing it costs a whole second load, and that is the right price: a boot
     ; that is 2.2s slower beats a kernel that is quietly wrong.
-    cmp word [run_max], SPT     ; already track-bounded? then no run has crossed
-    je .nocross                 ; a head and there is nothing to check
+    mov ax, [run_max]           ; the live bound, and AL alone is the whole of
+    cmp al, SPT                 ; it: SPT*HEADS is 36 at the widest geometry
+    je .nocross                 ; this ships. Already track-bounded? then no run
+                                ; has crossed a head and there is nothing to
+                                ; check
     cmp word [es:KSIG_OFF], KSIG
-    je .crossed
-    mov byte [run_max], SPT     ; ...the bound the FDC cannot get wrong,
-    mov word [dest_seg], KERNEL_SEG
-    jmp .reload                 ; ...and do the whole load again. [done] is NOT
-                                ; reset: the bar is at 100% and stays there,
-                                ; which is what spl_tick's clamp is for
-.crossed:
-    mov ax, [run_max]           ; ...and tell the kernel what we learned, so
-    mov [es:0x0004], ax         ; dsk_xfer needs no probe of its own (18.93.1).
+    jne .rerun                  ; ...the shared fallback below: back to the
+                                ; bound the FDC cannot get wrong, and the whole
+                                ; load again
+    mov [es:0x0004], ax         ; ...and tell the kernel what we learned, so
+                                ; dsk_xfer needs no probe of its own (18.93.1).
                                 ; The word is written ONLY here, on the one
                                 ; path that has seen a head crossed and come
                                 ; back right: every other way out of this block
@@ -415,6 +440,7 @@ entry:
                                 ; is what a second volume of a DIFFERENT
                                 ; geometry gets wrong (18.93.1)
 .nocross:
+%endif
 %endif
 %endif
     mov dl, [boot_drive]        ; kernel may want to know the boot drive
@@ -430,6 +456,28 @@ entry:
     jmp short .stop
 %endif
     jmp KERNEL_SEG:0x0000
+
+%ifndef TRACK_RUN
+; --- shorten the run and load the whole kernel again (SPEC.md 18.93) --------
+; ONE block, TWO ways in, and they are the two ways a crossing run can be wrong.
+; The canary above catches a BIOS that flipped heads at the wrong sector and
+; answered CF=0 anyway; read_run's exhausted retry catches the other kind - a
+; controller that refuses a multi-track read outright and ERRORS, which is what
+; kernel/disk.inc's own ladder was written for on the write side. Both want the
+; same thing: the bound the FDC cannot get wrong, and a second pass.
+;
+; ONE-SHOT by construction, because it can only be entered while [run_max] is
+; still wider than a track - so a genuinely dead drive reaches read_run's halt
+; on the second pass instead of retrying for ever.
+;
+; SP is re-established rather than unwound: read_run reaches here with its own
+; return address still on the stack, and this is the value `entry` set at
+; .moved, so the same instruction is right from either side.
+.rerun:
+    mov byte [run_max], SPT
+    mov sp, STACK_TOP
+    jmp .reload
+%endif
 
 ; -----------------------------------------------------------------------------
 ; read_run - read as many sectors from [lba] to ES:0000 as one int 13h may
@@ -463,15 +511,15 @@ read_run:
     ; The EOT is what carries the read onto the other head (see RUN_SECS).
     ; With TRACKRUN=1 the two are the same number again and the FDC stops
     ; exactly where a CHS call had to anyway.
+    mov di, [left]              ; bound 2 first, so bound 1 only has to beat it
     mov ax, [lba]
     xor dx, dx
     mov bx, [run_max]           ; RUNTIME now (SPEC.md 18.93.1/18.93.2): the
     div bx                      ; gate below sets it and the canary can lower it
-    mov di, bx                  ; div spends AX and DX and leaves BX, so this
-    sub di, dx                  ; costs a register move instead of a reload
-    cmp di, [left]
-    jbe .page
-    mov di, [left]
+    sub bx, dx                  ; div spends AX and DX and leaves BX, so the
+    cmp bx, di                  ; distance to the end of the run costs one
+    jae .page                   ; subtract and no reload
+    mov di, bx
 
     ; --- 3: the 64KB DMA page ----------------------------------------------
 .page:
@@ -538,15 +586,30 @@ read_run:
     dec si
     jnz .attempt
 
+%ifndef TRACK_RUN
+%ifndef FLOPPY_ONE
+    cmp byte [run_max], SPT     ; three attempts at a run that CROSSES a head,
+    jne entry.rerun             ; then the whole load again at the track bound
+%endif                          ; (SPEC.md 18.93). A controller that will not
+%endif                          ; do a multi-track read at all ERRORS rather
+                                ; than lying, and the canary cannot see that -
+                                ; it only ever runs after a load in which every
+                                ; call answered CF=0. Retrying the SAME width
+                                ; three times and halting is what main did not
+                                ; do, because main never asked for a run wider
+                                ; than a track. FLOPPY1=1 is out of it: that
+                                ; build asks for ONE sector a call and has
+                                ; crossed nothing, so a second pass could only
+                                ; be a second failure
 %ifdef BOOT_DIAG
     mov al, [diag_ah]           ; two hex digits and nothing else: 0C is a
-    mov cl, 4                   ; media type the drive could not identify
-    shr al, cl                  ; (a 360KB disk in a 1.2MB drive), 04 a
-    call .nib                   ; sector the FDC never found (EOT / the
-    mov al, [diag_ah]           ; multi-track flip), 09 a transfer that
-    and al, 0x0F                ; crossed a 64KB DMA page, 80 a drive that
-    call .nib                   ; never answered
-    jmp short .halt
+    aam 0x10                    ; media type the drive could not identify
+    push ax                     ; (a 360KB disk in a 1.2MB drive), 04 a
+    mov al, ah                  ; sector the FDC never found (EOT / the
+    call .nib                   ; multi-track flip), 09 a transfer that
+    pop ax                      ; crossed a 64KB DMA page, 80 a drive that
+    call .nib                   ; never answered. aam splits the byte in one
+    jmp short .stop             ; instruction: AH = the high nibble, AL the low
 .nib:
     add al, 0x90                ; the classic six bytes: 0..15 -> '0'..'F'
     daa
@@ -558,12 +621,20 @@ read_run:
     ret
 %else
     mov si, msg_err
-    call print
 %endif
-.halt:
+.halt:                          ; write the NUL-terminated string at DS:SI via
+    mov bx, 0x000F              ; BIOS teletype and STOP. BL carries the colour
+.pnext:                         ; so it stays legible if the splash already
+    lodsb                       ; switched us into mode 12h, and nothing is
+    test al, al                 ; saved or restored because neither of the two
+    jz .stop                    ; ways in ever comes back - this was `print`
+    mov ah, 0x0E                ; plus a halt, and folding them recovered the
+    int 0x10                    ; bytes SPEC.md 18.93's fallback above spends
+    jmp .pnext
+.stop:
     cli
     hlt
-    jmp .halt
+    jmp .stop
 
 .done:
     ; CF=0 IS the BIOS saying the whole request completed, and AL is not -
@@ -578,10 +649,8 @@ read_run:
     ; `make DISKAL=1` restores the old reading, in both loops together.
 %ifdef DISK_TRUST_AL
     xor ah, ah
-    or al, al
-    jnz .clamp                  ; 0 with CF=0 is trusted for one, so the loop
-    inc ax                      ; always progresses
-.clamp:
+    cmp al, 1                   ; 0 with CF=0 is trusted for one, so the loop
+    adc al, 0                   ; always progresses
     cmp ax, [run]
     jbe .out
 %endif
@@ -590,30 +659,8 @@ read_run:
     ret
 
 ; -----------------------------------------------------------------------------
-; print - write the NUL-terminated string at DS:SI via BIOS teletype. BL
-;         carries the colour so it stays legible if the splash already
-;         switched us into mode 12h.
-; -----------------------------------------------------------------------------
-print:
-    push ax
-    push bx
-    mov bx, 0x000F
-.next:
-    lodsb
-    test al, al
-    jz .done
-    mov ah, 0x0E
-    int 0x10
-    jmp .next
-.done:
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
 boot_drive  db 0
 lba         dw 0
-done        dw 0
 left        dw 0
 run         dw 0
 dest_seg    dw KERNEL_SEG
@@ -627,8 +674,8 @@ diag_ah     db 0                ; the int 13h status, banked before the reset
 msg_err     db 'DSK', 0        ; three characters and no newline, for
                                 ; msg_mem's reason - the sector has no room
                                 ; for prose. BOOTDIAG=1 prints int 13h's
-                                ; STATUS here instead, and `make cqdisk`
-                                ; builds the disk that carries it
+                                ; STATUS here instead, and `make field`
+                                ; builds cqdiag.img, which carries it
 %endif
 msg_mem     db 'RAM', 0         ; three characters because three is what is
                                  ; left in 512 bytes, and a machine that says
