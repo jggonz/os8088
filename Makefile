@@ -1009,7 +1009,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc
         cc-note chello covl cword cworddisk 386-c-word runcpm runcpmdisk \
         runcpm-src cpmsw rcz80test rcmemtest rczex 386-runcpm \
         xt-runcpm 286-runcpm \
-        allapps usb iso live rcbandbench \
+        allapps usb iso live burn rcbandbench \
         c64 c64disk c64rom c64bandbench c64cputest c64memtest 386-c64 xt-c64 286-c64 \
         checkdocs test-fast test-full test-soak clean clean-cc clean-marty distclean
 
@@ -5007,6 +5007,15 @@ $(LIVEISO): $(USBIMG) $(SYSDOC) tools/os88iso.py
 	@echo "iso:    $@ - the live CD (SPEC.md 80.2): the same image, El"
 	@echo "        Torito hard-disk emulation. QEMU: qemu-system-i386"
 	@echo "        -cdrom $@ -boot d"
+
+# `make burn` - the macOS guide that puts the live media on real media
+# (SPEC.md 80.4): lists the attached USB flash drives, walks through the
+# erase-and-write with a typed confirmation and a read-back verify, and
+# burns the CD when a burner is attached. Interactive by design, so it has
+# NO image prerequisites: on a tree where `make live` has not run it says
+# so and takes a path (an unpacked release zip has the same files).
+burn:
+	@python3 tools/os88burn.py
 
 # `make combo` -> build/combo.img: ONE 360KB bootable disk with the system,
 # every application AND the four benchmarks on it.

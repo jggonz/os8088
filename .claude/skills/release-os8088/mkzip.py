@@ -170,6 +170,11 @@ unmounted:
 
   dd if=os8088-usb.img of=/dev/sdX bs=1M
 
+On a Mac with the os8088 source checkout, `make burn` does this with an
+interactive guide instead -- it lists the attached USB flash drives, has
+you confirm the one to erase by typing its name, and verifies the write.
+It burns the CD too, when a burner is attached.
+
 os8088.iso is the same system as a CD image, for burning to a disc or for an
 emulator. In QEMU, one or the other:
 

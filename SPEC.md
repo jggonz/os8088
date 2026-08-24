@@ -66703,3 +66703,21 @@ installed disk it is.
 The 720KB and 1.44MB floppy *images* still matter to the same reader — a USB
 floppy drive and a Gotek take them — so the live media are additions to the
 release zip, not replacements for anything in it.
+
+### 80.4 Writing the media on a Mac, guided
+
+`tools/os88burn.py` (`make burn`) is the interactive text-mode guide that
+puts the two images on real media, because the raw alternative is `dd`
+against a typed device node and a mistyped node is somebody's backup drive.
+It lists only the disks that could be the right answer — USB bus, external,
+and never the disk macOS is running from, filtered out rather than warned
+about — and the erase is confirmed by **typing the disk's identifier back**,
+not by pressing `y`. The wizard itself stays unprivileged; only the write is
+escalated, into a hidden mode of the same file that streams the image to the
+raw device and then **reads the whole length back and compares SHA-256s**,
+because a stick that silently drops bytes (fake-capacity flash) is the
+failure a successful-looking write cannot show. The CD half is Apple's own
+machinery — `drutil list` to know a burner is attached at all (none: the
+menu row says so and does nothing, §47's shape), `hdiutil burn` to burn and
+verify. macOS only, and it says so: on Linux the same job is `lsblk` and
+`dd`, and a guide pretending to cover both would test as neither.

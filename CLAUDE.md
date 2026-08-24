@@ -145,6 +145,11 @@ make live     #   plus the allapps payload on one FAT16 partition that the
               #   §80.3 says what that costs; QEMU boots them with
               #   `-drive file=build/os8088-usb.img,format=raw -boot c` /
               #   `-cdrom build/os8088.iso -boot d`
+make burn     # the macOS guide onto REAL media (§80.4, tools/os88burn.py):
+              #   lists the attached USB flash drives (USB + external +
+              #   never the boot disk), typed-identifier confirmation,
+              #   read-back SHA-256 verify; burns the CD when drutil sees
+              #   a burner. Interactive; --scan just lists and exits
 make clean
 ```
 
