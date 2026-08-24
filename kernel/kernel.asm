@@ -736,9 +736,50 @@ KERN_BUDGET equ 117248          ; kern_big's FOOTPRINT guard, and the SHIPPED
                                 ; the two by 2KB, which is the direction it
                                 ; should drift from here.
 %else
-KERN_BUDGET equ 106496          ; the whole kernel's FOOTPRINT. Growing past
+KERN_BUDGET equ 107008          ; the whole kernel's FOOTPRINT. Growing past
                                 ; this is not a build detail - see
                                 ; docs/KERNEL-MEMORY.md before raising it.
+                                ;
+                                ; THE THIRTY-SECOND MOVE, 106,496 -> 107,008,
+                                ; ASKED FOR AND GRANTED, 512 BYTES, ONE STEP,
+                                ; ATTRIBUTED TO THE HEAD-SWITCH BOOT FIX -
+                                ; SPEC.md 18.93.1's canary and 18.93.2's
+                                ; per-track read, which is the last commit of
+                                ; this round and the one that crossed the
+                                ; rung. kern_big does NOT move for it: the
+                                ; thirty-first move left that figure a step,
+                                ; and the same code sits inside it.
+                                ;
+                                ; THE NUMBERING IS THE TABLE'S, not this
+                                ; arm's own count - the paragraphs below run
+                                ; on a local sequence that has collided with
+                                ; itself twice, and docs/KERNEL-MEMORY.md's
+                                ; ledger is the copy that file says to trust.
+                                ;
+                                ; THE OVERRUN WAS SIX BYTES and the grant is
+                                ; a whole rung, which is the shape moves 22
+                                ; and 23 of the ledger both had before it:
+                                ; `.text` + `.bss` came to
+                                ; 55,814 against a rung top of 55,808, so the
+                                ; footprint stepped 106,496 -> 107,008 and
+                                ; `make small` stopped assembling. Trimming
+                                ; the six was costed and REFUSED by the owner:
+                                ; every candidate is a feature this round
+                                ; landed deliberately on the 128KB build -
+                                ; wm.inc's right-click side table says in its
+                                ; own comment that it is in kern_small on
+                                ; purpose, and vga12.inc's `gfx_lm_pre` is
+                                ; SPEC.md 5.6.4.3's correctness fix - so the
+                                ; six bytes would come out of shipped
+                                ; behaviour rather than out of slack.
+                                ;
+                                ; IT LANDS AT ZERO SPARE, and that is the
+                                ; second half of the decision rather than an
+                                ; oversight: the rung has 506 bytes of slack
+                                ; inside it, so what fails next is the next
+                                ; CROSSING, which is the conversation this
+                                ; guard exists to force. The next ask is 1KB
+                                ; again unless somebody says otherwise.
                                 ;
                                 ; THE TWENTY-SECOND MOVE, 105,984 -> 106,496,
                                 ; ASKED FOR AND GRANTED, 512 BYTES, ONE STEP,
@@ -1385,7 +1426,7 @@ KERN_BUDGET equ 106496          ; the whole kernel's FOOTPRINT. Growing past
                                 ; machine can still install, just slowly.
 %endif                          ; KERN_BIG
 
-KERN_SMALL_BUDGET equ 106496    ; ...and kern_small's, named separately so it
+KERN_SMALL_BUDGET equ 107008    ; ...and kern_small's, named separately so it
                                 ; can be REPORTED on a big build rather than
                                 ; only enforced on a small one: the %else arm
                                 ; above is not taken on a kern_big assembly, so
@@ -1401,12 +1442,21 @@ KERN_SMALL_BUDGET equ 106496    ; ...and kern_small's, named separately so it
                                 ; kern_small without the conversation every
                                 ; budget move so far has had.
                                 ;
-                                ; It last moved at the TWENTY-SECOND, 105,984
+                                ; It last moved at the THIRTY-SECOND, 106,496
+                                ; -> 107,008, 512 bytes, one step, attributed
+                                ; to THE HEAD-SWITCH BOOT FIX (SPEC.md
+                                ; 18.93.1/18.93.2) - and kern_big did not move
+                                ; with it. The overrun was SIX bytes past a
+                                ; rung top and the trim was costed and refused
+                                ; by the owner; the full account is beside the
+                                ; KERN_BUDGET figure this one mirrors.
+                                ;
+                                ; Before that, at the TWENTY-SECOND, 105,984
                                 ; -> 106,496, 512 bytes, one step, attributed
                                 ; to DISK IMG WRITE - and kern_big did not
-                                ; move with it. The full account, including
-                                ; why the completion proc cannot go into
-                                ; CLONE.DRV to avoid it, is beside the
+                                ; move with it either. The full account,
+                                ; including why the completion proc cannot go
+                                ; into CLONE.DRV to avoid it, is beside the
                                 ; KERN_BUDGET figure this one mirrors.
                                 ;
                                 ; It moved at the seventeenth, 94,208 ->
