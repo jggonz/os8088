@@ -35,6 +35,24 @@ apps, a dock — and pre-emptive multitasking, which the real 1984 Macintosh
 never had (switchable to cooperative from the Control Panel, if you want to
 feel what they were up against).
 
+## 💾 New: boot it from a USB stick or a CD — no floppy drive needed
+
+[![Live USB](https://img.shields.io/badge/Live_USB-os8088--usb.img-2ea44f?style=for-the-badge&logo=usb&logoColor=white)](docs/LIVE-MEDIA.md)
+[![Live CD](https://img.shields.io/badge/Live_CD-os8088.iso-1f6feb?style=for-the-badge)](docs/LIVE-MEDIA.md)
+[![The guide](https://img.shields.io/badge/How%3F-docs%2FLIVE--MEDIA.md-e36209?style=for-the-badge)](docs/LIVE-MEDIA.md)
+
+> [!TIP]
+> The whole OS and **every application** — both word processors, Frotz, the
+> CP/M emulator, the Commodore 64, all the games — on one bootable image
+> that starts straight into the desktop as drive **C:**, on a real PC
+> (legacy BIOS), in QEMU, or burned to a CD-R.
+> **[docs/LIVE-MEDIA.md](docs/LIVE-MEDIA.md)** walks through all of it:
+> grab the images from a [release](https://github.com/jggonz/os8088/releases)
+> or `make live`, then `make burn` guides you through writing the stick on a
+> Mac — it shows only the drives that could be the right answer, makes you
+> type the disk's name before erasing anything, and verifies every byte it
+> wrote by reading it back.
+
 ```
 make          # build all seven floppy images
 make run      # boot it in QEMU (with an emulated serial mouse)
@@ -79,6 +97,12 @@ make 286-c64  # 86Box: the 12.5MHz 286 with the 720KB one
 make 386-c64  # 86Box: the 386DX with the 1.44MB one
 make allapps  # one 1.44MB floppy with every program on it, both word
               # processors, Frotz and RunCPM included
+make live     # the live media (docs/LIVE-MEDIA.md): os8088-usb.img, a
+              # bootable hard-disk image for a USB stick, and os8088.iso,
+              # the same image as a live CD - the whole OS and every app
+              # on one C: drive (make usb / make iso build them singly)
+make burn     # macOS: interactively write the stick / burn the CD, with a
+              # typed confirmation and a read-back verify
 make test     # boot headless with a QMP socket for scripted testing
 make debug    # boot with QEMU halted, waiting for gdb on :1234
 make marty    # a cycle-accurate IBM 5150 (MartyPC) with a debugger attached -
@@ -89,11 +113,12 @@ make clean
 ```
 
 `make` builds the six shipping floppies and needs nothing but `nasm` and
-`python3`. The three disks written in C — `cworddisk`, `runcpmdisk` and
-`allapps`, which carries both — want the compiler first: `tools/setup-cc.sh`
+`python3`. The disks that carry the C applications — `cworddisk`,
+`runcpmdisk`, `allapps` and the live media (`make live`) — want the compiler
+first: `tools/setup-cc.sh`
 fetches and builds it into `build/cc`, and nothing else in the tree depends on
-it. `runcpmdisk` and `allapps` also fetch RunCPM's command processor and
-master disk (`make runcpm-src`), and `runcpmdisk` the CP/M software that
+it. `runcpmdisk`, `allapps` and `live` also fetch RunCPM's command processor
+and master disk (`make runcpm-src`), and `runcpmdisk` the CP/M software that
 rides beside it (`make cpmsw`); none of it is committed here.
 
 ![what it looks like: gray dithered desktop, menu bar, drive icons, Note Pad,
