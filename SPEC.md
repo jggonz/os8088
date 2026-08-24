@@ -57503,19 +57503,20 @@ The target is PERFORMANCE.md's 8088. What follows from it, beyond §69.1's
 
 - **Nothing repaints more of the source pane than it changed.** A caret move
   is two XORs — the cell it left and the cell it reached — and no lettering at
-  all; a typed character re-letters the caret's line from the caret column
-  rightward (`tp_draw_tail`); a Return or a joining Backspace moves the rows
-  under it with one `OSAPI_GFX_SCROLL` and letters the one row the blit
-  vacated; a scroll blits the pane by the rows it moved and letters only the
-  band that came in. The whole pane is the FALLBACK — `gfx_scroll` refusing,
+  all; a typed character re-letters the rows of `tp_edmark`'s span (§69.10.1),
+  each of them whole and from column 0; a Return or a joining Backspace moves
+  the rows under it with one `OSAPI_GFX_SCROLL` and letters the one row the
+  blit vacated; a scroll blits the pane by the rows it moved and letters only
+  the band that came in. The whole pane is the FALLBACK — `gfx_scroll` refusing,
   the horizontal view moving, a jump longer than the pane — and a page turn or
   a layout change is still the window. Nothing repaints on a timer and there
   is no worker task: TeXPad owns no background task at all (§20.6), so there
   is no question of a mixer-style redraw racing a paint.
-- **A line is re-lettered from the EDIT, not from the caret**, which are
-  different columns: an insert leaves the caret one cell (a Tab, two) to the
-  right of what changed, and the character just typed is in between.
-  `tp_edn` is how many, and 0 for a delete.
+- **A row is re-lettered WHOLE, never from a column.** Starting at the edit's
+  own column would be fewer cells, but wrapping means the row it starts in is
+  not always the row the edit ends in, and `font_run` (§6.1) is one decision
+  per cell either way: the row is the unit here as it is everywhere else in
+  this app (§69.10), and `tp_draw_srow` is the only thing that letters one.
 - **An incremental path may only claim what it can describe.** `tp_edkind`
   says which of the four shapes an edit was, and a deleted SELECTION is none
   of them: it moved every row below it, so the paths that follow one leave
@@ -57592,7 +57593,13 @@ The target is PERFORMANCE.md's 8088. What follows from it, beyond §69.1's
 - The selection is XORed cell by cell as it is dragged, never by repainting
   the rows it covers, and the caret and the selection are tracked as SHOWN or
   HIDDEN state (`tp_caret_on` / `tp_dselon`) so that an XOR is never left
-  doubled or dropped.
+  doubled or dropped. **The XOR that takes a mark off must be made at the
+  scroll it was drawn at**: `tp_xor_span` places the drawn span by walking
+  rows from `[tp_vscroll]`, so anything that moves the view — a bar click, a
+  thumb drop — hides the marks BEFORE it moves it and `tp_sel_show` puts them
+  back after. `tp_sel_hide` preserves every register for the same reason: its
+  callers are mid-gesture and mid-blit, holding the pointer pair and the row
+  delta in the registers it used to return the drawn span in.
 - A preview row is one `OSAPI_FONT_RUN` per run, which is §6.1's
   erase-and-letter in one decision per cell; bold is a second transparent
   strike at x+1, the same trick §68.1 uses.
@@ -57648,6 +57655,15 @@ second row of a repaint starts where the first ended and a pane repaint is one
 pass over the document instead of forty-four. It is invalidated by anything
 that moves an offset (every edit) and by a change of WIDTH, which is a
 different set of rows entirely.
+
+**The row COUNT is kept the same way, and thrown away at the same moments.**
+`tp_count_rows` is the source bar's `total`, and `tp_ssb_sync` asks for it on
+every keystroke, every scroll step and — through `tp_sbd_which` — on every
+mouse report of a live thumb drag (§13.10.5), while the walk itself reads
+every character of the document: ~26 ms per 8KB on PERFORMANCE.md's 8088, per
+report. So the answer is kept in `tp_nrows` beside the width it was counted at
+(`tp_nrowsw`), `tp_row_inval` clears it along with the row cache, and a width
+the count was not taken at counts again.
 
 #### 69.10.1 An edit's reach is measured BEFORE it happens
 

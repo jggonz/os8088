@@ -1671,9 +1671,11 @@ tp_row_w:
     ret
 
 ; The cache is a guess about where a row starts, so the only way to be wrong
-; is to be stale: any edit, and any change of width.
+; is to be stale: any edit, and any change of width. The row COUNT is a guess
+; about the same thing, so it goes at the same moments.
 tp_row_inval:
     mov word [tp_rc_row], 0xFFFF
+    mov byte [tp_nrowsok], 0
     ret
 
 ; SI = a row's start offset, ES = tp_srcseg. Out: CX = its length in cells,
@@ -1936,21 +1938,39 @@ tp_lnext:
     ret
 
 ; AX = how many ROWS the document has - the scroll bar's `total`.
+;
+; The walk reads every character of the document, and tp_ssb_sync asks for it
+; on every keystroke, every scroll step and every mouse report of a live thumb
+; drag - ~26ms per 8KB on the target machine, per report. So the answer is
+; KEPT, and thrown away where the row cache is (tp_row_inval: every edit) and
+; when the wrap width moves under it, which is a different set of rows.
 tp_count_rows:
     push cx
     push dx
     push si
     push di
     push es
+    call tp_row_w               ; AX = the width the count would be taken at
+    cmp byte [tp_nrowsok], 0
+    je .walk
+    cmp ax, [tp_nrowsw]
+    jne .walk
+    mov ax, [tp_nrows]
+    jmp short .o
+.walk:
+    mov [tp_nrowsw], ax
     mov es, [tp_srcseg]
     xor si, si
     xor ax, ax
 .lp:
     call tp_row_ext
-    jc .o
+    jc .done
     inc ax
     mov si, di
     jmp short .lp
+.done:
+    mov [tp_nrows], ax
+    mov byte [tp_nrowsok], 1
 .o:
     pop es
     pop di
@@ -2443,13 +2463,17 @@ tp_xor_span:
     ret
 
 tp_sel_hide:
-    cmp byte [tp_dselon], 0
+    push ax                     ; the callers hold live values in AX/DX across
+    push dx                     ; this - tp_ondrag its anchor and caret pair,
+    cmp byte [tp_dselon], 0     ; tp_src_scroll the rows the view moved
     je .o
     mov ax, [tp_dsel0]
     mov dx, [tp_dsel1]
     call tp_xor_span
     mov byte [tp_dselon], 0
 .o:
+    pop dx
+    pop ax
     ret
 
 tp_sel_show:
@@ -2763,112 +2787,8 @@ tp_after_caret:
     call tp_marks_sync
     jmp .o
 .sc:
-    call tp_src_scroll
-    jmp .o
-.full:
-    call tp_redraw_src
+    call tp_src_scroll          ; ...which owns the whole-pane fallback itself
 .o:
-    pop bx
-    pop ax
-    ret
-
-; White-fill from column AX of visible row DI to the end of the row, then
-; letter the tail. Used for typing; not a whole line if AX > 0.
-tp_draw_tail:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov [tp_tmp4], ax           ; the column the edit started at
-    mov ax, di
-    mov bl, 8
-    mul bl
-    mov dx, ax
-    add dx, [tp_ey1]
-    add dx, 3
-    mov ax, [tp_tmp4]
-    cmp ax, [tp_ecols]
-    jae .o
-    mov bl, 8
-    mul bl
-    add ax, [tp_ex1]
-    add ax, 3                   ; x of first stale cell
-    push dx
-    push ax
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    pop ax
-    pop dx
-    mov bx, dx
-    mov cx, [tp_ex2]
-    add dx, 7
-    call OSAPI_GFX_FILL
-    ; restore y
-    sub dx, 7
-    mov ax, [tp_srcseg]
-    or ax, ax
-    jz .o
-    mov es, ax
-    push dx
-    mov ax, [tp_vscroll]
-    add ax, di
-    call tp_row_at
-    pop dx
-    jc .o
-    mov ax, [tp_tmp4]
-    cmp cx, ax
-    ja .tlen
-    xor cx, cx
-    jmp .run
-.tlen:
-    add si, ax
-    sub cx, ax
-.run:
-    push dx
-    push di
-    push es
-    push si
-    push cx
-    push ds
-    pop es
-    mov di, tp_linebuf
-    pop cx
-    pop si
-    push cx
-    push ds
-    mov ax, [tp_srcseg]
-    mov ds, ax
-    jcxz .nul
-    cld
-    rep movsb
-.nul:
-    pop ds
-    pop cx
-    pop es
-    mov bx, cx
-    mov byte [tp_linebuf+bx], 0
-    pop di
-    pop dx
-    mov ax, [tp_tmp4]
-    mov bl, 8
-    mul bl
-    add ax, [tp_ex1]
-    add ax, 3
-    mov cx, ax
-    mov si, tp_linebuf
-    mov al, CBLACK
-    mov ah, CWHITE
-    call OSAPI_FONT_RUN
-    call tp_draw_mark           ; the fill above took the mark with it
-.o:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
     pop bx
     pop ax
     ret
@@ -2895,7 +2815,6 @@ tp_edmark:
     push di
     push es
     mov byte [tp_edkind], 0
-    mov byte [tp_edn], 0
     mov es, [tp_srcseg]
     mov si, [tp_cur]
     call tp_lstart
@@ -3091,7 +3010,6 @@ tp_after_edit:
 .strip:
     call tp_stat_touch
     mov byte [tp_edkind], 0
-    mov byte [tp_edn], 0
     pop di
     pop si
     pop dx
@@ -4042,7 +3960,6 @@ tp_onkey:
     mov al, bl
     jnc .kins
     mov byte [tp_edkind], 1
-    mov byte [tp_edn], 1        ; one cell went in in front of the caret
 .kins:
     call tp_ins
     jmp .etype
@@ -4079,7 +3996,6 @@ tp_onkey:
     mov al, ' '
     jnc .ktab1
     mov byte [tp_edkind], 1
-    mov byte [tp_edn], 2        ; ...and a Tab is two of them
 .ktab1:
     call tp_ins
     mov al, ' '
@@ -4475,6 +4391,11 @@ tp_onclick:
 .ssb1:
     cmp byte [tp_ldfull], 0
     jne .draw
+    call tp_caret_hide          ; the marks come off at the scroll they were
+    call tp_sel_hide            ; DRAWN at - tp_xor_span walks rows from
+                                ; [tp_vscroll], which tp_ssb_click is about to
+                                ; move (tp_after_edit hides ahead of the move
+                                ; for the same reason)
     call tp_ssb_click
     call tp_src_scroll
     jmp .done
@@ -5735,6 +5656,8 @@ tp_sbd_which:
 tp_sbd_commit:
     cmp byte [tp_sbd_bar], 0
     jne .prev
+    call tp_caret_hide          ; ...at the scroll they were drawn at, before
+    call tp_sel_hide            ; the view moves out from under them
     mov [tp_vscroll], ax
     call tp_clamp_vs
     jmp tp_src_scroll
@@ -6335,8 +6258,10 @@ tp_dselon   equ os88_image_end + 12015
 tp_seldrag  equ os88_image_end + 12016
 tp_caret_on equ os88_image_end + 12017
 tp_edkind   equ os88_image_end + 12018
-tp_edn      equ os88_image_end + 12019   ; cells an insert put in front of the
-                                         ; caret: 1 typed, 2 a Tab, 0 a delete
+                                         ; 12019 is FREE: tp_edn, the cells an
+                                         ; insert put in front of the caret -
+                                         ; nothing re-letters from the edit's
+                                         ; own column (69.8)
 tp_dsel0    equ os88_image_end + 12020
 tp_dsel1    equ os88_image_end + 12022
 tp_ssbpos   equ os88_image_end + 12024
@@ -6367,12 +6292,15 @@ tp_edtail   equ os88_image_end + 12068
 tp_edkb     equ os88_image_end + 12070
 tp_edka     equ os88_image_end + 12072
 tp_edlen    equ os88_image_end + 12074
+tp_nrows    equ os88_image_end + 12076   ; the row COUNT cache: how many rows
+tp_nrowsw   equ os88_image_end + 12078   ; the document had, the width it was
+tp_nrowsok  equ os88_image_end + 12080   ; counted at, and whether it stands
 ; remainder to 12288. Every name above is a hand-computed offset and nothing
 ; checks them against each other, so a new field goes at the END and a field
 ; that grows moves everything under it - the assertion below is the only
 ; automatic part, and it catches overflowing the block, not overlapping inside
 ; it. TP_BSS_LAST is the high-water mark; keep it pointing at the last field.
-TP_BSS_LAST equ 12074 + 2
+TP_BSS_LAST equ 12080 + 1
 %if TP_BSS_LAST > TP_BSS_TOTAL
     %error "texpad bss map overflows OS88_BSS"
 %endif
