@@ -128,8 +128,14 @@ eth_v_send:
     mov ax, NETE_HANDLE
     jmp short .no
 .ok:
+    xor ax, ax
+    cmp [sk_seg], ax            ; NO RING = NO ROOM, and not "took them all":
+    je  .cap                    ; ring_in refuses on the same word and returns
+                                ; CX untouched, so crediting SKO_TXN here would
+                                ; build the segment over the last frame's bytes
     mov ax, [sk_txcap]
     sub ax, [bx+SKO_TXN]
+.cap:
     cmp cx, ax
     jbe .room
     mov cx, ax

@@ -56,7 +56,7 @@
 %include "os88sock.inc"
 
 NB_BLK      equ 200             ; the report block ETHER.DRV writes: PF_BLK is
-                                ; 188 today and this is the buffer it lands in.
+                                ; 192 today and this is the buffer it lands in.
                                 ; **SIZED WITH SLACK AND CHECKED AT RUNTIME**,
                                 ; because a stage added to the driver grows the
                                 ; block and this package is not rebuilt with it
@@ -64,7 +64,10 @@ NB_HDR      equ 12              ; ...its header: 'PF', version, stages, dd
                                 ; wall, dd ACTIVE
 NB_REC      equ 18              ; ...and per stage: dd ms, dd bytes, dw calls,
                                 ; 8 bytes of name
-NB_MAXST    equ 16              ; what the table below can render
+NB_MAXST    equ (NB_BLK - NB_HDR) / NB_REC  ; what nb_blk HOLDS, derived rather
+                                ; than written down a second time: a count
+                                ; written down twice is one the driver can grow
+                                ; past while the guard still says yes
 
 ; -----------------------------------------------------------------------------
 ; nb_entry - package entry (SPEC.md 20.2)

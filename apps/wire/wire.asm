@@ -81,7 +81,9 @@ WR_BSTEP    equ 2                   ; coprime, so the tumble does not repeat
 ;
 ; x is forced onto the byte grid because BLIT1 refuses one that is not, and the
 ; whole band is checked against the object area before the blit - a band that
-; would leave it sends the frame down mode 0's path instead. WR_BW/WR_BH are
+; would leave it sends the frame down mode 0's path instead, COVERING the mask
+; frame with a fill first, because a white kernel line does not cancel a mask
+; one (SPEC.md 78.8.2). WR_BW/WR_BH are
 ; now the mask's CAPACITY rather than the band's size, and the STRIDE stays
 ; WR_BST so wr_mline's row step is still a shift by 4.
 WR_BW       equ 128                 ; the most COLUMNS the mask can hold, and a
@@ -514,7 +516,17 @@ wr_put:
     mov dx, [wr_bh]
     call OSAPI_GFX_BLIT1
     pop es                          ; `pop` writes no flag, so BLIT1's CF is
-    ret                             ; still the caller's answer
+    jc .out                         ; still the caller's answer
+    mov ax, [wr_bx0]                ; THE BAND THAT IS ON THE GLASS, kept here
+    mov [wr_gbx0], ax               ; and not read back off wr_bx0: a later
+    mov ax, [wr_by0]                ; wr_compose stages x0/y0 before the tests
+    mov [wr_gby0], ax               ; that can refuse, so after a refusal those
+    mov ax, [wr_bh]                 ; four words are half this frame's and half
+    mov [wr_gbh], ax                ; the last one's (SPEC.md 78.8.2)
+    mov ax, [wr_bw]
+    mov [wr_gbw], ax                ; ...and this one LAST: it is the flag
+.out:                               ; (`mov` writes no flag, so CF is still
+    ret                             ; BLIT1's on both arms)
 
 ; -----------------------------------------------------------------------------
 ; wr_mline - one edge into the mask, in MASK coordinates
@@ -710,6 +722,11 @@ wr_draw:
 .orders:
     cmp byte [wr_shown], 0
     je .fresh                       ; nothing on the glass to take off
+    cmp word [wr_gbw], 0
+    jne .cover                      ; A COMPOSED FRAME IS ON THE GLASS, and a
+                                    ; white kernel line does not cancel a mask
+                                    ; one: the two rasterisations differ for
+                                    ; most endpoint pairs (SPEC.md 78.8.2)
     cmp byte [wr_mode], 0
     je .whole
     cmp byte [wr_mode], 3
@@ -724,6 +741,19 @@ wr_draw:
     mov di, wr_py
     call wr_edges
     jmp short .keep
+.cover:
+    mov al, CWHITE                  ; ...so it comes off the way it went down,
+    call OSAPI_SET_COLOR            ; in ONE call rather than one per edge. The
+    mov ax, [wr_gbx0]               ; band passed the object-area test before it
+    mov bx, [wr_gby0]               ; was blitted, so this fill is inside it
+    mov cx, ax
+    add cx, [wr_gbw]
+    dec cx
+    mov dx, bx
+    add dx, [wr_gbh]
+    dec dx
+    call OSAPI_GFX_FILL
+    jmp short .fresh
 .whole:
     mov al, CWHITE
     call OSAPI_SET_COLOR
@@ -731,6 +761,8 @@ wr_draw:
     mov di, wr_ey
     call wr_edges
 .fresh:
+    mov word [wr_gbw], 0            ; this frame goes down as kernel lines, so
+                                    ; kernel lines are what will take it off
     mov al, CBLACK
     call OSAPI_SET_COLOR
     mov si, wr_px
@@ -1391,7 +1423,7 @@ wr_tet_e:
 wr_sintab:
 %include "wiresin.inc"
 
-    OS88_BSS 176 + WR_BSZ
+    OS88_BSS 184 + WR_BSZ
     OS88_IMAGE_END
 
 ; --- loader-zeroed bss (SPEC.md 21 step 5) ------------------------------------
@@ -1454,4 +1486,8 @@ wr_bmnx     equ os88_image_end + 168  ; the union bounds wr_bspan folds into
 wr_bmxx     equ os88_image_end + 170
 wr_bmny     equ os88_image_end + 172
 wr_bmxy     equ os88_image_end + 174
-wr_mask     equ os88_image_end + 176  ; ...and the band itself
+wr_gbx0     equ os88_image_end + 176  ; SPEC.md 78.8.2: the band that is ON THE
+wr_gby0     equ os88_image_end + 178  ; GLASS, saved by wr_put once BLIT1 has
+wr_gbh      equ os88_image_end + 180  ; taken it - and wr_gbw = 0 says the frame
+wr_gbw      equ os88_image_end + 182  ; there was drawn with kernel lines
+wr_mask     equ os88_image_end + 184  ; ...and the band itself

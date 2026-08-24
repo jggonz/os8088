@@ -1730,11 +1730,26 @@ state to `[gfx_ln_cy1]` **before** the address is computed at all. Every pixel
 it skips was going to be skipped. A line that starts inside the box — almost
 every line — returns on the first compare.
 
-The **left** edge needs no such thing and never did: `x & 7` is the correct
-bit for any x, and the byte offset only had to become an arithmetic shift, so
-`gfx_ls_addr` uses `sar`. A walk entering from the left then addresses one
-byte before the row while it is outside the box, which nothing reads, and the
-right byte from the moment it is inside.
+The **left** edge is answered differently and not quite as completely: `x & 7`
+is the correct bit for any x, and the byte offset only had to become an
+arithmetic shift, so `gfx_ls_addr` uses `sar`. That makes it a correct signed
+displacement, so a walk entering from the left addresses one byte before the
+row while it is outside the box, which nothing reads.
+
+**What that leaves is the banking again.** `gfx_nextrow` sees a bank wrap by
+testing DI **after** the add, which is only true while DI's bank field is
+still y's — and a negative byte offset borrows out of that field. A walk that
+is still left of the box when it crosses the **last** bank — Hercules
+y=3→4, CGA y=1→2 — therefore misses the wrap and addresses wrongly from
+there on, including for the pixels it later draws inside the box. It takes a
+clip box whose top edge is in the screen's first four rows, so no window
+fragment reaches it, and modelled over 29,520 lines entering from the left it
+is 392 of them on Hercules and 284 on CGA — against 28,800 with the `shr`.
+Closing the rest belongs in `gfx_lm_pre`'s shape rather than in the
+addressing: step the state while `si` is outside the box on the **x** axis
+too, so the address is only ever computed at a point inside it in both axes.
+It is not done, because those bytes come out of the build that has none
+(§5.6.4.4).
 
 §5.6.4.1's fast walk never had either defect — it computes its address at the
 **entry** pixel, which is inside the box by construction — and
@@ -65485,7 +65500,8 @@ sized.
 
 **The fit is CHECKED and not argued.** A band derived from the vertices
 contains them by construction, but it is still tested against the OBJECT AREA
-before the blit — and a refusal falls through to mode 0, which draws whole. The
+before the blit — and a refusal falls through to mode 0, which draws whole
+after covering the composed frame with a fill (§78.8.2). The
 same happens when `gfx_blit1` itself refuses, which is what a **`kern_small`**
 kernel does: it carries the slot and not the body, so the three orders above
 are not a legacy there, they are the answer.
@@ -65560,6 +65576,37 @@ would read −3 as 65533 and size the band to the whole screen.
 step is still a shift by 4 and `wr_mpt` is untouched. Only the columns blitted
 and the rows cleared shrink. That is what keeps this a change to three
 constants' worth of code rather than to the rasteriser.
+
+#### 78.8.2 A refused frame is COVERED, not re-drawn in white
+
+The refusal path used to be mode 0's outright: erase `wr_ex`/`wr_ey` in
+`CWHITE` with `OSAPI_GFX_LINE`, then draw this frame black. **That erase does
+not cancel a composed frame.** `wr_mline` normalises left to right and tests
+its error term *after* the step; `gfx_line` normalises top to bottom (§5.6.2)
+and tests *before*, so the two lay different pixel sets for the same
+endpoints — modelled over 705,600 endpoint pairs, 91% of them differ, and the
+smallest disagreement is (0,0)→(1,2), where the minor-axis pixel lands on the
+other side. It is §5.6.5's problem in a second place: the white line takes
+most of each edge off and leaves the rest, and the leftovers stay on the glass
+until the next `W_PAINT` — with another ghost added on every fallback frame.
+
+So a frame the mask put down is taken off **by the band that put it down**:
+one `OSAPI_GFX_FILL` in `CWHITE`, which is also one primitive call against one
+per edge. `wr_put` saves that band — `wr_gbx0`/`wr_gby0`/`wr_gbw`/`wr_gbh` —
+once `OSAPI_GFX_BLIT1` has answered CF=0.
+
+**The SAVED band and not the staged one**, which is the part that is easy to
+get wrong: `wr_compose` writes `wr_bx0` and `wr_by0` *before* the size tests
+that can refuse, so after a refusal the staged rectangle is half this frame's
+and half the last one's — and the other refusal is the object-area test
+itself, so filling the staged band would land on the status strip.
+
+`wr_gbw` is the flag as well as the width: zero says the frame on the glass
+was drawn with kernel lines, so §78.5's three orders erase exactly the way
+they always did, and it is cleared on every frame that goes down as lines.
+That also covers the mode being changed on the menu while a composed frame is
+on the glass, which is the same defect with the two rasterisers a menu pick
+apart.
 
 ### 78.6 The strip re-letters the NUMBER, and only the number
 
