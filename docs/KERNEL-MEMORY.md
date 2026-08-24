@@ -681,7 +681,7 @@ Three things about it:
     "bss": 6456,
     "budget": 117248,
     "codemax": 65536,
-    "cold": 39047,
+    "cold": 39085,
     "coldpara": 2464,
     "fatpara": 288,
     "imgpara": 3968,
@@ -692,13 +692,13 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2828,
     "stk0": 1024,
-    "text": 56586
+    "text": 56610
   },
   "small": {
     "bss": 5961,
     "budget": 107008,
     "codemax": 65536,
-    "cold": 36608,
+    "cold": 36646,
     "coldpara": 2304,
     "fatpara": 288,
     "imgpara": 3520,
@@ -709,7 +709,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2799,
     "stk0": 1024,
-    "text": 49853
+    "text": 49877
   }
 }
 ```
@@ -1471,21 +1471,21 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 33,074 | 34.6% |
+| the file system, end to end | 33,136 | 34.6% |
 | the window system and its furniture | 24,934 | 26.1% |
 | drawing: adapters, primitives, glyphs, icons | 15,097 | 15.8% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 11,690 | 12.2% |
 | the kernel proper: API table, heap, scheduler, events | 8,033 | 8.4% |
 | the three built-in kinds | 1,751 | 1.8% |
 | the Control Panel | 1,054 | 1.1% |
-| **total** | **95,633** | |
+| **total** | **95,695** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
 | `wm.inc` — the window manager (§11) | 11,716 | 95 | **11,811** | 1,086 | — |
-| `files.inc` — the Disk window (§22) | 1,107 | 8,695 | **9,802** | 471 | — |
+| `files.inc` — the Disk window (§22) | 1,131 | 8,733 | **9,864** | 471 | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 6,427 | 430 | **6,857** | 665 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 359 | 6,105 | **6,464** | 890 | 3,584 |
 | `fdlg.inc` — the Standard File dialog (§38) | 223 | 5,155 | **5,378** | 169 | — |
@@ -1524,7 +1524,7 @@ generated in the first place.
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `bootprof.inc` — **(undescribed)** | — | — | **0** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 3,505 | — | **3,505** | — | — |
-| **total** | **56,586** | **39,047** | **95,633** | **6,456** | **7,702** |
+| **total** | **56,610** | **39,085** | **95,695** | **6,456** | **7,702** |
 <!-- END generated table -->
 
 ### Reading it

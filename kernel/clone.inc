@@ -38,7 +38,8 @@ CERR_SMALL   equ 5              ; the target drive cannot hold the source
 CERR_FULL    equ 6              ; the volume the image would go on is too full
 CERR_NOTIMG  equ 7              ; that file is not a whole floppy (SPEC.md 18.99.8)
 CERR_SAME    equ 8              ; ...and it may not live on the disk itself
-CLO_NERR     equ 9
+CERR_BUSY    equ 9              ; a clone is ALREADY running (SPEC.md 22.21.2)
+CLO_NERR     equ 10
 
 ; --- which prompt is up (SPEC.md 22.21.1) ------------------------------------
 CLS_PICK     equ 0              ; 'Clone A: to B:, ERASING it'
@@ -46,13 +47,22 @@ CLS_SRC      equ 1              ; 'Insert the SOURCE disk, then Enter'
 CLS_TGT      equ 2              ; 'Insert the TARGET disk, then Enter'
 CLS_SAME     equ 3              ; 'Still the SOURCE disk'
 CLS_WIMG     equ 4              ; 'ERASE A: and write DISK.IMG?' (SPEC.md 18.99.8)
+CLS_NOSRC    equ 5              ; 'Not the SOURCE disk' - CLS_SAME's twin on
+                                ; the other prompt (SPEC.md 18.99.3)
 
 ; --- what CLV_KEY tells the window it owes the screen ------------------------
-CLA_LINE     equ 0              ; the prompt changed and nothing else did
-CLA_DONE     equ 1              ; finished; BL/BH name the two volumes
-CLA_STOP     equ 2              ; Esc - the user said it, so nothing is said
-CLA_ERR      equ 3              ; AH = CERR_*
-CLA_SAVE     equ 4              ; ask for a file name, and come back through
+; **0x80 and up, clear of the CERR_* block above.** clo_call answers in two
+; alphabets on one register - AL is a CLA_* on success, AX a CERR_* with CF=1
+; when the image cannot be had (SPEC.md 18.99.7) - and CF is the discriminator.
+; It used to be the ONLY one: CERR_NODISK and CLA_SAVE were both 4, so a
+; caller that forgot the `jc` read 'the cloner could not be loaded' as 'the
+; user asked for an image target' and opened a Save box. Disjoint values make
+; that miss a wrong answer rather than a plausible one.
+CLA_LINE     equ 0x80           ; the prompt changed and nothing else did
+CLA_DONE     equ 0x81           ; finished; BL/BH name the two volumes
+CLA_STOP     equ 0x82           ; Esc - the user said it, so nothing is said
+CLA_ERR      equ 0x83           ; AH = CERR_*
+CLA_SAVE     equ 0x84           ; ask for a file name, and come back through
                                 ; CLV_SAVED. The dialog is opened by the
                                 ; RESIDENT half (SPEC.md 18.99.8): fdlg_open
                                 ; wants a live owned window and a near
@@ -224,10 +234,12 @@ clo_start:
     push ax
 
     cmp word [clo_seg], 0       ; a clone is already running: refuse rather
-    jne .busymem                ; than leak the first one's claim. It cannot
-                                ; happen - the prompt owns the window and the
-                                ; window owns the keystroke - and this is what
-                                ; makes that a fact
+    jne .busy                   ; than leak the first one's claim. It CAN
+                                ; happen - the File menu is not gated on
+                                ; FS_EDIT, so a second Disk window reaches
+                                ; here while the first prompt is up - so it
+                                ; is refused as CERR_BUSY and not as
+                                ; CERR_MEM (SPEC.md 22.21.2)
     ; --- the buffer FIRST, because the probe has nowhere to put its answers
     ;     until there is one, and because a machine that cannot fund the
     ;     operation should not have spun the drive to find out
@@ -256,8 +268,8 @@ clo_start:
     pop ax
     clc
     jmp short .out
-.busymem:
-    mov ax, CERR_MEM
+.busy:
+    mov ax, CERR_BUSY
     jmp short .fail
 .freefail:
     push ax
@@ -1152,6 +1164,8 @@ clo_key:
     je .tgt
     cmp dl, CLS_WIMG
     je .wimg
+    cmp dl, CLS_NOSRC
+    je .nosrc
                                 ; CLS_SAME: Enter re-checks, Y writes anyway,
                                 ; and every other key does nothing at all -
                                 ; SPEC.md 22's asymmetry where it matters most
@@ -1162,7 +1176,8 @@ clo_key:
     cmp al, 13
     jne .line
     mov byte [es:CL_STEP], CLS_TGT
-    jmp short .tgt
+    jmp .tgt                    ; NEAR: CLS_NOSRC's answers sit between here
+                                ; and it now (SPEC.md 18.99.3)
 
 .pick:
     cmp al, ' '
@@ -1209,10 +1224,37 @@ clo_key:
 .src:
     cmp al, 13
     jne .line
+    cmp word [es:CL_NEXT], 0    ; trip 1 has read nothing, so CL_BOOT is still
+    je .srcgo                   ; zeroes and there is nothing to compare with
+    call clo_issrc              ; ...but from trip 2 on the TARGET's LBA 0 is
+    jc .srcwarn                 ; deliberately still unwritten (SPEC.md
+                                ; 18.99.2), so the check answers here exactly
+                                ; as well as it does at the target prompt.
+                                ; Without it a user who forgets to swap reads
+                                ; the target and writes it straight back, and
+                                ; the operation reports success (SPEC.md
+                                ; 18.99.3)
+.srcgo:
     call clo_rd
     jc .err
     mov byte [es:CL_STEP], CLS_TGT
     jmp short .line
+.srcwarn:
+    mov byte [es:CL_STEP], CLS_NOSRC
+    jmp short .line
+
+    ; CLS_NOSRC: CLS_SAME's three answers on the other prompt (SPEC.md
+    ; 18.99.3) - Enter re-checks, Y reads anyway, Esc stops - so the habitual
+    ; key is the safe one here too.
+.nosrc:
+    cmp al, 'y'
+    je .srcgo
+    cmp al, 'Y'
+    je .srcgo
+    cmp al, 13
+    jne .line
+    mov byte [es:CL_STEP], CLS_SRC
+    jmp short .src
 
 .tgt:
     cmp al, 13
@@ -1368,8 +1410,8 @@ clo_wimg:
     clc
     jmp short .out
 .busy:
-    mov ax, CERR_MEM
-    jmp short .fail
+    mov ax, CERR_BUSY           ; ...said as itself and not as 'Out of
+    jmp short .fail             ; memory' (SPEC.md 22.21.2)
 .freefail:
     push ax
     call clo_free
@@ -1631,14 +1673,21 @@ clo_imgrun:
     cmp cx, [es:CL_TOT]
     jb .write
 .wdone:
-    call clo_fin                ; ...and sector 0 goes down last, out of the
-.out:                           ; keep the first chunk made
-    pop cx
+    mov ax, [es:CL_FOFF]        ; NOT ONE BYTE was read, so nothing was
+    or ax, [es:CL_FOFF+2]       ; written and no boot sector is owed: CL_BOOT
+    jz .empty                   ; is still clo_zerohdr's 512 zeroes, and
+    call clo_fin                ; clo_fin would lay THOSE down as LBA 0 and
+.out:                           ; the verdict would call it 'Wrote A:'
+    pop cx                      ; (SPEC.md 18.99.8)
     pop bx
     ret
 .badgo:
     mov al, CERR_NODISK         ; the file's volume will not mount any more -
     stc                         ; the disk was swapped, or it failed
+    jmp short .out
+.empty:
+    mov al, CERR_NOTIMG         ; a file of no bytes is not a picture of a
+    stc                         ; floppy either
     jmp short .out
 
 ; -----------------------------------------------------------------------------
@@ -2305,6 +2354,8 @@ clo_line:
     je .same
     cmp bl, CLS_WIMG
     je .wimg
+    cmp bl, CLS_NOSRC
+    je .nosrc
     mov si, clo_s_ins           ; 'Insert the ' + SOURCE/TARGET + ' disk, ...'
     call clo_cat
     mov si, clo_s_src
@@ -2325,6 +2376,9 @@ clo_line:
 .same:
     mov si, clo_s_same
     jmp .tail
+.nosrc:
+    mov si, clo_s_nosrc         ; ...and the same warning on the SOURCE prompt
+    jmp .tail                   ; (SPEC.md 18.99.3)
 .pick:
     mov si, clo_s_clone         ; 'Clone A: to B:, ERASING it'
     call clo_cat
@@ -2402,6 +2456,8 @@ clo_line:
     mov si, clo_s_samek         ; 'Enter=re-check  Y=go  Esc=no'
     cmp bl, CLS_SAME
     je .tail
+    cmp bl, CLS_NOSRC           ; ...the same three answers, on the other
+    je .tail                    ; prompt (SPEC.md 18.99.3)
     mov si, clo_s_yn            ; 'Enter=yes  Esc=no'
     cmp bl, CLS_WIMG
     je .tail
@@ -2483,6 +2539,11 @@ clo_s_samek: db 'Enter=re-check  Y=go  Esc=no', 0   ; not a refusal, because
                                     ; two disks can carry identical boot
                                     ; sectors and re-cloning onto last week's
                                     ; copy is exactly that case
+clo_s_nosrc: db 'Not the SOURCE disk', 0    ; ...and the SAME check on the
+                                    ; source prompt, which is the direction
+                                    ; that used to go unguarded and silent
+                                    ; (SPEC.md 18.99.3). Its key line is
+                                    ; clo_s_samek's
 clo_s_rdy:   db 'Enter=ready  Esc=no', 0     ; the copy the note above is about
 clo_s_ok:    db 'Cloned ', 0        ; the verdict (SPEC.md 22.21.3)
 clo_s_colon: db ':', 0              ; ...and its tail: 'Cloned A: to B:'

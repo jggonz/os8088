@@ -1515,9 +1515,14 @@ fm_s_notimg:  db 'Not a disk image', 0   ; ...a file whose length is not one of
                                     ; an exact image admits of
 fm_s_clsame2: db 'Pick another disk', 0  ; ...the image may not live on the
                                     ; disk it is of (SPEC.md 18.99.8)
+fm_s_clbusy:  db 'Clone already running', 0   ; ...and a SECOND one, refused
+                                    ; because the File menu is not gated on
+                                    ; FS_EDIT (SPEC.md 22.21.2). It borrowed
+                                    ; fm_s_nomem, which said 'Out of memory'
+                                    ; and sent the user closing applications
 fm_clotab:    dw fm_s_empty, fm_s_dskerr, fm_s_ewprot, fm_s_nomem
               dw fm_s_enodisk, fm_s_clsml, fm_s_efull, fm_s_notimg
-              dw fm_s_clsame2
+              dw fm_s_clsame2, fm_s_clbusy
 fm_s_delq2:   db ' +contents? Del=yes Esc=no', 0   ; ...for a folder
 fm_s_size:    db 'Size ', 0         ; ...and the resting status line, which
 fm_s_free:    db '   Free ', 0      ; carries both figures (SPEC.md 22.7)
@@ -4167,6 +4172,11 @@ fm_c_clone:
                                 ; what a clone needs too, so the two items can
                                 ; never disagree about one disk (SPEC.md 47
                                 ; rule 2)
+    cmp word [clo_seg], 0       ; ...and a clone ALREADY running is refused
+    jne .no                     ; before anything is read: nothing gates the
+                                ; bar on FS_EDIT, so a second Disk window can
+                                ; pick this item while the first is sitting at
+                                ; a prompt with a live claim (SPEC.md 22.21.2)
     push ax
     mov al, MOD_CLONE
     call mod_need
@@ -4228,10 +4238,34 @@ fm_clone_bad:
     call KERNEL_SEG:cw_toast_say
     pop cx
     pop bx
-    call clo_drop               ; ...and the image goes back HERE, because no
-    ret                         ; mode was armed and fm_edit_end will therefore
-                                ; never be reached with one to drop it from
-                                ; (SPEC.md 2.8.3)
+    cmp word [clo_seg], 0       ; ...and the image goes back HERE, because no
+    jne .armed                  ; mode was armed and fm_edit_end will therefore
+    call clo_drop               ; never be reached with one to drop it from
+.armed:                         ; (SPEC.md 2.8.3) - UNLESS a claim is live,
+    ret                         ; which is CERR_BUSY and means ANOTHER
+                                ; window's mode 7 is armed and owns the image.
+                                ; Freeing it there leaves that prompt needing
+                                ; the system disk for its next status line
+                                ; (SPEC.md 22.21.2)
+
+; -----------------------------------------------------------------------------
+; fm_cloline - CLV_LINE, and an EMPTY line if the image cannot be had
+; in:  AL = which line, DI = the buffer; clo_call's contract otherwise
+; out: the buffer terminated on both paths
+; clobbers: DL and clo_call's
+;
+; clo_call answers CF=1 with AX = CERR_* when CLONE.DRV cannot be re-read
+; (SPEC.md 18.99.7), and on that path clo_line never runs - so DI is untouched
+; and the buffer still holds whatever the PREVIOUS line put there, which
+; fm_stat_row then draws as if it were this one's.
+; -----------------------------------------------------------------------------
+fm_cloline:
+    mov dl, CLV_LINE
+    call clo_call
+    jnc .out
+    mov byte [di], 0
+.out:
+    ret
 
 ; -----------------------------------------------------------------------------
 ; fm_clone_res - a clone ENDED: say what happened and re-list (SPEC.md 22.21.3)
@@ -4255,25 +4289,24 @@ fm_clone_res:
     jne .noverdict
     mov di, fm_hdrbuf           ; 'Cloned A: to B:' is staged WHILE THE IMAGE
     mov al, 2                   ; IS STILL LOADED (SPEC.md 22.21.3), which is
-    mov dl, CLV_LINE            ; before fm_edit_end below and therefore before
-    call clo_call               ; the drop. fm_hdrbuf is free by now and
-.noverdict:                     ; toast_show copies out of it
-    call fm_edit_end            ; ...and THIS is what frees the claim and drops
-    pop bx                      ; CLONE.DRV (SPEC.md 2.8.3)
-    pop ax
-    cmp al, CLA_STOP
-    je .out                     ; the user said it, so nothing is said back:
-                                ; a verdict is a report of what happened, and
-                                ; nothing did (SPEC.md 59.5)
-    push ax
-    push bx
-    cmp al, CLA_DONE
-    jne .relist                 ; a half-cloned target is still a changed
-    mov al, bh                  ; volume, so an error re-lists too. On success
-    call fm_fmt_home            ; every window on the TARGET goes to its root:
-                                ; its FS_CWD names a cluster on a disk that no
-                                ; longer exists. A same-drive clone has one
-                                ; volume, so this call covers both ends
+    call fm_cloline             ; before fm_edit_end below and therefore before
+.noverdict:                     ; the drop. fm_hdrbuf is free by now and
+    call fm_edit_end            ; toast_show copies out of it
+    pop bx                      ; ...and THIS is what frees the claim and drops
+    pop ax                      ; CLONE.DRV (SPEC.md 2.8.3)
+    push ax                     ; EVERY outcome that got as far as CLV_START
+    push bx                     ; re-lists, Esc included: clo_geom published
+    cmp al, CLA_DONE            ; the clone's geometry before a sector moved
+    jne .relist                 ; and clo_free hands back the CLAIM and not
+    mov al, bh                  ; [disk_spt]/[disk_heads]/[dsk_totsec], so the
+    call fm_fmt_home            ; mount below is the only thing that puts them
+                                ; back (SPEC.md 18.99.5) - and a half-cloned
+                                ; target is a changed volume besides. On
+                                ; success every window on the TARGET goes to
+                                ; its root: its FS_CWD names a cluster on a
+                                ; disk that no longer exists. A same-drive
+                                ; clone has one volume, so this call covers
+                                ; both ends
 .relist:
     mov di, [fm_vp]
     mov al, [di+FS_DRV]
@@ -4287,6 +4320,11 @@ fm_clone_res:
     pop ax
     cmp al, CLA_DONE
     je .said
+    cmp al, CLA_STOP
+    je .out                     ; the user said it, so nothing is said back:
+                                ; a verdict is a report of what happened, and
+                                ; nothing did (SPEC.md 59.5). The re-list above
+                                ; still ran, because the GEOMETRY happened
     push bx                     ; CLA_ERR: AH is the code, and four of the six
     push cx                     ; strings are the FERR_* table's own
     mov al, ah
@@ -4333,6 +4371,10 @@ fm_c_wimg:
     mov di, [fm_vp]
     call fm_fmt_ok              ; the same predicate Format and Clone grey
     jc .no                      ; from - a BIOS floppy, and nothing else
+    cmp word [clo_seg], 0       ; ...and the same refusal a running clone
+    jne .no                     ; earns there (SPEC.md 22.21.2): this one
+                                ; would open a dialog first and only discover
+                                ; it in the completion proc
     push ax
     push bx
     push si
@@ -4436,6 +4478,10 @@ fm_img_done_x:
 .save:
     mov dl, CLV_SAVED
     call clo_call               ; AL = CLA_*, exactly as a keystroke answers
+    jnc .savedone               ; ...unless CF=1, which is AX = CERR_* in the
+    mov ah, al                  ; other alphabet (SPEC.md 18.99.7) and would
+    mov al, CLA_ERR             ; otherwise be read as an outcome code
+.savedone:
     call fm_clone_res
 
     ; ONE tail, and it is a REPAINT for both halves. Nothing here can get
@@ -5006,12 +5052,17 @@ fm_editkey:
 .clone:
     mov dl, CLV_KEY
     call clo_call               ; AL = CLA_*, AH = CERR_*, BL/BH = the volumes
-    cmp al, CLA_SAVE
-    je .clone_save
-    cmp al, CLA_LINE
+    jc .clonebad                ; ...unless CF=1, which is AX = CERR_* in the
+    cmp al, CLA_SAVE            ; OTHER alphabet (SPEC.md 18.99.7): CLONE.DRV
+    je .clone_save              ; could not be re-read, which is an error and
+    cmp al, CLA_LINE            ; not an answer
     jne .clone_end
     jmp .lineonly               ; NEAR: three prompts' worth of code sits
-.clone_end:                     ; between here and it
+                                ; between here and it
+.clonebad:
+    mov ah, al                  ; AL was a CERR_*, so it is said as one
+    mov al, CLA_ERR
+.clone_end:
     call fm_clone_res           ; the verdict, the re-home and the re-list -
     jmp .out                    ; and fm_edit_end inside it is what frees the
                                 ; claim and drops the image (SPEC.md 2.8.3)
@@ -7465,23 +7516,22 @@ fm_draw_status:
     jmp .fs_stat
 
     ; The clone's prompts (SPEC.md 22.21.1), in the two-line shape the replace
-    ; question and the format confirmation already use. Which of the four is
-    ; up is CL_STEP, inside the cloner's own claim, so this branch is the same
-    ; six instructions whichever it is - and CLONE.DRV is loaded by
-    ; construction, the prompt having been armed after mod_need and dropped
-    ; with fm_edit_end.
+    ; question and the format confirmation already use. Which one is up is
+    ; CL_STEP, inside the cloner's own claim, so this branch is the same six
+    ; instructions whichever it is - and CLONE.DRV is loaded by construction,
+    ; the prompt having been armed after mod_need and dropped with
+    ; fm_edit_end. fm_cloline is what covers the case where construction did
+    ; not hold after all.
 .fs_st_clone:
     xor al, al                  ; line one, in the row area
-    mov dl, CLV_LINE
-    call clo_call
-    mov dx, [fm_cy]
+    call fm_cloline             ; ...and an EMPTY line, never the previous
+    mov dx, [fm_cy]             ; one, if the image cannot be re-read
     add dx, [fm_staty]
     sub dx, FM_STAT2_DY
     call fm_stat_row
     mov di, fm_hdrbuf           ; ...and line two, the keys, where every other
     mov al, 1                   ; status line goes
-    mov dl, CLV_LINE
-    call clo_call
+    call fm_cloline
     jmp short .fs_stat_drawn
 
 .fs_st_del:

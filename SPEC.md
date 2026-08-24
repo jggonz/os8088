@@ -18529,7 +18529,7 @@ bytes.
 | offset | |
 |---|---|
 | `CL_SRC` / `CL_TGT` | the two volume indices — equal for a same-drive clone |
-| `CL_STEP` | which prompt is up (`CLS_PICK`/`CLS_SRC`/`CLS_TGT`/`CLS_SAME`) |
+| `CL_STEP` | which prompt is up (`CLS_PICK`/`CLS_SRC`/`CLS_TGT`/`CLS_SAME`/`CLS_WIMG`/`CLS_NOSRC`) |
 | `CL_SPT` / `CL_HDS` / `CL_TOT` | the SOURCE's geometry, and what the target is written with |
 | `CL_NEXT` | the next LBA to read |
 | `CL_HLBA` / `CL_HELD` | the run currently in the buffer |
@@ -18562,25 +18562,43 @@ onward and "is this the source disk?" would answer yes for ever.
 #### 18.99.3 Is this the source disk? — the check, and why it is a WARNING
 
 A same-drive clone asks for two disks by turns, and the hazard is the user
-pressing Enter without swapping. On the target prompt the module reads the
-disk's **sector 0** and compares it with `CL_BOOT`:
+pressing Enter without swapping. **The hazard is symmetric, and so is the
+check**: on both prompts the module reads the disk's **sector 0** and compares
+it with `CL_BOOT`.
+
+On the **target** prompt:
 
 * the read **fails** — an unformatted disk, which the source is not. Proceed.
 * the bytes **differ** — a different disk. Proceed.
 * the bytes are **identical** — say so, and do not write.
 
-That last verdict is not proof. Two disks can carry identical boot sectors:
-cloning onto a target that was cloned from the same source is exactly that
-case, and it is a thing people do. So `CLS_SAME` is a **warning with three
-answers** — Enter re-checks, `Y` writes anyway, Esc stops — and the habitual
-key is the safe one, which is §22's asymmetry in the place it matters most.
+On the **source** prompt the same three readings mean the opposite, so the
+answers are the opposite: identical proceeds, and anything else warns. It runs
+from trip 2 onward — trip 1 has read nothing yet, so `CL_BOOT` is still zeroes
+and there is nothing to compare with — and it is exactly as sharp there as at
+the target prompt, because the target's LBA 0 is deliberately still unwritten
+until `clo_fin` (§18.99.2). Without it a user who forgets to swap reads a chunk
+off the **target** and writes it straight back; `clo_fin` then lays the real
+source's sector 0 down last, so the disk *mounts*, the toast says `Cloned A: to
+A:`, and the middle of it is whatever was there before. That is §18.99.5's own
+standard — "a clone that copies half a disk produces a target that mounts and
+lies" — arrived at from the other side, and it is the direction that is silent.
+
+Neither verdict is proof. Two disks can carry identical boot sectors: cloning
+onto a target that was cloned from the same source is exactly that case, and it
+is a thing people do — the target prompt's false positive and the source
+prompt's false negative are that one case seen from each end. So `CLS_SAME` and
+`CLS_NOSRC` are both **warnings with three answers** — Enter re-checks, `Y`
+goes anyway, Esc stops — and the habitual key is the safe one, which is §22's
+asymmetry in the place it matters most.
 
 The read is issued with `[dsk_rah_busy]` raised. Without it §18.95's cache
 answers from the *source's* sector 0, which it read minutes ago under the same
 volume index, and the check says "still the source disk" for ever.
 
 The check runs only when `CL_SRC == CL_TGT`. One disk cannot be in two drives,
-so a cross-drive clone has nothing to confuse.
+so a cross-drive clone has nothing to confuse — and `CLS_SRC`/`CLS_NOSRC` are
+only ever up for a same-drive clone anyway.
 
 #### 18.99.4 One trip when the RAM allows, and XMS is what usually allows it
 
@@ -18683,9 +18701,22 @@ the pass's byte count, so the freeze has a bar on it.
 
 **Cancel is at every prompt and nowhere else**, which is what "at any point
 input is required" means on a machine that cannot interrupt an `int 13h`.
-Esc at `CLS_PICK`, `CLS_SRC`, `CLS_TGT` or `CLS_SAME` ends the operation where
-it stands, frees everything and leaves the target exactly as far through as it
-got — with sector 0 unwritten, per §18.99.2.
+Esc at `CLS_PICK`, `CLS_SRC`, `CLS_TGT`, `CLS_SAME` or `CLS_NOSRC` ends the
+operation where it stands, frees everything and leaves the target exactly as
+far through as it got — with sector 0 unwritten, per §18.99.2. It still costs
+the re-mount §22.21.3 owes, because `clo_free` gives back the claim and not
+the geometry.
+
+**`clo_call` answers in two alphabets on one register, and `CF` says which.**
+On success `AL` is a `CLA_*`; when `mod_need` cannot produce the image it is
+`CF=1` with `AX = CERR_NODISK`, which is the nearest true thing — there is no
+cloner, so there is no disk it can reach. **Every call site tests `CF` first.**
+The two enumerations are also disjoint by construction — `CERR_*` from 1 and
+`CLA_*` from `0x80` — so a site that forgets reads a wrong answer instead of a
+plausible one. They used to overlap exactly, and `CERR_NODISK` = `CLA_SAVE` = 4
+meant "the cloner could not be loaded" was acted on as "the user asked for an
+image target": a Save box, on a half-written disk, for an operation nobody
+chose.
 
 
 #### 18.99.8 One end may be a FILE — `IMG` and `Write Img...`
@@ -18794,6 +18825,7 @@ to be something it is not.
 | the image is on the disk being written | **`CERR_SAME`** — `Pick another disk` — and this is the refusal the feature cannot do without: writing an image onto the volume the file lives on destroys the file halfway through reading it, and imaging a disk onto itself is writing the picture into the thing being pictured. Unlike §18.99.3's identity check this is not a guess — two volume indices are equal or they are not, so it is a refusal rather than a warning |
 | the file's length is not one of the four standard floppies | **`CERR_NOTIMG`** — see below |
 | the volume has not room for the image | **`CERR_FULL`**, asked while the file volume is current so it costs no switch, and before anything has been created (`fcp_room`'s argument, §22.5.2) |
+| the first read off the image delivers **no bytes at all** | **`CERR_NOTIMG`** again, and it is refused rather than reported as done: `CL_BOOT` is filled by the `clo_boot0` that follows a *non-empty* read, so a `clo_fin` on that path would put 512 zero bytes down as the target's boot sector — a disk that will not mount, at the end of an operation whose verdict said `Wrote A:`. `CL_FOFF` already carries the fact, so nothing new is remembered. The length was checked against the four layouts at the Open dialog, so reaching this needs the disk under the image to be swapped between the dialog and the confirmation Enter — which is the keystroke gap `CL_FCLUS` exists for |
 
 ##### The geometry comes from the SIZE
 
@@ -24212,9 +24244,9 @@ on the prompt, and it may be the source's own drive — cloning a disk to
 another disk in one drive is the case a one-floppy machine has, and it is the
 case the whole of §18.99.4 is about.
 
-#### 22.21.1 ONE `FS_EDIT` value for four prompts
+#### 22.21.1 ONE `FS_EDIT` value for every prompt
 
-`FS_EDIT` = 7, and the four prompts are a `CL_STEP` byte inside the claim
+`FS_EDIT` = 7, and the prompts are a `CL_STEP` byte inside the claim
 (§18.99.1). This is `fm_s_swap1`'s lesson taken further: every ladder in
 `files.inc` — `fm_editkey`, `fm_draw_status`, `fm_2line`, `fm_edit_end` —
 gains **one** compare for the whole feature, where four modes would have been
@@ -24229,6 +24261,10 @@ in the row area, the keys on the status line:
 | `CLS_SRC` | `Insert the SOURCE disk, then Enter` | `Enter=ready  Esc=no` |
 | `CLS_TGT` | `Insert the TARGET disk, then Enter` | `Enter=ready  Esc=no` |
 | `CLS_SAME` | `Still the SOURCE disk` | `Enter=re-check  Y=go  Esc=no` |
+| `CLS_NOSRC` | `Not the SOURCE disk` | `Enter=re-check  Y=go  Esc=no` |
+
+`CLS_NOSRC` is `CLS_SAME`'s twin on the other prompt and shares its key line
+(§18.99.3): the same read, the same three answers, the opposite verdict.
 
 `CLS_PICK` is Format's confirmation exactly — Space changes what is about to
 happen, Enter agrees to it, Esc refuses — and it says `ERASING it` because
@@ -24242,7 +24278,7 @@ up for a same-drive clone, where there is one drive and naming it is noise.
 
 #### 22.21.2 The keystroke does the work
 
-`fm_editkey`'s mode-7 branch is three instructions and a far call:
+`fm_editkey`'s mode-7 branch is a `jc`, three compares and a far call:
 `CLV_KEY` (§18.99.7) takes the key, does whatever disk work that key asked
 for, moves `CL_STEP` and answers what the window owes the screen. So Enter on
 `CLS_SRC` *is* the read pass, Enter on `CLS_TGT` *is* the identity check and
@@ -24267,6 +24303,27 @@ itself goes through `fm_edit_end`, which is where `CLV_FREE` and the image's
 `mod_drop` are hung — one place, for `fm_fmt_drop`'s reason (§2.8.3): it is
 the moment nothing of the module is on the stack.
 
+##### A SECOND clone is refused as itself
+
+Nothing gates the File menu on `FS_EDIT`: `fm_bar_gate` greys `Clone Disk...`
+and `Write Img...` on `fm_fmt_ok` alone, and a status-line prompt is not modal,
+so a second Disk window — or the same one — can pick either item while a clone
+is sitting at `CLS_SRC` with a live claim. Three things follow, and all three
+are the contract:
+
+* `fm_c_clone` and `fm_c_wimg` **test `[clo_seg]` and return** before anything
+  is read. Refusing at the surface is what removes the path; the two guards
+  below are what make refusing at the body safe.
+* `clo_start` and `clo_wimg` answer **`CERR_BUSY`** — `Clone already running` —
+  and not `CERR_MEM`. They used to borrow it, so "a clone is already running"
+  was said as `Out of memory` and sent the user closing applications.
+* `fm_clone_bad` drops the image **only when `[clo_seg]` is 0**. Its `clo_drop`
+  is there because a refusal arrives before anything is armed, so
+  `fm_edit_end` will never be reached with a mode to drop it from — which is
+  true of every refusal *except* this one. Dropping it while another window's
+  mode 7 is armed frees the code that composes that window's next status line,
+  on the one-floppy machine where the system disk is not in the drive.
+
 #### 22.21.3 After it, both volumes are somebody else's disk
 
 `CLA_DONE` re-homes and re-lists the same way a format does. `fm_fmt_home`
@@ -24275,6 +24332,20 @@ cluster on a disk that no longer exists — and the acting window is re-listed
 and re-titled. On a same-drive clone the two volumes are one, so that single
 call covers both; on a cross-drive clone the source is untouched and the
 refresh of the acting window is free.
+
+**Every outcome re-lists, `CLA_STOP` included.** The re-list is a mount, and
+the mount is the only thing that puts `[disk_spt]`, `[disk_heads]` and
+`[dsk_totsec]` back: `clo_geom` publishes the clone's geometry at `CLV_START`,
+before a single sector has moved, and `clo_free` gives back the claim and the
+XMS block and *not* those three words (§18.99.5 — "the caller owes a re-mount
+afterwards"). Esc used to return before it, so a cancel left the source's
+mount and the clone's geometry standing over whatever platter was in the drive,
+with the bank that could have undone them already freed. Cancelling therefore
+costs one mount and one repaint, on an operation that has already spent a probe
+— and what it buys is `[dsk_cwd]`, §18.95's cache and the live geometry all
+describing the disk that is actually there. `CLA_STOP` still says *nothing*:
+the re-list happens, the verdict does not, because a verdict is a report of
+what happened and nothing did.
 
 Then the verdict: **`Cloned A: to B:`** in the menu bar (§59.6), for §22.12.1's
 reason at its strongest — a clone is *minutes* of floppy the user stood over,
