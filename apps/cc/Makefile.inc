@@ -78,7 +78,7 @@ CC_RUNTIME  := $(CC_DIR)/os88.h $(CC_DIR)/crt0.asm $(CC_DIR)/os88thunk.asm \
 # tool's own default and it is a SMELL THRESHOLD, not a budget: a 96-byte
 # frame in this OS is a local buffer, a local buffer is either an `&local`
 # (refused outright) or dead weight that should have been static, and on a
-# worker it is over a third of the whole 256-byte stack with the tick and
+# worker it is a quarter of the whole 384-byte stack with the tick and
 # mouse ISR frames still to land on top. Lowering it for a package that runs
 # on a worker is a normal thing to do; raising it is an argument to have in
 # SPEC.md 73.8.

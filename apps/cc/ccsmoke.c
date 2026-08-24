@@ -74,7 +74,7 @@ static void sm_draw(void *win)
      * an address, so a local `struct os88_pt org;` passed as `&org` is
      * `lea ax, [bp-N]` and the build stops. It was written that way first and
      * tools/cc8086.py refused both of them by name (73.5). Statics are also
-     * what keeps the frame small enough for a 256-byte worker stack (73.8) -
+     * what keeps the frame small enough for a 384-byte worker stack (73.8) -
      * the two rules are one rule seen twice. */
     static struct os88_pt org;
     static struct os88_size sz;

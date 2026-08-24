@@ -2829,9 +2829,16 @@ wm_wake_redo:
     xor si, si
     mov cx, MAX_WIN
 .l:
-    cmp byte [wm_wkq+si], WKQ_EATEN
-    jne .n
+    pushf                       ; the test and the clear are ONE decision, and
+    cli                         ; wm_wake runs on WORKERS (OSAPI_WM_WAKE): a
+    cmp byte [wm_wkq+si], WKQ_EATEN ; switch between them lets one post a
+    je  .redo                   ; record and set WKQ_RING for this slot, and
+    popf                        ; the clear would then drop that record's flag
+    jmp short .n                ; on the floor and post a SECOND for it
+.redo:
     mov byte [wm_wkq+si], WKQ_NONE  ; ...so wm_wake below really posts
+    popf                            ; released BEFORE the call below, which
+                                    ; takes its own guard
     mov ax, si
     call wm_idx2ptr             ; BX = the window record
     call wm_wake

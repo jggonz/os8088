@@ -90,7 +90,7 @@ ZI_STKMAX    equ ZI_STKKB * 1024
 
 ; A frame, as it sits on the Z-stack. Locals follow the header, then this
 ; frame's evaluation stack up to the next frame's base (or [zf_sp] for the
-; newest). Nothing here is on the 8086 stack: the worker's own stack is 256
+; newest). Nothing here is on the 8086 stack: the worker's own stack is 384
 ; bytes (SCH_STACK) shared with the tick, mouse and sound IRQs.
 ZI_FR_PREV   equ 0                  ; word: previous frame's base, 0xFFFF = none
 ZI_FR_PCL    equ 2                  ; word: return PC, low 16 bits

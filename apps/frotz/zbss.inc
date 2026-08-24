@@ -171,7 +171,7 @@ ZI_RING_N   equ 32
 
 ; --- 9. Scratch shared by the modules ----------------------------------------
 ; One 64-byte scratch, owned by whoever is running: the worker's own stack is
-; 256 bytes (SCH_STACK) and shared with the tick, the mouse and any sound IRQ,
+; 384 bytes (SCH_STACK) and shared with the tick, the mouse and any sound IRQ,
 ; so a module that needs a buffer takes it from here rather than from SP.
 %define zf_scratch    (os88_image_end + 1116) ; 64 bytes
 

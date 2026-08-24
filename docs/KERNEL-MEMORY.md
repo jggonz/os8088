@@ -692,7 +692,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2828,
     "stk0": 1024,
-    "text": 56610
+    "text": 56616
   },
   "small": {
     "bss": 5961,
@@ -709,7 +709,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2799,
     "stk0": 1024,
-    "text": 49877
+    "text": 49883
   }
 }
 ```
@@ -1472,19 +1472,19 @@ generated in the first place.
 | theme | bytes | share |
 |---|---:|---:|
 | the file system, end to end | 33,136 | 34.6% |
-| the window system and its furniture | 24,934 | 26.1% |
+| the window system and its furniture | 24,940 | 26.1% |
 | drawing: adapters, primitives, glyphs, icons | 15,097 | 15.8% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 11,690 | 12.2% |
 | the kernel proper: API table, heap, scheduler, events | 8,033 | 8.4% |
 | the three built-in kinds | 1,751 | 1.8% |
 | the Control Panel | 1,054 | 1.1% |
-| **total** | **95,695** | |
+| **total** | **95,701** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
-| `wm.inc` — the window manager (§11) | 11,716 | 95 | **11,811** | 1,086 | — |
+| `wm.inc` — the window manager (§11) | 11,722 | 95 | **11,817** | 1,086 | — |
 | `files.inc` — the Disk window (§22) | 1,131 | 8,733 | **9,864** | 471 | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 6,427 | 430 | **6,857** | 665 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 359 | 6,105 | **6,464** | 890 | 3,584 |
@@ -1524,7 +1524,7 @@ generated in the first place.
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `bootprof.inc` — **(undescribed)** | — | — | **0** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 3,505 | — | **3,505** | — | — |
-| **total** | **56,610** | **39,085** | **95,695** | **6,456** | **7,702** |
+| **total** | **56,616** | **39,085** | **95,701** | **6,456** | **7,702** |
 <!-- END generated table -->
 
 ### Reading it

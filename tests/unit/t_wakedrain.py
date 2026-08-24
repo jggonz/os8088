@@ -35,7 +35,13 @@ WINDOW = 14                     # lines after the call to look in
 def main() -> int:
     bad = []
     seen = 0
-    for src in sorted((ROOT / "kernel").glob("*.inc")):
+    # kernel.asm is in scope too, and not only the modules it includes: a
+    # drain written in kmain or in one of the far shims would otherwise land
+    # exactly as silently as the four this exists for. The exemption below
+    # names it, so leaving it out made that branch unreachable.
+    srcs = (sorted((ROOT / "kernel").glob("*.inc"))
+            + [ROOT / "kernel" / "kernel.asm"])
+    for src in srcs:
         lines = src.read_text().splitlines()
         for i, line in enumerate(lines):
             # The far form too: a .cold drain pops through the KERNEL_SEG

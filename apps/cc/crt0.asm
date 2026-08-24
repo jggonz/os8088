@@ -151,9 +151,12 @@
 ; undefined `cc__namelen` and a non-constant TIMES - three messages, none of
 ; which says "you forgot the name". %fatal stops here with the one that does.
 ; A task's whole stack (kernel/sched.inc, SCH_STACK), which cc_iswk needs as a
-; number rather than as a fact about the kernel it cannot see, and the depth of
+; number rather than as a fact about the kernel it cannot see - and it has to
+; move WITH it, because a window that is too SHORT fails the gate OPEN: a
+; worker deeper than this reads as the UI task and cc_ovneed goes on to claim
+; and read a floppy from it (SPEC.md 20.6 rule 7). And the depth of
 ; cc_ovthunk's return stash in WORDS (SPEC.md 73.14).
-CC_STACK    equ 256
+CC_STACK    equ 384
 CC_OVDEPTH  equ 16
 
 %ifndef CC_PKG_NAME
@@ -611,7 +614,7 @@ cc_onfile:
 ; scheduler irets straight to this offset.
 ;
 ; in:  DS = CS = this segment, ES = KERNEL_SEG, DX = the instance index,
-;      IF = 1, the gfx lock free, SP at the top of a 256-byte slice in LOW_SEG
+;      IF = 1, the gfx lock free, SP at the top of a 384-byte slice in LOW_SEG
 ; out: it does not have one - see below
 ;
 ; It saves nothing, because there is nobody to give anything back to.
@@ -633,7 +636,7 @@ cc_onfile:
 ; -----------------------------------------------------------------------------
 cc_worker:
     cld
-    mov [cc_wksp], sp               ; the top of THIS task's 256-byte slice,
+    mov [cc_wksp], sp               ; the top of THIS task's 384-byte slice,
                                     ; which is how cc_iswk answers "am I the
                                     ; worker" without a kernel call - see it
     push word [cc_win]              ; arg 1: void *win, banked by cc_entry
@@ -654,7 +657,7 @@ cc_worker:
 ; SPEC.md 20.6 rule 7 forbids a whole family of calls on a worker - claims,
 ; file I/O, anything that touches the FAT - and the kernel has no slot that
 ; answers "which task am I", so the runtime works it out from SP. Every task
-; stack is a 256-byte slice of LOW_SEG (kernel/sched.inc, SCH_STACK) and every
+; stack is a 384-byte slice of LOW_SEG (kernel/sched.inc, SCH_STACK) and every
 ; task runs with SS = LOW_SEG, so SP alone identifies the slice: cc_worker
 ; banks its own stack top on entry, and the worker is the task whose SP is
 ; inside that slice. Exact rather than approximate - the UI task's SP cannot be

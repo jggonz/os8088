@@ -5,7 +5,7 @@
     python3 tools/stkdepth.py drivers/ether/ether.asm            # every root
 
 `tools/stkwater.py` says HOW DEEP a task slice went; this says WHERE, and it
-says it without an emulator, a network or a lucky sample. `SCH_STACK` is 256
+says it without an emulator, a network or a lucky sample. `SCH_STACK` is 384
 bytes for every background task (SPEC.md 8) and `ETHER.DRV`'s service worker
 has been measured at 208 of them, so "which chain do we cut" is a question with
 a numeric answer and this is what answers it.

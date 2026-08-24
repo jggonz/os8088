@@ -207,10 +207,12 @@ stacks) or **ES** (the disk buffers), never DS. It sits *above* the kernel
 image now, not below it — there is no low memory under the kernel any more,
 because the kernel starts as low as the BIOS lets it.
 
-- `sch_stacks` — 11 × `SCH_STACK` (**256**) = 2,816 bytes, task slots 1..11
-  (§8), kept **256-aligned** in `.lowbss` (a `resb` pad before it) so a
-  slice top can be derived from SP alone; a `SCH_MAGIC` canary word sits at
-  the bottom of every slice (§8).
+- `sch_stacks` — 7 × `SCH_STACK` (**384**) = 2,688 bytes, task slots 1..7
+  (§8). The **block** is 256-aligned in `.lowbss` (a `resb` pad before it)
+  and an individual slice is **not** — at 384 the odd slots sit at 128 mod
+  256 — so a slice top is `sch_stacks + n*SCH_STACK` and never SP's low
+  bits, which is the arithmetic that read garbage in two instruments
+  (§8.4); a `SCH_MAGIC` canary word sits at the bottom of every slice (§8).
 - Task 0 runs on the same segment at `STK0_TOP`, growing down onto the top
   of `.lowbss` — `STK0_SIZE` = 1,024 bytes. All tasks share one SS, so a
   switch is still an SP swap and SS is not part of the saved frame. **This
@@ -234,7 +236,7 @@ its worker task, and Paint saving a GIF into a folder it created from the
 file dialog. The deepest mark left was **246 bytes** on task 0's stack and
 **150** on a background task's, ISR frames included (the tick and mouse
 handlers run on whichever stack they interrupt). The reservations above are
-4× and 3.4× those. Redo the fill probe before lowering either; guard 3
+4× and 2.6× those. Redo the fill probe before lowering either; guard 3
 (§15.1) only proves `STK0_SIZE` is big enough to be a stack at all, not that
 a task fits its own slice.
 
@@ -4211,29 +4213,31 @@ path, so the injection floor cannot enter the number.
 
 ## 8. sched.inc — round-robin, pre-emptive or cooperative (§8.2)
 
-- `MAX_TASKS equ 12`. Task 0 is the boot thread (becomes the UI task); it
+- `MAX_TASKS equ 8`. Task 0 is the boot thread (becomes the UI task); it
   runs on the task-0 stack (SS:`STK0_TOP`, §2.1) and owns **no** slice of
   `sch_stacks`.
-  Slots 1..11 are dynamic — spawned by `app_launch` (§29), by
+  Slots 1..7 are dynamic — spawned by `app_launch` (§29), by
   `inst_pkg_spawn` for a package's one worker (§20.6) and by the transient
   sound refill/drain tasks (§34.5), freed by `task_exit`. Three claimants
-  for eleven slots: a refused `OSAPI_TASK_SPAWN` (CF=1) and a stream
+  for seven slots: a refused `OSAPI_TASK_SPAWN` (CF=1) and a stream
   open's err 6 are ordinary outcomes, not edge cases, and a package must
   degrade rather than abort when it cannot have its worker. Each slot has
-  an `SCH_STACK`-byte stack — **256**, measured (§2.1 — 1.8× the deepest
-  0xCC-fill mark ever recorded), not guessed:
+  an `SCH_STACK`-byte stack — **384**, measured (1.75× the 220 bytes the
+  field has seen in use, docs/KERNEL-MEMORY.md "Task stacks"), not guessed:
   `sch_stacks resb (MAX_TASKS-1) * SCH_STACK` **in `.lowbss`** (§2.1),
-  256-aligned, slot n's stack top at
-  `sch_stacks + n*SCH_STACK` (slot 1 owns bytes 0..255). **Thin is
-  CHECKED, not trusted**: `SCH_MAGIC` (0x5A57) is written at the bottom
-  word of every slice by `task_spawn`, `sch_switch` compares the outgoing
-  task's canary on every switch away — four instructions, no multiply,
-  because 256 makes the slice base the slot index in BH — and a dead
-  canary halts the machine in `sch_stkdie` rather than letting the next
-  push land in another task's slice, where the symptom would be arbitrary
-  and nowhere near the cause. `tests/stackprobe` re-measures the margin on
-  real hardware, where the BIOS lands interrupt frames QEMU's SeaBIOS
-  services on an internal stack of its own.
+  the block 256-aligned and the slices themselves 128-aligned, slot n's
+  stack top at `sch_stacks + n*SCH_STACK` (slot 1 owns bytes 0..383).
+  **Thin is CHECKED, not trusted**: `SCH_MAGIC` (0x5A57) is written at the
+  bottom word of every slice by `task_spawn`, `sch_switch` compares the
+  outgoing task's canary on every switch away — one 8-bit multiply and a
+  shift, for any slice size that is a multiple of 128, with the old byte
+  swap kept under `%if SCH_STACK == 256` for the day a configuration
+  returns there — and a dead canary halts the machine in `sch_stkdie`
+  rather than letting the next push land in another task's slice, where
+  the symptom would be arbitrary and nowhere near the cause.
+  `tests/stackprobe` re-measures the margin on real hardware, where the
+  BIOS lands interrupt frames QEMU's SeaBIOS services on an internal stack
+  of its own.
 - Task record (8 bytes): `T_STATE` (0 free, 1 ready, 2 sleeping), `T_SP`
   (saved SP), `T_WAKE` (tick count to wake at), `T_INST` at offset 6
   (byte: owning instance index, §29; 0xFF = none — the Task Manager
@@ -11647,7 +11651,7 @@ last window goes, so layout time is too early. It is the §46 rule 5 case in
 its purest form (a stable, one-word fact) and the one a user meets on the
 desktop at boot before meeting any other; it used to be a live item that
 answered with a beep. The tables-full refusals beside it — Timer, Bounce and
-Disk at the instance cap — stay beeps on purpose: `MAX_TASKS` is 12, and the
+Disk at the instance cap — stay beeps on purpose: `MAX_TASKS` is 8, and the
 predicate is per-kind rather than one word.
 
 ```nasm
@@ -13320,10 +13324,11 @@ tests the carry and does without.
 **What it is for is un-drawing.** A control drawn down by a *keystroke* has no
 release edge to come back up on — §13.8's whole mechanism hangs off a mouse
 gesture — and a callback cannot sleep, holding the gfx lock as it does. Before
-this the only answer was a worker task (§20.6), which is a task slot of twelve
-and a 256-byte stack for a 165 ms flash, and which moves the package onto the
-task-owned close path. Calculator's key flash (§65.9) and ArtfulType's caret
-blink (§46) are the same shape, and both were paying that price.
+this the only answer was a worker task (§20.6), which is one of eight task
+slots and a 384-byte stack for a 165 ms flash, and which moves the package
+onto the task-owned close path. Calculator's key flash (§65.9) and
+ArtfulType's caret blink (§46) are the same shape, and both were paying that
+price.
 
 **Note Pad's caret is NOT one of them, and this section used to say it was.**
 It does not blink and never has: `np_carets` banks its column during the row
@@ -21075,11 +21080,11 @@ Two teardown corollaries, both about not trading a crash for a leak:
    wrong trade. This is the §14 Bounce idiom, and `app_bounce_task` in
    `kernel/apps.inc` is the reference implementation for everything a
    worker does.
-6. **The worker's stack is `SCH_STACK` (**256**) bytes in `LOW_SEG`, and
+6. **The worker's stack is `SCH_STACK` (**384**) bytes in `LOW_SEG`, and
    SS ≠ DS** (§2.1).
    No deep recursion, no large stack buffers — the tick, mouse and any
    sound IRQ land their frames on this slice while the worker runs, so
-   budget well under the 256 — and remember that `[bp+disp]` addresses
+   budget well under the 384 — and remember that `[bp+disp]` addresses
    SS: a kernel or package pointer held in BP needs an explicit `ds:`
    override. An overrun is caught by §8's canary and HALTS the machine,
    loudly, at the next switch.
@@ -21106,9 +21111,9 @@ Two teardown corollaries, both about not trading a crash for a leak:
    is why §20.11 requires the amendment in the same change as the cell.
    None of this is enforced.
 
-**Refusal is normal, not exceptional.** `MAX_TASKS` is 12 and the UI task,
+**Refusal is normal, not exceptional.** `MAX_TASKS` is 8 and the UI task,
 up to ten Timer/Bounce instances, the Task Manager's worker and a transient SB refill/drain
-task (§34.5) all draw from the same eleven dynamic slots, so CF=1 is an
+task (§34.5) all draw from the same seven dynamic slots, so CF=1 is an
 ordinary outcome. A package must degrade — stay a perfectly good task-less
 package, window, callbacks, menus and close box all working — and **should
 retry**, because the condition is transient: closing one Timer frees the
@@ -27064,7 +27069,7 @@ byte for byte instead.
 The textbook matcher recurses once per repeat element and once per repetition;
 the second is fatal on its own (`.*` over a 16KB note is 16,000 frames) and the
 first is fatal here too, because the match count is recomputed by the **worker**
-and a worker's stack is 256 bytes (§8). So a repetition is a greedy count plus
+and a worker's stack is 384 bytes (§8). So a repetition is a greedy count plus
 a frame that gives ground one at a time, the frames live in bss, and there are
 `NP_RXST` (12) of them — a pattern needing more is refused **whole**, by
 `np_fchk`, before anything runs. That is what lets `np_rx_at` treat a full stack
@@ -40804,7 +40809,7 @@ refusals *ought* to grey and do not, and three answer no:
 
 - **A press outside the modal dialog** (`fdlg_grab`, §38.2). Greying the whole
   desktop is not a control state, and the dialog's presence is the explanation.
-- **Timer / Bounce / Disk at the instance cap** (§12.3). `MAX_TASKS` is 12 and
+- **Timer / Bounce / Disk at the instance cap** (§12.3). `MAX_TASKS` is 8 and
   the predicate is per-kind rather than one word; the cost is not worth a fact
   a user meets about never.
 - **The Disk window's context menus** (`files.inc`, §22). Up One Folder at the
@@ -49650,7 +49655,7 @@ would hold the gfx lock for those seconds and freeze the clock, the mouse and
 every other window. The worker is hired from the first `W_PAINT`, because the
 loader publishes the instance only after the entry proc returns.
 
-Two worker rules shape the rest: the stack is 256 bytes (`SCH_STACK`, shared
+Two worker rules shape the rest: the stack is 384 bytes (`SCH_STACK`, shared
 with the tick, mouse and sound IRQs), so the VM keeps its own stack in a claim
 and nothing recurses; and **a worker may not touch a file slot,
 `OSAPI_FILE_DLG` or `OSAPI_MEM_*`**.
@@ -55526,12 +55531,12 @@ Everything from `cy_render` down to the fill preserves **SI, DI and nothing
 else**, and that is a stack decision rather than a style. It is written down
 because the polite version assembles, boots, plays, and then hangs.
 
-A worker gets 256 bytes (§8) and every interrupt the machine takes lands on
+A worker gets 384 bytes (§8) and every interrupt the machine takes lands on
 whichever task stack is current, so the app's own chain is only part of what
 has to fit. This app's chain is seven frames deep — worker → render →
 per-state render → per-object draw → `cy_obj_show` → `cy_rsub` → the fill —
 and six of those frames opened by banking AX..DX out of habit. That is 60 of
-the 256 bytes spent on registers that every one of the call sites reloads from
+the slice spent on registers that every one of the call sites reloads from
 memory on the next line: the loops all keep their cursor in SI and read the
 rect back out of `cy_snl..cy_snb`, which is bss.
 
@@ -59520,7 +59525,7 @@ both measured rather than guessed (§2.1):
   the kernel spent getting there, with the tick and mouse ISR frames landing
   on top of that. The 0xCC-fill probe under the hardest load the machine takes
   left its deepest mark at **246 bytes** (§2.1).
-- **A worker: `SCH_STACK` = 256 bytes.** Deepest mark **150** (§2.1), ISR
+- **A worker: `SCH_STACK` = 384 bytes.** Deepest mark **150** (§2.1), ISR
   frames included. An overrun is not silent here — §8's `SCH_MAGIC` canary is
   compared on every switch away and a dead canary **halts the machine** in
   `sch_stkdie` — but a caught halt is still the machine stopping in front of
@@ -59541,7 +59546,7 @@ number that would actually matter is a *sum over a call chain*; the chain runs
 through kernel dispatches no static analysis can see; so there is no symbol to
 define and nothing to compare it against. They are here as the figures a
 reviewer holds a design against — 512 of the UI task's ~778 free bytes, 64 of
-a worker's ~106 — and the mechanism that keeps them true in practice is
+a worker's ~234 — and the mechanism that keeps them true in practice is
 §73.5's `&local` rule, which pushes every buffer out of the frame, plus the
 frame report below, which makes the numbers visible on every build. Do not go
 looking for `CC_STACK_UI` or `CC_STACK_WORKER`: earlier drafts of this section
@@ -59556,7 +59561,7 @@ either will miss the other.
 
 It is not a budget — it is a **smell threshold**. A 96-byte frame in this OS is a
 local buffer; a local buffer is either an `&local` (§73.5 refuses it) or dead
-weight that should have been static, and on a worker it is over a third of the
+weight that should have been static, and on a worker it is a quarter of the
 entire stack with the tick and mouse ISRs still to land on top of it. The tool
 finds every `push bp` / `mov bp, sp` prologue, reads the `sub sp, N` that
 follows it, and fails the build on **any** N over the cap, naming the function

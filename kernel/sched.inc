@@ -913,10 +913,13 @@ khb_dipl:   db 0                ; to disagree: cutting 32 bytes off the
                                 ; interrupted CS:IP at the moment it was
                                 ; reached, sampled every tick - so the next cut
                                 ; is aimed at the chain the machine is actually
-                                ; in. Depth, not SP: slices are 256-aligned, so
-                                ; `neg` of SP's low byte IS how far down the
-                                ; slice it is, and the answer compares across
-                                ; slots
+                                ; in. Depth, not SP, because the answer has to
+                                ; compare across slots - and it is derived from
+                                ; sch_stacks + slot * SCH_STACK, never from
+                                ; SP's low bits: at 384 a slice is 128-aligned
+                                ; and the `neg al` that read 256-aligned ones
+                                ; produced garbage (the switch path below says
+                                ; the same thing at more length)
 khb_wide:   db 0x00, 0x0F, 0xF0, 0xFF   ; two bits -> four pixels each
 khb_stuck:  dw 0                ; consecutive ticks with NO ui_task pass
 khb_uipass: dw 0                ; bumped once per ui_task loop
@@ -1162,10 +1165,11 @@ sch_isr:
     xor ah, ah                  ; produced was garbage on the instrument that
     mov bx, SCH_STACK           ; aims the next stack cut. The slice TOP is
     mul bx                      ; sch_stacks + cur*SCH_STACK (slot n's base is
-    add ax, sch_stacks          ; (n-1)*SCH_STACK), and depth = top - SP -
-    sub ax, sp                  ; stored HALVED, so one byte holds 0..384 and
-    shr ax, 1                   ; tools/stkwater.py doubles it back
-    pop dx
+    add ax, sch_stacks          ; (n-1)*SCH_STACK), and depth = top - SP, less
+    sub ax, sp                  ; this sampler's own two pushes, so it agrees
+    sub ax, 4                   ; with khb_spl/khb_sph above - stored HALVED,
+    shr ax, 1                   ; so one byte holds 0..384 and
+    pop dx                      ; tools/stkwater.py doubles it back
     pop bx
     cmp al, [cs:khb_deep]
     jbe .khbnodeep
@@ -1560,15 +1564,16 @@ sch_stkdie:
 ; =============================================================================
 section .lowbss                         ; LOW_SEG, reached through SS (SPEC.md 2.1)
 
-resb (256 - (($-$$) % 256)) % 256       ; keep every slice on a 256-byte
+resb (256 - (($-$$) % 256)) % 256       ; keep the BLOCK on a 256-byte
                                         ; boundary (alignb spelled out - NASM
                                         ; refuses the macro form against this
-                                        ; nobits section). The canary math
-                                        ; above is symbol-relative and does
-                                        ; not need this, but tests/stackprobe
-                                        ; derives its slice top from SP
-                                        ; alone, and anything else doing SP
-                                        ; arithmetic will assume it too. Free
+                                        ; nobits section). The BLOCK only:
+                                        ; with SCH_STACK = 384 an individual
+                                        ; slice is 128-aligned, so nothing may
+                                        ; derive a slice base from SP's low
+                                        ; bits - the canary math above and
+                                        ; tests/stackprobe both work from
+                                        ; sch_stacks + slot * SCH_STACK. Free
                                         ; today: font's 768-byte block
                                         ; precedes this one and 768 is
                                         ; already a multiple

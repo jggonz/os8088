@@ -1657,7 +1657,7 @@ _os88_strcpy:
 ; char *os88_utoa(unsigned v, char *dst6) - decimal, no padding, returns dst.
 ; The buffer needs 6 bytes: 65535 plus the NUL. The digits come off the
 ; division in reverse, so they go on the STACK and come back off in order -
-; at most five words, which is the kind of frame the 256-byte worker stack can
+; at most five words, which is the kind of frame the 384-byte worker stack can
 ; afford (SPEC.md 73.8).
 _os88_utoa:
     push bp

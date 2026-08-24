@@ -1498,7 +1498,7 @@ DRVC_FILE    equ 5              ; a volume served by somebody answering
 ;     every call to the part of your content that shows. OSAPI_WM_OBSCURED
 ;     is still there and still correct, but it vetoes the whole frame for
 ;     one covered pixel - prefer the clip.
-;  6. Your stack is SCH_STACK (512) bytes in LOW_SEG and SS != DS (see the header of
+;  6. Your stack is SCH_STACK (384) bytes in LOW_SEG and SS != DS (see the header of
 ;     this file). No deep recursion, no big stack buffers, and BP-relative
 ;     operands address SS.
 ;  7. You may call: the gfx_* and font_* slots, OSAPI_SET_COLOR, OSAPI_GFX_PEN,
@@ -2513,9 +2513,14 @@ CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
                                  ; it is EMPTY / non-zero remove it AND
                                  ; EVERYTHING UNDER IT (SPEC.md 18.6). out
                                  ; CF=0 AX=0, else AX = FERR_* (FERR_NOENT no
-                                 ; such folder, FERR_EXIST it is not empty and
-                                 ; you asked for the strict form, FERR_PROT a
-                                 ; hidden or system entry).
+                                 ; such folder; FERR_PROT covers BOTH "it is
+                                 ; not empty and you asked for the strict
+                                 ; form" AND a read-only, hidden or system
+                                 ; entry - SPEC.md 18.6 gives one code to both
+                                 ; and a caller CANNOT tell them apart here;
+                                 ; FERR_IO for a first cluster outside
+                                 ; [2, the volume's last], which is
+                                 ; corruption).
                                  ;
                                  ; **AL = 0 IS THE ONE TO REACH FOR**, and the
                                  ; flag exists because the two callers want

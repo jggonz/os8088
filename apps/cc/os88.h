@@ -73,7 +73,7 @@
  *    themselves rather than trusting the ES they were entered with.
  *
  * 3. THE STACK IS TINY AND IS NOT GROWABLE. The UI task has 1,024 bytes total
- *    with a measured 246 already spent under load, and a worker has 256 with
+ *    with a measured 246 already spent under load, and a worker has 384 with
  *    a measured 150 (SPEC.md 2.1, 67.8). tools/cc8086.py prints every
  *    function's frame size on every build and fails on any frame over 96
  *    bytes (CC_FRAME_MAX). Rule 1 is most of what keeps this true: a buffer
@@ -391,7 +391,7 @@ void os88_onwake(void *win);
  * once your close box is clicked - and os88_task_sleep() when idle. If you
  * return anyway the runtime parks you in an alive/sleep loop rather than let
  * a near `ret` jump into a random kernel offset, but that is a net, not a
- * contract. Your stack here is 256 bytes TOTAL, with the tick and mouse ISR
+ * contract. Your stack here is 384 bytes TOTAL, with the tick and mouse ISR
  * frames landing on it while you run. */
 void os88_worker(void *win);
 

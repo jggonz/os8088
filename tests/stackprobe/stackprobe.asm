@@ -13,7 +13,7 @@
 ; only one and open Disk A again), and launch STKPROBE.O88.
 ;
 ; WHAT IT MEASURES, AND WHY QEMU IS NOT ENOUGH. A background task owns a
-; 256-byte stack slice (SCH_STACK, SPEC.md 8), sized at 1.8x the deepest
+; 384-byte stack slice (SCH_STACK, SPEC.md 8), sized against the deepest
 ; 0xCC-fill mark ever recorded - but that probe ran under QEMU, where
 ; SeaBIOS services its interrupt entries on an internal stack of its own.
 ; A real IBM BIOS runs int 09h on whichever task stack is current, and it
@@ -37,14 +37,15 @@
 ; has to walk them. A slice with no canary was never spawned; one whose task
 ; has exited still reads true until the slot is reused.
 ; The canary line mirrors SPEC.md 8's SCH_MAGIC: if the probe cannot find it
-; where the 256-aligned arithmetic says the slice bottom is, it says SLICE?
+; where the slice arithmetic says the slice bottom is, it says SLICE?
 ; and falls back to watching a 200-byte window under its own SP rather than
 ; inventing a base (and if the canary DIES, sch_switch halts the machine at
 ; the next switch - a halt during this test IS the overrun being reported).
 ;
-; The slice-top derivation (SP | 0xFF, roughly) leans on sch_stacks being
-; 256-ALIGNED in .lowbss, which kernel/sched.inc pins with an explicit pad;
-; the canary check is what notices if that ever stops being true.
+; The slice top is SP at worker entry and the base is one SPB_SLICE below it,
+; NOT SP rounded up to a 256-byte boundary: at 384 the odd slots sit at 128
+; mod 256 and that rounding invented a top 128 bytes high. The canary check is
+; what notices if SPB_SLICE ever stops matching the kernel's SCH_STACK.
 ;
 ; Prefix spb_.
 ; =============================================================================
@@ -170,7 +171,7 @@ spb_lines:
     push dx
     push si
 
-    mov ax, [spb_max]           ; "High water:  NNN of 256"
+    mov ax, [spb_max]           ; "High water:  NNN of 384"
     mov si, spb_n_used
     call spb_utoa
     mov cx, [spb_cx]
@@ -244,7 +245,7 @@ spb_lines:
 ; loop is the teardown contract - the close box makes it never return.
 ; -----------------------------------------------------------------------------
 spb_worker:
-    ; --- find the slice: top = SP rounded UP to 256, base = top - 256 -------
+    ; --- find the slice: top = SP at entry, base = top - SPB_SLICE ---------
     mov ax, sp                  ; SP IS the slice top at worker entry: the
     mov [spb_top], ax           ; scheduler pops the spawn frame before the
     sub ax, SPB_SLICE           ; proc runs, and nothing is pushed yet. The
@@ -446,7 +447,7 @@ spb_scan_all:
 
 ; -----------------------------------------------------------------------------
 ; spb_utoa - AX unsigned -> 3 right-aligned decimal digits at DS:SI
-; (values here are 0..256; 999 caps the display, not the measurement)
+; (values here are 0..SPB_SLICE; 999 caps the display, not the measurement)
 ; -----------------------------------------------------------------------------
 spb_utoa:
     push ax
