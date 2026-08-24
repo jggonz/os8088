@@ -475,9 +475,11 @@ VID_CGA    equ 2
                                  ; a borrowed window ptr buys nothing.
                                  ; out CF=1 refused and nothing was
                                  ; created (you already have a worker, or
-                                 ; the 12-slot task table is full - a
-                                 ; normal outcome: degrade, do not abort,
-                                 ; and DO retry later, it is transient);
+                                 ; the task table is full - MAX_TASKS slots,
+                                 ; defined below, so this prose cannot drift
+                                 ; from the constant again - a normal
+                                 ; outcome: degrade, do not abort, and DO
+                                 ; retry later, it is transient);
                                  ; else CF=0 and AL = the task slot. Every
                                  ; other register, AH included, is
                                  ; preserved. NOT callable from your entry
@@ -1114,8 +1116,8 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; edge to come back up on, and a callback
                                  ; cannot sleep - it holds the gfx lock. The
                                  ; only other answer was a worker task, which
-                                 ; is a task slot of twelve and 256 bytes of
-                                 ; stack for a 165ms flash.
+                                 ; is one of MAX_TASKS task slots and
+                                 ; SCH_STACK bytes of stack for a 165ms flash.
                                  ;
                                  ; ONE-SHOT, and it disarms itself BEFORE your
                                  ; handler runs - so re-arm inside the handler

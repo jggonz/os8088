@@ -5,7 +5,9 @@
 ; it - one count is 838ns and it reloads every 55ms - EXTENDED UPWARD by the
 ; BIOS tick at 0040:006C, which our own int 08h hook chains. One tick is
 ; exactly 65536 counts, so the two halves are one number in one unit and a
-; span may run for eighteen hours before it wraps.
+; span may run for an HOUR before it wraps - the high half is the BIOS tick's
+; low word, which laps in 65536 ticks of 54.92ms, and 2^32 counts of 838ns is
+; the same 3600 seconds from the other end.
 ;
 ; **A SPAN LONGER THAN 55ms IS THE WHOLE REASON THE HIGH HALF EXISTS.** Read
 ; the counter alone and a 561ms span reports 561 mod 54.92 = 12ms - a small

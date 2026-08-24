@@ -762,7 +762,9 @@ fd_mul32:
     push ax
     mov ax, si
     mul cx                      ; AX = high * CX (its own overflow is a span
-    add ax, bx                  ; of eighteen hours and is not one)
+    add ax, bx                  ; of TWELVE MINUTES - CX is 5, so the high
+                                ; half laps at 13108 ticks - and fd_tms_ms is
+                                ; its only caller, under FTPDBG alone)
     mov dx, ax
     pop ax
     pop si
@@ -1560,6 +1562,7 @@ fd_dpad:
 ; =============================================================================
 ; THE WORKER - it owns every socket, and it never touches a disk
 ; =============================================================================
+; --- fd_hire - the worker. CF=1 the task table refused it (SPEC.md 77.1) -----
 fd_hire:
     push ax
     push bx
@@ -1568,11 +1571,17 @@ fd_hire:
     mov ax, fd_worker
     mov bx, [fd_win]
     call OSAPI_TASK_SPAWN
-    jc .out
-    mov byte [fd_spawned], 1
+    jc .no                          ; a refusal is an ORDINARY outcome (SPEC.md
+    mov byte [fd_spawned], 1        ; 8), and the caller has to hear about it
 .out:
     pop bx
     pop ax
+    clc
+    ret
+.no:
+    pop bx
+    pop ax
+    stc
     ret
 
 fd_worker:
@@ -1937,12 +1946,26 @@ fd_paint_now:
 ; it all went would be a blocking call on a worker (netpkg.inc).
 fd_reply:
     push ax
+    mov al, [fd_chnd]
+    call fd_reply_h
+    pop ax
+    ret
+
+; --- fd_reply_h - the same reply, in AL the socket to send it ON -------------
+; **THE HANDLE IS AN ARGUMENT AND NOT A CELL** (SPEC.md 77.29). The loop below
+; yields, and [fd_chnd] is read by the UI task's fd_shutdown: borrowing that
+; cell for a foreign handle across the yields let a Stop or a close land on
+; the wrong socket, and the session's own then leaked (SPEC.md 77.28's class).
+fd_reply_h:
+    push ax
     push bx
     push cx
     push dx
     push si
     push di
     push es
+    push ax                         ; the handle, banked past fd_dcat - which
+                                    ; owns DI until the buffer is built
     push ds
     pop es                          ; **ES IS SET HERE AND NOT LEFT TO THE
                                     ; CALLER.** NETV_SEND reads ES:SI, and two
@@ -1960,6 +1983,8 @@ fd_reply:
     mov cx, di
     sub cx, fd_outb
     mov si, fd_outb
+    pop di                          ; ...and DI carries it from here: the loop
+                                    ; spends AX on the count that was taken
     ; -----------------------------------------------------------------------
     ; **SENT IN FULL, OR IT WAS NEVER SENT AT ALL** (SPEC.md 77.27).
     ;
@@ -1982,7 +2007,7 @@ fd_reply:
     mov dx, FD_TXTRY
 .tx:
     push cx
-    mov al, [fd_chnd]
+    mov ax, di                      ; AL = the socket this reply goes on
     mov bh, NET_CLASS
     mov bl, NETV_SEND
     call OSAPI_DRV_CALL             ; out CX = what was TAKEN
@@ -3339,15 +3364,12 @@ fd_second:
     call fd_reply
     jmp .out
 .refuse:
-    ; --- borrow the reply cell, so the bounded send in fd_reply is reused ---
-    mov bl, [fd_chnd]
-    mov [fd_chnd], al
-    mov [fd_rjsav], bl
+    ; --- the bounded send, ON THE REFUSED HANDLE - fd_reply_h takes it in AL
+    ; rather than through [fd_chnd], because that cell yields to the UI task
+    ; (SPEC.md 77.29) ---
     mov si, fd_r421
-    call fd_reply
-    mov bl, [fd_rjsav]
-    mov [fd_chnd], bl               ; the session's handle back FIRST, before
-    mov al, [fd_rjhnd]              ; anything can fail
+    call fd_reply_h
+    mov al, [fd_rjhnd]
     mov bh, NET_CLASS
     mov bl, NETV_ABORT              ; refused before it said a word: there is
     call OSAPI_DRV_CALL             ; nothing in flight for it to lose
@@ -3990,6 +4012,12 @@ fd_ferr_sel:
     je .full
     cmp ax, FERR_PROT
     je .prot
+    cmp ax, FERR_NOENT              ; the three the ONE-SHOTS bring - DELE,
+    je .none                        ; RNTO and RMD reach here too, and for
+    cmp ax, FERR_EXIST              ; them "no such file" is the COMMON answer
+    je .taken                       ; rather than an oddity. Without these
+    cmp ax, FERR_WPROT              ; arms the catch-all below would have told
+    je .wprot                       ; a client its disk was full
     mov si, fd_r552                 ; FERR_IO, FERR_NODISK and anything new:
     ret                             ; the honest catch-all is "it failed"
 .name:
@@ -4000,6 +4028,15 @@ fd_ferr_sel:
     ret
 .prot:
     mov si, fd_r550w
+    ret
+.none:
+    mov si, fd_r550
+    ret
+.taken:
+    mov si, fd_r550e                ; and NOT "no such file", which is the
+    ret                             ; exact inversion: it demonstrably exists
+.wprot:
+    mov si, fd_r552w
     ret
 
 ; --- fd_xfail - it did not. SI = the reply to send ---------------------------
@@ -5655,14 +5692,22 @@ fd_do_dele:
     jc .no
     mov si, fd_leaf
     call OSAPI_FILE_DELETE
-    jc .no
+    jc .ferr
     call fd_unbank
     mov si, fd_r250
     call fd_reply
     pop si
     ret
+.ferr:
+    push ax                         ; THE KERNEL SAID WHICH IT WAS - a
+    call fd_unbank                  ; write-protected disk answered "no such
+    pop ax                          ; file" here, which is not even close
+    call fd_ferr_sel
+    call fd_reply
+    pop si
+    ret
 .no:
-    call fd_unbank
+    call fd_unbank                  ; fd_split's own failure: AX is not a FERR
     mov si, fd_r550
     call fd_reply
     pop si
@@ -5696,7 +5741,16 @@ fd_do_rmd:
     ret
 .fail:
     cmp ax, FERR_PROT
-    jne .no
+    je .notempty
+    push ax                         ; everything else - FERR_WPROT, FERR_IO -
+    call fd_unbank                  ; the kernel named, and "no such directory"
+    pop ax                          ; named none of them
+    call fd_ferr_sel
+    call fd_reply
+    pop si
+    pop ax
+    ret
+.notempty:
     call fd_unbank
     mov si, fd_r550n
     call fd_reply
@@ -5704,7 +5758,7 @@ fd_do_rmd:
     pop ax
     ret
 .no:
-    call fd_unbank
+    call fd_unbank                  ; fd_split's own failure: AX is not a FERR
     mov si, fd_r550
     call fd_reply
     pop si
@@ -5848,16 +5902,25 @@ fd_do_rnto:
     mov si, fd_leaf
     mov di, fd_rnto_l
     call OSAPI_FILE_RENAME
-    jc .no
+    jc .ferr
     call fd_unbank
     mov si, fd_r250
     call fd_reply
     pop di
     pop si
     ret
+.ferr:
+    push ax                         ; FERR_EXIST is the one a client MEETS
+    call fd_unbank                  ; here, and "no such file" is its exact
+    pop ax                          ; inversion - the name is taken, not absent
+    call fd_ferr_sel
+    call fd_reply
+    pop di
+    pop si
+    ret
 .no:
-    call fd_unbank
-    mov si, fd_r550
+    call fd_unbank                  ; fd_split, or the two names disagreeing
+    mov si, fd_r550                 ; about their directory: AX is not a FERR
     call fd_reply
     pop di
     pop si
@@ -6064,9 +6127,11 @@ fd_up:
     shl ax, 1
     mov bx, ax
     mov dx, [fd_cstack+bx]
-    mov bl, [fd_bdrv]               ; ONE VOLUME, so the drive fd_pbank banked
-    call OSAPI_FILE_GOTO_QM            ; is the drive we are standing on
-    jc .no
+    push dx                         ; FILE_HERE answers in DX as well as BL, and
+    call OSAPI_FILE_HERE            ; BL is the drive we are ACTUALLY standing
+    pop dx                          ; on: a folder and its parent are one
+    call OSAPI_FILE_GOTO_QM         ; volume, but a mid-walk fd_volgo has
+    jc .no                          ; already moved us off fd_pbank's drive
 .ok:
     pop dx
     pop bx
@@ -6415,8 +6480,19 @@ fd_start:
     call fd_log                     ; said ONCE and before anything needs it -
                                     ; forwarding port 21 alone is the single
                                     ; commonest way to make PASV unreachable
-    call fd_hire
-    jmp short .out
+    call fd_hire                    ; ...and the worker is what ACCEPTS: with
+    jc .noworker                    ; none of it, the window says Listening
+    jmp short .out                  ; and every client is ignored (SPEC.md 77.1)
+.noworker:
+    mov al, [fd_lhnd]               ; so the port goes back, exactly as .badroot
+    mov bh, NET_CLASS               ; gives it back - one of NET_SOCKS held for
+    mov bl, NETV_CLOSE              ; the window's life is the SPEC.md 77.28 leak
+    call OSAPI_DRV_CALL
+    mov byte [fd_lhnd], 0
+    mov si, fd_e_nowork
+    call fd_log                     ; ...and the log has just said "Listening",
+                                    ; which this contradicts - so it says so
+    jmp short .fail                 ; there too, before fd_msg carries it
 .badroot:
     mov al, [fd_lhnd]               ; the port is open and nothing is going to
     mov bh, NET_CLASS               ; serve on it, so it goes back rather than
@@ -8140,6 +8216,7 @@ fd_e_nodrv: db 'No network driver', 0
 fd_e_nolink: db 'No network', 0
 fd_e_noport: db 'Port 21 is in use', 0
 fd_e_root:  db 'No such Root folder', 0
+fd_e_nowork: db 'No free task - close an app and retry', 0
 fd_e_lost:  db 'Link lost', 0
 
 ; --- the replies -------------------------------------------------------------
@@ -8180,8 +8257,10 @@ fd_r550:    db '550 No such file or directory', 0
 fd_r550d:   db '550 No such directory', 0
 fd_r550n:   db '550 Directory not empty', 0
 fd_r550w:   db '550 The server is read only', 0
+fd_r550e:   db '550 That name is already in use', 0
 fd_r551:    db '551 Read failed', 0
 fd_r552:    db '552 Write failed - disk full or protected', 0
+fd_r552w:   db '552 The disk is write-protected', 0
 fd_r426:    db '426 Transfer stalled - no data for 90 seconds', 0
 fd_r421:    db '421 Busy - this server takes one client at a time', 0
 fd_l_busy:  db 'Refused a second client (421)', 0
@@ -8391,7 +8470,7 @@ fd_rchk     equ fd_srects + 8                   ; ...the Read Only tick - the
                                      ; same SETTING fd_rob shows, drawn twice
                                      ; because it is reachable from two pages
 fd_mchk     equ fd_srects + 16                  ; ...and Serve every drive
-fd_cdirty   equ fd_rchk + 8                     ; byte: a setting changed and
+fd_cdirty   equ fd_srects + 24                  ; byte: a setting changed and
                                      ; the file owes a write (SPEC.md 77.17)
 fd_lognew   equ fd_cdirty + 1                   ; byte: rows appended since the
                                      ; glass last agreed with the ring
@@ -8429,8 +8508,9 @@ fd_mext     equ fd_npass + 4                    ; 4: the extension fd_mangle83
                                      ; UNDER it - the two overlap in fd_leaf,
                                      ; so the ext cannot stay where it was
 fd_rjhnd    equ fd_mext + 4                     ; byte: the second client's
-fd_rjsav    equ fd_rjhnd + 1                    ; byte: ...and ours, banked
-fd_cidle    equ fd_rjsav + 1                    ; word: the tick the control
+                                     ; handle. Ours is NOT banked beside it -
+                                     ; fd_reply_h takes the socket in AL
+fd_cidle    equ fd_rjhnd + 1                    ; word: the tick the control
                                      ; connection last said anything
 fd_tlast    equ fd_cidle + 2                    ; word: the tick a byte last
                                      ; crossed, for the gap
@@ -8480,5 +8560,8 @@ fd_stage    equ $$ + FD_SOFF     ; ...and the rounding is done on the offset
                                  ; only form of it NASM will let `&` touch
 %if (FD_SOFF & 511) != 0
   %error "ftpd: fd_stage must be 512-aligned - int 13h reads it (SPEC.md 2.4)"
+%endif
+%if fd_cdirty < fd_srects + FD_NR*8
+  %error "ftpd: fd_cdirty overlaps the Setup rect table - os88ui_bfind strides it"
 %endif
 FD_BSS      equ fd_stage + FD_STGSZ - os88_image_end

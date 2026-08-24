@@ -62347,6 +62347,19 @@ before it looks at anything else, because the stage is the request's argument
 and a second command drained out of the control buffer would run against a
 buffer the first still owns.
 
+**A refused worker REFUSES to start**, the way a root that will not resolve
+does (§77.16.1). `fd_hire` is the last thing `fd_start` does and its
+`OSAPI_TASK_SPAWN` can be turned down — §8 calls that an ordinary outcome, not
+an edge case — and the worker is the half that runs `NETV_ACCEPT`. Swallowing
+the carry left the window saying `Listening` with nothing behind it: every
+client ignored, no reason on the glass, and port 21 held out of `NET_SOCKS`
+for the window's life (§77.28's leak, from the other end). So `fd_hire`
+answers CF, `fd_start` shuts the listener it had already opened, and the
+status line says `No free task - close an app and retry` — which is something
+a person can act on, because closing an app is exactly what frees a slot. The
+log says it too, and has to: §77.43.1's clear has already run by then and put
+`Listening on port 21` on the glass, which this contradicts.
+
 ### 77.2 The stage is in the package's own bss, and it CANNOT be a heap claim
 
 It was a claim first — `OSAPI_MEM_*` is not on rule 7's list either, so it was
@@ -62883,6 +62896,15 @@ Three things hold it up and each was a real edit:
   volume happened to be current last would serve a folder the client was never
   shown — a wrong file with no diagnostic, which is docs/FIELD-NOTES.md 4's
   family.
+- **`CDUP` asks where it IS, not where the walk STARTED.** `fd_up`'s pop paired
+  the cluster off `[fd_cstack]` — which holds clusters and no drives — with
+  `[fd_bdrv]`, the drive `fd_pbank` banked once at `CWD`'s entry, reasoning
+  that a folder and its parent are one volume. They are; but `fd_volgo` can
+  change volumes half way along the same path, so `CWD /B/DOCS/..` popped
+  `B`'s cluster onto `A`'s drive. `PWD` then answered `/B` while every later
+  bare name — `STOR`, `DELE`, `MKD` — resolved on `A`, and a deeper `..`
+  landed on an arbitrary cluster of the wrong volume. `OSAPI_FILE_HERE` costs
+  one far call and no disk I/O, and it is the only thing that actually knows.
 
 **A session begins at the root, and that reset is a FLAG and not the work.**
 Without it the second client inherits wherever the first happened to walk to,
@@ -63141,6 +63163,21 @@ distinguished `FERR_NAME`, `FERR_FULL` and `FERR_PROT` all along
 failure, at STOR and at MKD alike. **A reply naming the wrong cause is worse
 than a vague one, because it is acted on** — it sent a field investigation at
 the disk, and the disk was innocent.
+
+**The one-shots go through it too** — DELE, RNTO and the rest of RMD. They
+kept a bare `550 No such file or directory` for every failure, so a
+write-protected floppy and a rename onto a name that is already taken both
+answered that the file was not there; for `FERR_EXIST` that is the exact
+inversion, since the name demonstrably exists. Routing them in needed the
+three arms the write path never met — `FERR_NOENT` → `550 No such file or
+directory`, `FERR_EXIST` → `550 That name is already in use`, `FERR_WPROT` →
+`552 The disk is write-protected` — and adding those FIRST is the point:
+without them the catch-all would have told a client that a file it simply
+misspelled had filled the disk. Only the *kernel's* failure is routed;
+`fd_split`'s own refusal keeps the flat `550`, because AX is not a `FERR_*`
+there. RMD keeps `FERR_PROT` → `550 Directory not empty` for the reason its
+own header gives: a package cannot see a hidden or system entry at all
+(§19.6.1), so the cause a client can reach is a folder with something in it.
 
 **But the right answer is not a better refusal.** The client cannot know this
 machine's rules in advance, and a name that WORKS beats one that explains
@@ -63573,6 +63610,20 @@ server takes one client at a time`**, and aborts the socket — refused before
 it said a word, so there is nothing in flight to lose. The window says
 `Refused a second client (421)`, which is the difference between a server
 that looks broken and one that says what it is.
+
+**And the 421 goes out on a HANDLE, not through `[fd_chnd]`.** The first
+version borrowed the control-connection cell — write the refused handle in,
+send, write the session's back — which is a global that the *other* task
+reads: `fd_reply` yields between attempts (§77.27), and `fd_shutdown` on the
+UI task closes whatever `[fd_chnd]` names. A Stop or a close landing in that
+window closed the stranger's socket, zeroed the cell, and then had the
+session's handle written back over the zero by a worker that was already past
+it — so the session's control socket was never closed at all, one of
+`NET_SOCKS`'s four gone until reboot (§77.28's class, arrived at from the
+other side). So `fd_reply_h` takes the socket in AL and `fd_reply` is the
+one-line wrapper that reads the cell for everybody else. It has to be a
+register: both tasks run this, so a second static cell would only move the
+race.
 
 **It does not run mid-transfer**, and that is deliberate rather than an
 oversight: accepting costs a socket, a passive transfer already holds all
