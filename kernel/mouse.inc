@@ -1771,11 +1771,10 @@ kbm_move:
     add ax, [mouse_x]
     push ax                     ; banked on OUR stack until y is ready, for
                                 ; mou_clamp's 2-D reason (SPEC.md 39.15.4).
-                                ; On OUR stack and not in a shared word:
-                                ; the ISR decodes on the same invariant, and a
-                                ; packet landing between a store and its read
-                                ; back would pair its x with our y. That is
-                                ; what retired [mou_nx] (SPEC.md 9.9)
+                                ; NOT in [mou_nx]: that word is the IRQ4
+                                ; ISR's staging area, and a serial byte
+                                ; landing between our store and read-back
+                                ; paired the ISR's x with our y
     mov al, [bx+2]              ; dy, the same way
     imul dl
     add ax, [mouse_y]

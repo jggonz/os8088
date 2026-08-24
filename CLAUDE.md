@@ -32,26 +32,16 @@ nothing here duplicates it — a second copy is a copy that goes stale.
 
 ## Commands
 
-Needs `nasm`, `python3`, and **`cargo` for `make marty`** (plus `libudev-dev`
-and `pkg-config` on Linux). `qemu-system-i386` is for the short list in
-Testing and nothing else. `tools/setup-macos.sh` installs the Mac set but
-**not Rust**, so `make marty` there wants `cargo` in front of it. No linker —
-everything is `nasm -f bin` flat binaries, deliberately, to keep Apple's
-Mach-O-only toolchain out of it.
+Needs `nasm`, `qemu-system-i386`, `python3`; `tools/setup-macos.sh` installs
+them on a Mac. No linker — everything is `nasm -f bin` flat binaries,
+deliberately, to keep Apple's Mach-O-only toolchain out of it.
 
 ```
 make          # build every floppy image into build/ (also runs tools/checkdocs.py)
 make run      # boot in QEMU with an emulated serial mouse. RUNAPPS=<img>
               # swaps the B: floppy, so a disk built on demand can be LOOKED
               # at (`make bench && make run RUNAPPS=build/bench.img`)
-make marty    # a cycle-accurate 4.77MHz 8088 with a real period BIOS and a
-              # debugger that costs the guest nothing — the default
-              # instrument (docs/MARTYPC-DEBUG.md). Needs cargo; build it at
-              # the START of a session, not when you first need it. A RUN
-              # PAST ~180s HAS FROZEN rather than slowed — the guest runs at
-              # over 4x real time, so the overrun is the finding: diagnose it
-              # rather than raising the timeout
-make test     # boot headless, QMP socket at build/qmp.sock — the fallback (see Testing)
+make test     # boot headless, QMP socket at build/qmp.sock — this is how you drive it
 make test-snd # ...plus PC speaker capture to build/snd.wav (verify: tools/sndcheck.py)
 make debug    # boot halted, waiting for gdb on :1234
 make bench    # build the tests/ apps — ON DEMAND ONLY; nothing under tests/ ships
@@ -378,40 +368,7 @@ rows are host-side invariant checks over what `make` just built, the build
 configurations `all` never builds, and whole scripted sessions driven through
 an emulator.
 
-**MartyPC is the default instrument; QEMU is a fallback with a closed list.**
-docs/TESTING.md's opening owns the rule and the reasoning. The list is
-repeated here on purpose — one you have to go and open is one you will argue
-past:
-
-1. 286 and 386
-2. rung 1 of the hard-disk driver (§52.1) — gated on `CPU_286`
-3. §9.5's awkward mouse cases — COM2, the cross-wired IRQ4 card, a modem
-4. the PS/2 mouse (§9.9) — MartyPC is an 8088, and an XT has an 8255 PPI
-   rather than an 8042 with an aux port
-5. the Ethernet card (§72) — MartyPC has no NIC of any kind
-
-**"It is quicker to type" is not on it, and neither is "I already know the QMP
-commands."** Everything else that runs on an 8088 — all three of §39's
-adapters, input, screenshots, sound — is `make marty`, which agrees with the
-field machine to 0–4% on 45 of 47 `gfxbench` rows.
-
-**Without MartyPC the list still binds**: QEMU does not become the answer in
-its absence. QEMU counts work exactly and cannot time it; 86Box has no
-debugger and no automation socket, so a session can start one and cannot read
-the result. That leaves the table above and arithmetic — which is precisely
-rule 5's blind spot. Say when a number is predicted rather than measured, and
-get it checked on the 5150 (docs/FIELD-MACHINES.md).
-
-Driving MartyPC — **`os88mouse.py`, never `os88marty.py mouse`**: it reads the
-cursor back instead of dead-reckoning, and `dblclick` is a verb of its own.
-
-```
-python3 tools/os88mouse.py 127.0.0.1:9001 click 445 153
-python3 tools/os88mouse.py 127.0.0.1:9001 dblclick 150 90   # NOT two clicks
-python3 tools/os88marty.py 127.0.0.1:9001 shot out.png --rendered
-```
-
-Driving QEMU, for the five cases above and for a host with no MartyPC:
+Everything else is still boot `make test`, then drive it over QMP.
 
 ```
 python3 tools/mouse.py build/qmp.sock click 180 150        # absolute click
@@ -421,6 +378,10 @@ python3 tools/qmp.py build/qmp.sock 'sendkey h'
 python3 tools/shot.py build/qmp.sock out.png [--crop X,Y,W,H] [--zoom N]
 python3 tools/qmp.py build/qmp.sock 'quit'
 ```
+
+docs/TESTING.md is the authority on which emulator to reach for, and its
+opening currently argues MartyPC first — so expect it to disagree with the
+paragraph above.
 
 Three traps not written down elsewhere:
 
