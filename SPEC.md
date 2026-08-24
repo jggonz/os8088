@@ -60218,7 +60218,7 @@ rules that turn `apps/<dir>/<name>.c` plus `apps/<dir>/<name>.asm` into
 | `cword` | `build/cword.o88` + `build/CWORD.OVL` (§73.12) |
 | `cworddisk` | `build/cword.img`, `cword720.img`, `cword360.img`, each carrying both files plus `WELCOME.RTF` and an empty `DOCS/` (§73.12.3), and each `os88disk.py --verify`ed |
 | `386-c-word` | boots `$(IMG)` in A: and `build/cword.img` in B: on `vm/386-c-word` |
-| `allapps` | `build/apps-all.img` — one 1.44MB floppy with every application on it (§19.10). The only target outside this section that needs the compiler, which is why it is on demand too |
+| `allapps` | `build/apps-all.img` — one 1.44MB floppy with every application on it (§19.10). Outside this section, only it and the live media (§80) — whose payload is this disk's — need the compiler, which is why all of them are on demand |
 | `clean-cc` | removes `build/cc`, which plain `clean` spares |
 
 **Nothing in `all` depends on the compiler, and that is the requirement rather
@@ -66609,3 +66609,97 @@ zero that turns the feature off.
 **No per-mode settings.** Speeds, star counts and figure sizes are constants
 chosen against the 4.77 MHz frame budget (§79.5). A user who wants a slower
 starfield wants a different starfield, and the place for that is the source.
+
+## 80. Live media — one bootable hard-disk image, a USB stick and a CD
+
+The shipped floppies assume a machine that has a floppy drive. A modern PC
+that still boots MS-DOS-era code has none — what it has is legacy (BIOS/CSM)
+boot from a USB stick or from a CD, and both of those present the medium
+through int 13h exactly as a hard disk is presented. So the live media are
+not a new boot path: they are §52.10's hard-disk boot, built into an image at
+release time instead of written by the installer at run time.
+
+`make usb` builds **`build/os8088-usb.img`**, a raw hard-disk image a reader
+writes to a USB stick with `dd` (or any raw-image writer) and boots. `make
+iso` wraps the same image in **`build/os8088.iso`**, a live CD. `make live`
+builds both. All three are on demand for §19.10's reason — the payload is the
+everything-disk's, and `cword`, the C64 and RUNCPM need the compiler and the
+pinned fetches — so a clone with `nasm` and `python3` still builds every
+shipped floppy and none of this.
+
+### 80.1 The image is §52.10's disk, made by the build instead of the installer
+
+`tools/os88disk.py --hdd` is the builder, and it writes what
+§52.10.4's installer writes, in the same order and for the same reasons:
+`boot/mbr.asm`'s 446 bytes and one active partition entry at LBA 0;
+`boot/boothd.asm` as the volume boot record, this volume's BPB over its first
+62 bytes and the kernel's sector count in the pinned word at offset 508; a
+FAT16 volume whose `KERNEL.SYS` is **first and contiguous from cluster 2**
+(§52.10.2 reads it as a flat run); and then the payload. It shares the floppy
+builder's whole middle — the folder tree, the attribute rules (§19.6), the
+warm `ASSOC.DAT` (§54.7), `--deep-folders` and `--dir-slots` — because a
+second copy of any of that is a copy that goes stale, and it is checked by
+the same `--verify-hdd` that checks an installer-written disk.
+
+The kernel needs nothing new. `boot/boothd.asm` takes its geometry from int
+13h AH=08h and its partition base from `BPB_HiddSec` (§52.10.2), the kernel
+adopts the boot partition as C: through `dsk_boot_from` before any driver
+loads (§52.10.3), and A: stays the floppy. A machine booted from the stick is
+an *installed* machine as far as every line of the OS is concerned — which is
+the point, because §52.10.3 was verified on a cycle-accurate 8088 and this
+inherits that verification rather than needing its own.
+
+**The geometry is 16 heads × 63 sectors, 65 cylinders, partition base 63.**
+The base is the era convention the driver's own partitioner uses (one track
+for the MBR); 65 cylinders puts the partition at 65,457 sectors, just under
+the **65,535-sector volume ceiling** the kernel's 16-bit sector arithmetic
+imposes (§52.10.3's `hd_chs` proof) — a hair under 32MB, so the type byte is
+04h (FAT16 under 32M) and there is free space to save into. 16×63 is chosen
+for the one consumer the floppies never had: a BIOS asked to boot a USB stick
+or an El Torito hard disk has no CMOS row for it, so it *derives* a geometry,
+and what it derives it from is the partition table's own CHS fields. The
+entry's CHS and LBA columns therefore describe the same sectors under
+exactly this geometry, start to end — a table whose two columns disagree
+boots on the BIOSes that read one column and not on the ones that read the
+other, and which column a BIOS reads is the one thing this image cannot ask.
+`boot/mbr.asm` reads the CHS column (§52.10.1).
+
+### 80.2 The CD is the same image, El Torito hard-disk emulation
+
+`tools/os88iso.py` writes an ISO9660 volume whose El Torito boot catalog
+names `OS8088HD.IMG` — the usb image, carried as an ordinary file on the CD —
+with media type 4, *hard disk emulation*: the BIOS presents the image as
+drive 80h, loads its MBR at `0000:7C00`, and every int 13h read the MBR, the
+VBR and the kernel make is serviced out of the file. Nothing that runs can
+tell it from the stick.
+
+The other two El Torito modes were considered and refused. **Floppy
+emulation** carries at most 2.88MB and the payload is ~1.3MB of applications
+*plus* the system, drivers, fonts and the CP/M drive — it does not fit any
+floppy geometry, which is §19.10's fact restated. **No-emulation** hands
+control to the boot image with no int 13h disk behind it at all — the CD
+answers only 2048-byte-sector reads on its own drive number, so it needs a
+CD driver in the kernel, and a driver for a medium the target machine class
+never shipped with is not worth a byte of `KERN_BUDGET`.
+
+The ISO is deterministic the way every image here is (fixed timestamps,
+fixed volume id), lists the boot image and a `README.TXT` beside it as plain
+files, and is built from the usb image byte-for-byte — one image, two
+wrappers, so a defect cannot exist on the CD and not on the stick.
+
+### 80.3 What a CD cannot do, stated rather than hidden
+
+A CD is read-only and the OS is not told so in advance: int 13h write on the
+emulated drive fails at the BIOS, and the failure surfaces exactly where a
+write-protected floppy's does — the operation reports its error when it is
+attempted. What that costs on a live CD: `SYSTEM.CFG` cannot be created or
+rewritten, so Control Panel choices and driver ticks (§51.5) last until
+power-off; saves onto C: refuse, and `DOCS/` is a folder the user can enter
+and not add to. None of it is handled specially, because §47's rule applies —
+the write's refusal is a fact, and it is reported where it happens. A USB
+stick has none of these limits: it persists settings and saves like the
+installed disk it is.
+
+The 720KB and 1.44MB floppy *images* still matter to the same reader — a USB
+floppy drive and a Gotek take them — so the live media are additions to the
+release zip, not replacements for anything in it.

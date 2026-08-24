@@ -1009,7 +1009,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc
         cc-note chello covl cword cworddisk 386-c-word runcpm runcpmdisk \
         runcpm-src cpmsw rcz80test rcmemtest rczex 386-runcpm \
         xt-runcpm 286-runcpm \
-        allapps rcbandbench \
+        allapps usb iso live rcbandbench \
         c64 c64disk c64rom c64bandbench c64cputest c64memtest 386-c64 xt-c64 286-c64 \
         checkdocs test-fast test-full test-soak clean clean-cc clean-marty distclean
 
@@ -4940,6 +4940,73 @@ $(ALLAPPSIMG): $(ALLAPPS) tools/os88disk.py
 	@python3 tools/os88disk.py --verify $@
 	@echo "allapps: $@ - every app on one 1.44MB floppy; boot the system"
 	@echo "         disk with it in B: (make run RUNAPPS=$@)"
+
+# =============================================================================
+# THE LIVE MEDIA (ON DEMAND: `make usb` / `make iso` / `make live`) - SPEC.md 80
+# =============================================================================
+# build/os8088-usb.img: SPEC.md 52.10's hard-disk boot, built into an image at
+# release time instead of written by the installer at run time - boot/mbr.asm,
+# boot/boothd.asm as the volume boot record, one FAT16 partition with
+# KERNEL.SYS first and contiguous - carrying the system disk's contents AND
+# the everything-disk's payload (SPEC.md 19.10). Written raw to a USB stick
+# (dd, or any raw-image writer) it boots a legacy-BIOS machine, and the kernel
+# adopts the partition as C: exactly as an installed machine's (SPEC.md
+# 52.10.3) - which is the verification this inherits rather than needs.
+#
+# build/os8088.iso is the SAME IMAGE wrapped in an El Torito
+# hard-disk-emulation CD (SPEC.md 80.2): the BIOS presents the file as drive
+# 80h and nothing that runs can tell it from the stick. The image and the
+# readme ride the ISO as plain files too, so a host that mounts the CD can
+# copy the raw image off it. What a CD cannot do - remember settings, take a
+# save - is SPEC.md 80.3, stated rather than handled.
+#
+# ON DEMAND for allapps' reason exactly: the payload is that disk's, so
+# cword, the C64 and RUNCPM need the compiler and the pinned fetches. A clone
+# with nasm and python3 still builds every shipped floppy and neither of
+# these.
+#
+# THE PAYLOAD IS DERIVED, NOT LISTED: ALLAPPSARGS plus the system disk's own
+# arguments (the drivers, the readme, the logo, the fonts), so a package
+# added to either shipped list is on the live media without anyone
+# remembering it here. The RunCPM drive-A selection is allapps' own - same
+# --select, same reserve list, same folder count - so the two
+# everything-payloads cannot drift apart, LEFT-OFF.TXT and all; the live
+# volume has ~30MB free, so a selection priced for a 1.44MB floppy always
+# fits it. SYSTEM/APPDATA exists here for the floppy system disk's reason
+# (SPEC.md 19.9), and every option precedes the positional list because an
+# option taking a value mid-list stops argparse collecting it (see
+# APPDATAFOLDER's note above).
+USBIMG := $(BUILD)/os8088-usb.img
+LIVEISO := $(BUILD)/os8088.iso
+
+LIVEARGS := $(DRIVERS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) $(ALLAPPSARGS)
+
+usb: $(USBIMG)
+iso: $(LIVEISO)
+live: $(USBIMG) $(LIVEISO)
+
+$(USBIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(BUILD)/kernel.bin \
+           $(DRIVERS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) \
+           $(ALLAPPS) tools/os88disk.py
+	sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select 1440 --dir-slots $(RUNCPMSLOTS) --folders $(ALLAPPSFOLDERS) --reserve $(ALLAPPSFILES) | sed 's,^,RUNCPM/A/0:,')"; \
+	[ -n "$$sel" ] || { echo "usb: getruncpm.py --select 1440 chose nothing"; exit 1; }; \
+	python3 tools/os88disk.py -o $@ --hdd \
+		--mbr $(BUILD)/mbr.bin --boot $(BUILD)/boothd.bin \
+		--kernel $(BUILD)/kernel.bin \
+		--deep-folders --dir-slots RUNCPM/A/0=$(RUNCPMSLOTS) \
+		--folder DOCS $(APPDATAFOLDER) $(LIVEARGS) $$sel
+	@python3 tools/os88disk.py --verify-hdd $@
+	@echo "usb:    $@ - the live USB image (SPEC.md 80.1). Write it raw"
+	@echo "        to a stick and boot a legacy-BIOS machine from it; the"
+	@echo "        partition mounts as C:. QEMU: qemu-system-i386 -drive"
+	@echo "        file=$@,format=raw -boot c"
+
+$(LIVEISO): $(USBIMG) $(SYSDOC) tools/os88iso.py
+	python3 tools/os88iso.py -o $@ --boot-image $(USBIMG) \
+		--file README.TXT=$(SYSDOC)
+	@echo "iso:    $@ - the live CD (SPEC.md 80.2): the same image, El"
+	@echo "        Torito hard-disk emulation. QEMU: qemu-system-i386"
+	@echo "        -cdrom $@ -boot d"
 
 # `make combo` -> build/combo.img: ONE 360KB bootable disk with the system,
 # every application AND the four benchmarks on it.

@@ -132,7 +132,19 @@ make allapps  # build/apps-all.img (§19.10): ONE 1.44MB floppy with every app
               #   on it, Frotz, both Words and RunCPM (with its drive A)
               #   included, for a release page. Needs the C toolchain and
               #   the RunCPM fetch, so it is on demand like cworddisk —
-              #   it is the only target outside §73/§74 that does
+              #   it and the live media below are the only targets outside
+              #   §73/§74 that do
+make usb      # THE LIVE MEDIA (§80): build/os8088-usb.img is §52.10's
+make iso      #   hard-disk boot built into an image — system disk contents
+make live     #   plus the allapps payload on one FAT16 partition that the
+              #   kernel adopts as C:. Written raw to a stick it boots a
+              #   legacy-BIOS machine; `iso` wraps the SAME image in an El
+              #   Torito hard-disk-emulation CD, `live` builds both. On
+              #   demand for allapps' reason and needing the same fetch
+              #   (`make runcpm-src` once, first). A CD cannot write, and
+              #   §80.3 says what that costs; QEMU boots them with
+              #   `-drive file=build/os8088-usb.img,format=raw -boot c` /
+              #   `-cdrom build/os8088.iso -boot d`
 make clean
 ```
 
@@ -186,7 +198,9 @@ and in raw QEMU). **`make wiredisk`** is the same shape for a package that
 DOES NOT SHIP: WIREFRAME is an instrument rather than an application (§78.9),
 so `all` builds `wire.o88` and no shipped floppy carries it, and the three
 tests that drive it — `wireflick`, `wirefps`, `uilat` — default to that disk.
-`make allapps` collapses all of them onto one 1.44MB floppy (§19.10).
+`make allapps` collapses all of them onto one 1.44MB floppy (§19.10), and
+`make live` puts that same payload plus the system on the bootable live
+USB image and live CD (§80).
 
 **`RESET=` clears a machine's non-volatile state on the way in**, and it
 reaches every one of those targets because they all launch through the same

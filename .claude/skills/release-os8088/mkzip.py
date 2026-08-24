@@ -20,8 +20,9 @@ invisible in the zip listing until it is public.
 It does not build anything. Run `make` (and any on-demand target you want in
 the zip) first; a missing REQUIRED image stops the script, and a missing
 optional one is reported and skipped. That split is the point -- the seven
-images `make` produces are the release, and `apps-all`/`word`/`cword`/`runcpm`
-are on-demand disks that a tree without the C toolchain cannot build at all.
+images `make` produces are the release, and `apps-all`/`word`/`cword`/
+`runcpm` and the live media (`make live`, SPEC.md 80) are on-demand targets
+that a tree without the C toolchain cannot build at all.
 
 The zip is byte-for-byte reproducible: entries are written in manifest order,
 every timestamp is the date in the version string, and permissions are fixed.
@@ -49,6 +50,14 @@ MANIFEST = [
                               "programs at this size, so it rides a disk of its own. "
                               "There is no 1.44MB or 720KB version -- at those sizes it is "
                               "already on the software disk."),
+    ("os8088-usb.img", False, "Live USB image. The whole system and every program on one "
+                              "bootable hard-disk image. Write it raw to a USB stick and "
+                              "boot a PC from it in legacy BIOS mode -- no floppy drive "
+                              "needed. The LIVE USB AND LIVE CD section says how."),
+    ("os8088.iso",     False, "Live CD. The same system as a bootable CD image, for "
+                              "burning to a disc or booting in an emulator. A CD is "
+                              "read-only, so settings and saved files last until "
+                              "power-off; the USB image keeps them."),
     ("apps-all.img",   False, "Every program on one 1.44MB software disk, including both "
                               "word processors, the story reader, the CP/M emulator and "
                               "the Commodore 64. Use this instead of apps.img if you "
@@ -119,7 +128,7 @@ second. The last line is the mouse: os8088 drives a serial mouse, so the
 emulator has to put one on a serial port, and that is QEMU's way of doing it.
 Other emulators have their own; the project's site has the current recipe and
 the 86Box machine files.
-
+{live}
 THE FILES
 ---------
 
@@ -142,6 +151,37 @@ has the terms. The Commodore 64 emulator on c64*.img is under the GNU General
 Public License version 2 or later, because it is a port of VICE, which is; that
 licence is COPYING.C64 here when those disks are in this zip, and on the disks
 themselves. Nothing else in os8088 is affected by it.
+"""
+
+
+# The live-media section of the README, present only when the zip carries
+# the images it describes -- a README that explains a file the reader does
+# not have reads as a packing mistake.
+LIVE = """\
+
+LIVE USB AND LIVE CD
+--------------------
+
+os8088-usb.img and os8088.iso carry the whole system and every program with
+no floppies at all. os8088-usb.img is a raw hard-disk image: write it to a
+USB stick -- everything already on the stick is erased -- and boot a PC from
+it in legacy BIOS mode. On macOS or Linux, with the stick at /dev/sdX and
+unmounted:
+
+  dd if=os8088-usb.img of=/dev/sdX bs=1M
+
+os8088.iso is the same system as a CD image, for burning to a disc or for an
+emulator. In QEMU, one or the other:
+
+  qemu-system-i386 -drive file=os8088-usb.img,format=raw -boot c \\
+    -chardev msmouse,id=m0 -serial chardev:m0
+
+  qemu-system-i386 -cdrom os8088.iso -boot d \\
+    -chardev msmouse,id=m0 -serial chardev:m0
+
+Booted this way the system runs from a hard-disk partition that appears as
+drive C, with every program on it. The CD is read-only, so settings and
+saved files last until power-off; the USB stick keeps them.
 """
 
 
@@ -233,8 +273,9 @@ def main():
     files = "\n\n".join(
         "  %s\n      %s" % (name, "\n      ".join(_wrap(desc, 66)))
         for name, _, desc in picked)
+    live = LIVE if "os8088-usb.img" in have and "os8088.iso" in have else ""
     readme = README.format(version=args.version, rule="=" * (7 + len(args.version)),
-                           files=files, commit=commit)
+                           files=files, commit=commit, live=live)
 
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
         add(zf, "%s/README.txt" % root, readme.encode(), when)

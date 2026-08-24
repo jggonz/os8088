@@ -171,6 +171,10 @@ tools/setup-cc.sh                     # SmallerC; needed by cword and allapps
 make allapps                          # apps-all.img -- every program, one disk
 make worddisk cworddisk               # word*.img, cword*.img
 make runcpm-src && make runcpmdisk    # runcpm*.img
+make live                             # os8088-usb.img + os8088.iso -- the live
+                                      # USB image and the live CD (SPEC.md 80).
+                                      # Needs the fetch on the line above and
+                                      # the C toolchain, like allapps
 ```
 
 Offer these, do not assume them. If `tools/setup-cc.sh` cannot run -- no
@@ -204,6 +208,25 @@ menu bar across the top with the chip glyph, then Locator, File and Builtins;
 a Disk A and a Disk B icon down the right-hand side; the mouse pointer.
 If the screen is blank or garbled, stop -- do not publish. Delete the two
 scratch files afterwards; `build/` is gitignored, but leave it tidy.
+
+**If `make live` ran, boot both live images the same way** -- the rule is
+per image, and a zip does not exempt the two biggest files in it:
+
+```bash
+qemu-system-i386 -display none -qmp unix:build/qmp.sock,server,nowait \
+  -drive file=build/os8088-usb.img,format=raw -boot c \
+  -chardev msmouse,id=m0 -serial chardev:m0 &
+sleep 10
+python3 tools/qmp.py build/qmp.sock 'screendump build/smoke-usb.ppm'
+python3 tools/qmp.py build/qmp.sock 'quit'
+# ...then the same five lines with `-cdrom build/os8088.iso -boot d`
+```
+
+**Look at both screenshots.** The desktop must show a Disk A icon AND a
+Disk C icon down the right-hand side -- C: is the live partition the kernel
+adopted, and its absence means the image booted the kernel and lost the
+volume, which is exactly the failure a screenshot catches and a checksum
+cannot.
 
 ### 3a. Pack the release zip
 
@@ -572,7 +595,10 @@ this whole procedure that cannot simply be re-run.
 Because the release page no longer lists a file per image, the notes have to
 say what the zip contains and how big it is -- one sentence naming the two
 images a reader actually needs, the packed size, and the sha256 step 3a
-printed. Someone who wants a per-image checksum finds it in the SHA256SUMS
+printed. When the zip carries the live media, name them too: a reader with no
+floppy drive needs to hear that `os8088-usb.img` and `os8088.iso` boot a PC
+or an emulator directly, or the two files that serve them best read as
+padding. Someone who wants a per-image checksum finds it in the SHA256SUMS
 inside the zip, or on the download page, and the notes should say which.
 
 `gh` infers the repository from the checkout's remote, so this works for a

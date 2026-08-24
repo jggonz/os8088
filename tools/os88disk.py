@@ -3,6 +3,8 @@
 
     python3 tools/os88disk.py -o OUT.img --size {1440,720,360}
                              [--folder PATH ...] [[DIR[/DIR...]:]PKG.o88 ...]
+    python3 tools/os88disk.py -o OUT.img --hdd --mbr MBR.bin
+                             --boot BOOTHD.bin --kernel KERNEL.bin [...]
     python3 tools/os88disk.py --verify IMG
     python3 tools/os88disk.py --verify-hdd HDD.img
 
@@ -27,6 +29,20 @@ geometry lived here so the kernel's FAT16 path had a positive test; it went
 when DSK_FAT_SECS fell to 10 sectors, which is below the 16 a FAT has to
 have to be FAT16 at all, so mount rule 10 (SPEC.md 18.2) now turns every
 FAT16 volume away and there is nothing left to test with.
+
+--hdd (SPEC.md 80.1) builds a bootable HARD-DISK image instead of a floppy:
+boot/mbr.asm's 446 bytes and one active partition entry at LBA 0,
+boot/boothd.asm as the volume boot record with this volume's BPB over its
+first 62 bytes and the kernel sector count in the pinned word at offset 508
+(SPEC.md 52.10.2), and a FAT16 volume laid out by the same code as every
+floppy - KERNEL.SYS first and contiguous, the folder tree, the attribute
+rules and the warm ASSOC.DAT are all the one implementation. It is what
+SPEC.md 52.10.4's installer writes, made at build time: the live-USB image,
+and the boot image inside the live CD (SPEC.md 80.2). The geometry is fixed
+(16 heads x 63 spt x 65 cylinders, partition base 63) and the partition
+entry's CHS and LBA columns describe the same sectors under it, because a
+BIOS booting a USB stick derives its virtual geometry from that table.
+--verify-hdd checks the result exactly as it checks an installer's disk.
 
 Boot-sector stub (offset 62): fixed hand-assembled bytes that print
 "Not a bootable disk. Press any key." via int 10h AH=0Eh teletype, wait
@@ -71,6 +87,23 @@ GEOMETRY = {
     720: (9, 2, 1440, 2, 3, 112, 0xF9),
     360: (9, 2, 720, 2, 2, 112, 0xFD),
 }
+
+# --hdd (SPEC.md 80.1): ONE fixed hard-disk shape, not a knob. 65 cylinders
+# puts the partition at 65,457 sectors - just under the kernel's
+# 65,535-sector volume ceiling (SPEC.md 52.10.3) and under 32MB, so the
+# partition type is 04h. The base is one track, the era convention
+# drivers/hdd/part.inc follows. 16x63 is for the consumer the floppies never
+# had: a BIOS booting a USB stick or an El Torito hard disk derives its
+# virtual geometry from the partition table's own CHS fields, so the entry
+# is written CHS/LBA-consistent under exactly this shape.
+HDD_SPT, HDD_HEADS, HDD_CYLS = 63, 16, 65
+HDD_BASE = HDD_SPT                       # the MBR's own track
+HDD_TOT = HDD_SPT * HDD_HEADS * HDD_CYLS # 65,520 sectors, the whole image
+HDD_PSECS = HDD_TOT - HDD_BASE           # 65,457 - the partition
+HDD_ROOT_ENT = 512                       # what drivers/hdd/fmt.inc formats
+HDD_LABEL = b"OS8088LIVE "
+BOOTHD_KSECS = 508                       # boot/boothd.asm's pinned patch word
+HP_TBL = 446                             # the partition table's offset
 
 # Hand-assembled A.4 stub (verified against nasm; see module docstring):
 #   xor ax,ax / mov ds,ax / mov si,0x7C59
@@ -346,12 +379,19 @@ def dirent(name11: bytes, attr: int, clus: int, size: int) -> bytes:
 
 
 def boot_sector(spt, heads, tot, spc, fatsz, root_ent, media,
-                lay: Layout, code: bytes = None, label: bytes = None) -> bytes:
-    """One BPB, two uses. `code` is os8088's own 512-byte boot sector: its
-    first three bytes are already EB 3C 90 and bytes 62.. are its loader, so
-    the BPB is written into the hole between them and everything else is left
-    exactly as nasm assembled it. Without `code` the sector carries the
-    not-bootable stub instead."""
+                lay: Layout, code: bytes = None, label: bytes = None,
+                hidden: int = 0, drvnum: int = 0, ksecs: int = 0) -> bytes:
+    """One BPB, three uses. `code` is os8088's own 512-byte boot sector -
+    boot/boot.asm's on a floppy, boot/boothd.asm's under --hdd: either way
+    its first three bytes are already EB 3C 90 and bytes 62.. are its
+    loader, so the BPB is written into the hole between them and everything
+    else is left exactly as nasm assembled it. Without `code` the sector
+    carries the not-bootable stub instead.
+
+    `hidden`/`drvnum`/`ksecs` are the hard-disk volume boot record's three
+    extras (SPEC.md 52.10.2): the partition base boothd.asm adds to every
+    LBA, BS_DrvNum 80h, and the kernel sector count in the pinned word at
+    offset 508 that the installer would otherwise patch."""
     bs = bytearray(code if code else SECTOR)
     if code:
         if len(code) != SECTOR:
@@ -371,15 +411,50 @@ def boot_sector(spt, heads, tot, spc, fatsz, root_ent, media,
     struct.pack_into("<H", bs, 22, fatsz)       # BPB_FATSz16
     struct.pack_into("<H", bs, 24, spt)         # BPB_SecPerTrk
     struct.pack_into("<H", bs, 26, heads)       # BPB_NumHeads
-    # BPB_HiddSec, BPB_TotSec32 stay 0; BS_DrvNum 0; BS_Reserved1 0.
+    # On a floppy BPB_HiddSec, BS_DrvNum and BPB_TotSec32 stay 0.
+    struct.pack_into("<I", bs, 28, hidden)      # BPB_HiddSec
+    bs[36] = drvnum                             # BS_DrvNum
     bs[38] = 0x29                               # BS_BootSig
     struct.pack_into("<I", bs, 39, VOL_ID)      # BS_VolID
     bs[43:54] = label or VOL_LABEL              # BS_VolLab
     bs[54:62] = b"FAT12   " if lay.fat12 else b"FAT16   "
     if not code:
         bs[62:62 + len(BOOT_STUB)] = BOOT_STUB
+    if ksecs:
+        struct.pack_into("<H", bs, BOOTHD_KSECS, ksecs)
     bs[510:512] = b"\x55\xAA"
     return bytes(bs)
+
+
+def hdd_layout(tot: int) -> Layout:
+    """The FAT16 layout for `tot` sectors: the smallest cluster that keeps
+    the count inside FAT16's range - the shape drivers/hdd/fmt.inc's own
+    capacity table produces, and the one tools/os88hdd.py builds for the
+    installer's test fixture (SPEC.md 52.10)."""
+    root_secs = (HDD_ROOT_ENT * 32 + SECTOR - 1) // SECTOR
+    for spc in (4, 8, 16, 32, 64):
+        fatsz = 1
+        nclus = 0
+        for _ in range(64):                     # converges in two or three
+            data = tot - 1 - 2 * fatsz - root_secs
+            nclus = data // spc
+            need = ((nclus + 2) * 2 + SECTOR - 1) // SECTOR
+            if need == fatsz:
+                break
+            fatsz = need
+        if 4085 <= nclus < 65525:
+            return Layout(spc, 1, 2, HDD_ROOT_ENT, tot, fatsz)
+    fail(f"no FAT16 layout fits {tot} sectors")
+
+
+def hdd_chs(lba: int) -> bytes:
+    """LBA as the 3-byte CHS field of a partition entry, under the fixed
+    --hdd geometry. Never clamped: 65 cylinders is far inside CHS range,
+    and the two columns agreeing IS the contract (SPEC.md 80.1) - a BIOS
+    booting this image derives its virtual geometry from these fields."""
+    c, r = divmod(lba, HDD_SPT * HDD_HEADS)
+    h, s = divmod(r, HDD_SPT)
+    return bytes([h, ((s + 1) & 0x3F) | ((c >> 2) & 0xC0), c & 0xFF])
 
 
 def read_data_file(path: str) -> bytes:
@@ -455,7 +530,20 @@ def read_blob(path: str, what: str) -> bytes:
 
 
 def build(args) -> int:
-    spt, heads, tot, spc, fatsz, root_ent, media = GEOMETRY[args.size]
+    mbr = b""
+    if args.hdd:
+        # A hard-disk image (SPEC.md 80.1) is a SYSTEM disk by construction:
+        # its whole point is booting, so the three parts of the chain are
+        # required rather than optional the way --boot/--kernel are.
+        if not (args.boot and args.kernel and args.mbr):
+            fail("--hdd needs --mbr (mbr.bin), --boot (boothd.bin) "
+                 "and --kernel")
+        mbr = read_blob(args.mbr, "MBR boot code")
+        if len(mbr) != HP_TBL:
+            fail(f"{args.mbr} is {len(mbr)} bytes, not {HP_TBL}")
+        spt, heads, tot, media = HDD_SPT, HDD_HEADS, HDD_PSECS, 0xF8
+    else:
+        spt, heads, tot, spc, fatsz, root_ent, media = GEOMETRY[args.size]
 
     # --- the system disk (SPEC.md 19.3) --------------------------------------
     # The kernel is an ordinary FILE, KERNEL.SYS, allocated FIRST and
@@ -480,7 +568,12 @@ def build(args) -> int:
         kern = read_blob(args.kernel, "kernel")
         ksecs = (len(kern) + SECTOR - 1) // SECTOR
         label = SYS_LABEL
-    lay = Layout(spc, 1, 2, root_ent, tot, fatsz)
+    if args.hdd:
+        label = HDD_LABEL
+        lay = hdd_layout(tot)
+        spc, fatsz, root_ent = lay.spc, lay.fatsz, lay.root_ent
+    else:
+        lay = Layout(spc, 1, 2, root_ent, tot, fatsz)
 
     # Group by folder, keeping first-appearance order. Names are checked for
     # duplicates PER DIRECTORY: two folders may each hold a MINES.O88.
@@ -708,11 +801,33 @@ def build(args) -> int:
         slot += 1
 
     image = bytearray(boot_sector(spt, heads, tot, spc, fatsz, root_ent,
-                                  media, lay, boot, label))
+                                  media, lay, boot, label,
+                                  hidden=HDD_BASE if args.hdd else 0,
+                                  drvnum=0x80 if args.hdd else 0,
+                                  ksecs=ksecs if args.hdd else 0))
     image += fat.buf + fat.buf                   # FAT2 = FAT1
     image += root
     image += data_area
     assert len(image) == tot * SECTOR
+
+    if args.hdd:
+        # The MBR sector in front of the volume: boot/mbr.asm's 446 bytes,
+        # one active entry whose CHS and LBA columns agree (SPEC.md 80.1),
+        # type 04h - the partition is under 32MB by construction - and the
+        # rest of the MBR's track left zero, which is where the era left it.
+        sec0 = bytearray(SECTOR)
+        sec0[0:HP_TBL] = mbr
+        ent = bytearray(16)
+        ent[0] = 0x80                            # active
+        ent[1:4] = hdd_chs(HDD_BASE)
+        ent[4] = 0x04                            # FAT16 under 32MB
+        ent[5:8] = hdd_chs(HDD_BASE + HDD_PSECS - 1)
+        struct.pack_into("<I", ent, 8, HDD_BASE)
+        struct.pack_into("<I", ent, 12, HDD_PSECS)
+        sec0[HP_TBL:HP_TBL + 16] = ent
+        sec0[510:512] = b"\x55\xAA"
+        image = bytes(sec0) + bytes((HDD_BASE - 1) * SECTOR) + bytes(image)
+        assert len(image) == HDD_TOT * SECTOR
 
     try:
         with open(args.output, "wb") as f:
@@ -720,7 +835,10 @@ def build(args) -> int:
     except OSError as e:
         fail(f"cannot write {args.output}: {e}")
 
-    print(f"os88disk: {args.output} ({args.size}KB, {spt} spt, "
+    geom = (f"{HDD_CYLS}/{HDD_HEADS}/{HDD_SPT} hdd, partition at LBA "
+            f"{HDD_BASE} for {HDD_PSECS} sectors" if args.hdd
+            else f"{args.size}KB, {spt} spt")
+    print(f"os88disk: {args.output} ({geom}, "
           f"{lay.type_name}) {len(files)} file(s)"
           + (f" in {len(dirs)} folder(s)" if dirs else "")
           + f", {need}/{lay.nclus} clusters"
@@ -1115,6 +1233,15 @@ def main() -> int:
     ap.add_argument("--size", type=int, choices=(1440, 720, 360),
                     help="disk size in KB: 1440 (18 spt), 720 or 360 (9 spt; "
                          "80 and 40 cylinders)")
+    ap.add_argument("--hdd", action="store_true",
+                    help="build a bootable HARD-DISK image instead of a "
+                         "floppy (SPEC.md 80.1): MBR + partition table, "
+                         "boothd.bin as the volume boot record, one FAT16 "
+                         "partition. Needs --mbr, --boot and --kernel; "
+                         "excludes --size")
+    ap.add_argument("--mbr", metavar="MBR.bin",
+                    help="with --hdd: boot/mbr.asm's 446 bytes of MBR boot "
+                         "code (build/mbr.bin)")
     ap.add_argument("--scramble", action="store_true",
                     help="fragment cluster chains round-robin (test only)")
     ap.add_argument("--verify-hdd", metavar="IMG",
@@ -1157,16 +1284,18 @@ def main() -> int:
 
     if args.verify_hdd:
         if args.output or args.size or args.scramble or args.packages \
-                or args.folder or args.dir_slots or args.verify:
+                or args.folder or args.dir_slots or args.verify or args.hdd:
             ap.error("--verify-hdd takes no other arguments")
         return verify_hdd(args.verify_hdd)
     if args.verify:
         if args.output or args.size or args.scramble or args.packages \
-                or args.folder or args.dir_slots:
+                or args.folder or args.dir_slots or args.hdd:
             ap.error("--verify takes no other arguments")
         return verify(args.verify)
-    if not args.output or not args.size:
-        ap.error("-o and --size are required to build")
+    if args.size and args.hdd:
+        ap.error("--size and --hdd are mutually exclusive")
+    if not args.output or not (args.size or args.hdd):
+        ap.error("-o and --size (or --hdd) are required to build")
     return build(args)
 
 
