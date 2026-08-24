@@ -13545,18 +13545,33 @@ as `press_y − thumb_top`, so the thumb does not jump under the finger.
 ##### 13.10.5.3 The inverse, and why it cannot divide-overflow
 
 `os88ui_sbthumb` derives the thumb from `pos`; this derives `pos` from the
-thumb:
+thumb. **The pair is written over the TRAVEL, not over the track:**
 
 ```
-pos = (top − track_top) × total / track_h        clamped to 0 .. total − fit
+travel = track_h − thumb_h
+
+forward (os88ui_sbthumb)  top = track_top + pos × travel / (total − fit)
+inverse (os88ui_sbpos)    pos = (total − fit) × (top − track_top) / travel
+                                              clamped to 0 .. total − fit
 ```
 
-`top − track_top` is at most `track_h` by the clamp above, so the quotient is
-at most `total` and a 16-bit `div` after a 32-bit `mul` cannot overflow — the
-same proof `os88ui_sbthumb`'s own pair rests on, read backwards. The
-quantisation is real and correct: on a 200-row listing in a 100-pixel track the
-thumb moves in steps of two rows, which is what a proportional bar has always
-done.
+`pos` runs `0 .. total − fit` and `top − track_top` runs `0 .. travel`, end
+meeting end — **which is why it is not the older `× total / track_h` form.**
+The two reduce to each other exactly while `thumb_h = fit × track_h / total`,
+and the moment the 8-pixel minimum thumb (`OS88UI_SBMINH`) lifts a thin thumb
+off that height they part: the forward map then disagreed with its own inverse,
+and the view could never reach the end of a long listing by the thumb at all.
+
+The overflow proof rests on §13.10.5.2's clamp: `top − track_top` is at most
+`travel`, so the quotient is at most `total − fit` and a 16-bit `div` after a
+32-bit `mul` cannot overflow — the same proof `os88ui_sbthumb`'s own pair rests
+on, read backwards, where `pos` is at most `total − fit` and the quotient at
+most `travel`. One case has no counterpart in the older form and is a
+**refusal**: `travel = 0` — a minimum thumb on a track no longer than one — is
+nowhere to drag and a zero divisor, so `os88ui_sbpos` keeps the `pos` it
+already had. The quantisation is real and correct: on a 200-row listing in a
+100-pixel track the thumb moves in steps of two rows, which is what a
+proportional bar has always done.
 
 ##### 13.10.5.4 The RATE — a window picks how often the view follows
 
@@ -13630,8 +13645,7 @@ every drawing site: **the caller's fill routine ends in `os88ui_sbfix`**,
 which overwrites word 6 with the dragged `pos` while a drag is live. Every
 reader downstream — `os88ui_sbar`, `os88ui_sbthumb`, `os88ui_sbhit`,
 `os88ui_sbmove` — then sees one coherent block and none of them knows a drag
-exists. In outline mode `os88ui_sbfix` does nothing: there the thumb is
-*supposed* to stay with the content and the overlay is what moves.
+exists.
 
 ##### 13.10.5.6.1 What it cost, measured
 

@@ -1417,10 +1417,10 @@ os88ui_sbfix:
 ; out: DI = the pos; every other register preserved
 ;
 ; THE INVERSE of os88ui_sbthumb, and 13.10.5.3 is the proof that its div
-; cannot overflow: the clamp holds (top - track_top) to at most track_h, so
-; the quotient is at most total. Reached only with a live drag, which means
-; sbthumb said yes at the press - but total and fit are the CALLER's and can
-; change under the gesture, so a refusal now keeps the pos it already had.
+; cannot overflow: the clamp holds (top - track_top) to at most the TRAVEL,
+; so the quotient is at most total - fit. Reached only with a live drag, which
+; means sbthumb said yes at the press - but total and fit are the CALLER's and
+; can change under the gesture, so a refusal now keeps the pos it already had.
 ; -----------------------------------------------------------------------------
 os88ui_sbpos:
     push ax

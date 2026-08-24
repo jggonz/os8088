@@ -454,7 +454,7 @@ sc_click:
     jmp short .chk
 .focus:
     call sc_focus
-    call sc_repaint
+    call sc_fields              ; ...and the two fields are the whole change
     jmp .out
 
 .chk:                           ; --- a check box?
@@ -674,7 +674,7 @@ sc_key:
     xor cx, cx
 .setf:
     call sc_focus
-    call sc_repaint
+    call sc_fields              ; ...and the two fields are the whole change
     jmp short .out
 .ret:
     call sc_apply
@@ -693,40 +693,26 @@ sc_key:
     ret
 
 ; -----------------------------------------------------------------------------
-; sc_repaint - the window's content again (the kernel does not repaint after a
-;              callback returns, SPEC.md 31.9's rule one window over)
+; sc_fields - the two fields after a focus change, and NOTHING else
+;
+; A caret arriving in one field and leaving the other is the whole of what a
+; click into a field or a Tab changes, and os88line_draw draws "the box, its
+; text, and the caret if it has focus" - so two calls express it. Repainting
+; the content instead cost the white fill, four os88ui_glyph (~45ms each, its
+; own header) and 121 cells of label and button text: a third of a second of
+; held gfx lock for one 1px bar, which is sc_check's argument above at the
+; other end of the same window.
+;
+; The caller has already run sc_layout, so LN_X1..LN_Y2 are at the window's
+; live position - the only state os88line_draw reads.
 ; -----------------------------------------------------------------------------
-sc_repaint:
-    push ax
-    push bx
-    push cx
-    push dx
+sc_fields:
     push si
-    push di
-    mov bx, [sv_win]
-    or bx, bx
-    jz .out
-    call OSAPI_WM_CONTENT       ; AX = content left, DX = content top
-    mov si, ax
-    mov di, dx
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    mov ax, si
-    mov bx, di
-    mov cx, si
-    add cx, SC_FW - 3           ; the content is (w-2) x (h-TITLE_H-1), so its
-    mov dx, di                  ; last column and row are these
-    add dx, SC_FH - TITLE_H - 2
-    call OSAPI_GFX_FILL
-    mov si, [sv_win]
-    call sc_paint
-.out:
-    pop di
+    mov si, sc_f0
+    call os88line_draw
+    mov si, sc_f1
+    call os88line_draw
     pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------

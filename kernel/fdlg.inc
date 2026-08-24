@@ -2494,9 +2494,11 @@ fdlg_onup_x:
     call fdlg_sbset             ; mid-drag is never lost, and a release that
     call os88ui_sbdrop          ; landed anywhere still ends the gesture
     jc .btn                     ; CF = 1 = it was the Disk window's bar
-    mov [fdlg_scrl], ax
-    call fdlg_draw_list
-    jmp short .out
+    cmp ax, [fdlg_scrl]
+    je .out                     ; ...but a release on the row the press began
+    mov [fdlg_scrl], ax         ; on scrolled nothing, and this list has no
+    call fdlg_draw_list         ; cheaper tier than a fill and FD_ROWS rows -
+    jmp short .out              ; fm_scroll_by's own `jz .same` (SPEC.md 22.11)
 .btn:
 %endif
     call os88ui_fire            ; AX = what the press armed, and it is CLEARED

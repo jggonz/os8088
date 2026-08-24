@@ -681,7 +681,7 @@ Three things about it:
     "bss": 6456,
     "budget": 117248,
     "codemax": 65536,
-    "cold": 39085,
+    "cold": 39091,
     "coldpara": 2464,
     "fatpara": 288,
     "imgpara": 3968,
@@ -1471,14 +1471,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 33,136 | 34.6% |
+| the file system, end to end | 33,142 | 34.6% |
 | the window system and its furniture | 24,940 | 26.1% |
 | drawing: adapters, primitives, glyphs, icons | 15,097 | 15.8% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 11,690 | 12.2% |
 | the kernel proper: API table, heap, scheduler, events | 8,033 | 8.4% |
 | the three built-in kinds | 1,751 | 1.8% |
 | the Control Panel | 1,054 | 1.1% |
-| **total** | **95,701** | |
+| **total** | **95,707** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -1488,7 +1488,7 @@ generated in the first place.
 | `files.inc` — the Disk window (§22) | 1,131 | 8,733 | **9,864** | 471 | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 6,427 | 430 | **6,857** | 665 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 359 | 6,105 | **6,464** | 890 | 3,584 |
-| `fdlg.inc` — the Standard File dialog (§38) | 223 | 5,155 | **5,378** | 169 | — |
+| `fdlg.inc` — the Standard File dialog (§38) | 223 | 5,161 | **5,384** | 169 | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 5,071 | **5,250** | 155 | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 4,685 | — | **4,685** | 149 | — |
 | `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 625 | 3,011 | **3,636** | 468 | — |
@@ -1524,7 +1524,7 @@ generated in the first place.
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `bootprof.inc` — **(undescribed)** | — | — | **0** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 3,505 | — | **3,505** | — | — |
-| **total** | **56,616** | **39,085** | **95,701** | **6,456** | **7,702** |
+| **total** | **56,616** | **39,091** | **95,707** | **6,456** | **7,702** |
 <!-- END generated table -->
 
 ### Reading it

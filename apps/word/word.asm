@@ -7499,24 +7499,24 @@ wd_hmove:
 wd_onclick:
     push ax
     push dx
+%ifdef OS88UI_SBDRAG
+    call os88ui_sbdragging      ; A PRESS CANNOT ARRIVE DURING A LIVE DRAG, so
+    jc .nostale                 ; one that does means the release never came
+    push cx                     ; (SPEC.md 13.10.5.7). BEFORE the routing, as
+    push dx                     ; np_onclick's is: the chrome consumes most of
+    call wd_bounds              ; this window, and a press it eats is still a
+    call wd_sbset               ; press that proves the drag is over
+    call os88ui_sbdrop
+    pop dx
+    pop cx
+.nostale:
+%endif
     call wd_mroute                  ; the in-window chrome first (SPEC.md
     jnc .live                       ; 65.2): an open dropdown or the About box
     pop dx                          ; owns EVERY click, and the menu bar,
     jmp .out                        ; ribbon, ruler and status strips own the
 .live:                              ; clicks that land on them. CF=1 = it was
                                     ; one of those and has been fully handled
-%ifdef OS88UI_SBDRAG
-    call os88ui_sbdragging      ; A PRESS CANNOT ARRIVE DURING A LIVE DRAG, so
-    jc .nostale                 ; one that does means the release never came
-    push cx                     ; (SPEC.md 13.10.5.7)
-    push dx
-    call wd_bounds
-    call wd_sbset
-    call os88ui_sbdrop
-    pop dx
-    pop cx
-.nostale:
-%endif
     mov [wd_hitx], cx
     mov [wd_hity], dx
     mov word [wd_wanty], 0x7FFF
