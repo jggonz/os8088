@@ -13,15 +13,27 @@
 ;
 ; Three things differ from boot/boot.asm and NOTHING ELSE does:
 ;
-;   1. THE GEOMETRY COMES FROM int 13h AH=08h, not from -DSPT/-DHEADS. A
-;      floppy build knows its geometry because the Makefile builds one image
-;      per geometry; a hard disk's belongs to the drive. And it must be the
-;      BIOS's answer rather than the BPB's, which is the subtle half: we read
-;      with CHS calls that THIS BIOS will service, so the geometry that
-;      matters is the one it translates with. A disk formatted on a machine
-;      that reported 615/4/17 and moved to a controller that translates
-;      977/5/17 has a correct BPB and a useless one - the sectors are where
-;      the running BIOS says they are.
+;   1. THE GEOMETRY COMES FROM THE BPB, not from -DSPT/-DHEADS. A floppy build
+;      knows its geometry because the Makefile builds one image per geometry;
+;      a hard disk's belongs to the VOLUME, and BPB_SecPerTrk/BPB_NumHeads at
+;      +24/+26 are what the formatter wrote there.
+;
+;      IT USED TO ASK int 13h AH=08h, reasoning that "we read with CHS calls
+;      that THIS BIOS will service, so the geometry that matters is the one it
+;      translates with". That is the wrong invariant and docs/FIELD-NOTES.md 33
+;      is what it cost. int 13h TAKES CHS: the same conversion applied to the
+;      write and to the read reaches the same sector, whatever the drive
+;      privately believes - so the geometry that must be used is THE ONE THAT
+;      WROTE THE VOLUME. DOS's boot sector reads the BPB for exactly this
+;      reason, and so does os8088's own kernel: dsk_bpb_check loads
+;      [disk_spt]/[disk_heads] from those two fields and dsk_xfer derives every
+;      CHS from them. This sector was the only thing in the system using a
+;      different source, so the system disagreed with itself about where its
+;      own sectors were.
+;
+;      It is also EIGHT BYTES SMALLER than the probe it replaces, and it makes
+;      a drive whose ROM will not answer AH=08h bootable - which such a drive
+;      was not, while still being installable.
 ;   2. EVERY LBA HAS THE PARTITION BASE ADDED, from BPB_HiddSec at offset 28.
 ;      The formatter has written that field since it was written
 ;      (drivers/hdd/fmt.inc), commented "DOS reads it, os8088 does not". It
@@ -82,8 +94,9 @@ bpb_rootent: dw 0                ; +17
 bpb_tot16:   dw 0                ; +19
 bpb_media:   db 0                ; +21
 bpb_fatsz:   dw 0                ; +22
-bpb_spt:     dw 0                ; +24  the FORMATTER's geometry: read by DOS,
-bpb_heads:   dw 0                ; +26  and NOT by us - see note 1 above
+bpb_spt:     dw 0                ; +24  the geometry THIS VOLUME WAS WRITTEN
+bpb_heads:   dw 0                ; +26  WITH, and what we read it back with -
+                                 ;      see note 1 above
 bpb_hidd:    dd 0                ; +28  the partition base. THIS one we read
     times BPB_END - ($ - $$) db 0
 
@@ -147,26 +160,28 @@ entry:
     ; which on a hard disk is a fraction of a second. What shows until then is
     ; the POST's own text rather than a cleared screen.
 
-    ; --- the drive's geometry, from the BIOS (note 1) -----------------------
-    ; AH=08h answers CL bits 0..5 = sectors per track, DH = the last head, and
-    ; it is the only honest source: these are the numbers the CHS reads below
-    ; will be serviced with. A drive that refuses the call cannot be read from
-    ; by this sector at all, so it is a hard stop rather than a fallback to
-    ; the BPB's - a wrong geometry reads the wrong sectors and says nothing.
-    mov ah, 0x08
-    mov dl, [boot_drive]
-    int 0x13
-    jc .nogeom
-    and cl, 0x3F                ; sectors per track
-    xor ch, ch
-    jcxz .nogeom                ; a zero would divide by zero below
-    mov [spt], cx
-    mov al, dh
-    xor ah, ah
-    inc ax                      ; heads = last head + 1
-    jz .nogeom                  ; DH = 0xFF is not a geometry
-    mul cx                      ; AX = spt * heads, and it fits: 63 * 256
+    ; --- the geometry the VOLUME WAS WRITTEN WITH, from its own BPB --------
+    ; Note 1 above is the whole argument. What is left here is that the two
+    ; fields have to be SANE before chs divides by them, and that there is
+    ; nothing else on the disk to fall back to if they are not.
+    mov ax, [bpb_spt]
+    or ax, ax
+    jz .nogeom                  ; a zero would divide by zero in chs
+    mov [spt], ax
+    mul word [bpb_heads]        ; AX = spt * heads, and DX catches a pair that
+    or dx, dx                   ; multiplies past a word - 63 x 255 is 16,065,
+    jnz .nogeom                 ; so anything over that is corrupt
+    or ax, ax
+    jz .nogeom                  ; heads = 0
     mov [spt_heads], ax
+
+    ; **AND NO int 13h AH=08h AT ALL.** A range check against the drive's own
+    ; answer - refuse when its tracks are shorter than the volume's - was
+    ; written and measured at EIGHTEEN BYTES more than this sector has. What it
+    ; would have bought is a better letter: such a drive fails its reads anyway
+    ; and stops on 'D' three sectors in, which is a diagnosable end rather than
+    ; a silent one. What dropping the call buys is the case in note 33 - a
+    ; drive whose ROM will not answer is now bootable.
     jmp short .geom_ok
 .nogeom:
     mov al, 'G'
@@ -308,15 +323,34 @@ read_run:
 ; out: [cyllo], [cylhi], [head]; DX = the sector's 0-based index in its track
 ; clobbers: ax, cx, dx
 ;
-; ONE div pair and no 32/16 two-step, on hd_chs's proof (SPEC.md 52.10.3): the
-; highest LBA a CHS call can name puts the cylinder under 1024, so dividing by
-; spt*heads leaves a quotient far inside a word and DX below the divisor.
+; ONE div pair and no 32/16 two-step, and the two guards that make it one.
+; hd_chs (drivers/hdd/hdcom.inc) carries the same pair, and the header there
+; calls them a proof - which is what they are for a geometry hd_geom_ok has
+; already bounded. THIS routine's geometry is BYTES OFF A DISK (note 1), and
+; the validation above accepts any non-zero spt/heads pair whose product fits
+; a word: spt = 1, heads = 1 passes every test it makes. So the pair is
+; ENFORCED here rather than assumed, on a sector 0 nobody in this system
+; necessarily wrote:
+;
+;   cmp dx, cx    a 32-bit dividend over a tiny divisor overflows the div, and
+;                 an INT 0 taken before the kernel exists lands on whatever
+;                 POST left in the vector. 'G' is the letter the header
+;                 promises for this class of BPB and it did not get it
+;   cmp ax, 1024  read_run packs the cylinder into ten bits - [cylhi] shifted
+;                 into CL bits 6..7 - so cylinder 1024 was issued as cylinder
+;                 0. The read SUCCEEDS, 207 sectors of something else land at
+;                 0060:0000, and this sector jumps into them: no letter, no
+;                 'D', nothing
 ; -----------------------------------------------------------------------------
 chs:
     mov ax, [lba]
     mov dx, [lba+2]
     mov cx, [spt_heads]
+    cmp dx, cx                  ; the quotient would not fit a word
+    jae .nogeom
     div cx                      ; AX = cylinder, DX = the rest
+    cmp ax, 1024                ; ...and CHS has ten bits for it
+    jae .nogeom
     mov [cyllo], al
     mov [cylhi], ah
     mov ax, dx
@@ -324,6 +358,11 @@ chs:
     div word [spt]              ; AX = head, DX = sector - 1
     mov [head], al
     ret
+.nogeom:
+    jmp entry.nogeom            ; the 'G' refusal, shared with the validation
+                                ; above - one letter, one meaning, and the
+                                ; three bytes of a near jmp rather than a
+                                ; second copy of it
 
 ; -----------------------------------------------------------------------------
 ; fail - print AL and stop. Three ways to get here and each names itself with
@@ -335,9 +374,11 @@ chs:
 ;
 ;   R  int 12h says this machine has too little RAM to hold the kernel
 ;      clear of this sector's own relocated stack (SPEC.md 2.7)
-;   G  the drive would not answer int 13h AH=08h, so there is no geometry to
-;      issue CHS reads with. Not recoverable: the BPB's geometry is the
-;      formatter's belief and this BIOS's translation is what the reads obey
+;   G  the BPB's geometry is unusable - no sectors per track, no heads, a
+;      spt x heads that does not fit a word, or a pair that puts KERNEL.SYS
+;      past what CHS can name (a quotient over a word, or a cylinder at or
+;      above 1024). Not recoverable: nothing else on the disk says where its
+;      sectors are
 ;   D  three attempts at one run of sectors all failed, reset between each
 ; -----------------------------------------------------------------------------
 fail:

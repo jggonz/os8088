@@ -209,7 +209,9 @@ app_about_paint:
     push dx
     push si
 
-    mov byte [gfx_color], CBLACK
+                                ; ...and no pen: app_about_center is an
+                                ; OPAQUE run now (SPEC.md 6.6.5) and nothing
+                                ; else in this window draws
     mov bx, si                  ; window ptr for the centering helper
     mov dx, [bx+W_Y]
     add dx, TITLE_H + 22        ; first line: content top + 22 (four lines of
@@ -257,7 +259,8 @@ app_about_center:
     shr cx, 1                   ; centering offset
     add cx, [bx+W_X]
     inc cx                      ; content left = W_X + 1
-    call font_str
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the content's own ground:
+    call font_run               ; W_PAINT arrives white-filled (6.6.5)
     ret
 
 ; =============================================================================

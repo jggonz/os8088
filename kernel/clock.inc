@@ -2365,7 +2365,7 @@ clk_fld_str:
     mov si, clk_fbuf
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; clk_fld_adj - step one field, with wrap (SPEC.md 31.5)
@@ -2482,7 +2482,7 @@ clk_fld_adj:
     pop cx
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; clk_step - add a signed step to a byte, wrapping into a closed range

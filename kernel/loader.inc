@@ -78,7 +78,7 @@ loader_init_x:
     mov word [ld_pending], 0
     mov word [ld_pwin], 0
     mov byte [ld_status], LD_OK
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; ld_slot - the instance slot a reserved record sits in, which is the owner
@@ -266,7 +266,7 @@ loader_run_x:
     push cx                     ; stamped on the window that asked, because
     mov bx, fm_stattab          ; one global put 'Bad package' on every open
     mov cx, LD_NSTAT            ; Disk window at once - a question a toast
-    call KERNEL_SEG:cw_toast_say ; cannot raise, since it belongs to no
+    call KERNEL_SEG:toast_say    ; cannot raise, since it belongs to no
     pop cx                      ; window at all and appears at the moment of
     pop bx                      ; the act (SPEC.md 22.9)
     cmp byte [ld_painted], 0
@@ -295,7 +295,7 @@ loader_run_x:
     pop cx
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; ld_run_body - the load pipeline (module-internal; loader_run saves regs)
@@ -711,10 +711,6 @@ section .cold                   ; far entries (SPEC.md 2.6): the resident
                                 ; these near-call the bodies above - so every
                                 ; routine here keeps its ordinary near `ret`
 ldf_ld_run_name:        call ld_run_name_x
-                    retf
-ldf_loader_init:        call loader_init_x
-                    retf
-ldf_loader_run:         call loader_run_x
                     retf
 
 section .text

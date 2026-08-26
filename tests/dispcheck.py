@@ -103,6 +103,27 @@ def longest_run(px, w, h):
     return best
 
 
+def longest_run_at(px, w, h):
+    """(run, x, y) for the longest horizontal run - WHERE it is, not just how
+    long. A wrong scan-line base does not scatter a shape, it RELOCATES it: the
+    frame stays contiguous, so `longest_run` above answers the same number for a
+    correct render and a broken one. Position is the thing that moves."""
+    best, bx, by = 0, 0, 0
+    for y in range(h):
+        run, start = 0, 0
+        base = y * w * 3
+        for x in range(w):
+            if px[base + x * 3]:
+                if run == 0:
+                    start = x
+                run += 1
+                if run > best:
+                    best, bx, by = run, start, y
+            else:
+                run = 0
+    return best, bx, by
+
+
 def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_5150_both_gla")
@@ -188,17 +209,27 @@ def main(argv):
             fail.append("vid_cur is %d - the live block is not display 0's"
                         % cur)
 
-        # VID_CTX_SZ, and it has moved once already (SPEC.md 39.18 added the
-        # adapter kind): the eighteen-word run, then VX, VY and the kind byte.
-        CTXSZ = 42
+        # VID_CTX_SZ: the per-display run, then VX, VY and the kind byte.
+        # DERIVED, not written down. This was `CTXSZ = 42` with the origin at
+        # word 18, and it had already moved once (SPEC.md 39.18 added the
+        # adapter kind) before SPEC.md 6.1.10 added `vid_tseg` and moved it
+        # again - at which point this script read display 1's record two bytes
+        # early, believed a garbage origin and asked the pointer to walk to
+        # x = 16769. That reads as a POINTER defect on a two-card machine,
+        # which is the most expensive possible way to be told a constant is
+        # stale. viddet.inc pins vid_seg..vid_tseg as the run and vidsel.inc
+        # asserts it, so both ends are symbols and neither can drift.
+        NWORD = (S("vid_tseg") - S("vid_seg")) // 2 + 1      # VID_CTX_W
+        VX = NWORD                                           # ...then VX, VY
+        CTXSZ = NWORD * 2 + 6                                # and the kind
         raw = m.read(S("vid_ctx"), 2 * CTXSZ)
-        ctx = [[u16(raw, d * CTXSZ + i * 2) for i in range(21)]
+        ctx = [[u16(raw, d * CTXSZ + i * 2) for i in range(NWORD + 2)]
                for d in (0, 1)]
         for d in (0, 1):
             w = ctx[d]
             say("ctx[%d] seg=%04X stride=%2d cw=%3d ch=%3d rseg=%04X "
                 "origin=(%d,%d)"
-                % (d, w[0], w[1], w[7], w[8], w[11], w[18], w[19]))
+                % (d, w[0], w[1], w[7], w[8], w[11], w[VX], w[VX + 1]))
         other = 1 if kind == 2 else 2
         for d, k in ((0, kind), (1, other)):
             _, seg, stride, _, cw, ch = KIND[k]
@@ -209,24 +240,24 @@ def main(argv):
             if ctx[d][11] != seg:
                 fail.append("ctx[%d] renders into %04X, not its own "
                             "framebuffer" % (d, ctx[d][11]))
-        if (ctx[0][18], ctx[0][19]) != (0, 0):
+        if (ctx[0][VX], ctx[0][VX + 1]) != (0, 0):
             fail.append("display 0 is not at the virtual origin")
         # ...and its top row is the DESKTOP's, not the screen's (SPEC.md
         # 39.19.3). This wanted 0, which was right until that landed and has
         # failed ever since - the same staleness dispsave.py's own comment
         # records fixing on its side ("y used to be taken raw").
-        if (ctx[1][18], ctx[1][19]) != (ctx[0][7], os88geom.MBAR_H):
+        if (ctx[1][VX], ctx[1][VX + 1]) != (ctx[0][7], os88geom.MBAR_H):
             fail.append("display 1 is not immediately right of display 0, at "
                         "the desktop band's top row (SPEC.md 39.19.3): it is "
                         "at (%d,%d) and display 0 is %d wide"
-                        % (ctx[1][18], ctx[1][19], ctx[0][7]))
+                        % (ctx[1][VX], ctx[1][VX + 1], ctx[0][7]))
         live = [u16(m.read(S("vid_seg"), 36), i * 2) for i in range(18)]
         if live != ctx[0][:18]:
             fail.append("the live block is not display 0's record")
         dw, dh = u16(m.read(S("vid_w"), 2)), u16(m.read(S("vid_h"), 2))
         say("desktop %dx%d" % (dw, dh))
-        uw = max(c[18] + c[7] for c in ctx)
-        uh = max(c[19] + c[8] for c in ctx)
+        uw = max(c[VX] + c[7] for c in ctx)
+        uh = max(c[VX + 1] + c[8] for c in ctx)
         if (dw, dh) != (uw, uh):
             fail.append("the desktop is %dx%d, not the union %dx%d "
                         "(SPEC.md 39.16)" % (dw, dh, uw, uh))
@@ -339,7 +370,7 @@ def main(argv):
         sec_before = m.fbuf(card=sec["idx"])[2]
         cd0 = m.read(S("cur_disp"), 1)[0]
 
-        away = (ctx[1][18] + ctx[1][7] // 2, ctx[1][8] // 2)
+        away = (ctx[1][VX] + ctx[1][7] // 2, ctx[1][8] // 2)
         mo.to(*away)
         m.advance(frames=4, card=sec["idx"])
         m.run()                     # advance() leaves it PAUSED
@@ -399,8 +430,8 @@ def main(argv):
         # is the primary or the secondary depending on the machine.
         tall, short = (1, 0) if ctx[1][8] > ctx[0][8] else (0, 1)
         y = ctx[short][8] + 40                  # inside `tall`, outside `short`
-        mo.to(ctx[tall][18] + 40 if tall else ctx[0][7] - 40, y)
-        dx, edge = ((-100, ctx[1][18]) if tall == 1
+        mo.to(ctx[tall][VX] + 40 if tall else ctx[0][7] - 40, y)
+        dx, edge = ((-100, ctx[1][VX]) if tall == 1
                     else (100, ctx[0][7] - 1))
         got = push(dx, 0)
         say("pushed %s along the row only display %d has: stopped at %s"
@@ -409,8 +440,8 @@ def main(argv):
             fail.append("pushed at the dead zone the pointer reached x=%d, "
                         "wanted %d - it walked into the gap"
                         % (got[0], edge))
-        far = (ctx[1][18] + ctx[1][7] - 1, ctx[1][19] + ctx[1][8] - 1)
-        mo.to(ctx[1][18] + 40, ctx[1][19] + 40)     # ...on display 1, then out
+        far = (ctx[1][VX] + ctx[1][7] - 1, ctx[1][VX + 1] + ctx[1][8] - 1)
+        mo.to(ctx[1][VX] + 40, ctx[1][VX + 1] + 40)     # ...on display 1, then out
         got = push(100, 100)
         say("pushed to the OUTER corner: stopped at %s, display ends %s"
             % (got, far))
@@ -467,7 +498,7 @@ def main(argv):
             say("About is window %d at (%d,%d) %dx%d"
                 % (found, wx, wy, ww, u16(wins, found * WIN + 8)))
             grab = (wx + ww // 2, wy + 8)       # the title bar's middle
-            dest = (ctx[1][18] + ctx[1][7] // 2, ctx[1][19] + 60)
+            dest = (ctx[1][VX] + ctx[1][7] // 2, ctx[1][VX + 1] + 60)
             mo.to(*grab)
             mo.m.mouse(0, 0, l=True)
             time.sleep(0.3)
@@ -488,21 +519,51 @@ def main(argv):
             say("dragged to (%d,%d)" % (nx, ny))
             d = 0
             for c in ctx:
-                if c[18] <= nx < c[18] + c[7] and c[19] <= ny < c[19] + c[8]:
+                if c[VX] <= nx < c[VX] + c[7] and c[VX + 1] <= ny < c[VX + 1] + c[8]:
                     d = 1 if c is ctx[1] else 0
                     break
             else:
                 fail.append("the window's origin (%d,%d) is on NO display - "
                             "it landed in the dead zone" % (nx, ny))
-            if nx < ctx[1][18]:
+            if nx < ctx[1][VX]:
                 fail.append("the window did not cross: origin x=%d, and "
-                            "display 1 starts at %d" % (nx, ctx[1][18]))
+                            "display 1 starts at %d" % (nx, ctx[1][VX]))
             w2, h2, sec2 = m.fbuf(card=sec["idx"])
             run2 = longest_run(sec2, w2, h2)
             say("secondary longest lit run with the window on it: %d px" % run2)
             if run2 < ww - 8:
                 fail.append("the window crossed but its %dpx frame is not on "
                             "the second card: longest run %d" % (ww, run2))
+
+            # ...and WHERE it landed, which is the assertion none of the run
+            # lengths above can make (SPEC.md 39.3.1).
+            #
+            # gfx_rowbase answers a scan line's base from a table vid_apply
+            # builds for ONE adapter, and a display swap does not rebuild it -
+            # so a secondary drawn through the primary's addressing gets every
+            # shape RELOCATED rather than broken up. The frame is still 298 px
+            # of contiguous run, the dither still answers 1, the lit count
+            # still lands within a tenth of a percent. Measured with the guard
+            # in vid_ctx_act removed: this window drew 162 rows low and 80
+            # columns right, and `longest run` moved by ONE pixel (298 -> 299).
+            # Every metric this file had agreed with a correct render.
+            #
+            # So: the row carrying the frame must be the row the WINDOW RECORD
+            # says it is. Y is the assertion because Y is where a wrong bank
+            # mapping goes - 3 px of slack against 162 px of error. X is
+            # reported for diagnosis and not asserted: the longest run is the
+            # title band, which is inset from W_X by a frame edge, so its start
+            # column is a weaker signal than its row.
+            _, rx, ry = longest_run_at(sec2, w2, h2)
+            exp_x, exp_y = nx - ctx[1][VX], ny - ctx[1][VX + 1]
+            say("frame row %d (window record says %d), run starts x=%d "
+                "(record says %d)" % (ry, exp_y, rx, exp_x))
+            if abs(ry - exp_y) > 32:
+                fail.append("the window's frame is drawn %d rows from where "
+                            "the record puts it (row %d, record says %d) - "
+                            "the secondary is being addressed with another "
+                            "display's scan-line bases (SPEC.md 39.3.1)"
+                            % (ry - exp_y, ry, exp_y))
 
             # --- 7: fullscreen on the SECOND display leaves the chrome alone
             # (SPEC.md 39.17.1). What decides that is wm_fs_vis, and what it

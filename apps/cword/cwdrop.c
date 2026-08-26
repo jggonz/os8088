@@ -156,29 +156,29 @@ static void cw_menu_paint(void)
             continue;
         }
         dis = cw_item_dis(it);
-        if (dis) {
-            /* THE WHOLE ITEM in the disabled pen, not just the caption
-             * (SPEC.md 47): on the two 1bpp adapters the colour alone rounds
-             * to solid black and only the pen's flag dithers it. */
+        /* THE WHOLE ITEM in the disabled pen, not just the caption (SPEC.md
+         * 47): on the two 1bpp adapters the colour alone rounds to solid
+         * black and only the pen's FLAG dithers it. The flag still rides the
+         * pen; what changed is that the INK is now named here as well, because
+         * a run takes it as an argument and C cannot read os88_set_color back
+         * any more than assembly can (SPEC.md 6.6.5). SPEC.md 6.1.12 does the
+         * checkerboard inside the run, so a greyed item costs nothing extra. */
+        if (dis)
             os88_gfx_pen(1);
-            os88_font_str(cw_m_x1 + 18, y, cw_item_label(it));
-        } else {
-            os88_font_run(cw_m_x1 + 18, y, cw_item_label(it),
-                          OS88_BLACK, OS88_WHITE);
-        }
+        os88_font_run(cw_m_x1 + 18, y, cw_item_label(it),
+                      dis ? OS88_DGRAY : OS88_BLACK, OS88_WHITE);
         cap = cw_it[it].cap;
         if (cap != 0) {
             n = (int)os88_strlen(cap);
-            if (!dis)
-                os88_set_color(OS88_BLACK);
-            os88_font_str(cw_m_x2 - 6 - n * 8, y, cap);
+            os88_font_run(cw_m_x2 - 6 - n * 8, y, cap,
+                          dis ? OS88_DGRAY : OS88_BLACK, OS88_WHITE);
             n = cw_mn_count[cw_m_open];
         }
         if (dis)
             os88_gfx_pen(0);
         if ((cw_it[it].flag & CWF_CHK) && cw_item_chk(it)) {
             /* THE CHECK IS DRAWN, BECAUSE THIS MACHINE HAS NO GLYPH FOR ONE.
-             * This asked os88_font_char() for 0xFB, the IBM ROM's check - and
+             * This asked os88_font_char_xparent() for 0xFB, the IBM ROM's check - and
              * the kernel's face is characters 32..126 (SPEC.md 6), so the call
              * drew NOTHING and no menu item in this program has ever carried a
              * check. It is the same defect cw_pilcrow() exists for, in a second

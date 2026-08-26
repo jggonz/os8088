@@ -1924,40 +1924,76 @@ tg_framec:
     ret
 
 ; -----------------------------------------------------------------------------
-; tg_str - a string in content coords
-; in:  CX = x, CX/DX = content coords, SI = NUL string; pen already set
+; tg_run / tg_str - a string in content coords, opaque and transparent
+; in:  CX = x, CX/DX = content coords, SI = NUL string
+;      tg_run: AL = ink, AH = the ground the caller has just laid down
+;      tg_str: the pen, already set
 ;
-; All-or-nothing, and deliberately so: font_char draws a whole 8x8 cell or
-; none of it, so a string half outside the box cannot be trimmed to fit. One
-; that would leave the box is DROPPED rather than clipped - a missing HUD
-; field is a layout bug you can see, and a glyph painted onto the window next
-; door is one you cannot.
+; All-or-nothing, and deliberately so: a cell is drawn whole or not at all, so
+; a string half outside the box cannot be trimmed to fit. One that would leave
+; the box is DROPPED rather than clipped - a missing HUD field is a layout bug
+; you can see, and a glyph painted onto the window next door is one you cannot.
+;
+; TWO ENTRIES because one caller cannot name a ground: the PAUSE / GAME OVER
+; banner lands on the matrix, which is a grid of coloured cells and not a
+; colour - SPEC.md 6.6.2 case 1, and the only transparent text left in this
+; package. Everything else letters onto something this same routine's caller
+; filled a few instructions earlier: the HUD band is [tg_hudbg] and the About
+; card is its own panel.
 ; -----------------------------------------------------------------------------
-tg_str:
+tg_run:
     push ax
     push bx
     push cx
     push dx
-    or cx, cx
-    js .out
-    or dx, dx
-    js .out
-    mov ax, dx
-    add ax, 8
-    cmp ax, [tg_chgt]
-    jg .out
-    call OSAPI_FONT_WIDTH           ; AX = the string's pixel width
-    add ax, cx
-    cmp ax, [tg_cwid]
-    jg .out
-    add cx, [tg_ox]
-    add dx, [tg_oy]
-    call OSAPI_FONT_STR
+    push ax                         ; the pair, banked across FONT_WIDTH
+    call tg_str_gate
+    pop ax
+    jc .out
+    call OSAPI_FONT_RUN
 .out:
     pop dx
     pop cx
     pop bx
     pop ax
+    ret
+
+tg_str:
+    push ax
+    push bx
+    push cx
+    push dx
+    call tg_str_gate
+    jc .out
+    call OSAPI_FONT_STR_XPARENT
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; tg_str_gate - the shared box test. CF=1 drop it; CF=0 draw at CX/DX, which
+; it has moved to SCREEN coordinates. Clobbers AX.
+tg_str_gate:
+    or cx, cx
+    js .no
+    or dx, dx
+    js .no
+    mov ax, dx
+    add ax, 8
+    cmp ax, [tg_chgt]
+    jg .no
+    call OSAPI_FONT_WIDTH           ; AX = the string's pixel width
+    add ax, cx
+    cmp ax, [tg_cwid]
+    jg .no
+    add cx, [tg_ox]
+    add dx, [tg_oy]
+    clc
+    ret
+.no:
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1978,21 +2014,22 @@ tg_draw_hud:
     dec cx
     mov dx, TG_HUD_H - 1
     call tg_fillc
-
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
+                                    ; ...and no pen from here on: every field
+                                    ; below is an opaque run carrying its own
     mov cx, TG_HC_L
     mov dx, 2
     mov si, tg_s_title
-    call tg_str
+    mov al, CWHITE                  ; AL = ink, AH = the band tg_draw_hud
+    mov ah, [tg_hudbg]              ; filled at the top of this routine
+    call tg_run
     cmp byte [tg_glock], 0
     je .rows
-    mov al, CYELLOW
-    call OSAPI_SET_COLOR
     mov cx, TG_HC_LOCK
     mov dx, 2
     mov si, tg_s_lock
-    call tg_str
+    mov al, CYELLOW                 ; the one field on this band that is not
+    mov ah, [tg_hudbg]              ; white
+    call tg_run
 .rows:
     ; Every column here is one glyph clear of the field before it, and the
     ; rightmost - FACTION's 'ORANGE' at TG_HC_FV - ends at 232, inside TG_HUD_W.
@@ -2009,12 +2046,12 @@ tg_draw_hud:
     ; A DISABLED label is the separate case and it does dither, legibly, via
     ; [gfx_dis] and OSAPI_GFX_PEN (SPEC.md 47 rule 3) - nothing here is
     ; disabled, so nothing here wants it.
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
     mov cx, TG_HC_L
     mov dx, 11
     mov si, tg_s_score
-    call tg_str
+    mov al, CWHITE                  ; AL = ink, AH = the band tg_draw_hud
+    mov ah, [tg_hudbg]              ; filled at the top of this routine
+    call tg_run
     mov ax, [tg_score]
     mov cx, TG_HC_LV
     mov dx, 11
@@ -2022,7 +2059,9 @@ tg_draw_hud:
     mov cx, TG_HC_R
     mov dx, 11
     mov si, tg_s_purges
-    call tg_str
+    mov al, CWHITE                  ; AL = ink, AH = the band tg_draw_hud
+    mov ah, [tg_hudbg]              ; filled at the top of this routine
+    call tg_run
     mov ax, [tg_purges]
     mov cx, TG_HC_RV
     mov dx, 11
@@ -2031,22 +2070,30 @@ tg_draw_hud:
     mov cx, TG_HC_L
     mov dx, 20
     mov si, tg_s_vec
-    call tg_str
+    mov al, CWHITE                  ; AL = ink, AH = the band tg_draw_hud
+    mov ah, [tg_hudbg]              ; filled at the top of this routine
+    call tg_run
     mov bl, [tg_grav]
     xor bh, bh
     shl bx, 1
     mov si, [tg_vecname + bx]
     mov cx, TG_HC_LV
     mov dx, 20
-    call tg_str
+    mov al, CWHITE                  ; AL = ink, AH = the band tg_draw_hud
+    mov ah, [tg_hudbg]              ; filled at the top of this routine
+    call tg_run
     mov cx, TG_HC_F
     mov dx, 20
     mov si, tg_s_fac
-    call tg_str
+    mov al, CWHITE                  ; AL = ink, AH = the band tg_draw_hud
+    mov ah, [tg_hudbg]              ; filled at the top of this routine
+    call tg_run
     call tg_fac_name                ; SI = the name
     mov cx, TG_HC_FV
     mov dx, 20
-    call tg_str
+    mov al, CWHITE                  ; AL = ink, AH = the band tg_draw_hud
+    mov ah, [tg_hudbg]              ; filled at the top of this routine
+    call tg_run
     pop si
     pop dx
     pop cx
@@ -2113,7 +2160,9 @@ tg_num:
 .dr:
     mov dx, si                      ; ...and back
     mov si, di
-    call tg_str
+    mov al, CWHITE                  ; a HUD value: white on the band. AL is
+    mov ah, [tg_hudbg]              ; NOT the caller's pen here - the divide
+    call tg_run                     ; above has been using it as a digit
     pop di
     pop si
     pop dx
@@ -2536,7 +2585,8 @@ tg_draw_panel:
     add cx, 8                       ; the margin tg_pmeas budgeted for
 .draw:
     mov dx, di
-    call tg_str
+    mov ax, (CWHITE << 8) | CBLACK  ; the panel tg_draw_panel
+    call tg_run                     ; filled four calls ago
     pop si
     add di, [tg_ablh]
     jmp .line

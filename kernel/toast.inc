@@ -266,7 +266,7 @@ toast_say:
     pop bx
     pop ax
     popf
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; toast_now - draw a staged toast on the spot, IF the caller provably holds

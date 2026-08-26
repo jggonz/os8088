@@ -538,7 +538,7 @@ spl_reset:
     pop bx
     pop ax
 .out:
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; vid_blank - dark the card the machine is LEAVING (SPEC.md 39.11.4)
@@ -643,7 +643,7 @@ vid_switch:
     call vid_avail_test
     jc .refuse
 
-    call cur_unlazy             ; 1. the cursor's save-under is the old
+    call cur_unlazy              ; 1. the cursor's save-under is the old
     call vid_blank              ; geometry's - and so is the tube we are
     call wm_su_drop_all         ; walking away from, and so is every raise
                                 ; cache (SPEC.md 39.14.8.1): wm_su_ck compares
@@ -691,10 +691,10 @@ vid_switch:
                                 ; nothing IN wm_paint_all destroys them
 .already:
     clc
-    ret
+    retf
 .refuse:
     stc
-    ret
+    retf
 
 ; =============================================================================
 ; The per-display context (SPEC.md 39.12) - kern_big only
@@ -705,9 +705,10 @@ vid_switch:
 ; construction rather than by inspection - which is the gate this step is
 ; allowed to land against.
 ;
-; WHAT A DISPLAY OWNS is the eighteen contiguous words `vid_seg` through
-; `vid_rend`: the nine live geometry words and the nine derived ones the
-; RENDERER reads (viddet.inc). What it does not own starts at `vid_dock_y0` -
+; WHAT A DISPLAY OWNS is the nineteen contiguous words `vid_seg` through
+; `vid_tseg`: the nine live geometry words, the nine derived ones the RENDERER
+; reads, and font_run's composed-row target (viddet.inc). What it does NOT own
+; starts at `vid_dock_y0` -
 ; the dock row, the clock cell, the drive column - because those describe the
 ; DESKTOP and must not change because a primitive happened to be drawing on
 ; the other monitor (DUAL-DISPLAY-PLAN 5).
@@ -893,7 +894,7 @@ vid_seq1_blank:
 %ifdef KERN_BIG
 
 VID_NDISP_MAX equ 2             ; the machine this is for holds two cards
-VID_CTX_W    equ 18             ; words copied to and from the live block
+VID_CTX_W    equ 19             ; words copied to and from the live block
 VID_CTX_CW   equ 14             ; ...within the run, the display's own extent -
 VID_CTX_CH   equ 16             ; word 7 and word 8, vid_cw/vid_ch (39.2.1)
 VID_CTX_VX   equ VID_CTX_W*2    ; ...then the display's origin in the VIRTUAL
@@ -913,8 +914,8 @@ VID_CTX_SZ   equ VID_CTX_W*2+6
 
 ; The live run this copies must be the run viddet.inc lays out, and a reorder
 ; there would be silent here - so it is asserted rather than trusted.
-%if vid_chm8 - vid_seg != (VID_CTX_W-1)*2
-%error "vid_seg..vid_chm8 is not VID_CTX_W contiguous words - see viddet.inc"
+%if vid_tseg - vid_seg != (VID_CTX_W-1)*2
+%error "vid_seg..vid_tseg is not VID_CTX_W contiguous words - see viddet.inc"
 %endif
 
 ; .text with REAL INITIALISERS, not .bss, and for the reason vid_avail above
@@ -929,7 +930,7 @@ vid_ndisp   db 1                ; displays the kernel has brought up. 1 for
 vid_cur     db 0                ; which display's geometry is in the live block
 vid_ox      dw 0                ; ...and its ORIGIN in the virtual desktop,
 vid_oy      dw 0                ; which is what every 39.14 hook subtracts.
-                                ; OUTSIDE the eighteen-word run on purpose:
+                                ; OUTSIDE the nineteen-word run on purpose:
                                 ; that run is asserted contiguous and is what
                                 ; the RENDERER reads, and an origin is not
                                 ; renderer state. Published by vid_ctx_act
@@ -1062,11 +1063,39 @@ vid_ctx_act:
     mov ax, [di+VID_CTX_VY]
     mov [vid_oy], ax
     mov al, [di+VID_CTX_KIND]   ; ...and HOW DEEP this display is, which is not
-    call vid_depth_set          ; in the eighteen-word run and is what every
+    call vid_depth_set          ; in the nineteen-word run and is what every
                                 ; primitive dispatches on. Two 1bpp displays
                                 ; agree about it and a VGA beside a Hercules
                                 ; does not - see vid_depth_set for what the
                                 ; omission measured as
+
+    ; ...and SPEC.md 39.3.1's ROW TABLE, which is the same omission again and
+    ; the one the run can never fix: [vid_rowmax] is in .text and vid_rowtab is
+    ; a single array in .lowbss, so no rep movsw reaches either - while
+    ; vid_stride, vid_bmask and vid_bshift, the three inputs the table baked
+    ; in, are all INSIDE the run and have just changed. vid_dual_ok takes only
+    ; a mono+colour pairing, so the two displays never agree about a row: at
+    ; y=5 Hercules answers 0x205A and CGA 0x20A0, and every row but 0 and 1
+    ; differs. VID_ROWTAB is 348 - every row of both 1bpp adapters - so the
+    ; "row past the end" miss path does not rescue it either, and the secondary
+    ; would be drawn through the PRIMARY's addressing: shredded, not
+    ; misaligned.
+    ;
+    ; Rebuilding it here is 23.6 ms (SPEC.md 39.3.1) under a drawing primitive
+    ; whose floor is 756 us, and under the CURSOR. So the table is switched OFF
+    ; instead: the display it was built for keeps the fast path and the other
+    ; one computes, which is what every row cost before the table existed.
+    ;
+    ; [vid_kind] IS the table's kind, by construction and not by a stamp:
+    ; vid_apply is the only routine that builds the table and it builds for
+    ; [vid_kind], and this routine deliberately does not move [vid_kind] - the
+    ; record's kind goes to vid_depth_set and nowhere else. AL still holds it.
+    xor di, di                  ; the record is finished with
+    cmp al, [vid_kind]
+    jne .norow
+    mov di, VID_ROWTAB
+.norow:
+    mov [vid_rowmax], di
     pop ax
     pop di
 .out:
@@ -1601,7 +1630,7 @@ vid_disp_other:
 ; accepts that pairing as one nobody built.
 ;
 ; THE SECONDARY IS BROUGHT UP BY MAKING IT MOMENTARILY CURRENT. vid_apply is
-; the only routine that turns a vid_tab row into the eighteen words a display
+; the only routine that turns a vid_tab row into the nineteen words a display
 ; owns plus everything derived from them, and it writes the LIVE block - so
 ; this sets [vid_kind], calls it, and banks the answer. vid_setmode then
 ; programmes the right card by construction rather than by argument: it reads
@@ -1786,7 +1815,7 @@ vid_disp_relayout:
     call vid_disp_init
     call desk_rowcalc
     call wm_refit
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; vid_desk_union - the desktop spans every display (SPEC.md 39.16)

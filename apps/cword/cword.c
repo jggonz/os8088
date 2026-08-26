@@ -1365,7 +1365,7 @@ static void cw_draw_run(int c0, int c1, int x0, int y, int a)
      *
      * BOLD IS A SECOND COMPOSE AND NOT A SECOND CALL: composing the run again
      * one pixel right into the SAME band costs no drawing floor at all, where
-     * the fixed arm below has to pay a whole os88_font_str() for it.
+     * the fixed arm below has to pay a whole os88_font_str_xparent() for it.
      *
      * ITALIC IS DRAWN UPRIGHT, DELIBERATELY. The fixed arm shears the KERNEL's
      * glyphs, so in a chosen face it would letter one run in a different
@@ -1406,9 +1406,9 @@ static void cw_draw_run(int c0, int c1, int x0, int y, int a)
     if (a & (CW_A_BOLD | CW_A_ITAL))
         os88_set_color(OS88_BLACK);
     if (a & CW_A_BOLD)
-        os88_font_str(x + 1, y, cw_rt);
+        os88_font_str_xparent(x + 1, y, cw_rt);
     if (a & CW_A_ITAL)
-        os88_font_str(x + 1, y - 1, cw_rt);
+        os88_font_str_xparent(x + 1, y - 1, cw_rt);
     cw_draw_rules(x, w, y, a, c0, c1, x0);
 }
 

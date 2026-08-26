@@ -133,8 +133,13 @@ TMM_RAM_Y   equ 4               ; 'RAM nnn/nnnK [] HEAP nnn/nnnK' - the
                                 ; conventional map's caption, both figures
 TMM_M1_Y1   equ 14              ; conventional-memory map frame top
 TMM_M1_Y2   equ 29              ; frame bottom (interior rows 15..28)
-TMM_HSQ_X   equ 105             ; the claim swatch, centred in the two-space
-                                ; gap between the RAM and HEAP figure pairs
+TMM_HSQ_X   equ 108             ; the claim swatch, centred in the two-space
+                                ; gap between the RAM and HEAP figure pairs.
+                                ; It was 105, when this line alone lettered
+                                ; from the band's edge + 6 instead of TM_PEN;
+                                ; the line is a tm_lrun now, so the gap is
+                                ; [104,119] and an 8px square centred in it
+                                ; starts here (SPEC.md 28.5.3)
 TMM_XMS_Y   equ 33              ; 'XMS nnn/nnnK' - memory above 1MB
                                 ; (SPEC.md 41), directly BELOW the map
                                 ; because that is where it is NOT: the map
@@ -268,6 +273,20 @@ TM_PEN      equ 8               ; the process list's and the captions' inset
                                 ; memory list's own inset was already 16. Two
                                 ; pixels of margin bought the whole window
                                 ; font_run's single-store path
+; SPEC.md 28.5.1: cells in one caption line, so a padded run covers the band
+; tm_rowfill used to erase. Asserted, because "the run is its own erase" is only
+; true if it reaches exactly TM_RW.
+TM_LCELLS   equ (TM_RW - TM_PEN + 1) / 8
+%if TM_LCELLS * 8 != TM_RW - TM_PEN + 1
+  %error "TM_RW - TM_PEN + 1 must be a whole number of 8px cells for tm_lrun"
+%endif
+; ...and tm_lrun pads INTO tm_str, so the buffer has to hold a full band plus
+; its NUL. The RAM line is 27 characters and TM_LCELLS is 27, so this is EXACT
+; rather than comfortable: it is the padding, not any label, that would be the
+; first thing to write past the end of .bss if TM_RW grew.
+%if TM_LCELLS + 1 > TM_STRMAX
+  %error "tm_str cannot hold a padded tm_lrun band - widen TM_STRMAX"
+%endif
 TM_MPEN     equ 16              ; ...and the memory list's, which leaves the
                                 ; band's first ten pixels for the legend
                                 ; square and was already aligned
@@ -1763,7 +1782,9 @@ tm_draw_perf:
     push dx
     add cx, TM_PEN              ; the PEN, not the band's left edge: the
     mov si, tm_s_hdr            ; captions have to stand over the columns
-    call OSAPI_FONT_STR               ; they name, and tm_rows letters from here
+    mov ax, (CWHITE << 8) | CBLACK  ; they name, and tm_rows letters from here
+    call OSAPI_FONT_RUN         ; opaque, over the content fill W_PAINT just
+                                ; laid down (SPEC.md 28.5.2)
     pop dx
     pop cx
     add cx, TM_COLW
@@ -1956,7 +1977,8 @@ tm_draw_mem:
     push dx
     add cx, 16
     mov si, tm_s_mhdr
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN         ; opaque (SPEC.md 28.5.2)
     pop dx
     pop cx
     add cx, TM_COLW
@@ -2077,19 +2099,11 @@ tm_cap_xms:
     call tm_elchk
     jc .out
 
-    mov ax, TMM_XMS_Y
-    call tm_lfill
-    jnc .draw                   ; a clip edge crosses it: neither half draws,
-    mov word [bx], 0            ; so the key must not stand either
-    jmp short .out
-.draw:
-    TM_INK CBLACK
-    mov cx, [tm_cx]
-    add cx, TM_PEN              ; 8, not the 6 this was: SPEC.md 11.94.3. The
-    mov dx, [tm_cy]             ; band tm_lfill erases still starts at 6, so
-    add dx, TMM_XMS_Y                  ; what moves is two pixels of white margin
-    mov si, tm_str
-    call OSAPI_FONT_STR
+    mov ax, TMM_XMS_Y              ; SPEC.md 28.5.1: placed, padded and drawn as
+    call tm_lrun                ; ONE opaque run - no fill, no blank interval
+    jnc .out
+    mov word [bx], 0            ; a clip edge crossed it: nothing was drawn, so
+                                ; the key just recorded would keep it stale
 .out:
     pop di
     pop si
@@ -3221,19 +3235,11 @@ tm_cap_htot:
     call tm_elchk
     jc .out
 
-    mov ax, TMH_TOT_Y
-    call tm_lfill
-    jnc .draw
+    mov ax, TMH_TOT_Y              ; SPEC.md 28.5.1: placed, padded and drawn as
+    call tm_lrun                ; ONE opaque run - no fill, no blank interval
+    jnc .out
     mov word [bx], 0            ; a clip edge crossed it: nothing was drawn, so
-    jmp short .out              ; the key just recorded would keep it stale
-.draw:
-    TM_INK CBLACK
-    mov cx, [tm_cx]
-    add cx, TM_PEN              ; 8, not the 6 this was: SPEC.md 11.94.3. The
-    mov dx, [tm_cy]             ; band tm_lfill erases still starts at 6, so
-    add dx, TMH_TOT_Y                  ; what moves is two pixels of white margin
-    mov si, tm_str
-    call OSAPI_FONT_STR
+                                ; the key just recorded would keep it stale
 .out:
     pop di
     pop si
@@ -3303,19 +3309,11 @@ tm_cap_hspl:
     call tm_elchk
     jc .out
 
-    mov ax, TMH_SPL_Y
-    call tm_lfill
-    jnc .draw
-    mov word [bx], 0
-    jmp short .out
-.draw:
-    TM_INK CBLACK
-    mov cx, [tm_cx]
-    add cx, TM_PEN              ; 8, not the 6 this was: SPEC.md 11.94.3. The
-    mov dx, [tm_cy]             ; band tm_lfill erases still starts at 6, so
-    add dx, TMH_SPL_Y                  ; what moves is two pixels of white margin
-    mov si, tm_str
-    call OSAPI_FONT_STR
+    mov ax, TMH_SPL_Y              ; SPEC.md 28.5.1: placed, padded and drawn as
+    call tm_lrun                ; ONE opaque run - no fill, no blank interval
+    jnc .out
+    mov word [bx], 0            ; a clip edge crossed it: nothing was drawn, so
+                                ; the key just recorded would keep it stale
 .out:
     pop di
     pop si
@@ -3372,19 +3370,11 @@ tm_cap_hfrg:
     call tm_elchk
     jc .out
 
-    mov ax, TMH_FRG_Y
-    call tm_lfill
-    jnc .draw
-    mov word [bx], 0
-    jmp short .out
-.draw:
-    TM_INK CBLACK
-    mov cx, [tm_cx]
-    add cx, TM_PEN              ; 8, not the 6 this was: SPEC.md 11.94.3. The
-    mov dx, [tm_cy]             ; band tm_lfill erases still starts at 6, so
-    add dx, TMH_FRG_Y                  ; what moves is two pixels of white margin
-    mov si, tm_str
-    call OSAPI_FONT_STR
+    mov ax, TMH_FRG_Y              ; SPEC.md 28.5.1: placed, padded and drawn as
+    call tm_lrun                ; ONE opaque run - no fill, no blank interval
+    jnc .out
+    mov word [bx], 0            ; a clip edge crossed it: nothing was drawn, so
+                                ; the key just recorded would keep it stale
 .out:
     pop di
     pop si
@@ -3447,7 +3437,8 @@ tm_draw_heap:
     push dx
     add cx, TM_MPEN
     mov si, tm_s_hhdr
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN         ; opaque (SPEC.md 28.5.2)
     pop dx
     pop cx
     add cx, TM_COLW
@@ -3701,23 +3692,80 @@ tm_mrow_nolast:
 ; Both views' row loops erase before they letter, and only once they know the
 ; row changed, so the rect lives in one place rather than in each of them.
 ; -----------------------------------------------------------------------------
-; tm_lfill is the same band named by a CONTENT-RELATIVE y, which is how the
-; caption lines above the list ask for it. They are chrome and live in column 0
-; whatever the list is doing, so this says so rather than relying on being
-; called before the row loop has moved [tm_rowx] - every row draw sets it back
-; through tm_row_place, so putting it back here costs nothing.
-tm_lfill:
+; It had a twin, tm_lfill, which named the same band by a CONTENT-RELATIVE y
+; for the caption lines above the list. Every caption is a tm_lrun now - the
+; padding IS the erase (SPEC.md 27.2), because a caption band is exactly a
+; glyph tall - so nothing erases a caption any more and the twin is gone.
+
+; -----------------------------------------------------------------------------
+; tm_lrun - a caption line, placed and drawn as ONE OPAQUE RUN (SPEC.md 28.5.1)
+;
+; in:  AX = the line's content-relative y; tm_str composed and NUL-terminated
+; out: CF = 0 it was drawn, CF = 1 the clip region refused it and NOTHING was
+;      drawn - the caller must then clear its check word, or the line stays
+;      stale behind whatever uncovers it
+; clobbers: nothing else (flags)
+;
+; This replaces tm_lfill + a font_str at four call sites. The pair wrote every
+; pixel of the band twice - white, then the glyphs over it - and left it BLANK
+; in between, which on a 4.77MHz machine is visible (SPEC.md 6.6). Padding
+; tm_str to the band's full width instead makes the run its own erase (27.2),
+; so there is no fill and no blank interval.
+;
+; THE GEOMETRY HAS TO LINE UP EXACTLY and it is asserted rather than trusted:
+; the band runs from the pen to TM_RW inclusive, and TM_LCELLS cells of 8px
+; must cover precisely that. The two pixels tm_rowfill used to whiten to the
+; LEFT of the pen are not covered and do not need to be - nothing ever writes
+; there, so what is on them is the page's own white.
+tm_lrun:
     push ax
-    mov ax, [tm_cx]
-    mov [tm_rowx], ax
-    pop ax
-    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov cx, [tm_cx]
+    mov [tm_rowx], cx
     add ax, [tm_cy]
     mov [tm_rowy], ax
-    call tm_rowok               ; a caption erases a band and then letters it,
-    jc .out                     ; so BOTH halves answer to one test and the
-    call tm_rowfill             ; caller skips its font_str on CF=1 (SPEC.md
-.out:                           ; 11.3's granularity rule)
+    call tm_rowok
+    jc .out
+
+    mov di, tm_str              ; pad to the band's width, in place
+    xor cx, cx
+.len:
+    cmp byte [di], 0
+    je .lend
+    inc di
+    inc cx
+    cmp cx, TM_LCELLS
+    jb .len
+.lend:
+    mov ax, TM_LCELLS
+    sub ax, cx                  ; ...however many spaces that takes
+    jbe .term                   ; already the full width, or over it
+    mov cx, ax
+    mov al, ' '
+.sp:
+    mov [di], al
+    inc di
+    loop .sp
+.term:
+    mov byte [di], 0
+
+    mov cx, [tm_cx]
+    add cx, TM_PEN
+    mov dx, [tm_rowy]
+    mov si, tm_str
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the pane's own ground
+    call OSAPI_FONT_RUN
+    clc                         ; ...and CF = 0 says so. The pops below write
+.out:                           ; no flags, so tm_rowok's CF survives them
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -4452,29 +4500,18 @@ tm_txt_ram_y:
     call tm_elchk
     jc .out
 
-    mov ax, [tm_liny]
-    call tm_lfill               ; only NOW is the line worth erasing
+    mov ax, [tm_liny]           ; SPEC.md 28.5.1: placed, padded and drawn as
+    call tm_lrun                ; ONE opaque run - no fill, no blank interval
     jnc .draw                   ; ...unless a clip edge crosses it, in which
     mov word [bx], 0            ; case nothing was drawn and the key tm_elchk
     jmp short .out              ; just recorded is a lie that would keep this
 .draw:                          ; line stale until its content moved again
-    TM_INK CBLACK
-    mov cx, [tm_cx]
-    add cx, 6
-    mov dx, [tm_cy]
-    add dx, [tm_liny]
-    mov si, tm_str
-    call OSAPI_FONT_STR
-
     cmp byte [tm_view], 0
     je .out
-    mov ax, [tm_cy]             ; ...and the claim legend square, last, over
-    add ax, [tm_liny]           ; the gap the string just lettered white
-    mov [tm_rowy], ax
-    mov word [tm_sqox], TMM_HSQ_X
-    mov si, tm_pat_clm
-    call tm_sq_pat
-.out:
+    mov word [tm_sqox], TMM_HSQ_X   ; ...and the claim legend square, last, over
+    mov si, tm_pat_clm              ; the gap the run just lettered white.
+    call tm_sq_pat                  ; [tm_rowx]/[tm_rowy] are tm_lrun's - it
+.out:                               ; places the band before it draws it
     pop di
     pop si
     pop dx

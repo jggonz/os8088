@@ -267,6 +267,88 @@ def main():
                  % len(j_bad))
     print("os88ovlchk: no tail call reaches a cw_ shim")
 
+    # --- and a routine's RETURN KIND matches how it is called ---------------
+    # `ret` pops two bytes and `retf` pops four.  Get it the wrong way round
+    # and the machine does not fault: it resumes at whatever the next word on
+    # the stack happens to name, which on a task stack is live data.  Nothing
+    # else here can see it - the near-call check above is about the CALL's
+    # displacement and says nothing about the RETURN.
+    #
+    # It became checkable, and necessary, when SPEC.md 2.6.1 deleted 84 of the
+    # `Xf_: call Y_x / retf` thunks by giving the body a `retf` of its own.
+    # That is a 340-byte saving and one keystroke away from a wild jump: a
+    # future near `call Y_x` from inside the same segment assembles perfectly
+    # and returns into nowhere.  This is the rule that refuses it, and it
+    # caught two real ones the first time it ran (two bodies had a SECOND
+    # thunk nobody had noticed).
+    #
+    # A proc is classified by the return instructions inside its extent - from
+    # its label to the next top-level one.  Anything mixed, or holding an
+    # `iret`, is not classified and not judged: an interrupt handler and a
+    # dual-entry routine are both legitimate and neither is this rule's
+    # business.  An INDIRECT call (`call bx`, a `dw` table) is invisible here
+    # exactly as it is to the near-call check, and stays a review rule.
+    RETI = re.compile(r'^\s*(?:[A-Za-z_.]\w*:\s*)?(ret|retf|retn|iret)\b', re.I)
+    TOPL = re.compile(r'^([A-Za-z_]\w*):')
+    FARC = re.compile(r'\bcall\s+(?:far\s+)?\w+\s*:\s*([A-Za-z_]\w*)')
+    NRC  = re.compile(r'\bcall\s+(?:near\s+)?([A-Za-z_]\w*)\s*$')
+    #
+    # A LABEL IS COLLECTED AS A LIST OF EXTENTS, NOT AS ONE.  `%ifdef
+    # KERN_BIG` / `%else` is the ordinary shape for a routine whose small-
+    # kernel answer is a refusing stub, so `X_x` is TWO extents in one file -
+    # and this used to keep one entry per label, `rets[cur] = seen`, so
+    # whichever arm came last in the file classified the label and the other
+    # arm was never looked at.  osapi_drv_dlg_x is exactly that: `ret` in the
+    # KERN_BIG body, `retf` in the stub, far-called from the resident
+    # trampoline - and the stub's retf waved the shipped kernel's near return
+    # through.  Merging the arms into one set is the WRONG repair and was
+    # tried: kindof() already declines to judge a mixed extent, so merging
+    # turns a reported defect into an unreported one.  Each definition is
+    # classified on its own and a call is refused if ANY of them disagrees.
+    rets = {}
+    for f in files:
+        cur, seen = None, set()
+        for sect, n, line in sections(f):
+            m = TOPL.match(line)
+            if m:
+                if cur:
+                    rets.setdefault(cur, []).append(seen)
+                cur, seen = m.group(1), set()
+            r = RETI.match(line)
+            if r and cur:
+                seen.add(r.group(1).lower())
+        if cur:
+            rets.setdefault(cur, []).append(seen)
+
+    def kind1(r):
+        if not r or 'iret' in r:
+            return None
+        if r == {'retf'}:
+            return 'far'
+        if r <= {'ret', 'retn'}:
+            return 'near'
+        return None                  # mixed: not this rule's business
+
+    def kinds(lab):
+        # every definition's classification, the unjudgeable ones dropped
+        return set(k for k in map(kind1, rets.get(lab, ())) if k)
+
+    r_bad = []
+    for f in files:
+        for sect, n, line in sections(f):
+            for lab in FARC.findall(line):
+                if 'near' in kinds(lab):
+                    r_bad.append((f, n, lab, 'far-called, ends in a NEAR ret'))
+            m = NRC.search(line)
+            if m and 'far' in kinds(m.group(1)):
+                r_bad.append((f, n, m.group(1), 'near-called, ends in RETF'))
+    for f, n, lab, why in r_bad:
+        print("%s:%d: %s is %s" % (f, n, lab, why), file=sys.stderr)
+    if r_bad:
+        sys.exit("os88ovlchk: %d return-kind mismatch(es) - SPEC.md 2.6.1 (a "
+                 "far entry ends in retf and is never near-called)" % len(r_bad))
+    print("os88ovlchk: every return kind matches how the routine is called")
+
 
 if __name__ == '__main__':
     main()

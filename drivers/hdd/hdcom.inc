@@ -2,7 +2,7 @@
 ; os8088 - HDD.DRV / hdcom.inc
 ;
 ; Code and scratch that BOTH images need, assembled into each of them
-; (SPEC.md 52.11). Nothing in here crosses the segment boundary: each image
+; (SPEC.md 52.12). Nothing in here crosses the segment boundary: each image
 ; gets its own copy of these routines and its own copy of the data they work
 ; on, and that is the point - a far call per decimal digit would be absurd,
 ; and a shared line buffer would be a second thing to keep in step.
@@ -37,6 +37,11 @@ hd_sel:      db 0               ; the device row the page (or the tool) shows
 hd_devs:     times HD_MAXDEV * HDD_SIZE db 0
 
 hd_rowslot:  db 0               ; a row painter's loop index
+; The pair every label on this driver's two surfaces is lettered in (SPEC.md
+; 52.12): AL = ink, AH = the ground under it. A driver cannot read [gfx_color]
+; back any more than a package can - there is no OSAPI_GET_COLOR - so a row
+; whose pen is chosen at a branch keeps its pair here instead.
+hd_pair:     dw (CWHITE << 8) | CBLACK
 hd_line:     times 64 db 0      ; one line of text under construction
 hd_lineptr:  dw 0               ; ...and where hd_scat/hd_utoa left off
 

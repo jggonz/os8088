@@ -104,6 +104,15 @@ MEM_K_CLONE equ 0xFF09          ; the disk cloner's buffer (SPEC.md 18.99) -
                                 ; the job block AND the sectors in flight, so
                                 ; freeing it is the whole of the operation's
                                 ; teardown; held for exactly one clone
+MEM_K_BAND equ 0xFF0A           ; the 1bpp band composer's buffer (SPEC.md
+                                ; 5.9.2) - taken ONCE at boot and never freed,
+                                ; because a composer with nowhere to compose
+                                ; is a composer that silently stops composing.
+                                ; Claimed rather than declared in .bss for the
+                                ; obvious reason: 2KB of KERN_BUDGET buys a
+                                ; 128px band and 2KB of the arena buys a band
+                                ; as wide as the screen, and SPEC.md 5.9.1's
+                                ; cost is per CHUNK
 MEM_K_CLIP equ 0xFF07           ; the system clipboard's text (SPEC.md 55) -
                                 ; sized to what is in it, freed when it is
                                 ; emptied, and deliberately NOT an instance's,
@@ -259,7 +268,7 @@ mem_init_x:
     pop di
     pop cx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; mem_claim / mem_claim_hi / mem_claim_dma - claim a block of the heap
@@ -730,8 +739,12 @@ mem_shed_one:
     stc
 .out:
     pop di
-    pop dx
-    pop si
+    pop si                      ; SI BEFORE DX - the pair was crossed here, and
+    pop dx                      ; SI is mem_claim_x's PARAMETER (SPEC.md
+                                ; 50.6.4.1): the shed-and-retry restaged the
+                                ; caller's DX as [mem_dma], which is half of
+                                ; the very defect mem_claim_1's header
+                                ; describes, through a different door
     pop cx
     pop bx
     pop ax
@@ -1137,7 +1150,7 @@ mem_is_region:
 ; putting them behind one predicate is that they lift in one place.
 ; -----------------------------------------------------------------------------
 mem_busy_seg:
-    call KERNEL_SEG:cw_inst_seg_parked  ; CF = 0: no worker, or one that has
+    call KERNEL_SEG:inst_seg_parked     ; CF = 0: no worker, or one that has
     jnc .free                           ; PARKED at OSAPI_TASK_ALIVE (66.5).
                                         ; A segment matching no instance -
                                         ; a driver's image - answers CF = 1,
@@ -1554,7 +1567,7 @@ mem_cp_unpark:
     cmp byte [mem_parked], 0
     je .out
     mov byte [mem_parked], 0
-    call KERNEL_SEG:cw_inst_park_end
+    call KERNEL_SEG:inst_park_end
 .out:
     popf
     ret
@@ -1841,7 +1854,7 @@ mem_free_rec_x:
     pop cx
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; mem_avail - how much heap is there, and how much of it in one piece?
@@ -2049,7 +2062,7 @@ mem_owned_kb_x:
     shr ax, cl
     pop si
     pop cx
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; mem_claimed_kb / mem_kernel_kb - the Task Manager's two heap terms
@@ -2241,7 +2254,7 @@ osapi_mem_regrow_x:
     call mem_regrow
 .out:
     pop bx                      ; pop leaves CF and DX alone
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; osapi_mem_movable - in: DX = the claim, AX = your relocation proc (0 pins it
@@ -2262,7 +2275,7 @@ osapi_mem_movable_x:
     call mem_movable_x
 .out:
     pop bx
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; osapi_mem_avail - in: nothing; out: AX = largest free KB, BX = total free KB
@@ -2298,7 +2311,7 @@ osapi_cm_alloc_x:
     mov ax, dx                  ; main's contract: AX = the base segment
     pop dx
     pop cx
-    ret
+    retf
 .refuse:
     xor ax, ax                  ; main's failure codes: 0 = no arena at all,
     mov dx, [mem_top]           ; 1 = no record, 2 = no run. The heap does
@@ -2309,14 +2322,14 @@ osapi_cm_alloc_x:
     pop dx
     pop cx
     stc
-    ret
+    retf
 
 osapi_cm_free_x:
     push dx                     ; in: AX = the base segment; out: CF, with
     mov dx, ax                  ; AX preserved - main's contract, so the
     call osapi_mem_free_x         ; heap's DX-in shape is hidden here
     pop dx
-    ret
+    retf
 
 osapi_cm_caps_x:
     push cx
@@ -2340,7 +2353,7 @@ osapi_cm_caps_x:
     mov bh, ch                  ; the caller's BH back (BL <= MEM_MAX)
     pop si
     pop cx
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; mem_own - the calling package's owner word (module-internal)
@@ -2587,7 +2600,7 @@ osapi_sys_kb_x:
     pop di
     pop bx
     pop ax
-    ret
+    retf
 
 ; =============================================================================
 ; Far entries (SPEC.md 2.6): the resident thunks in kernel.asm far-call these,
@@ -2608,25 +2621,11 @@ mmf_mem_free:             call mem_free_x
                       retf
 mmf_mem_free_owner:       call mem_free_owner_x
                       retf
-mmf_mem_free_rec:         call mem_free_rec_x
-                      retf
-mmf_mem_init:             call mem_init_x
-                      retf
 mmf_mem_movable:          call mem_movable_x
-                      retf
-mmf_osapi_mem_movable:    call osapi_mem_movable_x
-                      retf
-mmf_mem_owned_kb:         call mem_owned_kb_x
                       retf
 mmf_mem_owner_of:         call mem_owner_of_x
                       retf
 mmf_osapi_claim_snapshot: call osapi_claim_snapshot_x
-                      retf
-mmf_osapi_cm_alloc:       call osapi_cm_alloc_x
-                      retf
-mmf_osapi_cm_caps:        call osapi_cm_caps_x
-                      retf
-mmf_osapi_cm_free:        call osapi_cm_free_x
                       retf
 mmf_osapi_mem_avail:      call osapi_mem_avail_x
                       retf
@@ -2635,10 +2634,6 @@ mmf_osapi_mem_claim:      call osapi_mem_claim_x
 mmf_osapi_mem_claim_dma:  call osapi_mem_claim_dma_x
                       retf
 mmf_osapi_mem_free:       call osapi_mem_free_x
-                      retf
-mmf_osapi_mem_regrow:     call osapi_mem_regrow_x
-                      retf
-mmf_osapi_sys_kb:         call osapi_sys_kb_x
                       retf
 
 

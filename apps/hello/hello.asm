@@ -82,8 +82,8 @@ hl_paint:
     mov bx, si
     call OSAPI_WM_CONTENT            ; AX = content left, DX = content top
     mov bx, ax                      ; keep the content left in BX
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
+                                    ; ...and no pen: hl_line is an OPAQUE run
+                                    ; now and nothing else here draws
     mov al, [hl_page]               ; 0 or 1: hl_oncmd is its only writer
     xor ah, ah
     shl ax, 1
@@ -118,7 +118,8 @@ hl_line:
     sub cx, ax
     shr cx, 1
     add cx, bx
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the content's own ground:
+    call OSAPI_FONT_RUN             ; W_PAINT arrives white-filled
     pop cx
     pop ax
     ret

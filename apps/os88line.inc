@@ -291,6 +291,149 @@ os88line_draw:
     ret
 
 ; -----------------------------------------------------------------------------
+; os88line_cell - where a buffer index sits on the glass (internal)
+; in:  SI = the block, AX = a buffer index
+; out: CF=1 = it is outside the visible span, and NOTHING may be drawn for it.
+;      CF=0: AX = the cell's left column, DX = the glyph band's top row,
+;      BX -> that character in the buffer. CX is clobbered either way.
+;
+; THE PEN IS os88line_pen's AND THE BAND IS os88line_draw's. A cell repainted
+; from arithmetic of its own lands beside the one that was drawn rather than
+; on it, which is os88line_click's note (SPEC.md 22's fm_hit discipline) with
+; a third party in it.
+;
+; The carry is not defensiveness: LN_VIEW can have scrolled since the caret
+; was put on the glass, and a cell repainted at a stale column is ink LEFT
+; BEHIND rather than a repaint that did not happen (SPEC.md 77.45.2).
+; -----------------------------------------------------------------------------
+os88line_cell:
+    push di
+    mov bx, [si+LN_BUF]
+    add bx, ax                  ; BX -> the character, before AX becomes a
+                                ; screen column
+    mov di, ax
+    sub di, [si+LN_VIEW]
+    js .no                      ; scrolled off the left...
+    call os88line_cols          ; CX = the columns the box shows
+    cmp di, cx
+    jae .no                     ; ...or off the right
+    mov dx, [si+LN_Y1]
+    add dx, LN_INSET            ; the glyph band's top row: the 8 rows the bar
+                                ; covers and the 8 the character occupies are
+                                ; the SAME 8, which is what os88line_draw's
+                                ; caret note is about
+    call os88line_pen           ; AX = the aligned pen
+    mov cx, di
+    shl cx, 1                   ; x8, three shifts: an 8086 shifts by 1 or by
+    shl cx, 1                   ; CL and by nothing else, and CL is not free
+    shl cx, 1                   ; here (SPEC.md 1)
+    add ax, cx
+    pop di
+    clc
+    ret
+.no:
+    pop di
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; os88line_caron - put the caret ON the glass, and touch nothing else
+; in:  SI = the block, AX = the buffer index to put it at; the gfx lock held
+; out: nothing; all registers preserved
+;
+; The same 1px bar os88line_draw ends with, drawn from the same two routines,
+; so a field that is repainted whole and one that is not cannot disagree about
+; where its caret is.
+; -----------------------------------------------------------------------------
+os88line_caron:
+    push ax
+    push bx
+    push cx
+    push dx
+    call os88line_cell
+    jc .out
+    mov bx, dx                  ; the bar's rows are the glyph band's
+    mov dx, bx
+    add dx, 7
+    mov cx, ax                  ; ...and a 1px bar is x1 = x2
+    push ax
+    mov al, CBLACK
+    UI_INK
+    pop ax
+    UI_FILL
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; os88line_caroff - take the caret OFF, and put back what it was covering
+; in:  SI = the block, AX = the buffer index it is at; the gfx lock held
+; out: nothing; all registers preserved
+;
+; ONE OPAQUE CELL (SPEC.md 6.1): the character under the bar is drawn again,
+; ground and glyph in a single pass, so the bar is gone and the character
+; never blinks on the way. A white fill of the cell followed by the character
+; would be PERFORMANCE.md Part 1's erase-and-letter pair on one cell, which is
+; the flicker this file's pen alignment exists to avoid.
+;
+; The 1px bar is drawn at the LEFT edge of its cell and the cell is 8 wide, so
+; repainting the whole cell is the smallest thing that certainly covers it -
+; and it is also the ONLY thing that covers it when the glyph has ink in
+; column 0, which several of the kernel's do.
+;
+; Past the end of the text there is no character to draw, and the cell is
+; simply the white os88line_draw's strip fill left there.
+; -----------------------------------------------------------------------------
+os88line_caroff:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call os88line_cell
+    jc .out
+    cmp byte [bx], 0
+    je .blank
+    mov cl, [bx+1]              ; bank the byte the NUL will cover - the run is
+    mov byte [bx+1], 0          ; one character long and rarely ends at one,
+    push cx                     ; which is os88line_draw's trick for its reason
+    push si
+    mov si, bx                  ; ...SI is the TEXT for one call only
+    mov cx, ax
+    mov al, CBLACK
+    mov ah, CWHITE
+    UI_RUN
+    pop si
+    pop cx
+    mov [bx+1], cl              ; ...and the banked byte back
+    jmp short .out
+.blank:
+    mov bx, dx                  ; y1 = the band's top, y2 = 8 rows down
+    add dx, 7
+    mov cx, ax
+    add cx, 7                   ; ...and the whole 8px cell across
+    push ax
+    mov al, CWHITE
+    UI_INK
+    pop ax
+    UI_FILL
+    mov al, CBLACK              ; ...AND THE PEN BACK. fd_clear_content's bug
+    UI_INK                      ; is what a colour left behind looks like two
+                                ; callers later (SPEC.md 77.14.1)
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; os88line_key - one keystroke
 ; in:  SI = the block, AL = ascii, AH = scan code
 ; out: CF=0 the field used it (redraw the field); CF=1 it is the caller's -
@@ -429,6 +572,32 @@ os88line_end:
     ret
 
 ; -----------------------------------------------------------------------------
+; os88line_hit - is the point CX,DX inside this field? NOTHING IS MOVED
+; in:  SI = the block, CX = x, DX = y (screen)
+; out: CF=0 = inside, CF=1 = outside; every register preserved, flags aside
+;
+; os88line_click's first half, published on its own because a caller that
+; repaints only the CARET has to know which field is about to take the press
+; before the press lands: once os88line_click has answered, the column the old
+; bar was at is gone and the two cells that changed cannot be named any more
+; (SPEC.md 77.45.1).
+; -----------------------------------------------------------------------------
+os88line_hit:
+    cmp cx, [si+LN_X1]
+    jb .no
+    cmp cx, [si+LN_X2]
+    ja .no
+    cmp dx, [si+LN_Y1]
+    jb .no
+    cmp dx, [si+LN_Y2]
+    ja .no
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
 ; os88line_click - CX = x, DX = y, SI = the block
 ; out: CF=0 it was inside: FOCUS IS SET and the caret placed at the column
 ;      clicked; CF=1 it was outside and the block is untouched
@@ -439,14 +608,8 @@ os88line_end:
 ; -----------------------------------------------------------------------------
 os88line_click:
     push ax
-    cmp cx, [si+LN_X1]
-    jb .no
-    cmp cx, [si+LN_X2]
-    ja .no
-    cmp dx, [si+LN_Y1]
-    jb .no
-    cmp dx, [si+LN_Y2]
-    ja .no
+    call os88line_hit           ; ...the SAME test, so a caller that asks first
+    jc .no                      ; and a caller that does not cannot disagree
     push dx                     ; ...FROM THE SAME PEN THE PAINTER USED, or
     call os88line_pen           ; the drawn caret and the clicked one part
     mov dx, ax                  ; company by up to 7px (SPEC.md 22's fm_hit

@@ -47,9 +47,15 @@ import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
 import dispcp                                               # noqa: E402
+from os88geom import (VID_CTX_SZ, VID_CTX_VX,          # noqa: E402
+                      VID_CTX_VY, VID_CTX_CW, VID_CTX_CH)
+# SPEC.md 39.14's per-display record: DERIVED from VID_CTX_W and never
+# written down here. Nine scripts had `VID_CTX_SZ = 42` by hand and the
+# record has grown TWICE under them - the last time silently, because the
+# constant that moved was a DERIVED one and os88geom's scanner was only
+# looking at the mirrored ones. It is looking at both now.
 
 TITLE_H = 18
-VID_CTX_SZ, VID_CTX_CW, VID_CTX_VX = 42, 14, 36
 
 # The reference leg runs a KNOB BUILD, and os88sym re-assembles the kernel to
 # read its map - so it has to be told the same define the Makefile passed, or

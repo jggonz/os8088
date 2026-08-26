@@ -13,12 +13,18 @@ three framed buttons, a +/- pair, device ROWS and editor FIELDS.
 The signal for the firing cases is the MOUNT STATE, read out of the kernel's
 own volume table, because that is memory rather than a picture.
 
-  A  press Mount, slide OFF the pane, release  -> NOT mounted
+  A  press the mount button, slide OFF the pane, release -> UNCHANGED
   B  ...and the button came back UP while held (the tracking edge)
-  C  press AND release on Mount                -> MOUNTED
+  C  press AND release on it                             -> CHANGED
   D  a press draws it DOWN
   E  a device ROW still selects on the PRESS   -> the safe prefix action
      (13.6) keeps it, and mode 2 is what tells the two species apart
+
+**C is a CHANGE and not a mount**, and that is SPEC.md 52.6.1 rather than
+vagueness: ticking the driver in mounts every drive it found, so by the time
+this page is on screen the button says `Unmount` and firing it drops the
+volumes. Which direction it goes is the disk's business; that the RELEASE and
+only the release moves it is this test's.
 
 C is the one that says the conversion did not eat the feature; E is the one
 that says mode 2 works, and a build that had made the whole ladder
@@ -65,7 +71,8 @@ CP_DBY1, CP_DROWH = 20, 26         # ...the Drivers page's hit bands
 CP_IDRV = 2
 TITLE_H = 18
 HDP_BY, HDP_BH = 82, 16            # page.inc: the button row
-HDP_B1X, HDP_BW1 = 78, 72          # ...Mount / Unmount
+HDP_B1X, HDP_BW1 = 146, 72         # ...Mount / Unmount, LAST on the row
+                                   #    (SPEC.md 52.4)
 HDP_R0Y, HDP_ROWH = 17, 11         # ...the device rows
 HDP_EY = 63                        # ...and the C/H/S editor's row
 DRVR_SZ, DRVR_SEG = 16, 2
@@ -241,7 +248,9 @@ with M.launch(IMG, apps="build/apps360.img", machine=MACHINE) as m:
     mount = (cx + CP_RX + HDP_B1X, cy + HDP_BY,
              cx + CP_RX + HDP_B1X + HDP_BW1 - 1, cy + HDP_BY + HDP_BH - 1)
     mid = ((mount[0] + mount[2]) // 2, (mount[1] + mount[3]) // 2)
-    was = nvol(m)
+    was = nvol(m)                       # the tick above ALREADY mounted the
+                                        # disk (SPEC.md 52.6.1), so this is
+                                        # the count the release has to move
     print(f"  volumes mounted: {was}")
 
     # --- D: the press draws it DOWN ---------------------------------------
@@ -253,7 +262,7 @@ with M.launch(IMG, apps="build/apps360.img", machine=MACHINE) as m:
     mo._edge(True)
     time.sleep(0.9)
     down = lit(m, mono, inner)
-    check("a press draws Mount DOWN", down * 2 < up,
+    check("a press draws the mount button DOWN", down * 2 < up,
           f"({up} lit upright, {down} held - the interior, so a black fill "
           f"more than halves it)")
 
@@ -267,7 +276,7 @@ with M.launch(IMG, apps="build/apps360.img", machine=MACHINE) as m:
     # --- A: the release lands off it: NOTHING fires -----------------------
     mo._edge(False)
     quiet(m, 20.0)
-    check("a slide-off release does NOT mount", nvol(m) == was,
+    check("a slide-off release does NOT fire", nvol(m) == was,
           f"(dsk_nvol = {nvol(m)})")
 
     # --- C: press AND release on it: it mounts ----------------------------
@@ -276,7 +285,7 @@ with M.launch(IMG, apps="build/apps360.img", machine=MACHINE) as m:
     time.sleep(0.7)
     mo._edge(False)
     quiet(m, 30.0)
-    check("press-and-release ON Mount DOES mount", nvol(m) != was,
+    check("press-and-release ON it DOES fire", nvol(m) != was,
           f"(dsk_nvol = {nvol(m)}, was {was})")
 
     # --- E: a device ROW still selects on the PRESS -----------------------

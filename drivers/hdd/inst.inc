@@ -345,14 +345,13 @@ hd_iw_paint:
                                 ; first and is a whole content drawn a window's
                                 ; width to the right of where it belongs
 
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
     mov si, hd_s_ihead
     mov cx, di
     add cx, HIW_LX
     mov dx, bp
     add dx, HIW_HY
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the content's own ground
+    call OSAPI_FONT_RUN             ; (SPEC.md 52.12)
 
     call hd_irows_emit
 

@@ -182,13 +182,16 @@ dc_paint:
     mov al, CBLACK
     call OSAPI_SET_COLOR
     mov si, dc_r1
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     add dx, 14
     mov si, dc_r2
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     add dx, 14
     mov si, dc_r3
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     pop si
     pop dx
     pop cx

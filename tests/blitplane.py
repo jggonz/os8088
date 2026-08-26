@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+"""DOES SPEC.md 5.4.1.3's PLANAR DECODER DRAW THE SAME PIXELS - and how much
+faster?
+
+    make && python3 tests/blitplane.py
+
+Two runs of one script, one kernel each: the shipped one, and `NOPLANE=1`,
+which takes the decoder out and sends every run of a VGA blit back to
+vga_blit_span. Both must produce a framebuffer that is IDENTICAL to the
+pixel, and the shipped one must be several times quicker.
+
+WHY OS8088.GIF AND NOT A BLANK CANVAS. gfx_blit4 is priced per RUN on the
+span writer and per PIXEL on the decoder, so a picture that coalesces well
+cannot tell the two apart: a blank canvas is one run a row and stays on the
+span writer by design (5.4.1.3's row triage), and a test written against one
+would pass with the decoder deleted. The logo's ground is SPEC.md 63's 50%
+dither - 18,978 runs in 51,260 pixels - which is the case the decoder exists
+for and the case the field reported.
+
+BOTH PHASES, because the decoder has two. An odd destination x leaves the
+whole row one bit to the left of where it belongs and an `rcr` chain puts it
+back; a run does not care. Paint's window cannot be DRAGGED onto the other
+phase - every drag this harness can make lands it on x = 7 (mod 8), so the
+canvas is always even - so W_X is written directly and the window raised,
+which is the only way this side of the routine is entered at all.
+
+The apps disk is built here for the same reason tests/paintgif.py builds its
+own: the Open dialog then comes up on B:\\MEDIA with the GIF the only thing in
+it, and the association (SPEC.md 54) launches Paint with the picture already
+decoded, so not one navigation click is inside the measurement.
+"""
+import argparse
+import os
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "tools"))
+sys.path.insert(0, HERE)
+import os88marty, os88mouse, os88sym, dispcp                 # noqa: E402
+from os88geom import TITLE_H                                  # noqa: E402
+
+MIN_GAIN = 3.0                  # measured 6.2x even / 4.9x odd (Set 107).
+                                # Three is the floor a REGRESSION has to break
+                                # through, not the figure to quote
+
+
+def u16(b, i=0):
+    return b[i] | (b[i + 1] << 8)
+
+
+def shots(image, apps, machine, defines):
+    """(even-phase frame, odd-phase frame, even cycles, odd cycles)."""
+    os88sym.default_defines(*defines)
+    S = os88sym.linear
+    kbase = os88sym.KERNEL_SEG << 4
+    out = []
+    with os88marty.launch(image, apps=apps, machine=machine, boot=False) as m:
+        m.run()
+        os88marty.settle(m, gate=os88marty.desktop_up)
+        mo = os88mouse.Mouse(marty=m)
+        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        disk = dispcp.win_list(m, S)[-1]
+        bx, by = dispcp.win_rect(m, S, disk)[:2]
+        dispcp.open_named(m, mo, S, os88marty.settle, bx, by, "MEDIA")
+        os88marty.settle(m)
+        bx, by = dispcp.win_rect(m, S, disk)[:2]
+        rx, ry = dispcp.row_xy(bx, by,
+                               dispcp.scroll_to(m, mo, S, os88marty.settle,
+                                                bx, by,
+                                                dispcp.row_of(m, S,
+                                                              "OS8088.GIF")))
+        mo.to(rx, ry)
+        os88marty.settle(m)
+
+        # --- the canvas at its natural (even) x, bracketed entry to return
+        m.bp_exec("gfx_blit4")
+        mo.dblclick(rx, ry)
+        cyc_even, geom = _bracket(m, kbase)
+        m.bp_exec()
+        m.run()
+        os88marty.settle(m)
+        out.append(m.fbuf(card=0)[2])
+
+        # --- ...and one pixel over, which is the rcr pass
+        pw = [w for w in dispcp.win_list(m, S) if w != disk][-1]
+        px, py, pwid, _ = dispcp.win_rect(m, S, pw)
+        m.pause()
+        m.write(S("wm_wins") + pw * dispcp.WIN_SIZE + 2,
+                (px - 1).to_bytes(2, "little"))
+        m.run()
+        dx, dy = dispcp.win_rect(m, S, disk)[:2]
+        mo.click(dx + 60, dy + 9)                    # ...behind the disk
+        time.sleep(4)
+        m.bp_exec("gfx_blit4")
+        mo.click(px - 1 + pwid // 2, py + TITLE_H // 2)   # ...and back in front
+        cyc_odd, geom2 = _bracket(m, kbase)
+        m.bp_exec()
+        m.run()
+        os88marty.settle(m)
+        out.append(m.fbuf(card=0)[2])
+    return out[0], out[1], cyc_even, cyc_odd, geom, geom2
+
+
+def _bracket(m, kbase):
+    """Time the next gfx_blit4 from its entry to its RETURN.
+
+    The return address is read off the stack rather than assumed: gfx_blit4
+    has no exit symbol of its own, and a settle-shaped measurement would be
+    reporting the harness's quiet window rather than the primitive.
+    """
+    if not m.wait_stop(limit=300.0):
+        sys.exit("blitplane: gfx_blit4 never ran")
+    r = m.regs()
+    ret = u16(m.read((r["ss"] << 4) + r["sp"], 2))
+    print("      blit x=%d y=%d w=%d h=%d" % (r["ax"], r["bx"], r["cx"],
+                                              r["dx"]))
+    m.bp_exec(kbase + ret)
+    c0 = m.status()["cycles"]
+    m.run()
+    if not m.wait_stop(limit=600.0):
+        sys.exit("blitplane: gfx_blit4 never returned")
+    return (m.status()["cycles"] - c0,
+            (r["ax"], r["bx"], r["cx"], r["dx"]))
+
+
+def canvas_diff(a, b, geom, w=640):
+    """Differing pixels INSIDE the blitted rect, and their bounding box.
+
+    The rect and not the screen: the menu bar carries a running clock and the
+    pointer is drawn by the mouse ISR, so a whole-screen compare of two boots
+    is asking two machines to agree about the time. What is under test is the
+    block gfx_blit4 was handed, and the bracket above says exactly which one
+    that was.
+    """
+    x, y, bw, bh = geom
+    n = 0
+    box = None
+    for row in range(y, y + bh):
+        base = (row * w + x) * 3
+        if a[base:base + bw * 3] == b[base:base + bw * 3]:
+            continue
+        for col in range(x, x + bw):
+            i = (row * w + col) * 3
+            if a[i:i+3] != b[i:i+3]:
+                n += 1
+                box = ((min(box[0], col), min(box[1], row),
+                        max(box[2], col), max(box[3], row))
+                       if box else (col, row, col, row))
+    return n, box
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--image", default="build/os8088-360.img")
+    ap.add_argument("--apps", default="/tmp/blitplane.img")
+    ap.add_argument("--machine", default="os8088_xt_vga")
+    a = ap.parse_args()
+
+    if a.apps == "/tmp/blitplane.img" and not os.path.exists(a.apps):
+        subprocess.check_call(
+            [sys.executable, "tools/os88disk.py", "-o", a.apps, "--size",
+             "360", "APPS:build/paint.o88", "MEDIA:build/OS8088.GIF"])
+
+    print("   shipped kernel:")
+    fe, fo, ce, co, ge, go = shots(a.image, a.apps, a.machine, ())
+
+    # THIS ROW REBUILDS THE TREE, which no other one does, and the `finally`
+    # is not decoration: `make NOPLANE=1` writes build/kernel.bin, so a run
+    # that dies in the middle leaves the tree holding a kernel `make` did not
+    # put there - and every emulator row after it would then be driving a
+    # kernel its symbol map describes perfectly and nobody asked for. The
+    # knob image is COPIED out before the tree is put back, so the two
+    # captures are of two files rather than of one file twice.
+    ref = "/tmp/blitplane-noplane.img"
+    print("   NOPLANE=1 kernel: building")
+    try:
+        subprocess.check_call(["make", "NOPLANE=1", a.image],
+                              stdout=subprocess.DEVNULL)
+        subprocess.check_call(["cp", a.image, ref])
+        print("   NOPLANE=1 kernel:")
+        ne, no, rce, rco, nge, ngo = shots(ref, a.apps, a.machine,
+                                           ("NOPLANE",))
+    finally:
+        subprocess.check_call(["make"], stdout=subprocess.DEVNULL)
+
+    bad = 0
+    for name, x, y, g, ng in (("even", fe, ne, ge, nge),
+                              ("odd", fo, no, go, ngo)):
+        if g != ng:
+            print("   %-4s phase: the two kernels blitted DIFFERENT rects, "
+                  "%r against %r" % (name, g, ng))
+            bad += 1
+            continue
+        d, box = canvas_diff(x, y, g)
+        print("   %-4s phase: %d differing pixels in the %dx%d canvas%s"
+              % (name, d, g[2], g[3], "" if not box else " - box %r" % (box,)))
+        bad += d
+    for name, mine, theirs in (("even", ce, rce), ("odd", co, rco)):
+        gain = theirs / float(mine)
+        print("   %-4s phase: %d cycles against %d - %.2fx"
+              % (name, mine, theirs, gain))
+        if gain < MIN_GAIN:
+            print("blitplane: %s phase is only %.2fx (floor %.1f)"
+                  % (name, gain, MIN_GAIN))
+            bad += 1
+    if bad:
+        sys.exit("blitplane: FAILED")
+    print("blitplane: identical pixels, and %.2fx / %.2fx"
+          % (rce / float(ce), rco / float(co)))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

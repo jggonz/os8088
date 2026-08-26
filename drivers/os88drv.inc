@@ -137,8 +137,12 @@ DRVE_BUSY    equ 6              ; ...or it IS there and something the kernel
                                 ; already owns has its port or its IRQ. A
                                 ; separate code because the two send the user
                                 ; to different places: DRVE_HW means buy or
-                                ; fit a card, this means move a jumper
-                                ; (SPEC.md 58.2)
+                                ; fit a card, this means move a jumper. The
+                                ; worked example was the serial monitor's
+                                ; refusal to take a port the mouse had already
+                                ; answered on; that driver is gone (SPEC.md
+                                ; 58) and the code is not - any driver whose
+                                ; hardware is THERE but SPOKEN FOR wants it
 DRVE_TWICE   equ 7              ; YOU were asked to attach while you were
                                 ; already attached. The one code here that
                                 ; blames the software rather than the machine,

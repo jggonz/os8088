@@ -190,6 +190,9 @@ rp_py:      dw 0
 rp_cx:      dw 0                ; ...and the click inside it
 rp_cy:      dw 0
 rp_dlgmode: db 0                ; which dialog came back
+rp_ink:     db CBLACK           ; the ink rp_str letters in, banked by rp_pen
+                                ; at the branch that decides SPEC.md 47's flag
+                                ; - a driver cannot read [gfx_color] back
 rp_kbshown: dw 0                ; WHAT THE GLASS IS SHOWING - the size the last
 rp_eshown:  db 0                ; paint drew, and the verdict beside it. Both
                                 ; are written by rp_paint and by nothing else,

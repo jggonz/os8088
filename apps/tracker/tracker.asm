@@ -1504,6 +1504,14 @@ trk_fsx_key:
     je .rcyc
     cmp al, 'R'
     je .rcyc
+%ifdef TRKDBG
+    cmp al, 'g'                     ; bench-only (tests/trkscrl.inc): G
+    je .grid                        ; repaints the grid with the view held
+    cmp al, 'G'                     ; still, and j/k/n/v/b/c move the stopped
+    je .grid                        ; view by more than one row in one frame
+    call trk_dbg_key
+    jnc .out
+%endif
 %ifdef TRKLOG
     cmp al, 'd'
     je .diag
@@ -1538,6 +1546,12 @@ trk_fsx_key:
     call tui_msg                    ; and a bracket owns the machine until it
     pop si                          ; returns (SPEC.md 53.7). Say why, do not
     jmp .out                        ; do nothing (SPEC.md 47)
+%endif
+%ifdef TRKDBG
+.grid:
+    call trk_dbg_area
+    call tui_draw_pat
+    jmp .out
 %endif
 .load:
     push si
@@ -2833,6 +2847,9 @@ trk_reloc:
 %ifdef TRKLOG
 %include "trklog.inc"               ; tests/ - the bench build only, and the
 %endif                              ; only thing -DTRKLOG adds beyond hooks
+%ifdef TRKDBG
+%include "trkscrl.inc"              ; ...and the same shape for SPEC.md
+%endif                              ; 45.12.2's scroll gate
 
 ; =============================================================================
 ; .bss (SPEC.md 20.5: the loader zeroes TRK_BSS bytes after the image; every

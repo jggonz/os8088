@@ -463,7 +463,8 @@ taste, and three further facts make it the only workable answer:
 - **The Drivers page is full.** Rows are `CP_DROWH` (26) apart from `CP_DR0Y`
   (24) in a `CP_CH` (132) pane, so a fifth row's caption falls off the bottom,
   and the panel cannot grow because CGA is 200 rows against `wm_fit`'s 155
-  ceiling (SPEC.md §31.1). `DEBUG.DRV` was already unlisted to make room for
+  ceiling (SPEC.md §31.1). `DEBUG.DRV` was already unlisted — and has since
+  been removed outright (SPEC.md §58) — to make room for
   the RAM disk. Three ethernet rows are not available at any price; **one is,
   and it still needs §3.5's change.**
 - **One class is one publication slot** (SPEC.md §51.2.1), so two ethernet
@@ -678,7 +679,8 @@ turn:
    address ahead of DHCP and a LAN server ahead of the internet.
 
 So there is no contradiction, but there is a thing to keep true: **this must
-not become the debug channel by the back door.** SPEC.md §58's `DEBUG.DRV` and
+not become the debug channel by the back door.** The serial monitor (removed,
+SPEC.md §58) and
 the MartyPC debugger are the answers there, for the reason DEBUG-PLAN gives —
 a channel that works on the emulator *and* the iron beats a fast one that
 works on the emulator alone.

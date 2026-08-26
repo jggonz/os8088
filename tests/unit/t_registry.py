@@ -37,6 +37,7 @@ UNREGISTERED = {
     # --- library and support code, not tests ---
     "benchlib.inc": "a benchmark library, not a test",
     "trklog.inc": "tracker's logging build, %included by apps/tracker",
+    "trkscrl.inc": "tracker's scroll-gate build, %included by apps/tracker",
     "npbench.inc": "a benchmark body, %included",
 
     # --- need a build prerequisite the default build does not make ---

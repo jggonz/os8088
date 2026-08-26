@@ -650,7 +650,7 @@ inst_park_req:
 ; inst_park_end - withdraw the request; every parked worker resumes
 inst_park_end:
     mov byte [inst_parkreq], 0
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; inst_park_all - has every live package worker parked? (module internal)
@@ -739,13 +739,13 @@ inst_seg_parked:
     pop cx
     pop ax
     stc
-    ret
+    retf
 .free:
     pop di
     pop cx
     pop ax
     clc
-    ret
+    retf
 ; -----------------------------------------------------------------------------
 ; inst_svc_parked - has every DRIVER worker parked? (SPEC.md 66.5.5)
 ; out: CF = 0 yes (or there are none), CF = 1 somebody is still running
@@ -1966,8 +1966,9 @@ inst_launch_post:
     mov ah, 0
     inc ax
     mov [inst_launch], ax
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
     pop ax
-    ret
+    retf
 
 ; =============================================================================
 ; osapi_sys_snapshot - API slot 0x0298: the scheduler and the instance table, in

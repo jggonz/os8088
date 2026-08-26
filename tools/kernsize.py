@@ -40,6 +40,14 @@ USAGE
     tools/kernsize.py --bless          rewrite baseline AND tables to match
     tools/kernsize.py --json           machine-readable, no baseline needed
 
+A BUDGET MOVE IS REPORTED SEPARATELY from a size move, and that is not a
+formatting choice.  `KERN_BUDGET` is a decision somebody takes with whoever
+asked for the feature (CLAUDE.md's memory rule); `KERN_SIZE` is what the
+assembler answered.  This report compared only their difference until
+tests/unit/t_kernbudget.py went looking, so a raise read as the kernel having
+got smaller, and docs/KERNEL-MEMORY.md fell two moves behind with every run
+saying nothing.
+
 The baseline lives in docs/KERNEL-MEMORY.md between the kernsize markers, so
 that the document's headline figures cannot drift from the build without the
 next `make` saying so.  Bless it in the same commit as the change.
@@ -151,8 +159,8 @@ THEMES = (
     # does is write a video port: what it owns is whether the SIGNAL is on,
     # which is a property of the adapter the rest of this group programs.
     ("drawing: adapters, primitives, glyphs, icons",
-     ("vga12.inc", "softgfx.inc", "font.inc", "icons.inc", "viddet.inc",
-      "vidsel.inc", "splash.inc", "blank.inc")),
+     ("vga12.inc", "softgfx.inc", "font.inc", "band.inc", "icons.inc",
+      "viddet.inc", "vidsel.inc", "splash.inc", "blank.inc")),
     # bootprof.inc (SPEC.md 15.5) is here because what it measures is kmain's
     # own phase sequence, which lives in kernel.asm - and because it is not in
     # a shipped build at all (`make BOOTPROF=1`), so no other theme's figure
@@ -368,6 +376,21 @@ def report(cur, base, variant="big", out=sys.stdout):
                  f"  [{delta(cur['ksize'] - base['ksize'])}]")
     p(line)
 
+    # THE BUDGET MOVING IS THE ONE THING HERE THAT IS A DECISION, and it was
+    # the one thing this report could not see: it compared SPARE, which is
+    # budget minus size, so a raise and a shrink of the same amount read
+    # identically and a raise on its own read as "the kernel got smaller".
+    # docs/KERNEL-MEMORY.md went two moves stale behind exactly that, because
+    # nothing in the output ever said the baseline was describing a different
+    # KERN_BUDGET from the one that had just been assembled.
+    budged = base is not None and base["budget"] != cur["budget"]
+    if budged:
+        steps = (cur["budget"] - base["budget"]) // 512
+        p(f"{tag} *** KERN_BUDGET MOVED: {kb(base['budget'])} ->"
+          f" {kb(cur['budget'])}, {delta(steps)} rung"
+          f"{'' if abs(steps) == 1 else 's'} of 512 - the machine's RAM"
+          f" moved, and this baseline is stale until `--bless` ***")
+
     seg = cur["text"] + cur["bss"]
     p(f"{tag} segment    .text+.bss {kb(seg)} of KERN_CODE_MAX"
       f" {kb(cur['codemax'])} -> {kb(cur['codemax'] - seg)} left")
@@ -387,6 +410,8 @@ def report(cur, base, variant="big", out=sys.stdout):
     if base is None:
         p(tag + " no baseline for this variant in docs/KERNEL-MEMORY.md"
                        " - run `--bless` on it")
+    elif budged:
+        pass                            # already said, and louder
     elif crossed:
         for name, a, b in crossed:
             p(f"{tag} *** the {name} rung CROSSED: {a} -> {b}"

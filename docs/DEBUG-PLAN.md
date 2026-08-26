@@ -30,11 +30,17 @@ and what was rejected.
 > **OUTCOME — both halves are built. Read this document for the reasoning and
 > the two others for what exists.**
 >
-> - **SPEC.md §58 / `drivers/debug/debug.asm`** — DEBUG.DRV, the serial
->   monitor, built as a loadable driver rather than the `SERDBG=1` kernel this
->   plan proposed. A knob kernel is a different binary, so the machine you
->   debugged is not the machine that ships; a driver loads into the shipped
->   one. It is the only half that works on real iron.
+>   **THE SERIAL HALF HAS SINCE BEEN REMOVED (SPEC.md §58).** DEBUG.DRV was
+>   built as a loadable driver rather than the `SERDBG=1` kernel this plan
+>   proposed — a knob kernel is a different binary, so the machine you debugged
+>   would not be the machine that ships — and it was the only half that worked
+>   on real iron. It then lost its Control Panel row to the RAM disk, shipped
+>   on no floppy, and was named by nothing in the kernel; `drivers/debug/` and
+>   `tools/os88dbg.py` are gone with it. **This document is kept for the
+>   REASONING, which two live plans still build on, and not as a description of
+>   anything in the tree.** On iron what is left is SPEC.md §57's registry read
+>   out of a photograph (`tools/kfzread.py`) and a MartyPC dump taken by
+>   whoever has the machine (docs/FIELD-MACHINES.md).
 > - **docs/MARTYPC-DEBUG.md / `tools/martypc/`** — a debug server in MartyPC's
 >   headless frontend. It costs the guest **nothing** (no driver, no UART, no
 >   IRQ, not one cycle), answers on a frozen machine, and does what a guest
@@ -53,8 +59,8 @@ and what was rejected.
 >
 > Two things in the plan below were **not** built and the reasons are in the
 > outcome docs: the **disk data plane** of section 3 (it needs a `[sch_lock]`
-> entry point, which is kernel code — §58.4's divisor switch is the bulk path
-> instead), and **Stage 0's trace hook** into the benchmarks. Section 5's
+> entry point, which is kernel code — the monitor's own divisor switch was the
+> bulk path instead), and **Stage 0's trace hook** into the benchmarks. Section 5's
 > rejection of "patch the emulator" was **wrong about MartyPC** and right
 > about 86Box: the objection was that patching means *building* a debugger and
 > owning a fork, and MartyPC already has the debugger — the work was exposing

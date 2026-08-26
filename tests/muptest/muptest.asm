@@ -118,7 +118,8 @@ mu_vpaint:
     mov al, CBLACK
     call OSAPI_SET_COLOR
     mov si, mu_s_vanish
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     pop si
     pop dx
     pop cx
@@ -168,7 +169,8 @@ mu_paint:
     mov al, CBLACK
     call OSAPI_SET_COLOR
     mov si, mu_s_wait
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     call mu_layout                  ; the two buttons follow the window
     mov bx, mu_rects
     mov si, mu_l_a

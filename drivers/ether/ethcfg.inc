@@ -344,9 +344,8 @@ ec_paint:
 ; --- ec_txt - SI = the string at (CX, DX), black ----------------------------
 ec_txt:
     push ax
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the pane's own ground
+    call OSAPI_FONT_RUN
     pop ax
     ret
 

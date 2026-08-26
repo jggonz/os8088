@@ -84,6 +84,12 @@ ALIAS = {
     # body - 0x0448 goes through OSAPI_XSTUB and overwrites ES, 0x04A0 through
     # the ordinary SLOT and does not (SPEC.md 20.11.2).
     "OSAPI_DRV_CALL_AT":  "drv_pkg_call_x",
+    # SPEC.md 6.6.4: the SDK spelling says what the call COSTS and the kernel
+    # routine keeps the name SPEC.md 6 documents it under. The slot numbers did
+    # not move - 0x0060 and 0x0068 are what they always were - so this is a
+    # rename of a %define and its call sites and nothing about the ABI changed.
+    "OSAPI_FONT_CHAR_XPARENT": "font_char",
+    "OSAPI_FONT_STR_XPARENT":  "api_font_str",
     "OSAPI_KEY_DOWN":     "kbd_down",
     "OSAPI_FULLSCREEN":   "wm_fullscreen",
     "OSAPI_WM_GROW":      "wm_grow_paint",

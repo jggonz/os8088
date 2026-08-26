@@ -10,17 +10,19 @@
     python3 tools/os88marty.py 127.0.0.1:9001 dump 0060:0000 71624 -o /tmp/k.dump
     python3 tools/os88marty.py 127.0.0.1:9001            # a REPL
 
-The sibling of tools/os88dbg.py, and the difference is worth stating because
-they answer the same question from opposite sides. os88dbg talks to DEBUG.DRV,
-which is CODE RUNNING INSIDE THE GUEST: it needs a UART, an IRQ, interrupts
-enabled and a machine healthy enough to service them - and it works on real
-iron, which nothing else here does. This talks to the EMULATOR: it costs the
-guest not one cycle, needs nothing installed, answers on a machine that has
-hard-frozen, and can do the things a guest stub structurally cannot - single
-step, breakpoints, cycle counts, registers.
+This talks to the EMULATOR, and that is the whole of what makes it usable:
+it costs the guest not one cycle, needs nothing installed, answers on a
+machine that has hard-frozen, and does the things a stub running INSIDE the
+guest structurally cannot - single step, breakpoints, cycle counts,
+registers.
 
-Use this one for everything on an emulator. Use os88dbg when the machine is
-on somebody's desk.
+There used to be a sibling that took the other side - DEBUG.DRV and
+tools/os88dbg.py, a monitor in the guest answering over a UART, which needed
+an IRQ, interrupts enabled and a machine healthy enough to service them. It
+is gone (SPEC.md 58). ON REAL IRON THAT LEAVES A GAP AND IT IS WORTH KNOWING
+WHERE THE FLOOR IS: SPEC.md 57's registry read out of a photograph by
+tools/kfzread.py, and a MartyPC dump taken by whoever has the machine
+(docs/FIELD-MACHINES.md). Neither single-steps anything.
 
 MARTYPC IS CYCLE-ACCURATE AND IT IS NOT DISK-ACCURATE. It models the 8088's
 instruction timing, prefetch queue and bus contention; it models no platter,
@@ -1068,6 +1070,31 @@ def write_png_rgb(path, w, h, data):
     """Packed rgb24 out as a truecolour PNG."""
     raw = b"".join(b"\x00" + data[y * w * 3:(y + 1) * w * 3] for y in range(h))
     _png(path, w, h, raw, 2)
+
+
+def crop_rgb(m, x, y, w, h):
+    """A rectangle of the card's RENDERED framebuffer, packed rgb24.
+
+    THE CROP IS WHY, and it is the same reason in three tests: a claim like
+    "only the number of draws changed" cannot be checked by a capture of ONE
+    build, so the window's pixels are captured and diffed against the other
+    build's.  Cropping to the WINDOW rather than to a band around the thing
+    under test is deliberate - MartyPC's framebuffer is the CARD's, and on
+    Hercules that is 720x350 against a 720x348 screen, so a band computed from
+    guest coordinates lands beside its subject there.
+
+    Clamped at the bottom edge and not at the right: a row is sliced, so a
+    width past the edge silently wraps onto the next row rather than raising,
+    which is a diff that fails for the wrong reason.
+    """
+    fw, fh, data = m.fbuf()
+    x = max(0, min(x, fw))
+    w = max(0, min(w, fw - x))
+    out = bytearray()
+    for row in range(max(0, y), min(y + h, fh)):
+        o = (row * fw + x) * 3
+        out += data[o:o + w * 3]
+    return bytes(out)
 
 
 # SPEC.md 7.1's arrow: 8 wide, 12 high. A drawn mouse cursor is the one thing

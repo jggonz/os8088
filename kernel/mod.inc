@@ -504,11 +504,9 @@ mod_init_x:
     pop ax
     dec al
     jns .each
-    ret
+    retf
 
 section .cold                   ; the far entry, for kmain
-modf_mod_init:         call mod_init_x
-                    retf
 
 section .bss
 

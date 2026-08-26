@@ -70,6 +70,9 @@
 ;
 ; Keys: left/right or A/D move, Space/Ctrl fire, Z superzapper, J jump,
 ;       F full screen, Esc leave it, P pause, N new game, Enter start.
+; Mouse: the pointer picks the lane and the button fires. Both fire keys and
+;       the button are read as LEVELS, so holding any of them repeats at
+;       cy_fire's cooldown and holding the button steers as well (67.11.3).
 ; =============================================================================
 
 %include "os88api.inc"
@@ -654,13 +657,13 @@ cy_hp_text:
     db '', 0
     db 'ARROWS   move round the rim', 0
     db 'SPACE    fire down the web', 0
+    db 'MOUSE    aim - hold to fire', 0
     db 'Z  zap   J  jump   P  pause', 0
     db 'F        full screen', 0
     db 'ENTER    start a game', 0
     db '', 0
-    db 'Shoot every enemy to warp to', 0
-    db 'the next level. One that gets', 0
-    db 'to the rim shoots back, so', 0
+    db 'Shoot every enemy to warp on;', 0
+    db 'one at the rim shoots back -', 0
     db 'jump clear or kill it first.', 0
     db 'Grab the powerups on the web.', 0
     db 0xFF
@@ -1177,6 +1180,17 @@ cy_key_common:
 ; A click fires. Aiming is by lane and the mouse picks one: the pointer's
 ; angle about the tube's centre is the lane the player wants, which is the
 ; trackball of the original in the only form this machine has.
+;
+; IT ALSO ARMS THE HOLD (SPEC.md 67.11.3). W_ONCLICK is a press EDGE, so it can
+; say one shot and never a stream; cy_input reads the button as a LEVEL from
+; the worker and this is what tells it the press was OURS. A bare level would
+; fire the gun for the button the player is holding down on somebody else's
+; window - the kernel only dispatches this for a press in our own content, on
+; the frontmost window, and not for the press that merely raised us, which is
+; exactly the question a level cannot ask.
+;
+; The TITLE click does not arm: it starts a game, and a player who keeps the
+; button down would otherwise open the first wave with the gun already going.
 ; =============================================================================
 cy_onclick:
     push si
@@ -1188,6 +1202,7 @@ cy_onclick:
     call cy_newgame
     jmp .out
 .aim:
+    mov byte [cy_mheld], 1
     call cy_aim_mouse
 .out:
     pop si
@@ -2440,8 +2455,10 @@ cy_walk_one:
     inc word [cy_wn]
 .out:
     pop di
-    pop cx
-    pop dx
+    pop dx                          ; DX BEFORE CX - the pair was crossed here.
+    pop cx                          ; No caller reads either across the call
+                                    ; today, so this one was latent; the next
+                                    ; one to trust the header would not be
     pop bx
     pop ax
     ret
@@ -4352,6 +4369,8 @@ cy_play_update:
 cy_input:
     push ax
     push bx
+    push cx                         ; OSAPI_MOUSE answers in CX/DX, so this
+    push dx                         ; preserves what it used to
     mov word [cy_dir], 0
     mov al, KSC_LEFT
     call OSAPI_KEY_DOWN
@@ -4397,9 +4416,40 @@ cy_input:
     ; where the map never worked at all would otherwise have no gun.
     mov al, KSC_SPACE
     call OSAPI_KEY_DOWN
-    jnc .done
+    jnc .mouse
     mov byte [cy_firereq], 1
+.mouse:
+    ; AND SO IS THE MOUSE BUTTON (SPEC.md 67.11.3), for the same reason and
+    ; through the same cooldown: an input that can be HELD is asked once a
+    ; frame whether the player is asking, and W_ONCLICK - a press edge - could
+    ; only ever say one shot. The level is armed by that edge and read here;
+    ; [cy_mheld] is cy_onclick's answer to "was the press ours", without which
+    ; this would fire the gun for a button held down on another window.
+    ;
+    ; The release needs no W_ONMOUSEUP: the state is re-read rather than
+    ; remembered, so the first frame the button is up ends the hold wherever
+    ; the pointer happens to be, and a lost release is not a thing that can
+    ; happen. OSAPI_MOUSE is on SPEC.md 20.6's worker-legal list and this costs
+    ; one far call a frame, only while a hold is live.
+    ;
+    ; THE AIM FOLLOWS THE POINTER while it is held, and that is the feature
+    ; rather than a garnish: aiming on the press edge alone would freeze the
+    ; claw on the lane the press landed on, so sweeping the mouse would do
+    ; nothing and the hold would be WORSE than the repeated clicking it
+    ; replaces. Held, this is the trackball of the original.
+    cmp byte [cy_mheld], 0
+    je .done
+    call OSAPI_MOUSE                ; AL = buttons; CX/DX ignored, cy_aim_mouse
+    test al, 1                      ; re-reads them
+    jnz .mfire
+    mov byte [cy_mheld], 0          ; up: the gesture is over, and only another
+    jmp short .done                 ; W_ONCLICK starts one
+.mfire:
+    mov byte [cy_firereq], 1
+    call cy_aim_mouse
 .done:
+    pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -4541,6 +4591,34 @@ cy_player_move:
 ; against every lane's rim midpoint rather than doing any trigonometry - at
 ; sixteen lanes that is sixteen compares and no arctangent, and it is correct
 ; for the non-circular webs where an angle would not be.
+;
+; IT TOUCHES NO SHARED WORD, and that is load-bearing rather than tidy (SPEC.md
+; 67.11.3). It used to keep the pointer in [cy_tmpx]/[cy_tmpy] - which are
+; cy_setrect's - and its running best in [cy_tmpbest], which is
+; cy_bottom_lane's. That survived while the UI task and the bracket were the
+; only callers; cy_input calls it from the WORKER every frame the button is
+; held now, so a click landing inside the worker's sweep would pick the wrong
+; lane, and a mover's rect computed inside that click would be bounded by the
+; pointer. All four values live in registers instead - DI the pointer x, BX its
+; y, BP the running best, SI the lane. BP is used as a plain data register and
+; never dereferenced, which is legal and necessary: [bp+disp] would address SS.
+; cy_lanepos is NOT reentrant, and this line used to say it was - generalising
+; the tail comment at cy_lanepos, which claims something narrower and true (the
+; LIP TEST needs no scratch word, because DI and BX still hold the row offset
+; and the lane). Eighty lines above that tail the routine writes [cy_lspx],
+; [cy_lspy] and [cy_lspm] unconditionally, on every call.
+;
+; That matters here because THIS routine is the clobberer: cy_setrect calls
+; cy_lanepos and reads [cy_lspm] eighty lines later, and cy_aim_mouse calls it
+; once per lane, up to sixteen times, each one overwriting that span - and at
+; CY_TOPD, the lip, where cy_setrect's call is at the mover's own depth. After
+; perspective that is not a slightly wrong rect, it is a different lane's span
+; at a different order of magnitude.
+;
+; WHAT CLOSES IT IS THE GFX LOCK, not "one worker": this routine has two
+; callers and they are on different tasks - cy_input (the worker, no lock) and
+; cy_onclick (the UI task). The mutex is what keeps the two sweeps apart, so
+; anything that moves either caller out from under it reopens this.
 ; -----------------------------------------------------------------------------
 cy_aim_mouse:
     push ax
@@ -4549,14 +4627,15 @@ cy_aim_mouse:
     push dx
     push si
     push di
+    push bp
     cmp word [cy_nlane], 0
     je .out
     call OSAPI_MOUSE                ; CX/DX = screen x/y
     sub cx, [cy_ox]
     sub dx, [cy_oy]
-    mov [cy_tmpx], cx
-    mov [cy_tmpy], dx
-    mov word [cy_tmpbest], 0x7FFF
+    mov di, cx                      ; DI = the pointer, in content coordinates
+    mov bx, dx
+    mov bp, 0x7FFF                  ; BP = the best distance seen so far
     xor si, si
 .each:
     cmp si, [cy_nlane]
@@ -4564,23 +4643,24 @@ cy_aim_mouse:
     mov ax, si
     mov ah, CY_TOPD
     call cy_lanepos                 ; CX/DX = that lane's own spot on the lip
-    sub cx, [cy_tmpx]
+    sub cx, di
     jns .ax
     neg cx
 .ax:
-    sub dx, [cy_tmpy]
+    sub dx, bx
     jns .ay
     neg dx
 .ay:
     add cx, dx                      ; Manhattan distance: an ordering, not a
-    cmp cx, [cy_tmpbest]            ; measurement, and the cheapest one that
+    cmp cx, bp                      ; measurement, and the cheapest one that
     jae .next                       ; gets the ordering right
-    mov [cy_tmpbest], cx
+    mov bp, cx
     mov [cy_plane], si
 .next:
     inc si
     jmp short .each
 .out:
+    pop bp
     pop di
     pop si
     pop dx
@@ -7707,7 +7787,7 @@ cy_fsx_main:
                                     ; bracket - and leaves what cy_entry banked)
     call OSAPI_MOUSE
     mov [cy_pbtn], al               ; seed the button, or the click that got
-                                    ; us here fires the moment we arrive
+    mov byte [cy_mheld], 0          ; us here fires the moment we arrive
 .loop:
 .keys:
     mov ah, 1                       ; no events are dispatched in a bracket:
@@ -7720,15 +7800,28 @@ cy_fsx_main:
     jne .done
     jmp short .keys
 .nokey:
-    call OSAPI_MOUSE                ; edge-detect the button ourselves
+    ; ARM THE HOLD, and nothing else (SPEC.md 67.11.3). No events are
+    ; dispatched in a bracket, so there is no W_ONCLICK to do what it does
+    ; windowed and this edge stands in for it - but the FIRING is cy_input's in
+    ; both worlds, one place with one cooldown, and cy_update runs it a few
+    ; lines below. Setting the request here as well would only ask twice.
+    ;
+    ; The edge is what the seed above exists for: the menu click that opened
+    ; this bracket may still be down, and on a bare level the session would
+    ; open firing.
+    call OSAPI_MOUSE
     mov ah, [cy_pbtn]
     mov [cy_pbtn], al
+    test al, 1
+    jz .mup
     not ah
     and ah, al
     test ah, 1
     jz .nofire
-    mov byte [cy_firereq], 1
-    call cy_aim_mouse
+    mov byte [cy_mheld], 1          ; a press edge: this gesture is ours
+    jmp short .nofire
+.mup:
+    mov byte [cy_mheld], 0
 .nofire:
     call cy_cur_erase               ; FIRST, while the glass still holds what
                                     ; the draw inverted (SPEC.md 67.17)
@@ -7748,6 +7841,8 @@ cy_fsx_main:
     mov byte [cy_fsx], 0
     mov byte [cy_inbr], 0
     mov byte [cy_fsxq], 0
+    mov byte [cy_mheld], 0          ; the hold does not cross the boundary: the
+                                    ; windowed side arms from W_ONCLICK only
     mov byte [cy_needlay], 1
     mov byte [cy_full], 1
     pop si
@@ -7890,6 +7985,8 @@ CY_TWORDS equ 14
     CBYTE cy_msgdirty
     CBYTE cy_firereq
     CBYTE cy_firecd
+    CBYTE cy_mheld                  ; the mouse button is down and the press
+                                    ; that put it there was ours (67.11.3)
     CBYTE cy_c_e2                   ; the mover inks for THIS display (cy_pal)
     CBYTE cy_c_es
     CBYTE cy_hsav

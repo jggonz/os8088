@@ -311,7 +311,10 @@ sw_col:
 ; THREE SEGMENTS AT ONCE is what shapes the loop: the source is the CALLER's
 ; (ES on entry), the framebuffer is [vid_rseg], and the table is the kernel's.
 ; So DS becomes the source (lodsb), ES the framebuffer, and the table is read
-; `cs xlat` - .bss being in KERNEL_SEG, which is CS for this code. Nothing may
+; `ss xlat` - the tables having moved to .lowbss when SPEC.md 5.4.1.3 spent
+; the segment (39.3.1's reason), where they were `cs xlat` in .bss. It is the
+; same one prefix byte and the same clocks either way, because SS IS LOW_SEG
+; for all kernel code (SPEC.md 1) exactly as CS is KERNEL_SEG. Nothing may
 ; read a [gfx_blit_*] word inside the loop.
 ; =============================================================================
 
@@ -369,7 +372,7 @@ sw_pairbuild:
     call sw_pbit
     pop si
     or dl, al
-    mov [bx + gfx_pairtab0], dl
+    mov [ss:bx + gfx_pairtab0], dl
     mov dh, 1                   ; --- tab1: the other way round
     call sw_pbit
     shl al, 1
@@ -380,7 +383,7 @@ sw_pairbuild:
     call sw_pbit
     pop si
     or dl, al
-    mov [bx + gfx_pairtab1], dl
+    mov [ss:bx + gfx_pairtab1], dl
     inc bx
     cmp bx, 256
     jb .byte
@@ -467,12 +470,12 @@ sw_blit_row:
     shr al, cl
     mov dl, al
 .primed:
-    pop bx                      ; BX = the pair table (cs xlat's base)
+    pop bx                      ; BX = the pair table (ss xlat's base)
     pop cx                      ; CX = whole pairs
     jcxz .nomore
 .pair:
     lodsb                       ; DS:SI - the source byte, two pixels
-    cs xlat                     ; ...and its two destination bits
+    ss xlat                     ; ...and its two destination bits
     shl dx, 1
     shl dx, 1
     or dl, al
@@ -508,7 +511,7 @@ sw_blit_row:
     or bp, bp                   ; a trailing pixel with no partner
     jz .tail
     lodsb
-    cs xlat
+    ss xlat
     shr al, 1                   ; the HIGH nibble's bit, out of the pair
     shl dx, 1
     or dl, al
@@ -556,20 +559,20 @@ sw_blit_row:
     jcxz .erest
 .abyte:
     lodsb
-    cs xlat
+    ss xlat
     mov dl, al
     lodsb
-    cs xlat
+    ss xlat
     shl dl, 1
     shl dl, 1
     or dl, al
     lodsb
-    cs xlat
+    ss xlat
     shl dl, 1
     shl dl, 1
     or dl, al
     lodsb
-    cs xlat
+    ss xlat
     shl dl, 1
     shl dl, 1
     or dl, al
@@ -594,22 +597,22 @@ sw_blit_row:
     jcxz .orest
 .obyte:
     lodsb
-    cs xlat
+    ss xlat
     shl dx, 1
     shl dx, 1
     or dl, al
     lodsb
-    cs xlat
+    ss xlat
     shl dx, 1
     shl dx, 1
     or dl, al
     lodsb
-    cs xlat
+    ss xlat
     shl dx, 1
     shl dx, 1
     or dl, al
     lodsb
-    cs xlat
+    ss xlat
     shl dx, 1
     shl dx, 1
     or dl, al

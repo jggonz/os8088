@@ -277,6 +277,7 @@ fdlg_open_x:
                                 ; taken down on every Open and every Save
 %endif
     mov [fdlg_win], bx          ; take the gate LAST: until this store the
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
                                 ; window is an ordinary one
     call KERNEL_SEG:cw_wm_show  ; raise + repaint, under the caller's lock
     clc
@@ -602,7 +603,7 @@ fdlg_reap_x:
     pop bx
     pop ax
 .out:
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; fdlg_grab - the modal click filter (SPEC.md 38.2)
@@ -643,7 +644,7 @@ fdlg_grab_x:
 .out:
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; fdlg_top - the modal keyboard filter (SPEC.md 38.2)
@@ -665,7 +666,7 @@ fdlg_top_x:
 .out:
     pop cx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; fdlg_close - tear the dialog down (SPEC.md 38.7)
@@ -1193,9 +1194,15 @@ fdlg_icon:
 fdlg_text:
     push cx
     push dx
+    push ax
     add cx, [fdlg_cx]
     add dx, [fdlg_cy]
-    call KERNEL_SEG:cw_font_str
+    mov al, [gfx_color]         ; OPAQUE (SPEC.md 38.12), and the ink is read
+    mov ah, CWHITE              ; back rather than passed: seven call sites
+    call KERNEL_SEG:cw_font_run ; already set the pen and none had to change.
+    pop ax                      ; The paper is a constant - the dialog's pane
+                                ; is white and its SELECTION is 38.3's XOR
+                                ; band, drawn over the rows afterwards
     pop dx
     pop cx
     ret
@@ -2352,7 +2359,7 @@ fdlg_onkey_x:
     pop cx
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; fdlg_nins - insert AL at the caret, which then sits after it (internal)
@@ -2987,7 +2994,7 @@ fdlg_onclick_x:
     pop cx
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 section .bss
@@ -3069,25 +3076,15 @@ section .cold                   ; far entries (SPEC.md 2.6): the resident
                                 ; thunks in kernel.asm far-call these, and
                                 ; these near-call the bodies above - so every
                                 ; routine here keeps its ordinary near `ret`
-fdf_fdlg_grab:          call fdlg_grab_x
-                    retf
-fdf_fdlg_onclick:       call fdlg_onclick_x
-                    retf
 %ifdef KERN_BIG
 fdf_fdlg_onup:          call fdlg_onup_x
                     retf
 fdf_fdlg_ondrag:        call fdlg_ondrag_x
                     retf
 %endif
-fdf_fdlg_onkey:         call fdlg_onkey_x
-                    retf
 fdf_fdlg_open:          call fdlg_open_x
                     retf
 fdf_fdlg_paint:         call fdlg_paint_x
-                    retf
-fdf_fdlg_reap:          call fdlg_reap_x
-                    retf
-fdf_fdlg_top:           call fdlg_top_x
                     retf
 
 section .text

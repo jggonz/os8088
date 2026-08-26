@@ -572,6 +572,61 @@ ifneq ($(THEMEDARK),)
 VIDDEF += -DTHEMEDARK=$(THEMEDARK)
 endif
 
+# TITLESNAP=1 rounds a window title's pen to the nearest 8px CELL instead of
+# to the exact centre (docs/TEXT-PLAN.md 6.1). It is a LOOK question - the
+# title moves by at most 4 pixels - so it is a knob to be looked at rather
+# than a change to be argued, and the default is the exact centring that
+# ships. What it buys is the hottest chrome path in the system reaching
+# SPEC.md 6.1's fast path: wm_draw_title redraws on EVERY window operation
+# and its pen is off-grid seven times in eight.
+ifneq ($(TITLESNAP),)
+VIDDEF += -DTITLESNAP
+endif
+
+# NOUNAL=1 sends an UNALIGNED font_run back to gfx_fill + font_str, which is
+# what it did before SPEC.md 6.1.11. The A/B: the same session through a kernel
+# that has no one-pass unaligned path, which is the only way to show that the
+# pixels 6.1.11 puts down are the pixels the pair put down.
+ifneq ($(NOUNAL),)
+VIDDEF += -DNOUNAL
+endif
+
+# NOBAND=1 puts a window's title bar back on the fifteen primitive calls it
+# took before band.inc's COMPOSER (SPEC.md 11.101) became kern_big's default in
+# SPEC.md 5.9.6. The composed bar writes every pixel ONCE - so the caption
+# never flashes, which is docs/TEXT-PLAN.md 1.1's whole point - and it is also
+# the FASTER bar on both 1bpp adapters: 36.5 ms against 40.8 on Hercules and
+# 37.1 against 42.0 on CGA. On VGA it is 38.3 against 30.3 and ships anyway,
+# because a band is 1bpp on every card while the primitives get VGA's planar
+# hardware, and the flicker is worth more than the 8 ms (PERFORMANCE.md Sets
+# 88, 89, 91, 92).
+#
+# So this is the A/B, NOUNAL's shape: it exists to be diffed against rather
+# than because anybody should build it. It is also the only thing that keeps
+# the fifteen-call path assembling, which matters because that path is STILL
+# the runtime fallback on a machine whose heap refuses the band's 2KB claim,
+# and on kern_small, which has no gfx_blit1 at all.
+ifneq ($(NOBAND),)
+VIDDEF += -DNOBAND
+endif
+
+# NOPLANE=1 takes SPEC.md 5.4.1.3's PLANAR ROW DECODER out of gfx_blit4, so
+# every run of a VGA blit goes to vga_blit_span the way it did before - which
+# is the right writer for flat art and the wrong one for a picture. A run
+# costs ~1,800 cycles on a 4.77MHz 8088 whatever it covers, so os8088.gif's
+# 50% dither is 18,978 of them and SEVEN SECONDS of canvas; the decoder is
+# priced per PIXEL instead and draws the same picture in 1.1.
+#
+# NOBAND's shape, and here for the same two reasons: it is the A/B the number
+# above comes off, and it is the only thing keeping the run-only path
+# assembling - which still matters, because that path is what a 1bpp adapter,
+# a clipped blit, a block hanging off the screen edge and every FLAT row use.
+# kern_small does not have the decoder at all (KERN_SMALL_BUDGET), so there
+# the run-only path is not a knob, it is the build.
+ifneq ($(NOPLANE),)
+VIDDEF += -DNOPLANE
+endif
+
 ifneq ($(KERN_SMALL),)
 VIDDEF += -DKERN_SMALL
 else
@@ -761,6 +816,35 @@ ifneq ($(DIRTYRAM),)
 VIDDEF += -DDIRTYRAM
 endif
 
+# GFXAUDIT=1 counts every drawing primitive entered with the gfx lock FREE, and
+# remembers the call sites. SPEC.md 7 says every task-level drawing burst is
+# wrapped in gfx_lock/gfx_unlock AND that the mouse ISR draws the arrow exactly
+# when that lock is free - so an unlocked primitive is a primitive racing IRQ4
+# over the VGA's registers, vga_rect_setup's statics and the glass itself. It
+# is a DIAGNOSTIC and never ships; see kernel/vga12.inc's gfx_aud.
+#
+# Four words come out of it, through tools/os88sym.py --define GFXAUDIT:
+#   gfx_aud_tot   primitives entered with the lock free      <- THE GATE, 0
+#   gfx_aud_ra/cnt  each distinct call site and its count
+#   gfx_aud_mv    ISR cursor moves at all, the control
+#   gfx_aud_race  ...of which landed INSIDE one of them
+#   gfx_aud_bank  gfx_save calls with the ARROW STILL ON THE GLASS  <- 0
+#                 (SPEC.md 11.101.2: a save-under that banks the cursor keeps
+#                 it as somebody's window content for the session)
+#   cur_log/_i    a stop-when-full ring of cursor events - a tag, the refcount
+#                 and the drawn position at every show, hide, move, lock and
+#                 unlock. Re-arm it by writing 0 to cur_log_i one instruction
+#                 before the thing you are asking about; six lines of it named
+#                 the second half of FIELD-NOTES 34 in one run
+# tests/gfxlk.py is the registered session (SPEC.md 12.8.4, FIELD-NOTES 34).
+# The race row reads 0 under MartyPC and that is the harness: injected mouse
+# deltas arrive on frame boundaries. The EXPOSURE is what is measurable here.
+#
+# In $(VIDSTAMP) and $(KNOBS) below, like every other knob.
+ifneq ($(GFXAUDIT),)
+VIDDEF += -DGFXAUDIT
+endif
+
 # FSNOSTAMP=1 puts SPEC.md 62.9.10.4's defect back: drv_fs_call stops clearing
 # the dispatch stamp, so a redirector asking OSAPI_XMEM_COPY is fenced against
 # the block its own Mount claimed and every stage of the bounce is refused. It
@@ -904,7 +988,11 @@ endif
 # for them and the banner said nothing about the kernel it had just built -
 # each of them changes the binary (see their ifneqs at the top of this file).
 # BOOTDIAG is the one asymmetry that is meant to be one: it feeds $(BOOTDEF)
-# alone, and the stamp deletes boot.bin/boot360.bin whatever it says.
+# alone, and the stamp deletes boot.bin/boot360.bin - but only once BOOTDIAG is
+# IN the stamp, which for a long time it was not. The stamp deletes nothing
+# unless its own NAME changes, so `make BOOTDIAG=1` reused whatever boot.bin
+# was already there and the next plain `make` reused the diagnostic one. See
+# the note above $(VIDSTAMP) below.
 #
 # AND IT IS NOT ONLY THE BANNER ANY MORE. `all` runs `test-fast` when this list
 # is EMPTY, and the suite resolves every symbol through tools/os88sym.py, which
@@ -915,14 +1003,47 @@ endif
 # second build CLAUDE.md asks for after every change, and it exited 1.
 KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
                              KFZ DIRW1 INSTRO KEEPH STRAD DIRTYRAM HEAPCOMPACT HEAPPARK HEAPPARKLK FDDPROBE FDDABSENT REDRAWFULL NOSPLIT NOSUOCCL SNDSNIFF RAMKB DRAGCACHE \
-                             SNAPAUDIT SCROLLROW QUANTUM \
+                             SNAPAUDIT SCROLLROW QUANTUM GFXAUDIT \
                              CURFIX \
                              FONT INSTCHUNK PICOMEM PM_BASE PM_SB_PORT ANIMOFF DISINK0 \
                              BOOTPROF BOOTMARK BOOTHALT BOOTSTOP NOPS2 MOUIDSLOW TRACKRUN SBDRAGOFF SBRATE \
                              ETHPROF FTPDSLOW FTPDBG \
-                             KERN_SMALL FSNOSTAMP THEMEDARK,\
+                             KERN_SMALL FSNOSTAMP THEMEDARK TITLESNAP NOUNAL NOBAND NOPLANE,\
                              $(if $($(k)),$(k)=$($(k)))))
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(STRAD),-st$(STRAD))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(QUANTUM),-q$(QUANTUM))$(if $(DIRTYRAM),-dr$(DIRTYRAM))$(if $(FSNOSTAMP),-fn$(FSNOSTAMP))$(if $(ANIMOFF),-ao$(ANIMOFF))$(if $(THEMEDARK),-td$(THEMEDARK))$(if $(DISINK0),-di$(DISINK0))$(if $(BOOTPROF),-bp$(BOOTPROF))$(if $(BOOTMARK),-bm$(BOOTMARK))$(if $(BOOTHALT),-bh$(BOOTHALT))$(if $(BOOTSTOP),-bs$(BOOTSTOP))$(if $(NOPS2),-np$(NOPS2))$(if $(MOUIDSLOW),-mis$(MOUIDSLOW))$(if $(TRACKRUN),-tr$(TRACKRUN))$(if $(SBDRAGOFF),-sbo$(SBDRAGOFF))$(if $(SBRATE),-sbr$(SBRATE))
+# **A KNOB KERNEL IS NOT THE SHIPPED KERNEL, so KERN_BUDGET does not bind it**
+# (kernel.asm guard 1). It is built to answer a question about a machine and
+# nobody boots it, so the RAM it takes is a fact about that session; what still
+# binds it is guard 2, the 64KB segment, which nobody can raise. KERN_SMALL is
+# filtered out because it is not a diagnostic - it is the SHIPPED small-machine
+# kernel, with a budget of its own that it stays inside.
+#
+# It is derived from $(KNOBS) rather than listed, which is the whole point: the
+# five %ifdefs this replaced were added one at a time, each after a diagnostic
+# that would not assemble. tools/os88sym.py derives the same thing, so a tool
+# re-assembling a knob kernel for its symbol map gets the same answer.
+ifneq ($(filter-out KERN_SMALL=%,$(KNOBS)),)
+VIDDEF += -DKERN_KNOB
+endif
+
+# EVERY KNOB IN $(KNOBS) IS IN THIS STAMP TOO, and the seven that were not are
+# what this note is for: BOOTDIAG, PICOMEM, PM_BASE, PM_SB_PORT, ETHPROF,
+# FTPDSLOW and FTPDBG. Six of them own a stamp of their own further down
+# ($(SNDSTAMP), $(ETHSTAMP), $(FTPDSTAMP)), so the .bin each one shapes did
+# rebuild - what did NOT was the KERNEL, and the kernel is not neutral about
+# them: any knob but KERN_SMALL puts -DKERN_KNOB on its command line, which
+# SKIPS GUARD 1, the KERN_BUDGET footprint check (kernel.asm). Outside the
+# stamp that exemption is sticky. `make netbench` recurses with ETHPROF=1 onto
+# netbench-img, which deliberately builds $(IMG)/$(IMG720)/$(IMG360) - the
+# SHIPPED system-disk names, in the default build/ - so it left a
+# budget-exempt kernel under the shipped names and the next plain `make` said
+# "up to date" and shipped it. A kernel over budget could reach a floppy with
+# nothing having failed. BOOTDIAG is worse than sticky: it is the boot SECTOR,
+# a different 512 bytes, and it was neither built when asked for nor rebuilt
+# when not.
+#
+# The tags are short and must not collide with each other: -bd -pm -pmb -pms
+# -ep -fs -fd are the seven, checked against every tag already on the line.
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(STRAD),-st$(STRAD))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(GFXAUDIT),-ga$(GFXAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(QUANTUM),-q$(QUANTUM))$(if $(DIRTYRAM),-dr$(DIRTYRAM))$(if $(FSNOSTAMP),-fn$(FSNOSTAMP))$(if $(ANIMOFF),-ao$(ANIMOFF))$(if $(THEMEDARK),-td$(THEMEDARK))$(if $(DISINK0),-di$(DISINK0))$(if $(BOOTPROF),-bp$(BOOTPROF))$(if $(BOOTMARK),-bm$(BOOTMARK))$(if $(BOOTHALT),-bh$(BOOTHALT))$(if $(BOOTSTOP),-bs$(BOOTSTOP))$(if $(NOPS2),-np$(NOPS2))$(if $(MOUIDSLOW),-mis$(MOUIDSLOW))$(if $(TRACKRUN),-tr$(TRACKRUN))$(if $(SBDRAGOFF),-sbo$(SBDRAGOFF))$(if $(SBRATE),-sbr$(SBRATE))$(if $(TITLESNAP),-ts$(TITLESNAP))$(if $(NOUNAL),-nu$(NOUNAL))$(if $(NOBAND),-nb$(NOBAND))$(if $(NOPLANE),-npl$(NOPLANE))$(if $(BOOTDIAG),-bd$(BOOTDIAG))$(if $(PICOMEM),-pm$(PICOMEM))$(if $(PM_BASE),-pmb$(PM_BASE))$(if $(PM_SB_PORT),-pms$(PM_SB_PORT))$(if $(ETHPROF),-ep$(ETHPROF))$(if $(FTPDSLOW),-fs$(FTPDSLOW))$(if $(FTPDBG),-fd$(FTPDBG))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/kernel-full.bin \
@@ -1001,7 +1122,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc
 .PHONY: small kernsplit all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
         xt-hercules xt-multimon 286 386sx 386 386-xms xt-sound xt-sound-1.44 \
         286-sound 386-sound 486 pentium \
-        bench field combo combo144 combo720 stackprobe trklog npbench clicktest marty \
+        bench field combo combo144 combo720 stackprobe trklog trkscrl npbench clicktest marty \
         comscan lptlink calcref \
         fonts fontsheets fontlist \
         stories zdisk ztest zh zhboot zcheck zgfx zpic zscreens xt-z 386-z \
@@ -1280,12 +1401,6 @@ $(BUILD)/rdiag360.img: $(BUILD)/rdboot360.bin $(BUILD)/rdiag.bin
 # ui_tm_open looks for (SPEC.md 28.3). Kernel machinery in a folder of its
 # own, so the root of a disk is the user's files - and the two disks agree,
 # because the chip menu cannot know which of them is in the drive.
-# DEBUG.DRV is NOT here and its absence is deliberate: SPEC.md 58's monitor
-# lost its drv_tab row to the RAM disk (the Drivers page fits exactly four),
-# so nothing in the kernel names it and shipping the file would put a driver
-# on every disk that no Control Panel row can load. Its source and its rules
-# below are kept, so `make build/debug.drv` still builds it.
-#
 # RECURSIVE (`=`, not `:=`), because the on-demand modules appended below are
 # per BUILD DIRECTORY (SPEC.md 2.8.2) and a rule that builds a kernel outside
 # $(BUILD) overrides KMODDIR for itself - which a simply-expanded DRIVERS
@@ -1610,20 +1725,6 @@ $(BUILD)/hdd.bin: drivers/hdd/hdd.asm apps/os88ui.inc drivers/hdd/hddabi.inc dri
 $(BUILD)/hdd.drv: $(BUILD)/hdd.bin tools/os88drv.py
 	python3 tools/os88drv.py $(BUILD)/hdd.bin -o $@
 
-# DEBUG.DRV (SPEC.md 58) - the serial monitor. It SHIPS, and it costs a
-# machine that never asks for it one drv_tab row and a file on the floppy:
-# DRVR_WANT is 0 like every other row (SPEC.md 51.3), so nothing probes 2E8
-# and nothing hooks IRQ3 until the Drivers page is ticked. That is the whole
-# reason it is a driver rather than a SERDBG= kernel - a knob kernel is a
-# different binary, and the machine you debugged is then not the machine that
-# ships.
-$(BUILD)/debug.bin: drivers/debug/debug.asm drivers/os88drv.inc apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I drivers/debug/ -I drivers/ -I apps/ -o $@ $<
-	@echo "debug:  $(call FILESIZE,$@) bytes"
-
-$(BUILD)/debug.drv: $(BUILD)/debug.bin tools/os88drv.py
-	python3 tools/os88drv.py $(BUILD)/debug.bin -o $@
-
 # NET.DRV - a LapLink parallel cable as a block volume (docs/NET-PLAN.md stage
 # 1). Its transport is drivers/net/lplink.inc, which tests/lptlink includes
 # too, so the thing PERFORMANCE.md Part 9 Set 39 measured is the thing that
@@ -1664,8 +1765,9 @@ $(BUILD)/net.drv: $(BUILD)/net.bin tools/os88drv.py
 # and the FILE REDIRECTOR'S HARNESS: every branch site the redirector added to
 # the kernel runs on a cycle-accurate 8088 in a container, which is the one
 # thing block mode never had (docs/NET-PLAN.md 2.2.1). It ships because that is
-# DEBUG.DRV's argument - a knob kernel is a different binary, so what you
-# tested is not what ships - and it costs a machine that never ticks it one
+# the serial monitor's argument (SPEC.md 58) - a knob kernel is a different
+# binary, so what you tested is not what ships - and it costs a machine that
+# never ticks it one
 # drv_tab row and a file on the floppy.
 # RAMSEED=1 fills the RAM disk with the folders and files the redirector's
 # branch sites were built against - two levels of directory, three text files
@@ -3634,6 +3736,41 @@ $(BUILD)/trklog360.img: $(BUILD)/trklog.o88 apps/tracker/beverly.mod tools/os88d
 	python3 tools/os88disk.py -o $@ --size 360 \
 		$(BUILD)/trklog.o88 apps/tracker/beverly.mod
 
+# --- the scroll gate's disk (ON DEMAND: `make trkscrl`) ----------------------
+# TRKSCRL.O88 is apps/tracker built with -DTRKDBG, the trklog shape exactly:
+# four counters and two keys in tests/trkscrl.inc, one-line hooks in the app,
+# and the shipped TRACKER.O88 byte-identical without them.
+#
+#   make trkscrl && python3 tests/trkscrl.py
+#
+# It answers SPEC.md 45.12.2's two questions - are a scrolled n rows the same
+# pixels as a repaint of the same view, and does the full-repaint ratchet
+# stay shut. NEITHER IS A MEASUREMENT: tests/trkscrl.py's own header says the
+# assertion "is therefore not about time at all", and the bench build's jump
+# keys move the STOPPED view by +-2/3/4 in one frame, so the defect is
+# reproduced deterministically rather than waited for. It runs plain
+# `make test TESTAPPS=build/trkscrl.img` - no `-icount` anywhere - and QEMU is
+# the host because SPEC.md 45.9.1's graphics fullscreen needs a machine FASTER
+# than an 8088 to draw the grid at all, which is docs/TESTING.md's first
+# legitimate QEMU case. BEVERLY.MOD rides along because a scroll gate with
+# nothing playing has nothing to scroll.
+TRKSCRLSRC := apps/tracker/tracker.asm apps/tracker/trkplay.inc \
+              apps/tracker/trkui.inc apps/tracker/trktxt.inc tests/trkscrl.inc
+
+trkscrl: $(BUILD)/trkscrl.img
+
+$(BUILD)/trkscrl.bin: $(TRKSCRLSRC) apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -DTRKDBG -I apps/ -I apps/tracker/ -I tests/ \
+		-o $@ apps/tracker/tracker.asm
+	@echo "trkscrl: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/trkscrl.o88: $(BUILD)/trkscrl.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/trkscrl.bin -o $@
+
+$(BUILD)/trkscrl.img: $(BUILD)/trkscrl.o88 apps/tracker/beverly.mod tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		$(BUILD)/trkscrl.o88 apps/tracker/beverly.mod
+
 # --- the XT-rate capacity disks (ON DEMAND: `make trkrate`) ------------------
 # PERFORMANCE.md Sets 65/66: does XT mode's mixer HOLD a given sample rate on
 # the machine under it? Four disks, because the question needs four builds.
@@ -4192,8 +4329,9 @@ SMALLDIR := $(BUILD)/smallk
 # DISK. XMEM.DRV is dead weight on this kernel and only on this one: xmem.inc
 # is entirely inside %ifdef KERN_BIG and so is drv_load_at, its only loader,
 # and it has no drv_tab row that a Drivers page could tick - so nothing on a
-# kern_small disk can name it, read it or load it. Same reason DEBUG.DRV is not
-# in $(DRIVERS) at all.
+# kern_small disk can name it, read it or load it. The serial monitor was out
+# of $(DRIVERS) for the same reason before it was removed outright
+# (SPEC.md 58).
 #
 # RAMDISK.DRV and RAMPAGE.DRV go for the same reason one level up (SPEC.md
 # 62.9.15): a 128-256KB machine has nothing to spare for a store made of the
@@ -5357,27 +5495,6 @@ ifeq ($(NOCARD)$(ADLIB)$(SB16),)
 DEVCARD = -audiodev none,id=devsnd -device adlib,audiodev=devsnd
 endif
 
-# DBG=1 puts the serial monitor's UART in the machine (SPEC.md 58): a second
-# card at COM4 - 2E8, IRQ3, which is where 86Box and QEMU both put COM4 - with
-# a UNIX socket on the host end, so tools/os88dbg.py can drive it.
-#
-#   make test DBG=1
-#   python3 tools/os88dbg.py build/dbg.sock m 60 0 20
-#
-# 2E8 and NOT 2F8, because os8088 probes 3F8 and 2F8 and hooks the IRQ of
-# every UART that answers (SPEC.md 9.5) - the monitor would be fighting the
-# mouse for its own port. 3E8/2E8 are the two the kernel has never heard of.
-# The driver refuses to attach if a card DID answer at 2F8, because that is
-# the case where IRQ3 is already the kernel's; nothing here supplies one, and
-# MOUSEPORT=com2 deliberately does, which is the negative test.
-#
-# `server=on,wait=off` so the machine boots whether or not anybody is
-# listening, and the tool may attach and detach as often as it likes.
-ifneq ($(DBG),)
-DBGDEV = -chardev socket,id=dbg,path=$(BUILD)/dbg.sock,server=on,wait=off \
-         -device isa-serial,chardev=dbg,iobase=0x2e8,irq=3
-endif
-
 # TESTAPPS swaps the B: disk for a scratch image - the filetest/fmtest/sbtest
 # gates and the bench disk. It MUST be defined above the first target that
 # names it: prerequisites are expanded when the rule is READ, so a definition
@@ -5461,7 +5578,7 @@ test: $(TESTIMG) $(TESTAPPS) $(HDDIMG)
 	$(QEMU) -drive file=$(TESTIMG),format=raw,if=floppy -boot a $(MOUSE) \
 		-drive file=$(TESTAPPS),format=raw,if=floppy,index=1 $(HDDDEV) \
 		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid \
-		$(CARDAUDIO) $(ADLIBDEV) $(SBDEV) $(DEVCARD) $(DBGDEV) $(ETHERDEV)
+		$(CARDAUDIO) $(ADLIBDEV) $(SBDEV) $(DEVCARD) $(ETHERDEV)
 
 # `make test` plus audio capture (SPEC.md 34): the PC speaker renders into
 # build/snd.wav, finalized when QMP `quit` stops QEMU. Verify with
@@ -5761,9 +5878,10 @@ xt-runcpm: $(IMG360) $(BUILD)/runcpm360.img
 # The MARTYPC DEBUGGER (docs/MARTYPC-DEBUG.md): a remote debug server bolted
 # into MartyPC's headless frontend, giving memory, registers, breakpoints,
 # single-step and cycle counts on a running os8088 with NO code in the guest
-# at all. It is the other half of SPEC.md 58's DEBUG.DRV and not a replacement
-# for it - this one costs the guest nothing and answers on a frozen machine,
-# that one is the only one that works on real iron.
+# at all. It was one half of a pair - SPEC.md 58's serial monitor was the
+# other, and worked on real iron, which this cannot. That driver is gone, so
+# on an emulator this is the instrument and on IRON the floor is SPEC.md 57's
+# registry read out of a photograph (tools/kfzread.py).
 #
 # Pinned to one upstream commit on purpose (tools/martypc/UPSTREAM): a debugger
 # that changes under you is one more variable in a session whose whole point is
@@ -5782,6 +5900,10 @@ marty: $(IMG360)
 	@echo "                 a Hercules, docs/DUAL-DISPLAY-PLAN.md) and _herc_gla"
 	@echo "                 is the single-card Hercules without the IBM ROM."
 	@echo "                 python3 tests/dualcheck.py is the two-card gate"
+	@echo "       os8088_xt_vga_mda is the two-card XT with a VGA IN IT - the"
+	@echo "                 only machine here where an extended desktop has a"
+	@echo "                 COLOUR display, so it is the only one that can ask"
+	@echo "                 what SPEC.md 5.4.3 does at a seam (tests/dispblitp)"
 	@echo "       _herc_gla_144 has 1.44MB DRIVES, for make combo144 - the one"
 	@echo "                 machine here that can read an 18-spt disk. An"
 	@echo "                 anachronism on purpose: no stock XT reads 1.44MB"

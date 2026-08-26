@@ -807,7 +807,7 @@ sched_mode_set:
     mov byte [sch_hold], 0      ; the incoming mode starts with a full budget
     popf
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; sched_mode_get - read the current scheduling mode (SPEC.md 8.2)

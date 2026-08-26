@@ -327,7 +327,7 @@ files_init_x:
     pop di
     pop cx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; fm_kinit - KD_INIT for the Disk kind (SPEC.md 29.3): a whole new window
@@ -461,7 +461,7 @@ fm_kinit_x:
     pop dx
     pop cx
     pop ax
-    ret
+    retf
 
 ; =============================================================================
 ; The view cache (SPEC.md 2.3/22.1)
@@ -1088,6 +1088,7 @@ fmv_mark:
                                 ; waiting for the user to read the line it
                                 ; is asking about
     mov byte [fm_fchk], 1       ; and otherwise the UI task owes the FRONT
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
                                 ; window a look: the window a package just
                                 ; wrote into may be the one under the
                                 ; pointer, where waiting for a focus change
@@ -1219,7 +1220,7 @@ fm_focus_x:
     pop cx
     pop ax
     stc
-    ret
+    retf
 .clean:
     pop di
     pop si
@@ -1228,7 +1229,7 @@ fm_focus_x:
     pop ax
 .none:
     clc
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; fmv_bcast - push the current snapshot into every window showing it (22.1)
@@ -1912,7 +1913,7 @@ fm_bar_gate_x:
     pop di
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; fm_seed - park a target directory for the next fm_kinit (SPEC.md 22.1)
@@ -2424,7 +2425,7 @@ fm_paint_x:
     mov bx, si
     call fm_draw_core
     pop bx
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; fm_onclick - W_ONCLICK for the Disk window
@@ -2776,7 +2777,7 @@ fm_onup_x:
     pop cx
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; fm_ondrag - W_ONDRAG (SPEC.md 13.8.1): the pointer moved, press still down
@@ -3108,7 +3109,7 @@ fm_onkey_x:
     pop dx
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; fm_delrep - is this Delete keystroke a typematic REPEAT? (SPEC.md 22)
@@ -3189,6 +3190,7 @@ fm_open_sel:
 .package:                       ; is the truthful verdict it always was
     inc ax                      ; index + 1: ui.inc runs the loader once the
     mov [ld_pending], ax        ; lock drops (SPEC.md 21)
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
     mov [ld_pwin], di           ; ...resolved against THIS window (22.1)
     jmp short .out
 .folder:
@@ -3766,7 +3768,7 @@ fm_oncmd_x:
     pop cx
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; fm_docmd - run one FMC_* against the published window and repaint it
@@ -4065,6 +4067,7 @@ fm_fmt_home:
     mov word [di+FS_SCRL], 0        ; describes anything
     mov byte [di+FS_DIRTY], 1
     mov byte [fm_fchk], 1       ; ...and it may be the FRONT window, where
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
                                 ; waiting for a focus change means waiting for
                                 ; a click that never comes (22.8)
     push cx
@@ -4150,7 +4153,7 @@ fm_fmt_go:                      ; the image is here; the drive is the user's
     push cx                     ; just happened, so it is a toast (60.5) - and
     mov bx, fm_errtab           ; nothing is armed, so the window is left
     mov cx, FM_NERR             ; exactly as it was
-    call KERNEL_SEG:cw_toast_say
+    call KERNEL_SEG:toast_say
     pop cx
     pop bx
 .no:
@@ -4235,7 +4238,7 @@ fm_clone_bad:
     push cx                     ; a toast (SPEC.md 59.5) - and nothing is
     mov bx, fm_clotab           ; armed, so the window is left as it was
     mov cx, CLO_NERR
-    call KERNEL_SEG:cw_toast_say
+    call KERNEL_SEG:toast_say
     pop cx
     pop bx
     cmp word [clo_seg], 0       ; ...and the image goes back HERE, because no
@@ -4330,7 +4333,7 @@ fm_clone_res:
     mov al, ah
     mov bx, fm_clotab
     mov cx, CLO_NERR
-    call KERNEL_SEG:cw_toast_say
+    call KERNEL_SEG:toast_say
     pop cx
     pop bx
     jmp short .out
@@ -4508,7 +4511,7 @@ fm_img_done_x:
     pop cx
     pop bx
     pop ax
-    ret
+    retf
 
 fm_c_cut:                       ; File > Cut - the selection, onto the
     mov al, FCP_CUT             ; clipboard (SPEC.md 22.3)
@@ -4597,7 +4600,7 @@ fm_newwin:
     jae fm_nw_full
     call fm_seed                ; park the target for the new window's
     mov al, KIND_FILES          ; fm_kinit, then let ui_task do the launch
-    call KERNEL_SEG:cw_inst_launch_post ; NOT app_launch: it takes the lock
+    call KERNEL_SEG:inst_launch_post    ; NOT app_launch: it takes the lock
 fm_nw_none:                     ; we hold. The NEW window is what draws; this
     mov byte [fm_cmdchg], FMD_NONE  ; one is untouched, and so it is not
     ret                             ; redrawn (SPEC.md 22.13)
@@ -4617,17 +4620,17 @@ fm_c_nop:                       ; the File menu's separator (SPEC.md 22.12)
 ; full repaint of that window first (SPEC.md 22.13).
 fm_c_disk:                      ; Builtins > Disk - CMD_FILES, exactly what
     mov ax, CMD_FILES           ; Locator's own Builtins menu posts, so the
-    call KERNEL_SEG:cw_ui_post_cmd  ; item does the same thing from either bar
+    call KERNEL_SEG:ui_post_cmd     ; item does the same thing from either bar
     jmp short fm_c_elsewhere
 
 fm_c_timer:                     ; Builtins > Timer
     mov al, KIND_TIMER
-    call KERNEL_SEG:cw_inst_launch_post ; NOT app_launch: it takes the lock
+    call KERNEL_SEG:inst_launch_post    ; NOT app_launch: it takes the lock
     jmp short fm_c_elsewhere        ; (29.4)
 
 fm_c_bounce:                    ; Builtins > Bounce
     mov al, KIND_BOUNCE
-    call KERNEL_SEG:cw_inst_launch_post
+    call KERNEL_SEG:inst_launch_post
 fm_c_elsewhere:
     mov byte [fm_cmdchg], FMD_NONE
     ret
@@ -4872,7 +4875,7 @@ fm_rclick_x:
     pop cx
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; fm_rcmd - run the command fm_rclick latched
@@ -4901,7 +4904,7 @@ fm_rcmd_x:
     pop cx
     pop bx
     pop ax
-    ret
+    retf
 
 ; =============================================================================
 ; The status-line name editor (SPEC.md 22)
@@ -5121,7 +5124,7 @@ fm_editkey:
     mov al, 1
     mov bx, fm_swaptab
     mov cx, FM_NSWAP
-    call KERNEL_SEG:cw_toast_say
+    call KERNEL_SEG:toast_say
     pop cx
     pop bx
     jmp short .cancelfull
@@ -5395,7 +5398,7 @@ fm_edit_commit:
     push cx                     ; TOAST now (SPEC.md 59.5): a verdict is a
     mov bx, fm_errtab           ; report about what just happened, not a fact
     mov cx, FM_NERR             ; about this window, so it wants no per-window
-    call KERNEL_SEG:cw_toast_say ; byte, no status-line rung, and no later
+    call KERNEL_SEG:toast_say    ; byte, no status-line rung, and no later
     pop cx                      ; interaction to come along and retire it.
     pop bx                      ; BX/CX are pushed because this routine
                                 ; promises to preserve every register and
@@ -5698,7 +5701,7 @@ fm_paste_res:
     mov al, [fcp_err]
     mov bx, fm_errtab           ; SPEC.md 59
     mov cx, FM_NERR
-    call KERNEL_SEG:cw_toast_say
+    call KERNEL_SEG:toast_say
 .all:
     call fmv_repaint_all        ; fmv_reload_all moved every window's CACHE;
     jmp short .out              ; their PIXELS are still the old listing, and
@@ -6368,7 +6371,8 @@ fm_draw_core:
     mov dx, [fm_cy]
     add dx, 6
     mov si, fm_hdrbuf
-    call KERNEL_SEG:cw_font_str
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: the content's own white
+    call KERNEL_SEG:cw_font_run
 
     ; --- the two header buttons (SPEC.md 22.18) ---
     ; Each is drawn only when it fits, and fm_btn1 answers that itself out of
@@ -6398,7 +6402,8 @@ fm_draw_core:
     mov dx, [fm_cy]
     add dx, 4
     mov si, fm_s_refresh
-    call KERNEL_SEG:cw_font_str
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: the content's own white
+    call KERNEL_SEG:cw_font_run
 
     cmp word [fm_cw], 142
     jl .nobtns
@@ -6421,7 +6426,8 @@ fm_draw_core:
 .vlabel:
     mov dx, [fm_cy]
     add dx, 4
-    call KERNEL_SEG:cw_font_str
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: the content's own white
+    call KERNEL_SEG:cw_font_run
 .nobtns:
 %endif
 
@@ -6537,7 +6543,8 @@ fm_draw_rows:
     mov dx, [fm_celly]
     add dx, 23
     mov byte [gfx_color], CBLACK
-    call KERNEL_SEG:cw_font_str
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: the content's own white
+    call KERNEL_SEG:cw_font_run
 
     inc word [fm_vcol]
     mov ax, [fm_vcol]
@@ -6784,19 +6791,23 @@ fm_draw_lrow:
     pop ax
     call fm_stage_name          ; fm_name + [fm_fsize]
 
+    ; --- the name, an OPAQUE run (SPEC.md 22.11.3) -----------------------
+    ; It is truncated to the live budget, as it always was, and NOT padded out
+    ; to it: the row is FM_ROW_H = 16 px and a glyph is 8, so a run can never
+    ; be this band's erase however wide it is made. The caller's one fill is,
+    ; and stays.
     mov bx, [fm_nch]            ; truncate the name to the live budget
     cmp bx, 16
     jae .lname
     mov byte [fm_name+bx], 0
 .lname:
     add bp, 4                   ; text y: row top + 4 centers 8px glyphs
-    mov byte [gfx_color], CBLACK
     mov cx, [fm_cx]
     add cx, 32                  ; 32, not 24: BOTH are multiples of 8, so this
     mov dx, bp                  ; is not about alignment - it is the 16px icon
     mov si, fm_name             ; at +8 ending exactly here. At +24 the name's
-    call KERNEL_SEG:cw_font_str ; first letter touched the icon (ARTFUL.O88's
-                                ; A against the app diamond), which is a
+    mov ax, (CWHITE << 8) | CBLACK  ; first letter touched the icon (ARTFUL.O88's
+    call KERNEL_SEG:cw_font_run ; A against the app diamond), which is a
                                 ; visible regression and not one a size report
                                 ; or a byte-identity diff can see. 8px of
                                 ; daylight now, where +4/+24 gave 4; the
@@ -6817,7 +6828,8 @@ fm_draw_lrow:
     sub cx, 20                  ; the scroll bar, SPEC.md 22)
     sub cx, ax
     mov dx, bp
-    call KERNEL_SEG:cw_font_str
+    mov ax, (CWHITE << 8) | CBLACK  ; opaque, like the name beside it: the
+    call KERNEL_SEG:cw_font_run     ; ground is the band the caller filled
 .lnosize:
     pop di
     ret
@@ -7987,16 +7999,10 @@ section .cold                   ; far entries (SPEC.md 2.6): the resident
                                 ; thunks in kernel.asm far-call these, and
                                 ; these near-call the bodies above - so every
                                 ; routine here keeps its ordinary near `ret`
-fmf_files_init:         call files_init_x
-                    retf
-fmf_fm_bar_gate:        call fm_bar_gate_x
-                    retf
 ; ...and one an on-demand MODULE calls rather than the kernel (SPEC.md 2.8.6):
 ; FORMAT.DRV letters its own confirmation now and needs a decimal formatter to
 ; do it. Six resident bytes against a second copy of real code in the image,
 ; which is the one place that trade goes the other way.
-fmf_fm_img_done:        call fm_img_done_x
-                    retf
 fmf_fm_utoa:            call fm_utoa
                     retf
 fmf_files_open:         call files_open_x
@@ -8005,29 +8011,13 @@ fmf_files_open_drive:   call files_open_drive_x
                     retf
 fmf_files_refresh:      call files_refresh_x
                     retf
-fmf_fm_focus:           call fm_focus_x
-                    retf                ; CF is the answer, and neither
                                         ; `call` nor `retf` touches it
-fmf_fm_kinit:           call fm_kinit_x
-                    retf
 fmf_fm_onclick:         call fm_onclick_x
                     retf
 %ifdef KERN_BIG
-fmf_fm_onup:            call fm_onup_x
-                    retf
 fmf_fm_ondrag:          call fm_ondrag_x
                     retf
 %endif
-fmf_fm_oncmd:           call fm_oncmd_x
-                    retf
-fmf_fm_onkey:           call fm_onkey_x
-                    retf
-fmf_fm_paint:           call fm_paint_x
-                    retf
-fmf_fm_rclick:          call fm_rclick_x
-                    retf
-fmf_fm_rcmd:            call fm_rcmd_x
-                    retf
 fmf_fmv_sync:           call fmv_sync_x
                     retf
 

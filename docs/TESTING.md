@@ -828,8 +828,10 @@ ever have.
 **Then read `dsk_vtab`, do not count icons.** The volume table says which
 volume is which transport, on which unit, at which base; a screenshot says
 there are two hard-disk zones and leaves you guessing which one is the
-duplicate. Tick the driver on the Drivers page, select **Hard Drive**, click
-**Mount**, and the table must be unchanged — one hard-disk row, the
+duplicate. Tick the driver on the Drivers page — which mounts what it finds
+by itself now (SPEC.md §52.6.1), so the duplicate would appear on the tick
+rather than on the click — select **Hard Drive**, click **Mount**, and the
+table must be unchanged — one hard-disk row, the
 `DVK_BIOS` one the boot left, and the caption must read `Already mounted`.
 Two zones for one partition is §52.10.3.1.
 
@@ -1104,6 +1106,7 @@ checks referenced throughout this document:
 | `drvcall` | **a package reaching a driver** (§20.11): `OSAPI_DRV_CALL`, the `DSV_PKGCALL` fence, and — the half nothing else can check — that the driver was handed the *package's* segment in `ES`. Its counterpart is `RAMDISK.DRV`'s two package verbs, so it needs no card and no cable and runs on MartyPC. The assertion is in `tests/drvcall.py`, which reads the three report strings out of the package's own image and drives the Control Panel tick, so it sees the refusal **before** the driver is published as well as the answer after | `make drvcalltest && python3 tests/drvcall.py [--adapter herc]` |
 | `stackprobe` | the 256-byte task-stack margin (§8) | `make test TESTAPPS=build/stkprobe.img` |
 | `xmtest` | the extended-memory **teardown** (§41.5/§29.4): does a closed instance's blocks above 1MB get freed? Needs a machine with a store, so **QEMU on a 386** — the target machine can never have one. The assertion lives outside the package, in `tests/xmcheck.py`, which reads `xm_tab` over QMP around the close | `make test TESTAPPS=build/xmtest.img` then `python3 tests/xmcheck.py build/qmp.sock` |
+| `trkscrl` | **the pattern view scrolls, and it reaches past one row** (SPEC.md §45.12.2). Tracker built with `-DTRKDBG` (`tests/trkscrl.inc`), which adds four counters and two keys and changes the shipped `TRACKER.O88` by nothing — `trklog`'s shape exactly. Two assertions, and the second is the one the gate exists for: a jump of *n* rows must leave the row area **byte-identical to a full repaint of the same view** (§22.11's standard — a blit that drops one strip is invisible in a screenshot and wrong ever after), and it must cost **one scroll and no full repaint**. That second one is the ratchet, asserted without a clock: while the reach was 1, a late frame took `tui_draw_pat`'s 35 strips, outlasted its own frame, and the machine settled into re-lettering the grid at every row change. **QEMU, not MartyPC**: §45.9.1 turns the grid into one banded line on a tier-0 machine, so the surface under test needs something faster than an 8088. It needs no sound card — the jump keys move the *stopped* view, which is the only way to put more than one row between two frames at all | `make trkscrl && python3 tests/trkscrl.py` |
 | `trklog` | not a gate — a **recorder**. Tracker itself, built with `-DTRKLOG`, logging one record per system tick and writing it to `TRKLOG.TXT` (SPEC.md §45.14) | `make test SB16=1 TESTAPPS=build/trklog.img` |
 
 `benchlib.inc` is the one shared source under `tests/` — the timing loop, the

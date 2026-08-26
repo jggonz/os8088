@@ -182,6 +182,9 @@ def _modcut(blob):
     return int.from_bytes(blob[off + 6:off + 10], "little")
 
 
+_SHIPPED_DEFS = ("KERN_BIG", "KERN_SMALL", "KERNSIZE", "KERN_KNOB")
+
+
 def _load(defines=(), check=True):
     # $OS88_DEFINES is how a tool that never asked for a knob still finds the
     # right map. Every helper here takes `defines`, and the ones layered above
@@ -195,6 +198,14 @@ def _load(defines=(), check=True):
     if env:
         defines = tuple(defines) + tuple(
             d for d in env.replace(",", " ").split() if d)
+    # A KNOB KERNEL IS NOT BOUND BY KERN_BUDGET (kernel.asm guard 1), and the
+    # Makefile says so with -DKERN_KNOB. A tool re-assembling one for its
+    # symbol map has to say the same thing or nasm refuses a kernel that
+    # `make` built happily - which reads as "the map is broken" rather than as
+    # a missing define. KERN_SMALL is not a knob for this purpose: it is a
+    # shipped configuration with a budget of its own.
+    if any(d.split("=")[0] not in _SHIPPED_DEFS for d in defines):
+        defines = tuple(defines) + ("KERN_KNOB",)
     key = tuple(defines)
     if key in _cache:
         return _cache[key]

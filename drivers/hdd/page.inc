@@ -9,7 +9,7 @@
 ; slot at detach (SPEC.md 31.9/51.2.1).
 ;
 ; The pane is 221 x 132 px - 27 characters by 14 rows - and the panel is not
-; resizable, so this page is a list, an editor and two buttons, and anything
+; resizable, so this page is a list, an editor and three buttons, and anything
 ; that needs more room is a window of its own. Format opens the disk tool
 ; (tool.inc), which is partitioning and formatting in one window because they
 ; are one operation to the user.
@@ -18,7 +18,7 @@
 ;    IDE0  980x 10x 17   81M      <- one row per probed device, the selected
 ;    BIOS  615x  4x 17   20M         one drawn as a black bar
 ;   C[ 980] H[ 10] S[ 17]  - +    <- the geometry, editable when the probe
-;   [Format] [Mount]                 could not determine it
+;   [Format] [Install] [Mount]       could not determine it
 ;   Mounted as C:                 <- and the caption is where the truth goes
 ;
 ; **EVERY STRING HERE FITS ITS BOX, and that is a rule and not a habit.** The
@@ -50,9 +50,15 @@ HDP_PX       equ 186
 HDP_BTW      equ 24
 HDP_BY       equ 82             ; the button row
 HDP_BH       equ 16
+; The button row reads Format, Install, Mount, evenly spaced (SPEC.md 52.4):
+; 64 + 8 + 64 + 8 + 72 from x=2 ends at 218, inside the 221px pane, with the
+; two that open a WINDOW together and the one that acts on the spot at the end.
+; The INDICES did not move with the positions - 0 Format, 1 Mount, 2 Install
+; is still what hd_btn_ok is asked and what hd_page_button draws - so B1 is to
+; the right of B2 and the hit test walks the row 0, 2, 1.
 HDP_B0X      equ 2              ; 'Format'
-HDP_B1X      equ 78             ; 'Mount' / 'Unmount'
-HDP_B2X      equ 154            ; 'Install' (SPEC.md 52.10.4)
+HDP_B1X      equ 146            ; 'Mount' / 'Unmount' - LAST on the row
+HDP_B2X      equ 74             ; 'Install' (SPEC.md 52.10.4) - in the middle
 HDP_BW0      equ 64
 HDP_BW1      equ 72
 ; --- control ids (SPEC.md 13.8.4) -------------------------------------------
@@ -65,7 +71,8 @@ HDP_CINSTALL equ 3
 HDP_CMINUS   equ 4
 HDP_CPLUS    equ 5
 
-HDP_BW2      equ 64             ; 154 + 64 = 218, inside the 221px pane - the
+HDP_BW2      equ 64             ; Install's; the row's right edge is Mount's,
+                                ; 146 + 72 = 218, inside the 221px pane - the
                                 ; same arithmetic the caption column obeys
 HDP_CAPY     equ 104
 
@@ -86,14 +93,13 @@ hd_page_paint:
     push bp
     mov bp, dx                  ; BP = pane top for the rest of the routine
 
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov si, hd_s_page
-    mov cx, di
+    mov si, hd_s_page               ; NO PEN: font_run takes the pair in AX and
+    mov cx, di                      ; never reads [gfx_color] (SPEC.md 52.12)
     add cx, HDP_LX
     mov dx, bp
     add dx, HDP_HY
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: cp_page's pane (SPEC.md 52.12)
+    call OSAPI_FONT_RUN
 
     ; --- one row per probed device -------------------------------------------
     xor cl, cl
@@ -128,50 +134,51 @@ hd_page_paint:
     add dx, 9
     call OSAPI_GFX_FILL
     pop dx
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
+    mov word [hd_pair], (CBLACK << 8) | CWHITE  ; white on the bar just laid,
+                                    ; and the PAIR is the whole of it - the fill
+                                    ; above owns the pen (SPEC.md 52.12)
     jmp short .text
 .plain:
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
+    mov word [hd_pair], (CWHITE << 8) | CBLACK  ; ...or black on the pane
 .text:
     mov si, hd_line
     mov cx, di
     add cx, HDP_LX
-    call OSAPI_FONT_STR
+    mov ax, [hd_pair]           ; OPAQUE (SPEC.md 52.12)
+    call OSAPI_FONT_RUN
     pop cx
     inc cl
     jmp short .row
 .rows_done:
     cmp byte [hd_ndev], 0
     jne .geom
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
     mov si, hd_s_nodev
     mov cx, di
     add cx, HDP_LX
     mov dx, bp
     add dx, HDP_R0Y
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: cp_page's pane (SPEC.md 52.12)
+    call OSAPI_FONT_RUN
 
     ; --- the C/H/S editor ----------------------------------------------------
 .geom:
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
     mov si, hd_s_c
     mov cx, di
     add cx, HDP_LX
     mov dx, bp
     add dx, HDP_EY + 2
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: cp_page's pane (SPEC.md 52.12)
+    call OSAPI_FONT_RUN
     mov si, hd_s_h
     mov cx, di
     add cx, HDP_F1X - 10
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: cp_page's pane (SPEC.md 52.12)
+    call OSAPI_FONT_RUN
     mov si, hd_s_s
     mov cx, di
     add cx, HDP_F2X - 10
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: cp_page's pane (SPEC.md 52.12)
+    call OSAPI_FONT_RUN
 
     mov byte [hd_fldi], 0
 .field:
@@ -188,19 +195,6 @@ hd_page_paint:
     add bx, HDP_EY
     mov dx, bx
     add dx, HDP_FH - 1
-    call OSAPI_GFX_FRAME
-    mov al, [hd_fldi]
-    cmp al, [hd_field]
-    jne .fvalue
-    mov ax, di                  ; the selected field: a second frame just
-    add ax, [hd_fldx]           ; inside the first, which is how the
-    inc ax                      ; Date/Time page says "this one"
-    mov cx, ax
-    add cx, HDP_FW - 3
-    mov bx, bp
-    add bx, HDP_EY + 1
-    mov dx, bx
-    add dx, HDP_FH - 3
     call OSAPI_GFX_FRAME
 .fvalue:
     mov al, [hd_fldi]
@@ -219,7 +213,33 @@ hd_page_paint:
     mov dx, bp
     add dx, HDP_EY + 2
     mov si, hd_line
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: cp_page's pane (SPEC.md 52.12)
+    call OSAPI_FONT_RUN
+
+    ; --- the SELECTED field's inner frame, ON TOP OF the value -------------
+    ; It used to be drawn before it, and with a transparent value that was
+    ; invisible: the two overlap on exactly one row. The box is HDP_FH = 11
+    ; rows at HDP_EY, the inner frame HDP_EY+1 .. HDP_EY+8, and the value's
+    ; eight cell rows are HDP_EY+2 .. HDP_EY+9 - so the frame's BOTTOM edge
+    ; and the value's LAST row are the same row. A transparent glyph left it
+    ; alone; an opaque run paints it, and the selected field lost the bottom
+    ; of its ring. Chrome wins, so it is drawn last (SPEC.md 52.12)
+    mov al, [hd_fldi]
+    cmp al, [hd_field]
+    jne .fnext
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    mov ax, di                  ; a second frame just inside the first, which
+    add ax, [hd_fldx]           ; is how the Date/Time page says "this one"
+    inc ax
+    mov cx, ax
+    add cx, HDP_FW - 3
+    mov bx, bp
+    add bx, HDP_EY + 1
+    mov dx, bx
+    add dx, HDP_FH - 3
+    call OSAPI_GFX_FRAME
+.fnext:
     inc byte [hd_fldi]
     cmp byte [hd_fldi], 3
     jb .field
@@ -234,7 +254,7 @@ hd_page_paint:
     mov cl, HDP_CPLUS
     call hd_page_pm
 
-    ; --- the two buttons ------------------------------------------------------
+    ; --- the three buttons, drawn by INDEX and placed by their own x ---------
     mov si, hd_s_format
     mov ax, HDP_B0X
     mov bx, HDP_BW0
@@ -256,14 +276,13 @@ hd_page_paint:
     call hd_page_button
 
     ; --- and the caption, which is where the truth goes ----------------------
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
     mov si, [hd_msg]
     mov cx, di
     add cx, HDP_LX
     mov dx, bp
     add dx, HDP_CAPY
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: cp_page's pane (SPEC.md 52.12)
+    call OSAPI_FONT_RUN
 
     pop bp
     pop di
@@ -996,21 +1015,26 @@ hd_page_ladder:
     jmp .done
 
 .buttons:
+    ; LEFT TO RIGHT, which is 0, 2, 1: the row reads Format, Install, Mount and
+    ; the indices did not move with it (SPEC.md 52.4). The ladder walks the
+    ; row in x order because each rung's `jl .done` means "in the gap before
+    ; this button", and a rung out of order turns a gap into another button's
+    ; interior - the click would land on whichever index was tested first.
     mov cx, [hd_clx]
     xor bl, bl                  ; BL = which button
     cmp cx, HDP_B0X
     jl .done
     cmp cx, HDP_B0X + HDP_BW0
     jl .hit
-    mov bl, 1
-    cmp cx, HDP_B1X
-    jl .done
-    cmp cx, HDP_B1X + HDP_BW1
-    jl .hit
     mov bl, 2
     cmp cx, HDP_B2X
     jl .done
     cmp cx, HDP_B2X + HDP_BW2
+    jl .hit
+    mov bl, 1
+    cmp cx, HDP_B1X
+    jl .done
+    cmp cx, HDP_B1X + HDP_BW1
     jge .done
 .hit:
     mov al, bl                  ; ids are 1-based (0 means "nothing is down"),
@@ -1416,7 +1440,7 @@ hd_unmount_row:
     ret
 
 ; -----------------------------------------------------------------------------
-; hd_vol_of - which kernel volume is mounted on one partition (SPEC.md 52.11)
+; hd_vol_of - which kernel volume is mounted on one partition (SPEC.md 52.12)
 ; in:  AL = the device index, AH = the partition slot
 ; out: AL = the kernel's volume index, or 0FFh if nothing is mounted there
 ; clobbers: AX (the output), flags
@@ -1454,7 +1478,7 @@ hd_vol_of:
     ret
 
 ; -----------------------------------------------------------------------------
-; hd_unmount_part - drop every volume mounted on one partition (SPEC.md 52.11)
+; hd_unmount_part - drop every volume mounted on one partition (SPEC.md 52.12)
 ; in:  AL = the device index, AH = the partition slot
 ; out: AL = 1 if anything was unmounted, 0 if not
 ; clobbers: AX (the output), flags

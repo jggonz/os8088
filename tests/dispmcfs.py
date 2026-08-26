@@ -30,7 +30,7 @@ import os88marty, os88mouse, os88sym, dispcp                # noqa: E402
 S = os88sym.linear
 TITLE_H = 18
 GAMES_DIR, MISSILE_PKG = "GAMES", "MISSILE.O88"
-MBAR_H = 19
+MBAR_H = 20
 
 
 def u16(b, i=0): return b[i] | (b[i + 1] << 8)

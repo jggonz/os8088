@@ -346,6 +346,24 @@ ARK_MAXSHOT equ 4                   ; bullets in the air at once - a volley is
                                     ; presses' worth exactly as it was when a
                                     ; volley was a single bolt
 ARK_PUCHANCE equ 8                  ; 1 in this many broken bricks drops one
+; --- the composed capsule (SPEC.md 44.10.6) ---------------------------------
+; A capsule is ONE gfx_blit1 now: body, edge, mark and the strip it vacated,
+; composed into a 1bpp band at level start and put down in one call. It used to
+; be SEVEN drawing calls a frame per capsule and the mark was a transparent
+; pass over a body drawn in that same frame - so there was a letter-less
+; instant, every frame, on every falling capsule.
+ARK_SPW     equ 2                   ; band stride: 16 px, because gfx_blit1
+                                    ; wants a whole number of BYTES and the
+                                    ; capsule is 12. The four spare columns are
+                                    ; paper, and paper is ARK_BG
+ARK_SPTOP   equ 8                   ; blank rows ABOVE the capsule, which is
+                                    ; how the ERASE rides in the same call: a
+                                    ; capsule that fell `d` rows blits from row
+                                    ; ARK_SPTOP-d for ARK_PUH+d rows, and the
+                                    ; first d of them are background
+ARK_SPH     equ ARK_SPTOP + ARK_PUH ; rows in one sprite
+ARK_SPN     equ PU_KINDS + 1        ; ...and one sprite per kind, PU_NONE spare
+
 ARK_PUW     equ 12                  ; capsule size. The height must CONTAIN the
 ARK_PUH     equ 10                  ; 8px glyph drawn one row in, or the letter
                                     ; hangs a row below the rect that erases
@@ -2276,6 +2294,13 @@ ark_maybe_pu:
     add ax, bx
     pop bx
     sub ax, ARK_PUW / 2
+    add ax, [ark_ox]                ; SPEC.md 44.10.6: gfx_blit1 wants an x on
+    add ax, 4                       ; the BYTE grid, so snap the capsule's -
+    and ax, 0FFF8h                  ; once, at spawn, since it falls straight
+    sub ax, [ark_ox]                ; down and its x never changes again. At
+                                    ; most 4px, on a 12px capsule dropped from
+                                    ; a brick 20-odd wide, and the alternative
+                                    ; is the whole band refusing
     mov [ark_pux+bx], ax
     pop ax
     mul word [ark_bh]
@@ -2685,6 +2710,13 @@ ark_newgame:
 ; ark_startlevel - lay this level out and park the ball (all regs preserved)
 ark_startlevel:
     push ax
+    call ark_pu_compose             ; SPEC.md 44.10.6: the capsule sprites, once
+                                    ; a level rather than once a frame. Here and
+                                    ; not at ark_entry because 11.98.1 rescales
+                                    ; the board when the window moves cards -
+                                    ; the capsule does not scale, but a level
+                                    ; start is the one place that is certain to
+                                    ; run after every metrics change
     call ark_setspeed               ; AFTER the level is 1: it reads it
     mov ax, [ark_pw0]
     mov [ark_pw], ax
@@ -3391,6 +3423,16 @@ ark_draw_pu:
     mov al, [ark_pukind+si]
     cmp al, PU_NONE
     je .next
+    cmp byte [ark_spok], 0          ; SPEC.md 44.10.6: one blit, if the kernel
+    je .slow                        ; carries one (kern_small refuses gfx_blit1
+    call ark_blit_pu                ; outright, SPEC.md 5.4.2)
+    jnc .next                       ; ...and CF=1 means it would not take THIS
+                                    ; band, so fall through and draw it the way
+.slow:                              ; this always did rather than losing it
+    mov byte [ark_puband+si], 0     ; ...and SAY SO: this draw lays no vacated
+                                    ; strip, so the next frame's ark_wipe_pu
+                                    ; owns the erase again (SPEC.md 44.10.6.2)
+    mov al, [ark_pukind+si]
     mov ah, 0
     mov di, ax                      ; DI = kind, for the colour/letter tables
     mov bx, si
@@ -3494,6 +3536,314 @@ ark_draw_pu:
     ret
 
 ; -----------------------------------------------------------------------------
+; ark_blit_pu - capsule SI as ONE gfx_blit1 (SPEC.md 44.10.6)
+; in:  SI = the slot; out: CF = 0 drawn, CF = 1 not taken (caller draws it the
+;      old way); preserves all registers but the flags
+;
+; The band carries the strip the capsule VACATED as well as the capsule, which
+; is why there is no erase to pair with this: a capsule that fell `d` rows
+; blits from band row ARK_SPTOP-d for ARK_PUH+d rows, and the first d of those
+; are paper. Same idea as SPEC.md 27.2's "the padding IS the erase", one
+; dimension over.
+;
+; It refuses rather than clamping when `d` is larger than the blank margin -
+; a frame ark_render skipped - because the honest fallback is the old path,
+; which erases what it has to and does not care how far anything moved.
+; -----------------------------------------------------------------------------
+ark_blit_pu:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si                         ; the SLOT, and the band pointer spends SI
+    push di
+    push bp
+    push es
+
+    mov bx, si
+    add bx, bx
+    mov ax, [ark_puy+bx]            ; DX = rows fallen since it was last drawn
+    sub ax, [ark_puold+bx]
+    jb .no                          ; upwards: not a thing a capsule does
+    cmp ax, ARK_SPTOP
+    ja .no
+    mov dx, ax
+
+    mov al, [ark_pukind+si]         ; DI = this kind's band, backed up by the
+    mov ah, 0                       ; rows the erase needs
+    push dx
+    mov cx, ARK_SPH * ARK_SPW
+    mul cx
+    mov di, ax
+    pop dx
+    add di, ark_sprite
+    push dx
+    mov ax, ARK_SPTOP
+    sub ax, dx
+    mov cx, ARK_SPW
+    mul cx
+    add di, ax
+    pop dx
+
+    mov ax, [ark_pux+bx]            ; where: the vacated strip's top-left, in
+    add ax, [ark_ox]                ; ABSOLUTE coordinates - gfx_blit1 takes no
+    mov bx, [ark_puold+bx]          ; window origin, and clips signed
+    add bx, [ark_oy]
+
+    cmp byte [ark_bpp], 1           ; SPEC.md 5.4.2.2: the pen is not read on a
+    jbe .pen_done                   ; 1bpp adapter - a band there already means
+    push ax                         ; lit and unlit - so this is the VGA half
+    push bx                         ; only, and mono gets white on black, which
+    mov bl, [ark_pukind+si]         ; is what the reduction gave it anyway
+    mov bh, 0
+    mov al, [ark_pucol+bx]          ; ink = the capsule's colour...
+    mov ah, ARK_BG                  ; ...on background paper, which is CBLACK -
+    call OSAPI_GFX_BLIT1_PEN        ; and 0 is a subset of every colour, so
+    pop bx                          ; 5.4.2.2's SINGLE-PASS arm takes it
+    pop ax
+.pen_done:
+
+    add dx, ARK_PUH                 ; DX = rows: the capsule plus the strip
+    mov cx, ARK_SPW * 8             ; CX = width, 16 px
+    mov bp, ARK_SPW
+    mov si, di
+    push ds                         ; ES:SI is the band, and it is OURS: the
+    pop es                          ; slot is not an X stub, so nothing puts
+                                    ; our segment in ES for us (SPEC.md 20.1)
+    call OSAPI_GFX_BLIT1
+    jc .no
+
+    pop es                          ; drawn: and THIS is where it now sits,
+    pop bp                          ; which is the only honest thing the next
+    pop di                          ; frame can erase from
+    pop si                          ; SI BEFORE DX - they were pushed dx-then-si
+    pop dx                          ; and the pair was swapped here (SPEC.md
+                                    ; 44.10.6.1): SI came back holding the
+                                    ; caller's DX, so the slot below was junk
+    mov bx, si
+    add bx, bx
+    mov ax, [ark_puy+bx]
+    mov [ark_puold+bx], ax
+    mov byte [ark_puband+si], 1     ; ...and the band it laid carries the erase
+                                    ; for the strip below it, which is the one
+                                    ; thing ark_wipe_pu must not repeat
+                                    ; (SPEC.md 44.10.6.2)
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.no:
+    pop es
+    pop bp
+    pop di
+    pop si                          ; SI before DX, as above
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_pu_compose - build one 1bpp sprite per capsule kind (SPEC.md 44.10.6)
+;
+; Called once, from ark_reset_level. Composing at level start rather than per
+; frame is the whole point: the expensive half of compose-and-blit is the
+; compose, and a capsule's picture does not change while it falls.
+;
+; A SET bit is the BODY and takes the ink; a CLEAR bit is paper, which is the
+; edge, the mark and everything outside the 12px capsule. That polarity is
+; chosen so the pen's varying planes want the band AS IT STANDS - ink over
+; CBLACK paper, and 0 is a subset of every colour, so SPEC.md 5.4.2.2's
+; single-pass arm takes it (a black-ink pen would want the complement and cost
+; the slower loop). It also means the four spare columns and the blank rows
+; above compose to ARK_BG for free.
+;
+; The mark CLEARS bits, which is SPEC.md 6.3's rule in the other direction and
+; the one bug in this area that produces a plausible wrong result: OR the ink
+; in against a set body and nothing changes at all.
+; preserves all registers
+; -----------------------------------------------------------------------------
+ark_pu_compose:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    push bp
+
+    mov di, ark_sprite              ; every byte starts as paper
+    mov cx, ARK_SPN * ARK_SPH * ARK_SPW
+    xor al, al
+.zero:
+    mov [di], al
+    inc di
+    loop .zero
+
+    mov bp, 1                       ; BP = kind, 1..PU_KINDS
+.kind:
+    mov ax, bp                      ; DI = this kind's first band byte
+    mov bx, ARK_SPH * ARK_SPW
+    mul bx
+    mov di, ax
+    add di, ark_sprite
+    add di, ARK_SPTOP * ARK_SPW     ; ...past the blank rows, at capsule row 0
+
+    mov cx, ARK_PUH - 2             ; the BODY: rows 1..PUH-2, columns 1..10.
+    add di, ARK_SPW                 ; Row 0 and row PUH-1 are the edge and stay
+.body:                              ; paper, as do columns 0 and 11
+    mov word [di], 0xE07F           ; little-endian: byte 0 = 7Fh (x1..x7),
+    add di, ARK_SPW                 ; byte 1 = E0h (x8..x10)
+    loop .body
+
+    mov bx, bp                      ; the MARK: a letter, or the heart
+    mov al, [ark_puletter+bx]
+    or al, al
+    jz .heart
+    call ark_pu_letter
+    jmp short .knext
+.heart:
+    call ark_pu_heart
+.knext:
+    inc bp
+    cmp bp, ARK_SPN
+    jb .kind
+
+    mov byte [ark_spok], 1
+    pop bp
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_pu_letter - clear the letter's pixels out of kind BP's body
+; in:  AL = the character, BP = kind; preserves all registers
+;
+; The glyph comes from OSAPI_FONT_GLYPHS - the SAME table OSAPI_FONT_CHAR draws
+; from, which is the point: no second typeface, and it works on all three
+; adapters. It answers ES = DX, and the table is NOT in KERNEL_SEG.
+; -----------------------------------------------------------------------------
+ark_pu_letter:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov bl, al                      ; bank the character: FONT_GLYPHS returns
+    call OSAPI_FONT_GLYPHS          ; the range in AL/AH and the table in DX:SI
+    cmp bl, al
+    jb .out                         ; outside the table: no mark rather than a
+    cmp bl, ah                      ; walk past the end of it
+    ja .out
+    sub bl, al                      ; BL = the glyph's index
+    mov bh, 0
+    mov es, dx                      ; ES:SI is the table - and ES FIRST, because
+                                    ; the `mul` below returns DX:AX and would
+                                    ; take the segment with it
+    mov al, cl                      ; CX = bytes per glyph (8)
+    xor ah, ah                      ; ...and AH is still FONT_GLYPHS' last
+                                    ; character, which a 16-bit mul would use
+    mul bx
+    add si, ax                      ; SI = this glyph's first row
+
+    mov ax, bp                      ; DI = kind BP's capsule row 1
+    mov bx, ARK_SPH * ARK_SPW
+    mul bx
+    mov di, ax
+    add di, ark_sprite
+    add di, (ARK_SPTOP + 1) * ARK_SPW
+
+    mov cx, 8                       ; eight glyph rows onto body rows 1..8
+.row:
+    mov al, [es:si]                 ; the glyph row, bit 7 leftmost
+    inc si
+    mov ah, 0
+    push cx
+    mov cl, 6                       ; column c sits at capsule x = 2+c, and a
+    shl ax, cl                      ; word here has x0 in bit 15 - so bit
+    pop cx                          ; (7-c) has to reach bit (13-c): shift 6
+    xchg al, ah                     ; ...and the band is little-endian bytes
+    not ax
+    and [di], ax                    ; the mark CLEARS body bits
+    add di, ARK_SPW
+    loop .row
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_pu_heart - the same, from ark_heartrun's horizontal runs
+; in:  BP = kind; preserves all registers
+; -----------------------------------------------------------------------------
+ark_pu_heart:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov ax, bp
+    mov bx, ARK_SPH * ARK_SPW
+    mul bx
+    mov di, ax
+    add di, ark_sprite              ; ...at the row the heart is centred on
+    add di, (ARK_SPTOP + (ARK_PUH - ARK_HEARTH) / 2) * ARK_SPW
+    mov si, ark_heartrun
+    mov dx, ARK_HEARTH
+.row:
+    mov cx, 2                       ; two run slots a row; 0xFF ends them
+.run:
+    mov al, [si]
+    cmp al, 0xFF
+    je .rend
+    mov ah, [si+1]                  ; AL..AH inclusive, in heart columns
+.px:
+    push cx
+    push ax
+    mov bl, al
+    add bl, (ARK_PUW - ARK_HEARTW) / 2  ; ...into capsule columns
+    mov cl, bl
+    mov ax, 0x8000                  ; x0 is bit 15
+    shr ax, cl
+    xchg al, ah                     ; ...and the band is little-endian bytes
+    not ax
+    and [di], ax
+    pop ax
+    pop cx
+    inc al
+    cmp al, ah
+    jbe .px
+.rend:
+    add si, 2
+    loop .run
+    add di, ARK_SPW
+    dec dx
+    jnz .row
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; ark_wipe_pu - erase every capsule from where it was last frame
 ; preserves all registers
 ; -----------------------------------------------------------------------------
@@ -3513,6 +3863,21 @@ ark_wipe_pu:
     mov dx, ARK_PUH - 1
     jmp short .wipe
 .fall:                              ; still falling: only the strip it VACATED
+    cmp byte [ark_puband+si], 0     ; ...and NOT EVEN THAT once the capsule's
+    jne .next                       ; LAST DRAW WAS A BAND (SPEC.md 44.10.6):
+                                    ; the vacated strip is the band's own first
+                                    ; rows, so erasing it here would write those
+                                    ; pixels twice - which is the defect the
+                                    ; band was built to remove, moved one
+                                    ; routine over.
+                                    ; PER SLOT AND SET BY THE DRAW THAT
+                                    ; HAPPENED, never by ark_spok: that byte
+                                    ; only says a band is worth offering, and a
+                                    ; kernel that refuses every one of them
+                                    ; (kern_small has no gfx_blit1 at all) left
+                                    ; this erase to nobody and streaked two rows
+                                    ; of capsule black down the glass every
+                                    ; frame - SPEC.md 44.10.6.2
     mov bx, si                      ; since it was last drawn. Two rows in the
     add bx, bx                      ; ordinary frame; more if ark_render
     mov ax, [ark_puy+bx]            ; skipped one and the capsule kept moving;
@@ -4184,7 +4549,7 @@ ark_textc:
     push dx
     add cx, [ark_ox]
     add dx, [ark_oy]
-    call OSAPI_FONT_STR
+    call OSAPI_FONT_STR_XPARENT
     pop dx
     pop cx
     ret
@@ -4194,7 +4559,7 @@ ark_charc:
     push dx
     add cx, [ark_ox]
     add dx, [ark_oy]
-    call OSAPI_FONT_CHAR
+    call OSAPI_FONT_CHAR_XPARENT
     pop dx
     pop cx
     ret
@@ -4478,9 +4843,35 @@ ark_met_sml:                        ; CGA 640x200: 137 rows of content, all in
     ABUF  ark_dirty, ARK_CELLS      ; ...and which ones need redrawing
     ABUF  ark_pukind, ARK_MAXPU
     ABUF  ark_puwipe, ARK_MAXPU
+    ABUF  ark_puband, ARK_MAXPU     ; 1 = THIS SLOT'S LAST DRAW WAS A BAND, so
+                                    ; the strip it vacated is already erased and
+                                    ; ark_wipe_pu must not erase it again
+                                    ; (SPEC.md 44.10.6.2). Written by the draw
+                                    ; that HAPPENED - set by ark_blit_pu's
+                                    ; success path, cleared by ark_draw_pu's
+                                    ; .slow - and never by the offer that was
+                                    ; made, which is the whole distinction
+                                    ; ark_spok could not carry
     ABUF  ark_pux, ARK_MAXPU*2
     ABUF  ark_puy, ARK_MAXPU*2
     ABUF  ark_puold, ARK_MAXPU*2
+    ABUF  ark_sprite, ARK_SPN * ARK_SPH * ARK_SPW   ; SPEC.md 44.10.6
+    ABYTE ark_spok                  ; 1 = the sprites are composed, so a band is
+                                    ; worth OFFERING. ark_draw_pu reads this and
+                                    ; NOTHING ELSE DOES: it does not say the
+                                    ; kernel will TAKE the band - a kern_small
+                                    ; kernel refuses gfx_blit1 outright
+                                    ; (SPEC.md 5.4.2) - so the wipe cannot be
+                                    ; driven from it, and ark_puband above is
+                                    ; what the wipe reads instead
+                                    ; (SPEC.md 44.10.6.2).
+                                    ; It is not latched off on a refusal,
+                                    ; because the other two refusals are
+                                    ; per-frame and latching would strand the
+                                    ; capsule on the slow path for the rest of
+                                    ; the level. A refused blit costs one far
+                                    ; call, which is nothing against the six
+                                    ; fills behind it
     ABUF  ark_shot, ARK_MAXSHOT
     ABUF  ark_shwipe, ARK_MAXSHOT
     ABUF  ark_shx, ARK_MAXSHOT*2

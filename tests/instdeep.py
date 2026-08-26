@@ -145,7 +145,8 @@ CP_RX = 96                         # ...the right pane's left edge
 CP_DBY1, CP_DROWH = 20, 26         # ...the Drivers page's hit bands
 CP_IDRV = 2                        # SPEC.md 31.3
 HDP_BY, HDP_BH = 82, 16            # page.inc: the Disks page's button row
-HDP_B2X, HDP_BW2 = 154, 64         # ...Install, which opens the installer
+HDP_B2X, HDP_BW2 = 74, 64          # ...Install, the middle of the three
+                                   #    buttons (SPEC.md 52.4)
 HIW_BY, HIW_BH = 96, 16            # inst.inc: the installer's own button row
 HIW_B0X, HIW_BW0 = 8, 88           # ...and Install / Copy Apps, the first one
 WIN_BORDER, WIN_TITLE = 1, 18      # a window's content origin, from its rect

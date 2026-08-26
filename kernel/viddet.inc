@@ -85,13 +85,13 @@ vid_tab:
 ; reading them before vid_apply runs sees the historical constants.
 ;
 ; IT IS THE FIRST HALF OF A LONGER CONTIGUOUS RUN, and that is now load-bearing
-; rather than incidental. `vid_seg` through `vid_rend` - the nine live words and
-; the nine derived ones below them - are the eighteen words A DISPLAY OWNS, and
-; SPEC.md 39.12's per-display context copies exactly that span with one
-; `rep movsw`. Everything from `vid_dock_y0` down is the DESKTOP's and must stay
-; out of it. `vid_tab` used to sit between the two halves, which is why it has
-; moved up here: it is a static table and it was splitting a run that wants to
-; be one.
+; rather than incidental. `vid_seg` through `vid_tseg` - the nine live words,
+; the nine derived ones below them and font_run's composed-row target - are the
+; NINETEEN words A DISPLAY OWNS, and SPEC.md 39.12's per-display context copies
+; exactly that span with one `rep movsw`. Everything from `vid_dock_y0` down is
+; the DESKTOP's and must stay out of it. `vid_tab` used to sit between the two
+; halves, which is why it has moved up here: it is a static table and it was
+; splitting a run that wants to be one.
 ; -----------------------------------------------------------------------------
 vid_seg     dw VGA_SEG          ; framebuffer segment
 vid_stride  dw ROW_BYTES        ; bytes from a row to the row 1 bank down
@@ -125,6 +125,23 @@ vid_cwm1    dw SCREEN_W-1       ; the display's last legal x and y, and the
 vid_chm1    dw SCREEN_H-1       ; whole-cell limits font_char and ico_core
 vid_cwm8    dw SCREEN_W-8       ; clip against. THE LAST WORD OF THE RUN a
 vid_chm8    dw SCREEN_H-8       ; display owns - vidsel.inc asserts it.
+vid_tseg    dw VGA_SEG          ; THE SEGMENT A COMPOSED ROW IS WRITTEN TO
+                                ; (SPEC.md 6.1.10): [vid_rseg] on the mono
+                                ; adapters, where the software renderer's
+                                ; framebuffer IS the screen, and [vid_seg] on
+                                ; VGA, where vid_rseg is 0 and the planar
+                                ; aperture is the target. font_run's prologue
+                                ; is charged to every string this system
+                                ; draws, so the choice is made ONCE per
+                                ; display and not once per run.
+                                ;
+                                ; IT IS THE LAST WORD OF THE PER-DISPLAY RUN,
+                                ; and it EXTENDED that run rather than joining
+                                ; it in the middle: vidsel.inc's VID_CTX_W and
+                                ; its %error are the second opinion, so a
+                                ; nineteenth word put anywhere above this
+                                ; fails the build rather than being silently
+                                ; left out of the run that gets copied.
 
 ; --- THE VIRTUAL DESKTOP (SPEC.md 39.2.1) ------------------------------------
 ; What the WINDOW SYSTEM lays out in, and on a one-display machine identical to
@@ -210,6 +227,72 @@ gfx_inktab:
 vid_banktab:
     dw 0x0000, 0x2000, 0x4000, 0x6000
 
+; SPEC.md 39.3.1 - gfx_rowbase's table. 348 rows, WHICH IS EVERY ROW OF A
+; HERCULES and therefore every row of both 1bpp adapters: a CGA is 200 and a
+; Hercules 348, so on the target machine this table never misses.
+;
+; It was 128 - what 256 bytes of the image rung would carry - and PERFORMANCE.md
+; Set 106 is what moved it. 128 rows is the top 64% of a CGA and the top 37% of
+; a Hercules, and the profiles said what that costs where an application
+; actually draws: the screen saver spent 2.08% of the machine in
+; gfx_rowbase_calc on CGA and 6.39% on VGA, and Missile Command 1.40% and 1.68%,
+; because a game's window is in the bottom third of the screen. At 348 the CGA
+; miss path is 0.00% - the saver 4.69% -> 3.14% of the machine, Missile Command
+; 1.66% -> 0.69%.
+;
+; 200 AND 348 COST THE SAME 512-BYTE RUNG, which is why this is not 200: the
+; low rung rounds either to 9,728 bytes, so covering a Hercules as well as a
+; CGA is free once the step is taken.
+;
+; VGA IS 480 AND STILL MISSES, deliberately. 348 of 480 is 72.5% and takes the
+; saver from 8.18% to 4.22%; the remaining 132 rows are a SECOND rung and buy
+; VGA alone (4.22% -> 3.13%). The target machine is an IBM PC/XT (PERFORMANCE.md
+; Part 1), so the first rung is spent where the target is and the second is
+; priced in Set 106 and not taken. A row past the end takes the arithmetic,
+; which is why the cap is a number here and not a contract anywhere else.
+;
+; ...AND IT IS kern_big's ALONE, which is WM_ANIM's and OS88_THEME's shape in
+; kernel.asm and for their reason. The step is one 512-byte rung of the low
+; rung either way - 200 rows crosses it too - so a smaller table would not
+; rescue the small build, and kern_small's is the figure that has to be
+; DEFENDED (it is the 128KB machine's). It keeps the 128-row table and its
+; budget; the feature is the fast path being wider, not the fast path existing.
+%ifdef KERN_BIG
+VID_ROWTAB  equ 348
+%else
+VID_ROWTAB  equ 128
+%endif
+
+; ...and HOW MANY of its rows are filled: 0 until vid_apply has built it, and
+; VID_ROWTAB after. One word, so gfx_rowbase's "is there a table" and "is this
+; row in it" are the same compare.
+;
+; IT IS ALSO THE SWITCH THAT TURNS THE TABLE OFF ON THE SECOND DISPLAY. Neither
+; this word nor the table below is inside SPEC.md 39.12's nineteen-word run -
+; one is .text and the other .lowbss - while the stride, the bank mask and the
+; bank shift it was built from all are. So vid_ctx_act zeroes this when it makes
+; current a display whose adapter is not [vid_kind]'s and puts VID_ROWTAB back
+; when that display returns; see there for why the alternative - rebuilding, at
+; 23.6 ms - is not affordable under a drawing primitive.
+;
+; .text with a REAL initialiser, not .bss: -f bin zeroes nothing, and
+; gfx_rowbase is called by the SPLASH - which draws while vid_apply has not run
+; and the table is whatever the last boot left in that RAM. This zero is the
+; only thing between that and a progress bar drawn at a random offset.
+vid_rowmax  dw 0
+
+section .lowbss                 ; LOW_SEG (SPEC.md 2.1), and not .bss - 696
+vid_rowtab  resw VID_ROWTAB     ; bytes in the image rung would cross a step
+section .text                   ; AND spend KERN_CODE_MAX, which is the guard
+                                ; that cannot be raised. Here it costs one
+                                ; 512-byte rung of KERN_BUDGET and nothing of
+                                ; the segment. It costs nothing to REACH
+                                ; either: SS IS LOW_SEG for all kernel code
+                                ; (SPEC.md 1), so `[ss:bx + tab]` is the same
+                                ; one override byte `[cs:...]` would have been.
+                                ; font_glyphs is read exactly this way and for
+                                ; exactly this reason.
+
 ; -----------------------------------------------------------------------------
 ; vid_detect - decide which adapter is installed (SPEC.md 39.1)
 ;
@@ -294,8 +377,8 @@ vid_detect:
 ;
 ; THESE THREE ARE NOT IN THE PER-DISPLAY RUN AND HAVE TO FOLLOW A SWAP ANYWAY,
 ; which is the whole reason this is a routine rather than eleven lines inside
-; vid_apply. SPEC.md 39.12's context is the eighteen contiguous words from
-; vid_seg to vid_chm8; [vid_mono] and the two plane counts sit above that run,
+; vid_apply. SPEC.md 39.12's context is the nineteen contiguous words from
+; vid_seg to vid_tseg; [vid_mono] and the two plane counts sit above that run,
 ; are DERIVED from the kind rather than being vid_tab columns, and are what
 ; every primitive dispatches on. So vid_ctx_act has to publish them as well,
 ; and if it did so from its own copy of the rule the two could disagree.
@@ -394,6 +477,11 @@ vid_apply:
                                 ; primary's 640 gives cell 54, inside the
                                 ; buffer, which is the number this always meant
 
+    mov word [vid_rowmax], 0    ; SPEC.md 39.3.1: from here to the table build
+                                ; at the bottom of this routine the geometry
+                                ; and the table disagree, so nothing may read
+                                ; it - gfx_rowbase computes instead
+
     mov ax, [vid_h]             ; --- heights
     dec ax
     mov [vid_hm1], ax
@@ -450,12 +538,67 @@ vid_apply:
     mov [vid_rpara], bx
     mov [vid_rend], dx
 
+    ; --- font_run's target (SPEC.md 6.1.10), and it belongs HERE and not one
+    ; line above the block it reads. [vid_rseg] is what this routine has just
+    ; decided; a copy taken earlier in vid_apply is the PREVIOUS display's,
+    ; which on a one-card machine is the same number every time and on a
+    ; two-card machine is the other monitor's framebuffer. That is not a
+    ; theoretical ordering: it shipped for the length of one test run and
+    ; tests/dispcheck.py caught it as a 249-pixel solid run on a secondary
+    ; that should have been nothing but 50% dither.
+    or ax, ax                   ; VGA: nothing routes through the software
+    jnz .tseg                   ; renderer, so vid_rseg is 0 there and the
+    mov ax, [vid_seg]           ; planar aperture is where a composed row goes
+.tseg:
+    mov [vid_tseg], ax
+
+    ; --- gfx_rowbase's answer, laid down instead of computed (SPEC.md 39.3.1)
+    ; Every input to a row's base address - the stride, the bank mask and the
+    ; bank shift - is decided by the lines above and cannot change again until
+    ; this routine runs. So the answers go in a table here rather than being
+    ; recomputed on every drawing call in the machine.
+    ;
+    ; VID_ROWTAB rows and no more - 348, every row of both 1bpp adapters, and
+    ; 72.5% of a VGA's 480. A row past it takes the arithmetic path exactly as
+    ; before, so this is a fast path and not a new contract.
+    ;
+    ; The loop is ~324 cycles a row, so this is 113,000 cycles - 23.6 ms - of
+    ; every vid_apply, against 8.7 ms when the table was 128. It runs at boot
+    ; and on a display change, which is the only place it could ever be seen,
+    ; and a 9.2 s boot does not notice 15 ms. Written down because it is the
+    ; kind of cost that is only cheap while somebody has checked.
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov di, vid_rowtab
+    xor bx, bx                  ; BX = the row
+.rowtab:
+    mov ax, bx
+    call gfx_rowbase_calc       ; the body this table replaces, bank and all
+    mov [ss:di], ax             ; LOW_SEG, like every other reach for it
+    inc di
+    inc di
+    inc bx
+    cmp bx, VID_ROWTAB
+    jb .rowtab
+    mov word [vid_rowmax], VID_ROWTAB   ; ...and only now may anything read it
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+
     mov ax, [vid_w]             ; --- home the cursor; see the header
     shr ax, 1
     mov [mouse_x], ax
     mov ax, [vid_h]
     shr ax, 1
     mov [mouse_y], ax
+    mov byte [cur_shchk], 1     ; ...and the pointer MOVED (SPEC.md 7.2.1.1) -
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
+                                ; the geometry under it certainly did
 %ifdef KERN_BIG
     mov byte [cur_disp], 0      ; ...onto display 0, which is where the middle
                                 ; of the desktop is. Saying so matters: a stale
@@ -784,6 +927,18 @@ vid_text:
 ; Every geometry word is read through CS, not DS - see gfx_nextrow.
 ; -----------------------------------------------------------------------------
 gfx_rowbase:
+    cmp ax, [cs:vid_rowmax]     ; ONE guard, not two: [vid_rowmax] is 0 until
+    jae gfx_rowbase_calc        ; vid_apply has filled the table, so "there is
+    push bx                     ; no table yet" and "this row is past its end"
+    mov bx, ax                  ; are the same compare (SPEC.md 39.3.1)
+    shl bx, 1
+    mov ax, [ss:bx + vid_rowtab]    ; LOW_SEG - see the table's own note
+    pop bx
+    ret
+
+; gfx_rowbase_calc - the arithmetic. It fills the table above, it answers for a
+; row past its end, and it is what draws before vid_apply has run at all.
+gfx_rowbase_calc:
     push bx
     mov bx, ax
     and bx, [cs:vid_bmask]      ; BX = bank number

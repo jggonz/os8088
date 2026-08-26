@@ -6814,13 +6814,12 @@ fd_onup:
 .tick:
     ; **ONE 12px BOX, NOT THE PAGE** (SPEC.md 77.44). This was FDD_PAGE, which
     ; on the Setup page means fd_clear_content and every field, label, tick and
-    ; help line again - for a tick. The only thing that can widen it is a field
-    ; that HAD focus and has just lost it, which is what defoc's carry says.
+    ; help line again - for a tick. A field that HAD focus and has just lost it
+    ; used to widen it back to the page; it costs ONE CELL now, drawn here and
+    ; not asked for through a dirty bit at all (SPEC.md 77.45).
     mov byte [fd_cdirty], 1
+    call fd_setup_uncaret
     call fd_setup_defoc
-    jnc .narrow
-    mov ah, FDD_PAGE
-.narrow:
     or [fd_dirty], ah
     jmp short .paint
 .done:
@@ -7114,7 +7113,11 @@ fd_setup_toggle:
     mov byte [fd_page], FP_LOG
 .out:
     or byte [fd_dirty], FDD_PAGE    ; the face is a different face now
-    mov byte [fd_pfoc], 0
+    call fd_setup_defoc             ; ...and BOTH halves of the focus go with
+                                    ; it. This zeroed [fd_pfoc] alone and left
+                                    ; LN_FOCUS set, so the next visit drew a
+                                    ; caret in a field fd_setup_key would not
+                                    ; type into (SPEC.md 77.45.4)
     pop si
     ret
 
@@ -7338,41 +7341,117 @@ fd_setup_press:
     push ax
     push bx
     push si
+    push di                         ; ...DI too, because fd_fblock writes it
+                                    ; and this routine claims to preserve
+                                    ; everything
     xor bx, bx
 .f:
     call fd_fblock
-    call os88line_click             ; CF=0 = it landed in THIS field
-    jnc .got
-    inc bx
-    cmp bx, FD_FN
-    jb .f
+    call os88line_hit               ; CF=0 = it landed in THIS field - and it
+    jnc .got                        ; is the HIT and not the click, because
+    inc bx                          ; the click would move the caret before
+    cmp bx, FD_FN                   ; the old one had been taken off the glass
+    jb .f                           ; (SPEC.md 77.45.1)
     call fd_ctlfind                 ; not a field: a tick or Done takes the
     or ax, ax                       ; release, and anything else is a press on
     jnz .no                         ; the background, which takes the caret
     cmp byte [fd_pfoc], 0           ; away - but only if something HAD it, or
-    je .no                          ; every stray press repaints the page
-    call fd_setup_defoc
-    or byte [fd_dirty], FDD_PAGE
-    call fd_spend
+    je .no                          ; every stray press repaints
+    mov bx, FD_FN                   ; ...and NOTHING takes it (which is what
+    call fd_setup_refoc             ; the loop above exited on, said out loud)
 .no:
+    pop di
     pop si
     pop bx
     pop ax
     stc
     ret
 .got:
-    call fd_setup_defoc
-    mov al, bl
-    inc al                          ; 0 means NO field, so the index is +1
-    mov [fd_pfoc], al
-    call fd_fblock
-    mov byte [si + LN_FOCUS], 1
-    or byte [fd_dirty], FDD_PAGE
-    call fd_spend
+    call fd_setup_refoc             ; BX = the field, SI = its block
+    pop di
     pop si
     pop bx
     pop ax
     clc
+    ret
+
+; -----------------------------------------------------------------------------
+; fd_setup_refoc - the caret moves to field BX, from wherever it is
+; in:  BX = the field taking it and SI = that field's block, with
+;      os88line_click NOT yet called; or BX = FD_FN for "nothing takes it"
+; out: nothing; preserves all registers
+;
+; **UNCARET, DEFOCUS, CLICK, CARET, and in that order.** Two cells change on
+; the whole page - the one the bar leaves and the one it arrives at - and
+; nothing between those two calls draws anything, so the bar is never in two
+; places and the gap where it is in none is one drawing call long. This was
+; FDD_PAGE and fd_spend: fd_clear_content plus every field, label, tick and
+; help line, to move a 1px bar (SPEC.md 77.45).
+; -----------------------------------------------------------------------------
+fd_setup_refoc:
+    push ax
+%ifdef FTPDSLOW
+    ; **THE REFERENCE BUILD** (make FTPDSLOW=1, SPEC.md 77.14): the focus
+    ; change repaints the whole content box, which is what every one of them
+    ; did before SPEC.md 77.45. tests/ftpdflick.py is the A/B it exists for -
+    ; the claim being "the picture is the same, only the number of times it
+    ; was drawn changed", and a capture of ONE build cannot check that.
+    call fd_setup_defoc
+    cmp bx, FD_FN
+    jae .slow
+    call os88line_click
+    mov al, bl
+    inc al
+    mov [fd_pfoc], al
+.slow:
+    or byte [fd_dirty], FDD_PAGE
+    call fd_spend
+%else
+    call fd_setup_uncaret           ; the old bar off - one opaque cell...
+    call fd_setup_defoc             ; ...and the flags follow it
+    cmp bx, FD_FN
+    jae .out                        ; a press on the background: nothing takes
+    call os88line_click             ; it, and one cell is the whole cost
+    mov ax, [si + LN_CAR]           ; the caret is where the press landed and
+    call os88line_caron             ; LN_FOCUS with it: ONE 1px fill
+    mov al, bl
+    inc al                          ; 0 means NO field, so the index is +1
+    mov [fd_pfoc], al
+.out:
+%endif
+    pop ax
+    ret
+
+; --- fd_setup_uncaret - take the bar off the field that HAS it --------------
+; The caret is 1px wide inside one 8px cell, so putting back what it covered
+; is ONE drawing call and not the field, let alone the page (SPEC.md 77.45).
+;
+; It changes no state at all: fd_setup_defoc still owns LN_FOCUS and
+; [fd_pfoc], and the two are called in this order because this one reads the
+; variable that one clears.
+fd_setup_uncaret:
+%ifdef FTPDSLOW
+    ret                             ; the reference build repaints the page,
+                                    ; so a cell drawn here would only be a
+                                    ; double draw of its own making
+%endif
+    push ax
+    push bx
+    push si
+    push di
+    mov bl, [fd_pfoc]
+    or bl, bl
+    jz .out                         ; nothing has it, so nothing is on the
+    dec bl                          ; glass to take off
+    xor bh, bh
+    call fd_fblock
+    mov ax, [si + LN_CAR]
+    call os88line_caroff
+.out:
+    pop di
+    pop si
+    pop bx
+    pop ax
     ret
 
 ; --- fd_setup_rects - every Setup rect, from the live content box ------------
@@ -7403,41 +7482,34 @@ fd_setup_rects:
     ret
 
 ; --- fd_setup_defoc - take the caret off whichever field has it -------------
-; out: CF=1 = something WAS focused and now is not, so a field's pixels have
-; changed and the caller owes it a repaint. CF=0 = nothing moved, and a tick
-; toggled beside it can repaint just itself (SPEC.md 77.44).
+; out: nothing; preserves all registers
+;
+; **BOTH HALVES OF THE STATE, AND IT IS THE ONLY ROUTINE THAT OWNS BOTH**: the
+; per-field LN_FOCUS the painter reads and the [fd_pfoc] index fd_setup_key
+; types into. fd_setup_toggle cleared only the second on the way out of the
+; page, which left a caret drawn in a field the keyboard no longer reached
+; (SPEC.md 77.45.4).
+;
+; It answered a CARRY until SPEC.md 77.45 - "something was focused, so the
+; caller owes the page a repaint". Nothing owes the page anything now: the
+; field losing the caret costs one cell, drawn by fd_setup_uncaret before this
+; is called, so the carry had no consumer left and a documented output nothing
+; reads is a trap for the next caller.
 fd_setup_defoc:
-    push ax
     push bx
     push si
     push di
-    xor ax, ax                      ; AL = "we cleared one"
     xor bx, bx
 .f:
     call fd_fblock
-    cmp byte [si + LN_FOCUS], 0
-    je .n
-    mov al, 1
-.n:
     mov byte [si + LN_FOCUS], 0
     inc bx
     cmp bx, FD_FN
     jb .f
-    cmp byte [fd_pfoc], 0
-    je .p
-    mov al, 1
-.p:
     mov byte [fd_pfoc], 0
-    or al, al
     pop di
     pop si
     pop bx
-    pop ax
-    jz .none
-    stc
-    ret
-.none:
-    clc
     ret
 
 ; --- fd_setup_key - AL/AH from W_ONKEY. CF=0 = the field took it -------------
@@ -7989,8 +8061,12 @@ fd_cfg_getstr:
 .term:
     mov byte [di], 0
     pop di
-    pop cx
-    pop si
+    pop si                          ; SI BEFORE CX - the pair was crossed here
+    pop cx                          ; (SPEC.md 77.12.3), and SI is fd_cfg_load's
+                                    ; RECORD CURSOR: it came back holding the
+                                    ; capacity the caller had just put in CX,
+                                    ; so the walk left the buffer at the first
+                                    ; ROOT, USER or PASS record in the file
     pop ax
     ret
 

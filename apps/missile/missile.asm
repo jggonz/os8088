@@ -1358,7 +1358,8 @@ mc_abdraw:
     shr cx, 1
     add cx, [mc_abl]
     mov dx, di
-    call mc_textc
+    mov ah, CWHITE                  ; the panel this routine filled six calls
+    call mc_textc                   ; ago; the ink is still mc_setcol's CBLACK
     pop si
     add di, MC_ABLH
     jmp short .line
@@ -7198,6 +7199,12 @@ mc_clamp:
     stc
     ret
 
+; mc_textc - SI = string at content-relative CX/DX; AH = the GROUND a windowed
+;            run letters onto (the Mode X twin does not read it)
+;
+; The ink is [mc_col], which mc_setcol banks on every pen change - a package
+; cannot read [gfx_color] back (SPEC.md 6.6.5), and this one had already
+; written the answer down for its own reasons.
 mc_textc:
     push cx
     push dx
@@ -7205,7 +7212,8 @@ mc_textc:
     add dx, [mc_oy]
     cmp byte [mc_fsx], 0
     jne .fsx
-    call OSAPI_FONT_STR
+    mov al, [mc_col]
+    call OSAPI_FONT_RUN
     jmp short .out
 .fsx:
     call mx_text

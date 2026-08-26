@@ -196,7 +196,7 @@ tb_line:
     mov cx, [tb_cx]
     add cx, TB_MARGIN
     add dx, [tb_cy]
-    call OSAPI_FONT_STR
+    call OSAPI_FONT_STR_XPARENT
     pop dx
     pop cx
     ret
@@ -472,7 +472,7 @@ tb_key:
     mov di, TB_N
 .cell:
     mov al, [si]
-    call OSAPI_FONT_CHAR
+    call OSAPI_FONT_CHAR_XPARENT
     inc si
     add cx, 8
     dec di

@@ -624,6 +624,7 @@ assoc_post_x:
     pop si
     jc .no
     mov [assoc_dapp], al
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
     pop si                      ; the entry again
     push si
     mov di, assoc_doc           ; stage the document's own name
@@ -972,7 +973,7 @@ assoc_run_x:
     push cx
     mov bx, fm_stattab
     mov cx, LD_NSTAT
-    call KERNEL_SEG:cw_toast_say
+    call KERNEL_SEG:toast_say
     pop cx
     pop bx
     push ds
@@ -1006,7 +1007,7 @@ assoc_run_x:
     pop cx
     pop bx
     pop ax
-    ret
+    retf
 
 ; assoc_back - put the user's volume back where the document is. A failed
 ; remount leaves that volume mount-failed at its root with the write gate
@@ -1125,10 +1126,10 @@ osapi_arg_file_x:
     mov dx, [assoc_dclus]
     mov bl, [assoc_ddrv]
     clc
-    ret
+    retf
 .none:
     stc
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; osapi_assoc_set - claim an extension for a program (0x02F0, an X stub)
@@ -1200,7 +1201,7 @@ osapi_assoc_set_x:
     pop bx
     pop ax
     clc
-    ret
+    retf
 .full:
     pop di
     pop si
@@ -1209,7 +1210,7 @@ osapi_assoc_set_x:
     pop bx
     pop ax
     stc
-    ret
+    retf
 
 ; assoc_ext_row - the row assoc_find just matched. in: SI -> 3 ext bytes;
 ; out: BX = its row (the caller has already had CF=0 from assoc_find)
@@ -1969,8 +1970,6 @@ asc_note:
 ; =============================================================================
 acf_assoc_post:     call assoc_post_x
                 retf
-acf_assoc_run:      call assoc_run_x
-                retf
 acf_assoc_docicon:  call assoc_docicon_x
                 retf
 acf_assoc_note_app: call assoc_note_app_x
@@ -1980,10 +1979,6 @@ acf_asc_use:        call asc_use_x
 acf_asc_lookup:     call asc_lookup_x
                 retf
 acf_asc_take:       call asc_take_x
-                retf
-acf_osapi_arg_file: call osapi_arg_file_x
-                retf
-acf_osapi_assoc_set: call osapi_assoc_set_x
                 retf
 
 section .text                   ; DATA, so back to the kernel segment

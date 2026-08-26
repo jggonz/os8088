@@ -605,9 +605,7 @@ fr_nowork:
     push cx
     push dx
     push si
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov si, fr_s_now1
+    mov si, fr_s_now1               ; no pen: .line carries its own pair
     mov bx, -10
     call .line
     mov si, fr_s_now2
@@ -636,7 +634,8 @@ fr_nowork:
 .y_ok:
     add dx, [fr_oy]
     add dx, FR_STRIP_H
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the canvas's own ground -
+    call OSAPI_FONT_RUN             ; fr_clear/wm_paint_all just laid it down
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1861,8 +1860,9 @@ fr_status:
     mov dx, bx
     add dx, FR_STRIP_H-1
     call OSAPI_GFX_FILL
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
+                                    ; ...and NO pen: every field below carries
+                                    ; its own pair, so nothing here reads
+                                    ; [gfx_color] any more (SPEC.md 40.2.2)
 
     mov ax, [fr_type]               ; the fractal's name
     mov cl, 4
@@ -1874,21 +1874,27 @@ fr_status:
     add cx, FR_X_NAME
     mov dx, [fr_oy]
     add dx, FR_TXT_Y
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
 
     mov si, fr_s_zoom               ; 'Zoom' + the exponent 0..4
     mov cx, [fr_ox]
     add cx, FR_X_ZOOM
     mov dx, [fr_oy]
     add dx, FR_TXT_Y
-    call OSAPI_FONT_STR
-    mov al, [fr_z]
-    add al, '0'
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
+    mov al, [fr_z]                  ; ...and the exponent as a one-cell STRING,
+    add al, '0'                     ; because there is no opaque font_char and
+    mov [fr_numbuf], al             ; a run is the same call. fr_numbuf is free
+    mov byte [fr_numbuf+1], 0       ; until the percentage below composes into
+    mov si, fr_numbuf               ; it, and this is the only other user
     mov cx, [fr_ox]
     add cx, FR_X_ZNUM
     mov dx, [fr_oy]
     add dx, FR_TXT_Y
-    call OSAPI_FONT_CHAR
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
 
     mov di, fr_numbuf               ; the render progress, 0..100%
     mov al, [fr_pct]
@@ -1901,7 +1907,8 @@ fr_status:
     add cx, FR_X_PCT
     mov dx, [fr_oy]
     add dx, FR_TXT_Y
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
 
     mov bx, [fr_pal]                ; the palette, named by its own menu item
     shl bx, 1
@@ -1910,7 +1917,8 @@ fr_status:
     add cx, FR_X_PAL
     mov dx, [fr_oy]
     add dx, FR_TXT_Y
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
 .out:
     pop di
     pop si

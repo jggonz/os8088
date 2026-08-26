@@ -420,10 +420,11 @@ Two neighbours checked with it:
 
 ### 6.2 `[sch_lock]` has no API slot — and the kernel is where it belongs
 
-Both transports raise the scheduler lock. A loaded image cannot:
-`drivers/debug/debug.asm` records this in its own header as the reason it has
-no `call` verb and no disk payload channel — *"and `[sch_lock]` has no API
-slot. Adding one is kernel code."*
+Both transports raise the scheduler lock. A loaded image cannot: no API slot
+publishes `[sch_lock]`, so a driver that needs the scheduler held cannot ask
+for it. The since-removed serial monitor (SPEC.md §58) recorded this in its own
+header as the reason it had no `call` verb and no disk payload channel —
+*"and `[sch_lock]` has no API slot. Adding one is kernel code."*
 
 **The resolution needs no new slot and is already in the tree.** `dsk_xfer`
 raises `[sch_lock]` *before* dispatching `DSV_BLK`, so a block driver is handed

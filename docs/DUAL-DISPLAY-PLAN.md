@@ -573,7 +573,7 @@ There is one, and it is worth naming because it is cheap and genuinely useful
 outright: detection, mode, and a small published surface. The window manager
 never composites there, the cursor never goes there, nothing drags between.
 Content is pushed to it — a Task Manager readout, Tracker's pattern grid, a
-`DEBUG.DRV`-style console, a fullscreen picture.
+a serial-monitor-style console, a fullscreen picture.
 
 - Kernel impact: a class plus two or three cells — **~300 B**, against ~1,600.
 - The renderer needs no split at all: the driver calls the existing

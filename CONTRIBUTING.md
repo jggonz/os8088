@@ -315,10 +315,12 @@ has read a lot of modern x86:
   the loaded-program pool starts. A build-time assertion in `kernel.asm` fails
   the build if you cross it. When it fires, the fix is smaller data, not a
   bigger budget.
-- **Don't edit the dead modules.** `kernel/video.inc`, `keyboard.inc`,
-  `string.inc`, `gfx.inc` and `kernel-shell.asm.bak` are relics of the
-  pre-GUI text shell and are no longer included by anything. Agents love
-  finding them and "fixing" them.
+- **Every file in `kernel/` is live.** The five pre-GUI text-shell relics that
+  used to sit here unincluded — `video.inc`, `keyboard.inc`, `string.inc`,
+  `gfx.inc`, `kernel-shell.asm.bak` — are deleted. This bullet used to say
+  "don't edit the dead modules, agents love finding them and fixing them",
+  which is a warning a repository should not need twice: deleting them is
+  cheaper than telling everyone who arrives to ignore them.
 
 ## 4. Verifying — the part that isn't optional
 

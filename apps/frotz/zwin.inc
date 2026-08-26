@@ -411,7 +411,7 @@ zw_runsel:
 ;
 ; One OSAPI_FONT_RUN does the whole run, background and glyphs together.
 ; Bold on a colour adapter is the same run struck again one pixel to the
-; right, through OSAPI_FONT_STR because its background is transparent - a
+; right, through OSAPI_FONT_STR_XPARENT because its background is transparent - a
 ; second FONT_RUN would re-fill the cells and erase the first strike. Italic
 ; is an underline in the leading row, which is why ZF_LEAD is 9 and not 8:
 ; at 8 there is no row to put it in.
@@ -433,7 +433,7 @@ zw_run:
     call zw_runsel
     call OSAPI_SET_COLOR            ; AL = ink
     inc cx
-    call OSAPI_FONT_STR
+    call OSAPI_FONT_STR_XPARENT
     dec cx
 .noem:
     test byte [zw_style], ZST_ITALIC

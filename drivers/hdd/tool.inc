@@ -93,6 +93,15 @@ HTS_VOL      equ 2              ; a volume
 HTS_ALIEN    equ 3              ; foreign type, or over the 65,535-sector
                                 ; ceiling (SPEC.md 18.7) - either way this
                                 ; kernel will never mount it
+HTS_GEOM     equ 5              ; a FAT-typed extent whose OWN CHS does not
+                                ; correspond to its LBA at this device's
+                                ; geometry - so the platter was laid out at a
+                                ; geometry we are not using, every read of it
+                                ; lands on the wrong sector, and the volume is
+                                ; unreachable rather than absent (SPEC.md
+                                ; 52.2.6). It reads as Not Formatted without
+                                ; this, which is the one answer that is both
+                                ; false and destructive: Format believes it
 HTS_LIVE     equ 4              ; ...and the volume THIS MACHINE BOOTED FROM,
                                 ; which Format and Delete must both refuse
                                 ; (SPEC.md 52.10.4.1). It is a state and not a
@@ -162,6 +171,65 @@ hd_tw_open:
 ; a type we do not mount are facts about the TABLE, so neither costs a read;
 ; only a slot that could carry a volume is asked whether it does.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; hd_tw_geomok - does this entry's own CHS agree with its LBA? (internal)
+; in:       SI = the partition entry
+; out:      CF = 0 they agree, or the entry declines to say; CF = 1 they differ
+; clobbers: flags
+;
+; AN MBR ENTRY CARRIES BOTH ADDRESSES for its first sector - the packed CHS at
+; HP_SHEAD/HP_SSEC/HP_SCYL and the LBA at HP_LBA - and the two are only
+; consistent under ONE geometry: the one the volume was laid out with. So the
+; disagreement is detectable HERE, from the table alone, with no read and no
+; second opinion from the drive.
+;
+; That matters because the read is exactly what cannot be trusted: hd_fmt_isfat
+; reaches the platter through hd_raw -> hd_chs at the CURRENT geometry, so a
+; mismatch does not make it fail loudly, it makes it read a DIFFERENT SECTOR
+; and answer honestly about that one. Every path in this driver goes the same
+; way, which is why the volume is unreachable and not merely mislabelled.
+;
+; The comparison is against hd_lba_chs + hd_chs_pack - the same pair partw.inc
+; WRITES an entry with - so a clamped entry compares equal to a clamped
+; expectation instead of reading as a mismatch.
+;
+; A sector field of 0 is not a disagreement: sectors are 1-based, so 0 is an
+; entry that declines to name a CHS at all, and a tool that called that a
+; geometry fault would refuse to format a perfectly formattable extent.
+; -----------------------------------------------------------------------------
+hd_tw_geomok:
+    push ax
+    push dx
+    push di
+    mov al, [si+HP_SSEC]
+    and al, 0x3F                ; the sector, 1-based: 0 = no CHS claimed
+    jz .ok
+    mov al, [hd_tdev]           ; hd_tdev and never [hd_sel] - the panel
+    call hd_dev_row             ; underneath stays clickable (52.10.4.1)
+    mov ax, [si+HP_LBA]
+    mov dx, [si+HP_LBA+2]
+    call hd_lba_chs             ; [hd_cyl]/[hd_head]/[hd_sec] at OUR geometry
+    call hd_chs_pack            ; AL = sector|cyl-high, AH = cyl-low
+    cmp al, [si+HP_SSEC]
+    jne .bad
+    cmp ah, [si+HP_SCYL]
+    jne .bad
+    mov al, [hd_head]
+    cmp al, [si+HP_SHEAD]
+    jne .bad
+.ok:
+    pop di
+    pop dx
+    pop ax
+    clc
+    ret
+.bad:
+    pop di
+    pop dx
+    pop ax
+    stc
+    ret
+
 hd_tw_scan:
     push ax
     push bx
@@ -178,7 +246,10 @@ hd_tw_scan:
     jne .store                  ; over 65,535 sectors (SPEC.md 18.7)
     call hd_part_isfat
     jc .store                   ; a type this driver does not mount
-    mov al, HTS_VOL
+    call hd_tw_geomok           ; ...and BEFORE the read, because the read is
+    mov al, HTS_GEOM            ; the thing a geometry fault corrupts: ask the
+    jc .store                   ; table, which cannot be pointed at the wrong
+    mov al, HTS_VOL             ; sector (SPEC.md 52.2.6)
     call hd_fmt_isfat
     jnc .store
     mov al, HTS_RAW
@@ -223,14 +294,14 @@ hd_tw_paint:
     mov di, ax
     mov bp, dx
 
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov si, hd_s_thdr
+    mov si, hd_s_thdr               ; NO PEN: font_run takes the pair in AX and
+                                    ; never reads [gfx_color] (SPEC.md 52.12)
     mov cx, di
     add cx, HTW_LX
     mov dx, bp
     add dx, HTW_HY
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: the tool window's own white
+    call OSAPI_FONT_RUN
 
     xor cl, cl
 .row:
@@ -264,18 +335,21 @@ hd_tw_paint:
     add dx, 9
     call OSAPI_GFX_FILL
     pop cx
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
+    mov word [hd_pair], (CBLACK << 8) | CWHITE  ; white on the bar just laid,
+                                    ; and the PAIR is the whole of it - the fill
+                                    ; above owns the pen (SPEC.md 52.12)
     jmp short .text
 .plain:
-    mov al, CBLACK              ; every row in the SAME pen: the State column
-    call OSAPI_SET_COLOR        ; is what says what a slot is (SPEC.md 52.2.2)
+    mov word [hd_pair], (CWHITE << 8) | CBLACK  ; every row in the SAME pair:
+                                ; the State column is what says what a slot is
+                                ; (SPEC.md 52.2.2)
 .text:
     pop dx
     mov si, hd_line
     mov cx, di
     add cx, HTW_LX
-    call OSAPI_FONT_STR
+    mov ax, [hd_pair]           ; OPAQUE (SPEC.md 52.12)
+    call OSAPI_FONT_RUN
     pop cx
     inc cl
     cmp cl, 4
@@ -312,7 +386,8 @@ hd_tw_paint:
     add cx, HTW_LX
     mov dx, bp
     add dx, HTW_CAPY
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: the tool window's own white
+    call OSAPI_FONT_RUN
 
     pop bp
     pop di
@@ -433,9 +508,15 @@ hd_tw_rowtext:
     je .live
     cmp al, HTS_VOL
     je .vol
+    cmp al, HTS_GEOM
+    je .geom
     mov si, hd_s_traw           ; free and partitioned-but-empty read the same
     call hd_scat                ; on purpose: both mean Format makes a volume
     jmp short .done
+.geom:
+    mov si, hd_s_tgeom          ; ...and this one does NOT join them, which is
+    call hd_scat                ; the whole point: there IS a volume here and
+    jmp short .done             ; Format would destroy it (SPEC.md 52.2.6)
 .live:
     mov si, hd_s_tlive          ; NOT its FAT type: what matters about this one
     call hd_scat                ; is that the machine is standing on it
@@ -1038,6 +1119,12 @@ hd_tw_fmtok:
     xor bh, bh
     cmp byte [bx+hd_tstate], HTS_LIVE
     je .no
+    cmp byte [bx+hd_tstate], HTS_GEOM
+    je .no                      ; the one state where the ROW ABOVE THE BUTTON
+                                ; is false: there is a volume here and this
+                                ; driver cannot see it, so 'Erase slot N?' is
+                                ; a fair question asked of a user who has just
+                                ; been shown a wrong picture (SPEC.md 52.2.6)
     pop bx
     pop ax
     clc
@@ -1165,6 +1252,8 @@ hd_s_four:    db '     ', 0     ; slot digit -> size column
 hd_s_nosize:  db '     ', 0     ; ...and the size column when nothing claims it
 hd_s_traw:    db 'Not Formatted', 0
 hd_s_talien:  db 'Unmountable', 0
+hd_s_tgeom:   db 'Wrong Geometry', 0   ; 14 chars, the longest of the five -
+                                       ; hd_s_traw is 13 and the column fits
 hd_s_tlive:   db 'Booted From', 0   ; the installer's word for the same fact
                                     ; (SPEC.md 52.10.4.1): two windows, one
                                     ; thing to learn

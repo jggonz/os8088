@@ -30,9 +30,16 @@ remembering to add it.  Today that is 20 names across the kernel and the SDK,
 including `KERNEL_SEG`, `APP_MAX_SIZE`, `TITLE_H`, `MBAR_H`, the colour
 indices and the SPEC.md 57 debug-registry tags.
 
-The host tools are checked too, for the two constants they carry.  Those are
-Python, so they cannot `%include` anything and are the most likely of all of
-them to be left behind.
+The host tools are checked too, and the self-maintaining property has to be
+said again there rather than assumed: PY_MIRROR below is a HAND-WRITTEN list,
+and it names two files.  `KERNEL_SEG = 0x0060` is typed out in fifteen Python
+files in this tree.  So the Python side is covered by `tools/os88geom.scan()`
+instead, which walks every `.py` in `tools/` and `tests/` for an assignment
+whose NAME is one os88geom mirrors and whose value has drifted - the same
+"nothing enumerates it" shape as the asm side, over 156 local copies rather
+than two.  It had no caller at all until this check acquired one, and four
+copies of `MBAR_H` had gone stale behind it.  PY_MIRROR stays for the two
+constants os88geom does not carry an authority for.
 
 ONE LIMITATION, stated so nobody trusts it further: a definition inside a
 `%if` is read at its first spelling, so a constant that legitimately differs
@@ -46,7 +53,9 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(ROOT, "tools"))
 from harness import check, done                           # noqa: E402
+import os88geom as geom                                   # noqa: E402
 
 ASM = ["kernel/kernel.asm", "kernel/splash.inc", "boot/boot.asm",
        "boot/boothd.asm", "apps/os88api.inc", "apps/os88ui.inc",
@@ -190,8 +199,26 @@ def main():
                   "out twice; a field inserted on one side reads the wrong word",
                   got=cpu.get(name, "<not defined>"), want=i * 2)
 
-    print("t_mirror: %d names mirrored across %d asm/c files, %d host-tool copies"
-          % (len(mirrored), len(ASM) + len(CDEF), pychecked))
+    # ...and every OTHER local copy of a kernel constant in a host script.
+    # tools/os88geom.py mirrors 69 of them and checks each against the kernel
+    # source at import; `scan` is the other direction - the copies that did
+    # NOT come through it. A correct copy is only the seed of the next stale
+    # one, so the scan is the gate and the copy is allowed to stay.
+    stale = [c for c in geom.scan(ROOT) if c[3] != c[4]]
+    copies = len(geom.scan(ROOT))
+    check(not stale,
+          "no host script carries a stale copy of a kernel constant",
+          "the cost of one is not the wrong number - it is the DAY spent "
+          "believing the feature under test is broken. tools/os88geom.py's "
+          "header names three that did exactly that. Import it from "
+          "tools/os88geom.py rather than retyping the value",
+          got="; ".join("%s:%d %s = %d, kernel says %d" % (p, ln, n, mine, k)
+                        for p, ln, n, mine, k in stale) or "none",
+          want="every copy equal to the kernel, or imported from os88geom")
+
+    print("t_mirror: %d names mirrored across %d asm/c files, %d host-tool "
+          "copies, %d local constants scanned"
+          % (len(mirrored), len(ASM) + len(CDEF), pychecked, copies))
     done("t_mirror")
 
 

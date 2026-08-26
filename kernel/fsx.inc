@@ -151,7 +151,7 @@ fsx_run:
     jne .fail                   ; bracket would freeze the UI task mid-frame
     cmp byte [fsx_task], 0xFF   ; one bracket at a time
     jne .fail
-    call cur_unlazy             ; the bracket owns the machine and the held
+    call cur_unlazy              ; the bracket owns the machine and the held
                                 ; lock is what keeps the arrow off it - which
                                 ; a DEFERRED hide would not (SPEC.md 7.1.4).
                                 ; A same-mode bracket (SPEC.md 53.7) never

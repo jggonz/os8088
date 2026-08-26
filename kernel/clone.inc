@@ -1921,7 +1921,7 @@ clo_move:
     mov cx, 512                 ; machine, and this is what is on it
     mul cx
     mov cx, ax
-    call KERNEL_SEG:cw_fpg_begin
+    call KERNEL_SEG:fpg_begin
     pop dx
     pop cx
 
@@ -1982,7 +1982,7 @@ clo_move:
     clc
 .done:
     pushf                       ; fpg_end preserves the flags anyway; this
-    call KERNEL_SEG:cw_fpg_end  ; says that CF is the answer in flight
+    call KERNEL_SEG:fpg_end     ; says that CF is the answer in flight
     popf
     pop es
     pop bp

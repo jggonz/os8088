@@ -260,14 +260,13 @@ rd_page_paint:
     jmp short .out
 .gone:
     push ds
-    pop es                      ; font_str reads the string through the X
-    mov al, CBLACK              ; stub's ES, which is our own DS
-    call OSAPI_SET_COLOR
-    mov cx, di
+    pop es                      ; the run reads the string through the X
+    mov cx, di                  ; stub's ES, which is our own DS
     add cx, 2
     add dx, 4
     mov si, rd_s_nopage
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the pane's own ground
+    call OSAPI_FONT_RUN
 .out:
     pop es
     pop bp

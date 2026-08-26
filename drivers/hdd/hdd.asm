@@ -89,9 +89,10 @@ IDE_C_INITP  equ 0x91
 ;
 ; ATTACH IS ALL-OR-NOTHING and this one has an easy time of it: the probe
 ; writes no port that is not a read-back of a drive's own task file, claims
-; no memory, and hooks no interrupt. Everything expensive - a listing claim,
-; a mounted volume, a window - happens on a Control Panel click, and detach
-; gives all of it back.
+; no memory, and hooks no interrupt. A window still costs a Control Panel
+; click; a mounted volume and its listing claim do NOT any more - they are
+; hd_ready's, one verb later, for every drive the probe found (SPEC.md
+; 52.6.1). Detach gives all of it back either way.
 ; -----------------------------------------------------------------------------
 hd_entry:
     cmp al, DRVV_DETACH
@@ -115,20 +116,22 @@ hd_entry:
     ret                         ; path is reached with AL = the verb
 
 ; -----------------------------------------------------------------------------
-; hd_ready - the kernel can take our calls now (SPEC.md 51.2.2/52.6)
+; hd_ready - the kernel can take our calls now (SPEC.md 51.2.2/52.6/52.6.1)
 ; in:  nothing
 ; out: nothing
 ;
 ; The earliest point at which OSAPI_VOL_* will answer us: their fence is the
 ; publication slot and attach runs before it is armed. So this - and not
-; attach - is where the settings file is read and where a drive that was
-; mounted last session is mounted again.
+; attach - is where the settings file is read and where the drives are
+; mounted: every one the probe found, plus every one the settings said was
+; mounted last session (SPEC.md 52.6.1).
 ; -----------------------------------------------------------------------------
 hd_ready:
     call hd_tool_home           ; the current volume IS the system volume here
                                 ; and only here (SPEC.md 52.11)
     call hd_cfg_load            ; geometry the user typed, and what was up
-    call hd_cfg_automount
+    call hd_cfg_automount       ; ...and what is THERE, which is the click the
+                                ; user was going to make anyway
     clc
     ret
 
@@ -320,9 +323,10 @@ hd_bios_geom:
     mov cx, ax
     inc cx                      ; ...and the count is one more than the max
     mov al, dh
-    xor ah, ah
-    inc ax                      ; AX = heads
-    mov dx, ax
+    inc al                      ; AX = heads, and the 0xFF case is caught HERE
+    jz .no                      ; rather than by the `test dx, dx` below: that
+    xor ah, ah                  ; sees 0x0100 and lets it through, because the
+    mov dx, ax                  ; widening had already happened
     mov al, bl
     xor ah, ah                  ; AX = sectors/track
     test dx, dx
@@ -1266,7 +1270,9 @@ hd_idbuf:    times 512 db 0     ; IDENTIFY's 256 words (PIO, never DMA)
 
 hd_rowdev:   db 0
 hd_pslot:    db 0               ; the partition hd_mount is working on
-hd_wantmnt:  db 0               ; bit n = device n was mounted last session
+hd_wantmnt:  db 0               ; bit n = mount device n at DRVV_READY: it
+                                ; was mounted last session, or the probe
+                                ; just found it (SPEC.md 52.6.1)
 hd_selsave:  db 0               ; hd_cfg_automount's saved selection
 hd_cwd:      dw 0               ; the volume+directory the automount borrowed...
 hd_cdrv:     db 0               ; ...and must put back

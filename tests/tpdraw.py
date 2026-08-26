@@ -57,7 +57,7 @@ TITLE_H = 18
 TP_BAR_H = 22                   # apps/texpad's own three
 TP_STAT_H = 14
 TP_SPLIT0 = 200
-MBAR_H = 18
+MBAR_H = 20
 
 fails = []
 shots = None

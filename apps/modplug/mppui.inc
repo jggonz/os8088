@@ -292,11 +292,15 @@ mppu_vlr:
 ; mppu_run - CX=x DX=y content-relative, SI = NUL string, AL = ink, AH = ground
 ;
 ; OSAPI_FONT_RUN with the drawing origin added, and the reason every window in
-; this package letters through it rather than through mppu_strr: a run cannot
+; this package letters through it and through nothing else: a run cannot
 ; produce SPEC.md 11.3's granularity failure, so any of the three windows may
-; be redrawn under an armed clip region with no per-cell gate. The transparent
-; mppu_strr below stays for text drawn onto a surface that was just filled in
-; the same unclipped pass.
+; be redrawn under an armed clip region with no per-cell gate.
+;
+; It had a transparent twin, mppu_strr, for text drawn onto a surface that was
+; just filled in the same unclipped pass. Its two callers - the VU strip's
+; channel number and the About card's credits - name their ground now (the
+; well is CBLACK, the card is [mppu_body]), so the twin is gone rather than
+; left for the unreachable-code row to find (SPEC.md 6.6.5).
 ; -----------------------------------------------------------------------------
 mppu_run:
     add cx, [mppu_dx0]
@@ -387,15 +391,6 @@ mppu_clip_arm:
 
 mppu_clip_done:
     call OSAPI_WM_CLIP_CLEAR
-    ret
-
-; mppu_strr - CX=x DX=y content-relative, SI = NUL string
-mppu_strr:
-    add cx, [mppu_dx0]
-    add dx, [mppu_dy0]
-    call OSAPI_FONT_STR
-    sub cx, [mppu_dx0]
-    sub dx, [mppu_dy0]
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2032,7 +2027,9 @@ mppu_viz_vu:
     mov cx, [mppu_zx1]
     add cx, 3
     mov dx, [mppu_q2]
-    call mppu_strr
+    mov al, [mppu_ink]              ; AL = the LCD's ink, AH = the well
+    mov ah, CBLACK                  ; mppu_draw_viz filled before any of this
+    call mppu_run                   ; (SPEC.md 6.6.5)
     pop si
     inc si
     cmp si, MPPU_VUCH
@@ -2448,7 +2445,9 @@ mppu_draw_about:
     mov si, di
     mov cx, [mppu_q1]
     add cx, 10
-    call mppu_strr
+    mov al, CBLACK                  ; AL = ink, AH = the card mppu_face just
+    mov ah, [mppu_body]             ; laid down (SPEC.md 6.6.5)
+    call mppu_run
     pop si
     add si, 2
     add dx, 10

@@ -86,13 +86,19 @@ DRVC_DISK   equ 2               ; block volumes: hard disks (SPEC.md 51.8)
 DRVC_NET    equ 4               ; the parallel link (docs/NET-PLAN.md). A
                                 ; SECOND block-serving class beside DRVC_DISK,
                                 ; which is what DV_CLASS exists for
-DRVC_DEBUG  equ 3               ; the serial monitor (SPEC.md 58). It publishes
-                                ; no service the kernel dispatches - only a
-                                ; Control Panel page - so it needs a class for
-                                ; one reason: a class IS the publication slot,
-                                ; and giving it somebody else's would
-                                ; disconnect a sound card or a hard disk the
-                                ; moment the user ticked it (SPEC.md 51.2.1)
+DRVC_RETIRED3 equ 3             ; WAS the serial monitor's, and the driver is
+                                ; gone (SPEC.md 58). THE NUMBER STAYS: a class
+                                ; is an index into drv_fptr* below, which
+                                ; drv_cls_fp walks contiguously, so reusing 3
+                                ; renumbers DRVC_NET and DRVC_FILE - both of
+                                ; them shipped ABI, both of them named in a
+                                ; SYSTEM.CFG somebody already has. The slot
+                                ; below is kept beside it for the same reason
+                                ; and is never published: a class IS the
+                                ; publication slot, and handing a driver
+                                ; somebody else's would disconnect a sound card
+                                ; or a hard disk the moment the user ticked it
+                                ; (SPEC.md 51.2.1)
 DRVC_FILE   equ 5               ; a volume served by somebody ANSWERING
                                 ; QUESTIONS ABOUT FILES rather than about
                                 ; sectors (SPEC.md 62.9). Deliberately not
@@ -143,7 +149,7 @@ DRVE_BUSY   equ 6               ; ...or found it and cannot have it, because
                                 ; for a card that is sitting right there, and
                                 ; the fix for the two is not the same one -
                                 ; DRVE_HW wants a card, this wants a jumper
-                                ; or a different port (SPEC.md 58.2)
+                                ; or a different port
 DRVE_TWICE  equ 7               ; a driver was asked to attach while it was
                                 ; already attached. THE ONLY CODE HERE THAT
                                 ; BLAMES THE SOFTWARE: every other value is a
@@ -636,10 +642,10 @@ drv_f_sound: db 'SOUND.DRV', 0
 drv_t_sound: db 'Sound', 0
 drv_f_hdd:   db 'HDD.DRV', 0
 drv_t_hdd:   db 'Hard Drive', 0
-                                ; DEBUG.DRV's pair is gone with its row: the
-                                ; monitor's source is still in drivers/debug/
-                                ; and SPEC.md 58 still stands, but nothing in
-                                ; the kernel names it and nothing ships it
+                                ; DEBUG.DRV's pair went with its row, and the
+                                ; monitor itself is gone now too (SPEC.md 58):
+                                ; nothing in the kernel named it and nothing
+                                ; shipped it
 drv_f_net:   db 'NET.DRV', 0
 drv_t_net:   db 'os88net', 0
 %ifdef KERN_BIG
@@ -673,7 +679,8 @@ drv_fptr:    dw PKG_DISP        ; class 1 (DRVC_SOUND)
 drv_fseg:    dw 0
 drv_fptr2:   dw PKG_DISP        ; class 2 (DRVC_DISK)
 drv_fseg2:   dw 0
-drv_fptr3:   dw PKG_DISP        ; class 3 (DRVC_DEBUG). drv_cls_fp indexes
+drv_fptr3:   dw PKG_DISP        ; class 3 (DRVC_RETIRED3, SPEC.md 58 - kept so
+                                ; the indexing does not shift). drv_cls_fp indexes
 drv_fseg3:   dw 0               ; these contiguously, so a class is appended
 drv_fptr4:   dw PKG_DISP        ; here and nowhere else
 drv_fseg4:   dw 0               ; class 4 (DRVC_NET)
@@ -758,12 +765,13 @@ drv_tab:
                                 ; build. NOT wanted by default (SPEC.md 51.3).
                                 ;
                                 ; IT TOOK THE SERIAL MONITOR'S ROW, and that is
-                                ; the one thing here that is not free. SPEC.md
-                                ; 58's DEBUG.DRV was row 2 as the table then
-                                ; stood; its source is still
-                                ; in drivers/debug/ and its section still
-                                ; stands, but it is no longer listed and no
-                                ; longer ships. THE ROW WAS REUSED RATHER THAN
+                                ; the one thing here that is not free. DEBUG.DRV
+                                ; was row 2 as the table then stood. It was
+                                ; de-listed here first and has since been
+                                ; removed outright (SPEC.md 58), so what
+                                ; follows is now history rather than a
+                                ; standing cost - kept because the SETTINGS
+                                ; FILE remembers. THE ROW WAS REUSED RATHER THAN
                                 ; APPENDED because the Drivers page was FULL at
                                 ; the time: rows are CP_DROWH (26) apart from
                                 ; CP_DR0Y (24) in a CP_CH (132) pane, so a
@@ -848,7 +856,7 @@ DRVM_PLUS    equ 0x8000         ; "...and the store you size on its own page",
 
 DRVM_IMG_SND equ 6              ; ceil(build/sound.drv   / 1024) - t_drvmem
 DRVM_IMG_HDD equ 8              ; ceil(build/hdd.drv     / 1024)   checks
-DRVM_IMG_ETH equ 16             ; ceil(build/ether.drv   / 1024)   every one
+DRVM_IMG_ETH equ 17             ; ceil(build/ether.drv   / 1024)   every one
 DRVM_IMG_RAM equ 9              ; ceil(build/ramdisk.drv / 1024)   of these
 DRVM_IMG_NET equ 6              ; ceil(build/net.drv     / 1024)
 
@@ -944,7 +952,7 @@ drv_init_x:
     pop cx
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; drv_cls_fp / drv_cls_svc - one class's publication slot (module internal)
@@ -1134,17 +1142,17 @@ drv_status_x:
     mov si, ax                  ; existing row's caption moves. A code from a
     mov si, [si+drv_errstr]     ; future version still says nothing rather than
     pop ax                      ; indexing past the table
-    ret
+    retf
 .noerr:
     cmp word [bx+DRVR_SEG], 0
     jne .loaded
     mov si, drv_s_off
     pop ax
-    ret
+    retf
 .loaded:
     mov si, drv_e0
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; drv_row - row index to row pointer (module internal)
@@ -1344,7 +1352,7 @@ drv_svc_call_x:
     call far [es:drv_fptr]
     pop es
     pop ds
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; drv_blk_call - the same, for the DRVC_DISK publication slot
@@ -1439,7 +1447,7 @@ drv_fs_call:
                                 ; 51.2.1: the slot is armed after DRVV_ATTACH)
     push cx                     ; **THE REDIRECTOR'S HALF OF SPEC.md 12.8.3.**
     mov cx, FPG_WARM            ; The threshold, already met: there is nothing
-    call KERNEL_SEG:cw_fpg_busy ; to warm up to when the first verb is already
+    call KERNEL_SEG:fpg_busy    ; to warm up to when the first verb is already
     pop cx                      ; the slowest thing in the machine, so this
                                 ; site sets CX itself rather than costing the
                                 ; kernel segment an entry point of its own.
@@ -1663,7 +1671,7 @@ drv_cp_closed_x:
     pop cx
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; osapi_drv_cfg - a driver's own settings, in the kernel's file (SPEC.md 51.9)
@@ -1753,7 +1761,7 @@ osapi_drv_cfg_x:
     pop bx
     pop ax
     clc
-    ret
+    retf
 .no:
     xor cx, cx
     pop di
@@ -1762,7 +1770,7 @@ osapi_drv_cfg_x:
     pop bx
     pop ax
     stc
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; drv_row_ix_of - which drv_tab row is running in this segment? (internal)
@@ -1946,7 +1954,7 @@ osapi_drv_dlg_x:
     pop bx
     pop ax
     clc
-    ret
+    retf                        ; FAR: the only entry is kernel.asm's
 .disarm:
     mov word [drv_dlg_row], 0
 .no:
@@ -1957,7 +1965,7 @@ osapi_drv_dlg_x:
     pop bx
     pop ax
     stc
-    ret
+    retf                        ; `call COLD_SEG:osapi_drv_dlg_x` (SPEC.md 2.6.1)
 
 ; -----------------------------------------------------------------------------
 ; drv_dlg_done - the dialog committed; hand the answer to the driver
@@ -1999,7 +2007,7 @@ drv_dlg_done_x:
 %else
 osapi_drv_dlg_x:                ; the cell exists, the body does not
     stc
-    ret
+    retf
 drv_dlg_done_x:                 ; ...and nothing can arm it, so nothing calls
     ret                         ; this - it is here because the thunk names it
 %endif
@@ -2033,7 +2041,7 @@ drv_cp_count_x:
     mov al, bl
     pop di
     pop bx
-    ret
+    retf
 
 drv_cp_class_x:
     push bx
@@ -2901,7 +2909,7 @@ drv_shutdown_x:
     pop cx
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; drv_release - give the image's claim back and disarm the row (internal)
@@ -3102,7 +3110,7 @@ drv_task_x:
 .out:
     pop dx
     pop bx
-    ret
+    retf
 
 ; =============================================================================
 ; The settings file (SPEC.md 51.5)
@@ -3196,7 +3204,7 @@ drv_cfg_unpack:
     mov al, [drv_cfg+CFG_SCH]
     cmp al, 1
     ja .out                     ; a byte from a future version: leave the
-    call KERNEL_SEG:cw_sched_mode_set         ; mode alone rather than pick nonsense
+    call KERNEL_SEG:sched_mode_set            ; mode alone rather than pick nonsense
 .out:
     pop di
     pop si
@@ -3853,13 +3861,13 @@ drv_boot_x:
 %ifdef KERN_BIG
     mov ah, [vid_kind]
 %endif
-    call KERNEL_SEG:cw_vid_switch
+    call KERNEL_SEG:vid_switch
     jc .vnosw                   ; no such adapter here: stay on the probe's
 %ifdef KERN_BIG                 ; answer
     cmp ah, [vid_kind]
     je .vnosw                   ; already that adapter: nothing was cleared
 %endif
-    call KERNEL_SEG:cw_spl_reset              ; ...otherwise redraw the loading screen onto
+    call KERNEL_SEG:spl_reset                 ; ...otherwise redraw the loading screen onto
     jmp short .load             ; the framebuffer the mode set just wiped
 .vnosw:
 %ifdef KERN_BIG
@@ -3920,7 +3928,7 @@ drv_boot_x:
     pop cx
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; drv_notice - tell the user, once the screen exists (SPEC.md 51.3)
@@ -3957,7 +3965,7 @@ drv_notice_x:
                                 ; be SPEC.md 2.6's double crossing
 .out:
     pop ax
-    ret
+    retf
 
 ; =============================================================================
 ; Far entries (SPEC.md 2.6): the resident thunks in kernel.asm far-call these,
@@ -3965,8 +3973,6 @@ drv_notice_x:
 ; ordinary near `ret`.
 ; =============================================================================
 dvf_drv_blk_call:  call drv_blk_call_x
-               retf
-dvf_drv_boot:      call drv_boot_x
                retf
 dvf_drv_cfg_save:  call drv_cfg_save_x
                retf
@@ -3978,37 +3984,17 @@ dvf_drv_cp_call:   call drv_cp_call_x
                retf
 dvf_drv_cp_class:  call drv_cp_class_x
                retf
-dvf_drv_cp_closed: call drv_cp_closed_x
-               retf
-dvf_drv_cp_count:  call drv_cp_count_x
-               retf
 dvf_drv_cp_name:   call drv_cp_name_x
                retf
-dvf_drv_init:      call drv_init_x
-               retf
 dvf_drv_load:      call drv_load_x
-               retf
-dvf_drv_notice:    call drv_notice_x
                retf
 dvf_drv_owns_seg:  call drv_owns_seg_x
                retf
 dvf_drv_row:       call drv_row_x
                retf
-dvf_drv_shutdown:  call drv_shutdown_x
-               retf
-dvf_drv_status:    call drv_status_x
-               retf
-dvf_drv_svc_call:  call drv_svc_call_x
-               retf
-dvf_drv_task:      call drv_task_x
-               retf
 dvf_drv_tier:      call drv_tier_x
                retf
 dvf_drv_unload:    call drv_unload_x
-               retf
-dvf_osapi_drv_cfg: call osapi_drv_cfg_x
-               retf
-dvf_osapi_drv_dlg: call osapi_drv_dlg_x
                retf
 dvf_drv_dlg_done:  call drv_dlg_done_x
                retf
@@ -4068,8 +4054,6 @@ section .cold                   ; ...the far entries themselves live HERE, or
 ; -----------------------------------------------------------------------------
 drvf_drv_row:            call drv_row_x
                     retf
-drvf_drv_status:         call drv_status_x
-                    retf
 drvf_drv_cp_call:        call drv_cp_call_x
                     retf
 drvf_drv_cls_svc:        call drv_cls_svc_x
@@ -4081,8 +4065,6 @@ drvf_drv_tier:           call drv_tier_x
 drvf_drv_load:           call drv_load_x
                     retf
 drvf_drv_cp_name:        call drv_cp_name_x
-                    retf
-drvf_drv_cp_count:       call drv_cp_count_x
                     retf
 drvf_drv_cp_class:       call drv_cp_class_x
                     retf
@@ -4182,8 +4164,9 @@ drv_pkg_call_x:
     je .c1
     cmp bh, DRVC_DISK
     je .c2
-    cmp bh, DRVC_DEBUG
-    je .c3
+    cmp bh, DRVC_RETIRED3       ; nothing publishes class 3 any more, so this
+    je .c3                      ; arm dispatches the never-armed PKG_DISP and
+                                ; is here to keep the ladder's shape (SPEC.md 58)
     cmp bh, DRVC_NET
     je .c4
     call far [cs:drv_fptr5]     ; DRVC_FILE: the class was range-checked above,

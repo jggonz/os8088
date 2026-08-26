@@ -645,8 +645,8 @@ zf_abouth:
     mov al, CWHITE
     call OSAPI_SET_COLOR
     call zw_clear
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
+                                    ; ...and no pen: the lines below are
+                                    ; opaque runs (SPEC.md 6.6.5)
     mov si, zf_abt_lines
     add dx, 12
 .loop:
@@ -657,7 +657,8 @@ zf_abouth:
     mov si, cx
     mov cx, bx
     add cx, 8
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the ground zw_clear just
+    call OSAPI_FONT_RUN             ; laid down
     pop si
     add si, 2
     add dx, ZF_LEAD
@@ -686,8 +687,7 @@ zf_splash:
     call OSAPI_WM_CONTENT
     mov bx, ax
     add dx, 16
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
+                                    ; ...and no pen: opaque runs below
     mov si, zf_splash_lines
 .loop:
     mov cx, [si]
@@ -697,7 +697,8 @@ zf_splash:
     mov si, cx
     mov cx, bx
     add cx, 12
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the content's own ground:
+    call OSAPI_FONT_RUN             ; W_PAINT arrives white-filled
     pop si
     add si, 2
     add dx, ZF_LEAD
