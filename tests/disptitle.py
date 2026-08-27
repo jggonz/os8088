@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
 """Does a title bar STRADDLING the seam have one polarity? (SPEC.md 5.4.2.4)
 
-    make && python3 tests/disptitle.py
+    python3 tests/disptitle.py          # it builds the kernel it needs
+
+THIS ROW BUILDS `make BAND=1` ITSELF and puts the default kernel back
+afterwards, which tests/gfxlk.py's shape. The composer is a KNOB again since
+SPEC.md 5.9.6 and no shipped kernel carries it, so on a default build there is
+no band to emit the wrong way up and every assertion below passes by drawing
+the fifteen-call bar instead - a green row for a defect it could no longer
+see. PERFORMANCE.md Set 89 names that trap in as many words: a correctness
+check on a path that has a correct fallback proves nothing on its own.
 
 Reported from the field as *"the window title bar is drawing half inverted
 when straddling on an extended desktop"*, off a VGA beside a real Hercules.
@@ -33,13 +41,16 @@ DIFFERENT DEPTH is `os8088_xt_vga_herc` (docs/DUAL-DISPLAY-VGA.md 7.1), 86Box's
 one card cannot straddle anything.
 """
 import argparse
+import atexit
 import os
+import subprocess
 import sys
 from collections import Counter
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                "..", "tools"))
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+sys.path.insert(0, HERE)
 import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
@@ -112,8 +123,29 @@ def main(argv):
     ap.add_argument("--dump", help="write the second card's title strip here")
     ap.add_argument("--define", action="append", default=[],
                     help="a knob the kernel under test was built with, so "
-                         "os88sym maps the RIGHT kernel: --define NOBAND")
+                         "os88sym maps the RIGHT kernel: --define BAND")
+    ap.add_argument("--no-build", action="store_true",
+                    help="do not `make BAND=1` first - for driving an image "
+                         "built by hand, which must still be a BAND=1 one")
     a = ap.parse_args(argv)
+
+    # SPEC.md 5.9.6: the composed bar is `make BAND=1` and nothing else, so
+    # this row builds it. A knob kernel is a DIFFERENT kernel and os88sym
+    # refuses a map that is not byte-identical to build/kernel.bin, so the
+    # define goes in once here rather than at each of the lookups below.
+    if not a.no_build:
+        subprocess.check_call(["make", "BAND=1"], cwd=ROOT,
+                              stdout=subprocess.DEVNULL)
+        a.define = list(a.define) + ["BAND"]
+        # ...AND THE DEFAULT KERNEL GOES BACK, whichever way this run ends. A
+        # knob kernel left in build/ under the shipped names is CLAUDE.md's
+        # own trap: the next row resolves symbols against it, os88sym refuses
+        # a map that does not match, and the failure points at the kernel
+        # rather than at what left it there. atexit rather than a try/finally
+        # around the launch below, because half a dozen sys.exit()s inside it
+        # are the normal way this row gives up on a machine it cannot drive.
+        atexit.register(subprocess.check_call, ["make"], cwd=ROOT,
+                        stdout=subprocess.DEVNULL)
 
     global S
     if a.define:

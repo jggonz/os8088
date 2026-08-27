@@ -601,7 +601,7 @@ neither shows on a screen:
   kernel, same pixels, one rung cheaper. The contiguity the arithmetic rests
   on is asserted at assembly time rather than trusted.
 
-Net: `.text` −8, `.bss` +8, `.cold` +112, **no rung moved and the footprint
+Net: `.text` −8, `.bss` +8, `.cold` +112 and the footprint
 is unchanged** at 97,280 of 98,304.
 
 ### 13.9 Traps
@@ -892,7 +892,7 @@ memory-map frames — the Task Manager is a viewer and has **no buttons at all**
 
 ### 15.5 Cost
 
-`.text` **+160**, `.cold` **+163**, `.bss` **+1**, and **no rung crossed** —
+`.text` **+160**, `.cold` **+163**, `.bss` **+1** —
 the footprint stays at 107,520 of 108,544, so the machine pays nothing yet.
 It did cross one on the first build: the two `wm_chrome_*` routines went to
 `.cold` behind resident thunks precisely to get back under it, `.text`'s rung
@@ -1565,7 +1565,7 @@ being `.modc`, has to far-call every one.
 
 ### 21.3 Cost
 
-`.text` **+23**, `.cold` **+247**, `.bss` +3, **no rung crossed**: the
+`.text` **+23**, `.cold` **+247**, `.bss` +3: the
 footprint stays at **108,544 of 109,568, 1,024 spare (two steps)**. It is
 cheaper than it looks because `os88ui_btn` does the frame *and* the centring,
 so what was added is mostly the table and the two edges, not a painter.
@@ -1760,7 +1760,7 @@ has to be *filled* where a private bar read `[fm_lscr]` or `[fdlg_scrl]`
 directly. The `mov ax,[bx+n]`-is-as-cheap-as-`mov ax,imm16` observation was
 right and is not the reason the estimate missed.
 
-Measured, both builds: **`.cold` −41, `.bss` +14**, no rung crossed, footprints
+Measured, both builds: **`.cold` −41, `.bss` +14**, footprints
 unchanged. Cold slack **97 → 138** on big and **21 → 62** on small — which was
 the point on small, that being the build with 21 bytes to its name.
 

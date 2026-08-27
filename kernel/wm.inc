@@ -103,6 +103,21 @@ WIN_SIZE equ 28                 ; ...and kern_small stops where SPEC.md 13.7
 %endif                          ; left it
 MAX_WIN  equ 12                 ; mirrored in apps/os88api.inc (SPEC.md 11)
 
+; --- the title bar's two boxes (SPEC.md 11) ----------------------------------
+; The close box on the left, the minimize box mirrored at the right, both the
+; same size and both on the same rows. NAMED rather than written out at the
+; four places wm_hit compares against them, because a scripted click has to
+; land inside one and the harness had no way to ask: tests/xmcheck.py wrote
+; down (W_X+14, W_Y+5) for a window it assumed sat at x=180, the window came
+; up at 175, the click landed on the TITLE BAR instead of the box, and the
+; gate reported an extended-memory LEAK for a window that had never closed.
+; tools/os88geom.py mirrors these four and tests/unit/t_mirror.py fails on a
+; stale copy, which is what makes the harness's arithmetic follow the kernel.
+WM_BOX_X0 equ 8                 ; the close box's left, relative to W_X...
+WM_BOX_W  equ 10                ; ...and its width, so it spans X0 .. X0+W
+WM_BOX_Y0 equ 4                 ; both boxes' top and bottom, relative to W_Y
+WM_BOX_Y1 equ 14
+
 WF_SIZABLE equ 4                ; W_FLAGS bit2: resizable (SPEC.md 11.1)
 WF_FULL    equ 8                ; W_FLAGS bit3: fullscreen (SPEC.md 11.2)
 WF_SAVEU   equ 32               ; W_FLAGS bit5: this window PROMISES that its
@@ -3257,10 +3272,22 @@ wm_zoom:
     ; the proposal was legal, so the reply is written as given.
     call wm_zoom_slot           ; SI -> this window's bank
     mov cx, [si+ZR_W]
-    jcxz .out                   ; nothing banked - the window was CREATED this
-                                ; size and has never been anywhere else, so
+    or cx, cx                   ; nothing banked - the window was CREATED this
+    jz .out                     ; size and has never been anywhere else, so
                                 ; there is nothing to go back to and nothing
-                                ; is drawn
+                                ; is drawn.
+                                ;
+                                ; NOT `jcxz`, which is SHORT-ONLY on an 8086
+                                ; and had 14 bytes of headroom left here
+                                ; (displacement 113 of 127): the next thing
+                                ; that grew this routine broke the BUILD, and
+                                ; it did - a scheduler change nowhere near
+                                ; this file was enough, because NASM's jump
+                                ; optimiser reaches a different fixpoint when
+                                ; anything shifts and the short jumps in
+                                ; between resize with it. `.out` is four pops
+                                ; and a ret, so nothing downstream reads the
+                                ; flags this costs
     mov ax, [si+ZR_X]
     mov dx, [si+ZR_H]
     call wm_ask_size            ; preserves SI, which is why the bank can still
@@ -3796,7 +3823,7 @@ wm_raise:
                                 ; of the two ways the answer moves under it
     push ax                     ; a Disk window whose folder changed under it
     xor al, al                  ; is re-listed BEFORE a pixel is drawn, so
-    call fm_focus               ; this raise puts the new listing up rather
+    call COLD_SEG:fm_focus_x    ; this raise puts the new listing up rather
     pop ax                      ; than the old one and then the new. AL = 0:
     jnc .listed                 ; the drawing below is ours, not its (22.8)
     mov al, 1                   ; and CF = 1 upgrades a title-bar raise to a
@@ -4675,15 +4702,15 @@ wm_hit:
     jge .content
     test bp, bp                 ; the boxes exist on the frontmost only
     jz .title
-    cmp ax, 4                   ; both boxes occupy rows W_Y+4 .. W_Y+14
+    cmp ax, WM_BOX_Y0           ; both boxes occupy rows W_Y+4 .. W_Y+14
     jl .title
-    cmp ax, 14
+    cmp ax, WM_BOX_Y1
     jg .title
     mov ax, [bx+W_X]            ; close box columns W_X+8 .. W_X+18
-    add ax, 8
+    add ax, WM_BOX_X0
     cmp cx, ax
     jl .minbox
-    add ax, 10
+    add ax, WM_BOX_W
     cmp cx, ax
     jg .minbox
     mov al, 2
@@ -4691,10 +4718,10 @@ wm_hit:
 .minbox:
     mov ax, [bx+W_X]            ; minimize box: W_X+W_W-19 .. W_X+W_W-9
     add ax, [bx+W_W]            ; (the close box mirrored, SPEC.md 11)
-    sub ax, 19
+    sub ax, WM_BOX_X0 + WM_BOX_W + 1
     cmp cx, ax
     jl .title
-    add ax, 10
+    add ax, WM_BOX_W
     cmp cx, ax
     jg .title
     mov al, 3
@@ -5173,7 +5200,7 @@ wm_paint_dmg:
 
     cmp byte [wm_dmg_fs], 0
     jne .wins                   ; fullscreen: no zones to grow the rect to
-    call desk_dmg_zones         ; AL = the zone mask; the rect grows to cover
+    call COLD_SEG:desk_dmg_zones_x ; AL = the zone mask; the rect grows to cover
     mov [wm_dmg_zn], al         ; every zone it touched
     or al, al
     jz .fill                    ; ...and a zone is redrawn WHOLE, so a window
@@ -5190,7 +5217,7 @@ wm_paint_dmg:
     call wm_dmg_gray            ; corner alone - see wm_dmg_bands
 .zones:
     mov al, [wm_dmg_zn]
-    call desk_paint_mask        ; the touched drive zones, whole
+    call COLD_SEG:desk_paint_mask_x ; the touched drive zones, whole
     mov ax, [wm_dmg_y2]         ; reached the strip? then the dither above
     cmp ax, [vid_dock_y0]       ; just ran over it, and whatever WAS covering
     jl .dock                    ; it has moved - the one case that owes the
@@ -5517,7 +5544,7 @@ wm_paint_all:
                                 ; second monitor is pure desktop. One compare
                                 ; on a machine with one card
 %endif
-    call desk_paint             ; drive icons live on the desktop, under
+    call COLD_SEG:desk_paint_x  ; drive icons live on the desktop, under
                                 ; every window (SPEC.md 26)
     call dock_paint             ; ...so the strip is UNTOUCHED and usually has
                                 ; nothing to do. No dock_force: nothing here
@@ -7135,11 +7162,13 @@ wm_draw_title:
     push si
 %ifdef BANDCOMP
     call wm_title_band          ; SPEC.md 11.101: the interior as ONE PICTURE,
-    jnc .sep                    ; composed and blitted - kern_big's DEFAULT
-%endif                          ; path since 5.9.6. Everything below is what
-                                ; kern_small keeps and what kern_big falls back
-                                ; to: a bar with no whole byte in it, or a
-                                ; machine whose heap refused the 2KB claim
+    jnc .sep                    ; composed and blitted - the `BAND=1` path, a
+%endif                          ; KNOB again since 5.9.6. Everything below is
+                                ; what every OTHER build draws, kern_small
+                                ; included, and what a BAND=1 kernel itself
+                                ; falls back to: a bar with no whole byte in
+                                ; it, or a machine whose heap refused the 2KB
+                                ; claim
     call wm_tpen_bg          
     mov bx, di                  ; title bar interior, 16 white rows - reaching
     call wm_flush               ; column 0 on a window with no left border, or

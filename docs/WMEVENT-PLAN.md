@@ -3,10 +3,10 @@
 > **STATUS: `W_ONMOUSEUP` IMPLEMENTED** (SPEC.md §13.7; `kernel/wm.inc`,
 > `kernel/ui.inc`, `kernel/kernel.asm`, `apps/os88api.inc`), gated by
 > `tests/muptest` on all three adapters, at **API 0x01F0 — a REUSED retired
-> cell** (SPEC.md §20.3.1), which is what kept it free: `.text` +141 against
-> 168 left in the image rung, so **no rung crossed and the footprint spare is
-> still three steps**. **The §2 withdrawals were NOT done** — §2.4 is why, and
-> it is a reversal of what §2 recommends.
+> cell** (SPEC.md §20.3.1), which is what kept it small: `.text` +141 against
+> 168 left in the image rung, so **the footprint spare is still three steps
+> and that rung has 27 bytes left**. **The §2 withdrawals were NOT done** —
+> §2.4 is why, and it is a reversal of what §2 recommends.
 
 **Tier 3 of the mouse-up work.** One new window callback, plus the API audit
 the §20.8 alpha unfreeze makes actionable.
@@ -247,7 +247,7 @@ kernsize[big]: rungs      image 60,416 +0 (0 left, was 168)
 kernsize[big]: footprint  KERN_SIZE 96,768 of 98,304 -> 1,536 spare (3 steps), was 1,536  [+0]
 ```
 
-**No rung crossed, and it very nearly did.** The first build appended the
+**It very nearly crossed a rung.** The first build appended the
 cell at 0x03A8 and came to `.text` +151 / `.bss` +27 = **178 against the 168
 that were left**, crossing by ten bytes and taking the footprint spare from
 three steps to two. Putting the slot on the **reused retired cell** at 0x01F0

@@ -72,7 +72,7 @@ the *cheapest* block it outranks. (§50.6.4.)
 SPEC.md §11.96.3 is the section; it landed as designed below, with one
 simplification (a `mem_pg_own` row needs a tag, a base and a COUNT — no
 stride column, because §50.6 already requires every purgeable block to be
-named by exactly one *word*). `.text` +69 bytes, no rung crossed.
+named by exactly one *word*). `.text` +69 bytes.
 
 **Read §5 first, though, because the gate this section told you to use did
 not work.** `tools/sucheck.py` clicked a hard-coded point that Solitaire's

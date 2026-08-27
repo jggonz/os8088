@@ -211,6 +211,20 @@ ifneq ($(SNAPAUDIT),)
 VIDDEF += -DSNAPAUDIT
 endif
 
+# VGADIRTY=1 fills the VGA framebuffer with a pattern in the ONE window a
+# machine cannot: after `int 10h AX=0012h` and before vid_setmode's own clear
+# (SPEC.md 39.23). Every emulator in this tree has a BIOS that clears mode 12h
+# properly, so the field's failure - a loading screen drawn over the mode 3
+# character generator, which lives in plane 2 and becomes bitmap the instant
+# the card is in 12h - is invisible here. This is DIRTYRAM's shape one device
+# along, and for its reason: it makes a difference between this machine and
+# that one REPRODUCIBLE rather than argued about. tests/vgadirty.py is the
+# gate; a shipped kernel carries none of it. Folded into VIDDEF so it shares
+# the stamp below, which is what stops a dirtying kernel lingering in build/.
+ifneq ($(VGADIRTY),)
+VIDDEF += -DVGA_DIRTY
+endif
+
 # DISKCNT=1 compiles in the three disk counters of docs/DISK-PERF-PLAN.md 2:
 # mounts, sectors transferred and int 13h data calls. They exist to answer
 # "how much work is a directory change", which QEMU can measure exactly even
@@ -325,6 +339,13 @@ endif
 # 18.93.1's canary to pay for the hex digits. What it keeps is 18.93's
 # shorten-on-error fallback, which is the half a disk that will not boot meets.
 ifneq ($(BOOTDIAG),)
+VIDDEF += -DBOOT_DIAG
+# ...AND THE SECTOR, which is where this knob started and where the note above
+# $(KNOBS) still says it lives. It stopped reaching stage 1 when SPEC.md 2.9
+# moved the loader - and the hex printer with it - into the kernel, and nobody
+# noticed because there was nothing left in the sector that wanted it. SPEC.md
+# 2.9.7's checksum wants it: BOOTDIAG=1 is what makes the failure print the sum
+# it computed instead of only saying that it was wrong.
 BOOTDEF += -DBOOT_DIAG
 endif
 
@@ -396,6 +417,7 @@ endif
 # ON the far jump, or failed DURING the load and never got that far. Halted, the
 # splash stays up; still looping, the fault is inside the load.
 ifneq ($(BOOTSTOP),)
+VIDDEF += -DBOOT_STOP=$(BOOTSTOP)
 BOOTDEF += -DBOOT_STOP=$(BOOTSTOP)
 endif
 
@@ -416,6 +438,12 @@ endif
 # inside the first 64KB, so the compare reuses the ES the handoff already loads,
 # and the word is the same for every geometry because KERNEL.SYS is one file.
 # tests/suite.py's `canary` row is what keeps all of that true.
+# Stage 2's size, read from the kernel's own constant so the two cannot
+# disagree (SPEC.md 2.9). The sector needs it to know how many sectors to
+# fetch before anything has told it; kernel.asm asserts that stage 2 fits.
+BOOT2_SECS := $(shell sed -n 's/^BOOT2_SECS  *equ  *\([0-9][0-9]*\).*/\1/p' kernel/kernel.asm)
+BOOT2_PAD  := $(shell echo $$(( $(shell sed -n 's/^BOOT2_SECS  *equ  *\([0-9][0-9]*\).*/\1/p' kernel/kernel.asm) * 512 )))
+
 KSIG_OFF := 18432
 #
 # A PAYLOAD SHORTER THAN THE OFFSET DEFINES NO KSIG AT ALL, and that is the
@@ -431,6 +459,27 @@ KSIG_OFF := 18432
 # half of the same fence: KERNEL_SECTORS > KSIG_OFF/512, not > 32, so the
 # compare is only assembled when the sector it names was loaded.
 KSIGDEF = -DKSIG_OFF=$(KSIG_OFF) $$(python3 -c "import sys; d = open(sys.argv[1], 'rb').read(); o = $(KSIG_OFF); print('-DKSIG=%d' % int.from_bytes(d[o:o+2], 'little')) if len(d) > o + 1 else None" $(1))
+
+# ...and the KERNEL's, which needs its own because SPEC.md 2.9 put stage 2 in
+# front of the image: KSIG_OFF is a MEMORY offset from KERNEL_SEG and stage 2
+# holds it as a constant, so what shifts is only where the same bytes sit in
+# the FILE. The signature itself still has to be injected - it is read out of
+# the built kernel, so a kernel that carried it would need a second assembly
+# to reach a fixed point, and stage 1 is built afterwards and hands it over.
+KSIGDEF2 = $$(python3 -c "import sys; d = open(sys.argv[1], 'rb').read(); o = $(KSIG_OFF) + $(BOOT2_PAD); print('-DKSIG=%d' % int.from_bytes(d[o:o+2], 'little')) if len(d) > o + 1 else None" $(1))
+
+# ...and THE BLOB'S OWN CHECKSUM (SPEC.md 2.9.7). The kernel's load has had
+# 18.93.1's canary since the day a BIOS was caught flipping heads early; the
+# BLOB's load had nothing, and since 2.9.6 it is 13 sectors and two int 13h
+# calls where it used to be 4 and one. A short or torn read there is not a
+# disk error - stage 2 runs, the loading screen draws, and the machine
+# executes whatever landed in the sectors that did not arrive, hundreds of
+# instructions later and somewhere else entirely.
+#
+# A 16-bit word sum, injected the way KSIG is and for KSIG's reason: it is
+# read OUT of the built kernel, so a kernel carrying it would have to be
+# assembled twice to reach a fixed point.
+BLOBSUMDEF = $$(python3 -c "import sys; d = open(sys.argv[1], 'rb').read()[:$(BOOT2_PAD)]; print('-DBLOBSUM=%d' % (sum(int.from_bytes(d[i:i+2], 'little') for i in range(0, len(d), 2)) & 0xFFFF)) if len(d) >= $(BOOT2_PAD) else None" $(1))
 
 # DIRW1=1 never takes SPEC.md 18.95's sector cache, so every read moves exactly
 # the sectors asked for again - the pre-18.95 behaviour, reached through the
@@ -591,23 +640,30 @@ ifneq ($(NOUNAL),)
 VIDDEF += -DNOUNAL
 endif
 
-# NOBAND=1 puts a window's title bar back on the fifteen primitive calls it
-# took before band.inc's COMPOSER (SPEC.md 11.101) became kern_big's default in
-# SPEC.md 5.9.6. The composed bar writes every pixel ONCE - so the caption
-# never flashes, which is docs/TEXT-PLAN.md 1.1's whole point - and it is also
-# the FASTER bar on both 1bpp adapters: 36.5 ms against 40.8 on Hercules and
-# 37.1 against 42.0 on CGA. On VGA it is 38.3 against 30.3 and ships anyway,
-# because a band is 1bpp on every card while the primitives get VGA's planar
-# hardware, and the flicker is worth more than the 8 ms (PERFORMANCE.md Sets
-# 88, 89, 91, 92).
+# BAND=1 puts a window's title bar on band.inc's COMPOSER (SPEC.md 11.101):
+# the whole bar drawn into a 1bpp band and blitted, so every pixel it covers
+# is written ONCE and the caption never flashes, which is docs/TEXT-PLAN.md
+# 1.1's whole point. The default build draws the bar with the fifteen
+# primitive calls it always did.
 #
-# So this is the A/B, NOUNAL's shape: it exists to be diffed against rather
-# than because anybody should build it. It is also the only thing that keeps
-# the fifteen-call path assembling, which matters because that path is STILL
-# the runtime fallback on a machine whose heap refuses the band's 2KB claim,
-# and on kern_small, which has no gfx_blit1 at all.
-ifneq ($(NOBAND),)
-VIDDEF += -DNOBAND
+# IT WAS kern_big's DEFAULT FOR ONE CYCLE (SPEC.md 5.9.6) AND IS A KNOB
+# AGAIN, and nothing in that decision touches what was measured. The composed
+# bar is still the faster bar on both 1bpp adapters - 36.5 ms against 40.8 on
+# Hercules and 37.1 against 42.0 on CGA - and it still writes no pixel twice
+# where the fifteen calls write the caption's own rows four times
+# (PERFORMANCE.md Sets 88, 89, 91, 92, 93). What sends it back to a knob is
+# the byte price: 1,634 of them - .text +322, .bss +34, .cold +1,278 - on a
+# kernel that has to be efficient with size everywhere (CLAUDE.md's rung
+# rule). KERN_SIZE follows the sum, 121,344 -> 120,320, so the default build
+# hands 1,024 bytes of every machine's RAM back.
+#
+# So the A/B runs the other way round and is the same A/B: `make` against
+# `make BAND=1`, one kernel and one knob. This is now the only thing that
+# keeps the COMPOSED path assembling - the fifteen calls are what every
+# build has - and band.inc is not a museum piece either: SPEC.md 5.9.6 is
+# re-decidable in the direction it came from, and this is what measures it.
+ifneq ($(BAND),)
+VIDDEF += -DBAND
 endif
 
 # NOPLANE=1 takes SPEC.md 5.4.1.3's PLANAR ROW DECODER out of gfx_blit4, so
@@ -617,12 +673,30 @@ endif
 # 50% dither is 18,978 of them and SEVEN SECONDS of canvas; the decoder is
 # priced per PIXEL instead and draws the same picture in 1.1.
 #
-# NOBAND's shape, and here for the same two reasons: it is the A/B the number
+# NOUNAL's shape, and here for the same two reasons: it is the A/B the number
 # above comes off, and it is the only thing keeping the run-only path
 # assembling - which still matters, because that path is what a 1bpp adapter,
 # a clipped blit, a block hanging off the screen edge and every FLAT row use.
 # kern_small does not have the decoder at all (KERN_SMALL_BUDGET), so there
 # the run-only path is not a knob, it is the build.
+# NOUIBLOCK=1 puts ui_task back on the SPIN it ran on before SPEC.md 8.1.2:
+# `.idle` becomes task_yield again instead of task_sleep(1). The A/B for the
+# whole idle design, and the only thing that keeps the spinning path
+# assembling.
+#
+# What the default buys, measured on a 5150 under MartyPC: an idle desktop
+# goes from 100% ui_task to 2.70% ui_task and 97.2% HALTED, and the loop from
+# 1,134.6 passes/s to 17.9. What it does NOT touch is the pointer - the mouse
+# ISR draws it itself (mou_apply -> cur_move), so the arrow is ISR-paced and
+# not pass-paced: 112 draws against 113 over the same sweep. Input latency
+# from the ISR finishing a packet to the next pass is 5.14 ms median against
+# the spinning kernel's 4.99, with a LOWER worst case (5.22 against 6.41).
+#
+# In $(VIDSTAMP) and $(KNOBS) below, like every other knob.
+ifneq ($(NOUIBLOCK),)
+VIDDEF += -DNOUIBLOCK
+endif
+
 ifneq ($(NOPLANE),)
 VIDDEF += -DNOPLANE
 endif
@@ -987,8 +1061,10 @@ endif
 # SCROLLROW were in the stamp and not in this list, so the kernel duly rebuilt
 # for them and the banner said nothing about the kernel it had just built -
 # each of them changes the binary (see their ifneqs at the top of this file).
-# BOOTDIAG is the one asymmetry that is meant to be one: it feeds $(BOOTDEF)
-# alone, and the stamp deletes boot.bin/boot360.bin - but only once BOOTDIAG is
+# BOOTDIAG feeds BOTH $(BOOTDEF) and $(VIDDEF) - the sector's checksum report
+# (SPEC.md 2.9.7) and stage 2's hex printer, which live in different binaries
+# since 2.9 moved the loader. It fed VIDDEF alone for a while and the sector's
+# half simply did not assemble. The stamp deletes boot.bin/boot360.bin - but only once BOOTDIAG is
 # IN the stamp, which for a long time it was not. The stamp deletes nothing
 # unless its own NAME changes, so `make BOOTDIAG=1` reused whatever boot.bin
 # was already there and the next plain `make` reused the diagnostic one. See
@@ -1008,7 +1084,7 @@ KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
                              FONT INSTCHUNK PICOMEM PM_BASE PM_SB_PORT ANIMOFF DISINK0 \
                              BOOTPROF BOOTMARK BOOTHALT BOOTSTOP NOPS2 MOUIDSLOW TRACKRUN SBDRAGOFF SBRATE \
                              ETHPROF FTPDSLOW FTPDBG \
-                             KERN_SMALL FSNOSTAMP THEMEDARK TITLESNAP NOUNAL NOBAND NOPLANE,\
+                             KERN_SMALL FSNOSTAMP THEMEDARK TITLESNAP NOUNAL BAND NOPLANE NOUIBLOCK VGADIRTY,\
                              $(if $($(k)),$(k)=$($(k)))))
 # **A KNOB KERNEL IS NOT THE SHIPPED KERNEL, so KERN_BUDGET does not bind it**
 # (kernel.asm guard 1). It is built to answer a question about a machine and
@@ -1042,8 +1118,15 @@ endif
 # when not.
 #
 # The tags are short and must not collide with each other: -bd -pm -pmb -pms
-# -ep -fs -fd are the seven, checked against every tag already on the line.
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(STRAD),-st$(STRAD))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(GFXAUDIT),-ga$(GFXAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(QUANTUM),-q$(QUANTUM))$(if $(DIRTYRAM),-dr$(DIRTYRAM))$(if $(FSNOSTAMP),-fn$(FSNOSTAMP))$(if $(ANIMOFF),-ao$(ANIMOFF))$(if $(THEMEDARK),-td$(THEMEDARK))$(if $(DISINK0),-di$(DISINK0))$(if $(BOOTPROF),-bp$(BOOTPROF))$(if $(BOOTMARK),-bm$(BOOTMARK))$(if $(BOOTHALT),-bh$(BOOTHALT))$(if $(BOOTSTOP),-bs$(BOOTSTOP))$(if $(NOPS2),-np$(NOPS2))$(if $(MOUIDSLOW),-mis$(MOUIDSLOW))$(if $(TRACKRUN),-tr$(TRACKRUN))$(if $(SBDRAGOFF),-sbo$(SBDRAGOFF))$(if $(SBRATE),-sbr$(SBRATE))$(if $(TITLESNAP),-ts$(TITLESNAP))$(if $(NOUNAL),-nu$(NOUNAL))$(if $(NOBAND),-nb$(NOBAND))$(if $(NOPLANE),-npl$(NOPLANE))$(if $(BOOTDIAG),-bd$(BOOTDIAG))$(if $(PICOMEM),-pm$(PICOMEM))$(if $(PM_BASE),-pmb$(PM_BASE))$(if $(PM_SB_PORT),-pms$(PM_SB_PORT))$(if $(ETHPROF),-ep$(ETHPROF))$(if $(FTPDSLOW),-fs$(FTPDSLOW))$(if $(FTPDBG),-fd$(FTPDBG))
+# -ep -fs -fd are the seven, checked against every tag already on the line;
+# -nub is NOUIBLOCK's and -vd is VGADIRTY's, both checked the same way.
+#
+# A KNOB IN $(KNOBS) AND NOT IN THIS STRING IS SILENT AND WORSE THAN USELESS:
+# `make VGADIRTY=1 build/os8088.img` answered "up to date" and the test that
+# asked for it read a PLAIN kernel, so its assertion was about a build nobody
+# had made. Both halves, every time - the list above so the knob announces
+# itself, this string so the kernel is rebuilt when it changes.
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(STRAD),-st$(STRAD))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(GFXAUDIT),-ga$(GFXAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(QUANTUM),-q$(QUANTUM))$(if $(DIRTYRAM),-dr$(DIRTYRAM))$(if $(FSNOSTAMP),-fn$(FSNOSTAMP))$(if $(ANIMOFF),-ao$(ANIMOFF))$(if $(THEMEDARK),-td$(THEMEDARK))$(if $(DISINK0),-di$(DISINK0))$(if $(BOOTPROF),-bp$(BOOTPROF))$(if $(BOOTMARK),-bm$(BOOTMARK))$(if $(BOOTHALT),-bh$(BOOTHALT))$(if $(BOOTSTOP),-bs$(BOOTSTOP))$(if $(NOPS2),-np$(NOPS2))$(if $(MOUIDSLOW),-mis$(MOUIDSLOW))$(if $(TRACKRUN),-tr$(TRACKRUN))$(if $(SBDRAGOFF),-sbo$(SBDRAGOFF))$(if $(SBRATE),-sbr$(SBRATE))$(if $(TITLESNAP),-ts$(TITLESNAP))$(if $(NOUNAL),-nu$(NOUNAL))$(if $(BAND),-bnd$(BAND))$(if $(NOPLANE),-npl$(NOPLANE))$(if $(NOUIBLOCK),-nub$(NOUIBLOCK))$(if $(VGADIRTY),-vd$(VGADIRTY))$(if $(BOOTDIAG),-bd$(BOOTDIAG))$(if $(PICOMEM),-pm$(PICOMEM))$(if $(PM_BASE),-pmb$(PM_BASE))$(if $(PM_SB_PORT),-pms$(PM_SB_PORT))$(if $(ETHPROF),-ep$(ETHPROF))$(if $(FTPDSLOW),-fs$(FTPDSLOW))$(if $(FTPDBG),-fd$(FTPDBG))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/kernel-full.bin \
@@ -1117,7 +1200,13 @@ KERNEL_SRC := kernel/kernel.asm
 # that file leaves build/kernel.bin untouched and every image stale, which is
 # indistinguishable from a change that did nothing: kernsize.py re-assembles
 # and so reports the NEW sizes while the booted kernel is the old one.
-KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc
+# ...and boot/boot2.asm is one too, for exactly the reason above: SPEC.md 2.9's
+# stage 2 is %included into `.boot2` and lives outside kernel/, so without it
+# here editing the LOADER leaves build/kernel.bin untouched and every image
+# stale. Caught once already - a fix to the 286 head-cross gate assembled
+# perfectly, never reached the disk, and the only symptom was os88sym refusing
+# a map that described "a DIFFERENT kernel".
+KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
 
 .PHONY: small kernsplit all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
         xt-hercules xt-multimon 286 386sx 386 386-xms xt-sound xt-sound-1.44 \
@@ -1275,7 +1364,13 @@ $(BUILD)/kernel.bin: $(BUILD)/kernel-full.bin tools/os88mod.py | $(BUILD)
 # What that cost, per section and in 512-byte rungs, against the baseline in
 # docs/KERNEL-MEMORY.md. A REPORT and never a gate: the guards inside
 # kernel.asm are what refuse an overrun, and this says how close you came and
-# how much of each rung's slack is left for the next feature. It costs one
+# how much of each rung has already been spent by changes that crossed
+# nothing. That last figure is the `accrued` line and it is deliberately the
+# bill rather than the headroom - "402 left" invites the next 402 bytes and
+# "508/512 spent" does not, and they are the same number (CLAUDE.md's rung
+# rule: a rung says WHEN the machine pays, never what a change cost).
+#
+# It costs one
 # extra assembly of the kernel, which is why it is not folded into the line
 # above: -w+error would turn its %warning into an error, and relaxing that
 # for every build would silence a %warning somebody meant as an alarm.
@@ -1315,7 +1410,7 @@ $(KMODS): $(BUILD)/kernel.bin ;
 $(BUILD)/boot.bin: boot/boot.asm $(BUILD)/kernel.bin Makefile | $(BUILD)
 	$(NASM) -f bin $(BOOTDEF) \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/kernel.bin) + 511 ) / 512 )) \
-		$(call KSIGDEF,$(BUILD)/kernel.bin) \
+		-DBOOT2_SECS=$(BOOT2_SECS) $(call KSIGDEF2,$(BUILD)/kernel.bin) $(call BLOBSUMDEF,$(BUILD)/kernel.bin) \
 		-o $@ boot/boot.asm
 	@test $(call FILESIZE,$@) -eq 512 || { echo "boot sector is not 512 bytes"; exit 1; }
 
@@ -1335,7 +1430,7 @@ $(BUILD)/boot.bin: boot/boot.asm $(BUILD)/kernel.bin Makefile | $(BUILD)
 $(BUILD)/boot360.bin: boot/boot.asm $(BUILD)/kernel.bin Makefile | $(BUILD)
 	$(NASM) -f bin -DSPT=9 -DHEADS=2 $(BOOTDEF) \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/kernel.bin) + 511 ) / 512 )) \
-		$(call KSIGDEF,$(BUILD)/kernel.bin) \
+		-DBOOT2_SECS=$(BOOT2_SECS) $(call KSIGDEF2,$(BUILD)/kernel.bin) $(call BLOBSUMDEF,$(BUILD)/kernel.bin) \
 		-o $@ boot/boot.asm
 	@test $(call FILESIZE,$@) -eq 512 || { echo "boot sector is not 512 bytes"; exit 1; }
 
@@ -1682,8 +1777,24 @@ $(BUILD)/mbr.bin: boot/mbr.asm | $(BUILD)
 # the driver. NO -DKERNEL_SECTORS: unlike the floppy sectors, this one is
 # built long before it knows which kernel it will boot, so the count is a word
 # at a pinned offset that the installer patches when it writes the VBR.
-$(BUILD)/boothd.bin: boot/boothd.asm | $(BUILD)
-	$(NASM) -f bin -w+error -o $@ $<
+# THREE constants come out of the KERNEL's own build, and boothd.asm cannot
+# know one of them (SPEC.md 2.9.9): BOOT2_SECS is where `.text` starts in the
+# file, BLOB_SEG is the heap floor the blob is read to, and SPL_FSEG is the
+# word the sector publishes it in. Deferred into the recipe rather than taken
+# at parse time, the way KSIG is, because build/kernel.bin need not exist yet.
+#
+BOOTHD_DEFS = import sys, subprocess, json; sys.path.insert(0, 'tools'); \
+              import os88sym; \
+              k = json.loads(subprocess.check_output(['python3','tools/kernsize.py','--json'])); \
+              print('-DBLOB_SEG=%d -DSPL_FSEG=%d' % (k['kseg'] + k['ksize'] // 16, os88sym.syms()['spl_fseg']))
+
+# BLOB_SEG follows the SHIPPED kernel's ladder. A kern_small installed to a
+# hard disk would have a lower heap floor, so the blob would land a little
+# above it - a gap rather than an overlap, because mem_init raises [mem_base]
+# over wherever [spl_fseg] says the blob is. Nothing in `all` builds that
+# combination.
+$(BUILD)/boothd.bin: boot/boothd.asm kernel/kernel.asm $(BUILD)/kernel.bin | $(BUILD)
+	$(NASM) -f bin -w+error -DBOOT2_SECS=$(BOOT2_SECS) $$(python3 -c "$(BOOTHD_DEFS)") -o $@ $<
 	@echo "boothd: $(call FILESIZE,$@) bytes"
 
 # HDDTOOL.DRV - the hard-disk driver's OTHER half (SPEC.md 52.11): the
@@ -4633,13 +4744,13 @@ $(BUILD)/comscan.bin: tests/comscan/comscan.asm | $(BUILD)
 # Its own boot sectors, because the count of sectors to read is assembled in
 # and comscan is a great deal smaller than the kernel.
 $(BUILD)/csboot360.bin: boot/boot.asm $(BUILD)/comscan.bin Makefile | $(BUILD)
-	$(NASM) -f bin -DSPT=9 -DHEADS=2 $(BOOTDEF) \
+	$(NASM) -f bin -DSPT=9 -DHEADS=2 -DFLAT_PAYLOAD $(BOOTDEF) \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/comscan.bin) + 511 ) / 512 )) \
 		$(call KSIGDEF,$(BUILD)/comscan.bin) \
 		-o $@ boot/boot.asm
 
 $(BUILD)/csboot144.bin: boot/boot.asm $(BUILD)/comscan.bin Makefile | $(BUILD)
-	$(NASM) -f bin $(BOOTDEF) \
+	$(NASM) -f bin -DFLAT_PAYLOAD $(BOOTDEF) \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/comscan.bin) + 511 ) / 512 )) \
 		$(call KSIGDEF,$(BUILD)/comscan.bin) \
 		-o $@ boot/boot.asm
@@ -4688,13 +4799,13 @@ $(BUILD)/lptlink.bin: tests/lptlink/lptlink.asm drivers/net/lplink.inc | $(BUILD
 # Its own boot sectors, because the sector count is assembled in and lptlink
 # is a great deal smaller than the kernel.
 $(BUILD)/llboot360.bin: boot/boot.asm $(BUILD)/lptlink.bin Makefile | $(BUILD)
-	$(NASM) -f bin -DSPT=9 -DHEADS=2 $(BOOTDEF) \
+	$(NASM) -f bin -DSPT=9 -DHEADS=2 -DFLAT_PAYLOAD $(BOOTDEF) \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/lptlink.bin) + 511 ) / 512 )) \
 		$(call KSIGDEF,$(BUILD)/lptlink.bin) \
 		-o $@ boot/boot.asm
 
 $(BUILD)/llboot144.bin: boot/boot.asm $(BUILD)/lptlink.bin Makefile | $(BUILD)
-	$(NASM) -f bin $(BOOTDEF) \
+	$(NASM) -f bin -DFLAT_PAYLOAD $(BOOTDEF) \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/lptlink.bin) + 511 ) / 512 )) \
 		$(call KSIGDEF,$(BUILD)/lptlink.bin) \
 		-o $@ boot/boot.asm
@@ -4760,7 +4871,7 @@ $(DSSTAMP): | $(BUILD)
 	@touch $@
 
 $(BUILD)/dsboot.bin: boot/boot.asm $(BUILD)/dosstub.bin Makefile | $(BUILD)
-	$(NASM) -f bin -DSPT=9 -DHEADS=2 $(BOOTDEF) \
+	$(NASM) -f bin -DSPT=9 -DHEADS=2 -DFLAT_PAYLOAD $(BOOTDEF) \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/dosstub.bin) + 511 ) / 512 )) \
 		$(call KSIGDEF,$(BUILD)/dosstub.bin) \
 		-o $@ boot/boot.asm

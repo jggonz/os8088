@@ -111,7 +111,7 @@ Everything below was taken on **MartyPC**, cycle-accurate 4.77 MHz 8088,
 | | |
 |---|---|
 | one window raise, title bars only | Hercules **40.8 ms**, CGA **42.0**, VGA **30.3** |
-| the same, composed — now the DEFAULT (SPEC.md §5.9.6) | Hercules **36.5 ms**, CGA **37.1**, VGA **38.3** |
+| the same, composed — `make BAND=1` (SPEC.md §5.9.6; it was the default for a cycle) | Hercules **36.5 ms**, CGA **37.1**, VGA **38.3** |
 | `gfx_hline`, 6 pixels | **3,235 cycles** |
 | `gfx_hline`, 312 pixels | **4,112 cycles** — 877 more for 306 more pixels |
 | `gfx_fill`, over one whole raise | 3,106 → 41,323 cycles |
@@ -253,24 +253,25 @@ minutes.
 
 ## 4. The segment proposal — OVERLAPPING, not partitioned (PINNED)
 
-> **COSTED, and the number is 3.** PERFORMANCE.md Set 95 breakpointed all 84
-> `cw_` shims at once and counted: **one window raise crosses out of `.cold`
-> three times** — two title bars, frames, shadows and dither — and **opening a
-> Disk window 117 times**, which is ~3.2 ms against an operation that is
-> floppy-bound at several hundred.
+> **UN-COSTED again, and pinned.** A costing lived here from 2026-08-24 to
+> 2026-08-27 and was withdrawn with the set behind it (PERFORMANCE.md Set 95):
+> it counted crossings over two gestures at an idle desktop and concluded from
+> them that this proposal would buy nothing. Two gestures cannot carry that
+> conclusion, and it was read as settling the question for three days.
 >
-> The drawing path is *already* inside one segment: `.text` primitives call
-> `.text`, and the composer's `.cold` body calls `.cold` ops. **This proposal
-> would buy essentially nothing**, and it is the graphics path it was proposed
-> for.
+> **So nobody knows what §4 is worth, and the speed case is not the only
+> case.** What IS measured is the SIZE of the machinery, in PERFORMANCE.md
+> Set 109: **2,245 resident bytes** of shims, thunks and far-call encoding
+> across **391 crossing sites** — nine times what the one cheaper measure
+> still on the table there would recover. Overlapping segments would retire most of
+> it, in `.text` and `.cold` alike, and every one of those bytes counts at
+> face value (CLAUDE.md's rung rule). Anyone re-taking the speed side needs a
+> harness that samples across applications and workloads and says what it did
+> not cover.
 >
-> It stays pinned because it is the owner's to decide and because the *shape*
-> may still be right for reasons other than speed. But the case for it is not
-> "far calls are 130 cycles" — they are, and there are almost none. Anyone
-> designing from here starts with those two counts.
->
-> What the counting DID find is in Set 95 and SPEC.md §38.1.1: a guard written
-> on the wrong side of the boundary, costing 0.8% of the machine at idle.
+> The one durable finding of the withdrawn run is SPEC.md §38.1.1: a guard
+> written on the wrong side of the boundary, costing ~1% of the machine at
+> idle. It is measured independently there.
 
 
 `.text` and `.cold` today are a **budget** split, not a cohesion one, and the
@@ -452,7 +453,7 @@ The design agent must measure. These exist and work:
 | `/tmp/os88ver/tbar.py` (recreate) | breakpoint pair on `wm_draw_title`, entry to return, over one window raise with two windows up |
 | `/tmp/os88ver/prof.py` (recreate) | the same for a set of symbols, summed per op — this is what found "the cost is per chunk" |
 | the two-point solve | measure one op at two sizes and solve for fixed vs per-byte. One point is a fit, not a measurement |
-| `tools/os88sym.py` | pass the knob's defines (`NOBAND`, `TITLESNAP`, …) or every address is wrong |
+| `tools/os88sym.py` | pass the knob's defines (`BAND`, `TITLESNAP`, …) or every address is wrong |
 | `tools/kernsize.py` | sections, rungs, the 64 KB segment and the ladder |
 
 **Driving rules that cost time to learn:** `os88mouse` polls the guest's own
@@ -466,34 +467,39 @@ stops the guest; call `m.run()` after. And committing invalidates
 
 ## 8. What is in the tree now
 
-- `kernel/band.inc` — the composer, **kern_big's default** since SPEC.md §5.9.6, with a
+- `kernel/band.inc` — the composer, **`make BAND=1`** (SPEC.md §5.9.6 — it was
+  kern_big's default for a cycle and is a knob again), with a
   2 KB `MEM_K_BAND` heap claim (§5.9.2), the 1bpp storage polarity (§5.9.3) and
-  both hoists (§5.9.4, §5.9.5). **Correct on all three adapters and now the
-  FASTER path on both 1bpp cards** — see §1.1. It is the only title bar in the
+  both hoists (§5.9.4, §5.9.5). **Correct on all three adapters and the FASTER
+  path on both 1bpp cards** — see §1.1. It is the only title bar in the
   tree with no double-draw in it at all, which is the property
   docs/TEXT-PLAN.md exists to get. What is left of its cost is the band clear
   and the blit, 25,933 cycles a bar, and the blit is this rework's own subject.
 - `kernel/wm.inc`'s `wm_title_band` / `wm_title_band_x` / `wm_tsend` — the
-  first consumer (§11.101), with the fifteen-call path kept as the fallback:
-  `kern_small` has no `gfx_blit1`, and a machine whose heap refuses the 2 KB
-  claim falls through to it. `NOBAND=1` is the A/B and the only thing that
-  keeps that path assembling.
+  first consumer (§11.101), behind the same knob, with the fifteen-call path
+  the one every other build draws: `kern_small` has no `gfx_blit1`, and a
+  `BAND=1` machine whose heap refuses the 2 KB claim falls through to it too.
+  `make` against `make BAND=1` is the A/B.
 
-**Two things this rework now OWES the composer**, because it shipped:
+**Two things this rework OWES the composer**, and the second changed hands
+when the default went back:
 
-1. **VGA.** The composed bar is 38.3 ms there against the primitives' 30.3, and
-   it ships at that loss because the flicker is worth more (§5.9.6). If Phase 1
-   and Phase 3 bring the per-call cost down far enough that fifteen calls stop
-   flashing in practice, VGA — and then mono — can go back to them. **Measure
-   that, do not assume it**: `NOBAND=1` is the A/B.
-2. **`band_emit_x`, 18,776 cycles a bar.** That is `gfx_blit1_x` and it is now
-   on a shipped path, so its 603 bytes of which 78 do the blitting are this
-   document's subject with a caller that cares.
+1. **VGA.** The composed bar is 38.3 ms there against the primitives' 30.3.
+   That loss shipped while the composer was the default because the flicker is
+   worth more (§5.9.6), and it is what a `BAND=1` build still chooses. If Phase
+   1 and Phase 3 bring the per-call cost down far enough that fifteen calls
+   stop flashing in practice, the composer stops being wanted at all. **Measure
+   that, do not assume it**: `make BAND=1` is the A/B.
+2. **`band_emit_x`, 18,776 cycles a bar.** That is `gfx_blit1_x`, whose 603
+   bytes of which 78 do the blitting are this document's subject. It came OFF
+   the shipped path with §5.9.6's flip, so the caller that cared is a knob
+   build now — but `gfx_blit1` is API 0x0418 as well, and every package that
+   composes a band (docs/TEXT-PLAN.md, apps/os88type.inc) is still that caller.
 
-> **Noted, not pursued** (SPEC.md §5.9.6): with the composer default there is a
-> second saving available — the fifteen-call path's own bytes, and any primitive
-> that exists only to serve it. Taking it would trade the runtime fallback and
-> `kern_small`'s bar for whatever they cost, which nobody has measured.
+> **No longer available** (SPEC.md §5.9.6): while the composer was the default
+> there was a second saving here — the fifteen-call path's own bytes, and any
+> primitive that exists only to serve it. The fifteen calls are the shipped bar
+> again, so that is off. Nobody had measured it.
 - `gfx_blit1_x`'s odd-row fix (§5.4.2.3) — **unconditional, and it ships.**
 - PERFORMANCE.md Sets 86, 87, 88, 89, 90, 91, 92 — the measurements this file
   is built on. Sets 91 and 92 are the two that reversed its conclusion.

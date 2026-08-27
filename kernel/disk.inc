@@ -294,7 +294,7 @@ FDD_S_NORDY  equ 4               ; the controller never took a byte, or never
 ; machine claiming three or four drives the block described the LAST unit
 ; asked and said nothing at all about the others - and that is precisely the
 ; configuration this diagnostic exists for, an internal drive plus a 4865 on
-; the 37-pin connector. Ten bytes of .text, no rung crossed.
+; the 37-pin connector. Ten bytes of .text.
 FDU_ST3      equ 0               ; SENSE DRIVE STATUS, motor off. bit 4 = TRACK
                                  ; 0, and bit 3 = two-side, which the field 5150
                                  ; also reads CLEAR on the drive it does not
@@ -1114,7 +1114,7 @@ dsk_xfer:
     push cx                     ; ...and THE SAME NOTCHES .notch makes, which
     mov cx, ax                  ; is the whole of SPEC.md 12.8.2: a sector the
 .snotch:                        ; cache served is a sector the operation is
-    call KERNEL_SEG:cw_spl_step ; DONE with, and a bar that counts only what
+    SPLCALL splf_step ; DONE with, and a bar that counts only what
     call KERNEL_SEG:cw_fpg_step ; reached the drive stops short and vanishes
     loop .snotch                ; there. Both preserve every register and the
                                 ; flags, so AX is still the count below and CX
@@ -1346,7 +1346,7 @@ dsk_xfer:
 .count:
     mov cx, ax                  ; the boot bar counts SECTORS, and a call now
 .notch:                         ; carries a run of them (SPEC.md 18.91) - so
-    call KERNEL_SEG:cw_spl_step               ; it is stepped per sector rather than per
+    SPLCALL splf_step               ; it is stepped per sector rather than per
     call KERNEL_SEG:cw_fpg_step               ; call, or the bar would under-count exactly
     loop .notch                 ; as far as the batching won. BOTH preserve
                                 ; every register and the flags - CX is this
@@ -3973,11 +3973,22 @@ dsk_fatw_claim:
     mov ax, (DSK_FAT_SECS*512 + 1023) / 1024
     mov bx, MEM_K_FATW
     call mem_claim_x              ; out: DX = the segment; CF=1 = refused
+    jc .none                    ; BX is still the TAG here, which is what
+                                ; mem_movable wants beside DX (SPEC.md 66.2)
+    mov ax, dsk_fatw_reloc      ; ...AND IT MOVES (SPEC.md 66.5.6). This is the
+    call mem_movable_x          ; FIRST bottom-up claim of the whole boot - it
+                                ; lands on [mem_base] itself at the A: mount,
+                                ; before any driver - so anything the kernel
+                                ; ever wants to hand back from the arena's
+                                ; floor is walled in behind it while it is
+                                ; pinned. Nothing about the window needs it to
+                                ; be: the bytes travel with the block and its
+                                ; only readers are software.
     pop bx
-    jc .none
     mov [bx], dx
     jmp short .out
 .none:
+    pop bx
     mov word [bx], 0
 .out:
     pop dx
@@ -3985,6 +3996,54 @@ dsk_fatw_claim:
     pop bx
     pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; dsk_fatw_reloc - MEM_K_FATW's relocation proc (SPEC.md 66.2, 66.5.6)
+; in:  BX = the base it WAS at, DX = the base it is at now; DS = KERNEL_SEG
+; out: nothing (every register preserved)
+;
+; TWO NAMING WORDS, which is exactly why 66.2 takes a proc and not the address
+; of one: dsk_fatwc[vol] is where the claim is RECORDED and [dsk_fatseg] is
+; where the FAT is READ FROM, and the second equals the first only while that
+; volume is the one mounted. Poking either alone leaves a window that reads the
+; right bytes from the wrong place at the next switch - which is a FAT read
+; that succeeds and returns somebody else's sectors.
+;
+; The scan is by VALUE and not by the mounted volume's index, because a
+; compaction can fire while a different volume is current and the block being
+; moved is then not the one [disk_drive] names.
+; IT IS `.text` AND THAT IS LOAD-BEARING. mem_reloc_call reaches a kernel proc
+; through cw_mem_disp - `call bp` - with CS = KERNEL_SEG, so BP has to be a
+; `.text` offset. Written here, in the middle of disk.inc's cold half, it
+; assembled into `.cold` and os88ovlchk said nothing: an INDIRECT transfer is
+; the one class that file cannot see ("call bx, jmp [table]"), so the compactor
+; would have jumped to a cold offset inside the kernel segment on the first
+; move. The section switch below is the whole fix and there is no gate for it.
+section .text
+; -----------------------------------------------------------------------------
+dsk_fatw_reloc:
+    push ax
+    push cx
+    push si
+    mov si, dsk_fatwc
+    mov cx, DVOL_MAX
+.scan:
+    cmp [si], bx
+    jne .next
+    mov [si], dx
+.next:
+    inc si
+    inc si
+    loop .scan
+    cmp [dsk_fatseg], bx        ; ...and the LIVE pointer, if this volume is
+    jne .out                    ; the one mounted
+    mov [dsk_fatseg], dx
+.out:
+    pop si
+    pop cx
+    pop ax
+    ret
+section .cold                   ; ...and back, or every routine below joins it
 
 dsk_fatw_drop:
     push ax

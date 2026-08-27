@@ -57,6 +57,10 @@ T_FLAGS     equ 7               ; byte (was padding): bit 0 = TF_SERVICE -
                                 ; only by the fsx freeze (SPEC.md 53.2)
 T_SIZE      equ 8               ; record stride
 
+TF_IDLE     equ 2               ; PROBE (docs/SCHED-IDLE-PLAN.md 6.2): the
+                                ; idle task. sch_switch skips its slot in the
+                                ; scan and picks it only where the old code
+                                ; resumed the outgoing task
 TF_SERVICE  equ 1               ; survives the fullscreen-exclusive freeze:
                                 ; a loaded driver's refill/drain worker is
                                 ; plumbing, not app work, and parking it
@@ -136,6 +140,11 @@ sched_init:
     mov byte [sch_fast], 0      ; no sub-tick until a bracket asks (53.8)
     mov byte [sch_coop], 0      ; pre-emptive until the Control Panel says
     mov byte [sch_hold], 0      ; otherwise (SPEC.md 8.2). All three are
+    mov byte [sch_idleslot], 0xFF ; NO idle task yet, and this is exactly why
+                                ; it is 0xFF rather than 0 - nothing clears
+                                ; .bss, and a zero here names slot 0, the UI
+                                ; task, which sch_switch's scan would then
+                                ; skip for ever
     mov word [sch_wd_hits], 0   ; zeroed HERE by hand: nothing clears .bss at
                                 ; boot, so an uninitialised sch_coop would
                                 ; boot into a random mode
@@ -328,6 +337,87 @@ sched_unhook:
 
     pop es
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sch_wake_ui - make the UI task ready (PROBE, docs/SCHED-IDLE-PLAN.md 6.3)
+;
+; One byte store, atomic on an 8086, so an ISR may do it with nothing held.
+; Task 0 is the UI task and its record is at offset 0 of sch_tasks, so this is
+; a single instruction with no index arithmetic. Setting READY on a task that
+; is already READY is a no-op.
+; -----------------------------------------------------------------------------
+sch_wake_ui:
+    mov byte [sch_uiwake], 1    ; ...and SAY SO, for the lost-wakeup guard at
+                                ; ui_task's .idle (SPEC.md 8.1.2.3). The
+                                ; T_STATE store below is not enough on its own:
+                                ; it carries no information while the task is
+                                ; RUNNING, which is exactly when the race
+                                ; happens
+    mov byte [sch_tasks+T_STATE], 1
+    ret
+
+; -----------------------------------------------------------------------------
+; sch_idle_body / sch_idle_start - the idle task (docs/SCHED-IDLE-PLAN.md 6.2)
+;
+; PROBE CODE, not yet a decision. It is inert on a kernel where ui_task never
+; sleeps: the scan skips this slot, so it is picked only where sch_switch used
+; to resume the outgoing task - which on a machine with one runnable task is
+; every switch, and ui_task is that task.
+;
+; hlt rather than a spin, and the machine has to be able to take an interrupt
+; or it never comes back: sti is inside the loop, not before it, so a stray
+; cli anywhere cannot strand the machine for good. SPEC.md 8's fail-safe
+; question - a machine with IRQ0 masked spins uselessly today and would hang
+; here - is NOT answered yet; that is docs/SCHED-IDLE-PLAN.md 4 item 1.
+; -----------------------------------------------------------------------------
+sch_idle_body:
+.loop:
+    sti                         ; ...inside the loop: see above
+    cmp byte [sch_idlespin], 0  ; THE FAIL-SAFE (SPEC.md 8.1.2.1): a machine
+    jne .spin                   ; whose IRQ0 was masked at boot never leaves a
+    hlt                         ; hlt, so it does not take one. One compare on
+.spin:                          ; a path that is by definition doing nothing
+    call task_yield             ; ...and THIS is what makes a wake immediate.
+    jmp short .loop             ; Only IRQ0 falls into sch_switch; every other
+                                ; ISR - the mouse's IRQ4 above all - iret's
+                                ; straight back here. Without the yield a task
+                                ; that an ISR just made ready waits for the
+                                ; next TICK, so the wake byte on its own buys
+                                ; nothing and input still lands up to 55 ms
+                                ; late. Costs one switch per interrupt taken
+                                ; while idle, which is what being idle is for
+
+; in:  nothing.  out: CF=1 if no slot was free (the machine keeps the old
+;      resume-the-outgoing fallback and nothing else changes)
+sch_idle_start:
+    push bx
+    push cx
+    push dx
+    in al, 0x21                 ; PIC1's mask, ONCE (SPEC.md 8.1.2.1): bit 0 is
+    and al, 1                   ; IRQ0. Masked means the tick never arrives, so
+    mov [sch_idlespin], al      ; a hlt here would never end - spin instead,
+                                ; which is exactly what the machine did before
+                                ; this task existed. A driver that masks IRQ0
+                                ; LATER is out of this guard's reach and is a
+                                ; driver bug; this is the boot-time case, and
+                                ; it is the one docs/FIELD-NOTES.md has seen
+    mov ax, sch_idle_body
+    xor bx, bx                  ; KERNEL_SEG
+    mov dx, 0x00FF              ; DL -> T_INST = 0xFF, "owns no instance"
+    call task_spawn
+    jc .out
+    mov [sch_idleslot], al
+    mov bl, al                  ; mark the slot so the scan can skip it
+    xor bh, bh
+    mov cl, 3
+    shl bx, cl
+    or byte [bx+sch_tasks+T_FLAGS], TF_IDLE
+    clc
+.out:
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -531,7 +621,15 @@ task_yield:
     push ds
     mov ax, KERNEL_SEG          ; caller's DS is on the stack; we need ours
     mov ds, ax
-    call sch_account            ; charge the slice that just ended (IF=0)
+                                ; NO sch_account HERE (SPEC.md 8.1.1). It used
+                                ; to charge the slice unconditionally, and on a
+                                ; machine with one runnable task that is 500
+                                ; cycles to bill a task and then go on running
+                                ; the same task - 1,048 times a second, 10.9%
+                                ; of an idle 8088. sch_switch charges at .pick
+                                ; instead, and only when the pick is a real
+                                ; change; the sch_resume branch below is a
+                                ; no-change by construction
     cmp byte [sch_lock], 0      ; scheduler locked: resume self immediately
     jne sch_resume
     jmp sch_switch
@@ -1462,6 +1560,8 @@ sch_switch:
     shl bx, cl
     cmp byte [bx+sch_tasks+T_STATE], 1
     jne .skip
+    cmp dl, [sch_idleslot]      ; the idle task is picked at the fallback
+    je .skip                    ; below and never by the scan (6.2)
     cmp byte [fsx_task], 0xFF   ; the fsx freeze (SPEC.md 53.2): off means
     je .pick                    ; every ready task is eligible; armed, only
     cmp dl, [fsx_task]          ; the exclusive task itself...
@@ -1473,13 +1573,41 @@ sch_switch:
 .skip:
     dec dh
     jnz .scan
-    mov dl, [sch_cur]           ; nothing ready (task 0 never sleeps, so
-    mov bl, dl                  ; only reachable if every task slept):
-    xor bh, bh                  ; resume the outgoing task
+    mov dl, [sch_idleslot]      ; nothing ready: the idle task, if there is
+    cmp dl, 0xFF                ; one (6.2). Without it - and before boot
+    jne .idlepick               ; starts it - the old behaviour stands, which
+    mov dl, [sch_cur]           ; is to resume the outgoing task
+.idlepick:
+    mov bl, dl
+    xor bh, bh
     mov cl, 3
     shl bx, cl
 .pick:
+    ; --- charge the OUTGOING task, and ONLY on a real change (SPEC.md 8.1.1)
+    ; [sch_cur] still names the task that just ran, which is what sch_account
+    ; bills - so the charge belongs above the store and not below it.
+    ;
+    ; The skip is EXACT rather than an approximation: sch_account's timestamp
+    ; is good for an interval of any length, so a no-change switch that is not
+    ; charged just leaves sch_pit_last where it is and the next charge bills
+    ; the whole longer interval to the same task. Nothing is mis-attributed
+    ; and no counter the Task Manager reads changes value. The interval cannot
+    ; run away because sch_isr stamps every tick whatever happens here.
+    ;
+    ; DX and BX are pushed because sch_account clobbers AX/BX/CX/DX/SI and
+    ; this is holding the picked index in DL and its record in BX. SP has
+    ; already been parked into the outgoing record above, so the four bytes
+    ; land in that task's slice below the parked SP - scratch nothing reads,
+    ; and 4 bytes against SCH_STACK's 1.8x margin over the measured worst case.
+    cmp dl, [sch_cur]
+    je .same                    ; resuming the caller: nothing ended, so
+    push dx                     ; nothing to charge
+    push bx
+    call sch_account
+    pop bx
+    pop dx
     mov [sch_cur], dl
+.same:
     mov sp, [bx+sch_tasks+T_SP]
     ; fall through into sch_resume
 
@@ -1628,6 +1756,15 @@ sch_hold:   resb 1                      ; ticks the running task has held the
 sch_newseg: resw 1                      ; task_spawn scratch: the code segment
                                         ; of the task being built (IF=0, so
                                         ; it cannot race a second spawner)
+sch_uiwake: resb 1                      ; an ISR woke the UI task; spent at
+                                        ; ui_task's .idle (SPEC.md 8.1.2.3)
+sch_idlespin: resb 1                    ; non-zero: IRQ0 was masked at boot, so
+                                        ; the idle task spins instead of
+                                        ; halting (SPEC.md 8.1.2.1)
+sch_idleslot: resb 1                    ; the idle task's slot, or 0xFF for
+                                        ; none - sched_init sets it, because
+                                        ; a zero here names slot 0, the UI
+                                        ; task, and the scan would skip it
 sch_wd_hits: resw 1                     ; watchdog-forced switches; diagnostic
                                         ; only (QMP xp on segment 0x0800),
                                         ; wraps mod 65536, never reset

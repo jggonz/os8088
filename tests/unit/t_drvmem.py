@@ -184,9 +184,16 @@ def main():
                     + s["SBL_POOLKB"],                      # sbl_pool_get, top rung
         "DRVM_HDD": s["DRVM_IMG_HDD"]
                     + s["HD_MAXVOL"] * s["HDD_LISTKB"],     # one per mounted volume
+        # **THE POOL, NOT ONE RING A SLOT** (SPEC.md 72.21). This was
+        # NET_SOCKS * (rx + tx), which is exactly the arithmetic the ring pool
+        # exists to break: a slot is 128 bytes of bss and a ring pair is 9,216
+        # of the claim, and multiplying them together is what made two more
+        # handles cost 18KB. NET_SOCKS must NOT appear here - if it comes back,
+        # the weld is back.
         "DRVM_ETH": s["DRVM_IMG_ETH"]
-                    + ceil_kb(s["NET_SOCKS"]
-                              * (s["SK_RXMAX"] + s["SK_TXMAX"])),   # sk_try, top rung
+                    + ceil_kb(s["SK_RXMAX"] + s["SK_TXMAX"]          # the bulk pair
+                              + s["SK_NLEAN"] * (s["SK_LEANRX"]      # ...and the lean
+                                                 + s["SK_LEANTX"])), # ones beside it
         "DRVM_RAM": (s["DRVM_IMG_RAM"]
                      + s["RD_TABMAXKB"]                     # the chain table
                      + s["RD_EXTMAXKB"]) | plus,            # ...and the bounce

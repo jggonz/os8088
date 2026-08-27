@@ -1947,7 +1947,7 @@ menu_drop:
     push ax                     ; ...and MOVABLE (SPEC.md 66.5.6). It is only
     mov ax, menu_reloc          ; 20KB and only lives for one menu - but that
     mov bx, MEM_K_SAVE          ; is 20KB sitting mid-arena at exactly the
-    call mem_movable            ; moment a MENU COMMAND claims, which is one of
+    call COLD_SEG:mmf_mem_movable ; moment a MENU COMMAND claims, which is one of
     pop ax                      ; the commonest ways a claim happens at all
 .noclaim:
 

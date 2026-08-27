@@ -486,42 +486,11 @@ tlog_xr:        db 0                ; - in the IMAGE and not in bss, because
                                     ; package's bss arrives zeroed, which here
                                     ; would be a request for 0 Hz
 
-; -----------------------------------------------------------------------------
-; tlog_xtrate_stamp - put the LIVE rate into the text screen's header string
-;                     (SPEC.md 45.13's 'XT 5500 Hz' cell)
-;
-; The shipped build bakes 5,500 in because XT mode IS 5,500 Hz. Here K moves
-; it, so the screen has to say which one is running - a swept rate nobody can
-; read off the machine is not a measurement.
-;
-; Called from ttx_put's caller with SI already on the string, DI the VRAM
-; offset and AH the attribute, so it preserves EVERYTHING. [mp_mixrate] and
-; not [tlog_xrate], because what the header owes is the rate the stream was
-; OPENED at, and K takes effect at the next Play.
-; -----------------------------------------------------------------------------
-tlog_xtrate_stamp:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
-    mov di, ttx_s_xtrate + 7        ; the last of the five digits
-    mov ax, [mp_mixrate]
-    mov cx, 5
-    mov bx, 10
-.d:
-    xor dx, dx
-    div bx
-    add dl, '0'
-    mov [di], dl
-    dec di
-    loop .d
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+; tlog_xtrate_stamp is GONE: SPEC.md 45.13.7 gave the shipped build the same
+; problem K gave the bench one - a nameplate rate that is not a constant - so
+; ttx_rate_stamp does it for every build and a second stamper here would be a
+; second opinion about the same cell.
+
 tlog_s_r4:      db 'XT rate 4000 Hz - block 512ms = 4.1 rows (press Enter)', 0
 tlog_s_r55:     db 'XT rate 5500 Hz - block 372ms = 3.0 rows (press Enter)', 0
 tlog_s_r11:     db 'XT rate 11000 Hz - block 186ms = 1.5 rows (press Enter)', 0

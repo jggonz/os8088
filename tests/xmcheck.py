@@ -10,8 +10,17 @@ overlay was loaded into (DRVR_SEG, a heap claim, different every boot), and
 the overlay's OWN nasm map says where `xm_tab` sits inside it. Neither can be
 guessed and both are exact.
 
-    make test TESTAPPS=build/xmtest.img
-    python3 tests/xmcheck.py build/qmp.sock
+    python3 tests/xmcheck.py                 # boots its own machine
+    python3 tests/xmcheck.py build/qmp.sock  # ...or drives one already up
+
+IT BOOTS ITS OWN MACHINE NOW, which is what the suite row needs and what it
+did not have: registered as `py("tests/xmcheck.py")` with no argument, every
+run ended in `SystemExit(__doc__)` at the argument check - exit 1, in a
+hundredth of a second, printing this docstring as though it were a failure
+report. A gate that cannot be run by the runner that registers it is an
+ABSENT gate reading as a failing one (tools/os88fixture.py makes the same
+point about a missing fixture). The socket argument still works, because the
+two-step form is what you want when poking at a machine by hand.
 
 Exit 0 = the release works. Exit 1 = blocks outlived their instance, which is
 the state the #51 integration merge shipped for a year after it dropped
@@ -41,12 +50,28 @@ DRVR_SEG = 2                        # kernel/driver.inc, into xm_row
 XB_OFF, XB_KB, XB_OWN = 0, 2, 4
 XM_OWN_KERN = 0xFF
 
-# Where things are on a 640x480 desktop with build/xmtest.img in drive B.
-# The Disk B drive zone, the package's row in the window it opens, and the
-# close box of the window the package creates at (180,120) 240x90.
+SOCK = os.path.join(ROOT, "build", "qmp.sock")
+PID = os.path.join(ROOT, "build", "qemu.pid")
+XMIMG = "build/xmtest.img"          # `all` builds nothing under tests/, and
+                                    # `make test` names TESTAPPS as one of its
+                                    # own prerequisites, so asking for it here
+                                    # builds it (tools/os88fixture.py's rule,
+                                    # arrived at by the Makefile rather than
+                                    # by a second copy of the ladder)
+
+# Where things are on a 640x480 desktop with build/xmtest.img in drive B:
+# the Disk B drive zone, and the package's row in the window it opens.
+#
+# THE CLOSE BOX IS NOT HERE, and used to be: `CLOSE = (194, 125)` was computed
+# for a window assumed to sit at (180,120), the window manager put it at 175,
+# and 194 is one column PAST the close box of a window at 175. wm_hit read
+# that as the title bar, the click started a drag, the window never closed -
+# and this gate then reported three blocks "outliving their instance" for an
+# instance that was still running. It is read off the live record now, through
+# tools/os88geom.py, which mirrors the offsets and is guarded against the
+# kernel moving them.
 DISKB = (610, 110)
 ROW = (180, 128)
-CLOSE = (194, 125)
 
 
 def qmp(sock, *cmds):
@@ -76,17 +101,22 @@ def dblclick(sock, x, y):
 
 
 def sym(name):
-    """A KERNEL symbol's flat address, out of nasm's own map."""
-    r = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "os88sym.py"),
-                        "--all"], capture_output=True, text=True, cwd=ROOT)
-    if r.returncode != 0:
-        raise SystemExit("xmcheck: os88sym.py failed:\n" + r.stderr[-600:])
-    for line in r.stdout.splitlines():
-        f = line.split()
-        if len(f) >= 4 and f[0] == name:
-            return int(f[3], 16)
-    raise SystemExit(f"xmcheck: no kernel symbol {name!r}. kern_small has none "
-                     "of this at all (SPEC.md 41.11) - this gate is kern_big's.")
+    """A KERNEL symbol's flat address, out of nasm's own map.
+
+    Through the LIBRARY and not through `os88sym.py --all`, which is what this
+    used to shell out to: that re-assembles the whole kernel to answer about
+    one symbol, and it prints a dash rather than an address for the on-demand
+    modules (SPEC.md 2.8) - which a positional `int(f[3], 16)` would have
+    parsed as an error the day one of those names was asked for.
+    """
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import os88sym
+    try:
+        return os88sym.linear(name)
+    except KeyError:
+        raise SystemExit(
+            f"xmcheck: no kernel symbol {name!r}. kern_small has none "
+            "of this at all (SPEC.md 41.11) - this gate is kern_big's.")
 
 
 def ovl_sym(name):
@@ -122,6 +152,24 @@ def ovl_sym(name):
             if len(f) >= 3 and f[2] == name:
                 return int(f[0], 16)
     raise SystemExit(f"xmcheck: no symbol {name!r} in XMEM.DRV.")
+
+
+def newest_window(sock):
+    """(slot, x, y, w, h) of the frontmost used+visible window."""
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import os88geom
+    raw = read_bytes(sock, sym("wm_wins"),
+                     os88geom.MAX_WIN * os88geom.WIN_SIZE)
+
+    def u16(o):
+        return raw[o] | (raw[o + 1] << 8)
+    out = None
+    for i in range(os88geom.MAX_WIN):
+        b = i * os88geom.WIN_SIZE
+        if u16(b + os88geom.W_FLAGS) & 3 == 3:
+            out = (i, u16(b + os88geom.W_X), u16(b + os88geom.W_Y),
+                   u16(b + os88geom.W_W), u16(b + os88geom.W_H))
+    return out
 
 
 def table_base(sock):
@@ -177,11 +225,51 @@ def show(label, live):
         print(f"      [{i}] +{off}KB {kb}KB owner {own:#04x} ({who})")
 
 
+def boot():
+    """`make test TESTAPPS=build/xmtest.img`, and answer when QMP is up.
+
+    A previous run's QEMU is killed first, for CLAUDE.md's reason: `make test`
+    fails with `cannot create PID file` while the STALE instance keeps
+    answering on build/qmp.sock, so every read below succeeds and describes a
+    machine nobody asked for. tests/minesrc.py opens the same way.
+    """
+    import time
+    if os.path.exists(PID):
+        try:
+            os.kill(int(open(PID).read().strip()), 15)
+            time.sleep(1.0)
+        except (OSError, ValueError):
+            pass
+    for f in (SOCK, PID):
+        if os.path.exists(f):
+            os.remove(f)
+    r = subprocess.run(["make", "test", "TESTAPPS=" + XMIMG],
+                       capture_output=True, text=True, cwd=ROOT)
+    if r.returncode:
+        raise SystemExit("xmcheck: make test failed:\n" + r.stdout + r.stderr)
+    for _ in range(150):                    # ...and wait for the socket
+        if os.path.exists(SOCK):
+            break
+        time.sleep(0.2)
+    else:
+        raise SystemExit("xmcheck: QEMU never opened " + SOCK)
+    time.sleep(12)                          # ...and for the desktop
+    return SOCK
+
+
 def main():
     import time
-    if len(sys.argv) < 2:
-        raise SystemExit(__doc__)
-    sock = sys.argv[1]
+    mine = len(sys.argv) < 2
+    sock = boot() if mine else sys.argv[1]
+    try:
+        return check(sock)
+    finally:
+        if mine:
+            qmp(sock, "quit")
+
+
+def check(sock):
+    import time
     base = table_base(sock)
 
     print("xmcheck: opening Disk B and launching XMTEST.O88")
@@ -199,9 +287,27 @@ def main():
             "         Either xmtest did not launch, or this machine has no\n"
             "         store above 1MB. Use QEMU on a 386 (SPEC.md 41.7).")
 
-    print("xmcheck: closing its window (the close box, not minimize)")
-    click(sock, *CLOSE)
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import os88geom
+    win = newest_window(sock)
+    if win is None:
+        raise SystemExit("xmcheck: no window is open, so xmtest did not run.")
+    slot, wx, wy, ww, wh = win
+    cx, cy = os88geom.close_xy(wx, wy)
+    print(f"xmcheck: closing window {slot} at ({wx},{wy}) {ww}x{wh} - "
+          f"its close box, at ({cx},{cy}), not minimize")
+    click(sock, cx, cy)
     time.sleep(5)
+    # ...and PROVE it closed. Without this the leak report below cannot tell
+    # "the blocks were not freed" from "the window is still open", which is
+    # the state this gate spent a year in.
+    still = newest_window(sock)
+    if still is not None and still[0] == slot:
+        raise SystemExit(
+            f"xmcheck: window {slot} is STILL OPEN after clicking "
+            f"({cx},{cy}) - the click missed its close box, so nothing below "
+            "would have been a memory finding. Check WM_BOX_* in "
+            "tools/os88geom.py against kernel/wm.inc's wm_hit.")
     after = blocks(sock, base)
     show("after close", after)
 

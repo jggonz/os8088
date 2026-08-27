@@ -3156,6 +3156,10 @@ cp_vid_click:
 ; sched_mode_get. Nothing here knows what a month is - clk_fld_adj owns the
 ; ranges, the wrap and the day clamp - and nothing here calls BIOS: writing
 ; the hardware RTC is ui_task's job, off the [clk_dirty] flag (SPEC.md 13).
+;
+; Those two are at the BOTTOM of this page's code since SPEC.md 37.93: still
+; SPEC.md 37's routines with SPEC.md 37's names, but assembled into this
+; image because this page is the only thing that has ever called them.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -3290,7 +3294,16 @@ cp_time_click:
     jc .done
 %endif
     mov al, [cp_tsel]
-    call KERNEL_SEG:clk_fld_adj              ; in AL = field, BL = +1/-1 (SPEC.md 37)
+    call clk_fld_adj            ; in AL = field, BL = +1/-1 (SPEC.md 37).
+                                ; NEAR since SPEC.md 37.93: it is in this image
+    mov byte [cp_wdirty], 1     ; ...and the panel is dirty (SPEC.md 31.8), which
+                                ; is what makes cpf_cp_flush_close load this
+                                ; module on the way out. WITHOUT IT a clock-only
+                                ; edit - arrows and nothing else - hits that
+                                ; thunk's [cp_wdirty] early-out and the RTC is
+                                ; never written (SPEC.md 37.94). clk_fld_adj's
+                                ; own [clk_dirty] still says whether the clock
+                                ; is owed; this says the panel is.
     xor al, al                  ; a +/- step changes DIGITS and not the layout
     call cp_time_rows
     jmp .done
@@ -3510,7 +3523,8 @@ cp_time_fld:
     mov word [cp_tpair], (CWHITE << 8) | CBLACK
 .text:
     mov al, ah                  ; AL = field index for the formatter
-    call KERNEL_SEG:clk_fld_str               ; SI = that field's text (SPEC.md 37)
+    call clk_fld_str            ; SI = that field's text (SPEC.md 37) - near,
+                                ; same image (SPEC.md 37.93)
     ; ...and the field is drawn OPAQUE (SPEC.md 6.1). Every field's text is
     ; exactly its own width - 'Mmm' is CPT_MONW, 'DD' is CPT_NUMW, 'YYYY' is
     ; CPT_YRW - so the run covers its field exactly and IS the erase for it
@@ -3691,6 +3705,246 @@ cp_timebtn:
     pop ax
     ret
 
+; SPEC.md 37's RTC WRITE HALF, hosted here too (SPEC.md 37.94). A file of its
+; own rather than 600 lines of MC146818, MM58167 and RP5C01 in the middle of
+; the Control Panel - it carries no `section` of its own precisely so that it
+; lands in THIS one, and tools/os88ovlchk.py knows that through its EXTRA map.
+%include "clockw.inc"
+
+; =============================================================================
+; SPEC.md 37's FIELD EDITOR, hosted here (SPEC.md 37.93)
+;
+; clk_fld_str / clk_fld_adj / clk_step are the clock's code and keep the
+; clock's prefix - SPEC.md 37 owns their contract and clock.inc is where a
+; reader looks for them. They are assembled HERE because this page is their
+; only caller, so they belong in this page's image rather than in the kernel:
+; the panel is shut almost always, and an editor for a shut window was 329
+; bytes of .text that every machine carried all session.
+;
+; Not in clock.inc, and that is a layout fact rather than a preference:
+; `.modc` is ONE image whose offset 0 must be modc_hdr, NASM lays a section
+; out in source order, and kernel.asm %includes clock.inc BEFORE ctrl.inc - so
+; a `section .modc` block over there would land in front of the header and the
+; loader would check a header that is not one.
+;
+; DS is KERNEL_SEG here exactly as it was in .text, so every [clk_*] below is
+; unchanged. What DID change is the six formatters these reach: those stay
+; resident (clk_fmt draws the bar from five of them, clk_inc_day carries a
+; month with the sixth), so each is far-called through its cw_clk_* thunk in
+; kernel.asm. os88ovlchk.py refuses any of them written near.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; clk_fld_str - format ONE field for the Date/Time page (SPEC.md 31.5)
+; in:  AL = field: 0 month, 1 day, 2 year, 3 hour, 4 minute, 5 second,
+;      6 meridiem (12-hour mode only)
+; out: SI = clk_fbuf, the field alone, always its full width (zero-padded -
+;      a field is a fixed-width editable cell whose highlight box must not
+;      change size under it, so unlike clk_fmt the 12-hour hour keeps its
+;      leading zero: '12', '01'..'11')
+; clobbers: nothing else
+; Reads the LAST SNAPSHOT and does not take one: a caller drawing several
+; fields (cp_time_rows) calls clk_snapshot once, so its whole row is one
+; instant.
+; -----------------------------------------------------------------------------
+clk_fld_str:
+    push ax
+    push bx
+    mov bx, clk_fbuf
+    or al, al
+    jz .mon
+    cmp al, 1
+    je .day
+    cmp al, 2
+    je .year
+    cmp al, 3
+    je .hour
+    cmp al, 4
+    je .min
+    cmp al, 5
+    je .sec
+
+    mov al, [clk_sn_hour]       ; 6: the meridiem
+    call KERNEL_SEG:cw_clk_ampm ; AL = 'A' or 'P'
+    mov [bx], al
+    inc bx
+    mov byte [bx], 'M'
+    inc bx
+    jmp .done
+.sec:
+    mov al, [clk_sn_sec]
+    jmp .two
+.min:
+    mov al, [clk_sn_min]
+    jmp .two
+.hour:
+    mov al, [clk_sn_hour]
+    cmp byte [clk_h12], 0
+    je .two
+    call KERNEL_SEG:cw_clk_h12h ; AL = 1..12, still zero-padded below
+    jmp .two
+.day:
+    mov al, [clk_sn_day]
+.two:
+    call KERNEL_SEG:cw_clk_put2
+    jmp .done
+.mon:
+    mov al, [clk_sn_mon]
+    call KERNEL_SEG:cw_clk_put_mon
+    jmp .done
+.year:
+    mov ax, [clk_sn_year]
+    call KERNEL_SEG:cw_clk_put4
+.done:
+    mov byte [bx], 0
+    mov si, clk_fbuf
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; clk_fld_adj - step one field, with wrap (SPEC.md 31.5)
+; in:  AL = field (as clk_fld_str), BL = +1 or -1
+; out: nothing (all registers preserved)
+;
+; A month or year step re-clamps the day to the new month's length, so
+; 31 March minus one month is 28 February and never 31 February. The hour
+; is always stored and stepped 0..23 - 12-hour mode is a rendering of it,
+; not a second representation - so field 6 (the meridiem) is the only thing
+; that moves by 12, and either sign of the step flips it. Any edit restarts
+; the sub-second accumulator from now (setting the seconds to a value and
+; having it advance a tenth of a second later would be wrong), posts
+; [clk_dirty] so ui_task writes the hardware RTC outside the lock, and posts
+; [clk_barq] so the menu bar follows even when it is not showing seconds.
+; -----------------------------------------------------------------------------
+clk_fld_adj:
+    push ax
+    push bx
+    push cx
+    push dx
+    pushf                       ; one edit = one critical section, so a
+    cli                         ; reader never catches the day mid-clamp
+    mov ah, bl                  ; AH = the step, +1 or -1
+    or al, al
+    jz .mon
+    cmp al, 1
+    je .day
+    cmp al, 2
+    je .year
+    cmp al, 3
+    je .hour
+    cmp al, 4
+    je .min
+    cmp al, 5
+    je .sec
+
+    mov al, [clk_hour]          ; 6: the meridiem - +-12 hours, either sign
+    cmp al, 12
+    jb .pm
+    sub al, 12                  ; PM -> AM
+    jmp .merset
+.pm:
+    add al, 12                  ; AM -> PM
+.merset:
+    mov [clk_hour], al
+    jmp .done
+.sec:
+    mov cx, 0x3B00              ; second: CH = 59 max, CL = 0 min
+    mov al, [clk_sec]
+    call clk_step
+    mov [clk_sec], al
+    jmp .done
+.min:
+    mov cx, 0x3B00
+    mov al, [clk_min]
+    call clk_step
+    mov [clk_min], al
+    jmp .done
+.hour:
+    mov cx, 0x1700              ; CH = 23, CL = 0
+    mov al, [clk_hour]
+    call clk_step
+    mov [clk_hour], al
+    jmp .done
+.day:
+    mov al, [clk_mon]
+    call KERNEL_SEG:cw_clk_mlen
+    mov ch, al                  ; max = this month's length
+    mov cl, 1
+    mov al, [clk_day]
+    call clk_step
+    mov [clk_day], al
+    jmp .done
+.mon:
+    mov cx, 0x0C01              ; CH = 12, CL = 1
+    mov al, [clk_mon]
+    call clk_step
+    mov [clk_mon], al
+    jmp .fixday
+.year:
+    mov bx, [clk_year]
+    cmp ah, 0
+    jl .ydn
+    inc bx
+    cmp bx, CLK_YMAX
+    jbe .yset
+    mov bx, CLK_YMIN
+    jmp .yset
+.ydn:
+    dec bx
+    cmp bx, CLK_YMIN
+    jae .yset
+    mov bx, CLK_YMAX
+.yset:
+    mov [clk_year], bx
+
+.fixday:                        ; the month (or the leap year) may have got
+    mov al, [clk_mon]           ; shorter under the current day
+    call KERNEL_SEG:cw_clk_mlen
+    cmp [clk_day], al
+    jbe .done
+    mov [clk_day], al
+
+.done:
+    mov ax, [ticks]             ; the new second starts now
+    mov [clk_last], ax
+    mov word [clk_acc], 0
+    mov byte [clk_dirty], 1     ; ui_task step 3 writes the RTC (SPEC.md 13)
+    mov byte [clk_barq], 1      ; ...and step 4 refreshes the bar, which may
+                                ; otherwise be a minute from noticing
+    popf
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; clk_step - add a signed step to a byte, wrapping into a closed range
+; in:  AL = value, AH = step (+1 / -1), CL = range min, CH = range max
+; out: AL = the wrapped value
+; clobbers: nothing else (flags)
+; Values are small unsigned bytes, so stepping down from 0 lands on 0xFF -
+; above the max - and the step's sign is what tells the two overflows apart.
+; -----------------------------------------------------------------------------
+clk_step:
+    add al, ah
+    cmp al, ch
+    jbe .lo
+    cmp ah, 0
+    jl .under                   ; 0xFF from a -1: wrap to the top
+    mov al, cl                  ; past the max: wrap to the bottom
+    ret
+.under:
+    mov al, ch
+    ret
+.lo:
+    cmp al, cl
+    jae .out
+    mov al, ch                  ; below the min: wrap to the top
+.out:
+    ret
+
 section .modc                   ; the on-demand image (SPEC.md 2.8): a segment
                                 ; of its own with DS still KERNEL_SEG, so
                                 ; every reference below - this module's own
@@ -3745,7 +3999,7 @@ cp_flush_x:
     push ax
     push bx
     push cx
-    call COLD_SEG:drvf_drv_cfg_save
+    call cp_cfg_save            ; SPEC.md 51.5.3: the writer is in THIS image
     mov byte [cp_dsave], 0
     jnc .say
     mov byte [cp_dsave], 2      ; the write itself failed: full, protected, I/O
@@ -3781,6 +4035,11 @@ cp_flush_x:
 ; failure path handles the third.
 ; -----------------------------------------------------------------------------
 cp_flush_close_x:
+    cmp byte [clk_dirty], 0     ; THE HARDWARE CLOCK FIRST (SPEC.md 37.94), and
+    je .cfg                     ; before the floppy: this is port I/O in
+    mov byte [clk_dirty], 0     ; microseconds where drv_cfg_save below is two
+    call clk_rtc_write          ; seconds of motor, and a write that fails
+.cfg:                           ; leaves nothing to retry either way
     cmp byte [cp_wdirty], 0
     je .out
     call cp_flush_x

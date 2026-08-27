@@ -54,9 +54,9 @@ than a preference:
    the first client of a general hook instead of being the hook.
 3. **It fits in the slack that is already there.** Measured on this tree
    today, `kern_big` has **204 bytes left in its image rung** and the cell
-   plus its dispatch is ~58 of them. **No rung crossed, `KERN_BUDGET`
-   untouched** — and `kernel.asm`'s own comment on move 16 says this is what
-   that move was granted for.
+   plus its dispatch is ~58 of them. **`KERN_BUDGET` untouched** — and
+   `kernel.asm`'s own comment on move 16 says this is what that move was
+   granted for.
 
 ### What it is honestly for
 

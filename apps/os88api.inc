@@ -673,6 +673,16 @@ VID_CGA    equ 2
                                  ; claim. OSAPI_MEM_REGROW is safe on one of
                                  ; these: the record carries the constraint,
                                  ; and a move re-honours it (SPEC.md 50.3).
+; ...AND THE SAME TWO FROM THE TOP OF THE HEAP (SPEC.md 50.3.2). For a buffer
+; THE HARDWARE holds the address of - a sound card's DMA ring, a NIC's
+; descriptors - which can therefore never be moved and has no business in the
+; arena every data claim and the compactor share. SPEC.md 50.3 says why in its
+; own words: "one long-lived data claim landing mid-heap permanently splits the
+; space a package can be loaded into". If software is the only thing that reads
+; your block, use OSAPI_MEM_CLAIM above and let it be compacted.
+%define OSAPI_MEM_CLAIM_HI  KERNEL_SEG:0x04C8   ; AX = KB; out CF, DX = segment
+%define OSAPI_MEM_CLAIM_DMA_HI KERNEL_SEG:0x04D0 ; ...and CX = the page-safe HEAD
+
 %define OSAPI_MEM_FREE      KERNEL_SEG:0x0208   ; DX = the segment you were
                                  ; given; out CF=0 released, CF=1 not yours
 %define OSAPI_MEM_AVAIL     KERNEL_SEG:0x0210   ; out AX = largest free run in
@@ -994,7 +1004,14 @@ SS_CUR     equ 2                ; byte: the running task slot
 SS_COOP    equ 3                ; byte: 0 pre-emptive, 1 cooperative
 SS_NTASK   equ 4                ; byte: MAX_TASKS, the same figure AX answers
 SS_NINST   equ 5                ; byte: INST_MAX, likewise BX
-SS_TSTATE  equ 6                ; MAX_TASKS bytes, the kernel's T_STATE
+SS_TSTATE  equ 6                ; MAX_TASKS bytes, the kernel's T_STATE - with
+                                ; ONE VALUE THAT IS THE SNAPSHOT'S OWN: 3 is
+                                ; the idle task (SPEC.md 8.1.2, 28.7), which
+                                ; the kernel's own table records as 1/ready
+                                ; like anything else. It is a fourth value
+                                ; rather than a slot index in the header
+                                ; because the header has no spare byte and
+                                ; every field after one would move
                                 ; verbatim: 0 free, 1 ready, 2 SLEEPING
                                 ; (SPEC.md 8). There is no "running" state -
                                 ; the running task is SS_CUR, and its T_STATE
@@ -1043,6 +1060,13 @@ MEM_K_COPY  equ 0xFF04          ; the file manager's copy buffer (SPEC.md 22.5)
 MEM_K_FATW  equ 0xFF05          ; one volume's FAT window (SPEC.md 18.8.1)
 MEM_K_ASC   equ 0xFF06          ; one volume's ASSOC.DAT cache (SPEC.md 54.7)
 MEM_K_CLIP  equ 0xFF07          ; the system clipboard's text (SPEC.md 55)
+MEM_K_MOD   equ 0xFF08          ; an on-demand kernel module's image (SPEC.md 2.8)
+MEM_K_CLONE equ 0xFF09          ; the disk cloner's buffer (SPEC.md 18.99)
+MEM_K_BAND  equ 0xFF0A          ; the 1bpp band composer's buffer (SPEC.md 5.9.2)
+; 0xFF0B WAS MEM_K_OVL, the relocated boot overlay. It rides stage 2's blob
+; now (SPEC.md 2.9.6) and is not a claim at all, so the tag is retired and
+; LEFT UNUSED - a value that meant one thing in a shipped kernel and another
+; in the next is a collision a debug read cannot see.
 
 MEM_PG_TRIV equ 0xFB            ; the purge tiers (SPEC.md 50.6.4), low to
 MEM_PG_LOW  equ 0xFC            ; high: what LOSING the block costs, which is

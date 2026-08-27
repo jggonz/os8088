@@ -519,7 +519,16 @@ CFG_NB      equ CFG_DBLOB + DRV_BLOB_SZ     ; no RAM disk here, so no second
 ; TO CHANGE WHAT A KEY MEANS, BUMP ITS ver. That is the whole compatibility
 ; story: old records stop matching and the default stands, which is the
 ; documented outcome rather than a misread value.
-drv_cfg_keys:
+;
+; **IT IS A MACRO AND IT IS NOT RESIDENT** (SPEC.md 51.5.3). Every byte of it
+; is read by the parser and by nothing else, and since the parser lives in the
+; boot overlay and in CTRL.DRV there are two images to put it in and no reason
+; to keep a third copy in .text. Emitted with a prefix so the two do not
+; collide, read `cs:` in both, and edited ONCE here - which is the property
+; the paragraph above claims for it and the one thing a hand-copied second
+; table would destroy.
+%macro CFG_DATA 1
+%1 %+ _keys:
     dw 'DW'                     ; Driver Wanted, the row bitmap
     db 1, 2, CFG_WANT
     dw 'SR'                     ; Sound Route
@@ -581,7 +590,11 @@ CFG_FBUF    equ CFG_REC0 + CFG_NKEY * CFR_HDR + CFG_NB + 2
 ; and another unpacks, so a new setting is three bytes of table rather than
 ; two more hand-written copies that can drift apart. The scheduler and the
 ; adapter is NOT here - it is not a plain store (SPEC.md 8.2/39.11.3).
-drv_cfg_map:
+;
+; The ADDRESSES are the kernel's and stay the kernel's: both images run with
+; DS = KERNEL_SEG (SPEC.md 2.5/2.8), so `mov di, [cs:si+1]` then `mov [di], al`
+; is the same pair of stores it always was. Only the TABLE moved.
+%1 %+ _map:
     db CFG_RT
     dw snd_route
     db CFG_H12
@@ -611,14 +624,29 @@ DRV_CFG_MAPN equ 8
 ; Ethernet card was brought forward. The BLOB's own bytes and its CFG_ offset
 ; are untouched - it is a driver's private 34 or 24 bytes and the kernel knows
 ; nothing about them - so this is a key change and not a format one.
-; --- drv_cfgbit - each row's bit in SYSTEM.CFG's driver word (SPEC.md 51.5) --
-; See drv_want_set for why this exists. .text, beside the table it indexes.
-drv_cfgbit:
+; --- the driver word's bits, and the file's own head (SPEC.md 51.5) ---------
+; drv_want_set says why the bitmap is not the row order. Both of these are the
+; parser's alone, so both ride the images with the tables above; the two NAMES
+; below do not, and cannot - dskw_read, dskw_stat and dskw_write_sys all read
+; a filename through DS, so a name in an image would be a filename read out of
+; the kernel at the image's offset.
+%1 %+ _bit:
 %ifdef KERN_BIG
     db 0, 1, 4, 2, 3            ; sound, hdd, ether, ramdisk, net
 %else
     db 0, 1, 3, 2               ; sound, hdd, ether, net
 %endif
+%1 %+ _sig:  db 'O88CFG', 0, 0  ; 8 bytes, byte for byte the file's head
+%1 %+ _buf:  times CFG_FBUF db 0   ; ...AND THE FILE ITSELF (SPEC.md 51.5.3).
+                                ; It was 120 bytes of .bss doing nothing
+                                ; between a boot and a Control Panel click,
+                                ; and it is the half of a setting's cost that
+                                ; grows fastest: CFG_FBUF is derived, so every
+                                ; new key takes CFR_HDR + its payload. In the
+                                ; image it is `times` and not `resb` because a
+                                ; module and an overlay are both FILE bytes -
+                                ; there is no .bss in either
+%endmacro
 
 drv_blob_map:
     db 1, DRV_BLOB_SZ
@@ -690,7 +718,6 @@ drv_fseg5:   dw 0               ; class 5 (DRVC_FILE)
 drv_cfgname: db 'SYSTEM.CFG', 0
 drv_sysname: db 'KERNEL.SYS', 0 ; what makes a disk THE system disk (19.6): the
                                 ; settings are written beside it or not at all
-drv_cfgsig:  db 'O88CFG', 0, 0  ; 8 bytes, byte for byte the file's head
 
 drv_tab:
     dw PKG_DISP, 0              ; row 0: the sound driver (SPEC.md 34/51.4)
@@ -856,7 +883,7 @@ DRVM_PLUS    equ 0x8000         ; "...and the store you size on its own page",
 
 DRVM_IMG_SND equ 6              ; ceil(build/sound.drv   / 1024) - t_drvmem
 DRVM_IMG_HDD equ 8              ; ceil(build/hdd.drv     / 1024)   checks
-DRVM_IMG_ETH equ 17             ; ceil(build/ether.drv   / 1024)   every one
+DRVM_IMG_ETH equ 18             ; ceil(build/ether.drv   / 1024)   every one
 DRVM_IMG_RAM equ 9              ; ceil(build/ramdisk.drv / 1024)   of these
 DRVM_IMG_NET equ 6              ; ceil(build/net.drv     / 1024)
 
@@ -868,9 +895,11 @@ DRVM_SND     equ DRVM_IMG_SND + 8 + 20    ; SBL_DMASZ (the DMA-visible double
 DRVM_HDD     equ DRVM_IMG_HDD + 4 * 6     ; HD_MAXVOL listing claims of
                                 ; HDD_LISTKB - one per mounted volume, and four
                                 ; is what the driver will mount at once
-DRVM_ETH     equ DRVM_IMG_ETH + 36        ; NET_SOCKS * (SK_RXMAX + SK_TXMAX),
-                                ; rounded up: 4 * 9,216 = 36,864. sk_claim is a
-                                ; ladder down to SK_RXCAP0 and this is its top
+DRVM_ETH     equ DRVM_IMG_ETH + 14        ; THE RING POOL at its top rung, not
+                                ; one ring per socket (SPEC.md 72.21): the bulk
+                                ; pair plus three lean ones is 13,824 bytes
+                                ; where a pair per slot was 36,864. sk_claim is
+                                ; a ladder down to SK_RXCAP0 and this is its top
 DRVM_RAM     equ (DRVM_IMG_RAM + 4 + 8) | DRVM_PLUS
                                 ; RD_TABMAXKB (the chain table) + RD_EXTMAXKB
                                 ; (the bounce, which the extended store lends
@@ -3113,39 +3142,85 @@ drv_task_x:
     retf
 
 ; =============================================================================
-; The settings file (SPEC.md 51.5)
+; The settings file (SPEC.md 51.5), AS TWO MACROS AND NO RESIDENT BYTES (51.5.3)
 ;
-; SYSTEM.CFG in the system disk's root: 32 bytes, signature + version + the
-; wanted-driver bitmap. It goes through the ordinary file API, so it is an
+; SYSTEM.CFG in the system disk's root: signature + container generation + one
+; keyed record per setting. It goes through the ordinary file API, so it is an
 ; ordinary file - deletable, copyable and readable from DOS - and a missing or
 ; malformed one means "the defaults in drv_tab", never an error.
+;
+; **IT IS PARSED TWICE IN A MACHINE'S LIFE AND WAS RESIDENT FOR ALL OF IT.**
+; drv_boot reads it before the first paint and the Control Panel writes it when
+; it closes; nothing else in the kernel, in a package or in a driver names one
+; of these routines. So the code lives where its callers do and nowhere else:
+; the BOOT half in the overlay (SPEC.md 2.5.1, which is what lets an overlay
+; entry run after the mount at all) and the SAVE half in CTRL.DRV's image
+; beside cp_flush_x. Both run with CS = their own image and DS = KERNEL_SEG,
+; which is why one macro serves both: every kernel reference is unchanged and
+; only the parser's OWN tables need `cs:`.
+;
+; THE THREE THINGS THAT STAY, and each is a rule rather than an oversight:
+;   * `drv_cfg`, the settings struct - osapi_drv_cfg hands a driver its blob
+;     out of it at any moment in the session (SPEC.md 51.9), so it is live
+;     state and not scaffolding;
+;   * `drv_cfgname` and `drv_sysname` - dskw_read, dskw_stat and dskw_write_sys
+;     each read a filename through DS, so a name in an image is a filename read
+;     out of the kernel at the image's offset;
+;   * the far entries below, four bytes each, because a call out of an image is
+;     a far call.
+;
+; WHAT IT COST TO WRITE IT ONCE: the two instantiations differ by a prefix and
+; by which macro is expanded. A hand-copied second parser would be the thing
+; SPEC.md 51.5 exists to prevent, one level up - a reader and a writer that can
+; disagree about what a key means.
 ; =============================================================================
 
+section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
+                                ; LINE IS WHAT SAYS SO.** They emit nothing
+                                ; here - a %macro is preprocessor - but
+                                ; tools/os88ovlchk.py reads SOURCE, so a body
+                                ; defined inside a `.cold` block is linted
+                                ; against .cold's rules and every `cs:` in it
+                                ; is reported as rule 2's assumption. The
+                                ; contract these bodies actually run under is
+                                ; a module's and an overlay's, which is the
+                                ; same contract (CS = the image, DS =
+                                ; KERNEL_SEG), and `.modc` is the stricter of
+                                ; the two - it keeps the `lods` refusal
+                                ; (SPEC.md 2.8.6) that .ovl does not have, and
+                                ; that is exactly the rule this code has to
+                                ; obey. Back to .cold below the last %endmacro.
+
 ; -----------------------------------------------------------------------------
-; drv_cfg_pack / drv_cfg_unpack - the record and the live settings (51.5)
-; in:  nothing
-; out: nothing (all registers preserved)
+; CFG_SHARED - what both halves need: the struct <- the live state, and the
+;              WANT bytes as one bitmap word
+; in:  %1 = the image's label prefix
+; -----------------------------------------------------------------------------
+%macro CFG_SHARED 1
+
+; %1_pack - the live settings into the struct. All registers preserved.
 ;
-; is not a store: sw_set claims 150KB and seeds the buffer from VRAM under the
-; gfx lock, and it has to happen after the screen exists.
-; -----------------------------------------------------------------------------
-drv_cfg_pack:
+; The struct is KERNEL-PRIVATE and positional: only the FILE has to be
+; self-describing. What a key the file does not carry falls back to is
+; whatever this left behind, and at boot the live state IS the defaults - so
+; there is no second copy of them to keep in step.
+%1 %+ _pack:
     push ax
     push bx
     push cx
     push si
     push di
-    mov si, drv_cfg_map
-    mov cx, DRV_CFG_MAPN
-.p:
-    mov bl, [si]
+    mov si, %1 %+ _map          ; the table is the IMAGE's (51.5.3); the
+    mov cx, DRV_CFG_MAPN        ; ADDRESSES in it are the kernel's, and DS
+%%p:                            ; still names the kernel - so the `mov [di]`
+    mov bl, [cs:si]             ; below is the store it always was
     xor bh, bh
-    mov di, [si+1]
+    mov di, [cs:si+1]
     mov al, [di]
     mov [bx+drv_cfg], al
     add si, 3
-    loop .p
-    call drv_want_get
+    loop %%p
+    call %1 %+ _want_get
     mov [drv_cfg+CFG_WANT], ax
     call KERNEL_SEG:cw_sched_mode_get
     mov [drv_cfg+CFG_SCH], al
@@ -3167,22 +3242,108 @@ drv_cfg_pack:
     pop ax
     ret
 
-drv_cfg_unpack:
+; %1_want_get - out AX = the bitmap, bit %1_bit[row] set = that row is wanted.
+;
+; **THE BIT IS NOT THE ROW, AND THAT IS THE WHOLE POINT OF THAT TABLE.** It was
+; bit n = row n, which is why every row until then was APPENDED: the settings
+; word is on the USER'S floppy and reordering drv_tab silently re-ticked it - a
+; machine that had Ethernet on would come back with the Ram Disk on instead,
+; with nothing on screen saying so. %1_bit gives each row a bit that does not
+; move when the row does, so the PAGE's order (SPEC.md 31.1: most used first)
+; and the FILE's format are independent things.
+;
+; The historical assignment is the order the rows were added in, which is what
+; every SYSTEM.CFG in existence was written with:
+;
+;       sound 0   hard disk 1   ram disk 2   parallel link 3   ethernet 4
+;
+; **kern_small's differs and always did**, because its table never had the RAM
+; disk row (SPEC.md 62.9.15) so the two after it sat one lower.
+%1 %+ _want_get:
+    push bx
+    push cx
+    push dx
+    push si
+    xor ax, ax
+    mov si, %1 %+ _bit
+    mov cx, DRV_MAX
+    mov bx, drv_tab
+%%next:
+    cmp byte [bx+DRVR_WANT], 0
+    je %%no
+    push cx
+    mov dx, 1
+    mov cl, [cs:si]
+    shl dx, cl
+    or ax, dx
+    pop cx
+%%no:
+    inc si
+    add bx, DRVR_SIZE
+    loop %%next
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+%endmacro
+
+; -----------------------------------------------------------------------------
+; CFG_BOOT - read SYSTEM.CFG and apply it. The OVERLAY's half (SPEC.md 2.5.1),
+;            reached once from drv_boot and never again
+; in:  %1 = the image's label prefix
+; -----------------------------------------------------------------------------
+%macro CFG_BOOT 1
+
+; %1_want_set - in AX = the bitmap. See %1_want_get for why the bit is not the
+; row. All registers preserved.
+%1 %+ _want_set:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, %1 %+ _bit
+    mov cx, DRV_MAX
+    mov bx, drv_tab
+%%ws_next:
+    mov byte [bx+DRVR_WANT], 0
+    push cx
+    mov cl, [cs:si]             ; CL = THIS ROW'S BIT, not its index
+    mov dx, ax
+    shr dx, cl
+    test dl, 1
+    jz %%ws_no
+    mov byte [bx+DRVR_WANT], 1
+%%ws_no:
+    pop cx
+    inc si
+    add bx, DRVR_SIZE
+    loop %%ws_next
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; %1_unpack - the struct back out into the live bytes. All registers preserved.
+%1 %+ _unpack:
     push ax
     push bx
     push cx
     push si
     push di
-    mov si, drv_cfg_map
+    mov si, %1 %+ _map
     mov cx, DRV_CFG_MAPN
-.u:
-    mov bl, [si]
+%%up_u:
+    mov bl, [cs:si]
     xor bh, bh
-    mov di, [si+1]
+    mov di, [cs:si+1]
     mov al, [bx+drv_cfg]
     mov [di], al
     add si, 3
-    loop .u
+    loop %%up_u
 %ifdef OS88_THEME
     mov al, [thm_kind]          ; the map above stored the theme; resolving
     call KERNEL_SEG:cw_thm_set  ; the palette from it is not a store (76.5).
@@ -3196,16 +3357,16 @@ drv_cfg_unpack:
                                 ; a kernel swap (SPEC.md 76.13)
 %endif
     mov ax, [drv_cfg+CFG_WANT]
-    call drv_want_set
-    call ss_mins2idle           ; the map above stored [ss_mins]; the TICKS
-                                ; blk_pass compares against are derived from
-                                ; it and clamped (SPEC.md 79.4), which is not
-                                ; a store and so cannot be a map row
+    call %1 %+ _want_set
+    call COLD_SEG:drvf_ss_mins2idle   ; the map above stored [ss_mins]; the
+                                ; TICKS blk_pass compares against are derived
+                                ; from it and clamped (SPEC.md 79.4), which is
+                                ; not a store and so cannot be a map row
     mov al, [drv_cfg+CFG_SCH]
     cmp al, 1
-    ja .out                     ; a byte from a future version: leave the
-    call KERNEL_SEG:sched_mode_set            ; mode alone rather than pick nonsense
-.out:
+    ja %%up_out                    ; a byte from a future version: leave the
+    call KERNEL_SEG:sched_mode_set    ; mode alone rather than pick nonsense
+%%up_out:
     pop di
     pop si
     pop cx
@@ -3213,13 +3374,131 @@ drv_cfg_unpack:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; drv_cfg_load - read SYSTEM.CFG and apply everything in it but the buffer
-; in:  drive A: already mounted
+; %1_key - in AX = a key; out CF=0 and DI = its entry in %1_keys (read `cs:`),
+; CF=1 = this kernel does not know it. Clobbers DI and flags.
+%1 %+ _key:
+    push cx
+    mov di, %1 %+ _keys
+    mov cx, CFG_NKEY
+%%scan:
+    cmp [cs:di], ax
+    je %%hit
+    add di, CFG_KESZ
+    loop %%scan
+    pop cx
+    stc
+    ret
+%%hit:
+    pop cx
+    clc
+    ret
+
+; %1_deser - the file's records into the struct.
+; in:  AX = bytes read into %1_buf
+; out: CF = 0 the struct holds this file's settings; CF = 1 nothing usable
+; clobbers: flags
+;
+; **Defaults first, records second.** %1_load packs the LIVE state before this
+; runs, so a key that is absent - or present with a ver this kernel does not
+; accept - leaves the DEFAULT in place rather than whatever the struct held.
+;
+; Every step is bounded by the byte count the read actually returned: a record
+; header that would run past the end, or a len that would, ends the walk. A
+; truncated or corrupt file therefore costs the settings it did not carry and
+; nothing else - the same shape as every other hostile-input path here.
+;
+; THE BUFFER IS THE IMAGE'S, so every read of it takes `cs:` and the record
+; copy at the bottom is hand-rolled: `movsb` reads DS:SI, which is the KERNEL,
+; and a segment override on a string instruction says the opposite of what is
+; meant (SPEC.md 2.8.6). The destination stays DS - it is drv_cfg - so ES is
+; not touched at all and no longer has to be banked.
+%1 %+ _deser:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp ax, CFG_REC0            ; too short to hold even a header
+    jb %%bad
+    mov dx, ax                  ; DX = the file's length, the only bound
+    mov si, %1 %+ _buf
+    mov di, %1 %+ _sig
+    mov cx, CFG_SIGN
+%%sig:
+    mov al, [cs:si]
+    cmp al, [cs:di]
+    jne %%bad                   ; a foreign file of that name: left alone
+    inc si
+    inc di
+    loop %%sig
+    cmp word [cs:%1 %+ _buf+CFG_GEN], CFG_GEN_V
+    jne %%bad                   ; another generation's SHAPE: the records are
+                                ; not records. Defaults, and the next save
+                                ; rewrites the file in this one
+    mov si, CFG_REC0            ; SI = offset of the next record
+%%rec:
+    mov ax, si
+    add ax, CFR_HDR
+    cmp ax, dx
+    ja %%ds_done                   ; no room for another header: end of file
+    mov bx, si
+    cmp word [cs:bx+%1 %+ _buf+CFR_KEY], 0
+    je %%ds_done                   ; the terminator. Tested IN MEMORY, because AX
+                                ; is still si+CFR_HDR from the bound check
+                                ; above and the next one needs it
+    mov cl, [cs:bx+%1 %+ _buf+CFR_LEN]
+    xor ch, ch
+    add ax, cx                  ; AX = where the NEXT record starts
+    cmp ax, dx
+    ja %%ds_done                   ; its data would run past the end
+    push ax
+    mov ax, [cs:bx+%1 %+ _buf+CFR_KEY]
+    call %1 %+ _key             ; DI = table entry, or CF=1 = not ours
+    jc %%ds_next
+    mov cl, [cs:di+3]           ; the length THIS kernel expects
+    xor ch, ch
+    cmp cl, [cs:bx+%1 %+ _buf+CFR_LEN]
+    jne %%ds_next                  ; right key, wrong size: not our record
+    mov al, [cs:di+2]
+    cmp al, [cs:bx+%1 %+ _buf+CFR_VER]
+    jne %%ds_next                  ; right key, DIFFERENT MEANING: the default
+                                ; stands, which is the whole point of ver
+    push si
+    mov al, [cs:di+4]           ; where it lives in the struct
+    xor ah, ah
+    mov di, ax
+    add di, drv_cfg
+    lea si, [bx+%1 %+ _buf+CFR_DAT]
+%%cp:                           ; image -> kernel, a byte at a time (above)
+    mov al, [cs:si]
+    mov [di], al
+    inc si
+    inc di
+    loop %%cp
+    pop si
+%%ds_next:
+    pop si                      ; ...the next record, bounded above
+    jmp %%rec
+%%ds_done:
+    clc
+    jmp short %%dout
+%%bad:
+    stc
+%%dout:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; %1_load - read SYSTEM.CFG and apply everything in it but the buffer
+; in:  the boot volume already mounted
 ; out: CF = 0 a valid record was read and applied; CF = 1 the defaults stand
 ; clobbers: flags
-; -----------------------------------------------------------------------------
-drv_cfg_load:
+%1 %+ _load:
     push ax
     push bx
     push cx
@@ -3227,28 +3506,28 @@ drv_cfg_load:
     push si                     ; and its size high word coming back (18.4.1)
     push di
     push es
-    push ds
-    pop es                      ; a 64-byte .bss buffer, not a heap claim: this
-    mov bx, drv_cfgbuf          ; runs at boot and a claim can be refused, and
-    mov cx, CFG_FBUF            ; the read takes ES:BX for exactly that reason
+    push cs
+    pop es                      ; the file buffer is the IMAGE's (51.5.3) and
+    mov bx, %1 %+ _buf          ; the read takes ES:BX, which is what makes
+    mov cx, CFG_FBUF            ; that free rather than awkward
     xor dx, dx
-    mov si, drv_cfgname
-    call dskw_read_x              ; AX = bytes actually read (DX = 0: CFG_FBUF)
-    jc .out                     ; no file: the defaults stand
-    call drv_cfg_pack           ; the LIVE state into the struct first: that
+    mov si, drv_cfgname         ; ...but the NAME is read through DS, so it is
+                                ; one of the two things that stay resident
+    call COLD_SEG:dwf_dskw_read ; AX = bytes actually read (DX = 0: CFG_FBUF)
+    jc %%ld_out                    ; no file: the defaults stand
+    call %1 %+ _pack            ; the LIVE state into the struct first: that
                                 ; is what a key the file does not carry - or
                                 ; carries at a ver we do not accept - falls
                                 ; back to, and at boot the live state IS the
-                                ; defaults (SPEC.md 51.5). No second copy of
-                                ; them to keep in step
-    call drv_cfg_deser
-    jc .out
-    call drv_cfg_unpack
+                                ; defaults (SPEC.md 51.5)
+    call %1 %+ _deser
+    jc %%ld_out
+    call %1 %+ _unpack
     clc
-    jmp short .done
-.out:
+    jmp short %%ld_done
+%%ld_out:
     stc
-.done:
+%%ld_done:
     pop es
     pop di
     pop si
@@ -3257,224 +3536,17 @@ drv_cfg_load:
     pop bx
     pop ax
     ret
+%endmacro
 
 ; -----------------------------------------------------------------------------
-; drv_cfg_deser - the file's records into the settings struct (SPEC.md 51.5)
-; in:  AX = bytes read into drv_cfgbuf
-; out: CF = 0 the struct holds this file's settings; CF = 1 nothing usable
-;      was found and the struct is untouched
-; clobbers: flags
-;
-; **Defaults first, records second.** The struct is seeded from drv_cfg_def
-; before a record is looked at, so a key that is absent - or present with a
-; ver this kernel does not accept - leaves the DEFAULT in place rather than
-; whatever the struct happened to hold.
-;
-; Every step is bounded by the byte count the read actually returned: a record
-; header that would run past the end, or a len that would, ends the walk. A
-; truncated or corrupt file therefore costs the settings it did not carry and
-; nothing else - the same shape as every other hostile-input path here.
+; CFG_SAVE - write the settings back. CTRL.DRV's half, reached from cp_flush_x
+;            and from nothing else
+; in:  %1 = the image's label prefix
 ; -----------------------------------------------------------------------------
-drv_cfg_deser:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    push ds
-    pop es
-    cmp ax, CFG_REC0            ; too short to hold even a header
-    jb .bad
-    mov dx, ax                  ; DX = the file's length, the only bound
-    mov si, drv_cfgbuf
-    mov di, drv_cfgsig
-    mov cx, CFG_SIGN
-    cld
-.sig:
-    mov al, [si]
-    cmp al, [di]
-    jne .bad                    ; a foreign file of that name: left alone
-    inc si
-    inc di
-    loop .sig
-    cmp word [drv_cfgbuf+CFG_GEN], CFG_GEN_V
-    jne .bad                    ; another generation's SHAPE: the records are
-                                ; not records. Defaults, and the next save
-                                ; rewrites the file in this one
-    mov si, CFG_REC0            ; SI = offset of the next record
-.rec:
-    mov ax, si
-    add ax, CFR_HDR
-    cmp ax, dx
-    ja .done                    ; no room for another header: end of file
-    mov bx, si
-    cmp word [bx+drv_cfgbuf+CFR_KEY], 0
-    je .done                    ; the terminator. Tested IN MEMORY, because AX
-                                ; is still si+CFR_HDR from the bound check
-                                ; above and the next one needs it
-    mov cl, [bx+drv_cfgbuf+CFR_LEN]
-    xor ch, ch
-    add ax, cx                  ; AX = where the NEXT record starts
-    cmp ax, dx
-    ja .done                    ; its data would run past the end
-    push ax
-    mov ax, [bx+drv_cfgbuf+CFR_KEY]
-    call drv_cfg_key            ; DI = table entry, or CF=1 = not ours
-    jc .next
-    mov cl, [di+3]              ; the length THIS kernel expects
-    xor ch, ch
-    cmp cl, [bx+drv_cfgbuf+CFR_LEN]
-    jne .next                   ; right key, wrong size: not our record
-    mov al, [di+2]
-    cmp al, [bx+drv_cfgbuf+CFR_VER]
-    jne .next                   ; right key, DIFFERENT MEANING: the default
-                                ; stands, which is the whole point of ver
-    push si
-    mov al, [di+4]              ; where it lives in the struct
-    xor ah, ah
-    mov di, ax
-    add di, drv_cfg
-    lea si, [bx+drv_cfgbuf+CFR_DAT]
-    rep movsb
-    pop si
-.next:
-    pop si                      ; ...the next record, bounded above
-    jmp .rec
-.done:
-    clc
-    jmp short .dout
-.bad:
-    stc
-.dout:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+%macro CFG_SAVE 1
 
-; -----------------------------------------------------------------------------
-; drv_cfg_key - find a key in drv_cfg_keys (module internal)
-; in:  AX = the key
-; out: CF = 0 and DI = the entry; CF = 1 = this kernel does not know it
-; clobbers: DI (the output), flags
-; -----------------------------------------------------------------------------
-drv_cfg_key:
-    push cx
-    mov di, drv_cfg_keys
-    mov cx, CFG_NKEY
-.scan:
-    cmp [di], ax
-    je .hit
-    add di, CFG_KESZ
-    loop .scan
-    pop cx
-    stc
-    ret
-.hit:
-    pop cx
-    clc
-    ret
-
-; -----------------------------------------------------------------------------
-; drv_want_set / drv_want_get - the WANT bytes as one bitmap word
-; in / out: AX = bit n set = row n is wanted
-; clobbers: nothing else (AX is drv_want_get's output; flags)
-; -----------------------------------------------------------------------------
-; **THE BIT IS NOT THE ROW, AND THAT IS THE WHOLE POINT OF THIS TABLE.** It was
-; bit n = row n, which is why every row until now was APPENDED: the settings
-; word is on the USER'S floppy and reordering drv_tab silently re-ticked it -
-; a machine that had Ethernet on would come back with the Ram Disk on instead,
-; with nothing on screen saying so. drv_cfgbit gives each row a bit that does
-; not move when the row does, so the PAGE's order (SPEC.md 31.1: most used
-; first) and the FILE's format are now independent things.
-;
-; The historical assignment is the order the rows were added in, which is what
-; every SYSTEM.CFG in existence was written with:
-;
-;       sound 0   hard disk 1   ram disk 2   parallel link 3   ethernet 4
-;
-; **kern_small's differs and always did**, because its table never had the RAM
-; disk row (SPEC.md 62.9.15) so the two after it sat one lower. That is not a
-; new divergence - CLAUDE.md already records that the bitmap does not mean the
-; same thing across the two builds - it is the existing one written down.
-;
-; The TABLE itself is beside drv_tab in .text, because this code is .cold and
-; a word declared there and read through DS is not that word (SPEC.md 2.6
-; rule 1) - the read and the write use the same wrong address, so the feature
-; would have worked perfectly while five bytes landed somewhere in the kernel.
-; tools/os88ovlchk.py refused the build, which is what that gate is for.
-; -----------------------------------------------------------------------------
-; drv_want_set / drv_want_get - the WANT bytes as one bitmap word
-; in / out: AX = the bitmap, bit drv_cfgbit[row] set = that row is wanted
-; clobbers: nothing else (AX is drv_want_get's output; flags)
-; -----------------------------------------------------------------------------
-drv_want_set:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov si, drv_cfgbit
-    mov cx, DRV_MAX
-    mov bx, drv_tab
-.next:
-    mov byte [bx+DRVR_WANT], 0
-    push cx
-    mov cl, [si]                ; CL = THIS ROW'S BIT, not its index
-    mov dx, ax
-    shr dx, cl
-    test dl, 1
-    jz .no
-    mov byte [bx+DRVR_WANT], 1
-.no:
-    pop cx
-    inc si
-    add bx, DRVR_SIZE
-    loop .next
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-drv_want_get:
-    push bx
-    push cx
-    push dx
-    push si
-    xor ax, ax
-    mov si, drv_cfgbit
-    mov cx, DRV_MAX
-    mov bx, drv_tab
-.next:
-    cmp byte [bx+DRVR_WANT], 0
-    je .no
-    push cx
-    mov dx, 1
-    mov cl, [si]
-    shl dx, cl
-    or ax, dx
-    pop cx
-.no:
-    inc si
-    add bx, DRVR_SIZE
-    loop .next
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
-
-; -----------------------------------------------------------------------------
-; drv_cfg_ser - the settings struct out as records (SPEC.md 51.5)
-; in:  nothing (drv_cfg current)
-; out: CX = the file's length in bytes
+; %1_ser - the struct out as records.
+; in:  nothing (drv_cfg current).  out: CX = the file's length in bytes
 ; clobbers: CX (the output), flags
 ;
 ; Writes the signature, this kernel's container generation, one record per
@@ -3482,49 +3554,56 @@ drv_want_get:
 ; kernel understands. A record read from a NEWER kernel's file is therefore
 ; gone after the first save, which is the documented behaviour: keeping bytes
 ; whose meaning cannot be checked is worse than losing them.
-; -----------------------------------------------------------------------------
-drv_cfg_ser:
+;
+; ES is the IMAGE's for the whole of it, because the buffer it fills is - so
+; `stosb` is right and the signature copy is hand-rolled for %1_deser's reason:
+; `movsb` would read the signature out of the kernel at the image's offset.
+%1 %+ _ser:
     push ax
     push bx
     push dx
     push si
     push di
     push es
-    push ds
+    push cs
     pop es
     cld
-    mov si, drv_cfgsig
-    mov di, drv_cfgbuf
+    mov si, %1 %+ _sig
+    mov di, %1 %+ _buf
     mov cx, CFG_SIGN
-    rep movsb
+%%sig:
+    mov al, [cs:si]
+    stosb
+    inc si
+    loop %%sig
     mov ax, CFG_GEN_V
     stosw
-    mov si, drv_cfg_keys
+    mov si, %1 %+ _keys
     mov dx, CFG_NKEY
-.rec:
-    mov ax, [si]                ; key
+%%rec:
+    mov ax, [cs:si]             ; key
     stosw
-    mov al, [si+2]              ; ver
+    mov al, [cs:si+2]           ; ver
     stosb
-    mov al, [si+3]              ; len
+    mov al, [cs:si+3]           ; len
     stosb
-    mov bl, [si+4]              ; ...and the bytes themselves
-    xor bh, bh
+    mov bl, [cs:si+4]           ; ...and the bytes themselves, which ARE the
+    xor bh, bh                  ; kernel's: drv_cfg is .bss and stays
     add bx, drv_cfg
-    mov cl, [si+3]
+    mov cl, [cs:si+3]
     xor ch, ch
-.cp:
+%%cp:
     mov al, [bx]
     stosb
     inc bx
-    loop .cp
+    loop %%cp
     add si, CFG_KESZ
     dec dx
-    jnz .rec
+    jnz %%rec
     xor ax, ax
     stosw                       ; the terminator
     mov cx, di
-    sub cx, drv_cfgbuf          ; CX = what to write
+    sub cx, %1 %+ _buf          ; CX = what to write
     pop es
     pop di
     pop si
@@ -3533,8 +3612,7 @@ drv_cfg_ser:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; drv_cfg_save - write the table's WANT bytes back to SYSTEM.CFG
+; %1_save - write the settings back to SYSTEM.CFG
 ; in:  nothing
 ; out: CF = 0 written; CF = 1 and AX = FERR_* (the caller says so in prose)
 ; clobbers: AX (the output), flags
@@ -3557,58 +3635,62 @@ drv_cfg_ser:
 ; directory sectors, which is where a hidden + system entry can be seen at all.
 ;
 ; **dskw_stat and not drv_find**, deliberately: drv_find answers a SIZE and
-; refuses one whose high word is non-zero, and KERNEL.SYS is 63,944 bytes
-; today - so the day the kernel passes 64KB, the check would start reporting
-; that the system disk is not the system disk. Existence is the question here.
-; -----------------------------------------------------------------------------
-drv_cfg_save_x:
+; refuses one whose high word is non-zero, and KERNEL.SYS is over 100,000 bytes
+; today - so it would start reporting that the system disk is not the system
+; disk. Existence is the question here.
+%1 %+ _save:
     push bx
     push cx
     push dx                     ; DX is the write's count high word (18.4.1)
     push si
     push di
     push es
-    call drv_vol_bank           ; the panel is closing on top of whatever the
-                                ; user was doing; this write goes to the BOOT
-                                ; VOLUME - A: on a floppy machine and the
+    call COLD_SEG:drvf_drv_vol_bank   ; the panel is closing on top of whatever
+                                ; the user was doing; this write goes to the
+                                ; BOOT VOLUME - A: on a floppy machine and the
                                 ; installed partition otherwise (SPEC.md
                                 ; 52.10.3) - and must not move them (51.5.2)
-    call drv_mounted
-    jc .nodisk
-    mov si, drv_sysname
-    call dskw_stat_x              ; the disk in A: is not guaranteed to be ours
-    jc .notsys
+    call COLD_SEG:drvf_drv_mounted
+    jc %%nodisk
+    mov si, drv_sysname         ; through DS: a filename always is
+    call COLD_SEG:dwf_dskw_stat ; the disk in A: is not guaranteed to be ours
+    jc %%notsys
 
-    push ds                     ; rebuild the whole file: a settings file is
-    pop es                      ; small and a partial one is a bug waiting for
-    call drv_cfg_pack           ; the next format change
-    call drv_cfg_ser            ; CX = its length, records and all
+    call %1 %+ _pack            ; rebuild the whole file: a settings file is
+    call %1 %+ _ser             ; small and a partial one is a bug waiting for
+                                ; the next format change. CX = its length
 
-    mov bx, drv_cfgbuf
+    push cs
+    pop es                      ; the buffer is the image's, and this is where
+    mov bx, %1 %+ _buf          ; dskw_write_sys reads it from
     xor dx, dx                  ; DX:CX = the count; a settings file is bytes
     mov si, drv_cfgname
-    call dskw_write_sys_x         ; ES is already ours, which is where it reads.
+    call COLD_SEG:dwf_dskw_write_sys
                                 ; _sys: SYSTEM.CFG is hidden + system, so it
                                 ; is neither listed nor deletable, and only
-                                ; this entry point may rewrite one (19.6)
-    jmp short .out
-.notsys:
+                                ; that entry point may rewrite one (19.6)
+    jmp short %%out
+%%notsys:
     mov ax, FERR_NOENT          ; a disk, but not ours. [cp_dsave] carries it
     stc                         ; to the Drivers page, whose caption already
-    jmp short .out              ; says 'Cannot save to the system disk' - which
-.nodisk:                        ; is exactly the truth in this case
+    jmp short %%out             ; says 'Cannot save to the system disk' - which
+%%nodisk:                       ; is exactly the truth in this case
     mov ax, FERR_NODISK
     stc
-.out:
-    call drv_vol_back           ; CF and AX are this routine's result and
+%%out:
+    call COLD_SEG:drvf_drv_vol_back   ; CF and AX are this routine's result and
                                 ; drv_vol_back preserves both - a remount
-    pop es                      ; that failed must not read as a write that did
+                                ; that failed must not read as a write that did
+    pop es
     pop di
     pop si
     pop dx
     pop cx
     pop bx
     ret
+%endmacro
+
+section .cold                   ; ...and back to cold code
 
 ; =============================================================================
 ; Boot (SPEC.md 51.3) and the notice that follows it
@@ -3624,6 +3706,30 @@ section .ovl                    ; boot overlay (SPEC.md 2.5): this runs ONCE,
                                 ; no business being resident.
 
 DRVP_OPL    equ 0x388           ; the OPL2's address/status port; +1 is data
+
+; --- SYSTEM.CFG's reader, in the overlay (SPEC.md 51.5.3, 2.5.1) -------------
+; It is here rather than in .cold because it is read ONCE, before the first
+; paint, and because since SPEC.md 2.5.1 the overlay outlives the mount that
+; drv_cfg_load needs. 431 bytes of code and 202 of tables and buffer that no
+; longer sit in the kernel's own segment, and thirteen of the fourteen bytes a
+; new setting used to cost.
+CFG_DATA   ovc
+CFG_SHARED ovc
+CFG_BOOT   ovc
+
+; -----------------------------------------------------------------------------
+; ovl_cfg_load - the entry drv_boot reaches through OVLCALL (SPEC.md 2.5.1)
+; out: CF = 0 a valid record was read and applied; CF = 1 the defaults stand
+;
+; A PLAIN LABEL AND NOT `ovc_load` ITSELF, on purpose: tools/os88ovlchk.py maps
+; a label to its section by reading the source, and a label a macro pastes
+; together is one it cannot see. Every call between the ovc_ routines is inside
+; this one section by construction; this is the only one that crosses, so this
+; is where the gate is given something to look at.
+; -----------------------------------------------------------------------------
+ovl_cfg_load:
+    call ovc_load
+    retf
 
 ; -----------------------------------------------------------------------------
 ; drv_snd_sniff - is there an FM chip in this machine? (SPEC.md 51.3.1)
@@ -3715,7 +3821,7 @@ drv_snd_sniff:
     pop cx
     pop bx
     pop ax
-    retf                        ; kmain reaches this as FAT_SEG:drv_snd_sniff
+    retf                        ; FAR: kmain reaches this through OVLCALL
 
 ; -----------------------------------------------------------------------------
 ; drvp_wr - write one OPL2 register (overlay-local; SPEC.md 34.1)
@@ -3820,10 +3926,21 @@ drv_boot_x:
     push ax
     push bx
     push cx
+    push dx
+    push si
+
+    ; --- SAY SO (SPEC.md 15.6) -----------------------------------------------
+    ; Everything below this line is floppy, and on the field machine it is
+    ; seconds of it with the bar as the only sign of life. The mount and the
+    ; settings read are one phase from the user's side, so they get one line;
+    ; it goes up BEFORE drv_mounted rather than after, because the mount is
+    ; most of what it is announcing.
+    OVLCALL ovl_spl_msg_cfg
+
     xor ch, ch                  ; CH = 1 once a settings RECORD has been read
     call drv_mounted
     jc .nodisk
-    call drv_cfg_load           ; CF = 1: no file, so every default stands -
+    OVLCALL ovl_cfg_load        ; CF = 1: no file, so every default stands -
     jc .load                    ; and every default is now "not wanted", so
     mov ch, 1                   ; the loop below correctly loads nothing
 
@@ -3867,7 +3984,7 @@ drv_boot_x:
     cmp ah, [vid_kind]
     je .vnosw                   ; already that adapter: nothing was cleared
 %endif
-    call KERNEL_SEG:spl_reset                 ; ...otherwise redraw the loading screen onto
+    SPLCALL splf_reset                 ; ...otherwise redraw the loading screen onto
     jmp short .load             ; the framebuffer the mode set just wiped
 .vnosw:
 %ifdef KERN_BIG
@@ -3878,6 +3995,28 @@ drv_boot_x:
     call KERNEL_SEG:cw_vid_disp_init
 %endif
 .load:
+    ; --- HOW MANY are we about to read? (SPEC.md 15.6) -----------------------
+    ; The status line names an ordinal out of a total, so the total has to be
+    ; known before the first one is read. It is a walk of the same two tests
+    ; the loop below applies, which is the only way the two can agree about
+    ; what counts as a driver being loaded; DRVR_WANT is settled by now, the
+    ; settings file having been read above.
+    xor dh, dh                  ; DH = how many, DL = how many so far
+    xor cl, cl
+.count:
+    mov al, cl
+    call drv_row_x
+    cmp word [bx+DRVR_FILE], 0
+    je .cskip
+    cmp byte [bx+DRVR_WANT], 0
+    je .cskip
+    inc dh
+.cskip:
+    inc cl
+    cmp cl, DRV_MAX
+    jb .count
+    xor dl, dl
+
     xor cl, cl
 .next:
     mov al, cl
@@ -3886,6 +4025,11 @@ drv_boot_x:
     je .skip
     cmp byte [bx+DRVR_WANT], 0
     je .skip
+    inc dl                      ; ...and NAME it, before the sectors start
+    mov al, dl
+    mov ah, dh
+    mov si, [bx+DRVR_TITLE]
+    OVLCALL ovl_spl_msg_drv
     mov al, cl
     call drv_load_x
     jnc .skip
@@ -3894,6 +4038,12 @@ drv_boot_x:
     inc cl
     cmp cl, DRV_MAX
     jb .next
+
+    OVLCALL ovl_spl_msg_boot    ; the loads are done and the desktop is not up
+                                ; yet: xm_boot, the palette and the first
+                                ; wm_paint_all are still to come, and a line
+                                ; left naming a driver it has finished with is
+                                ; worse than no line at all
     jmp short .out              ; THE LOADS ARE DONE - and .nodisk is below,
                                 ; so without this the successful path walks
                                 ; straight into the failure path and stamps
@@ -3925,6 +4075,8 @@ drv_boot_x:
     cmp cx, DRV_MAX
     jb .dnext
 .out:
+    pop si
+    pop dx
     pop cx
     pop bx
     pop ax
@@ -3971,30 +4123,26 @@ drv_notice_x:
 ; Far entries (SPEC.md 2.6): the resident thunks in kernel.asm far-call these,
 ; and these near-call the bodies above, so every routine here keeps its
 ; ordinary near `ret`.
+;
+; THERE ARE TWO OF THESE BLOCKS AND NOTHING DISTINGUISHES THEM. A far entry
+; does not know who far-called it, so `dvf_*` here and `drvf_*` below the .bss
+; are the same four bytes twice - `call <body>` / `retf` - and the only reason
+; the second set exists is that it was written when the Control Panel became a
+; module (SPEC.md 2.8) and its callers had to become far. What nobody did was
+; delete the `dvf_` half those callers had just stopped using: ELEVEN of the
+; thirteen were left with no caller at all, nine of them exact duplicates of a
+; `drvf_` entry four hundred lines away and two (`drv_blk_call`, `drv_cls_fp`)
+; dead outright - their bodies are near-called from inside the cold segment.
+; 44 bytes of `.cold`, and SPEC.md 2.6.1 had already named this exact defect
+; twice (`drv_status_x`, `drv_cp_count_x`) without the set being swept.
+;
+; The two that survive are the two with a resident caller: kernel.asm's
+; `drv_owns_seg` and `drv_dlg_done` thunks. Every other `.text` thunk in that
+; file far-calls the `_x` BODY directly, which is SPEC.md 2.6.1's deleted
+; middle pair - so a new `dvf_` entry is wanted only when the body it wraps
+; ends in a near `ret` and something in `.text` has to reach it.
 ; =============================================================================
-dvf_drv_blk_call:  call drv_blk_call_x
-               retf
-dvf_drv_cfg_save:  call drv_cfg_save_x
-               retf
-dvf_drv_cls_fp:    call drv_cls_fp_x
-               retf
-dvf_drv_cls_svc:   call drv_cls_svc_x
-               retf
-dvf_drv_cp_call:   call drv_cp_call_x
-               retf
-dvf_drv_cp_class:  call drv_cp_class_x
-               retf
-dvf_drv_cp_name:   call drv_cp_name_x
-               retf
-dvf_drv_load:      call drv_load_x
-               retf
 dvf_drv_owns_seg:  call drv_owns_seg_x
-               retf
-dvf_drv_row:       call drv_row_x
-               retf
-dvf_drv_tier:      call drv_tier_x
-               retf
-dvf_drv_unload:    call drv_unload_x
                retf
 dvf_drv_dlg_done:  call drv_dlg_done_x
                retf
@@ -4030,8 +4178,15 @@ drv_cpname: resb DRV_CPNSZ*DRVC_MAX ; each class's staged Control Panel page
 drv_svc:    resb DSV_SIZE*DRVC_MAX  ; ...and a copy of each one's table, so
                                 ; every `[drv_svc+DSV_*]` in snd.inc still
                                 ; names the SOUND driver's and did not change
-drv_cfg:    resb CFG_NB         ; the live settings, staged (layout above)
-drv_cfgbuf: resb CFG_FBUF       ; the file itself, records and all
+drv_cfg:    resb CFG_NB         ; the live settings, staged (layout above).
+                                ; THE ONE PIECE OF THE SETTINGS THAT IS STILL
+                                ; RESIDENT (SPEC.md 51.5.3): osapi_drv_cfg
+                                ; hands a driver its blob out of it at any
+                                ; moment in the session, so it is live state
+                                ; and not the parser's scaffolding. The FILE
+                                ; buffer went with the parser into the two
+                                ; images - it was 120 bytes doing nothing
+                                ; between a boot and a Control Panel click
 
 section .text
 
@@ -4068,8 +4223,52 @@ drvf_drv_cp_name:        call drv_cp_name_x
                     retf
 drvf_drv_cp_class:       call drv_cp_class_x
                     retf
-drvf_drv_cfg_save:       call drv_cfg_save_x
+
+; ...and the four SPEC.md 51.5.3's parser needs. drvf_drv_cfg_save is gone with
+; the body it wrapped: the save half is inside CTRL.DRV now, so cp_flush_x
+; reaches it with a near call and these are what IT has to cross for.
+; drvf_ss_mins2idle wraps a body in blank.inc rather than this file, which is
+; fine and is the first of these that does - a far entry is four bytes wherever
+; the body lives, and .cold reaches .cold near.
+drvf_drv_vol_bank:       call drv_vol_bank
                     retf
+drvf_drv_vol_back:       call drv_vol_back
+                    retf
+drvf_drv_mounted:        call drv_mounted
+                    retf
+drvf_ss_mins2idle:       call ss_mins2idle
+                    retf
+
+section .modc                   ; CTRL.DRV's image (SPEC.md 2.8)
+
+; --- SYSTEM.CFG's writer, in the panel's own module (SPEC.md 51.5.3) --------
+; The Control Panel is the only thing in the tree that writes the settings
+; file - cp_flush_x, on the way out of the panel and on the way to a reboot -
+; so the writer belongs in the panel's image and not in the kernel. It is
+; .modc HERE rather than in ctrl.inc so that it sits beside the macro it
+; expands and beside the reader it must agree with; the module is one image
+; whichever file emits into it, so cp_flush_x reaches cp_cfg_save near.
+;
+; It carries its OWN copy of the tables and the file buffer. That is the trade
+; the whole of 51.5.3 makes: two copies in two files, both emitted from the one
+; macro above, against one copy in a segment every machine pays for.
+CFG_DATA   cpc
+CFG_SHARED cpc
+CFG_SAVE   cpc
+
+; -----------------------------------------------------------------------------
+; cp_cfg_save - what cp_flush_x calls (SPEC.md 51.5)
+; out: CF = 0 written; CF = 1 and AX = FERR_*
+;
+; ovl_cfg_load's reason for existing, one image over: a label a macro pastes
+; together is one tools/os88ovlchk.py cannot map to a section, and this is the
+; only cpc_ label anything outside the expansion names.
+; -----------------------------------------------------------------------------
+cp_cfg_save:
+    jmp cpc_save                ; a tail call INSIDE one image - not the thing
+                                ; SPEC.md 2.6's fourth rule refuses, which is a
+                                ; `jmp` to a cw_ shim whose retf would then pop
+                                ; a near return address
 
 section .text
 

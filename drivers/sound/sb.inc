@@ -2408,7 +2408,16 @@ sbl_dma_map:
     mov word [sbl_seg], 0
     mov ax, SBL_WANT            ; 8KB, ALL of which the chip addresses -
     mov cx, ax                  ; so the page rule covers the whole claim
-    call OSAPI_MEM_CLAIM_DMA    ; out CF, DX = base segment
+    call OSAPI_MEM_CLAIM_DMA_HI ; out CF, DX = base segment. FROM THE TOP
+                                ; (SPEC.md 50.3.2): the 8237 holds this ring's
+                                ; page and offset in its own registers, so it
+                                ; can no more be moved than a package's region
+                                ; can - and a claim like that in the DATA arena
+                                ; is 50.3's own warning about splitting the run
+                                ; a package has to load into. The staging pool
+                                ; below stays where it is: software is the only
+                                ; thing that reads it, so the compactor should
+                                ; have it.
     jc .fail
     mov [sbl_seg], dx
     mov ax, dx

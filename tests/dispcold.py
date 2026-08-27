@@ -54,12 +54,15 @@ TITLE_H = 18
 # The ladder, out of the map rather than out of this file. `segment_of` reads
 # the section's base from the map's own equates, so COLD_SEG is whatever THIS
 # kernel put it at; FAT_SEG is what lands immediately above `.cold`, which is
-# what gives its length without needing a section-size accessor. The overlay
-# is the right upper bound in its own right: past FAT_SEG the first mount has
-# overwritten everything (SPEC.md 2.5), so there is nothing there to compare.
+# what gives its length without needing a section-size accessor. It is the
+# right upper bound in its own right: past FAT_SEG is the FAT window, which
+# the first mount has overwritten (SPEC.md 2.5), so there is nothing there to
+# compare.  FAT_SEG is read from the map's equates now - `.ovl` used to land
+# there and gave the same answer through segment_of("ovl_base"), and since
+# SPEC.md 2.9.6 the overlay is in stage 2's blob and has no fixed segment.
 KERNEL_SEG = 0x0060
 COLD_SEG = os88sym.segment_of("fm_layout")      # ...any .cold symbol will do
-FAT_SEG = os88sym.segment_of("ovl_base")        # ...and any .ovl one
+FAT_SEG = os88sym.equates()["FAT_SEG"]
 COLD_LEN = (FAT_SEG - COLD_SEG) << 4
 COLD_OFF = (COLD_SEG - KERNEL_SEG) << 4         # where it sits in kernel.bin
 

@@ -746,6 +746,52 @@ class _Screen(object):
                 % (100 * self.field, 100 * self.rule, 100 * self.dock))
 
 
+def saver_running(m):
+    """Is SPEC.md 79's idle screen saver on the glass right now?
+
+    One byte, and it is the difference between "this gate found a bug" and
+    "this gate waited out its limit for five minutes of guest idle". The
+    saver DRAWS - a starfield, shapes, fish - so a screen with it up never
+    settles and never will.
+    """
+    try:
+        return bool(m.read(_syms().linear("blk_on"), 1)[0])
+    except Exception:
+        return False            # kern_small, a knob kernel, a stale map: the
+                                # diagnostic is worth nothing if it can raise
+
+
+def no_saver(m):
+    """Turn the screen saver OFF for the rest of this session, and say so.
+
+    [ss_idle] == 0 is the setting's own OFF (blank.inc's `zero minutes: OFF,
+    and that is a setting and not a degenerate period`), so this is what the
+    Control Panel writes for Never rather than a poke around the feature.
+    Both halves, because ss_mins2idle would put the period back the moment
+    anything touched a setting.
+
+    CALL IT IN ANY GATE THAT DRIVES FOR MORE THAN ~5 GUEST MINUTES, which on
+    a host running the guest at 4x is a bit over a minute of navigation with
+    no input. tests/blitplane.py is the worked example, and the reason this
+    exists: the saver came up in the middle of its run, `settle` could never
+    return because the saver animates, and the gfx_blit4 breakpoint it had
+    armed caught a SAVER shape instead of Paint's canvas. Neither symptom
+    named the saver.
+
+    Not done in `launch`: tests/saver.py is a gate ABOUT the saver, and a
+    harness that silently disabled the feature under test would be worse than
+    the failure this prevents.
+    """
+    S = _syms().linear
+    m.write(S("ss_idle"), b"\0\0")
+    m.write(S("ss_mins"), b"\0")
+
+
+def _syms():
+    import os88sym
+    return os88sym
+
+
 def desktop_up(s):
     """Is the os8088 DESKTOP on screen? - the boot gate, and the only one that
     works on all three adapters.
@@ -901,6 +947,13 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None):
             "%s, against a desktop's 93+/0/96. This machine never finished "
             "booting, so nothing below would mean what it says. See the "
             "MartyPC log." % (limit, seen))
+    if saver_running(m):
+        raise MartyError(
+            "the screen was still changing after %.0fs because SPEC.md 79's "
+            "SCREEN SAVER IS RUNNING - [blk_on] is set. It draws, so this can "
+            "never settle, and anything else this gate armed is now watching "
+            "the saver rather than the machine. Call os88marty.no_saver(m) "
+            "once after the desktop is up." % limit)
     raise MartyError(
         "the screen was still changing after %.0fs: the machine never "
         "finished booting (or something on it is animating, in which case "

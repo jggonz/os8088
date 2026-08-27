@@ -1785,6 +1785,7 @@ kbm_move:
     mov [mouse_y], bx
     mov byte [cur_shchk], 1     ; THE POINTER MOVED (SPEC.md 7.2.1.1)
     mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
+    call sch_wake_ui            ; ...and WAKE the UI task (SPEC.md 8.1.2.2)
 .paint:
     call kbm_paint
     pop dx
@@ -1994,6 +1995,16 @@ kbm_isr:
     push ds
     mov ax, KERNEL_SEG
     mov ds, ax
+    call sch_wake_ui            ; A KEYSTROKE WAKES THE UI TASK (SPEC.md
+                                ; 8.1.2.2). Here at the head and not after the
+                                ; chain below, because the chain is a `jmp far`
+                                ; and never comes back - and it is safe here,
+                                ; because the BIOS handler runs inside THIS
+                                ; interrupt and stores the key before any task
+                                ; runs again. int 16h is polled once a pass and
+                                ; a blocked ui_task has no other reason to
+                                ; take one; without this a keystroke waits for
+                                ; the tick
     call kbd_ovflow             ; SPEC.md 9.8, and AHEAD of every gate below:
                                 ; a BIOS about to find its buffer full is a
                                 ; nested beep and a dead machine, and that is
@@ -2747,6 +2758,7 @@ mou_apply:
     mov [mouse_y], bx
     mov byte [cur_shchk], 1     ; THE POINTER MOVED, so the window under it
     mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
+    call sch_wake_ui            ; ...and WAKE the UI task (SPEC.md 8.1.2.2)
                                 ; may have changed (SPEC.md 7.2.1.1). One byte
                                 ; in the report path is what lets
                                 ; cur_shape_pass be one compare, not three
@@ -4253,7 +4265,7 @@ cur_mvt     dw 0                ; [ticks] at the last movement packet (SPEC.md
 cur_sptr    dw cur_save         ; -> whichever save buffer is live. In .text
                                 ; with a REAL initialiser, not .bss: .bss
                                 ; arrives zeroed (kernel.asm - NASM pads the
-                                ; gap to OVL_START), and 0 here is a pointer
+                                ; gap to COLD_START), and 0 here is a pointer
                                 ; at the API jump table
 cur_tabp    dw cur_and          ; -> the live shape's white table (SPEC.md
                                 ; 7.2). In .text with a real initialiser, for

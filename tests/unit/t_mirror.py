@@ -60,6 +60,14 @@ import os88geom as geom                                   # noqa: E402
 ASM = ["kernel/kernel.asm", "kernel/splash.inc", "boot/boot.asm",
        "boot/boothd.asm", "apps/os88api.inc", "apps/os88ui.inc",
        "drivers/os88drv.inc",
+       # The claim table's own namespace (SPEC.md 50.2/50.6): the SDK block
+       # under "mirrored from kernel/memory.inc" is the Task Manager's only
+       # way to name a kernel tag, and a RENUMBER there is silent in exactly
+       # the way this file exists for - the heap page would go on decoding
+       # the old word and label the wrong claim. tests/unit/t_ktags.py is the
+       # other half: that every tag reaches the SDK at all, which a mirror
+       # check by construction cannot see.
+       "kernel/memory.inc",
        # The screen saver's private ABI (SPEC.md 79.3): five verbs, the
        # settings block's four offsets, the mode bits and the minutes clamp,
        # all written out in the kernel AND in the overlay because an overlay

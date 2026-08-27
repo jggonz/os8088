@@ -45,7 +45,7 @@ MODS = ('.modc', '.modf', '.modl')   # on-demand module images (SPEC.md 2.8).
 # which is how `.modl` shipped once with the near-call check blind to it - the
 # clone module's every `call COLD_SEG:` was correct, and would not have been
 # reported had one been near.
-FAR = ('.ovl', '.cold') + MODS   # sections with a vstart of their own
+FAR = ('.boot2', '.ovl', '.cold') + MODS   # sections with a vstart of their own
 
 
 # A file the kernel %includes from OUTSIDE kernel/, and the section its
@@ -59,7 +59,28 @@ FAR = ('.ovl', '.cold') + MODS   # sections with a vstart of their own
 # untested rather than reported, and the Control Panel painted itself and then
 # ran off the end of its own image into whatever was above it.  A file that
 # emits code into the kernel belongs here whatever directory it is in.
-EXTRA = {'apps/os88ui.inc': '.cold'}
+EXTRA = {'apps/os88ui.inc': '.cold',
+         # ...and SPEC.md 2.9's stage 2, which is %included into `.boot2` from
+         # kernel.asm and lives in boot/. It carries no `section` of its own -
+         # one would displace it from file offset 0 - so without this line
+         # every label in it would be filed as `.text` and a near call out of
+         # it would go unreported, which is the exact bug this file exists for.
+         'boot/boot2.asm': '.boot2',
+         # ...and the loading screen, which joined it (SPEC.md 2.9.4). Like
+         # clockw.inc below it carries no `section` of its own - kernel.asm
+         # wraps the %include - so without this line every label in it files
+         # as `.text` and stage 2's own near calls into it are reported as
+         # crossings that are not, while a real crossing OUT of it would not
+         # be reported at all.
+         'kernel/splash.inc': '.boot2',
+         # ...and one that IS under kernel/, so the glob below finds it too:
+         # clockw.inc is SPEC.md 37.94's RTC write half, %included from
+         # ctrl.inc's `.modc`. It carries no `section` of its own (one would
+         # push modc_hdr off offset 0), so without this line every label in it
+         # would be filed as `.text` and every far call out of it reported as
+         # a crossing that is not one - and, worse, a NEAR call out of it
+         # would not be reported at all.
+         'kernel/clockw.inc': '.modc'}
 
 
 def sections(path):
@@ -74,9 +95,28 @@ def sections(path):
         yield cur, n, line
 
 
+def sections_raw(path):
+    """...and the same walk with the RAW line beside the stripped one.
+
+    The `; ovlchk: DS = ...` markers below live in COMMENTS, which sections()
+    throws away before anything can see them - so the check that needs both
+    halves gets its own walk rather than a flag on the shared one.
+    """
+    cur = EXTRA.get(path, '.text')
+    for n, raw in enumerate(open(path), 1):
+        line = raw.split(';')[0]
+        m = re.match(r'^\s*section\s+(\.\w+)', line)
+        if m:
+            cur = m.group(1)
+            continue
+        yield cur, n, line, raw
+
+
 def main():
     kfiles = sorted(glob.glob('kernel/*.inc')) + ['kernel/kernel.asm']
-    files = kfiles + sorted(EXTRA)
+    # dedup: an EXTRA under kernel/ is already in the glob, and scanning it
+    # twice reports every finding in it twice.
+    files = kfiles + [f for f in sorted(EXTRA) if f not in kfiles]
     where = {}                       # label -> section it is defined in
     for f in files:
         for sect, n, line in sections(f):
@@ -266,6 +306,90 @@ def main():
         sys.exit("os88ovlchk: %d tail call(s) to a cw_ shim - use call + ret"
                  % len(j_bad))
     print("os88ovlchk: no tail call reaches a cw_ shim")
+
+    # --- and .lowbss / .vgabuf are reached through SS or ES, never DS -------
+    # SPEC.md 2.1: those two sections are in LOW_SEG and VGABUF_SEG and DS is
+    # KERNEL_SEG for all kernel code, so a BARE reference to a symbol declared
+    # in either reads the kernel's own image at that offset.  It assembles
+    # cleanly and runs wrong, which is the whole family this file exists for.
+    #
+    # `.vgabuf` is here for SPEC.md 39.22's reason and is not a special case:
+    # it is a rung of its own above `.lowbss` and is just as unreachable
+    # through DS, so the same rule binds it.
+    #
+    # THE EXEMPTION IS A BANK, AND IT NAMES ITS SEGMENT - which is the whole
+    # of why it names one.  A routine may point DS at one of these segments
+    # for a hot loop (vga_blit_prow does, so its table costs no override byte
+    # a pixel), and inside such a bank the bare reference is the correct one
+    # FOR THAT SEGMENT ONLY.  `; ovlchk: DS = VGABUF_SEG` opens one and
+    # `; ovlchk: DS restored` closes it.
+    #
+    # A bank that exempted EVERYTHING would be blind in precisely the place
+    # the hazard is: SPEC.md 39.22 moved two buffers out of `.lowbss` into
+    # `.vgabuf` and left three `.lowbss` words being read inside the decoder's
+    # bank, each of which needed an `ss:` it had never needed before.  So the
+    # symbol carries the segment its section lives in and the bank is checked
+    # against it - inside a VGABUF_SEG bank a bare `.vgabuf` word is right and
+    # a bare `.lowbss` word is the bug.
+    SECT_SEG = {'.lowbss': 'LOW_SEG', '.vgabuf': 'VGABUF_SEG'}
+    lb = {}
+    for f in kfiles:
+        for sect, n, line in sections(f):
+            if sect not in SECT_SEG:
+                continue
+            m = re.match(r'^\s*([A-Za-z_]\w*)\s*:?\s*(?:res[bwdqt])\b', line)
+            if m:
+                lb[m.group(1)] = SECT_SEG[sect]
+    # `\b` on both sides so `vid_rowtab` does not match `vid_rowtab2` and
+    # `font_zero` does not match inside `xfont_zero`.
+    MEMREF = re.compile(r'\[\s*(?:(\w\w)\s*:)?([^\]]*)\]')
+    OPEN = re.compile(r';\s*ovlchk:\s*DS\s*=\s*(\w+_SEG)\b', re.I)
+    SHUT = re.compile(r';\s*ovlchk:\s*DS\s+restored\b', re.I)
+    l_bad = []
+    for f in files:
+        low, opened_at = False, 0
+        for n, raw in enumerate(open(f), 1):
+            if OPEN.search(raw):
+                if low:
+                    l_bad.append((f, n, '(nested)', 'a DS bank inside a DS bank'))
+                low, opened_at = True, n
+            elif SHUT.search(raw):
+                if not low:
+                    l_bad.append((f, n, '(unopened)', 'DS restored, never banked'))
+                low = False
+        if low:
+            l_bad.append((f, opened_at, '(unclosed)',
+                          'a DS bank with no "DS restored"'))
+    for f in files:
+        bank = None                  # the segment DS is banked to, if any
+        for sect, n, line, raw in sections_raw(f):
+            m = OPEN.search(raw)
+            if m:
+                bank = m.group(1).upper()
+            elif SHUT.search(raw):
+                bank = None
+            if sect in SECT_SEG:
+                continue             # the declarations themselves
+            for m in MEMREF.finditer(line):
+                seg = (m.group(1) or '').lower()
+                if seg in ('ss', 'es', 'cs'):
+                    continue
+                for w in re.findall(r'\b\w+\b', m.group(2)):
+                    if w not in lb or lb[w] == bank:
+                        continue
+                    l_bad.append((f, n, w, 'reached without ss: or es:'
+                                  if bank is None else
+                                  'is %s, but DS is banked to %s here'
+                                  % (lb[w], bank)))
+    for f, n, sym, why in l_bad:
+        print("%s:%d: %s - %s (SPEC.md 2.1/39.22)" % (f, n, sym, why),
+              file=sys.stderr)
+    if l_bad:
+        sys.exit("os88ovlchk: %d .lowbss/.vgabuf finding(s) - SPEC.md 2.1 "
+                 "(LOW_SEG and VGABUF_SEG are reached through SS or ES)"
+                 % len(l_bad))
+    print("os88ovlchk: every .lowbss/.vgabuf reference names SS or ES "
+          "(%d symbols)" % len(lb))
 
     # --- and a routine's RETURN KIND matches how it is called ---------------
     # `ret` pops two bytes and `retf` pops four.  Get it the wrong way round

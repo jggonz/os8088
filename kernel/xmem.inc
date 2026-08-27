@@ -292,8 +292,6 @@ xmf_xm_boot:        call xm_boot_x
 
 section .text
 
-xm_boot:            call COLD_SEG:xmf_xm_boot
-                    ret
 
 ; -----------------------------------------------------------------------------
 ; xm_dsp - dispatch one of the overlay's service procs

@@ -131,8 +131,10 @@ dns_tmo:    dw 0
 ; needs to be a decision the machine makes, not a constant somebody picked.
 ;
 ; [sk_seg] is the claim; the rings live at offset 0 in it, RX first. The caps
-; and their shifts are words because the code that walks them is the same
-; code at every size. TOTAL MUST STAY UNDER 64KB - the offsets into it are 16
+; are words because the code that walks them is the same code at every size.
+; (The SHIFTS that used to live here are gone: a socket carries its own ring
+; base and capacity in its record now, because the ring's address used to be
+; the slot NUMBER and that is what welded the two together - SPEC.md 72.21.) TOTAL MUST STAY UNDER 64KB - the offsets into it are 16
 ; bits - which is what caps RX at 8192 with four sockets.
 ; -----------------------------------------------------------------------------
 sk_seg:     dw 0                ; the claim, 0 = none (and every socket verb
@@ -144,9 +146,10 @@ sk_base:    dw 0                ; ...and the RX area's offset INSIDE it. The
                                 ; bss, where they are not at offset zero
 sk_rxcap:   dw SK_RXCAP0        ; ...and the shape inside it
 sk_txcap:   dw SK_TXCAP0
-sk_rxsh:    dw SK_RXSH0
-sk_txsh:    dw SK_TXSH0
-sk_txoff:   dw NET_SOCKS * SK_RXCAP0    ; where the TX rings start: it moves
+sk_rused:   times SK_NRING db 0         ; which pool rings are handed out
+                                        ; (SPEC.md 72.21) - one byte a ring,
+                                        ; and the whole allocator's state
+sk_txoff:   dw SK_RXCAP0 + SK_NLEAN * SK_LEANRX  ; where the TX rings start: it moves
                                 ; with the RX size, so it is computed once at
                                 ; the claim and not derived at each call
 sk_want:    dw 0                ; the RX size the user ASKED for, 0 = auto

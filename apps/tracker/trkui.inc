@@ -3282,7 +3282,17 @@ tui_s_splash1: db 'T R A C K E R', 0
 tui_s_splash2: db 'A FastTracker II style MOD player', 0
 tui_s_none:    db 'No module loaded', 0
 tui_s_keys1:   db 'ENTER play  SPACE stop  HOME top  P pattern', 0
-tui_s_keys2:   db 'ARROWS position  1-4 mute  L load  X xt', 0
+tui_s_keys2:   db 'ARROWS position  1-4 mute  L load  X xt  V screen', 0
+                                    ; 'a key nothing names is a key nobody
+                                    ; finds' (just below) applies to V as much
+                                    ; as it did to the bench keys, and the
+                                    ; SURFACE is the one setting whose effect
+                                    ; is invisible until F is pressed
+                                    ; (SPEC.md 45.13.7). 49 cells against
+                                    ; tui_cline's centred [tui_cw] = 418 = 52,
+                                    ; and tui_cw does not move with the
+                                    ; adapter - only tui_ch does - so this
+                                    ; fits on all three of SPEC.md 39's
 %ifdef TRKLOG                       ; the bench keys are on screen, because a
                                     ; key nothing names is a key nobody finds:
                                     ; this line said 'P pattern' one row above

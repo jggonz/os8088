@@ -92,7 +92,7 @@ answers once, not the cell. SPEC.md §6.1.10 is the contract.
 | `whole page of rows` | 2,554,046 | **741,497** | **3.44×** | 494,331 |
 
 VGA is now faster than the Hercules on every aligned text row. +177 bytes of
-`.text` on `kern_big`, +15 on `kern_small`, no rung crossed, **no budget
+`.text` on `kern_big`, +15 on `kern_small`, **no budget
 raised** — the 2KB offered for this rework is untouched, and §7.1 is the only
 item that would want any of it.
 
@@ -802,32 +802,39 @@ snapped and must not be.
 Worked example, a Disk window at `W_X` 103, `W_W` 320, title `Disk` (32 px):
 the pen is `103 + (320−32)/2 = 247`, which is ≡ 7 — off-grid — and snaps to
 **248**, a **+1 px** move. That was verified on VGA against the shipped kernel
-of the day — 80 pixels differ, all inside the title band — and **it is no
-longer what the shipped kernel does.**
+of the day — 80 pixels differ, all inside the title band — and **which build
+the shipped kernel is has moved twice since**, which is the next paragraph.
 
-**THE KNOB MOVES NOTHING ON A DEFAULT BUILD, and that is not a defect in the
-knob.** `TITLESNAP`'s only occurrence in the tree is `kernel/wm.inc:7228`,
-inside `wm_draw_title`'s **fallback**, below the `call wm_title_band` / `jnc
-.sep` that SPEC.md §5.9.6 made kern_big's default. The composed bar centres its
-caption itself, so on `kern_big` the snap is assembled and never reached:
-measured, plain against `TITLESNAP=1` in one session, **0 differing pixels of
-307,200**. It still measures what it always measured under `NOBAND=1` or
-`KERN_SMALL=1`, which are exactly the two builds that still take the fifteen
-primitive calls — so run it against one of those, or it will look as though the
-snap were invisible rather than absent.
+**WHICH BUILD THE KNOB IS VISIBLE ON HAS CHANGED TWICE, so check before
+concluding it does nothing.** `TITLESNAP`'s only occurrence in the tree is
+`kernel/wm.inc:7228`, inside the fifteen-call path — below the `call
+wm_title_band` / `jnc .sep`, which is compiled in only by `make BAND=1`
+(SPEC.md §5.9.6). The composed bar centres its caption itself, so wherever
+that path is in the build the snap is assembled and never reached: measured,
+plain against `TITLESNAP=1` in one session while the composer was kern_big's
+default, **0 differing pixels of 307,200**.
+
+§5.9.6 has since sent the composer back to a knob, so the fifteen calls are
+what a default `kern_big` draws again and **`make TITLESNAP=1` against `make`
+moves the pen once more** — the reading above was a fact about that cycle's
+default and not about the knob. The build that now hides it is `BAND=1`, and
+`KERN_SMALL=1` never did. Run the A/B on a build that takes the fifteen calls,
+or it will look as though the snap were invisible rather than absent.
 
 SPEC.md §11.94.3 lists "a centred string" as one of three off-grid pens that are
 *correct*; this narrows that to **"centred, to the nearest cell"**, which would
 also reach `ui_note`, the About box and Missile's banner if it is adopted.
 
-**The knob only buys alignment, not the flash.** On the fallback path
+**The knob only buys alignment, not the flash.** On the fifteen-call path
 `wm_draw_title` is still a `gfx_fill` plus a `font_str_x`, so it still writes
 every title pixel twice; what the snap buys is that the *conversion* to
 `font_run` (§4.1 item 1) will land on the fast path when it happens. The two
-are independent and the conversion is the bigger half. On the DEFAULT path the
-flash is already gone by the other route entirely — §3's compose-and-blit,
-which SPEC.md §11.101 shipped as `wm_title_band`: every pixel of the bar
-written once, into a 1bpp band, and blitted.
+are independent and the conversion is the bigger half. On a `BAND=1` build the
+flash is gone by the other route entirely — §3's compose-and-blit, which
+SPEC.md §11.101 is: every pixel of the bar written once, into a 1bpp band, and
+blitted. That was the shipped bar for a cycle and is a knob again on bytes
+(§5.9.6), which puts the flash back on the default build's title bar and makes
+the conversion above worth more, not less.
 
 ### 6.2 Two things I had wrong
 

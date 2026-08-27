@@ -2644,16 +2644,20 @@ fm_onclick_x:
                                 ; one on row 3 next door would compose
     cmp dx, FM_DBLCLK
     jae .restamp
-    call fm_open_sel            ; double-click: a package goes to the
-    cmp word [ld_pending], 0    ; loader, a folder re-lists this window (22)
-    je .redraw                  ; folder: fm_go changed the whole listing
-    jmp short .quiet            ; package: the loader is somebody else's
-                                ; window and NOTHING here changed at all
-                                ; (SPEC.md 22.17 - it used to be one line,
-                                ; 'Loading...'). Through .quiet and not
-                                ; straight out, because this click may also
-                                ; have retired an editor prompt, which is a
-                                ; different question with its own answer
+    call fm_open_sel            ; double-click: a package or a DOCUMENT goes
+    jc .redraw                  ; to somebody else's window, a folder re-lists
+    jmp short .quiet            ; this one (SPEC.md 22.13.2). CF is the
+                                ; ROUTINE'S answer now: the [ld_pending] test
+                                ; that used to be here asked whether a PACKAGE
+                                ; had been posted, and a document posts an
+                                ; association instead - so every document open
+                                ; took the folder's branch and repainted this
+                                ; window whole for nothing.
+                                ;
+                                ; Through .quiet and not straight out, because
+                                ; this click may also have retired an editor
+                                ; prompt, which is a different question with
+                                ; its own answer
 
 .restamp:                       ; already selected, too slow to be a double
     mov dx, [ui_click_t]        ; click: the entry does not move, so NOT ONE
@@ -3099,7 +3103,15 @@ fm_onkey_x:
     mov ax, [di+FS_SEL]
     cmp ax, [di+FS_N]           ; 0xFFFF (none) also fails this
     jae .out
-    call fm_open_sel            ; same as a double-click
+    call fm_open_sel            ; same as a double-click - INCLUDING the
+    jc .redraw                  ; answer (SPEC.md 22.13.2). This site had no
+    cmp byte [fm_statowed], 0   ; test at all and fell straight into the
+    je .out                     ; repaint, so Enter redrew the whole window
+    call fm_status_only         ; for a PACKAGE too, where the double-click
+    jnc .out                    ; beside it had known better since 22.17.
+                                ; The keystroke may still have retired a
+                                ; verdict (22.9), which is the .scr_move
+                                ; ladder above and the same answer
 
 .redraw:
     call fm_repaint             ; SI still = window ptr
@@ -3150,13 +3162,26 @@ fm_delrep:
 ; fm_open_sel - open one directory entry: THE open path (SPEC.md 22)
 ; in:  AX = index into THIS window's listing, already checked against FS_N;
 ;      gfx lock held, [fm_vp] published
-; out: nothing (all registers preserved)
+; out: CF = 1 THIS WINDOW'S LISTING CHANGED and the caller owes it a full
+;      repaint; CF = 0 nothing in this window moved at all. All registers
+;      preserved.
 ;
 ; Shared by the double-click, by Enter and by File > Open, so those three can
 ; never drift apart. The SPEC.md 19 type word decides: 2 is a folder and
 ; re-lists this window; anything else goes to the loader, which rejects a
 ; type-0 file as "Bad package" - the truthful verdict for double-clicking a
 ; data file.
+;
+; THE ANSWER IS THIS ROUTINE'S BECAUSE THE BRANCH IS (SPEC.md 22.13.2). All
+; three callers used to ask `[ld_pending] != 0` instead - "did this post a
+; PACKAGE load?" - which is a PROXY for "did this navigate", and the two
+; parted the day a third outcome arrived. A document (SPEC.md 54.4) posts an
+; ASSOCIATION and no package index, so it answered the folder's answer and
+; every document open repainted the Disk window whole: a white fill and some
+; forty font_strs, immediately before the program it launched was drawn over
+; the top of them. That is fm_docmd's own argument about Timer and Bounce,
+; one branch away from where it was made - and ui.inc's `.chk_ld` carries the
+; identical warning about the identical word, one level up.
 ;
 ; Before this branch existed a folder double-click reached ld_run_body, which
 ; rejects type != 1, and the window reported "Bad package" for an operation
@@ -3186,13 +3211,21 @@ fm_open_sel:
     cmp word [si+16], 0         ; a DATA file with an association opens in
     jne .package                ; its program instead of reaching the loader
     call assoc_post_x ; (SPEC.md 54.4); without one it still goes
-    jnc .out                    ; there and still says "Bad package", which
+    jnc .quiet                  ; there and still says "Bad package", which
 .package:                       ; is the truthful verdict it always was
     inc ax                      ; index + 1: ui.inc runs the loader once the
     mov [ld_pending], ax        ; lock drops (SPEC.md 21)
     mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
     mov [ld_pwin], di           ; ...resolved against THIS window (22.1)
-    jmp short .out
+.quiet:
+    clc                         ; A PACKAGE AND A DOCUMENT BOTH OPEN SOMEBODY
+    jmp short .out              ; ELSE'S WINDOW. Not one pixel of this one
+                                ; changed: no listing, no selection (the first
+                                ; click of the double-click made it, and it is
+                                ; already on the glass), and no status line -
+                                ; SPEC.md 59.5 took the verdicts out to the
+                                ; toast, so 'Bad package' is a menu-bar strip
+                                ; now and not a line of this window
 .folder:
     call fm_stage_name          ; fm_name = the folder's display name, out
     mov ax, bx                  ; of the staged entry while it still exists
@@ -3213,10 +3246,11 @@ fm_open_sel:
     xor si, si                  ; instructions are the SHAPE this site shipped
 %endif                          ; with, so its bytes do not move
 .titled:
-    call fm_go
+    call fm_go                  ; ...and THIS one really did replace the
+    stc                         ; listing, the selection and the caption
 .out:
-    pop di
-    pop si
+    pop di                      ; (`pop` and `ret` leave the flags alone, so
+    pop si                      ; the answer survives the epilogue)
     pop bx
     pop ax
     ret
@@ -3839,13 +3873,16 @@ fm_c_open:                      ; File > Open - the selection, if any
     cmp ax, [di+FS_N]           ; 0xFFFF (no selection) also fails this
     jae .none
     call fm_open_sel
-    cmp word [ld_pending], 0    ; a folder re-listed us and owes the whole
-    je .out                     ; window; a PACKAGE went to the loader and
-    mov byte [fm_cmdchg], FMD_NONE  ; changed NOTHING on this one - the same
-.out:                           ; [ld_pending] test fm_onclick makes on a
-    ret                         ; double-click (SPEC.md 22.2/22.13). It was
-                                ; FMD_LINE while the line still said
-                                ; 'Loading...' (SPEC.md 22.17)
+    jc .out                     ; a folder re-listed us and owes the whole
+    mov byte [fm_cmdchg], FMD_NONE  ; window; a package or a DOCUMENT opened
+.out:                           ; somebody else's and changed NOTHING on this
+    ret                         ; one - fm_open_sel's own answer, which is the
+                                ; same one fm_onclick reads on a double-click
+                                ; (SPEC.md 22.13.2). It was the [ld_pending]
+                                ; word here too, so File > Open on a document
+                                ; carried the identical wasted repaint; and
+                                ; FMD_LINE before that, while the line still
+                                ; said 'Loading...' (SPEC.md 22.17)
 .none:
     mov byte [fm_cmdchg], FMD_NONE  ; nothing selected: a no-op, and a no-op
     ret                             ; draws nothing

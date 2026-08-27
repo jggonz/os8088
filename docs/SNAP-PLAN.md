@@ -67,7 +67,7 @@ now guaranteed `≡ 0 (mod 8)`, so `offset mod 8` is the whole question.
 | grid icon | `fm_cellx + 31` | `+ 32` | `(80-16)/2` — aligned **and** exactly centred |
 
 **Cost: 0 bytes in every section** — `.text`, `.bss`, `.cold`, `.lowbss`,
-`.ovl` all +0, no rung crossed, `KERN_BUDGET` spare unchanged at 3,072. Every
+`.ovl` all +0, `KERN_BUDGET` spare unchanged at 3,072. Every
 one of those seven constants is an `add`/`sub reg, imm8` at both the old value
 and the new.
 

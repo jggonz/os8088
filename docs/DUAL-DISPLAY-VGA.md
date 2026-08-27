@@ -447,8 +447,9 @@ stale-baseline figures `make` prints:
 | Control Panel, `SYSTEM.CFG` | **0** | **+0** |
 | **total so far** | ~200–400 B | **+62 B** |
 
-**No rung moved and the footprint did not change**: `KERN_SIZE` is 104,448
-before the branch and 104,448 now, the image rung's slack going 220 → 158
+**The footprint did not change, and the rung came 62 bytes closer to
+crossing**: `KERN_SIZE` is 104,448 before the branch and 104,448 now, the
+image rung's slack going 220 → 158
 bytes inside the same 512-byte step. Per docs/KERNEL-MEMORY.md's accounting
 rule that is *not* "free" — 62 bytes of the next feature's slack are spent —
 but the machine's RAM has not moved. The remaining §4.4 work has 158 bytes of
@@ -590,7 +591,7 @@ the aliased configuration**, which is exactly why it decides nothing.
 
 `vid_dual_ok` rewritten, `vid_disp_other` added, `vid_blank` reduced to its
 test, and `vid_depth_set` carrying the renderer's depth across a display swap.
-**Cost: `.text` +37, `.cold` +4, no rung crossed** — 194 bytes left in the image
+**Cost: `.text` +37, `.cold` +4 — 194 bytes left in the image
 rung — against the 1KB grant.
 
 **Step 1 alone corrupts kernel memory, which is why step 2 is in the same
@@ -651,7 +652,7 @@ this machine.
 `wm_su_pw` — the plane count of the display a raise cache is **on** — set by
 `wm_su_flay` and read by the four sites that used `[vid_planes_w]`
 (`wm_su_bytes`, `wm_su_scrset`, `wm_su_edge`, `wm_su_merge`).
-**Cost: `.text` +36, no rung crossed.** Running total for the whole feature:
+**Cost: `.text` +36.** Running total for the whole feature:
 **`.text` +73, `.cold` +4** of the 1KB grant.
 
 **It is a heap overrun and not a wrong picture, which is why it was worth
@@ -1211,7 +1212,7 @@ text screen untestable on that card in this container.
     `DL` = the answering display's kind, so one call gives both and they
     cannot disagree.
 
-    Cost: kernel `.text` **+4 bytes**, no rung crossed. Verified —
+    Cost: kernel `.text` **+4 bytes**. Verified —
     `tests/dispmodex.py`, four cases: launched from the VGA `0x01EF`/mono 0;
     dragged so its **centre** is on the Hercules `0x0011`/mono 1; dragged back
     `0x01EF`/mono 0; and launched from a Disk window on the Hercules, where
@@ -1246,7 +1247,7 @@ text screen untestable on that card in this container.
     thing that makes another display's geometry meaningless. A bracket that
     sets no mode now changes nothing about displays at all.
 
-    Cost: `.text` **+21 bytes**, `.bss` +1, no rung crossed. Verified —
+    Cost: `.text` **+21 bytes**, `.bss` +1. Verified —
     `tests/dispmcfs.py`: the pointer stays virtual and moves (935 → 815, both
     on the Hercules); after the round trip **both cards are byte-identical to
     a forced full repaint**; and the mode-setting path still collapses
@@ -1360,7 +1361,7 @@ text screen untestable on that card in this container.
     answers about the primary (§39.2.1) — so it comes from `fsx_caps`' `DL`,
     which is already *that display's* kind (§39.18.2).
 
-    Cost: `.text` **+70 bytes**, no rung crossed (the image rung's slack
+    Cost: `.text` **+70 bytes** (the image rung's slack
     327 → 257). Every `.o88` is invalidated by the slot append, which §20.8
     rule 4 makes a rebuild rather than a compatibility event.
 

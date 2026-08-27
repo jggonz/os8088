@@ -408,7 +408,7 @@ nothing in this round may be put behind `%ifndef KERN_SMALL`.
 
 Item A was what the raise was granted for, and it spent **one of the two
 steps — on `kern_small` only**. §11.96.10 cost `.text` +355 and `.cold` +22:
-`kern_big` crossed no rung and stands at **2,560 spare (five steps), 147 bytes
+`kern_big` stands at **2,560 spare (five steps), 147 bytes
 left in the image rung** (was 502); `kern_small`'s image rung **CROSSED**, so its
 spare went **3,584 → 3,072 (seven steps to six)**. That is the shape the move was
 asked for and it is the asymmetry to expect from anything in this round — the

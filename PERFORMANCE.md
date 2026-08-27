@@ -1237,6 +1237,9 @@ list to check yourself against.
 | Note Pad insert at the front | 1,600 cells ≈ most of a second | a scroll, settled later | §27.3 |
 | An opaque text run | 228–336 framebuffer accesses, alignment-dependent | flat **80**; 1.30× on hardware (`fontbench`), 1.24× on a second harness and a second adapter (Part 9), and no flash | §6.1, §6.1.1 |
 | Task Manager row update | 20 glyphs to change 3, twice a second | the changed chunks only | §28.2 |
+| The Task Manager's QUIET pages | the memory view and the heap page repainted at `TM_INT` like the live one — and measured on a 5150/CGA with `tools/os88lockw.py`, one refresh held the gfx lock **45.1 ms** and **51.2 ms** and made **no drawing call of any kind**: the chunk cache was working and the walk to find that out was not free. Twice a second that is **102 ms of every second with the pointer hidden** (§7.1.4) buying nothing | `tm_paintdue` — every fourth interval on those two pages, tested BEFORE the lock is taken. Heap page **10.3% → 2.0%** of wall-clock holding the lock, memory view 1.9%, performance view untouched at 4.4%. The SAMPLE still runs at `TM_INT`, so the CPU gauge and its epoch are unchanged | §28.6 |
+| ...and the walk that was left | §28.6 quartered the paint and the remaining refresh still held the lock **51.2 ms** to conclude nothing had changed | `tm_quiet` — the same question as three hashes over 334 bytes, **4.89 ms**, and asked BEFORE the lock is taken. The heap page sitting quiet now takes the lock **0 times in 9 seconds**; a change still reaches it on the first refresh | §28.6.1 |
+| Scroll the Task Manager's heap page | there was no scrolling: `TMH_ROWS` is 47, no screen shows more than 22, and `tm_row_place` refused the rest without saying so | a list repaint a click — ~20 rows × 5 chunks of changed text, **~450 ms on the target**, which is about what a page switch already costs and is why the thumb does not DRAG. §28.2's per-chunk cache is REUSED rather than cleared: the offset is spent at the source (`tm_mrow_close`), so `tm_rowck` stays indexed by the row's place on the SCREEN and a row whose text matches the one that was in that slot is not redrawn. An end stop is **nothing at all** — `tm_hscroll` compares the clamped position against the one the bar was drawn from and returns | §28.4.4 |
 | Press an arrow on the Drivers page | §13.8.3's pressed look reached this page as `cp_drv_boxes` — **every** row's checkbox, on both edges of every press, and `os88ui_glyph` white-fills its box before it draws a pixel. Measured on a cycle-accurate 5150/CGA with `tests/drvscroll.py`: the press is **9 frames = 133.3 ms** of visible redraw with the flashing rect spanning the whole list, the release carries another **100 ms** in front of the scroll's own repaint, and a press on a **greyed** arrow spends **116.7 ms** twice to draw nothing at all | the one control the down state moved to or from: the press is **2 frames = 16.7 ms**, the flash is the mouse pointer's own cell and the rows are 0 differing pixels; a greyed arrow is **0 frames**; the release is the scroll's pane repaint alone, **367.1 → 267.1 ms**. A driver row's own press 133.3 → **33.6 ms**, one glyph instead of four | §31.1.2 |
 | Timer digits | eight erase-and-letter pairs — 8 `gfx_fill` + 8 `font_char`, each cell blank between its two calls, **twice a second for as long as the window is open**: 320 + 320 calls in 20 s, ~24.7 ms a redraw | one `font_run` over the cells that CHANGED, byte-aligned by `WF_SNAP`: **0 fills, 0 `font_char`**, 20 runs of 22 cells in the same 20 s, and no blank interval | §14.1, §6.1 |
 | Menu bar redraw | every window operation | gated on `[menu_bdirty]` | §12.05 |
@@ -1275,6 +1278,7 @@ list to check yourself against.
 | Paint's canvas going back to nibbles | `pt_topacked` was `pt_line_get` then `pt_line_put` - a planar row unpacked into one colour index a BYTE and packed again, two passes and a 736-byte buffer between them to move eight bits: **377.7 cycles a pixel**, **4,056 ms** for 466x110. On a two-card machine that is what a window dragged onto the mono monitor costs before it draws | one loop: four plane bytes of a byte column in, four packed bytes out, eight `shl`/`rcl` pairs a pixel and no buffer between. **108.4 cycles a pixel**, **1,165 ms**, 3.48x. The break-even against KEEPING the planes - 164 ms a repaint through `gfx_blitp` against 1,161 through `gfx_blit4` - goes from 4.1 repaints to 1.2. Two table designs were costed against the shift loop and both lose | §42.13.1.2 |
 | Paint's GIF save, per row | `pt_line_get`'s planar loop is the writer's row reader, one call a row, and a pixel in it is eight shifts wrapped in a `cmp`/`jae`/`dec`/`jnz`: **190.3 cycles a pixel**, 18.58 ms a row, **2,044 ms** of a 466x110 save | the whole byte column unrolled, the rolled loop kept for the partial one at the end of a row: **141.1 cycles a pixel**, 13.78 ms a row, **1,516 ms**, 26% off every save. `tests/paintrow.py` calls the routine directly - nothing that draws goes near it | §42.13.1.2 |
 | A 4bpp canvas blit on VGA | one write per coalesced RUN, at **1,797 cycles a run whatever it covers** — so os8088.gif's 50% dither is 18,978 runs and **7,146 ms** of one `gfx_blit4`, with the pixel count barely in it | the row is priced and a detailed one is transposed into the four planes at **106.9 cycles a pixel**: **1,148 ms**, 6.23x, and 4.88x on the odd destination phase. A FLAT row keeps the run writer and pays 4.2% for the pricing | §5.4.1.3 |
+| Per-switch CPU accounting | `sch_account` on **every** `task_yield`, 500 cycles a call. On a bare desktop `sch_switch` finds nobody ready and resumes the caller, so all 1,048 of them a second charged a task and then went on running that same task: **10.9% of a 4.77 MHz 8088**, and 11% of an idle `ui_task` pass | charged at `.pick`, behind `cmp dl, [sch_cur]` — **17/s, 0.18%**, and **exact**: the timestamp is good for an interval of any length, so a skipped charge rolls into the next one and the same desktop still bills **99.6%** of the elapsed window to task 0. +10 bytes of `.text`. It buys nothing with two runnable tasks (measured: 399 of 400 switches are real changes) and that is by design | §8.1.1, `tests/schacct.py` |
 | Menu save-under | 20KB claimed permanently, then 20KB per menu | sized from the rect actually dropped (~4KB VGA, ~1KB Hercules) | docs/KERNEL-MEMORY.md |
 | Covered background window | skipped the frame entirely | draws its visible region | §11.3 |
 | Copy a file | 5 volume switches per file | 2, one `dsk_read_chain` per chunk | §22.5 |
@@ -3772,7 +3776,7 @@ systematic rather than random, which is precisely what a real defect looks
 like. Crop the cell and read it before believing it.
 
 Cost: `.text` +13 bytes (the per-row saving is 2–4 bytes, the once-per-call
-setup 2–9), no rung crossed, `KERN_SIZE` unchanged.
+setup 2–9), `KERN_SIZE` unchanged.
 
 ### Set 24 — the WRITE priced on both drives, and the append penalty is real
 
@@ -3937,7 +3941,7 @@ CL and CH a row becomes a load, an `and`, an `xor` and a store.
 +0.00% because an unaligned run never reaches `font_run_cell` at all (§6.1's
 gate), and `FONT_CHAR`/`FONT_STR` are untouched code — so the change landed
 exactly where it was aimed and nowhere else. Cost: `.text` **−12** bytes,
-`.bss` **−2**, no rung crossed.
+`.bss` **−2**.
 
 **Byte-for-byte on both mono adapters**, a scripted desktop → chip menu →
 Disk-window session through each kernel: **Hercules 0 differing pixels of
@@ -3992,7 +3996,7 @@ which retires `[font_rn_si]`, `[font_rn_di]`, `[font_rn_fs]` and
 | `GFX_PIXEL` · `GFX_FILL` 8x8 / 64x64 · `GFX_SCROLL` | — | — | — | ±0.01% |
 
 Cost across both changes: `.text` 54,597 → **54,540 (−57)**, `.bss` 4,736 →
-**4,730 (−6)**. No rung crossed. **Byte-for-byte identical to the ORIGINAL
+**4,730 (−6)**. **Byte-for-byte identical to the ORIGINAL
 kernel** — the pre-§6.1.5 one, not the intermediate — over a scripted
 desktop → chip-menu → Disk-window session: CGA 0 differing pixels of 128,000
 on all three screens, Hercules 0 of 250,560 on all three. (The Disk window's
@@ -4120,7 +4124,7 @@ gives a **fixed** saving of 57.5 µs (the row counter, once a run) and **9.1 µs
 a cell**, so the percentage falls as the per-cell term dominates.
 
 **B — the trailing span as one `rep stosb`: KEPT.** +138 bytes of `.text`, +4
-of `.bss`, **no rung crossed**. It is a trade and both halves are real: −31.3%
+of `.bss`. It is a trade and both halves are real: −31.3%
 on a padded run, **+1.4% on a run with no span**, which is the fixed cost of
 deciding. Framebuffer **byte-identical** to the shipped kernel on both mono
 adapters.
@@ -5489,10 +5493,10 @@ without the change), at the even phase on VGA mode 12h and on CGA with
 42's known 25-pixel free-space difference is gone with the cluster count back
 where it was.
 
-**Cost: `.text` +148.** `kern_big` crosses no rung and is left with **63 bytes**
-in its image rung against 211, so the next byte added to `.text` anywhere buys
-a whole 512-byte step; `kern_small` crossed one (1,536 → 1,024 spare, two
-steps, still inside its own budget). `KERN_BUDGET`'s nineteenth move (+2,048,
+**Cost: `.text` +148.** `kern_big` is left with **63 bytes** in its image
+rung against 211 — 449 of that rung's 512 spent — so the next byte added to
+`.text` anywhere buys a whole 512-byte step; `kern_small` crossed one
+(1,536 → 1,024 spare, two steps, still inside its own budget). `KERN_BUDGET`'s nineteenth move (+2,048,
 granted with the eighteenth as one piece of work) is what that slack is drawn
 from.
 
@@ -5983,7 +5987,7 @@ Two things worth keeping:
   cell, `00:01` against `00:02`, which advances with wall time and landed on a
   different step on each adapter. A diff that lands in the same relative
   6x6 box on two different geometries is a clock, not a regression.
-- **It made the kernel smaller**: `.text` −18, `.cold` −4, no rung crossed,
+- **It made the kernel smaller**: `.text` −18, `.cold` −4,
   footprint unchanged. Removing a gate removes code.
 
 The cost is real and it is the one the old comment named: **8-pixel horizontal
@@ -6217,7 +6221,7 @@ column-preserving and so has to start from the column it is preserving. **The
 A/B is what caught it**: the pixels were plausible, the window looked like a
 window, and nothing errored.
 
-**Cost: `.text` +116, no rung crossed — but the image rung is down to 48 bytes
+**Cost: `.text` +116 — but the image rung is down to 48 bytes
 of slack** (164 before). The next addition to `.text` anywhere buys a whole
 sector, which is the guard working rather than this change being dear.
 
@@ -6282,7 +6286,7 @@ Emulator: MartyPC, cycle-accurate 4.77MHz 8088, `os8088_5150_cga` /
 and the second is the interesting one.
 
 **The Disk window (SPEC.md §22.11.1.1/§22.11.2, seven constants + two): 0 bytes.**
-`.text`, `.bss`, `.cold`, `.lowbss`, `.ovl` all **+0**, no rung crossed,
+`.text`, `.bss`, `.cold`, `.lowbss`, `.ovl` all **+0**,
 `KERN_BUDGET` spare unchanged at 3,072 — every one of the nine is an
 `add`/`sub reg, imm8` at both the old value and the new. What moved: the header
 pen and the status line's 6 → 8 (with their truncation constants 14 → 16 and
@@ -8005,7 +8009,7 @@ of §12.2.1 and §6.1.12 together:
 
 The fold's own contribution is the difference against Set 80's shipped column:
 the chip menu 297,362 → 244,346 and the greyed cell 112,990 → 78,078 on
-Hercules. **It costs 43 bytes of `.text` and one byte of `.bss`**, and no rung.
+Hercules. **It costs 43 bytes of `.text` and one byte of `.bss`**.
 
 #### Why it is free in the loop
 
@@ -8131,7 +8135,7 @@ Sound pages; the Date/Time page differs only in the seconds digit ticking
 between two runs. `tests/drvscroll` still passes every check, including the two
 that assert the Drivers page redraws only the row that moved.
 
-**+2 bytes of `.text`**, and no rung.
+**+2 bytes of `.text`**.
 
 #### The number under it: 24–34 ms for ONE 12x12 control
 
@@ -8872,6 +8876,18 @@ fine the first time they were measured.
 | harness | the same gesture as Sets 88–92: one window raise, two title bars, a 320-pixel window |
 | date | 2026-08-24 |
 
+> **ADDENDUM, 2026-08-26: the default went back and the knob inverted with
+> it.** The composer is `make BAND=1` now and the shipped bar is the fifteen
+> primitive calls again — SPEC.md §5.9.6 is the decision and the reason is
+> **1,634 bytes**, 1,278 of them `.cold`, on a kernel that has to be efficient
+> with size everywhere. **Not one measurement in this set or
+> in Sets 88–92, 94 and 104 is withdrawn or re-taken**: the flip is a polarity
+> in one `%ifdef`, and a `BAND=1` kernel assembled today is byte-for-byte the
+> kernel that was the default when these numbers were taken. So read every
+> `NOBAND=1` below as *the build without the composer*, which is now plain
+> `make`, and every "default (composed)" as `make BAND=1`. The A/B is the same
+> A/B; only which side you have to type has changed.
+
 `KERN_SIZE` rose three 512-byte rungs, **116,736 → 118,272** — the two
 figures in this set's own table below — and `KERN_BUDGET` was raised by the
 same three steps to cover it (docs/KERNEL-MEMORY.md move 33's +1,536 arm; the
@@ -8941,7 +8957,9 @@ tabulated.
 **−39% on the routine**, and on the calls that contain it: `gfx_fill`'s floor
 2,650 → **2,459**, `gfx_hline`'s 2,771 → **2,592**. The fifteen-call title bar
 (`NOBAND=1`) goes 40.8 → 40.3 ms; the composed one barely moves, because it
-makes few rect calls — which is the point of it.
+makes few rect calls — which is the point of it. (`NOBAND=1` was the
+composer-less build when this was taken and is plain `make` today — the
+addendum at Set 93.)
 
 #### The two that lost, and why the arithmetic said they would win
 
@@ -8995,7 +9013,7 @@ hold."* Set 92 priced the chain; this is what was left after acting on it.
 |---|---:|---:|
 | `gfx_fill`, floor | 2,650 | **2,405** |
 | `gfx_hline`, floor | 2,771 | **2,534** |
-| the fifteen-call title bar (`NOBAND=1`) | 40.8 ms | **40.0 ms** |
+| the fifteen-call title bar (`NOBAND=1`, and the DEFAULT build since §5.9.6) | 40.8 ms | **40.0 ms** |
 
 **About 9%**, for 114 bytes of `.text` and 256 of `.lowbss`, with no budget
 raised.
@@ -9030,61 +9048,21 @@ and costs the same bytes as one on a path taken per pixel run.
 `.text + .bss` is now **63,796 of 65,536 — 1,740 left**. The tightest limit in
 this kernel is no longer the one that can be negotiated.
 
-### Set 95 — how many times does anything actually cross a segment? (docs/GFX-REWORK-PLAN.md §4, SPEC.md §38.1.1)
+### Set 95 — withdrawn
 
-| | |
-|---|---|
-| machine | **MartyPC**, cycle-accurate IBM 5150/XT, 4.77 MHz 8088 |
-| adapter | `os8088_5150_herc_gla` |
-| harness | breakpoints on **all 84 `cw_` shims at once**, counted over one gesture |
-| date | 2026-08-24 |
+**Removed 2026-08-27 by the owner's decision, and nothing replaces it.** It
+counted crossings out of `.cold` over two gestures on an idle desktop and its
+conclusion — that segment crossings cost the system essentially nothing — was
+written as a general fact and cited as one, by docs/GFX-REWORK-PLAN.md §4 and
+by sessions since. Two gestures cannot establish that. A crossing cost is a
+property of the whole system under load, and the paths that would show it are
+the ones neither gesture went near.
 
-docs/GFX-REWORK-PLAN.md §4 proposes overlapping segments so that "files one
-side, graphics the other" stop far-calling each other. **The proposal has never
-been costed, and the count is the whole of the question.**
-
-| gesture | crossings out of `.cold` |
-|---|---:|
-| one window raise — two title bars, frames, shadows, dither | **3** |
-| opening a Disk window — the whole file path | **117** |
-
-**Three.** The drawing path is already inside one segment: `.text` primitives
-call `.text`, and the composer's `.cold` body calls `.cold` ops. At ~130 cycles
-a crossing that is **0.2%** of the gesture, and the two biggest of the three
-are `cw_gfx_rowbase`.
-
-The 117 on the file path are ~3.2 ms against an operation that is **floppy
-bound** — several `int 13h` at ~400 ms each — so ~0.3% of it. Twenty-six of
-them are the splash tick and twenty-six the progress widget.
-
-**So §4 would buy essentially nothing.** It stays pinned because it is the
-user's to decide, but a design agent should start from these two numbers rather
-than from the assumption that crossings are expensive because they are 130
-cycles each. They are expensive *per crossing* and there are almost none.
-
-#### What the counting did find
-
-`fdlg_reap_x` is far-called **619 times a second on an idle desktop**. It opens
-with `cmp word [fdlg_win], 0 / je`, which §11 calls "one compare per pass when
-nothing is pending" — and it is, **on the far side of a segment boundary**. The
-UI ladder was paying ~158 cycles a pass to be told there was no dialog.
-
-`[fdlg_win]` is `.text`. Moving the guard to the resident thunk takes the pass
-to ~94: **about 0.8% of the machine**, which at idle is free (nothing else
-wants the CPU) and is not free the moment a worker, a download or a game does.
-
-**The rule, which §39.3.2 is the drawing path's instance of:** a cheap test
-that decides whether to do expensive work must live on the CALLER's side of any
-boundary the call crosses — a segment, a lock, a disk. Writing the guard is not
-enough; where it sits is the whole of it.
-
-#### A harness note that cost a run
-
-Counting far ENTRIES rather than exits ran away at 19,829 hits, because
-`fdlg_reap_x` is on the idle loop and the sample outlived the gesture. **A
-count needs a bounded gesture or a bounded cycle window**, and "how many per
-second" is usually the more useful question anyway — it is the one that found
-the defect above.
+**So the question is open.** Anyone re-taking it needs a harness that samples
+across applications and workloads rather than one path at rest, and needs to
+say what it did *not* cover. The one durable finding of the original run — a
+guard sitting on the far side of the boundary it was meant to protect — is
+SPEC.md §38.1.1, measured independently there and not dependent on any of this.
 
 ### Set 96 — what an IDLE desktop costs, and the pointer that was never there (SPEC.md §7.2.1.1, §38.1.1)
 
@@ -9095,10 +9073,11 @@ the defect above.
 | harness | a breakpoint pair per symbol over a fixed cycle window — calls per second and cycles each |
 | date | 2026-08-24 |
 
-Set 95 found `fdlg_reap` far-called 619 times a second to be told there was no
-file dialog. The obvious next question is what the rest of the UI ladder costs,
-and the answer is that **an idle os8088 spends 11.6% of the machine asking
-whether there is anything to do.**
+`fdlg_reap` was found far-called 619 times a second to be told there was no
+file dialog (SPEC.md §38.1.1, which re-measured it at 610 and 87 cycles a
+call). The obvious next question is what the rest of the UI ladder costs, and
+the answer is that **an idle os8088 spends 11.6% of the machine asking whether
+there is anything to do.**
 
 #### First, the number that was wrong
 
@@ -9567,7 +9546,7 @@ fix. It is written down here rather than taken.
 |---|---|
 | machine | **MartyPC**, `os8088_5150_cga_gla` |
 | harness | `m.flicker(frames=150)` around a window RAISE, transients filtered to the title strip's rows |
-| A/B | ONE kernel, one knob: `make` against `make NOBAND=1` |
+| A/B | ONE kernel, one knob: `make` against `make NOBAND=1` — the same pair is `make BAND=1` against `make` since §5.9.6 sent the composer back to a knob (Set 93's addendum) |
 | date | 2026-08-24 |
 
 §5.9.6's claim is not a timing claim — it is that the bar is composed into a
@@ -9582,8 +9561,8 @@ Ten raises, alternating between two non-overlapping windows:
 
 | | worst transient in one frame, per raise of the WIDE window | median over all rounds | total |
 |---|---|---:|---:|
-| `NOBAND=1` — the fifteen primitive calls | 327, 141, 83, 66, 250 | 74.5 | 2,204 |
-| composed (ships) | **26, 26, 26, 26, 26** | **26.0** | 1,125 |
+| `NOBAND=1` — the fifteen primitive calls (the DEFAULT build today) | 327, 141, 83, 66, 250 | 74.5 | 2,204 |
+| composed (`BAND=1` today; it shipped when this was taken) | **26, 26, 26, 26, 26** | **26.0** | 1,125 |
 
 **The composed bar's worst frame is 26 transient pixels and it is 26 every
 time.** That is the mouse cursor being saved and restored over the strip — the
@@ -9661,12 +9640,14 @@ right trade and it is not a free one, and the new row is what shows both halves.
 | `WM_TITLE strip` | **1.316×** | the composed bar (§5.9.6) |
 | `GFX_UNLOCK+LOCK pair` | 1.029× | the cursor's three passes |
 
-**The title bar is 32% slower on VGA and ships that way.** CLAUDE.md's knob
-table already states the trade — a 1bpp band costs the same on every card while
-the primitives get VGA's planar hardware — and this is it measured on the
-harness rather than on the wall clock: 124,684 counts to 164,029. Set 104 is
-the other side of the trade, and it is what the 32% buys. `NOBAND=1` is the
-A/B if it is ever re-decided.
+**The title bar is 32% slower on VGA**, and it shipped that way for the cycle
+in which the composer was the default. CLAUDE.md's knob table states the trade
+— a 1bpp band costs the same on every card while the primitives get VGA's
+planar hardware — and this is it measured on the harness rather than on the
+wall clock: 124,684 counts to 164,029. Set 104 is the other side of the trade,
+and it is what the 32% buys. It HAS been re-decided since, on bytes rather
+than on either of these numbers (SPEC.md §5.9.6): the composed bar is
+`make BAND=1` and this measurement is what a build that types it is choosing.
 
 #### …and the ladder work lands the same on both (P3/P2)
 
@@ -9985,3 +9966,269 @@ picture above the beam and the previous one below it. **The planes read back
 exactly right the whole time.** `tests/blitp.py` reads them rather than the
 rendered frame, and docs/MARTYPC-DEBUG.md now carries the trap beside the
 Hercules offset it sits next to.
+
+### Set 109 — what the segment machinery COSTS, in bytes and in cycles (SPEC.md §2.6, §2.6.1, docs/GFX-REWORK-PLAN.md §4)
+
+| | |
+|---|---|
+| machine | **MartyPC**, cycle-accurate IBM 5150/XT, 4.77 MHz 8088 |
+| adapter | `os8088_5150_herc_gla` |
+| harness | breakpoint pairs on thunk / pad / body, cycle deltas; plus a static byte census off the `[map all]` symbol map and the NASM listing |
+| date | 2026-08-27 |
+
+**Set 95 asked how OFTEN anything crosses and answered it from two gestures.
+That set is withdrawn.** This one asks the two questions a static instrument
+can answer completely: what does a crossing cost *per crossing*, and how many
+bytes does the whole mechanism occupy. Neither is a frequency claim and
+neither should be read as one.
+
+#### The shapes, measured
+
+Two shapes ship side by side (§2.6.1): a `.text` thunk that far-calls a
+`.cold` **pad** which near-calls the body, and a thunk that far-calls a body
+ending in `retf`. Bracketing thunk-entry to body-entry on one of each prices
+the far call, and their difference prices the near call the pad adds.
+
+| leg | measured |
+|---|---:|
+| `files_init` → `files_init_x` — the far call alone | **54 cycles** |
+| `xm_boot` → `xmf_xm_boot` — the same, a different site | **55 cycles** |
+| `xmf_xm_boot` → `xm_boot_x` — the near call a pad adds | **30 cycles** |
+
+The far call agreeing to a cycle across two unrelated sites is the useful
+part: it is not sensitive to prefetch state at this granularity. These are
+**inbound legs only** — the far return and the near return are on the way
+back, and §2.6.1 measured the pad's full pair independently at **67 cycles**,
+which the 30 above is consistent with.
+
+#### The bytes, censused
+
+Every stub identified by its opcode bytes rather than its name, every call
+site decoded from the emitted displacement rather than read out of the source
+— a source scan cannot see a macro argument, and `OSAPI_SLOT`'s body is
+`call %1`, so 151 API cells resolve to a routine called `%1`.
+
+| | n | bytes | where |
+|---|---:|---:|---|
+| free-standing far-call sites, +2 bytes each over a near call | 311 | 622 | `.text` 61 / `.cold` 217 / `.ovl` 33 |
+| `.cold` inbound landing pads | 107 | 430 | `.cold` |
+| `mod.inc` loader + `mod_fp` (§2.8) | — | 464 | `.cold` 314 / `.text` 54 / `.bss` 96 |
+| resident in-thunks — `call far COLD_SEG:x` / `ret` | 64 | 384 | `.text` |
+| `cw_*` out-shims — `call near x` / `retf` | 92 | 367 | `.text` |
+| `ovw_*` out-shim + `.ovl` inbound pads | 8 | 32 | `.text` 4 / `.ovl` 28 |
+| `OVLCALL` sites (§2.5.1), +7 each over a near call | 4 | 28 | `.text` 3 / `.cold` 1 |
+| module entry pads + far-call sites + `mod_fp` dispatch | 156 | 328 | in the `.DRV` files |
+
+**2,655 bytes emitted, of which 2,245 are resident** — `.ovl`'s 94 are
+transient (§2.5.1; a heap claim when this was taken, stage 2's blob since
+§2.9.6), and 316 are in the module
+images. That is **1.90% of `KERN_SIZE`**, spread **952 in `.text` (1.66%)**,
+**1,197 in `.cold` (3.10%)** and 96 in `.bss`, across **391 crossing sites**.
+Those are the figures AFTER the thunk sweep below; before it, 2,363 resident
+and 1,087 in `.text`.
+
+**`OVLCALL` is the newest shape and the most expensive per site.** Since
+§2.5.1 the overlay is not at a constant segment, so an entry cannot be an
+immediate far call: `mov word [spl_fp], x` + `call far [spl_fp]` is **ten
+bytes against a near call's three**. Four sites survived the shipped build's
+`%ifdef`s when this was taken — three in `.text`, one in `.cold` — and the
+shape is bounded by how many entries have to outlive the mount, not by
+anything this set can shave.
+
+> **Since measured (§2.9.6).** The overlay moved out of the heap claim and into
+> stage 2's blob, which deleted `ovl_relocate` (−108 `.ovl`) and the second far
+> pointer, and converted the three remaining immediate `call FAT_SEG:` sites to
+> `OVLCALL` — so the table's four sites are **seven** now, +15 bytes of `.text`,
+> and `.ovl`'s 94 bytes above are transient in the blob rather than in a claim.
+> The rest of the set stands.
+
+**The distribution is what decides every proposal**, and it is lopsided in
+opposite directions. Out of `.cold` into `.text`: 111 targets, 317 sites, but
+63 targets have exactly one site and 22 targets carry 191 of them. Into
+`.cold` from `.text`: 114 targets, 115 sites — **essentially every one is
+unique**, which is why the thunk-per-target shape is close to worst-case
+there.
+
+#### Three ways to spend less. One was taken, one deferred, one does not exist
+
+| | bytes | where they land | cycles | |
+|---|---:|---|---|---|
+| **delete unpinned low-fanout thunks** — a thunk costs `6 + 3N`, a direct far call to its own far target costs `5N`, so the thunk only pays from N ≥ 4 | **−160** | `.text` | faster: one call level goes at every site | **TAKEN** |
+| **trampolines** — a near-callable `call far cw_Y / ret` in `.cold` per high-fanout target, sites drop 5 → 3 bytes | −250 | `.cold` | **+67 a crossing, on 191 sites** | **deferred** |
+| **move misplaced bodies into `.cold`** | — | — | — | **no such measure** |
+
+**All 250 of the trampoline's bytes are real bytes.** They land in `.cold`
+rather than `.text`, which decides where their 512 eventually comes from and
+nothing else — CLAUDE.md's rung rule refuses *"it saves 500 and uncrosses no
+rung, so it buys nothing"* in as many words, and the ledger in
+docs/KERNEL-MEMORY.md is 35 moves long with no slack ever unspent. So the
+only thing wrong with the trampoline is the **cycles**: the near call it adds
+at every site is the exact pair §2.6.1 deleted 84 of, for this reason,
+measured at 67. **Any report that it costs no performance is describing the
+instruction sequence, not the cost** — the error this document already has a
+paragraph about, one section over.
+
+**And whether 67 cycles matters is a FREQUENCY question, which is exactly
+what this set cannot answer.** 67 cycles on a crossing taken at tick rate
+(18.2 Hz) is 1,219 cycles a second out of 4.77 million — 0.03%, and the 250
+bytes are worth having. The same 67 on a per-cell or per-run path is not.
+Withdrawing Set 95 removed the only frequency data there was, and it deserved
+withdrawing; **the trampoline is therefore deferred, not refused**, and what
+un-defers it is a rate for those 191 sites taken by a harness that samples
+under load. Owner's decision, 2026-08-27.
+
+#### The thunk sweep, taken: 43 thunks, −160 bytes of `.text`
+
+Each deletion is one edit with no code moved: the call site far-calls the
+thunk's **own** far target, which already has the right return discipline
+because the thunk was far-calling it. 43 thunks went, 49 call sites grew from
+three bytes to five, and `.text` fell **57,505 → 57,345**. It is also faster
+everywhere it applies — a near call and a near return come off each of those
+49 sites, and nothing is added.
+
+Three things decided which 43, and each of them refused candidates a call
+scan alone would have taken:
+
+- **A `mov ax, cp_onup` is a reference.** Window callbacks are registered by
+  address and dispatched through `wm_pkgcall`; twelve thunks looked dead to a
+  scan that only counted calls, and files.inc's own comment at the
+  registration says *"THE RESIDENT THUNK, not the body"*.
+- **A tail `jmp` is a reference**, and it cannot become a far call: the
+  jumper pushed no far frame. `jmp dskw_dfree` is one.
+- **A quoted name in a host script is a reference**; a name in a driver's
+  prose is not. Fifteen candidates were held back for naming outside
+  `kernel/` and then released — every one was a comment, a `/* */` block, or
+  a same-named local label in a standalone host test. The distinction worth
+  keeping is *quoted in a `.py` that calls `os88sym`*, not *appears in a
+  file*.
+
+#### The third measure does not exist, and the reason is worth more than it was
+
+An earlier pass here costed *"move 8 misplaced bodies into `.cold`"* at −82
+bytes on the model `delta = 6 − 2X`, X being the crossings into the body.
+**Both halves were wrong.**
+
+- **A crossing from a module or the overlay is not convertible.** `.modc`,
+  `.modf` and `.modl` are loaded at a heap address and `.ovl` runs at
+  `FAT_SEG`; none of them can near-call `.cold` any more than it can
+  near-call `.text`, so moving the target changes `call KERNEL_SEG:cw_Y`
+  into `call COLD_SEG:Yf_Y` and saves **nothing**. Only `.cold`-origin
+  crossings convert. `clk_tobcd` looked like the best candidate in the tree
+  at 14 crossings; **all 14 are in `clockw.inc`, which `ctrl.inc` `%include`s
+  into `.modc`**, so its true score is zero.
+- **The cadence rule was not applied**, and §2.6's criterion for what may go
+  cold is the cadence of the path, not the size of the win. Re-scored on
+  `.cold`-origin crossings alone, the four candidates left with a positive
+  number are the four that fail it anyway: `wm_content` and `gfx_pen_cf` are
+  reached from an **OSAPI cell**, whose body near-calls its argument, so the
+  target must be resident; `font_run` and `icon_draw` are drawing paths.
+  `font_width` fails for a third reason — `font_width_x` is already a
+  *different* routine (§20.1's ES:SI entry), so the `_x` convention has
+  nowhere to put the body.
+
+What is left after both corrections is `gfx_lock` (+22), `gfx_unlock` (+22)
+and `gfx_fill` (+20) — and those have **47, 46 and 31 resident callers**
+against 14, 14 and 13 crossings, so moving them would create twice the
+crossings it removed, on the drawing path. **Zero candidates.** The `.text` /
+`.cold` split is already placed correctly by caller mix, which is a real
+finding and the opposite of what the first pass reported.
+
+#### One dead entry
+
+`dsk_get_dir` is a resident thunk that nothing calls, nothing tail-jumps to,
+no table names and no API cell reaches — six bytes of `.text`, four of `.cold`
+in `dkf_dsk_get_dir`, and whatever `dsk_get_dir_x` is worth behind them. It is
+the same class as the eleven the previous sweep found.
+
+#### What this set does NOT establish
+
+**Nothing about how often anything crosses**, and therefore nothing about what
+crossings cost the system as a whole. A per-crossing cycle count multiplied by
+a guess at a rate is a guess. The byte figures are exact for this build and
+for no other.
+
+
+### Set 110 — what apps.inc going cold cost Bounce, paired frame for frame (SPEC.md §2.6, §14)
+
+| | |
+|---|---|
+| machine | **MartyPC**, cycle-accurate IBM 5150/XT, 4.77 MHz 8088, `os8088_5150_cga_gla` |
+| harness | `tests/bouncecost.py` — exec breakpoints on the loop body's two ends, cycle deltas, two kernels |
+| date | 2026-08-27 |
+
+Set 109 priced a crossing and said, in its own last paragraph, that it could
+say nothing about how often anything crosses. This is one case where the rate
+is knowable exactly, because the code is a loop with a fixed body: **a visible
+Bounce frame makes eight crossings** — `gfx_lock`, `wm_clip_set`,
+`gfx_unlock`, and `wm_content` + `gfx_fill` inside each of `app_ball_fill` and
+`app_ball_wipe`.
+
+#### The bracket
+
+`app_bounce_task` sleeps at the top of its loop, so `.loop` to `.loop` is a
+110 ms period of which ~108 ms is the sleep — the work under test would be 2%
+of the number. The bracket therefore runs from **the instruction the sleep
+returns to** to the next `.loop`: the die check, the lock, the `W_FLAGS`
+test, `wm_clip_set`, `app_ball_step`, `app_ball_fill`, `app_ball_wipe` and
+`gfx_unlock`. `task_sleep`'s own crossing straddles the sleep and is outside
+it, which is why eight and not nine.
+
+That first address is **decoded rather than computed**: it is `.loop + 3 +
+len(call)`, and the call is three bytes near or five bytes far depending on
+which side of §2.6 the module is on. Reading the opcode — `E8` near, `9A` far
+— lets one script measure both kernels and print which one it is looking at.
+
+#### Frames are PAIRED, because the spread is work
+
+A first run reported 20,336 to 23,534 cycles over 24 samples and it would
+have been easy to call that noise and take a mean. It is not noise:
+`app_ball_wipe` draws a column strip and a row strip whose areas follow the
+step, and a bounce shortens the step at the wall. **Different frames
+legitimately cost different amounts, and a mean over them answers a question
+nobody asked.**
+
+The trajectory is deterministic from `app_bounce_kinit`'s (4,4) and (3,2), so
+the ball's `(x, y, vx, vy)` names a frame's work in any build. Recording it
+with each sample makes two runs a paired comparison. Two things had to be got
+right for that to work:
+
+- **The seed is WRITTEN.** The path's cycle is ~93 frames in x and 111 in y,
+  so forty consecutive frames taken from wherever the first breakpoint landed
+  overlap the other run's forty essentially never — measured, on the first
+  attempt: **zero keys in common**. Writing (4,4,3,2) at the bracket's start
+  puts both walks at the same place. The frame stays self-consistent because
+  the bracket opens *before* the task banks CX/DX from `BAL_X`/`BAL_Y`.
+- **The gesture is retried.** The boot gate watches the desktop and §9.4.1's
+  ~596 ms identify window is not part of it, so the first press after a boot
+  can land before the mouse is listening — and *whether it does* depends on
+  how the kernel's size moved the boot around. That read as a difference
+  between two kernels twice running, on code neither had changed.
+  `app_bounce_kinit` is armed before the press now, so what is waited on is
+  the launch rather than a duration.
+
+#### Measured
+
+| | `.text` (baseline) | `.cold` | delta |
+|---|---:|---:|---:|
+| cheapest frame | 19,627 | 20,334 | +707 |
+| median frame | 21,840 | 22,542 | +702 |
+| dearest frame | 22,800 | 23,534 | +734 |
+| **mean over 40 paired frames** | | | **+712** |
+
+**40 of 40 frames matched and every one of them is slower**, in a band of
+662 to 772 cycles. That consistency is the result: it is eight crossings and
+nothing else, and **712 / 8 = 89 cycles a crossing** — which is what Set 109's
+54-cycle far call plus the shim's own near call and the two returns predict,
+arrived at from the other end.
+
+In time: **149 µs a frame** at 4.77 MHz. A Bounce frame goes from 4.11–4.78 ms
+to 4.26–4.93 ms, **+3.4%** of its own work; against its 109.9 ms period, one
+live Bounce goes from 3.74–4.35% of the machine to 3.88–4.49%, **+0.14
+points**. Its frame RATE cannot move at all — `task_sleep` sets the period,
+and the work is nowhere near filling it.
+
+**What this does not say**: Bounce is the fastest-waking of the three kinds
+and the only one that draws every frame, so it is the worst case in `apps.inc`
+and was chosen for that. The Timer wakes at 9 ticks and redraws only the
+digit cells that changed; About draws on repaint alone. Neither was measured,
+and neither is claimed.

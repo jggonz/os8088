@@ -69,17 +69,18 @@ KERNEL_SEG   equ 0x0060
 STACK_TOP    equ 0x7C00
 BOOT_STACK   equ 2048
 RELOC_ADJ    equ 0x07E0         ; boot/boot.asm's, and for its reasons
-SPLASH_OFF   equ 0x0008
-SPL_RESIDENT equ 9              ; THE THIRD MIRROR of this constant, and the
-                                ; one no assertion can see: splash.inc's
-                                ; %if compares the module against the value
-                                ; IT holds, and boot/boot.asm's copy is the
-                                ; one anybody raising it notices. Left behind
-                                ; at 7 this sector ticks the splash a sector
-                                ; EARLY - into a module that is not aboard -
-                                ; which is precisely the failure that
-                                ; assertion exists to prevent, on the one
-                                ; path it cannot check. Raise all three.
+; SPLASH_OFF and SPL_RESIDENT WERE HERE, and SPEC.md 2.9.9 is why they are not.
+; This sector used to tick the loading screen itself, through a far entry
+; pinned at KERNEL_SEG:0008. SPEC.md 2.9.4 moved that screen out of `.text`
+; into stage 2's BLOB, so the offset is now the middle of an instruction -
+; and the blob belongs at the heap's floor rather than at KERNEL_SEG.
+;
+; So this sector does what stage 2's handover does and nothing more: it loads
+; the blob to HEAP_SEG, publishes the segment in [spl_fseg], and lets the
+; KERNEL make the first call. Three constants come from the kernel's own build
+; rather than being written here, the way KERNEL_SECTORS always has - BLOB_SEG,
+; SPL_FSEG and BOOT2_SECS - because every one of them is a thing this file
+; cannot know and must not guess.
 
 BPB_END      equ 62
 
@@ -212,31 +213,25 @@ entry:
     adc si, 0
     add bx, [bpb_hidd]          ; ...and the partition base
     adc si, [bpb_hidd+2]
-    mov [lba], bx
+    mov [lba], bx               ; ...the FIRST sector of KERNEL.SYS, which is
+                                ; the blob's, not `.text`'s: the two passes
+                                ; below read the file straight through and
+                                ; [lba] carries from one to the other
     mov [lba+2], si
+
+    ; --- PASS 1: the blob, to the heap's floor (SPEC.md 2.9.5, 2.9.9) -------
+    ; It is the first BOOT2_SECS sectors of the file and it is where the
+    ; loading screen AND the boot overlay live, so a kernel that does not get
+    ; it boots with no clock, no font, no SYSTEM.CFG and no drivers - looking,
+    ; from the outside, like a machine that works.
+    mov ax, BOOT2_SECS          ; AX = sectors, DX = where. In REGISTERS,
+    mov dx, BLOB_SEG            ; because two `mov word [mem], imm` a pass is
+    call load_all               ; six bytes this sector has not got
+    ; --- PASS 2: `.text` onward, to KERNEL_SEG, which [lba] already names ---
     mov ax, [ksecs]
-    mov [left], ax
-
-.load_next:
-    mov es, [dest_seg]
-    xor bx, bx
-    call read_run               ; AX = sectors this call actually moved
-    add [lba], ax
-    adc word [lba+2], 0
-    sub [left], ax
-    mov cl, 5
-    shl ax, cl
-    add [dest_seg], ax
-
-    mov ax, [ksecs]             ; sectors DONE, derived rather than counted:
-    sub ax, [left]              ; one fewer word of state, and this sector
-    cmp ax, SPL_RESIDENT        ; has none to spare
-    jb .no_tick
-    mov dx, [ksecs]
-    call KERNEL_SEG:SPLASH_OFF
-.no_tick:
-    cmp word [left], 0
-    jne .load_next
+    sub ax, BOOT2_SECS
+    mov dx, KERNEL_SEG
+    call load_all
 
     ; --- hand off -----------------------------------------------------------
     ; DL is the BIOS drive and BX:CX the partition base, which is what the
@@ -245,10 +240,39 @@ entry:
     mov ax, KERNEL_SEG
     mov es, ax
     mov [es:0x000C], bp         ; the boot timer, AFTER the load
+    mov ax, BLOB_SEG            ; ...and WHERE THE BLOB IS, which is stage 2's
+    mov [es:SPL_FSEG], ax       ; own last act before its jump and is what
+                                ; unguards every SPLCALL in the kernel (SPEC.md
+                                ; 2.9.5.3). The kernel makes the first call,
+                                ; draws its own loading screen and gives these
+                                ; bytes back at spl_finish. Through AX because
+                                ; `mov word [es:mem], imm` is a byte dearer and
+                                ; AX is dead the instant ES is loaded
     mov dl, [boot_drive]
     mov bx, [bpb_hidd]
     mov cx, [bpb_hidd+2]
     jmp KERNEL_SEG:0x0000
+
+; -----------------------------------------------------------------------------
+; load_all - read [left] sectors from [lba] to [dest_seg], as many runs as it
+;            takes. Both passes above are this, and [lba] carries across them
+;            because the blob and `.text` are consecutive in the file.
+; -----------------------------------------------------------------------------
+load_all:
+    mov [left], ax
+    mov [dest_seg], dx
+.run:
+    mov es, [dest_seg]          ; (BX is read_run's own business - it zeroes it
+    call read_run               ; itself at every attempt)
+    add [lba], ax               ; AX = sectors this call actually moved
+    adc word [lba+2], 0
+    mov cl, 5
+    shl ax, cl                  ; ...32 paragraphs a sector, so the destination
+    add [dest_seg], ax          ; follows the run...
+    shr ax, cl                  ; ...and back to SECTORS, which costs two bytes
+    sub [left], ax              ; against the five a `cmp word [left], 0` does:
+    jnz .run                    ; this way the subtract's own ZF is the test
+    ret
 
 ; -----------------------------------------------------------------------------
 ; read_run - read as many sectors from [lba] to ES:0000 as one int 13h may
@@ -279,12 +303,13 @@ read_run:
     shr ax, cl
     cmp ax, di
     jae .have
-    or ax, ax
-    jz .one
-    mov di, ax
-    jmp short .have
-.one:
-    mov di, 1
+    mov di, ax                  ; ...and NEVER ZERO, which used to need a
+                                ; branch: every destination here is 512-ALIGNED
+                                ; (both passes start on a 32-paragraph boundary
+                                ; and advance 32 a sector), so the remainder is
+                                ; a multiple of 512 and the shift can only
+                                ; reach 0 from an AX the `jz` above has taken.
+                                ; boot/boot2.asm's read_run says the same
 .have:
     mov [run], di
     mov si, 3

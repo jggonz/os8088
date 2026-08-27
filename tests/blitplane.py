@@ -24,6 +24,26 @@ phase - every drag this harness can make lands it on x = 7 (mod 8), so the
 canvas is always even - so W_X is written directly and the window raised,
 which is the only way this side of the routine is entered at all.
 
+AND BOTH PHASES SIT OFF THE BYTE GRID, which is not a detail: since SPEC.md
+42.13 Paint's canvas is FOUR PLANES on a colour adapter and repaints through
+gfx_blitp, so a window on the grid does not call gfx_blit4 AT ALL. The packed
+path is still live and still the field's - pt_blit falls back to it whenever
+gfx_blitp refuses, and an origin off the byte grid is one of the refusals -
+so the window is put at x-1 (odd, and the refusal that converts the canvas
+once) and then at x+2 (even, and still 2 mod 8 so the probe at SPEC.md
+5.4.3.2 keeps saying no). Put it back on the grid between the two and
+pt_toplanar undoes the whole thing.
+
+WHAT THAT COST, because it is the reason this file was rewritten: for a
+release after 42.13 landed, the even phase measured NOTHING. It did not fail
+either. `_bracket` waited 300 wall seconds - about twenty guest minutes at
+this host's rate - for a gfx_blit4 that was never coming, the idle screen
+saver came up at five, the breakpoint caught one of ITS shapes (16x8 at
+(162,377)), and the settle after that could never return because the saver
+animates. The reported error was "the machine never finished booting". The
+bound in `_bracket` is under the saver's idle period now, so a scene that
+stops reaching the primitive says so in 45 seconds instead.
+
 The apps disk is built here for the same reason tests/paintgif.py builds its
 own: the Open dialog then comes up on B:\\MEDIA with the GIF the only thing in
 it, and the association (SPEC.md 54) launches Paint with the picture already
@@ -59,6 +79,20 @@ def shots(image, apps, machine, defines):
     with os88marty.launch(image, apps=apps, machine=machine, boot=False) as m:
         m.run()
         os88marty.settle(m, gate=os88marty.desktop_up)
+        # SPEC.md 79's SAVER IS LEFT ON, DELIBERATELY. It came up in the
+        # middle of this gate once and broke it twice over - it ANIMATES, so
+        # the settles waited out their whole limit, and it BLITS, so the
+        # gfx_blit4 breakpoint caught a wandering saver shape (16x8 at
+        # (162,377)) instead of the 466x110 canvas. os88marty.no_saver(m)
+        # would have hidden both.
+        #
+        # But the saver was the SYMPTOM. Five guest minutes of no input is not
+        # something a scripted session should be able to reach, and this one
+        # reached it in `_bracket`, which waited 300 WALL seconds - about
+        # twenty guest minutes here - for a blit that could never come once
+        # SPEC.md 42.13 made Paint's canvas planar. The bound there is the fix
+        # and it is under the idle period on purpose; leaving the saver armed
+        # is what keeps this gate able to notice if that ever stops being true.
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")
         disk = dispcp.win_list(m, S)[-1]
@@ -74,33 +108,56 @@ def shots(image, apps, machine, defines):
         mo.to(rx, ry)
         os88marty.settle(m)
 
-        # --- the canvas at its natural (even) x, bracketed entry to return
-        m.bp_exec("gfx_blit4")
+        # --- open it, and DO NOT measure this repaint (SPEC.md 42.13.1) ------
+        # Paint's canvas is FOUR PLANES now, and a planar canvas repaints
+        # through OSAPI_GFX_BLITP - so on a VGA machine with the window on the
+        # byte grid, opening a picture does not call gfx_blit4 at all and this
+        # gate measured nothing. It did not fail, either: it stopped at
+        # whatever gfx_blit4 ran next, which for a while was the SCREEN SAVER's
+        # shapes.
+        #
+        # The packed path is still live and still the field's - pt_blit falls
+        # back to it whenever gfx_blitp refuses (a 1bpp adapter, an origin off
+        # the byte grid, a straddled seam), and pt_topacked then converts the
+        # canvas ONCE and every repaint after it is an OSAPI_GFX_BLIT4. So the
+        # ODD phase is measured FIRST: nudging W_X off the byte grid is what
+        # provokes the refusal, so it both selects the rcr pass and is what
+        # puts Paint into the mode the rest of this gate needs.
         mo.dblclick(rx, ry)
-        cyc_even, geom = _bracket(m, kbase)
-        m.bp_exec()
-        m.run()
+        time.sleep(6)
         os88marty.settle(m)
-        out.append(m.fbuf(card=0)[2])
-
-        # --- ...and one pixel over, which is the rcr pass
         pw = [w for w in dispcp.win_list(m, S) if w != disk][-1]
         px, py, pwid, _ = dispcp.win_rect(m, S, pw)
-        m.pause()
-        m.write(S("wm_wins") + pw * dispcp.WIN_SIZE + 2,
-                (px - 1).to_bytes(2, "little"))
-        m.run()
         dx, dy = dispcp.win_rect(m, S, disk)[:2]
-        mo.click(dx + 60, dy + 9)                    # ...behind the disk
-        time.sleep(4)
-        m.bp_exec("gfx_blit4")
-        mo.click(px - 1 + pwid // 2, py + TITLE_H // 2)   # ...and back in front
-        cyc_odd, geom2 = _bracket(m, kbase)
-        m.bp_exec()
-        m.run()
-        os88marty.settle(m)
-        out.append(m.fbuf(card=0)[2])
-    return out[0], out[1], cyc_even, cyc_odd, geom, geom2
+
+        def repaint_at(x):
+            """Put the window at x and force a full canvas repaint there."""
+            m.pause()
+            m.write(S("wm_wins") + pw * dispcp.WIN_SIZE + 2,
+                    x.to_bytes(2, "little"))
+            m.run()
+            mo.click(dx + 60, dy + 9)                # behind the disk window
+            time.sleep(4)
+            m.bp_exec("gfx_blit4")
+            mo.click(x + pwid // 2, py + TITLE_H // 2)      # ...and in front
+            cyc, g = _bracket(m, kbase)
+            m.bp_exec()
+            m.run()
+            os88marty.settle(m)
+            return cyc, g, m.fbuf(card=0)[2]
+
+        # --- one pixel over, which is the rcr pass AND the refusal ----------
+        cyc_odd, geom2, f_odd = repaint_at(px - 1)
+        # --- ...and an EVEN x that is still OFF THE BYTE GRID.
+        # Not `px`, which is where this first went: pt_blit re-ASKS on every
+        # repaint whether the planes would be taken (SPEC.md 5.4.3.2's probe),
+        # so putting the window back on the grid calls pt_toplanar and the
+        # canvas is four planes again - gfx_blit4 is then not called at all and
+        # the phase measures nothing. px+2 is even, so the destination x is
+        # even and this is the decoder's straight pass, and it is 2 (mod 8), so
+        # the probe keeps saying no and the canvas stays packed.
+        cyc_even, geom, f_even = repaint_at(px + 2)
+    return f_even, f_odd, cyc_even, cyc_odd, geom, geom2
 
 
 def _bracket(m, kbase):
@@ -110,8 +167,22 @@ def _bracket(m, kbase):
     has no exit symbol of its own, and a settle-shaped measurement would be
     reporting the harness's quiet window rather than the primitive.
     """
-    if not m.wait_stop(limit=300.0):
-        sys.exit("blitplane: gfx_blit4 never ran")
+    # THE LIMIT IS UNDER THE SCREEN SAVER'S IDLE PERIOD, and that is the
+    # point of the number. The blit being waited for happens within a couple
+    # of guest seconds of the click; a limit long enough to sit through five
+    # GUEST minutes with no input is not patience, it is a way of turning "the
+    # caller no longer calls this primitive" into a twenty-minute free run.
+    # That is exactly what happened when SPEC.md 42.13 made Paint's canvas
+    # planar: 300s here is ~20 guest minutes at this host's rate, the saver
+    # came up at five, and the breakpoint finally caught one of ITS shapes -
+    # so the gate reported a 16x8 blit at (162,377) and then waited out a
+    # settle that could never return, and none of it named the cause.
+    if not m.wait_stop(limit=45.0):
+        sys.exit("blitplane: gfx_blit4 never ran within 45s of the click.\n"
+                 "  The primitive is not being reached at all - check that "
+                 "Paint's canvas is still PACKED here (SPEC.md 42.13.1: a "
+                 "planar canvas repaints through gfx_blitp instead), which is "
+                 "what putting the window off the byte grid is for.")
     r = m.regs()
     ret = u16(m.read((r["ss"] << 4) + r["sp"], 2))
     print("      blit x=%d y=%d w=%d h=%d" % (r["ax"], r["bx"], r["cx"],
@@ -119,7 +190,7 @@ def _bracket(m, kbase):
     m.bp_exec(kbase + ret)
     c0 = m.status()["cycles"]
     m.run()
-    if not m.wait_stop(limit=600.0):
+    if not m.wait_stop(limit=120.0):
         sys.exit("blitplane: gfx_blit4 never returned")
     return (m.status()["cycles"] - c0,
             (r["ax"], r["bx"], r["cx"], r["dx"]))

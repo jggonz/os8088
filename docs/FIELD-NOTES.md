@@ -1694,7 +1694,7 @@ the configuration it exists for, an internal drive plus a 4865 on the 37-pin
 connector. It is **one five-byte row per unit** now, with `probe ran` a bitmap
 (bit n = unit n was asked) and a unit printed only if its bit is set — so a
 correctly-switched two-drive machine still reads five short rows and not
-twenty. Ten bytes of `.text`, sixteen of `.ovl`, no rung crossed. Verified on
+twenty. Ten bytes of `.text`, sixteen of `.ovl`. Verified on
 `os8088_5150_cga_ext720`: `claimed 4`, `probe ran 0E`, three rows whose `ST3`
 reads `79`, `7A`, `7B` — the low two bits being the unit, which is what says
 each row is about the drive it names.
@@ -1790,7 +1790,7 @@ one left inside `B:\APPS` — the sibling's `FS_CWD` goes 2 → 0 with the
 re-list debt set, its caption comes back as `Disk`, and raising it lists the
 new root. The 720K/360K gate (§18.96.2) still passes both legs.
 
-Cost: `.text` +24, `.cold` +152, **no rung crossed** and footprint unchanged
+Cost: `.text` +24, `.cold` +152
 — but `kern_big`'s cold rung has 107 bytes left in it afterwards, so the next
 cold addition buys a whole 512. `kern_small` is untouched: the formatter is
 `kern_big` only (§18.96).
@@ -4167,3 +4167,257 @@ The first investigation had a counter and no picture; this one needed both.
 - **A stale comment was the confession.** Three places in the tree said
   `WM_SHOW/HIDE/FRONT` take the lock themselves. All three were written by
   someone who had checked the *contract* and not the code.
+
+## 35. A boot that reached the desktop with a corrupt kernel — 86Box XT, 360KB
+
+**The reader's opening line was five words and a number, and the number was the
+whole of the diagnosis:**
+
+> *"I'm getting corruption in the middle of the boot; weirdly, 44%, in the
+> middle of the long read."*
+
+What followed was six rounds against one machine, four defects, and three of
+them were introduced by the branch that was being tested. Every one of the four
+is **invisible to every instrument in this tree**, and each is invisible for a
+different reason — which is why this note is worth its length. The four are, in
+the order they were peeled off:
+
+| | what it was | why nothing here saw it |
+|---|---|---|
+| 35.2 | the splash bar parked at 44% | no gate had ever watched the bar MOVE |
+| 35.3 | the VGA framebuffer never cleared | every BIOS in this tree clears mode 12h |
+| 35.4 | a retired far pointer, called | the call site is post-desktop and every boot row stops at the first frame |
+| 35.5 | stage 1's read lost sector 9 of a track | the IBM XT ROM says EOT=8; nothing else does |
+| 35.7 | the kernel load's run bound was 0x2000 | SPEC.md §18.93's reload rescues it and the desktop comes up |
+
+### 35.1 The machine
+
+86Box 6.0 build 9001, `machine = ibmxt86` — the October 1982 IBM XT ROM — with
+the 8088 at 10 MHz, `mem_size = 640`, `gfxcard = vga`,
+`hdc_1 = st506_xt_st11_m` behind a 20MB ST-225 image, `sndcard = sb2.0`,
+`net_01_card = novell_ne1k`, `mouse_type = msserial`, and two 360KB floppy
+drives. The reader supplied the ROM and the `86box.cfg`, and both mattered:
+§35.5 is a property of that ROM and of no other in this project's reach.
+
+**The branch under test was `splash-evict`** — SPEC.md §2.9.4–§2.9.7, which
+moves the loading screen out of `.text` into a 13-sector blob at the front of
+the image, relocates that blob to the heap's floor, and gives the memory back
+after `spl_finish`. Three of the four defects are that work's.
+
+### 35.2 44%, and why the fraction was the answer
+
+The bar stopped at 44% and stayed there for the rest of the load. 96/214 is
+44.86%, and 96 is 0x60 — **`KERNEL_SEG`**.
+
+`spl_tick` takes the sectors loaded in `AX`. Moving the loading screen into
+`.boot2` put a `mov ds, KERNEL_SEG` in front of the first use of it, and an 8086
+has no `mov ds, imm`: the segment goes through a general register, and the
+register it went through was the argument. `[spl_done]` was 0x60 on every tick.
+
+**The number on the glass was a register.** Nothing else about the boot was
+wrong, and the machine came up.
+
+`tests/splashbar.py` is the gate that did not exist: it samples `[spl_done]` and
+the **lit width of the trough** a frame at a time, and asserts both take many
+values and grow. Reintroduce the defect and it prints *"it parked at 96/214 =
+44%"*.
+
+### 35.3 The Hercules run had the freeze and NOT the corruption
+
+> *"Same freeze on hercules as well, without the corruption."*
+
+Two separate defects, separated by one sentence from the reader. The freeze is
+§35.2 on both cards; the *corruption* — banded dashes behind the loading dialog
+with the title text speckled — is VGA's alone, and it is not corruption at all.
+
+`vid_setmode` set mode 12h through the ROM and trusted the ROM to clear the
+framebuffer. Every BIOS in **this** tree does. The IBM XT ROM sets 12h through
+the VGA card's own option ROM, and what is left in plane 2 afterwards is the
+**mode 3 character generator** — which is bitmap the instant the card is in 12h.
+The loading screen was drawn on top of a font.
+
+SPEC.md §39.23 is the fix (the VGA arm clears A0000 itself, Map Mask all four
+planes) and `VGADIRTY=1` is the bracket: it fills the framebuffer with 0xDB in
+the one window a machine cannot — after the ROM's mode set and before ours.
+`tests/vgadirty.py` fails with **189,952 surviving pixels** if the clear comes
+out.
+
+**And the knob was wired to nothing for its first two runs.** `VGADIRTY` went
+into `$(KNOBS)` and not into `$(VIDSTAMP)`, so `make VGADIRTY=1` said *"up to
+date"* and the test read a kernel nobody had built. A stamp-tracked knob is two
+lists, and the second one is the one that is easy to forget.
+
+### 35.4 92%, and a far pointer that had been retired
+
+> *"Got further! Freezing at 92 now, which I think is the .ovl handover?"*
+
+`SPLCALL` is `mov word [spl_fp], %1` + `call far [spl_fp]` — it writes **only
+the offset half**, and takes the segment from `spl_fseg`. Stage 4 gives the blob
+back to the heap, so the pair was pointed at `spl_dead` when the screen was
+finished with.
+
+That lasted exactly until the next call site, which rewrote the offset and left
+the segment at `KERNEL_SEG`. Every `SPLCALL` after the handover became
+`call far KERNEL_SEG:{3,7,11,15}` — `cold_entry`'s padding. The site on
+`dsk_xfer`'s per-sector path meant **every disk access after the desktop**.
+
+The fix is a guard inside the macro (`cmp byte [spl_live], 0 / je`), which costs
+a rung. `tests/postboot.py` is the gate: it opens drive B: *after* the desktop
+and asserts a window opened and the ticks advanced. Every other boot row in the
+tree stops at the first frame, which is how a kernel that jumped into
+`cold_entry` on its next `int 13h` passed all of them.
+
+### 35.5 `Loader checksum 589C` — the IBM ROM's EOT is 8
+
+Past that, the boot reached a screen and stopped, and the RTC bisect said
+something that made no sense: **every configuration that reached the clock
+ladder's `.found` failed, and every one that fell through to `.none` booted.**
+`RTC=none` and `RTC=at` both froze at block 31; `RTC=ns` reached the desktop;
+`RTC=rp` took INT 0; `RTC=bios` hung with a disk error.
+
+That is not a clock bug. That is **code that is not there**.
+
+The instrument that named it is SPEC.md §2.9.7: stage 1 now sums the 13-sector
+blob it just read, as a 16-bit word sum, against a constant the Makefile injects
+from the built kernel — and `BOOTDIAG=1` prints what it actually got. The reader
+sent back four hex digits:
+
+> *"589c"*
+
+`0xB885 - 0x589C` is exactly **blob sector 5's own sum**, and blob sector 5 is
+cylinder 0, head 1, **sector 9** — the last sector of the track, and the last
+sector of stage 1's first `int 13h`.
+
+`int 1Eh` is a *pointer*, not a handler: it names an 11-byte table the BIOS
+re-reads on every floppy operation, and byte 4 of it is **EOT**, the last sector
+number the FDC may touch on a track. **The IBM PC and XT ROMs say 8**, from the
+8-sector diskettes of DOS 1.x. Every DOS since 1982 replaces that table at boot;
+this loader replaced it in *stage 2*, and stage 1's own multi-sector read
+happens first. The read returned CF=0 and the full count with 512 bytes
+missing.
+
+SPEC.md §2.9.8 moved the patch into the sector, and paid for it by moving the
+text-mode set the other way. **That trade is what §35.7 is.**
+
+### 35.6 What the reader's instinct was worth
+
+Two of the reader's sentences shortened this by rounds.
+
+> *"We're debugging on an emulator, so just go ahead and send them to me. Worst
+> they can do is not boot."*
+
+Diagnostic disks stopped being verified before they went out, and the loop went
+from one round a session to four.
+
+> *"This rom does do a multi-track/cylinder read though - this is the same
+> system that was written for (and its working prior to our work here). So I
+> think we broke something in that logic."*
+
+…which was right, and is §35.7. **The reader knew the machine's history and this
+end knew the diff; neither half finds it alone.** The canary firing on a ROM
+that had always done multi-track reads reads as §18.93.1 working as designed if
+you only have the diff, and as an unexplained regression if you only have the
+machine.
+
+### 35.7 The bound that was a cursor shape
+
+Moving the text-mode set into stage 2 put `int 10h AH=01h` three instructions
+above the run bound. **It takes the cursor shape in `CX`. `CX` was the sectors
+per track.** `[b2_run]` came out 16,384 and `[b2_runmax]` 8,192.
+
+The full account is SPEC.md §18.93.3. What belongs in a field note is the shape
+of its silence, because it is the worst of the four:
+
+- The boot **works**. `read_run` asks for 125 sectors across a cylinder, the FDC
+  refuses, three retries fail, and §18.93's shorten-and-reload loads a correct
+  kernel at the track bound.
+- Every gate in the tree passes, including `make test-full`.
+- What is gone is **SPEC.md §18.91.1 entirely** — `[b2_runmax]` is `SPT`, so the
+  canary's `je .nocross` skips it, `boot_cylrun` stays 0, and `dsk_xfer` is
+  careful for nothing for the rest of the session. The 2.2s is paid for and not
+  collected, on every machine.
+- The only outward sign is three failed reads at the top of a boot that already
+  sounds like a floppy.
+
+A BIOS that answers that same call **CF=0 with a short count** — which is what
+the field XT looks like — reports the load complete with most of the kernel
+missing, fails the KSIG probe, and reloads. Same rescue, same silence, one more
+full load of drive noise.
+
+`tests/cylrun.py` is the gate. It asserts the one thing the boot could not say
+about itself: `boot_cylrun` at `0060:0004` is **non-zero** after an 8088 boot.
+Before the fix it read 0 on MartyPC too — so this was never a field-only defect,
+it was a defect no instrument here was pointed at. It reads 18 now.
+
+### 35.8 CLOSED — both were the read corruption
+
+Two symptoms outlived §35.5 and looked like defects of their own. They were not.
+On `e6c2e93` the reader reports a **complete, working desktop on three
+different 86Box machines** — a 286 MR BIOS VGA with a 70h clock, an XT VGA with
+no clock at all, and a 5150 with a SixPakPlus clock — with the date correct on
+all three:
+
+> *"All of the symptoms stem from the various read corruptions."*
+
+**A kernel with holes in it was the sufficient explanation, and it was the
+whole explanation.** Both are recorded below anyway, because the *reasoning
+that nearly went wrong* is the reusable part: each had a plausible,
+self-consistent story that pointed somewhere else entirely, and both stories
+were wrong.
+
+**A. No drive icons on the desktop** — and the story it invited was a hardware one. The menu bar is correct (chip, Locator,
+File, Builtins) and the dock is empty. `desk_init` opens with `int 0x11` /
+`test al, 0x01`, and a zero there means the equipment word claims **no floppy
+drives** — so no volume gets a zone. On an XT that word is the SW1 DIP switches
+read back through the 8255: a statement about what somebody set, and, on a
+machine with an ST-11 option ROM in it, about what that ROM left behind.
+`fdd_dbg_eqp` banks what `int 11h` actually claimed; `OVLMARK 51` in `.none`
+reports the branch. MartyPC's `os8088_xt_vga` reads `fdd_dbg_eqp=2` and draws
+both icons.
+
+**B. Two garbage glyphs where the clock goes**, at about screen x 617–632,
+instead of a date. The reader:
+
+> *"The default clock just gets set to a specific date - aug 04 iirc."*
+
+…so this is **not** the no-RTC rendering. MartyPC with no RTC at all
+(`clk_tier=0 clk_rtc=0 clk_ref=0`) draws a full date string — the menu bar's ink
+groups are `[(10,20),(40,94),(120,149),(168,229),(488,508),(520,534),(544,573),
+(592,630)]`, and the QEMU VGA reference has *"Aug 27 2026 12:49"* at x≈487–570.
+Two glyphs at the far right is a *third* thing, matching neither.
+
+`OVLMARK 49` in rung 5 was added to tell NS apart from BIOS when block 39
+lights. It was never needed: the RTC ladder was reading the chips correctly the
+whole time, on all four rungs, and what was two glyphs wide was the drawing of
+the result.
+
+**The lesson is the RTC bisect table in §35.5, and it is worth keeping.** Every
+configuration that reached the clock ladder's `.found` failed, and every one
+that fell through to `.none` booted — which reads as a damning indictment of the
+clock code and is in fact a statement about *how much code each path executes
+out of a region of the image that was missing*. A bisect over a feature switch
+is only a bisect over that feature if the binary is intact; on a corrupt image
+it is a bisect over **code size**, and it will name whatever component happens
+to be large. Nothing in the table was a clock finding. Two of the three symptoms
+in this note were reasoned about for a round each before §35.5 made them
+disappear at once.
+
+### 35.9 The instruments this cost, and which are keepers
+
+Four gates and one boot-time check came out of it, and all five stay:
+
+- `tests/splashbar.py` — the counter **and** the lit width of the trough.
+- `tests/vgadirty.py` — with the `VGADIRTY=1` knob that fills A0000 in the one
+  window a machine cannot.
+- `tests/postboot.py` — the first disk access **after** the desktop.
+- `tests/cylrun.py` — `boot_cylrun != 0`.
+- `tests/blobsum.py` and SPEC.md §2.9.7's own checksum, which is the only reason
+  §35.5 took one round instead of five. It is worth 30 bytes of the boot sector
+  permanently: **the blob is the one part of this image that nothing else
+  verifies**, and a short read of it presents as the kernel misbehaving.
+
+Two of the five assert things that were true for years and had never been
+checked. That is the finding underneath all of them: this tree's boot rows all
+stop at the first frame of the desktop, and three of the four defects here live
+either after that frame or in a number the frame does not show.
+

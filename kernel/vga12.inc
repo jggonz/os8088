@@ -2887,6 +2887,12 @@ vga_p4build:
     push cx
     push dx
     push si
+    push es                     ; ...and ES, banked to the buffers' own rung
+    mov ax, VGABUF_SEG          ; for the whole build (SPEC.md 39.22). It used
+    mov es, ax                  ; to be SS, which reached them while they were
+                                ; .lowbss; the contract that every register is
+                                ; preserved is why this pushes rather than
+                                ; leaving ES where it lands
     xor bx, bx
 .byte:
     mov cl, 4
@@ -2910,11 +2916,15 @@ vga_p4build:
     jnz .pl
     mov si, bx
     shl si, 1
-    mov [ss:si + vga_p4tab], dx ; .lowbss, and SS IS LOW_SEG (SPEC.md 1)
+    mov [es:si + vga_p4tab], dx ; .vgabuf, so NOT through SS any more
+                                ; (SPEC.md 39.22): ES is banked to VGABUF_SEG
+                                ; for the build and put back, which is cheaper
+                                ; than a segment load a byte
     inc bx
     cmp bx, 256
     jb .byte
     mov byte [vga_p4built], 1
+    pop es
     pop si
     pop dx
     pop cx
@@ -2979,9 +2989,14 @@ vga_blit_prow:
                                 ; row - and back on at the end, because the
                                 ; next row may be a run's again
 
-    mov ax, LOW_SEG
+    mov ax, VGABUF_SEG          ; ovlchk: DS = VGABUF_SEG
     mov ds, ax                  ; DS = the table and the four plane rows; ES is
-                                ; still the caller's source
+                                ; still the caller's source. THE BARE
+                                ; REFERENCE IS THE .vgabuf ONE FROM HERE TO
+                                ; THE `pop ds` BELOW, and every `.lowbss` word
+                                ; in between needs `ss:` - which is the whole
+                                ; hazard of SPEC.md 39.22 and cost three
+                                ; overrides that used to be free
     mov bp, di                  ; BP = groups to decode
     mov di, vga_pbuf
     mov cl, 4                   ; the split's rotate count, for the whole loop
@@ -3037,12 +3052,12 @@ vga_blit_prow:
     dec bp
     jnz .g
 
-    cmp word [vga_pr_sh], 0     ; --- an odd x, put back one bit right. `inc`
+    cmp word [ss:vga_pr_sh], 0  ; --- an odd x, put back one bit right. `inc`
     je .noshift                 ;     and `loop` both leave CF alone, so the
     mov si, vga_pbuf            ;     chain runs the length of a plane row
     mov bp, 4
 .shp:
-    mov cx, [vga_pr_n]
+    mov cx, [ss:vga_pr_n]
     mov di, si
     clc
 .shb:
@@ -3056,7 +3071,7 @@ vga_blit_prow:
     jnz .shp
 .noshift:
 
-    mov word [vga_pr_ps], VGA_PB
+    mov word [ss:vga_pr_ps], VGA_PB
     mov bp, vga_pbuf
     call vga_prow_emit          ; --- and out, four Map Masks and four rows
 
@@ -3065,7 +3080,7 @@ vga_blit_prow:
     out dx, ax
     call vga_sr_on
     pop es
-    pop ds
+    pop ds                      ; ovlchk: DS restored
     pop bp
     pop di
     pop si
@@ -5900,13 +5915,31 @@ gfx_pairtab1 resb 256           ; gfx_inktab by sw_pairbuild - and here rather
                                 ; image rung gives back exactly the step the
                                 ; low rung takes
 %ifdef GFX_PLANE
+section .vgabuf                 ; ...AND THESE TWO ARE NOT .lowbss's any more
+                                ; (SPEC.md 39.22): they are the only bytes in
+                                ; the kernel a machine with no VGA has no use
+                                ; for, and `.vgabuf` is a rung of its own at
+                                ; the TOP of the kernel so that mem_init can
+                                ; put the heap floor under them. Reached
+                                ; through VGABUF_SEG, which the decoder banks
+                                ; into DS exactly where it used to bank
+                                ; LOW_SEG - one word, because the table was
+                                ; already read through a segment register.
 vga_p4tab   resw 256            ; source byte -> a nibble of plane bits each
 vga_pbuf    resb VGA_PB*4       ; one plane row apiece, filled then blitted
+section .lowbss                 ; ...and the SCRATCH stays here, because
+                                ; vga_prow_emit reads it through SS while DS
+                                ; is the caller's planes
 vga_pr_lm   resb 1              ; the row's edge masks, byte span, first
 vga_pr_rm   resb 1              ; framebuffer byte and odd-x flag - banked
-vga_pr_n    resw 1              ; HERE and not in .bss because DS is LOW_SEG
-vga_pr_o    resw 1              ; from the decode onwards and a [gfx_blit_*]
-vga_pr_sh   resw 1              ; word is unreachable from there
+vga_pr_n    resw 1              ; HERE and not in .bss because DS is NEVER
+vga_pr_o    resw 1              ; KERNEL_SEG from the decode onwards - it is
+vga_pr_sh   resw 1              ; VGABUF_SEG in the decoder and the caller's
+                                ; planes in gfx_blitp - so a [gfx_blit_*] word
+                                ; is unreachable from either and SS reaches
+                                ; these from both. Three of them are read
+                                ; `ss:` INSIDE the decoder's bank, which is
+                                ; the hazard SPEC.md 39.22 introduced
 vga_pr_rs   resw 1              ; gfx_blitp's row stride and the caller's
 vga_pr_sg   resw 1              ; segment, banked because DS is the kernel's
                                 ; for gfx_rowbase and the planes' for the copy

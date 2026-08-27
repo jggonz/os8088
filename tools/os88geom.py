@@ -106,6 +106,15 @@ _MIRROR = {
     "W_W": ("kernel/wm.inc", 6),
     "W_H": ("kernel/wm.inc", 8),
     "W_TITLE": ("kernel/wm.inc", 10),
+    # ...and the title bar's two boxes, which a scripted click has to land
+    # INSIDE. Mirrored the day tests/xmcheck.py was found aiming at a
+    # hard-coded (W_X+14, W_Y+5) for a window it assumed sat at x=180: the
+    # window came up at 175, the click hit the title bar, and the gate
+    # reported an extended-memory leak for a window that never closed.
+    "WM_BOX_X0": ("kernel/wm.inc", 8),
+    "WM_BOX_W": ("kernel/wm.inc", 10),
+    "WM_BOX_Y0": ("kernel/wm.inc", 4),
+    "WM_BOX_Y1": ("kernel/wm.inc", 14),
     "W_MENUS": ("kernel/wm.inc", 18),
     "W_SEG": ("kernel/wm.inc", 22),
     "WF_SIZABLE": ("kernel/wm.inc", 4),
@@ -347,6 +356,20 @@ class Win(object):
             self.title, self.i, self.x, self.y, self.w, self.h,
             "" if self.visible else " HIDDEN",
             "+saveu" if self.promises else "")
+
+
+def close_xy(wx, wy):
+    """The close box's centre for a window whose frame starts at (wx, wy).
+
+    wm_hit accepts columns W_X+WM_BOX_X0 .. +WM_BOX_X0+WM_BOX_W and rows
+    W_Y+WM_BOX_Y0 .. +WM_BOX_Y1, so the centre is the safe aim - a click one
+    column past the box is a click on the TITLE BAR, which starts a drag and
+    closes nothing. The minimize box is the same span mirrored at
+    W_X+W_W-1-WM_BOX_X0, and is not written out here because nothing asks for
+    it yet; the four constants above are what an asker would need.
+    """
+    return (wx + WM_BOX_X0 + WM_BOX_W // 2,
+            wy + (WM_BOX_Y0 + WM_BOX_Y1) // 2)
 
 
 def windows(m, sym=None):

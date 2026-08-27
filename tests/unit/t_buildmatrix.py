@@ -18,7 +18,7 @@ naming one), and nothing builds them until somebody types the knob by hand:
     `REDRAWFULL=`, `HEAPCOMPACT=`, `FDDPROBE=`, `SNAPAUDIT=`, `BOOTPROF=`,
     `MOUIDSLOW=`, `TRACKRUN=`, `QUANTUM=`, `SBDRAGOFF=`/`SBRATE=`,
     `DIRW1=`, `PICOMEM=`, `BOOTMARK=`/`BOOTHALT=`/`BOOTSTOP=`, `NOPS2=`,
-    `NOBAND=`, `TITLESNAP=`, `NOUNAL=`.
+    `BAND=`, `TITLESNAP=`, `NOUNAL=`.
     Each one is
     `%ifdef`'d code that no ordinary build compiles, so it rots in silence -
     and every one of them is the A/B half of a gate somewhere in `tests/`.
@@ -119,15 +119,24 @@ KNOBS = [
     ("sbdragoff",   ["SBDRAGOFF=1"]),
     ("sbrate",      ["SBRATE=2"]),
     # The LOOK/measurement knobs, which nothing else builds at all. Each
-    # switches a whole path in or out - and NOBAND is now the only thing that
-    # assembles the FIFTEEN-CALL title bar, which since SPEC.md 5.9.6 is no
-    # longer the default path but is still the runtime fallback when the band's
-    # claim is refused. Without this row that path rots un-assembled.
-    ("noband",      ["NOBAND=1"]),
+    # switches a whole path in or out - and BAND is now the only thing that
+    # assembles the COMPOSED title bar at all, because SPEC.md 5.9.6 sent it
+    # back to a knob and no shipped kernel carries it. This row is therefore
+    # the whole of what keeps kernel/band.inc, wm_title_band and wm_tsend
+    # assembling; the fifteen-call path it replaces needs no row of its own,
+    # being what every other build in this table draws.
+    #
+    # THE ROW FLIPPED WITH THE DEFAULT and had to: while the composer shipped,
+    # `NOBAND=1` was what kept the fifteen calls alive here. A row left naming
+    # the retired knob would have gone on passing - `make NOBAND=1` is a make
+    # variable nothing reads, so it builds the DEFAULT kernel and reports a
+    # pass for a configuration nobody assembled.
+    ("band",        ["BAND=1"]),
     ("titlesnap",   ["TITLESNAP=1"]),
     ("nounal",      ["NOUNAL=1"]),
-    # NOPLANE= is the same sentence as NOBAND, and the Makefile says so at its
-    # definition: it is "the only thing keeping the run-only path assembling",
+    # NOPLANE= is the same sentence as BAND one polarity over, and the
+    # Makefile says so at its definition: it is "the only thing keeping the
+    # run-only path assembling",
     # and that path is not dead code either - a FLAT row, a clipped blit and a
     # block hanging off the screen edge all take it. The A/B PERFORMANCE.md
     # Set 107 comes off is the other reason, and neither survives a build

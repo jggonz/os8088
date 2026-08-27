@@ -2938,6 +2938,17 @@ fd_data_listen:
     jc .no
     mov [fd_dlhnd], al
     mov byte [fd_dmode], DM_PASV
+    ; **THE TRANSFER'S RING, ASKED FOR ON THE LISTENER** (SPEC.md 72.21.1).
+    ; The data connection does not exist yet - it is whatever this listener
+    ; accepts - so the wish is recorded here and inherited by the child. The
+    ; control connection deliberately does NOT ask: it carries command lines,
+    ; and a first-come rule would give it the one big ring in the pool.
+    mov bh, NET_CLASS
+    mov bl, NETV_BULK
+    call OSAPI_DRV_CALL             ; CF is not tested: a driver without the
+                                    ; verb, or a pool with the ring already
+                                    ; out, means a slower transfer and not a
+                                    ; failed one
     pop cx
     pop bx
     clc
@@ -3214,6 +3225,10 @@ fd_c_port:
                                     ; failed is the CONNECTION
     mov [fd_dhnd], al
     mov byte [fd_dmode], DM_PORT
+    mov bh, NET_CLASS               ; ACTIVE mode dials out, so the socket is
+    mov bl, NETV_BULK               ; here rather than accepted later - and it
+    call OSAPI_DRV_CALL             ; is still empty, so the swap is free
+    mov al, [fd_dhnd]               ; (SPEC.md 72.21.1)
     mov si, fd_r200
     call fd_reply
     jmp short .out
@@ -4081,6 +4096,7 @@ fd_list_go:
     call fd_have_data
     jc .out
     mov byte [fd_lsdir], 0
+    call fd_lsopts                  ; `LIST -a` is a LISTING (SPEC.md 77.46)
     cmp word [fd_arglen], 0
     je .noarg
     call fd_keepname                ; **THE NAME IS BANKED HERE TOO** - the
@@ -4238,6 +4254,211 @@ fd_setchunk:
     pop bx
     pop ax
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fd_socks - the DRIVER'S WHOLE SOCKET TABLE, into the log (SPEC.md 72.20)
+;
+; **NETV_STATUS ANSWERS ABOUT A HANDLE WE HOLD**, and the sockets that cause
+; trouble are the ones nobody holds: a stranded child of a closed listener, a
+; TIME-WAIT that has not let go, a data connection finishing a handshake with
+; a client that left. Three separate bugs in this server (SPEC.md 77.25,
+; 77.28, 72.4.2) were all "the table is full of things I cannot see from
+; here", and every one of them was diagnosed by reasoning rather than by
+; looking. This is the looking.
+;
+; One line per slot, and `rx` over two dumps is the question worth asking:
+; a receive ring that stays full is a server that is not draining it, where
+; one that stays empty is a peer that is not sending.
+;
+; UI-task context (a menu command), so the log is ours to write.
+; -----------------------------------------------------------------------------
+fd_socks:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    push ds
+    pop es                          ; **OURS**: OSAPI_DRV_CALL is the X stub and
+                                    ; puts our segment in ES for the driver to
+                                    ; write through (SPEC.md 20.11)
+    mov di, fd_skbuf
+    mov cx, FD_SKBSZ
+    mov bh, NET_CLASS
+    mov bl, NETV_SKTAB
+    call OSAPI_DRV_CALL
+    jnc .have
+    mov si, fd_l_nosk               ; an older driver, or no card: say so
+    call fd_log                     ; rather than printing an empty table
+    jmp .out                        ; NEAR: the table below is past 128 bytes
+.have:
+    mov ax, cx
+    mov cl, SKI_SZ                  ; records, not bytes - the driver decides
+    xor dx, dx                      ; how many it gave us
+    div cl                          ; AL = the count (AH = the remainder)
+    mov [fd_skn], al
+    or al, al
+    jz .out
+    mov si, fd_l_skhd
+    call fd_log
+    xor bx, bx                      ; BX = the record offset
+    xor cl, cl                      ; CL = the slot number
+.row:
+    cld
+    mov di, fd_outb2
+    mov si, fd_l_sk
+    call fd_dcat
+    mov al, cl
+    xor ah, ah
+    xor dx, dx
+    call fd_dnum32
+    mov si, fd_l_sp
+    call fd_dcat
+    ; --- the TCP state BY NAME, because a number is not a diagnosis ---------
+    mov al, [fd_skbuf+bx+SKI_TS]
+    cmp al, FD_NTS
+    jb .ts
+    xor al, al                      ; a state this build has no name for reads
+.ts:                                ; as 'closed' rather than walking off the
+    xor ah, ah                      ; end of the table
+    shl ax, 1
+    xchg ax, bx                     ; BX = the table index, AX = the record's
+    mov si, [fd_ts_tab+bx]
+    xchg ax, bx                     ; ...and back
+    call fd_dcat
+    mov si, fd_l_skl
+    call fd_dcat
+    mov ax, [fd_skbuf+bx+SKI_LP]
+    xor dx, dx
+    call fd_dnum32
+    mov si, fd_l_skr
+    call fd_dcat
+    mov ax, [fd_skbuf+bx+SKI_RP]
+    xor dx, dx
+    call fd_dnum32
+    mov si, fd_l_skrx
+    call fd_dcat
+    mov ax, [fd_skbuf+bx+SKI_RXN]
+    xor dx, dx
+    call fd_dnum32
+    mov si, fd_l_skc                ; the ring it holds, as its size: 0 for a
+    call fd_dcat                    ; listener, lean for a control connection,
+    mov ax, [fd_skbuf+bx+SKI_RXC]   ; the bulk rung for a transfer (72.21)
+    xor dx, dx
+    call fd_dnum32
+    mov si, fd_l_sktx
+    call fd_dcat
+    mov ax, [fd_skbuf+bx+SKI_TXN]
+    xor dx, dx
+    call fd_dnum32
+    ; --- THE FLAGS, AND NOT ON A CLOSED SLOT --------------------------------
+    ; ORPH and ACPT are the stranded-socket tell, so a column of ' f0' would
+    ; bury them - but a slot that is TS_CLOSED is FREE, and sk_alloc zeroes
+    ; the record when it hands it out rather than when it takes it back. So a
+    ; closed slot still carries the flags of whoever had it LAST, and printing
+    ; those is a live-looking `f32` on a socket that is not there. That is the
+    ; exact wrong diagnosis this whole verb exists to prevent (SPEC.md 72.20).
+    cmp byte [fd_skbuf+bx+SKI_TS], TS_CLOSED
+    je .noflg
+    mov al, [fd_skbuf+bx+SKI_FL]
+    or al, al
+    jz .noflg
+    push ax
+    mov si, fd_l_skf
+    call fd_dcat
+    pop ax
+    xor ah, ah
+    xor dx, dx
+    call fd_dnum32
+.noflg:
+    mov byte [di], 0
+    push bx
+    push cx
+    mov si, fd_outb2
+    call fd_log                     ; BX and CL are the loop's and fd_log is
+    pop cx                          ; not documented to keep them
+    pop bx
+    add bx, SKI_SZ
+    inc cl
+    cmp cl, [fd_skn]
+    jb .row
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fd_lsopts - drop leading `-x` option words from the LIST/NLST argument
+;
+; **EVERY WinSCP SESSION OPENED WITH A 550** (SPEC.md 77.46): it asks `LIST -a`
+; first, this banked `-a` as a path, and the lookup failed. The client retries
+; a bare LIST and nothing looks broken - the cost is a round trip and a whole
+; DATA CONNECTION, set up and torn down for a refusal, on every connection.
+; NET_SOCKS has no room to spare for that (SPEC.md 72.4.2).
+;
+; RFC 959 gives LIST no options and real servers hand the line to `ls`, so a
+; leading flag is a flag. A name that begins with '-' was never reachable here
+; regardless: an 8.3 name cannot start with one.
+; -----------------------------------------------------------------------------
+fd_lsopts:
+    push ax
+    push cx
+    push si
+    push di
+    cld
+.again:
+    cmp byte [fd_arg], '-'
+    jne .len
+    mov si, fd_arg
+.word:                              ; to the end of this option word...
+    lodsb
+    or al, al
+    jz .empty
+    cmp al, ' '
+    jne .word
+.sp:                                ; ...and past the spaces behind it
+    cmp byte [si], ' '
+    jne .shift
+    inc si
+    jmp short .sp
+.shift:
+    mov di, fd_arg                  ; what is left moves down to the front, so
+    mov cx, FD_PATHMAX              ; everything downstream sees a plain path
+.m:
+    lodsb
+    mov [di], al
+    inc di
+    or al, al
+    jz .again                       ; `LIST -a -l` is two of them
+    loop .m
+    mov byte [fd_arg + FD_PATHMAX - 1], 0
+    jmp short .again
+.empty:
+    mov byte [fd_arg], 0
+.len:
+    mov si, fd_arg                  ; the length is recomputed, never adjusted:
+    xor cx, cx                      ; one place decides it and it cannot drift
+.c:
+    cmp byte [si], 0
+    je .done
+    inc si
+    inc cx
+    cmp cx, FD_PATHMAX
+    jb .c
+.done:
+    mov [fd_arglen], cx
+    pop di
+    pop si
+    pop cx
+    pop ax
     ret
 
 ; --- fd_keepname - bank the argument as the transfer's name ------------------
@@ -7023,8 +7244,13 @@ fd_oncmd:
                                 ; item repainted nothing at all (77.43.1)
 .setup:
     cmp al, 2
-    jne .out
+    jne .sock
     call fd_setup_toggle
+    jmp short .paint
+.sock:
+    cmp al, 3
+    jne .out
+    call fd_socks               ; the whole socket table, into the log (72.20)
 .paint:
     mov si, [fd_win]
     call fd_layout
@@ -8234,10 +8460,37 @@ fd_draw_about:
 fd_ttl:     db 'FTP Server', 0
 fd_name_s:  db 'Ftpd', 0
 fd_m_srv:   db 'Server', 0
-fd_i_srv:   dw fd_it_run, fd_it_clr, fd_it_set
+fd_i_srv:   dw fd_it_run, fd_it_clr, fd_it_set, fd_it_sk
 fd_it_run:  db 'Start / Stop', 0
 fd_it_clr:  db 'Clear Log', 0
 fd_it_set:  db 'Setup...', 0
+fd_it_sk:   db 'Sockets', 0
+
+; --- the socket dump's strings (SPEC.md 72.20) -------------------------------
+fd_l_skhd:  db '-- sockets --', 0
+fd_l_nosk:  db 'Sockets: the driver refused', 0
+fd_l_sk:    db 's', 0
+fd_l_sp:    db ' ', 0
+fd_l_skl:   db ' L', 0
+fd_l_skr:   db ' R', 0
+fd_l_skrx:  db ' rx', 0
+fd_l_skc:   db '/', 0
+fd_l_sktx:  db ' tx', 0
+fd_l_skf:   db ' f', 0
+FD_NTS      equ 11
+fd_ts_tab:  dw fd_ts0, fd_ts1, fd_ts2, fd_ts3, fd_ts4, fd_ts5
+            dw fd_ts6, fd_ts7, fd_ts8, fd_ts9, fd_ts10
+fd_ts0:     db 'closed', 0
+fd_ts1:     db 'listen', 0
+fd_ts2:     db 'synsnt', 0
+fd_ts3:     db 'synrcv', 0
+fd_ts4:     db 'estab', 0
+fd_ts5:     db 'finw1', 0
+fd_ts6:     db 'finw2', 0
+fd_ts7:     db 'closng', 0
+fd_ts8:     db 'timewt', 0
+fd_ts9:     db 'lastak', 0
+fd_ts10:    db 'closew', 0
 
 ; --- the status line ---------------------------------------------------------
 fd_s_state: dw fd_s_off, fd_s_lis, fd_s_ctl, fd_s_err
@@ -8386,7 +8639,7 @@ fd_ab5:     db 0
 fd_ab6:     db 'Anyone on the network can read these', 0
 
     OS88_MENUSET fd_menus, fd_name_s, fd_oncmd
-        OS88_MENU fd_m_srv, fd_i_srv, 3
+        OS88_MENU fd_m_srv, fd_i_srv, 4
     OS88_MENUSET_END fd_menus
 
 fd_tpl:
@@ -8630,7 +8883,15 @@ fd_wprog    equ fd_wdog + 2                     ; word: how far it had got when
 ; anywhere above moves this offset, and nothing else in the package would
 ; notice.
 ; -----------------------------------------------------------------------------
-FD_SOFF     equ ((fd_wprog + 2 - $$) + 511) & ~511
+fd_skn      equ fd_wprog + 2                    ; byte: how many socket records
+                                     ; the last NETV_SKTAB actually gave us -
+                                     ; the DRIVER decides, not NET_SOCKS here,
+                                     ; so a package built against a smaller
+                                     ; table still reads whole records
+FD_SKBSZ    equ NET_SOCKS * SKI_SZ
+fd_skbuf    equ fd_skn + 1                      ; the snapshot itself (72.20)
+
+FD_SOFF     equ ((fd_skbuf + FD_SKBSZ - $$) + 511) & ~511
 fd_stage    equ $$ + FD_SOFF     ; ...and the rounding is done on the offset
                                  ; from the section base, because that is the
                                  ; only form of it NASM will let `&` touch

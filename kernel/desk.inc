@@ -104,6 +104,14 @@ desk_init:
                                 ; the count to 0, and left drive 3 with no row
     jmp .flags
 .none:
+    OVLMARK 51                  ; 51: SPEC.md 57.5's equipment word says this
+                                ; machine has NO FLOPPY DRIVES, so no volume
+                                ; gets a zone and the desktop has no icons.
+                                ; On an XT that claim is the SW1 DIP switches
+                                ; read back through the 8255 - a statement
+                                ; about what somebody SET, and on a machine
+                                ; with a hard-disk controller's option ROM in
+                                ; it, about what that ROM left behind
     xor dh, dh
 .flags:
     mov [fdd_dbg_eqp], dh       ; what int 11h CLAIMED, banked before anything

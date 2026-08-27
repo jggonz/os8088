@@ -44,12 +44,20 @@
 ; arrived. What is resident is band_init alone - a claim has to be taken from
 ; somewhere that may call mem_claim near.
 ;
-; IT IS KERN_BIG'S DEFAULT (SPEC.md 5.9.6), not a knob, and on all three
-; adapters: 36.5 ms against the fifteen primitive calls' 40.8 on Hercules and
-; 37.1 against 42.0 on CGA, and 38.3 against 30.3 on VGA - which is a LOSS and
-; ships anyway, because the bar it replaces writes the caption's own rows four
-; times and that is visible on the target machine (docs/TEXT-PLAN.md 1.1:
-; flicker first, speed second). `make NOBAND=1` is the A/B.
+; IT IS A KNOB (SPEC.md 5.9.6), `make BAND=1`, and it was kern_big's default
+; for one cycle in between. What it draws is the faster bar on both 1bpp
+; adapters - 36.5 ms against the fifteen primitive calls' 40.8 on Hercules and
+; 37.1 against 42.0 on CGA - and the slower one on VGA, 38.3 against 30.3,
+; because a band is 1bpp on every card while the primitives get VGA's planar
+; hardware. What it buys on all three is a bar that writes no pixel twice
+; where the one it replaces writes the caption's own rows four times, and that
+; is visible on the target machine (docs/TEXT-PLAN.md 1.1: flicker first,
+; speed second). None of that moved when the default did; the BYTES are what
+; moved it - 1,634 of them, 1,278 out of .cold. `make`
+; against `make BAND=1` is the A/B, and the knob is now the only thing that
+; keeps this file assembling at all: no shipped build compiles it, so the
+; build matrix's `band` row (tests/unit/t_buildmatrix.py) is what stops it
+; rotting.
 ; =============================================================================
 
 BAND_KB     equ 2               ; the buffer, in KB: mem_claim's unit, and the

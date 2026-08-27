@@ -283,6 +283,7 @@ vid_rowmax  dw 0
 
 section .lowbss                 ; LOW_SEG (SPEC.md 2.1), and not .bss - 696
 vid_rowtab  resw VID_ROWTAB     ; bytes in the image rung would cross a step
+
 section .text                   ; AND spend KERN_CODE_MAX, which is the guard
                                 ; that cannot be raised. Here it costs one
                                 ; 512-byte rung of KERN_BUDGET and nothing of
@@ -741,6 +742,78 @@ vid_setmode:
     mov ax, 0x0006              ; CGA: 640x200 monochrome
 .bios:
     int 0x10
+    cmp byte [vid_kind], VID_VGA
+    jne .nowipe
+
+%ifdef VGA_DIRTY
+    ; --- make VGADIRTY=1: BE the BIOS that did not clear (SPEC.md 39.23) ----
+    ; The window between the ROM's mode set and ours is the only place a
+    ; machine can be given the field's framebuffer, and every emulator in this
+    ; tree has a BIOS that clears properly - so the failure this arm exists
+    ; for cannot otherwise be shown. DIRTYRAM's shape, one device along.
+    ;
+    ; 0xDB is not arbitrary: it is a stripe rather than a solid, so a clear
+    ; that reached only SOME of the four planes leaves a different colour
+    ; instead of the same black, and tests/vgadirty.py can tell the two apart.
+    mov dx, VGA_SEQ
+    mov ax, 0x0F02
+    out dx, ax
+    mov ax, VGA_SEG
+    mov es, ax
+    xor di, di
+    mov ax, 0xDBDB
+    mov cx, SCREEN_H * ROW_BYTES / 2
+    cld
+    rep stosw
+%endif
+
+    ; --- ...AND CLEAR A0000 OURSELVES (SPEC.md 39.23) -----------------------
+    ; THE OTHER TWO ARMS OF THIS ROUTINE ALREADY DO. Hercules clears its 32KB
+    ; behind its own blank; the CGA arm zeroes B800 before the mode set, with
+    ; the reasoning three screens up. This arm trusted `int 10h AX=0012h` to
+    ; do it - and two places in the kernel state as fact that "vid_setmode
+    ; clears the framebuffer" (spl_reset, vid_switch), so the VGA was the one
+    ; adapter on which that was a hope.
+    ;
+    ; It is not always true. A field report on 86Box showed the loading screen
+    ; drawn over a full field of banded dashes - the mode 3 CHARACTER
+    ; GENERATOR, which lives in plane 2 and becomes bitmap the moment the card
+    ; is in 12h - with the BIOS's own title text speckled by it, because
+    ; teletype into a graphics mode is transparent. A ROM that clears only
+    ; plane 0, or clears B8000 instead, leaves exactly that.
+    ;
+    ; This is the CGA arm's bug on the other card and the same answer: remove
+    ; the garbage rather than hope. NO EMULATOR HERE SHOWS IT either, which is
+    ; why tests/vgadirty.py dirties the framebuffer on purpose.
+    ;
+    ; The five register writes are not decoration - the Map Mask is what
+    ; decides how many planes one CPU byte reaches, and a BIOS that left it at
+    ; plane 0 is one of the ways the garbage survives. They are inline rather
+    ; than vga_gc_reset's because THIS RUNS FROM THE SPLASH, whose first tick
+    ; is gated on SPL_RESIDENT sectors: vga12.inc is thousands of bytes past
+    ; that window and is not resident yet.
+    mov dx, VGA_SEQ
+    mov ax, 0x0F02              ; SEQ2 Map Mask: all four planes
+    out dx, ax
+    mov dx, VGA_GC
+    mov ax, 0x0001              ; GC1  Enable Set/Reset: none, so the CPU byte
+    out dx, ax                  ;      is the data
+    mov ax, 0x0003              ; GC3  Data Rotate/Function: replace, no rotate
+    out dx, ax
+    mov ax, 0x0005              ; GC5  Mode: write mode 0
+    out dx, ax
+    mov ax, 0xFF08              ; GC8  Bit Mask: every bit ours
+    out dx, ax
+    mov ax, VGA_SEG
+    mov es, ax
+    xor di, di
+    xor ax, ax
+    mov cx, SCREEN_H * ROW_BYTES / 2
+    cld
+    rep stosw                   ; ~110 ms on a 4.77MHz 8088, ONCE: vid_init
+                                ; skips the mode set while [spl_live] is up,
+                                ; and every later caller owes a full repaint
+.nowipe:
     jmp short .done
 .herc:
     mov dx, 0x3BF               ; configuration: graphics allowed. Bit 1 - the
@@ -1027,3 +1100,32 @@ gfx_ink:
     mov al, [bx + gfx_inktab]
     pop bx
     ret
+
+section .text                   ; ...and back, so the next include lands right
+
+; =============================================================================
+; WHAT THE SPLASH LEFT BEHIND (SPEC.md 2.9.4)
+;
+; The loading screen is stage 2's now, so every call it makes into the kernel
+; is across a segment. These four are that, four bytes each - and they are
+; HERE, at the end of viddet.inc, rather than in kernel.asm's cw_ block for one
+; reason: SPL_RESIDENT. The bar cannot move until the routines the first tick
+; calls are ABOARD, and the cw_ block is at the end of `.text` - the last
+; sector of the image. Here they land in sector 7, which is what SPL_RESIDENT
+; now measures and why it fell from 9 to that.
+; =============================================================================
+spw_vid_detect:   call vid_detect
+                  retf
+spw_vid_apply:    call vid_apply
+                  retf
+spw_vid_setmode:  call vid_setmode
+                  retf
+spw_gfx_rowbase:  call gfx_rowbase
+                  retf
+spw_resident_end:
+
+; ...and the ONE BYTE of splash.inc that could not go with it. viddet's mode
+; guard, fprog's boot test and vidsel's spl_reset all ask it through DS, so it
+; lives where DS reaches it. 967 bytes left; this stayed.
+spl_live    db 0
+

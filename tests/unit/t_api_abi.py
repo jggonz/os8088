@@ -19,8 +19,10 @@ two cells pointing at one another's addresses with nothing to say so until a
 package calls one and gets the other.  A check performed by remembering to
 perform it is not a check, so this is that comparison as a gate.
 
-IT READS THE BINARY, NOT THE SOURCE.  `build/kernel.bin` is a flat image
-loaded at KERNEL_SEG:0000, so a slot's address IS its file offset and the cell
+IT READS THE BINARY, NOT THE SOURCE.  `build/kernel.bin` is a flat image whose
+`.text` is loaded at KERNEL_SEG:0000 - BOOT2_PAD bytes into the file since
+SPEC.md 2.9 put stage 2 in front of it, which tools/os88layout.py is the one
+place that knows - so a slot's address is its file offset plus that, and the cell
 can simply be decoded:
 
     OSAPI_SLOT   1E 0E 1F  E8 lo hi  1F CB     push ds/push cs/pop ds/
@@ -59,6 +61,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
+import os88layout                                            # noqa: E402
 sys.path.insert(0, HERE)
 
 import os88sym                                            # noqa: E402
@@ -149,6 +152,9 @@ def decode(blob, addr):
 
 def main():
     blob = open(os.path.join(ROOT, "build/kernel.bin"), "rb").read()
+    # ...and drop stage 2, so every address below is an offset into `.text`
+    # exactly as it was before SPEC.md 2.9 (tools/os88layout.py)
+    blob = blob[os88layout.boot2_pad(ROOT):]
     off, sect = os88sym.syms(), os88sym.sections()
     # offset -> the .text labels there. Several labels can share an offset
     # (an entry point and its fallthrough alias), so this is a list.

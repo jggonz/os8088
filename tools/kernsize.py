@@ -113,7 +113,7 @@ def knob_args(nasm_args):
 # because it costs anything: the boot overlay lands in the FAT window and is
 # overwritten by the first mount (SPEC.md 2.5), so its rung is somebody
 # else's.  It still has a ceiling - see the guard on OVL_SIZE.
-SECTIONS = ("text", "bss", "cold", "lowbss", "ovl")
+SECTIONS = ("text", "bss", "cold", "lowbss", "vgabuf", "ovl")
 
 # Which rung each section rounds into.  .text and .bss share one; that is why
 # a byte moved from .bss to .lowbss can cost 512 rather than saving anything
@@ -122,14 +122,23 @@ RUNGS = (
     ("image", ("text", "bss"), "imgpara"),
     ("cold", ("cold",), "coldpara"),
     ("low", ("lowbss", "stk0"), "lowpara"),
+    ("vgabuf", ("vgabuf",), "vgabufpara"),
 )
+
+# ...and therefore the sections a rung CHARGES for, which is not SECTIONS: the
+# boot overlay lands in the FAT window and is charged to no rung at all
+# (SPEC.md 2.5), so counting `.ovl` in the spend would price a change that
+# only moved overlay code as if it had eaten the image rung's slack.  Derived
+# from RUNGS rather than written out, so the two cannot drift apart.
+RUNG_SECTIONS = tuple(dict.fromkeys(
+    s for _, members, _ in RUNGS for s in members))
 
 # --- the per-module pass ------------------------------------------------------
 MODS_BEGIN = "<!-- BEGIN generated table -->"
 MODS_END = "<!-- END generated table -->"
 THEMES_BEGIN = "<!-- kernsize:themes -->"
 THEMES_END = "<!-- /kernsize:themes -->"
-MOD_SECTIONS = ("text", "bss", "lowbss", "cold", "ovl")
+MOD_SECTIONS = ("text", "bss", "lowbss", "vgabuf", "cold", "ovl")
 INCLUDE = re.compile(r'^%include\s+"([\w.]+)"')
 RESIDUAL = "kernel.asm"
 
@@ -307,11 +316,28 @@ def measure_modules(nasm_args=()):
 
 
 def rung_bytes(v, para_key):
-    return v[para_key] * 16
+    # `.get`, because a BASELINE taken before a rung existed has no key for it
+    # (SPEC.md 39.22's `.vgabuf` is the case that arrived): a rung nobody had
+    # measured was 0 bytes, which is the honest reading and makes the first
+    # report after it lands price the whole thing rather than crashing.
+    return v.get(para_key, 0) * 16
 
 
 def rung_used(v, parts):
-    return sum(v[p] for p in parts)
+    return sum(v.get(p, 0) for p in parts)
+
+
+def rung_accrued(size, used):
+    """How far into the CURRENT rung a build already is, in bytes.
+
+    A rung is `ceil(used/512)*512`, so `used` sits in `(size-512, size]` and
+    the bytes already spent into a rung nobody has been billed for are simply
+    `512 - slack`.  DERIVED, never stored, and that is deliberate: a floor
+    kept in the baseline would be one more figure that can go stale (this
+    file's whole reason for existing), and this one cannot - it is arithmetic
+    on two numbers the report already had.
+    """
+    return 0 if size <= 0 else 512 - (size - used)
 
 
 def kb(n):
@@ -323,8 +349,16 @@ def delta(n):
 
 
 def report(cur, base, variant="big", out=sys.stdout):
-    """Five lines. The sum first, because that is the number an author
-    controls; the rungs second, because that is what the machine feels.
+    """Six lines. The sum first, because that is the number an author
+    controls; the rungs second, because that is what the machine feels; the
+    ACCRUAL third, because that is the one an author gets wrong.
+
+    The accrual line is the rungs' `left` figure inverted, and the inversion
+    is the whole of it.  "4 left" reads as headroom and invites the next four
+    bytes; "508/512 spent" reads as a bill nobody has been handed yet, which
+    is what it is.  A rung decides WHEN the machine pays and never what a
+    change cost (CLAUDE.md's rung rule): every byte in that line was added by
+    some change that crossed nothing and was called free for it.
 
     EVERY LINE NAMES ITS VARIANT, and that is not decoration: the two builds
     have separate baselines and separate budgets, and a run of figures with no
@@ -333,8 +367,13 @@ def report(cur, base, variant="big", out=sys.stdout):
     p = lambda s: print(s, file=out)
     tag = "kernsize[%s]:" % variant
 
+    # `.get` on BOTH sides, for `rung_bytes`'s reason one level up: a section
+    # a build does not declare is 0 bytes of it, which is the honest reading
+    # and is what lets this report on a kernel from either side of the commit
+    # that added one (SPEC.md 39.22's `.vgabuf` is the case that arrived).
     def d(key):
-        return None if base is None else cur[key] - base.get(key, cur[key])
+        return (None if base is None
+                else cur.get(key, 0) - base.get(key, cur.get(key, 0)))
 
     parts = []
     total = 0
@@ -342,11 +381,16 @@ def report(cur, base, variant="big", out=sys.stdout):
         dv = d(s)
         if dv is not None:
             total += dv
-            parts.append(f"{s} {kb(cur[s])} {delta(dv)}")
+            parts.append(f"{s} {kb(cur.get(s, 0))} {delta(dv)}")
         else:
-            parts.append(f"{s} {kb(cur[s])}")
+            parts.append(f"{s} {kb(cur.get(s, 0))}")
     p(tag + " sections   " + "  ".join(parts)
       + (f"   (sum {delta(total)})" if base is not None else ""))
+
+    # NOT `total`: see RUNG_SECTIONS. This is what the change took out of the
+    # rungs, which is the number the verdict at the bottom prices.
+    charged = (None if base is None
+               else sum(d(s) or 0 for s in RUNG_SECTIONS))
 
     crossed = []
     cells = []
@@ -366,6 +410,14 @@ def report(cur, base, variant="big", out=sys.stdout):
             cell += f" ({kb(slack)} left)"
         cells.append(cell)
     p(tag + " rungs      " + "   ".join(cells))
+
+    acc = []
+    for name, members, para in RUNGS:
+        size = rung_bytes(cur, para)
+        spent = rung_accrued(size, rung_used(cur, members))
+        acc.append(f"{name} {spent}/512 ({spent * 100 // 512}%)")
+    p(tag + " accrued    " + "   ".join(acc)
+      + "   - spent into the current rung and NOT YET BILLED")
 
     spare = cur["budget"] - cur["ksize"]
     line = (f"{tag} footprint  KERN_SIZE {kb(cur['ksize'])}"
@@ -402,8 +454,10 @@ def report(cur, base, variant="big", out=sys.stdout):
     cold = ks + cur["imgpara"]
     fat = cold + cur["coldpara"]
     low = fat + cur["fatpara"]
+    vgabuf = low + cur["lowpara"]
     p(f"{tag} ladder     KERNEL {ks:#06x}  COLD {cold:#06x}"
-      f"  FAT {fat:#06x}  LOW {low:#06x}  HEAP {cur['kend']:#06x}"
+      f"  FAT {fat:#06x}  LOW {low:#06x}  VGABUF {vgabuf:#06x}"
+      f"  HEAP {cur['kend']:#06x}"
       f" = {cur['kend'] * 16 / 1024:.1f} KB   (heap KB = int 12h"
       f" - {cur['kend'] * 16 / 1024:.1f})")
 
@@ -413,14 +467,44 @@ def report(cur, base, variant="big", out=sys.stdout):
     elif budged:
         pass                            # already said, and louder
     elif crossed:
+        # A CROSSING GOES BOTH WAYS, and the down direction used to read as
+        # the up one. A saving that clears a rung hands 512 bytes back to
+        # every machine, which is the largest single thing an optimisation
+        # pass in this kernel can do, and the report called it "the machine's
+        # RAM moved" in the same words it used for a regression.
         for name, a, b in crossed:
-            p(f"{tag} *** the {name} rung CROSSED: {a} -> {b}"
-              f" steps of 512 - the machine's RAM moved ***")
+            # ...and it can move more than one step, which is why the byte
+            # figure is computed rather than written as 512.
+            moved = abs(b - a) * 512
+            if b > a:
+                p(f"{tag} *** the {name} rung CROSSED: {a} -> {b}"
+                  f" steps of 512 - {kb(moved)} bytes of every machine's"
+                  f" RAM, gone ***")
+            else:
+                p(f"{tag} *** the {name} rung UNCROSSED: {a} -> {b}"
+                  f" steps of 512 - {kb(moved)} bytes of every machine's"
+                  f" RAM, back ***")
+    # THE TWO SENTENCES BELOW ARE THE POINT OF THIS TOOL, and for a long time
+    # the first of them said the opposite. It read "the machine pays nothing
+    # YET, and the slack above is what the next feature has left" - which is
+    # true and lands as "this was free, and here is more free", the exact
+    # argument CLAUDE.md's rung rule now refuses. The rung says WHEN the
+    # machine pays. It never said what the change cost.
+    elif charged > 0:
+        p(f"{tag} no rung crossed - AND THIS CHANGE WAS NOT FREE: it spent"
+          f" {kb(charged)} bytes of rung slack that belonged to whoever comes"
+          f" next, and the 512 it did not pay is now theirs to pay. A byte"
+          f" costs a byte (CLAUDE.md's rung rule)")
+    elif charged < 0:
+        p(f"{tag} no rung uncrossed - AND THE SAVING IS STILL REAL:"
+          f" {kb(-charged)} bytes bought back is {kb(-charged)} the next"
+          f" feature does not have to ask for. A saving is priced in bytes,"
+          f" not in steps (CLAUDE.md's rung rule)")
     elif total:
-        p("kernsize: no rung crossed - the machine pays nothing YET, and the"
-          " slack above is what the next feature has left")
+        p(f"{tag} .ovl moved and no rung did - the overlay lands in the FAT"
+          f" window and is charged to no rung at all (SPEC.md 2.5)")
     else:
-        p("kernsize: unchanged")
+        p(f"{tag} unchanged")
     return crossed
 
 
