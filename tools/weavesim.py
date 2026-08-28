@@ -58,12 +58,16 @@ GLYPH_TOGGLE_MS = (35, 50)  # os88ui_glyph toggle, 44-64 set bits, field 5150
 LIST_SCROLL_MS = (83, 90)   # PERFORMANCE.md Part 5's scroll-one-line contract
 KEYSTROKE_MS = 1.8          # the Note Pad contract (SPEC.md 27.2), ~2 cells
 
-# Content areas per adapter: the browser's maximized-window figures
-# (tools/htmsim.py), same chrome arithmetic; cell_us is Part 2's per-adapter
-# glyph cost. The walk itself only needs cw/ch (WEAVE-SPEC 7.1).
+# Content areas per adapter, derived in WEAVE-SPEC 7.1.1 from the platform's
+# own constants - CW = floor(([vid_w]-1)/8), CH = floor(([vid_h]-64)/8) over
+# SPEC.md 11.95's standard rect. NOT htmsim's viewport: the browser is not
+# maximized on Hercules (it takes 90% of the band), and copying its figure
+# is where this table's herc ch=36 came from - four content pixels that do
+# not exist, and a row the 8086 would have been told to lay out on.
+# cell_us is Part 2's per-adapter glyph cost; the walk needs only cw/ch.
 ADAPTERS = {
     "cga":  dict(name="CGA 640x200",      cell_us=918.0, cw=79, ch=17),
-    "herc": dict(name="Hercules 720x348", cell_us=905.0, cw=89, ch=36),
+    "herc": dict(name="Hercules 720x348", cell_us=905.0, cw=89, ch=35),
     "vga":  dict(name="VGA 640x480",      cell_us=620.0, cw=79, ch=52),
 }
 GEOM_ALIAS = {"640x200": "cga", "720x348": "herc", "640x480": "vga"}
@@ -217,7 +221,7 @@ class PackError(Exception):
 class BundleError(Exception):
     """A malformed bundle, refused with the field named (WEAVE-SPEC 10.4)."""
     def __init__(self, name, field):
-        super().__init__("%s is not a Weave bundle (: %s)." % (name, field))
+        super().__init__("%s is not a Weave bundle (%s)." % (name, field))
         self.field = field
 
 
@@ -2639,6 +2643,12 @@ class CompRec:
 
 
 class Bundle:
+    """The reader.  WEAVE-SPEC 2.1: every byte read off a disk is hostile,
+    so nothing here believes an offset it has not bounds-checked, and a
+    malformed bundle refuses with the field named (WEAVE-SPEC 10.4) rather
+    than raising - on the 8086 the same byte is a wild read, a bad divide
+    or a claim sized from a lie, and there is no traceback to catch."""
+
     def __init__(self, data, name):
         self.data, self.name = data, name
         e = lambda field: (_ for _ in ()).throw(BundleError(name, field))
@@ -2654,50 +2664,129 @@ class Bundle:
         self.flags = flags
         self.vm_kb, self.grid_kb, nsec, self.entry, self.canvas_kb, rsvd \
             = data[10:16]
-        if rsvd or not 1 <= nsec <= 9 or not 16 <= self.vm_kb <= 32:
+        if rsvd:
             e("header")
+        # The three claim-KB bytes ARE WEAVE-SPEC 10.1's memory refusal:
+        # the whole ask is computed from the directory entry plus these,
+        # BEFORE any I/O, so an out-of-range one is a lie the heap would
+        # believe.  All three are ranged, not just the VM's.
+        if not 16 <= self.vm_kb <= 32:
+            e("vm KB")
+        if self.grid_kb and not 8 <= self.grid_kb <= 26:
+            e("grid KB")
+        if self.canvas_kb and not 2 <= self.canvas_kb <= 8:
+            e("canvas KB")
+        # 2.4: UISTREAM, PROPS, CODE and ATOMS are mandatory and ICON is
+        # always present, so five rows is the floor and nine the ceiling.
+        if not 5 <= nsec <= 9:
+            e("section count")
+        if not 1 <= self.entry <= 8:
+            e("entry card")
         nm = data[16:32]
         z = nm.find(b"\0")
-        if z < 0 or any(b for b in nm[z:]):
+        if z <= 0 or any(b for b in nm[z:]):
+            e("app name")
+        if any(not 0x20 <= b <= 0x7E for b in nm[:z]):
             e("app name")
         self.app_name = nm[:z].decode("ascii")
         self.sections = {}
-        prev = 0
+        if 32 + 8 * nsec > total:
+            e("section table")
+        prev, end = 0, 32 + 8 * nsec
         for k in range(nsec):
             typ, z2, ofs, ln, extra = struct.unpack_from("<BBHHH", data,
                                                          32 + 8 * k)
             if typ <= prev or typ > 9 or z2:
                 e("section table")
-            if ofs % 16 or ofs + ln > total:
+            # 2.3: the first section begins at align16(32 + 8*count) and
+            # each next at align16(previous offset + length) - sections
+            # abut, so a gap or an overlap is a different file.
+            if ofs != align16(end) or ofs + ln > total:
                 e("section table")
-            prev = typ
+            if any(data[end:ofs]):      # 2.1: padding bytes are 0x00
+                e("section padding")
+            prev, end = typ, ofs + ln
             self.sections[typ] = (data[ofs:ofs + ln], extra)
+        if end != total:                # 2.3: no tail padding, ever
+            e("total size")
         for typ in (SEC_UISTREAM, SEC_PROPS, SEC_CODE, SEC_ATOMS):
             if typ not in self.sections:
                 e("section table")
+        # 2.4: ICON always - the packer supplies a default when the
+        # project has none, so an absent one is a truncated bundle.
+        if SEC_ICON not in self.sections \
+                or len(self.sections[SEC_ICON][0]) != 64:
+            e("ICON")
+        self._check_couplings(e)
+        # Parse order is dependency order: the atom pool, the sprite
+        # table and the function table are what a property record's value
+        # is bounds-checked against, so they are read first.
         self._parse_atoms(e)
-        self._parse_props(e)
-        self._parse_uistream(e)
-        self._parse_code(e)
-        self._parse_fx(e)
         self._parse_sprites(e)
-        self.icon = self.sections.get(SEC_ICON, (b"", 0))[0]
+        self._parse_code(e)
+        self._parse_uistream(e)
+        self._parse_props(e)
+        self._parse_fx(e)
+        self._check_comp_props(e)
+        self.icon = self.sections[SEC_ICON][0]
         src, wml_len = self.sections.get(SEC_SOURCE, (b"", 0))
+        if src and wml_len > len(src):
+            e("SOURCE")
         self.source = (src[:wml_len], src[wml_len:]) if src else None
 
+    def _check_couplings(self, e):
+        """2.2.1/2.4 - which sections ride which flag bits.  The packer
+        computes the flags word; a bundle whose flags disagree with its own
+        section table makes the load-time capability test (10.2) lie."""
+        grid = bool(self.flags & WABF_GRID)
+        if (SEC_FXCODE in self.sections) != grid:
+            e("flags")
+        if (SEC_CELLS in self.sections) != grid:
+            e("flags")
+        if (self.grid_kb > 0) != grid:
+            e("flags")
+        if (self.canvas_kb > 0) != bool(self.flags & WABF_CANVAS):
+            e("flags")
+        if (SEC_SOURCE in self.sections) != bool(self.flags & WABF_SOURCE):
+            e("flags")
+        if SEC_SPRITES in self.sections \
+                and not self.flags & WABF_CANVAS:
+            e("flags")
+
     def _parse_atoms(self, e):
+        """2.7 - the pool walked end to end: the count word must leave
+        room for its own offset table, every offset and length must stay
+        inside the section, and every body byte must be one the cell font
+        has a glyph for."""
         b, _ = self.sections[SEC_ATOMS]
+        if len(b) < 2:
+            e("atom pool")
         n = struct.unpack_from("<H", b, 0)[0]
         if n > APP_ATOM_MAX:
             e("atom id")
+        if 2 + 2 * n > len(b):
+            e("atom pool")
         self.atom_strings = []
+        pos = 2 + 2 * n
         for k in range(n):
             ofs = struct.unpack_from("<H", b, 2 + 2 * k)[0]
+            # Offsets ascend in id order and strings pack without gaps.
+            if ofs != pos or ofs >= len(b):
+                e("atom pool")
             ln = b[ofs]
+            if ln < 1 or ofs + 1 + ln + 1 > len(b):
+                e("atom pool")
             s = b[ofs + 1:ofs + 1 + ln]
             if b[ofs + 1 + ln] != 0:
                 e("atom pool")
+            # 2.7/3.1: folded to 0x20..0x7E.  A decode() here would raise
+            # instead of refusing - and the 8086 has no decode at all.
+            if any(not 0x20 <= c <= 0x7E for c in s):
+                e("atom pool")
             self.atom_strings.append(s.decode("ascii"))
+            pos = ofs + 1 + ln + 1
+        if pos != len(b):
+            e("atom pool")
 
     def atom_str(self, aid):
         if APP_ATOM0 <= aid < APP_ATOM0 + len(self.atom_strings):
@@ -2705,6 +2794,10 @@ class Bundle:
         if aid in WK_NAME:
             return WK_NAME[aid]
         raise BundleError(self.name, "atom id")
+
+    def _atom_ok(self, aid):
+        return aid in WK_NAME or \
+            APP_ATOM0 <= aid < APP_ATOM0 + len(self.atom_strings)
 
     def _block(self, ofs, e):
         b, _ = self.sections[SEC_PROPS]
@@ -2718,10 +2811,16 @@ class Bundle:
                 return out
             if kind > PK_SPRITE:
                 e("prop kind")
-            if not (atom in WK_NAME
-                    or APP_ATOM0 <= atom < APP_ATOM0
-                    + len(self.atom_strings)):
+            if not self._atom_ok(atom):
                 e("atom id")
+            if kind == PK_ATOM and not self._atom_ok(val):
+                e("atom id")
+            if kind == PK_BLOB and val >= len(b):
+                e("prop blob")
+            if kind == PK_FUNC and val >= len(self.functions):
+                e("function index")
+            if kind == PK_SPRITE and val >= len(self.sprites):
+                e("sprite index")
             if kind == PK_INT and val & 0x8000:
                 val -= 0x10000          # PK_INT is a signed word
             out[atom] = (kind, val)
@@ -2730,9 +2829,66 @@ class Bundle:
     def blob(self, ofs):
         return self.sections[SEC_PROPS][0][ofs:]
 
+    def _items_blob(self, ofs, e):
+        """2.6.1 - count byte then count atom-id bytes.  Walked AT LOAD:
+        a count larger than the blob's remaining bytes is a short list on
+        the model and a wild read on the machine."""
+        b = self.sections[SEC_PROPS][0]
+        if ofs >= len(b):
+            e("prop blob")
+        n = b[ofs]
+        if n > 64 or ofs + 1 + n > len(b):
+            e("list items")
+        for a in b[ofs + 1:ofs + 1 + n]:
+            if not self._atom_ok(a):
+                e("atom id")
+
+    def _menus_blob(self, ofs, e):
+        """2.6.2 - the MENUS blob, walked AT LOAD.  The model reads menus
+        lazily and the 8086 cannot: it must have them before the first
+        OSAPI_MENU_SET, so an unwalked blob is a wild read there and clean
+        here, which no differential can see."""
+        b = self.sections[SEC_PROPS][0]
+        if ofs >= len(b):
+            e("prop blob")
+        nm = b[ofs]
+        if not 1 <= nm <= 5:            # MENU_APPMAX (SPEC.md 12.2)
+            e("menu count")
+        pos = ofs + 1
+        self.menus = []
+        for _ in range(nm):
+            if pos + 2 > len(b):
+                e("menu blob")
+            title, ni = b[pos], b[pos + 1]
+            if not self._atom_ok(title):
+                e("atom id")
+            if not 1 <= ni <= 8:
+                e("menu item count")
+            pos += 2
+            if pos + 2 * ni > len(b):
+                e("menu blob")
+            items = []
+            for it in range(ni):
+                label, fn = b[pos + 2 * it], b[pos + 2 * it + 1]
+                if not self._atom_ok(label):
+                    e("atom id")
+                if fn != 0xFF and fn >= len(self.functions):
+                    e("menu command")
+                items.append((label, fn))
+            self.menus.append((title, items))
+            pos += 2 * ni
+
     def _parse_props(self, e):
         _, app_at = self.sections[SEC_PROPS]
+        if app_at >= len(self.sections[SEC_PROPS][0]):
+            e("app block")
         self.app_props = self._block(app_at, e)
+        self.menus = []
+        for atom, (kind, val) in self.app_props.items():
+            if atom not in (WK["card"], WK["start"], WK["MENUS"]):
+                e("app block")          # 2.6.2: nothing else may appear
+            if atom == WK["MENUS"]:
+                self._menus_blob(val, e)
 
     def _parse_uistream(self, e):
         b, nrec = self.sections[SEC_UISTREAM]
@@ -2741,15 +2897,22 @@ class Bundle:
         self.cards = []
         seen_ids = set()
         comps = None
+        end_seen = False
+        next_id, prev_ct = 1, None
         for k in range(nrec):
             r = b[10 * k:10 * k + 10]
             if r[0] == REC_END:
                 if k != nrec - 1 or any(r[1:]):
                     e("REC_END")
+                end_seen = True
             elif r[0] == REC_CARD:
                 if not 1 <= r[1] <= 8 or r[1] != len(self.cards) + 1:
                     e("card index")
+                # 2.5: bytes +2..+7 are 0 and v1 cards carry no props.
+                if any(r[2:8]) or struct.unpack_from("<H", r, 8)[0] != 0xFFFF:
+                    e("card record")
                 comps = []
+                prev_ct = None
                 self.cards.append(comps)
             elif r[0] == REC_COMP:
                 if comps is None:
@@ -2757,37 +2920,125 @@ class Bundle:
                 cid, ct = r[1], r[2]
                 if ct not in CTYPE_NAME:
                     e("ctype")
-                if cid in seen_ids or not 1 <= cid <= 250:
+                # 2.5/2.14 rule 2: comp_ids are document order, 1-based.
+                if cid in seen_ids or not 1 <= cid <= 250 or cid != next_id:
                     e("comp_id")
                 seen_ids.add(cid)
+                next_id += 1
+                if r[7]:
+                    e("component record")
                 if r[5] & 0xF0:
                     e("style byte")
                 if (r[5] >> 2) & 3 == 3:
                     e("style byte")
                 if r[6] & ~7:
                     e("cflags")
+                self._geometry(CTYPE_NAME[ct], r[3], r[4], prev_ct, e)
                 c = CompRec(cid, ct, r[3], r[4], r[5], r[6])
                 pofs = struct.unpack_from("<H", r, 8)[0]
                 if pofs != 0xFFFF:
+                    if pofs >= len(self.sections[SEC_PROPS][0]):
+                        e("prop block")
                     c.props = self._block(pofs, e)
                 comps.append(c)
+                prev_ct = ct
             else:
                 e("record kind")
+        if not end_seen:
+            e("REC_END")
         if not self.cards or not 1 <= self.entry <= len(self.cards):
             e("entry card")
         self.comps = {c.comp_id: c for comps in self.cards for c in comps}
 
+    def _geometry(self, tag, w, h, prev_ct, e):
+        """2.5/3.3 - the record's w/h bytes, per ctype.  A 0 where the
+        spec says "never 0" is a divide or a negative repeat count on the
+        machine, so it refuses here."""
+        if tag == "sprite":
+            # 2.5: a <sprite> record follows its <canvas> directly.
+            if prev_ct not in (CTYPE["canvas"], CTYPE["sprite"]):
+                e("sprite record")
+            if w or h:                  # its geometry lives in SPRITES
+                e("sprite record")
+            return
+        if tag == "canvas":
+            # w/8 cells (64..320 px) and ceil(h/8) rows (32..160 px).
+            if not 8 <= w <= 40:
+                e("canvas w")
+            if not 4 <= h <= 20:
+                e("canvas h")
+            return
+        if w > 160:
+            e("component w")
+        if h > 40:
+            e("component h")
+        if tag == "box":                # 3.3: w,h required, >= 2x1
+            if w < 2:
+                e("box w")
+            if h < 1:
+                e("box h")
+        elif tag == "spacer":           # 3.3: w required
+            if w < 1:
+                e("spacer w")
+
+    def _check_comp_props(self, e):
+        """3.3's required properties and their bounds - checked by no
+        reader in this tree before now.  Each is something the runtime
+        divides by, sizes a claim from, or dereferences."""
+        for c in self.comps.values():
+            t = c.tag
+            if t == "grid":
+                if WK["cols"] not in c.props:
+                    e("grid cols")
+                if WK["rows"] not in c.props:
+                    e("grid rows")
+                cols = c.props[WK["cols"]][1]
+                rows = c.props[WK["rows"]][1]
+                if not 1 <= cols <= 26:
+                    e("grid cols")
+                if not 1 <= rows <= 256:
+                    e("grid rows")
+                # 5.6: the cell store plus its pool must fit a 26KB claim
+                # - and the header's grid KB was sized from these numbers.
+                if rows * cols > 6140:
+                    e("grid size")
+            elif t == "radio":
+                if WK["group"] not in c.props:
+                    e("radio group")
+            elif t == "meter":
+                if WK["max"] in c.props \
+                        and not 1 <= c.props[WK["max"]][1] <= 32000:
+                    e("meter max")
+            elif t == "list" and WK["ITEMS"] in c.props:
+                self._items_blob(c.props[WK["ITEMS"]][1], e)
+
     def _parse_code(self, e):
         b, _ = self.sections[SEC_CODE]
+        if len(b) < 2:
+            e("function table")
         nf, ng = b[0], b[1]
         if nf > 128 or ng > 128:
             e("function table")
         self.nglobals = ng
         self.functions = []
+        body_at = 2 + 4 * nf
+        if body_at > len(b):
+            e("function table")
+        if nf == 0:
+            # 2.8: a scriptless bundle's body is exactly one HALT byte.
+            if b[body_at:] != bytes([OP["HALT"]]):
+                e("function table")
+        prev = body_at
         for k in range(nf):
             ofs, nargs, nloc = struct.unpack_from("<HBB", b, 2 + 4 * k)
-            if ofs > len(b) or nargs > 8 or nloc > 16 or nloc < nargs:
+            # 2.8: functions are packed back to back from 2+4F, each a
+            # contiguous run - so every offset bounds the previous body.
+            bad = (ofs != prev) if k == 0 else (ofs <= prev)
+            if bad:
                 e("function table")
+            if ofs >= len(b) or nargs > 8 or nloc > 16 or nloc < nargs:
+                e("function table")
+            prev = ofs
             self.functions.append((ofs, nargs, nloc))
         self.code = b
 
@@ -2795,10 +3046,19 @@ class Bundle:
         self.formulas, self.cells = [], []
         if SEC_FXCODE in self.sections:
             b, nf = self.sections[SEC_FXCODE]
-            if struct.unpack_from("<H", b, 0)[0] != nf:
+            if len(b) < 2 or struct.unpack_from("<H", b, 0)[0] != nf:
                 e("formula count")
+            if 2 + 2 * nf > len(b):
+                e("formula count")
+            prev = 2 + 2 * nf
             for k in range(nf):
                 ofs = struct.unpack_from("<H", b, 2 + 2 * k)[0]
+                bad = (ofs != prev) if k == 0 else (ofs <= prev)
+                if bad:
+                    e("formula table")
+                if ofs >= len(b):
+                    e("formula table")
+                prev = ofs
                 self.formulas.append(b[ofs:])
         if SEC_CELLS in self.sections:
             b, nc = self.sections[SEC_CELLS]
@@ -2808,11 +3068,20 @@ class Bundle:
                 r, c, kind, z = b[8 * k:8 * k + 4]
                 if z or kind not in (1, 2, 3):
                     e("cell record")
+                if c > 25:
+                    e("cell record")
                 if kind == 1:
                     payload = struct.unpack_from("<i", b, 8 * k + 4)[0]
                 else:
                     payload = struct.unpack_from("<I", b, 8 * k + 4)[0] \
                         & 0xFFFF
+                    if kind == 2 and not self._atom_ok(payload):
+                        e("cell record")
+                    # 2.9/2.10: CELLS reference formulas by INDEX into
+                    # the FXCODE table - past its end is a wild read at
+                    # the first recalc, which is at open.
+                    if kind == 3 and payload >= len(self.formulas):
+                        e("cell record")
                 self.cells.append((r, c, kind, payload))
 
     def _parse_sprites(self, e):
@@ -2820,7 +3089,9 @@ class Bundle:
         if SEC_SPRITES not in self.sections:
             return
         b, ns = self.sections[SEC_SPRITES]
-        if b[0] != ns or b[1]:
+        if len(b) < 2 or b[0] != ns or b[1] or not 1 <= ns <= 16:
+            e("sprite count")
+        if 2 + 8 * ns > len(b):
             e("sprite count")
         for k in range(ns):
             wb, h, nf, z1 = b[2 + 8 * k:2 + 8 * k + 4]
@@ -2828,7 +3099,11 @@ class Bundle:
             if z1 or not 1 <= wb <= 8 or not 1 <= h <= 64 \
                     or not 1 <= nf <= 8:
                 e("sprite descriptor")
+            if struct.unpack_from("<H", b, 2 + 8 * k + 6)[0]:
+                e("sprite descriptor")
             fsz = wb * h
+            if dofs + nf * 2 * fsz > len(b):
+                e("sprite data")
             images, masks = [], []
             for f in range(nf):
                 base = dofs + f * 2 * fsz
@@ -3835,8 +4110,10 @@ def flow_walk(rt, adapter, card=None):
         w = c.w if c.w > 0 else natural_w(rt, c, cw)
         w = min(w, cw)
         if (c.cflags & CF_BREAK) or (x > 0 and x + w > cw):
-            rows.append(cur)
-            cur, x = [], 0
+            if cur:                     # closing an EMPTY row is a no-op
+                rows.append(cur)        # (WEAVE-SPEC 7.2): a CF_BREAK on a
+                cur = []                # card's first component is already
+            x = 0                       # at the start of a row
         cur.append((c, x, w))
         x += w + 1                      # one gutter cell
     if cur:
@@ -3952,6 +4229,20 @@ def render(rt, adapter, card=None, out=print):
 
 
 # --- the cost model (WEAVE-SPEC 14) ------------------------------------------
+def first_paint_us(adapter, comps=None):
+    """What OPENING a card costs, which WEAVE-SPEC 14 priced nowhere: every
+    other row of that table is an INTERACTION, and paint() counts only
+    mutations, so the one spend wave 2's gate actually measures had no
+    number.  One gfx call per painted component plus its cells:
+    sum(CALL_US + cells x cell_us).  With no component list, the worst
+    case - a fully lettered card, one component per content row, every
+    cell of the content area a glyph."""
+    A = ADAPTERS[adapter]
+    if comps is None:
+        comps = [A["cw"]] * A["ch"]
+    return sum(CALL_US + cells * A["cell_us"] for cells in comps)
+
+
 def costs_table(adapter="cga"):
     """WEAVE-SPEC 14's rows, computed from the measured constants. The
     appendix is regenerated FROM this function - the model owns the
@@ -3987,6 +4278,15 @@ def costs_table(adapter="cga"):
          "~%.0f-%.0f ms" % (ms(2 * CALL_US) + 0.5, ms(4 * CALL_US) + 2)),
         ("card", "switch (full-card repaint, text-heavy CGA card)",
          "~1/row", "~0.3-1.2 s"),
+    ]
+    # The first paint, worst case, per adapter - the row wave 2's gate is.
+    for ad in ("cga", "herc", "vga"):
+        A = ADAPTERS[ad]
+        rows.append(("card", "first paint, fully lettered %s (%d rows x "
+                     "%d cells)" % (A["name"], A["ch"], A["cw"]),
+                     "%d" % A["ch"],
+                     "~%.2f s" % (first_paint_us(ad) / 1e6)))
+    rows += [
         ("alert", "raise + dismiss", "~8",
          "~%.0f-%.0f ms" % (ms(8 * CALL_US) + 24, ms(8 * CALL_US) + 34)),
     ]
@@ -4158,6 +4458,15 @@ def cmd_render(path, adapters, card=None):
     else:
         res = pack_project(path)
         rt = Runtime(Bundle(res.data, "x.WAB"), idmap=res.app.idmap)
+    # Card indices are 1-based (WEAVE-SPEC 2.5).  Python's are not: --card 0
+    # rendered the LAST card and --card 9 traced back, so both refuse here
+    # with the range, the way every other out-of-range answer does.
+    if card is not None and not 1 <= card <= len(rt.b.cards):
+        raise SystemExit("--card %d: %s has %d card%s, numbered 1..%d "
+                         "(WEAVE-SPEC 2.5)"
+                         % (card, rt.b.app_name, len(rt.b.cards),
+                            "" if len(rt.b.cards) == 1 else "s",
+                            len(rt.b.cards)))
     for ad in adapters:
         render(rt, ad, card)
         print()
@@ -4485,6 +4794,23 @@ def selfcheck_demos(ck, tmp):
         ck.ok(total >= max(p.y + p.h for p in placed), "%s: total rows "
               "cover the walk" % ad)
 
+    # CF_BREAK on a card's FIRST component, and two in a row: closing an
+    # empty row is a no-op (WEAVE-SPEC 7.2). A row with no component in it
+    # has no height, and the walk once raised on max() of an empty list.
+    brk = os.path.join(tmp, "brk.wml")
+    with open(brk, "w") as f:
+        f.write('<app name="Brk"><card id="main">'
+                '<label br="1">A</label><label br="1">B</label>'
+                '<label>C</label></card></app>\n')
+    resb = pack_project(brk)
+    rtb = Runtime(Bundle(resb.data, "BRK.WAB"), idmap=resb.app.idmap)
+    pl, tot = flow_walk(rtb, "cga")
+    ck.ok(tot == 2, "br: two rows, not three - the leading break emits no "
+          "empty row (got %d)" % tot)
+    ck.ok([(p.x, p.y) for p in pl] == [(0, 0), (0, 1), (2, 1)],
+          "br: A at 0,0; B at 0,1; C at 2,1 (got %s)"
+          % [(p.x, p.y) for p in pl])
+
     # sheet: SUM/AVG/IF over the budget, the WJS truncation seam
     res = pack_project(os.path.join(dd, "sheet.wml"))
     rt = Runtime(Bundle(res.data, "SHEET.WAB"), idmap=res.app.idmap)
@@ -4591,7 +4917,7 @@ def selfcheck_vm(ck, tmp):
         d = bytearray(good)
         mut(d)
         ck.raises(what, BundleError, lambda: Bundle(bytes(d), "X.WAB"),
-                  contains="is not a Weave bundle (: %s)." % field)
+                  contains="is not a Weave bundle (%s)." % field)
     broken(lambda d: d.__setitem__(0, 0x57 + 1), "magic", "bad magic")
     broken(lambda d: d.__setitem__(4, 2), "version", "version != 1")
     broken(lambda d: d.__setitem__(6, d[6] ^ 1), "total size",
@@ -4610,6 +4936,21 @@ def selfcheck_vm(ck, tmp):
     band79 = BAND_CALL_US + 79 * BAND_CELL_US
     ck.ok(abs(band79 - 14527) < 1, "79-cell band row = 14.5 ms (Set 68)")
 
+    # The first paint (WEAVE-SPEC 14's added row): every other row of that
+    # table is an interaction, and paint() counts only mutations, so
+    # nothing priced opening a card - which is exactly wave 2's gate.
+    A = ADAPTERS["cga"]
+    ck.ok(abs(first_paint_us("cga")
+              - A["ch"] * (CALL_US + A["cw"] * A["cell_us"])) < 1,
+          "card first paint: one call plus its cells, per painted "
+          "component, worst case a fully lettered card")
+    ck.ok(first_paint_us("cga", [20, 20])
+          == 2 * CALL_US + 40 * A["cell_us"],
+          "first paint sums over the components it is given")
+    ck.ok(any(c == "card" and "first paint" in i
+              for c, i, _n, _v in costs_table("cga")),
+          "the cost table carries a card first-paint row")
+
     # the generators
     tab = emit_optab()
     ck.ok(tab.count("\n    dw ") == 38, "--emit-optab emits 38 entries")
@@ -4619,10 +4960,266 @@ def selfcheck_vm(ck, tmp):
           "--emit-foldtab: 128 entries from htmsim's one definition")
 
 
+# --- the hostile corpus (WEAVE-SPEC 2.1, 10.4) -------------------------------
+# Every byte read off a disk is hostile.  These build a real packed bundle,
+# break exactly one thing in it, and assert the reader REFUSES with the field
+# named - never a traceback.  Each row is a defect the model once accepted or
+# crashed on; on the 8086 each is a wild read, a bad divide or a claim sized
+# from a lie, so they stay here as a regression suite rather than a one-off.
+def _wab_take(data):
+    """A packed bundle taken apart: [[type, bytearray body, extra], ...]."""
+    out = []
+    for k in range(data[12]):
+        typ, _z, ofs, ln, extra = struct.unpack_from("<BBHHH", data,
+                                                     32 + 8 * k)
+        out.append([typ, bytearray(data[ofs:ofs + ln]), extra])
+    return out
+
+
+def _wab_make(data, secs):
+    """...and put back together, with the section table, the 16-byte
+    padding and the total-size word recomputed (WEAVE-SPEC 2.3).  A corpus
+    bundle must be malformed in exactly ONE place, or the reader refuses
+    the scaffolding instead of the defect under test."""
+    out = bytearray(data[:32])
+    out[12] = len(secs)
+    out += bytearray(8 * len(secs))
+    for i, (typ, body, extra) in enumerate(secs):
+        while len(out) % 16:
+            out.append(0)
+        struct.pack_into("<BBHHH", out, 32 + 8 * i, typ, 0, len(out),
+                         len(body), extra)
+        out += body
+    struct.pack_into("<H", out, 6, len(out))
+    return bytes(out)
+
+
+def _sec(secs, typ):
+    for row in secs:
+        if row[0] == typ:
+            return row
+    raise KeyError(typ)
+
+
+def _find_prop(props, name, start=0, stop=None):
+    """The offset of the first 4-byte property record with this name atom.
+    Blocks run back to back from PROPS+0 and the blobs follow all of them
+    (WEAVE-SPEC 2.14 rule 5), so a 4-byte stride is the record grid."""
+    for i in range(start, (len(props) if stop is None else stop) - 3, 4):
+        if props[i] == name:
+            return i
+    raise KeyError(name)
+
+
+def _find_rec(ui, ctype):
+    for i in range(0, len(ui), 10):
+        if ui[i] == REC_COMP and ui[i + 2] == ctype:
+            return i
+    raise KeyError(ctype)
+
+
+RADIO_WML = ('<app name="Radio"><card id="m">'
+             '<radio id="r" group="pick">One</radio>'
+             '<radio id="r2" group="pick">Two</radio></card></app>')
+LIST_WML = ('<app name="Lister"><card id="m"><list id="l">'
+            '<item>Alpha</item><item>Beta</item></list></card></app>')
+BOX_WML = '<app name="Boxy"><card id="m"><box w="4" h="2"/></card></app>'
+
+
+def selfcheck_hostile(ck, tmp):
+    dd = demo_dir()
+    form = pack_project(os.path.join(dd, "form.wml")).data
+    sheet = pack_project(os.path.join(dd, "sheet.wml")).data
+    pong = pack_project(os.path.join(dd, "pong.wml")).data
+    radio = pack_project(_proj(tmp, RADIO_WML, stem="radio")).data
+    lister = pack_project(_proj(tmp, LIST_WML, stem="lister")).data
+    boxy = pack_project(_proj(tmp, BOX_WML, stem="boxy")).data
+
+    def hostile(base, mut, field, what):
+        secs = _wab_take(base)
+        mut(secs)
+        d = _wab_make(base, secs)
+        ck.raises(what, BundleError, lambda: Bundle(d, "X.WAB"),
+                  contains="is not a Weave bundle (%s)." % field)
+
+    def header(base, mut, field, what):
+        d = bytearray(base)
+        mut(d)
+        ck.raises(what, BundleError, lambda: Bundle(bytes(d), "X.WAB"),
+                  contains="is not a Weave bundle (%s)." % field)
+
+    # UB-1..UB-4: ATOMS.  The pool is a table of offsets into itself -
+    # every one of these was an IndexError or a UnicodeDecodeError.
+    def ub1(secs):
+        a = _sec(secs, SEC_ATOMS)[1]
+        struct.pack_into("<H", a, 2, len(a) + 8)        # atom 64 past the end
+    hostile(form, ub1, "atom pool", "UB-1 atom offset past the section")
+
+    def ub2(secs):
+        a = _sec(secs, SEC_ATOMS)[1]
+        n = struct.unpack_from("<H", a, 0)[0]
+        a[struct.unpack_from("<H", a, 2 + 2 * (n - 1))[0]] = 250
+    hostile(form, ub2, "atom pool", "UB-2 atom length overruns the section")
+
+    def ub3(secs):
+        a = _sec(secs, SEC_ATOMS)[1]
+        a[struct.unpack_from("<H", a, 2)[0] + 1] = 0xE9
+    hostile(form, ub3, "atom pool", "UB-3 non-ASCII byte in an atom body")
+
+    def ub4(secs):
+        struct.pack_into("<H", _sec(secs, SEC_ATOMS)[1], 0, 150)
+    hostile(form, ub4, "atom pool", "UB-4 atom count larger than the pool")
+
+    # UB-5: a sprite record with no canvas before it - the model's own
+    # canvas_cid was still None and the append raised KeyError.
+    def ub5(secs):
+        ui = _sec(secs, SEC_UISTREAM)[1]
+        ui[12], ui[13], ui[14] = CTYPE["sprite"], 0, 0
+    hostile(form, ub5, "sprite record", "UB-5 sprite with no canvas")
+
+    # UB-6/UB-8/UB-16/UB-17: PROPS values that address nothing.
+    def ub6(secs):
+        p, app_at = _sec(secs, SEC_PROPS)[1], _sec(secs, SEC_PROPS)[2]
+        for i in range(0, app_at, 4):
+            if p[i + 1] == PK_SPRITE:
+                struct.pack_into("<H", p, i + 2, 99)
+                return
+        raise KeyError("PK_SPRITE")
+    hostile(pong, ub6, "sprite index", "UB-6 PK_SPRITE past the SPRITES table")
+
+    def ub8(secs):
+        p = _sec(secs, SEC_PROPS)[1]
+        struct.pack_into("<H", p, _find_prop(p, WK["ITEMS"]) + 2, len(p) + 4)
+    hostile(lister, ub8, "prop blob", "UB-8 ITEMS blob offset past PROPS")
+
+    def ub16(secs):
+        p, app_at = _sec(secs, SEC_PROPS)[1], _sec(secs, SEC_PROPS)[2]
+        struct.pack_into("<H", p,
+                         _find_prop(p, WK["MENUS"], app_at) + 2, len(p) + 4)
+    hostile(form, ub16, "prop blob", "UB-16 MENUS blob offset past PROPS")
+
+    def ub17(secs):
+        p = _sec(secs, SEC_PROPS)[1]
+        p[struct.unpack_from("<H", p,
+                             _find_prop(p, WK["ITEMS"]) + 2)[0]] = 60
+    hostile(lister, ub17, "list items", "UB-17 ITEMS count past the blob")
+
+    # UB-7/UB-13..UB-15/UB-20: WEAVE-SPEC 3.3's required properties.
+    def drop_prop(name, start=0):
+        def mut(secs):
+            p = _sec(secs, SEC_PROPS)[1]
+            i = _find_prop(p, name, start)
+            p[i:i + 4] = bytes(4)      # the block now terminates here
+        return mut
+    hostile(radio, drop_prop(WK["group"]), "radio group",
+            "UB-7 radio with no group")
+    hostile(sheet, drop_prop(WK["rows"]), "grid cols",
+            "UB-13 grid with no cols/rows")
+
+    def set_prop(name, val):
+        def mut(secs):
+            p = _sec(secs, SEC_PROPS)[1]
+            struct.pack_into("<H", p, _find_prop(p, name) + 2, val)
+        return mut
+    hostile(sheet, set_prop(WK["rows"], 60000), "grid rows",
+            "UB-14 grid rows = 60000")
+    hostile(sheet, set_prop(WK["cols"], 0), "grid cols",
+            "UB-15 grid cols = 0")
+    hostile(form, set_prop(WK["max"], 0), "meter max",
+            "UB-20 meter max = 0")
+
+    # UB-9/UB-10: a section emptied while its count word still lies.
+    def empty(typ):
+        def mut(secs):
+            _sec(secs, typ)[1] = bytearray()
+        return mut
+    hostile(pong, empty(SEC_SPRITES), "sprite count",
+            "UB-9 empty SPRITES, count 2")
+    hostile(sheet, empty(SEC_FXCODE), "formula count",
+            "UB-10 empty FXCODE, count 4")
+
+    # UB-11: a CELLS record naming a formula that is not in FXCODE.
+    def ub11(secs):
+        c = _sec(secs, SEC_CELLS)[1]
+        for i in range(0, len(c), 8):
+            if c[i + 2] == 3:
+                struct.pack_into("<H", c, i + 4, 99)
+                return
+        raise KeyError("formula cell")
+    hostile(sheet, ub11, "cell record", "UB-11 cell formula index past FXCODE")
+
+    # UB-18/UB-19: a geometry byte WEAVE-SPEC 2.5/3.3 says is never 0 -
+    # a divide, or a negative repeat count, on the machine.
+    def zero_geom(ctype, off):
+        def mut(secs):
+            ui = _sec(secs, SEC_UISTREAM)[1]
+            ui[_find_rec(ui, ctype) + off] = 0
+        return mut
+    hostile(pong, zero_geom(CTYPE["canvas"], 3), "canvas w",
+            "UB-18 canvas w = 0")
+    hostile(pong, zero_geom(CTYPE["canvas"], 4), "canvas h",
+            "UB-18 canvas h = 0")
+    hostile(boxy, zero_geom(CTYPE["box"], 3), "box w", "UB-19 box w = 0")
+    hostile(boxy, zero_geom(CTYPE["box"], 4), "box h", "UB-19 box h = 0")
+
+    # UB-12: the CLI's own 1-based/0-based seam (WEAVE-SPEC 2.5).
+    wab = os.path.join(tmp, "CARDS.WAB")
+    open(wab, "wb").write(form)
+    for n in (0, 9):
+        ck.raises("UB-12 --card %d refuses with the range" % n, SystemExit,
+                  cmd_render, wab, ["cga"], n, contains="numbered 1..")
+
+    # The header's three claim-KB bytes ARE 10.1's memory refusal.
+    header(form, lambda d: d.__setitem__(10, 15), "vm KB", "vm KB below 16")
+    header(form, lambda d: d.__setitem__(11, 4), "grid KB",
+           "grid KB outside 0 or 8..26")
+    header(pong, lambda d: d.__setitem__(14, 9), "canvas KB",
+           "canvas KB outside 0 or 2..8")
+    header(form, lambda d: d.__setitem__(12, 4), "section count",
+           "fewer than the four mandatory sections plus ICON")
+    header(form, lambda d: d.__setitem__(13, 0), "entry card",
+           "entry card 0")
+    header(form, lambda d: d.__setitem__(16, 0), "app name",
+           "an empty app name")
+
+    # 2.3: sections abut at align16, padding is 0x00, the file ends at the
+    # last section's UNPADDED end.
+    header(form, lambda d: d.__setitem__(203, 1), "section padding",
+           "a non-zero inter-section padding byte")
+    padded = bytearray(form) + bytes(16)
+    struct.pack_into("<H", padded, 6, len(padded))   # a consistent lie
+    ck.raises("tail padding after the last section", BundleError,
+              lambda: Bundle(bytes(padded), "X.WAB"),
+              contains="(total size)")
+
+    def shift(secs):
+        _sec(secs, SEC_ICON)[1] = bytearray(63)
+    hostile(form, shift, "ICON", "ICON that is not 64 bytes")
+
+    # 2.5/2.14 rule 2: comp_ids are document order.
+    def outoforder(secs):
+        ui = _sec(secs, SEC_UISTREAM)[1]
+        ui[11] = 7
+    hostile(form, outoforder, "comp_id", "a comp_id out of document order")
+
+    # 2.4/2.2.1: the flag/section couplings, both directions.
+    header(form, lambda d: d.__setitem__(8, d[8] | WABF_SOURCE), "flags",
+           "WABF_SOURCE with no SOURCE section")
+    header(sheet, lambda d: d.__setitem__(8, d[8] & ~WABF_GRID), "flags",
+           "FXCODE and CELLS with WABF_GRID clear")
+
+    # 2.8: the function table bounds its own bodies.
+    def badfn(secs):
+        c = _sec(secs, SEC_CODE)[1]
+        struct.pack_into("<H", c, 2, len(c) + 4)
+    hostile(form, badfn, "function table", "a function offset past CODE")
+
+
 def run_selfcheck(verbose=False):
     ck, tmp = selfcheck(verbose)
     sizes = selfcheck_demos(ck, tmp)
     selfcheck_vm(ck, tmp)
+    selfcheck_hostile(ck, tmp)
     if ck.fails:
         print("selfcheck: %d of %d checks FAILED" % (len(ck.fails),
                                                      ck.count))

@@ -209,7 +209,7 @@ draw and arm/fire natively but no bytecode runs, and the pane is labelled
 | +8 | 2 | flags | §2.2.1 |
 | +10 | 1 | vm KB | VM claim ask, 16–32 (§4.7) |
 | +11 | 1 | grid KB | grid claim ask, 0 or 8–26 (§5.6) |
-| +12 | 1 | section count | 1–9, one row per section present |
+| +12 | 1 | section count | **5–9**, one row per section present. Five is the floor and not one: §2.4 makes UISTREAM, PROPS, CODE and ATOMS mandatory in every bundle and ICON always present, so those five rows are named by the format itself and a bundle carrying fewer refuses (§10.4) |
 | +13 | 1 | entry card | card index (1-based) shown at open |
 | +14 | 1 | canvas KB | canvas claim ask, 0 or 2–8 (§6.10) |
 | +15 | 1 | reserved | 0 |
@@ -1503,8 +1503,96 @@ component creation** (§9.9), which is what keeps layout §7's single walk.
 Layout runs on the 8×8 cell grid of the window's **content area**, whose
 truth is the live screen (`[vid_w]`/`[vid_h]`/`[vid_stride]` — never the
 VGA reference constants; SPEC.md §39). Let `CW` = content width in cells
-(content_px_w / 8, floor), `CH` = content height in rows of 8 px.
-Positions are cell-grid coordinates, converted to pixels only at paint.
+and `CH` = content height in rows of 8 px, both floored and both derived in
+§7.1.2 — the floor is not the only thing that comes off `CW`. Positions are
+cell-grid coordinates, converted to pixels only at paint.
+
+**Cell (0,0) IS the content origin.** WEAVE adds no inset of its own; a
+component that wants breathing room asks for a `spacer` (§6.3). That is a
+decision, not an omission — §7.1.2 is what it buys.
+
+#### 7.1.1 The three adapters' `CW × CH`, and the arithmetic behind them
+
+**WEAVE's window chrome is the browser's** (SPEC.md §71): an ordinary
+resizable window, no toolbar and no status strip of its own, opened at
+SPEC.md §11.95's **standard rect** — the whole desktop band. Everything the
+three adapters differ by falls out of that one rect, so the numbers below
+are derived and checkable rather than measured:
+
+```
+frame:   x = 0                       y = MBAR_H
+         w = [vid_w]                 h = [vid_dock_y0] - MBAR_H - 1
+content: width  = w - 1              (a window spanning the screen has no
+                                      LEFT border, SPEC.md 11.95.2, so
+                                      wm_geom answers w-1 and not w-2)
+         height = h - (TITLE_H + 1)   (wm_geom, SPEC.md 11)
+```
+
+`MBAR_H` is 20 and `TITLE_H` 18 (`apps/os88api.inc`), `DOCK_H` is 24
+(`kernel/dock.inc`) and `[vid_dock_y0]` is `[vid_h] - DOCK_H`
+(`kernel/viddet.inc`). The four subtractions on the height collapse to a
+constant — `24 + 20 + 1 + 19 = 64` — so for every adapter:
+
+```
+CW = floor(([vid_w] - 1)  / 8)
+CH = floor(([vid_h] - 64) / 8)
+```
+
+| adapter | screen | content px | `CW × CH` | wasted |
+|---|---|---|---|---|
+| CGA | 640×200 | 639 × 136 | **79 × 17** | 7 px × 0 px |
+| Hercules | 720×348 | 719 × 284 | **89 × 35** | 7 px × 4 px |
+| VGA mode 12h | 640×480 | 639 × 416 | **79 × 52** | 7 px × 0 px |
+
+These are the grids `weavesim --render` prints and the 8086 must reproduce
+exactly (§12). They are the **opening** grid and not a constant: a window
+the user has resized re-runs the walk at whatever `CW × CH` it then has
+(§7.4), and §7.4's 32×12 floor is what the family refuses to go below.
+Nothing else in this document may hard-code 79, 89, 17, 35 or 52 — an
+implementation that reads the numbers instead of the screen is wrong on two
+adapters of three the moment either constant moves (SPEC.md §39).
+
+#### 7.1.2 The content origin is rounded UP to a multiple of 8
+
+**Binding, and it is a shipped defect class rather than a theory.**
+`OSAPI_FONT_RUN`'s single-store fast path — the one that writes each cell
+old-to-final in ONE store, so a run is never momentarily blank — requires
+the pen on a multiple of 8 (SPEC.md §6.1). The walk emits cell coordinates
+and converts to pixels only at paint, so cell column `c` is drawn at
+`origin_x + 8c`: if `origin_x` is not ≡ 0 (mod 8) then **no component in
+the family ever takes the fast path, at any window position, on any
+adapter**, and every one of them draws the erase-then-letter pair instead
+(PERFORMANCE.md Part 1).
+
+That is exactly what happened to the line editor. `apps/os88line.inc` took
+its pen from a content edge plus its caller's small inset — the browser's
+is content+3, so the pen sat at content+6 — and `WF_SNAP` (SPEC.md §11.94)
+makes the content origin 8-aligned, which pinned the pen at 6 mod 8 for
+every window position on every adapter. Measured on a cycle-accurate
+5150/CGA with PERFORMANCE.md Part 3.1's instrument, a 26-character URL:
+**one keystroke flashed 246 transient pixels** over ~18 cells, and a
+backspace 437 over ~21.
+
+So, at **layout** time and not at paint:
+
+```
+origin_x = (content_left + 7) & ~7      ; UP. Down would put the pen inside
+                                        ; the frame (os88line_pen's reason)
+origin_y = content_top                  ; y is NOT aligned - font_run's
+                                        ; requirement is on x alone
+CW       = (content_left + content_w - origin_x) / 8
+CH       = content_h / 8
+```
+
+Three instructions, and the whole family is on the fast path by
+construction. The round costs up to 7 px of width, which `CW` has already
+taken off — the `os88line_cols` pattern, so nothing downstream of the walk
+learns about it. On §7.1.1's standard rect `content_left` is 0 and the
+round is a no-op, which is the point: it is the **general** case it exists
+for — a window the user resized, one that opted out with `WF_NOSNAP`, a
+secondary display where x = 0 is not a screen edge (SPEC.md §39.17.2), and
+the window too wide to snap that SPEC.md §11.94 leaves unsnapped rather
+than illegal.
 
 ### 7.2 The walk — normative and deterministic
 
@@ -1518,11 +1606,22 @@ for each component C (hidden components still take part — hiding does not
   w = C.w if C.w > 0 else natural width (§7.3), clamped to CW
   if C has CF_BREAK, or x > 0 and x + w > CW:
       close the current row; x = 0
+      (closing an EMPTY row is a NO-OP: no row is emitted. A CF_BREAK on a
+       card's first component, and a second CF_BREAK straight after one, are
+       both already at the start of a new row and must not produce a
+       zero-component row - a row has no height without a component in it,
+       and an implementation that emits one has no max() to take)
   place C at column x in the current row; x += w + 1   (one gutter cell)
-close the last row
+close the last row (the same no-op rule: an empty last row emits nothing)
 for each row:
   row height = max component natural/declared height in the row
-  align: slack = CW - (sum of widths + gutters);
+  align: slack = CW - (sum of widths + (n - 1))
+         (n = the row's component count. A row of n components carries n-1
+          gutters, NOT n: the gutter `x += w + 1` left after the last
+          component is the space before a component that went to the next
+          row, and is not part of this one. Slack is never negative - every
+          width is clamped to CW and a row closes before a component would
+          overflow it)
          ALIGN of the row's FIRST component: left -> 0 shift,
          center -> shift floor(slack/2), right -> shift slack
 row tops stack from row 0 downward, one blank pixel row (not cell) between
@@ -1541,8 +1640,8 @@ implementation — `weavesim --render` prints the cell rectangles and the
 
 | component | natural w (cells) | natural h (rows) |
 |---|---|---|
-| `label` | text length | 1 |
-| `text` | CW (full row) | wrapped row count at its width |
+| `label` | max(1, text length) | 1 |
+| `text` | CW (full row) | max(1, wrapped row count at its width) |
 | `rule` | CW | 1 |
 | `box` | declared (required) | declared |
 | `spacer` | declared | 1 |
@@ -1550,13 +1649,63 @@ implementation — `weavesim --render` prints the cell rectangles and the
 | `button` | label length + 2 | 2 |
 | `check`/`radio` | label length + 2 | 2 |
 | `input` | cols + 2 | 2 |
-| `list` | longest item + 3 (scroll bar) | rows |
+| `list` | max(1, longest item) + 3 (scroll bar) | rows |
 | `grid` | CW | CH − consumed rows above, min 6 |
 | `canvas` | w px / 8 | h px / 8 |
 
-`text` wrapping is greedy word wrap at cell granularity: break at spaces;
-a word longer than the width hard-breaks. Identical rule in weavesim and
-the 8086 — the wrap is part of the layout contract.
+The **floor of 1** in three of those rows is not defensive rounding. A
+component with no content still occupies one cell, so that it can be seen,
+hit, and given content later from script. Without the floor an empty
+`label` is 0 cells wide and §7.2's `x += w + 1` collapses it into its
+neighbour's gutter — a component present in the display list, invisible on
+the glass, and reachable by `.text` from WJS with nowhere to draw the
+answer. The same reasoning gives `text` a height of at least one row and a
+`list` of empty items a width of `1 + 3`.
+
+`text` wrapping is greedy word wrap at cell granularity: break at spaces; a
+word longer than the width hard-breaks. **The algorithm is normative here
+rather than by reference** — `tools/htmsim.py`'s `wrap()` is its one host
+implementation and the 8086 implements from this text, never from that
+source. In: the component's text folded to ASCII (§3.1) and split at
+whitespace into `words` in document order, and `width` = the component's
+width in cells, at least 1. Out: a list of lines, whose count is the
+natural height in the table above.
+
+```
+pending = ""                                ; the line being collected
+1. for each `word`, in document order:
+   a. while len(word) > width:              ; too long for ANY line: break it
+        i.   if pending is not empty: emit pending; pending = ""
+        ii.  emit the first `width` characters of word
+        iii. word = what is left of word
+   b. if pending is empty:
+          pending = word
+      else if len(pending) + 1 + len(word) <= width:
+          pending = pending + " " + word
+      else:
+          emit pending; pending = word
+2. if pending is not empty: emit pending
+```
+
+Three things the sentence above does not pin and an implementer would
+otherwise have to guess:
+
+- **On a hard break the pending line is emitted FIRST** (1.a.i), before the
+  over-long word's leading `width` characters. The word starts a line of
+  its own; it never continues the line already in hand, however much room
+  that line had left.
+- **The remainder becomes the new pending line** (1.a.iii feeding 1.b), not
+  a line of its own — so the tail of a hard-broken word goes on collecting
+  the words after it.
+- **The remainder may be EMPTY**, when the word's length was an exact
+  multiple of `width`. An empty `pending` is overwritten by the next word
+  at 1.b and emits nothing at step 2, so such a word adds no blank line.
+
+The separator written between two words on a line is one space, one cell
+wide, whatever whitespace stood there in the source (§3.1 collapses it) —
+and `len(pending) + 1 + len(word)` is the whole of the fit test. Identical
+rule in weavesim and the 8086: the wrap is part of the layout contract, and
+`--render` diffs it.
 
 ### 7.4 Resize, minimums, clipping
 
@@ -1771,14 +1920,31 @@ land here.
 
 ### 10.4 Malformed bundle
 
-Bad magic, version ≠ 1, size word ≠ directory size, section out of
-bounds, unknown section type, unknown ctype, reserved bits set, atom id
-out of range:
+Bad magic, version ≠ 1, size word ≠ directory size, section count under
+5 (§2.2), section out of bounds, unknown section type, unknown ctype,
+reserved bits set, atom id out of range, **a required property absent**,
+**a property outside §3.3's range**:
 
-> `<NAME>.WAB is not a Weave bundle (: <field>).`
+> `<NAME>.WAB is not a Weave bundle (<field>).`
 
 with the field named. The runtime never guesses past a bad header — every
 byte off a disk is hostile (SPEC.md §19).
+
+The last two are the ones a reader is likeliest to skip, because the packer
+already refuses them at pack (§10.5, §11.3) — and a `.WAB` on a disk need
+never have been through a packer. **A required property absent is
+malformed, never defaulted**: §3.3 requires `group` on a `radio`,
+`cols`/`rows` on a `grid`, `w`/`h` on a `box`, `w` on a `spacer` and
+`w`/`h` on a `canvas`, and §7.3 reads `box`'s, `spacer`'s and `canvas`'s
+straight out of the record as their natural size — so a bundle missing one
+lays the card out around a number nobody wrote. The field is
+`required property`. **A property outside its range is malformed too**:
+§3.3 bounds a `meter`'s `max` at 1–32000, an `input`'s `cols` at 2–60, a
+`list`'s `rows` at 1–40, a `grid`'s `cols` at 1–26 and `rows` at 1–256
+with cols×rows ≤ 6,140 (§5.6), a `canvas`'s `w` at 64–320 and a multiple
+of 8 and its `h` at 32–160. The field is `property range`. Both are
+checked as the PROPS blocks are read (§2.6), before any of them reaches
+the walk.
 
 ### 10.5 Pack-time refusals — the sentences name the platform fact
 

@@ -44,6 +44,32 @@ The former AMBIGUITY sites below now enforce the pinned readings:
       in CODE, an <input>, or a <grid> (its formula bar is a library-wired
       input, S6.9).  Enforced both directions.
 
+STILL AMBIGUOUS, and read leniently here rather than guessed at:
+
+  A9. What `<canvas walls="TB">` COMPILES to.  S3.3 types the attribute
+      as a string, a subset of `TBLR`, and pins no encoding; the packed
+      bundles carry a PK_INT edge mask.  Both readings are admitted -
+      a mask is bounded by S3.4's four edge codes (0..15), a pooled
+      string by the TBLR subset - because a second reader that picks one
+      and refuses the other is asserting a fact the spec does not state.
+      Naming it here is the point: the spec should pin it, and until it
+      does neither implementation can be called wrong.
+
+  A10. S2.2 tabulates `section count` as 1-9 while S2.4 makes four
+      sections mandatory and ICON always present.  Read here as 5-9,
+      the only range the rest of the format can produce; S2.2's own
+      figure is the one that should move.
+
+WHAT S3.3 SAYS AND THIS FILE NOW ENFORCES.  S2.6 hands the reader the
+attribute table as a validation duty - "which names are legal on which
+component is S3.3's table; a reader treats an unknown pairing as a
+malformed bundle" - so S33_PROPS below is that table transcribed: the
+legal pairings per element, the kind each attribute compiles to, and the
+range each is bounded by.  S33_REQUIRED is its `required` column.  These
+are not ornaments on a well-formed file: `meter max = 0` divides by zero
+drawing the bar, a `radio` with no `group` has nothing to be exclusive
+against, and an out-of-range `cols` lays a component out past the card.
+
 DETERMINISM.  S2.14 rule 1: no timestamps, no host paths, nothing
 environmental.  Every field S2.2-S2.13 defines is structural, so there is no
 field this file must wave through unvalidated as "environmental" - byte
@@ -88,10 +114,95 @@ WK_EVENTS = set(range(48, 61))                            # onclick..onalert
 ATOM_ITEMS, ATOM_MENUS = 61, 62
 ATOM_ROWS, ATOM_COLS, ATOM_CARD = 15, 16, 20
 ATOM_FRAME, ATOM_START = 11, 40
+ATOM_TEXT, ATOM_VALUE, ATOM_LABEL, ATOM_CHECKED = 1, 2, 3, 5
+ATOM_X, ATOM_Y, ATOM_SHOWN, ATOM_MAX = 7, 8, 12, 14
+ATOM_GROUP, ATOM_WALLS, ATOM_TICK = 19, 23, 24
+ATOM_ONCLICK, ATOM_ONCHANGE, ATOM_ONKEY, ATOM_ONSELECT = 48, 49, 50, 51
+ATOM_ONEDIT, ATOM_ONCALC, ATOM_ONCOLLIDE = 52, 53, 54
+ATOM_ONWALL, ATOM_ONSCORE, ATOM_ONTICK = 55, 56, 57
 WK_ASSIGNED = WK_PROPS | WK_METHODS | WK_EVENTS | {ATOM_ITEMS, ATOM_MENUS}
 
 # S2.6 - property record kinds.
 PK_INT, PK_ATOM, PK_BLOB, PK_FUNC, PK_SPRITE = range(5)
+
+# S3.3 - the attribute table, element by element, as a bundle carries it:
+# which property atoms may appear in a component's block, the kind each
+# attribute compiles to, and the range S3.3 bounds it by (None = unbounded
+# there).  S2.6 makes the pairing binding in as many words - "which names
+# are legal on which component is S3.3's table; a reader treats an unknown
+# pairing as a malformed bundle" - and a range is not decoration either:
+# `meter max = 0` is a divide by zero on the runtime, and an `input` claiming
+# 61 columns lays out past the widest card the flow walk can give it.
+# Content-derived props are here too (S3.2's "children allowed: text"):
+# `label`/`text` carry their content as `text`, the three controls as `label`.
+S33_PROPS = {
+    CT_LABEL:  {ATOM_TEXT: (PK_ATOM, None, None)},
+    CT_TEXT:   {ATOM_TEXT: (PK_ATOM, None, None)},
+    CT_RULE:   {},
+    CT_BOX:    {},                                        # w,h live in the record
+    CT_SPACER: {},
+    CT_METER:  {ATOM_VALUE: (PK_INT, 0, 32000),           # and <= max, below
+                ATOM_MAX: (PK_INT, 1, 32000)},
+    CT_BUTTON: {ATOM_LABEL: (PK_ATOM, None, None),
+                ATOM_ONCLICK: (PK_FUNC, None, None)},
+    CT_CHECK:  {ATOM_LABEL: (PK_ATOM, None, None),
+                ATOM_CHECKED: (PK_INT, 0, 1),
+                ATOM_ONCHANGE: (PK_FUNC, None, None)},
+    CT_RADIO:  {ATOM_LABEL: (PK_ATOM, None, None),
+                ATOM_GROUP: (PK_ATOM, None, None),
+                ATOM_CHECKED: (PK_INT, 0, 1),
+                ATOM_ONCHANGE: (PK_FUNC, None, None)},
+    CT_INPUT:  {ATOM_TEXT: (PK_ATOM, None, None),
+                ATOM_COLS: (PK_INT, 2, 60),
+                ATOM_ONCHANGE: (PK_FUNC, None, None),
+                ATOM_ONKEY: (PK_FUNC, None, None)},
+    CT_LIST:   {ATOM_ITEMS: (PK_BLOB, None, None),
+                ATOM_ROWS: (PK_INT, 1, 40),
+                ATOM_ONSELECT: (PK_FUNC, None, None)},
+    CT_GRID:   {ATOM_COLS: (PK_INT, 1, 26),
+                ATOM_ROWS: (PK_INT, 1, 256),
+                ATOM_ONSELECT: (PK_FUNC, None, None),
+                ATOM_ONEDIT: (PK_FUNC, None, None),
+                ATOM_ONCALC: (PK_FUNC, None, None)},
+    CT_CANVAS: {ATOM_WALLS: (PK_INT, 0, 15),              # or PK_ATOM - see below
+                ATOM_TICK: (PK_INT, 0, 255),
+                ATOM_ONKEY: (PK_FUNC, None, None),
+                ATOM_ONCOLLIDE: (PK_FUNC, None, None),
+                ATOM_ONWALL: (PK_FUNC, None, None),
+                ATOM_ONSCORE: (PK_FUNC, None, None),
+                ATOM_ONTICK: (PK_FUNC, None, None)},
+    CT_SPRITE: {ATOM_FRAME: (PK_SPRITE, None, None),      # S3.3: `img` compiles here
+                ATOM_X: (PK_INT, None, None),             # signed px
+                ATOM_Y: (PK_INT, None, None),
+                ATOM_SHOWN: (PK_INT, 0, 1)},
+}
+assert len(S33_PROPS) == 14                               # S2.5.1's fourteen ctypes
+
+# S3.3's `required` column, for the attributes that survive into a block.
+# (`app name` is the header field, `card id` is the card index, `canvas w/h`
+# and `box`/`spacer` sizes are REC_COMP bytes, `menu title` and `item
+# oncommand` are the MENUS blob - each checked where it lands.)
+S33_REQUIRED = {
+    CT_RADIO: (ATOM_GROUP,),      # one checked per group; absent = no group
+    CT_GRID: (ATOM_COLS, ATOM_ROWS),
+    CT_SPRITE: (ATOM_FRAME,),     # S3.3: `img` is required on <sprite>
+}
+
+CT_NAMES = {CT_LABEL: "label", CT_TEXT: "text", CT_RULE: "rule",
+            CT_BOX: "box", CT_SPACER: "spacer", CT_METER: "meter",
+            CT_BUTTON: "button", CT_CHECK: "check", CT_RADIO: "radio",
+            CT_INPUT: "input", CT_LIST: "list", CT_GRID: "grid",
+            CT_CANVAS: "canvas", CT_SPRITE: "sprite"}
+ATOM_NAMES = {ATOM_TEXT: "text", ATOM_VALUE: "value", ATOM_LABEL: "label",
+              ATOM_CHECKED: "checked", ATOM_X: "x", ATOM_Y: "y",
+              ATOM_FRAME: "frame", ATOM_SHOWN: "shown", ATOM_MAX: "max",
+              ATOM_ROWS: "rows", ATOM_COLS: "cols", ATOM_GROUP: "group",
+              ATOM_WALLS: "walls", ATOM_TICK: "tick", ATOM_ITEMS: "ITEMS",
+              ATOM_ONCLICK: "onclick", ATOM_ONCHANGE: "onchange",
+              ATOM_ONKEY: "onkey", ATOM_ONSELECT: "onselect",
+              ATOM_ONEDIT: "onedit", ATOM_ONCALC: "oncalc",
+              ATOM_ONCOLLIDE: "oncollide", ATOM_ONWALL: "onwall",
+              ATOM_ONSCORE: "onscore", ATOM_ONTICK: "ontick"}
 
 # S4.5 - the 38 WVM opcodes and each one's total encoded length.
 OP_HALT, OP_RET = 0x00, 0x1D
@@ -133,6 +244,11 @@ def word(b, o):
     return struct.unpack_from("<H", b, o)[0]
 
 
+def signed(v):
+    """S2.6: a property record's value is a SIGNED word for PK_INT."""
+    return v - 0x10000 if v >= 0x8000 else v
+
+
 def align16(n):
     return (n + 15) & ~15
 
@@ -152,6 +268,7 @@ class Bundle:
         self.entry_card = 0
         self.vm_kb = self.grid_kb = self.canvas_kb = 0
         self.atom_count = 0        # app atoms in the pool
+        self.atom_text = {}        # atom id -> its pooled string
         self.comp_ids = set()      # every REC_COMP comp_id
         self.ctypes = {}           # comp_id -> ctype
         self.prop_ref = {}         # comp_id -> PROPS block offset (not 0xFFFF)
@@ -194,7 +311,11 @@ def check_header(w):
     check(w.grid_kb == 0 or 8 <= w.grid_kb <= 26,
           "%s: grid KB ask 0 or 8..26" % n, "S2.2/S5.6", got=w.grid_kb)
     nsec = b[12]
-    check(1 <= nsec <= 9, "%s: section count in 1..9" % n, "S2.2", got=nsec)
+    check(5 <= nsec <= 9, "%s: section count in 5..9" % n,
+          "S2.2 tabulates the byte as 1-9, but S2.4 leaves no bundle with "
+          "fewer than five sections: UISTREAM, PROPS, CODE and ATOMS are "
+          "mandatory in every bundle and ICON is always present. A count "
+          "below five is a header the format cannot produce", got=nsec)
     w.entry_card = b[13]
     check(1 <= w.entry_card <= 8, "%s: entry card in 1..8" % n,
           "S2.2: 1-based card index; S3.2 allows 1-8 cards", got=w.entry_card)
@@ -309,6 +430,7 @@ def check_atoms(w):
               "nothing outside them survives to a bundle", got=body)
         eq(s[off + 1 + L], 0, "%s: atom %d NUL-terminated" % (n, 64 + i),
            "S2.7: length byte and NUL must agree - a reader may use either")
+        w.atom_text[64 + i] = bytes(body)
         pos = off + 1 + L + 1
     eq(pos if count else 2, len(s), "%s: ATOMS length is exactly the pool" % n,
        "S2.7: no trailing bytes - the section length is part of the format")
@@ -360,6 +482,79 @@ def walk_prop_block(w, off, owner):
                "S2.6.1/S2.6.2")
         out.append((name, kind, value))
         off += 4
+
+
+def check_comp_props(w, cid, ctype, recs):
+    """S3.3 - one component's block against the attribute table: every
+    pairing legal on that element, every kind the one S3.3 compiles to,
+    every value inside the range the table pins, and every attribute S3.3
+    marks required actually present.
+
+    S2.6 hands this to the reader in as many words - an unknown pairing IS
+    a malformed bundle - and the ranges are what the runtime trusts: a
+    `meter` whose `max` is 0 divides by zero drawing its bar, and a `radio`
+    with no `group` has nothing to be exclusive against (S6.6).
+    """
+    n, el = w.name, CT_NAMES.get(ctype, "ctype 0x%02X" % ctype)
+    table = S33_PROPS.get(ctype, {})
+    seen = {}
+    for name, kind, value in recs:
+        aname = ATOM_NAMES.get(name, "atom %d" % name)
+        if name == ATOM_WALLS and ctype == CT_CANVAS and kind == PK_ATOM:
+            # AMBIGUITY (A9): S3.3 types `walls` as a string, a subset of
+            # `TBLR`, and does not say what it compiles to.  The demo
+            # bundles carry a PK_INT edge mask; a pooled string is the
+            # other defensible reading, so both are admitted and each is
+            # bounded on its own terms.  S3.4's edge codes (0 T, 1 B,
+            # 2 L, 3 R) are what bound the mask.
+            seen[name] = value
+            txt = w.atom_text.get(value, b"")
+            check(set(txt) <= set(b"TBLR"),
+                  "%s: %s comp %d walls string is a subset of TBLR" % (n, el, cid),
+                  "S3.3: `walls` is a subset of TBLR; missing edges are open",
+                  got=txt)
+            continue
+        if not check(name in table,
+                     "%s: %s comp %d carries `%s`, which S3.3 does not give a "
+                     "<%s>" % (n, el, cid, aname, el),
+                     "S2.6: which names are legal on which component is "
+                     "S3.3's table, and a reader treats an unknown pairing "
+                     "as a malformed bundle - the runtime would hand the "
+                     "value to a library component that has no such field",
+                     got="atom %d on <%s>" % (name, el)):
+            continue
+        want_kind, lo, hi = table[name]
+        eq(kind, want_kind, "%s: %s comp %d `%s` kind" % (n, el, cid, aname),
+           "S3.3/S2.6: the attribute's compiled kind - 0 PK_INT, 1 PK_ATOM, "
+           "2 PK_BLOB, 3 PK_FUNC, 4 PK_SPRITE")
+        if lo is not None and kind == PK_INT:
+            check(lo <= signed(value) <= hi,
+                  "%s: %s comp %d `%s` in %d..%d" % (n, el, cid, aname, lo, hi),
+                  "S3.3: the range this attribute is pinned to - a value "
+                  "outside it is refused at pack, so a bundle carrying one "
+                  "was not written by a conforming packer",
+                  got=signed(value), want="%d..%d" % (lo, hi))
+        seen[name] = value
+    for req in S33_REQUIRED.get(ctype, ()):
+        check(req in seen, "%s: %s comp %d carries the required `%s`"
+              % (n, el, cid, ATOM_NAMES.get(req, req)),
+              "S3.3 marks this attribute required on <%s>: absent is "
+              "malformed, not defaulted - there is no default for it to "
+              "take" % el, got=sorted(seen))
+    if ctype == CT_METER:
+        # S3.3: `value` is 0..max, `max` defaults to 100 when absent.
+        mx = signed(seen[ATOM_MAX]) if ATOM_MAX in seen else 100
+        val = signed(seen[ATOM_VALUE]) if ATOM_VALUE in seen else 0
+        check(0 <= val <= mx, "%s: meter comp %d value within 0..max"
+              % (n, cid), "S3.3/S6.4: `value` is 0..max and the library "
+              "clamps to it; a packed value outside means the two "
+              "implementations disagree about the clamp",
+              got=val, want="0..%d" % mx)
+    if ctype == CT_CANVAS and ATOM_ONTICK in seen:
+        check(signed(seen.get(ATOM_TICK, 0)) >= 1,
+              "%s: canvas comp %d binds ontick and carries tick >= 1" % (n, cid),
+              "S3.3: `ontick` requires `tick` >= 1 - tick 0 is no ontick "
+              "(S6.10 step 7 never fires), so a bound handler is dead code")
 
 
 def check_uistream(w):
@@ -428,6 +623,20 @@ def check_uistream(w):
                       "S3.3: w cells 0-160; 0 = natural", got=cw)
                 check(ch <= 40, "%s: rec %d h <= 40 rows" % (n, i),
                       "S3.3: h rows 0-40", got=ch)
+            # S3.3's two sizes that are REQUIRED rather than natural: a
+            # `box` is a frame and a `spacer` is a width, so 0 (= natural,
+            # S7.3) is not a reading either one has.
+            if ctype == CT_BOX:
+                check(cw >= 2, "%s: rec %d box w >= 2" % (n, i),
+                      "S3.3: <box> `w`,`h` required, >= 2x1 - a frame "
+                      "narrower than its two verticals is not a frame",
+                      got=cw)
+                check(ch >= 1, "%s: rec %d box h >= 1" % (n, i),
+                      "S3.3: <box> `w`,`h` required, >= 2x1", got=ch)
+            elif ctype == CT_SPACER:
+                check(cw >= 1, "%s: rec %d spacer w >= 1" % (n, i),
+                      "S3.3: <spacer> `w` required - a spacer draws nothing "
+                      "(S6.3), so its width is the whole of it", got=cw)
             check(style & 0xF0 == 0, "%s: rec %d style bits 4-7 zero" % (n, i),
                   "S2.5.2: a set bit refuses at load", got=hex(style))
             check((style >> 2) & 3 != 3, "%s: rec %d ALIGN != 3" % (n, i),
@@ -661,16 +870,13 @@ def check_props(w):
                    "%s: comp %d PK_SPRITE record named `frame`" % (n, cid),
                    "S3.3: no `img` atom exists; the record doubles as the "
                    "frame property's initial value")
+        check_comp_props(w, cid, w.ctypes[cid], recs)
         if w.ctypes[cid] == CT_GRID:
             got = {nm: v for nm, k, v in recs if k == PK_INT}
-            if check(ATOM_ROWS in got and ATOM_COLS in got,
-                     "%s: grid block carries rows and cols" % n,
-                     "S3.3: cols and rows are required on <grid>", got=list(got)):
+            # Presence and the 1..26 / 1..256 ranges are S33_PROPS' and
+            # S33_REQUIRED's; what is left here is the pair's arithmetic.
+            if ATOM_ROWS in got and ATOM_COLS in got:
                 w.grid_rows, w.grid_cols = got[ATOM_ROWS], got[ATOM_COLS]
-                check(1 <= w.grid_cols <= 26, "%s: grid cols 1..26" % n,
-                      "S3.3", got=w.grid_cols)
-                check(1 <= w.grid_rows <= 256, "%s: grid rows 1..256" % n,
-                      "S3.3", got=w.grid_rows)
                 check(w.grid_rows * w.grid_cols <= 6140,
                       "%s: rows x cols <= 6140" % n,
                       "S5.6: the cell store plus its pool must fit a 26KB claim",
@@ -733,6 +939,11 @@ def check_menus_blob(w, off):
         title, nitems = s[pos], s[pos + 1]
         check(w.atom_ok(title), "%s: menu %d title atom assigned" % (n, m),
               got=title)
+        check(len(w.atom_text.get(title, b"")) <= 8,
+              "%s: menu %d title <= 8 chars" % (n, m),
+              "S3.3: <menu> `title` <= 8 chars - the kernel's bar is drawn "
+              "from these and a longer one runs into the next menu",
+              got=w.atom_text.get(title))
         check(1 <= nitems <= 8, "%s: menu %d item count 1..8" % (n, m),
               "S2.6.2", got=nitems)
         pos += 2
@@ -743,6 +954,10 @@ def check_menus_blob(w, off):
             label, fn = s[pos + 2 * it], s[pos + 2 * it + 1]
             check(w.atom_ok(label), "%s: menu %d item %d label atom" % (n, m, it),
                   got=label)
+            check(len(w.atom_text.get(label, b"")) <= 24,
+                  "%s: menu %d item %d label <= 24 glyphs" % (n, m, it),
+                  "S3.3: <item> content is the label, <= 24 glyphs",
+                  got=w.atom_text.get(label))
             check(fn == 0xFF or fn < len(w.funcs),
                   "%s: menu %d item %d oncommand index" % (n, m, it),
                   "S2.6.2: a function index, or 0xFF for none (present, inert)",
