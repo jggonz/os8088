@@ -2163,23 +2163,25 @@ after any change to §6 or to the model. Field figures land on the 5150
 and supersede modelled ones row by row (§12.4).
 
 | component | interaction | gfx calls | modelled cost |
-|---|---|---|---|
-| label | `.text` set (20 cells) | 1 | ~19 ms |
+| label | .text set (20 cells) | 1 | ~19 ms |
 | text | repaint (per wrapped row, 40 cells) | 1/row | ~37 ms/row |
 | rule / box / spacer | card paint | 1 / 1 / 0 | ~0.8 ms |
-| meter | `.value` delta | 1 | ~0.8–1 ms |
-| button | press+release | ~2 + label | ~1.5–9 ms |
-| check / radio | toggle (one glyph) | 1 | 35–50 ms (field) |
+| meter | .value delta | 1 | ~0.8-1 ms |
+| button | press+release | ~2 + label | ~1.5-9 ms |
+| check / radio | toggle (one glyph) | 1 | 35-50 ms (field) |
 | input | keystroke | ~2 cells | ~1.8 ms |
 | list | selection move | 2 (XOR) | ~1.6 ms |
-| list | scroll one line | 2 | ~83–90 ms |
-| grid | edit one cell (compose+blit 1 row) | 1 | ~3–5 ms |
+| list | scroll one line | 2 | ~83-90 ms |
+| grid | edit one cell (compose+blit 1 row) | 1 | ~3-5 ms |
 | grid | selection move (2 XOR rects) | 2 | ~1.5 ms |
 | grid | 79-cell row compose+blit | 1 | ~14.5 ms |
 | grid | full 20-row page | 20 | ~291 ms |
-| canvas | frame, 2 sprites (dirty bands) | 2–4 | ~2–5 ms |
-| card | switch (full-card repaint, text-heavy CGA card) | ~1/row | ~0.3–1.2 s |
-| alert | raise + dismiss | ~8 | ~30–40 ms |
+| canvas | frame, 2 sprites (dirty bands) | 2-4 | ~2-5 ms |
+| card | switch (full-card repaint, text-heavy CGA card) | ~1/row | ~0.3-1.2 s |
+| card | first paint, fully lettered CGA 640x200 (17 rows x 79 cells) | 17 | ~1.25 s |
+| card | first paint, fully lettered Hercules 720x348 (35 rows x 89 cells) | 35 | ~2.85 s |
+| card | first paint, fully lettered VGA 640x480 (52 rows x 79 cells) | 52 | ~2.59 s |
+| alert | raise + dismiss | ~8 | ~30-40 ms |
 
 A change that moves a row of this table upward is a regression against a
 documented number, not a neutral refactor — PERFORMANCE.md Part 5's
