@@ -648,22 +648,65 @@ def _png(path, w, h, raw, colour_type):
 # sentence saying which of the above it was.
 # =============================================================================
 
+def _keep_pid(cmd):
+    """Does this command line belong to the EMULATOR, not to a shell or a
+    client that merely names it? The one rule both platforms below share."""
+    if "martypc_headless" not in cmd:
+        return False
+    if "pgrep" in cmd or "pkill" in cmd:
+        return False
+    parts = cmd.split()
+    return bool(parts) and parts[0].endswith("martypc_headless")
+
+
 def _marty_pids():
-    """Every running martypc_headless, by PID, without pgrep's self-match."""
+    """Every running martypc_headless, by PID, without pgrep's self-match.
+
+    TWO READERS, because /proc IS NOT PORTABLE AND DARWIN HAS NONE. This
+    harness ran on Linux only until a macOS box tried it and every marty row
+    died in launch() with FileNotFoundError('/proc') before starting anything
+    - which reads as the emulator being broken rather than as the process
+    lister being Linux-only, and macOS is a supported dev platform here
+    (tools/setup-macos.sh). The Darwin branch reads the same two fields from
+    `ps` and applies the same _keep_pid rule, so BOTH still kill by PID rather
+    than by pattern - which is the discipline the banner above insists on and
+    the whole reason this function exists instead of a pkill.
+    """
     import os
+    import subprocess
     out = []
-    for ent in os.listdir("/proc"):
-        if not ent.isdigit():
-            continue
-        try:
-            with open("/proc/%s/cmdline" % ent, "rb") as f:
-                cmd = f.read().replace(b"\0", b" ").decode("utf-8", "replace")
-        except OSError:
-            continue
-        # the EXECUTABLE, not any shell or client that merely names it
-        if "martypc_headless" in cmd and "pgrep" not in cmd and "pkill" not in cmd:
-            if cmd.split()[0].endswith("martypc_headless"):
+    if os.path.isdir("/proc"):
+        for ent in os.listdir("/proc"):
+            if not ent.isdigit():
+                continue
+            try:
+                with open("/proc/%s/cmdline" % ent, "rb") as f:
+                    cmd = f.read().replace(b"\0", b" ").decode("utf-8",
+                                                               "replace")
+            except OSError:
+                continue
+            if _keep_pid(cmd):
                 out.append(int(ent))
+        return out
+
+    # Darwin (and any other /proc-less unix): `ps` is the only process table.
+    # -A every process, -o with trailing `=` to suppress the headers, so each
+    # line is "<pid> <argv joined>" and nothing has to be parsed around a
+    # column title that localises.
+    try:
+        ps = subprocess.run(["ps", "-Ao", "pid=,args="],
+                            capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return out
+    for line in ps.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        pid, _, cmd = line.partition(" ")
+        if not pid.isdigit():
+            continue
+        if _keep_pid(cmd.strip()):
+            out.append(int(pid))
     return out
 
 

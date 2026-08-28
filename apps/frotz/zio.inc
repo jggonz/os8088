@@ -2486,9 +2486,19 @@ zi_m_scrfull: db 'Transcript full - it stops here.', 0
 ;
 ; The association path (SPEC.md 54.7) hands over a name and a LOCATOR, while
 ; the file dialog hands over a name AND the size - and the size is what
-; SPEC.md 61.4's refusal is decided from, before any disk I/O. So this looks
-; the size up the only way a package can: OSAPI_FILE_FIND walks the mount
-; snapshot, which is in RAM, so the walk costs no motor time either.
+; SPEC.md 61.4's refusal is decided from, before the file itself is read. So
+; this looks the size up the only way a package can: OSAPI_FILE_FIND.
+;
+; IT IS NOT FREE, and an earlier version of this comment said it was ("walks
+; the mount snapshot, which is in RAM, so the walk costs no motor time").
+; There is no such snapshot: names resolve through the RAW DIRECTORY SECTORS
+; and so does OSAPI_FILE_FIND (apps/os88api.inc's slot text), which re-seeks
+; from the ordinal and so "costs a directory re-read per entry"
+; (kernel/disk.inc, dsk_find_x). The refusal rule stands anyway - a directory
+; is at most a few hundred entries and the walk is a handful of sector reads
+; against a document read of tens of KB - but it is a cheaper read, not a
+; free one, and the file-dialog route is the only one that gets the size for
+; nothing.
 ;
 ; It walks the directory we are STANDING IN, so the locator frotz.asm banked
 ; is spent first. Nothing here searches for the file - the whole of opening a
