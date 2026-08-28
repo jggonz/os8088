@@ -97,6 +97,12 @@ FAST = [
     Row("wakedrain", "fast", py("tests/unit/t_wakedrain.py"), 0.3,
         "every event-queue drain gives a package's wake back - one that eats "
         "it deafens the window for the rest of its life (SPEC.md 74.1.1)"),
+    Row("wab", "fast", py("tests/unit/t_wab.py"), 0.3,
+        "the demo bundles `all` just packed, read back by an independent "
+        "second reader of the .WAB format - weavesim and t_wab are two "
+        "implementations written from WEAVE-SPEC that can disagree, and "
+        "until the 8086 runtime lands this row is the disagreement's only "
+        "audience"),
     Row("checkdocs", "fast", py("tools/checkdocs.py"), 1.0,
         "stale SPEC.md citations and slot numbers in prose (already in `make`; "
         "here too so the suite is a complete statement)"),

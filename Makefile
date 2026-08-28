@@ -1021,13 +1021,24 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc
 # and nothing else builds every floppy this project ships. `cc-note` is last
 # in the list and is the whole of what the default build says about C - one
 # paragraph, only when the compiler is absent, never an error.
+WEAVEDEMOS := apps/weave/demos
+WEAVEWABS  := $(BUILD)/FORM.WAB $(BUILD)/SHEET.WAB $(BUILD)/PONG.WAB
 all: checkdocs $(IMG) $(IMG720) $(IMG360) $(APPSIMG) $(APPSIMG720) $(APPSIMG360) \
-     $(MEDIAIMG360) $(BUILD)/wire.o88 cc-note test-fast
+     $(MEDIAIMG360) $(BUILD)/wire.o88 $(WEAVEWABS) $(BUILD)/.weave-hostchecks \
+     cc-note test-fast
 # wire.o88 is named here and NOWHERE else in `all`, because WIREFRAME is built
 # but does not ship (SPEC.md 78.9, `make wiredisk`). Keeping it in the default
 # build is the whole point of the arrangement: it is the bench for 78.5's draw
 # orders and for 5.6.4.1, and a package that only an on-demand target compiles
 # is a package that stops compiling without anybody noticing.
+#
+# The Weave demo bundles ride `all` for wire's reason, one stage earlier: the
+# family has no 8086 runtime yet (WEAVE-SPEC §13.1), so the pack itself -
+# three demo sources through tools/weavesim.py, behind its --selfcheck stamp -
+# is the only thing keeping the .WAB contract exercised, and the fast tier's
+# `wab` row reads the result back with an independent second implementation.
+# Pure python3, host-side, shipped on no floppy. The rules are below, next to
+# wire's.
 
 # The regression suite (tools/os88test.py, tests/suite.py). Three tiers:
 #
@@ -1063,7 +1074,7 @@ all: checkdocs $(IMG) $(IMG720) $(IMG360) $(APPSIMG) $(APPSIMG720) $(APPSIMG360)
 # rather than passing the defines through: the other nine tests are about the
 # SHIPPED artifacts, and a knob build is not one.
 test-fast: $(IMG) $(IMG720) $(IMG360) $(APPSIMG) $(APPSIMG720) $(APPSIMG360) \
-           $(MEDIAIMG360)
+           $(MEDIAIMG360) $(WEAVEWABS)
 ifeq ($(KNOBS),)
 	@python3 tools/os88test.py fast
 else
@@ -1072,7 +1083,7 @@ else
 endif
 
 test-full: $(IMG) $(IMG720) $(IMG360) $(APPSIMG) $(APPSIMG720) $(APPSIMG360) \
-           $(MEDIAIMG360)
+           $(MEDIAIMG360) $(WEAVEWABS)
 	@python3 tools/os88test.py full
 
 test-soak: $(IMG) $(IMG720) $(IMG360) $(APPSIMG) $(APPSIMG720) $(APPSIMG360) \
@@ -2171,6 +2182,38 @@ $(BUILD)/wire.img: $(BUILD)/wire.o88 tools/os88disk.py
 
 $(BUILD)/wire360.img: $(BUILD)/wire.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 APPS:$(BUILD)/wire.o88
+
+# --- The WEAVE demo bundles (docs/WEAVE-SPEC.md) -----------------------------
+# Wave 1 of the Weave family is the contract, the host reference
+# implementation and these three bundles (WEAVE-SPEC §13.1); the 8086 runtime
+# arrives in a later wave. Until it does, packing the demos in `all` is what
+# keeps the .WAB format exercised - weavesim writes them, and
+# tests/unit/t_wab.py reads them back sharing no code with the packer, the
+# wordfmt shape. docs/WEAVE-SPEC.md is a prerequisite of every rule here
+# because both implementations are written from it and nothing else.
+#
+# THE MODEL CHECKS ITSELF BEFORE IT PACKS ANYTHING (the RunCPM host-checks
+# shape): --selfcheck is weavesim's checks over the scanner, the WJS and FX
+# compilers, both VMs and the packer, and a failure leaves no stamp, so a
+# broken model stops the pack rather than writing bundles from it.
+$(BUILD)/.weave-hostchecks: tools/weavesim.py docs/WEAVE-SPEC.md | $(BUILD)
+	python3 tools/weavesim.py --selfcheck
+	@touch $@
+
+$(BUILD)/FORM.WAB: $(WEAVEDEMOS)/form.wml $(WEAVEDEMOS)/form.wjs \
+                   tools/weavesim.py docs/WEAVE-SPEC.md \
+                   $(BUILD)/.weave-hostchecks | $(BUILD)
+	python3 tools/weavesim.py --pack $(WEAVEDEMOS)/form.wml -o $@
+
+$(BUILD)/SHEET.WAB: $(WEAVEDEMOS)/sheet.wml $(WEAVEDEMOS)/sheet.wjs \
+                    $(WEAVEDEMOS)/sheet.wfx tools/weavesim.py \
+                    docs/WEAVE-SPEC.md $(BUILD)/.weave-hostchecks | $(BUILD)
+	python3 tools/weavesim.py --pack $(WEAVEDEMOS)/sheet.wml -o $@
+
+$(BUILD)/PONG.WAB: $(WEAVEDEMOS)/pong.wml $(WEAVEDEMOS)/pong.wjs \
+                   $(WEAVEDEMOS)/pong.wsp tools/weavesim.py \
+                   docs/WEAVE-SPEC.md $(BUILD)/.weave-hostchecks | $(BUILD)
+	python3 tools/weavesim.py --pack $(WEAVEDEMOS)/pong.wml -o $@
 
 # The scroll-bar knob's package stamp (SPEC.md 13.10.7), DSSTAMP's shape and
 # DSSTAMP's reason. It lives here, below `all:`, because an explicit rule above

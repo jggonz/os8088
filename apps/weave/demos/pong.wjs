@@ -1,0 +1,34 @@
+// PONG's handlers. The game loop is native worker code; these run only on
+// discrete events (WEAVE-SPEC 6.10 - the loop never executes a bytecode
+// op). Velocities are 1/16-px per frame: 32 = 2 px/frame.
+var ptsL;
+var ptsR;
+
+function doServe() {
+  ball.x = 116;
+  ball.y = 56;
+  ball.vx = 32;
+  ball.vy = 4;
+  field.start(18);
+}
+
+function onPad(ch, down) {
+  if (down == 0) { return; }
+  if (ch == 97) { pad.y = pad.y - 8; }
+  if (ch == 122) { pad.y = pad.y + 8; }
+  if (pad.y < 0) { pad.y = 0; }
+  if (pad.y > 96) { pad.y = 96; }
+}
+
+function onHit(a, b) {
+  ball.vx = -ball.vx;
+  tone(880, 1);
+}
+
+function onGoal(sp, edge) {
+  field.stop();
+  if (edge == 2) { ptsR = ptsR + 1; }
+  if (edge == 3) { ptsL = ptsL + 1; }
+  score.text = str(ptsL) + " : " + str(ptsR);
+  tone(220, 3);
+}

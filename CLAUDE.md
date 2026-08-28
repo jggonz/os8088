@@ -30,6 +30,8 @@ nothing here duplicates it — a second copy is a copy that goes stale.
 | **[docs/FIELD-NOTES.md](docs/FIELD-NOTES.md)** | a bug that reproduces on hardware and not here — open, reproduced, unfixed, with what has already been ruled out for each |
 | **[docs/FTP-PERF.md](docs/FTP-PERF.md)** | picking the FTP server's speed back up (§77, §72.15) — what moved it from 7 to 15 KB/s, the four things that did NOT work, where the time goes now (57% of it is ABOVE the driver), and the next five candidates in the order the evidence ranks them |
 | **[docs/LIVE-MEDIA.md](docs/LIVE-MEDIA.md)** | answering any user-facing "how do I write, burn or boot the live USB/CD" — it is the reader's guide (dd, Rufus, BIOS settings, troubleshooting) and the README links it; §80 stays the design record and this file must follow it, never lead |
+| **[docs/WEAVE-SPEC.md](docs/WEAVE-SPEC.md)** | touching anything in the Weave family (`apps/weave/`, the `.WAB` bundle, WML/WJS/FX) — the binding contract, outside SPEC.md on the C64 precedent, cited as `WEAVE-SPEC §N`; `tools/weavesim.py` is its reference implementation and `tests/unit/t_wab.py` its independent second reader |
+| **[docs/WEAVE-PLAN.md](docs/WEAVE-PLAN.md)** | re-opening a Weave design decision — why each fork went the way it did, the judged alternatives, and what was deferred with the arithmetic attached |
 
 ## Commands
 
@@ -38,7 +40,12 @@ them on a Mac. No linker — everything is `nasm -f bin` flat binaries,
 deliberately, to keep Apple's Mach-O-only toolchain out of it.
 
 ```
-make          # build every floppy image into build/ (also runs tools/checkdocs.py)
+make          # build every floppy image into build/ (also runs tools/checkdocs.py),
+              # and packs the three Weave demo bundles (build/FORM/SHEET/PONG
+              # .WAB) with tools/weavesim.py — docs/WEAVE-SPEC.md's reference
+              # implementation, htmsim's shape — behind its --selfcheck stamp.
+              # Host-side python3; the 8086 runtime is later waves
+              # (WEAVE-SPEC §13.1)
 make run      # boot in QEMU with an emulated serial mouse. RUNAPPS=<img>
               # swaps the B: floppy, so a disk built on demand can be LOOKED
               # at (`make bench && make run RUNAPPS=build/bench.img`)
@@ -101,7 +108,7 @@ make runcpmdisk #   windowed CP/M 2.2 emulator — the host checks, then the
                 #   / `make rcz80test` are the Z80 core's ZEXDOC gates (in the
                 #   OS / in raw QEMU), `make rcmemtest` the movers',
                 #   `make rcbandbench` the row composer's bench
-                #   (PERFORMANCE.md Set 65)
+                #   (PERFORMANCE.md Set 68)
 make c64        # C64 (docs/C64-SPEC.md), the third C application: VICE
 make c64disk    #   3.10's x64 as a windowed Commodore 64 — a 6510 in a 64KB
                 #   claim, a VIC-II and two CIAs in C, and the KERNAL, BASIC
