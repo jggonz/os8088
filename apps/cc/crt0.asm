@@ -187,6 +187,24 @@ section .bss    follows=.data   align=2 nobits
 section .modc   follows=.data   align=1 vstart=0
 %endif
 
+; --- the header flags byte, assembled from what the shim declared ------------
+; Two independent bits (SPEC.md 54.6, and tools/os88pkg.py checks both):
+;   bit 0  an embedded 16x16 icon follows the header, at offset 32..95
+;   bit 1  a 16-byte association block follows the icon (offset 96) or, with
+;          no icon, the header (offset 32)
+; Computed here rather than written as a literal in the header, because with
+; two optional blocks a literal is four cases and one of them is wrong: 54.6
+; records that gating the DECLARATION on the icon bit is exactly the mistake
+; that shipped once, and an iconless package declaring an extension is the
+; case the block was wanted for first.
+%assign CC_FLAGS 0
+%ifdef CC_ICON
+  %assign CC_FLAGS CC_FLAGS | 1
+%endif
+%ifdef CC_ASSOC
+  %assign CC_FLAGS CC_FLAGS | 2
+%endif
+
 ; =============================================================================
 ; THE 32-BYTE HEADER (SPEC.md 20.2)
 ;
@@ -198,11 +216,14 @@ section .modc   follows=.data   align=1 vstart=0
 section .text
     db 'O', '8'                     ; +0  magic (word 0x384F)
     db 3                            ; +2  format version 3: segment-per-package
-%ifdef CC_ICON
-    db 1                            ; +3  flags bit 0: an embedded icon follows
-%else
-    db 0                            ; +3  flags
-%endif
+    db CC_FLAGS                     ; +3  flags: bit 0 an embedded icon
+                                    ;     follows, bit 1 a 16-byte association
+                                    ;     block follows it (SPEC.md 54.6).
+                                    ;     Computed above as the OR of the two,
+                                    ;     because they are independent - an
+                                    ;     ICONLESS package declaring an
+                                    ;     extension is the case 54.6 says the
+                                    ;     block ships on first
     dw 0                            ; +4  link base: 0, and the loader checks it
     dw cc_entry                     ; +6  entry offset - an ABSOLUTE label,
                                     ;     because .text starts at 0
@@ -238,6 +259,37 @@ section .text
 %if ($ - $$) != 96
     %error "CC_ICON must be exactly 32 dw rows (16 mask + 16 data)"
 %endif
+%endif
+
+%ifdef CC_ASSOC
+; The optional association block (SPEC.md 54.6): "a document wearing one of
+; these extensions is MINE". A fixed 16 bytes - a count byte then up to five
+; 3-byte uppercase space-padded extensions - sitting immediately after the
+; icon (offset 96) or, with no icon, after the header (offset 32). Declaring
+; costs nothing at run time: the mount's icon harvest already reads this
+; sector, so a document beside the program opens on the FIRST double-click,
+; with no prior run and no search.
+;
+; The shim names the file, exactly as it names the icon:
+;     %define CC_ASSOC "weave/wvassoc.inc"
+; and that file writes the count byte and one OS88_ASSOC_EXT per extension -
+; the same two lines an assembly package writes (apps/frotz/frotz.asm is the
+; worked example). The BRACKET is here rather than in the shim's file so that
+; the offset assertions and the pad-to-16 cannot be forgotten, and it is
+; os88api.inc's own macro pair rather than a copy of it, so there is one
+; authority for what the block looks like.
+;
+; The offsets both macros assert are `$ - $$` inside .text, which is the one
+; section this file gives `start=0` - so `$$` is 0 and the arithmetic is the
+; file offset, the same reason the icon's two assertions above work.
+;
+; This is ALSO what os88_assoc_set() (SPEC.md 54.5, os88thunk.asm) does at run
+; time, and the two are not alternatives: a declaration is free and is read
+; before the program has ever run, while a runtime claim is what a program
+; makes about a STEM it just saved. A package may want both.
+    OS88_ASSOC16                    ; asserts offset 96 (icon) or 32 (none)
+%include CC_ASSOC                   ; the count byte, then OS88_ASSOC_EXT xN
+    OS88_ASSOC16_END                ; asserts <= 5 and pads to exactly 16
 %endif
 
 ; =============================================================================

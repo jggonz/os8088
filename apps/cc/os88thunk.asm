@@ -557,6 +557,36 @@ _os88_wm_resize:
     pop bp
     ret
 
+; void os88_wm_minsize(void *win, int w, int h) - BX = win, CX/DX = the
+; minimum OUTER width and height, frame included; 0, 0 withdraws it (SPEC.md
+; 11.100.2). "Below this my layout stops working - do not cut me past it, even
+; to fit a screen." It REGISTERS AND APPLIES, so calling it straight after
+; os88_wm_create() from os88_main() is how a window opens no smaller than its
+; layout needs; without one you get the system floor, WMIN_W x WMIN_H.
+;
+; Not CC_T_WIN and not a macro of its own: it is os88_wm_resize()'s register
+; shape (BX, CX, DX) and that one is written longhand too.
+;
+; The kernel keeps the two NUMBERS, not a pointer to them - unlike the
+; per-adapter preferred-size table of SPEC.md 11.100.1, where what the kernel
+; holds is an offset into your image. So nothing here has to outlive the call,
+; which is the only reason a plain (w, h) signature is honest.
+;
+; The floor is applied again on an adapter change and on a drag onto a smaller
+; display, and the box you end up with is not always the one you asked for:
+; the display clamps down, this lifts back, and it is capped at the display's
+; own extent so it can never cost you your title bar. Read os88_wm_geom()
+; after an os88_onresize() rather than assuming.
+_os88_wm_minsize:
+    push bp
+    mov bp, sp
+    mov bx, [bp+4]
+    mov cx, [bp+6]
+    mov dx, [bp+8]
+    call OSAPI_WM_MINSIZE
+    pop bp
+    ret
+
 ; void os88_wm_cursor(void *win, int shape) - BX = win, AL = OS88_CUR_*.
 ; Set it once at creation; the pointer wears it over your CONTENT only, and it
 ; dies with the record. Not CC_T_WINF: that macro folds any non-zero argument
@@ -973,6 +1003,59 @@ _os88_file_read_seg:
 .err:
     mov [cc_ferr], ax
     mov ax, 0
+.out:
+    pop si
+    pop bp
+    ret
+
+; unsigned os88_file_read_at(const char *name, void *buf, unsigned cap,
+;                            unsigned off_lo, unsigned off_hi)
+; SI = name, ES:BX = the buffer, CX = its capacity in BYTES, DX:AX = the byte
+; offset to read from; out DX:AX = the bytes DELIVERED (SPEC.md 18.4.4). The
+; read half of the chunked pair whose write half is os88_file_append(), and
+; the only way a C package can look at a file bigger than the buffer it can
+; hold: os88_file_read() refuses a short buffer with FERR_BIG and reads
+; nothing at all, so "show me the header and then decide" cannot be said with
+; it.
+;
+; THE OFFSET IS TWO WORDS, NOT ONE, and that is the SDK's settled shape for a
+; 32-bit value rather than a new idea: struct os88_find carries size_lo /
+; size_hi and os88_onfile() is handed its size the same way (SPEC.md 73.7 - C
+; has no such type here). Truncating the offset to a word would cap this at
+; 64KB, which is the one file size the slot exists for. Reading a header is
+; os88_file_read_at(name, buf, cluster_bytes, 0, 0).
+;
+; THE ANSWER, though, is one word and exact, for os88_file_read()'s reason:
+; the delivery is bounded by the capacity, `cap` is an unsigned, so DX comes
+; back 0 by construction and no saturation is possible (contrast
+; os88_disk_free_kb(), where the 32 bits are genuinely the disk's and the
+; shift down has to saturate).
+;
+; 0 MEANS TWO THINGS AND os88_ferr() SEPARATES THEM, exactly as it does for
+; os88_file_read(): ferr 0 with 0 bytes is "the offset is at or past the end",
+; which is how the loop terminates, and a non-zero ferr is a refusal. The
+; offset AND the capacity must each be a whole number of CLUSTERS
+; (os88_disk_cluster_sectors() * 512) or the answer is FERR_NAME - refused,
+; never mis-read. The last chunk is the arithmetic's own exception: a tail
+; shorter than a cluster is delivered whole.
+_os88_file_read_at:
+    push bp
+    mov bp, sp
+    push si
+    mov si, [bp+4]
+    mov bx, [bp+6]
+    push ds
+    pop es                          ; ES:BX - the buffer is OURS
+    mov cx, [bp+8]
+    mov ax, [bp+10]                 ; DX:AX - the offset, low word first
+    mov dx, [bp+12]
+    call OSAPI_FILE_READ_AT
+    jc .err
+    mov word [cc_ferr], 0
+    jmp short .out                  ; AX = the count; DX is 0 - see above
+.err:
+    mov [cc_ferr], ax
+    mov ax, 0                       ; 0 bytes; os88_ferr() says why
 .out:
     pop si
     pop bp

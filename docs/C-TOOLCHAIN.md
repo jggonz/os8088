@@ -159,8 +159,19 @@ callback dispatched WITHOUT the gfx lock — SPEC.md 74.1: install it with
 `os88_wm_onwake()`, post it with `os88_wm_wake()` from any context, and it
 runs on the UI task where the file slots are legal, taking the lock itself for
 whatever it draws; `apps/runcpm` is the worked example), plus `CC_ICON` to
-name an embedded icon file. A trampoline you do not ask for is not assembled
-at all.
+name an embedded icon file and `CC_ASSOC` to name an association file. A
+trampoline you do not ask for is not assembled at all.
+
+`CC_ASSOC` is the C half of SPEC.md §54.6: the file it names holds a count
+byte and up to five `OS88_ASSOC_EXT` lines, exactly as an assembly package
+writes them (`apps/frotz/frotz.asm` is the worked example), and `crt0.asm`
+brackets it with `OS88_ASSOC16` / `OS88_ASSOC16_END` so the offset assertions
+and the pad to 16 bytes cannot be forgotten. The header's flags byte is the OR
+of the two bits — an icon is bit 0, a declaration is bit 1 — and they are
+independent, so an **iconless** package can declare extensions, which §54.6
+records as the case the block was wanted for first. Declaring costs nothing at
+run time: the mount's icon harvest already reads that sector, so a document
+beside your program opens on the first double-click, with no prior run.
 
 ### The `make` rule
 

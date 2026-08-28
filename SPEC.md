@@ -53366,6 +53366,13 @@ need four bits), which is what stops §54.6's declaration taking it back.
 `OS88_ASSOC_EXT` / `OS88_ASSOC16_END` bracket it and assert both offsets, so a
 miscounted `db` fails at assembly rather than at mount.
 
+**A C package declares the same way** (§73): `%define CC_ASSOC "<file>.inc"`
+in the shim names a file holding the count byte and the `OS88_ASSOC_EXT`
+lines, and `apps/cc/crt0.asm` writes the bracket itself — the same two macros,
+not a copy of them — so the offsets and the pad are not the author's to
+remember. Its flags byte is computed as the OR of the icon bit and this one,
+which is the *first* trap below said as code rather than as a warning.
+
 **The format version stays 3.** An old kernel loading a new package works —
 everything it reads is unmoved (magic, flags, the dispatcher at 12, the name
 at 16..31, the icon at a fixed 32..95) and `LD_H_ENTRY` is absolute, so where
