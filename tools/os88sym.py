@@ -231,6 +231,17 @@ def _load(defines=(), check=True):
     if env:
         defines = tuple(defines) + tuple(
             d for d in env.replace(",", " ").split() if d)
+    # ...and $OS88_BUILD is the same idea for WHICH BUILD, because both the
+    # generated includes and the image this map is checked against live in a
+    # build directory, and `build/` is only one of them. A sub-make with
+    # BUILD= set - `make field`, `make small`, any knob built into a directory
+    # of its own - has its own associco.inc and its own kernel.bin, and
+    # hardcoding build/ here meant the check compared a knob's map against the
+    # PLAIN kernel and refused. That refusal is right and the map was right;
+    # what was missing was a way to say which pair to use.
+    bdir = os.environ.get("OS88_BUILD", "") or os.path.join(ROOT, "build")
+    if not os.path.isabs(bdir):
+        bdir = os.path.join(ROOT, bdir)
     # A KNOB KERNEL IS NOT BOUND BY KERN_BUDGET (kernel.asm guard 1), and the
     # Makefile says so with -DKERN_KNOB. A tool re-assembling one for its
     # symbol map has to say the same thing or nasm refuses a kernel that
@@ -239,7 +250,9 @@ def _load(defines=(), check=True):
     # shipped configuration with a budget of its own.
     if any(d.split("=")[0] not in _SHIPPED_DEFS for d in defines):
         defines = tuple(defines) + ("KERN_KNOB",)
-    key = tuple(defines)
+    key = (bdir,) + tuple(defines)   # ...and the DIRECTORY, or two builds
+                                     # share one map and the second gets the
+                                     # first's addresses
     if key in _cache:
         return _cache[key]
 
@@ -257,7 +270,7 @@ def _load(defines=(), check=True):
     cmd = ["nasm", "-f", "bin", "-w+error",
            "-I", os.path.join(ROOT, "kernel") + os.sep,
            "-I", os.path.join(ROOT, "apps") + os.sep,
-           "-I", os.path.join(ROOT, "build") + os.sep]
+           "-I", bdir + os.sep]
     for d in defines:
         cmd += ["-D" + d]
     cmd += ["-o", binf, asm]
@@ -265,7 +278,7 @@ def _load(defines=(), check=True):
     if r.returncode:
         raise RuntimeError("nasm failed:\n" + r.stderr)
 
-    built = os.path.join(ROOT, "build", "kernel.bin")
+    built = os.path.join(bdir, "kernel.bin")
     if check and os.path.exists(built):
         # build/kernel.bin is the assembled image with the on-demand modules
         # CUT OFF (SPEC.md 2.8), so compare against the same prefix rather
@@ -276,9 +289,10 @@ def _load(defines=(), check=True):
         mine = mine[:_modcut(mine)]
         if mine != open(built, "rb").read():
             raise RuntimeError(
-                "the map describes a DIFFERENT kernel from build/kernel.bin: "
-                "run `make` (or pass the knob's --define) before trusting any "
-                "address from it.")
+                "the map describes a DIFFERENT kernel from %s: run `make` "
+                "(or pass the knob's --define, or $OS88_DEFINES, and "
+                "$OS88_BUILD for a sub-make's own directory) before trusting "
+                "any address from it." % os.path.relpath(built, ROOT))
 
     out, sect, equ = _parse_map(mapf)
     if not out:

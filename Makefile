@@ -1816,9 +1816,9 @@ $(BUILD)/mbr.bin: boot/mbr.asm | $(BUILD)
 #
 # BOTH OF THEM FOLLOW THIS BUILD'S KNOBS, and neither did. kernsize.py has a
 # --build for exactly this ("a sub-make with BUILD= set needs this") and
-# os88sym reads $OS88_DEFINES for the knobs, which is the mechanism its own
-# comment describes - "a tool that never asked for a knob still finds the right
-# map". Without either, `make field` - whose $(FIELDDRV) rebuilds the drivers,
+# os88sym reads $OS88_DEFINES for the knobs and $OS88_BUILD for the directory,
+# which is the mechanism its own comment describes - "a tool that never asked
+# for a knob still finds the right map". Without either, `make field` - whose $(FIELDDRV) rebuilds the drivers,
 # and so this sector, under $(FIELDKNOBS) - asked a PLAIN map about a
 # DISK_COUNTERS kernel, os88sym refused as it should, and both -D options then
 # simply VANISHED from the nasm line. What that printed was
@@ -1843,7 +1843,8 @@ BOOTHD_DEFS = import sys, subprocess, json; sys.path.insert(0, 'tools'); \
 # reported by the assembler, about a symbol, several lines further on. Run it
 # first and let it fail here, where its traceback is the error.
 $(BUILD)/boothd.bin: boot/boothd.asm kernel/kernel.asm $(BUILD)/kernel.bin | $(BUILD)
-	@D=$$(OS88_DEFINES="$(subst -D,,$(VIDDEF))" python3 -c "$(BOOTHD_DEFS)") && \
+	@D=$$(OS88_DEFINES="$(subst -D,,$(VIDDEF))" OS88_BUILD="$(BUILD)" \
+	     python3 -c "$(BOOTHD_DEFS)") && \
 	 echo "$(NASM) -f bin -w+error -DBOOT2_SECS=$(BOOT2_SECS) $$D -o $@ $<" && \
 	 $(NASM) -f bin -w+error -DBOOT2_SECS=$(BOOT2_SECS) $$D -o $@ $<
 	@echo "boothd: $(call FILESIZE,$@) bytes"
