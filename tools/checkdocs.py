@@ -121,6 +121,10 @@ SITES_HIST = {
     (189, 61): "docs/TEXT-PLAN.md 2 - where the ratchet started",
     (111, 49): "SPEC.md 6.6.5 / docs/TEXT-PLAN.md 4 item 6 - where the LAST "
                "batch started, which is not where the sweep started",
+    (37, 17): "SPEC.md 6.6.5 / docs/TEXT-PLAN.md 4.4 - what stage 4 LEFT. "
+              "Sheet and Chart (SPEC.md 81, 83) were written on main while "
+              "6.6 was being written here, so they joined the ratchet at the "
+              "merge and neither number is the sweep's account of itself",
 }
 
 

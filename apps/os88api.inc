@@ -803,17 +803,37 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
 ;
 ; ...and OSAPI_CPU_INFO's AH, which this file described in prose and did not
 ; name. They are one contract with three readers now - the kernel publishes
-; them, XMEM.DRV is the only thing that SETS them (SPEC.md 41.12.2), and a
-; package may test them - so they are spelled once here rather than three
-; times. NONE OF THEM IS THE THING TO BRANCH ON: a package asks
-; OSAPI_XMEM_CAPS for KB, always, because these say what the machine can do
-; and that one says what is actually there.
+; them, XMEM.DRV sets the three memory bits (SPEC.md 41.12.2) and the boot
+; probe sets CPU_F_X87 - so XMEM.DRV must write ITS THREE and leave the byte's
+; other bits alone, which it did not always do - and a package may test them -
+; so they are spelled once here rather than three times. NONE OF THEM IS THE
+; THING TO BRANCH ON: a package asks OSAPI_XMEM_CAPS for KB, always, because
+; these say what the machine can do and that one says what is actually there.
 CPU_F_A20           equ 0x01     ; the A20 line VERIFIED open - by a
                                  ; wraparound read, never by "we wrote to the
                                  ; gate" (SPEC.md 41.2)
 CPU_F_HMA           equ 0x02     ; the High Memory Area is claimed (41.3)
 CPU_F_UNREAL        equ 0x04     ; unreal mode armed: FS and GS carry a 4GB
                                  ; data limit (41.4). Tier 2 only
+CPU_F_X87           equ 0x08     ; an 8087/287/387 IS IN THE SOCKET, probed
+                                 ; at boot with FNINIT and a status-word read
+                                 ; back - not INT 11h's equipment word, whose
+                                 ; bit on a 5150 is a DIP switch reporting
+                                 ; what the owner claimed. A 5150 shipped with
+                                 ; that socket EMPTY and many were filled
+                                 ; later, so this is a per-machine fact rather
+                                 ; than a tier fact, which is why it lives
+                                 ; here and not in CPU_8086/286/386.
+                                 ; TEST IT BEFORE EVERY COPROCESSOR PATH, and
+                                 ; understand what happens if you do not: on a
+                                 ; machine with an empty socket an `fadd` does
+                                 ; NOT fault, it HANGS - the WAIT in front of
+                                 ; it blocks forever on a BUSY line nothing
+                                 ; will lower. No `cpu` island is involved:
+                                 ; the 8087's base instructions assemble at
+                                 ; `cpu 8086` already, so rule 1 stands with
+                                 ; no exception and the gate here is a
+                                 ; RUN-TIME one (SPEC.md 1 rule 1, 84.6).
 ;
 ; --- volumes (SPEC.md 18.7/51.8) --------------------------------------------
 ; A DRVC_DISK DRIVER's slots, not an application's: the four that CHANGE

@@ -115,6 +115,9 @@ FAST = [
     Row("checkdocs", "fast", py("tools/checkdocs.py"), 1.0,
         "stale SPEC.md citations and slot numbers in prose (already in `make`; "
         "here too so the suite is a complete statement)"),
+    Row("docindex", "fast", py("tools/os88index.py", "--check"), 0.5,
+        "docs/INDEX.md still matches the tree - an index that has drifted is "
+        "worse than none, because it is consulted and believed"),
     Row("checkreadme", "fast", py("tools/checkreadme.py", "readme.txt"), 0.3,
         "README.TXT's width and size rules - Note Pad refuses a file one byte "
         "too long and shows nothing at all"),
@@ -127,6 +130,21 @@ FAST = [
         "that stopped saving a register to fit a 256-byte task slice (SPEC.md "
         "72.16.4) still get it back from every callee. Without this the trade "
         "is a landmine for whoever edits the TCP stack next"),
+    Row("stkbalance", "fast",
+        py("tools/stkbalance.py", "apps/sheet/sheet.asm", "apps/chart/chart.asm",
+           "apps/os88chart.inc", "apps/os88fp.inc", "apps/os88text.inc",
+           "apps/os88line.inc"), 1.5,
+        "every `ret` in SHEET, CHART and the includes they share is reached at "
+        "the depth it started at. `ch_legend` pushed SI and never popped it, so "
+        "its `ret` jumped to the saved register: a black canvas and a wedged "
+        "app, with no crash and no message (SPEC.md 82.7.3). The walk is "
+        "path-aware because a naive push-vs-pop count flags one routine in ten "
+        "and would just be ignored. SCOPED to these files on purpose - the "
+        "kernel's ISR tails push in one global label and pop in another, which "
+        "this cannot follow, so pointing it there would report noise. Two "
+        "stated gaps, both counted in the tool's own summary line: a routine "
+        "whose every exit is a tail jmp is not walked, and loop back-edge "
+        "conflicts are suppressed"),
 ]
 
 # --------------------------------------------------------------------------

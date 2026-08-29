@@ -1304,8 +1304,15 @@ test-soak: $(IMG) $(IMG720) $(IMG360) $(APPSIMG) $(APPSIMG720) $(APPSIMG360) \
 # text and writes nothing. It builds no artifact, so it is PHONY and every
 # `make` pays it; that is deliberate, because the drift it catches arrives in
 # commits that touch no source at all.
+#
+# docs/INDEX.md rides the same rule and for a stronger reason. It is GENERATED
+# from apps/os88api.inc, SPEC.md and this file, and it exists to be consulted
+# before designing something - so an index that has drifted is worse than no
+# index at all, because it is believed. `tools/os88index.py --check` fails the
+# build if a regeneration would change a byte; `tools/os88index.py` fixes it.
 checkdocs:
 	@python3 tools/checkdocs.py
+	@python3 tools/os88index.py --check
 
 $(BUILD):
 	@mkdir -p $(BUILD)
@@ -2391,6 +2398,48 @@ $(BUILD)/wire360.img: $(BUILD)/wire.o88 tools/os88disk.py
 $(SBSTAMP): | $(BUILD)
 	@rm -f $(BUILD)/.sbpkg*
 	@touch $@
+# Sheet (spreadsheet roadmap stage 1.0): a 64x64 numeric grid, no formulas,
+# no formatting, SYLK only.
+# EVERY .inc A PACKAGE INCLUDES BELONGS IN ITS RULE, and this one is the reason
+# the rule says so out loud: sheet.bin listed only sheet.asm and os88api.inc, so
+# an edit to os88chart.inc rebuilt CHART.O88 and left SHEET.O88 stale - which
+# presents as a fix that did not work, on a binary that never contained it.
+# Four other rules had the same hole and were fixed with this one.
+$(BUILD)/sheet.bin: apps/sheet/sheet.asm apps/os88api.inc \
+                    apps/os88ui.inc apps/os88line.inc apps/os88text.inc \
+                    apps/os88chart.inc apps/os88fp.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/sheet/sheet.asm
+	@echo "sheet:  $(call FILESIZE,$@) bytes"
+
+
+$(BUILD)/sheet.o88: $(BUILD)/sheet.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/sheet.bin -o $@
+
+# FPTEST: the self-test for apps/os88fp.inc, the software IEEE-754 double.
+# Deliberately NOT on any disk - it is a developer tool, and the 360KB apps
+# disk has no room to spare. Built here so it cannot rot: a change to
+# os88fp.inc that breaks the test app breaks the build. Run it by hand with
+#   python3 tools/os88disk.py -o build/fptest.img --size 1440 build/fptest.o88
+#   make test TESTAPPS=build/fptest.img
+# and read the window: every row is one case against a host-computed IEEE-754
+# expectation, and the header says ALL PASS or FAILURES.
+$(BUILD)/fptest.bin: apps/fptest/fptest.asm apps/fptest/fpcases.inc apps/os88fp.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/fptest/ -o $@ apps/fptest/fptest.asm
+	@echo "fptest: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/fptest.o88: $(BUILD)/fptest.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/fptest.bin -o $@
+
+# Chart: a standalone SYLK/DIF/BIFF bar-chart viewer, sharing its
+# rasterizer/BMP-writer with Sheet's own live chart window (os88chart.inc).
+$(BUILD)/chart.bin: apps/chart/chart.asm apps/os88api.inc apps/os88chart.inc \
+                    apps/os88fp.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/chart/chart.asm
+	@echo "chart:  $(call FILESIZE,$@) bytes"
+
+
+$(BUILD)/chart.o88: $(BUILD)/chart.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/chart.bin -o $@
 
 # Note Pad, formerly the built-in KIND_NOTE app (SPEC.md 27).
 $(BUILD)/notepad.bin: apps/notepad/notepad.asm apps/os88api.inc apps/os88ui.inc \
@@ -2419,7 +2468,7 @@ $(BUILD)/calc.o88: $(BUILD)/calc.bin tools/os88pkg.py
 # implementation and tests/htm/ is what both are checked against.
 $(BUILD)/browser.bin: apps/browser/browser.asm apps/browser/brnet.inc \
                       apps/os88api.inc \
-                      apps/os88ui.inc apps/os88line.inc \
+                      apps/os88ui.inc apps/os88line.inc apps/os88sock.inc \
                       drivers/net/netpkg.inc $(SBSTAMP) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/browser/ -I drivers/net/ \
 	        $(PKGSBDEF) -o $@ apps/browser/browser.asm
@@ -2430,7 +2479,7 @@ $(BUILD)/browser.bin: apps/browser/browser.asm apps/browser/brnet.inc \
 # the two cannot drift (SPEC.md 20.11) - the same reason tests/socktest has it.
 $(BUILD)/telnet.bin: apps/telnet/telnet.asm apps/telnet/tetxt.inc \
                      apps/os88api.inc \
-                     apps/os88ui.inc apps/os88line.inc \
+                     apps/os88ui.inc apps/os88line.inc apps/os88sock.inc \
                      drivers/net/netpkg.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/telnet/ -I drivers/net/ -o $@ apps/telnet/telnet.asm
 	@echo "telnet: $(call FILESIZE,$@) bytes"
@@ -2467,7 +2516,7 @@ $(FTPDSTAMP): | $(BUILD)
 	touch $@
 
 $(BUILD)/ftpd.bin: apps/ftpd/ftpd.asm apps/os88api.inc apps/os88ui.inc \
-                   apps/os88line.inc apps/os88sock.inc \
+                   apps/os88line.inc apps/os88sock.inc apps/os88pit.inc \
                    drivers/net/netpkg.inc $(FTPDSTAMP) | $(BUILD)
 	$(NASM) -f bin -w+error $(FTPDSLOWDEF) -I apps/ -I apps/ftpd/ -I drivers/net/ -o $@ apps/ftpd/ftpd.asm
 	@echo "ftpd:   $(call FILESIZE,$@) bytes"
@@ -2532,7 +2581,7 @@ $(BUILD)/piano.o88: $(BUILD)/piano.bin tools/os88pkg.py
 # It needs no card to be USEFUL -
 # DEMO stages a built-in sweep and PLAY falls back to speaker clips - so it
 # ships on every disk and greys REC on a machine with no Sound Blaster.
-$(BUILD)/recorder.bin: apps/recorder/recorder.asm apps/os88api.inc | $(BUILD)
+$(BUILD)/recorder.bin: apps/recorder/recorder.asm apps/os88api.inc apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/recorder/recorder.asm
 	@echo "recorder: $(call FILESIZE,$@) bytes"
 
@@ -4922,10 +4971,10 @@ $(BUILD)/lptlink144.img: $(BUILD)/llboot144.bin $(BUILD)/lptlink.bin \
 # also the only answer that survives a host OS writing to the disk. What is
 # left here is which packages ship and which folder each lands in.
 APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
-              $(BUILD)/fractal.o88 \
+              $(BUILD)/chart.o88 $(BUILD)/fractal.o88 \
               $(BUILD)/hello.o88 $(BUILD)/modplug.o88 $(BUILD)/notepad.o88 \
               $(BUILD)/paint.o88 $(BUILD)/piano.o88 $(BUILD)/recorder.o88 \
-              $(BUILD)/ftpd.o88 $(BUILD)/telnet.o88 \
+              $(BUILD)/ftpd.o88 $(BUILD)/sheet.o88 $(BUILD)/telnet.o88 \
               $(BUILD)/texpad.o88 $(BUILD)/tracker.o88
 APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/cyclone.o88 $(BUILD)/mines.o88 \
               $(BUILD)/missile.o88 $(BUILD)/solitair.o88 $(BUILD)/tamegram.o88
@@ -5356,8 +5405,13 @@ burn:
 # they have 713 and 2,847 clusters, the reason for the cut does not exist
 # there, and COMBO144ARGS below is therefore built from the FULL lists rather
 # than from COMBOARGS as it used to be.
+#
+# SHEET and CHART went with the spreadsheet: 57 clusters between them, sheet
+# is the largest package on the disk, and neither is a field-calibration
+# tool - Calc stays for the arithmetic a field run needs.
 COMBO_DROP := $(BUILD)/artful.o88 $(BUILD)/modplug.o88 $(BUILD)/texpad.o88 \
-              $(BUILD)/tracker.o88 $(BUILD)/recorder.o88
+              $(BUILD)/tracker.o88 $(BUILD)/recorder.o88 \
+              $(BUILD)/sheet.o88 $(BUILD)/chart.o88
 COMBO_TOOLS := $(filter-out $(COMBO_DROP),$(APPS_TOOLS))
 COMBO_GAMES := $(filter-out $(COMBO_DROP),$(APPS_GAMES))
 

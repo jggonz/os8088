@@ -67,3 +67,15 @@
 # had: a redundant fill the PRIMITIVE could take, not a caller's mistake. It is
 # here rather than in the case list because the fix belongs in font_run.
 1 apps/tracker/trkui.inc  # backlog: SPEC.md 45.20 - tui_runc's COLOUR arm. tui_runo is the unconditional run; this one is a measured trade, not an unconverted site
+
+# --- ARRIVED WITH SPEC.md 81/83, AFTER the rule was written ------------------
+# Sheet and Chart (#117) were written on main while 6.6 was being written on
+# this branch, so their text predates the rule rather than breaking it. The
+# ratchet's own opening argument applies to them exactly as it applied to the
+# rest of the tree: register the count the tree HAS, and stop it going up.
+# Both files are a MIX - a dialog label over a ground the window manager put
+# down two operations ago is 6.6.2 case 2 and is right as it stands; a
+# `gfx_fill` three instructions above a `font_str_x` is the pair, in the same
+# pass, and is not.
+17 apps/sheet/sheet.asm  # MIXED, one line per file. 6.6.2 case 1 is sh_drawcell's label over a SHADED cell (GFX_FILL_GRAY, so the ground is a dither); case 6 is the bold overstrike a line below it, the same 1px-right double strike texpad does; case 2 is the dialog prompts, drawn once onto a body the WM painted. backlog: the formula bar, the status bar and three dialog titles fill and then letter in the SAME pass - TEXT-PLAN 4's shape, in a package the branch that wrote the rule could not see
+4 apps/fptest/fptest.asm  # 6.6.2 case 2 - fpt_row's per-case rows land on a panel ground filled once for the whole run, and the pass that does not draw does not letter either. backlog: fpt_paint's header is a fill and then a letter in one pass

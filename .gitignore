@@ -42,3 +42,7 @@ tools/martypc/roms/
 # gets a checkout of this repo under here, so committing one would nest the
 # whole tree inside itself; the harness removes them when the agent finishes.
 .claude/worktrees/
+
+# Third-party format specifications kept locally for reference (docs/BIFF-NOTES.md
+# cites them). Not vendored: this tree is MIT under one licence file.
+docs/excelfileformat.pdf

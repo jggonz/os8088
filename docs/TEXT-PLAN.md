@@ -606,6 +606,12 @@ than a queue:
 **A new `backlog:` line is now a claim that somebody is going to do it**, which
 is what the word should have meant all along.
 
+**Two files joined afterwards and are not part of this account.** Sheet and
+Chart (SPEC.md 81, 83) were written on `main` while stage 4 was being written
+here; they reached the registry at the merge, at the 21 sites they had, with
+one mixed line each. They are the ratchet doing its job on a tree it arrived
+in, not stage 4 leaving work behind.
+
 ### 4.1 Priority is redraw frequency, not site count
 
 A panel drawn once when a window opens costs a user one flash. A status field
