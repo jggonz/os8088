@@ -36,7 +36,8 @@
 ;          db base>>4      the IDE task file's base port, 0 for a BIOS drive.
 ;                          Every ISA task file is 16-byte aligned, so the shift
 ;                          is lossless and the port fits a byte
-;          db flags        bit 0 = mount it at boot
+;          db flags        bit 0 = mount it at boot, bit 1 = the geometry
+;                          below was TYPED IN rather than probed
 ;          dw cyl
 ;          db heads        1..255 }  a word each in the device row, because
 ;          db spt          1..63  }  that is what the arithmetic wants
@@ -63,6 +64,8 @@ HDC_E_HEADS  equ 6
 HDC_E_SPT    equ 7
 HDC_ESZ      equ 8
 HDC_F_MOUNT  equ 1              ; bit 0: this drive was mounted
+HDC_F_TYPED  equ 2              ; bit 1: the user typed this geometry in, so
+                                ; it is the one to restore (SPEC.md 52.6)
 HDC_FBUF     equ HDC_ENT0 + HD_MAXDEV * HDC_ESZ     ; 34 = DRV_BLOB_SZ
 
 %if HDC_FBUF != DRV_BLOB_SZ
@@ -160,7 +163,10 @@ hd_cfg_build:
     mov bx, di                  ; turns - BX carries the row from here
     pop di
     test byte [bx+HDD_FLAGS], 2 ; typed in by hand?
-    jnz .write
+    jz .probed
+    or dl, HDC_F_TYPED          ; ...and the RECORD has to say so, or the
+    jmp short .write            ; restore cannot tell a geometry the user
+.probed:                        ; typed from one the probe answered with
     test dl, dl
     jz .next                    ; probed geometry and not mounted: there is
                                 ; nothing about this drive worth a record
@@ -334,12 +340,22 @@ hd_cfg_apply:
     ; one is a fact about wherever this file was written, so the probe wins
     ; whenever it has one. That is also what this file's own header says the
     ; record is FOR - "the geometry of a drive the PROBE could not determine
-    ; and the user typed in" - and what the Control Panel already enforces at
-    ; the keyboard, where the fields are editable only when the probe failed
-    ; (page.inc). The MOUNT bit below is untouched: which drives to mount is a
-    ; preference and travels fine; a geometry is not and does not.
-    test byte [di+HDD_FLAGS], 1
+    ; and the user typed in". The MOUNT bit below is untouched: which drives to
+    ; mount is a preference and travels fine; a geometry is not and does not.
+    ;
+    ; UNLESS THE RECORD SAYS THE USER TYPED IT. The +/- editor is live on every
+    ; drive, probed or not (page.inc: hd_page_adjust has no such gate), so
+    ; "the probe answered" is not the same fact as "nobody typed one" - and
+    ; reading it as if it were threw a typed geometry away at every boot and
+    ; then wrote the probe's back over it. HDC_F_TYPED is the fact itself,
+    ; recorded by hd_cfg_build off HDD_FLAGS bit 1. The field record that
+    ; travelled between the 5150s carried flags=01 - mounted, not typed - so it
+    ; still loses to the probe and docs/FIELD-NOTES.md 33 stays fixed.
+    test byte [si+HDC_E_FLAGS], HDC_F_TYPED
+    jnz .geom                   ; the user's own answer wins...
+    test byte [di+HDD_FLAGS], 1 ; ...and where there is none, the probe's does
     jnz .nogeom
+.geom:
     mov ax, [si+HDC_E_CYL]
     mov [di+HDD_CYL], ax
     mov al, [si+HDC_E_HEADS]

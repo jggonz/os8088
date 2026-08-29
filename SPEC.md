@@ -50256,6 +50256,27 @@ an XT-IDE adapter latches. An 8088 with a hard disk has a controller with a
 ROM in it, and rung 0 is that ROM. The PIO loop is `in ax, dx` / `stosw`
 because this tree is `cpu 8086` and `rep insw` is a 186 instruction.
 
+**Rung 1 gives no row to a drive rung 0 already reported**, and the test is the
+**geometry** — `hd_ide_dup`, walked before the row is claimed. It has to be the
+geometry, because it is the only thing the two rungs both answer for: a BIOS
+row's unit is 80h/81h and an IDE row's is 0/1 on a base port the BIOS never
+mentions, so §52.6's kind+unit+base key cannot pair them. `IDENTIFY`'s words
+3 and 6 must **equal** the BIOS row's heads and sectors/track — a drive the
+BIOS is not translating reports its own pair, and one it *is* translating has a
+geometry that is not the drive's at all — while word 1's cylinder count only
+has to be **no smaller** than the BIOS's, because reserving the last cylinder
+or two is what a drive-type table does and SeaBIOS does it too (65 cylinders
+of IDE are 64 through `AH=08h`). **A rung 0 row pairs once**: two identical
+drives with only the first in the BIOS is the case a plain scan gets wrong, and
+it gets it wrong by losing a disk.
+
+Without it the machine whose BIOS knows its disk gets **two rows for one
+drive**, and §52.6.1's automount then mounts every partition on it twice — once
+through each transport, C: and D: over the same sectors, two icons per volume
+and two FAT caches. What no key can separate is an MFM drive and an unknown IDE
+drive of *exactly* the same geometry: the second is skipped rather than listed,
+which is a drive missing rather than a volume doubled.
+
 `91h INITIALIZE DEVICE PARAMETERS` is **not optional**: the geometry a drive is
 addressed with has to be the geometry it was told about, or every read lands
 somewhere else.
@@ -50731,8 +50752,8 @@ tidy-up rather than an upgrade step.
 
 ```
 +0   db version (1; 0 = never written = the defaults)   +1  db count
-+2   count x 8:  kind, unit, base>>4, flags(bit 0 = mounted), dw cyl,
-                 db heads, db spt
++2   count x 8:  kind, unit, base>>4, flags(bit 0 = mounted,
+                 bit 1 = the geometry was TYPED), dw cyl, db heads, db spt
 ```
 
 Four records of eight bytes and a two-byte header is 34, which is where
@@ -50741,12 +50762,29 @@ driver needs, not a round number. `base>>4` is lossless because every ISA task
 file is 16-byte aligned, and heads (1..255) and sectors (1..63) each fit the
 byte the device row spends a word on.
 
-Three things about it are load-bearing:
+Four things about it are load-bearing:
 
 - **A device is matched by kind+unit+base, never by its row index.** The probe
   runs again at every attach and a machine can gain or lose a drive between
   boots; an index would restore one drive's geometry onto another's and mount
   a partition table belonging to somebody else.
+- **The probe beats a saved geometry, and the user beats the probe.** The
+  probe's answer is a fact about the drive in front of you and a saved one is a
+  fact about wherever the file was written — and a BIOS drive's match key is
+  `BIOS/80h/0` on every machine there is, so a file that travels carries a
+  geometry that matches everywhere and is right in one place
+  (docs/FIELD-NOTES.md 33: a whole volume written to the wrong physical
+  sectors, and nothing errors). `hd_cfg_apply` therefore restores the geometry
+  only when the probe could not answer — **or when the record's `TYPED` bit
+  says the user typed it in**, which is the half of §52.6 a user cannot
+  reconstruct. The `+`/`-` editor is live on a probed drive too, so "the probe
+  answered" is not the same fact as "nobody typed one", and reading it as if it
+  were threw the typed geometry away at every boot and wrote the probe's back
+  over it. The field record that travelled between the 5150s was `mounted` and
+  not `TYPED`, so it still loses. What is left, and stated rather than closed:
+  a **typed** record travelling on an install floppy is still applied on the
+  next machine, and greying the fields on a probed drive (§47 rule 2) is the
+  decision that would close it.
 - **A record exists only for a drive worth remembering** — one whose geometry
   the user typed in, or one that was mounted. There is nothing to save about a
   drive the probe describes correctly and nobody mounted. The blob is

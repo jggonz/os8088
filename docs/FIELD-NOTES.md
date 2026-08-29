@@ -3927,13 +3927,26 @@ That is both symptoms exactly:
 ### The fix
 
 `hd_cfg_apply` restores a saved geometry **only when the probe could not
-determine one** (`HDD_FLAGS` bit 0 clear). The probe's answer is a fact about
+determine one** (`HDD_FLAGS` bit 0 clear) **or when the record says the user
+typed it in** (the blob's `HDC_F_TYPED`). The probe's answer is a fact about
 the drive in front of you; the saved one is a fact about wherever the file was
 written. This is also what cfg.inc's own header always said the record was for
 — *"the geometry of a drive the PROBE could not determine and the user typed
-in"* — and what the Control Panel already enforces at the keyboard, where those
-fields are editable only when the probe failed. **The mount bit is untouched:**
-which drives to mount is a preference and travels fine.
+in"*. **The mount bit is untouched:** which drives to mount is a preference and
+travels fine.
+
+**The `TYPED` bit is a correction to the first version of this fix, not a
+retreat from it.** That version tested the probe alone, on the stated reasoning
+that the Control Panel enforces the same thing at the keyboard — *"those fields
+are editable only when the probe failed"*. **It does not**: `hd_page_adjust`
+has no such gate and the `+`/`-` pair is live on every drive. So the guard was
+reading "the probe answered" as "nobody typed one", and a geometry typed on a
+probed drive was discarded at every boot and then overwritten in `SYSTEM.CFG`
+by the probe's. The blob now carries the fact itself. **This section's own
+record is untouched by it** — `flags=01` is mounted and not typed, so it still
+loses to the probe. What is not closed is a *typed* record travelling the same
+route these images did; greying the fields on a probed drive (SPEC.md §47
+rule 2) is the decision that would close it, and it has not been taken.
 
 ### What this does NOT explain, and is still open
 
