@@ -19866,10 +19866,14 @@ section .text
                             ; CBLACK, or CDGRAY when the item is dead
                             ; (SPEC.md 68.14). Decided at the same branch that
                             ; decides OSAPI_GFX_PEN's CF, because a package
-                            ; cannot read the pen back, and it takes the pad
-                            ; byte that used to keep the words below even
+                            ; cannot read the pen back, and it took the pad
+                            ; byte that used to keep the words below even -
+                            ; which wd_dink then needed back (wd_mpad)
     WDVAR wd_dink, 1        ; byte: the same answer for a DIALOG's controls,
                             ; banked by wd_dpen (SPEC.md 6.6.5)
+    WDVAR wd_mpad, 1        ; byte: ...and the pad BACK, because two ink bytes
+                            ; landed where one did and the words below have to
+                            ; stay even again
     WDVAR wd_cbuf, 2        ; wd_btn12's one character and its NUL
     WDVAR wd_mrx1, 2        ; word } the open dropdown's rectangle, computed
     WDVAR wd_mry1, 2        ; word } once by wd_mgeo and read by painter, hit

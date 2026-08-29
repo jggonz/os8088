@@ -28585,6 +28585,16 @@ caller composing data rows reproduces it by ANDing each row with `0xAAAA` or
 `0x5555` off that parity — which is free, because a caller that needs a pair at
 all is composing its rows anyway.
 
+**And it clips the shape WHOLE.** `ico_core` asks `wm_clip_test` about the
+icon's rect and draws *nothing* when a clip fragment's edge cuts it — which is
+`font_char`'s rule one region in (§11.3). That is free for a desktop icon,
+which is never half over a window, and it is not free for a **control**: a
+check box on a partly covered page must still draw its visible half, the way
+the `gfx_*` fills that used to draw it did, per pixel. So a caller whose shape
+can be cut asks `OSAPI_WM_CLIP_TEST` first and keeps a per-pixel arm for the
+answer. `os88ui_glyph` does exactly that, and pays for it only in the case
+where this pass would have drawn nothing at all.
+
 **Why this rather than a masked `gfx_blit1`.** §5.4.2 refuses an x or a width off
 the byte grid, so a 12-px shape at an arbitrary x needs either an edge-masked
 band or a caller that declares what surrounds it — one is new code in the hottest

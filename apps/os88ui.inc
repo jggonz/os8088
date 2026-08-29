@@ -85,6 +85,9 @@
   %macro UI_IPEN 0                  ; ...and the pair it draws in, one-shot
     call KERNEL_SEG:cw_icon_pen
   %endmacro
+  %macro UI_CLIPT 0                 ; ...and may that WHOLE shape be drawn?
+    call KERNEL_SEG:cw_wm_clip_test ; (SPEC.md 11.3) - CF = 1 it may not
+  %endmacro
   %macro UI_ISMONO 0                ; ZF = 1 on a COLOUR adapter (SPEC.md 39.5)
     cmp byte [vid_mono], 0
   %endmacro
@@ -133,6 +136,9 @@
   %endmacro
   %macro UI_IPEN 0                  ; ...and the pair it draws in, one-shot
     call OSAPI_ICON_PEN
+  %endmacro
+  %macro UI_CLIPT 0                 ; ...and may that WHOLE shape be drawn?
+    call OSAPI_WM_CLIP_TEST         ; (SPEC.md 11.3) - CF = 1 it may not
   %endmacro
   %macro UI_ISMONO 0                ; ZF = 1 on a COLOUR adapter (SPEC.md 39.5)
     push ax                         ; OSAPI_VIDEO documents four outputs and
@@ -564,10 +570,27 @@ os88ui_glyph:
                                 ; (a VALUE, never an address - SS is not DS
                                 ; in a package)
 
+    ; --- ...but is the whole 12x12 box drawable? (SPEC.md 11.3) ------
+    ; ico_core clips an icon WHOLE - one shape or none, the font_char rule -
+    ; so a control a clip fragment's edge cuts draws NOTHING through the pass
+    ; below, where the pixel arm draws the visible half: the gfx_* fills clip
+    ; per pixel. That is the pair the SDK publishes this slot for. It is asked
+    ; here and not after the compose because DI still carries the argument
+    ; and SI still points at the picture at this line.
+    mov ax, cx
+    mov bx, dx
+    add cx, OS88UI_GW - 1
+    add dx, OS88UI_GW - 1
+    UI_CLIPT                    ; preserves every register, and answers CF = 0
+    mov cx, ax                  ; when no clip is armed at all
+    mov dx, bx
+    jc .gpix
+
     ; --- ONE CALL, through the masked sprite pass (SPEC.md 25.6) -----
-    ; What follows this block is the ORIGINAL: a white box and then one
-    ; drawing call per set bit, 45 to 65 of them, 24-34 ms of the field
-    ; machine's time for one 12x12 control (PERFORMANCE.md Set 83). A glyph
+    ; `.gpix` below is the ORIGINAL, and is what a cut control still draws
+    ; with: a white box and then one drawing call per set bit, 45 to 65 of
+    ; them, 24-34 ms of the field machine's time for one 12x12 control
+    ; (PERFORMANCE.md Set 83) - a price paid where nothing else can. A glyph
     ; is a 1bpp shape with a mask, which is exactly what ico_core draws - so
     ; the mask rows are the 12x12 box, the data rows are the bitmap this
     ; routine already has, and the box and the picture arrive together.
@@ -617,10 +640,13 @@ os88ui_glyph:
     mov cx, bp                  ; ...and back to the pen this was called with
     mov si, os88ui_grec
     UI_ICON
-                                ; ...and no fallback, because the kernel
-                                ; CANNOT refuse this record and the branch
-                                ; that used to catch it could not have drawn
-                                ; one (SPEC.md 25.6.1).
+    jmp short .gout
+                                ; ...and no fallback for a REFUSAL, because
+                                ; the kernel CANNOT refuse this record and the
+                                ; branch that used to catch it could not have
+                                ; drawn one (SPEC.md 25.6.1). The arm below is
+                                ; the CLIP's, and is why the test above stands
+                                ; where it does.
                                 ;
                                 ; icon_draw_x refuses four shapes: ww = 0,
                                 ; ww > 1, rows = 0, rows > ICO_STAGE_H.
@@ -646,6 +672,56 @@ os88ui_glyph:
                                 ; os88ui_grec, so the per-pixel pass re-read
                                 ; the record's header and its twelve constant
                                 ; mask words as if they were the picture.
+                                ; Both are the reason the arm below is reached
+                                ; from ABOVE the compose, where DI is still
+                                ; the argument and SI is still the bitmap.
+
+.gpix:                          ; the CUT control (SPEC.md 11.3), pixel by
+    UI_WHITE                    ; pixel: the box first, so a glyph can be
+    call os88ui_gdn             ; redrawn in place. [gfx_dis] does not reach a
+    jnz .box                    ; fill, so a stale one cannot tint it - and a
+    UI_BLACK                    ; PRESSED glyph is that box in black, over
+.box:                           ; which the picture below goes white
+    mov ax, cx
+    mov bx, dx
+    add cx, OS88UI_GW - 1
+    add dx, OS88UI_GW - 1
+    UI_FILL                     ; AX,BX,CX,DX = x1,y1,x2,y2; BX survives it
+
+    test di, 0xFF00             ; ...then the pen, both halves at once
+    jz .live                    ; (SPEC.md 47 rule 1) - the disabled byte out
+                                ; of the bank above, never out of AH
+    stc
+    jmp short .set
+.live:
+    clc
+.set:
+    UI_PEN
+    call os88ui_gdn             ; ...and the picture in white if it is down,
+    jnz .pixpen                 ; which UI_PEN has just overwritten with the
+    UI_WHITE                    ; live or the disabled ink
+.pixpen:
+
+    mov dx, bx                  ; DX = pen y, back at the top row
+    mov bh, OS88UI_GW           ; BH = rows left
+.row:
+    lodsw                       ; AX = the row's bits, MSB leftmost (DF = 0
+    mov cx, bp                  ; by contract); CX = pen x
+    mov bl, OS88UI_GW           ; BL = columns left
+.col:
+    shl ax, 1
+    jnc .skip
+    UI_PIXEL
+.skip:
+    inc cx
+    dec bl
+    jnz .col
+    inc dx
+    dec bh
+    jnz .row
+
+    clc
+    UI_PEN                      ; ...and the pen back, always
 .gout:
     pop bp
     pop di

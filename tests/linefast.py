@@ -127,7 +127,8 @@ def main(argv):
     with os88marty.launch(a.image, machine=a.machine) as m:
         os88marty.settle(m)
         m.pause()
-        rig = Rig(m, sym, sym["gfx_pairtab0"])
+        rig = Rig(m, sym, sym["snd_xlat"])      # the stub's 256 idle .bss
+                                                # bytes (tools/os88linecost.py)
         got = m.read((KERNEL_SEG << 4) + call, 3)
         if got[0] != 0xE8:
             sys.exit("linefast: %04x is not `call gfx_line_fast` (%s) - the "
