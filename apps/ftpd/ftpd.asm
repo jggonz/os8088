@@ -1903,9 +1903,19 @@ fd_paint_now:
                                     ; the lines
     call OSAPI_GFX_LOCK
     mov bx, [fd_win]                ; **AND THE CLIP, WHICH WAS MISSING.** A
-    call OSAPI_WM_CLIP_SET          ; W_PAINT callback is entered with clipping
-    jc .unlock                      ; already armed by the window manager; this
-                                    ; is NOT one - it takes the lock itself,
+    call OSAPI_WM_CLIP_SET          ; NOTHING has armed a clip for us. An
+    jc .unlock                      ; earlier version of this comment said a
+                                    ; W_PAINT callback is entered with one
+                                    ; already armed by the window manager and
+                                    ; that this was merely not a W_PAINT. The
+                                    ; second half is true and the first is not:
+                                    ; wm_draw_win KILLS the region before the
+                                    ; title bar (`mov word [wm_clip_n], 0`,
+                                    ; kernel/wm.inc) and never re-arms it, and
+                                    ; the kernel's only two `call wm_clip_set`
+                                    ; sites are kernel/apps.inc's background
+                                    ; painters. So a W_PAINT arms its own too.
+                                    ; This one takes the lock itself,
                                     ; from a wake and from the second-tick
                                     ; flush - so nothing has armed anything and
                                     ; the gfx_* primitives take ABSOLUTE screen

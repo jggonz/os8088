@@ -78,6 +78,9 @@ FAST = [
         "docs/KERNEL-MEMORY.md's blessed baseline carries THIS kernel's "
         "KERN_BUDGET - it went two moves behind because tools/kernsize.py "
         "compared spare and could not see a budget move at all"),
+    Row("swallow", "fast", py("tests/unit/t_swallow.py"), 0.2,
+        "a statement that ended up inside a block comment: it compiles clean, "
+        "runs never, and cost apps/c64 a Paste that outlived a machine reset"),
     Row("drvmem", "fast", py("tests/unit/t_drvmem.py"), 0.2,
         "the Drivers page's memory column (SPEC.md 31.6.2) re-derived: every "
         "image term against the .drv this build made, every claim term against "

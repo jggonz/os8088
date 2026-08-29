@@ -643,6 +643,28 @@ def _png(path, w, h, raw, colour_type):
 #   * THE SERVER TAKES ONE CLIENT. A second connection does not error, it
 #     HANGS until the read times out - so a script that wants both the mouse
 #     driver and the framebuffer must share one Marty, never build two.
+#   * TWO CONCURRENT SESSIONS ON ONE BOX DESTROY EACH OTHER, BY CONSTRUCTION.
+#     The sweep below kills EVERY martypc_headless before starting its own -
+#     which is right for the first hazard above and fatal for two people, two
+#     terminals or two agents working in one checkout: each new launch kills
+#     the other's running machine. The victim sees BrokenPipeError or
+#     ConnectionResetError from a socket to a process that no longer exists,
+#     and every symptom points at the emulator or the guest while the cause is
+#     somewhere else entirely. `serial=True` in tests/suite.py does NOT cover
+#     it: that orders rows within ONE runner process (tools/os88test.py), and
+#     nothing coordinates two runners.
+#
+#     Two things make it hard to see. Because the sweep kills BEFORE it
+#     starts, the two emulators never coexist, so a `ps` that only ever shows
+#     one process looks like proof that nothing is competing - it is not.
+#     And a MartyPC that loses the race does NOT exit: it reports
+#     "Could not bind debug server to 127.0.0.1:9001: Address already in use"
+#     to its LOG ONLY and runs on headless and unreachable forever, which is
+#     where survivors come from in the first place.
+#     The way to be sure is the exit code: hold an idle emulator, and if it
+#     dies with -9 while your own close() has not run, another launch() killed
+#     it. THE FIX IS NOT TO RETRY - a retry races the same way. It is to not
+#     run two.
 #
 # All of that is handled once, here, and loudly: every failure raises with a
 # sentence saying which of the above it was.

@@ -1241,9 +1241,21 @@ static void c64_reset_service(void)
                                              * is conditional on
                                              * kbd_buf_cmdline, which has no
                                              * equivalent here */
-    c64_copy_req = 0;                       /* ...and a Copy or Paste queued
-    c64_paste_req = 0;                       * behind this one dies with the
-                                             * machine that asked for it */
+    /* ...and a Copy or Paste queued behind this one dies with the machine
+     * that asked for it. BOTH flags, and c64_paste_stop() above does not
+     * cover the second: that empties VICE's own key queue, where this is the
+     * REQUEST the menu left for the wake to spend (c64cmd.c:294-296,
+     * c64kbd.c:999-1015).
+     *
+     * The two statements are laid out plainly rather than aligned beside a
+     * comment, because for one commit they were not: `c64_paste_req = 0;` sat
+     * INSIDE the block comment the line above it opened, so a Paste queued
+     * behind a reset outlived the machine that asked for it - which is
+     * exactly what these two lines exist to prevent. It compiled, and nothing
+     * but this comment said the pair belonged together. tests/unit/t_swallow.py
+     * is the gate that now catches the shape. */
+    c64_copy_req = 0;
+    c64_paste_req = 0;
     c64_reset_regs();
     c64_lum_update();
     c64_frame_regs();
