@@ -55,7 +55,7 @@
 3 apps/os88ui.inc  # 6.6.2 case 4's other half - two of these three are UI_STR's MACRO BODIES, one per build, not call sites; the third is ui_button's own invocation of it, the shared button label. They go when font_str does
 
 # --- backlog: three, and none of them is a conversion ------------------------
-1 kernel/wm.inc  # backlog: wm_draw_title's FALLBACK path only. The answer WAS compose-and-blit and it SHIPPED (SPEC.md 5.9.6, 11.101): wm_title_band is kern_big's default and this font_str_x sits below its `jnc .sep`, so the shipped kernel assembles it and never executes it. What still takes it is kern_small, which has no gfx_blit1, and a kern_big whose heap refused the 2KB claim - so it is not deletable and not convertible either. Stage 7
+1 kernel/wm.inc  # backlog: wm_draw_title's fifteen-call path, which is what EVERY shipping build draws. The composed bar is a KNOB (SPEC.md 5.9.6): wm_title_band is `%ifdef BAND`, so no floppy this project ships even assembles it, and this gfx_fill plus font_str_x writes every title pixel twice on chrome that redraws on every window operation. kern_small has no gfx_blit1 at all, so the conversion is owed on both builds. docs/TEXT-PLAN.md 6.1, Stage 7
 2 apps/arkanoid/arkanoid.asm  # backlog: the capsule letter is TEXT-PLAN 3.1's worked example - a sprite, so it wants compose-and-blit, not a run
 3 kernel/bootprof.inc  # backlog: TEXT-PLAN 4. BOOTPROF=1 only - the one surface no shipping build draws, so a conversion here cannot be seen without building the knob
 

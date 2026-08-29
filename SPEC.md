@@ -3716,7 +3716,11 @@ the *ink* and would have been silently reversed by reading the stored bits'
 colour instead.
 
 **`[gfx_b1adp]` is 0 for everybody else and dies with the pen** — `gfx_blit1_pen`
-clears it and `gfx_unlock` puts it back — so §5.4.2.2's "on a 1bpp adapter the
+clears it and `gfx_unlock` puts it back, and **`band_emit_x` puts both back
+itself, at its own exit rather than at the end of the hold**, because the next
+`gfx_blit1` of that same hold is not necessarily another band: an icon or a
+package's blit landing after one would be drawn in the composer's colours and
+turned over besides. So §5.4.2.2's "on a 1bpp adapter the
 pen is NOT READ" is untouched for packages: a band composed in final screen
 polarity is a caller declaring that there is nothing to adapt, which is what
 `apps/wire`, the cube saver and `apps/arkanoid` (§44.10.6, which skips the pen
@@ -4741,6 +4745,20 @@ the end write them with the mask set **once**. `gfx_fill_gray`'s
   because §1.7 says every routine leaves it there.
 - **1bpp** — no latches, so the merge is done in the register:
   `(old & ~mask) | (stashed & mask)`.
+
+##### The per-cell escape is gated on the PHASE as well as on the prologue
+
+§6.1.2's escape — a clip region actually cutting the run — leaves the row walk
+for a per-cell loop, and `font_run_cell` **stores whole framebuffer bytes**
+because an aligned cell owns one. Off the grid it does not, so the escape reads
+`[font_rn_k7]` beside §6.1.10's `[font_rn_pl]`: a cut run that is *either*
+planar or off-grid goes to `font_run_scell`, which is `gfx_fill` + `font_char`
+and blind to the adapter and to the phase alike. Sending an off-grid run to the
+mono cell instead writes each cell's neighbours over with the run's own ground —
+a smeared or blanked cell, and only on a run a clip edge cuts, which is the
+narrow case an emulator screendump is least likely to be pointed at.
+`kern_small` needs no such gate: it takes `.slow` for an unaligned run before
+the glyph table is built at all.
 
 ##### What it is FOR, and it is not mainly speed
 

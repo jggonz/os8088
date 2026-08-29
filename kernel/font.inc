@@ -918,7 +918,8 @@ font_run_x:
     pop cx                      ; screen, and a fallback rather than a truncation
     pop si                      ; if that ever stops being true
 %ifdef KERN_BIG
-    cmp byte [font_rn_pl], 0    ; ...and planar, to the scell path (6.1.10)
+    mov al, [font_rn_pl]        ; ...and planar OR unaligned, to the scell
+    or al, [font_rn_k7]         ; path (6.1.10, 6.1.11)
     jne .cells
 %endif
     jmp .cell                   ; NOT `jmp short`: it reaches by 12 bytes today
@@ -992,11 +993,12 @@ font_run_x:
     pop cx
 %ifdef KERN_BIG
     jnc .rm
-    cmp byte [font_rn_pl], 0    ; SPEC.md 6.1.10: font_run_cell is the MONO
-    jne .cells                  ; cell and there is no planar spelling of it -
-    jmp .cell                   ; a cut planar run goes to font_run_scell,
-%else                           ; which is gfx_fill + font_char and blind to
-    jc .cell                    ; the adapter
+    mov al, [font_rn_pl]        ; SPEC.md 6.1.10/6.1.11: font_run_cell is the
+    or al, [font_rn_k7]         ; MONO, byte-ALIGNED cell and there is no
+    jne .cells                  ; planar or off-grid spelling of it - a cut run
+    jmp .cell                   ; that is either goes to font_run_scell, which
+%else                           ; is gfx_fill + font_char and blind to both
+    jc .cell                    ; the adapter and the phase
 %endif
 
     ; --- PASS 2: one ROW of the whole run at a time --------------------------

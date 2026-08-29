@@ -740,6 +740,16 @@ band_emit_x:
     mov cx, [bnd_w]
     mov dx, [bnd_h]
     call gfx_blit1_x
+    mov word [gfx_b1ink], (CBLACK << 8) | CWHITE
+                                ; ...AND BACK TO REST, before the lock hold
+    mov byte [gfx_b1adp], 0     ; ends: the pen and the polarity are one-shots
+                                ; with gfx_unlock's lifetime (SPEC.md 5.4.2.2,
+                                ; 5.9.3.1), and a band left declared upside
+                                ; down turns the NEXT gfx_blit1 of the hold -
+                                ; an icon, a package's blit - over. The two
+                                ; literals rather than gfx_blit1_pen for the
+                                ; reason above, and `mov` writes no flags, so
+                                ; the CF this routine documents survives them
     pop es
     pop bp
     pop si
