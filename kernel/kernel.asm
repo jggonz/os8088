@@ -3881,6 +3881,27 @@ api_sysap:  db 0                ; which verb the shared fenced cell runs:
     popf
 %endmacro
 
+; OVLCALLC - the CF-RETURNING form, and the one entry that needs it (SPEC.md
+; 2.9.5.4). The two macros above BANK THE FLAGS, so an overlay entry that
+; answers in CF has its answer thrown away at the `popf` and every `jc` after
+; one reads the caller's own carry instead. `drv_boot`'s `ovl_cfg_load` is the
+; only such entry in the tree.
+;
+; It is a second name rather than a change to OVLCALL because the banking is
+; load-bearing where it is: the busiest caller is `dsk_xfer`'s per-sector
+; `SPLCALL splf_step`, inside a run loop with its own CF in flight. **This form
+; must never go there.**
+%macro OVLCALLC 1
+    cmp word [spl_fseg], COLD_SEG
+    jbe %%dead
+    mov word [spl_fp], %1
+    call far [spl_fp]
+    jmp short %%done
+%%dead:
+    stc                         ; a retired blob means "the defaults stand",
+%%done:                         ; never "a record was read"
+%endmacro
+
 %macro SPLGATE 1
     call splg_%1
 %endmacro

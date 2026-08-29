@@ -568,11 +568,24 @@ vid_apply:
     ; and on a display change, which is the only place it could ever be seen,
     ; and a 9.2 s boot does not notice 15 ms. Written down because it is the
     ; kind of cost that is only cheap while somebody has checked.
+    ;
+    ; AND ONLY WHEN SS IS LOW_SEG. The SPLASH calls this routine, and it calls
+    ; it on the boot sector's stack - boot/boot.asm's `.moved` points SS at its
+    ; own relocated segment and stage 2 never changes it, so `.lowbss` is not
+    ; reachable until kmain's `mov ss, ax`. Built there, the table is 696 bytes
+    ; written over whatever is under the boot stack and [vid_rowmax] is left
+    ; ARMED across the switch, so every gfx_rowbase after it indexes a table
+    ; LOW_SEG never had. The miss path is exactly what the machine did before
+    ; the table existed: [vid_rowmax] is 0 from the top of this routine, so
+    ; gfx_rowbase computes, and vid_init's own vid_apply builds it for real.
     push ax
     push bx
     push cx
     push dx
     push di
+    mov ax, ss
+    cmp ax, LOW_SEG
+    jne .norowtab
     mov di, vid_rowtab
     xor bx, bx                  ; BX = the row
 .rowtab:
@@ -585,6 +598,7 @@ vid_apply:
     cmp bx, VID_ROWTAB
     jb .rowtab
     mov word [vid_rowmax], VID_ROWTAB   ; ...and only now may anything read it
+.norowtab:
     pop di
     pop dx
     pop cx

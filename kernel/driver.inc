@@ -3141,6 +3141,18 @@ drv_task_x:
     pop bx
     retf
 
+drv_cfg_macros:                 ; NOT CALLED, and not a routine: it ENDS
+                                ; drv_task_x's extent. tools/os88ovlchk.py
+                                ; classifies a proc by the returns between its
+                                ; label and the next TOP-LEVEL one, and the
+                                ; next one here is 600 lines away past the
+                                ; CFG_* macro bodies below - whose eleven
+                                ; near `ret`s mixed with this `retf` made
+                                ; drv_task_x unjudgeable, so the far call in
+                                ; kernel.asm went unchecked. A macro-pasted
+                                ; label is one the tool cannot see; see
+                                ; ovl_cfg_load for the same problem
+
 ; =============================================================================
 ; The settings file (SPEC.md 51.5), AS TWO MACROS AND NO RESIDENT BYTES (51.5.3)
 ;
@@ -3940,9 +3952,12 @@ drv_boot_x:
     xor ch, ch                  ; CH = 1 once a settings RECORD has been read
     call drv_mounted
     jc .nodisk
-    OVLCALL ovl_cfg_load        ; CF = 1: no file, so every default stands -
+    OVLCALLC ovl_cfg_load       ; CF = 1: no file, so every default stands -
     jc .load                    ; and every default is now "not wanted", so
-    mov ch, 1                   ; the loop below correctly loads nothing
+    mov ch, 1                   ; the loop below correctly loads nothing.
+                                ; OVLCALLC and never OVLCALL: the plain form
+                                ; banks the flags, which swallows this answer
+                                ; whole (SPEC.md 2.9.5.4)
 
     ; --- the display adapter, FIRST (SPEC.md 39.11.3) ------------------------
     ; Before the driver loads, at the bottom of

@@ -1358,6 +1358,39 @@ on every path you have is not the same as a flag that is *right*, and the way
 you find out is by growing a path. `[spl_live]` had been the wrong question
 since §2.9.5.1 and answered correctly every time until a hard disk asked it.
 
+##### 2.9.5.4 The banking swallows a `CF` answer, so the one entry that gives one has a form of its own
+
+The guard banks the flags (§2.9.5.1), and it is right to: the busiest caller is
+`disk.inc`'s per-sector `SPLCALL splf_step`, inside `dsk_xfer`'s run loop with
+its own `CF` in flight. That is correct for every entry in the blob that answers
+nothing — which is all of them but one.
+
+`ovl_cfg_load` answers **`CF` = 0 a settings record was read and applied, `CF` =
+1 the defaults stand** (§51.5.3). Through `OVLCALL` that answer never left the
+macro: `popf` put the caller's own carry back over it, and `drv_boot` reaches
+the call immediately after a `jc .nodisk` that was **not** taken, so the carry
+restored is always clear. **The `jc` after it could not be taken on any
+machine.**
+
+What that cost is the display block above `.load`, entered on every boot rather
+than only when a record was read — so a machine with **no `SYSTEM.CFG`** applies
+`CFG_VID`, and on `kern_big` §39.19's `CFG_VDM`/`CFG_VDL`, out of a `drv_cfg`
+that nothing has deserialised into. `drv_cfg` is `.bss` and nothing zeroes
+`.bss`, so those bytes are the previous session's on a warm restart and the
+machine's power-on RAM on a cold one. It has been carried by two accidents:
+`CFG_VID` = 0 is `VID_VGA`, which `vid_switch` refuses on the adapters the
+target machine has, and the two arrangement bytes are range-checked before they
+are stored. Neither is a reason — the refusal is `vid_switch`'s job and this
+should not be asking it.
+
+So that one site uses **`OVLCALLC`**: the same `[spl_fseg]` guard, no
+`pushf`/`popf`, and **`stc` on the dead arm** — a retired blob has to answer
+"the defaults stand", never "a record was read". One byte more than `OVLCALL`,
+at one site. It is a second macro rather than a change to the first because the
+banking the first does is load-bearing where it is: **`OVLCALLC` must never
+reach `dsk_xfer`'s per-sector site**, and a separate name is what makes that a
+thing somebody writes on purpose.
+
 #### 2.9.6 …and the boot overlay joins it, so there is one transient
 
 The blob is 2KB held at a fixed address for the whole boot and released in one
@@ -36938,6 +36971,19 @@ nothing and `gfx_rowbase` is called by the **splash**, which draws while
 RAM. And it is **cleared at the top of `vid_apply`'s geometry block** and set
 only after the build — in between, the live geometry and the table disagree,
 and a display change is exactly when something reads one against the other.
+
+**And the table is not built at all until `SS` is `LOW_SEG`.** The splash calls
+`vid_apply` (§2.9.4), and it calls it on the **boot sector's** stack —
+`boot/boot.asm`'s `.moved` points `SS` at its own relocated segment and stage 2
+never changes it — so `.lowbss` is not reachable until `kmain`'s `mov ss, ax`.
+Built there, `[ss:di]` writes the 348 words over whatever sits under the boot
+stack, and worse, `[vid_rowmax]` is left **armed across the switch**: every
+`gfx_rowbase` from `kmain` onwards then indexes a table `LOW_SEG` never had,
+until `vid_init`'s own `vid_apply` overwrites it. So the build *and* the arm sit
+behind a `cmp ss, LOW_SEG`, and the miss path is exactly what the machine did
+before the table existed — `[vid_rowmax]` is 0 from the top of the routine, so
+`gfx_rowbase` computes. It takes the 23.6 ms off the boot's critical path as
+well, where it was being spent on a table nothing could read.
 
 #### The table is one display's, and a swap turns it off
 
