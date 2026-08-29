@@ -144,12 +144,12 @@
  *     to read a file's HEADER and decide from it before reading the rest,
  *     which os88_file_read() cannot express - it is os88_file_read_at().)
  *
- * The count: 94 of the 143 slots apps/os88api.inc publishes, plus six
+ * The count: 94 of the 149 slots apps/os88api.inc publishes, plus six
  * window-record accessors and six runtime helpers that are not slots at all -
  * 115 C entry points, and every one of them is in apps/cc/os88thunk.asm.
  *
  * How those three are counted, so the next person does not have to guess:
- *   143  `%define OSAPI_<NAME> KERNEL_SEG:0x...` lines in apps/os88api.inc.
+ *   149  `%define OSAPI_<NAME> KERNEL_SEG:0x...` lines in apps/os88api.inc.
  *        OSAPI_FIND_SZ is an `equ`, not a slot, and is not one of them.
  *    94  those names that appear in apps/cc/os88thunk.asm, in code rather
  *        than in a comment - a macro invocation names its slot as an

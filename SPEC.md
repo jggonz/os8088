@@ -37296,7 +37296,7 @@ criteria in §17 record which apps it affects.
 
 ### 39.8 The package ABI
 
-`OSAPI_VIDEO` (slot **0x0158**; the table publishes 143 slots today) — no
+`OSAPI_VIDEO` (slot **0x0158**; the table publishes 149 slots today) — no
 inputs;
 out AX = width, BX = height, CX = the first row the dock owns (so the usable
 desktop is rows `MBAR_H`..CX-1), DL = `vid_kind`, DH = bits per pixel (4 or

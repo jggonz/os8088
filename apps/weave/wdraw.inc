@@ -143,7 +143,7 @@ wd_pad:
 ;
 ; WD_BOLD is WEAVE-SPEC 6.2's double strike, and the ORDER is the whole of why
 ; it is not a double-draw: OSAPI_FONT_RUN is OPAQUE and lands the finished
-; cells in one pass, then OSAPI_FONT_STR is TRANSPARENT and only ORs the same
+; cells in one pass, then OSAPI_FONT_STR_XPARENT is TRANSPARENT and only ORs the same
 ; glyphs one pixel right into them. Nothing is ever blank and no pixel goes
 ; dark-to-light-to-dark. It is the one component style that costs a second
 ; gfx call, which is WEAVE-SPEC 14's `label` row plus ~0.8 ms when the style
@@ -171,7 +171,7 @@ wd_emit:
     pop ax                          ; greyed bold label stipples like a greyed
     inc cx                          ; plain one (47 rule 2)
     mov si, w_runbuf
-    call OSAPI_FONT_STR
+    call OSAPI_FONT_STR_XPARENT
 .out:
     ret
 
