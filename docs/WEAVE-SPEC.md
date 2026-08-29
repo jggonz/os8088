@@ -53,7 +53,7 @@ whole develop–run cycle lives on the target with zero new kernel bytes.
 | **`WEAVE.OVL`** | the runtime's one overlay: refusable, UI-task-only command paths — verbose bundle diagnostics, About, state import/export dialogs, formula-function help. Nothing an event handler needs mid-run lives here |
 | **`LOOM.O88`** | the IDE. A separate native package (the WORD/CWORD precedent: two things may not answer to one name). Note Pad's editor engine transplanted with prefix `lm_` (the SPEC.md §68 precedent), a file-list sidebar, one editor pane |
 | **`LOOM.OVL`** | Loom's one overlay: the WML compiler, the WJS compiler, the FX pre-compiler, the atom interner, the bundle writer. Pack is a menu command and menu commands may refuse — the canonical overlay tenant |
-| **`apps/weave/*.inc`** | the shared component library: paint, layout and hit-test cores as assembly source `%include`d by BOTH packages (the `apps/os88ui.inc` model, SPEC.md §20.5.1 — this platform's only code-sharing mechanism) |
+| **`apps/weave/*.inc`** | the shared component library: **paint and hit-test** cores as assembly source `%include`d by BOTH packages (the `apps/os88ui.inc` model, SPEC.md §20.5.1 — this platform's only code-sharing mechanism). They are assembly from wave 2 because they run under the gfx lock, once per callback, and are what LOOM's Preview (§1.7) paints with. **The flow walk (§7) is C in the runtime** and is not one of them: it emits no gfx call, runs over at most 250 records in microseconds (§7.2), and has exactly one caller until LOOM exists. When LOOM lands (wave 6) it takes the same walk — moved to a shared `.inc`, or called through one — and **never a second copy**: two layouts that must agree cell-for-cell (§12) is the failure §11's byte-identity rule exists to prevent, said about code instead of about bundles |
 | **`tools/weavesim.py`** | the host reference implementation, written FIRST (the `tools/htmsim.py` precedent): parser, compiler, packer (`--pack`), WVM and FX interpreters, flow-walk layout, gfx-call cost model (`--costs`, §14), `--render`, `--emit-optab`, `--emit-foldtab`, `--selfcheck`. Deterministic, byte-for-byte |
 | **`tests/unit/t_wab.py`** | the independent second reader of `.WAB`, written from THIS file, sharing no code with any packer |
 
@@ -1351,10 +1351,16 @@ wrong:
 
 Wrap nothing — one `font_run` per row, painted on damage or on a `.text`
 write. A 20-cell label repaints in ONE call, ~18 ms. `label` is one line,
-clipped at its width; `text` wraps at the walk's width, natural height =
-its wrapped row count. BOLD is drawn by the library double-striking one
-pixel right within the composed band; INVERT swaps ink and paper for the
-run (padding is the erase — no fill-then-letter pair, SPEC.md §27.2).
+clipped at its width; `text` wraps at the walk's width — **its own settled
+width, never `CW`**: a `<text w="…">` that wrapped at the full row on one
+implementation and at its declared width on another would break §12's
+determinism contract silently, since the two differ only in a bundle that
+declares the attribute — natural height = its wrapped row count. BOLD is
+drawn by the library double-striking one pixel right within the composed
+band, which is **a second gfx call** (an opaque `font_run`, then a
+transparent one a pixel right) — §14's `label` row prices the plain case at
+1; INVERT swaps ink and paper for the run (padding is the erase — no
+fill-then-letter pair, SPEC.md §27.2).
 
 WJS surface: `text` (get/set string). Setting `.text` repaints only the
 component's rows.
@@ -1404,7 +1410,24 @@ One `font_run` per visible row; selection is an **XOR bar** — reversible,
 1 call to move each way, so moving the selection is 2 calls ≈ 1.6 ms.
 Scroll = one `GFX_SCROLL` + one exposed row ≈ 83–90 ms/line (the Part 5
 contract row; a repaint would be 1.24 s on CGA), coalesced through
-`OSAPI_EVQ_PENDING` with the browser's MAXSKIP bound of 4. Items are
+`OSAPI_EVQ_PENDING` with the browser's MAXSKIP bound of 4. **Plus the
+thumb, when it moves**: `os88ui_sbmove` is three further calls, and it
+draws NOTHING when the step is too small to shift the thumb — which on a
+long list is most steps. So a scroll is 2 calls in the common case and 5
+when the thumb translates; §14's row prices the common one.
+
+**`rows` must be at least 3 for the list to be scrollable.** `os88ui_sbar`
+places its two arrow-cell rules at `y1 + 10` and `y2 - 10` with no test that
+the bar is tall enough for both, so a bar under 20 px crosses them and one
+at 8 px puts an hline **outside its own rect**. A `<list rows="1">` or
+`rows="2"` is legal by §3.3's 1–40 range and cannot carry a bar, so the
+library draws none — which leaves a list that cannot be scrolled and does
+not say why, and §47's rule is that a refusal is stated, never silent. The
+packer therefore refuses `rows` below 3 on a list whose items can exceed
+it, with §10.5's voice: `list rows="2": a scroll bar needs 3 rows (24 px);
+os88ui_sbar's arrow cells are 10 px each`. The shared bar's own missing
+bound is recorded in docs/WEAVE-PLAN.md rather than fixed here — it has no
+other caller that can reach it. Items are
 fixed at pack (§2.6.1), text mutable. `onselect` on selection change
 (click or arrow keys). Surface: `sel` (get/set index, −1 none),
 `set(i, s)` / `get(i)` (CALLM; set repaints that row), `rows` (get).
@@ -2116,7 +2139,19 @@ drawing change gets looked at on a 1bpp adapter before it is called done
 
 Wave 1 shipped this document, docs/WEAVE-PLAN.md, `tools/weavesim.py`,
 `tests/unit/t_wab.py`, the three demo sources, and the host-side pack of
-the demos in `all`. The rest, each gated before the next begins:
+the demos in `all`.
+
+**Wave 2 shipped `apps/weave/`** — `WEAVE.O88` + `WEAVE.OVL`, the first C
+package in this tree to declare a file association (which took a `CC_ASSOC`
+path in `apps/cc/crt0.asm`, since no C package had ever needed one), the
+accept idiom, the §10 refusals, the flow walk and the static components —
+plus `make weavedisk` in three geometries and `tests/weavesmoke.py`. A
+wave-1 fix pass preceded it: 21 defects in this document and in `weavesim`,
+of which the load-bearing one was §7.1.1's Hercules grid, wrong at 89×36
+because it had been inherited from the browser's viewport rather than
+derived.
+
+The rest, each gated before the next begins:
 
 | wave | ships | the gate |
 |---|---|---|

@@ -181,6 +181,25 @@ FULL = [
         "[vid_avail], which reads identically until somebody switches a VGA "
         "machine to mono",
         needs=("marty",), serial=True),
+    Row("weavesmoke", "full", py("tests/weavesmoke.py"), 75.0,
+        "WEAVE opens FORM.WAB and draws a window on both 1bpp GLaBIOS twins - "
+        "the Weave family's ONE full-tier row, forever (WEAVE-SPEC 12.3), and "
+        "the widest reach per second the family has: the .WAB association, "
+        "the accept idiom, the bundle reader, the flow walk and the first "
+        "paint all fail here. It asserts the drawn window's STRUCTURE and "
+        "never a golden screenshot, for bootsmoke's reason. It BUILDS ITS OWN "
+        "DISK, which `full` may do and `fast` may not - and that is why it "
+        "needs `cc` as well as WEAVE-SPEC 12.3's `marty`: WEAVE is a C "
+        "package, so a tree without SmallerC cannot run this row at all and "
+        "should say so as a SKIP rather than as a failure. 75s is 45s "
+        "MEASURED here - two boots, two Disk-window navigations and two "
+        "package launches - taken up by the ~1.6x a boot costs on the "
+        "slowest box this suite is written for (7.8s against 5.0s), with a "
+        "little room for the package still growing. It is NOT 2x bootsmoke: "
+        "the launch after the boot costs as much again as the boot, and it "
+        "went 41s -> 45s when wdraw.inc's paint core took weave.o88 from "
+        "21,076 bytes to 27,020",
+        needs=("marty", "cc"), serial=True, timeout=300),
 ]
 
 # --------------------------------------------------------------------------

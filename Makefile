@@ -1231,6 +1231,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         xt-runcpm 286-runcpm \
         allapps usb iso live burn rcbandbench \
         c64 c64disk c64rom c64bandbench c64cputest c64memtest 386-c64 xt-c64 286-c64 \
+        weave weavedisk \
         checkdocs test-fast test-full test-soak clean clean-cc clean-marty distclean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
@@ -3605,6 +3606,84 @@ xt-c64: $(IMG360) $(BUILD)/c64360.img
 286-c64: $(IMG) $(BUILD)/c64720.img
 	@$(UNPROTECT) $(VM286C64)/86box.cfg
 	$(BOX) -P $(VM286C64) -N
+
+# --- WEAVE, the .WAB runtime (WEAVE-SPEC 1.2) --------------------------------
+# The C toolchain's fourth application: a web-style app runtime whose bundle
+# reader, flow walk and refusals are C, with hand-written cores for the hot
+# loops. `make weave` builds the package, `make weavedisk` the floppy in all
+# three geometries.
+#
+# IT IS NOT LOOM. WEAVE-SPEC 1.2's in-OS IDE is a separate package with a
+# separate name, target and disk; nothing here may reach a `loom` name and
+# nothing there may reach a `weave` one - the same fence §73.12 draws between
+# apps/word and apps/cword.
+#
+# NOT IN `all`, for cworddisk's reason: a C package needs SmallerC, which
+# tools/setup-cc.sh fetches and which is deliberately not in this tree
+# (SPEC.md 73.1). A clone with nasm and python3 builds every SHIPPED floppy.
+# The demo bundles ARE in `all` - `$(WEAVEWABS)`, packed host-side by
+# tools/weavesim.py - and they are a different artifact from this disk.
+$(eval $(call CC_PACKAGE,weave,weave,WEAVE.OVL))
+
+# THE REST OF THE TRANSLATION UNIT. `nasm -f bin` has no notion of an external
+# symbol, so a C package is ONE compilation and one assembly (SPEC.md 73.1):
+# weave.c #includes its parts and weave.asm %includes the hand-written cores,
+# the icon and the association block. CC_PACKAGE names only apps/weave/weave.c
+# and apps/weave/weave.asm, and make cannot see through a #include or a
+# %include - so without these two lines an edit to a part leaves
+# build/weave.o88 untouched, and a stale package reads exactly like the change
+# having done nothing. That is the failure the WORD.OVL rule already paid for
+# once.
+#
+# WILDCARDS RATHER THAN A NAMED LIST, which is where this differs from
+# CWORDSRC above, and the reason is the direction each one fails in: a named
+# list that falls behind the directory yields a STALE PACKAGE, silently; a
+# wildcard that picks up a file the translation unit does not include yields
+# one unnecessary rebuild, loudly and cheaply. Weave's source set is scheduled
+# to grow through WEAVE-SPEC 13.1's remaining waves, which is exactly the
+# condition under which a hand-maintained list goes stale.
+WEAVESRC := $(wildcard apps/weave/*.c apps/weave/*.h)
+WEAVEINC := $(wildcard apps/weave/*.inc)
+$(BUILD)/weave.raw.asm: $(WEAVESRC)
+$(BUILD)/weave.bin:     $(WEAVEINC)
+
+weave: $(BUILD)/weave.o88
+
+# All three geometries, as every disk-visible image in this tree is built
+# (CLAUDE.md): 1.44MB and 720KB for QEMU, 360KB for an 86Box XT or a real one.
+# --verify is a standalone structural fsck of what came out and it is in the
+# recipe rather than in a target of its own because it costs milliseconds and
+# catches the class of defect - a bad FAT chain, a directory entry pointing at
+# nothing - that otherwise arrives as "Disk error" inside the emulator ten
+# minutes later, reading like a bug in the file system.
+#
+# ONE FOLDER: THE PACKAGE, ITS OVERLAY AND THE BUNDLES ARE ALL IN THE ROOT,
+# and that is a correctness requirement rather than tidiness. A double-click
+# on a bundle launches WEAVE through SPEC.md 54.4.2, and assoc_back then
+# leaves the launched instance's current directory on the DOCUMENT's (SPEC.md
+# 54.9, 19.2.1); WEAVE.OVL is resolved in that directory (SPEC.md 73.14). So
+# a bundle in a folder of its own opens a program whose every overlay path
+# then refuses, politely and inexplicably - which is why WELCOME.RTF rides
+# beside CWORD.OVL two hundred lines up.
+#
+# DISTRIBUTION IS WEAVE-SPEC 13.1's WAVE 7, not this one: the PROJECTS/
+# folder, CATALOG.TXT, a BUNDLES= knob and the allapps rows all belong there.
+# Nothing here anticipates them.
+weavedisk: $(BUILD)/weave.img $(BUILD)/weave720.img $(BUILD)/weave360.img
+
+WEAVEDISK := $(BUILD)/weave.o88 $(BUILD)/WEAVE.OVL $(WEAVEWABS)
+
+$(BUILD)/weave.img: $(WEAVEDISK) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(WEAVEDISK)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/weave720.img: $(WEAVEDISK) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(WEAVEDISK)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/weave360.img: $(WEAVEDISK) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(WEAVEDISK)
+	@python3 tools/os88disk.py --verify $@
 
 # =============================================================================
 # FROTZ and its story floppy (SPEC.md 61) - ON DEMAND: `make zdisk`

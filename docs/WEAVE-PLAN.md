@@ -341,6 +341,28 @@ windowed, arkanoid-class, and an FSX mode would be a new bracket tenant
 with §53's whole obligation set. Both models are real; the design picked
 per workload rather than per doctrine, which is the note's point.
 
+### 4.4.1 `os88ui_sbar` has no minimum height, and nothing else can reach it
+
+Found while wave 2 wrapped the shared scroll bar. `os88ui_sbar`
+(`apps/os88ui.inc`) draws its two arrow-cell rules at `y1 + OS88UI_SBCELL`
+and `y2 - OS88UI_SBCELL` — 10 px in from each end — **unconditionally**. A
+bar shorter than 20 px crosses them; one 8 px tall draws an hline outside
+its own rect, which is a package painting where it does not own the pixels.
+
+It has never fired: both kernel callers and every shipped package give it a
+bar the height of a window's content area. Weave is the first caller that
+can be handed an arbitrary height, because `<list rows>` is an app author's
+number — hence WEAVE-SPEC §6.8's pack-time refusal below 3 rows, which is
+the fix at the level that can see the author.
+
+**Not fixed in `os88ui.inc` here, deliberately.** The bar is shared with the
+kernel (`%ifdef OS88UI_KERNEL`), a clamp changes what every existing caller
+draws, and no current caller can reach the broken range — so the change
+would be untestable against its own precedent and would edit a file this
+wave has no other reason to touch. Whoever gives the bar a floor should do
+it with the kernel's two callers in front of them, and can then relax
+WEAVE-SPEC §6.8's refusal.
+
 ### 4.5 The stale slot count in os88.h
 
 `apps/cc/os88.h:141` says the C thunk layer covers "90 of the 134 slots";
