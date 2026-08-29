@@ -248,6 +248,12 @@ SKI_SZ      equ 14
 ; TS_* and this is a MIRROR rather than a second definition - tests/suite.py's
 ; `mirror` row is what keeps the two honest.
 TS_CLOSED   equ 0
+TS_CLOSEW   equ 10              ; ...and the TOP of the range, published so a
+                                ; package with a name PER state can assert its
+                                ; table is still the right length (apps/ftpd's
+                                ; FD_NTS). That catches a state INSERTED or
+                                ; REMOVED; a pure reorder renames rows and
+                                ; nothing cheap catches it
 
 ; -----------------------------------------------------------------------------
 ; NETV_BULK - "this handle is going to move a FILE" (SPEC.md 72.21.1)

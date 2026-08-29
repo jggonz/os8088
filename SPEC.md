@@ -70658,6 +70658,14 @@ is a correctness bound and not a tuning knob** — the rung the heap can fund
 is irrelevant if the card drops it on the floor — so it clamps `[sk_want]`
 too, which is the one place the user's explicit choice does not win.
 
+**Clamps, and not refuses.** `sk_claim` steps an explicit `[sk_want]` down to
+the highest rung the card can hold *before* it asks, because a bare refusal at
+`sk_try` would drop the user's choice through into the auto ladder below it —
+and that ladder measures the **heap**, against `SK_SHARESH`, which an explicit
+choice is meant to skip. On an NE1000 with a modest heap that turns "I picked
+8K" into the 1024 floor while "I picked 4K" gets 4096: a bigger request
+yielding less, which is the shape of a bug rather than of a clamp.
+
 **No harness in this tree could have found it.** QEMU's `ne2k_isa` is the
 full 16KB card, so `tests/ethernet.py` and `tests/ftpd.py` run against a ring
 more than twice the size of the one on the machine the field runs. §77.30

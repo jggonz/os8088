@@ -8478,6 +8478,11 @@ fd_l_skc:   db '/', 0
 fd_l_sktx:  db ' tx', 0
 fd_l_skf:   db ' f', 0
 FD_NTS      equ 11
+%if FD_NTS != TS_CLOSEW + 1     ; the driver's TS_* range is what sizes this
+    %error "fd_ts_tab no longer matches the driver's TS_* range"
+%endif                          ; table (netpkg.inc). A state INSERTED or
+                                ; REMOVED lands here; a pure reorder renames
+                                ; rows and nothing cheap catches it
 fd_ts_tab:  dw fd_ts0, fd_ts1, fd_ts2, fd_ts3, fd_ts4, fd_ts5
             dw fd_ts6, fd_ts7, fd_ts8, fd_ts9, fd_ts10
 fd_ts0:     db 'closed', 0

@@ -558,6 +558,12 @@ ring_move:
 ; Control Panel and picked 8K has said something about their machine that the
 ; arithmetic does not know, and the claim itself is still the thing that can
 ; refuse. Only if the asked-for rung will not fit does the ladder run.
+;
+; **THE CARD IS THE ONE BOUND AN EXPLICIT RUNG DOES NOT SKIP** (SPEC.md
+; 72.13.3), and it is applied here as a step DOWN the rungs before the ask
+; rather than as a refusal at it: a refusal would push the user's choice into
+; the heap-measured ladder, where an explicit 8K on an NE1000 can land at the
+; floor while an explicit 4K got 4096.
 ; =============================================================================
 sk_claim:
     push ax
@@ -569,6 +575,14 @@ sk_claim:
     mov bx, [sk_want]               ; the user's rung, if there is one
     or bx, bx
     jz .auto
+    call sk_cardcap                 ; ...CLAMPED to the card and not REFUSED by
+    cmp bx, ax                      ; it (SPEC.md 72.13.3). Letting sk_try turn
+    jbe .ask                        ; the ask down drops it into the auto ladder
+    mov bx, SK_RXMID                ; below, which measures the HEAP - so on an
+    cmp bx, ax                      ; NE1000 an explicit 8K could end at the
+    jbe .ask                        ; FLOOR while an explicit 4K got 4096, which
+    mov bx, SK_RXCAP0               ; is a bigger request yielding less
+.ask:
     call sk_try
     jnc .done
 .auto:

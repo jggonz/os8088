@@ -76,6 +76,12 @@ ASM = ["kernel/kernel.asm", "kernel/splash.inc", "boot/boot.asm",
        # watching it.
        "kernel/blank.inc", "drivers/saver/saver.asm",
        "drivers/saver/svcfg.inc",
+       # The socket ABI's two ends (SPEC.md 72.20): netpkg.inc is the header a
+       # package includes and tcp.inc is the driver's own, and the TS_* a
+       # reader tests by name are typed out in both. netpkg.inc's own comment
+       # already promises this row keeps them honest, and until now it did
+       # not name either file.
+       "drivers/net/netpkg.inc", "drivers/ether/tcp.inc",
        # apps/c64 is a C package whose assembly half and C half type the same
        # constants out twice (docs/C64-SPEC.md, its memory and screen
        # sections): the core's scratch offsets, the composer's band stride.
