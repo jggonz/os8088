@@ -178,7 +178,7 @@ fpg_begin:
     pop bx
     pop ax
     popf
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; fpg_busy - a file operation with no scale is still a frozen machine
@@ -243,7 +243,7 @@ fpg_busy:
     pop bx
     pop ax
     popf
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; fpg_arm - put the chrome up if it is not up already (internal)
@@ -310,6 +310,71 @@ fpg_arm:
     mov word [fpg_px], 0        ; TOAST CAN GET OUT OF THE WAY** (SPEC.md
     mov byte [fpg_pat], 0       ; 59.9.2). A strip is placed where it fitted
     mov byte [menu_bdirty], 1   ; when it went up, and SPEC.md 59.9's first
+
+    ; --- ...AND THE ARROW COMES OFF THE GLASS (SPEC.md 12.8.4) --------------
+    ; This module is the one painter in the machine that draws with the gfx
+    ; lock FREE, and free is the one state the mouse ISR draws in (SPEC.md 7).
+    ; The first half of the fix is one compare in mou_apply - while [fpg_on] is
+    ; set the ISR defers exactly as if the lock were held - and this is the
+    ; second: frozen is not gone, so an arrow already SITTING on the bar would
+    ; still be drawn over, and cur_save would still go stale under it.
+    ;
+    ; ONE COMPARE, because everything this module draws is inside the bar's
+    ; rows; conservative by a cell, because a shape's hot spot can be as low as
+    ; CUR_GH (SPEC.md 7.2.2); and conservative by a display on a two-card
+    ; machine, where the y is virtual (39.15) and hiding once too often costs a
+    ; blink nobody is looking at.
+    ;
+    ; NO `cli`, and that is the ISR gate above paying for itself: [fpg_on] is
+    ; already set, so no packet can move the arrow between this test and the
+    ; hide - and an ISR that was mid-cur_move when we got here ran to
+    ; completion before this instruction did.
+    ;
+    ; ABOVE menu_draw_bar, which composes the WHOLE bar and would otherwise be
+    ; the first thing to draw over it.
+    cmp byte [gfx_lock_flag], 0
+    jne .lit                    ; somebody's hold already keeps the ISR off and
+                                ; their gfx_unlock owes the show - which is
+                                ; every locked file operation there is
+
+                                ; ...and NO [cur_level] test, which is five
+                                ; bytes and answers nothing: hiding an arrow
+                                ; that is already hidden by refcount is one
+                                ; decrement and no pixels, and fpg_finish's
+                                ; show puts the count back. Every rung this
+                                ; module has ever crossed was paid for in
+                                ; exactly this coin (12.8.3's closing note)
+    cmp word [cur_drawn_y], MBAR_H + CUR_GH
+    jae .lit
+    or byte [fpg_on], 2         ; **BIT 1 OF [fpg_on] IS THE DEBT**, not a byte
+                                ; of its own: fpg_finish already banks this
+                                ; byte to decide whether the widget was up at
+                                ; all, so the debt rides home in a register it
+                                ; is already carrying. Every other reader tests
+                                ; it against 0 and is unaffected, and
+                                ; fpg_finish's one word store still clears it
+    call cursor_hide
+.lit:
+    ; ...AND THE BAR BELOW IS COMPOSED WITH THE MUTEX POSSIBLY UNHELD, which is
+    ; not excluded by the [gfx_lock_own] test above: that test refuses a lock
+    ; held by ANOTHER task at the instant of arming and says nothing about one
+    ; taken an instruction later. So "two painters on one strip of glass" is
+    ; structurally open here, and the argument that it is benign is worth
+    ; writing down because it is not this routine's own test that makes it so:
+    ;
+    ;   - the painter that could genuinely race a lock-free draw is IRQ4, and
+    ;     [fpg_on] - set ABOVE, before any of this - is exactly what shuts it
+    ;     off (mouse.inc's `cmp byte [fpg_on], 0`, docs/FIELD-NOTES.md 34);
+    ;   - the remaining case is a second TASK taking gfx_lock and painting, and
+    ;     a lock-free arm is bounded by what can produce one: dsk_xfer from a
+    ;     wm_wake_disp dispatch, on a task that by construction is not the UI
+    ;     task. It would overlap the bar rather than corrupt shared primitive
+    ;     state, and it self-heals at the next fpg_finish.
+    ;
+    ; That is two comments in two files that did not reference each other,
+    ; under a paragraph that said the case was prevented by a test that does
+    ; not prevent it. It is a bound, not an exclusion - a third painter, or a
+    ; UI-task path that reaches a lock-free arm, would break it.
     call menu_draw_bar          ; choice - the gap the menus leave - is the
                                 ; same stretch of bar this widget is about to
                                 ; be drawn on; measured on a 5150/CGA, Paint's
@@ -365,7 +430,7 @@ fpg_arm:
 ; was.
 ; -----------------------------------------------------------------------------
 fpg_paint:
-    call cur_unlazy             ; spend gfx_lock's promised hide before we
+    call cur_unlazy              ; spend gfx_lock's promised hide before we
                                 ; draw anywhere near the arrow (SPEC.md 7.1.4)
     call fpg_span               ; --- the bed: white over whatever the bar had
     xor bx, bx                  ;     there, since the space is BORROWED and
@@ -578,7 +643,7 @@ fpg_stepb:
 ; -----------------------------------------------------------------------------
 fpg_end:
     mov word [fpg_total], 0     ; no scale: fpg_step and fpg_stepb stop, and
-    ret                         ; fpg_busy may hatch the trough again
+    retf                        ; fpg_busy may hatch the trough again
 
 ; -----------------------------------------------------------------------------
 ; fpg_finish - disarm, and give the bar back
@@ -629,6 +694,12 @@ fpg_finish:
                                 ; bearing for exactly this reason
     or al, al
     je .out
+    push ax                     ; **BANKED HERE AND NOT AT THE TEST BELOW**:
+                                ; bit 1 is fpg_arm's cursor debt (SPEC.md
+                                ; 12.8.4) and fpg_span answers in AX, so
+                                ; everything between this and the pop destroys
+                                ; it. The jump above is above the push, so the
+                                ; stack balances on both exits
     mov word [fpg_total], 0     ; ...and no phase survives the widget either
 
     call thm_bg                
@@ -653,10 +724,19 @@ fpg_finish:
                                 ; store makes the erase this routine's own
                                 ; rather than a debt somebody else may settle
     call menu_draw_bar          ; the text band, as the ONE run that differs -
-                                ; and the menus segment is FPG_CELLS longer
+    pop ax                      ; and the menus segment is FPG_CELLS longer
                                 ; again the moment [fpg_on] went to 0 above,
                                 ; so this is also the composition that gives
                                 ; those cells back (SPEC.md 12.8.3)
+
+    test al, 2                  ; ...and fpg_arm's arrow comes back (SPEC.md
+    jz .out                     ; 12.8.4), LAST: the save-under has to be taken
+    CURLOG 'F'
+    call cursor_show            ; from finished pixels and the bar is not
+                                ; finished until the line above. We are inside
+                                ; gfx_unlock, which still owns the glass, and
+                                ; its own cursor tail is BELOW this - so the
+                                ; refcount lands where it started either way
 .out:
     pop dx
     pop cx
@@ -697,6 +777,12 @@ fpg_boxr:
 ;     first int 13h of the machine calls fpg_step) ----------------------------
 fpg_on      db 0                ; is the CHROME up? Set for the whole freeze
                                 ; (SPEC.md 12.8.3), not for one transfer.
+                                ; **BIT 1 IS fpg_arm's CURSOR DEBT** (SPEC.md
+                                ; 12.8.4): the arrow was taken off the glass
+                                ; because it was sitting in the bar's rows, and
+                                ; fpg_finish owes a cursor_show. Every other
+                                ; reader asks this byte "non-zero?", so the bit
+                                ; is invisible to all of them.
                                 ; **KEEP [fpg_warm] NEXT TO IT** - fpg_finish
                                 ; clears the pair with one word store
 fpg_warm    db 0                ; sectors of disk work seen in this lock hold,

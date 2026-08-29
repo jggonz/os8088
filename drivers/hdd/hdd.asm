@@ -89,9 +89,10 @@ IDE_C_INITP  equ 0x91
 ;
 ; ATTACH IS ALL-OR-NOTHING and this one has an easy time of it: the probe
 ; writes no port that is not a read-back of a drive's own task file, claims
-; no memory, and hooks no interrupt. Everything expensive - a listing claim,
-; a mounted volume, a window - happens on a Control Panel click, and detach
-; gives all of it back.
+; no memory, and hooks no interrupt. A window still costs a Control Panel
+; click; a mounted volume and its listing claim do NOT any more - they are
+; hd_ready's, one verb later, for every drive the probe found (SPEC.md
+; 52.6.1). Detach gives all of it back either way.
 ; -----------------------------------------------------------------------------
 hd_entry:
     cmp al, DRVV_DETACH
@@ -115,20 +116,22 @@ hd_entry:
     ret                         ; path is reached with AL = the verb
 
 ; -----------------------------------------------------------------------------
-; hd_ready - the kernel can take our calls now (SPEC.md 51.2.2/52.6)
+; hd_ready - the kernel can take our calls now (SPEC.md 51.2.2/52.6/52.6.1)
 ; in:  nothing
 ; out: nothing
 ;
 ; The earliest point at which OSAPI_VOL_* will answer us: their fence is the
 ; publication slot and attach runs before it is armed. So this - and not
-; attach - is where the settings file is read and where a drive that was
-; mounted last session is mounted again.
+; attach - is where the settings file is read and where the drives are
+; mounted: every one the probe found, plus every one the settings said was
+; mounted last session (SPEC.md 52.6.1).
 ; -----------------------------------------------------------------------------
 hd_ready:
     call hd_tool_home           ; the current volume IS the system volume here
                                 ; and only here (SPEC.md 52.11)
     call hd_cfg_load            ; geometry the user typed, and what was up
-    call hd_cfg_automount
+    call hd_cfg_automount       ; ...and what is THERE, which is the click the
+                                ; user was going to make anyway
     clc
     ret
 
@@ -233,6 +236,8 @@ hd_probe:
     push es
 
     mov byte [hd_ndev], 0
+    mov byte [hd_dupd], 0       ; no rung 0 row has been paired with an IDE
+                                ; unit yet (hd_ide_dup)
 
     ; --- rung 0: what the BIOS says -----------------------------------------
     ; int 13h AH=08h on 80h and 81h. DL comes back as the NUMBER of fixed
@@ -320,9 +325,10 @@ hd_bios_geom:
     mov cx, ax
     inc cx                      ; ...and the count is one more than the max
     mov al, dh
-    xor ah, ah
-    inc ax                      ; AX = heads
-    mov dx, ax
+    inc al                      ; AX = heads, and the 0xFF case is caught HERE
+    jz .no                      ; rather than by the `test dx, dx` below: that
+    xor ah, ah                  ; sees 0x0100 and lets it through, because the
+    mov dx, ax                  ; widening had already happened
     mov al, bl
     xor ah, ah                  ; AX = sectors/track
     test dx, dx
@@ -348,6 +354,9 @@ hd_bios_geom:
 ; in:  BX = the task file's base port
 ; out: nothing (rows appended to hd_devs)
 ; clobbers: flags
+;
+; A drive rung 0 already reported gets NO row here - that is what SPEC.md 52.1
+; means by "for a drive the BIOS does not know", and hd_ide_dup is the test.
 ; -----------------------------------------------------------------------------
 hd_ide_channel:
     push ax
@@ -358,6 +367,8 @@ hd_ide_channel:
 .drive:
     call hd_ide_ident           ; CF = 0 and hd_idbuf holds IDENTIFY's answer
     jc .next
+    call hd_ide_dup             ; the BIOS's own row for this drive is the one
+    jnc .next                   ; to keep (SPEC.md 52.1)
     call hd_dev_new
     jc .out
     mov byte [di+HDD_KIND], HDK_IDE
@@ -381,6 +392,83 @@ hd_ide_channel:
     pop dx
     pop cx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_ide_dup - is the drive IDENTIFY just answered for one rung 0 already has?
+;              (module internal)
+; in:  hd_idbuf holds IDENTIFY's answer; the rung 0 rows are in hd_devs
+; out: CF = 0 yes - the BIOS reported it and this unit gets no row of its own,
+;      and that BIOS row is now SPENT; CF = 1 no
+; clobbers: flags
+;
+; The key is the GEOMETRY, because it is the only thing the two rungs both
+; answer for: a BIOS row's unit is 80h/81h and an IDE row's is 0/1 on a base
+; port the BIOS never mentions, so SPEC.md 52.6's kind+unit+base cannot pair
+; them. Heads and sectors/track must be EQUAL - int 13h reports the drive's own
+; pair for a drive it is not translating, and a drive it IS translating has a
+; geometry that is not this one's at all - while the cylinder count only has to
+; be no LARGER, because reserving the last cylinder or two for diagnostics is
+; what a BIOS drive-type table does and SeaBIOS does it too (a 65-cylinder
+; drive is 64 cylinders through AH=08h).
+;
+; **Each BIOS row is spent once**, in [hd_dupd]: two identical drives with only
+; the first in the BIOS is the case a plain scan gets wrong, and it gets it
+; wrong in the direction that LOSES a disk. What no key can tell apart is an
+; MFM drive and an unknown IDE drive of exactly the same geometry - the second
+; is then skipped rather than listed.
+;
+; Without any of this the machine whose BIOS knows its disk gets TWO rows for
+; it, and SPEC.md 52.6.1's automount then mounts every partition on it twice -
+; once through each transport, as C: and again as D:, on a desktop with two
+; icons per volume and two FAT caches over the same sectors.
+; -----------------------------------------------------------------------------
+hd_ide_dup:
+    push ax
+    push bx
+    push cx
+    push di
+    xor bl, bl
+.scan:
+    cmp bl, [hd_ndev]
+    jae .no
+    mov al, bl
+    call hd_dev_row
+    cmp byte [di+HDD_KIND], HDK_BIOS
+    jne .next
+    mov cl, bl                  ; already paired with an earlier IDE unit?
+    mov al, 1
+    shl al, cl                  ; 8086: a variable shift goes through CL
+    test [hd_dupd], al
+    jnz .next
+    mov ax, [hd_idbuf + 3*2]    ; word 3: heads
+    cmp ax, [di+HDD_HEADS]
+    jne .next
+    mov ax, [hd_idbuf + 6*2]    ; word 6: sectors per track
+    cmp ax, [di+HDD_SPT]
+    jne .next
+    mov ax, [hd_idbuf + 1*2]    ; word 1: cylinders - the BIOS may report
+    cmp [di+HDD_CYL], ax        ; fewer, never more
+    ja .next
+    mov cl, bl
+    mov al, 1
+    shl al, cl
+    or [hd_dupd], al            ; spent
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.next:
+    inc bl
+    jmp short .scan
+.no:
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1250,6 +1338,9 @@ hd_bop:      db 0
 hd_run:      dw 0               ; sectors in the transfer being issued
 hd_status:   db 0
 hd_pdl:      db 0               ; hd_probe's int 13h drive number
+hd_dupd:     db 0               ; bit n = rung 0's row n is the same drive as
+                                ; an IDE unit rung 1 has already seen, so it
+                                ; can pair with no other (hd_ide_dup)
 
 %ifdef INSTBENCH
 ; SPEC.md 52.10.9 - the DEVICE side of a transfer, which nothing else counts.
@@ -1266,7 +1357,9 @@ hd_idbuf:    times 512 db 0     ; IDENTIFY's 256 words (PIO, never DMA)
 
 hd_rowdev:   db 0
 hd_pslot:    db 0               ; the partition hd_mount is working on
-hd_wantmnt:  db 0               ; bit n = device n was mounted last session
+hd_wantmnt:  db 0               ; bit n = mount device n at DRVV_READY: it
+                                ; was mounted last session, or the probe
+                                ; just found it (SPEC.md 52.6.1)
 hd_selsave:  db 0               ; hd_cfg_automount's saved selection
 hd_cwd:      dw 0               ; the volume+directory the automount borrowed...
 hd_cdrv:     db 0               ; ...and must put back

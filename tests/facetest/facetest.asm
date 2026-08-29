@@ -217,7 +217,8 @@ ft_head:
     mov dx, [ft_cy]
     add dx, 3
     mov si, ft_s_t1
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
 
     mov di, ft_s_t2 + 6             ; "face: " - the family, or the error.
                                     ; BUILT LEFT TO RIGHT and not written at
@@ -257,7 +258,8 @@ ft_head:
     mov dx, [ft_cy]
     add dx, 12
     mov si, ft_s_t2
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
 
     pop di
     pop si

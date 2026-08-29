@@ -119,7 +119,7 @@ fb_paint:
     mov dx, [fb_cy]
     add dx, 3
     mov si, fb_s_head
-    call OSAPI_FONT_STR
+    call OSAPI_FONT_STR_XPARENT
 
     cmp byte [fb_done], 0
     jne .rows
@@ -128,7 +128,7 @@ fb_paint:
     mov dx, [fb_cy]
     add dx, 25
     mov si, fb_s_hint
-    call OSAPI_FONT_STR
+    call OSAPI_FONT_STR_XPARENT
     jmp short .out
 .rows:
     mov si, fb_s_pair               ; the four measured rows
@@ -161,7 +161,7 @@ fb_line:
     push cx
     mov cx, [fb_cx]
     add cx, 4
-    call OSAPI_FONT_STR
+    call OSAPI_FONT_STR_XPARENT
     pop cx
     ret
 
@@ -403,7 +403,7 @@ fb_once:
     mov al, CBLACK
     call OSAPI_SET_COLOR
     mov si, fb_s_test
-    call OSAPI_FONT_STR
+    call OSAPI_FONT_STR_XPARENT
     jmp short .out
 .run:
     mov si, fb_s_test               ; --- FONT_RUN: both colours, one pass

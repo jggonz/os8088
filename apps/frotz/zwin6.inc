@@ -600,7 +600,7 @@ zw6_flush:
     pop bx
 
     ; Bold is a second pass one pixel right (FROTZ-PLAN 5.1). It has to be
-    ; OSAPI_FONT_STR and not a second FONT_RUN: the run paints its cells'
+    ; OSAPI_FONT_STR_XPARENT and not a second FONT_RUN: the run paints its cells'
     ; background, so a run at x+1 would erase the first one and leave a
     ; one-pixel stub. FONT_STR's background is transparent, which is exactly
     ; the "drawn twice, one pixel apart" this needs.
@@ -611,7 +611,7 @@ zw6_flush:
     call OSAPI_SET_COLOR            ; AL = ink
     inc cx
     mov si, zw6_lbuf
-    call OSAPI_FONT_STR
+    call OSAPI_FONT_STR_XPARENT
     dec cx
     pop bx
 .noem:

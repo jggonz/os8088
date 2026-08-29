@@ -47,13 +47,15 @@ at_bar_draw:
     dec bx
     mov dx, 19
     call OSAPI_GFX_HLINE
-    mov al, CBLACK
-    cmp byte [at_writer], 0
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the ground the fill above
+    cmp byte [at_writer], 0         ; laid - the run's pair (SPEC.md 46.10)
     je .ink
-    mov al, CWHITE
+    mov ax, (CBLACK << 8) | CWHITE  ; Writer mode: the inverted bar
 .ink:
-    call OSAPI_SET_COLOR
-    xor di, di                      ; DI = menu index
+    mov [at_pair], ax
+    call OSAPI_SET_COLOR            ; ...and the pen too, for the rule and the
+    xor di, di                      ; title-cell invert below
+                                    ; DI = menu index
 .title:
     cmp di, AT_NMENUS
     jae .done
@@ -66,7 +68,8 @@ at_bar_draw:
     add si, di
     add si, si                      ; SI = di*6
     mov si, [si+at_mtab]
-    call OSAPI_FONT_STR
+    mov ax, [at_pair]               ; OPAQUE (SPEC.md 46.10): the bar's own fill
+    call OSAPI_FONT_RUN             ; is what is under every one of these
     inc di
     jmp short .title
 .done:
@@ -402,7 +405,18 @@ at_mrows:
     jne .ink
     mov al, CLGRAY                  ; disabled: gray (dither on 1bpp)
 .ink:
-    call OSAPI_SET_COLOR
+    mov [at_ink], al                ; ...and the run's ink, kept: a package
+    call OSAPI_SET_COLOR            ; cannot read the pen back (SPEC.md 46.10)
+                                    ;
+                                    ; THIS IS A SPEC.md 47 RULE 1 VIOLATION AND
+                                    ; IT IS LEFT STANDING HERE - see 46.10.1.
+                                    ; A grey store without [gfx_dis] reduces to
+                                    ; solid BLACK on a 1bpp adapter, so a dead
+                                    ; item looks live on the target machine.
+                                    ; The fix is OSAPI_GFX_PEN with CF, and it
+                                    ; is not in this commit because no state
+                                    ; this session could drive put a disabled
+                                    ; item on screen to diff it against
     cmp ah, 2
     jne .nocheck
     ; a small hand-drawn check in the left gutter (no glyph exists for it)
@@ -427,18 +441,22 @@ at_mrows:
     add dx, 3
     push si
     mov si, [si]
-    call OSAPI_FONT_STR
+    mov ah, CWHITE                  ; OPAQUE: at_mopen filled the panel white
+    mov al, [at_ink]
+    call OSAPI_FONT_RUN
     pop si
     mov ax, [si+2]                  ; the right-aligned shortcut
     or ax, ax
     jz .next
     push si
     mov si, ax
-    call OSAPI_FONT_WIDTH
-    mov cx, [at_msx2]
+    call OSAPI_FONT_WIDTH           ; AX is the WIDTH here, so the pair goes in
+    mov cx, [at_msx2]               ; after it and not before
     sub cx, 6
     sub cx, ax
-    call OSAPI_FONT_STR
+    mov ah, CWHITE
+    mov al, [at_ink]
+    call OSAPI_FONT_RUN
     pop si
 .next:
     add si, 6
@@ -764,7 +782,8 @@ at_alert:
     cmp byte [at_modal], AT_MD_SAVE
     jne .plain
     mov si, at_s_savechg
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: the box is CWHITE-filled above
+    call OSAPI_FONT_RUN
     push dx
     call OSAPI_FONT_WIDTH
     add cx, ax
@@ -774,17 +793,20 @@ at_alert:
     jne .nm
     mov si, at_s_untitled
 .nm:
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
     push dx
     call OSAPI_FONT_WIDTH
     add cx, ax
     pop dx
     mov si, at_s_qmark
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: ...and so is the rest of the line
+    call OSAPI_FONT_RUN
     jmp short .buttons
 .plain:
     mov si, [at_mmsg]
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: one message line, same ground
+    call OSAPI_FONT_RUN
 .buttons:
     call at_mdbuttons
     jmp short .done
@@ -1182,13 +1204,18 @@ at_about_body:
     ret
 
 ; at_ctext - draw SI centred on x = CX at y = DX (8px font)
+;
+; OPAQUE, and it names its own pair rather than taking one: all three callers
+; are the About box's body, which is drawn on the modal box's CWHITE fill in
+; CBLACK, and a package cannot read the pen back to inherit it (SPEC.md 46.10).
 at_ctext:
     push ax
     push cx
-    call OSAPI_FONT_WIDTH
+    call OSAPI_FONT_WIDTH           ; AX is the WIDTH here...
     shr ax, 1
     sub cx, ax
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; ...so the pair goes in after it
+    call OSAPI_FONT_RUN
     pop cx
     pop ax
     ret

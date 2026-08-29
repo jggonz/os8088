@@ -145,7 +145,8 @@ CP_RX = 96                         # ...the right pane's left edge
 CP_DBY1, CP_DROWH = 20, 26         # ...the Drivers page's hit bands
 CP_IDRV = 2                        # SPEC.md 31.3
 HDP_BY, HDP_BH = 82, 16            # page.inc: the Disks page's button row
-HDP_B2X, HDP_BW2 = 154, 64         # ...Install, which opens the installer
+HDP_B2X, HDP_BW2 = 74, 64          # ...Install, the middle of the three
+                                   #    buttons (SPEC.md 52.4)
 HIW_BY, HIW_BH = 96, 16            # inst.inc: the installer's own button row
 HIW_B0X, HIW_BW0 = 8, 88           # ...and Install / Copy Apps, the first one
 WIN_BORDER, WIN_TITLE = 1, 18      # a window's content origin, from its rect
@@ -164,7 +165,17 @@ def content(w):
     return w[1] + WIN_BORDER, w[2] + WIN_TITLE
 
 
-def install(m):
+# The two halves are separate because tests/instrest.py needs to LOOK at the
+# window between them - the action button's caption is what it is about, and
+# that caption changes as the stage machine runs (SPEC.md 52.10.6.1). One copy
+# of the clicks rather than two that can drift: the coordinates are the
+# awkward part of driving this dialog and a second opinion about them is what
+# the module-constant rule above exists to prevent.
+def open_installer(m):
+    """Control Panel -> Drivers -> tick Hard Drive -> its page -> Install.
+
+    out: (mouse, ix, iy) - the installer window's CONTENT origin.
+    """
     mo = Mouse(marty=m)
     mo.menu(8, 8, 8, 40)                        # chip menu -> Control Panel
     cp = [w for w in wins(m) if w[3] >= 280 and w[4] >= 100]
@@ -184,6 +195,11 @@ def install(m):
         sys.exit("the installer window never opened")
     print("  installer window = %s" % (iw,))
     ix, iy = content(iw)
+    return mo, ix, iy
+
+
+def run_install(m, mo, ix, iy):
+    """Two clicks on the action button - arm, then go - and then WAIT."""
     bx, by = ix + HIW_B0X + HIW_BW0 // 2, iy + HIW_BY + HIW_BH // 2
     mo.click(bx, by, settle=3.0)                # Install: arms
     mo.click(bx, by, settle=0)                  # Install: goes
@@ -212,6 +228,11 @@ def install(m):
     else:
         sys.exit("the disk never stopped changing - the install did not finish")
     print("  the drive went quiet")
+
+
+def install(m):
+    mo, ix, iy = open_installer(m)
+    run_install(m, mo, ix, iy)
 
 
 def main():

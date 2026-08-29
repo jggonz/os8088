@@ -14,6 +14,25 @@ So the assertion is INK BEYOND COLUMN 90, on the card that holds it. Reported
 from the field with a photo of exactly that, and with the tell that makes the
 diagnosis: a redraw shows the same gap WITHOUT the fragments, because the
 white fill clears the stale pixels and the clamp still stops the text short.
+
+OPEN, AND IT NEVER REACHES THE ASSERTION ABOVE. This row fails at its SETUP:
+"it does not straddle the seam". The Note Pad opens at (55,60) 260x180, the
+grow drags it to (199,60) and it stays 260 wide - about 32 cells - while the
+seam is at x=720, so there is nothing straddling anything to measure.
+
+It is NOT the stride bug that hid it, and it is not this branch. The stride
+was wrong here too (VID_CTX_SZ 42 against the kernel's 44, fixed with the
+other eight readers), and while it was wrong this row died on garbage geometry
+long before getting here - which is why nobody had seen this. With the stride
+right, the same failure reproduces at the branch's first commit AND at the
+merge-base with `elendilon` using the ORIGINAL constant, where 42 was correct.
+So the setup has been broken for longer than the branch and the row has never
+tested what its docstring says it tests.
+
+What to look at first: the grow. `grown to (199,60) 260x180` is a MOVE and not
+a resize - the width did not change - so either the drag is landing on the
+frame rather than the size box, or the size box is not where this script
+thinks it is on this layout.
 """
 import argparse
 import os
@@ -27,9 +46,15 @@ import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
 import dispcp                                               # noqa: E402
+from os88geom import (VID_CTX_SZ, VID_CTX_VX,          # noqa: E402
+                      VID_CTX_VY, VID_CTX_CW, VID_CTX_CH)
+# SPEC.md 39.14's per-display record: DERIVED from VID_CTX_W and never
+# written down here. Nine scripts had `VID_CTX_SZ = 42` by hand and the
+# record has grown TWICE under them - the last time silently, because the
+# constant that moved was a DERIVED one and os88geom's scanner was only
+# looking at the mirrored ones. It is looking at both now.
 
 MBAR_H, TITLE_H = 20, 18
-VID_CTX_SZ, VID_CTX_VX, VID_CTX_VY, VID_CTX_CW = 42, 36, 38, 14
 NP_OLDMAX = 90                  # the clamp this exists to be past
 S = os88sym.linear
 

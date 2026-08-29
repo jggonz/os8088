@@ -460,6 +460,8 @@ eth_vtab:
     dw eth_v_addr               ; 10 NETV_ADDR
     dw eth_v_abort              ; 11 NETV_ABORT
     dw eth_v_prof               ; 12 NETV_PROF - the stage timers (72.15)
+    dw eth_v_sktab              ; 13 NETV_SKTAB - the socket table (72.20)
+    dw eth_v_bulk               ; 14 NETV_BULK  - give me the big ring (72.21.1)
 eth_vtab_end:
 %if (eth_vtab_end - eth_vtab) / 2 != NETV_MAX + 1
   %error "ether: the verb table and NETV_MAX disagree"

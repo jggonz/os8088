@@ -294,7 +294,7 @@ FDD_S_NORDY  equ 4               ; the controller never took a byte, or never
 ; machine claiming three or four drives the block described the LAST unit
 ; asked and said nothing at all about the others - and that is precisely the
 ; configuration this diagnostic exists for, an internal drive plus a 4865 on
-; the 37-pin connector. Ten bytes of .text, no rung crossed.
+; the 37-pin connector. Ten bytes of .text.
 FDU_ST3      equ 0               ; SENSE DRIVE STATUS, motor off. bit 4 = TRACK
                                  ; 0, and bit 3 = two-side, which the field 5150
                                  ; also reads CLEAR on the drive it does not
@@ -371,7 +371,11 @@ dsk_dbg_rst: dw 0                ; +10 controller resets (the 00h after a
 dsk_dbg_ent: dw dsk_dbg_raw      ; +12 near offset of the FAR entry below
 dsk_dbg_tn:  dw 0                ; +14 how many trace slots are filled; a
                                  ;     reader ZEROES this to start a trace
-dsk_dbg_tp:  dw dsk_dbg_trc      ; +16 ...and where they are
+dsk_dbg_tp:  dw dsk_dbg_trc      ; +16 ...and where they are - an offset in
+                                 ;     LOW_SEG, not in this segment
+dsk_dbg_tsg: dw LOW_SEG          ; +18 ...and WHICH segment, because the ring
+                                 ;     is the one part of this block that is
+                                 ;     not here (SPEC.md 18.94.4)
 
 DSK_DBG_TRC equ 400              ; (lba, run|drive|op) pairs. 40 covered the
                                  ; 16KB read this was written for - 34 calls -
@@ -384,7 +388,16 @@ DSK_DBG_TRC equ 400              ; (lba, run|drive|op) pairs. 40 covered the
                                  ; indistinguishable from a short one and this
                                  ; exists to be READ. 1,600 bytes, and only in
                                  ; the DISKCNT build
-dsk_dbg_trc: times DSK_DBG_TRC*2 dw 0
+; ...and the ring itself lives in LOW_SEG, not here. It is 1,600 bytes of
+; ZEROS, and in .text they were 1,600 bytes of the kernel's own 64KB segment
+; AND of the image the boot sector loads - for a buffer that no shipped kernel
+; has at all. .text+.bss was 65,632 of KERN_CODE_MAX with it, which is a
+; DISKCNT build that would not assemble while the shipped one had 1,572 bytes
+; spare: the guard cannot say that the overflowing bytes are an instrument's,
+; it sees one number (SPEC.md 18.94.4). Reached through SS, which is LOW_SEG.
+section .lowbss
+dsk_dbg_trc: resw DSK_DBG_TRC*2
+section .text
 
 ; WHERE THE SECTORS WENT, which dsk_dbg_sec's total cannot say. The progress
 ; widget (SPEC.md 12.8) reports the DATA PHASE of one file operation and
@@ -579,7 +592,7 @@ dsk_batch_end_x:
     je .out                     ; gfx_unlock may have ended it already, which
     dec byte [dsk_batch]        ; is not an error and is the common case
 .out:
-    ret
+    retf
 
 ; dsk_bpb_flopzap - forget every bank that was taken inside a batch
 ; preserves every register and the flags
@@ -932,7 +945,7 @@ dsk_dpt_init_x:
     pop si
     pop cx
     pop ax
-    ret
+    retf
 
 disk_read_x:
     mov byte [dsk_op], 0x02     ; AH=02 read (mov leaves the flags alone)
@@ -952,7 +965,7 @@ dsk_xfer:
     push di
     push bp
 
-    call KERNEL_SEG:cw_fpg_busy ; **EVERY SECTOR IN THE MACHINE PASSES HERE,
+    call KERNEL_SEG:fpg_busy    ; **EVERY SECTOR IN THE MACHINE PASSES HERE,
                                 ; SO THIS IS WHERE THE PROGRESS WIDGET IS PUT
                                 ; UP** (SPEC.md 12.8.3). CX is what this call
                                 ; is about to move, and fpg_busy accumulates
@@ -1101,7 +1114,7 @@ dsk_xfer:
     push cx                     ; ...and THE SAME NOTCHES .notch makes, which
     mov cx, ax                  ; is the whole of SPEC.md 12.8.2: a sector the
 .snotch:                        ; cache served is a sector the operation is
-    call KERNEL_SEG:cw_spl_step ; DONE with, and a bar that counts only what
+    SPLCALL splf_step ; DONE with, and a bar that counts only what
     call KERNEL_SEG:cw_fpg_step ; reached the drive stops short and vanishes
     loop .snotch                ; there. Both preserve every register and the
                                 ; flags, so AX is still the count below and CX
@@ -1254,13 +1267,14 @@ dsk_xfer:
     jae .dbgnotrc               ; the shape 148 sectors for a 32-sector file
     add bx, bx                  ; has, and which no total can distinguish
     add bx, bx                  ; from "reads too much"
-    mov [dsk_dbg_trc+bx], di    ; DI is the LBA this pass is issuing
+    mov [ss:dsk_dbg_trc+bx], di ; DI is the LBA this pass is issuing - and
+                                ; SS, because the ring is in LOW_SEG
     mov ah, [disk_drive]        ; ...and the run, which is at most 128 - so AL
     cmp byte [dsk_op], 0x03     ; holds it and AH is free for the VOLUME and,
     jne .dbgrd                  ; in its top bit, for WRITE. A simulation of a
     or ah, 0x80                 ; cache has to tell a read from a write and one
 .dbgrd:                         ; volume from another
-    mov [dsk_dbg_trc+bx+2], ax
+    mov [ss:dsk_dbg_trc+bx+2], ax
     xor ah, ah                  ; ...and AX goes back to the plain run
     inc word [dsk_dbg_tn]
 .dbgnotrc:
@@ -1332,7 +1346,7 @@ dsk_xfer:
 .count:
     mov cx, ax                  ; the boot bar counts SECTORS, and a call now
 .notch:                         ; carries a run of them (SPEC.md 18.91) - so
-    call KERNEL_SEG:cw_spl_step               ; it is stepped per sector rather than per
+    SPLCALL splf_step               ; it is stepped per sector rather than per
     call KERNEL_SEG:cw_fpg_step               ; call, or the bar would under-count exactly
     loop .notch                 ; as far as the batching won. BOTH preserve
                                 ; every register and the flags - CX is this
@@ -1567,7 +1581,7 @@ dsk_boot_from_x:
     pop si
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; dsk_bootltr - stamp the boot volume's drive letter into the messages
@@ -1732,12 +1746,12 @@ dsk_flop_add_x:
     pop cx
     pop bx
     clc
-    ret
+    retf
 .full:
     pop cx
     pop bx
     stc
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; dsk_vol_fixed - is this volume a HARD DISK? (SPEC.md 18.7.2)
@@ -1891,13 +1905,13 @@ osapi_vol_at_x:
     pop si
     pop bx
     stc
-    ret
+    retf
 .found:
     pop di
     pop si
     pop bx
     clc
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; dsk_vol_add - register a driver-backed volume (osapi_vol_add, SPEC.md 18.7)
@@ -2200,10 +2214,10 @@ osapi_vol_add_x:
     call osapi_vol_fence
     jc .no
     call dsk_vol_add
-    ret
+    retf
 .no:
     stc
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; osapi_fs_ent - slot 0x03C0 (X: ES = the caller's segment), SPEC.md 62.9.1
@@ -2265,7 +2279,7 @@ osapi_fs_ent_x:
     pop cx
     pop bx
     clc
-    ret
+    retf
 .no:
     pop di
     pop si
@@ -2274,7 +2288,7 @@ osapi_fs_ent_x:
     pop bx
     xor ax, ax
     stc
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; osapi_vol_del - slot 0x0278 (X).  in AL = volume index
@@ -2284,7 +2298,7 @@ osapi_vol_del_x:
     jc .out
     call dsk_vol_del
 .out:
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; osapi_vol_mount - slot 0x0280 (X).  in AL = volume index; out CF = 1 refused
@@ -2308,13 +2322,13 @@ osapi_vol_mount_x:
     pop dx
     pop bx
     clc
-    ret
+    retf
 .no:
     pop dx
     pop bx
 .nofence:
     stc
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; osapi_vol_paint - slot 0x0288: repaint the desktop's drive zones
@@ -2327,7 +2341,7 @@ osapi_vol_paint_x:
     call KERNEL_SEG:cw_gfx_lock
     call desk_zones_paint_x
     call KERNEL_SEG:cw_gfx_unlock
-    ret
+    retf
 
 ; =============================================================================
 ; The FAT window (SPEC.md 18.8)
@@ -3959,11 +3973,22 @@ dsk_fatw_claim:
     mov ax, (DSK_FAT_SECS*512 + 1023) / 1024
     mov bx, MEM_K_FATW
     call mem_claim_x              ; out: DX = the segment; CF=1 = refused
+    jc .none                    ; BX is still the TAG here, which is what
+                                ; mem_movable wants beside DX (SPEC.md 66.2)
+    mov ax, dsk_fatw_reloc      ; ...AND IT MOVES (SPEC.md 66.5.6). This is the
+    call mem_movable_x          ; FIRST bottom-up claim of the whole boot - it
+                                ; lands on [mem_base] itself at the A: mount,
+                                ; before any driver - so anything the kernel
+                                ; ever wants to hand back from the arena's
+                                ; floor is walled in behind it while it is
+                                ; pinned. Nothing about the window needs it to
+                                ; be: the bytes travel with the block and its
+                                ; only readers are software.
     pop bx
-    jc .none
     mov [bx], dx
     jmp short .out
 .none:
+    pop bx
     mov word [bx], 0
 .out:
     pop dx
@@ -3971,6 +3996,54 @@ dsk_fatw_claim:
     pop bx
     pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; dsk_fatw_reloc - MEM_K_FATW's relocation proc (SPEC.md 66.2, 66.5.6)
+; in:  BX = the base it WAS at, DX = the base it is at now; DS = KERNEL_SEG
+; out: nothing (every register preserved)
+;
+; TWO NAMING WORDS, which is exactly why 66.2 takes a proc and not the address
+; of one: dsk_fatwc[vol] is where the claim is RECORDED and [dsk_fatseg] is
+; where the FAT is READ FROM, and the second equals the first only while that
+; volume is the one mounted. Poking either alone leaves a window that reads the
+; right bytes from the wrong place at the next switch - which is a FAT read
+; that succeeds and returns somebody else's sectors.
+;
+; The scan is by VALUE and not by the mounted volume's index, because a
+; compaction can fire while a different volume is current and the block being
+; moved is then not the one [disk_drive] names.
+; IT IS `.text` AND THAT IS LOAD-BEARING. mem_reloc_call reaches a kernel proc
+; through cw_mem_disp - `call bp` - with CS = KERNEL_SEG, so BP has to be a
+; `.text` offset. Written here, in the middle of disk.inc's cold half, it
+; assembled into `.cold` and os88ovlchk said nothing: an INDIRECT transfer is
+; the one class that file cannot see ("call bx, jmp [table]"), so the compactor
+; would have jumped to a cold offset inside the kernel segment on the first
+; move. The section switch below is the whole fix and there is no gate for it.
+section .text
+; -----------------------------------------------------------------------------
+dsk_fatw_reloc:
+    push ax
+    push cx
+    push si
+    mov si, dsk_fatwc
+    mov cx, DVOL_MAX
+.scan:
+    cmp [si], bx
+    jne .next
+    mov [si], dx
+.next:
+    inc si
+    inc si
+    loop .scan
+    cmp [dsk_fatseg], bx        ; ...and the LIVE pointer, if this volume is
+    jne .out                    ; the one mounted
+    mov [dsk_fatseg], dx
+.out:
+    pop si
+    pop cx
+    pop ax
+    ret
+section .cold                   ; ...and back, or every routine below joins it
 
 dsk_fatw_drop:
     push ax
@@ -4954,7 +5027,7 @@ dsk_find_x:
     pop dx
     pop bx
     clc
-    ret
+    retf
 .ioerr:
     mov ax, FERR_IO
     jmp short .fail
@@ -4967,7 +5040,7 @@ dsk_find_x:
     pop dx
     pop bx
     stc
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; dsk_chdir - make a directory the current one and re-list the volume
@@ -5226,7 +5299,7 @@ dsk_read_chain_x:
     mov cx, 512                 ; (SPEC.md 12.8). This caller is handed SECTORS
     mul cx                      ; and holds no finer figure, so the byte count
     mov cx, ax                  ; is exact to the sector and the last partial
-    call KERNEL_SEG:cw_fpg_begin              ; one rounds up here exactly as it used to
+    call KERNEL_SEG:fpg_begin                 ; one rounds up here exactly as it used to
     pop dx                      ; round up inside the widget (12.8.1)
     pop ax                      ; ...AX is the first cluster either side
 
@@ -5304,7 +5377,7 @@ dsk_read_chain_x:
 .done:                          ; ...and where the redirected read above joins
     mov [dsk_chain_end], si     ; where a chunked caller resumes from
     clc
-    call KERNEL_SEG:cw_fpg_end                ; preserves CF, so it sits either side of the
+    call KERNEL_SEG:fpg_end                   ; preserves CF, so it sits either side of the
                                 ; clc without comment (SPEC.md 12.8)
     pop bp
     pop di
@@ -5320,7 +5393,7 @@ dsk_read_chain_x:
 .fail2:
     mov byte [dsk_cherr], 2     ; chain corrupt
 .failc:
-    call KERNEL_SEG:cw_fpg_end                ; a failed read owes the bar back exactly as
+    call KERNEL_SEG:fpg_end                   ; a failed read owes the bar back exactly as
     pop bp                      ; a successful one does
     pop di
     pop si
@@ -5657,10 +5730,6 @@ dkf_disk_write:      call disk_write_x
                  retf
 dkf_dsk_batch_begin: call dsk_batch_begin_x
                  retf
-dkf_dsk_batch_end:   call dsk_batch_end_x
-                 retf
-dkf_dsk_boot_from:   call dsk_boot_from_x
-                 retf
 dkf_dsk_chdir:       call dsk_chdir_x
                  retf
 dkf_dsk_chdir_q:     call dsk_chdir_q_x
@@ -5679,13 +5748,7 @@ dkf_dsk_dirw_start:  call dsk_dirw_start_x
                  retf
 dkf_dsk_dotdot:      call dsk_dotdot_x
                  retf
-dkf_dsk_dpt_init:    call dsk_dpt_init_x
-                 retf
 dkf_dsk_fat_ofs:     call dsk_fat_ofs_x
-                 retf
-dkf_dsk_find:        call dsk_find_x
-                 retf
-dkf_dsk_flop_add:    call dsk_flop_add_x
                  retf
 dkf_dsk_free_clus:   call dsk_free_clus_x
                  retf
@@ -5710,18 +5773,6 @@ dkf_dsk_vol_fixed:   call dsk_vol_fixed_x
 dkf_dsk_vol_row:     call dsk_vol_row_x
                  retf
 dkf_dsk_vol_slot:    call dsk_vol_slot_x
-                 retf
-dkf_osapi_fs_ent:    call osapi_fs_ent_x
-                 retf
-dkf_osapi_vol_add:   call osapi_vol_add_x
-                 retf
-dkf_osapi_vol_at:    call osapi_vol_at_x
-                 retf
-dkf_osapi_vol_del:   call osapi_vol_del_x
-                 retf
-dkf_osapi_vol_mount: call osapi_vol_mount_x
-                 retf
-dkf_osapi_vol_paint: call osapi_vol_paint_x
                  retf
 
 

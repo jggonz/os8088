@@ -759,8 +759,8 @@ read it is a second of listing time for a folder of thirty packages.
 
 **The interface is PINNED (SPEC.md §62.9) and the constants are in;
 no branch site is built yet.** `DVK_FILE`, `DRVC_FILE` = 5, `DSV_FS` as a
-pointer to the thirteen-verb table, and the fifth publication slot: 184 bytes,
-no rung crossed. What is done is the part §1's rule says must come first.
+pointer to the thirteen-verb table, and the fifth publication slot: 184
+bytes. What is done is the part §1's rule says must come first.
 
 Two design decisions were settled while pinning it and neither was in the
 original sketch above:
@@ -836,7 +836,7 @@ the same-volume move fast path, is raw directory slots end to end and is
 already a fast path **with a fallback**, so a redirected volume declines it
 and the copy engine — entirely built — does the move.
 
-**`.cold` +50, no rung crossed, footprint unchanged**; the driver grew 68
+**`.cold` +50, footprint unchanged**; the driver grew 68
 bytes. Read back from OUTSIDE with `os88flush`, because asking os8088 to list
 what os8088 wrote is the writer and the reader agreeing: `DOCS/DEEP`,
 `DOCS/DEEP/BOTTOM.TXT` 127 bytes, `DOCS/HELLO.TXT` 26 bytes, both bodies
@@ -887,8 +887,8 @@ remainder carried rather than rounded so a wire's 64-byte frames sum exactly.
 `RAMDISK.DRV` reports in 64-byte pieces on purpose: a RAM disk delivers a file
 in one `rep movsb`, and without that this slot would have shipped with no
 consumer but the cable it was written for — which is precisely how
-`OS88NET.COM` reached the field twice unexecuted. **`.text` +103, `.cold` +23,
-no rung crossed, footprint unchanged.**
+`OS88NET.COM` reached the field twice unexecuted. **`.text` +103, `.cold`
++23, footprint unchanged.**
 
 The cable's file client is now a SECOND `DRVC_FILE` driver against a kernel
 proven three milestones deep, which is what the whole RAM-disk detour bought.

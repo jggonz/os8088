@@ -581,7 +581,8 @@ hf_paint:
     mov cx, [hf_x]
     mov dx, bp
     mov si, hf_num
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     mov si, hf_s_pass
     cmp byte [di+hf_res], 0
     je .label
@@ -590,14 +591,16 @@ hf_paint:
     mov cx, [hf_x]
     add cx, 28
     mov dx, bp
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     mov bx, di                  ; ...and what the check actually was, because
     shl bx, 1                   ; a column of PASS/FAIL is unreadable from a
     mov si, [bx+hf_lbl_t]       ; screenshot two weeks later. SCALED: the
     mov cx, [hf_x]              ; labels are words where hf_res is bytes, and
     add cx, 68                  ; DI indexes both
     mov dx, bp
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     add bp, 10
     inc di
     jmp short .row
@@ -606,7 +609,8 @@ hf_paint:
     mov si, hf_s_kb             ; the four figures the suite turns on
     mov cx, [hf_x]
     mov dx, bp
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     add bp, 10
     mov ax, [hf_l0]
     call hf_fig
@@ -637,7 +641,8 @@ hf_fig:
     add cx, 12
     mov dx, bp
     mov si, hf_num
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     add bp, 10
     pop si
     pop dx

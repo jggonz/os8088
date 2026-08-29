@@ -9,8 +9,12 @@
 CYCLE-EXACT, ON A RUNNING os8088, WITH NO CODE ON THE FLOPPY. MartyPC's debug
 server reports `cycles` and `instructions` and its `park` command points the
 CPU at an address with the prefetch queue flushed (docs/MARTYPC-DEBUG.md), so
-this boots a desktop, writes a stub into `gfx_pairtab0` - 256 idle .bss bytes
-inside KERNEL_SEG - parks on it and reads the counter either side.  `park`
+this boots a desktop, writes a stub into `snd_xlat` - 256 idle .bss bytes
+inside KERNEL_SEG, the PWM rescale table, which is rebuilt per clip and so
+holds nothing while nothing is playing - parks on it and reads the counter
+either side.  It was `gfx_pairtab0` until that pair moved to `.lowbss`
+(SPEC.md 5.4.1.1): a LOW_SEG offset written at KERNEL_SEG is a plausible
+address in the middle of the kernel, which is os88sym.py's own warning.  `park`
 resets the CPU, so IF is 0 for the whole measurement: no tick, no mouse ISR,
 nothing in the number but the routine.
 
@@ -268,7 +272,7 @@ def with_rig(args, body):
     with os88marty.launch(args.image, machine=args.machine) as m:
         os88marty.settle(m)
         m.pause()
-        rig = Rig(m, sym, sym["gfx_pairtab0"])
+        rig = Rig(m, sym, sym["snd_xlat"])
         print("%s: framebuffer %04x:0000+%04x\n"
               % (args.machine, rig.fbseg, rig.fblen))
         return body(rig, sym)

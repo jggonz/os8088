@@ -243,7 +243,7 @@ builds its region on those seeds. The split it needed already existed —
 display is drawn by nobody — so this is still **one region build and one
 `gfx_fill_gray`**, not one of each per display.
 
-`.text` **+199 bytes**, no rung crossed. Both legs of part 2 read **0 px** on
+`.text` **+199 bytes**. Both legs of part 2 read **0 px** on
 both cards with both controls still 0, and part 1 is unmoved.
 
 The contract is the part meant to outlast the bug: there is no point-shaped

@@ -1,8 +1,11 @@
 ; =============================================================================
 ; os8088 - apps/tracker/trktxt.inc
 ;
-; XT mode's fullscreen is an 80x25 TEXT screen (SPEC.md 45.13). Prefix ttx_;
-; included by tracker.asm AFTER trkui.inc, so every tui_ helper it borrows -
+; The fullscreen 80x25 TEXT screen (SPEC.md 45.13). Prefix ttx_; XT mode
+; forces this surface and View > Text Screen picks it outright (45.13.7), and
+; NOTHING IN THIS FILE KNOWS WHICH - it never read [mp_xt], which is why
+; decoupling the two was a gate change and not a port. Included by tracker.asm
+; AFTER trkui.inc, so every tui_ helper it borrows -
 ; tui_scpy, tui_hexb, tui_dec3, tui_viewrow, tui_vu_step - is already defined.
 ;
 ; WHY THIS EXISTS, in one paragraph. The FT2 screen (SPEC.md 45.6) is drawn
@@ -815,20 +818,100 @@ ttx_name:
     mov cx, 21
     mov ah, TTX_A_INV
     call ttx_putn
-    mov di, TTXAT(TTX_NAMEY, TTX_COLS - 12)
-    mov si, ttx_s_xtrate            ; XT mode IS 5,500 Hz for as long as it is
-    mov ah, TTX_A_INV               ; on (SPEC.md 45.9), and this screen only
-%ifdef TRKLOG                       ; exists while it is - so it is a fact...
-    call tlog_xtrate_stamp          ; ...unless K has moved it, in which case
-%endif                              ; the screen has to SAY which (FIELD-NOTES
-    call ttx_put                    ; 16): a swept rate nobody can read off
-                                    ; the machine is not a measurement
+    call ttx_rate_cell              ; the rate, STAMPED - it used to be the
+                                    ; constant 'XT 5500 Hz' and the comment
+                                    ; here said why that was a fact: XT mode
+                                    ; IS 5,500 Hz and this screen only existed
+                                    ; while XT mode was on. SPEC.md 45.13.7
+                                    ; retired the second half of that sentence
     pop es
     pop di
     pop si
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ttx_rate_stamp - put the LIVE rate into the nameplate's own string
+;
+; It was a CONSTANT, and that was correct while the text screen was XT mode's
+; and nothing else: XT mode IS 5,500 Hz (SPEC.md 45.9). SPEC.md 45.13.7 made
+; the surface a pick, so this screen now runs at 22 or 44 kHz with XT mode
+; off - and a header reading `XT 5500 Hz` over a 22,050 Hz stream is the app
+; lying about its own state, which is the one thing SPEC.md 45.8's honest
+; degradations are all shaped to avoid. K moving the rate under TRKLOG was the
+; SAME defect arriving first (docs/FIELD-NOTES.md 16) and had its own bench
+; stamper; there is one stamper now, in the shipped build, because the shipped
+; build has the problem too.
+;
+; [mp_mixrate], not the Rate menu's pick: what the header owes is the rate the
+; stream was OPENED at, and a pick takes effect at the next Play. mp_init
+; seeds it 11,000, so this never reads a zero.
+;
+; Preserves everything. Leading zeros become spaces and so does the `XT `
+; prefix when the mode is off, so the field keeps its width in every state and
+; the pen behind it never moves.
+; -----------------------------------------------------------------------------
+ttx_rate_stamp:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov di, ttx_s_xtrate
+    mov ax, '  '                    ; `XT ` is a FACT only while the mode is
+    cmp byte [mp_xt], 0             ; on - off, it is a claim about the rate
+    je .pfx                         ; that the digits then contradict
+    mov ax, 'XT'
+.pfx:
+    mov [di], al
+    mov [di + 1], ah
+    mov di, ttx_s_xtrate + 7        ; the last of the five digits
+    mov ax, [mp_mixrate]
+    mov cx, 5
+    mov bx, 10
+.d:
+    xor dx, dx
+    div bx
+    add dl, '0'
+    mov [di], dl
+    dec di
+    loop .d
+    mov di, ttx_s_xtrate + 3        ; '05500' is not a five-digit rate; four
+    mov cx, 4                       ; of the five may blank, never the last
+.z:
+    cmp byte [di], '0'
+    jne .out
+    mov byte [di], ' '
+    inc di
+    loop .z
+.out:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ttx_rate_cell - stamp it and draw that one cell. ES = [ttx_seg] on entry from
+; ttx_name; ttx_draw_dyn's delta call sets its own. Preserves everything.
+; -----------------------------------------------------------------------------
+ttx_rate_cell:
+    push ax
+    push si
+    push di
+    call ttx_rate_stamp
+    mov di, TTXAT(TTX_NAMEY, TTX_COLS - 12)
+    mov si, ttx_s_xtrate
+    mov ah, TTX_A_INV
+    call ttx_put
+    mov ax, [mp_mixrate]
+    mov [ttx_lrate], ax
+    pop di
+    pop si
     pop ax
     ret
 
@@ -1220,6 +1303,15 @@ ttx_draw_dyn:
     mov [tui_lplay], al             ; legend into [tui_msgp] and parks the view
     call trk_transport              ; row; the status line below spends it
 .noxn:
+    mov ax, [mp_mixrate]            ; ...and the nameplate's rate cell with it:
+    cmp ax, [ttx_lrate]             ; Play opens the stream INSIDE the bracket,
+    je .norate                      ; so a header stamped at ttx_name would
+    push es                         ; otherwise stand at whatever the rate was
+    mov ax, [ttx_seg]               ; before it. One cell, and only when the
+    mov es, ax                      ; value moved (SPEC.md 45.13.1)
+    call ttx_rate_cell
+    pop es
+.norate:
     cmp byte [ttx_shbusy], 0        ; a spread rebuild continues before
     jne .step                       ; anything looks at the pattern again
     call ttx_shvalid
@@ -1335,11 +1427,11 @@ ttx_draw_dyn:
 ; =============================================================================
 ttx_s_name:   db 'TRACKER', 0
 ttx_s_nomod:  db 'no module loaded', 0
-%ifdef TRKLOG
-ttx_s_xtrate: db 'XT 00000 Hz', 0   ; K sweeps it, so it is stamped per paint
-%else                               ; (docs/FIELD-NOTES.md 16); TTX_COLS - 12
-ttx_s_xtrate: db 'XT 5500 Hz', 0    ; leaves room for the extra digit
-%endif
+ttx_s_xtrate: db 'XT 00000 Hz', 0   ; STAMPED per paint in every build now
+                                    ; (SPEC.md 45.13.7): the rate is not a
+                                    ; constant once the surface is a pick.
+                                    ; TTX_COLS - 12 leaves room for the fifth
+                                    ; digit, which 44,100 needs
 ttx_s_pos:    db 'Pos ', 0
 ttx_s_slash:  db '/', 0
 ttx_s_ptn:    db '  Ptn ', 0
@@ -1394,6 +1486,13 @@ ttx_s_mute:   db '   MUTE', 0
                                     ; never inferred from a measurement
     TRKW ttx_vutick                 ; the tick the needles last decayed on
     TRKW ttx_lmsg                   ; the status string last drawn
+    TRKW ttx_lrate                  ; ...and the rate last stamped into the
+                                    ; nameplate (SPEC.md 45.13.7). The
+                                    ; nameplate is drawn ONCE per bracket and
+                                    ; the rate can move inside one - Play
+                                    ; opens the stream at the pick - so the
+                                    ; cell is delta-drawn on this, the
+                                    ; [tui_lplay] idiom one field over
     TRKBUF ttx_vuc, 4               ; last-drawn bar widths, CELLS (SPEC.md
                                     ; 45.12's delta baseline, in this mode's
                                     ; own units - never tui_vupx, which is px)

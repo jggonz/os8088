@@ -95,6 +95,15 @@ TC_WBG    equ 16                    ; windowed splash / About panel bg
 TC_WTX    equ 17                    ; ...and its text
 TC_N      equ 18
 
+; --- the scroll path's reach (SPEC.md 45.12.2) --------------------------------
+; How many rows of view movement tui_scrl will still answer with a blit. The
+; cost is 2n+1 strips against tui_draw_pat's RAB+RBE+1 - 35 on the VGA layout,
+; 29 on the Hercules one - so the arithmetic alone allows far more than this;
+; what caps it is that past a few rows the move is a SEEK rather than a late
+; frame, and a seek has nothing worth preserving in the region. Swept on the
+; 286 in SPEC.md 45.12.2.
+TUI_SCRL_MAX equ 4
+
 ; set the pen from the colour table
 %macro TSETC 1
     push ax
@@ -373,7 +382,7 @@ tui_textc:                          ; SI = string, CX = x, DX = y
     push dx
     add cx, [tui_ox]
     add dx, [tui_oy]
-    call OSAPI_FONT_STR
+    call OSAPI_FONT_STR_XPARENT
     pop dx
     pop cx
     ret
@@ -449,14 +458,27 @@ tui_runo:
     push si
     jmp tui_runc.run
 
-tui_charc:                          ; AL = char, CX = x, DX = y
+; tui_charc - AL = char, CX = x, DX = y: ONE CELL, opaque
+;
+; A one-character STRING rather than a font_char, because there is no opaque
+; font_char and a run of one cell is the same call at the same cost - fractal's
+; zoom exponent took the same shape (SPEC.md 40.2.2). Its one caller,
+; tui_el_scopes, fills the cell with TC_BG and bevels it two instructions
+; earlier, so the pair is the caller's own ground and its own TC_TEXT.
+tui_charc:
+    push ax
     push cx
     push dx
-    add cx, [tui_ox]
-    add dx, [tui_oy]
-    call OSAPI_FONT_CHAR
+    push si
+    mov [tui_cbuf], al
+    mov byte [tui_cbuf + 1], 0
+    mov si, tui_cbuf
+    mov ax, (TC_BG << 8) | TC_TEXT  ; AL = ink role, AH = ground role
+    call tui_runo
+    pop si
     pop dx
     pop cx
+    pop ax
     ret
 
 tui_clipc:                          ; AX,BX,CX,DX rect -> CF=1 partly covered
@@ -2251,6 +2273,9 @@ tui_xt_on:
     ret
 
 tui_draw_pat:
+%ifdef TRKDBG
+    inc word [tds_pat]              ; tests/trkscrl.inc
+%endif
     push ax
     push bx
     push cx
@@ -2298,14 +2323,43 @@ tui_draw_pat:
     ret
 
 ; -----------------------------------------------------------------------------
-; tui_scrl - the one-row scroll path (SPEC.md 45.12): when the view moved by
-; exactly one row inside one pattern/position, the row area's content is the
-; same pixels eight rows away - scroll the upper and lower regions (the band
-; between them breaks the 8-row rhythm, so they move separately) and repaint
-; three strips: band, the strip that left it, the row entering at the far
-; edge. out CF=0 done (markers updated); CF=1 not eligible, or gfx_scroll
-; refused (a clip cutting the area - the dialog) - caller runs tui_draw_pat,
-; whose per-strip gates are then the correct renderer.
+; tui_scrl - the scroll path (SPEC.md 45.12): when the view moved by a few rows
+; inside one pattern/position, the row area's content is the same pixels 8n
+; rows away - scroll the upper and lower regions (the band between them breaks
+; the 8-row rhythm, so they move separately) and relight 2n+1 strips: the n
+; that entered each region at its far edge, and the band. out CF=0 done
+; (markers updated); CF=1 not eligible, or gfx_scroll refused (a clip cutting
+; the area - the dialog) - caller runs tui_draw_pat, whose per-strip gates are
+; then the correct renderer.
+;
+; N IS NOT 1, AND THAT IS THE WHOLE OF SPEC.md 45.12.2. A frame that arrives
+; late sees the view two rows on, and a path that only knew ONE row handed
+; that frame to tui_draw_pat - 35 strips on the VGA layout against the three
+; a scroll costs. The full repaint then takes longer than the frame it was
+; drawn in, the next frame is later still, and the machine settles into
+; repainting the whole grid at every row change: the failure is a RATCHET, not
+; a slowdown, and it reads on the screen as a pattern view that has stopped
+; scrolling and started re-lettering itself. Reproduced under QEMU at
+; `-icount shift=9`, which is about the 12.5 MHz 286 the field reported it
+; from, with that report's module (125 BPM, speed 6 - 8.3 rows a second
+; against the tick's 18.2 frames): the counters in this file read 6.8 scrolls
+; and 0.72 full repaints a second, where the music only turns the pattern
+; over once every 7.7 s. It is 8.2 and 0.13 now - every row change scrolled,
+; and every repaint a pattern. THE SECOND FIGURE IS AN INSTRUCTION COUNT
+; STANDING IN FOR A CLOCK: QEMU charges nothing for the VGA's bus, so the real
+; machine spends more of its frame drawing than this and the ratchet shuts
+; harder there, not softer.
+;
+; The generalisation is exact rather than approximate: n rows of view is 8n
+; pixels of content, one gfx_scroll each way still, and the strips that need
+; relighting are the n at the region's trailing edge instead of the one. So
+; the cost is 2n+1 strips and the ceiling is where that stops beating
+; tui_draw_pat's RAB+RBE+1.
+;
+; TUI_SCRL_MAX is that ceiling and it is a MEASUREMENT, not a guess: see
+; SPEC.md 45.12.2 for the sweep. Past it the jump is a seek rather than a late
+; frame - a pattern loop, a HOME, an Up/Down held down - and the region has
+; too little left in it to be worth preserving.
 ; -----------------------------------------------------------------------------
 tui_scrl:
     push ax
@@ -2322,16 +2376,20 @@ tui_scrl:
     jne .no
     call tui_viewrow                ; [tui_cvr] = the row the band shows now
     mov al, [tui_cvr]
-    sub al, [tui_lcvr]
-    cmp al, 1
-    je .up
-    cmp al, -1
-    jne .no
-    mov si, -8                      ; view moved up: content moves down
-    jmp .go
-.up:
-    mov si, 8                       ; view advanced: content moves up
-.go:
+    sub al, [tui_lcvr]              ; both are 0..63, so the byte difference is
+    cbw                             ; a signed row delta and cbw is exact
+    or ax, ax
+    jz .no                          ; nothing moved: the caller's own gate has
+    mov si, ax                      ; already decided otherwise, so this is a
+    jns .npos                       ; belt rather than a path
+    neg ax
+.npos:
+    cmp ax, TUI_SCRL_MAX
+    ja .no                          ; too far to be a late frame (see above)
+    mov [tui_srn], ax               ; AX = n from here to the strip runs
+    mov cl, 3
+    shl si, cl                      ; SI = 8n, SIGNED: positive moves the
+                                    ; content UP, which is the view advancing
     mov ax, [tui_lay + TL_RAB]      ; upper region: ROWT .. ROWT + RAB*8 - 1
     mov cl, 3
     shl ax, cl
@@ -2361,47 +2419,86 @@ tui_scrl:
     call OSAPI_GFX_SCROLL
     jc .no                          ; half-scrolled: the full repaint the
                                     ; caller falls back to repairs it whole
-    mov al, [tui_cvr]               ; the three strips (SPEC.md 45.12)
+    mov al, [tui_cvr]               ; the 2n+1 strips (SPEC.md 45.12)
     cbw
     mov byte [tui_band], 0
     or si, si
     js .dstrips
-    mov bx, ax                      ; up: the strip that LEFT the band is
-    dec bx                          ; row view-1, the last upper strip...
-    mov dx, [tui_lay + TL_RAB]
-    dec dx
+
+    ; --- the view ADVANCED n rows: the last n strips of each region ----------
+    mov bx, ax                      ; upper: rows view-n .. view-1, ending at
+    sub bx, [tui_srn]               ; the strip immediately above the band
+    mov [tui_sru], bx
+    mov bx, [tui_lay + TL_RAB]
+    sub bx, [tui_srn]
     mov cl, 3
-    shl dx, cl
-    add dx, [tui_lay + TL_ROWT]
-    call tui_row1
-    mov bx, ax                      ; ...and row view+RBE enters at the
-    add bx, [tui_lay + TL_RBE]      ; last lower strip
-    mov dx, [tui_lay + TL_RBE]
-    dec dx
+    shl bx, cl
+    add bx, [tui_lay + TL_ROWT]
+    mov [tui_sruy], bx
+    mov bx, ax                      ; lower: rows view+RBE-n+1 .. view+RBE,
+    add bx, [tui_lay + TL_RBE]      ; ending at the region's bottom strip
+    sub bx, [tui_srn]
+    inc bx
+    mov [tui_srl], bx
+    mov bx, [tui_lay + TL_RBE]
+    sub bx, [tui_srn]
     mov cl, 3
-    shl dx, cl
-    add dx, [tui_lay + TL_LOWY]
-    call tui_row1
-    jmp .band
+    shl bx, cl
+    add bx, [tui_lay + TL_LOWY]
+    mov [tui_srly], bx
+    jmp short .strips
+
+    ; --- ...or moved BACK n: the first n strips of each region ---------------
 .dstrips:
-    mov bx, ax                      ; down: row view-RAB enters at the first
-    sub bx, [tui_lay + TL_RAB]      ; upper strip...
-    mov dx, [tui_lay + TL_ROWT]
+    mov bx, ax
+    sub bx, [tui_lay + TL_RAB]      ; upper: rows view-RAB .. view-RAB+n-1
+    mov [tui_sru], bx
+    mov bx, [tui_lay + TL_ROWT]
+    mov [tui_sruy], bx
+    mov bx, ax
+    inc bx                          ; lower: rows view+1 .. view+n
+    mov [tui_srl], bx
+    mov bx, [tui_lay + TL_LOWY]
+    mov [tui_srly], bx
+
+.strips:
+    push ax                         ; AX = the view row, wanted by the band
+    mov cx, [tui_srn]
+    mov bx, [tui_sru]
+    mov dx, [tui_sruy]
+.ustrip:
+    push cx
     call tui_row1
-    mov bx, ax                      ; ...and the strip that LEFT the band is
-    inc bx                          ; row view+1, the first lower strip
-    mov dx, [tui_lay + TL_LOWY]
+    pop cx
+    inc bx
+    add dx, 8
+    loop .ustrip
+    mov cx, [tui_srn]
+    mov bx, [tui_srl]
+    mov dx, [tui_srly]
+.lstrip:
+    push cx
     call tui_row1
-.band:
+    pop cx
+    inc bx
+    add dx, 8
+    loop .lstrip
+    pop ax
     mov bx, ax                      ; the band itself, on the new view row
     mov byte [tui_band], 1
     mov dx, [tui_lay + TL_BANDY]
     call tui_row1
     mov byte [tui_band], 0
     call tui_marks
+%ifdef TRKDBG
+    inc word [tds_scrl]             ; tests/trkscrl.inc
+%endif
     clc
     jmp .out
 .no:
+%ifdef TRKDBG
+    inc word [tds_no]               ; tests/trkscrl.inc
+%endif
     stc
 .out:
     pop di
@@ -2845,6 +2942,9 @@ tui_cline:
 ;                the top band every 16th call
 ; -----------------------------------------------------------------------------
 tui_draw_dyn:
+%ifdef TRKDBG
+    inc word [tds_frame]            ; tests/trkscrl.inc
+%endif
     push ax
     push bx
     push cx
@@ -3182,7 +3282,17 @@ tui_s_splash1: db 'T R A C K E R', 0
 tui_s_splash2: db 'A FastTracker II style MOD player', 0
 tui_s_none:    db 'No module loaded', 0
 tui_s_keys1:   db 'ENTER play  SPACE stop  HOME top  P pattern', 0
-tui_s_keys2:   db 'ARROWS position  1-4 mute  L load  X xt', 0
+tui_s_keys2:   db 'ARROWS position  1-4 mute  L load  X xt  V screen', 0
+                                    ; 'a key nothing names is a key nobody
+                                    ; finds' (just below) applies to V as much
+                                    ; as it did to the bench keys, and the
+                                    ; SURFACE is the one setting whose effect
+                                    ; is invisible until F is pressed
+                                    ; (SPEC.md 45.13.7). 49 cells against
+                                    ; tui_cline's centred [tui_cw] = 418 = 52,
+                                    ; and tui_cw does not move with the
+                                    ; adapter - only tui_ch does - so this
+                                    ; fits on all three of SPEC.md 39's
 %ifdef TRKLOG                       ; the bench keys are on screen, because a
                                     ; key nothing names is a key nobody finds:
                                     ; this line said 'P pattern' one row above
@@ -3232,6 +3342,11 @@ tui_ab5:     db 'Any key closes', 0
     TRKW tui_chend                  ; right edge of the channel block
     TRKW tui_rend                   ; right edge of a row strip
     TRKW tui_vuw                    ; volume bar full width
+    TRKW tui_srn                    ; the scroll's row delta n (SPEC.md 45.12.2)
+    TRKW tui_sru                    ; first row to relight in the upper region
+    TRKW tui_sruy                   ; ...and that strip's y
+    TRKW tui_srl                    ; the same pair for the lower region
+    TRKW tui_srly
     TRKB tui_vrow                   ; the Up/Down scroll row while stopped
     TRKB tui_cvr                    ; the view row this frame
 
@@ -3263,6 +3378,7 @@ tui_ab5:     db 'Any key closes', 0
                                     ; view's start/stop transition (45.9.1)
     TRKW tui_rrole                  ; tui_row1's ink/background role pair
     TRKB tui_rbg                    ; tui_runc's resolved background colour
+    TRKBUF tui_cbuf, 2              ; tui_charc's one character and its NUL
     TRKB tui_vonly                  ; 1 = draw an element's VALUES only, the
                                     ; face/bevel/labels being on screen already
     TRKB tui_lrow                   ; last-drawn markers for tui_draw_dyn

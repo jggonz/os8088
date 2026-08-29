@@ -1,7 +1,7 @@
 # The chrome fires on mouse-UP — investigation and plan
 
 > **STATUS: IMPLEMENTED.** SPEC.md §13.5 and §13.6; `kernel/ui.inc`. Measured
-> at **`.text` +102, `.bss` +3, no rung crossed** (§8) and gated on CGA,
+> at **`.text` +102, `.bss` +3 (§8) and gated on CGA,
 > Hercules and VGA mode 12h (§12.1). Phase B — pressed-state feedback — is
 > deliberately **not** built (§7).
 
@@ -316,7 +316,7 @@ kernsize[big]: footprint  KERN_SIZE 96,768 of 98,304 -> 1,536 spare (3 steps), w
 kernsize[big]: segment    .text+.bss 60,353 of 65,536 -> 5,183 left
 ```
 
-**`.text` +102, `.bss` +3, and NO RUNG CROSSED** — the estimate above was ~115
+**`.text` +102, `.bss` +3 — the estimate above was ~115
 and 3. The footprint is unchanged at 96,768 and the spare is still **1,536
 bytes, three 512-byte steps**. (Two earlier drafts of this document said 1,024
 and two steps, taken from `docs/KERNEL-MEMORY.md` rather than from a build;

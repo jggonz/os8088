@@ -729,6 +729,7 @@ guest's turnaround puts it. Quote the **class**, not the machine.
 **Two things to know before driving it.** MartyPC headless free-runs at about **4x real time** (measured: 74.0 guest ticks a wall second against 18.2), and `net_connect` leaves the reply deadline at `REPLY_TMO` = ten GUEST seconds — so a mouse `settle` of 6 s is 24 guest seconds of nobody answering, `net_lost` fires, and every verb after it is refused by the `NS_LINKED` gate with **no wire traffic at all**. That reads as a UI that does nothing, nowhere near its cause. Click with a short settle and answer immediately. And `Partner.serve` **steps** the guest, so it leaves it paused: call `m.run()` afterwards or `os88mouse` reports the next target as one it cannot reach. GLaBIOS on purpose: nothing here is a timing question, so this is one of the machines that runs in a container with no IBM ROM |
 | `os8088_5150_both` | **two cards**: a CGA *and* a Hercules, which is docs/FIELD-MACHINES.md's machine as it actually is. SPEC.md §39.11's adapter switching exists for this, and docs/DUAL-DISPLAY-PLAN.md is the study of driving both at once |
 | `os8088_5150_both_gla` | its GLaBIOS twin, and the one `tests/dualcheck.py` runs by default — the IBM ROM this tree cannot ship is what the other needs |
+| `os8088_xt_vga_mda` | **two cards, and one of them is a VGA.** Every other two-card machine here is a CGA beside a Hercules, so both of its displays are 1bpp and every question the extended desktop raises about a COLOUR display is unanswerable — which is most of them, because the paths that differ by bit depth are the interesting ones. SPEC.md §5.4.3's `gfx_blitp` refuses a 1bpp adapter *and* refuses a straddle, so on the mono-only machines a window dragged across the seam takes both refusals at once and one of them changes what the app stores (§42.13.1); §39.4's colour reduction only exists on the mono side; and §11.98's adapter change is a real change of DEPTH here rather than of size. The field has had one of these for a while — 86Box's `XTDualVideoVGA` — and every report off it arrived as a screenshot nothing here could reproduce, `tests/dispblitp.py`'s bug included. The VGA is declared first, so it is MartyPC's card 0; which of them os8088 calls display 0 is the Control Panel's business (§39.19.1) and `tests/dispcp.py`'s `set_primary` drives it either way |
 | `os8088_5150_herc_gla` | a single-card Hercules on GLaBIOS: `os8088_5150_herc` without the ROM, and the control for "does this card rasterise at all" with no second card to confuse the question |
 | `os8088_5150_herc_gla_144` | ...and the same machine with **1.44MB drives**, for `make combo144`. It exists because every other machine here takes `pcxt_2_360k_floppies`, so a 1.44MB image could be BUILT here and never BOOTED here. **It is an anachronism on purpose**: a 1.44MB disk wants 500 kbps and the IBM XT's 8-bit controller runs 250, so no stock XT reads one — it took a third-party 8-bit HD controller and a driver, and the 5150's own ROM tops out at 360KB whatever is plugged in. MartyPC models the DRIVE (`FloppyDriveType::Floppy144M`, `type = "1.44m"`) and has the one `IbmNec` FDC, so what this proves is that **our** boot sector and **our** FAT12 code handle 18 spt on an 8088 — not that the media is period. Measured: it boots to a desktop **byte-identical** to `combo.img` on `_herc_gla` (139,438 lit pixels on both) in **128.7M cycles against 151.7M**, because 18 sectors a track is fewer `int 13h` calls for the same kernel; a Disk window opens on the volume, which is the mount, the FAT snapshot, the root listing and the icon harvest's per-package first-sector read. Take no PERFORMANCE.md number off it, and put no 1.44MB disk in the calibration 5150 (docs/FIELD-MACHINES.md). Its `fdc` is declared INLINE rather than as an overlay, so no file of upstream's needs patching — `build.sh` copies `install/` wholesale and only ever APPENDS our machine file |
 | `os8088_5150_cga_720b` | the default with an **80-cylinder drive as B** — SPEC.md §18.96.2's machine. The 1982 ROM answers no `AH=08h` for a floppy, so `dskw_fmt_probe` reads a 360KB machine and offers 360K for a disk that could hold 720K; this is the only machine here where §22.12's **Space** key has something to toggle to. It drops the `pcxt_2_360k_floppies` overlay and declares `[machine.fdc]` itself, because the drives are the point — upstream's own `pcxt_4_360k_floppies` is the other one worth knowing about, and the FDC takes **four**. Put a non-FAT image of the size under test in B: the reach test's verdict is whether LBA 1439 can be written and read back, so a 1440-sector image passes and a 720-sector one takes the 360K fallback |
@@ -1187,8 +1188,9 @@ is at the command. In the **GUI** build the same knob is a runtime slider at
 **On 86Box, none of this exists** and the question comes back. There the
 keyboard has a zero-code answer anyway — poke the BIOS buffer at
 `0040:001A`/`001C`, which `int 16h` reads — and the mouse would need
-`DEBUG.DRV` and a guest-side injection verb. Neither is built; both are
-wanted only if 86Box automation is.
+a guest-side stub with an injection verb — the serial monitor that could have
+carried one is gone (SPEC.md §58). Neither is built; both are wanted only if
+86Box automation is.
 
 **Audio capture**, which headless MartyPC did not have at all — marty_core's
 `sound` feature was not even enabled for the crate, so a device's samples
@@ -1313,8 +1315,22 @@ the wrong one does not error; it produces a plausible picture of nothing.
 | `shot --rendered` (`fbuf`) | asks the CARD what it rasterised, as rgb24 | **every mode**, CGA and VGA (see the Hercules note) |
 | `screen` | the card's text rows as **characters** | text modes |
 
-**THE RENDERED FRAME IS NOT IN THE GUEST'S COORDINATE SYSTEM, and nothing
-says so.** A whole-screen capture does not care; **a CROP does**, and this is
+**THE RENDERED FRAME IS ONLY AS CURRENT AS THE RASTER.** Stop the machine at
+a breakpoint half way down a frame and `fbuf` gives you the new picture above
+the beam and the PREVIOUS one below it — and nothing says so, because the
+capture succeeds and two captures of the same stopped machine agree with each
+other perfectly (they are both reading the same stale buffer). What it looks
+like is a primitive that drew twenty rows and stopped: rows of whatever was
+on screen before, starting at a **different row every run**, because the
+raster is where it is. That is a full session's worth of chasing a bug that
+was never there, and the tell is the one thing a rendered frame cannot fake:
+**read the PLANES**. They are memory, they are always current, and
+`tests/blitp.py` is the worked example — drive Read Map Select (GC4 = 4, then
+the plane number to 3CF) through `outb` and read `0xA0000` with `read`. Use
+`fbuf` for a settled machine and the planes for a stopped one.
+
+**THE RENDERED FRAME IS NOT IN THE GUEST'S COORDINATE SYSTEM EITHER, and
+nothing says that.** A whole-screen capture does not care; **a CROP does**, and this is
 the trap that costs a session. Measured by correlating `fbuf` against the
 guest's own framebuffer on a Hercules desktop, the card's frame is **720x350
 for a 720x348 screen and sits at dx = −16, dy = +2** — a perfect match at
@@ -1451,9 +1467,11 @@ Unix only, in-memory only, and the mounted floppy is shared rather than rolled
 back — SNAPSHOT-PLAN §8 has the limits. Combine it with a `bp mem` watchpoint
 to snapshot the instant a value is touched.
 
-**Not for:** the real 5150 — that is `DEBUG.DRV`'s job (SPEC.md §58), and the
-two are complementary rather than competing. And not for a machine that is
-not an 8088: the 286 and 386 targets are 86Box's.
+**Not for:** the real 5150. That used to be `DEBUG.DRV`'s job and that driver
+is gone (SPEC.md §58), so on iron the floor is SPEC.md §57's registry read out
+of a photograph and a dump taken by whoever has the machine — neither of which
+single-steps anything. And not for a machine that is not an 8088: the 286 and
+386 targets are 86Box's.
 
 **And a number from it is still a number from an emulator.**
 docs/FIELD-MACHINES.md's first rule is unchanged: a timing goes in

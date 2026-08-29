@@ -67,7 +67,7 @@ now guaranteed `≡ 0 (mod 8)`, so `offset mod 8` is the whole question.
 | grid icon | `fm_cellx + 31` | `+ 32` | `(80-16)/2` — aligned **and** exactly centred |
 
 **Cost: 0 bytes in every section** — `.text`, `.bss`, `.cold`, `.lowbss`,
-`.ovl` all +0, no rung crossed, `KERN_BUDGET` spare unchanged at 3,072. Every
+`.ovl` all +0, `KERN_BUDGET` spare unchanged at 3,072. Every
 one of those seven constants is an `add`/`sub reg, imm8` at both the old value
 and the new.
 
@@ -117,7 +117,7 @@ count.
 | ~~**Task Manager**~~ | ~~five literal `+6` sites~~ | ✅ **DONE, and it was FOUR** — SPEC.md §28.5. Three of the five are `add ax, 6` on FRAME RECTS (CPU graph, bar, RAM map) and a rect has no glyph phase. The four real pens — the memory page's XMS line and the heap page's TOTAL/SPLIT/FRAG summaries — are at `TM_PEN` now, 0 bytes; `tm_rowfill` still erases from +6, so only 2px of white margin moves |
 | ~~**Hello**~~ | **not a defect** | `hl_line` CENTRES every string — `(HL_CONT_W - width)/2 + content_left` — so it is §3's category 2 and must not be "fixed". Its earlier "≡ 3 for 5 glyphs" was its own caption plus that centring |
 | **Missile Command** | unresolved | every pen is computed at run time. Needs `make SNAPAUDIT=1`, not a grep |
-| `DEBUG.DRV` | `DBGP_LX` 1 | unshipped (SPEC.md §62.9.4); fix if it is ever restored |
+| `DEBUG.DRV` | `DBGP_LX` 1 | the driver is REMOVED (SPEC.md §58); the row is kept so the survey reads as complete |
 
 **Already aligned, and most of them because somebody moved two pixels to get
 there:** Note Pad (`NP_MARGIN` 6 → 8), the Task Manager (`TM_PEN` 6 → 8), the

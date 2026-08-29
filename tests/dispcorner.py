@@ -69,7 +69,7 @@ def S(name, _d=[()]):
     return os88sym.linear(name, defines=_d[0])
 
 
-TITLE_H, MBAR_H = 18, 19
+TITLE_H, MBAR_H = 18, 20
 PARK = (4, MBAR_H + 4)
 
 # `hello` IS THE SUBJECT BECAUSE IT DOES NOTHING - no worker, no animation, a

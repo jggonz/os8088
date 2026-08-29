@@ -211,6 +211,20 @@ ifneq ($(SNAPAUDIT),)
 VIDDEF += -DSNAPAUDIT
 endif
 
+# VGADIRTY=1 fills the VGA framebuffer with a pattern in the ONE window a
+# machine cannot: after `int 10h AX=0012h` and before vid_setmode's own clear
+# (SPEC.md 39.23). Every emulator in this tree has a BIOS that clears mode 12h
+# properly, so the field's failure - a loading screen drawn over the mode 3
+# character generator, which lives in plane 2 and becomes bitmap the instant
+# the card is in 12h - is invisible here. This is DIRTYRAM's shape one device
+# along, and for its reason: it makes a difference between this machine and
+# that one REPRODUCIBLE rather than argued about. tests/vgadirty.py is the
+# gate; a shipped kernel carries none of it. Folded into VIDDEF so it shares
+# the stamp below, which is what stops a dirtying kernel lingering in build/.
+ifneq ($(VGADIRTY),)
+VIDDEF += -DVGA_DIRTY
+endif
+
 # DISKCNT=1 compiles in the three disk counters of docs/DISK-PERF-PLAN.md 2:
 # mounts, sectors transferred and int 13h data calls. They exist to answer
 # "how much work is a directory change", which QEMU can measure exactly even
@@ -325,6 +339,13 @@ endif
 # 18.93.1's canary to pay for the hex digits. What it keeps is 18.93's
 # shorten-on-error fallback, which is the half a disk that will not boot meets.
 ifneq ($(BOOTDIAG),)
+VIDDEF += -DBOOT_DIAG
+# ...AND THE SECTOR, which is where this knob started and where the note above
+# $(KNOBS) still says it lives. It stopped reaching stage 1 when SPEC.md 2.9
+# moved the loader - and the hex printer with it - into the kernel, and nobody
+# noticed because there was nothing left in the sector that wanted it. SPEC.md
+# 2.9.7's checksum wants it: BOOTDIAG=1 is what makes the failure print the sum
+# it computed instead of only saying that it was wrong.
 BOOTDEF += -DBOOT_DIAG
 endif
 
@@ -396,6 +417,7 @@ endif
 # ON the far jump, or failed DURING the load and never got that far. Halted, the
 # splash stays up; still looping, the fault is inside the load.
 ifneq ($(BOOTSTOP),)
+VIDDEF += -DBOOT_STOP=$(BOOTSTOP)
 BOOTDEF += -DBOOT_STOP=$(BOOTSTOP)
 endif
 
@@ -416,7 +438,21 @@ endif
 # inside the first 64KB, so the compare reuses the ES the handoff already loads,
 # and the word is the same for every geometry because KERNEL.SYS is one file.
 # tests/suite.py's `canary` row is what keeps all of that true.
-KSIG_OFF := 18432
+# Stage 2's size, read from the kernel's own constant so the two cannot
+# disagree (SPEC.md 2.9). The sector needs it to know how many sectors to
+# fetch before anything has told it; kernel.asm asserts that stage 2 fits.
+BOOT2_SECS := $(shell sed -n 's/^BOOT2_SECS  *equ  *\([0-9][0-9]*\).*/\1/p' kernel/kernel.asm)
+BOOT2_PAD  := $(shell echo $$(( $(shell sed -n 's/^BOOT2_SECS  *equ  *\([0-9][0-9]*\).*/\1/p' kernel/kernel.asm) * 512 )))
+
+# IT IS A MEMORY OFFSET, AND THE FILE SECTOR IS 13 FURTHER IN (SPEC.md 2.9).
+# Stage 2 sits in front of the image now, so the sector this names in KERNEL.SYS
+# is KSIG_OFF/512 + BOOT2_SECS - which is why KSIGDEF2 below adds BOOT2_PAD to
+# read the word out. The number was left at the one that used to put it on file
+# sector 36, and that moved the probe to file sector 49: a run's FIRST HALF on
+# 360KB and on 1.44MB, the half that loads correctly on exactly the machine the
+# canary exists to catch. 11776 puts it back on 36 - the same sector the
+# argument above is about, still in the middle of the common band 33..38.
+KSIG_OFF := 11776
 #
 # A PAYLOAD SHORTER THAN THE OFFSET DEFINES NO KSIG AT ALL, and that is the
 # whole of this line's second job. It used to answer 0, and a fabricated zero is
@@ -431,6 +467,27 @@ KSIG_OFF := 18432
 # half of the same fence: KERNEL_SECTORS > KSIG_OFF/512, not > 32, so the
 # compare is only assembled when the sector it names was loaded.
 KSIGDEF = -DKSIG_OFF=$(KSIG_OFF) $$(python3 -c "import sys; d = open(sys.argv[1], 'rb').read(); o = $(KSIG_OFF); print('-DKSIG=%d' % int.from_bytes(d[o:o+2], 'little')) if len(d) > o + 1 else None" $(1))
+
+# ...and the KERNEL's, which needs its own because SPEC.md 2.9 put stage 2 in
+# front of the image: KSIG_OFF is a MEMORY offset from KERNEL_SEG and stage 2
+# holds it as a constant, so what shifts is only where the same bytes sit in
+# the FILE. The signature itself still has to be injected - it is read out of
+# the built kernel, so a kernel that carried it would need a second assembly
+# to reach a fixed point, and stage 1 is built afterwards and hands it over.
+KSIGDEF2 = $$(python3 -c "import sys; d = open(sys.argv[1], 'rb').read(); o = $(KSIG_OFF) + $(BOOT2_PAD); print('-DKSIG=%d' % int.from_bytes(d[o:o+2], 'little')) if len(d) > o + 1 else None" $(1))
+
+# ...and THE BLOB'S OWN CHECKSUM (SPEC.md 2.9.7). The kernel's load has had
+# 18.93.1's canary since the day a BIOS was caught flipping heads early; the
+# BLOB's load had nothing, and since 2.9.6 it is 13 sectors and two int 13h
+# calls where it used to be 4 and one. A short or torn read there is not a
+# disk error - stage 2 runs, the loading screen draws, and the machine
+# executes whatever landed in the sectors that did not arrive, hundreds of
+# instructions later and somewhere else entirely.
+#
+# A 16-bit word sum, injected the way KSIG is and for KSIG's reason: it is
+# read OUT of the built kernel, so a kernel carrying it would have to be
+# assembled twice to reach a fixed point.
+BLOBSUMDEF = $$(python3 -c "import sys; d = open(sys.argv[1], 'rb').read()[:$(BOOT2_PAD)]; print('-DBLOBSUM=%d' % (sum(int.from_bytes(d[i:i+2], 'little') for i in range(0, len(d), 2)) & 0xFFFF)) if len(d) >= $(BOOT2_PAD) else None" $(1))
 
 # DIRW1=1 never takes SPEC.md 18.95's sector cache, so every read moves exactly
 # the sectors asked for again - the pre-18.95 behaviour, reached through the
@@ -475,11 +532,13 @@ endif
 # HEAPCOMPACT=0 removes the heap compactor (SPEC.md 66) - the BODY, not merely
 # the call, so the A/B measures the feature and not a branch around it. With it
 # off, mem_claim's retry loop is the shed-and-retry it was, every claim stays
-# where it was first placed, and OSAPI_MEM_MOVABLE records a handle nothing
-# ever reads. This is the reference build for tests/heapfrag and for any claim
-# that compaction changed a byte it should not have: the two kernels must
-# produce identical contents in every surviving block, and only the ADDRESSES
-# may differ.
+# where it was first placed, mem_can_move pins the lot - so mem_avail, which
+# answers out of the compactor's plan (SPEC.md 66.10.3), reports the run this
+# heap really has - and OSAPI_MEM_MOVABLE records a handle nothing ever reads.
+# This is the reference build for tests/heapfrag and for any claim that
+# compaction changed a byte it should not have: the two kernels must produce
+# identical contents in every surviving block, and only the ADDRESSES may
+# differ.
 ifeq ($(HEAPCOMPACT),0)
 VIDDEF += -DNOCOMPACT
 endif
@@ -570,6 +629,86 @@ endif
 # is silently wiped, because $(KNOBS) is a `:=` further down the file.
 ifneq ($(THEMEDARK),)
 VIDDEF += -DTHEMEDARK=$(THEMEDARK)
+endif
+
+# TITLESNAP=1 rounds a window title's pen to the nearest 8px CELL instead of
+# to the exact centre (docs/TEXT-PLAN.md 6.1). It is a LOOK question - the
+# title moves by at most 4 pixels - so it is a knob to be looked at rather
+# than a change to be argued, and the default is the exact centring that
+# ships. What it buys is the hottest chrome path in the system reaching
+# SPEC.md 6.1's fast path: wm_draw_title redraws on EVERY window operation
+# and its pen is off-grid seven times in eight.
+ifneq ($(TITLESNAP),)
+VIDDEF += -DTITLESNAP
+endif
+
+# NOUNAL=1 sends an UNALIGNED font_run back to gfx_fill + font_str, which is
+# what it did before SPEC.md 6.1.11. The A/B: the same session through a kernel
+# that has no one-pass unaligned path, which is the only way to show that the
+# pixels 6.1.11 puts down are the pixels the pair put down.
+ifneq ($(NOUNAL),)
+VIDDEF += -DNOUNAL
+endif
+
+# BAND=1 puts a window's title bar on band.inc's COMPOSER (SPEC.md 11.101):
+# the whole bar drawn into a 1bpp band and blitted, so every pixel it covers
+# is written ONCE and the caption never flashes, which is docs/TEXT-PLAN.md
+# 1.1's whole point. The default build draws the bar with the fifteen
+# primitive calls it always did.
+#
+# IT WAS kern_big's DEFAULT FOR ONE CYCLE (SPEC.md 5.9.6) AND IS A KNOB
+# AGAIN, and nothing in that decision touches what was measured. The composed
+# bar is still the faster bar on both 1bpp adapters - 36.5 ms against 40.8 on
+# Hercules and 37.1 against 42.0 on CGA - and it still writes no pixel twice
+# where the fifteen calls write the caption's own rows four times
+# (PERFORMANCE.md Sets 88, 89, 91, 92, 93). What sends it back to a knob is
+# the byte price: 1,634 of them - .text +322, .bss +34, .cold +1,278 - on a
+# kernel that has to be efficient with size everywhere (CLAUDE.md's rung
+# rule). KERN_SIZE follows the sum, 121,344 -> 120,320, so the default build
+# hands 1,024 bytes of every machine's RAM back.
+#
+# So the A/B runs the other way round and is the same A/B: `make` against
+# `make BAND=1`, one kernel and one knob. This is now the only thing that
+# keeps the COMPOSED path assembling - the fifteen calls are what every
+# build has - and band.inc is not a museum piece either: SPEC.md 5.9.6 is
+# re-decidable in the direction it came from, and this is what measures it.
+ifneq ($(BAND),)
+VIDDEF += -DBAND
+endif
+
+# NOPLANE=1 takes SPEC.md 5.4.1.3's PLANAR ROW DECODER out of gfx_blit4, so
+# every run of a VGA blit goes to vga_blit_span the way it did before - which
+# is the right writer for flat art and the wrong one for a picture. A run
+# costs ~1,800 cycles on a 4.77MHz 8088 whatever it covers, so os8088.gif's
+# 50% dither is 18,978 of them and SEVEN SECONDS of canvas; the decoder is
+# priced per PIXEL instead and draws the same picture in 1.1.
+#
+# NOUNAL's shape, and here for the same two reasons: it is the A/B the number
+# above comes off, and it is the only thing keeping the run-only path
+# assembling - which still matters, because that path is what a 1bpp adapter,
+# a clipped blit, a block hanging off the screen edge and every FLAT row use.
+# kern_small does not have the decoder at all (KERN_SMALL_BUDGET), so there
+# the run-only path is not a knob, it is the build.
+# NOUIBLOCK=1 puts ui_task back on the SPIN it ran on before SPEC.md 8.1.2:
+# `.idle` becomes task_yield again instead of task_sleep(1). The A/B for the
+# whole idle design, and the only thing that keeps the spinning path
+# assembling.
+#
+# What the default buys, measured on a 5150 under MartyPC: an idle desktop
+# goes from 100% ui_task to 2.70% ui_task and 97.2% HALTED, and the loop from
+# 1,134.6 passes/s to 17.9. What it does NOT touch is the pointer - the mouse
+# ISR draws it itself (mou_apply -> cur_move), so the arrow is ISR-paced and
+# not pass-paced: 112 draws against 113 over the same sweep. Input latency
+# from the ISR finishing a packet to the next pass is 5.14 ms median against
+# the spinning kernel's 4.99, with a LOWER worst case (5.22 against 6.41).
+#
+# In $(VIDSTAMP) and $(KNOBS) below, like every other knob.
+ifneq ($(NOUIBLOCK),)
+VIDDEF += -DNOUIBLOCK
+endif
+
+ifneq ($(NOPLANE),)
+VIDDEF += -DNOPLANE
 endif
 
 ifneq ($(KERN_SMALL),)
@@ -761,6 +900,35 @@ ifneq ($(DIRTYRAM),)
 VIDDEF += -DDIRTYRAM
 endif
 
+# GFXAUDIT=1 counts every drawing primitive entered with the gfx lock FREE, and
+# remembers the call sites. SPEC.md 7 says every task-level drawing burst is
+# wrapped in gfx_lock/gfx_unlock AND that the mouse ISR draws the arrow exactly
+# when that lock is free - so an unlocked primitive is a primitive racing IRQ4
+# over the VGA's registers, vga_rect_setup's statics and the glass itself. It
+# is a DIAGNOSTIC and never ships; see kernel/vga12.inc's gfx_aud.
+#
+# Four words come out of it, through tools/os88sym.py --define GFXAUDIT:
+#   gfx_aud_tot   primitives entered with the lock free      <- THE GATE, 0
+#   gfx_aud_ra/cnt  each distinct call site and its count
+#   gfx_aud_mv    ISR cursor moves at all, the control
+#   gfx_aud_race  ...of which landed INSIDE one of them
+#   gfx_aud_bank  gfx_save calls with the ARROW STILL ON THE GLASS  <- 0
+#                 (SPEC.md 11.101.2: a save-under that banks the cursor keeps
+#                 it as somebody's window content for the session)
+#   cur_log/_i    a stop-when-full ring of cursor events - a tag, the refcount
+#                 and the drawn position at every show, hide, move, lock and
+#                 unlock. Re-arm it by writing 0 to cur_log_i one instruction
+#                 before the thing you are asking about; six lines of it named
+#                 the second half of FIELD-NOTES 34 in one run
+# tests/gfxlk.py is the registered session (SPEC.md 12.8.4, FIELD-NOTES 34).
+# The race row reads 0 under MartyPC and that is the harness: injected mouse
+# deltas arrive on frame boundaries. The EXPOSURE is what is measurable here.
+#
+# In $(VIDSTAMP) and $(KNOBS) below, like every other knob.
+ifneq ($(GFXAUDIT),)
+VIDDEF += -DGFXAUDIT
+endif
+
 # FSNOSTAMP=1 puts SPEC.md 62.9.10.4's defect back: drv_fs_call stops clearing
 # the dispatch stamp, so a redirector asking OSAPI_XMEM_COPY is fenced against
 # the block its own Mount claimed and every stage of the bounce is refused. It
@@ -903,8 +1071,14 @@ endif
 # SCROLLROW were in the stamp and not in this list, so the kernel duly rebuilt
 # for them and the banner said nothing about the kernel it had just built -
 # each of them changes the binary (see their ifneqs at the top of this file).
-# BOOTDIAG is the one asymmetry that is meant to be one: it feeds $(BOOTDEF)
-# alone, and the stamp deletes boot.bin/boot360.bin whatever it says.
+# BOOTDIAG feeds BOTH $(BOOTDEF) and $(VIDDEF) - the sector's checksum report
+# (SPEC.md 2.9.7) and stage 2's hex printer, which live in different binaries
+# since 2.9 moved the loader. It fed VIDDEF alone for a while and the sector's
+# half simply did not assemble. The stamp deletes boot.bin/boot360.bin - but only once BOOTDIAG is
+# IN the stamp, which for a long time it was not. The stamp deletes nothing
+# unless its own NAME changes, so `make BOOTDIAG=1` reused whatever boot.bin
+# was already there and the next plain `make` reused the diagnostic one. See
+# the note above $(VIDSTAMP) below.
 #
 # AND IT IS NOT ONLY THE BANNER ANY MORE. `all` runs `test-fast` when this list
 # is EMPTY, and the suite resolves every symbol through tools/os88sym.py, which
@@ -915,14 +1089,54 @@ endif
 # second build CLAUDE.md asks for after every change, and it exited 1.
 KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
                              KFZ DIRW1 INSTRO KEEPH STRAD DIRTYRAM HEAPCOMPACT HEAPPARK HEAPPARKLK FDDPROBE FDDABSENT REDRAWFULL NOSPLIT NOSUOCCL SNDSNIFF RAMKB DRAGCACHE \
-                             SNAPAUDIT SCROLLROW QUANTUM \
+                             SNAPAUDIT SCROLLROW QUANTUM GFXAUDIT \
                              CURFIX \
                              FONT INSTCHUNK PICOMEM PM_BASE PM_SB_PORT ANIMOFF DISINK0 \
                              BOOTPROF BOOTMARK BOOTHALT BOOTSTOP NOPS2 MOUIDSLOW TRACKRUN SBDRAGOFF SBRATE \
                              ETHPROF FTPDSLOW FTPDBG \
-                             KERN_SMALL FSNOSTAMP THEMEDARK,\
+                             KERN_SMALL FSNOSTAMP THEMEDARK TITLESNAP NOUNAL BAND NOPLANE NOUIBLOCK VGADIRTY,\
                              $(if $($(k)),$(k)=$($(k)))))
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(STRAD),-st$(STRAD))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(QUANTUM),-q$(QUANTUM))$(if $(DIRTYRAM),-dr$(DIRTYRAM))$(if $(FSNOSTAMP),-fn$(FSNOSTAMP))$(if $(ANIMOFF),-ao$(ANIMOFF))$(if $(THEMEDARK),-td$(THEMEDARK))$(if $(DISINK0),-di$(DISINK0))$(if $(BOOTPROF),-bp$(BOOTPROF))$(if $(BOOTMARK),-bm$(BOOTMARK))$(if $(BOOTHALT),-bh$(BOOTHALT))$(if $(BOOTSTOP),-bs$(BOOTSTOP))$(if $(NOPS2),-np$(NOPS2))$(if $(MOUIDSLOW),-mis$(MOUIDSLOW))$(if $(TRACKRUN),-tr$(TRACKRUN))$(if $(SBDRAGOFF),-sbo$(SBDRAGOFF))$(if $(SBRATE),-sbr$(SBRATE))
+# **A KNOB KERNEL IS NOT THE SHIPPED KERNEL, so KERN_BUDGET does not bind it**
+# (kernel.asm guard 1). It is built to answer a question about a machine and
+# nobody boots it, so the RAM it takes is a fact about that session; what still
+# binds it is guard 2, the 64KB segment, which nobody can raise. KERN_SMALL is
+# filtered out because it is not a diagnostic - it is the SHIPPED small-machine
+# kernel, with a budget of its own that it stays inside.
+#
+# It is derived from $(KNOBS) rather than listed, which is the whole point: the
+# five %ifdefs this replaced were added one at a time, each after a diagnostic
+# that would not assemble. tools/os88sym.py derives the same thing, so a tool
+# re-assembling a knob kernel for its symbol map gets the same answer.
+ifneq ($(filter-out KERN_SMALL=%,$(KNOBS)),)
+VIDDEF += -DKERN_KNOB
+endif
+
+# EVERY KNOB IN $(KNOBS) IS IN THIS STAMP TOO, and the seven that were not are
+# what this note is for: BOOTDIAG, PICOMEM, PM_BASE, PM_SB_PORT, ETHPROF,
+# FTPDSLOW and FTPDBG. Six of them own a stamp of their own further down
+# ($(SNDSTAMP), $(ETHSTAMP), $(FTPDSTAMP)), so the .bin each one shapes did
+# rebuild - what did NOT was the KERNEL, and the kernel is not neutral about
+# them: any knob but KERN_SMALL puts -DKERN_KNOB on its command line, which
+# SKIPS GUARD 1, the KERN_BUDGET footprint check (kernel.asm). Outside the
+# stamp that exemption is sticky. `make netbench` recurses with ETHPROF=1 onto
+# netbench-img, which deliberately builds $(IMG)/$(IMG720)/$(IMG360) - the
+# SHIPPED system-disk names, in the default build/ - so it left a
+# budget-exempt kernel under the shipped names and the next plain `make` said
+# "up to date" and shipped it. A kernel over budget could reach a floppy with
+# nothing having failed. BOOTDIAG is worse than sticky: it is the boot SECTOR,
+# a different 512 bytes, and it was neither built when asked for nor rebuilt
+# when not.
+#
+# The tags are short and must not collide with each other: -bd -pm -pmb -pms
+# -ep -fs -fd are the seven, checked against every tag already on the line;
+# -nub is NOUIBLOCK's and -vd is VGADIRTY's, both checked the same way.
+#
+# A KNOB IN $(KNOBS) AND NOT IN THIS STRING IS SILENT AND WORSE THAN USELESS:
+# `make VGADIRTY=1 build/os8088.img` answered "up to date" and the test that
+# asked for it read a PLAIN kernel, so its assertion was about a build nobody
+# had made. Both halves, every time - the list above so the knob announces
+# itself, this string so the kernel is rebuilt when it changes.
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(STRAD),-st$(STRAD))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(GFXAUDIT),-ga$(GFXAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(QUANTUM),-q$(QUANTUM))$(if $(DIRTYRAM),-dr$(DIRTYRAM))$(if $(FSNOSTAMP),-fn$(FSNOSTAMP))$(if $(ANIMOFF),-ao$(ANIMOFF))$(if $(THEMEDARK),-td$(THEMEDARK))$(if $(DISINK0),-di$(DISINK0))$(if $(BOOTPROF),-bp$(BOOTPROF))$(if $(BOOTMARK),-bm$(BOOTMARK))$(if $(BOOTHALT),-bh$(BOOTHALT))$(if $(BOOTSTOP),-bs$(BOOTSTOP))$(if $(NOPS2),-np$(NOPS2))$(if $(MOUIDSLOW),-mis$(MOUIDSLOW))$(if $(TRACKRUN),-tr$(TRACKRUN))$(if $(SBDRAGOFF),-sbo$(SBDRAGOFF))$(if $(SBRATE),-sbr$(SBRATE))$(if $(TITLESNAP),-ts$(TITLESNAP))$(if $(NOUNAL),-nu$(NOUNAL))$(if $(BAND),-bnd$(BAND))$(if $(NOPLANE),-npl$(NOPLANE))$(if $(NOUIBLOCK),-nub$(NOUIBLOCK))$(if $(VGADIRTY),-vd$(VGADIRTY))$(if $(BOOTDIAG),-bd$(BOOTDIAG))$(if $(PICOMEM),-pm$(PICOMEM))$(if $(PM_BASE),-pmb$(PM_BASE))$(if $(PM_SB_PORT),-pms$(PM_SB_PORT))$(if $(ETHPROF),-ep$(ETHPROF))$(if $(FTPDSLOW),-fs$(FTPDSLOW))$(if $(FTPDBG),-fd$(FTPDBG))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/kernel-full.bin \
@@ -996,12 +1210,18 @@ KERNEL_SRC := kernel/kernel.asm
 # that file leaves build/kernel.bin untouched and every image stale, which is
 # indistinguishable from a change that did nothing: kernsize.py re-assembles
 # and so reports the NEW sizes while the booted kernel is the old one.
-KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc
+# ...and boot/boot2.asm is one too, for exactly the reason above: SPEC.md 2.9's
+# stage 2 is %included into `.boot2` and lives outside kernel/, so without it
+# here editing the LOADER leaves build/kernel.bin untouched and every image
+# stale. Caught once already - a fix to the 286 head-cross gate assembled
+# perfectly, never reached the disk, and the only symptom was os88sym refusing
+# a map that described "a DIFFERENT kernel".
+KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
 
 .PHONY: small kernsplit all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
         xt-hercules xt-multimon 286 386sx 386 386-xms xt-sound xt-sound-1.44 \
         286-sound 386-sound 486 pentium \
-        bench field combo combo144 combo720 stackprobe trklog npbench clicktest marty \
+        bench field combo combo144 combo720 stackprobe trklog trkscrl npbench clicktest marty \
         comscan lptlink calcref \
         fonts fontsheets fontlist \
         stories zdisk ztest zh zhboot zcheck zgfx zpic zscreens xt-z 386-z \
@@ -1105,8 +1325,15 @@ test-soak: $(IMG) $(IMG720) $(IMG360) $(APPSIMG) $(APPSIMG720) $(APPSIMG360) \
 # text and writes nothing. It builds no artifact, so it is PHONY and every
 # `make` pays it; that is deliberate, because the drift it catches arrives in
 # commits that touch no source at all.
+#
+# docs/INDEX.md rides the same rule and for a stronger reason. It is GENERATED
+# from apps/os88api.inc, SPEC.md and this file, and it exists to be consulted
+# before designing something - so an index that has drifted is worse than no
+# index at all, because it is believed. `tools/os88index.py --check` fails the
+# build if a regeneration would change a byte; `tools/os88index.py` fixes it.
 checkdocs:
 	@python3 tools/checkdocs.py
+	@python3 tools/os88index.py --check
 
 $(BUILD):
 	@mkdir -p $(BUILD)
@@ -1165,7 +1392,13 @@ $(BUILD)/kernel.bin: $(BUILD)/kernel-full.bin tools/os88mod.py | $(BUILD)
 # What that cost, per section and in 512-byte rungs, against the baseline in
 # docs/KERNEL-MEMORY.md. A REPORT and never a gate: the guards inside
 # kernel.asm are what refuse an overrun, and this says how close you came and
-# how much of each rung's slack is left for the next feature. It costs one
+# how much of each rung has already been spent by changes that crossed
+# nothing. That last figure is the `accrued` line and it is deliberately the
+# bill rather than the headroom - "402 left" invites the next 402 bytes and
+# "508/512 spent" does not, and they are the same number (CLAUDE.md's rung
+# rule: a rung says WHEN the machine pays, never what a change cost).
+#
+# It costs one
 # extra assembly of the kernel, which is why it is not folded into the line
 # above: -w+error would turn its %warning into an error, and relaxing that
 # for every build would silence a %warning somebody meant as an alarm.
@@ -1205,7 +1438,7 @@ $(KMODS): $(BUILD)/kernel.bin ;
 $(BUILD)/boot.bin: boot/boot.asm $(BUILD)/kernel.bin Makefile | $(BUILD)
 	$(NASM) -f bin $(BOOTDEF) \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/kernel.bin) + 511 ) / 512 )) \
-		$(call KSIGDEF,$(BUILD)/kernel.bin) \
+		-DBOOT2_SECS=$(BOOT2_SECS) $(call KSIGDEF2,$(BUILD)/kernel.bin) $(call BLOBSUMDEF,$(BUILD)/kernel.bin) \
 		-o $@ boot/boot.asm
 	@test $(call FILESIZE,$@) -eq 512 || { echo "boot sector is not 512 bytes"; exit 1; }
 
@@ -1225,7 +1458,7 @@ $(BUILD)/boot.bin: boot/boot.asm $(BUILD)/kernel.bin Makefile | $(BUILD)
 $(BUILD)/boot360.bin: boot/boot.asm $(BUILD)/kernel.bin Makefile | $(BUILD)
 	$(NASM) -f bin -DSPT=9 -DHEADS=2 $(BOOTDEF) \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/kernel.bin) + 511 ) / 512 )) \
-		$(call KSIGDEF,$(BUILD)/kernel.bin) \
+		-DBOOT2_SECS=$(BOOT2_SECS) $(call KSIGDEF2,$(BUILD)/kernel.bin) $(call BLOBSUMDEF,$(BUILD)/kernel.bin) \
 		-o $@ boot/boot.asm
 	@test $(call FILESIZE,$@) -eq 512 || { echo "boot sector is not 512 bytes"; exit 1; }
 
@@ -1250,10 +1483,24 @@ $(BUILD)/rdiag.bin: tests/rdiag.asm | $(BUILD)
 	  open('$@','wb').write(o); \
 	  print('rdiag: %d sectors, every one of them named' % (len(o) // 512))"
 
-# ...and its boot sector, with the canary aimed at SECTOR 0 - which always loads
-# correctly - so it can never fire and hide the very corruption being mapped.
+# ...and its boot sector. THE CANARY IS NOT AIMED ANYWHERE ANY MORE: SPEC.md
+# 2.9 moved it into stage 2, and a FLAT payload never enters stage 2 - the flat
+# arm jumps straight to KERNEL_SEG:0 - so -DKSIG_OFF=2 and its -DKSIG are inert
+# and kept only so the rule reads the same as the four below it. What the line
+# used to say (aimed at sector 0, which always loads correctly, so it can never
+# fire and hide the corruption being mapped) is still the intent and is now
+# free.
+#
+# -DFLAT_PAYLOAD, for the reason the four diagnostics below it carry it
+# (boot/boot.asm's own note on the define): rdiag.bin is a FLAT payload, not a
+# KERNEL.SYS with stage 2 on the front of it (SPEC.md 2.9). Without the define
+# the sector reads BOOT2_SECS sectors instead of KERNEL_SECTORS and enters what
+# it read as though it were the blob, so the 207 sectors rdiag exists to MAP
+# are never fetched: it draws 206 X's and reports `bad=00CE first=0001` on a
+# floppy that is perfect, which is the instrument for a machine that will not
+# boot answering the one question it has with a confident lie.
 $(BUILD)/rdboot360.bin: boot/boot.asm $(BUILD)/rdiag.bin Makefile | $(BUILD)
-	$(NASM) -f bin -w+error -DSPT=9 -DHEADS=2 $(BOOTDEF) \
+	$(NASM) -f bin -w+error -DSPT=9 -DHEADS=2 -DFLAT_PAYLOAD $(BOOTDEF) \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/rdiag.bin) + 511 ) / 512 )) \
 		-DKSIG_OFF=2 -DKSIG=$$(python3 -c "print(int.from_bytes(open('$(BUILD)/rdiag.bin','rb').read()[2:4],'little'))") \
 		-o $@ boot/boot.asm
@@ -1291,12 +1538,6 @@ $(BUILD)/rdiag360.img: $(BUILD)/rdboot360.bin $(BUILD)/rdiag.bin
 # ui_tm_open looks for (SPEC.md 28.3). Kernel machinery in a folder of its
 # own, so the root of a disk is the user's files - and the two disks agree,
 # because the chip menu cannot know which of them is in the drive.
-# DEBUG.DRV is NOT here and its absence is deliberate: SPEC.md 58's monitor
-# lost its drv_tab row to the RAM disk (the Drivers page fits exactly four),
-# so nothing in the kernel names it and shipping the file would put a driver
-# on every disk that no Control Panel row can load. Its source and its rules
-# below are kept, so `make build/debug.drv` still builds it.
-#
 # RECURSIVE (`=`, not `:=`), because the on-demand modules appended below are
 # per BUILD DIRECTORY (SPEC.md 2.8.2) and a rule that builds a kernel outside
 # $(BUILD) overrides KMODDIR for itself - which a simply-expanded DRIVERS
@@ -1578,8 +1819,45 @@ $(BUILD)/mbr.bin: boot/mbr.asm | $(BUILD)
 # the driver. NO -DKERNEL_SECTORS: unlike the floppy sectors, this one is
 # built long before it knows which kernel it will boot, so the count is a word
 # at a pinned offset that the installer patches when it writes the VBR.
-$(BUILD)/boothd.bin: boot/boothd.asm | $(BUILD)
-	$(NASM) -f bin -w+error -o $@ $<
+# THREE constants come out of the KERNEL's own build, and boothd.asm cannot
+# know one of them (SPEC.md 2.9.9): BOOT2_SECS is where `.text` starts in the
+# file, BLOB_SEG is the heap floor the blob is read to, and SPL_FSEG is the
+# word the sector publishes it in. Deferred into the recipe rather than taken
+# at parse time, the way KSIG is, because build/kernel.bin need not exist yet.
+#
+# BOTH OF THEM FOLLOW THIS BUILD'S KNOBS, and neither did. kernsize.py has a
+# --build for exactly this ("a sub-make with BUILD= set needs this") and
+# os88sym reads $OS88_DEFINES for the knobs and $OS88_BUILD for the directory,
+# which is the mechanism its own comment describes - "a tool that never asked
+# for a knob still finds the right map". Without either, `make field` - whose $(FIELDDRV) rebuilds the drivers,
+# and so this sector, under $(FIELDKNOBS) - asked a PLAIN map about a
+# DISK_COUNTERS kernel, os88sym refused as it should, and both -D options then
+# simply VANISHED from the nasm line. What that printed was
+# `boot/boothd.asm:228: symbol BLOB_SEG not defined`, which points at the
+# sector rather than at the two constants, and it took every field disk down
+# with it - cqdiag.img included, the diagnostic floppy for a machine that will
+# not start.
+BOOTHD_DEFS = import sys, subprocess, json; sys.path.insert(0, 'tools'); \
+              import os88sym; \
+              k = json.loads(subprocess.check_output(['python3','tools/kernsize.py','--json','--build','$(BUILD)'])); \
+              print('-DBLOB_SEG=%d -DSPL_FSEG=%d' % (k['kseg'] + k['ksize'] // 16, os88sym.syms()['spl_fseg']))
+
+# BLOB_SEG follows the SHIPPED kernel's ladder. A kern_small installed to a
+# hard disk would have a lower heap floor, so the blob would land a little
+# above it - a gap rather than an overlap, because mem_init raises [mem_base]
+# over wherever [spl_fseg] says the blob is. Nothing in `all` builds that
+# combination.
+#
+# THE EXTRACTION IS ITS OWN STEP, and that is the other half of the same bug.
+# `$$(python3 ...)` inside the nasm line throws the interpreter's exit status
+# away, so a refusal reached nasm as an EMPTY STRING and the failure was
+# reported by the assembler, about a symbol, several lines further on. Run it
+# first and let it fail here, where its traceback is the error.
+$(BUILD)/boothd.bin: boot/boothd.asm kernel/kernel.asm $(BUILD)/kernel.bin | $(BUILD)
+	@D=$$(OS88_DEFINES="$(subst -D,,$(VIDDEF))" OS88_BUILD="$(BUILD)" \
+	     python3 -c "$(BOOTHD_DEFS)") && \
+	 echo "$(NASM) -f bin -w+error -DBOOT2_SECS=$(BOOT2_SECS) $$D -o $@ $<" && \
+	 $(NASM) -f bin -w+error -DBOOT2_SECS=$(BOOT2_SECS) $$D -o $@ $<
 	@echo "boothd: $(call FILESIZE,$@) bytes"
 
 # HDDTOOL.DRV - the hard-disk driver's OTHER half (SPEC.md 52.11): the
@@ -1621,20 +1899,6 @@ $(BUILD)/hdd.bin: drivers/hdd/hdd.asm apps/os88ui.inc drivers/hdd/hddabi.inc dri
 $(BUILD)/hdd.drv: $(BUILD)/hdd.bin tools/os88drv.py
 	python3 tools/os88drv.py $(BUILD)/hdd.bin -o $@
 
-# DEBUG.DRV (SPEC.md 58) - the serial monitor. It SHIPS, and it costs a
-# machine that never asks for it one drv_tab row and a file on the floppy:
-# DRVR_WANT is 0 like every other row (SPEC.md 51.3), so nothing probes 2E8
-# and nothing hooks IRQ3 until the Drivers page is ticked. That is the whole
-# reason it is a driver rather than a SERDBG= kernel - a knob kernel is a
-# different binary, and the machine you debugged is then not the machine that
-# ships.
-$(BUILD)/debug.bin: drivers/debug/debug.asm drivers/os88drv.inc apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I drivers/debug/ -I drivers/ -I apps/ -o $@ $<
-	@echo "debug:  $(call FILESIZE,$@) bytes"
-
-$(BUILD)/debug.drv: $(BUILD)/debug.bin tools/os88drv.py
-	python3 tools/os88drv.py $(BUILD)/debug.bin -o $@
-
 # NET.DRV - a LapLink parallel cable as a block volume (docs/NET-PLAN.md stage
 # 1). Its transport is drivers/net/lplink.inc, which tests/lptlink includes
 # too, so the thing PERFORMANCE.md Part 9 Set 39 measured is the thing that
@@ -1675,8 +1939,9 @@ $(BUILD)/net.drv: $(BUILD)/net.bin tools/os88drv.py
 # and the FILE REDIRECTOR'S HARNESS: every branch site the redirector added to
 # the kernel runs on a cycle-accurate 8088 in a container, which is the one
 # thing block mode never had (docs/NET-PLAN.md 2.2.1). It ships because that is
-# DEBUG.DRV's argument - a knob kernel is a different binary, so what you
-# tested is not what ships - and it costs a machine that never ticks it one
+# the serial monitor's argument (SPEC.md 58) - a knob kernel is a different
+# binary, so what you tested is not what ships - and it costs a machine that
+# never ticks it one
 # drv_tab row and a file on the floppy.
 # RAMSEED=1 fills the RAM disk with the folders and files the redirector's
 # branch sites were built against - two levels of directory, three text files
@@ -2221,6 +2486,48 @@ $(BUILD)/PONG.WAB: $(WEAVEDEMOS)/pong.wml $(WEAVEDEMOS)/pong.wjs \
 $(SBSTAMP): | $(BUILD)
 	@rm -f $(BUILD)/.sbpkg*
 	@touch $@
+# Sheet (spreadsheet roadmap stage 1.0): a 64x64 numeric grid, no formulas,
+# no formatting, SYLK only.
+# EVERY .inc A PACKAGE INCLUDES BELONGS IN ITS RULE, and this one is the reason
+# the rule says so out loud: sheet.bin listed only sheet.asm and os88api.inc, so
+# an edit to os88chart.inc rebuilt CHART.O88 and left SHEET.O88 stale - which
+# presents as a fix that did not work, on a binary that never contained it.
+# Four other rules had the same hole and were fixed with this one.
+$(BUILD)/sheet.bin: apps/sheet/sheet.asm apps/os88api.inc \
+                    apps/os88ui.inc apps/os88line.inc apps/os88text.inc \
+                    apps/os88chart.inc apps/os88fp.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/sheet/sheet.asm
+	@echo "sheet:  $(call FILESIZE,$@) bytes"
+
+
+$(BUILD)/sheet.o88: $(BUILD)/sheet.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/sheet.bin -o $@
+
+# FPTEST: the self-test for apps/os88fp.inc, the software IEEE-754 double.
+# Deliberately NOT on any disk - it is a developer tool, and the 360KB apps
+# disk has no room to spare. Built here so it cannot rot: a change to
+# os88fp.inc that breaks the test app breaks the build. Run it by hand with
+#   python3 tools/os88disk.py -o build/fptest.img --size 1440 build/fptest.o88
+#   make test TESTAPPS=build/fptest.img
+# and read the window: every row is one case against a host-computed IEEE-754
+# expectation, and the header says ALL PASS or FAILURES.
+$(BUILD)/fptest.bin: apps/fptest/fptest.asm apps/fptest/fpcases.inc apps/os88fp.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/fptest/ -o $@ apps/fptest/fptest.asm
+	@echo "fptest: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/fptest.o88: $(BUILD)/fptest.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/fptest.bin -o $@
+
+# Chart: a standalone SYLK/DIF/BIFF bar-chart viewer, sharing its
+# rasterizer/BMP-writer with Sheet's own live chart window (os88chart.inc).
+$(BUILD)/chart.bin: apps/chart/chart.asm apps/os88api.inc apps/os88chart.inc \
+                    apps/os88fp.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/chart/chart.asm
+	@echo "chart:  $(call FILESIZE,$@) bytes"
+
+
+$(BUILD)/chart.o88: $(BUILD)/chart.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/chart.bin -o $@
 
 # Note Pad, formerly the built-in KIND_NOTE app (SPEC.md 27).
 $(BUILD)/notepad.bin: apps/notepad/notepad.asm apps/os88api.inc apps/os88ui.inc \
@@ -2249,7 +2556,7 @@ $(BUILD)/calc.o88: $(BUILD)/calc.bin tools/os88pkg.py
 # implementation and tests/htm/ is what both are checked against.
 $(BUILD)/browser.bin: apps/browser/browser.asm apps/browser/brnet.inc \
                       apps/os88api.inc \
-                      apps/os88ui.inc apps/os88line.inc \
+                      apps/os88ui.inc apps/os88line.inc apps/os88sock.inc \
                       drivers/net/netpkg.inc $(SBSTAMP) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/browser/ -I drivers/net/ \
 	        $(PKGSBDEF) -o $@ apps/browser/browser.asm
@@ -2260,7 +2567,7 @@ $(BUILD)/browser.bin: apps/browser/browser.asm apps/browser/brnet.inc \
 # the two cannot drift (SPEC.md 20.11) - the same reason tests/socktest has it.
 $(BUILD)/telnet.bin: apps/telnet/telnet.asm apps/telnet/tetxt.inc \
                      apps/os88api.inc \
-                     apps/os88ui.inc apps/os88line.inc \
+                     apps/os88ui.inc apps/os88line.inc apps/os88sock.inc \
                      drivers/net/netpkg.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/telnet/ -I drivers/net/ -o $@ apps/telnet/telnet.asm
 	@echo "telnet: $(call FILESIZE,$@) bytes"
@@ -2297,7 +2604,7 @@ $(FTPDSTAMP): | $(BUILD)
 	touch $@
 
 $(BUILD)/ftpd.bin: apps/ftpd/ftpd.asm apps/os88api.inc apps/os88ui.inc \
-                   apps/os88line.inc apps/os88sock.inc \
+                   apps/os88line.inc apps/os88sock.inc apps/os88pit.inc \
                    drivers/net/netpkg.inc $(FTPDSTAMP) | $(BUILD)
 	$(NASM) -f bin -w+error $(FTPDSLOWDEF) -I apps/ -I apps/ftpd/ -I drivers/net/ -o $@ apps/ftpd/ftpd.asm
 	@echo "ftpd:   $(call FILESIZE,$@) bytes"
@@ -2362,7 +2669,7 @@ $(BUILD)/piano.o88: $(BUILD)/piano.bin tools/os88pkg.py
 # It needs no card to be USEFUL -
 # DEMO stages a built-in sweep and PLAY falls back to speaker clips - so it
 # ships on every disk and greys REC on a machine with no Sound Blaster.
-$(BUILD)/recorder.bin: apps/recorder/recorder.asm apps/os88api.inc | $(BUILD)
+$(BUILD)/recorder.bin: apps/recorder/recorder.asm apps/os88api.inc apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/recorder/recorder.asm
 	@echo "recorder: $(call FILESIZE,$@) bytes"
 
@@ -3677,6 +3984,41 @@ $(BUILD)/trklog360.img: $(BUILD)/trklog.o88 apps/tracker/beverly.mod tools/os88d
 	python3 tools/os88disk.py -o $@ --size 360 \
 		$(BUILD)/trklog.o88 apps/tracker/beverly.mod
 
+# --- the scroll gate's disk (ON DEMAND: `make trkscrl`) ----------------------
+# TRKSCRL.O88 is apps/tracker built with -DTRKDBG, the trklog shape exactly:
+# four counters and two keys in tests/trkscrl.inc, one-line hooks in the app,
+# and the shipped TRACKER.O88 byte-identical without them.
+#
+#   make trkscrl && python3 tests/trkscrl.py
+#
+# It answers SPEC.md 45.12.2's two questions - are a scrolled n rows the same
+# pixels as a repaint of the same view, and does the full-repaint ratchet
+# stay shut. NEITHER IS A MEASUREMENT: tests/trkscrl.py's own header says the
+# assertion "is therefore not about time at all", and the bench build's jump
+# keys move the STOPPED view by +-2/3/4 in one frame, so the defect is
+# reproduced deterministically rather than waited for. It runs plain
+# `make test TESTAPPS=build/trkscrl.img` - no `-icount` anywhere - and QEMU is
+# the host because SPEC.md 45.9.1's graphics fullscreen needs a machine FASTER
+# than an 8088 to draw the grid at all, which is docs/TESTING.md's first
+# legitimate QEMU case. BEVERLY.MOD rides along because a scroll gate with
+# nothing playing has nothing to scroll.
+TRKSCRLSRC := apps/tracker/tracker.asm apps/tracker/trkplay.inc \
+              apps/tracker/trkui.inc apps/tracker/trktxt.inc tests/trkscrl.inc
+
+trkscrl: $(BUILD)/trkscrl.img
+
+$(BUILD)/trkscrl.bin: $(TRKSCRLSRC) apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -DTRKDBG -I apps/ -I apps/tracker/ -I tests/ \
+		-o $@ apps/tracker/tracker.asm
+	@echo "trkscrl: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/trkscrl.o88: $(BUILD)/trkscrl.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/trkscrl.bin -o $@
+
+$(BUILD)/trkscrl.img: $(BUILD)/trkscrl.o88 apps/tracker/beverly.mod tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		$(BUILD)/trkscrl.o88 apps/tracker/beverly.mod
+
 # --- the XT-rate capacity disks (ON DEMAND: `make trkrate`) ------------------
 # PERFORMANCE.md Sets 65/66: does XT mode's mixer HOLD a given sample rate on
 # the machine under it? Four disks, because the question needs four builds.
@@ -4235,8 +4577,9 @@ SMALLDIR := $(BUILD)/smallk
 # DISK. XMEM.DRV is dead weight on this kernel and only on this one: xmem.inc
 # is entirely inside %ifdef KERN_BIG and so is drv_load_at, its only loader,
 # and it has no drv_tab row that a Drivers page could tick - so nothing on a
-# kern_small disk can name it, read it or load it. Same reason DEBUG.DRV is not
-# in $(DRIVERS) at all.
+# kern_small disk can name it, read it or load it. The serial monitor was out
+# of $(DRIVERS) for the same reason before it was removed outright
+# (SPEC.md 58).
 #
 # RAMDISK.DRV and RAMPAGE.DRV go for the same reason one level up (SPEC.md
 # 62.9.15): a 128-256KB machine has nothing to spare for a store made of the
@@ -4538,13 +4881,13 @@ $(BUILD)/comscan.bin: tests/comscan/comscan.asm | $(BUILD)
 # Its own boot sectors, because the count of sectors to read is assembled in
 # and comscan is a great deal smaller than the kernel.
 $(BUILD)/csboot360.bin: boot/boot.asm $(BUILD)/comscan.bin Makefile | $(BUILD)
-	$(NASM) -f bin -DSPT=9 -DHEADS=2 $(BOOTDEF) \
+	$(NASM) -f bin -DSPT=9 -DHEADS=2 -DFLAT_PAYLOAD $(BOOTDEF) \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/comscan.bin) + 511 ) / 512 )) \
 		$(call KSIGDEF,$(BUILD)/comscan.bin) \
 		-o $@ boot/boot.asm
 
 $(BUILD)/csboot144.bin: boot/boot.asm $(BUILD)/comscan.bin Makefile | $(BUILD)
-	$(NASM) -f bin $(BOOTDEF) \
+	$(NASM) -f bin -DFLAT_PAYLOAD $(BOOTDEF) \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/comscan.bin) + 511 ) / 512 )) \
 		$(call KSIGDEF,$(BUILD)/comscan.bin) \
 		-o $@ boot/boot.asm
@@ -4593,13 +4936,13 @@ $(BUILD)/lptlink.bin: tests/lptlink/lptlink.asm drivers/net/lplink.inc | $(BUILD
 # Its own boot sectors, because the sector count is assembled in and lptlink
 # is a great deal smaller than the kernel.
 $(BUILD)/llboot360.bin: boot/boot.asm $(BUILD)/lptlink.bin Makefile | $(BUILD)
-	$(NASM) -f bin -DSPT=9 -DHEADS=2 $(BOOTDEF) \
+	$(NASM) -f bin -DSPT=9 -DHEADS=2 -DFLAT_PAYLOAD $(BOOTDEF) \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/lptlink.bin) + 511 ) / 512 )) \
 		$(call KSIGDEF,$(BUILD)/lptlink.bin) \
 		-o $@ boot/boot.asm
 
 $(BUILD)/llboot144.bin: boot/boot.asm $(BUILD)/lptlink.bin Makefile | $(BUILD)
-	$(NASM) -f bin $(BOOTDEF) \
+	$(NASM) -f bin -DFLAT_PAYLOAD $(BOOTDEF) \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/lptlink.bin) + 511 ) / 512 )) \
 		$(call KSIGDEF,$(BUILD)/lptlink.bin) \
 		-o $@ boot/boot.asm
@@ -4665,7 +5008,7 @@ $(DSSTAMP): | $(BUILD)
 	@touch $@
 
 $(BUILD)/dsboot.bin: boot/boot.asm $(BUILD)/dosstub.bin Makefile | $(BUILD)
-	$(NASM) -f bin -DSPT=9 -DHEADS=2 $(BOOTDEF) \
+	$(NASM) -f bin -DSPT=9 -DHEADS=2 -DFLAT_PAYLOAD $(BOOTDEF) \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/dosstub.bin) + 511 ) / 512 )) \
 		$(call KSIGDEF,$(BUILD)/dosstub.bin) \
 		-o $@ boot/boot.asm
@@ -4716,10 +5059,10 @@ $(BUILD)/lptlink144.img: $(BUILD)/llboot144.bin $(BUILD)/lptlink.bin \
 # also the only answer that survives a host OS writing to the disk. What is
 # left here is which packages ship and which folder each lands in.
 APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
-              $(BUILD)/fractal.o88 \
+              $(BUILD)/chart.o88 $(BUILD)/fractal.o88 \
               $(BUILD)/hello.o88 $(BUILD)/modplug.o88 $(BUILD)/notepad.o88 \
               $(BUILD)/paint.o88 $(BUILD)/piano.o88 $(BUILD)/recorder.o88 \
-              $(BUILD)/ftpd.o88 $(BUILD)/telnet.o88 \
+              $(BUILD)/ftpd.o88 $(BUILD)/sheet.o88 $(BUILD)/telnet.o88 \
               $(BUILD)/texpad.o88 $(BUILD)/tracker.o88
 APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/cyclone.o88 $(BUILD)/mines.o88 \
               $(BUILD)/missile.o88 $(BUILD)/solitair.o88 $(BUILD)/tamegram.o88
@@ -5150,8 +5493,13 @@ burn:
 # they have 713 and 2,847 clusters, the reason for the cut does not exist
 # there, and COMBO144ARGS below is therefore built from the FULL lists rather
 # than from COMBOARGS as it used to be.
+#
+# SHEET and CHART went with the spreadsheet: 57 clusters between them, sheet
+# is the largest package on the disk, and neither is a field-calibration
+# tool - Calc stays for the arithmetic a field run needs.
 COMBO_DROP := $(BUILD)/artful.o88 $(BUILD)/modplug.o88 $(BUILD)/texpad.o88 \
-              $(BUILD)/tracker.o88 $(BUILD)/recorder.o88
+              $(BUILD)/tracker.o88 $(BUILD)/recorder.o88 \
+              $(BUILD)/sheet.o88 $(BUILD)/chart.o88
 COMBO_TOOLS := $(filter-out $(COMBO_DROP),$(APPS_TOOLS))
 COMBO_GAMES := $(filter-out $(COMBO_DROP),$(APPS_GAMES))
 
@@ -5400,27 +5748,6 @@ ifeq ($(NOCARD)$(ADLIB)$(SB16),)
 DEVCARD = -audiodev none,id=devsnd -device adlib,audiodev=devsnd
 endif
 
-# DBG=1 puts the serial monitor's UART in the machine (SPEC.md 58): a second
-# card at COM4 - 2E8, IRQ3, which is where 86Box and QEMU both put COM4 - with
-# a UNIX socket on the host end, so tools/os88dbg.py can drive it.
-#
-#   make test DBG=1
-#   python3 tools/os88dbg.py build/dbg.sock m 60 0 20
-#
-# 2E8 and NOT 2F8, because os8088 probes 3F8 and 2F8 and hooks the IRQ of
-# every UART that answers (SPEC.md 9.5) - the monitor would be fighting the
-# mouse for its own port. 3E8/2E8 are the two the kernel has never heard of.
-# The driver refuses to attach if a card DID answer at 2F8, because that is
-# the case where IRQ3 is already the kernel's; nothing here supplies one, and
-# MOUSEPORT=com2 deliberately does, which is the negative test.
-#
-# `server=on,wait=off` so the machine boots whether or not anybody is
-# listening, and the tool may attach and detach as often as it likes.
-ifneq ($(DBG),)
-DBGDEV = -chardev socket,id=dbg,path=$(BUILD)/dbg.sock,server=on,wait=off \
-         -device isa-serial,chardev=dbg,iobase=0x2e8,irq=3
-endif
-
 # TESTAPPS swaps the B: disk for a scratch image - the filetest/fmtest/sbtest
 # gates and the bench disk. It MUST be defined above the first target that
 # names it: prerequisites are expanded when the rule is READ, so a definition
@@ -5504,7 +5831,7 @@ test: $(TESTIMG) $(TESTAPPS) $(HDDIMG)
 	$(QEMU) -drive file=$(TESTIMG),format=raw,if=floppy -boot a $(MOUSE) \
 		-drive file=$(TESTAPPS),format=raw,if=floppy,index=1 $(HDDDEV) \
 		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid \
-		$(CARDAUDIO) $(ADLIBDEV) $(SBDEV) $(DEVCARD) $(DBGDEV) $(ETHERDEV)
+		$(CARDAUDIO) $(ADLIBDEV) $(SBDEV) $(DEVCARD) $(ETHERDEV)
 
 # `make test` plus audio capture (SPEC.md 34): the PC speaker renders into
 # build/snd.wav, finalized when QMP `quit` stops QEMU. Verify with
@@ -5804,9 +6131,10 @@ xt-runcpm: $(IMG360) $(BUILD)/runcpm360.img
 # The MARTYPC DEBUGGER (docs/MARTYPC-DEBUG.md): a remote debug server bolted
 # into MartyPC's headless frontend, giving memory, registers, breakpoints,
 # single-step and cycle counts on a running os8088 with NO code in the guest
-# at all. It is the other half of SPEC.md 58's DEBUG.DRV and not a replacement
-# for it - this one costs the guest nothing and answers on a frozen machine,
-# that one is the only one that works on real iron.
+# at all. It was one half of a pair - SPEC.md 58's serial monitor was the
+# other, and worked on real iron, which this cannot. That driver is gone, so
+# on an emulator this is the instrument and on IRON the floor is SPEC.md 57's
+# registry read out of a photograph (tools/kfzread.py).
 #
 # Pinned to one upstream commit on purpose (tools/martypc/UPSTREAM): a debugger
 # that changes under you is one more variable in a session whose whole point is
@@ -5825,6 +6153,10 @@ marty: $(IMG360)
 	@echo "                 a Hercules, docs/DUAL-DISPLAY-PLAN.md) and _herc_gla"
 	@echo "                 is the single-card Hercules without the IBM ROM."
 	@echo "                 python3 tests/dualcheck.py is the two-card gate"
+	@echo "       os8088_xt_vga_mda is the two-card XT with a VGA IN IT - the"
+	@echo "                 only machine here where an extended desktop has a"
+	@echo "                 COLOUR display, so it is the only one that can ask"
+	@echo "                 what SPEC.md 5.4.3 does at a seam (tests/dispblitp)"
 	@echo "       _herc_gla_144 has 1.44MB DRIVES, for make combo144 - the one"
 	@echo "                 machine here that can read an 18-spt disk. An"
 	@echo "                 anachronism on purpose: no stock XT reads 1.44MB"

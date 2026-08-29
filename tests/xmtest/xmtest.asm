@@ -135,14 +135,16 @@ xt_paint:
     mov dx, [xt_cy]
     add dx, 8
     mov si, xt_s_held
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
 
     mov cx, [xt_cx]
     add cx, 8 + 17*8
     mov dx, [xt_cy]
     add dx, 8
     mov si, xt_s_n
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
 
     mov cx, [xt_cx]
     add cx, 8
@@ -153,7 +155,8 @@ xt_paint:
     jne .say
     mov si, xt_s_nostore
 .say:
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
 
     pop di
     pop si

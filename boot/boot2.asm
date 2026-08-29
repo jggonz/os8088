@@ -1,0 +1,532 @@
+; =============================================================================
+; boot/boot2.asm - STAGE 2, THE LOADER (SPEC.md 2.9)
+;
+; The 512-byte sector relocates itself, finds the data area and reads the
+; first BOOT2_SECS sectors of KERNEL.SYS to a scratch segment. Those sectors
+; are this file. Everything the sector could not afford is here: the int 1Eh
+; parameter table (SPEC.md 18.92/18.93), read_run's four bounds, the 286
+; head-cross gate (18.93.2), 18.93.1's canary and its shorten-and-reload.
+;
+; It is assembled INTO THE KERNEL, which buys it the kernel's own constants -
+; the image's sector count falls out of MODC_START rather than being measured
+; and injected - and costs it the one thing the sector had for free: A KERNEL
+; IS ONE BINARY FOR THREE GEOMETRIES. So SPT and HEADS are RUNTIME values
+; here, handed over by stage 1 out of the volume's own BPB, where the sector
+; had them as immediates and could shift instead of divide.
+;
+; ENTRY, at offset 0 of `.boot2`:
+;   CS = wherever stage 1 put us, IP = 0, SS:SP = stage 1's stack. The first
+;   thing it does is COPY ITSELF TO HEAP_SEG and jump there (SPEC.md 2.9.5),
+;   so everything below runs at the bottom of the claim heap and the top of
+;   conventional RAM is free from the first claim onward.
+;   DL = boot drive     DH = heads          CX = sectors per track
+;   SI = the data area's LBA (KERNEL.SYS's first sector)
+;   BP = the BIOS tick stage 1 read before it loaded anything (SPEC.md 15.4)
+;   DI = SPEC.md 18.93.1's KSIG, or 0 for "no canary on this image"
+;
+; DI IS WHY THE SIGNATURE IS A REGISTER AND NOT A CONSTANT. KSIG is read out
+; of the BUILT kernel, so a kernel that contained it would have to be
+; assembled twice to reach a fixed point. Stage 1 is built after the kernel
+; and already carries measured constants, so it carries this one too.
+; =============================================================================
+
+; --- BOOTSTOP=2 IS THE ONE WITHOUT THE SPLASH, and this is what says so ------
+; The knob moved down here with the loader (SPEC.md 2.9.4) and this derivation
+; did not come with it, so `2` compiled to exactly `1`: the splash still ran,
+; and the halt left a screen the splash owned rather than a text screen with a
+; mark on it. Both halves are the point of `2` - a fault INSIDE the splash
+; cannot be reached, and a machine that goes round instead of halting leaves
+; something legible behind.
+%ifdef BOOT_STOP
+ %if BOOT_STOP == 2
+  %define BOOT_NOSPLASH        ; BOOTSTOP=2: the load, with NO splash call at
+ %endif                        ; all - so a fault inside the splash cannot be
+%endif                         ; reached and read_run is on its own
+
+; --- what stage 2 needs of the world it is assembled into --------------------
+DPT_AT      equ 0x0580          ; 0000:0580 - our copy of the diskette
+                                ; parameter table. ABOVE the BIOS data area
+                                ; (which ends at 0x4FF), clear of every
+                                ; documented use of the 0x500 page and BELOW
+                                ; KERNEL_SEG, so nothing the kernel or its heap
+                                ; can claim reaches it and it needs no restore
+B2_STACK    equ 0x7C00          ; stage 1's STACK_TOP, which is still ours
+KSIG_OFF    equ 11776           ; SPEC.md 18.93.1's probe, as a MEMORY offset
+                                ; from KERNEL_SEG - the Makefile reads the same
+                                ; bytes out of the file at KSIG_OFF + BOOT2_PAD,
+                                ; which is FILE SECTOR 36 and has to be: the
+                                ; probe must land in a run's SECOND half, and
+                                ; tests/unit/t_canary.py re-derives that from
+                                ; every shipped image's BPB. This equ and the
+                                ; Makefile's KSIG_OFF are one number typed
+                                ; twice; that row checks they agree
+B2_KSECS    equ ((MODC_START + 511) / 512) - BOOT2_SECS  ; what is left to read
+
+boot2_entry:
+    ; --- DOWN TO THE HEAP'S FLOOR, FIRST (SPEC.md 2.9.5) --------------------
+    ; Stage 1 put us at the TOP of conventional RAM, below its own stack,
+    ; because that is the only address it can compute: HEAP_SEG falls out of
+    ; the kernel's section sizes and the sector has none of them. We are
+    ; assembled INTO the kernel, so we do - and the top of RAM is the one
+    ; place this blob must not still be sitting when the heap fills up.
+    ;
+    ; A transient at either END of the heap strands what it leaves behind:
+    ; every claim above the blob's eventual hole is one mem_compact cannot
+    ; pack past, so the freed bytes never rejoin the long run and the machine
+    ; ends the boot already fragmented. At the FLOOR they do rejoin it -
+    ; mem_init raises [mem_base] over us for the duration, kmain lowers it
+    ; again after spl_finish and compacts, and the arena closes up (SPEC.md
+    ; 50.6.3). That is the whole reason for this copy.
+    ;
+    ; HEAP_SEG IS ABOVE THE LOAD, ALWAYS: the image stops at MODC_START and
+    ; `.lowbss` + `.vgabuf` are nobits, so there are LOW_PARA + VGABUF_PARA
+    ; paragraphs of nothing between the last sector to land and us. And it is
+    ; below the top of RAM by stage 1's own .nomem refusal, which is stricter
+    ; than we need by 21KB - guard 5c at the foot of kernel.asm is that
+    ; argument as an assertion, so a kernel that grew past it fails to build
+    ; rather than overwriting itself on a small machine.
+    ;
+    ; CX, SI and DI are stage 1's handover and `rep movsw` wants all three,
+    ; so they go on stage 1's stack - which is where SS:SP still points and
+    ; is nowhere near either copy.
+    push cx
+    push si
+    push di
+    mov ax, cs
+    mov ds, ax
+    mov ax, HEAP_SEG
+    mov es, ax
+    xor si, si
+    xor di, di
+    mov cx, BOOT2_PAD / 2
+    cld
+    rep movsw
+    push es                     ; a computed far jump, stage 1's exactly: the
+    mov ax, .moved              ; 8086 has no `jmp reg:off` and HEAP_SEG is a
+    push ax                     ; constant only to the ASSEMBLER, not to a
+    retf                        ; `jmp imm16:imm16` this section could encode
+.moved:
+    pop di
+    pop si
+    pop cx
+
+    mov ax, cs                  ; our data is our own; the stack stays stage 1's
+    mov ds, ax
+    mov [b2_drive], dl
+    mov [b2_heads], dh
+    mov [b2_spt], cx
+    mov [b2_lba0], si
+    mov [b2_ksig], di
+    mov [b2_t0], bp
+
+    ; --- the text screen stage 1 used to set (SPEC.md 2.9.8) ----------------
+    ; It was in the sector, and the sector spent its last bytes on SPEC.md
+    ; 18.92's parameter table instead - which has to be patched before the
+    ; first multi-sector read and is therefore stage 1's now. What moving it
+    ; costs is that POST's own screen stays up for the blob's read rather than
+    ; the kernel's first nine sectors: about 300 ms more, on a boot that is
+    ; nine seconds, before anything of ours is on the glass either way.
+    ;
+    ; **AFTER THE HANDOVER IS STASHED, NOT BEFORE IT.** `int 10h AH=01h` sets
+    ; the cursor shape from CX, so setting it up costs a `mov cx, 0x2000` -
+    ; and CX is stage 1's SECTORS PER TRACK. Putting this block where it sat
+    ; in the sector, at the top of this routine, made every geometry divide
+    ; below use 0x2000 sectors a track. The boot got as far as a splash that
+    ; never finished, which is what a load reading the wrong sectors looks
+    ; like from outside.
+    int 0x11                    ; clean, cursorless text screen while the
+    and al, 0x30                ; sectors land; the loading screen takes over
+    cmp al, 0x30                ; in graphics the moment it is resident. A
+    mov ax, 0x0003              ; monochrome card has no mode 3 - equipment
+    jne .tmode                  ; word bits 5:4 = 11b means mode 7 instead.
+    mov al, 0x07
+.tmode:
+    int 0x10
+    mov ah, 0x01
+    mov cx, 0x2000
+    int 0x10
+
+    ; --- how far ONE int 13h may run (SPEC.md 18.91.1) ----------------------
+    ; The cylinder, not the track, which on a two-headed floppy doubles it.
+    ; It works because the BIOS issues READ DATA with the MULTI-TRACK bit set,
+    ; so at the sector numbered EOT the FDC flips head and carries on from
+    ; sector 1 of the same cylinder - and EOT is the byte the parameter table
+    ; below patches. TRACKRUN=1 puts the bound back at the track.
+    ;
+    ; **OUT OF [b2_spt] AND [b2_heads], NEVER OUT OF CX AND DH.** They are the
+    ; same numbers, and the registers holding them are three instructions from
+    ; a routine that eats one: the block above sets the cursor shape, `int 10h
+    ; AH=01h` takes it in CX, and this multiply read CX for one cycle of this
+    ; branch (SPEC.md 18.93.3). A run bound of 0x2000 sectors is not a bound -
+    ; read_run's second bound, the sectors still wanted, wins every time - so
+    ; the FIRST call of the boot asks for the rest of the kernel in one int
+    ; 13h, and what happens next is the BIOS's business rather than ours: this
+    ; emulator errors it and 18.93's shorten-and-reload quietly rescues the
+    ; boot, which is why it took a field report to find. The stash above is
+    ; three words away; use it.
+%ifdef TRACK_RUN
+    mov ax, [b2_spt]
+%else
+    mov al, [b2_heads]
+    xor ah, ah
+    mul word [b2_spt]
+%endif
+    mov [b2_run], ax
+    mov ax, [b2_spt]            ; ...and the LIVE bound starts at the TRACK,
+    mov [b2_runmax], ax         ; which the gate below widens on an 8088. That
+                                ; direction is not arbitrary and reversing it
+                                ; is silent: a 286 left on the cylinder bound
+                                ; still boots, and an 8088 left on the track
+                                ; bound still boots - it just takes twice the
+                                ; calls and the canary then compares equal and
+                                ; never runs, so boot_cylrun stays 0 and
+                                ; dsk_xfer spends the rest of the session
+                                ; being careful for nothing
+
+    ; --- take over the diskette parameter table (SPEC.md 18.92/18.93) -------
+    ; int 1Eh is a POINTER, not a handler: it names an 11-byte table the BIOS
+    ; re-reads on every floppy operation, and byte 4 of it is EOT - the last
+    ; sector number the FDC may touch on a track. The IBM PC and XT ROMs say
+    ; 8, from the 8-sector diskettes of DOS 1.x, and the BIOS issues READ with
+    ; the multi-track bit set, so a run reaching sector 9 does not stop - it
+    ; flips to the other head and returns ITS sectors, with CF=0 and the full
+    ; count. Every DOS since 1982 has replaced this table at boot.
+    ;
+    ; The machine's own table is COPIED and one byte patched: the step rate,
+    ; head load/unload, motor timings and gap lengths in it belong to these
+    ; drives and are not ours to guess.
+    ;
+    ; No guard on the vector, deliberately: the BIOS read the BOOT SECTOR
+    ; through it, so a machine that could not use it never got here.
+    push ds
+    push es
+    xor ax, ax
+    mov es, ax
+    mov di, DPT_AT
+    lds si, [es:0x0078]         ; DS:SI = the BIOS's table
+    mov cx, 11
+    cld
+    rep movsb                   ; ...ES:DI = ours
+    xor ax, ax
+    mov ds, ax
+    mov word [0x0078], DPT_AT
+    mov [0x007A], ax
+    pop es
+    pop ds
+    push es
+    xor ax, ax
+    mov es, ax
+    mov al, [b2_spt]
+    mov [es:DPT_AT + 4], al     ; EOT = this disk's sectors per track
+    pop es
+
+%ifndef TRACK_RUN
+    ; --- may this machine's FDC cross a head? (SPEC.md 18.93.2) -------------
+    ; `push sp` is the entire test: the 8086 and 8088 push SP as it is AFTER
+    ; the decrement, every later part pushes it as it was before.
+    ;
+    ; It is a bet about a POPULATION, not a fact about this machine - which is
+    ; why the canary below still runs and can still lower the bound. What the
+    ; gate buys is that a 286 never PAYS for the discovery: it takes the track
+    ; bound from the start instead of loading the whole kernel wrong and then
+    ; loading it again.
+    push sp
+    pop ax
+    cmp ax, sp
+    je .trkbound                ; 286 and up: leave it at the TRACK
+    mov ax, [b2_run]            ; 8086/8088: the CYLINDER, which is what the
+    mov [b2_runmax], ax         ; canary below then has something to verify
+.trkbound:
+%endif
+
+; -----------------------------------------------------------------------------
+; The load. Both ways in - here, and the canary's shorten-and-reload below -
+; re-establish the destination and the LBA, so neither carries a copy.
+; -----------------------------------------------------------------------------
+.reload:
+    mov word [b2_dest], KERNEL_SEG
+    mov ax, [b2_lba0]
+    add ax, BOOT2_SECS          ; ...past ourselves: `.text` begins at the file
+    mov [b2_lba], ax            ; sector after this one (SPEC.md 2.9)
+    mov word [b2_left], B2_KSECS
+
+.load_next:
+    mov es, [b2_dest]
+    call read_run               ; AX = sectors it moved; BX is its own business
+    add [b2_lba], ax
+    sub [b2_left], ax
+    pushf                       ; the loop test, banked past the splash call
+    mov cl, 5
+    shl ax, cl                  ; 0x20 paragraphs a sector...
+    add [b2_dest], ax           ; ...so the destination follows the run
+
+%ifndef BOOT_NOSPLASH
+    mov dx, B2_KSECS            ; tick the splash once it is fully resident:
+    mov ax, dx                  ; AX = sectors done, DX = total (SPEC.md 15).
+    sub ax, [b2_left]           ; DERIVED from what is left rather than counted
+    cmp ax, SPL_RESIDENT        ; alongside it - and a load asked for a SECOND
+    jb .no_tick                 ; time re-arms the bar with [b2_left] and
+    call spl_tick               ; climbs from 0 again (SPEC.md 18.93.1).
+                                ; NEAR: the loading screen is in this section
+                                ; (SPEC.md 2.9.4), so the pinned 0060:0008 far
+                                ; entry it used to answer at is gone. What the
+                                ; gate still measures is `.text`: the first
+                                ; tick probes the adapter, and those routines
+                                ; are the KERNEL's
+%endif
+.no_tick:
+    popf                        ; ...and the flags `sub [b2_left], ax` set
+    jne .load_next
+
+    ; --- hand off ------------------------------------------------------------
+    mov ax, KERNEL_SEG          ; the boot timer's t=0, into the fixed word the
+    mov es, ax                  ; kernel keeps for it (SPEC.md 15.4). AFTER the
+    mov bx, [b2_t0]             ; load, or the sectors landing here would
+    mov [es:0x000C], bx         ; overwrite it
+
+    mov ax, cs                  ; ...and WHERE WE ARE, so the kernel can reach
+    mov [es:spl_fseg], ax       ; the loading screen for the rest of the boot
+                                ; (SPEC.md 2.9.4). spl_step is on dsk_xfer's
+                                ; per-sector path and spl_finish is kmain's
+                                ; last word to it; both are far calls through
+                                ; this word now, and until it is written they
+                                ; refuse through COLD_SEG:mod_gone rather than
+                                ; jumping into whatever offset 0 happens to be
+
+%ifndef TRACK_RUN
+    ; --- THE CANARY (SPEC.md 18.93.1) ---------------------------------------
+    ; int 13h answered CF=0 and the full count for every run above. That is
+    ; NOT the same as the right BYTES: a run bounded by the CYLINDER only
+    ; lands in LBA order because the FDC's multi-track bit carries it onto the
+    ; other head at EOT, and EOT is the byte we patched into the parameter
+    ; table. A BIOS that keeps its own table ignores that patch, flips at 8
+    ; instead of 9, and returns the other head's sectors - silently.
+    ;
+    ; So verify the TRANSFER, never the table: reading our own patch back
+    ; proves only that our own write to our own RAM worked, which it always
+    ; does. Failing it costs a whole second load, and that is the right price:
+    ; a boot that is 2.2s slower beats a kernel that is quietly wrong.
+    cmp word [b2_ksig], 0
+    je .nocross                 ; no signature for this image: nothing to check
+    mov ax, [b2_runmax]
+    cmp ax, [b2_spt]
+    je .nocross                 ; already track-bounded: no run crossed a head
+    mov bx, [b2_ksig]
+    cmp [es:KSIG_OFF], bx
+    jne .rerun
+    mov [es:0x0004], ax         ; ...and tell the kernel what we learned, so
+                                ; dsk_xfer needs no probe of its own. Written
+                                ; ONLY here, on the one path that has seen a
+                                ; head crossed and come back right: every other
+                                ; way out leaves the image's own ZERO, which is
+                                ; what makes the kernel's test `!= 0`
+.nocross:
+%endif
+    mov dl, [b2_drive]          ; the kernel may want to know the boot drive
+%ifdef BOOT_STOP
+%ifdef BOOT_NOSPLASH
+    mov ax, 0x0E2A              ; '*' on the text screen the splash never took
+    mov bx, 7                   ; over, so a HALT is legible where a machine
+    int 0x10                    ; that went round leaves nothing behind
+%endif
+    cli                         ; STOP one instruction short of the handoff
+.stop:
+    hlt
+    jmp short .stop
+%endif
+    jmp KERNEL_SEG:0x0000
+
+%ifndef TRACK_RUN
+; --- shorten the run and load the whole kernel again (SPEC.md 18.93) --------
+; ONE block, TWO ways in, and they are the two ways a crossing run can be
+; wrong. The canary above catches a BIOS that flipped heads at the wrong
+; sector and answered CF=0 anyway; read_run's exhausted retry catches the
+; other kind - a controller that refuses a multi-track read outright and
+; ERRORS. Both want the same thing: the bound the FDC cannot get wrong, and a
+; second pass.
+;
+; ONE-SHOT by construction, because it can only be entered while [b2_runmax]
+; is still wider than a track - so a genuinely dead drive reaches read_run's
+; halt on the second pass instead of retrying for ever.
+;
+; SP is re-established rather than unwound: read_run reaches here with its own
+; return address still on the stack, and stage 1 left SP at its own STACK_TOP.
+.rerun:
+    mov ax, [b2_spt]
+    mov [b2_runmax], ax
+    mov sp, B2_STACK
+    jmp .reload
+%endif
+
+; -----------------------------------------------------------------------------
+; read_run - read as many sectors from [b2_lba] to ES:0000 as one int 13h may
+;            carry (SPEC.md 18.93). Retries three times, resetting the
+;            controller between attempts, because floppy reads fail spuriously
+;            often enough to matter.
+; in:  ES = destination segment, [b2_left] = sectors still wanted
+; out: AX = sectors actually transferred, 1..run
+; clobbers: ax, bx, cx, dx, si, di
+;
+; A run stops at the first of three bounds, and the third is the one that is
+; easy not to think of:
+;   1. [b2_runmax] - the end of the cylinder, or with TRACKRUN=1 the end of
+;      the track (SPEC.md 18.91.1). Either way EOT stays SPT.
+;   2. the sectors still wanted
+;   3. the 64KB DMA page - a single 512-aligned sector cannot cross one, a run
+;      can, and the controller answers a straddle with error 09h
+; -----------------------------------------------------------------------------
+read_run:
+    ; --- 1 and 2: the run bound, and what is left to read --------------------
+    mov di, [b2_left]           ; bound 2 first, so bound 1 only has to beat it
+    mov ax, [b2_lba]
+    xor dx, dx
+    mov bx, [b2_runmax]
+    div bx                      ; div spends AX and DX and leaves BX, so the
+    sub bx, dx                  ; distance to the end of the run costs one
+    cmp bx, di                  ; subtract and no reload
+    jae .page
+    mov di, bx
+
+    ; --- 3: the 64KB DMA page ----------------------------------------------
+.page:
+    mov ax, es
+    mov cl, 4
+    shl ax, cl                  ; the low 16 bits of the physical address
+    neg ax                      ; bytes to the page end (0 = a whole page)
+    jz .have
+    mov cl, 9
+    shr ax, cl
+    cmp ax, di
+    jae .have
+    mov di, ax                  ; ...and never zero: every destination here is
+                                ; 512-ALIGNED (ES starts at KERNEL_SEG and
+                                ; advances 32 paragraphs a sector), so the
+                                ; remainder is a multiple of 512 and the shift
+                                ; can only reach 0 from an AX the jz has taken
+.have:
+%ifdef FLOPPY_ONE
+    mov di, 1                   ; FLOPPY1=1: one sector a call, the transfer
+%endif                          ; as it was before any of this
+    mov [b2_runsz], di
+    mov si, 3                   ; attempts
+
+.attempt:
+    ; LBA -> CHS, rebuilt every attempt because a controller reset owes us
+    ; nothing.  sector = lba % spt + 1, head = (lba / spt) % heads,
+    ;                                cylinder = (lba / spt) / heads
+    ;
+    ; BOTH divides are general, where the sector had `%if HEADS == 2` and a
+    ; shift: one kernel serves every geometry (see the header), so the head
+    ; count is a variable and cannot be tested at assembly time.
+    mov ax, [b2_lba]
+    xor dx, dx
+    div word [b2_spt]
+    inc dx
+    mov cl, dl                  ; CL = sector (1-based)
+    xor dx, dx
+    mov bl, [b2_heads]
+    xor bh, bh
+    div bx
+    mov ch, al                  ; CH = cylinder (low 8 bits; never over 255)
+    mov dh, dl                  ; DH = head
+    xor bx, bx                  ; ES:BX - the offset is always zero
+    mov dl, [b2_drive]
+    mov ax, [b2_runsz]          ; AL = the run...
+    mov ah, 0x02                ; ...AH = 02 read
+    int 0x13
+    jnc .done
+
+%ifdef BOOT_DIAG
+    mov [b2_diag], ah           ; BOOTDIAG=1: the reset below destroys the
+%endif                          ; status, and the status IS the diagnosis
+    xor ah, ah                  ; reset and try again
+    mov dl, [b2_drive]
+    int 0x13
+    dec si
+    jnz .attempt
+
+%ifndef TRACK_RUN
+%ifndef FLOPPY_ONE
+    mov ax, [b2_runmax]         ; three attempts at a run that CROSSES a head,
+    cmp ax, [b2_spt]            ; then the whole load again at the track bound
+    jne boot2_entry.rerun       ; (SPEC.md 18.93). A controller that will not
+%endif                          ; do a multi-track read at all ERRORS rather
+%endif                          ; than lying, and the canary cannot see that -
+                                ; it only ever runs after a load in which every
+                                ; call answered CF=0
+%ifdef BOOT_DIAG
+    ; Two hex digits and nothing else: 0C is a media type the drive could not
+    ; identify (a 360KB disk in a 1.2MB drive), 04 a sector the FDC never found
+    ; (EOT / the multi-track flip), 09 a transfer that crossed a 64KB DMA page,
+    ; 80 a drive that never answered. aam splits the byte in one instruction.
+    ;
+    ; IT KEEPS THE CANARY NOW. This knob existed because 510 bytes would not
+    ; hold both and the sector gave 18.93.1 up to pay for the digits; down here
+    ; there are hundreds of bytes spare and nothing has to be traded (2.9).
+    mov al, [b2_diag]
+    aam 0x10
+    push ax
+    mov al, ah
+    call .nib
+    pop ax
+    call .nib
+    jmp short .stop
+.nib:
+    add al, 0x90                ; the classic six bytes: 0..15 -> '0'..'F'
+    daa
+    adc al, 0x40
+    daa
+    mov ah, 0x0E
+    mov bx, 7
+    int 0x10
+    ret
+%endif
+    mov si, b2_msg_err
+.halt:                          ; write the NUL-terminated string at DS:SI via
+    mov bx, 0x000F              ; BIOS teletype and STOP. BL carries the colour
+.pnext:                         ; so it stays legible if the splash already
+    lodsb                       ; switched us into mode 12h
+    test al, al
+    jz .stop
+    mov ah, 0x0E
+    int 0x10
+    jmp short .pnext
+.stop:
+    cli
+    hlt
+    jmp short .stop
+
+.done:
+    ; CF=0 IS the BIOS saying the whole request completed, and AL is not - the
+    ; same reading dsk_xfer takes (SPEC.md 18.91). On the IBM 5150 a
+    ; nine-sector read MOVES ALL NINE and answers AL = 1, and trusting AL took
+    ; a 16KB read from 8.29 s to 2.09 when it was fixed.
+    ;
+    ; `make DISKAL=1` restores the old reading, in both loops together.
+%ifdef DISK_TRUST_AL
+    xor ah, ah
+    cmp al, 1                   ; 0 with CF=0 is trusted for one, so the loop
+    adc al, 0                   ; always progresses
+    cmp ax, [b2_runsz]
+    jbe .out
+%endif
+    mov ax, [b2_runsz]          ; the whole run: CF=0 is the contract
+.out:
+    ret
+
+b2_msg_err:  db 'Disk error', 0
+b2_drive:    db 0
+b2_heads:    db 0
+b2_spt:      dw 0
+b2_run:      dw 0
+b2_runmax:   dw 0
+b2_runsz:    dw 0
+b2_lba0:     dw 0
+b2_lba:      dw 0
+b2_left:     dw 0
+b2_dest:     dw 0
+b2_ksig:     dw 0
+b2_t0:       dw 0
+%ifdef BOOT_DIAG
+b2_diag:     db 0
+%endif

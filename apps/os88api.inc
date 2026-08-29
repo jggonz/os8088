@@ -161,9 +161,71 @@ CWHITE    equ 15
 %define OSAPI_GFX_FILL_GRAY KERNEL_SEG:0x0048   ; AX=x1, BX=y1, CX=x2, DX=y2 (50% dither)
 %define OSAPI_GFX_XOR_RECT  KERNEL_SEG:0x0050   ; AX=x1, BX=y1, CX=x2, DX=y2
 %define OSAPI_GFX_XOR_FILL  KERNEL_SEG:0x0058   ; AX=x1, BX=y1, CX=x2, DX=y2
-%define OSAPI_FONT_CHAR     KERNEL_SEG:0x0060   ; CX=x, DX=y, AL=char
-%define OSAPI_FONT_STR      KERNEL_SEG:0x0068   ; CX=x, DX=y, SI=NUL string
+; --- TEXT, and READ THIS BEFORE PICKING ONE (SPEC.md 6.6) --------------------
+; OSAPI_FONT_RUN is the one you want. It draws the background and the glyph in
+; ONE pass, so no pixel is written twice and no cell is ever momentarily blank.
+;
+; The two below are TRANSPARENT: they leave whatever is underneath. That is
+; only right when what is underneath is already what you want. A caller that
+; fills a rect and then letters it has written every one of those pixels
+; twice, and on the machine this OS is for the gap between the two is VISIBLE
+; - PERFORMANCE.md Part 1 calls it the double-draw flash and rates it one of
+; the three defects an emulator cannot show you.
+;
+; They are named _XPARENT so that choosing one is a thing you typed rather
+; than a thing you defaulted to, and tests/unit/t_textrules.py is the gate:
+; a new call site fails the build until it is registered in
+; tests/textsites.txt with a reason. SPEC.md 6.6 is the closed list of what
+; a good reason looks like - there are five kinds and "it was shorter to
+; write" is not one of them.
+%define OSAPI_FONT_CHAR_XPARENT     KERNEL_SEG:0x0060   ; CX=x, DX=y, AL=char
+%define OSAPI_FONT_STR_XPARENT      KERNEL_SEG:0x0068   ; CX=x, DX=y, SI=NUL string
 %define OSAPI_FONT_WIDTH    KERNEL_SEG:0x0070   ; SI=NUL string; out AX = pixel width
+; -----------------------------------------------------------------------------
+; A masked 1bpp SPRITE, at any x (SPEC.md 25.6). OSAPI_GFX_BLIT1 above is the
+; fast one and it wants an x and a width on the byte grid; this one takes a
+; MASK instead, so it may land anywhere and it leaves every pixel outside that
+; mask exactly as it found it.
+;
+; The record, in YOUR segment:
+;     db wwords, rows          ; wwords = 1 (16 px a row), rows = 1..16
+;     dw mask[rows]            ; 1 = this pixel is mine
+;     dw data[rows]            ; 1 = draw it in the DATA colour
+;   bit 15 of a word is its LEFTMOST pixel.
+;
+; Reach for it for a control, a small badge, a cursor-sized picture - anything
+; whose pen you do not control and whose surroundings are not yours to paint.
+; One call replaces one drawing call per set pixel: os88ui.inc's own 12x12
+; control went from 45-65 calls to this one, 33.6 ms to 6.7 ms on a 4.77MHz
+; 8088 (PERFORMANCE.md Set 84).
+;
+; A 1bpp adapter has nowhere to put a middle grey, so a DITHERED picture is
+; yours to compose - and the dither gfx_ink uses is screen-absolute in (x + y)
+; parity (SPEC.md 39.4). os88ui_glyph is the worked example.
+%define OSAPI_ICON_PEN      KERNEL_SEG:0x04B0   ; AL = the colour the next
+                                 ; OSAPI_ICON_DRAW's MASK rows lay down, AH =
+                                 ; the colour its DATA rows draw over them.
+                                 ; ONE-SHOT: the draw puts CWHITE/CBLACK back
+%define OSAPI_ICON_DRAW     KERNEL_SEG:0x04B8   ; CX = x, DX = y, SI -> the
+                                 ; record. out CF = 1 refused (a record wider
+                                 ; than one word a row, or taller than 16)
+%define OSAPI_GFX_BLIT1_PEN KERNEL_SEG:0x04A8   ; AL = ink (what a SET bit in the
+                                 ; next OSAPI_GFX_BLIT1's band becomes), AH =
+                                 ; paper (a CLEAR one). SPEC.md 5.4.2.2. The
+                                 ; default is CWHITE on CBLACK - what every
+                                 ; band got before this existed - and
+                                 ; OSAPI_GFX_UNLOCK puts it back, so a pen is
+                                 ; valid for exactly the lock hold you set it
+                                 ; in. Refuses NOTHING itself; the BLIT then
+                                 ; answers CF=1 for a pair whose two colours
+                                 ; share no plane in either direction.
+                                 ;
+                                 ; NOT READ on a 1bpp adapter - a band there
+                                 ; already means lit and unlit - so a package
+                                 ; drawing a COLOURED sprite sets it per
+                                 ; adapter off OSAPI_VIDEO: your colour on
+                                 ; VGA, CWHITE on mono. apps/arkanoid is the
+                                 ; worked example (SPEC.md 44.10.6)
 %define OSAPI_WM_CREATE     KERNEL_SEG:0x0078   ; SI=template; out BX = win ptr, CF on full
 %define OSAPI_WM_SHOW       KERNEL_SEG:0x0080   ; BX=win ptr
 %define OSAPI_WM_HIDE       KERNEL_SEG:0x0088   ; BX=win ptr
@@ -611,6 +673,16 @@ VID_CGA    equ 2
                                  ; claim. OSAPI_MEM_REGROW is safe on one of
                                  ; these: the record carries the constraint,
                                  ; and a move re-honours it (SPEC.md 50.3).
+; ...AND THE SAME TWO FROM THE TOP OF THE HEAP (SPEC.md 50.3.2). For a buffer
+; THE HARDWARE holds the address of - a sound card's DMA ring, a NIC's
+; descriptors - which can therefore never be moved and has no business in the
+; arena every data claim and the compactor share. SPEC.md 50.3 says why in its
+; own words: "one long-lived data claim landing mid-heap permanently splits the
+; space a package can be loaded into". If software is the only thing that reads
+; your block, use OSAPI_MEM_CLAIM above and let it be compacted.
+%define OSAPI_MEM_CLAIM_HI  KERNEL_SEG:0x04C8   ; AX = KB; out CF, DX = segment
+%define OSAPI_MEM_CLAIM_DMA_HI KERNEL_SEG:0x04D0 ; ...and CX = the page-safe HEAD
+
 %define OSAPI_MEM_FREE      KERNEL_SEG:0x0208   ; DX = the segment you were
                                  ; given; out CF=0 released, CF=1 not yours
 %define OSAPI_MEM_AVAIL     KERNEL_SEG:0x0210   ; out AX = largest free run in
@@ -628,6 +700,41 @@ VID_CGA    equ 2
                                  ; a wide erase followed by glyphs can white
                                  ; out a band the glyphs then refuse to
                                  ; repaint. Erase per cell, or skip the pair.
+; ...and the OTHER end of it (SPEC.md 5.4.3). OSAPI_GFX_BLIT4 takes PIXELS and
+; works out what the card wants; this takes what the card wants and does
+; nothing but put it there - one `rep movsb` per plane per row, which is the
+; traffic OSAPI_GFX_SCROLL moves for the same area and the floor a 16-colour
+; block has on this card.
+;
+; **IT REFUSES MORE THAN IT ACCEPTS AND YOU MUST READ CF.** No on: a 1bpp
+; adapter (four planes is not a thing a Hercules has), an x that is not a
+; multiple of 8, a block off either side of the screen, an armed clip region,
+; a block straddling two displays, and a kernel built without the planes.
+; The answer to every one of them is OSAPI_GFX_BLIT4, which still works and is
+; still flat in run density - so the fallback is the code you already had.
+;
+; ALIGNING x IS FREE FOR A WINDOW: SPEC.md 11.94 already snaps the content
+; origin to a multiple of 8, so what is left is your own inset from it.
+%define OSAPI_GFX_BLITP     KERNEL_SEG:0x04C0   ; ES:SI = plane 0's first row,
+                                 ; DI = the step to the next plane, BP = the
+                                 ; row stride inside one, AX = x (A MULTIPLE
+                                 ; OF 8), BX = y, CX = width in pixels, DX =
+                                 ; rows. out CF = 1 refused, nothing drawn
+                                 ;
+                                 ; **DI BIT 15 SET IS A PROBE** (SPEC.md
+                                 ; 5.4.3.2): every refusal above is decided
+                                 ; against the rect you passed and CF comes
+                                 ; back without a pixel being written. ES:SI
+                                 ; and BP are not read on that path, so you can
+                                 ; ask BEFORE you have any planes - which is
+                                 ; the case it exists for. "Is this window
+                                 ; wholly on a colour display?" has no other
+                                 ; answer: OSAPI_WM_DISPLAY names a display and
+                                 ; says nothing about a straddle, and SPEC.md
+                                 ; 39.16.4.2 resolves a straddle by usable BAND
+                                 ; rather than by colour. A refused probe
+                                 ; changes nothing, so asking again next
+                                 ; repaint is the intended use.
 %define OSAPI_GFX_BLIT4     KERNEL_SEG:0x01D8   ; ES:SI = packed 4bpp pixels (two
                                  ; per byte, high nibble leftmost), BP = source
                                  ; stride in BYTES, AX/BX = destination x/y,
@@ -696,17 +803,37 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
 ;
 ; ...and OSAPI_CPU_INFO's AH, which this file described in prose and did not
 ; name. They are one contract with three readers now - the kernel publishes
-; them, XMEM.DRV is the only thing that SETS them (SPEC.md 41.12.2), and a
-; package may test them - so they are spelled once here rather than three
-; times. NONE OF THEM IS THE THING TO BRANCH ON: a package asks
-; OSAPI_XMEM_CAPS for KB, always, because these say what the machine can do
-; and that one says what is actually there.
+; them, XMEM.DRV sets the three memory bits (SPEC.md 41.12.2) and the boot
+; probe sets CPU_F_X87 - so XMEM.DRV must write ITS THREE and leave the byte's
+; other bits alone, which it did not always do - and a package may test them -
+; so they are spelled once here rather than three times. NONE OF THEM IS THE
+; THING TO BRANCH ON: a package asks OSAPI_XMEM_CAPS for KB, always, because
+; these say what the machine can do and that one says what is actually there.
 CPU_F_A20           equ 0x01     ; the A20 line VERIFIED open - by a
                                  ; wraparound read, never by "we wrote to the
                                  ; gate" (SPEC.md 41.2)
 CPU_F_HMA           equ 0x02     ; the High Memory Area is claimed (41.3)
 CPU_F_UNREAL        equ 0x04     ; unreal mode armed: FS and GS carry a 4GB
                                  ; data limit (41.4). Tier 2 only
+CPU_F_X87           equ 0x08     ; an 8087/287/387 IS IN THE SOCKET, probed
+                                 ; at boot with FNINIT and a status-word read
+                                 ; back - not INT 11h's equipment word, whose
+                                 ; bit on a 5150 is a DIP switch reporting
+                                 ; what the owner claimed. A 5150 shipped with
+                                 ; that socket EMPTY and many were filled
+                                 ; later, so this is a per-machine fact rather
+                                 ; than a tier fact, which is why it lives
+                                 ; here and not in CPU_8086/286/386.
+                                 ; TEST IT BEFORE EVERY COPROCESSOR PATH, and
+                                 ; understand what happens if you do not: on a
+                                 ; machine with an empty socket an `fadd` does
+                                 ; NOT fault, it HANGS - the WAIT in front of
+                                 ; it blocks forever on a BUSY line nothing
+                                 ; will lower. No `cpu` island is involved:
+                                 ; the 8087's base instructions assemble at
+                                 ; `cpu 8086` already, so rule 1 stands with
+                                 ; no exception and the gate here is a
+                                 ; RUN-TIME one (SPEC.md 1 rule 1, 84.6).
 ;
 ; --- volumes (SPEC.md 18.7/51.8) --------------------------------------------
 ; A DRVC_DISK DRIVER's slots, not an application's: the four that CHANGE
@@ -897,7 +1024,14 @@ SS_CUR     equ 2                ; byte: the running task slot
 SS_COOP    equ 3                ; byte: 0 pre-emptive, 1 cooperative
 SS_NTASK   equ 4                ; byte: MAX_TASKS, the same figure AX answers
 SS_NINST   equ 5                ; byte: INST_MAX, likewise BX
-SS_TSTATE  equ 6                ; MAX_TASKS bytes, the kernel's T_STATE
+SS_TSTATE  equ 6                ; MAX_TASKS bytes, the kernel's T_STATE - with
+                                ; ONE VALUE THAT IS THE SNAPSHOT'S OWN: 3 is
+                                ; the idle task (SPEC.md 8.1.2, 28.7), which
+                                ; the kernel's own table records as 1/ready
+                                ; like anything else. It is a fourth value
+                                ; rather than a slot index in the header
+                                ; because the header has no spare byte and
+                                ; every field after one would move
                                 ; verbatim: 0 free, 1 ready, 2 SLEEPING
                                 ; (SPEC.md 8). There is no "running" state -
                                 ; the running task is SS_CUR, and its T_STATE
@@ -946,6 +1080,13 @@ MEM_K_COPY  equ 0xFF04          ; the file manager's copy buffer (SPEC.md 22.5)
 MEM_K_FATW  equ 0xFF05          ; one volume's FAT window (SPEC.md 18.8.1)
 MEM_K_ASC   equ 0xFF06          ; one volume's ASSOC.DAT cache (SPEC.md 54.7)
 MEM_K_CLIP  equ 0xFF07          ; the system clipboard's text (SPEC.md 55)
+MEM_K_MOD   equ 0xFF08          ; an on-demand kernel module's image (SPEC.md 2.8)
+MEM_K_CLONE equ 0xFF09          ; the disk cloner's buffer (SPEC.md 18.99)
+MEM_K_BAND  equ 0xFF0A          ; the 1bpp band composer's buffer (SPEC.md 5.9.2)
+; 0xFF0B WAS MEM_K_OVL, the relocated boot overlay. It rides stage 2's blob
+; now (SPEC.md 2.9.6) and is not a claim at all, so the tag is retired and
+; LEFT UNUSED - a value that meant one thing in a shipped kernel and another
+; in the next is a collision a debug read cannot see.
 
 MEM_PG_TRIV equ 0xFB            ; the purge tiers (SPEC.md 50.6.4), low to
 MEM_PG_LOW  equ 0xFC            ; high: what LOSING the block costs, which is
@@ -1279,7 +1420,10 @@ DRVC_SOUND   equ 1
 DRVC_DISK    equ 2              ; block volumes: hard disks (SPEC.md 51.8).
                                 ; Publishes no package entry point and is not
                                 ; going to - see OSAPI_DRV_CALL above
-DRVC_DEBUG   equ 3              ; the serial monitor (SPEC.md 58)
+                                ; 3 was the serial monitor's and is RETIRED,
+                                ; not free: a class number is ABI, and a driver
+                                ; built against the old header would attach as
+                                ; whatever took it (SPEC.md 58)
 DRVC_NET     equ 4              ; the parallel link (SPEC.md 62)
 DRVC_FILE    equ 5              ; a volume served by somebody answering
                                 ; questions about FILES rather than sectors
@@ -1467,7 +1611,7 @@ DRVC_FILE    equ 5              ; a volume served by somebody answering
                                  ; needs the BITMAP of a character rather than
                                  ; a drawn one - scaling it, stamping it into
                                  ; a canvas, measuring a cell. It is the same
-                                 ; table OSAPI_FONT_CHAR draws from, which is
+                                 ; table OSAPI_FONT_CHAR_XPARENT draws from, which is
                                  ; the point: no int 10h ROM probe, no second
                                  ; typeface, and it works on all three
                                  ; adapters.

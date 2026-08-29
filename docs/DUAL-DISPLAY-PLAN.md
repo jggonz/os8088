@@ -573,7 +573,7 @@ There is one, and it is worth naming because it is cheap and genuinely useful
 outright: detection, mode, and a small published surface. The window manager
 never composites there, the cursor never goes there, nothing drags between.
 Content is pushed to it — a Task Manager readout, Tracker's pattern grid, a
-`DEBUG.DRV`-style console, a fullscreen picture.
+a serial-monitor-style console, a fullscreen picture.
 
 - Kernel impact: a class plus two or three cells — **~300 B**, against ~1,600.
 - The renderer needs no split at all: the driver calls the existing
@@ -726,7 +726,7 @@ Measured across the four cases that matter: two cards CGA-primary `0x06`, two
 cards **Hercules-primary `0x06`** (was `0x02`), a Hercules alone `0x02`, a CGA
 alone `0x04`. And the backstop still backstops — reverting patch 02 recreates
 an aliasing card, and a lone Hercules on it still reports `0x02` rather than
-inventing a CGA. Cost: **8 bytes of `.text`**, no rung crossed.
+inventing a CGA. Cost: **8 bytes of `.text`**.
 
 **The `REDRAWFULL=1` precedent applies.** SPEC.md §12.9/§30.3 verified their
 incremental drawing by **byte identity** against a reference kernel, not by
@@ -864,7 +864,7 @@ question in §39 no emulator can be asked.
 ### 11.8 Step 6c, as built
 
 `vid_fsx_enter` / `vid_fsx_leave` / `vid_fsx_unblank` (SPEC.md §39.18).
-**Cost: `.text` +320 for `kern_big`, no rung crossed, and `kern_small` +0.**
+**Cost: `.text` +320 for `kern_big`, and `kern_small` +0.**
 
 **§6.5.2's design went in as written and no fsx app needed a line.** The
 bracket makes its display the *only* display at the virtual origin, and every
@@ -995,7 +995,7 @@ because the flip between 0 and 779 is that routine answering.
 ### 11.6 Step 6, as built
 
 `[vid_w]`/`[vid_h]` are the union (SPEC.md §39.16). **Cost: `.text` +202 for
-`kern_big`, no rung crossed — 48 bytes left in it — and `kern_small` +39.**
+`kern_big` — 48 bytes left in it — and `kern_small` +39.**
 
 **§5.1's naming decision is what made this ~15 sites instead of ~60.** Keeping
 `[vid_w]`/`[vid_h]` meaning *the desktop* means every UI site that reads them
@@ -1064,7 +1064,7 @@ The pointer crosses (SPEC.md §39.15). **Cost: `.text` +286 for `kern_big`, one
 image rung crossed, and `kern_small` +6** — the first non-zero small delta in
 this work, and it is the clamp refactor being *shared* rather than an `%ifdef`
 being missed: two inline per-axis clamps became one `mou_clamp`, which both
-variants call. No rung crossed there; 440 bytes still free.
+variants call. That rung still has 440 bytes free.
 
 **§5.1's decision paid off again here, in a place §4 did not list.** Keeping
 `[cur_drawn_x]`/`[cur_drawn_y]` in the same coordinate space as
@@ -1180,7 +1180,7 @@ and unexercised, and step 6 is where they get a caller.
 ### 11.3 Step 3, as built
 
 `vid_disp_init` in `vidsel.inc`, called from `kmain` after `vid_probe_avail`,
-`KERN_BIG` only (SPEC.md §39.13). **Cost: `.text` +83, no rung crossed** — 298
+`KERN_BIG` only (SPEC.md §39.13). **Cost: `.text` +83 — 298
 bytes left in the image rung, against 381 before — and `kern_small` measures
 **+0**, which is what the split is for.
 
@@ -1236,7 +1236,7 @@ down, and step 4's pixel gate is where it would have cost a day.
 `vid_cw`/`vid_ch` and their four derived limits, split from the desktop's
 `vid_w`/`vid_h` (SPEC.md §39.2.1). **22 renderer sites moved; the ~60 window
 system ones did not.** Cost: **`.text` +44** — the extra derivation in
-`vid_apply` — no rung crossed, and `kern_small` pays the same 44 because this
+`vid_apply` — and `kern_small` pays the same 44 because this
 is a *shared* refactor rather than an `%ifdef`. That is deliberate: the
 alternative is twenty-two `%ifdef`s inside the renderer's hot paths, which is
 §2's own "hook left outside its `%ifdef`" hazard with more places to get it

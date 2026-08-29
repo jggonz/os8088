@@ -717,7 +717,8 @@ lt_report:
     add cx, 2
     mov dx, [lt_oy]
     add dx, 1
-    call OSAPI_FONT_STR
+    mov ax, (CBLACK << 8) | CWHITE  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     pop di
     pop si
     pop dx

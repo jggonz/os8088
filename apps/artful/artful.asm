@@ -964,7 +964,15 @@ at_msx2     equ at_msx1 + 2                  ; word
 at_msy2     equ at_msx2 + 2                  ; word
 at_mwid     equ at_msy2 + 2                  ; AT_NMENUS words
 at_mmsg     equ at_mwid + AT_NMENUS*2        ; word: alert message
-at_b1x      equ at_mmsg + 2                  ; the buttons: x, y, width
+at_pair     equ at_mmsg + 2                  ; word: the menu BAR's opaque pair
+                                             ;   (SPEC.md 46.10) - AL ink, AH
+                                             ;   ground, and Writer mode swaps
+                                             ;   them
+at_ink      equ at_pair + 2                  ; byte: a pull-down item's ink,
+                                             ;   kept because a package cannot
+                                             ;   read the pen back
+at_pad64    equ at_ink + 1                   ; byte: keeps the words below even
+at_b1x      equ at_pad64 + 1                 ; the buttons: x, y, width
 at_b1y      equ at_b1x + 2
 at_b1w      equ at_b1y + 2
 at_b2x      equ at_b1w + 2

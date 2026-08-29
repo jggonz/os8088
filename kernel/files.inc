@@ -327,7 +327,7 @@ files_init_x:
     pop di
     pop cx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; fm_kinit - KD_INIT for the Disk kind (SPEC.md 29.3): a whole new window
@@ -461,7 +461,7 @@ fm_kinit_x:
     pop dx
     pop cx
     pop ax
-    ret
+    retf
 
 ; =============================================================================
 ; The view cache (SPEC.md 2.3/22.1)
@@ -1088,6 +1088,7 @@ fmv_mark:
                                 ; waiting for the user to read the line it
                                 ; is asking about
     mov byte [fm_fchk], 1       ; and otherwise the UI task owes the FRONT
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
                                 ; window a look: the window a package just
                                 ; wrote into may be the one under the
                                 ; pointer, where waiting for a focus change
@@ -1219,7 +1220,7 @@ fm_focus_x:
     pop cx
     pop ax
     stc
-    ret
+    retf
 .clean:
     pop di
     pop si
@@ -1228,7 +1229,7 @@ fm_focus_x:
     pop ax
 .none:
     clc
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; fmv_bcast - push the current snapshot into every window showing it (22.1)
@@ -1912,7 +1913,7 @@ fm_bar_gate_x:
     pop di
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; fm_seed - park a target directory for the next fm_kinit (SPEC.md 22.1)
@@ -2424,7 +2425,7 @@ fm_paint_x:
     mov bx, si
     call fm_draw_core
     pop bx
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; fm_onclick - W_ONCLICK for the Disk window
@@ -2643,16 +2644,20 @@ fm_onclick_x:
                                 ; one on row 3 next door would compose
     cmp dx, FM_DBLCLK
     jae .restamp
-    call fm_open_sel            ; double-click: a package goes to the
-    cmp word [ld_pending], 0    ; loader, a folder re-lists this window (22)
-    je .redraw                  ; folder: fm_go changed the whole listing
-    jmp short .quiet            ; package: the loader is somebody else's
-                                ; window and NOTHING here changed at all
-                                ; (SPEC.md 22.17 - it used to be one line,
-                                ; 'Loading...'). Through .quiet and not
-                                ; straight out, because this click may also
-                                ; have retired an editor prompt, which is a
-                                ; different question with its own answer
+    call fm_open_sel            ; double-click: a package or a DOCUMENT goes
+    jc .redraw                  ; to somebody else's window, a folder re-lists
+    jmp short .quiet            ; this one (SPEC.md 22.13.2). CF is the
+                                ; ROUTINE'S answer now: the [ld_pending] test
+                                ; that used to be here asked whether a PACKAGE
+                                ; had been posted, and a document posts an
+                                ; association instead - so every document open
+                                ; took the folder's branch and repainted this
+                                ; window whole for nothing.
+                                ;
+                                ; Through .quiet and not straight out, because
+                                ; this click may also have retired an editor
+                                ; prompt, which is a different question with
+                                ; its own answer
 
 .restamp:                       ; already selected, too slow to be a double
     mov dx, [ui_click_t]        ; click: the entry does not move, so NOT ONE
@@ -2776,7 +2781,7 @@ fm_onup_x:
     pop cx
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; fm_ondrag - W_ONDRAG (SPEC.md 13.8.1): the pointer moved, press still down
@@ -3098,7 +3103,15 @@ fm_onkey_x:
     mov ax, [di+FS_SEL]
     cmp ax, [di+FS_N]           ; 0xFFFF (none) also fails this
     jae .out
-    call fm_open_sel            ; same as a double-click
+    call fm_open_sel            ; same as a double-click - INCLUDING the
+    jc .redraw                  ; answer (SPEC.md 22.13.2). This site had no
+    cmp byte [fm_statowed], 0   ; test at all and fell straight into the
+    je .out                     ; repaint, so Enter redrew the whole window
+    call fm_status_only         ; for a PACKAGE too, where the double-click
+    jnc .out                    ; beside it had known better since 22.17.
+                                ; The keystroke may still have retired a
+                                ; verdict (22.9), which is the .scr_move
+                                ; ladder above and the same answer
 
 .redraw:
     call fm_repaint             ; SI still = window ptr
@@ -3108,7 +3121,7 @@ fm_onkey_x:
     pop dx
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; fm_delrep - is this Delete keystroke a typematic REPEAT? (SPEC.md 22)
@@ -3149,13 +3162,26 @@ fm_delrep:
 ; fm_open_sel - open one directory entry: THE open path (SPEC.md 22)
 ; in:  AX = index into THIS window's listing, already checked against FS_N;
 ;      gfx lock held, [fm_vp] published
-; out: nothing (all registers preserved)
+; out: CF = 1 THIS WINDOW'S LISTING CHANGED and the caller owes it a full
+;      repaint; CF = 0 nothing in this window moved at all. All registers
+;      preserved.
 ;
 ; Shared by the double-click, by Enter and by File > Open, so those three can
 ; never drift apart. The SPEC.md 19 type word decides: 2 is a folder and
 ; re-lists this window; anything else goes to the loader, which rejects a
 ; type-0 file as "Bad package" - the truthful verdict for double-clicking a
 ; data file.
+;
+; THE ANSWER IS THIS ROUTINE'S BECAUSE THE BRANCH IS (SPEC.md 22.13.2). All
+; three callers used to ask `[ld_pending] != 0` instead - "did this post a
+; PACKAGE load?" - which is a PROXY for "did this navigate", and the two
+; parted the day a third outcome arrived. A document (SPEC.md 54.4) posts an
+; ASSOCIATION and no package index, so it answered the folder's answer and
+; every document open repainted the Disk window whole: a white fill and some
+; forty font_strs, immediately before the program it launched was drawn over
+; the top of them. That is fm_docmd's own argument about Timer and Bounce,
+; one branch away from where it was made - and ui.inc's `.chk_ld` carries the
+; identical warning about the identical word, one level up.
 ;
 ; Before this branch existed a folder double-click reached ld_run_body, which
 ; rejects type != 1, and the window reported "Bad package" for an operation
@@ -3185,12 +3211,21 @@ fm_open_sel:
     cmp word [si+16], 0         ; a DATA file with an association opens in
     jne .package                ; its program instead of reaching the loader
     call assoc_post_x ; (SPEC.md 54.4); without one it still goes
-    jnc .out                    ; there and still says "Bad package", which
+    jnc .quiet                  ; there and still says "Bad package", which
 .package:                       ; is the truthful verdict it always was
     inc ax                      ; index + 1: ui.inc runs the loader once the
     mov [ld_pending], ax        ; lock drops (SPEC.md 21)
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
     mov [ld_pwin], di           ; ...resolved against THIS window (22.1)
-    jmp short .out
+.quiet:
+    clc                         ; A PACKAGE AND A DOCUMENT BOTH OPEN SOMEBODY
+    jmp short .out              ; ELSE'S WINDOW. Not one pixel of this one
+                                ; changed: no listing, no selection (the first
+                                ; click of the double-click made it, and it is
+                                ; already on the glass), and no status line -
+                                ; SPEC.md 59.5 took the verdicts out to the
+                                ; toast, so 'Bad package' is a menu-bar strip
+                                ; now and not a line of this window
 .folder:
     call fm_stage_name          ; fm_name = the folder's display name, out
     mov ax, bx                  ; of the staged entry while it still exists
@@ -3211,10 +3246,11 @@ fm_open_sel:
     xor si, si                  ; instructions are the SHAPE this site shipped
 %endif                          ; with, so its bytes do not move
 .titled:
-    call fm_go
+    call fm_go                  ; ...and THIS one really did replace the
+    stc                         ; listing, the selection and the caption
 .out:
-    pop di
-    pop si
+    pop di                      ; (`pop` and `ret` leave the flags alone, so
+    pop si                      ; the answer survives the epilogue)
     pop bx
     pop ax
     ret
@@ -3766,7 +3802,7 @@ fm_oncmd_x:
     pop cx
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; fm_docmd - run one FMC_* against the published window and repaint it
@@ -3837,13 +3873,16 @@ fm_c_open:                      ; File > Open - the selection, if any
     cmp ax, [di+FS_N]           ; 0xFFFF (no selection) also fails this
     jae .none
     call fm_open_sel
-    cmp word [ld_pending], 0    ; a folder re-listed us and owes the whole
-    je .out                     ; window; a PACKAGE went to the loader and
-    mov byte [fm_cmdchg], FMD_NONE  ; changed NOTHING on this one - the same
-.out:                           ; [ld_pending] test fm_onclick makes on a
-    ret                         ; double-click (SPEC.md 22.2/22.13). It was
-                                ; FMD_LINE while the line still said
-                                ; 'Loading...' (SPEC.md 22.17)
+    jc .out                     ; a folder re-listed us and owes the whole
+    mov byte [fm_cmdchg], FMD_NONE  ; window; a package or a DOCUMENT opened
+.out:                           ; somebody else's and changed NOTHING on this
+    ret                         ; one - fm_open_sel's own answer, which is the
+                                ; same one fm_onclick reads on a double-click
+                                ; (SPEC.md 22.13.2). It was the [ld_pending]
+                                ; word here too, so File > Open on a document
+                                ; carried the identical wasted repaint; and
+                                ; FMD_LINE before that, while the line still
+                                ; said 'Loading...' (SPEC.md 22.17)
 .none:
     mov byte [fm_cmdchg], FMD_NONE  ; nothing selected: a no-op, and a no-op
     ret                             ; draws nothing
@@ -4065,6 +4104,7 @@ fm_fmt_home:
     mov word [di+FS_SCRL], 0        ; describes anything
     mov byte [di+FS_DIRTY], 1
     mov byte [fm_fchk], 1       ; ...and it may be the FRONT window, where
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
                                 ; waiting for a focus change means waiting for
                                 ; a click that never comes (22.8)
     push cx
@@ -4150,7 +4190,7 @@ fm_fmt_go:                      ; the image is here; the drive is the user's
     push cx                     ; just happened, so it is a toast (60.5) - and
     mov bx, fm_errtab           ; nothing is armed, so the window is left
     mov cx, FM_NERR             ; exactly as it was
-    call KERNEL_SEG:cw_toast_say
+    call KERNEL_SEG:toast_say
     pop cx
     pop bx
 .no:
@@ -4235,7 +4275,7 @@ fm_clone_bad:
     push cx                     ; a toast (SPEC.md 59.5) - and nothing is
     mov bx, fm_clotab           ; armed, so the window is left as it was
     mov cx, CLO_NERR
-    call KERNEL_SEG:cw_toast_say
+    call KERNEL_SEG:toast_say
     pop cx
     pop bx
     cmp word [clo_seg], 0       ; ...and the image goes back HERE, because no
@@ -4330,7 +4370,7 @@ fm_clone_res:
     mov al, ah
     mov bx, fm_clotab
     mov cx, CLO_NERR
-    call KERNEL_SEG:cw_toast_say
+    call KERNEL_SEG:toast_say
     pop cx
     pop bx
     jmp short .out
@@ -4508,7 +4548,7 @@ fm_img_done_x:
     pop cx
     pop bx
     pop ax
-    ret
+    retf
 
 fm_c_cut:                       ; File > Cut - the selection, onto the
     mov al, FCP_CUT             ; clipboard (SPEC.md 22.3)
@@ -4597,7 +4637,7 @@ fm_newwin:
     jae fm_nw_full
     call fm_seed                ; park the target for the new window's
     mov al, KIND_FILES          ; fm_kinit, then let ui_task do the launch
-    call KERNEL_SEG:cw_inst_launch_post ; NOT app_launch: it takes the lock
+    call KERNEL_SEG:inst_launch_post    ; NOT app_launch: it takes the lock
 fm_nw_none:                     ; we hold. The NEW window is what draws; this
     mov byte [fm_cmdchg], FMD_NONE  ; one is untouched, and so it is not
     ret                             ; redrawn (SPEC.md 22.13)
@@ -4617,17 +4657,17 @@ fm_c_nop:                       ; the File menu's separator (SPEC.md 22.12)
 ; full repaint of that window first (SPEC.md 22.13).
 fm_c_disk:                      ; Builtins > Disk - CMD_FILES, exactly what
     mov ax, CMD_FILES           ; Locator's own Builtins menu posts, so the
-    call KERNEL_SEG:cw_ui_post_cmd  ; item does the same thing from either bar
+    call KERNEL_SEG:ui_post_cmd     ; item does the same thing from either bar
     jmp short fm_c_elsewhere
 
 fm_c_timer:                     ; Builtins > Timer
     mov al, KIND_TIMER
-    call KERNEL_SEG:cw_inst_launch_post ; NOT app_launch: it takes the lock
+    call KERNEL_SEG:inst_launch_post    ; NOT app_launch: it takes the lock
     jmp short fm_c_elsewhere        ; (29.4)
 
 fm_c_bounce:                    ; Builtins > Bounce
     mov al, KIND_BOUNCE
-    call KERNEL_SEG:cw_inst_launch_post
+    call KERNEL_SEG:inst_launch_post
 fm_c_elsewhere:
     mov byte [fm_cmdchg], FMD_NONE
     ret
@@ -4872,7 +4912,7 @@ fm_rclick_x:
     pop cx
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; fm_rcmd - run the command fm_rclick latched
@@ -4901,7 +4941,7 @@ fm_rcmd_x:
     pop cx
     pop bx
     pop ax
-    ret
+    retf
 
 ; =============================================================================
 ; The status-line name editor (SPEC.md 22)
@@ -5121,7 +5161,7 @@ fm_editkey:
     mov al, 1
     mov bx, fm_swaptab
     mov cx, FM_NSWAP
-    call KERNEL_SEG:cw_toast_say
+    call KERNEL_SEG:toast_say
     pop cx
     pop bx
     jmp short .cancelfull
@@ -5395,7 +5435,7 @@ fm_edit_commit:
     push cx                     ; TOAST now (SPEC.md 59.5): a verdict is a
     mov bx, fm_errtab           ; report about what just happened, not a fact
     mov cx, FM_NERR             ; about this window, so it wants no per-window
-    call KERNEL_SEG:cw_toast_say ; byte, no status-line rung, and no later
+    call KERNEL_SEG:toast_say    ; byte, no status-line rung, and no later
     pop cx                      ; interaction to come along and retire it.
     pop bx                      ; BX/CX are pushed because this routine
                                 ; promises to preserve every register and
@@ -5698,7 +5738,7 @@ fm_paste_res:
     mov al, [fcp_err]
     mov bx, fm_errtab           ; SPEC.md 59
     mov cx, FM_NERR
-    call KERNEL_SEG:cw_toast_say
+    call KERNEL_SEG:toast_say
 .all:
     call fmv_repaint_all        ; fmv_reload_all moved every window's CACHE;
     jmp short .out              ; their PIXELS are still the old listing, and
@@ -6368,7 +6408,8 @@ fm_draw_core:
     mov dx, [fm_cy]
     add dx, 6
     mov si, fm_hdrbuf
-    call KERNEL_SEG:cw_font_str
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: the content's own white
+    call KERNEL_SEG:cw_font_run
 
     ; --- the two header buttons (SPEC.md 22.18) ---
     ; Each is drawn only when it fits, and fm_btn1 answers that itself out of
@@ -6398,7 +6439,8 @@ fm_draw_core:
     mov dx, [fm_cy]
     add dx, 4
     mov si, fm_s_refresh
-    call KERNEL_SEG:cw_font_str
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: the content's own white
+    call KERNEL_SEG:cw_font_run
 
     cmp word [fm_cw], 142
     jl .nobtns
@@ -6421,7 +6463,8 @@ fm_draw_core:
 .vlabel:
     mov dx, [fm_cy]
     add dx, 4
-    call KERNEL_SEG:cw_font_str
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: the content's own white
+    call KERNEL_SEG:cw_font_run
 .nobtns:
 %endif
 
@@ -6537,7 +6580,8 @@ fm_draw_rows:
     mov dx, [fm_celly]
     add dx, 23
     mov byte [gfx_color], CBLACK
-    call KERNEL_SEG:cw_font_str
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: the content's own white
+    call KERNEL_SEG:cw_font_run
 
     inc word [fm_vcol]
     mov ax, [fm_vcol]
@@ -6784,19 +6828,23 @@ fm_draw_lrow:
     pop ax
     call fm_stage_name          ; fm_name + [fm_fsize]
 
+    ; --- the name, an OPAQUE run (SPEC.md 22.11.3) -----------------------
+    ; It is truncated to the live budget, as it always was, and NOT padded out
+    ; to it: the row is FM_ROW_H = 16 px and a glyph is 8, so a run can never
+    ; be this band's erase however wide it is made. The caller's one fill is,
+    ; and stays.
     mov bx, [fm_nch]            ; truncate the name to the live budget
     cmp bx, 16
     jae .lname
     mov byte [fm_name+bx], 0
 .lname:
     add bp, 4                   ; text y: row top + 4 centers 8px glyphs
-    mov byte [gfx_color], CBLACK
     mov cx, [fm_cx]
     add cx, 32                  ; 32, not 24: BOTH are multiples of 8, so this
     mov dx, bp                  ; is not about alignment - it is the 16px icon
     mov si, fm_name             ; at +8 ending exactly here. At +24 the name's
-    call KERNEL_SEG:cw_font_str ; first letter touched the icon (ARTFUL.O88's
-                                ; A against the app diamond), which is a
+    mov ax, (CWHITE << 8) | CBLACK  ; first letter touched the icon (ARTFUL.O88's
+    call KERNEL_SEG:cw_font_run ; A against the app diamond), which is a
                                 ; visible regression and not one a size report
                                 ; or a byte-identity diff can see. 8px of
                                 ; daylight now, where +4/+24 gave 4; the
@@ -6817,7 +6865,8 @@ fm_draw_lrow:
     sub cx, 20                  ; the scroll bar, SPEC.md 22)
     sub cx, ax
     mov dx, bp
-    call KERNEL_SEG:cw_font_str
+    mov ax, (CWHITE << 8) | CBLACK  ; opaque, like the name beside it: the
+    call KERNEL_SEG:cw_font_run     ; ground is the band the caller filled
 .lnosize:
     pop di
     ret
@@ -7987,16 +8036,10 @@ section .cold                   ; far entries (SPEC.md 2.6): the resident
                                 ; thunks in kernel.asm far-call these, and
                                 ; these near-call the bodies above - so every
                                 ; routine here keeps its ordinary near `ret`
-fmf_files_init:         call files_init_x
-                    retf
-fmf_fm_bar_gate:        call fm_bar_gate_x
-                    retf
 ; ...and one an on-demand MODULE calls rather than the kernel (SPEC.md 2.8.6):
 ; FORMAT.DRV letters its own confirmation now and needs a decimal formatter to
 ; do it. Six resident bytes against a second copy of real code in the image,
 ; which is the one place that trade goes the other way.
-fmf_fm_img_done:        call fm_img_done_x
-                    retf
 fmf_fm_utoa:            call fm_utoa
                     retf
 fmf_files_open:         call files_open_x
@@ -8005,29 +8048,13 @@ fmf_files_open_drive:   call files_open_drive_x
                     retf
 fmf_files_refresh:      call files_refresh_x
                     retf
-fmf_fm_focus:           call fm_focus_x
-                    retf                ; CF is the answer, and neither
                                         ; `call` nor `retf` touches it
-fmf_fm_kinit:           call fm_kinit_x
-                    retf
 fmf_fm_onclick:         call fm_onclick_x
                     retf
 %ifdef KERN_BIG
-fmf_fm_onup:            call fm_onup_x
-                    retf
 fmf_fm_ondrag:          call fm_ondrag_x
                     retf
 %endif
-fmf_fm_oncmd:           call fm_oncmd_x
-                    retf
-fmf_fm_onkey:           call fm_onkey_x
-                    retf
-fmf_fm_paint:           call fm_paint_x
-                    retf
-fmf_fm_rclick:          call fm_rclick_x
-                    retf
-fmf_fm_rcmd:            call fm_rcmd_x
-                    retf
 fmf_fmv_sync:           call fmv_sync_x
                     retf
 

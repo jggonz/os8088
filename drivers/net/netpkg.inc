@@ -206,7 +206,77 @@ NETV_PROF    equ 12             ; THE STAGE PROFILER (SPEC.md 72.15), and it is
                                 ; the instrument (SPEC.md 62.11.1), and a
                                 ; reporter must SAY that rather than draw a
                                 ; table of zeroes.
-NETV_MAX     equ 12             ; ...and anything above it is refused. A verb
+; -----------------------------------------------------------------------------
+; NETV_SKTAB - THE WHOLE SOCKET TABLE, for a human to look at (SPEC.md 72.20)
+;
+; in  ES:DI = a buffer, CX = its capacity
+; out CX = bytes written (a whole number of SKI_SZ records), AL = NET_SOCKS
+;
+; **NETV_STATUS ANSWERS ABOUT A HANDLE YOU ALREADY HOLD**, which is exactly
+; the wrong question when the complaint is "the server went quiet". A stranded
+; socket belongs to nobody, so nobody can ask about it, and the three times
+; this table has run dry (SPEC.md 72.4.2) it was invisible from inside every
+; package on the machine. This answers about the TABLE.
+;
+; Read-only and side-effect free apart from the pump every verb does, so it is
+; safe to call from a UI pass in the middle of a transfer - which is the only
+; moment worth looking.
+NETV_SKTAB   equ 13
+
+; --- one record per slot, and it is FIXED so a reader can stride it ----------
+SKI_ST      equ 0               ; byte: NSK_*, what a package would be told
+SKI_TS      equ 1               ; byte: TS_*, what TCP is actually doing
+SKI_FL      equ 2               ; byte: SKF_* - ORPH and ACPT are what say a
+                                ;       slot is stranded rather than working
+SKI_TRY     equ 3               ; byte: retransmits on the segment in flight
+SKI_LP      equ 4               ; word: local port, host order
+SKI_RP      equ 6               ; word: remote port, host order
+SKI_RXN     equ 8               ; word: bytes sitting in the receive ring -
+                                ;       "are we filling sockets and keeping
+                                ;       them filled" is this number over time
+SKI_TXN     equ 10              ; word: bytes waiting to go out
+SKI_RXC     equ 12              ; word: the CAPACITY of the ring it holds, 0 =
+                                ;       none. This is the tier (SPEC.md 72.21):
+                                ;       a listener shows 0, a control
+                                ;       connection SK_LEANRX and a transfer the
+                                ;       bulk rung - so "did the data connection
+                                ;       actually get the big ring" is a
+                                ;       question the screen answers
+SKI_SZ      equ 14
+
+; The SKI_TS values a reader will want to test by name. They are tcp.inc's
+; TS_* and this is a MIRROR rather than a second definition - tests/suite.py's
+; `mirror` row is what keeps the two honest.
+TS_CLOSED   equ 0
+TS_CLOSEW   equ 10              ; ...and the TOP of the range, published so a
+                                ; package with a name PER state can assert its
+                                ; table is still the right length (apps/ftpd's
+                                ; FD_NTS). That catches a state INSERTED or
+                                ; REMOVED; a pure reorder renames rows and
+                                ; nothing cheap catches it
+
+; -----------------------------------------------------------------------------
+; NETV_BULK - "this handle is going to move a FILE" (SPEC.md 72.21.1)
+;
+; in  AL = a handle. Always succeeds; CF=1 only for a handle that is not yours.
+;
+; The rings are a POOL now (72.21) with ONE big ring in it, because only a
+; transfer needs a window worth the name - a listener needs no ring at all and
+; a control connection carries short command lines. **The driver cannot tell
+; those apart**, and first-come is actively wrong: an FTP control connection
+; arrives before the data connection and would take the big ring.
+;
+; So the package says. Call it on a LISTENER and every connection that
+; listener accepts inherits the wish - which is what lets a PASV listener hand
+; the bulk ring to a data connection that does not exist yet. Call it on a
+; freshly opened socket and it swaps, while both rings are still empty.
+;
+; **A REFUSAL IS SILENT AND NORMAL** (PERFORMANCE.md rule 6): if the bulk ring
+; is already out, the caller keeps the lean one and the transfer is slower.
+; Asking twice, or asking for something already held, is a no-op.
+NETV_BULK    equ 14
+
+NETV_MAX     equ 14             ; ...and anything above it is refused. A verb
                                 ; table indexed by an unchecked verb is a wild
                                 ; near call inside the driver
 
@@ -285,13 +355,24 @@ NET_SIG      equ 'NL'            ; what NETV_IDENT answers. **IT NAMES THE ABI
                                 ; publication slot (SPEC.md 20.11.1)
 
 ; --- limits ------------------------------------------------------------------
-NET_SOCKS    equ 4              ; simultaneous handles. FOUR IS THE FLOOR AND
-                                ; NOT A ROUND NUMBER: an FTP server is a
-                                ; control connection plus a data connection
-                                ; plus a listener that must stay open across
-                                ; both, and the fourth is a browser fetching
-                                ; while something else is connected
-                                ; (docs/NET-STACK-PLAN.md 1.2)
+NET_SOCKS    equ 8              ; simultaneous handles. **A SLOT AND A RING
+                                ; ARE DIFFERENT THINGS NOW** (SPEC.md 72.21),
+                                ; and that is what lets this be eight: a slot
+                                ; is SK_SZ = 128 bytes of bss, where a ring
+                                ; pair is 9,216 of the claim - seventy-two to
+                                ; one - and the two used to be welded together
+                                ; by the ring's address being the slot NUMBER.
+                                ;
+                                ; Four was the FLOOR an FTP server needs
+                                ; (docs/NET-STACK-PLAN.md 1.2) - control, data
+                                ; and a listener that stays open across both -
+                                ; and a floor is what you cannot build on: a
+                                ; listener, a TIME-WAIT and a connection the
+                                ; listener made that nobody has accepted yet
+                                ; all competed for the same four. Eight costs
+                                ; 512 bytes of bss over four and NOTHING of
+                                ; the claim, because listeners now hold no
+                                ; rings at all
 NET_HOSTMAX  equ 64             ; the host field on the wire, INCLUDING the
                                 ; NUL, and a fixed frame like every other one
                                 ; here (SPEC.md 62.10.1)

@@ -78,11 +78,16 @@ import dispcp                                               # noqa: E402
 import dispcorner                                           # noqa: E402
 import dispapps                                             # noqa: E402
 import os88geom                                             # noqa: E402
+from os88geom import (VID_CTX_SZ, VID_CTX_VX,          # noqa: E402
+                      VID_CTX_VY, VID_CTX_CW, VID_CTX_CH)
+# SPEC.md 39.14's per-display record: DERIVED from VID_CTX_W and never
+# written down here. Nine scripts had `VID_CTX_SZ = 42` by hand and the
+# record has grown TWICE under them - the last time silently, because the
+# constant that moved was a DERIVED one and os88geom's scanner was only
+# looking at the mirrored ones. It is looking at both now.
 
 TITLE_H = 18
 FM_MIN_H = 92                               # kernel/files.inc, SPEC.md 11.100.2
-VID_CTX_SZ, VID_CTX_CW, VID_CTX_CH = 42, 14, 16
-VID_CTX_VX, VID_CTX_VY = 36, 38
 NR_SIZE = 8                                 # the natural bank's stride (wm.inc)
 S = os88sym.linear
 

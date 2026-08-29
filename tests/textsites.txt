@@ -1,0 +1,81 @@
+# tests/textsites.txt - the transparent-text registry (SPEC.md 6.6.3)
+#
+# `font_run` (SPEC.md 6.1) draws a cell's background and its glyph in ONE pass.
+# The calls counted here are TRANSPARENT: they leave whatever is underneath, so
+# a caller that fills a rect and then letters it writes every pixel twice, and
+# on a 4.77MHz 8088 the gap between the passes is VISIBLE.
+#
+# ONE LINE PER FILE: <count> <path>  # <reason>
+#
+# A file NOT in this list may not call transparent text at all - that is the
+# case that matters, because it is what a new package hits. A file in it may
+# not exceed its count, and may not fall below it either: lowering the number
+# after a conversion is the diff saying the work happened.
+#
+# The reason is not decoration. It is either one of SPEC.md 6.6.2's SIX cases
+# - say WHICH - or the word `backlog:` and what it should become. "It was
+# shorter to write" is not a reason, and neither is "the background is white
+# anyway": a white background is a background, so fill it with the run.
+#
+# THIS IS A RATCHET, NOT A CLEAN GATE. It starts at the count the tree has,
+# because a rule that cannot be enforced from the day it is written is not
+# enforced at all. docs/TEXT-PLAN.md 4 is the order to work it down in.
+#
+# STAGE 4 IS FINISHED (SPEC.md 6.6.5, docs/TEXT-PLAN.md 4.4). Every line below
+# now carries a REASON. FOUR still say `backlog:` and not one of the four is a
+# conversion waiting to be typed: wm_draw_title's compose-and-blit answer has
+# SHIPPED and the line left is its fallback, Arkanoid's capsule letter is a
+# sprite (TEXT-PLAN 3.1), kernel/bootprof.inc is a surface no shipping build
+# draws, and the Tracker's tui_runc is a measured cost trade whose fix belongs
+# in font_run. A NEW backlog line is a claim that somebody is going to do it.
+
+# --- KEPT: one of SPEC.md 6.6.2's six cases ----------------------------------
+4 apps/mines/mines.asm  # 6.6.2 case 2 - a revealed cell's digit, over a face already down; and 11.94.4 protects the centring
+2 apps/piano/piano.asm  # 6.6.2 case 3 - key_x + 5 off a keyboard pn_metrics scales at run time (11.98.1); no constant aligns it
+4 apps/solitaire/solitaire.asm  # 6.6.2 case 2 - a card's rank over a card face put down by the previous operation
+4 tests/fontbench/fontbench.asm  # 6.6.2 case 5 - prices FONT_CHAR per cell
+3 tests/gfxbench/gfxbench.asm  # 6.6.2 case 5 - the harness PRICES the pair; it is the measurement (PERFORMANCE.md Set 76)
+2 tests/typebench/typebench.asm  # 6.6.2 case 5 - measures the erase-and-letter pair against one font_run
+
+# --- 6.6.2 case 6: an OVERSTRIKE, which has to ADD to the glyphs under it ----
+# There is one typeface here, so bold is the same string struck again a pixel
+# right. A second run would repaint the cells' ground and erase the first
+# strike, leaving a one-pixel stub - the two passes have to be one opaque and
+# one transparent, in that order, and no primitive can collapse them.
+2 apps/word/word.asm  # ONE LINE PER FILE, so two cases on it: 6.6.2 case 6 is wd_drawrun's BOLD second strike (68.1), and 6.6.2 case 1 is the ruler's inch digits over the tick pattern (68)
+1 apps/texpad/texpad.asm  # 6.6.2 case 6 - the bold overstrike, tp_draw's second pass
+1 apps/frotz/zwin.inc  # 6.6.2 case 6 - zw_run's bold strike (FROTZ-PLAN 5.1)
+1 apps/frotz/zwin6.inc  # 6.6.2 case 6 - zw6_line's bold strike, the v6 window's twin of it
+2 apps/cword/cword.c  # 6.6.2 case 6 - the BOLD and ITALIC strikes, in C (73)
+
+# --- 6.6.2 case 1: a ground that is not a colour -----------------------------
+1 apps/tamegram/tamegram.asm  # 6.6.2 case 1 - tg_str, kept for the PAUSE/GAME OVER banner alone: it lands on the matrix, which is a grid of cells. tg_run is the opaque twin every other caller takes
+
+# --- 6.6.2 case 4: the published C surface, and 6.6.2 case 5's macro bodies ---
+3 apps/os88ui.inc  # 6.6.2 case 4's other half - two of these three are UI_STR's MACRO BODIES, one per build, not call sites; the third is ui_button's own invocation of it, the shared button label. They go when font_str does
+
+# --- backlog: three, and none of them is a conversion ------------------------
+1 kernel/wm.inc  # backlog: wm_draw_title's fifteen-call path, which is what EVERY shipping build draws. The composed bar is a KNOB (SPEC.md 5.9.6): wm_title_band is `%ifdef BAND`, so no floppy this project ships even assembles it, and this gfx_fill plus font_str_x writes every title pixel twice on chrome that redraws on every window operation. kern_small has no gfx_blit1 at all, so the conversion is owed on both builds. docs/TEXT-PLAN.md 6.1, Stage 7
+2 apps/arkanoid/arkanoid.asm  # backlog: the capsule letter is TEXT-PLAN 3.1's worked example - a sprite, so it wants compose-and-blit, not a run
+3 kernel/bootprof.inc  # backlog: TEXT-PLAN 4. BOOTPROF=1 only - the one surface no shipping build draws, so a conversion here cannot be seen without building the knob
+
+# --- the tracker's adapter gate, which is a COST argument and not a case -----
+# tui_runc takes OSAPI_FONT_RUN on mono and tui_setcol + tui_textc on colour,
+# where [vid_mono] is 0 and the run's own fallback is a gfx_fill of ground the
+# pattern view's caller filled once for the whole row band. That is measured
+# (SPEC.md 6.1.1) and it is the same shape SPEC.md 6.6.2's retired sixth case
+# had: a redundant fill the PRIMITIVE could take, not a caller's mistake. It is
+# here rather than in the case list because the fix belongs in font_run.
+1 apps/tracker/trkui.inc  # backlog: SPEC.md 45.20 - tui_runc's COLOUR arm. tui_runo is the unconditional run; this one is a measured trade, not an unconverted site
+
+# --- ARRIVED WITH SPEC.md 81/83, AFTER the rule was written ------------------
+# Sheet and Chart (#117) were written on main while 6.6 was being written on
+# this branch, so their text predates the rule rather than breaking it. The
+# ratchet's own opening argument applies to them exactly as it applied to the
+# rest of the tree: register the count the tree HAS, and stop it going up.
+# Both files are a MIX - a dialog label over a ground the window manager put
+# down two operations ago is 6.6.2 case 2 and is right as it stands; a
+# `gfx_fill` three instructions above a `font_str_x` is the pair, in the same
+# pass, and is not.
+17 apps/sheet/sheet.asm  # MIXED, one line per file. 6.6.2 case 1 is sh_drawcell's label over a SHADED cell (GFX_FILL_GRAY, so the ground is a dither); case 6 is the bold overstrike a line below it, the same 1px-right double strike texpad does; case 2 is the dialog prompts, drawn once onto a body the WM painted. backlog: the formula bar, the status bar and three dialog titles fill and then letter in the SAME pass - TEXT-PLAN 4's shape, in a package the branch that wrote the rule could not see
+4 apps/fptest/fptest.asm  # 6.6.2 case 2 - fpt_row's per-case rows land on a panel ground filled once for the whole run, and the pass that does not draw does not letter either. backlog: fpt_paint's header is a fill and then a letter in one pass

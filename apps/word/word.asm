@@ -4754,7 +4754,7 @@ wd_bandrun:
     inc ax                          ; this is a second compose rather than a
     push si                         ; second drawing call - it costs no floor
     call ty_putn                    ; at all, where the cell arm pays a whole
-    pop si                          ; OSAPI_FONT_STR for it
+    pop si                          ; OSAPI_FONT_STR_XPARENT for it
     pop ax
     inc ax                          ; ...and the run is one pixel wider
 .nbold:
@@ -4874,7 +4874,7 @@ wd_drawrun:
     mov al, CBLACK                  ; FONT_STR ORs ink and erases nothing
     call OSAPI_SET_COLOR
     pop ax
-    call OSAPI_FONT_STR
+    call OSAPI_FONT_STR_XPARENT
 .nbold:
     pop bx
     pop ax
@@ -13298,13 +13298,15 @@ wd_mdraw:
     cmp ax, [wd_mry2]
     jae .done                       ; clipped by a short window: stop
     push cx
+    mov byte [wd_mink], CBLACK
     test byte [si], WDMF_DIS
     jnz .dis
     clc
     jmp short .pen
 .dis:
-    stc
-.pen:
+    mov byte [wd_mink], CDGRAY      ; ...and the run's ink is the same answer
+    stc                             ; (SPEC.md 68.14): a package cannot read
+.pen:                               ; the pen back, so it is decided here
     call OSAPI_GFX_PEN              ; CF IS the argument (SPEC.md 47)
     ; the check column
     test byte [si], WDMF_CHK
@@ -13339,8 +13341,11 @@ wd_mdraw:
     inc dx
     push si
     mov si, [si+4]
-    call OSAPI_FONT_STR
-    pop si
+    mov ah, CWHITE                  ; OPAQUE (SPEC.md 68.14): the panel's white
+    mov al, [wd_mink]               ; is a constant and the item's own cells
+    call OSAPI_FONT_RUN             ; are one decision each. [gfx_dis] is
+    pop si                          ; already set, so 6.1.12 folds 47's
+                                    ; checkerboard into the run's own mask
     ; the mnemonic underline (enabled items only: a grey line rounds to
     ; solid black at 1bpp and a greyed mnemonic answers no key anyway)
     test byte [si], WDMF_DIS
@@ -13365,13 +13370,15 @@ wd_mdraw:
     jz .nocap
     push si
     mov si, bx
-    call OSAPI_FONT_WIDTH
-    mov cx, [wd_mrx2]
+    call OSAPI_FONT_WIDTH           ; AX is the WIDTH here, so the pair goes
+    mov cx, [wd_mrx2]               ; in after it and not before
     sub cx, 6
     sub cx, ax
     mov dx, di
     inc dx
-    call OSAPI_FONT_STR
+    mov ah, CWHITE
+    mov al, [wd_mink]
+    call OSAPI_FONT_RUN
     pop si
 .nocap:
     clc
@@ -13927,7 +13934,8 @@ wd_combo:
     add cx, 8
     mov dx, bx
     add dx, 2
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: the strip's fill is what is under
+    call OSAPI_FONT_RUN             ; this box, and it is white (SPEC.md 68.14)
     pop di
     pop si
     pop dx
@@ -13954,13 +13962,20 @@ wd_btn12:
     pop cx
     or cl, cl
     jz .out
-    push ax
-    mov al, cl
-    pop cx
+    push si
+    mov [wd_cbuf], cl               ; a one-character STRING: there is no
+    mov byte [wd_cbuf+1], 0         ; opaque font_char and a run of one cell
+    mov si, wd_cbuf                 ; is the same call (SPEC.md 6.6.5)
+    mov cx, ax                      ; CX = x, which arrived in AX
     add cx, 2
     mov dx, bx
     add dx, 2
-    call OSAPI_FONT_CHAR
+    mov ax, (CWHITE << 8) | CBLACK  ; the strip's fill is what is under this
+    call OSAPI_FONT_RUN             ; box. EVERY LETTERED CALLER IS LIVE - the
+                                    ; two that grey the pen (super/subscript,
+                                    ; the tab gallery) pass CL = 0 - so the
+                                    ; ink is a constant here
+    pop si
 .out:
     pop dx
     pop cx
@@ -14012,7 +14027,8 @@ wd_ribbon:
     mov dx, di
     add dx, 4
     mov si, wd_s_font
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: the ribbon's fill is white (SPEC.md 68.14)
+    call OSAPI_FONT_RUN
     mov ax, [wd_cl]
     add ax, WD_RB_FBX
     mov bx, di
@@ -14029,7 +14045,8 @@ wd_ribbon:
     mov dx, di
     add dx, 4
     mov si, wd_s_pts
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: ...and so is the rest of the strip
+    call OSAPI_FONT_RUN
     mov ax, [wd_cl]
     add ax, WD_RB_PBX
     mov bx, di
@@ -14524,7 +14541,8 @@ wd_ruler:
     mov dx, di
     add dx, 4
     mov si, wd_s_style
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: the ruler's fill, likewise
+    call OSAPI_FONT_RUN
     mov ax, [wd_cl]
     add ax, WD_RL_SBX
     mov bx, di
@@ -14593,7 +14611,8 @@ wd_ruler:
     mov dx, di
     add dx, 4
     mov si, wd_s_15
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: ...and the box this sits in is drawn on it
+    call OSAPI_FONT_RUN
     mov ax, [wd_cl]
     add ax, WD_RL_SP2
     mov bx, di
@@ -14926,7 +14945,7 @@ wd_rlscale:
     mov cx, bx
     mov dx, di
     add dx, 2
-    call OSAPI_FONT_CHAR
+    call OSAPI_FONT_CHAR_XPARENT
     add bx, 80
     inc al
     cmp al, '9'
@@ -17022,14 +17041,17 @@ wd_abopen:
     add cx, 8
     mov dx, [wd_abrect+2]
     add dx, 8
-    mov si, wd_s_about
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; the panel this routine filled, eleven
+    mov si, wd_s_about              ; calls up (SPEC.md 6.6.5)
+    call OSAPI_FONT_RUN
     add dx, 12
     mov si, wd_s_abou2
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
     add dx, 12
     mov si, wd_s_abou3
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
     ; the OK button
     mov ax, [wd_abrect]
     add ax, 148
@@ -17167,6 +17189,30 @@ wd_dgopen:
     ret
 
 ; -----------------------------------------------------------------------------
+; wd_dpen - OSAPI_GFX_PEN from a WDDF_DIS mask, and the INK with it
+; in:  AL = the record's WDDF_DIS bit, isolated (0 live, non-0 disabled)
+; out: the pen set, [wd_dink] banked; AL clobbered, everything else preserved
+;
+; `add al, 0xFF` is the flag: it carries out of a non-zero AL and not out of a
+; zero one, which is CF = 1 for disabled. That much is unchanged. What is new
+; is that a run takes its ink as an ARGUMENT and there is no OSAPI_GET_COLOR
+; (SPEC.md 6.6.5), so the same branch writes the answer down - CDGRAY where
+; the menu's [wd_mink] uses CDGRAY, for the same reason and to the same value.
+; -----------------------------------------------------------------------------
+wd_dpen:
+    or al, al
+    jz .live
+    mov byte [wd_dink], CDGRAY
+    stc
+    jmp short .set
+.live:
+    mov byte [wd_dink], CBLACK
+    clc
+.set:
+    call OSAPI_GFX_PEN
+    ret
+
+; -----------------------------------------------------------------------------
 ; wd_dgpaint - draw the open dialog whole: dress, title, every control
 ; in:  [wd_dlg]/[wd_dlgx]/[wd_dlgy]/[wd_dlrect], gfx lock held; preserves all
 ; -----------------------------------------------------------------------------
@@ -17209,7 +17255,8 @@ wd_dgpaint:
     mov dx, [wd_dlgy]
     add dx, 6
     mov si, [bx+4]                  ; the title
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; the panel wd_dgpaint filled above
+    call OSAPI_FONT_RUN
     lea di, [bx+6]
 .ctl:
     cmp byte [di], 0
@@ -17265,7 +17312,8 @@ wd_dgctl:
     jmp .done
 .lbl:
     mov si, [di+6]
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
     jmp .done
 .chk:
     mov al, OS88UI_GCHECK
@@ -17281,10 +17329,11 @@ wd_dgctl:
     add dx, 2
     mov al, [di+1]                  ; the glyph left the pen LIVE: back to the
     and al, WDDF_DIS                ; record's own state for the label
-    add al, 0xFF
-    call OSAPI_GFX_PEN
-    mov si, [di+6]
-    call OSAPI_FONT_STR
+    call wd_dpen                    ; ...which banks the run's INK with the
+    mov si, [di+6]                  ; flag: a package cannot read the pen back
+    mov al, [wd_dink]               ; (SPEC.md 6.6.5). The pen is still set,
+    mov ah, CWHITE                  ; because the mnemonic rule below is a
+    call OSAPI_FONT_RUN             ; GFX_HLINE and does read it
     test byte [di+1], WDDF_DIS
     jnz .done                       ; no mnemonic on a greyed box (65.2's rule)
     mov ax, [di+10]                 ; the mnemonic underline: index * 8
@@ -17311,10 +17360,11 @@ wd_dgctl:
     add dx, 2
     mov al, [di+1]
     and al, WDDF_DIS
-    add al, 0xFF
-    call OSAPI_GFX_PEN
+    call wd_dpen
     mov si, [di+6]
-    call OSAPI_FONT_STR
+    mov al, [wd_dink]
+    mov ah, CWHITE
+    call OSAPI_FONT_RUN
     jmp .done
 .grp:
     mov ax, cx
@@ -17331,7 +17381,8 @@ wd_dgctl:
     add cx, 6
     add dx, 2
     mov si, [di+6]
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; INSIDE the frame: its top edge is at
+    call OSAPI_FONT_RUN             ; dx-2 and the cells run dx..dx+7
     jmp .done
 .box:
     mov ax, cx
@@ -17347,7 +17398,8 @@ wd_dgctl:
     add cx, 4
     add dx, 3
     mov si, [di+6]
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; the box is 13 rows and the cells are
+    call OSAPI_FONT_RUN             ; rows 3..10 of it: clear of both edges
     jmp .done
 .edit:
     mov ax, cx                      ; the live edit box: interior erased (it
@@ -17382,7 +17434,8 @@ wd_dgctl:
     mov dx, bx
     add dx, 3
     mov si, [di+6]
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; the interior this arm erased six calls
+    call OSAPI_FONT_RUN             ; ago, clear of both frame edges
     cmp di, [wd_dgfoc]
     jne .edone
     call OSAPI_FONT_WIDTH           ; SI = the text: AX = its width
@@ -19809,7 +19862,19 @@ section .text
                             ; finishes the teardown (wd_worker .quit)
     WDVAR wd_stok, 1        ; byte: wd_stold describes the strip
     WDVAR wd_stkf, 1        ; byte: the CAPS/NUM bits the lamps show
-    WDVAR wd_mpad, 1        ; byte: keeps the words below even
+    WDVAR wd_mink, 1        ; byte: the ink a dropped menu's runs letter in -
+                            ; CBLACK, or CDGRAY when the item is dead
+                            ; (SPEC.md 68.14). Decided at the same branch that
+                            ; decides OSAPI_GFX_PEN's CF, because a package
+                            ; cannot read the pen back, and it took the pad
+                            ; byte that used to keep the words below even -
+                            ; which wd_dink then needed back (wd_mpad)
+    WDVAR wd_dink, 1        ; byte: the same answer for a DIALOG's controls,
+                            ; banked by wd_dpen (SPEC.md 6.6.5)
+    WDVAR wd_mpad, 1        ; byte: ...and the pad BACK, because two ink bytes
+                            ; landed where one did and the words below have to
+                            ; stay even again
+    WDVAR wd_cbuf, 2        ; wd_btn12's one character and its NUL
     WDVAR wd_mrx1, 2        ; word } the open dropdown's rectangle, computed
     WDVAR wd_mry1, 2        ; word } once by wd_mgeo and read by painter, hit
     WDVAR wd_mrx2, 2        ; word } test, highlight and close repaint alike

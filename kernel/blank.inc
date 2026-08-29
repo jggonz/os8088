@@ -118,7 +118,7 @@ SSV_BUSY    equ 4               ; may your image be freed? Out: CF = 1 = no,
 ; -----------------------------------------------------------------------------
 ; State. In .text with real initialisers rather than in .bss, and here that is
 ; not the usual caution - .bss does arrive zeroed (kernel.asm: the image's gap
-; to OVL_START is emitted as zeros and the boot sector's one contiguous read
+; to COLD_START is emitted as zeros and stage 2's one contiguous read
 ; lands them), and it costs the same image bytes either way, because the rung
 ; KIMG_PARA rounds covers .text and .bss together.
 ;
@@ -351,7 +351,7 @@ blk_pass:
 
 .post:
     mov byte [ss_post], 0       ; consumed BEFORE it is spent, blk_act's rule:
-    call COLD_SEG:ssf_post      ; a second post landing inside this window
+    call COLD_SEG:ss_post_x     ; a second post landing inside this window
     ret                         ; costs one more pass and nothing else
 %endif
 
@@ -679,7 +679,7 @@ ss_post_x:
     mov byte [cp_wdirty], 1
     call ss_reap_x
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; ss_set_x - blk_set's whole animation arm (SPEC.md 79.1, 79.6)
@@ -759,8 +759,6 @@ ssf_frame:      cmp byte [blk_sv], 0    ; blk_pass's gate, on this side of the
                 call ss_call
                 pop ax
 .none:
-                retf
-ssf_post:       call ss_post_x
                 retf
 ssf_cfg:        call ss_cfg_x
                 retf

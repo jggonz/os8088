@@ -60,7 +60,7 @@ import os88marty, os88mouse, os88sym, dispcp                # noqa: E402
 
 S = os88sym.linear
 TITLE_H = 18
-MBAR_H = 19
+MBAR_H = 20
 KINDS = {0: "VGA", 1: "HERC", 2: "CGA"}
 
 # A DISK OF ITS OWN PER APP, so the package is row 0 of B:'s root and there is

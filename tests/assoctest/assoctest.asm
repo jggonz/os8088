@@ -181,7 +181,8 @@ at_paint:
     mov si, [at_labels + si]
     mov cx, bx
     add cx, 6
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     push bx
     mov bx, di
     add bx, at_v0                       ; the six verdicts are one contiguous
@@ -194,7 +195,8 @@ at_paint:
 .verdict:
     mov cx, bx
     add cx, 262
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     add dx, 12
     inc di
     cmp di, AT_ROWS

@@ -23,6 +23,16 @@
 ; the first tick can arrive.
 ; =============================================================================
 
+section .boot2                  ; ...and it lives in STAGE 2 (SPEC.md 2.9.4).
+                                ; The switch is HERE and not round the
+                                ; %include in kernel.asm, because that is what
+                                ; every other module that leaves .text does
+                                ; and because tools/kernsize.py's per-module
+                                ; markers hand each %include the section they
+                                ; end in - a `section` in the caller reads as
+                                ; .text to them, and the whole module lands in
+                                ; the image instead
+
 SPL_RESIDENT equ 9              ; sectors the boot sector waits for before
                                 ; ticking us (must match boot/boot.asm).
                                 ; It was 6, and the module ended at 3,072
@@ -67,6 +77,20 @@ SPL_RESIDENT equ 9              ; sectors the boot sector waits for before
                                 ; second - was a sector at the pre-18.91 238 ms
 SPL_GC      equ 0x3CE           ; VGA Graphics Controller index port
 
+; gfx_nextrow, INLINED (SPEC.md 2.9.4). Two reasons and the second is the one
+; that bites: it is four instructions, and a call and ret across a segment is
+; 46.7 us against 11 - paid per ROW, in spl_fill, spl_vline and spl_bar, which
+; on VGA is ~100 rows a paint and ~50 paints a boot. AND ITS OWN BODY READS
+; `[cs:vid_rowadd]`, which is right in `.text` and wrong here: CS is stage 2's
+; segment now, so the same three words have to come through DS.
+%macro SPL_NEXTROW 0
+    add di, [vid_rowadd]
+    test di, [vid_wrapbit]
+    jz %%r
+    add di, [vid_wrapfix]
+%%r:
+%endmacro
+
 ; The bar counts SECTORS, and the boot sector's read is not the last of them:
 ; kmain's tail mounts A:, reads SYSTEM.CFG and loads whatever it asks for,
 ; which on the 1.44MB system disk is thirteen more sectors before a pixel of
@@ -100,7 +124,26 @@ SPL_BAR_Y   equ 264             ; bar interior top row on VGA - inside the
 SPL_BAR_H   equ 16
 
 ; -----------------------------------------------------------------------------
-; spl_tick - the 0800:0008 far entry (SPEC.md 15).
+; The three entries the KERNEL still reaches, and it reaches them FAR: the
+; splash is in `.boot2` and the kernel is not (SPEC.md 2.9.4). Four bytes each,
+; the boot overlay's ovl_* shape exactly, so every body below keeps its near
+; `ret` and changed in no other way.
+; -----------------------------------------------------------------------------
+splf_step:      call spl_step
+                retf
+splf_finish:    call spl_finish
+                retf
+splf_reset:     call spl_reset
+                retf
+splf_fill:      call spl_fill
+                retf            ; ...and SPEC.md 15.5's BOOTMARK beacon, which
+                                ; borrows the splash's byte-granular fill and
+                                ; is `.text`. os88ovlchk found this one: two
+                                ; near calls that were right for as long as
+                                ; both ends were in the same segment
+
+; -----------------------------------------------------------------------------
+; spl_tick - stage 2 calls this after every run it reads (SPEC.md 15).
 ; in: AX = sectors loaded, DX = total sectors. Preserves every register and
 ; segment; flags clobbered. Runs on the boot stack, boot sector's segments.
 ; -----------------------------------------------------------------------------
@@ -114,20 +157,37 @@ spl_tick:
     push bp
     push ds
     push es
-    push cs
-    pop ds                      ; our data lives in the kernel segment
+    mov bx, ax                  ; AX IS THE ARGUMENT AND LOADING DS SPENDS IT.
+                                ; An 8086 has no `mov ds, imm`, so the segment
+                                ; goes through a general register - and this
+                                ; routine took the sector count in AX, which
+                                ; is why the count is banked FIRST and every
+                                ; use below reads BX (SPEC.md 15.3.1).
+                                ;
+                                ; It cost a whole boot's worth of progress bar:
+                                ; `mov [cs:spl_done], ax` stored KERNEL_SEG,
+                                ; so the bar sat at 96/spl_total = 44% for the
+                                ; entire kernel load and only moved again when
+                                ; dsk_xfer's spl_step took over. In `.text`
+                                ; there was no `mov ds` here at all - DS was
+                                ; already the kernel's - so the instruction
+                                ; that broke it is the one SPEC.md 2.9.4 added.
+    mov ax, KERNEL_SEG          ; DS IS THE KERNEL'S, not ours (SPEC.md 2.9.4):
+    mov ds, ax                  ; every vid_* and gfx_* word below is plain,
+                                ; and our own data is reached `cs:` - the boot
+                                ; overlay's contract, one section along
 
     add dx, SPL_POST            ; kmain's tail is on this bar too (SPEC 15.3)
-    mov [spl_total], dx
-    cmp ax, dx                  ; ...and CLAMP: a bound on what a CALLER may
+    mov [cs:spl_total], dx
+    cmp bx, dx                  ; ...and CLAMP: a bound on what a CALLER may
     jbe .cnt                    ; pass, nothing more. The loader may load the
-    mov ax, dx                  ; kernel TWICE (SPEC.md 18.93/18.93.1) and the
+    mov bx, dx                  ; kernel TWICE (SPEC.md 18.93/18.93.1) and the
 .cnt:                           ; bar climbs from 0 again when it does - the
-    mov [spl_done], ax          ; sector derives the count from what is LEFT
+    mov [cs:spl_done], bx          ; sector derives the count from what is LEFT
 
-    cmp byte [spl_on], 0
+    cmp byte [cs:spl_on], 0
     jne .running
-    mov byte [spl_on], 1
+    mov byte [cs:spl_on], 1
     mov byte [spl_live], 1      ; ...and from here the splash OWNS the screen
     call spl_chrome             ; and the video mode, until spl_finish
 .running:
@@ -142,10 +202,12 @@ spl_tick:
     pop cx
     pop bx
     pop ax
-    retf
+    ret                         ; NEAR: stage 2 draws the splash and stage 2
+                                ; calls it, so the pinned 0060:0008 far entry
+                                ; this used to answer at is gone (SPEC.md 2.9.4)
 
 ; -----------------------------------------------------------------------------
-; spl_paint - one frame of the loading screen, from [spl_done]/[spl_total].
+; spl_paint - one frame of the loading screen, from [cs:spl_done]/[cs:spl_total].
 ;             clobbers: ax, bx, cx, dx, si, di, bp, es
 ;
 ; Factored out of spl_tick so the boot sector's ticks and kmain's post-load
@@ -171,11 +233,28 @@ spl_paint:
 ; after spl_finish this is a compare and a return, and it stays on the disk
 ; path for the life of the machine at that price (~13 us against a sector's
 ; ~24 ms).
+;
+; ...AND IT STARTS THE SPLASH ITSELF WHEN NOBODY ELSE HAS (SPEC.md 2.9.9.1).
+; It could not, and that cost the hard disk its loading screen: spl_tick raises
+; [spl_live] and STAGE 2 is the only caller of spl_tick, so a loader that does
+; not tick - and boot/boothd.asm has no business drawing a progress bar out of
+; 512 bytes - left this routine a no-op for the whole boot.
+;
+; The two states it has to tell apart are "nobody has started me" and "I am
+; finished", and both read [spl_live] = 0. [cs:spl_on] is the difference: it is
+; set once and never cleared, so the FIRST call ever made can start the screen
+; and every call after spl_finish stays the compare-and-return above. Seeding
+; the total with SPL_POST rather than a sector count is not a shortfall - on a
+; machine whose loader finished the load before the kernel ran, kmain's own
+; tail IS what is left to measure.
 ; -----------------------------------------------------------------------------
 spl_step:
     pushf
     cmp byte [spl_live], 0
-    je .out
+    jne .go
+    cmp byte [cs:spl_on], 0
+    jne .out                    ; spl_finish has been and gone
+.go:
     push ax
     push bx
     push cx
@@ -184,14 +263,24 @@ spl_step:
     push di
     push bp
     push es
-    mov ax, [spl_done]
+    cmp byte [cs:spl_on], 0
+    jne .notch
+    mov byte [cs:spl_on], 1     ; the first call of a boot nobody ticked
+    mov byte [spl_live], 1
+    mov word [cs:spl_total], SPL_POST
+    mov word [cs:spl_done], 0
+    call spl_chrome
+    jmp short .draw
+.notch:
+    mov ax, [cs:spl_done]
     inc ax
-    cmp ax, [spl_total]
+    cmp ax, [cs:spl_total]
     jb .set
-    mov ax, [spl_total]         ; the last notch is spl_finish's, so a boot
+    mov ax, [cs:spl_total]         ; the last notch is spl_finish's, so a boot
     dec ax                      ; that overruns its allowance crowds up
 .set:                           ; against 100% instead of claiming to be done
-    mov [spl_done], ax
+    mov [cs:spl_done], ax
+.draw:
     call spl_paint
     pop es
     pop bp
@@ -230,8 +319,8 @@ spl_finish:
     push di
     push bp
     push es
-    mov ax, [spl_total]
-    mov [spl_done], ax
+    mov ax, [cs:spl_total]
+    mov [cs:spl_done], ax
     call spl_paint
     mov byte [spl_live], 0
     pop es
@@ -247,13 +336,71 @@ spl_finish:
     ret
 
 ; -----------------------------------------------------------------------------
+; spl_reset - put the loading screen back after a mode switch (SPEC.md 39.11.3)
+;
+; in:       nothing
+; out:      nothing (all registers preserved)
+; clobbers: -
+;
+; vid_setmode clears the framebuffer, so a switch taken from drv_boot - while
+; the boot is still reading sectors and ticking the bar - wipes the loading
+; screen. This redraws it: the chrome from spl_rechrome, which is spl_chrome
+; without the adapter re-probe that would undo the switch, and then one
+; ordinary frame from the progress the bar had already reached.
+;
+; IT LIVES IN splash.inc NOW. It was in vidsel.inc because splash.inc had to
+; fit the image's opening SPL_RESIDENT sectors and this is not reachable from
+; the boot sector - a budget that stopped existing when the whole module moved
+; to stage 2 (SPEC.md 2.9.4).
+;
+; [spl_live] is the guard, and it is what makes this safe to call from
+; anywhere: after spl_finish the splash owns nothing and drawing a dialog
+; over the desktop would be a bug. The Control Panel's switch therefore
+; never calls it and would be harmless if it did.
+; -----------------------------------------------------------------------------
+spl_reset:
+    cmp byte [spl_live], 0
+    je .out
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    call spl_rechrome
+    call spl_paint
+    OVLCALL ovl_spl_redraw      ; ...and SPEC.md 15.6's status line with it.
+                                ; spl_paint deliberately does NOT draw it - a
+                                ; per-sector font_run is tens of milliseconds
+                                ; against a ~24 ms sector - so the ONE path
+                                ; that wipes the framebuffer under a live line
+                                ; is the one that has to put it back, at the
+                                ; NEW geometry. After kmain gives the blob
+                                ; back this reaches spl_dead and returns
+                                ; (2.9.5), which is the right answer: by then
+                                ; the desktop owns the screen and [spl_live]
+                                ; would have refused anyway
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
 ; spl_chrome - first tick only: mode 12h, the double-framed welcome dialog,
 ;              the bar trough, the title. clobbers: ax, bx, cx, dx, si, es
 ; -----------------------------------------------------------------------------
 spl_chrome:
-    call vid_detect             ; the adapter probe happens HERE, before any
-    call vid_apply              ; other kernel module is even resident: the
-    call vid_setmode            ; splash owns the first mode set, and kmain's
+    call KERNEL_SEG:spw_vid_detect ; the adapter probe happens HERE, before any
+    call KERNEL_SEG:spw_vid_apply ; other kernel module is even resident: the
+    call KERNEL_SEG:spw_vid_setmode; splash owns the first mode set, and kmain's
                                 ; vid_init later re-runs all three (SPEC 39.1)
 
 ; ...and the same chrome onto a mode SOMEBODY ELSE has just set: spl_reset's
@@ -272,13 +419,13 @@ spl_rechrome:
 .barv:
     mov ax, SPL_BAR_Y
 .bary:
-    call gfx_rowbase
+    call KERNEL_SEG:spw_gfx_rowbase
     mov bx, [vid_cw]            ; x = (width - bar) / 2, in whole bytes: 22 at
     sub bx, SPL_BAR_PX          ; 640 (which is what SPL_BAR_ADR always was),
     mov cl, 4                   ; 27 at Hercules' 720
     shr bx, cl
     add ax, bx
-    mov [spl_bar_adr], ax
+    mov [cs:spl_bar_adr], ax
 
     mov ax, [vid_seg]
     mov es, ax
@@ -325,15 +472,15 @@ spl_bar:
     mov ax, [vid_seg]
     mov es, ax
 
-    mov ax, [spl_done]
+    mov ax, [cs:spl_done]
     mov cx, SPL_BAR_PX
     mul cx
-    div word [spl_total]        ; AX = filled pixels, 0..SPL_BAR_PX
+    div word [cs:spl_total]        ; AX = filled pixels, 0..SPL_BAR_PX
     mov si, ax
     mov cl, 3
     shr ax, cl                  ; AX = whole bytes of fill
 
-    mov di, [spl_bar_adr]
+    mov di, [cs:spl_bar_adr]
     mov cx, ax
     mov bx, SPL_BAR_H
     mov al, 0xFF
@@ -352,7 +499,7 @@ spl_bar:
     mov bx, SPL_BAR_H
 .prow:
     call spl_wrbyte             ; merge white through the armed mask
-    call gfx_nextrow
+    SPL_NEXTROW
     dec bx
     jnz .prow
     mov al, 0xFF
@@ -365,19 +512,19 @@ spl_bar:
 ; clobbers: ax, bx, cx, dx, si
 ; -----------------------------------------------------------------------------
 spl_pct:
-    mov ax, [spl_done]
+    mov ax, [cs:spl_done]
     mov cx, 100
     mul cx
-    div word [spl_total]        ; AX = percent, 0..100
+    div word [cs:spl_total]        ; AX = percent, 0..100
 
-    mov word [spl_pctbuf], '  '     ; digits grow leftward over the blanks
+    mov word [cs:spl_pctbuf], '  '     ; digits grow leftward over the blanks
     mov bx, spl_pctbuf + 2
     mov cx, 10
 .digit:
     xor dx, dx
     div cx
     add dl, '0'
-    mov [bx], dl
+    mov [cs:bx], dl
     dec bx
     test ax, ax
     jnz .digit
@@ -398,7 +545,8 @@ spl_print:
     push si
     mov bx, 0x000F              ; page 0; BL = foreground in graphics modes
 .next:
-    lodsb
+    mov al, [cs:si]             ; OUR string, so not lodsb: DS is the kernel's
+    inc si
     test al, al
     jz .done
     mov ah, 0x0E
@@ -425,26 +573,30 @@ spl_spin:
     xor al, al
     call spl_fill
 
-    mov bx, [spl_done]
+    mov bx, [cs:spl_done]
     and bx, 15
     shl bx, 1
-    mov ax, [spl_cos_tab + bx]
-    mov [spl_cos], ax
+    mov ax, [cs:spl_cos_tab + bx]
+    mov [cs:spl_cos], ax
 
     mov si, spl_segs
     mov cx, SPL_NSEGS
 .seg:
     push cx
-    lodsb                       ; x1
+    mov al, [cs:si]             ; the stroke table is OURS, so every read of it
+    inc si                      ; is cs: - four of them a segment
     call spl_xform
     mov bx, ax
-    lodsb                       ; y1
+    mov al, [cs:si]             ; y1
+    inc si
     xor ah, ah
     mov dx, ax
-    lodsb                       ; x2
+    mov al, [cs:si]             ; x2
+    inc si
     call spl_xform
     mov bp, ax
-    lodsb                       ; y2
+    mov al, [cs:si]             ; y2
+    inc si
     xor ah, ah
 
     cmp dx, ax
@@ -480,7 +632,7 @@ spl_xform:
     push dx
     xor ah, ah
     sub ax, SPL_HALFW
-    imul word [spl_cos]         ; DX:AX = rel * cos; |result| <= 3328
+    imul word [cs:spl_cos]         ; DX:AX = rel * cos; |result| <= 3328
     mov cl, 6
     sar ax, cl
     add ax, 320
@@ -504,7 +656,7 @@ spl_hline:
     mov si, dx                  ; SI = x2 (gfx_rowbase eats CX and DX)
     mov ax, bx                  ; AX = y
     mov bx, cx                  ; BX = x1 - gfx_rowbase preserves it
-    call gfx_rowbase
+    call KERNEL_SEG:spw_gfx_rowbase
     mov bp, ax                  ; BP = row base
 
     mov ax, bx
@@ -574,7 +726,7 @@ spl_vline:
     inc di                      ; DI = row count
     push cx                     ; CX = x, and gfx_rowbase eats CX
     mov ax, bx
-    call gfx_rowbase
+    call KERNEL_SEG:spw_gfx_rowbase
     mov bx, di                  ; BX = row count
     mov di, ax                  ; DI = row base
     pop cx
@@ -591,7 +743,7 @@ spl_vline:
     call spl_bitmask
 .row:
     call spl_wrbyte             ; latch, then merge the masked bit
-    call gfx_nextrow
+    SPL_NEXTROW
     dec bx
     jnz .row
     mov al, 0xFF
@@ -640,7 +792,7 @@ spl_fill:
     rep stosb
     pop di
     pop cx
-    call gfx_nextrow
+    SPL_NEXTROW
     dec bx
     jnz .row
     pop di
@@ -664,7 +816,7 @@ spl_bitmask:
     pop ax
     ret
 .mono:
-    mov [spl_mask], al          ; no GC to arm: spl_wrbyte applies it in
+    mov [cs:spl_mask], al          ; no GC to arm: spl_wrbyte applies it in
     pop dx                      ; software
     pop ax
     ret
@@ -692,7 +844,7 @@ spl_wrbyte:
     mov byte [es:di], 0xFF
     ret
 .mono:
-    mov al, [spl_mask]
+    mov al, [cs:spl_mask]
     or [es:di], al
     ret
 
@@ -729,19 +881,22 @@ spl_cos_tab:                    ; cos(k/16 rev) * 64, k = 0..15
 spl_bar_adr dw 0            ; the bar's top-left byte, set by spl_chrome
 spl_mask    db 0xFF          ; mono: what the GC's Bit Mask holds on VGA
 spl_on      db 0             ; the chrome has been drawn - spl_tick's latch
-spl_live    db 0             ; ...and the splash still OWNS the screen and the
-                             ; video mode. A different question, and it stays
-                             ; true right through kmain: spl_finish clears it
-                             ; (SPEC.md 15.3)
+; ...and [spl_live] is NOT here: it is the one byte of this module the KERNEL
+; reads - viddet's mode guard, fprog's boot test and vidsel's spl_reset all ask
+; it through DS - so it stays in `.text` where DS reaches it (SPEC.md 2.9.4).
+; One byte resident against 967 that left.
 spl_done    dw 0
 spl_total   dw 1
 spl_cos     dw 64
 spl_pctbuf  db '   %', 0
 spl_s_welcome db 'Welcome to os8088.', 0
 
-; The whole module must be aboard before the boot sector's first tick.
-spl_module_end:
-SPL_MODULE_END equ spl_module_end - $$
-%if SPL_MODULE_END > SPL_RESIDENT * 512
-%error "splash: module must fit inside the first SPL_RESIDENT sectors (SPEC.md 15)"
-%endif
+; THE MODULE'S OWN SIZE IS NOT A BUDGET ANY MORE (SPEC.md 2.9.4). It used to
+; have to fit the image's opening SPL_RESIDENT sectors, because the boot sector
+; far-called it at 0060:0008 while the rest of the kernel was still landing -
+; a constant that was raised three times, never once by this file. It is stage
+; 2's now, aboard in its entirety before stage 2 runs at all, and what
+; SPL_RESIDENT measures instead is viddet.inc: the first tick probes the
+; adapter, and that is the KERNEL's code. The assertion moved with the meaning.
+
+section .text                   ; and hand .text back, as every module must

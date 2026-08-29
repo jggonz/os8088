@@ -494,51 +494,318 @@ vid_reboot:
     pop ax
     ret
 
+; =============================================================================
+; THE BOOT STATUS LINE (SPEC.md 15.6) - ENTIRELY IN THE BOOT OVERLAY
+;
+; The bar says HOW FAR; this says WHAT. From kmain onward the remaining
+; seconds of a boot are four distinguishable pieces of floppy work - the mount
+; of A:, the read of SYSTEM.CFG, and one .DRV per driver the settings ask for
+; - and on the field machine that is seconds of drive noise with nothing on
+; the screen but a bar creeping through SPEC.md 15.3's SPL_POST notches. It
+; reads as a hang. A line under the bar naming the file being read turns it
+; into a machine that is visibly working.
+;
+; **EVERY BYTE OF THE CODE, THE STRINGS AND THE BUFFER IS IN `.ovl`**, which
+; is what makes the feature free: the overlay rides stage 2's blob (SPEC.md
+; 2.9.6), which stage 1 reads before it jumps and kmain gives back after
+; spl_finish - so this is drawing code that exists for exactly as long as there
+; is a loading screen to draw on, and then stops existing. The resident cost is
+; 4 bytes (ovw_font_run_x) plus the two OVLCALL sites.
+;
+; **That is only possible since SPEC.md 2.5.1.** The overlay used to BE the FAT
+; window, so the first mount ate it - and drv_boot's own mount is the very
+; thing the first line here announces, so every driver message after it would
+; have been a far call into somebody else's FAT. It outlives the mount now,
+; which is exactly the lifetime this needs.
+;
+; Five things hold it up.
+;
+; **It is drawn when it CHANGES, and never on a tick.** spl_paint runs once
+; per sector transferred (dsk_xfer, SPEC.md 15.3) and a 32-cell font_run is
+; tens of milliseconds on a 4.77MHz machine against a sector's ~24 ms, so a
+; line redrawn per frame would cost more than the load it is reporting on.
+; spl_mline is therefore the composition buffer AND the record of what is on
+; the glass - SPEC.md 12.9's menu_bcell discipline in miniature - so composing
+; IS the diff. The whole boot draws it three times.
+;
+; **It is ONE opaque font_run, space-padded to SPL_MSG_CELLS.** The padding is
+; the erase (SPEC.md 27.2), so a shorter message wipes a longer one in the
+; same pass that letters it; there is no fill anywhere in this module and the
+; line is never momentarily blank. It also puts SPEC.md 11.3's granularity
+; rule out of reach - there is no erase-and-letter pair here to disagree.
+;
+; **The pen is byte-aligned**, floored to a cell by spl_mgeom, so both mono
+; adapters take font_run's single-store path (SPEC.md 6.1). That is what makes
+; a 32-cell line affordable on the machine it exists for - and the line draws
+; on ALL THREE adapters, which the rest of the loading screen does not: 15's
+; dialog, percentage and spinner are BIOS teletype and mode-12h chrome, and
+; the bar was the only thing a Hercules or a CGA ever saw.
+;
+; **The overlay may not reach its own data through DS** (SPEC.md 2.5), so the
+; buffer and the three strings below are read `cs:` - and the string the
+; DRIVER supplies is a .text one read through DS, which is why there are two
+; walkers (spl_mcs / spl_mds) rather than one.
+;
+; **No entry takes a pointer across the boundary.** A caller in .cold naming
+; a label in this section would assemble and would be a cross-address-space
+; reference os88ovlchk cannot see, so the two literal lines are zero-argument
+; entries of their own and the only pointer that ever crosses is DS:SI, which
+; is a kernel string by contract.
+;
+; The gfx lock is not held, exactly as spl_paint does not hold it: nothing
+; else in the machine draws yet. The UI task does not exist, the cursor is not
+; shown until after spl_finish, and [spl_live] refuses spl_mdraw the moment
+; the desktop owns the screen.
+; =============================================================================
+section .ovl
+
+SPL_MSG_CELLS equ 32            ; the reserved width, in 8px cells. 32 because
+                                ; the longest line the tree can compose is
+                                ; 'Loading Driver 1/5 (Hard Drive)' = 31, and
+                                ; 32 cells is 256px - byte-aligned arithmetic
+                                ; on every adapter this runs on
+SPL_MSG_Y     equ 288           ; VGA: under the bar trough (rows 262..281) and
+                                ; above spl_pct's text row 19 (y 304). Mono
+                                ; computes its own from the live geometry
+
 ; -----------------------------------------------------------------------------
-; spl_reset - put the loading screen back after a mode switch (SPEC.md 39.11.3)
-;
-; in:       nothing
-; out:      nothing (all registers preserved)
-; clobbers: -
-;
-; vid_setmode clears the framebuffer, so a switch taken from drv_boot - while
-; the boot is still reading sectors and ticking the bar - wipes the loading
-; screen. This redraws it: the chrome from spl_rechrome, which is spl_chrome
-; without the adapter re-probe that would undo the switch, and then one
-; ordinary frame from the progress the bar had already reached.
-;
-; It lives here rather than in splash.inc because that module has to fit
-; inside the image's first SPL_RESIDENT sectors and this is not reachable
-; from the splash - the label it enters at costs that budget nothing.
-;
-; [spl_live] is the guard, and it is what makes this safe to call from
-; anywhere: after spl_finish the splash owns nothing and drawing a dialog
-; over the desktop would be a bug. The Control Panel's switch therefore
-; never calls it and would be harmless if it did.
+; The three entries drv_boot reaches through OVLCALL, and the one spl_reset
+; does. Every one of them preserves every register and the flags.
 ; -----------------------------------------------------------------------------
-spl_reset:
+ovl_spl_msg_cfg:                ; 'Loading SYSTEM.CFG'
+    push si
+    mov si, spl_s_cfg
+    call spl_msg_cs
+    pop si
+    retf
+
+ovl_spl_msg_boot:               ; 'Starting os8088'
+    push si
+    mov si, spl_s_boot
+    call spl_msg_cs
+    pop si
+    retf
+
+ovl_spl_msg_drv:                ; AL = ordinal, AH = total, DS:SI = DRVR_TITLE
+    call spl_msg_drv
+    retf
+
+ovl_spl_redraw:                 ; put the composed line back after a mode set
+    call spl_mdraw
+    retf
+
+; -----------------------------------------------------------------------------
+; spl_msg_cs - compose a whole literal line, from a string in THIS section
+; in:  CS:SI -> ASCIIZ
+; -----------------------------------------------------------------------------
+spl_msg_cs:
+    pushf
+    push ax
+    push si
+    push di
+    call spl_mbegin
+    call spl_mcs
+    call spl_mend
+    pop di
+    pop si
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
+; spl_msg_drv - 'Loading Driver n/N (Title)'
+; in:  AL = the 1-based ordinal, AH = how many are being loaded,
+;      DS:SI -> the row's DRVR_TITLE string
+; -----------------------------------------------------------------------------
+spl_msg_drv:
+    pushf
+    push ax
+    push bx
+    push si
+    push di
+    mov bx, ax                  ; BL = ordinal, BH = total - AL is the cell
+    call spl_mbegin
+    push si
+    mov si, spl_s_drv
+    call spl_mcs
+    pop si
+    mov al, bl
+    call spl_mnum
+    mov al, '/'
+    call spl_mput
+    mov al, bh
+    call spl_mnum
+    mov al, ' '
+    call spl_mput
+    mov al, '('
+    call spl_mput
+    call spl_mds                ; the title, through DS - it is a .text string
+    mov al, ')'
+    call spl_mput
+    call spl_mend
+    pop di
+    pop si
+    pop bx
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
+; The composer. DI walks spl_mline and every store goes through spl_mput,
+; which compares before it writes: at spl_mend [spl_mdirty] says whether one
+; single cell differs from what is on the glass. The BOUND lives in spl_mput
+; rather than in its callers, so a line that overruns truncates at the
+; reserved width instead of writing past the buffer, and nothing above has to
+; carry a length.
+; -----------------------------------------------------------------------------
+spl_mbegin:
+    mov di, spl_mline
+    mov byte [cs:spl_mdirty], 0
+    ret
+
+spl_mput:                       ; AL -> the line at DI
+    cmp di, spl_mline + SPL_MSG_CELLS
+    jae .out                    ; full: swallow the rest of the line
+    cmp al, [cs:di]
+    je .adv
+    mov [cs:di], al
+    mov byte [cs:spl_mdirty], 1
+.adv:
+    inc di
+.out:
+    ret
+
+spl_mcs:                        ; CS:SI ASCIIZ -> the line (one of ours)
+    push ax
+.next:
+    mov al, [cs:si]
+    inc si
+    or al, al
+    jz .out
+    call spl_mput
+    jmp short .next
+.out:
+    pop ax
+    ret
+
+spl_mds:                        ; DS:SI ASCIIZ -> the line (a kernel string)
+    push ax
+.next:
+    lodsb
+    or al, al
+    jz .out
+    call spl_mput
+    jmp short .next
+.out:
+    pop ax
+    ret
+
+spl_mnum:                       ; AL = 0..99 -> the line, no leading zero
+    push ax
+    push bx
+    push dx
+    xor ah, ah
+    mov bl, 10
+    div bl                      ; AL = tens, AH = units
+    mov dl, ah
+    or al, al
+    jz .units
+    add al, '0'
+    call spl_mput
+.units:
+    mov al, dl
+    add al, '0'
+    call spl_mput
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+spl_mend:
+    mov al, ' '                 ; the padding IS the erase - see the header
+.pad:
+    cmp di, spl_mline + SPL_MSG_CELLS
+    jae .padded
+    call spl_mput
+    jmp short .pad
+.padded:
+    cmp byte [cs:spl_mdirty], 0
+    je .out                     ; the same line as last time: no pixels at all
+    call spl_mdraw
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; spl_mdraw - put spl_mline on the glass, wherever the screen currently is
+; out: nothing (every register and the flags preserved)
+;
+; [spl_live] is the guard, spl_reset's exactly: after spl_finish the splash
+; owns nothing and a status line over the desktop would be a bug. It is a
+; .text byte, so DS reaches it (SPEC.md 2.5) while the line beside it needs
+; ES:CS - which is why this calls font_run_x and not font_run.
+; -----------------------------------------------------------------------------
+spl_mdraw:
+    pushf
     cmp byte [spl_live], 0
     je .out
     push ax
-    push bx
     push cx
     push dx
     push si
-    push di
-    push bp
     push es
-    call spl_rechrome
-    call spl_paint
+    call spl_mgeom              ; CX = x, DX = y
+    mov ax, cs                  ; the line lives in THIS section, and
+    mov es, ax                  ; font_run_x is the ES:SI entry
+    mov si, spl_mline
+    mov ax, (CBLACK << 8) | CWHITE
+    call KERNEL_SEG:ovw_font_run_x  ; ONE opaque run: ink white, ground black,
+                                ; which is the loading screen on all three
+                                ; adapters whatever the theme says about a
+                                ; desktop that has not been drawn yet
     pop es
-    pop bp
-    pop di
     pop si
     pop dx
     pop cx
-    pop bx
     pop ax
 .out:
+    popf
     ret
+
+; -----------------------------------------------------------------------------
+; spl_mgeom - where the line goes on THIS screen
+; out: CX = x (byte-aligned), DX = y
+; clobbers: cx, dx, flags
+;
+; Read live, never banked: drv_boot can switch the adapter out from under a
+; line that is already up (SPEC.md 39.11.3), and spl_reset then redraws it
+; through here at the new geometry.
+; -----------------------------------------------------------------------------
+spl_mgeom:
+    mov cx, [vid_cw]            ; the ACTIVE display's extent, as the bar uses
+    sub cx, SPL_MSG_CELLS * 8
+    shr cx, 1
+    and cl, 0xF8                ; ...floored to a cell, or the mono adapters
+                                ; lose font_run's single-store path (SPEC.md
+                                ; 6.1) for a line 32 cells wide
+    cmp byte [vid_mono], 0
+    je .vga
+    mov dx, [vid_ch]            ; mono: the bar is centred at ch/2 and is
+    shr dx, 1                   ; SPL_BAR_H tall, so this clears it by 8
+    add dx, 16
+    ret
+.vga:
+    mov dx, SPL_MSG_Y           ; VGA: inside the dialog, between the trough
+    ret                         ; and the percentage
+
+spl_s_drv:  db 'Loading Driver ', 0
+spl_s_cfg:  db 'Loading SYSTEM.CFG', 0
+spl_s_boot: db 'Starting os8088', 0
+
+spl_mdirty: db 0                ; ...and the line itself. Both `cs:`, both in
+spl_mline:  times SPL_MSG_CELLS + 1 db 0   ; the overlay, both gone with it.
+                                ; The trailing NUL is never written by anything
+                                ; and is what terminates the run
+section .text
 
 ; -----------------------------------------------------------------------------
 ; vid_blank - dark the card the machine is LEAVING (SPEC.md 39.11.4)
@@ -643,7 +910,7 @@ vid_switch:
     call vid_avail_test
     jc .refuse
 
-    call cur_unlazy             ; 1. the cursor's save-under is the old
+    call cur_unlazy              ; 1. the cursor's save-under is the old
     call vid_blank              ; geometry's - and so is the tube we are
     call wm_su_drop_all         ; walking away from, and so is every raise
                                 ; cache (SPEC.md 39.14.8.1): wm_su_ck compares
@@ -691,10 +958,10 @@ vid_switch:
                                 ; nothing IN wm_paint_all destroys them
 .already:
     clc
-    ret
+    retf
 .refuse:
     stc
-    ret
+    retf
 
 ; =============================================================================
 ; The per-display context (SPEC.md 39.12) - kern_big only
@@ -705,9 +972,10 @@ vid_switch:
 ; construction rather than by inspection - which is the gate this step is
 ; allowed to land against.
 ;
-; WHAT A DISPLAY OWNS is the eighteen contiguous words `vid_seg` through
-; `vid_rend`: the nine live geometry words and the nine derived ones the
-; RENDERER reads (viddet.inc). What it does not own starts at `vid_dock_y0` -
+; WHAT A DISPLAY OWNS is the nineteen contiguous words `vid_seg` through
+; `vid_tseg`: the nine live geometry words, the nine derived ones the RENDERER
+; reads, and font_run's composed-row target (viddet.inc). What it does NOT own
+; starts at `vid_dock_y0` -
 ; the dock row, the clock cell, the drive column - because those describe the
 ; DESKTOP and must not change because a primitive happened to be drawing on
 ; the other monitor (DUAL-DISPLAY-PLAN 5).
@@ -893,7 +1161,7 @@ vid_seq1_blank:
 %ifdef KERN_BIG
 
 VID_NDISP_MAX equ 2             ; the machine this is for holds two cards
-VID_CTX_W    equ 18             ; words copied to and from the live block
+VID_CTX_W    equ 19             ; words copied to and from the live block
 VID_CTX_CW   equ 14             ; ...within the run, the display's own extent -
 VID_CTX_CH   equ 16             ; word 7 and word 8, vid_cw/vid_ch (39.2.1)
 VID_CTX_VX   equ VID_CTX_W*2    ; ...then the display's origin in the VIRTUAL
@@ -913,8 +1181,8 @@ VID_CTX_SZ   equ VID_CTX_W*2+6
 
 ; The live run this copies must be the run viddet.inc lays out, and a reorder
 ; there would be silent here - so it is asserted rather than trusted.
-%if vid_chm8 - vid_seg != (VID_CTX_W-1)*2
-%error "vid_seg..vid_chm8 is not VID_CTX_W contiguous words - see viddet.inc"
+%if vid_tseg - vid_seg != (VID_CTX_W-1)*2
+%error "vid_seg..vid_tseg is not VID_CTX_W contiguous words - see viddet.inc"
 %endif
 
 ; .text with REAL INITIALISERS, not .bss, and for the reason vid_avail above
@@ -929,7 +1197,7 @@ vid_ndisp   db 1                ; displays the kernel has brought up. 1 for
 vid_cur     db 0                ; which display's geometry is in the live block
 vid_ox      dw 0                ; ...and its ORIGIN in the virtual desktop,
 vid_oy      dw 0                ; which is what every 39.14 hook subtracts.
-                                ; OUTSIDE the eighteen-word run on purpose:
+                                ; OUTSIDE the nineteen-word run on purpose:
                                 ; that run is asserted contiguous and is what
                                 ; the RENDERER reads, and an origin is not
                                 ; renderer state. Published by vid_ctx_act
@@ -1062,11 +1330,39 @@ vid_ctx_act:
     mov ax, [di+VID_CTX_VY]
     mov [vid_oy], ax
     mov al, [di+VID_CTX_KIND]   ; ...and HOW DEEP this display is, which is not
-    call vid_depth_set          ; in the eighteen-word run and is what every
+    call vid_depth_set          ; in the nineteen-word run and is what every
                                 ; primitive dispatches on. Two 1bpp displays
                                 ; agree about it and a VGA beside a Hercules
                                 ; does not - see vid_depth_set for what the
                                 ; omission measured as
+
+    ; ...and SPEC.md 39.3.1's ROW TABLE, which is the same omission again and
+    ; the one the run can never fix: [vid_rowmax] is in .text and vid_rowtab is
+    ; a single array in .lowbss, so no rep movsw reaches either - while
+    ; vid_stride, vid_bmask and vid_bshift, the three inputs the table baked
+    ; in, are all INSIDE the run and have just changed. vid_dual_ok takes only
+    ; a mono+colour pairing, so the two displays never agree about a row: at
+    ; y=5 Hercules answers 0x205A and CGA 0x20A0, and every row but 0 and 1
+    ; differs. VID_ROWTAB is 348 - every row of both 1bpp adapters - so the
+    ; "row past the end" miss path does not rescue it either, and the secondary
+    ; would be drawn through the PRIMARY's addressing: shredded, not
+    ; misaligned.
+    ;
+    ; Rebuilding it here is 23.6 ms (SPEC.md 39.3.1) under a drawing primitive
+    ; whose floor is 756 us, and under the CURSOR. So the table is switched OFF
+    ; instead: the display it was built for keeps the fast path and the other
+    ; one computes, which is what every row cost before the table existed.
+    ;
+    ; [vid_kind] IS the table's kind, by construction and not by a stamp:
+    ; vid_apply is the only routine that builds the table and it builds for
+    ; [vid_kind], and this routine deliberately does not move [vid_kind] - the
+    ; record's kind goes to vid_depth_set and nowhere else. AL still holds it.
+    xor di, di                  ; the record is finished with
+    cmp al, [vid_kind]
+    jne .norow
+    mov di, VID_ROWTAB
+.norow:
+    mov [vid_rowmax], di
     pop ax
     pop di
 .out:
@@ -1601,7 +1897,7 @@ vid_disp_other:
 ; accepts that pairing as one nobody built.
 ;
 ; THE SECONDARY IS BROUGHT UP BY MAKING IT MOMENTARILY CURRENT. vid_apply is
-; the only routine that turns a vid_tab row into the eighteen words a display
+; the only routine that turns a vid_tab row into the nineteen words a display
 ; owns plus everything derived from them, and it writes the LIVE block - so
 ; this sets [vid_kind], calls it, and banks the answer. vid_setmode then
 ; programmes the right card by construction rather than by argument: it reads
@@ -1786,7 +2082,7 @@ vid_disp_relayout:
     call vid_disp_init
     call desk_rowcalc
     call wm_refit
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; vid_desk_union - the desktop spans every display (SPEC.md 39.16)

@@ -10,17 +10,19 @@
     python3 tools/os88marty.py 127.0.0.1:9001 dump 0060:0000 71624 -o /tmp/k.dump
     python3 tools/os88marty.py 127.0.0.1:9001            # a REPL
 
-The sibling of tools/os88dbg.py, and the difference is worth stating because
-they answer the same question from opposite sides. os88dbg talks to DEBUG.DRV,
-which is CODE RUNNING INSIDE THE GUEST: it needs a UART, an IRQ, interrupts
-enabled and a machine healthy enough to service them - and it works on real
-iron, which nothing else here does. This talks to the EMULATOR: it costs the
-guest not one cycle, needs nothing installed, answers on a machine that has
-hard-frozen, and can do the things a guest stub structurally cannot - single
-step, breakpoints, cycle counts, registers.
+This talks to the EMULATOR, and that is the whole of what makes it usable:
+it costs the guest not one cycle, needs nothing installed, answers on a
+machine that has hard-frozen, and does the things a stub running INSIDE the
+guest structurally cannot - single step, breakpoints, cycle counts,
+registers.
 
-Use this one for everything on an emulator. Use os88dbg when the machine is
-on somebody's desk.
+There used to be a sibling that took the other side - DEBUG.DRV and
+tools/os88dbg.py, a monitor in the guest answering over a UART, which needed
+an IRQ, interrupts enabled and a machine healthy enough to service them. It
+is gone (SPEC.md 58). ON REAL IRON THAT LEAVES A GAP AND IT IS WORTH KNOWING
+WHERE THE FLOOR IS: SPEC.md 57's registry read out of a photograph by
+tools/kfzread.py, and a MartyPC dump taken by whoever has the machine
+(docs/FIELD-MACHINES.md). Neither single-steps anything.
 
 MARTYPC IS CYCLE-ACCURATE AND IT IS NOT DISK-ACCURATE. It models the 8088's
 instruction timing, prefetch queue and bus contention; it models no platter,
@@ -744,6 +746,52 @@ class _Screen(object):
                 % (100 * self.field, 100 * self.rule, 100 * self.dock))
 
 
+def saver_running(m):
+    """Is SPEC.md 79's idle screen saver on the glass right now?
+
+    One byte, and it is the difference between "this gate found a bug" and
+    "this gate waited out its limit for five minutes of guest idle". The
+    saver DRAWS - a starfield, shapes, fish - so a screen with it up never
+    settles and never will.
+    """
+    try:
+        return bool(m.read(_syms().linear("blk_on"), 1)[0])
+    except Exception:
+        return False            # kern_small, a knob kernel, a stale map: the
+                                # diagnostic is worth nothing if it can raise
+
+
+def no_saver(m):
+    """Turn the screen saver OFF for the rest of this session, and say so.
+
+    [ss_idle] == 0 is the setting's own OFF (blank.inc's `zero minutes: OFF,
+    and that is a setting and not a degenerate period`), so this is what the
+    Control Panel writes for Never rather than a poke around the feature.
+    Both halves, because ss_mins2idle would put the period back the moment
+    anything touched a setting.
+
+    CALL IT IN ANY GATE THAT DRIVES FOR MORE THAN ~5 GUEST MINUTES, which on
+    a host running the guest at 4x is a bit over a minute of navigation with
+    no input. tests/blitplane.py is the worked example, and the reason this
+    exists: the saver came up in the middle of its run, `settle` could never
+    return because the saver animates, and the gfx_blit4 breakpoint it had
+    armed caught a SAVER shape instead of Paint's canvas. Neither symptom
+    named the saver.
+
+    Not done in `launch`: tests/saver.py is a gate ABOUT the saver, and a
+    harness that silently disabled the feature under test would be worse than
+    the failure this prevents.
+    """
+    S = _syms().linear
+    m.write(S("ss_idle"), b"\0\0")
+    m.write(S("ss_mins"), b"\0")
+
+
+def _syms():
+    import os88sym
+    return os88sym
+
+
 def desktop_up(s):
     """Is the os8088 DESKTOP on screen? - the boot gate, and the only one that
     works on all three adapters.
@@ -899,6 +947,13 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None):
             "%s, against a desktop's 93+/0/96. This machine never finished "
             "booting, so nothing below would mean what it says. See the "
             "MartyPC log." % (limit, seen))
+    if saver_running(m):
+        raise MartyError(
+            "the screen was still changing after %.0fs because SPEC.md 79's "
+            "SCREEN SAVER IS RUNNING - [blk_on] is set. It draws, so this can "
+            "never settle, and anything else this gate armed is now watching "
+            "the saver rather than the machine. Call os88marty.no_saver(m) "
+            "once after the desktop is up." % limit)
     raise MartyError(
         "the screen was still changing after %.0fs: the machine never "
         "finished booting (or something on it is animating, in which case "
@@ -1068,6 +1123,31 @@ def write_png_rgb(path, w, h, data):
     """Packed rgb24 out as a truecolour PNG."""
     raw = b"".join(b"\x00" + data[y * w * 3:(y + 1) * w * 3] for y in range(h))
     _png(path, w, h, raw, 2)
+
+
+def crop_rgb(m, x, y, w, h):
+    """A rectangle of the card's RENDERED framebuffer, packed rgb24.
+
+    THE CROP IS WHY, and it is the same reason in three tests: a claim like
+    "only the number of draws changed" cannot be checked by a capture of ONE
+    build, so the window's pixels are captured and diffed against the other
+    build's.  Cropping to the WINDOW rather than to a band around the thing
+    under test is deliberate - MartyPC's framebuffer is the CARD's, and on
+    Hercules that is 720x350 against a 720x348 screen, so a band computed from
+    guest coordinates lands beside its subject there.
+
+    Clamped at the bottom edge and not at the right: a row is sliced, so a
+    width past the edge silently wraps onto the next row rather than raising,
+    which is a diff that fails for the wrong reason.
+    """
+    fw, fh, data = m.fbuf()
+    x = max(0, min(x, fw))
+    w = max(0, min(w, fw - x))
+    out = bytearray()
+    for row in range(max(0, y), min(y + h, fh)):
+        o = (row * fw + x) * 3
+        out += data[o:o + w * 3]
+    return bytes(out)
 
 
 # SPEC.md 7.1's arrow: 8 wide, 12 high. A drawn mouse cursor is the one thing

@@ -985,14 +985,13 @@ rc_draw_wave:
 ; out: nothing; clobbers AX, BX, CX, DX, SI
 ; -----------------------------------------------------------------------------
 rc_draw_status:
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
     mov cx, [rc_ox]
     add cx, 4
     mov dx, [rc_oy]
     add dx, RC_ST1_Y
     mov si, [rc_msg]
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the content's own ground
+    call OSAPI_FONT_RUN             ; (rc_draw_all's header; SPEC.md 6.6.5)
     mov ax, [rc_len]                ; render the byte count into line 2
     mov bx, rc_s_line2
     call rc_putu5
@@ -1001,7 +1000,8 @@ rc_draw_status:
     mov dx, [rc_oy]
     add dx, RC_ST2_Y
     mov si, rc_s_line2
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
     ret
 
 ; -----------------------------------------------------------------------------

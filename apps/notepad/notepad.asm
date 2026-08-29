@@ -9241,8 +9241,8 @@ np_pfield:
     add ax, NP_FP_PAD
     mov di, ax                  ; DI = this row's top
 
-    mov al, CBLACK              ; the label
-    call OSAPI_SET_COLOR
+    mov al, CBLACK              ; the pen is the BOX FRAME's below, not the
+    call OSAPI_SET_COLOR        ; label's - the label carries its own pair
     mov si, np_s_find
     or bp, bp
     jz .lbl
@@ -9252,7 +9252,8 @@ np_pfield:
     add cx, 4
     mov dx, di
     add dx, 1
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the panel's own ground
+    call OSAPI_FONT_RUN             ; (SPEC.md 6.6.5)
 
     mov ax, [np_pfx]            ; the box
     sub ax, 2
@@ -9664,7 +9665,9 @@ np_fpaint:
     mov dx, [np_pbtny]
     add dx, 2
     mov si, np_s_rx
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the panel's own ground.
+    call OSAPI_FONT_RUN             ; The tick box to its left is a fill of
+                                    ; its own and ends 5px short of this pen
 
     mov bx, 3
     mov si, np_b_next

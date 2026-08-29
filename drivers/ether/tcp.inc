@@ -89,6 +89,27 @@ SKO_FL      equ 37              ; SKF_*
 SKO_IDX     equ 38              ; our own slot number, so a buffer base is a
                                 ; shift rather than a division
 SKO_HOST    equ 39              ; NET_HOSTMAX bytes: the name, until DNS
+; --- the RING this socket holds, if any (SPEC.md 72.21) ---------------------
+; **A SLOT AND A RING ARE DIFFERENT THINGS AND USED TO BE THE SAME ONE.** The
+; ring's address was `SKO_IDX << [sk_rxsh]` - the slot NUMBER was the buffer
+; address - so a table of four cost four rings whether they were carrying
+; anything or not, and two more slots cost 18KB. A slot is SK_SZ = 128 bytes
+; of bss; a ring pair is 9,216 of the claim. Seventy-two to one.
+;
+; So the geometry lives in the RECORD and the ring is claimed from a pool:
+; a listener never takes one, and a socket with no ring has RXC = 0, which
+; makes sk_rxfree answer 0, sk_rxput take nothing and sk_rxget give nothing
+; without a single test anywhere.
+SKO_RING    equ SKO_HOST + NET_HOSTMAX  ; byte: which pool ring, 0xFF = none
+SKO_WANTB   equ SKO_RING + 1    ; byte: NETV_BULK was asked for. On a LISTENER
+                                ; it is inherited by every child it accepts,
+                                ; which is how a PASV listener hands the bulk
+                                ; ring to the data connection it has not made
+                                ; yet (SPEC.md 72.21.1)
+SKO_RXB     equ SKO_WANTB + 1   ; word: this socket's rx ring, as an offset
+SKO_RXC     equ SKO_RXB + 2     ; word: ...and its capacity
+SKO_TXB     equ SKO_RXC + 2     ; word: the same pair for the send ring
+SKO_TXC     equ SKO_TXB + 2
 SK_SZ       equ 128             ; A POWER OF TWO ON PURPOSE - `sk_ptr` is a
                                 ; shift, and an 8086 `mul` writes DX, which is
                                 ; live at three of the six call sites
@@ -98,29 +119,24 @@ SK_SZ       equ 128             ; A POWER OF TWO ON PURPOSE - `sk_ptr` is a
 
 ; --- the ring sizes are RUNTIME now (SPEC.md 72.13) -------------------------
 ; These are the DEFAULTS the driver starts at and the floor it falls back to;
-; [sk_rxcap]/[sk_txcap] and their shifts in ethstate.inc are what the code
-; reads. Every size is a power of two so the walk stays a shift and a compare.
+; [sk_rxcap]/[sk_txcap] in ethstate.inc are what the code reads, and they are
+; THE BULK RING'S (SPEC.md 72.21) - the lean rings beside it are fixed.
 SK_RXCAP0   equ 1024            ; the floor: what a machine that can spare
 SK_TXCAP0   equ 512             ; nothing else still gets
-SK_RXSH0    equ 10
-SK_TXSH0    equ 9
 
-SK_RXMAX    equ 8192            ; **AND THE CEILING IS THE SEGMENT.** Four
-SK_TXMAX    equ 1024            ; sockets at 8192+1024 is 36,864 bytes; the
-SK_RXMAXSH  equ 13              ; next step up is 69,632 and the offsets into
-SK_TXMAXSH  equ 10              ; the claim are SIXTEEN BITS
+SK_RXMAX    equ 8192            ; **AND THE CEILING IS THE SEGMENT.** The pool
+SK_TXMAX    equ 1024            ; at this rung is 13,824 bytes; the
 
 SK_RXMID    equ 4096            ; the middle rung, and the one the arithmetic
 SK_TXMID    equ 512             ; says is the sweet spot: ~29 KB/s predicted
-SK_RXMIDSH  equ 12              ; against a ~155 KB/s per-byte ceiling, so it
-SK_TXMIDSH  equ 9               ; is fast without crowding the CPU
 
 ; What the two MEASURED rungs cost, in KB. Derived from the sizes above and
 ; from NET_SOCKS rather than written down beside them, because a number
 ; written twice is a number that disagrees with itself later. The floor has no
 ; entry here on purpose: it is not measured against anything (see sk_claim).
-SK_KBMAX    equ (NET_SOCKS * (SK_RXMAX + SK_TXMAX) + 1023) / 1024
-SK_KBMID    equ (NET_SOCKS * (SK_RXMID + SK_TXMID) + 1023) / 1024
+SK_POOLKB   equ SK_NLEAN * (SK_LEANRX + SK_LEANTX)
+SK_KBMAX    equ (SK_RXMAX + SK_TXMAX + SK_POOLKB + 1023) / 1024
+SK_KBMID    equ (SK_RXMID + SK_TXMID + SK_POOLKB + 1023) / 1024
 SK_SHARESH  equ 2               ; ...and a rung the user did not ASK for may
                                 ; take at most a 1/(1<<2) - a QUARTER - of the
                                 ; free heap. It is a SHIFT and not a divisor
@@ -153,15 +169,42 @@ TCP_MSS     equ SK_TXMAX        ; we never send more than one buffer's worth,
                                 ; allows, so nothing here can provoke a
                                 ; fragment (inet.inc drops those).
                                 ;
-                                ; **THE MAXIMUM AND NOT THE CURRENT ONE**, now
-                                ; that the buffer is sized at attach: the MSS
-                                ; is announced in the SYN, once, and a peer
-                                ; that has been told 1024 may send 1024 for
-                                ; the life of the connection. Advertising the
-                                ; live [sk_txcap] would be advertising a
-                                ; number that was chosen before the ring was,
-                                ; and it bounds what WE send, which tcp_out
-                                ; already clamps to the real one
+                                ; **AND IT IS NOT WHAT WE ANNOUNCE**: this
+                                ; bounds what WE send, where the option in a
+                                ; SYN means what we can RECEIVE. TCP_RMSS
+                                ; below is that number (SPEC.md 72.4.1) -
+                                ; conflating the two is what left the option
+                                ; unimplemented while this comment said it
+                                ; was sent
+; --- TCP_RMSS - what we ANNOUNCE, and it is not TCP_MSS (SPEC.md 72.4.1) ----
+; TCP_MSS above bounds what we SEND. The option in a SYN means the largest
+; segment we are willing to RECEIVE, which is a different number: one whole
+; Ethernet frame's payload, because eth_rxb is NE_FRAME + 4 wide and really
+; can take one. tcp_out clamps it to [sk_rxcap] as well - at the floor rung
+; the ring is 1024, and a peer told 1460 would have every segment half-refused
+; by sk_rxput and retransmitted, which is worse than the 536 it replaces.
+TCP_RMSS    equ NE_FRAME - IP_PAY - TC_HLEN
+
+; =============================================================================
+; THE RING POOL (SPEC.md 72.21)
+;
+; ONE BULK RING AND THREE LEAN ONES. Only a transfer needs a window worth the
+; name: a listener needs no ring at all, and a control connection carries
+; short command lines - FTPD's own line buffer is 512. The bulk ring follows
+; the ladder's rung; the lean ones are fixed, because the thing they hold is
+; a command and not a file.
+;
+; **WHO GETS THE BULK RING IS SAID, NOT GUESSED** (72.21.1). The driver cannot
+; tell a control connection from a data connection, and taking biggest-free
+; -first is actively wrong: the control connection connects FIRST and would
+; take it. NETV_BULK is how a package says which is which.
+SK_NBULK    equ 1
+SK_NLEAN    equ 3
+SK_NRING    equ SK_NBULK + SK_NLEAN
+SK_LEANRX   equ 1024            ; a command line, with room for a pipelined one
+SK_LEANTX   equ 512             ; ...and a reply is tens of bytes
+SK_NORING   equ 0xFF
+
 TCP_RTO0    equ 9               ; ticks: half a second, doubling
 TCP_RTMAX   equ 7               ; ...seven doublings is about a minute
 TCP_CONNTMO equ 550             ; ticks: 30 seconds to get connected
@@ -188,31 +231,187 @@ sk_ptr:
 ; -----------------------------------------------------------------------------
 ; sk_rxbase / sk_txbase - BX = a socket -> DI = its buffer
 ; -----------------------------------------------------------------------------
-sk_rxbase:
+; -----------------------------------------------------------------------------
+; sk_ring_get - hand socket BX a ring from the pool (SPEC.md 72.21)
+; in:  BX = the socket; [bx+SKO_WANTB] says whether it asked for the bulk one
+; out: CF=0 and the record's four geometry words are set; CF=1 = none free
+;
+; **A LEAN REQUEST NEVER TAKES THE BULK RING.** Reserving it for whoever asked
+; is the whole point: FTPD's control connection arrives FIRST and a
+; first-come rule would hand it the one ring the transfer needed. A BULK
+; request falls back to a lean ring rather than failing - a slow transfer is a
+; better answer than no transfer (PERFORMANCE.md rule 6).
+; -----------------------------------------------------------------------------
+sk_ring_get:
     push ax
     push cx
-    mov al, [bx+SKO_IDX]
-    xor ah, ah
-    mov di, ax
-    mov cx, [sk_rxsh]
-    shl di, cl
-    add di, [sk_base]
-    pop cx                          ; **AN OFFSET IN [sk_seg], not in DS.** The
-    pop ax                          ; rings moved out of the driver's bss into
-    ret                             ; a claim (SPEC.md 72.13), so the RX area
-                                    ; starts at 0 and every caller supplies the
-sk_txbase:                          ; segment itself
-    push ax
-    push cx
-    mov al, [bx+SKO_IDX]
-    xor ah, ah
-    mov di, ax
-    mov cx, [sk_txsh]
-    shl di, cl
-    add di, [sk_txoff]              ; ...and TX sits above every RX ring
-    add di, [sk_base]
+    push dx
+    cmp word [sk_seg], 0            ; no claim at all: no rings to hand out
+    je  .no
+    cmp byte [bx+SKO_RING], SK_NORING
+    jne .have                       ; already holds one
+    cmp byte [bx+SKO_WANTB], 0
+    je  .lean
+    cmp byte [sk_rused], 0          ; ring 0 IS the bulk ring
+    jne .lean                       ; taken: a lean one still moves bytes
+    xor al, al
+    jmp short .take
+.lean:
+    mov al, SK_NBULK
+    mov cx, SK_NLEAN
+.l:
+    mov dl, al
+    xor dh, dh
+    push bx
+    mov bx, dx
+    cmp byte [sk_rused+bx], 0
+    pop bx
+    je  .take
+    inc al
+    loop .l
+    jmp short .no                   ; every lean ring is out
+.take:
+    mov [bx+SKO_RING], al
+    mov dl, al
+    xor dh, dh
+    push bx
+    mov bx, dx
+    mov byte [sk_rused+bx], 1
+    pop bx
+    call sk_ring_geo                ; the four words, from the ring number
+.have:
+    pop dx
     pop cx
     pop ax
+    clc
+    ret
+.no:
+    pop dx
+    pop cx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; sk_ring_put - give socket BX's ring back, if it has one
+; out: nothing; every register preserved. Idempotent, which matters: the
+;      release points below are three and they overlap.
+; -----------------------------------------------------------------------------
+sk_ring_put:
+    push ax
+    push bx
+    mov al, [bx+SKO_RING]
+    cmp al, SK_NORING
+    je  .out
+    mov byte [bx+SKO_RING], SK_NORING
+    mov word [bx+SKO_RXB], 0        ; **AND THE GEOMETRY GOES WITH IT.** A
+    mov word [bx+SKO_RXC], 0        ; capacity left behind is a window this
+    mov word [bx+SKO_TXB], 0        ; socket would go on advertising over a
+    mov word [bx+SKO_TXC], 0        ; ring somebody else now owns
+    xor ah, ah
+    mov bx, ax
+    mov byte [sk_rused+bx], 0
+.out:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sk_ring_geo - AL = a ring number -> socket BX's four geometry words
+;
+; The claim's shape, and the ONE place that knows it:
+;
+;   [0                       .. rxcap)          the bulk rx ring
+;   [rxcap                   .. + N*SK_LEANRX)  the lean rx rings
+;   [sk_txoff                .. + txcap)        the bulk tx ring
+;   [sk_txoff + txcap        .. + N*SK_LEANTX)  the lean tx rings
+; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; sk_ring_reset - nothing holds a ring
+;
+; **BSS IS ZERO AND ZERO IS A VALID RING NUMBER**, which is the trap this
+; closes: a slot nobody has ever used would read as holding ring 0 - the bulk
+; one - and the first sk_alloc would hand it back to the pool on behalf of a
+; socket that never had it. Every slot is stamped SK_NORING here, once, where
+; the pool comes into existence.
+; -----------------------------------------------------------------------------
+sk_ring_reset:
+    push ax
+    push bx
+    push cx
+    push di
+    mov di, sk_rused
+    mov cx, SK_NRING
+    call mem_zero
+    xor al, al
+    mov cx, NET_SOCKS
+.l:
+    call sk_ptr
+    mov byte [bx+SKO_RING], SK_NORING
+    mov word [bx+SKO_RXB], 0
+    mov word [bx+SKO_RXC], 0
+    mov word [bx+SKO_TXB], 0
+    mov word [bx+SKO_TXC], 0
+    inc al
+    loop .l
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+sk_ring_geo:
+    push ax
+    push cx
+    push dx
+    xor ah, ah
+    or  al, al
+    jne .lean
+    mov word [bx+SKO_RXB], 0        ; ring 0: the bulk pair
+    mov ax, [sk_rxcap]
+    mov [bx+SKO_RXC], ax
+    mov ax, [sk_txoff]
+    mov [bx+SKO_TXB], ax
+    mov ax, [sk_txcap]
+    mov [bx+SKO_TXC], ax
+    jmp short .out
+.lean:
+    dec al                          ; lean rings are numbered from 0 inside
+    xor ah, ah                      ; their own area
+    mov cx, ax
+    mov dx, SK_LEANRX
+    mul dx
+    add ax, [sk_rxcap]              ; ...which begins above the bulk rx ring
+    mov [bx+SKO_RXB], ax
+    mov word [bx+SKO_RXC], SK_LEANRX
+    mov ax, cx
+    mov dx, SK_LEANTX
+    mul dx
+    add ax, [sk_txoff]
+    add ax, [sk_txcap]              ; ...and above the bulk tx ring
+    mov [bx+SKO_TXB], ax
+    mov word [bx+SKO_TXC], SK_LEANTX
+.out:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; **THE RECORD CARRIES ITS OWN BASE NOW** (SPEC.md 72.21). This was
+; `SKO_IDX << [sk_rxsh]` - the slot number WAS the address - which is what
+; welded a slot to a ring and made two more slots cost 18KB. A stored offset
+; is also shorter and has no shift in it, which is not the reason but is not
+; nothing at 4.77MHz.
+;
+; **AN OFFSET IN [sk_seg], not in DS**: the rings live in a claim (72.13), so
+; the RX area starts at 0 and every caller supplies the segment itself.
+sk_rxbase:
+    mov di, [bx+SKO_RXB]
+    add di, [sk_base]
+    ret
+sk_txbase:
+    mov di, [bx+SKO_TXB]
+    add di, [sk_base]
     ret
 
 ; =============================================================================
@@ -359,6 +558,12 @@ ring_move:
 ; Control Panel and picked 8K has said something about their machine that the
 ; arithmetic does not know, and the claim itself is still the thing that can
 ; refuse. Only if the asked-for rung will not fit does the ladder run.
+;
+; **THE CARD IS THE ONE BOUND AN EXPLICIT RUNG DOES NOT SKIP** (SPEC.md
+; 72.13.3), and it is applied here as a step DOWN the rungs before the ask
+; rather than as a refusal at it: a refusal would push the user's choice into
+; the heap-measured ladder, where an explicit 8K on an NE1000 can land at the
+; floor while an explicit 4K got 4096.
 ; =============================================================================
 sk_claim:
     push ax
@@ -370,6 +575,14 @@ sk_claim:
     mov bx, [sk_want]               ; the user's rung, if there is one
     or bx, bx
     jz .auto
+    call sk_cardcap                 ; ...CLAMPED to the card and not REFUSED by
+    cmp bx, ax                      ; it (SPEC.md 72.13.3). Letting sk_try turn
+    jbe .ask                        ; the ask down drops it into the auto ladder
+    mov bx, SK_RXMID                ; below, which measures the HEAP - so on an
+    cmp bx, ax                      ; NE1000 an explicit 8K could end at the
+    jbe .ask                        ; FLOOR while an explicit 4K got 4096, which
+    mov bx, SK_RXCAP0               ; is a bigger request yielding less
+.ask:
     call sk_try
     jnc .done
 .auto:
@@ -481,6 +694,57 @@ sk_reclaim:
     stc
     ret
 
+; -----------------------------------------------------------------------------
+; sk_cardcap - AX = the largest receive window THIS CARD's ring can absorb
+;
+; **THE LADDER MEASURES THE HEAP AND THE CARD IS A SECOND CEILING**
+; (SPEC.md 72.13.3). An advertised window is an invitation to put that many
+; bytes in flight, and every one of them sits in the 8390's own ring until a
+; socket verb drains it - which nothing does during an FTP commit, because
+; fd_step stands down while a file request is out (77.41) and dsk_xfer holds
+; [sch_lock] across the int 13h anyway (12.8), so no task runs at all.
+;
+; An NE1000 - the 8-BIT card, which is what an XT takes - has 26 pages, 6,656
+; bytes, about four full frames. An 8192 window over-runs it before per-frame
+; page rounding is even counted, ne_overflow discards THE WHOLE RING, TCP
+; retransmits into the same 8192 window, and it happens again. mTCP names the
+; cycle in Tcp::sendPacket: "you basically wind up timing out on every packet
+; and forcing resends for every packet, which is very hard to recover from."
+;
+; One whole frame's worth of pages is left spare: an NE2000's 14,848 keeps
+; 8192 and nothing changes, an NE1000's 6,656 yields 5,120 and the ladder
+; takes 4096 - three in-flight frames with a fourth's room behind them.
+;
+; [eth_word] is ne_probe's answer and ne_probe runs BEFORE sk_claim
+; (ether.asm), so the card is known by the time this is asked. It cannot read
+; [eth_pstart]/[eth_pstop] - ne_init sets those, and it runs after.
+; -----------------------------------------------------------------------------
+NE_RINGSZ   equ (NE_PSTOP - NE_PSTART) * 256
+NE1_RINGSZ  equ (NE1_PSTOP - NE1_PSTART) * 256
+SK_RINGSLK  equ 1536            ; one 1514-byte frame, rounded up to 6 pages
+
+; --- and the rungs have to LAND somewhere, which is a build-time fact --------
+; Without these the clamp is silent: a card whose ring stopped fitting even
+; the middle rung would fall to the floor and read as "the network got slow".
+%if SK_RXMAX > NE_RINGSZ - SK_RINGSLK
+    %error "SK_RXMAX no longer fits an NE2000's receive ring"
+%endif
+%if SK_RXMID > NE1_RINGSZ - SK_RINGSLK
+    %error "SK_RXMID no longer fits an NE1000's receive ring"
+%endif
+%if SK_RXCAP0 > NE1_RINGSZ - SK_RINGSLK
+    %error "even the floor rung no longer fits an NE1000's receive ring"
+%endif
+
+sk_cardcap:
+    mov ax, NE_RINGSZ
+    cmp byte [eth_word], 0
+    jne .got
+    mov ax, NE1_RINGSZ
+.got:
+    sub ax, SK_RINGSLK
+    ret
+
 ; --- sk_try - BX = an RX size: claim it, or CF=1 ----------------------------
 ; The TX size and both shifts follow the RX rung rather than being chosen
 ; separately - there is one knob, and a machine generous enough for a big
@@ -489,41 +753,48 @@ sk_try:
     push ax
     push cx
     push dx
-    mov cx, SK_TXCAP0               ; the rung's TX size and shifts
-    mov ax, SK_RXSH0
-    mov dx, SK_TXSH0
+    call sk_cardcap                 ; **THE CARD FIRST** (SPEC.md 72.13.3): a
+    cmp bx, ax                      ; rung the ring cannot hold is one the peer
+    ja  .no                         ; is invited to overflow, and this clamps
+                                    ; [sk_want] as well - it is a correctness
+                                    ; bound, not a preference
+    mov cx, SK_TXCAP0               ; the rung's TX size
     cmp bx, SK_RXMAX
     jne .nmax
     mov cx, SK_TXMAX
-    mov ax, SK_RXMAXSH
-    mov dx, SK_TXMAXSH
     jmp short .got
 .nmax:
     cmp bx, SK_RXMID
     jne .got
     mov cx, SK_TXMID
-    mov ax, SK_RXMIDSH
-    mov dx, SK_TXMIDSH
 .got:
-    mov [sk_rxsh], ax
-    mov [sk_txsh], dx
     mov [sk_rxcap], bx
     mov [sk_txcap], cx
     ; --- KB wanted: NET_SOCKS * (rx + tx), rounded up ----------------------
-    mov ax, bx
-    add ax, cx
-    mov cl, 2                       ; NET_SOCKS is 4 (netpkg.inc), and this is
-    shl ax, cl                      ; the one place that assumes it
+    mov ax, bx                      ; **THE POOL, NOT THE TABLE** (72.21): one
+    add ax, cx                      ; bulk pair plus SK_NLEAN lean ones, and
+                                    ; NOT one pair per slot. That is what
+                                    ; decouples how many sockets exist from
+                                    ; what they cost - 13,824 bytes at the top
+                                    ; rung where a pair per slot was 36,864
+    add ax, SK_NLEAN * (SK_LEANRX + SK_LEANTX)
     add ax, 1023
     mov cl, 10
     shr ax, cl                      ; AX = KB
-    call OSAPI_MEM_CLAIM            ; out DX = the base segment
+    call OSAPI_MEM_CLAIM_HI         ; out DX = the base segment. FROM THE TOP
+                                    ; (SPEC.md 50.3.2): the card's own
+                                    ; descriptors point into these rings and it
+                                    ; DMAs into them, so this block is as
+                                    ; unmovable as a driver image and belongs at
+                                    ; the same end of the heap - not in the
+                                    ; arena the compactor and every data claim
+                                    ; share
     jc .no
     mov [sk_seg], dx
-    mov ax, bx                      ; TX starts above all four RX rings
-    mov cl, 2
-    shl ax, cl
+    mov ax, bx                      ; TX starts above ALL the RX rings: the
+    add ax, SK_NLEAN * SK_LEANRX    ; bulk one and then the lean ones
     mov [sk_txoff], ax
+    call sk_ring_reset              ; ...and nothing holds a ring yet
     pop dx
     pop cx
     pop ax
@@ -608,10 +879,16 @@ sk_alloc:
     jmp short .out
 .got:
     push ax
+    call sk_ring_put                ; **BEFORE THE ZERO** (SPEC.md 72.21): the
+                                    ; second walk above steals a TIME-WAIT slot,
+                                    ; and its ring is the pool's to have back -
+                                    ; mem_zero would erase which one it was
     mov di, bx
     mov cx, SK_SZ
     call mem_zero
     pop ax
+    mov byte [bx+SKO_RING], SK_NORING   ; ...and zero is a ring NUMBER, so the
+                                        ; fresh record has to say "none" out loud
     mov [bx+SKO_IDX], al
     inc al                      ; handles are 1-based: 0 is "no handle" in
     clc                         ; NETV_ACCEPT's answer
@@ -696,8 +973,8 @@ q_get:
 ; sk_rxfree - BX = a socket -> AX = bytes it could still take
 ; -----------------------------------------------------------------------------
 sk_rxfree:
-    mov ax, [sk_rxcap]
-    sub ax, [bx+SKO_RXN]
+    mov ax, [bx+SKO_RXC]            ; **THIS SOCKET'S**, not the driver's: a
+    sub ax, [bx+SKO_RXN]            ; listener's is 0 and answers 0 (72.21)
     ret
 
 ; -----------------------------------------------------------------------------
@@ -724,13 +1001,13 @@ sk_rxput_i:
     call sk_rxbase              ; perfectly and corrupts whatever is there
     mov bp, di                  ; BP = the ring's base...
     mov dx, bp
-    add dx, [sk_rxcap]          ; ...and DX one past its end
+    add dx, [bx+SKO_RXC]        ; ...and DX one past its end
     add di, [bx+SKO_RXH]        ; DI = where the writer stands
     mov ax, [bx+SKO_RXH]        ; ...and the new head, computed ONCE. CX cannot
     add ax, cx                  ; exceed sk_rxfree, so head + cx is under two
-    cmp ax, [sk_rxcap]          ; capacities and one subtract is the whole wrap
+    cmp ax, [bx+SKO_RXC]        ; capacities and one subtract is the whole wrap
     jb  .nw
-    sub ax, [sk_rxcap]
+    sub ax, [bx+SKO_RXC]
 .nw:
     mov [bx+SKO_RXH], ax
     cld                         ; **TWO `rep movsb` RUNS, SPLIT AT THE WRAP**
@@ -801,12 +1078,12 @@ sk_rxget_i:
     mov si, bp
     add si, [bx+SKO_RXT]        ; SI = where the reader stands
     mov dx, bp
-    add dx, [sk_rxcap]          ; DX = one past the end
+    add dx, [bx+SKO_RXC]        ; DX = one past the end
     mov ax, [bx+SKO_RXT]        ; ...and the new tail, while the record is
     add ax, cx                  ; still addressable
-    cmp ax, [sk_rxcap]
+    cmp ax, [bx+SKO_RXC]
     jb  .nw
-    sub ax, [sk_rxcap]
+    sub ax, [bx+SKO_RXC]
 .nw:
     mov [bx+SKO_RXT], ax
     mov ax, [sk_seg]            ; the ring's segment into a REGISTER first -
@@ -891,9 +1168,41 @@ tcp_out:
     call q_get
     mov di, eth_txb + IP_PAY + TCO_ACK
     call be32_put
-    mov byte [eth_txb+IP_PAY+TCO_OFF], 5 << 4
     mov al, [eth_oflg]
     mov [eth_txb+IP_PAY+TCO_FLG], al
+    ; -----------------------------------------------------------------------
+    ; **THE MSS OPTION, ON A SYN AND ONLY THERE** (SPEC.md 72.4.1). This used
+    ; to be a bare `5 << 4` on every segment, so no SYN this stack sent ever
+    ; said what it could receive - and RFC 1122 4.2.2.6 binds a peer that is
+    ; told nothing to a 536-byte send MSS. A frame costs this stack the same
+    ; whatever it carries (72.16), so every real client was paying nearly
+    ; three times the per-frame work for the same file. slirp picks its own
+    ; segment size and so tests/ftpd.py could never see it.
+    ;
+    ; A SYN carries no data on any path here - tcp_syn, tcp_accept_in and
+    ; tcp_retx all arrive with CX = 0 - so the four bytes sit where the
+    ; payload would, and the only other change is the four added to the TCP
+    ; length below.
+    ; -----------------------------------------------------------------------
+    mov byte [eth_txb+IP_PAY+TCO_OFF], 5 << 4
+    test al, TF_SYN
+    jz  .noopt
+    mov byte [eth_txb+IP_PAY+TCO_OFF], 6 << 4
+    mov di, eth_txb + IP_PAY + TC_HLEN
+    mov byte [di], 2                    ; kind 2, maximum segment size
+    mov byte [di+1], 4                  ; ...and the option's own length
+    mov ax, [bx+SKO_RXC]                ; OUR ring, if it is the smaller -
+    or  ax, ax                          ; and a socket with none announces the
+    jnz .msc                            ; frame, because a SYN is only ever
+    mov ax, TCP_RMSS                    ; sent by one that has just claimed one
+.msc:
+    cmp ax, TCP_RMSS
+    jbe .msok
+    mov ax, TCP_RMSS
+.msok:
+    add di, 2
+    call be_put
+.noopt:
     call sk_rxfree                      ; the window IS the free ring space,
     mov di, eth_txb + IP_PAY + TCO_WIN  ; computed here and nowhere else, so it
     call be_put                         ; cannot drift from the buffer
@@ -909,6 +1218,10 @@ tcp_out:
 .nodata:
     mov cx, [eth_dlen]
     add cx, TC_HLEN
+    test byte [eth_oflg], TF_SYN        ; ...and the MSS option a SYN carries,
+    jz  .nomss                          ; which ip_pseudo, ip_ck_part and
+    add cx, 4                           ; ip_finish all measure from CX
+.nomss:
     push cx
     call ip_pseudo                      ; BX = the pseudo-header sum. **BX is
     mov si, eth_txb + IP_PAY            ; the socket everywhere else in this
@@ -1126,7 +1439,11 @@ tcp_abort:
     ret
 .free:
     mov byte [bx+SKO_ST], NSK_FREE
-    ret
+    call sk_ring_put                    ; nobody holds this one: the ring is the
+    ret                                 ; pool's again (SPEC.md 72.21). The path
+                                        ; ABOVE keeps it - the app has not been
+                                        ; told yet and netpkg.inc says the drain
+                                        ; to CX = 0 is what ends a stream
 
 ; -----------------------------------------------------------------------------
 ; sk_reap_kids - a LISTENER is closing, so its un-accepted children go with it
@@ -1248,6 +1565,10 @@ tcp_syn:
     call q_put
     mov ax, 1
     call q_add
+    call sk_ring_get                    ; **BEFORE THE SYN** (SPEC.md 72.21):
+    jc  .noring                         ; tcp_out advertises sk_rxfree, so a
+                                        ; socket with no ring would open the
+                                        ; connection announcing a zero window
     mov byte [bx+SKO_TS], TS_SYNSENT
     mov byte [bx+SKO_ST], NSK_CONNECT
     or  byte [bx+SKO_FL], SKF_SYNA
@@ -1259,6 +1580,12 @@ tcp_syn:
     xor cx, cx
     call tcp_out                        ; a CF here is ARP: the timer retries
     call tcp_arm
+    jmp short .done
+.noring:
+    mov byte [bx+SKO_TS], TS_CLOSED     ; every ring is busy: this is a refusal
+    mov byte [bx+SKO_ST], NSK_FAILED    ; the caller can see, not a connection
+    mov byte [eth_lasterr], NETE_FULL   ; that opens and never moves
+.done:
     pop di
     pop si
     pop dx
@@ -1392,7 +1719,14 @@ tcp_in:                         ; STKDEPTH-NOSAVE: dx si di
     test byte [eth_rxb+IP_PAY+TCO_FLG], TF_SYN
     jz  .rst
     call tcp_accept_in
-    jmp short .out
+    jnc .out
+    ; **A REFUSAL THE PEER CAN SEE** (SPEC.md 72.4.2). sk_alloc found no slot,
+    ; and tcp_accept_in's "the peer's own SYN retransmission is the retry" is
+    ; only sound while a slot can still free. When the starvation is
+    ; structural the peer retransmits until it gives up - measured, nine SYNs
+    ; over twenty seconds with nothing coming back - and the server log is
+    ; clean throughout. One RST ends it in a round trip and names the end that
+    ; refused. It fires only where the SYN was being dropped anyway.
 .rst:
     call tcp_rst
     jmp short .out
@@ -1421,9 +1755,23 @@ tcp_accept_in:
     push si
     push di
     mov dx, [bx+SKO_LP]                 ; the port to keep answering on
+    mov al, [bx+SKO_WANTB]              ; **AND THE LISTENER'S WISH** - read
+    push ax                             ; before sk_alloc moves BX to the child.
+                                        ; This is how a PASV listener hands the
+                                        ; bulk ring to a data connection that
+                                        ; does not exist yet (SPEC.md 72.21.1)
     call sk_alloc
-    jc  .out                            ; no room: drop it, and the peer's own
-                                        ; SYN retransmission is the retry
+    jc  .fullpop
+    pop ax
+    mov [bx+SKO_WANTB], al
+    call sk_ring_get                    ; before the SYN-ACK, which advertises
+    jc  .noring                         ; sk_rxfree                           ; **NO SLOT: SAY SO** (SPEC.md 72.4.2).
+                                        ; This used to drop the SYN and leave
+                                        ; "the peer's own retransmission" as
+                                        ; the retry, which is sound only while
+                                        ; a slot can still free - and when the
+                                        ; table is structurally full it never
+                                        ; does. CF=1 and tcp_in sends the RST
     mov [bx+SKO_LP], dx
     mov ax, [eth_rport]
     mov [bx+SKO_RP], ax
@@ -1466,6 +1814,16 @@ tcp_accept_in:
     xor cx, cx
     call tcp_out
     call tcp_arm
+    clc                                 ; **SET EXPLICITLY, BOTH WAYS**: the
+    jmp short .out                      ; pops below do not touch the flags but
+.noring:                                ; tcp_arm's CF is nobody's contract
+    mov byte [bx+SKO_ST], NSK_FREE      ; a slot with no ring cannot receive, so
+    mov byte [bx+SKO_TS], TS_CLOSED     ; it goes straight back and tcp_in RSTs
+    jmp short .full
+.fullpop:
+    pop ax
+.full:
+    stc
 .out:
     pop di
     pop si
@@ -1741,6 +2099,12 @@ tcp_finacked:
 tcp_timewait:
     push ax
     mov byte [bx+SKO_TS], TS_TIMEWT
+    cmp word [bx+SKO_RXN], 0            ; **AND THE RING GOES BACK NOW** if it
+    jne .hold                           ; is empty: both FINs are done, so no
+    call sk_ring_put                    ; new byte can arrive, and TIME-WAIT
+.hold:                                  ; holding a ring for TCP_TWTMO is the
+                                        ; whole thing this pool is for. Data
+                                        ; still unread is still the app's
     call OSAPI_GET_TICKS
     add ax, TCP_TWTMO
     mov [bx+SKO_TMO], ax

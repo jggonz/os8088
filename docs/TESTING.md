@@ -49,9 +49,35 @@ argue yourself into:
    about behaviour and none about speed**, because the machine under it is
    not an 8088.
 
+6. **The RTC ladder's WRITE half** (SPEC.md §37.90, §37.94). MartyPC's
+   machines are 5150s and **an IBM PC has no real-time clock at all** — the
+   MC146818 arrived with the AT — and MartyPC models no XT add-on clock card
+   either, so all four rungs are out of its reach: `clk_probe` walks the
+   ladder, rejects every rung, `[clk_tier]` is 0 and `clk_rtc_write` returns
+   at its `[clk_rtc]` test having done nothing. That is correct behaviour and
+   it is not a test of anything, which is entry 4's shape exactly. QEMU has an
+   **MC146818 and nothing else**, so rung 1 always wins there and it is the
+   only host in this tree with a hardware clock of any kind.
+   **What it can prove is the whole chain and nothing less**: set the clock on
+   the Date/Time page, close the panel — which is what writes the chip since
+   §37.94 — `system_reset`, and read the menu bar. The value survives the
+   reboot only if `clk_at_write` really reached the silicon and the next
+   boot's overlay really read it back, and no shorter check gets there,
+   because the only way to read an RTC from outside the guest is the guest.
+   Rungs 2 and 3 are **nobody's** here — no emulator in this tree has an
+   MM58167 or an RP5C01 — and stay the 5150's (§37.90's rung 2 is
+   field-verified on a real clock card). `RTC=ns` on QEMU exercises the
+   *rejection* of an absent chip and that is all it exercises.
+
 That is the list. **"It is quicker to type" is not on it, and neither is
-"I already know the QMP commands."** If you find a fifth entry, add it here
+"I already know the QMP commands."** If you find a seventh entry, add it here
 rather than treating the rule as advisory.
+
+Note the shape entries 4, 5 and 6 share, because it is the only shape that
+gets on this list easily: **MartyPC does not have the hardware at all.** An
+8042 aux port, a NIC, an RTC — none of them exist on a 5150, so there is no
+"prefer MartyPC" to weigh. Entries 1-3 are the harder kind and the ones to
+argue with.
 
 That ordering is a **reversal**, and it is written down because the old one
 cost a great deal. Everything in this tree was QEMU-first for years, and QEMU
@@ -67,7 +93,7 @@ A tool that is wrong in the flattering direction does not announce itself.
 | reach for | when | why |
 |---|---|---|
 | **MartyPC** | **the default** — any 8088 machine, any of the three adapters, and any question of the form *what is the machine doing* | cycle-accurate CPU, a real BIOS ROM, real CGA/Hercules/VGA cards, and a debugger that perturbs nothing |
-| **QEMU** | the five-item fallback list above, and nothing else | on an 8088, MartyPC covers all three adapters, input, screenshots and sound. QMP and `tools/mouse.py` remain the harness for what is genuinely left |
+| **QEMU** | the six-item fallback list above, and nothing else | on an 8088, MartyPC covers all three adapters, input, screenshots and sound. QMP and `tools/mouse.py` remain the harness for what is genuinely left |
 | **86Box** | a machine that is **not an 8088** (the 286 and 386 targets), real sound cards on a period bus, a second opinion on the video probe — **and only where a person is watching**: no debugger and no automation socket, so a session can start one and cannot read the result. Do not plan a scripted check around it | period-correct whole machines, and the widest hardware library |
 | **the 5150** | anything with a **disk** in it, and the three defects no emulator shows | docs/FIELD-MACHINES.md |
 
@@ -252,6 +278,7 @@ emulator have the hardware": a ✅ means reach for it first.
 | A **cross-wired IRQ** (SPEC.md §9.5.2) | ➖ | ✅ | `make test MOUSEPORT=com2irq4` | the Compaq Portable III: mouse at 2F8 driving IRQ4. Undetectable before the fix |
 | A **modem** on the other port | ➖ | ✅ | a socket chardev at 3F8 — see below | eight result codes claim nothing, move nothing, click nothing |
 | **A PS/2 mouse** (SPEC.md §9.9) | ➖ | ✅ | `make test MOUSEPORT=ps2` | the `pc` machine's 8042 has an auxiliary port whether or not anything is plugged into it, so both halves are testable here and neither is on MartyPC or a 5150 — an XT has no 8042 at all, and `[cpu_tier]` refuses the whole module there. See below |
+| **The hardware clock** (SPEC.md §37.90/§37.94) | ➖ | ✅ | `make test`, then drive the Date/Time page and `system_reset` — see below | a 5150 has no RTC and MartyPC models no clock card, so `[clk_tier]` is 0 there and the whole ladder is untestable. QEMU's MC146818 is rung 1 and the only hardware clock in this tree. Verified: `Hardware clock: AT 70h`, year stepped 2026 → 2024, panel closed, `system_reset`, and the bar still reads `Aug 26 2024`. Rungs 2 and 3 are the 5150's — no emulator here has an MM58167 or an RP5C01 |
 | Performance benchmarks | ✅ | ✅ | `make bench` (from `tests/`, not in `all`) | numbers are always in flux — see below |
 | **Flicker** — the double-draw flash | ✅ | ❌ | `os88marty.py flicker` (PERFORMANCE.md Part 3.1) | one sample per displayed frame. A Disk window repaint flashes 1,963 px for 166 ms; an idle desktop and a pointer move measure zero. CGA, Hercules and VGA — the MDA's rasterisation of Hercules graphics was measured working at the pinned build (docs/MARTYPC-DEBUG.md); this row used to exclude it |
 | Fullscreen exclusive (SPEC.md §53) | ➖ | ✅ | `make test TESTAPPS=build/fsxtest.img` | every FSXM mode the adapter owns sets, draws and restores — the desktop screendump below the bar is byte-identical after a full sweep; Mode X dumps 640x480 (line-doubled 320x240) |
@@ -539,6 +566,53 @@ handler ate the `0xF4` acknowledgement: every earlier step passed and
 `mou_p2st` sat at `7`. Nothing about that reads as a race — it reads as a
 controller that stopped answering — and the only reason it was found in
 minutes rather than on hardware is that `mou_p2st` records the step.
+
+### The RTC ladder (SPEC.md §37.90), and why QEMU is the only instrument
+
+**An IBM PC has no real-time clock.** The MC146818 arrived with the AT, so
+every 5150 that ever kept time did it with an add-on card — which is the whole
+reason §37.90 is a ladder rather than a call to `int 1Ah`. MartyPC models no
+such card, so on every `os8088_5150_*` machine `clk_probe` walks all four
+rungs, rejects each one, and leaves `[clk_tier]` at 0 and the fallback date on
+screen. Nothing is wrong; there is simply no clock to find.
+
+QEMU's `pc` machine has an **MC146818 and nothing else**, so rung 1 always
+wins there. That makes it the only host in this tree that can answer the one
+question that matters about the write half: **did the chip take it?**
+
+```
+make test                                   # QEMU, MC146818 at 70h/71h
+python3 tools/mouse.py build/qmp.sock to 8 8
+python3 tools/mouse.py build/qmp.sock down
+python3 tools/mouse.py build/qmp.sock to 8 40
+python3 tools/mouse.py build/qmp.sock up            # chip menu -> Control Panel
+python3 tools/mouse.py build/qmp.sock click 200 173 # the Date/Time row
+python3 tools/shot.py build/qmp.sock /tmp/p.png --crop 159,131,322,152 --zoom 2
+        # ...and read the caption: `Hardware clock: AT 70h` is rung 1 claiming
+python3 tools/mouse.py build/qmp.sock click 336 180 # the YEAR field
+python3 tools/mouse.py build/qmp.sock click 420 203 # '-', twice
+python3 tools/mouse.py build/qmp.sock click 420 203
+python3 tools/mouse.py build/qmp.sock click 169 140 # the close box: SPEC.md
+                                                    # 37.94's write happens HERE
+python3 tools/qmp.py build/qmp.sock 'system_reset'
+python3 tools/shot.py build/qmp.sock /tmp/q.png --crop 380,0,260,18 --zoom 2
+```
+
+**The reboot is the assertion and there is no shorter one.** The only way to
+read an RTC from outside the guest is the guest, so a set that "looked right"
+on the page proves only that `clk_fld_adj` ran. A value that survives a
+`system_reset` proves the whole chain: `cp_flush_close_x` → `clk_rtc_write` →
+`clk_at_write` → the resident `retf` port helpers → the chip → the next boot's
+overlay reading it back. Use `system_reset` and **not** the System menu's
+Restart, which reaches `cp_flush_close` a second time and would write the chip
+again on the way out — a test that cannot fail the way the first one can.
+
+Two things this recipe cannot reach. **Rungs 2 and 3** — the MM58167 and the
+RP5C01 — are in no emulator here at all and stay the field machine's (§37.90's
+rung 2 is field-verified on a real card in a real 5150, battery and all).
+And `RTC=ns` on QEMU forces the ladder to try rung 2 against a machine that
+has no such chip, so what it exercises is the **refusal** and nothing past it
+— which is worth running, and is not a test of the rung.
 
 ### Can we boot a real 5150 BIOS instead of SeaBIOS?
 
@@ -828,8 +902,10 @@ ever have.
 **Then read `dsk_vtab`, do not count icons.** The volume table says which
 volume is which transport, on which unit, at which base; a screenshot says
 there are two hard-disk zones and leaves you guessing which one is the
-duplicate. Tick the driver on the Drivers page, select **Hard Drive**, click
-**Mount**, and the table must be unchanged — one hard-disk row, the
+duplicate. Tick the driver on the Drivers page — which mounts what it finds
+by itself now (SPEC.md §52.6.1), so the duplicate would appear on the tick
+rather than on the click — select **Hard Drive**, click **Mount**, and the
+table must be unchanged — one hard-disk row, the
 `DVK_BIOS` one the boot left, and the caption must read `Already mounted`.
 Two zones for one partition is §52.10.3.1.
 
@@ -1104,6 +1180,7 @@ checks referenced throughout this document:
 | `drvcall` | **a package reaching a driver** (§20.11): `OSAPI_DRV_CALL`, the `DSV_PKGCALL` fence, and — the half nothing else can check — that the driver was handed the *package's* segment in `ES`. Its counterpart is `RAMDISK.DRV`'s two package verbs, so it needs no card and no cable and runs on MartyPC. The assertion is in `tests/drvcall.py`, which reads the three report strings out of the package's own image and drives the Control Panel tick, so it sees the refusal **before** the driver is published as well as the answer after | `make drvcalltest && python3 tests/drvcall.py [--adapter herc]` |
 | `stackprobe` | the 256-byte task-stack margin (§8) | `make test TESTAPPS=build/stkprobe.img` |
 | `xmtest` | the extended-memory **teardown** (§41.5/§29.4): does a closed instance's blocks above 1MB get freed? Needs a machine with a store, so **QEMU on a 386** — the target machine can never have one. The assertion lives outside the package, in `tests/xmcheck.py`, which reads `xm_tab` over QMP around the close | `make test TESTAPPS=build/xmtest.img` then `python3 tests/xmcheck.py build/qmp.sock` |
+| `trkscrl` | **the pattern view scrolls, and it reaches past one row** (SPEC.md §45.12.2). Tracker built with `-DTRKDBG` (`tests/trkscrl.inc`), which adds four counters and two keys and changes the shipped `TRACKER.O88` by nothing — `trklog`'s shape exactly. Two assertions, and the second is the one the gate exists for: a jump of *n* rows must leave the row area **byte-identical to a full repaint of the same view** (§22.11's standard — a blit that drops one strip is invisible in a screenshot and wrong ever after), and it must cost **one scroll and no full repaint**. That second one is the ratchet, asserted without a clock: while the reach was 1, a late frame took `tui_draw_pat`'s 35 strips, outlasted its own frame, and the machine settled into re-lettering the grid at every row change. **QEMU, not MartyPC**: §45.9.1 turns the grid into one banded line on a tier-0 machine, so the surface under test needs something faster than an 8088. It needs no sound card — the jump keys move the *stopped* view, which is the only way to put more than one row between two frames at all | `make trkscrl && python3 tests/trkscrl.py` |
 | `trklog` | not a gate — a **recorder**. Tracker itself, built with `-DTRKLOG`, logging one record per system tick and writing it to `TRKLOG.TXT` (SPEC.md §45.14) | `make test SB16=1 TESTAPPS=build/trklog.img` |
 
 `benchlib.inc` is the one shared source under `tests/` — the timing loop, the

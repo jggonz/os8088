@@ -459,9 +459,16 @@ void os88_gfx_blit4(const void *pix, int stride, int x, int y, int w, int h);
 
 /* --- text (SPEC.md 6) ----------------------------------------------------
  * The kernel's 8x8 face. One glyph cell is ~900 us and a 78-cell row is
- * ~71 ms, so a row of text is not a free thing to repaint. */
-void os88_font_char(int x, int y, int ch);
-void os88_font_str(int x, int y, const char *s);
+ * ~71 ms, so a row of text is not a free thing to repaint.
+ *
+ * os88_font_run() below is the one you want. The two _xparent calls are
+ * TRANSPARENT - they leave whatever is underneath - so a caller that fills a
+ * rect and then letters it has written every one of those pixels twice, with
+ * a visible gap between the two passes on the machine this OS is for
+ * (SPEC.md 6.6; PERFORMANCE.md Part 1's double-draw flash). The name is the
+ * point: choosing transparent should be something you typed. */
+void os88_font_char_xparent(int x, int y, int ch);
+void os88_font_str_xparent(int x, int y, const char *s);
 int  os88_font_width(const char *s);             /* pixels */
 
 /* os88_font_run - the cells' background AND their glyphs in one pass (6.1),

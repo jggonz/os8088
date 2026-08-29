@@ -4,6 +4,29 @@ fails LOUDLY when the kernel moves under it.
 
     python3 tools/os88geom.py          # check every mirrored constant, print
 
+A LOCAL COPY REPORTED STALE IS A BUG WAITING, not noise, and the cost of one
+is not the wrong number - it is the DAY spent believing the feature under test
+is broken. `scan` reported four for as long as it had no caller: `MBAR_H` was
+19 in tests/dispcorner.py, dispfsx.py and dispmcfs.py and 18 in
+tests/tpdraw.py, against a kernel that has said 20 since the first commit in
+the repository. All four are corrected, and what they changed was looked at:
+
+  * dispcorner.py slices its comparison at `MBAR_H*pw*3` and re-adds `MBAR_H`
+    to every coordinate it reports, the SAME constant, so it cancelled
+    exactly and no reported coordinate was ever off. Its `room` calculation
+    at :729 is the one place it bit - one row too much of drag room, which
+    `(min(40,room)//8)*8` usually rounded away but could flip a CGA
+    "no vertical room - SKIPPED" branch;
+  * tpdraw.py, dispfsx.py and dispmcfs.py use it as a FILTER rather than as a
+    cancelling pair, so menu-bar rows 18-19 survived it. Static today, one
+    repaint away from a false failure.
+
+`scan` HAS A CALLER NOW - tests/unit/t_mirror.py, in the fast tier, which
+fails on any stale copy. That is what turns this module from a thing you can
+run into a thing that runs. The four above are the argument for it: they were
+sitting in this docstring, correctly described, for as long as nothing read
+it.
+
 WHY THIS EXISTS. Nine scripts had their own copy of the window record's
 stride, the desktop's zone pitch and the Disk window's row height, and the
 kernel moved four times: WIN_SIZE went 26 -> 28 when SPEC.md 13.7 added
@@ -21,6 +44,22 @@ failures look exactly like the FEATURE UNDER TEST being broken:
     of that file used 28, so finding the Control Panel was luck;
   * a session lost an afternoon to "the second Disk window never opens",
     which was this and not the window manager.
+
+IT HAS NOW HAPPENED A SECOND TIME, to a constant this module was not yet
+covering. Nine harness scripts each wrote down `VID_CTX_SZ = 42` - SPEC.md
+39.14's per-display context stride - and the record grew twice under them:
+39.18's adapter kind, then 6.1.10's `vid_tseg`, which took `VID_CTX_W` from 18
+to 19 and the stride from 42 to 44. Every copy went on reading display 1's
+record TWO BYTES EARLY and returning numbers: a secondary card "32858 px
+wide", an origin at x=340. `dispsave`, `dispnp` and `dockmark` all failed as
+though the WINDOW SYSTEM were broken, which cost a bisect across 27 commits to
+disbelieve.
+
+What let it hide is worth stating on its own: **the constant that moved was a
+DERIVED one** (`VID_CTX_SZ` is `VID_CTX_W*2+6` in vidsel.inc, an expression
+`_equs` deliberately refuses to evaluate), and `scan` was comparing local
+copies against `_MIRROR` alone. So the guard was watching the inputs and not
+the answer. It compares against `_KNOWN` now - mirrored AND derived.
 
 The lesson is the tree's own (SPEC.md 22's `fm_hit` discipline): the drawn
 thing and the tested thing must come from ONE place. So this module is that
@@ -67,6 +106,15 @@ _MIRROR = {
     "W_W": ("kernel/wm.inc", 6),
     "W_H": ("kernel/wm.inc", 8),
     "W_TITLE": ("kernel/wm.inc", 10),
+    # ...and the title bar's two boxes, which a scripted click has to land
+    # INSIDE. Mirrored the day tests/xmcheck.py was found aiming at a
+    # hard-coded (W_X+14, W_Y+5) for a window it assumed sat at x=180: the
+    # window came up at 175, the click hit the title bar, and the gate
+    # reported an extended-memory leak for a window that never closed.
+    "WM_BOX_X0": ("kernel/wm.inc", 8),
+    "WM_BOX_W": ("kernel/wm.inc", 10),
+    "WM_BOX_Y0": ("kernel/wm.inc", 4),
+    "WM_BOX_Y1": ("kernel/wm.inc", 14),
     "W_MENUS": ("kernel/wm.inc", 18),
     "W_SEG": ("kernel/wm.inc", 22),
     "WF_SIZABLE": ("kernel/wm.inc", 4),
@@ -138,6 +186,21 @@ _MIRROR = {
     "MC_DMA": ("kernel/memory.inc", 6),
     "MC_RLOC": ("kernel/memory.inc", 8),
     "MC_SIZE": ("kernel/memory.inc", 10),
+    # kernel/vidsel.inc - the PER-DISPLAY CONTEXT record (SPEC.md 39.14)
+    #
+    # Nine harness scripts each wrote `VID_CTX_SZ = 42` down by hand, and the
+    # record has now grown TWICE under them: SPEC.md 39.18's adapter kind, and
+    # then 6.1.10's `vid_tseg`, which took VID_CTX_W from 18 to 19 and the
+    # stride from 42 to 44. Every copy that did not follow went on reading
+    # display 1's record TWO BYTES EARLY and returning numbers - a secondary
+    # "32858 px wide", an origin at x=340 - and dispsave, dispnp and dockmark
+    # all failed as though the WINDOW SYSTEM were broken. That is this
+    # module's own founding story happening a second time, so the record joins
+    # it rather than being fixed nine times.
+    "VID_CTX_W": ("kernel/vidsel.inc", 19),
+    "VID_CTX_CW": ("kernel/vidsel.inc", 14),
+    "VID_CTX_CH": ("kernel/vidsel.inc", 16),
+    "VID_NDISP_MAX": ("kernel/vidsel.inc", 2),
 }
 
 globals().update({k: v for k, (_, v) in _MIRROR.items()})
@@ -145,8 +208,27 @@ globals().update({k: v for k, (_, v) in _MIRROR.items()})
 # Derived, and not mirrored: W_FLAGS bits 0 and 1 have no names in wm.inc.
 WF_USED, WF_VIS = 1, 2
 
+# ...and the three the kernel derives from VID_CTX_W the same way. They are
+# EXPRESSIONS in vidsel.inc (`VID_CTX_W*2`, `VID_CTX_W*2+6`), which _equs
+# deliberately refuses to evaluate - so they are computed here from the word
+# count above, which IS checked. A change to the record moves all three on the
+# next run of any script, which is the whole point.
+VID_CTX_VX = VID_CTX_W * 2          # the display's origin in the virtual desktop
+VID_CTX_VY = VID_CTX_W * 2 + 2
+VID_CTX_SZ = VID_CTX_W * 2 + 6      # ...the run, both origin words, and the kind
+
+# Everything `scan` compares a local copy against: the mirrored constants AND
+# the derived ones. It used to be _MIRROR alone, and that is exactly how nine
+# copies of `VID_CTX_SZ = 42` went stale unseen - the constant that MOVED was
+# the derived one, and the scanner was not looking at it.
+
 # The purgeable ranks (SPEC.md 50.6.4), by the high byte of the owner word.
 RANK = {0xFB: "trivial", 0xFC: "low", 0xFD: "medium", 0xFE: "high"}
+
+
+_KNOWN = dict({k: v for k, (_, v) in _MIRROR.items()},
+              VID_CTX_VX=VID_CTX_VX, VID_CTX_VY=VID_CTX_VY,
+              VID_CTX_SZ=VID_CTX_SZ, WF_USED=WF_USED, WF_VIS=WF_VIS)
 
 
 # --- the guard --------------------------------------------------------------
@@ -274,6 +356,20 @@ class Win(object):
             self.title, self.i, self.x, self.y, self.w, self.h,
             "" if self.visible else " HIDDEN",
             "+saveu" if self.promises else "")
+
+
+def close_xy(wx, wy):
+    """The close box's centre for a window whose frame starts at (wx, wy).
+
+    wm_hit accepts columns W_X+WM_BOX_X0 .. +WM_BOX_X0+WM_BOX_W and rows
+    W_Y+WM_BOX_Y0 .. +WM_BOX_Y1, so the centre is the safe aim - a click one
+    column past the box is a click on the TITLE BAR, which starts a drag and
+    closes nothing. The minimize box is the same span mirrored at
+    W_X+W_W-1-WM_BOX_X0, and is not written out here because nothing asks for
+    it yet; the four constants above are what an asker would need.
+    """
+    return (wx + WM_BOX_X0 + WM_BOX_W // 2,
+            wy + (WM_BOX_Y0 + WM_BOX_Y1) // 2)
 
 
 def windows(m, sym=None):
@@ -450,13 +546,13 @@ def scan(root=None):
                           and len(tgt.elts) == len(node.value.elts)):
                         pairs = list(zip(tgt.elts, node.value.elts))
                     for nm, val in pairs:
-                        if not isinstance(nm, ast.Name) or nm.id not in _MIRROR:
+                        if not isinstance(nm, ast.Name) or nm.id not in _KNOWN:
                             continue
                         if not isinstance(val, ast.Constant) \
                                 or not isinstance(val.value, int):
                             continue
                         out.append((os.path.join(sub, fn), node.lineno, nm.id,
-                                    val.value, _MIRROR[nm.id][1]))
+                                    val.value, _KNOWN[nm.id]))
     return sorted(out, key=lambda r: (r[3] == r[4], r[0], r[1]))
 
 

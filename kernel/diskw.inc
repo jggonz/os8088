@@ -239,7 +239,7 @@ dskw_write_x:
     mov [dskw_len], cx
     mov [dskw_lenhi], dx
     call dskw_wbody             ; out: CF + AX (pops do not touch flags)
-    call KERNEL_SEG:cw_fpg_end  ; the ONE place the widget is given back,
+    call KERNEL_SEG:fpg_end     ; the ONE place the widget is given back,
                                 ; however many ways the body returned - and it
                                 ; preserves CF and AX too (SPEC.md 12.8)
     mov byte [dskw_syswr], 0    ; one shot, cleared here so it can never
@@ -302,7 +302,7 @@ dskw_read_x:
     mov [dskw_cap], cx
     mov [dskw_caphi], dx
     call dskw_rbody             ; out: CF + DX:AX (pops touch neither)
-    call KERNEL_SEG:cw_fpg_end  ; ...and neither does this (SPEC.md 12.8)
+    call KERNEL_SEG:fpg_end     ; ...and neither does this (SPEC.md 12.8)
     pop es
     pop bp
     pop di
@@ -325,7 +325,7 @@ dskw_read_x:
 dskw_gone_x:
     mov ax, FERR_NAME
     stc
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; dskw_delete - delete a file by name (SPEC.md 18.4, slot 0x0130)
@@ -1378,7 +1378,7 @@ dskw_wbody:
                                 ; exactly as a read is
     mov cx, [dskw_len]          ; ...and arm the widget as the FAT arm below
     mov dx, [dskw_lenhi]        ; does (DX:CX = the job in BYTES, SPEC.md
-    call KERNEL_SEG:cw_fpg_begin    ; 12.8.1): the driver steps it from inside
+    call KERNEL_SEG:fpg_begin       ; 12.8.1): the driver steps it from inside
                                 ; FSV_WRITE through OSAPI_FS_PROG, and without
                                 ; this that report has nothing to report into.
                                 ; dskw_write_x ends it either way
@@ -1444,7 +1444,7 @@ dskw_wbody:
 .data:
     mov cx, [dskw_len]          ; arm the progress widget HERE and not up at
     mov dx, [dskw_lenhi]        ; .sized, though the count is known there:
-    call KERNEL_SEG:cw_fpg_begin    ; (DX:CX = the job in BYTES, SPEC.md 12.8.1)
+    call KERNEL_SEG:fpg_begin       ; (DX:CX = the job in BYTES, SPEC.md 12.8.1)
                                 ; dskw_find's directory scan sits between the
                                 ; two and its sectors are not part of the job
                                 ; the bar is measuring (SPEC.md 12.8).
@@ -1823,7 +1823,7 @@ dskw_rbody:
 .secok:
     mov cx, [dskw_len]          ; the widget's scale, in BYTES (SPEC.md
     mov dx, [dskw_lenhi]        ; 12.8.1) - a 116KB module is a minute of
-    call KERNEL_SEG:cw_fpg_begin    ; frozen screen; dskw_read_x ends it
+    call KERNEL_SEG:fpg_begin       ; frozen screen; dskw_read_x ends it
     mov ax, [dskw_raw+DSK_R_CLUS]
     mov [dskw_cur], ax
     call dskw_rdata             ; walk the chain into the caller's buffer
@@ -1864,7 +1864,7 @@ dskw_rbody:
     stc
     ret
 .fsfits:
-    call KERNEL_SEG:cw_fpg_begin    ; DX:CX IS ALREADY THE SIZE - the reason
+    call KERNEL_SEG:fpg_begin       ; DX:CX IS ALREADY THE SIZE - the reason
                                 ; the widget's scale is BYTES (SPEC.md 12.8.1):
                                 ; a redirected volume has no sectors to give
                                 ; it, so before this the one file operation
@@ -2747,7 +2747,7 @@ dskw_append_x:
     mov [dskw_len], cx
     mov word [dskw_lenhi], 0    ; a chunk is 16-bit by contract, above
     call dskw_apbody
-    call KERNEL_SEG:cw_fpg_end  ; SPEC.md 12.8, as the other two pipelines
+    call KERNEL_SEG:fpg_end     ; SPEC.md 12.8, as the other two pipelines
     mov byte [dskw_syswr], 0    ; one shot, dskw_write_x's rule: it can never
                                 ; leak into the next caller's append
     pop es
@@ -2770,7 +2770,7 @@ dskw_apbody:
     jne .fatap
     mov cx, [dskw_len]          ; arm the widget as the FAT arm below does,
     mov dx, [dskw_lenhi]        ; so a file-manager copy over a cable reports
-    call KERNEL_SEG:cw_fpg_begin    ; chunk by chunk too (SPEC.md 12.8.1);
+    call KERNEL_SEG:fpg_begin       ; chunk by chunk too (SPEC.md 12.8.1);
                                 ; dskw_append_x ends it either way
     mov dx, es                  ; DX:BX = the bytes, CX = how many - the same
     mov bp, FSV_APPEND          ; three registers this cell was handed
@@ -2795,7 +2795,7 @@ dskw_apbody:
     jc .badarg                  ; (unreachable: a chunk is one 16-bit count)
     mov cx, [dskw_len]          ; ...and arm the widget the same way, so a
     mov dx, [dskw_lenhi]        ; file-manager copy reports chunk by chunk
-    call KERNEL_SEG:cw_fpg_begin
+    call KERNEL_SEG:fpg_begin
     mov word [dskw_zapnext], 0
 
     call dskw_wdata             ; the new sub-chain, allocated and written
@@ -4949,8 +4949,6 @@ dwf_dskw_delete:        call dskw_delete_x
 dwf_dskw_dfree:         call dskw_dfree_x
                     retf
 dwf_dskw_flush:         call dskw_flush_x
-                    retf
-dwf_dskw_gone:          call dskw_gone_x
                     retf
 dwf_dskw_read:          call dskw_read_x
                     retf

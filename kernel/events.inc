@@ -73,7 +73,8 @@ evq_init:
 ; caller running with IF=0 (the mouse ISR) stays that way throughout.
 ; -----------------------------------------------------------------------------
 evq_push:
-    push ax
+    call sch_wake_ui            ; an event means the UI task has work
+    push ax                     ; work (docs/SCHED-IDLE-PLAN.md 6.3)
     push cx
     push si
     push di

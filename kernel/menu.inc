@@ -346,6 +346,7 @@ menu_activate:
     je .same
     mov [menu_win], bx
     mov byte [fm_fchk], 1       ; the active application changed, so a Disk
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
                                 ; window may have just gained the focus with
                                 ; a refresh owing (SPEC.md 22.8). This is the
                                 ; catch-all rather than the main path -
@@ -1946,7 +1947,7 @@ menu_drop:
     push ax                     ; ...and MOVABLE (SPEC.md 66.5.6). It is only
     mov ax, menu_reloc          ; 20KB and only lives for one menu - but that
     mov bx, MEM_K_SAVE          ; is 20KB sitting mid-arena at exactly the
-    call mem_movable            ; moment a MENU COMMAND claims, which is one of
+    call COLD_SEG:mmf_mem_movable ; moment a MENU COMMAND claims, which is one of
     pop ax                      ; the commonest ways a claim happens at all
 .noclaim:
 
@@ -1990,17 +1991,31 @@ menu_drop:
                                 ; re-established per pass because menu_trunc
                                 ; may repoint it at the kernel's copy
     call thm_pen_live           ; the CHROME's pair (SPEC.md 76.6): this is
-    cmp byte [es:si], MENU_DIS  ; the one greying surface the theme reaches
-    jne .live                   ; disabled: the disabled pen, and skip the
-    inc si                      ; marker byte. thm_pen_dis and not a bare
-    call thm_pen_dis            ; CDGRAY store, because on a mono adapter
-.live:                          ; grey text IS black text - the flag is what
-                                ; buys the checkerboard (SPEC.md 47)
+    call thm_pair               ; the one greying surface the theme reaches.
+                                ; AL = chrome ink, AH = chrome background -
+                                ; the run's pair, and thm_pair exists for it
+    cmp byte [es:si], MENU_DIS
+    jne .live
+    inc si                      ; disabled: the disabled pen, and skip the
+    call thm_pen_dis            ; marker byte. thm_pen_dis and not a bare
+    mov al, [gfx_color]         ; CDGRAY store, because on a mono adapter grey
+                                ; text IS black text - the flag is what buys
+                                ; the checkerboard (SPEC.md 47), which
+                                ; font_run FOLDS INTO ITS OWN MASK since
+                                ; SPEC.md 6.1.12. Before that this branch had
+                                ; to letter transparently, because a run with
+                                ; [gfx_dis] set fell back to gfx_fill +
+                                ; font_str and filled ground this routine had
+                                ; laid four instructions earlier
+.live:
+    push ax
     call menu_trunc             ; ES:SI = the item, truncated to MENU_MAXCH,
     mov cx, [menu_x1]           ; so no glyph lands outside the saved rect
     add cx, 8
-    call font_str_x
-    call thm_pen_live
+    pop ax
+    call font_run_x             ; OPAQUE (SPEC.md 12.2.1): the item's own cells
+    call thm_pen_live           ; are one decision each, not a fill and a glyph
+                                ; over it
     pop cx
     add bx, 2
     add dx, MENU_ITEM_H
@@ -2228,6 +2243,8 @@ menu_kbnav:
     call mou_clamp              ; the clamp the ISR itself uses, so the
     mov [mouse_x], ax           ; two-display seam is honoured by construction
     mov [mouse_y], bx           ; rather than by a rectangle known here
+    mov byte [cur_shchk], 1     ; ...and the pointer MOVED (SPEC.md 7.2.1.1)
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
     pop di
     pop si
     pop dx

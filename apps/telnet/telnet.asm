@@ -1397,7 +1397,8 @@ te_about:
     mov si, cx
     mov cx, [te_px]
     add cx, 16
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the box this routine
+    call OSAPI_FONT_RUN             ; filled white just above
     pop si
     add si, 2
     add dx, 12

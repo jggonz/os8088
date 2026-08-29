@@ -108,7 +108,7 @@ ui_task:
     KFZ 5                       ; 5: WE HAVE THE GFX LOCK. A bar that stops at
                                 ;    4 is a mutex nobody released
     call wm_top                 ; BX = frontmost visible window, 0 if none
-    call fdlg_top               ; ...unless a modal file dialog is up, which
+    call COLD_SEG:fdlg_top_x    ; ...unless a modal file dialog is up, which
                                 ; takes every key (SPEC.md 38.2)
     KFZ 6                       ; 6: the target window is resolved
     or bx, bx
@@ -188,7 +188,7 @@ ui_task:
     mov ax, [ui_ev + EV_C]      ; publish the click's birth tick for the
     mov [ui_click_t], ax        ; double-click detectors (SPEC 22, 26)
 
-    call fdlg_grab              ; a modal file dialog swallows every press
+    call COLD_SEG:fdlg_grab_x   ; a modal file dialog swallows every press
     jc .yield                   ; outside its own frame (SPEC.md 38.2).
                                 ; AHEAD of every branch below - modality is
                                 ; not a window property, and a press on the
@@ -217,7 +217,7 @@ ui_task:
     jae .clock_cell             ; tested BEFORE menu_track: it is not a title
     call ui_loc_gate            ; ...and Locator's own items go grey or live
 %ifndef KERN_SMALL
-    call fm_bar_gate            ; ...as does a Disk window's Format (22.12),
+    call COLD_SEG:fm_bar_gate_x ; ...as does a Disk window's Format (22.12),
                                 ; whose owner is a WINDOW rather than the
                                 ; desktop but whose timing problem is the
                                 ; identical one. kern_big only - kern_small
@@ -231,7 +231,7 @@ ui_task:
 
 .clock_cell:                    ; open the Control Panel on its Date/Time
     mov byte [cp_sel], CP_ITIME ; page (SPEC.md 31.5); no lock held here, so
-    call cp_open                ; cp_open is app_launch with the module load
+    call COLD_SEG:cpf_cp_open   ; cp_open is app_launch with the module load
     jnc .yield                  ; in front of it (SPEC.md 2.8.4) - and it owns
     jmp .yield                  ; the refusal, beep or toast, so there is
                                 ; nothing left here to say
@@ -285,6 +285,7 @@ ui_task:
     call gfx_lock               ; W_ONCLICK contract: CX=x, DX=y, SI=win
     call ui_ptcall              ; (CX/DX survived wm_hit/wm_top/gfx_lock)
     mov [ui_armw], si           ; ...and the RELEASE is owed to this window
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
     mov byte [ui_armr], 0       ; (SPEC.md 13.7): region 0, armed only because
                                 ; W_ONCLICK actually ran. A press that merely
                                 ; raised a window, or that this window refused
@@ -303,7 +304,7 @@ ui_task:
     call menu_draw_bar          ; whose double-click-open may front a window
     call gfx_unlock             ; and activate it in turn
 .desk_go:
-    call desk_click             ; CX/DX = click point, no lock held; select /
+    call COLD_SEG:desk_click_x  ; CX/DX = click point, no lock held; select /
     jmp .yield                  ; double-click-open is desk.inc's business
 
     ; --- the chrome boxes: the press only ARMS (SPEC.md 13.5) ----------------
@@ -322,6 +323,7 @@ ui_task:
 .close_box:                     ; wm_hit only reports AL=2 on the front window
 .min_box:                       ; ...and AL=3, likewise
     mov [ui_armw], bx           ; BX = the window, AL = wm_hit's region
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
     mov [ui_armr], al
 %ifdef KERN_BIG
     call ui_lit_on              ; ...and the arm and the picture are set in the
@@ -441,7 +443,7 @@ ui_task:
 .rdown:
     mov cx, [ui_ev + EV_A]      ; the right button is swallowed by a modal
     mov dx, [ui_ev + EV_B]      ; dialog too (SPEC.md 38.2) - there is no
-    call fdlg_grab              ; context menu it could usefully open. The
+    call COLD_SEG:fdlg_grab_x   ; context menu it could usefully open. The
     jc .yield                   ; point is loaded here rather than above
                                 ; because this branch is taken before the
                                 ; left button's own load
@@ -454,41 +456,81 @@ ui_task:
     cmp word [evq_count], 0     ; empty, which is nearly every pass
     jne .evloop
 .tail:
-    call kbm_ui                 ; the keyboard mouse's end-of-pass service
-                                ; (SPEC.md 9.6.1): a press held the button so
-                                ; that whatever this pass dispatched could
-                                ; track it, and if nothing did, this is where
-                                ; the press becomes a click
-    call kbd_ovspend            ; ...and a beep the keyboard ISR asked for when
-                                ; the BIOS buffer overran (SPEC.md 9.8). HERE
-                                ; and not on kbm_ui's tail: that one returns
-                                ; immediately on a machine with a mouse, and
-                                ; typing faster than this loop reads has
-                                ; nothing to do with which pointer is fitted
-%ifdef KERN_BIG
-    call ui_arm_trk             ; ...then the held chrome box follows the
-                                ; pointer (SPEC.md 13.8.1). BEFORE ui_arm_chk,
-                                ; which can drop the arm this reads - and after
+    cmp byte [mou_ptr], 0       ; the keyboard mouse's end-of-pass service
+    jne .kbm_done               ; (SPEC.md 9.6.1): a press held the button so
+    call kbm_ui                 ; that whatever this pass dispatched could
+.kbm_done:                      ; track it, and if nothing did, this is where
+                                ; the press becomes a click.
+                                ;
+                                ; ONE-WAY, and that is why the test is here
+                                ; (SPEC.md 9.6.1.1): [mou_ptr] is set the first
+                                ; time any pointing device proves itself and is
+                                ; never cleared, so on a machine with a mouse
+                                ; this is retired for the boot rather than
+                                ; asked 671 times a second. Unplugging the
+                                ; mouse does NOT bring it back - if that is
+                                ; ever wanted it is a key combination, not a
+                                ; poll
+    ; --- 3. deferred POSTED work, behind ONE compare (SPEC.md 13.13) ---------
+    ; Every step from here to .posted_done is a flag some lock-holding caller
+    ; set, and they are all the same question: HAS ANYTHING BEEN POSTED? One
+    ; byte answers it, and on a quiet desktop that is the whole of this
+    ; section - fifteen compares became one.
+    ;
+    ; CLEARED BEFORE THE WALK, NOT AFTER. A post that arrives DURING the walk -
+    ; from an ISR, or from a callback the walk itself dispatches - must set the
+    ; word again and be collected next pass. Clearing afterwards would drop it.
+    ;
+    ; OVER-SETTING IS FREE and UNDER-SETTING IS A LOST EVENT, so the tick
+    ; section below sets it unconditionally (SPEC.md 13.12): a setter that
+    ; forgets [ui_post] costs at most 55 ms of latency instead of a feature
+    ; that silently stops working. That is the whole reason this is affordable
+    ; to do across twenty-six call sites.
+    cmp byte [ui_post], 0
+    je .posted_done
+    mov byte [ui_post], 0
+
+    cmp byte [kbd_ovb], 0       ; ...and a beep the keyboard ISR asked for when
+    je .ovb_done                ; the BIOS buffer overran (SPEC.md 9.8). HERE
+    call kbd_ovspend            ; and not on kbm_ui's tail: that one is retired
+.ovb_done:                      ; on a machine with a mouse, and typing faster
+                                ; than this loop reads has nothing to do with
+                                ; which pointer is fitted
+    cmp word [ui_armw], 0       ; ONE compare for the PAIR below: both key on
+    je .arm_done                ; this word, and it is non-zero only between a
+%ifdef KERN_BIG                 ; chrome press and its release (SPEC.md 13.5.1)
+    call ui_arm_trk             ; ...the held chrome box follows the pointer
+                                ; (SPEC.md 13.8.1). BEFORE ui_arm_chk, which
+                                ; can drop the arm this reads - and after
                                 ; kbm_ui, so a keyboard-mouse press has already
                                 ; posted its release and this pass lights a box
                                 ; that the next pass puts straight back up
 %endif
     call ui_arm_chk             ; ...and a chrome press whose release was
-                                ; DROPPED must not stay armed (SPEC.md 13.5)
+.arm_done:                      ; DROPPED must not stay armed (SPEC.md 13.5)
 %ifdef KERN_BIG
-    call ui_timer_pass          ; ...and any window whose one-shot timer has
-                                ; come due (SPEC.md 13.9). One compare per pass
-                                ; on a machine with none armed, which is nearly
-                                ; always
-%endif
-    call fdlg_reap              ; a file dialog cancelled by its close or
-                                ; minimize box is only HIDDEN by that route
-                                ; (SPEC.md 38.1) - collect it here rather
+    cmp byte [wm_tarm], 0       ; ...and any window whose one-shot timer has
+    je .tmr_done                ; come due (SPEC.md 13.9). One compare per pass
+    call ui_timer_pass          ; on a machine with none armed, which is nearly
+.tmr_done:                      ; always - and the compare is HERE, so that is
+%endif                          ; all it is
+    cmp word [fdlg_win], 0      ; a file dialog cancelled by its close or
+    je .chk_close               ; minimize box is only HIDDEN by that route
+    call fdlg_reap              ; (SPEC.md 38.1) - collect it here rather
                                 ; than leaving the menu bar on Locator
-                                ; until the user next clicks something
-    call wm_close_pass          ; a package that answered "close me" is closed
-                                ; HERE, with none of its code on the stack
-                                ; (SPEC.md 75.2)
+                                ; until the user next clicks something.
+                                ;
+                                ; THE COMPARE IS HERE, like every other step
+                                ; of this ladder (SPEC.md 38.1.1). A dialog to
+                                ; pick a location is open under 1% of the time
+                                ; and this ran 671 times a SECOND on an idle
+                                ; desktop - a near call and a return to be
+                                ; told no, which is 1% of the machine
+.chk_close:
+    cmp word [wm_clreq], 0      ; a package that answered "close me" is closed
+    je .clr_done                ; HERE, with none of its code on the stack
+    call wm_close_pass          ; (SPEC.md 75.2)
+.clr_done:
     mov ax, [inst_launch]       ; deferred instance launch (posted by
     or ax, ax                   ; lock-held handlers via inst_launch_post)
     jz .chk_ld
@@ -504,11 +546,11 @@ ui_task:
     mov ax, [ld_pending]        ; stored as directory index + 1
     dec ax
     mov word [ld_pending], 0    ; consume before running, not after
-    call loader_run             ; in: AX = index; does its own locking
+    call COLD_SEG:loader_run_x  ; in: AX = index; does its own locking
 .chk_assoc:
     cmp byte [assoc_dapp], 0xFF ; a document double-click (SPEC.md 54.4):
     je .chk_pcmd                ; find its program, load it, and hand the
-    call assoc_run              ; document over by pull. Consumes the slot
+    call COLD_SEG:assoc_run_x   ; document over by pull. Consumes the slot
                                 ; itself, and does its own locking
 .chk_pcmd:
     mov ax, [ui_pcmd]           ; a kernel menu command posted from under
@@ -526,7 +568,7 @@ ui_task:
     call gfx_lock               ; refresh. One compare per pass when it is
     call wm_top                 ; not - which is nearly always, because
     mov al, 1                   ; wm_raise has usually spent the debt on the
-    call fm_focus               ; way in. AL = 1: there is nobody here to
+    call COLD_SEG:fm_focus_x    ; way in. AL = 1: there is nobody here to
     call gfx_unlock             ; defer the repaint to, so fm_focus draws
 .chk_cp:
     cmp byte [cp_dirty], 0      ; scheduler mode changed in the Control
@@ -540,30 +582,58 @@ ui_task:
     je .chk_curs                ; posted for the same reason and drained in
     mov byte [desk_zdirty], 0   ; the same pass - but it costs the drive-zone
     call gfx_lock               ; grid and the windows over it, not the screen
-    call desk_zones_paint
+    call COLD_SEG:dkz_desk_zones_paint
     call gfx_unlock
 .chk_curs:
-    call cur_shape_pass         ; which window is the pointer over, and does it
-                                ; want a different picture (SPEC.md 7.2)? One
-                                ; compare per pass when neither the pointer nor
-                                ; the z-order moved, which is nearly always -
+    cmp byte [cur_shchk], 0     ; which window is the pointer over, and does it
+    je .curs_done               ; want a different picture (SPEC.md 7.2)? ONE
+    call cur_shape_pass         ; compare per pass when neither the pointer nor
+.curs_done:                     ; the z-order moved, which is nearly always -
                                 ; and it belongs HERE rather than in the mouse
-                                ; ISR because the UI task is the only mutator
+                                ; ISR because the UI task is the only mutator.
+                                ; The flag is now set by whatever MOVED the
+                                ; pointer as well (SPEC.md 7.2.1.1), which is
+                                ; what makes this a byte compare instead of
+                                ; three word compares behind a call
                                 ; of wm_zord and the window rects, so wm_hit
                                 ; answers from it with no lock and no race
+    ; --- 3a. THE TIME-DRIVEN STEPS, BEHIND ONE COMPARE (SPEC.md 13.12) --------
+    ; Everything below this line is driven by the CLOCK rather than by an
+    ; event, and the system tick is 18.2 Hz against a loop that runs about 750
+    ; times a second - so on forty passes out of forty-one there is, by
+    ; construction, nothing for any of it to do. One `[ticks]` compare says so.
+    ;
+    ; It is worth a whole section of its own because clk_tick alone measured
+    ; 633 cycles a pass - 10% of the machine - to discover that no tick had
+    ; elapsed, most of it a 16-bit MUL scaling a delta of zero.
+    ;
+    ; COALESCING IS A FEATURE HERE, not a cost: a toast appearing, or a
+    ; hotplug edge advancing, up to 55 ms late is not observable - which is
+    ; exactly why these and not the posted flags above, where 55 ms of latency
+    ; WOULD show (a held chrome box lagging the pointer, a cursor shape lagging
+    ; a window edge).
+    ;
+    ; [clk_dirty] WAS DRAINED HERE and is not any more (SPEC.md 37.94). It was
+    ; the same argument - holding an arrow steps the clock on every repeat, and
+    ; the tick wrote the RTC once instead of once per step - but the Control
+    ; Panel's CLOSE coalesces harder still, once a session, and it is a moment
+    ; the user chose rather than one the machine asks itself about 18.2 times a
+    ; second. The write half went with it, into CTRL.DRV.
+.posted_done:
+    mov ax, [ticks]
+    cmp ax, [ui_lastt]
+    je .idle                    ; no tick since the last pass: nothing below
+    mov [ui_lastt], ax          ; can have become true
+    mov byte [ui_post], 1       ; ...and SWEEP the posted flags on the tick, so
+                                ; a setter that forgets to say so is 55 ms late
+                                ; rather than never seen (SPEC.md 13.13)
+
 .chk_toast:
     call toast_pass             ; put a staged toast up, or take an expired
-                                ; one down (SPEC.md 59). One compare per pass
-                                ; when nothing is up, and the ONE place
-                                ; either edge is drawn - toast_show is
-                                ; reachable from a lock-holding callback, a
-                                ; worker holding nothing, and kernel code
-.chk_clk:
-    cmp byte [clk_dirty], 0     ; the clock was set from the Date/Time page
-    je .clock                   ; (SPEC.md 31.5): the hardware RTC is written
-    mov byte [clk_dirty], 0     ; HERE, outside the lock, because a page proc
-    call clk_rtc_write          ; may not call BIOS (SPEC.md 31.1)
-
+                                ; one down (SPEC.md 59). The ONE place either
+                                ; edge is drawn - toast_show is reachable from
+                                ; a lock-holding callback, a worker holding
+                                ; nothing, and kernel code
     ; --- 4. the clock: keep time always, draw only when something changed ----
     ; Taking the gfx lock blinks the cursor, and that blink IS the flicker
     ; the "seconds in menu bar" setting exists to remove - so the lock is
@@ -594,7 +664,7 @@ ui_task:
 %endif
     test al, 2
     jnz .clk_lock
-    call cp_tick_due            ; CF = 1: a live Date/Time page is showing
+    call COLD_SEG:cpf_cp_tick_due ; CF = 1: a live Date/Time page is showing
     jnc .idle
 .clk_lock:
     call gfx_lock
@@ -602,12 +672,42 @@ ui_task:
     jz .clk_cp
     call menu_draw_clock        ; the menu bar cell (SPEC.md 12.1)...
 .clk_cp:
-    call cp_tick                ; ...and an open Date/Time page (SPEC 31.5),
+    call COLD_SEG:cpf_cp_tick   ; ...and an open Date/Time page (SPEC 31.5),
     call gfx_unlock             ; which is a no-op unless one is showing
 
     ; --- 5. give everyone else a slice ----------------------------------------
 .idle:
-    call task_yield
+%ifndef NOUIBLOCK
+    ; --- THE LOST WAKEUP (SPEC.md 8.1.2.3) ---------------------------------
+    ; An ISR that fires while this pass is running has already delivered its
+    ; event and set [sch_uiwake]; sleeping now would sit on it until the tick.
+    ; The test and task_sleep's T_STATE store have to be ONE critical section
+    ; or the race just moves - so IF=0 spans both, and the byte is spent on
+    ; the far side of it whichever way we went.
+    ;
+    ; It is a dedicated byte and NOT [ui_post], which looks like it should
+    ; serve: .posted_done sets [ui_post] on every tick, for the NEXT pass to
+    ; sweep, and a tick pass therefore always reaches here with it set - so
+    ; this would never sleep at all.
+    pushf
+    cli
+    cmp byte [sch_uiwake], 0
+    jne .woke                   ; something arrived during the pass: go round
+    mov ax, 1                   ; BLOCK until the next tick (SPEC.md 8.1.2.2),
+    call task_sleep             ; and sooner than that if an ISR wakes us. The
+                                ; loop went round 1,134 times a second to find
+                                ; nothing to do 56 times in 57; it now goes
+                                ; round 17.9 times and the machine spends 97.2%
+                                ; of an idle desktop HALTED. task_sleep is the
+                                ; whole mechanism - no new scheduler primitive:
+                                ; sch_isr's wake scan is the tick wake, and
+                                ; sch_wake_ui is the early one
+.woke:
+    mov byte [sch_uiwake], 0    ; spent - still under IF=0, so a wake posted
+    popf                        ; after this is a wake the NEXT .idle sees
+%else
+    call task_yield             ; `make NOUIBLOCK=1` - the spin, for the A/B
+%endif
     jmp .loop
 
 ; -----------------------------------------------------------------------------
@@ -769,6 +869,7 @@ ui_timer_pass:
     jmp short .step
 .armed:
     mov byte [wm_tarm], 1
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
 .step:
     add si, WIN_SIZE
     loop .next
@@ -921,7 +1022,7 @@ ui_lit_go:
     je .out                     ; already in that state
     mov [ui_armlit], al
     mov ah, [ui_armr]
-    call wm_chrome_rect         ; AX,BX,CX,DX = the box interior
+    call COLD_SEG:wmz_wm_chrome_rect ; AX,BX,CX,DX = the box interior
     call gfx_lock
     call gfx_xor_fill
     call gfx_unlock
@@ -1029,7 +1130,7 @@ ui_rdown:
                                 ; it numerically (SPEC.md 12.3)
 
     call gfx_lock
-    call fm_rclick              ; select + track the popup: UNBILLED, exactly
+    call COLD_SEG:fm_rclick_x   ; select + track the popup: UNBILLED, exactly
     jc .ctx_done                ; like menu_track (SPEC.md 13) - the dwell
                                 ; time of a held button is nobody's CPU cost
 
@@ -1041,7 +1142,7 @@ ui_rdown:
     call task_cycles            ; DX:AX = start stamp
     push dx                     ; start stamp: hi, then lo
     push ax
-    call fm_rcmd
+    call COLD_SEG:fm_rcmd_x
     pop ax
     pop dx
     pop word [snd_inst]         ; the outer dispatch's stamp, back
@@ -2073,7 +2174,8 @@ ui_loc_base:
 ; -----------------------------------------------------------------------------
 ui_post_cmd:
     mov [ui_pcmd], ax
-    ret
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
+    retf
 
 ui_pcmd:    dw 0                ; posted CMD_*, 0 = none (see above)
 
@@ -2177,7 +2279,7 @@ ui_tm_open:
 
     mov word [ld_pwin], 0       ; no poster: this is not a Disk window's load,
     mov si, ui_s_tmfile         ; and so not loader_run either - there is no
-    call ld_run_name            ; BY NAME (SPEC.md 21.4): no listing to build
+    call COLD_SEG:ldf_ld_run_name ; BY NAME (SPEC.md 21.4): no listing to build
                                 ; and none to refresh, and no status line to
                                 ; correct either ([ld_status] is loader_run's
                                 ; to write; storing it here would retitle an
@@ -2194,7 +2296,7 @@ ui_tm_open:
     cmp al, LD_EBAD             ; Disk window's status line uses - EXCEPT that
     jne .code                   ; ld_res_name answers LD_EBAD both for a file
     mov si, ui_s_tmfile         ; that is not a package and for a file that is
-    call dskw_stat              ; not THERE (SPEC.md 21.4), and those are not
+    call COLD_SEG:dwf_dskw_stat ; not THERE (SPEC.md 21.4), and those are not
     jnc .code                   ; one message to a user (SPEC.md 28.3). The
     pop ax                      ; index resolver could tell them apart because
     mov si, ui_s_nofile         ; dsk_find_name failed first; by name they
@@ -2249,7 +2351,7 @@ ui_tm_open:
 ; -----------------------------------------------------------------------------
 ui_tm_sysdir:
     mov si, ui_s_tmdir
-    call dskw_stat              ; AL = the raw attribute, BX = first cluster
+    call COLD_SEG:dwf_dskw_stat ; AL = the raw attribute, BX = first cluster
     jc .no
     test al, 0x10               ; a subdirectory, not a file of that name
     jz .no
@@ -2499,7 +2601,7 @@ ui_cmd:
     mov al, KIND_ABOUT
     jmp .launch
 .ctrl:
-    call cp_open                ; NOT .launch: the panel's code is a file now
+    call COLD_SEG:cpf_cp_open   ; NOT .launch: the panel's code is a file now
     ret                         ; (SPEC.md 2.8.4), so opening it can fail for
                                 ; a reason app_launch knows nothing about
 .timer:
@@ -2519,7 +2621,7 @@ ui_cmd:
     ret
 
 .files:
-    call files_open             ; fronts, creates or moves a file-manager
+    call COLD_SEG:fmf_files_open ; fronts, creates or moves a file-manager
     ret                         ; window (SPEC.md 22.1); locks internally
 
 .close:
@@ -2554,14 +2656,14 @@ ui_cmd_reboot:
                                 ; disk at all: drv_shutdown's detaches are
                                 ; memory and ports (hd_cfg_mark stages its
                                 ; blob and writes nothing - SPEC.md 51.9)
-    call cp_flush_close         ; the OTHER way the panel stops existing
+    call COLD_SEG:cpf_cp_flush_close ; the OTHER way the panel stops existing
                                 ; (SPEC.md 31.8). Before the lock, because a
                                 ; disk write is not something to do with the
                                 ; GUI already torn down - and before vid_text,
                                 ; so a failure still has a screen to have
                                 ; happened on
 .nosave:
-    call drv_shutdown           ; detach every loaded driver (SPEC.md 51.2):
+    call COLD_SEG:drv_shutdown_x ; detach every loaded driver (SPEC.md 51.2):
                                 ; int 19h resets no hardware, so a hooked
                                 ; card would ride the reboot with its vector
                                 ; pointing into a heap the next boot reuses
@@ -2645,6 +2747,18 @@ ui_click_t: resw 1              ; EV_C of the event being dispatched: the
 ui_tclkt:   resw 1              ; birth tick of the last title-bar press, and
 ui_tclkw:   resw 1              ; the window it landed on (0 = none recorded):
                                 ; ui_tdbl's pair, SPEC.md 11.95
+ui_post:    resb 1              ; SPEC.md 13.13: HAS ANYTHING BEEN POSTED? The
+                                ; OR of the fifteen deferred-work flags, set
+                                ; beside each of them and cleared before the
+                                ; walk. -f bin zeroes no .bss and it does not
+                                ; matter: garbage here costs one walk
+ui_lastt:   resw 1              ; SPEC.md 13.12: the [ticks] value the last pass
+                                ; ran the time-driven steps at. -f bin zeroes
+                                ; no .bss, but garbage here costs one extra
+                                ; pass and nothing else - it is an EQUALITY
+                                ; test against a free-running word, so there
+                                ; is no ordering to get wrong and no wrap to
+                                ; survive
 ui_armw:    resw 1              ; SPEC.md 13.5: the window a chrome press is
                                 ; ARMED on, 0 = nothing armed. A window pointer
                                 ; is never 0, so 0 is the sentinel and .bss

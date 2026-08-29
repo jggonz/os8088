@@ -549,6 +549,51 @@ overlays = [
     subtype = "Hercules"
     clock_mode = "Dynamic"
 
+# THE TWO-CARD XT WITH A VGA IN IT: sixteen colours beside one bit.
+#
+# os8088_5150_both is a CGA and a Hercules, so both of its displays are 1bpp
+# and every question the extended desktop (SPEC.md 39.12-39.19) raises about
+# a COLOUR card is unanswerable on it. That is most of them, because the paths
+# that differ by bit depth are the interesting ones: SPEC.md 5.4.3's gfx_blitp
+# refuses a straddle and refuses a 1bpp adapter, so on this machine a window
+# dragged across the seam takes BOTH refusals and one of them changes what the
+# app stores (SPEC.md 42.13.1); SPEC.md 39.4's colour reduction only exists on
+# the mono side; and SPEC.md 11.98's adapter change is a real change of depth
+# here rather than a change of size.
+#
+# The field has had one of these for a while - 86Box's "XTDualVideoVGA" - and
+# every report off it arrived as a screenshot nothing here could reproduce.
+#
+# VGA FIRST so it is MartyPC's card 0 and the mono card is 1. Which of them
+# os8088 calls display 0 is the Control Panel's business (SPEC.md 39.19.1) and
+# not this file's, and tests/dispcp.py's set_primary drives it either way.
+[[machine]]
+name = "os8088_xt_vga_mda"
+type = "Ibm5160"
+rom_set = "glabios_xt"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "VGA"
+    clock_mode = "Default"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"
+
 # os8088_5150_sb at the RAM FLOOR: 128KB, which is MIN_RAM_KB (SPEC.md 2.7).
 #
 # It exists to test the CLAIM HEAP under a Sound Blaster rather than the card.

@@ -2754,7 +2754,8 @@ br_abdraw:
     shr cx, 1
     add cx, [br_abl]
     mov dx, di
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the panel this routine
+    call OSAPI_FONT_RUN             ; filled white four calls ago
     pop si
     add di, BR_ABLH
     jmp .line

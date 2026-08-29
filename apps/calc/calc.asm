@@ -1071,10 +1071,11 @@ cal_abdraw:
     sub cx, ax
     shr cx, 1
     add cx, [cal_abl]
-    add cx, [cal_ox]                ; font_str wants SCREEN coords
+    add cx, [cal_ox]                ; the run wants SCREEN coords
     mov dx, di
     add dx, [cal_oy]
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the panel this routine
+    call OSAPI_FONT_RUN             ; filled white four calls ago
     pop si
     add di, CAL_ABLH
     jmp .line

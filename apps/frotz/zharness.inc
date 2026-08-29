@@ -25,8 +25,10 @@
 ; everything that preceded it.
 ;
 ; COM4 at 0x3E8. SPEC.md 9.5's mouse probe knows 3F8 and 2F8 and hooks the IRQ
-; of anything that answers there, and DEBUG.DRV (SPEC.md 58) is at 2E8 - 3E8
-; is the one address in the machine with no other owner. Polled, never
+; of anything that answers there, so 3E8 and 2E8 are the two the kernel has
+; never heard of; 2E8 was the serial monitor's until that driver was removed
+; (SPEC.md 58), and 3E8 is kept rather than moved because nothing is gained by
+; moving it and the harness machines are configured for it. Polled, never
 ; interrupt-driven, so it shares an IRQ line with nothing and needs no vector.
 ; =============================================================================
 

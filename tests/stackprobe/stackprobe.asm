@@ -129,19 +129,22 @@ spb_paint:
     mov dx, [spb_cy]
     add dx, 6
     mov si, spb_s_title
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     mov cx, [spb_cx]
     add cx, 8
     mov dx, [spb_cy]
     add dx, 62
     mov si, spb_s_hint1
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     mov cx, [spb_cx]
     add cx, 8
     mov dx, [spb_cy]
     add dx, 72
     mov si, spb_s_hint2
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
 
     call spb_lines              ; the three live lines share one drawer
 

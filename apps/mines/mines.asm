@@ -722,7 +722,7 @@ mn_draw_cell:
     add al, '0'
     add cx, 4                       ; centre the 8x8 glyph in the 16px cell
     add dx, 4
-    call OSAPI_FONT_CHAR
+    call OSAPI_FONT_CHAR_XPARENT
 .done:
     pop si
     pop dx
@@ -778,9 +778,25 @@ mn_draw_minecell:
     ret
 
 ; -----------------------------------------------------------------------------
-; mn_draw_wrongflag - a flag with no mine under it (loss): mine + black X
+; mn_draw_wrongflag - a flag with no mine under it (loss): mine + LIGHT-RED X
 ; in:  BX = cell index
 ; out: nothing; preserves all registers
+;
+; The X may not be CBLACK, and SPEC.md 23 states it as a rule because the
+; first cut was: all twenty of its pixels land inside the mine glyph under
+; it - the diagonals run (3,3)..(12,12) and (12,3)..(3,12), and mn_sh_mine's
+; disc, spokes and corner nubs cover every one - so a black X was drawn
+; black on black and NOTHING of it survived. A wrongly flagged empty cell
+; came out pixel-identical to a real mine, the lost board showed an
+; eleventh mine that was not there, and every digit beside it read one too
+; low: reported, reasonably, as the COUNTS being wrong. They never were -
+; mn_place bumps each placed mine's neighbours and is right.
+;
+; Light red because 39.4 maps 12 to WHITE at 1bpp: red on a black mine on
+; VGA, white on a black mine on a CGA and a Hercules. It is one SET_COLOR
+; for the whole loop, so the fix costs nothing (PERFORMANCE.md: the twenty
+; gfx_pixel calls are what they always were, and only a lost board with a
+; wrong flag on it pays them at all).
 ; -----------------------------------------------------------------------------
 mn_draw_wrongflag:
     push ax
@@ -793,7 +809,7 @@ mn_draw_wrongflag:
     call mn_shape
     mov si, mn_sh_mine
     call mn_shape
-    mov al, CBLACK
+    mov al, CLRED                   ; NOT CBLACK - see the header
     call OSAPI_SET_COLOR
     mov di, 0                       ; two 10px diagonals, corner to corner
 .px:
@@ -878,14 +894,14 @@ mn_draw_status:
     cmp al, 10                      ; only ever 0..10: "10" or one digit
     jb .one
     mov al, '1'
-    call OSAPI_FONT_CHAR
+    call OSAPI_FONT_CHAR_XPARENT
     add cx, 8
     mov al, '0'
     jmp .putc
 .one:
     add al, '0'
 .putc:
-    call OSAPI_FONT_CHAR
+    call OSAPI_FONT_CHAR_XPARENT
 
     mov si, mn_s_boom               ; centred mode text
     cmp byte [mn_mode], MN_M_LOST
@@ -904,7 +920,7 @@ mn_draw_status:
     add cx, [mn_ox]
     mov dx, [mn_oy]
     add dx, 6
-    call OSAPI_FONT_STR
+    call OSAPI_FONT_STR_XPARENT
 .done:
     pop si
     pop dx

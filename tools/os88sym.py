@@ -27,8 +27,9 @@ Knob builds (`VIDEO=`, `DISKCNT=1`, ...) move everything: pass the same
 
 **AND THE SECTION DECIDES THE SEGMENT.** This answered `KERNEL_SEG:offset` for
 every symbol for as long as it existed, which is right for `.text` and `.bss`
-and wrong for the other three: `.cold` runs at COLD_SEG, `.ovl` at FAT_SEG and
-`.lowbss` lives at LOW_SEG (SPEC.md 2.1/2.5/2.6). That is 25KB of resident
+and wrong for the others: `.cold` runs at COLD_SEG and `.lowbss` lives at
+LOW_SEG (SPEC.md 2.1/2.6), while `.boot2` and `.ovl` have no fixed segment at
+all - stage 2 chooses it and publishes it in `[spl_fseg]`. That is 25KB of resident
 code and every task stack, disk buffer and claim record - and the wrong answer
 is a small plausible address INSIDE the kernel image that reads back happily
 and means nothing, which is the exact failure this file was written to stop,
@@ -52,7 +53,31 @@ KERNEL_SEG = 0x0060                      # SPEC.md 2 - one place, one meaning
 # nobody has named is an error, not a guess at KERNEL_SEG (which is how the
 # bug in the header went unnoticed: the wrong answer was always plausible).
 SECTION_SEG = {".text": "KERNEL_SEG", ".bss": "KERNEL_SEG",
-               ".cold": "COLD_SEG", ".ovl": "FAT_SEG", ".lowbss": "LOW_SEG"}
+               ".cold": "COLD_SEG", ".lowbss": "LOW_SEG",
+               # STAGE 2's BLOB (SPEC.md 2.9.5/2.9.6): the loader, the loading
+               # screen and the boot overlay, one image at one address - which
+               # stage 2 CHOOSES, copying itself to HEAP_SEG and publishing the
+               # segment in [spl_fseg]. It is a kernel constant in the map, but
+               # a kernel started some other way never wrote the word, so the
+               # honest answer is the same one the on-demand modules get: read
+               # [spl_fseg] out of the guest first. `.ovl` used to be FAT_SEG.
+               ".boot2": None, ".ovl": None,
+               # the planar decoder's buffers, a rung of their own above
+               # .lowbss so a mono machine's heap can start under them
+               # (SPEC.md 39.22)
+               ".vgabuf": "VGABUF_SEG",
+               # ...and the on-demand modules (SPEC.md 2.8), which have NO
+               # fixed segment and never will: each is split out of the image
+               # into a file of its own and loaded into a HEAP CLAIM when its
+               # feature is asked for, so its base is different every boot.
+               # `None` is the honest answer and is not the same as "nobody
+               # has named this section yet" - segment_of says which of the
+               # two it is hit, and `--all` prints the row with a dash instead
+               # of dying on it. Finding one of these at run time is a
+               # two-step read the caller has to do for itself: the kernel's
+               # own row says where the claim went (tests/xmcheck.py does
+               # exactly that for XMEM.DRV, SPEC.md 41.12).
+               ".modc": None, ".modf": None, ".modl": None, ".modmap": None}
 
 _cache = {}
 
@@ -154,6 +179,14 @@ def segment_of(name, defines=(), check=True):
         raise RuntimeError("section %s has no segment in SECTION_SEG - add it "
                            "rather than assuming KERNEL_SEG" % s)
     nm = SECTION_SEG[s]
+    if nm is None:
+        raise RuntimeError(
+            "%s is in %s, which has NO FIXED SEGMENT. An on-demand module "
+            "(SPEC.md 2.8) is loaded into a heap claim; `.boot2` and `.ovl` "
+            "are stage 2's blob, which puts itself where it likes (2.9.5). "
+            "Either way this offset is only meaningful against a base the "
+            "kernel chose at run time - read it out of the guest first "
+            "([spl_fseg] for the blob)." % (name, s))
     if nm == "KERNEL_SEG":
         return KERNEL_SEG
     if nm not in equ:
@@ -182,6 +215,9 @@ def _modcut(blob):
     return int.from_bytes(blob[off + 6:off + 10], "little")
 
 
+_SHIPPED_DEFS = ("KERN_BIG", "KERN_SMALL", "KERNSIZE", "KERN_KNOB")
+
+
 def _load(defines=(), check=True):
     # $OS88_DEFINES is how a tool that never asked for a knob still finds the
     # right map. Every helper here takes `defines`, and the ones layered above
@@ -195,7 +231,28 @@ def _load(defines=(), check=True):
     if env:
         defines = tuple(defines) + tuple(
             d for d in env.replace(",", " ").split() if d)
-    key = tuple(defines)
+    # ...and $OS88_BUILD is the same idea for WHICH BUILD, because both the
+    # generated includes and the image this map is checked against live in a
+    # build directory, and `build/` is only one of them. A sub-make with
+    # BUILD= set - `make field`, `make small`, any knob built into a directory
+    # of its own - has its own associco.inc and its own kernel.bin, and
+    # hardcoding build/ here meant the check compared a knob's map against the
+    # PLAIN kernel and refused. That refusal is right and the map was right;
+    # what was missing was a way to say which pair to use.
+    bdir = os.environ.get("OS88_BUILD", "") or os.path.join(ROOT, "build")
+    if not os.path.isabs(bdir):
+        bdir = os.path.join(ROOT, bdir)
+    # A KNOB KERNEL IS NOT BOUND BY KERN_BUDGET (kernel.asm guard 1), and the
+    # Makefile says so with -DKERN_KNOB. A tool re-assembling one for its
+    # symbol map has to say the same thing or nasm refuses a kernel that
+    # `make` built happily - which reads as "the map is broken" rather than as
+    # a missing define. KERN_SMALL is not a knob for this purpose: it is a
+    # shipped configuration with a budget of its own.
+    if any(d.split("=")[0] not in _SHIPPED_DEFS for d in defines):
+        defines = tuple(defines) + ("KERN_KNOB",)
+    key = (bdir,) + tuple(defines)   # ...and the DIRECTORY, or two builds
+                                     # share one map and the second gets the
+                                     # first's addresses
     if key in _cache:
         return _cache[key]
 
@@ -213,7 +270,7 @@ def _load(defines=(), check=True):
     cmd = ["nasm", "-f", "bin", "-w+error",
            "-I", os.path.join(ROOT, "kernel") + os.sep,
            "-I", os.path.join(ROOT, "apps") + os.sep,
-           "-I", os.path.join(ROOT, "build") + os.sep]
+           "-I", bdir + os.sep]
     for d in defines:
         cmd += ["-D" + d]
     cmd += ["-o", binf, asm]
@@ -221,7 +278,7 @@ def _load(defines=(), check=True):
     if r.returncode:
         raise RuntimeError("nasm failed:\n" + r.stderr)
 
-    built = os.path.join(ROOT, "build", "kernel.bin")
+    built = os.path.join(bdir, "kernel.bin")
     if check and os.path.exists(built):
         # build/kernel.bin is the assembled image with the on-demand modules
         # CUT OFF (SPEC.md 2.8), so compare against the same prefix rather
@@ -232,9 +289,10 @@ def _load(defines=(), check=True):
         mine = mine[:_modcut(mine)]
         if mine != open(built, "rb").read():
             raise RuntimeError(
-                "the map describes a DIFFERENT kernel from build/kernel.bin: "
-                "run `make` (or pass the knob's --define) before trusting any "
-                "address from it.")
+                "the map describes a DIFFERENT kernel from %s: run `make` "
+                "(or pass the knob's --define, or $OS88_DEFINES, and "
+                "$OS88_BUILD for a sub-make's own directory) before trusting "
+                "any address from it." % os.path.relpath(built, ROOT))
 
     out, sect, equ = _parse_map(mapf)
     if not out:
@@ -246,7 +304,7 @@ def _load(defines=(), check=True):
 def linear(name, defines=()):
     """The 20-bit address a debugger wants: <this symbol's segment>:offset.
 
-    NOT always KERNEL_SEG - see the header. `.cold`, `.ovl` and `.lowbss` each
+    NOT always KERNEL_SEG - see the header. `.cold` and `.lowbss` each
     run somewhere else, and getting that wrong yields a readable address in
     the wrong place rather than an error.
     """
@@ -271,7 +329,19 @@ def main(argv):
     sect = sections(defines)
 
     def row(n):
-        seg = segment_of(n, defines)
+        # An on-demand module's symbol has no fixed segment (see SECTION_SEG),
+        # and `--all` listing every symbol must not die on the 576 of them:
+        # it prints the OFFSET, which is the only true thing about them, and a
+        # dash where a segment would be. It was an unhandled RuntimeError, so
+        # `--all` had been dead since SPEC.md 2.8 landed and every caller of
+        # it - tests/xmcheck.py among them - died with it.
+        try:
+            seg = segment_of(n, defines)
+        except RuntimeError:
+            if SECTION_SEG.get(sect[n], "") is not None:
+                raise
+            print("%-28s %-8s %5s:%04X  %5s" % (n, sect[n], "-", s[n], "-"))
+            return
         print("%-28s %-8s %04X:%04X  %05X"
               % (n, sect[n], seg, s[n], seg * 16 + s[n]))
 

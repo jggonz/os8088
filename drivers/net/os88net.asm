@@ -350,9 +350,8 @@ net_bss_clear:
     mov word [sk_base], sk_rxb
     mov word [sk_rxcap], SK_RXMID
     mov word [sk_txcap], SK_TXMID
-    mov word [sk_rxsh], SK_RXMIDSH
-    mov word [sk_txsh], SK_TXMIDSH
-    mov word [sk_txoff], NET_SOCKS * SK_RXMID
+    mov word [sk_txoff], SK_RXMID + SK_NLEAN * SK_LEANRX
+    call sk_ring_reset              ; ...and nothing holds a ring yet (72.21)
     pop es
     pop di
     pop cx
@@ -4411,8 +4410,13 @@ sk_tab:     resb NET_SOCKS * SK_SZ
 ; partner takes the MIDDLE rung - the one tcp.inc's arithmetic calls the
 ; sweet spot - and the %error below is what keeps this ceiling from being
 ; discovered on a field machine again.
-sk_rxb:     resb NET_SOCKS * SK_RXMID
-sk_txb:     resb NET_SOCKS * SK_TXMID
+; **AND IT IS THE POOL'S SIZE, NOT ONE RING A SLOT** (SPEC.md 72.21). This was
+; NET_SOCKS * SK_RXMID, which is what made the handle count and the buffer
+; bill the same number - and in a .COM's single segment that ceiling is real:
+; eight slots that way is 36,864 bytes and runs off the end. One bulk pair
+; plus SK_NLEAN lean ones is 9,216, and the slot count stops mattering to it.
+sk_rxb:     resb SK_RXMID + SK_NLEAN * SK_LEANRX
+sk_txb:     resb SK_TXMID + SK_NLEAN * SK_LEANTX
 eth_rxh:    resb 4
 eth_rxb:    resb NE_FRAME + 4
 eth_txb:    resb NE_FRAME + 4

@@ -244,12 +244,11 @@ net_txt:
     push ax
     push cx
     push dx
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
     add cx, [net_px]
     mov dx, [net_py]
     add dx, bx
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the pane's own ground
+    call OSAPI_FONT_RUN
     pop dx
     pop cx
     pop ax

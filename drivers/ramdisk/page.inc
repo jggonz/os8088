@@ -172,7 +172,7 @@ rp_paint:
                                 ; and a mount can happen between two paints
 
     clc
-    call OSAPI_GFX_PEN
+    call rp_pen
     mov si, rp_s_page
     mov cx, RP_LX
     mov dx, RP_HY
@@ -180,14 +180,14 @@ rp_paint:
 
     ; --- the size row --------------------------------------------------------
     call rp_size_ok             ; ONE predicate, shared by the greying, the
-    call OSAPI_GFX_PEN          ; click refusal and the explanation (47 rule 2)
+    call rp_pen                 ; click refusal and the explanation (47 rule 2)
     mov si, rp_s_size
     mov cx, RP_LX
     mov dx, RP_SY
     call rp_str
 
     call rp_size_ok
-    call OSAPI_GFX_PEN
+    call rp_pen
     mov ax, RP_SBX              ; the value box
     mov bx, RP_SY - 3
     mov cx, RP_SBX + RP_SBW - 1
@@ -196,7 +196,7 @@ rp_paint:
 
     call rp_size_text           ; rp_line = the value, or what is being typed
     call rp_size_ok
-    call OSAPI_GFX_PEN
+    call rp_pen
     mov si, rp_line
     mov cx, RP_STX
     mov dx, RP_SY
@@ -207,7 +207,7 @@ rp_paint:
 
     ; --- the store row -------------------------------------------------------
     call rp_loc_ok
-    call OSAPI_GFX_PEN
+    call rp_pen
     mov si, rp_s_store
     mov cx, RP_LX
     mov dx, RP_LY
@@ -238,7 +238,7 @@ rp_paint:
 
     ; --- the captions --------------------------------------------------------
     clc
-    call OSAPI_GFX_PEN
+    call rp_pen
     call rp_cap_mount
     mov si, rp_line
     mov cx, RP_LX
@@ -318,7 +318,7 @@ rp_radio:
     add dx, [rp_py]
     call os88ui_glyph
     call rp_loc_ok
-    call OSAPI_GFX_PEN
+    call rp_pen
     mov cx, di
     mov dx, RP_LY
     call rp_str
@@ -395,15 +395,39 @@ rp_clear_ok:                    ; ...and Clear, an association to drop
 ; the paint cannot disagree about which of the two a number is.
 ; =============================================================================
 
+; rp_pen - OSAPI_GFX_PEN, and the INK a run must letter in, from one CF
+; in:  CF = SPEC.md 47's argument (0 live, 1 disabled)
+; out: the pen set and [rp_ink] banked; every register preserved
+;
+; A DRIVER CANNOT READ [gfx_color] BACK any more than a package can (SPEC.md
+; 52.12): there is no OSAPI_GET_COLOR, so the ink has to be decided at the
+; branch that decides the flag. Every one of this page's seven pen sites goes
+; through here, so rp_str never has to ask. The FLAG stays the pen's, which is
+; what leaves SPEC.md 6.1.12 to checkerboard a disabled caption for free.
+rp_pen:
+    push ax
+    mov al, CBLACK
+    jnc .set
+    mov al, CDGRAY
+.set:
+    mov [rp_ink], al
+    pop ax
+    call OSAPI_GFX_PEN
+    ret
+
 ; rp_str - SI = a string, CX/DX = a pane-relative pen
 rp_str:
+    push ax
     push cx
     push dx
     add cx, [rp_px]
     add dx, [rp_py]
-    call OSAPI_FONT_STR
+    mov al, [rp_ink]            ; AL = ink, AH = the pane's own ground
+    mov ah, CWHITE
+    call OSAPI_FONT_RUN
     pop dx
     pop cx
+    pop ax
     ret
 
 ; rp_frame - AX/BX/CX/DX = a pane-relative rect

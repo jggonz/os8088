@@ -103,6 +103,21 @@ WIN_SIZE equ 28                 ; ...and kern_small stops where SPEC.md 13.7
 %endif                          ; left it
 MAX_WIN  equ 12                 ; mirrored in apps/os88api.inc (SPEC.md 11)
 
+; --- the title bar's two boxes (SPEC.md 11) ----------------------------------
+; The close box on the left, the minimize box mirrored at the right, both the
+; same size and both on the same rows. NAMED rather than written out at the
+; four places wm_hit compares against them, because a scripted click has to
+; land inside one and the harness had no way to ask: tests/xmcheck.py wrote
+; down (W_X+14, W_Y+5) for a window it assumed sat at x=180, the window came
+; up at 175, the click landed on the TITLE BAR instead of the box, and the
+; gate reported an extended-memory LEAK for a window that had never closed.
+; tools/os88geom.py mirrors these four and tests/unit/t_mirror.py fails on a
+; stale copy, which is what makes the harness's arithmetic follow the kernel.
+WM_BOX_X0 equ 8                 ; the close box's left, relative to W_X...
+WM_BOX_W  equ 10                ; ...and its width, so it spans X0 .. X0+W
+WM_BOX_Y0 equ 4                 ; both boxes' top and bottom, relative to W_Y
+WM_BOX_Y1 equ 14
+
 WF_SIZABLE equ 4                ; W_FLAGS bit2: resizable (SPEC.md 11.1)
 WF_FULL    equ 8                ; W_FLAGS bit3: fullscreen (SPEC.md 11.2)
 WF_SAVEU   equ 32               ; W_FLAGS bit5: this window PROMISES that its
@@ -2434,6 +2449,7 @@ wm_timer:
 .set:
     mov [bx+W_TIMER], ax
     mov byte [wm_tarm], 1
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
     pop ax
     ret
 .cancel:
@@ -2654,6 +2670,7 @@ wm_ask_close:
 ; -----------------------------------------------------------------------------
 wm_close_req:
     mov [wm_clreq], bx
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3255,10 +3272,22 @@ wm_zoom:
     ; the proposal was legal, so the reply is written as given.
     call wm_zoom_slot           ; SI -> this window's bank
     mov cx, [si+ZR_W]
-    jcxz .out                   ; nothing banked - the window was CREATED this
-                                ; size and has never been anywhere else, so
+    or cx, cx                   ; nothing banked - the window was CREATED this
+    jz .out                     ; size and has never been anywhere else, so
                                 ; there is nothing to go back to and nothing
-                                ; is drawn
+                                ; is drawn.
+                                ;
+                                ; NOT `jcxz`, which is SHORT-ONLY on an 8086
+                                ; and had 14 bytes of headroom left here
+                                ; (displacement 113 of 127): the next thing
+                                ; that grew this routine broke the BUILD, and
+                                ; it did - a scheduler change nowhere near
+                                ; this file was enough, because NASM's jump
+                                ; optimiser reaches a different fixpoint when
+                                ; anything shifts and the short jumps in
+                                ; between resize with it. `.out` is four pops
+                                ; and a ret, so nothing downstream reads the
+                                ; flags this costs
     mov ax, [si+ZR_X]
     mov dx, [si+ZR_H]
     call wm_ask_size            ; preserves SI, which is why the bank can still
@@ -3578,7 +3607,75 @@ wm_destroy_seg:
 ; dialog over a fullscreen player was a whole-screen repaint including that
 ; player's W_PAINT, twice - once to show the dialog and once to take it away.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; wm_lk / wm_unlk - THE DRAWING MUTEX, FOR THE THREE ENTRIES A PACKAGE REACHES
+;                   WITH IT FREE (SPEC.md 11.101.2)
+;
+; `wm_show`, `wm_hide` and `wm_front` are API slots (0x0080/0x0088/0x0090), and
+; a package's ENTRY PROC runs with the gfx lock free (SPEC.md 20.2) - which is
+; exactly where a package shows the window it has just created. Three places in
+; this tree already say these three take the lock themselves - gfxbench's
+; header ("WM_SHOW/HIDE/FRONT take it themselves, so from inside a window
+; callback they are a deadlock"), muptest's entry proc ("FREE (SPEC.md 20.2),
+; unlike a callback") and kbm_ui's own comment - and none of them did. Every
+; KERNEL caller took it for them, so the gap was invisible until a package used
+; the API the way the SDK documents it.
+;
+; **What it costs is a save-under with the ARROW IN IT.** wm_show banks what
+; the new window is about to cover (wm_su_precover, 11.96.16) and wm_hide banks
+; what is going down; both read the screen through gfx_save, whose cur_unlazy
+; spends a hide that only a LOCK HOLD ever promised (SPEC.md 7.1.4). With no
+; hold there is no promise, the arrow is standing on the pixels being banked,
+; and it is stored as somebody's window content. Nothing shows it at the time:
+; a cache is only wrong when it is used, so the arrow appears when that window
+; is next uncovered - a whole one, or the part of it the rect caught - and it
+; stays, because nothing repaints what it did not damage. docs/FIELD-NOTES.md
+; 34.1 is the report, and "the window that opens must be ABOVE the cursor" is
+; the reader having found the precover rect from the outside.
+;
+; It is a RECURSIVE-AWARE take and not a bare gfx_lock, because every kernel
+; caller already holds it and gfx_lock is not reentrant: ours is a no-op,
+; anybody else's waits, free is taken. Unlike fprog's (12.8.4) this one may
+; block - all three run on the UI task and never inside dsk_xfer's [sch_lock].
+;
+; in:  nothing;  out: wm_lk: AL = 1 we took it and owe wm_unlk, 0 it was ours.
+;      wm_unlk: AL as wm_lk answered. Neither touches another register.
+; -----------------------------------------------------------------------------
+wm_lk:
+    cmp byte [gfx_lock_flag], 0
+    je wm_lk_take               ; free: take it
+    push ax
+    mov al, [sch_cur]
+    cmp al, [gfx_lock_own]
+    pop ax
+    jne wm_lk_take              ; SOMEBODY ELSE'S: gfx_lock waits for them,
+                                ; which is what a mutex is for
+    xor al, al                  ; ours: the caller's hold covers all of it
+    ret
+wm_lk_take:
+    call gfx_lock
+    mov al, 1
+    ret
+
+wm_unlk:
+    or al, al
+    jz wm_unlk_out
+    call gfx_unlock             ; ...and the arrow comes back on finished
+wm_unlk_out:                    ; pixels, with the caches already clean
+    ret
+
 wm_show:
+    push ax                     ; the caller's AX first: wm_lk answers in AL
+    call wm_lk
+    push ax
+    call wm_show_b
+    pop ax
+    call wm_unlk
+    pop ax
+    ret
+
+wm_show_b:
+    CURLOG 'W'
     push ax
     push bx
     push bp
@@ -3720,12 +3817,13 @@ wm_fs_zpos:
 ; -----------------------------------------------------------------------------
 wm_raise:
     mov byte [cur_shchk], 1     ; the window under a STANDING pointer just
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
                                 ; changed (SPEC.md 7.2): cur_shape_pass gates
                                 ; on the pointer having moved, and this is one
                                 ; of the two ways the answer moves under it
     push ax                     ; a Disk window whose folder changed under it
     xor al, al                  ; is re-listed BEFORE a pixel is drawn, so
-    call fm_focus               ; this raise puts the new listing up rather
+    call COLD_SEG:fm_focus_x    ; this raise puts the new listing up rather
     pop ax                      ; than the old one and then the new. AL = 0:
     jnc .listed                 ; the drawing below is ours, not its (22.8)
     mov al, 1                   ; and CF = 1 upgrades a title-bar raise to a
@@ -3894,6 +3992,16 @@ wm_dock_clear:
 ; the pixels to repair are the ones that were actually lit.
 ; -----------------------------------------------------------------------------
 wm_hide:
+    push ax
+    call wm_lk                  ; SPEC.md 11.101.2, and wm_su_take below is
+    push ax                     ; exactly why: it BANKS the window going down
+    call wm_hide_b
+    pop ax
+    call wm_unlk
+    pop ax
+    ret
+
+wm_hide_b:
     push ax
     push bx
     push cx
@@ -4351,6 +4459,16 @@ wm_fullscreen:
 ; silently drawing a hidden window.
 ; -----------------------------------------------------------------------------
 wm_front:
+    push ax
+    call wm_lk                  ; SPEC.md 11.101.2
+    push ax
+    call wm_front_b
+    pop ax
+    call wm_unlk
+    pop ax
+    ret
+
+wm_front_b:
     test word [bx+W_FLAGS], 2
     jz .slow
 
@@ -4498,6 +4616,7 @@ wm_cursor:
     or al, ah
     mov [bx + W_FLAGS + 1], al
     mov byte [cur_shchk], 1
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
 .out:
     pop ax
     popf
@@ -4583,15 +4702,15 @@ wm_hit:
     jge .content
     test bp, bp                 ; the boxes exist on the frontmost only
     jz .title
-    cmp ax, 4                   ; both boxes occupy rows W_Y+4 .. W_Y+14
+    cmp ax, WM_BOX_Y0           ; both boxes occupy rows W_Y+4 .. W_Y+14
     jl .title
-    cmp ax, 14
+    cmp ax, WM_BOX_Y1
     jg .title
     mov ax, [bx+W_X]            ; close box columns W_X+8 .. W_X+18
-    add ax, 8
+    add ax, WM_BOX_X0
     cmp cx, ax
     jl .minbox
-    add ax, 10
+    add ax, WM_BOX_W
     cmp cx, ax
     jg .minbox
     mov al, 2
@@ -4599,10 +4718,10 @@ wm_hit:
 .minbox:
     mov ax, [bx+W_X]            ; minimize box: W_X+W_W-19 .. W_X+W_W-9
     add ax, [bx+W_W]            ; (the close box mirrored, SPEC.md 11)
-    sub ax, 19
+    sub ax, WM_BOX_X0 + WM_BOX_W + 1
     cmp cx, ax
     jl .title
-    add ax, 10
+    add ax, WM_BOX_W
     cmp cx, ax
     jg .title
     mov al, 3
@@ -5029,6 +5148,7 @@ wm_paint_chrome:
 ; -----------------------------------------------------------------------------
 wm_paint_dmg:
     mov byte [cur_shchk], 1     ; ...and the other way (SPEC.md 7.2): a window
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
                                 ; hidden, destroyed, dragged or grown out from
                                 ; under a pointer that never moved. Every one
                                 ; of those pays a repaint through here, which
@@ -5080,7 +5200,7 @@ wm_paint_dmg:
 
     cmp byte [wm_dmg_fs], 0
     jne .wins                   ; fullscreen: no zones to grow the rect to
-    call desk_dmg_zones         ; AL = the zone mask; the rect grows to cover
+    call COLD_SEG:desk_dmg_zones_x ; AL = the zone mask; the rect grows to cover
     mov [wm_dmg_zn], al         ; every zone it touched
     or al, al
     jz .fill                    ; ...and a zone is redrawn WHOLE, so a window
@@ -5097,7 +5217,7 @@ wm_paint_dmg:
     call wm_dmg_gray            ; corner alone - see wm_dmg_bands
 .zones:
     mov al, [wm_dmg_zn]
-    call desk_paint_mask        ; the touched drive zones, whole
+    call COLD_SEG:desk_paint_mask_x ; the touched drive zones, whole
     mov ax, [wm_dmg_y2]         ; reached the strip? then the dither above
     cmp ax, [vid_dock_y0]       ; just ran over it, and whatever WAS covering
     jl .dock                    ; it has moved - the one case that owes the
@@ -5424,7 +5544,7 @@ wm_paint_all:
                                 ; second monitor is pure desktop. One compare
                                 ; on a machine with one card
 %endif
-    call desk_paint             ; drive icons live on the desktop, under
+    call COLD_SEG:desk_paint_x  ; drive icons live on the desktop, under
                                 ; every window (SPEC.md 26)
     call dock_paint             ; ...so the strip is UNTOUCHED and usually has
                                 ; nothing to do. No dock_force: nothing here
@@ -6121,7 +6241,7 @@ wm_dmg_gray:
     push cx
     push dx
     push si
-    call cur_unlazy             ; ...as the unclipped fill did (see above)
+    call cur_unlazy              ; ...as the unclipped fill did (see above)
     mov [wm_dg_r + 0], ax       ; the DAMAGE, banked: the overflow path below
     mov [wm_dg_r + 2], bx       ; has to re-seed from it and the region build
     mov [wm_dg_r + 4], cx       ; eats every register
@@ -6270,7 +6390,7 @@ wm_clip_rect:
     pop cx
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; wm_clip_clear - disarm clipping
@@ -6725,9 +6845,24 @@ wm_ptr2idx:
     mov ax, bx
     sub ax, wm_wins
     mov cl, WIN_SIZE
-    div cl                      ; AL = index (AH = 0: ptr is record-aligned)
-    pop cx
-    ret
+    div cl                      ; AL = index...
+    xor ah, ah                  ; ...and AH IS THE REMAINDER, NOT ZERO. This
+                                ; line used to be a comment saying "AH = 0: ptr
+                                ; is record-aligned", which is a statement about
+                                ; the CALLER. wm_su_slot doubles the whole of AX
+                                ; to reach a word per window, so one unaligned
+                                ; pointer put its slot 0x566 past the table and
+                                ; wm_su_drop zeroed two bytes of the kernel's
+                                ; own .text with it (SPEC.md 11.96.11.4). A
+                                ; documented output that is only true when the
+                                ; input is right is not a documented output
+    cmp al, MAX_WIN             ; ...and the INDEX IS BOUNDED, because every
+    jb .ok                      ; per-window table in this module is addressed
+    mov al, MAX_WIN - 1         ; off it: wm_su_segs, wm_su_ext, the size
+.ok:                            ; preferences. A pointer that is not a window
+    pop cx                      ; then names the LAST window rather than a byte
+    ret                         ; of .text, which is wrong and bounded instead
+                                ; of wrong and unbounded
 
 ; -----------------------------------------------------------------------------
 ; wm_idx2ptr - window index to record pointer (module internal)
@@ -6787,6 +6922,213 @@ wm_tpen_ink equ thm_ink
 ; else. wm_show's fast path (SPEC.md 11.90) is the caller that cares; every
 ; other path reaches it through wm_draw_win and never notices.
 ; -----------------------------------------------------------------------------
+%ifdef BANDCOMP
+; -----------------------------------------------------------------------------
+; wm_title_band - the .text half of SPEC.md 11.101's composed title bar
+; in:  DI = the window, BP = the frontmost one; the gfx lock held
+; out: CF = 0 the interior was drawn, CF = 1 it was not and the caller must
+;      draw it the old way. SI is SPENT; every other register is preserved.
+;
+; EVERY CROSSING INTO .text IS HERE, which is the whole reason this half
+; exists: wm_flush, thm_tbg/thm_tink, wm_strseg and font_width_x are all
+; resident, and a .cold body near-calling one of them is SPEC.md 5.4.2.1's
+; defect - tools/os88ovlchk.py caught exactly that on this file's first build.
+; So the prologue resolves the four facts the picture needs, writes them where
+; the body can read them, and far-calls it.
+;
+; It also draws the RAGGED EDGES. gfx_blit1 takes a multiple of 8 at both ends
+; (SPEC.md 5.4.2) and a window's frame x is aligned only when it asked for
+; WF_SNAP - which aligns its CONTENT, so W_X is 7 mod 8 when it did. The up to
+; 7 pixels at either end are one thin fill each and cannot be composed without
+; painting desktop.
+; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; wm_tsend - the PINSTRIPE FRAGMENTS inside one ragged end (SPEC.md 11.101.1)
+; in:  AX = the end's first column, CX = its last (both already known
+;      non-empty), DI = the window, BP = the frontmost, BX/DX = the bar's
+;      interior rows, and [gfx_color] the bar's GROUND
+; out: nothing; every register preserved and the ground pen put back
+;
+; A ragged end is NOT just ground, which is what the first composed bar
+; assumed: the stripes run from W_X+3 to W_X+W_W-4 and the byte-aligned span
+; stops up to 7 pixels short of both, so filling the ends flat loses three or
+; four pixels off the end of every stripe. Six dashes that stop before the bar
+; does - small, and plainly visible beside a window drawn the old way.
+;
+; WHAT SURVIVES OUT THERE IS TWO THREE-PIXEL RUNS, not the whole stripe span.
+; The primitive path draws each stripe full width and then paints the two
+; boxes' break fills over it, so all that is left near either edge is
+; W_X+3..W_X+5 and W_X+W_W-6..W_X+W_W-4. A fragment drawn without that
+; knowledge puts a stripe pixel back inside the minimize box's break, which is
+; how this was found the SECOND time.
+;
+; It is six more primitive calls at each end that holds one, and that is the
+; honest price of a band which cannot reach the last byte - the clearest
+; single statement of what a composer costs at a boundary it cannot cross.
+; -----------------------------------------------------------------------------
+wm_tsend:
+    cmp di, bp
+    jne .out                    ; an inactive bar has no stripes to lose
+%ifdef KERN_BIG
+    cmp byte [thm_strp], 0      ; ...and neither has a SOLID theme (76.12)
+    je .out
+%endif
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push bp
+    mov bp, ax                  ; BP/SI = the end zone, banked while AX/CX
+    mov si, cx                  ; carry each run in turn
+    mov ax, [di+W_X]            ; the run left of the close box's break fill
+    add ax, 3
+    mov cx, ax
+    add cx, 2
+    call .run
+    mov ax, [di+W_X]            ; ...and the one right of the minimize box's
+    add ax, [di+W_W]
+    sub ax, 6
+    mov cx, ax
+    add cx, 2
+    call .run
+    pop bp
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.out:
+    ret
+
+; .run - stripe run AX..CX, clipped to the end zone BP..SI and drawn if any of
+;        it is left. AX and CX are spent; BX/DX/SI/BP are not.
+.run:
+    cmp ax, bp
+    jge .rl
+    mov ax, bp
+.rl:
+    cmp cx, si
+    jle .rr
+    mov cx, si
+.rr:
+    cmp ax, cx
+    jg .rout                    ; this end holds none of this run
+    push bx
+    push dx
+    push cx                     ; the run's right end, for gfx_hline's BX
+    call thm_tink
+    pop bx
+    mov dx, [di+W_Y]
+    add dx, 3
+    mov cx, 6                   ; six stripes, rows y+3,5,7,9,11,13
+.r1:
+    call gfx_hline
+    add dx, 2
+    loop .r1
+    call thm_tbg                ; ...and the ground back, for the next run
+    pop dx
+    pop bx
+.rout:
+    ret
+
+
+wm_title_band:
+    push ax
+    push bx
+    push cx
+    push dx
+    push es
+    cmp word [bnd_seg], 0       ; no buffer, no composer (SPEC.md 5.9.2): band_
+    je .no                      ; open_x would refuse anyway, but the two ragged
+                                ; ends below would have been drawn first and
+                                ; then drawn again by the fallback
+    mov bx, di                  ; the bar's own left edge (SPEC.md 11.95.2)
+    call wm_flush
+    mov ax, [di+W_X]
+    jc .l0
+    inc ax
+.l0:
+    mov [wmt_lo], ax
+    add ax, 7                   ; ...and the aligned span inside it
+    and ax, 0FFF8h
+    mov [wmt_x0], ax
+    mov cx, [di+W_X]
+    add cx, [di+W_W]
+    sub cx, 2
+    mov [wmt_hi], cx
+    inc cx
+    and cx, 0FFF8h
+    dec cx
+    mov [wmt_x1], cx
+    cmp ax, cx
+    jg .no                      ; a bar with no whole byte in it at all
+
+    call wm_tpen_bg             ; the pair, read back off the pen: a KERNEL
+    mov ah, [gfx_color]         ; may do that (SPEC.md 6.6.5). FOCUS-RESOLVED,
+    call wm_tpen_ink            ; through the same two names the fallback path
+    mov al, [gfx_color]         ; uses (76.12) - this word is the band's paper
+    mov [wmt_pair], ax          ; AL = ink, AH = paper. AND the ink of its
+                                ; stripes, its boxes and its caption, so going
+                                ; straight to thm_tbg/thm_tink here painted
+                                ; every UNFOCUSED bar in the Color theme blue
+                                ; with a white caption while the body's own
+                                ; `cmp di, bp` correctly withheld the stripes
+                                ; and the boxes. DI and BP are still this
+                                ; routine's arguments here: nothing above
+                                ; touches either, and wm_flush, wm_strseg and
+                                ; the fills all preserve them. On kern_small
+                                ; the two names are equ'd to the chrome pair
+                                ; (76.13), so both builds read the same
+
+    mov si, [di+W_TITLE]
+    or si, si
+    jz .noname
+    call wm_strseg              ; ES = the OWNER's segment, and it stays that
+    call font_width_x           ; way into the body, which letters through it
+    mov [wmt_tw], ax
+    mov cx, [di+W_W]
+    sub cx, ax
+    sar cx, 1                   ; SIGNED: a title wider than its window
+    add cx, [di+W_X]
+    mov [wmt_tx], cx
+.noname:
+    call wm_tpen_bg             ; the two ragged ends, in the bar's ground -
+                                ; the SAME ground the band is about to be
+                                ; blitted in, so it asks the same question
+    mov bx, [di+W_Y]
+    inc bx
+    mov dx, [di+W_Y]
+    add dx, TITLE_H-2
+    mov ax, [wmt_lo]
+    mov cx, [wmt_x0]
+    dec cx
+    cmp ax, cx
+    jg .rright
+    call gfx_fill
+    call wm_tsend               ; ...and what the ground fill just flattened
+.rright:
+    mov ax, [wmt_x1]
+    inc ax
+    mov cx, [wmt_hi]
+    cmp ax, cx
+    jg .band
+    call gfx_fill
+    call wm_tsend
+.band:
+    call COLD_SEG:wm_title_band_x
+    jmp short .out
+.no:
+    stc
+.out:
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
+
 wm_draw_title:
 %ifdef SNAPAUDIT
     ; SPEC.md 11.94.2: THE CAPTION IS CHROME. The pen is centred in the title
@@ -6818,6 +7160,15 @@ wm_draw_title:
     push cx
     push dx
     push si
+%ifdef BANDCOMP
+    call wm_title_band          ; SPEC.md 11.101: the interior as ONE PICTURE,
+    jnc .sep                    ; composed and blitted - the `BAND=1` path, a
+%endif                          ; KNOB again since 5.9.6. Everything below is
+                                ; what every OTHER build draws, kern_small
+                                ; included, and what a BAND=1 kernel itself
+                                ; falls back to: a bar with no whole byte in
+                                ; it, or a machine whose heap refused the 2KB
+                                ; claim
     call wm_tpen_bg          
     mov bx, di                  ; title bar interior, 16 white rows - reaching
     call wm_flush               ; column 0 on a window with no left border, or
@@ -6833,20 +7184,6 @@ wm_draw_title:
     mov dx, [di+W_Y]
     add dx, TITLE_H-2
     call gfx_fill
-
-    call thm_ink                
-    mov bx, di                  ; separator under the title bar, likewise
-    call wm_flush               ; (SPEC.md 11.95.2)
-    mov ax, [di+W_X]
-    jc .tsep
-    inc ax
-.tsep:
-    mov bx, [di+W_X]
-    add bx, [di+W_W]
-    sub bx, 2
-    mov dx, [di+W_Y]
-    add dx, TITLE_H-1
-    call gfx_hline
 
     cmp di, bp                  ; pinstripes + close box: frontmost only
     jne .title
@@ -6935,7 +7272,8 @@ wm_draw_title:
 .title:
     mov si, [di+W_TITLE]        ; centered title on a 6px white gap
     test si, si
-    jz .out                     ; no title string: nothing more to draw
+    jz .sep                     ; no title string: nothing more in the bar,
+                                ; but the separator under it is still owed
     push es                     ; the title is the OWNER's string, so it is
     call wm_strseg              ; read through ES: the package's segment for
     call font_width_x           ; a package window, ours for everything else
@@ -6944,6 +7282,26 @@ wm_draw_title:
     sub cx, ax
     sar cx, 1
     add cx, [di+W_X]            ; CX = text left
+%ifdef TITLESNAP
+    ; docs/TEXT-PLAN.md 6.1: centre to the nearest CELL rather than to the
+    ; exact pixel. A window title is the hottest text in the system - it
+    ; redraws on every window operation - and centring puts its pen off the
+    ; 8px grid seven times in eight, which costs SPEC.md 6.1's fast path and
+    ; (since Stage 1) 2.8x on VGA. The title moves by at most 4 px, so this
+    ; is a LOOK question and lives on a knob until somebody has looked.
+    ;
+    ; The +4 is what makes it NEAREST rather than leftward, and it is correct
+    ; on a title wider than its window too: `sar cx, 1` is signed, so CX can
+    ; be left of W_X, and (cx + 4) AND ~7 rounds a two's-complement negative
+    ; the same way it rounds a positive one.
+    ;
+    ; The white gap below is computed FROM this pen, so it moves with the
+    ; text and stays centred on it - the gap is not separately snapped, and
+    ; must not be: it is 6px of margin either side of wherever the glyphs
+    ; actually land.
+    add cx, 4
+    and cx, 0FFF8h
+%endif
     push cx
     add ax, cx                  ; AX = gap right = text left + width + 5
     add ax, 5
@@ -6963,6 +7321,24 @@ wm_draw_title:
     call wm_strseg
     call font_str_x
     pop es
+.sep:
+    ; The separator under the bar, drawn LAST and by both paths. It is row
+    ; TITLE_H-1 and the interior stops at TITLE_H-2, so moving it off the
+    ; front of this routine changes no pixel - and it reaches the ragged ends
+    ; a band cannot (SPEC.md 11.95.2/11.101).
+    call thm_ink
+    mov bx, di
+    call wm_flush
+    mov ax, [di+W_X]
+    jc .tsep
+    inc ax
+.tsep:
+    mov bx, [di+W_X]
+    add bx, [di+W_W]
+    sub bx, 2
+    mov dx, [di+W_Y]
+    add dx, TITLE_H-1
+    call gfx_hline
 .out:
     pop si
     pop dx
@@ -6998,6 +7374,209 @@ section .cold                   ; the two chrome-box helpers are COLD (SPEC.md
                                 ; the thunk, so the common case - nothing is
                                 ; held down - is still a compare and a near ret
                                 ; on every title draw in the system
+
+%ifdef BANDCOMP
+; =============================================================================
+; wm_title_band_x - THE TITLE BAR, COMPOSED (SPEC.md 11.101)
+;
+; in:  DI = the window, BP = the frontmost one (DI == BP is "active"), and the
+;      four words the .text prologue resolved for it - see wm_title_band, which
+;      is where every crossing into .text lives so that this body has none
+;      (SPEC.md 5.4.2.1). ES:SI = the title string, in the OWNER's segment.
+; out: CF = 0 the bar's interior was drawn whole, CF = 1 nothing was and the
+;      caller must draw it the old way
+;
+; The bar is ONE PICTURE - ground, pinstripes, both boxes, the collapse mark
+; and the caption - composed into a band and blitted. It used to be up to
+; fifteen primitive calls with the caption's own rows written FOUR times
+; (the bar fill, the stripes across them, the white gap over those, and the
+; glyphs), and the gap between the third and the fourth is SPEC.md 6.6's
+; double-draw at the top of every window in the system.
+;
+; THE BAND IS REPLAYED, NOT SPLIT. The op list below is emitted once per chunk
+; and every op clips itself, so a box or a glyph that straddles two chunks is
+; composed into both without this routine knowing where the seams are.
+;
+; THE RAGGED EDGES ARE THE CALLER'S. gfx_blit1 takes a multiple of 8 at both
+; ends (SPEC.md 5.4.2) and a window's frame x is only aligned when it asked for
+; WF_SNAP - and that aligns its CONTENT, so W_X is 7 mod 8 when it does. The
+; up-to-7px at either end is left to two thin gfx_fills up in the prologue,
+; which is one call each and cannot be composed without painting desktop.
+; =============================================================================
+wm_title_band_x:
+    push ax                     ; SI is NOT banked: the prologue's contract
+    push bx                     ; says it is spent, and this body reads it as
+    push cx                     ; the caption string all the way to the end
+    push dx
+    push di
+    push bp
+    mov ax, [wmt_pair]          ; the bar's two colours, BEFORE the first band
+    call band_pen_x             ; opens: on 1bpp they decide which way up the
+                                ; bits are stored (SPEC.md 5.9.3)
+    mov ax, [wmt_x0]            ; the aligned span this routine may blit
+    mov [wmt_cx], ax
+.chunk:
+    mov ax, [wmt_x1]
+    sub ax, [wmt_cx]
+    inc ax                      ; AX = pixels left to draw
+    jle .done
+    cmp ax, BAND_MAXW
+    jbe .cw
+    mov ax, BAND_MAXW
+.cw:
+    push ax
+    mov cx, ax
+    mov ax, [wmt_cx]
+    mov bx, [di+W_Y]
+    inc bx                      ; the interior starts one row under the frame
+    mov dx, TITLE_H - 2         ; ...and is 16 of them
+    call band_open_x
+    pop ax
+    jc .fail
+    add [wmt_cx], ax            ; the next chunk starts after this one
+
+    ; --- NO GROUND FILL. band_open_x clears the band to PAPER and paper is
+    ; what the blit turns into the bar's ground, so the whole interior is
+    ; already drawn the instant the band opens. It used to be filled again
+    ; here, which is 16 rows a chunk of work to reach the state it was
+    ; handed - PERFORMANCE.md Set 88.
+    cmp di, bp                  ; pinstripes, boxes and the collapse mark are
+    jne .caption                ; the ACTIVE bar's alone (SPEC.md 11)
+    mov al, 1
+    call band_ink_x
+%ifdef KERN_BIG
+    cmp byte [thm_strp], 0      ; ...and a SOLID bar has no stripes (76.12)
+    je .boxes
+%endif
+    mov dx, [di+W_Y]            ; 6 stripes, rows y+3,5,7,9,11,13
+    add dx, 3
+    mov cx, 6
+.stripe:
+    mov ax, [di+W_X]
+    add ax, 3                   ; inset 3px from each side
+    mov bx, [di+W_X]
+    add bx, [di+W_W]
+    sub bx, 4
+    call band_hline_x
+    add dx, 2
+    loop .stripe
+.boxes:
+    xor al, al                  ; break the stripes 2px around the close box
+    call band_ink_x
+    mov ax, [di+W_X]
+    add ax, 6
+    mov bx, [di+W_Y]
+    add bx, 2
+    mov cx, [di+W_X]
+    add cx, 20
+    mov dx, [di+W_Y]
+    add dx, 16
+    call band_fill_x
+    mov al, 1
+    call band_ink_x
+    mov ax, [di+W_X]            ; close box: an 11x11 frame, paper inside
+    add ax, 8
+    mov bx, [di+W_Y]
+    add bx, 4
+    mov cx, [di+W_X]
+    add cx, 18
+    mov dx, [di+W_Y]
+    add dx, 14
+    call band_frame_x
+
+    xor al, al                  ; ...and the mirror of both around the
+    call band_ink_x             ; minimize box
+    mov ax, [di+W_X]
+    add ax, [di+W_W]
+    sub ax, 21
+    mov bx, [di+W_Y]
+    add bx, 2
+    mov cx, [di+W_X]
+    add cx, [di+W_W]
+    sub cx, 7
+    mov dx, [di+W_Y]
+    add dx, 16
+    call band_fill_x
+    mov al, 1
+    call band_ink_x
+    mov ax, [di+W_X]
+    add ax, [di+W_W]
+    sub ax, 19
+    mov bx, [di+W_Y]
+    add bx, 4
+    mov cx, [di+W_X]
+    add cx, [di+W_W]
+    sub cx, 9
+    mov dx, [di+W_Y]
+    add dx, 14
+    call band_frame_x
+    mov ax, [di+W_X]            ; the collapse mark
+    add ax, [di+W_W]
+    sub ax, 17
+    mov bx, [di+W_X]
+    add bx, [di+W_W]
+    sub bx, 11
+    mov dx, [di+W_Y]
+    add dx, 9
+    call band_hline_x
+
+.caption:
+    or si, si
+    jz .emit                    ; no title string: the bar is finished
+    cmp di, bp
+    jne .glyphs                 ; an INACTIVE bar has no stripes, so there is
+                                ; nothing under the caption to break and the
+                                ; run's own cells are the whole of its ground
+    xor al, al                  ; the 6px white gap either side of the glyphs,
+    call band_ink_x             ; which is what breaks the stripes for them
+    mov ax, [wmt_tx]
+    sub ax, 6
+    mov bx, [di+W_Y]
+    add bx, 2
+    mov cx, [wmt_tx]
+    add cx, [wmt_tw]
+    add cx, 5
+    mov dx, [di+W_Y]
+    add dx, 15
+    call band_fill_x
+.glyphs:
+    mov al, 1
+    call band_ink_x
+    mov cx, [wmt_tx]
+    mov dx, [di+W_Y]
+    add dx, 5                   ; 8px glyphs centred in the 16-row bar
+    call band_run_x
+.emit:
+    call band_emit_x            ; the colours are band_pen_x's, up at the top
+    jc .fail
+    jmp .chunk
+.done:
+    clc
+    jmp short .out
+.fail:
+    stc
+.out:
+    pop bp
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    retf
+
+; wmt_barrect - the bar's interior rect, which the ground fill and nothing
+; else wants. AX/BX/CX/DX; DI = the window.
+wmt_barrect:
+    mov ax, [di+W_X]
+    mov bx, [di+W_Y]
+    inc bx
+    mov cx, [di+W_X]
+    add cx, [di+W_W]
+    sub cx, 2
+    mov dx, [di+W_Y]
+    add dx, TITLE_H-2
+    ret
+%endif                          ; BANDCOMP
 
 ; -----------------------------------------------------------------------------
 ; wm_chrome_rect_x - the INTERIOR of a title-bar box (SPEC.md 13.8.1)
@@ -7097,6 +7676,8 @@ wm_chrome_relit_x:
 ; UI task never comes back - so the press arms, the flag it set reads
 ; perfectly over the debugger, and nothing is ever drawn or released.
 ; -----------------------------------------------------------------------------
+%ifdef BANDCOMP
+%endif
 wmz_wm_chrome_rect:     call wm_chrome_rect_x
                     retf
 wmz_wm_chrome_relit:    call wm_chrome_relit_x
@@ -7235,6 +7816,14 @@ wm_title_set:
 ; -----------------------------------------------------------------------------
 wm_saveu:
     pushf
+    push ax                     ; **BX CAME FROM A PACKAGE** (SPEC.md
+    mov ax, bx                  ; 11.96.11.4) and both writes below go THROUGH
+    sub ax, wm_wins             ; it - so it is a window record or we do
+    cmp ax, MAX_WIN * WIN_SIZE  ; nothing. BELOW the table wraps high, so one
+    pop ax                      ; unsigned compare catches both ends, and `pop`
+    jae .done                   ; leaves the flags alone. Paint once passed its
+                                ; screen's HEIGHT here and the kernel set a bit
+                                ; at KERNEL_SEG:480, inside the API jump table
     or al, al
     jz .clear
     or word [bx+W_FLAGS], WF_SAVEU
@@ -7243,7 +7832,8 @@ wm_saveu:
 .clear:
     and word [bx+W_FLAGS], ~WF_SAVEU & 0xFFFF
     call wm_su_drop             ; ...and a promise withdrawn takes any cache
-    popf                        ; made under it with it
+.done:                          ; made under it with it
+    popf
     ret
 
 ; -----------------------------------------------------------------------------
@@ -7804,7 +8394,7 @@ wm_chrome_clip:
     mov bx, di
     call wm_obscured
     jnc .out                    ; nothing above us overlaps: draw the lot
-    call cur_unlazy             ; SPEND THE DEFERRED HIDE (7.1.4). An armed
+    call cur_unlazy              ; SPEND THE DEFERRED HIDE (7.1.4). An armed
                                 ; region stops the clipped primitives taking it
                                 ; themselves, and the cursor is not confined to
                                 ; this window - so without this it is drawn over
@@ -8725,7 +9315,7 @@ wm_su_orect:
 ;      slot, SPEC.md 11.96.3); clobbers nothing else (flags)
 wm_su_slot:
     push ax
-    call wm_ptr2idx             ; AL = slot, AH = 0
+    call wm_ptr2idx             ; AL = slot, AH = 0 (and it IS 0 now)
     mov si, ax
     add si, ax                  ; a word per slot
     add si, wm_su_segs
@@ -8770,6 +9360,13 @@ wm_su_drop:
     push bx
     push dx
     push si
+                                ; NO wm_win_ok HERE, and that is a size
+                                ; decision rather than a judgement that it is
+                                ; safe: the BOOT_MARK kernel has tens of bytes
+                                ; of its 64KB segment left (docs/KERNEL-MEMORY.md),
+                                ; so the check lives at the two API doors a
+                                ; package can reach and every caller below them
+                                ; passes wm_idx2ptr's own answer
     call wm_su_slot             ; SI = its word, BX = its tag
     mov dx, [si]
     or dx, dx
@@ -9019,6 +9616,7 @@ wm_dc_done:
     ret
 
 wm_su_take:
+    CURLOG 'P'
     push ax
     push bx
     push cx
@@ -10486,6 +11084,20 @@ section .bss
 wm_wins:    resb MAX_WIN * WIN_SIZE ; 12 windows x WIN_SIZE bytes
 wm_zord:    resb MAX_WIN            ; window indices, [0] = backmost
 wm_zn:      resb 1                  ; entries in wm_zord
+%ifdef BANDCOMP
+; SPEC.md 11.101: what wm_title_band resolves in .text for wm_title_band_x to
+; read in .cold. A parameter BLOCK rather than registers because the body
+; needs six words and the 8086 has not got six to spare with DI and BP already
+; carrying the two windows.
+wmt_lo:     resw 1                  ; the bar's own left and right edges...
+wmt_hi:     resw 1
+wmt_x0:     resw 1                  ; ...and the byte-aligned span inside them,
+wmt_x1:     resw 1                  ;    which is all gfx_blit1 will take
+wmt_cx:     resw 1                  ; the chunk cursor, walking x0 -> x1
+wmt_pair:   resw 1                  ; AL = the bar's ink, AH = its paper
+wmt_tx:     resw 1                  ; the caption's pen...
+wmt_tw:     resw 1                  ; ...and its width in pixels
+%endif
 %ifdef KERN_BIG
 wm_tarm:    resb 1                  ; SPEC.md 13.9: MAY any window have a timer
                                     ; armed? Set by every wm_timer arm, cleared

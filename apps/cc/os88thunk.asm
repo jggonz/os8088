@@ -12,7 +12,7 @@
 ; WHY THIS FILE EXISTS
 ; -----------------------------------------------------------------------------
 ; An OSAPI slot is a FAR call with a REGISTER contract: `OSAPI_GFX_FILL` wants
-; AX/BX/CX/DX = x1/y1/x2/y2 and `OSAPI_FONT_STR` wants SI = a string. A C
+; AX/BX/CX/DX = x1/y1/x2/y2 and `OSAPI_FONT_STR_XPARENT` wants SI = a string. A C
 ; caller has a cdecl STACK frame and no way to say "put this in DX". So each
 ; slot a C package can reach gets a routine here that reads the frame, loads
 ; the registers, makes the far call and turns the answer back into a C return
@@ -349,27 +349,27 @@ _os88_gfx_blit4:
 ; TEXT (SPEC.md 6). One 8x8 cell is ~900 us; a 78-cell row is ~71 ms.
 ; =============================================================================
 
-; void os88_font_char(int x, int y, int ch) - CX = x, DX = y, AL = char.
-_os88_font_char:
+; void os88_font_char_xparent(int x, int y, int ch) - CX = x, DX = y, AL = char.
+_os88_font_char_xparent:
     push bp
     mov bp, sp
     mov cx, [bp+4]
     mov dx, [bp+6]
     mov ax, [bp+8]
-    call OSAPI_FONT_CHAR
+    call OSAPI_FONT_CHAR_XPARENT
     pop bp
     ret
 
-; void os88_font_str(int x, int y, const char *s) - CX, DX, SI = NUL string
+; void os88_font_str_xparent(int x, int y, const char *s) - CX, DX, SI = NUL string
 ; in our segment.
-_os88_font_str:
+_os88_font_str_xparent:
     push bp
     mov bp, sp
     push si
     mov cx, [bp+4]
     mov dx, [bp+6]
     mov si, [bp+8]                  ; ours: DS
-    call OSAPI_FONT_STR
+    call OSAPI_FONT_STR_XPARENT
     pop si
     pop bp
     ret

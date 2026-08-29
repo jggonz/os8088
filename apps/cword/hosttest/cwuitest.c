@@ -18,7 +18,7 @@
  *
  * So this stubs the whole os8088 API with a MODEL OF THE GLASS: os88_font_run()
  * records the character it put in a cell and clears that cell whole, as an
- * opaque run does; os88_font_str() records overstrike ink at the pixel level;
+ * opaque run does; os88_font_str_xparent() records overstrike ink at the pixel level;
  * os88_gfx_hline() and os88_gfx_fill() clear or set it; os88_gfx_scroll()
  * moves it and fills the vacated rows with GARBAGE, which is legal (SPEC.md
  * 5.5 says their content is unspecified) and is what catches an app that
@@ -233,7 +233,7 @@ void os88_font_run(int x, int y, const char *s, int ink, int paper)
     }
 }
 
-void os88_font_str(int x, int y, const char *s)
+void os88_font_str_xparent(int x, int y, const char *s)
 {
     int i, xx, yy, px;
     n_font_str++;
@@ -319,8 +319,8 @@ void os88_gfx_line(int x1, int y1, int x2, int y2, int dilate)
     }
 }
 void os88_gfx_pixel(int x, int y) { os88_gfx_fill(x, y, x, y); }
-void os88_font_char(int x, int y, int ch)
-{ char b[2]; b[0] = (char)ch; b[1] = 0; os88_font_str(x, y, b); }
+void os88_font_char_xparent(int x, int y, int ch)
+{ char b[2]; b[0] = (char)ch; b[1] = 0; os88_font_str_xparent(x, y, b); }
 unsigned os88_strlen(const char *s) { return (unsigned)strlen(s); }
 /* os88_gfx_blit1 - ONE call for a band the app composed itself (SPEC.md
  * 5.4.2). Modelled rather than refused, because the ruler's scale goes through

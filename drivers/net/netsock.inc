@@ -84,6 +84,16 @@ nsk_everb:
     stc
     ret
 
+; --- and one that SUCCEEDS by doing nothing ---------------------------------
+; NETV_BULK is a question about performance, not a request for a capability:
+; the cable has one buffer size and no pool to take a bigger ring out of, so
+; the honest answer is "noted" rather than NETE_VERB. A package that treated a
+; refusal as fatal would stop working over the cable for having asked.
+nsk_ok:
+    xor ax, ax
+    clc
+    ret
+
 ; A TABLE AND NOT A LADDER, and the reason is the 8086 rather than taste: a
 ; `je` is a SHORT jump and the verbs are several hundred bytes below here, so
 ; a compare ladder would not assemble at all. BX is free to spend - BL was the
@@ -130,6 +140,25 @@ nsk_tab:
                                 ; refusal is the only honest answer - a table
                                 ; of zeroes would read as a stack doing no
                                 ; work at all
+    dw nsk_everb                ; NETV_SKTAB - **THE CABLE HAS NO SOCKET
+                                ; TABLE** (SPEC.md 72.20). Its handles are the
+                                ; partner's file cursors, not TCP records:
+                                ; there is no receive ring to report a depth
+                                ; for and no TIME-WAIT to catch stranded, so
+                                ; every column the verb exists to show would
+                                ; be a zero that means "not applicable" and
+                                ; reads as "healthy". A refusal is the honest
+                                ; answer, and NETV_PROF above refuses for the
+                                ; same reason
+    dw nsk_ok                   ; NETV_BULK - **THE CABLE HAS ONE BUFFER SIZE**
+                                ; (SPEC.md 72.21.1). There is no ring pool to
+                                ; take a big ring out of, so the wish is
+                                ; granted by being ignored - and that is a
+                                ; SUCCESS rather than a refusal, because
+                                ; netpkg.inc says a caller may always ask and
+                                ; a package that treated NETE_VERB as fatal
+                                ; would stop working over the cable for
+                                ; asking a question about performance
 %if ($ - nsk_tab) / 2 != NETV_MAX + 1
   %error "net: nsk_tab does not cover NETV_0..NETV_MAX"
 %endif

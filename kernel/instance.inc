@@ -650,7 +650,7 @@ inst_park_req:
 ; inst_park_end - withdraw the request; every parked worker resumes
 inst_park_end:
     mov byte [inst_parkreq], 0
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; inst_park_all - has every live package worker parked? (module internal)
@@ -739,13 +739,13 @@ inst_seg_parked:
     pop cx
     pop ax
     stc
-    ret
+    retf
 .free:
     pop di
     pop cx
     pop ax
     clc
-    ret
+    retf
 ; -----------------------------------------------------------------------------
 ; inst_svc_parked - has every DRIVER worker parked? (SPEC.md 66.5.5)
 ; out: CF = 0 yes (or there are none), CF = 1 somebody is still running
@@ -1246,7 +1246,7 @@ inst_icon_ptr:
     mov di, inst_icobuf
     mov cx, 64
     mov ax, cs
-    call dsk_copy_seg
+    call COLD_SEG:dkf_dsk_copy_seg
     mov si, inst_icobuf
 .have:
     pop di
@@ -1542,13 +1542,13 @@ app_close_win:
                                 ; whose slot inst_caller answers with
     cmp byte [di+I_KIND], KIND_CTRL
     jne .noflush                ; the Control Panel defers its settings write
-    call drv_cp_closed          ; ...and tell the drivers, which is where the
+    call COLD_SEG:drv_cp_closed_x ; ...and tell the drivers, which is where the
                                 ; hard disk's tool image goes back (SPEC.md
                                 ; 31.9.1). BEFORE the settings write, so a
                                 ; driver that stages something on the way out
                                 ; is staging it into the blob that is about to
                                 ; be written rather than the one after
-    call cp_flush_close         ; to here (SPEC.md 31.8): one floppy write per
+    call COLD_SEG:cpf_cp_flush_close ; to here (SPEC.md 31.8): one floppy write per
                                 ; session instead of one per click. Only the
                                 ; TASK-LESS branch needs it - the panel owns
                                 ; no task, so it can never reach
@@ -1966,8 +1966,9 @@ inst_launch_post:
     mov ah, 0
     inc ax
     mov [inst_launch], ax
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
     pop ax
-    ret
+    retf
 
 ; =============================================================================
 ; osapi_sys_snapshot - API slot 0x0298: the scheduler and the instance table, in
@@ -2032,6 +2033,15 @@ osapi_sys_snapshot:
     add si, T_SIZE
     inc di
     loop .ssnap
+    mov bl, [sch_idleslot]      ; ...and the IDLE TASK is named by a state of
+    cmp bl, 0xFF                ; its own (SPEC.md 28.7): it is READY like any
+    je .noidle                  ; other ready task and reading it as one makes
+    xor bh, bh                  ; the process page charge 97% of the machine
+    mov di, bp                  ; to a row it cannot explain. A fourth value
+    add di, SS_TSTATE           ; costs no byte of the snapshot, which a slot
+    add di, bx                  ; index in the header would have - and every
+    mov byte [es:di], 3         ; field after it moving is an ABI break for
+.noidle:                        ; something the Task Manager alone reads
 
     mov si, sch_cycles          ; ...and the cycle counters, MAX_TASKS dwords
     mov di, bp
@@ -2099,7 +2109,7 @@ osapi_sys_snapshot:
     jz .cown
     mov bx, [es:di+SSI_SEG]
 .cown:
-    call mem_owned_kb           ; in BX = owner word; out AX = KB
+    call COLD_SEG:mem_owned_kb_x ; in BX = owner word; out AX = KB
 .cstore:
     mov [es:di+SSI_KB], ax
     add di, SSI_RECSZ

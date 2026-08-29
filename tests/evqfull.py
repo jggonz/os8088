@@ -104,7 +104,13 @@ def main(argv):
     a = ap.parse_args(argv)
     os.chdir(ROOT)
     sym = os88sym.syms()
-    at = sym["gfx_pairtab0"]            # 256 idle .bss bytes inside KERNEL_SEG
+    at = sym["snd_xlat"]                # 256 idle .bss bytes inside KERNEL_SEG,
+                                        # rebuilt per clip and so idle on a
+                                        # desktop nothing is playing on. NOT
+                                        # gfx_pairtab0 any more: that pair went
+                                        # to .lowbss (SPEC.md 5.4.1.1), and an
+                                        # offset in LOW_SEG poked at KERNEL_SEG
+                                        # lands in the middle of the kernel
     rec = at + 64
     bad = 0
 

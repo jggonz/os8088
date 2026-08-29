@@ -133,8 +133,8 @@ eth_v_send:
     je  .cap                    ; ring_in refuses on the same word and returns
                                 ; CX untouched, so crediting SKO_TXN here would
                                 ; build the segment over the last frame's bytes
-    mov ax, [sk_txcap]
-    sub ax, [bx+SKO_TXN]
+    mov ax, [bx+SKO_TXC]        ; **THIS SOCKET'S RING** (SPEC.md 72.21), which
+    sub ax, [bx+SKO_TXN]        ; is a lean one unless it asked for the bulk
 .cap:
     cmp cx, ax
     jbe .room
@@ -180,15 +180,38 @@ eth_v_recv:
     jz  .out
     cmp byte [bx+SKO_ST], NSK_UP        ; **THE WINDOW JUST OPENED.** Without
     jne .out                            ; this a peer that filled the ring is
-    push ax                             ; waiting on an advertisement nothing
-    mov ax, [sk_rxcap]
+                                        ; waiting on an advertisement nothing
+                                        ; else in this driver would ever send,
+                                        ; and the transfer stops for good.
+    ; -----------------------------------------------------------------------
+    ; **ONCE PER DRAIN, ON THE CROSSING** (SPEC.md 72.4). This fired whenever
+    ; the ring had been at or above half full, which is every pass of a loop
+    ; that empties it - and fd_recv_stage drains a whole chunk in one
+    ; (SPEC.md 77.30), so a full ring sent an update per NET_SKMAX taken.
+    ; Measured on the wire that was 253 frames out of the server against 109
+    ; data frames into it for a 153KB upload: 2.32 to 1, where one to one is
+    ; the floor. A transmitted frame costs the target ~10 ms whatever it
+    ; carries (72.16), so the redundant two thirds were ~1.4 s per 153KB.
+    ;
+    ; The crossing is the whole test: WAS at or above half, IS now below.
+    ; One update is all the peer needs to start sending again, and every
+    ; segment it then sends is acknowledged with the space that opened after
+    ; it - so nothing is lost by not repeating ourselves.
+    ; -----------------------------------------------------------------------
+    push ax
+    mov ax, [bx+SKO_RXC]        ; ...and half of ITS ring, not the driver's
     shr ax, 1
-    cmp dx, ax
+    cmp dx, ax                          ; was it at or above half...
+    jb  .noadv
+    cmp [bx+SKO_RXN], ax                ; ...and is it below half now?
+    jae .noadv
     pop ax
-    jb  .out                            ; else in this driver would ever send,
-    push cx                             ; and the transfer stops for good
+    push cx
     call tcp_ack
     pop cx
+    jmp short .out
+.noadv:
+    pop ax
 .out:
     pop si
     pop dx
@@ -202,6 +225,96 @@ eth_v_recv:
     pop bx
     add sp, 2
     stc
+    ret
+
+; --- NETV_BULK ---------------------------------------------------------------
+; AL = a handle: it is going to move a file, so give it the big ring if it is
+; there (SPEC.md 72.21.1).
+eth_v_bulk:
+    push bx
+    call sk_h2p
+    jc  .no
+    mov byte [bx+SKO_WANTB], 1          ; recorded either way - a LISTENER holds
+    cmp byte [bx+SKO_TS], TS_LISTEN     ; no ring itself and this is inherited
+    je  .ok                             ; by every child it accepts
+    ; --- **ONLY LET GO OF A RING WHEN THE BULK ONE IS THERE TO TAKE** -------
+    ; put-then-get would be a socket with no ring at all if the get failed,
+    ; which is a connection that can never receive again. The pool's own byte
+    ; is the test, and it is exact.
+    cmp byte [sk_rused], 0
+    jne .ok                             ; bulk is out - or WE hold it already
+    cmp word [bx+SKO_RXN], 0            ; ...and a swap only moves a pointer
+    jne .ok                             ; while there is nothing in the ring
+    cmp word [bx+SKO_TXN], 0
+    jne .ok
+    call sk_ring_put
+    call sk_ring_get
+.ok:
+    pop bx
+    xor ax, ax
+    clc
+    ret
+.no:
+    pop bx
+    stc
+    ret
+
+; --- NETV_SKTAB --------------------------------------------------------------
+; in ES:DI = a buffer, CX = its capacity; out CX = bytes written, AL=NET_SOCKS
+;
+; **THE TABLE, NOT A HANDLE** (SPEC.md 72.20). Every other verb here answers
+; about a socket the caller owns; the sockets that cause trouble are the ones
+; nobody owns. Bounded by the caller's CX and never by NET_SOCKS, so a package
+; built against a smaller table still reads whole records.
+eth_v_sktab:
+    push bx
+    push dx
+    push di
+    push bp
+    push es
+    call eth_pump
+    mov bp, cx                          ; the capacity, banked
+    mov es, [eth_useg]
+    xor cx, cx                          ; ...and CX becomes the answer
+    xor dl, dl
+.l:
+    mov ax, cx
+    add ax, SKI_SZ
+    cmp ax, bp
+    ja  .done                           ; a partial record is worse than none
+    mov al, dl
+    call sk_ptr                         ; BX = the record (CX survives it)
+    mov al, [bx+SKO_ST]
+    mov [es:di+SKI_ST], al
+    mov al, [bx+SKO_TS]
+    mov [es:di+SKI_TS], al
+    mov al, [bx+SKO_FL]
+    mov [es:di+SKI_FL], al
+    mov al, [bx+SKO_TRY]
+    mov [es:di+SKI_TRY], al
+    mov ax, [bx+SKO_LP]
+    mov [es:di+SKI_LP], ax
+    mov ax, [bx+SKO_RP]
+    mov [es:di+SKI_RP], ax
+    mov ax, [bx+SKO_RXN]
+    mov [es:di+SKI_RXN], ax
+    mov ax, [bx+SKO_TXN]
+    mov [es:di+SKI_TXN], ax
+    mov ax, [bx+SKO_RXC]                ; ...and WHICH RING, as its size (72.21)
+    mov [es:di+SKI_RXC], ax
+    add di, SKI_SZ
+    add cx, SKI_SZ
+    inc dl
+    cmp dl, NET_SOCKS
+    jb  .l
+.done:
+    mov al, NET_SOCKS
+    pop es
+    pop bp
+    pop di
+    pop dx
+    pop bx
+    clc
     ret
 
 ; --- NETV_CLOSE --------------------------------------------------------------
@@ -230,6 +343,7 @@ eth_v_close:
 .nores:                                 ; SKO_RIP and calls tcp_syn on it
     mov byte [bx+SKO_TS], TS_CLOSED     ; nothing was ever connected, or it is
     mov byte [bx+SKO_ST], NSK_FREE      ; already over: the slot goes now
+    call sk_ring_put                    ; ...and the ring with it (72.21)
     jmp short .out
 .fin:
     or  byte [bx+SKO_FL], SKF_FIN

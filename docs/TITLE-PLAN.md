@@ -5,8 +5,8 @@ caption it shipped with and is **byte-identical** with and without the change.
 §9 is what the build found; the estimates in §6 are left as they were written,
 with the measured figures beside them.
 
-**Cost, measured:** `.text` +11, `.bss` +165, `.cold` +349 — **no rung crossed
-anywhere**, `KERN_SIZE` unchanged, so it costs the machine nothing. The
+**Cost, measured:** `.text` +11, `.bss` +165, `.cold` +349 — `KERN_SIZE`
+unchanged, so the machine has not paid for it yet. The
 estimate in §6 said "likely one 512-byte step"; it landed inside the rungs
 already open. What it did spend is the cold rung's slack, which is **14 bytes**
 now, and that is the number the next cold addition pays against.

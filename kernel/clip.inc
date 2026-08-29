@@ -108,7 +108,7 @@ clip_put:
     push ax                     ; ...and MOVABLE (SPEC.md 66.5.6): one word,
     mov ax, clip_reloc          ; read immediately before each copy, and a
     mov bx, MEM_K_CLIP          ; claim that outlives the app that filled it -
-    call mem_movable            ; so it is long-lived by design and exactly
+    call COLD_SEG:mmf_mem_movable ; so it is long-lived by design and exactly
     pop ax                      ; the shape that ends up mid-arena
     mov [clip_kb], ax
 .room:

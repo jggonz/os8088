@@ -79,7 +79,8 @@ ft_paint:
     call OSAPI_SET_COLOR
     add dx, 12
     mov si, ft_s_line1
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     add dx, 16
     mov al, [ft_stage]              ; line 2: the stage name
     mov si, ft_s_idle
@@ -90,7 +91,8 @@ ft_paint:
     je .draw
     mov si, ft_s_two
 .draw:
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     pop si
     pop dx
     pop cx

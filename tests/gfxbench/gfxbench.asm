@@ -88,6 +88,26 @@
 
 %include "os88api.inc"
 
+; --- running this harness against an OLDER kernel ----------------------------
+; Every row that a kernel of some vintage cannot serve is guarded with %ifdef
+; on the API cell it calls, so this one source builds against any SDK and
+; simply omits the rows that would not exist. That is the whole mechanism, and
+; it is deliberate: a benchmark rebuilt per vintage is two sources measuring
+; "the same" thing, which is the drift this package exists not to have.
+;
+; The two aliases below are the exception, because SPEC.md 6.6 RENAMED two
+; cells rather than adding them - font_char and font_str became
+; FONT_CHAR_XPARENT and FONT_STR_XPARENT, so that a call site has to say out
+; loud that it is leaving what is underneath. The routine behind each is the
+; same one, so an %ifdef would drop a row that the older kernel can serve
+; perfectly well and make the comparison narrower for no reason.
+%ifndef OSAPI_FONT_CHAR_XPARENT
+  %define OSAPI_FONT_CHAR_XPARENT OSAPI_FONT_CHAR
+%endif
+%ifndef OSAPI_FONT_STR_XPARENT
+  %define OSAPI_FONT_STR_XPARENT OSAPI_FONT_STR
+%endif
+
     OS88_HEADER 'GFXBENCH', gb_entry
 
 GB_BOXW     equ 256               ; the drawing sandbox, in pixels. Fixed and
@@ -104,6 +124,9 @@ GB_BLITW    equ 64                ; the blit source, 4bpp packed
 GB_BLITH    equ 64
 GB_BLITS    equ GB_BLITW / 2      ; ...its stride in bytes
 GB_BLITSZ   equ GB_BLITS * GB_BLITH
+GB_BLITPS   equ GB_BLITW / 8      ; ...and the SAME block as four PLANES
+GB_BLITPP   equ GB_BLITPS * GB_BLITH   ; (SPEC.md 5.4.3): 8 bytes a plane row,
+GB_BLITPZ   equ GB_BLITPP * 4     ; 512 a plane, 2,048 the block
 
 GB_VSMAX    equ 60000             ; retrace-poll bound. A dead status port must
                                   ; time out, never hang: the Linux-RTC bug
@@ -378,6 +401,7 @@ gb_run:
     call gb_disp                    ; ...and WHICH CARD it is on (SPEC.md 39.19)
     call gb_mktab                   ; the adapter record and the row tables
     call gb_mkblit                  ; the two blit sources
+    call gb_mkblitp                 ; ...and the planar one (SPEC.md 5.4.3)
     call bl_baseline                ; ...and the loop overhead every P row is
     mov [gb_bcnt], ax               ; reported net of
     mov [gb_bcnt+2], dx
@@ -738,6 +762,49 @@ gb_mkblit:
     stosb
     inc bx
     loop .s
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; gb_mkblitp - the SAME 64x64 block as four planes (SPEC.md 5.4.3)
+;
+; A 50% dither, which is the worst thing you can hand a run coalescer and
+; means NOTHING to a copy: the point of the row this feeds is that its cost is
+; the bytes and the bytes alone. Rows alternate AA/55 in every plane, so what
+; lands on screen is a grey square in colour 15 - visibly the same class of
+; picture as os8088.gif's ground.
+; -----------------------------------------------------------------------------
+gb_mkblitp:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push es
+    push ds
+    pop es
+    cld
+    mov di, gb_bplanar
+    mov dx, 4                       ; four planes...
+.plane:
+    mov bx, GB_BLITH                ; ...of GB_BLITH rows each
+.row:
+    mov al, 0xAA
+    test bl, 1
+    jz .even
+    mov al, 0x55                    ; the other phase, so it is a dither and
+.even:                              ; not stripes
+    mov cx, GB_BLITPS
+    rep stosb
+    dec bx
+    jnz .row
+    dec dx
+    jnz .plane
     pop es
     pop di
     pop dx
@@ -1229,6 +1296,29 @@ gb_prims:
     mov si, gb_r_blit1
     xor al, al
     call bl_run
+    mov ax, [bl_last]
+    mov dx, [bl_last+2]
+    mov [gb_tblit1], ax
+    mov [gb_tblit1+2], dx
+%ifdef OSAPI_GFX_BLIT1_PEN
+    ; ...and the SAME band under a non-default pen (SPEC.md 5.4.2.2). Before
+    ; the pen existed a band was always CWHITE on CBLACK, so a package wanting
+    ; a coloured figure blitted white and then re-coloured it - two passes over
+    ; the same pixels, which is the flash SPEC.md 6.1 forbids for text.
+    ;
+    ; The pair is the measurement, and BOTH answers are worth having. On a 1bpp
+    ; adapter the pen IS NOT READ - a band there already means lit and unlit -
+    ; so this row must land on the one above it, and a gap is a bug. On VGA it
+    ; is the price of a colour, and it is what apps/arkanoid pays per capsule.
+    mov word [bl_body], gb_b_blit1c
+    mov si, gb_r_blit1c
+    xor al, al
+    call bl_run
+    mov ax, [bl_last]
+    mov dx, [bl_last+2]
+    mov [gb_tblit1c], ax
+    mov [gb_tblit1c+2], dx
+%endif
     mov word [bl_body], gb_b_mclr
     mov si, gb_r_mclr
     xor al, al
@@ -1369,6 +1459,26 @@ gb_prims:
     mov [gb_tbn], ax
     mov [gb_tbn+2], dx
 
+    mov word [bl_n], 12             ; ...and the same block already IN the
+    mov word [bl_body], gb_b_blitp  ; card's own form (SPEC.md 5.4.3), which is
+    mov si, gb_r_bp                 ; what the two rows above spend their time
+    xor al, al                      ; ARRIVING at
+    call bl_run
+    mov ax, [bl_last]
+    mov dx, [bl_last+2]
+    mov [gb_tbp], ax
+    mov [gb_tbp+2], dx
+
+    mov word [bl_n], 12             ; ...and the same bytes as a WIDE block,
+    mov word [bl_body], gb_b_blitpw ; which is the shape a canvas has
+    mov si, gb_r_bpw
+    xor al, al
+    call bl_run
+    mov ax, [bl_last]
+    mov dx, [bl_last+2]
+    mov [gb_tbpw], ax
+    mov [gb_tbpw+2], dx
+
     call gb_boxfull                 ; the blit's alternative: move the pixels
     mov word [bl_n], 16             ; you already have (SPEC.md 5.5)
     mov word [bl_body], gb_b_scroll
@@ -1427,6 +1537,28 @@ gb_text:
     mov dx, [bl_last+2]
     mov [gb_trun], ax
     mov [gb_trun+2], dx
+
+    ; ...and the same run DISABLED (SPEC.md 6.1.12, 47 rule 3), which on the
+    ; two 1bpp adapters is the entire difference between a greyed label and a
+    ; live one: the colour alone rounds to solid black, so it is the
+    ; checkerboard or nothing.
+    ;
+    ; It is here because it was a REGRESSION nothing could see. font_run could
+    ; not express the mask, so it answered a flagged run by falling back to
+    ; gfx_fill + font_str - the erase-and-letter pair, in the one routine whose
+    ; whole purpose is not to write a pixel twice - and a greyed menu item came
+    ; out 13.4% slower than a live one on Hercules. No row in this harness
+    ; drew disabled text, so the fall-back was invisible here for as long as it
+    ; existed. This row is the pair: same string, same length, same place, and
+    ; the only difference is the pen. Read it against FONT_RUN 10 aligned.
+    mov word [bl_body], gb_b_frundis
+    mov si, gb_r_rudis
+    xor al, al
+    call bl_run
+    mov ax, [bl_last]
+    mov dx, [bl_last+2]
+    mov [gb_trundis], ax
+    mov [gb_trundis+2], dx
 
     ; SPEC.md 6.1.7's question: a run of 20, once as ordinary text and once
     ; SPACE-PADDED, which is what this system actually draws - 27.2 makes a
@@ -1500,6 +1632,16 @@ gb_api:
     mov si, gb_r_sc2
     xor al, al
     call bl_run
+    mov word [bl_body], gb_b_pen     ; the OTHER colour cell (SPEC.md 47 rule
+    mov si, gb_r_pen                 ; 3): CDGRAY *and* the [gfx_dis] flag,
+    xor al, al                       ; which is the pair SET_COLOR cannot set
+    call bl_run
+%ifdef OSAPI_WM_BAND
+    mov word [bl_body], gb_b_band    ; SPEC.md 11.96.11: naming a band and
+    mov si, gb_r_band                ; retiring it, the pair a scroller makes
+    xor al, al                       ; every time its geometry changes
+    call bl_run
+%endif
     mov word [bl_body], gb_b_cont
     mov si, gb_r_wc
     xor al, al
@@ -1913,6 +2055,24 @@ gb_derived:
     call gb_ratio
     mov si, gb_d_blit
     call gb_num32
+
+%ifdef OSAPI_GFX_BLIT1_PEN
+    mov ax, [gb_tblit1c]            ; the SAME band, coloured over plain. On
+    mov dx, [gb_tblit1c+2]          ; Hercules and CGA this must read 100 - the
+    mov bx, [gb_tblit1]             ; pen is not read on a 1bpp adapter, so a
+    mov cx, [gb_tblit1+2]           ; band there already means lit and unlit and
+    call gb_ratio                   ; there is nothing for a colour to cost. It
+    mov si, gb_d_blitpen            ; is VGA where this is a price, and it is
+    call gb_num32                   ; what a coloured sprite pays per frame
+%endif
+
+    mov ax, [gb_trundis]            ; a DISABLED run over a live one (SPEC.md
+    mov dx, [gb_trundis+2]          ; 6.1.12). Near 100 is the checkerboard
+    mov bx, [gb_trun]               ; folded into the mask font_run already
+    mov cx, [gb_trun+2]             ; carries. Well over it is the fall-back to
+    call gb_ratio                   ; gfx_fill + font_str - which is the
+    mov si, gb_d_rundis             ; erase-and-letter pair, inside the one
+    call gb_num32                   ; routine that exists not to write twice
 
     mov ax, [gb_tlock]              ; the gfx lock pair, in the field log's own
     mov dx, [gb_tlock+2]            ; currency (PERFORMANCE.md Part 9 Set 4):
@@ -2403,6 +2563,39 @@ gb_b_blit1:
     pop bp
     ret
 
+%ifdef OSAPI_GFX_BLIT1_PEN
+; The same band as gb_b_blit1, under a pen that is not the default. The pen is
+; ONE LOCK HOLD long and OSAPI_GFX_UNLOCK puts it back, so setting it inside
+; the timed body is what a real caller does - a package that set it once
+; outside would lose it at the next unlock and draw white without knowing.
+;
+; CLBLUE on CBLACK, not CWHITE: the blit refuses a pair whose two colours share
+; no plane in either direction, and this pair is one plane against none - the
+; cheap end of the VGA path, which is the end apps/arkanoid's capsules use.
+gb_b_blit1c:
+    push bp
+    push es
+    push ds
+    pop es
+    mov al, CLBLUE                  ; ink...
+    mov ah, CBLACK                  ; ...and paper
+    call OSAPI_GFX_BLIT1_PEN
+    mov si, gb_maska
+    mov bp, GB_MST
+    mov ax, [gb_x]
+    and ax, 0FFF8h
+    mov bx, [gb_y]
+    mov cx, GB_MW
+    mov dx, GB_MH
+    call OSAPI_GFX_BLIT1
+    mov al, CWHITE                  ; ...and back, so the row after this one
+    mov ah, CBLACK                  ; is not measuring a pen it did not set
+    call OSAPI_GFX_BLIT1_PEN
+    pop es
+    pop bp
+    ret
+%endif
+
 gb_b_mclr:
     push es
     push ds
@@ -2499,6 +2692,51 @@ gb_b_blit:
     pop bp
     ret
 
+; The same 64x64 area, but the caller already holds it the way the card wants
+; it (SPEC.md 5.4.3). x is forced onto the byte grid because the primitive
+; refuses anything else - which is the contract, not a limitation of the row.
+gb_b_blitp:
+    push bp
+    push es
+    push ds
+    pop es
+    mov si, gb_bplanar
+    mov di, GB_BLITPP
+    mov bp, GB_BLITPS
+    mov ax, [gb_x]
+    and ax, 0xFFF8
+    mov bx, [gb_y]
+    mov cx, GB_BLITW
+    mov dx, GB_BLITH
+    call OSAPI_GFX_BLITP
+    pop es
+    pop bp
+    ret
+
+; THE SAME 2,048 BYTES, four times as wide and a quarter as tall (SPEC.md
+; 5.4.3). The pair is the point: a copy costs a fixed part per ROW PER PLANE -
+; two `out`s, a masked byte, a `rep movsb` set up - and a variable part per
+; byte, and one measurement cannot separate them. 64x64 is 256 row-plane
+; operations for those bytes and 256x16 is 64, so the difference between the
+; two rows IS the fixed part. A canvas is the wide shape.
+gb_b_blitpw:
+    push bp
+    push es
+    push ds
+    pop es
+    mov si, gb_bplanar
+    mov di, GB_BLITPP
+    mov bp, GB_BLITPS * 4
+    mov ax, [gb_x]
+    and ax, 0xFFF8
+    mov bx, [gb_y]
+    mov cx, GB_BLITW * 4
+    mov dx, GB_BLITH / 4
+    call OSAPI_GFX_BLITP
+    pop es
+    pop bp
+    ret
+
 gb_b_scroll:
     mov ax, [gb_x]                  ; x1 and x2+1 are multiples of 8 by
     mov bx, [gb_y]                  ; construction - the blit is byte-column
@@ -2512,14 +2750,14 @@ gb_b_fchar:
     mov cx, [gb_tx]
     mov dx, [gb_y]
     mov al, 'W'
-    call OSAPI_FONT_CHAR
+    call OSAPI_FONT_CHAR_XPARENT
     ret
 
 gb_b_fstr:
     mov cx, [gb_tx]
     mov dx, [gb_y]
     mov si, gb_s_test
-    call OSAPI_FONT_STR
+    call OSAPI_FONT_STR_XPARENT
     ret
 
 ; The erase-and-letter PAIR: what every text element in this system wrote by
@@ -2539,7 +2777,7 @@ gb_b_pair:
     mov cx, [gb_tx]
     mov dx, [gb_y]
     mov si, gb_s_test
-    call OSAPI_FONT_STR
+    call OSAPI_FONT_STR_XPARENT
     ret
 
 gb_b_frun:
@@ -2568,6 +2806,53 @@ gb_b_frunp:
     mov ah, CWHITE
     call OSAPI_FONT_RUN
     ret
+
+; The disabled run (SPEC.md 6.1.12). CF IS THE ARGUMENT to OSAPI_GFX_PEN, so
+; `stc` then the call is the whole of setting it, and the `clc` call after is
+; not decoration: the flag lasts the lock hold, and this runs inside a callback
+; that already holds it, so a leaked flag would dither every row below.
+;
+; The colour is CDGRAY because that is what a disabled control IS - but on the
+; two 1bpp adapters the colour is not the part that does anything (it rounds to
+; solid black), the FLAG is: font_ink masks a flagged glyph to 47's
+; checkerboard. So on Hercules and CGA this row measures the mask fold and
+; nothing else, which is exactly what it is for.
+gb_b_frundis:
+    stc
+    mov al, CDGRAY
+    call OSAPI_GFX_PEN
+    mov cx, [gb_tx]
+    mov dx, [gb_y]
+    mov si, gb_s_test
+    mov al, CBLACK
+    mov ah, CWHITE
+    call OSAPI_FONT_RUN
+    clc
+    mov al, CBLACK
+    call OSAPI_GFX_PEN
+    ret
+
+gb_b_pen:
+    clc
+    mov al, CBLACK
+    call OSAPI_GFX_PEN
+    ret
+
+%ifdef OSAPI_WM_BAND
+; Naming a band and retiring it - the pair, because one without the other
+; leaves the window with a cache this harness never asked for. CX = 0 is the
+; retire (SPEC.md 11.96.11.1).
+gb_b_band:
+    mov bx, [gb_win]
+    mov al, 2                       ; the top edge
+    mov cx, 16
+    call OSAPI_WM_BAND
+    mov bx, [gb_win]
+    mov al, 2
+    xor cx, cx
+    call OSAPI_WM_BAND
+    ret
+%endif
 
 gb_b_fwidth:
     mov si, gb_s_test
@@ -2926,6 +3211,9 @@ gb_r_lshf: db 'GFX_LINE shallow fat', 0
 gb_r_mline:db 'mask line 127x32', 0
 gb_r_xdiff:db 'xordiff 128x128', 0
 gb_r_blit1:db 'GFX_BLIT1 128x128', 0
+%ifdef OSAPI_GFX_BLIT1_PEN
+gb_r_blit1c:db 'GFX_BLIT1 128x128 pen', 0
+%endif
 gb_r_mclr: db 'clear mask 2048', 0
 gb_r_ls8:  db 'GFX_LSTEP x8 (8 calls)', 0
 gb_r_lsv8: db 'GFX_LSTEPV x8 (1 call)', 0
@@ -2939,12 +3227,15 @@ gb_r_xrb:  db 'GFX_XOR_RECT 256x128', 0
 gb_r_xrr:  db 'GFX_XOR_RECT 256x1', 0
 gb_r_bs:   db 'GFX_BLIT4 solid', 0
 gb_r_bn:   db 'GFX_BLIT4 4px runs', 0
+gb_r_bp:   db 'GFX_BLITP 64x64', 0
+gb_r_bpw:  db 'GFX_BLITP 256x16', 0
 gb_r_sc:   db 'GFX_SCROLL 256x128', 0
 
 gb_r_ch:   db 'FONT_CHAR one cell', 0
 gb_r_st:   db 'FONT_STR 10 aligned', 0
 gb_r_pa:   db 'PAIR 10 aligned', 0
 gb_r_ru:   db 'FONT_RUN 10 aligned', 0
+gb_r_rudis:db 'FONT_RUN 10 disabled', 0
 gb_r_ru20: db 'FONT_RUN 20 text', 0
 gb_r_rup:  db 'FONT_RUN 20 padded', 0
 gb_r_pa5:  db 'PAIR 10 skewed 5', 0
@@ -2953,6 +3244,10 @@ gb_r_fw:   db 'FONT_WIDTH 10', 0
 
 gb_r_gt:   db 'GET_TICKS', 0
 gb_r_sc2:  db 'SET_COLOR', 0
+gb_r_pen:  db 'GFX_PEN', 0
+%ifdef OSAPI_WM_BAND
+gb_r_band: db 'WM_BAND set+retire', 0
+%endif
 gb_r_wc:   db 'WM_CONTENT', 0
 gb_r_wg:   db 'WM_GEOM', 0
 gb_r_wo:   db 'WM_OBSCURED', 0
@@ -2982,6 +3277,10 @@ gb_d_busw:     db 'VRAM/RAM word x100', 0
 gb_d_busm:     db 'VRAM/RAM rmw x100', 0
 gb_d_rmwclk:   db 'VRAM rmw clocks x100', 0
 gb_d_blit:     db 'blit runs/solid x100', 0
+%ifdef OSAPI_GFX_BLIT1_PEN
+gb_d_blitpen:  db 'BLIT1 pen/plain x100', 0
+%endif
+gb_d_rundis:   db 'RUN disabled/live x100', 0
 gb_d_lockus:   db 'lock pair us x100', 0
 gb_d_lockfill: db 'lock pair/FILL8 x100', 0
 gb_d_pagepred: db 'page predicted usx100', 0
@@ -3025,7 +3324,7 @@ VCTX_VY     equ 38
 VCTX_KIND   equ 40              ; ...and which adapter it is
 
 GB_NWALK    equ 8               ; walks stepped together (SPEC.md 5.6.8)
-GB_O_SCAL   equ 192             ; ...where the scalars below end
+GB_O_SCAL   equ 216             ; ...where the scalars below end
 GB_O_SYSKB  equ GB_O_SCAL + GB_NWALK * (4 + GLS_SZ)   ; the scalars above end at
                                 ; gb_lsblk, which is DERIVED - a hand-totalled
                                 ; figure that is too small is a package writing
@@ -3046,7 +3345,8 @@ GB_MSZ      equ GB_MST * GB_MH  ; 2,048
 GB_MDX      equ 127             ; ...and the same 127 x 32 line the GFX_LINE
 GB_MDY      equ 32              ; rows draw, so the two are comparable
 GB_MNL      equ 12              ; edges of a cube, for the diff row's density
-GB_O_MASKA  equ GB_O_STRIPE + GB_BLITSZ
+GB_O_PLANAR equ GB_O_STRIPE + GB_BLITSZ
+GB_O_MASKA  equ GB_O_PLANAR + GB_BLITPZ
 GB_O_MASKB  equ GB_O_MASKA + GB_MSZ
 GB_BSS_OWN  equ ((GB_O_MASKB + GB_MSZ + 511) / 512) * 512   ; benchlib's base must be
                                         ; 512-ALIGNED: bl_out is an int 13h target
@@ -3128,6 +3428,16 @@ gb_dvx      equ os88_image_end + 184   ; word: that display's origin in the
 gb_dvy      equ os88_image_end + 186   ;       virtual desktop, and its own
 gb_dcw      equ os88_image_end + 188   ;       extent - what every number from
 gb_dch      equ os88_image_end + 190   ;       'framebuffer seg' down describes
+gb_tblit1   equ os88_image_end + 192   ; dword: the 1bpp band, default pen...
+gb_tblit1c  equ os88_image_end + 196   ; dword: ...and under a colour, which on
+                                       ;        a 1bpp adapter must be the SAME
+                                       ;        number (SPEC.md 5.4.2.2)
+gb_tbp      equ os88_image_end + 204   ; dword: SPEC.md 5.4.3's copy, against
+                                       ;        gb_tbn's transpose above it
+gb_tbpw     equ os88_image_end + 208   ; dword: ...and the same bytes wide,
+                                       ;        which separates the per-ROW part
+gb_trundis  equ os88_image_end + 200   ; dword: a DISABLED run (SPEC.md 6.1.12),
+                                       ;        against gb_trun beside it
 gb_lsdsc    equ os88_image_end + GB_O_SCAL   ; GB_NWALK (block, count) pairs
 gb_lsblk    equ os88_image_end + GB_O_SCAL + GB_NWALK * 4  ; ...and walk states
 gb_syskb    equ os88_image_end + GB_O_SYSKB    ; SYSKB_SIZE bytes
@@ -3136,6 +3446,7 @@ gb_rrow     equ os88_image_end + GB_O_RROW     ; ...and the RAM ones
 gb_ram      equ os88_image_end + GB_O_RAM      ; the RAM bandwidth target
 gb_bsolid   equ os88_image_end + GB_O_SOLID    ; the two blit sources
 gb_bstripe  equ os88_image_end + GB_O_STRIPE
+gb_bplanar  equ os88_image_end + GB_O_PLANAR    ; ...and the planar one
 gb_maska    equ os88_image_end + GB_O_MASKA   ; the two figure masks
 gb_maskb    equ os88_image_end + GB_O_MASKB
 

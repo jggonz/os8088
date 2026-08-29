@@ -123,6 +123,9 @@
 ; --- tuning --------------------------------------------------------------------
 TRK_VITEM   equ 24                  ; a composed View item: MENU_DIS +
                                     ; 'Fullscreen' + ' (5.5 kHz)' + NUL = 22
+TRK_TITEM   equ 20                  ; ...and the View menu's SECOND composed
+                                    ; item (SPEC.md 45.13.7): MENU_DIS + '* '
+                                    ; + 'Text Screen' + ' (Xt)' + NUL = 20
 TRK_RITEM_SH equ 5                  ; ...and the item stride is a SHIFT, so it
 TRK_RITEM   equ 1 << TRK_RITEM_SH   ; is derived from the size rather than
                                     ; being a second opinion about it. It was
@@ -558,6 +561,10 @@ trk_onkey:
     je .rcyc
     cmp bl, 'R'
     je .rcyc
+    cmp bl, 'v'                     ; V: the fullscreen SURFACE (SPEC.md
+    je .txtog                       ; 45.13.7). Free in every build - T is
+    cmp bl, 'V'                     ; tlog_clk_key's in a TRKLOG one, and the
+    je .txtog                       ; mnemonic is not worth a silent collision
 %ifdef TRKLOG
     cmp bl, 'd'
     je .diag
@@ -600,6 +607,9 @@ trk_onkey:
 .xt:
     call trk_xt_toggle
     jmp .out
+.txtog:
+    call trk_txt_toggle             ; no stop, no rebuild - the pick is not
+    jmp .out                        ; something the mixer can see (45.13.7)
 .rcyc:
     call trk_rsel_get               ; R cycles whatever the Rate MENU lists in
     mov al, ah                      ; this mode - 11/22/44 outside XT mode and
@@ -722,7 +732,12 @@ trk_oncmd:
     cmp bh, 1
     jne .out
     or bl, bl                       ; View > Fullscreen: toggle
-    jnz .out
+    jz .vfull
+    cmp bl, 1                       ; View > Text Screen (SPEC.md 45.13.7):
+    jne .out                        ; the surface pick. No belt like .enter's
+    call trk_txt_toggle             ; below - the row greys because XT mode
+    jmp .out                        ; makes the pick INERT, not unavailable,
+                                    ; and MENU_DIS is not dispatched anyway
 .vfull:
     cmp byte [trk_fs], 0
     je .enter
@@ -1372,10 +1387,11 @@ trk_fsx_main:
     push dx
     push si
     push di
-    cmp byte [mp_xt], 0             ; XT mode's fullscreen is an 80x25 TEXT
-    je .gfx                         ; screen (SPEC.md 45.13) - see trktxt.inc
-    call ttx_begin                  ; for the arithmetic. CF=1: refused, and
-    jc .gfx                         ; nothing was changed - fsx_mode either
+    call trk_txon                   ; the 80x25 TEXT screen (SPEC.md 45.13):
+    je .gfx                         ; XT mode forces it, [trk_txw] asks for it
+    call ttx_begin                  ; (45.13.7) - see trktxt.inc for the
+    jc .gfx                         ; arithmetic. CF=1: refused, and nothing
+                                    ; was changed - fsx_mode either
 .txok:                              ; sets the mode or touches nothing at all
     mov byte [trk_tx], 1
     call ttx_draw_all
@@ -1504,6 +1520,18 @@ trk_fsx_key:
     je .rcyc
     cmp al, 'R'
     je .rcyc
+    cmp al, 'v'                     ; V changes the SURFACE, and fsx_mode is
+    je .txxt                        ; called once at ttx_begin - a bracket
+    cmp al, 'V'                     ; cannot re-enter itself in the other mode
+    je .txxt                        ; (SPEC.md 45.13.3). Say why not (47)
+%ifdef TRKDBG
+    cmp al, 'g'                     ; bench-only (tests/trkscrl.inc): G
+    je .grid                        ; repaints the grid with the view held
+    cmp al, 'G'                     ; still, and j/k/n/v/b/c move the stopped
+    je .grid                        ; view by more than one row in one frame
+    call trk_dbg_key
+    jnc .out
+%endif
 %ifdef TRKLOG
     cmp al, 'd'
     je .diag
@@ -1538,6 +1566,12 @@ trk_fsx_key:
     call tui_msg                    ; and a bracket owns the machine until it
     pop si                          ; returns (SPEC.md 53.7). Say why, do not
     jmp .out                        ; do nothing (SPEC.md 47)
+%endif
+%ifdef TRKDBG
+.grid:
+    call trk_dbg_area
+    call tui_draw_pat
+    jmp .out
 %endif
 .load:
     push si
@@ -1585,11 +1619,19 @@ trk_fsx_key:
     call trk_play
     jmp .out
 .xt:
-    cmp byte [trk_tx], 0            ; the XT text screen (SPEC.md 45.13) IS
-    jne .txxt                       ; what XT mode's fullscreen is, so turning
-    call trk_xt_toggle              ; the mode off from inside it would leave
-    jmp .out                        ; the app on a surface it no longer wants.
-                                    ; Say why not (SPEC.md 47), like L does
+    cmp byte [trk_tx], 0            ; BOTH directions since SPEC.md 45.13.7:
+    jne .txxt                       ; a picked surface can hold this bracket
+    call trk_xt_toggle              ; with [mp_xt] clear, so X here can mean
+    jmp .out                        ; ON. Either way trk_xt_toggle stops
+                                    ; playback, rebuilds the table, re-sets
+                                    ; the menu and on [trk_fs] calls
+                                    ; tui_draw_all - a kernel drawing slot,
+                                    ; against a framebuffer that is a TEXT
+                                    ; PAGE (45.13.3). So the guard stays keyed
+                                    ; on [trk_tx] and stays BROAD: narrowing
+                                    ; it to "only when [trk_txw] is clear" is
+                                    ; exactly the case that reaches that
+                                    ; repaint. Say why not (47), like L does
 .rcyc:
     call trk_rsel_get               ; R cycles whatever the Rate MENU lists in
     mov al, ah                      ; this mode - 11/22/44 outside XT mode and
@@ -2182,6 +2224,40 @@ trk_menus_build:
 .vterm:
     mov byte [di], 0
 
+    ; --- View > Text Screen: the surface pick (SPEC.md 45.13.7) -------------
+    ; The Rate menu's idiom below, one for one: '*' in the TEXT means selected
+    ; so that greying goes back to meaning unavailable, and the '(Xt)' suffix
+    ; names the other control that makes this one inert (SPEC.md 47 rule 7).
+    ; It is a FACT and not a guess (rule 3) - trk_txon's first term is already
+    ; true, so every press here really is without effect until XT mode goes.
+    ;
+    ; No adapter test and no CPU test: FSXM_TEXT80 is bit 0 of all three
+    ; capstab rows (SPEC.md 53.8) and the text screen is the CHEAPER surface
+    ; on every machine (45.13.1), so either gate would be greying a guess.
+    mov di, trk_textitem
+    cmp byte [mp_xt], 0
+    je .tlive
+    mov byte [di], MENU_DIS
+    inc di
+.tlive:
+    mov al, ' '
+    call trk_txon                   ; the '*' shows the EFFECTIVE surface, so
+    je .tmark                       ; in XT mode it is set whatever the pick
+    mov al, '*'                     ; is - which is what the greying explains
+.tmark:
+    mov [di], al
+    inc di
+    mov byte [di], ' '
+    inc di
+    mov si, trk_s_textm
+    call trk_scpy
+    cmp byte [mp_xt], 0
+    je .tterm
+    mov si, trk_s_xsfx
+    call trk_scpy
+.tterm:
+    mov byte [di], 0
+
     ; --- Rate: XT mode's TWO, or the other mode's three ---------------------
     mov cx, 3                       ; the counts differ, so AMENU_NITEM is
     cmp byte [mp_xt], 0             ; written rather than assembled
@@ -2256,6 +2332,71 @@ trk_fs_ok:
     ret
 .ok:
     clc
+    ret
+
+; -----------------------------------------------------------------------------
+; trk_txon - is the fullscreen surface the SPEC.md 45.13 TEXT screen?
+;            out: ZF=0 (jne) yes, ZF=1 (je) no. Preserves every register.
+;
+; ONE predicate, two readers (SPEC.md 45.13.7, 47 rule 5): trk_fsx_main's
+; branch and trk_menus_build's '*'. So the surface the bracket actually takes
+; and the surface the menu claims cannot come to differ.
+;
+; XT mode FORCES the surface and [trk_txw] ASKS for it, and NEITHER TERM READS
+; THE OTHER - that is the point of the section rather than an implementation
+; detail. Turning XT mode off leaves a picked surface exactly where the user
+; put it, at 22 or 44 kHz; and a tier-0 machine, pre-armed into XT mode at
+; entry (45.9), still lands on the text screen with [trk_txw] never written.
+;
+; Not called by the bracket's X and V guards, which ask [trk_tx] - "where the
+; app already IS" - and SPEC.md 45.13.3 is why that is the right question
+; there and this is the wrong one.
+; -----------------------------------------------------------------------------
+trk_txon:
+    cmp byte [mp_xt], 0
+    jne .yes                        ; ZF=0 already: XT mode forces it
+    cmp byte [trk_txw], 0           ; ...otherwise the pick IS the answer
+.yes:
+    ret
+
+; -----------------------------------------------------------------------------
+; trk_txt_toggle - flip the fullscreen surface pick (SPEC.md 45.13.7). UI
+; context, lock held (key V or View > Text Screen). Preserves every register.
+;
+; NO playback stop, NO stream close and NO table rebuild, which is what makes
+; this a different shape from trk_xt_toggle sitting next to it: the pick
+; decides which bracket F enters and NOTHING the mixer can see, so there is
+; no rate to fix at stream-open time and the music does not even pause.
+;
+; It moves the byte even while XT mode forces the surface and the row is
+; MENU_DIS. The pick is the user's; XT mode is only standing on top of it, and
+; a toggle that silently refused would leave the '*' disagreeing with what the
+; user just pressed the moment XT mode came off.
+;
+; The repaint is the menu and nothing else. The windowed splash carries no
+; pixel that depends on this - its hint line is trk_fs_ok's business (45.9.3),
+; which [trk_txw] does not move - so tui_draw_all here would be PERFORMANCE.md
+; rule 1's full repaint bought for identical pixels.
+; -----------------------------------------------------------------------------
+trk_txt_toggle:
+    push ax
+    push si
+    push di                         ; tui_msg_draw preserves AX/BX/CX/DX/SI and
+                                    ; NOT DI, and this is a public routine
+    mov al, [trk_txw]
+    xor al, 1
+    mov [trk_txw], al
+    call trk_menus_build            ; the '*' moves - one builder, one
+                                    ; MENU_SET (SPEC.md 45.17.1)
+    mov si, trk_s_txmg
+    cmp byte [trk_txw], 0
+    je .say
+    mov si, trk_s_txmt
+.say:
+    call tui_msg
+    pop di
+    pop si
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2667,7 +2808,11 @@ trk_tpl:
     OS88_MENUSET trk_menus, trk_m_name, trk_oncmd
         OS88_MENU trk_m_file, trk_mi_file, 2
 trk_e_view:
-        OS88_MENU trk_m_view, trk_mi_view, 1
+        OS88_MENU trk_m_view, trk_mi_view, 2    ; Fullscreen + Text Screen
+                                        ; (SPEC.md 45.13.7). A fixed count,
+                                        ; unlike trk_e_rate's below: both
+                                        ; rows exist in every mode and it is
+                                        ; the GREYING that moves
 trk_e_rate:                             ; ...labelled because its AMENU_NITEM
         OS88_MENU trk_m_rate, trk_mi_rate, 3    ; is written at RUN TIME: the
                                         ; Rate menu is TWO items in XT mode
@@ -2688,12 +2833,28 @@ trk_s_xtoff: db 'XT Mode: Off', 0
 trk_s_xton:  db 'XT Mode: On', 0
 trk_s_fsxhi: db '11 kHz is windowed: R picks 5.5', 0
 trk_m_view:  db 'View', 0
-trk_mi_view: dw trk_viewitem            ; AMENU_ITEMS is an ARRAY of pointers,
+trk_mi_view: dw trk_viewitem, trk_textitem  ; AMENU_ITEMS is an ARRAY of pointers,
                                         ; never the string itself - pointed at
                                         ; the composed buffer directly, the bar
                                         ; reads its first two characters as a
                                         ; pointer and draws whatever they name
 trk_s_fullm: db 'Fullscreen', 0
+trk_s_textm: db 'Text Screen', 0        ; SPEC.md 45.13.7's surface pick
+trk_s_xsfx:  db ' (Xt)', 0              ; ...greyed with the Rate menu's own
+                                        ; suffix, because it is the same fact:
+                                        ; XT mode overrides the row below it
+trk_s_txmt:  db 'Full screen: text', 0
+trk_s_txmg:  db 'Full screen: graphics', 0
+
+; TRK_TITEM against the strings it was sized from, rather than a second
+; opinion about them (the TRK_RITEM lesson: two constants that disagreed put
+; `* 5.5 kH  11 kHz` on the bar). Worst case is the greyed row - MENU_DIS +
+; '* ' + the caption + the suffix + NUL - and it fits EXACTLY, so a caption
+; edit that does not move the constant fails the build instead of running off
+; the end of the buffer into trk_viewitem.
+%if 1 + 2 + (trk_s_xsfx - trk_s_textm - 1) + (trk_s_txmt - trk_s_xsfx - 1) + 1 > TRK_TITEM
+  %error "the composed View > Text Screen row no longer fits TRK_TITEM"
+%endif
 trk_s_fswin: db ' (5.5 kHz)', 0         ; SPEC.md 47 rule 7: the greyed row
                                         ; says what would bring it back, which
                                         ; is the OTHER control's setting
@@ -2748,7 +2909,20 @@ trk_s_xtmon:  db 'XT mode on - Enter plays', 0
 trk_s_xtmoff: db 'XT mode off - Enter plays', 0
 trk_s_norate: db '44 kHz needs a DSP 4.x card', 0
 trk_s_buffer: db 'Buffering...', 0
-trk_s_txxt:   db 'XT off is windowed: Esc first', 0
+trk_s_txxt:   db 'Windowed only: Esc first', 0
+                                        ; THREE keys share this and sharing it
+                                        ; is what made it accurate (SPEC.md
+                                        ; 45.13.3). It read 'XT off is
+                                        ; windowed', which was already wrong
+                                        ; for the R key that shared it - a
+                                        ; rate change is not an XT toggle -
+                                        ; and 45.13.7 would have made it wrong
+                                        ; for X too, since a picked surface
+                                        ; can hold the bracket with [mp_xt]
+                                        ; clear and X then means ON. True for
+                                        ; X, R and V now, in both directions,
+                                        ; and five bytes shorter than the
+                                        ; sentence that was true for one
 
 ; =============================================================================
 ; The rest of the package: the replayer, and the two renderers of one screen -
@@ -2833,6 +3007,9 @@ trk_reloc:
 %ifdef TRKLOG
 %include "trklog.inc"               ; tests/ - the bench build only, and the
 %endif                              ; only thing -DTRKLOG adds beyond hooks
+%ifdef TRKDBG
+%include "trkscrl.inc"              ; ...and the same shape for SPEC.md
+%endif                              ; 45.12.2's scroll gate
 
 ; =============================================================================
 ; .bss (SPEC.md 20.5: the loader zeroes TRK_BSS bytes after the image; every
@@ -2862,6 +3039,21 @@ trk_reloc:
     TRKB trk_xhi                      ; XT mode's rate: 0 = 5,500 (the default,
                                       ; and bss arrives zeroed so it is the
                                       ; default by construction), 1 = 11,000
+    TRKB trk_txw                      ; the FULLSCREEN SURFACE pick (SPEC.md
+                                      ; 45.13.7): 0 = the 45.6 graphics
+                                      ; screen, 1 = the 45.13 text one. bss
+                                      ; arrives zeroed, so the default is the
+                                      ; default by construction - trk_xhi's
+                                      ; idiom just above - and NOTHING seeds
+                                      ; or clears this byte. trk_xt_toggle in
+                                      ; particular does not: a pick that XT
+                                      ; mode reset would be the
+                                      ; setting-that-undoes-itself 45.9.3
+                                      ; refused to ship. XT mode FORCES the
+                                      ; surface without owning it, which is
+                                      ; the whole of trk_txon
+    TRKBUF trk_textitem, TRK_TITEM    ; ...its composed row, greyed while XT
+                                      ; mode forces the surface anyway
     TRKBUF trk_viewitem, TRK_VITEM    ; ...and the View item, which greys
     TRKBUF trk_ritem0, TRK_RITEM      ; the three composed Rate items
     TRKBUF trk_ritem1, TRK_RITEM      ; (SPEC.md 45.17.1) - in the PACKAGE's own

@@ -17,7 +17,8 @@ naming one), and nothing builds them until somebody types the knob by hand:
     `BOOTDIAG=`,
     `REDRAWFULL=`, `HEAPCOMPACT=`, `FDDPROBE=`, `SNAPAUDIT=`, `BOOTPROF=`,
     `MOUIDSLOW=`, `TRACKRUN=`, `QUANTUM=`, `SBDRAGOFF=`/`SBRATE=`,
-    `DIRW1=`, `PICOMEM=`, `BOOTMARK=`/`BOOTHALT=`/`BOOTSTOP=`, `NOPS2=`.
+    `DIRW1=`, `PICOMEM=`, `BOOTMARK=`/`BOOTHALT=`/`BOOTSTOP=`, `NOPS2=`,
+    `BAND=`, `TITLESNAP=`, `NOUNAL=`.
     Each one is
     `%ifdef`'d code that no ordinary build compiles, so it rots in silence -
     and every one of them is the A/B half of a gate somewhere in `tests/`.
@@ -117,6 +118,36 @@ KNOBS = [
     # rate constant, which only the second of these reaches.
     ("sbdragoff",   ["SBDRAGOFF=1"]),
     ("sbrate",      ["SBRATE=2"]),
+    # The LOOK/measurement knobs, which nothing else builds at all. Each
+    # switches a whole path in or out - and BAND is now the only thing that
+    # assembles the COMPOSED title bar at all, because SPEC.md 5.9.6 sent it
+    # back to a knob and no shipped kernel carries it. This row is therefore
+    # the whole of what keeps kernel/band.inc, wm_title_band and wm_tsend
+    # assembling; the fifteen-call path it replaces needs no row of its own,
+    # being what every other build in this table draws.
+    #
+    # THE ROW FLIPPED WITH THE DEFAULT and had to: while the composer shipped,
+    # `NOBAND=1` was what kept the fifteen calls alive here. A row left naming
+    # the retired knob would have gone on passing - `make NOBAND=1` is a make
+    # variable nothing reads, so it builds the DEFAULT kernel and reports a
+    # pass for a configuration nobody assembled.
+    ("band",        ["BAND=1"]),
+    ("titlesnap",   ["TITLESNAP=1"]),
+    ("nounal",      ["NOUNAL=1"]),
+    # NOPLANE= is the same sentence as BAND one polarity over, and the
+    # Makefile says so at its definition: it is "the only thing keeping the
+    # run-only path assembling",
+    # and that path is not dead code either - a FLAT row, a clipped blit and a
+    # block hanging off the screen edge all take it. The A/B PERFORMANCE.md
+    # Set 107 comes off is the other reason, and neither survives a build
+    # failure nobody sees until they reach for it.
+    ("noplane",     ["NOPLANE=1"]),
+    # GFXAUDIT= is vga12.inc's gfx_aud counters - a whole %ifdef path, four
+    # words of bss and a bump in every drawing primitive. Only a SOAK row
+    # builds it (tests/gfxlk.py runs `make GFXAUDIT=1` itself), which is not
+    # the pre-merge gate, and an instrument that stopped assembling is found
+    # at the moment somebody needs it to answer a question.
+    ("gfxaudit",    ["GFXAUDIT=1"]),
 ]
 
 

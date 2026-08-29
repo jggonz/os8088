@@ -3707,7 +3707,7 @@ tp_paint_runs:
     mov si, tp_linebuf
     mov al, CBLACK
     mov ah, CWHITE
-    call OSAPI_FONT_STR
+    call OSAPI_FONT_STR_XPARENT
 .un:
     pop si
 .n:

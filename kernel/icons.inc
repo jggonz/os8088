@@ -27,6 +27,94 @@
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
+; icon_draw_x - the API's entry: the record is the CALLER'S (SPEC.md 25.6.1)
+; in:       CX = x, DX = y, ES:SI -> record; caller holds the gfx lock
+; out:      CF = 0 drawn, CF = 1 refused (a record this cannot stage)
+; clobbers: nothing else
+;
+; ico_pass reads the rows through DS and every ico_* variable through DS too,
+; so DS cannot be moved to the caller's segment the way gfx_blit1_x moves it
+; to the caller's band (SPEC.md 5.4.2) - the pass would then read its own
+; geometry out of the package. The record is STAGED instead: it is 66 bytes at
+; the outside, one `movsb` loop, and nothing measurable beside two passes over
+; twelve rows.
+;
+; The bound is what the stage holds and it is a REFUSAL rather than a
+; truncation: one word a row, sixteen rows - a 16x16 icon, and every control
+; os88ui.inc draws. A wider record is a caller error, not a shape to clip.
+; -----------------------------------------------------------------------------
+ICO_STAGE_H equ 16              ; rows the stage holds, at one word a row
+; ...and the ceiling on the SHARED control glyph, asserted here because this is
+; the first point both constants exist: kernel.asm includes fdlg.inc (and with
+; it apps/os88ui.inc, which sets OS88UI_GW) one line above icons.inc.
+;
+; os88ui_glyph hands icon_draw_x the constant record `db 1, OS88UI_GW` and has
+; NO fallback - the branch that used to stand in for one could not draw a
+; glyph, so it went rather than being kept (SPEC.md 25.6.1). Of the four shapes
+; icon_draw_x refuses - ww = 0, ww > 1, rows = 0, rows > ICO_STAGE_H - three
+; are pinned by the literal `1`; this is the fourth, and a glyph grown past the
+; stage would otherwise turn every control in every package into nothing at
+; all, silently.
+; No %ifdef around it: `equ` defines an ASSEMBLER symbol and %ifdef tests the
+; PREPROCESSOR's, so `%ifdef OS88UI_GW` is false however defined it is - which
+; is a guard that never fires. This file is the kernel's alone, so the symbol
+; is always there and the %if can stand bare.
+%if OS88UI_GW > ICO_STAGE_H
+  %error "OS88UI_GW is taller than the icon stage: icon_draw_x refuses the control-glyph record and os88ui_glyph has no fallback (SPEC.md 25.6.1)"
+%endif
+icon_draw_x:
+    push ax
+    push cx
+    push si
+    push di
+    mov al, [es:si]             ; the header: words a row, then rows
+    mov ah, [es:si+1]
+    cmp al, 1
+    ja .refuse
+    or al, al
+    jz .refuse
+    or ah, ah
+    jz .refuse
+    cmp ah, ICO_STAGE_H
+    ja .refuse
+    push cx                     ; CX IS THE X, and the copy below wants it for
+                                ; the count - so it is banked a second time
+                                ; rather than spent. Without this the record
+                                ; staged perfectly and drew at a byte count
+    mov cl, ah                  ; CX = 2 + h * 4: the header, h mask words
+    xor ch, ch                  ; and h data words
+    shl cx, 1
+    shl cx, 1
+    add cx, 2
+    mov di, ico_stage
+.cp:
+    mov al, [es:si]
+    mov [di], al                ; DS is KERNEL_SEG here - the X stub's doing
+    inc si
+    inc di
+    loop .cp
+    pop cx                      ; ...and x back
+    mov si, ico_stage
+    call icon_draw
+    clc
+.out:
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret                         ; a pop writes no flags, so CF survives it
+.refuse:
+    mov word [ico_c1], (CBLACK << 8) | CWHITE   ; SPEC.md 25.6: the pen is
+                                ; ONE-SHOT, and a refusal spends it too. Without
+                                ; this the pair a refused draw was set for is
+                                ; still armed for whatever the caller draws
+                                ; next - which on the failing path is the one
+                                ; time nobody is looking. A `mov` writes no
+                                ; flags, so it goes ABOVE the `stc`
+    stc
+    jmp short .out
+
+; -----------------------------------------------------------------------------
 ; icon_draw - draw a full icon record (header + mask + data)
 ;
 ; in:       CX = x, DX = y (top-left, screen px), SI -> record;
@@ -34,6 +122,7 @@
 ; out:      nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 icon_draw:
+    GFXAUDIT_HOOK
     push ax
     push bx
     push cx
@@ -50,6 +139,7 @@ icon_draw:
     add si, 2                   ; SI -> body (mask rows first)
     GFXDENTERCD                 ; whole-shape, like a glyph (SPEC.md 39.14.2)
     call ico_core
+    mov word [ico_c1], (CBLACK << 8) | CWHITE   ; SPEC.md 25.6: ONE-SHOT
     GFXDLEAVE
     pop es
     pop bp
@@ -82,6 +172,7 @@ icon_draw16:
     mov word [ico_h], 16
     GFXDENTERCD                 ; whole-shape, like a glyph (SPEC.md 39.14.2)
     call ico_core
+    mov word [ico_c1], (CBLACK << 8) | CWHITE   ; SPEC.md 25.6: ONE-SHOT
     GFXDLEAVE
     pop es
     pop bp
@@ -192,9 +283,9 @@ ico_core:
     mov dx, 0x3CE               ; GC1: enable Set/Reset on all planes
     mov ax, 0x0F01
     out dx, ax
-    mov ah, CWHITE              ; GC0: Set/Reset color = white
-    mov al, 0
-    out dx, ax
+    mov ah, [ico_c1]            ; GC0: Set/Reset color = the underlay
+    mov al, 0                   ; (SPEC.md 25.6; CWHITE unless icon_pen said
+    out dx, ax                  ; otherwise)
     mov al, 8                   ; leave the index at GC8 (Bit Mask)
     out dx, al
     mov si, [ico_maskp]
@@ -203,7 +294,7 @@ ico_core:
     pop di
 
     mov dx, 0x3CE
-    mov ah, CBLACK              ; GC0: Set/Reset color = black
+    mov ah, [ico_c2]            ; GC0: Set/Reset color = the picture's
     mov al, 0
     out dx, ax
     mov al, 8
@@ -315,13 +406,29 @@ ico_core_bb:
     mov al, [vid_stride]
     mov [ico_lim0], al
 
-    mov byte [ico_bbop], 0      ; white underlay: OR the mask rows in
-    mov si, [ico_maskp]
-    call ico_pass_bb
-    mov byte [ico_bbop], 1      ; black pixels: AND-NOT the data rows out
+    mov al, [ico_c1]            ; SPEC.md 25.6: WHITE ors the rows in and
+    call ico_bbop_of            ; anything else ands them out - which is the
+    mov [ico_bbop], al          ; hardcoded pair's own behaviour, and gives a
+    mov si, [ico_maskp]         ; pressed control its black underlay and a
+    call ico_pass_bb            ; disabled one its stipple for free (the
+    mov al, [ico_c2]            ; CALLER dithers the data rows; a 1bpp op has
+    call ico_bbop_of            ; nowhere to put a grey)
+    mov [ico_bbop], al
     mov si, [ico_datap]
     call ico_pass_bb
 .none:
+    ret
+
+; ico_bbop_of - AL = a colour -> AL = 0 (or) for white, 1 (and-not) otherwise
+; The 1bpp reduction is gfx_ink's (SPEC.md 39.4): only pure white lights a
+; pixel, and the dither class is a black stipple, so it ands out like black.
+ico_bbop_of:
+    call gfx_ink
+    cmp al, 0xFF
+    mov al, 0
+    je .out
+    inc al
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -676,7 +783,39 @@ ico_hdd32:
     times 6 dw 0x0000, 0x0000   ; 26..31
 
 
+; --- SPEC.md 25.6: the two colours a record is drawn in ----------------------
+; The mask pass lays [ico_c1] and the data pass draws [ico_c2] over it. They
+; were CWHITE and CBLACK, written into GC0 as immediates, which is every icon
+; in the system and is not every 1bpp SHAPE the pass can draw: a pressed
+; control is the same shape with the two exchanged, and a disabled one wants
+; the overlay in CDGRAY (SPEC.md 47).
+;
+; ONE-SHOT, like gfx_blit1_pen (SPEC.md 5.4.2.2): icon_pen sets the pair and
+; ico_core puts it back on the way out, so a caller that does not set it gets
+; the icon pair and no icon site had to change.
+ico_c1:     db CWHITE           ; the mask pass's colour: the underlay
+ico_c2:     db CBLACK           ; ...and the data pass's: the picture
+%if ico_c2 - ico_c1 != 1
+  %error "ico_c1/ico_c2 must stay adjacent: icon_pen sets both in one word store"
+%endif
+
+; -----------------------------------------------------------------------------
+; icon_pen - set the pair the NEXT icon_draw uses (SPEC.md 25.6)
+; in:       AL = the mask pass's colour, AH = the data pass's
+; out:      nothing
+; clobbers: nothing (flags)
+; -----------------------------------------------------------------------------
+icon_pen:
+    mov [ico_c1], ax
+    ret
+
+
 section .bss
+ico_stage   resb 2 + ICO_STAGE_H * 4   ; SPEC.md 25.6.1: a package's record,
+                                ; copied where the pass can read it. One of it
+                                ; for os88ui_krect's reason - every caller is
+                                ; under the gfx lock and nothing in a drawing
+                                ; path re-enters
 ico_ww      resw 1              ; current record: words per row
 ico_h       resw 1              ; current record: total rows
 ico_rows    resw 1              ; rows after vertical clip

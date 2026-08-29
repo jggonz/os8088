@@ -73,8 +73,8 @@
 ; allocator and the copy are UI-task context, the gfx lock MAY be held, and
 ; [sch_lock] is raised by the kernel's own slot body around the dispatch -
 ; exactly as dsk_xfer raises it before dispatching DSV_BLK, and for the same
-; reason, which is that a loaded image cannot reach it (there is no API slot,
-; and drivers/debug/debug.asm records why).
+; reason, which is that a loaded image cannot reach it: no API slot publishes
+; it, so a driver that needs the scheduler held cannot ask for it itself.
 ; =============================================================================
 
 %include "os88drv.inc"

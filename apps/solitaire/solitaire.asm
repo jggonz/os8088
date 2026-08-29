@@ -1214,11 +1214,11 @@ sol_drawface:
     or al, al
     jnz .one
     mov al, '1'                     ; the ten is the only two-glyph rank
-    call OSAPI_FONT_CHAR
+    call OSAPI_FONT_CHAR_XPARENT
     add cx, 8
     mov al, '0'
 .one:
-    call OSAPI_FONT_CHAR
+    call OSAPI_FONT_CHAR_XPARENT
 
     mov ax, [sol_psy]               ; --- corner pip, 8x8 ---
     add ax, 8
@@ -1704,7 +1704,7 @@ sol_abdraw:
     add cx, [sol_ox]                ; font_str wants SCREEN coords
     mov dx, di
     add dx, [sol_oy]
-    call OSAPI_FONT_STR
+    call OSAPI_FONT_STR_XPARENT
     pop si
     add di, SOL_ABLH
     jmp .line
@@ -1779,7 +1779,7 @@ sol_banner:
     add dx, 10
     add dx, [sol_oy]
     mov si, sol_s_win
-    call OSAPI_FONT_STR
+    call OSAPI_FONT_STR_XPARENT
     call sol_pinv                   ; the plaque lands on the felt BETWEEN the
     pop si                          ; piles, and on a short window its top row
     pop dx                          ; is a pixel off a column's slivers

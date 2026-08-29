@@ -104,6 +104,21 @@ MEM_K_CLONE equ 0xFF09          ; the disk cloner's buffer (SPEC.md 18.99) -
                                 ; the job block AND the sectors in flight, so
                                 ; freeing it is the whole of the operation's
                                 ; teardown; held for exactly one clone
+; 0xFF0B WAS MEM_K_OVL, the relocated boot overlay - a CS like MEM_K_DRV's,
+; claimed high at MARK 12 and freed after drv_boot. The overlay rides stage 2's
+; blob now (SPEC.md 2.9.6), which is the same lifetime at a fixed address and
+; no claim at all, so the tag is retired. It is LEFT UNUSED rather than reused:
+; a value that has meant one thing in a shipped kernel and something else in
+; the next is exactly the kind of collision a debug read cannot see.
+MEM_K_BAND equ 0xFF0A           ; the 1bpp band composer's buffer (SPEC.md
+                                ; 5.9.2) - taken ONCE at boot and never freed,
+                                ; because a composer with nowhere to compose
+                                ; is a composer that silently stops composing.
+                                ; Claimed rather than declared in .bss for the
+                                ; obvious reason: 2KB of KERN_BUDGET buys a
+                                ; 128px band and 2KB of the arena buys a band
+                                ; as wide as the screen, and SPEC.md 5.9.1's
+                                ; cost is per CHUNK
 MEM_K_CLIP equ 0xFF07           ; the system clipboard's text (SPEC.md 55) -
                                 ; sized to what is in it, freed when it is
                                 ; emptied, and deliberately NOT an instance's,
@@ -242,8 +257,35 @@ mem_init_x:
     cld
     rep stosb
 
-    mov word [mem_base], HEAP_SEG
-    mov word [mem_top], HEAP_SEG        ; an empty heap until int 12h says more
+    call mem_floor_ax           ; THE FLOOR (SPEC.md 39.22), and it is a proc
+                                ; rather than eight instructions here because
+                                ; mem_unblob below has to arrive at the same
+                                ; answer - two copies of a conditional whose
+                                ; disagreement would be a mono machine handed
+                                ; a VGABUF rung the decoder is still using
+
+    ; --- AND STAGE 2 IS DOWN HERE (SPEC.md 2.9.5) ---------------------------
+    ; The loading screen lives in the loader, and the loader copied itself to
+    ; HEAP_SEG before it read a sector - so the blob sits on the heap's FLOOR
+    ; and is LIVE until spl_finish, which is after drv_boot. The arena
+    ; therefore starts above it and the whole top of RAM stays claimable.
+    ;
+    ; It is ASKED OF [spl_fseg] rather than assumed to be HEAP_SEG, because
+    ; that word is what stage 2 actually published and a kernel reached some
+    ; other way - a diagnostic payload, a test harness - never wrote it.
+    ; COLD_SEG is its seed and is below the heap, so the compare refuses it
+    ; and that kernel keeps the whole floor.
+    ;
+    ; A blob ABOVE the floor is not tested for: stage 2 puts itself exactly on
+    ; HEAP_SEG and the floor is HEAP_SEG or one VGABUF rung below it, so the
+    ; raise is never a lowering. What IS tested is the seed.
+    cmp word [spl_fseg], COLD_SEG
+    jbe .nospl
+    mov ax, [spl_fseg]
+    add ax, BOOT2_PAD / 16      ; ...the paragraph past the blob's last byte
+.nospl:
+    mov [mem_base], ax
+    mov [mem_top], ax           ; an empty heap until int 12h says more
 
     int 0x12                    ; AX = conventional KB
     mov cl, 6                   ; KB -> paragraphs: AX * 64, and the top
@@ -251,14 +293,81 @@ mem_init_x:
     jc .done                    ; 0xA000). A shift out is impossible below
                                 ; 1MB, but a hostile BIOS is not our problem
                                 ; to crash for
-    cmp ax, HEAP_SEG
-    jbe .done                   ; RAM ends at or below the heap: none of it
+    cmp ax, [mem_base]          ; ...against the FLOOR and not HEAP_SEG, which
+    jbe .done                   ; is only its seed now: RAM ending at or below
+                                ; the heap means none of it
     mov [mem_top], ax
 .done:
     pop es
     pop di
     pop cx
     pop ax
+    retf
+
+; -----------------------------------------------------------------------------
+; mem_unblob - stage 2's 2KB back, and the hole it leaves closed (SPEC.md
+;              50.6.3)
+;
+; in:       nothing
+; out:      nothing (every register preserved; CF is mem_compact's, and no
+;           caller has anything to do with it)
+;
+; Called ONCE, from kmain the line after spl_finish - the moment nothing wants
+; the loading screen again. Two halves, and the second is the half that makes
+; the first worth anything:
+;
+;   1. [mem_base] goes back to the floor mem_init worked out, which hands the
+;      arena BOOT2_PAD bytes it has never been allowed to see.
+;   2. ...and mem_compact packs the movable claims down onto it. Without this
+;      the released bytes are a hole UNDER kern:FATW and kern:ASC rather than
+;      part of the long run, which is the fragmentation this whole move exists
+;      to avoid - the blob would simply have strung the boot out at the other
+;      end of the heap.
+;
+; AX = 0 is mem_compact's "compact regardless": there is no pending claim to
+; size the decision against, and the whole point is to close a hole nobody has
+; asked for memory across yet.
+;
+; A kernel whose [spl_fseg] was never written never raised the base in the
+; first place, so [mem_floor] equals [mem_base], the store is a no-op and
+; mem_compact finds every claim already at its fill point.
+; -----------------------------------------------------------------------------
+mem_unblob_x:
+    push ax
+    call mem_floor_ax
+    mov [mem_base], ax
+    xor ax, ax
+    call mem_compact
+    pop ax
+    retf
+
+; -----------------------------------------------------------------------------
+; mem_floor_ax - the heap's lowest paragraph (module internal)
+; out: AX = HEAP_SEG, or one VGABUF rung below it on a machine with no VGA
+; clobbers: AX and the flags
+;
+; `.vgabuf` is the planar decoder's two buffers and nothing else, sitting in a
+; rung of their own at the TOP of the kernel - so on a machine with no VGA
+; they are never reserved and the heap simply starts under them. Nothing moves
+; and nothing is claimed: [mem_base] was always a runtime word and HEAP_SEG is
+; only what it is seeded with.
+;
+; It asks [vid_avail] AND NEVER [vid_mono] (SPEC.md 39.22): a machine that
+; boots mono can never acquire the VGA bit, there being no probe at 0xA000 -
+; but a VGA machine always has VID_A_CGA too and can be SWITCHED to mono, so
+; it may never give these back. That is also what makes the answer STABLE
+; across a boot, which is what lets mem_unblob ask it a second time.
+; vid_probe_avail runs before mem_init in kmain, which is what makes the bit
+; readable at all.
+; -----------------------------------------------------------------------------
+mem_floor_ax:
+    mov ax, HEAP_SEG
+%if VGABUF_PARA
+    test byte [vid_avail], VID_A_VGA
+    jnz .out
+    sub ax, VGABUF_PARA
+.out:
+%endif
     ret
 
 ; -----------------------------------------------------------------------------
@@ -324,9 +433,27 @@ mem_init_x:
 ; rather than bumping, which can refuse where a legal base exists (rare,
 ; conservative, never wrong memory).
 ; -----------------------------------------------------------------------------
+; --- ...AND THE TOP-DOWN DOORS (SPEC.md 50.3.2) ------------------------------
+; A claim the HARDWARE addresses can never move: the 8237 holds a sound ring's
+; page and offset in its own registers and a NIC's descriptors point at its
+; buffers. That is the property mem_claim_hi exists for - "a package region can
+; NEVER move, because its base IS its CS" - and 50.3's own warning is what a
+; driver's ring was doing in the data arena: "one long-lived data claim landing
+; mid-heap permanently splits the space a package can be loaded into".
+;
+; They were down there because OSAPI_MEM_CLAIM was the only door a driver had.
+; These two are the other one. Nothing else changes: the scan, the page bump
+; and the record are the same code, reached with mem_dir set.
+mem_claim_dma_hi_x:
+    push si
+    push di
+    mov di, 1                   ; ...and this one MEANS top-down, where the
+    jmp short mem_claim_dma_x.head  ; door below asks the tag
 mem_claim_dma_x:
     push si
     push di
+    xor di, di
+.head:
     push cx
     mov si, cx
     mov cl, 6
@@ -335,26 +462,34 @@ mem_claim_dma_x:
     jnc .set
     mov si, 0xFFFF              ; a head past 1MB: let the page test refuse it
 .set:                           ; rather than wrap into a plausible small one
-    xor di, di
-    jmp short mem_claim_x.go
+    jmp short mem_claim_x.go    ; DI is already this door's own answer, and
+                                ; there is no longer a TAG that can disagree
+                                ; with it: SPEC.md 50.6.1.1's defect was a
+                                ; purgeable claim reaching the scan without
+                                ; passing the direction test, and 50.6.1 has
+                                ; since deleted the test. A door that asks
+                                ; nothing cannot skip the asking
 mem_claim_hi_x:
     push si
     push di
     xor si, si
-    mov di, 1
-    jmp short mem_claim_x.go
+    mov di, 1                   ; ...and this one MEANS it: an explicit hi
+    jmp short mem_claim_x.go    ; claim is a caller's request, not a tag's
 mem_claim_x:
     push si
     push di
     xor si, si
-    xor di, di
-    cmp bh, MEM_PG_MIN          ; a purgeable tag places ITSELF (SPEC.md
-    jb .go                      ; 50.5.1): top down like a region, but under
-    cmp bh, MEM_PG_MAX          ; a ceiling that keeps it out of the region
-    ja .go                      ; arena. The tag is the request, so there is
-    inc di                      ; no third entry point to call by mistake -
-                                ; and the tag is now a RANGE, because the high
-                                ; byte carries the priority too (50.6.4)
+    xor di, di                  ; A PURGEABLE TAG IS AN ORDINARY DATA CLAIM
+                                ; (SPEC.md 50.6.1). It used to place itself
+                                ; top-down under a ceiling of its own, and
+                                ; what that bought was a cache the shed could
+                                ; not give back: the read-ahead is claimed at
+                                ; the A: mount, BEFORE any driver image
+                                ; exists, so the ceiling was [mem_top] and it
+                                ; took the roof - after which every region
+                                ; packed underneath it and shedding it opened
+                                ; an island above them that only another
+                                ; top-down claim could ever reach
 .go:
     cmp byte [mem_cp_busy], 0   ; INSIDE A COMPACTION - a relocation proc that
     jne .busy                   ; claimed (SPEC.md 66.3 rule 3 forbids it) -
@@ -414,18 +549,10 @@ mem_claim_1:
                                 ; DMA head silently dropped, or a region
                                 ; claim allocating from the wrong end
 
-    push ax                     ; THE CEILING the scan may not pass. It is
-    mov ax, [mem_top]           ; [mem_top] for everything except a purgeable
-    cmp bh, MEM_PG_MIN          ; claim, which stops below the lowest REGION
-    jb .ceilok                  ; so that it can never split the arena a
-    cmp bh, MEM_PG_MAX          ; package has to load into (SPEC.md 50.6.1)
-    ja .ceilok
-    call mem_pg_ceil
-.ceilok:
-    mov [mem_ceil], ax
-    pop ax
-
-    or ax, ax
+    or ax, ax                   ; (the ceiling the scan may not pass is
+                                ; [mem_top] for every claim there is now -
+                                ; SPEC.md 50.6.1 - so it is read where it is
+                                ; used instead of being staged here)
     jz .fail
     mov cl, 6
     shl ax, cl                  ; AX = paragraphs wanted
@@ -463,7 +590,7 @@ mem_claim_1:
     mov dx, [mem_base]          ; DX = candidate base
     jmp short .retry
 .hi:
-    mov dx, [mem_ceil]          ; the highest base that still fits
+    mov dx, [mem_top]           ; the highest base that still fits
     sub dx, ax
     jc .fail
     cmp dx, [mem_base]
@@ -492,7 +619,7 @@ mem_claim_1:
     mov cx, dx
     add cx, ax                  ; CX = candidate end
     jc .fail                    ; wrapped past 0xFFFF
-    cmp cx, [mem_ceil]
+    cmp cx, [mem_top]
     ja .fail
 
     mov si, mem_tab             ; overlap scan: CX is the candidate end and
@@ -549,78 +676,6 @@ mem_claim_1:
     pop si                      ; the same ones (pop touches no flag, and CF
     pop cx                      ; is this routine's answer)
     pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; mem_pg_ceil - the lowest REGION base, or [mem_top] when there is none
-; out: AX = the ceiling a purgeable claim may not pass; preserves everything
-;      else
-;
-; SPEC.md 50.6.1. A purgeable block placed among the regions is
-; indistinguishable from a region to the scan while it is live, so it splits
-; exactly the run a package needs - and shed-and-retry does not save it,
-; because that only fires on a REFUSAL and a region that merely fits WORSE has
-; been fragmented with nothing noticing. So purgeable is highest-fit inside
-; the DATA arena: the region arena keeps 50.3's property that everything in it
-; is a region, and the block still sits against the free middle, which is the
-; one run both arenas grow toward and the only one worth enlarging.
-;
-; AN INSTANCE SLOT IN MC_OWN IS NOT A REGION, and reading it as one made this
-; whole feature dead on the commonest desktop there is. 50.3's rule is that a
-; PACKAGE's region is owned by the instance slot and a PACKAGE's data claims by
-; its segment - it says nothing about a BUILT-IN, whose data claims are stamped
-; with its slot as well, and mem_free_rec forty lines below is where that is
-; written down ("a built-in's claims are stamped with its instance slot (the
-; Disk window's cache)"). So "below INST_MAX" also matches a Disk window's
-; 3KB listing cache (SPEC.md 22.1), which is a data claim placed BOTTOM UP and
-; therefore sits at the very floor of the heap. Measured, with README.TXT open
-; from a Disk window: the ceiling came back as that cache's base, 0x17C0
-; against a heap floor of 0x1680 - and the FAT window already filled every
-; paragraph between them, so every raise-cache claim was refused on a machine
-; with 505KB free and SPEC.md 11.96 never once fired.
-;
-; A region is what a package's image IS: I_SPTR of a KIND_PKG instance. That is
-; the test, and it is two compares on the few records that get that far.
-; -----------------------------------------------------------------------------
-mem_pg_ceil:
-    push bx
-    push cx
-    push si
-    push di
-    mov ax, [mem_top]
-    mov bx, mem_tab
-    mov cx, MEM_MAX
-.scan:
-    cmp word [ss:bx+MC_SEG], 0
-    je .next
-    cmp [ss:bx+MC_SEG], ax
-    jae .next                   ; at or above the lowest region found so far:
-                                ; it cannot lower the ceiling whatever it is
-    mov di, [ss:bx+MC_OWN]
-    cmp di, INST_MAX
-    jae .next                   ; a kernel tag, or a package's own segment -
-                                ; either way a data claim
-    mov si, di                  ; si = di*I_RECSZ, without CL: the loop counter
-    shl si, 1                   ; is in CX and the 8086 has no shl reg, imm
-    shl si, 1
-    shl si, 1
-    shl si, 1
-    shl si, 1
-    add si, inst_tab
-    test byte [si+I_KIND], KIND_PKG
-    jz .next                    ; a built-in stamps its DATA claims with its
-                                ; slot too - see the header
-    mov di, [ss:bx+MC_SEG]
-    cmp di, [si+I_SPTR]
-    jne .next                   ; ...and a package's region is the one claim
-    mov ax, di                  ; whose base is its I_SPTR
-.next:
-    add bx, MC_SIZE
-    loop .scan
-    pop di
-    pop si
-    pop cx
-    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -730,8 +785,12 @@ mem_shed_one:
     stc
 .out:
     pop di
-    pop dx
-    pop si
+    pop si                      ; SI BEFORE DX - the pair was crossed here, and
+    pop dx                      ; SI is mem_claim_x's PARAMETER (SPEC.md
+                                ; 50.6.4.1): the shed-and-retry restaged the
+                                ; caller's DX as [mem_dma], which is half of
+                                ; the very defect mem_claim_1's header
+                                ; describes, through a different door
     pop cx
     pop bx
     pop ax
@@ -1020,6 +1079,11 @@ mem_bcopy:
 ; and the failure it would buy is the worst one this tree can ship.
 ; -----------------------------------------------------------------------------
 mem_can_move:
+%ifdef NOCOMPACT
+    stc                         ; make HEAPCOMPACT=0: nothing can move on this
+    ret                         ; build, so mem_avail's plan must model the
+                                ; heap it really has (SPEC.md 66.8)
+%endif
     push ax
     push bx
     push di
@@ -1028,31 +1092,42 @@ mem_can_move:
     cmp word [ss:si+MC_DMA], 0
     jne .pin                    ; a bus master's, and unrelocatable in
                                 ; principle (see the header)
-    mov ax, [mem_pinseg]        ; ...and the block a DISK TRANSFER is reading
-    or ax, ax                   ; into, which the kernel is holding a pointer
-    jz .nopin                   ; into on its own stack (SPEC.md 66.3 rule 5)
-    cmp ax, [ss:si+MC_SEG]
-    jb .nopin
-    mov bx, [ss:si+MC_SEG]
-    add bx, [ss:si+MC_PARA]
-    cmp ax, bx
-    jb .pin                     ; the destination is inside this claim
-.nopin:
+    call mem_in_xfer            ; ...and the block a DISK TRANSFER is reading
+    jc .pin                     ; into, which the kernel is holding a pointer
+                                ; into on its own stack (SPEC.md 66.3 rule 5)
     mov bx, [ss:si+MC_OWN]
     cmp bh, MEM_PG_MIN
     jb .notpg
     cmp bh, MEM_PG_MAX
-    jbe .pin                    ; a PURGEABLE cache places itself top-down
-                                ; under the region ceiling (SPEC.md 50.6.1),
-                                ; so sliding it DOWN would put it in the one
-                                ; arena it is deliberately kept out of. It is
-                                ; also the one class that need not move: the
-                                ; shed already gives its room back
+    jbe .pin                    ; A PURGEABLE CACHE IS NEVER MOVED, AND NEVER
+                                ; NEEDS TO BE (SPEC.md 50.6.1). It is not that
+                                ; it could not be: it is that mem_claim's loop
+                                ; already reaches the same room by SHEDDING it
+                                ; one step later, and the shed is the cheaper
+                                ; primitive by every measure - a 63KB block
+                                ; with a 64KB page head cannot be packed
+                                ; tight, and its contents are disposable by
+                                ; definition (a re-claim calls dsk_rah_flush,
+                                ; so a cache never comes back warm from any
+                                ; path). A relocation here would copy 63KB to
+                                ; preserve nothing.
+                                ;
+                                ; This USED to cite the top-down placement as
+                                ; the reason, and the compactor's pin was then
+                                ; resting on an invariant the allocator was
+                                ; not delivering (50.6.1.1). The pin outlived
+                                ; its justification and was right anyway,
+                                ; which is worth one comment: a correct answer
+                                ; held up by a false premise is a defect that
+                                ; has not fired yet.
 .notpg:
     cmp bx, MEM_K_DRV
     je .pin                     ; a driver's image and an on-demand module's
-    cmp bx, MEM_K_MOD           ; are each a CS (SPEC.md 2.8/51.3), and a
-    je .pin                     ; base that is a CS can never move
+    cmp bx, MEM_K_MOD           ; are each a CS (SPEC.md 2.8/51.3), and a base
+    je .pin                     ; that is a CS can never move. The boot overlay
+                                ; was a third of these until SPEC.md 2.9.6 put
+                                ; it in stage 2's blob, where it is not a claim
+                                ; at all and there is nothing to pin
     cmp bx, INST_MAX
     jae .notslot
     call mem_is_region          ; an instance slot owns a package's REGION and
@@ -1082,10 +1157,12 @@ mem_can_move:
 ; out: CF = 1 it is a region (so: pinned), CF = 0 it is a data claim
 ; clobbers: nothing else (flags)
 ;
-; mem_pg_ceil's test, factored out so the two cannot drift: a region is the
-; one claim whose base IS the instance's I_SPTR, and only a KIND_PKG record
-; has one - a built-in stamps its DATA claims with its slot too, which is the
-; distinction that made SPEC.md 50.6.1's ceiling dead on arrival.
+; A region is the one claim whose base IS the instance's I_SPTR, and only a
+; KIND_PKG record has one - a built-in stamps its DATA claims with its slot too
+; (the Disk window's listing cache), which is the distinction that made SPEC.md
+; 50.6.1's purgeable ceiling dead on arrival before that ceiling was deleted
+; outright. This test OUTLIVED it: mem_can_move is the caller it still has, and
+; "a region can never move, because its base IS its CS" is the older rule.
 ; -----------------------------------------------------------------------------
 mem_is_region:
     push ax
@@ -1137,7 +1214,7 @@ mem_is_region:
 ; putting them behind one predicate is that they lift in one place.
 ; -----------------------------------------------------------------------------
 mem_busy_seg:
-    call KERNEL_SEG:cw_inst_seg_parked  ; CF = 0: no worker, or one that has
+    call KERNEL_SEG:inst_seg_parked     ; CF = 0: no worker, or one that has
     jnc .free                           ; PARKED at OSAPI_TASK_ALIVE (66.5).
                                         ; A segment matching no instance -
                                         ; a driver's image - answers CF = 1,
@@ -1151,6 +1228,97 @@ mem_busy_seg:
     ret
 .free:
     clc
+    ret
+
+; -----------------------------------------------------------------------------
+; mem_in_xfer - is a disk transfer reading INTO the claim at SI? (internal)
+; in:  SI = record pointer
+; out: CF = 1 the destination is inside it, CF = 0 it is not
+; clobbers: nothing else (flags)
+;
+; SPEC.md 66.3 rule 5. [mem_pinseg] is dsk_xfer's, set and cleared inside its
+; own [sch_lock] hold, and 0 is the value it spends every path back to.
+;
+; Factored because it now has TWO callers that must not drift: mem_can_move,
+; which refuses to relocate such a block, and mem_cp_drop, which refuses to
+; dissolve one. The second is the newer and the sharper - a relocation would
+; at least leave the bytes somewhere, where a free hands them to whoever asks
+; next while the controller is still writing.
+; -----------------------------------------------------------------------------
+mem_in_xfer:
+    push ax
+    push bx
+    mov ax, [mem_pinseg]
+    or ax, ax
+    jz .no
+    cmp ax, [ss:si+MC_SEG]
+    jb .no
+    mov bx, [ss:si+MC_SEG]
+    add bx, [ss:si+MC_PARA]
+    cmp ax, bx
+    jae .no
+    pop bx
+    pop ax
+    stc
+    ret
+.no:
+    pop bx
+    pop ax
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; mem_cp_drop - may this pass DISSOLVE the claim at SI? (module internal)
+; in:  SI = a record mem_can_move has just PINNED
+; out: CF = 0 it is a cache and this pass may drop it, CF = 1 it is a barrier
+; clobbers: nothing else (flags)
+;
+; SPEC.md 66.10. The compactor's third outcome, and the one that costs nothing
+; to execute: a purgeable block is never relocated - 63KB with a 64KB page
+; head cannot be packed tight, and a re-claim calls dsk_rah_flush, so copying
+; it would preserve nothing - but it can be made to STOP BEING A BARRIER,
+; which is the whole of what it was doing wrong.
+;
+; [mem_pg_rank] IS THE "ONLY UNDER PRESSURE" RULE, and it is a parameter that
+; already existed: mem_compact takes the size of the pending claim, and 0
+; means "compact regardless, nobody is waiting". mem_unblob is the one caller
+; that passes 0 - the boot giving the loader's floor back - and it must not
+; drop, because the A: mount claimed this cache four routines ago and the
+; desktop would then run with no read-ahead until the next mount.
+; -----------------------------------------------------------------------------
+mem_cp_drop:
+    cmp byte [mem_pg_rank], 0
+    je .no
+    call mem_in_xfer            ; A DROP IS NOT A WEAKER PIN THAN A MOVE HERE.
+    jc .no                      ; The walk reaches this AFTER mem_can_move has
+                                ; already refused, so every other reason that
+                                ; routine pins is being deliberately overruled
+                                ; - which is right for all of them but one.
+                                ; MC_DMA is an address property and we are not
+                                ; changing the address; a region or a driver
+                                ; segment is never purgeable. An IN-FLIGHT
+                                ; TRANSFER is different in kind: dsk_rah_fill
+                                ; reads INTO this very cache, so freeing it
+                                ; there would hand a live int 13h destination
+                                ; to the next claimant. No path reaches here
+                                ; from inside dsk_xfer today - mem_claim is
+                                ; the only way in and a transfer does not
+                                ; claim - and "no caller does that" is not the
+                                ; same statement as "this cannot happen",
+                                ; which is mem_can_move's own rule
+    push ax
+    mov al, [ss:si+MC_OWN+1]    ; mem_shed_one's two compares, and they have to
+    cmp al, MEM_PG_MIN          ; be the same two: is it a cache at all, and is
+    jb .nopop                   ; it strictly CHEAPER than the claimant. The
+    cmp al, [mem_pg_rank]       ; second subsumes the range's top - 0xFF is
+    jae .nopop                  ; never below a level, and neither is an
+    pop ax                      ; instance slot
+    clc
+    ret
+.nopop:
+    pop ax
+.no:
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1256,6 +1424,16 @@ mem_cp_plan:
     add bx, [ss:si+MC_PARA]     ; the fill point advances by its size
     jmp short .loop
 .pinned:
+    call mem_cp_drop            ; ...unless it is a cache this pass may
+    jc .barrier                 ; dissolve (SPEC.md 66.10): the fill point does
+                                ; NOT advance and no barrier is recorded, so
+                                ; the plan counts exactly the room the run
+                                ; below is about to produce. The KEY has
+                                ; already stepped past it, so it is not
+                                ; revisited
+    inc dx
+    jmp short .loop
+.barrier:
     mov ax, [ss:si+MC_SEG]      ; the gap under a pinned claim is a hole that
     sub ax, bx                  ; compaction cannot close - it is a barrier,
     jbe .nogap                  ; and claims above it still pack against it
@@ -1334,6 +1512,15 @@ mem_cp_run:
     add bx, [ss:si+MC_PARA]
     jmp short .loop
 .pinned:
+    call mem_cp_drop            ; the plan's step, for real (SPEC.md 66.10).
+    jc .barrier                 ; The owner is told BEFORE the record goes -
+    push bx                     ; mem_shed_one's order, for its reason: there
+    mov bx, [ss:si+MC_OWN]      ; is no instant in which a kernel word names
+    call mem_pg_forget          ; memory somebody else already holds. BX is
+    pop bx                      ; the FILL POINT and does not move: that is
+    mov word [ss:si+MC_SEG], 0  ; what makes this walk the plan's, step for
+    jmp short .loop             ; step
+.barrier:
     mov bx, [ss:si+MC_SEG]
     add bx, [ss:si+MC_PARA]
     jmp short .loop
@@ -1429,7 +1616,11 @@ mem_reloc_call:
 
 ; -----------------------------------------------------------------------------
 ; mem_compact - close the data arena's holes (SPEC.md 66.4)
-; in:  AX = the KB the pending claim needs (0 = compact whatever the size)
+; in:  AX = the KB the pending claim needs (0 = compact whatever the size, and
+;           DISSOLVE NOTHING - see mem_cp_drop and SPEC.md 66.10.1)
+;      BX = the owner it is being compacted FOR, read only when AX is non-zero:
+;           its high byte is the rank a cache has to be cheaper than before
+;           this pass may drop it (SPEC.md 50.6.4)
 ; out: CF = 0 something moved, so the map has changed and the claim is worth
 ;      retrying; CF = 1 nothing moved and nothing was copied
 ; clobbers: nothing else (flags)
@@ -1469,6 +1660,17 @@ mem_compact:
     shl ax, cl                  ; KB -> paragraphs; 0 stays 0
     jc .none                    ; more than a megabyte: nothing to do here
     mov di, ax                  ; DI = what the caller needs
+    xor al, al                  ; ...and the rank a drop is judged against
+    or di, di                   ; (SPEC.md 66.10.1): ZERO when nobody is
+    jz .rank                    ; waiting, so mem_unblob's "compact regardless"
+    mov al, MEM_LVL_TOP         ; dissolves nothing. Otherwise the CLAIMANT's
+    cmp bh, MEM_PG_MIN          ; own level, mem_shed_one's derivation exactly -
+    jb .rank                    ; a cache may only take a cheaper cache, and
+    cmp bh, MEM_PG_MAX          ; putting that rule in one door and not the
+    ja .rank                    ; other is how SPEC.md 50.6.4 gets undone
+    mov al, bh
+.rank:
+    mov [mem_pg_rank], al
 
     inc byte [mem_cp_busy]
     inc byte [sch_lock]         ; pause task switching across the PLAN as well
@@ -1554,7 +1756,7 @@ mem_cp_unpark:
     cmp byte [mem_parked], 0
     je .out
     mov byte [mem_parked], 0
-    call KERNEL_SEG:cw_inst_park_end
+    call KERNEL_SEG:inst_park_end
 .out:
     popf
     ret
@@ -1841,7 +2043,7 @@ mem_free_rec_x:
     pop cx
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; mem_avail - how much heap is there, and how much of it in one piece?
@@ -1850,21 +2052,36 @@ mem_free_rec_x:
 ; out:      AX = largest free run in KB, BX = total free KB
 ; clobbers: nothing else (flags)
 ;
-; The query a package sizes itself from (SPEC.md 50.3). Walking holes
-; without sorting: for each candidate base (the heap base, then every
-; claim's end), measure the distance to the nearest claim that starts above
-; it. O(MEM_MAX^2) with MEM_MAX = 32 - around a thousand cycles, called at
-; app startup.
+; The query a package sizes itself from (SPEC.md 50.3), and the whole of its
+; contract is one sentence: IT ANSWERS THE QUESTION mem_claim ANSWERS. Every
+; consumer sizes itself DOWN from this number - Paint's canvas, Tracker's
+; module, ArtfulType's document, the recorder's tiers, bb_canfit's greying -
+; so a caller that CHECKS FIRST AND BAILS never discovers a claim it would
+; have been granted. Under-reporting here is not a safe error; it is the only
+; direction in which the error is invisible.
 ;
-; **PURGEABLE claims are counted as FREE, in both answers** (SPEC.md 50.6.3).
-; They were counted as occupied, which made this routine answer a different
-; question from the one mem_claim answers: a cache yields to any claim, so it
-; is not in the way of one. With a 63KB directory read-ahead window resident
-; that is not a rounding error - measured on a 256KB machine, this said 21.5KB
-; while a caller went on to fund an 18KB claim AND a 16KB one out of the same
-; heap. Every consumer sizes itself DOWN from this number (Paint's canvas,
-; Tracker's module, ArtfulType's document, the recorder's tiers), so
-; under-reporting is a feature silently lost, not a safe error.
+; **PURGEABLE claims are counted as FREE** (SPEC.md 50.6.3). They were counted
+; as occupied, on the reasoning that a conservative direction is a safe one -
+; and that is the mistake above, in its first half. Measured on a 256KB
+; machine, this said 21.5KB while a caller went on to fund an 18KB claim AND a
+; 16KB one out of the same heap.
+;
+; **AND THE LARGEST RUN IS mem_cp_plan's, BECAUSE mem_claim COMPACTS** (SPEC.md
+; 66.10.3). That is the second half, and it went unfixed for a release: the
+; refusal path is COMPACT, then shed, then retry - so the run a claimant can
+; have is the one compaction would leave, not the one lying about now. This
+; routine used to walk the holes itself, measuring each candidate base to the
+; nearest claim above it, and a movable 3KB claim sitting above a cache was
+; enough to make it answer 373.0K where the allocator would hand out 442.5K.
+;
+; So it does not have a scan of its own any more. mem_cp_plan IS the model of
+; what mem_claim will do, it is already written, and it is already the routine
+; the compactor decides with - which makes the two the same arithmetic rather
+; than two walks with matching comments. It costs no more: the walk it
+; replaced was O(MEM_MAX^2) too.
+;
+; The TOTAL is still a walk of its own, and needs no compaction: packing
+; claims together does not change how many bytes they occupy.
 ; -----------------------------------------------------------------------------
 mem_avail_x:
     mov al, MEM_LVL_TOP         ; an ORDINARY claim's rank: every cache counts
@@ -1877,26 +2094,16 @@ mem_avail_lvl_x:                  ; as free, because mem_claim sheds them all.
     push di
     pushf
     cli
-    mov [mem_av_pg], al         ; inside the window, with the other three
-    mov dx, [mem_base]          ; candidate 0: the bottom of the heap
-    call mem_run
-    mov ax, cx                  ; AX = largest run, paragraphs
-    mov di, mem_tab             ; then every claim's end
-.cand:
-    cmp word [ss:di+MC_SEG], 0
-    je .cnext
-    mov dx, [ss:di+MC_SEG]
-    add dx, [ss:di+MC_PARA]
-    cmp dx, [mem_top]
-    jae .cnext
-    call mem_run                ; CX = free paragraphs from DX up
-    cmp cx, ax
-    jbe .cnext
-    mov ax, cx                  ; a new largest run
-.cnext:
-    add di, MC_SIZE
-    cmp di, mem_tab + MEM_MAX*MC_SIZE
-    jb .cand
+    cmp byte [mem_cp_busy], 0   ; INSIDE A COMPACTION, which means a relocation
+    jne .nested                 ; proc is asking (SPEC.md 66.3 rule 3 forbids
+                                ; it claiming, and this is the same rule): the
+                                ; walk below would reset [mem_cp_key] and
+                                ; [mem_wpin] under the walk driving it. Zero
+                                ; is the honest answer to a holder that has no
+                                ; business sizing anything mid-move
+    mov [mem_pg_rank], al       ; inside the window, with the other three
+    call mem_cp_plan            ; CX = the largest run compaction would leave,
+    mov ax, cx                  ; caches at or below AL dissolved with it
 
     mov si, mem_tab             ; total free = heap - sum of claims, and a
     mov bx, [mem_top]           ; PURGEABLE claim is only one of them when it
@@ -1908,7 +2115,7 @@ mem_avail_lvl_x:                  ; as free, because mem_claim sheds them all.
     mov dl, [ss:si+MC_OWN+1]
     cmp dl, MEM_PG_MIN
     jb .tsolid
-    cmp dl, [mem_av_pg]
+    cmp dl, [mem_pg_rank]
     jb .tnext
 .tsolid:
     sub bx, [ss:si+MC_PARA]
@@ -1920,65 +2127,17 @@ mem_avail_lvl_x:                  ; as free, because mem_claim sheds them all.
     mov cl, 6                   ; paragraphs -> KB, rounded DOWN: a claim of
     shr ax, cl                  ; the answer must always fit
     shr bx, cl
+.out:
     pop di
     pop si
     pop dx
     pop cx
     ret
-
-; -----------------------------------------------------------------------------
-; mem_run - free paragraphs starting at a candidate base (module-internal)
-; in:  DX = candidate base segment
-; out: CX = free paragraphs from DX up to the next claim (or mem_top)
-; clobbers: nothing else (flags)
-;
-; A PURGEABLE claim does not block (SPEC.md 50.6.3). This is mem_avail's
-; helper and nobody else's - the allocator's own scan is mem_runfree - so
-; "free" here means "free to a caller who is willing to shed", and every
-; caller is: mem_claim_1 has exactly one caller, mem_claim's unconditional
-; shed-and-retry loop. Counting a cache as occupied made mem_avail answer a
-; different question from the one mem_claim answers.
-; -----------------------------------------------------------------------------
-mem_run:
-    push ax
-    push si
-    push di
-    mov cx, [mem_top]           ; CX = the ceiling, lowered by every claim
-    mov si, mem_tab             ; that starts at or above DX
-    mov di, MEM_MAX
-.scan:
-    cmp word [ss:si+MC_SEG], 0
-    je .next
-    mov al, [ss:si+MC_OWN+1]    ; a cache CHEAPER than the caller is not in
-    cmp al, MEM_PG_MIN          ; the way of it - it would be shed (50.6.4).
-    jb .solid                   ; Two compares, and the second subsumes the
-    cmp al, [mem_av_pg]         ; range's top: 0xFF is never below a level
-    jb .next                    ; and neither is an instance slot
-.solid:
-    mov ax, [ss:si+MC_SEG]
-    cmp ax, dx
-    jb .below
-    cmp ax, cx
-    jae .next
-    mov cx, ax                  ; nearer ceiling
-    jmp short .next
-.below:                         ; a claim that starts below DX still blocks
-    add ax, [ss:si+MC_PARA]        ; us if it ENDS above it - only possible when
-    cmp ax, dx                  ; DX is another claim's end inside it, which
-    jbe .next                   ; cannot happen; the guard is free
-    mov cx, dx
-.next:
-    add si, MC_SIZE
-    dec di
-    jnz .scan
-    sub cx, dx                  ; CX = the run
-    jnc .out
-    xor cx, cx
-.out:
-    pop di
-    pop si
-    pop ax
-    ret
+.nested:
+    popf
+    xor ax, ax
+    xor bx, bx
+    jmp short .out
 
 ; -----------------------------------------------------------------------------
 ; mem_claim_get - read one claim record by index (SPEC.md 50.6)
@@ -2049,7 +2208,7 @@ mem_owned_kb_x:
     shr ax, cl
     pop si
     pop cx
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; mem_claimed_kb / mem_kernel_kb - the Task Manager's two heap terms
@@ -2191,6 +2350,25 @@ osapi_mem_claim_x:
 ; through the same slot table as everything else: mem_own accepts a driver's
 ; image segment as an owner exactly as it accepts a package's region.
 ; -----------------------------------------------------------------------------
+; ---- osapi_mem_claim_hi / _dma_hi - the same, from the TOP (SPEC.md 50.3.2)
+; What a driver's long-lived, hardware-addressed buffer asks for. A ring the
+; 8237 or a NIC holds the address of is exactly as unmovable as a package's
+; region, so it belongs at the same end - and out of the arena the compactor
+; and every data claim share.
+osapi_mem_claim_hi_x:
+    push cx
+    xor cx, cx                  ; no head: no 64KB page constraint
+    call osapi_mem_claim_dma_hi_x
+    pop cx                      ; pop leaves CF alone, and so does ret
+    ret
+
+osapi_mem_claim_dma_hi_x:
+    push bx
+    call mem_own
+    jc osapi_mem_claim_dma_x.fail
+    call mem_claim_dma_hi_x
+    jmp short osapi_mem_claim_dma_x.out
+
 osapi_mem_claim_dma_x:
     push bx
     call mem_own                ; BX = owner word = the calling segment
@@ -2241,7 +2419,7 @@ osapi_mem_regrow_x:
     call mem_regrow
 .out:
     pop bx                      ; pop leaves CF and DX alone
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; osapi_mem_movable - in: DX = the claim, AX = your relocation proc (0 pins it
@@ -2262,7 +2440,7 @@ osapi_mem_movable_x:
     call mem_movable_x
 .out:
     pop bx
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; osapi_mem_avail - in: nothing; out: AX = largest free KB, BX = total free KB
@@ -2298,7 +2476,7 @@ osapi_cm_alloc_x:
     mov ax, dx                  ; main's contract: AX = the base segment
     pop dx
     pop cx
-    ret
+    retf
 .refuse:
     xor ax, ax                  ; main's failure codes: 0 = no arena at all,
     mov dx, [mem_top]           ; 1 = no record, 2 = no run. The heap does
@@ -2309,14 +2487,14 @@ osapi_cm_alloc_x:
     pop dx
     pop cx
     stc
-    ret
+    retf
 
 osapi_cm_free_x:
     push dx                     ; in: AX = the base segment; out: CF, with
     mov dx, ax                  ; AX preserved - main's contract, so the
     call osapi_mem_free_x         ; heap's DX-in shape is hidden here
     pop dx
-    ret
+    retf
 
 osapi_cm_caps_x:
     push cx
@@ -2340,7 +2518,7 @@ osapi_cm_caps_x:
     mov bh, ch                  ; the caller's BH back (BL <= MEM_MAX)
     pop si
     pop cx
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; mem_own - the calling package's owner word (module-internal)
@@ -2548,6 +2726,15 @@ osapi_claim_snapshot_x:
 ; least interesting figures absorb it: SK_IMG is the whole span less the
 ; buffers, and SK_DSK is the buffers less the FAT window and the stacks -
 ; which is exactly what "whatever else is in .lowbss" already meant.
+;
+; That is also where SPEC.md 39.22's `.vgabuf` lands, and it lands there by
+; construction rather than by a decision anybody has to remember: those 848
+; bytes are inside SK_KERN's span and outside KBUF_KB, so the residual takes
+; them. It moves a kilobyte from SK_DSK to SK_IMG against the build before the
+; rung existed - the buffers used to be .lowbss and so used to be counted as
+; "the rest of .lowbss" - and neither row was ever the honest name for a plane
+; buffer. Adding a row of its own would change a published block that a
+; package reads (SPEC.md 28), for a figure nobody can act on.
 ; =============================================================================
 SK_STK_KB  equ ((MAX_TASKS-1) * SCH_STACK + 1023) / 1024
 SK_STK0_KB equ (STK0_SIZE + 1023) / 1024
@@ -2557,9 +2744,27 @@ osapi_sys_kb_x:
     push ax
     push bx
     push di
-    mov word [es:di+SK_KERN], KERN_KB
+    mov ax, KERN_KB             ; ...and on a machine with NO VGA the kernel is
+%if VGABUF_PARA                 ; a KB smaller, because `.vgabuf` was never
+                                ; reserved (SPEC.md 39.22). Reported and not
+                                ; hidden: the free figure comes out right by
+                                ; construction - mem_avail is
+                                ; [mem_top] - [mem_base] - claims and the
+                                ; floor already moved - but the SYSTEM row is
+                                ; a build constant, and left alone it would
+                                ; bill a mono machine for a buffer it does not
+                                ; have. That is exactly the misreporting a
+                                ; heap claim was rejected for.
+    test byte [vid_avail], VID_A_VGA
+    jnz .kern
+    sub ax, (VGABUF_PARA * 16 + 1023) / 1024
+.kern:
+%endif
+    mov [es:di+SK_KERN], ax
     mov word [es:di+SK_BUF],  KBUF_KB
-    mov word [es:di+SK_IMG],  KERN_KB - KBUF_KB
+    sub ax, KBUF_KB
+    mov [es:di+SK_IMG],  ax     ; ...and the IMAGE row follows it, or the three
+                                ; would stop summing
     mov word [es:di+SK_FAT],  SK_FAT_KB
     mov word [es:di+SK_STK],  SK_STK_KB
     mov word [es:di+SK_STK0], SK_STK0_KB
@@ -2587,7 +2792,7 @@ osapi_sys_kb_x:
     pop di
     pop bx
     pop ax
-    ret
+    retf
 
 ; =============================================================================
 ; Far entries (SPEC.md 2.6): the resident thunks in kernel.asm far-call these,
@@ -2602,31 +2807,21 @@ mmf_mem_claim:            call mem_claim_x
                       retf
 mmf_mem_claim_dma:        call mem_claim_dma_x
                       retf
+mmf_osapi_mem_claim_hi:   call osapi_mem_claim_hi_x
+                          retf
+mmf_osapi_mem_claim_dma_hi: call osapi_mem_claim_dma_hi_x
+                          retf
 mmf_mem_claim_hi:         call mem_claim_hi_x
                       retf
 mmf_mem_free:             call mem_free_x
                       retf
 mmf_mem_free_owner:       call mem_free_owner_x
                       retf
-mmf_mem_free_rec:         call mem_free_rec_x
-                      retf
-mmf_mem_init:             call mem_init_x
-                      retf
 mmf_mem_movable:          call mem_movable_x
-                      retf
-mmf_osapi_mem_movable:    call osapi_mem_movable_x
-                      retf
-mmf_mem_owned_kb:         call mem_owned_kb_x
                       retf
 mmf_mem_owner_of:         call mem_owner_of_x
                       retf
 mmf_osapi_claim_snapshot: call osapi_claim_snapshot_x
-                      retf
-mmf_osapi_cm_alloc:       call osapi_cm_alloc_x
-                      retf
-mmf_osapi_cm_caps:        call osapi_cm_caps_x
-                      retf
-mmf_osapi_cm_free:        call osapi_cm_free_x
                       retf
 mmf_osapi_mem_avail:      call osapi_mem_avail_x
                       retf
@@ -2635,10 +2830,6 @@ mmf_osapi_mem_claim:      call osapi_mem_claim_x
 mmf_osapi_mem_claim_dma:  call osapi_mem_claim_dma_x
                       retf
 mmf_osapi_mem_free:       call osapi_mem_free_x
-                      retf
-mmf_osapi_mem_regrow:     call osapi_mem_regrow_x
-                      retf
-mmf_osapi_sys_kb:         call osapi_sys_kb_x
                       retf
 
 
@@ -2659,10 +2850,6 @@ mem_fptr: resw 2                  ; mem_reloc_call's staged far pointer. HERE
 section .bss
 
 
-mem_ceil: resw 1                  ; the highest paragraph the scan may reach:
-                                  ; [mem_top], or the lowest region base for a
-                                  ; purgeable claim (SPEC.md 50.6.1). Staged
-                                  ; inside the cli window with the other two
 mem_dir:  resw 1                  ; 0 = mem_claim (bottom up), 1 = mem_claim_hi
                                   ; (top down, a package's region). A word so
                                   ; the entries can stage it in a register and
@@ -2673,13 +2860,9 @@ mem_dma:  resw 1                  ; ...and mem_claim_dma's head, in paragraphs,
                                   ; for the same reason: 0 = no page constraint
 mem_base: resw 1                  ; first heap paragraph = HEAP_SEG
 mem_skip:   resw 1              ; mem_runfree: a record to ignore, 0 = none
-mem_av_pg:  resb 1              ; mem_avail's RANK: a purgeable claim below it
-                                ; counts as free, because a claim at that rank
-                                ; would shed it (SPEC.md 50.6.4). Staged
-                                ; inside mem_avail's own cli window, like the
-                                ; three above, so it is never a parameter
-                                ; channel another task can overwrite in the gap
-mem_av_pad: resb 1              ; ...and a byte to keep the words aligned
+mem_av_pad: resb 2              ; ...and two bytes to keep the words aligned
+                                ; (one of them was [mem_av_pg], which is
+                                ; [mem_pg_rank] below now - see its header)
 mem_cp_busy: resb 1             ; the compactor is running (SPEC.md 66.4): a
                                 ; relocation proc that claims - which 66.3
                                 ; rule 3 forbids - would otherwise re-enter
@@ -2690,7 +2873,28 @@ mem_wpin:    resb 1             ; the last plan pinned something ONLY because a
                                 ; worth asking for (SPEC.md 66.5)
 mem_parked:  resb 1             ; ...and this pass has asked, so it owes the
                                 ; withdrawal on every path out
-mem_cp_pad:  resb 1             ; ...and a byte to keep the word below aligned
+mem_pg_rank: resb 1             ; THE RANK AT WHICH A PURGEABLE CLAIM COUNTS AS
+                                ; TAKEABLE (SPEC.md 50.6.4): a cache is free
+                                ; to this asker when its own level is >=
+                                ; MEM_PG_MIN and strictly BELOW this byte.
+                                ; 0 = nothing is takeable, which is what
+                                ; mem_compact stores when no claim is waiting
+                                ; (66.10.1).
+                                ;
+                                ; ONE byte for what were two: mem_avail staged
+                                ; this as [mem_av_pg] to answer "how much may
+                                ; I have", and the compactor needs the same
+                                ; number to answer "may I dissolve this" -
+                                ; asking it twice under two names is how the
+                                ; two answers drift apart. Staged inside the
+                                ; asker's own cli window, never a parameter
+                                ; channel another task can overwrite in the
+                                ; gap, and mem_avail refuses outright while
+                                ; [mem_cp_busy] so a walk cannot be re-entered
+                                ; and have this changed underneath it.
+                                ; It spends the byte that used to sit here as
+                                ; alignment padding, so the words below are
+                                ; where they were
 mem_pinseg:  resw 1             ; a segment a disk transfer is reading into, so
                                 ; the claim holding it may not move under the
                                 ; kernel's own pointer (SPEC.md 66.3 rule 5).

@@ -1439,7 +1439,7 @@ pn_cchar:                           ; AL=char CX=x DX=y (color set)
     push dx
     add cx, [pn_ox]
     add dx, [pn_oy]
-    call OSAPI_FONT_CHAR
+    call OSAPI_FONT_CHAR_XPARENT
     pop dx
     pop cx
     ret
@@ -1449,7 +1449,7 @@ pn_cstr:                            ; SI=string CX=x DX=y (color set)
     push dx
     add cx, [pn_ox]
     add dx, [pn_oy]
-    call OSAPI_FONT_STR
+    call OSAPI_FONT_STR_XPARENT
     pop dx
     pop cx
     ret

@@ -1783,6 +1783,9 @@ kbm_move:
     call mou_clamp
     mov [mouse_x], ax
     mov [mouse_y], bx
+    mov byte [cur_shchk], 1     ; THE POINTER MOVED (SPEC.md 7.2.1.1)
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
+    call sch_wake_ui            ; ...and WAKE the UI task (SPEC.md 8.1.2.2)
 .paint:
     call kbm_paint
     pop dx
@@ -1992,6 +1995,16 @@ kbm_isr:
     push ds
     mov ax, KERNEL_SEG
     mov ds, ax
+    call sch_wake_ui            ; A KEYSTROKE WAKES THE UI TASK (SPEC.md
+                                ; 8.1.2.2). Here at the head and not after the
+                                ; chain below, because the chain is a `jmp far`
+                                ; and never comes back - and it is safe here,
+                                ; because the BIOS handler runs inside THIS
+                                ; interrupt and stores the key before any task
+                                ; runs again. int 16h is polled once a pass and
+                                ; a blocked ui_task has no other reason to
+                                ; take one; without this a keystroke waits for
+                                ; the tick
     call kbd_ovflow             ; SPEC.md 9.8, and AHEAD of every gate below:
                                 ; a BIOS about to find its buffer full is a
                                 ; nested beep and a dead machine, and that is
@@ -2281,6 +2294,7 @@ kbd_ovflow:
                                 ; has not (SPEC.md 9.8)
     inc byte [kbd_ovn]
     mov byte [kbd_ovb], 1       ; THE ISR ONLY EVER SETS A BYTE: snd_beep takes
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
                                 ; a critical section and may reach a loaded
                                 ; driver, and stack inside a nested keyboard
                                 ; interrupt is the one thing this routine
@@ -2742,6 +2756,12 @@ mou_apply:
     call mou_clamp              ; ...and CX is untouched by it, which the
     mov [mouse_x], ax           ; button decode below relies on
     mov [mouse_y], bx
+    mov byte [cur_shchk], 1     ; THE POINTER MOVED, so the window under it
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
+    call sch_wake_ui            ; ...and WAKE the UI task (SPEC.md 8.1.2.2)
+                                ; may have changed (SPEC.md 7.2.1.1). One byte
+                                ; in the report path is what lets
+                                ; cur_shape_pass be one compare, not three
 %ifdef CURFIX
     mov ax, [ticks]             ; THE HAND IS MOVING (SPEC.md 7.1.4.3), which
     mov [cur_mvt], ax           ; is what decides whether the deferred hide is
@@ -2798,6 +2818,21 @@ mou_apply:
     ; --- cursor: draw only if the lock is free AND cur_level >= 0 (SPEC 7) ---
     cmp byte [gfx_lock_flag], 0
     jne .dirty
+    cmp byte [fpg_on], 0        ; ...OR AN UNLOCKED PAINTER IS UP (SPEC.md
+                                ; 12.8.4). The progress widget is the one
+                                ; painter in the machine that draws with the
+                                ; lock FREE, and free is the one state this ISR
+                                ; draws in - so without this compare a fill and
+                                ; IRQ4 share vga_rect_setup's module scratch,
+                                ; the Graphics Controller's state and the glass
+                                ; itself, and what that leaves behind is an
+                                ; arrow written into somebody's window content
+                                ; for good (docs/FIELD-NOTES.md 34)
+%ifdef GFXAUDIT
+    jne .fpgd                   ; ...counted under the audit knob; the two arms
+%else                           ; are otherwise the same instruction
+    jne .dirty
+%endif
     mov al, [cur_level]
     or  al, al
     js .dirty
@@ -2809,10 +2844,27 @@ mou_apply:
     cmp bx, [cur_drawn_y]
     je .out
 .redraw:
+%ifdef GFXAUDIT
+    inc word [gfx_aud_mv]       ; the control: how many draws there were AT ALL
+    cmp byte [fpg_on], 0        ; **THE GATE** (SPEC.md 12.8.4): a draw here
+    je .nogate                  ; with the widget up is the defect itself -
+    inc word [gfx_aud_gate]     ; unreachable on a kernel that has the compare
+.nogate:                        ; above, and one per packet on one that does not
+    cmp byte [gfx_aud_dep], 0   ; ...and the COLLISION: a rect primitive in
+    je .norace                  ; flight in the task we interrupted, which is
+    inc word [gfx_aud_race]     ; the same defect caught in the act rather than
+.norace:                        ; at the door
+%endif
     call cur_move               ; SPEC.md 7.1.2: erase-old and draw-new as one
     mov byte [cur_dirty], 0
     ret
 
+%ifdef GFXAUDIT
+.fpgd:                          ; the deferral the gate above bought, counted -
+    inc word [gfx_aud_def]      ; the control for [gfx_aud_gate] being 0, which
+                                ; a session that never armed the widget would
+                                ; also manage
+%endif
 .dirty:
     mov byte [cur_dirty], 1     ; cursor_show catches up later
 .out:
@@ -2831,6 +2883,33 @@ mou_eoi:
     pop ax
     pop bx
     iret
+
+%ifdef GFXAUDIT
+; cur_logput - one ring entry: the tag, the refcount, and where the pixels are
+; in:  AL = tag;  clobbers: AX, SI (the macro banks them)
+cur_logput:
+    pushf
+    mov si, [ss:cur_log_i]
+    cmp si, CURLOG_N*CURLOG_SZ
+    jae .out                    ; **IT STOPS WHEN FULL** rather than wrapping,
+                                ; and the harness re-arms it by storing 0 in
+                                ; [cur_log_i]: the question is always "what
+                                ; happened NEXT", and a ring answers "what
+                                ; happened last", which on an idle desktop is
+                                ; the clock
+    mov [ss:cur_log + si], al
+    mov al, [cur_level]
+    mov [ss:cur_log + si + 1], al
+    mov ax, [cur_drawn_x]
+    mov [ss:cur_log + si + 2], ax
+    mov ax, [cur_drawn_y]
+    mov [ss:cur_log + si + 4], ax
+    add si, CURLOG_SZ
+    mov [ss:cur_log_i], si
+.out:
+    popf
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; cursor_show - increment cur_level; on the -1 -> 0 transition, save under and
@@ -2865,6 +2944,7 @@ cursor_show:
     pop ax
 %endif
     mov byte [cur_dirty], 0
+    CURLOG 'S'                  ; DRAWN, at the position just stored
     call cur_put
 .done:
     popf
@@ -2899,6 +2979,7 @@ cursor_hide:
     dec byte [cur_level]
     cmp byte [cur_level], -1
     jne .done                   ; only the 0 -> -1 edge erases
+    CURLOG 'H'                  ; ERASED, from where the pixels are
     call cur_get
 .done:
     popf
@@ -3525,22 +3606,25 @@ cur_shape_set:
 ; standing still while the window under it is raised, hidden, closed or
 ; dragged out from under it.
 cur_shape_pass:
+    ; THE "NOTHING MOVED" TEST IS ABOVE THE FRAME, and that is the whole of
+    ; SPEC.md 7.2.2. It used to sit below four pushes, so the pass that has
+    ; nothing to do - which is nearly every pass - paid 108 cycles of banking
+    ; to reach three compares. The UI ladder calls this 671 times a second on
+    ; an idle desktop: 300 cycles a pass, 4.2% of the machine, to answer no.
+    ;
+    ; One register is enough to ask, so one is what the fast path banks.
+    cmp byte [cur_shchk], 0
+    je .quiet                   ; ONE BYTE, and the UI ladder asks it too, so
+                                ; on a quiet pass this routine is not even
+                                ; called (SPEC.md 7.2.1.1)
     push ax
     push bx
     push cx
     push dx
     mov ax, [mouse_x]
     mov bx, [mouse_y]
-    cmp byte [cur_shchk], 0
-    jne .look
-    cmp ax, [cur_shx]
-    jne .look
-    cmp bx, [cur_shy]
-    je .out
 .look:
     mov byte [cur_shchk], 0
-    mov [cur_shx], ax
-    mov [cur_shy], bx
     mov cx, ax
     mov dx, bx
     call wm_hit                 ; BX = the topmost visible window over the
@@ -3584,6 +3668,7 @@ cur_shape_pass:
     pop cx
     pop bx
     pop ax
+.quiet:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3685,6 +3770,7 @@ cur_move:
     ja cur_move_multi           ; SPEC.md 39.15.3: it does not straddle
 %endif
 cur_move_1:
+    CURLOG 'm'                  ; ...from HERE (cur_drawn is still the old one)
     cmp byte [vid_mono], 0
     jne cur_move_mono
     push ax                     ; planar: the save is four planes through Read
@@ -3694,6 +3780,7 @@ cur_move_1:
     pop ax
     mov [cur_drawn_x], ax
     mov [cur_drawn_y], bx
+    CURLOG 'M'                  ; ...to HERE
     call cur_saveu
     jmp cur_draw
 
@@ -4178,7 +4265,7 @@ cur_mvt     dw 0                ; [ticks] at the last movement packet (SPEC.md
 cur_sptr    dw cur_save         ; -> whichever save buffer is live. In .text
                                 ; with a REAL initialiser, not .bss: .bss
                                 ; arrives zeroed (kernel.asm - NASM pads the
-                                ; gap to OVL_START), and 0 here is a pointer
+                                ; gap to COLD_START), and 0 here is a pointer
                                 ; at the API jump table
 cur_tabp    dw cur_and          ; -> the live shape's white table (SPEC.md
                                 ; 7.2). In .text with a real initialiser, for
@@ -4199,8 +4286,6 @@ cur_shchk   db 0                ; "the window under the pointer may have
                                 ; changed without the pointer moving": a
                                 ; raise, a hide, a destroy or a drag. One
                                 ; byte, the [fm_fchk] shape (SPEC.md 22.8)
-cur_shx     dw -1               ; the position cur_shape_pass last answered
-cur_shy     dw -1               ; for; -1 cannot be a clamped mouse position
 cur_level   db -1               ; refcount; < 0 = hidden (boot state)
 mou_nx      dw 0                ; the candidate x, staged across the y decode
                                 ; because mou_clamp is 2-D (SPEC.md 39.15.4)
@@ -4432,6 +4517,31 @@ cur_save    resb CUR_SAVE_SZ    ; save-under: CUR_SPAN bytes x CUR_GH rows,
 cur_savex   resb CUR_SPAN * CUR_GH  ; ...and its twin. A MOVE reads one while
                                 ; it fills the other (SPEC.md 7.1.2); 24 bytes,
                                 ; and the pointer swap means nothing is copied
+%ifdef GFXAUDIT
+CURLOG_N    equ 64              ; a WRAPPING ring of cursor events, for the
+CURLOG_SZ   equ 6               ; sessions where the question is "which draw
+                                ; had no erase".
+                                ;
+                                ; IN .lowbss AND NOT HERE, which is the second
+                                ; half of the sentence this used to carry. A
+                                ; knob kernel is not bound by KERN_BUDGET
+                                ; (kernel.asm guard 1) - true, and it says
+                                ; nothing about guard 2, the 64KB SEGMENT,
+                                ; which nobody can raise and which .bss spends.
+                                ; 386 bytes of ring is a third of what the
+                                ; shipped kernel has left there, and adding it
+                                ; to .text+.bss is what put `make GFXAUDIT=1`
+                                ; 189 bytes over the segment. .lowbss costs the
+                                ; segment nothing (SPEC.md 2.1), is not zeroed
+                                ; either way so the ring behaves identically,
+                                ; and os88sym.linear already answers LOW_SEG
+                                ; for it, so tools/os88snap.py and the CURLOG
+                                ; readers need no change.
+section .lowbss
+cur_log_i   resw 1              ; write cursor, in BYTES
+cur_log     resb CURLOG_N*CURLOG_SZ
+section .bss
+%endif
 cur_lazy    resb 1              ; gfx_lock deferred the hide (SPEC.md 7.1.4):
                                 ; the arrow is still on screen this hold
 cur_off     resw 1              ; cur_geom's answers, banked for cur_get_mono:

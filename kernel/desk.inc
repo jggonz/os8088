@@ -104,6 +104,14 @@ desk_init:
                                 ; the count to 0, and left drive 3 with no row
     jmp .flags
 .none:
+    OVLMARK 51                  ; 51: SPEC.md 57.5's equipment word says this
+                                ; machine has NO FLOPPY DRIVES, so no volume
+                                ; gets a zone and the desktop has no icons.
+                                ; On an XT that claim is the SW1 DIP switches
+                                ; read back through the 8255 - a statement
+                                ; about what somebody SET, and on a machine
+                                ; with a hard-disk controller's option ROM in
+                                ; it, about what that ROM left behind
     xor dh, dh
 .flags:
     mov [fdd_dbg_eqp], dh       ; what int 11h CLAIMED, banked before anything
@@ -202,7 +210,7 @@ desk_init:
     xor cl, cl
 .zloop:
     mov bl, cl
-    call KERNEL_SEG:ovw_dsk_vol_slot  ; FAR: overlay -> resident
+    call KERNEL_SEG:dsk_vol_slot      ; FAR: overlay -> resident
     mov byte [bx+DV_FLAGS], 0
     cmp byte [bx+DV_KIND], DVK_FREE
     je .zskip                   ; the probe retired it - do not hand it back.
@@ -254,7 +262,7 @@ desk_init:
     call dsk_fdd_probe          ; preserves BX, CX, DX and ES: CL and the
 %endif                          ; count in DH both survive it. AL is IGNORED
     mov al, cl
-    call KERNEL_SEG:ovw_dsk_flop_add    ; FAR: overlay -> resident
+    call KERNEL_SEG:dsk_flop_add        ; FAR: overlay -> resident
 .eskip:
     inc cl
     cmp cl, 4
@@ -368,7 +376,7 @@ desk_rowcalc_x:
     pop cx
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 desk_ord:
@@ -458,7 +466,7 @@ desk_paint_x:
 .done:
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; desk_zone_rect - one drive zone's DRAWN rect (not its hit zone)
@@ -559,6 +567,7 @@ desk_zmark_x:
     mov [desk_zhw], al
 .post:
     mov byte [desk_zdirty], 1
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
     pop ax
     ret
 
@@ -703,7 +712,7 @@ desk_dmg_zones_x:
     pop dx
     pop cx
     pop bx
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; desk_zones_paint - repaint the drive zones and what they disturb (26.2)
@@ -764,7 +773,7 @@ desk_paint_mask_x:
     pop cx
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; desk_click - desktop hit test, called by ui.inc when wm_hit found no
@@ -873,7 +882,7 @@ desk_click_x:
     pop cx
     pop bx
     pop ax
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; desk_zone_redraw - flip one zone's SELECTION outside wm_paint_all
@@ -914,7 +923,7 @@ desk_zone_redraw:
 
     push ax                     ; keep the volume index for the draw call
     call desk_zone_rect         ; AX/BX = x1/y1, CX/DX = x2/y2 (inclusive)
-    call KERNEL_SEG:cw_wm_clip_rect           ; the zone less every visible window; the rect
+    call KERNEL_SEG:wm_clip_rect              ; the zone less every visible window; the rect
                                 ; survives in AX/BX/CX/DX for the test below
     jc .full                    ; too many fragments: repaint the world
     jz .none                    ; wholly covered: nothing of it is on screen
@@ -1059,6 +1068,9 @@ desk_draw_zone:
     call KERNEL_SEG:cw_gfx_fill
 
     ; --- ...and the caption in it, black -------------------------------------
+    ; OPAQUE (SPEC.md 26.6): the white rect above is DESK_LBLH = 12 rows and a
+    ; glyph is 8, so the fill stays and the run buys the cells - 22.11.3's
+    ; rule. The rect is still needed for the 2px of white above and below.
     mov byte [gfx_color], CBLACK
     pop si
     mov cx, [desk_lblx]
@@ -1066,7 +1078,8 @@ desk_draw_zone:
     add dx, [desk_icoh]
     add dx, [desk_zgap]         ; 26.5's gap of desktop...
     add dx, 2                   ; ...and the 2px of white above the text
-    call KERNEL_SEG:cw_font_str
+    mov ax, (CWHITE << 8) | CBLACK
+    call KERNEL_SEG:cw_font_run
 
     ; --- selection highlight: XOR the whole hit zone --------------------------
     mov al, [desk_sel]
@@ -1114,16 +1127,6 @@ section .cold                   ; ...and back to cold code for the far entries
 ; Far entries (SPEC.md 2.6): the resident thunks in kernel.asm far-call these,
 ; and these near-call the bodies above.
 ; =============================================================================
-dkz_desk_click:       call desk_click_x
-                  retf
-dkz_desk_dmg_zones:   call desk_dmg_zones_x
-                  retf
-dkz_desk_paint:       call desk_paint_x
-                  retf
-dkz_desk_paint_mask:  call desk_paint_mask_x
-                  retf
-dkz_desk_rowcalc:     call desk_rowcalc_x
-                  retf
 dkz_desk_zmark:       call desk_zmark_x
                   retf
 dkz_desk_zones_paint: call desk_zones_paint_x

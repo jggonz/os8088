@@ -36,7 +36,8 @@
 ;          db base>>4      the IDE task file's base port, 0 for a BIOS drive.
 ;                          Every ISA task file is 16-byte aligned, so the shift
 ;                          is lossless and the port fits a byte
-;          db flags        bit 0 = mount it at boot
+;          db flags        bit 0 = mount it at boot, bit 1 = the geometry
+;                          below was TYPED IN rather than probed
 ;          dw cyl
 ;          db heads        1..255 }  a word each in the device row, because
 ;          db spt          1..63  }  that is what the arithmetic wants
@@ -63,6 +64,8 @@ HDC_E_HEADS  equ 6
 HDC_E_SPT    equ 7
 HDC_ESZ      equ 8
 HDC_F_MOUNT  equ 1              ; bit 0: this drive was mounted
+HDC_F_TYPED  equ 2              ; bit 1: the user typed this geometry in, so
+                                ; it is the one to restore (SPEC.md 52.6)
 HDC_FBUF     equ HDC_ENT0 + HD_MAXDEV * HDC_ESZ     ; 34 = DRV_BLOB_SZ
 
 %if HDC_FBUF != DRV_BLOB_SZ
@@ -160,7 +163,10 @@ hd_cfg_build:
     mov bx, di                  ; turns - BX carries the row from here
     pop di
     test byte [bx+HDD_FLAGS], 2 ; typed in by hand?
-    jnz .write
+    jz .probed
+    or dl, HDC_F_TYPED          ; ...and the RECORD has to say so, or the
+    jmp short .write            ; restore cannot tell a geometry the user
+.probed:                        ; typed from one the probe answered with
     test dl, dl
     jz .next                    ; probed geometry and not mounted: there is
                                 ; nothing about this drive worth a record
@@ -313,18 +319,74 @@ hd_cfg_apply:
     shl ax, cl
     cmp ax, [di+HDD_BASE]
     jne .next
-    mov ax, [si+HDC_E_CYL]      ; the geometry, restored whether the probe
-    mov [di+HDD_CYL], ax        ; found one or not: a saved record only
-    mov al, [si+HDC_E_HEADS]    ; exists when the user typed it in or mounted
-    xor ah, ah                  ; with it, and either way it is the one that
-    mov [di+HDD_HEADS], ax      ; worked
+    ; --- the geometry, and ONLY when the probe could not answer -------------
+    ; This used to restore it unconditionally, reasoning that "a saved record
+    ; only exists when the user typed it in or mounted with it, and either way
+    ; it is the one that worked". That is true on ONE machine and false the
+    ; moment the file travels - and a BIOS drive's match key is
+    ; kind=BIOS/unit=80h/base=0, which is the SAME KEY ON EVERY MACHINE THERE
+    ; IS. So the geometry typed on one box was restored, silently and with
+    ; full confidence, onto a different box's drive.
+    ;
+    ; What that costs is not a refusal: the row now disagrees with int 13h, so
+    ; hd_chs turns every LBA into a CHS the BIOS resolves to a DIFFERENT
+    ; physical sector, and the partitioner, the formatter and the installer all
+    ; write a whole volume somewhere it was never meant to go. Nothing errors.
+    ; boot/boothd.asm then asks int 13h AH=08h - the truth - and reads the
+    ; sectors the install BELIEVED it was writing, which hold either nothing or
+    ; the previous install (docs/FIELD-NOTES.md 33).
+    ;
+    ; The probe's answer is a fact about the drive in front of us and the saved
+    ; one is a fact about wherever this file was written, so the probe wins
+    ; whenever it has one. That is also what this file's own header says the
+    ; record is FOR - "the geometry of a drive the PROBE could not determine
+    ; and the user typed in". The MOUNT bit below is untouched: which drives to
+    ; mount is a preference and travels fine; a geometry is not and does not.
+    ;
+    ; UNLESS THE RECORD SAYS THE USER TYPED IT. The +/- editor is live on every
+    ; drive, probed or not (page.inc: hd_page_adjust has no such gate), so
+    ; "the probe answered" is not the same fact as "nobody typed one" - and
+    ; reading it as if it were threw a typed geometry away at every boot and
+    ; then wrote the probe's back over it. HDC_F_TYPED is the fact itself,
+    ; recorded by hd_cfg_build off HDD_FLAGS bit 1. The field record that
+    ; travelled between the 5150s carried flags=01 - mounted, not typed - so it
+    ; still loses to the probe and docs/FIELD-NOTES.md 33 stays fixed.
+    test byte [si+HDC_E_FLAGS], HDC_F_TYPED
+    jnz .geom                   ; the user's own answer wins...
+    test byte [di+HDD_FLAGS], 1 ; ...and where there is none, the probe's does
+    jnz .nogeom
+.geom:
+    mov ax, [si+HDC_E_CYL]
+    mov [di+HDD_CYL], ax
+    mov al, [si+HDC_E_HEADS]
+    xor ah, ah
+    mov [di+HDD_HEADS], ax
     mov al, [si+HDC_E_SPT]
     xor ah, ah
     mov [di+HDD_SPT], ax
     and byte [di+HDD_FLAGS], 0xFC
     call hd_geom_ok
     jc .nogeom
-    or byte [di+HDD_FLAGS], 1
+    or byte [di+HDD_FLAGS], 3   ; bit 0 usable, AND BIT 1 - "not the BIOS's".
+                                ; It used to set bit 0 alone, which made a
+                                ; restored geometry indistinguishable from a
+                                ; probed one the moment it landed. ONE THING
+                                ; turns on telling them apart: the save above
+                                ; drops any record that is "probed and not
+                                ; mounted", so a restored geometry on an
+                                ; unmounted drive used to erase itself at the
+                                ; next write.
+                                ; IT USED TO CITE A SECOND REASON - that
+                                ; boot/boothd.asm has ONLY int 13h AH=08h, so a
+                                ; geometry that did not come from that call is
+                                ; one the loader can never reproduce. That
+                                ; sentence is void: the loader reads the BPB now
+                                ; and issues no AH=08h at all (SPEC.md 52.10.2),
+                                ; and the geometry it reproduces is the one that
+                                ; WROTE the volume - see docs/FIELD-NOTES.md 33,
+                                ; which is what moved it. The flag stays,
+                                ; because the save path above justifies it on
+                                ; its own
     call hd_geom_push           ; the drive has to be told too: this runs before
                                 ; the first paint, so a restored geometry that
                                 ; only we know about would automount and then
@@ -348,7 +410,51 @@ hd_cfg_apply:
     ret
 
 ; -----------------------------------------------------------------------------
-; hd_cfg_automount - mount what the settings said was mounted (SPEC.md 52.6)
+; hd_want_found - a drive that is THERE is a drive to mount (SPEC.md 52.6.1)
+; in:  [hd_ndev], hd_devs
+; out: [hd_wantmnt] gains a bit per probed device with a usable geometry
+; clobbers: flags
+;
+; This ADDS to the set hd_cfg_load restored and never replaces it, so the
+; automount can only ever attempt MORE than it used to - which is what makes
+; this a re-decision with no case underneath it that stops working.
+;
+; hd_geom_ok is the page's own predicate (SPEC.md 47), so what is attempted
+; here is exactly what the page would have let the user click - a device with
+; no addressable geometry is skipped rather than handed to hd_mount, which
+; would read a partition table through a CHS conversion that cannot name a
+; sector.
+; -----------------------------------------------------------------------------
+hd_want_found:
+    push ax
+    push bx
+    push cx
+    push di
+    xor bl, bl
+.dev:
+    cmp bl, [hd_ndev]
+    jae .out
+    mov al, bl
+    call hd_dev_row             ; DI = the row, which is hd_geom_ok's argument
+    call hd_geom_ok
+    jc .next
+    mov cl, bl
+    mov al, 1
+    shl al, cl                  ; 8086: a variable shift only goes through CL
+    or [hd_wantmnt], al
+.next:
+    inc bl
+    jmp short .dev
+.out:
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_cfg_automount - mount what is there, and what the settings said was
+;                    mounted (SPEC.md 52.6/52.6.1)
 ; in:  [hd_wantmnt]; DRVV_READY context
 ; out: nothing
 ; clobbers: flags
@@ -359,12 +465,19 @@ hd_cfg_apply:
 ; the boot expects the system disk to be the current volume. The desktop icons
 ; appear anyway: osapi_vol_add posts the kernel's own deferred repaint
 ; (SPEC.md 31.2), which is drained after the first paint.
+;
+; DRVV_READY is also where a Control Panel TICK arrives (SPEC.md 51.2.2), so
+; this is the boot's path and the tick's path both.
 ; -----------------------------------------------------------------------------
 hd_cfg_automount:
     push ax
     push bx
     push cx
     push dx
+    call hd_want_found          ; ...and the found set is added to the saved
+                                ; one FIRST, so the zero test below is "no
+                                ; drive worth mounting" rather than "the
+                                ; settings said nothing" (SPEC.md 52.6.1)
     cmp byte [hd_wantmnt], 0
     je .out
     call OSAPI_FILE_HERE        ; DX = the current directory, BL = its drive

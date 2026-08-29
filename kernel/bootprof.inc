@@ -197,7 +197,7 @@ bpf_bprof_show:
     mov si, bprof_lhdr          ; the header
     mov cx, BP_X
     mov dx, BP_Y
-    call KERNEL_SEG:cw_font_str
+    call KERNEL_SEG:font_str
 
     mov bp, BP_Y + 2 * BP_ROW   ; row 1: the ticks era, before the PIT clock
     mov si, bprof_l0
@@ -264,7 +264,7 @@ bpf_label:
     push dx
     mov cx, BP_X
     mov dx, bp
-    call KERNEL_SEG:cw_font_str
+    call KERNEL_SEG:font_str
     pop dx
     pop cx
     ret
@@ -282,7 +282,7 @@ bpf_value:
     mov si, bprof_buf
     mov cx, BP_VALX
     mov dx, bp
-    call KERNEL_SEG:cw_font_str
+    call KERNEL_SEG:font_str
     pop di
     pop si
     pop dx

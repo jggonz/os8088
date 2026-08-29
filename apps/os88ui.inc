@@ -65,7 +65,10 @@
     call KERNEL_SEG:cw_gfx_fill
   %endmacro
   %macro UI_STR 0
-    call KERNEL_SEG:cw_font_str
+    call KERNEL_SEG:font_str
+  %endmacro
+  %macro UI_RUN 0                   ; ...and the OPAQUE one (SPEC.md 6.1)
+    call KERNEL_SEG:cw_font_run
   %endmacro
   %macro UI_WIDTH 0
     call KERNEL_SEG:cw_font_width
@@ -75,6 +78,18 @@
   %endmacro
   %macro UI_PIXEL 0
     call KERNEL_SEG:cw_gfx_pixel
+  %endmacro
+  %macro UI_ICON 0                  ; SPEC.md 25.6: the masked 1bpp sprite
+    call KERNEL_SEG:cw_icon_draw    ; pass - CX = x, DX = y, SI -> record
+  %endmacro
+  %macro UI_IPEN 0                  ; ...and the pair it draws in, one-shot
+    call KERNEL_SEG:cw_icon_pen
+  %endmacro
+  %macro UI_CLIPT 0                 ; ...and may that WHOLE shape be drawn?
+    call KERNEL_SEG:cw_wm_clip_test ; (SPEC.md 11.3) - CF = 1 it may not
+  %endmacro
+  %macro UI_ISMONO 0                ; ZF = 1 on a COLOUR adapter (SPEC.md 39.5)
+    cmp byte [vid_mono], 0
   %endmacro
   %macro UI_WHITE 0
     mov byte [gfx_color], CWHITE
@@ -102,7 +117,10 @@
     call OSAPI_GFX_FILL
   %endmacro
   %macro UI_STR 0
-    call OSAPI_FONT_STR
+    call OSAPI_FONT_STR_XPARENT
+  %endmacro
+  %macro UI_RUN 0                   ; ...and the OPAQUE one (SPEC.md 6.1)
+    call OSAPI_FONT_RUN
   %endmacro
   %macro UI_WIDTH 0
     call OSAPI_FONT_WIDTH
@@ -112,6 +130,31 @@
   %endmacro
   %macro UI_PIXEL 0
     call OSAPI_GFX_PIXEL
+  %endmacro
+  %macro UI_ICON 0                  ; SPEC.md 25.6: the masked 1bpp sprite
+    call OSAPI_ICON_DRAW            ; pass - CX = x, DX = y, SI -> record
+  %endmacro
+  %macro UI_IPEN 0                  ; ...and the pair it draws in, one-shot
+    call OSAPI_ICON_PEN
+  %endmacro
+  %macro UI_CLIPT 0                 ; ...and may that WHOLE shape be drawn?
+    call OSAPI_WM_CLIP_TEST         ; (SPEC.md 11.3) - CF = 1 it may not
+  %endmacro
+  %macro UI_ISMONO 0                ; ZF = 1 on a COLOUR adapter (SPEC.md 39.5)
+    push ax                         ; OSAPI_VIDEO documents four outputs and
+    push bx                         ; says nothing about the rest, and every
+    push cx                         ; register is live at the one call site -
+    push dx                         ; so bank them all. A pop writes no flags,
+    push si                         ; which is what lets the answer survive
+    push di
+    call OSAPI_VIDEO
+    cmp dh, 4
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
   %endmacro
   %macro UI_WHITE 0
     push ax
@@ -429,6 +472,15 @@ OS88UI_GDOWN  equ 4             ; ...and the PRESSED look (SPEC.md 13.8): the
                                 ; (`and si, 3`) and bit 2 was free; the
                                 ; disabled flag has AH to itself and keeps it
 OS88UI_GW     equ 12            ; both are 12 x 12
+; ...and the size os88ui_glyph's masked-sprite pass is allowed to be. The
+; record it hands the kernel is `db 1, OS88UI_GW`, and icon_draw_x refuses
+; ww = 0, ww > 1, rows = 0 or rows > ICO_STAGE_H - so the ONLY one of the four
+; a change here can trip is the last, and this is it, checked rather than
+; reasoned about. ICO_STAGE_H is the kernel's and is not published to a
+; package (SPEC.md 25.6.1), so THE GUARD LIVES IN kernel/icons.inc, beside the
+; constant it reads. It cannot live here: kernel.asm includes fdlg.inc - and so
+; this file - one line BEFORE icons.inc, so an `%ifdef ICO_STAGE_H` written
+; here is false on every build and guards nothing. That was tried.
 
 ; -----------------------------------------------------------------------------
 ; os88ui_glyph - one check box or radio button, over its own white box
@@ -518,9 +570,116 @@ os88ui_glyph:
                                 ; (a VALUE, never an address - SS is not DS
                                 ; in a package)
 
-    UI_WHITE                    ; the box first, so a glyph can be redrawn
-    call os88ui_gdn             ; in place. [gfx_dis] does not reach a fill,
-    jnz .box                    ; so a stale one cannot tint it - and a
+    ; --- ...but is the whole 12x12 box drawable? (SPEC.md 11.3) ------
+    ; ico_core clips an icon WHOLE - one shape or none, the font_char rule -
+    ; so a control a clip fragment's edge cuts draws NOTHING through the pass
+    ; below, where the pixel arm draws the visible half: the gfx_* fills clip
+    ; per pixel. That is the pair the SDK publishes this slot for. It is asked
+    ; here and not after the compose because DI still carries the argument
+    ; and SI still points at the picture at this line.
+    mov ax, cx
+    mov bx, dx
+    add cx, OS88UI_GW - 1
+    add dx, OS88UI_GW - 1
+    UI_CLIPT                    ; preserves every register, and answers CF = 0
+    mov cx, ax                  ; when no clip is armed at all
+    mov dx, bx
+    jc .gpix
+
+    ; --- ONE CALL, through the masked sprite pass (SPEC.md 25.6) -----
+    ; `.gpix` below is the ORIGINAL, and is what a cut control still draws
+    ; with: a white box and then one drawing call per set bit, 45 to 65 of
+    ; them, 24-34 ms of the field machine's time for one 12x12 control
+    ; (PERFORMANCE.md Set 83) - a price paid where nothing else can. A glyph
+    ; is a 1bpp shape with a mask, which is exactly what ico_core draws - so
+    ; the mask rows are the 12x12 box, the data rows are the bitmap this
+    ; routine already has, and the box and the picture arrive together.
+    ;
+    ; The pair: white box / black picture, exchanged when the control is
+    ; PRESSED, and the picture in CDGRAY when it is disabled (SPEC.md 47
+    ; rule 1). Disabled outranks down inside os88ui_gdn, so the two never
+    ; both apply.
+    mov ax, (CBLACK << 8) | CWHITE
+    call os88ui_gdn
+    jnz .gpair
+    mov ax, (CWHITE << 8) | CBLACK
+.gpair:
+    mov cx, 0xFFFF              ; CX = the per-row dither, and 0xFFFF is none
+    test di, 0xFF00
+    jz .gdith
+    mov ah, CDGRAY
+    UI_ISMONO                   ; ...and on a 1bpp adapter a grey is a 50%
+    jz .gdith                   ; STIPPLE that a mask pass has nowhere to put,
+    mov cx, 0x5555              ; so the caller lays it into the data rows.
+    mov bx, bp                  ; gfx_ink's dither class is screen-absolute in
+    add bx, dx                  ; (x + y) parity, which is what this reads -
+    test bl, 1                  ; and bit 15 of a row word is its LEFTMOST
+    jz .gdith                   ; pixel, so an odd sum keeps the even columns
+    mov cx, 0xAAAA
+.gdith:
+    push ax                     ; the pair, wanted after the compose
+    push dx                     ; ...and y, which DX is about to stop being
+    xor dx, dx                  ; DX = the row-to-row phase toggle: nothing
+    cmp cx, 0xFFFF              ; unless this is a stipple, exactly as
+    je .gnodt                   ; font_run's [font_rn_dt] is (SPEC.md 6.1.12)
+    mov dx, 0xFFFF
+.gnodt:
+    mov bx, os88ui_grec_d       ; only the DATA rows are composed: the header
+    mov di, OS88UI_GW           ; and the 12 mask words are constants and are
+.gdata:                         ; declared filled in
+    lodsw
+    and ax, cx
+    xor cx, dx
+    mov [bx], ax
+    add bx, 2
+    dec di
+    jnz .gdata
+    pop dx
+    pop ax
+    UI_IPEN                     ; AL = the box's colour, AH = the picture's
+    mov cx, bp                  ; ...and back to the pen this was called with
+    mov si, os88ui_grec
+    UI_ICON
+    jmp short .gout
+                                ; ...and no fallback for a REFUSAL, because
+                                ; the kernel CANNOT refuse this record and the
+                                ; branch that used to catch it could not have
+                                ; drawn one (SPEC.md 25.6.1). The arm below is
+                                ; the CLIP's, and is why the test above stands
+                                ; where it does.
+                                ;
+                                ; icon_draw_x refuses four shapes: ww = 0,
+                                ; ww > 1, rows = 0, rows > ICO_STAGE_H.
+                                ; os88ui_grec is `db 1, OS88UI_GW` - a
+                                ; CONSTANT, one word a row and twelve rows -
+                                ; so all four are decided at assembly time and
+                                ; the %if below is that decision, made by the
+                                ; build instead of by this comment. Grow the
+                                ; glyph past the stage and it is a build
+                                ; failure, which is what the branch was
+                                ; standing in for.
+                                ;
+                                ; THE BRANCH WAS ALSO BROKEN, which is why it
+                                ; went rather than being kept for luck. The
+                                ; compose loop above leaves DI = 0 - it counts
+                                ; rows down in DI - and DI carried the whole
+                                ; argument including SPEC.md 47's disabled
+                                ; byte, so `test di, 0xFF00` always fell to
+                                ; .live and a DISABLED control drew in the
+                                ; live pen with no [gfx_dis] dither: rule 1's
+                                ; exact failure, a dead control that looks
+                                ; alive. SI was wrong too - it points at
+                                ; os88ui_grec, so the per-pixel pass re-read
+                                ; the record's header and its twelve constant
+                                ; mask words as if they were the picture.
+                                ; Both are the reason the arm below is reached
+                                ; from ABOVE the compose, where DI is still
+                                ; the argument and SI is still the bitmap.
+
+.gpix:                          ; the CUT control (SPEC.md 11.3), pixel by
+    UI_WHITE                    ; pixel: the box first, so a glyph can be
+    call os88ui_gdn             ; redrawn in place. [gfx_dis] does not reach a
+    jnz .box                    ; fill, so a stale one cannot tint it - and a
     UI_BLACK                    ; PRESSED glyph is that box in black, over
 .box:                           ; which the picture below goes white
     mov ax, cx
@@ -563,6 +722,7 @@ os88ui_glyph:
 
     clc
     UI_PEN                      ; ...and the pen back, always
+.gout:
     pop bp
     pop di
     pop si
@@ -580,6 +740,23 @@ section .text                   ; DATA, and SPEC.md 2.6 rule 1 is why: a table
 ; The four are ONE array, indexed by (kind | on), and os88ui_glyph reaches
 ; them by arithmetic rather than through a table of pointers - so the order
 ; and the spacing are load-bearing and are asserted at the bottom.
+; os88ui_grec - THE control-glyph record (SPEC.md 25.6): a two-byte header,
+; twelve mask words and twelve data words, handed to the masked sprite pass.
+; The header and the mask are CONSTANTS - one word per row, twelve rows, and
+; the mask is the 12x12 box every control fills - so they are declared filled
+; in and only the data rows are composed per call.
+;
+; ONE of it, for os88ui_krect's reason: every caller is the UI task under the
+; gfx lock and nothing in a drawing path re-enters. In `.text` and NOT `.bss`
+; because it is initialised, and .text is writable RAM - the rule os88ui_krect
+; states is about `.cold`, which a cold module reaches through a DS that is
+; still KERNEL_SEG.
+os88ui_grec:
+    db 1, OS88UI_GW             ; ww = 1 word a row, h = 12 rows
+    times OS88UI_GW dw 0xFFF0   ; the mask: twelve bits, left-aligned
+os88ui_grec_d:
+    times OS88UI_GW dw 0        ; ...and the data, written per call
+
 os88ui_g_roff:                  ; radio, clear: an open ring
     dw 0x0F00                   ;  0  ....####....
     dw 0x30C0                   ;  1  ..##....##..
@@ -1907,7 +2084,8 @@ os88ui_apaint:
     mov dx, [es:bx + W_Y]
     add dx, TITLE_H + OS88UI_AMSGY
     mov si, [os88ui_amsg]
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: an alert's content is the window
+    UI_RUN                          ; manager's white fill (SPEC.md 38.12)
     call os88ui_abtns
     pop di
     pop si
@@ -2020,6 +2198,7 @@ section .bss
 ; their own comment and had it right; this is what forgetting it costs.
 ; -----------------------------------------------------------------------------
 os88ui_krect: resw 4
+
 
 %ifdef OS88UI_SCROLL
 ; -----------------------------------------------------------------------------

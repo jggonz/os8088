@@ -1694,7 +1694,7 @@ the configuration it exists for, an internal drive plus a 4865 on the 37-pin
 connector. It is **one five-byte row per unit** now, with `probe ran` a bitmap
 (bit n = unit n was asked) and a unit printed only if its bit is set — so a
 correctly-switched two-drive machine still reads five short rows and not
-twenty. Ten bytes of `.text`, sixteen of `.ovl`, no rung crossed. Verified on
+twenty. Ten bytes of `.text`, sixteen of `.ovl`. Verified on
 `os8088_5150_cga_ext720`: `claimed 4`, `probe ran 0E`, three rows whose `ST3`
 reads `79`, `7A`, `7B` — the low two bits being the unit, which is what says
 each row is about the drive it names.
@@ -1790,7 +1790,7 @@ one left inside `B:\APPS` — the sibling's `FS_CWD` goes 2 → 0 with the
 re-list debt set, its caption comes back as `Disk`, and raising it lists the
 new root. The 720K/360K gate (§18.96.2) still passes both legs.
 
-Cost: `.text` +24, `.cold` +152, **no rung crossed** and footprint unchanged
+Cost: `.text` +24, `.cold` +152
 — but `kern_big`'s cold rung has 107 bytes left in it afterwards, so the next
 cold addition buys a whole 512. `kern_small` is untouched: the formatter is
 `kern_big` only (§18.96).
@@ -3792,3 +3792,645 @@ Batched, because each answer is a trip (docs/FIELD-MACHINES.md):
 
 Until (1) and (3) are answered this note stays open, and **`Write Img...`
 should be treated as unsafe on media anyone minds losing.**
+
+--
+
+## 33. A hard-disk install writes the whole volume to the wrong place, because SYSTEM.CFG carried another machine's geometry (FIXED, drivers/hdd/cfg.inc)
+
+**Reported** on both 5150s — the real ST-225 and the Picomem — and **not
+reproducible in 86Box on the same images**. One machine reached the end of the
+KERNEL.SYS bar and froze; the other printed `G` and stopped. Diagnosed from the
+two 20MB disk images their owner dumped **after** installation, without the
+hardware.
+
+**And then confirmed by the owner, who knew the route the disks had taken:**
+
+> these images ran against 86Box; then against the ST-225; then against the
+> picomem. And at each point, they saved their system.cfg and then tried to use
+> its geometry against the next box.
+
+The full path, in their words:
+
+| stop | result |
+|---|---|
+| 86Box | **worked** |
+| the real ST-225 | failed |
+| the Picomem's `os8088.img` | failed |
+| a **brand-new** Picomem image, made minutes before | failed (`G`) |
+
+That is the mechanism stated as a workflow rather than as a bug — one config
+file, four drives, and each stop confidently applying the last stop's answer.
+It is also why it was never going to reproduce in 86Box: **the fault is not in
+any one machine, it is in what the file carries BETWEEN them**, and a
+single-machine test is the one arrangement that cannot show it. The first stop
+worked and wrote a record; every stop after it inherited one.
+
+**And the record is REFRESHED at each stop, which is what makes this a defect
+rather than a stale file.** The owner did further work after the first two
+installs rather than rebooting straight away, so each of those sessions flushed
+a `SYSTEM.CFG` carrying a geometry that was correct *there*. There is nothing to
+clean up once and be done with: the file regenerates at every stop and is wrong
+again at the next one. A fix has to be at the point of USE, which is where the
+one below is.
+
+### What the images said
+
+Every number below is read off the platters, not inferred.
+
+| | `OS8088.img` | `os80882.img` |
+|---|---|---|
+| MBR partition entry | LBA 63, CHS **c0 h3 s13** | LBA 17, CHS **c0 h1 s1** |
+| where a VBR actually is | **63** *and* **201** | **63** |
+| the newer VBR's BPB | spt **17**, heads **4**, hidd 63 | spt **17**, heads **4**, hidd **17** |
+| its `ksecs` | 207 | 207 |
+| the OLDER VBR at 63 | spt **63**, heads **16**, hidd 63, ksecs **194** | — |
+
+Two things fall out at once. The **older** install's BPB records **63 × 16** —
+the formatter writes what `int 13h AH=08h` told it, so that is what the drive
+reports. The **newer** install records **17 × 4** everywhere: BPB, partition
+CHS, all of it.
+
+And the newer install's structures are not where its own BPB says they are.
+Take the volume-relative LBA it meant, turn it into CHS with **17/4**, and
+resolve that CHS on a **63/16** drive:
+
+| meant | CHS it computed | where 63/16 puts it | what is there |
+|---|---|---|---|
+| 63 (the VBR) | c0 h3 s13 | **201** | the newer VBR ✓ |
+| 144 (the root dir) | c2 h0 s9 | **2024** | a root dir listing `SAVER.DRV` and `CLONE.DRV` ✓ |
+| 176 (the data area) | c2 h2 s7 | **2148** | the newer files ✓ |
+
+Every prediction lands. The whole volume is displaced by that one substitution,
+and `SYSTEM.CFG` read back through the same map decodes cleanly — which is the
+check that turns a good story into a measurement.
+
+**And the second image draws the fault in one picture.** It was created blank
+minutes before the attempt, so every non-zero sector on it is something the
+install put there. Listing them:
+
+```
+63..64, 197, 1086..1087, 1210..1213,
+2016..2032, 2079..2095, 2142..2158, 2205..2221,     <- 17 sectors, stride 63
+3024..3040, 3087..3103, 3150..3154, 3214..3229,     <- +1008, and again
+4032..4048, 4095..4111, 4158..4174, 4221..4236, ...
+```
+
+**Runs of seventeen at a stride of sixty-three, four of them, then a jump of
+1008.** That is a 17-sector track written four heads at a time onto a drive
+whose tracks hold 63 sectors and whose cylinders have sixteen heads
+(63 × 16 = 1008). The displacement does not have to be inferred from the
+arithmetic — it is legible in which sectors got touched.
+
+### The cause, from the config the install wrote
+
+`SYSTEM.CFG`'s 34-byte `HD` blob on the newer install:
+
+```
+dev0: kind=BIOS unit=80h base=00 flags=01(mount)  cyl=613 heads=4 spt=17
+```
+
+**613 × 4 × 17 is a 20MB MFM geometry, ST-225 class — the PREVIOUS stop's, not
+this drive's.** Which previous stop the images cannot say: 86Box's emulated
+drive and the real ST-225 report the same numbers, and either could have
+written it. It does not matter, because neither of them is the Picomem.
+`hd_cfg_apply` restored it onto the Picomem's drive anyway, and the comment
+beside the code said why it was allowed to:
+
+> the geometry, restored whether the probe found one or not: a saved record
+> only exists when the user typed it in or mounted with it, and either way it
+> is the one that worked
+
+True on one machine. **A BIOS drive is matched by kind+unit+base, which is
+`BIOS/80h/0` on every machine there is** — so the key that was designed to stop
+one drive's geometry landing on another's does not discriminate at all here.
+The file travels on the install floppy; the geometry travels with it.
+
+Nothing refuses, and that is the whole shape of it: the row disagrees with
+`int 13h`, `hd_chs` turns each LBA into a CHS the BIOS resolves elsewhere, and
+the partitioner, formatter and installer lay a complete, internally consistent
+volume down in the wrong physical sectors. Then `boot/boothd.asm` — which
+deliberately asks `AH=08h` and believes it (§18.99 note 1, and it is right to)
+— reads the sectors the install *believed* it wrote.
+
+That is both symptoms exactly:
+
+- **`OS8088.img`.** The MBR reads by CHS, not LBA (`boot/mbr.asm`: "the CHS in
+  the entry is what we read with"). `c0 h3 s13` on a 63/16 drive is LBA 201 —
+  the new VBR, `ksecs = 207`, `hidd = 63`. `boothd` computes the data area at
+  LBA 176 and reads 207 sectors from there. LBA 176 holds the **previous**
+  install's `KERNEL.SYS`, which is **194** sectors. So it loads an older kernel
+  plus thirteen sectors of whatever follows, reaches 100%, and hands off.
+- **`os80882.img`.** `c0 h1 s1` on a 63/16 drive is LBA 63 — a VBR whose BPB
+  says `hidd = 17`. Everything it then computes is 46 sectors away from
+  anything the install wrote.
+
+### The fix
+
+`hd_cfg_apply` restores a saved geometry **only when the probe could not
+determine one** (`HDD_FLAGS` bit 0 clear) **or when the record says the user
+typed it in** (the blob's `HDC_F_TYPED`). The probe's answer is a fact about
+the drive in front of you; the saved one is a fact about wherever the file was
+written. This is also what cfg.inc's own header always said the record was for
+— *"the geometry of a drive the PROBE could not determine and the user typed
+in"*. **The mount bit is untouched:** which drives to mount is a preference and
+travels fine.
+
+**The `TYPED` bit is a correction to the first version of this fix, not a
+retreat from it.** That version tested the probe alone, on the stated reasoning
+that the Control Panel enforces the same thing at the keyboard — *"those fields
+are editable only when the probe failed"*. **It does not**: `hd_page_adjust`
+has no such gate and the `+`/`-` pair is live on every drive. So the guard was
+reading "the probe answered" as "nobody typed one", and a geometry typed on a
+probed drive was discarded at every boot and then overwritten in `SYSTEM.CFG`
+by the probe's. The blob now carries the fact itself. **This section's own
+record is untouched by it** — `flags=01` is mounted and not typed, so it still
+loses to the probe. What is not closed is a *typed* record travelling the same
+route these images did; greying the fields on a probed drive (SPEC.md §47
+rule 2) is the decision that would close it, and it has not been taken.
+
+### What this does NOT explain, and is still open
+
+**The `G` was a SECOND fault, and it is fixed too.** That letter was
+`boothd`'s "`int 13h AH=08h` refused, or answered zero sectors per track", and
+nothing above could produce it: a displaced volume never reaches that call, and
+`boothd` never reads `SYSTEM.CFG`. It appeared on the **brand-new** Picomem
+image — a drive the card had created minutes earlier, which is exactly when a
+ROM has no geometry to report.
+
+The owner asked the question that unpicked it: *"it seems like we should be
+able to boot from a geometry we typed in; dos can? Is that a lack of space in
+the boot sector for us right now?"* **It was not space. It was the wrong
+source.**
+
+`int 13h` takes CHS. Whatever geometry converts an LBA into CHS, the same
+conversion applied to the write and to the read reaches the same sector — the
+drive's private opinion never enters into it. So the geometry that must be used
+is **the one that wrote the volume**, and the formatter records exactly that in
+the BPB at +24/+26. That is what DOS's boot sector reads, and — this is the
+part that makes it indefensible — **it is already what os8088's own kernel
+reads**: `dsk_bpb_check` loads `[disk_spt]`/`[disk_heads]` from those two fields
+and `dsk_xfer` derives every CHS from them. `boothd` was the only thing in the
+system using a different source, so the system disagreed with itself about
+where its own sectors were.
+
+`boothd` now takes spt and heads from the BPB and does not call `AH=08h` at
+all. It is **eight bytes smaller** — 478 of 508 — so it was never a space
+problem in the direction it looked. A range check against the drive's answer
+*was* written and measured at 18 bytes more than the sector has; what it would
+have bought is a better letter, since a drive whose tracks are shorter than the
+volume's fails its reads and stops on `D` anyway. `G` now means the BPB itself
+is unusable.
+
+**Verified against both field disks, without the hardware.** Walking the read
+the new sector performs — MBR chain-load by CHS, geometry from the BPB, data
+area, 207 sectors, each LBA mapped through 17/4 to CHS and resolved on 63/16:
+
+| | MBR lands on | BPB says | data area | result |
+|---|---|---|---|---|
+| `OS8088.img` | physical 201 | 17 × 4 | volume 176 → physical **2148** | `KERNEL.SYS` **byte-for-byte** |
+| `os80882.img` | physical 63 | 17 × 4 | volume 132 → physical **1210** | `KERNEL.SYS` **byte-for-byte** |
+
+The old sector on the same disks takes 63 × 16 from the BIOS and reads
+physical 176 and 132 — zeros on one, the previous install on the other. Both
+of these disks boot with the new one, without being reinstalled.
+
+That also retires the Install refusal this section used to specify. The gap was
+"os8088 can install to a disk it can never boot from"; the loader can boot it
+now, so there is nothing to grey.
+
+### Two things worth keeping from how this was found
+
+**The images were enough.** No hardware, no emulator: a partition table, two
+BPBs, a FAT and a 34-byte config blob, and every prediction the model made
+about where a structure would be physically found came true. When a field
+report arrives with a disk image attached, read the image first.
+
+**And the older install is why it was legible at all.** `OS8088.img` carried
+both installs — the previous one intact at the sectors the new one *meant* to
+use — which is the only reason "the newer VBR is at 201" could be told from
+"the newer VBR is missing".
+
+
+---
+
+## 34. The mouse cursor gets written into save-unders, most often out of the File Manager (FIXED, SPEC.md §12.8.4 — reproduced here with a counter)
+
+**Observed**, on a 286/VGA under 86Box, with two screenshots:
+
+> *"The cursor is getting written into save unders on occasion. This seems to
+> happen most with File Manager. The cursor is sometimes whole, or a partial
+> cursor (just the shadow), or some previous cursor background (this is
+> usually opening a program, the black cursor's background from the selected
+> program row gets written into the new location I moved the mouse to while
+> waiting for the program to load)."*
+
+The first shot shows a Disk window listing `GAMES` behind an Arkanoid window,
+with `CYCLONE.O88`'s `O` overwritten by an arrow-shaped hole. The second shows
+the same window **raised over** Arkanoid — and the same damaged glyph, because
+a raise restores the covered part from the raise cache (§11.96) and repaints
+nothing that was already visible. That is the whole shape of the defect in two
+pictures: the corruption is written into window CONTENT, nothing ever repaints
+it, and the caches carry it forward.
+
+### 34.1 What it is
+
+**The file-operation progress widget draws with the gfx lock free, and
+`[gfx_lock_flag]` = 0 is the one state in which the mouse ISR draws.**
+
+`fpg_arm` (§12.8.3) refuses when *another task* owns the drawing mutex and
+proceeds when **nobody** does — on the reasoning that nobody owning it means
+nobody to collide with. §7 says the opposite in the same byte: the ISR moves
+the arrow exactly when that flag is clear. So every unlocked file operation
+put a `gfx_fill` and IRQ4 on one screen, sharing `vga_rect_setup`'s module
+scratch and the VGA's Graphics Controller state, neither of which survives an
+interleave. SPEC.md §12.8.4 has the three mechanisms and which symptom each
+produces; the "previous cursor background at the new location" is the third of
+them, and it is the erase writing the interrupted fill's colour under the
+interrupted fill's bit mask instead of the background it banked.
+
+**Why the File Manager, and why a launch.** The unlocked file operations are
+the ones the UI task runs *outside* a window callback: `loader_run` is
+documented as holding no lock (§21), and a folder open reaches the disk the
+same way. The damage lands where the POINTER is, and during a launch the
+pointer is over the list you launched from.
+
+### 34.2 The reproduction is a counter
+
+`make GFXAUDIT=1` counts every drawing primitive entered with the lock free and
+remembers each distinct call site. A scripted boot → Disk window → folder →
+package launch on `os8088_xt_vga` names one module and nothing else:
+
+```
+=== boot: 0 unlocked primitive calls
+=== B: window open: 12          fpg_paint x2, gfx_hline x2, gfx_vline x2,
+=== GAMES open: 12              fpg_busy, fpg_begin, fpg_step x4
+=== after the launch: 24        ...the same seven sites again
+```
+
+Twelve per unlocked file operation, each one a window IRQ4 can land in. At
+~756 us of fixed cost per primitive (PERFORMANCE.md Part 2) against a mouse
+packet every ~25 ms of hand movement, "on occasion" is exactly the rate to
+expect — and it is why this survived so long: it needs the hand to be moving
+*during* one of twelve short windows, and what it leaves behind is silent.
+
+**The COLLISION itself does not reproduce here, and that is the harness rather
+than the kernel.** The knob counts it — `[gfx_aud_dep]` is the primitives in
+flight, `[gfx_aud_race]` the times the mouse ISR reached its draw inside one —
+and four scripted launches with the hand moving through every one of them give
+**484 cursor moves and 0 collisions**, because MartyPC's injected deltas are
+delivered on frame boundaries and a `gfx_fill` is about a millisecond wide. A
+real serial mouse interrupts on its own clock.
+
+So the gate is neither the exposure nor a screendump. `tests/gfxlk.py` (a
+registered soak row) counts the ISR reaching its draw **while the widget is
+up**, which the fix makes unreachable: **6 on this kernel, 0 with the fix in**,
+against a control that proves the situation arose at all. A pixel test would
+pass on a broken kernel nearly every run, which is the worst kind of gate to
+have.
+
+### 34.3 What was ruled out
+
+- **The cursor's own save/restore geometry.** `cur_rect` and `cur_geom` are
+  one answer each (§7.1.2's smear rule) and agree; the corruption reproduces
+  with them untouched.
+- **The raise cache banking a drawn arrow.** `gfx_save` calls `cur_unlazy`
+  before it reads a pixel, and every bank happens inside a lock hold. The
+  cache is how the damage PERSISTS, not how it is made — which is why the
+  report's "written into save unders" is the right description of the symptom
+  and points one layer above the cause.
+- **`CURFIX` (§7.1.4.2/§7.1.4.3, note 28).** Off by default, and both halves
+  are about *when the hide is spent inside a lock hold*. Neither touches a
+  path where no lock is held at all.
+
+### 34.4 The first fix — the progress widget
+
+Two halves, 38 bytes, SPEC.md §12.8.4. `mou_apply` defers on `[fpg_on]` as it
+already does on the lock, so nothing this module draws can interleave with the
+cursor; and `fpg_arm` takes the arrow off the glass first if it is sitting in
+the bar's rows, which `fpg_finish` pays back. `tests/gfxlk.py` asserts the
+exposure is **0** through a boot, a mount, a folder open and a package load,
+and fails on the kernel this note is about, naming all seven call sites.
+
+**The pointer now stops for the length of an unlocked file operation.** It is
+what it already did for every *locked* one, and those operations run on the UI
+task, so the machine really is frozen either way.
+
+The more general fix — the widget taking the drawing mutex around each burst,
+which would also stop a `fpg_step` landing inside another task's composition —
+is written down in §12.8.4 and not shipped: it is 141 bytes against 38, and at
++141 three knob kernels (`DISKAL=1`, `BOOTMARK=1`, `BOOTHALT=20`) stopped
+fitting `KERN_BUDGET` — caught by `make test-full`'s build matrix, which a
+plain `make` and every behavioural check had passed straight over. A knob
+kernel is not bound by that budget any more (docs/KERNEL-MEMORY.md); what
+still stops the bracket is the shipped kernel's own last spare rung, which the
+38-byte fix does not spend and that one would.
+
+### 34.5 …and it was not the whole of it: the SECOND report
+
+The fix above shipped and the reader came back:
+
+> *"This is still happening, and with the mouse freezing in place is almost a
+> 100% repro now. I have noticed that the window that opens must be above the
+> cursor, or it doesn't happen. That is probably why it was sporadic before;
+> the cursor didn't freeze, so I moved it out of the way."*
+
+…and, a moment later, the clue that named the culprit:
+
+> *"Cyclone does a score file load on its own open… Cyclone was causing it
+> every time."*
+
+**Both halves of that are exactly right, and the second one is the cause.**
+`apps/cyclone` shows its own window from its entry proc — `OSAPI_WM_SHOW`,
+which the SDK documents as taking the gfx lock itself and which did not
+(SPEC.md §11.101.2). `wm_show` then reached `wm_su_precover` with no lock and
+no deferred hide outstanding, so the bank that stores what the new window is
+about to cover **read the arrow off the glass** and kept it as the File
+Manager's content. It reappeared the next time that window was uncovered, and
+stayed.
+
+"The window that opens must be above the cursor" is the precover rect, found
+from the outside. And §34.4's fix is what made it a 100% reproduction rather
+than a sporadic one: freezing the pointer for the length of the load is
+correct, and it also stops the reader moving the arrow out of the rect before
+the bank happens.
+
+**Two defects, one symptom, and the first fix was not wasted** — the audit that
+found it is what says nothing else in the kernel draws unlocked, and the frozen
+pointer is what made the second one reproducible. But it is the reason this
+note is worth keeping in full: a fix that removes a *mechanism* is not a fix
+that removes a *symptom*, and only the field could tell the two apart.
+
+### 34.6 What made the second one findable
+
+The first investigation had a counter and no picture; this one needed both.
+
+- **The reader's recipe was the whole of the reproduction.** Every harness here
+  had moved the mouse *during* the load, because that is what the first report
+  described — and moving it is precisely what takes the arrow out of the rect
+  that gets banked. Parking it and opening the window with **Enter** (`fm_onkey`
+  has the shortcut) reproduces it every run.
+- **A cursor event ring beat every counter.** `make GFXAUDIT=1` logs a tag, the
+  refcount and the drawn position at each show, hide, move, lock and unlock,
+  stops when full, and is re-armed by writing 0 to `[cur_log_i]`. Armed one
+  instruction before the launch it printed six lines, and the defect was two of
+  them: `W` (wm_show) and `P` (the bank) both at `lvl=0`, with no `L` above
+  them. Reading "the bank ran with the arrow drawn and nobody holding the lock"
+  off six lines took less time than one more round of reasoning about who ought
+  to have hidden it.
+- **A stale comment was the confession.** Three places in the tree said
+  `WM_SHOW/HIDE/FRONT` take the lock themselves. All three were written by
+  someone who had checked the *contract* and not the code.
+
+## 35. A boot that reached the desktop with a corrupt kernel — 86Box XT, 360KB
+
+**The reader's opening line was five words and a number, and the number was the
+whole of the diagnosis:**
+
+> *"I'm getting corruption in the middle of the boot; weirdly, 44%, in the
+> middle of the long read."*
+
+What followed was six rounds against one machine, four defects, and three of
+them were introduced by the branch that was being tested. Every one of the four
+is **invisible to every instrument in this tree**, and each is invisible for a
+different reason — which is why this note is worth its length. The four are, in
+the order they were peeled off:
+
+| | what it was | why nothing here saw it |
+|---|---|---|
+| 35.2 | the splash bar parked at 44% | no gate had ever watched the bar MOVE |
+| 35.3 | the VGA framebuffer never cleared | every BIOS in this tree clears mode 12h |
+| 35.4 | a retired far pointer, called | the call site is post-desktop and every boot row stops at the first frame |
+| 35.5 | stage 1's read lost sector 9 of a track | the IBM XT ROM says EOT=8; nothing else does |
+| 35.7 | the kernel load's run bound was 0x2000 | SPEC.md §18.93's reload rescues it and the desktop comes up |
+
+### 35.1 The machine
+
+86Box 6.0 build 9001, `machine = ibmxt86` — the October 1982 IBM XT ROM — with
+the 8088 at 10 MHz, `mem_size = 640`, `gfxcard = vga`,
+`hdc_1 = st506_xt_st11_m` behind a 20MB ST-225 image, `sndcard = sb2.0`,
+`net_01_card = novell_ne1k`, `mouse_type = msserial`, and two 360KB floppy
+drives. The reader supplied the ROM and the `86box.cfg`, and both mattered:
+§35.5 is a property of that ROM and of no other in this project's reach.
+
+**The branch under test was `splash-evict`** — SPEC.md §2.9.4–§2.9.7, which
+moves the loading screen out of `.text` into a 13-sector blob at the front of
+the image, relocates that blob to the heap's floor, and gives the memory back
+after `spl_finish`. Three of the four defects are that work's.
+
+### 35.2 44%, and why the fraction was the answer
+
+The bar stopped at 44% and stayed there for the rest of the load. 96/214 is
+44.86%, and 96 is 0x60 — **`KERNEL_SEG`**.
+
+`spl_tick` takes the sectors loaded in `AX`. Moving the loading screen into
+`.boot2` put a `mov ds, KERNEL_SEG` in front of the first use of it, and an 8086
+has no `mov ds, imm`: the segment goes through a general register, and the
+register it went through was the argument. `[spl_done]` was 0x60 on every tick.
+
+**The number on the glass was a register.** Nothing else about the boot was
+wrong, and the machine came up.
+
+`tests/splashbar.py` is the gate that did not exist: it samples `[spl_done]` and
+the **lit width of the trough** a frame at a time, and asserts both take many
+values and grow. Reintroduce the defect and it prints *"it parked at 96/214 =
+44%"*.
+
+### 35.3 The Hercules run had the freeze and NOT the corruption
+
+> *"Same freeze on hercules as well, without the corruption."*
+
+Two separate defects, separated by one sentence from the reader. The freeze is
+§35.2 on both cards; the *corruption* — banded dashes behind the loading dialog
+with the title text speckled — is VGA's alone, and it is not corruption at all.
+
+`vid_setmode` set mode 12h through the ROM and trusted the ROM to clear the
+framebuffer. Every BIOS in **this** tree does. The IBM XT ROM sets 12h through
+the VGA card's own option ROM, and what is left in plane 2 afterwards is the
+**mode 3 character generator** — which is bitmap the instant the card is in 12h.
+The loading screen was drawn on top of a font.
+
+SPEC.md §39.23 is the fix (the VGA arm clears A0000 itself, Map Mask all four
+planes) and `VGADIRTY=1` is the bracket: it fills the framebuffer with 0xDB in
+the one window a machine cannot — after the ROM's mode set and before ours.
+`tests/vgadirty.py` fails with **189,952 surviving pixels** if the clear comes
+out.
+
+**And the knob was wired to nothing for its first two runs.** `VGADIRTY` went
+into `$(KNOBS)` and not into `$(VIDSTAMP)`, so `make VGADIRTY=1` said *"up to
+date"* and the test read a kernel nobody had built. A stamp-tracked knob is two
+lists, and the second one is the one that is easy to forget.
+
+### 35.4 92%, and a far pointer that had been retired
+
+> *"Got further! Freezing at 92 now, which I think is the .ovl handover?"*
+
+`SPLCALL` is `mov word [spl_fp], %1` + `call far [spl_fp]` — it writes **only
+the offset half**, and takes the segment from `spl_fseg`. Stage 4 gives the blob
+back to the heap, so the pair was pointed at `spl_dead` when the screen was
+finished with.
+
+That lasted exactly until the next call site, which rewrote the offset and left
+the segment at `KERNEL_SEG`. Every `SPLCALL` after the handover became
+`call far KERNEL_SEG:{3,7,11,15}` — `cold_entry`'s padding. The site on
+`dsk_xfer`'s per-sector path meant **every disk access after the desktop**.
+
+The fix is a guard inside the macro (`cmp byte [spl_live], 0 / je`), which costs
+a rung. `tests/postboot.py` is the gate: it opens drive B: *after* the desktop
+and asserts a window opened and the ticks advanced. Every other boot row in the
+tree stops at the first frame, which is how a kernel that jumped into
+`cold_entry` on its next `int 13h` passed all of them.
+
+### 35.5 `Loader checksum 589C` — the IBM ROM's EOT is 8
+
+Past that, the boot reached a screen and stopped, and the RTC bisect said
+something that made no sense: **every configuration that reached the clock
+ladder's `.found` failed, and every one that fell through to `.none` booted.**
+`RTC=none` and `RTC=at` both froze at block 31; `RTC=ns` reached the desktop;
+`RTC=rp` took INT 0; `RTC=bios` hung with a disk error.
+
+That is not a clock bug. That is **code that is not there**.
+
+The instrument that named it is SPEC.md §2.9.7: stage 1 now sums the 13-sector
+blob it just read, as a 16-bit word sum, against a constant the Makefile injects
+from the built kernel — and `BOOTDIAG=1` prints what it actually got. The reader
+sent back four hex digits:
+
+> *"589c"*
+
+`0xB885 - 0x589C` is exactly **blob sector 5's own sum**, and blob sector 5 is
+cylinder 0, head 1, **sector 9** — the last sector of the track, and the last
+sector of stage 1's first `int 13h`.
+
+`int 1Eh` is a *pointer*, not a handler: it names an 11-byte table the BIOS
+re-reads on every floppy operation, and byte 4 of it is **EOT**, the last sector
+number the FDC may touch on a track. **The IBM PC and XT ROMs say 8**, from the
+8-sector diskettes of DOS 1.x. Every DOS since 1982 replaces that table at boot;
+this loader replaced it in *stage 2*, and stage 1's own multi-sector read
+happens first. The read returned CF=0 and the full count with 512 bytes
+missing.
+
+SPEC.md §2.9.8 moved the patch into the sector, and paid for it by moving the
+text-mode set the other way. **That trade is what §35.7 is.**
+
+### 35.6 What the reader's instinct was worth
+
+Two of the reader's sentences shortened this by rounds.
+
+> *"We're debugging on an emulator, so just go ahead and send them to me. Worst
+> they can do is not boot."*
+
+Diagnostic disks stopped being verified before they went out, and the loop went
+from one round a session to four.
+
+> *"This rom does do a multi-track/cylinder read though - this is the same
+> system that was written for (and its working prior to our work here). So I
+> think we broke something in that logic."*
+
+…which was right, and is §35.7. **The reader knew the machine's history and this
+end knew the diff; neither half finds it alone.** The canary firing on a ROM
+that had always done multi-track reads reads as §18.93.1 working as designed if
+you only have the diff, and as an unexplained regression if you only have the
+machine.
+
+### 35.7 The bound that was a cursor shape
+
+Moving the text-mode set into stage 2 put `int 10h AH=01h` three instructions
+above the run bound. **It takes the cursor shape in `CX`. `CX` was the sectors
+per track.** `[b2_run]` came out 16,384 and `[b2_runmax]` 8,192.
+
+The full account is SPEC.md §18.93.3. What belongs in a field note is the shape
+of its silence, because it is the worst of the four:
+
+- The boot **works**. `read_run` asks for 125 sectors across a cylinder, the FDC
+  refuses, three retries fail, and §18.93's shorten-and-reload loads a correct
+  kernel at the track bound.
+- Every gate in the tree passes, including `make test-full`.
+- What is gone is **SPEC.md §18.91.1 entirely** — `[b2_runmax]` is `SPT`, so the
+  canary's `je .nocross` skips it, `boot_cylrun` stays 0, and `dsk_xfer` is
+  careful for nothing for the rest of the session. The 2.2s is paid for and not
+  collected, on every machine.
+- The only outward sign is three failed reads at the top of a boot that already
+  sounds like a floppy.
+
+A BIOS that answers that same call **CF=0 with a short count** — which is what
+the field XT looks like — reports the load complete with most of the kernel
+missing, fails the KSIG probe, and reloads. Same rescue, same silence, one more
+full load of drive noise.
+
+`tests/cylrun.py` is the gate. It asserts the one thing the boot could not say
+about itself: `boot_cylrun` at `0060:0004` is **non-zero** after an 8088 boot.
+Before the fix it read 0 on MartyPC too — so this was never a field-only defect,
+it was a defect no instrument here was pointed at. It reads 18 now.
+
+### 35.8 CLOSED — both were the read corruption
+
+Two symptoms outlived §35.5 and looked like defects of their own. They were not.
+On `e6c2e93` the reader reports a **complete, working desktop on three
+different 86Box machines** — a 286 MR BIOS VGA with a 70h clock, an XT VGA with
+no clock at all, and a 5150 with a SixPakPlus clock — with the date correct on
+all three:
+
+> *"All of the symptoms stem from the various read corruptions."*
+
+**A kernel with holes in it was the sufficient explanation, and it was the
+whole explanation.** Both are recorded below anyway, because the *reasoning
+that nearly went wrong* is the reusable part: each had a plausible,
+self-consistent story that pointed somewhere else entirely, and both stories
+were wrong.
+
+**A. No drive icons on the desktop** — and the story it invited was a hardware one. The menu bar is correct (chip, Locator,
+File, Builtins) and the dock is empty. `desk_init` opens with `int 0x11` /
+`test al, 0x01`, and a zero there means the equipment word claims **no floppy
+drives** — so no volume gets a zone. On an XT that word is the SW1 DIP switches
+read back through the 8255: a statement about what somebody set, and, on a
+machine with an ST-11 option ROM in it, about what that ROM left behind.
+`fdd_dbg_eqp` banks what `int 11h` actually claimed; `OVLMARK 51` in `.none`
+reports the branch. MartyPC's `os8088_xt_vga` reads `fdd_dbg_eqp=2` and draws
+both icons.
+
+**B. Two garbage glyphs where the clock goes**, at about screen x 617–632,
+instead of a date. The reader:
+
+> *"The default clock just gets set to a specific date - aug 04 iirc."*
+
+…so this is **not** the no-RTC rendering. MartyPC with no RTC at all
+(`clk_tier=0 clk_rtc=0 clk_ref=0`) draws a full date string — the menu bar's ink
+groups are `[(10,20),(40,94),(120,149),(168,229),(488,508),(520,534),(544,573),
+(592,630)]`, and the QEMU VGA reference has *"Aug 27 2026 12:49"* at x≈487–570.
+Two glyphs at the far right is a *third* thing, matching neither.
+
+`OVLMARK 49` in rung 5 was added to tell NS apart from BIOS when block 39
+lights. It was never needed: the RTC ladder was reading the chips correctly the
+whole time, on all four rungs, and what was two glyphs wide was the drawing of
+the result.
+
+**The lesson is the RTC bisect table in §35.5, and it is worth keeping.** Every
+configuration that reached the clock ladder's `.found` failed, and every one
+that fell through to `.none` booted — which reads as a damning indictment of the
+clock code and is in fact a statement about *how much code each path executes
+out of a region of the image that was missing*. A bisect over a feature switch
+is only a bisect over that feature if the binary is intact; on a corrupt image
+it is a bisect over **code size**, and it will name whatever component happens
+to be large. Nothing in the table was a clock finding. Two of the three symptoms
+in this note were reasoned about for a round each before §35.5 made them
+disappear at once.
+
+### 35.9 The instruments this cost, and which are keepers
+
+Four gates and one boot-time check came out of it, and all five stay:
+
+- `tests/splashbar.py` — the counter **and** the lit width of the trough.
+- `tests/vgadirty.py` — with the `VGADIRTY=1` knob that fills A0000 in the one
+  window a machine cannot.
+- `tests/postboot.py` — the first disk access **after** the desktop.
+- `tests/cylrun.py` — `boot_cylrun != 0`.
+- `tests/blobsum.py` and SPEC.md §2.9.7's own checksum, which is the only reason
+  §35.5 took one round instead of five. It is worth 30 bytes of the boot sector
+  permanently: **the blob is the one part of this image that nothing else
+  verifies**, and a short read of it presents as the kernel misbehaving.
+
+Two of the five assert things that were true for years and had never been
+checked. That is the finding underneath all of them: this tree's boot rows all
+stop at the first frame of the desktop, and three of the four defects here live
+either after that frame or in a number the frame does not show.
+

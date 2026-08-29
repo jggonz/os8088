@@ -9,7 +9,7 @@
 ;   Slot 2             -     Too Small
 ;   Slot 3            50M    Unusable       <- foreign, or over the ceiling
 ;   Slot 4             -     No Room
-;   [Install] [Close]
+;   [Install] [Close]      <- the first one says 'Copy Apps', then 'Restart'
 ;   Insert the APPS disk in A:, then Install
 ;
 ; **IT FORMATS THE TARGET, AND THAT IS NOT A CONVENIENCE.** boot/boothd.asm
@@ -24,11 +24,14 @@
 ; modal dialog to ask in - tool.inc's Delete uses the same idiom, the caption
 ; asking and the second click answering:
 ;
-;   idle     -> Install arms:  'Erases slot N - Install again to confirm'
-;   armed    -> format, then copy the SYSTEM disk (the one in A: now)
-;               'Copied - insert APPS disk, then Install'
-;   sysdone  -> copy that disk, write the VBR, write the MBR
-;               'Done - restart with no floppy'
+;   idle     -> Install arms:  'Erases it: Install again to confirm'
+;   armed    -> format, copy the SYSTEM disk (the one in A: now), write the
+;               VBR and then the MBR - the machine boots from here on
+;               (SPEC.md 52.10.10):  'Insert the APPS disk, then Install'
+;   sysdone  -> copy that disk:      'Done - remove the floppy, Restart'
+;   done     -> the SAME button says 'Restart' now, and reboots the machine
+;               (SPEC.md 52.10.6.1). It was a third button of its own, greyed
+;               through every stage but this one
 ;
 ; Taking the system disk out mid-install is safe: the kernel is in RAM and the
 ; only thing that reaches for A: afterwards is this copy. A Control Panel
@@ -74,15 +77,16 @@ HIW_CAPY     equ 120
   %endmacro
 %endif
 
-HIW_B0X      equ 8              ; 'Install', or 'Copy Apps' in the second
-HIW_B1X      equ 104            ; stage (SPEC.md 52.10.10) - which is nine
-HIW_B2X      equ 168            ; characters, 72px, and so exactly as wide as
-HIW_BW0      equ 88             ; the 72px button was: it would have touched
-HIW_BW1      equ 56             ; the frame at both ends. 88 gives it 8px of
-HIW_BW2      equ 72             ; margin, and the other two move right by 16.
-                                ; They drive the HIT TEST as well as the
-                                ; drawing (hd_iw_click reads the same pair),
-                                ; so there is one place to change and not two
+HIW_B0X      equ 8              ; the ACTION button: 'Install', 'Copy Apps' or
+HIW_B1X      equ 104            ; 'Restart', one control saying what the click
+HIW_BW0      equ 88             ; does NOW (SPEC.md 52.10.6.1). Its widest
+HIW_BW1      equ 56             ; caption is nine characters, 72px, and the
+                                ; button was 72px: it would have touched the
+                                ; frame at both ends, so it is 88 and Close
+                                ; moved right by 16. These drive the HIT TEST
+                                ; as well as the drawing (hd_ibhit reads the
+                                ; same pairs), so there is one place to change
+                                ; and not two
 HIW_CELLS    equ 35             ; characters across the text band: HIW_W - 12
                                 ; less HIW_LX, in 8px cells. Every run in this
                                 ; window is padded to it, which is what makes
@@ -345,14 +349,13 @@ hd_iw_paint:
                                 ; first and is a whole content drawn a window's
                                 ; width to the right of where it belongs
 
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
     mov si, hd_s_ihead
     mov cx, di
     add cx, HIW_LX
     mov dx, bp
     add dx, HIW_HY
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the content's own ground
+    call OSAPI_FONT_RUN             ; (SPEC.md 52.12)
 
     call hd_irows_emit
 
@@ -370,7 +373,7 @@ hd_iw_paint:
 
 ; -----------------------------------------------------------------------------
 ; hd_iw_button - one framed button (module internal)
-; in:  SI = label, AX = x, BX = width, CL = 0 Install / 1 Close,
+; in:  SI = label, AX = x, BX = width, CL = 0 the action button / 1 Close,
 ;      DI = pane left, BP = pane top
 ;
 ; The pen comes from OSAPI_GFX_PEN, so a disabled button carries [gfx_dis]
@@ -378,9 +381,10 @@ hd_iw_paint:
 ; coming out solid black inside a dotted frame (SPEC.md 47 rule 1). Close is
 ; never disabled: there is always a way out of a window.
 ;
-; CL picks the PREDICATE, not the state: 0 = hd_inst_ok, 1 = always live,
-; 2 = hd_rest_ok. One predicate per control, shared by the greying, the click
-; refusal and the explanation (SPEC.md 47 rule 2).
+; CL picks the PREDICATE, not the state: 0 = hd_iact_ok, 1 = always live. One
+; predicate per control, shared by the greying, the click refusal and the
+; explanation (SPEC.md 47 rule 2) - and ONE for the action button whichever of
+; its three captions is on it (SPEC.md 52.10.6.1).
 ; -----------------------------------------------------------------------------
 hd_iw_button:
     push ax
@@ -402,12 +406,8 @@ hd_iw_button:
 .nodn:
     cmp cl, 1
     je .live
-    ja .rest
-    call hd_inst_ok             ; the ONE predicate, shared by the greying,
+    call hd_iact_ok             ; the ONE predicate, shared by the greying,
     jmp short .pen              ; the refusal and the explanation (47 rule 2)
-.rest:
-    call hd_rest_ok
-    jmp short .pen
 .live:
     clc
 .pen:
@@ -448,7 +448,7 @@ hd_idown:   db 0                ; which button is DRAWN pressed, 0 = none
 ; -----------------------------------------------------------------------------
 ; hd_ibhit - which button is this CONTENT-relative point in?
 ; in:  CX = content-relative x, DX = content-relative y
-; out: AL = 1..3 (Install, Close, Restart), or 0; AH clobbered
+; out: AL = 1..2 (the action button, Close), or 0; AH clobbered
 ;
 ; One description, read by the press, the drag and the release - and by the
 ; painter through the same HIW_B* constants. The ids are the predicate
@@ -470,11 +470,6 @@ hd_ibhit:
     jl .no
     cmp cx, HIW_B1X + HIW_BW1
     jl .out
-    inc al
-    cmp cx, HIW_B2X
-    jl .no
-    cmp cx, HIW_B2X + HIW_BW2
-    jl .out
 .no:
     xor al, al
 .out:
@@ -482,12 +477,12 @@ hd_ibhit:
 
 ; -----------------------------------------------------------------------------
 ; hd_ictlpaint - redraw ONE button, in whatever state [hd_idown] says
-; in:  AL = 1..3; the lock is held
+; in:  AL = 1..2; the lock is held
 ; out: nothing (all registers preserved)
 ;
-; NOT hd_ibtns_draw: that white-fills the whole 16px band and re-emits all
-; three, which on every press and every slide is PERFORMANCE.md's double-draw
-; flash - the defect the feature exists to avoid, introduced by the feature.
+; NOT hd_ibtns_draw: that white-fills the whole 16px band and re-emits both,
+; which on every press and every slide is PERFORMANCE.md's double-draw flash -
+; the defect the feature exists to avoid, introduced by the feature.
 ; -----------------------------------------------------------------------------
 hd_ictlpaint:
     push ax
@@ -505,25 +500,14 @@ hd_ictlpaint:
     mov cl, al                  ; CL = the predicate selector, which IS the id
     or al, al                   ; minus one (see hd_ibhit)
     jnz .b1
-    mov si, hd_s_iinst          ; ...and in the apps stage it is not an INSTALL
-    cmp byte [hd_iw_st], HII_SYSDONE    ; any more (SPEC.md 52.10.10), so the
-    jne .b0                     ; button says what the click actually does -
-    mov si, hd_s_icopy          ; hd_ibtns_emit's own branch, and the one thing
-.b0:                            ; here that a caption table could not carry
-    mov ax, HIW_B0X
-    mov bx, HIW_BW0
+    call hd_ib0_label           ; SI = what the action button says in THIS
+    mov ax, HIW_B0X             ; stage - asked, never re-derived, because
+    mov bx, HIW_BW0             ; hd_ibtns_emit asks the same routine
     jmp short .draw
 .b1:
-    cmp cl, 1
-    jne .b2
     mov si, hd_s_close
     mov ax, HIW_B1X
     mov bx, HIW_BW1
-    jmp short .draw
-.b2:
-    mov si, hd_s_irest
-    mov ax, HIW_B2X
-    mov bx, HIW_BW2
 .draw:
     call hd_iw_button
 .out:
@@ -611,22 +595,25 @@ hd_iw_up:
                                 ; first is PERFORMANCE.md's double-draw
     cmp al, 2
     je .close
-    ja .restart
-    call hd_inst_ok
-    jc .refused
+    call hd_iact_ok             ; the action button's one predicate, whichever
+    jc .refused                 ; caption is on it
+    cmp byte [hd_iw_st], HII_DONE   ; ...and at the end that caption is
+    je .restart                     ; 'Restart', so that is what the click does
+                                    ; (SPEC.md 52.10.6.1). The STAGE decides
+                                    ; and not a second id: there is one button
+                                    ; here, and hd_ibhit cannot tell which verb
+                                    ; it is wearing
     call hd_inst_step
-    call hd_ibtns_draw          ; the stage moved, so hd_inst_ok and hd_rest_ok
-    call hd_imsg_draw           ; may both have flipped - and the message
-    jmp short .done             ; always did. The ROWS did not: hd_iw_scan
-                                ; runs at open, and a stage changes no slot's
-                                ; state (SPEC.md 52.10.6)
+    call hd_ibtns_draw          ; the stage moved, so hd_iact_ok and the
+    call hd_imsg_draw           ; caption may both have flipped - and the
+    jmp short .done             ; message always did. The ROWS did not:
+                                ; hd_iw_scan runs at open, and a stage changes
+                                ; no slot's state (SPEC.md 52.10.6)
 .close:
     call hd_iw_shut
     jmp short .done
 .restart:
-    call hd_rest_ok             ; a greyed control explains itself, so a
-    jc .done                    ; refused release here says nothing (47 rule 5)
-    mov al, 1                   ; ...and NOT the flushing kind: the caption
+    mov al, 1                   ; NOT the flushing kind: the caption
                                 ; this button sits under has just told the
                                 ; user to take the floppy out, so the Control
                                 ; Panel's write would mount an empty drive and
@@ -893,7 +880,34 @@ hd_imsg_draw:
     ret
 
 ; -----------------------------------------------------------------------------
-; hd_ibtns_emit / hd_ibtns_draw - the three buttons, greying and all
+; hd_ib0_label - what the ACTION button says in the stage we are in
+; out: SI = the string; every other register preserved, flags clobbered
+;
+; ONE control, three captions, each naming what the click actually does
+; (SPEC.md 52.10.6.1): 'Install' while there is one to do, 'Copy Apps' once
+; the volume boots and the click is adding software (SPEC.md 52.10.10), and
+; 'Restart' once the apps are on it too. It is a routine rather than a table
+; because the answer is a STAGE and not a row - and it is a routine rather
+; than a branch because BOTH drawers need it, the full pass and the
+; one-button repaint, and a second copy of it is a second opinion about what
+; the button says.
+; -----------------------------------------------------------------------------
+hd_ib0_label:
+    mov si, hd_s_iinst
+    cmp byte [hd_iw_st], HII_SYSDONE
+    je .copy
+    cmp byte [hd_iw_st], HII_DONE
+    je .rest
+    ret
+.copy:
+    mov si, hd_s_icopy
+    ret
+.rest:
+    mov si, hd_s_irest
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_ibtns_emit / hd_ibtns_draw - both buttons, greying and all
 ; -----------------------------------------------------------------------------
 hd_ibtns_emit:
     push ax
@@ -901,11 +915,7 @@ hd_ibtns_emit:
     push cx
     push dx
     push si
-    mov si, hd_s_iinst          ; ...and in the apps stage it is not an
-    cmp byte [hd_iw_st], HII_SYSDONE    ; INSTALL any more: the disk is
-    jne .b0                     ; already installed and bootable (SPEC.md
-    mov si, hd_s_icopy          ; 52.10.10), so the button says what the
-.b0:                            ; click actually does
+    call hd_ib0_label           ; SI = 'Install' / 'Copy Apps' / 'Restart'
     mov ax, HIW_B0X
     mov bx, HIW_BW0
     xor cl, cl
@@ -914,11 +924,6 @@ hd_ibtns_emit:
     mov ax, HIW_B1X
     mov bx, HIW_BW1
     mov cl, 1
-    call hd_iw_button
-    mov si, hd_s_irest
-    mov ax, HIW_B2X
-    mov bx, HIW_BW2
-    mov cl, 2
     call hd_iw_button
     pop si
     pop dx
@@ -960,34 +965,28 @@ hd_ibtns_draw:
     ret
 
 ; -----------------------------------------------------------------------------
-; hd_rest_ok - may Restart be clicked? (module internal)
-; out: CF = 0 yes / 1 no.  SPEC.md 47 rule 2's predicate for that button.
+; hd_iact_ok - may the ACTION button be clicked? (module internal)
+; out: CF = 0 yes / 1 no.  SPEC.md 47 rule 2's single predicate for it.
 ;
-; A FACT and not a guess (rule 3): the install this dialog just did is what
-; there is to restart into, so the button is live from the moment the stage
-; machine says the MBR was written and greyed before it.
+; ONE predicate for one control, whichever of hd_ib0_label's three captions is
+; on it. There were TWO - hd_rest_ok asked whether the stage had reached
+; HII_DONE, and this routine's FIRST test was the same compare answering no
+; because there is nothing left to install - and they collapse because they
+; were always the same question asked from two ends (SPEC.md 52.10.6.1).
+;
+; At HII_DONE it answers YES, and that is a FACT rather than a guess (rule 3):
+; the button says Restart there, and what there is to restart into is the
+; install this dialog just did.
 ; -----------------------------------------------------------------------------
-hd_rest_ok:
-    cmp byte [hd_iw_st], HII_DONE
-    je .yes
-    stc
-    ret
-.yes:
-    clc
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_inst_ok - may Install be clicked? (module internal)
-; out: CF = 0 yes / 1 no.  SPEC.md 47 rule 2's single predicate.
-; -----------------------------------------------------------------------------
-hd_inst_ok:
+hd_iact_ok:
     push bx
     cmp byte [hd_iw_st], HII_DONE
-    je .no                      ; finished: nothing left to do in here
+    je .yes                     ; finished: the button is Restart now
     mov bl, [hd_isel]
     xor bh, bh
     cmp byte [bx+hd_istate], HIS_OK
     jne .no
+.yes:
     pop bx
     clc
     ret
@@ -1490,9 +1489,9 @@ hd_iw_click:
 
     cmp dx, HIW_BY - 2
     jl .rows
-    ; SPEC.md 13.6/13.8.4: Install writes a disk, Restart reboots the machine
-    ; and Close ends the window - not one of the three has a safe prefix
-    ; action, so the press only ARMS and DRAWS and hd_iw_up acts.
+    ; SPEC.md 13.6/13.8.4: the action button writes a disk or reboots the
+    ; machine and Close ends the window - neither has a safe prefix action,
+    ; so the press only ARMS and DRAWS and hd_iw_up acts.
     call hd_ibhit
     or al, al
     jz .done
