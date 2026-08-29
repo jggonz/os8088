@@ -532,11 +532,13 @@ endif
 # HEAPCOMPACT=0 removes the heap compactor (SPEC.md 66) - the BODY, not merely
 # the call, so the A/B measures the feature and not a branch around it. With it
 # off, mem_claim's retry loop is the shed-and-retry it was, every claim stays
-# where it was first placed, and OSAPI_MEM_MOVABLE records a handle nothing
-# ever reads. This is the reference build for tests/heapfrag and for any claim
-# that compaction changed a byte it should not have: the two kernels must
-# produce identical contents in every surviving block, and only the ADDRESSES
-# may differ.
+# where it was first placed, mem_can_move pins the lot - so mem_avail, which
+# answers out of the compactor's plan (SPEC.md 66.10.3), reports the run this
+# heap really has - and OSAPI_MEM_MOVABLE records a handle nothing ever reads.
+# This is the reference build for tests/heapfrag and for any claim that
+# compaction changed a byte it should not have: the two kernels must produce
+# identical contents in every surviving block, and only the ADDRESSES may
+# differ.
 ifeq ($(HEAPCOMPACT),0)
 VIDDEF += -DNOCOMPACT
 endif

@@ -852,40 +852,42 @@ Three things about it:
 ```json
 {
   "big": {
-    "bss": 6050,
+    "bss": 5932,
     "budget": 122368,
     "codemax": 65536,
-    "cold": 39185,
-    "coldpara": 2464,
+    "cold": 40413,
+    "coldpara": 2528,
     "fatpara": 288,
-    "imgpara": 4000,
-    "kend": 7552,
+    "imgpara": 3840,
+    "kend": 7456,
     "kseg": 96,
-    "ksize": 119296,
+    "ksize": 117760,
     "lowbss": 8982,
     "lowpara": 640,
-    "ovl": 2828,
+    "ovl": 3909,
     "stk0": 1024,
-    "text": 57505,
+    "text": 55270,
     "vgabuf": 848,
     "vgabufpara": 64
   },
   "small": {
-    "bss": 5525,
+    "bss": 5435,
     "budget": 107520,
     "codemax": 65536,
-    "cold": 36560,
-    "coldpara": 2304,
+    "cold": 37499,
+    "coldpara": 2368,
     "fatpara": 288,
-    "imgpara": 3520,
-    "kend": 6816,
+    "imgpara": 3328,
+    "kend": 6688,
     "kseg": 96,
-    "ksize": 107520,
+    "ksize": 105472,
     "lowbss": 8470,
     "lowpara": 608,
-    "ovl": 2799,
+    "ovl": 3826,
     "stk0": 1024,
-    "text": 50477
+    "text": 47364,
+    "vgabuf": 0,
+    "vgabufpara": 0
   }
 }
 ```
@@ -900,13 +902,13 @@ derived from them exactly as `kernel/kernel.asm` derives them.
 
 | region | size | what it is |
 |---|---:|---|
-| image (`.text` 56,586 + `.bss` 6,456) | 63,488 B | all resident kernel code in the kernel's own segment, its read-only data, and its scratch — 446 bytes of the rung are free |
-| cold code | 39,424 B | 39,047 bytes with a CS of their own: the Control Panel, the five file modules, SPEC.md §2.6's second round — assoc, disk, driver, memory and desk — and SPEC.md §18.99's disk clone. 377 bytes of the rung are free |
+| image (`.text` 55,270 + `.bss` 5,932) | 61,440 B | all resident kernel code in the kernel's own segment, its read-only data, and its scratch — 238 bytes of the rung are free |
+| cold code | 40,448 B | 40,413 bytes with a CS of their own: the Control Panel, the five file modules, SPEC.md §2.6's second round — assoc, disk, driver, memory and desk — and SPEC.md §18.99's disk clone. 35 bytes of the rung are free |
 | FAT window | 4,608 B | nine of the mounted volume's FAT sectors (SPEC.md §18.8) — the whole FAT on any floppy, a sliding window on a hard disk |
 | `.lowbss` + task 0's stack | 10,240 B | 8,982 B of tables, stacks and disk buffers, plus `STK0_SIZE` = 1,024 — 234 bytes of the rung are free |
 | `.vgabuf` | 1,024 B | 848 B: `vga_p4tab` and `vga_pbuf`, SPEC.md §5.4.1.3's planar decoder and nothing else. **The topmost rung, and the only one a machine can decline** — `mem_init` seeds `[mem_base]` under it when `[vid_avail] & VID_A_VGA` is clear, so a mono machine never reserves these 1,024 bytes and its heap starts here instead (SPEC.md §39.22). 0 B on `kern_small` and on any `NOPLANE` build, which have no decoder |
-| the boot overlay | 0 B | 3,870 bytes of code inside **stage 2's blob** (SPEC.md §2.9.6), which sits on the heap's floor and is given back at `spl_finish`. It was inside the FAT window and gone by the first mount; before that it was a heap claim |
-| **total** | **119,296 B** | of a 122,368-byte budget — **3,072 spare, six steps** (the thirty-fifth move's, and earmarked: see "The rule"), and the two rung figures above are what is actually free inside it. **The image, cold and FAT rows are the pre-move-33 figures and have NOT been re-derived** — the total, the budget and the two `LOW`/`VGABUF` rows have. `tools/kernsize.py --json` is the live breakdown; this table is hand-written and says so below |
+| the boot overlay | 0 B | 3,909 bytes of code inside **stage 2's blob** (SPEC.md §2.9.6), which sits on the heap's floor and is given back at `spl_finish`. It was inside the FAT window and gone by the first mount; before that it was a heap claim |
+| **total** | **117,760 B** | of a 122,368-byte budget — **4,608 spare, nine steps**, and the rung figures above are what is actually free inside it. **Every row here was re-derived from `kernsize`'s own `sections` and `rungs` lines at the bless that carries stage 2** — the image and cold rows had been the pre-move-33 figures until then. `tools/kernsize.py --json` is the live breakdown; this table is hand-written and says so below |
 
 **This table is HAND-WRITTEN and the block above it is not**, which is how it
 came to disagree with the blessed JSON by 800 bytes before this was noticed.
@@ -924,7 +926,7 @@ because `.lowbss` was the LAST rung before the heap: a byte that leaves it
 lowers the floor directly, with nothing above it to relocate. Everything
 lower in the ladder is pinned under the image and cannot be dropped this
 cheaply. The total above is the VGA machine's; on a Hercules or a CGA read it
-as **118,272 B**, and `SK_KERN` says so too (SPEC.md §39.22).
+as **116,736 B**, and `SK_KERN` says so too (SPEC.md §39.22).
 
 **These are `kern_big`'s figures**, which is to say the shipped kernel's
 (docs/KERN-SPLIT-PLAN.md). **The two builds have DIVERGED** — in both
@@ -1662,45 +1664,44 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 33,102 | 34.2% |
-| the window system and its furniture | 25,204 | 26.1% |
-| drawing: adapters, primitives, glyphs, icons | 17,036 | 17.6% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 10,531 | 10.9% |
-| the kernel proper: API table, heap, scheduler, events | 8,008 | 8.3% |
-| the three built-in kinds | 1,749 | 1.8% |
+| the file system, end to end | 33,305 | 34.8% |
+| the window system and its furniture | 25,310 | 26.5% |
+| drawing: adapters, primitives, glyphs, icons | 16,121 | 16.8% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,994 | 10.4% |
+| the kernel proper: API table, heap, scheduler, events | 8,078 | 8.4% |
+| the three built-in kinds | 1,815 | 1.9% |
 | the Control Panel | 1,060 | 1.1% |
-| **total** | **96,690** | |
+| **total** | **95,683** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
-| `wm.inc` — the window manager (§11) | 11,847 | 95 | **11,942** | 1,086 | — |
-| `files.inc` — the Disk window (§22) | 1,131 | 8,711 | **9,842** | 471 | — |
+| `wm.inc` — the window manager (§11) | 11,857 | 95 | **11,952** | 1,086 | — |
+| `files.inc` — the Disk window (§22) | 1,131 | 8,719 | **9,850** | 471 | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 7,398 | 702 | **8,100** | 165 | 526 |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 359 | 6,061 | **6,420** | 890 | 3,584 |
-| `fdlg.inc` — the Standard File dialog (§38) | 273 | 5,156 | **5,429** | 169 | — |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 392 | 6,098 | **6,490** | 890 | 3,584 |
+| `fdlg.inc` — the Standard File dialog (§38) | 274 | 5,280 | **5,554** | 169 | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 5,067 | **5,246** | 155 | — |
-| `mouse.inc` — serial mouse and the cursor (§9) | 4,694 | — | **4,694** | 149 | — |
-| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 625 | 2,959 | **3,584** | 468 | — |
-| `ui.inc` — the UI task and the event ladder (§13) | 3,338 | — | **3,338** | 50 | — |
-| `menu.inc` — the menu bar and pull-downs (§12) | 3,084 | — | **3,084** | 197 | 98 |
+| `mouse.inc` — serial mouse and the cursor (§9) | 4,703 | — | **4,703** | 149 | — |
+| `ui.inc` — the UI task and the event ladder (§13) | 3,400 | — | **3,400** | 50 | — |
+| `menu.inc` — the menu bar and pull-downs (§12) | 3,086 | — | **3,086** | 197 | 98 |
+| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 543 | 2,491 | **3,034** | 348 | — |
 | `assoc.inc` — file type associations (§54) | 528 | 2,373 | **2,901** | 43 | — |
-| `memory.inc` — the claim heap (§50) | 14 | 2,738 | **2,752** | 22 | 324 |
+| `memory.inc` — the claim heap (§50) | 14 | 2,693 | **2,707** | 20 | 324 |
+| `instance.inc` — instances and the built-in kinds (§29) | 2,452 | — | **2,452** | 694 | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,440 | **2,440** | 148 | — |
-| `instance.inc` — instances and the built-in kinds (§29) | 2,422 | — | **2,422** | 694 | — |
-| `font.inc` — **(undescribed)** | 2,121 | — | **2,121** | 218 | 768 |
-| `apps.inc` — the three built-in kinds (§14) | 1,749 | — | **1,749** | 15 | 240 |
-| `icons.inc` — the icon renderer (§10) | 1,680 | — | **1,680** | 100 | — |
-| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,571 | — | **1,571** | 88 | — |
+| `font.inc` — **(undescribed)** | 2,125 | — | **2,125** | 218 | 768 |
+| `apps.inc` — the three built-in kinds (§14) | 251 | 1,564 | **1,815** | 15 | 240 |
+| `icons.inc` — the icon renderer (§10) | 1,686 | — | **1,686** | 100 | — |
+| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,541 | — | **1,541** | 88 | — |
+| `sched.inc` — pre-emptive scheduling (§7–8) | 1,223 | — | **1,223** | 124 | 2,746 |
 | `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,207 | — | **1,207** | 4 | — |
 | `snd.inc` — the sound layer (§34) | 1,200 | — | **1,200** | 300 | — |
-| `sched.inc` — pre-emptive scheduling (§7–8) | 1,116 | — | **1,116** | 120 | 2,746 |
 | `ctrl.inc` — the Control Panel (§31) | 778 | 282 | **1,060** | — | — |
 | `desk.inc` — the desktop and volume zones (§14/§26.1) | 15 | 1,040 | **1,055** | 18 | — |
+| `viddet.inc` — adapter detection and geometry (§39) | 1,014 | — | **1,014** | — | 696 |
 | `fsx.inc` — fullscreen exclusive (§53) | 1,011 | — | **1,011** | 10 | — |
-| `splash.inc` — the boot splash (§15) | 967 | — | **967** | — | — |
-| `viddet.inc` — adapter detection and geometry (§39) | 942 | — | **942** | — | 696 |
 | `dock.inc` — **(undescribed)** | 913 | — | **913** | 38 | — |
 | `loader.inc` — the package loader (§21) | — | 782 | **782** | 58 | — |
 | `clock.inc` — the clock ladder (§37) | 678 | — | **678** | 89 | — |
@@ -1708,15 +1709,16 @@ generated in the first place.
 | `toast.inc` — the menu bar's transient message (§59) | 537 | — | **537** | 25 | — |
 | `mod.inc` — on-demand kernel modules (§2.8) | 54 | 416 | **470** | 98 | — |
 | `blank.inc` — **(undescribed)** | 208 | 240 | **448** | — | — |
-| `xmem.inc` — memory above 1MB (§41.4–41.5) | 269 | 96 | **365** | 22 | — |
-| `clip.inc` — the system clipboard (§55) | 227 | — | **227** | 6 | — |
-| `events.inc` — the event ring (§10) | 170 | — | **170** | 134 | — |
+| `xmem.inc` — memory above 1MB (§41.4–41.5) | 263 | 104 | **367** | 22 | — |
+| `clip.inc` — the system clipboard (§55) | 229 | — | **229** | 6 | — |
+| `events.inc` — the event ring (§10) | 173 | — | **173** | 134 | — |
 | `clone.inc` — **(undescribed)** | 15 | 27 | **42** | — | — |
-| `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
+| `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 12 | — | **12** | — | — |
+| `splash.inc` — the boot splash (§15) | — | — | **0** | — | — |
 | `band.inc` — **(undescribed)** | — | — | **0** | — | — |
 | `bootprof.inc` — **(undescribed)** | — | — | **0** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 3,500 | — | **3,500** | — | — |
-| **total** | **57,505** | **39,185** | **96,690** | **6,050** | **8,982** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 3,505 | — | **3,505** | — | — |
+| **total** | **55,270** | **40,413** | **95,683** | **5,932** | **8,982** |
 <!-- END generated table -->
 
 ### Reading it
@@ -1761,7 +1763,10 @@ moves does not drag a paragraph out of date with it.
   window is also why the cold segment's shim block sits *below* every
   `%include` in `kernel.asm` — at over 500 bytes it pushed the splash out of
   its sectors when it sat above them, and the build failed naming splash and
-  nothing else.
+  nothing else. **Its row reads 0 now, and that is the truth rather than a
+  gap**: the module is `.boot2`'s (SPEC.md §2.9.4) and no rung in this table
+  charges for that section, because `KIMG_PARA` is `.text` + `.bss` and stage
+  2's blob is given back at `spl_finish`.
 - **`clip.inc` is 193 bytes** and `cpudet.inc` is 10 — the two smallest things
   with a chapter in SPEC.md. Not everything that has a name has a footprint.
 

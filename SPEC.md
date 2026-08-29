@@ -61270,7 +61270,12 @@ wrong memory an hour later, so the gates are the deliverable and not an
 afterthought.
 
 - **`make HEAPCOMPACT=0`** removes the body and not merely the call, so the
-  A/B measures the feature rather than a branch around it.
+  A/B measures the feature rather than a branch around it. It pins every claim
+  in `mem_can_move` as well, because `mem_avail` answers out of `mem_cp_plan`
+  (§66.10.3) and that plan is reached on this build too: a stubbed
+  `mem_compact` with a live plan would have the A/B kernel report the run a
+  compaction it cannot perform would have left, which is §50.6.3's invisible
+  direction of error in the build whose whole job is to be the honest one.
 - **`tests/heapfrag` runs its whole suite with a live worker**, and that is
   not incidental: without one, `mem_can_move` passes the package's claims on
   `I_TASK = 0xFF` alone and §66.5's handshake is never exercised, so the gate

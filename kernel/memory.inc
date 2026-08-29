@@ -1079,6 +1079,11 @@ mem_bcopy:
 ; and the failure it would buy is the worst one this tree can ship.
 ; -----------------------------------------------------------------------------
 mem_can_move:
+%ifdef NOCOMPACT
+    stc                         ; make HEAPCOMPACT=0: nothing can move on this
+    ret                         ; build, so mem_avail's plan must model the
+                                ; heap it really has (SPEC.md 66.8)
+%endif
     push ax
     push bx
     push di

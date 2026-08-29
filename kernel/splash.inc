@@ -23,6 +23,16 @@
 ; the first tick can arrive.
 ; =============================================================================
 
+section .boot2                  ; ...and it lives in STAGE 2 (SPEC.md 2.9.4).
+                                ; The switch is HERE and not round the
+                                ; %include in kernel.asm, because that is what
+                                ; every other module that leaves .text does
+                                ; and because tools/kernsize.py's per-module
+                                ; markers hand each %include the section they
+                                ; end in - a `section` in the caller reads as
+                                ; .text to them, and the whole module lands in
+                                ; the image instead
+
 SPL_RESIDENT equ 9              ; sectors the boot sector waits for before
                                 ; ticking us (must match boot/boot.asm).
                                 ; It was 6, and the module ended at 3,072
@@ -888,3 +898,5 @@ spl_s_welcome db 'Welcome to os8088.', 0
 ; 2's now, aboard in its entirety before stage 2 runs at all, and what
 ; SPL_RESIDENT measures instead is viddet.inc: the first tick probes the
 ; adapter, and that is the KERNEL's code. The assertion moved with the meaning.
+
+section .text                   ; and hand .text back, as every module must

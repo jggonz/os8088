@@ -4695,10 +4695,18 @@ section .boot2
     jmp boot2_entry
 section .text
 
-section .boot2                  ; SPEC.md 2.9.4: the loading screen is STAGE
-%include "splash.inc"           ; 2's now - it is drawn from the loader that
-section .text                   ; draws it, and its 967 bytes have left .text
-                                ; entirely. What stays behind is [spl_live]
+%include "splash.inc"           ; SPEC.md 2.9.4: the loading screen is STAGE
+                                ; 2's now - it is drawn from the loader that
+                                ; draws it, and its 967 bytes have left .text
+                                ; entirely. The module opens `.boot2` and
+                                ; hands .text back ITSELF, which is the shape
+                                ; every other module out of .text has and the
+                                ; one tools/kernsize.py can read: its
+                                ; per-module markers give each %include the
+                                ; section they end in, so a `section` wrapped
+                                ; round this one here put splash back in the
+                                ; image and the whole per-module pass refused
+                                ; itself. What stays behind is [spl_live]
                                 ; and four shims. This used to say "must be
                                 ; resident within the image's opening
                                 ; SPL_RESIDENT sectors (SPEC.md 15)
