@@ -57,10 +57,6 @@ T_FLAGS     equ 7               ; byte (was padding): bit 0 = TF_SERVICE -
                                 ; only by the fsx freeze (SPEC.md 53.2)
 T_SIZE      equ 8               ; record stride
 
-TF_IDLE     equ 2               ; PROBE (docs/SCHED-IDLE-PLAN.md 6.2): the
-                                ; idle task. sch_switch skips its slot in the
-                                ; scan and picks it only where the old code
-                                ; resumed the outgoing task
 TF_SERVICE  equ 1               ; survives the fullscreen-exclusive freeze:
                                 ; a loaded driver's refill/drain worker is
                                 ; plumbing, not app work, and parking it
@@ -354,38 +350,61 @@ sch_wake_ui:
                                 ; it carries no information while the task is
                                 ; RUNNING, which is exactly when the race
                                 ; happens
+    mov byte [sch_idlewake], 1  ; ...and the same fact for the idle task's own
+                                ; halt guard (SPEC.md 8.1.2), which is spent
+                                ; there and not here
     mov byte [sch_tasks+T_STATE], 1
     ret
 
 ; -----------------------------------------------------------------------------
-; sch_idle_body / sch_idle_start - the idle task (docs/SCHED-IDLE-PLAN.md 6.2)
+; sch_idle_body / sch_idle_start - the idle task (SPEC.md 8.1.2)
 ;
-; PROBE CODE, not yet a decision. It is inert on a kernel where ui_task never
-; sleeps: the scan skips this slot, so it is picked only where sch_switch used
-; to resume the outgoing task - which on a machine with one runnable task is
-; every switch, and ui_task is that task.
+; It is what sch_switch picks where the old code resumed the outgoing task, and
+; UIBLOCK is what makes that load-bearing: a ui_task that can sleep makes the
+; old fallback wrong, because resuming it would resume a sleeper. `make
+; NOUIBLOCK=1` is the build where it is inert again - ui_task never blocks
+; there, so the scan always finds it and the fallback is never taken.
 ;
 ; hlt rather than a spin, and the machine has to be able to take an interrupt
-; or it never comes back: sti is inside the loop, not before it, so a stray
-; cli anywhere cannot strand the machine for good. SPEC.md 8's fail-safe
-; question - a machine with IRQ0 masked spins uselessly today and would hang
-; here - is NOT answered yet; that is docs/SCHED-IDLE-PLAN.md 4 item 1.
+; or it never comes back: sti is inside the loop on both arms, not before it,
+; so a stray cli anywhere cannot strand the machine for good, and a machine
+; whose IRQ0 was masked at boot spins instead (the fail-safe, SPEC.md 8.1.2.1).
+;
+; THE HALT IS GUARDED, the same shape as ui_task's .idle (SPEC.md 8.1.2.3):
+; sch_wake_ui sets [sch_idlewake] in the same breath as T_STATE, and the test,
+; the halt and the clear are ONE IF=0 window with sti's shadow covering the
+; hlt. Without it a wake landing between the test and the hlt is halted
+; straight through and nothing looks again until the tick. The byte is spent
+; HERE rather than by ui_task, so the fsx freeze - where ui_task is READY but
+; ineligible (SPEC.md 53.2) - costs one extra yield per wake instead of a spin
+; for the whole exclusive bracket.
 ; -----------------------------------------------------------------------------
 sch_idle_body:
 .loop:
-    sti                         ; ...inside the loop: see above
     cmp byte [sch_idlespin], 0  ; THE FAIL-SAFE (SPEC.md 8.1.2.1): a machine
     jne .spin                   ; whose IRQ0 was masked at boot never leaves a
-    hlt                         ; hlt, so it does not take one. One compare on
-.spin:                          ; a path that is by definition doing nothing
-    call task_yield             ; ...and THIS is what makes a wake immediate.
-    jmp short .loop             ; Only IRQ0 falls into sch_switch; every other
-                                ; ISR - the mouse's IRQ4 above all - iret's
-                                ; straight back here. Without the yield a task
-                                ; that an ISR just made ready waits for the
-                                ; next TICK, so the wake byte on its own buys
-                                ; nothing and input still lands up to 55 ms
-                                ; late. Costs one switch per interrupt taken
+                                ; hlt, so it does not take one. One compare on
+                                ; a path that is by definition doing nothing
+    pushf
+    cli                         ; the guard: nothing may be posted between the
+    cmp byte [sch_idlewake], 0  ; test and the halt...
+    jne .rearm                  ; a wake landed since the last pass: go round
+    sti                         ; ...and sti's shadow covers the hlt, so an
+    hlt                         ; interrupt taken here ENDS it rather than
+.rearm:                         ; preceding it
+    mov byte [sch_idlewake], 0  ; spent BEFORE the yield, so a wake posted
+    popf                        ; after this is one the next pass sees
+.spin:
+    sti                         ; ...inside the loop: see above
+    call task_yield             ; ...and THIS is what makes a wake immediate
+    jmp short .loop             ; (SPEC.md 8.1.2.2). Only IRQ0 falls into
+                                ; sch_switch; every other ISR - the mouse's
+                                ; IRQ4 above all - iret's straight back here.
+                                ; Without the yield a task that an ISR just
+                                ; made ready waits for the next TICK, so the
+                                ; wake byte on its own buys nothing and input
+                                ; still lands up to 55 ms late. Costs one
+                                ; switch per interrupt taken
                                 ; while idle, which is what being idle is for
 
 ; in:  nothing.  out: CF=1 if no slot was free (the machine keeps the old
@@ -407,12 +426,9 @@ sch_idle_start:
     mov dx, 0x00FF              ; DL -> T_INST = 0xFF, "owns no instance"
     call task_spawn
     jc .out
-    mov [sch_idleslot], al
-    mov bl, al                  ; mark the slot so the scan can skip it
-    xor bh, bh
-    mov cl, 3
-    shl bx, cl
-    or byte [bx+sch_tasks+T_FLAGS], TF_IDLE
+    mov [sch_idleslot], al      ; the ONE identifier for the idle task: the
+                                ; scan skips this index and the fallback picks
+                                ; it, and both need the index anyway
     clc
 .out:
     pop dx
@@ -675,10 +691,12 @@ task_sleep:
 ; the own task record, and jumps into sch_switch, which parks a
 ; now-meaningless SP into the freed record (harmless) and resumes the next
 ; ready task. The freed slot is skipped by the round-robin scan (T_STATE=0);
-; the resume-the-outgoing-task fallback cannot pick a dead task because it
-; is only reachable when NOTHING is ready, and task 0 (the UI task) never
-; sleeps and never exits. Because the release byte and T_STATE are both
-; cleared inside one IF=0 window, an instance slot and its task slot free
+; the fallback cannot pick a dead task because it picks [sch_idleslot], a task
+; that is always READY, owns no instance and never exits - and sch_idle_start
+; spawns it at boot, before any task can be created let alone exit. The
+; resume-the-outgoing-task arm survives only for the window before that call,
+; where nothing can have exited either. Because the release byte and T_STATE
+; are both cleared inside one IF=0 window, an instance slot and its task free
 ; at the same instant - "instance free but task table still holding the
 ; zombie" is unobservable (SPEC.md 8/29).
 ;
@@ -1758,6 +1776,9 @@ sch_newseg: resw 1                      ; task_spawn scratch: the code segment
                                         ; it cannot race a second spawner)
 sch_uiwake: resb 1                      ; an ISR woke the UI task; spent at
                                         ; ui_task's .idle (SPEC.md 8.1.2.3)
+sch_idlewake: resb 1                    ; the same wake, for the idle task's
+                                        ; halt guard; spent at sch_idle_body's
+                                        ; .rearm (SPEC.md 8.1.2)
 sch_idlespin: resb 1                    ; non-zero: IRQ0 was masked at boot, so
                                         ; the idle task spins instead of
                                         ; halting (SPEC.md 8.1.2.1)

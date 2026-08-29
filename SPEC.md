@@ -6797,22 +6797,26 @@ cheaper than the reasoning needed to remove it safely.
 ### 8.1.2 The idle task
 
 `sch_idle_start` (called from boot, after `sched_init`) spawns a task whose
-whole body is `sti` / `hlt` / `jmp`, records its slot in `sch_idleslot` and
-sets `TF_IDLE` on its record. `sched_init` seeds `sch_idleslot` with **0xFF**
-by hand — nothing clears `.bss`, and a zero there names slot 0, the UI task,
-which the scan below would then skip for ever.
+whole body is a guarded `hlt` and a `task_yield`, and records its slot in
+`sch_idleslot` — the single identifier for it, because the scan skips that
+index and the fallback picks it and both want the index anyway. `sched_init`
+seeds `sch_idleslot` with **0xFF** by hand — nothing clears `.bss`, and a zero
+there names slot 0, the UI task, which the scan below would then skip for ever.
 
 `sch_switch` treats it as a floor rather than a peer: the round-robin scan
 **skips** the idle slot, and picks it in place of the "nothing ready, resume
 the outgoing task" fallback. With 0xFF in `sch_idleslot` — before boot has
 started it, or if no slot was free — that fallback is exactly what it was.
 
-**It is inert on a kernel where `ui_task` never sleeps**, and that is not an
-accident of the current build, it is why it can ship on its own. The scan runs
-`MAX_TASKS` iterations from `cur+1`, so it reaches `cur` itself on the last
-one; with the UI task always ready the scan always finds it and the fallback
-is never taken. Measured: `sch_cycles[idle]` reads 0 across a scripted session,
-and every figure in `tests/schacct.py` is unchanged.
+**It was inert on a kernel where `ui_task` never sleeps**, and that was not an
+accident of the build it arrived on, it is why it could ship on its own as
+stage 2. The scan runs `MAX_TASKS` iterations from `cur+1`, so it reaches `cur`
+itself on the last one; with the UI task always ready the scan always finds it
+and the fallback is never taken. Measured then: `sch_cycles[idle]` read 0
+across a scripted session, and every figure in `tests/schacct.py` was
+unchanged. Since `UIBLOCK` it is load-bearing on every shipped kernel, and
+`make NOUIBLOCK=1` — the A/B build where `ui_task` spins instead of blocking —
+is the only build in which it is still inert.
 
 Its reason to exist is `UIBLOCK` (docs/SCHED-IDLE-PLAN.md §6.3). A `ui_task`
 that can sleep makes the old fallback wrong — it would resume a *sleeper* —
@@ -6822,11 +6826,24 @@ and the tempting one-line fix, `sti`/`hlt`/rescan inside `sch_switch` itself,
 that is `SCH_STACK` bytes. A real task parks its frame in its own record and
 cannot nest.
 
-**The `hlt` is not yet fail-safe.** A machine whose IRQ0 is masked spins
-uselessly today and would hang here. `sti` is inside the loop rather than
-before it, so a stray `cli` cannot strand it, but the masked-IRQ0 case is
-open (docs/SCHED-IDLE-PLAN.md §4 item 1) and is only reachable at all once
-something blocks.
+**The `hlt` is guarded, the same shape as §8.1.2.3's.** `sch_wake_ui` sets
+`sch_idlewake` in the same breath as task 0's `T_STATE`, and the idle loop
+tests that byte, halts and clears it inside one `pushf`/`cli` … `popf` window,
+with `sti` immediately before the `hlt` so the STI shadow covers the halt.
+Without the guard a wake landing between the scheduler's last look at the task
+table and the `hlt` is halted straight through and nothing looks again until
+the tick — the idle task's own lost wakeup.
+
+The byte is spent by the **idle task**, on the far side of the halt: a wake
+posted after the clear is one the next pass round the loop sees. It is a
+dedicated byte rather than a test of task 0's `T_STATE` because under the
+fullscreen-exclusive freeze (§53.2) the UI task can be READY and still
+ineligible, and a `T_STATE` test would spin the idle task for the whole
+exclusive bracket; clearing it here bounds that to one extra `task_yield` per
+wake.
+
+`sti` is inside the loop on both arms rather than before it, so a stray `cli`
+cannot strand the machine for good.
 
 #### 8.1.2.1 The fail-safe: a machine whose IRQ0 is masked
 
@@ -6846,9 +6863,11 @@ reach, and is a driver bug.
 
 #### 8.1.2.2 Waking the UI task
 
-A blocked `ui_task` is made ready again by `sch_wake_ui` — one byte store to
-task 0's `T_STATE`, atomic on an 8086, so an ISR may do it with nothing held
-and setting READY on a task that is already READY is a no-op. Three callers:
+A blocked `ui_task` is made ready again by `sch_wake_ui` — a byte store to
+task 0's `T_STATE`, beside the two guard bytes `sch_uiwake` (§8.1.2.3) and
+`sch_idlewake` (§8.1.2). Each store is atomic on an 8086, so an ISR may do
+them with nothing held, and setting READY on a task that is already READY is a
+no-op. Three callers:
 
 - `evq_push` — every queued event, from any source;
 - the mouse ISR's motion path, beside the `[cur_shchk]`/`[ui_post]` pair it
