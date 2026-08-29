@@ -3185,11 +3185,9 @@ gfx_blitp:
                                 ; carries this warning twenty lines up; this
                                 ; routine was written from it and put the line
                                 ; in the wrong place
-    cmp byte [vid_mono], 0
-    jne .no
-    cmp word [wm_clip_n], 0
-    jne .no
-    test al, 7
+    cmp word [wm_clip_n], 0     ; [vid_mono] IS NOT ASKED HERE - see below the
+    jne .no                     ; hook. Everything in this block is a property
+    test al, 7                  ; of the CALL rather than of a display
     jnz .no                     ; x off the byte grid
     or cx, cx
     jz .no
@@ -3217,6 +3215,26 @@ gfx_blitp:
     GFXDENTER
 .hkdone:
 %endif
+    cmp byte [vid_mono], 0      ; **AFTER THE HOOK, BECAUSE IT IS A QUESTION
+    jne .no                     ; ABOUT A DISPLAY** (SPEC.md 39.5, 39.14.7.1).
+                                ; [vid_mono] is per-display and GFXDENTER is
+                                ; what selects the one this block is going to;
+                                ; asked above, it answers for whatever display
+                                ; the last vid_ctx_act left active - display 0
+                                ; after any gfx_unlock. On the two-card machine
+                                ; (SPEC.md 39.12) that is both mistakes at
+                                ; once: a block bound for the mono card sails
+                                ; past the refusal and the planar body writes
+                                ; VGA_SEG at it, and a block bound for the VGA
+                                ; is refused because the OTHER card is 1bpp.
+                                ; gfx_blit4 (its own `[vid_mono]` test) and
+                                ; gfx_blit1's `.pen` both already ask it here;
+                                ; this routine was the one that did not.
+                                ;
+                                ; OUTSIDE the %endif rather than inside it:
+                                ; GFX_PLANE implies KERN_BIG today, so both
+                                ; spellings assemble, and this one stays right
+                                ; if that ever stops being true
     ; --- the geometry, once for the whole block. THE SHIFTS ARE SINGLE-BIT
     ; and that is not style: `mov cl, 3` and a `pop cx` in the same block is a
     ; count destroyed by the value it was going to shift, and the first

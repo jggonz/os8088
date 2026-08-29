@@ -137,6 +137,13 @@ fdlg_s_media:  db 'MEDIA', 0     ; the default location (SPEC.md 38.10).
                                  ; so a string down there is read out of the
                                  ; cold segment's code. It assembles, and the
                                  ; folder is simply never found
+; THE PAPER fdlg_text LETTERS ON. A constant while every caller drew on the
+; dialog's white pane; fdlg_btn2's PRESSED button fills its interior CBLACK and
+; then letters in CWHITE, so ink and paper were both white and font_run laid a
+; solid white block over it - press-and-hold on New/Folder painted two bars
+; where the captions should be. In `.text` and not `.bss`: this is `nasm -f
+; bin` and .bss is not zeroed.
+fdlg_paper:    db CWHITE
 fdlg_s_open:   db 'Open', 0
 fdlg_s_save:   db 'Save', 0
 fdlg_s_cancel: db 'Cancel', 0
@@ -1198,11 +1205,13 @@ fdlg_text:
     add cx, [fdlg_cx]
     add dx, [fdlg_cy]
     mov al, [gfx_color]         ; OPAQUE (SPEC.md 38.12), and the ink is read
-    mov ah, CWHITE              ; back rather than passed: seven call sites
+    mov ah, [fdlg_paper]        ; back rather than passed: seven call sites
     call KERNEL_SEG:cw_font_run ; already set the pen and none had to change.
-    pop ax                      ; The paper is a constant - the dialog's pane
-                                ; is white and its SELECTION is 38.3's XOR
-                                ; band, drawn over the rows afterwards
+    pop ax                      ; The paper follows the GROUND - white for the
+                                ; dialog's pane, whose SELECTION is 38.3's XOR
+                                ; band drawn over the rows afterwards, and
+                                ; black for the one caller that fills its own
+                                ; ground first (fdlg_btn2's pressed button)
     pop dx
     pop cx
     ret
@@ -1426,6 +1435,7 @@ fdlg_btn2:
     test al, OS88UI_DOWN        ; ...and the two captions in white over it
     jz .ink
     mov byte [gfx_color], CWHITE
+    mov byte [fdlg_paper], CBLACK   ; ...on the ground this branch just filled
 .ink:
     mov dx, bp
     add dx, FD_BT1
@@ -1434,6 +1444,8 @@ fdlg_btn2:
     mov dx, bp
     add dx, FD_BT2
     call fdlg_blabel
+    mov byte [fdlg_paper], CWHITE   ; UNCONDITIONALLY, so the up path cannot
+                                    ; leave it black for the next caller
     pop bp
     pop di
     pop si

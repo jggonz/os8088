@@ -444,7 +444,15 @@ endif
 BOOT2_SECS := $(shell sed -n 's/^BOOT2_SECS  *equ  *\([0-9][0-9]*\).*/\1/p' kernel/kernel.asm)
 BOOT2_PAD  := $(shell echo $$(( $(shell sed -n 's/^BOOT2_SECS  *equ  *\([0-9][0-9]*\).*/\1/p' kernel/kernel.asm) * 512 )))
 
-KSIG_OFF := 18432
+# IT IS A MEMORY OFFSET, AND THE FILE SECTOR IS 13 FURTHER IN (SPEC.md 2.9).
+# Stage 2 sits in front of the image now, so the sector this names in KERNEL.SYS
+# is KSIG_OFF/512 + BOOT2_SECS - which is why KSIGDEF2 below adds BOOT2_PAD to
+# read the word out. The number was left at the one that used to put it on file
+# sector 36, and that moved the probe to file sector 49: a run's FIRST HALF on
+# 360KB and on 1.44MB, the half that loads correctly on exactly the machine the
+# canary exists to catch. 11776 puts it back on 36 - the same sector the
+# argument above is about, still in the middle of the common band 33..38.
+KSIG_OFF := 11776
 #
 # A PAYLOAD SHORTER THAN THE OFFSET DEFINES NO KSIG AT ALL, and that is the
 # whole of this line's second job. It used to answer 0, and a fabricated zero is
@@ -1462,10 +1470,24 @@ $(BUILD)/rdiag.bin: tests/rdiag.asm | $(BUILD)
 	  open('$@','wb').write(o); \
 	  print('rdiag: %d sectors, every one of them named' % (len(o) // 512))"
 
-# ...and its boot sector, with the canary aimed at SECTOR 0 - which always loads
-# correctly - so it can never fire and hide the very corruption being mapped.
+# ...and its boot sector. THE CANARY IS NOT AIMED ANYWHERE ANY MORE: SPEC.md
+# 2.9 moved it into stage 2, and a FLAT payload never enters stage 2 - the flat
+# arm jumps straight to KERNEL_SEG:0 - so -DKSIG_OFF=2 and its -DKSIG are inert
+# and kept only so the rule reads the same as the four below it. What the line
+# used to say (aimed at sector 0, which always loads correctly, so it can never
+# fire and hide the corruption being mapped) is still the intent and is now
+# free.
+#
+# -DFLAT_PAYLOAD, for the reason the four diagnostics below it carry it
+# (boot/boot.asm's own note on the define): rdiag.bin is a FLAT payload, not a
+# KERNEL.SYS with stage 2 on the front of it (SPEC.md 2.9). Without the define
+# the sector reads BOOT2_SECS sectors instead of KERNEL_SECTORS and enters what
+# it read as though it were the blob, so the 207 sectors rdiag exists to MAP
+# are never fetched: it draws 206 X's and reports `bad=00CE first=0001` on a
+# floppy that is perfect, which is the instrument for a machine that will not
+# boot answering the one question it has with a confident lie.
 $(BUILD)/rdboot360.bin: boot/boot.asm $(BUILD)/rdiag.bin Makefile | $(BUILD)
-	$(NASM) -f bin -w+error -DSPT=9 -DHEADS=2 $(BOOTDEF) \
+	$(NASM) -f bin -w+error -DSPT=9 -DHEADS=2 -DFLAT_PAYLOAD $(BOOTDEF) \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/rdiag.bin) + 511 ) / 512 )) \
 		-DKSIG_OFF=2 -DKSIG=$$(python3 -c "print(int.from_bytes(open('$(BUILD)/rdiag.bin','rb').read()[2:4],'little'))") \
 		-o $@ boot/boot.asm
@@ -1790,9 +1812,21 @@ $(BUILD)/mbr.bin: boot/mbr.asm | $(BUILD)
 # word the sector publishes it in. Deferred into the recipe rather than taken
 # at parse time, the way KSIG is, because build/kernel.bin need not exist yet.
 #
+# BOTH OF THEM FOLLOW THIS BUILD'S KNOBS, and neither did. kernsize.py has a
+# --build for exactly this ("a sub-make with BUILD= set needs this") and
+# os88sym reads $OS88_DEFINES for the knobs, which is the mechanism its own
+# comment describes - "a tool that never asked for a knob still finds the right
+# map". Without either, `make field` - whose $(FIELDDRV) rebuilds the drivers,
+# and so this sector, under $(FIELDKNOBS) - asked a PLAIN map about a
+# DISK_COUNTERS kernel, os88sym refused as it should, and both -D options then
+# simply VANISHED from the nasm line. What that printed was
+# `boot/boothd.asm:228: symbol BLOB_SEG not defined`, which points at the
+# sector rather than at the two constants, and it took every field disk down
+# with it - cqdiag.img included, the diagnostic floppy for a machine that will
+# not start.
 BOOTHD_DEFS = import sys, subprocess, json; sys.path.insert(0, 'tools'); \
               import os88sym; \
-              k = json.loads(subprocess.check_output(['python3','tools/kernsize.py','--json'])); \
+              k = json.loads(subprocess.check_output(['python3','tools/kernsize.py','--json','--build','$(BUILD)'])); \
               print('-DBLOB_SEG=%d -DSPL_FSEG=%d' % (k['kseg'] + k['ksize'] // 16, os88sym.syms()['spl_fseg']))
 
 # BLOB_SEG follows the SHIPPED kernel's ladder. A kern_small installed to a
@@ -1800,8 +1834,16 @@ BOOTHD_DEFS = import sys, subprocess, json; sys.path.insert(0, 'tools'); \
 # above it - a gap rather than an overlap, because mem_init raises [mem_base]
 # over wherever [spl_fseg] says the blob is. Nothing in `all` builds that
 # combination.
+#
+# THE EXTRACTION IS ITS OWN STEP, and that is the other half of the same bug.
+# `$$(python3 ...)` inside the nasm line throws the interpreter's exit status
+# away, so a refusal reached nasm as an EMPTY STRING and the failure was
+# reported by the assembler, about a symbol, several lines further on. Run it
+# first and let it fail here, where its traceback is the error.
 $(BUILD)/boothd.bin: boot/boothd.asm kernel/kernel.asm $(BUILD)/kernel.bin | $(BUILD)
-	$(NASM) -f bin -w+error -DBOOT2_SECS=$(BOOT2_SECS) $$(python3 -c "$(BOOTHD_DEFS)") -o $@ $<
+	@D=$$(OS88_DEFINES="$(subst -D,,$(VIDDEF))" python3 -c "$(BOOTHD_DEFS)") && \
+	 echo "$(NASM) -f bin -w+error -DBOOT2_SECS=$(BOOT2_SECS) $$D -o $@ $<" && \
+	 $(NASM) -f bin -w+error -DBOOT2_SECS=$(BOOT2_SECS) $$D -o $@ $<
 	@echo "boothd: $(call FILESIZE,$@) bytes"
 
 # HDDTOOL.DRV - the hard-disk driver's OTHER half (SPEC.md 52.11): the

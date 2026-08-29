@@ -2350,7 +2350,7 @@ a caller may now say **which two colours** the band's set and clear bits mean.
 ```
 gfx_blit1_pen   AL = ink   (what a SET band bit becomes)
                 AH = paper (what a CLEAR one becomes)
-                API slot 0x04A0. Preserves every register.
+                API slot 0x04A8. Preserves every register.
 ```
 
 **It is a call rather than an argument because `gfx_blit1` has no register
@@ -28490,7 +28490,8 @@ untouched. That is exactly the shape every small UI picture in this system
 wants — and it drew in two hardcoded colours, `CWHITE` then `CBLACK`, written
 into GC0 as immediates.
 
-The two colours come from `[ico_c1]` / `[ico_c2]` now, and `icon_pen` sets them:
+The two colours come from `[ico_c1]` / `[ico_c2]` now, and `icon_pen` sets them
+(**API slot 0x04B0**; `icon_draw` is **0x04B8**):
 **AL = the mask pass's colour, AH = the data pass's**. It is **one-shot** —
 `icon_draw` puts the icon pair back on the way out, exactly as `gfx_blit1_pen`
 is cleared by `gfx_unlock` (§5.4.2.2) — so every existing icon site is untouched

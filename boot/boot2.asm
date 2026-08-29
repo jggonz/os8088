@@ -30,6 +30,19 @@
 ; and already carries measured constants, so it carries this one too.
 ; =============================================================================
 
+; --- BOOTSTOP=2 IS THE ONE WITHOUT THE SPLASH, and this is what says so ------
+; The knob moved down here with the loader (SPEC.md 2.9.4) and this derivation
+; did not come with it, so `2` compiled to exactly `1`: the splash still ran,
+; and the halt left a screen the splash owned rather than a text screen with a
+; mark on it. Both halves are the point of `2` - a fault INSIDE the splash
+; cannot be reached, and a machine that goes round instead of halting leaves
+; something legible behind.
+%ifdef BOOT_STOP
+ %if BOOT_STOP == 2
+  %define BOOT_NOSPLASH        ; BOOTSTOP=2: the load, with NO splash call at
+ %endif                        ; all - so a fault inside the splash cannot be
+%endif                         ; reached and read_run is on its own
+
 ; --- what stage 2 needs of the world it is assembled into --------------------
 DPT_AT      equ 0x0580          ; 0000:0580 - our copy of the diskette
                                 ; parameter table. ABOVE the BIOS data area
@@ -38,9 +51,15 @@ DPT_AT      equ 0x0580          ; 0000:0580 - our copy of the diskette
                                 ; KERNEL_SEG, so nothing the kernel or its heap
                                 ; can claim reaches it and it needs no restore
 B2_STACK    equ 0x7C00          ; stage 1's STACK_TOP, which is still ours
-KSIG_OFF    equ 18432           ; SPEC.md 18.93.1's probe, as a MEMORY offset
+KSIG_OFF    equ 11776           ; SPEC.md 18.93.1's probe, as a MEMORY offset
                                 ; from KERNEL_SEG - the Makefile reads the same
-                                ; bytes out of the file at KSIG_OFF + BOOT2_PAD
+                                ; bytes out of the file at KSIG_OFF + BOOT2_PAD,
+                                ; which is FILE SECTOR 36 and has to be: the
+                                ; probe must land in a run's SECOND half, and
+                                ; tests/unit/t_canary.py re-derives that from
+                                ; every shipped image's BPB. This equ and the
+                                ; Makefile's KSIG_OFF are one number typed
+                                ; twice; that row checks they agree
 B2_KSECS    equ ((MODC_START + 511) / 512) - BOOT2_SECS  ; what is left to read
 
 boot2_entry:
@@ -305,6 +324,11 @@ boot2_entry:
 %endif
     mov dl, [b2_drive]          ; the kernel may want to know the boot drive
 %ifdef BOOT_STOP
+%ifdef BOOT_NOSPLASH
+    mov ax, 0x0E2A              ; '*' on the text screen the splash never took
+    mov bx, 7                   ; over, so a HALT is legible where a machine
+    int 0x10                    ; that went round leaves nothing behind
+%endif
     cli                         ; STOP one instruction short of the handoff
 .stop:
     hlt

@@ -75,11 +75,22 @@ def cfgfile():
 
 
 def image():
-    """build/os8088.img's own recipe, with that settings file in it."""
-    cmd = subprocess.run(["make", "-n", "build/os8088.img"], cwd=ROOT,
-                         capture_output=True, text=True, check=True).stdout
-    cmd = cmd.replace("\\\n", " ").strip()
-    assert "--folder SYSTEM/APPDATA" in cmd, cmd
+    """build/os8088.img's own recipe, with that settings file in it.
+
+    --always-make, because a plain `make -n` on an UP-TO-DATE tree prints
+    "`build/os8088.img' is up to date." and no recipe at all - and the tree is
+    up to date every time, since `make` is what you run before you test.  This
+    row therefore only ever passed on a tree where the image was missing.  The
+    cost of -B is that the whole chain is printed rather than one rule, so the
+    one line that builds the image is picked out by name instead of the stdout
+    being run whole.
+    """
+    out = subprocess.run(["make", "-n", "--always-make", "build/os8088.img"],
+                         cwd=ROOT, capture_output=True, text=True,
+                         check=True).stdout.replace("\\\n", " ")
+    cmd = next((ln.strip() for ln in out.splitlines()
+                if "tools/os88disk.py" in ln and "-o build/os8088.img" in ln), "")
+    assert "--folder SYSTEM/APPDATA" in cmd, out
     cmd = (cmd.replace("-o build/os8088.img", "-o " + IMG)
               .replace("--folder SYSTEM/APPDATA",
                        cfgfile() + " --folder SYSTEM/APPDATA"))

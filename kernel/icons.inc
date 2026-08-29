@@ -104,6 +104,13 @@ icon_draw_x:
     pop ax
     ret                         ; a pop writes no flags, so CF survives it
 .refuse:
+    mov word [ico_c1], (CBLACK << 8) | CWHITE   ; SPEC.md 25.6: the pen is
+                                ; ONE-SHOT, and a refusal spends it too. Without
+                                ; this the pair a refused draw was set for is
+                                ; still armed for whatever the caller draws
+                                ; next - which on the failing path is the one
+                                ; time nobody is looking. A `mov` writes no
+                                ; flags, so it goes ABOVE the `stc`
     stc
     jmp short .out
 
