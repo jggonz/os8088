@@ -1,0 +1,13 @@
+// nested CALL, frames, arguments, pad-and-truncate, INCG/DECG
+var g1; var g2; var g3;
+function add3(a, b, c) { return a + b + c; }
+function twice(n) { return add3(n, n, 0); }
+function deep(n) { if (n <= 0) { return 0; } return 1 + deep(n - 1); }
+function main() {
+  g1 = twice(11);
+  g2 = deep(9);
+  g3 = 5;
+  g3++;
+  g3++;
+  g3--;
+}

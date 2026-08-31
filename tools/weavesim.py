@@ -4347,6 +4347,206 @@ def emit_foldtab():
     return htmsim.emit_l1tab().replace("br_l1tab:", "wv_foldtab:")
 
 
+# --- the differential corpus (WEAVE-SPEC 12.1.1) -----------------------------
+#
+# The WVM's end state, per case, in a form apps/weave/hosttest/weavevm.asm can
+# assemble beside the SHIPPING wvm.inc and compare on an 8086 in raw QEMU.
+#
+# What is compared is WEAVE-SPEC 8.3's SERIALIZED GLOBALS - the bytes
+# saveState writes - and not a transcript, for two reasons that are both about
+# what a comparison can mean. The image is handle-free by construction
+# (strings are flattened, arrays counted), so the model - which has no handle
+# table at all - and the machine, which has nothing else, describe the same
+# thing. And the machine already has to produce those bytes for 8.3, so the
+# gate exercises shipping code rather than a routine written for it.
+#
+# The two rules the c64cputest gate learned, kept: the model visits the cases
+# in the harness's order (sorted by file name, and the harness walks the table
+# it is handed), and the corpus carries NEGATIVE CONTROLS - a row whose
+# expected state is deliberately one byte wrong, which the harness must FAIL.
+
+# 10.6.1's sentences, as the codes wvm.inc raises. Only the seven the CORE
+# owns appear here; the rest are the runtime's and are weavesession's.
+VMC_ERRC = [("type mismatch.", 0), ("divide by zero.", 1),
+            ("out of string space.", 2), ("too deep.", 3),
+            ("array index ", 4), ("bad opcode.", 5), ("bad builtin.", 6)]
+VMC_OK = 0xFFFF                 # the row is expected to run to completion
+
+
+def _vmc_errcode(msg):
+    for text, code in VMC_ERRC:
+        if text in msg:
+            return code
+    raise SystemExit("--emit-vmcorpus: '%s' is not one of the core's own "
+                     "sentences (WEAVE-SPEC 10.6.1) - a case that reaches a "
+                     "runtime error belongs in weavesession, not here" % msg)
+
+
+def _vmc_case(tmp, path):
+    """Compile one corpus .wjs and run it on the model's WVM.
+    Answers (name, bundle, init fn index, entry fn index, end-state bytes,
+    expected error code)."""
+    src = open(path, "r").read()
+    first = src.split("\n", 1)[0]
+    name = first.lstrip("/ ").strip() or os.path.basename(path)
+    stem = "C"
+    proj = os.path.join(tmp, os.path.basename(path)[:-4])
+    os.makedirs(proj, exist_ok=True)
+    # The smallest legal app that can carry a script: one card, one label.
+    # Components are deliberately absent - a corpus case that touched one
+    # would need wvm_native, and the harness has no runtime behind it.
+    open(os.path.join(proj, stem + ".WML"), "w").write(
+        '<app name="VMC"><card id="m"><label>x</label></card>'
+        '<script src="%s.WJS"/></app>' % stem)
+    open(os.path.join(proj, stem + ".WJS"), "w").write(src)
+    res = pack_project(os.path.join(proj, stem + ".WML"))
+    b = Bundle(res.data, "VMC.WAB")
+    init = b.app_props.get(WK["start"])
+    init_fn = init[1] if init and init[0] == PK_FUNC else 0xFFFF
+    if "main" not in res.prog.fnindex:
+        raise SystemExit("%s: a corpus case needs a function main()" % path)
+    entry = res.prog.fnindex["main"]
+    rt = Runtime(b)                     # ...which runs the init function
+    err = VMC_OK
+    try:
+        rt.invoke(entry, [])
+    except ScriptError as ex:
+        err = _vmc_errcode(str(ex))
+    rt.save_state()
+    return name, b, init_fn, entry, rt.sav_mem, err
+
+
+def _vmc_ring(path):
+    """The ring-policy cases (WEAVE-SPEC 4.9), driven through the model's own
+    Ring so the ORACLE is the policy rather than a second reading of it."""
+    cases = []
+    ops, name = None, None
+    for line in open(path):
+        line = line.split("#", 1)[0].split()
+        if not line:
+            continue
+        if line[0] == "case":
+            if ops is not None:
+                cases.append((name, ops))
+            name, ops = line[1], []
+        elif line[0] in ("enq", "deq"):
+            ops.append([line[0]] + [int(x) for x in line[1:]])
+        else:
+            raise SystemExit("%s: no ring verb '%s'" % (path, line[0]))
+    if ops is not None:
+        cases.append((name, ops))
+    out = []
+    for name, ops in cases:
+        r = Ring(lambda: None)
+        for op in ops:
+            if op[0] == "enq":
+                r.enqueue(op[1], op[2], op[3], op[4])
+            elif r.q:
+                r.q.pop(0)
+        out.append((name, ops, list(r.q)))
+    return out
+
+
+def _vmc_bytes(label, data):
+    lines = ["%s:" % label]
+    for k in range(0, len(data), 16):
+        lines.append("    db " + ", ".join("0x%02X" % x
+                                           for x in data[k:k + 16]))
+    return lines
+
+
+def emit_vmcorpus(dirname):
+    """WEAVE-SPEC 12.1.1.  Answers the nasm text."""
+    import tempfile
+    files = sorted(f for f in os.listdir(dirname) if f.endswith(".wjs"))
+    if not files:
+        raise SystemExit("--emit-vmcorpus: no .wjs in %s" % dirname)
+    out = ["; The WVM differential corpus (WEAVE-SPEC 12.1.1).",
+           "; GENERATED by `python3 tools/weavesim.py --emit-vmcorpus "
+           "tests/weave/vmcorpus`.",
+           "; Do not edit - regenerate. The expected states are the MODEL's,",
+           "; serialized by WEAVE-SPEC 8.3's rules, which is what makes this",
+           "; a differential rather than a second opinion.",
+           ";",
+           "; Row: name, code, codelen, nfunc, atoms, atomslen, natoms,",
+           ";      init fn, entry fn, expected, expectedlen, errcode, neg",
+           "WVC_ROW equ 26"]
+    rows, blobs, n = [], [], 0
+    tmp = tempfile.mkdtemp(prefix="wvc")
+    for f in files:
+        name, b, init_fn, entry, exp, err = _vmc_case(tmp, os.path.join(
+            dirname, f))
+        code = b.sections[SEC_CODE][0]
+        atoms = b.sections[SEC_ATOMS][0]
+        tag = "wvc%d" % n
+        rows.append("    dw %s_name, %s_code, %d, %d, %s_atoms, %d, %d, "
+                    "%d, %d, %s_exp, %d, %d, 0"
+                    % (tag, tag, len(code), len(b.functions), tag,
+                       len(atoms), len(b.atom_strings), init_fn, entry,
+                       tag, len(exp), err))
+        blobs.append("%s_name: db '%s', 0" % (tag, name.replace("'", " ")))
+        blobs += _vmc_bytes(tag + "_code", code)
+        blobs += _vmc_bytes(tag + "_atoms", atoms)
+        blobs += _vmc_bytes(tag + "_exp", exp)
+        n += 1
+        # ...and the NEGATIVE CONTROL for the same case: the identical
+        # program against an expectation one byte wrong. The harness must
+        # FAIL it, which is what proves the comparison is running at all.
+        if n == 1:
+            bad = bytearray(exp)
+            bad[6] ^= 0xFF          # the first global's tag word
+            tag2 = "wvc%d" % n
+            rows.append("    dw %s_name, %s_code, %d, %d, %s_atoms, %d, %d, "
+                        "%d, %d, %s_exp, %d, %d, 1"
+                        % (tag2, tag, len(code), len(b.functions), tag,
+                           len(atoms), len(b.atom_strings), init_fn, entry,
+                           tag2, len(bad), err))
+            blobs.append("%s_name: db 'NEG end state', 0" % tag2)
+            blobs += _vmc_bytes(tag2 + "_exp", bytes(bad))
+            n += 1
+    out.append("WVC_N equ %d" % n)
+    out.append("wvc_tab:")
+    out += rows
+    out += blobs
+
+    rp = os.path.join(dirname, "ring.txt")
+    rings = _vmc_ring(rp) if os.path.exists(rp) else []
+    out.append("WVR_ROW equ 8")
+    out.append("WVR_N equ %d" % (len(rings) + (1 if rings else 0)))
+    out.append("wvr_tab:")
+    rblob = []
+    for k, (name, ops, want) in enumerate(rings):
+        tag = "wvr%d" % k
+        out.append("    dw %s_name, %s_ops, %d, %s_exp"
+                   % (tag, tag, len(ops), tag))
+        rblob.append("%s_name: db '%s', 0" % (tag, name))
+        b = bytearray()
+        for op in ops:
+            if op[0] == "enq":
+                b += bytes([0, op[1] & 0xFF, op[2] & 0xFF, 0])
+                b += struct.pack("<hh", op[3], op[4])
+            else:
+                b += bytes([1, 0, 0, 0, 0, 0, 0, 0])
+        rblob += _vmc_bytes(tag + "_ops", bytes(b))
+        e = bytearray([len(want)])
+        for rec in want:
+            e += bytes([rec[0] & 0xFF, rec[1] & 0xFF])
+            e += struct.pack("<hh", rec[2], rec[3])
+        rblob += _vmc_bytes(tag + "_exp", bytes(e))
+    if rings:                       # the ring's negative control, same shape
+        name, ops, want = rings[0]
+        out.append("    dw wvrN_name, wvr0_ops, %d, wvrN_exp" % len(ops))
+        rblob.append("wvrN_name: db 'NEG ring', 0")
+        e = bytearray([len(want) + 1])
+        for rec in want:
+            e += bytes([rec[0] & 0xFF, rec[1] & 0xFF])
+            e += struct.pack("<hh", rec[2], rec[3])
+        e += bytes(6)
+        rblob += _vmc_bytes("wvrN_exp", bytes(e))
+    out += rblob
+    return "\n".join(out)
+
+
 # --- CLI verbs ---------------------------------------------------------------
 def cmd_pack(path, out_path, with_source):
     res = pack_project(path, with_source)
@@ -5259,6 +5459,9 @@ def main():
                     help="print the 38-entry WVM jump table for wvm.inc")
     ap.add_argument("--emit-foldtab", action="store_true",
                     help="print the Latin-1 fold table for LOOM.OVL")
+    ap.add_argument("--emit-vmcorpus", metavar="DIR",
+                    help="the WVM differential corpus for weavevm "
+                         "(WEAVE-SPEC 12.1.1)")
     ap.add_argument("--selfcheck", action="store_true")
     ap.add_argument("--verbose", "-v", action="store_true")
     args = ap.parse_args()
@@ -5276,6 +5479,13 @@ def main():
             return 0
         if args.emit_foldtab:
             print(emit_foldtab())
+            return 0
+        if args.emit_vmcorpus:
+            text = emit_vmcorpus(args.emit_vmcorpus)
+            if args.o:
+                open(args.o, "w").write(text + "\n")
+            else:
+                print(text)
             return 0
         if args.costs:
             print_costs(adapter)

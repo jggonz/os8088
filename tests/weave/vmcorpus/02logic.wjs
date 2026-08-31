@@ -1,0 +1,15 @@
+// truth, short-circuit, ! and the comparison rules
+var a; var b; var c; var d; var e; var f; var g; var h;
+function main() {
+  var empty;
+  empty = substr("x", 0, 0);  // 2.7 forbids an empty ATOM, so the empty
+                              // string is made rather than written
+  a = 0 || 5;                 // yields the deciding VALUE, not a bool
+  b = 3 && 0;
+  c = !0;
+  d = !empty;
+  e = 1 == true;              // FALSE: tag 0 against tag 5 (4.4)
+  f = "ab" < "b";
+  g = null == null;
+  h = empty || "x";
+}

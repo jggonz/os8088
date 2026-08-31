@@ -1,0 +1,10 @@
+// arrays: fixed size, int-only, AGET/ASET, len
+var arr = array(8);
+var a; var b; var c;
+function main() {
+  var i;
+  for (i = 0; i < 8; i = i + 1) { arr[i] = i * i; }
+  a = arr[7];
+  b = len(arr);
+  c = arr[0] + arr[3];
+}

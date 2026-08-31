@@ -1,0 +1,8 @@
+// 8.1.1's pinned LCG, seeded 0x1234 on both sides
+var a; var b; var c; var d;
+function main() {
+  a = rand(100);
+  b = rand(100);
+  c = rand(7);
+  d = rand(1);
+}

@@ -1,0 +1,7 @@
+// call depth 16 is `too deep.` (4.7)
+var reached;
+function rec(n) { reached = n; return rec(n + 1); }
+function main() {
+  reached = 0;
+  rec(1);
+}

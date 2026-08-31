@@ -1,0 +1,7 @@
+// divide by zero stops the handler; the globals written before it STAND
+var a; var b;
+function main() {
+  a = 11;
+  b = a / (a - 11);
+  a = 99;
+}

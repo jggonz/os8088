@@ -1,0 +1,8 @@
+// an out-of-range index is `array index %d of %d.` and stops the handler
+var arr = array(10);
+var a;
+function main() {
+  a = 5;
+  arr[12] = 1;
+  a = 6;
+}
