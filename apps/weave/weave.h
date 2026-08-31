@@ -126,6 +126,24 @@
 #define WA_GROUP     19
 #define WA_CARD      20
 #define WA_START     40
+#define WA_SEL       17
+#define WA_SELROW    21
+#define WA_SELCOL    22
+#define WA_CELL      32
+#define WA_SETCELL   33
+#define WA_RECALC    34
+#define WA_SELECT    35
+#define WA_GO        37
+#define WA_SET       38
+#define WA_GET       39
+#define WA_CLEAR     41
+#define WA_ONCLICK   48
+#define WA_ONCHANGE  49
+#define WA_ONKEY     50
+#define WA_ONSELECT  51
+#define WA_ONCOMMAND 58
+#define WA_ONTIMER   59
+#define WA_ONALERT   60
 #define WA_ITEMS     61
 #define WA_MENUS     62
 #define WA_APP_FIRST 64
@@ -214,5 +232,156 @@ void wd_sbar(int *blk);                /* os88ui.inc's 7-word scroll block */
 void wd_sbmove(int *blk, int oldpos);
 int  wd_sbhit(int *blk, int x, int y); /* WD_SB_* */
 int  wd_hit(int *rects, int n, int x, int y);   /* index + 1, 0 = none */
+
+/* ============================================================================
+ * THE WJS VM (WEAVE-SPEC 4), apps/weave/wvm.inc
+ *
+ * Everything below is a copy of that file's own constants and IT IS NOT THE
+ * CONTRACT either: docs/WEAVE-SPEC.md is, and wvm.inc is written from it. A
+ * disagreement between the two %if-fails the build - see the guard at the
+ * foot of wvm.inc's include in weave.asm.
+ * ==========================================================================*/
+
+/* 4.3 - the tags. */
+#define WT_INT    0
+#define WT_STR    1
+#define WT_ARR    2
+#define WT_COMP   3
+#define WT_NULL   4
+#define WT_BOOL   5
+
+/* wvm_slice's answers. */
+#define WR_IDLE   0
+#define WR_DONE   1
+#define WR_MORE   2
+#define WR_GC     3
+#define WR_ERR    4
+
+/* 10.6.1's sentences, as codes. 0..6 are the core's own and are raised inside
+ * wvm.inc; 7 and up are the runtime's and travel out through WN_ERRC. The
+ * TEXT of all of them is in wevent.c, which is the only place that has a
+ * status row to put one in. */
+#define WE_TYPE   0
+#define WE_DIV0   1
+#define WE_STRSP  2
+#define WE_DEEP   3
+#define WE_AIDX   4
+#define WE_OPCODE 5
+#define WE_BUILT  6
+#define WE_NOCOMP 7             /* no component %d. */
+#define WE_NOPROP 8             /* no property "%s" on a %s. */
+#define WE_NOMETH 9             /* no method "%s" on a %s. */
+#define WE_NOIMPL 10            /* no method. */
+#define WE_LIDX   11            /* list index %d of %d. */
+#define WE_GCELL  12            /* grid cell %d,%d of %dx%d. */
+#define WE_CARD   13            /* card %s of %d. */
+#define WE_RAND   14            /* rand of %s. */
+#define WE_NERR   15
+
+/* The native block (wvm.inc's WN_*), in WORDS - the C side indexes an int
+ * array and the assembly side a byte offset, so every name here is the
+ * assembly's halved. NB() is the one accessor; there is deliberately no
+ * struct, because a struct assignment is one of the four C refusals
+ * (SPEC.md 73.5) and a struct here would invite one. */
+#define WN_SIZE   54
+#define WNW_KIND   0
+#define WNW_COMP   1
+#define WNW_ATOM   2
+#define WNW_ARGC   3
+#define WNW_REST   4
+#define WNW_RESV   5
+#define WNW_ERRC   6
+#define WNW_ERRA   7
+#define WNW_ERRB   8
+#define WNW_ARG0   9            /* 9 cells of 2 words each */
+
+#define WNK_GETP   0
+#define WNK_SETP   1
+#define WNK_CALLM  2
+#define WNK_BUILT  3
+
+/* 8.1's builtin indices. */
+#define WB_ALERT   0
+#define WB_TIMER   1
+#define WB_SAVE    2
+#define WB_LOAD    3
+#define WB_PLAY    4
+#define WB_TONE    5
+
+/* --- the core's C surface (apps/weave/wvm.inc) --------------------------- */
+void wvm_bind(unsigned vmseg, unsigned vmbytes, unsigned bseg,
+              unsigned codeoff, unsigned codelen, unsigned nfunc,
+              unsigned atomoff, unsigned natoms, void *nblk, unsigned seed);
+void wvm_unbind(void);
+void wvm_argi(int v);
+int  wvm_begin(int fn);
+int  wvm_busy(void);
+void wvm_abort(void);
+int  wvm_slice(int budget);
+void wvm_gc(void);
+int  wvm_mark(int tag, int handle);
+int  wvm_gcreq(void);
+int  wvm_errcode(void);
+int  wvm_errfn(void);
+int  wvm_erra(void);
+int  wvm_errb(void);
+int  wvm_enq(int comp, int atom, int d1, int d2);
+int  wvm_deq(int *rec4);
+int  wvm_rcount(void);
+int  wvm_str_read(int handle, char *dst, unsigned cap);
+int  wvm_str_make(const char *s);
+int  wvm_atom_handle(int atom);
+int  wvm_gtag(int i);
+int  wvm_gval(int i);
+void wvm_gset(int i, int tag, int val);
+unsigned wvm_save(unsigned seg, unsigned off, unsigned cap);
+int  wvm_load(unsigned seg, unsigned off, unsigned len);
+
+/* --- apps/weave/wui.inc: the shared alert and the arm/fire word ---------- */
+/* os88ui.inc is assembly and a C file may not name an nasm label, so these
+ * four are the whole of what WEAVE needs out of it that wdraw.inc did not
+ * already wrap. wu_ask's completion is a near proc in wui.inc that calls
+ * w_alertdone() below - which is why the runtime never writes a `retf`
+ * (SPEC.md 20's package boundary, solved once). */
+int  wd_ask(const char *msg, void *win, int set);   /* 0 up, -1 refused */
+void wd_arm(int i);
+int  wd_fire(void);
+int  wd_armed(void);
+
+/* ...and apps/os88line.inc's field, which declares no storage of its own -
+ * every routine takes a block the CALLER owns (6.7). */
+void wd_ldraw(int *blk);
+int  wd_lkey(int *blk, int ascii, int scan);   /* 0 used it, -1 the caller's */
+int  wd_lclick(int *blk, int x, int y);        /* 0 inside, -1 outside */
+void wd_lset(int *blk, const char *s);
+void wd_lcaron(int *blk);
+void wd_lcaroff(int *blk);
+
+#define WD_AOK      0           /* os88ui.inc's button sets */
+#define WD_AYESNO   1
+#define WD_AMAX    34           /* the message, in characters (8.2) */
+#define WD_ACANCEL (-1)         /* ...and the answer for a DISMISSED alert */
+
+/* --- 4.10's slice model -------------------------------------------------- */
+#define W_SLICE0  256           /* the start budget, 256 << cpu tier */
+#define W_SLICEMIN 128
+#define W_SLICEMAX 1536
+#define W_RUNAWAY  90           /* ticks before 4.11's alert (~4.9 s) */
+
+/* 4.8.1's list-item override pool: 64 is one full <list> (2.6.1's own cap). */
+#define W_NLSET    64
+
+/* 6.7's field bound. apps/os88line.inc declares no storage - every routine
+ * takes a block the CALLER owns - so WEAVE's fields come out of a fixed pool,
+ * assigned in UISTREAM order at load. Eight blocks over 512 bytes of text is
+ * eight full-width fields (cols caps at 60) or twenty typical ones; past it a
+ * field is painted and refuses focus, with 6.7's sentence in the toast. */
+#define W_MAXIN     8
+#define W_IPOOL   512
+
+/* 6.7's caret, in ticks between blinks. 4 is ~220 ms at 18.2 Hz - slow enough
+ * that the blink costs two ~756 us primitives a fifth of a second on the
+ * target, and fast enough to read as a caret. */
+#define W_BLINK     4
 
 #endif /* WEAVE_H */

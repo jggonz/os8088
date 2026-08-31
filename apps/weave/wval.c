@@ -30,20 +30,20 @@
  * structural rather than untidy: WEAVE-SPEC 10.1 requires the memory refusal
  * to happen BEFORE the bundle is read, so the header is read out of a
  * one-cluster probe into this segment (w_probe[]) and the rest out of the
- * claim once there is one. w_val_header() therefore reads a C array and every
+ * claim once there is one. ovl_val_header() therefore reads a C array and every
  * other routine here reads the claim through wblob.inc's accessors.
  * ==========================================================================*/
 
 /* --- the header, off the probe (WEAVE-SPEC 2.2) ------------------------- */
 
-/* w_val_header - the 32 bytes, every field ranged, from the probe buffer.
+/* ovl_val_header - the 32 bytes, every field ranged, from the probe buffer.
  *
  * `w_fsize` is the size the DIRECTORY entry gave, which is what the memory
  * refusal was going to be computed from - so the total-size word is checked
  * against it here rather than against the bytes read. A bundle whose header
  * understates its file is the case that would let the refusal be computed
  * from one number and the read cost paid for another. */
-static const char *w_val_header(void)
+static const char *ovl_val_header_x(void)
 {
     unsigned t;
 
@@ -115,7 +115,7 @@ static unsigned w_align16(unsigned n)
     return (n + 15) & 0xFFF0;
 }
 
-/* w_val_sections - the table, then the couplings the flags word implies.
+/* ovl_val_sections - the table, then the couplings the flags word implies.
  *
  * Sections are checked for EXACT packing, not just for bounds: 2.3 says each
  * begins at align16(previous offset + length) and the file ends at the last
@@ -123,7 +123,7 @@ static unsigned w_align16(unsigned n)
  * is a different file than the contract describes and t_wab refuses it, so
  * this does too - bytes the format does not account for are exactly where a
  * hostile bundle would put something. */
-static const char *w_val_sections(void)
+static const char *ovl_val_sections(void)
 {
     unsigned i, row, t, off, len, extra, prev, expect;
 
@@ -207,13 +207,13 @@ static const char *w_val_sections(void)
 
 /* --- the atom pool (WEAVE-SPEC 2.7) ------------------------------------- */
 
-/* w_val_atoms - the pool walked end to end, and it must END exactly.
+/* ovl_val_atoms - the pool walked end to end, and it must END exactly.
  *
  * Ids 1..63 are well-known and are NOT stored here; row i is atom 64 + i. The
  * offsets are checked against the PACKED positions rather than merely for
  * bounds (t_wab's rule): strings pack without gaps, so an offset that is
  * merely in range names bytes the format does not account for. */
-static const char *w_val_atoms(void)
+static const char *ovl_val_atoms(void)
 {
     unsigned s, len, i, count, off, pos, l;
 
@@ -281,7 +281,7 @@ static unsigned w_atom_len(unsigned a)
 
 /* --- CODE (WEAVE-SPEC 2.8) ---------------------------------------------- */
 
-/* w_val_code - the function table only.
+/* ovl_val_code - the function table only.
  *
  * The BYTECODE is not walked here and that is deliberate: nothing in wave 2
  * executes an opcode, and a jump-target walk that no interpreter follows would
@@ -289,7 +289,7 @@ static unsigned w_atom_len(unsigned a)
  * own walk (WEAVE-SPEC 4.5, and t_wab's walk_function() is the shape). What
  * IS checked is everything an offset or a count could make this file index
  * out of bounds with. */
-static const char *w_val_code(void)
+static const char *ovl_val_code(void)
 {
     unsigned s, len, i, f, g, ofs, na, nl;
 
@@ -332,7 +332,7 @@ static const char *w_val_code(void)
 static unsigned w_pv_seen;
 static unsigned w_pv_cols, w_pv_rows;
 
-/* w_val_block - one property block, for the component of type `ctype`
+/* ovl_val_block - one property block, for the component of type `ctype`
  * (0 = the app block, which 2.6.2 bounds separately).
  *
  * Records are 4 bytes and a block ends at four zero bytes; names ascend
@@ -340,7 +340,7 @@ static unsigned w_pv_cols, w_pv_rows;
  * its range is MALFORMED and never clamped, and that a required property
  * absent is malformed and never defaulted - "a bundle missing one lays the
  * card out around a number nobody wrote". */
-static const char *w_val_block(unsigned off, unsigned ctype)
+static const char *ovl_val_block(unsigned off, unsigned ctype)
 {
     unsigned base, len, name, kind, val, prev, blob, n, i;
 
@@ -444,9 +444,9 @@ static const char *w_val_block(unsigned off, unsigned ctype)
     }
 }
 
-/* w_val_app - the app block (2.6.2): CARD, MENUS and `start`, and nothing
+/* ovl_val_app - the app block (2.6.2): CARD, MENUS and `start`, and nothing
  * else may appear in it. */
-static const char *w_val_app(void)
+static const char *ovl_val_app(void)
 {
     unsigned base, len, off, name, kind, val, blob, nm, ni, i, j, fn;
     const char *e;
@@ -456,7 +456,7 @@ static const char *w_val_app(void)
     off = w_sextra[W_PROPS];
     if (off >= len)
         return "prop block";
-    e = w_val_block(off, 0);
+    e = ovl_val_block(off, 0);
     if (e)
         return e;
     for (;;) {
@@ -512,7 +512,7 @@ static const char *w_val_app(void)
 
 /* --- UISTREAM (WEAVE-SPEC 2.5), and every component's block with it ------ */
 
-static const char *w_val_uistream(void)
+static const char *ovl_val_uistream(void)
 {
     unsigned s, len, n, i, rec, kind, id, ctype, style, cflags, props, w, h;
     unsigned cards, ended, grids, canvases, lastct;
@@ -619,7 +619,7 @@ static const char *w_val_uistream(void)
         if (ctype == WC_SPACER && w == 0)
             return "required property";
 
-        e = w_val_block(props, ctype);
+        e = ovl_val_block(props, ctype);
         if (e)
             return e;
         if (ctype == WC_RADIO && !(w_pv_seen & WP_GROUP))
@@ -653,10 +653,10 @@ static const char *w_val_uistream(void)
 
 /* --- FXCODE, CELLS, SPRITES (WEAVE-SPEC 2.9-2.11) ----------------------- */
 
-/* w_val_sprites - the count and the descriptors.  Read EARLY, because a
+/* ovl_val_sprites - the count and the descriptors.  Read EARLY, because a
  * PK_SPRITE property's value is an index into this table and the props walk
  * needs the bound before it can check one. */
-static const char *w_val_sprites(void)
+static const char *ovl_val_sprites(void)
 {
     unsigned s, len, i, n, wb, h, fr, off, need;
 
@@ -694,7 +694,7 @@ static const char *w_val_sprites(void)
     return 0;
 }
 
-static const char *w_val_extras(void)
+static const char *ovl_val_extras(void)
 {
     unsigned s, len, n, i, off, kind;
 
@@ -737,9 +737,9 @@ static const char *w_val_extras(void)
 
 /* --- the one door ------------------------------------------------------- */
 
-/* w_validate - everything past the header, in the order nothing is believed
+/* ovl_validate - everything past the header, in the order nothing is believed
  * before the thing that bounds it.  0 = the bundle may be trusted. */
-static const char *w_validate(void)
+static const char *ovl_validate_x(void)
 {
     const char *e;
 
@@ -752,23 +752,75 @@ static const char *w_validate(void)
     if (w_w(w_seg, W_H_TOTAL) != w_size)
         return "total size";
 
-    e = w_val_sections();
+    e = ovl_val_sections();
     if (e)
         return e;
-    e = w_val_atoms();
+    e = ovl_val_atoms();
     if (e)
         return e;
-    e = w_val_code();
+    e = ovl_val_code();
     if (e)
         return e;
-    e = w_val_sprites();
+    e = ovl_val_sprites();
     if (e)
         return e;
-    e = w_val_uistream();
+    e = ovl_val_uistream();
     if (e)
         return e;
-    e = w_val_extras();
+    e = ovl_val_extras();
     if (e)
         return e;
-    return w_val_app();
+    return ovl_val_app();
+}
+
+/* ============================================================================
+ * THE OVERLAY SEAM (SPEC.md 73.14, WEAVE-SPEC 1.2)
+ *
+ * EVERYTHING ABOVE IS `ovl_*` AND SHIPS IN WEAVE.OVL. Validation is the
+ * runtime's largest single body of code and it runs EXACTLY ONCE per bundle,
+ * at open, on the UI task - which is 1.2's own test for a tenant ("nothing an
+ * event handler needs mid-run lives here") and 73.14's ("split by FREQUENCY -
+ * a keystroke's path stays in, a menu command's can go out"). Wave 3 crossed
+ * 1.2's 55,000-byte split trigger and this is the body that moved; the
+ * pre-named candidates were already spent.
+ *
+ * THE INVERTED ANSWER IS THE WHOLE OF THE CARE HERE. A refused overlay load
+ * returns 0 (apps/cc/crt0.asm), and the validator's natural answer is a
+ * `const char *` where 0 MEANS VALID - so a missing or stale WEAVE.OVL would
+ * have made every malformed bundle look perfect. The two entry points
+ * therefore answer 1 for "checked, and it is sound" and 0 for anything else,
+ * with the field name in a RESIDENT static that the wrapper below primes
+ * before the call. A refused load then reads back as `WEAVE.OVL`, which is
+ * exactly what went wrong.
+ *
+ * The atom accessors stay resident: the PAINTER calls them on every row of
+ * every list, which is mid-run by any definition.
+ * ==========================================================================*/
+
+static const char *w_valfield;
+
+static int ovl_val_header(void)
+{
+    w_valfield = ovl_val_header_x();
+    return w_valfield == 0;
+}
+
+static int ovl_validate(void)
+{
+    w_valfield = ovl_validate_x();
+    return w_valfield == 0;
+}
+
+/* The two resident wrappers.  `WEAVE.OVL` is written BEFORE the call, so a
+ * refused load leaves it standing and 10.4's sentence names the real cause. */
+static const char *w_val_header(void)
+{
+    w_valfield = "WEAVE.OVL";
+    return ovl_val_header() ? 0 : w_valfield;
+}
+
+static const char *w_validate(void)
+{
+    w_valfield = "WEAVE.OVL";
+    return ovl_validate() ? 0 : w_valfield;
 }

@@ -128,6 +128,61 @@ static struct w_lay w_lay[W_MAXLAY];
 static int w_nlay, w_nrow;
 static int w_lay_cw, w_lay_ch, w_lay_card;   /* what the table was built for */
 
+/* --- the VM's claim and the things that hang off it (WEAVE-SPEC 4) ------- */
+static unsigned w_vmseg;                /* 0 = no VM is bound */
+static int      w_rec[4];               /* one dequeued ring record (4.9) */
+static char     w_amsg[WD_AMAX + 2];    /* the alert's line - os88ui.inc holds
+                                         * the POINTER and letters from it when
+                                         * the alert paints, so it has to
+                                         * outlive the call */
+static int      w_alertfn = -1;         /* 8.2's callback, -1 = none */
+static int      w_alertkind;            /* 0 = alert(), 1 = 4.11's runaway */
+static int      w_gsel_r = 1;           /* 6.9's selection - 1,1 until wave 4 */
+static int      w_gsel_c = 1;           /*   owns a cell store to move it over */
+static struct os88_place w_savhere2;    /* 19.9's walk, one step at a time */
+
+/* ============================================================================
+ * THE FORWARD DECLARATIONS
+ *
+ * `nasm -f bin` has no notion of an external symbol, so a C package is ONE
+ * compilation (SPEC.md 73.1) and the parts below are #included into this file
+ * in dependency order. Six of them are MUTUALLY dependent - a click enqueues
+ * an event, a handler repaints a component, a builtin writes a file, a
+ * refusal reloads - and no ordering makes all of that forward-free. These are
+ * the ones that cross backwards, and the list is deliberately short: a name
+ * here is a seam between two files, and a long list would mean the split is
+ * in the wrong place.
+ * ==========================================================================*/
+static void w_repaint2(void *win, int clear);
+static void w_reload(void *win);
+static int  w_samename(const char *a, const char *b);
+static void w_infield(int i, int x1, int y1, int x2, int y2, int dis);
+static void w_press(int i, int x, int y);
+static int  w_radio_holder(int i);
+static void w_itext_to_state(int k);
+static int  w_iblk(int id);
+static void w_enq(int comp, int atom, int d1, int d2);
+static void w_kick(void);
+static void w_gcmark(void);
+static void w_touch(int id);
+static void w_arm(void);
+static void w_caret(void *win);
+static int  w_menu_fn(int mi, int ii);
+static int  w_savestate(void);
+static int  w_loadstate(void);
+static void w_saysav(const char *s);
+static void w_menubuild(void *win);
+static void w_comp_init(void);
+static void w_iload(int id, unsigned props);
+static void w_vmstart(void *win);
+static void w_ialloc(int id, int cols);
+static void w_istate(void);
+static int  w_key(void *win, int ascii, int scan);
+static void w_release(int x, int y);
+static void w_wake(void);
+static void w_ontimer_body(void *win);
+static void w_alertdone(int button);
+
 /* ============================================================================
  * SMALL HELPERS
  * ==========================================================================*/
@@ -156,6 +211,16 @@ static void w_ln(unsigned v)
  * WEAVE-SPEC 10.1's shape, which is C64-SPEC 1.4's: the window comes up, the
  * sentence is in the content area, the status row keeps it, and the toast
  * fires too - never a bare failed launch. */
+/* w_saysav - 8.3's refusal, which is a TOAST and not the status row: a card
+ * owns the whole content area (7.1.1 gives the family no status strip), so a
+ * sentence drawn there would land on the app's last row. It is kept in
+ * w_status for the overlay's diagnostics all the same. */
+static void w_saysav(const char *s)
+{
+    os88_strcpy(w_status, s, sizeof(w_status));
+    os88_toast(s, 0);
+}
+
 static void w_say(const char *s)
 {
     os88_strcpy(w_msg, s, sizeof(w_msg));
@@ -174,36 +239,66 @@ static void w_say(const char *s)
  * silent nonsense. The items array is not const either, because Reload greys
  * ITSELF when there is nothing to reload - SPEC.md 47's rule that a control
  * states a FACT rather than refusing after the click. */
+/* --- the menus (SPEC.md 12.2, WEAVE-SPEC 6.11) ---------------------------
+ *
+ * ONE MENU OF OUR OWN, AND THE ARITHMETIC IS WHY. `MENU_APPMAX` is 5 - the
+ * kernel's own bar bound - and WEAVE-SPEC 3.2 lets a bundle declare 5. Wave 2
+ * spent two of the five on File and Bundle, which would have left an app
+ * three. Folding WEAVE's three commands into one pull-down named for the
+ * program leaves FOUR, which is as close as the bar gets; a bundle that
+ * declares a fifth gets its first four and a toast that says so, because a
+ * menu that is silently absent is a command the user cannot find and cannot
+ * ask about. 6.11 is amended to carry that.
+ *
+ * NOT `const`: os88_menu_set() patches the set's oncmd field with the
+ * runtime's command trampoline, and a set in .rodata takes the patch as
+ * silent nonsense. The items are not const either, because Reload and Bundle
+ * Info grey THEMSELVES when there is nothing to reload - SPEC.md 47's rule
+ * that a control states a FACT rather than refusing after the click. */
 #define W_CMD_OPEN   0
 #define W_CMD_RELOAD 1
-#define W_CMD_INFO   0
+#define W_CMD_INFO   2
 
-static const char *w_file_items[2] = { "Open Bundle...", "\001Reload" };
-static const char *w_bundle_items[1] = { "\001Bundle Info" };
+#define W_APPMENUS   4          /* MENU_APPMAX 5, less the one that is ours */
+#define W_APPITEMS   8          /* 2.6.2's own per-menu bound */
+#define W_TITLEMAX   9          /* 3.3: a menu title is <= 8 characters */
+#define W_LABELMAX  26          /* ...and an item label <= 24 glyphs, plus the
+                                 * leading OS88_MENU_DIS byte a greyed one
+                                 * would carry, plus the NUL */
+
+static const char *w_wv_items[3] = { "Open Bundle...", "\001Reload  ^R",
+                                     "\001Bundle Info" };
+static char        w_mtitle[W_APPMENUS][W_TITLEMAX];
+static char        w_mlabel[W_APPMENUS][W_APPITEMS][W_LABELMAX];
+static const char *w_mitems[W_APPMENUS][W_APPITEMS];
+
 static struct os88_menuset w_menus = {
-    "Weave", 0, 2,
-    { { "File", w_file_items, 2 },
-      { "Bundle", w_bundle_items, 1 } }
+    "Weave", 0, 1,
+    { { "Weave", w_wv_items, 3 } }
 };
 
 /* w_menusync - the two items that are only meaningful with a bundle open.
  * A leading OS88_MENU_DIS byte is what draws an item disabled (SPEC.md 47),
- * and the kernel reads these strings each time the menu drops, so swapping the
- * pointer is the whole of it. */
+ * and the kernel reads these strings each time the menu drops, so swapping
+ * the pointer is the whole of it. */
 static void w_menusync(void)
 {
     if (w_state == W_ST_RUN) {
-        w_file_items[1] = "Reload";
-        w_bundle_items[0] = "Bundle Info";
+        w_wv_items[1] = "Reload  ^R";
+        w_wv_items[2] = "Bundle Info";
     } else {
-        w_file_items[1] = "\001Reload";
-        w_bundle_items[0] = "\001Bundle Info";
+        w_wv_items[1] = "\001Reload  ^R";
+        w_wv_items[2] = "\001Bundle Info";
     }
 }
 
 #include "wval.c"                       /* the hostile-bundle reader */
 #include "wflow.c"                       /* the flow walk */
 #include "wpaint.c"                      /* ...and what it hands the cores */
+#include "wact.c"                        /* the press, the release, the field */
+#include "wevent.c"                      /* the ring, the slices, the errors */
+#include "wnative.c"                     /* the component and builtin surface */
+#include "wstate.c"                      /* 8.3's .SAV, the only file surface */
 #include "wload.c"                       /* the accept idiom and the refusals */
 #include "wovl.c"                        /* WEAVE.OVL's tenants */
 
@@ -408,11 +503,45 @@ void os88_onclick(int x, int y, void *win)
 
 void os88_onkey(int ascii, int scan, void *win)
 {
-    (void)scan;
-    if (ascii == 'r' || ascii == 'R') {
+    if (w_state == W_ST_RUN) {
+        w_key(win, ascii, scan);        /* wact.c: ^R, Tab, then the armed
+                                         * field (6.7, 1.7) */
+        return;
+    }
+    if (ascii == 0x12) {                /* 1.7's shortcut still works with no
+                                         * bundle open, because Reload is what
+                                         * a refused one wants next */
         w_reload(win);
         w_repaint2(win, 1);
     }
+}
+
+/* W_ONMOUSEUP - the release half of SPEC.md 13.7's gesture, and the ONLY
+ * place a button fires. The kernel guarantees exactly one of these per
+ * W_ONCLICK, which is what makes os88ui_fire's clear-on-read safe. */
+void os88_onmouseup(int x, int y, void *win)
+{
+    if (w_state != W_ST_RUN)
+        return;
+    if (!w_layout(win))
+        return;
+    w_release(x, y);
+}
+
+/* W_ONTIMER (SPEC.md 13.9) - the caret's blink and 8.2's timer(), multiplexed
+ * over the one one-shot a window gets. wevent.c's w_ontimer_body says why. */
+void os88_ontimer(void *win)
+{
+    if (w_state == W_ST_RUN)
+        w_ontimer_body(win);
+}
+
+/* W_ONWAKE (SPEC.md 74.1) - the ONE callback that runs WITHOUT the gfx lock,
+ * and therefore the only place a slice may run (WEAVE-SPEC 4.10). */
+void os88_onwake(void *win)
+{
+    (void)win;
+    w_wake();
 }
 
 void os88_oncmd(int item, int menu, void *win)
@@ -424,6 +553,11 @@ void os88_oncmd(int item, int menu, void *win)
             w_reload(win);
             w_repaint2(win, 1);
         }
+    } else if (menu >= 2) {
+        /* 6.11: the app's own menus, after WEAVE's two. Both indices go into
+         * the ring 1-BASED, which is what 2.6.2's blob is numbered in and
+         * what 3.4's oncommand record carries. */
+        w_enq(0, WA_ONCOMMAND, menu - 1, item + 1);
     } else if (menu == 1) {
         if (item == W_CMD_INFO && w_state == W_ST_RUN)
             ovl_info();                 /* the overlay: a menu command may

@@ -54,6 +54,17 @@
  * (apps/frotz/zio.inc's zi_free_all rule). */
 static void w_free(void)
 {
+    /* THE VM GOES FIRST, and wvm_unbind before the free rather than after:
+     * a slice that ran between the two would read a segment the heap has
+     * given to somebody else, and on this machine that does not fault
+     * (LESSONS.md 4). Unbinding is one word - the core answers WR_IDLE to
+     * everything once the claim is 0 - and it costs nothing to do it in the
+     * order that cannot be wrong. */
+    wvm_unbind();
+    if (w_vmseg) {
+        os88_mem_free(w_vmseg);
+        w_vmseg = 0;
+    }
     if (w_seg) {
         os88_mem_free(w_seg);
         w_seg = 0;
@@ -63,6 +74,10 @@ static void w_free(void)
     w_nlay = 0;
     w_nrow = 0;
     w_lay_cw = -1;                      /* the cached walk is void */
+    w_alertfn = -1;
+    w_alertkind = 0;
+    w_tscript_on = 0;
+    w_bdown = -1;
 }
 
 /* w_fail - a refusal, complete: the state, the sentence on the glass, the
@@ -313,14 +328,110 @@ static void w_open(void *win, const char *name, unsigned size_lo,
     }
 
     w_state = W_ST_RUN;
-    w_menusync();
     w_pstate();                         /* the LAST bundle's scroll positions
                                          * and selections are not this one's,
                                          * and they are indexed by comp_id -
                                          * which the new bundle reuses (2.5) */
+    w_istate();
+    w_comp_init();                      /* every component's birth state, and
+                                         * a field block for every <input> */
     w_lay_cw = -1;                      /* force the walk on the next paint */
     if (w_grid(win))
         w_flow();
+    w_menusync();
+    w_menubuild(win);                   /* 6.11: the bundle's own menus */
+    w_vmstart(win);                     /* ...and the VM, last: it is the one
+                                         * thing that can run a line of the
+                                         * app's own code, and 2.6.2's
+                                         * module-init function must not run
+                                         * against a half-built card */
+}
+
+/* ============================================================================
+ * THE COMPONENTS' BIRTH STATE, AND THE VM (WEAVE-SPEC 2.5, 4.7)
+ * ==========================================================================*/
+
+/* w_comp_init - walk the WHOLE display list, not just the entry card.
+ *
+ * The flow walk lays out ONE card (7.2); this fills in every component the
+ * bundle declares, on any card, because `app.go(2)` makes the second card's
+ * components live without reloading anything - and because `hidden` and
+ * `checked` are birth state that a card switch must not reset. */
+static void w_comp_init(void)
+{
+    unsigned s, n, i, rec, id, ct, props;
+
+    s = w_soff[W_UISTREAM];
+    n = w_sextra[W_UISTREAM];
+    for (i = 0; i < n; i++) {
+        rec = s + i * W_REC_SIZE;
+        if (w_b(w_seg, rec) != W_REC_COMP)
+            continue;
+        id = w_b(w_seg, rec + W_R_ID);
+        ct = w_b(w_seg, rec + W_R_CTYPE);
+        props = w_w(w_seg, rec + W_R_PROPS);
+        w_cflag[id] = (unsigned char)(w_b(w_seg, rec + W_R_CFLAGS)
+                                      & (CF_HIDDEN | CF_DISABLED));
+        if (props == W_NOPROPS)
+            continue;
+        if (ct == WC_METER)
+            w_cval[id] = (int)w_pint(props, WA_VALUE, 0);
+        else if (ct == WC_CHECK || ct == WC_RADIO)
+            w_cval[id] = w_pint(props, WA_CHECKED, 0) ? 1 : 0;
+        else if (ct == WC_INPUT) {
+            w_ialloc((int)id, (int)w_pint(props, WA_COLS, 20));
+            w_iload((int)id, props);
+        }
+    }
+}
+
+/* w_iload - an <input>'s initial contents, out of its `text` attribute. */
+static void w_iload(int id, unsigned props)
+{
+    int k;
+
+    k = w_iblk(id);
+    if (k < 0)
+        return;
+    if (w_pstr(props, WA_TEXT) == 0)
+        return;
+    wd_lset(w_fld[k], w_str);
+}
+
+/* w_vmstart - the VM claim, the bind and 2.6.2's module-init function.
+ *
+ * THE CLAIM'S SIZE IS THE BUNDLE'S OWN ASK (2.2's vm KB byte), which 10.1
+ * already counted before any I/O - so a failure here is a heap that moved
+ * under us between the refusal and now, and it is reported as the same
+ * sentence rather than as a new kind of trouble. */
+static void w_vmstart(void *win)
+{
+    unsigned start;
+
+    w_vmseg = os88_mem_claim((int)w_vmkb);
+    if (w_vmseg == 0) {
+        w_short(w_claimkb + w_vmkb, os88_mem_largest_kb());
+        return;
+    }
+    wvm_bind(w_vmseg, w_vmkb << 10, w_seg,
+             w_soff[W_CODE], w_slen[W_CODE], w_nfunc,
+             w_soff[W_ATOMS], w_natoms, w_nblk, (unsigned)os88_rand());
+
+    /* 10.2's second capability test, which wave 2 could not make because
+     * OSAPI_WM_TIMER had no C thunk. It has one now, so the fact is TESTED
+     * rather than guessed from the machine's size (SPEC.md 47). */
+    w_tmrok = os88_wm_timer(win, 0) == 0;
+    if ((w_flags & WABF_TIMER) && !w_tmrok)
+        w_saysav("This app uses timers (WM_TIMER); "
+                 "this kernel does not carry them.");
+
+    start = w_pfind(w_sextra[W_PROPS], WA_START);
+    if (w_pfound) {
+        wvm_begin((int)start);          /* 2.6.2: the globals are zeroed, then
+                                         * the initializers are applied - by
+                                         * exactly this carriage */
+        w_kick();
+    }
 }
 
 /* --- the association route (1.5) ---------------------------------------- */

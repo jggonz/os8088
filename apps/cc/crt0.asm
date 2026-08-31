@@ -492,6 +492,44 @@ cc_onresize:
     ret
 %endif
 
+%ifdef CC_HAS_ONTIMER
+; -----------------------------------------------------------------------------
+; cc_ontimer - W_ONTIMER (SPEC.md 13.9), installed by os88_wm_ontimer() and
+; fired by os88_wm_timer(). ONE-SHOT, and it disarms itself BEFORE this runs -
+; so re-arm inside the handler for a repeat (a blinking caret) and do nothing
+; for a single shot.
+;
+; It is W_ONCLICK's environment exactly: the UI task, the gfx lock HELD, billed
+; to the instance - which is why it may draw. It fires while the window is
+; MINIMIZED too; ask os88_wm_geom() if that matters.
+;
+; NOTHING ARRIVES WITH IT. CX and DX are 0 going in (a timer has no point), so
+; the C signature takes the window and nothing else. The first C package to
+; want either of these is WEAVE, whose <input> blinks a caret (WEAVE-SPEC 6.7);
+; the pair had no C path before that, which is why it is here and not older.
+; in:  SI = the window; the gfx lock IS held
+; out: nothing; every register the kernel cares about is preserved
+; -----------------------------------------------------------------------------
+cc_ontimer:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    cld
+    push si                         ; arg 1: void *win
+    call _os88_ontimer
+    add sp, 2
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+%endif
+
 %ifdef CC_HAS_ONWAKE
 ; -----------------------------------------------------------------------------
 ; cc_onwake - W_ONWAKE, the package's own kick (SPEC.md 74.1), installed by

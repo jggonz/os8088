@@ -87,10 +87,59 @@ static int  w_sbblk[7];                 /* os88ui.inc's scroll block */
 static unsigned w_lpos[256];
 static unsigned w_lsel1[256];
 
+/* ============================================================================
+ * THE COMPONENT STATE THE SCRIPT CAN MOVE (WEAVE-SPEC 6)
+ *
+ * By comp_id, because that is what WJS names and what the ring records carry
+ * (2.5, 4.9). The UISTREAM record is the component's BIRTH state and never
+ * changes - the bundle is read-only at run time (2.1) - so everything a
+ * `SETP` writes lives here instead.
+ *
+ * w_ctext IS A GC ROOT (4.8.1). It holds 0 while the component still shows
+ * the atom its record named, and a VM string handle once script has written
+ * one; wevent.c marks every non-zero entry before a collection, and the
+ * paragraph in 4.8.1 is about what happens if it does not.
+ *
+ * ...and w_cflag is the LIVE hidden/disabled pair, which is why the walk
+ * takes those two bits from here rather than from the record it is reading:
+ * one predicate, three consumers (SPEC.md 47 rule 4) - it greys the control,
+ * refuses its click and answers `.enabled`.
+ */
+static unsigned      w_ctext[256];      /* a VM string handle, 0 = the atom */
+static int           w_cval[256];       /* meter .value / check .checked */
+static unsigned char w_cflag[256];      /* the live CF_HIDDEN | CF_DISABLED */
+
+/* 4.8.1's list-item override pool, shared by every list in the bundle and
+ * skipped entirely while it is empty - which is every app that never calls
+ * set(). The linear scan is why the empty test comes first: a list paints
+ * one font_run a row and a 64-entry walk per row would be real time on the
+ * target for a feature most bundles do not use. */
+static unsigned char w_lsetc[W_NLSET];  /* comp_id */
+static unsigned char w_lseti[W_NLSET];  /* item index */
+static unsigned      w_lseth[W_NLSET];  /* the string handle */
+static int           w_nlset;
+
 static void w_pstate(void)              /* a new bundle: forget the old one's */
 {
     os88_memset(w_lpos, 0, sizeof(w_lpos));
     os88_memset(w_lsel1, 0, sizeof(w_lsel1));
+    os88_memset(w_ctext, 0, sizeof(w_ctext));
+    os88_memset(w_cval, 0, sizeof(w_cval));
+    os88_memset(w_cflag, 0, sizeof(w_cflag));
+    w_nlset = 0;
+}
+
+/* w_lfind - the override for (comp, index), or -1. */
+static int w_lfind(int id, int idx)
+{
+    int k;
+
+    if (w_nlset == 0)
+        return -1;
+    for (k = 0; k < w_nlset; k++)
+        if (w_lsetc[k] == id && w_lseti[k] == idx)
+            return k;
+    return -1;
 }
 
 /* ============================================================================
@@ -171,6 +220,20 @@ static unsigned w_pstr(unsigned props, unsigned name)
         w_copy(w_seg, w_atom_off(a), w_str, n);
     w_str[n] = 0;
     return n;
+}
+
+/* w_cstr - the component's CURRENT text or label, into w_str[].
+ *
+ * One reader for two sources: the atom its record named, or the arena string
+ * a `SETP` put in w_ctext (4.8.1). The copy costs a few microseconds against
+ * a font_run's 756 - PERFORMANCE.md's own rule that a redraw is priced by its
+ * primitive calls - and it buys the painter one path instead of two, which is
+ * the same argument wdraw.inc makes about taking a descriptor. */
+static unsigned w_cstr(int id, unsigned props, unsigned name)
+{
+    if (w_ctext[id])
+        return (unsigned)wvm_str_read((int)w_ctext[id], w_str, W_STRMAX);
+    return w_pstr(props, name);
 }
 
 static unsigned w_pint(unsigned props, unsigned name, unsigned dflt)
@@ -304,15 +367,26 @@ static void w_lblk(unsigned pos)
  * because what is under it is the row that scrolled away. */
 static void w_lrow(int k, unsigned pos, int sel, int erase)
 {
-    int y;
+    int y, ov;
     unsigned idx, a;
 
     y = w_lg_y1 + (k << 3);
     idx = pos + k;
     if (idx < w_it_n) {
-        a = w_item(idx);
-        w_draw_run(w_lg_x1, y, w_seg, w_atom_off(a), w_atom_len(a),
-                   w_lg_cells, OS88_BLACK, OS88_WHITE, WD_PAD);
+        ov = w_lfind(w_lg_id, (int)idx);        /* 4.8.1's override, if any -
+                                                 * and the scan returns at
+                                                 * once while the pool is
+                                                 * empty, which is every app
+                                                 * that never calls set() */
+        if (ov >= 0) {
+            wvm_str_read((int)w_lseth[ov], w_str, W_STRMAX);
+            w_draw_text(w_lg_x1, y, w_str, w_lg_cells,
+                        OS88_BLACK, OS88_WHITE, WD_PAD);
+        } else {
+            a = w_item(idx);
+            w_draw_run(w_lg_x1, y, w_seg, w_atom_off(a), w_atom_len(a),
+                       w_lg_cells, OS88_BLACK, OS88_WHITE, WD_PAD);
+        }
     } else if (erase) {
         w_draw_text(w_lg_x1, y, "", w_lg_cells, OS88_BLACK, OS88_WHITE,
                     WD_PAD);
@@ -363,6 +437,19 @@ static void w_paint_list(int i)
  * Rule 2 is why it is per COMPONENT rather than per call: a check box's ring
  * and its label are drawn by two different routines and a black ring beside
  * faint writing reads as a mislabelled live control. */
+/* w_padnow - WD_PAD, on an INCREMENTAL repaint only.
+ *
+ * A card paint draws onto ground the kernel (or w_repaint2) has just
+ * whitened, so a run padded to the component's width would spend ~900 us a
+ * cell erasing what is already white. A repaint of ONE component after a
+ * `.text` write does not: what is under it is the last string, and
+ * os88_font_run() letters exactly the cells it is given - so `status.text =
+ * "Hi."` over `Recalculated 12 cells.` would leave `ated 12 cells.` behind.
+ * The padding IS the erase (WEAVE-SPEC 6.2), and this is the flag that says
+ * which of the two cases we are in. */
+static int w_padnow;
+static int w_bdown = -1;                /* the button drawn PRESSED, -1 none */
+
 static void w_paint_comp(int i)
 {
     int x1, y1, x2, y2, dis, ink, paper, flags, cells, j, rows;
@@ -402,9 +489,14 @@ static void w_paint_comp(int i)
 
     switch (w_lay[i].ctype) {
     case WC_LABEL:
-        a = w_patom(props, WA_TEXT);
-        w_draw_run(x1, y1, w_seg, w_atom_off(a), w_atom_len(a), cells,
-                   ink, paper, flags);
+        if (w_ctext[w_lay[i].id]) {
+            n = w_cstr(w_lay[i].id, props, WA_TEXT);
+            w_draw_text(x1, y1, w_str, cells, ink, paper, flags | w_padnow);
+        } else {
+            a = w_patom(props, WA_TEXT);
+            w_draw_run(x1, y1, w_seg, w_atom_off(a), w_atom_len(a), cells,
+                       ink, paper, flags | w_padnow);
+        }
         break;
 
     case WC_TEXT:
@@ -444,13 +536,13 @@ static void w_paint_comp(int i)
                                          * whole of it - it occupies cells */
 
     case WC_METER:
-        wd_meter(x1, y1, x2, y2, w_pint(props, WA_VALUE, 0),
+        wd_meter(x1, y1, x2, y2, (unsigned)w_cval[w_lay[i].id],
                  w_pint(props, WA_MAX, 100));
         break;
 
     case WC_BUTTON:
-        w_pstr(props, WA_LABEL);
-        wd_button(w_rect + j, w_str, dis, 0, 0);
+        w_cstr(w_lay[i].id, props, WA_LABEL);
+        wd_button(w_rect + j, w_str, dis, w_bdown == w_lay[i].id, w_padnow);
                                         /* down = 0: wave 3 owns the pressed
                                          * state, and it is DRAWN from a
                                          * variable this painter reads, never
@@ -465,23 +557,22 @@ static void w_paint_comp(int i)
     case WC_CHECK:
     case WC_RADIO:
         wd_glyph(x1 + 2, y1 + 2, w_lay[i].ctype == WC_RADIO,
-                 w_pint(props, WA_CHECKED, 0) != 0, dis);
+                 w_cval[w_lay[i].id] != 0, dis);
         os88_gfx_pen(dis);              /* os88ui_glyph PUT THE PEN BACK LIVE,
                                          * so the label needs it again - 47
                                          * rule 2: grey the ring AND the words
                                          * beside it, or the control reads as
                                          * mislabelled rather than disabled */
         n = cells > W_SB_CELLS ? cells - 2 : 1;
-        a = w_patom(props, WA_LABEL);
-        w_draw_run(x1 + 16, y1 + 4, w_seg, w_atom_off(a), w_atom_len(a),
-                   n, ink, paper, flags);
+        w_cstr(w_lay[i].id, props, WA_LABEL);
+        w_draw_text(x1 + 16, y1 + 4, w_str, n, ink, paper,
+                    flags | w_padnow);
         break;
 
     case WC_INPUT:
         if (y2 > w_ybot)
             y2 = w_ybot;
-        w_pstr(props, WA_TEXT);
-        wd_input(x1, y1, x2, y2, w_str);
+        w_infield(i, x1, y1, x2, y2, dis);
         break;
 
     case WC_LIST:
@@ -530,6 +621,62 @@ static void w_paint_card(void *win)
                                          * disabled draws the next string in
                                          * this lock hold as a checkerboard,
                                          * and the next string is the kernel's */
+    if (clipped)
+        os88_wm_clip_clear();
+}
+
+/* w_find_lay - the layout index of comp_id `id`, or -1.
+ *
+ * Linear over at most 250 records and called from GETP/SETP - which is a
+ * handful of times a handler, not per op - so a 256-entry reverse table would
+ * be 512 bytes of bss to save microseconds nobody is waiting for. */
+static int w_find_lay(int id)
+{
+    int i;
+
+    for (i = 0; i < w_nlay; i++)
+        if (w_lay[i].id == id)
+            return i;
+    return -1;
+}
+
+/* w_wipe_one - give one component's rect back to the paper.  What `hidden`
+ * costs: ONE gfx_fill, ~756 us, and no reflow (7.2). */
+static void w_wipe_one(int i)
+{
+    int j, y2;
+
+    j = i << 2;
+    if (w_rect[j + 1] > w_ybot)
+        return;
+    y2 = w_rect[j + 3];
+    if (y2 > w_ybot)
+        y2 = w_ybot;
+    os88_set_color(OS88_WHITE);
+    os88_gfx_fill(w_rect[j], w_rect[j + 1], w_rect[j + 2], y2);
+}
+
+/* w_repaint_one - one component, now, under its own lock hold and clip.
+ *
+ * The arm/fire path's painter: a press repaints the pressed control and
+ * nothing else (WEAVE-SPEC 6.5, ~2 calls + the label). It is called from a
+ * CALLBACK, where the gfx lock is already held - so it takes none. The
+ * deferred path (wevent.c's w_flush) is the one that has to. */
+static void w_repaint_one(int i)
+{
+    int clipped;
+
+    if (i < 0 || i >= w_nlay)
+        return;
+    clipped = os88_wm_clip_set(w_win) == 0;
+    w_padnow = WD_PAD;                  /* over the LAST state, so the run IS
+                                         * the erase (6.2) */
+    if (w_cflag[w_lay[i].id] & CF_HIDDEN)
+        w_wipe_one(i);
+    else
+        w_paint_comp(i);
+    w_padnow = 0;
+    os88_gfx_pen(0);
     if (clipped)
         os88_wm_clip_clear();
 }
@@ -652,6 +799,10 @@ static void w_lclick(int i, int x, int y)
     w_lsel1[w_lg_id] = idx + 1;
     wd_xor(w_lg_x1, w_lg_y1 + (k << 3),
            w_lg_x1 + (w_lg_cells << 3) - 1, w_lg_y1 + (k << 3) + 7);
+    w_enq(w_lg_id, WA_ONSELECT, idx, 0);    /* 3.4: onselect carries the new
+                                             * index. The PICTURE moved above,
+                                             * natively; the script hears
+                                             * about it a slice later (1.2) */
 }
 
 /* w_onhit - a press landed on component `i`.  WAVE 3's SEAM.
@@ -664,6 +815,7 @@ static void w_lclick(int i, int x, int y)
  * doing something plausible. */
 static void w_onhit(int i, int x, int y)
 {
-    if (w_lay[i].ctype == WC_LIST)
-        w_lclick(i, x, y);
+    w_press(i, x, y);                   /* wact.c: the press half of SPEC.md
+                                         * 13.7's gesture. Wave 2's seam,
+                                         * spent. */
 }

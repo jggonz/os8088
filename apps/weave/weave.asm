@@ -34,6 +34,12 @@
 %define OS88UI_ARM                  ; os88ui_arm/fire/armed - the press/release
                                     ; gesture every <button>, <check> and
                                     ; <radio> is armed through
+%define OS88UI_ALERT                ; ...and SPEC.md 75.3's alert, which is
+                                    ; WEAVE-SPEC 8.2's alert() and 4.11's
+                                    ; runaway question. 607 bytes of OUR image
+                                    ; and none of the kernel's, which is that
+                                    ; file's whole argument applied to
+                                    ; something bigger than a button.
                                     ;
                                     ; NOT %define OS88UI_SBDRAG: nothing drags
                                     ; a thumb yet, and the state it declares is
@@ -47,6 +53,17 @@
 
 %define CC_HAS_ONKEY                ; void os88_onkey(int, int, void *)
 %define CC_HAS_ONCLICK              ; void os88_onclick(int, int, void *)
+%define CC_HAS_ONMOUSEUP            ; void os88_onmouseup(int, int, void *) -
+                                    ; the RELEASE half of SPEC.md 13.7's
+                                    ; gesture, and the only place a <button>
+                                    ; fires (WEAVE-SPEC 6.5)
+%define CC_HAS_ONWAKE               ; void os88_onwake(void *) - the one
+                                    ; callback that runs WITHOUT the gfx lock,
+                                    ; and therefore the only place a WVM slice
+                                    ; may run (WEAVE-SPEC 4.10)
+%define CC_HAS_ONTIMER              ; void os88_ontimer(void *) - 6.7's caret
+                                    ; and 8.2's timer(), multiplexed over the
+                                    ; one one-shot a window gets (SPEC.md 13.9)
 %define CC_HAS_ONRESIZE             ; void os88_onresize(int, int, void *) -
                                     ; SPEC.md 11.98, and NOT the same thing as
                                     ; WM_ONSIZE: that one is asked BEFORE a
@@ -59,12 +76,11 @@
 %define CC_HAS_OVL                  ; ...and WEAVE.OVL (SPEC.md 73.14), whose
                                     ; tenants are in apps/weave/wovl.c
                                     ;
-                                    ; and NOT, in this wave: CC_HAS_ONMOUSEUP
-                                    ; (nothing is armed yet), CC_HAS_ONWAKE
-                                    ; (the WVM's slices arrive with the VM) or
-                                    ; CC_HAS_WORKER (the canvas worker arrives
-                                    ; with <canvas>) - a trampoline nobody asks
-                                    ; for is not assembled at all
+                                    ; and NOT, in this wave: CC_HAS_WORKER -
+                                    ; the canvas worker arrives with <canvas>
+                                    ; (WEAVE-SPEC 13.1 wave 5), and a
+                                    ; trampoline nobody asks for is not
+                                    ; assembled at all
 
 %define CC_ICON  "weave/icon.inc"   ; 32 dw rows exactly: 16 mask, 16 data
 %define CC_ASSOC "weave/wvassoc.inc" ; 'WAB' - so a bundle opens on the FIRST
@@ -120,5 +136,27 @@
 ; discipline - the next %include otherwise lands in the wrong section).
 %include "weave/wblob.inc"          ; reading the bundle claim
 %include "weave/wdraw.inc"          ; the paint core (WEAVE-SPEC 1.2's seam)
+%include "weave/wui.inc"            ; the alert, the arm word, and the bridge
+                                    ; the bytecode core leaves through. AFTER
+                                    ; os88ui.inc, which it calls into.
+%include "weave/wvm.inc"            ; ...and the WJS VM (WEAVE-SPEC 4), which
+                                    ; names wui.inc's wvm_native and is
+                                    ; %included UNCHANGED by
+                                    ; apps/weave/hosttest/weavevm.asm - what
+                                    ; that gate runs is this text and not a
+                                    ; copy of it (WEAVE-SPEC 12.3)
+
+; --- THE DRIFT GUARDS, and they are %if and not a comment --------------------
+; weave.h carries a C copy of two of wvm.inc's own numbers, because a C file
+; may not name an nasm equ. A copy that goes stale is the class of defect this
+; whole tree writes guards for (os88.h's own count line was wrong by three),
+; and here it would be silent: the native block's fields would be read at the
+; wrong offsets and every GETP would answer nonsense.
+%if WN_SIZE != 54
+  %error "wvm.inc's WN_SIZE moved; weave.h's WN_SIZE and WNW_* must follow"
+%endif
+%if OS88LINE_SZ != 20
+  %error "os88line.inc's block moved; wact.c's LNW_* must follow"
+%endif
 
     CC_IMAGE_END                    ; cc_bss_end, cc_modc_end and cc_image_end
