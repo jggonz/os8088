@@ -1241,6 +1241,26 @@ overlays = ["pcxt_2_360k_floppies", "us_modelf_keyboard"]
 # waits on the desktop rather than on the gate.
 [[machine]]
 name = "os8088_5150_cga_gla_256k"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0x40000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+# ============================================================================
 # THE SMALL MACHINES (SPEC.md 18.95.5). GLaBIOS, so they need no ROM this tree
 # does not fetch - which is the whole reason they exist: the period-ROM 128K
 # config cannot boot here, and 256K is the smallest machine that could.
@@ -1294,7 +1314,6 @@ overlays = [
 ]
 
     [machine.memory]
-    conventional.size = 0x40000
     conventional.size = 0x30000
     conventional.wait_states = 0
 
