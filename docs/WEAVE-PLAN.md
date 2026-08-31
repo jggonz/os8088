@@ -363,6 +363,37 @@ wave has no other reason to touch. Whoever gives the bar a floor should do
 it with the kernel's two callers in front of them, and can then relax
 WEAVE-SPEC §6.8's refusal.
 
+### 4.4.2 `os88line_draw` forces CBLACK, so a greyed field cannot exist
+
+Found while wave 3 wrapped the shared one-line field. `os88line_draw`
+(`apps/os88line.inc`) sets `CBLACK` for its frame and again for its text,
+unconditionally — so a field drawn under SPEC.md §47's pen comes out with a
+**solid** frame and **dithered** letters. That is rule 2's own failure: two
+halves of one control disagreeing, which reads as a mislabelled live control
+rather than a disabled one, and on the two 1bpp adapters that is the whole
+difference.
+
+It has never fired, for §4.4.1's reason exactly: the browser's location bar
+and Telnet's host box are never greyed, so no existing caller can reach it.
+Weave is the first, because `<input disabled>` is an app author's attribute
+(WEAVE-SPEC §3.3).
+
+**Not fixed in `os88line.inc` here, deliberately** — and this is the same
+judgment as the scroll bar's, made twice now rather than once by habit. The
+file is shared with the browser and Telnet, honouring the pen changes what
+both draw, and neither can be handed a greyed field to test the change
+against. So WEAVE paints a DISABLED field with its own `wd_input` (which
+takes the pen the caller set) and a live one with the real editor; the split
+is two lines in `w_infield` and it is written down at both ends. Whoever
+gives `os88line.inc` a pen should do it with its two existing callers in
+front of them, and can then delete WEAVE's second painter.
+
+The pair of these — a shared control with no minimum height, and a shared
+control with a hard-coded colour — is worth reading as one finding: **the
+`apps/*.inc` library was written by and for callers who all wanted the same
+thing**, and the first caller whose numbers come from an app author finds the
+places where "the same thing" was assumed rather than parameterised.
+
 ### 4.5 The stale slot count in os88.h
 
 `apps/cc/os88.h:141` says the C thunk layer covers "90 of the 134 slots";

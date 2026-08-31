@@ -69,6 +69,18 @@ static int   w_state;                   /* W_ST_* - and 1.5's trap 3 is that
                                          * branch on it before the load runs */
 static char  w_msg[W_MSG];              /* section 10's sentence, on the glass */
 static char  w_status[W_MSG];           /* ...and the row that keeps it */
+static char  w_serr[W_MSG];             /* 10.6's LAST SCRIPT ERROR, in full -
+                                         * a string of its own and not
+                                         * w_status, because Bundle Info is
+                                         * where a user goes to READ it and
+                                         * ovl_info was overwriting w_status
+                                         * with its own line on the way in.
+                                         * Found on the glass: the toast said
+                                         * `Script error in fn 0.`, Bundle
+                                         * Info was opened to see which error,
+                                         * and the listing's last row showed
+                                         * the ask arithmetic instead */
+static char  w_infoln[W_MSG];           /* ...and ovl_info's own line */
 static char  w_line[W_MSG];             /* one line under construction */
 static char  w_num[8];
 
@@ -217,8 +229,16 @@ static void w_ln(unsigned v)
  * w_status for the overlay's diagnostics all the same. */
 static void w_saysav(const char *s)
 {
-    os88_strcpy(w_status, s, sizeof(w_status));
-    os88_toast(s, 0);
+    os88_strcpy(w_serr, s, sizeof(w_serr));
+    os88_toast("State refused - see Info", 0);   /* 24 -> clipped to 23, and
+                                                  * the word that matters is
+                                                  * the first. TOAST_MAX is 23
+                                                  * (SPEC.md 59.8) and these
+                                                  * sentences are 40+; the
+                                                  * status string keeps the
+                                                  * whole of it for Bundle
+                                                  * Info, the way a script
+                                                  * error does */
 }
 
 static void w_say(const char *s)
@@ -274,7 +294,7 @@ static const char *w_mitems[W_APPMENUS][W_APPITEMS];
 
 static struct os88_menuset w_menus = {
     "Weave", 0, 1,
-    { { "Weave", w_wv_items, 3 } }
+    { { "Bundle", w_wv_items, 3 } }
 };
 
 /* w_menusync - the two items that are only meaningful with a bundle open.
@@ -546,21 +566,28 @@ void os88_onwake(void *win)
 
 void os88_oncmd(int item, int menu, void *win)
 {
-    if (menu == 0) {
-        if (item == W_CMD_OPEN)
-            os88_file_dlg(OS88_FDLG_OPEN, win, 0);
-        else if (item == W_CMD_RELOAD && w_state == W_ST_RUN) {
-            w_reload(win);
-            w_repaint2(win, 1);
-        }
-    } else if (menu >= 2) {
-        /* 6.11: the app's own menus, after WEAVE's two. Both indices go into
-         * the ring 1-BASED, which is what 2.6.2's blob is numbered in and
-         * what 3.4's oncommand record carries. */
-        w_enq(0, WA_ONCOMMAND, menu - 1, item + 1);
-    } else if (menu == 1) {
-        if (item == W_CMD_INFO && w_state == W_ST_RUN)
-            ovl_info();                 /* the overlay: a menu command may
+    /* MENU 0 IS OURS AND EVERY OTHER ONE IS THE BUNDLE'S (WEAVE-SPEC 6.11).
+     * The kernel numbers an app's menus from 0 in the order the set declares
+     * them, and the set is built by w_menubuild: ours first, then up to four
+     * of the bundle's. So the app's menu k is at index k, 1-based already -
+     * which is the number 2.6.2's blob and 3.4's oncommand record are both
+     * written in, and it is why the record's data1 needs no adjustment and
+     * its data2 needs exactly one. */
+    if (menu > 0) {
+        w_enq(0, WA_ONCOMMAND, menu, item + 1);
+        return;
+    }
+    if (item == W_CMD_OPEN) {
+        os88_file_dlg(OS88_FDLG_OPEN, win, 0);
+        return;
+    }
+    if (item == W_CMD_RELOAD && w_state == W_ST_RUN) {
+        w_reload(win);
+        w_repaint2(win, 1);
+        return;
+    }
+    if (item == W_CMD_INFO && w_state == W_ST_RUN)
+        ovl_info();                     /* the overlay: a menu command may
                                          * refuse, which is what makes it the
                                          * canonical tenant (SPEC.md 73.14).
                                          *
@@ -576,7 +603,6 @@ void os88_oncmd(int item, int menu, void *win)
                                          * refused load here draws nothing at
                                          * all and leaves the card alone, which
                                          * is the honest degradation */
-    }
 }
 
 /* W_ONFILE: the Standard File dialog's completion (SPEC.md 38). THE SECOND WAY
@@ -651,6 +677,21 @@ void *os88_main(void)
 
     /* ...and TELL US when the box moves without anyone proposing it. */
     os88_wm_onresize(win);
+
+    /* THE THREE THAT MAKE WAVE 3 HAPPEN, and every one of them is a template
+     * word the kernel does not fill in for you (os88.h: "call from
+     * os88_main() after os88_wm_create(); they are not template words"). A
+     * missing install is the quietest failure in this file: the C compiles,
+     * the %define in the shim is satisfied, the callback exists - and the
+     * kernel simply never calls it. Verified as exactly that: a button drew
+     * its down state on the press and stayed down for ever, because
+     * W_ONMOUSEUP was never installed and the release reached nobody. */
+    os88_wm_onmouseup(win);             /* 13.7's RELEASE - the only place a
+                                         * <button> fires (WEAVE-SPEC 6.5) */
+    os88_wm_onwake(win);                /* 74.1's kick - the only place a WVM
+                                         * slice may run (4.10) */
+    os88_wm_ontimer(win);               /* 13.9's one-shot - 6.7's caret and
+                                         * 8.2's timer(), multiplexed */
 
     /* THE LAUNCH DOCUMENT (SPEC.md 54.5). Read-and-clear, so it is banked here
      * and spent in the first paint. os88_arg_file() cannot hand back the name

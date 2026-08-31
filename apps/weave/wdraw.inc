@@ -426,6 +426,121 @@ _wd_meter:
     ret
 
 ; -----------------------------------------------------------------------------
+; void wd_mdelta(int x1, int y1, int x2, int y2, int oldv, int newv, int max)
+;
+; WEAVE-SPEC 6.4's OTHER half: "setting .value fills or CLEARS only the delta
+; span - 1 call per change". _wd_meter above fills 0..value and touches
+; nothing else, which is exactly right on ground the kernel has just whitened
+; and exactly wrong on a repaint: a bar that went from 2 to 0 kept its ink,
+; because until wave 3 nothing could make a meter SHRINK. `count.value = 0` in
+; FORM's doReset is the first thing that could, and it is what found this.
+;
+; ONE gfx call, and it is the span BETWEEN the two fills - ink when the value
+; grew, paper when it fell, nothing at all when the span did not move (which
+; on a 100-max meter in a 78px interior is most single steps). The frame is
+; not redrawn: it did not change.
+;
+; The span arithmetic is _wd_meter's, character for character, and that is
+; deliberate rather than lazy - two routines that disagree about where the
+; fill ends by one pixel leave a one-pixel line of ink behind on every
+; decrease, which is the kind of thing that survives every test and is
+; visible on a 5150.
+; -----------------------------------------------------------------------------
+_wd_mdelta:
+    push bp
+    mov bp, sp
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov ax, [bp+12]                 ; the OLD span
+    call wd_mspan
+    mov si, ax
+    mov ax, [bp+14]                 ; ...and the new one
+    call wd_mspan
+    cmp ax, si
+    je .out                         ; the fill did not move: NOTHING at all
+    mov di, ax                      ; DI = new, SI = old
+    ja .grow
+
+    mov al, CWHITE                  ; it fell: paper, from new+1 to old
+    UI_INK
+    mov ax, di
+    inc ax
+    mov cx, si
+    jmp short .span
+.grow:
+    mov al, CBLACK                  ; it grew: ink, from old+1 to new
+    UI_INK
+    mov ax, si
+    inc ax
+    mov cx, di
+.span:
+    add ax, [bp+4]                  ; both are offsets from x1+1
+    mov bx, [bp+4]
+    inc bx
+    add cx, bx
+    dec cx
+    cmp ax, cx
+    jg .pen
+    mov bx, [bp+6]
+    inc bx
+    mov dx, [bp+10]
+    dec dx
+    cmp bx, dx
+    jg .pen
+    call OSAPI_GFX_FILL
+.pen:
+    mov al, CBLACK                  ; ...AND THE PEN BACK. A colour left behind
+    UI_INK                          ; is what os88line.inc's fd_clear_content
+.out:                               ; note is about (SPEC.md 77.14.1)
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop bp
+    ret
+
+; wd_mspan - the filled width in pixels for the value in AX, out of the frame
+; at [bp+4]..[bp+8] and the max at [bp+16].  AX = 0..interior.
+; MUL WRITES DX, so nothing may be banked there across it.
+wd_mspan:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov di, [bp+16]                 ; max
+    or di, di
+    jz .none
+    mov si, ax                      ; the value, clamped to max
+    cmp si, di
+    jbe .vok
+    mov si, di
+.vok:
+    or si, si
+    jz .none
+    mov ax, [bp+8]                  ; interior width = (x2-1) - (x1+1) + 1
+    sub ax, [bp+4]
+    dec ax
+    jle .none
+    mul si
+    div di
+    jmp short .out
+.none:
+    xor ax, ax
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
 ; void wd_xor(int x1, int y1, int x2, int y2)
 ;
 ; WEAVE-SPEC 6.8's selection bar. ONE call each way and its own inverse, which

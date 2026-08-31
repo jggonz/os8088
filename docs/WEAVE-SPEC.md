@@ -50,7 +50,7 @@ whole develop–run cycle lives on the target with zero new kernel bytes.
 | piece | what it is |
 |---|---|
 | **`WEAVE.O88`** | the runtime. A C package (`CC_PACKAGE(weave,weave,WEAVE.OVL)`, SPEC.md §73) with hand-written 8086 cores for the hot loops, RUNCPM's shape (SPEC.md §74). Opens one `.WAB` per instance. Resident target ≤52KB image+bss; 55,000 bytes is the overlay-split trigger (SPEC.md §73.14) |
-| **`WEAVE.OVL`** | the runtime's one overlay: refusable, UI-task-only command paths — verbose bundle diagnostics, About, state import/export dialogs, formula-function help. Nothing an event handler needs mid-run lives here |
+| **`WEAVE.OVL`** | the runtime's one overlay: refusable, UI-task-only paths — verbose bundle diagnostics, About, **the bundle validator** (§10.4; it runs once per open and is the runtime's largest single body of code), state import/export dialogs, formula-function help. Nothing an event handler needs mid-run lives here |
 | **`LOOM.O88`** | the IDE. A separate native package (the WORD/CWORD precedent: two things may not answer to one name). Note Pad's editor engine transplanted with prefix `lm_` (the SPEC.md §68 precedent), a file-list sidebar, one editor pane |
 | **`LOOM.OVL`** | Loom's one overlay: the WML compiler, the WJS compiler, the FX pre-compiler, the atom interner, the bundle writer. Pack is a menu command and menu commands may refuse — the canonical overlay tenant |
 | **`apps/weave/*.inc`** | the shared component library: **paint and hit-test** cores as assembly source `%include`d by BOTH packages (the `apps/os88ui.inc` model, SPEC.md §20.5.1 — this platform's only code-sharing mechanism). They are assembly from wave 2 because they run under the gfx lock, once per callback, and are what LOOM's Preview (§1.7) paints with. **The flow walk (§7) is C in the runtime** and is not one of them: it emits no gfx call, runs over at most 250 records in microseconds (§7.2), and has exactly one caller until LOOM exists. When LOOM lands (wave 6) it takes the same walk — moved to a shared `.inc`, or called through one — and **never a second copy**: two layouts that must agree cell-for-cell (§12) is the failure §11's byte-identity rule exists to prevent, said about code instead of about bundles |
@@ -1305,11 +1305,22 @@ numbers:
 ### 4.11 The runaway script
 
 A handler still unfinished after **90 ticks (~4.9 s at 18.2 Hz)** raises
-the shared alert (`os88ui_ask`): **`Script is still running.`** with
-buttons `Stop` / `Wait`. Stop abandons the handler (eval and frame stacks
-cleared, ring preserved, globals as they are); Wait re-arms the counter
+the shared alert (`os88ui_ask`): **`Script is still running. Stop it?`**
+with buttons **`Yes` / `No`**. Yes abandons the handler (eval and frame
+stacks cleared, ring preserved, globals as they are); No re-arms the counter
 for another 90 ticks. The runaway loop is a designed path with a designed
 sentence, not a hang.
+
+This section asked for buttons `Stop` / `Wait` until wave 3 went to raise
+one. **The shared alert's button sets are fixed** — `OK`, `Yes`/`No`,
+`Save`/`Discard`/`Cancel`, and no more (SPEC.md §75.3, `apps/os88ui.inc`) —
+because that engine's whole argument is that it costs each package 607 bytes
+of its own image rather than the kernel 1,067, and a per-caller label table
+is the first thing that would undo it. So the choice was between inventing a
+fourth set in a shared file for one caller, or asking the question as a
+question. It is asked as a question, in 33 characters against
+`OS88UI_AMAX`'s 34. The alternative was a runtime quietly using different
+words from the ones this document pins, which is worse than either.
 
 #### 4.11.1 The `ontick` budget
 
@@ -1559,6 +1570,26 @@ Surface: `text` (get/set ≤ 255, display window scrolls), `cols` (get),
 armed input (click to arm; one armed input per card; Tab moves to the
 next input in UISTREAM order).
 
+**At most eight editable fields per bundle, over 512 bytes of text.**
+`apps/os88line.inc` declares no storage at all — every routine takes a
+block the CALLER owns, which is what lets one window have two — so the
+runtime's blocks and their buffers come out of a fixed pool, assigned in
+UISTREAM order at load. Eight blocks is eight full-width fields (`cols`
+caps at 60) or twenty typical ones. A ninth is **painted normally and
+refuses focus**: it is not a malformed bundle and not a pack error, because
+the bound is the runtime's arithmetic and not the format's, and a form is
+still readable when its last field cannot be typed in. It is stated here so
+an app author meets a number rather than a mystery.
+
+**A greyed field is drawn by the runtime's own painter and not by
+`os88line_draw`**, which forces `CBLACK` for its frame and its text: a
+disabled one would come out solid-framed with dithered letters, two halves
+of one control disagreeing, which is SPEC.md §47 rule 2's own failure. That
+is the shared file's defect and not this family's — it has no other caller
+that can grey a field — and it is recorded in docs/WEAVE-PLAN.md §4.4.2
+rather than fixed here, for the reason WEAVE-PLAN §4.4.1 gives about the
+scroll bar's missing floor.
+
 ### 6.8 `list`
 
 One `font_run` per visible row; selection is an **XOR bar** — reversible,
@@ -1662,6 +1693,15 @@ word write).
 §12.2), and the kernel draws and tracks them; `MENU_DIS` greying is free
 and SPEC.md §47-correct. An item fires `oncommand`. The kernel's own Close item
 is not the app's.
+
+**The runtime keeps ONE of the five and the app gets four**, which is the
+arithmetic §3.2's "at most 5 `<menu>`s" has to be read against.
+`MENU_APPMAX` is the bar's own bound and the runtime needs somewhere to put
+File → Open, Reload and Bundle Info; wave 2 spent two of the five on two
+pull-downs, which would have left an app three. They are folded into one
+named for the program. A bundle that declares a fifth menu gets its first
+four and a toast saying so — a menu that is silently absent is a command the
+user cannot find and cannot ask about (SPEC.md §47: refuse out loud).
 
 ### 6.12 Cards
 
@@ -2203,7 +2243,8 @@ bound, the fact.
 ### 10.6 Script errors — at run time
 
 A script error stops the current handler (stacks cleared, ring kept),
-puts the sentence in the status row, and the app lives on:
+puts the sentence where the runtime has one to put (§10.6.0), and the app
+lives on:
 
 > `Script error in <fn>: divide by zero.`
 > `Script error in <fn>: out of string space.`
@@ -2215,6 +2256,21 @@ The CODE section carries no name table (§2.8), so `<fn>` is the function
 INDEX (`fn 3`) — unless the bundle carries SOURCE, in which case the
 overlay's diagnostics resolve the index to its name. Pinned so nobody
 invents a name table the format does not have.
+
+#### 10.6.0 There is no status row while a card is up
+
+"The status row" is §10.1's — the bottom row of the content area — and it is
+available exactly when a card is NOT painted over it. §7.1.1 gives the family
+no status strip of its own and §6.12 gives the card the whole content box, so
+a script error raised while an app is running has nowhere to put a line that
+is not on top of the app's own last row.
+
+It therefore goes to the **toast** (SPEC.md §59 — the platform's transient
+row, which costs this window no pixels and takes itself down) and is KEPT in
+the runtime's status string, where the overlay's Bundle Info shows it to a
+user who missed it. §8.3's refusals take the same route. The Deck and
+§10.1–§10.4's refusal screens still use the status row, because on those
+there is nothing else in the box.
 
 #### 10.6.1 The complete list
 
@@ -2481,12 +2537,37 @@ sees, which is the ALLAPPSFILES work. Both machines are manual evidence —
 `make xt-weave` launches 86Box and cannot assert that anything booted, so
 no gate in this family rests on either.
 
+**Wave 3 shipped the interaction and the VM** — `apps/weave/wvm.inc`
+(section 4's machine in assembly, on the generated dispatch table), the event
+ring with §4.9's whole policy, §4.10's adaptive slices, §6.5–§6.8's arm/fire,
+the `os88line` field and its caret, §8's builtins, §10.6's script errors and
+§4.11's runaway alert, and §1.7's `^R` Reload. It is gated FIRST by
+`weavevm`, the raw-QEMU differential (§12.3), which found its own first defect
+on its first green run: `wvm_alloc` banked an object's type in `DH` and then
+loaded `DX` with the handle, so every dynamic string and array was filed as
+free — reads worked and the next allocation quietly took the same handle,
+which is invisible until a second string is alive at once.
+
+It also **crossed §1.2's 55,000-byte split trigger**, and the body that moved
+into `WEAVE.OVL` is the bundle validator: it runs exactly once per bundle, at
+open, on the UI task, which is §1.2's own test for a tenant. The pre-named
+candidates were spent. `weave.o88` is 42,704 image + 12,674 bss = 55,378
+resident, `WEAVE.OVL` 9,518.
+
+Fifteen amendments landed in this document before the code that needed them,
+each listed in the wave's pull request; the load-bearing ones were §10.6.1
+(five example sentences were not a contract — the model raises eighteen, and
+the commonest was not among the five), §4.8.1 (the component-string slots are
+GC roots, without which the collector frees the string a label is currently
+displaying) and §4.5.1 (every indexed operand is bounds-checked, because a
+`.WAB` on a disk need never have been through a packer).
+
 The rest, each gated before the next begins:
 
 | wave | ships | the gate |
 |---|---|---|
 | 2 | WEAVE viewer: CC_PACKAGE from day one, the Frotz accept idiom verbatim (ASSOC16, ARG_FILE banking, first-paint spend, §10.1–§10.4's refusals), flow walk, static components, list with scroll | `weavesmoke` on both 1bpp adapters |
-| 3 | interaction + the VM: widget arm/fire, os88line input, event ring, `wvm.inc` (gated FIRST by the raw-QEMU differential corpus), adaptive slices, onclick/onchange/onkey, alert/timer/tone/state builtins, Cmd-R Reload | `weavevm`, `weavesession`, the §7.3 bar via `weavelat` |
+| 3 | interaction + the VM: widget arm/fire, os88line input, event ring, `wvm.inc` (gated FIRST by the raw-QEMU differential corpus), adaptive slices, onclick/onchange/onkey, alert/timer/tone/state builtins, `^R` Reload | `weavevm`, `weavesession`, the §7.3 bar via `weavelat` |
 | 4 | `<grid>`: cell store, `wband.inc` benched against Set 68's numbers (`make weavebandbench`), per-row damage, formula bar, `wfx.inc` + resident formula compiler, sliced recalc | `weavegrid` (recalc vs model + tpdraw identity), `weavegfx` |
 | 5 | `<canvas>`/`<sprite>`: `wspr.inc` mask composition, dirty-band emit, worker loop, AABB, KEY_DOWN input, worker tones, ontick budget enforcement | `weavegame` (wirefps/wireflick); **commission the field run** — 5150 fps and the XT ops/s reading that converts §4.12 to measurement |
 | 6 | Loom: `lm_` editor transplant, project folder + file switcher, LOOM.OVL compilers + packer, Pack, Preview, templates, APPDATA prefs, W_ONCLOSE/ASAVE close guard | `weavepack` byte-identity on all templates and demos, in the OS |

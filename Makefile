@@ -1249,7 +1249,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         xt-runcpm 286-runcpm \
         allapps usb iso live burn rcbandbench \
         c64 c64disk c64rom c64bandbench c64cputest c64memtest 386-c64 xt-c64 286-c64 \
-        weave weavedisk xt-weave 386-weave \
+        weave weavedisk weavevm xt-weave 386-weave \
         checkdocs test-fast test-full test-soak clean clean-cc clean-marty distclean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
@@ -3688,6 +3688,27 @@ weave: $(BUILD)/weave.o88
 # folder, CATALOG.TXT, a BUNDLES= knob and the allapps rows all belong there.
 # Nothing here anticipates them.
 weavedisk: $(BUILD)/weave.img $(BUILD)/weave720.img $(BUILD)/weave360.img
+
+# --- THE BOOT-SECTOR GATE (WEAVE-SPEC 12.3, 12.1.1) --------------------------
+# The SHIPPING apps/weave/wvm.inc, %included by a boot sector and run in raw
+# QEMU with SS != DS and no OS under it, diffed case by case against
+# tools/weavesim.py's end states. rcz80test's and c64memtest's shape, and
+# WEAVE-SPEC 13.1 gates wave 3 on it FIRST: the interaction is wired to the VM
+# only after the VM has been diffed against the model.
+#
+# It is NOT in `all` and is a prerequisite of nothing, the way `make
+# rcz80test` and `make c64cputest` are not - but unlike those three it is also
+# a registered soak ROW (tests/weavevm.py), because 12.3 names it as one and
+# because `os88test.py soak -k 'weave*'` is this family's one command. Needs
+# only nasm, python3 and qemu: the corpus is GENERATED here and never
+# committed, so a change to the model moves the expected states with it.
+#
+# MEASURED: 1 s of guest, ~2 s wall clock including the corpus and the nasm
+# run, on an idle 2024 laptop with nothing else on it.
+weavevm: apps/weave/wvm.inc apps/weave/hosttest/weavevm.asm \
+         apps/weave/hosttest/weavevm.sh tools/weavesim.py \
+         docs/WEAVE-SPEC.md $(wildcard tests/weave/vmcorpus/*)
+	apps/weave/hosttest/weavevm.sh
 
 WEAVEDISK := $(BUILD)/weave.o88 $(BUILD)/WEAVE.OVL $(WEAVEWABS)
 

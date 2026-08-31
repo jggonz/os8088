@@ -210,6 +210,53 @@ FULL = [
 # single-subject gates; several are worth reading before touching their area.
 # --------------------------------------------------------------------------
 SOAK = [
+    Row("weavevm", "soak", py("tests/weavevm.py"), 20.0,
+        "WEAVE-SPEC 12.3: the SHIPPING apps/weave/wvm.inc run in a raw-QEMU "
+        "BOOT SECTOR with SS != DS and no OS under it at all, diffed case by "
+        "case against tools/weavesim.py's end states - the rcz80test / "
+        "c64memtest shape, and the gate wave 3's whole interaction half is "
+        "built on (13.1 gates it FIRST). It asks docs/TESTING.md's question "
+        "differently from every other qemu row here: this is not QEMU instead "
+        "of MartyPC for a machine feature, it is a boot sector with one "
+        "%included file in it, so what the emulator supplies is an 8086, a "
+        "serial port and isa-debug-exit and nothing about the machine is "
+        "being asserted. Which is also why it asserts CORRECTNESS and never "
+        "a time. Every case runs TWICE, at a 256-op budget and at a budget "
+        "of ONE, because a core that kept state in a register across a slice "
+        "boundary passes the first and fails the second; and the corpus "
+        "carries negative controls the harness must FAIL, without which the "
+        "comparison proves nothing. 20s is 1s MEASURED here (the guest runs "
+        "in well under a second) plus the corpus generation and the nasm "
+        "run, with room for the corpus growing",
+        needs=("qemu", "nasm"), serial=True, timeout=300),
+    Row("weavesession", "soak", py("tests/weavesession.py"), 90.0,
+        "WEAVE-SPEC 12.3, 12.3.1: a scripted session driven through the "
+        "SHIPPING package under MartyPC - type in a field, press a button, "
+        "toggle a check, take a menu command, dismiss an alert - and every "
+        "reading diffed against `weavesim --run` given the same events. It "
+        "reads facts that are on the glass or in the kernel's own window "
+        "table (a meter's fill in pixels, a check's glyph, whether an alert "
+        "window exists) and never a transcript, because a transcript is a "
+        "claim the program makes about itself and a -DWVHARNESS build would "
+        "be a second implementation of the thing under test (12.3.1 says so "
+        "at length). It is the only row that exercises the ring, the slice "
+        "and the native surface END TO END - weavevm cannot reach any of "
+        "them, having no runtime under it. 90s is 55s MEASURED here for one "
+        "boot, one navigation, one launch and eleven gestures, taken up by "
+        "the ~1.6x a boot costs on the slowest box this suite is written for",
+        needs=("marty", "cc"), serial=True, timeout=360),
+    Row("weavelat", "soak", py("tests/weavelat.py"), 120.0,
+        "SPEC.md 7.3's click-to-action bar with a WEAVE FORM as the load "
+        "(WEAVE-SPEC 12.4), measured the way tests/uilat.py measures it - "
+        "two memory breakpoints and the cycle counter, because os88mouse's "
+        "injection path has a ~0.51 s floor and cannot see 40 ms. The "
+        "question it asks is the one 4.10's slice design could get wrong: a "
+        "handler runs in ONWAKE without the gfx lock, and a runtime that "
+        "took the lock for the slice rather than for the flush would hold it "
+        "for 51-154 ms against a 37-70 ms bar. That is invisible in every "
+        "functional test in this family and it is exactly what this row is "
+        "for. 120s is uilat's own figure: the same shape, one more launch",
+        needs=("marty", "cc"), serial=True, timeout=480),
     Row("assocglyph", "soak", py("tests/assocglyph.py"), 62.3,
         "A DECLARED extension's icon is right from a COLD mount (SPEC.md"
         "54.7.3).",

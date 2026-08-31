@@ -112,6 +112,10 @@ static void ovl_layout(void)
     fit = w_ch - 1;
     if (w_nlay > fit)
         fit = w_ch - 2;
+    if (w_infoln[0])
+        fit--;                          /* one for the ask line */
+    if (w_serr[0])
+        fit--;                          /* ...and one for the LAST SENTENCE */
     if (fit < 0)
         fit = 0;
 
@@ -127,6 +131,11 @@ static void ovl_layout(void)
     w_ls(" COMPS ");
     w_ln(w_nlay);
     w_row(0, w_line);
+    if (w_infoln[0])
+        w_row(1, w_infoln);             /* the ask arithmetic, in full: the
+                                         * toast that raised it holds 23
+                                         * characters (SPEC.md 59.8) and this
+                                         * line is 45 */
 
     for (i = 0; i < w_nlay && i < fit; i++) {
         w_l0();
@@ -142,7 +151,7 @@ static void ovl_layout(void)
         w_ln(w_lay[i].cw);
         w_ls(" ");
         w_ln(w_lay[i].ch);
-        w_row(1 + i, w_line);
+        w_row(1 + (w_infoln[0] ? 1 : 0) + i, w_line);
     }
 
     if (i < w_nlay) {
@@ -152,8 +161,17 @@ static void ovl_layout(void)
         w_l0();
         w_ls("MORE ");
         w_ln(w_nlay - i);
-        w_row(1 + fit, w_line);
+        w_row(1 + (w_infoln[0] ? 1 : 0) + fit, w_line);
     }
+
+    /* THE LAST SENTENCE, IN FULL (WEAVE-SPEC 10.6.0). The toast that raised
+     * it holds 23 characters and every one of 10.6.1's sentences is longer,
+     * so the toast is the alarm and this is the detail - which is what 1.2
+     * names this overlay's diagnostics for. It is the bottom row of the
+     * listing because it is the thing a user came here to read, and a row
+     * was reserved for it above so nothing is underneath it. */
+    if (w_serr[0])
+        w_row(w_ch - 1, w_serr);
 }
 
 static void ovl_info(void)
@@ -180,7 +198,16 @@ static void ovl_info(void)
     w_ln(w_nsec);
     w_ls(", flags ");
     w_ln(w_flags);
-    os88_strcpy(w_status, w_line, sizeof(w_status));
+    os88_strcpy(w_infoln, w_line, sizeof(w_infoln));
+    w_l0();                             /* ...and a SHORT form for the toast,
+                                         * which holds 23 characters: `ask
+                                         * 26KB, 9 sections` is 20 at the
+                                         * biggest bundle the format allows */
+    w_ls("ask ");
+    w_ln(w_claimkb + w_vmkb + w_gridkb + w_canvaskb);
+    w_ls("KB, ");
+    w_ln(w_nsec);
+    w_ls(" sections");
     os88_toast(w_line, 0);
     ovl_layout();                       /* ...and the listing, on the glass.
                                          * AFTER the toast, because the toast

@@ -222,6 +222,8 @@ void w_draw_text(int x, int y, const char *s, int cells,
 void wd_rule(int x1, int x2, int y);
 void wd_box(int x1, int y1, int x2, int y2);
 void wd_meter(int x1, int y1, int x2, int y2, int value, int max);
+void wd_mdelta(int x1, int y1, int x2, int y2, int oldv, int newv,
+               int max);      /* 6.4's delta: ONE call, or none */
 void wd_xor(int x1, int y1, int x2, int y2);
 void wd_input(int x1, int y1, int x2, int y2, const char *s);
 

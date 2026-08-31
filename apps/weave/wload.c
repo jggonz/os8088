@@ -374,8 +374,11 @@ static void w_comp_init(void)
                                       & (CF_HIDDEN | CF_DISABLED));
         if (props == W_NOPROPS)
             continue;
-        if (ct == WC_METER)
+        if (ct == WC_METER) {
             w_cval[id] = (int)w_pint(props, WA_VALUE, 0);
+            w_cvold[id] = w_cval[id];   /* 6.4's delta starts from what the
+                                         * first card paint will draw */
+        }
         else if (ct == WC_CHECK || ct == WC_RADIO)
             w_cval[id] = w_pint(props, WA_CHECKED, 0) ? 1 : 0;
         else if (ct == WC_INPUT) {

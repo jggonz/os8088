@@ -114,7 +114,21 @@ static void w_scripterr(void)
         w_ln((unsigned)wvm_errb());
         w_ls(".");
     }
-    os88_strcpy(w_status, w_line, sizeof(w_status));
+    os88_strcpy(w_serr, w_line, sizeof(w_serr));
+
+    /* THE TOAST HOLDS 23 CHARACTERS (`TOAST_MAX`, SPEC.md 59.8) and the
+     * shortest sentence above is `Script error in fn 0: type mismatch.` at
+     * 35. Booted, that came out as `Script error in fn 0: di` - the alarm
+     * intact and the CAUSE cut off, which is the half a user needs.
+     *
+     * So the two jobs are split: the toast is the ALARM and says where, and
+     * Bundle Info is the DETAIL and says what - which is what 1.2 already
+     * names that overlay for. `Script error in fn 250.` is 22 characters at
+     * the worst function index the format allows, so it never clips. */
+    w_l0();
+    w_ls("Script error in fn ");
+    w_ln((unsigned)wvm_errfn());
+    w_ls(".");
     os88_toast(w_line, 0);
 }
 

@@ -107,6 +107,8 @@ static unsigned w_lsel1[256];
  */
 static unsigned      w_ctext[256];      /* a VM string handle, 0 = the atom */
 static int           w_cval[256];       /* meter .value / check .checked */
+static int           w_cvold[256];      /* ...and what a meter last DREW,
+                                         * which 6.4's delta needs */
 static unsigned char w_cflag[256];      /* the live CF_HIDDEN | CF_DISABLED */
 
 /* 4.8.1's list-item override pool, shared by every list in the bundle and
@@ -125,6 +127,7 @@ static void w_pstate(void)              /* a new bundle: forget the old one's */
     os88_memset(w_lsel1, 0, sizeof(w_lsel1));
     os88_memset(w_ctext, 0, sizeof(w_ctext));
     os88_memset(w_cval, 0, sizeof(w_cval));
+    os88_memset(w_cvold, 0, sizeof(w_cvold));
     os88_memset(w_cflag, 0, sizeof(w_cflag));
     w_nlset = 0;
 }
@@ -536,8 +539,15 @@ static void w_paint_comp(int i)
                                          * whole of it - it occupies cells */
 
     case WC_METER:
-        wd_meter(x1, y1, x2, y2, (unsigned)w_cval[w_lay[i].id],
-                 w_pint(props, WA_MAX, 100));
+        n = w_pint(props, WA_MAX, 100);
+        if (w_padnow)                   /* a repaint over the LAST value: 6.4's
+                                         * delta, one call or none */
+            wd_mdelta(x1, y1, x2, y2, w_cvold[w_lay[i].id],
+                      w_cval[w_lay[i].id], (int)n);
+        else                            /* clean ground: the frame and the fill,
+                                         * which is 14's two-call row */
+            wd_meter(x1, y1, x2, y2, w_cval[w_lay[i].id], (int)n);
+        w_cvold[w_lay[i].id] = w_cval[w_lay[i].id];
         break;
 
     case WC_BUTTON:
