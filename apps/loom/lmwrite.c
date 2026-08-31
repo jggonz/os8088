@@ -735,15 +735,23 @@ int ovl_write(void)
  * THE DOOR
  * ========================================================================*/
 
+/* THE ORDER IS tools/weavesim.py's pack_project(), STEP FOR STEP, and it is
+ * part of the contract rather than an implementation detail: 2.14 rule 3 pins
+ * the interning traversal (WML, then WJS TOKENS, then FX formulas in CELLS
+ * order), and 10.5's "which error wins" follows the rest of it. The bodies
+ * compile LAST, after the sheet and the sprite art, which is why ovl_wjs()
+ * and ovl_wjs_gen() are two doors. */
 int ovl_pack_rest(void)
 {
-    if (!ovl_wjs())
+    if (!ovl_wjs())                 /* tokens + top-level declarations */
         return 0;
-    if (!ovl_sheet())
+    if (!ovl_sheet())               /* .WFX -> CELLS + FXCODE */
         return 0;
-    if (!ovl_sprites())
+    if (!ovl_sprites())             /* .WSP -> SPRITES */
         return 0;
-    if (!ovl_resolve())
+    if (!ovl_wjs_gen())             /* 4.6's code generation */
+        return 0;
+    if (!ovl_resolve())             /* events and menu items -> indices */
         return 0;
     return ovl_write();
 }

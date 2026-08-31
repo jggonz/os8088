@@ -88,6 +88,8 @@ unsigned char lm_evlen[LM_MAXEV];
 int           lm_evline[LM_MAXEV];
 int           lm_nev = 0;
 
+static int ovl_elem_index(unsigned off, unsigned len);
+
 /* --- the scanner's cursor ------------------------------------------------ */
 static unsigned lmw_i;
 static int      lmw_line;
@@ -217,6 +219,19 @@ static void ovl_mn(int v)
     lm_catn(lmw_msg, v);
 }
 
+/* ...and its lowercasing twin, for the names 3.1 folds. */
+static void ovl_msrcl(unsigned off, unsigned len)
+{
+    unsigned n = os88_strlen(lmw_msg);
+    unsigned k;
+
+    for (k = 0; k < len && n + 1 < LM_ERRMAX; k++) {
+        lmw_msg[n] = (char) lm_lower((int) lm_sb(LM_SLOT_WML, off + k));
+        n++;
+    }
+    lmw_msg[n] = 0;
+}
+
 static void ovl_msrc(unsigned off, unsigned len)
 {
     unsigned n = os88_strlen(lmw_msg);
@@ -243,7 +258,7 @@ static void ovl_mv(int ai)
 
 static void ovl_mtag(void)
 {
-    ovl_msrc(lmw_tagoff, lmw_taglen);
+    ovl_msrcl(lmw_tagoff, lmw_taglen);
 }
 
 static void ovl_raise(int line)
@@ -450,13 +465,14 @@ static int ovl_opentag(void)
             if (lmw_anlen[i] == (unsigned char) nlen) {
                 unsigned j = 0;
                 while (j < nlen
-                       && lmw_at(lmw_anoff[i] + j) == lmw_at(noff + j))
+                       && lm_lower((int) lmw_at(lmw_anoff[i] + j))
+                          == lm_lower((int) lmw_at(noff + j)))
                     j++;
                 if (j == nlen) {
                     ovl_m0("");
                     ovl_mtag();
                     ovl_mc(": attribute \"");
-                    ovl_msrc(noff, nlen);
+                    ovl_msrcl(noff, nlen);
                     ovl_mc("\" written twice");
                     ovl_raise(aline);
                     return 0;
@@ -533,8 +549,12 @@ static int ovl_closetag(const char *name)
     m = lmw_i;
     while (lm_isalnum((int) lmw_at(m)))
         m++;
-    if (!lm_srceq(LM_SLOT_WML, lmw_i, m - lmw_i, name)) {
+    if (!lm_srceqi(LM_SLOT_WML, lmw_i, m - lmw_i, name)) {
         ovl_m0("</");
+        /* RAW, not folded: the model quotes the close tag's own spelling here
+         * (`m.group(0)`) while the element it failed to close is the folded
+         * name. It is the one place in this file a name is not lowercased,
+         * and a fuzz run against tools/weavesim.py is what found it. */
         ovl_msrc(lmw_i, m - lmw_i);
         ovl_mc("> closes <");
         ovl_mc(name);
@@ -570,7 +590,7 @@ static int ovl_afind(const char *name)
     int i;
 
     for (i = 0; i < lmw_nattr; i++) {
-        if (lm_srceq(LM_SLOT_WML, lmw_anoff[i], lmw_anlen[i], name))
+        if (lm_srceqi(LM_SLOT_WML, lmw_anoff[i], lmw_anlen[i], name))
             return i;
     }
     return -1;
@@ -680,6 +700,25 @@ static int ovl_boolattr(const char *tag, const char *attr, int ai)
     return 0;
 }
 
+/* 3.1: "Element and attribute names are case-insensitive, folded to lowercase
+ * by the parser." Every comparison on a NAME in this file goes through
+ * lm_srceqi, and every message that quotes one lowercases it (ovl_msrcl) -
+ * which is what "folded by the parser" looks like where a reader can see it.
+ * Attribute VALUES keep their case (3.1 again), so `style="Bold"` is still a
+ * pack error and `id="Who"` still differs from `id="who"`.
+ *
+ * -1 = not one of the eighteen. */
+static int ovl_elem_index(unsigned off, unsigned len)
+{
+    int i;
+
+    for (i = 0; i < LMW_NELEM; i++) {
+        if (lm_srceqi(LM_SLOT_WML, off, len, lmw_elem[i]))
+            return i;
+    }
+    return -1;
+}
+
 /* 3.4/10.5's unknown-attribute voice, in weavesim's own branch order: an
  * `on*` name first (a known event on the wrong element, else the hover
  * sentence), then a colour name, then the general one.
@@ -700,44 +739,40 @@ static void ovl_badattr(int ei, int ai)
     unsigned len = lmw_anlen[ai];
     int k;
 
-    if (len >= 2 && lmw_at(off) == 'o' && lmw_at(off + 1) == 'n') {
+    if (len >= 2 && lm_srceqi(LM_SLOT_WML, off, 2, "on")) {
         int isev = 0;
-        int hov = lm_srceq(LM_SLOT_WML, off, len, "onhover")
-            || lm_srceq(LM_SLOT_WML, off, len, "onmouseover")
-            || lm_srceq(LM_SLOT_WML, off, len, "onmouseout")
-            || lm_srceq(LM_SLOT_WML, off, len, "onmousemove");
+        int hov = lm_srceqi(LM_SLOT_WML, off, len, "onhover")
+            || lm_srceqi(LM_SLOT_WML, off, len, "onmouseover")
+            || lm_srceqi(LM_SLOT_WML, off, len, "onmouseout")
+            || lm_srceqi(LM_SLOT_WML, off, len, "onmousemove");
         for (k = 0; known_ev[k]; k++)
-            if (lm_srceq(LM_SLOT_WML, off, len, known_ev[k]))
+            if (lm_srceqi(LM_SLOT_WML, off, len, known_ev[k]))
                 isev = 1;
         if (isev && !hov) {
             ovl_m0(lmw_elem[ei]);
             ovl_mc(": no event \"");
-            ovl_msrc(off, len);
+            ovl_msrcl(off, len);
             ovl_mc("\" exists on it (WEAVE-SPEC 3.3)");
             ovl_raise(lmw_aline[ai]);
             return;
         }
         ovl_m0("");
-        ovl_msrc(off, len);
+        ovl_msrcl(off, len);
         ovl_mc(": no hover exists; pointer movement reaches a package only "
                "between press and release (SPEC.md 13.7)");
         ovl_raise(lmw_aline[ai]);
         return;
     }
     for (k = 0; k + 5 <= (int) len; k++) {
-        if (lmw_at(off + (unsigned) k) == 'c'
-            && lmw_at(off + (unsigned) k + 1) == 'o'
-            && lmw_at(off + (unsigned) k + 2) == 'l'
-            && lmw_at(off + (unsigned) k + 3) == 'o'
-            && lmw_at(off + (unsigned) k + 4) == 'r')
+        if (lm_srceqi(LM_SLOT_WML, off + (unsigned) k, 5, "color"))
             goto colour;
     }
     for (k = 0; colourish[k]; k++)
-        if (lm_srceq(LM_SLOT_WML, off, len, colourish[k]))
+        if (lm_srceqi(LM_SLOT_WML, off, len, colourish[k]))
             goto colour;
     ovl_m0(lmw_elem[ei]);
     ovl_mc(": no such attribute \"");
-    ovl_msrc(off, len);
+    ovl_msrcl(off, len);
     ovl_mc("\"; style is bold/invert/align only - two of three adapters "
            "are 1bpp");
     ovl_raise(lmw_aline[ai]);
@@ -745,7 +780,7 @@ static void ovl_badattr(int ei, int ai)
 
 colour:
     ovl_m0("");
-    ovl_msrc(off, len);
+    ovl_msrcl(off, len);
     ovl_mc(": there are no colors; grey rounds to black on 1bpp and state "
            "never rides on color (SPEC.md 39.4)");
     ovl_raise(lmw_aline[ai]);
@@ -764,12 +799,12 @@ static int ovl_checkattrs(int ei)
 
         if (flow) {
             for (k = 0; lmw_common[k]; k++)
-                if (lm_srceq(LM_SLOT_WML, lmw_anoff[i], lmw_anlen[i],
-                             lmw_common[k]))
+                if (lm_srceqi(LM_SLOT_WML, lmw_anoff[i], lmw_anlen[i],
+                              lmw_common[k]))
                     legal = 1;
         }
         for (k = 0; tab[k]; k++)
-            if (lm_srceq(LM_SLOT_WML, lmw_anoff[i], lmw_anlen[i], tab[k]))
+            if (lm_srceqi(LM_SLOT_WML, lmw_anoff[i], lmw_anlen[i], tab[k]))
                 legal = 1;
         if (!legal) {
             ovl_badattr(ei, i);
@@ -858,6 +893,7 @@ void ovl_psort(int comp)
 
 static int lmw_hastext;
 static int lmw_textline;
+static int runline;      /* where the text run being scanned STARTED */
 
 static int ovl_text_run(unsigned from, unsigned to, int line)
 {
@@ -1219,15 +1255,16 @@ static int ovl_list_item(void)
                 while (lm_isalnum((int) lmw_at(m)))
                     m++;
                 ovl_m0("<");
-                ovl_msrc(toff, m - toff);
+                ovl_msrcl(toff, m - toff);
                 ovl_mc(">: <item> takes no children");
                 ovl_raise(lmw_line);
                 return 0;
             }
             run = lmw_i;
+            runline = lmw_line;
             while (!lmw_eof() && lmw_at(lmw_i) != '<')
                 lmw_adv(1);
-            if (!ovl_text_run(run, lmw_i, lmw_line))
+            if (!ovl_text_run(run, lmw_i, runline))
                 return 0;
         }
         if (!ovl_closetag("item"))
@@ -1342,12 +1379,13 @@ static int ovl_sprite_elem(int card)
                 while (lm_isalnum((int) lmw_at(m)))
                     m++;
                 ovl_m0("<");
-                ovl_msrc(toff, m - toff);
+                ovl_msrcl(toff, m - toff);
                 ovl_mc(">: <sprite> takes no children");
                 ovl_raise(lmw_line);
                 return 0;
             }
             run = lmw_i;
+            runline = lmw_line;
             while (!lmw_eof() && lmw_at(lmw_i) != '<')
                 lmw_adv(1);
             {
@@ -1355,7 +1393,7 @@ static int ovl_sprite_elem(int card)
                 for (k = run; k < lmw_i; k++)
                     if (!lm_isspace((int) lm_sb(LM_SLOT_WML, k))) {
                         ovl_m0("sprite: takes no text content");
-                        ovl_raise(lmw_line);
+                        ovl_raise(runline);
                         return 0;
                     }
             }
@@ -1667,33 +1705,23 @@ static int ovl_component(int ei, int card)
             if (lmw_lit("</"))
                 break;
             if (lmw_lit("<")) {
-                unsigned toff = lmw_i + 1;
-                unsigned m = toff;
                 int ce;
-                while (lm_isalnum((int) lmw_at(m)))
-                    m++;
-                ce = -1;
-                {
-                    int q;
-                    for (q = 0; q < LMW_NELEM; q++)
-                        if (lm_srceq(LM_SLOT_WML, toff, m - toff,
-                                     lmw_elem[q]))
-                            ce = q;
-                }
+
+                if (!ovl_opentag())
+                    return 0;
+                ce = ovl_elem_index(lmw_tagoff, lmw_taglen);
                 if (ei == LMW_E_LIST) {
                     if (ce != LMW_E_ITEM) {
                         ovl_m0("<");
-                        ovl_msrc(toff, m - toff);
+                        ovl_mtag();
                         ovl_mc(ce >= 0 ? ">: not a child of <list> "
                                          "(WEAVE-SPEC 3.2)"
                                        : ">: not a Weave element; the "
                                          "inventory is closed "
                                          "(WEAVE-SPEC 3.2)");
-                        ovl_raise(lmw_line);
+                        ovl_raise(lmw_tagline);
                         return 0;
                     }
-                    if (!ovl_opentag())
-                        return 0;
                     if (!ovl_list_item())
                         return 0;
                     continue;
@@ -1701,17 +1729,15 @@ static int ovl_component(int ei, int card)
                 if (ei == LMW_E_CANVAS) {
                     if (ce != LMW_E_SPRITE) {
                         ovl_m0("<");
-                        ovl_msrc(toff, m - toff);
+                        ovl_mtag();
                         ovl_mc(ce >= 0 ? ">: not a child of <canvas> "
                                          "(WEAVE-SPEC 3.2)"
                                        : ">: not a Weave element; the "
                                          "inventory is closed "
                                          "(WEAVE-SPEC 3.2)");
-                        ovl_raise(lmw_line);
+                        ovl_raise(lmw_tagline);
                         return 0;
                     }
-                    if (!ovl_opentag())
-                        return 0;
                     if (!ovl_sprite_elem(card))
                         return 0;
                     lm_canvspr++;
@@ -1726,18 +1752,19 @@ static int ovl_component(int ei, int card)
                     continue;
                 }
                 ovl_m0("<");
-                ovl_msrc(toff, m - toff);
+                ovl_mtag();
                 ovl_mc(">: <");
                 ovl_mc(lmw_elem[ei]);
                 ovl_mc("> takes no children");
-                ovl_raise(lmw_line);
+                ovl_raise(lmw_tagline);
                 return 0;
             }
             run = lmw_i;
+            runline = lmw_line;
             while (!lmw_eof() && lmw_at(lmw_i) != '<')
                 lmw_adv(1);
             if (takestext) {
-                if (!ovl_text_run(run, lmw_i, lmw_line))
+                if (!ovl_text_run(run, lmw_i, runline))
                     return 0;
             } else if (ei != LMW_E_CANVAS) {
                 unsigned k;
@@ -1745,7 +1772,7 @@ static int ovl_component(int ei, int card)
                     if (!lm_isspace((int) lm_sb(LM_SLOT_WML, k))) {
                         ovl_m0(lmw_elem[ei]);
                         ovl_mc(": takes no text content");
-                        ovl_raise(lmw_line);
+                        ovl_raise(runline);
                         return 0;
                     }
             }
@@ -1795,8 +1822,6 @@ static int ovl_element_card(void)
     int ai;
     int idx;
 
-    if (!ovl_opentag())
-        return 0;
     openline = lmw_tagline;
     if (!ovl_checkattrs(LMW_E_CARD))
         return 0;
@@ -1845,37 +1870,33 @@ static int ovl_element_card(void)
         if (lmw_lit("</"))
             break;
         if (lmw_lit("<")) {
-            unsigned toff = lmw_i + 1;
-            unsigned m = toff;
-            int ce = -1;
-            int q;
-            while (lm_isalnum((int) lmw_at(m)))
-                m++;
-            for (q = 0; q < LMW_NELEM; q++)
-                if (lm_srceq(LM_SLOT_WML, toff, m - toff, lmw_elem[q]))
-                    ce = q;
+            int ce;
+
+            if (!ovl_opentag())
+                return 0;
+            ce = ovl_elem_index(lmw_tagoff, lmw_taglen);
             if (ce < 0) {
                 ovl_m0("<");
-                ovl_msrc(toff, m - toff);
+                ovl_mtag();
                 ovl_mc(">: not a Weave element; the inventory is closed "
                        "(WEAVE-SPEC 3.2)");
-                ovl_raise(lmw_line);
+                ovl_raise(lmw_tagline);
                 return 0;
             }
             if (ce > LMW_E_CANVAS) {        /* sprite, app, card, menu... */
                 ovl_m0("<");
-                ovl_msrc(toff, m - toff);
+                ovl_mtag();
                 ovl_mc(">: not a child of <card> (WEAVE-SPEC 3.2)");
-                ovl_raise(lmw_line);
+                ovl_raise(lmw_tagline);
                 return 0;
             }
-            if (!ovl_opentag())
-                return 0;
             if (!ovl_component(ce, idx + 1))
                 return 0;
             continue;
         }
         run = lmw_i;
+        runline = lmw_line;         /* where the run STARTED - the model
+                                     * records a text node at its first line */
         while (!lmw_eof() && lmw_at(lmw_i) != '<')
             lmw_adv(1);
         {
@@ -1883,7 +1904,7 @@ static int ovl_element_card(void)
             for (k = run; k < lmw_i; k++)
                 if (!lm_isspace((int) lm_sb(LM_SLOT_WML, k))) {
                     ovl_m0("card: bare text is not a component");
-                    ovl_raise(lmw_line);
+                    ovl_raise(runline);
                     return 0;
                 }
         }
@@ -1898,8 +1919,6 @@ static int ovl_element_menu(void)
     int ai;
     int mi;
 
-    if (!ovl_opentag())
-        return 0;
     openline = lmw_tagline;
     if (!ovl_checkattrs(LMW_E_MENU))
         return 0;
@@ -1957,27 +1976,21 @@ static int ovl_element_menu(void)
         if (lmw_lit("</"))
             break;
         if (lmw_lit("<")) {
-            unsigned toff = lmw_i + 1;
-            unsigned m = toff;
-            int ce = -1;
-            int q;
+            int ce;
             int itemline;
-            while (lm_isalnum((int) lmw_at(m)))
-                m++;
-            for (q = 0; q < LMW_NELEM; q++)
-                if (lm_srceq(LM_SLOT_WML, toff, m - toff, lmw_elem[q]))
-                    ce = q;
+
+            if (!ovl_opentag())
+                return 0;
+            ce = ovl_elem_index(lmw_tagoff, lmw_taglen);
             if (ce != LMW_E_ITEM) {
                 ovl_m0("<");
-                ovl_msrc(toff, m - toff);
+                ovl_mtag();
                 ovl_mc(ce >= 0 ? ">: not a child of <menu> (WEAVE-SPEC 3.2)"
                                : ">: not a Weave element; the inventory is "
                                  "closed (WEAVE-SPEC 3.2)");
-                ovl_raise(lmw_line);
+                ovl_raise(lmw_tagline);
                 return 0;
             }
-            if (!ovl_opentag())
-                return 0;
             itemline = lmw_tagline;
             if (!ovl_checkattrs(LMW_E_ITEM))
                 return 0;
@@ -2029,9 +2042,10 @@ static int ovl_element_menu(void)
                             return 0;
                         }
                         r2 = lmw_i;
+                        runline = lmw_line;
                         while (!lmw_eof() && lmw_at(lmw_i) != '<')
                             lmw_adv(1);
-                        if (!ovl_text_run(r2, lmw_i, lmw_line))
+                        if (!ovl_text_run(r2, lmw_i, runline))
                             return 0;
                     }
                     if (!ovl_closetag("item"))
@@ -2054,6 +2068,7 @@ static int ovl_element_menu(void)
             continue;
         }
         run = lmw_i;
+        runline = lmw_line;
         while (!lmw_eof() && lmw_at(lmw_i) != '<')
             lmw_adv(1);
         {
@@ -2061,7 +2076,7 @@ static int ovl_element_menu(void)
             for (k = run; k < lmw_i; k++)
                 if (!lm_isspace((int) lm_sb(LM_SLOT_WML, k))) {
                     ovl_m0("menu: bare text is not an item");
-                    ovl_raise(lmw_line);
+                    ovl_raise(runline);
                     return 0;
                 }
         }
@@ -2082,8 +2097,6 @@ static int ovl_element_script(void)
     int openline;
     int ai;
 
-    if (!ovl_opentag())
-        return 0;
     openline = lmw_tagline;
     if (!ovl_checkattrs(LMW_E_SCRIPT))
         return 0;
@@ -2313,7 +2326,7 @@ int ovl_wml(void)
         return 0;
     if (!ovl_opentag())
         return 0;
-    if (!lm_srceq(LM_SLOT_WML, lmw_tagoff, lmw_taglen, "app")) {
+    if (!lm_srceqi(LM_SLOT_WML, lmw_tagoff, lmw_taglen, "app")) {
         ovl_m0("<");
         ovl_mtag();
         ovl_mc(">: the document element is <app> (WEAVE-SPEC 3.2)");
@@ -2366,16 +2379,20 @@ int ovl_wml(void)
                 if (lmw_lit("</"))
                     break;
                 if (lmw_lit("<")) {
-                    unsigned toff = lmw_i + 1;
-                    unsigned m = toff;
-                    int ce = -1;
-                    int q;
-                    while (lm_isalnum((int) lmw_at(m)))
-                        m++;
-                    for (q = 0; q < LMW_NELEM; q++)
-                        if (lm_srceq(LM_SLOT_WML, toff, m - toff,
-                                     lmw_elem[q]))
-                            ce = q;
+                    unsigned toff;
+                    unsigned tlen;
+                    int ce;
+                    /* THE TAG IS SCANNED BEFORE IT IS CLASSIFIED, which is
+                     * the model's order: WmlScanner reads a whole element -
+                     * name, attributes and all - and the Analyzer rejects the
+                     * name afterwards. Classifying first would report "not a
+                     * Weave element" for `<but style=` where weavesim reports
+                     * the malformed attribute list. */
+                    if (!ovl_opentag())
+                        return 0;
+                    toff = lmw_tagoff;
+                    tlen = lmw_taglen;
+                    ce = ovl_elem_index(toff, tlen);
                     if (ce == LMW_E_CARD) {
                         if (!ovl_element_card())
                             return 0;
@@ -2387,18 +2404,19 @@ int ovl_wml(void)
                             return 0;
                     } else {
                         ovl_m0("<");
-                        ovl_msrc(toff, m - toff);
+                        ovl_msrcl(toff, tlen);
                         ovl_mc(ce >= 0 ? ">: not a child of <app> "
                                          "(WEAVE-SPEC 3.2)"
                                        : ">: not a Weave element; the "
                                          "inventory is closed "
                                          "(WEAVE-SPEC 3.2)");
-                        ovl_raise(lmw_line);
+                        ovl_raise(lmw_tagline);
                         return 0;
                     }
                     continue;
                 }
                 run = lmw_i;
+                runline = lmw_line;
                 while (!lmw_eof() && lmw_at(lmw_i) != '<')
                     lmw_adv(1);
                 {
@@ -2406,7 +2424,7 @@ int ovl_wml(void)
                     for (k = run; k < lmw_i; k++)
                         if (!lm_isspace((int) lm_sb(LM_SLOT_WML, k))) {
                             ovl_m0("app: text content is not a card");
-                            ovl_raise(lmw_line);
+                            ovl_raise(runline);
                             return 0;
                         }
                 }

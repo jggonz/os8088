@@ -386,7 +386,8 @@ extern int           lm_nev;
  * ==========================================================================*/
 
 int ovl_wml(void);                  /* parse + analyse LM_SLOT_WML */
-int ovl_wjs(void);                  /* tokenize + collect + generate */
+int ovl_wjs(void);                  /* tokenize + collect (2.14 rule 3b) */
+int ovl_wjs_gen(void);              /* ...and 4.6, AFTER the sheet and art */
 int ovl_sheet(void);                /* .WFX -> CELLS + FXCODE (via wfxc.c) */
 int ovl_sprites(void);              /* .WSP -> SPRITES */
 int ovl_resolve(void);              /* events and menu items -> fn indices */

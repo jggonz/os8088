@@ -2227,15 +2227,21 @@ static int ovl_ontick_ok(int fi, int line)
 
 /* --- the door ------------------------------------------------------------ */
 
+/* ovl_wjs - 4.2's TOKENS and 4.1's top-level declarations, and nothing else.
+ *
+ * IT STOPS BEFORE THE BODIES ON PURPOSE. tools/weavesim.py's pack_project()
+ * tokenizes and collects, then reads the sheet and the sprite art, and only
+ * then calls compile_wjs() - so a project with a broken handler AND a broken
+ * `.WSP` refuses about the art, not about the handler. The atom pool does not
+ * care (2.14 rule 3b interns in the TOKENIZER, which is here), but 10.5's
+ * "which error wins" does, and that is the whole of why this is two doors. */
 int ovl_wjs(void)
 {
-    int i;
-    int ninit = 0;
-
     lm_used = 0;
     lm_startfn = -1;
     lm_nfunc = 0;
     lm_nglob = 0;
+    lmj_ntok = 0;
     lmc_cur = 0;
     if (!lm_hasscript)
         return 1;
@@ -2249,15 +2255,25 @@ int ovl_wjs(void)
     }
     if (!ovl_tokenize())
         return 0;
-    if (!ovl_collect())
-        return 0;
+    return ovl_collect();
+}
+
+/* ...and the second door: 4.6's code generation, plus 2.6.2's synthesized
+ * module-init function. */
+int ovl_wjs_gen(void)
+{
+    int i;
+    int ninit = 0;
+
+    if (!lm_hasscript)
+        return 1;
     for (i = 0; i < lm_nfunc; i++)
         if (!lmc_compile_fn(i))
             return 0;
 
-    /* 2.6.2's module-init function: synthesized when any global carries an
-     * initializer other than int 0, appended as the LAST table entry, its
-     * body the initializer stores in declaration order ending PUSHN/RET. */
+    /* 2.6.2: synthesized when any global carries an initializer other than
+     * int 0, appended as the LAST table entry, its body the initializer
+     * stores in declaration order ending PUSHN/RET. */
     for (i = 0; i < lm_nglob; i++) {
         unsigned r = lmj_grow(i);
         int k = (int) lm_wb(r + LMG_KIND);

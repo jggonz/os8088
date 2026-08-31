@@ -350,6 +350,34 @@ SOAK = [
         "turns it into a claim. 50s is 34s MEASURED plus room for the one "
         "navigation retry weavesmoke's own flake can cost",
         needs=("marty",), serial=True, timeout=300),
+    Row("weavepack", "soak", py("tests/weavepack.py"), 200.0,
+        "WEAVE-SPEC 11.1's gate and the one wave 6 closes on: LOOM packs "
+        "every demo and every template ON THE MACHINE, the guest's floppy is "
+        "flushed to the host, and each .WAB is read back out of it by an "
+        "independent FAT12 reader and compared whole. That last part is what "
+        "makes the comparison mean anything - without it a scripted session "
+        "makes a program save a file and then has to ask the program whether "
+        "it worked, which cannot catch the case where the writer and the "
+        "reader agree on the same wrong thing. tests/unit/t_lmpack.py packs "
+        "the same seven with the HOST cc in four seconds and is the dev "
+        "loop; the difference between the two is one word wide (`int` is 32 "
+        "bits there and 16 here), so that row proves the logic and this one "
+        "proves the arithmetic. Needs `cc` because LOOM is a C package, and "
+        "`marty` for the boot",
+        needs=("marty", "cc"), serial=True, timeout=600),
+    Row("weavefuzz", "soak", py("tests/weavefuzz.py"), 75.0,
+        "a thousand DAMAGED projects through both packers, asking the two "
+        "questions a fixture cannot: did they agree about whether it is a "
+        "program, and when both said yes are the bytes identical "
+        "(WEAVE-SPEC 11.1). Fixed seeds, so a find on Tuesday is still there "
+        "on Wednesday. Message TEXT is reported and not asserted, and the "
+        "row's own header says why - weavesim scans a whole element before "
+        "analysing any of it and LOOM analyses as it goes, so a DOUBLY "
+        "broken document makes them name different faults; the single-fault "
+        "documents an author types are what tests/weave/packerr/ holds them "
+        "to. Measured when it was written: 0 verdict disagreements, 0 byte "
+        "disagreements, 93 differing messages in 1,000",
+        needs=()),
     Row("weavelat", "soak", py("tests/weavelat.py"), 120.0,
         "SPEC.md 7.3's click-to-action bar with a WEAVE FORM as the load "
         "(WEAVE-SPEC 12.4), measured the way tests/uilat.py measures it - "
