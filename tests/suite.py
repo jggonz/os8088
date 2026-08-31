@@ -249,6 +249,49 @@ SOAK = [
         "run, and a declared figure nobody has taken is the thing this "
         "registry's budgets exist to stop drifting",
         needs=("marty", "cc"), serial=True, timeout=360),
+    Row("weavegrid", "soak", py("tests/weavegrid.py"), 200.0,
+        "WEAVE-SPEC 13.1's wave-4 gate: the <grid>, against the model and "
+        "against itself. Three things no other row in this family can see. "
+        "(1) Every visible BAND is read off the glass by 12.3.2's "
+        "consistency rule and compared with weavesim's own band() - 6.9.1's "
+        "pinned layout, 5.2.1's display conversion, the justification and "
+        "the scroll origin, all at once. (2) The set of bands whose PIXELS "
+        "changed across an edit must equal the set whose model text changed: "
+        "5.5.1's per-row damage said as a fact about the glass, and a "
+        "runtime that repaints the whole grid on every edit passes every "
+        "value check and fails only this one (a 20-row page is 291 ms "
+        "against one row's 14.5). (3) tests/tpdraw.py's identity for the "
+        "grid - the pixels after an incremental edit against the pixels "
+        "after a full re-compose of the same state, the re-compose forced "
+        "with the arrow keys, which is what catches the XOR selection path "
+        "and the band composer disagreeing about which cells the selection "
+        "covers. It drives BOTH ways into the store, because they share no "
+        "code: `Cider +1` is SHEET's own setCell() through the ring, a "
+        "slice and CALLM, and then a formula is TYPED into an empty cell "
+        "through os88line, 6.9.3's classification and 6.9.2's compiler into "
+        "a 5.6 kind-6 pool slot. 200s is 165s MEASURED over two adapters - "
+        "two boots, two navigations, two launches and ~20 gestures - with "
+        "room for the demo growing",
+        needs=("marty", "cc"), serial=True, timeout=480),
+    Row("weavegfx", "soak", py("tests/weavegfx.py"), 260.0,
+        "WEAVE-SPEC 12.3's pixels-vs-model row, zgfx's shape: every other "
+        "gate in this family reads a number or a structure, and none of them "
+        "can see a component drawn at the wrong row, a control that draws "
+        "nothing at all, or a card whose ink runs outside the content box - "
+        "which are precisely a widget library's failure modes (12.4). It is "
+        "NOT a golden screenshot, for bootsmoke's reason: it compares the "
+        "machine's picture against `weavesim --render`, the oracle 12.1 "
+        "makes every differential in this family diff against. Three "
+        "assertions per card and two cards - FORM is the widget zoo and "
+        "SHEET is the band composer, which draws through GFX_BLIT1 rather "
+        "than FONT_RUN - on both 1bpp adapters, because grey rounds to "
+        "black there and a drawing change is not done until it has been "
+        "looked at on one. The ink-presence half is what makes the text "
+        "half honest: an unlearned glyph reads '?' and is skipped, so a "
+        "component that drew nothing would otherwise pass a comparison made "
+        "entirely of question marks. 260s is 215s MEASURED - four boots, "
+        "four navigations, four launches",
+        needs=("marty", "cc"), serial=True, timeout=600),
     Row("weavelat", "soak", py("tests/weavelat.py"), 120.0,
         "SPEC.md 7.3's click-to-action bar with a WEAVE FORM as the load "
         "(WEAVE-SPEC 12.4), measured the way tests/uilat.py measures it - "

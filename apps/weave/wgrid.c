@@ -964,8 +964,9 @@ static int w_gcellint(int r, int c)
     int t, neg;
 
     w_gcellerr = 0;
-    t = wfx_cell(r, c, w_gv + 1);       /* wfx_cell answers TWO ints; w_gv[0]
-                                         * is wfx_eval's type slot */
+    t = wfx_cell(r, c, w_gv);           /* TWO ints, low then high - and they
+                                         * go in slots 0 and 1 because no
+                                         * wfx_eval is running to own them */
     if (t == 0)
         return 0;                       /* empty and label read as 0, which
                                          * is the model's answer too */
@@ -980,7 +981,7 @@ static int w_gcellint(int r, int c)
      * the positive case must fail (5.2's "out of range is a script error"). */
     if ((unsigned)w_gmag[1] > (neg ? 32768u : 32767u)) {
         w_gcellerr = 2;
-        w_gshowv(w_gv[1], w_gv[2], 0, 0);   /* the sentence names the value */
+        w_gshowv(w_gv[0], w_gv[1], 0, 0);   /* the sentence names the value */
         return 0;
     }
     return neg ? -(int)(unsigned)w_gmag[1] : w_gmag[1];

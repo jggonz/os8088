@@ -3988,14 +3988,31 @@ class Runtime:
         except ScriptError as ex:
             # handler stopped, stacks cleared, ring kept, app lives on
             self.log(str(ex))
-        if self.grid and self.grid_pending:
-            self.grid_pending = False
-            changed = self.grid.recalc()
-            self.log("recalc: %d cell(s) changed" % changed)
-            self.ring.enqueue(self.grid_cid, WK["oncalc"], changed, 0)
-
     def drain(self):
-        while self.ring.q:
+        """Handlers and 5.5's recalculation, in the runtime's own priority.
+
+        THE RECALCULATION IS NOT A HANDLER'S TAIL, and wave 3's model had it
+        as one - `run_handler` ran it after the script returned. That is right
+        for `setCell()` and `recalc()` and WRONG for everything else: a cell
+        committed from the formula bar (6.9.3) sets the trigger with no
+        handler in sight, and on a bundle that binds no `onedit` the record is
+        discarded and the passes never ran at all. The sheet then showed
+        stale values with no error anywhere - found by tests/weavegrid.py's
+        first green run, where the MACHINE had recalculated and the model had
+        not.
+
+        The order is wevent.c's w_wake to the letter: a pending walk runs
+        BEFORE the next record is dequeued, because that is where w_gbusy()
+        is tested."""
+        while True:
+            if self.grid and self.grid_pending:
+                self.grid_pending = False
+                changed = self.grid.recalc()
+                self.log("recalc: %d cell(s) changed" % changed)
+                self.ring.enqueue(self.grid_cid, WK["oncalc"], changed, 0)
+                continue
+            if not self.ring.q:
+                return
             self.dispatch(self.ring.q.pop(0))
 
     def tick(self, n=1):
@@ -4914,7 +4931,12 @@ def runtime_for(bundle_path, src=None):
     return Runtime(b, idmap=idmap, sav_path=sav)
 
 
-def cmd_run(bundle_path, events_path, src=None, adapter="cga"):
+def cmd_run(bundle_path, events_path, src=None, adapter="cga",
+            render_after=False):
+    """--run, and with --render-after the CARD as it stands when the events
+    are spent rather than a state dump. That is what a differential against
+    the glass needs: tests/weavegrid.py compares the machine's bands with the
+    model's, and a band is a line of this picture."""
     rt = runtime_for(bundle_path, src)
     rt.adapter = adapter            # 6.9.4's scroll clamp needs a layout
     print("%s: %d cards, %d components, entry card %d"
@@ -4944,6 +4966,9 @@ def cmd_run(bundle_path, events_path, src=None, adapter="cga"):
         else:
             raise SystemExit("%s:%d: no such event verb '%s'"
                              % (events_path, lineno, verb))
+    if render_after:
+        render(rt, adapter)
+        return
     for line in rt.out:
         print(line)
     dump_state(rt)
@@ -5785,6 +5810,8 @@ def main():
     ap.add_argument("--emit-vmcorpus", metavar="DIR",
                     help="the WVM differential corpus for weavevm "
                          "(WEAVE-SPEC 12.1.1)")
+    ap.add_argument("--render-after", action="store_true",
+                    help="--run: print the CARD when the events are spent")
     ap.add_argument("--emit-fxcorpus", metavar="DIR",
                     help="the FX differential corpus for weavevm "
                          "(WEAVE-SPEC 12.1.2)")
@@ -5829,7 +5856,8 @@ def main():
         if args.run:
             if not args.events:
                 ap.error("--run needs --events")
-            cmd_run(args.run, args.events, args.src, adapter)
+            cmd_run(args.run, args.events, args.src, adapter,
+                    args.render_after)
             return 0
         if args.render:
             cmd_render(args.render, adapters, args.card)
