@@ -269,11 +269,12 @@ SOAK = [
         "code: `Cider +1` is SHEET's own setCell() through the ring, a "
         "slice and CALLM, and then a formula is TYPED into an empty cell "
         "through os88line, 6.9.3's classification and 6.9.2's compiler into "
-        "a 5.6 kind-6 pool slot. 200s is 165s MEASURED over two adapters - "
-        "two boots, two navigations, two launches and ~20 gestures - with "
-        "room for the demo growing",
+        "a 5.6 kind-6 pool slot. 200s is 157s MEASURED here over two "
+        "adapters - two boots, two navigations, two launches and ~20 "
+        "gestures - taken over three consecutive clean runs at 156.8, 157.4 "
+        "and 156.7, with room for the demo growing",
         needs=("marty", "cc"), serial=True, timeout=480),
-    Row("weavegfx", "soak", py("tests/weavegfx.py"), 260.0,
+    Row("weavegfx", "soak", py("tests/weavegfx.py"), 240.0,
         "WEAVE-SPEC 12.3's pixels-vs-model row, zgfx's shape: every other "
         "gate in this family reads a number or a structure, and none of them "
         "can see a component drawn at the wrong row, a control that draws "
@@ -289,8 +290,15 @@ SOAK = [
         "looked at on one. The ink-presence half is what makes the text "
         "half honest: an unlearned glyph reads '?' and is skipped, so a "
         "component that drew nothing would otherwise pass a comparison made "
-        "entirely of question marks. 260s is 215s MEASURED - four boots, "
-        "four navigations, four launches",
+        "entirely of question marks. 240s is 122s MEASURED CLEAN over three "
+        "consecutive runs (121, 122) and 190s on the third, which spent "
+        "weavesmoke's three navigation retries and then failed - FOUR "
+        "sessions is four double-clicks, so this row carries twice "
+        "weavesession's exposure to the one thing that flakes in this "
+        "family: a double-click whose two presses straddle the kernel's "
+        "9-tick window is seen as two FIRST clicks, and on a loaded host "
+        "that happens. The retry is weavesmoke's and is not loosened here - "
+        "a gate that hid it would hide a host that had really got slower",
         needs=("marty", "cc"), serial=True, timeout=600),
     Row("weavelat", "soak", py("tests/weavelat.py"), 120.0,
         "SPEC.md 7.3's click-to-action bar with a WEAVE FORM as the load "
