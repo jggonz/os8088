@@ -4143,7 +4143,7 @@ WEAVEDISK := $(BUILD)/weave.o88 $(BUILD)/WEAVE.OVL $(BUILD)/WEAVE.WSM \
 # --- WHAT WAVE 7 ADDED TO THIS DISK (WEAVE-SPEC 13.1's distribution row) -----
 #
 # THE IDE RIDES IT, and the arithmetic is why rather than a preference: LOOM is
-# 54,862 + LOOM.OVL 42,902 + LOOM.WPV 16,174 = ~113KB, the runtime's three
+# 54,966 + LOOM.OVL 42,902 + LOOM.WPV 16,216 = ~114KB, the runtime's three
 # files are ~78KB, the bundles and the sources ~6KB, and the smallest geometry
 # holds 354 clusters of 1KB. So all three geometries carry the family whole -
 # edit, pack, preview and run on one floppy - and the recipe's own --verify
@@ -4410,7 +4410,7 @@ $(BUILD)/loom.bin:     $(LOOMINC) $(WEAVEINC) $(BUILD)/wpvsize.inc
 # is the one WEAVE-SPEC 1.7.1 has the arithmetic for: an overlay moves CODE and
 # leaves every global, literal and bss byte resident (SPEC.md 73.14), while
 # what does not fit here is ~4.7KB of DATA - the walk's layout table and the
-# painter's six tables keyed by comp_id - against the 594 bytes wave 6 closed
+# painter's six tables keyed by comp_id - against the headroom wave 6 closed
 # with. An overlay cannot move one byte of that.
 #
 # IT IS THE FIRST C SECOND SEGMENT IN THIS TREE, which is why the compile line

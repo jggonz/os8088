@@ -361,9 +361,10 @@ whole of this section: §2.9's code could not be an overlay tenant because a
 **worker** cannot enter one; wave 7's code could enter one perfectly well, and
 the thing that does not fit is not code at all.
 
-**What wave 7 opened with.** `loom.o88` at 54,648 image + 6,198 bss =
-**60,846 resident** against SPEC.md §20.1's `APP_MAX_SIZE` of 0xF000 = 61,440.
-**594 bytes.** And WEAVE-SPEC §1.7.1's row to pay: Preview's picture.
+**What wave 7 opened with.** `loom.o88` at 54,752 image + 6,198 bss =
+**60,950 resident** against SPEC.md §20.1's `APP_MAX_SIZE` of 0xF000 = 61,440.
+**490 bytes** (594 before the merge with `main`; §5.2 prices the shared-SDK
+growth).** And WEAVE-SPEC §1.7.1's row to pay: Preview's picture.
 
 **What Preview's picture needs, and why an overlay does not move it.** The
 picture is WEAVE-SPEC §7's flow walk and WEAVE-SPEC §6's component painter —
@@ -730,7 +731,7 @@ runs once per Pack.
 **And it is why Preview ships without its picture** (WEAVE-SPEC §1.7.1).
 Rendering the compiled stream needs `apps/weave/wflow.c` and
 `apps/weave/wpaint.c` — 880 lines that name the component value arrays, the
-field pool, the grid's cell store and the canvas seam — and 594 bytes will not
+field pool, the grid's cell store and the canvas seam — and ~500 bytes will not
 host them. Writing a SMALLER painter is what WEAVE-SPEC §1.2 forbids by name,
 and it would be the worse failure: a Preview that draws a different picture
 from the runtime's is worse than one that draws none, because the whole point

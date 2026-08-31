@@ -402,12 +402,12 @@ SPEC.md §73.14 writes about its own two words.
 one folder for exactly this reason, and SPEC.md §19.10's `LOOM/` folder is the
 same rule on the everything disk.
 
-**What it costs, counted.** As built in wave 7: **16,174 bytes of image +
+**What it costs, counted.** As built in wave 7: **16,216 bytes of image +
 5,268 of bss = 21,442, one 21KB claim**, taken the first time the pane is
 opened and held until the instance closes. Against the alternative it beat,
 that is the trade: LOOM's resident count grew by **228 bytes** — 214 of
 image and 14 of bss — for the seam, the loader and the three sentences, and
-the picture cost nothing else. LOOM closed wave 7 at 54,862 + 6,212 = 61,074,
+the picture cost nothing else. LOOM closed wave 7 at 54,966 + 6,212 = 61,178,
 **366 under** SPEC.md §20.1's ceiling.
 
 ---
@@ -498,7 +498,7 @@ stale and are not quoted here):
   figures"*. It does not, and it cannot: §10.1 is the **runtime** refusing its
   own bundle's claims, and on this machine the runtime never starts. A
   package's region is claimed by the **kernel's loader** before the package
-  runs at all (SPEC.md §20.1, §21), WEAVE's is 61,408 bytes, and with one
+  runs at all (SPEC.md §20.1, §21), WEAVE's is 60,320 bytes, and with one
   instance up there is not that much left — so `loader_run` answers
   `LD_ENOMEM` and the Finder says `Out of memory` in the Disk window's status
   row and in a toast (SPEC.md §22.9, §59). Both refusals are before any I/O
@@ -615,7 +615,7 @@ leaves every global, literal and bss byte resident and DS-relative. What does
 not fit in LOOM is the DATA: `w_lay[]` is `W_MAXLAY` × 10 = **2,500 bytes**,
 `wpaint.c`'s six tables keyed by comp_id plus the list-override pool and the
 staged string are **2,159**, and the module measured **5,268 bytes of `.bss`**
-when it was built. LOOM closed wave 6 at **594 bytes** under SPEC.md §20.1's
+when it was built. LOOM closed wave 6 at **490 bytes** under SPEC.md §20.1's
 ceiling. The overlay's own size was never the binding fact either — `LOOM.OVL`
 is 42,902 bytes against a segment's 64KB, with room for the painter's code —
 and neither was the callback rule: a `W_PAINT` runs on the UI task, so it
@@ -4094,7 +4094,7 @@ description of the picture, two copies of the object code. What forced a
 segment was not the tenant list but the fact that an overlay moves **code**
 and what did not fit is **data** — 5,268 bytes of `.bss` against the 594 wave 6
 closed with (§1.7.1 has the table; docs/WEAVE-PLAN.md §2.10 prices the four
-alternatives it beat). The module is 16,174 image + 5,268 bss = one 21KB
+alternatives it beat). The module is 16,216 image + 5,268 bss = one 21KB
 claim, read the first time the pane is opened and never again.
 
 **Two extractions in shared source were needed and both were proved
@@ -4103,9 +4103,9 @@ own check for `wnum.inc`, and it came back byte-identical: `apps/weave/watom.c`
 (§2.7's two atom accessors, `#include`d by `wval.c` where they used to stand)
 and one three-line `#ifdef W_PREVIEW` in `wflow.c`'s `w_grid()`, because the
 box a Preview lays out in is a PANE inside a window and not a window's content
-area. `weave.o88` did not move: **52,212 + 9,196 = 61,408**, byte for byte what
-wave 5 closed at. `loom.o88` is **54,862 + 6,212 = 61,074, 366 under**, with
-`LOOM.OVL` at 42,902 and `LOOM.WPV` at 16,174 + 5,268.
+area. `weave.o88` did not move: **51,124 + 9,196 = 60,320**, byte for byte what
+wave 5 closed at. `loom.o88` is **54,966 + 6,212 = 61,178, 262 under**, with
+`LOOM.OVL` at 42,902 and `LOOM.WPV` at 16,216 + 5,268.
 
 **The distribution row is `make weavedisk` carrying the whole family** — the
 runtime, its two modules, the three bundles, LOOM and its three, the demo
@@ -4122,7 +4122,7 @@ user's own the way `CPMSW=` does, and the cluster-fit refusal is
 **And the 256KB row found the document wrong**, which is what it was for.
 §1.4 said the second Weave app on a 256KB machine refuses with §10.1's
 sentence; it does not, because the second launch never reaches the runtime —
-the kernel's loader cannot claim WEAVE's 61,408-byte region with one instance
+the kernel's loader cannot claim WEAVE's 60,320-byte region with one instance
 up, and answers `LD_ENOMEM`. `tests/weaveone.py` asserts the byte, that no
 second window opens, and that the first app is still running; §1.4 now says
 what the machine says.

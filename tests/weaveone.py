@@ -15,7 +15,7 @@ quietly wrong.
 WHICH REFUSAL ACTUALLY FIRES, because wave 7 asked the machine and the
 document had it in the wrong place. The second launch does not reach WEAVE at
 all. A package region is claimed by the KERNEL's loader before the package
-runs (SPEC.md 20.1, 21), WEAVE's is 61,408 bytes, and with one instance up
+runs (SPEC.md 20.1, 21), WEAVE's is 60,320 bytes, and with one instance up
 there is not that much left - so `loader_run` answers LD_ENOMEM and the Finder
 says `Out of memory` (SPEC.md 22.9's status ladder, and the toast beside it,
 SPEC.md 59). WEAVE-SPEC 10.1's sentence - `This app needs <N>KB; the largest
@@ -147,7 +147,7 @@ def _drive(m, png_dir):
           "%s: the second launch answered LD_ENOMEM" % MACHINE,
           "the KERNEL's loader refuses it before WEAVE runs at all - a "
           "package region is claimed before the package (SPEC.md 20.1, 21) "
-          "and WEAVE's is 61,408 bytes. `Out of memory` is what the Finder "
+          "and WEAVE's is 60,320 bytes. `Out of memory` is what the Finder "
           "draws from this byte (SPEC.md 22.9) and what the toast says "
           "(SPEC.md 59)",
           got=st, want="%d (LD_ENOMEM)" % LD_ENOMEM)

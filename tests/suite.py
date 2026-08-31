@@ -435,7 +435,7 @@ SOAK = [
         "exercised - wave 5 moved it by one claim and wave 7 found the "
         "document naming the wrong refusal: the second launch never reaches "
         "WEAVE, because a package region is claimed by the KERNEL before the "
-        "package runs (SPEC.md 20.1, 21) and WEAVE's is 61,408 bytes, so the "
+        "package runs (SPEC.md 20.1, 21) and WEAVE's is 60,320 bytes, so the "
         "loader answers LD_ENOMEM and the Finder says `Out of memory`. What "
         "is asserted is that byte and not the toast drawn from it, which is "
         "a ~3s transient no polling rate worth having catches; plus that the "
