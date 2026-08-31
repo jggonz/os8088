@@ -30,6 +30,31 @@ map's own equates now (os88sym asserts that map is byte-identical to
 span follows the file manager's CODE rather than the addresses it used to sit
 at.
 
+**AND IT CRIED WOLF A SECOND TIME ANYWAY**, with "40,225 of 40,960 bytes
+differ" and the first difference at `xm_boot_x+0`, which reads exactly like
+`.cold` being scribbled on from the moment the desktop comes up. It was not.
+Deriving the SEGMENTS from the map fixed half the problem and left the other
+half standing, because the thing that broke next was not a rung: it was the
+FILE.
+
+  * SPEC.md 2.9 put stage 2 at the front of `kernel.bin`, so a segment delta
+    stopped being a file offset. `(COLD_SEG - KERNEL_SEG) << 4` then pointed
+    6,656 bytes early - into the COLD THUNK TABLE, runs of `9A offset 0FC0 /
+    C3` that live in `.text` and are what CALLS `.cold`. Comparing those
+    against `.cold` differs in ~98% of bytes, from byte zero.
+  * `FAT_SEG - COLD_SEG` is the RUNG, not the section. `.cold` is 40,655 bytes
+    against a 40,960-byte rung, so the old length also ran 305 bytes past the
+    end of the file.
+
+Both are gone below, and the second is why the length now comes from what the
+file actually holds: `.cold` is the last thing in `kernel.bin` and ends at EOF,
+so `len(kernel.bin) - COLD_OFF` IS the section, asserted against the rung.
+
+The lesson is one line and it has now cost three rows - this one,
+tests/linefast.py and tests/wirefps.py: **a segment delta is not a file
+offset**, and `tools/os88layout.py` is the only thing that knows the
+difference.
+
 .cold is the right place to catch it because SPEC.md 2.6 rule 1 forbids a data
 directive there and tools/os88ovlchk.py enforces it: every byte of it is code,
 so ANY write is the bug. This carpets a span of it with memory breakpoints -
@@ -45,7 +70,7 @@ import os, sys, time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
-import os88marty, os88mouse, os88sym, dispcp
+import os88marty, os88mouse, os88sym, dispcp, os88layout
 S = os88sym.linear
 SY = os88sym.syms()
 SEC = os88sym.sections()
@@ -60,11 +85,12 @@ TITLE_H = 18
 # compare.  FAT_SEG is read from the map's equates now - `.ovl` used to land
 # there and gave the same answer through segment_of("ovl_base"), and since
 # SPEC.md 2.9.6 the overlay is in stage 2's blob and has no fixed segment.
-KERNEL_SEG = 0x0060
-COLD_SEG = os88sym.segment_of("fm_layout")      # ...any .cold symbol will do
-FAT_SEG = os88sym.equates()["FAT_SEG"]
-COLD_LEN = (FAT_SEG - COLD_SEG) << 4
-COLD_OFF = (COLD_SEG - KERNEL_SEG) << 4         # where it sits in kernel.bin
+# ...and where it sits in kernel.bin, which is os88layout's answer and not
+# arithmetic done here. A segment delta stopped being a file offset at SPEC.md
+# 2.9, and `FAT_SEG - COLD_SEG` is the RUNG rather than the section; each trap
+# alone reads as `.cold` being scribbled on before the first click, and this
+# row hit both. cold_span carries the reasoning and the assertions.
+COLD_SEG, COLD_OFF, COLD_LEN = os88layout.cold_span(ROOT)
 
 # The carpet: the span the file manager's own code occupies, padded, rather
 # than the 0x4000..0x5000 that span happened to fall in when this was written.
@@ -91,9 +117,10 @@ def coldimage():
 
     This used to SEARCH kernel.bin for fm_layout's first four opcode bytes,
     which is two ways of being wrong at once: the prologue is not an ABI, and
-    a search that matches the wrong place answers confidently. The boot sector
-    does one contiguous read from KERNEL_SEG (SPEC.md 2.5/2.6), so the file
-    offset is arithmetic and there is nothing to look for.
+    a search that matches the wrong place answers confidently. It is derived
+    instead - by os88layout.cold_span, which is the one place that knows both
+    that stage 2 sits in front of `.text` and that the FAT_SEG rung is not the
+    section's length.
     """
     k = open(os.path.join(ROOT, "build", "kernel.bin"), "rb").read()
     if COLD_OFF + COLD_LEN > len(k):

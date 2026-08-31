@@ -34,6 +34,45 @@
  * other routine here reads the claim through wblob.inc's accessors.
  * ==========================================================================*/
 
+/* --- THE FIELD NAMES, EACH SPELLED ONCE (WEAVE-SPEC 10.4) ---------------- */
+/* Every routine below answers with the name of the field that refused, and
+ * `section table` alone is the answer at eighteen sites. A C string literal
+ * is emitted once PER SITE by this toolchain - it is not pooled - and a
+ * literal named by an ovl_ function is RESIDENT even though the code that
+ * names it is not (SPEC.md 73.14: the code moves, the literal stays). So the
+ * eighteen copies were 238 bytes of the package image, against SPEC.md 20.1s
+ * 61,440 for image and bss together, and buying nothing: the sentence is the
+ * same sentence. Named once here, they cost their own length and one word per
+ * site, which is what the `return` already cost.
+ *
+ * THE TEXT IS THE CONTRACT. WEAVE-SPEC 10.4 names each of these in the
+ * refusal it prescribes, so a name changed here changes a sentence the spec
+ * pins - change 10.4 first. */
+static const char w_f_sectab   [] = "section table";
+static const char w_f_props    [] = "prop block";
+static const char w_f_prange   [] = "property range";
+static const char w_f_atoms    [] = "atom pool";
+static const char w_f_ftab     [] = "function table";
+static const char w_f_reqprop  [] = "required property";
+static const char w_f_atomid   [] = "atom id";
+static const char w_f_reckind  [] = "record kind";
+static const char w_f_sprcount [] = "sprite count";
+static const char w_f_cellrec  [] = "cell record";
+static const char w_f_cardidx  [] = "card index";
+static const char w_f_propkind [] = "prop kind";
+static const char w_f_header   [] = "header";
+static const char w_f_fxcount  [] = "formula count";
+static const char w_f_recend   [] = "REC_END";
+static const char w_f_total    [] = "total size";
+static const char w_f_appname  [] = "app name";
+static const char w_f_sprdesc  [] = "sprite descriptor";
+static const char w_f_magic    [] = "magic";
+static const char w_f_flags    [] = "flags";
+static const char w_f_ctype    [] = "ctype";
+static const char w_f_entry    [] = "entry card";
+static const char w_f_style    [] = "style byte";
+static const char w_f_compid   [] = "comp_id";
+
 /* --- the header, off the probe (WEAVE-SPEC 2.2) ------------------------- */
 
 /* ovl_val_header - the 32 bytes, every field ranged, from the probe buffer.
@@ -48,34 +87,34 @@ static const char *ovl_val_header_x(void)
     unsigned t;
 
     if (w_probelen < W_HDR_SIZE)
-        return "magic";                 /* nothing to look at: not a bundle */
+        return w_f_magic;               /* nothing to look at: not a bundle */
     if (w_probe[0] != 'W' || w_probe[1] != 'A' || w_probe[2] != 'B' ||
         w_probe[3] != 0x1A)
-        return "magic";
+        return w_f_magic;
 
     if (w_probe[W_H_VERSION] != 1 || w_probe[W_H_VERSION + 1] != 0)
         return "version";               /* 2.2: any other value refuses */
 
     t = w_probe[W_H_TOTAL] | (w_probe[W_H_TOTAL + 1] << 8);
     if (t != w_fsize || t > W_CAP || t < W_HDR_SIZE)
-        return "total size";
+        return w_f_total;
     w_size = t;
 
     w_flags = w_probe[W_H_FLAGS] | (w_probe[W_H_FLAGS + 1] << 8);
     if (w_flags & ~WABF_KNOWN)
-        return "flags";                 /* 2.2.1: a set unknown bit refuses */
+        return w_f_flags;               /* 2.2.1: a set unknown bit refuses */
 
     w_vmkb = w_probe[W_H_VMKB];
     if (w_vmkb < 16 || w_vmkb > 32)
-        return "header";
+        return w_f_header;
     w_gridkb = w_probe[W_H_GRIDKB];
     if (w_gridkb != 0 && (w_gridkb < 8 || w_gridkb > 26))
-        return "header";
+        return w_f_header;
     w_canvaskb = w_probe[W_H_CANVASKB];
     if (w_canvaskb != 0 && (w_canvaskb < 2 || w_canvaskb > 8))
-        return "header";
+        return w_f_header;
     if (w_probe[W_H_RSVD] != 0)
-        return "header";
+        return w_f_header;
 
     /* 2.2 tabulates the section count as 1..9 and 2.4 leaves no bundle with
      * fewer than five: UISTREAM, PROPS, CODE and ATOMS are mandatory and ICON
@@ -83,11 +122,11 @@ static const char *ovl_val_header_x(void)
      * A count below five is a header the format cannot produce. */
     w_nsec = w_probe[W_H_NSEC];
     if (w_nsec < 5 || w_nsec > 9)
-        return "header";
+        return w_f_header;
 
     w_entry = w_probe[W_H_ENTRY];
     if (w_entry < 1 || w_entry > W_MAXCARD)
-        return "entry card";
+        return w_f_entry;
 
     /* 2.2: 15 characters then a NUL, printable before it, 0x00 after. Space
      * padding before the NUL is explicitly not allowed, which is why the
@@ -96,14 +135,14 @@ static const char *ovl_val_header_x(void)
         if (w_probe[W_H_NAME + t] == 0)
             break;
     if (t < 1 || t > 15)
-        return "app name";
+        return w_f_appname;
     w_applen = t;
     for (t = 0; t < w_applen; t++)
         if (w_probe[W_H_NAME + t] < 0x20 || w_probe[W_H_NAME + t] > 0x7E)
-            return "app name";
+            return w_f_appname;
     for (t = w_applen; t < 16; t++)
         if (w_probe[W_H_NAME + t] != 0)
-            return "app name";
+            return w_f_appname;
 
     return 0;
 }
@@ -135,7 +174,7 @@ static const char *ovl_val_sections(void)
     }
 
     if (W_HDR_SIZE + W_ROW_SIZE * w_nsec > w_size)
-        return "section table";
+        return w_f_sectab;
 
     prev = 0;
     expect = w_align16(W_HDR_SIZE + W_ROW_SIZE * w_nsec);
@@ -143,21 +182,21 @@ static const char *ovl_val_sections(void)
         row = W_HDR_SIZE + W_ROW_SIZE * i;
         t = w_b(w_seg, row);
         if (t < W_UISTREAM || t > W_SOURCE)
-            return "section table";
+            return w_f_sectab;
         if (w_b(w_seg, row + 1) != 0)
-            return "section table";
+            return w_f_sectab;
         if (t <= prev)                  /* strictly ascending: one row per type */
-            return "section table";
+            return w_f_sectab;
         prev = t;
         off = w_w(w_seg, row + 2);
         len = w_w(w_seg, row + 4);
         extra = w_w(w_seg, row + 6);
         if (off & 15)
-            return "section table";
+            return w_f_sectab;
         if (off != expect)
-            return "section table";
+            return w_f_sectab;
         if (off > w_size || len > w_size - off)
-            return "section table";
+            return w_f_sectab;
         w_soff[t] = off;
         w_slen[t] = len;
         w_sextra[t] = extra;
@@ -166,26 +205,26 @@ static const char *ovl_val_sections(void)
         /* 2.1: the padding between two sections is 0x00. `off + len` to the
          * next section's start is at most 15 bytes. */
         if (i + 1 < w_nsec && !w_zero(w_seg, off + len, expect - (off + len)))
-            return "section table";
+            return w_f_sectab;
         w_lastend = off + len;
     }
     /* 2.3: the file ends at the last section's unpadded end - no tail
      * padding follows it. (t_wab pins this; the model does not.) */
     if (w_lastend != w_size)
-        return "section table";
+        return w_f_sectab;
     /* ...and the gap between the table and the first section, if any. */
     off = W_HDR_SIZE + W_ROW_SIZE * w_nsec;
     if (!w_zero(w_seg, off, w_align16(off) - off))
-        return "section table";
+        return w_f_sectab;
 
     /* 2.4: the mandatory four, and ICON always. */
     if (!w_shave[W_UISTREAM] || !w_shave[W_PROPS] || !w_shave[W_CODE] ||
         !w_shave[W_ATOMS] || !w_shave[W_ICON])
-        return "section table";
+        return w_f_sectab;
     if (w_slen[W_ICON] != 64 || w_sextra[W_ICON] != 0)
-        return "section table";
+        return w_f_sectab;
     if (w_sextra[W_CODE] != 0 || w_sextra[W_ATOMS] != 0)
-        return "section table";
+        return w_f_sectab;
 
     /* The flag/section couplings (t_wab's, entirely). Each of these is a
      * bundle claiming one thing in its header and carrying another, which is
@@ -193,15 +232,15 @@ static const char *ovl_val_sections(void)
     if (w_shave[W_FXCODE] != ((w_flags & WABF_GRID) != 0) ||
         w_shave[W_CELLS] != ((w_flags & WABF_GRID) != 0) ||
         (w_gridkb != 0) != ((w_flags & WABF_GRID) != 0))
-        return "section table";
+        return w_f_sectab;
     if ((w_canvaskb != 0) != ((w_flags & WABF_CANVAS) != 0))
-        return "section table";
+        return w_f_sectab;
     if (w_shave[W_SOURCE] != ((w_flags & WABF_SOURCE) != 0))
-        return "section table";
+        return w_f_sectab;
     if (w_shave[W_SPRITES] && !(w_flags & WABF_CANVAS))
-        return "section table";         /* sprites live inside a canvas (2.11) */
+        return w_f_sectab;              /* sprites live inside a canvas (2.11) */
     if (w_shave[W_SOURCE] && w_sextra[W_SOURCE] > w_slen[W_SOURCE])
-        return "section table";         /* 2.13: extra is the WML length */
+        return w_f_sectab;              /* 2.13: extra is the WML length */
     return 0;
 }
 
@@ -220,34 +259,34 @@ static const char *ovl_val_atoms(void)
     s = w_soff[W_ATOMS];
     len = w_slen[W_ATOMS];
     if (len < 2)
-        return "atom pool";
+        return w_f_atoms;
     count = w_w(w_seg, s);
     if (count > 187)                    /* 2.7: ids 64..250 */
-        return "atom id";
+        return w_f_atomid;
     w_natoms = count;
     if (2 + 2 * count > len)
-        return "atom pool";
+        return w_f_atoms;
 
     pos = 2 + 2 * count;                /* 2.7: atom 64 begins here */
     for (i = 0; i < count; i++) {
         off = w_w(w_seg, s + 2 + 2 * i);
         if (off != pos)
-            return "atom pool";
+            return w_f_atoms;
         if (off + 1 > len)
-            return "atom pool";
+            return w_f_atoms;
         l = w_b(w_seg, s + off);
         if (l < 1)
-            return "atom pool";
+            return w_f_atoms;
         if (off + 1 + l + 1 > len)
-            return "atom pool";
+            return w_f_atoms;
         if (!w_print(w_seg, s + off + 1, l))
-            return "atom pool";         /* 3.1's fold admits 0x20..0x7E only */
+            return w_f_atoms;           /* 3.1's fold admits 0x20..0x7E only */
         if (w_b(w_seg, s + off + 1 + l) != 0)
-            return "atom pool";         /* length byte and NUL must agree */
+            return w_f_atoms;           /* length byte and NUL must agree */
         pos = off + 1 + l + 1;
     }
     if (pos != len)
-        return "atom pool";             /* no trailing bytes: the section
+        return w_f_atoms;               /* no trailing bytes: the section
                                          * length is part of the format */
     return 0;
 }
@@ -296,27 +335,27 @@ static const char *ovl_val_code(void)
     s = w_soff[W_CODE];
     len = w_slen[W_CODE];
     if (len < 3)
-        return "function table";
+        return w_f_ftab;
     f = w_b(w_seg, s);
     g = w_b(w_seg, s + 1);
     if (f > 128 || g > 128)
-        return "function table";
+        return w_f_ftab;
     w_nfunc = f;
     if (2 + 4 * f > len)
-        return "function table";
+        return w_f_ftab;
     for (i = 0; i < f; i++) {
         ofs = w_w(w_seg, s + 2 + 4 * i);
         na = w_b(w_seg, s + 2 + 4 * i + 2);
         nl = w_b(w_seg, s + 2 + 4 * i + 3);
         if (ofs < 2 + 4 * f || ofs >= len)
-            return "function table";
+            return w_f_ftab;
         if (na > 8 || nl > 16 || nl < na)
-            return "function table";
+            return w_f_ftab;
     }
     /* 2.8: a scriptless bundle still carries the section, and its body is
      * exactly one HALT byte - so the length is exactly 3. (t_wab's.) */
     if (f == 0 && len != 3)
-        return "function table";
+        return w_f_ftab;
     return 0;
 }
 
@@ -354,39 +393,39 @@ static const char *ovl_val_block(unsigned off, unsigned ctype)
     prev = 0;
     for (;;) {
         if (off + 4 > len)
-            return "prop block";
+            return w_f_props;
         name = w_b(w_seg, base + off);
         kind = w_b(w_seg, base + off + 1);
         val = w_w(w_seg, base + off + 2);
         if (name == 0) {                /* the terminator is FOUR zero bytes */
             if (kind != 0 || val != 0)
-                return "prop block";
+                return w_f_props;
             return 0;
         }
         if (name <= prev)
-            return "prop block";        /* 2.6: sorted, and at most once */
+            return w_f_props;           /* 2.6: sorted, and at most once */
         prev = name;
         if (!w_atom_ok(name))
-            return "atom id";
+            return w_f_atomid;
         if (kind > PK_MAX)
-            return "prop kind";
+            return w_f_propkind;
 
         switch (kind) {
         case PK_ATOM:
             if (!w_atom_ok(val & 0xFF) || (val >> 8) != 0)
-                return "atom id";
+                return w_f_atomid;
             break;
         case PK_BLOB:
             if (val >= len)
-                return "prop block";
+                return w_f_props;
             break;
         case PK_FUNC:
             if (val >= w_nfunc)
-                return "prop block";
+                return w_f_props;
             break;
         case PK_SPRITE:
             if (val >= w_nsprite)
-                return "prop block";
+                return w_f_props;
             break;
         default:
             break;                      /* PK_INT: any word is a legal word */
@@ -396,44 +435,44 @@ static const char *ovl_val_block(unsigned off, unsigned ctype)
          * and whose kind is PK_FUNC (2.6). The pairing is part of the format,
          * so a bundle that binds an event to an integer is malformed. */
         if (name >= 48 && name <= 60 && kind != PK_FUNC)
-            return "prop kind";
+            return w_f_propkind;
         if (name == WA_MENUS && ctype != 0)
-            return "prop block";        /* MENUS lives in the app block only */
+            return w_f_props;           /* MENUS lives in the app block only */
         if (name == WA_ITEMS && ctype != WC_LIST)
-            return "prop block";
+            return w_f_props;
         if (name == WA_ITEMS) {
             if (kind != PK_BLOB)
-                return "prop kind";
+                return w_f_propkind;
             blob = val;
             if (blob + 1 > len)
-                return "prop block";
+                return w_f_props;
             n = w_b(w_seg, base + blob);
             if (n > 64 || blob + 1 + n > len)
-                return "prop block";    /* 2.6.1: at most 64 items */
+                return w_f_props;       /* 2.6.1: at most 64 items */
             for (i = 0; i < n; i++)
                 if (!w_atom_ok(w_b(w_seg, base + blob + 1 + i)))
-                    return "atom id";
+                    return w_f_atomid;
         }
 
         /* 10.4's `property range`, checked as the block is read and before any
          * of it reaches the walk. */
         if (ctype == WC_METER && name == WA_MAX &&
             (val < 1 || val > 32000))
-            return "property range";
+            return w_f_prange;
         if (ctype == WC_INPUT && name == WA_COLS &&
             (val < 2 || val > 60))
-            return "property range";
+            return w_f_prange;
         if (ctype == WC_LIST && name == WA_ROWS && (val < 1 || val > 40))
-            return "property range";
+            return w_f_prange;
         if (ctype == WC_GRID && name == WA_COLS) {
             if (val < 1 || val > 26)
-                return "property range";
+                return w_f_prange;
             w_pv_cols = val;
             w_pv_seen |= WP_COLS;
         }
         if (ctype == WC_GRID && name == WA_ROWS) {
             if (val < 1 || val > 256)
-                return "property range";
+                return w_f_prange;
             w_pv_rows = val;
             w_pv_seen |= WP_ROWS;
         }
@@ -455,52 +494,52 @@ static const char *ovl_val_app(void)
     len = w_slen[W_PROPS];
     off = w_sextra[W_PROPS];
     if (off >= len)
-        return "prop block";
+        return w_f_props;
     e = ovl_val_block(off, 0);
     if (e)
         return e;
     for (;;) {
         if (off + 4 > len)
-            return "prop block";
+            return w_f_props;
         name = w_b(w_seg, base + off);
         if (name == 0)
             break;
         kind = w_b(w_seg, base + off + 1);
         val = w_w(w_seg, base + off + 2);
         if (name != WA_CARD && name != WA_START && name != WA_MENUS)
-            return "prop block";
+            return w_f_props;
         if (name == WA_CARD && (kind != PK_INT || val != w_entry))
-            return "prop block";        /* 2.6.2: a mirror of the header's */
+            return w_f_props;           /* 2.6.2: a mirror of the header's */
         if (name == WA_START && (kind != PK_FUNC || val + 1 != w_nfunc))
-            return "prop block";        /* ...and it names the LAST function */
+            return w_f_props;           /* ...and it names the LAST function */
         if (name == WA_MENUS) {
             if (kind != PK_BLOB)
-                return "prop kind";
+                return w_f_propkind;
             blob = val;
             if (blob + 1 > len)
-                return "prop block";
+                return w_f_props;
             nm = w_b(w_seg, base + blob);
             if (nm < 1 || nm > 5)       /* MENU_APPMAX is the kernel's own
                                          * bound (SPEC.md 12.2) */
-                return "prop block";
+                return w_f_props;
             j = blob + 1;
             for (i = 0; i < nm; i++) {
                 if (j + 2 > len)
-                    return "prop block";
+                    return w_f_props;
                 if (!w_atom_ok(w_b(w_seg, base + j)))
-                    return "atom id";
+                    return w_f_atomid;
                 ni = w_b(w_seg, base + j + 1);
                 if (ni < 1 || ni > 8)
-                    return "prop block";
+                    return w_f_props;
                 j += 2;
                 if (j + 2 * ni > len)
-                    return "prop block";
+                    return w_f_props;
                 for (fn = 0; fn < ni; fn++) {
                     if (!w_atom_ok(w_b(w_seg, base + j + 2 * fn)))
-                        return "atom id";
+                        return w_f_atomid;
                     val = w_b(w_seg, base + j + 2 * fn + 1);
                     if (val != 0xFF && val >= w_nfunc)
-                        return "prop block";
+                        return w_f_props;
                 }
                 j += 2 * ni;
             }
@@ -535,29 +574,29 @@ static const char *ovl_val_uistream(void)
         rec = s + W_REC_SIZE * i;
         kind = w_b(w_seg, rec);
         if (ended)
-            return "REC_END";           /* exactly one, and it is last */
+            return w_f_recend;          /* exactly one, and it is last */
         if (kind == W_REC_END) {
             if (!w_zero(w_seg, rec + 1, W_REC_SIZE - 1))
-                return "REC_END";
+                return w_f_recend;
             if (i + 1 != n)
-                return "REC_END";
+                return w_f_recend;
             ended = 1;
             continue;
         }
         if (kind == W_REC_CARD) {
             id = w_b(w_seg, rec + W_R_ID);
             if (id != cards + 1 || id > W_MAXCARD)
-                return "card index";
+                return w_f_cardidx;
             if (!w_zero(w_seg, rec + 2, 6))
-                return "card index";    /* 2.5: bytes +2..+7 are 0 (t_wab) */
+                return w_f_cardidx;     /* 2.5: bytes +2..+7 are 0 (t_wab) */
             if (w_w(w_seg, rec + W_R_PROPS) != W_NOPROPS)
-                return "card index";    /* v1 cards carry no props */
+                return w_f_cardidx;     /* v1 cards carry no props */
             cards++;
             lastct = 0;
             continue;
         }
         if (kind != W_REC_COMP)
-            return "record kind";
+            return w_f_reckind;
 
         if (cards == 0)
             return "component before any card";
@@ -570,9 +609,9 @@ static const char *ovl_val_uistream(void)
         props = w_w(w_seg, rec + W_R_PROPS);
 
         if (id < 1 || id > 250)
-            return "comp_id";
+            return w_f_compid;
         if (id != w_ncomp + 1)
-            return "comp_id";           /* unique across the bundle AND in
+            return w_f_compid;          /* unique across the bundle AND in
                                          * document order (2.5, 2.14 rule 2;
                                          * t_wab pins it). ONE test does both:
                                          * ids that are exactly 1..n in order
@@ -582,73 +621,73 @@ static const char *ovl_val_uistream(void)
                                          * bundles with the same word */
         w_ncomp++;
         if (ctype < WC_LABEL || ctype > WC_MAX)
-            return "ctype";             /* 0x0F+ is unassigned (2.5.1) */
+            return w_f_ctype;           /* 0x0F+ is unassigned (2.5.1) */
         if (style & ~WS_KNOWN)
-            return "style byte";
+            return w_f_style;
         if (((style & WS_ALIGN) >> WS_ALIGNSH) == 3)
-            return "style byte";        /* ALIGN 3 is refused by the packer */
+            return w_f_style;           /* ALIGN 3 is refused by the packer */
         if (cflags & ~CF_KNOWN)
             return "cflags";
         if (w_b(w_seg, rec + 7) != 0)
-            return "record kind";       /* 2.5: byte +7 is 0 */
+            return w_f_reckind;         /* 2.5: byte +7 is 0 */
 
         if (ctype == WC_SPRITE) {
             /* 2.5: a sprite record follows its canvas directly and carries
              * 0/0 - its geometry lives in SPRITES. */
             if (lastct != WC_CANVAS && lastct != WC_SPRITE)
-                return "record kind";
+                return w_f_reckind;
             if (w != 0 || h != 0)
-                return "record kind";
+                return w_f_reckind;
         } else {
             if (w > 160 || h > 40)
-                return "record kind";   /* t_wab's bound: nothing on any
+                return w_f_reckind;     /* t_wab's bound: nothing on any
                                          * adapter's grid is wider */
         }
         if (ctype == WC_GRID && ++grids > 1)
-            return "ctype";
+            return w_f_ctype;
         if (ctype == WC_CANVAS) {
             if (++canvases > 1)
-                return "ctype";
+                return w_f_ctype;
             /* 2.5: a canvas carries its pixel size already divided down,
              * never 0, and 10.4 bounds the pixels at 64..320 by 8 and
              * 32..160 - which is 8..40 and 4..20 here. */
             if (w < 8 || w > 40 || h < 4 || h > 20)
-                return "property range";
+                return w_f_prange;
         }
         if (ctype == WC_BOX && (w == 0 || h == 0))
-            return "required property"; /* 7.3 reads both out of the record */
+            return w_f_reqprop; /* 7.3 reads both out of the record */
         if (ctype == WC_SPACER && w == 0)
-            return "required property";
+            return w_f_reqprop;
 
         e = ovl_val_block(props, ctype);
         if (e)
             return e;
         if (ctype == WC_RADIO && !(w_pv_seen & WP_GROUP))
-            return "required property"; /* 3.3 requires `group` on a radio */
+            return w_f_reqprop; /* 3.3 requires `group` on a radio */
         if (ctype == WC_GRID) {
             if ((w_pv_seen & (WP_COLS | WP_ROWS)) != (WP_COLS | WP_ROWS))
-                return "required property";
+                return w_f_reqprop;
             if (w_pv_cols * w_pv_rows > 6140)
-                return "property range";  /* 5.6: the cell store's cap */
+                return w_f_prange;        /* 5.6: the cell store's cap */
         }
         lastct = ctype;
     }
 
     if (!ended)
-        return "REC_END";
+        return w_f_recend;
     if (cards == 0)
-        return "card index";
+        return w_f_cardidx;
     if (w_entry > cards)
-        return "entry card";
+        return w_f_entry;
     w_ncard = cards;
 
     /* The header's flags must agree with what the display list actually
      * holds - a bundle that claims a grid and carries none has a grid claim
      * asked for and nothing to put in it (t_wab's coupling). */
     if (((w_flags & WABF_GRID) != 0) != (grids != 0))
-        return "flags";
+        return w_f_flags;
     if (((w_flags & WABF_CANVAS) != 0) != (canvases != 0))
-        return "flags";
+        return w_f_flags;
     return 0;
 }
 
@@ -667,14 +706,14 @@ static const char *ovl_val_sprites(void)
     s = w_soff[W_SPRITES];
     len = w_slen[W_SPRITES];
     if (len < 2)
-        return "sprite count";
+        return w_f_sprcount;
     n = w_b(w_seg, s);
     if (n < 1 || n > 16 || n != w_sextra[W_SPRITES])
-        return "sprite count";
+        return w_f_sprcount;
     if (w_b(w_seg, s + 1) != 0)
-        return "sprite count";
+        return w_f_sprcount;
     if (2 + 8 * n > len)
-        return "sprite count";
+        return w_f_sprcount;
     for (i = 0; i < n; i++) {
         wb = w_b(w_seg, s + 2 + 8 * i);
         h = w_b(w_seg, s + 2 + 8 * i + 1);
@@ -682,9 +721,9 @@ static const char *ovl_val_sprites(void)
         if (w_b(w_seg, s + 2 + 8 * i + 3) != 0 ||
             w_b(w_seg, s + 2 + 8 * i + 6) != 0 ||
             w_b(w_seg, s + 2 + 8 * i + 7) != 0)
-            return "sprite descriptor";
+            return w_f_sprdesc;
         if (wb < 1 || wb > 8 || h < 1 || h > 64 || fr < 1 || fr > 8)
-            return "sprite descriptor";
+            return w_f_sprdesc;
         off = w_w(w_seg, s + 2 + 8 * i + 4);
         /* 2.11: per frame, h*wb bytes of image then h*wb of AND mask. */
         need = 2 * fr * h * wb;
@@ -703,13 +742,13 @@ static const char *ovl_val_extras(void)
         s = w_soff[W_FXCODE];
         len = w_slen[W_FXCODE];
         if (len < 2)
-            return "formula count";
+            return w_f_fxcount;
         n = w_w(w_seg, s);
         if (n != w_sextra[W_FXCODE] || 2 + 2 * n > len)
-            return "formula count";
+            return w_f_fxcount;
         for (i = 0; i < n; i++)
             if (w_w(w_seg, s + 2 + 2 * i) >= len)
-                return "formula count";
+                return w_f_fxcount;
         w_nformula = n;
     }
     if (w_shave[W_CELLS]) {
@@ -721,16 +760,16 @@ static const char *ovl_val_extras(void)
         for (i = 0; i < n; i++) {
             off = s + 8 * i;
             if (w_b(w_seg, off + 1) > 25)
-                return "cell record";   /* 2.10: col 0..25 */
+                return w_f_cellrec;     /* 2.10: col 0..25 */
             if (w_b(w_seg, off + 3) != 0)
-                return "cell record";
+                return w_f_cellrec;
             kind = w_b(w_seg, off + 2);
             if (kind < 1 || kind > 3)
-                return "cell record";
+                return w_f_cellrec;
             if (kind == 2 && !w_atom_ok(w_w(w_seg, off + 4)))
-                return "atom id";
+                return w_f_atomid;
             if (kind == 3 && w_w(w_seg, off + 4) >= w_nformula)
-                return "cell record";
+                return w_f_cellrec;
         }
     }
     return 0;
@@ -749,9 +788,9 @@ static const char *ovl_validate_x(void)
      * case where those bytes disagree, and it costs four compares to notice. */
     if (w_b(w_seg, 0) != 'W' || w_b(w_seg, 1) != 'A' ||
         w_b(w_seg, 2) != 'B' || w_b(w_seg, 3) != 0x1A)
-        return "magic";
+        return w_f_magic;
     if (w_w(w_seg, W_H_TOTAL) != w_size)
-        return "total size";
+        return w_f_total;
 
     e = ovl_val_sections();
     if (e)

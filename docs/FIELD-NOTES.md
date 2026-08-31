@@ -4434,3 +4434,154 @@ checked. That is the finding underneath all of them: this tree's boot rows all
 stop at the first frame of the desktop, and three of the four defects here live
 either after that frame or in a number the frame does not show.
 
+
+---
+
+## 36. A handful of 86Box BIOSes have said `Disk error` since day one, and the BIOS never set DL (FIXED, SPEC.md §2.9.11 — diagnosed in one boot)
+
+**Reported as a class rather than a bug**: *"a handful of BIOSes in 86Box always
+error out with `Disk error` on boot, and they have done this since day 1 of this
+repo."* Not caused by any of the recent boot work — which is exactly what made
+it hard to look at, because the string is printed from three files, the loader
+under it has been rewritten four times, and `Disk error` means *`int 13h` set
+carry three times running* and nothing else.
+
+**The machine**: 86Box 6.0 build 9001, `machine = pb286` — a Packard Bell 286,
+BIOS dated 09/17/86, model byte `FC`, 640KB, OTI-067 video, booting a 360KB
+`os8088360.img` in drive A. **The same config with nothing but the BIOS changed
+boots fine**, which is the whole of the evidence anybody had.
+
+### What the diagnostic said
+
+`make bootdiag` (SPEC.md §2.9.10) — `bootdiag360.img` reached its report,
+`bootdiagx360.img` printed `Disk error`, and that pair alone had already halved
+the problem. Then section [2]:
+
+```
+[2] HANDOVER
+  loaded by  bdboot.asm - the paranoid loader
+  DL at boot 61  used 00  <== THE BIOS DID NOT SET DL. Fell back to 0.
+  payload    48 sectors  retries 03  worst status 01
+```
+
+**`DL = 0x61`.** Not a drive number — whatever was in the register when the ROM
+reached its boot jump. `boot/boot.asm` did `mov [boot_drive], dl` and believed
+it; every `int 13h` then named unit `0x61`, answered status `01`, and three
+attempts later the sector printed its message. `retries 03  worst status 01` is
+the paranoid loader's own record of the same three failures before its fallback
+rescued it, which is why the report exists to be read at all.
+
+Setting `DL` is the convention every BIOS since 1981 follows and none is made
+to follow. Fixed with a seven-byte range check — this sector is the *floppy*
+VBR, so a unit above 3 cannot be where it came from — and the same clamp the
+other way in `boot/mbr.asm`. SPEC.md §2.9.11 has the reasoning, including why
+it is a range check and not the try-then-fall-back the diagnostic itself uses.
+
+### Three suspects cleared and one hazard found, in the same boot
+
+The value of the rest of the report was mostly in what it ruled out:
+
+| asked | answered |
+|---|---|
+| does this ROM's `EOT` break the multi-track read? | `0F` in ROM, patched to `09` at `0000:0580`, and **kept** across a reset+read |
+| is `0000:0580` free memory on this machine? | untouched |
+| does the top of conventional RAM exist, and stay? | both — and the ROM used **60 bytes** below stage 1's `SP`, against the 2,048 it reserves |
+| `int 12h`, `AH=08h`, `AH=15h` | 640KB, `st 00` (79 cyl / 2 heads / 18 spt / 2 drives / type 04), type 01 no change line |
+
+**The one real hazard**: reads 6 and 7 — a run crossing a head and a run
+crossing a cylinder — each answered status `04` on two attempts and then
+`CF = 0` **with two of four sectors wrong** on the third. That is note 31's MR
+BIOS behaviour on a second, unrelated 286 clone, and it errors *and* lies where
+that one only lied.
+
+**It is already harmless, and the report says why.** `[1]` reports `80286`, so
+SPEC.md §18.93.2's gate takes the track bound from the start; the loader never
+asks for a crossing run, §18.93.1's canary never runs, `[boot_cylrun]` stays 0,
+and `dsk_xfer` stays track-bounded for the rest of the session. Two machines
+now, and neither of them an XT — which is the evidence that gate rests on,
+still a bet about a population and now a better-supported one.
+
+### The note to take
+
+**`Disk error` named neither its sector nor its cause, and that cost this
+defect the life of the repository.** SPEC.md §2.9.9 had already written down
+"a message identifying its own sector would have named this in one look" after
+the hard-disk loader printed the floppy loader's string. This is the same
+lesson from the other end: the message was ours, the sector was right, and the
+thing it could not say was the one byte that mattered.
+
+The diagnostic that found it is `tests/bootdiag/`, and the reason it could run
+on the machine that fails is that **it does not use the loader under test** —
+`bdboot.asm` reads one sector an `int 13h` with no relocation, no `int 1Eh`
+patch and a `DL` fallback, so it boots wherever a single sector can be read.
+
+---
+
+## 37. Paint's wide pen draws a snake, and the line has "very little to do with where the mouse moves" (FIXED, SPEC.md §42.8.3 — reproduced here on the first try, once the hand was paced on the GUEST clock)
+
+**Observed.** A drag on the 5150's Hercules card, wide nib: "the drag moved in
+a somewhat straight line between where the point started, and where the cursor
+sits. The line curves away in the middle, then back, then away again at the
+end as it gets behind. On a slower drag, this manifests as tiny wobbles." With
+an AutoHotkey macro that walks the mouse 2 px a step with `Random(-1, 1)` of
+wobble — a path that is straight to within one pixel — Paint drew an S-curve
+wandering tens of pixels. And the two observations that turned out to name the
+mechanism between them: **"a faster system, or a thinner pen, almost
+completely fixes the issue"**, and *"the updates in where the line is going
+only ever seem to happen when the cursor is actually drawn"*.
+
+**This is the third report of one complaint and the first with the right
+cause.** §11 above was the same stroke arriving as long straight chords, and
+its two fixes (§42.8, §42.8.1) were both real — the chord got 8.7x cheaper to
+draw and the sample rate went from 20/s to 88/s. Neither was this. Measured at
+320 px/s with the 8 px nib, the position `pt_stroke` read was equal to the live
+pointer on **every single turn**: there was no sampling error left to find, and
+the stroke still wandered 9 px against a hand that wobbled 1.
+
+**It was arithmetic.** `pt_seg` kept the Bresenham denominator in **CX, which
+is also what `loop` counts down**, so the denominator shrank by one every
+iteration and the minor axis stepped ever more often towards the end of each
+chord. A chord of dx=1, dy=8 stepped x four times and landed 3 px past its own
+target; the next sample pulled it back, it overshot the other way, and the
+stroke became a self-sustaining zig-zag. That is why it read as ink that had
+stopped following the mouse rather than as ink arriving late — **it was going
+somewhere the hand never went**, not going there slowly.
+
+Every part of the report falls out of that one register:
+
+- The overshoot is the tail of the walk, where the denominator is smallest, so
+  it **scales with chord length and therefore with SPEED** — a slow hand
+  wobbles a little, a fast one snakes.
+- **A faster machine "fixes" it** because more turns a second means shorter
+  chords, not because it draws faster.
+- **A thinner pen fixes it because it is not this code**: §42.8 routes a
+  width-1 stroke on a 1bpp adapter to `pt_lineseg`, which is `gfx_line_mono`'s
+  arithmetic and correct. The wide nib is the only path through `pt_seg`.
+- The cursor observation was a true correlation with the causation the other
+  way round. During a stroke Paint holds the gfx lock, so §7.1.4's promised
+  hide keeps the ISR off the arrow and `gfx_unlock` is the only thing that
+  moves it — once per loop turn, the same turn that draws a chord. Both are
+  paced by the loop; neither is driving the other, and `mouse_x`/`mouse_y` were
+  already being sampled on every packet regardless of whether the arrow was up.
+
+**Why no harness here had ever seen it, which is the reusable half.**
+`os88mouse`'s injection path costs ~0.51 guest seconds a report (SPEC.md
+§7.3.1), so a scripted stroke arrives at about two reports a second against a
+hand's forty. Every chord is then one or two pixels long, the shrinking
+denominator never gets going, and **both builds draw the same smooth picture**
+— exactly the blindness §42.8.2 predicted would keep the remaining smoothing
+question unmeasurable. Pacing the packets on the **guest** clock instead
+(`m.advance(cycles=...)`, one packet per 25 ms of guest time, which is what
+1200 baud actually carries) reproduces the snake on the first attempt.
+`tests/paintwalk.py` is that harness, and it asserts the walk rather than the
+picture: a chord steps each axis exactly `|d|` times, which is a fact about
+Bresenham that needs no hand to check. It fails 5 chords of 5 on the old build
+and passes 9 of 9 on the new one.
+
+**What is left is a genuine lag, and it is much smaller.** With the walk
+correct, an 8 px nib at 640 px/s still finishes ~46 px behind the pointer on a
+4.77 MHz 8088 — §11's cost story, unfixed for widths above 1. At 320 px/s and
+below the ink lands where the hand did. The step costs 2.05 ms, so the nib's
+ceiling is ~490 px/s against the width-1 pencil's ~6,000; and **63% of that
+step is `pt_rect`'s fixed preamble rather than any pixel** (SPEC.md §42.8.3),
+which is where a fix for it would go.

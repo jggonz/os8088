@@ -98,6 +98,50 @@ br_hire:
 ;      every caller is a click or a keystroke and none has anywhere to put a
 ;      carry flag.
 ; -----------------------------------------------------------------------------
+; --- br_promise - tell the kernel whether our content is standing still ------
+; in:  nothing; THE GFX LOCK HELD BY THE CALLER
+; out: nothing (every register and the flags preserved)
+;
+; SPEC.md 71.11. This app is SPEC.md 11.96.1's disqualifier written out - the
+; worker advances the page and SKIPS DRAWING when the window cannot be seen,
+; which is content changing without being drawn - but only while a fetch is in
+; flight. [br_nstate] already answers that: BN_OPEN..BN_BODY is a fetch, and
+; BN_IDLE / BN_DONE / BN_ERR are a page standing still. So the promise is per
+; FETCH rather than per package, and this is the state machine's second job.
+;
+; THE LOCK IS A CONDITION, NOT POLITENESS (SPEC.md 20.6 rule 7): the clear
+; frees the raise cache, so a worker calling it outside a hold could free a
+; buffer the UI task is blitting out of. Two of the three call sites are the
+; worker's and both are already inside one.
+;
+; The window pointer comes from [br_win] and not from whatever BX holds, which
+; is SPEC.md 11.96.11.4's lesson: Paint once handed the kernel a screen HEIGHT
+; as a window record and the kernel set a bit inside its own jump table.
+br_promise:
+    pushf
+    push ax
+    push bx
+    mov bx, [br_win]
+    or bx, bx                       ; before wm_create, and after a refused
+    jz .out                         ; one: there is nothing to promise about
+    xor al, al                      ; ...a fetch IS in flight: withdraw
+    cmp byte [br_nstate], BN_OPEN
+    jb .say                         ; BN_IDLE - nothing fetched yet, so still
+    cmp byte [br_nstate], BN_DONE
+    jb .say                         ; BN_OPEN..BN_BODY: AL stays 0
+    mov al, OSAPI_SAVEU_ON | OSAPI_SAVEU_1BPP
+                                    ; BN_DONE / BN_ERR: the page has settled -
+                                    ; and it is two colours, which is what
+                                    ; gets it under wm_su_kb's 64,512 ceiling
+                                    ; on a VGA (SPEC.md 11.96.17)
+.say:
+    call OSAPI_WM_SAVEU
+.out:
+    pop bx
+    pop ax
+    popf
+    ret
+
 br_go:
     push ax
     push bx
@@ -181,6 +225,28 @@ br_go:
                                     ; code was read for the FIRST page of the
                                     ; session and no other
     mov byte [br_nstate], BN_OPEN
+    push ax                         ; ...AND THE PROMISE IS WITHDRAWN HERE, at
+    push bx                         ; the transition and UNCONDITIONALLY, not
+    mov bx, [br_win]                ; by re-reading [br_nstate] on the way out
+    xor al, al                      ; (SPEC.md 71.11). BX IS THE WINDOW and is
+    call OSAPI_WM_SAVEU             ; not optional: without it wm_saveu's own
+    pop bx                          ; bounds check refuses the call and the
+    pop ax                          ; withdrawal silently does not happen -
+                                    ; SPEC.md 11.96.11.4's guard earning its
+                                    ; keep a second time, and the reason this
+                                    ; is not `whatever BX held`.
+                                    ;
+                                    ; THAT WAS A BUG AND tests/brpromise.py
+                                    ; FOUND IT. The worker does not need the
+                                    ; lock to move the state machine - only to
+                                    ; DRAW - so with no NIC it reaches
+                                    ; net_find, fails, and writes BN_ERR while
+                                    ; br_go still holds the lock. A br_promise
+                                    ; at the exit then read BN_ERR, called the
+                                    ; state settled, and SET the promise: the
+                                    ; withdrawal never happened at all, and
+                                    ; the gate caught it as a one-in-seven
+                                    ; flake rather than as a failure
     call br_toolbar                 ; the strip, because br_hpush above has
     jmp short .out                  ; just moved what Back and Forward may do
 .badurl:
@@ -191,8 +257,24 @@ br_go:
 .say:
     mov [br_nmsg], si
     mov byte [br_nstate], BN_ERR
+    call br_promise                 ; **THIS TAIL IS A THIRD SETTLE** (SPEC.md
+                                    ; 71.11). A `https://` URL, an empty host
+                                    ; or a refused claim lands here with the
+                                    ; withdrawal from the BN_OPEN transition
+                                    ; still outstanding - and the fetch it was
+                                    ; withdrawn for was aborted, so neither
+                                    ; br_finish nor br_nshow ever runs to put
+                                    ; it back. The page then stands still with
+                                    ; no promise on it for the rest of the
+                                    ; session: every raise repaints instead of
+                                    ; restoring. BN_ERR is already stored, so
+                                    ; br_promise's own state test re-states it
     call br_status
-.out:
+.out:                               ; ...and NOTHING here. The withdrawal is
+                                    ; above, at the transition; the two other
+                                    ; ways a fetch settles own the set, and the
+                                    ; paths that never start one leave a
+                                    ; promise that was already true untouched
     pop di
     pop si
     pop dx
@@ -862,6 +944,7 @@ br_finish:
 .notit:
     mov byte [br_nstate], BN_DONE
     call OSAPI_GFX_LOCK
+    call br_promise                 ; ...and the page is standing still again
     mov si, [br_win]
     mov word [br_cols], 0           ; force br_measure to relayout: the page
                                     ; changed under a band whose width did not
@@ -920,6 +1003,10 @@ br_nshow:
     push bx
     push si
     call OSAPI_GFX_LOCK
+    call br_promise                 ; ...ABOVE the obscured test: the promise
+                                    ; is not drawing and is owed whether or not
+                                    ; one pixel of us shows. This is where
+                                    ; BN_ERR lands (SPEC.md 71.11)
     mov bx, [br_win]
     call OSAPI_WM_OBSCURED
     jc .un                          ; covered: the next paint owes it, and a

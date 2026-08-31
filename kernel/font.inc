@@ -531,7 +531,15 @@ font_char_bb:
 font_ink:
     mov byte [font_dith], 0     ; cleared on EVERY path, VGA included: the
     cmp byte [vid_mono], 0      ; glyph loop reads it per plane and .bss is
-    je .out                     ; not zeroed by -f bin
+    jne .mono                   ; not zeroed by -f bin
+    cmp byte [gfx_mono1], 0     ; ...OR THE WINDOW SAID SO (SPEC.md 11.96.17.1).
+    je .out                     ; A cache one plane deep cannot carry a third
+.mono:                          ; colour, and 47 rule 1's disabled pen is solid
+                                ; CDGRAY on a VGA - which an application cannot
+                                ; fix from outside, font_ink being the
+                                ; kernel's. The path below already answers it:
+                                ; it reduces the ink to 00h/FFh and stipples
+                                ; the disabled case, which IS the claim
     push ax
     mov al, ch
     cmp byte [gfx_dis], 0       ; DISABLED IS ASKED FIRST (SPEC.md 76.6). It
@@ -1219,7 +1227,40 @@ font_run_x:
 .plcpl:
     mov byte [font_rn_bm], 0xFF
 .plset:
-    mov byte [font_rn_xm], 0xFF ; the compose is a pass-through either way
+    mov byte [font_rn_xm], 0xFF ; the compose is a pass-through either way...
+    cmp byte [gfx_mono1], 0     ; ...UNLESS THIS WINDOW DECLARED TWO COLOURS
+    je .plgo                    ; AND THE RUN IS DISABLED (SPEC.md 11.96.17.1).
+    cmp byte [gfx_dis], 0       ; [gfx_dis] AND NOT [font_rn_dt], which is 0
+    je .plgo                    ; here by construction: 6.1.12's mask is
+                                ; computed in the MONO prologue and this
+                                ; branch left before it.
+                                ; A greyed control on a VGA says so by being
+                                ; CDGRAY, and a window that claims one plane
+                                ; cannot carry colour 8 - so gfx_pen_dis
+                                ; rounds the pen to black for it, and then the
+                                ; ONLY thing left to say "dead" is 47 rule 1's
+                                ; checkerboard, which this prologue was
+                                ; throwing away. Without it a greyed caption
+                                ; comes out pixel-identical to a live one,
+                                ; which is that rule's own failure.
+                                ;
+                                ; xm is a mask over the GLYPH here and not an
+                                ; ink-xor-background, so it halves the ink for
+                                ; either bm: 00 writes (glyph & AA) and FF
+                                ; writes its complement, which is the same
+                                ; pixels read the other way up.
+    push ax
+    mov al, 0xAA
+%ifdef KERN_BIG
+    test byte [font_rn_k7], 1   ; ...on the other phase for an odd skew, so
+    jz .plph                    ; the checkerboard lands in the same screen
+    mov al, 0x55                ; columns whatever the cell's x is
+.plph:
+%endif
+    mov [font_rn_xm], al
+    mov byte [font_rn_dt], 0xFF ; ...and the per-row swap is the whole mask,
+    pop ax                      ; the two colours having been reduced to
+.plgo:                          ; 00/FF by font_ink before we got here
     mov byte [font_rn_pl], 1
     not bl
     and bl, 0x0F                ; BL = C, the planes Set/Reset answers for

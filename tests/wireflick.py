@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """How much of the figure is on the glass, frame by frame (SPEC.md 78.5).
 
-    make wiredisk && python3 tests/wireflick.py [--machine os8088_5150_cga]
+    make wiredisk && python3 tests/wireflick.py [--machine os8088_5150_cga_gla]
 
 WIREFRAME DOES NOT SHIP (SPEC.md 78.9), so `make wiredisk` is what puts
 WIRE.O88 on a floppy for this to open. `make` alone still builds the
@@ -21,6 +21,13 @@ frame a viewer sees and `blank` is the fraction of frames under half full.
 It is a MEASUREMENT and not a gate. 78.5's three orders are a trade with no
 free corner, so there is no threshold to assert - the point is to put numbers
 on a choice the reader makes by looking.
+
+**ON THE GLaBIOS TWIN**, `os8088_5150_herc_gla`, because `os8088_5150_herc`
+wants the IBM ROM this repo cannot ship. Checked with that ROM dropped in
+beside GLaBIOS: the frame rates come out the SAME on both - 18.2, 18.2, 13.1,
+18.2 down the four draw orders - and the ink percentages move by a few points
+either way, which is this row sampling a free-running animation and not the
+BIOS.
 """
 import argparse
 import os
@@ -59,7 +66,7 @@ def ink(m, rig_seg, geom, fbseg, stride, banks):
 
 def main(argv):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--machine", default="os8088_5150_herc")
+    ap.add_argument("--machine", default="os8088_5150_herc_gla")
     ap.add_argument("--image", default="build/os8088-360.img")
     ap.add_argument("--apps", default="build/wire360.img")
     ap.add_argument("--frames", type=int, default=48)

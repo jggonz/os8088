@@ -83,6 +83,28 @@ sw_rect:
     push es
     call vga_rect_setup
     jc .done
+    call sw_rect_pl
+.done:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sw_rect_pl - internal: the PLANE LOOP alone, for a rect vga_rect_setup has
+;              already described. sw_rect is its only caller that clips;
+;              SPEC.md 5.10's gfx_spans is the other, and it fills the same
+;              scratch a row at a time from its own leaner setup.
+; in:       the vga_* rect scratch and [sw_mode] are set
+; out:      -
+; clobbers: everything but the segment registers
+; -----------------------------------------------------------------------------
+sw_rect_pl:
     mov byte [sw_altm], 0
     cmp byte [sw_mode], SWM_GRAY ; ONLY gray starts from the dither byte. Solid
     jne .planes                  ; overwrote it per plane below (sw_ink), and
@@ -103,16 +125,68 @@ sw_rect:
     add dx, [vid_rpara]
     dec bh
     jnz .plane
-.done:
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
+
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; sw_spans - the 1bpp half of SPEC.md 5.10's gfx_spans
+; in:       gfx_spans' walk is armed; jumped to, not called
+; out:      jumps back to gfx_spans.done
+;
+; **IT DOES NOT GO THROUGH sw_rect_pl, AND SPEC.md 5.10.4 IS WHY.** That is the
+; body for a RECT and it costs 1,806 cycles for a single row, measured - the
+; mode tests, the plane loop, sw_ink's table read and two sw_col calls that
+; each reload six registers, all of which a rect pays ONCE and amortises over
+; its rows. A span IS one row, so a span list paid a rect's fixed cost sixteen
+; times and the primitive lost to the eight fills it replaced. PERFORMANCE.md
+; Set 88's trap, one layer down: reusing the shape of the machinery is not
+; reusing the optimisation.
+;
+; So the ink, the plane and the dither's alternation are hoisted out of the
+; loop and what is left per row is the two masked edge bytes and the interior.
+; The ink comes from sw_ink exactly as a fill's does, [vga_y1] being the FIRST
+; row when it runs, and a middle grey then alternates through [sw_altm] per row
+; - which is what sw_col does inside a rect (SPEC.md 39.4).
+; -----------------------------------------------------------------------------
+sw_spans:
+    mov byte [sw_mode], SWM_SOLID   ; sw_ink's, and nothing else reads it here
+    mov ax, [gfx_sp_y]
+    mov [vga_y1], ax                ; the first row: sw_parity's parity
+    mov byte [sw_altm], 0
+    call sw_ink                     ; [sw_pat], and [sw_altm] if it dithers
+    mov ax, [vid_rseg]              ; one plane: [vid_mono] and [vid_planes]
+    mov [gfx_sp_fb], ax             ; are set together (SPEC.md 39.5)
+    mov es, ax
+.row:
+    call gfx_sp_next                ; AH/AL = the masks, BX = span, DI = the byte
+    jc .next
+    mov dl, [sw_pat]
+    mov dh, dl                      ; left edge (the whole row if 1 byte wide)
+    and dh, ah
+    not ah
+    and [es:di], ah
+    or  [es:di], dh
+    or bx, bx
+    jz .next
+    add di, bx                      ; right edge
+    mov dh, dl
+    and dh, al
+    not al
+    and [es:di], al
+    or  [es:di], dh
+    dec bx                          ; interior bytes
+    jz .next
+    sub di, bx                      ; DI is on the right edge: step back over
+    mov cx, bx                      ; the interior rather than reload the left
+    mov al, dl                      ; byte, which is no longer in memory to
+    rep stosb                       ; reload (SPEC.md 5.7.1's shape)
+.next:
+    mov al, [sw_altm]               ; gray alternates down the rows, solid
+    xor [sw_pat], al                ; leaves [sw_altm] zero and this alone
+    dec word [gfx_sp_n]
+    jnz .row
+    jmp gfx_spans.done
+%endif
 
 ; -----------------------------------------------------------------------------
 ; sw_parity - internal: [sw_pat] = the 50% dither byte for the rect's top

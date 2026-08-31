@@ -146,7 +146,13 @@ entry:
     sti
     cld
 
-    mov [boot_drive], dl        ; the MBR handed us the drive it came from
+    mov [boot_drive], dl        ; the MBR handed us the drive it came from,
+                                ; and boot/mbr.asm clamps it to 0x80 or above
+                                ; before its own first read (SPEC.md 2.9.11) -
+                                ; so a ROM that never set DL is already dealt
+                                ; with by the time we are running, and this
+                                ; sector spends none of its 25 spare bytes on
+                                ; asking the question twice
 
     ; NO VIDEO SETUP, which the floppy sector can afford and this one cannot.
     ; boot/boot.asm reads the equipment word and sets mode 3 or mode 7 for a

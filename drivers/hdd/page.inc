@@ -1251,12 +1251,24 @@ hd_mount_one:
     mov ax, [si+HP_SECS]
     mov [bx+HDV_SECS], ax
 
-    mov ax, HDD_LISTKB          ; the listing claim (SPEC.md 22.6)
-    call OSAPI_MEM_CLAIM
-    jnc .claimed
+    mov ax, HDD_LISTKB          ; the listing claim (SPEC.md 22.6), and it
+    call OSAPI_MEM_CLAIM        ; STAYS LOW - measured, not assumed (SPEC.md
+    jnc .claimed                ; 50.3.2.1): sent high it cost 9KB, because a
+                                ; pinned claim BELOW every movable one is
+                                ; packed past and costs the big run nothing
     xor dx, dx                  ; refused: the kernel's 32-entry floor, which
 .claimed:                       ; works and shows fewer files
-    mov [bx+HDV_LSEG], dx
+    mov [bx+HDV_LSEG], dx       ; ...and PINNED for a moment longer: DX is
+                                ; still this base and OSAPI_VOL_ADD below is
+                                ; about to write it down as the kernel's own
+                                ; DV_SEG (SPEC.md 18.7). Declared movable up
+                                ; here, a compaction between the two calls
+                                ; moved the block, hd_lst_reloc corrected
+                                ; HDV_LSEG - and the STALE DX went into DV_SEG
+                                ; anyway, from where dsk_list_pick copies it
+                                ; into [dsk_dseg]. Nothing here holds sch_lock,
+                                ; and hd_mount_one runs under the gfx lock,
+                                ; which yields
 
     mov al, [bx+HDV_VOLH]       ; our own handle IS the row index
     mov cx, [bx+HDV_SECS]
@@ -1265,7 +1277,21 @@ hd_mount_one:
     jc .novol                   ; place that knows it (SPEC.md 26.1)
     mov [bx+HDV_VOL], al
     mov byte [bx+HDV_USED], 1
-    call OSAPI_VOL_MOUNT        ; AL is still the volume index
+
+    mov dx, [bx+HDV_LSEG]       ; ...AND NOW IT MOVES (SPEC.md 66.5.10.2).
+    or dx, dx                   ; Where it lands is a property of the SESSION
+    jz .nolist                  ; and not of the code - on a desktop that has
+    push bx                     ; been used, the gap under 18.95's read-ahead
+    mov ax, hd_lst_reloc        ; is taken and this first-fits ABOVE that cache
+    call OSAPI_MEM_MOVABLE      ; instead, where pinned it costs the whole
+    pop bx                      ; 63KB. TWO words, not one: HDV_LSEG here and
+.nolist:                        ; the kernel's DV_SEG, which dsk_dseg_reloc
+                                ; already scans BY VALUE for every move - and
+                                ; that is exactly why the ORDER matters. BX is
+                                ; the hd_vols row and is needed below
+
+    mov al, [bx+HDV_VOL]        ; reloaded: hd_lst_reloc's address went through
+    call OSAPI_VOL_MOUNT        ; AX, so the volume index is no longer in it
     jc .badvol
     inc byte [hd_nmnt]
     jmp short .out
@@ -1286,6 +1312,42 @@ hd_mount_one:
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_lst_reloc - the listing claim moved (SPEC.md 66.5.10.2)
+; in:  BX = the base it WAS at, DX = the base it is at now; DS = CS = ours,
+;      ES = KERNEL_SEG
+; out: nothing (every register preserved)
+;
+; ONE WORD. HDV_LSEG is the only place this driver writes the segment down, and
+; it writes it for exactly one purpose - to free the block - so there is no
+; derived pointer, no offset banked off it and nothing paragraph-aligned to
+; recompute. The kernel's own two naming words (dsk_vtab's DV_SEG and
+; [dsk_dseg]) are fixed by dsk_dseg_reloc before this is reached, which is what
+; makes a DONATED claim movable at all: the callback reaches the owner, and the
+; owner is only one of the three holders (SPEC.md 66.5.10.1).
+;
+; BY VALUE and not by [hd_sel]'s row, because a compaction can fire while a
+; different partition is the selected one - and because a driver's proc is
+; handed the old base and nothing else.
+; -----------------------------------------------------------------------------
+hd_lst_reloc:
+    push ax
+    push cx
+    push si
+    mov si, hd_vols
+    mov cx, HD_MAXVOL
+.scan:
+    cmp [si+HDV_LSEG], bx
+    jne .next
+    mov [si+HDV_LSEG], dx
+.next:
+    add si, HDV_SIZE
+    loop .scan
+    pop si
+    pop cx
     pop ax
     ret
 

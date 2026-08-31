@@ -105,9 +105,18 @@ rd_page_need:
     jc .fail
 
     mov ax, RAMPAGE_KB
-    call OSAPI_MEM_CLAIM        ; owner = our segment, so drv_release sweeps it
-    jc .fail                    ; even if we never get to free it
-    mov [rd_pseg], dx
+    call OSAPI_MEM_CLAIM_HI     ; owner = our segment, so drv_release sweeps it
+    jc .fail                    ; even if we never get to free it - and FROM
+    mov [rd_pseg], dx           ; THE TOP (SPEC.md 50.3.2.1), because this
+                                ; image's base IS its CS: [rd_pfar] is
+                                ; PKG_DISP:[rd_pseg] and every verb is a far
+                                ; call to it, so no compaction can ever have
+                                ; it. Low, it first-fits ABOVE every movable
+                                ; claim, so mem_cp_plan's fill point stops
+                                ; here and the arena is two runs instead of
+                                ; one - measured at 64.5KB of what a claimant
+                                ; can have, on and off every time somebody
+                                ; selects this page
 
     mov es, dx
     xor bx, bx

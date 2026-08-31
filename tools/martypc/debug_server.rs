@@ -492,11 +492,41 @@ impl DebugServer {
     }
 
     fn send(&mut self, value: &Value) {
+        // The stream is NONBLOCKING (poll_socket set it so, for the read
+        // side), and `write_all` on a nonblocking socket returns
+        // `WouldBlock` the moment the kernel send buffer fills - it does
+        // not wait for the client to drain. Any reply larger than that
+        // buffer then dies PART-WRITTEN and the client is dropped, which
+        // the caller sees as a truncated JSON line followed by EOF. `fbuf`
+        // on a VGA card is a ~1.8MB line (640x480 rgb24, hex), so it lost
+        // its connection at ~330KB every single time, while CGA's 768KB
+        // usually squeaked through on the drain race - a bug that looks
+        // like a flake on one adapter and is deterministic on another.
+        // So: write in a loop and treat WouldBlock as "let the client
+        // catch up", never as an error. Only a real error, or a peer that
+        // closed (Ok(0)), drops the client.
         if let Some(reader) = self.client.as_mut() {
             let mut out = value.to_string();
             out.push('\n');
-            if reader.get_mut().write_all(out.as_bytes()).is_err() {
-                self.client = None;
+            let stream = reader.get_mut();
+            let bytes = out.as_bytes();
+            let mut off = 0usize;
+            while off < bytes.len() {
+                match stream.write(&bytes[off..]) {
+                    Ok(0) => {
+                        self.client = None;
+                        return;
+                    }
+                    Ok(n) => off += n,
+                    Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                    Err(ref e) if e.kind() == ErrorKind::Interrupted => {}
+                    Err(_) => {
+                        self.client = None;
+                        return;
+                    }
+                }
             }
         }
     }

@@ -189,6 +189,9 @@ CY_MAXPU    equ 3                   ; powerup pickups on the web at once
 CY_RIMSTEP  equ 14                  ; frames between rim steps: slow enough
                                     ; to be shootable, fast enough to matter
 CY_MAXDBR   equ 8                   ; debris particles in the game-over burst
+%ifndef CY_DRSTEP                   ; frames between the droid's hunting steps
+CY_DRSTEP   equ 6                   ; - a third of a second at 18fps. `make
+%endif                              ; DRSTEP=n` tries another
 
 ; Every mover on the web has a 10-byte "what is on the glass" block, and they
 ; live in one array so a full repaint can forget all of them in one loop.
@@ -198,7 +201,22 @@ CY_OB_ES    equ CY_OB_S  + CY_MAXSHOT
 CY_OB_PU    equ CY_OB_ES + CY_MAXESHOT
 CY_OB_D     equ CY_OB_PU + CY_MAXPU
 CY_OB_PL    equ CY_OB_D  + CY_MAXDBR
-CY_NOBJ     equ CY_OB_PL + 1
+CY_OB_DR    equ CY_OB_PL + 1       ; the AI droid - a claw, so it is drawn and
+CY_NOBJ     equ CY_OB_DR + 1       ; repaired by exactly the player's code
+
+; The droid is A SMALLER US (SPEC.md 67.9.3). Not a sixth aspect ratio - 67.9's
+; five were spoken for and 67.9.1 had to fall back on hollow-vs-solid - but the
+; claw's OWN silhouette at a smaller scale, which no enemy can ever collide
+; with however many kinds arrive. Scale normally reads badly on a 1bpp adapter
+; because there is nothing to judge it against; here there is, because both
+; claws are pinned to the rim ring at CY_TOPD and are always side by side.
+;
+; 0x0203 against the claw's 0x0305: 7x5 against 11x7, with the SAME 2px walls,
+; so it is plainly the same object and plainly smaller. Do not go below this.
+; At half-width 2 the notch is 1px, and cy_lanecap's floor of 1 turns it into a
+; 3x3 blob with no notch at all - which is exactly the "movers that are not
+; there" the quarter-cap lesson in cy_lanecap records.
+CY_DROIDEXT equ 0x0203
 CY_OBSZ     equ 12                  ; bytes of "what is on the glass" per object
 
 ; Pixels of every walk laid per warp frame. 4 puts a 60-pixel spoke on screen
@@ -2085,6 +2103,9 @@ cy_fillx:
 %ifdef CYTRACE
     call cy_trace
 %endif
+%ifdef CYPROF
+    inc word [cy_pf_fill]           ; SPEC.md 67.22: count the CALLS, because
+%endif                              ; that is what a redraw is priced in
     call OSAPI_GFX_FILL             ; NOT a `jmp`, tempting as one is here:
                                     ; an OSAPI cell is a FAR entry ending in
                                     ; retf, so a tail jump would pop this
@@ -2120,6 +2141,9 @@ cy_framec:
     add cx, [cy_ox]
     add bx, [cy_oy]
     add dx, [cy_oy]
+%ifdef CYPROF
+    inc word [cy_pf_frame]
+%endif
     call OSAPI_GFX_FRAME
 .out:
     pop dx
@@ -2141,6 +2165,9 @@ cy_textc:
     push dx
     add cx, [cy_ox]
     add dx, [cy_oy]
+%ifdef CYPROF
+    inc word [cy_pf_font]
+%endif
     call OSAPI_FONT_RUN
     pop dx
     pop cx
@@ -2288,6 +2315,9 @@ cy_dsc_run:
     mov di, cy_dsc
     push ds
     pop es
+%ifdef CYPROF
+    inc word [cy_pf_lstep]
+%endif
     call OSAPI_GFX_LSTEPV
 .out:
     pop es
@@ -2757,6 +2787,9 @@ cy_obj_hide:
 ;      the routine or reloads on the next line).
 ; -----------------------------------------------------------------------------
 cy_obj_dmg:
+%ifdef CYPROF
+    inc word [cy_pf_dmg]            ; scans: each walks all CY_NOBJ blocks
+%endif
     push si
     push cx
     mov si, cy_ost
@@ -2811,6 +2844,9 @@ cy_dmg_rect:
 ; Preserves CX (cy_obj_dmg, its one caller, is counting the table down in it)
 ; and SI; AX/BX/DX are scratch.
 cy_obj_put:
+%ifdef CYPROF
+    inc word [cy_pf_put]            ; ...and the repairs they actually cause
+%endif
     push cx
     mov al, [si + 10]
     call cy_setcol
@@ -2819,10 +2855,13 @@ cy_obj_put:
     mov cx, [si + 6]
     mov dx, [si + 8]
     call cy_fillx
-    mov ax, si                      ; the claw carries a notch inside its own
-    sub ax, cy_ost                  ; rect (67.5), and a plain refill would
-    cmp ax, CY_OB_PL * CY_OBSZ      ; fill it in
-    jne .out
+    mov ax, si                      ; EITHER claw carries a notch inside its
+    sub ax, cy_ost                  ; own rect (67.5), and a plain refill would
+    cmp ax, CY_OB_PL * CY_OBSZ      ; fill it in. The droid is the player's
+    je .notch                       ; shape at another scale (67.9.3), so it
+    cmp ax, CY_OB_DR * CY_OBSZ      ; is repaired by the identical arithmetic -
+    jne .out                        ; the insets are absolute, not proportional
+.notch:
     mov al, CY_C_BG
     call cy_setcol
     mov ax, [si + 2]
@@ -3572,6 +3611,20 @@ cy_home_ck:
     mov byte [cy_phome], 0
     call cy_bottom_lane
     mov [cy_plane], ax
+    mov ax, [cy_dlane]              ; ...AND THE DROID WITH IT (SPEC.md 67.9).
+    cmp ax, [cy_nlane]              ; cy_clearboard does not touch [cy_pw_droid]
+    jb .dok                         ; or [cy_dlane], so a droid still out when
+    mov ax, [cy_nlane]              ; the level changes keeps a lane number the
+    dec ax                          ; OLD web had - and the eight shapes are 16
+    mov [cy_dlane], ax              ; or 12 lanes, so on a 12-lane web it drew
+.dok:                               ; itself from rows 12..15 of cy_vx/cy_vy,
+                                    ; which still hold the previous shape's
+                                    ; coordinates: in bounds, wrong geometry,
+                                    ; and a claw that cannot be reached where
+                                    ; it appears to be. HERE and not in
+                                    ; cy_startlevel for this routine's own
+                                    ; stated reason - [cy_nlane] is not the new
+                                    ; web's until cy_build_verts has run
     pop ax
 .out:
     ret
@@ -3706,6 +3759,9 @@ cy_newgame:
     mov byte [cy_zap], 1
     mov word [cy_pw_laser], 0
     mov word [cy_pw_droid], 0
+%ifdef DROIDNOW
+    mov word [cy_pw_droid], 30000   ; THE PLAY-TEST INSTRUMENT (SPEC.md 67.9.5)
+%endif                              ; and it never ships: see the Makefile
     mov byte [cy_pw_jump], 0
     call cy_startlevel
     pop di
@@ -4354,7 +4410,8 @@ cy_play_update:
     call cy_eshots_update
     call cy_pu_update
     call cy_spawn_tick
-    call cy_droid_tick
+    call cy_droid_lane              ; AFTER cy_player_move: the same-lane guard
+    call cy_droid_tick              ; has to see where the player ended up
     call cy_laser_tick
     call cy_wave_ck
     ret
@@ -5247,6 +5304,11 @@ cy_shots_update:
     jne .next
     mov bx, si
     shl bx, 1
+    call cy_shot_hit                ; TEST WHERE IT IS, THEN MOVE IT. The other
+                                    ; order cost this game a whole class of
+                                    ; kill - SPEC.md 67.8.2
+    cmp byte [cy_s_act + si], 1     ; ...and it may have spent itself doing so
+    jne .next
     mov ax, [cy_s_dp + bx]
     sub ax, 380                     ; shots run down the tube fast
     cmp ax, CY_FARD * 256
@@ -5262,7 +5324,6 @@ cy_shots_update:
     jmp short .next
 .live:
     mov [cy_s_dp + bx], ax
-    call cy_shot_hit
 .next:
     inc si
     jmp short .each
@@ -5480,6 +5541,42 @@ cy_eshots_update:
 ; - the particle laser and the AI droid - unlock at 4 and 6. That progression
 ; is the reward curve, and it is why a level-10 player feels different from a
 ; level-1 one rather than merely busier.
+;
+; THE DROID WAS UNREACHABLE FOR ITS WHOLE LIFE, and the cause was two adjacent
+; `OSAPI_RAND` calls reading the SAME bits. `osapi_rand` is an LCG mod 2^16
+; (seed = seed*25173 + 13849), so bit k of it has period 2^(k+1): the low three
+; bits repeat every EIGHT calls. The old gate was `and ax, 7`, which therefore
+; did not sample anything - it fired on exactly every eighth kill, for ever -
+; and because it passed only when the seed was 0 mod 8, the very next word was
+; pinned to 25173*0 + 13849 = 13849 (mod 4) = 1. `div bx` reads that as the
+; kind, so EVERY powerup this game has ever dropped was a JUMP, except on
+; levels 4 and 5 where the divisor is 3 and a power-of-two lattice cannot pin
+; it. The laser and the spare zapper charge were lost the same way; only the
+; droid was lost completely, because 6 is where the divisor becomes 4 again.
+;
+; Three things fix it, and none of them is "call RAND again":
+;
+;  - **The gate reads bits 8..10, not 0..2.** Same three bytes, and it is what
+;    unpins the kind draw. It also makes the drop RATE a distribution rather
+;    than a metronome - still one kill in eight on average, but 1 to 50 apart
+;    instead of always exactly 8.
+;  - **The kind reads the high byte** (`xchg al, ah`), because a 2-bit slice of
+;    the low end of this generator is worth nothing whatever the gate does.
+;  - **`cy_frame` is stirred in.** The two above are enough to make the kinds
+;    uniform, but NOT to make them unpredictable: a fixed-phase slice of a
+;    16-bit LCG still repeats every 128 drops, which is about a thousand kills
+;    and inside one good session. The frame counter is free entropy that is
+;    already here and is driven by WHEN THE PLAYER SHOT, so folding its low
+;    byte in takes the period past 20,000 drops. It is the low byte on purpose
+;    - `cy_frame` is small for the first fourteen seconds of a game, so stirring
+;    the whole word would leave the high byte we actually use untouched exactly
+;    when a new player is watching.
+;
+; Measured over 160,000 drops against four independent play-timing seeds, chi2
+; against uniform and against lag-1 independence, all six inside p=0.001:
+; levels 1-3 49.8/50.2, levels 4-5 33.4/33.5/33.1, levels 6+ 24.9/25.2/24.9/
+; 25.0. The droid's median drought is 2 drops and its worst over 200,000 was
+; 48. `div bx` cannot overflow: DX is 0 and the dividend is one word.
 ; -----------------------------------------------------------------------------
 cy_maybe_drop:
     push ax
@@ -5488,8 +5585,8 @@ cy_maybe_drop:
     push dx
     push si
     call OSAPI_RAND
-    and ax, 7
-    jnz .out                        ; one kill in eight
+    test ax, 0x0700                 ; one kill in eight - and the SLICE matters:
+    jnz .out                        ;   see the note above cy_maybe_drop
     xor si, si
 .find:
     cmp si, CY_MAXPU
@@ -5500,6 +5597,8 @@ cy_maybe_drop:
     jmp short .find
 .got:
     call OSAPI_RAND                 ; which kinds this level offers
+    xchg al, ah                     ; the HIGH byte, and stir the frame counter
+    xor al, [cy_frame]              ;   into it - both for the reason above
     mov bl, 2                       ; zapper charge and jump
     cmp word [cy_level], 4
     jb .k
@@ -5592,6 +5691,17 @@ cy_pu_take:
 .d:
     cmp al, CYP_DROID
     jne .j
+    cmp word [cy_pw_droid], 0       ; a FRESH droid is placed; a second pickup
+    jne .dadd                       ; only extends the one already out there
+    push ax
+    mov ax, [cy_plane]
+    add ax, 2
+    call cy_wrap                    ; touches AX only, so BL keeps the kind
+    mov [cy_dlane], ax
+    mov word [cy_ddir], 1
+    mov byte [cy_dstep], CY_DRSTEP
+    pop ax
+.dadd:
     add word [cy_pw_droid], 300
     jmp short .say
 .j:
@@ -5621,7 +5731,192 @@ cy_pu_take:
     pop ax
     ret
 
-; the AI droid: an autonomous second gun two lanes over, firing on its own
+; --- WHERE THE DROID IS (SPEC.md 67.9.4) --------------------------------------
+; It HUNTS. Every CY_DRSTEP frames it looks for the nearest lane with something
+; alive in it and takes ONE step that way - never a jump, so it is always a
+; single-lane move and costs what any other single-lane move costs.
+;
+; It was an A/B for a cycle: FIXED two lanes off the claw against a droid that
+; drifted the web on its own clock. Drift won on the glass and the fixed arm is
+; gone rather than kept as a knob, so this is the only behaviour there is
+; (PERFORMANCE.md Set 111 priced them the same: 4.95 fills a play frame against
+; 5.41, both inside the scene noise, so nothing was riding on frames).
+;
+; Costs nothing new. Lanes are DISCRETE, so it redraws only on the frames it
+; actually steps, never on the ones between; an adjacent-lane rect does not
+; touch this one (cy_lanecap bounds every mover to a third of its lane), so
+; cy_rsub takes its `.whole` path and a step is TWO fills. Hunting is the same
+; step drifting was - only the direction is chosen differently - so Set 111's
+; measurement carries over unchanged.
+;
+; TWO REASONS IT HOLDS STILL, and holding is free (the rect does not change, so
+; cy_obj_show takes the did-not-move exit):
+;
+;  - nothing is alive to shoot at, between waves;
+;  - the nearest thing is in the lane we are already on, which is the whole
+;    point of having gone there.
+;
+; THE ONE OVERLAP cy_lanecap DOES NOT PREVENT is two claws in the SAME lane,
+; whose rects genuinely coincide and merge into one unreadable blob on a 1bpp
+; adapter. It is handled twice, because the two ways into it are different:
+; the hunt REFUSES to step onto the player (it holds beside him instead of
+; stepping on and being shoved off again next frame, which would be a redraw
+; every step), and the guard below runs EVERY frame because the player can
+; walk onto the droid and no step-time check would ever see that.
+; -----------------------------------------------------------------------------
+cy_droid_lane:
+    cmp word [cy_pw_droid], 0
+    je .out                         ; no droid, no lane to keep
+    push ax
+    cmp word [cy_ddir], 0           ; ddir out of a zeroed bss is a droid that
+    jne .dir                        ; never moves and then parks on top of us,
+    mov word [cy_ddir], 1           ; so it is healed HERE rather than trusted
+.dir:                               ; to whichever path armed the droid
+    cmp byte [cy_dstep], 0
+    je .step
+    dec byte [cy_dstep]
+    jmp short .guard
+.step:
+    mov byte [cy_dstep], CY_DRSTEP
+    call cy_droid_seek              ; CF=1: nothing alive, so hold
+    jc .guard
+    or ax, ax                       ; 0: already on the nearest one's lane
+    jz .guard
+    mov [cy_ddir], ax
+    mov ax, [cy_dlane]
+    add ax, [cy_ddir]
+    call cy_wrap                    ; cy_wrap, not cy_wrapd: the hunt cannot
+                                    ; ask to leave an open web - every target
+                                    ; lane is on it - so there is nothing to
+                                    ; bounce off, and cy_wrapd has a SIDE
+                                    ; EFFECT (it flips cy_ddir) that must not
+                                    ; fire on a step that may not be taken
+    cmp ax, [cy_plane]
+    je .guard                       ; never step ONTO the player
+    mov [cy_dlane], ax
+.guard:
+    mov ax, [cy_dlane]              ; ...and if HE walked onto US, get off
+    cmp ax, [cy_plane]
+    jne .done
+    call cy_droid_step
+.done:
+    pop ax
+.out:
+    ret
+
+; cy_droid_seek - which way is the nearest thing worth shooting?
+; out: CF=1 nothing alive anywhere. CF=0 and AX = -1, 0 or +1 - the single step
+;      that closes on the nearest live enemy, 0 when we are on its lane already.
+; Preserves BX, CX, DX and SI.
+cy_droid_seek:
+    push bx
+    push cx
+    push dx
+    push si
+    mov cx, 0x7FFF                  ; the nearest distance found so far
+    xor dx, dx                      ; ...and the way to it
+    xor si, si
+.each:
+    cmp si, CY_MAXENEM
+    jae .done
+    cmp byte [cy_e_kind + si], 0xFE ; 0FFh free, 0FEh dead-but-still-drawn:
+    jae .next                       ; neither is worth a shot
+    mov al, [cy_e_lane + si]
+    mov ah, 0
+    sub ax, [cy_dlane]
+    call cy_shortway                ; the delta, by the shorter way round
+    mov bx, ax
+    or bx, bx
+    jns .abs
+    neg bx
+.abs:
+    cmp bx, cx
+    jae .next                       ; no nearer than what we have
+    mov cx, bx
+    xor dx, dx                      ; a new nearest, and the way to it - `mov`
+    or ax, ax                       ; leaves the flags of this `or` alone, so
+    jz .next                        ; the two below still read it
+    mov dx, 1
+    jns .next
+    mov dx, -1
+.next:
+    inc si
+    jmp short .each
+.done:
+    cmp cx, 0x7FFF
+    je .none
+    mov ax, dx
+    clc
+    jmp short .out
+.none:
+    stc
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; cy_shortway - AX is a lane delta; fold it to the SHORTER way round a CLOSED
+; web, so a droid at lane 0 with a target at lane 15 of 16 goes DOWN one rather
+; than up fifteen. An open web has no way round, so it is left alone.
+cy_shortway:
+    cmp word [cy_closed], 0
+    je .out
+    push bx
+    push cx
+    mov bx, [cy_nlane]
+    mov cx, bx
+    shr cx, 1
+    cmp ax, cx
+    jle .lo
+    sub ax, bx
+    jmp short .fin
+.lo:
+    neg cx
+    cmp ax, cx
+    jge .fin
+    add ax, bx
+.fin:
+    pop cx
+    pop bx
+.out:
+    ret
+
+; cy_droid_step - one lane along cy_ddir, wrapping or bouncing. Preserves all.
+; Only the same-lane guard uses this now: the hunt does its own step, because
+; it must be able to decline one.
+cy_droid_step:
+    push ax
+    mov ax, [cy_dlane]
+    add ax, [cy_ddir]
+    call cy_wrapd
+    mov [cy_dlane], ax
+    pop ax
+    ret
+
+; cy_wrapd - cy_wrap for the guard's step: on an OPEN web it BOUNCES rather
+; than clamping, because a clamp leaves the droid on the player's lane - which
+; is the one thing the guard exists to prevent - instead of moving it off.
+; in: AX = the lane wanted. out: AX = the lane it may have.
+cy_wrapd:
+    cmp word [cy_closed], 0
+    je .ends
+    jmp cy_wrap                     ; near, and cy_wrap is thousands of bytes
+.ends:                              ; away: a short jcc cannot reach it
+    or ax, ax
+    js .rev
+    cmp ax, [cy_nlane]
+    jb .ok
+.rev:
+    neg word [cy_ddir]              ; turn round, and step the other way from
+    mov ax, [cy_dlane]              ; where we ACTUALLY are rather than from
+    add ax, [cy_ddir]               ; the lane that fell off the end
+    jmp cy_wrap
+.ok:
+    ret
+
+; the AI droid: an autonomous second gun on cy_dlane, firing on its own
 cy_droid_tick:
     push ax
     push si
@@ -5633,9 +5928,7 @@ cy_droid_tick:
 .live:
     test word [cy_frame], 7
     jnz .out
-    mov ax, [cy_plane]
-    add ax, 2
-    call cy_wrap
+    mov ax, [cy_dlane]              ; wherever cy_droid_lane put it
     push ax
     xor si, si
 .find:
@@ -6022,8 +6315,9 @@ cy_play_render:
     jmp .uloop                      ; NOT `jmp short`: the hole above put the
                                     ; loop body past 127 bytes
 
-    ; --- the player's claw -------------------------------------------------
+    ; --- the claws, the droid's first so ours is the one drawn over ---------
 .pl:
+    call cy_droid_draw
     call cy_player_draw
     call cy_debris_render
     call cy_spk_repair
@@ -6073,7 +6367,65 @@ cy_player_draw:
     call cy_obj_show
     jc .out                         ; it did not move: the notch is still there
 
-    mov al, CY_C_BG                 ; the notch, inside the rect just written
+    call cy_claw_notch              ; ...and the notch, DI still being ours
+.out:
+    ret
+.hide:
+    mov ax, CY_OB_PL
+    call cy_obj_ptr
+    call cy_obj_hide
+    ret
+
+; --- cy_droid_draw ------------------------------------------------------------
+; A SMALLER US (SPEC.md 67.9.3). The same bounding-rect-then-notch construction
+; as the claw, for the same reason - every pixel of the rect written on every
+; draw is what keeps cy_rsub exact - and in the same pen, because the point of
+; the shape is that it reads as one of ours rather than as a sixth enemy. On a
+; 1bpp adapter the pen is gone anyway and the SCALE is the whole signal, which
+; is legible here only because both claws sit on the rim ring together.
+;
+; Drawn BEFORE the player, so on the one frame a guard has not yet separated
+; them the claw is the one left whole.
+; -----------------------------------------------------------------------------
+cy_droid_draw:
+    ; Preserves nothing: it is on the drawing spine (SPEC.md 67.5.5).
+    cmp word [cy_pw_droid], 0
+    je .hide                        ; the powerup ran out
+    cmp byte [cy_state], CYS_OVER
+    je .hide
+    cmp byte [cy_state], CYS_DIE
+    je .hide
+
+    mov ax, [cy_dlane]
+    mov ah, CY_TOPD
+    mov bx, CY_DROIDEXT
+    call cy_setrect
+
+    mov ax, CY_OB_DR
+    call cy_obj_ptr
+    mov al, CY_C_PLAYER
+    call cy_obj_show
+    jc .out                         ; it did not move: the notch is still there
+    call cy_claw_notch
+.out:
+    ret
+.hide:
+    mov ax, CY_OB_DR
+    call cy_obj_ptr
+    call cy_obj_hide
+    ret
+
+; cy_claw_notch - cut the notch inside the rect still in cy_snl..cy_snb and
+; report the erase. BOTH claws are this shape (67.9.3), and the insets are
+; absolute rather than proportional, so the smaller one simply has a smaller
+; hole and the walls stay 2px on each.
+;
+; DI MUST STILL BE THE DRAWING CLAW'S OWN BLOCK: the notch is an erase like any
+; other and goes through cy_obj_dmg, which skips DI - that is what stops it
+; recursing into the object that just cut it. cy_obj_show preserves DI, so the
+; caller has it still. Preserves nothing: it is on the drawing spine (67.5.5).
+cy_claw_notch:
+    mov al, CY_C_BG
     call cy_setcol
     mov ax, [cy_snl]
     add ax, 2
@@ -6087,9 +6439,9 @@ cy_player_draw:
     cmp bx, dx
     jg .out
     call cy_fillc
-    mov ax, [cy_snl]                ; the notch is an erase like any other -
-    add ax, 2                       ; and DI is still the claw's own block, so
-    mov [cy_sol], ax                ; cy_obj_dmg skips it and cannot recurse
+    mov ax, [cy_snl]
+    add ax, 2
+    mov [cy_sol], ax
     mov ax, [cy_snt]
     mov [cy_sot], ax
     mov ax, [cy_snr]
@@ -6100,11 +6452,6 @@ cy_player_draw:
     mov [cy_sob], ax
     call cy_obj_dmg
 .out:
-    ret
-.hide:
-    mov ax, CY_OB_PL
-    call cy_obj_ptr
-    call cy_obj_hide
     ret
 
 ; cy_sgn3 - AX = 3 with the sign of AX (0 stays 0). The jump's offset.
@@ -7947,6 +8294,14 @@ cy_ekcol:
     ; --- game state -------------------------------------------------------
     CWORD cy_frame
     CWORD cy_nfull                  ; whole repaints (diagnostic)
+%ifdef CYPROF
+    CWORD cy_pf_fill                ; gfx_fill CALLS this session (make CYPROF=1)
+    CWORD cy_pf_dmg                 ; cy_obj_dmg scans (each walks CY_NOBJ)
+    CWORD cy_pf_put                 ; cy_obj_put repairs those scans caused
+    CWORD cy_pf_lstep               ; the web walker - NOT counted by cy_fillx
+    CWORD cy_pf_frame               ; gfx_frame calls
+    CWORD cy_pf_font                ; font_run calls (the HUD)
+%endif
 %ifdef CYTRACE
 CY_TBUF equ 6
 CY_TWORDS equ 14
@@ -8005,6 +8360,9 @@ CY_TWORDS equ 14
 
     ; --- the player -------------------------------------------------------
     CWORD cy_plane                  ; the lane the claw is on
+    CWORD cy_dlane                  ; ...and the lane the AI droid is on
+    CWORD cy_ddir                   ; the way it last stepped: +1 or -1
+    CBYTE cy_dstep                  ; frames left before it hunts again
     CWORD cy_pjump
     CWORD cy_dir
     CWORD cy_accel

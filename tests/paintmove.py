@@ -114,6 +114,14 @@ def main():
     a = ap.parse_args()
     S = os88sym.linear
 
+    # THE DOCSTRING'S RECIPE, RUN rather than transcribed. build/heapfrag360.img
+    # carries PAINT.O88 and is NOT in `all`, so a plain `make` leaves it holding
+    # whatever paint.o88 existed the last time somebody typed its target - and
+    # the symbols below come from the SOURCE. The offsets then miss by a few
+    # bytes and [pt_base] reads as garbage, which looks exactly like the heap
+    # corruption this row exists to catch. Make is the dependency graph; ask it.
+    subprocess.run(["make", "build/heapfrag360.img"], check=True,
+                   capture_output=True)
     with os88marty.launch("build/os8088-360.img", apps="build/heapfrag360.img",
                           machine=a.machine, boot=False) as m:
         m.run()

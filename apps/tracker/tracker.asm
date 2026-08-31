@@ -308,6 +308,11 @@ trk_entry:
                                     ; It preserves FLAGS too, so the loader's
     mov si, trk_about               ; CF still survives to .out
     call OSAPI_ABOUT_SET
+    mov ax, trk_onwake              ; SPEC.md 54.10: the kernel calls this once
+    call OSAPI_WM_ONWAKE            ; our window is on the glass, and the launch
+                                    ; module loads in front of it. BX is still
+                                    ; the window and the slot preserves the
+                                    ; flags the loader's CF rides in
     call trk_arg                    ; were we launched to play a module?
 .out:
     pop di
@@ -325,7 +330,9 @@ trk_entry:
 ;
 ; It RECORDS and does not load: trk_fdone shows a message, frees and reclaims
 ; the module grant and repaints, all of which want the gfx lock HELD, and an
-; entry proc holds none (SPEC.md 20.2). The first W_PAINT spends it.
+; entry proc holds none (SPEC.md 20.2). trk_onwake spends it - the first
+; W_PAINT did until SPEC.md 54.10, and that paint is inside wm_show's repaint,
+; so the read still happened before the desktop had finished being drawn.
 ; -----------------------------------------------------------------------------
 trk_arg:
     pushf
@@ -367,8 +374,28 @@ trk_arg:
     ret
 
 ; -----------------------------------------------------------------------------
-; trk_argload - spend it, from the first paint (SPEC.md 54.5)
-; in:  the gfx lock HELD, the window visible
+; trk_onwake - W_ONWAKE: play the module we were launched on (SPEC.md 54.10)
+; in:  SI = our window; the UI task, gfx lock NOT held
+; out: nothing; no register need be preserved
+;
+; The kernel calls this once assoc_run has shown our window, so the read
+; happens in front of a Tracker the user can see and SPEC.md 12.8's widget
+; steps through it. It takes the lock for the burst SPEC.md 74.1 lets it state:
+; trk_fdone is the file dialog's own completion proc and it claims, reads,
+; reclaims the grant and repaints, all of which want the lock held.
+; -----------------------------------------------------------------------------
+trk_onwake:
+    cmp byte [trk_argp], 0          ; not the module's wake, or the module is
+    je .out                         ; already playing
+    call OSAPI_GFX_LOCK
+    call trk_argload
+    call OSAPI_GFX_UNLOCK
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; trk_argload - spend it, from trk_onwake (SPEC.md 54.10)
+; in:  the gfx lock HELD, the window visible AND DRAWN
 ; out: nothing; preserves all registers
 ;
 ; It hands the name to trk_fdone, the dialog's own completion proc, which
@@ -418,10 +445,13 @@ trk_paint:
     push dx
     push si
     push di
-    cmp byte [trk_argp], 0          ; a module handed to us at launch
-    je .noarg                       ; (SPEC.md 54.5): here the gfx lock is
-    call trk_argload                ; held and the window is placed, which
-.noarg:                             ; the entry proc could promise neither
+                                    ; NO trk_argload HERE. The first paint
+                                    ; used to spend it, and the first paint is
+                                    ; INSIDE wm_show's repaint - so the module
+                                    ; was read with the desktop half redrawn and
+                                    ; this window's own content still blank.
+                                    ; trk_onwake spends it after that whole pass
+                                    ; has finished (SPEC.md 54.10)
     call trk_reap                   ; F00/watchdog leftovers close on any UI
                                     ; event (SPEC.md 45.2)
     cmp byte [tui_inited], 0

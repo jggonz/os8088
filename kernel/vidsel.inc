@@ -586,6 +586,26 @@ ovl_spl_msg_boot:               ; 'Starting os8088'
     pop si
     retf
 
+; ...and the two kmain reaches, for the phases that are NOT disk and are the
+; longest things on a hard-disk boot's bar (SPEC.md 15.6.4). Each is composed
+; AFTER the notch that precedes it, never before: spl_mdraw refuses while
+; [spl_live] is 0 and spl_mline is the record of what is on the glass, so a
+; line composed before the screen exists is composed, never drawn, and never
+; redrawn.
+ovl_spl_msg_mouse:              ; 'Looking for Mouse' - SPEC.md 9.4.1's
+    push si                     ; identify window: 596 ms with a mouse on the
+    mov si, spl_s_mouse         ; other end and 1,208 ms without, measured at
+    call spl_msg_cs             ; 1.23 s on the hard-disk boot this names
+    pop si
+    retf
+
+ovl_spl_msg_fdd:                ; 'Looking for Drives' - SPEC.md 18.97's TRACK
+    push si                     ; 0 question, FDD_MOTORW + FDD_SEEKW = 32 ticks
+    mov si, spl_s_fdd           ; whenever the answer is heading for absent,
+    call spl_msg_cs             ; measured at 1.80 s against 1,758 ms predicted
+    pop si
+    retf
+
 ovl_spl_msg_drv:                ; AL = ordinal, AH = total, DS:SI = DRVR_TITLE
     call spl_msg_drv
     retf
@@ -753,6 +773,10 @@ spl_mdraw:
     push dx
     push si
     push es
+    inc byte [spl_busy]         ; SPEC.md 15.3.8.3's lock: font_run programs the
+                                ; write mode and the Map Mask, and an animation
+                                ; frame arriving from IRQ0 in the middle of that
+                                ; draws its box through somebody else's state
     call spl_mgeom              ; CX = x, DX = y
     mov ax, cs                  ; the line lives in THIS section, and
     mov es, ax                  ; font_run_x is the ES:SI entry
@@ -762,6 +786,7 @@ spl_mdraw:
                                 ; which is the loading screen on all three
                                 ; adapters whatever the theme says about a
                                 ; desktop that has not been drawn yet
+    dec byte [spl_busy]
     pop es
     pop si
     pop dx
@@ -787,21 +812,34 @@ spl_mgeom:
     and cl, 0xF8                ; ...floored to a cell, or the mono adapters
                                 ; lose font_run's single-store path (SPEC.md
                                 ; 6.1) for a line 32 cells wide
-    cmp byte [vid_mono], 0
-    je .vga
-    mov dx, [vid_ch]            ; mono: the bar is centred at ch/2 and is
-    shr dx, 1                   ; SPL_BAR_H tall, so this clears it by 8
-    add dx, 16
-    ret
-.vga:
-    mov dx, SPL_MSG_Y           ; VGA: inside the dialog, between the trough
-    ret                         ; and the percentage
+    mov dx, [cs:spl_l_msg]      ; ...and the ROW that splash.inc banked when it
+    ret                         ; laid the screen out (SPEC.md 15.3.5.1). Both
+                                ; halves of the blob are one segment, so this
+                                ; is a `cs:` away - and it is a BACKWARD
+                                ; reference, splash.inc being %included above
+                                ; this file, which is why the CELL COUNT below
+                                ; is still a second copy with an assertion on
+                                ; it and this is not
 
 spl_s_drv:  db 'Loading Driver ', 0
 spl_s_cfg:  db 'Loading SYSTEM.CFG', 0
+spl_s_mouse: db 'Looking for Mouse', 0      ; 17 and 18 cells - both inside
+spl_s_fdd:  db 'Looking for Drives', 0      ; SPL_MSG_CELLS, so neither is
+                                            ; truncated by spl_mput's bound
 spl_s_boot: db 'Starting os8088', 0
 
 spl_mdirty: db 0                ; ...and the line itself. Both `cs:`, both in
+; ...and the two constants splash.inc had to carry a second copy of, because
+; `.boot2` is %included ABOVE this file and stage 2 draws into the same field
+; (SPEC.md 15.6.5). Asserted rather than commented: a geometry that must agree
+; and is written twice is what a build check is for.
+%if SPL_KCELLS != SPL_MSG_CELLS
+%error "splash.inc's SPL_KCELLS and vidsel.inc's SPL_MSG_CELLS have parted"
+%endif
+%if SPL_KY != SPL_MSG_Y
+%error "splash.inc's SPL_KY and vidsel.inc's SPL_MSG_Y have parted"
+%endif
+
 spl_mline:  times SPL_MSG_CELLS + 1 db 0   ; the overlay, both gone with it.
                                 ; The trailing NUL is never written by anything
                                 ; and is what terminates the run

@@ -84,6 +84,11 @@ DSK_R_SIZE   equ 28              ; file size, dword
 ; dsk_read_chain's run coalescer, dskw_flush - is untouched by capacity, and
 ; a volume is capped at 65,535 sectors (31.99MB) by BPB rule 8, which is also
 ; the DOS 3.3 partition limit these machines ran.
+%if MEM_P_FATW_N != 8
+  %error "MEM_P_FATW_N and DVOL_MAX have parted (SPEC.md 18.8.4) - the purge \
+protocol would name a shorter array than dsk_fatwc actually is, and a volume \
+above the end would keep a claim mem_shed_one has already given away"
+%endif
 DVOL_MAX     equ 8               ; the FLOPPIES the machine has, and one per
                                  ; PARTITION a disk driver can mount: four
                                  ; primaries is the whole of what a partition
@@ -3809,11 +3814,12 @@ dsk_fatw_pick:
     mov word [dsk_fatseg], FAT_SEG
     mov bl, [disk_drive]
     call dsk_fatw_slot
-    jc .load
-    mov ax, [bx+DVOL_MAX*2]     ; the claim; the saved sector is at [bx]
-    or ax, ax
-    jz .load                    ; no claim: the shared window, as before
-    mov [dsk_fatseg], ax
+    jc .homeless
+    mov ax, [bx+DVOL_MAX*2]     ; the claim, or FAT_SEG for the pin; the saved
+    or ax, ax                   ; sector is at [bx]
+    jz .homeless                ; no home at all - dsk_fatw_want makes this
+    mov [dsk_fatseg], ax        ; unreachable, and .homeless is why that is
+                                ; safe to rely on rather than to assert
     cmp byte [dsk_quiet], 0
     je .load
     cmp word [bx], 0xFFFF
@@ -3829,6 +3835,15 @@ dsk_fatw_pick:
     pop ax
     clc
     ret
+.homeless:                      ; ABOUT TO WRITE THE KERNEL'S OWN WINDOW
+    call dsk_fatw_evict         ; WITHOUT HOLDING THE PIN (SPEC.md 18.8.3), so
+                                ; nobody may go on believing they hold it: the
+                                ; holder's dsk_fatww would still say "sector N
+                                ; resident" and its next quiet mount would
+                                ; reuse another disk's FAT. dsk_fatw_want does
+                                ; not let this happen; the invariant is
+                                ; enforced here as well because THIS is the
+                                ; routine that would do the damage
 .load:
     pop bx
     pop ax
@@ -3896,33 +3911,182 @@ dsk_bpb_sig:
 ; machine that frees the heap later gets its window - one mem_avail walk
 ; (~1,000 cycles) against a floppy mount measured in seconds.
 ; -----------------------------------------------------------------------------
-DSK_FATW_MINK equ 128            ; free heap KB below which a floppy shares
+; **THE KERNEL'S OWN WINDOW IS TRIED FIRST AND HAS NO GATE** (SPEC.md 18.8.3).
+; FAT_SEG is 4,608 bytes reserved on every machine whether anything uses them
+; or not, so a volume that takes them spends nothing - where the same 4,608
+; bytes bought out of the arena are a real claim. Only when it is already
+; pinned does the gate below get asked, and only when the heap refuses as well
+; does this volume EVICT the pin and take it - which is exactly what used to
+; happen to those bytes when a claim was refused, except that the holder is
+; now told.
+;
+; THERE IS NO THIRD STATE. This routine returns with the mounting volume
+; holding a claim or holding the pin, never neither, and dsk_fatw_pick relies
+; on it: a homeless volume would be pointed at FAT_SEG and mounted into it
+; WITHOUT demoting whoever thinks they hold it, and 18.8.2's signature cannot
+; catch that - two os8088-built floppies of one geometry have byte-identical
+; boot sectors by construction.
+%ifdef FATW_GATE
+DSK_FATW_MINK equ FATW_GATE      ; ...moved by the knob, for the tests that
+%else                            ; have to reach the steal (SPEC.md 18.8.3)
+DSK_FATW_MINK equ ((DSK_FAT_SECS*512 + 1023) / 1024) * 2   ; ...and it is
+                                ; TWICE THE CLAIM now, not 128KB (SPEC.md
+                                ; 18.8.4). What the big number was defending is
+                                ; defended by the tag instead: the window is a
+                                ; cache, so a machine that needs the room back
+                                ; TAKES it. What is left of the gate is the
+                                ; part that was always right - mem_avail_lvl's
+                                ; bottom rank, so a window is still only taken
+                                ; out of memory that is free without shedding
+                                ; anybody for it
+%endif
 
 dsk_fatw_want:
     push ax
     push bx
     push cx
     push dx
-    mov bl, [disk_drive]
-    cmp bl, 2                   ; volumes 0 and 1 are the BIOS floppies; a
-    jae .out                    ; driver volume claims at osapi_vol_add
-    call dsk_fatw_slot
-    jc .out
-    cmp word [bx+DVOL_MAX*2], 0
-    jne .out                    ; it already has one
-    mov al, MEM_PG_MIN          ; ...at the BOTTOM rank (SPEC.md 50.6.4): the
-    call mem_avail_lvl_x          ; FAT window is a comfort, so "free" here has
-    cmp bx, DSK_FATW_MINK       ; to mean free without taking a cache off
-                                ; anybody - nothing is below MEM_PG_MIN, so
-                                ; nothing counts. AX = largest run KB, BX =
-                                ; TOTAL free KB, and BX is why the slot is
-                                ; read above first
-    jb .out
+    mov bl, [disk_drive]        ; EVERY volume, not just the two floppies:
+    call dsk_fatw_slot          ; the driver volumes' claim at osapi_vol_add
+    jc .out                     ; is their only one, so a refusal there used
+    cmp word [bx+DVOL_MAX*2], 0 ; to be PERMANENT where a floppy retried
+    jne .out                    ; every mount (SPEC.md 18.8.3)
+    call dsk_fatw_pinned        ; the kernel's own window is free? Take it -
+    jc .pin                     ; it is already paid for, so there is no gate
+    push bx                     ; mem_avail_lvl ANSWERS in BX, so the slot
+    mov al, MEM_PG_MED          ; goes on the stack rather than being read
+    call mem_avail_lvl_x          ; twice. ...AT OUR OWN RANK (SPEC.md 50.6.4),
+    cmp bx, DSK_FATW_MINK       ; which is dsk_rah_want's rule and now ours: a
+    pop bx                      ; CHEAPER cache counts as free and a dearer one
+    jb .evict                   ; does not. So a FAT window may have the window
+                                ; raise caches - one window redrawing when it
+                                ; is raised, which is what every window did
+                                ; before 11.96 - and MEM_P_DIRW at HIGH may
+                                ; quietly have this. It asked at MEM_PG_MIN for
+                                ; one commit, which counted NOTHING as free and
+                                ; made the window more timid than its own rank
+                                ; entitles it to be. AX = largest run KB, BX =
+                                ; TOTAL free KB, and pop leaves the cmp's flags
     mov al, [disk_drive]
     call dsk_fatw_claim         ; a refusal is a normal path (SPEC.md 50) and
-.out:                           ; leaves this volume sharing, as before
+    cmp word [bx+DVOL_MAX*2], 0 ; falls through to the pin below. BX survives:
+    jne .out                    ; claim preserves it, and so does evict
+.evict:                         ; the heap said no: TAKE THE PIN (18.8.3). The
+    call dsk_fatw_evict         ; victim is never the volume being mounted -
+.pin:                           ; that one has a home and never reaches here -
+                                ; and never dirty, because dsk_fatw_park
+                                ; flushes the outgoing volume at the top of
+                                ; every mount
+    mov word [bx+DVOL_MAX*2], FAT_SEG
+    mov word [bx], 0xFFFF       ; nothing of OURS is in it yet, whatever the
+.out:                           ; bytes hold
     pop dx
     pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_fatw_pinned / dsk_fatw_evict - the kernel's own window (SPEC.md 18.8.3)
+;
+; pinned: out CF=0 = some volume holds FAT_SEG, CF=1 = it is free
+; evict:  out nothing (every register preserved, flags clobbered) - the holder
+;         is demoted to homeless, which is where every volume stood before
+;         18.8.1, and both its words go: a cleared dsk_fatwc with a live
+;         dsk_fatww behind it is the zombie window dsk_fatw_park describes
+;
+; BY VALUE and not by a second index word, for dsk_fatw_reloc's reason: two
+; words naming one fact is how a window ends up reading the right bytes from
+; the wrong place. dsk_fatwc[v] IS the record, and FAT_SEG in it means the pin.
+; Neither routine can collide with a heap base - the arena starts above
+; LOW_SEG, which is above FAT_SEG - which is the same fact that lets
+; dsk_fatw_reloc scan the array without a guard.
+;
+; evict re-scans rather than taking a pointer from pinned, so no register has
+; to survive the mem_claim in between; that call can COMPACT, and reasoning
+; about which pointers a compaction leaves alone is the kind of argument this
+; file should not have to make twice.
+; -----------------------------------------------------------------------------
+dsk_fatw_pinned:
+    push cx
+    push si
+    mov si, dsk_fatwc
+    mov cx, DVOL_MAX
+.scan:
+    cmp word [si], FAT_SEG
+    je .out                     ; equal leaves CF=0, which IS the answer; the
+    inc si                      ; pops below do not touch flags
+    inc si
+    loop .scan
+    stc
+.out:
+    pop si
+    pop cx
+    ret
+
+dsk_fatw_evict:
+    push cx
+    push si
+    mov si, dsk_fatwc
+    mov cx, DVOL_MAX
+.scan:
+    cmp word [si], FAT_SEG
+    jne .next
+    mov word [si], 0                    ; homeless: no claim, and...
+    mov word [si-DVOL_MAX*2], 0xFFFF    ; ...nothing of theirs resident
+.next:
+    inc si
+    inc si
+    loop .scan
+    pop si
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_fatw_demote - this volume's FAT window is being SHED (SPEC.md 18.8.4)
+; in:  BX = the owner word, MEM_P_FATW + the volume
+; out: nothing (all registers preserved)
+;
+; mem_pg_forget hands the owner here instead of zeroing dsk_fatwc[v], because
+; the purge protocol carries ONE naming word and the LIVE window has three.
+; Clearing the record is still this routine's job - it just does the other two
+; as well.
+;
+; A BANKED window stops at the clear: nothing else names it, and 18.8.3's
+; dsk_fatw_want gives that volume a home again at its next mount - the pin if
+; it is free, a fresh claim if the heap will fund one, the pin taken from its
+; holder otherwise.
+;
+; THE LIVE ONE HANDS THE VOLUME THE PIN ON ITS WAY OUT. The bytes are lost
+; either way, which is what a cache is; the HOME must not be, or 18.8.3's
+; "there is no third state" ends right here - dsk_fatw_pick would point this
+; volume at FAT_SEG and mount into it WITHOUT demoting whoever holds the pin,
+; and 18.8.2's signature cannot catch that between two os8088-built floppies.
+; [dsk_fatw0] going to 0xFFFF is the other half: dsk_fat_window would otherwise
+; find the sector it wants already resident and return without loading it.
+;
+; It runs inside mem_shed_one's cli, so it is word stores and nothing else - no
+; I/O, no claim, no flush. mem_fatw_dirty is what makes that safe: a window
+; with FAT edits still in it never reaches here.
+; -----------------------------------------------------------------------------
+dsk_fatw_demote:
+    push ax
+    push bx
+    mov ax, bx
+    sub ax, MEM_P_FATW          ; AX = the volume this owner names
+    mov bl, al
+    call dsk_fatw_slot
+    jc .out
+    mov ax, [bx+DVOL_MAX*2]     ; the claim that is going...
+    mov word [bx+DVOL_MAX*2], 0 ; ...and mem_pg_forget's own store, done here
+    mov word [bx], 0xFFFF       ; because it does not make the other two
+    cmp ax, [dsk_fatseg]
+    jne .out                    ; BANKED: no other word ever named it
+    call dsk_fatw_evict         ; LIVE: take the pin off whoever holds it -
+    mov word [bx+DVOL_MAX*2], FAT_SEG   ; which is never this volume, its
+    mov word [dsk_fatseg], FAT_SEG      ; record having just been cleared -
+    mov word [dsk_fatw0], 0xFFFF        ; and move in
+.out:
     pop bx
     pop ax
     ret
@@ -3970,20 +4134,33 @@ dsk_fatw_claim:
     mov word [bx], 0xFFFF       ; nothing resident in it yet
     add bx, DVOL_MAX*2
     push bx
+%ifdef FATW_NONE
+    stc                         ; the knob: every heap window refused, so the
+    jmp short .none             ; whole machine runs on the pin and the
+%endif                          ; ping-pong is what a test sees (18.8.3)
+    mov bx, MEM_P_FATW          ; ONE OWNER PER VOLUME (SPEC.md 18.8.4): the
+    add bl, al                  ; range's base plus the index, which is what
+                                ; makes dsk_fatwc the array mem_pg_own names.
+                                ; BEFORE THE SIZE GOES INTO AX, which is where
+                                ; the volume still is - written the other way
+                                ; round it tagged every window with the CLAIM'S
+                                ; KB instead, and 5 KB is a legal volume index:
+                                ; volume 1 carried owner FC25, so a shed would
+                                ; have zeroed volume 5's record and left B:
+                                ; naming freed memory (tests/fatwpin.py)
     mov ax, (DSK_FAT_SECS*512 + 1023) / 1024
-    mov bx, MEM_K_FATW
     call mem_claim_x              ; out: DX = the segment; CF=1 = refused
-    jc .none                    ; BX is still the TAG here, which is what
-                                ; mem_movable wants beside DX (SPEC.md 66.2)
-    mov ax, dsk_fatw_reloc      ; ...AND IT MOVES (SPEC.md 66.5.6). This is the
-    call mem_movable_x          ; FIRST bottom-up claim of the whole boot - it
-                                ; lands on [mem_base] itself at the A: mount,
-                                ; before any driver - so anything the kernel
-                                ; ever wants to hand back from the arena's
-                                ; floor is walled in behind it while it is
-                                ; pinned. Nothing about the window needs it to
-                                ; be: the bytes travel with the block and its
-                                ; only readers are software.
+    jc .none
+                                ; NOT mem_movable. mem_can_move refuses a
+                                ; purgeable cache outright (SPEC.md 50.6.1), so
+                                ; a relocation proc here was dead code the
+                                ; moment the tag changed - and 66.5.6's reason
+                                ; for wanting one is spent twice over: the
+                                ; compactor's mem_cp_drop dissolves a cache
+                                ; instead of moving it, and since 18.8.3 the
+                                ; boot volume takes the PIN rather than a
+                                ; claim, so there is no first bottom-up claim
+                                ; of the boot to wall the arena's floor in
     pop bx
     mov [bx], dx
     jmp short .out
@@ -3997,47 +4174,63 @@ dsk_fatw_claim:
     pop ax
     ret
 
+; dsk_fatw_reloc lived here: MEM_K_FATW's relocation proc, deleted with the tag
+; (SPEC.md 18.8.4). mem_can_move refuses a purgeable cache outright, so a
+; relocation proc for a FAT window can never be reached - and 66.5.6's reason
+; for having one is spent twice over: the compactor's mem_cp_drop dissolves a
+; cache instead of moving it, and since 18.8.3 the boot volume takes the pin
+; rather than a claim, so there is no first bottom-up claim of the boot walling
+; in the arena's floor. What it knew that this file must not forget is that the
+; live window has a SECOND naming word, [dsk_fatseg]; dsk_fatw_demote below is
+; where that now lives.
+section .text                   ; ...and dsk_dseg_reloc below still needs it:
+                                ; mem_reloc_call reaches a kernel proc through
+                                ; cw_mem_disp - `call bp` with CS = KERNEL_SEG
+                                ; - so BP has to be a .text offset. An INDIRECT
+                                ; transfer is the one class os88ovlchk cannot
+                                ; see, so nothing would have failed
 ; -----------------------------------------------------------------------------
-; dsk_fatw_reloc - MEM_K_FATW's relocation proc (SPEC.md 66.2, 66.5.6)
+; dsk_dseg_reloc - the KERNEL's half of a DONATED claim's move (SPEC.md 66.5.10.2)
 ; in:  BX = the base it WAS at, DX = the base it is at now; DS = KERNEL_SEG
 ; out: nothing (every register preserved)
 ;
-; TWO NAMING WORDS, which is exactly why 66.2 takes a proc and not the address
-; of one: dsk_fatwc[vol] is where the claim is RECORDED and [dsk_fatseg] is
-; where the FAT is READ FROM, and the second equals the first only while that
-; volume is the one mounted. Poking either alone leaves a window that reads the
-; right bytes from the wrong place at the next switch - which is a FAT read
-; that succeeds and returns somebody else's sectors.
+; NOT A RELOCATION PROC: no claim names this in MC_RLOC, and it is not reached
+; through cw_mem_disp because some record asked for it. mem_reloc_call calls it
+; for EVERY move, before the owner's own proc, because the kernel is a holder
+; of claims it does not own - which is what osapi_vol_add's DX means (18.7).
 ;
-; The scan is by VALUE and not by the mounted volume's index, because a
-; compaction can fire while a different volume is current and the block being
-; moved is then not the one [disk_drive] names.
-; IT IS `.text` AND THAT IS LOAD-BEARING. mem_reloc_call reaches a kernel proc
-; through cw_mem_disp - `call bp` - with CS = KERNEL_SEG, so BP has to be a
-; `.text` offset. Written here, in the middle of disk.inc's cold half, it
-; assembled into `.cold` and os88ovlchk said nothing: an INDIRECT transfer is
-; the one class that file cannot see ("call bx, jmp [table]"), so the compactor
-; would have jumped to a cold offset inside the kernel segment on the first
-; move. The section switch below is the whole fix and there is no gate for it.
-section .text
+; A DONATED claim has three naming words and the callback reaches one (66.5.10.1).
+; These are the other two: dsk_vtab's DV_SEG, where the donation is recorded,
+; and [dsk_dseg], where the listing is READ FROM - and the second equals the
+; first only while that volume is the one mounted. dsk_fatw_reloc's problem
+; exactly, one table along, and the scan is by VALUE for its reason: a
+; compaction can fire while a different volume is current.
+;
+; Every row, free ones included. A free row's DV_SEG is stale rather than
+; meaningless (6.1's clear leaves it alone), so writing the new base into one
+; costs a store and keeps the table honest; skipping it would need the kind
+; test, which is two more instructions to achieve nothing.
+;
+; .text, and 66.5.6.1 is why: cw_mem_disp is `call bp` with CS = KERNEL_SEG,
+; so BP has to be a .text offset. This sits above the section switch below for
+; that reason and not by accident.
 ; -----------------------------------------------------------------------------
-dsk_fatw_reloc:
+dsk_dseg_reloc:
     push ax
     push cx
     push si
-    mov si, dsk_fatwc
+    mov si, dsk_vtab
     mov cx, DVOL_MAX
 .scan:
-    cmp [si], bx
+    cmp [si+DV_SEG], bx
     jne .next
-    mov [si], dx
+    mov [si+DV_SEG], dx
 .next:
-    inc si
-    inc si
+    add si, DV_SIZE
     loop .scan
-    cmp [dsk_fatseg], bx        ; ...and the LIVE pointer, if this volume is
-    jne .out                    ; the one mounted
-    mov [dsk_fatseg], dx
+    cmp [dsk_dseg], bx          ; ...and the LIVE pointer, if the block being
+    jne .out                    ; moved is the mounted volume's
+    mov [dsk_dseg], dx
 .out:
     pop si
     pop cx
@@ -4063,7 +4256,17 @@ dsk_fatw_drop:
     mov word [dsk_fatseg], FAT_SEG
     mov word [dsk_fatw0], 0xFFFF
 .free:
-    mov bx, MEM_K_FATW
+    cmp dx, FAT_SEG             ; THE PIN IS NOT A CLAIM (SPEC.md 18.8.3) and
+    je .out                     ; there is no record to free. mem_free happens
+                                ; to refuse it anyway - it scans mem_tab for
+                                ; MC_SEG = DX and no record can hold a segment
+                                ; below HEAP_SEG - but that is a coupling to
+                                ; the ladder's layout, not a contract
+    mov bx, MEM_P_FATW          ; the owner is the range's base plus the
+    add bl, al                  ; volume (SPEC.md 18.8.4), and it has to be the
+                                ; SAME arithmetic the claim did - AL is
+                                ; untouched here, where in dsk_fatw_claim the
+                                ; size very nearly took it
     call mem_free_x               ; DX = the segment, BX = the owner word
 .out:
     pop dx
@@ -4152,8 +4355,19 @@ dsk_free_clus_x:
     cmp word [dsk_fatw0], 0     ; ...and the window actually sitting at 0
     jne .slow
     mov cx, [dsk_fatseg]
-    mov es, cx
-    mov bx, 3                   ; cluster 2 lives at byte 2 + 2/2
+    inc byte [sch_lock]         ; **THE WINDOW IS A CACHE NOW** (SPEC.md
+    mov es, cx                  ; 18.8.4), and ES is banked for the whole walk
+    mov bx, 3                   ; below. While it was MEM_K_FATW nothing could
+                                ; move or shed it and the bank was safe; a
+                                ; purgeable one is shed by any ordinary claim
+                                ; from any other task, and mem_fatw_dirty does
+                                ; not cover a COUNT - [dsk_fatd0] is 0xFFFF
+                                ; here. So the count would be read out of
+                                ; whatever took the paragraphs, and it is the
+                                ; free-space figure the file manager prints and
+                                ; FTPd answers with. dsk_xfer's own hold is the
+                                ; same lock and nests; there is no I/O in this
+                                ; loop, so the hold is arithmetic only
 .pair:
     mov ax, [es:bx]             ; b0 | b1<<8 - the even entry's 12 bits are
     mov dx, ax                  ; the bottom of it, the odd entry's low
@@ -4163,7 +4377,7 @@ dsk_free_clus_x:
 .odd:
     inc si
     cmp si, [dsk_maxclus]
-    ja .counted                 ; an odd cluster count ends on the even half
+    ja .c12                     ; an odd cluster count ends on the even half
     mov dl, [es:bx+2]           ; odd entry = (ax >> 12) | b2 << 4, and it is
     or dl, dl                   ; zero exactly when both halves are
     jnz .pnext
@@ -4175,6 +4389,8 @@ dsk_free_clus_x:
     add bx, 3
     cmp si, [dsk_maxclus]
     jbe .pair
+.c12:
+    dec byte [sch_lock]         ; ...and ES is nobody's again
     jmp short .counted
 
     ; --- FAT16: a plain word array, and NOT gated on residency - a hard-disk
@@ -4189,8 +4405,10 @@ dsk_free_clus_x:
     call dsk_fat_ofs_x            ; BX = offset in the window, and the sector
     jc .counted                 ; holding cluster SI is now resident
     mov cx, [dsk_fatseg]
-    mov es, cx
-    mov cx, si                  ; entries from here to the end of the sector
+    inc byte [sch_lock]         ; the same bank and the same reason, one FAT
+    mov es, cx                  ; SECTOR at a time - released below before the
+    mov cx, si                  ; next dsk_fat_ofs_x, which does disk I/O and
+                                ; must not run inside this hold
     and cx, 255
     sub cx, 256
     neg cx
@@ -4210,6 +4428,7 @@ dsk_free_clus_x:
     inc bx
     inc bx
     loop .word
+    dec byte [sch_lock]
     cmp si, [dsk_maxclus]
     jbe .f16
 .counted:
@@ -4472,7 +4691,20 @@ DSK_RAH_RUNS equ 14              ; ...and how many chunks are kept. Simulated
                                  ; a resumable FIND cursor would have bought
                                  ; (§18.95.2), at heap instead of an ABI
                                  ; change. §18.95.4
-DSK_RAH_KB   equ (DSK_RAH_SECS * 512 * DSK_RAH_RUNS) / 1024
+DSK_RAH_KB   equ (DSK_RAH_SECS * 512 * DSK_RAH_RUNS) / 1024   ; the CEILING's
+                                 ; size. The live width is [dsk_rah_runs],
+                                 ; solved for from the machine (SPEC.md
+                                 ; 18.95.5) - this is what n = 14 costs
+DSK_RAH_MIN  equ 4               ; ...and the FLOOR, in slots. Below this the
+                                 ; walk's own metadata - a directory sector,
+                                 ; the FAT window's loads - takes so much of
+                                 ; the cache that little is left for the file:
+                                 ; sysbench measures the EFFECTIVE width at 12
+                                 ; against a compiled 14, and that overhead
+                                 ; does not shrink with the cache. Four slots
+                                 ; is 18KB of claim behind a 36KB bar and 93%
+                                 ; of what the ceiling saves (18.95.4's own
+                                 ; simulation). tests/dirwsize.py is the row
 
 RAH_LBA equ 0                    ; one slot: the chunk's first LBA, how many
 RAH_N   equ 2                    ; sectors of it are here (0 = the slot says
@@ -4482,6 +4714,18 @@ RAH_REC equ 9
 %if RAH_REC != DSK_RAH_SECS
 %error "dsk_rah_have derives a slot's byte offset with ONE shift, which needs \
 the record stride and the chunk length to be the same number"
+%endif
+%if DSK_RAH_SECS * 512 != 4608
+%error "dsk_rah_want sizes the claim as (n*9+1)>>1 KB and solves the gate as \
+n = free/9, and BOTH assume a chunk is 4,608 bytes - ceil(n * 4.5KB) and \
+2 x n x 4.5KB. Change DSK_RAH_SECS and those two lines are silently wrong in \
+the direction that matters: a claim SHORTER than the width it was told to \
+hold, so dsk_rah_fill writes past the end of it (SPEC.md 18.95.5)"
+%endif
+%if DSK_RAH_MIN < 1 || DSK_RAH_MIN > DSK_RAH_RUNS
+%error "DSK_RAH_MIN is the floor in SLOTS and has to sit inside [1, \
+DSK_RAH_RUNS]: at 0 dsk_rah_want would claim nothing and then scan it, and \
+above the ceiling it can never be satisfied so the cache is dead code"
 %endif
 %if DSK_RAH_RUNS * DSK_RAH_SECS > 128
 %error "the WHOLE cache is addressed by one 16-bit offset from dsk_rah_seg \
@@ -4494,6 +4738,12 @@ section .text                   ; DATA, so back to the kernel segment
                                 ; (SPEC.md 2.6 rule 1)
 
 
+dsk_rah_runs: dw 0               ; how many slots the LIVE claim has (SPEC.md
+                                 ; 18.95.5), <= DSK_RAH_RUNS. Meaningful only
+                                 ; while dsk_rah_seg is non-zero, and .text
+                                 ; with a real initialiser for its neighbour's
+                                 ; reason: -f bin zeroes no .bss and this
+                                 ; bounds a write
 dsk_rah_seg:  dw 0               ; the claim, 0 = none. In .text with a real
                                  ; initialiser: -f bin zeroes nothing, this is
                                  ; read before anything sets it, and it is the
@@ -4519,11 +4769,11 @@ dsk_rah_have:
     push cx
     push dx
     mov bx, dsk_rah_tab
-    mov dx, DSK_RAH_RUNS
-.slot:
-    cmp word [bx+RAH_N], 0
-    je .next
-    mov cl, [disk_drive]
+    mov dx, [dsk_rah_runs]      ; the LIVE width, and this one is for the
+.slot:                          ; CYCLES: the slots above it hold RAH_N = 0 for
+    cmp word [bx+RAH_N], 0      ; ever (18.95.5), so scanning them would be
+    je .next                    ; correct and wasted. Reached only with a claim
+    mov cl, [disk_drive]        ; live, so the count is never 0 here
     cmp cl, [bx+RAH_VOL]
     jne .next
     mov cx, [dsk_sigcur]
@@ -4617,7 +4867,17 @@ dsk_rah_fill:
     mov si, [dsk_rah_next]      ; the slot to spend: round robin, because a
     mov [dsk_rah_slot], si      ; chunk has no better claim than its neighbours
     add si, RAH_REC
-    cmp si, DSK_RAH_RUNS * RAH_REC
+    push ax                     ; THE ONE BOUND THAT MUST BE DYNAMIC (SPEC.md
+    push bx                     ; 18.95.5): this decides which slots are ever
+    mov ax, [dsk_rah_runs]      ; WRITTEN, so a stale ceiling here would fill a
+    mov bx, ax                  ; slot no memory backs. The scans elsewhere are
+    shl ax, 1                   ; safe whatever they read, because dsk_rah_flush
+    shl ax, 1                   ; clears all DSK_RAH_RUNS records and the ones
+    shl ax, 1                   ; above the live width then stay RAH_N = 0
+    add ax, bx                  ; AX = runs * RAH_REC, RAH_REC being 9
+    cmp si, ax
+    pop bx
+    pop ax
     jb .picked
     xor si, si
 .picked:
@@ -4715,6 +4975,14 @@ dsk_rah_take:
 ; -----------------------------------------------------------------------------
 ; dsk_rah_flush - forget every cached chunk
 ; out: nothing; every register AND the flags preserved
+;
+; ALL DSK_RAH_RUNS RECORDS, not [dsk_rah_runs] of them, and that is what makes
+; every other loop in this file safe at any width (SPEC.md 18.95.5): the table
+; is 126 bytes of .bss whatever the claim is, dsk_rah_fill never writes a slot
+; at or above the live width, so the ones above it stay RAH_N = 0 for ever and
+; a scan that over-runs finds nothing rather than garbage. It also means the
+; count can shrink between claims without leaving a record behind that names a
+; chunk in memory somebody else now owns.
 ; -----------------------------------------------------------------------------
 dsk_rah_flush:
     pushf
@@ -4753,7 +5021,7 @@ dsk_rah_wr:
     cmp word [dsk_rah_seg], 0
     je .out                     ; no claim: the table means nothing yet
     mov bx, dsk_rah_tab
-    mov dx, DSK_RAH_RUNS
+    mov dx, [dsk_rah_runs]      ; ...and the same, behind the same guard
 .slot:
     cmp word [bx+RAH_N], 0
     je .next
@@ -4806,28 +5074,58 @@ dsk_rah_want:
     jne .out                    ; already held
     mov al, MEM_PG_HIGH         ; ...at OUR OWN rank (SPEC.md 50.6.4), so a
     call mem_avail_lvl_x          ; cheaper cache counts as free and a dearer one
-    cmp ax, DSK_RAH_KB * 2      ; does not. This window is the most expensive
+                                ; does not. This window is the most expensive
                                 ; cache in the system to lose and the raise
                                 ; cache is the cheapest, so it may have that
                                 ; one and nothing may quietly have this.
-                                ; TWICE what we want, on fr_cache_row's terms (SPEC.md
-    jb .out                     ; 40.1): this is an OPTIMISATION and must not
-                                ; be why something else fails. Asking outright
-                                ; would be worse than a refusal - mem_claim
-                                ; SHEDS and retries, so a mount on a tight
-                                ; machine would take the window raise cache
-                                ; (11.96) away, and take it every mount
-    mov ax, DSK_RAH_KB
-    mov bx, MEM_P_DIRW
-    mov cx, DSK_RAH_KB          ; ...the WHOLE of it inside one 64KB DMA page
+                                ; AX = the largest free RUN, which is the one
+                                ; that matters: the claim has to be one
+                                ; page-safe run, not scattered KB
+                                ;
+                                ; SOLVE FOR THE WIDTH (SPEC.md 18.95.5). The
+                                ; old rule was "twice DSK_RAH_KB or nothing",
+                                ; on fr_cache_row's terms (SPEC.md 40.1) - an
+                                ; OPTIMISATION must not be why something else
+                                ; fails. Asking outright would be worse than a
+                                ; refusal: mem_claim SHEDS and retries, so a
+                                ; mount on a tight machine would take the
+                                ; window raise cache (11.96) away, and take it
+                                ; every mount. Keep the rule and move the
+                                ; unknown: 2 x n x 4.5KB <= AX is 9n <= AX, so
+    xor dx, dx                  ; n = AX/9 - and n = 14 still wants the same
+    mov cx, 9                   ; 126KB it always did, while 40KB of free run
+    div cx                      ; now buys four slots instead of nothing
+    cmp ax, DSK_RAH_RUNS
+    jbe .width
+    mov ax, DSK_RAH_RUNS        ; the ceiling: 18.95.4's segment-offset bound
+.width:
+    cmp ax, DSK_RAH_MIN
+    jb .out                     ; ...and the floor, below which the metadata
+    mov [dsk_rah_runs], ax      ; eats the cache. THE WIDTH THIS CLAIM HAS
+    mov bx, ax
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    add ax, bx                  ; AX = n*9...
+    inc ax
+    shr ax, 1                   ; ...and KB = ceil(n * 4.5), a chunk being
+                                ; 4,608 bytes. Exact at 14: (126+1)>>1 = 63
+    mov cx, ax
+    mov bx, MEM_P_DIRW          ; ...the WHOLE of it inside one 64KB DMA page
     call mem_claim_dma_x          ; (SPEC.md 50.3), so dsk_runcap never splits a
-    jc .out                     ; fill and a fill is exactly one call
+    jc .none                    ; fill and a fill is exactly one call
     mov [dsk_rah_seg], dx
     call dsk_rah_flush          ; ...and it holds nothing yet. THE ONLY place
                                 ; that is established: .bss arrives at whatever
                                 ; -f bin left there, and dsk_rah_have would
-                                ; read it as chunks over random LBAs
+                                ; read it as chunks over random LBAs. It clears
+                                ; all DSK_RAH_RUNS records and not just the
+                                ; live ones, which is what makes every scan
+                                ; below safe at any width (18.95.5)
     mov word [dsk_rah_next], 0
+    jmp short .out
+.none:
+    mov word [dsk_rah_runs], 0  ; refused: no claim, so no width either
 .out:
     pop dx
     pop cx
@@ -5945,31 +6243,22 @@ dsk_fdd_probe:
                                 ; is called twice and the two reads are two
                                 ; different fields
     test al, 0x10               ; TRACK 0
-    jz .motor
+%ifdef FDD_NO_FAST
+    jmp .recal                  ; `make FDDSLOW=1` (SPEC.md 18.97.5): take the
+                                ; SLOW path whatever ST3 says. Neither emulator
+                                ; can reach it naturally - MartyPC synthesizes
+                                ; TRK0 set and QEMU derives it from a track
+                                ; that is 0 for an absent drive (18.97.2) - so
+                                ; without this the reorder that moved the motor
+                                ; wait could only ever be tested in the field
+%else
+    jz .recal
+%endif
     mov byte [si+FDU_STEP], FDD_S_TRK0
     jmp .keep                   ; near: .recal below is longer than a short
                                 ; displacement reaches
 
-.motor:                         ; --- step 2: spin unit 1 up before deciding --
-    mov al, bh                  ; NOT to read ST3 again - the recalibrate below
-    or  al, 0x0C                ; searches for the same TRK0 and answers the
-    or  al, [fdd_unit]          ; same question, so a second read would only
-    push bx
-    mov bl, [fdd_unit]
-    xor bh, bh
-    or  al, [cs:fdd_mbit+bx]    ; ...this unit's motor, not unit 1's. Read
-                                ; through CS: this table is .ovl DATA, and the
-                                ; overlay cannot reach its own data through DS
-                                ; (SPEC.md 2.5) - DS is still KERNEL_SEG here
-    pop bx
-    call fdd_dor
-    mov cx, FDD_MOTORW          ; name a case SEEKOK already covers. This is
-    call fdd_wait               ; here so that the step that can REMOVE a drive
-                                ; runs under the most favourable conditions the
-                                ; probe can arrange, against the (undocumented,
-                                ; and on every datasheet untrue) possibility of
-                                ; a drive that gates TRK0 on its spindle
-.recal:                         ; --- step 3: make it step, then ask the LINE
+.recal:                         ; --- step 2: make it step, then ask the LINE
     call fdd_sidrain            ; whatever the controller still has queued is
                                 ; not ours - see fdd_sidrain, and SPEC.md
                                 ; 18.97.1 for the field run that found it
@@ -6032,10 +6321,49 @@ dsk_fdd_probe:
     and al, 3                   ; ...and it is THIS unit's result, not one the
     cmp al, [fdd_unit]          ; queue was still holding (18.97.1's whole
     jne .keepst0                ; lesson - the drain makes it ours, this proves
-    jmp short .gone             ; it)
+    jmp short .lastchance       ; ...and NOT straight to .gone: the motor has
+                                ; not had its say yet, and this is the one
+                                ; path that reaches it (SPEC.md 18.97.5)
 .keepst0:
     mov byte [si+FDU_STEP], FDD_S_SEEKST0
     jmp short .keep
+.lastchance:                    ; --- step 3: spin it up before REMOVING it ---
+    mov al, bh                  ; NOT to read ST3 again - the recalibrate below
+    or  al, 0x0C                ; searches for the same TRK0 and answers the
+    or  al, [fdd_unit]          ; same question, so a second read would only
+    push bx
+    mov bl, [fdd_unit]
+    xor bh, bh
+    or  al, [cs:fdd_mbit+bx]    ; ...this unit's motor, not unit 1's. Read
+                                ; through CS: this table is .ovl DATA, and the
+                                ; overlay cannot reach its own data through DS
+                                ; (SPEC.md 2.5) - DS is still KERNEL_SEG here
+    pop bx
+    call fdd_dor
+    mov cx, FDD_MOTORW          ; ...and NOW pay it, on the one path that can
+    call fdd_wait               ; remove a drive - which is what 18.97 wanted
+                                ; the wait for: the removal decision running
+                                ; under the most favourable conditions the
+                                ; probe can arrange, against the (undocumented,
+                                ; and on every datasheet untrue) possibility of
+                                ; a drive that gates TRK0 on its spindle.
+                                ;
+                                ; RE-READ rather than re-STEP. The recalibrate
+                                ; above already ran; the head is wherever it
+                                ; left it, and the hypothetical this defends
+                                ; against is about REPORTING TRK0 and not about
+                                ; reaching it. A second recalibrate would cost
+                                ; another FDD_SEEKW and answer the same
+                                ; question, which is what would have made this
+                                ; a regression for the one machine the probe
+                                ; exists for (18.97.5).
+    call fdd_st3
+    jc .nordy                   ; 18.97's rule: every failure keeps the drive
+    mov [si+FDU_ST3B], al       ; the read the VERDICT is taken on, which is
+                                ; what 57.5's `ST3 after seek` should carry
+    test al, 0x10
+    jnz .seekok
+                                ; ...and only now may it fall into .gone
 .gone:
     mov byte [si+FDU_STEP], FDD_S_NOTRK0
     mov byte [si+FDU_VRD], 0

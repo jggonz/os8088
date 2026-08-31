@@ -63,6 +63,11 @@ RANGE_TAGS = {
     "MEM_P_WSAVE": "a window's raise cache: MEM_P_WSAVE_N of them, the slot "
                    "added (SPEC.md 11.96.3), so tm_htype subtracts and "
                    "compares against the length instead of matching a word",
+    "MEM_P_FATW": "one volume's FAT window: MEM_P_FATW_N of them, the VOLUME "
+                  "added (SPEC.md 18.8.4). It was MEM_K_FATW and an ordinary "
+                  "tm_ktab row until the window became a purgeable cache, "
+                  "which is what made it a range - mem_pg_own needs one owner "
+                  "per naming word and dsk_fatwc is the array",
 }
 
 EQU = re.compile(r"^(MEM_[KP]_[A-Z0-9_]+)\s+equ\s", re.M)

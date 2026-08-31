@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SPEC.md 5.6.4.1's fast walk draws the SAME pixels as 5.6.4's.
 
-    make && python3 tests/linefast.py [--machine os8088_5150_cga]
+    make && python3 tests/linefast.py [--machine os8088_5150_cga_gla]
 
 The claim the fast walk rests on is not "it is quicker" - it is that it lays
 the identical pixel set, because 5.6.2 makes the erase contract depend on it:
@@ -37,6 +37,20 @@ WHAT THE FAN COVERS, and each of these has been a bug in something:
 
 The whole framebuffer is compared, not a crop: a walk that runs away writes
 outside the box and that is the failure worth catching.
+
+**ON THE GLaBIOS TWIN**, `os8088_5150_herc_gla`, because `os8088_5150_herc`
+wants an IBM ROM this repo cannot ship and the row could not run at all without
+one. This is the row where the swap needs no argument: with the IBM ROM dropped
+in beside GLaBIOS the two machines return **byte-identical framebuffer
+hashes**, `fe55669e5894` clip-disarmed and `1a507401f8a6` clip-armed, which is
+the entire subject of the test.
+
+**IT HAD ALSO BEEN DEAD SINCE SPEC.md 2.9**, on every machine, and said so
+without anyone reading it as such: stage 2 went in front of `.text` inside
+`kernel.bin`, so a symbol offset stopped indexing the file and `_find_call`
+scanned 6,656 bytes of the wrong thing. It found no call and exited "the
+dispatch moved", which names the kernel rather than the scan. The guard was
+right to refuse; what was wrong was the offset. See `_find_call`.
 """
 import argparse
 import hashlib
@@ -47,6 +61,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
 import os88marty                                            # noqa: E402
 import os88sym                                              # noqa: E402
+import os88layout                                           # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KERNEL_SEG = 0x0060
@@ -94,6 +109,14 @@ def run(rig, sym, armed):
 def _find_call(sym):
     """The `call gfx_line_fast` inside gfx_line_raw, by its own encoding."""
     img = open(os.path.join(ROOT, "build", "kernel.bin"), "rb").read()
+    # ...MINUS STAGE 2. SPEC.md 2.9 put it in front of .text inside the same
+    # file, so a symbol offset stopped indexing kernel.bin the day that landed
+    # and this scan has been reading 6,656 bytes of the wrong thing ever since
+    # - it found no call and refused, which is the guard below doing its job
+    # rather than a dispatch that moved. tools/os88layout.py is the one place
+    # that knows the size (tests/unit/t_api_abi.py does the same subtraction),
+    # and after it `a` is a .text offset, which is what the poke wants.
+    img = img[os88layout.boot2_pad(ROOT):]
     want = sym["gfx_line_fast"]
     for a in range(sym["gfx_line_raw"], sym["gfx_line_raw"] + 64):
         if a + 3 <= len(img) and img[a] == 0xE8:
@@ -107,7 +130,7 @@ def _find_call(sym):
 
 def main(argv):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--machine", default="os8088_5150_herc")
+    ap.add_argument("--machine", default="os8088_5150_herc_gla")
     ap.add_argument("--image", default="build/os8088-360.img")
     a = ap.parse_args(argv)
     os.chdir(ROOT)

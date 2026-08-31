@@ -49,6 +49,7 @@ import os88marty                                            # noqa: E402
 import os88sym                                              # noqa: E402
 
 MACHINE = "os8088_5150_herc_gla"
+SPL_BAR_PX = 288                # splash.inc's, and the width this asserts
 IMG = os.path.join(ROOT, "build", "os8088-360.img")
 
 # The trough's interior, in the guest's own coordinates. spl_rechrome centres
@@ -63,10 +64,22 @@ MIN_STEPS = 20          # distinct [spl_done] values during the load
 MIN_WIDTHS = 8          # ...and distinct lit widths on the glass
 
 
-def bar_width(m):
-    """Lit pixels in the trough's middle row, off the card's own framebuffer."""
-    _, h, rows = m.vram("herc")
-    return sum(bin(b).count("1") for b in rows[h // 2 - 8 + 8])
+def bar_width(m, row):
+    """Lit pixels of the BAR, off the card's own framebuffer.
+
+    The ROW comes from the kernel's own banked layout (SPEC.md 15.3.5.1's
+    `spl_l_bar`) and not from a formula repeated here. It used to be
+    `h // 2 - 8 + 8`, which was the mono bar's middle row until the bar moved
+    to centre the whole block - and a test that re-derives a geometry is a
+    test that reads the wrong row in silence.
+
+    ...and it counts the bar's OWN 36 bytes rather than the whole row, because
+    since 15.3.5 that row also crosses the trough's two sides and the dialog's
+    two frames on a mono adapter: 288 + 6 = 294 of a 288px trough, which reads
+    as a bar overrunning its frame."""
+    w, h, rows = m.vram("herc")
+    x0 = (w - SPL_BAR_PX) // 16 * 8     # spl_bar's own arithmetic, in PIXELS -
+    return sum(rows[row][x0:x0 + SPL_BAR_PX])   # vram() is a byte a pixel
 
 
 def main():
@@ -78,6 +91,7 @@ def main():
     blob = os88sym.equates()["HEAP_SEG"]
     off_done = os88sym.syms()["spl_done"]
     off_total = os88sym.syms()["spl_total"]
+    off_bar = os88sym.syms()["spl_l_bar"]
 
     done, widths, backwards, total = [], [], 0, 0
     with os88marty.launch(IMG, apps=os.path.join(ROOT, "build", "apps360.img"),
@@ -102,9 +116,13 @@ def main():
                 if done and d < done[-1]:
                     backwards += 1
                 done.append(d)
-            wpx = bar_width(m)
-            if not widths or widths[-1] != wpx:
-                widths.append(wpx)
+            bar = int.from_bytes(m.readseg(blob, off_bar, 2), "little")
+            if bar:             # spl_tick raises [spl_live] and THEN calls
+                                # spl_chrome, so there is a window where the
+                                # splash is live and the layout is not banked
+                wpx = bar_width(m, bar + 8)
+                if not widths or widths[-1] != wpx:
+                    widths.append(wpx)
             if live == 0:
                 break
         else:

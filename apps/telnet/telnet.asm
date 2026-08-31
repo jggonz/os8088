@@ -375,6 +375,11 @@ te_paint:
     call te_button
     call te_screen
     call te_status
+    call te_promise                 ; a full paint settles every debt, so the
+                                    ; glass matches the buffer and the window
+                                    ; may be banked again (SPEC.md 70.7). This
+                                    ; is where the promise comes BACK after a
+                                    ; covered session withdrew it
     pop di
     pop si
     pop dx
@@ -462,7 +467,22 @@ te_status:
 te_screen:
     call te_markall
     call te_rows_owed
-    ret
+    mov word [te_scrl], 0           ; **AND THE SCROLL DEBT, WHICH IT DID NOT.**
+    ret                             ; Every row has just been drawn from the
+                                    ; buffer, so a pending "blit the pixels up
+                                    ; by N" is not owed - and spending it is
+                                    ; not harmless. te_scrollpaint moves the
+                                    ; whole terminal up N rows and marks only
+                                    ; the N it vacated, so rows 0..17-N are
+                                    ; left showing rows N..17 until the next
+                                    ; thing that touches them. Reachable
+                                    ; before this line: text scrolls while the
+                                    ; window is covered (te_show bails at .un
+                                    ; ahead of te_scrollpaint, so [te_scrl]
+                                    ; accumulates), the window is uncovered
+                                    ; into a full te_paint, and the next
+                                    ; worker pass blits a screen that was
+                                    ; already right
 
 ; -----------------------------------------------------------------------------
 ; te_rows_owed - draw the rows in the dirty range, and clear it
@@ -793,6 +813,12 @@ te_toggle:
     mov byte [te_want], 0           ; ...and a close asked for on a session
     mov word [te_msg], 0            ; that has already ended is not owed
     call te_clear
+    call te_promise                 ; AT THE TRANSITION and unconditionally
+                                    ; (SPEC.md 70.7): te_clear has just
+                                    ; marked every row, so this withdraws here
+                                    ; rather than a tick later in te_show. The
+                                    ; click handler holds the lock, which is
+                                    ; rule 7's condition
     jmp short .out
 .down:
     mov byte [te_want], 1           ; ...ASKED, not done: closing is a wire
@@ -992,6 +1018,67 @@ te_owed:
 .no:
     pop ax
     clc
+    ret
+
+; -----------------------------------------------------------------------------
+; te_promise - "the glass matches the buffer" / "it does not"
+; in:  the debt words; THE GFX LOCK HELD BY THE CALLER
+; out: nothing (every register and the flags preserved)
+;
+; SPEC.md 70.7, which is SPEC.md 11.96.1's promise answered per DEBT rather
+; than per session.
+;
+; te_show tests OSAPI_WM_OBSCURED and SKIPS THE DRAW when the answer is yes,
+; which is 11.96.1's disqualifier word for word - so a raise cache banked
+; while text was arriving would put back a terminal missing whatever came in
+; after it. The obvious fix is the browser's (71.11): promise while the
+; session is not up. It is also the wrong one HERE, because a telnet window
+; spends its life connected and sitting at a prompt - the state that would
+; never hold a cache is the state it is almost always in.
+;
+; te_owed already answers the finer question. Three debts and one test: the
+; CHROME ([te_dirty]), the SCROLL ([te_scrl]) and the ROWS ([te_dr0]..
+; [te_dr1]). Nothing owed means the buffer and the glass agree, and a cache
+; taken then is exactly what a repaint would draw - whether the session is up,
+; down or was never dialled.
+;
+; So it is called at both edges of te_show's lock hold: on the way in, where
+; te_owed is true by construction and this WITHDRAWS (taking the cache with
+; it, SPEC.md 11.96), and on the way out of a draw that actually happened,
+; where it grants again. The obscured, foreign-text-mode and credits paths
+; leave through .un instead and the promise stays withdrawn, which is right:
+; the debt is still owed and only a paint can settle it.
+;
+; WHAT IT DOES NOT CLOSE is one worker pass. te_feed writes the buffer with no
+; lock held (rule 3 - the wire is 274 ms and the cursor may not stop for it),
+; so between the byte landing and te_show taking the lock there is a window in
+; which a raise restores the frame before it. The debt survives that raise,
+; so the next pass draws it: the cost is up to one tick of a stale line
+; against a whole 18-row repaint - 1,152 glyph cells, about a second on the
+; machine this is for - every single time the window is uncovered. Closing it
+; needs the withdrawal at te_feed, and rule 7 forbids a worker touching this
+; without the lock.
+;
+; TWO COLOURS: CBLACK and CWHITE, four uses each and nothing else, so the
+; depth claim rides along (11.96.17) and the cache is a quarter of 46,526.
+; -----------------------------------------------------------------------------
+te_promise:
+    pushf
+    push ax
+    push bx
+    mov bx, [te_win]
+    or bx, bx                       ; before wm_create, and after a refused
+    jz .out                         ; one: nothing to promise about
+    call te_owed
+    mov al, 0                       ; something is owed: withdraw
+    jc .say
+    mov al, OSAPI_SAVEU_ON | OSAPI_SAVEU_1BPP
+.say:
+    call OSAPI_WM_SAVEU             ; BX is [te_win] and not whatever was in it
+.out:                               ; (SPEC.md 11.96.11.4)
+    pop bx
+    pop ax
+    popf
     ret
 
 ; --- te_qstat - NETV_STATUS on our handle. out AH = state, CX = readable -----
@@ -1321,6 +1408,12 @@ te_show:
     push bx
     push si
     call OSAPI_GFX_LOCK
+    call te_promise                 ; te_owed is TRUE by construction here (it
+                                    ; is what got us called), so this WITHDRAWS
+                                    ; and the raise cache goes with it - before
+                                    ; the obscured test below, because the
+                                    ; covered case is exactly the one where the
+                                    ; debt is not about to be settled
     mov bx, [te_win]
     call OSAPI_WM_OBSCURED
     jc .un                          ; covered: the next paint owes it, and a
@@ -1341,10 +1434,15 @@ te_show:
     call te_scrollpaint             ; ...the pixels the buffer already moved
     call te_rows_owed               ; ...and ONLY the rows that changed
     cmp byte [te_dirty], 0
-    je .un                          ; the CHROME is a separate question: a
+    je .done                        ; the CHROME is a separate question: a
     call te_status                  ; character arriving is not a state change
     call te_button
-.un:
+    mov byte [te_dirty], 0          ; ...and SPENT, so te_owed can be read as
+                                    ; the whole truth (te_promise). te_step
+.done:                              ; zeroes it every pass anyway, so this
+    call te_promise                 ; changes nothing for the state machine
+                                    ; ...and the glass matches the buffer
+.un:                                ; again: promise
     call OSAPI_GFX_UNLOCK
     pop si
     pop bx

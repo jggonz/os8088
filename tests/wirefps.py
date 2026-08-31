@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """What SPEC.md 5.6.4.1 is worth to a program, measured by the program.
 
-    make wiredisk && python3 tests/wirefps.py [--machine os8088_5150_cga]
+    make wiredisk && python3 tests/wirefps.py [--machine os8088_5150_cga_gla]
 
 WIREFRAME DOES NOT SHIP (SPEC.md 78.9), so `make wiredisk` is what puts
 WIRE.O88 on a floppy for this to open. `make` alone still builds the
@@ -22,6 +22,17 @@ across two builds would have to hold all of that equal by hand.
 It is a MEASUREMENT and not a gate: no threshold is asserted, because a
 number that fails a build when a harness gets slower teaches nobody anything.
 It prints, and PERFORMANCE.md is where the figure is kept.
+
+**ON THE GLaBIOS TWIN**, `os8088_5150_herc_gla`, because `os8088_5150_herc`
+wants the IBM ROM this repo cannot ship. Checked with that ROM dropped in
+beside GLaBIOS: the fast walk reads 18.2 fps on both, the general walk 9.5
+against 9.1, and the ratio this row exists to report 1.92x against 2.00x.
+
+**IT HAD ALSO BEEN DEAD SINCE SPEC.md 2.9**, like tests/linefast.py and for the
+same reason: stage 2 went in front of `.text` inside `kernel.bin`, so
+`find_call`'s scan read 6,656 bytes of the wrong thing, found nothing and
+exited "no `call gfx_line_fast` in gfx_line_raw" - which reads as a kernel that
+moved rather than a scan that did not. See `find_call`.
 """
 import argparse
 import os
@@ -34,6 +45,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
+import os88layout                                           # noqa: E402
 import dispapps                                             # noqa: E402
 import dispcp                                               # noqa: E402
 
@@ -46,6 +58,13 @@ WR_NE = 38                              # `os88_image_end +` block
 def find_call(sym):
     """The `call gfx_line_fast` in gfx_line_raw, by its own encoding."""
     img = open(os.path.join(ROOT, "build", "kernel.bin"), "rb").read()
+    # ...MINUS STAGE 2, which SPEC.md 2.9 put in front of .text inside the same
+    # file: a symbol offset stopped indexing kernel.bin that day, so this scan
+    # was reading 6,656 bytes of the wrong thing and found no call at all.
+    # tools/os88layout.py is the one place that knows the size, and after it
+    # `a` is a .text offset - which is what the poke below wants. The same
+    # subtraction as tests/unit/t_api_abi.py and tests/linefast.py.
+    img = img[os88layout.boot2_pad(ROOT):]
     want = sym["gfx_line_fast"]
     for a in range(sym["gfx_line_raw"], sym["gfx_line_raw"] + 64):
         if a + 3 <= len(img) and img[a] == 0xE8:
@@ -69,7 +88,7 @@ def sample(m, seg, base, secs=6):
 
 def main(argv):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--machine", default="os8088_5150_herc")
+    ap.add_argument("--machine", default="os8088_5150_herc_gla")
     ap.add_argument("--image", default="build/os8088-360.img")
     ap.add_argument("--apps", default="build/wire360.img")
     a = ap.parse_args(argv)

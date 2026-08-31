@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Telnet: the About panel, a session you can retry, and the drawing (70.3/70.4).
 
-    make && python3 tests/telnet.py [--adapter cga|herc]
+    make && python3 tests/telnet.py [--adapter cga|herc] [--machine <cfg>]
 
 **THERE IS NO WIRE IN THIS GATE AND THAT IS DELIBERATE.** Everything below is
 about the TERMINAL - which rows are drawn, where the pen is, what the About
@@ -97,13 +97,23 @@ def te_syms():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--adapter", default="cga", choices=sorted(MACHINE))
+    ap.add_argument("--machine", default=None,
+                    help="override the machine the --adapter picks. The two "
+                         "defaults want the LICENSED IBM ROM (ibm5150_82_v4), "
+                         "which a fresh container has no copy of - MartyPC "
+                         "then exits at once with 'ROM set not found in ROM "
+                         "set map', which reads like a broken harness rather "
+                         "than a missing file. os8088_5150_cga_gla and "
+                         "os8088_5150_herc_gla are the GLaBIOS twins, and "
+                         "nothing here takes a timing, so they answer every "
+                         "question this gate asks")
     ap.add_argument("--shot", default=None)
     a = ap.parse_args()
     fails = []
     sy = te_syms()
 
     with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
-                          machine=MACHINE[a.adapter]) as m:
+                          machine=a.machine or MACHINE[a.adapter]) as m:
         os88marty.settle(m, gate=os88marty.desktop_up)
         mo = os88mouse.Mouse(marty=m)
         mono = True

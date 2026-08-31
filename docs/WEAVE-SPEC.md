@@ -2126,7 +2126,7 @@ Prices, from Set 68's constants:
 |---|---|
 | edit one cell | recompose + blit 1 row ≈ 3–5 ms |
 | move the selection | 2 recomposed rows ≈ 5–10 ms, or 2 XOR rects ≈ 1.6 ms on the fast path |
-| one 79-cell row | 14.5 ms (vs `font_run`'s ~60) |
+| one 80-cell row | 14.7 ms (vs `font_run`'s ~60) |
 | full visible page, 20 rows | ≈ 290 ms (vs ~1.4 s via font_run) |
 | scroll one row | 1 `GFX_SCROLL` + 1 composed row ≈ 90–100 ms |
 
@@ -2678,9 +2678,11 @@ are derived and checkable rather than measured:
 ```
 frame:   x = 0                       y = MBAR_H
          w = [vid_w]                 h = [vid_dock_y0] - MBAR_H - 1
-content: width  = w - 1              (a window spanning the screen has no
-                                      LEFT border, SPEC.md 11.95.2, so
-                                      wm_geom answers w-1 and not w-2)
+content: width  = w                  (a window spanning the screen has
+                                      NEITHER side border - SPEC.md 11.95.2
+                                      for the left and 11.95.3 for the
+                                      right - so wm_geom answers w, not
+                                      w-1 and not w-2)
          height = h - (TITLE_H + 1)   (wm_geom, SPEC.md 11)
 ```
 
@@ -2690,21 +2692,30 @@ content: width  = w - 1              (a window spanning the screen has no
 constant — `24 + 20 + 1 + 19 = 64` — so for every adapter:
 
 ```
-CW = floor(([vid_w] - 1)  / 8)
+CW = floor( [vid_w]       / 8)
 CH = floor(([vid_h] - 64) / 8)
 ```
 
 | adapter | screen | content px | `CW × CH` | wasted |
 |---|---|---|---|---|
-| CGA | 640×200 | 639 × 136 | **79 × 17** | 7 px × 0 px |
-| Hercules | 720×348 | 719 × 284 | **89 × 35** | 7 px × 4 px |
-| VGA mode 12h | 640×480 | 639 × 416 | **79 × 52** | 7 px × 0 px |
+| CGA | 640×200 | 640 × 136 | **80 × 17** | 0 px × 0 px |
+| Hercules | 720×348 | 720 × 284 | **90 × 35** | 0 px × 4 px |
+| VGA mode 12h | 640×480 | 640 × 416 | **80 × 52** | 0 px × 0 px |
+
+**`[vid_w]` and not `[vid_w] - 1`, and the whole column of waste went with
+it.** The derivation above already says a window spanning the screen has
+neither side border, so the content is `w` — SPEC.md §11.95.2 took the left
+one and §11.95.3 the right. While only the left had gone, `wm_geom` answered
+`w - 1` and the seven pixels the last cell could not fill were real; now there
+is one more whole cell on every adapter instead. `tools/weavesim.py`'s
+`ADAPTERS` and `tests/weavesmoke.py`'s frame model are the two other places
+this number is written down, and all three say 80 / 90 / 80.
 
 These are the grids `weavesim --render` prints and the 8086 must reproduce
 exactly (§12). They are the **opening** grid and not a constant: a window
 the user has resized re-runs the walk at whatever `CW × CH` it then has
 (§7.4), and §7.4's 32×12 floor is what the family refuses to go below.
-Nothing else in this document may hard-code 79, 89, 17, 35 or 52 — an
+Nothing else in this document may hard-code 80, 90, 17, 35 or 52 — an
 implementation that reads the numbers instead of the screen is wrong on two
 adapters of three the moment either constant moves (SPEC.md §39).
 
@@ -3711,7 +3722,7 @@ displaying) and §4.5.1 (every indexed operand is bounds-checked, because a
 its own, `apps/weave/wfx.inc` (section 5's RPN machine and its 16.16
 arithmetic in assembly, because this toolchain has no `long` at all),
 `apps/weave/wband.inc` (§6.9.1's band composer, rcband's shape and Set 68's
-constants, now re-measured as PERFORMANCE.md Set 111), §5.5's sliced two-pass
+constants, now re-measured as PERFORMANCE.md Set 113), §5.5's sliced two-pass
 recalculation with §5.5.1's per-row damage, the formula bar over `os88line`,
 and `apps/weave/wfxc.c` — §9.4's one carve-out, the whole of §5.1's grammar
 compiled where it is typed.
@@ -3760,6 +3771,23 @@ because §10.1's refuse-before-read needs one, and nothing had ever read past
 its first 32 bytes — and that `w_ctname`'s fourteen-case switch, which
 SmallerC compiles to a 161-instruction compare chain, is a table walk.
 
+**Then the merge with `main` spent those 32 bytes and 42 more, and a sixth
+cut answered it.** Elendilon's work landed in the SHARED SDK includes both
+packages compile — `apps/os88ui.inc` grew the scroll bar's arrow buttons and
+arrow-drag, which `<list>` and `<grid>` genuinely reach, so it is not gateable
+out — and the package came to 52,318 + 9,196 = 61,514, **74 over**. What paid
+for it is duplicated DATA rather than another structural change: §10.4's
+refusal names the field that refused, and the validator answers
+`section table` at eighteen sites and `prop block` at twenty-one. SmallerC
+emits a string literal **once per site** — it pools nothing — and a literal an
+`ovl_` function names is RESIDENT even though the code naming it is not
+(SPEC.md §73.14 moves the code and leaves the literal). The twenty-four field
+names are spelled once each in `apps/weave/wval.c` now, which is **1,194
+bytes** with `.text` byte-identical either way: no call was added, no path
+moved, and the sentences are the same sentences. The shipped figure is
+**51,124 image + 9,196 bss = 60,320 resident, 1,120 under**, with
+`WEAVE.OVL` at 20,983 and `WEAVE.WSM` at 4,593.
+
 It was gated FIRST by `weavecanvas` (§12.1.3), the raw-QEMU differential
 against a composer written into the model for it, because §6.10.2 had no
 oracle at all. Two defects the model carried are fixed with it (§6.10.1's two
@@ -3782,7 +3810,7 @@ negotiator had no C door at all, so every C package that ever wanted to ask
 
 `loom.o88` is **54,648 image + 6,198 bss = 60,846 resident, 594 under**
 SPEC.md §20.1's ceiling, with `LOOM.OVL` at 42,902. WEAVE did not move:
-52,212 + 9,196 = 61,408, byte for byte what wave 5 closed at, and the two
+51,124 + 9,196 = 60,320, byte for byte what wave 5 closed at, and the two
 things LOOM needed from it — `wfx_frac` extracted into `apps/weave/wnum.inc`,
 and an `#ifndef` around `wfxc.c`'s output buffer — were each checked by
 rebuilding `weave.bin` and comparing it whole.
@@ -3852,16 +3880,18 @@ after any change to §6 or to the model. Field figures land on the 5150
 and supersede modelled ones row by row (§12.4).
 
 **The band composer's two constants were Set 68's and are now measured for
-`wband.inc` itself**: PERFORMANCE.md **Set 111** ran the shipping file on Set
+`wband.inc` itself**: PERFORMANCE.md **Set 113** ran the shipping file on Set
 68's own harness and solved 915 µs a call and 162 µs a cell against 860 and
 173 — six per cent apart in opposite directions, on a harness whose quantum is
-one count of 0.359 ms. A 79-cell row measured **13.7 ms** against the 14.5 this
-table prices. Set 111 also settles the one claim §6.9.1 was making without
+one count of 0.359 ms. A 79-cell row measured **13.7 ms** against the model's
+14.5 for those cells (the rows were 79 cells when Set 113 was taken; SPEC.md
+§11.95.3 has since made a full CGA row 80, which the table below prices). Set 113 also settles the one claim §6.9.1 was making without
 evidence: inverting the header band and the selected cell costs **0.4%**, one
 count over eight iterations of 79 cells, where a second `gfx` call would have
 been ~756 µs.
 
 | component | interaction | gfx calls | modelled cost |
+|---|---|---|---|
 | label | .text set (20 cells) | 1 | ~19 ms |
 | text | repaint (per wrapped row, 40 cells) | 1/row | ~37 ms/row |
 | rule / box / spacer | card paint | 1 / 1 / 0 | ~0.8 ms |
@@ -3873,15 +3903,15 @@ been ~756 µs.
 | list | scroll one line | 2 | ~83-90 ms |
 | grid | edit one cell (compose+blit 1 row) | 1 | ~3-5 ms |
 | grid | selection move (2 XOR rects) | 2 | ~1.5 ms |
-| grid | 79-cell row compose+blit | 1 | ~14.5 ms |
-| grid | full 20-row page | 20 | ~291 ms |
+| grid | 80-cell row compose+blit | 1 | ~14.7 ms |
+| grid | full 20-row page | 20 | ~294 ms |
 | grid | scroll one row (GFX_SCROLL + 1 composed band) | 2 | ~83-90 ms |
 | canvas | frame, 1 moving sprite (one dirty run) | 1-2 | ~1-3 ms |
 | canvas | frame, 2 sprites (dirty bands) | 2-4 | ~2-5 ms |
 | card | switch (full-card repaint, text-heavy CGA card) | ~1/row | ~0.3-1.2 s |
-| card | first paint, fully lettered CGA 640x200 (17 rows x 79 cells) | 17 | ~1.25 s |
-| card | first paint, fully lettered Hercules 720x348 (35 rows x 89 cells) | 35 | ~2.85 s |
-| card | first paint, fully lettered VGA 640x480 (52 rows x 79 cells) | 52 | ~2.59 s |
+| card | first paint, fully lettered CGA 640x200 (17 rows x 80 cells) | 17 | ~1.26 s |
+| card | first paint, fully lettered Hercules 720x348 (35 rows x 90 cells) | 35 | ~2.88 s |
+| card | first paint, fully lettered VGA 640x480 (52 rows x 80 cells) | 52 | ~2.62 s |
 | alert | raise + dismiss | ~8 | ~30-40 ms |
 
 **The canvas's two rows are now COUNTED on a machine**, which is

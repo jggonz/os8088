@@ -45,6 +45,7 @@ import argparse
 import json
 import socket
 import sys
+import threading
 
 DEFAULT_TIMEOUT = 60.0
 KERNEL_SEG = 0x0060
@@ -68,6 +69,7 @@ class Marty:
                 f"{addr}: {e}. Is martypc_headless running with "
                 f"MARTYPC_DEBUG_ADDR set?") from None
         self.f = self.s.makefile("rwb")
+        self._lock = threading.Lock()   # cmd() is a request/reply PAIR
         self._log = []          # every input, stamped with its guest cycle
 
     def __enter__(self):
@@ -92,9 +94,21 @@ class Marty:
                 pass
 
     def cmd(self, **kw):
-        self.f.write((json.dumps(kw) + "\n").encode())
-        self.f.flush()
-        line = self.f.readline()
+        """One request, one reply - and ATOMICALLY, because tests thread.
+
+        The protocol is a line out and a line back on one socket, with nothing
+        matching a reply to its request. Two threads interleaving there do not
+        fail cleanly: each gets the OTHER's reply, so a `read` comes back as
+        the answer to a `regs` and the caller dies on `KeyError: 'data'` far
+        from the cause. tests/paintcull.py has driven a click from a daemon
+        thread while the main loop pumps a breakpoint since it was written -
+        the two only rarely collided, and a timing change elsewhere in the
+        kernel was enough to make it every run.
+        """
+        with self._lock:
+            self.f.write((json.dumps(kw) + "\n").encode())
+            self.f.flush()
+            line = self.f.readline()
         if not line:
             raise MartyError("server closed the connection")
         r = json.loads(line)
@@ -1073,6 +1087,48 @@ def until(m, cond, what="that condition", poll=1.0, limit=600.0):
                 "running, so either it is slower than the limit or the "
                 "condition is asking about the wrong thing." % (limit, what))
         time.sleep(poll)
+
+
+def scratch_disk(path, *files, **kw):
+    """Build a row's scratch floppy, and REBUILD it when an input has moved.
+
+    Every row needing a disk `make all` does not build makes one in /tmp and
+    keeps it: os88disk is deterministic, so the image is a pure function of
+    its inputs and rebuilding it forty times buys nothing. The keeping was
+    written as `if not os.path.exists(path)`, and THAT is the trap - the
+    image is built once, out of whatever build/ happened to hold that
+    minute, and every run after it boots that. A fix then reads as having
+    changed nothing and the defect it fixed reads as pre-existing, which is
+    the same failure mode as a stale build/kernel.bin and just as quiet.
+
+    It has already cost this project a wrong answer: paintsu was read as
+    0 differing pixels against a fixture that predated the paint.o88 under
+    test, and paintbig blamed pt_resize for a refusal measured on a Paint
+    without the fix in it.
+
+    An mtime compare is the whole answer, because every input is a build
+    product of a `make` that has already run. `files` are os88disk's own
+    positional arguments, prefix and all ("APPS:build/paint.o88"), so the
+    inputs cannot drift out of step with the contents the way a second list
+    passed alongside them would.
+    """
+    import os
+    import subprocess
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    disk = os.path.join(here, "os88disk.py")
+    srcs = [f.split(":")[-1] for f in files]
+    try:
+        have = os.path.getmtime(path)
+        fresh = all(os.path.getmtime(s) <= have for s in srcs)
+    except OSError:
+        fresh = False                       # missing image, or a missing
+                                            # input: let os88disk say which
+    if not fresh:
+        subprocess.check_call(
+            [sys.executable, disk, "-o", path,
+             "--size", str(kw.get("size", 360))] + list(files))
+    return path
 
 
 def launch(image, apps=None, machine="os8088_5150_cga", addr="127.0.0.1:9001",
