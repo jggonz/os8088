@@ -164,18 +164,54 @@ def trim(note, width=150):
 
 
 def packages():
-    """[(NAME, source)] for every .o88 the Makefile builds, from its bin rule."""
+    """[(NAME, source)] for every package the Makefile builds.
+
+    TWO SHAPES, because there are two, and reading only the first left five
+    packages out of an index whose whole claim is that it cannot drift:
+
+      * an assembly package has an open-coded `$(BUILD)/x.bin:` rule naming
+        `apps/x/x.asm`, and its name is in its own `OS88_HEADER`;
+      * a C package (SPEC.md 73) is `$(eval $(call CC_PACKAGE,name,dir))` -
+        the rule is generated, so there is no `.bin:` line to find - and its
+        name is the `CC_PKG_NAME` in the same shim. LOOM open-codes its rules
+        for an include-path reason, so it has BOTH; the set() below is why
+        that is not a duplicate row.
+    """
     mk = re.sub(r"\\\n\s*", " ", read("Makefile"))
-    out = []
+    srcs = []
     for m in re.finditer(r"^\$\(BUILD\)/([a-z0-9]+)\.bin:([^\n]*)$", mk, re.M):
-        src = re.search(r"(apps/[a-z0-9]+/[a-z0-9]+\.asm)", m.group(2))
-        if not src or not os.path.exists(os.path.join(ROOT, src.group(1))):
+        got = re.search(r"(apps/[a-z0-9]+/[a-z0-9]+\.asm)", m.group(2))
+        if got:
+            srcs.append(got.group(1))
+    for m in re.finditer(r"CC_PACKAGE,([a-z0-9]+),([a-z0-9]+)", mk):
+        srcs.append("apps/%s/%s.asm" % (m.group(2), m.group(1)))
+    out = []
+    for src in srcs:
+        if not os.path.exists(os.path.join(ROOT, src)):
             continue
-        # the package's real name is in its own OS88_HEADER, not the file name
-        hdr = re.search(r"OS88_HEADER\s+'([^']+)'", read(src.group(1)))
+        text = read(src)
+        hdr = re.search(r"OS88_HEADER\s+'([^']+)'", text) \
+            or re.search(r"CC_PKG_NAME\s+'([^']+)'", text)
         if hdr:
-            out.append((hdr.group(1), src.group(1)))
+            out.append((hdr.group(1), src))
     return sorted(set(out))
+
+
+def own_specs():
+    """{NAME: 'X-SPEC'} for a package whose contract is a document of its own.
+
+    Read out of each docs/*-SPEC.md's own H1 rather than from a table here:
+    C64-SPEC and WEAVE-SPEC exist because SPEC.md is not the right home for
+    them (C64-SPEC 1, WEAVE-SPEC's own preamble), and a hand-written mapping
+    in a GENERATED index would be the one line in it that can go stale."""
+    out = {}
+    d = os.path.join(ROOT, "docs")
+    for n in sorted(os.listdir(d)):
+        if not n.endswith("-SPEC.md"):
+            continue
+        first = read("docs/" + n).split("\n")[0]
+        out[n[:-3]] = first.lstrip("# ").strip()
+    return out
 
 
 def doc_files():
@@ -280,6 +316,7 @@ def build():
     w("")
     w("| package | source | SPEC |")
     w("|---|---|---|")
+    specs = own_specs()
     for name, src in packages():
         sec = ""
         for num, title in sorted(head.items(), key=lambda kv: len(kv[0])):
@@ -288,6 +325,23 @@ def build():
             if re.search(r"\b%s\b" % re.escape(name), title, re.I):
                 sec = "§%s" % num
                 break
+        if not sec:
+            # ...then a SUBSECTION, which is where a package that shares a
+            # section with its toolchain lives (CWORD is SPEC.md 73.12).
+            for num, title in sorted(head.items(),
+                                     key=lambda kv: len(kv[0])):
+                if "." not in num:
+                    continue
+                if re.search(r"\b%s\b" % re.escape(name), title, re.I):
+                    sec = "§%s" % num
+                    break
+        if not sec:
+            # ...and a package whose contract is a document of its own says
+            # which one, rather than an empty cell (C64-SPEC, WEAVE-SPEC).
+            for doc, title in sorted(specs.items()):
+                if re.search(r"\b%s\b" % re.escape(name), title, re.I):
+                    sec = "`docs/%s.md`" % doc
+                    break
         w("| %s | `%s` | %s |" % (name, src, sec))
     w("")
 

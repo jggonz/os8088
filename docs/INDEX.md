@@ -274,13 +274,16 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | ARKANOID | `apps/arkanoid/arkanoid.asm` | §44 |
 | ArtfulType | `apps/artful/artful.asm` | §46 |
 | BROWSER | `apps/browser/browser.asm` | §71 |
+| C64 | `apps/c64/c64.asm` | `docs/C64-SPEC.md` |
 | CALCULATOR | `apps/calc/calc.asm` | §65 |
 | CHART | `apps/chart/chart.asm` | §82 |
+| CWORD | `apps/cword/cword.asm` | §73.12 |
 | CYCLONE 88 | `apps/cyclone/cyclone.asm` | §67 |
 | FPTEST | `apps/fptest/fptest.asm` |  |
 | FRACTAL | `apps/fractal/fractal.asm` | §40 |
 | FTPD | `apps/ftpd/ftpd.asm` | §77 |
 | HELLO | `apps/hello/hello.asm` | §27 |
+| LOOM | `apps/loom/loom.asm` | `docs/WEAVE-SPEC.md` |
 | MINES | `apps/mines/mines.asm` | §23 |
 | MISSILE | `apps/missile/missile.asm` | §48 |
 | MODPLUG | `apps/modplug/modplug.asm` | §56 |
@@ -288,6 +291,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | PAINT | `apps/paint/paint.asm` | §42 |
 | PIANO | `apps/piano/piano.asm` | §36 |
 | RECORDER | `apps/recorder/recorder.asm` | §35 |
+| RUNCPM | `apps/runcpm/runcpm.asm` | §74 |
 | SHEET | `apps/sheet/sheet.asm` | §81 |
 | SOLITAIRE | `apps/solitaire/solitaire.asm` | §43 |
 | TAMEGRAM | `apps/tamegram/tamegram.asm` | §49 |
@@ -295,6 +299,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | TEXPAD | `apps/texpad/texpad.asm` | §69 |
 | TRACKER | `apps/tracker/tracker.asm` | §45 |
 | TaskMgr | `apps/taskmgr/taskmgr.asm` | §28 |
+| WEAVE | `apps/weave/weave.asm` | `docs/WEAVE-SPEC.md` |
 | WIRE | `apps/wire/wire.asm` | §78 |
 
 ## SPEC.md sections
