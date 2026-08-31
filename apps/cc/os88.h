@@ -361,6 +361,7 @@ static char os88__sz_find[sizeof(struct os88_find)    == 24 ? 1 : -1];
  *                                       void *win);
  *   CC_HAS_WORKER     void  os88_worker(void *win);
  *   CC_HAS_ONWAKE     void  os88_onwake(void *win);       (74.1 - see below)
+ *   CC_HAS_ONCLOSE    int   os88_onclose(void *win);      (75.1 - see below)
  * ========================================================================*/
 
 /* os88_main - your entry point (SPEC.md 20.2, 21 step 8).
@@ -410,6 +411,27 @@ void os88_ontimer(void *win);
  * computation with I/O live on the UI task in slices, each re-posting the
  * next (RunCPM's Z80, SPEC.md 74). Needs CC_HAS_ONWAKE. */
 void os88_onwake(void *win);
+
+/* os88_onclose - THE CLOSE NEGOTIATOR (SPEC.md 75.1). The kernel asks before
+ * it closes your window, through every door there is: the close box, the
+ * app-name menu's Close, the dock tile's context menu. There is one door and
+ * this is in front of it.
+ *
+ * ANSWER 1 to let the close happen - which is what a package with no unsaved
+ * work says, and what a window with no negotiator says by default. ANSWER 0
+ * to REFUSE it: nothing at all happens, your window is not even hidden, and
+ * YOU NOW OWE THE USER A WAY OUT. Put up an alert (os88ui.inc's os88ui_ask,
+ * OS88UI_ASAVE) and call os88_wm_close() when it is answered. A refusal with
+ * nothing behind it is a window that cannot be closed, and real mode has no
+ * way to take that back.
+ *
+ * It is os88_onclick()'s environment: the UI task, the gfx lock HELD, so it
+ * may draw, may call the file slots, may raise an alert - and must not take
+ * the lock and must not take long. It is never asked about itself while it is
+ * running, so raising a dialog from inside one cannot recurse.
+ *
+ * Needs CC_HAS_ONCLOSE, and os88_wm_onclose() to install it. */
+int os88_onclose(void *win);
 
 /* os88_worker - your one background task (SPEC.md 20.6), started by
  * os88_task_spawn() from a callback. IT MUST NEVER RETURN: call
@@ -655,6 +677,12 @@ int  os88_wm_timer(void *win, int ticks);        /* ...and arm it: ticks from
                                                   * slot and not the body) -
                                                   * TEST IT and have a second
                                                   * path (SPEC.md 13.8.2) */
+/* os88_wm_onclose - install the close negotiator above (SPEC.md 75.1). Call
+ * it once from os88_main(), after os88_wm_create(), the way os88_wm_onwake()
+ * is called. A side table, not a template word: the kernel clears it when the
+ * window dies. Needs CC_HAS_ONCLOSE. */
+void os88_wm_onclose(void *win);
+
 void os88_wm_onwake(void *win);                  /* 74.1 - install
                                                   * os88_onwake(); needs
                                                   * CC_HAS_ONWAKE */

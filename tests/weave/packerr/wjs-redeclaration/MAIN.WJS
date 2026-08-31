@@ -1,0 +1,6 @@
+var a;
+var a;
+
+function f() {
+  a = 1;
+}

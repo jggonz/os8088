@@ -1,0 +1,7 @@
+function one(a) {
+  return a;
+}
+
+function f() {
+  one(1, 2);
+}

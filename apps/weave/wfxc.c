@@ -92,7 +92,14 @@
  * 256. Nothing here can collide with either neighbour: this compiler runs at
  * a formula bar's Enter, long after the header was read, and it stops 16
  * bytes short of the band. */
+/* ...and LOOM points it somewhere else. apps/loom #includes THIS FILE as its
+ * FX pre-compiler (WEAVE-SPEC 1.2's rule that what the two packages share
+ * they share as source), and it has no header probe to borrow - so the buffer
+ * is a #define a includer may set first. WEAVE does not, and gets the line
+ * below unchanged. */
+#ifndef w_fxc_out
 #define w_fxc_out (w_probe + W_HDR_SIZE)
+#endif
 static unsigned      w_fxc_n;
 static const char   *w_fxc_err;         /* 0 = it compiled */
 static const char   *w_fxc_p;           /* the scanner's cursor */

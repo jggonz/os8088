@@ -1,0 +1,20 @@
+var n;
+
+function tick() {
+  n = n + 1;
+  n = n + 1;
+  n = n + 1;
+  n = n + 1;
+  n = n + 1;
+  n = n + 1;
+  n = n + 1;
+  n = n + 1;
+  n = n + 1;
+  n = n + 1;
+  n = n + 1;
+  n = n + 1;
+  n = n + 1;
+  n = n + 1;
+  n = n + 1;
+  n = n + 1;
+}

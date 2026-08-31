@@ -786,6 +786,21 @@ _os88_wm_timer:
     ret
 %endif
 
+%ifdef CC_HAS_ONCLOSE
+; void os88_wm_onclose(void *win) - BX = win, AX = the near proc (SPEC.md 75.1).
+; Call it AFTER os88_wm_create, once, from os88_main(). From that moment every
+; door out of your window - the close box, the app-name menu's Close, the dock
+; tile's context menu - runs os88_onclose() first and takes its answer.
+_os88_wm_onclose:
+    push bp
+    mov bp, sp
+    mov bx, [bp+4]
+    mov ax, cc_onclose
+    call OSAPI_WM_ONCLOSE
+    pop bp
+    ret
+%endif
+
 %ifdef CC_HAS_ONWAKE
 ; void os88_wm_onwake(void *win) - BX = win, AX = the near proc (SPEC.md 74.1).
 _os88_wm_onwake:

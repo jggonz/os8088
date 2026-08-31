@@ -530,6 +530,56 @@ cc_ontimer:
     ret
 %endif
 
+%ifdef CC_HAS_ONCLOSE
+; -----------------------------------------------------------------------------
+; cc_onclose - THE CLOSE NEGOTIATOR (SPEC.md 75.1), installed by
+; os88_wm_onclose(). The kernel asks the window before it closes it, through
+; EVERY door there is - the close box, the app-name menu's Close, the dock
+; tile's context menu - and the window may refuse.
+;
+; It is W_ONCLICK's environment: the UI task, the gfx lock HELD, SI = the
+; window. So the C may draw, may call the file slots, may raise an alert - and
+; must not take the lock and must not take long.
+;
+; THE ANSWER RIDES IN CF, which is the whole reason this trampoline is not a
+; copy of cc_ontimer's. `wm_ask_close` calls us and branches on the carry with
+; nothing in between that touches the flags (SPEC.md 75.1), so the flags this
+; ret leaves are the answer. The C returns an int - non-zero LET IT CLOSE,
+; zero REFUSE - and the flag is set by the one compare below, AFTER the pops,
+; because `pop` does not write flags but `add sp` does.
+;
+; A C function whose answer is a REFUSAL now owes the user a way out: put up
+; an alert (lm_ask / os88ui_ask) and call os88_wm_close() when it is answered.
+; A refusal with nothing behind it is a window that cannot be closed, and real
+; mode has no way to take that back.
+;
+; in:  SI = the window; the gfx lock IS held
+; out: CF = 0 close it, CF = 1 refused; every register preserved
+; -----------------------------------------------------------------------------
+cc_onclose:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    cld
+    push si                         ; arg 1: void *win
+    call _os88_onclose
+    add sp, 2
+    mov [cc_clans], ax              ; bank it: the pops must not decide the flag
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    cmp word [cc_clans], 1          ; 0 < 1 sets CF - a zero answer REFUSES,
+    ret                             ; anything else lets the close through
+%endif
+
 %ifdef CC_HAS_ONWAKE
 ; -----------------------------------------------------------------------------
 ; cc_onwake - W_ONWAKE, the package's own kick (SPEC.md 74.1), installed by
@@ -1080,6 +1130,13 @@ cc_wksp:    resw 1                  ; SP at the top of the worker's stack
                                     ; compares against it. Defined whether or
                                     ; not this package HAS a worker, so the
                                     ; test needs no %ifdef of its own
+%ifdef CC_HAS_ONCLOSE
+cc_clans:   resw 1                  ; the negotiator's answer, banked across
+                                    ; the pops - SPEC.md 75.1's answer is a
+                                    ; FLAG and `pop` is the only thing between
+                                    ; the C's return and the `ret` that carries
+                                    ; it out
+%endif
 %ifdef CC_HAS_OVL
 cc_ovseg:   resw 1                  ; the claim the module was read into,
                                     ; 0 = not loaded yet (SPEC.md 73.14)

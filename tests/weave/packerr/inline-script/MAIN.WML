@@ -1,0 +1,6 @@
+<app name="Err">
+  <card id="main">
+    <label>Hi</label>
+  </card>
+  <script>function f() { }</script>
+</app>

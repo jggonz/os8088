@@ -1120,7 +1120,17 @@ def fx_tokenize(src, fname, line):
 class FxCompiler:
     """Recursive descent per WEAVE-SPEC 5.1's grammar, emitting the RPN of
     5.3 - operand order left, right, op; function arguments in order, op
-    last - which is exactly the pinned shunting-yard output."""
+    last - which is exactly the pinned shunting-yard output.
+
+    THE REFUSAL SENTENCES ARE THE RESIDENT COMPILER'S (WEAVE-SPEC 6.9.2), and
+    that is a contract rather than a coincidence: LOOM's FX pre-compiler IS
+    apps/weave/wfxc.c, `#include`d rather than rewritten (WEAVE-SPEC 1.2's
+    rule that what the two packages share they share as source). A shared
+    compiler has one vocabulary by construction, so this one was moved onto
+    it - the family now says the same thing about a bad formula whether it
+    was typed into a cell or packed from a .WFX. WEAVE-SPEC 10.5 records the
+    amendment; tests/weave/packerr/ is what holds the two to it.
+    """
 
     CMP = {"=": "FEQ", "<>": "FNE", "<": "FLT", "<=": "FLE", ">": "FGT",
            ">=": "FGE"}
@@ -1133,14 +1143,19 @@ class FxCompiler:
     def err(self, msg):
         raise PackError(self.fname, self.line, "formula: " + msg)
 
+    def emit(self, b):
+        self.out.append(b)
+        if len(self.out) > 256:         # W_FXCMAX, wfxc.c's own cap
+            self.err("too long for one cell.")
+
     def compile(self, src):
         self.toks = fx_tokenize(src, self.fname, self.line)
         self.i = 0
         self.cmp()
         if self.i != len(self.toks):
-            self.err('unexpected "%s"' % self.toks[self.i])
-        self.out.append(FXOP["FEND"])
-        self.check_depth()
+            self.err("there is something after the formula.")
+        self.check_depth()              # ...as the resident core does, before
+        self.out.append(FXOP["FEND"])   #    the FEND
         return bytes(self.out)
 
     def peek(self):
@@ -1148,9 +1163,14 @@ class FxCompiler:
 
     def take(self):
         if self.i >= len(self.toks):
-            self.err("formula ends early")
+            self.err("a number, a cell or a function is needed.")
         self.i += 1
         return self.toks[self.i - 1]
+
+    def want(self, ch, msg):
+        if self.peek() != ch:
+            self.err(msg)
+        self.i += 1
 
     def cmp(self):
         self.sum_()
@@ -1158,90 +1178,126 @@ class FxCompiler:
         if t in self.CMP:
             self.take()
             self.sum_()
-            self.out.append(FXOP[self.CMP[t]])
+            self.emit(FXOP[self.CMP[t]])
 
     def sum_(self):
         self.term()
         while self.peek() in ("+", "-"):
             op = self.take()
             self.term()
-            self.out.append(FXOP["FADD" if op == "+" else "FSUB"])
+            self.emit(FXOP["FADD" if op == "+" else "FSUB"])
 
     def term(self):
         self.factor()
         while self.peek() in ("*", "/"):
             op = self.take()
             self.factor()
-            self.out.append(FXOP["FMUL" if op == "*" else "FDIV"])
+            self.emit(FXOP["FMUL" if op == "*" else "FDIV"])
 
     def factor(self):
         if self.peek() == "-":
             self.take()
             self.atom()
-            self.out.append(FXOP["FNEG"])
+            self.emit(FXOP["FNEG"])
         else:
             self.atom()
+
+    def number(self, tok):
+        """5.1's number, with 6.9.2's sentences. It is NOT
+        parse_number_16_16: that one is the .WFX line format's and keeps its
+        own wording, because a cell's value is not a formula."""
+        m = re.match(r"^([0-9]+)(?:\.([0-9]*))?$", tok)
+        if not m:
+            self.err("a number, a cell or a function is needed.")
+        ip = int(m.group(1))
+        fp = m.group(2)
+        if ip > 32767:
+            self.err("|value| < 32768.")
+        frac = 0
+        if fp is not None:
+            if len(fp) == 0:
+                self.err("a digit must follow the point.")
+            if len(fp) > 4:
+                self.err("at most 4 decimals - 16.16 stops there.")
+            d = 10 ** len(fp)
+            frac = (int(fp) * 65536 + d // 2) // d
+        return (ip << 16) + frac
+
+    def cellref(self, tok):
+        """...and the same for a reference: 6.9.2's two sentences, not
+        parse_cellref's."""
+        m = CELLREF_RE.match(tok)
+        if not m:
+            return None
+        r = int(m.group(2))
+        if r > 999:
+            self.err("a row is 1..256.")
+        c = ord(m.group(1).upper()) - 65
+        r -= 1
+        if not (0 <= c < self.cols and 0 <= r < self.rows):
+            self.err("that cell is outside the grid.")
+        return r, c
 
     def atom(self, range_ok=False):
         t = self.take()
         if t == "(":
             self.cmp()
-            if self.take() != ")":
-                self.err("missing ')'")
+            self.want(")", "a ')' is missing.")
             return
         if re.match(r"^[0-9]", t):
-            v = parse_number_16_16(t, self.fname, self.line)
-            self.out.append(FXOP["FNUM"])
-            self.out += struct.pack("<i", v)
+            v = self.number(t)
+            self.emit(FXOP["FNUM"])
+            for b in struct.pack("<i", v):
+                self.emit(b)
             return
-        if CELLREF_RE.match(t):
-            r, c = parse_cellref(t, self.cols, self.rows, self.fname,
-                                 self.line)
+        rc = self.cellref(t) if CELLREF_RE.match(t) else None
+        if rc is not None:
+            r, c = rc
             if self.peek() == ":":
                 if not range_ok:
-                    self.err("a range is legal only as an aggregate "
-                             "argument (WEAVE-SPEC 5.1)")
+                    self.err("a range is legal only in an aggregate.")
                 self.take()
-                r2, c2 = parse_cellref(self.take(), self.cols, self.rows,
-                                       self.fname, self.line)
-                # normalized so r1<=r2, c1<=c2 (recorded decision)
-                self.out.append(FXOP["FRANGE"])
-                self.out += bytes([min(r, r2), min(c, c2),
-                                   max(r, r2), max(c, c2)])
+                nxt = self.peek()
+                rc2 = self.cellref(nxt) if nxt and CELLREF_RE.match(nxt) \
+                    else None
+                if rc2 is None:
+                    self.err("a cell must follow the ':'.")
+                self.take()
+                r2, c2 = rc2
+                self.emit(FXOP["FRANGE"])
+                for b in (min(r, r2), min(c, c2), max(r, r2), max(c, c2)):
+                    self.emit(b)
                 return
-            self.out.append(FXOP["FCELL"])
-            self.out += bytes([r, c])       # 0-based (recorded decision)
+            self.emit(FXOP["FCELL"])
+            self.emit(r)
+            self.emit(c)
             return
-        name = t.upper()
-        if name in FX_FUNCS:
-            op, sig = FX_FUNCS[name]
-            if self.take() != "(":
-                self.err("%s( expected" % name)
-            if sig == "range":
-                # aggregates take exactly one RANGE (WEAVE-SPEC 5.4)
-                self.atom(range_ok=True)
-                if len(self.out) < 5 or self.out[-5] != FXOP["FRANGE"]:
-                    self.err("%s takes exactly one range (WEAVE-SPEC 5.4)"
-                             % name)
-                if self.take() != ")":
-                    self.err("%s takes exactly one range (WEAVE-SPEC 5.4)"
-                             % name)
-            else:
-                for k in range(sig):
-                    if k:
-                        if self.take() != ",":
-                            self.err("%s takes %d arguments" % (name, sig))
-                    self.cmp()
-                if self.take() != ")":
-                    self.err("%s takes %d arguments" % (name, sig))
-            self.out.append(FXOP[op])
-            return
-        self.err('no such function "%s"; SUM MIN MAX AVG COUNT IF ABS '
-                 "ROUND is the whole set (WEAVE-SPEC 5.4)" % t)
+        if not re.match(r"^[A-Za-z]", t):
+            self.err("a number, a cell or a function is needed.")
+        name = t.upper()[:7]            # wfxc.c reads at most seven letters
+        if name not in FX_FUNCS:
+            self.err("SUM MIN MAX AVG COUNT IF ABS ROUND is the whole set.")
+        op, sig = FX_FUNCS[name]
+        self.want("(", "a '(' must follow the function.")
+        if sig == "range":
+            k = len(self.out)
+            self.atom(range_ok=True)
+            if len(self.out) != k + 5 or self.out[k] != FXOP["FRANGE"]:
+                self.err("an aggregate takes exactly one range.")
+            self.want(")", "a ')' is missing.")
+        else:
+            for k in range(sig):
+                if k:
+                    self.want(",", "the arguments need a ',' between them.")
+                self.cmp()
+            self.want(")", "a ')' is missing.")
+        self.emit(FXOP[op])
 
     def check_depth(self):
         """FX eval slots are 16 deep (WEAVE-SPEC 5.3); a deeper formula is
-        refused at pack."""
+        refused at pack, and an incomplete one leaves a depth that is not 1.
+        The resident core checks both as it emits; this walks the finished
+        stream and reaches the same two answers."""
         depth = peak = i = 0
         b = self.out
         while i < len(b):
@@ -1257,8 +1313,9 @@ class FxCompiler:
                 depth -= 2
             peak = max(peak, depth)
         if peak > 16:
-            self.err("formula needs %d eval slots; the stack is 16 deep "
-                     "(WEAVE-SPEC 5.3)" % peak)
+            self.err("too deep - the stack is 16 slots.")
+        if depth != 1:
+            self.err("the formula is incomplete.")
 
 
 def fx_eval(rpn, read_cell):
@@ -4550,6 +4607,28 @@ def emit_foldtab():
     return htmsim.emit_l1tab().replace("br_l1tab:", "wv_foldtab:")
 
 
+def emit_foldtab_c():
+    """The same 128 bytes, as a C initialiser for apps/loom's compilers
+    (WEAVE-SPEC 3.1, 12.1). LOOM's WML and WJS scanners are C in an overlay
+    and a C file cannot name an nasm table, so the ONE definition is emitted
+    twice from the same source rather than copied once by hand - which is the
+    whole of why --emit-optab exists and is the same argument said about a
+    different consumer."""
+    out = ["/* The Latin-1 fold, 0x80..0xFF (WEAVE-SPEC 3.1). GENERATED by",
+           " * `python3 tools/weavesim.py --emit-foldtab-c` out of",
+           " * tools/htmsim.py's ONE definition - do not edit, regenerate.",
+           " * A zero entry means DROP THE BYTE (lm_fold answers -1). */",
+           "static const unsigned char lm_foldtab[128] = {"]
+    for i in range(0x80, 0x100, 16):
+        row = []
+        for cp in range(i, i + 16):
+            f = fold_text(chr(cp))
+            row.append("0x%02X," % (ord(f) if f else 0))
+        out.append("    " + " ".join(row))
+    out.append("};")
+    return "\n".join(out)
+
+
 # --- the differential corpus (WEAVE-SPEC 12.1.1) -----------------------------
 #
 # The WVM's end state, per case, in a form apps/weave/hosttest/weavevm.asm can
@@ -5647,7 +5726,7 @@ def selfcheck(verbose=False):
     deep = "1" + "+(1" * 17 + ")" * 17
     ck.raises("fx depth cap", PackError,
               lambda: FxCompiler(26, 256, "t", 1).compile(deep),
-              contains="16 deep")
+              contains="the stack is 16 slots")
 
     # 6. sprites: mask = NOT(coverage)
     sp = parse_wsp("sprite B 8 2\n#.......\n.#......\n", "t.wsp")
@@ -5929,6 +6008,9 @@ def selfcheck_vm(ck, tmp):
     ft = emit_foldtab()
     ck.ok(ft.startswith("wv_foldtab:") and ft.count("db ") == 8,
           "--emit-foldtab: 128 entries from htmsim's one definition")
+    ftc = emit_foldtab_c()
+    ck.ok(ftc.count("0x") == 130 and "lm_foldtab[128]" in ftc,
+          "--emit-foldtab-c: the same 128 entries, as C")
 
 
 # --- the hostile corpus (WEAVE-SPEC 2.1, 10.4) -------------------------------
@@ -6230,6 +6312,9 @@ def main():
                     help="print the 38-entry WVM jump table for wvm.inc")
     ap.add_argument("--emit-foldtab", action="store_true",
                     help="print the Latin-1 fold table for LOOM.OVL")
+    ap.add_argument("--emit-foldtab-c", action="store_true",
+                    help="...and the same table as a C initialiser, for "
+                         "apps/loom's compilers (WEAVE-SPEC 3.1)")
     ap.add_argument("--emit-vmcorpus", metavar="DIR",
                     help="the WVM differential corpus for weavevm "
                          "(WEAVE-SPEC 12.1.1)")
@@ -6258,6 +6343,8 @@ def main():
             return 0
         if args.emit_foldtab:
             print(emit_foldtab())
+        if args.emit_foldtab_c:
+            print(emit_foldtab_c())
             return 0
         if args.emit_vmcorpus:
             text = emit_vmcorpus(args.emit_vmcorpus)

@@ -285,19 +285,12 @@ _wfx_cents:
     pop bp
     ret
 
-; unsigned wfx_frac(unsigned num, unsigned den) - (num*65536 + den/2) / den,
-; which is WEAVE-SPEC 5.1's decimal-to-16.16 conversion, rounded half up. The
-; quotient fits a word because num < den always (5.1 bounds the fraction at
-; four digits, so den <= 10000 and num <= 9999).
-_wfx_frac:
-    push bp
-    mov bp, sp
-    mov dx, [bp+4]                  ; num * 65536
-    mov ax, [bp+6]
-    shr ax, 1                       ; + den/2
-    div word [bp+6]
-    pop bp
-    ret
+; WEAVE-SPEC 5.1's decimal-to-16.16 conversion is in a file of its own,
+; because LOOM's FX pre-compiler needs it and may not carry a second copy
+; (WEAVE-SPEC 1.2: what the two packages share, they share as SOURCE). It sits
+; exactly where _wfx_frac stood, so this extraction is byte for byte the image
+; that was here before it.
+%include "weave/wnum.inc"
 
 ; -----------------------------------------------------------------------------
 ; int wfx_eval(unsigned seg, unsigned off, unsigned len, int *out3)

@@ -1,0 +1,13 @@
+<!-- FORM: the smallest interactive app - an input, a button, and a label
+     the handler rewrites. Every element and attribute is WEAVE-SPEC 3. -->
+<app name="Form" vm="16">
+  <card id="main">
+    <label style="bold">Form</label>
+    <label br="1">Your name:</label>
+    <input id="who" cols="16" onchange="doGreet"/>
+    <button id="go" onclick="doGreet">Greet</button>
+    <button id="rst" onclick="doReset">Reset</button>
+    <label id="out" br="1" w="32">Ready.</label>
+  </card>
+  <script src="MAIN.WJS"/>
+</app>

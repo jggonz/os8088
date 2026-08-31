@@ -1,0 +1,5 @@
+<app name="Err">
+  <card id="main">
+    <canvas id="c" w="64"/>
+  </card>
+</app>

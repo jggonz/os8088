@@ -1,0 +1,7 @@
+<!-- PLAIN: the smallest project that packs - one app, one card, one
+     label, no script. Add components from WEAVE-SPEC 3.2's list. -->
+<app name="Plain">
+  <card id="main">
+    <label style="bold">Hello from Weave.</label>
+  </card>
+</app>
