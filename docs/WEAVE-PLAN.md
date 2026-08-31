@@ -228,6 +228,29 @@ duty: it is also what makes an on-machine compiler trustworthy at all. The
 host reference is written first on the `tools/htmsim.py` precedent, which
 found three real bugs before any 8086 code existed.
 
+**Wave 4 carved out exactly one exception and it is worth saying why the
+decision above survives it.** A spreadsheet whose cells cannot be typed into
+is not one, and a cell's source IS text — so `apps/weave/wfxc.c` compiles FX
+on the machine (WEAVE-SPEC §6.9.2, WEAVE-SPEC §9.4). What the paragraph above is about
+is a PROGRAM: the display list and the bytecode still arrive compiled, the
+pack step is still the only surface that compiles one, and no WML and no WJS
+is ever parsed on this machine by WEAVE. What is carved out is one expression
+language of nine productions and eight functions, entered a line at a time by
+a person looking at the result — WJS is the app's language and FX is the
+user's, which is the same line WEAVE-SPEC §5's own split already draws.
+
+Two things kept it honest. It is **the whole of WEAVE-SPEC §5.1 and not a
+subset**, because a subset would let a formula pack on the host, load on the
+machine, and refuse the moment its author clicked its cell to look at it —
+WEAVE-SPEC §11's byte-identity rule said about a language instead of about a
+file. And it is **not resident**: WEAVE-SPEC §6.9.2's first draft argued
+that "your formula did not
+compile because a module would not load" is not an answer a spreadsheet may
+give, which is true and was not decisive — tenant 5 already gives exactly
+that answer about `saveState`, on the same three grounds, and the size line
+made the choice arithmetic rather than taste (WEAVE-SPEC §1.2.1's tenant 7
+carries the paragraph).
+
 ### 2.6 Handle-table GC, and the §66 adoption path
 
 **Decided: v1 pins every claim, and every VM heap object is reached through
@@ -394,6 +417,26 @@ control with a hard-coded colour — is worth reading as one finding: **the
 thing**, and the first caller whose numbers come from an app author finds the
 places where "the same thing" was assumed rather than parameterised.
 
+### 4.4.3 A `.WAB` cannot show a bundle formula's source, and the format is why
+
+WEAVE-SPEC §6.9.3 makes the formula bar load a bundle formula as `=?`, and
+that is a format decision rather than a runtime shortfall: WEAVE-SPEC §2.9
+carries compiled RPN and no formula text, so the only ways to show what an
+author wrote are to decompile the RPN — a third implementation of
+WEAVE-SPEC §5.1 to keep in step with the other two — or to carry the source
+in the bundle.
+
+The second is the real option and it is deferred with its arithmetic: a
+SOURCE section already exists (WEAVE-SPEC §2.13) and is off by default, and a
+per-cell source table would cost roughly the sheet's own formula text against
+the 62KB cap (WEAVE-SPEC §2.1). SHEET's six formulas are 61 bytes; a 500-formula sheet at 20
+characters is 10KB, which is a sixth of the cap for a feature that matters
+only when somebody clicks a cell. The wave that wants it should measure a
+real sheet first.
+
+Committing over a `=?` replaces the formula, which is the operation the user
+was reaching for — so the gap costs a look, never an edit.
+
 ### 4.5 The stale slot count in os88.h
 
 `apps/cc/os88.h:141` says the C thunk layer covers "90 of the 134 slots";
@@ -447,3 +490,16 @@ The size line is watched every wave: `os88pkg.py`'s resident count against
 the ~52KB target, 55,000 bytes the overlay-split trigger, the OVL
 candidates pre-named (WEAVE-SPEC §1.2) so the split is a move, not a
 scramble.
+
+**As of wave 4 it is 60,868 resident against SPEC.md §20.1's 61,440 ceiling
+and the pre-named list is spent for the second time.** Wave 3 spent tenants
+1–5 and wave 4 added and spent 6 and 7, which is the mechanism working as
+designed; what is left in WEAVE-SPEC §1.2.1 is two tenants that do not exist
+yet (8 and 9) and one that is listed with its own disqualification (10, the
+flow walk, which a card switch reaches mid-run and W_PAINT reaches on a path
+that may not refuse). Wave 4 also spent the easy structural savings — the
+per-component rect table, the layout record's `row` field, the dirty set's
+byte-per-component — so **wave 5 opens with 572 bytes and no shortcut**, and
+its canvas work has to name a tenant of its own before it writes one. That is
+not a surprise this plan can absorb quietly, and it is written here rather
+than discovered in the size line's error message.

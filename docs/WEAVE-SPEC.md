@@ -2967,13 +2967,43 @@ GC roots, without which the collector frees the string a label is currently
 displaying) and §4.5.1 (every indexed operand is bounds-checked, because a
 `.WAB` on a disk need never have been through a packer).
 
+**Wave 4 shipped the `<grid>`** — WEAVE-SPEC 5.6's cell store in a claim of
+its own, `apps/weave/wfx.inc` (section 5's RPN machine and its 16.16
+arithmetic in assembly, because this toolchain has no `long` at all),
+`apps/weave/wband.inc` (§6.9.1's band composer, rcband's shape and Set 68's
+constants, now re-measured as PERFORMANCE.md Set 111), §5.5's sliced two-pass
+recalculation with §5.5.1's per-row damage, the formula bar over `os88line`,
+and `apps/weave/wfxc.c` — §9.4's one carve-out, the whole of §5.1's grammar
+compiled where it is typed.
+
+It was gated FIRST by the FX half of `weavevm` (§12.1.2), which found nothing
+only because the corpus was written before the core; `weavegrid` and
+`weavegfx` found the rest, and the load-bearing one was that `g.cell()`
+answered 0 for every cell — SHEET's `bump()` therefore computed 0+1 rather
+than 12+1 and the sheet recalculated to a total that looked entirely
+plausible. Nothing but the picture would have caught it, which is what
+§12.3's pixel rows are for. `weavegrid`'s first green run also caught the
+MODEL: `tools/weavesim.py` ran §5.5's passes at the end of a HANDLER, so a
+cell committed from the formula bar never recalculated at all.
+
+**It crossed §1.2's trigger by a long way and spent the tenant list a second
+time.** Tenants 6 and 7 moved out (the grid's load path and the whole commit,
+each with the paragraph §1.2 asks for), and the wave still did not fit
+SPEC.md §20.1's 61,440-byte ceiling, so three structures changed shape: the
+per-component SCREEN rect table went (2,000 bytes of bss to avoid four
+multiplies, rebuilt on every edge anyway), the layout record lost its `row`
+field and is ten bytes rather than twelve (a row is a contiguous run of the
+table), and the dirty-component set became one bit a comp_id. `weave.o88` is
+50,366 image + 10,502 bss = **60,868 resident**, `WEAVE.OVL` 19,475 — 572
+bytes under the ceiling, which is the number wave 5 has to plan around.
+
 The rest, each gated before the next begins:
 
 | wave | ships | the gate |
 |---|---|---|
 | 2 | WEAVE viewer: CC_PACKAGE from day one, the Frotz accept idiom verbatim (ASSOC16, ARG_FILE banking, first-paint spend, §10.1–§10.4's refusals), flow walk, static components, list with scroll | `weavesmoke` on both 1bpp adapters |
 | 3 | interaction + the VM: widget arm/fire, os88line input, event ring, `wvm.inc` (gated FIRST by the raw-QEMU differential corpus), adaptive slices, onclick/onchange/onkey, alert/timer/tone/state builtins, `^R` Reload | `weavevm`, `weavesession`, the §7.3 bar via `weavelat` |
-| 4 | `<grid>`: cell store, `wband.inc` benched against Set 68's numbers (`make weavebandbench`), per-row damage, formula bar, `wfx.inc` + resident formula compiler, sliced recalc | `weavegrid` (recalc vs model + tpdraw identity), `weavegfx` |
+| 4 | `<grid>`: cell store, `wband.inc` benched against Set 68's numbers (`make weavebandbench`), per-row damage, formula bar, `wfx.inc` + the formula compiler (§1.2.1's tenant 7, not resident — the size line decided it), sliced recalc | `weavegrid` (recalc vs model + tpdraw identity), `weavegfx`, and the FX half of `weavevm` FIRST |
 | 5 | `<canvas>`/`<sprite>`: `wspr.inc` mask composition, dirty-band emit, worker loop, AABB, KEY_DOWN input, worker tones, ontick budget enforcement | `weavegame` (wirefps/wireflick); **commission the field run** — 5150 fps and the XT ops/s reading that converts §4.12 to measurement |
 | 6 | Loom: `lm_` editor transplant, project folder + file switcher, LOOM.OVL compilers + packer, Pack, Preview, templates, APPDATA prefs, W_ONCLOSE/ASAVE close guard | `weavepack` byte-identity on all templates and demos, in the OS |
 | 7 | distribution: `make weavedisk` in three geometries with cluster-fit refusal + `--verify`, writable `PROJECTS/` folder, CATALOG.TXT, `BUNDLES=` knob; ALLAPPSFILES rows (one `WEAVE/` folder — package + overlay + bundles share it, SPEC.md §19.10); the 256KB one-app refusal exercised on the `xt` target | the release checklist |
