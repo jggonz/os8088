@@ -288,6 +288,67 @@ episode is recorded here as method: every budget number in the family is
 required to carry the multiplication that produced it, so a reviewer can
 re-run it.
 
+### 2.9 The canvas core is a SECOND SEGMENT, and the alternatives are priced
+
+**The decision wave 5 turns on, recorded here so that whoever reverses it
+starts from the arithmetic rather than from the shape of the code.** The
+contract is WEAVE-SPEC §1.2.2; this is why.
+
+**What wave 5 opened with.** `weave.o88` at 50,360 image + 10,502 bss =
+**60,862 resident** against SPEC.md §20.1's `APP_MAX_SIZE` of 0xF000 =
+61,440. **578 bytes.** §5.2 already said the pre-named overlay tenants were
+spent for the second time and that the easy structural savings had gone with
+wave 4.
+
+**What wave 5 needs resident, and why none of it can be an overlay tenant.**
+Mask composition, the dirty-band mark/compose/emit, the frame loop, AABB over
+sixteen sprites, the 37-key poll, the staging ring — measured at ~3.4KB of
+hand-written 8086 — run **on a worker task, per frame**. SPEC.md §73.14's
+overlay is loaded by `cc_ovneed`, whose *first instruction* is `call cc_iswk`
+and whose answer on a worker is a refusal: the load claims memory and reads a
+floppy, both forbidden by SPEC.md §20.6 rule 7, and the return-stash LIFO is
+correct for exactly one task. So the tenant list being spent is not what
+decides this. The tenant list is **inapplicable**, and would be at 578 bytes
+or at 5,780.
+
+**The four alternatives, each with the number that lost it.**
+
+| alternative | the arithmetic | verdict |
+|---|---|---|
+| **Raise `APP_MAX_SIZE`** | It is not a budget. A package links at `org 0` and addresses itself with 16-bit offsets (SPEC.md §33), so image + bss can never reach 64KB whatever the heap holds. 0xF000 leaves 4,096 bytes of headroom for the loader's own arithmetic; raising it to 0xF800 buys 2,048 bytes and spends a kernel constant every package in the tree is measured against, on one package's wave | **Refused, and it is not this project's to take** — CLAUDE.md: raising a budget is a decision taken with whoever asked for the feature. And 2,048 bytes buys one wave, not the family |
+| **Move bss into claims** | The three big ones are `w_lay[250]` at 2,500 bytes, `w_probe` at 1,024 and `w_gband` at 720. `w_lay` is defended in the source (an eleventh field costs 500 bytes) and every access would become a `w_w(seg,…)` far call on the layout walk's hot path; `w_probe` must be a whole cluster or §10.1's refuse-before-read guarantee degrades on every 2-sector-cluster volume; `w_gband` is reachable but needs an ES-based composer, which re-opens PERFORMANCE.md Set 111's measured file | **Refused as the ANSWER, taken as a partial** — it buys ~1KB at the cost of speed on measured paths, and wave 5 needs 3.4KB. What it did buy is §2.9's honest savings below |
+| **A second overlay** | Same mechanism, same `cc_iswk` refusal at the door. A second `.OVL` would need a second load path, a second stamp, a second claim — and would still refuse the worker | **Refused: it does not solve the problem at all** |
+| **Cut the feature** | A `<canvas>` without a worker is a canvas that draws on `WM_TIMER` at 18.2 Hz on the UI task, holding the gfx lock for the compose as well as the blit, with every keystroke and every menu track behind it. SPEC.md §20.6 rule 3 is the rule it breaks | **Refused: the windowed game IS the worker** (§4.4) |
+
+**What was taken instead**, and it is the tree's own doctrine rather than a
+new mechanism: CLAUDE.md's hard rule *a C package that does not fit gets a
+second segment, not a bigger one*, read through SPEC.md §68.10's `WORD.OVL`
+(an assembly module beside the package, DS still the package's) and
+`C64.ROM`'s lifecycle (a sidecar read at launch into a claim, never
+re-read). `WEAVE.WSM` is both: a flat `nasm -f bin` binary at `org 0`, read
+**once at open and only when the bundle declares a canvas**, resident until
+close, far-called from the worker and from the UI task alike. A bundle with
+no canvas pays nothing at all — not a claim, not a disk revolution, not a KB
+of §10.1's ask.
+
+**What it costs, and it is not free.** One more claim record: WEAVE-SPEC
+§1.4's ladder goes from six at peak to **seven against SPEC.md §50.2's cap of
+eight**, so the family has one spare rather than two, and §1.4 names the
+candidate to take back if an eighth is ever wanted. One more file on the
+disk, and one more refusal sentence at open. One more stamp to keep honest —
+and the stamp is stronger than `.OVL`'s, because a shared `%include` gives
+both assemblies an ABI number, which two size words cannot express.
+
+**And the honest savings were taken first, because a wave that reaches for a
+new mechanism without them has not earned it.** Two, both provable, both
+free: `w_idseen[256]` (the comp_id uniqueness bitmap) is **subsumed** by the
+sequential check three lines below it — a bundle whose ids are not exactly
+1..n in order is refused by `id != w_ncomp + 1` with the same field name, so
+the array can never be the thing that fires; and `w_msg[88]` was a
+byte-for-byte duplicate of `w_status[88]`, written only by `w_say()`, which
+copies the same sentence into both. **344 bytes**, which is not the wave and
+is 60% of what wave 5 opened with.
+
 ---
 
 ## 3. The platform facts that shaped everything

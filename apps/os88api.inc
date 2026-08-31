@@ -1649,7 +1649,14 @@ DRVC_FILE    equ 5              ; a volume served by somebody answering
 ;     OSAPI_WM_CONTENT, OSAPI_WM_OBSCURED, OSAPI_WM_CLIP_SET,
 ;     OSAPI_WM_CLIP_CLEAR, OSAPI_WM_CLIP_TEST, OSAPI_VIDEO, OSAPI_GET_TICKS,
 ;     OSAPI_MOUSE, OSAPI_SRAND/RAND, OSAPI_SND_CAPS, OSAPI_SND_TONE,
-;     OSAPI_TASK_SLEEP, OSAPI_TASK_YIELD and OSAPI_TASK_ALIVE.
+;     OSAPI_TASK_SLEEP, OSAPI_TASK_YIELD, OSAPI_WM_WAKE and
+;     OSAPI_TASK_ALIVE. OSAPI_WM_WAKE is not a new permission - its own
+;     cell below has always said "any context - ISR-safe and worker-safe,
+;     no lock needed" - and it is on this list because a list of what a
+;     worker MAY call is read as exhaustive, so a worker-safe slot missing
+;     from it reads as forbidden. It is the carrier of every
+;     worker-stages/UI-task-commits handshake in the tree (SPEC.md 77,
+;     WEAVE-SPEC 6.10.6).
 ;     OSAPI_SET_COLOR writes ONE global pen shared by the whole machine, so
 ;     set it only inside the same lock hold as the drawing it colours -
 ;     lock-free, it repaints someone else's window in your colour.

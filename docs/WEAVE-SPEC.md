@@ -51,6 +51,7 @@ whole develop–run cycle lives on the target with zero new kernel bytes.
 |---|---|
 | **`WEAVE.O88`** | the runtime. A C package (`CC_PACKAGE(weave,weave,WEAVE.OVL)`, SPEC.md §73) with hand-written 8086 cores for the hot loops, RUNCPM's shape (SPEC.md §74). Opens one `.WAB` per instance. Resident target ≤52KB image+bss; 55,000 bytes is the overlay-split trigger (SPEC.md §73.14) |
 | **`WEAVE.OVL`** | the runtime's one overlay: refusable, UI-task-only paths — the tenant list is §1.2.1. Nothing an event handler needs mid-run lives here |
+| **`WEAVE.WSM`** | the runtime's **canvas core** (§1.2.2): a second, RESIDENT segment, read ONCE at open and only when the bundle declares a `<canvas>`, far-called from the worker as well as from the UI task. It is not an overlay and does not carry the `.OVL` extension, because an overlay is refusable and on-demand and this is neither — `cc_ovneed` refuses a worker outright (SPEC.md §73.14), and every byte in here runs per frame on one |
 | **`LOOM.O88`** | the IDE. A separate native package (the WORD/CWORD precedent: two things may not answer to one name). Note Pad's editor engine transplanted with prefix `lm_` (the SPEC.md §68 precedent), a file-list sidebar, one editor pane |
 | **`LOOM.OVL`** | Loom's one overlay: the WML compiler, the WJS compiler, the FX pre-compiler, the atom interner, the bundle writer. Pack is a menu command and menu commands may refuse — the canonical overlay tenant |
 | **`apps/weave/*.inc`** | the shared component library: **paint and hit-test** cores as assembly source `%include`d by BOTH packages (the `apps/os88ui.inc` model, SPEC.md §20.5.1 — this platform's only code-sharing mechanism). They are assembly from wave 2 because they run under the gfx lock, once per callback, and are what LOOM's Preview (§1.7) paints with. **The flow walk (§7) is C in the runtime** and is not one of them: it emits no gfx call, runs over at most 250 records in microseconds (§7.2), and has exactly one caller until LOOM exists. When LOOM lands (wave 6) it takes the same walk — moved to a shared `.inc`, or called through one — and **never a second copy**: two layouts that must agree cell-for-cell (§12) is the failure §11's byte-identity rule exists to prevent, said about code instead of about bundles |
@@ -156,6 +157,102 @@ the split and it is paid once, visibly, on a disk somebody has taken the
 package off without its module — which is why `make weavedisk` puts both in
 one folder and `weavesmoke` boots that folder.
 
+#### 1.2.2 `WEAVE.WSM` — the canvas core, resident and beside the package
+
+**The decision this section records is the one wave 5 turns on, and it is the
+owner's to reverse.** SPEC.md §20.1 caps a package's image + bss at
+`APP_MAX_SIZE` = 0xF000 = 61,440 bytes, a kernel constant a package author may
+not raise. Wave 4 closed at 60,862 resident (§13.1) — **578 bytes** — and
+§1.2.1's overlay tenant list was spent for the second time. Wave 5's code is
+mask composition, dirty-band emit, the frame loop, AABB, the key poll and the
+staging ring: **all of it runs on a WORKER task, per frame**, and
+SPEC.md §73.14's overlay is loaded on demand by `cc_ovneed`, which **refuses a
+worker at its first instruction** — the load claims memory and reads a floppy,
+both forbidden by SPEC.md §20.6 rule 7, and the return-stash LIFO is correct
+for one task only. So not one byte of this wave can be an overlay tenant, and
+the tenant list being spent is not the binding fact; the tenant list being
+*inapplicable* is.
+
+The in-doctrine answer is CLAUDE.md's own hard rule — *a C package that does
+not fit gets a second segment, not a bigger one* — read through the two
+precedents this tree already has for a second segment that is **not** an
+overlay: SPEC.md §68.10's `WORD.OVL` (an ASSEMBLY module beside the package,
+DS still the package's) and `C64.ROM` (a sidecar read at launch into a claim,
+C64-SPEC §14). `WEAVE.WSM` is the first and takes the second's lifecycle:
+
+- **A separate `nasm -f bin` assembly at `org 0`**, built from
+  `apps/weave/wcanvas.asm`, which `%include`s `apps/weave/wspr.inc` (the
+  composer) and `apps/weave/wwork.inc` (the frame loop). It is **not** part of
+  the package's one translation unit (SPEC.md §73.1) and names no package
+  label; the two agree about nothing except this section's ABI.
+- **Read ONCE, at open, by the UI task**, from inside §1.2.1's tenant 4 — the
+  load path — and **only when the bundle's header sets `WABF_CANVAS`**. A
+  bundle with no canvas never asks for the file, never claims for it, and pays
+  nothing: not a byte of heap, not a disk revolution, not a KB of §10.1's
+  arithmetic.
+- **Resident from that moment until the instance closes or reloads.** There is
+  no unload, no re-read and no refusal after open. That is the whole
+  difference from an overlay and it is what makes the module callable from the
+  worker.
+- **DS is the caller's on entry and the module never changes it for the
+  caller.** Inside a call the module switches DS to the canvas claim for the
+  body's duration and restores it — `wvm.inc`'s own idiom (§4.12) — and its
+  own constants are reached `cs:`-relative. It holds **no** package-DS pointer
+  across a call.
+
+**The layout.** The file begins with an 8-byte header, and the entry point is
+at a fixed offset so the package can far-call it with a dword it assembles
+itself:
+
+| offset | size | field |
+|---|---|---|
+| +0 | 2 | magic `0x5357` (`'W','S'` little-endian) |
+| +2 | 2 | ABI number — `WSM_ABI`, from `apps/weave/wsmabi.inc`, which BOTH assemblies `%include` |
+| +4 | 2 | the module's own size in bytes, from its last label |
+| +6 | 2 | the byte offset of the module's STATE BLOCK (§6.10.4) within the module image |
+| +8 | — | **the entry**: `WSM_ENTRY` = 8, far-called, `AL` = verb (§6.10.3) |
+
+**The stamp, and what it catches.** `WEAVE.O88` and `WEAVE.WSM` are separate
+files on a floppy, so a rebuilt package beside a stale module is a thing a
+user can produce with a file copy — SPEC.md §73.14 says this about `.OVL` and
+it is just as true here. Three words are checked before the module is believed
+and the check is the whole of the trust:
+
+1. **the magic**, so a truncated or unrelated file is refused rather than
+   entered;
+2. **the ABI number** against `WSM_ABI`, which the package assembles in from
+   the same `%include` — this is the half `.OVL`'s two size words cannot do,
+   because a *contract* change need not change a size;
+3. **the size word** against `WSM_SIZE`, the module's byte count as it stood
+   when the package was assembled, injected by the Makefile with `-D` after
+   the module is built and before the package is.
+
+Between them they catch a stale pair whose ABI moved and a stale pair whose
+size moved. They do **not** catch two builds of the same ABI at the same size,
+and that is stated rather than implied — the same sentence SPEC.md §73.14
+writes about its own two words.
+
+**The refusals, and they name the file.** A bundle that declares a canvas and
+cannot get its module refuses at open, the way a missing `WEAVE.OVL` refuses
+(§10.3/§10.4) — window up, the sentence in the content area, the status row
+keeps it, the toast fires too:
+
+> `WEAVE.WSM is not on this disk.`
+> `WEAVE.WSM does not match this program.`
+> `Not enough memory for WEAVE.WSM.`
+
+`make weavedisk` puts the package, the overlay, the module and the bundles in
+one folder for exactly this reason, and wave 7's single `WEAVE/` folder
+(SPEC.md §19.10, §13.1) gains one more file.
+
+**What it costs, counted.** One more heap claim while a canvas app is open —
+§1.4's ladder is amended for it — and `ceil(size/1024)` KB added to §10.1's
+`ask` when and only when `WABF_CANVAS` is set. What it buys is that wave 5's
+per-frame code exists at all: the alternatives are judged in
+docs/WEAVE-PLAN.md §2.9, with the arithmetic, and every one of them lost to
+either a kernel constant this project may not raise on a package's behalf or a
+refusal a running game cannot be given.
+
 ### 1.3 The languages, and where compilation lives
 
 | language | what it writes | compiled to |
@@ -189,12 +286,19 @@ The accepted cost, priced. One typical instance:
 | bundle claim (§2.1; typical 8–24, cap 62) | 8–24 |
 | VM claim (§4.7; default 16, cap 32) | 16 |
 | grid claim (§5.6; only with a `<grid>`) | 0–26 |
-| canvas claim (§6.10; only with a `<canvas>`) | 0–8 |
-| **typical instance total** | **~75–120** |
+| canvas claim (§6.10.4; only with a `<canvas>`) | 0–8 |
+| `WEAVE.WSM` claim (§1.2.2; only with a `<canvas>`) | 0–5 |
+| **typical instance total** | **~75–125** |
 
-A sixth, transient claim (2–8KB) exists only during `saveState`/`loadState`
-staging (§8.3). Six claim records at peak against the 8-per-owner cap
-(SPEC.md §50.2) — two spare.
+`WEAVE.OVL`'s own claim (§1.2.1) is a seventh once anything has opened, and
+a transient claim (2–8KB) exists only during `saveState`/`loadState` staging
+(§8.3). **Seven claim records at peak against the 8-per-owner cap
+(SPEC.md §50.2) — one spare**, and that is the number wave 5 spent: it was
+two before `WEAVE.WSM`. The peak needs a bundle that declares BOTH a `<grid>`
+and a `<canvas>` and then calls `saveState` from a handler; the two demo
+shapes each declare one. A wave that wants an eighth claim has to take one
+back first, and the obvious candidate is the transient — §8.3 could stage
+through the VM claim's own scratch at the cost of a bound on state size.
 
 Against the machine ladder — heap figures are `tools/kernsize.py`'s, the
 authority per docs/KERNEL-MEMORY.md (SPEC.md §61.4's 551/167 figures are
@@ -316,7 +420,7 @@ draw and arm/fire natively but no bytecode runs, and the pane is labelled
 | +11 | 1 | grid KB | grid claim ask, 0 or 8–26 (§5.6) |
 | +12 | 1 | section count | **5–9**, one row per section present. Five is the floor and not one: §2.4 makes UISTREAM, PROPS, CODE and ATOMS mandatory in every bundle and ICON always present, so those five rows are named by the format itself and a bundle carrying fewer refuses (§10.4) |
 | +13 | 1 | entry card | card index (1-based) shown at open |
-| +14 | 1 | canvas KB | canvas claim ask, 0 or 2–8 (§6.10) |
+| +14 | 1 | canvas KB | canvas claim ask, 0 or 2–8; the derivation is pinned in §6.10.4 |
 | +15 | 1 | reserved | 0 |
 | +16 | 16 | app name | 15 characters + NUL, space-padded before the NUL is **not** allowed: unused bytes after the NUL are 0x00 |
 
@@ -1433,6 +1537,22 @@ ops/s, under 10% of the VM contract). Per-frame JS beyond that is
 arithmetically impossible on this machine (§9.3) and is refused at pack,
 not discovered on an XT.
 
+**Counted as the compiler emits them**, one per instruction whatever its
+operands, including the `PUSHN`/`RET` every function ends with — so an empty
+handler is 2 ops. A backward jump is any patched displacement that goes
+negative, which every `while` and `for` back-edge is; a `CALL` is a user call
+**or a builtin**, so `tone()` inside an `ontick` handler is a pack error and
+the sound belongs in `oncollide` where PONG puts it.
+
+**And the runtime checks it too** (§10.4), which is wave 5's amendment. Every
+other §10.5 rule is a property of the source and a bundle that skipped the
+packer merely misbehaves; this one bounds a path the machine takes eighteen
+times a second, and it is the one path §4.11's runaway alert cannot police —
+the counter is armed per `wvm_begin`, so a handler dispatched afresh every
+frame resets it every frame and a hostile bundle could hold the UI task for
+as long as it liked. The runtime therefore refuses the bundle rather than
+trusting the packer, in the validator, at no resident cost.
+
 ### 4.12 The contract number
 
 **The WVM contract is 10,000–30,000 bytecode ops/s on the 4.77 MHz
@@ -1447,6 +1567,34 @@ reports its own number the way RunCPM banners its clock. The wave-5 field
 run (§13) converts the figure from design arithmetic to measurement; no
 performance claim ships on emulator evidence alone (docs/TESTING.md,
 docs/FIELD-MACHINES.md).
+
+**How the banner is measured, pinned, because a self-measurement whose
+method is not written down is a number nobody can check.** Only **exhausted**
+slices are counted, which is §4.10's own rule and the only honest window: a
+slice that finished early spent an unknown fraction of its budget, and
+counting it would divide real ops by wall-clock time the VM was not running
+in. So the runtime accumulates `budget` ops for every slice that came back
+`MORE`, and the ticks those slices spanned; when the window reaches 18 ticks
+it publishes
+
+```
+ops/s = (acc / ticks) x 18 + (acc / ticks) / 5 + ((acc mod ticks) x 18) / ticks
+```
+
+— which is `acc x 18.2 / ticks` written so that no intermediate leaves 16
+bits (`acc/ticks` is at most ~1,700 at the contract's ceiling, and
+`acc mod ticks` is under 36). A window that ran longer than 36 ticks is
+**discarded rather than scaled**, because at that point the VM was idle for
+most of it and the quotient is a statement about the desktop, not about the
+VM. Until a full window has closed the banner reads `WVM: - ops/s (idle)`,
+and that is the honest answer for an app that has not run a slice.
+
+The banner appears in **About and in Bundle Info**, and the second is not a
+duplicate: About is a toast and takes itself down in about three seconds
+(SPEC.md §59), which is not long enough to copy a five-digit number off a
+5150's screen by hand. Bundle Info's line stays until the card is repainted.
+That is the field run's instrument (§13.1's wave-5 row) and it is why it is
+readable twice.
 
 ---
 
@@ -2031,9 +2179,11 @@ round(18.2/fps))` ticks):
    remainders** — `vx`/`vy` are in 1/16-px per frame (16 = 1 px/frame),
    the arkanoid technique.
 2. Bounce on `walls` edges (negate the component, emit `onwall`); a
-   sprite fully out an open edge stops and emits `onscore`.
+   sprite fully out an open edge stops and emits `onscore` **once, and is
+   re-armed the frame it is no longer fully out of that edge** (§6.10.1).
 3. AABB collision over shown sprites (≤ 16 per canvas; pairs emit
-   `oncollide` once per contact, re-armed on separation).
+   `oncollide` once per contact, re-armed on separation — **and a pair
+   either of whose sprites is not `shown` counts as separated**, §6.10.1).
 4. Compose background + sprites into the buffer via §2.11's AND/OR masks
    — transparency is legal HERE because it happens in RAM; the
    no-masked-blit constraint binds gfx calls only.
@@ -2055,6 +2205,283 @@ Surface — canvas: `start(fps)` (fps 1–18), `stop()`; sprite: `x`, `y`
 frames (the worker reads sprite state once per frame from the shared
 records in the canvas claim; a single word each, no tearing on an 8086
 word write).
+
+**Where the code lives.** Steps 1–7 above are `WEAVE.WSM` (§1.2.2) —
+`apps/weave/wspr.inc` (the composer) and `apps/weave/wwork.inc` (the loop),
+assembled into a second, resident segment because every one of them runs on
+the worker and SPEC.md §73.14's overlay refuses a worker at its first
+instruction. The resident package keeps only the seams: the worker
+trampoline `OSAPI_TASK_SPAWN` requires (its entry must be inside the
+package's own region, SPEC.md §20.6), the far-call stub, the paint arm, the
+native surface's two arms, and the drain (§6.10.6).
+
+#### 6.10.1 The frame, normative and exact
+
+`tools/weavesim.py`'s `canvas_frame()` is the model and the 8086 agrees with
+it operation for operation. It is written out here because a differential
+that disagrees by one pixel on a negative coordinate is a defect nobody can
+localise from the diff alone.
+
+Let `W` = `record w × 8` and `H` = `record h × 8` — **the record's bytes, not
+the WML `h`**, which the packer already rounded up (§2.5). Each sprite keeps
+`px16`/`py16`, its position in 1/16 px, seeded `x×16`/`y×16` at open and
+re-seeded on any write to `x` or `y` from script (which therefore **discards
+the sub-pixel remainder**).
+
+```
+frame += 1
+for each sprite, in UISTREAM order:
+    if not shown: skip it entirely           ; no move, no wall, no score,
+                                             ; and not a collision candidate
+    px16 += vx ;  py16 += vy
+    x = px16 >> 4 ;  y = py16 >> 4           ; ARITHMETIC shift: floor, not
+                                             ; truncation toward zero
+    for edge in (T, B, L, R):                ; all four, in this order, no break
+        hit = (T: y < 0) (B: y + ph > H) (L: x < 0) (R: x + pw > W)
+        if not hit: continue
+        if walls has this edge:
+            T: py16 = -py16
+            B: py16 = 2*(H - ph)*16 - py16
+            L: px16 = -px16
+            R: px16 = 2*(W - pw)*16 - px16
+            negate vy (T,B) or vx (L,R)
+            x = px16 >> 4 ;  y = py16 >> 4   ; recomputed BEFORE the next edge
+            emit onwall(sprite, edge)
+        else:
+            out = (T: y + ph < 0) (B: y > H) (L: x + pw < 0) (R: x > W)
+            if out and not scored:  scored = 1 ; vx = vy = 0
+                                    emit onscore(sprite, edge)
+            if not out:             scored = 0
+for each pair i<j of SHOWN sprites, in UISTREAM order:
+    overlap = ax < bx+bpw and bx < ax+apw and ay < by+bph and by < ay+aph
+    if overlap and not in contact:  mark contact ; emit oncollide(A, B)
+    if not overlap:                 clear contact
+if tick and frame mod tick == 0:  emit ontick(frame AND 0xFFFF)
+```
+
+Six things an implementer would otherwise guess, each of which changes an
+answer:
+
+- **`>> 4` is arithmetic.** `-17 >> 4` is −2, and `-17 / 16` truncating is
+  −1. Every negative sprite position diverges by a pixel otherwise. On the
+  8086 that is four `sar`s and never an `idiv`.
+- **Edge order is T, B, L, R with no early exit**, and `x`/`y` are recomputed
+  from the accumulators after each bounce, so a sprite in a corner bounces
+  twice and emits two `onwall` records in one frame.
+- **The far edges use `>` and not `>=`**: a sprite exactly flush with the
+  right edge (`x + pw == W`) has not hit it.
+- **All four AABB comparisons are strict `<`**: touching edges do not
+  collide.
+- **`walls` bits are T=1, B=2, L=4, R=8** — `1 << "TBLR".index(c)`, and not
+  the more usual LRTB. Absent attribute means all four (0xF), supplied by the
+  reader and never by the packer.
+- **`onwall` fires on every frame the sprite is out of bounds on a walled
+  edge**, not only on the transition. The bounce normally puts it back
+  inside, so that is once; a velocity larger than twice the clearance can
+  oscillate, and that is the app's arithmetic, not the runtime's.
+
+**The two re-arms are wave 5's amendment and the model was fixed with the
+8086.** The draft model latched `scored` for the life of the instance and
+never cleared a contact whose sprite had been hidden — so PONG scored
+exactly one goal per launch, and a sprite hidden mid-contact could never
+collide again. Both are the same omission with two faces: an event that fires
+"once per contact" needs a definition of *leaving* the contact, and §6.10's
+own sentence already had one for collisions. `scored` clears the frame the
+sprite is no longer fully out of that edge; a contact clears when the pair
+stops overlapping **or either sprite stops being shown**.
+
+**The frame clock.** `start(fps)` takes fps 1–18 (anything else is the
+`start(%s): fps is 1..18.` script error, §10.6.1), sets
+`sleep = max(1, round(18.2 / fps))` — 1→18, 2→9, 3→6, 4→5, 5→4, 6→3, 7→3,
+8→2, 9..12→2, 13..18→1 — and resets the phase counter but **not** the frame
+counter. `stop()` releases the loop. The worker task itself is hired once,
+at open, and parked rather than killed between `stop()` and the next
+`start()`: SPEC.md §20.6 rule 2 has no un-spawn, and a worker that exited
+would leak the instance record for the session.
+
+#### 6.10.2 Composition and the dirty bands
+
+There is **no oracle for this half** — `weavesim` models the semantics and
+deliberately not the pixels — so the rules are normative here and the gate is
+`weavegame`'s counted blits (§12.3), never a golden picture.
+
+The canvas claim holds one 1bpp buffer, `stride = W/8` bytes a row, `H`
+rows, in the framebuffer's own polarity (1 = a LIT pixel, SPEC.md §5.4.2) —
+which is the polarity `GFX_BLIT1` wants and the polarity §2.11's images and
+masks were packed in. The pen is set once per lock hold with
+`GFX_BLIT1_PEN` (ink `CBLACK`, paper `CWHITE`), so a set bit is ink.
+
+A **band** is eight pixel rows of the buffer, 8-aligned to the buffer's own
+top: band *k* covers rows `8k .. 8k+7`, and there are `H/8` of them (`H` is a
+multiple of 8 by §2.5's rounding, so the last band is whole). Per frame:
+
+1. **Mark.** A sprite is *moved* if its `x`, `y`, `frame` or `shown` differs
+   from what was last composed. For each moved sprite, mark every band its
+   OLD rect touched and every band its NEW rect touches. Nothing else is
+   marked; a still sprite on a still background costs nothing.
+2. **Compose.** For each maximal RUN of consecutive marked bands: clear the
+   run's rows to paper, then, for each shown sprite whose rect intersects the
+   run, in UISTREAM order, apply §2.11's rule byte by byte —
+   `dst = (dst AND mask) OR image` — clipped to the buffer's rectangle. A
+   sprite at a negative `x` or past the right edge is clipped in **whole
+   bytes**: partial columns of a byte are not split, because `w` is a
+   multiple of 8 and a sprite's width is a whole number of bytes, so a sprite
+   at an `x` that is not a multiple of 8 is shifted into place a byte at a
+   time as it is composed.
+3. **Emit.** One `GFX_BLIT1` per run: `ES:SI` = the run's first byte,
+   `BP` = the stride, `AX` = the canvas's screen x, `BX` = its screen y plus
+   `8 × first band`, `CX` = `W`, `DX` = `8 × band count`. x and `CX` are
+   multiples of 8 by construction (§3.3 requires `w` to be, and §7.1.2 puts
+   the content origin on a multiple of 8).
+
+The background is **paper** and there is no background art in v1 — a bundle
+that wants one draws it with sprites. Step 2's clear-then-compose writes each
+byte of a run exactly once for the background plus once per covering sprite,
+never twice for the same reason, and the run is put on the glass in one call:
+PERFORMANCE.md's two rules, applied to a frame.
+
+**The count is the budget.** §14 prices a two-sprite frame at 2–4 calls and
+~2–5 ms. One moving sprite whose old and new rects share a band is **one**
+call; one that has moved clear of its old rect is two. PONG's three sprites
+with a still paddle and a still wall are one or two calls a frame, and
+`weavegame` reads the module's own `blits` and `frames` counters and prints
+the quotient — a counted number, not a felt one.
+
+**`GFX_BLIT1` refusal has no second path here and does not need one.**
+Everywhere else in this runtime a refused blit letters the row instead
+(§6.9.1); a canvas cannot, and does not have to, because `WABF_CANVAS`
+already refused the whole bundle at load on the one kernel that lacks the
+body (§10.2). A refusal after that is the clip answering, which the worker
+has already tested.
+
+#### 6.10.3 The module's verbs
+
+`WEAVE.WSM` is entered by a far call to `seg:8` (§1.2.2) with `AL` = the
+verb. `DS` is the caller's on entry and is the caller's on return; the module
+switches `DS` to the canvas claim inside a body and puts it back. `ES` is
+preserved. Verbs, pinned:
+
+| `AL` | verb | in | out |
+|---|---|---|---|
+| 0 | `BIND` | `BX` = canvas claim seg, `CX` = bundle claim seg, `DX` = a 12-byte parameter block in the caller's `DS` (W, H, walls, tick, nspr, SPRITES offset) | `AX` = 1 bound |
+| 1 | `SPRITE` | `BX` = sprite index, `CX` = the record's field id, `DX` = the value; `AH` = 0 read / 1 write | `AX` = the value read, or 1/0 for a write accepted/refused |
+| 2 | `START` | `BX` = fps 1..18 | `AX` = 1 running, 0 = fps out of range |
+| 3 | `STOP` | — | `AX` = 1 once the worker has acknowledged |
+| 4 | `PAINT` | `BX` = screen x, `CX` = screen y; the gfx lock is HELD by the caller | `AX` = blits emitted |
+| 5 | `DRAIN` | `DX` = a 4-word record block in the caller's `DS` | `AX` = 1 a record was written, 0 the ring is empty |
+| 6 | `UNBIND` | — | `AX` = 1 |
+| 7 | `WORKER` | — | never returns (SPEC.md §20.6 rule 2) |
+
+Verb 7 is reached from the resident trampoline `OSAPI_TASK_SPAWN` was given,
+which is a near label in the package's own image because the kernel's
+ownership fence requires one (SPEC.md §20.6). Everything after that first
+instruction is the module's.
+
+#### 6.10.4 The canvas claim, byte by byte
+
+KB-aligned, pinned, zeroed at birth. `nspr` is the number of `<sprite>`
+records inside the canvas, 0–16.
+
+```
++0000   16 bytes   the canvas header
+   +0   word       W, pixels (record w x 8)
+   +2   word       H, pixels (record h x 8)
+   +4   word       walls (T=1 B=2 L=4 R=8)
+   +6   word       tick (0 = no ontick)
+   +8   word       nspr
+   +10  word       stride = W/8
+   +12  word       the buffer's offset in this claim
+   +14  word       0
++0010   24 x nspr  the sprite records, in UISTREAM order
+   +0   word       px16, signed         +12  byte  pw, the sprite's px width
+   +2   word       py16, signed         +13  byte  ph, its px height
+   +4   word       x, signed            +14  byte  wb, its width in BYTES
+   +6   word       y, signed            +15  byte  nframes
+   +8   word       vx, signed           +16  word  data offset in SPRITES
+   +10  word       vy, signed           +18  word  ox, last composed x
+                                        +20  word  oy, last composed y
+                                        +22  byte  flags: 1 shown, 2 scored,
+                                                   4 was shown, 8 dirty
+                                        +23  byte  frame | (last composed
+                                                   frame << 4)
++          the 1bpp buffer, stride x H bytes
+```
+
+**The claim's size is derived and the packer computes it from the same
+numbers**, which is a wave-5 correction to §2.2's canvas KB byte:
+
+```
+need     = 16 + 24 x nspr + (W/8) x H          ; W and H as above - the
+                                               ; ROUNDED H, not the WML h
+canvasKB = min(8, max(2, ceil(need / 1024)))
+```
+
+The draft packer sized the buffer from the WML `h` while the runtime derives
+`H` from the record's rounded height, so a canvas of `h="153"` asked for 6KB
+and needed 6,800 bytes. No shipped bundle changes — PONG's `(240/8)×120 +
+16 + 72 = 3,688` is 4KB either way — and the largest legal canvas,
+320×160 with sixteen sprites, is `16 + 384 + 6,400 = 6,800` → 7KB, inside the
+8 the byte allows.
+
+#### 6.10.5 The key poll
+
+Step 6 polls `OSAPI_KEY_DOWN` (SPEC.md §9.7) for a **pinned set of 37 keys —
+`a`–`z`, `0`–`9` and space** — and stages an `onkey` record for every key
+whose state differs from the previous frame's: `data1` = the lower-case
+ASCII, `data2` = 1 down / 0 up.
+
+The set is pinned rather than derived because §3.4 gives a canvas's `onkey`
+one ASCII word and one up/down word and **no scan code** — so a key with no
+ASCII meaning would arrive as `onkey(0, 1)` and no handler could tell which
+one it was. Arrows, Enter and Escape are therefore deliberately absent, and
+adding a scan-code word to the record is a v2 item (§13.2), not a defaulted
+guess. PONG steers on `a` and `z` for exactly this reason.
+
+**The cost, counted:** 37 far calls at SPEC.md §7's 46.7 µs is **1.7 ms of a
+55 ms frame, 3%** — against ~756 µs for a single primitive, so the poll is
+worth two blits and buys the one fact int 16h cannot give (SPEC.md §9.7: a
+typematic repeat is byte-identical to a fresh press). Asking is what arms the
+map, so the first frame after `start()` always reads every key up; a key
+already held then is not seen until it is pressed again, which is that
+slot's own documented cost.
+
+#### 6.10.6 The staging ring — the worker's half of the handshake
+
+**A worker may not write the VM's event ring.** `wvm_enq` runs with `DS` on
+the VM claim, the ring's head and count are two words with no lock, and
+SPEC.md §20.6 rule 3 forbids a worker to take one — so the worker stages and
+the UI task commits, which is `apps/ftpd`'s shape (SPEC.md §77) said about
+frames instead of about bytes.
+
+The staging ring is **32 records of 6 bytes** (comp, atom, data1, data2) in
+the module's own image, with a head byte and a count byte. The worker
+appends; after a frame that appended anything it posts `OSAPI_WM_WAKE`, which
+is ISR- and worker-safe and takes no lock (`apps/os88api.inc`, and see the
+amendment to SPEC.md §20.6 rule 7 this wave makes). The UI task drains it at
+the top of its wake handler, before the slice, one record at a time through
+verb 5, and hands each to the existing `wvm_enq` — so **the whole of §4.9's
+policy is applied once, by the VM core, where it already lives**.
+
+The staging ring's own policy is therefore only what is needed to lose
+nothing between the frame and the drain:
+
+- **`ontick` collapses to one** (§4.9 rule 3), by a pending flag rather than
+  by a scan: at most one `ontick` is ever staged, and a second in the same
+  drain window replaces nothing because there is nothing to replace.
+- **A full ring receiving a key drops the oldest non-key record** (§4.9 rule
+  4's shape) and appends the key; **a ring genuinely full of keys answers
+  with the BEL** — `OSAPI_SND_TONE`, the one worker-legal voice (§8.4,
+  §9.11) — and refuses the key, which is §4.9 rule 5 emitted from the only
+  task that can see the overflow.
+- **Any other record arriving on a full ring is dropped and counted.** The
+  counter is in the state block and `weavegame` reads it: input overrun is
+  one of the three defects no emulator shows (CLAUDE.md), so it is
+  instrumented rather than hoped about. Thirty-two records is more than four
+  frames of the worst legal frame (sixteen sprites, two wall bounces each),
+  against a drain that runs at every wake.
+
+`stop()` and the close/reload path both drain to empty and clear the pending
+flag, so a stale record cannot arrive against the next bundle's components.
 
 ### 6.11 Menus
 
@@ -2544,9 +2971,12 @@ pinned so three implementations refuse identically.
 
 ### 10.1 Memory — before any I/O
 
-Ask = `ceil(filesize/1024) + vmKB + gridKB + canvasKB` from the directory
-entry and the header (§2.2). Refuse when `OSAPI_MEM_AVAIL`'s total is
-short OR its largest free run cannot hold the largest single claim:
+Ask = `ceil(filesize/1024) + vmKB + gridKB + canvasKB + wsmKB` from the
+directory entry and the header (§2.2), where `wsmKB` is
+`ceil(WSM_SIZE/1024)` when — and only when — `WABF_CANVAS` is set and 0
+otherwise (§1.2.2: a bundle with no canvas never asks for the module). Refuse
+when `OSAPI_MEM_AVAIL`'s total is short OR its largest free run cannot hold
+the largest single claim:
 
 > `This app needs <N>KB; the largest free run is <M>KB.`
 
@@ -2565,12 +2995,20 @@ Tested by the slot's CF answer, per flag bit (§2.2.1), at load:
 the status row once, `timer()` inert and the input caret static (§6.7,
 §8.2).
 
-### 10.3 Missing or unreadable bundle
+### 10.3 Missing or unreadable bundle — or a missing module
 
 The C64-SPEC §1.4 shape, copied: window up, content area names the file
 (`FORM.WAB missing`), permanent status-row line, toast as well. A
 double-click that reaches a deleted file and an empty Deck directory both
 land here.
+
+**So does a missing sidecar**, and it names the sidecar rather than the
+bundle: `WEAVE.OVL is missing or stale; no bundle can open.` (§1.2.1), and —
+for a bundle that declares a `<canvas>` and only then — `WEAVE.WSM is not on
+this disk.` / `WEAVE.WSM does not match this program.` / `Not enough memory
+for WEAVE.WSM.` (§1.2.2). A disk somebody has taken the package off without
+its two modules is the case, it is paid once and visibly, and it is why
+`make weavedisk` puts all four in one folder.
 
 ### 10.4 Malformed bundle
 
@@ -2596,9 +3034,24 @@ lays the card out around a number nobody wrote. The field is
 §3.3 bounds a `meter`'s `max` at 1–32000, an `input`'s `cols` at 2–60, a
 `list`'s `rows` at 1–40, a `grid`'s `cols` at 1–26 and `rows` at 1–256
 with cols×rows ≤ 6,140 (§5.6), a `canvas`'s `w` at 64–320 and a multiple
-of 8 and its `h` at 32–160. The field is `property range`. Both are
+of 8 and its `h` at 32–160, a `canvas`'s `walls` at 0–15 and its `tick` at
+0–255, and a `<sprite>`'s `x` at −320..320 and `y` at −160..160. The field
+is `property range`. Both are
 checked as the PROPS blocks are read (§2.6), before any of them reaches
 the walk.
+
+**And the `ontick` budget is checked at LOAD as well as at pack** (§4.11.1),
+which wave 5 added and which is this section's opening sentence taken
+seriously: a `.WAB` on a disk need never have been through a packer, and an
+over-budget `ontick` handler is the one pack-time refusal whose subject is a
+**per-frame** path — one that a runaway alert (§4.11) cannot even reach,
+because every `ontick` dispatch re-arms that counter. The runtime walks the
+bound handler's bytecode as the canvas's PROPS block is read — at most 64
+ops, no backward jump, no `CALL` — and refuses the bundle with the field
+`ontick budget`. It costs nothing resident: the walk is inside the validator,
+§1.2.1's tenant 3, which is in the overlay. Every other §10.5 refusal stays
+pack-time only, because every other one is a property of the source rather
+than of a path the machine takes eighteen times a second.
 
 ### 10.5 Pack-time refusals — the sentences name the platform fact
 
