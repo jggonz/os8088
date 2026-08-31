@@ -17,11 +17,11 @@ projects (FORM, SHEET, PONG) it packs.
 | `weave.asm` | the shim: the name, the callbacks, the icon, the `.WAB` association, and the include order — which is load-bearing and says why at each line |
 | `weave.h` | the format's constants and every core's prototypes. **Not the contract** — WEAVE-SPEC is |
 | `weave.c` | the state, the window, the menus, the callbacks; it `#include`s the parts below, because a C package is one compilation (SPEC.md §73.1) |
-| `wval.c` | the hostile-bundle reader (WEAVE-SPEC §2 and §10.4) — **in the overlay** (WEAVE-SPEC §1.2) |
+| `wval.c` | the hostile-bundle reader (WEAVE-SPEC §2, WEAVE-SPEC §10.4) — **in the overlay** (WEAVE-SPEC §1.2) |
 | `wflow.c` | the flow walk (WEAVE-SPEC §7) |
 | `wpaint.c` | the component painter, the hit test and the per-component runtime state (WEAVE-SPEC §6) |
-| `wact.c` | the press, the release, the field pool, focus and `^R` (WEAVE-SPEC §6.5–§6.8 and §1.7) |
-| `wevent.c` | the ring's doorway, the slices, the errors, the timer (WEAVE-SPEC §4.9–§4.11) |
+| `wact.c` | the press, the release, the field pool, focus and `^R` (WEAVE-SPEC §6.5 to WEAVE-SPEC §6.8, and WEAVE-SPEC §1.7) |
+| `wevent.c` | the ring's doorway, the slices, the errors, the timer (WEAVE-SPEC §4.9, WEAVE-SPEC §4.10 and WEAVE-SPEC §4.11) |
 | `wnative.c` | WEAVE-SPEC §6's get/set/method surface and WEAVE-SPEC §8.1's six impure builtins |
 | `wstate.c` | WEAVE-SPEC §8.3's `.SAV`, the only file surface |
 | `wovl.c` | `WEAVE.OVL`'s own tenants: About and Bundle Info |
