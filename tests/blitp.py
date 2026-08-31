@@ -25,7 +25,6 @@ wide, reading into the next), and no `cld` in a routine built out of `lodsb`,
 """
 import argparse
 import os
-import subprocess
 import sys
 import time
 
@@ -50,10 +49,8 @@ def main():
     ap.add_argument("--machine", default="os8088_xt_vga")
     a = ap.parse_args()
 
-    if a.apps == "/tmp/blitp.img" and not os.path.exists(a.apps):
-        subprocess.check_call(
-            [sys.executable, "tools/os88disk.py", "-o", a.apps, "--size",
-             "360", "APPS:build/gfxbench.o88"])
+    if a.apps == "/tmp/blitp.img":
+        os88marty.scratch_disk(a.apps, "APPS:build/gfxbench.o88")
 
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
                           boot=False) as m:

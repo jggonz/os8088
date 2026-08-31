@@ -93,8 +93,11 @@ MEM_K_COPY equ 0xFF04           ; the file manager's copy buffer (22.3): held
                                 ; on an overwrite question
 MEM_K_ASC  equ 0xFF06           ; one volume's ASSOC.DAT cache (SPEC.md
                                 ; 54.7) - shared, reloaded on a volume switch
-MEM_K_FATW equ 0xFF05           ; one volume's private FAT window (18.8.1),
-                                ; held for as long as that volume is mounted
+                                ; 0xFF05 was MEM_K_FATW, one volume's FAT
+                                ; window, held for as long as that volume was
+                                ; mounted. It is MEM_P_FATW below now: a
+                                ; window is a CACHE and the machine may take
+                                ; it back (SPEC.md 18.8.4)
 MEM_K_MOD  equ 0xFF08           ; an on-demand kernel module's image (SPEC.md
                                 ; 2.8) - claimed top-down like a driver's,
                                 ; because its base IS its CS and so it can
@@ -183,6 +186,26 @@ MEM_P_WSAVE equ MEM_PG_TRIV<<8 | 0x10   ; a window's raise cache (SPEC.md
                                 ; (SPEC.md 11.96.3). Low bytes are per-rank,
                                 ; so a future TRIVIAL tag must avoid that
                                 ; block; the ranks below are free of it
+MEM_P_FATW  equ MEM_PG_MED<<8 | 0x20    ; one volume's FAT window (SPEC.md
+MEM_P_FATW_N equ 8              ; 18.8.4): MED, and it was LOW for one commit
+                                ; on a number that was measured wrong. Losing
+                                ; a window is not ONE ~400 ms reload - a shed
+                                ; volume falls back to the pin, only one volume
+                                ; can hold that, so two that alternate evict
+                                ; each other and reload NINE SECTORS A SWITCH
+                                ; for as long as it is gone. 18.8.1 measured
+                                ; that state: 45 mounts, 45 loads, 405 of 873
+                                ; sectors on the reference copy, against 3 with
+                                ; a window. ~17 s, which is "seconds of work
+                                ; the user waits through" and not "a little
+                                ; I/O". MEM_P_DIRW stays above it at HIGH,
+                                ; still ~5x dearer (202 int 13h on an install,
+                                ; 18.95). IT IS A RANGE, MEM_P_WSAVE's shape:
+                                ; the VOLUME is added to it, 0x20..0x27, so
+                                ; there is one per volume and dsk_fatwc is the
+                                ; array mem_pg_own names. MEM_P_FATW_N is
+                                ; DVOL_MAX, asserted where that is defined -
+                                ; a name ending _N is a length, not a tag
 MEM_P_DIRW  equ MEM_PG_HIGH<<8 | 0x02   ; the directory read-ahead window:
                                 ; HIGH, because it is the difference between
                                 ; 316 int 13h calls and 114 on an install
@@ -709,6 +732,7 @@ section .text                   ; DATA, so back to the kernel segment
 mem_pg_own:
     dw MEM_P_WSAVE, wm_su_segs,  MAX_WIN
     dw MEM_P_DIRW,  dsk_rah_seg, 1
+    dw MEM_P_FATW,  dsk_fatwc,   MEM_P_FATW_N
     dw 0
 section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
                                 ; segment of its own. DS is still KERNEL_SEG,
@@ -765,6 +789,8 @@ mem_shed_one:
     jb .next
     cmp dl, al                  ; at or above the best so far (which starts at
     jae .next                   ; the claimant's rank): leave it
+    call mem_fatw_dirty         ; ...and never the FAT window somebody is
+    jc .next                    ; part-way through writing (SPEC.md 18.8.4)
     mov al, dl                  ; a new cheapest
     mov di, si
 .next:
@@ -819,7 +845,15 @@ mem_pg_forget:
     shl cx, 1                   ; a word per entry (see the header: there is
     add cx, [si+PGO_BASE]       ; no stride column because there is nothing
     mov si, cx                  ; for it to be)
-    mov word [si], 0
+    mov cx, bx                  ; A FAT WINDOW HAS MORE NAMING WORDS THAN THIS
+    sub cx, MEM_P_FATW          ; PROTOCOL CARRIES (SPEC.md 18.8.4): the LIVE
+    cmp cx, MEM_P_FATW_N        ; one is also [dsk_fatseg], which every access
+    jb .fatw                    ; reads, and [dsk_fatw0], which says what is
+    mov word [si], 0            ; resident - and dsk_fat_window believing that
+    jmp short .out              ; returns WITHOUT loading, so the reads and
+.fatw:                          ; writes after it land in whatever claim owns
+    call dsk_fatw_demote        ; those paragraphs now. So the disk layer is
+                                ; handed the owner and clears the word itself
 .out:
     pop si
     pop cx
@@ -1245,6 +1279,40 @@ mem_busy_seg:
 ; at least leave the bytes somewhere, where a free hands them to whoever asks
 ; next while the controller is still writing.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; mem_fatw_dirty - is the record at SI the LIVE FAT window, with FAT edits in
+;                  it that have not reached the disk? (SPEC.md 18.8.4)
+; in:  SI = record pointer
+; out: CF = 1 do not take it, CF = 0 it may go
+; clobbers: nothing else (flags)
+;
+; mem_in_xfer's shape and for mem_in_xfer's reason - TWO callers that must not
+; drift, mem_shed_one and mem_cp_drop. Shedding a FAT window costs nine sectors
+; to read back and nothing worse, WHICH IS THE WHOLE POINT of it being a cache;
+; shedding a DIRTY one throws away a half-built chain instead.
+;
+; Only the live window can be dirty: dsk_fatw_park flushes the outgoing volume
+; at the top of every mount, so a banked window is clean by construction. And
+; this is belt to dskw_flush's braces rather than the only thing standing
+; there - a demote leaves [dsk_fatw0] = 0xFFFF, which dskw_flush already reads
+; as "there is no buffer this range could be written out of" and refuses.
+; -----------------------------------------------------------------------------
+mem_fatw_dirty:
+    push ax
+    cmp word [dsk_fatd0], 0xFFFF
+    je .no                      ; nothing is dirty anywhere
+    mov ax, [dsk_fatseg]
+    cmp ax, [ss:si+MC_SEG]      ; ...and is THIS the window it is dirty in?
+    jne .no
+    pop ax
+    stc
+    ret
+.no:
+    pop ax
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
 mem_in_xfer:
     push ax
     push bx
@@ -1289,6 +1357,8 @@ mem_in_xfer:
 mem_cp_drop:
     cmp byte [mem_pg_rank], 0
     je .no
+    call mem_fatw_dirty         ; SPEC.md 18.8.4, and mem_shed_one's other half
+    jc .no
     call mem_in_xfer            ; A DROP IS NOT A WEAKER PIN THAN A MOVE HERE.
     jc .no                      ; The walk reaches this AFTER mem_can_move has
                                 ; already refused, so every other reason that
@@ -1579,6 +1649,23 @@ mem_reloc_call:
                                 ; read the kernel structures it always reads.
                                 ; NAMED and not `push cs`, which in .cold is
                                 ; COLD_SEG and would be quietly wrong
+
+    ; THE KERNEL IS A HOLDER OF CLAIMS IT DOES NOT OWN (SPEC.md 66.5.10.2).
+    ; osapi_vol_add's DX is a DONATED listing claim: the driver owns it, so the
+    ; dispatch below reaches the driver - and dsk_vtab's DV_SEG and [dsk_dseg]
+    ; name the same block on this side of the ABI, where that proc cannot go.
+    ; So the kernel's half runs FIRST, unconditionally, for every move: a
+    ; record that is not a donation matches no row and the walk costs eight
+    ; compares against a rep movsb of up to 64KB. Unconditional is the design -
+    ; the next driver to donate one is movable the day it declares a proc, with
+    ; no kernel change and nothing to remember. BX and DX are the parameters
+    ; for the owner's call below and dsk_dseg_reloc preserves both.
+    mov word [ss:mem_fptr], cw_mem_disp
+    mov word [ss:mem_fptr+2], KERNEL_SEG
+    mov ds, ax                  ; DS = KERNEL_SEG: a kernel proc's own
+    mov bp, dsk_dseg_reloc
+    call far [ss:mem_fptr]
+
     mov bp, [ss:si+MC_RLOC]     ; BP = the proc, PKG_DISP's own contract
     mov ax, [ss:si+MC_OWN]
     cmp ah, MEM_PG_MIN

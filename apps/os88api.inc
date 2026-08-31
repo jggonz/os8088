@@ -246,6 +246,25 @@ CWHITE    equ 15
                                  ; which INCLUDES your window being hidden, so a
                                  ; worker gating a draw on this needs no
                                  ; visibility test of its own (SPEC.md 11.3.1)
+
+; --- WHO owns window slot n? (SPEC.md 11.96.3.1) -----------------------------
+; A raise cache's owner tag is MEM_P_WSAVE plus the window's SLOT (11.96.3),
+; and until this cell existed a slot could not be turned back into anything -
+; so a claim walker could say `WinSave` and never whose. Ask this with the
+; slot and you get the SEGMENT that owns that window, which is enough for both
+; questions worth asking: `is that cache mine` (compare it with your own DS)
+; and `whose is it` (match it against the instances you already know about).
+;
+; It answers a segment and NOT the window record, deliberately: a segment is
+; the whole of what the question needs, and a package holding another window's
+; pointer could pass it back through any wm_* cell.
+%define OSAPI_WM_OWNSEG     KERNEL_SEG:0x04E0   ; AL = a window slot; out CF=1
+                                 ; no live window in that slot, else CF=0 and
+                                 ; DX = the owning segment - KERNEL_SEG for a
+                                 ; window the kernel itself made (the Disk
+                                 ; window, the About box). Preserves every
+                                 ; register but DX. A free slot answers CF=1
+                                 ; rather than its last tenant's segment
 %define OSAPI_TASK_YIELD    KERNEL_SEG:0x00A8   ; give up the time slice
 %define OSAPI_TASK_SLEEP    KERNEL_SEG:0x00B0   ; AX = ticks to sleep (18 ~ 1 second)
 %define OSAPI_GET_TICKS     KERNEL_SEG:0x00B8   ; out AX = [ticks]
@@ -735,6 +754,36 @@ VID_CGA    equ 2
                                  ; rather than by colour. A refused probe
                                  ; changes nothing, so asking again next
                                  ; repaint is the intended use.
+; -----------------------------------------------------------------------------
+; A RUN OF SCAN LINES, one call (SPEC.md 5.10)
+;
+; Every gfx_* call costs about the same whatever it draws, and SPEC.md 5.7 is
+; the account of why. Measured on a 4.77MHz 8088 for one 8x8 fill on a
+; Hercules: 381 cycles of wrapper, 1,236 of rect setup and 3,197 of rows. So
+; BATCHING RECTS BUYS ALMOST NOTHING - hoisting the wrapper is 7% - and this
+; call is not that. It is for the shape a rect cannot say cheaply: ONE X
+; INTERVAL PER CONSECUTIVE ROW, which is what a polygon rasteriser, a swept
+; brush and a sprite silhouette all produce. The rows being consecutive is
+; what pays: the framebuffer base steps by an add instead of a lookup and the
+; vertical clip is done once for the whole run.
+;
+; Paint's 45-degree brush chord is the worked example: eight 8x8 dabs are 64
+; row-writes for a shape that is 15 rows, and as 15 spans it is 15.
+;
+; x1 > x2 IS AN EMPTY ROW and costs the step alone, so a caller with a hole in
+; its shape does not have to split the call. A row with TWO intervals does.
+;
+; **CF = 1 IS A REFUSAL AND YOU MUST READ IT**: an armed clip region, a second
+; display, or a kern_small kernel - and nothing was drawn. The fallback is one
+; OSAPI_GFX_FILL per span, which draws the identical pixels; keep it, it is
+; also the only path on a 128KB machine.
+%define OSAPI_GFX_SPANS     KERNEL_SEG:0x04D8   ; AX = the y of the FIRST span,
+                                 ; ES:SI = CX records of two words each, x1
+                                 ; then x2, both INCLUSIVE; CX = rows, row n
+                                 ; being y+n. ES is yours - the stub puts your
+                                 ; DS there - so the list lives in your own
+                                 ; segment. Fills them in the current colour.
+                                 ; out CF = 1 REFUSED, nothing drawn
 %define OSAPI_GFX_BLIT4     KERNEL_SEG:0x01D8   ; ES:SI = packed 4bpp pixels (two
                                  ; per byte, high nibble leftmost), BP = source
                                  ; stride in BYTES, AX/BX = destination x/y,
@@ -1077,7 +1126,6 @@ CLAIM_SNAPSHOT_SIZE equ MEM_MAX * CLS_RECSZ
 MEM_K_SAVE  equ 0xFF01          ; the menu save-under (SPEC.md 12)
 MEM_K_DRV   equ 0xFF03          ; a loaded driver's image (SPEC.md 51.3)
 MEM_K_COPY  equ 0xFF04          ; the file manager's copy buffer (SPEC.md 22.5)
-MEM_K_FATW  equ 0xFF05          ; one volume's FAT window (SPEC.md 18.8.1)
 MEM_K_ASC   equ 0xFF06          ; one volume's ASSOC.DAT cache (SPEC.md 54.7)
 MEM_K_CLIP  equ 0xFF07          ; the system clipboard's text (SPEC.md 55)
 MEM_K_MOD   equ 0xFF08          ; an on-demand kernel module's image (SPEC.md 2.8)
@@ -1098,6 +1146,10 @@ MEM_LVL_TOP equ 0xFF            ; ...and an ordinary claim outranks all of them
 
 MEM_P_WSAVE equ MEM_PG_TRIV<<8 | 0x10   ; a window's raise cache - a RANGE,
 MEM_P_WSAVE_N equ 16            ; 0x10..0x1F, the window's slot added (11.96.3)
+                                ; - and OSAPI_WM_OWNSEG above turns that slot
+                                ; back into the segment that owns the window
+MEM_P_FATW  equ MEM_PG_MED<<8 | 0x20    ; one volume's FAT window - a RANGE,
+MEM_P_FATW_N equ 8              ; 0x20..0x27, the VOLUME added (SPEC.md 18.8.4)
 MEM_P_DIRW  equ MEM_PG_HIGH<<8 | 0x02   ; the directory read-ahead window (18.95)
 
 ; --- OSAPI_SYS_KB's buffer, all in KB ----------------------------------------
@@ -2250,6 +2302,29 @@ OS88_BSS_SIZE equ 0
                                                 ; or on an unknown AL.
                                                 ; Draw, wait, repeat.
 
+%define OSAPI_FSX_PAGE      KERNEL_SEG:0x04E8   ; AL = a page index; out CF=1
+                                                ; refused. SHOW that page, and
+                                                ; wait for the vertical retrace
+                                                ; that latches it - so the
+                                                ; moment it returns, the page
+                                                ; you named is the one being
+                                                ; scanned and any OTHER page is
+                                                ; yours to draw on. That is what
+                                                ; makes an erase invisible
+                                                ; without a second framebuffer,
+                                                ; and it is the only supported
+                                                ; way to spend FSI_PAGES.
+                                                ; Bracket-only, exclusive task
+                                                ; only, and only in a GRAPHICS
+                                                ; mode that has more than one
+                                                ; page - Mode X (3) and
+                                                ; Hercules (2). Everything else
+                                                ; refuses, including the text
+                                                ; modes, whose pages are the
+                                                ; BIOS's 4KB convention rather
+                                                ; than this table's stride x
+                                                ; height. Preserves every
+                                                ; register (SPEC.md 53.10)
 %define OSAPI_FSX_SURF      KERNEL_SEG:0x03F8   ; THE RECT YOUR BRACKET OWNS
                                                 ; (SPEC.md 53.7.1). No inputs;
                                                 ; out CF=0 with AX = x, BX =
@@ -2536,16 +2611,38 @@ OSAPI_CUR_CROSS equ 1           ; the aiming crosshair, hot spot at its centre
                                                 ; whatever was there before -
                                                 ; after a move, another
                                                 ; window's
+OSAPI_SAVEU_ON   equ 1           ; OSAPI_WM_SAVEU's AL, bit 0: the promise
+OSAPI_SAVEU_1BPP equ 2           ; ...and bit 1: "and my content is two
+                                 ; colours". OR them: AL = 3 is both
 %define OSAPI_WM_SAVEU      KERNEL_SEG:0x0378   ; BX = window ptr, AL = 0 clear
-                                                 ; / non-0 set. A PROMISE: this
-                                                 ; window's content does not
-                                                 ; change while it is not
-                                                 ; drawing, so a raise may put
-                                                 ; its old pixels back rather
-                                                 ; than call W_PAINT (SPEC.md
-                                                 ; 11.96.1). Costs nothing if
-                                                 ; refused; wrong if the
-                                                 ; promise is
+                                                 ; / OSAPI_SAVEU_* set. A
+                                                 ; PROMISE: this window's
+                                                 ; content does not change
+                                                 ; while it is not drawing, so
+                                                 ; a raise may put its old
+                                                 ; pixels back rather than call
+                                                 ; W_PAINT (SPEC.md 11.96.1).
+                                                 ; Costs nothing if refused;
+                                                 ; wrong if the promise is.
+                                                 ; OSAPI_SAVEU_1BPP is the
+                                                 ; SECOND half of it (SPEC.md
+                                                 ; 11.96.17): every pixel of
+                                                 ; your content is colour 0 or
+                                                 ; colour 15, so the cache
+                                                 ; holds ONE plane instead of
+                                                 ; four - a quarter of the
+                                                 ; memory AND a quarter of the
+                                                 ; blit, which is what gets a
+                                                 ; big window under the 64KB
+                                                 ; ceiling on a VGA. A 50%
+                                                 ; dither counts: gfx_fill_gray
+                                                 ; is 15 and 0, not a grey.
+                                                 ; CDGRAY is NOT two colours,
+                                                 ; and SPEC.md 47 rule 1's
+                                                 ; disabled pen is CDGRAY on a
+                                                 ; colour adapter. RE-STATED
+                                                 ; every call: pass 1 after 3
+                                                 ; and you have withdrawn it
 %define OSAPI_TOAST         KERNEL_SEG:0x0380   ; ES:SI = a NUL line, CX =
                                  ; ticks to live (0 = ~3s at 18.2 Hz). Says it
                                  ; as an inverse-video strip at the right end
@@ -2982,6 +3079,29 @@ OSAPI_FT_UP   equ 3             ; the synthesized '..' (SPEC.md 19.5)
                                  ; from here (SPEC.md 71), each slice re-posting
                                  ; the next, and a program waiting on a key
                                  ; costs nothing until W_ONKEY kicks.
+                                 ;
+                                 ; **AND IT IS THE LAUNCH DOCUMENT'S HANDOVER**
+                                 ; (SPEC.md 54.10). If your package was started
+                                 ; by a double-click on a DOCUMENT, the kernel
+                                 ; calls this handler ONCE, itself, after your
+                                 ; window is on the glass - so the shape of an
+                                 ; associated app is: read OSAPI_ARG_FILE in
+                                 ; your entry proc and BANK it (the slot is
+                                 ; read-and-clear and is disarmed the moment
+                                 ; the load returns), then open it from here,
+                                 ; where there is something for the user to
+                                 ; look at while the floppy turns. Take
+                                 ; OSAPI_GFX_LOCK for that burst: everything
+                                 ; that draws needs it, and OSAPI_TOAST only
+                                 ; reaches the glass BEFORE a long operation
+                                 ; for a caller that holds it (SPEC.md 59.4).
+                                 ; A package that installs no handler is
+                                 ; unaffected - the kernel calls nothing.
+                                 ;
+                                 ; This slot PRESERVES THE FLAGS, which matters
+                                 ; because you install it from your entry proc:
+                                 ; the CF you owe the loader is still riding in
+                                 ; them there (SPEC.md 54.10.2).
 %define OSAPI_WM_WAKE       KERNEL_SEG:0x0450   ; BX = win ptr (a window of
                                  ; YOURS). Post an EVT_WAKE for it (SPEC.md
                                  ; 10, 74.1): the UI task pops it in order with

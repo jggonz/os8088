@@ -74,9 +74,34 @@ overlays = [
     clock_mode = "Dynamic"
 
 # The GLaBIOS twin, for when you want a machine that BOOTS FAST rather than one
-# that boots the way the calibration machine does. GLaBIOS is optimised in ways
-# the 1982 IBM ROM is not, so its POST and its int 13h are NOT period timings -
-# use it to iterate, never to take a number for PERFORMANCE.md.
+# that boots the way the calibration machine does.
+#
+# WHAT THE CAVEAT ACTUALLY COVERS, because it used to be written broadly enough
+# to stop rows that it has no business stopping. Two things:
+#
+#   * THE DISK, and this is the whole of the substance. The note at the top of
+#     this file explains that the field machine's floppy timings come out right
+#     because the head-settle wait is not modelled at all - it is ~52 ms of
+#     `LOOP $` at F000:EEB8, IBM ROM code, and simply RUNNING the ROM produces
+#     it. GLaBIOS is optimised where the 1982 ROM is not and has no such loop,
+#     and nothing here substitutes one for it, so the thing that makes an
+#     IBM-ROM machine reproduce the 5150's raw floppy block to the quantum is
+#     absent on a twin by construction. A disk or boot number taken here is
+#     therefore not a period number: POST, and every int 13h in it.
+#   * SOME CGA. GLaBIOS optimises parts of its CGA handling. os8088 sets a mode
+#     through the ROM and then drives the framebuffer itself, so this reaches
+#     the mode set and not the drawing - but it is the other half of the reason
+#     the calibration machine is the calibration machine.
+#
+# IT IS NOT A BAN ON TAKING ANY NUMBER HERE, and it never should have read like
+# one. A row that measures os8088's OWN code over a window of guest cycles with
+# no int 13h in it is measuring the same 8088 at the same 4.77MHz off the same
+# PIT, and the ROM is not on that path. Neither is a "does it work" row that
+# takes no timing at all. Both belong on a twin, because the IBM ROM cannot be
+# in this tree (see os8088_5150_cga_hdd below) and a row that cannot run is
+# worth nothing. What belongs on the calibration machine is a DISK or BOOT
+# number, a PERFORMANCE.md figure meant to be compared against the field 5150,
+# and anything resting on the CGA mode set.
 [[machine]]
 name = "os8088_5150_cga_gla"
 type = "Ibm5150v256K"
@@ -377,6 +402,48 @@ overlays = [
     type = "CGA"
     clock_mode = "Dynamic"
 
+# ...and the same disk behind a VGA, which until now no machine in this file
+# offered: every hard-disk machine here is CGA, and the loading screen's whole
+# dialog - the frames, the `Welcome to os8088.` caption and the percentage -
+# is VGA-only (SPEC.md 15.3). So the one path that draws chrome from the
+# KERNEL rather than from stage 2 could not be looked at: a hard-disk boot has
+# no loader that ticks, so `spl_step` starts the screen itself (SPEC.md
+# 2.9.9.1) and enters `spl_rechrome` (2.9.9.2). On CGA that path returns before
+# any of it.
+#
+# It matters more since SPEC.md 15.3.2: the caption and the percentage are
+# blitted out of the ROM 8x8 set now, and `spl_kfont` asks the BIOS for that
+# set with an `int 10h` at the first glyph of the boot. On every other machine
+# here the first glyph is stage 2's; on this one it is the kernel's.
+[[machine]]
+name = "os8088_xt_vga_hdd"
+type = "Ibm5160"
+rom_set = "glabios_xt"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.hdc]
+    bus_type = "ISA"
+    type = "XtIde"
+
+        [[machine.hdc.drive]]
+        format = "Mfm"
+        vhd = "default_xtide.vhd"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "VGA"
+    clock_mode = "Default"
+
 # ...and the calibration machine as it ACTUALLY is: a 5150 with a Hercules AND
 # a CGA in it, both permanent, each on its own monitor (docs/FIELD-MACHINES.md).
 # This is the configuration SPEC.md 39.11's adapter switching exists for, and
@@ -617,6 +684,11 @@ overlays = [
     [machine.memory]
     conventional.size = 0x20000
     conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
 
     [[machine.video]]
     bus_type = "ISA"
@@ -1142,3 +1214,86 @@ overlays = ["pcxt_2_360k_floppies", "us_modelf_keyboard"]
     bus_type = "ISA"
     type = "CGA"
     clock_mode = "Default"
+
+# =============================================================================
+# THE SMALL MACHINES (SPEC.md 18.95.5). GLaBIOS, so they need no ROM this tree
+# does not fetch - which is the whole reason they exist: the period-ROM 128K
+# config cannot boot here, and 256K is the smallest machine that could.
+#
+# The kernel's ladder is ~117KB, so conventional memory minus that is the heap,
+# and the heap is what dsk_rah_want solves its width from (n = free_run / 9,
+# capped at DSK_RAH_RUNS, floored at DSK_RAH_MIN). 256K picks the ceiling and
+# says nothing about the range; these two say what happens inside it and under
+# it, and they are the only way to SEE either without a field machine.
+#
+#   192K -> 76KB of heap -> a PARTIAL width, which is what 18.95.5 is for
+#   128K -> 11KB of heap -> under the floor: no cache. MIN_RAM_KB exactly, so
+#                           it is also the smallest machine this OS claims to
+#                           run - AND IT DOES NOT REACH A DESKTOP. Measured
+#                           both sides of SPEC.md 18.95.5, so it is not that
+#                           change: the same config never gets there on the
+#                           commit before it either. Left here because the
+#                           machine is the instrument that found it and it is
+#                           the one to re-run when somebody takes the question
+#                           up; nothing else in this tree can boot 128K, the
+#                           period-ROM config needing a ROM we do not fetch
+#
+# CHECK [mem_top] IN THE GUEST, NOT THE NUMBER IN THIS FILE. A first cut asked
+# for 0x24000 (144K) and the guest came up with 192K - the same machine twice,
+# which reads as the width ignoring the config rather than as the config not
+# taking. The two sizes above are the ones observed to survive the round trip.
+#
+# AND COPY THE WHOLE REFERENCE MACHINE, video block included. The same first
+# cut left [[machine.video]] out; the guest still booted and still answered
+# memory reads, so a probe that never draws reports plausible numbers off a
+# machine with no CGA in it - and SPEC.md 39.22 skips .vgabuf on a machine with
+# no VGA, so the ladder those numbers came off was not this one.
+#
+# `type` is the MOTHERBOARD, not the total: os8088_5150_cga_gla is
+# Ibm5150v256K and comes up with 640K and a 524KB heap, which is why it picks
+# the ceiling and can say nothing about the range below it.
+#
+# Everything else is os8088_5150_cga_gla's, so a difference between them is the
+# memory and nothing else.
+# =============================================================================
+[[machine]]
+name = "os8088_5150_gla_192k"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0x30000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+[[machine]]
+name = "os8088_5150_gla_128k"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0x20000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"

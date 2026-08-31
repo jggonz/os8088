@@ -33,10 +33,13 @@ instruction that did it, the segment it addressed through, the stack around SP
 (a wild transfer's return chain is usually still on it) and the bytes either
 side of CS:IP.
 """
-import sys, time
-sys.path.insert(0, "/home/user/os8088/tools")
-sys.path.insert(0, "/home/user/os8088/tests")
-import os88marty, os88mouse, os88sym, dispcp
+import os, sys, time
+# ...off this file, not off an absolute path. It was /home/user/os8088, so the
+# row ran in one container and nowhere else.
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+sys.path.insert(0, os.path.join(ROOT, "tests"))
+import os88marty, os88mouse, os88sym, dispcp, os88layout
 S = os88sym.linear
 SY = os88sym.syms()
 KSEG = 0x0060
@@ -70,17 +73,28 @@ def runs_of(a, b):
 BSS0 = 0xC12E       # .text ends here; everything above is live state and a
                     # diff against the built image says nothing about it
 
-# .cold's FILE offset inside kernel.bin, and how much of it there is. Derived
-# rather than assumed: .text is followed by nasm's zero padding across the
-# whole .bss range, and the exact boundary is what the cold section's own
-# vstart makes it. `coldbase()` pins it by finding a known run of the built
-# image at the address the machine reports it at.
-COLD_SEG = 0x0E00
-COLD_MAX = 0x8900
+# .cold: its segment, where it sits in kernel.bin, and how much of it there is
+# - all three from os88layout.cold_span, none of them written down here.
+#
+# ALL THREE USED TO BE WRONG, and the row said so every run without failing:
+# "33,819 byte(s) in 766 run(s)  <-- .cold IS CODE ONLY: THIS IS CORRUPTION",
+# on a machine where nothing was wrong. COLD_SEG was pinned at 0x0E00 and has
+# since moved twice (0x0E20, then 0x0FC0), so the RAM side read a different
+# section entirely; COLD_MAX was pinned at 0x8900 against a section that is
+# 0x9ECF; and the base was found by SEARCHING the image for fm_layout's first
+# four opcode bytes, which tests/dispcold.py had already argued is two ways of
+# being wrong at once - the prologue is not an ABI, and a search that matches
+# the wrong place answers confidently.
+#
+# What made the search necessary was the thing nobody had named: since SPEC.md
+# 2.9 a segment delta is not a file offset, so the arithmetic anyone would
+# write instead lands BOOT2_PAD bytes early, in the cold thunk table. That is
+# what cold_span is for, and it carries the assertions.
+COLD_SEG, _COLD_OFF, COLD_MAX = os88layout.cold_span(ROOT)
 
 
 def coldbase():
-    """Where .cold starts inside kernel.bin.
+    """Where .cold starts inside kernel.bin, and the image it starts in.
 
     .cold is CODE AND NOTHING ELSE - SPEC.md 2.6 rule 1 forbids a data
     directive there, and tools/os88ovlchk.py enforces it - so unlike .text,
@@ -88,13 +102,8 @@ def coldbase():
     from the built image is CORRUPTION and nothing else. That is what makes
     this the sharpest memory check in the tree.
     """
-    k = open("build/kernel.bin", "rb").read()
-    off = SY["fm_layout"]
-    # fm_layout's opening `push ax/cx/dx/di` + `call fm_vp_set` is unique
-    for base in range(0xC000, len(k) - COLD_MAX, 2):
-        if k[base + off:base + off + 4] == b"\x50\x51\x52\x57":
-            return base, k
-    raise RuntimeError("cannot locate .cold inside kernel.bin")
+    return _COLD_OFF, open(os.path.join(ROOT, "build", "kernel.bin"),
+                           "rb").read()
 
 
 def colddiff(m, pad=""):

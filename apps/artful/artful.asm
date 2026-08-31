@@ -125,6 +125,9 @@ at_entry:
     mov byte [at_writer], 1         ; Writer is the default view (main.c)
     call at_cmd_newdoc              ; a fresh untitled document
     call at_arg                     ; ...unless we were launched to open one
+    mov bx, [at_win]                ; SPEC.md 54.10: the kernel calls this once
+    mov ax, at_onwake               ; our window is on the glass, and the launch
+    call OSAPI_WM_ONWAKE            ; document loads in front of it
     clc                             ; the CF the loader is owed
 .out:
     ret
@@ -267,11 +270,15 @@ at_paint:
     push di
     push bp
     push es
-    cmp byte [at_argp], 0           ; a document handed to us at launch
-    je .noarg                       ; (SPEC.md 54.5): the gfx lock is held
-    call at_argload                 ; here and the window is placed, which
-    jc .done                        ; the entry proc could promise neither.
-.noarg:                             ; CF=1: it entered the editor and painted
+                                    ; NO at_argload HERE. The first paint used
+                                    ; to spend it, and the first paint is INSIDE
+                                    ; wm_show's repaint - so the document was
+                                    ; read with the desktop half redrawn and
+                                    ; this window showing nothing. at_onwake
+                                    ; spends it after that pass has finished
+                                    ; (SPEC.md 54.10), which is also why the
+                                    ; splash below is now drawn ONCE and then
+                                    ; replaced rather than skipped
     push ds                         ; ES arrives = KERNEL_SEG (SPEC.md 20.2)
     pop es
     mov byte [at_cshown], 0         ; fresh pixels carry no caret

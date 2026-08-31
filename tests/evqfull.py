@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A full event ring loses the OLDEST input, and never a WAKE (SPEC.md 10.1).
 
-    make && python3 tests/evqfull.py [--machine os8088_5150_cga]
+    make && python3 tests/evqfull.py [--machine os8088_5150_cga_gla]
 
 The starvation this policy exists for takes seconds of guest time to set up
 and is a measurement, not a gate (docs/FIELD-NOTES.md 27). The POLICY is a
@@ -17,6 +17,15 @@ Two questions, and they are the two halves of 10.1:
   2. a WAKE at the head is a promise `wm_wake` has already recorded in
      `wm_wkq` and only a dispatch clears, so it must survive - the push falls
      back to refusing the newest instead.
+
+**ON THE GLaBIOS TWIN**, `os8088_5150_herc_gla` - the same machine with
+`rom_set = "glabios_pc"`. `os8088_5150_herc` wants `ibm5150_82_v4`, the
+reader's own dump of the 27 OCT 82 BIOS, which this repo cannot ship, so this
+row died in `os88marty.launch` on any clean tree. Nothing here is a timing
+question at all - it parks the CPU on a stub with IF=0 and reads a ring back -
+and it PASSES IDENTICALLY on both, checked with the IBM ROM dropped in beside
+GLaBIOS. tools/martypc/configs/os8088_machines.toml says what the twin's
+caveat does and does not cover.
 """
 import argparse
 import os
@@ -99,7 +108,7 @@ def reset(m, sym, at):
 
 def main(argv):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--machine", default="os8088_5150_herc")
+    ap.add_argument("--machine", default="os8088_5150_herc_gla")
     ap.add_argument("--image", default="build/os8088-360.img")
     a = ap.parse_args(argv)
     os.chdir(ROOT)

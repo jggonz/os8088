@@ -32,6 +32,8 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "tools"))
+import os88marty                                             # noqa: E402
 
 
 def main():
@@ -46,10 +48,8 @@ def main():
     # it driving a kernel nobody asked for - described perfectly by its own
     # symbol map, so nothing would complain.
     apps = "/tmp/paintpack.img"
-    if not os.path.exists(apps):
-        subprocess.check_call(
-            [sys.executable, "tools/os88disk.py", "-o", apps, "--size", "360",
-             "APPS:build/paint.o88", "MEDIA:build/OS8088.GIF"])
+    os88marty.scratch_disk(apps, "APPS:build/paint.o88",
+                           "MEDIA:build/OS8088.GIF")
 
     print("   NOPLANE=1 kernel: building")
     try:

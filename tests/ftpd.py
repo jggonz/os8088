@@ -118,6 +118,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import dispcp                                          # noqa: E402
 import ethernet as eth                                 # noqa: E402
 import os88sym                                         # noqa: E402
+import os88layout                                           # noqa: E402
 
 S = os88sym.linear
 
@@ -280,7 +281,10 @@ def stack_water(m):
     stkwater.annotate(mem[(slot - 1) * n:slot * n], worst, n,
                       kern=os88sym.syms(stkwater.DEF), drv=eth.ether_syms(),
                       seg=eth.u16(row),
-                      kimg=open("build/kernel.bin", "rb").read(),
+                      # ...as .TEXT OFFSETS index it, not the raw file: the
+                      # words being annotated are near return addresses off a
+                      # guest stack (SPEC.md 2.9, tools/os88layout.py)
+                      kimg=os88layout.kernel_text(),
                       dimg=open("build/ether.bin", "rb").read())
 
 

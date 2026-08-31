@@ -236,6 +236,9 @@ zf_entry:
 %endif
     mov ax, zf_onresize             ; ...and TELL US when the adapter moves
     call OSAPI_WM_ONRESIZE          ; (SPEC.md 11.98)
+    mov ax, zf_onwake               ; SPEC.md 54.10: the kernel calls this once
+    call OSAPI_WM_ONWAKE            ; our window is on the glass, and the story
+                                    ; a double-click named loads in front of it
 
     ; A story named by a double-click (SPEC.md 54.7). SI comes back pointing
     ; into KERNEL_SEG, so it is read through ES and copied before anything
@@ -287,6 +290,17 @@ zf_entry:
     pop si
     mov byte [zf_pendok], 1
 .zhready:
+    cmp byte [zf_pendok], 0     ; **AND THE HARNESS KICKS ITSELF** (SPEC.md
+    je .zhnowake                ; 54.10): the kernel's handover is assoc_run's,
+    push bx                     ; and a harness build seeds [zf_pend] with no
+    mov bx, [zf_win]            ; double-click behind it - so it posts the wake
+    call OSAPI_WM_WAKE          ; the shipping path is given. BX is RELOADED,
+    pop bx                      ; for the reason spelled out at .out below:
+                                ; OSAPI_ARG_FILE above clobbered it. A refused
+                                ; post (a full ring) is the one case where the
+                                ; story waits for a keystroke, and the harness
+                                ; types one
+.zhnowake:
     push si
     mov si, zh_m_ready
     call zh_mark
@@ -352,6 +366,35 @@ zf_copyname:
 ;   loading         a one-line notice; zi_load owns the screen
 ;   running         zw_paint / zw6_paint repaints from the scrollback
 ; =============================================================================
+; -----------------------------------------------------------------------------
+; zf_onwake - W_ONWAKE: open the story we were launched on (SPEC.md 54.10/74.1)
+; in:  SI = our window; the UI task, gfx lock NOT held
+; out: nothing; no register need be preserved
+;
+; The kernel calls this once assoc_run has shown our window, so the read
+; happens in front of the splash W_PAINT has already drawn and SPEC.md 12.8's
+; widget steps through it. It takes the lock for the burst SPEC.md 74.1 lets it
+; state: zi_openpend reads the story, and everything it can do about the answer
+; - the notice, the status line, the first screenful - draws.
+;
+; **AND NOTHING REPAINTS AFTER IT.** zi_load ends in zw_clear + zw_paint +
+; zf_hire precisely because a story loaded into a window ALREADY ON SCREEN
+; gets no repaint from the kernel (zio.inc says so at that call), which is
+; File > Open Story's case and is now this one too. A zf_paint here would draw
+; the SPLASH back over a failure's notice, because [zf_state] is not ZFS_RUN
+; on that path.
+; -----------------------------------------------------------------------------
+zf_onwake:
+    cmp byte [zf_pendok], 0         ; not the story's wake, or it is already in
+    je .out
+    mov byte [zf_pendok], 0         ; once, whatever happens below
+    call OSAPI_GFX_LOCK
+    call zi_openpend
+    call OSAPI_GFX_UNLOCK
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
 zf_paint:
     push ax
     push bx
@@ -363,16 +406,13 @@ zf_paint:
     mov [zf_win], si                ; the window pointer never changes, but a
                                     ; repaint is the cheapest place to be sure
 
-    ; A story named by a double-click (SPEC.md 54.7) is opened HERE and not in
-    ; the entry proc, because opening one draws - the refusal notice, the
-    ; status line, the first screenful - and the entry proc may not. The first
-    ; paint is the earliest moment that is allowed to, and the flag makes it
-    ; happen exactly once.
-    cmp byte [zf_pendok], 0
-    je .nopend
-    mov byte [zf_pendok], 0
-    call zi_openpend
-.nopend:
+    ; NO zi_openpend HERE. A story named by a double-click (SPEC.md 54.7) was
+    ; opened from this, the FIRST PAINT, because opening one draws - the
+    ; refusal notice, the status line, the first screenful - and the entry proc
+    ; may not. But a first paint runs inside wm_show's own repaint, so the read
+    ; still happened with the desktop half redrawn and this window showing
+    ; nothing at all. zf_onwake is after that whole pass and may draw as freely
+    ; (SPEC.md 54.10).
 
     cmp byte [zf_state], ZFS_RUN
     jne .nostory

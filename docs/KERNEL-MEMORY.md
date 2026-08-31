@@ -15,15 +15,58 @@ last time.
 
 ---
 
-## The rule
+## The rules — THREE sentences, THREE quantities
+
+This section named one rule for a long time and the kernel had two guards
+answering to it, which is how the binding one came to be the one nobody was
+watching. There are three rules and each names a different quantity:
+
+| | rule | guard |
+|---|---|---|
+| 1 | **`kern_small` BOOTS on 128KB** | guard 5, `MIN_RAM_KB` |
+| 2 | **`kern_big` BOOTS on 196KB** | guard 5, `MIN_RAM_KB` |
+| 3 | **`kern_big` fully RESIDES in 128KB** once it is at the desktop | guard 1, `KERN_BUDGET`, and `tests/kernresident.py` |
+
+**Booting on a machine and residing in one are different questions.** Guard 5
+asks whether stage 1 can put its 512-byte sector and its 2KB stack at the top
+of that machine and still read the kernel **and its 6,656-byte stage-2 blob**
+in underneath — a *reach* at one instant of boot. Rule 3 asks what is still
+occupied once the desktop is up: every non-purgeable byte, **no drivers
+loaded, no XMS, on VGA** (the adapter that does not drop a `.bss` segment of
+its own, so the rule is stated against the configuration that costs the most).
+
+**That distinction is not academic and the measurement is why it exists.** On
+the day this was rewritten, the shipped kernel had **3,584 bytes** before
+`KERN_BUDGET` and **1,670** before guard 5. The budget everything steers by
+could not be reached; a ~5KB recovery showed up as slack under a ceiling that
+was not the ceiling, and the first change that noticed was a knob kernel that
+would not assemble. `tools/kernsize.py` prints both lines now — a report that
+names one guard teaches everybody to steer by it.
+
+**Rule 3's number is DERIVED, not chosen.** The span starts at `KERNEL_SEG`
+and the rule says where it ends, so `KERN_BUDGET` for big is
+`KERN_RESIDENT_KB*1024 - KERNEL_SEG*16` = **129,536** and there is nothing
+left to decide. The ledger below stops at move 35 for that reason: a
+thirty-sixth would be a change to the RULE, and this table is where it would
+be argued.
+
+**None of the three binds a KNOB build.** A knob kernel is not what anybody
+boots — it exists to answer a question about a machine — and every machine
+this project tests on has 640KB or could have. Guard 2 (one 64KB segment,
+which nobody can raise) is the whole of what bounds it. That does not make a
+RAM-constrained test impossible; it makes the test state its own constraint
+instead of borrowing the shipped kernel's.
+
+---
 
 **The kernel is ONE contiguous span starting at linear 0x00600, and that
-includes its buffers.** `kern_big`'s budget is 119.5KB today (122,368) and
-`kern_small`'s 105KB (107,520). **Big stands at two steps and small at
-ZERO — small's `KERN_SIZE` equals its `KERN_BUDGET` exactly**, which
-assembles only because the guard is `>`; the thirty-second move raised small
-by 512 for the head-switch boot fix and landed it there deliberately. That is
-a figure to raise deliberately or to spend down, not headroom to draw on.
+includes its buffers.** `kern_big`'s budget is 126.5KB today (129,536) and
+`kern_small`'s 105KB (107,520). **Big stands at eighteen steps and small at
+ONE.** Small's used to equal its budget exactly, which assembled only because
+the guard is `>`; the thirty-second move raised it by 512 for the head-switch
+boot fix and landed it there deliberately. Either figure is one to raise
+deliberately or to spend down, not headroom to draw on — and small's one step
+is one step: the next 512 bytes it grows is a conversation, not a build fix.
 
 Big's two steps are the thirty-fifth move's, and they are **earmarked rather
 than free**: one restores the step move 34's merge spent and one is the
@@ -852,40 +895,46 @@ Three things about it:
 ```json
 {
   "big": {
-    "bss": 5932,
-    "budget": 122368,
+    "boot2": 2498,
+    "bootmax": 189952,
+    "bss": 5955,
+    "budget": 129536,
     "codemax": 65536,
-    "cold": 40413,
-    "coldpara": 2528,
+    "cold": 40803,
+    "coldpara": 2560,
     "fatpara": 288,
-    "imgpara": 3840,
-    "kend": 7456,
+    "imgpara": 3968,
+    "kend": 7616,
     "kseg": 96,
-    "ksize": 117760,
+    "ksize": 120320,
     "lowbss": 8982,
     "lowpara": 640,
-    "ovl": 3909,
+    "minramkb": 196,
+    "ovl": 3969,
     "stk0": 1024,
-    "text": 55270,
+    "text": 57197,
     "vgabuf": 848,
     "vgabufpara": 64
   },
   "small": {
-    "bss": 5435,
+    "boot2": 2498,
+    "bootmax": 120320,
+    "bss": 5442,
     "budget": 107520,
     "codemax": 65536,
-    "cold": 37499,
-    "coldpara": 2368,
+    "cold": 37889,
+    "coldpara": 2400,
     "fatpara": 288,
-    "imgpara": 3328,
-    "kend": 6688,
+    "imgpara": 3392,
+    "kend": 6784,
     "kseg": 96,
-    "ksize": 105472,
+    "ksize": 107008,
     "lowbss": 8470,
     "lowpara": 608,
-    "ovl": 3826,
+    "minramkb": 128,
+    "ovl": 3886,
     "stk0": 1024,
-    "text": 47364,
+    "text": 48458,
     "vgabuf": 0,
     "vgabufpara": 0
   }
@@ -902,13 +951,13 @@ derived from them exactly as `kernel/kernel.asm` derives them.
 
 | region | size | what it is |
 |---|---:|---|
-| image (`.text` 55,270 + `.bss` 5,932) | 61,440 B | all resident kernel code in the kernel's own segment, its read-only data, and its scratch — 238 bytes of the rung are free |
-| cold code | 40,448 B | 40,413 bytes with a CS of their own: the Control Panel, the five file modules, SPEC.md §2.6's second round — assoc, disk, driver, memory and desk — and SPEC.md §18.99's disk clone. 35 bytes of the rung are free |
+| image (`.text` 57,149 + `.bss` 5,955) | 63,488 B | all resident kernel code in the kernel's own segment, its read-only data, and its scratch — 384 bytes of the rung are free |
+| cold code | 40,960 B | 40,784 bytes with a CS of their own: the Control Panel, the five file modules, SPEC.md §2.6's second round — assoc, disk, driver, memory and desk — and SPEC.md §18.99's disk clone. 176 bytes of the rung are free |
 | FAT window | 4,608 B | nine of the mounted volume's FAT sectors (SPEC.md §18.8) — the whole FAT on any floppy, a sliding window on a hard disk |
 | `.lowbss` + task 0's stack | 10,240 B | 8,982 B of tables, stacks and disk buffers, plus `STK0_SIZE` = 1,024 — 234 bytes of the rung are free |
 | `.vgabuf` | 1,024 B | 848 B: `vga_p4tab` and `vga_pbuf`, SPEC.md §5.4.1.3's planar decoder and nothing else. **The topmost rung, and the only one a machine can decline** — `mem_init` seeds `[mem_base]` under it when `[vid_avail] & VID_A_VGA` is clear, so a mono machine never reserves these 1,024 bytes and its heap starts here instead (SPEC.md §39.22). 0 B on `kern_small` and on any `NOPLANE` build, which have no decoder |
-| the boot overlay | 0 B | 3,909 bytes of code inside **stage 2's blob** (SPEC.md §2.9.6), which sits on the heap's floor and is given back at `spl_finish`. It was inside the FAT window and gone by the first mount; before that it was a heap claim |
-| **total** | **117,760 B** | of a 122,368-byte budget — **4,608 spare, nine steps**, and the rung figures above are what is actually free inside it. **Every row here was re-derived from `kernsize`'s own `sections` and `rungs` lines at the bless that carries stage 2** — the image and cold rows had been the pre-move-33 figures until then. `tools/kernsize.py --json` is the live breakdown; this table is hand-written and says so below |
+| the boot overlay | 0 B | 3,969 bytes of code inside **stage 2's blob** (SPEC.md §2.9.6), which sits on the heap's floor and is given back at `spl_finish`. It was inside the FAT window and gone by the first mount; before that it was a heap claim |
+| **total** | **120,320 B** | of a 129,536-byte budget — **9,216 spare, eighteen steps**, and the rung figures above are what is actually free inside it. **Every row here was re-derived from `kernsize`'s own `sections` and `rungs` lines at the bless that carries stage 2** — the image and cold rows had been the pre-move-33 figures until then. `tools/kernsize.py --json` is the live breakdown; this table is hand-written and says so below |
 
 **This table is HAND-WRITTEN and the block above it is not**, which is how it
 came to disagree with the blessed JSON by 800 bytes before this was noticed.
@@ -926,7 +975,7 @@ because `.lowbss` was the LAST rung before the heap: a byte that leaves it
 lowers the floor directly, with nothing above it to relocate. Everything
 lower in the ladder is pinned under the image and cannot be dropped this
 cheaply. The total above is the VGA machine's; on a Hercules or a CGA read it
-as **116,736 B**, and `SK_KERN` says so too (SPEC.md §39.22).
+as **119,296 B**, and `SK_KERN` says so too (SPEC.md §39.22).
 
 **These are `kern_big`'s figures**, which is to say the shipped kernel's
 (docs/KERN-SPLIT-PLAN.md). **The two builds have DIVERGED** — in both
@@ -936,11 +985,11 @@ SPEC.md §18.96's floppy formatter, §39.11's dual display. Things REMOVED from
 small: SPEC.md §41.11's extended-memory store, the first of those and so far
 the only one.
 
-`kern_small` stands at **107,008 B of its own 107,008-byte budget — ZERO
-spare, and it assembles only because the guard is `>`**. Moves 21, 22 and 23
-are where the surplus went, and move 32's head-switch boot fix is what spent
-the last step of it (the ledger row above). There are 506 bytes of image
-rung left before the next crossing fails the assemble. It stood at seven steps then, three over the
+`kern_small` stands at **107,008 B of its own 107,520-byte budget — 512
+spare, ONE step**. Moves 21, 22 and 23 are where the surplus went, and move
+32's head-switch boot fix is what spent a step of it (the ledger row above).
+There are 372 bytes of image rung and 511 of cold rung left before the next
+crossing costs a step. It stood at seven steps then, three over the
 standard, which **owed a conversation rather than being headroom**: two things
 had arrived at the same figure from opposite directions and neither knew about
 the other:
@@ -1153,8 +1202,10 @@ The padding is not wasted either. **The whole of `.bss` is now zeroed before
 `kmain` runs**, which nothing previously did — `nasm -f bin` zeroes nothing,
 which is why `[fdlg_win]` has to live in `.text` as a `dw 0` (`fdlg_grab`
 reads it on the machine's very first mouse press). The splash is safe through
-it: `viddet` and `splash` keep all their data in `.text` precisely because
-they run during the load.
+it: `viddet` keeps its data in `.text` and `splash.inc` is `.boot2` in its
+entirety since SPEC.md §2.9.4 moved the loading screen into stage 2 — and
+neither has a byte of `.bss` at all, precisely because they run during the
+load.
 
 Expressing it as a section start is what makes it non-circular. Padding
 *inside* `.text` would grow `KTEXT_SIZE`, which grows `KIMG_PARA`, which
@@ -1516,7 +1567,9 @@ largest FAT any geometry this OS boots or builds declares: 1.44MB = 9,
 
 It used to be where the boot overlay lived until the first mount, which was
 the reason `.ovl` cost nothing. Since SPEC.md §2.9.6 the overlay is in stage
-2's blob and this window is the FAT's alone (below).
+2's blob and this window is the FAT's alone (below) — and since §18.8.3 it is
+**one volume's**, a pin rather than a fallback, so these bytes are the first
+FAT window the machine hands out instead of the one it never uses.
 
 ### What is reserved on every machine, used or not
 
@@ -1544,19 +1597,42 @@ is `.bss` that nothing can ever use.
 
 **The per-volume FAT windows are the one place the kernel claims heap for
 speed rather than capacity.** `DSK_FAT_SECS` sectors — 4.5KB, rounded to a
-5KB claim tagged `MEM_K_FATW` — **per driver-backed volume**, so a copy
-alternating between two hard-disk partitions stops reloading nine FAT sectors
-on every switch (SPEC.md §18.8.1). Two mounted partitions is 10KB of heap
-that a machine with no hard disk never pays, a floppy never asks for, and a
-refused claim degrades out of entirely. The kernel-side cost is 24 bytes of
-`.bss` for the two per-volume arrays, four words moved from `.bss` into
-`.text` so they can carry real initialisers, and the park/pick/claim/drop
-routines.
+5KB claim tagged `MEM_K_FATW` — so a copy alternating between two volumes
+stops reloading nine FAT sectors on every switch (SPEC.md §18.8.1). A refused
+claim degrades out entirely. The kernel-side cost is three `DVOL_MAX`-wide
+arrays and four other words, all of them in `.text` with real initialisers
+rather than in `.bss` — `-f bin` zeroes no `.bss` and `dsk_fatw_pick` reads
+one of those words **as a segment** — plus the park/pick/claim/drop routines.
 
-**…and the directory window is the second, on softer terms.** `MEM_P_DIRW`
-(SPEC.md §19.2.3) is 16KB of cached directory sectors, and it is **purgeable**
-(SPEC.md §50.6) where the FAT windows are not: a copy that is halfway through
-needs its FAT, and nothing needs this. So it is given back the instant anything
+**It began as driver-backed volumes only**, on the reasoning that a floppy's
+window is its whole FAT and never moves. §18.8.2 answered that — what costs
+is the nine sectors re-read at every *switch*, not the window moving — and
+gave a floppy one too, behind a 128KB free-heap comfort gate.
+
+**And since §18.8.3 the first window on the machine costs nothing at all**, and
+since §18.8.4 none of the others is held against the machine's will.
+`FAT_SEG` was a fallback owned by nobody, so a machine whose volumes all won
+claims reserved 4,608 bytes it never touched and bought the same window again
+out of the arena. It is now a **pin**: one volume holds it, recorded like any
+claim, tried first and ungated because it is already paid for, and taken away
+by the next volume that needs a home and cannot fund one. Measured on the
+360KB pair, a desktop with A: mounted holds **no `MEM_K_FATW` claim at all**
+where it used to hold one, and one rather than two once B: is open. Kernel
+and heap are the same RAM: a reserve that is always there and always unused
+is the same waste wherever the ladder puts it.
+
+**Both of them are purgeable now.** `MEM_P_DIRW` (SPEC.md §19.2.3) is 16KB of
+cached directory sectors and always was; `MEM_P_FATW` joined it at §18.8.4,
+which is what let the 128KB gate above come down to twice the claim. The
+objection this paragraph used to carry — *a copy that is halfway through needs
+its FAT* — is answered by a guard rather than by a pin: `mem_fatw_dirty`
+refuses to shed a window with FAT edits still in it, and only the live window
+can be dirty, because `dsk_fatw_park` flushes the outgoing volume at every
+mount. It ranks `MEM_PG_MED` — a shed window is not one reload but nine
+sectors on every volume switch until it is back (§18.8.1: 45 loads on the
+reference copy, against 3 with a window), which is seconds rather than the
+~400 ms a single rebuild suggests. `MEM_P_DIRW` stays above it at HIGH. So it
+is given back the instant anything
 else wants the room, and `dsk_rah_want` will not even ask unless `mem_avail`
 reports twice its size — because `mem_claim` sheds and retries, and a directory
 walk that took the window raise cache away every time it ran would be a worse
@@ -1643,6 +1719,14 @@ attribution is complete — and `kernel.asm`'s own row is the **residual**, so
 anything the pass failed to attribute lands there in plain sight instead of
 disappearing.
 
+**`.boot2` is a column and not a rung.** The loader blob is padded to
+`BOOT2_PAD` whatever is in it, so nothing is spent by growing it — up to the
+guard on `BOOT2_SIZE`, which is a cliff rather than a slope. It is measured
+per module anyway because `splash.inc` lives there and nowhere else: without
+the column a 1,859-byte module reports as costing nothing, which is how the
+old table came to attribute 967 of those bytes to `.text` and go unnoticed
+for two blessings.
+
 Three results are worth knowing before you go looking. The figures for them
 are in the tables and deliberately not repeated here: a number stated twice
 is a number that goes stale once, which is how this section came to be
@@ -1664,61 +1748,62 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 33,305 | 34.8% |
-| the window system and its furniture | 25,310 | 26.5% |
-| drawing: adapters, primitives, glyphs, icons | 16,121 | 16.8% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,994 | 10.4% |
-| the kernel proper: API table, heap, scheduler, events | 8,078 | 8.4% |
+| the file system, end to end | 33,628 | 34.3% |
+| the window system and its furniture | 26,227 | 26.8% |
+| drawing: adapters, primitives, glyphs, icons | 16,863 | 17.2% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 10,119 | 10.3% |
+| the kernel proper: API table, heap, scheduler, events | 8,288 | 8.5% |
 | the three built-in kinds | 1,815 | 1.9% |
 | the Control Panel | 1,060 | 1.1% |
-| **total** | **95,683** | |
+| **total** | **98,000** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
-| module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
-|---|---:|---:|---:|---:|---:|
-| `wm.inc` — the window manager (§11) | 11,857 | 95 | **11,952** | 1,086 | — |
-| `files.inc` — the Disk window (§22) | 1,131 | 8,719 | **9,850** | 471 | — |
-| `vga12.inc` — the VGA planar primitives (§5) | 7,398 | 702 | **8,100** | 165 | 526 |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 392 | 6,098 | **6,490** | 890 | 3,584 |
-| `fdlg.inc` — the Standard File dialog (§38) | 274 | 5,280 | **5,554** | 169 | — |
-| `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 5,067 | **5,246** | 155 | — |
-| `mouse.inc` — serial mouse and the cursor (§9) | 4,703 | — | **4,703** | 149 | — |
-| `ui.inc` — the UI task and the event ladder (§13) | 3,400 | — | **3,400** | 50 | — |
-| `menu.inc` — the menu bar and pull-downs (§12) | 3,086 | — | **3,086** | 197 | 98 |
-| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 543 | 2,491 | **3,034** | 348 | — |
-| `assoc.inc` — file type associations (§54) | 528 | 2,373 | **2,901** | 43 | — |
-| `memory.inc` — the claim heap (§50) | 14 | 2,693 | **2,707** | 20 | 324 |
-| `instance.inc` — instances and the built-in kinds (§29) | 2,452 | — | **2,452** | 694 | — |
-| `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,440 | **2,440** | 148 | — |
-| `font.inc` — **(undescribed)** | 2,125 | — | **2,125** | 218 | 768 |
-| `apps.inc` — the three built-in kinds (§14) | 251 | 1,564 | **1,815** | 15 | 240 |
-| `icons.inc` — the icon renderer (§10) | 1,686 | — | **1,686** | 100 | — |
-| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,541 | — | **1,541** | 88 | — |
-| `sched.inc` — pre-emptive scheduling (§7–8) | 1,223 | — | **1,223** | 124 | 2,746 |
-| `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,207 | — | **1,207** | 4 | — |
-| `snd.inc` — the sound layer (§34) | 1,200 | — | **1,200** | 300 | — |
-| `ctrl.inc` — the Control Panel (§31) | 778 | 282 | **1,060** | — | — |
-| `desk.inc` — the desktop and volume zones (§14/§26.1) | 15 | 1,040 | **1,055** | 18 | — |
-| `viddet.inc` — adapter detection and geometry (§39) | 1,014 | — | **1,014** | — | 696 |
-| `fsx.inc` — fullscreen exclusive (§53) | 1,011 | — | **1,011** | 10 | — |
-| `dock.inc` — **(undescribed)** | 913 | — | **913** | 38 | — |
-| `loader.inc` — the package loader (§21) | — | 782 | **782** | 58 | — |
-| `clock.inc` — the clock ladder (§37) | 678 | — | **678** | 89 | — |
-| `fprog.inc` — the file-operation progress widget (§12.8) | 675 | — | **675** | — | — |
-| `toast.inc` — the menu bar's transient message (§59) | 537 | — | **537** | 25 | — |
-| `mod.inc` — on-demand kernel modules (§2.8) | 54 | 416 | **470** | 98 | — |
-| `blank.inc` — **(undescribed)** | 208 | 240 | **448** | — | — |
-| `xmem.inc` — memory above 1MB (§41.4–41.5) | 263 | 104 | **367** | 22 | — |
-| `clip.inc` — the system clipboard (§55) | 229 | — | **229** | 6 | — |
-| `events.inc` — the event ring (§10) | 173 | — | **173** | 134 | — |
-| `clone.inc` — **(undescribed)** | 15 | 27 | **42** | — | — |
-| `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 12 | — | **12** | — | — |
-| `splash.inc` — the boot splash (§15) | — | — | **0** | — | — |
-| `band.inc` — **(undescribed)** | — | — | **0** | — | — |
-| `bootprof.inc` — **(undescribed)** | — | — | **0** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 3,505 | — | **3,505** | — | — |
-| **total** | **55,270** | **40,413** | **95,683** | **5,932** | **8,982** |
+| module | `.text` | `.cold` | code | `.bss` | `.lowbss` | `.boot2` |
+|---|---:|---:|---:|---:|---:|---:|
+| `wm.inc` — the window manager (§11) | 12,531 | 95 | **12,626** | 1,086 | — | — |
+| `files.inc` — the Disk window (§22) | 1,131 | 8,744 | **9,875** | 471 | — | — |
+| `vga12.inc` — the VGA planar primitives (§5) | 7,991 | 702 | **8,693** | 181 | 526 | — |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 397 | 6,306 | **6,703** | 890 | 3,584 | — |
+| `fdlg.inc` — the Standard File dialog (§38) | 274 | 5,323 | **5,597** | 169 | — | — |
+| `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 5,067 | **5,246** | 155 | — | — |
+| `mouse.inc` — serial mouse and the cursor (§9) | 4,828 | — | **4,828** | 149 | — | — |
+| `ui.inc` — the UI task and the event ladder (§13) | 3,516 | — | **3,516** | 58 | — | — |
+| `menu.inc` — the menu bar and pull-downs (§12) | 3,086 | — | **3,086** | 197 | 98 | — |
+| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 543 | 2,491 | **3,034** | 348 | — | — |
+| `assoc.inc` — file type associations (§54) | 528 | 2,415 | **2,943** | 43 | — | — |
+| `memory.inc` — the claim heap (§50) | 20 | 2,765 | **2,785** | 20 | 324 | — |
+| `instance.inc` — instances and the built-in kinds (§29) | 2,452 | — | **2,452** | 694 | — | — |
+| `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,440 | **2,440** | 148 | — | — |
+| `font.inc` — the 8×8 glyph renderer (§6) | 2,167 | — | **2,167** | 218 | 768 | — |
+| `apps.inc` — the three built-in kinds (§14) | 251 | 1,564 | **1,815** | 15 | 240 | — |
+| `icons.inc` — the icon renderer (§10) | 1,686 | — | **1,686** | 100 | — | — |
+| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,541 | — | **1,541** | 88 | — | — |
+| `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,304 | — | **1,304** | 4 | — | — |
+| `sched.inc` — pre-emptive scheduling (§7–8) | 1,277 | — | **1,277** | 124 | 2,746 | — |
+| `snd.inc` — the sound layer (§34) | 1,200 | — | **1,200** | 300 | — | — |
+| `fsx.inc` — fullscreen exclusive (§53) | 1,131 | — | **1,131** | 9 | — | — |
+| `ctrl.inc` — the Control Panel (§31) | 778 | 282 | **1,060** | — | — | — |
+| `desk.inc` — the desktop and volume zones (§14/§26.1) | 15 | 1,040 | **1,055** | 18 | — | — |
+| `viddet.inc` — adapter detection and geometry (§39) | 1,024 | — | **1,024** | — | 696 | 3 |
+| `dock.inc` — the dock strip (§30) | 913 | — | **913** | 38 | — | — |
+| `loader.inc` — the package loader (§21) | — | 782 | **782** | 58 | — | — |
+| `fprog.inc` — the file-operation progress widget (§12.8) | 682 | — | **682** | — | — | — |
+| `clock.inc` — the clock ladder (§37) | 678 | — | **678** | 89 | — | — |
+| `toast.inc` — the menu bar's transient message (§59) | 537 | — | **537** | 25 | — | — |
+| `mod.inc` — on-demand kernel modules (§2.8) | 54 | 416 | **470** | 98 | — | — |
+| `blank.inc` — the idle screen blanker (§64) | 208 | 240 | **448** | — | — | — |
+| `xmem.inc` — memory above 1MB (§41.4–41.5) | 263 | 104 | **367** | 22 | — | — |
+| `clip.inc` — the system clipboard (§55) | 229 | — | **229** | 6 | — | — |
+| `events.inc` — the event ring (§10) | 173 | — | **173** | 134 | — | — |
+| `clone.inc` — the disk cloner (§18.99) | 15 | 27 | **42** | — | — | — |
+| `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 12 | — | **12** | — | — | — |
+| `splash.inc` — the boot splash (§15) | — | — | **0** | — | — | 2,027 |
+| `band.inc` — the 1bpp band composer (§5.9), `BAND=1` | — | — | **0** | — | — | — |
+| `bootprof.inc` — the boot phase table (§15.5), `BOOTPROF=1` | — | — | **0** | — | — | — |
+| `moudiag.inc` — what the identify window saw (§9.4.6), `MOUDIAG=1` | — | — | **0** | — | — | — |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 3,583 | — | **3,583** | — | — | 468 |
+| **total** | **57,197** | **40,803** | **98,000** | **5,955** | **8,982** | **2,498** |
 <!-- END generated table -->
 
 ### Reading it

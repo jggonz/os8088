@@ -518,12 +518,42 @@ direction.
 SPEC.md §9.5's probe, nothing can win the serial contest, and the only
 pointing device on the machine is the PS/2 mouse the `pc` machine has anyway.
 That is the positive test for the 8042 handshake, and there is nowhere else to
-run it: MartyPC and every 5150 in docs/FIELD-MACHINES.md is an 8088 whose
-keyboard is an 8255 PPI, so `[cpu_tier]` refuses the module before it reads a
-port. **86Box's AT-class machines are where it should next be tried on
-something closer to iron**, and it has not been.
+run it automatically: MartyPC and every 5150 in docs/FIELD-MACHINES.md is an
+8088 whose keyboard is an 8255 PPI, so `[cpu_tier]` refuses the module before
+it reads a port.
 
-What to assert, all of it readable with `tools/os88sym.py` and `xp`:
+**`make 386-ps2` is the 86Box machine, and it is the only one in this tree
+with a PS/2 mouse.** Every other `vm/` config is `mouse_type = msserial`, and
+that is not an oversight anyone would notice — it is why §9.9 shipped and went
+untested on anything but QEMU for months, and why the first real machine it
+met refused it at the first step. It is a Packard Bell Legend 300SX (386SX @
+25MHz, 4MB, OTI-067) with no serial mouse at all, so the serial contest cannot
+be entered and the pointer either comes from the auxiliary port or does not
+come.
+
+Picking that machine is not arbitrary either: 86Box gives its 8042 an
+auxiliary port because the machine's `bus_flags` carry
+`MACHINE_BUS_PS2_PORTS`, and on a machine without them `0xA8` and `0xA9` are
+no-ops whatever `mouse_type` is set to — so a PS/2 mouse selected on the wrong
+board is silently connected to nothing.
+
+**What a working machine looks like is a pointer that moves.** What a broken
+one looks like is the *keyboard mouse* (§9.6): the arrow keys drive the
+pointer and the mouse does nothing, because `[mou_ptr]` is 0 until a packet
+arrives. `make 386-ps2 MOUDIAG=1` then draws §9.9.6's table over the desktop,
+and its `p2st`, `aux`, `sub` and `pic` columns say which step stopped.
+
+**`tests/ps2mouse.py` is this recipe, automated** — `make test-full` runs it,
+and `python3 tools/os88test.py full -k 'ps2*'` runs it alone. It was a recipe
+for months and a recipe is a thing somebody has to remember to run; nobody did,
+and the feature turned out not to work at all on the first 86Box machine it
+met. The row would not have caught *that* bug (SPEC.md §9.9.1's IRQ1 mask is
+a race QEMU never loses), and that is the point of having it: it holds the
+half this container can see, so the next field round is spent on the field's
+bug rather than on one that was findable here.
+
+What it asserts, all of it also readable by hand with `tools/os88sym.py` and
+`xp`:
 
 | | |
 |---|---|
@@ -559,6 +589,18 @@ because QEMU keeps routing input to whichever handler was activated last and
 `msmouse` is still that one. The PS/2 mouse is probed, found, and then retired
 by `mou_lockon` — `mou_p2` goes back to `0` with `mou_p2st` left at `9`,
 which is the pair that says "the vector is still ours to give back".
+
+**What `MOUDIAG=1` adds, and why QEMU passing is not the end of it.** Every
+assertion above passes on QEMU with SPEC.md §9.9.1's **bit 4 rule broken** —
+the command byte written at step 4 handing the keyboard interface back in the
+middle of the probe — because QEMU's i8042 raises IRQ1 only for
+keyboard-sourced bytes and a mouse reply can never reach int 09h there. On a
+controller whose OBF interrupt is gated by bit 0 alone, the same build stalls
+at `mou_p2st` 4 or 5. **That class of defect is invisible to every row in this
+table**, which is what SPEC.md §9.9.6's two `MOUDIAG=1` rows are for: `tier`,
+`a9`, `cmd`, `id`, `irq`, `p2`, `b0`, `ptr`, `pkt` and `x`, drawn on the glass
+and kept live from `ui_task` so the counters answer "move the mouse and see".
+`make MOUDIAG=1` builds it; §9.9.6 carries the decision tree.
 
 **What found the ordering bug.** The first version of this armed IRQ12 in the
 8042's command byte before installing int 74h, and the machine's own BIOS

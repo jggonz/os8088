@@ -1478,6 +1478,47 @@ sch_isr:
                                 ; publishes; runs every tick in both modes,
                                 ; floppy reads included
 
+    ; --- the loading screen's animation (SPEC.md 15.3.8.2) -------------------
+    ; snd_tick's shape one line down and for its reason: a gated leaf that runs
+    ; every tick, floppy reads INCLUDED - which here is the whole point. This
+    ; ISR owns int 08h from sched_init, which is early in kmain, so it drives
+    ; the second half of the loading screen's life; spl_chrome's own hook drove
+    ; the first, and stage 2 gave it back before the handover.
+    ;
+    ; [spl_busy] is 15.3.8.3's lock and this takes it exactly as spl_isr does.
+    ; What it does NOT do is `sti` first, and that asymmetry is deliberate:
+    ; this ISR's contract is IF=0 throughout (see the header), and re-entering
+    ; the SCHEDULER is a worse thing than making the floppy's completion
+    ; interrupt wait one frame. spl_isr can afford the sti because the only
+    ; thing it can re-enter is itself, and [spl_busy] already refuses that.
+    ; ...and NOT through SPLCALL, which stages its target in the [spl_fp] the
+    ; main line is using: an interrupt that borrows that word sends whatever
+    ; SPLCALL it landed inside to splf_anim. kernel.asm's [spl_ifp] is this
+    ; ISR's own, and the two instructions either side are SPLCALL's own body -
+    ; the blob-gone test and the far call.
+    cmp byte [spl_live], 0
+    je .nospl
+    cmp byte [spl_quiet], 0         ; ...and spl_stepq has the floor (15.3.3.1).
+    jne .nospl                      ; THIS handler is the one that matters for
+                                    ; it: sched_init takes int 08h early in
+                                    ; kmain, so it - not spl_isr - is what fires
+                                    ; during mouse_init's identify window, and
+                                    ; it does not `sti`. A 28.7 ms spinner frame
+                                    ; with IF=0 loses three bytes of a 1200-baud
+                                    ; burst the 8250 holds one at a time, which
+                                    ; is a mouse on the wire and not detected
+    cmp byte [spl_busy], 0
+    jne .nospl
+    cmp word [spl_fseg], COLD_SEG   ; the blob has been given back (2.9.5)
+    jbe .nospl
+    inc byte [spl_busy]
+    mov word [spl_ifp], splf_anim
+    mov ax, [spl_fseg]
+    mov [spl_ifseg], ax
+    call far [spl_ifp]
+    dec byte [spl_busy]
+.nospl:
+
     mov dx, [ticks]             ; wake sleepers whose deadline has passed
     mov bx, sch_tasks
     mov cx, MAX_TASKS

@@ -47,7 +47,6 @@ coordinates there samples the wrong pixels).
 """
 import argparse
 import os
-import subprocess
 import sys
 import time
 
@@ -282,10 +281,9 @@ def main():
     ap.add_argument("--case", choices=("vga", "herc"), default=None)
     a = ap.parse_args()
 
-    if a.apps == "/tmp/paintback.img" and not os.path.exists(a.apps):
-        subprocess.check_call(
-            [sys.executable, "tools/os88disk.py", "-o", a.apps, "--size",
-             "360", "APPS:build/paint.o88", "MEDIA:" + a.gif])
+    if a.apps == "/tmp/paintback.img":
+        os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
+                               "MEDIA:" + a.gif)
 
     iw, ih, px = gif_pixels(a.gif)
     sym = pkg_syms("apps/paint/paint.asm")

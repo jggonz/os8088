@@ -229,10 +229,9 @@ def main():
     ap.add_argument("--machine", default="os8088_xt_vga")
     a = ap.parse_args()
 
-    if a.apps == "/tmp/blitplane.img" and not os.path.exists(a.apps):
-        subprocess.check_call(
-            [sys.executable, "tools/os88disk.py", "-o", a.apps, "--size",
-             "360", "APPS:build/paint.o88", "MEDIA:build/OS8088.GIF"])
+    if a.apps == "/tmp/blitplane.img":
+        os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
+                               "MEDIA:build/OS8088.GIF")
 
     print("   shipped kernel:")
     fe, fo, ce, co, ge, go = shots(a.image, a.apps, a.machine, ())

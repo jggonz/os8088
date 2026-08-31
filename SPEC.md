@@ -273,6 +273,14 @@ and at a FAT flush (out). The whole region is the snapshot; there is no
 reserve, and `FAT_PARA` is derived from `DSK_FAT_SECS` so the two can never
 disagree.
 
+It is **not a fallback any more, it is a PIN** (§18.8.3): exactly one volume
+holds it at a time, recorded in `dsk_fatwc[v]` like any heap window, and a
+volume that needs a home and cannot fund one out of the heap evicts the
+holder and takes it. That is the same thing that used to happen to these
+bytes when a claim was refused — the difference is that the holder is now
+*told*, so its banked window can never be reused after somebody else has
+written over it.
+
 **Why 9.** It is the largest FAT any floppy geometry this OS boots or builds
 declares — 360KB = 2, 720KB = 3, 1.2MB = 7, 1.44MB = 9 — so every floppy's
 whole FAT is resident and `dsk_fat_window` returns on its first compare
@@ -779,8 +787,9 @@ has to hold for the whole span because it is asked about a machine nobody has
 in front of them.
 
 **What the refusal does not do is choose the minimum machine.** That is
-`MIN_RAM_KB` (§15.1), a policy figure of 128KB: the smallest machine the
-shipped system is *claimed* to work on, not the smallest that can boot. The
+`MIN_RAM_KB` (§15.1), a policy figure and one **per configuration** — 128KB
+for `kern_small`, 196KB for `kern_big`: the smallest machine that
+configuration is *claimed* to work on, not the smallest that can boot. The
 smallest that can boot is roughly the kernel's own span plus this sector,
 which leaves a heap too small to open anything (docs/KERNEL-MEMORY.md).
 
@@ -1485,6 +1494,21 @@ That knob had stopped reaching the sector at all. It fed `$(VIDDEF)` alone —
 correct once §2.9 moved the loader and its hex printer into the kernel, and
 wrong the moment anything in stage 1 wanted it again. It feeds both now.
 
+**And the digits are a TAIL on the one printer, not a printer of their own.**
+They were a second copy of `.halt`'s teletype loop, which left the `BOOTDIAG=1`
+sector one byte from full — so §2.9.11's seven-byte range check tipped it six
+over 512, and `t_buildmatrix` is what said so. `.halt` prints its string and
+falls into `.tail`, which prints `DX` as four hex digits or nothing at all when
+`DX` is 0; the two other ways in zero `DX` to say they have nothing to add.
+**The label was already named**: the read-failure path's `xor dx, dx` has
+carried the comment *"nothing to print after this one (see .tail)"* since this
+section was written, pointing at a label nobody had built. Ten bytes back, and
+the plain sector is byte-identical — the tail compiles out of it.
+
+**That build now stands at 506 of 510, four spare**, against the plain
+sector's 482 and 28. It is the tightest configuration in the tree and the one
+to measure first when anything is added here.
+
 **Which sector it names is the diagnosis**, because stage 1 reads the blob in
 runs bounded by the TRACK. On a 360KB disk that is two `int 13h` calls: blob
 sectors 0–5 from cylinder 0 head 1 sectors 4–9, and blob sectors 6–12 from
@@ -1630,6 +1654,285 @@ the loader* nobody wrote down. The rule the three of them make is the same one �
 **the kernel must not depend on its loader having done anything it can do
 itself** — and the two constants a loader still owes it, `[spl_fseg]` and the
 image at `KERNEL_SEG:0`, are now the whole contract.
+
+##### 2.9.9.2 …and then it set the video mode TWICE
+
+`spl_chrome` opens with `vid_detect`, `vid_apply` and `vid_setmode`, because on
+the floppy path it is the first thing in the machine that has ever looked at a
+screen — §39.1's *the splash owns the first mode set*, written when the splash
+was the only thing that ever set one. §2.9.9.1 gave `spl_step` that same entry
+and thereby handed it to a caller for which none of it is true: on a hard-disk
+boot the loading screen is started from `kmain`, **thirteen calls after
+`vid_init` has already probed, applied and set the mode**.
+
+So an installed machine paid for the mode twice — two BIOS `int 10h AX=0012h`
+calls and two of `vid_setmode`'s own ~110 ms planar wipes — and neither copy
+could be dropped by asking `[spl_live]` the way `vid_init` does, because by the
+time `spl_chrome` runs `spl_step` has already raised it.
+
+**Measured on `os8088_xt_hdd`, MartyPC's cycle counter, one installed partition
+booted each way**: from `[spl_live]` rising to the first notch is **700.9 ms
+before and 584.1 ms after — 557,558 cycles, 116.8 ms**, which is the second
+`vid_detect` + `vid_apply` + `vid_setmode` and nothing else. The rest of that
+window is `mouse_init` and is §15.6.4's.
+
+**The CALLER is the discriminator, and it is exact rather than a flag.**
+`spl_tick` is stage 2's and stage 2's alone, before `kmain` exists; every caller
+of `spl_step` — `kmain`'s three `SPLGATE` sites, `dsk_xfer`'s per-sector notch
+and `dsk_rah`'s — is in the kernel proper and therefore downstream of
+`vid_init`. *"The screen is being started by `spl_step`"* already **means** *"the
+mode is set"*, so the start path enters at `spl_rechrome` — which is
+`spl_chrome` without those three calls and has existed since §39.11.3 for the
+same shape of reason. It costs no byte in either direction and adds no state to
+get wrong.
+
+**What does NOT move is `vid_init`'s own mode set**, and `vid_probe_avail` is
+why: it has to run with the VGA already in mode 12h, or a card whose BIOS came
+up in mono text answers at B000 as *itself* and reports a Hercules that is not
+there (§39.11.1). Handing the hard-disk path's mode set back to the splash would
+put that probe in text mode — a phantom second display, which is worse than a
+slow boot.
+
+#### 2.9.10 BOOTDIAG — the loader, instrumented, for the ROMs that refuse it
+
+**A handful of 86Box BIOSes have answered this OS with `Disk error` and stopped
+since the first commit**, and every rewrite of the loader since has left them
+exactly where they were. That is the shape of the problem rather than a
+coincidence: the string means *int 13h set carry three times running* and
+nothing else. It says nothing about which call, which sector, which drive
+number, or whether the bytes that did arrive were the right ones — §18.91 and
+§18.93.1 are both cases of a BIOS answering `CF = 0` for a transfer it did not
+make, and neither of them sets carry at all.
+
+`tests/bootdiag/` is the instrument. `make bootdiag`, six images.
+
+##### The loader that fails is the loader that would have to carry the diagnostic
+
+Everything §2.9 does is a suspect, so a payload loaded by `boot/boot.asm` can
+only be run on machines that do not have the bug. `tests/bootdiag/bdboot.asm`
+is a second 512-byte sector that depends on none of it:
+
+| `boot/boot.asm` does | `bdboot.asm` does |
+|---|---|
+| relocates itself to the top of RAM, at a segment computed from `int 12h` (§2.7) | stays at `0x7C00` and loads the payload **low**, at `0800:0000` |
+| copies and patches the `int 1Eh` diskette parameter table at `0000:0580` (§2.9.8) | **touches nothing** — the table the BIOS booted with is the table it keeps |
+| reads a whole track an `int 13h`, and on an 8088 a whole **cylinder**, across the head boundary (§18.91.1) | **one sector an `int 13h`**, always |
+| believes `DL` | believes `DL`, **falls back to 0** when every retry on the first sector fails, and reports that it did |
+| has `SPT`/`HEADS` as build-time immediates, one sector per geometry | reads both out of the BPB, so **one binary serves all three** |
+
+What is left is the smallest request any BIOS since 1981 can be asked for. It
+fits in 436 bytes, which is 74 spare — the shipped sector's arithmetic for
+finding the data area (§19.3) is the only thing it keeps.
+
+**The pair is the experiment, and neither disk alone is.** `bootdiag*.img`
+carries the payload behind `bdboot.asm`; `bootdiagx*.img` carries **the same
+bytes** behind the shipped `boot/boot.asm` as a `FLAT_PAYLOAD` (§2.9.3). One
+booting and the other not is a one-bit answer about whether the fault is in the
+loader or under it, and no amount of reading the source gives it.
+
+`BOOTDIAG.COM` rides on every disk for the third case: a machine that boots DOS
+and not this. It is the same source with `-DCOMFILE`, so the report is the
+same; `BOOTDIAG > BD.TXT` captures it, `BOOTDIAG B:` surveys the other drive,
+and the memory tests that would scribble on DOS are skipped and say so.
+**Nothing in any build ever writes to a disk** — every `int 13h` is `AH=00h`,
+`02h`, `08h` or `15h`.
+
+##### What it reports
+
+| | |
+|---|---|
+| **[1] machine** | BIOS date and model byte, `int 15h AH=C0h` (whose *absence* is a finding — an original PC/XT ROM has none), the first 24-character printable run in `F000` so both ends of a report are talking about the same ROM, the CPU tier §18.93.2's gate turns on, `int 12h`, and the equipment word |
+| **[2] handover** | which loader carried it, `DL` as the BIOS set it against `DL` as the load used it, and the sector count, retry count and worst status of the load that just happened |
+| **[3] `int 1Eh`** | the vector and whether it points at ROM or RAM, all eleven bytes with **EOT** called out against this disk's sectors per track (§18.92), and then the same again after installing our copy at `0000:0580` and resetting the controller — so a ROM that puts its own table back is visible, and so is one for which `0000:0580` is not free memory |
+| **[4] drive** | `AH=08h` and `AH=15h`, including the change line that answers status `06` until a reset |
+| **[5] reads** | the eight shapes the loader uses, each with its CHS, `AH`, `AL`, attempt count **and a per-sector data column**. `AH` is the **first non-zero status any attempt returned**, not the last: a read that failed once and then succeeded printed `00` beside `try 2`, which says something went wrong and refuses to say what |
+| **[6] memory** | the two questions below |
+| **[7] replay** | §2.9's own read sequence, instrumented |
+| **[8] verdict** | one line of hex, so a single photograph carries the essentials |
+
+##### The two questions in [6], which nothing in this tree has ever asked
+
+Stage 1 computes its own home from `int 12h` and moves to the **last 512 bytes
+of conventional RAM**, with its stack in the 2KB below that and stage 2 in the
+5.5KB below that again. Both of those are bets, and both are testable:
+
+- **Is the RAM there?** `int 12h` over-reporting — a shift that overflowed, a
+  ROM counting a shadow area — makes stage 1's `retf` a jump into nothing.
+  That is a hang with a blank screen, not a message, so it has never been on
+  anybody's list. The test is a write and a read-back at `[relseg]:7C00` and at
+  stage 2's first byte.
+- **Does it STAY, and how deep does the ROM go?** Two failures with one shape.
+  A ROM that keeps scratch in the top of conventional memory *without
+  subtracting it from `int 12h`* has stage 1's stack living inside the BIOS's
+  own variables; a ROM whose `int 13h` simply uses a lot of stack runs off the
+  bottom of the 2,048 bytes stage 1 reserves. Either way the first `int 13h`
+  corrupts the loader or the loader corrupts the `int 13h`, and `Disk error` is
+  what reaches the screen. So the probe fills 4,096 bytes — twice what stage 1
+  reserves — **switches `SS:SP` to stage 1's own stack**, does a reset, a read,
+  an `int 10h` and an `int 16h` there with no `call` of ours among them, and
+  reports the read's `AH` and a **depth in bytes**.
+
+  **A read that only fails from that stack is the bug, named.** The first
+  version of this made the four calls on the program's own stack and reported
+  *0 bytes* on a ROM that cannot have used none — an `int` pushes six before a
+  line of BIOS code runs, and they went where `SP` pointed. What it measured
+  was whether the top of RAM is scratch, which is half the question and reads
+  exactly like the whole one. GLaBIOS answers **56 bytes**.
+
+##### The data column, and why the payload is in two halves
+
+A run is checked against the **bytes**, never against the carry flag. The
+payload is `BD_SECS` = 48 sectors: the first `BD_STAMP0` = 16 are the code, and
+the Makefile pads them to that boundary and fills every sector after it with
+its own index in all 256 words — `tests/rdiag.asm`'s trick (§18.93.1), for the
+same reason. Every verified read is aimed into that stamped region, which is
+what the run-placement arithmetic in `lba_cyl1`, `lba_trk`, `lba_flip0` and
+`lba_flip1` exists to guarantee on all three geometries. **The build fails if
+the code outgrows `BD_STAMP0`**, because the way that goes wrong is silent:
+every verified read quietly becomes a comparison against a routine.
+
+**Where the three of them sit is derived, not written down.** The payload's
+image, a 1KB stack and the 8KB read buffer are laid end to end from wherever
+the loader put the payload — `SCR_ADJ` is `SECS*32 + 64`, so changing the
+sector count moves all of it together. The first version had that offset as a
+constant beside a 48-sector image longer than it, which put the buffer *and the
+stack* inside the image with the stack growing down through the stamped
+sectors; it worked, because nothing reads the image back, and it would have
+stopped working the day something did.
+
+**And the buffer must not straddle a 64KB DMA page**, or every multi-sector
+read into it answers error `09` for a reason that is ours, in the column the
+whole report is about. `PAYLOAD_SEG` is `0x00A0` — low, because the low end is
+where there is room: the three end at `0x08E00`, so a 64KB machine holds them,
+where `0x0800` put the buffer's end at `0x10400` and across a page. It clears
+the BIOS data area (which stops at `0x004FF`), the parameter-table copy at
+`0x00580`, and `KERNEL_SEG`, which read 8 writes a sector into.
+`scratch_seg` still checks at run time and moves the buffer up a page if it
+would straddle, because in one of the two builds the payload's address is
+`boot/boot.asm`'s business and not this file's to assert about.
+
+Read 6 straddles a head boundary and read 7 a cylinder boundary — deliberately,
+and the pair separates a controller that will not do the multi-track flip
+(`docs/FIELD-NOTES.md` 31, where a 286 clone left 92 of 206 sectors never
+written) from one behaving exactly as documented, which is not required to
+cross a cylinder and never asked to.
+
+##### [7] runs twice, and [8] is what to photograph
+
+The replay does what §2.9 does, in the order it does it, into the addresses it
+uses: the patched table from [3] is already installed, the destination is the
+computed stage-2 segment at the top of RAM, and the run is cut by the track and
+by the 64KB DMA page. **Pass 1 reads the sectors stage 1 actually reads**,
+which are the payload's code and carry no stamp — its status columns are the
+point of it. **Pass 2 is the same shape over the stamped region**, so the
+transfer can be checked rather than believed.
+
+It is last on purpose. A machine that stops there has not defeated the
+diagnostic; it has answered it, and everything above is already on the screen.
+
+**[8] labels its own fields**, because it is read off a photograph and down a
+telephone: `BD dl 00  used 00  eot 09  dptkept 01  scrok 01  st 80  bad 0020`.
+`st` is every status any attempt returned, OR'd together — `80` there against
+`00` in every `[5]` row is a retry that worked, which is worth knowing and is
+not a failure. `bad` carries **one fixed bit per checked run, in the order they
+printed**; a shift register was tried first and makes the reader count the runs
+backwards to find out which one it was.
+
+The report **breaks between sections rather than at a line count**, so each of
+the three pages is one photograph that needs no other: `[1]`–`[3]`, `[4]`–`[6]`,
+`[7]`–`[8]`.
+
+**And if the payload never loads at all**, `bdboot.asm` prints one line and
+halts:
+
+```
+BD dl=XX/YY st=ZZ lba=WWWW
+```
+
+`XX` is the `DL` the BIOS handed over and `YY` the one the failing read used —
+`2A/00` is a ROM that handed over garbage and was overridden. `ZZ` is `int
+13h`'s status from the last attempt, which is the whole diagnosis when it is
+`0C` (media the drive cannot identify), `04` (sector not found), `06` (the
+change line), `80` (the drive never answered) or `20` (controller failure);
+`09` is a 64KB DMA straddle, which a single 512-aligned sector cannot do and is
+therefore a lie. `WWWW` is the LBA it died on. A dot per sector goes to the
+screen during the load, so a machine that *hangs* rather than erroring is
+placed by counting them.
+
+**Nothing in `all` builds any of it**, and no shipped floppy carries it: it is
+an instrument, not software (`tests/`).
+
+#### 2.9.11 The BIOS is supposed to say which drive, and a handful do not
+
+**`DL = 0x61`.** That is what the Packard Bell 286 — 86Box `pb286`, BIOS dated
+09/17/86 — puts in the register when it jumps to `0000:7C00`. Not a drive
+number: whatever was in `DL` when the ROM reached its boot jump. Setting it is
+the convention every BIOS since 1981 follows and no BIOS is *made* to follow.
+
+This sector's line was `mov [boot_drive], dl` with the comment *"BIOS told us
+where we came from; believe it"*, and it has been that line since the first
+commit. Every `int 13h` afterwards named unit `0x61`, all three attempts
+answered status `01`, and the machine printed **`Disk error`** — through four
+rewrites of the loader (§2.9, §2.9.6, §2.9.8, §2.9.9), none of which touched
+the one line that was wrong. §2.9.10's diagnostic found it in one boot, and
+`docs/FIELD-NOTES.md` 36 is the report.
+
+**The fix is a range check, not a fallback.** This sector is the *floppy*
+volume boot record and nothing else — the hard disk has `boot/boothd.asm`
+behind `boot/mbr.asm` (§2.9.9), and §80's live USB stick and CD use that pair
+too. So a unit above 3 is not a drive this sector can have come from, whatever
+the register says, and 0 is the only guess left:
+
+```
+    cmp dl, 3
+    jbe .dlok
+    xor dl, dl
+.dlok:
+    mov [boot_drive], dl
+```
+
+Seven bytes, of the sector's 35 free.
+
+**Why not try `DL` and fall back when it fails**, which is what
+`tests/bootdiag/bdboot.asm` does and is right for a diagnostic: a fallback
+fires on a *genuinely bad disk in drive B* and loads a kernel off whatever
+happens to be in drive A. That is a worse outcome than the error — a machine
+that boots the wrong system rather than saying it cannot boot this one. A
+range check cannot pick up the wrong disk. If a ROM ever turns up leaving a
+*plausible* wrong unit in `DL`, §2.9.10 prints what it was handed, and that
+report is what to act on then.
+
+**`boot/mbr.asm` gets the same clamp the other way** — `DL` below `0x80` is not
+a unit an MBR can have come from — because there is no reason to think a ROM
+that skips `DL` for a floppy sets it for a fixed disk, and this user installs
+to one. It lives there rather than in `boot/boothd.asm`, which takes the drive
+from the MBR and is 25 bytes from full.
+
+##### 2.9.11.1 `DLJUNK=<n>`, because nothing in this tree has such a ROM
+
+The check is a line no build here would ever execute: every BIOS in the tree
+sets `DL`, and MartyPC cannot run a 286 at all, so the machine that shows the
+bug cannot be hosted. `DLJUNK=<n>` overwrites `DL` immediately before the
+range check, so `DLJUNK=0x61` **is** the Packard Bell 286 for this purpose — a
+machine that boots is the check working, and `Disk error` is the bug it closed.
+
+`tests/dljunk.py` is the row, and it is an A/B rather than one assertion:
+`DLJUNK=0x61` must reach a desktop, and `DLJUNK=1` must **not** — 1 is a legal
+floppy unit, the check leaves it alone by design, and a build that booted
+anyway would be clamping something it should not.
+
+**What it did NOT find** is worth writing down beside it, because three
+plausible suspects were cleared in the same boot: the ROM's `EOT` is `0F` and
+§18.92's patch to `09` is installed and *kept* across a reset; `0000:0580` is
+untouched; and the top of conventional RAM both exists and survives — the ROM
+used **60 bytes** below stage 1's `SP`, against the 2,048 it reserves.
+
+**One real hazard it did find and the loader already avoids**: a run crossing a
+head answers status `04` twice and then `CF = 0` with two of four sectors
+wrong. That is `docs/FIELD-NOTES.md` 31's 286 clone again, on a second machine,
+and §18.93.2's gate is what makes it harmless — the CPU reports 286, the loader
+takes the track bound from the start, and `[boot_cylrun]` stays 0 so `dsk_xfer`
+stays careful for the rest of the session.
 
 ## 3. Global constants (defined once in kernel.asm, used everywhere)
 
@@ -1874,10 +2177,12 @@ canvas blank is 211 (PERFORMANCE.md Set 32): the pixels barely enter it.
 **It is refused rather than approximated in three cases**, each because
 something the `gfx_fill` did per run genuinely has to happen: an armed clip
 region (§11.3 — the runs must clip against it, and only `gfx_fill` does),
-more than one display (§39.14.7 — a run splits itself through `gfx_fill`'s own
-`GFXDISP`), and a nested whole-shape hook (§39.14.2 — the coordinates have
-already been translated). Refusing is the *existing* path, so the fallback
-needs no argument of its own.
+a block **this call did not put on one display** (§39.14.7 — a run splits
+itself through `gfx_fill`'s own `GFXDISP`; since §39.14.7.1 that is a block
+which straddles, and since §39.14.7.2 only one the seam cannot cut), and a
+nested whole-shape hook (§39.14.2 — the coordinates have already been
+translated). Refusing is the *existing* path, so the fallback needs no
+argument of its own.
 
 **VGA is `vga_blit_span`, and it is the same routine with the byte pattern
 replaced by a port write.** The four planes take their data from Set/Reset
@@ -2179,6 +2484,44 @@ byte either way (`SS` is `LOW_SEG` for all kernel code exactly as `CS` is
 `KERNEL_SEG`), and the move is **`KERN_BUDGET`-neutral**: the image rung
 gives back exactly the step the low rung takes. `tests/blitpair.py` is the
 gate that move needed and nothing had — see §5.4.1.1.
+
+#### 5.4.1.4 A REGION IS ARMED — BUT IS IT IN THE WAY?
+
+§5.4.1's fast path writes a coalesced run straight into the framebuffer, which
+it may only do when nothing has to be clipped away; so `gfx_blit4` sent every
+call with `[wm_clip_n]` set to `.slow`, where each run becomes a whole
+`gfx_fill` at its own ~756 µs arrival.
+
+**§11.3.3's cull arms a region around every `W_PAINT`.** So from the moment
+that landed, a Paint canvas gave up §5.4.1's fast path on *every damage
+repaint*: measured on a 4.77 MHz 8088 with a Hercules, `OS8088.GIF` opened by
+association is one `gfx_blit4` of 466×110 with `wm_clip_n = 1`, and it takes
+**19.97 seconds**. §63's 50% dither is a run a *pixel*, so `.slow` pays a
+`gfx_fill` per pixel-pair.
+
+**The test is containment, not the cull.** If the whole block lies inside ONE
+fragment of the region there is nothing here to clip against, and the fast path
+writes exactly the pixels the slow one would — so `wm_clip_t1` answers it, once
+per call, walking at most `WM_CLIP_MAX` rects against a blit that is measured
+in seconds.
+
+**Why this one is containment where §5.4.3.3 is the cull flag**, which is worth
+being explicit about because the two sit ten lines apart and answer the same
+question differently:
+
+- `gfx_blit4` needs to know only *may I skip clipping* — and containment says
+  yes exactly when it is true, for a **real** §11.3 region as much as for the
+  cull. It never draws a pixel outside the region, so nothing is over-drawn and
+  no repair is relied on.
+- `gfx_blitp` **refuses**, and its caller reacts by converting a 62,720-byte
+  canvas out of four planes and not converting back (§42.13.1). Containment
+  alone would leave that conversion happening whenever Paint is *partly*
+  covered during a repaint, so there the answer has to be the cull's own
+  contract: this pass redraws everything above afterwards, so ignoring the
+  region is redundant rather than wrong.
+
+One primitive can afford the stricter test because it loses only speed; the
+other cannot, because it loses the picture's format for the session.
 
 ### 5.4.2 `gfx_blit1` — a band of pixels the caller already composed
 
@@ -2730,6 +3073,48 @@ can be wholly on a display the canvas straddles.
 
 A probe that is refused changes nothing, so a caller may keep asking; Paint
 does, once per repaint, until the answer is yes.
+
+#### 5.4.3.3 THE CULL IS NOT A CLIP REGION, and refusing on it cost Paint its planes
+
+An armed clip region is one of the six refusals, and it has to be: a plane
+byte carries eight x's, so there is no masking here that would honour a
+fragment edge without giving up §5.4.3's single-bit shifts.
+
+**But `[wm_dmg_cull]` says the armed region is ADVISORY.** §11.3.3's cull is
+armed around one `W_PAINT` inside `wm_dmg_wins`, and that pass — *this pass and
+no other* — redraws everything above the window afterwards. So a primitive
+that ignores the region there paints redundantly, not wrongly, which is
+already why `wm_clip_test` rounds *outward* under the same flag. The cull is a
+saving, and refusing on it turns a saving into a defect.
+
+**What it cost.** Paint converts its canvas out of four planes on any refusal
+and does not convert back until the *adapter* changes (§42.13.1), because
+every refusal used to be a property of the machine — a mono card, an x off the
+byte grid, a straddled seam, a nested hook, a `kern_small` kernel. §11.3.3 put
+a sixth kind under it that is a property of *this call*, and the two are
+indistinguishable from outside. Measured on VGA: open Paint, draw one stroke,
+double-click the title bar to maximize, double-click again to restore — and
+`pt_topacked` runs with `wm_clip_n = 1`, `vid_mono = 0`, `vid_ndisp = 1`,
+`gfx_dnest = 0` and the block at screen x = 120, which is **on the byte grid**.
+Every geometric guard passed. From there the canvas is nibbles for the rest of
+the session and every repaint goes through `gfx_blit4` instead of `gfx_blitp` —
+1,161 ms against 164 for the same picture.
+
+**So the region refuses only when it is a real one.** Seven bytes, and the
+premise §42.13.1 is written on — *a refusal is a fact about the machine* — is
+true again.
+
+**And for Paint that is the whole of it**, which is worth checking rather than
+hoping: the other way a region gets armed around a package's drawing is the
+package arming its own through `OSAPI_WM_CLIP_SET` (§11.3), the door a
+background painter comes through, and Paint calls neither that nor
+`OSAPI_WM_CLIP_CLEAR`. So §11.3.3's cull was the only region its blits could
+ever meet. A package that *does* arm one and holds a planar picture would still
+convert, and the honest answer for it is the same one written above — the
+region there is binding, and a plane byte carries eight x's.
+
+`tests/paintcull.py` is the row, and it fails without the seven bytes with the
+guard values printed rather than a bare mismatch.
 
 ### 5.5 `gfx_scroll` — move a rect instead of redrawing it
 
@@ -4054,6 +4439,183 @@ taken in either direction: VGA is the adapter the composer loses time on, and
 a per-adapter default would have made the bar's own polarity a fact about the
 card rather than about the build — §5.9.3.1 is what that costs when a machine
 has two of them.
+
+### 5.10 `gfx_spans` — a RUN OF SCAN LINES, one call (API slot 0x04D8)
+
+§5.7 says a drawing call costs almost the same whatever it draws. **This is
+the primitive that stops paying it once a shape is known.** It takes one x
+interval per row for a run of **consecutive** rows and fills them all in
+`[gfx_color]`, computing one row base and one vertical clip for the lot.
+
+```
+in:   AX    = the y of the FIRST span
+      ES:SI = CX records of two words each, x1 then x2, both INCLUSIVE
+      CX    = rows; row n is y + n. x1 > x2 is an EMPTY row
+out:  CF = 0 drawn. CF = 1 REFUSED, and nothing was drawn
+```
+
+`ES` is the caller's own segment — slot 0x04D8 is an X cell (§20.3), so the
+list lives in the package's data and no staging buffer exists or is wanted.
+
+#### 5.10.1 It is not a batched `gfx_fill`, and the measurement is why
+
+The obvious version of this call is a rect list that loops the machinery
+already there. **It buys 7%.** Measured on a cycle-accurate 4.77 MHz 8088 for
+one 8×8 brush dab on a Hercules — `gfx_fill` entry to `sw_rect.done`, split
+five ways, with any interval an ISR landed in discarded (64 calls, none
+discarded):
+
+| leg | cycles | share |
+|---|---:|---:|
+| `gfx_fill` → `gfx_fill_d` — §11.3's clip test and `CURUNLAZY` | 91 | 1.7% |
+| `gfx_fill_d` → `gfx_fill_raw` — §39.14.1's display test | 46 | 0.9% |
+| `gfx_fill_raw` → `sw_rect` — `[vid_mono]` and `[sw_mode]` | 92 | 1.7% |
+| `sw_rect` → `vga_rect_setup` — the eight pushes | 152 | 2.9% |
+| **`vga_rect_setup`** | **1,236** | **23.3%** |
+| **`sw_plane_op` — the rows themselves** | **3,197** | **60.3%** |
+| | **5,305** | 1.11 ms |
+
+Only the first four legs — **381 cycles of 5,305** — are what a batch hoists.
+A cursor hide costs 3,718 more and lands on 8 calls of 64, but that is once
+per **lock hold**, not once per call, and no batching removes it.
+
+So the money is the 1,236 and the 3,197, and neither is a per-call overhead:
+they are the setup and the drawing of **a rect**. The only way past them is to
+stop describing the shape as rects. A 45° brush chord of eight steps with an
+8 px nib is 8 dabs of 8×8 = **64 row-writes** for a union that is **15 rows**.
+Emitted as 15 spans it is 15 row-writes and one row base.
+
+**That is the whole argument for the call, and it is also the warning against
+the other one.** PERFORMANCE.md Set 88 is the same trap seen once before: a
+design that removes calls without beating them.
+
+#### 5.10.2 What the run being CONSECUTIVE buys
+
+`gfx_sp_next` is `vga_rect_setup` minus the two things a run already knows:
+
+- **The row is one row.** `[vga_rows]` is set to 1 once, before the loop.
+- **Its base is the last one stepped.** `gfx_rowbase`'s table lookup — or, past
+  `[vid_rowmax]`, its `mul` — happens once for the first row; every row after
+  it is `gfx_nextrow` inlined, three instructions (§5.7 rule 6).
+- **The vertical clip is a row COUNT.** A `y` above the screen drops that many
+  *leading records* and a run past the bottom is truncated, both once.
+
+What is left per row is the x clip and the two mask table reads, because the
+interval genuinely is per row. It fills the same `vga_*` scratch
+`vga_rect_setup` fills, so both renderers' bodies are the ones already there:
+1bpp goes through `sw_rect_pl` — `sw_rect`'s plane loop, split out at this
+change and otherwise untouched — and VGA through a copy of `gfx_fill_raw`'s
+row body with **`vga_set_color` and `vga_gc_reset` hoisted out of the loop**,
+which on that adapter is four `out`s and a three-`out` reset saved per span
+rather than per call.
+
+`[vga_y1]` is set per row and not per call, because §39.4's grey dither reads
+its parity in `sw_ink`: a run drawn in a middle grey alternates AA/55 down the
+rows exactly as a tall rect does.
+
+**`gfx_sp_next` puts `ES` back to the framebuffer before it returns**, and that
+is not tidiness. The list is the *caller's* segment — slot 0x04D8 is an X cell
+— and both row writers write through `ES`, so leaving it on the list writes the
+picture into the package's own image. It shipped that way for one build and
+`tests/paintundo.py` caught it: the stroke drew 1,786 pixels instead of 2,794
+and Undo did nothing at all, because the undo bitmap was among the bytes being
+overwritten. §77.10 is the same defect one layer up, and reads the same way —
+as memory corruption rather than as a wrong segment register, because the bytes
+really are ours.
+
+**The answer comes back in registers, and that is worth its own sentence.**
+`gfx_sp_next` first wrote `[vga_lmsk]`/`[vga_rmsk]`/`[vga_span]`/`[vga_off]`
+for a row writer three instructions away to read back — four stores and six
+loads a span, on a machine where a word through memory costs about what a
+masked framebuffer byte costs. Returning `AH`/`AL`/`BX`/`DI` instead took a
+span from **1,638 to 1,393 cycles**, and it made the kernel **57 bytes
+smaller**: neither writer reloads anything, and the interior `rep stosb` steps
+*back* over itself from the right edge rather than re-reading a base that is no
+longer in memory to re-read. It also does not duplicate the clip or the mask
+lookups, which a fused-per-renderer version would have.
+
+Measured, on the same 8088 and against the same table: **1,393 cycles a span**,
+against a one-row `gfx_fill`'s 381 + 1,236 + a row. Sixteen spans of a 45°
+brush chord are **22,284 cycles against the 45,600** of the eight 8×8 fills
+they replace — **2.05x**, drawing the identical pixels.
+
+#### 5.10.5 What gates it, and against what
+
+`tests/spantest.py` and `tests/spantest/` — a package that draws nine shapes
+twice, once through `OSAPI_GFX_SPANS` and once through **one `gfx_fill` per
+span out of the same list**, over an identically erased ground, and compares
+the two as a region hash. That second loop is §5.10.3's own fallback, so the
+gate is the contract read back: *"which draws the identical pixels"*.
+
+It is deliberately not a picture of an expected shape. The list is the same
+list both times, and the fill loop is machinery that predates this feature by
+years, so a disagreement is this primitive's and cannot be an argument about
+what the shape should have been.
+
+The nine cover what `apps/paint` never asks for: **an empty row** (`x1 > x2`),
+a run **starting above the screen** and one **running off the bottom**, spans
+off **both side edges**, a **one-pixel** span (both masks inside one byte, the
+merge path), a **byte-aligned whole byte** (both masks `0xFF`), a **wide** one
+with a `rep stosb` interior, and a **middle grey**, which on 1bpp is §39.4's
+dither and must alternate by row exactly as a tall rect does. Then the
+**refusal**, by arming a one-rect region by hand across a single call and
+asserting `CF = 1` with the box unchanged — a refusal that fired too rarely
+would let the primitive draw through an armed region, which is a corrupted
+repaint rather than a slow one.
+
+**The drawing is on `W_ONKEY`, not `W_PAINT`,** and that is a fact about
+§11.3.3 rather than a preference: since the cull, a `W_PAINT` can run with the
+region armed, so a paint-driven test would pass or fail by whether a damage
+pass happened to ask for one.
+
+Both mutants it was checked against failed it: dropping `gfx_sp_next`'s `ES`
+restore (five cases differ, then the guest stops answering), and making the
+refusal never fire (`CF = 0`).
+
+#### 5.10.4 Reusing the rect body made it lose to the fills it replaced
+
+The 1bpp half's first version called `sw_rect_pl` per span — the plane loop
+`sw_rect` uses, with the scratch filled a row at a time. It is the obvious
+reuse and it was **1,806 cycles for one row**, measured, against `sw_plane_op`'s
+**400 a row inside an 8-row rect**. Everything in that gap is fixed cost a rect
+pays once and amortises: the mode tests, the plane loop, `sw_ink`'s table read,
+and two `sw_col` calls that each reload six registers because their only caller
+banked them for the whole plane (§5.7 rule 5).
+
+**A span is one row, so a span list paid a rect's fixed cost per span.** Sixteen
+spans came to 46,291 cycles against the 45,600 of the eight `gfx_fill`s they
+replaced — the primitive lost, by 2%, while doing a quarter of the row-writes.
+
+That is PERFORMANCE.md Set 88's trap one layer down, and §5.4's own history
+repeating: *keeping the shape of an optimisation is not keeping the
+optimisation.* The ink, the plane segment and the dither's row alternation are
+hoisted out of the loop now — `sw_ink` runs once, with `[vga_y1]` at the first
+row, and a middle grey alternates through `[sw_altm]` exactly as `sw_col` does
+inside a rect — and what is left per row is the two masked edge bytes and the
+interior `rep stosb`.
+
+#### 5.10.3 It REFUSES, and the fallback is the code the caller already had
+
+CF = 1, nothing drawn, in three cases:
+
+1. **An armed clip region** (§11.3). Re-cutting a run per fragment is
+   `gfx_clip_run` again, for a caller that by construction is drawing into its
+   own front window.
+2. **A second display** (§39.14). Same shape, `gfx_disp_run`'s.
+3. **`kern_small`.** The slot cell is there and the body is `stc`/`ret` —
+   `gfx_blit1`'s precedent (§5.4.2), and the 128 KB machine's guard.
+
+The answer to all three is **one `gfx_fill` per span**, which draws the
+identical pixels, and a caller that has built a span list already holds
+everything that call needs. So the refusal costs a caller a loop it wants
+anyway, and never a second description of the shape. §5.4.3's `gfx_blitp` is
+the same contract for the same reason.
+
+**One interval a row is the contract, not a simplification.** A shape with two
+intervals on one row — a torus, a glyph with a counter — makes two calls, one
+per interval column, and pays two row bases. A list of `{y, x1, x2}` triples
+would serve that in one call and would give up the incremental row base, which
+is the thing being bought.
 
 ## 6. font.inc
 
@@ -7147,6 +7709,30 @@ Two things follow from the fill being there:
   set it, so it does not need an instrument to be looking at the right moment —
   which is what a tick-sampled minimum-SP cannot promise (§8.4).
 
+#### 8.3.1 …and eleven marks on the WINDOW path, for a freeze the keyboard's nine cannot see
+
+`khb_kfz`'s original nine marks are `ui_task`'s `.keys` branch, because the
+freeze they were cut for arrived through a keystroke. A freeze reported on
+**maximize → restore** arrives through the mouse and reaches none of them, so
+the cell reads whatever the last keystroke left — which is worse than useless,
+because it looks like an answer.
+
+Eleven more, all `%ifdef KFZTRACE` and so costing the shipped kernel nothing:
+`wm_zoom` (16), `wm_rz_paint` (17), `wm_su_precover` (18), `wm_su_take` (19),
+`wm_su_try` (20), `wm_su_occl` (21), `wm_dmg_wins` (22), `wm_paint_all` (23),
+`wm_draw_win` (24), `gfx_blit4` (25), `ui_drag` (26). They are the funnels a
+geometry change passes through, in the order it passes them, so the cell names
+**how far the last one got** — and §11.96's raise cache and §11.3.3's cull have
+four of the eleven between them, which is where a report of "it froze after the
+window came back" points first.
+
+**The strip is the instrument even when the machine is ALIVE**, which this one
+is: the reported freeze recovers when the blanker (§64) takes over minutes
+later, so IRQ0 and `ui_task` are both still running and the watchdog above —
+which fires on *no `ui_task` pass* — will not print. What is on the glass is
+`gfx_lock_flag`, `gfx_lock_own`, `sch_cur`, the interrupted `CS:IP` and this
+cell, updated twice a tick throughout. A photograph is the whole diagnosis.
+
 ### 8.4 …and the deepest TICK, which is the other half of the same question
 
 A `KFZ=1` `sch_isr` also keeps one byte — the deepest a background task has
@@ -7634,6 +8220,191 @@ half. The machine that settles it is a **Compaq Portable III with a modem in
 it** (docs/FIELD-MACHINES.md), A/B'd `MOUIDSLOW=1` against the default. Until
 that has been run, the three fences in this section are an argument and not a
 measurement.
+
+#### 9.4.6 …and `make MOUDIAG=1` says WHICH of the three tests failed
+
+§9.4.5's early close is fenced three ways, and a machine whose mouse works
+perfectly at the desktop and still spends the whole `MOU_IDWIN` is failing one
+of them. Measured on 86Box, hard-disk boot: the bar sat at 0% for **1.23 s**,
+which is `MOU_RSTLOW` + the full `MOU_IDWIN` — 22 ticks, the ceiling — where the
+same code on MartyPC closes at **584 ms**. So it is a fact about the machine,
+and the four candidates need telling apart:
+
+| what the table shows | what it means |
+|---|---|
+| `idn` = 00 on both ports | **nothing arrived.** The DTR/RTS raise is not provoking the mouse — or the emulated mouse does not answer one at all |
+| `idn` > 0, `b0` ≠ 4D | something answered and it was not `'M'` — rule 2, and §9.5.1's modem is the case it exists for |
+| `idn` > MOU_IDMAX (08) | a **stream**, not a burst |
+| `idn` ok, `b0` = 4D, and the window still ran full | it never went quiet: `last` keeps moving to within `MOU_IDQUIET` of the close |
+
+**Every one of those numbers is already banked** — `mou_idn`, `mou_idb0`,
+`mou_idlast`, `mou_ident` per port, spent once by `mou_idjudge` and dead for
+the life of the machine afterwards (§9.4.1). The knob adds **two words and
+nothing else**: `[ticks]` when the window opened, which is what turns
+`mou_idlast` into a readable number, and the ticks it ended up spending.
+
+**It draws, and that is why it is a knob rather than a registry entry**
+(§57.2). `tests/sysbench` already reads the same block through §57's registry
+and shows port 0's identify columns — but it is a package, and the machines
+that ask this question are 86Box and the 5150, which cannot run one against a
+boot they have already finished. §15.5's phase table made the same choice for
+the same reason: **the screen is the delivery mechanism.** It is drawn last in
+`kmain`, after `cursor_show` and `drv_notice`, and goes away on the first
+repaint.
+
+Five lines, `font_run` and not `font_str` — padded to `MDG_W` cells, so the
+padding is the erase and there is no fill underneath (§6.6, and no
+`tests/textsites.txt` entry needed). White on black, no greys: a grey rounds to
+a checkerboard on both 1bpp adapters (§39.4) and a checkerboard behind 8×8 text
+does not survive being photographed, which is how the number gets off the
+machine.
+
+```
+win open 0021  used 0013  of 0013 ticks
+row  base  idn  b0  last  idt  nd  run
+  0  03F8  00  00  FFFF   0    1   0
+  2  02F8  00  00  FFFF   0    0   0
+idany 0  port 0  seen 1  p2st 02  hpst 0
+```
+
+`last` is **relative to the open** and reads `FFFF` when `idn` is 0, because a
+raw `mou_idlast` on a port that never spoke is a stale tick that looks like
+data. It is `.text` and not `.cold`: knob-only, so `KERN_BUDGET` is skipped
+(§2), and `.text` is the segment whose strings DS reaches with no override.
+
+##### 9.4.6.1 …and the line that says whether the stall is even this phase
+
+The first field run of §9.4.6 came back with the identify window **closed at
+`used 0008` of `0013`** — `MOU_IDFLOOR` exactly, the early close working — on a
+machine whose bar had been timed at 1.23 s in that window. So the two numbers
+were about different things, and the table could not say which: it measured the
+window and the stopwatch measured `kmain`'s notch-to-notch gap, and the step
+between them was an *assumption* that the gap is `mouse_init` and nothing else.
+
+That assumption is read off `kmain` and it is right — the only call between the
+first `SPLGATE splf_step` and the second is `mouse_init` — but an instrument
+that needs it is one phase short of the question. So the table stamps `[ticks]`
+at each of `kmain`'s three notches and prints the two gaps:
+
+```
+gap mouse 000B  gap fdd 0001  ticks
+```
+
+They are named for the **phase** and not for the percentage the bar happens to
+show, because only a hard-disk boot spends them at 0% and 6%: a floppy boot
+reaches `kmain` with the bar already at 92% (§15.6.4).
+
+`n1 − n0` is `mouse_init` and `n2 − n1` is `desk_init`'s §18.97 floppy probe —
+the two §15.6.4 named — so **one screenshot now prices the phase and the
+window against each other** rather than against a video. Three words and three
+stamps of six bytes, all knob-only.
+
+**The lesson is §57.3's, arriving from the other side**: a diagnostic that
+reports a component is worth less than one that reports the component *and the
+total it is supposed to explain*, because only the second can tell you that you
+are measuring the wrong thing.
+
+##### 9.4.6.2 …and CHROME, which only the hard-disk path pays inside that frame
+
+The same machine, `ibmxt86` with a VGA, read `mouse 000B  fdd 0001` booting a
+FLOPPY — 604 ms and 55 ms — where the video of it booting its HARD DISK showed
+1.23 s and 1.80 s in the same two places. Same kernel, same emulator, same
+mouse; the boot source is the only variable, and it changes both halves:
+
+- **`fdd`** is §18.97's TRACK 0 question about **unit 1**, and the floppy boot
+  had the apps disk in B:. A drive with media asserts TRK0 and the probe exits
+  free; an empty one heads for the absent verdict and pays `FDD_MOTORW` +
+  `FDD_SEEKW` — 32 ticks, **1,758 ms**, which is the 1.80 s to a hundredth.
+  The A/B is one eject.
+- **`mouse`** is the frame the bar first shows, and on a hard disk `spl_step`
+  draws the whole loading screen inside it (§2.9.9.1) — the dialog, and then
+  the `Welcome to os8088.` caption and the percentage through **BIOS teletype
+  at ~40 ms a character** (§15.6.5.1). Eighteen characters plus four is ~880 ms
+  on a 4.77 MHz machine. A floppy boot spent that before `kmain` existed.
+
+So `mdg_nlive` is stamped where `spl_step` raises `[spl_live]`, and the table
+splits the frame it used to lump:
+
+```
+chrome 000A  mouse 000B  fdd 0001  ticks
+```
+
+**The two tables sit side by side and not stacked.** §15.5's is 140px tall and a
+CGA screen is 200, so six more rows below it landed on the DOCK — and
+`os88marty`'s `settle()` reads the dock strip to decide a desktop is up, so
+`instdeep` and `hdboot` both timed out on a machine that had booted perfectly.
+A diagnostic that hides the thing the harness measures is worse than none.
+
+`chrome` is meaningless on a floppy boot — `spl_tick` raised the screen long
+before, so the subtraction is against a stamp nothing wrote — and it is the
+whole of the difference on a hard disk. **It is also §15.6.5.1's argument
+arriving with a second witness**: the teletype is not merely two thirds of what
+the splash draws, it is most of what a hard-disk boot's first visible stall
+*is*.
+
+##### 9.4.6.4 …and the sixth line, which is 18.97's own verdict
+
+`desktop + drivers` is **1,782 ms of a 3,790 ms hard-disk boot — 47% of it** —
+and it is that on a machine with the apps disk mounted in B:. So **media is not
+the discriminator and the boot SOURCE is**, which is the opposite of what the
+floppy A/B suggested: booting a floppy with B: empty costs the same 1,782 ms,
+and booting a hard disk with B: full costs it too.
+
+MartyPC will not reproduce it. `os8088_xt_hdd` booted from C: reads
+`ST3 = 79` — bit 4, TRACK 0 — and takes the fast exit, exactly as it does from a
+floppy. Whatever holds TRK0 low on the field machine after a hard-disk boot is
+86Box's drive model, and only that machine can be asked.
+
+§18.97 already banks the whole answer per unit and §57.5 publishes it, so the
+table prints it rather than inventing anything: `ST3` before the recalibrate,
+`ST3B` after it, the drained `ST0`, the `FDD_S_*` step it stopped at, the row's
+`VRD` and what `int 11h` claimed. **The table is indexed from UNIT 1** —
+`fdd_dbg_u - FDU_SIZE` is the base — which is the one `desk_init` contests.
+
+The step byte is the answer on its own: **1** is the fast exit, **3** is the
+absent verdict after a recalibrate that never brought TRK0 up, **5** is
+`SEEKST0` — kept, unproven — and **4** says the controller never took a byte.
+
+##### 9.4.6.3 The pair was refused, and the refusal is retired
+
+`make MOUDIAG=1 BOOTPROF=1` **was refused** for a boot that reached the loading
+screen and then executed wild — `[spl_live]` reading **0FFh** and `[spl_fseg]`
+**1D23** against the **1D80** its own volume boot record wrote. §52.10.2.1's
+`BLOB_SEG` was a cause and was fixed; the note kept here afterwards said the
+symptom had **moved** rather than gone, from `mdg_t5`'s string data to
+`gfx_blit4`.
+
+**It does not reproduce, and it has been looked for properly.** At HEAD and at
+`52.10.2.1`'s own commit, with the refusal lifted, the pair installs and boots
+off a hard disk on **both** adapters and reaches a desktop with both tables
+drawn. The kernel reads `[spl_fseg]` back as its own `HEAP_SEG` the whole time
+the splash is up, and `kernsize.py --json` and the kernel's own equates agree
+on that value for the pair's define set. What the field actually reported —
+*"locks on boot from hard drive with just the boot splash up, no bar or
+percentage in it"* — is §52.10.2.1 exactly: chrome drawn, blob loaded three
+rungs low, bar never advancing. The `gfx_blit4` sighting was taken in-session
+and is far more likely to have been a stale `build/` than a second defect,
+which is the trap this tree documents twice over (a knob kernel in `build/`
+against a map built from different defines, and `make` after committing).
+
+**So the guard is replaced by tests rather than kept as a note.** A refusal
+for a failure nobody can produce costs the diagnostic for ever, and it is not
+what the tree does with a suspicion:
+
+| | |
+|---|---|
+| `tests/unit/t_vbrseg.py` (**fast**) | `build/boothd.bin`'s two `BLOB_SEG` immediates and its `SPL_FSEG` displacement, read back out of the assembled sector and compared with `build/kernel.bin`'s own map. Verified to fail: patching `mov dx, BLOB_SEG` from `1DA0` to the shipped kernel's `1D20` — §52.10.2.1's exact defect — fails the row and names it |
+| `tests/knobhd.py` (**soak**) | the pair built, installed and booted off the disk on `os8088_xt_hdd` and `os8088_xt_vga_hdd`, asserting `[spl_fseg]` reads `HEAP_SEG` live |
+
+**The VGA machine is the half that was missing** and is why this went
+unnoticed: every hard-disk config in the tree was CGA, where the loading
+screen draws the bar and nothing else (§15.3), so `spl_step`'s
+start path (§2.9.9.1) and `spl_rechrome` (§2.9.9.2) drew no chrome to go wrong.
+
+Ruled out on the way, and worth keeping: `mdg_tpl` padded its buffer with
+`rep stosb` through ES while every other store in the routine went through DS —
+a real defect in a routine that runs at the end of `kmain` where ES is whatever
+the desktop paint left, now written one segment throughout. It was not this.
 
 ### 9.5 COM1 or COM2 — the port is not asked and not configured
 
@@ -8700,12 +9471,53 @@ it was found:
 2. **`0x20` — read the command byte and bank it** (`[mou_p2cmd0]`). Everything
    written below is written over this value, and every failure path restores
    it byte for byte.
-3. **`0xA8`, then `0xA9` — enable the auxiliary device and TEST it.** `0x00`
-   is "no error"; `0xFF` is "there is no auxiliary interface"; anything else
-   names a stuck clock or data line; and a controller that has never heard of
-   the command answers nothing at all and times out. **This is the step that
-   makes the rest safe on a machine that has no aux port**: it is a question,
-   and only the answer `0x00` licenses a single write below it.
+3. **The command byte, read ONCE and read EARLY — and the evidence is already
+   in it.** The read happens immediately after `0xAD`, which is the position it
+   works in on every controller seen so far, and the probe then asks the
+   *controller* nothing further before the device reset. Two bits of the byte
+   it returns settle whether there is an auxiliary port:
+
+   - **bit 1 — the auxiliary OBF interrupt enable.** This machine's own
+     firmware armed IRQ12 for a device on that port. A BIOS does not arm an
+     interrupt for a port its controller has not got, so this is exactly the
+     evidence the step was reaching for, and it costs the controller no second
+     question.
+   - **bit 5 clear** — the port is already clocked, which says the same thing
+     more directly.
+
+   Either one is enough. A byte saying neither falls back to the older road —
+   `0xA8`, then read the command byte again and see whether bit 5 cleared —
+   which is correct where it works and is **why it is now the fallback rather
+   than the path**: on a Phoenix 8042, enabling the auxiliary port while the
+   keyboard interface is disabled leaves the controller somewhere it will not
+   answer a second command-byte read from, and the probe that depended on that
+   read simply stopped. A machine that has to take the fallback is no worse
+   off than before; a machine whose BIOS armed IRQ12 never goes near it.
+
+   **`0xA9` is not asked at all, and that is the finding.** The obvious probe
+   is the controller's own auxiliary-interface self-test, and it was the first
+   thing here; it cost three rounds on the machine this section was debugged
+   on. A great many controllers implement the port and not the test and answer
+   *nothing*, so silence cannot be read as refusal — and on the machine in
+   question the attempt also left the controller unwilling to answer what came
+   next, turning a clean refusal into a timeout that named nothing. **A
+   question you do not have to ask is one the machine cannot get wrong.**
+
+   Once there is evidence, the port is enabled **both ways controllers differ
+   about** — `0xA8` here, and bit 5 of the command byte at step 4 — and
+   neither is read back. The device reset at step 5 is what actually decides.
+
+   Nothing below this point is written without that evidence, and that matters
+   more than it looks: a controller that ignores `0xD4` passes the `0xFF`
+   after it to **the keyboard**, which resets and answers `0xFA` then `0xAA` —
+   indistinguishable from a mouse. A probe that reached step 5 on a machine
+   with no auxiliary port would not merely be wrong, it would be
+   *convincingly* wrong, and would have reset the keyboard to say so.
+
+   Failing here is cheaper than failing later: at the first read nothing has
+   been banked, so that exit is `.quit` rather than `.fail`, whose first act
+   is to write a command byte that does not exist yet.
+
 4. **the command byte back, bit 5 clear** (run the aux clock) and **bit 1
    still clear** — IRQ12 stays off until the vector is ours.
 5. **`0xD4`, `0xFF` — reset the device.** `0xFA` acknowledges, then the BAT
@@ -8713,6 +9525,28 @@ it was found:
    byte is **banked and published rather than tested**, because a wheel mouse
    sitting in its 3-byte boot mode is still exactly the mouse this decoder
    wants and refusing it would buy nothing.
+
+**Bit 4 of every command byte written between step 1 and the `0xAE` at the end
+stays SET**, and that is step 1 holding rather than a sixth rule. `0xAD` sets
+that bit in the controller; the byte banked at step 2 has it deliberately
+*cleared*, because `mou_p2_off` writes that same byte on the UI task long
+after the keyboard is back and must not disable it. So the bank is right and
+every write made *inside* the window has to re-assert bit 4 — steps 4 and 6
+below, which is to say the command byte at step 4 and the one that arms IRQ12,
+both `or` it back in. Without that, step 4 hands the keyboard interface back
+in the middle of the probe and int 09h is live again for the whole reset: the
+`0xFA`, the `0xAA` and the device ID are all read with a BIOS handler
+competing for the same one-byte buffer, which is exactly what step 1 exists to
+prevent.
+
+**It is invisible in QEMU and it is not invisible on iron.** QEMU's i8042
+raises IRQ1 only for keyboard-sourced bytes, so a mouse reply never reaches
+int 09h there however the command byte is set, and `make test MOUSEPORT=ps2`
+passes every assertion in docs/TESTING.md with the bit wrong. On controllers
+whose OBF interrupt is gated by bit 0 alone — which is most of them — aux data
+arriving with IRQ12 not yet armed raises **IRQ1 instead**, the BIOS takes the
+byte, and the probe stalls at step 4 or 5 on a machine where every earlier
+step passed. §9.9.6 is the instrument that tells those two apart.
 
 Those five are the probe. What follows is the commitment, and nothing in it
 runs until a device has answered `0xFA 0xAA` to an edge this kernel made:
@@ -8722,6 +9556,28 @@ output buffer flushed, `0xAE`, and then IRQ12 unmasked at the slave 8259
 (`0xA1` bit 4) **and IRQ2 at the master** (`0x21` bit 2) — the cascade,
 without which the slave's line reaches nothing and the symptom is a mouse
 that passes every step of the probe and then never interrupts.
+
+**IRQ1 IS MASKED AT THE MASTER FOR THE WHOLE PROBE, AND FORGETTING IT COST SIX
+ROUNDS ON REAL HARDWARE.** `0xAD` looks like it covers this and does not.
+Disabling the keyboard *interface* stops the **keyboard** putting scancodes in
+the output buffer; IRQ1 is tied to **OBF** and gated by the command byte's
+**bit 0**, so every reply the **controller itself** makes raises it too. With
+the BIOS's int 09h live, that handler reads 60h and takes the probe's own
+answer — the command byte, `0xA9`'s verdict, the reset's `0xFA`, any of them.
+
+It is a **race**, which is why it reads as a controller that answers
+*sometimes*: on the machine this was found on, the identical build read the
+command byte on one boot and timed out at the same instruction on the next,
+and each failure looked like a different bug one step further along. A byte
+that is stolen and a byte that was never sent are indistinguishable from
+inside the probe. Masking the line means the reply stays in the buffer for the
+probe to read, and a keystroke that arrives meanwhile is still pending when
+the mask comes off — the 8042 holds it, because with the interface disabled it
+never reached the buffer at all.
+
+The mask is banked and restored bit by bit rather than blindly cleared: the
+success path clears the cascade in that same 8259 byte, and putting the whole
+byte back would undo it.
 
 **Two orderings in that sentence are load-bearing and one of them cost a
 debugging session.** IRQ12 is masked at the slave from the routine's *first*
@@ -8907,6 +9763,73 @@ What is deliberately **not** done:
   from most of the machines in `vm/` and wrong on several that have it, and it
   would put a far call into an unknown ROM inside the path that moves the
   pointer.
+
+#### 9.9.6 `MOUDIAG=1`'s two rows — reading a failure on a machine with no debugger
+
+§9.9.1's handshake is nine steps and `[mou_p2st]` records which one it reached,
+which is most of a diagnosis and not all of one. Two failures share the last
+step: a probe that completed and a line that never fires both leave `9`, and
+they are a controller bug and a wiring bug respectively. And step 0 is
+ambiguous in the other direction — the tier gate refused it, or the module was
+never compiled in.
+
+So `MOUDIAG=1` (§9.4.6) grows two rows beside the four it already draws:
+
+```
+tier . a9 ..   cmd ..  id ..  irq ....
+p2 .  b0 ..  ptr .  pkt ....  x ....
+sub .  pre ..  a8 ..  st ..  cm1 ..
+```
+
+| column | what it settles |
+|---|---|
+| `tier` | §41.1's tier. **`0` means the module never ran** — §9.9.2's gate — and every column after it is meaningless rather than negative |
+| `aux` | what step 2 concluded. **`E0` is "`0xA8` took — bit 5 cleared, so there is a port"**, `E1` is "it did not", and `EE`, the initial value, is "the command byte never came back", so the question was never put at all |
+| `cmd` | the 8042's command byte as the BIOS left it, which no reading of this source can supply and which says whether the machine's own firmware had the aux port enabled |
+| `id` | the device ID, banked and never tested (§9.9.1 step 5) |
+| `irq` | **times int 74h has been entered at all**, counted before the ISR's own tests. This is the column that separates a handshake that failed from a line that never fires, and nothing else in the kernel can answer it |
+| `p2` | live, after any contest (§9.9.4) |
+| `b0` | the last byte 0 accepted. **Bit 3 is always set in a synced stream**, so a stream that arrives and never syncs is visible as a value rather than as silence |
+| `ptr` | §9.6.6's byte — so "why is the keyboard mouse up" is answered on the same screen as "what did the PS/2 probe do" |
+| `pkt` | complete three-byte packets, counted past sync and past the overflow drop |
+| `x` | `[mouse_x]`, which with `pkt` moving says whether decoded packets are reaching the pointer |
+| `sub` | **how far it got** — 1 the command-byte read, 2 past it and into the bit test, 3 the fallback's `0xA8`, 4 the fallback's read back. `[mou_p2st]` says which *step* and several calls fail into the same place, so on its own it cannot say which. **`sub 2` with `aux E0` is the shortcut: the byte itself carried the evidence** |
+| `pre` | the 8042 status byte as the probe found it |
+| `pic` | **the master 8259's mask as the probe found it.** Bit 1 is IRQ1, whose handler is what takes a reply out from under the probe — `00` in that bit is the exposure, and the probe masks it for its own duration |
+| `st` | the status at the moment `.fail` was taken. IBF, OBF and AUXB in one byte, which is the fact no amount of reading the source can supply. `00` means `.fail` was never reached |
+| `cm1` | **the command byte as read** — the raw answer bits 1 and 5 are taken from, before the bank forces bits 4 and 5. On the fallback road it is re-stamped with the post-`0xA8` read |
+
+**`0xA8` is followed by a flush**, and that is one of this section's findings
+rather than housekeeping. The 8042 has one output buffer and enabling the auxiliary port is
+the moment the device first gets to use it: a mouse that has been sitting
+unclocked since the machine came up still has its power-on BAT queued, and it
+lands in that buffer the instant `0xA8` takes. Whatever that does to the
+controller, the byte is not an answer to any question the probe has asked — and
+reading it as one makes `0xA9`'s verdict whatever the mouse happened to say.
+The `pre`/`a8` pair exists to show it arriving.
+
+**The table is kept LIVE on this knob**, redrawn from `ui_task` every
+`MDG_RATE` ticks, and that is the one behavioural difference from §9.4.6's
+original six rows. Those six are all settled before the desktop exists, so
+drawing them once at the end of `kmain` is right. `irq`, `pkt` and `b0` count
+what the *pointing device* does, and drawn once they read zero on a working
+machine and zero on a broken one — which is the one thing a diagnostic may not
+do. Live, "move the mouse and read the counters" becomes a question the glass
+can answer, which is the whole reason §57.2 makes this a knob rather than a
+registry entry.
+
+The decision tree it collapses, in the order the columns are read:
+
+| reading | what it is |
+|---|---|
+| `tier 0` | the CPU gate refused it (§9.9.2), or `NOPS2=1` / `kern_small` |
+| `p2st 02`, `a9 FF` | the machine has no auxiliary port. Correct refusal |
+| `p2st 02`, `aux E1` | the byte carried no evidence **and** `0xA8` did not clear bit 5: no auxiliary port. A plain AT 8042, and the refusal is correct |
+| `p2st 02`, `aux EE` | the command byte never came back — **read `sub` for how far it got, and `st` for the controller's own account of why** |
+| `p2st 04`/`05` | the device did not answer its reset. Nothing plugged in — **or §9.9.1's bit 4 rule broken and int 09h eating the replies** |
+| `p2st 09`, `irq 0000` | the handshake completed and the line never fired: the cascade, the mask, or the vector |
+| `p2st 09`, `irq` moving, `pkt 0000` | bytes arrive and never sync — read `b0` |
+| `pkt` moving, `x` still | decoded and not applied |
 
 ## 10. events.inc
 
@@ -9831,6 +10754,75 @@ survives across call sites, which §7.1.4.1 is the standing argument against.
 It was not taken: a correctness fix on a path the target machine mostly does
 not use is worth 2% of the primitive it does not use.
 
+#### 11.3.3 The CULL — the one pass that may round a cell OUTWARD
+
+§11.91's damage pass redraws a marked window **whole** and lets the windows
+above it paint over the part they own. That is correct, and on the target
+machine it is seconds of visible rubbish. Measured on the Task Manager with a
+window dragged further over it: **118 primitive calls, 117 of them landing
+inside the rect the mover was about to occupy**, and 42,546 subpixels of its
+memory list on the glass before the mover covered them. A person sees the
+covered window redraw and then sees it disappear.
+
+The obvious answer — arm §11.3's region for the paint, as every background
+painter does — is the one §11.97.1 forbids: the region has **cell**
+granularity for glyphs, so a cell the region cuts is dropped entirely and the
+visible sliver of it is left blank. That is a real defect and it shipped once.
+
+**The cull is that answer with the rounding turned the other way.** A cell the
+region cuts is painted **whole** rather than dropped: the sliver is right, and
+the pixels outside the region belong to a window that is painted over them a
+few instructions later **in the same pass**. Nothing is lost and nothing
+survives that should not.
+
+> **It is only safe in a pass that redraws everything above afterwards.** A
+> background painter has nothing redrawing above it, so for a worker the
+> region must keep dropping cells — which is what it does, because the cull is
+> off. `wm_dmg_wins` is the one caller that may ask.
+
+Three things implement it and each is small:
+
+* **`wm_clip_test` swaps the corners.** Its walk is four compares that read
+  `x1` against a fragment's left edge and `x2` against its right; exchanging
+  AX↔CX and BX↔DX asks *overlap* instead of *containment* with no second copy
+  of the arithmetic. They are exchanged back on the way out, because
+  `font_char` takes its CX/DX from AX/BX after the call returns.
+* **`wm_clip_rows` answers all-or-nothing.** §11.3.2's partial row range is
+  precisely what the cull is defined not to need.
+* **`wm_clip_set` does not drop the raise cache** while the cull is on.
+  §11.96.18 puts the drop after the occlusion walk because the drawer is about
+  to draw; here `wm_su_try` has already run and §11.96.4 leaves the keep-or-drop
+  decision to `wm_su_bank` at the end of the draw. Dropping here would take it
+  away from a window that never moved.
+
+**Two bytes, not one.** `wm_dmg_wins` sets `wm_dmg_cullq` — *this pass wants
+it* — and `wm_draw_win` turns `wm_dmg_cull` on around **W_PAINT alone**, so
+`wm_su_try`'s own region arming (§11.96.15) is outside it and the restore is
+unaffected. The chrome, the title bar and the grow box are drawn as they
+always were: the cull is about the app's own paint, which is the expensive
+part and the only part that is somebody else's pixels.
+
+**+91 bytes of `.text`, none of `.bss`.** Measured A/B, dragging a window
+further over the Task Manager's memory page:
+
+| | runs | cells PAINTED | …of them under the mover |
+|---|---|---|---|
+| before | 83 | 479 | **452** |
+| after | 323 | 53 | **26** |
+
+**What it counts is cells put on the glass, and that distinction is the
+gate.** A culled cell is still a CALL — `font_run` is entered and paints
+nothing — so a call count says the change did nothing. The run count in fact
+goes **up**: a chunk the region cut zeroes its own check word and is retried
+(§28.2), which is 240 more calls that paint nothing at ~47 µs each, against
+426 cells at ~900 µs that are no longer painted at all. `tests/dmgcull.py` is
+the gate and reads the armed region at every run to decide which cells got
+through.
+
+The 26 that remain are the outward rounding doing its job: a cell the region
+cuts is painted whole, and something above paints over the part it does not
+own before the frame is finished.
+
 ### 11.90 Showing a window costs one window, not one screen
 
 `wm_show` does **not** call `wm_paint_all`. Showing a window is the one
@@ -10072,6 +11064,45 @@ overlay disqualifies the window from a partial paint**: Paint's marquee is XOR
 and its paint re-shows it unconditionally, so a partial blit would leave the part
 outside it lit and the re-show would then invert it *off*. With a selection live,
 Paint asks for nothing and repaints whole.
+
+#### 11.90.3 A PURE SHRINK OWES ITS CONTENT NOTHING
+
+`ui_grow` repaints the union of the rect a window had and the rect it has
+(§11.91), because the columns it vacated are the desktop's again. On a SHRINK
+that union is the old rect, which contains the new one whole — so the window is
+told *draw all of you* about pixels that were never painted over.
+
+**They really were not.** `wm_dmg_gray` clips the desktop dither to the windows
+about to cover it, and `wm_draw_win` writes the frame whole whatever the
+content does, so on a shrink with the origin unmoved every pixel inside the new
+content rect is still exactly what the application last drew there.
+
+So `ui_grow` arms `[wm_dmg_rzwin]` across its one `wm_paint_dmg` call, and
+`wm_damage` answers that window with an **empty rect** — `x1 > x2`, which
+§11.90.2's contract already documents as *draw NOTHING* and which every
+primitive already reads as nothing to do.
+
+**Armed only when nothing moved and nothing grew**: the origin identical on
+both axes and neither W nor H larger. A grow exposes columns that were never
+drawn; a move takes the content somewhere the pixels are not. Both are the
+existing answer, unchanged. `ui_grow` banks the four words before
+`wm_ask_size` — the record is rewritten between there and the repaint by
+`wm_dock_snap`, `wm_land_fit` and `wm_snap_win`, any of which can move the
+origin — and compares afterwards.
+
+**It reaches exactly one window in the machine today**, which is why it needs
+no opt-in flag: `wm_damage` answers `.whole` for anything without `WF_OWNBG`
+(§11.90.2), and Paint is the only window that is both `WF_OWNBG` and
+`WF_SIZABLE`.
+
+**WHAT MOVED IS THE APPLICATION'S, and that is the contract half.** The kernel
+can say what was *exposed*; it cannot know that a strip anchored to the bottom
+of the content is now somewhere else. An application that lays out against its
+own edges must draw those parts on a resize whether or not the damage names
+them — Paint does it off `[pt_szchg]`, which `pt_setsize` already sets, and its
+three furniture elements draw unconditionally on a pass that re-laid the
+canvas while the canvas itself takes the empty rect. An application that got
+this wrong would leave stale furniture, not a stale picture.
 
 ### 11.91 Hiding, destroying and moving cost a rectangle, not a screen
 
@@ -10923,6 +11954,139 @@ things: **centring** (protected), a **frame rect** counted as a pen, geometry
 grep cannot tell those apart from a defect, which is why every remaining entry
 was censused before anything moved.
 
+#### 11.94.5 …and the SIZE, not only the origin
+
+§11.94 puts a window's content **origin** on a multiple of 8 and stops there,
+so the far edge lands wherever the width leaves it. Seven widths in eight
+therefore end the content mid-byte, and the argument this section already
+makes for the first cell in a row — *mode 12h is eight pixels to a byte, so an
+unaligned 8x8 cell spills into a second framebuffer byte there exactly as it
+does on a Hercules* — is word for word the argument for the last one.
+
+`wm_snap_w` is that half. It takes a candidate frame width and answers the
+snapped one, and it is `wm_snap_ax`'s twin in every respect that matters:
+
+* **UP where it fits, DOWN where it does not** — see §11.94.5.1, which is the
+  correction that says why, and it is not a matter of taste.
+* **It REFUSES rather than clamping.** A width it may not snap is returned
+  unchanged and the window simply misses the fast path, exactly as an x that
+  cannot move left does. Nothing is ever moved somewhere it did not ask to be.
+* **`wm_snap_win` is the whole of its reach.** `wm_fit`, `wm_resize_nb` and
+  §11.95's zoom restore all end there already, so no new hook exists.
+  Called AFTER the x snap, so the right-edge test below reads the origin the
+  window will actually have.
+
+Three things it refuses, and each is a defect it would otherwise be:
+
+1. **A frame that spans the screen** — §11.95.2's rect, and this is the
+   important one. That section exists because the zoom rect used to be
+   `x = 7, w = screen − 7`, §11.94's snap moving *right* to buy an aligned
+   origin at a cost of "eight columns of content given up to land the origin
+   on a byte boundary that x = 0 already is". Only the LEFT border is
+   suppressed there, so the content is `W_W − 1` — 639 on VGA, which is 7
+   mod 8 and **not** aligned. Snapping it hands seven of those columns
+   straight back on the other side, and a maximized window comes up 633 wide.
+   `wm_zoom` already declines its own +7 on `wm_flush_ck`; this is the same
+   predicate at the other end of the same journey. **A maximized window is
+   `x = 0, w = [vid_pw]` and this feature does not touch it.**
+2. **A width at the window's own minimum** (§11.100.2), reachable only from
+   the DOWN branch — growing cannot break a floor. It is `wm_min_axd`'s
+   minimum and not the constant, because a window that asked for more than 96
+   would otherwise be narrowed below what it asked for.
+3. **A content narrower than one cell**, which has no aligned width to go
+   DOWN to.
+
+A frame that would hang off the right edge is **not** a refusal: it is the
+test that chooses the direction, and it reads the **snapped** x because
+`wm_snap_win` runs that first.
+
+**The candidate is snapped BEFORE `wm_ask_size`, not after.** §11.1 gives the
+window a say in its own size, and offering it a width the kernel is about to
+take up to 7px off is not a negotiation. `ui_grow`'s two clamps — the screen
+edge above and the minimum below — can each move an already-snapped outline
+off the grid, so the snap goes between them and the ask. The `wm_snap_win`
+below the ask stays as the backstop for a window that answers with something
+of its own: Paint is the only `W_ONSIZE` in the tree (§42) and its answer is
+an upper bound on what memory will fund, so a window that shrinks its own
+answer below the grid gets the snap applied to that.
+
+**`ui_grow` snaps the tracked OUTLINE too**, and that is a look decision
+rather than a mechanical one. The XOR rectangle follows the mouse freely and
+the release ends in `wm_snap_win`, so without it a window lands up to 7px
+inside where the hand let go. Snapped, the grow box steps 8px across and 1px
+down, and what the outline shows is what the window becomes.
+
+`make NOSIZESNAP=1` is the A/B: it skips the two calls and leaves `wm_snap_w`
+compiled, which is §11.96.15's `NOSUOCCL` shape and for the same reason —
+both sides of the comparison carry the same disk and the same free space.
+
+**What it is worth beyond the cell.** `gfx_restore` writes WHOLE BYTES, so a
+content rect ending mid-byte overhangs its own window and §11.96.2's
+`wm_su_edge` has to read the screen back and merge it — §11.96.8 measures
+that at 18.22 ms of a 47.86 ms restore. Both masks come out FFh on a snapped
+width and that path becomes a no-op.
+
+##### 11.94.5.1 It rounded DOWN, and that took six columns off eleven windows
+
+**The first build of `wm_snap_w` rounded the width DOWN**, on the argument
+above — `wm_snap_ax` moves left, growing could hang the frame off the right
+edge, so shrink and be safe. It shipped for a cycle and it was wrong, in a
+way that is invisible in a screenshot until you go looking at a two-pixel
+column.
+
+**`W_X` is the kernel's to move and `W_W` is a number the package asked
+for.** Eleven of the thirteen window templates in this tree carry a layout
+constant derived from that number — `CP_CW`, `FD_W`, the Browser's column
+table, Note Pad's ruler — and the arithmetic in each is `content =
+template_w − 2`. Taking six columns off the content those constants describe
+does not make the package draw a narrower layout. It makes it draw **the same
+layout six pixels past the content**, over its own right border and drop
+shadow.
+
+The Control Panel is the worked example. `cp_page` erases its pane with
+`gfx_fill di .. di + CP_CW − 1`, `CP_CW` is 318 from a 320-wide template, and
+the snapped window was 314 — content 312. The clip region stopped the fill at
+the shadow column and let the rest through, so the panel came up with **no
+right border down its 132 content rows**: white content running into the
+desktop dither, the title bar and the bottom edge still framed. It was found
+by `tests/cppromise.py`'s `PIXELS` leg, which compares a raise off the §11.96
+cache against a forced full repaint and reported 792 differing subpixels —
+264 pixels, two columns by 132 rows — because the cache had banked the
+correct border from before the pane was ever re-erased.
+
+| template | frame | content | rounded DOWN | what it gets now |
+|---|---|---|---|---|
+| Word | 600 | 598 | 592 (−6) | 600 |
+| Browser | 496 | 494 | 488 (−6) | 496 |
+| Control Panel, File Manager | 320 | 318 | 312 (−6) | 320 |
+| Artful | 360 | 358 | 352 (−6) | 360 |
+| Note Pad | 260 | 258 | 256 (−2) | 264 |
+| Task Manager | 232 | 230 | 224 (−6) | 232 |
+| TeXPad | 628 | 626 | 624 (−2) | 624 — the DOWN branch |
+| Fractal | 322 | 320 | 320 | 320 |
+
+**Growing cannot do it.** `wm_draw_win` white-fills the whole content before
+`W_PAINT` runs, so surplus columns a package never draws into are
+indistinguishable from the empty content they are.
+
+**DOWN survives as the fallback, and refusing outright was tried and is
+wrong.** The right-edge worry that argued for DOWN in the first place is
+real: TeXPad is 628 wide at `x = 6`, its snapped `x` is 7, and 634 is one
+column past a 640 screen. Made a refusal, that costs the **largest window in
+the tree its raise cache entirely** — a ragged right edge is exactly what
+§11.96.17's one-plane claim may not have, and four planes there is 121,934
+bytes against a 64,512 ceiling. `tests/tpsaveu.py` reported it as `FITS:
+TeXPad was covered and got no cache at all` within one run of the direction
+changing.
+
+So UP is tried first and DOWN is taken when it will not fit, and the
+invariant is the narrower one the evidence supports: **a window is handed
+less content than its template asked for only when it is within 7px of the
+glass** — and every window in this tree that wide sizes itself from
+`OSAPI_WM_GEOM` rather than from a constant, because a fixed layout that wide
+could not fit a CGA at all. TeXPad, the Browser and Word are the three, and
+all three do.
+
 ### 11.95 Double-clicking a title bar zooms a resizable window
 
 **Two presses on the same title bar inside `UI_TDBLT` (9) ticks toggle that
@@ -11083,6 +12247,122 @@ behind it is popped by the UI loop and ignored, which is what that loop
 already does with every mouse-up. On a machine with no mouse (§9.6) the same
 press is a latched level, and `kbm_ui`'s end-of-pass service releases it for
 exactly this case — a pass that dispatched a press and did not track it.
+
+#### 11.95.2.1 `[vid_w]` is the whole desktop, and a screen edge is not
+
+**A maximized window on an EXTENDED desktop sat seven pixels in from the left,
+with the desktop's dither showing down its side** — which is precisely the
+eight columns §11.95.2 was written to stop giving up, arriving again by a road
+that section could not have known about.
+
+Before §39.16 the screen and the desktop were the same rectangle, so every
+question of the form *does this reach the edge of the screen* was asked against
+`[vid_w]` and was right. On a two-card desktop `[vid_w]` is the **sum**, and
+those questions silently became about the far side of the other monitor. Two of
+them:
+
+- `wm_snap_ax` moves a window at x = 0..6 **right** to the nearest aligned x,
+  and refuses when `x + W_W` would then hang off. On one screen a maximized
+  window is refused (`7 + 640 > 640`) and stays at 0. With a second card
+  attached, `7 + 640 ≤ 1360` — so it is *allowed*, and the window walks.
+- `wm_flush_ck` then reads the moved window as not spanning the screen
+  (`640 < 1360`), so §11.95.2's borderless case does not fire either and the
+  left border comes back on top of the gap.
+
+Measured on `os8088_5150_both_gla`, zooming the Disk window:
+
+| | one display | two displays, before | two displays, after |
+|---|---|---|---|
+| `W_X` | 0 | **7** | 0 |
+| `W_W` | 640 | 634 | 640 |
+
+There is a **third**, in `wm_snap_w`: the same test in the other axis of the
+same rect, where a snapped-up width could be pushed past the SEAM instead of
+past the glass.
+
+`wm_disp_xw` answers the display's own x range — `[vid_ctx]`'s `VX`/`CW` for
+the display `wm_disp_of` puts the window on, and `0 .. [vid_w]` when there is
+only one, which is the answer the whole tree had before §39.16. `wm_flush_ck`
+and `wm_snap_w` compare against that instead of against 0 and `[vid_w]`, and
+`wm_snap_ax` asks `wm_zoom_xmax`, which already answered exactly this
+question — *the largest x a window of width CX may have on ITS display* — and
+existed for §39.17.2 two sections away. **+63 bytes**, no rung crossed.
+
+`tests/dispzoom.py` is the gate, registered soak, and it is an A/B against
+itself: it zooms the same window on one display and on two and requires the
+same answer, so the single-display half is the control and a failure says the
+second display broke it rather than that zoom is broken. It was verified to
+fail on the unfixed kernel with exactly that message, and it reads the window
+record rather than the glass, because 7 px of geometry does not show in a
+screenshot of a mostly-white window.
+
+**The machinery was all already here**, which is the part worth remembering:
+`wm_zoom` computes the right rect (the probe shows it asking for x = 0,
+w = `[vid_pw]`), and the snap then moved it. A fix that reaches for `[vid_w]`
+is right on every machine anybody tests on and wrong on the one nobody does.
+
+### 11.95.3 ...and it has no right border either
+
+§11.95.2's argument is one sentence — *a border separates a window from what
+is beside it, and at the screen's left edge there is nothing beside it* — and
+it is word for word the argument for the **right** edge. What it actually did
+was drop the left border only, because what it was buying was an aligned
+content **origin**, and only the left border affects that. The far edge was
+left wherever `W_W - 1` put it.
+
+**The cost of the half-measure is a column short of a cell.** A maximized
+window on VGA is `x = 0, w = 640`, so its content is 639 px — **79 whole 8px
+cells and seven columns that can hold no cell at all**. The last character of
+a full-width row has nowhere to go, and text that crosses a maximized window
+cannot be aligned to its right edge because the edge is not on the grid.
+Measured on `os8088_xt_vga`, Note Pad maximized: `W_X=0 W_W=640 vid_w=640`,
+content 639, `79 whole cells, 7 columns spare`. On Hercules it is 719 — 89
+cells and 7 spare — and on CGA 639 again.
+
+With both side borders suppressed the content is `x .. x+w-1`, the full frame
+width: **640 on VGA and CGA, 720 on Hercules**, all three exact multiples of 8.
+
+**`wm_bord` is the shape the sites wanted all along.** Ten places asked
+`wm_flush` and then wrote `inc ax` to skip the left border, computing the right
+edge separately as `x + w - 2` — several instructions later, by which time `CF`
+was gone. The value form says it once:
+
+    content = W_X + b  ..  W_X + W_W - 1 - b
+
+and `b` is `wm_bord`'s answer: 1 normally, 0 for a window spanning the screen.
+`wm_bordr` is the same answer for the right-hand half alone, so that
+`make NOFLUSHR=1` puts that border back without touching the left — the A/B
+for this section rather than for the whole of §11.95.2.
+
+Measured, reading `[pt_contw]` — the width `OSAPI_WM_GEOM` hands a package,
+not one the harness computed:
+
+| Paint, maximized | `NOFLUSHR=1` | default |
+|---|---|---|
+| VGA | 639 — 79 cells, **7 spare** | **640** — 80 cells, 0 spare |
+| Hercules | 719 — 89 cells, 7 spare | **720** — 90 cells, 0 spare |
+| windowed, either | 496 — 62 cells, 0 spare | 496 — unchanged |
+
+**+17 bytes** of `.text`+`.bss` for the whole of it, and no rung crossed: the
+ten sites' conditionals were *replaced* rather than added to, and `wm_bord`
+costs less than the `jc`/`inc` pair it retires at each of them.
+
+Where the frame is drawn, the flush case goes from **three sides to two** —
+`gfx_frame` is four `gfx_fill`s, so dropping a side is a drawing call cheaper
+rather than dearer, and the border may not be drawn and then covered by the
+fills that follow: every pixel of that column would be written twice, which is
+PERFORMANCE.md Part 1's double-draw flash and is plainly visible on the target
+machine.
+
+Four `wm_flush` callers are deliberately left alone, because they want the
+boolean or the left edge only: `wm_content` answers an origin, the drop
+shadow's bottom run ends at `x+w` (the shadow column, which is not a border),
+the frame's own two-or-four decision is a branch, and `wm_bord` is built on it.
+
+**It is a look question as well as an arithmetic one**, which is what the knob
+is for: a maximized window loses the one dark column down its right-hand side,
+and on a 1bpp adapter that column is the only thing between the content and
+the glass.
 
 ### 11.95.2 A window that spans the screen has no left border
 
@@ -11352,6 +12632,33 @@ worker, so the table moves only when a card is dragged) — and the **Disk
 window**, which is the kernel's own and keeps the promise mechanically
 rather than by assertion (§22.14).
 
+**IT IS A MODE AND NOT A CLASSIFICATION, and the list above is a list of
+windows that are always in it.** `wm_saveu` has no latch: the bit is per
+window record, the take reads it at the moment it takes (`wm_su_take` through
+`wm_dc_ok`, and `wm_su_precover`'s scan), and the clear drops the claim on the
+spot. So an application whose content stands still *sometimes* may say so
+sometimes — `apps/paint` already does, re-answering from `pt_onresize` when
+the adapter moves under it (§11.98), and the Browser does it per fetch
+(§71.11).
+
+The two directions are not symmetric and only one of them is urgent.
+**Entering** a live mode must reach the kernel before the content moves, or
+the cache is a picture of the past; **leaving** one can be arbitrarily late,
+because a cache not taken is only a repaint not skipped. Every live-entering
+transition in the tree is raised on the UI task with the gfx lock already
+held — a menu command, a Return, a click — which is where the clear is safe
+(§20.6 rule 7). The other direction is what a worker notices, and being late
+there costs nothing.
+
+**A window that polls must decide BEFORE it arms.** `wm_clip_set` drops the
+cache of the window about to draw, and it does so before it discovers how much
+of that window is visible — so a worker that takes the lock and arms a region
+on every tick destroys its own cache whether or not it then draws anything.
+That is not the kernel guessing wrong; arming a region says *I am about to
+draw*. An application that wakes, finds nothing changed and arms anyway has
+said something untrue, and it pays for it twice: once in the cache and once in
+`wm_clip_occl`'s walk of the z-order, which §48.13 prices at 6.2 ms a frame.
+
 So the flag is a promise only the application can make — *my content does not
 change while I am not drawing* — and the asymmetry settles the default:
 **forgetting to opt in costs speed, and forgetting to invalidate costs
@@ -11527,6 +12834,39 @@ next. A `[wm_su_live]` counter would short-circuit it, and it would drift —
 `mem_pg_forget` zeroes the word on a shed without coming through
 `wm_su_drop`, so the count would only ever read high and the guard would stop
 firing.
+
+##### 11.96.3.1 `OSAPI_WM_OWNSEG` — reading the slot back out of the tag
+
+The tag is a base plus the window's slot, and **nothing outside `wm.inc` could
+turn that slot back into anything**. The Task Manager's heap page is where
+that showed: it decodes the range, prints `WinSave`, and cannot say *whose* —
+so several tens of KB of a 640KB machine appear on the one page that reports
+memory as an anonymous row under **System**, whoever actually caused it.
+
+`OSAPI_WM_OWNSEG` (slot 0x04D8) is the door. `AL` is a window slot; `CF = 1`
+means no live window is in it, and otherwise `DX` is the segment that owns it —
+`[W_SEG]`, or `KERNEL_SEG` when that word is 0, which is what a window the
+kernel itself created carries. It is 38 bytes of `.text` and **it crossed the
+image rung**: 512 bytes of every machine's RAM, on a rung that had 15 bytes
+left. That is the price and it was taken deliberately, not discovered.
+
+**It answers a SEGMENT and not the record pointer.** A package holding another
+window's record could pass it back through any `wm_*` cell, and a segment is
+the whole of what the two questions worth asking need: *is that cache mine* is
+a compare against the caller's own `DS`, and *whose is it* is a match against
+the instance bases a claim walker already keeps (`tm_ispt` is exactly that).
+
+**It is not `wm_owner`.** The bss array of that name (§29) answers in
+**instance indices**, which is the right internal answer and the wrong
+published one: an index means nothing to a caller that has not also
+snapshotted the instance table, and the same index means different things
+across a snapshot boundary. A segment means the same thing to everyone,
+including to the kernel's own windows, which have no instance at all.
+
+**The slot is bounded and the used bit tested**, both because they are the
+caller's word for it: `wm_idx2ptr` does no bounds check of its own, and a free
+record's `W_SEG` is a previous tenant's leftover (`wm_destroy_seg` says so) —
+so answering it would name a package that is no longer running.
 
 ### 11.101 The title bar as ONE PICTURE (a knob: `BAND=1` compiles it in)
 
@@ -13241,6 +14581,312 @@ What still differs: a caption wide enough to reach a ragged zone loses its
 outermost glyph columns there, because the ends are filled as ground. No
 shipped window has a title that long, and the fix is the same six-call shape,
 so it is recorded rather than written.
+
+#### 11.96.16.2 …and a window ZOOMED or DRAGGED over one banks it too
+
+§11.96.16 had exactly one caller, `wm_show_b`, so the pass fired for a window
+that **appears** and for nothing else. **A window covered by the front one
+being zoomed or resized over it was banked by nothing at all**, and the raise
+back was therefore always a full repaint — on the most natural way there is to
+cover a window completely. Measured on a maximize over the Task Manager:
+`wm_su_take` **0** times.
+
+`wm_rz_paint` is the funnel — the zoom's own path, the zoom's restore and the
+grow box all reach it — and it runs before either of its branches puts a pixel
+anywhere, which is the moment this has to happen.
+
+**The two tests want the rect at two different moments, and that is the whole
+of why this is not four lines.**
+
+| the test | asks about | so it needs |
+|---|---|---|
+| `wm_win_over` | *do we land on it* | the rect we are about to **have** |
+| `wm_obscured` | *is its content still its own* | the **glass**, which still shows us where we were |
+
+`wm_show_b` gets that for free: a window that has never been drawn is
+invisible to `wm_obscured`, so the record may already hold the final rect. A
+resize does not — by `wm_rz_paint` the record is the new rect and the screen is
+still the old one. So the record goes **back** to the old rect for the walk
+(`wm_rz_swap`, one loop over four words laid out the same way in both places,
+called twice so it is a bracket rather than a rewrite) and the new rect, now
+sitting in `wm_rz_o*`, is handed to the overlap test through `wm_su_pcrp`.
+
+**Get it the other way round and it banks the coverer's own pixels as the
+covered window's content** — for every window the old rect was already sitting
+on. A restore then paints this window's face into somebody else's, which is
+the failure this ordering exists to prevent and the reason the obvious
+"clear the visible bit and call it" does not work here.
+
+**A window ABOVE us may be banked**, which `wm_show_b` never has to consider
+because it goes to the front. That is waste and not a defect — `wm_obscured`
+still says the content is its own, so what is banked is correct — and the
+alternative is a z-order compare in a walk that has none.
+
+**A DRAG is not a geometry change**, so `wm_rz_paint` never sees one. `ui_drag`
+writes the new x/y into the record itself and repaints through
+`wm_paint_dmg` (§11.91), which means dragging a window wholly over another one
+banked nothing at all — the same hole as the zoom, on the most *common* way
+there is to cover a window. `wm_dg_precover` is the drop's way in: eleven bytes
+that take the old rect in `AX/BX/CX/DX`, park it in `wm_rz_o*` and call
+`wm_rz_precover`, so both callers share one bracket and one ordering argument.
+
+The old rect comes in **registers** rather than being read back, because by the
+drop the record no longer holds it: `ui_drag` has it in
+`[ui_origx]`/`[ui_origy]`/`[ui_dragw]`/`[ui_dragh]` and the record has moved on.
+`wm_rz_o*` is free at that moment for a reason and not by luck — it is live only
+*across* one geometry change, and a drop is not one.
+
+**`wm_su_take` firing is not evidence this ran.** `wm_su_bank` takes a cache at
+the end of every `wm_draw_win`, so a drop with no precover at all still trips a
+breakpoint on that symbol. `tests/zoomsave.py`'s `DRAGGED` leg counts by
+**return address** instead, and asks for the one that comes from
+`wm_su_precover`.
+
+#### 11.96.17 …and a window may declare its content TWO COLOURS
+
+`WF_1BPP` (bit 13) is a window saying **every pixel of my content is colour 0
+or colour 15**. It is the second half of §11.96.1's promise and is carried on
+the same call: `wm_saveu`'s `AL` bit 0 is the promise, bit 1 is this, and
+`AL = 0` withdraws both. No new API slot, because the claim means nothing
+without the save-under it exists to make affordable.
+
+**What it will buy, and it is not a trade.** `gfx_save` reads and
+`gfx_restore` writes one plane at a time, four times, because that is what a
+VGA rect is. A window that is only 0 and 15 has four *identical* planes, so
+one plane is the whole of its content — and putting it back costs one write
+per byte rather than four, because Map Mask 0Fh with Set/Reset disabled lands
+one CPU byte in all four planes. That is the framebuffer's resting state and
+§5.4.2.2's `gfx_blit1` already ships on it. So the claim is **a quarter the
+memory and a quarter the write traffic**, not one bought with the other.
+
+The Browser's default content on a VGA is about 92KB of four-plane cache
+against `wm_su_kb`'s 64,512 ceiling — refused outright — and about 23KB as
+one plane. That is the case this exists for.
+
+**THE ARM MUST NOT REACH THE POINTER, and disarming inside `gfx_save` and
+`gfx_restore` is not what stops it.** `[vga_pn]`/`[vga_pm]` are the walk the
+next save or restore takes, and `wm_su_arm` raises them just before the call;
+those two routines put them back at the bottom. But both call `cur_unlazy` at
+the **top**, above their own disarm, and `cur_saveu`/`cur_restoreu` go
+straight into `vga_save_vram`/`vga_restore_vram` — so the arrow was hidden and
+put back with the one-plane arm live for every window that promised this. A
+restore seeded with `0Fh` makes exactly one pass with the Map Mask on all four
+planes, so plane 0 of a four-plane `cur_save` is broadcast into all of them
+and the cell under the pointer comes back solid black or solid white; it is
+the pointer, so it is *everywhere*, and on VGA it is a colour cell. The two
+cursor routines therefore bank the pair and clear it around their own
+transfer. That is the single point both cursor paths pass through, it costs
+nothing on a mono adapter (the branch is inside `vga_*_vram`, below it), and
+it leaves the arm meaning exactly what `wm_su_arm` documents.
+
+**The high byte's bits are now named once.** §7.2.1's cursor shape shares that
+byte, and the rule was written in prose: *"the two places that touch the byte
+must mask this bit off with `WF_STALE`"*. There are three kernel bits there
+now, so the set is `WF_HIBITS` and both sites derive their mask from it —
+`wm_cursor` keeping those bits and `mou_apply`'s shape read dropping them.
+A prose rule became an expression, so the next flag in that byte cannot be
+half-added. Bits 8..12 remain the shape's, and both writers still refuse a
+shape at or past `CUR_NSHAPE`.
+
+**The depth belongs in the claim's header, not in a hook.** A cache taken
+under this claim is one plane deep; withdraw the claim and the same buffer
+means something else. §11.96.3 already settled the shape of that problem for
+the rect — *"the rect travels with the pixels it describes and cannot get out
+of step with them"* — so the depth travels with them too, and `wm_su_ck`
+invalidates by disagreeing rather than by `wm_saveu` remembering to drop.
+**Binding on whoever builds the cache**: the declaration alone does not
+invalidate anything.
+
+**Marked today: Note Pad.** It is the window §11.96's own headline came off —
+1,026 ms to raise, 578 ms of it lettering — and its content is `CBLACK`,
+`CWHITE` and the scroll bar's `gfx_fill_gray`, which is a 50% dither of 15
+and 0 rather than a grey. Every other `WF_SAVEU` window in the tree fails it:
+Minesweeper, Piano and Solitaire all draw in real colours, and the Browser
+fails on `os88ui`'s disabled pen alone (§47 rule 1 is `CDGRAY` plus
+`[gfx_dis]`, and `font_ink` clears `[font_dith]` on the VGA path, so a greyed
+caption is a checkerboard on 1bpp and solid colour 8 there).
+
+**Forgetting to claim it costs memory; claiming it falsely costs the
+picture** — §11.96.1's asymmetry again, and the same answer: the flag is a
+promise only the application can make.
+
+#### 11.96.17.1 …and the renderer holds it to the claim, for TEXT
+
+A window that declares two colours and then draws a third has lied, and the
+symptom is not a crash: one plane broadcast through Map Mask 0Fh puts back 15
+and 0, so the colour simply is not there on the raise. §47 rule 1 makes that
+easy to do by accident — the disabled pen is `CDGRAY` **and** `[gfx_dis]`, and
+`font_ink` clears `[font_dith]` on the VGA path, so a greyed caption is a
+checkerboard of black and white on Hercules and CGA and **solid colour 8** on
+a VGA. An application cannot fix that from outside: `font_ink` is the
+kernel's.
+
+So `font_ink` takes its mono path when `[vid_mono]` is set **or** the window
+being drawn has declared two colours. That path reduces the ink to 00h or FFh
+and sets `[font_dith]`, which is the checkerboard. Nothing new renders; an
+existing path is reached from one more place.
+
+**It reaches `font_run` and it does NOT reach `font_str`, and that is the
+whole of what this section can claim today.** `font_char` sends a VGA to its
+`.vram` path — Set/Reset straight from `[gfx_color]` — which calls `font_ink`
+not at all and reads `[font_dith]` not at all; the software renderer
+`font_char_bb` is the only caller, and it is the 1bpp one. `font_run` is
+different: §6.1's opaque renderer calls `font_ink` explicitly on **every**
+adapter, and computes its own checkerboard without asking `[vid_mono]`. So a
+declared window's greyed text is right when it is drawn with `font_run` and
+wrong when it is drawn with `font_str` — which is §6.6's rule about text
+arriving at the same answer from the other end.
+
+**The pen is reduced too, and it took three goes.** `gfx_pen_dis` picks
+`CBLACK` instead of `CDGRAY` for a declared window, which takes colour 8 out
+of the frame and the caption together. On its own that is **wrong**, and
+`tests/monoink.py` measured why: the Browser's greyed `Back` went from solid
+colour 8 to solid black — 215 ink pixels either way, no stipple in either —
+pixel-identical to a live caption, which is §47 rule 1's own failure with a
+new way in. It was withdrawn once for exactly that.
+
+What made it right is that the **checkerboard** now survives to a VGA, so the
+signal no longer needs the colour. Two things had to change and neither is in
+`font_char`:
+
+* **`os88ui_btn` draws its caption with `font_run` wherever the interior is
+  filled** (§6.6's rule, arrived at from this end). `font_char` sends a VGA to
+  its `.vram` path and never asks about `[gfx_dis]`; `font_run` reads it,
+  substitutes `[gfx_disink]` for the ink it was handed and lays §6.1.12's mask
+  over the result. A button with neither `OS88UI_DOWN` nor `OS88UI_FILL` never
+  fills its interior, so *that* one keeps the transparent call — the ground
+  under those cells is not its to repaint.
+* **`font_run`'s planar prologue keeps the mask.** §6.1.10's single-store
+  prologue was setting `[font_rn_xm]` to FFh — *"the compose is a pass-through
+  either way"* — and throwing §6.1.12's checkerboard away, which is right
+  while `CDGRAY` is doing the talking and wrong the moment it is not. For a
+  declared window with `[gfx_dis]` set it now writes the phase mask instead
+  and `[font_rn_dt]` = FFh for the per-row swap. `xm` is a mask over the
+  **glyph** there rather than an ink-XOR-background, so it halves the ink for
+  either `bm`: 00h writes `glyph & AAh` and FFh writes its complement, which
+  is the same pixels read the other way up. The test is `[gfx_dis]` and **not**
+  `[font_rn_dt]`, which is 0 there by construction — §6.1.12's mask is
+  computed in the *mono* prologue and this branch left before it.
+
+Gated on `[gfx_mono1]`, so an ordinary VGA window's greying is untouched:
+grey still carries it where grey is available.
+
+**Whose content is being drawn is answered in two places, and they are the
+two §11.3 already names.** `[gfx_mono1]` is a per-lock-hold byte of
+`[gfx_dis]`'s kind, cleared by `gfx_unlock`:
+
+* **`wm_pkgcall`** sets it from the window for every callback there is —
+  `W_PAINT`, `W_ONCLICK`, `W_ONKEY`, `W_ONWAKE`, `W_ONSIZE` — because that is
+  the one dispatcher all of them go through, package and kernel window alike.
+  **Stacked**, for the reason `SNAPAUDIT`'s `[snap_cur]` is stacked one line
+  away: a repaint pass calls several windows' callbacks inside one lock hold,
+  and the question is *whose*, not *how deep*.
+* **`wm_clip_set`** sets it from `BX`, because a background painter is a
+  worker and reaches no dispatcher at all.
+
+A window's CHROME is drawn outside both, which is right: the title bar is the
+kernel's, it is redrawn on every raise, and it is not in the cache.
+
+**What is still open, and it is what a declaring application owes.** A
+`gfx_fill` in `CDGRAY` from the application's own hand still lands colour 8
+and nothing here notices; making every primitive ask would put the test on the
+hot path of every drawing call on the machine to serve one window, which is
+the trade PERFORMANCE.md exists to refuse. `os88ui`'s shared controls are
+covered because the pen is, and text is covered wherever it is a run — which
+§6.6 asks for anyway. Beyond that the declaration stays a promise.
+
+**Measured on the Browser** (`tests/monoink.py`, `os8088_xt_vga`): content
+**0 pixels** that are neither colour 0 nor colour 15; `Back` and `Fwd` lit on
+one parity of (x + y) and `Reload` on both, so a checkerboard and a solid
+glyph respectively; and the cache the kernel took is **23,513 bytes at one
+plane** where four would have been **94,010** — past `wm_su_kb`'s 64,512, which
+is the refusal this whole section exists to lift.
+
+#### 11.96.18 The drop moved after the occlusion walk
+
+`wm_clip_set` is §11.96's blanket safety net — *"this window is about to draw,
+so whatever the cache holds for it is now a picture of the past"* — and every
+background painter comes through it, because §11.3 makes it arm a region or
+paint over the window on top of it. One call covers every app at once, with no
+rule for an app to remember.
+
+**It ran at the top of the routine, and that was the wrong end.** The order was
+drop, seed, walk, answer; so a window that is *visible but wholly covered* —
+precisely the state a save-under exists for — destroyed its own cache and was
+then told, two calls later, that there was nothing to draw. Every app with a
+background painter did it on every poll, which is why the feature could not
+survive being switched on: docs/SAVEUNDER-LIVE-PLAN.md §3.1 measured it as the
+single thing defeating the whole proposal, and costed it as a rework of every
+candidate app.
+
+It is a **reorder in one place**. The drop happens at `.done`, on the path
+where the region really was armed:
+
+```
+    call wm_clip_seed
+    call wm_clip_occl           ; subtract every visible window above us
+    jc .none                    ; the list overflowed: degrade to a skip
+    cmp word [wm_clip_n], 0
+    jne .done
+.none:                          ; wholly covered - and the cache STANDS
+    ...
+.done:
+    mov bx, [wm_clipwin]        ; BX does not survive the walk
+    call wm_su_drop
+```
+
+Nothing between the two points draws: the seed and the walk read the record
+and write `wm_clip_tab`, and `.none` arms nothing at all. `[wm_clipwin]` was
+the `CURFIX` knob's alone and is unconditional now, because the drop needs the
+same word in every build.
+
+**What it does not change**, and this is the half worth stating: a
+*partially* covered window behaves exactly as before. The walk finds
+fragments, the answer is CF = 0, the cache is dropped, and the app draws its
+visible part — which is right, because the glass is being kept current and
+there is nothing left to restore. Only the wholly-covered case, where the app
+cannot draw at all, keeps what it banked.
+
+##### 11.96.18.1 It is proven by the CALL, because the cache word is not observable here
+
+The obvious gate for §11.96.18 is "cover the window wholly and watch
+`wm_su_segs` survive". **It does not work, and three readings of the same
+build say why:**
+
+| how it was watched | what it reported |
+|---|---|
+| `mo.dblclick`, then one read 1.8 s later | the cache **alive** |
+| a tight `advance`/`run` sampling loop | **dead** from ~130 ms, for 5.9 s |
+| a breakpoint armed just after the gesture | **no bank at all** |
+
+Whether the bank lands, and whether it is seen to survive, moves with the act
+of looking. So the cache word is not the instrument.
+
+**An exec breakpoint on `wm_su_drop`, with BX compared against the window
+record, is** — and it is the reorder's claim word for word. Measured on the
+Task Manager's performance view, whose worker arms a clip every `TM_INT`
+whether or not it has anything to draw, over eight of those polls each way:
+
+```
+  PARTIAL : 4 wm_su_drop calls for us, 0 for others  (partly covered)
+  WHOLLY  : 0 wm_su_drop calls for us, 0 for others  (zoomed cover)
+```
+
+Four when it can draw, **none when it cannot**. `tests/clipkeep.py` asserts
+exactly that, needs no `WF_SAVEU` forced into the record, and has been stable
+in every run.
+
+**Two things the investigation ruled out along the way**, both of which the
+first draft of this section got wrong:
+
+* **Nothing sheds it.** `mem_pg_forget` never fires either, and the heap is
+  not tight — 415,744 bytes free in one run against the 32,874 this window's
+  four-plane cache needs, twelve times over, identical on every attempt.
+* **`wm_front` banks the OUTGOING FRONT and nothing else**, so a cover whose
+  subject was not in front banks nothing at all — which reads exactly like a
+  cache that died. That was a harness fault, and it produced the "3 of 7" and
+  "4 of 7" figures this section originally reported as kernel behaviour. With
+  the raise proven through `wm_zord` it banks 6 of 7.
 
 ### 11.97 A window below does not draw chrome where something above will cover it
 
@@ -15479,6 +17125,78 @@ rather than the fix: a knob build is bound by `KERN_CODE_MAX` alone now
 is still the right one — the mutex bracket would spend the shipped kernel's
 last spare 512-byte step, and this one spends nothing — but the constraint it
 was cut to no longer exists.
+
+#### 12.8.5 …and it does not exist at all in a foreign mode
+
+Reported off a 5150: a game that saves a high score from inside its fsx
+bracket (§53.7) drew the widget over its own screen, and nothing took it away
+again.
+
+Both halves follow from where this module draws. `fpg_arm` composes at the
+right-hand end of the **menu bar**, in the desktop's geometry and the desktop's
+colours — and past `fsx_mode` there is no menu bar, no desktop geometry, and
+the pixels belong to the exclusive app. It stayed because the app's erase is
+its own dirty spans (§85.3.1 is one such design) and it never knew those bytes
+were dirty; `fpg_finish` would then "repair" a bar that is not on the screen.
+
+So there are **four** refusals in `fpg_arm`, not three: the splash, another
+task's lock, a fullscreen window, and now `[fsx_cur] != 0xFF`.
+
+**The refusal belongs in `fpg_arm`, not at the call sites.** A package's file
+write is a perfectly ordinary thing to do inside a bracket — §53.7 forbids
+*drawing* slots, not the file API, and §85.9 is a worked example of a save that
+happens there on purpose — and the disk path has no business knowing which
+video mode is set.
+
+**`fsx_mode` pays off a widget that is already up**, before it touches a single
+mode register. `fpg_arm`'s refusal cannot help there: the widget may have been
+armed by a file read *earlier in the same gfx-lock hold*, the hold the bracket
+inherited from the callback that started it. Calling `fpg_finish` at that point
+is the correct teardown rather than a state reset, and the difference matters —
+bit 1 of `[fpg_on]` is a **cursor debt** (§12.8.4), and clearing the byte
+instead of finishing would leave `cur_level` negative and the arrow gone for
+the rest of the session. It runs after the caps test, so a *refused* mode still
+changes nothing at all.
+
+#### 12.8.5.1 …and that refusal made an UNINITIALISED sentinel load-bearing
+
+`fsx_cur` was `.bss`, on a comment that was true when it was written: *"Written
+by `fsx_run` before anything reads it, so it needs no boot-time init."* Every
+reader it had was inside a bracket, and inside a bracket `fsx_run` has already
+stored 0xFF.
+
+**§12.8.5's refusal is the first reader OUTSIDE one.** `fpg_arm` runs on a
+machine that has never entered an fsx bracket in its life — and `.bss` is not
+0xFF there. `-f bin` emits nothing for it (§2.6), and what the boot read lands
+on those bytes is the image's own inter-section padding, so the byte is **0**.
+0 is `FSXM_TEXT80`, and every comparison in the tree spells "unswitched" as
+0xFF, so `fpg_arm` read a foreign mode on the glass and **refused on every
+machine, from the first file operation after boot until the first fsx app had
+run and restored**. The widget was not shown for a hard-disk install, a file
+copy, a document save or a package load. Measured on `os8088_xt_hdd`:
+`[fsx_cur]` = 0x00 on a settled desktop, and `[fpg_on]` = 0 for the whole of an
+install.
+
+The failure is invisible in exactly the way §12.8 is: nothing draws, nothing
+errors, and the operation runs to completion. What it reads as on the target
+machine is a **lock** — an install is minutes of `int 13h` on a 4.77 MHz 8088
+with the UI frozen behind `gfx_lock`, and the widget is the only thing that
+says the machine is alive. It was reported as one.
+
+**The sentinel therefore lives in `.text`, seeded `db 0xFF`**, which is
+`api_name`'s and `spl_fp`'s rule (§2.6) stated once more: a byte whose
+*resting* value is not zero cannot be `.bss` in this kernel. It costs one byte
+of `.text` and gives one back from `.bss`, so `KERN_CODE_MAX` and
+`KERN_BUDGET` are both unmoved, and it needs no boot-time store — the value is
+correct from the first instruction the kernel executes rather than from
+wherever in the boot order somebody remembered to put it.
+
+`fsx_wdisp` beside it carries the identical comment and is **still `.bss` and
+still correct**: its one reader is `fsx_mode`, which is legal only inside a
+bracket (§53.4). The rule is not "every fsx byte" — it is that the comment is a
+claim about the *set of readers*, and adding one outside the bracket is what
+falsifies it. A new reader of any `fsx_*` byte from desktop code owes that
+check.
 
 ### 12.9 The bar is three segments, and each answers for itself
 
@@ -17868,16 +19586,29 @@ alignment every int 13h target depends on (§2.1.1).
 **Guard 5 is the relocated boot sector (§15.2), and it is the third POLICY
 figure in the file.** The sector puts itself at the top of conventional RAM
 (§2.7), an address this file cannot know, so what the guard checks is the
-machine the system is *claimed* to run on: at `MIN_RAM_KB` = 128 the sector
-and its stack take the top 2,560 bytes and the kernel must fit below them —
-126,976 bytes. It used to name a fixed `BOOT_RELOC` and cap the footprint at
-82,432, which is exactly what `KERN_BUDGET` had reached, so for a while
-raising the budget bought nothing and the only way up was to move the sector.
-It is 44.5KB above the budget now. **When the kernel approaches *this* one
-the answer is not a raise**: it is two kernels off one tree, a full one and a
-minimum one, because a 128KB machine and a 640KB machine stop wanting the
-same feature set long before they stop fitting the same image. Keep this
-block last.
+machine the system is *claimed* to run on: the sector and its stack take the
+top 2,560 bytes and the kernel must fit below them. It used to name a fixed
+`BOOT_RELOC` and cap the footprint at 82,432, which is exactly what
+`KERN_BUDGET` had reached, so for a while raising the budget bought nothing
+and the only way up was to move the sector.
+
+**`MIN_RAM_KB` IS PER CONFIGURATION, and that is the answer this paragraph
+used to say was still to come.** It reads 128 for `kern_small` and **196** for
+`kern_big`, because the two kernels stopped being the same claim: a
+`kern_big` of 120,320 bytes cannot boot a 128KB machine at all — `boot.asm`'s
+own `.nomem` floor puts the bar at ~143.5KB for a 217-sector image before this
+guard is even reached — while `kern_small` is built for exactly that machine
+and boots it. `kern_big` still *resides* inside 128KB, which is
+`KERN_RESIDENT_KB` and is where its `KERN_BUDGET` is derived from; what it
+cannot do is get there through a 128KB boot. So the split is not a relaxation
+of guard 5, it is guard 5 finally asking each configuration about the machine
+that configuration ships to. **When a kernel approaches its own figure the
+answer is still not a raise** — it is the two kernels this note anticipated,
+which is what the split now is.
+
+Guard 5 is wrapped in `%ifndef KERN_KNOB` for the reason its own comment
+gives: the machine it is about is the one we SHIP to, and a diagnostic build
+is not that. Keep this block last.
 
 #### 15.1.1 The smallest ceiling in the tree is a diagnostic's
 
@@ -18028,6 +19759,890 @@ old code was free to hold an argument in.** Nothing in the tree could see it —
 `bootsmoke` asserts a desktop, `bootstatus` asserts the status line's strings —
 so `tests/splashbar.py` is the row that watches the bar *advance*, which is the
 one property a progress bar has.
+
+#### 15.3.2 The caption and the percentage are blitted too
+
+§15.6.5.1 priced a mode-12h BIOS teletype character at **40 ms** and stopped
+there, because the line it was about had a cheaper renderer to hand. The rest
+of the screen went on paying: `spl_chrome`'s caption was **18** characters and
+`spl_pct` is **four a tick**, and stage 2 ticks once per `int 13h` run. (The
+caption is `Welcome to os8088` and **17** cells wide: the trailing period came
+off after the measurements below were taken, and `SPL_TTLC` went 18 -> 17 with
+it. It moves no pixel — `spl_cell` floors the field's left edge to a byte,
+and both counts floor to the same one at either screen centre.)
+
+Both go through `spl_text` now — the same eight byte-stores a character
+§15.6.5.2 already draws the status line with — and `spl_print` is deleted with
+its last caller. **A 360KB floppy boot on `os8088_xt_vga` goes from 21,959.1 ms
+to 16,084.2 ms**, one tree built twice, `tools/os88boot.py`:
+
+| phase | before | after | delta |
+|---|---|---|---|
+| POST (the ROM's own) | 5,817.5 | 5,817.5 | — |
+| `boot: int 13h x18` | 7,581.7 | 7,196.0 | −385.7 |
+| **`boot: sector loop`** | **3,765.9** | **993.3** | **−2,772.6** |
+| `mouse_init` | 782.9 | 618.1 | −164.8 |
+| `dock_init` | 243.9 | 83.4 | −160.5 |
+| **`drv_boot`** | **3,293.9** | **1,063.2** | **−2,230.7** |
+| `mem_unblob_x` | 213.7 | 52.9 | −160.8 |
+| **TOTAL from reset** | **21,959.1** | **16,084.2** | **−5,875.0** |
+
+and the kernel's own boot timer (§15.4) agrees from the other end: **274 ticks
+to 182**.
+
+**Read the shape of that table, not just the total.** A notch of the bar cost
+`4 x 39.8 + 1.03` = **160.2 ms** — four digits and the cursor set that preceded
+them — so *every phase that repaints* shed a flat 160 ms whether it did any
+work or not: `dock_init` was 243.9 ms of which **two thirds was the
+percentage**, and `mem_unblob_x` 213.7 of which three quarters was. `drv_boot`
+calls `spl_step` once a sector, so it shed fourteen of them; the loader's own
+`sector loop` shed the caption's 18 characters (716.4 ms) plus its ticks. The
+`int 13h` row is not a saving of ours — its **modelled mechanical** time fell
+3,650 → 3,265 ms, which is where the platter happened to be when a shorter
+gap between reads ended.
+
+**That is what a progress indicator costing more than the progress looks
+like**, and the loading screen's own contract (§15.6.5.1) is that it never
+slows the load down.
+
+The renderer had to change to take the percentage, and the change is worth
+more than the call site. `spl_text` **merged** white pixels through the Bit
+Mask, which is a stencil: fine for a caption on fresh black ground, useless for
+a reading that goes `9%` → `10%` with the 9 still underneath. It is **opaque**
+now, and that is one instruction rather than four:
+
+    ; before, per row: two OUTs, a latch read and a store
+    call spl_bitmask            ; out 3CE, (row << 8) | 8
+    call spl_wrbyte             ; mov al, [es:di] / mov [es:di], 0FFh
+    ; after, per row, with the Bit Mask left at 0FFh:
+    mov [es:di], al             ; every bit of the byte comes from the CPU
+
+With the mask at `0FFh` a VGA plane takes the glyph row as it stands — white
+where a bit is set and **black where it is not** — and a 1bpp framebuffer *is*
+that byte. So the same store serves all three adapters, the leading blanks of
+`spl_pctbuf` are the erase, and **no pixel is written twice** (PERFORMANCE.md
+rule 2), which the erase-then-letter pair it replaces could not say. `spl_fill`
+has always written the bar this way; this is that write, one byte wide.
+
+The geometry keeps the teletype's, so the screen does not move: `SPL_TTL_X` =
+248 is 18 cells centred on 640 (col 31) and `SPL_TTL_Y` = 244 centres an 8-row
+glyph in the 16-row band row 15 occupied; `SPL_PCT_X` = 304 and `SPL_PCT_Y` =
+308 are the same arithmetic on row 19's four cells. Both are VGA-only, as they
+were — `spl_chrome` returns above them on a 1bpp adapter and `spl_paint` gates
+`spl_pct` — so the mono splash still carries the bar and §15.6's line and
+nothing else. **That is a look decision left open, not a limit**: `spl_text`
+draws on all three adapters, so giving mono a caption and a reading is now a
+question of where to put them on 640x200 and 720x348, and of somebody looking
+at the result (§39.4).
+
+The ROM 8x8 set moves out of `spl_kern_on` into **`spl_kfont`**, called at the
+top of `spl_text`, because `spl_pct` reaches it every tick and the fetch is an
+`int 10h` — the one call this section exists to stop making. `[spl_kfseg]` is
+the latch as well as the answer: `AX=1130h` reports through ES:BP and
+`F000:FA6E` is the fallback, so a segment of 0 cannot be a result.
+
+#### 15.3.3 A long wait charges the bar as it HAPPENS, not afterwards
+
+The percentage lied, and the shape of the lie is worth keeping because it is
+not the one that was expected. Sampling `[spl_done]`/`[spl_total]` against
+MartyPC's cycle counter through a whole boot (§15.3.2's build):
+
+| boot | splash up for | worst the bar was wrong by | ...and after |
+|---|---|---|---|
+| 360KB floppy, `os8088_xt_vga` | 8,620 ms | **+14.4 points**, running ahead | +10.1 |
+| hard disk, `os8088_xt_vga_hdd` | 1,365 ms | **−43.8 points**, running behind | **+8.0** |
+
+The hard-disk row is what this section is for: its longest hold goes **630 ms
+→ 105 ms** and the bar tracks the clock within ~5 points the whole way. The
+floppy barely moves, and that is honest — its remaining error is the load's own
+granularity, one notch per `int 13h` run and ~630 ms between them.
+
+**On a hard disk the bar sat at 0% for 630 ms of 1,365** — 46% of the visible
+boot showing zero — and it is `mouse_init` (§9.4.1's two waits, 618 ms) charged
+**one** notch, spent at the end.
+
+**A weight cannot fix that, and the arithmetic says so.** Charging the phase 11
+notches instead of 1 moves where the bar lands *after* the wait; it does not
+move the bar *during* it, so the reading just before the jump is as wrong as
+before. What fixes a hold is charging it **while it happens**, and `mouse_init`
+can: both its waits are `[ticks]` loops that already compute the elapsed count.
+So they notch once a tick, and §15.3's `SPL_POST` carries the **guess** — 11
+ticks, `MOU_RSTLOW` + `MOU_IDFLOOR`, which is what a machine WITH a mouse
+spends (§9.4.5's early close, and 11 × 54.9 = 604 ms against the 618 measured).
+
+The guess is a **clamp, not a prediction to live with**: `.settle` stops
+notching above `MOU_IDFLOOR`, so a machine with no mouse — which spends
+`MOU_IDWIN`, 22 ticks, 1,190 ms — moves the bar for the first 604 ms of it and
+holds for the rest. It cannot be known in advance which machine this is, and a
+hold at the end of a phase is strictly better than a hold at the start.
+
+##### 15.3.3.1 The notch that does not spin, and the 7.5 ms that decides it
+
+`spl_paint` costs **32.4 ms**, and `spl_spin` is **28.7 ms of it** — 88%
+(`spl_bar` 1.8, `spl_pct` 1.9, measured with `execseg` breakpoints on the four
+entries). The spinner is 19 stroke primitives and ~330 masked byte-writes, each
+with a Graphics Controller `out`; it is by a wide margin the most expensive
+thing the loading screen does.
+
+**That is what decides whether `mouse_init` may repaint at all.** The identify
+window drains the ports by polling (§9.4.1), an 8250 holds **one** byte, and a
+Microsoft mouse talks at 1200 baud 7N1 — 9 bits, **7.5 ms a byte**. A byte is
+lost only if a *second* one completes while the poll is away, so the bound is
+the absence, and it is 7.5 ms. A 32.4 ms repaint is four byte times and would
+lose three, which is precisely the burst §9.4 exists to capture.
+
+So there are two notches:
+
+| entry | draws | measured, where it runs |
+|---|---|---|
+| `splf_step` | bar, percentage, spinner | 32.4 ms |
+| `splf_stepq` | bar, percentage | **4.75–4.81 ms** |
+
+`mouse_init` uses the quiet one — **11 calls a boot, exactly `MOU_RSTLOW` +
+`MOU_IDFLOOR`**, timed with a breakpoint on `splf_stepq` and one on its own
+far return address. 4.81 ms against 7.5 leaves **1.56x**, and the margin is on
+the right side of a threshold rather than near it: no byte can be lost unless
+the absence exceeds a whole byte time. (Summing `spl_bar` + `spl_pct` predicts
+3.7 ms and is wrong by a quarter — `spl_step`'s own arithmetic and the far call
+are the rest. The end-to-end number is the one to quote.)
+
+The spinner freezes for the ~600 ms of the wait and the bar moves instead,
+which is the right way round: a bar that advances says *progress*, where a
+spinner only says *alive*. `spl_stepq` sets `[spl_quiet]`, calls `spl_step` and
+clears it, so the two share every line and no other caller has to know it
+exists.
+
+**AND EVERY DRAWER OF A FRAME HAS TO READ IT, WHICH SINCE §15.3.8 MEANS THE
+TWO IRQ0 HANDLERS.** `spl_paint` honouring the flag was the whole of it while
+`spl_paint` was the only way a frame got drawn; moving the animation onto the
+timer added two more entries — `spl_isr` while stage 2 holds the vector, and
+`sch_isr`'s gated call once `sched_init` has it — and neither asked. `sch_isr`
+is the one that matters here: `sched_init` runs early in `kmain`, so it is what
+fires during the identify window, and it deliberately does **not** `sti`. The
+28.7 ms frame therefore ran with `IF = 0` straight through the flag that was
+raised to forbid it, which is §9.4's burst lost to an interrupt instead of to a
+repaint — the same three bytes, by a different door, and invisible in an
+emulator because no emulator here clocks the UART.
+
+`[spl_quiet]` lives in `viddet.inc`'s `.text` for that reason, beside
+`[spl_live]` and `[spl_busy]` and for `[spl_busy]`'s own second reason: both
+handlers are kernel `.text`, where `cs:` names `KERNEL_SEG` and not the stage-2
+blob, so a `.boot2` byte read `cs:` cannot be seen from either of them.
+
+**`MOU_DIAG` is the check, and it is a check rather than a proof.** The
+window's own numbers are published (§9.4.6) and they are **identical before and
+after**: `mdg_used 8 of 19`, `mou_idany 1`, port 0's `idn 1` / `idb0 4Dh` —
+the `M` of a Microsoft mouse, caught. What it does not exercise is a **burst**:
+MartyPC's mouse sends one byte, so the back-to-back PnP string §9.4.1 mentions
+is covered by the 7.5 ms argument and by nothing that has run. A field machine
+is where that gets checked.
+
+##### 15.3.3.2 What is deliberately NOT charged
+
+**The floppy probe (§18.97).** Its two waits are `FDD_MOTORW` + `FDD_SEEKW` =
+32 ticks, 1,758 ms, and they hold the bar at 6% when the slow path fires — a
+worse-looking freeze than the mouse's. It is left alone because the arithmetic
+does not work: 32 notches is larger than the whole of `SPL_POST`, so charging
+them would either crowd every slow boot against 100% for the rest of the run or
+leave every fast boot — which is now the common case (§18.97.5) — ending at
+half and jumping. The probe's freeze is the probe's to fix, not the bar's.
+
+#### 15.3.4 The spinner composes each row and stores it ONCE
+
+`spl_spin` blanked its whole 15x41 box with `spl_fill` and then stroked
+nineteen lines into it. **That is the erase-then-letter pair** (PERFORMANCE.md
+rule 2) at the largest scale in the tree: 615 bytes cleared to redraw about
+370, with the logo *absent* in between. A boot repaints about 29 times, half a
+second apart, so it is not subliminal — it reads as the logo **blinking**, and
+it was reported from the field as exactly that.
+
+**It costs 28.7 ms, and 26 of those are not the pixels.** `spl_fill`'s 615
+opaque byte-writes measure **2.70 ms — 21.0 cycles a byte** (breakpointed on
+`spl_fill` inside `spl_spin`). The other 370 bytes take 26 ms, which is **335
+cycles each**: a `spl_wrbyte` call, a latch read, a store, `SPL_NEXTROW` and a
+loop, per byte. The cost was never the VGA; it was the per-byte call overhead.
+
+So the box is **composed a row at a time in RAM and written once**:
+
+| | |
+|---|---|
+| blank | **gone** — nothing is cleared, because nothing is drawn twice |
+| VGA writes | 615, opaque, one per byte, no read, no Bit Mask, no `out` |
+| RAM | **two 15-byte buffers** |
+| measured | **10.6 ms** against 28.7 |
+
+**The blink is gone and the picture did not move**, both measured by reading
+the box out of VRAM once per displayed frame:
+
+    before:  399 399 399 399 | 54 306 | 400 400 400 400 …
+    after:   399 399 399 399 | 399 400 | 400 400 400 400 …
+
+No frame shows a broken picture, and **all 27 settled pictures are
+byte-identical to the pre-change build**. (A settled picture is a sample whose
+successor is the same; the fast tail after `spl_done` 215 gets one frame per
+notch in each build, so those samples are mid-draw instants and compare
+nothing.)
+
+Whole boot, `tools/os88boot.py` on `os8088_xt_vga`: **16,084.2 → 15,849.2 ms**.
+The per-phase deltas are the honest number — every phase that repaints shed
+**~18.1 ms a spin**, `boot: sector loop` −236.5, `drv_boot` −184.5,
+`dock_init` −18.3, `mem_unblob_x` −18.9, about **450 ms of CPU across ~25
+spins** — and the total moved less because the floppy's modelled rotational
+latency absorbed some of it. `mouse_init` is unchanged at 622.9, which is the
+check that §15.3.3.1's quiet notch never drew a spinner in the first place.
+
+**A `.text` byte did not move**: `.text` 55,334 and `KERN_SIZE` 117,760 are
+what they were.
+
+**The shape is what makes it cheap.** The logo is four digits of two verticals
+and two or three bars, so **38 of the 41 rows are the same row** — the eight
+verticals — and only 0, 20 and 40 carry a bar. `spl_rowa` holds the plain row
+and `spl_rowb` the bar row, rebuilt three times because row 20 is the *middle*
+bar and `SPL_DIG0` — the second digit — has none. `spl_rowmk` takes a
+four-bit digit mask and `spl_span` ORs a run of screen x into a buffer, doing
+a single pixel as the degenerate case `x1 == x2`, which is why there is no
+set-pixel routine.
+
+##### 15.3.4.0 The bug: a routine that spent the caller's row pointer
+
+`spl_rowmk` used DI for its zero loop, and DI is the **VRAM row pointer**
+`spl_spin` is walking down the box with — and the bar row is rebuilt twice
+*during* that walk. So every row landed wherever the zero loop had left DI,
+and the box read as **nothing drawn at all**, 615 zero bytes. It reads like a
+composer that computes an empty picture, which sends you into `spl_span`'s
+masks; the box being *uniformly* zero rather than partly right is the tell,
+and one `push di` is the fix. It is `spl_text`'s bug from §15.6.5.3 exactly —
+a helper spending the register the caller was walking with — two sections and
+one release apart.
+
+##### 15.3.4.1 What was tried first, and why it is wrong
+
+The obvious cheaper change is to **erase the previous frame's strokes** instead
+of the box. It fails twice over and both are worth keeping.
+
+**The angle cannot be derived.** It is `spl_done & 15`, so the frame before
+looks like `(spl_done - 1) & 15` — but `spl_step` advances `spl_done` by one
+while `spl_tick` *assigns* it the loader's sector count, thirteen or so a tick.
+A latched byte fixes that.
+
+**Interleaving the erase and the redraw corrupts the picture**, and the
+measurement is the proof — the spinner box read once per displayed frame:
+
+    before:  399 399 399 399 | 54 306 | 400 400 400 400 …   one torn frame
+    erase:   399 399 399 399 | 352 217 | 203 203 203 203 …  PERMANENTLY sparse
+
+22 of 39 frames rendered differently from the reference build. Because the
+angle jumps thirteen a tick, |cos| changes a lot between frames, and a later
+digit's *old* horizontal spans right across where an earlier digit's *new*
+strokes now sit — erasing them with nothing to put them back.
+
+Erasing all nineteen and then drawing all nineteen is correct and **buys no
+flicker at all**: it empties the box exactly as `spl_fill` did. It would have
+been a ~25% speed change sold as a flicker fix.
+
+##### 15.3.4.2 It cost the blob's `OVL_AT` rung, and that is the file's own precedent
+
+The composer is **63 bytes over four sectors of `.boot2`**, so `OVL_AT` goes
+2,048 → 2,560. `kernel.asm` already carries the argument for exactly this
+call: three sectors once left 46 bytes, `BOOTDIAG=1`'s hex printer did not fit,
+and the recorded answer was *"the rung and not a smaller printer"*.
+
+**It costs nothing to move.** The blob is `BOOT2_SECS` = 13 sectors either way,
+so no image byte, no RAM and no extra `int 13h` changes — only the split.
+What it spends is the blob's last slack: `.boot2` is 2,141 of 2,560 and `.ovl`
+ends at 6,497 — **159 bytes** short of `BOOT2_PAD`. So the next claim on this
+file is `BOOT2_SECS`, and that one is a real ~24 ms on every boot.
+
+#### 15.3.5 The mono splash gets the whole screen
+
+Until §15.3.2 the 1bpp adapters carried **the bar and nothing else**, and the
+reason was in `spl_rechrome`'s own comment: the chrome was BIOS text, and
+`int 10h` teletype into a Hercules card already in graphics writes
+character/attribute pairs into the bitmap. That reason is gone. Every
+primitive under the chrome has had a mono arm all along — `spl_rect` reaches
+`spl_bitmask`/`spl_wrbyte`, whose merge is an `or` there; `spl_text` is what
+already draws §15.6's line on all three; and §15.3.4's composer writes a plain
+opaque byte, which on a 1bpp framebuffer is *more* direct than on VGA.
+
+**So what was left was layout, and it was the one thing written as VGA pixel
+literals** — 152, 487, 208, 343, 174, 465, 262, 281, 248, 244, 304, 308,
+`SPL_TOP * 80 + 33`. §39's rule says anything that centres or anchors reads
+`[vid_cw]`/`[vid_ch]`, and this screen was the exception.
+
+##### 15.3.5.1 One horizontal rule, two vertical ones
+
+**Horizontally there is a single rule and VGA falls out of it.** Every column
+is the screen's centre plus a constant, so `[spl_l_cx]` = `vid_cw`/2 is banked
+once and the dialog is `cx-168 .. cx+167`, its inner frame `cx-164 .. cx+163`,
+the trough `cx-146 .. cx+145`, the caption's 18 cells `cx-72`, the
+percentage's four `cx-16` and the spinner's box `cx-56`. At `cx` = 320 those
+are 152/487, 156/483, 174/465, 248, 304 and 264 — **the literals they
+replace**, which is the check that the rule is the right one.
+
+**Vertically there are two**, and the difference is not stylistic: VGA's dialog
+is 136 rows for 72 rows of content, and the spinner's box is another 41 above
+it. That block is 226 rows and **a CGA screen is 200**. So VGA keeps its own
+constants and mono packs the same elements around the bar:
+
+| | mono | VGA |
+|---|---|---|
+| spinner box, top | `bar − 81` | 118 |
+| dialog, outer | `bar − 32` … `bar + 59` | 208 … 343 |
+| caption | `bar − 20` | 244 |
+| trough | `bar − 2` … `bar + 17` | 262 … 281 |
+| **bar** | **`vid_ch`/2 + 10** | **264** |
+| §15.6's line | `bar + 24` | 288 |
+| percentage | `bar + 40` | 308 |
+
+**The mono bar moves, and it moves because it stopped being the only thing on
+the screen.** It was `vid_ch`/2 − 8 — the *bar* centred, which is right when
+the bar is the whole splash. The block runs `bar − 81` to `bar + 59`, so
+centring **it** puts the bar at `vid_ch`/2 + 10, and the difference is visible:
+before, CGA's content sat at rows 11…151 of 200 with the spinner eleven rows
+off the top edge. It is 29…169 now, margins **29 / 30**, and Hercules 105 / 104.
+Looked at on both (§39.4).
+
+`bar + 24` is where §15.6's line already was on VGA (264 + 24 = `SPL_MSG_Y`)
+**and** on mono (`vid_ch`/2 + 16 against the old bar), so one rule covers both
+adapters — and it is banked as `[spl_l_msg]` rather than computed. It had been
+computed **three times from two formulas**: here, in `spl_kern_on`, and in
+`vidsel.inc`'s `spl_mgeom` one section along. Banking it is what made moving
+the mono layout one edit instead of three, and `.ovl` can read it because both
+halves of the blob are one segment and splash.inc is `%include`d *above*
+vidsel.inc — a backward reference, which is the direction the duplicated CELL
+COUNT and its assertion cannot go.
+
+##### 15.3.5.2 What the spinner needed
+
+`spl_spin` addressed its box as `SPL_TOP * 80 + 33` — a hard stride of 80,
+which is VGA's and Hercules' 90 is not — and `spl_xform` mapped a stroke's x
+onto a hard centre of 320. Both read the banked layout now, and the box's row
+goes through `gfx_rowbase` like every other row in the module, so the CGA
+adapter's bank interleave and Hercules' four banks are handled by
+`SPL_NEXTROW_CS` exactly as they are for the bar.
+
+`spl_paint`'s `[vid_mono]` gate on the percentage and the spinner is gone with
+them: mono now draws every element VGA does.
+
+##### 15.3.5.3 VGA is 0 differing pixels, and two tests had the geometry twice
+
+The rule has to reproduce the literals or it is a redesign wearing a
+refactor's clothes, so it was checked that way: the VGA loading screen against
+the build immediately before, **0 differing pixels of 307,200** — the whole
+screen, spinner included.
+
+Getting there cost one bug and two test fixes.
+
+**`spl_spinadr` reads `[vid_seg]`, which is a DS read**, and §15.3.4's row loop
+points DS at CS so the copy can be a `rep movsb`. Called from inside that, it
+read a `.boot2` byte as a segment and left ES wherever it landed: the spinner
+vanished **on all three adapters at once**, which on VGA showed up as a
+400-pixel diff in exactly the band that had been correct a moment before. It
+is called before the switch now.
+
+**Both splash tests carried a second copy of a geometry that moved.**
+`tests/splashbar.py` read the bar at `h/2 − 8 + 8` and `tests/bootstatus.py`
+the status band at `h/2 + 16 + 3`; after §15.3.5 the first read a row above the
+bar and the second read **the progress bar itself**, which changes every notch
+— 41 distinct bands against the 4…9 it allows. Both read `[spl_l_bar]` /
+`[spl_l_msg]` out of the guest now, which is the same fix as banking them.
+Two smaller things fell out: `splashbar` counts the bar's **own** 288 pixels
+rather than the whole row, because that row now crosses the trough's sides and
+the dialog's two frames (288 + 6 = 294, read as a bar overrunning its frame);
+and `bootstatus` waits for `spl_mline` to **settle**, because the composer
+walks it a cell at a time and a mid-walk sample reads a hybrid — `Looking for
+Druse` is `Dr` of Drives over `use` of Mouse. The glass never shows it (§15.6.3
+draws the composed line in one `font_run`), and it is not a prefix, so the
+existing collapse could not see it.
+
+#### 15.3.6 The spinner's angle is the WALL CLOCK, not the notch count
+
+`spl_spin` took its angle from the progress bar:
+
+    mov bx, [cs:spl_done]
+    and bx, 15
+
+**So the logo's rotation was a function of how much of the kernel had
+loaded**, and a boot does not deliver its sectors at a constant rate. The
+three stretches of a boot notch the bar at three completely different speeds,
+and the spinner inherited all three:
+
+| stretch | what notches it | one notch is |
+|---|---|---|
+| stage 2's kernel load | `spl_tick`, once per **coalesced `int 13h` run** — 18 sectors after §18.91.1 | ~430 ms |
+| the boot mount and `drv_boot` | `spl_step`, once per **sector** in `dsk_xfer` | ~24 ms |
+| §15.3.3's mouse wait | `spl_stepq`, once per **system tick** | 55 ms, and it draws **no spinner at all** (§15.3.3.1) |
+
+A frame per 430 ms and a frame per 24 ms are an eighteen-fold difference in
+angular rate, and the eye reads that exactly as it is: **the logo turns a
+little, stops, turns further**. It is not a stutter in the drawing — every
+frame is composed and written correctly (§15.3.4) — it is the animation being
+driven by the wrong variable. The bar is *supposed* to move in fits and
+starts, because that is the truth about the disk; the logo is not.
+
+**So the angle is the clock**, and the notch count drives the bar alone:
+
+    call spl_clock              ; AX = the BIOS tick at 0040:006C
+    mov cl, SPL_SPINSH
+    shr ax, cl
+    and ax, 15
+
+`spl_clock` reads the low word of the BIOS 18.2065 Hz tick count at
+**0040:006C**, and that word is live for the whole of the loading screen's
+life at both ends of it: during the load the BIOS still owns `int 08h`, and
+after `sched_init` **`sch_isr` chains the BIOS handler first** (§8.1), which
+is the same guarantee §15.4's boot timer already rests on — it reads the same
+word from the boot sector and again at the first desktop frame and subtracts.
+A 16-bit read of it is atomic on an 8088 because the interrupt is taken
+between instructions, and the word wraps once an hour, which a boot is not.
+
+`SPL_SPINSH` is **2**: one of the sixteen positions per four ticks, so a
+revolution is 64 ticks — **3.52 s** at 18.2065 Hz.
+
+**That value was chosen under a constraint §15.3.8 has since removed, and the
+reasoning is left here because the correction is the interesting part.** It
+used to read: the binding constraint is the *frame* rate, not the constant —
+the spinner is composed about 29 times in a boot, roughly half a second apart
+(§15.3.4), so at `SPL_SPINSH` = 2 a frame advances the logo about 2.3 of the
+sixteen positions, which is seven samples of a revolution and comfortably
+above the point where the rotation would alias into a judder. All of that was
+true, and it stopped being true the moment the animation moved onto IRQ0:
+**every one of the sixteen positions is now drawn, on time**, and a frame is
+available every 55 ms rather than every 581. So the constant is now purely a
+look question — 2 gives 3.52 s a revolution, 1 gives 1.76 and 0 gives 0.88,
+all of them equally smooth — and nothing about the frame rate argues for one
+over another any more.
+
+**What this does NOT fix, and should not be claimed to**: a stretch that draws
+no frames still shows no motion. Wall-clock time cannot animate a logo during
+a gap in which nothing calls `spl_paint`, and §15.3.3.1's quiet notch is a
+deliberate such gap. What changes is that the *rate* between frames is
+constant, and that the frame after a gap resumes at the angle the clock says
+rather than one position on from wherever the last one stopped.
+
+**It is also less state, not more.** The angle is now a pure function of the
+clock, so `spl_reset` needs nothing added to it, a repaint at the same instant
+draws the same picture, and there is no accumulator that a restarted load
+(§18.93.1) can wind backwards.
+
+##### 15.3.6.1 A frozen clock is invisible in an emulator
+
+The failure this introduces is a **stopped tick** — IRQ0 masked, an `int 08h`
+hook that does not chain, a PIT left reprogrammed — and its symptom is a logo
+that sits at one angle. That is one of PERFORMANCE.md Part 1's three invisible
+defects wearing a new hat: a screendump of a splash looks correct at any
+angle, and the machine still boots.
+
+`tests/splashspin.py` is the gate. It boots MartyPC a frame at a time and, on
+every frame where the composed angle `[cs:spl_cos]` changes, reads the guest's
+own BIOS tick and checks the two against each other — the angle has to be the
+one `spl_cos_tab` holds for that tick, within one position of slop for the
+tick that can turn over inside the paint itself. It asserts three things, and
+the second is the one that makes it a gate rather than a restatement of the
+first:
+
+ 1. the angle **moves** — many distinct values across the load;
+ 2. every sample agrees with the clock, which a notch-driven angle does not:
+    the two disagree the moment the notch rate changes, which is most of a
+    boot;
+ 3. the angle's **rate** is the same in the stage 2 stretch as in the boot
+    mount stretch, measured in positions per tick. That is the property the
+    change exists to buy, and it is the one an "it still animates" test would
+    pass without.
+
+**It was run against the defect, which is what says it is a gate.** Both
+builds boot `os8088_5150_herc_gla`, the same machine `splashbar` uses, and the
+only difference between them is the five instructions above:
+
+| | angles disagreeing with the clock | positions/tick, kernel load | positions/tick, boot mount |
+|---|---|---|---|
+| `[spl_done] & 15` | **16 of 27** | 0.2963 | **0.6562** |
+| the clock | **0 of 15** | 0.2407 | 0.2553 |
+
+The old build's two stretches are a **2.21× swing in angular rate inside one
+boot**, and that number is the complaint written down: the logo turns, slows,
+and turns again. The new build's whole-load figure is **0.2500 positions per
+tick against `SPL_SPINSH`'s 0.2500** — the two halves straddle it by ±4%, and
+what is left of that is quantisation, a transition being a handful of ticks
+long and rounding hard.
+
+Three things about the measurement, because each was a wrong answer first:
+
+* **the rate is taken off the angle that was DRAWN, never off the tick.**
+  Deriving the travel from the tick is the clock checked against itself, and
+  it reported a flat 0.2500 on the notch-driven build too.
+* **the drawn angles have to be unwrapped**, because `spl_cos_tab` repeats —
+  a cos names one or two of the sixteen positions. Each sample resolves to
+  whichever candidate is the shortest way *forward*, which is sound here
+  because the spinner only advances and covers ~2.3 positions a frame, so it
+  cannot lap between two samples.
+* **`spl_cos` is initialised to 64**, so a run that records its first read
+  records an angle no frame ever showed. It seeded the unwrap at a position
+  the logo was never at and read as the first stretch turning half again as
+  fast as the second — *the very defect the file exists to catch*, manufactured
+  by the test.
+
+#### 15.3.7 `SPLSTARS=1` — the still logo and the twinkle
+
+An A/B for the loading screen's animation, and a knob for TITLESNAP's reason
+(docs/TEXT-PLAN.md §6.1): it is a **look** question, so it is something to be
+looked at rather than argued, and the default is the spinner that ships.
+
+`make SPLSTARS=1` pins the logo at `cos` = 64 — full width, no flip, **still** —
+and animates six **stars** around it instead. A star is a crossed pair of
+lines, and its twinkle is a growth and a shrink with two rings of single-pixel
+clumps appearing at the peak and gone again by the end:
+
+| phase step | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8…15 |
+|---|---|---|---|---|---|---|---|---|---|
+| arm radius | — | 1 | 2 | 3 | **4** | 3 | 2 | 1 | — |
+| clump rings | — | — | — | inner | **inner + outer** | inner | — | — | — |
+
+The six carry different phase offsets (0, 6, 3, 9, 12, 5 of the sixteen), so
+about three are lit at any instant and they do not pulse in unison.
+
+**It is 329 bytes of `.boot2`, and the knob build pays for them with a 14th
+sector of the blob** — §15.3.8.5 is why that is the answer and moving `OVL_AT`
+is not. **The shipped kernel is untouched by it**: 13 sectors, and its
+`.boot2` is the size it was.
+
+**Both arms are driven by §15.3.6's clock and neither by the notch count**,
+which is what makes this an A/B of the *animation* rather than of the change
+above. `SPL_STARSH` is **3** — one phase step per eight ticks, a full cycle of
+128 ticks or **7.0 s**, of which the lit half is 3.5.
+
+It was picked off the frame rate, exactly as `SPL_SPINSH` was and with the
+same expiry date: at about a frame every 500 ms, a step per 440 ms was very
+nearly one step per frame, which is what made the growth render *as* a growth.
+Since §15.3.8 a frame is available every 55 ms, every step is drawn on time,
+and the value is a look question with nothing mechanical left in it. **1**
+would give a twinkle in 0.88 s and a cycle in 1.76, which is a good deal more
+like twinkling; 3 is what has been looked at.
+
+##### 15.3.7.1 A star is composed and written once, like the logo
+
+Each star is a **3-byte by 11-row box composed in RAM and blitted opaquely** —
+§15.3.4's design at a smaller scale and for exactly its reason. A twinkle that
+grew and shrank would otherwise be an erase followed by a draw, which is
+PERFORMANCE.md rule 2's double-draw pair and is the same defect the logo's own
+**blink** was. A dark star writes 33 zero bytes, so the previous frame's arms
+are erased *by* the write that replaces them and never by a pass of their own;
+there is no frame in which a star is half drawn and none in which the ground
+under it is momentarily wrong.
+
+Six stars are **198 opaque byte writes a frame** against the logo's 615, and
+no read, no Bit Mask and no Graphics Controller `out` — the star boxes never
+touch the logo box, so nothing is written twice anywhere on the screen.
+
+##### 15.3.7.2 Where the stars go, on three adapters
+
+The positions are held **relative to the logo box** — a signed byte column
+from `[spl_l_spx]` and a signed row from `[spl_l_spn]` — because §15.3.5 gives
+the three adapters three different layouts and a screen literal is right on
+one of them. The band they may occupy is decided by the tightest of the three,
+and it is not VGA:
+
+| | logo box rows | dialog top | rows between |
+|---|---|---|---|
+| VGA 640×480 | 118…158 | 208 | 50 |
+| Hercules 720×348 | 103…143 | 152 | **9** |
+| CGA 640×200 | 29…69 | 78 | **9** |
+
+Nine rows is not a star, so **none of the six sits below the logo**: four are
+level with it and outside it left and right, two are above it. The highest
+star's box reaches 19 rows above the box top, which on CGA — where the box top
+is row 29 — is row 10, and that is the constraint that fixes the layout. All
+six clear the dialog, the caption and §15.6's status line on every adapter,
+and all six are inside the framebuffer on 640-pixel and 720-pixel screens
+alike.
+
+#### 15.3.8 The animation runs on IRQ0, because a BIOS disk call does not lock us out
+
+§15.3.6 fixed the *rate* the logo turns at. It could not fix the **frame
+rate**, which is still whatever `spl_paint` happens to get called at — and
+that is not many. Measured over a whole load on the 5150:
+
+| | |
+|---|---|
+| animation frames | **1.72 a second** |
+| median gap between frames | 10.6 ticks, **581 ms** |
+| worst gap | 22 ticks, **1.21 s** |
+
+A logo that redraws every 581 ms is not an animation, whatever drives its
+angle. Wall-clock time makes the frame *after* a 1.2-second gap correct rather
+than merely next, which is worth having, but the picture still sits still for
+a second and then jumps five of the sixteen positions.
+
+**The reason it sits still is that the CPU is inside the ROM**, and the
+assumption that follows — that we are therefore locked out — is **wrong**.
+`int 13h` runs with interrupts *enabled*. Sampling CS, the BDA tick and
+MartyPC's cycle counter once a frame through the whole loading screen:
+
+* **261,952 cycles per tick against the PIT's 262,144** — an effective
+  **18.2198 Hz** across the entire load, where the PIT's own rate is 18.2065.
+  Not one IRQ0 was lost anywhere in it.
+* **83% of the samples have CS = F000.** The machine really is in the BIOS for
+  most of the boot.
+* The longest unbroken run of in-ROM samples spans **tick 172 to 193 — 21
+  timer interrupts fired without the CPU ever leaving the ROM**, with IF set
+  throughout.
+
+And the CPU in there is not busy, it is *waiting*: the BIOS has handed the
+transfer to the DMA controller and is spinning on IRQ6. **So a frame drawn
+from the timer ISR costs no real time at all** — it is drawn in a gap the
+machine was going to spend idle.
+
+##### 15.3.8.0 What it bought, measured
+
+`os8088_5150_herc_gla`, the same machine every other splash measurement here
+uses, watching `[spl_anlast]` — the phase the animation last actually drew:
+
+| | before | after |
+|---|---|---|
+| times the picture CHANGED | 15, over 148 ticks | **37, over 144** |
+| that rate | 1.72 a second | **4.55 a second** |
+| median gap | 10.6 ticks, **581 ms** | **4 ticks, 220 ms** |
+| worst gap | 22 ticks, **1.21 s** | **4 ticks, 220 ms** |
+
+The row that matters is the first: it counts what the *eye* gets, not what the
+CPU did. Before, the spinner was **composed about 29 times** (§15.3.4) and the
+angle changed 15 — so nearly half of those frames redrew the picture that was
+already there, at 11.87 ms each, between sectors.
+
+**Afterwards the median gap and the worst gap are the same number, and that
+number is `1 << SPL_SPINSH`.** Every one of the sixteen positions was drawn, on
+time, nothing skipped and nothing late — 36 gaps of exactly 4 ticks across 144.
+That is the whole of what this section is for. The `SPLSTARS` arm is the same result one constant along: 19
+frames, every gap exactly 8 ticks. And **35% of those frames were drawn with
+CS in the ROM**, which is the thing that was supposed to be impossible.
+
+**It is also 157 ms FASTER**, which is not a rounding error and not luck:
+
+    before   40,078,740 cycles   8.397 s
+    after    39,329,079 cycles   8.240 s
+
+repeated to the cycle across runs, MartyPC being deterministic. More than
+twice the frames for less time, and the reason is the whole thesis in one
+line: `spl_paint` used to draw the spinner on **every notch whether the angle
+had moved or not**, between sectors, where the time is real — and `spl_anim`
+now skips those, while the frames that replaced them land in the gap the BIOS
+was going to spend waiting on IRQ6.
+
+**What it costs in bytes**: `.boot2` 2,341 → **2,495 of 2,560**, which is 154
+for the ISR and its hook against the 76 §15.3.8.5 recovered from a dead table;
+`.text` **+52** for the two `[spl_busy]` guards and `sch_isr`'s gated call,
+`.ovl` +8. `KERN_SIZE` is unchanged at 118,784 — no rung moved.
+
+##### 15.3.8.1 What it costs, and why only the ANIMATION moves
+
+Per frame, breakpointed on the routine and differenced on the cycle counter
+(Hercules, `SPLSTARS=1` so both animations are present):
+
+| | cycles | ms | of a 54.9 ms tick |
+|---|---|---|---|
+| `spl_stars` | 19,764 | **4.14** | 7.5% |
+| `spl_spin` | 56,640 | **11.87** | 21.6% |
+| `spl_bar` | 16,362 | 3.43 | 6.2% |
+| `spl_pct` | 9,663 | 2.02 | 3.7% |
+| whole `spl_paint` | ~102,000 | 21.35 | 38.9% |
+
+So the ISR draws the **animation only**, and `spl_bar`/`spl_pct` stay where
+they are. That is not a budget dodge, it is the meaning of the two things: the
+bar's whole job is to report progress, so it *should* move in fits and starts,
+because that is the truth about the disk. The logo's job is to say the machine
+is alive.
+
+**And most ticks it draws nothing.** The phase only changes every
+`1 << SPL_ANSH` ticks — four for the spinner, eight for the stars — so
+`spl_anim` compares the phase against the last one drawn and returns. The
+steady cost is one frame per phase, which for the stars is **4.14 ms every
+eight ticks, 0.9% of the machine**, and every bit of that lands in a gap the
+BIOS was idling through.
+
+**`spl_paint` still calls `spl_anim` too**, and that is a fail-safe rather
+than a duplicate: on a machine where IRQ0 never arrives — masked, or a PIT
+somebody else has reprogrammed — the animation goes on being drawn on the
+notch exactly as it was before this section, at 1.72 frames a second. The
+phase check makes the duplicate call a compare and a return.
+
+##### 15.3.8.2 Two stretches, two owners of `int 08h`
+
+`sched_init` hooks the timer **early in `kmain`**, long before `spl_finish`,
+so the loading screen's life is split in two and each half needs its own way
+in:
+
+| stretch | who owns `int 08h` | how the animation is driven |
+|---|---|---|
+| stage 2's kernel load — **83% of the boot**, and where the 21- and 22-tick gaps are | the BIOS | `spl_chrome` installs `spl_isr` at `0000:0020`; stage 2 restores the BIOS vector immediately before `jmp KERNEL_SEG:0` |
+| `kmain`'s tail — the mount, `drv_boot`, `mouse_init` | `sch_isr` | a `[spl_live]`-gated `SPLCALL splf_anim` in `sch_isr`, beside `snd_tick`, which is the same shape for the same reason |
+
+**Stage 2 must un-hook before the handover**, and that is not tidiness. If it
+did not, `sched_init` would save *our* vector as `sch_old08` and go on calling
+it — and `spl_finish` gives the whole blob back to the heap (§2.9.5), so the
+chain would end in a far call into freed memory. The vector is restored on the
+one path that can, at the one moment it still means anything.
+
+`spl_chrome` is the installer and `spl_rechrome` is not, which is exactly the
+right split: `spl_chrome` is stage 2's entry, and `spl_rechrome` is what a
+**hard-disk** boot takes (§2.9.9.2), where the splash starts from inside
+`kmain` with `sched_init` already holding the vector and the row above already
+covering it.
+
+##### 15.3.8.3 One lock, and what it is actually guarding
+
+`spl_isr` fires in the middle of whatever the machine was doing. It refuses
+the tick unless `[spl_busy]` is clear, and raises it for the duration of its
+own frame — so **the same byte is the main line's "I am drawing" and the
+interrupt's own re-entrancy lock**, and there is one rule instead of two. The
+test-and-set is atomic because it happens before the ISR's `sti`.
+
+**What it guards is not the pixels.** The animation writes its own box and
+nothing else on the screen writes there, so two frames racing would at worst
+draw the same picture twice. What it guards is the **VGA's Graphics
+Controller**: `spl_bitmask` arms the Bit Mask and restores it, and `font_run`
+programs the write mode and the Map Mask. An opaque `rep movsb` landing
+between one of those and its restore draws through somebody else's mask — a
+defect that would not repeat the same way twice and that no screendump would
+name.
+
+So the flag is raised at every path that draws while `[spl_live]` is up, and
+the list is closed:
+
+| | why it is on the list |
+|---|---|
+| `spl_tick` | stage 2's entry — chrome and paint |
+| `spl_step` (and `spl_stepq`) | `dsk_xfer`'s per-sector notch, and `kmain`'s |
+| `spl_finish` | the last frame |
+| `spl_reset` | `drv_boot`'s adapter switch — re-chrome, paint, and §15.6's line |
+| `spl_fill` | `SPLCALL splf_fill` |
+| `spl_mdraw` | the single funnel for every `ovl_spl_msg_*`, and it draws through `font_run_x` |
+| `vid_setmode` | it reprograms the card and clears the framebuffer, and for part of that `[vid_seg]` does not describe the mode the card is in |
+
+`vid_setmode` is the one that is not splash code, and it is the reason
+`[spl_busy]` lives in `.text` beside `[spl_live]` rather than with the rest of
+the module's state in `.boot2`: kernel code cannot reach a blob byte through
+DS.
+
+**The lock is a COUNTER and not a flag**, because two of those rows nest:
+`spl_tick` reaches `vid_setmode` through `spl_chrome`, and `spl_reset` reaches
+`spl_mdraw` through `ovl_spl_redraw`. A flag would be released by the inner
+region while the outer one was still drawing, which is the guard silently not
+being there for the rest of the outer call.
+
+`spl_fill` is deliberately **not** on the list. It is a plain `rep stosb` — it
+programs nothing and leaves nothing armed — so it holds nothing the animation
+needs, and its only in-module caller (`spl_bar`) is inside a guarded region
+already.
+
+##### 15.3.8.3.1 The interrupt may not borrow `[spl_fp]`
+
+`sch_isr`'s half was written as `SPLCALL splf_anim` first, and that was wrong
+in a way worth recording because it would have shipped.
+
+`SPLCALL` stages its target in `[spl_fp]` and does the `call far` **two
+instructions later**. An interrupt landing in that window with a `SPLCALL` of
+its own overwrites the word — so the main line's far call goes to the
+*interrupt's* target. The window is a couple of microseconds of every
+`SPLCALL`; a boot makes about two hundred of them, almost all `dsk_xfer`'s
+per-sector notch; and the timer fires 18 times a second through all of it.
+That is **roughly one boot in fifty**, landing the bar's notch on the
+animation instead — silently, and never twice in the same place.
+
+`[spl_ifp]` is `sch_isr`'s own pair. It copies the segment from `[spl_fseg]`
+at call time rather than mirroring it, because that word is written exactly
+twice in a boot — when stage 2 publishes the blob and when `kmain` gives it
+back — and the copy is two instructions. `spl_isr` needs none of this: it
+calls `spl_anim` **near**, being in the same segment.
+
+##### 15.3.8.4 `spl_isr` chains first, then lets IRQ6 through
+
+The ISR chains the BIOS handler **before** it does anything else, exactly as
+`sch_isr` does and for the same two reasons: the BIOS keeps its own tick count
+(which §15.4's boot timer and §15.3.6's angle both read) and it sends the EOI,
+which we must not.
+
+Then it raises `[spl_busy]` and **`sti`s before drawing**. That matters more
+here than in `sch_isr`: the machine we are interrupting is usually the BIOS
+waiting on IRQ6, and a frame is 4 to 12 ms. Drawing with IF clear would hold
+the floppy's completion interrupt off for that long on every tick of every
+transfer. With interrupts back on, IRQ6 is serviced while we draw and the only
+thing our frame delays is itself.
+
+**This is the class of change that passes every emulator and bites one real
+drive**, so it is worth naming what the exposure actually is: no data can be
+lost, because the FDC transfers through the DMA controller and not through the
+CPU, and the tick the BIOS's own timeouts count is incremented by the chained
+handler before we draw anything. What is left is a completion interrupt
+serviced a few hundred microseconds late, which is what `sti` is for.
+
+##### 15.3.8.5 The knob build takes the blob's 14th sector, and only it
+
+`.boot2` was 2,341 bytes of its 2,560 when §15.3.6 landed. §15.3.7's twinkle
+wanted 329 and §15.3.8's ISR another 154, which is 154 more than there was —
+so this section paid for its own first, out of something that should not have
+been there at all.
+
+**The "8088" stroke table was dead.** Nineteen segments of four bytes, 76 in
+all, and §15.3.4's row composer stopped reading it when it replaced the
+segment walker. Nothing referenced `spl_segs` or `SPL_NSEGS`. It survived
+because it is **data**: the tree's unreachable-code check walks code, and dead
+data reads exactly like a table somebody is about to use. Nothing found it
+until this section needed the space.
+
+That leaves the shipped arm at 2,495 of 2,560 — **65 bytes spare, and the
+disk, the boot sector and stage 1's flat 13-sector read all unchanged**.
+
+The `SPLSTARS` arm does not fit, and no amount of moving the split helps: it
+wants **2,824 bytes of `.boot2` and 3,930 of `.ovl`, which is 6,754 of a
+6,656-byte blob**. It is over by 98 *wherever* `OVL_AT` falls. So that arm —
+and nothing else — takes `BOOT2_SECS` = **14**, which is the claim the comment
+above `OVL_AT` has been predicting since §2.9.6. Six sectors for `.boot2` and
+eight for `.ovl` leaves 248 bytes and 166, which is about the room the shipped
+split has, so the knob arm stops being the one that breaks first.
+
+**And the 14th sector is NOT free, which was asserted here before it was
+measured.** The reasoning was 360KB's alone — nine sectors a track, the blob
+starting inside one, the extra sector landing in a run that was going to
+happen anyway — and it is right on that disk and wrong on another. `boot.asm`
+bounds a run at the **track**, and `KERNEL.SYS` starts wherever each geometry's
+BPB puts the data area, so the same `BOOT2_SECS` splits three different ways.
+Read off the loader's own registers at its `int 13h`, on the guest:
+
+| `BOOT2_SECS` | 360KB (data @12) | 720KB (data @14) | 1.44MB (data @33) |
+|---|---|---|---|
+| 13 | 2 calls — 6 + 7 | 2 calls — 4 + 9 | 2 calls — 3 + 10 |
+| **14** | 2 calls — 6 + 8 | **3 calls — 4 + 9 + 1** | 2 calls — 3 + 11 |
+
+**720KB is the tight one, and 13 is exactly its last sector.** The 14th costs a
+whole extra `int 13h` to move **one** sector — 1–2 revolutions, near enough
+400 ms on the field machine, for 512 bytes — which is the worst shape a read
+has. The knob build pays it on that one geometry and the shipped kernel pays
+nothing, but "it changes no disk byte and costs no `int 13h`" was true of two
+disks out of three and was written as though it were true of all of them.
+
+The boundary is worth carrying forward, because the *shipped* blob sits on it:
+
+| | last size that is two calls |
+|---|---|
+| 360KB | 15 |
+| **720KB** | **13 — where the blob is now** |
+| 1.44MB | 17 or more |
+
+`tests/unit/t_blobruns.py` is the ratchet, in the fast tier, and it exists
+because nothing here could have caught this: it walks the runs out of the
+images `make` just built, and `--sectors N` prices a blob the tree does not
+have. MartyPC cannot host a 720KB drive with the ROM sets in this tree at all,
+which is exactly how the boundary was missed.
+
+The Makefile reads the sector count out of this file with a `sed` so the two
+cannot disagree, and it now reads **two** constants: `BOOT2_SECS_STARS` for
+the knob and `BOOT2_SECS` for everything else. The pattern anchors on
+`^BOOT2_SECS  *equ  *<digits>`, which the knob's own line misses on the
+underscore and the `%ifdef`'s line misses on the value not being a number — so
+the shipped 13 stays the one the pattern finds and the override is deliberate
+rather than an accident of ordering. **A boot sector told to fetch 13 sectors
+for a 14-sector stage 2 jumps into a blob whose last sector never landed**,
+which is why the two lookups are worth the ugliness.
 
 ### 15.4 The boot timer
 
@@ -18239,6 +20854,204 @@ not held, exactly as `spl_paint` does not hold it: the UI task does not exist
 yet, the cursor is not shown until after `spl_finish`, and `[spl_live]` refuses
 `spl_mdraw` the moment the desktop owns the screen.
 
+
+#### 15.6.4 …and the two waits BEFORE `drv_boot`, which the hard disk made visible
+
+§15.6 is written about the stretch from `drv_boot` onward, because on a FLOPPY
+boot that is where the remaining seconds are: everything above it happens with
+the bar already at 92% of `spl_total` = sectors + `SPL_POST`, and *moving*. A
+hard-disk boot has no sector notches at all (§2.9.9), so `spl_total` is the
+sixteen post-load notches alone, `spl_done` is 0 when the screen appears, and
+the two longest non-disk phases of `kmain` become the first and second things
+the user ever sees:
+
+| the bar reads | what is happening | how long |
+|---|---|---|
+| **0%** | `mouse_init` — §9.4.1's identify window | 596 ms with a mouse, **1,200 ms** without (§9.4.5) |
+| **6%** | `desk_init` → `dsk_fdd_probe` — §18.97's TRACK 0 question about unit 1 | nothing if the drive asserts TRK0 or the equipment word claims one drive; **1,703–1,758 ms** if it does not |
+
+Neither is new and neither is a defect. The mouse window is §9.4.5's, already
+halved. The floppy probe is §18.97 paying `FDD_MOTORW` (12 ticks) and then
+`FDD_SEEKW` (20 ticks) for a recalibrate whose entire value is that its answer
+can be believed — and §18.98's units 2 and 3 each pay it again, so a machine
+claiming four drives spends it three times. What is new is that both now happen
+under a bar that is **not moving**, at the two lowest numbers it ever shows.
+That is exactly the failure §15.6 exists to answer — *it reads as a hang* —
+arriving one phase earlier than the section was written for.
+
+So the line names them. `Looking for Mouse` and `Looking for Drives` are two
+more zero-argument entries beside §15.6.1's `Loading SYSTEM.CFG` and
+`Starting os8088`, and they are composed **by the caller** — `kmain`, which is
+where the phase boundary is legible and where a reader of the boot sequence can
+see the line beside the call it describes. They cost two `SPLSTUB`s and two
+`OVLGATE` sites; everything else is in the blob and goes back to the heap at
+`spl_finish`.
+
+**Each one goes up AFTER the notch that precedes it, never before.** `spl_mdraw`
+refuses while `[spl_live]` is 0 (§15.6.2) and `spl_mline` is the record of what
+is on the glass — so a line composed before the screen exists is composed, never
+drawn, and never redrawn, because the next composition finds the buffer already
+saying it. That is the composed-but-not-drawn failure `tests/bootstatus.py`'s
+second assertion was written for, and on the hard-disk path it is one line of
+`kmain` away.
+
+**The bar still tells the truth and the line does not fix it.** Five of a
+hard-disk boot's sixteen notches are spent before a sector is read, so 0% and 6%
+are what those phases really are — a denominator seeded from `SPL_POST` cannot
+know that `mouse_init` is a fifth of the wall clock. Naming the phase is the
+cheap half; §15.5's profile is where the case for shortening one is made.
+
+#### 15.6.4.1 The harness built a disk that disagreed with what it asked for
+
+`tests/bootstatus.py` ticks **two** driver rows — Ethernet and the RAM disk —
+because `n/N` with N = 1 cannot tell an ordinal from a total. It failed for
+some time with
+
+    no 'Loading Driver 1/2 (Ethernet)' in [… 'Loading Driver 1/1 (Ethernet)']
+
+on both adapters, and every part of that reads as the **kernel** miscounting.
+It was not. `drv_tab`'s bit map is `0, 1, 4, 2, 3`, so the RAM disk really is
+bit 2 and the test's constant was right; `RAMDISK.DRV` really is on
+`ether360.img`'s file list; and `drv_boot` counted correctly every time. What
+was wrong was the **disk**: it carried a `SYSTEM.CFG` asking for `0x10` where
+the test had asked for `0x14`.
+
+`image()` takes `ether360.img`'s own recipe out of `make -n` and substitutes
+its settings file into it. That recipe is **two** commands — a `python3 -c`
+that writes `build/system.cfg`, then the `os88disk.py` that puts it on a
+floppy — and the substitution was textual, so it hit **both** occurrences and
+ran both: the generator wrote *ether360's* bitmap over the file the test had
+just written, one line before the disk was built from it. Taking the recipe
+whole was right when the settings file was a target of its own; it stopped
+being right the moment the generator moved into this recipe, and nothing
+connected the two.
+
+The fix is to take **only the `os88disk.py` line**. The guard is that `image()`
+now **reads the bitmap back off the finished disk** and refuses to return one
+that does not match — because the entire failure was a disk that did not carry
+what the function was asked for, and no assertion further down the test can
+tell that from the kernel getting the count wrong. That is the shape worth
+remembering: a harness that builds its own fixture needs to check the fixture,
+or its bugs are reported against the thing under test.
+
+#### 15.6.5 …and `Loading Kernel`, for the nine seconds that ARE a floppy boot
+
+The stretch §15.6.4 leaves unnamed is the biggest one in the system, and only on
+a floppy: **9.34 s of an 11.42 s boot is the boot sector reading `KERNEL.SYS`**
+(§18.91.1's profile). The bar moves the whole way, a notch a *run*, so it never
+reads as a hang — but nothing says what is being read.
+
+**§15.6's line cannot say it, and the reason is structural.** That line is one
+`font_run` into the framebuffer (§15.6.3) and `font_run` lives in `.text` —
+which is precisely what stage 2 is reading. `spl_mdraw`'s far call to
+`ovw_font_run_x` is the whole of the dependency, and there is no font either:
+`font_glyphs` is `LOW_SEG` and `font_init` does not run until `kmain`.
+
+##### 15.6.5.1 NOT BIOS teletype, and that is the measurement worth keeping
+
+The obvious answer is the one the rest of this screen already uses — `int 10h`
+AH=0Eh, like the `Welcome to os8088.` caption and the percentage. **It was
+built that way first, and it costs 40 ms a character.**
+
+Measured on `os8088_xt_vga`, `tools/os88boot.py`, against the same tree without
+the line — and *linear*, which is what makes it a rate rather than an anecdote:
+
+| the caption | the loader's own phase | delta |
+|---|---|---|
+| none | 3,752.0 ms | — |
+| **one** character | 3,792.9 ms | **+40.9 ms** |
+| fourteen characters | 4,309.4 ms | **+557.4 ms** (39.8 each) |
+| …and blanking it again | 4,827.0 ms | **+1,075 ms**, a whole-boot 21,959 → 22,959 |
+
+**Eleven per cent of the read, spent saying what the eleven per cent was
+doing.** `splash.inc`'s own contract is that it never slows the load down, so
+that is not a trade to make — and the same rate prices what is *already* here:
+`spl_pct` teletypes four characters a tick and stage 2 ticks once per `int 13h`
+run, about sixteen of them, so **the percentage alone is ~2.5 s of a VGA
+boot** — near enough two thirds of everything the splash draws. That is a
+standing finding, not this section's to fix. (§15.3.2 fixed it.)
+
+**Where the 40 ms goes**, because ~191,000 cycles to draw one 8x16 glyph reads
+like a bug on our side of the call. It is not: `spl_print` was one `int 10h` a
+character and nothing else. Breaking on `int 10h` under MartyPC and
+differencing the cycle counter prices the teletype at **189,700 cycles /
+12,030 instructions**, and `AH=02h` — set cursor, no drawing — at **4,900**, so
+all of it is the glyph. Of 317 IP samples taken inside one call, **316 are in
+the video BIOS at `C000`**, in two clusters, and the bytes name both. MartyPC's
+bundled ROM is the **Bochs VGABIOS**, whose `write_gfx_char_pl4` walks the
+character a **pixel at a time**:
+
+| `C000:5140` | `outw(0x3CE, mask<<8 \| 8)` | arm the Bit Mask | per pixel |
+|---|---|---|---|
+| `C000:5153` | `read_byte(0xA000, dst)` | load the latches | per pixel |
+| `C000:5177` | `write_byte(0xA000, dst, attr)` | ...and store | per pixel |
+
+and each of those three is a compiled C stub with a full stack frame:
+`read_byte` at `C000:7B49` is **eleven instructions to fetch one byte**
+(`push bp` / `mov bp,sp` / `push bx` / `push ds` / two `mov`s / `mov ds,ax` /
+`mov al,[bx]` / three pops / `ret`), `outb` at `C000:7BB6` is **nine to issue
+one `out dx, al`**. 128 pixels x ~94 instructions is the 12,030, and at the
+8088's ~15.8 cycles for a memory-operand instruction that is the 189,700.
+
+**A per-pixel read-modify-write is what a VGA BIOS does in a planar mode** —
+it is the only way to touch one pixel through the Bit Mask — so the IBM ROM
+86Box runs measures the same 40 ms, and there is no version of this call that
+is cheap. The fix is not to make it (§15.3.2).
+
+##### 15.6.5.2 The glyphs are blitted, and that is why all three adapters get it
+
+`spl_text` walks the string and `spl_wrbyte` writes each row — the bar's own
+pair (§15.3), a bit mask and a latched store on VGA and an OR on a 1bpp
+adapter. Eight byte-stores a character against the BIOS's 40 ms, and it draws on
+**all three adapters**: the mono splash has carried nothing but the bar since it
+existed (§15.3's dialog, percentage and spinner are VGA-only), and it carries
+this. **Measured at +13.9 ms on the loader's phase, with the boot's total
+unchanged at 21,959.1 ms** — it disappears into the disk waits, which is the bar
+about which the whole module is written.
+
+The typeface is the **ROM 8×8 set**, asked for exactly as `font_init` asks
+(`int 10h AX=1130h BH=03h`, falling back to `F000:FA6E`) — the BIOS being the
+one thing that is resident this early. `BAKED_FONT` would put a copy in the
+blob and is not an option: it is a knob (`FONT=`), and a shipped kernel has no
+baked typeface. The eight rows are buffered into `.boot2` a character at a
+time because three segments are live and only two can be read through — ES is
+the framebuffer and DS is the kernel's, which `SPL_NEXTROW` needs.
+
+**It needs no erase, and that is a consequence of the renderer rather than
+luck.** A teletype cell is 16 rows and `font_run` draws 8, so the teletype
+version had to be blanked at the handover or its bottom half survived under
+`Looking for Mouse`. A blitted 8×8 line is the same eight rows at the same
+origin, and §15.6.4's first line — padded to `SPL_MSG_CELLS` — covers it
+exactly. `boot/boot2.asm` is untouched.
+
+It lands in **§15.6's own field**, so the boot has one place where it says what
+it is doing: `spl_mgeom` puts that at x = (`vid_cw` − 32×8)/2 floored to a byte
+and `SPL_MSG_Y` on VGA, `vid_ch`/2 + 16 on a mono adapter. `splash.inc` is
+`%include`d **above** `vidsel.inc`, so it carries its own `SPL_KCELLS` /
+`SPL_KY` and `vidsel.inc` **asserts them equal** — a geometry that must agree
+and is written twice is what a build check is for, not a comment.
+
+**Raised from `spl_tick` and not from `spl_chrome`**, which is §2.9.9.2's
+distinction one routine along: `spl_rechrome` shares `spl_chrome`'s body and
+`spl_step`'s start path enters there, and on a hard-disk boot nothing is loading
+a kernel.
+
+It cost **233 bytes of `.boot2`** (1,636 → 1,869 of the 2,048 `OVL_AT` allows;
+§15.3.2 took it to 1,882),
+and **nothing anywhere else**: `.text`, `.ovl` and `KERN_SIZE` are unchanged,
+and the blob is a fixed 13 sectors, so stage 1 still reads it in the same two
+`int 13h` calls. 179 bytes were left there, and §15.3.4 is the claim that took them: `OVL_AT`
+is 2,560 now.
+
+##### 15.6.5.3 The bug: a glyph drawn at the right address, eight rows early
+
+`spl_kglyph` spends DI (it is the buffer cursor) and `spl_text` restored it
+**after** the row loop instead of before it — so every glyph was written at
+`ES:spl_krow+8`, a few bytes into the framebuffer, and the field stayed black.
+It reads as *nothing drawn*, which sends you looking at the mask, the latches
+and the font pointer; a solid `spl_fill` at the same DI proved the address and
+a constant row pattern proved the mask, and only then was the register the
+suspect. The cell rides in **BP** now, across both the fetch and the eight rows.
 
 ## 16. Build & test
 
@@ -19554,7 +22367,11 @@ its own window resident costs **nothing at all**: 45 mounts, 3 loads.
 private copy buys nothing and would cost 4.5KB twice on every machine, hard
 disk or not. And **a refused claim is not an error** — the volume shares the
 window below the stacks and behaves exactly as it did before this existed,
-which is §50's rule and the reason this was safe to want.
+which is §50's rule and the reason this was safe to want. (§18.8.2 answers
+the first half — what costs is the *reload*, not the window moving — and
+§18.8.3 the second: sharing became **pinning**, so "shares the window below
+the stacks" now means one volume holds it and the next one to need it takes
+it away.)
 
 Four things hold it up:
 
@@ -19588,7 +22405,10 @@ BPB(1) + **FAT(9)** + directory(1) + `ASSOC.DAT`(1), and the icon harvest —
 the thing that looks expensive — is already answered from §54.7's per-volume
 icon cache without reads. The FAT *is* the mount.
 
-`dsk_fatw_want` claims one at mount time for volumes 0 and 1. Four things:
+`dsk_fatw_want` claims one at mount time — for volumes 0 and 1 when this
+was written, and since §18.8.3 for **every** volume, a driver-backed one
+included, which is also where its refusal stopped being permanent. Four
+things:
 
 - **The gate is 128KB of FREE HEAP**, not the 4.5KB the claim needs. This is
   a comfort, and a machine short of memory should spend what it has on the
@@ -19596,8 +22416,10 @@ icon cache without reads. The FAT *is* the mount.
 - **Retried at every mount rather than latched**, so a machine that frees the
   heap later gets its window. One `mem_avail` walk (~1,000 cycles) against a
   floppy mount measured in seconds.
-- **A refusal is a normal path** (§50): the volume shares the window below
-  the stacks and behaves exactly as it did before this existed.
+- **A refusal is a normal path** (§50): the volume takes the kernel's own
+  window instead, evicting whoever held it (§18.8.3). Before §18.8.3 it
+  *shared* those bytes with every other refused volume and reloaded them on
+  every mount.
 - **The three arrays moved to `.text` with real initialisers**, and that is a
   latent-bug fix rather than tidiness. `dsk_fatwc` was `.bss`, `-f bin` zeroes
   no `.bss`, and `dsk_fatw_pick` reads that word **as a segment** — so volumes
@@ -19647,6 +22469,199 @@ The last row is 18.4.3 arriving from `elendilon` and **composing**: this
 window removed the FAT re-read at the switch, `dskw_find` keeping its entry
 removed the directory re-read at the open, and they are different sectors, so
 the wins add rather than overlapping. Nothing here had to change for it.
+
+### 18.8.3 …and the kernel's own window is one of them, PINNED
+
+`FAT_SEG` was a **fallback**: 4,608 bytes reserved on every machine, used by
+whatever volume had no claim of its own, owned by nobody. On a machine where
+every mounted volume won its claim — which is every machine with 128KB of
+free heap, so most of them — those bytes were **read and written by nothing
+at all** while the same 4,608 bytes were bought again out of the arena.
+
+So it becomes a **pin**. One volume holds `FAT_SEG` at a time, recorded in
+`dsk_fatwc[v]` exactly like a heap claim, and `dsk_fatw_want` tries it
+**first** — before the heap, and with no gate, because it is already paid
+for. The next volume that needs a home and cannot fund one out of the heap
+**evicts the pin and takes it**, which is precisely what would have happened
+to those bytes anyway when a claim was refused.
+
+**There is no third state.** `dsk_fatw_want` returns with the mounting volume
+holding a claim or holding the pin, never neither — and that is the whole
+safety argument, because `dsk_fatw_pick` points a homeless volume at
+`FAT_SEG` and mounts into it *without demoting whoever thinks they hold it*.
+The victim's `dsk_fatww[v]` would still say "sector N resident" and its next
+quiet mount would reuse bytes belonging to another disk. §18.8.2's signature
+does **not** catch that one: A: and B: both holding os8088-built floppies of
+the same geometry have byte-identical boot sectors by construction, and that
+is the commonest machine there is. `dsk_fatw_pick` therefore evicts on its
+own homeless path too, so the invariant is enforced where it is *used* and
+not only where it is established.
+
+**One claim's worth of the machine's memory, back.** 5,120 bytes of arena on
+any machine that funds a window at all. Kernel and heap are the same RAM —
+`KERN_BUDGET` exists to stop the kernel spending it carelessly, not to make a
+byte inside the budget cheaper than a byte outside it — so a reserve that is
+always there and always unused is the same waste wherever the ladder puts it.
+
+Measured, `MEM_P_FATW` records live in `mem_tab` on the 360KB pair, booting
+to the desktop and then opening drive B: — the same machine and the same two
+actions either side (`tests/fatwpin.py`):
+
+| | at the desktop, A: only | …and after B: opens |
+|---|---|---|
+| the fallback | 1 heap window | 2 |
+| **the pin** | **0** | **1** |
+
+One claim fewer at both points, and the row that matters is the first: a
+machine sitting on its desktop having touched one volume now holds **no FAT
+window in the arena at all**. It costs **81 bytes** of `.cold`.
+
+**The part that is free is worth more than the part that is saved.** Taking
+the pin costs nothing, so it is not gated: a machine *under* §18.8.2's 128KB
+comfort gate now gets one volume with a **banked, reusable** window, where
+before it got none. `dsk_fatw_pick` refuses to reuse whenever `dsk_fatwc[v]`
+is 0, so every no-claim volume reloaded all nine FAT sectors on every mount —
+the mount invalidates the window itself (`[dsk_fatw0]` = 0xFFFF) and only a
+banked claim restores it. That reload was the whole remaining cost of a
+volume switch (§18.8.2: ~12 sectors of which the FAT is 9), and on the
+smallest machines it is now gone for the pinned volume.
+
+Four things hold it up:
+
+- **Only a mount may take or move the pin.** `osapi_vol_add` still claims
+  heap or nothing: it is not a mount, so there is no `dsk_fatw_park` in front
+  of it, and grabbing the pin there could take a **dirty** window away from
+  the volume that is currently mounted. A driver volume refused at `vol_add`
+  is homeless until its first mount, where `dsk_fatw_want` gives it the pin
+  or a retried claim.
+- **The victim is never dirty, and never the volume being mounted.**
+  `dsk_fatw_park` flushes the outgoing volume at the top of every mount, so
+  any volume that is not current has a clean window; the volume being mounted
+  already has a home and never reaches the steal. Both facts predate this and
+  neither had to change.
+- **`dsk_fatw_want` now runs for every volume**, not just 0 and 1. The
+  `bl >= 2` early-out was correct while driver volumes could only claim at
+  `vol_add` — and it meant a driver volume refused there **never retried**,
+  where a floppy retried every mount. That was already the wrong asymmetry.
+- **The pin is not a claim and must not be freed as one.** `dsk_fatw_drop`
+  refuses `mem_free` for `FAT_SEG`. It happens to be harmless today —
+  `mem_free` scans `mem_tab` for `MC_SEG` = DX and no record can hold a
+  segment below `HEAP_SEG` — but that is a coupling to the ladder's layout,
+  not a contract. `dsk_fatw_reloc` needs no such guard for the same reason
+  stated the other way round: it scans **by value** for a base that moved, and
+  a heap base can never equal `FAT_SEG`, so the pin is invisible to it.
+
+**Degradation is exactly today's behaviour.** Two volumes, no heap for
+either: each mount evicts the other and reloads nine sectors — which is what
+a no-claim volume has always cost. The pin can ping-pong; it cannot lose data
+and it cannot be slower than the fallback it replaces. `FATWNONE=1` builds
+that machine on purpose and `FATWGATE=<KB>` moves §18.8.2's gate, so both the
+steal and the ping-pong are reachable from a test rather than only from a
+small machine.
+
+### 18.8.4 A FAT window is a CACHE, so the machine may take it back
+
+§18.8.2 gated a floppy's window on **128KB of free heap**, and called that a
+comfort: "a machine short of memory should spend what it has on the user's
+application". That is the right instinct and the wrong mechanism. A window
+the machine cannot take back has to be refused *in advance*, on a guess about
+what the session will need — so the machines that would gain most from one
+never get one, and the machines that get one hold it through every shortage
+afterwards. **"Some use" is worth more than "never taken"**, and the way to
+have both is to make the window purgeable (§50.6) rather than to guess.
+
+`MEM_P_FATW` is `MEM_PG_MED`, one owner word per volume (`0x20`…`0x27`, a
+RANGE like `MEM_P_WSAVE`).
+
+**It was LOW for one commit, on a cost that was measured wrong, and the error
+is worth writing down because it is the easy one to make about any cache.**
+LOW was argued from *one* rebuild: nine sectors, one coalesced `int 13h` run,
+~400 ms. But a window is not lost once — a shed volume falls back to the pin,
+only one volume can hold that, so two volumes that alternate **evict each
+other and reload nine sectors a switch** for as long as the window is gone.
+§18.8.1 measured exactly that state: **45 mounts, 45 loads, 405 of 873 sectors
+on the reference copy**, against 3 loads with a private window. That is ~17 s
+of a nine-file 175KB copy, and it scales with the workload. "Seconds of work
+the user waits through" is `MEM_PG_MED`, and the ~400 ms figure was a
+*per-event* cost being compared against `MEM_P_DIRW`'s *whole-install* one —
+which made the gap look like 200x when it is about 5x.
+
+`MEM_P_DIRW` stays above it at HIGH and is still the dearest cache in the
+system: 316 `int 13h` calls against 114 on an install (§18.95), ~81 s. So the
+order is `WSAVE` (TRIV, one window redraws) < `FATW` (MED) < `DIRW` (HIGH),
+and none of it rests on which of them happened to be unpurgeable first.
+`MEM_LVL_TOP` is not a rank above HIGH — it is the *absence* of a rank, shared
+with every package image and document on the machine — so "it used to be held"
+was never a judgement that a FAT window outranked the directory window.
+
+**The gate asks at that rank too**, which is `dsk_rah_want`'s rule and now
+ours: a cheaper cache counts as free and a dearer one does not. So a FAT
+window may take the **window raise caches** — one window redrawing when it is
+raised, which is what every window did before §11.96, against ~17 s of reloads
+— and `MEM_P_DIRW` may quietly have this. It asked at `MEM_PG_MIN` for one
+commit, counting *nothing* as free, which made the window more timid than its
+own rank entitles it to be.
+
+**The purge protocol carries ONE naming word and a FAT window has more.**
+`mem_pg_own` maps an owner to the single word `mem_pg_forget` zeroes, and
+zeroing it *is* the notice. `dsk_fatwc[v]` is that word and the array is
+already the right shape. But when the block being shed is the **live** window,
+two more words describe it: `[dsk_fatseg]`, which every access reads, and
+`[dsk_fatw0]`, which says which sector is resident. Left alone they are not
+merely stale — `dsk_fat_window` reads `[dsk_fatw0]`, finds the sector it wants
+already resident, **returns without loading**, and the FAT reads and writes
+then land in whatever claim now owns those paragraphs.
+
+So a FATW owner is handed to `dsk_fatw_demote` instead of being zeroed, and
+what that routine does is the whole of §18.8.4:
+
+- a **banked** window is the simple case — `dsk_fatwc[v] = 0`, and no other
+  word names it. The volume is homeless, which §18.8.3's `dsk_fatw_want`
+  resolves at its next mount: the pin if it is free, a fresh claim if the heap
+  will fund one, the pin taken from its holder otherwise.
+- the **live** window hands the volume the pin as it goes: evict whoever holds
+  `FAT_SEG`, `dsk_fatwc[v] = FAT_SEG`, `[dsk_fatseg] = FAT_SEG`,
+  `[dsk_fatw0] = 0xFFFF`. The bytes are gone either way; what the demote
+  preserves is the **home**, so §18.8.3's "there is no third state" survives a
+  shed and no volume is ever left using the kernel's window without holding it.
+
+**The contents are dropped and that is the design, not a compromise.** A
+transfer into `FAT_SEG` would preserve them — 4,608 bytes is 12.07 ms of
+`rep movsw` on a 4.77MHz 8088 against the ~400 ms reload it saves, so the
+arithmetic is inviting. It is refused on **where** it would have to run:
+`mem_shed_one` holds `cli` from end to end, a byte at 1200 7N1 is 7.5 ms and
+the 8250 has no FIFO, so a 12 ms hold drops one and a half mouse bytes on
+every shed. §7.1.4.3 already measured what a delayed IRQ4 does here — pointer
+stutter in 16 of 56 lock holds — and doing it deliberately is worse than
+re-reading nine sectors. Moving the copy out from under that `cli` means
+giving `mem_claim`'s scan-and-publish a drop-out point, which is a change to
+§50.6's contract for one owner. Not worth it for the reload it saves.
+
+**Dirty is refused, not dropped.** `mem_fatw_dirty` is the one guard, and it
+has `mem_in_xfer`'s shape for `mem_in_xfer`'s reason — two callers that must
+not drift, `mem_shed_one` and `mem_cp_drop`. A shed of a dirty window throws
+away FAT edits that never reached the disk, which is a half-built chain lost
+rather than nine sectors re-read. **Only the live window can be dirty**:
+`dsk_fatw_park` flushes the outgoing volume at the top of every mount, so a
+banked window is clean by construction. And the guard is belt to
+`dskw_flush`'s braces rather than the only thing standing there — a demote
+sets `[dsk_fatw0] = 0xFFFF`, and `dskw_flush` already refuses a dirty range it
+has no resident window to read out of.
+
+**It costs bytes back.** `mem_can_move` refuses a purgeable cache outright
+(§50.6.1), so `dsk_fatw_reloc` and the `mem_movable` beside it were dead the
+moment this landed, and both are deleted. §66.5.6 wanted the window movable
+because it was the first bottom-up claim of the boot and would otherwise wall
+in the arena floor; that reasoning is spent twice over — the compactor's
+`mem_cp_drop` dissolves a cache instead of moving it, which is the same
+outcome by a cheaper route, and since §18.8.3 the boot volume takes the **pin**
+rather than a claim, so there is no first bottom-up claim to wall anything in.
+
+**And the gate comes down with it.** `DSK_FATW_MINK` goes from 128KB to twice
+the claim, keeping `mem_avail_lvl`'s bottom-rank test so the window is still
+only taken out of memory that is free without shedding anybody. What the
+number was defending is now defended by the tag: a machine that needs the room
+back takes it.
 
 ### 18.9 A volume switch is not a mount
 
@@ -21168,6 +24183,79 @@ the 5150 has one drive and a second disk is a swap and a reboot in the middle
 of every batch). A knob in `FIELDKNOBS` that will not assemble is the field
 programme stopped.
 
+#### 18.95.5 …and the width is chosen from the machine, not from the constant
+
+§18.95.4 settled `DSK_RAH_RUNS` = 14 as a **ceiling** — one 16-bit offset from
+`dsk_rah_seg`, so `RUNS × SECS ≤ 128` — and then claimed exactly that or
+nothing. That last word is what this section removes. The claim is gated on
+`mem_avail` reporting **twice** its size, so the bar was **126KB of a free
+run**, and §18.95.4 already named the cost: *"what it costs is the machines
+that never get the cache… the band between them is the loss."*
+
+**The band is most of the machines this OS is for, and the curve says the
+cache did not need to be that big.** §18.95.4's own simulation against the
+install trace, against a 316-call baseline with no cache at all:
+
+| slots | KB | install `int 13h` | share of the 223 calls the ceiling saves |
+|---:|---:|---:|---:|
+| 1 | 4.5 | 156 | 72% |
+| 2 | 9 | 123 | 87% |
+| 4 | 18 | 108 | **93%** |
+| 8 | 36 | 102 | 96% |
+| **14** | **63** | **93** | 100% |
+
+The first 4.5KB buys 72% of it and **the last 27KB buys 4%**. So the width is
+solved for instead of fixed: `n = largest_free_run ÷ 9`, capped at
+`DSK_RAH_RUNS` and floored at `DSK_RAH_MIN`, which is **exactly the old rule
+with the size as the unknown** — 2 × n × 4.5KB ≤ free is 9n ≤ free, and n = 14
+still wants the same 126KB it always did. A 640KB machine is unchanged; a
+machine with 40KB of free run gets four slots instead of nothing.
+
+**Only the round-robin bound had to become dynamic.** `dsk_rah_flush` still
+clears all `DSK_RAH_RUNS` records — 126 bytes of `.bss`, already paid, and
+clearing slots that no memory backs is free — which is what makes every other
+loop safe: `dsk_rah_take` never writes a slot at or above `[dsk_rah_runs]`, so
+the ones above it hold `RAH_N` = 0 for ever and every scan skips them. The
+scans read the live count anyway, for the cycles rather than for correctness.
+
+**There is no grow path and there does not need to be one.** Every claim sizes
+itself from what is free at that moment, and the cache is purgeable (§50.6),
+so a shed under pressure is followed by a re-claim at the next mount that
+re-sizes to whatever the machine has by then. The only state a grow path would
+reach is "claimed small, never shed, memory freed since" — and the first mount
+of the boot happens on an empty heap, so that machine got the ceiling already.
+
+**Measured, and the machines to measure it on had to be built.** Every config
+in this tree was either 640KB — which picks the ceiling and says nothing about
+the range — or a 128KB one needing a period ROM the tree does not fetch. So
+`tools/martypc/configs` gained two GLaBIOS machines that differ from the
+reference in their `[machine.memory]` and nothing else:
+
+| machine | heap | slots | claim | slots need |
+|---|---:|---:|---:|---:|
+| `os8088_5150_cga_gla` (640KB) | 524KB | **14** | 64,512 B | 64,512 B |
+| `os8088_5150_gla_192k` | 76KB | **7** | 32,768 B | 32,256 B |
+
+Seven slots and a 32KB claim on the machine that used to get **nothing at
+all** — that is the whole of §18.95.5 in one row, and by §18.95.4's table it
+is ~96% of what the ceiling saves for half the memory.
+
+**`DSK_RAH_MIN` = 4 is a floor that could not be measured here**, and it is
+worth saying so rather than implying otherwise. A small cache loses
+proportionally more of itself to the walk's own metadata — `sysbench` reports
+the effective width as **12 against a compiled 14** (§18.95.4), because a
+directory sector and the FAT window's loads take slots too and that overhead
+does not shrink with the cache — so four slots is reasoned from that
+overhead's size, not measured against it. The 128KB machine that would sit
+under the floor **does not reach a desktop at all**, before this change or
+after it (`os8088_5150_gla_128k` exists to re-run that), so the floor's own
+case is unreachable here and wants a field machine.
+
+`tests/unit/t_dirwsize.py` is the ratchet, and it checks the consequence a
+sample cannot: that `kb × 1024 ≥ n × chunk` at **every** width the machine can
+pick, because a claim one slot short puts `dsk_rah_fill`'s last transfer
+outside it.
+
 ### 18.96 Formatting a floppy — the mount's verdict, run backwards
 
 A disk that reads perfectly and is not a FAT12 volume had exactly one thing
@@ -21763,6 +24851,52 @@ scripted Restart, a host-driven `SEEK` to cylinder 20 through the emulated
 recalibrate then answers `71` on the reporting machine is the 5150's
 question**, and the probe already publishes what it saw: §57.5's `'FD'`
 block, which `tests/sysbench` prints. `make FDDPROBE=0` is the A/B.
+
+### 18.97.5 The motor wait moves to the only path that can remove a drive
+
+**§18.97's own comments say only a machine heading for the absent verdict ever
+pays `FDD_MOTORW` and `FDD_SEEKW`, and a hard-disk boot proves otherwise.**
+Measured on the field 86Box XT, `MOUDIAG=1` reading §57.5's block, the same
+machine and the same drive B two ways:
+
+| | `ST3` motor off | `ST3B` after seek | `ST0` | step | cost |
+|---|---|---|---|---|---|
+| floppy boot | **`39`** — TRK0 | `FF` — never read | `FF` | 1, fast exit | **1 tick** |
+| hard-disk boot | `29` — no TRK0 | **`39`** — TRK0 | **`20`** | 2, `SEEKOK` | **32 ticks** |
+
+The drive is present, the controller answered normally — `ST0 = 20` is IC 00
+with seek end and **EC clear**, §18.97.3's own proof of presence — and the
+recalibrate reached track 0. The *only* reason the hard-disk boot pays 1,758 ms
+is that **nothing had touched the FDC**, so the head was not already at track 0.
+The fast path is an accident of having just booted off a floppy, and on a
+machine that boots from its hard disk it never fires. That was **1,782 ms of a
+3,790 ms boot — 47% of it**.
+
+**So the motor moves to `.lastchance`, which only the removal path reaches.**
+Step 1 is unchanged. Step 2 now recalibrates with the motor still off and takes
+the same three verdicts off `ST3B` and `ST0`; a drive that proves itself there —
+which is every present drive — is done. Only a machine whose `ST0` says `7x`
+for its own unit, the one about to lose its row, spins up and asks again.
+
+**And it RE-READS ST3 rather than re-stepping**, which is what makes this cost
+nothing on the machine the probe exists for. The recalibrate has already run and
+the head is wherever it left it; the hypothetical the motor defends against is a
+drive that **gates its TRK0 REPORTING on its spindle**, not one that cannot
+reach track 0 — so a second `RECALIBRATE` would spend another `FDD_SEEKW` to
+answer a question the first already asked. `ST3B` carries the read the verdict
+was actually taken on, which is what §57.5's *ST3 after seek* should mean.
+
+| | before | after |
+|---|---|---|
+| present, head at track 0 (floppy boot) | 0 | **0** |
+| present, head elsewhere (hard-disk boot) | 32 ticks | **20** |
+| absent — the 5150 (§18.97.1) | 32 ticks | **32** |
+
+**No machine pays more than it did**, which was the constraint: the one machine
+this probe exists for is the one whose drive B is genuinely absent, and it must
+not be the one that pays for the change. §18.97.2's tier rule, §18.97.3's ST0
+evidence and §18.97.4's absence test are all untouched — this moves *when* the
+motor spins, not *what is concluded*.
 
 ### 18.98 The third and fourth floppy — a row, and nothing else
 
@@ -24539,7 +27673,12 @@ Two teardown corollaries, both about not trading a crash for a leak:
    `osapi_set_color`, `font_*`, `wm_content`, `wm_obscured`,
    `wm_clip_set`/`wm_clip_clear`, `osapi_video`,
    `osapi_get_ticks`, `osapi_mouse`, `osapi_srand`/`osapi_rand`,
-   `task_sleep`, `task_yield` and `OSAPI_TASK_ALIVE`. `osapi_set_color`
+   `task_sleep`, `task_yield`, `OSAPI_TASK_ALIVE` and `wm_saveu`.
+   **`wm_saveu` comes with `osapi_set_color`'s condition** and for a sharper
+   version of its reason: the clear path calls `mem_free` on the raise cache,
+   so a worker that withdraws the promise outside a lock hold can free a
+   buffer the UI task is blitting out of. Inside one it is exactly what
+   `wm_clip_set` already does from a worker on every frame. `osapi_set_color`
    comes with a condition, and it is the same one that makes `gfx_*` safe:
    `[gfx_color]` is a *single global with no owner*, so a worker may set it
    only inside the same lock hold as the drawing it colours. Setting it
@@ -26666,6 +29805,71 @@ Cost: `.text` **+0**, `.bss` +0, `.cold` **+8** — no rung crossed on either
 kernel, the footprint unmoved, and the cold rung's slack 213 → 205 bytes.
 `tests/assocopen.py` is the gate.
 
+#### 22.13.3 …and a command that DID change the window has to survive the test
+
+§18.99.8's Save box gave `fm_onkey`'s editor path a step it had not had:
+
+```
+    call fm_editkey
+    cmp word [fdlg_win], 0      ; did THIS keystroke put a modal dialog up?
+    jne .out
+    jc .redraw                  ; ...it changed the listing or the mode
+```
+
+The test is right and the placement was not. **`cmp word [mem], 0` writes
+CF**, and against zero it writes it the same way every time: an unsigned
+subtraction of 0 can never borrow, so the carry is **always clear** by the
+time the `jc` under it is reached. `fm_editkey`'s answer — the one thing that
+says whether this keystroke changed the listing — was destroyed one
+instruction after it was returned, and the branch that reads it has been dead
+code ever since.
+
+What that costs is every *committing* keystroke in the file manager falling
+through to `fm_status_only` instead, which draws **one line** and answers
+CF = 0:
+
+  * **Delete**, confirmed with the second `Del`, deleted the file and left
+    its row on the glass. `fmv_bcast` had already replaced the window's cache
+    (§22.1), so the pixels and the listing disagreed — the hit-tester
+    resolving a row the painter is still showing is the exact state §22.8
+    exists to prevent, and here it was reached with no refresh debt recorded
+    anywhere, because the window had been *told* it was about to be redrawn.
+  * **Rename** stored the new name under the old one.
+  * **New Folder** created a folder that did not appear.
+
+Reproduced under MartyPC with a breakpoint on `fm_repaint` — the instrument
+`tests/assocopen.py` uses, and for its reason: it costs the shipped kernel
+nothing. Confirming a delete of `B:\APPS\ARTFUL.O88` did **not** reach it,
+while the window's own cache came back without the file.
+
+The answer is banked before the compare and read after it — `sbb bx, bx`,
+which is 0 or −1 and needs no second byte anywhere. BX is pushed at the top
+of `fm_onkey_x` and nothing on this path reads it. The dialog test stays
+exactly where it has to be, between the keystroke and the drawing: a window
+that repaints itself here would paint over the dialog the keystroke has just
+opened, which is what §18.99.8 put it there for.
+
+**Reconnecting a branch nothing has read for a release means auditing what it
+now reaches**, and one of `fm_editkey`'s answers was wrong in the safe
+direction. Four sites refuse a *character* — the twelfth one typed, a leading
+dot, a second dot, anything outside the FAT set — and all four answered `.out`,
+"the caller owes the whole window", when a refused character has not moved a
+pixel. That cost nothing while the branch was dead and would have cost a full
+`fm_repaint` every time a rename prompt was typed a comma. They answer
+`.lineonly` now, which is what an *accepted* character answers: the prompt is
+on the status line and the status line is all that can have changed. So this
+adds exactly the repaints the window is owed and not one more — the rule
+§22.13 is named for, applied to its own fix.
+
+Three of the restored repaints are bugs in their own right, and the third is
+one that had already been found and written down. `Rename` stored the new name
+under the old one; `New Folder` created a folder that did not appear; and
+`Esc` on a **two-line** prompt took `.cancelfull`, whose whole purpose is that
+one status line cannot erase a prompt whose first line is up in the row area —
+so `Format B: as 360K?` stayed on the row above it for the rest of the
+session, which is docs/FIELD-NOTES.md 17.1 exactly, reported off the field
+once as the prompt not clearing and once as corruption over it.
+
 ### 22.14 The Disk window keeps §11.96's promise, and `fmv_store` is why
 
 Drag a window over a Note Pad and off again and the Note Pad does not
@@ -27194,6 +30398,55 @@ documented fallback and not an error: the window then paints from the global
 snapshot at the cost of the floppy I/O it would otherwise have avoided. A
 machine with only floppies never pays for the bigger cache, because nothing
 ever asks for it.
+
+#### 22.6.1 …and a window's cache keeps the shape it was FILLED with
+
+`[dsk_nmax]` is a fact about **the volume mounted last**, and for as long as
+`fmv_iofs` was the only answer to *where do the icons start* it was read as a
+fact about **the cache being painted**. Those are the same word on a machine
+with one kind of volume and two different words on every other:
+
+  * a floppy's cache is `VIEW_KB` = 3KB — 32 entries at 0, 32 icon slots at
+    **1024**;
+  * a hard disk's is `DSK_VKB` = 6KB — 64 entries at 0, 64 icon slots at
+    **2048**.
+
+`fmv_reload_all` (§22.3) mounts **every** Disk window's volume in turn and
+`fmv_repaint_all` then repaints **all of them**, so after any Cut/Copy/Paste —
+a drag and drop included (§22.4) — `[dsk_nmax]` names whichever window the
+walk of `inst_tab` ended on and every other window paints its icon column
+from the wrong base. Measured on `os8088_xt_hdd` with a Disk window on `C:`
+and one on `B:\APPS`, one file dragged from the floppy into the hard disk:
+the hard disk's window came back with its names, its sizes, its header and
+its status line all correct and **every icon a block of vertical stripes** —
+its own directory entries, read at 1024 instead of 2048 and drawn as a 16×16
+bitmap. The other direction is quieter and worse to diagnose: a floppy
+window painted at 2048 reads slot *i+16*, which in a folder of a dozen files
+is the blank tail of its own icon area, so every row falls back to
+`ico_app16` and the window merely looks like it has forgotten what its files
+are. Either way the report is *"the window refreshed correctly and lost all
+of its icons"*, because the icon base is the **only** thing in the paint path
+that was still being read off a global.
+
+So the shape is **recorded per window** now. `FS_IOFH` is the high byte of
+that offset — the low byte is always zero, because the offset is `nmax × 32`
+and both caps are multiples of 8, and `files.inc` asserts that at assembly
+time rather than trusting it. It is written by `fmv_store`, which is already
+"THE ONE PLACE A WINDOW'S LISTING IS REPLACED" (§22.14) and therefore the one
+place that knows the shape it has just written; `fmv_viofs` reads it.
+`fmv_iofs` still answers for the **global** snapshot and still has exactly
+the two callers that mean the global: `fmv_store`, which is copying it, and
+`fmv_copy_in`'s no-cache fallback, which is reading it. A window with no
+cache of its own stores `FS_IOFH` = 0 and `fmv_viofs` defers to `fmv_iofs`,
+so the two halves of that fallback cannot disagree about a base.
+
+**It cannot be derived from `FS_VKB`**, which was the first fix tried and is
+worth writing down because it looks right: `fmv_fit` only ever GROWS the
+claim, so a window that has visited a hard disk keeps its 6KB cache when it
+goes back to a floppy and then holds a 32-entry listing in a 64-entry claim —
+which is precisely the disagreement this section is about, moved one field
+along. The byte costs nothing: it is `+15`, the second of the two `FS_FERR` /
+`FS_LDST` holes §59.5 left behind, and `FS_SIZE` does not move.
 
 ### 22.7 The status line's resting state — this folder's size, this volume's free space
 
@@ -31878,7 +35131,7 @@ decoded from `CLS_OWN`:
 | `MEM_K_SAVE` | `MenuSav` | the menu save-under |
 | `MEM_K_DRV` | `DrvImg` | a loaded driver |
 | `MEM_K_COPY` | `CopyBuf` | the file manager's copy buffer |
-| `MEM_K_FATW` | `FATwin` | one volume's FAT window |
+| `MEM_P_FATW` + volume | `FATwin` | one volume's FAT window (a RANGE, §18.8.4) |
 | `MEM_K_ASC` | `Assoc` | one volume's `ASSOC.DAT` cache |
 | `MEM_K_CLIP` | `Clipbrd` | the system clipboard |
 | `MEM_K_MOD` | `ModImg` | an on-demand kernel module's image (§2.8) |
@@ -32227,6 +35480,37 @@ would need a second walk to act on it. It survives a page switch, because
 coming back to where you were is the better behaviour and the clamp is what
 keeps it honest.
 
+### 28.4.5 A raise cache is filed under the package that owns the WINDOW
+
+`MEM_P_WSAVE + slot` is a **kernel** tag (§11.96.3), so `tm_hmatch`'s System
+arm — *"0xFB..0xFF is a kernel tag, purgeable or not"* — swallowed every raise
+cache. Tens of KB of a 640KB machine therefore appeared on the one page that
+reports memory as an anonymous `WinSave` row belonging to nobody, whoever
+actually caused it. Measured on a bare desktop: 33.0 KB for the Task Manager
+and 30.0 KB for a Disk window, both under **System**.
+
+The slot in that tag names a *window*, and §11.96.3.1's `OSAPI_WM_OWNSEG`
+turns it into the segment that owns it. `tm_ispt` already holds exactly that
+per instance — it is what the page's own data-claim arm compares against — so
+the claim files under the package that caused it with **no new column**.
+`TMH_IND` is already *"the indent that puts a claim under its owner"*, and
+§28.4's whole shape is one group per owner.
+
+**The kernel's own windows need no special case.** `wm_ownseg` answers
+`KERNEL_SEG` for a window the kernel created, and no `tm_ispt` ever holds
+`KERNEL_SEG`, so the Disk window's cache stays under System by falling through
+the same two tests. That is why the arms are written as exact complements: the
+instance arm claims a cache whose segment matches, the System arm keeps one
+whose segment is `KERNEL_SEG` and **refuses** any other — a claim counted in
+both groups is a set of totals that does not add up, and §28.4.1 is the
+section that exists because those totals are read.
+
+**The cost is one far call per raise cache per group.** `tm_wsown` range-tests
+first, so the call is reached only for a record already known to be one — on a
+live desktop, one or two of the thirty-two — and `tm_hsum` and `tm_hgrp` each
+walk the table once per group. At `OSAPI`'s 46.7us that is under 2 ms on a
+full heap page, against the ~450 ms the page's own list repaint costs.
+
 ### 28.5 The summary lines sit at `TM_PEN`, so the pane has one inset
 
 The memory page's XMS line and the heap page's TOTAL, SPLIT and FRAG summaries
@@ -32524,6 +35808,396 @@ snapshot** — 3, where its own task table records 1/ready like anything else
 (§8.1.2). A slot index in the `SS_*` header would have cost a byte the header
 has not got, and every field after it moving is an ABI break for something the
 Task Manager alone reads.
+
+### 28.8 The two quiet pages cannot hold an ORDINARY raise cache, and the cache is why
+
+docs/SAVEUNDER-LIVE-PLAN.md §18.4 put this window on the "not worth it" list
+in one line — *its worker redraws twice a second because it **is** the load
+meter (§28.7)*. That is true of the performance view and false of the other
+two, and §28.11 is where the other two end up. This section is why the
+obvious route does not get them there.
+
+**The shape was the best in the tree.** `tm_paintdue` says whether the
+interval owes a paint, §28.6.1's `tm_quiet` says whether anything the memory
+map and the heap page *draw from* has moved — the claim table, `[tm_kb]` and
+the instance block — and it is asked **before** the lock. A promise built on
+that is §31.12's per-page answer and §70.7's per-debt answer in one window,
+needing no restructuring at all.
+
+**It was built, and it does not work.** Measured on a VGA MartyPC, memory
+page, covered by raising a Disk window, sampling `wm_su_segs` and `W_FLAGS`
+every three frames from the instant of the press:
+
+```
+  cache=0000 saveu=True   x1        the press
+  cache=3880 saveu=True   x14       banked at the raise - about 0.7s
+  cache=0000 saveu=False  x1        withdrawn, and the claim freed with it
+  cache=0000 saveu=True   x104      re-granted, and nothing re-banks it
+```
+
+The control is the same run with no cache in play: covered, `saveu` stays
+`True` and `tm_quiet` never once fires across eight seconds. **The only thing
+that changed between quiet and not quiet is that a cache was taken.**
+
+**The raise cache is a purgeable heap claim** — `MEM_P_WSAVE`, §50.6, in the
+claim table like any other — and §28.4.1 closes the loop: these two pages are
+the tree's only reporters of purgeable claims, **on purpose**. The heap page
+splits out `HELD`/`PURGE` because *this is the page where a cache is the
+subject*, and the memory map draws purgeable bands because a map is about
+addresses. So:
+
+1. `wm_su_take` claims ~8 KB and the claim table changes.
+2. `tm_quiet` hashes the claim table, says **changed**, and the worker takes
+   the lock.
+3. The withdrawal frees the claim — the only correct thing to do, because the
+   page it is about to draw is now behind.
+4. The table is back where it started, and nothing takes a second cache until
+   the next raise.
+
+**Every step is right and the cache lasts one interval.** It is a window whose
+content includes the memory its own cache is made of, and §11.96.1 does not
+name that class:
+
+> a window may not hold a raise cache if the cache's own existence changes
+> what the window draws.
+
+**What §28.11 does is remove step 3.** The withdrawal was forced by
+§11.96.1's promise — *my content does not change while I am not drawing* — and
+a window that repairs itself at the restore is not making that promise. With
+nothing to withdraw, there is nothing to free, and the loop has no step to
+close on.
+
+#### 28.8.1 Masking the cache out of the question — the RANGE is wrong, the SELF-REFERENCE is right
+
+The escape looked like masking the cache out of `tm_quiet`'s **hash** — out of
+what forces a redraw, not out of what is drawn — so that a claim appearing is
+not a reason to repaint.
+
+**Masking every `MEM_P_WSAVE` record is wrong, and a partially covered window
+is why.** The argument for it was that the page is never wrong when anybody
+can see it: the cache exists only while the window is covered, and the raise
+that uncovers it frees it. That holds for *this window's own* cache and for
+nothing else:
+
+* **A partially covered window is still visible.** Covered on one edge, it
+  shows most of its content, holds a raise cache the whole time, and is being
+  looked at — and so is the heap page beside it.
+* **The mask hides every window's cache, not this one's.** A raise cache is
+  not bounded in time; a window can sit covered for hours. A fully visible
+  heap page would report `PURGE` short by that claim for all of it.
+
+Both still stand, and they are the reason what shipped masks **one record**.
+
+**§28.11 did not remove the need for it, which is a correction to what this
+section used to say.** §28.11 closed the loop in the *promise* — the window no
+longer withdraws `WF_SAVEU` when its content moves, because it repairs at the
+restore instead. What it could not close is the loop in the **claim**: taking a
+cache is a heap event, these two pages report heap events, and §11.96.18 drops
+the cache of a partially covered window the moment it paints. So the round trip
+is: the cache appears → the page has changed → the page paints → the cache is
+gone. Measured with the Task Manager open on the memory page, `wm_su_segs` is
+**empty before a drag and empty after it**, and `wm_su_drop` fires for its slot
+on every one of its intervals. It never held one at all.
+
+**What that cost.** Uncovering the memory page put **527 cells** on the glass
+across 97 `font_run` calls and 40 fills — about **505 ms on a 4.77 MHz 8088**
+by PERFORMANCE.md Part 2's table — with the cache word reading 0000 at the
+reveal. One drop swung the heap **85.0 → 148.0 → 85.0 KB**: 33.0 KB banked for
+the Task Manager by §11.96.16.2's precover and 30.0 KB for the window being
+dragged, both gone again by the time the machine settled.
+
+**So the cut is the self-reference and nothing wider.** `tm_quiet` walks the
+claim snapshot record by record and leaves out the one record whose owner is
+`MEM_P_WSAVE` plus **our own** window's slot; `SK_CLAIM` and `SK_KCLAIM` leave
+the `[tm_kb]` span with it, because they move with that record and are derived
+from the table already hashed — so a real claim is still caught by the record
+it occupies, and no paragraphs-to-KB correction is owed (that arithmetic
+rounds, and a rounding key lies in both directions). **Nothing is written to
+the snapshot**: the paint draws every cache, this one included, and truthfully.
+What is skipped is the *reason*.
+
+`OSAPI_WM_OWNSEG` (§11.96.3.1) is what makes "our own" expressible at all —
+the tag carries a slot and nothing outside `wm.inc` could read it back.
+
+**The drag cache is a SAMPLING RACE, and it is accepted.** `wm_dc_take` banks
+*through* `wm_su_take` and `wm_su_slot` gives both the same owner tag, so the
+two are not separately maskable without a kernel-side distinction — a second
+`MEM_P_WDRAG` range, costed at 20–45 bytes with three ordering traps that all
+fail silently, the worst being a kept cache (`WF_SAVEU` at `wm_dc_done`) whose
+tag no longer matches what `mem_free` checks. It is not needed, because the
+drag cache **lives entirely inside one `gfx_lock` hold**: `ui_drag`'s
+`.release` is entered with the lock held and does not unlock until after
+`wm_dc_done`, and the heap either side is identical. The Task Manager sees it
+only because §28.6.1 deliberately samples *before* the lock, which is why it
+catches one only sometimes.
+
+Sampling under the lock instead would close it and costs the wrong thing: a
+skipped interval would sit in `gfx_lock`'s `task_yield` retry loop for the
+length of a drag — `ui_drag` holds the lock across its per-pass linger of a
+whole tick — burning a task switch every scheduling round in exactly the
+gesture being smoothed, where today it returns straight to `TASK_SLEEP`. One
+intermittent 505 ms repaint is the cheaper answer, and it is self-limiting:
+the next backgrounding banks the window again.
+
+### 28.10 It paints its own ground, so a PARTIAL repaint fills only the part
+
+`wm_draw_win` white-fills a window's content before calling `W_PAINT` unless
+`WF_OWNBG` is set (§11.90.1), and this window did not set it — so every
+repaint filled all 232×265 of the content and then drew over it. On a window
+whose `W_PAINT` is the densest in the tree (PERFORMANCE.md prices the heap
+page's list repaint at **~450 ms on the target**) that is §11.90.1's own
+sentence: *"on a window whose `W_PAINT` takes seconds it is that long as a
+white hole."*
+
+**`WF_OWNBG` on its own does not fix that, and saying so is the point of this
+section.** Measured with PERFORMANCE.md Part 3.1's instrument, a forced full
+repaint with the flag set still flashes **49,729 transient pixels of a 61,480
+px content** — because the fill did not go away, it changed owner. A full
+repaint owes the whole content and something has to lay the ground for it.
+
+**What the flag buys is the right to be told you owe LESS**, which is
+§11.90.2's interlock: `wm_damage` answers "the whole content" unless
+`WF_OWNBG` is set, because with the flag clear the kernel has already filled
+everything and a partial answer would leave the rest blank. Without the flag
+this window could never be told it owed a strip.
+
+So `tm_entry` calls `OSAPI_WM_OWNBG`, `tm_clear_content` is the fill the
+kernel stopped doing — the one already inline in `tm_click`'s view swap, made
+a routine — and `tm_clear_owed` is what makes the flag worth having.
+
+#### 28.10.1 `tm_clear_owed` — the fill follows the damage rect
+
+A window redrawn because something *above* it moved owes only the strip that
+moved; the rest of its pixels are on the glass and correct. `tm_clear_owed`
+asks `OSAPI_WM_DAMAGE` and fills that rect, falling back to the whole content
+when the answer is CF = 1 and doing nothing at all when the rect is empty.
+
+**The drawing is still whole, and that is a decision rather than an
+unfinished edge.** A repaint is priced by the primitive calls it makes and not
+by the pixels they cover, so what would save the 450 ms is skipping *elements*
+outside the rect — see §28.10.2. What the fill saves is the FLASH, and the
+flash is what a person sees: on a partial repaint the white hole shrinks from
+the content box to the damaged strip.
+
+It cannot paint anything wrong. `wm_dmg_wins` marks the transitive closure and
+redraws each marked window **whole, bottom to top**, so a window drawing
+outside its damage is covered by the ones above it in the same pass — which is
+why §11.90.2 can say *"a caller that never tests for it cannot paint anything
+wrong, only waste the answer."*
+
+#### 28.10.2 …and it LETTERS only the part, which is the half that costs
+
+§28.10.1 left this as the unfinished half: the fill was partial and the
+drawing was whole, so a window moved off this one repainted every row of a
+19-row list to repair a strip. Measured A/B on the memory page with a window
+dragged off part of it, counting this window's own calls:
+
+| the memory page | `font_run` | `gfx_fill` |
+|---|---|---|
+| the partial repaint, **before** | 97 | 40 |
+| the partial repaint, **after** | **52** | **21** |
+| a forced WHOLE repaint of the same page | 97 | 41 |
+
+**The partial repaint was issuing every call a whole one did** — the third
+row is the second row's own reference, taken in the same run. **+242 package
+bytes** (8,095 → 8,337) **and no kernel bytes**: the rect, the two tests and
+the eight sites that name a band.
+
+**The rule is one clause wider than the one §28.2 already had.** A row is five
+independently-checked chunks and every one comes through `tm_elchk`, so:
+
+> draw this chunk if its key CHANGED, **or if the damage took its pixels**
+
+`[tm_dmg]` is that rect and `tm_dmg_hit` is the clause — a `jnc .draw` and a
+call, in the one place the chunk loop asks. `tm_clear_owed` publishes what it
+filled, because *what was filled is exactly what has to be lettered again*;
+`tm_dmg_all` and `tm_dmg_none` are the two ends, and `tm_paint` restores
+`none` on the way out so no later worker interval inherits this paint's rect.
+
+**A chunk's band is not always its own text**, and both ends of a row are
+somebody's: chunk 0 owns the LEAD-IN in front of the pen — where the memory
+list's legend square lives — and the last chunk runs on to the row's right
+edge, so it owns the tail past the text. `tm_dmg_hit` tests those bands and
+not the five even 40px spans, because a damage rect ending inside the lead-in
+erases a square that nothing then puts back until the row's key moves.
+
+**Both axes, and neither needs a table.** The rect is absolute, like
+`[tm_rowy]` and `[tm_penx]` and like `wm_damage`'s own answer, so nothing is
+converted anywhere and the two-column layout (§28.1) comes out right for free
+— the test reads the live pen rather than deriving x from a row index. The
+earlier draft of this section had it as a y band per element and called a
+vertical strip the case it could not help; the chunk is what makes the x half
+free, so the strip is a chunk range and pays like the rest.
+
+**The seven `TMC_*` elements get theirs from the SITE**, through
+`tm_elchk_y`: the rows can derive a band from the chunk loop's own pen and a
+caption cannot, so each site names the y range it is about to hand `tm_lrun`
+or `tm_map_rect` three instructions later — a constant it already had. X is
+not asked there, because every one of them spans the pane and the answer
+could not differ. That is the `gfx_fill` column above: the conventional map
+alone is most of it.
+
+**The scroll bar is the one thing still forced**, by a single `mov word
+[tm_elck + 2*TMC_HSB], 0` in `tm_paint`. It is the only element with no band
+written down — `tm_hbar`'s prologue does not save DX, and a scroll bar is a
+full-height strip that any damage crossing this window is going to cross
+anyway. Sixteen drawing calls, kept deliberately.
+
+`tests/tmdmg.py` is the gate, and three things it has to get right are each a
+run this cost:
+
+* **The MEMORY page, not the heap page.** The heap page's rows *are* the claim
+  table, so anything that opens, closes or covers a window moves most of them
+  on the data alone: closing the cover over the heap page drew 96 chunks of
+  100, correctly. The memory page's rows are instances.
+* **A drag, not a close.** Closing the cover ends an instance, which moves the
+  memory page's rows for the same reason.
+* **`font_run_x` reached through `api_font_run`.** Slot 0x0258 is an X stub
+  straight to `font_run_x`, so a breakpoint on the kernel's own `font_run`
+  counts **2** calls for a whole repaint of this window; and the return
+  address is what separates this window's calls from the Finder redrawing its
+  own rows in the same pass.
+
+And pixels cannot answer the question at all — a redraw of the same characters
+changes nothing on the glass, `m.flicker` sees a still screen either way, and
+that is exactly how this cost went unnoticed.
+
+**The table above is in CALLS and the gate is not any more.** §11.3.3's cull
+landed the same evening and broke it: a culled cell is still a call, and a
+chunk the region cut retries (§28.2), so an armed region drives the call count
+*up* while the pixels go down. `tests/dispcells.py` reads the region and counts
+the cells that got through, and the same A/B re-measured that way — under the
+cull, which is now always on for a damage repaint — is **225 cells before the
+bands and 0 after**, against 549 for a forced whole repaint. Zero is the right
+answer for that gesture: the mover covers *more* of the window than it did, so
+nothing was uncovered and nothing is owed, and `SAME` is what keeps that from
+being a window that simply stopped drawing.
+
+### 28.11 …so the promise becomes a REPAIR, and the band is the doorway
+
+§11.96.1's promise is *"my content does not change while I am not drawing"*.
+This window cannot make it — §28.8 — and it does not have to. The weaker one
+it can make is:
+
+> **my content may change while I am covered, and I will make the restored
+> pixels right before you see them.**
+
+**The kernel already routes that**, and it costs no new bytes. §11.96.11's
+band contract is *"the kernel banks the band, and `wm_damage` tells you you owe
+the rest"*, and `wm_draw_win` distinguishes the two restores:
+
+```
+    call wm_su_try              ; the cache is back on the glass
+    jc .content
+    call wm_su_bget             ; ...UNLESS THE CACHE IS ONLY THE BANDS OF IT
+    jnc .paint                  ; -> W_PAINT runs, and wm_damage hands the
+    jmp .growbox                ; app what the restore did not cover
+```
+
+A band covering the **whole content** is the degenerate case: everything
+banked, nothing owed. `wm_su_orect` insets `x1` by the band's extent, which
+takes it past `x2`, and `wm_damage` answers the **empty** rect §11.90.2
+already documents as legal — *"it may be empty (x1 > x2), meaning draw nothing
+at all"*. So the app is called, told it owes nothing, and spends its own debt.
+
+`tm_promise` names that band and makes the promise. `tm_clear_owed` was
+already asking `OSAPI_WM_DAMAGE` for §28.10.1's strip, so it answers **CF**
+now and the question is asked once — `tm_paint` branches on that alone:
+
+| `wm_damage` | what it means | `tm_clear_owed` | `tm_paint` then |
+|---|---|---|---|
+| CF = 1 | the whole content | fills all of it | `tm_draw_full` |
+| a rect | a strip was vacated | fills the strip (§28.10.1) | `tm_draw_full` |
+| **empty** | the cache put it all back | fills nothing, **CF = 1** | **`tm_update`** — the changed elements, and nothing else |
+
+**Three things make it correct, and each was a separate change.**
+
+* **§11.96.18** — a wholly covered window no longer destroys its cache by
+  arming a clip, so there is something to restore.
+* **§28.10's `WF_OWNBG`** — `wm_damage` answers "whole" without it, so the
+  window could never be told it owed nothing. It is also `wm_band`'s own
+  interlock: the call refuses without it.
+* **§28.11.1's `tm_qpeek`** — the debt has to survive being covered, and
+  `tm_elchk` was consuming it.
+
+**Per page**, like §31.12's: the performance view is the load meter and moves
+every `TM_INT` by construction, so it is never promised and the band is
+retired when the view cycles back to it.
+
+**No depth claim**: `wm_su_1bpp` refuses a banded window, so this is four
+planes — 32,874 bytes for a 232×265 content, inside `wm_su_kb`'s 64,512
+ceiling. And the extent is a byte (§11.96.11.1), so a content wider than 255
+refuses the band; that is a **normal path** and the window then behaves
+exactly as it did before.
+
+**+99 package bytes** (7,996 → 8,095) **and no kernel bytes at all.**
+`tests/tmrepair.py` is the gate, on a VGA MartyPC:
+
+```
+PROMISE : Task Manager (247,100) 234x284 view=2 saveu=True band=[232,0,0,0]
+KEPT    : wholly=True - 0 wm_su_drop calls for us across 8 polls
+REPAIR  : 1 wm_su_occl call(s) for us at the uncover - 0 subpixels differ
+          against a forced full repaint (6192 moved while it was covered)
+LIVE    : view=0 saveu=False band=[0,0,0,0]
+```
+
+REPAIR covers it wholly, opens **and closes** a package under it — an instance
+in and out of the table, several claims in and out of the heap, which is what
+these two pages draw from — then closes the cover. **It is written so it
+cannot pass vacuously**: without a live cache `wm_damage` answers WHOLE,
+`tm_paint` draws everything, and the pixels match for the wrong reason. So it
+counts `wm_su_occl` with DI on the window record, that call sitting in
+`wm_su_try` past every refusal in `wm_su_ck` — reaching it *is* the restore
+going ahead, and it is the one instrument §11.96.18.1 leaves standing.
+
+#### 28.11.1 `tm_qpeek` — the debt has to survive being covered
+
+`tm_elchk` records the key it was asked about, which is right for a draw: it
+has just put those pixels on the glass. **`tm_quiet` is not a draw.** It is
+the question *is a paint owed at all*, asked with no lock held, on intervals
+where the paint may then be refused because the window is wholly covered and
+`OSAPI_WM_CLIP_SET` says so. Recording there spends the change on an interval
+that drew nothing.
+
+§28.6.1 names that hazard and works around it by **ordering** the two calls —
+`tm_paintdue` before `tm_quiet`, so the question is only asked on intervals
+that were going to paint. That is enough while the answer to "cannot draw" is
+"the next raise repaints everything". It is not enough once the raise is a
+restore: the debt is the only record of what moved, and a consumed debt cannot
+be replayed.
+
+`tm_qpeek` is `tm_elchk`'s compare without the store — 13 bytes — and
+`tm_quiet` uses it. The recording still happens, per element, inside
+`tm_update`, which is where it belongs: after the pixels are on the glass.
+
+#### 28.11.2 The loop came back in the HARNESS
+
+§28.8's shape is not confined to the app. `tests/tmground.py`'s PIXELS leg —
+*cover it, uncover it, and the glass must equal a forced full repaint* —
+started answering **396 subpixels one run and 0 the next**, and every one of
+those subpixels was `PURGE nnK( 3)` against `( 2)` and the claim rows that
+count shifts.
+
+**Forcing a full repaint moves a purgeable claim, and this page reports
+purgeable claims.** It is not even this window's own cache that does it: with
+the drive window still up, it is *that* window's claim crossing the
+comparison. Three things fix the leg and the second is the one that matters:
+
+1. **The restore has to miss**, or the ground fill never runs and the leg
+   tests this section instead of §28.10. `WF_SAVEU` cleared in the record
+   while the window is covered is the deterministic half — `wm_su_ck` asks
+   `wm_dc_ok` first, and a host poke is not `wm_saveu`, so nothing is freed
+   and no figure moves.
+2. **Nothing else may be on the desktop.** PIXELS runs last now and opens the
+   cover it closes. With the Task Manager alone on the glass: **0
+   subpixels**, in each of the three runs taken since.
+3. **Both captures settle rather than tick**, because a claim taken and
+   dropped again is two changes to this page.
+
+So on this window every instrument that changes the machine changes the
+picture: the cache word cannot be read (§11.96.18.1), a forced repaint cannot
+be a reference while anything else is up, and what is left to assert is the
+**calls**.
 
 ## 29. instance.inc — the instance table (running-app lifecycle)
 
@@ -34594,6 +38268,77 @@ happens to sit at — and the Theme page's colour row and the Sound page's rows
 grey. PERFORMANCE.md Set 81 named that combination as the one §6.1.12 could not
 verify because the tree contained none; Set 82 verifies it here, against
 `make NOUNAL=1`.
+
+
+### 31.12 The panel's promise is answered per PAGE, not per package
+
+§11.96.1's question — *does your content change while you are not drawing?* —
+has no single answer for this window, and that is why it went so long without
+one. The Control Panel is a window a person leaves open, on a machine where
+uncovering one costs its whole repaint, and its repaint is the densest in the
+kernel: six list rows, a page of labelled controls, and §31.11's twenty-six
+opaque runs. It is also the window this branch found had the **cheapest**
+promise to make in the tree.
+
+**On five of its six pages nothing in it moves without a click**, and a click
+cannot reach a window that is not frontmost — while a frontmost window never
+holds a cache, because §11.96.4 drops it on the raise. The panel has no worker
+at all, so §11.96.1's first question passes the way §69's does: the window ABI
+has no periodic hook to fail it with.
+
+**Date & Time is the exception, and it is exactly the disqualifier.** `ui_task`
+calls `cp_tick_due_x`/`cp_tick_x` once a second (§13.12, §31.5), and
+`cp_tick_x` **skips the draw when `wm_obscured` says so**. So while the panel
+is covered the clock advances and the glass does not: a cache banked before
+that shows the wrong time on the raise, and the wrongness grows with how long
+the window stayed buried. That is §11.96.1's sentence with the subject changed.
+
+So `cp_promise` answers from `[cp_sel]`:
+
+```
+cp_promise:                     ; the gfx lock is HELD (cp_page's contract)
+    mov al, KIND_CTRL
+    call KERNEL_SEG:cw_inst_find_kind   ; CF = 1: no live panel
+    jc .out
+    mov bx, [di+I_WIN]
+    mov al, 1
+    cmp byte [cp_sel], CP_ITIME
+    jne .say
+    xor al, al                  ; the clock is on the pane: withdraw
+.say:
+    call KERNEL_SEG:cw_wm_saveu
+.out:
+```
+
+**`cp_page` is the one place it can be called from, and that is the whole of
+the correctness argument.** Every path that can change the answer — the list
+click that moves `[cp_sel]`, the repaint, and `cp_open`'s first draw — reaches
+the page through that one routine, so there is no second site to keep in step
+and no ordering to get wrong. It is `cp_page` and not `cp_onclick_x` for the
+same reason `fr_kick` is the fractal's single invalidation point: the click is
+one of the callers, not the choke.
+
+**A withdrawal takes the cache with it.** `wm_saveu`'s clear calls `wm_su_drop`
+(§11.96), so switching *to* Date & Time while covered — which cannot happen, a
+click having to reach the window — and switching to it while frontmost both
+end with no cache, and nothing has to remember to drop one.
+
+**No depth claim goes with it.** The panel draws in `CDGRAY` (§47 — the greyed
+rows on the Sound and Theme pages, and §31.11's unaligned greyed run), so a
+§11.96.17 two-colour claim would be a lie. It does not need one: a 322×151
+panel is 320×132 of content, **22,190 bytes at four planes** against
+`wm_su_kb`'s 64,512 ceiling, so the four-plane cache fits with room to spare.
+That is the shape §11.96.17 was built for the *other* half of — the promise and
+the depth claim are separate questions, and this window answers only the first.
+
+**The cost is four bytes of `.text`** — `cw_wm_saveu`, the kernel-side thunk
+`ctrl.inc` calls through, beside `cw_wm_snap`. `cp_promise` itself is 23 bytes
+of `CTRL.DRV`, which is module space and outside `KERN_BUDGET` (§51).
+
+`tests/cppromise.py` is the gate, and **its `CLOCK` leg is the half that
+bites**: with `cp_promise` removed the panel simply never promises, so the
+promise and the caching legs pass on a kernel that does nothing. Only the
+withdrawal is evidence about this routine.
 
 ### 32.1 What the renderer does
 
@@ -37373,6 +41118,43 @@ bytes of room when this was written. Nothing in this module is reachable
 from the splash: the probe runs from `kmain` and the switch from the Control
 Panel.
 
+#### 39.11.0 TWO OF A KIND IS NOT A CONFIGURATION, so every straddle is the slow one
+
+Worth stating because it decides how much a straddling window can ever cost, and
+because reasoning about "the expensive kind of straddle" wastes the question:
+**there is no other kind.**
+
+**The hardware cannot do it.** MDA and Hercules decode B000 and ports 3B0–3BF;
+CGA decodes B800 and 3D0–3DF; EGA and VGA in a graphics mode decode A000 and
+3C0–3CF. None of them relocates. Two cards of one kind answer the same
+addresses and the same ports, and ISA arbitrates nothing — which is exactly why
+the classic two-monitor PC is a mono card *plus* a colour one, and why that
+pairing works at all.
+
+**This kernel could not represent it either.** §39.11.1's probe is one question
+per aperture, and `[vid_avail]` is "a bitmap, one bit per `VID_*` **kind**" — a
+set of kinds, not a list of instances.
+
+**So both halves of a two-display machine differ, and a window across the seam
+is always the restrictive case.** `gfx_blitp` refuses a straddle outright
+(§5.4.3, via `vid_span_one`), so Paint's canvas is converted to nibbles by
+§42.13.1 whatever it started as; and `gfx_blit4` sends a straddling block to
+`.slow` — the hook is taken only when the block fits one display — where each
+coalesced run becomes a whole `gfx_fill`. A straddling blit is therefore packed
+*and* run-priced, by construction, on every machine that can exist.
+
+**AND IT IS NOT TESTED, WHICH IS WHY IT KEEPS BREAKING.** Multi-display defects
+have arrived repeatedly and been found by hand on the owner's VGA + Hercules
+pair — §5.4.1.3's decoder handed a row it must not clip, `gfx_blitp`'s hook
+byte cleared after its guards rather than before, `wm_su_owed` handing a window
+on display 1 a rect disjoint from itself. There is no registered row that puts
+a window across the seam and asserts what it drew. **One is owed**, and the
+cheapest useful shape is the one the ad-hoc probes here kept reaching for:
+extend the desktop, drag a window across the seam, force a repaint, and compare
+the two cards' framebuffers against the same view drawn on one. Until that
+exists, every claim on this page about a straddle is a reading of the code
+rather than a measurement — including the paragraph above.
+
 #### 39.11.1 What the machine has — `vid_probe_avail`
 
 `[vid_avail]` is a bitmap, one bit per `VID_*` kind (`1 << VID_VGA` etc.),
@@ -38156,6 +41938,11 @@ per pixel is the inner loop §5.6.6 exists to keep tight.
 
 #### 39.14.7.1 …and the gate §39.14.7 declined, priced by the field
 
+> **§39.14.7.2 is the other half of this gate.** What follows fixes the case
+> where a blit FITS one display. A blit that STRADDLES still gave up §5.4.1
+> entirely until §39.14.7.2 cut it at the seam, and that was 44.6x.
+
+
 *"Something hurt paint performance. Build 674 renders `OS8088.GIF` in roughly
 a second, on 704 it takes more than 10."* Paint's binary is **byte-identical**
 between the two (`md5sum build/paint.o88`), so it is kernel-side; and it needs
@@ -38201,6 +41988,162 @@ extended **48.62 s**, and extended with this gate **33.35 s** — so the
 extension's cost is back inside the run-to-run noise of the one-display
 figure, where it had been 41% of the whole operation, and the drawing half of
 it, which is what the field was watching, is what a one-display machine does.
+
+#### 39.14.7.2 …and the straddle is a CUT, not a surrender
+
+§39.14.7.1's gate is binary, and the half of it nobody priced is the `else`.
+A block that fits one display keeps §5.4.1's fast path; a block that straddles
+gives it up **entirely** — every coalesced run becomes a `gfx_fill` at its own
+arrival, on all of its pixels, including the ones nowhere near the seam.
+PERFORMANCE.md Set 63 measured that on iron: `GFX_BLIT4 solid` 39,498.8 us on
+one display against **164,777.2 us straddled, 4.17x**, the largest ratio in the
+set and one of only two rows in it that change shape rather than paying twice.
+
+**A straddle is not a reason to give up the fast path on the pixels that do not
+straddle.** Displays are placed edge to edge (§39.19.2) and there are two of
+them, so there is exactly **one seam** — a column on the Right layout, a row on
+Below — and either side of it is a block that fits one display. So the answer
+is to cut the block at the seam and run the routine twice, each half hooked to
+its own display and each half on the fast path it would have had if the window
+had never been dragged.
+
+**What the seam costs is a source pointer, and that is the whole feasibility
+question.** §39.14.7's argument was that *a run carries no source*; a SUB-RECT
+does, and that is why the split has to be made here rather than left to
+`gfx_fill`. The second half starts `n` pixels along, and the source is packed
+two pixels to a byte with the high nibble leftmost (§5.4), so it can only start
+there when **`n` is even** — an odd `n` shifts the nibble phase of every pair
+after it, which is the same hazard §5.4.1 refuses a left clip for.
+
+It is even, on every path that matters. `n` is `seam - x`; the seam is the
+primary's own width, **640 or 720**, and a window's content origin is a
+multiple of 8 (§11.94) — Paint's canvas then sits `PT_CV_X = 48` further along
+and its band is masked to an even column before the call (§42.9). An odd cut is
+**refused rather than approximated**, and the refusal is §39.14.7's path
+unchanged: the destination stays virtual and each run splits itself.
+
+**An odd cut could be rescued with a third pass, and is not.** Draw
+`[x, seam-1]` fast (an odd WIDTH is nothing to this routine), the single
+column at `seam` on its own through the run path, and `[seam+1, ...]` fast
+from a source `seam+1-x` pixels along — which is even by construction. It
+works, it is about 25 bytes, and nothing in the tree needs it: every caller
+that can straddle is a window, and a window's content origin is aligned.
+Recorded so it is not re-derived, and so that a caller which opts out of
+§11.94 has an answer waiting.
+
+**On the Below layout there is no parity question at all.** The cut is between
+whole ROWS, so the second half's source is `n` strides along and nothing about
+the nibble phase moves. `BP` is signed there — Paint hands over a negative
+stride because its canvas is stored bottom row first — and `mul` leaves the
+same low sixteen bits `imul` would, which is all that is added to `SI`.
+
+**The display is NAMED, not resolved, and that is the one trap in it.**
+`GFXDENTER` resolves by anchor through `vid_disp_of`, which answers with the
+**primary** for a point no display covers (§39.2.1). On the Right layout the
+second monitor's first row is `MBAR_H` (§39.19.3), so a half whose top-left
+corner sits above that row is in the dead zone — and entering it by anchor
+would put it on display 0, at an x display 0 does not have, and clip the whole
+half away including the rows display 1 really does hold. `gfx_disp_enter_n`
+takes the index instead. The cut already knows it: it read the seam out of that
+display's own record.
+
+**The half that does not cross is the same case one axis along, and it is taken
+too.** `vid_span_one` also refuses a block that fits one display in x and hangs
+into the dead zone in **y**, and those rows are drawn by nobody. So a block
+that does not reach the seam at all becomes **one forced pass** rather than
+two, and the row loop's own `cmp bx, [vid_ch]` is what skips the rows that are
+not there. Before this, that block took `.slow` for its whole area.
+
+**What it does NOT do is make a straddled blit as cheap as an unstraddled
+one**, and the shape of the remaining cost is worth stating: the per-ROW setup
+— `gfx_rowbase`, the pair table, and on the secondary `gfx_rowbase_calc`
+rather than §39.3.1's table — is paid twice, once per half. So the win is
+smallest on flat art, where a row is nearly all setup, and largest on the
+detailed art the decoders (§5.4.1.1, §5.4.1.3) price per pixel — which is the
+art a Paint canvas actually holds, and the case §39.14.7.1 was opened by.
+
+**Two displays is the whole population this reaches**, and `VID_NDISP_MAX` is
+2. A third display would have more than one seam and this would need a loop
+rather than a cut; there is no such machine and §39.13 admits none.
+
+**Measured, cycle-accurate 4.77 MHz 8088, a VGA and an MDA extended Right**
+(PERFORMANCE.md Set 112, `tests/blitcut.py`, `NOBLITCUT=1` the A/B):
+`OS8088.GIF` straddling the seam, one 466×110 canvas blit —
+**132,962,695 cycles whole-virtual against 2,983,572 cut, 27,859 ms against
+625, 44.56x**. The arithmetic closes on Set 107's per-pixel rates, which is
+the check that both halves really are on their fast paths: the VGA's 112
+columns at 106.9 cycles a pixel and the MDA's 354 at 42.8 account for the
+whole of the 2.98 M, and **neither rate is reachable from `gfx_fill`**. It
+also means a straddled canvas is now *cheaper* than the same canvas wholly on
+the VGA — three quarters of it having landed on the 1bpp row decoder, which
+is about 2.5x cheaper a pixel than four planes are.
+
+**It costs 199 bytes** — 195 of `.text`, 4 of `.bss` — and **20 bytes of
+stack**, the cut being a recursive call into `gfx_blit4` with
+`[gfx_blit_fd]` naming the half's display. Task 0's measured high water is
+274 of 1,024 and a worker's 142 of 384 (docs/KERNEL-MEMORY.md), so the frame
+is well inside both. The alternative shape — the row loop factored into a
+local subroutine the hook calls once or twice — costs 2 bytes of stack
+instead of 20 and deletes `[gfx_blit_hk]` with it, and is the restructure to
+take if that frame ever matters.
+
+**`[gfx_blit_fd]` is in `.text` with a real initialiser and not in `.bss`**,
+for `vid_ndisp`'s reason (§39.12): `-f bin` zeroes nothing, and this is the
+one byte of `gfx_blit4`'s block that is READ BEFORE IT IS WRITTEN — the gate
+sits above every store in the routine. A stale non-zero there is a display
+index handed to `vid_ctx_act` that indexes past a two-record array.
+
+
+#### 5.4.3.4 …and `gfx_blitp` asked HOW DEEP before it asked WHICH DISPLAY
+
+`gfx_blitp`'s first guard was `cmp byte [vid_mono], 0`, twenty-five lines
+above its display hook. **`[vid_mono]` describes the display LAST DRAWN ON**
+(§39.14.3) and the rect handed in is virtual, so asked up there the routine
+answers a question about whichever card the previous primitive happened to
+touch. `gfx_blit4` has always tested the same word *below* its own hook, at
+`.dsp1`, and the two are the same routine's two ends — the asymmetry was the
+tell.
+
+Both directions are wrong, and neither is the one a reader guesses:
+
+- a **VGA** block entered while the mono card is current is **refused**, and
+  §42.13.1 reads a refusal as a fact about the machine — so Paint converts a
+  canvas that could have kept its planes, at 1.2 s to convert and 1.2 s to
+  undo;
+- a **mono** block entered while the VGA is current **passes**, so §5.4.3.2's
+  probe answers *yes, planes* for a 1bpp card and the caller converts to four
+  planes it can never draw.
+
+**IT IS LATENT, AND IS RECORDED AS LATENT.** Measured on a VGA+MDA XT with the
+desktop extended, both primaries in turn, Paint dragged wholly onto the second
+display: `[vid_cur]` was **already the block's own display** at `gfx_blitp`'s
+entry both times — 1 with `[vid_mono]` = 0 on the VGA, 1 with `[vid_mono]` = 1
+on the MDA — and `[pt_planar]` came out right in both runs. The reason is that
+a window's frame is drawn on its own display earlier in the same lock hold,
+and `gfx_unlock`'s `vid_ctx_act 0` is what bounds that to one hold. So the
+guard read the right card **by accident of draw order**.
+
+That is §39.14.8's situation exactly — *"the menu save-under was safe by
+accident … It is safe by mechanism now"* — and the fix here is the same kind
+and costs the same: **code motion, and no behaviour anyone can currently
+observe.** Two predictions were made before it and both were refuted by
+measurement; what is claimed is the hazard, not a win.
+
+**A refusal below the hook still unwinds.** `.no` falls into `.out`, which
+brings the nest down when `[gfx_bp_hk]` says this call put it up — the byte
+that already exists for the six refusals above it.
+
+**What was considered and NOT done**, so it is not re-derived: giving
+`gfx_blitp` §39.14.7.2's one-pass case, for a block that fails `vid_span_one`
+only by hanging into the dead zone in the other axis. It buys nothing on
+either pairing. With a **VGA primary**, a display-0 block cannot fail
+`vid_span_one` without crossing the seam — the desktop union is the primary's
+own height — and a display-1 block is the Hercules, which this routine refuses
+whatever the geometry. With a **mono primary**, display 1 is the VGA, but
+§39.19.3 puts its first row at `MBAR_H` and `ui_ylow` clamps a window to it,
+so the dead zone above is not reachable by a window either. A cut is
+§39.14.7.2's answer for `gfx_blit4` because a run carries no source; a plane
+byte carries eight x's and cannot be cut at all.
 
 #### 39.14.8 `gfx_save` / `gfx_restore` — the two writers the audit missed
 
@@ -40108,6 +44051,70 @@ unaligned edge (§6.1.11) and `gfx_blit1` is not involved.
   build/apps.img` passes.
 - All three adapters.
 
+### 40.4 …and once it stops, it can be banked — the promise is per FRAME
+
+§40.2 is §11.96.1's disqualifier written out and then some: `fr_emit_body`
+makes only the *painting* conditional on visibility, and caches the row and
+steps the state machine either way, so a buried fractal goes on changing its
+content for as long as a frame takes — a minute or two on a 4.77 MHz 8088.
+A raise cache taken over that is a picture from some earlier pass.
+
+**But a fractal is only doing that while it renders.** At pass 3 `fr_worker`
+takes `.idle`, sleeps four ticks at a time and touches nothing: no lock, no
+`OSAPI_WM_CLIP_SET`, no pixel. That is the flattest resting state of any
+window in this tree, and it is also — for a window whose repaint is the
+*whole* of §40.1's replay, paced a row per lock hold precisely because doing
+it in one go would freeze the UI — the most expensive repaint to avoid.
+
+So `fr_promise` answers §11.96.1 from `[fr_pass]`, and the three call sites
+are every place that word moves under a lock:
+
+| site | pass after | promise |
+|---|---|---|
+| `fr_kick` — a view change, the canvas cleared | 0 | **withdrawn** |
+| `fr_redraw` — a repaint republishing a resume point | 0 or 1 | **withdrawn** |
+| `fr_emit_body` — `fr_advance` consumed the last row | 3 | **granted** |
+
+**The grant is inside `fr_emit_body`'s lock hold**, beside the `fr_advance`
+that earned it, behind the same restart check — §20.6 rule 7, and the same
+argument that put `fr_cache_row` and the `fr_prog` increment there. It fires
+**once a frame**: the worker goes `.idle` from the next loop top and never
+reaches `.adv` again until something restarts it.
+
+**A repaint withdrawing looks wrong and is not.** §40.1's replay is *work* —
+`fr_redraw` puts the pass-0 prefix back inline and hands the rest to the
+worker, which re-emits it a row per hold — so a window in the middle of one
+is rendering by any definition that matters here. The case that reads like a
+contradiction, "the picture was finished, I uncovered it, and it withdrew",
+does not arise: when the cache is valid `wm_su_try` restores the pixels and
+**never calls `W_PAINT`** (§11.96), so `fr_redraw` does not run and the
+promise stands. `fr_redraw` runs when there was no cache to spend, which is
+exactly when there is drawing to do.
+
+**No depth claim.** The canvas is sixteen colours by construction — the pen
+comes off the palette per run — so a §11.96.17 two-colour claim would be a
+lie, and it is not needed: 322×199 is 320×180 of content and **30,254 bytes
+at four planes**, inside `wm_su_kb`'s 64,512 ceiling with room over. Fractal
+is the case that shows the promise and the depth claim are separate
+questions; §71.11's Browser needed both, §31.12's Control Panel neither, and
+this one only the first.
+
+**The trap that defeats most candidates does not bite here, and that is
+worth stating rather than assuming.** The finding is
+docs/SAVEUNDER-LIVE-PLAN.md's: a live-drawing app arms a clip region
+unconditionally on every poll, and `wm_clip_set` drops the cache of a
+*visible* window before it discovers the window is covered — so the app
+destroys its own cache twice a second and the promise buys nothing. `fr_worker` does not: the visibility test and the
+`OSAPI_WM_CLIP_SET` are inside `fr_emit_body`, which is reached only from
+`.work`, which is reached only when `[fr_pass] < 3`. The decision is already
+above the arm.
+
+**Cost: nothing in the kernel.** `fr_promise` is 24 bytes of the package and
+the three call sites are 3 bytes each plus `fr_emit_body`'s 5-byte compare —
+`FRACTAL.O88` grows and `kernel.bin` does not.
+
+`tests/frpromise.py` is the gate.
+
 ## 41. xmem.inc — memory above 1MB
 
 `xmem.inc` sizes the store above 1MB, allocates out of it, and moves bytes
@@ -41424,6 +45431,17 @@ switch for — and the screen becomes a single call. Measured on Hercules over
 one scripted stroke: **576 drawing calls → 66** (61 fills + 5 lines), 8.7x.
 A line pixel costs ~160 µs (§48.16), so the ceiling moves to ~6,000 px/s.
 
+**It BANKS `[pt_noscr]` and puts it back; it does not store 0.** While
+`pt_stroke`'s live loop was the only caller the flag was always clear on
+entry, so raising it for the walk and clearing it for the `OSAPI_GFX_LINE`
+said the same thing as restoring it. §42.8.8's replay is a second caller and
+it comes in with the flag already **set** — the live pass put this ink on the
+glass and the replay owes the canvas alone — so clearing it drew the chord a
+second time, which is PERFORMANCE.md's double-draw flash on the default pencil
+on the 1bpp machine this whole path exists for. The clear also leaked past the
+routine: `.perpix`, which never touches the flag, then drew per-pixel to the
+screen for the rest of that replay.
+
 **The walk had to become the kernel's own, and that is the whole difficulty.**
 The canvas is what a repaint draws from, so a canvas walked one way and a
 screen drawn another disagree — and not subtly: `gfx_line` uses the two-error
@@ -41555,6 +45573,891 @@ replay them into both builds** — outside the OS, in the harness, where the
 packet stream is. `tests/paintrate.py` measures the sample RATE for exactly
 this reason: it is the part that can be asserted without a hand.
 
+**Half of that instrument exists now, and finding it found a defect instead.**
+Packets do not have to be *recorded* to be paced properly — `m.advance(cycles=)`
+puts them on the guest clock, so a synthetic hand can be driven at the wire's
+own 40 reports a second rather than os88mouse's two. The first stroke drawn
+that way came out as a snake, and §42.8.3 is what was under it. The recorded
+hand is still what a *smoothing* argument would need; it was never what this
+needed.
+
+#### 42.8.3 ...and the wobble was NEITHER: `pt_seg` walked CX as the denominator
+
+§42.8 made a chord cheap to draw and §42.8.1 made the samples arrive, and the
+report still came back: a slow drag *wobbles*, a fast one comes out as a snake
+with "very little to do with where the mouse moves", and **a one-pixel nib or
+a faster machine very nearly fixes it**. Those three facts together are not a
+sampling story, and they are not a cost story. They are an arithmetic one.
+
+`pt_seg` kept `steps` — `max(|dx|, |dy|)`, the Bresenham denominator — **in
+CX, which is also what `loop` counts down**. So the denominator shrank by one
+every iteration, the error term wrapped against an ever-smaller modulus, and
+the minor axis stepped more and more often as the chord went on. Traced on
+`os8088_5150_herc_gla` at a `pt_seg.ystep` breakpoint, for the chord
+(60,12) → (59,20) — `ddx` 1, `ddy` 8, so **exactly one** x step is owed:
+
+| iter | CX | err | wx | what should have happened |
+|---:|---:|---:|---:|---|
+| 1 | 8 | 4 | 60 | |
+| 2 | 7 | 5 | 60 | |
+| 3 | 6 | 6 | 60 | |
+| 4 | 5 | **1** | **59** | err 6+1 = 7, compared against **CX = 6** — steps |
+| 7 | 2 | 1 | **58** | wraps against 3 |
+| 8 | 1 | 0 | **57** | wraps against 2 |
+| end | 0 | 0 | **56** | wraps against 1 |
+
+**Four x steps for a chord that asked for one**, and the brush lands 3 px past
+its own target. The next sample pulls it back and it overshoots the other way,
+so the stroke is a self-sustaining zig-zag rather than a lag — which is why it
+reads as the ink "not following the mouse" instead of as ink arriving late.
+
+Everything the field said falls out of that one line:
+
+- **It scales with chord length, so it scales with SPEED.** The overshoot is
+  the tail of the walk, where the denominator is smallest; a short chord
+  barely reaches it. A slow hand gets short chords and *tiny wobbles*, a fast
+  hand gets long ones and a snake.
+- **A faster machine fixes it** for the same reason and not because it draws
+  faster: more turns a second means shorter chords.
+- **A one-pixel nib fixes it because it is not this code.** §42.8 routes a
+  width-1 stroke on a 1bpp adapter to `pt_lineseg`, which is `gfx_line_mono`'s
+  arithmetic — the two-error form, all of it in memory, no `loop` — and is
+  correct. The wide nib is the only path through `pt_seg`.
+- **Neither sampling nor cost was ever the whole of it.** Measured at 320 px/s
+  with the 8 px nib, the position `pt_stroke` read was equal to the live
+  pointer on **every** turn (§42.8.1's work holding), and the stroke still
+  wandered 9 px against a hand that wobbled 1.
+
+The fix is to keep the denominator somewhere `loop` is not: **BX**, which is
+free the moment the major-axis test has been taken, and which `pt_bar_x` /
+`pt_bar_y` preserve through `pt_rect`'s own push set. `mov bx, cx` sits
+between the `cmp` and the `jb` because it touches no flags, and the two loops
+compare and wrap against BX. **+2 bytes in the package, none in the kernel.**
+
+**The instrument came first and is the reusable part.** os88mouse's
+wall-clock path costs ~0.51 guest seconds a report (§7.3.1), so a scripted
+hand there moves at about two reports a second, paint is oversampled by every
+build, and a defect that only shows above ~200 px/s cannot appear — which is
+exactly what §42.8.2 predicted would keep this unmeasurable. Pacing the
+packets on the **guest** clock instead (`advance(cycles=...)`, one packet per
+25 ms of guest time — what 1200 baud actually carries) reproduces it on the
+first try. `tests/paintwalk.py` is that harness, asserting the walk rather
+than the picture: a chord may step the minor axis exactly `min(|dx|, |dy|)`
+times, which is a fact about Bresenham that needs no hand to check.
+
+**And it is worth being clear about what is LEFT, because three of the four
+things this was blamed on are now measured rather than argued.** One
+leading-edge bar of the 8 px nib, timed on `os8088_5150_herc_gla` by
+bracketing `pt_segdo`, `pt_bar_x` and `pt_bar_y` with cycle stamps, and again
+with `[pt_noscr]` forced to 1 so `pt_rect` writes the canvas and skips the
+`gfx_fill`:
+
+| | cycles | µs | share |
+|---|---:|---:|---:|
+| the canvas nibbles + the undo row marking | 6,120 | 1,283 | **63%** |
+| the screen `gfx_fill` | 3,658 | 767 | 37% |
+| **one bar, total** | **9,778** | **2,049** | |
+
+The 767 µs is `gfx_fill`'s own fixed part measured from the far side, against
+Part 2's 756 — which is the check that says the bracket is measuring what it
+claims. Two things follow, and neither is obvious from the source:
+
+- **A wide nib spends more time writing its own canvas than drawing on the
+  glass, and almost none of it is the pixels.** `pt_bar_y` is ONE ROW eight
+  pixels wide — four bytes of nibbles — and `pt_bar_x` is eight rows one pixel
+  wide. Eight times the rows, and it costs **3% more** (6,299 against 6,120).
+  So the per-row work is nearly free and what is being paid is `pt_rect`'s
+  FIXED preamble: `pt_clip`, `pt_umark`, and the left/right mask and edge-value
+  setup, ~6,100 cycles of it, **once per step of the stroke**.
+
+  That is §42.8's finding again one level down, and it points the same way: the
+  wide nib is expensive because a general rectangle primitive is being called
+  per step, exactly as the thin one was expensive because a general fill was.
+  Whatever replaces it wants to compute the chord's masks once and emit the
+  sweep — which is what §5.9's band composer did for the title bar, and what
+  PERFORMANCE.md Sets 88-92 found there every time: a routine doing per-row
+  what it could do per-shape.
+- **`pt_wait` is not the problem it looks like.** `GFX_UNLOCK`+`GFX_LOCK` is
+  290 µs on the 5150 still and 369 µs with the pointer moving
+  (docs/FIELD-NOTES.md 8), plus 693 µs for the yield — about **1.06 ms**, or
+  **6%** of a turn whose walk is 16.4 ms. PERFORMANCE.md Set 4's 21.8% is a
+  figure about Missile Command, whose per-frame drawing is cheap; a wide brush
+  stroke is not that shape.
+
+So the 8 px nib's ceiling is **1 px per 2.05 ms ≈ 490 px/s**, against §42.8's
+~6,000 px/s for the width-1 pencil, and above it the ink falls behind at
+`(t_step - t_report) / t_step` of the hand's travel. Measured: **0 px behind
+at 320 px/s, 46 px behind at 640 px/s** over ten reports, where the arithmetic
+predicts 42. That residual is §42.8's cost story, still unfixed for widths
+above 1, and it is a LAG — the ink is where the hand was, late. It is not what
+§42.8.3 fixed, which was ink where the hand never went.
+
+#### 42.8.4 A stroke ended at the last SAMPLE, not at the release
+
+Both of Paint's tracking loops read the pointer and the buttons from one
+`OSAPI_MOUSE` call and then leave the moment the button is up — **before
+spending the position that came back with it**. Everything the hand did
+between the last processed sample and the release was therefore never drawn,
+on every stroke, permanently.
+
+It is not a rounding error, because the loops do not turn over at the wire's
+rate:
+
+- `pt_stroke` turns over in however long the chord took. At the 8 px nib's
+  measured 2.05 ms a step (§42.8.3) a fast hand loses a whole chord — tens of
+  pixels — and it is exactly the case where the stroke was already behind, so
+  it reads as the lag getting worse at the end rather than as a separate
+  defect. It is the last of the three things the field report at
+  docs/FIELD-NOTES.md 37 described: *"then away again at the end as it gets
+  behind"*.
+- `pt_rubber` is worse and simpler. Its loop opens with `pt_wait_tick`, so it
+  samples at **18.2 Hz whatever the hand does**, and a rectangle, ellipse or
+  selection marquee therefore ends up to a whole tick short of where it was
+  released — 33 px at 600 px/s. Dragging a marquee out and having it land
+  short of the corner you let go on is the same bug wearing different clothes.
+
+Both take the position unconditionally now and decide about the button after.
+`pt_stroke` runs one last `pt_segdo` to the release point if it moved;
+`pt_rubber` updates `[pt_curx]`/`[pt_cury]` and re-normalises before the test,
+and only the **outline redraw** is skipped on the way out — the XOR outline is
+already erased at that point, so what the caller commits is the release
+rectangle rather than the last one drawn.
+
+**The position is the release's, to the packet.** `mou_apply` applies a
+report's deltas and *then* updates `[mouse_btn]`, so by the time a caller can
+see the button up, `[mouse_x]`/`[mouse_y]` already carry that same packet's
+travel. `osapi_mouse` reads the three separately with interrupts on, so a
+report landing mid-read can still tear x from y from the buttons by one
+packet — that is a pre-existing bound of §9's report path and this does not
+widen it.
+
+#### 42.8.5 BANKING THE CHORD: a run of leading rows is one rect, not eight
+
+§42.8.3 measured one leading-edge bar of the 8 px nib at 9,778 cycles and
+found the per-row work nearly free — eight times the rows costs 3% more — so
+what a wide stroke actually spends is `pt_rect`'s FIXED preamble, once per step
+of the walk. Broken down on `os8088_5150_herc_gla`, per call:
+
+| | down | across |
+|---|---:|---:|
+| the push block | 122 | 122 |
+| `pt_clip` | 766 | 739 |
+| **`pt_umark`** | **4,598** | **2,453** |
+| edge masks + the rows themselves | 506 | 3,162 |
+
+`pt_umark` is the largest item — it copies a whole 224-byte canvas row into
+the undo image the first time a stroke touches it, to protect the eight pixels
+the nib actually covers, and a y-major chord meets a new row every step. That
+is its own fix and is not this one. This section is the other half of the same
+sentence: **stop calling the primitive per step.**
+
+`pt_bar_y` is one row `nib` wide. A run of consecutive y steps that the
+Bresenham does not interrupt with an x step therefore lays down a **stack of
+identical rows at the same x** — which is a rectangle, and `pt_rect` can draw
+a rectangle as cheaply as it draws one row. So `pt_seg` banks the run in
+`[pt_runn]` and flushes one `pt_rect` when x moves or the chord ends.
+
+**The x step is what makes it exact rather than approximately right.** At an x
+step the old run is flushed *at the old x* — it must be, because the row the
+brush is about to occupy is one column further along, and flushing it at the
+new x would ink a trailing column the brush never covered (a 1 px burr on
+every x step, which is a different picture and would fail
+`tests/paintdraw.py`'s repaint oracle). Then `pt_bar_x` draws the leading
+column as before, and **this step's row opens the next run at the NEW x** —
+which is precisely where `pt_bar_y` would have put it, so the pixel set is
+identical and no `pt_bar_y` call is needed at all.
+
+Calls go from `ddy + ddx` to at most `2*ddx + 1`, so it wins whenever
+`ddx + 1 < ddy` — which is the gate, tested once per chord, and below it the
+old per-step path runs unchanged. **It is therefore never worse**, and the
+near-45° chord where banking cannot help is the one case that keeps the
+per-step path live. The x-major loop is the same thing transposed: a run of x
+steps at constant y is a stack of identical columns, flushed as one rect.
+
+**The gate has to be tested on EACH side of the major-axis branch.** Putting
+it all in one place in front of `jb .ymajor` means that jump goes straight
+over it, only x-major chords ever bank, and half the feature is missing with
+nothing to show for it — which is how it was first built and how it was
+caught: a straight *down* stroke still measured eight `pt_bar_y` calls a chord
+while a straight *across* one measured none.
+
+Measured on `os8088_5150_herc_gla`, one 8-px chord with the 8 px nib,
+bracketed exactly by `pt_seg` and `pt_seg.out`:
+
+| chord | before | banked | |
+|---|---|---|---|
+| straight down | 8 calls, 16.97 ms | **1 call, 9.38 ms** | 1.81x |
+| straight across | 8 calls, 19.61 ms | **1 call, 4.16 ms** | **4.72x** |
+| ±1 px of wobble, `ddy` 8 | 9 calls | **3 calls** | |
+| 45° | 16 calls, 36.39 ms | 16 calls, 35.82 ms | gated off, 1.6% |
+
+and over a twelve-ray fan of 90 px strokes at every angle, **1,341 → 723
+`pt_rect` calls, 46% fewer**.
+
+**Down gains half of what across does, and the reason is the next bottleneck.**
+Its one rect is eight rows the stroke has never touched, so `pt_umark` still
+copies eight whole 224-byte canvas rows into the undo image — about 32,000 of
+that chord's 44,788 cycles. Across re-uses the same eight rows every chord and
+pays them once. Banking removes the per-step preamble; it cannot remove a
+per-row cost that is genuinely per row, and that copy is now the largest single
+item in a vertical stroke.
+
+**The pixels are identical, and that is checked rather than argued.** The fan
+above is hashed twice — once off the screen and once after the window has been
+dragged, which repaints it out of the canvas in RAM — and both hashes match the
+unbanked build exactly. That second hash is the one that matters: `pt_rect`'s
+screen half is a `gfx_fill` of the rect that was asked for, so a canvas that
+disagreed with it would look right until the next repaint (§42.13).
+
+**What it costs is 348 bytes of PACKAGE code and one bss word**, none of it
+the kernel's — `pt_seg` gains two loops and two flush routines, and `[pt_runn]`
+is the banked count. A package's image is a heap claim, so this is paint's own
+footprint rather than a `KERN_BUDGET` move.
+
+**It also changed what `tests/paintwalk.py` can assert.** That row began by
+counting `pt_bar_x`/`pt_bar_y` calls against `|dx|`/`|dy|`, which banking
+breaks by not calling `pt_bar_y` at all — a gate that would have failed an
+implementation for being *faster*. It asserts the arrival instead: nothing in
+`pt_seg` assigns the destination at the end, so **the brush at the head of each
+chord must equal the target of the one before it**, which is the property the
+§42.8.3 defect actually violated and is indifferent to how the walk emits its
+rects.
+
+#### 42.8.6 The undo snapshot copies 224 bytes to protect eight — BUILT, MEASURED, AND REFUSED
+
+Undo is copy-on-first-touch: `pt_undo_new` clears a bitmap, and `pt_umark`
+copies a canvas row into the undo image the first time an operation touches
+it. The granularity is a whole ROW — `[pt_stride]` bytes, 224 at a 448-wide
+canvas — and the 8 px nib covers **four or five of them**. So a first touch
+copies about 28 times what it protects, and a y-major chord meets a new row at
+every step. Measured per `pt_rect` call on `os8088_5150_herc_gla`: **4,598
+cycles down against 2,453 across**, and after §42.8.5 about **32,000 of a
+vertical chord's 44,788** — the largest single item left in a wide stroke.
+
+**So it was built.** The bitmap became a byte a row: eight BLOCKS, `[pt_ushf]`
+the smallest shift with `ceil(stride >> shf) <= 8`, block *b* the canvas bytes
+`[b<<shf, min((b+1)<<shf, stride))`. Blocks were BYTE ranges of the stored row
+rather than pixel ranges, which is what let one scheme serve both canvas
+formats — packed 4bpp puts pixel *x* at byte `x>>1` so a rect is one range,
+planar (§42.13) at byte `x>>3` of four planes so it is four, `[pt_bpr]` apart.
+The block table was hoisted out of the row loop and then built lazily, so a
+call whose rows were all saved paid nothing for a table it never read.
+
+**It worked exactly as designed and it is not worth having.** Read out of the
+running guest: `stride` 224, `pt_ushf` 5, 32-byte blocks, one block needed,
+**16 words copied where 112 were before**. And measured, one 8 px chord with
+the 8 px nib, bracketed by `pt_seg`/`pt_seg.out` — the instrument is
+deterministic here, two runs agreeing to a single cycle:
+
+| chord | §42.8.5 | + block undo | |
+|---|---:|---:|---|
+| straight down | 9.38 ms | **6.49 ms** | 1.45x |
+| straight across | 4.16 ms | 4.61 ms | **11% WORSE** |
+| 45° | 35.82 ms | 37.53 ms | **4.8% WORSE** |
+
+**A seven-fold smaller copy bought 1.45x on one direction and lost 5-11% on
+the other two**, because the per-call and per-row bookkeeping costs about what
+the shorter copy saves. That is PERFORMANCE.md Part 2's fetch floor doing what
+it always does: on an 8088 an added instruction is priced by its ENCODED BYTES
+as much as by its clocks, so "a few more compares" is not free and a model
+that counts clocks alone will predict a win that does not arrive.
+
+It is refused on the numbers, and the numbers are here so it is not rebuilt.
+**Two things would change the answer** and neither is this change: a canvas
+whose rows are much wider (the over-copy grows with the stride while the
+bookkeeping does not), and a stroke path that is mostly vertical. Neither
+describes a hand drawing.
+
+**What the exercise did leave is `tests/paintundo.py`.** Nothing covered
+Paint's undo at all — not one row in the registry — which is a poor place to
+be while changing the code that owns it. It draws across, down and diagonally,
+presses Ctrl+Z twice and asserts the picture comes back to the pixel both
+ways. **Redo is the canvas oracle**: `pt_undo_swap` repaints the rows it
+touched OUT OF the canvas, so a canvas holding anything the glass did not
+could not produce a matching hash. Dragging the window to force a repaint —
+which is what `tests/paintdraw.py` does — is not reliable for this: on a 1bpp
+adapter a short move can be served without repainting the content at all, and
+`[pt_cx0]`/`[pt_cy0]` are then whatever the last `pt_org` left, which reads as
+a canvas mismatch when it is really a stale sampling origin. That cost a
+session's worth of chasing before the screenshot said the picture was perfect.
+
+##### 42.8.6.1 A row has AT MOST eight blocks, not exactly eight — the 97-second resize
+
+`pt_layout` picks `[pt_ushf]` as the smallest shift with `(stride-1) >> shf <=
+7`, so **one mask byte covers the row**. That is a ceiling, not an identity: at
+a stride of 336 the shift is 6, the block is 64 bytes, and the row has **six**
+blocks. Blocks 6 and 7 do not exist.
+
+`pt_ucopy` and `pt_uswap_row` walked `bx` from 0 to 7 and clipped each block's
+**END** at the stride — which is right for the last real block, the short one —
+and never asked whether its **START** was inside the row at all:
+
+```
+    mov ax, 1
+    shl ax, cl                  ; block size
+    add ax, dx                  ; ...its end
+    cmp ax, [pt_stride]
+    jbe .have
+    mov ax, [pt_stride]         ; clipped
+.have:
+    sub ax, dx                  ; length = end - start   <-- NEGATIVE
+```
+
+For block 6, `dx` = 384 and the clipped end is 336, so the length is **-48**,
+which as a word is 65,488 — and `shr ax,1` makes it 32,744 words of
+`rep movsw`. Block 7 is another 65,424 bytes. **Two 64KB copies per row, on
+every one of 258 rows: 33 MB of `rep movsw` on a 4.77 MHz 8088.**
+
+| stride | shift | real blocks | block 6 | block 7 |
+|---:|---:|---:|---:|---:|
+| 224 | 5 | 7 | 32 bytes | **0** — starts exactly at the stride |
+| 336 | 6 | 6 | **65,488** | **65,424** |
+
+**A stride of 224 hides it completely**, which is why it took a maximize to
+find: block 7 begins at byte 224, exactly the row's end, so `end - start` is
+zero and `jz .next` retires it. Every width whose blocks do not happen to land
+on that boundary has the defect, and the default canvas is one of the widths
+that does.
+
+#### What it looked like
+
+Reported from the field as a hard freeze on **maximize, then restore**. It is
+not a freeze: `pt_setsize` sees the window shrink, calls `pt_resize`, and the
+`.inplace` path stages the whole picture into the undo image with
+`pt_umark(0, ch-1)` — **`BL` = 0xFF, all eight blocks** — so every row asks for
+the two that are not there. Measured here end to end: **the restore takes 97
+seconds**, of which 79 are inside `pt_ucopy`, and the machine is alive
+throughout — the screen blanker takes over if it is left alone, and a mouse
+move brings it back.
+
+The runaway `rep movsw` also **reads 64 KB past the canvas row and writes 64 KB
+past the undo row**, so it lands in whatever the heap put after the undo image
+— which, at these sizes, is the canvas. The picture comes back with a band of
+garbage across the bottom (the canvas is stored bottom row first, so the start
+of the block is the bottom of the picture) and it is in the canvas, not on the
+glass: it survives a save and a reload. Whether the band reads as solid black
+or as one-pixel vertical stripes is just what happened to be in the memory
+above; the field saw stripes, and this reproduces as 22,842 bytes of black.
+
+**The fix is one compare in each routine**: a block whose first byte is at or
+past the stride is not part of the row. `pt_ubm1` needs nothing — it derives
+block indices from byte offsets that are inside the row by construction.
+
+#### 42.8.7 A DIAGONAL step's two leading edges are one dab
+
+§42.8.5 banks runs of axis-aligned steps and refuses the near-45° chord, which
+leaves that chord exactly where it was: **two `pt_rect` calls per step**, a
+leading ROW (`pt_bar_y`, one row `nib` wide) and a leading COLUMN (`pt_bar_x`,
+`nib` rows one wide). At 36.16 ms for an eight-step chord it is now the
+slowest thing a hand can ask for by a factor of eight, and the only direction
+a hand on the field machine can still outrun.
+
+**The two edges are an L, and the brush's own square contains it.** Stepping
+diagonally from (x,y) to (x+1,y+1), the new pixels are that L; the full square
+at the new position is the L plus `(nib-1)²` pixels the previous square
+already inked in the same colour. Redrawing those is invisible — it is not
+§6.1's erase-then-letter double draw, which is visible because the two passes
+differ — and `pt_rect` is priced by its FIXED preamble and by `gfx_fill`'s
+per-SCAN-LINE cost, not per pixel. §42.8.3 measured that directly: eight times
+the rows costs 3% more.
+
+So a diagonal step calls `pt_dab` once instead of `pt_bar_y` and `pt_bar_x`.
+Measured per call on `os8088_5150_herc_gla`: the two bars are 9,778 + 11,015
+cycles with about 12,400 of that their two preambles, against one taller rect.
+
+**This is the exact inverse of the trade `pt_seg` was built on**, and both are
+right. Its header says re-dabbing the full square at every step "would write
+width*width pixels instead, which at the eraser's 32px is a thousand-fold
+waste" — true for an AXIS-ALIGNED step, where the leading edge is one call and
+the dab is also one call, so the extra pixels buy nothing. It is false for a
+DIAGONAL step, where the leading edges are TWO calls and the dab is one: there
+the extra pixels buy a whole `pt_rect`, and pixels are the cheap thing here.
+The rule is therefore per STEP and not per brush: **one axis moved, draw the
+edge; both moved, draw the square.**
+
+Nothing else changes — the pixel set is identical (the dab is a superset of
+the L, and every extra pixel is already that colour), so the canvas and the
+screen stay in step and `tests/paintdraw.py`'s repaint oracle and
+`tests/paintwalk.py`'s arrival invariant both still hold. Verified: the
+twelve-ray fan of §42.8.5 hashes the same on the screen and after a repaint
+out of RAM, to the digit.
+
+Measured, one eight-step chord with the 8 px nib: **16 `pt_rect` calls and
+36.16 ms → 8 calls and 29.03 ms, 1.25x.** The straight cases are untouched
+(across 4.16 both sides), which is the gate doing its job.
+
+**Halving the calls bought only a fifth of the time, and the split says why.**
+Re-run with `[pt_noscr]` forced, so `pt_rect` writes the canvas and the undo
+image and skips the `gfx_fill`:
+
+| chord | total | canvas + undo | screen |
+|---|---:|---:|---:|
+| straight down | 9.49 ms | 7.60 | 1.89 |
+| straight across | 4.16 ms | 2.15 | 2.01 |
+| **45°** | **29.03 ms** | **19.12 (66%)** | 9.91 (34%) |
+
+**Two thirds of a diagonal chord is the app's own bookkeeping, not drawing** —
+and roughly 40% of *that* is `pt_umark` saving one newly-touched canvas row
+per step (§42.8.6). So a faster screen primitive, however good, is bounded at
+1.5x here: it can only reach the 34%. The 66% is reachable only by not doing
+that work while the button is down — banking the stroke's geometry and writing
+the canvas and the undo image once at the release, where the canvas still
+holds the pixels the undo needs. That is the next step and it is not this
+section's.
+
+#### 42.8.8 THE CANVAS CATCHES UP AT THE RELEASE
+
+§42.8.7's split says two thirds of a diagonal chord is the app's own
+bookkeeping — the canvas nibbles and `pt_umark`'s undo snapshot — and only a
+third is drawing. No screen primitive can reach that two thirds. The only way
+to is **not to do it while the button is down.**
+
+So while a stroke is in flight, `pt_rect` writes the **screen only**, and
+`pt_stroke` banks the stroke's POINTS. At the release the points are replayed
+through the same `pt_segdo` walk with the screen off and the canvas on.
+
+**The ordering is the whole idea, and it is why the obvious version of this
+does not work.** Undo needs the pixels that were there BEFORE the ink; drawing
+destroys them. Recording points and "saving at the end" is therefore
+impossible if the canvas has been written all along — by the end there is
+nothing left to save. Deferring the canvas is exactly what makes the deferral
+legal: **at the release the canvas still holds the original picture**, so the
+replay can save each touched row and then write it, in that order, with the
+same guarantee the live path had.
+
+It is also §42.8's proposal 3 done in the one direction that works. Rebuilding
+the canvas from the FRAMEBUFFER cannot work — a 1bpp adapter shows `CLGRAY` as
+a dither so the three canvas colours are not recoverable, anything clipped by
+another window is simply absent, and VGA read-back is four planes through the
+Graphics Controller. Rebuilding it from the GEOMETRY has none of those
+problems, because the geometry is exact and ours.
+
+**Points, not rects.** A chord is two points and consecutive chords share one,
+so the bank is 4 bytes a sample rather than 8 a primitive call, and the replay
+re-runs the identical walk — which is what makes the pixel set provably the
+same rather than argued to be. `PT_BNKMAX` samples are held; on overflow the
+bank is flushed mid-stroke and re-seeded with its last point, so a long stroke
+costs a bounded hitch rather than unbounded memory.
+
+**Three places flush**, and they are the complete set of moments the canvas
+can be looked at while a bank exists: the end of `pt_stroke`, the head of
+`pt_paint` (a repaint mid-stroke would otherwise draw the stale canvas over
+the ink), and the overflow above. `pt_wait` clears `[pt_defer]` across its
+unlock/yield/lock and restores it after, so the deferral is scoped to the
+brush's own drawing and an event dispatched during that yield cannot land a
+non-brush `pt_rect` with the canvas switched off.
+
+**`[pt_defer]` is the one switch.** Clearing it restores the old behaviour
+exactly, which is what makes this testable from the harness and revertable in
+one commit.
+
+Measured on `os8088_5150_herc_gla`, one eight-step chord with the 8 px nib,
+button-down only — the cost that decides whether the ink keeps up:
+
+| chord | §42.8.7 | deferred | |
+|---|---:|---:|---|
+| straight down | 9.49 ms | **2.51 ms** | 3.8x |
+| straight across | 4.16 ms | **2.85 ms** | 1.5x |
+| **45°** | **29.03 ms** | **13.03 ms** | **2.2x** |
+
+and against where §42.8.3 found it, the diagonal is **36.16 → 13.03 ms, 2.8x**.
+Pixel-identical throughout: the twelve-ray fan hashes the same on the screen
+and after a repaint out of RAM, and `tests/paintundo.py` still restores the
+picture to the pixel both ways — which is the real check here, because the
+undo image is now written from a canvas that has been sitting untouched.
+
+**THE SETTLE IS THE WHOLE COST, MOVED — NOT REMOVED.** Timed from `pt_flush`
+to `pt_flush.out` after a 25-sample diagonal stroke: **357 ms, 14.29 ms per
+banked sample**, which is the canvas-and-undo figure of §42.8.7 to the digit.
+Nothing got cheaper. What changed is *when* it is paid, and the trade is
+therefore real but one-sided in a way worth stating plainly:
+
+- The button-down half is 2.2x faster and the ink follows the hand.
+- The release costs about 0.6 ms of settle for every millisecond of diagonal
+  drawing, and it **scales with the stroke**. `PT_BNKMAX` bounds the memory,
+  not the time: a full 256-sample bank is ~3.7 s of catch-up, and it arrives
+  mid-stroke as an overflow flush rather than at the release.
+
+So this is shipped behind its switch and **not yet finished**. Two things
+would bound the settle, and both are cheaper here than they were on the hot
+path:
+
+1. **Spend the bank in the idle turns.** `pt_stroke` polls faster than the
+   wire reports (§42.8.1), so at a 13 ms chord against a 25 ms report there is
+   idle time every turn that is currently spun away. Flushing the oldest
+   sample there pays the debt down as it is incurred, and the release settles
+   only what is outstanding. It needs `pt_flush` to become incremental — a
+   head index into the bank rather than all-or-nothing.
+2. **Block-granular undo, at the flush.** §42.8.6 built it and refused it
+   because the per-call bookkeeping cost as much as the shorter copy saved on
+   the hot path. At the flush there IS no hot path: the geometry is known, the
+   bookkeeping is paid once per row instead of once per `pt_rect`, and
+   `pt_umark` is roughly 60% of the settle. That refusal was correct where it
+   was made and does not carry to here.
+
+##### 42.8.8.1 ...and pays the bank down in the idle turns
+
+§42.8.8's settle is the deferred work arriving all at once: **357 ms after a
+25-sample diagonal stroke**, and it grows with the stroke, which is the one
+thing a settle must not do.
+
+But `pt_stroke` polls faster than the wire reports (§42.8.1): at a 13 ms chord
+against a 25 ms report interval there is idle time on most turns, and §42.8.1
+spends it spinning on `pt_wait` precisely because there was nothing else to do
+with it. There is now. **`.idle` pays one banked sample into the canvas
+instead**, so the debt is settled as it is incurred and the release only
+finishes what is left.
+
+That makes `pt_flush` incremental: `[pt_bnkh]` is how far into the bank the
+CANVAS has got, where the screen is always all the way, and `pt_flush_n` spends
+at most CX samples from there. `pt_bnk_compact` then drops what the canvas
+already has, so the bank does not need to be deep — `PT_BNKMAX` is 64, 256
+bytes.
+
+**Overflow degrades to the old behaviour rather than stalling.** A hand that
+genuinely outruns the idle turns fills the bank; banking a sample then spends
+ONE and compacts, which is the undeferred cost for that one report. Flushing
+the whole bank there would be a ~900 ms hitch *in the middle of the stroke*,
+which is worse than never having deferred at all.
+
+**And it repeats until a slot exists, which is not the same as spending one.**
+The first turn can be the PRESS DAB and nothing else: `pt_flush_n`'s seed
+branch replays the press point, sets `[pt_bnkd]` and spends the whole of CX
+there, so it returns with `[pt_bnkh]` still 0 and `pt_bnk_compact` — which
+drops nothing when the head has not moved — leaves the bank full. The store
+after it is unconditional, so that turn wrote four bytes PAST `pt_bnk`, over
+`[pt_ikeep]`, `[pt_dirty]` and `[pt_blankc]`, and the release replay then read
+them back as a chord endpoint. Two turns is the ceiling: the first pays the
+dab, the second a real sample, which is what compaction needs to have
+something to drop.
+
+Measured on `os8088_5150_herc_gla`, the settle after a 25-sample diagonal
+stroke driven at the wire's own 40 reports a second: **357.9 ms → 146.2 ms,
+2.4x**, with the button-down cost unchanged.
+
+**And it cannot fix the saturated case, which is arithmetic rather than
+engineering.** A 45° chord is 13 ms of screen plus 14 ms of canvas and undo:
+**27 ms of work per 25 ms report.** No amount of moving it around fits 27 into
+25 — the idle turns help because a real hand is not a metronome at 45° for
+seconds on end, and the 146 ms that survives here is what a hand that IS one
+leaves behind.
+
+**§42.8.6's blocks were tried on top of this and DO NOT compound.** The
+argument was good: the hot path no longer marks at all, so the bookkeeping
+that sank them is no longer on it. Measured anyway — 145.6 ms without them and
+**141.0 with**, a 3% total that is worse per banked sample (6.72 ms against
+5.82) and paid for with 450 bytes. The reason is that moving *when* they run
+did not change *what* they are: still one mask computation and one block scan
+per `pt_rect` call, and the flush makes eight of those per diagonal chord.
+
+So the compounding is real but wants a different shape: **the undo save has to
+become once per ROW for the whole stroke**, not once per call. At the flush
+the banked geometry is complete, so every row's byte range across the entire
+stroke is knowable in one pass before a single pixel is written — which is the
+first time that has ever been true, and is the only version of §42.8.6 whose
+bookkeeping is amortised over rows instead of over primitive calls. That is
+the next step, and it is what a settle under 100 ms depends on.
+
+##### 42.8.8.2 ...and the undo save moves up a level, where the blocks finally pay
+
+§42.8.8.1 tried §42.8.6's block granularity on top of the deferred canvas and
+found it did not compound: 145.6 ms of settle without it and 141.0 with, worse
+per banked sample. The diagnosis was that moving *when* it ran had not changed
+*what it was* — still one mask computation and one block scan per `pt_rect`
+call, and the replay makes eight of those per diagonal chord.
+
+**So the marking moves up a level, to once per CHORD.** The replay knows the
+chord's two endpoints before it walks anything, so its bounding box — both
+endpoints expanded by the nib — is known too. `pt_umark_chord` saves that box
+once and `[pt_uoff]` then tells `pt_rect` to mark nothing at all for the eight
+calls inside the walk.
+
+Two costs collapse at once, and they are the two that §42.8.8.1 measured:
+
+- **The re-testing.** Each of the eight dabs used to test all eight rows of its
+  own square — 306 cycles a row, seven of them already saved, eight times over.
+  One pass over the chord's rows replaces sixty-four tests with about fourteen.
+- **The copying.** The mask is now computed once per chord, so a block scan
+  that cost more than it saved when it ran eight times a chord runs once — and
+  a diagonal chord's box is 14 px wide against a 448 px row, so it saves one
+  block of 32 bytes where the row granularity copied 224.
+
+**The box over-approximates the swept region near its corners, and that is
+safe**: saving a byte the stroke never writes costs one copy and restores
+itself unchanged. It is the same argument that lets a whole row be saved for a
+four-byte dab, applied with a much tighter box.
+
+This is the amortisation §42.8.6 never had. Its refusal was correct on the hot
+path, where the base was primitive calls; correct again at the flush in
+§42.8.8.1, where the base was still primitive calls; and wrong here, where the
+base is chords.
+
+Measured, the same 25-sample diagonal stroke at the wire's own 40 reports a
+second: **146.2 ms → 113.0 ms of settle, and 6.96 → 4.52 ms a banked sample,
+1.54x.** The undo image is byte-identical — `tests/paintundo.py` returns the
+same hashes it did before any of this — and so are the pixels, on the screen
+and after a repaint out of RAM.
+
+So the whole of §42.8.8 now stands at **357.9 → 113.0 ms**, and a diagonal
+chord's deferred half at **14.29 → 4.52 ms**. That last number is the one that
+matters for whether the idle turns can ever win the race: a 45° chord is 13 ms
+of screen plus 4.52 of canvas and undo, **17.5 ms against a 25 ms report**, so
+for the first time the machine is not oversubscribed at 45° and a hand that
+pauses at all will settle nothing. What is left of the 113 ms is the metronome
+case, and the next place to take it from is the 13 ms — the screen half, which
+is §42.8.7's remaining third and wants a primitive that draws a whole chord's
+sweep in one call rather than one per step.
+
+#### 42.8.9 THE CHORD IS BANKED AS A SPAN LIST, and goes out in one call
+
+§42.8.8 ends by naming what is left: the screen half, and *a primitive that
+draws a whole chord's sweep in one call rather than one per step*. §5.10 is
+that primitive and this is Paint's side of it.
+
+**The walk did not change.** `pt_seg` makes the same `pt_dab`, `pt_bar_x`,
+`pt_bar_y` and `pt_run_flush_*` calls in the same order, and `pt_rect` clips
+each one exactly as before. What changed is where the screen half of a
+*deferred* rect goes: into one x interval per row instead of an
+`OSAPI_GFX_FILL`. `pt_spflush` then emits the lot at the end of the chord.
+Since the buffer is the **union** of the rects the walk produced, the pixels
+are the pixels it always drew — there is no second rasterisation to diverge
+(§42.8.3's whole class of defect), and the canvas half is not touched at all:
+the replay runs with `[pt_noscr]` set and never reaches the buffer.
+
+**Why it is worth a primitive.** A 45° chord is the one the banking gate
+(§42.8.5) refuses, and it is eight 8×8 dabs — **64 row-writes for a union that
+is fifteen rows**. On a 4.77 MHz 8088 a dab is 5,305 cycles of which 4,433 are
+the kernel setting a rect up and walking its rows, so the redundant 49 rows are
+most of the chord (§5.10.1).
+
+**The row range is computed up front, not grown.** `pt_sparm` takes it from
+the two endpoints and the nib and clips it to the canvas, because the walk may
+run **upward**: a buffer indexed from the first row it happened to touch would
+then run backwards off its own front. A chord taller than `PT_SPMAX` = 96 rows
+arms nothing and draws as it always did.
+
+**The buffer holds SCREEN coordinates**, so the flush is one call and not a
+translating pass — and so the refusal path can reuse it byte for byte. §5.10.3
+refuses on `kern_small`, an armed clip region and a second display; the answer
+is one `OSAPI_GFX_FILL` a row out of the same buffer, which draws the identical
+pixels. That path is live on real machines, not a dead limb.
+
+**To revert it, delete the four lines at `pt_seg`'s `call pt_sparm`.**
+Everything else is then unreachable and the walk draws as it always did.
+
+#### What it measures
+
+A 45° chord, 8 px a report, on a cycle-accurate 4.77 MHz 8088 with a Hercules —
+the *live* chord, separated from the deferred canvas's replay of the same chord
+by whether `pt_spgen` ran:
+
+| | before | after |
+|---|---:|---:|
+| a 45° chord's screen half | 15.19 ms | **8.61 ms** |
+| …of which the walk | 26.5 kcyc | 18.8 kcyc |
+| …and the drawing | 45.6 kcyc (8 fills) | 22.3 kcyc (16 spans) |
+| straight down / across | 2.51 / 2.85 ms | 2.24 / 2.42 ms |
+| the release settle, 25 samples | 112.2 ms | **59.8 ms** |
+| …a banked sample | 4.49 ms | **2.39 ms** |
+
+**1.76x on the chord the field could still outdraw**, and the settle follows it
+down without anything in §42.8.8 changing: the screen half finishing sooner is
+more idle time, and §42.8.8.1 spends idle time paying the bank off, so less of
+it is left at the release.
+
+Straight chords are untouched by design — the gate keeps them on §42.8.5's
+banked path, where one tall rect is one row base and N row-writes and N spans
+would be N of each. Banking those *loses*: it was measured at 2.51 → 4.71 ms
+straight down before the gate went in.
+
+**The pixels are the same pixels.** `tests/paintundo.py` returns the hash it
+returned before any of this, on Hercules and on VGA, and its redo compares the
+span-drawn screen against a canvas the untouched walk wrote.
+
+##### 42.8.9.1 A min and a max per row is what the design costs, and it is not needed
+
+The first build folded each rect into the buffer the obvious way: for every
+row it covered, `min` the left edge and `max` the right. **That is 344 cycles a
+row on a 4.77 MHz 8088**, and a 45° chord's eight dabs cover eight rows each —
+**22,040 cycles of bookkeeping to save 21,270 of drawing**. Measured end to
+end the chord went 13.03 ms → 13.19: the primitive worked, the walk paid for
+it, and the two cancelled to within 1%.
+
+It cancels because a compare-and-store against memory costs what a masked
+framebuffer write costs. So the fold has to stop comparing, and it can:
+
+**`[pt_sx]` is fixed for the whole chord**, so x moves one way. For a row
+covered by rects *i₀…i₁*, one edge is settled by the **last** rect to touch it
+and the other by the **first** — never by a minimum taken over all of them.
+Going right, x2 is the last writer's and x1 the first's; going left, the
+mirror. The last writer needs no test at all, just an assignment over the rows
+the rect covers. The first writer needs to know which rows are new, and **the
+y walk is monotone too**, so those are one contiguous range at each end of the
+touched span — two ranges to compute per rect, not a test to run per row.
+
+`[pt_sptop]`/`[pt_spbot]` are that touched span. What is left in both loops is
+`mov [bx], reg` / `add bx, 4` / `loop`.
+
+**Clipping does not break it.** `pt_clip` clamps x to the canvas, and a
+clamped edge is constant across the rects that hit the clamp — so first and
+last agree there, and the answer is the same either way.
+
+##### 42.8.9.2 ...AND THE SAME LIST WRITES THE CANVAS
+
+§42.8.9 above says the canvas half "is not touched at all: the replay runs with
+`[pt_noscr]` set and never reaches the buffer". That is the shape it shipped
+in, and it left the **bigger** of the two halves alone. One chord's replay,
+split by where the cycles go — **57,179 cycles, 12.0 ms** on a 4.77 MHz 8088:
+
+| | cycles | |
+|---|---:|---:|
+| `pt_rect` — writing the canvas | 33,781 | **59.1%** |
+| `pt_ucopy` — the undo copy | 13,252 | 23.2% |
+| `pt_umark_chord` | 1,717 | 3.0% |
+| `pt_umark_b` | 1,307 | 2.3% |
+| `pt_seg` — the walk | 1,516 | 2.7% |
+
+**That 59% is the same 64 row-writes for a fifteen-row union**, one image
+along: where the screen half spent a `gfx_fill` a dab, the canvas half spends
+`pt_rect`'s row loop eight times a dab. So the replay arms the identical
+machinery — `pt_sparm` gates it, `pt_spgen` derives it — and `pt_spflush` hands
+the result to `pt_cvspans` instead of to `OSAPI_GFX_SPANS`.
+
+**Four extra conditions arm it**, all in `pt_sparm`: `[pt_defer]` clear and
+`[pt_noscr]` set, which together say *this is the replay and not the live
+pass*; `[pt_uoff]` set, so §42.8.8.2 has already saved the chord's undo blocks
+and the span writer owes the undo image nothing; and `[pt_planar]` clear.
+**Packed only** — a planar canvas is four masked runs a row (§42.13) and a
+second copy of that loop is more code than the rows are worth, so a
+VGA-formatted canvas keeps the walk.
+
+**`[pt_spdst]` says which**, and it also picks `[pt_spxo]`, the x offset
+`pt_spgen`'s second pass adds to every interval: the screen wants `[pt_cx0]`,
+the canvas wants zero. One word, added unconditionally, so the choice is not a
+branch inside the row loop.
+
+**`pt_cvspans` is a SECOND row writer and not `pt_rect` called per span**, and
+§5.10.4 is why: a rect's per-row setup is most of what a small rect costs, so
+handing `pt_rect` one span at a time pays that setup fifteen times instead of
+eight and the primitive loses. What it is instead is `pt_rect`'s row loop with
+the edge-mask arithmetic moved *inside* it — computed per span rather than
+hoisted per rect — which is exactly the trade `sw_spans` made against
+`sw_rect_pl`, and for the same reason.
+
+**The superset is the same superset, and it is safe for the same reason.** The
+list is the union of the nib over the walk's positions, where the walk draws
+leading edges — so it additionally inks the whole nib at the position the chord
+*starts* from. On the canvas that position is the press dab or the previous
+chord's last step, and **the full nib at the brush's current position is always
+inked**: a step's leading edge plus the old nib covers the new nib, which is
+§42.8.7's argument used as an invariant rather than as an optimisation. Same
+ink, already there. `pt_umark_chord` marks the chord's bounding box, which
+contains that nib, so undo restores it too — and `tests/paintundo.py`'s redo
+hash is what says so out loud.
+
+**It sets `[pt_iall]`** (§42.15) exactly as the `pt_rect` calls it replaces
+did; the inked bounds themselves are re-derived at a resize and not per write.
+
+**To revert it, take the `[pt_spdst]` arm out of `pt_sparm`.** `pt_cvspans` is
+then unreachable and the replay walks as it did.
+
+#### What it measures
+
+`pt_flush_n` is the only thing that writes the canvas during a deferred
+stroke, so bracketing **every** call to it across a whole stroke — not just the
+one left owing at the release — is the canvas half end to end. A 45° stroke,
+6 px a report at 25 ms, 8 px nib, on a cycle-accurate 4.77 MHz 8088 with a
+Hercules; 14.9 output rows a chord against 7.2 `pt_rect` calls of 8 rows each:
+
+| a chord's replay | before | after |
+|---|---:|---:|
+| the canvas half | 70,575 cyc — **14.79 ms** | 53,077 cyc — **11.12 ms** |
+| `pt_rect` (57.6 row-writes) | 46,099 cyc | — |
+| `pt_cvspans` (14.9 rows) | — | 12,458 cyc |
+| `pt_spgen` | — | 16,544 cyc |
+| `pt_ucopy` | 19,311 cyc | 18,654 cyc |
+| the whole stroke's canvas half | 295.7 ms | **233.5 ms** |
+
+**3.7x on the drawing itself** — 46,099 cycles of `pt_rect` become 12,458 of
+`pt_cvspans` — and **1.33x on the half**, because deriving the list is not
+free: `pt_spgen` is 16,544 cycles and the replay pays a second one, the live
+screen pass having already paid the first. Per row `pt_cvspans` is *slower*
+than `pt_rect` (890 cycles against 800: the masks are computed rather than
+hoisted, and a span is wider than a dab); it wins on the count, 14.9 rows
+against 57.6, which is the only thing §42.8.9 ever claimed.
+
+**`pt_spgen` is now the largest single term after the undo copy** — 31% of the
+half, and it is paid on both halves, so it is where the next cycle of this
+goes. It is ~1,100 cycles an output row, and most of that is its second pass
+recomputing `clamp(r ± nib − wkmin, 0, ddy)` from scratch for every row when
+both bounds advance by exactly one row at a time.
+
+##### 42.8.9.3 AND THE TWO WINDOW ENDS WALK
+
+§42.8.9.2's own table names what it left behind: `pt_spgen` is **16,544
+cycles**, 31% of the canvas half, and the replay pays a *second* one because
+the live screen pass already spent the first. Per output row that is ~1,100
+cycles — **more than writing the row costs**.
+
+Almost all of it is pass 2 recomputing, from scratch for every row, a pair of
+indices that advance by exactly one record a row:
+
+```
+jlo = clamp(r - bhi - wkmin, 0, ddy)      two subtractions, a call, two
+jhi = clamp(r + blo - wkmin, 0, ddy)      compares and two shifts, twice over
+```
+
+That is §42.8.9.1's mistake in the other pass — *a compare-and-store against
+memory costs what the work costs* — and the fix is the same one: **the window
+ends walk.** `BX` and `SI` hold the two byte offsets into `pt_wkbuf` directly,
+each `add 4` a row and each sticking at its own ceiling, and the canvas row `r`
+is not needed at all after the setup.
+
+**The lower clamp becomes a HOLD count**, which is the only part that is not
+obvious. An index that starts at −3 reads record 0 for four output rows and
+then rises; so `pt_wkseq` returns both the clamped starting offset *and*
+`max(0, −raw)`, and the row loop skips that many **advances**. No test per row
+survives it — the `cmp`/`jz` that reads the hold is the test, and it is one
+word compare against the two subtractions, call, clamp and shifts it replaces.
+
+**`pt_wkclamp` becomes `pt_wkseq`** and nothing else calls it.
+
+#### What it measures
+
+The same stroke as §42.8.9.2, on the same machine. `pt_spgen` is paid twice a
+chord — once by the live screen pass, once by the replay — so this row moves
+**both** halves, which nothing else in §42.8.9 does:
+
+| a chord's REPLAY, 6 px a report, 14.9 rows | before | after |
+|---|---:|---:|
+| `pt_spgen` | 16,544 cyc | **11,827 cyc** |
+| …per output row | ~1,110 | **~794** |
+| the canvas half | 53,077 cyc — 11.12 ms | **48,373 cyc — 10.14 ms** |
+| the whole stroke's canvas half | 233.5 ms | **212.8 ms** |
+
+| the LIVE chord, `pt_seg` bracketed, 8 px a report | before | after |
+|---|---:|---:|
+| 45° — the armed case | 19,047 cyc — 3.99 ms | **14,271 cyc — 2.99 ms** |
+| straight down | 10,955 cyc | 10,955 cyc |
+| straight across | 11,782 cyc | 11,781 cyc |
+
+**28% off `pt_spgen`, twice a chord** — about 9,500 cycles, 2.0 ms, for a 45°
+chord that arms. The two straight rows are unchanged **to the cycle**, and
+that is the check rather than a footnote: §42.8.5's gate leaves them unarmed,
+so `pt_spgen` never runs on them and a change to it must not be able to move
+them.
+
+Taken with §42.8.9.2, a chord's canvas replay is **70,575 → 48,373 cycles,
+14.79 → 10.14 ms: 1.46x**.
+
+**What is deliberately NOT done.** For the rows in the middle of a chord
+neither hold nor ceiling nor canvas clip bites, and a middle loop with all
+four tests lifted out is ~219 cycles a row against ~445. The four boundaries
+are computable — every one of them is monotone — but that is four more
+derivations of the same geometry, which is the class §42.8.3 exists to warn
+about, and it buys ~3,000 cycles a chord a half. It is written down here so
+that it is a decision and not an oversight.
+
 ### 42.9 The canvas floor is the KERNEL's, and the size boxes stopped setting it
 
 `pt_sizeask` floored the height at **`PT_SZ_END` = 128** — *tall enough to
@@ -41627,6 +46530,19 @@ which is exactly the case at launch.
 
 ### 42.11 A document handed over at launch is read BEFORE `wm_create`
 
+> **SUPERSEDED BY §54.10, and the *reason* below is what survives.** The load
+> is not in the entry proc any more — it is in `pt_onwake`, after the window
+> is drawn — because reading it there meant several seconds of a frozen screen
+> with no Paint on it (§54.10). What that costs is exactly what this section
+> bought: `pt_tpl` is no longer the picture's size when `wm_create` runs, so
+> the window opens at the default and **resizes**. That is not the repair this
+> section refused; it is `pt_ondlg`'s own path, the one branch below that was
+> always correct, and `pt_onwake` takes it deliberately. The two things to
+> keep from here are why `pt_track` must not be the thing that follows a load
+> (it drags the canvas out to the window instead of the window in to the
+> canvas), and that `[pt_wchg]` is the debt that says so — which §54.10 now
+> **spends** where this section **cleared** it.
+
 A picture double-clicked in a Disk window (§54.4) reached Paint as a name, and
 Paint spent it from its **first `W_PAINT`**. That is a paint the kernel has
 already drawn a frame for, so the picture's size arrived after the window's was
@@ -41676,7 +46592,10 @@ to say nothing at all.
 Measured on a cycle-accurate 5150 with a Hercules card, double-clicking
 `MEDIA/OS8088.GIF`: frame **494x300 → 512x152**, canvas **466x258 → 466x110**,
 `[pt_wchg]` **1 → 0** — identical, now, to what the same file through
-`File ▸ Open` has always produced.
+`File ▸ Open` has always produced. (§54.10 reaches the same frame and the
+same canvas by the other road: `[pt_wchg]` **1 → spent on
+`OSAPI_WM_RESIZE`**, which is what `File ▸ Open` itself has always done with
+it.)
 
 #### 42.11.1 The `[pt_argp]` gate belongs to `pt_argload`, not to its caller
 
@@ -41740,6 +46659,214 @@ event-driven and adapter-conditional; the field's stays at 2 permanently.
 Nothing here is worth a layout change, and this section exists so the next reader
 does not re-derive it from the same five-pen sample.
 
+### 42.16 `Save changes to PICTURE.BMP?` — a FLAG, where Note Pad uses a checksum
+
+Paint answers §75.1's close negotiation the way Note Pad does (§27.15): a
+picture with unsaved work puts the question up and **refuses to close**,
+leaving itself on screen to be answered, and `pt_onask` finishes the job on
+Save / Discard / Cancel.
+
+**The difference is how it knows, and it is a deliberate departure.** §27.15
+argues at length for a checksum over a flag: a flag has to be set by every
+mutation, which is nine places in Note Pad that must each remember, and it
+answers *dirty* for a note the user typed a character into and took straight
+back out. Fletcher's two sums over a 16KB note cost ~0.14 s at
+PERFORMANCE.md's instruction floor and are exact.
+
+**A canvas is 62,720 bytes and rising**, so the same walk is **~0.5 s on a
+4.77 MHz 8088 at the moment the user clicks the close box** — and more on a
+loaded picture, and it has to run through `pt_rowset` per row because the
+canvas spans segments. Half a second of nothing happening in front of a click
+is the wrong price for a question that is usually answered *no*. So Paint
+takes the flag, and takes the flag's known cost with it: **draw a pixel, undo
+it, and Paint still asks.** That is honest — the picture *was* changed — and it
+is the trade, written down so the next reader does not "fix" it into a
+checksum.
+
+**`[pt_dirty]` is the HIGH BYTE of `[pt_iall]`'s word**, defined as
+`pt_iall + 1` rather than declared beside it, so the adjacency is a definition
+and cannot drift. The seven routines that write canvas pixels already opened
+with `mov byte [pt_iall], 1` (§42.15); they now write `mov word [pt_iall],
+0x0101` and set both facts in one store — the same six bytes, and one
+instruction rather than two.
+
+**What clears it** is the three moments the picture agrees with the disk, or
+there is nothing to lose: a save that believes it wrote (`[pt_msgp]` still
+`pt_s_wrote` at `pt_save`'s exit), a load that believes it read, and **New**,
+which leaves a blank canvas that is not worth a prompt.
+
+**What does NOT set it is a RESIZE**, and that is a decision rather than an
+oversight. Growing the canvas with the window does change the document — the
+BMP that comes out is a different size — so a flag set on every mutation would
+strictly be right to fire. But *open Paint, maximize, restore, close* would
+then ask a question about a blank picture nobody drew on, and the answer to it
+is worth nothing. The resize path reaches none of the seven writers
+(`pt_ucopy` stages rows and sets nothing), so this costs no code: it is what
+the mechanism already does, checked rather than assumed —
+`tests/paintdirty.py` asserts it.
+
+**The unnamed picture goes to Save As**, `[pt_qclose]` marking the dialog's
+commit as a quit exactly as §27.15.1 does it — and `pt_dlg` clears that flag at
+the one place all three of its callers pass through, because a *cancelled*
+dialog never reaches `pt_ondlg` and so could never clear it itself. Whether the
+write happened is `[pt_dirty]` again and not a second test.
+
+**A refusal from `os88ui_ask` leaves Paint open.** There are two of them — an
+alert is already up (and has just been *raised*, which is what §75.3.1 has
+instead of modality), or the window table is full — and neither is a reason to
+act on the user's behalf. Both being the same answer is why Paint carries no
+`[np_asking]` equivalent: Note Pad keeps one to tell those two apart, and a
+byte written and never read is worse than no byte. Note Pad saves on its way out instead, and the
+difference is the document: a note always has a name to save under, where a
+Paint picture usually does not, and writing `PICTURE.BMP` into whatever folder
+is current, on a close the user may not have meant, is the worse of the two
+outcomes.
+
+**The question names the file, or says `this picture`** when there is not one
+yet. Naming `PICTURE.BMP` there would promise the name the Save As dialog is
+about to ask for.
+
+#### 42.16.1 A new canvas is a GIF, and a loaded one stays what it was
+
+`[pt_sfmt]` used to arrive 0 from the zeroed bss and mean *BMP* until a menu
+verb said otherwise. The four verbs each name their own format — `Save Bmp`,
+`Save as Bmp...`, `Save Gif`, `Save as Gif...` — so the flag decides only the
+**default**: the name `pt_dlg` offers when there is none (`PICTURE.BMP` against
+`PICTURE.GIF`), and what §42.16's close question writes when the user answers
+Save.
+
+**A new canvas now defaults to GIF**, and the reason is the disks rather than
+the format: the 448×280 test picture is **1,285 bytes as a GIF against 62,838
+as a BMP** (§42.6), and a 360 KB floppy has 354 clusters. Drawing a picture and
+answering the close question used to spend a sixth of the disk.
+
+**And `pt_load` sets the flag from the magic it decoded**, which is the half
+that makes the default safe: without it, opening `FOO.BMP` and closing it would
+have written `FOO.GIF` — §42.16's Save calls `pt_save`, which coerces the name
+to the flag's extension (`pt_setext`). The flag now means *the format this
+document is in*, which is what both of its readers already wanted.
+
+### 42.17 A shrink that would lose ink gives back what it CAN, instead of nothing
+
+§42.9's per-axis rule is that *a shrink that would throw away ink is refused
+per axis: the other axis still moves, so widening while shortening does the
+half that is safe.* What "refused" meant was **pinned back to the size it
+already had** — drag the grow box in by 200 px over a picture with one stroke
+120 px from the right edge, and the window kept its whole width for the sake of
+80 columns.
+
+**Now the axis gives back everything it can.** `pt_sizeask` takes the largest
+shrink that loses nothing, which is the smallest width `w` for which
+`pt_lose_w` says no ink is dropped.
+
+**By BINARY SEARCH over the existing predicate, and that is the whole
+implementation.** `pt_lose_w(w)` is monotone in `w` — dropping fewer columns
+can never lose more ink — and the two ends are known before the search starts:
+the requested width loses (that is why we are here) and the current width does
+not (it drops nothing at all). So nine iterations of *"does this lose?"* find
+the boundary exactly, and every one of them is the scanner that already
+exists, in both storage formats, unchanged. Rewriting the scanners to report a
+right-most inked column instead would have been two new loops — packed and
+four-plane — to compute a number the predicate already brackets.
+
+It costs what the search costs: at most ⌈log₂(range)⌉ scans of a region that
+halves each time, against a `pt_resize` measured at **1.09 s** on the same
+drag. §42.15's inked bounds were considered for this and refused: they are
+exact and free, but `[pt_iall]` is 1 after any stroke — which is precisely
+when a shrink has something to lose — so the bounds are unavailable in the only
+case that matters.
+
+**`[pt_kept]` still means "an axis did not go where it was asked"**, and the
+toast is unchanged: the axis moved, just not all the way, which is the same
+thing the user needs telling about. `[pt_pinw]`/`[pt_pinh]` still pin that axis
+for the re-fit below them, because the value they now pin is a fundable one by
+the same argument — it is no larger than the width already held.
+
+### 42.18 ONE RECT BECOMES A TABLE OF ROW BANDS, and one stroke stops costing the canvas
+
+§42.15 answers a repaint with a fill when the canvas is uniform, and narrows
+the decode to an inked-bounds rect when it is not. It has one flag,
+`[pt_iall]`, and **any single pixel sets it**: from the first stroke the whole
+mechanism is off and every repaint decodes the lot.
+
+**What that costs, measured on a 4.77 MHz 8088 with a Hercules**, forcing a
+full-canvas repaint on the same 480×258 canvas in two states:
+
+| | |
+|---|---:|
+| BLANK — §42.15's one `gfx_fill` | **0.069 s** |
+| INKED — one 56×48 stroke on it | **0.880 s** |
+
+The canvas is 98% ground and pays 0.88 s to say so. **A fill is not free
+either** — 0.069 s over 123,840 pixels is 0.58 µs a pixel against the pair
+decoder's 7.1 — so the prize is 12/13 of the difference, not all of it, and
+that is still an order of magnitude.
+
+**The bounds becomes a TABLE, indexed by ROW BAND.** The canvas is cut into
+16-row bands (`PT_IBSH` = 4, at most `PT_NBAND` = 30 for a 464-row canvas) and
+each band carries its own inclusive x range: `x1 > x2` means *nothing is inked
+in this band*, and everything outside every band's range is `[pt_blankc]`, as
+before.
+
+**Why bands and not a grid of cells.** A blit is already priced per row and per
+pixel with a small fixed part, so cutting on the *row* axis costs one more call
+per band and nothing else, while cutting on both axes would fragment the inner
+loop that does the actual work. And the x range inside a band is what makes a
+diagonal cheap: a stroke corner to corner puts a *narrow* interval in every
+band it crosses, where a single bounds rect would cover the whole canvas and
+save nothing at all. That case — the 45° chord — is the one this whole document
+is about.
+
+**Adjacent bands merge before anything is drawn.** `pt_blit` walks the bands the
+damage covers, and extends a run while the next band's answer is identical; an
+empty run becomes one `gfx_fill` and an inked run one decode. So a blank canvas
+is still exactly one fill (§42.15's case, unchanged), and a canvas with a stroke
+across the middle is a fill, a decode, and a fill. **Vertically only**: merging
+horizontally would mean choosing between "decode more pixels" and "make another
+call", and at 7.1 µs a pixel against a call's fixed part that trade is a loss
+past about fifty columns — the merge that is worth doing is the free one.
+
+**The writers pay a rect, not a flag.** `pt_imark` takes a clipped canvas rect
+and folds it into the bands it covers — one or two for a brush dab — which is
+a compare and a store per band per axis. That is §42.8.9.1's rule respected
+rather than broken: the fold is per RECT, never per row.
+
+**`[pt_iall]` retires.** It said *nothing is known*, and with every writer
+maintaining the table there is no such state: an unmarked band is a claim, not
+an absence. `[pt_dirty]` (§42.16) keeps its meaning and is set by `pt_imark`
+instead of riding `[pt_iall]`'s word.
+
+**A resize keeps the table rather than banking it.** §42.15.2 banked the
+bounds across `pt_wipe` because the wipe cleared them; 120 bytes of table is
+too much to copy for that, so `[pt_ikeep]` stops the resize's wipe emptying it
+instead — the wipe lays the ground the copy-back is about to put the old
+picture onto, and the old table still describes that picture. `pt_iresize` then
+only clips: band *b* stays band *b* because the picture keeps its top-left
+corner, and every row or column the resize ADDED is ground, which an unmarked
+band already says.
+
+#### What it measures
+
+The same canvas, forced to repaint in full by a grow-box drag, on a 4.77 MHz
+8088 with a Hercules:
+
+| | before | after |
+|---|---:|---:|
+| BLANK, 464×258 | 0.069 s | **0.072 s** |
+| INKED — one 56×48 stroke, 480×258 | 0.880 s | **0.181 s** |
+
+**4.9x on the case that matters**, and the blank case is unchanged, which is
+the check rather than a footnote: §42.15's one-fill answer had to survive being
+expressed as a run of thirty identical bands, and it does — the merge closes
+them into a single `gfx_fill` exactly as before.
+
+What is left is the floor: filling 123,840 pixels of ground costs 0.07 s
+whatever else happens, so the remaining 0.11 s is four bands of stroke decoded
+at full band height. Cutting the bands finer would shrink that and cost a call
+each; 16 rows is where those two meet on this canvas.
+
+  apps/paint: 24,568 → 24,876 bytes, **+308**.
+
 ## 43. Solitaire — the eighth package (apps/solitaire/solitaire.asm)
 
 Klondike over the published package ABI. Prefix `sol_`, embedded two-card
@@ -41751,6 +46878,319 @@ what the Task Manager and the dock show, is still `SOLITAIRE`.
 
 It owns no worker task and claims no heap. Everything it does happens inside
 `W_PAINT`, `W_ONKEY`, `W_ONCLICK` and its `AM_ONCMD`, under the caller's lock.
+### 42.19 A resize walks its row addresses instead of computing them
+
+`pt_resize`'s copy-back called `pt_orowset` and `pt_rowset` once per **plane**
+per row to ask where a row lives at each end — 1,120 pairs on the 280-row
+planar canvas `os8088_xt_vga` gives Paint — and each of those is a 16-bit `MUL`
+and a 32-bit shift down to a paragraph.
+
+**The tell was a cost that did not move with the bytes.** Measured on MartyPC
+at 4.77 MHz, tracing the labelled points inside `pt_resize`:
+
+| phase | shrink 448→304 | grow 448→590 |
+|---|---|---|
+| stage the old picture (`pt_umark`) | 412.3 ms | — (`.moved` claims afresh) |
+| `pt_layout` + `pt_bmp_hdr` + `pt_wipe` | 153.3 ms | 241.0 ms |
+| the copy-back | **386.2 ms** | **386.2 ms** |
+
+The shrink carried 42,560 bytes and the grow 62,720, and they took the same
+386 ms — ~1,645 cycles a plane-row against ~475 of `rep movsw`. Seven cycles
+in ten were the addressing, and none of the ten moved with the picture.
+
+Consecutive rows are a fixed stride apart *in the file*, so each end is one
+subtraction from the row before. `pt_cvmove` calls `pt_orowset` and `pt_rowset`
+**once**, for whichever row the walk starts at, and `pt_mstep` carries the pair
+along: `and 15` for the offset and an **arithmetic** `sar 4` for the segment —
+arithmetic because a step down borrows, and a logical shift would send the
+segment 4,095 paragraphs *up* the arena instead of one down. The copy-back is
+**386.2 → 301.2 ms** (shrink) and **386.2 → 300.3 ms** (grow), +207 bytes of
+package.
+
+What is left is `pt_cvrow`'s per-plane overhead, and on a planar canvas that is
+four loop bodies for 38 bytes each. §42.13.2's rule is why it cannot be one:
+a planar row is four plane-runs end to end and a width change moves all three
+boundaries inside it.
+
+**`[pt_cvup]` is one flag read in three places**, not three decisions. When the
+destination is above the source in the *same* block, the rows walk from the
+bottom of the picture up, the planes within a row run last-to-first, and each
+move runs backwards — so a row is never written over a row still to be read.
+Nothing sets it yet; the copy-back's source is either a block of its own or
+lower in this one.
+
+#### 42.19.1 ...and an in-place resize needs no staging area at all
+
+`pt_resize`'s in-place path copied the **whole canvas** into the undo image
+first, laid out the new geometry, wiped it white, and copied the picture back.
+Three passes over the picture, of which the first exists only so that the
+copy-back never has to reason about the source and the destination overlapping.
+Traced on MartyPC, the staging pass is **412.3 ms of a 953.4 ms resize** — 43%
+— and it also made the resize *conditional*: a machine that could not fund an
+undo image had the resize REFUSED, because the wipe that followed would
+otherwise erase a picture there was nowhere to carry across.
+
+The picture is already inside the block being relaid out, so `[pt_osrc]` is
+`[pt_base]` and `pt_cvmove` reads it where it lies. What replaces the staging
+is a walk order, `[pt_cvup]` (§42.19).
+
+**One axis at a time, because one pass is not safe.** Row `r` sits at
+`PT_BMPHDR + (ch-1-r)*stride`, so how far it moves is
+`(ch-1-r)*stride - (och-1-r)*ostride` — linear in `r`, and when one dimension
+grows while the other shrinks it **changes sign partway up the picture**: the
+rows near one end move up while the rows near the other move down, and no
+single walk order is safe for all of them. Split into a height pass
+(`pt_hpass`, the stride held, so every kept row shifts by the same constant
+`(ch-och)*stride`) and a stride pass (`pt_spass`, the height held, so every row
+shifts by `(H-1-r)*(stride-ostride)`, one sign throughout), each pass has a
+constant sign by construction.
+
+**Which pass goes first is a memory question, not a correctness one.** The
+intermediate canvas must fit the claim we already hold, so the height goes
+first when it SHRINKS (`ch*ostride <= och*ostride`) and the stride goes first
+when the height grows (`och*stride <= ch*stride`). Either way neither
+intermediate is bigger than the larger end.
+
+A pass whose axis did not move is skipped, so the ordinary resize is one pass.
+`pt_spass` tests the **stride** and not the width: `stride = 4*ceil(w/8)`, so a
+width change inside a band of eight re-spaces nothing and only the new columns
+need whitening.
+
+**`pt_wipe` becomes `pt_cvwipe`**, which whitens the rows the move did not
+reach and, in the rows it did, everything from column `[pt_kw]` on. The column
+pass runs even when nothing was added, because the stride PADDING past the last
+column has to be white — §42.17's `pt_lose_w` scans whole bytes on the strength
+of that, and a shrink has just carried old ink into it. White is `0xFF` in both
+formats (a nibble of `0x0F` twice over; all four planes set), so a full row is
+`[pt_stride]` bytes of `0xFF` whichever way the canvas is stored and the
+boundary byte is one `OR` rather than a mask and a merge.
+
+**A resize can no longer be refused.** `pt_resize` keeps its `CF` contract, and
+nothing sets it: the only refusal it had was "nowhere to stage".
+
+Measured on `os8088_xt_vga`, a planar 280-row canvas, tracing the same points:
+
+| | before | after |
+|---|---|---|
+| in-place shrink 448→300 | 953.4 ms | **406.1 ms** |
+| grow past the claim 448→590 | 678.6 ms | **525.6 ms** |
+| in-place shrink 590→320 | 995.8 ms | **348.8 ms** |
+
+The wipe alone is 153.3 → 20.5 ms of final `pt_layout` plus 0–63 ms of column
+pass, and the third row is where the pass is skipped outright: an empty run and
+no boundary mask is 280 rows of four planes of bookkeeping writing **no bytes**,
+which cost 63 ms until it was tested for.
+
+**The row walk's direction is the one thing here with no safe default.** The
+first build had it inverted and every test that resizes a canvas *in one
+direction* still passed, because the copy-back's source used to be a separate
+buffer where every order is safe. What it did was wipe the picture from about
+the middle of the canvas down — and it read as the wipe going wrong, which is
+the part of the change that was new and innocent.
+
+#### 42.19.2 A row is set up once, not once per plane
+
+With the staging pass gone (§42.19.1) the move *is* the resize — 320 ms of a
+406 ms in-place shrink — and on a planar canvas it is four loop bodies for
+38 bytes each. `pt_cvrow` was paying for that four times over: five variables
+re-read, `ES` and `DS` reloaded, and the two plane offsets stored back to
+memory and re-added, per plane.
+
+None of it varies within a row. The row's two segments go into `ES` and `DS`
+once; the plane length, the two plane gaps and the plane count go into
+registers; and because `rep movs` leaves both pointers just past what it moved,
+the next plane is **one add** rather than two offsets stored, reloaded and
+re-added. The gap is `[pt_rpso] - [pt_rpb]`, so it also stops caring which
+plane this is.
+
+The backward walk is a second loop rather than a flag inside one, because the
+odd byte changes ends: forwards it is the last thing moved, backwards it is the
+first, and a backward move stops one byte *below* the region it moved — which
+is why its gaps are one shorter. Two tight loops beat one loop that asks.
+
+| | staged | walked (§42.19) | hoisted |
+|---|---|---|---|
+| the move, in-place shrink | — | 320.0 ms | **235.9 ms** |
+| in-place shrink 448→300, whole resize | 953.4 ms | 406.1 ms | **322.8 ms** |
+| grow past the claim 448→590 | 678.6 ms | 525.6 ms | **441.5 ms** |
+| in-place shrink 590→320 | 995.8 ms | 348.8 ms | **266.3 ms** |
+
+`tests/paintrz.py` is the gate, registered soak in both formats, and it exists
+because of what §42.19.1's first build did: **every other paint row passed with
+the row walk inverted**, since they all resize in the one direction the wrong
+answer survives. It lays two strokes far apart, resizes each axis in each
+direction and then both at once, and compares the inked pixels as a **set** —
+read out of the canvas, so no repaint can flatter it, and a set rather than a
+bounding box, so a smear inside the box does not pass.
+
+#### 42.19.3 The tool column is anchored, and a resize does not move it
+
+With the move down to 236 ms, the biggest single thing a resize costs is no
+longer the resize. Tracing a whole `W_PAINT` on `os8088_xt_vga` after a width
+change:
+
+| | |
+|---|---|
+| `pt_resize` | 260.0 ms |
+| `pt_draw_pal` — the tool column | **237.6 ms** |
+| `pt_draw_strip` — the colour strip | 146.6 ms |
+| the canvas blit and the rest | 37.9 ms |
+| `pt_fsbed` | 14.5 ms |
+| `pt_dmg_get` | 11.6 ms |
+
+§11.90.3's `[pt_dmoved]` says "the layout moved under us", and everything
+anchored to the *canvas* answers to it — the strip sits at `y = [pt_ch]`, so
+any height change really does move it. **The tool column and the divider are
+not anchored to the canvas.** They are pinned to the content's top-left corner,
+which a resize does not move, so a width change has not moved one pixel of
+either and redrawing them writes what is already there.
+
+`pt_dmg_anch` is `pt_dmg_hit` with `[pt_dgrew]` as the override instead of
+`[pt_dmoved]`, and `pt_anch` sets it: the origin moved, or the canvas got
+**taller** — which is more bed, and possibly a button that now fits. Shorter is
+not owed anything; what was drawn is still drawn and still where it was. The
+comparison is against what the LAST paint laid out with (`[pt_lox]`,
+`[pt_loy]`, `[pt_lch]`, latched in the same routine), not against anything
+inside this one, because the question is what is on the glass.
+
+Everything else about the test is unchanged — a window uncovered over its tool
+column still gets it back through the ordinary damage rect, which is why this
+is one flag swapped and not a second predicate.
+
+Measured on a shrinking grow-box drag, `ch` = 280 in both readings (the tool
+column's cost is a function of the height, not the width, so they compare):
+
+| | before | after |
+|---|---|---|
+| `pt_draw_pal` | 237.6 ms | **skipped** |
+| the divider | 5.1 ms | **skipped** |
+
+**Both halves were needed for it to reach the size boxes**, and it took a
+while to see why. §11.90.3 was armed only in `ui_grow`'s release, so the size
+boxes got a full damage rect from the kernel; and `pt_anch` first asked
+`[pt_szchg]`, which is 0 by then because the size boxes resize *outside* a
+paint and `pt_track` has already called `pt_setsize` again. Either one alone
+leaves the palette drawing. §11.90.3.1 arms the kernel half on `wm_resize`, and
+this routine asks the LAYOUT instead of the flag. Measured on the size boxes,
+`ch` = 280:
+
+| | before | after |
+|---|---|---|
+| width 448→304, the whole gesture | 798.2 ms | **517.1 ms** |
+| height 280→240, the whole gesture | 785.7 ms | **460.8 ms** |
+| the repaint alone | 454.8 ms | **173.5 ms** |
+
+What survives is `pt_draw_strip` at 146.6 ms, and it is genuinely owed: the
+strip sits at `y = [pt_ch]` and its contents are laid out across the content
+width, so a resize really does move it either way. That is the next thing in
+this repaint worth costing, and it is a different question — what part of the
+strip moved — rather than whether to draw it.
+
+#### 11.90.3.1 ...and a window that resizes itself by name gets the same
+
+§11.90.3 is armed in `ui_grow`'s release, so it reaches a hand on the grow box
+and nothing else. A package that resizes itself through `OSAPI_WM_RESIZE` —
+Paint's size boxes, its full-screen exit, `cal_hist_toggle` — came through
+`wm_resize` instead and paid a **full content repaint** for a window whose every
+surviving pixel is still its own.
+
+Same predicate, off the rect `wm_rz_bank` has already put aside for the
+repaint: origin unmoved, neither dimension grown. Armed immediately before
+`wm_rz_paint` and cleared immediately after, a one-shot exactly as `ui_grow`'s
+is.
+
+**It reaches less than it looks like it does, and that is the safety
+argument.** `wm_dmg_rzwin` is consumed inside `wm_damage`, behind the
+`WF_OWNBG` test — so it can only change what a package sees if that package
+*asks* for a damage rect. Of everything that calls `OSAPI_WM_RESIZE` today,
+only Paint does: `cal_hist_toggle` folds Calc's history pane through this exact
+predicate (a pure height shrink with the origin unmoved) and never calls
+`OSAPI_WM_DAMAGE`, so it is repainted exactly as before, and the C runtime's
+`_os88_wm_resize` hands through to whatever its caller does. The kernel's own
+drawing is unchanged either way: `wm_rz_paint` still repaints the union of the
+two rects, so a window that draws its whole face still gets its whole face.
+
+What the *application* owes itself across its own resize remains the
+application's to know — §42.19.3 is Paint's answer, and the reason it cannot be
+`[pt_szchg]`.
+
+### 42.20 The content area may be WIDER than the canvas, and usually is
+
+**This is the decision docs/SAVEUNDER-LIVE-PLAN.md §28 records and stops
+short of**, and it is that section's option 2: Paint lets its content area be
+wider than its canvas, rather than the kernel giving up the alignment or Paint
+giving up the snap.
+
+Since §11.94.5 the kernel rounds a window's content width up to a multiple of
+8, and `PT_CV_X` is 48, so a canvas whose width is not a multiple of 8 is
+handed a content area **1–7 columns wider than it asked for**. `pt_track`
+defines the canvas as the content area, so it read those columns as somebody
+asking for a bigger picture and grew the document into them. `pt_bmp_hdr`
+writes `biWidth` from `[pt_cw]`, so opening a 466-wide picture and saving it
+wrote a **472-wide file with six columns of white welded to its right edge** —
+and nothing warned, because `[pt_trunc]` is for the opposite case and the six
+columns are the colour a blank canvas already is.
+
+§28 costs option 2 as the expensive fix — "the canvas becomes a thing *inside*
+the content rather than equal to it, which touches `pt_track`, `pt_org`,
+`pt_wfix`, `pt_clip` and every click ladder". **It does not, because §42.7's
+fullscreen surface got there first.** A canvas smaller than its content is an
+old state in this program:
+
+- `pt_fsbed` already fills "anything the canvas leaves to its right", and its
+  own comment says why it was written — `pt_fit` shrank the canvas for want of
+  memory, not the user
+- `pt_stripset` already puts the strip flush with the **content's** bottom
+  rather than one row under the canvas, because on the fullscreen surface the
+  two are 67 rows apart
+- `pt_clip` clips to the canvas and the click ladder derives from `pt_org`'s
+  four words, both of which have to hold for the memory-cropped case anyway
+
+So the whole change is `pt_track` computing the content this canvas is
+**entitled** to — `[pt_cw] + PT_CV_X`, rounded up to 8 the way §11.94.5 rounds
+it, and `[pt_ch] + PT_STRIP_H + 1`, which nothing snaps — and treating a match
+as its own sizing coming back rather than a hand on the grow box.
+
+**And the match is remembered PER AXIS, because a drag can move one of them.**
+Asking "did both match?" and then taking *both* new sizes from the content is
+the same defect through the other door: a height-only drag leaves `[pt_contw]`
+at the entitled 520 while `[pt_conth]` changes, the combined test fails, and
+the width comes back as `520 − PT_CV_X` = 472. The 466-wide picture is 472 in
+the file with six white columns welded on, from a drag that never touched the
+width — and it is stable afterwards, because 472 rounds to 520 again and the
+test then passes. So the width test's answer is banked and the width is taken
+from `[pt_cw]` when it said yes. The height needs no such care: nothing snaps
+it, so `[pt_conth] − (PT_STRIP_H + 1)` is exact.
+
+**The kernel's arithmetic is mirrored here, deliberately.** There is no API
+that answers "what content would this frame give me", and the alternative —
+recording what the kernel actually returned — cannot work: all three of Paint's
+`OSAPI_WM_RESIZE` calls repaint *synchronously*, so `pt_track` runs inside the
+call and there is no "afterwards" in which to record anything. §11.94.5 is the
+contract being mirrored and it is cited at the code.
+
+**It costs one notch of grow-box stickiness, and only on an unaligned canvas.**
+With the canvas at 466 the entitled content is 520; a drag that lands there
+changes nothing, and the next notch (528 → a 480 canvas) moves it. The window
+grows those 6 px and the document does not, which is the point. A canvas that
+is already a multiple of 8 — every new canvas, and every canvas that has been
+dragged once — is entitled to exactly `cw + 48` and has no slack at all.
+
+`tests/paintrow.py` carries the assertion. It requires that opening the
+466-wide `OS8088.GIF` leaves `[pt_cw]` at 466, it has been correctly red since
+§11.94.5 landed, and it now reads 466.
+
+**The row loop below that assertion is still red, for a reason of its own**,
+and it is worth being precise about which half passes. The width is right; what
+fails is the rig that steps `pt_line_get` a row at a time through five bytes
+written over `pt_blit`'s entry — it does not survive its second call, the guest
+spins in the patched loop rather than hanging, and the symptom reads as the
+routine under test never returning. That rig has not executed since §11.94.5
+either, because the width assertion exits before it. What has been ruled out is
+written down at `call_line_get`; the remaining suspect is `patch_caller`'s own
+warning, that MartyPC's `pc` is the **fetch** pointer and `pt_blit+3` sits
+inside the prefetch window of the `call` at `pt_blit+0`.
+
 ### 42.13 The canvas is stored the way the CARD wants it
 
 §5.4's blit takes packed 4bpp — two pixels a byte, which is what a BMP row is
@@ -42048,13 +47488,16 @@ so the retry rides the next repaint at the cost of one far call, and the
 conversion happens exactly once, at the first repaint where the planes would
 actually be taken.
 
-#### 42.13.2 Six things the second bodies got wrong
+#### 42.13.2 Seven things the second bodies got wrong
 
 Two screenshots' worth, and none of them is visible in the routine that
 carries it — which is the point of writing them down. The first three came off
-a picture that had been drawn on; the last three off one that had been
+a picture that had been drawn on; the next three off one that had been
 **resized**, which is the operation that changes `[pt_bpr]` and so the only
-one that can tell the two formats apart at all.
+one that can tell the two formats apart at all. The seventh is the odd one
+out and §42.13.2.1 is why it deserves the space: it is not a second body at
+all, it is the setup the two bodies SHARE, and the format it broke is the one
+that did not change.
 
 **A mask built in the register the byte column is sitting in.** `pt_rect`'s
 planar setup computed the left byte column into `AX`, then `mov ah, 0xFF` /
@@ -42126,6 +47569,35 @@ to test — `jnc` / `movsb`. This one was found by the test written for the
 band, three lines after it started passing, which is the argument for
 comparing against the file rather than against a picture that looks right.
 
+##### 42.13.2.1 ...and a colour banked in the high half of the fill word
+
+`pt_wipe` is the one routine here whose two bodies share their whole setup.
+It replicates the colour into all four nibbles of `AX`, banks that in `DX`
+because `.row` needs `AX` for `pt_rowset`, and `.row` then stores `DX` as the
+fill word — `rep stosw`, a whole canvas row at a time. Giving `.planar` the
+bare colour cost one instruction, `mov dh, bl`, and `DH` **is the high half
+of the word `.row` stores**. A `CWHITE` wipe laid `0x0FFF` instead of
+`0xFFFF`.
+
+So a blank canvas came out `FF 0F FF 0F` — three pixels of white and one of
+colour 0, over and over, on **every row alike**. On screen that is a black
+vertical line a pixel wide every four pixels down the whole picture, and it is
+in the saved `.BMP` with them: `pt_wipe` writes the canvas, and the canvas is
+what a save is a single write of.
+
+**It is invisible on the adapter most people test on**, which is why it
+shipped. §42.13's whole point is that the canvas is packed on a 1bpp adapter
+and four planes on a colour one, so `.row` — the body this defect is in — is
+the one a VGA machine never runs. A Hercules or CGA primary runs nothing else.
+The other three wipes are `CWHITE` too (`pt_new`, the region an opened picture
+does not cover, and a resize), so it is every blank ground Paint has, not
+only the first.
+
+`DX` is banked whole now and `.planar` takes `DL` instead: the byte carries
+the nibble twice, and bit *k* of `n | n << 4` is bit *k* of the nibble for
+every *k* the four-iteration loop reaches. Two bytes smaller than the line it
+replaces.
+
 #### 42.13.4 `pt_screen` does not preserve `BX`, and `pt_sucache` believed it did
 
 The routine ends in `OSAPI_WM_DISPLAY`, whose documented outputs are
@@ -42150,6 +47622,39 @@ which is what `pt_bands` beside it already did. Depending on a register a
 public routine never promised is the defect; taking the window from the one
 place that owns it is the fix, and it makes both call sites correct for the
 same reason.
+
+### 42.14 `Decoding BMP` / `Decoding GIF` — the half of an open the widget cannot see
+
+Opening a picture is two operations with a hard boundary between them: the
+**read**, which is `int 13h` calls, and the **decode**, which is the CPU alone
+on a heap claim. §12.8's file-activity widget is stepped from inside
+`dsk_xfer`'s per-sector loop, so it reports the first exactly and **cannot see
+the second at all** — and the second is the long one. A GIF is compressed:
+the 448×280 test picture is 1,285 bytes where its BMP is 62,838, so the read
+is over in three sectors and the LZW that follows walks 125,000 pixels.
+
+So `pt_load` says which decoder is about to run, at the instruction the read
+ends. `pt_msg_show` → `toast_show` → `toast_now` (§59.4) puts it on the glass
+**before** the machine goes quiet, because both callers hold the gfx lock and
+provably own it: `pt_ondlg` is a dialog completion and `pt_onwake` (§54.10)
+takes the lock for its stated burst. The outcome toast — `Opened`, or why not
+— replaces it after the repaint, so nothing has to take it down.
+
+**This is `pt_save`'s `Saving...` at the other end of the same file**, and the
+argument is identical and was already written down there: an encode comes
+*before* the floppy starts, so the widget has nothing to report while it runs.
+The decode is the mirror image, and the reason it took longer to say so is
+that the load path had a different message removed for a different reason.
+That one was `Loading...`, and **removing it was right and stays right**: it
+said what the widget says better — a live bar rather than a static line — and
+it said it over the widget's own pixels. The two decisions are about different
+halves of the operation and do not contradict each other; `pt_ondlg`'s comment
+now carries both so the next reader does not have to reconstruct that.
+
+Two toasts and not one, because which decoder is running is a fact the user
+can act on: a GIF that takes twenty seconds and a BMP that takes four are the
+same wait with different reasons behind it. Both are 12 characters against
+`TOAST_MAX`'s 24 (§59.8).
 
 ### 43.1 The card
 
@@ -42582,6 +48087,174 @@ unexplained, and `keep = 0` is a state the shipped build reaches too** — on th
 first draw after `sol_pinv`, and after any re-fan — so it is not safe to file as
 a property of the knob. What is established is only that the shipped build's
 own output is exact against a full repaint on both 1bpp adapters.
+
+### 42.15 ONE COLOUR IS ONE RECT — a blank canvas is not a picture
+
+A full-canvas repaint on a 4.77 MHz 8088 is **980 ms**, measured, for the
+670×258 canvas a maximized Paint carries on a Hercules: one `gfx_blit4`, and
+§5.4.1's pair decoder costs the same per pixel whatever is in them. **The
+picture the machine draws most often has nothing in it at all** — every
+repaint before the first stroke, every one after New, and the one a resize
+owes — and a canvas of one colour is a `gfx_fill`, which is about 1 ms.
+
+**`[pt_iall]` and an INKED BOUNDS** say it: `[pt_iall]` = 1 means nothing is
+known and a repaint decodes the lot, as it always did. 0 means **every pixel
+outside `[pt_ix1]`..`[pt_iy2]` is `[pt_blankc]`**, and an empty bounds
+(x1 > x2) means the whole canvas is.
+
+`pt_blit` intersects its clipped rect with that bounds and gets three
+behaviours out of one mechanism:
+
+| the bounds | what the repaint costs |
+|---|---|
+| empty — a blank canvas | **one `gfx_fill`** |
+| a sub-rect — a resized one | the four bands around it are fills, the middle is decoded |
+| the whole canvas — anything has been drawn | today's single decode, unchanged |
+
+**The rect does not have to be the whole canvas.** If every pixel outside the
+bounds is that colour then so is every pixel of any part of it, so a damage
+repaint takes this too.
+
+#### 42.15.0 A drag-resize LARGER is the middle row, and it is not the WM's
+
+`wm_rz_paint` calls `wm_draw_win` on a grow — the whole window, frame and
+content — and `wm_draw_win` hands the app a `W_PAINT` for its whole content
+with no damage rect and no narrowed clip region. **That is the minimum the
+window manager can safely do**, and it is not an ordering defect to be fixed
+there: the app may re-lay out at the new size, and Paint does (the strip moves,
+the palette moves, the canvas grows), so a kernel that clipped the paint to the
+newly exposed L would be wrong. The knowledge that the old area is unchanged is
+the *app's*, and so is the saving.
+
+What Paint knows after `pt_resize` is exact: `pt_wipe` made the whole new
+canvas the ground and the copy-back wrote only the overlap, so the bounds is
+the overlap ∩ whatever the old canvas knew. A canvas that knew **nothing**
+still gains a bound there, which is the whole of what this buys — the picture
+is in the corner it always was and the two new bands are ground.
+
+#### 42.15.1 What sets it, and the six things that clear it
+
+**`pt_wipe` is the only thing in Paint that makes the canvas uniform**, and it
+is the only thing that sets the flag: `pt_canvas_init`, `pt_new` and
+`pt_resize` all reach it. What clears it is the six routines that write canvas
+pixels, as their **first instruction** — before the push set, since
+`mov byte [mem], imm` touches no register and no flag:
+
+| | |
+|---|---|
+| `pt_rect` | every brush dab, box and fill |
+| `pt_setpx` | one pixel |
+| `pt_line_put` | a decoded file row, and the line tool's |
+| `pt_frow` | a flood fill's run |
+| `pt_cb_merge` | a paste |
+| `pt_uswap_row` | undo and redo, which can put ink **back** |
+
+Each sets `[pt_iall]`, one byte, as it did when this was a bool — **it does not
+union a rect**. A union is eight compares against memory, ~600 cycles on this
+machine, and `pt_rect` runs eight times per brush chord: 12% of a chord to
+narrow a bound that the very next dab widens again. §42.8.9.1 is the same trade
+measured going the wrong way. The bounds is therefore established by the two
+routines that can state it for nothing — `pt_wipe` and `pt_resize` — and
+surrendered by everything else.
+
+That list is the whole invalidation surface and it was **enumerated rather than
+guessed**: eighteen routines address a canvas row through `pt_rowset`, and the
+other twelve only read it (`pt_blit`, `pt_getpx`, `pt_cb_grab`, `pt_line_get`,
+`pt_lose_w`/`pt_lose_h`, `pt_ucopy`, `pt_upix`) or move the picture without
+changing it (`pt_wipe`, `pt_resize`, `pt_topacked`, `pt_toplanar`).
+
+**Five of the six are downstream of `pt_undo_new`**, which is where a single
+clear would have gone. It is not there, deliberately: the sixth is `pt_uswap_row`,
+the undo *itself*, which by construction does not open a generation — so the
+choke point does not cover the case that most needs covering, and one clear
+that looks complete is worse than six that are.
+
+#### 42.15.2 A resize declares the canvas blank and then makes it untrue
+
+`pt_resize` wipes the new canvas — which sets an empty bounds — and copies the
+old picture back into it, and the copy-back moves ROWS rather than pixels, so
+it goes through none of the six. Left alone, a resize of an inked canvas would
+come back claiming to be blank, which is the one way to lose a picture here
+(until the next repaint, which draws it correctly again — the canvas itself is
+never touched).
+
+`pt_iresize` re-derives the bounds after the copy-back instead, and the old
+state it needs is banked **at the top of `.geom` rather than around `pt_wipe`**:
+the two `pop`s between them carry `pt_layout`'s width and height, so an `AX`
+borrowed across that pair resizes the canvas to the bookkeeping. That was
+written the wrong way round first and caught reading the diff back.
+
+#### 42.15.3 A stale flag cannot lose the picture
+
+The failure mode is worth stating because it decides how careful the list above
+has to be. A bounds wrongly reading *blank* paints the canvas area flat — and the
+**canvas memory is untouched**, so the next repaint that finds the flag clear
+draws the picture back. It is a visible, self-correcting display fault rather
+than data loss, and `tests/paintblank.py` is the gate: it draws with each tool
+that clears the flag, forces a repaint, and compares the glass against a canvas
+the untouched path wrote.
+
+#### 42.15.4 `pt_fit` asks whether a bigger block COULD be had; something has to go and get it
+
+`pt_adopt` is the loaders' door — a picture arriving, BMP or GIF. It clamps to
+the screen (`pt_cwmax`/`pt_chmax`), calls `pt_fit`, then `pt_layout`. And
+`pt_fit`'s accept is **two** questions, not one:
+
+```
+    cmp cx, [pt_smaxp]
+    jbe .out                        ; the block we hold carries it...
+    cmp cx, [pt_growp]
+    jbe .out                        ; ...or a bigger one we could claim does
+```
+
+**Nothing between it and `pt_layout` ever made that second claim.** So
+`pt_layout` built row tables addressing 26,078 bytes over a 25,600-byte block,
+and `pt_wipe` and then the decoder wrote **478 bytes past the end of it** —
+into whatever the heap had put next. Measured on a 466×110 GIF: `pt_smaxp`
+1,600 paragraphs against `pt_paras`' 1,630.
+
+**What it looked like was two lost rows, three removes away.** The canvas is
+stored bottom-up, so the overrun is the picture's TOP rows; they landed
+outside the claim, another owner overwrote them, and the later resize carried
+only the claim's own paragraphs. `tests/paintsu.py` reported it as the raise
+cache putting back the wrong pixels — the cache was restoring them faithfully,
+they were wrong before it ever ran (§28.8.1's shape, in another file).
+
+`pt_cvgrow` is the claim `pt_fit` was promising. **`OSAPI_MEM_REGROW` and not
+claim-copy-free**, which is the SDK's own advice at that cell: it extends in
+place when the paragraphs above are free — needing only the DIFFERENCE — and a
+refusal leaves the old claim untouched at its old base, so the fallback is
+simply to re-fit against what is held, exactly as `pt_resize`'s `.refit` does.
+
+**THE UNDO IMAGE IS FREED FIRST, and that is what makes the regrow land in
+place.** `pt_alloc` claims canvas, then undo, then clipboard, all at startup —
+so by the time a file is opened the undo image is the block sitting
+immediately above the canvas, and a regrow with it there could only ever move.
+Freeing it first is owed anyway (it is sized from `[pt_smaxp]`, which is about
+to change), and it opens a hole the size of the canvas itself — far more than
+any adopt can want, since the ceiling is the screen.
+
+**And `[pt_undelta]` has to be re-made, which is a second defect the first one
+hid.** The undo image is addressed as `rowseg[y] + [pt_undelta]` — a
+DIFFERENCE — and nothing recomputes it when only one of the two blocks moves:
+`pt_reloc` shifts `pt_rowseg[]` and `[pt_unseg]` separately, and `pt_layout`
+says in as many words that the delta is `pt_alloc_undo`'s to set. So a regrow
+that moved the canvas left `pt_urowset` pointing the undo image at whatever
+now sat that many paragraphs along, and the undo write landed there — measured
+as the canvas's bottom rows going wrong the moment the top rows were fixed.
+Re-claiming the undo image after the grow is what sets the delta again.
+
+**Why not claim the ceiling up front instead.** It is knowable — `pt_adopt`
+clamps first, so no adopt can want more than `pt_cwmax` × `pt_chmax` — and on
+a 5150/CGA that is 590×110 = 31.9 KB against the 25.0 KB Paint opens at. The
+reason it is not free is one line in `pt_alloc_undo`: the undo image is sized
+from `[pt_smaxp]`, so raising the canvas raises it too, and the clipboard takes
+the canvas size as well when the heap will fund it. The 7 KB is 14, and can be
+21, on every session whether or not a bigger picture is ever opened. The
+ceiling is not even constant: §11.98's adapter change re-derives
+`pt_cwmax`/`pt_chmax`, so a window dragged onto a bigger display raises it and
+the grow path is still owed.
+
 
 ## 44. Arkanoid — the ninth package (apps/arkanoid/arkanoid.asm)
 
@@ -48646,6 +54319,100 @@ placement, it is what a cache being claimed at the boot mount rather than after
 the drivers costs, and it is the next thing to do rather than a regression in
 this one.
 
+
+#### 50.3.2.1 Two images the doors were opened for and did not reach
+
+§50.3.2 drew the line — *a claim the hardware addresses, or whose base is a CS,
+goes high; a claim only software reads stays low, where the compactor can have
+it* — and then changed the claims that were in front of it: `SOUND`'s DMA ring,
+`ETHER`'s socket rings, `MEM_P_FATW`. **Two more were already on the wrong side
+of it**, and neither is a ring:
+
+| claim | why it can never move |
+|---|---|
+| `RAMPAGE.DRV` (`rd_page_need`, §62.9.9) | its base **is** its CS: `[rd_pfar]` is `PKG_DISP:[rd_pseg]`, and every verb is a far call to it |
+| `HDDTOOL.DRV` (`hd_tool_need`, §52.11) | the same, one driver along: `[hd_tfar]` |
+
+They are the rule's second clause verbatim, and they read `OSAPI_MEM_CLAIM` for
+the reason §50.3.2 already wrote about the rings — it was the only door a
+driver had when they were written. A package's region and a driver's image both
+go top-down already (`loader.inc`, `mod.inc`, `driver.inc`); these are the same
+kind of object and the only two images in the tree that a *driver* loads.
+
+**What they were doing, measured.** A 640KB XT with an already-formatted hard
+disk and a `SYSTEM.CFG` that asks for nothing (`os8088_xt_hdd`, `tests/heaphi.py`),
+driven through a user's sequence: open the Control Panel, tick Hard Drive —
+which is the mount (§52.6.1) — tick Ram Disk, select its page.
+
+```
+                                   largest run   ...after a compaction
+  desktop, no drivers                  449.0K          519.5K
+  + Hard Drive ticked                  426.0K          490.5K
+  + Ram Disk page selected             413.0K          413.0K   <-- before
+                                       413.0K          477.5K   <-- after
+```
+
+**+64.5KB to what a claimant can actually have**, and the shape of the loss is
+the point: `mem_claim` sheds and compacts before it refuses (§50.6.2, §66.9),
+so the second column is the number a claim is answered from — and at the last
+row it had *collapsed onto the first*. The compactor could do nothing at all.
+
+**Why a 4KB claim costs 64.5KB.** `dsk_rah_want`'s block is `MEM_P_DIRW`, the
+dearest cache in the system, and it is claimed at the **boot mount**, before
+any driver exists; `mem_claim_dma`'s 64KB page rule lands it at `0x20000` with
+the arena's floor beneath it. Dissolve it and there is a ~64.5KB hole at the
+bottom of the heap for the movable claims above to pack down into — which is
+exactly what `mem_cp_plan` does. `RAMPAGE.DRV` first-fits **above** those
+movables, at `0x31C00`, and it is pinned: the fill point stops there, the hole
+below stays a separate run, and the arena is two pieces instead of one for as
+long as the page is loaded. It is claimed and freed on every visit to that
+page, so this is not a boot-time layout question — it is a heap that comes
+apart when somebody opens a Control Panel page and knits back together when
+they leave it.
+
+**A pinned claim's cost is decided by what is ABOVE it, not by whether it is
+pinned** — and that is the sentence worth keeping, because the obvious
+generalisation from the rows above is *"pinned belongs high"*, that
+generalisation is wrong, and it was tried before it was believed.
+
+**The HDD's per-partition listing claim (§22.6) is the counter-example, and it
+stays low.** It has every surface feature of the defect: 6KB, `MC_RLOC` = 0 for
+ever (§66.5.10.1 — it is *donated*, and the kernel holds two of its three
+naming words), claimed at the automount, and it first-fits into the gap
+**under** the 63KB read-ahead, giving that cache something pinned on both
+sides. Sent high it measured:
+
+```
+                                   largest run   ...after a compaction
+  + Hard Drive ticked                  416.0K          481.5K   (was 426.0K / 490.5K)
+```
+
+**−10KB live and −9KB compacted, for nothing.** It sits *below* every movable
+claim, so `mem_cp_plan` packs them straight past it and the big run never sees
+it; at the top it lowers that run's ceiling by its whole size, permanently and
+on every machine with a hard disk — including the ones that never open a
+Control Panel page. The gap it strands is real and it is 1.5KB, not 63KB: the
+cache's room is recovered by dissolving the cache, which the compactor does,
+and not by the block below it moving.
+
+So §66.5.10.1's conclusion stands unchanged, for a reason it did not have —
+but **only for the configuration measured above, and §66.5.6.2 is the one where
+it does not hold.** Where a first-fit claim lands is a property of the session,
+not of the code: on a desktop that has been *used* before the drive is mounted,
+the ~7.5KB gap under the read-ahead is already occupied and the 6KB lands
+**above** the cache instead, pinned, where it costs the whole 63KB and every
+compaction is worth nothing. Sending it up is still the wrong fix — it is worse
+in both placements — and what that configuration argues for is the one thing
+§66.5.10.1 ruled out on a budget argument rather than a technical one:
+**declaring it movable.** The table above is a measurement of two placements,
+not a licence to stop asking.
+
+**Nothing about the allocator changes**, exactly as in §50.3.2 — same scan,
+same record, same owner. `osapi_mem_claim_hi` reaches `mem_own` the way
+`osapi_mem_claim` does, so the owner word is still the calling driver's
+segment and `drv_release`'s `mem_free_owner` sweep still collects both images
+without knowing anything new (§50.4). What changes is `mem_dir`.
+
 ### 50.3.3 The floor moves once, and that is the loader coming home
 
 `[mem_base]` was a runtime word that never changed after `mem_init`. It changes
@@ -51118,6 +56885,32 @@ kernel got there first, through the BIOS, and the row is live. §52.10.3.1 is
 what that took, and it is worth reading before trusting any other sentence in
 this section that describes behaviour rather than code.
 
+##### 52.10.2.1 …and a KNOB kernel's volume boot record pointed at the shipped kernel's heap
+
+`BLOB_SEG` is the heap floor the hard-disk sector reads the blob to, and it is
+injected from the kernel's own build (§2.9.9) as `kseg + KERN_SIZE/16`. The
+Makefile got it by running `tools/kernsize.py --json` — **which re-ASSEMBLES the
+kernel to measure it, and takes its defines as arguments.** With none, it
+describes the *shipped* kernel whatever is sitting in `build/`.
+
+So a knob kernel large enough to move `KERN_SIZE` by a rung was installed with a
+volume boot record that loads its blob to the **shipped** kernel's heap floor —
+on top of its own image. Measured: `BOOTPROF=1 MOUDIAG=1` is `KERN_SIZE`
+119,296 and `BLOB_SEG` **1D80**, and the sector carried **1D20**. Three rungs
+low, straight into `.lowbss`.
+
+Each knob alone happened not to cross a rung, which is why this survived: it is
+invisible until two of them are on at once, and **no test in the tree boots a
+knob kernel from a hard disk**. `$(VIDDEF)` is passed to `kernsize` now, beside
+the `$OS88_DEFINES` that the same recipe already needed for `os88sym`. The
+shipped `boothd.bin` is byte-identical either way, checked both ways at one
+commit.
+
+**The floppy path cannot have this bug at all**, and that asymmetry is the
+design working: stage 2 publishes the segment it actually relocated itself to,
+so it is a measurement rather than a prediction. A constant baked into a sector
+is a prediction, and this is what a wrong one costs.
+
 #### 52.10.3.1 CLOSED: the paragraph above was true and the code was not
 
 The rule was written and never implemented, and what it cost was the symptom
@@ -52160,10 +57953,14 @@ things the kernel already does are what make it possible.
   windows were already the unowned species (§38.1), so nothing about how the
   window manager treats them changed.
 - **The tool's claim is owned by the RESIDENT's segment**, because
-  `OSAPI_MEM_CLAIM` takes its owner from `ES` and the resident is the caller.
-  `drv_release` sweeps `mem_free_owner` over a driver's segment before it
-  frees the image (§50.4), so a tool left loaded at detach is freed by the
-  kernel with no bookkeeping of ours.
+  `OSAPI_MEM_CLAIM_HI` takes its owner from `ES` — the same `mem_own` the
+  bottom-up door uses — and the resident is the caller. `drv_release` sweeps
+  `mem_free_owner` over a driver's segment before it frees the image (§50.4),
+  so a tool left loaded at detach is freed by the kernel with no bookkeeping
+  of ours. **The `_HI` half is §50.3.2.1's**, and it is the only part of this
+  bullet that is not original to it: the claim's base is its CS (`[hd_tfar]` is
+  `PKG_DISP:[hd_tseg]`), so it can never be compacted and has no business in
+  the arena the compactor works.
 - **Finding the file needs no new API**, and this is the part that looks like
   it should. `HDDTOOL.DRV` is on the *system* volume — A: on a floppy machine,
   the boot partition on an installed one (§52.10.3) — and a driver cannot ask
@@ -53080,6 +58877,68 @@ offsets.
   to a forced full repaint, and so must their raster dimensions and the
   `vid_ctx` records. The second alone passes on a broken kernel, because
   §53.6's exit repaint hides everything the bracket did to the wrong monitor.
+- §53.10's `fsx_page`, which is numbered after this list because it arrived
+  after it: TANK ATTACK (§85) on VGA is the consumer, `tests/tank.py` the
+  gate, and the assertion is that the picture ADVANCES - a flip that never
+  latches leaves a screen that is drawn on and never shown, which looks
+  exactly like a game that has hung.
+
+### 53.10 `fsx_page` — the only supported way to spend `FSI_PAGES`
+
+`fsx_page` (slot 0x04E8) — in AL = a page index; out CF=0 with that page on
+the glass, CF=1 refused with nothing written. Bracket-only, exclusive task
+only, and only in a **graphics** mode that offers more than one page: Mode X
+(3) and Hercules (2).
+
+**§53.4 has published `FSI_PAGES` since it was written and nothing could act
+on it.** The field says 3, 2, 4 or 8 depending on the mode, and the mechanism
+behind each of those numbers is different in kind:
+
+- **Mode X** moves the CRTC start address, in bytes, through 3D4h index
+  0x0C/0x0D.
+- **A Hercules does not move the start address at all.** Its second page is
+  bit 7 of the display-mode register at 3B8h — and that bit does nothing
+  until bit 1 of the configuration register at 3BFh allows it, which
+  `vid_setmode` deliberately leaves **clear** (§39.6), because the desktop
+  only ever addresses page 0.
+- **The text modes' pages are the BIOS's own 4KB convention**, not this
+  table's stride × rows, and no consumer here wants one.
+
+None of that is derivable from the info block, so every app that flips would
+rediscover it, and **the two ways to get it wrong both look like a card that
+has stopped working**: writing the start address without waiting for the
+retrace that latches it (so the app draws on the page still being scanned —
+which is the flicker a flip exists to remove), and setting the Hercules page
+bit without its configuration bit (so nothing happens at all).
+
+So the routine writes the register **and waits for the retrace**, which is
+what makes its contract a sentence a caller can rely on: *when this returns,
+the page you named is the one being scanned and every other page is yours to
+draw on*. The wait is `fsx_wait`'s own, so its `[ticks]` bound applies and a
+dead status port cannot hang it.
+
+**It refuses the text modes rather than guessing at them.** A text bracket
+that wants a page can have this routine learn the convention, which is where
+that belongs; today it would be a code path with no caller.
+
+**AND IT REFUSES THE HERCULES SECOND PAGE ON A MACHINE THAT ALSO HAS A COLOUR
+CARD.** §39.6's clear bit is not a default that a bracket may override: the
+reason `vid_setmode` writes 3BFh = 1 is stated at the write, and it is that
+the second 32KB page lives at **B8000**, where a CGA in the same machine
+lives — so allowing the decode puts two cards on the bus for the same
+addresses. A bracket does not change where the cards are. The predicate is
+`vid_dual_ok` (a mono card *and* a colour card), not `[vid_ndisp]`, which
+`vid_fsx_enter` has already forced to 1 before any call can reach here; on a
+lone-Hercules XT it answers no and the page is available as advertised. Page
+**0** takes 3BFh back to 1 on its way in, so the bracket leaves the register
+as the desktop's own value rather than as whatever the last flip wanted.
+
+**TANK ATTACK (§85) is the consumer that asked for it**, and it is the first
+thing in this tree to page-flip at all. Its Mode X backend draws into the
+page nobody is looking at and calls this; what it had before was the CRTC
+pair written by hand, in the wrong order, which is exactly the first failure
+above. Cost: **108 bytes of `.text` and one 8-byte slot**; the image rung's
+accrued figure went 153/512 to 261/512 and `KERN_SIZE` did not move.
 
 ---
 
@@ -53664,12 +59523,20 @@ already in hand.
 Note Pad, Paint, Tracker, ArtfulType and Frotz all take a document handed to
 them at launch, and the shape is the same in all five: the entry proc
 **records** (`OSAPI_ARG_FILE`, then the name **and the locator** copied into
-the app's own buffers) and the first `W_PAINT` **spends**. Recording in the entry proc is forced — the word
-is read-and-clear (§54.5), so it must be taken before anything else asks —
-and spending in the paint is forced too, because every load path in these
-apps shows a toast, repaints or enters fullscreen, and all three want the
-**gfx lock held**, which an entry proc does not hold (§20.2). The paint is
-also the first moment the window is placed and visible.
+the app's own buffers) and something later **spends**. Recording in the entry
+proc is forced — the word is read-and-clear (§54.5), so it must be taken
+before anything else asks — and spending elsewhere is forced too, because
+every load path in these apps shows a toast, repaints or enters fullscreen,
+and all three want the **gfx lock held**, which an entry proc does not hold
+(§20.2).
+
+**"Later" is `W_ONWAKE` (§54.10).** It was the first `W_PAINT` when this
+section was written, and that paint runs *inside* `wm_show`'s repaint — so
+the read still happened over a half-drawn desktop with the app's own content
+blank. The kernel calls the handler after that whole pass, which is the first
+moment the window is placed, visible **and finished**. Nothing else in this
+section changes: the three traps below are about the handoff, not about when
+it is spent.
 
 Three traps, every one of which shipped broken and was caught by clicking a
 saved file rather than by reading the code:
@@ -53706,13 +59573,17 @@ saved file rather than by reading the code:
   screen is painted, draw nothing**. One test on `[at_fs]` after the fact
   covers all three ways out — unlistable folder, unreadable file, and a
   fullscreen refused because another window owns the screen — and each of them
-  correctly falls back to the splash.
+  correctly falls back to the splash. Since §54.10 the splash is genuinely on
+  the glass before any of this runs, which is what the wait is now spent
+  looking at.
 
-Entering fullscreen from inside a `W_PAINT` is safe for the reason
+Entering fullscreen from inside a `W_PAINT` was safe for the reason
 `wm_grow_paint` is a no-op on a `WF_FULL` window: `wm_draw_win` draws the grow
 box *after* the paint proc returns (§11.1), and by then the window is
 fullscreen, so the box that would have landed in the middle of the page is
-never drawn.
+never drawn. `at_argload` runs from `W_ONWAKE` now and is not inside a paint
+at all, so the question does not arise on this path — it still does for
+`at_ondlg`, which is a completion callback under the same lock.
 
 ---
 
@@ -53792,6 +59663,131 @@ request rather than a double-click, and there is no window to ask.
 the poster's **state block** and not its window record; `FS_DRV`/`FS_CWD` are
 `fm_pool` fields (§22). Read as a window it is a garbage rect, and 22's own
 `fmv_winof` note is the same distinction from the other side.
+
+### 54.10 A document launch is TWO phases: the program, then the document
+
+Double-clicking a document froze the machine with nothing to look at. The
+whole of the launch — locate the program, read its image, run its entry proc,
+show its window — happened inside `assoc_run`, and **every app read its
+document inside that**, either in the entry proc (Paint, Note Pad, Word, the
+browser) or in the first `W_PAINT`, which is inside `wm_show`'s repaint
+(Tracker, ArtfulType, TeXPad, Frotz). Neither is a moment the user can be
+shown anything:
+
+- **In the entry proc** there is no window at all. The screen holds the file
+  manager and nothing else for the whole of the read.
+- **In the first `W_PAINT`** the window's frame is on the glass and its
+  content is not, and `wm_paint_all` has not finished the windows behind it —
+  so the read happens over a half-drawn desktop.
+
+An `int 13h` is ~400 ms on the target machine (`PERFORMANCE.md`), so a
+116KB module is *seconds* of that. The one thing that did move was §12.8's
+file-activity widget, which is exactly the complaint: the only evidence the
+machine was alive was a progress bar with no application behind it.
+
+**So the document is a SECOND PHASE.** `assoc_run` now finishes the program's
+launch completely — `wm_show` has drawn the new window and every window under
+it, `assoc_back` has put the volume back (§54.9) — and *then* tells the
+package to spend what it was handed. `assoc_handover` is that instruction and
+it is four: read `[ld_rec]`, take `I_WIN`, call `wm_wake_call`.
+
+**The message is the package's own `W_ONWAKE` handler** (§74.1), and that is
+a reuse rather than a new slot. The wake mechanism is already resident on
+every machine, its published environment is *the UI task with the gfx lock not
+held* — which is precisely where `assoc_run` is standing at that instruction —
+and its contract already says a handler must be indifferent to a kick with
+nothing to do, so a package tells the document's wake from any other the only
+way a wake handler ever can: **by its own pending flag**. A package that
+installs no handler is the machine it was before this existed, which is what
+makes the change safe to make one app at a time.
+
+It is a **call** (`wm_wake_call`) and not an `OSAPI_WM_WAKE` **post**. A post
+can be refused — the ring is 16 records and a user who moves the mouse during
+a multi-second load can fill it — and a refusal here loses the document
+silently; while the ordering a post would buy, against the mouse, is already
+settled by standing at that instruction. `wm_wake_call` is `wm_wake_disp` from
+its second half down and deliberately does **not** clear `[wm_wkq]`: a wake
+the window really did post is still owed after this one.
+
+`OSAPI_ARG_FILE` is unchanged and still read-and-clear in the **entry proc**
+(§54.5) — it has to be, the word is spent by the first asker and the loader
+disarms it the moment `ld_run_name` returns. What changed is that every app
+now only *records* there. §54.8's shape holds, with "the first `W_PAINT`
+spends" replaced by "`W_ONWAKE` spends".
+
+**What the user sees, double-clicking `MEDIA/OS8088.GIF`:** the progress bar
+fills for `PAINT.O88`; Paint's window draws, empty; the progress bar fills
+again for `OS8088.GIF`; `Decoding GIF` appears in the menu bar (§42.14); the
+window resizes to 466×110 with the picture in it and the toast becomes
+`Opened`. That last step is `OSAPI_WM_RESIZE` — the file dialog's own
+completion path — so a double-clicked picture and a `File ▸ Open` of the same
+file now end in the identical window, which §42.11 achieved by a different
+route and at the cost of this one.
+
+#### 54.10.1 The nine apps, and the three things that moved with the load
+
+| app | before | what its handler does |
+|---|---|---|
+| Paint | entry proc, **above `wm_create`** (§42.11) | `pt_argload`, then `pt_ondlg`'s own resize/repaint/toast tail |
+| Note Pad | entry proc | `np_load`, `np_mark`, `np_redraw` |
+| Word | entry proc | `wd_load`, `wd_redraw` |
+| Browser | entry proc | `br_opened`'s tail: load, measure, relayout, band, scroll bar |
+| Tracker | first `W_PAINT` | `trk_argload` → `trk_fdone`, the dialog's completion proc |
+| ArtfulType | first `W_PAINT` | `at_argload` → `at_load_named` + `at_fs_enter` |
+| TeXPad | first `W_PAINT` | `tp_deferred_ld`, then `tp_redraw` and `[tp_ldfull]` spent |
+| Frotz | first `W_PAINT` | `zi_openpend` alone — `zi_load` already ends in `zw_clear`/`zw_paint`/`zf_hire` for `File ▸ Open Story`'s sake, and a `zf_paint` after it would put the splash back over a failure's notice |
+| CWORD | **nothing at all** | `os88_file_goto`, `ovl_file_load`, `cw_redraw_all` |
+
+CWORD is the one that was not merely late: it registered `.RTF` with
+`os88_assoc_set` and never called `os88_arg_file`, so double-clicking a
+document launched Word with an **empty** one. It has the C SDK's
+`CC_HAS_ONWAKE` now and reaches `ovl_file_load` — the same overlay entry
+`os88_onfile`'s Open arm uses — with size 0, which is that routine's own
+"no size known" (the association path has none to give, where the Standard
+File dialog does).
+
+Three things had to move with the load rather than being left where they were,
+and each was a real defect in the version that did not:
+
+- **Every handler takes the gfx lock.** §74.1 permits a wake handler to take
+  it for a burst it can state, and each of these states one: a read, a decode
+  or reflow, and a repaint. It is not optional — `OSAPI_WM_RESIZE`,
+  `np_redraw`, `at_fs_enter` and the rest all draw, and `toast_now` (§59.4)
+  only reaches the glass for a caller that **provably owns** the lock, which
+  is what puts `Decoding GIF` up before the decode rather than after it.
+- **Note Pad's `np_mark` came too.** It records what the document agrees with
+  the disk about (§27.15), and `np_entry` runs it right after `np_arg`. With
+  the load deferred that call now marks the *empty* note, so a document opened
+  by double-click read DIRTY from its first keystroke and the close alert
+  asked about work nobody had done.
+- **Paint stopped clearing `[pt_wchg]`.** §42.11 cleared it because the load
+  ran above `wm_create` and the *template* was the answer; run after the
+  window, the resize debt `pt_wfollow` raises is a real one, and clearing it
+  would leave the picture in a default-sized window.
+
+#### 54.10.2 `wm_onwake` preserves the flags now, and it did not
+
+Every app installs its handler from its **entry proc after `OSAPI_WM_CREATE`**,
+which is what the SDK tells a package to do — and that is the one place where
+the `CF` the entry owes the loader (§21) is still riding in the flags.
+`wm_onwake` reaches its side table through `wm_wkh_slot`, whose `wm_ptr2idx`
+is a `div`, so installing one **ate that `CF`** and the launch failed or
+aborted at random depending on what the divide left behind.
+
+`wm_onclose` (§75.1) already carried a `pushf`/`popf` for exactly this reason
+and said so; `wm_onwake` now does too. The alternative was a `pushf`/`popf`
+pair at nine call sites and a silent aborted launch at whichever one forgot —
+§59.7's clamp, and §42.11.1's lesson, arriving at a third door.
+
+#### 54.10.3 The harness kicks itself
+
+`ZHARNESS` builds of Frotz (§61.13) seed `[zf_pend]` with their own story name
+and never call `OSAPI_ARG_FILE`, so no double-click and no `assoc_run` stands
+behind them — and with the load moved off the first paint, nothing would ever
+open the story. That build posts its own `OSAPI_WM_WAKE` from the entry proc
+instead, which is the published way to reach the same handler, and reloads
+`BX` first because `OSAPI_ARG_FILE` above it clobbers the window pointer
+(the same trap `zf_entry`'s own exit documents).
 
 ## 55. clip.inc — the system clipboard
 
@@ -57437,6 +63433,11 @@ mount, and **`RAMPAGE.DRV`** — read off the system volume when the page is
 first painted, and freed when the panel closes — holds the page's layout, its
 strings, its paint, its click and its file-dialog completion.
 
+The image is claimed **top-down**, with `OSAPI_MEM_CLAIM_HI` (§50.3.2.1). Its
+base is its CS, so no compaction can ever move it; claimed low it first-fitted
+at the floor of the data arena, above every movable claim, and it does that
+again on every visit to this page rather than once for the life of a mount.
+
 It is `OS88_OVERLAY` and not a driver: `DRVC_OVL`, no `drv_tab` row, no class,
 no Drivers-page tick of its own, and the kernel never sees it. It could not be
 a driver even if that were wanted — publication is per class (§51.2.1) and a
@@ -60956,6 +66957,67 @@ the kernel segment on the first move. All five of the kernel's relocation procs
 were audited against this and the other four were already right.
 
 
+#### 66.5.6.2 A declaration that was refused, and threw the refusal away
+
+**Every Disk window on a floppy volume has carried a PINNED 3KB listing cache
+in the arena's floor since §66.5.6 landed**, and `files.inc` has said
+`; ...and it is MOVABLE (SPEC.md 66.5.6)` on the line that failed to make it
+so the whole time.
+
+`fm_kinit_x` claims `VIEW_KB` with the owning instance slot computed into `BX`
+from the record it was handed, and then calls `fmv_movable` — which does not
+use that `BX`. It calls `fmv_owner`, which derives the slot from
+**`[fm_vinst]`**, the *acting* window. `fm_vp_set` is what publishes it, and in
+`fm_kinit_x` that call is sixty-odd lines further down. So at the declaration
+`[fm_vinst]` still named the window that was acting before — or was 0, on the
+machine's first Disk window, where `fmv_owner`'s "cannot happen" arm hands back
+`MEM_K_SAVE`.
+
+`mem_movable`'s fence is `MC_SEG == DX && MC_OWN == BX` — *yours, or not at
+all*, deliberately the same fence as `mem_free`'s. A wrong owner is a scan that
+matches nothing, so it returns CF = 1 and writes no `MC_RLOC`. **And
+`fmv_movable` ends in `popf`**, which restores the flags it saved on entry and
+discards that refusal. There is no error path because there is no error left to
+see.
+
+The fix is to call `mem_movable` from the claim site with the `BX` already in
+hand, which is three bytes and no new mechanism. `fmv_movable` stays as it is
+for `fmv_fit`'s call, where `[fm_vinst]` *is* this window because the re-claim
+happens on the acting one.
+
+**What it cost, measured** (`os8088_xt_hdd`, 640KB, and the sequence is the
+point — two Disk windows opened *before* the drive is mounted, which is what a
+machine that has been used looks like):
+
+```
+                                     largest run   ...after a compaction
+  two Disk windows open                  422.0K          434.0K   before
+                                         422.0K          498.5K   after   +64.5K
+  ...then the hard disk mounted          403.0K          403.0K   before
+                                         403.0K          403.0K   after    +0.0K
+```
+
+**+64.5KB on the first row and nothing on the second, and the second row is
+the more interesting one.** Fixing the declaration does not move where a claim
+*lands*: the 3KB cache is still claimed at `0x1E200`, and it is still most of
+the ~7.5KB gap the boot leaves under §18.95's read-ahead. So when the hard disk
+is ticked in afterwards, its 6KB per-partition listing claim (§66.5.10.1) no
+longer fits below that cache and first-fits **above** it — and *that* claim is
+pinned for ever. A purgeable block with something pinned on both sides hands
+its room to nobody: the compacted figure collapses onto the live one and 63KB
+of the dearest cache in the system stops being worth shedding. With the 6KB
+declared movable the same row models at **479.5K**; it is the only barrier
+left in that map below the top.
+
+**§50.3.2.1 said that claim was harmless where it is, and this is the
+configuration where it is not.** That measurement was taken on a desktop
+nothing had been opened on, where first fit put the 6KB *below* every movable
+claim; it does not hold on a desktop that has been used, because where a
+first-fit claim lands is a property of the session and not of the code. The
+conclusion to keep is the mechanism — a pinned claim's cost is decided by what
+is above it — and not the placement it happened to get.
+
+
 ### 66.5.7 The three editors, and what a second claim costs
 
 ArtfulType, Note Pad and Fractal, adopted together because they are the same
@@ -61199,6 +67261,108 @@ block is 6KB against the RAM disk's store, and this tree stands at one
 512-byte step of `KERN_BUDGET`. The shape is what is worth keeping: **the
 relocation callback assumes one holder, and a claim that is given away has
 two.**
+
+**AND IT STAYS LOW, which §50.3.2.1 asked and answered the other way.** The
+argument for sending it up was sound and it lost to a measurement: this block
+is pinned for ever, it first-fits *under* §18.95's read-ahead on every
+hard-disk mount, and it looks exactly like the two images §50.3.2.1 moved.
+What separates it is that it lands **below every movable claim**, and
+`mem_cp_plan` resumes its fill point above each barrier — so the movables pack
+straight past it and the big run loses nothing. Sent high it cost **9KB** of
+what a claimant can have, because the top has no compactor to pack around it.
+The general form is in §50.3.2.1: a pinned block's cost is decided by what is
+*above* it, not by whether it is pinned.
+
+#### 66.5.10.2 …so the kernel becomes the other half of the callback
+
+**§66.5.10.1 is right that the callback reaches one holder of a donated claim,
+and wrong that this is where the matter ends.** It closed on a budget — *"the
+block is 6KB against the RAM disk's store, and this tree stands at one 512-byte
+step of `KERN_BUDGET`"* — which is not an argument this project accepts
+(CLAUDE.md: *a rung is not a design input*). §66.5.6.2 is the configuration
+that made the block worth the bytes: on a desktop that has been **used** before
+a hard disk is mounted, the ~7.5KB gap under §18.95's read-ahead is already
+occupied, the 6KB first-fits **above** that cache instead of below it, and a
+purgeable block pinned on both sides hands its 63KB to nobody. The compacted
+figure collapses onto the live one and every compaction after that is worth
+nothing.
+
+**The fix is the one §66.5.10.1 described and did not take: `mem_reloc_call`
+tells the KERNEL about every move, and then tells the owner.**
+
+```
+mem_reloc_call:                 ; BX = old base, DX = new
+    ...
+    call far cw_mem_disp        ; BP = dsk_dseg_reloc - the KERNEL's holders
+    ...                         ; ...and THEN the owner's proc, as before
+```
+
+`dsk_dseg_reloc` is `dsk_fatw_reloc`'s shape, 100 lines along in the same file
+and for the same reason: it scans `dsk_vtab` by **value** for `DV_SEG` and
+fixes `[dsk_dseg]` if the block being moved is the one currently mounted. By
+value and not by `[disk_drive]`'s index, because a compaction can fire while a
+different volume is current. It is `.text`, which §66.5.6.1 explains is
+load-bearing and ungated.
+
+**It runs for EVERY move, not for a recognised few**, and that is the design
+rather than a shortcut. A donated claim is not a hard-disk concept — it is what
+`osapi_vol_add`'s `DX` means — so any future driver that donates one is movable
+the day it declares a proc, with no kernel change and nothing to remember. The
+price is a `DVOL_MAX`-row scan per moved block, which is eight compares against
+a `rep movsb` of up to 64KB.
+
+The driver's half is then **one word**: `hd_lst_reloc` scans `hd_vols` for
+`HDV_LSEG`, which is the only place `HDD.DRV` writes the segment down — and it
+writes it for exactly one purpose, to free the block.
+
+**Two conditions this inherits rather than introduces.** §66.5.5's rule binds
+it: a driver-owned claim does not move while any `TF_SERVICE` task is unparked,
+all-or-nothing across the machine, so a Sound Blaster stream mid-refill pins
+this block exactly as it pins the RAM disk's store. And the audit — which is
+the actual work, not the code — is **`[dsk_dseg]` held in a segment register
+across anything that can claim**, because a claim compacts. There are two such
+windows, both in `disk_mount_x`, and neither can reach a claim: the sort's
+(`dsk_sortdir` only, and ES goes back to `LOW_SEG` before the harvest reads
+anything) and the `.fsicons` pass's, where `asc_use_x` — the one routine in
+that path that claims — is *deliberately not called*, which §54.7 already says
+in the code. `tools/dsegaudit.py` is that walk, transitively, so the next
+change to `disk.inc` re-answers it instead of inheriting this paragraph.
+
+**One window is clean only by accident of kind, and is worth naming.** The
+`.fsicons` pass calls `drv_fs_call`, which far-calls into a driver the graph
+cannot see through. It is unreachable here because that pass runs only for
+`DVK_FILE` volumes and this claim belongs to a `DVK_BIOS` one — so **a
+`DVK_FILE` driver that donates a listing claim and declares it movable makes
+that window live**, and owes the audit its own answer.
+
+**Measured** (`os8088_xt_hdd`, 640KB, two Disk windows opened *before* the
+drive is mounted — §66.5.6.2's sequence):
+
+```
+                                   largest run   ...what mem_claim would give
+  hard disk mounted, used desktop      403.0K          403.0K   before
+                                       403.0K          479.5K   after   +76.5K
+```
+
+**+76.5KB, and the live run does not move at all** — which is the whole shape
+of this class of defect and the reason `mem_avail` answers the second column
+(§50.6.3, §66.10.3). Nothing was refused before the change and nothing is
+granted more easily by luck after it; what changed is that the arena below the
+top now has **no barrier in it at all** — every claim there is movable or
+purgeable — so a compaction can actually deliver what the Task Manager has
+been reporting.
+
+`tests/hdmove.py` is the gate, and it is `rdmove`'s shape: heapfrag combs the
+arena, the hard disk is ticked in above it, heapfrag dies to open the ground,
+and heapfrag again forces the compaction. **The claim moved `6FC0 -> 3EE0`** —
+199KB down — with `HDV_LSEG`, `DV_SEG` and the block's own bytes all following
+it. `[dsk_dseg]` is reported NOT EXERCISED rather than passed: pointing it at
+the claim needs the hard-disk volume to be the mounted one when the compaction
+fires, and the only lever this test has for forcing one is launching heapfrag
+out of the B: window, which mounts B: on its way past. That is stated in the
+run instead of being quietly counted, and the check that is never vacuous sits
+beside it — **no word anywhere still holds the old base**.
+
 
 ### 66.5.11 The rest of the packages, and a row of the map that was wrong
 
@@ -62041,6 +68205,85 @@ The climb speed was tuned by playing it. The first pass used a figure that put
 an enemy nineteen seconds end to end on the tube, which reads as a screensaver
 rather than as Tempest; it is about six seconds at level 1 now.
 
+### 67.8.2 A shot was moved before it was tested, and the rim was unreachable
+
+**A fully ascended enemy could not be shot. By anyone, ever.** Reported from
+the front of the machine as *"I have never been able to kill a fully ascended
+enemy with jump + shoot"*, and the reading behind the report was right — the
+shot does not come out of the claw's mouth, it is placed into a lane — but the
+mechanism is one step further in, and it is an **ordering**, not a position.
+
+`cy_enemies_update` clamps a climber's depth to `CY_TOPD * 256` = **4352**;
+`cy_fire` and `cy_droid_tick` both spawn a shot at `CY_TOPD * 256` = 4352, the
+same place. So the shot begins life exactly on top of the thing it is meant to
+kill. But `cy_shots_update` **advanced the shot before testing it**:
+
+```
+    mov ax, [cy_s_dp + bx]
+    sub ax, 380              ; …first
+    …
+    mov [cy_s_dp + bx], ax
+    call cy_shot_hit         ; …and only then
+```
+
+`cy_shot_hit` allows **300** of depth difference. The shot's positions at test
+time were therefore 3972, 3592, 3212 … and its **closest approach to 4352 was
+380**, on the very first test:
+
+| test | shot depth | distance to an arrived enemy | ≤ 300? |
+|---|---:|---:|---|
+| 1st | 3972 | **380** | no |
+| 2nd | 3592 | 760 | no |
+
+Every later test is worse, so the union of the swept bands begins at 4352 − 80
+and **the whole lip is outside it**. The 380 step against a 300 tolerance
+leaves no gap anywhere else — consecutive bands overlap by 220 — so this is the
+*only* unreachable depth, which is exactly why it survived: nothing else misses.
+
+**What made it cost a whole class of play** is §67.5.3 and the rim collision
+together. An arrived enemy in your lane calls `cy_player_hit` **unless
+`cy_pjump` is non-zero** — so *jump to survive, shoot to kill* is the answer
+the game is built around, and the second half of it could not land. The only
+things that ever cleared the lip were the superzapper and moving away.
+
+The fix is the order: **test where the shot is, then move it.**
+
+```
+    call cy_shot_hit         ; where it IS - the muzzle on frame one…
+    cmp byte [cy_s_act + si], 1
+    jne .next                ; …and it may have spent itself doing so
+    mov ax, [cy_s_dp + bx]
+    sub ax, 380              ; …and the far end on its last
+```
+
+It adds the muzzle position to the sweep and removes nothing: the expiring
+frame now tests before it gives up, where before it returned without testing
+at all, so the deepest position is still covered. That is **one extra
+`cy_shot_hit` per shot per lifetime**, not per frame. The `cy_s_act` re-check
+is not optional — `cy_shot_hit` spends a non-piercing shot on a kill, and
+without the check a shot that had already hit something would go on to take a
+segment off the lane's spike as well.
+
+**Measured both ways on a 5150 + CGA.** First as played: reading `cy_e_kind`
+and `cy_e_dp` out of guest RAM over 500 samples and counting only deaths at the
+rim with no superzapper spent — **119 frames of an enemy sitting on the lip,
+0 killed there.** Emergent play then stopped producing the case at all once the
+droid was hunting, because nothing survives the climb any more, so the assertion
+was made **controlled** instead: poke a live enemy to depth 4352, poke a shot
+into its lane at the same depth, step two game frames, read the kind back.
+
+| | shot at the lip killed it |
+|---|---|
+| move-then-test (before) | **0 of 6** |
+| test-then-move (after) | **5 of 5** |
+
+That is a written state and not emergent play, and it is the right instrument
+for this one question: the claim is about a **collision rule**, not about an
+input path, and every trial picked an enemy whose lane was not the player's so
+that §67.5.3's rim collision could not confound it. A killed enemy reads back
+as `0FEh` *or* `0FFh` — dead, or dead and already erased and freed — because
+§67.5's two-phase death is one frame wide and the draw pass had run.
+
 ### 67.9 The powerups
 
 The powerups are Tempest 2000's four — the particle laser (shots pierce), the
@@ -62103,6 +68346,256 @@ The pulse stays, and it now runs `0304h`/`0405h` — no longer any enemy's
 footprint, and `cy_lanecap` caps the width to the lane, so asking for a wider
 box asks for "as wide as this lane allows" rather than for one that crowds its
 neighbours.
+
+### 67.9.2 The AI droid never dropped, and the gate is why
+
+`cy_maybe_drop` drew twice from `OSAPI_RAND` — once to decide *whether* a kill
+drops anything, once to decide *what* — and both draws read the bottom of the
+same weak generator. `osapi_rand` is an LCG mod 2^16 (`seed = seed*25173 +
+13849`), where bit *k* has period 2^(k+1), so the low three bits repeat every
+**eight calls**. The gate was `and ax, 7`. It never sampled anything: it fired
+on exactly every eighth kill for ever, and because it passed only when the seed
+was ≡ 0 (mod 8), the *next* word was pinned to 13849 ≡ 1 (mod 4). `div bx`
+reads that word as the kind, so **every powerup the game ever dropped was a
+JUMP** — except on levels 4–5, where the divisor is 3 and no power-of-two
+lattice can pin it.
+
+That is why the droid had never been seen by anyone. Level 6 is exactly where
+the divisor returns to 4, so the one level that unlocks the droid is the one
+that re-pins the draw. The particle laser and the spare zapper charge were lost
+the same way and simply less visibly, the player starting with one of each.
+
+The fix is **+6 bytes** and three parts, none of them another `RAND` call:
+
+- **The gate reads bits 8–10** (`test ax, 0700h`) — the same three bytes as the
+  `and` it replaces, and the part that unpins the kind. It also turns the drop
+  *rate* into a distribution rather than a metronome: still one kill in eight
+  on average, but 1 to 50 apart instead of always exactly 8.
+- **The kind reads the high byte** (`xchg al, ah`), because a two-bit slice off
+  the low end of this generator is worth nothing whatever the gate does.
+- **`cy_frame` is stirred in.** The first two make the kinds *uniform* but not
+  *unpredictable* — a fixed-phase slice of a 16-bit LCG still repeats every 128
+  drops, about a thousand kills and inside one good session. The frame counter
+  is free entropy already present and driven by **when the player shot**, and
+  folding its low byte in takes the period past 20,000 drops. The **low** byte
+  on purpose: `cy_frame` is under 256 for a game's first fourteen seconds, so
+  stirring the whole word would leave the high byte actually used untouched
+  exactly while a new player is watching.
+
+Measured by emulating the emitted instructions over 160,000 drops against four
+independent play-timing seeds — χ² against uniform and against lag-1
+independence, all six inside p = 0.001:
+
+| levels | divisor | distribution |
+|---|---|---|
+| 1–3 | 2 | ZAP 49.8%, JUMP 50.2% |
+| 4–5 | 3 | ZAP 33.4%, JUMP 33.5%, LASER 33.1% |
+| 6+ | 4 | ZAP 24.9%, JUMP 25.2%, LASER 24.9%, **DROID 25.0%** |
+
+The droid's median drought is 2 drops and its worst over 200,000 was 48. `div
+bx` cannot overflow: DX is zero and the dividend is one word.
+
+**The general lesson, and it is not Cyclone's.** `osapi_rand` is fine at the
+top and worthless at the bottom, so *any* `and ax, <2^n - 1>` or `mod 2^n` on
+its result is a bug waiting to be found — and two such draws in a row is the
+one that hides, because the first silently determines the second. Prefer the
+high bits, and where the sequence must not repeat inside a session, stir in
+something the player did.
+
+### 67.9.3 The droid is a SMALLER US
+
+§67.9's shapes rule ran out of aspects once already — §67.9.1 had to fall back
+on hollow-versus-solid for the powerup, because the five ratios worth having at
+9px were spoken for. The droid does not spend a sixth. It is **the claw's own
+silhouette at a smaller scale**: `0x0203` against `cy_player_draw`'s `0x0305`,
+so **7×5 against 11×7**, built the same way — the whole bounding rect in the
+player's pen and then a notch in the background — and drawn in **the same pen**,
+because the thing it has to say is *that is one of ours*.
+
+Scale is normally the worst discriminator on a 1bpp adapter, since nothing
+tells you how big a thing was meant to be. It works here for one structural
+reason: **both claws are pinned to the rim ring at `CY_TOPD`**, so they are
+never apart and never at different depths — the comparison the reader needs is
+always on screen. It is also a property no enemy can collide with however many
+kinds arrive later, which is the test §67.9.1 set for the hollow box.
+
+**Do not go below `0x0203`.** The notch insets are absolute (2px walls, 1px
+floor) rather than proportional, so they are what fails first: at half-width 2
+the notch is 1px, and at `cy_lanecap`'s floor of 1 the whole mover is a 3×3
+blob with no notch at all — which is precisely the *"movers that are not
+there"* the quarter-cap lesson in `cy_lanecap` records, and it would read as
+the droid never having arrived.
+
+Two things follow from it being the same shape:
+
+- **`cy_claw_notch` is shared.** The notch was inline in `cy_player_draw`; it is
+  now one routine both call, with `DI` still the drawing claw's own block so
+  `cy_obj_dmg` skips it and cannot recurse (§67.5.4's rule, unchanged).
+- **`cy_obj_put` re-cuts the droid's notch too.** A repair redraws from the
+  block, which is a plain rect fill, so a notched mover left out of that test
+  comes back **solid** — the claw's own bug, and the droid inherits both it and
+  the fix by being the same shape.
+
+The droid is drawn **before** the player, so on any frame where the same-lane
+guard in §67.9.4 has not yet separated them, the claw is the one left whole.
+
+### 67.9.3.1 The droid loses its notch for one frame in eight, and it is its own shot
+
+Measured on a 5150 CGA under MartyPC, sampling the rendered framebuffer every
+*display* frame and taking the droid's lit-pixel ratio: it is **0.66 for seven
+game frames and 1.00 for the eighth** — a filled box, no notch — recurring
+exactly on `cy_droid_tick`'s `test word [cy_frame], 7` cadence. (Three
+consecutive display frames read solid because CGA scans at 60 Hz against the
+18.2 Hz tick; that is one game frame.)
+
+It is arithmetic, not a drawing fault:
+
+| | rect | notch | lit / total |
+|---|---|---|---|
+| claw | 11×7 = 77 | 7×6 = 42 | 35/77 = **0.45** |
+| droid | 7×5 = 35 | 3×4 = 12 | 23/35 = **0.66** |
+| a shot at the lip | 5×5 = 25 | — | — |
+
+A shot is **25 px and the droid's notch is 12**, so a shot spawned on the
+droid's own lane at `CY_TOPD` covers the notch *entirely*. The claw cannot
+reach 1.00 the same way — 25 px into a 42 px notch is 0.78 at worst — which is
+why this has never been seen before and why it is starker on the smaller
+shape. The route is §67.5.4 working correctly: the notch erase damages the
+shot, `cy_obj_dmg` repairs it, and `cy_obj_put` puts it back **on top of the
+notch**.
+
+**It is left in, and it is a LOOK question rather than a defect to fix
+quietly.** At 18 fps it is a ~2.3 Hz blink locked to the gun firing, so it
+either reads as a muzzle flash or as flicker, and nothing here can tell which
+— §67.9.4's rule applies. The two fixes both cost something real, so neither
+is taken on an instrument's say-so:
+
+- **spawn the shot one depth step in** (`CY_TOPD * 256 - 380`) — 3 bytes, and
+  the shot was invisible on that frame anyway, being inside the gun. But it
+  then *skips* an enemy arrived at `CY_TOPD` in that lane, which is a
+  gameplay change and not a drawing one.
+- **enlarge the droid** to `0x0304` — 9×7, notch 5×6 = 30 px against a 25 px
+  shot. It also collides with the powerup's own footprint and costs most of
+  what §67.9.3's scale contrast buys.
+
+One neighbouring coincidence found while measuring, recorded so it is not
+re-discovered as a bug: a **powerup at depth 11–13 also renders 7×5 hollow**
+(`0x0304` scaled), the same footprint as the droid at the lip. They are never
+confusable in place — the powerup is *inside* the web and the droid *outside*
+the rim, and the powerup pulses between two sizes while the droid does not —
+but a measurement that keys on 7×5 alone will find both.
+
+### 67.9.4 The droid HUNTS
+
+`cy_dlane` is the droid's lane, and everything else — the firing, the drawing,
+the repair — reads it and does not care how it got there.
+
+Every `CY_DRSTEP` frames (default 6, a third of a second at 18 fps; `make
+DRSTEP=n`) the droid looks for **the nearest lane with something alive in it**
+and takes **one step** that way. Never a jump: it is always a single-lane move,
+so it costs exactly what any other single-lane move costs, and the player can
+see where it is going.
+
+`cy_droid_seek` walks the enemy table, skipping `0FFh` (free) and `0FEh` (dead
+but still drawn) because neither is worth a shot, and keeps the smallest
+distance. `cy_shortway` folds each lane delta to **the shorter way round a
+closed web** — a droid on lane 0 with a target on lane 15 of 16 goes *down*
+one rather than up fifteen — and leaves an open web's deltas alone, there
+being no way round one.
+
+**It holds still for two reasons, and holding is free** — the rect does not
+change, so `cy_obj_show` takes the did-not-move exit, which §67.5 calls the
+single biggest saving in the game loop:
+
+- nothing is alive to shoot at, which is the gap between waves;
+- the nearest thing is already in the droid's own lane, which is the whole
+  point of having gone there.
+
+**The same-lane overlap is handled twice, because there are two ways into it.**
+What `cy_lanecap` prevents is neighbouring movers touching (every mover is
+bounded to a third of its lane, so two adjacent ones are still a third of a
+lane apart); what it cannot prevent is two claws in the **same** lane, whose
+rects genuinely coincide and merge into one unreadable blob on a 1bpp adapter.
+So the hunt **refuses to step onto the player** — it holds beside him rather
+than stepping on and being shoved off next frame, which would be a redraw
+every step — and a guard runs **every frame** for the other direction, because
+the player can walk onto the droid and no step-time check would ever see it.
+
+`cy_ddir` is healed where it is read rather than trusted to whoever armed the
+droid: 0 out of a zeroed bss is a droid that never steps, and one that never
+steps is one the guard can never push off the player.
+
+**This was an A/B for one cycle and is not any more.** The other arm pinned the
+droid two lanes off the claw; drift won on the glass and the fixed arm is
+**deleted rather than kept as a knob**, so there is one behaviour and nothing
+half-live. PERFORMANCE.md Set 111 had already priced the two the same — 4.95
+fills a play frame against 5.41, both inside the scene noise — so nothing was
+riding on frames and the decision was the looking. Hunting is the same *step*
+drifting was, only with the direction chosen differently, so Set 111's
+measurement carries over unchanged: lanes are discrete, so the droid redraws
+only on the frames it actually steps, and an adjacent-lane rect does not touch
+this one, so `cy_rsub` takes its `.whole` path and a step is **two fills**.
+
+`cy_wrapd` survives for the guard alone, and only there: on an open web it
+**bounces** rather than clamping, because a clamp would leave the droid on the
+player's lane, which is the one thing the guard exists to prevent. The hunt
+does its own step with plain `cy_wrap` — it can never ask to leave an open web,
+every target lane being on it, and `cy_wrapd` has a **side effect** (it flips
+`cy_ddir`) that must not fire on a step the hunt may decline.
+
+### 67.9.5 `DROIDNOW` — the instrument that makes §67.9.4 testable
+
+The droid is a **level-6 drop**, so comparing the two arms of §67.9.4 honestly
+would mean reaching level 6 twice and getting lucky with the kind both times —
+a great deal of play between the tester and a question about how a 7×5 box
+moves. `make DROIDNOW=1` arms the droid at **new game** instead, and
+`make DROIDDRIFT=1 DROIDNOW=1` is the disk that answers the question in the
+first ten seconds.
+
+It is an **instrument and never ships**: nothing in `all` sets it, and it is in
+`CYCSTAMP` like the rest, so a build carrying it cannot be mistaken for one
+that does not.
+
+The direction word is **healed in `cy_droid_lane` rather than trusted to
+whoever armed the droid**. `cy_ddir` out of a zeroed bss is 0, which is a droid
+that never steps — and a droid that never steps is one the same-lane guard can
+never push off the player, so it sits **inside the claw** for the whole
+powerup. That is one line where it is read, instead of a rule every future
+arming path has to remember; `DROIDNOW` is the second such path and it was
+written after the first.
+
+### 67.22 `CYPROF` — how Cyclone is measured
+
+`make CYPROF=1` puts counters on the funnels every drawing call in this game
+passes through — `cy_fillx`, `cy_obj_dmg`, `cy_obj_put`, the web walker's
+`OSAPI_GFX_LSTEPV`, `gfx_frame`, `font_run` — beside `cy_frame`, which already
+counts game frames. It is an **instrument and never ships**; it is in
+`CYCSTAMP`, so a build carrying it cannot be confused with one that does not.
+
+A redraw is priced in **calls, not pixels** (PERFORMANCE.md), which is why
+these are call counters and why a changed-pixel figure is not a substitute.
+
+Reading them needs no debugger build: the package is found in guest RAM by
+searching for its header name, and the address is *confirmed* by checking that
+`cy_frame` there ticks at the game rate. bss offsets come from replaying the
+`CWORD`/`CBYTE`/`CBUF` declarations in source order — validated against
+`os88pkg`'s own reported `bss=3412`, which is the check that makes the whole
+method trustworthy.
+
+**The counters must be read against a `CYS_PLAY` window and nothing else.**
+`cy_frame` advances only in `cy_play_update`, while the call counters keep
+counting through `CYS_WARPIN`, `CYS_DIE` and the rest — so a naive ratio
+charges a level entry's drawing to the play frames alone and divides by a
+clock that stopped. Set 111's first version did exactly that and reported
+4.6 fps for a game that runs at the tick. Sample in short windows, read
+`cy_state` at both ends, keep only the windows that start and finish in play.
+
+PERFORMANCE.md Set 111 is the first run: **Cyclone sits on the 18.2 Hz tick**
+(54.8–55.3 ms a play frame) at **2.7 fills a play frame with no droid and
+about 5 with one**, so it is paced rather than compute-bound and the object
+layer is nowhere near spending its budget. That set also records the scene
+confounds — an armed droid changes how long the player survives, and
+`cy_entry` seeds from `OSAPI_GET_TICKS` so boot timing decides the game.
 
 ### 67.10 The attract screen
 
@@ -63928,16 +70421,19 @@ typeset later. Reading a floppy from the entry proc happens under the loader's
 lock and freezes the desktop for the length of the read — an `int 13h` call is
 ~400 ms on the target machine, so that is seconds, visibly.
 
-**"Later" is the FIRST PAINT**, which is the earliest moment that is not under
-that lock: the window is already up, so the document a double-click asked for
-lands in the source pane rather than waiting for a key or a click to arrive.
-The paint that follows the load draws every part of the window from what
-landed, so it IS the full repaint the load owes and `tp_ldfull` is cleared
-again before it runs.
+**"Later" is `W_ONWAKE`** (§54.10). It was the FIRST PAINT, on the reasoning
+that this is the earliest moment not under the loader's lock — and it is not:
+`wm_show` calls the paint proc from *inside* its own repaint, so the read
+still happened with the desktop half drawn and both panes blank. The kernel
+calls the wake handler after that whole pass, `tp_onwake` takes the lock for
+its stated burst, and `tp_redraw` at the end of it draws every part of the
+window from what landed — so it IS the full repaint the load owes and
+`tp_ldfull` is cleared again before it runs.
 
 A load reaching an event handler instead — a key or a click that arrives while
-the flag is still set — owes a FULL repaint rather than the incremental one
-that handler was on its way to doing: the byte count in the status strip and
+the flag is still set, which since §54.10 means only a wake the ring refused —
+owes a FULL repaint rather than the incremental one that handler was on its
+way to doing: the byte count in the status strip and
 the page count in the top bar both changed. `tp_ldfull` says so and the
 handler promotes itself, which keeps it to ONE draw — repainting the pane and
 then the window would put the source through twice, and a double draw is
@@ -64409,6 +70905,78 @@ It also flushed out a menu bug of exactly the browser's kind (§71.8):
 exactly one menu on this app's bar — so it was always 0 and **Clear Screen
 could never be reached**.
 
+### 70.7 The promise is per DEBT, not per session
+
+`te_show` calls `OSAPI_WM_OBSCURED` and **skips the draw** when the answer is
+yes. That is §11.96.1's disqualifier word for word — the buffer moves on and
+the glass does not — so a raise cache banked while text was arriving puts back
+a terminal missing whatever came in after it.
+
+The obvious fix is §71.11's: promise while the session is not up, withdraw for
+`TS_OPEN`/`TS_WAIT`/`TS_UP`. It is also the wrong one here, and for a reason
+worth writing down before the next window: **a telnet window spends its life
+connected and sitting at a prompt.** The state a per-session promise would
+refuse to bank is the state this window is in almost all of the time, so the
+feature would buy nothing.
+
+**`te_owed` already answers the finer question**, and it did before any of
+this — three debts and one test: the CHROME (`[te_dirty]`, a state change),
+the SCROLL (`[te_scrl]`, pixels the buffer has already moved) and the ROWS
+(`[te_dr0]`..`[te_dr1]`). Nothing owed means the buffer and the glass agree,
+and a cache taken then is exactly what a repaint would draw — whether the
+session is up, down or was never dialled. So `te_promise` is `te_owed`
+inverted, and the promise is **live in the sense the feature was asked for**:
+a connected terminal at an idle prompt holds a cache, and loses it the moment
+the host prints.
+
+Four call sites, all with the gfx lock held (§20.6 rule 7):
+
+| site | `te_owed` | |
+|---|---|---|
+| `te_show`, on the way in | true by construction — it is what got it called | **withdraw** |
+| `te_show`, after a draw that happened | false | **grant** |
+| `te_paint` (`W_PAINT`) | false — `te_screen` settles every row | **grant** |
+| `te_toggle`, at `TS_OPEN` | true — `te_clear` just marked all 18 rows | **withdraw** |
+
+The `te_toggle` site is §71.11's first bug not repeated: the withdrawal goes
+**at the transition and unconditionally**, not a tick later when the worker
+notices. The obscured, foreign-text-mode and credits paths leave `te_show`
+through `.un` without granting, which is right — the debt is still owed and
+only a paint can settle it.
+
+**Two colours**: `CBLACK` and `CWHITE`, four uses each and nothing else, so
+the depth claim rides along (§11.96.17) and the cache is 11,642 bytes rather
+than 46,526.
+
+#### 70.7.1 One worker pass is not closed, and that is the trade
+
+`te_feed` writes the buffer with **no lock held** — rule 3, because a
+`NETV_RECV` is up to 274 ms on the cable and the cursor may not stop for it —
+so between a byte landing and `te_show` taking the lock there is a window in
+which a raise restores the frame before it.
+
+It self-heals: the debt survives the raise, so the next worker pass draws it.
+The cost is therefore **up to one tick of a stale line** against a whole
+18-row repaint — 1,152 glyph cells, about a second on a 4.77 MHz 8088 — every
+single time the window is uncovered. Closing it needs the withdrawal at
+`te_feed`, and §20.6 rule 7 forbids a worker touching `wm_saveu` without the
+lock: the clear frees the cache, and the UI task may be blitting out of it.
+
+#### 70.7.2 …and `te_screen` was not clearing the scroll debt
+
+Found while placing the grant, and it is a defect on its own. `te_screen`
+marks all 18 rows and draws them from the buffer, so after it the glass is
+right — but `[te_scrl]` survived, and `te_scrollpaint` then spends it on the
+next worker pass by **blitting the whole terminal up N rows and marking only
+the N it vacated**. Rows 0..17−N are left showing rows N..17.
+
+It is reachable without the cache: text scrolls while the window is covered
+(`te_show` bails at `.un` *ahead* of `te_scrollpaint`, so `[te_scrl]`
+accumulates), the window is uncovered into a full `te_paint`, and the next
+pass blits a screen that was already correct. `te_screen` zeroes it now,
+which is also what makes `te_owed` readable as the whole truth — the
+precondition `te_promise` needs.
+
 ## 71. The browser fetches (`apps/browser/brnet.inc`)
 
 docs/NET-STACK-PLAN.md stage D. The rendering half of the browser needed **no
@@ -64828,6 +71396,57 @@ It is `DRVC_NET`, which was vacant: block mode left the class when NET.DRV
 became the file redirector (§62.10), and a card serves neither files nor
 sectors. So the cable and the card may be attached **at once**, in two
 publication slots, and a package chooses one by naming a class.
+
+### 71.11 The promise is per FETCH, not per package
+
+The Browser is §11.96.1's disqualifier written out: its worker advances the
+page — opens a socket, drains a reply, accumulates a body — and **skips
+drawing when the window cannot be seen**, which is content changing without
+being drawn and is exactly what a raise cache may not survive. So for as long
+as this application existed it made no promise and paid a full repaint on
+every raise, which for a page of text is §11.96's 578 ms of lettering.
+
+**It is only true while a fetch is in flight.** `[br_nstate]` already answers
+that: `BN_OPEN`..`BN_BODY` is a fetch, and `BN_IDLE`, `BN_DONE` and `BN_ERR`
+are a page standing still. `br_promise` is the state machine's second job —
+one routine, called with the gfx lock held, that hands `[br_nstate]`'s answer
+to `OSAPI_WM_SAVEU`.
+
+Three call sites, and each is a place the lock is already held:
+
+| site | context | says |
+|---|---|---|
+| `br_go`, at `BN_OPEN` | UI task — a menu command, a Return, a Submit | **live** |
+| the `BN_DONE` block | worker, inside the hold it paints the finished page in | settled |
+| `br_nshow` | worker, inside its own hold | settled — this is the `BN_ERR` path |
+
+**The withdrawal is unconditional and at the transition; only the SET reads
+`[br_nstate]`.** Putting a state-driven `br_promise` at `br_go`'s exit instead
+looks tidier and is wrong: the worker needs the lock only to **draw**, not to
+move its own state machine, so on a machine with no NIC it reaches `net_find`,
+fails and writes `BN_ERR` while `br_go` is still holding the lock. The exit
+then reads a settled state, calls it settled, and the withdrawal never happens
+at all. `tests/brpromise.py` caught it as a one-run-in-seven flake.
+
+**The clear must be prompt and the set may be late**, which is why the clear
+sits on the UI task and the set on the worker, and why that division needed
+no arranging: `br_go` is where a fetch starts and it already runs under the
+lock (§71.8), while the two ways a fetch ends are both the worker's and both
+already take one. §20.6 rule 7's amendment is what makes the worker's half
+legal.
+
+**Its poll loop needed no change**, and that is worth saying because most of
+the tree's would. `br_nstep` falls straight through to its exit on
+`BN_IDLE`/`BN_DONE`/`BN_ERR` — it takes no lock and arms no region when there
+is nothing to do — so an idle Browser does not destroy its own cache the way
+a worker that arms `wm_clip_set` on every tick does (§11.96.1).
+
+**What it gets, and where.** The content is about 16KB banked on a Hercules
+and 10KB on a CGA, so the promise is worth a cache on both of the adapters
+this OS is for. **And on a VGA too, now**: it declares two colours as well
+(§11.96.17), which the greyed Back and Forward used to make untrue and
+§11.96.17.1 fixed — so the claim is 23,513 bytes at one plane where four
+planes would have been 94,010 and `wm_su_kb` would have refused it.
 
 ### 72.1 What the packages did have to change, which is one question
 
@@ -67545,6 +74164,15 @@ Two things were added to the kernel for this port and both are general:
   itself for as long as it can state. `crt0.asm` grows `CC_HAS_ONWAKE`; the C
   sees `os88_wm_onwake(win)` and `int os88_wm_wake(win)`. It is what makes an
   emulator (or any long computation with I/O) a UI-task program here.
+
+  **It is also the machine's document handover** (§54.10), which is worth
+  naming because this section shipped saying "no shipped app uses it yet" and
+  the kernel note beside the guard called that the first thing to weigh if the
+  budget ever had to be defended. Nine apps install a handler now, and
+  `assoc_run` reaches it through `wm_wake_call` — the same dispatch with no
+  queued promise to spend. `wm_onwake` preserves the **flags** for that
+  (§54.10.2): every one of those installs is in an entry proc, where the `CF`
+  owed the loader is still in flight.
 - **an instance-marking variant of `OSAPI_FILE_GOTO_Q`** — §19.2.2's quiet
   stand moves the machine and deliberately not the instance, and every
   package file cell first re-stands the machine in the instance's folder, so
@@ -68498,6 +75126,50 @@ that would not survive.
 so an alert the user minimized comes back on the next close click. Without
 that, minimizing an alert would leave an application refusing to close with
 nothing on screen to say why.
+
+#### 75.3.0 The buttons track the pointer, and only the one that CHANGED redraws
+
+Two defects, reported from the field against Paint's `Save changes?` and both
+of them the shared control's rather than Paint's — which is the point of the
+control being shared, in both directions.
+
+**It did not install `W_ONDRAG`.** §13.8.2 exists for exactly this: *"the close
+box going back up as the pointer slides off is what tells you the gesture is
+cancelled before you commit to it, and a package's control could not say the
+same thing."* The alert installed `W_ONMOUSEUP` and nothing between the press
+and the release, so a button held and dragged off stayed filled and only came
+up when the finger lifted — the un-fill arriving at the moment it had stopped
+being information. `os88ui_adrag` **reads the arm**: `os88ui_armed`'s peek
+says which button the press claimed, `os88ui_ahit` says which one the pointer
+is over now, and `os88ui_adn` gets that button if the two agree and 0 if they
+do not.
+
+**It is not `os88ui_aclick` without the arm**, which is what it was first
+written as and is a different routine: with no test, a drag pressed whatever
+the pointer crossed — and a press that started on the alert's *message* arms
+nothing, so `os88ui_aup`'s `or ax, ax / jz .out` returned without putting
+anything up, and the button stayed drawn pressed for as long as the alert
+stood. §13.8.2's third consequence is the other half of the same rule, so the
+release now un-draws **first and unconditionally** and only then asks whether
+it fires: whatever is drawn pressed comes up whether this gesture commits or
+not.
+
+On `kern_small` `OSAPI_WM_ONDRAG` answers CF = 1 and installs nothing (§13.8.2),
+so the alert degrades there to what it did before — which needs no flag,
+because the release already re-tests the button under it and cancels a gesture
+that moved.
+
+**And `os88ui_adn` redrew the whole ROW.** It called `os88ui_abtns` for a state
+change that can only ever touch two buttons — the one that was down and the one
+that is — and on `OS88UI_ASAVE` that is three buttons lettered where one was
+needed. Rule 1 of PERFORMANCE.md, in the control that every package's dialog
+goes through. `os88ui_abtn1` draws one by index and ignores an index that is
+not a button, so `os88ui_adn` draws the old and the new and `os88ui_abtns`
+becomes a loop over it.
+
+**The state is set BEFORE either draw**, because `os88ui_abtn1` reads
+`[os88ui_adown]` to decide the pressed look — the same interlock
+`os88ui_abtns` always relied on, now with two callers instead of one.
 
 #### 75.3.1 It is NOT modal, and that is a decision
 
@@ -72153,6 +78825,55 @@ begin with one).
 **`NLST` shares it**, because the two must not drift about which entries they
 show, which is `fd_list_go`'s whole reason for existing.
 
+### 77.47 The promise is per DEBT — a running server that is quiet holds its cache
+
+§70.7 in a second window, and for the same reason a size larger. A file
+server spends its whole life **running and quiet**: what a per-fetch promise
+(§71.11) would call live is the state this window is in from the moment
+somebody presses Start until they press Stop, which is to say always. A
+per-session promise here buys nothing at all.
+
+`[fd_dirty]` already answers the finer question, and it is the byte this file
+has always used for it — *"what says the glass is behind"*. Zero means the
+four things on the face — the button, the Read Only box, the status line and
+the log — are all on the glass, and a cache taken then is exactly what a
+repaint would draw. It is set by a log line arriving, a start, a stop and a
+page change, and **by nothing periodic**: `FDD_STAT` has three setters and all
+three sit beside `FDD_BTN` at a state change. An idle server sets it never.
+
+So `fd_promise` is `[fd_dirty] == 0`, at both edges of `fd_paint_now`'s lock
+hold and at the end of `fd_paint`:
+
+| site | `[fd_dirty]` | |
+|---|---|---|
+| `fd_paint_now`, on the way in | non-zero — the guard above established it | **withdraw** |
+| `fd_paint_now`, after `fd_spend` | zero — `fd_spend` ends by clearing it | **grant** |
+| `fd_paint` (`W_PAINT`) | zero, or `FDD_LOG` for a line the worker claimed mid-paint | the predicate reads both |
+
+**This window already had the decide-before-you-arm shape** that
+docs/SAVEUNDER-LIVE-PLAN.md names as the blocker for most candidates, which
+is why it needed nothing else: `fd_paint_now` opens with `cmp byte [fd_dirty], 0 / je .out`, so the clip is
+armed only when there is something to draw. The apps that block the feature
+are the ones that arm first and discover there was nothing to do second.
+
+**And §77.33's rule is what makes the withdrawal sufficient.** A clip that
+answers CF=1 — *"not one pixel of your content shows"* — leaves `[fd_dirty]`
+**set** and the next flush tries again. So the covered path leaves through
+`.unlock` with the promise still withdrawn and the debt still owed, and the
+raise gets a full paint that settles it. Nothing is lost and nothing is
+stale for longer than the pass described below.
+
+**Two colours**: nine `CBLACK` and nine `CWHITE`, nothing else, so the depth
+claim rides along (§11.96.17) and 32,670 bytes at four planes becomes 8,178 at
+one. What it saves is a repaint of the log ring, which is the densest
+lettering on this face.
+
+**One worker pass is not closed**, exactly as in §70.7.1: `fd_log` sets the
+bit with no lock held, so a raise between that and the next flush restores the
+frame before it. §77.33's own rule heals it — the bit survives, so the next
+flush draws the line — and the trade is up to one tick of a stale log line
+against a whole-face repaint every time the window is uncovered.
+
 ### 77.44 The Setup page repainted itself for a tick
 
 `fd_spend`'s incremental path opened with `cmp byte [fd_page], FP_LOG / jne
@@ -75511,3 +82232,676 @@ about the coprocessor path**, so the count reads `8087 -` there rather than
 execute by deliberately breaking `fpx_mul` and watching the hardware count go
 to 23 while the software count stayed at 0 — without that check, a dispatcher
 that never fired would report exactly the same `ALL PASS` as one that worked.
+
+## 85. TANK ATTACK — a wireframe tank duel in a foreign mode (`apps/tank/`)
+
+A first-person vector tank game in the vein of Atari's 1980 arcade original
+by way of the 1983 MS-DOS port: drive over a flat plain, dodge cubes,
+pyramids and slabs, and duel enemy tanks that turn onto you and shoot back
+if you are slow. `apps/tank/`, prefix `tk_`, four sources, no worker task,
+**no kernel change of any kind**.
+
+It is here to be a LOAD, and the load is the point. §5.6.4.1's fast walk,
+§5.6.8's batch and §5.9's band composer all arrived in the last few cycles
+and WIREFRAME (§78) exercises them in a window at twelve edges a frame. This
+exercises what is on the **other side of §53.7's fence** — the machine, in a
+foreign mode, where no kernel drawing slot is legal and every pixel is the
+app's — at about a hundred edges a frame with a game attached.
+docs/GFX-FSX-PLAN.md is what the exercise found and what is proposed about
+it; this section is what was built.
+
+### 85.1 Three things decide the whole design
+
+1. **A frame must not flash**, and on a 4.77 MHz 8088 that rules out
+   clearing the screen. A 320×240 Mode X clear is 9,600 word stores into
+   VGA memory — about 50 ms, a whole frame's budget, before a single line is
+   drawn. So nothing is ever cleared wholesale: every backend keeps a
+   **per-row dirty span** and the next frame clears exactly those runs.
+2. **The erase must not be VISIBLE**, which is a different problem from
+   making it cheap. §78.5 measures four orderings of erase-and-draw *on the
+   glass* and none of them wins; so no backend here erases on the glass.
+   Mode X and Hercules have more video memory than one screen and page flip;
+   CGA mode 4 uses 16,000 of a CGA's 16,384 bytes and cannot, so it composes
+   into a RAM shadow and blits the dirty spans. **Every pixel that reaches
+   the glass is written once per frame**, which is PERFORMANCE.md rule 2 met
+   rather than traded away.
+   Measured, `tests/tank.py`, forty displayed frames on both 1bpp adapters:
+   **not one is thinner than the frames either side of it** — 100%, 0 under
+   90%. And the metric is the finding as much as the number is: a flash is a
+   **dip**, not a low frame, so a frame is priced against its NEIGHBOURS.
+   Pricing it against the run's median read 99.9% one run and 55.6% the next
+   on a game that had not changed, because a scene that legitimately loses
+   half its ink walks down and stays down. §78.5's windowed comparison is
+   what these numbers are against: its `Whole figure` order empties to **0%**
+   and puts 56% of displayed frames under half full.
+3. **The same game on three very different rasters.** The projection is
+   parameterised by a viewport and two scales; the horizontal field of view
+   is a constant, so every adapter sees the same world, and the vertical
+   scale is derived from the viewport's *physical pixel aspect*, so a square
+   is square on all three. That is the whole of the per-adapter difference
+   in the engine.
+
+### 85.2 The adapters, and why each got what it got
+
+| | fsx mode | device | viewport | present |
+|---|---|---|---|---|
+| VGA | `FSXM_MODEX` | 320×240×256, 3 pages | 320×240 at (0,0) | page flip, 2 pages |
+| CGA | `FSXM_CGA320` | 320×200×4, 1 page | 320×200 at (0,0) | shadow + span blit |
+| HERC | `FSXM_HERC` | 720×348 mono | **640×200 at (40,74)** | shadow + span blit |
+
+**Mode X is the right answer for the reason its author intended.**
+Unchaining buys PAGES, and a page is what makes an erase invisible for free.
+Two of the three are used; nothing in this tree page-flipped before, so
+`FSI_PAGES` had no consumer until now.
+
+**CGA gets the 1983 port's own mode, and its palette.** Mode 4 palette 1 at
+high intensity is cyan / magenta / white on black — which is exactly the
+colour scheme of the port in the reference capture, and is why §85.4's three
+inks are named for what they mean rather than for a colour.
+
+**Hercules gets a 640×200 box in the middle of the screen**, which is what
+720×348 has to offer a game designed for 320×200. A full-screen 720×348
+frame would be 2.2× the pixels of the CGA one on the adapter that can least
+afford them; the 640-pixel width is also exactly 80 bytes, so the shadow and
+the row stride are the same as CGA's and there is one shadow backend rather
+than two.
+
+**A Hercules HAS a second page and it is not used.** The kernel leaves
+3BFh's page bit clear (§39.6), and an app setting it behind the kernel's
+back is a poor trade for a copy this small.
+
+### 85.3 The raster (`apps/tank/tkraster.inc`)
+
+Four entries — `tk_r_setup`, `tk_r_begin`, `tk_seg`, `tk_r_end` — and not one
+kernel drawing slot among them.
+
+**One stride for all three, and it is not a coincidence worth passing over.**
+A CGA 320×200×4 row is 80 bytes, a Hercules 640-pixel 1bpp row is 80 bytes,
+and a Mode X 320-pixel *plane* row is 80 bytes. So `add di, 80` steps a row
+on every backend, and there is one walk with three plots rather than three
+walks.
+
+#### 85.3.1 The dirty span is the whole design
+
+Per row of the viewport, the first and last BYTE the frame touched — one
+byte each, so a span pair is a word and a whole screen's worth is 480 bytes.
+Two sets, indexed by frame parity, and the parity picks the page as well,
+which is what lets a two-page flip need no third array:
+
+- **Page flip.** The set for page P describes what was drawn on page P *last
+  time it was used*, two frames ago. Clear it, arm it empty, draw, mark.
+- **Shadow.** The other set is the frame now standing in the shadow. Clear
+  that, arm this one, draw, and blit the **union** of the two — because a
+  pixel the last frame lit and this one does not still has to be taken off
+  the glass. Both sets are live at that moment, which is why there are two.
+
+The clear and the blit both round the run out to whole WORDS: `rep stosw`
+moves a byte in about 7 clocks against `stosb`'s 10, and the two bytes
+rounding adds are cheaper than the ones it saves on any row wider than six.
+
+#### 85.3.2 The walk marks as it goes
+
+A **shallow** line's run inside one row is monotone, so its ends are its
+first and last pixel: it marks twice per ROW. A **steep** line's row IS a
+pixel, so it marks twice per pixel, which is the same thing. Shallow lines
+normalise x increasing and steep ones normalise y increasing, which puts
+each walk's rare step on the branchy side — a shallow line's y moves seldom
+and can afford a memory-resident step, a steep line's x moves seldom and can
+afford a direction test — and leaves the frequent step a register add with
+no test in it at all.
+
+The span arrays carry **8 bytes of slack either side**, because a walk's last
+step can advance the row pointer one past the row it drew on and a guard is
+cheaper than a test in the inner loop.
+
+**The same last step also over-runs the ROW, and that one is not free to
+ignore.** A shallow walk steps x after its final plot, so if that pixel was
+the last in its byte, the byte index now names the byte *after* the row — and
+marking it puts a span end one past the row's 80. The clear then wipes the
+next row's first byte and the blit copies it to the device: on a CGA that
+lands on a row about to be redrawn and is invisible, and on a **Hercules** it
+lands in the five bytes of margin either side of the 640-pixel viewport, where
+**nothing ever erases it**, because the erase is the frame's own spans. It was
+reported from a playtest as stale ink collecting down the right-hand edge. One
+compare per line fixes it, and `tests/tank.py` is the gate — it has to
+**drive**, because a stationary player almost never lays a segment that ends
+on a row's last byte.
+
+**Endpoint clipping is legal here**, and it is worth saying why, because
+§5.6.3 refuses to do it in the kernel: clipping an endpoint moves the
+Bresenham lattice, so a line drawn clipped and erased unclipped leaves a
+scatter behind. *Nothing here erases a line.* The frame is erased by its
+recorded spans, which contain whatever lattice the walk actually laid, so
+the walk owes the next frame no promises.
+
+**Mode X pays an OUT per pixel on a shallow line** and almost none on a
+steep one — a steep line's x moves at most |dx| times — which is §5.6.4's
+own split seen from the other side: mono is the 4.77 MHz machine and gets
+the tight loop, VGA is the fast one.
+
+#### 85.3.3 A flat edge is a run, never a walk
+
+§5.6.1's argument, on this side of the fence. `tk_hseg` writes whole bytes
+with two masked ends: the horizon line alone is the viewport's whole width
+every frame — 640 pixels on Hercules — and as a walk it is about 12,800
+cycles against 800 as a run. `tk_seg` and `tk_drawtab` both test `y1 == y2`
+and defer, exactly as `gfx_line` tail-calls `gfx_hline`.
+
+### 85.4 Three inks, named for what they mean
+
+`TKI_WORLD`, `TKI_HUD`, `TKI_MARK` — the world, the panel, the gunsight and
+the cracks. Only one of the three adapters has colours at all, so naming
+them for colours would name a thing two adapters do not have. On CGA they
+are palette 1's cyan, magenta and white; on Mode X the DAC is loaded with
+the same three; on Hercules all three are the one lit bit, and the game's
+contrast comes from what it draws rather than what colour it draws it in
+(§39.4's rule, taken at the source).
+
+The two shadow backends **OR** their ink in, which they may: the shadow was
+cleared to 0 by the span pass, so there is nothing under the ink to
+preserve, and where two inks cross they add — which on a vector display is
+what crossing beams do anyway.
+
+### 85.5 The geometry (`apps/tank/tk3d.inc`)
+
+**Angles are bytes.** 256 units to the turn, so a heading wraps by being a
+byte and the sine table is indexed with no masking at all; `cos(a)` is
+`sin(a+64)`. The table is `sin × 16384`, the largest scale that keeps a
+signed word, and `MUL14` is the matching multiply: the shift is done by
+moving the 32-bit product LEFT two and keeping DX, which is four cheap
+instructions against the ten a right shift by 14 would take.
+
+**The world is a torus 8,192 units round** and the wrap is three
+instructions: mask a difference to 13 bits and fold the top half negative.
+Every distance in the game is then already the short way round, and there is
+no "which copy of the world is nearer" anywhere in the file.
+
+**One rotation, not two.** A vertex has to be turned by its object's heading
+and then by the negative of the camera's; those compose, so it is turned
+once by the DIFFERENCE and the object's origin is translated in camera space
+afterwards. That halves the multiplies, and it is what makes the **shape
+cache** possible: every cube in the world has the same relative angle, so
+the eight rotated offsets are computed once a frame and every cube instance
+after that is two adds a vertex. `tk_drawtype` iterates by TYPE rather than
+by slot for exactly that reason.
+
+**The projection's clamp is not cosmetic.** `idiv` raises int 0 when the
+quotient will not fit a word, and a vertex a hand's breadth past the near
+plane projects to tens of thousands — so the overflow case is the NORMAL one
+for anything close, and an unguarded `idiv` here is a machine that reboots
+when a tank gets near. `tk_pdiv` tests `|DX| < BX/2`, which is sufficient
+because `|DX:AX| < (|DX|+1)·65536`, and clamps to ±4000 so the screen-space
+clipper's own products stay inside a 32-bit `imul`.
+
+**The near plane is clipped per EDGE, in camera space**, before projection:
+both ends behind is a reject, one end behind is an interpolation onto
+`TK_NEARZ`. The interpolation's numerator is bounded by its denominator by
+construction, so that `idiv` needs no guard.
+
+#### 85.5.1 The ridge is at infinity, so it is a table
+
+Mountains at infinity move only when the camera TURNS, so the horizon
+silhouette is one height per 1/256 turn and its screen x depends on the angle
+alone. Sampling at 25 fixed angles and solving for x once a bracket is what
+turns "an arctangent per column" into a table lookup per frame; the profile
+itself is built out of whole numbers of cycles, so a ridge line closes on
+itself.
+
+#### 85.5.2 The models
+
+`db nverts, db nedges, dw vertices, dw edges`. A vertex is three words — x
+right, y up, z forward — with y = 0 the ground plane; an edge is two vertex
+indices. Nothing is a face: this is a vector game and a wireframe is what it
+draws. Cube and slab are 8/12, the pyramid 5/8, the tank 13/22 — hull,
+turret and a barrel that says which way it is about to shoot — and a shell
+is a three-axis cross, 6/3, drawn in `TKI_MARK` so the thing about to kill
+you is the thing that stands out.
+
+### 85.6 The session (`apps/tank/tkgame.inc`)
+
+`tk_fsx_main` is the §53.1 bracket's exclusive main, and it has **two rates,
+not one**. The simulation steps once per elapsed system tick — so the game
+plays at the same speed on a 4.77 MHz XT and a 386 — and the drawing goes as
+fast as the machine can. Pacing the *frame* to the tick instead, which is what
+`FSXW_TICK` looks like it is for, cost **18.5% of the frame** on the target
+machine: a frame that overruns a tick by a fifth then rounds up to the next
+whole one. `tk_steps` caps the catch-up at three, because a floppy stall that
+left five ticks owing would advance a shell clean through a tank it should
+have hit.
+
+Measured on a cycle-accurate 4.77 MHz 8088: **6.06 fps** on CGA and 4.32 on
+Hercules, against the **6 fps, peaking at 8**, that the 1983 port itself runs
+at in the capture this was built from (docs/GFX-FSX-PLAN.md §0).
+
+**Two input readers, because they answer two different questions.** `int 16h`
+answers *what was typed* and is right for fire, pause and leaving;
+`OSAPI_KEY_DOWN` (§9.7) answers *what is held* and is the only thing that can
+drive a tank. An app without the second stutters on the typematic delay,
+which is the bug §9.7 was published to end.
+
+**The enemy needs no arctangent.** The sign of the cross product of a tank's
+forward vector with the vector to the player says which way to turn, the dot
+product says whether the player is in front at all, and "aimed" is |cross|
+small against the range. Four multiplies a tank a frame and not one divide.
+A tank turns one angle unit a step against the player's two, which is what
+makes flanking the way to beat it, and it closes to about 700 units and
+stops — a tank that drives into you is not a duel.
+
+#### 85.6.1 How long a tank must wait before it may shoot — derived
+
+The first build let a fresh tank fire 2.2 s after it appeared, and a playtest
+answered: *"the game can often end in half a second after the tank appears."*
+The tank arrives already facing the player, and the player may be facing the
+other way.
+
+So the wait is **derived from what the player has to do about it**, not
+chosen: turn 180° (128 angle units at `TK_TURN` a tick = **64 ticks**), fire
+and let the shell cross (3,250 units at `TK_SHVEL` a tick = **25 ticks**), and
+a second on top (**18 ticks**) — 107, rounded up to `TK_GRACE` = **115 ticks,
+6.3 s**. Measured on the machine: the first enemy shell leaves at **109 ticks**
+and the first hit lands at 130.
+
+**And the crack must not clear straight into the next shell**, which is the
+same complaint in a different place: the tank has been aiming right through
+the freeze. `tk_hitme` re-arms *every* live tank to `TK_REGRACE` = 70 ticks —
+measured at 96 ticks to the next shell, because it has to re-aim as well.
+
+While a tank is still inside its grace it **wanders**: it tracks at a quarter
+rate and closes at a third speed, so it arrives late and off the beam instead
+of bearing down on the sights from the first frame. That costs nothing —
+`tk_otim` is free on a tank, only a shell uses it as a life — and it is what
+makes the wait read as a slower enemy rather than as an enemy that is
+inexplicably holding its fire.
+
+**The blip costs nothing to place.** An enemy's position in CAMERA space is
+already its position on the radar — x across, z up the dial — so the radar is
+the transform the renderer just did at a different scale, and needs no
+bearing and no arctangent of its own. `tk_objcam_raw` exists because the
+radar wants objects the frustum has thrown away, which is the whole point of
+having a radar.
+
+### 85.8 GAME OVER — the lines fly in and become the letters
+
+Losing the last tank does not end the session; it ends the *game*. `GAME
+OVER` is a **stroke font** — forty segments on a 0..71 × 0..10 grid,
+pre-composed so character *n* owns x = 8n..8n+6 and there is no
+per-character machinery at all — and for **one second** (`TK_GOANIM`, 18
+ticks) those forty segments fly in from forty directions and land as the
+letters, over the frozen world.
+Then the score, `N NEW GAME` and `F EXIT`.
+
+**The sequence carries no per-segment state**, and that is the design rather
+than a saving. A segment's direction and distance both come from its own
+INDEX — 37 is coprime with 256, so forty headings never repeat, and the
+distance walks a different cycle so two segments on the same bearing still
+start apart — and all forty share one *remaining distance* that falls with
+the clock. A frame is a table walk and three multiplies a segment. Storing
+forty flown positions would be 480 bytes of `.bss` to save about 3 ms a
+frame, and this game has the milliseconds and not the bytes.
+
+**The ease is the point.** A linear fly-in reads as a slide. Squaring the
+remaining distance — `q = (256-t)² >> 8`, one multiply per FRAME, not per
+segment — makes the pieces hurtle in and then settle onto the letters, which
+is what makes it worth watching rather than a second of waiting. It is also
+why halving the duration from two seconds cost nothing: the positions come
+from elapsed *ticks* through that curve, so the frames are the same frames,
+drawn at whatever rate the machine can manage.
+
+**The two key lines share one left edge**, and that is why they are not
+centred like the score above them: centring each line separately puts the `N`
+and the `F` in different columns and their two actions in different columns
+again, so nothing lines up with anything. One left edge, taken from the
+longer line, and all four columns agree.
+
+The world stays on the glass underneath, frozen: the radar's sweep stops,
+because a dial still sweeping under `GAME OVER` says the game is still going
+on. Everything else is the raster the game already had — the same `tk_seg`,
+the same spans, the same blit — so the overlay costs what forty more segments
+cost and nothing structural.
+
+#### 85.6.3 The difficulty curve — the first ten tanks
+
+Reported from a playtest, and the two halves are separate complaints. §85.6.1
+derived the grace from *what the player has to do about it* and that derivation
+still holds — this is a **beginner's allowance on top of it**, spent over the
+first ten tanks and gone from the eleventh.
+
+`tk_ntank` counts the tanks that have come at the player this GAME (not this
+round — a life lost does not make the game easier), and it is the only input
+either half takes.
+
+The playtest that set the numbers also corrected the premise: **the fire timing
+was never the problem, §85.6.4's turn rate was.** So the first ten tanks keep
+the allowance the derivation gave them and the curve carries on past it.
+
+- **Time.** `tk_gracurve` is **signed** and runs over TWENTY tanks, not ten:
+  two seconds of allowance on top of `TK_GRACE` for the first, down a step a
+  tank to nothing at the tenth, and then three seconds *below* it by the
+  twentieth, where it stops. The allowance buys more than the time it names,
+  because a tank inside its grace *wanders* (§85.6.1) — a longer grace is also
+  a longer stretch of a slower, stupider enemy, and the back half of the curve
+  takes that away as well as the seconds.
+- **Aim.** `tk_acccurve` is the percentage of shots meant to arrive: **50 at
+  the first tank, 80 from the tenth**, and it stops climbing there — the back
+  half of the curve is time, not accuracy. The rest are spoiled deliberately.
+
+**A spoiled shot's error is derived from the RANGE, and that is the whole of
+why the old spread was not a miss.** `tk_efire` has always added ±4 units of
+heading, and the comment on it said what that was worth: about the tank's own
+width at 2,000 units. But a heading error of *k* units puts the shell
+`2πRk/256` across the player's path, and the player is `TK_HITR` wide, so
+anything under `TK_HITR·256/2πR` — about `6,100/R` — still hits. At the 700
+units a tank closes to that is nine units and the ±4 lands every time; at
+3,000 it is two and the same ±4 misses by accident. One fixed figure either
+misses everything or misses nothing, which is exactly the "they all seem to
+go on target" that was reported. `tk_espoil` divides instead: `6100/R`, capped
+at 40 (more than a sixth of a turn is a tank shooting sideways, not a near
+miss), plus two to clear the edge of the radius and up to three of jitter, and
+a random sign.
+
+#### 85.6.4 The player moved at the FRAME rate and the world at the TICK rate
+
+Reported as *"on a 386 I can usually make my turns and shots; on a 5150 I
+usually cannot"*, with the reporter's own guess — a tick issue — correct.
+
+§85.6's whole point is that the **simulation is on the tick and the drawing is
+not**, so a fast machine does not play a fast game. The held-key half of
+`tk_input` never got the memo: it read the scancode map and applied `TK_TURN`
+and `TK_SPEED` *there*, once per call, and `tk_input` is called once per
+FRAME. So the player turned at the machine's frame rate while every tank
+turned at the clock's. A 386 gets about 1.6 frames to a tick and swings round
+nicely; the 4.77 MHz 8088 this game is *for* gets about a third of one, so the
+same tank took five times as long to come about — against an enemy whose
+tracking had not slowed down at all.
+
+`tk_input` now only **latches** the pair (`tk_kturn`, `tk_kdrv`), and
+`tk_pmove` spends one step of it inside the same loop that steps the world.
+`TK_MAXSTEP`'s cap covers the player too, so a floppy stall cannot teleport
+them either.
+
+This also makes §85.6.1's derivation literally true for the first time: it
+priced a 180° turn at "128 angle units at `TK_TURN` a tick = 64 ticks", which
+is what the code now does.
+
+#### 85.8.1 The lettering gets a halo, because a 1bpp erase is not a colour
+
+Reported from a 5150: on a busy screen GAME OVER *overlaps*. The scene is
+drawn first and the lettering straight over it, so the horizon, a slab edge or
+the wreck runs through the letters and the eye has to separate them.
+
+**A shadow in a darker ink is not available.** Two of the three backends OR
+their pixels — deliberately, because the shadow was cleared to 0 by the span
+pass and crossing beams adding is what a vector display does anyway — and on
+Hercules black is the *absence* of a bit, not a colour you can lay. So the
+halo needed an **erase walk**: `TK_PLOT`'s second parameter, three more
+`TK_LINEBODY` instantiations, and `tk_setink TKI_MASK` — an ink whose device
+value is every bit of one pixel rather than a colour, so the walk builds the
+right mask in AL and the erase plot ANDs its complement. **718 bytes**, and
+the drawing path pays nothing for it: the halo is reached by swapping
+`[tk_lineproc]` for the length of one pass.
+
+**It is a PASS over all forty segments, not a step per segment.** A halo drawn
+segment by segment would rub out the letters already laid beside it. So:
+scene, then every halo displacement over all forty, then the letters.
+
+`tk_golets` always uses `tk_seg` and never `tk_hseg`, because there is no
+erasing horizontal *run* and a letter stroke is thirty pixels — the fast run
+was buying almost nothing on this path.
+
+`TK_GOSH` picks the shape: 0 none, 1 shadow (one pass, down-right by 2), 2
+outline (four passes at ±1 on each axis). **The outline ships and the shadow
+does not**, because on the same deliberately-crowded frame the shadow moves 26
+pixels and leaves every line that approaches from above or the left still
+touching a letter. The outline moves 82 and breaks all four sides.
+
+**It costs 279 ms a frame** — 435 ms without it, 714 with, on MartyPC's 4.77
+MHz 8088 over the same settled scene — because it is 160 segment walks where
+the letters are 40. That is why the paragraph below exists.
+
+**A settled GAME OVER is a still picture, and it was being redrawn anyway.**
+The world is not stepped once `tk_over` is set, the lettering has landed, and
+the radar sweep already stops — so every frame after the fly-in was the last
+one again, which is PERFORMANCE.md's first rule broken in the plainest way.
+`tk_still` is set by the frame that settles it and cleared by any key;
+`tk_fsx_main` waits on a tick instead of rendering while it stands. Measured
+at **one frame drawn and then nothing**, and it is what makes the halo
+affordable: 279 ms once per keystroke, not once per frame.
+
+#### 85.6.2 Scenery stops a shell, every step
+
+A shot used to pass through a slab, which made the obstacles decoration
+rather than cover — and cover is what a game about driving between them is
+*for*.
+
+Each live shell is tested against the twelve scenery objects every simulation
+step, at **a radius per shape**: a slab is wider than a cube and a pyramid
+sits between them, so one figure for all three either lets a shot through the
+middle of a slab or stops one that clearly went past a cube.
+
+**Every step, and not once at the muzzle.** Casting a ray when the trigger is
+pulled is the cheaper answer and it is the wrong one: it cannot know where a
+TANK will be by the time the shell arrives, so the two tests end up
+disagreeing about what a shot can reach. Twelve box tests per shell per step
+is about 0.6 ms a frame on the target machine — a twentieth of what the walk
+costs — and buys one answer instead of two.
+
+### 85.9 The high scores
+
+Six rows of a score and three initials, `TANK.HS` in `SYSTEM\APPDATA` on the
+volume the game was launched from, and three keystrokes taken on the game-over
+screen before the `N`/`F` prompt appears.
+
+The shape is Cyclone's (§67.20) and so are its two rules, repeated in
+`apps/tank/tkhs.inc` because getting either wrong fails **quietly**: the file
+belongs in `SYSTEM\APPDATA` (§19.9) and not beside the game, where the file
+browser makes it a misclick waiting to happen; and it is `OSAPI_FILE_GOTO`
+and **not** its quiet twin, because `GOTO_Q` moves the global cwd and
+deliberately not the instance's, so a quiet move is undone by the very next
+`FILE_FIND` — the save then writes nothing at all while the load appears to
+work.
+
+**The write happens inside the fsx bracket**, at the moment the initials are
+committed. That is legal — the file API is UI-task-context-only and a bracket
+IS the UI task (§53.7) — and it is a choice rather than the only option:
+§75.1's `wm_onclose` is a real exit hook, called for every way of closing, on
+the UI task with the lock held, and permitted to call the file slots. Writing
+there would be correct and would bank one save per session instead of one per
+game. It loses on what the player sees. A score is banked when the player
+finishes typing it, not when they later happen to close a window: a machine
+switched off, or a session that ends any way other than through the close box,
+would silently drop a row the table had already shown them. At most one floppy
+write per game, and none at all for a game that did not make the table.
+
+**While the prompt is up, every key is the prompt's** — including the ones
+that would otherwise leave the bracket. Esc in the middle of typing a name
+would end the session and lose the row.
+
+### 85.7 Text in a foreign mode
+
+No `font_*` slot is legal in here (§53.7), but `OSAPI_FONT_GLYPHS` is: it
+hands over the BITMAP rather than drawing it, which is exactly what an app
+that owns the raster needs. So the panel is lettered in the kernel's own 8×8
+face on all three adapters, with no second typeface anywhere.
+
+Every run is forced to an **8-pixel boundary**, which is what makes a glyph
+row a whole byte on Hercules, two whole bytes on CGA and two byte-columns on
+Mode X — one store per row instead of eight tests. Mode X letters **plane by
+plane** rather than row by row: a glyph's eight rows touch every plane, so
+doing it the other way is 32 map-mask writes instead of 4.
+
+#### 85.10.1 The logo is an OUTLINED face, and a glyph is one closed loop
+
+The first logo was a single continuous stroke through the whole word, and it
+was built that way to make §5.6.7's resumable walk usable. It is now an
+**outlined heavy geometric face** — the letters drawn as their own edges with
+empty centres — and the walk got easier rather than harder, because **a glyph
+is one closed loop** and a closed loop is the natural home for two cursors.
+
+`apps/tank/tklogo.inc` is generated: five unique glyphs (T, A, N, K, C) on a
+**24×32 grid at 1:1**, so the glyph *is* its pixels and nothing scales at run
+time; advance 28, eleven cells, 308×32. Each loop is listed from the glyph's
+**lower-left vertex**, and a counter — only A has one — is reached by a
+**bridge that is retraced**, which is invisible because the same ink is laid
+over itself. That is the same trick the one-stroke version used for the T's
+stem, kept because it is what lets a letter with a hole still be one loop.
+
+**Two gaps a letter, and they meet.** Both leave the lower-left vertex; one
+walks with the point order and one against it; each stops at the vertex `tk_lgg`
+names — the lower-RIGHT corner on A, N and K, the crossbar's right corner on T
+and the upper terminal on C, because those are the letters that have no
+lower-right corner to meet at. Then both jump to the next cell.
+
+**The two halves are almost never the same length** — a K is nearly three to
+one — so each cursor carries its **own** per-wake `TKC_STEP`, sized as its
+half over `TK_LGWAKES`. That is the whole of what makes the pair leave together
+and arrive together, and it is why the cursor record grew a step and a
+remaining count: with one shared step the K's short side would finish in a
+third of the time and sit there.
+
+Each gap is still a head and a tail (§85.10), so there are **four** cursors,
+and a letter is finished only when all four have spent what they owed it — the
+heads at the meeting vertex and the tails `TK_GLLAG` wakes later, so no letter
+is ever left with a bright section on it.
+
+**A repaint re-arms the whole glyph** rather than resuming mid-letter. A glyph
+is about a second; replaying the one under the pointer costs less than the
+bookkeeping to resume it exactly.
+
+#### 85.10.2 The score band shows every row, and turns over through a gap
+
+Three of six rows left the left-hand column looking half empty. It shows all
+six now — and a six-of-six window cannot scroll, so the list it scrolls
+through is **`TK_NHS + 2`**: the table, then two blank rows. The band still
+rolls a row a second and the table still comes round; what passes between the
+last score and the first is a gap rather than a jump.
+
+**The blank rows are LETTERED, not skipped.** The row arriving at the foot of
+a `gfx_scroll` is whatever the blit left there, so a blank row is thirteen
+spaces drawn opaquely — which is the erase.
+
+#### 85.9.1 A typed initial redraws three lines, not the world
+
+Reported off a 5150 as *"initials entry is VERY slow — a second or two per
+letter"*, and it was: §85.8.1 had already established that a settled GAME OVER
+is a still picture and stopped redrawing it, but a key **invalidates** that
+picture, and the redraw it triggered was the whole world — scene, lettering,
+halo, HUD — for a change of one glyph.
+
+`tk_repoint` draws the prompt block alone onto the frame already standing, and
+it needs no new machinery because **nothing about the frame's bookkeeping has
+moved since `tk_r_end`**:
+
+- `[tk_tbase]` still addresses the surface on the glass — the shadow on CGA and
+  Hercules, and on Mode X the page `tk_r_end` flipped *to*, which is why there
+  is no second flip here and no tearing to avoid.
+- `[tk_spcur]` still names the span set that describes that surface, so the
+  glyphs widen exactly the record the next full frame will erase from. The
+  partial draw is not outside the span discipline; it is inside it.
+- Every glyph cell is opaque (§85.7) and the name line only ever **grows**
+  while it is being typed, so nothing has to be cleared first.
+
+The two 1bpp backends still owe a blit; Mode X drew straight into the page
+being scanned and owes nothing.
+
+**The path is taken only when the initials prompt was up before the key and is
+still up after it.** Enter commits the name and swaps "NAME abc" / "PRESS
+ENTER" for the `N`/`F` lines, which are laid out differently and one of which
+is *shorter* — an opaque overwrite would leave its tail. That is one frame, so
+it takes the full redraw.
+
+**And the halo is for the settled lettering only.** §85.8.1's four passes are
+279 ms; the fly-in is an animation with a one-second budget (`TK_GOANIM`), and
+nothing overlaps a moving letter for longer than a frame anyway.
+
+### 85.10 The attract window — one stroke, two cursors, and a band that blits
+
+The window is the half of this game that draws with the kernel's slots at all;
+everything else is past §53.7's fence. So it is also where §5.6.7's resumable
+walk finally gets a consumer in this package, and where §5.5's `gfx_scroll`
+pays for a list that never stops moving.
+
+Frame 480×130, content 480×111 — the window manager rounds the frame width up
+until the content lands on a byte boundary — and not resizable: every row is
+placed off a constant rather than measured, and a window the player can squash
+is a window where the logo and the score band overlap. **The width is decided
+by the two of them sitting SIDE BY SIDE**: the table is top-left, the logo
+top-right sharing its first row, and the instructions are centred in the space
+under both. 128 of table, 258 of logo and the margins between them is what 480
+is.
+
+`wm_snap` (§11.94) is set at create, so the content origin is on a multiple of
+8 — which is what every `font_run` here wants for §6.1's single-store cell, and
+what `gfx_scroll` *requires* of the band's two ends.
+
+**THE LOGO WAS ONE POLYLINE, AND IS NOW ONE CLOSED LOOP A GLYPH.** The first
+version was a wireframe face in which each letter's exit point was the next
+letter's entry point — `TANK ATTACK` as a single 55-point stroke with no pen
+lift in it, so a cursor could walk the whole logo without being told where a
+letter began. **§85.10.1 replaces it** with an outlined heavy geometric face,
+one closed loop a glyph, and the walk got *easier*: a closed loop is the
+natural home for two cursors. The retrace trick survived the change and is
+what lets a glyph with a counter still be one loop.
+
+**Two phases, and the second one never ends.**
+
+1. **Drawing in** — `TK_INSEG` whole segments a wake, as ordinary `gfx_line`
+   calls, a glyph at a time. Quick enough to be an arrival rather than an
+   animation, which is what was asked for.
+2. **The gaps** — `gfx_linit`/`gfx_lstep` cursors, four of them, working one
+   glyph at a time (§85.10.1). A HEAD lays `TK_C_GLEAM` and a TAIL, `TK_GLLAG`
+   wakes behind, lays `TK_C_TUBE` back over it, so what travels is a gap in the
+   outline rather than a bright section — done as a moving window rather than a
+   per-segment appear-and-dissolve, because a cursor crossing a vertex does not
+   stop there.
+
+**Why the pair is a walk and not two `gfx_line` calls.** The erase has to visit
+exactly the pixels the draw visited. §5.6.2 promises that only for a whole line
+handed over in one call — a bright section that starts and ends *inside* a
+segment is not a line, so drawing it with `gfx_line` and erasing it with
+another leaves a dashed remnant every frame. The two cursors run the same
+recurrence in the same direction, so they agree by construction, and neither
+one ever redraws a segment it is only passing through.
+
+**A repaint re-arms both cursors** (`tk_at_resume`). A walk block holds
+absolute screen coordinates, so a window that moved leaves them walking the
+logo's old position; and the repaint has in any case erased the bright section
+they were half way through. Both are answered by re-initialising each cursor at
+the START of the segment it had reached — the head loses at most `TK_GLSTEP`
+pixels it was about to relay, and the tail stays behind it because it is on an
+earlier segment. The draw-in needs nothing: `tk_logo_full` redraws exactly the
+segments `[tk_at_prog]` counts.
+
+**The score band is a blit.** Three rows of the six-row table (§85.9) roll up
+one row every `TK_SCRT` wakes: **one `gfx_scroll` and one `font_run`**, because
+the band moves as a blit and only the row that arrived is lettered. The refusal
+path is a full band redraw — a clip region that does not wholly contain the
+rect refuses, since a blit cannot be cut per pixel (§11.3) — and it is a
+correctness path, not a fallback nobody reaches: it fires whenever another
+window overlaps the band.
+
+The band's left edge is settled in `tk_at_layout` as an **absolute** number
+rounded up to a multiple of 8, and `TK_BANDW` is a multiple of 8, so rounding
+one end settles both. A snapped window rounds by nothing; the rounding is what
+keeps the band right on a kernel or a path where the snap did not take.
+
+**The worker is §20.6's, with §20.6 rule 7 obeyed the usual way**: it sleeps two
+ticks, calls `task_alive` with the lock down, takes the lock, checks
+`wm_obscured` and draws. It is spawned from the first PAINT and not from the
+entry proc, because `task_spawn` refuses there; the refusal is transient, so
+`tk_hire` retries on every paint rather than giving up. During an fsx bracket
+the worker is frozen by the scheduler (§53.2) — `tk_cmd_play` passes no
+`fsx_worker` — so there is no window in which it could draw over a foreign
+mode.
+
+**The inks are §39.4's, and the logo's PAIR TURNS OVER on a 1bpp adapter.** A
+GLYPH in the dither class rounds to black there, so every string in this window
+is 12, 14 or 15 on every adapter. A LINE in that class really does dither — and
+a dithered logo is a logo made of holes, which is not what a title is for. So
+Hercules and CGA draw the tube SOLID and give the moving cursor BLACK: a gap
+chasing along the tube, which is the only contrast a 1bpp adapter has left once
+the tube is already white. VGA keeps the tube cyan and makes the cursor the
+brighter of the two — the same effect the other way up. The choice is made from
+the `VID_*` kind `fsx_caps` hands back in DL, which `tk_adapter` already asks
+for and re-asks on a resize, so a window dragged to the other card of a
+two-card machine (§39.18.2) re-answers it rather than carrying VGA's palette
+onto a Hercules.

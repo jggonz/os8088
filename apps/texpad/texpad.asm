@@ -133,6 +133,29 @@ tp_entry:
     call OSAPI_WM_SIZABLE
     mov al, 1
     call OSAPI_WM_SNAP
+    mov al, OSAPI_SAVEU_ON | OSAPI_SAVEU_1BPP
+    call OSAPI_WM_SAVEU         ; ...AND IT PROMISES, WITH NOTHING TO REMEMBER
+                                ; (SPEC.md 11.96.1). This app has NO WORKER at
+                                ; all - tp_onwake is a one-shot the kernel
+                                ; calls once the window is on the glass, not a
+                                ; background painter - and the window ABI has
+                                ; no periodic hook, so its content cannot
+                                ; change while it is not drawing. There is no
+                                ; mode to toggle and no br_promise to write.
+                                ;
+                                ; ...AND IT IS TWO COLOURS (SPEC.md 11.96.17),
+                                ; which is not a claim to make lightly and is
+                                ; simply true here: CBLACK and CWHITE and
+                                ; nothing else in 43 uses, this being a
+                                ; black-and-white TeX pad. That is what gets
+                                ; it a cache AT ALL on a VGA - 628x400 is the
+                                ; largest window in the system and its content
+                                ; is 123,458 bytes at four planes, past
+                                ; wm_su_kb's 64,512 ceiling and refused;
+                                ; 30,875 at one, and taken. The repaint it
+                                ; skips is source text beside a typeset
+                                ; preview, which is more lettering than any
+                                ; other window has
     push cx                     ; ...AND A FLOOR UNDER THE GROW BOX (SPEC.md
     push dx                     ; 11.100.2). Two panes with minimums cannot be
     mov cx, TP_MIN_W            ; expressed by WMIN_W, which is one number for
@@ -180,6 +203,10 @@ tp_entry:
     mov byte [tp_needttl], 1
     mov byte [tp_needset], 1
     mov byte [tp_setok], 0
+    mov bx, [tp_win]            ; SPEC.md 54.10: the kernel calls this once our
+    mov ax, tp_onwake           ; window is on the glass, and the launch .TEX
+    call OSAPI_WM_ONWAKE        ; loads in front of it rather than inside the
+                                ; repaint that is still putting it there
     clc                         ; entry CF=1 means launch failed
 .out:
     pop si
@@ -228,7 +255,28 @@ tp_note_arg:
     clc
     ret
 
-; Load a pending ARG_FILE. Call from a key/click, not paint.
+; tp_onwake - W_ONWAKE: typeset the launch document (SPEC.md 54.10/74.1)
+; in:  SI = our window; the UI task, gfx lock NOT held
+; out: nothing; no register need be preserved
+;
+; The kernel calls this once assoc_run has shown our window. It takes the lock
+; for the burst SPEC.md 74.1 lets it state - one file read, one typeset, one
+; repaint - and then spends [tp_ldfull] itself, because the handler that used
+; to inherit that debt is no longer the one that ran the load.
+tp_onwake:
+    cmp byte [tp_needld], 0     ; not the document's wake, or it is already in
+    je .out
+    call OSAPI_GFX_LOCK
+    call tp_deferred_ld
+    mov byte [tp_ldfull], 0     ; the redraw below IS the full repaint the load
+                                ; asks the next handler for, so nothing
+                                ; inherits it
+    call tp_redraw              ; ...and it reloads SI from [tp_win] itself
+    call OSAPI_GFX_UNLOCK
+.out:
+    ret
+
+; Load a pending ARG_FILE. Call from tp_onwake, or a key/click, never paint.
 tp_deferred_ld:
     cmp byte [tp_needld], 0
     je .o
@@ -333,21 +381,12 @@ tp_paint:
     mov [tp_cw], cx
     mov [tp_ch], dx
     call tp_clamp_split
-    ; ARG_FILE is READ here, not in the entry proc: a floppy read under the
-    ; loader lock froze the desktop (SPEC.md 69.6). First paint is after the
-    ; window is up, so the associated .TEX actually lands in the source pane
-    ; instead of waiting for a key or a click.
-    cmp byte [tp_needld], 0
-    je .noload
-    call tp_deferred_ld
-    mov byte [tp_ldfull], 0     ; the load asks the NEXT handler for a full
-                                ; repaint, and this IS one: the rest of this
-                                ; proc draws every part of the window from the
-                                ; document that just landed. Left set, the
-                                ; first keystroke afterwards took the whole
-                                ; window again instead of the one line it
-                                ; changed
-.noload:
+    ; NO tp_deferred_ld HERE. It was read from the FIRST PAINT between SPEC.md
+    ; 69.6 and 54.10 - never from the entry proc, where a floppy read under the
+    ; loader lock froze the desktop - and the first paint is itself inside
+    ; wm_show's repaint, so the read still happened with the desktop half
+    ; redrawn and this window's panes still blank. tp_onwake is after all of
+    ; that, and it is the handler that spends [tp_ldfull] now.
     call tp_fill
     mov byte [tp_caret_on], 0
     mov byte [tp_dselon], 0

@@ -810,6 +810,11 @@ wd_entry:
     mov byte [wd_mhi], 0xFF         ; a REAL menu index and a real item
     mov [wd_win], bx                ; the worker (SPEC.md 27.3) has no callback
                                     ; to be handed this in SI
+    push ax                         ; SPEC.md 54.10: the kernel calls this once
+    mov ax, wd_onwake               ; our window is on the glass, and the launch
+    call OSAPI_WM_ONWAKE            ; document loads in front of it. BX is still
+    pop ax                          ; the window, and the slot preserves the
+                                    ; flags the CF we owe the loader rides in
 %ifdef OS88UI_SBDRAG
     pushf                           ; the entry still owes the loader
     push ax                         ; wm_create's CF (SPEC.md 13.10.7.1)
@@ -6645,13 +6650,18 @@ wd_hguess:
 ; preserves all registers
 ;
 ; The predicate in ONE place, called from both ends of the drawing: every exit
-; of wd_redraw, and wd_paint - which is W_PAINT, and W_PAINT is the only thing
-; that draws a window opened by DOUBLE-CLICKING A DOCUMENT. That launch loads
-; the file in the entry proc and never calls wd_redraw at all, so the note
-; whose height most needs counting - a whole file, arriving at once - was the
-; one note that never got a worker to count it. It sat at the first
-; screenful's lower bound until some later edit happened to hire one, and
-; before then the first click paid the entire count in a single hold.
+; of wd_redraw, and wd_paint - which is W_PAINT. It was W_PAINT that made this
+; a routine: a window opened by DOUBLE-CLICKING A DOCUMENT used to load the
+; file in the entry proc and never reach wd_redraw at all, so the note whose
+; height most needs counting - a whole file, arriving at once - was the one
+; note that never got a worker to count it. It sat at the first screenful's
+; lower bound until some later edit happened to hire one, and before then the
+; first click paid the entire count in a single hold.
+;
+; SPEC.md 54.10 moved that launch onto wd_onwake, which ends in wd_redraw like
+; every other dispatch site, so the case that needed the second call site is
+; gone. Both sites stay: a predicate held in one place is why the gap was
+; findable, and W_PAINT still draws first on that path.
 ; -----------------------------------------------------------------------------
 wd_hirechk:
     push ax
@@ -9268,7 +9278,7 @@ wd_goto:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_arg - open the document we were launched to open (SPEC.md 54.5)
+; wd_arg - BANK the document we were launched to open (SPEC.md 54.5/54.10)
 ; in:  nothing; called from wd_entry once the window and the claim exist
 ; out: nothing; preserves all registers AND the flags, because the CF this
 ;      package owes the loader is still riding in them
@@ -9276,8 +9286,14 @@ wd_goto:
 ; The kernel hands over a name and a (cluster, volume) pair rather than
 ; putting us in the right folder, because it cannot: the loader read our own
 ; image out of OUR directory and far-called this entry as one unit. So the
-; whole of accepting a document is to copy the name, record the folder the
-; way Save As already records one, and let wd_load do what Ctrl-O does.
+; whole of accepting a document is to copy the name and record the folder the
+; way Save As already records one.
+;
+; **IT RECORDS AND DOES NOT LOAD.** It called wd_load here until SPEC.md
+; 54.10, and an entry proc runs under the loader's own gfx-lock burst with no
+; window on the glass yet - so a double-clicked .DOC froze the desktop at the
+; disk for as many int 13h calls as the file took, with the file manager still
+; on screen. wd_onwake spends it once the window is drawn.
 ;
 ; The name lives in the KERNEL segment, so ES is loaded explicitly rather
 ; than trusted: it happens to still be KERNEL_SEG here, and a later edit that
@@ -9317,7 +9333,8 @@ wd_arg:
     call wd_compttl                 ; the title follows the name - compose
                                     ; only, the window is not shown yet and
                                     ; the loader draws the caption (65.2)
-    call wd_load                    ; ...and this is Ctrl-O, unchanged
+    mov byte [wd_argp], 1           ; wd_onwake reads it; wd_load is Ctrl-O and
+                                    ; is what it calls (SPEC.md 54.10)
 .out:
     pop es
     pop di
@@ -9327,6 +9344,35 @@ wd_arg:
     pop bx
     pop ax
     popf
+    ret
+
+; -----------------------------------------------------------------------------
+; wd_onwake - W_ONWAKE: open the launch document (SPEC.md 54.10/74.1)
+; in:  SI = our window; the UI task, gfx lock NOT held
+; out: nothing; no register need be preserved
+;
+; The kernel calls this once assoc_run has shown our window, so the read
+; happens in front of a Word the user can see and SPEC.md 12.8's widget steps
+; through it. It takes the lock for the burst SPEC.md 74.1 lets it state - one
+; file read, one reflow and one repaint - because wd_redraw draws.
+;
+; wd_hirechk is NOT owed here and used to be, in a note this file carried for
+; the launch that "loads the file in the entry proc and never calls wd_redraw
+; at all": wd_redraw's own exit is one of the two places that hires the height
+; worker, so a whole document arriving at once now gets one by the ordinary
+; route.
+; -----------------------------------------------------------------------------
+wd_onwake:
+    cmp byte [wd_argp], 0           ; not the document's wake, or the document
+    je .out                         ; is already open
+    mov byte [wd_argp], 0           ; once, whatever happens below
+    call OSAPI_GFX_LOCK
+    push si
+    call wd_load                    ; ...and this is Ctrl-O, unchanged
+    pop si
+    call wd_redraw                  ; SI = the window ptr
+    call OSAPI_GFX_UNLOCK
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -20145,6 +20191,13 @@ section .text
     WDVAR wd_rpp,   4       ; the PAP entry the writer is emitting, banked
                             ; because SI is the string pointer every emit
                             ; needs and the entry has to outlive them
+
+; --- the launch document (SPEC.md 54.10) -------------------------------------
+    WDVAR wd_argp,  1       ; byte: wd_arg banked a document and wd_onwake has
+                            ; not spent it yet. The pair wd_load needs is
+                            ; already kept - wd_dir/wd_drv/wd_dirok are Save
+                            ; As's own - so this one byte is the whole of
+                            ; deferring the read out of the entry proc
 
 %ifdef WDBENCH
 ; --- the walk bench (tests/wdbench.inc), in the -DWDBENCH build only ---------

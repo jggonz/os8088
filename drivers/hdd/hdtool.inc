@@ -151,9 +151,14 @@ hd_tool_need:
     jc .fail
 
     mov ax, HDTOOL_KB
-    call OSAPI_MEM_CLAIM        ; owner = our segment, so drv_release sweeps
-    jc .fail                    ; it even if we never get to free it
-    mov [hd_tseg], dx
+    call OSAPI_MEM_CLAIM_HI     ; owner = our segment, so drv_release sweeps
+    jc .fail                    ; it even if we never get to free it - and
+    mov [hd_tseg], dx           ; FROM THE TOP (SPEC.md 50.3.2.1): [hd_tfar]
+                                ; is PKG_DISP:[hd_tseg], so this image's base
+                                ; is its CS and it can never move. 13KB of
+                                ; pinned claim in the middle of the arena is
+                                ; also the largest single thing this driver
+                                ; ever puts there
 
     mov es, dx
     xor bx, bx

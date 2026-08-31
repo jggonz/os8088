@@ -123,6 +123,7 @@ _MIRROR = {
     "WF_SAVEU": ("kernel/wm.inc", 32),
     "WF_OWNBG": ("kernel/wm.inc", 64),
     "WF_KEEPH": ("kernel/wm.inc", 128),
+    "WF_1BPP": ("kernel/wm.inc", 0x2000),
     # kernel/instance.inc - the instance record (SPEC.md 29)
     "I_STATE": ("kernel/instance.inc", 0),
     "I_FLAGS": ("kernel/instance.inc", 1),
@@ -207,6 +208,11 @@ globals().update({k: v for k, (_, v) in _MIRROR.items()})
 
 # Derived, and not mirrored: W_FLAGS bits 0 and 1 have no names in wm.inc.
 WF_USED, WF_VIS = 1, 2
+WF_HIBITS = (0x8000 | 0x4000 | 0x2000) >> 8   # WF_STALE|WF_NOANIM|WF_1BPP: the
+                                              # kernel's bits in the shape byte
+                                              # (SPEC.md 11.96.17). WF_1BPP is
+                                              # in the mirror table above, so a
+                                              # drift there fails t_mirror
 
 # ...and the three the kernel derives from VID_CTX_W the same way. They are
 # EXPRESSIONS in vidsel.inc (`VID_CTX_W*2`, `VID_CTX_W*2+6`), which _equs
@@ -342,6 +348,21 @@ class Win(object):
         return bool(self.flags & WF_SAVEU)
 
     @property
+    def mono(self):
+        """SPEC.md 11.96.17: it claims its content is colour 0 or 15 only."""
+        return bool(self.flags & WF_1BPP)
+
+    @property
+    def shape(self):
+        """SPEC.md 7.2.1's cursor shape - the high byte MINUS the kernel's.
+
+        Three flags share that byte and the mask is WF_HIBITS in the kernel;
+        getting it wrong here reads a kernel bit as a shape, which is the
+        exact defect WF_STALE's banner records having shipped once.
+        """
+        return (self.flags >> 8) & ~(WF_HIBITS) & 0xFF
+
+    @property
     def content(self):
         """The content rect - what wm_su_rect answers and the cache holds."""
         return (self.x + 1, self.y + TITLE_H,
@@ -356,6 +377,41 @@ class Win(object):
             self.title, self.i, self.x, self.y, self.w, self.h,
             "" if self.visible else " HIDDEN",
             "+saveu" if self.promises else "")
+
+
+def snapw(w, flush=False, x=None, screen=None):
+    """A template frame width as SPEC.md 11.94.5's size snap leaves it.
+
+    wm_snap_w rounds a frame so its CONTENT is a whole number of framebuffer
+    bytes - W_W - 2 with a left border, W_W - 1 without one - so a window does
+    not come up the width its template asked for. Mirrored here rather than
+    retyped at each call site because three tests identify a window BY its
+    size, and a literal is what turned all three into failures the day the
+    snap landed: dispcorner's hl_tpl 240 is 242, dispclose's os88ui_ask 288 is
+    290, fdlggrey's dialog 300 is 306.
+
+    UP WHERE IT FITS, DOWN WHERE IT DOES NOT, and this function had it
+    unconditionally down for a cycle because the kernel did (SPEC.md
+    11.94.5.1): rounding down hands a package less content than its template
+    asked for, and a layout drawn from `template_w - 2` then runs over the
+    window's own right border.
+
+    `x` and `screen` are what decides the direction, and they are optional
+    because every caller here is a window narrow enough that UP fits. Pass
+    them for a window near the right edge - TeXPad at x = 7 on a 640 screen
+    is the one in the tree that takes the DOWN branch.
+
+    It does NOT model the other two refusals - a frame spanning the screen,
+    and a DOWN result under the window's declared minimum - because no test
+    subject is either. Read the record rather than this function if that
+    changes.
+    """
+    c = 1 if flush else 2
+    up = ((w - c + 7) & ~7) + c
+    if x is None or screen is None or x + up <= screen:
+        return up
+    down = ((w - c) & ~7) + c
+    return down if down > c else w
 
 
 def close_xy(wx, wy):

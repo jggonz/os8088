@@ -322,6 +322,14 @@ boot2_entry:
                                 ; what makes the kernel's test `!= 0`
 .nocross:
 %endif
+    call spl_unhook             ; GIVE INT 08h BACK (SPEC.md 15.3.8.2). Not
+                                ; tidiness: leave it and sched_init saves OUR
+                                ; handler as sch_old08 and goes on calling it,
+                                ; while spl_finish gives the whole blob back to
+                                ; the heap (2.9.5) - so the chain would end in a
+                                ; far call into freed memory. From here to
+                                ; sched_init the animation is spl_paint's
+                                ; fail-safe again, which is the notch
     mov dl, [b2_drive]          ; the kernel may want to know the boot drive
 %ifdef BOOT_STOP
 %ifdef BOOT_NOSPLASH

@@ -10233,9 +10233,169 @@ and was chosen for that. The Timer wakes at 9 ticks and redraws only the
 digit cells that changed; About draws on repaint alone. Neither was measured,
 and neither is claimed.
 
+
+### Set 111 — Cyclone runs at the tick, and the first version of this set was wrong twice (SPEC.md §67.22, §67.9.4)
+
+Cyclone had **no rows in this file at all**. It has an object layer built
+entirely around the redraw budget — damage rects, a did-not-move exit, a
+repair pass — and none of it had ever been priced.
+
+**The first version of this set reported 4.6–7.1 fps and "drawing is 9% of a
+busy frame". Both numbers were wrong, and they are recorded here rather than
+deleted because each is a general trap.** What caught them was the owner
+saying he had never seen Cyclone run at 4 fps — an instrument disagreeing with
+somebody who has watched the thing run is the instrument's problem.
+
+**Error 1 — the denominator was a different clock.** `cy_frame` increments in
+`cy_play_update`, which runs **only in `CYS_PLAY`**. There are six other
+states, and two of them are unavoidable and long: `CYS_WARPIN` extrudes the
+web at every level entry and `CYS_DIE`/`CYS_OVER` play out every death. So
+"frames ÷ wall seconds" was **frame rate × fraction of time spent playing**.
+Worse, the call counters keep counting in every state, so a warp-in's drawing
+was being charged to the play frames alone — which is where "16–25 fills a
+frame" came from. In the corrected run only **19 of 60 sample windows** were
+entirely inside `CYS_PLAY`.
+
+**Error 2 — 756 µs is not a per-call cost.** Part 1 of this file says so in
+terms and Set 89 is its worked example: it is the fixed part of a *small* call
+and an average of the family, while `gfx_fill` itself measures **3,106 to
+41,323 cycles** over a single window raise. Multiplying a call count by it
+produces a number that means nothing, which is exactly the argument-from-the-
+aggregate Set 89 exists to warn about. **The "12.3 ms" and the "9%" are
+withdrawn outright** — not corrected, withdrawn: this set never measured the
+drawing's share of a frame and cannot, from call counts.
+
+**The corrected method.** Sample in short windows (15 display frames), read
+`cy_state` at both ends, and keep only windows that began *and* ended in
+`CYS_PLAY`; accumulate cycles, `cy_frame` and the call counters across those
+alone. Cycles come from MartyPC and need no conversion constant. `make
+CYPROF=1` provides the counters (`cy_fillx`, `cy_obj_dmg`, `cy_obj_put`, the
+web walker, `font_run`); the package is found in guest RAM by its header name
+and confirmed by `cy_frame` ticking at the game rate; bss offsets are resolved
+by replaying the declarations in source order, **validated against `os88pkg`'s
+own `bss=3424`**. MartyPC, 5150 + CGA + GLaBIOS.
+
+| | clean windows | in-play fps | cycles / play frame | ms / play frame |
+|---|---:|---:|---:|---:|
+| no droid | 19/60 | 18.08 | 263,952 | 55.3 |
+| droid, FIXED | 7/60 | 18.26 | 261,345 | 54.8 |
+| droid, DRIFT | 50/60 | 18.22 | 262,001 | 54.9 |
+
+**All three sit on the tick.** 18.2 Hz is 54.9 ms and the measured frame is
+54.8–55.3, so Cyclone is **paced and not compute-bound** — the loop is waiting
+on `cy_due`, and the earlier suspicion that a 140 ms frame was 668,000 cycles
+of work was an artefact of the bad denominator and nothing else. There is
+headroom, and the object layer is nowhere near spending it.
+
+| calls per **play** frame | no droid | FIXED | DRIFT |
+|---|---:|---:|---:|
+| `gfx_fill` (all of `cy_fillx`) | 2.72 | 5.41 | 4.95 |
+| `cy_obj_dmg` scans | 1.22 | 2.19 | 2.23 |
+| `cy_obj_put` repairs | 0.00 | 0.25 | 0.24 |
+| `OSAPI_GFX_LSTEPV` (web) | 0.26 | 0.25 | 0.25 |
+| `font_run` (HUD) | 0.00 | 0.00 | 0.04 |
+
+**Under three fills a play frame with no droid, about five with one.** The web
+walker is a quarter of a call a frame, which is §67's extrude-once design
+working as written, and the HUD is essentially free.
+
+**Since superseded on the design, not on the numbers**: the FIXED arm was
+play-tested against DRIFT, lost, and has been **deleted** — §67.9.4 is now a
+hunt (one step a tick toward the nearest live enemy) rather than either. That
+is the same single-lane step DRIFT made, so the row below still prices it.
+
+**On the droid's two arms: DRIFT is not the dearer one.** 4.95 fills a frame
+against FIXED's 5.41 — the opposite of the intuition, and the difference is
+inside the scene-to-scene noise either way, so the honest statement is that
+**they cost the same** and §67.9.4 is a look question with nothing riding on
+frames. §67.9.4's arithmetic (a drift step is two fills every `CY_DRSTEP`
+frames, ~0.33 a frame) sits comfortably inside that noise, which is consistent
+but is not confirmation.
+
+**What this set still does not say.** It does **not** price the drawing's
+share of a frame. Doing that needs Set 89's method — bracket the actual calls
+with breakpoints and time them — not a call count times a constant. And the
+scene confounds remain: `DROIDNOW` arms the droid from the first game, an
+armed droid kills enemies and so changes how long the player survives (note
+FIXED's 7 clean windows against DRIFT's 50 — that is survival, not speed), and
+`cy_entry` seeds the RNG from `OSAPI_GET_TICKS`, so boot timing decides the
+whole game. Compare like with like or not at all.
+
+### Set 112 — the straddled blit, cut at the seam (SPEC.md §39.14.7.2)
+
+| | |
+|---|---|
+| machine | **MartyPC**, `os8088_xt_vga_mda` — an XT with a **VGA and an MDA**, 8088 at **4.77 MHz**, extended **Right**: display 0 at (0,0) 640×480, display 1 at (640,20) 720×348, seam at x = 640 |
+| harness | `tests/blitcut.py` — one `gfx_blit4` bracketed **entry to `.pops`**, with **SP back where it started**, which is what tells the outer call from the cut's two halves |
+| method | two kernels off one tree, `make` and `make NOBLITCUT=1`, driven through the same script |
+| workload | `build/OS8088.GIF` opened in Paint through the association, then the window **dragged across the seam** — the drag is also what makes `gfx_blitp` refuse and Paint convert its canvas to nibbles (§42.13.1), which is what puts the block through `gfx_blit4` at all |
+| date | 2026-08-30 |
+
+**One 466×110 canvas, straddling, at x = 528 — so 112 columns on the VGA and
+354 on the MDA:**
+
+| | cycles | ms | |
+|---|---:|---:|---|
+| `NOBLITCUT=1` — §39.14.7's whole-virtual path | 132,962,695 | **27,858.9** | |
+| the cut (§39.14.7.2) | 2,983,572 | **625.1** | **44.56x** |
+
+**That is a factor, not a percentage, and the reason is that `.slow` is not a
+slower way of writing a run** — it is §5.4.1's fast path given up on the whole
+block, including every run nowhere near the seam. Set 63 measured the same
+shape at 4.17x on a 64-run *solid* blit, which is the case the cut helps
+LEAST: a flat row is nearly all per-row setup and the cut pays that setup
+twice. §63's dither is the other end — 18,978 runs in 51,260 pixels — and it
+is what a Paint canvas actually holds.
+
+#### The arithmetic closes, which is the check that this is real
+
+Set 107 priced §5.4.1.3's planar decoder at **106.9 cycles a pixel** and
+measured this same picture, unstraddled on a VGA, at 5,476,654 cycles. Split
+at x = 640 the cut puts **12,320 pixels** on the VGA and **38,940** on the
+MDA, so:
+
+| | pixels | cycles | per pixel |
+|---|---:|---:|---:|
+| the VGA half, §5.4.1.3's decoder | 12,320 | ~1,317,000 (at Set 107's rate) | 106.9 |
+| the MDA half, §5.4.1.1's row decoder | 38,940 | ~1,667,000 (the remainder) | **42.8** |
+
+**So the straddled blit is now CHEAPER than the same blit wholly on the VGA**
+— 2.98 M against Set 107's 5.48 M — because three quarters of it lands on the
+1bpp row decoder, which is about 2.5x cheaper a pixel than four planes are.
+That is not a claim the cut makes; it is what falls out of it, and it is the
+strongest evidence the two halves really are on their fast paths, because
+neither rate is reachable from `gfx_fill`.
+
+**The whole-virtual figure divides out at ~7,006 cycles a run** (132,962,695 ÷
+18,978), which is a `gfx_fill` arrival on the mono renderer plus `gfx_disp_run`
+— consistent with Set 63's straddled `GFX_FILL 8x8` at 1,036 µs and with
+Set 62's ~756 µs mono floor. Nothing here is a new cost; the cut simply stops
+paying it 18,978 times.
+
+#### The Below layout, and what it cost
+
+The same picture, the same machine, `set_mode below` — display 1 at (0,480),
+seam at row 480 — with the canvas at y = 422 so **58 rows land on the VGA and
+52 on the MDA**: **3,674,182 cycles, 769.8 ms**. Set 107's rates predict
+3.93 M for that split (27,027 VGA pixels at 106.9 and 24,233 MDA pixels at
+42.8), so the measurement is 7% under the prediction and the two halves are
+plainly both on their decoders. **A row seam has no parity question at all** —
+the second half's source is `n` strides along — so this is the case with
+nothing to refuse.
+
+**What the whole thing cost: 199 bytes** — 195 of `.text`, 4 of `.bss` — and
+20 bytes of stack, the cut being a recursive call into `gfx_blit4`. Task 0's
+measured high water is 274 of 1,024 (docs/KERNEL-MEMORY.md), which is where a
+`W_PAINT` runs.
+
+**Take no absolute number here to another machine.** The split is 112/354 at
+this window position, and a window straddling the other way round would put
+three quarters on the VGA and land nearer Set 107's figure. The ratio is what
+travels, and even that is workload-shaped: 44.6x on a dither, and Set 63's
+4.17x is the floor a flat blit sees.
 ---
 
-### Set 111 — WEAVE's grid band composer, against Set 68's numbers (WEAVE-SPEC §6.9.1, §14)
+### Set 112 — WEAVE's grid band composer, against Set 68's numbers (WEAVE-SPEC §6.9.1, §14)
 
 `apps/weave/wband.inc` is the grid's painter: one row of cells composed into a
 1bpp band in RAM and put down with ONE `OSAPI_GFX_BLIT1` (WEAVE-SPEC §6.9.1).

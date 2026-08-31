@@ -35,6 +35,8 @@ import suite                                              # noqa: E402
 # Not registered, and why. Keep the reason specific and true.
 UNREGISTERED = {
     # --- library and support code, not tests ---
+    "dispcells.py": "the CELLS-not-calls counter two gates share (SPEC.md "
+                    "11.3.3), not a test",
     "benchlib.inc": "a benchmark library, not a test",
     "trklog.inc": "tracker's logging build, %included by apps/tracker",
     "trkscrl.inc": "tracker's scroll-gate build, %included by apps/tracker",

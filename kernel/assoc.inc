@@ -980,10 +980,14 @@ assoc_run_x:
     pop es                      ; ld_run_body's failure exits leave ES adrift
     call assoc_back             ; the user's volume FIRST, then the window
     cmp byte [ld_painted], 0
-    jne .out                    ; ld_run_body's wm_show drew the new window
+    je .refresh                 ; ld_run_body's wm_show drew the new window
                                 ; and the poster's own window was never
                                 ; written on by this load at all (SPEC.md
                                 ; 22.17), so nothing here is owed a repaint
+    call assoc_handover         ; ...and the DOCUMENT is a second phase, now
+    jmp short .out              ; that there is something to look at while it
+                                ; loads (SPEC.md 54.10)
+.refresh:
     call files_refresh_x
     jmp short .out
 
@@ -1008,6 +1012,65 @@ assoc_run_x:
     pop bx
     pop ax
     retf
+
+; -----------------------------------------------------------------------------
+; assoc_handover - the window is up; tell the package to spend its document
+; in:  the load succeeded ([ld_painted] != 0), so [ld_rec] is the instance
+;      ld_run_body published and its I_WIN is the window wm_show just drew;
+;      the UI task, gfx lock NOT held
+; out: nothing (all registers preserved)
+;
+; **THE SECOND PHASE OF A DOCUMENT LAUNCH** (SPEC.md 54.10). The first is the
+; PROGRAM: locate it, read it, run its entry proc, show its window. Everything
+; a package used to do with the document happened inside that - in the entry
+; proc, or in the first W_PAINT, which is inside wm_show's repaint - so the
+; machine was frozen at the disk with the desktop half redrawn and the
+; application not on the glass at all. A double-click on a picture bought
+; several seconds of a screen that had nothing on it but the file-activity
+; widget, and PERFORMANCE.md's "a redraw is priced in calls" has nothing to
+; say about it: the cost is one int 13h at a time and the defect is that
+; nobody can see anything while it is paid.
+;
+; So the document waits for HERE: wm_show has drawn the new window and every
+; other window with it, assoc_back has put the user's volume back, and this
+; runs on the UI task with no lock held - which is exactly the environment
+; SPEC.md 74.1 gives a W_ONWAKE handler. The package's own handler is
+; therefore what is called, with nothing delivered: the pending flag it set
+; from OSAPI_ARG_FILE in its entry proc is what tells it this wake is the
+; document's, and a package that installs no handler is the machine it was
+; before this existed.
+;
+; It is a CALL and not an OSAPI_WM_WAKE post, deliberately. A post can be
+; refused (a full ring), and a refusal here loses the document silently -
+; where the whole of what the ring buys, ordering against the mouse, is
+; already settled by standing at this instruction.
+; -----------------------------------------------------------------------------
+assoc_handover:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov di, [ld_rec]            ; the record .reg published, and I_WIN is the
+    or di, di                   ; window the entry proc answered with
+    jz .out
+    mov si, [di+I_WIN]
+    or si, si
+    jz .out
+    call KERNEL_SEG:cw_wm_wake_call
+.out:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
 
 ; assoc_back - put the user's volume back where the document is. A failed
 ; remount leaves that volume mount-failed at its root with the write gate
