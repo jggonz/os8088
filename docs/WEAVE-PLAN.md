@@ -612,13 +612,45 @@ every wave gated before the next begins:
 | 3 | interaction + the WVM — event ring, adaptive slices, Reload | the raw-QEMU differential corpus, then session replay and the SPEC.md §7.3 latency bar |
 | 4 | `<grid>` — band composer, per-row damage, FX VM, sliced recalc | recalc-vs-model and the incremental-equals-full pixel identity |
 | 5 | `<canvas>`/`<sprite>` — worker loop, masks, collision, **and `WEAVE.WSM`, a second resident segment** (§2.9) | `weavecanvas` FIRST, then `weavegame`; the field run is COMMISSIONED (§4.2) |
-| 6 | Loom — editor transplant, overlay compilers, Pack, Preview | on-machine pack **byte-identical** to `weavesim --pack` |
+| 6 | ~~Loom~~ **SHIPPED** — editor transplant, overlay compilers, Pack; Preview's PLUMBING but not its picture (§5.3) | on-machine pack **byte-identical** to `weavesim --pack` |
 | 7 | distribution — `make weavedisk` ×3 geometries, vm targets, allapps rows | the release checklist, and the 256KB one-app refusal exercised on the `xt` target |
 
 The size line is watched every wave: `os88pkg.py`'s resident count against
 the ~52KB target, 55,000 bytes the overlay-split trigger, the OVL
 candidates pre-named (WEAVE-SPEC §1.2) so the split is a move, not a
 scramble.
+
+### 5.3 Wave 6's own size line, and the one thing it could not afford
+
+LOOM is a SECOND package with a ceiling of its own, so wave 6 opens two size
+lines rather than moving one. It closed at **54,904 image + 6,036 bss =
+60,930 resident, 536 under** SPEC.md §20.1's 61,440, with `LOOM.OVL` at
+42,894 — and WEAVE did not move a byte: 61,408, exactly wave 5's number,
+verified by rebuilding `weave.bin` and comparing it whole after each of the
+two changes LOOM needed there (`wfx_frac` extracted into a shared `.inc`, and
+an `#ifndef` around `wfxc.c`'s output buffer).
+
+**Where the 536 went, and it is the interesting half.** An overlay's CODE is
+free — `LOOM.OVL` carries 42,894 bytes of compiler and costs the resident
+image nothing — but SPEC.md §73.14's rule is that *"every global, literal and
+bss byte it names stays resident and DS-relative"*, and a compiler is made of
+sentences. WEAVE-SPEC §10.5 pins forty-odd of them and every one is a
+`const char *` in `.rodata`. So the resident cost of the pack step is its
+VOCABULARY, not its logic, which is why WEAVE-SPEC §11.4 puts every compiler
+TABLE in a heap claim reached through accessors: a 5,000-byte component table
+declared as a C array would have been 5,000 resident bytes for a body that
+runs once per Pack.
+
+**And it is why Preview ships without its picture** (WEAVE-SPEC §1.7.1).
+Rendering the compiled stream needs `apps/weave/wflow.c` and
+`apps/weave/wpaint.c` — 880 lines that name the component value arrays, the
+field pool, the grid's cell store and the canvas seam — and 536 bytes will not
+host them. Writing a SMALLER painter is what WEAVE-SPEC §1.2 forbids by name,
+and it would be the worse failure: a Preview that draws a different picture
+from the runtime's is worse than one that draws none, because the whole point
+of the pane is to answer "what will this look like" before `^R`. The price of
+doing it properly is the one §2.9 already worked out for a different subject —
+a second segment — and it is a wave-7 row rather than a corner cut here.
 
 **As of wave 5 it is 61,408 resident against SPEC.md §20.1's 61,440 ceiling —
 32 bytes — and the wave that got there did it by putting its code in a SECOND

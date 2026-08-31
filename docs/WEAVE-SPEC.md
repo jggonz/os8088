@@ -3754,6 +3754,40 @@ PONG came up on CGA as a black field with white paddles, on two adapters of
 three, and passed every differential. §6.10.2 now pins the buffer in the
 framebuffer's own polarity.
 
+**Wave 6 shipped LOOM** — `apps/loom/`, `LOOM.O88` + `LOOM.OVL`, the second
+package in the family and the one that closes §1.1's loop. The five compilers
+§1.2 names are in the overlay (`lmwml.c`, `lmwjs.c`, `lmsheet.c`, `lmatom.c`,
+`lmwrite.c`), the editor is `apps/cword`'s C engine with prefix `lm_`
+(§1.2.3), the sidebar is §11.3's with the pack sentence clickable and the
+caret jumping to the offending line, and the close guard runs on a
+`CC_HAS_ONCLOSE` path this wave had to add to the C SDK — SPEC.md §75.1's
+negotiator had no C door at all, so every C package that ever wanted to ask
+*"save the changes?"* had no way to be asked.
+
+`loom.o88` is **54,904 image + 6,036 bss = 60,930 resident, 536 under**
+SPEC.md §20.1's ceiling, with `LOOM.OVL` at 42,894. WEAVE did not move:
+52,212 + 9,196 = 61,408, byte for byte what wave 5 closed at, and the two
+things LOOM needed from it — `wfx_frac` extracted into `apps/weave/wnum.inc`,
+and an `#ifndef` around `wfxc.c`'s output buffer — were each checked by
+rebuilding `weave.bin` and comparing it whole.
+
+**The gate is green host-side and on the machine.** Every demo and every
+template packs byte-identically to `weavesim --pack`, and all forty cases in
+`tests/weave/packerr/` refuse with the identical sentence
+(`tests/unit/t_lmpack.py`, a fast row). `tests/weavefuzz.py` then damaged a
+thousand projects and found **no** case where the two packers disagreed about
+whether the result was a program, and none where they disagreed about its
+bytes. `tests/weavepack.py` is the on-machine half.
+
+**FX is not compiled twice on this machine**, and that is the wave's one
+structural decision: LOOM's FX pre-compiler IS `apps/weave/wfxc.c`,
+`#include`d rather than rewritten, which is §1.2's sharing rule applied to a
+grammar. It cost the pack-time sentences their old wording — §10.5 records the
+amendment and what it buys.
+
+**PREVIEW SHIPPED AS PLUMBING AND A LABEL, NOT A PICTURE**, and §1.7.1 carries
+the arithmetic rather than leaving it to be found. It is the wave's one gap.
+
 The rest, each gated before the next begins:
 
 | wave | ships | the gate |
@@ -3762,7 +3796,8 @@ The rest, each gated before the next begins:
 | 3 | interaction + the VM: widget arm/fire, os88line input, event ring, `wvm.inc` (gated FIRST by the raw-QEMU differential corpus), adaptive slices, onclick/onchange/onkey, alert/timer/tone/state builtins, `^R` Reload | `weavevm`, `weavesession`, the §7.3 bar via `weavelat` |
 | 4 | `<grid>`: cell store, `wband.inc` benched against Set 68's numbers (`make weavebandbench`), per-row damage, formula bar, `wfx.inc` + the formula compiler (§1.2.1's tenant 7, not resident — the size line decided it), sliced recalc | `weavegrid` (recalc vs model + tpdraw identity), `weavegfx`, and the FX half of `weavevm` FIRST |
 | 5 | ~~`<canvas>`/`<sprite>`~~ **SHIPPED**, above — and in `WEAVE.WSM`, a second RESIDENT segment (§1.2.2), which is the decision the wave turns on | `weavecanvas` FIRST (§12.1.3), then `weavegame`; the field run is COMMISSIONED and pending (WEAVE-PLAN §4.2) |
-| 6 | Loom: `lm_` editor transplant, project folder + file switcher, LOOM.OVL compilers + packer, Pack, Preview, templates, APPDATA prefs, W_ONCLOSE/ASAVE close guard | `weavepack` byte-identity on all templates and demos, in the OS |
+| 6 | ~~Loom~~ **SHIPPED**, above — except Preview's PICTURE (§1.7.1), which needs the shared paint stack in a segment LOOM has not got | `weavepack` byte-identity on all templates and demos, in the OS |
+| 7 | Preview's picture (§1.7.1): `wflow.c` and `wpaint.c` reachable from LOOM, the way `WEAVE.WSM` is reachable from a worker (§1.2.2) — a second segment, priced the same way | the pane draws what `weavesim --render` predicts |
 | 7 | distribution: `make weavedisk` in three geometries with cluster-fit refusal + `--verify`, writable `PROJECTS/` folder, CATALOG.TXT, `BUNDLES=` knob; ALLAPPSFILES rows (one `WEAVE/` folder — package + overlay + **`WEAVE.WSM`** + bundles share it, SPEC.md §19.10: wave 5 added the fourth file, and a canvas bundle that cannot find it refuses at open with §10.3's sentence); the 256KB one-app refusal exercised on the `xt` target, whose arithmetic §1.4 moved by one claim | the release checklist |
 
 Wave order within a wave follows the size line: `os88pkg.py`'s resident

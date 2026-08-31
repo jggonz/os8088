@@ -47,7 +47,7 @@ nothing here duplicates it — a second copy is a copy that goes stale.
 | **[docs/FIELD-NOTES.md](docs/FIELD-NOTES.md)** | a bug that reproduces on hardware and not here — open, reproduced, unfixed, with what has already been ruled out for each |
 | **[docs/FTP-PERF.md](docs/FTP-PERF.md)** | picking the FTP server's speed back up (§77, §72.15) — what moved it from 7 to 15 KB/s, the four things that did NOT work, where the time goes now (57% of it is ABOVE the driver), and the next five candidates in the order the evidence ranks them |
 | **[docs/LIVE-MEDIA.md](docs/LIVE-MEDIA.md)** | answering any user-facing "how do I write, burn or boot the live USB/CD" — it is the reader's guide (dd, Rufus, BIOS settings, troubleshooting) and the README links it; §80 stays the design record and this file must follow it, never lead |
-| **[docs/WEAVE-SPEC.md](docs/WEAVE-SPEC.md)** | touching anything in the Weave family (`apps/weave/`, the `.WAB` bundle, WML/WJS/FX) — the binding contract, outside SPEC.md on the C64 precedent, cited as `WEAVE-SPEC §N`; `tools/weavesim.py` is its reference implementation and `tests/unit/t_wab.py` its independent second reader |
+| **[docs/WEAVE-SPEC.md](docs/WEAVE-SPEC.md)** | touching anything in the Weave family (`apps/weave/` and `apps/loom/`, the `.WAB` bundle, WML/WJS/FX) — the binding contract, outside SPEC.md on the C64 precedent, cited as `WEAVE-SPEC §N`; `tools/weavesim.py` is its reference implementation and `tests/unit/t_wab.py` its independent second reader. **Two packages share one document and a lot of source**: WEAVE runs a bundle, LOOM builds one, and what they share they share as SOURCE (`%include`/`#include`), never as a copy — WEAVE-SPEC §1.2 is the rule and `apps/weave/wfxc.c` is the worked example, being LOOM's FX compiler as well as WEAVE's formula bar's |
 | **[docs/WEAVE-PLAN.md](docs/WEAVE-PLAN.md)** | re-opening a Weave design decision — why each fork went the way it did, the judged alternatives, and what was deferred with the arithmetic attached |
 
 ## Commands
@@ -137,6 +137,16 @@ make c64disk    #   3.10's x64 as a windowed Commodore 64 — a 6510 in a 64KB
                 #   in raw QEMU), `make c64bandbench` the composer's bench, and
                 #   `make c64cputest` the 6510's — it arrives with the core.
                 #   THE CONTRACT IS docs/C64-SPEC.md, not a section of SPEC.md
+make loom       # LOOM (WEAVE-SPEC §1.2), the family's second package: the
+make loomdisk   #   in-OS IDE that edits a project's sources and packs the
+                #   `.WAB` ON THE MACHINE, byte-identical to what
+                #   `tools/weavesim.py --pack` writes on the host. That
+                #   identity IS the gate (WEAVE-SPEC §11.1): `make` runs the
+                #   host half of it every time (the `lmpack` row, four
+                #   seconds), and `python3 tools/os88test.py soak -k
+                #   'weave*'` runs the machine's. `make loomdisk` puts both
+                #   packages, both overlays, WEAVE.WSM, the demo bundles and
+                #   the demo SOURCES on one floppy in all three geometries
 make netbench   # THE STACK'S PROFILER (SPEC.md 72.15): NETBENCH.O88 beside
                 #   FTPD.O88 on one disk, in all three geometries. ETHER.DRV
                 #   brackets its own ten stages with the PIT and this is the
