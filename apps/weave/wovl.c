@@ -42,8 +42,19 @@
  * part of the document. */
 static void ovl_about(void)
 {
-    os88_toast("WEAVE - web-style apps, compiled to a bundle "
-               "(docs/WEAVE-SPEC.md)", 0);
+    /* WEAVE-SPEC 4.12's banner: the WVM's own ops/s, measured over the last
+     * closed window of EXHAUSTED slices, the way RunCPM banners its effective
+     * Z80 clock (SPEC.md 74). It is the number the wave-5 field run is asked
+     * to read off a 5150's screen, and until a full window has closed it says
+     * so rather than guessing. */
+    w_l0();
+    w_ls("WEAVE - WVM: ");
+    if (wcv_opsps())
+        w_ln(wcv_opsps());
+    else
+        w_ls("-");
+    w_ls(" ops/s (measured)");
+    os88_toast(w_line, 0);
 }
 
 /* ovl_info - Bundle -> Bundle Info: the verbose diagnostics WEAVE-SPEC 1.2
@@ -198,6 +209,32 @@ static void ovl_info(void)
     w_ln(w_nsec);
     w_ls(", flags ");
     w_ln(w_flags);
+    w_ls("; WVM ");                     /* 4.12's banner, a SECOND time and
+                                         * not a duplicate: About is a toast
+                                         * and takes itself down in about
+                                         * three seconds (SPEC.md 59), which
+                                         * is not long enough to copy a
+                                         * five-digit number off a 5150's
+                                         * screen by hand. This line stays
+                                         * until the card is repainted, and it
+                                         * is what the field run reads */
+    if (wcv_opsps())
+        w_ln(wcv_opsps());
+    else
+        w_ls("-");
+    w_ls(" ops/s");
+    if (w_cseg) {                       /* ...and the canvas's own two
+                                         * counters, which are what
+                                         * tests/weavegame reads and what
+                                         * 14 prices at 2-4 calls a frame */
+        w_ls("; canvas ");
+        w_ln(w_w(w_cmseg, w_cso + WSS_FRAMES));
+        w_ls(" frames ");
+        w_ln(w_w(w_cmseg, w_cso + WSS_BLITS));
+        w_ls(" blits ");
+        w_ln(w_w(w_cmseg, w_cso + WSS_OVF));
+        w_ls(" ovf");
+    }
     os88_strcpy(w_infoln, w_line, sizeof(w_infoln));
     w_l0();                             /* ...and a SHORT form for the toast,
                                          * which holds 23 characters: `ask

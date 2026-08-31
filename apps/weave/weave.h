@@ -118,12 +118,19 @@
 #define WA_ENABLED    4
 #define WA_CHECKED    5
 #define WA_HIDDEN     6
+#define WA_X          7
+#define WA_Y          8
+#define WA_VX         9
+#define WA_VY        10
 #define WA_FRAME     11
+#define WA_SHOWN     12
 #define WA_MIN       13
 #define WA_MAX       14
 #define WA_ROWS      15
 #define WA_COLS      16
 #define WA_GROUP     19
+#define WA_WALLS     23
+#define WA_TICK      24
 #define WA_CARD      20
 #define WA_START     40
 #define WA_SEL       17
@@ -136,6 +143,7 @@
 #define WA_GO        37
 #define WA_SET       38
 #define WA_GET       39
+#define WA_STOP      36
 #define WA_CLEAR     41
 #define WA_ONCLICK   48
 #define WA_ONCHANGE  49
@@ -143,6 +151,10 @@
 #define WA_ONSELECT  51
 #define WA_ONEDIT    52
 #define WA_ONCALC    53
+#define WA_ONCOLLIDE 54
+#define WA_ONWALL    55
+#define WA_ONSCORE   56
+#define WA_ONTICK    57
 #define WA_ONCOMMAND 58
 #define WA_ONTIMER   59
 #define WA_ONALERT   60
@@ -157,6 +169,8 @@
  * table is sized for the format rather than for a guess about a card. Ten
  * bytes each in bss, which SPEC.md 73.9 prices as the cheap half. */
 #define W_MAXLAY    250
+#define W_NCOMP     251        /* ...and a table keyed by comp_id: 1..250,
+                                * so index 250 has to exist (2.5) */
 #define W_MAXCARD     8        /* 2.5: card index <= 8 */
 
 /* The header probe (WEAVE-SPEC 10.1, SPEC.md 18.4.4): os88_file_read_at()'s
@@ -309,7 +323,9 @@ void wg_band(unsigned char *dst, const char *chars, int n, int inv0, int inv1);
 #define WE_GDIV0  15            /* cell is #DIV0. */
 #define WE_GRANGE 16            /* cell %s is out of int range. */
 #define WE_GPOOL  17            /* grid pool full. */
-#define WE_NERR   18
+#define WE_FRAME  18            /* frame %d of %d. */
+#define WE_FPS    19            /* start(%s): fps is 1..18. */
+#define WE_NERR   20
 
 /* The native block (wvm.inc's WN_*), in WORDS - the C side indexes an int
  * array and the assembly side a byte offset, so every name here is the
@@ -394,6 +410,75 @@ void wd_lcaroff(int *blk);
 #define WD_AYESNO   1
 #define WD_AMAX    34           /* the message, in characters (8.2) */
 #define WD_ACANCEL (-1)         /* ...and the answer for a DISMISSED alert */
+
+/* ============================================================================
+ * WEAVE.WSM - THE CANVAS CORE (WEAVE-SPEC 1.2.2, 6.10), apps/weave/wcanvas.asm
+ *
+ * A SECOND, RESIDENT SEGMENT and not an overlay, because every byte of it
+ * runs on a WORKER task per frame and SPEC.md 73.14's cc_ovneed refuses a
+ * worker at its first instruction. WEAVE-PLAN 2.9 prices the alternatives.
+ *
+ * Everything below is a C COPY of apps/weave/wsmabi.inc, which is the file
+ * both assemblies share, and IT IS NOT THE CONTRACT: docs/WEAVE-SPEC.md
+ * 6.10.3 and 6.10.4 are. weave.asm carries %ifs that fail the build if any of
+ * these drift - a stale copy here would read a frame counter out of the
+ * middle of the staging ring, assemble cleanly and run wrong.
+ * ==========================================================================*/
+
+#define WSMV_BIND   0               /* 6.10.3's eight verbs */
+#define WSMV_SPRITE 1
+#define WSMV_START  2
+#define WSMV_STOP   3
+#define WSMV_PAINT  4
+#define WSMV_DRAIN  5
+#define WSMV_UNBIND 6
+#define WSMV_PLACE  8
+
+#define WSMP_W      0               /* WSMV_BIND's parameter block */
+#define WSMP_H      1
+#define WSMP_WALLS  2
+#define WSMP_TICK   3
+#define WSMP_NSPR   4
+#define WSMP_SPOFF  5
+#define WSMP_CID    6
+#define WSMP_NW     7               /* ...in WORDS: the C side hands over an
+                                     * int array and the module reads bytes */
+
+#define WSMF_X      0               /* WSMV_SPRITE's fields */
+#define WSMF_Y      1
+#define WSMF_VX     2
+#define WSMF_VY     3
+#define WSMF_FRAME  4
+#define WSMF_SHOWN  5
+#define WSMF_NFRAME 6
+#define WSMF_DESC   7
+
+#define WSS_RUN     0               /* the state block, at WSM_H_STATE */
+#define WSS_ACK     1
+#define WSS_SLEEP   2
+#define WSS_FRAME   6
+#define WSS_CVSEG   8
+#define WSS_BLITS  18
+#define WSS_FRAMES 20
+#define WSS_OVF    22
+
+#define WSM_MAXSPR 16               /* 2.11's own cap */
+
+/* --- the seam (apps/weave/wcv.inc) ---------------------------------------
+ * The magic, the ABI number and the module's size are NOT copied here: they
+ * are nasm equs out of the two files the two assemblies share, and a C copy
+ * would be a fourth place for the contract to drift - which is the exact
+ * failure the ABI word exists to prevent. wcv_stamp() checks all three where
+ * they live. */
+unsigned wcv_call(unsigned verb, unsigned a, unsigned b, unsigned c);
+void     wcv_bindmod(unsigned seg);
+void     wcv_run(void *win);        /* the worker's body; it does not return */
+int      wcv_kb(void);              /* the module's claim, in KB */
+unsigned wcv_bytes(void);           /* ...and in bytes, to check the read */
+int      wcv_stamp(unsigned seg);   /* 0 ok, 1 not ours/truncated, 2 stale */
+unsigned wcv_stateoff(unsigned seg);
+void     wcv_ops(int spent);        /* 4.12's banner: one exhausted slice */
+unsigned wcv_opsps(void);           /* ...and the last window's answer */
 
 /* --- 4.10's slice model -------------------------------------------------- */
 #define W_SLICE0  256           /* the start budget, 256 << cpu tier */

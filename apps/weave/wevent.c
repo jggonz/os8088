@@ -79,7 +79,8 @@ static const char *w_errtext[WE_NERR] = {
     "too deep.", "array index ", "bad opcode.", "bad builtin.",
     "no component ", "no property.", "no method.", "no method.",
     "list index ", "grid cell ", "card ", "rand of ",
-    "cell is #DIV0.", "cell ", "grid pool full."
+    "cell is #DIV0.", "cell ", "grid pool full.",
+    "frame ", "start("
 };
 
 /* w_scripterr - 10.6: the handler is already stopped (the core cleared the
@@ -101,11 +102,14 @@ static void w_scripterr(void)
     w_ln((unsigned)wvm_errfn());
     w_ls(": ");
     w_ls(c >= 0 && c < WE_NERR ? w_errtext[c] : "stopped.");
-    if (c == WE_AIDX || c == WE_LIDX) {
+    if (c == WE_AIDX || c == WE_LIDX || c == WE_FRAME) {
         w_ln((unsigned)wvm_erra());
         w_ls(" of ");
         w_ln((unsigned)wvm_errb());
         w_ls(".");
+    } else if (c == WE_FPS) {
+        w_ln((unsigned)wvm_erra());
+        w_ls("): fps is 1..18.");
     } else if (c == WE_NOCOMP || c == WE_CARD || c == WE_RAND) {
         w_ln((unsigned)wvm_erra());
         w_ls(".");
@@ -185,10 +189,16 @@ static void w_flush(void)
         os88_gfx_unlock();
         return;
     }
-    if (w_ndirty == 0 && !w_gredraw)
+    if (w_ndirty == 0 && !w_gredraw && !w_credraw)
         return;
     os88_gfx_lock();
     if (w_layout(w_win)) {
+        if (w_credraw)
+            w_cflush();                 /* 6.10.2's dirty bands: a sprite a
+                                         * handler moved while the loop was
+                                         * STOPPED, one composed run and not a
+                                         * card. A running canvas needs none
+                                         * of this - its own worker draws */
         if (w_gredraw)
             w_gflush();                 /* 5.5.1's damage: the grid ROWS the
                                          * recalculation changed, one blit
@@ -298,8 +308,15 @@ static int w_step(void)
         return 0;
     began = os88_ticks();
     r = wvm_slice(w_budget);
-    if (r == WR_MORE)
+    if (r == WR_MORE) {
         w_adapt(began);
+        wcv_ops(w_budget);              /* 4.12: ONLY an exhausted slice
+                                         * counts, because a slice that
+                                         * finished early spent an unknown
+                                         * fraction of its budget and would
+                                         * divide real ops by time the VM was
+                                         * not running in */
+    }
     w_flush();
     if (r == WR_GC) {
         w_gcmark();                     /* 4.8.1's roots, before 4.8's marks */
@@ -416,6 +433,10 @@ static void w_wake(void)
     /* One slice per wake, and at most a handful of empty dispatches: a record
      * with no binding costs nothing and there are at most 16 of them, so
      * draining them in one pass is cheaper than a wake each. */
+    w_cdrain();                         /* 6.10.6: the worker STAGED and this
+                                         * commits - before the slice, so a
+                                         * frame's events are in the ring the
+                                         * slice is about to drain */
     guard = 20;
     while (guard-- > 0) {
         if (wvm_busy()) {

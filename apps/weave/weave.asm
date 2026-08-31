@@ -75,12 +75,25 @@
                                     ; second of WEAVE-SPEC 1.5's ways in
 %define CC_HAS_OVL                  ; ...and WEAVE.OVL (SPEC.md 73.14), whose
                                     ; tenants are in apps/weave/wovl.c
+%define CC_HAS_WORKER               ; void os88_worker(void *) - WEAVE-SPEC
+                                    ; 6.10's canvas frame loop, hired at the
+                                    ; first start() and parked between runs.
+                                    ; The BODY is not in this image at all: it
+                                    ; is WEAVE.WSM (1.2.2), a second RESIDENT
+                                    ; segment, because SPEC.md 73.14's overlay
+                                    ; refuses a worker at its first
+                                    ; instruction and every byte of that loop
+                                    ; runs on one. What os88_worker() does is
+                                    ; far-call it - and the entry has to be
+                                    ; HERE anyway, because OSAPI_TASK_SPAWN's
+                                    ; ownership fence checks that it lies
+                                    ; inside this instance's own region.
                                     ;
-                                    ; and NOT, in this wave: CC_HAS_WORKER -
-                                    ; the canvas worker arrives with <canvas>
-                                    ; (WEAVE-SPEC 13.1 wave 5), and a
-                                    ; trampoline nobody asks for is not
-                                    ; assembled at all
+                                    ; It also arms cc_iswk: without
+                                    ; CC_HAS_WORKER, cc_wksp is never set and
+                                    ; every task reads as the UI task - which
+                                    ; would let the WORKER load WEAVE.OVL, and
+                                    ; SPEC.md 20.6 rule 7 is why it may not
 
 %define CC_ICON  "weave/icon.inc"   ; 32 dw rows exactly: 16 mask, 16 data
 %define CC_ASSOC "weave/wvassoc.inc" ; 'WAB' - so a bundle opens on the FIRST
@@ -151,6 +164,17 @@
 %include "weave/wband.inc"          ; ...and the grid's band composer (6.9.1),
                                     ; apps/runcpm/rcband.inc's shape and
                                     ; PERFORMANCE.md Set 68's constants
+%include "weave/wsmabi.inc"         ; the WEAVE.WSM contract (1.2.2) - the ONE
+                                    ; file this assembly and apps/weave/
+                                    ; wcanvas.asm share, and the reason a
+                                    ; separate `nasm -f bin` job can be
+                                    ; trusted to agree with this one about
+                                    ; anything at all
+%include "weave/wcv.inc"            ; ...and the three-routine seam to it. The
+                                    ; module is NOT in this image: it is read
+                                    ; once at open, into a claim of its own,
+                                    ; and only when the bundle declares a
+                                    ; <canvas>
 
 ; --- THE DRIFT GUARDS, and they are %if and not a comment --------------------
 ; weave.h carries a C copy of two of wvm.inc's own numbers, because a C file
@@ -169,6 +193,31 @@
 %endif
 %if WFX_HDR != 16 || WFX_CELL != 4
   %error "wfx.inc's cell record moved; wgrid.c's WG_CHDR/WG_CELL must follow"
+%endif
+
+; ...and the same guard over WEAVE.WSM's ABI, which is the one contract in
+; this package whose two readers are in DIFFERENT ASSEMBLIES. weave.h carries
+; a C copy of the verb numbers, the parameter block and the state block's
+; offsets, because a C file may not name an nasm equ; a copy that went stale
+; here would read the frame counter out of the middle of the staging ring,
+; assemble cleanly and run wrong.
+%if WSMV_BIND != 0 || WSMV_SPRITE != 1 || WSMV_START != 2 || WSMV_STOP != 3
+  %error "wsmabi.inc's verbs moved; weave.h's WSMV_* must follow"
+%endif
+%if WSMV_PAINT != 4 || WSMV_DRAIN != 5 || WSMV_UNBIND != 6 || WSMV_PLACE != 8
+  %error "wsmabi.inc's verbs moved; weave.h's WSMV_* must follow"
+%endif
+%if WSMP_SIZE != 14 || WSMP_CID != 12
+  %error "wsmabi.inc's BIND block moved; weave.h's WSMP_NW must follow"
+%endif
+%if WSMF_DESC != 7 || WSMF_NFRAME != 6
+  %error "wsmabi.inc's sprite fields moved; weave.h's WSMF_* must follow"
+%endif
+%if WSS_RUN != 0 || WSS_FRAME != 6 || WSS_BLITS != 18 || WSS_FRAMES != 20
+  %error "wsmabi.inc's state block moved; weave.h's WSS_* must follow"
+%endif
+%if WSS_OVF != 22 || WSM_MAXSPR != 16
+  %error "wsmabi.inc's state block moved; weave.h's WSS_* must follow"
 %endif
 
     CC_IMAGE_END                    ; cc_bss_end, cc_modc_end and cc_image_end

@@ -106,8 +106,16 @@ static int w_getp(int id, int atom)
                                          * property in v1 (6's SURFACE) */
         return w_nerr(WE_NOPROP, atom, 0);
     i = w_find_lay(id);
-    if (i < 0)
+    if (i < 0) {
+        k = w_find_spr(id);             /* a SPRITE is not a flow component
+                                         * and the walk skipped it (7.2), so
+                                         * it is not in w_lay at all - which
+                                         * is why the miss is resolved here
+                                         * rather than by a table (wcanv.c) */
+        if (k >= 0)
+            return w_cspr_get(k, atom);
         return w_nerr(WE_NOCOMP, id, 0);
+    }
     ct = w_lay[i].ctype;
     props = w_lay[i].props;
 
@@ -228,8 +236,15 @@ static int w_setp(int id, int atom)
     if (id == 0)
         return w_nerr(WE_NOPROP, atom, 0);
     i = w_find_lay(id);
-    if (i < 0)
+    if (i < 0) {
+        k = w_find_spr(id);
+        if (k >= 0) {
+            if (w_argt(0) != WT_INT && w_argt(0) != WT_BOOL)
+                return w_nerr(WE_TYPE, 0, 0);
+            return w_cspr_set(k, atom, w_argv(0));
+        }
         return w_nerr(WE_NOCOMP, id, 0);
+    }
     ct = w_lay[i].ctype;
     props = w_lay[i].props;
 
@@ -349,6 +364,28 @@ static int w_callm(int id, int atom, int argc)
         return w_nerr(WE_NOCOMP, id, 0);
     ct = w_lay[i].ctype;
     props = w_lay[i].props;
+
+    if (ct == WC_CANVAS) {
+        /* 6.10's whole method surface: start(fps) and stop(). A spawn
+         * refusal is NORMAL (SPEC.md 20.6) and degrades to a refused start()
+         * with 10.6.1's own sentence, which is what an app can act on. */
+        if (atom == WA_START) {
+            if (argc < 1 || w_argt(0) != WT_INT)
+                return w_nerr(WE_TYPE, 0, 0);
+            n = w_argv(0);
+            if (n < 1 || n > 18)
+                return w_nerr(WE_FPS, n, 0);
+            if (!w_chire())
+                return w_nerr(WE_FPS, n, 0);
+            wcv_call(WSMV_START, (unsigned)n, 0, 0);
+            return w_nres(WT_NULL, 0);
+        }
+        if (atom == WA_STOP) {
+            wcv_call(WSMV_STOP, 0, 0, 0);
+            return w_nres(WT_NULL, 0);
+        }
+        return w_nerr(WE_NOMETH, atom, 0);
+    }
 
     if (ct == WC_LIST) {
         w_items(props);

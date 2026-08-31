@@ -1544,14 +1544,27 @@ negative, which every `while` and `for` back-edge is; a `CALL` is a user call
 **or a builtin**, so `tone()` inside an `ontick` handler is a pack error and
 the sound belongs in `oncollide` where PONG puts it.
 
-**And the runtime checks it too** (§10.4), which is wave 5's amendment. Every
-other §10.5 rule is a property of the source and a bundle that skipped the
-packer merely misbehaves; this one bounds a path the machine takes eighteen
-times a second, and it is the one path §4.11's runaway alert cannot police —
-the counter is armed per `wvm_begin`, so a handler dispatched afresh every
-frame resets it every frame and a hostile bundle could hold the UI task for
-as long as it liked. The runtime therefore refuses the bundle rather than
-trusting the packer, in the validator, at no resident cost.
+**The RUNTIME does not re-check it, and wave 5 amended its own first draft
+after looking at what §4.11 actually covers.** That draft said the validator
+would walk the handler and refuse the bundle, on the grounds that a `.WAB`
+need never have been through a packer and that §4.11's runaway alert could
+not police a handler dispatched afresh every frame. The second half is
+wrong: `w_startt` is armed at each `wvm_begin`, which is once per **handler
+invocation** and not once per frame, so an `ontick` handler that never
+finishes never re-arms it and the alert fires at 90 ticks exactly as it does
+for any other runaway. **The hang is covered.** What the pack-time bound
+protects is not safety but the frame: a handler that *finishes* but costs
+600 ops eats a third of the VM's second at 18 fps, and §4.9 rule 3's collapse
+means the app merely runs slowly rather than falling over.
+
+So the check stays where it can be exact and free. Making it exact at load
+needs an operand-length table for all 38 opcodes, which the runtime does not
+otherwise carry — `wvm.inc` decodes each operand inside its own op body — and
+generating a second table both cores would have to agree about is a real cost
+for a bound whose failure mode is slowness. A byte-length bound (64 ops is at
+most 192 bytes) was considered and rejected: it refuses the extreme cases and
+passes a hundred single-byte ops, which is enforcement in name only.
+Deferred, with that arithmetic, in docs/WEAVE-PLAN.md §4.6.
 
 ### 4.12 The contract number
 
@@ -3050,19 +3063,6 @@ of 8 and its `h` at 32–160, a `canvas`'s `walls` at 0–15 and its `tick` at
 is `property range`. Both are
 checked as the PROPS blocks are read (§2.6), before any of them reaches
 the walk.
-
-**And the `ontick` budget is checked at LOAD as well as at pack** (§4.11.1),
-which wave 5 added and which is this section's opening sentence taken
-seriously: a `.WAB` on a disk need never have been through a packer, and an
-over-budget `ontick` handler is the one pack-time refusal whose subject is a
-**per-frame** path — one that a runaway alert (§4.11) cannot even reach,
-because every `ontick` dispatch re-arms that counter. The runtime walks the
-bound handler's bytecode as the canvas's PROPS block is read — at most 64
-ops, no backward jump, no `CALL` — and refuses the bundle with the field
-`ontick budget`. It costs nothing resident: the walk is inside the validator,
-§1.2.1's tenant 3, which is in the overlay. Every other §10.5 refusal stays
-pack-time only, because every other one is a property of the source rather
-than of a path the machine takes eighteen times a second.
 
 ### 10.5 Pack-time refusals — the sentences name the platform fact
 

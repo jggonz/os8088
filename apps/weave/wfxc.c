@@ -84,7 +84,15 @@
  * that would need more is refused rather than truncated. */
 #define W_FXCMAX  256
 
-static unsigned char w_fxc_out[W_FXCMAX];
+/* ...and the compiled RPN lives in the MIDDLE of the header probe, for
+ * wgrid.c's reason and with the same arithmetic: w_probe[] is a whole
+ * 1,024-byte cluster because 10.1's refuse-before-read needs one, the only
+ * thing that ever reads it is the 32-byte header at offset 0, and the band
+ * buffer already has the last 720. That leaves 32..303 free, and W_FXCMAX is
+ * 256. Nothing here can collide with either neighbour: this compiler runs at
+ * a formula bar's Enter, long after the header was read, and it stops 16
+ * bytes short of the band. */
+#define w_fxc_out (w_probe + W_HDR_SIZE)
 static unsigned      w_fxc_n;
 static const char   *w_fxc_err;         /* 0 = it compiled */
 static const char   *w_fxc_p;           /* the scanner's cursor */

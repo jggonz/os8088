@@ -65,6 +65,14 @@ static void w_free(void)
                                          * reason and in the same order: the
                                          * FX VM is unbound before the memory
                                          * it was pointed at goes back */
+    w_cfree();                          /* ...and the canvas claim, which has
+                                         * a SECOND TASK in it: w_cfree's
+                                         * unbind does not return until the
+                                         * worker has acknowledged, because a
+                                         * frame half-composed into freed
+                                         * memory does not fault here, it
+                                         * writes over somebody else's claim
+                                         * (WEAVE-SPEC 6.10.6) */
     if (w_vmseg) {
         os88_mem_free(w_vmseg);
         w_vmseg = 0;
@@ -254,6 +262,11 @@ static int ovl_open(void *win, const char *name, unsigned size_lo,
          *    the largest single claim cannot host this app either. */
         kb = (w_fsize + 1023) >> 10;
         ask = kb + w_vmkb + w_gridkb + w_canvaskb;
+        if (w_flags & WABF_CANVAS)
+            ask += (unsigned)wcv_kb();  /* 10.1: WEAVE.WSM's claim, and ONLY
+                                         * when the bundle declares a canvas
+                                         * (1.2.2 - a bundle without one pays
+                                         * nothing at all) */
         biggest = kb;
         if (w_vmkb > biggest)
             biggest = w_vmkb;
@@ -354,6 +367,30 @@ static int ovl_open(void *win, const char *name, unsigned size_lo,
     }
     if (w_glderr == 2) {
         w_fail("WEAVE.OVL is missing or stale; no bundle can open.");
+        return 1;
+    }
+
+    /* 6.10's canvas, in a claim of its own and beside a MODULE of its own,
+     * built by overlay tenant 8 - and it answers through w_cldstate for
+     * tenant 6's reason exactly: a refused overlay returns 0 and 0 is also a
+     * perfectly good "this bundle has no canvas". */
+    w_cldstate = 2;
+    ovl_canvasload();
+    if (w_cldstate == 1) {
+        w_short(w_claimkb + w_vmkb + w_gridkb + w_canvaskb
+                + (unsigned)wcv_kb(), os88_mem_largest_kb());
+        return 1;
+    }
+    if (w_cldstate == 2) {
+        w_fail("WEAVE.OVL is missing or stale; no bundle can open.");
+        return 1;
+    }
+    if (w_cldstate == 3) {
+        w_fail("WEAVE.WSM is not on this disk.");
+        return 1;
+    }
+    if (w_cldstate == 4) {
+        w_fail("WEAVE.WSM does not match this program.");
         return 1;
     }
     w_lay_cw = -1;                      /* force the walk on the next paint */

@@ -498,6 +498,47 @@ real sheet first.
 Committing over a `=?` replaces the formula, which is the operation the user
 was reaching for — so the gap costs a look, never an edit.
 
+### 4.6 The `ontick` budget at LOAD, and why the runtime does not re-check it
+
+Wave 5 drafted this as a wave-5 deliverable — WEAVE-SPEC §13.1's row says
+"ontick budget enforcement" — wrote the amendment, and then reversed it after
+reading what WEAVE-SPEC §4.11 already covers. The record is here rather than in the spec
+because it is a decision and not a contract.
+
+**The argument for a load-time check** was WEAVE-SPEC §10.4's own opening: a `.WAB` on a
+disk need never have been through a packer, so a runtime that trusts a
+pack-time refusal is trusting a file. That is right for every other WEAVE-SPEC §10.5
+rule the validator already re-checks.
+
+**What killed it** was the second half of the same argument: that WEAVE-SPEC §4.11's
+runaway alert could not reach an `ontick` handler, because the counter is
+armed per dispatch and an `ontick` is dispatched every frame. `w_startt` is
+armed at each `wvm_begin` — once per **handler invocation**, not once per
+frame — so a handler that never finishes never re-arms it and the alert fires
+at 90 ticks like any other. The hang is covered. What the pack-time bound
+protects is the frame rate: a handler that *finishes* but costs 600 ops eats a
+third of the VM's second at 18 fps, and WEAVE-SPEC §4.9 rule 3's collapse turns that into
+an app that runs slowly rather than one that falls over.
+
+**What it would cost.** An exact check needs an operand-length table for all
+38 opcodes. The runtime does not carry one and has no other use for one:
+`wvm.inc` decodes each operand inside its own op body, which is what makes the
+dispatch a two-instruction jump. Generating a second table that both cores
+have to agree about is the kind of duplication WEAVE-SPEC §12's whole differential
+apparatus exists to avoid, for a bound whose failure mode is slowness.
+
+**What was rejected along the way.** WEAVE-SPEC §2.8 packs functions contiguously, so a
+function's BYTE length is `next offset - this offset` and needs no table at
+all — and 64 ops is at most 192 bytes, so `len > 192` refuses the extreme
+cases. It also passes a hundred single-byte ops, which is enforcement in name
+only, and a check that is called enforcement and is not is worse than none.
+
+Whoever reopens this starts here, and the cheapest honest version is probably
+a **format** change rather than a runtime one: one byte of op count per
+function in the CODE table, written by both packers, checked by the validator
+in one compare. That is a `.WAB` version bump and belongs to whichever wave is
+already making one.
+
 ### 4.5 The stale slot count in os88.h
 
 `apps/cc/os88.h:141` says the C thunk layer covers "90 of the 134 slots";

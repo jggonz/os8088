@@ -3664,9 +3664,30 @@ $(eval $(call CC_PACKAGE,weave,weave,WEAVE.OVL))
 WEAVESRC := $(wildcard apps/weave/*.c apps/weave/*.h)
 WEAVEINC := $(wildcard apps/weave/*.inc)
 $(BUILD)/weave.raw.asm: $(WEAVESRC)
-$(BUILD)/weave.bin:     $(WEAVEINC)
+$(BUILD)/weave.bin:     $(WEAVEINC) $(BUILD)/wsmsize.inc
 
-weave: $(BUILD)/weave.o88
+# --- WEAVE.WSM, the canvas core (WEAVE-SPEC 1.2.2) ---------------------------
+# A SEPARATE `nasm -f bin` job, not part of the package's one translation unit
+# (SPEC.md 73.1), and the ORDER below is what makes its third stamp word a
+# real staleness check rather than a tautology: the module is built first, its
+# byte count is written into build/wsmsize.inc, and the package is assembled
+# after and compares what it read off the disk against that number.
+#
+# IT IS NOT AN OVERLAY and does not go through tools/os88ovl.py. An overlay is
+# cut out of the package's own image at a recorded size; this is a file of its
+# own from the first byte, because SPEC.md 73.14's loader refuses a worker and
+# every byte in here runs on one.
+$(BUILD)/WEAVE.WSM: apps/weave/wcanvas.asm apps/weave/wsmabi.inc \
+                    apps/weave/wsmdata.inc apps/weave/wspr.inc \
+                    apps/weave/wwork.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/weave/wcanvas.asm
+	@echo "WEAVE.WSM: $(call FILESIZE,$@) bytes (resident, on demand at open)"
+
+$(BUILD)/wsmsize.inc: $(BUILD)/WEAVE.WSM
+	@echo "WSM_SIZE equ $(call FILESIZE,$<)" | tr -d ' \t' \
+	    | sed 's/^WSM_SIZEequ/WSM_SIZE equ /' > $@
+
+weave: $(BUILD)/weave.o88 $(BUILD)/WEAVE.WSM
 
 # All three geometries, as every disk-visible image in this tree is built
 # (CLAUDE.md): 1.44MB and 720KB for QEMU, 360KB for an 86Box XT or a real one.
@@ -3723,7 +3744,8 @@ weavecanvas: apps/weave/wspr.inc apps/weave/wwork.inc apps/weave/wsmdata.inc \
          apps/weave/hosttest/weavecv.sh tools/weavesim.py docs/WEAVE-SPEC.md
 	apps/weave/hosttest/weavecv.sh
 
-WEAVEDISK := $(BUILD)/weave.o88 $(BUILD)/WEAVE.OVL $(WEAVEWABS)
+WEAVEDISK := $(BUILD)/weave.o88 $(BUILD)/WEAVE.OVL $(BUILD)/WEAVE.WSM \
+             $(WEAVEWABS)
 
 $(BUILD)/weave.img: $(WEAVEDISK) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(WEAVEDISK)

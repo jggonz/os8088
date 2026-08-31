@@ -9,8 +9,8 @@
 ; and WSM_ABI is what makes a change to one of them a refused load rather than
 ; a wrong answer.
 ;
-; IT IS NOT THE CONTRACT EITHER. docs/WEAVE-SPEC.md 1.2.2, 6.10.3 and 6.10.4
-; are, and this file is written from them (the os88.h/os88api.inc rule, said a
+; IT IS NOT THE CONTRACT EITHER. docs/WEAVE-SPEC.md is - sections 1.2.2,
+; 6.10.3 and 6.10.4 - and this file is written from them (the os88.h/os88api.inc rule, said a
 ; third time). Where the two disagree, that one is right.
 ;
 ; WHY THERE IS A SECOND MODULE AT ALL, in one paragraph, because the next

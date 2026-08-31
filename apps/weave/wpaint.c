@@ -102,8 +102,12 @@ static int  w_sbblk[7];                 /* os88ui.inc's scroll block */
  * count that might grow; it cannot grow without the bundle format changing,
  * and that change would come through wval.c first. 512 bytes of a package
  * whose resident count is the wave's own headline (1.2.1). */
-static unsigned char w_lpos[256];
-static unsigned char w_lsel1[256];
+/* Six tables keyed by comp_id, and W_NCOMP is 251 rather than 256 because
+ * 2.5 caps a comp_id at 250 and wval.c refuses anything above it - which is
+ * 40 bytes, and wave 5 wanted them (WEAVE-PLAN 2.9). It is the FORMAT's bound
+ * and not a guess about a card, so nothing here can reach past it. */
+static unsigned char w_lpos[W_NCOMP];
+static unsigned char w_lsel1[W_NCOMP];
 
 /* ============================================================================
  * THE COMPONENT STATE THE SCRIPT CAN MOVE (WEAVE-SPEC 6)
@@ -123,14 +127,14 @@ static unsigned char w_lsel1[256];
  * one predicate, three consumers (SPEC.md 47 rule 4) - it greys the control,
  * refuses its click and answers `.enabled`.
  */
-static unsigned char w_ctext[256];      /* a VM string handle, 0 = the atom -
+static unsigned char w_ctext[W_NCOMP];      /* a VM string handle, 0 = the atom -
                                          * a BYTE, because 4.8's table is 256
                                          * entries and handle 0 is never
                                          * allocated */
-static int           w_cval[256];       /* meter .value / check .checked */
-static int           w_cvold[256];      /* ...and what a meter last DREW,
+static int           w_cval[W_NCOMP];       /* meter .value / check .checked */
+static int           w_cvold[W_NCOMP];      /* ...and what a meter last DREW,
                                          * which 6.4's delta needs */
-static unsigned char w_cflag[256];      /* the live CF_HIDDEN | CF_DISABLED */
+static unsigned char w_cflag[W_NCOMP];      /* the live CF_HIDDEN | CF_DISABLED */
 
 /* 4.8.1's list-item override pool, shared by every list in the bundle and
  * skipped entirely while it is empty - which is every app that never calls
@@ -637,13 +641,12 @@ static void w_paint_comp(int i)
         break;
 
     case WC_CANVAS:
-        if (y2 > w_ybot)
-            y2 = w_ybot;
-        wd_box(x1, y1, x2, y2);         /* WAVE 5's SEAM: the sprite
-                                         * compositor (6.10) fills this frame.
-                                         * Drawing the frame now is what puts
-                                         * the walk's arithmetic on the glass
-                                         * where it can be looked at */
+        w_cpaint(i);                    /* 6.10.2: the sprite compositor, one
+                                         * GFX_BLIT1 per dirty band run. There
+                                         * is NO FRAME - the canvas's whole
+                                         * chrome is what its sprites draw,
+                                         * and a border would be pixels the
+                                         * app did not ask for */
         break;
 
     default:

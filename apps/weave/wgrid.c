@@ -92,7 +92,20 @@ static int      w_gtop, w_gleft;        /* 6.9.1's scroll origin, 0-based */
 static int      w_gbar = -1;            /* the formula bar's field block */
 static int      w_gredraw;              /* the flush owes the dirty rows */
 
-static unsigned char w_gband[WG_BANDMAX * 8];
+/* THE BAND BUFFER IS THE TAIL OF THE HEADER PROBE, and that is a union
+ * rather than a coincidence (WEAVE-PLAN 2.9).
+ *
+ * w_probe[] is one CLUSTER, 1,024 bytes, because os88_file_read_at's capacity
+ * has to be a whole number of them (10.1's refuse-before-read) - and the only
+ * thing anything ever reads out of it is the 32-byte header at offset 0
+ * (wval.c's ovl_val_header_x, and every reference there is W_H_* < 32). The
+ * remaining 992 bytes have never been looked at by anything.
+ *
+ * So the 720-byte band lives at the END of that cluster, 304 bytes clear of
+ * the header, and the two cannot collide even if a later wave gives the
+ * header a second reader: they overlap nowhere. Wave 5 needed the bytes and
+ * this was 720 of them, at the cost of one #define and this paragraph. */
+#define w_gband (w_probe + W_PROBE - WG_BANDMAX * 8)
 static char          w_gtext[WG_BANDMAX + 1];
 static char          w_gdisp[WG_DMAX];  /* one cell's display string */
 static char          w_gold[WG_DMAX];   /* ...and what it displayed before */
