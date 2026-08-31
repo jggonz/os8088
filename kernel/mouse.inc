@@ -3234,11 +3234,28 @@ cur_get_1:
 ; -----------------------------------------------------------------------------
 cur_restoreu:
     push es
+    push word [vga_pn]          ; **AND THE POINTER IS ALWAYS FOUR PLANES**
+    call gfx_1bpp_off           ; (SPEC.md 11.96.17, 32). vga_pn/vga_pm's own
+                                ; header says an arm "cannot leak onto the
+                                ; pointer, which reaches vga_restore_vram
+                                ; DIRECTLY out of IRQ4, below the two routines
+                                ; that disarm" - and gfx_save/gfx_restore call
+                                ; cur_unlazy FIRST, above their own disarm, so
+                                ; a window that promised OSAPI_SAVEU_1BPP hid
+                                ; the arrow with the one-plane arm still up.
+                                ; A restore seeded 0Fh does ONE pass with the
+                                ; Map Mask on all four planes, so plane 0 of a
+                                ; four-plane cur_save is broadcast into all of
+                                ; them and the cell under the arrow comes back
+                                ; black or white. Two words, at the one point
+                                ; both cursor paths pass through; the mono
+                                ; branch is inside vga_restore_vram, below this
     call cur_rect
     push ds
     pop es
     mov si, cur_save
     call vga_restore_vram
+    pop word [vga_pn]           ; ...and the caller's arm is its own again
     pop es
     ret
 
@@ -3251,11 +3268,15 @@ cur_restoreu:
 ; -----------------------------------------------------------------------------
 cur_saveu:
     push es
+    push word [vga_pn]          ; four planes, cur_restoreu's reason exactly -
+    call gfx_1bpp_off           ; and it has to be BOTH halves or the save and
+                                ; the restore disagree about the buffer
     call cur_rect
     push ds
     pop es                      ; buffer lives in kernel .bss
     mov di, cur_save
     call vga_save_vram
+    pop word [vga_pn]
     pop es
     ret
 

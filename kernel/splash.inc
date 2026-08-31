@@ -280,8 +280,10 @@ spl_paint:
     call spl_bar                ; the ONE stage that runs on all three
                                 ; adapters - see spl_chrome
     call spl_pct                ; ...on ALL THREE adapters now (SPEC.md 15.3.5)
-    cmp byte [cs:spl_quiet], 0  ; ...and the animation only when the caller can
-    jne .out                    ; afford it (SPEC.md 15.3.3.1)
+    cmp byte [spl_quiet], 0     ; ...and the animation only when the caller can
+    jne .out                    ; afford it (SPEC.md 15.3.3.1). Through DS, not
+                                ; `cs:`: the flag is viddet.inc's now, so that
+                                ; the two IRQ0 handlers can read it too
     call spl_anim               ; ...which since 15.3.8 is IRQ0's job, and this
                                 ; call is the FAIL-SAFE: on a machine whose
                                 ; IRQ0 never arrives the logo still moves, on
@@ -332,9 +334,9 @@ spl_paint:
 ; ONE body and no other caller has to know this entry exists.
 ; -----------------------------------------------------------------------------
 spl_stepq:
-    mov byte [cs:spl_quiet], 1
+    mov byte [spl_quiet], 1
     call spl_step
-    mov byte [cs:spl_quiet], 0
+    mov byte [spl_quiet], 0
     ret
 
 spl_step:
@@ -1416,6 +1418,14 @@ spl_isr:
     mov ds, ax                  ; both flags are `.text` bytes (15.3.8.3)
     cmp byte [spl_live], 0
     je .out
+    cmp byte [spl_quiet], 0     ; ...AND THE CALLER MAY NOT BE ABLE TO AFFORD
+    jne .out                    ; ONE (SPEC.md 15.3.3.1). spl_stepq raises this
+                                ; around mouse_init's identify window, where a
+                                ; 28.7 ms spinner frame costs three bytes of a
+                                ; 1200-baud burst - and until this test existed
+                                ; the interrupt drew straight through it, which
+                                ; is the very overrun spl_stepq was written to
+                                ; prevent. sch_isr carries the same test
     cmp byte [spl_busy], 0      ; ...somebody is drawing, and what they may be
     jne .out                    ; holding is the Graphics Controller
     inc byte [spl_busy]        ; TAKE IT: the main line's flag is the ISR's
@@ -1432,6 +1442,11 @@ spl_isr:
     push di
     push bp
     push es
+    cld                         ; spl_spin's row copy is a `rep movsb` and this
+                                ; is an ISR: DF belongs to whatever we
+                                ; interrupted, which during the load is a BIOS
+                                ; int 13h (SPEC.md 1 - sched.inc says the same
+                                ; thing above its own in-ISR blit)
     call spl_anim
     pop es
     pop bp
@@ -1746,7 +1761,10 @@ spl_l_msg   dw SPL_KY        ; 15.6's line, read by spl_kern_on AND by
 spl_radd    dw 0             ; vid_rowadd/wrapbit/wrapfix, banked into CS for
 spl_rwbit   dw 0             ; SPL_NEXTROW_CS - the row loop runs with DS = CS
 spl_rwfix   dw 0
-spl_quiet   db 0             ; spl_stepq is in progress: no spinner (15.3.3.1)
+; [spl_quiet] is NOT here any more: it moved to viddet.inc's `.text` beside
+; [spl_live] and [spl_busy], because since 15.3.8 the readers that matter are
+; the two IRQ0 handlers and both are kernel `.text`, where `cs:` names the
+; KERNEL segment and not this blob (SPEC.md 15.3.3.1).
 spl_on      db 0             ; the chrome has been drawn - spl_tick's latch
 ; ...and [spl_live] is NOT here: it is the one byte of this module the KERNEL
 ; reads - viddet's mode guard, fprog's boot test and vidsel's spl_reset all ask

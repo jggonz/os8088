@@ -4355,8 +4355,19 @@ dsk_free_clus_x:
     cmp word [dsk_fatw0], 0     ; ...and the window actually sitting at 0
     jne .slow
     mov cx, [dsk_fatseg]
-    mov es, cx
-    mov bx, 3                   ; cluster 2 lives at byte 2 + 2/2
+    inc byte [sch_lock]         ; **THE WINDOW IS A CACHE NOW** (SPEC.md
+    mov es, cx                  ; 18.8.4), and ES is banked for the whole walk
+    mov bx, 3                   ; below. While it was MEM_K_FATW nothing could
+                                ; move or shed it and the bank was safe; a
+                                ; purgeable one is shed by any ordinary claim
+                                ; from any other task, and mem_fatw_dirty does
+                                ; not cover a COUNT - [dsk_fatd0] is 0xFFFF
+                                ; here. So the count would be read out of
+                                ; whatever took the paragraphs, and it is the
+                                ; free-space figure the file manager prints and
+                                ; FTPd answers with. dsk_xfer's own hold is the
+                                ; same lock and nests; there is no I/O in this
+                                ; loop, so the hold is arithmetic only
 .pair:
     mov ax, [es:bx]             ; b0 | b1<<8 - the even entry's 12 bits are
     mov dx, ax                  ; the bottom of it, the odd entry's low
@@ -4366,7 +4377,7 @@ dsk_free_clus_x:
 .odd:
     inc si
     cmp si, [dsk_maxclus]
-    ja .counted                 ; an odd cluster count ends on the even half
+    ja .c12                     ; an odd cluster count ends on the even half
     mov dl, [es:bx+2]           ; odd entry = (ax >> 12) | b2 << 4, and it is
     or dl, dl                   ; zero exactly when both halves are
     jnz .pnext
@@ -4378,6 +4389,8 @@ dsk_free_clus_x:
     add bx, 3
     cmp si, [dsk_maxclus]
     jbe .pair
+.c12:
+    dec byte [sch_lock]         ; ...and ES is nobody's again
     jmp short .counted
 
     ; --- FAT16: a plain word array, and NOT gated on residency - a hard-disk
@@ -4392,8 +4405,10 @@ dsk_free_clus_x:
     call dsk_fat_ofs_x            ; BX = offset in the window, and the sector
     jc .counted                 ; holding cluster SI is now resident
     mov cx, [dsk_fatseg]
-    mov es, cx
-    mov cx, si                  ; entries from here to the end of the sector
+    inc byte [sch_lock]         ; the same bank and the same reason, one FAT
+    mov es, cx                  ; SECTOR at a time - released below before the
+    mov cx, si                  ; next dsk_fat_ofs_x, which does disk I/O and
+                                ; must not run inside this hold
     and cx, 255
     sub cx, 256
     neg cx
@@ -4413,6 +4428,7 @@ dsk_free_clus_x:
     inc bx
     inc bx
     loop .word
+    dec byte [sch_lock]
     cmp si, [dsk_maxclus]
     jbe .f16
 .counted:

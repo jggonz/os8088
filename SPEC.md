@@ -787,8 +787,9 @@ has to hold for the whole span because it is asked about a machine nobody has
 in front of them.
 
 **What the refusal does not do is choose the minimum machine.** That is
-`MIN_RAM_KB` (§15.1), a policy figure of 128KB: the smallest machine the
-shipped system is *claimed* to work on, not the smallest that can boot. The
+`MIN_RAM_KB` (§15.1), a policy figure and one **per configuration** — 128KB
+for `kern_small`, 196KB for `kern_big`: the smallest machine that
+configuration is *claimed* to work on, not the smallest that can boot. The
 smallest that can boot is roughly the kernel's own span plus this sector,
 which leaves a heap too small to open anything (docs/KERNEL-MEMORY.md).
 
@@ -14662,6 +14663,22 @@ The Browser's default content on a VGA is about 92KB of four-plane cache
 against `wm_su_kb`'s 64,512 ceiling — refused outright — and about 23KB as
 one plane. That is the case this exists for.
 
+**THE ARM MUST NOT REACH THE POINTER, and disarming inside `gfx_save` and
+`gfx_restore` is not what stops it.** `[vga_pn]`/`[vga_pm]` are the walk the
+next save or restore takes, and `wm_su_arm` raises them just before the call;
+those two routines put them back at the bottom. But both call `cur_unlazy` at
+the **top**, above their own disarm, and `cur_saveu`/`cur_restoreu` go
+straight into `vga_save_vram`/`vga_restore_vram` — so the arrow was hidden and
+put back with the one-plane arm live for every window that promised this. A
+restore seeded with `0Fh` makes exactly one pass with the Map Mask on all four
+planes, so plane 0 of a four-plane `cur_save` is broadcast into all of them
+and the cell under the pointer comes back solid black or solid white; it is
+the pointer, so it is *everywhere*, and on VGA it is a colour cell. The two
+cursor routines therefore bank the pair and clear it around their own
+transfer. That is the single point both cursor paths pass through, it costs
+nothing on a mono adapter (the branch is inside `vga_*_vram`, below it), and
+it leaves the arm meaning exactly what `wm_su_arm` documents.
+
 **The high byte's bits are now named once.** §7.2.1's cursor shape shares that
 byte, and the rule was written in prose: *"the two places that touch the byte
 must mask this bit off with `WF_STALE`"*. There are three kernel bits there
@@ -19569,16 +19586,29 @@ alignment every int 13h target depends on (§2.1.1).
 **Guard 5 is the relocated boot sector (§15.2), and it is the third POLICY
 figure in the file.** The sector puts itself at the top of conventional RAM
 (§2.7), an address this file cannot know, so what the guard checks is the
-machine the system is *claimed* to run on: at `MIN_RAM_KB` = 128 the sector
-and its stack take the top 2,560 bytes and the kernel must fit below them —
-126,976 bytes. It used to name a fixed `BOOT_RELOC` and cap the footprint at
-82,432, which is exactly what `KERN_BUDGET` had reached, so for a while
-raising the budget bought nothing and the only way up was to move the sector.
-It is 44.5KB above the budget now. **When the kernel approaches *this* one
-the answer is not a raise**: it is two kernels off one tree, a full one and a
-minimum one, because a 128KB machine and a 640KB machine stop wanting the
-same feature set long before they stop fitting the same image. Keep this
-block last.
+machine the system is *claimed* to run on: the sector and its stack take the
+top 2,560 bytes and the kernel must fit below them. It used to name a fixed
+`BOOT_RELOC` and cap the footprint at 82,432, which is exactly what
+`KERN_BUDGET` had reached, so for a while raising the budget bought nothing
+and the only way up was to move the sector.
+
+**`MIN_RAM_KB` IS PER CONFIGURATION, and that is the answer this paragraph
+used to say was still to come.** It reads 128 for `kern_small` and **196** for
+`kern_big`, because the two kernels stopped being the same claim: a
+`kern_big` of 120,320 bytes cannot boot a 128KB machine at all — `boot.asm`'s
+own `.nomem` floor puts the bar at ~143.5KB for a 217-sector image before this
+guard is even reached — while `kern_small` is built for exactly that machine
+and boots it. `kern_big` still *resides* inside 128KB, which is
+`KERN_RESIDENT_KB` and is where its `KERN_BUDGET` is derived from; what it
+cannot do is get there through a 128KB boot. So the split is not a relaxation
+of guard 5, it is guard 5 finally asking each configuration about the machine
+that configuration ships to. **When a kernel approaches its own figure the
+answer is still not a raise** — it is the two kernels this note anticipated,
+which is what the split now is.
+
+Guard 5 is wrapped in `%ifndef KERN_KNOB` for the reason its own comment
+gives: the machine it is about is the one we SHIP to, and a diagnostic build
+is not that. Keep this block last.
 
 #### 15.1.1 The smallest ceiling in the tree is a diagnostic's
 
@@ -19881,6 +19911,23 @@ which is the right way round: a bar that advances says *progress*, where a
 spinner only says *alive*. `spl_stepq` sets `[spl_quiet]`, calls `spl_step` and
 clears it, so the two share every line and no other caller has to know it
 exists.
+
+**AND EVERY DRAWER OF A FRAME HAS TO READ IT, WHICH SINCE §15.3.8 MEANS THE
+TWO IRQ0 HANDLERS.** `spl_paint` honouring the flag was the whole of it while
+`spl_paint` was the only way a frame got drawn; moving the animation onto the
+timer added two more entries — `spl_isr` while stage 2 holds the vector, and
+`sch_isr`'s gated call once `sched_init` has it — and neither asked. `sch_isr`
+is the one that matters here: `sched_init` runs early in `kmain`, so it is what
+fires during the identify window, and it deliberately does **not** `sti`. The
+28.7 ms frame therefore ran with `IF = 0` straight through the flag that was
+raised to forbid it, which is §9.4's burst lost to an interrupt instead of to a
+repaint — the same three bytes, by a different door, and invisible in an
+emulator because no emulator here clocks the UART.
+
+`[spl_quiet]` lives in `viddet.inc`'s `.text` for that reason, beside
+`[spl_live]` and `[spl_busy]` and for `[spl_busy]`'s own second reason: both
+handlers are kernel `.text`, where `cs:` names `KERNEL_SEG` and not the stage-2
+blob, so a `.boot2` byte read `cs:` cannot be seen from either of them.
 
 **`MOU_DIAG` is the check, and it is a check rather than a proof.** The
 window's own numbers are published (§9.4.6) and they are **identical before and
@@ -22456,7 +22503,7 @@ any machine that funds a window at all. Kernel and heap are the same RAM —
 byte inside the budget cheaper than a byte outside it — so a reserve that is
 always there and always unused is the same waste wherever the ladder puts it.
 
-Measured, `MEM_K_FATW` records live in `mem_tab` on the 360KB pair, booting
+Measured, `MEM_P_FATW` records live in `mem_tab` on the 360KB pair, booting
 to the desktop and then opening drive B: — the same machine and the same two
 actions either side (`tests/fatwpin.py`):
 
@@ -35084,7 +35131,7 @@ decoded from `CLS_OWN`:
 | `MEM_K_SAVE` | `MenuSav` | the menu save-under |
 | `MEM_K_DRV` | `DrvImg` | a loaded driver |
 | `MEM_K_COPY` | `CopyBuf` | the file manager's copy buffer |
-| `MEM_K_FATW` | `FATwin` | one volume's FAT window |
+| `MEM_P_FATW` + volume | `FATwin` | one volume's FAT window (a RANGE, §18.8.4) |
 | `MEM_K_ASC` | `Assoc` | one volume's `ASSOC.DAT` cache |
 | `MEM_K_CLIP` | `Clipbrd` | the system clipboard |
 | `MEM_K_MOD` | `ModImg` | an on-demand kernel module's image (§2.8) |
@@ -45384,6 +45431,17 @@ switch for — and the screen becomes a single call. Measured on Hercules over
 one scripted stroke: **576 drawing calls → 66** (61 fills + 5 lines), 8.7x.
 A line pixel costs ~160 µs (§48.16), so the ceiling moves to ~6,000 px/s.
 
+**It BANKS `[pt_noscr]` and puts it back; it does not store 0.** While
+`pt_stroke`'s live loop was the only caller the flag was always clear on
+entry, so raising it for the walk and clearing it for the `OSAPI_GFX_LINE`
+said the same thing as restoring it. §42.8.8's replay is a second caller and
+it comes in with the flag already **set** — the live pass put this ink on the
+glass and the replay owes the canvas alone — so clearing it drew the chord a
+second time, which is PERFORMANCE.md's double-draw flash on the default pencil
+on the 1bpp machine this whole path exists for. The clear also leaked past the
+routine: `.perpix`, which never touches the flag, then drew per-pixel to the
+screen for the rest of that replay.
+
 **The walk had to become the kernel's own, and that is the whole difficulty.**
 The canvas is what a repaint draws from, so a canvas walked one way and a
 screen drawn another disagree — and not subtly: `gfx_line` uses the two-error
@@ -46058,9 +46116,20 @@ bytes.
 
 **Overflow degrades to the old behaviour rather than stalling.** A hand that
 genuinely outruns the idle turns fills the bank; banking a sample then spends
-exactly ONE and compacts, which is the undeferred cost for that one report.
-Flushing the whole bank there would be a ~900 ms hitch *in the middle of the
-stroke*, which is worse than never having deferred at all.
+ONE and compacts, which is the undeferred cost for that one report. Flushing
+the whole bank there would be a ~900 ms hitch *in the middle of the stroke*,
+which is worse than never having deferred at all.
+
+**And it repeats until a slot exists, which is not the same as spending one.**
+The first turn can be the PRESS DAB and nothing else: `pt_flush_n`'s seed
+branch replays the press point, sets `[pt_bnkd]` and spends the whole of CX
+there, so it returns with `[pt_bnkh]` still 0 and `pt_bnk_compact` — which
+drops nothing when the head has not moved — leaves the bank full. The store
+after it is unconditional, so that turn wrote four bytes PAST `pt_bnk`, over
+`[pt_ikeep]`, `[pt_dirty]` and `[pt_blankc]`, and the release replay then read
+them back as a chord endpoint. Two turns is the ceiling: the first pays the
+dab, the second a real sample, which is what compaction needs to have
+something to drop.
 
 Measured on `os8088_5150_herc_gla`, the settle after a 25-sample diagonal
 stroke driven at the wire's own 40 reports a second: **357.9 ms → 146.2 ms,
@@ -47081,6 +47150,17 @@ So the whole change is `pt_track` computing the content this canvas is
 **entitled** to — `[pt_cw] + PT_CV_X`, rounded up to 8 the way §11.94.5 rounds
 it, and `[pt_ch] + PT_STRIP_H + 1`, which nothing snaps — and treating a match
 as its own sizing coming back rather than a hand on the grow box.
+
+**And the match is remembered PER AXIS, because a drag can move one of them.**
+Asking "did both match?" and then taking *both* new sizes from the content is
+the same defect through the other door: a height-only drag leaves `[pt_contw]`
+at the entitled 520 while `[pt_conth]` changes, the combined test fails, and
+the width comes back as `520 − PT_CV_X` = 472. The 466-wide picture is 472 in
+the file with six white columns welded on, from a drag that never touched the
+width — and it is stable afterwards, because 472 rounds to 520 again and the
+test then passes. So the width test's answer is banked and the width is taken
+from `[pt_cw]` when it said yes. The height needs no such care: nothing snaps
+it, so `[pt_conth] − (PT_STRIP_H + 1)` is exact.
 
 **The kernel's arithmetic is mirrored here, deliberately.** There is no API
 that answers "what content would this frame give me", and the alternative —
@@ -54245,7 +54325,7 @@ this one.
 §50.3.2 drew the line — *a claim the hardware addresses, or whose base is a CS,
 goes high; a claim only software reads stays low, where the compactor can have
 it* — and then changed the claims that were in front of it: `SOUND`'s DMA ring,
-`ETHER`'s socket rings, `MEM_K_FATW`. **Two more were already on the wrong side
+`ETHER`'s socket rings, `MEM_P_FATW`. **Two more were already on the wrong side
 of it**, and neither is a ring:
 
 | claim | why it can never move |
@@ -58840,6 +58920,18 @@ dead status port cannot hang it.
 **It refuses the text modes rather than guessing at them.** A text bracket
 that wants a page can have this routine learn the convention, which is where
 that belongs; today it would be a code path with no caller.
+
+**AND IT REFUSES THE HERCULES SECOND PAGE ON A MACHINE THAT ALSO HAS A COLOUR
+CARD.** §39.6's clear bit is not a default that a bracket may override: the
+reason `vid_setmode` writes 3BFh = 1 is stated at the write, and it is that
+the second 32KB page lives at **B8000**, where a CGA in the same machine
+lives — so allowing the decode puts two cards on the bus for the same
+addresses. A bracket does not change where the cards are. The predicate is
+`vid_dual_ok` (a mono card *and* a colour card), not `[vid_ndisp]`, which
+`vid_fsx_enter` has already forced to 1 before any call can reach here; on a
+lone-Hercules XT it answers no and the page is available as advertised. Page
+**0** takes 3BFh back to 1 on its way in, so the bracket leaves the register
+as the desktop's own value rather than as whatever the last flip wanted.
 
 **TANK ATTACK (§85) is the consumer that asked for it**, and it is the first
 thing in this tree to page-flip at all. Its Mode X backend draws into the
@@ -75047,8 +75139,20 @@ cancelled before you commit to it, and a package's control could not say the
 same thing."* The alert installed `W_ONMOUSEUP` and nothing between the press
 and the release, so a button held and dragged off stayed filled and only came
 up when the finger lifted — the un-fill arriving at the moment it had stopped
-being information. `os88ui_adrag` is `os88ui_aclick` without the arm: ask
-`os88ui_ahit` where the pointer is now and hand the answer to `os88ui_adn`.
+being information. `os88ui_adrag` **reads the arm**: `os88ui_armed`'s peek
+says which button the press claimed, `os88ui_ahit` says which one the pointer
+is over now, and `os88ui_adn` gets that button if the two agree and 0 if they
+do not.
+
+**It is not `os88ui_aclick` without the arm**, which is what it was first
+written as and is a different routine: with no test, a drag pressed whatever
+the pointer crossed — and a press that started on the alert's *message* arms
+nothing, so `os88ui_aup`'s `or ax, ax / jz .out` returned without putting
+anything up, and the button stayed drawn pressed for as long as the alert
+stood. §13.8.2's third consequence is the other half of the same rule, so the
+release now un-draws **first and unconditionally** and only then asks whether
+it fires: whatever is drawn pressed comes up whether this gesture commits or
+not.
 
 On `kern_small` `OSAPI_WM_ONDRAG` answers CF = 1 and installs nothing (§13.8.2),
 so the alert degrades there to what it did before — which needs no flag,

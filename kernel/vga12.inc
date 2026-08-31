@@ -4890,9 +4890,15 @@ vga_save_vram:
 ; 4 and 1 AT REST, which is gfx_sub_*'s discipline below and for its reason:
 ; the two bodies read them unconditionally and the resting pair IS the walk
 ; they had, so the cursor's own path is byte-identical. gfx_save and
-; gfx_restore put them back, so an arm is good for exactly ONE call and cannot
-; leak onto the pointer - which reaches vga_save_vram and vga_restore_vram
-; DIRECTLY out of IRQ4, below the two routines that disarm.
+; gfx_restore put them back, so an arm is good for exactly ONE call.
+;
+; THAT IS NOT WHAT KEEPS IT OFF THE POINTER, and this comment said it was.
+; cur_saveu and cur_restoreu reach vga_save_vram and vga_restore_vram DIRECTLY
+; out of IRQ4 - and gfx_save and gfx_restore call cur_unlazy at their TOP,
+; above their own disarm, so the arrow was hidden and put back with a live
+; one-plane arm every time a window that promised OSAPI_SAVEU_1BPP was banked.
+; The pair is banked and cleared by those two routines now, at the one point
+; both cursor paths pass through (SPEC.md 11.96.17).
 ;
 ; The restore's loop needs no terminator of its own: seeded with 0Fh it does
 ; one pass and `add al, al` gives 1Eh, which fails `cmp al, 0x10`.

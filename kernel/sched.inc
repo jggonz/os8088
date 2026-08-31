@@ -1498,6 +1498,15 @@ sch_isr:
     ; the blob-gone test and the far call.
     cmp byte [spl_live], 0
     je .nospl
+    cmp byte [spl_quiet], 0         ; ...and spl_stepq has the floor (15.3.3.1).
+    jne .nospl                      ; THIS handler is the one that matters for
+                                    ; it: sched_init takes int 08h early in
+                                    ; kmain, so it - not spl_isr - is what fires
+                                    ; during mouse_init's identify window, and
+                                    ; it does not `sti`. A 28.7 ms spinner frame
+                                    ; with IF=0 loses three bytes of a 1200-baud
+                                    ; burst the 8250 holds one at a time, which
+                                    ; is a mouse on the wire and not detected
     cmp byte [spl_busy], 0
     jne .nospl
     cmp word [spl_fseg], COLD_SEG   ; the blob has been given back (2.9.5)

@@ -5895,12 +5895,31 @@ pt_bank:
     push cx
     cmp word [pt_bnkn], PT_BNKMAX
     jb .room
+.full:
     mov cx, 1                       ; FULL: spend exactly ONE sample and drop
     call pt_flush_n                 ; it. That is the UNDEFERRED cost for this
     call pt_bnk_compact             ; one report and the right way to degrade -
-.room:                              ; a hand that outruns the idle turns should
-    pop cx                          ; slide back to the old behaviour, not
-    mov si, [pt_bnkn]               ; stall for a whole bankful (42.8.8.1)
+    cmp word [pt_bnkn], PT_BNKMAX   ; a hand that outruns the idle turns should
+    jae .full                       ; slide back to the old behaviour, not
+                                    ; stall for a whole bankful (42.8.8.1)
+                                    ;
+                                    ; **AND IT IS A LOOP**, because ONE turn
+                                    ; does not always free a slot: with
+                                    ; [pt_bnkd] still 0 the whole of CX pays
+                                    ; the PRESS DAB, pt_flush_n returns with
+                                    ; [pt_bnkh] at 0, and pt_bnk_compact drops
+                                    ; nothing when the head has not moved. The
+                                    ; store below is unconditional, so that
+                                    ; wrote four bytes PAST pt_bnk - over
+                                    ; [pt_ikeep], [pt_dirty] and [pt_blankc] -
+                                    ; and the release replay then read them
+                                    ; back as a chord endpoint. Two turns at
+                                    ; most: the first pays the dab, the second
+                                    ; a real sample, which is what compaction
+                                    ; needs to have something to drop
+.room:
+    pop cx
+    mov si, [pt_bnkn]
     add si, si
     add si, si
     mov ax, [pt_wx]
@@ -6221,12 +6240,18 @@ pt_segdo:
     mov ax, [pt_toy]
     call pt_lcany
     jc .perpix
-    mov byte [pt_noscr], 1          ; the walk writes the canvas and the undo
-    call pt_lineseg                 ; image; the screen is the one call below
-    mov byte [pt_noscr], 0
-    call pt_lndraw
-    pop ax
-    ret
+    mov al, [pt_noscr]              ; BANKED AND PUT BACK, not stored to 0
+    push ax                         ; (SPEC.md 42.8). This routine had one
+    mov byte [pt_noscr], 1          ; caller and could assume the screen was
+    call pt_lineseg                 ; owed; pt_flush_n is a second, and it comes
+    pop ax                          ; in with the flag ALREADY set because the
+    mov [pt_noscr], al              ; live pass drew this ink. Clearing it here
+    or al, al                       ; drew it again - a double-draw on the
+    jnz .fpdone                     ; DEFAULT pencil on the 1bpp machine this
+    call pt_lndraw                  ; whole path exists for - and left the flag
+.fpdone:                            ; at 0 for the .perpix chords after it
+    pop ax                          ; the walk writes the canvas and the undo
+    ret                             ; image; the screen is the one call above
 .perpix:
     call pt_lineseg                 ; same rasterization, screen per pixel -
     pop ax                          ; slow, but it is the same shape, and only
@@ -9627,12 +9652,14 @@ pt_track:
     push bx
     push cx
     push dx
-    mov ax, [pt_cw]                 ; what THIS canvas asks for, rounded the
-    add ax, PT_CV_X                 ; way SPEC.md 11.94.5 rounds it...
-    add ax, 7
-    and ax, 0xFFF8
+    xor bx, bx                      ; BX = "the width is our own snap coming
+    mov ax, [pt_cw]                 ; back", banked because the HEIGHT may
+    add ax, PT_CV_X                 ; still have moved (SPEC.md 42.20). What
+    add ax, 7                       ; THIS canvas asks for, rounded the way
+    and ax, 0xFFF8                  ; SPEC.md 11.94.5 rounds it...
     cmp ax, [pt_contw]
     jne .follow
+    inc bx
     mov ax, [pt_ch]                 ; ...and the height, which nothing snaps,
     add ax, PT_STRIP_H + 1          ; so it is exact
     cmp ax, [pt_conth]
@@ -9646,11 +9673,17 @@ pt_track:
                                     ; than its content is an old state here and
                                     ; not a new one
 .follow:
-    mov ax, [pt_contw]              ; the canvas the content asks for
-    sub ax, PT_CV_X
-    mov dx, [pt_conth]
-    sub dx, PT_STRIP_H + 1
-    call pt_setsize
+    mov ax, [pt_cw]                 ; ...AND THE TEST IS PER AXIS, because a
+    or bx, bx                       ; drag can move ONE (SPEC.md 42.20). Taking
+    jnz .havew                      ; the width from the content whenever the
+    mov ax, [pt_contw]              ; HEIGHT moved handed the padding back as
+    sub ax, PT_CV_X                 ; document by the other door: drag the grow
+.havew:                             ; box down on a 466-wide picture and it is
+    mov dx, [pt_conth]              ; 472 in the file, six white columns welded
+    sub dx, PT_STRIP_H + 1          ; on, which is the very thing the entitled
+    call pt_setsize                 ; width above was computed to prevent. The
+                                    ; height needs no such test: nothing snaps
+                                    ; it, so the content's answer is exact
     jnc .out
     cmp byte [pt_fs], 0             ; full screen: the record is not what this
     jne .fsonly                     ; lays out from (pt_org answers the screen,
@@ -11371,9 +11404,21 @@ pt_fsbed:
     mov cx, PT_DIVX - 1
     mov dx, [pt_ch]
     dec dx
-    call pt_dmg_hit                 ; SPEC.md 11.90.2: only if this paint owes
+    call pt_dmg_anch                ; SPEC.md 11.90.2: only if this paint owes
     jnc .right                      ; it. Always, in the 42.7 bracket
-    call pt_cfill
+    call pt_cfill                   ;
+                                    ; **AND IT ASKS THE SAME QUESTION AS THE
+                                    ; FURNITURE STANDING ON IT** (SPEC.md
+                                    ; 42.19.3). This was pt_dmg_hit while
+                                    ; pt_draw_pal above was unconditional; the
+                                    ; anchored test made the palette skip a
+                                    ; resize that did not MOVE it, and left the
+                                    ; bed answering the older question - so a
+                                    ; resize with the origin held erased the
+                                    ; tool column and drew nothing back, and it
+                                    ; stayed blank until something forced a
+                                    ; full W_PAINT. A bed and the thing that
+                                    ; stands on it are one decision
 .right:
     mov ax, [pt_cw]                 ; ...and anything the canvas leaves to its
     add ax, PT_CV_X                 ; right (pt_fit shrank it, not the user)
@@ -11535,6 +11580,21 @@ pt_onask:
 .save:
     cmp byte [pt_name], 0
     je .saveas                      ; never been a file: ASK where it goes
+    cmp byte [pt_trunc], 0          ; ...AND THE MENU'S FENCE IS THIS PATH'S
+    jne .saveas                     ; TOO (SPEC.md 42.16). The file on disk
+                                    ; holds MORE than we loaded - the screen
+                                    ; capped the size, or the claim would not
+                                    ; fund it - so File > Save refuses and says
+                                    ; so rather than writing the crop over the
+                                    ; original. The close question offered the
+                                    ; same Save with no such test, and it is
+                                    ; the one the user reaches by accident:
+                                    ; click the close box, press Enter, and the
+                                    ; picture is cropped on disk with no second
+                                    ; chance, because .close follows straight
+                                    ; on. Ask WHERE instead - .saveas already
+                                    ; sets [pt_qclose], so the close still
+                                    ; finishes once the file is named
     push si
     mov si, pt_s_saving             ; a GIF encodes 125,000 pixels BEFORE the
     call pt_msg_show                ; floppy starts and the file-activity

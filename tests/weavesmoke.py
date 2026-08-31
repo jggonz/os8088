@@ -261,12 +261,14 @@ def _oracle_cells(adapter):
     """(CW, CH) for this adapter, from tools/weavesim.py (WEAVE-SPEC 12.1).
 
     THE ORACLE ANSWERS, NOT THIS FILE. WEAVE-SPEC 7.1.1 ends "Nothing else in
-    this document may hard-code 79, 89, 17, 35 or 52", and a test that mirrors
+    this document may hard-code 80, 90, 17, 35 or 52", and a test that mirrors
     a constant is a constant that goes stale - so the numbers come from the
     reference implementation every differential in the family already diffs
-    against. The formula is `CW = floor(([vid_w]-1)/8)`,
+    against. The formula is `CW = floor([vid_w]/8)`,
     `CH = floor(([vid_h]-64)/8)`; it is here as documentation and is computed
-    nowhere in this file.
+    nowhere in this file. It was `([vid_w]-1)/8` while only SPEC.md 11.95.2's
+    LEFT border had gone; 11.95.3 took the right one and `_flush` below is
+    where that is decided.
 
     The grid is a property of the ADAPTER rather than of the bundle - it falls
     out of the standard rect - so which bundle is rendered does not matter.

@@ -2632,7 +2632,12 @@ void os88_onwake(void *win)
         return;
     cw_argp = 0;
     os88_gfx_lock();
-    if (os88_file_goto(&cw_argplace) == 0)
+    /* THE GOTO GETS ITS OWN ARM.  It answers -1 when the folder could not be
+     * listed, and with no arm the whole launch failed in silence: the window
+     * came up empty and a double-click looked like it had done nothing. */
+    if (os88_file_goto(&cw_argplace) != 0)
+        cw_toast("Could not open that folder.");
+    else
         ovl_file_load(win, cw_argname, 0, 0);
     cw_redraw_all(win);
     os88_gfx_unlock();

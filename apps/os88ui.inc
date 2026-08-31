@@ -2198,13 +2198,32 @@ os88ui_aclick:
 ; os88ui_adrag - W_ONDRAG: the pointer moved while a press is armed
 ; in:  CX = x, DX = y, SI = the alert window; gfx lock held
 ;
-; os88ui_aclick without the arm (SPEC.md 75.3.0). What it buys is the button
-; going back UP as the pointer slides off, which is what says the gesture is
-; cancelled before the finger commits to it (SPEC.md 13.8.2).
+; **IT READS THE ARM** (SPEC.md 75.3.0, 13.8.2), through os88ui_armed's PEEK
+; rather than os88ui_fire's take - which is the distinction that routine's own
+; header exists to make. What it buys is the armed button going back UP as the
+; pointer slides off it, which is what says the gesture is cancelled before the
+; finger commits.
+;
+; Written as "os88ui_aclick without the arm" it pressed whatever the pointer
+; happened to be over, armed or not - and a press that started on the alert's
+; MESSAGE arms nothing, so the release took os88ui_aup's `jz .out` and never
+; put it back up. One drag across an alert left a button drawn pressed for as
+; long as the alert stood.
 os88ui_adrag:
     push ax
+    push bx
+    call os88ui_armed           ; PEEK: the arm is the RELEASE's to spend
+    or ax, ax
+    jz .out                     ; the press armed nothing: track nothing
+    mov bx, ax
     call os88ui_ahit            ; AX = the button under the pointer NOW
+    cmp ax, bx
+    je .set
+    xor ax, ax                  ; off the armed one: nothing is down
+.set:
     call os88ui_adn             ; ...which draws only on a change
+.out:
+    pop bx
     pop ax
     ret
 
@@ -2212,11 +2231,13 @@ os88ui_aup:
     push ax
     push di
     call os88ui_fire            ; AX = what the press armed, and it is CLEARED
-    or ax, ax
-    jz .out
     mov di, ax
     xor ax, ax
-    call os88ui_adn             ; upright again, whatever happens next
+    call os88ui_adn             ; UP FIRST, unconditionally: whatever is drawn
+                                ; pressed has to come up whether this release
+                                ; fires anything or not (SPEC.md 13.8.2)
+    or di, di
+    jz .out
     call os88ui_ahit            ; AX = the button under the RELEASE
     cmp ax, di
     jne .out                    ; a different button, or none: CANCELLED

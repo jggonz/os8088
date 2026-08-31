@@ -810,15 +810,32 @@ fsx_page:
     cmp al, 2
     jae .fail
     mov bl, 0x0A                    ; graphics, video on...
-    or al, al
+    mov ah, 1                       ; ...and 3BFh bit 0 alone, which is what
+    or al, al                       ; vid_setmode leaves (SPEC.md 39.6)
     jz .h0
+%ifdef KERN_BIG
+    call vid_dual_ok                ; **AND THE SECOND PAGE IS REFUSED ON A
+    jnc .fail                       ; MACHINE THAT HAS A COLOUR CARD TOO**
+%endif                              ; (SPEC.md 53.10). vid_setmode leaves 3BFh
+                                    ; bit 1 clear for a reason it states at the
+                                    ; write: that page is at B8000, where a CGA
+                                    ; in the same machine lives, and turning
+                                    ; the decode on puts two cards on the bus
+                                    ; for the same addresses. A bracket does
+                                    ; not make that safe, so the page is
+                                    ; refused rather than the decode forced,
+                                    ; and a lone-Hercules XT still gets it.
+                                    ; NOT [vid_ndisp]: vid_fsx_enter has
+                                    ; already forced that to 1 by the time any
+                                    ; call can reach here
     or bl, 0x80                     ; ...and page 1
+    mov ah, 3                       ; ...whose decode has to be allowed with it
 .h0:
     mov dx, 0x3BF                   ; ALLOW the second page: bit 0 graphics,
-    mov al, 3                       ; bit 1 the page. vid_setmode writes 1
-    out dx, al                      ; here, because the desktop only ever
-    mov dx, 0x3B8                   ; addresses page 0 (SPEC.md 39.6)
-    mov al, bl
+    mov al, ah                      ; bit 1 the page - and bit 1 goes back off
+    out dx, al                      ; for page 0, which needs no second decode
+    mov dx, 0x3B8                   ; and is the state the desktop comes back
+    mov al, bl                      ; to
     out dx, al
 .sync:
     mov al, FSXW_VSYNC              ; the latch happens at the retrace, so the

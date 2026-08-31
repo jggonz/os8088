@@ -13,12 +13,14 @@ one this file exists for:
 
   ZOOMED    a maximized window is x = 0, w = [vid_pw] - UNTOUCHED. 11.95.2
             made the standard rect span the screen so the alignment was kept
-            rather than bought with eight columns of content, and only the
-            LEFT border is suppressed there, so the content is W_W-1 and is
-            NOT a multiple of 8. A snapper that does not refuse this case
-            takes SEVEN COLUMNS off every maximized window on every adapter,
-            and the window still looks maximized - which is why arithmetic
-            rather than a screenshot is what catches it.
+            rather than bought with eight columns of content; 11.95.3 then
+            took the RIGHT border too, so the content of a flush window is
+            W_W and is already a multiple of 8. The refusal is therefore no
+            longer about an unaligned width - it is that there is nothing to
+            round: a snapper that takes this case at all takes EIGHT COLUMNS
+            off every maximized window on every adapter, and the window still
+            looks maximized - which is why arithmetic rather than a
+            screenshot is what catches it.
 
   FLOORED   nothing came up narrower than the minimum it declared
             (11.100.2). Since 11.94.5.1 the snap rounds UP, so this cannot
@@ -57,9 +59,14 @@ fails = []
 
 
 def content_w(win, vid_w):
-    """11.95.2: the left border is suppressed only when the frame spans."""
+    """A frame that spans the screen has NEITHER side border.
+
+    11.95.2 for the left and 11.95.3 for the right, which is what `wm_geom`
+    answers: it subtracts `wm_bord` and then `wm_bordr`, and both are 0 for a
+    flush window. It was `w - 1` while only the left one had gone.
+    """
     flush = win.x == 0 and win.x + win.w >= vid_w
-    return win.w - (1 if flush else 2)
+    return win.w - (0 if flush else 2)
 
 
 with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",

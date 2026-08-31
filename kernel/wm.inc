@@ -4636,14 +4636,30 @@ wm_snap_ax:
     push cx                     ; only the x=0..6 case can move RIGHT, but the
     push dx                     ; right-edge test is cheap and it is the one
     push ax                     ; way this could hand back an illegal rect
+    push word [bx+W_X]          ; **AND THE QUESTION IS ABOUT THE RECT BEING
+    mov [bx+W_X], cx            ; PROPOSED** (SPEC.md 11.95.2.1). wm_zoom_xmax
+                                ; asks wm_disp_of, which reads the RECORD - and
+                                ; ui_drag calls this before it stores, because
+                                ; its own "did it move" compare still needs the
+                                ; old W_X. So a drop on the OTHER display was
+                                ; measured against the display the window came
+                                ; from and refused, and the drops that skip
+                                ; ui_drag_phase - the ones where wm_land_fit
+                                ; also moved the size - kept an unaligned
+                                ; content origin for the session, which is
+                                ; font_run's fast path gone on every text row.
+                                ; Two instructions and a stack slot; the record
+                                ; is put back below before anything else can
+                                ; see it
     mov ax, cx
     mov cx, [bx+W_W]
     call wm_zoom_xmax           ; DX = the largest x this width may take on the
-    cmp ax, dx                  ; window's OWN display (SPEC.md 39.17.2), and
-    pop ax                      ; not on the whole extended desktop - where a
-    pop dx                      ; MAXIMIZED window on the primary was allowed
-    pop cx                      ; to walk 7px right and sat with the desktop's
-    ja .pop                     ; dither showing down its left (11.95.2.1)
+    pop word [bx+W_X]           ; window's OWN display (SPEC.md 39.17.2), and
+    cmp ax, dx                  ; not on the whole extended desktop - where a
+    pop ax                      ; MAXIMIZED window on the primary was allowed
+    pop dx                      ; to walk 7px right and sat with the desktop's
+    pop cx                      ; dither showing down its left (11.95.2.1).
+    ja .pop                     ; `pop` writes no flags, so the cmp carries
     mov ax, cx                  ; would hang off: leave it unsnapped, and it
 .pop:                           ; simply misses the fast path
     pop cx

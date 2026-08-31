@@ -1559,21 +1559,30 @@ content: width  = w                  (a window spanning the screen has
 constant — `24 + 20 + 1 + 19 = 64` — so for every adapter:
 
 ```
-CW = floor(([vid_w] - 1)  / 8)
+CW = floor( [vid_w]       / 8)
 CH = floor(([vid_h] - 64) / 8)
 ```
 
 | adapter | screen | content px | `CW × CH` | wasted |
 |---|---|---|---|---|
-| CGA | 640×200 | 639 × 136 | **79 × 17** | 7 px × 0 px |
-| Hercules | 720×348 | 719 × 284 | **89 × 35** | 7 px × 4 px |
-| VGA mode 12h | 640×480 | 639 × 416 | **79 × 52** | 7 px × 0 px |
+| CGA | 640×200 | 640 × 136 | **80 × 17** | 0 px × 0 px |
+| Hercules | 720×348 | 720 × 284 | **90 × 35** | 0 px × 4 px |
+| VGA mode 12h | 640×480 | 640 × 416 | **80 × 52** | 0 px × 0 px |
+
+**`[vid_w]` and not `[vid_w] - 1`, and the whole column of waste went with
+it.** The derivation above already says a window spanning the screen has
+neither side border, so the content is `w` — SPEC.md §11.95.2 took the left
+one and §11.95.3 the right. While only the left had gone, `wm_geom` answered
+`w - 1` and the seven pixels the last cell could not fill were real; now there
+is one more whole cell on every adapter instead. `tools/weavesim.py`'s
+`ADAPTERS` and `tests/weavesmoke.py`'s frame model are the two other places
+this number is written down, and all three say 80 / 90 / 80.
 
 These are the grids `weavesim --render` prints and the 8086 must reproduce
 exactly (§12). They are the **opening** grid and not a constant: a window
 the user has resized re-runs the walk at whatever `CW × CH` it then has
 (§7.4), and §7.4's 32×12 floor is what the family refuses to go below.
-Nothing else in this document may hard-code 79, 89, 17, 35 or 52 — an
+Nothing else in this document may hard-code 80, 90, 17, 35 or 52 — an
 implementation that reads the numbers instead of the screen is wrong on two
 adapters of three the moment either constant moves (SPEC.md §39).
 

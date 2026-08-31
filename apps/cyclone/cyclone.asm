@@ -3611,6 +3611,20 @@ cy_home_ck:
     mov byte [cy_phome], 0
     call cy_bottom_lane
     mov [cy_plane], ax
+    mov ax, [cy_dlane]              ; ...AND THE DROID WITH IT (SPEC.md 67.9).
+    cmp ax, [cy_nlane]              ; cy_clearboard does not touch [cy_pw_droid]
+    jb .dok                         ; or [cy_dlane], so a droid still out when
+    mov ax, [cy_nlane]              ; the level changes keeps a lane number the
+    dec ax                          ; OLD web had - and the eight shapes are 16
+    mov [cy_dlane], ax              ; or 12 lanes, so on a 12-lane web it drew
+.dok:                               ; itself from rows 12..15 of cy_vx/cy_vy,
+                                    ; which still hold the previous shape's
+                                    ; coordinates: in bounds, wrong geometry,
+                                    ; and a claw that cannot be reached where
+                                    ; it appears to be. HERE and not in
+                                    ; cy_startlevel for this routine's own
+                                    ; stated reason - [cy_nlane] is not the new
+                                    ; web's until cy_build_verts has run
     pop ax
 .out:
     ret

@@ -113,10 +113,22 @@ tk_r_setup:
     ret
 .shadow:
     mov byte [tk_npage], 1
+    mov dx, [tk_shseg]              ; ...AND ONCE FOR THE INSTANCE, NOT ONCE
+    or dx, dx                       ; PER BRACKET. This routine runs at every
+    jnz .haveshadow                 ; Play, and a claim taken there and never
+                                    ; given back is 16KB a game: eight rounds
+                                    ; on a 1bpp machine - which is the only
+                                    ; kind that takes this path, Mode X having
+                                    ; two VRAM pages - and the ninth is refused
+                                    ; for the life of the app, on the machines
+                                    ; with the least heap to lose. The claim is
+                                    ; not movable (nothing declares it so), so
+                                    ; the segment is still good next time
     mov ax, TK_SHKB
     call OSAPI_MEM_CLAIM            ; 16KB, and the kernel frees it with the
     jc .noshadow                    ; instance (SPEC.md 50.3) - no teardown
-    mov [tk_shseg], dx              ; hook of our own
+    mov [tk_shseg], dx              ; hook of our own, which is what makes the
+.haveshadow:                        ; reuse above the whole of the lifetime
     mov [tk_tseg], dx
     mov word [tk_page0], 0
     mov word [tk_page1], 0

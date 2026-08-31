@@ -52,8 +52,16 @@ tk_fsx_main:
     call tk_clearall
     mov byte [tk_par], 0
     mov byte [tk_quit], 0
-    mov byte [tk_pause], 0
     mov byte [tk_over], 0
+    cmp byte [tk_lives], 0          ; A FINISHED GAME STARTS A NEW ONE (SPEC.md
+    jne .keep                       ; 85.6). Only 'N' ever wrote tk_lives back,
+    call tk_newgame                 ; so Play after a GAME OVER ran with an
+.keep:                              ; empty bar: the first hit found 0 and the
+                                    ; session ended before the first shell
+                                    ; landed, with the finished game's score
+                                    ; still on the panel. AFTER tk_r_setup's
+                                    ; success, so a refused mode does not clear
+                                    ; the score the attract panel is showing
     call tk_startround
     call OSAPI_GET_TICKS
     mov [tk_last], ax
@@ -1140,6 +1148,12 @@ tk_startround:
     push ax
     mov byte [tk_dead], 0
     mov byte [tk_spawn], 0
+    mov byte [tk_pause], 0          ; ...AND A ROUND IS NEVER PAUSED. It is
+                                    ; here rather than at each entry because
+                                    ; there are two: the bracket's own, and
+                                    ; 'N' inside it - and 'N' did not clear it,
+                                    ; so P then N drew a fresh world that
+                                    ; nothing stepped and no key reached
     call tk_addtank
     pop ax
     ret

@@ -1147,7 +1147,7 @@ spw_gfx_rowbase:  call gfx_rowbase
                   retf
 spw_resident_end:
 
-; ...and the TWO BYTES of splash.inc that could not go with it. viddet's mode
+; ...and the THREE BYTES of splash.inc that could not go with it. viddet's mode
 ; guard, fprog's boot test and vidsel's spl_reset all ask [spl_live] through
 ; DS, so it lives where DS reaches it. 967 bytes left; these stayed.
 spl_live    db 0
@@ -1168,4 +1168,17 @@ spl_live    db 0
 ; landing between one of those and its restore draws through somebody else's
 ; mask, which is a defect no emulator run would repeat twice the same way.
 spl_busy    db 0
+
+; [spl_quiet] IS THE THIRD, and it is here for spl_busy's second reason
+; (SPEC.md 15.3.3.1, 15.3.8.2). It was a `.boot2` byte read `cs:`, which was
+; right while spl_paint was its only reader - and then 15.3.8 gave the
+; animation to IRQ0, where BOTH handlers are kernel `.text` and `cs:` names
+; the KERNEL segment rather than the blob. So the flag stopped reaching the
+; only two callers that could still spend the 28.7 ms it exists to refuse:
+; spl_stepq raised it, mouse_init's identify window ran, and the interrupt
+; drew the spinner straight through it. An 8250 holds ONE byte and a
+; 1200-baud 7N1 frame is 7.5 ms, so that is three bytes of the burst 9.4
+; exists to capture - a mouse that is on the wire and not detected, which is
+; PERFORMANCE.md's input overrun and is invisible in an emulator.
+spl_quiet   db 0
 

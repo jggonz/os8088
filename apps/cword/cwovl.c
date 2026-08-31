@@ -887,7 +887,13 @@ int ovl_file_load(void *win, const char *name, unsigned lo, unsigned hi)
         return 0;
     }
     cw_rtfn = (int)os88_file_read(name, cw_rtf, (unsigned)CW_RTF_MAX);
-    if (cw_rtfn == 0 && lo != 0) {
+    /* ZERO BYTES IS AN EMPTY FILE OR A FAILURE, and os88_ferr() is what tells
+     * them apart (os88.h) - not `lo`, which the ASSOCIATION path has none of
+     * and passes as 0.  Written against `lo` this arm was dead for a document
+     * opened by double-click: a read that failed fell into ovl_rtf_parse(0),
+     * which answers CW_RTF_NOTRTF for anything under five bytes, and the user
+     * was told their RTF was not an RTF file. */
+    if (cw_rtfn == 0 && os88_ferr() != OS88_FERR_OK) {
         cw_toast("Could not read that file.");
         return 0;
     }

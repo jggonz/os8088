@@ -5116,7 +5116,13 @@ fm_editkey:
     mov bl, [fm_elen]
     xor bh, bh
     or bl, bl
-    jz .out
+    jz .nochg                   ; ...and a BACKSPACE THAT REMOVED NOTHING owes
+                                ; the same as a refused character: the prompt
+                                ; is already empty. `.out` answers CF=1, which
+                                ; fm_onkey_x now reads as "repaint the whole
+                                ; window" - so holding Backspace on an empty
+                                ; Rename or New Folder box repainted the
+                                ; listing at every typematic repeat
     dec bl                      ; `dec bl` IS `dec bx` here (BH is 0), so BX
     mov [fm_elen], bl           ; is the NEW length and the terminator lands
     mov byte [fm_ebuf+bx], 0    ; on the character just dropped - the -1 that

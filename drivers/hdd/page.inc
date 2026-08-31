@@ -1258,17 +1258,17 @@ hd_mount_one:
                                 ; packed past and costs the big run nothing
     xor dx, dx                  ; refused: the kernel's 32-entry floor, which
 .claimed:                       ; works and shows fewer files
-    mov [bx+HDV_LSEG], dx
-    or dx, dx                   ; ...AND IT MOVES (SPEC.md 66.5.10.2). Where it
-    jz .nolist                  ; lands is a property of the SESSION and not of
-    push bx                     ; the code - on a desktop that has been used,
-    mov ax, hd_lst_reloc        ; the gap under 18.95's read-ahead is taken and
-    call OSAPI_MEM_MOVABLE      ; this first-fits ABOVE that cache instead,
-    pop bx                      ; where pinned it costs the whole 63KB. ONE
-.nolist:                        ; word, because HDV_LSEG is the only place this
-                                ; driver writes the segment down; the kernel's
-                                ; other two are dsk_dseg_reloc's. BX is the
-                                ; hd_vols row and is needed below
+    mov [bx+HDV_LSEG], dx       ; ...and PINNED for a moment longer: DX is
+                                ; still this base and OSAPI_VOL_ADD below is
+                                ; about to write it down as the kernel's own
+                                ; DV_SEG (SPEC.md 18.7). Declared movable up
+                                ; here, a compaction between the two calls
+                                ; moved the block, hd_lst_reloc corrected
+                                ; HDV_LSEG - and the STALE DX went into DV_SEG
+                                ; anyway, from where dsk_list_pick copies it
+                                ; into [dsk_dseg]. Nothing here holds sch_lock,
+                                ; and hd_mount_one runs under the gfx lock,
+                                ; which yields
 
     mov al, [bx+HDV_VOLH]       ; our own handle IS the row index
     mov cx, [bx+HDV_SECS]
@@ -1277,7 +1277,21 @@ hd_mount_one:
     jc .novol                   ; place that knows it (SPEC.md 26.1)
     mov [bx+HDV_VOL], al
     mov byte [bx+HDV_USED], 1
-    call OSAPI_VOL_MOUNT        ; AL is still the volume index
+
+    mov dx, [bx+HDV_LSEG]       ; ...AND NOW IT MOVES (SPEC.md 66.5.10.2).
+    or dx, dx                   ; Where it lands is a property of the SESSION
+    jz .nolist                  ; and not of the code - on a desktop that has
+    push bx                     ; been used, the gap under 18.95's read-ahead
+    mov ax, hd_lst_reloc        ; is taken and this first-fits ABOVE that cache
+    call OSAPI_MEM_MOVABLE      ; instead, where pinned it costs the whole
+    pop bx                      ; 63KB. TWO words, not one: HDV_LSEG here and
+.nolist:                        ; the kernel's DV_SEG, which dsk_dseg_reloc
+                                ; already scans BY VALUE for every move - and
+                                ; that is exactly why the ORDER matters. BX is
+                                ; the hd_vols row and is needed below
+
+    mov al, [bx+HDV_VOL]        ; reloaded: hd_lst_reloc's address went through
+    call OSAPI_VOL_MOUNT        ; AX, so the volume index is no longer in it
     jc .badvol
     inc byte [hd_nmnt]
     jmp short .out

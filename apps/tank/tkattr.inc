@@ -813,10 +813,20 @@ tk_at_step:
     push si
     push di
     push es
-    mov bx, [tk_win]
-    call OSAPI_WM_OBSCURED          ; covered or hidden: the repaint that
-    jc .out                         ; uncovers it will put us back
-    call OSAPI_GFX_LOCK
+    call OSAPI_GFX_LOCK             ; **THE LOCK FIRST, THEN THE QUESTION**
+    mov bx, [tk_win]                ; (SPEC.md 20.6 rule 5). wm_obscured's own
+    call OSAPI_WM_OBSCURED          ; header says it is only trustworthy while
+    jc .unlock                      ; the caller holds the lock, because the UI
+                                    ; task mutates the z-order and the rects
+                                    ; under it - and this runs on a WORKER,
+                                    ; pre-emptively against that task. Asked
+                                    ; above the lock it could answer "clear",
+                                    ; park in gfx_lock behind a raise, and then
+                                    ; draw the logo and the score band at
+                                    ; ABSOLUTE screen coordinates over whatever
+                                    ; had come to the front: covered or hidden,
+                                    ; the repaint that uncovers us will put us
+                                    ; back
     mov bx, [tk_win]
     call OSAPI_WM_CONTENT           ; A MOVED WINDOW IS A MOVED ORIGIN, and a
     cmp ax, [tk_winox]              ; move does not have to come through

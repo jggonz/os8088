@@ -61,11 +61,12 @@ instead of borrowing the shipped kernel's.
 
 **The kernel is ONE contiguous span starting at linear 0x00600, and that
 includes its buffers.** `kern_big`'s budget is 126.5KB today (129,536) and
-`kern_small`'s 105KB (107,520). **Big stands at two steps and small at
-ZERO — small's `KERN_SIZE` equals its `KERN_BUDGET` exactly**, which
-assembles only because the guard is `>`; the thirty-second move raised small
-by 512 for the head-switch boot fix and landed it there deliberately. That is
-a figure to raise deliberately or to spend down, not headroom to draw on.
+`kern_small`'s 105KB (107,520). **Big stands at eighteen steps and small at
+ONE.** Small's used to equal its budget exactly, which assembled only because
+the guard is `>`; the thirty-second move raised it by 512 for the head-switch
+boot fix and landed it there deliberately. Either figure is one to raise
+deliberately or to spend down, not headroom to draw on — and small's one step
+is one step: the next 512 bytes it grows is a conversation, not a build fix.
 
 Big's two steps are the thirty-fifth move's, and they are **earmarked rather
 than free**: one restores the step move 34's merge spent and one is the
@@ -894,12 +895,12 @@ Three things about it:
 ```json
 {
   "big": {
-    "boot2": 2494,
+    "boot2": 2498,
     "bootmax": 189952,
     "bss": 5955,
     "budget": 129536,
     "codemax": 65536,
-    "cold": 40784,
+    "cold": 40803,
     "coldpara": 2560,
     "fatpara": 288,
     "imgpara": 3968,
@@ -911,26 +912,29 @@ Three things about it:
     "minramkb": 196,
     "ovl": 3969,
     "stk0": 1024,
-    "text": 57149,
+    "text": 57197,
     "vgabuf": 848,
     "vgabufpara": 64
   },
   "small": {
-    "bss": 5435,
+    "boot2": 2498,
+    "bootmax": 120320,
+    "bss": 5442,
     "budget": 107520,
     "codemax": 65536,
-    "cold": 37499,
-    "coldpara": 2368,
+    "cold": 37889,
+    "coldpara": 2400,
     "fatpara": 288,
-    "imgpara": 3328,
-    "kend": 6688,
+    "imgpara": 3392,
+    "kend": 6784,
     "kseg": 96,
-    "ksize": 105472,
+    "ksize": 107008,
     "lowbss": 8470,
     "lowpara": 608,
-    "ovl": 3826,
+    "minramkb": 128,
+    "ovl": 3886,
     "stk0": 1024,
-    "text": 47364,
+    "text": 48458,
     "vgabuf": 0,
     "vgabufpara": 0
   }
@@ -981,11 +985,11 @@ SPEC.md §18.96's floppy formatter, §39.11's dual display. Things REMOVED from
 small: SPEC.md §41.11's extended-memory store, the first of those and so far
 the only one.
 
-`kern_small` stands at **106,496 B of its own 107,520-byte budget — 1,024
-spare, two steps**. Moves 21, 22 and 23 are where the surplus went, and move
-32's head-switch boot fix is what spent the last step of it (the ledger row
-above). There are 415 bytes of image rung left before the next crossing costs
-a step. It stood at seven steps then, three over the
+`kern_small` stands at **107,008 B of its own 107,520-byte budget — 512
+spare, ONE step**. Moves 21, 22 and 23 are where the surplus went, and move
+32's head-switch boot fix is what spent a step of it (the ledger row above).
+There are 372 bytes of image rung and 511 of cold rung left before the next
+crossing costs a step. It stood at seven steps then, three over the
 standard, which **owed a conversation rather than being headroom**: two things
 had arrived at the same figure from opposite directions and neither knew about
 the other:
@@ -1744,26 +1748,26 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 33,609 | 34.3% |
-| the window system and its furniture | 26,209 | 26.8% |
-| drawing: adapters, primitives, glyphs, icons | 16,862 | 17.2% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 10,097 | 10.3% |
-| the kernel proper: API table, heap, scheduler, events | 8,281 | 8.5% |
+| the file system, end to end | 33,628 | 34.3% |
+| the window system and its furniture | 26,227 | 26.8% |
+| drawing: adapters, primitives, glyphs, icons | 16,863 | 17.2% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 10,119 | 10.3% |
+| the kernel proper: API table, heap, scheduler, events | 8,288 | 8.5% |
 | the three built-in kinds | 1,815 | 1.9% |
 | the Control Panel | 1,060 | 1.1% |
-| **total** | **97,933** | |
+| **total** | **98,000** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` | `.boot2` |
 |---|---:|---:|---:|---:|---:|---:|
-| `wm.inc` — the window manager (§11) | 12,522 | 95 | **12,617** | 1,086 | — | — |
-| `files.inc` — the Disk window (§22) | 1,131 | 8,747 | **9,878** | 471 | — | — |
+| `wm.inc` — the window manager (§11) | 12,531 | 95 | **12,626** | 1,086 | — | — |
+| `files.inc` — the Disk window (§22) | 1,131 | 8,744 | **9,875** | 471 | — | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 7,991 | 702 | **8,693** | 181 | 526 | — |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 397 | 6,284 | **6,681** | 890 | 3,584 | — |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 397 | 6,306 | **6,703** | 890 | 3,584 | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 274 | 5,323 | **5,597** | 169 | — | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 5,067 | **5,246** | 155 | — | — |
-| `mouse.inc` — serial mouse and the cursor (§9) | 4,806 | — | **4,806** | 149 | — | — |
+| `mouse.inc` — serial mouse and the cursor (§9) | 4,828 | — | **4,828** | 149 | — | — |
 | `ui.inc` — the UI task and the event ladder (§13) | 3,516 | — | **3,516** | 58 | — | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 3,086 | — | **3,086** | 197 | 98 | — |
 | `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 543 | 2,491 | **3,034** | 348 | — | — |
@@ -1776,12 +1780,12 @@ generated in the first place.
 | `icons.inc` — the icon renderer (§10) | 1,686 | — | **1,686** | 100 | — | — |
 | `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,541 | — | **1,541** | 88 | — | — |
 | `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,304 | — | **1,304** | 4 | — | — |
-| `sched.inc` — pre-emptive scheduling (§7–8) | 1,270 | — | **1,270** | 124 | 2,746 | — |
+| `sched.inc` — pre-emptive scheduling (§7–8) | 1,277 | — | **1,277** | 124 | 2,746 | — |
 | `snd.inc` — the sound layer (§34) | 1,200 | — | **1,200** | 300 | — | — |
-| `fsx.inc` — fullscreen exclusive (§53) | 1,122 | — | **1,122** | 9 | — | — |
+| `fsx.inc` — fullscreen exclusive (§53) | 1,131 | — | **1,131** | 9 | — | — |
 | `ctrl.inc` — the Control Panel (§31) | 778 | 282 | **1,060** | — | — | — |
 | `desk.inc` — the desktop and volume zones (§14/§26.1) | 15 | 1,040 | **1,055** | 18 | — | — |
-| `viddet.inc` — adapter detection and geometry (§39) | 1,023 | — | **1,023** | — | 696 | 3 |
+| `viddet.inc` — adapter detection and geometry (§39) | 1,024 | — | **1,024** | — | 696 | 3 |
 | `dock.inc` — the dock strip (§30) | 913 | — | **913** | 38 | — | — |
 | `loader.inc` — the package loader (§21) | — | 782 | **782** | 58 | — | — |
 | `fprog.inc` — the file-operation progress widget (§12.8) | 682 | — | **682** | — | — | — |
@@ -1794,12 +1798,12 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 173 | — | **173** | 134 | — | — |
 | `clone.inc` — the disk cloner (§18.99) | 15 | 27 | **42** | — | — | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 12 | — | **12** | — | — | — |
-| `splash.inc` — the boot splash (§15) | — | — | **0** | — | — | 2,023 |
+| `splash.inc` — the boot splash (§15) | — | — | **0** | — | — | 2,027 |
 | `band.inc` — the 1bpp band composer (§5.9), `BAND=1` | — | — | **0** | — | — | — |
 | `bootprof.inc` — the boot phase table (§15.5), `BOOTPROF=1` | — | — | **0** | — | — | — |
 | `moudiag.inc` — what the identify window saw (§9.4.6), `MOUDIAG=1` | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 3,583 | — | **3,583** | — | — | 468 |
-| **total** | **57,149** | **40,784** | **97,933** | **5,955** | **8,982** | **2,494** |
+| **total** | **57,197** | **40,803** | **98,000** | **5,955** | **8,982** | **2,498** |
 <!-- END generated table -->
 
 ### Reading it

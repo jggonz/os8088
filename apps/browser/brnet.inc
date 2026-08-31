@@ -257,12 +257,24 @@ br_go:
 .say:
     mov [br_nmsg], si
     mov byte [br_nstate], BN_ERR
+    call br_promise                 ; **THIS TAIL IS A THIRD SETTLE** (SPEC.md
+                                    ; 71.11). A `https://` URL, an empty host
+                                    ; or a refused claim lands here with the
+                                    ; withdrawal from the BN_OPEN transition
+                                    ; still outstanding - and the fetch it was
+                                    ; withdrawn for was aborted, so neither
+                                    ; br_finish nor br_nshow ever runs to put
+                                    ; it back. The page then stands still with
+                                    ; no promise on it for the rest of the
+                                    ; session: every raise repaints instead of
+                                    ; restoring. BN_ERR is already stored, so
+                                    ; br_promise's own state test re-states it
     call br_status
 .out:                               ; ...and NOTHING here. The withdrawal is
-                                    ; above, at the transition; the two ways a
-                                    ; fetch settles own the set, and the paths
-                                    ; that never start one leave a promise
-                                    ; that was already true untouched
+                                    ; above, at the transition; the two other
+                                    ; ways a fetch settles own the set, and the
+                                    ; paths that never start one leave a
+                                    ; promise that was already true untouched
     pop di
     pop si
     pop dx

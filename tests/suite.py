@@ -191,6 +191,12 @@ FAST = [
     Row("ovlchk", "fast", py("tools/os88ovlchk.py"), 1.0,
         "no near call crosses a section boundary - it assembles cleanly and "
         "runs wrong"),
+    Row("dsegaudit", "fast", py("tools/dsegaudit.py"), 1.0,
+        "no path holding [dsk_dseg] can reach a claim, and a claim COMPACTS "
+        "(SPEC.md 50.6.2). It is a 0/1 gate with no harness around it and "
+        "nothing ran it - not `make`, not this file, and not t_registry, "
+        "whose walk is over tests/ and cannot see a tool. A static gate that "
+        "nobody runs is a comment"),
     Row("stknosave", "fast",
         py("tools/stkdepth.py", "drivers/ether/ether.asm", "--check"), 1.5,
         "every `; STKDEPTH-NOSAVE:` in ETHER.DRV still holds: the routines "
