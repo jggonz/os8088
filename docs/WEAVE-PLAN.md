@@ -620,13 +620,33 @@ the ~52KB target, 55,000 bytes the overlay-split trigger, the OVL
 candidates pre-named (WEAVE-SPEC §1.2) so the split is a move, not a
 scramble.
 
-**As of wave 5 it is 61,408 resident against SPEC.md §20.1's 61,440 ceiling —
-32 bytes — and the wave that got there did it by putting its code in a SECOND
-SEGMENT** (§2.9, WEAVE-SPEC §1.2.2) rather than by finding room. Wave 5's
+**As of wave 5 it is 60,320 resident against SPEC.md §20.1's 61,440 ceiling —
+1,120 bytes — and the wave that got there did it by putting its code in a
+SECOND SEGMENT** (§2.9, WEAVE-SPEC §1.2.2) rather than by finding room. Wave 5's
 first build was 62,850, 1,410 over; five structural cuts brought it under, of
 which two were the honest savings §2.9 asks a wave to take first and three
 were the wave's own C compiling fatter than it read. `WEAVE.WSM` is 4,593
-bytes and `WEAVE.OVL` 20,740. What follows is wave 4's record, kept because
+bytes and `WEAVE.OVL` 20,740.
+
+**Then the merge with `main` took the 32 bytes and 42 more — 61,514, 74
+over — and a sixth cut answered it: 51,124 + 9,196 = 60,320 resident, 1,120
+under.** The overrun is worth naming because no Weave source caused it: the
+Elendilon work `main` carried grew the SHARED SDK includes (`os88api.inc`,
+`os88ui.inc` — the scroll bar's arrow buttons and arrow-drag, which `<list>`
+and `<grid>` reach, so the feature cannot be `%define`d out), and a package
+that shares a library pays for the library's growth. **The cut is duplicated
+DATA, and it is the last cut of its kind this file knows of**: §10.4's
+validator answers with the name of the field that refused, and SmallerC emits
+a string literal once per site rather than pooling — `section table` eighteen
+times, `prop block` twenty-one — while a literal an `ovl_` function names
+stays RESIDENT even though its code does not (SPEC.md §73.14). Spelling the
+twenty-four names once each in `apps/weave/wval.c` is **1,194 bytes** with
+`.text` byte-identical, so it costs no call on any path. **Do not re-propose
+it, and do not re-propose the wave 3–5 cuts below**: `w_idseen`, `w_msg`, the
+per-component rect table, the layout record's `row` field, the dirty bitmap,
+`w_ctname`'s switch, the sprite atom map, the ops/s arithmetic, `w_gband` and
+`w_fxc_out` aliased into `w_probe`, the comp_id tables at 251, and the
+word→byte arrays are all spent. What follows is wave 4's record, kept because
 its arithmetic is what wave 5 planned against.
 
 **As of wave 4 it was 60,862 resident against SPEC.md §20.1's 61,440 ceiling

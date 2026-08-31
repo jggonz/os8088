@@ -3562,6 +3562,23 @@ because §10.1's refuse-before-read needs one, and nothing had ever read past
 its first 32 bytes — and that `w_ctname`'s fourteen-case switch, which
 SmallerC compiles to a 161-instruction compare chain, is a table walk.
 
+**Then the merge with `main` spent those 32 bytes and 42 more, and a sixth
+cut answered it.** Elendilon's work landed in the SHARED SDK includes both
+packages compile — `apps/os88ui.inc` grew the scroll bar's arrow buttons and
+arrow-drag, which `<list>` and `<grid>` genuinely reach, so it is not gateable
+out — and the package came to 52,318 + 9,196 = 61,514, **74 over**. What paid
+for it is duplicated DATA rather than another structural change: §10.4's
+refusal names the field that refused, and the validator answers
+`section table` at eighteen sites and `prop block` at twenty-one. SmallerC
+emits a string literal **once per site** — it pools nothing — and a literal an
+`ovl_` function names is RESIDENT even though the code naming it is not
+(SPEC.md §73.14 moves the code and leaves the literal). The twenty-four field
+names are spelled once each in `apps/weave/wval.c` now, which is **1,194
+bytes** with `.text` byte-identical either way: no call was added, no path
+moved, and the sentences are the same sentences. The shipped figure is
+**51,124 image + 9,196 bss = 60,320 resident, 1,120 under**, with
+`WEAVE.OVL` at 20,983 and `WEAVE.WSM` at 4,593.
+
 It was gated FIRST by `weavecanvas` (§12.1.3), the raw-QEMU differential
 against a composer written into the model for it, because §6.10.2 had no
 oracle at all. Two defects the model carried are fixed with it (§6.10.1's two
