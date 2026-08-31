@@ -6,10 +6,10 @@
  * It compiles LOOM's five compiler sources - apps/loom/lmerr.c, lmatom.c,
  * lmwml.c, lmwjs.c, lmsheet.c and lmwrite.c, THE SHIPPING TEXT and not a copy
  * of it - with the host's cc, stands the scratch workspace and the output
- * image up as plain arrays, and packs a project. lmpack.sh then diffs the
- * result against `python3 tools/weavesim.py --pack` for every demo and every
- * template, and runs tests/weave/packerr/ for WEAVE-SPEC 10.5's sentence
- * identity.
+ * image up as plain arrays, and packs a project. tests/unit/t_lmpack.py
+ * then diffs the result against `python3 tools/weavesim.py --pack` for every
+ * demo and every template, and runs tests/weave/packerr/ for WEAVE-SPEC
+ * 10.5's sentence identity - a fast-tier row, so it runs on every `make`.
  *
  * IT IS THE DEV LOOP AND IT IS NOT THE GATE. The gate is `weavepack`
  * (WEAVE-SPEC 12.3), which packs on the MACHINE and reads the bundle back off

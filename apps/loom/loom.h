@@ -45,8 +45,13 @@
  * demos/), so this is seven times the largest thing the family has ever
  * packed. A file over it opens read-only with the sentence in the status row:
  * a truncated source would pack a bundle nobody wrote. */
-#define LM_TEXTMAX  6144
-#define LM_SRCKB      24            /* the source claim: 4 x 6144 = 24,576 */
+#define LM_TEXTMAX  6144            /* ...and four of them is 24,576 bytes.
+                                     * The claim that holds them is bigger:
+                                     * apps/loom/loom.c's LM_CLAIMKB adds the
+                                     * editor's glass shadow behind the four
+                                     * slots, because 4,576 bytes of bss would
+                                     * be 7.5% of SPEC.md 20.1's whole
+                                     * allowance for image AND bss */
 
 #define LM_MAXLINE   400            /* the line index, one word a line. A
                                      * source longer than this many lines is

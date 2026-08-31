@@ -40,7 +40,7 @@
  *   the OUTPUT claim   LM_OUTKB, TRANSIENT for the same reason and in the
  *                      same bracket: it holds the finished `.WAB`.
  *
- * The two transient ones are 114KB together and they are taken BEFORE ANY
+ * The two transient ones are 112KB together and they are taken BEFORE ANY
  * I/O, with WEAVE-SPEC 10.1's arithmetic in the refusal - which is
  * apps/weave/wload.c's rule applied to the other direction: WEAVE refuses
  * before it READS a bundle, LOOM refuses before it WRITES one.
@@ -864,11 +864,13 @@ static void lm_pack(void)
                                          * BEFORE the report is drawn */
 
     if (lm_packlen == 0) {
-        /* The writer answered success with nothing in the claim. It is the
-         * honest report and not a crash: this wave's lmwjs.c and lmsheet.c
-         * are placeholders (loom.h says so), so a project can compile to an
-         * empty image while the writer is still being landed. */
-        lm_say("Packed 0 bytes - the bundle writer is not finished yet.");
+        /* The writer answered success with nothing in the claim, which no
+         * project can now produce: 2.2's header alone is 32 bytes and 2.4
+         * makes five sections mandatory, so the smallest legal bundle is
+         * PLAIN's 240. It is kept as a REPORT rather than removed because a
+         * writer that ever answers this way must say so on the glass instead
+         * of writing an empty file over the author's last good bundle. */
+        lm_say("Packed 0 bytes - nothing was written.");
     } else if (written != 0) {
         lm_l0();
         lm_ls(lm_amsg);

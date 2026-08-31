@@ -27,7 +27,12 @@ python3 tools/weavesim.py --emit-optab > $BUILD/wvmtab.inc
 python3 tools/weavesim.py --emit-vmcorpus tests/weave/vmcorpus -o $BUILD/weavevmcorp.inc
 python3 tools/weavesim.py --emit-fxcorpus tests/weave/fxcorpus -o $BUILD/weavefxcorp.inc
 
-nasm -f bin -w+error -I apps/weave/ -I $BUILD/ \
+# -I apps/ AS WELL AS -I apps/weave/: apps/weave/wfx.inc %includes
+# "weave/wnum.inc" (WEAVE-SPEC 5.1's conversion, shared with apps/loom), and
+# that path is written from the tree root the way weave.asm's includes are.
+# Without it this harness stops assembling the moment a core gains a shared
+# include - which is exactly what happened in wave 6, and the gate said so.
+nasm -f bin -w+error -I apps/weave/ -I apps/ -I $BUILD/ \
     -o $BUILD/weavevm.img apps/weave/hosttest/weavevm.asm
 SZ=$(wc -c < $BUILD/weavevm.img)
 [ "$SZ" -le 32768 ] || { echo "weavevm: image is $SZ bytes, over the 32KB the loader reads"; exit 1; }

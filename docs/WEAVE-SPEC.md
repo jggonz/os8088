@@ -836,12 +836,18 @@ the same format as the package header icon (SPEC.md §21). Shown in the Deck
 
 ### 2.13 SOURCE — optional round-trip text
 
-Off by default; `weavesim --pack --with-source` (and Loom's matching
-checkbox) carries it, at the visible cost of bundle bytes against the 62KB
-cap. Layout: the WML text, then the WJS text, both folded and
-LF-terminated; the section's extra word is the WML length, so the reader
-splits without a scan. Loom's `File → Open` of a `.WAB` with `WABF_SOURCE`
-re-creates the project files from it.
+Off by default; `weavesim --pack --with-source` carries it, at the visible
+cost of bundle bytes against the 62KB cap. Layout: the WML text, then the
+WJS text, both folded and LF-terminated; the section's extra word is the WML
+length, so the reader splits without a scan.
+
+**LOOM HAS NEITHER HALF OF THIS YET**, and wave 6 says so rather than leaving
+the sentence standing: there is no with-source checkbox and no `File → Open`
+of a `.WAB`. Both are wave-7 rows and neither is on the byte-identity gate's
+path — the option is off by default in the host packer too, so the seven
+projects §11.1 compares are compared without it. What the pair is FOR is the
+round trip: a bundle somebody was given, opened, edited and packed again. It
+is the only thing in §2 that no shipped code reads or writes.
 
 ### 2.14 Determinism — how two packers stay byte-identical
 
@@ -3556,13 +3562,13 @@ belongs in the pre-release ritual.
 
 #### 12.3.3 `lmpack` is the dev loop; `weavepack` is the gate
 
-`apps/loom/hosttest/lmpack.sh` builds LOOM's five compiler sources — the
-SHIPPING text, `#include`d by `apps/loom/hosttest/lmhost.c` and not a copy of
-it — with the host's `cc`, stands the two claims up as plain arrays, packs
-every demo and every template, and diffs each result against
-`weavesim --pack` byte for byte; then it runs `tests/weave/packerr/` and
-compares the two packers' sentences. It is a second or two and it is what
-makes an on-machine compiler writable at all.
+`tests/unit/t_lmpack.py` builds LOOM's five compiler sources — the SHIPPING
+text, `#include`d by `apps/loom/hosttest/lmhost.c` and not a copy of it —
+with the host's `cc`, stands the two claims up as plain arrays, packs every
+demo and every template, and diffs each result against `weavesim --pack` byte
+for byte; then it runs `tests/weave/packerr/` and compares the two packers'
+sentences. It is four seconds, it is a FAST-tier row so it runs on every
+`make`, and it is what makes an on-machine compiler writable at all.
 
 **It is NOT the gate, and the difference is one word wide: `int` is 32 bits
 there and 16 bits here.** So the compilers are written never to depend on the

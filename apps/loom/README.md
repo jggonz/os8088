@@ -40,7 +40,7 @@ package's own header and explicitly **not** the contract.
 | `lmui.inc` | the alert, the scroll bar, the two claim movers, the line scanner and the glass shadow's comparator (assembly) |
 | `icon.inc` | the 16×16 icon: a loom — beams, warp threads and a shuttle |
 | `lmassoc.inc` | the association block: `.WML` and `.WJS` (WEAVE-SPEC §1.5 step 2) |
-| `hosttest/` | `lmhost.c` + `lmpack.sh`: the compilers built with the HOST's `cc` and diffed against `weavesim --pack`. The dev loop, not the gate — `int` is 32 bits there and 16 bits here |
+| `hosttest/` | `lmhost.c`: the compilers built with the HOST's `cc`, driven by `tests/unit/t_lmpack.py` and diffed against `weavesim --pack`. The dev loop, not the gate — `int` is 32 bits there and 16 bits here |
 
 ## Building and testing
 

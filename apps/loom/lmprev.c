@@ -52,11 +52,12 @@
  *   wave's report and the seam is lm_prev_paint() below, which is the ONE
  *   function that changes.
  *
- * IT IS ALSO NOT REACHABLE TODAY IN ANY USEFUL FORM for a second reason that
- * is not this file's: apps/loom/lmwjs.c and lmsheet.c are placeholders in
- * this wave (loom.h says so), so ovl_pack() answers success with a
- * zero-length image for every project that has a script. The pane says that
- * rather than pretending.
+ * WHAT IT DOES SHOW, so that the pane is not a stub with a sentence in it:
+ * the staged bundle's SIZE, its component count and its card count, all read
+ * back out of the image ovl_pack() just wrote (WEAVE-SPEC 2.2, 2.5). Those
+ * are facts about the thing that will run, they come from the real packer,
+ * and they are the half of "what will this look like" that does not need a
+ * painter.
  * ==========================================================================*/
 
 /* lm_prev_off - give the output claim back and go back to editing. Every exit

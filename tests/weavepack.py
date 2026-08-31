@@ -2,7 +2,7 @@
 """Does LOOM pack the same bytes as the host packer, ON THE MACHINE?
 
     make loom && python3 tests/weavepack.py
-    python3 tests/weavepack.py --no-make          # use build/loompack.img as-is
+    python3 tests/weavepack.py --no-make          # ...with the package as built
 
 **THE GATE WAVE 6 CLOSES ON** (WEAVE-SPEC 12.3, 13.1). WEAVE-SPEC 11.1 says
 the pack step has two implementations and one output: *"Loom's pack of every
