@@ -350,7 +350,7 @@ SOAK = [
         "turns it into a claim. 50s is 34s MEASURED plus room for the one "
         "navigation retry weavesmoke's own flake can cost",
         needs=("marty",), serial=True, timeout=300),
-    Row("weavepack", "soak", py("tests/weavepack.py"), 200.0,
+    Row("weavepack", "soak", py("tests/weavepack.py"), 1500.0,
         "WEAVE-SPEC 11.1's gate and the one wave 6 closes on: LOOM packs "
         "every demo and every template ON THE MACHINE, the guest's floppy is "
         "flushed to the host, and each .WAB is read back out of it by an "
@@ -363,8 +363,13 @@ SOAK = [
         "loop; the difference between the two is one word wide (`int` is 32 "
         "bits there and 16 here), so that row proves the logic and this one "
         "proves the arithmetic. Needs `cc` because LOOM is a C package, and "
-        "`marty` for the boot",
-        needs=("marty", "cc"), serial=True, timeout=600),
+        "`marty` for the boot. 1,500s MEASURED, and it is eleven LAUNCHES rather "
+        "than one session: each project is its own instance (WEAVE-SPEC 1.4) "
+        "and they cannot all be open at once, so every one costs a package "
+        "load - 55KB of LOOM plus 43KB of LOOM.OVL off an emulated floppy - "
+        "and that read is the whole of the time. It is the price of asking "
+        "the question on the target rather than on the host",
+        needs=("marty", "cc"), serial=True, timeout=3000),
     Row("weavefuzz", "soak", py("tests/weavefuzz.py"), 75.0,
         "a thousand DAMAGED projects through both packers, asking the two "
         "questions a fixture cannot: did they agree about whether it is a "

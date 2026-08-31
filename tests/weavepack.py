@@ -3,7 +3,6 @@
 
     make loom && python3 tests/weavepack.py
     python3 tests/weavepack.py --no-make          # use build/loompack.img as-is
-    python3 tests/weavepack.py --png shots/       # ...and LOOK at what it drew
 
 **THE GATE WAVE 6 CLOSES ON** (WEAVE-SPEC 12.3, 13.1). WEAVE-SPEC 11.1 says
 the pack step has two implementations and one output: *"Loom's pack of every
@@ -62,6 +61,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(HERE, "unit"))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 
 import os88marty as M                                          # noqa: E402
@@ -84,7 +84,7 @@ MACHINE = "os8088_5150_cga_gla"
 # it is NOT a kernel accelerator - no OSAPI_* slot binds a key to a menu item
 # (SPEC.md 12.2). A keystroke is also the only way to drive this row without
 # a menu drag per project.
-K_PACK = "p"
+K_PACK = "KeyP"
 
 # The flattening (see the header). stem -> the files that make the project,
 # each as (source path, destination name).
@@ -189,50 +189,58 @@ def build_disk(projects, errs):
     return r.returncode == 0
 
 
-def pack_one(m, mo, S, dx, dy, stem, png=None):
-    """Open <stem>.WML, press ^P, close the window. Answers 1 if a LOOM
-    window came and went."""
+def pack_one(m, mo, S, wx, wy, stem):
+    """Open <stem>.WML from the Disk window at (wx, wy), press ^P, close it.
+
+    WAIT ON THE WINDOW, NOT ON THE PICTURE - weavesmoke's own note, and its
+    reason applies twice as hard here: a package LOAD draws nothing while it
+    runs, and so does a PACK, so `settle` sees perfect stillness partway
+    through either and returns. os88marty.until is the bounded wait that the
+    retry can catch."""
     before = set(dispcp.win_list(m, S))
-    # WEAVE-SPEC 12.3's own note about this: the double-click is the one thing
-    # that flakes on a loaded host, and the retry is weavesmoke's, not a
-    # looser one.
+    win = None
     for attempt in range(3):
         try:
-            dispcp.open_named(m, mo, S, M.settle, dx, dy, "%s.WML" % stem)
+            dispcp.open_named(m, mo, S, M.settle, wx, wy, "%s.WML" % stem)
+            M.until(m, lambda mm: set(dispcp.win_list(mm, S)) - before,
+                    "LOOM's window for %s" % stem, limit=25.0)
         except Exception as e:                                  # noqa: BLE001
             if attempt == 2:
-                check(False, "%s: the double-click landed" % stem,
+                check(False, "%s: LOOM opens on the double-click" % stem,
                       "os88mouse refuses a double-click whose two presses "
                       "straddled the kernel's 9-tick window - a statement "
-                      "about the host, retried three times and then reported",
-                      got=str(e)[:200], want="a launch")
+                      "about the HOST, retried three times and then "
+                      "reported. The .WML association is LOOM's "
+                      "(WEAVE-SPEC 1.5 step 2)",
+                      got=str(e)[:200], want="a package window")
                 return 0
             continue
         M.settle(m)
         now = set(dispcp.win_list(m, S)) - before
         if now:
+            win = sorted(now)[-1]
             break
-    else:
+    if win is None:
         return 0
-    if not now:
-        check(False, "%s: LOOM opens on it" % stem,
-              "the .WML association is LOOM's (WEAVE-SPEC 1.5 step 2); no "
-              "new window means the double-click reached nothing",
-              got="no new window", want="a package window")
-        return 0
-    win = sorted(now)[0]
+
     m.ctrl(K_PACK)                      # WEAVE-SPEC 1.7's ^P
     M.settle(m)
     M.settle(m)                         # the write is a disk revolution or
     M.settle(m)                         # three; settle again rather than sleep
-    if png:
-        m.screen(); m.video()
-        try:
-            M.png(m, os.path.join(png, "pack-%s.png" % stem))
-        except Exception:                                       # noqa: BLE001
-            pass
-    x, y, w, h = dispcp.win_rect(m, S, win)
+
+    x, y = dispcp.win_rect(m, S, win)[:2]
     mo.click(x + 9, y + 9)              # the close box
+    try:
+        M.until(m, lambda mm: win not in dispcp.win_list(mm, S),
+                "LOOM's window for %s to close" % stem, limit=20.0)
+    except Exception:                                           # noqa: BLE001
+        check(False, "%s: the window closes again" % stem,
+              "each project is one instance and they cannot all be open at "
+              "once - a 640KB machine has room for about four (WEAVE-SPEC "
+              "1.4). A window that will not close is also the close guard "
+              "refusing, which for an UNMODIFIED project it must not do "
+              "(SPEC.md 75.1)")
+        return 0
     M.settle(m)
     return 1
 
@@ -241,7 +249,6 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default=MACHINE)
     ap.add_argument("--no-make", action="store_true")
-    ap.add_argument("--png")
     args = ap.parse_args()
 
     if not args.no_make:
@@ -266,18 +273,23 @@ def main():
                  "flattened projects (WEAVE-SPEC 11.2's stem rule)"):
         done("weavepack")
         return
-    if args.png:
-        os.makedirs(args.png, exist_ok=True)
 
-    with M.launch(machine=args.machine, apps=IMG) as m:
+    boot = os.path.join(BUILD, "os8088-360.img")
+    boot = os.path.join(BUILD, "os8088-360.img")
+    with M.launch(boot, apps=IMG, machine=args.machine) as m:
         M.settle(m)
-        S = os88sym.resolver()
+        S = os88sym.linear
         mo = Mouse(marty=m)
-        dx, dy = dispcp.open_drive(m, mo, S, M.settle, letter="B")
+        desk = set(dispcp.win_list(m, S))
+        dispcp.open_drive(m, mo, S, M.settle, "B")
+        M.until(m, lambda mm: set(dispcp.win_list(mm, S)) - desk,
+                "drive B's Disk window to open", limit=20.0)
+        disk = sorted(set(dispcp.win_list(m, S)) - desk)[-1]
+        wx, wy = dispcp.win_rect(m, S, disk)[:2]
         for stem, _ in projects:
-            pack_one(m, mo, S, dx, dy, stem, png=args.png)
+            pack_one(m, mo, S, wx, wy, stem)
         for stem, _ in errs:
-            pack_one(m, mo, S, dx, dy, stem, png=args.png)
+            pack_one(m, mo, S, wx, wy, stem)
         m.flush(1, IMG)
 
     vol = os88flush.Volume(open(IMG, "rb").read(), IMG)
