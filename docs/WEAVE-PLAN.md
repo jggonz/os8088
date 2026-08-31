@@ -491,7 +491,7 @@ the ~52KB target, 55,000 bytes the overlay-split trigger, the OVL
 candidates pre-named (WEAVE-SPEC §1.2) so the split is a move, not a
 scramble.
 
-**As of wave 4 it is 60,868 resident against SPEC.md §20.1's 61,440 ceiling
+**As of wave 4 it is 60,862 resident against SPEC.md §20.1's 61,440 ceiling
 and the pre-named list is spent for the second time.** Wave 3 spent tenants
 1–5 and wave 4 added and spent 6 and 7, which is the mechanism working as
 designed; what is left in WEAVE-SPEC §1.2.1 is two tenants that do not exist
@@ -499,7 +499,7 @@ yet (8 and 9) and one that is listed with its own disqualification (10, the
 flow walk, which a card switch reaches mid-run and W_PAINT reaches on a path
 that may not refuse). Wave 4 also spent the easy structural savings — the
 per-component rect table, the layout record's `row` field, the dirty set's
-byte-per-component — so **wave 5 opens with 572 bytes and no shortcut**, and
+byte-per-component — so **wave 5 opens with 578 bytes and no shortcut**, and
 its canvas work has to name a tenant of its own before it writes one. That is
 not a surprise this plan can absorb quietly, and it is written here rather
 than discovered in the size line's error message.

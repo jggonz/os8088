@@ -2994,7 +2994,7 @@ per-component SCREEN rect table went (2,000 bytes of bss to avoid four
 multiplies, rebuilt on every edge anyway), the layout record lost its `row`
 field and is ten bytes rather than twelve (a row is a contiguous run of the
 table), and the dirty-component set became one bit a comp_id. `weave.o88` is
-50,366 image + 10,502 bss = **60,868 resident**, `WEAVE.OVL` 19,475 — 572
+50,360 image + 10,502 bss = **60,862 resident**, `WEAVE.OVL` 19,475 — 578
 bytes under the ceiling, which is the number wave 5 has to plan around.
 
 The rest, each gated before the next begins:
