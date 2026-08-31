@@ -62,12 +62,19 @@ left in build/, and a stale disk runs an earlier build's package while every
 assertion below reports on this one. `full` is the tier that is allowed to
 build (tools/os88test.py), and `make` is what knows whether anything is stale.
 
-WHY THE WHOLE DISK IS ONE FOLDER. WEAVE.OVL and the .WAB bundles ride the root
-beside WEAVE.O88: a double-click on a bundle leaves the launched instance's
-current directory on the DOCUMENT's (SPEC.md 54.9), and the overlay is
-resolved in that directory (SPEC.md 73.14) - so a bundle in a folder of its
-own opens a program whose every overlay path then refuses, politely and
-inexplicably.
+WHY THE RUNTIME AND ITS BUNDLES ARE ALL IN THE ROOT. WEAVE.OVL, WEAVE.WSM and
+the .WAB bundles ride the root beside WEAVE.O88: a double-click on a bundle
+leaves the launched instance's current directory on the DOCUMENT's (SPEC.md
+54.9), and the overlay is resolved in that directory (SPEC.md 73.14) - so a
+bundle in a folder of its own opens a program whose every overlay path then
+refuses, politely and inexplicably.
+
+Wave 7's disk is no longer ONLY the root - it also carries LOOM's three files,
+a PROJECTS/ folder a project (WEAVE-SPEC 11.2) and SYSTEM/APPDATA - and none
+of that touches the sentence above, because the runtime and the bundles this
+row double-clicks are still root to root. What it does mean is that the
+listing this row scrolls is longer than it was, which open_named handles and
+which is worth knowing when a navigation retry is being read.
 
 BOTH 1bpp ADAPTERS out of one body, because they are the target class and they
 differ in kind rather than in depth - 640x200 against 720x348, two different

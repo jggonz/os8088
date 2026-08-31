@@ -349,11 +349,12 @@ SOAK = [
         "SHEET has a <grid> and PONG a <canvas> and 1.7.1's rule is that a "
         "Preview draws those as their frame - which the model was taught in "
         "one flag rather than the test being taught to ignore two "
-        "components. Both 1bpp adapters. 260s is 218s MEASURED over three "
-        "consecutive runs (215, 218, 221) with a margin for the one thing "
-        "that flakes in this family, a double-click whose two presses "
-        "straddle the kernel's 9-tick window; the retry is weavesmoke's and "
-        "is not loosened here",
+        "components. Both 1bpp adapters - six sessions, 180 checks. 260s is "
+        "239s MEASURED over three consecutive runs (238.7 inside the tier, "
+        "238.5 and 238.6 standalone) with a margin for the one thing that "
+        "flakes in this family, a double-click whose two presses straddle "
+        "the kernel's 9-tick window; the retry is weavesmoke's and is not "
+        "loosened here",
         needs=("marty", "cc"), serial=True, timeout=600),
     Row("weaveone", "soak", py("tests/weaveone.py"), 90.0,
         "WEAVE-SPEC 1.4's 256KB machine, ASSERTED: the family's floor board "
@@ -373,7 +374,8 @@ SOAK = [
         "with it would break. MartyPC on a GLaBIOS 256KB machine, because a "
         "machine wanting IBM's ROM cannot boot in this tree; `make "
         "xt-weave-256` is the same question on 86Box and is manual evidence "
-        "only (docs/TESTING.md). 90s is 61s measured over three runs",
+        "only (docs/TESTING.md). 90s is 46s measured over three consecutive "
+        "runs (46.1 inside the tier, 46.0 and 45.9 standalone)",
         needs=("marty", "cc"), serial=True, timeout=300),
     Row("weavegame", "soak", py("tests/weavegame.py"), 50.0,
         "WEAVE-SPEC 6.10, 12.3, 14: PONG.WAB under MartyPC, and it asks "
