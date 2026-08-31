@@ -65859,6 +65859,18 @@ Notes that are part of the contract, not commentary:
   the test: pops, then `or ax, ax`, then `stc`/`clc`, then `ret`. `pop` does
   not touch FLAGS, so the reverse order would also work — pinning one order
   removes the question.
+
+  **`CC_HAS_ONCLOSE` is the one that has it**, and it is the newest
+  trampoline here: §75.1's close negotiator had no C path at all until
+  `apps/loom` needed one (WEAVE-SPEC §13.1's wave-6 row asks for the guard),
+  so every C package that ever wanted to ask *"save the changes?"* had no way
+  to be asked. `int os88_onclose(void *win)` answers non-zero to let the close
+  happen and **zero to refuse it**, `os88_wm_onclose(win)` installs it from
+  `os88_main()` beside `os88_wm_onwake()`, and `os88_wm_close(win)` — which
+  already existed — is how a package that refused finishes the job once the
+  user has answered. `wm_ask_close` branches on the carry with nothing between
+  the call and the branch that writes FLAGS, so the shape above is not a
+  convention here but the whole mechanism.
 - **No thunk may `retf`** (§20.8 rule 5), and none has any reason to: the
   dispatcher owns the only one in the package.
 - **The worker entry is the exception.** It never returns (§20.6 rule 2), so

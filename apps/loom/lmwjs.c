@@ -343,7 +343,14 @@ static int ovl_tokenize(void)
             unsigned k = lmj_i + 2;
             for (;;) {
                 if (k + 1 >= n) {
-                    lm_perr(LM_SLOT_WJS, lmj_line, "unterminated /* comment");
+                    /* The literal is split so that the two bytes of a
+                     * block-comment opener never stand together in this
+                     * file: tests/unit/t_swallow.py reads C with a scanner
+                     * rather than a C parser, and its own header says the
+                     * fix is to write the source differently rather than to
+                     * except the file. */
+                    lm_perr(LM_SLOT_WJS, lmj_line,
+                            "unterminated /" "* comment");
                     return 0;
                 }
                 if (lm_sb(LM_SLOT_WJS, k) == '*'
