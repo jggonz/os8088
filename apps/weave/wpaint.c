@@ -17,19 +17,29 @@
  * code-sharing mechanism on this platform (SPEC.md 20.5.1).
  *
  * ---------------------------------------------------------------------------
- * ONE TABLE, TWO READERS
+ * ONE FUNCTION, TWO READERS
  * ---------------------------------------------------------------------------
- * w_rect[] is apps/calc/calc.asm's cal_layout, in C: the flow walk's CELL
- * rectangles converted once to ABSOLUTE SCREEN pixels, read by the painter and
- * by the hit test alike, so the drawn control and the clickable control cannot
- * drift (SPEC.md 22's fm_hit discipline). It is rebuilt on every edge rather
- * than cached, because the window MOVES: the walk's answer is in cells and
- * survives a move, and the pixels do not.
+ * w_rectof() is apps/calc/calc.asm's cal_layout, in C: the flow walk's CELL
+ * rectangle of ONE component converted to ABSOLUTE SCREEN pixels, called by
+ * the painter and by the hit test alike, so the drawn control and the
+ * clickable control cannot drift (SPEC.md 22's fm_hit discipline).
  *
- * It holds a rect for every laid-out component whether or not that component
- * is on screen, and os88ui_bfind is given a COUNT - so a component the window
- * is too short to show is simply not reachable, and there is no second rule
- * about which rects are valid.
+ * WAVE 2 KEPT AN ARRAY OF THEM AND WAVE 4 DOES NOT, and it is a size decision
+ * with the arithmetic attached: 250 components x 4 words is 2,000 bytes of
+ * bss (SPEC.md 20.1's package region is 61,440 for image AND bss together),
+ * against four multiplies and an add to derive one rect from w_lay[] and the
+ * content origin. The walk's answer is in CELLS and survives a window move;
+ * the pixels do not, so the array was rebuilt on every edge anyway - it was a
+ * cache of something already cheap. w_recti holds the one rect currently
+ * derived, and w_layout() invalidates it because that is where the origin
+ * moves.
+ *
+ * The hit test is therefore a C loop rather than os88ui_bfind through
+ * wd_hit(): it walks the same w_lay[] the painter does, in the same order,
+ * and the walk never produces overlaps (WEAVE-SPEC 7.2), so first-match is
+ * the same answer bfind gave. A component the window is too short to show is
+ * still reachable, exactly as before - the count is w_nlay and there is no
+ * second rule about which rects are valid.
  *
  * ---------------------------------------------------------------------------
  * WHAT WAVE 2 DOES AND DOES NOT DO
@@ -65,7 +75,9 @@
 #define W_SB_CELLS  2
 #define W_SB_MINH   24
 
-static int w_rect[W_MAXLAY * 4];        /* {x1,y1,x2,y2}, inclusive, SCREEN */
+static int w_rect[4];                   /* {x1,y1,x2,y2}, inclusive, SCREEN -
+                                         * ONE component's, derived on demand */
+static int w_recti = -1;                /* ...and whose it is */
 static int w_ybot;                      /* the last pixel row of the content */
 
 static char w_str[W_STRMAX];            /* one resolved string at a time */
@@ -158,24 +170,39 @@ static int w_lfind(int id, int idx)
  * THE RECT TABLE
  * ==========================================================================*/
 
-static void w_rects(void)
+static void w_rectof(int i)
 {
-    int i, j, x, y;
+    int x, y;
+
+    if (i == w_recti || i < 0 || i >= w_nlay)
+        return;
+    w_recti = i;
+    x = w_ox + (w_lay[i].cx << 3);      /* cell -> pixel, and the origin's x
+                                         * was rounded UP to a multiple of 8
+                                         * at LAYOUT time (7.1.2), so every
+                                         * column is 8-aligned and every
+                                         * font_run takes the single-store
+                                         * fast path */
+    y = w_oy + (w_lay[i].cy << 3);
+    w_rect[0] = x;
+    w_rect[1] = y;
+    w_rect[2] = x + (w_lay[i].cw << 3) - 1;
+    w_rect[3] = y + (w_lay[i].ch << 3) - 1;
+}
+
+/* w_hit - which component is under (x, y)?  Its index PLUS ONE, 0 = none -
+ * os88ui_bfind's own convention, kept so that every caller reads the same. */
+static int w_hit(int x, int y)
+{
+    int i;
 
     for (i = 0; i < w_nlay; i++) {
-        j = i << 2;
-        x = w_ox + (w_lay[i].cx << 3);      /* cell -> pixel, and the origin's
-                                             * x was rounded UP to a multiple
-                                             * of 8 at LAYOUT time (7.1.2), so
-                                             * every column is 8-aligned and
-                                             * every font_run takes the
-                                             * single-store fast path */
-        y = w_oy + (w_lay[i].cy << 3);
-        w_rect[j] = x;
-        w_rect[j + 1] = y;
-        w_rect[j + 2] = x + (w_lay[i].cw << 3) - 1;
-        w_rect[j + 3] = y + (w_lay[i].ch << 3) - 1;
+        w_rectof(i);
+        if (x >= w_rect[0] && x <= w_rect[2]
+                && y >= w_rect[1] && y <= w_rect[3])
+            return i + 1;
     }
+    return 0;
 }
 
 /* w_layout - geometry, walk, rect table.  0 = the window shows nothing.
@@ -191,11 +218,12 @@ static int w_layout(void *win)
     if (!w_grid(win))
         return 0;
     w_ybot = w_oy + (w_ch << 3) - 1;
-    if (w_state == W_ST_RUN) {
-        if (w_lay_cw != w_cw || w_lay_ch != w_ch || w_lay_card != (int)w_entry)
-            w_flow();
-        w_rects();
-    }
+    w_recti = -1;                       /* the origin may have moved: whatever
+                                         * rect is in hand is yesterday's */
+    if (w_state == W_ST_RUN
+            && (w_lay_cw != w_cw || w_lay_ch != w_ch
+                || w_lay_card != (int)w_entry))
+        w_flow();
     return 1;
 }
 
@@ -297,11 +325,12 @@ static void w_lgeom(int i)
 {
     int j, rows;
 
-    j = i << 2;
-    w_lg_x1 = w_rect[j];
-    w_lg_y1 = w_rect[j + 1];
-    w_lg_x2 = w_rect[j + 2];
-    w_lg_y2 = w_rect[j + 3];
+    w_rectof(i);
+    j = 0;
+    w_lg_x1 = w_rect[0];
+    w_lg_y1 = w_rect[1];
+    w_lg_x2 = w_rect[2];
+    w_lg_y2 = w_rect[3];
     w_lg_id = w_lay[i].id;
     w_lg_cells = w_lay[i].cw;
     if (w_lg_y2 > w_ybot)
@@ -471,16 +500,17 @@ static void w_paint_comp(int i)
         return;                         /* 7.2: a hidden component still took
                                          * part in the walk and still occupies
                                          * its rect - hiding does not reflow */
-    j = i << 2;
-    y1 = w_rect[j + 1];
+    w_rectof(i);
+    j = 0;
+    y1 = w_rect[1];
     if (y1 > w_ybot)
         return;                         /* 7.4: wholly below the content box.
                                          * The clip would drop it anyway; not
                                          * asking for it saves the ~756 us a
                                          * refused primitive call still costs */
-    x1 = w_rect[j];
-    x2 = w_rect[j + 2];
-    y2 = w_rect[j + 3];
+    x1 = w_rect[0];
+    x2 = w_rect[2];
+    y2 = w_rect[3];
     props = w_lay[i].props;
     cells = w_lay[i].cw;
     dis = (w_lay[i].cflags & CF_DISABLED) ? 1 : 0;
@@ -561,7 +591,7 @@ static void w_paint_comp(int i)
 
     case WC_BUTTON:
         w_cstr(w_lay[i].id, props, WA_LABEL);
-        wd_button(w_rect + j, w_str, dis, w_bdown == w_lay[i].id, w_padnow);
+        wd_button(w_rect, w_str, dis, w_bdown == w_lay[i].id, w_padnow);
                                         /* down = 0: wave 3 owns the pressed
                                          * state, and it is DRAWN from a
                                          * variable this painter reads, never
@@ -599,12 +629,18 @@ static void w_paint_comp(int i)
         break;
 
     case WC_GRID:
+        w_gpaint(i);                    /* 6.9.1: the formula bar, the header
+                                         * band and one blit per data row.
+                                         * There is NO FRAME - the inverted
+                                         * header is the grid's whole chrome,
+                                         * and it costs no call of its own */
+        break;
+
     case WC_CANVAS:
         if (y2 > w_ybot)
             y2 = w_ybot;
-        wd_box(x1, y1, x2, y2);         /* WAVE 4 / WAVE 5's SEAM: the band
-                                         * composer (6.9) and the sprite
-                                         * compositor (6.10) fill this frame.
+        wd_box(x1, y1, x2, y2);         /* WAVE 5's SEAM: the sprite
+                                         * compositor (6.10) fills this frame.
                                          * Drawing the frame now is what puts
                                          * the walk's arithmetic on the glass
                                          * where it can be looked at */
@@ -665,14 +701,15 @@ static void w_wipe_one(int i)
 {
     int j, y2;
 
-    j = i << 2;
-    if (w_rect[j + 1] > w_ybot)
+    w_rectof(i);
+    j = 0;
+    if (w_rect[1] > w_ybot)
         return;
-    y2 = w_rect[j + 3];
+    y2 = w_rect[3];
     if (y2 > w_ybot)
         y2 = w_ybot;
     os88_set_color(OS88_WHITE);
-    os88_gfx_fill(w_rect[j], w_rect[j + 1], w_rect[j + 2], y2);
+    os88_gfx_fill(w_rect[0], w_rect[1], w_rect[2], y2);
 }
 
 /* w_repaint_one - one component, now, under its own lock hold and clip.

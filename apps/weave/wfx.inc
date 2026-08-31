@@ -237,6 +237,69 @@ wfx_read:
     ret
 
 ; -----------------------------------------------------------------------------
+; THE THREE 32-BIT FAVOURS THE C SIDE ASKS FOR
+;
+; They are here rather than in wgrid.c because this toolchain has no long
+; (SPEC.md 73.7) and every one of them is a 16x16 product that does not fit
+; sixteen bits. Each is four instructions; putting them in the core that
+; already owns 16.16 keeps the C free of the pretence that it can do this.
+; -----------------------------------------------------------------------------
+
+; int wfx_mag(int lo, int hi, int *out2) - |value| into out2; 1 when negative.
+_wfx_mag:
+    push bp
+    mov bp, sp
+    push bx
+    mov ax, [bp+4]
+    mov dx, [bp+6]
+    mov bx, [bp+8]
+    or dx, dx
+    jns .pos
+    neg dx
+    neg ax
+    sbb dx, 0
+    mov [bx], ax
+    mov [bx+2], dx
+    mov ax, 1
+    pop bx
+    pop bp
+    ret
+.pos:
+    mov [bx], ax
+    mov [bx+2], dx
+    xor ax, ax
+    pop bx
+    pop bp
+    ret
+
+; unsigned wfx_cents(unsigned lo) - (lo * 100) >> 16, TRUNCATED.
+; WEAVE-SPEC 5.2.1's two decimal places, and the truncation is that section's:
+; rounding here would make 0.999 display as 1 while `=A1=1` stayed false.
+_wfx_cents:
+    push bp
+    mov bp, sp
+    mov ax, [bp+4]
+    mov dx, 100
+    mul dx
+    mov ax, dx                      ; >> 16
+    pop bp
+    ret
+
+; unsigned wfx_frac(unsigned num, unsigned den) - (num*65536 + den/2) / den,
+; which is WEAVE-SPEC 5.1's decimal-to-16.16 conversion, rounded half up. The
+; quotient fits a word because num < den always (5.1 bounds the fraction at
+; four digits, so den <= 10000 and num <= 9999).
+_wfx_frac:
+    push bp
+    mov bp, sp
+    mov dx, [bp+4]                  ; num * 65536
+    mov ax, [bp+6]
+    shr ax, 1                       ; + den/2
+    div word [bp+6]
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
 ; int wfx_eval(unsigned seg, unsigned off, unsigned len, int *out3)
 ;
 ; Run one RPN stream (WEAVE-SPEC 5.3).  Answers the number of ops dispatched -

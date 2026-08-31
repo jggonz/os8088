@@ -83,27 +83,43 @@ naming them in advance is that the split is a move rather than a scramble.
 | 4 | **the load path** — the size probe, the capability tests, the directory search, the claim and the read, the component birth state, the field pool's assignment, the menu build, the VM bind and §2.6.2's module-init call | once per open, and once per `^R` (§1.7), which is a COMMAND keystroke and not an editing one | wave 3 |
 | 5 | **`saveState` / `loadState`** (§8.3) | a builtin, so MID-RUN — the one stated exception, below | wave 3 |
 | 6 | **the grid's load path** — the grid claim, the CELLS section read into the cell store, the formula cells' pool slots and the first recalculation's arming (§5.6) | once per open, beside tenant 4 and for tenant 4's reason | wave 4 |
-| 7 | state import/export dialogs | a menu command | — |
-| 8 | formula-function help | a menu command | — |
-| 9 | the flow walk's NATURAL SIZES (§7.3) | once per open and per resize — **not** movable while `app.go()` can reflow from a handler (§6.12) | — |
+| 7 | **the formula bar's COMMIT** — §6.9.3's classification, §6.9.2's compiler and the cell write | once per Enter in the bar; a human's gesture, never a script's | wave 4 |
+| 8 | state import/export dialogs | a menu command | — |
+| 9 | formula-function help | a menu command | — |
+| 10 | the flow walk's NATURAL SIZES (§7.3) | once per open and per resize — **not** movable while `app.go()` can reflow from a handler (§6.12) | — |
 
-Entries 7 and 8 do not exist yet. **Entry 9 is listed with its own
+Entries 8 and 9 do not exist yet. **Entry 10 is listed with its own
 disqualification**, because it is the obvious next thing to reach for and it
 is wrong: a card switch runs the walk from inside a handler, so the walk is
 mid-run by §6.12's own design and moving it would put a refusable call on the
 path a running script takes.
 
-**Entry 6 was added in wave 4 and the list it joined was spent** — 3, 4 and 5
+**Entries 6 and 7 were added in wave 4 and the list they joined was spent** — 3, 4 and 5
 had all moved, 7 and 8 did not exist and 9 is disqualified above — so it is
 worth saying what qualified it rather than letting a wave extend the list by
 reaching. It runs exactly once per bundle, at open, on the UI task, from
 inside tenant 4's own body; it draws nothing and no handler can reach it; and
 its refusal already has a meaning, because a grid claim that cannot be had is
 §10.1's sentence and that path exists whether the overlay loads or not.
-Everything ELSE the grid does — the band composer, the FX VM, the resident
-formula compiler, the sliced recalculation — is on a keystroke's path and
-stays resident, which is why wave 4 spends the size line rather than saving
-it.
+Everything ELSE the grid does — the band composer, the FX VM, the display
+conversion, the selection, the sliced recalculation — is on a keystroke's or
+a handler's path and stays resident, which is why wave 4 spends the size line
+rather than saving it.
+
+**Entry 7 was the compiler, and §6.9.2 said it was resident until the size
+line said otherwise.** That draft's argument was that "your formula did not
+compile because a module would not load" is not an answer a spreadsheet may
+give — and it is a worse answer than "it compiled", but it is the SAME answer
+tenant 5 already gives about `saveState`, on the same terms: the refusal
+already exists (§6.9.2 has a `Formula:` line for a formula that will not
+compile, and a module that will not load is one more reason it did not),
+the path is UI-task-only by construction (a script cannot reach the compiler
+— §8.5 gives WJS no way to write a formula, only a value), and it runs once
+per Enter rather than once per keystroke. What decided it was arithmetic
+rather than taste: the compiler and the commit are ~6,000 bytes, wave 4's
+resident code without them is already at the ceiling, and the alternative
+was a wave that does not fit on the machine. The paragraph §1.2 asks a
+tenant to be able to write is this one.
 
 **Entry 5 is the one exception to "nothing an event handler needs mid-run",
 and it is stated rather than stretched.** `saveState()` and `loadState()` are
@@ -1449,7 +1465,8 @@ sum       = term { ( "+" | "-" ) term } ;
 term      = factor { ( "*" | "/" ) factor } ;
 factor    = [ "-" ] atom ;
 atom      = number | cellref | funcall | "(" expr ")" ;
-number    = digits [ "." digits ]  (16.16 range: |value| < 32768) ;
+number    = digits [ "." digits ]  (16.16 range: |value| < 32768;
+                                    at most FOUR fraction digits) ;
 cellref   = letter digits          (column A..Z, row 1..256) ;
 range     = cellref ":" cellref    (legal only as an aggregate argument) ;
 funcall   = name "(" arg { "," arg } ")" ;
@@ -1459,6 +1476,15 @@ arg       = expr | range ;
 A non-formula cell entry is a number (stored as 16.16) or a text label
 (stored as a string). Cell references are absolute — there is no `$`
 notation and no relative copy-adjust in v1.
+
+**The fraction is bounded at four digits** and a fifth refuses at pack. It is
+not an arbitrary cap: 16.16's own resolution is 1/65536 ≈ 0.0000153, so the
+fifth decimal place is *below* what the format can store and could not change
+the value — all it could do is make two parsers disagree about which way to
+round it. Four digits is also what lets the conversion be one 16-bit divide on
+the target (`(digits × 65536 + d/2) / d` with `d ≤ 10000`), which is what the
+resident compiler (§6.9.2) needs to be able to do the same arithmetic as the
+host packer rather than an approximation of it.
 
 ### 5.2 The number model
 
@@ -1586,13 +1612,25 @@ implementation would keep on a stack a slice does not own.
 | `pass` | 0 idle, 1 pass 1 running, 2 pass 2 running |
 | `cursor` | the next cell index in row-major order, 0..rows×cols |
 | `changed` | display strings that have changed so far, for `oncalc` |
-| the **pass-1 value** | per formula cell, in its own pool slot (§5.6) |
+| the **pre-walk value** | per formula cell, in its own pool slot (§5.6) |
 
-The pass-1 value is per CELL and not a list, because §5.5's step 2 compares
-each formula's pass-2 value with its own pass-1 value and the two passes are
-separated by an unbounded number of slices — a vector allocated for the
-duration would be a second allocation on a heap the app has already been
-refused against (§10.1), and a local would not survive the return.
+That is ONE extra value per formula cell and not two, and the arithmetic is
+worth writing down because the obvious reading of §5.5 asks for three. §5.5
+needs the value a formula had *before the walk* (to count what changed, and to
+mark its row) and the value it had *after pass 1* (to decide CIRC) — but the
+pass-1 value needs no storage at all: pass 1 leaves it in the cell's own
+cached slot, and pass 2 reads it there on its way past, one instruction before
+overwriting it. So pass 1 saves the pre-walk value into the slot's second
+dword and writes its own answer into the cached one; pass 2 reads the cached
+one as its pass-1 comparand, writes its answer over it, and compares its
+DISPLAY against the pre-walk value's.
+
+It is per CELL and not a list because the two passes are separated by an
+unbounded number of slices: a vector allocated for the duration would be a
+second allocation on a heap the app has already been refused against (§10.1),
+and a local would not survive the return. `CELLF_ERRWAS` and `CELLF_CIRCWAS`
+carry the two bits of the pre-walk DISPLAY that its dword cannot — a value of
+zero and `#DIV0` are the same four bytes.
 
 **A trigger arriving mid-walk restarts at pass 1, cursor 0.** That is what
 §5.5's "multiple triggers collapse to one" means once the passes can be
@@ -1636,7 +1674,9 @@ Cell record: kind byte, flags byte, payload word.
 | 0 | `CELLF_CIRC` | §5.5's circular marker; the cell displays `#CIRC` |
 | 1 | `CELLF_DIRTY` | the row-dirty mirror (§5.5.1) |
 | 2 | `CELLF_ERR` | **the cached value IS the error value** (§5.2); the cell displays `#DIV0` |
-| 3–7 | — | 0 |
+| 3 | `CELLF_ERRWAS` | the PRE-WALK value was the error value (§5.5.1) |
+| 4 | `CELLF_CIRCWAS` | ...and the cell was marked CIRC before the walk began |
+| 5–7 | — | 0 |
 
 Bit 2 is named here because it cannot be inferred: FX's error is not a
 number, every one of the 2³² bit patterns of a 16.16 slot is a legal value,
@@ -1651,9 +1691,9 @@ computed it.
 | 1 | inline int | signed 16-bit value (a whole number in int range) |
 | 2 | pool number | pool offset of a 4-byte 16.16 value |
 | 3 | atom label | atom id |
-| 4 | bundle formula | pool offset of a **10-byte** slot: FXCODE index word, the 4-byte cached value, the 4-byte pass-1 value (§5.5.1) |
+| 4 | bundle formula | pool offset of a **10-byte** slot: FXCODE index word, the 4-byte cached value, the 4-byte pre-walk value (§5.5.1) |
 | 5 | pool string | pool offset: length byte + bytes (a runtime `setCell` string, copied in) |
-| 6 | **runtime formula** | pool offset of a slot: RPN length word, the 4-byte cached value, the 4-byte pass-1 value, then `len` bytes of §5.3 RPN — the resident compiler's output (§6.9.2) |
+| 6 | **runtime formula** | pool offset of a slot: RPN length word, the 4-byte cached value, the 4-byte pre-walk value, then `len` bytes of §5.3 RPN — the resident compiler's output (§6.9.2) |
 
 Kinds 4 and 6 are one cell kind wearing two addresses. The RPN a bundle
 carried is in the BUNDLE claim, which is pinned and read-only (§2.1); the RPN
@@ -1663,7 +1703,7 @@ had to write it into a read-only section. The FX VM therefore takes a
 (segment, offset) pair for the stream rather than an index, and the only
 difference between the two kinds is which segment it is handed.
 
-Both slots carry the **pass-1 value** §5.5.1 requires, which is why kind 4's
+Both slots carry the **pre-walk value** §5.5.1 requires, which is why kind 4's
 slot is 10 bytes and not 6. A runtime formula's slot is `10 + len` bytes and
 is bump-allocated like every other pool object: **re-typing a formula into
 the same cell allocates a new slot and leaks the old one**, which is stated
@@ -1919,10 +1959,19 @@ recursive descent emitting §5.3's RPN, with §5.3's depth cap and §5.4's
 function set, and its output for a given source is the same bytes
 `weavesim --pack` would have written for it.
 
-It is **resident** because a commit is a keystroke-path action: an overlay
-call may refuse (SPEC.md §73.14) and "your formula did not compile because a
-module would not load" is not an answer a spreadsheet may give. Its cost
-against the size line is recorded per wave like everything else (§13.1).
+It lives in the **overlay** (§1.2.1's tenant 7) with the rest of the commit,
+and the draft of this section that said "resident" is corrected rather than
+quietly diverged from: the reason it gave — that "your formula did not
+compile because a module would not load" is not an answer a spreadsheet may
+give — is true and is not decisive, because tenant 5 already gives exactly
+that answer about `saveState` and for the same three reasons. §1.2.1 carries
+the full paragraph and the arithmetic that forced it.
+
+What that costs, stated: with `WEAVE.OVL` missing or stale **no bundle opens
+at all** (§1.2 already), so the case where a grid is on screen and its bar
+cannot compile is the case where the module went away between the open and
+the Enter — a disk pulled mid-session. It answers with the sentence naming
+the overlay, the bar keeps the text, and nothing is committed.
 
 Its refusals are §10.5's, reduced to one line: the runtime has no file and no
 line number to name, so the toast reads `Formula: <message>` with §10.5's own

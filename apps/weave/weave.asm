@@ -145,6 +145,12 @@
                                     ; apps/weave/hosttest/weavevm.asm - what
                                     ; that gate runs is this text and not a
                                     ; copy of it (WEAVE-SPEC 12.3)
+%include "weave/wfx.inc"            ; the FX formula VM (WEAVE-SPEC 5), the
+                                    ; second core the same boot sector runs
+                                    ; unchanged (12.1.2)
+%include "weave/wband.inc"          ; ...and the grid's band composer (6.9.1),
+                                    ; apps/runcpm/rcband.inc's shape and
+                                    ; PERFORMANCE.md Set 68's constants
 
 ; --- THE DRIFT GUARDS, and they are %if and not a comment --------------------
 ; weave.h carries a C copy of two of wvm.inc's own numbers, because a C file
@@ -157,6 +163,12 @@
 %endif
 %if OS88LINE_SZ != 20
   %error "os88line.inc's block moved; wact.c's LNW_* must follow"
+%endif
+%if WG_STRIDE < 90
+  %error "wband.inc's WG_STRIDE must cover the widest content grid (7.1.1)"
+%endif
+%if WFX_HDR != 16 || WFX_CELL != 4
+  %error "wfx.inc's cell record moved; wgrid.c's WG_CHDR/WG_CELL must follow"
 %endif
 
     CC_IMAGE_END                    ; cc_bss_end, cc_modc_end and cc_image_end

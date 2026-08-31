@@ -134,8 +134,15 @@ struct w_lay {
     unsigned char ctype;
     unsigned char style;
     unsigned char cflags;
-    unsigned char row;                  /* which layout row it landed in */
-};
+};                                      /* TEN BYTES, and the tenth is not
+                                         * spare: SmallerC pads this to an even
+                                         * size, so an eleventh field would
+                                         * cost 250 x 2 bytes of bss against
+                                         * SPEC.md 20.1's 61,440 for image AND
+                                         * bss together. The `row` field wave 2
+                                         * carried is gone for exactly that
+                                         * reason - wflow.c says what replaced
+                                         * it */
 static struct w_lay w_lay[W_MAXLAY];
 static int w_nlay, w_nrow;
 static int w_lay_cw, w_lay_ch, w_lay_card;   /* what the table was built for */
@@ -149,8 +156,16 @@ static char     w_amsg[WD_AMAX + 2];    /* the alert's line - os88ui.inc holds
                                          * outlive the call */
 static int      w_alertfn = -1;         /* 8.2's callback, -1 = none */
 static int      w_alertkind;            /* 0 = alert(), 1 = 4.11's runaway */
-static int      w_gsel_r = 1;           /* 6.9's selection - 1,1 until wave 4 */
-static int      w_gsel_c = 1;           /*   owns a cell store to move it over */
+/* THE GRID'S FOUR CROSS-FILE WORDS (WEAVE-SPEC 6.9), and they are here rather
+ * than in wgrid.c for one reason: a C package is ONE compilation (SPEC.md
+ * 73.1), a static cannot be forward-declared where it is also defined, and
+ * these four are read by files INCLUDED BEFORE wgrid.c - wact.c owns the
+ * field pool the formula bar comes out of, so it has to come first. Every
+ * other word the grid owns lives in wgrid.c where it belongs. */
+static int      w_gsel_r = 1;           /* 6.9's selection, 1-based */
+static int      w_gsel_c = 1;
+static int      w_gid;                  /* the grid's comp_id, 0 = no grid */
+static int      w_gactive;              /* 6.9.4: was the grid last clicked? */
 static struct os88_place w_savhere2;    /* 19.9's walk, one step at a time */
 
 /* ============================================================================
@@ -193,6 +208,27 @@ static void w_release(int x, int y);
 static void w_wake(void);
 static void w_ontimer_body(void *win);
 static void w_alertdone(int button);
+static void w_gload(void);
+static void w_gpaint(int i);
+static int  w_gclick(int i, int x, int y);
+static int  w_gkey(int ascii, int scan);
+static void ovl_gcommit(void);
+static int  w_gcommitran;               /* 1.2 again: did tenant 7's body
+                                         * actually run? */
+static void w_gselect(int r1, int c1, int fire);
+static int  w_gstep(int budget);
+static int  w_gbusy(void);
+static void w_gflush(void);
+static void w_gfree(void);
+static void w_gclear(void);
+static void w_gtrigger(void);
+static int  w_gcellint(int r, int c);
+static int  w_gsetnum(int r, int c, int lo, int hi);
+static int  w_gsetstr(int r, int c, const char *s);
+static void w_growdirty(int r);
+static void ovl_gridload(void);
+static int  w_glderr;                   /* 0 fine, 1 no room, 2 the overlay
+                                         * itself did not load (1.2) */
 
 /* ============================================================================
  * SMALL HELPERS
@@ -315,6 +351,8 @@ static void w_menusync(void)
 #include "wflow.c"                       /* the flow walk */
 #include "wpaint.c"                      /* ...and what it hands the cores */
 #include "wact.c"                        /* the press, the release, the field */
+#include "wfxc.c"                        /* 9.4's one carve-out: FX text */
+#include "wgrid.c"                       /* the cell store and the bands */
 #include "wevent.c"                      /* the ring, the slices, the errors */
 #include "wnative.c"                     /* the component and builtin surface */
 #include "wstate.c"                      /* 8.3's .SAV, the only file surface */
@@ -511,7 +549,7 @@ void os88_onclick(int x, int y, void *win)
         return;
     if (!w_layout(win))
         return;
-    i = wd_hit(w_rect, w_nlay, x, y);
+    i = w_hit(x, y);
     if (i == 0)
         return;
     i--;

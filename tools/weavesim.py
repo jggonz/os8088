@@ -1005,6 +1005,13 @@ def parse_number_16_16(tok, fname, line):
     if ip > 32767:
         raise PackError(fname, line, "%s: |value| < 32768 (WEAVE-SPEC 5.1)"
                         % tok)
+    if len(fp) > 4:
+        # WEAVE-SPEC 5.1: the fifth decimal place is below 16.16's own
+        # resolution of 1/65536, so it cannot change the value - all it could
+        # do is make two parsers disagree about the rounding.
+        raise PackError(fname, line,
+                        "%s: at most 4 fraction digits; 16.16 resolves to "
+                        "1/65536 (WEAVE-SPEC 5.1)" % tok)
     frac = 0
     if fp:
         d = 10 ** len(fp)

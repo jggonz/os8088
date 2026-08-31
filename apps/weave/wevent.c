@@ -78,7 +78,8 @@ static const char *w_errtext[WE_NERR] = {
     "type mismatch.", "divide by zero.", "out of string space.",
     "too deep.", "array index ", "bad opcode.", "bad builtin.",
     "no component ", "no property.", "no method.", "no method.",
-    "list index ", "grid cell ", "card ", "rand of "
+    "list index ", "grid cell ", "card ", "rand of ",
+    "cell is #DIV0.", "cell ", "grid pool full."
 };
 
 /* w_scripterr - 10.6: the handler is already stopped (the core cleared the
@@ -113,6 +114,11 @@ static void w_scripterr(void)
         w_ls(",");
         w_ln((unsigned)wvm_errb());
         w_ls(".");
+    } else if (c == WE_GRANGE) {
+        /* 10.6.1's `cell %s is out of int range.` - the %s renders the value
+         * the way str() does, which for a 16.16 is 5.2.1's own display. */
+        w_ls(w_gdisp);
+        w_ls(" is out of int range.");
     }
     os88_strcpy(w_serr, w_line, sizeof(w_serr));
 
@@ -136,15 +142,23 @@ static void w_scripterr(void)
  * THE DIRTY SET AND ITS FLUSH
  * ==========================================================================*/
 
-static unsigned char w_dirty[256];
+/* ONE BIT A COMPONENT, not one byte: 256 comp_ids is 32 bytes here and 256
+ * there, and SPEC.md 20.1's package region is 61,440 for image AND bss
+ * together (wgrid.c's own w_gdirty is the same shape for the same reason). */
+static unsigned char w_dirty[32];
 static int           w_ndirty;
 static int           w_cardpend;        /* app.go() asked for a full repaint */
 
+static int w_isdirty(int id)
+{
+    return (w_dirty[id >> 3] & (1 << (id & 7))) != 0;
+}
+
 static void w_touch(int id)
 {
-    if (id < 0 || id > 255 || w_dirty[id])
+    if (id < 0 || id > 255 || w_isdirty(id))
         return;
-    w_dirty[id] = 1;
+    w_dirty[id >> 3] |= (unsigned char)(1 << (id & 7));
     w_ndirty++;
 }
 
@@ -171,14 +185,18 @@ static void w_flush(void)
         os88_gfx_unlock();
         return;
     }
-    if (w_ndirty == 0)
+    if (w_ndirty == 0 && !w_gredraw)
         return;
     os88_gfx_lock();
     if (w_layout(w_win)) {
+        if (w_gredraw)
+            w_gflush();                 /* 5.5.1's damage: the grid ROWS the
+                                         * recalculation changed, one blit
+                                         * each and nothing else on the card */
         clipped = os88_wm_clip_set(w_win) == 0;
         w_padnow = WD_PAD;
         for (i = 0; i < w_nlay; i++) {
-            if (!w_dirty[w_lay[i].id])
+            if (!w_isdirty(w_lay[i].id))
                 continue;
             if (w_cflag[w_lay[i].id] & CF_HIDDEN)
                 w_wipe_one(i);          /* hiding does not reflow (7.2), so
@@ -405,11 +423,20 @@ static void w_wake(void)
                 break;                  /* still going: re-post and yield */
             continue;                   /* finished: take the next record */
         }
+        if (w_gbusy()) {
+            /* 5.5's recalculation, sliced: FX ops count against 4.10's
+             * budget one for one, and the walk runs BETWEEN handlers rather
+             * than inside one - a handler that called setCell() has already
+             * finished by the time its recalculation starts, which is what
+             * makes `oncalc` a later event and not a nested call. */
+            w_gstep(w_budget);
+            break;
+        }
         if (!w_dispatch())
             break;
     }
     w_flush();
-    if (wvm_busy() || wvm_rcount() > 0)
+    if (wvm_busy() || w_gbusy() || wvm_rcount() > 0)
         w_kick();                       /* 4.10: re-post ONLY while there is
                                          * something to do - an idle app costs
                                          * zero CPU */

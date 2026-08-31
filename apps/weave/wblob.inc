@@ -60,6 +60,71 @@ _w_b:
     ret
 
 ; -----------------------------------------------------------------------------
+; void w_pb(unsigned seg, unsigned off, unsigned v) - one byte INTO a claim
+; void w_pw(unsigned seg, unsigned off, unsigned v) - ...and one word
+;
+; The bundle claim is read-only at run time (WEAVE-SPEC 2.1) and these are not
+; for it: the GRID claim (5.6) is written every commit, every setCell and
+; every recalculation, and it is a claim for the same reason the bundle is -
+; a 26KB cell store can never live in the package's own segment.
+; -----------------------------------------------------------------------------
+_w_pb:
+    push bp
+    mov bp, sp
+    push es
+    mov es, [bp+4]
+    mov bx, [bp+6]
+    mov ax, [bp+8]
+    mov [es:bx], al
+    pop es
+    pop bp
+    ret
+
+_w_pw:
+    push bp
+    mov bp, sp
+    push es
+    mov es, [bp+4]
+    mov bx, [bp+6]
+    mov ax, [bp+8]
+    mov [es:bx], ax
+    pop es
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; void w_pcopy(char *src, unsigned seg, unsigned off, unsigned n)
+;
+; ...and a run of OUR bytes into a claim: a label the user typed, or the RPN
+; 6.9.2 just compiled. The mirror of w_copy, which brings bytes the other way.
+; -----------------------------------------------------------------------------
+_w_pcopy:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push es
+    mov si, [bp+4]
+    mov es, [bp+6]                  ; cc8086:allow ES = the claim for one copy
+    mov di, [bp+8]                  ; out of our own segment; restored below
+    mov cx, [bp+10]
+    jcxz .out
+    cld
+.l:
+    mov al, [si]
+    mov [es:di], al
+    inc si
+    inc di
+    dec cx
+    jnz .l
+.out:
+    pop es
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
 ; unsigned w_w(unsigned seg, unsigned off) - the little-endian word at off.
 ;
 ; The claim is <= 62KB and every internal offset is a 16-bit word within one

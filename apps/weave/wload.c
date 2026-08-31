@@ -61,6 +61,10 @@ static void w_free(void)
      * everything once the claim is 0 - and it costs nothing to do it in the
      * order that cannot be wrong. */
     wvm_unbind();
+    w_gfree();                          /* ...and the grid claim, for the same
+                                         * reason and in the same order: the
+                                         * FX VM is unbound before the memory
+                                         * it was pointed at goes back */
     if (w_vmseg) {
         os88_mem_free(w_vmseg);
         w_vmseg = 0;
@@ -335,6 +339,23 @@ static int ovl_open(void *win, const char *name, unsigned size_lo,
     w_istate();
     ovl_comp_init();                      /* every component's birth state, and
                                          * a field block for every <input> */
+    /* 5.6's cell store, in a claim of its own, built by overlay tenant 6.
+     *
+     * A REFUSED OVERLAY RETURNS 0 (apps/cc/crt0.asm), so "it ran" and "what
+     * it decided" have to be two different answers - WEAVE-SPEC 1.2's rule,
+     * and wave 3's lesson said again. w_glderr is set to 2 BEFORE the call
+     * and the body overwrites it, so a 2 coming back means the body never
+     * ran at all and the sentence names the module rather than the memory. */
+    w_glderr = 2;
+    ovl_gridload();
+    if (w_glderr == 1) {
+        w_short(w_claimkb + w_vmkb + w_gridkb, os88_mem_largest_kb());
+        return 1;
+    }
+    if (w_glderr == 2) {
+        w_fail("WEAVE.OVL is missing or stale; no bundle can open.");
+        return 1;
+    }
     w_lay_cw = -1;                      /* force the walk on the next paint */
     if (w_grid(win))
         w_flow();

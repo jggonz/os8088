@@ -723,34 +723,15 @@ _wd_sbhit:
     pop bp
     ret
 
-; -----------------------------------------------------------------------------
-; int wd_hit(int *rects, int n, int x, int y)   - THE HIT TEST CORE
-;
-; Which of `n` four-word rects holds the point, INDEX PLUS ONE, 0 for none.
-; It reads the same table wd_button was handed a row of, which is the whole
-; point of there being one table (SPEC.md 22).
-;
-; Plus one so that 0 means "nothing", which is the sentinel os88ui_arm and
-; os88ui_fire already use - so wave 3's whole press-and-release cycle is
-; `wd_hit -> arm` then `fire`, `wd_hit`, compare, with no separate flag.
-; -----------------------------------------------------------------------------
-_wd_hit:
-    push bp
-    mov bp, sp
-    push bx
-    push cx
-    push dx
-    mov bx, [bp+4]
-    mov ax, [bp+6]
-    mov cx, [bp+8]
-    mov dx, [bp+10]
-    call os88ui_bfind
-    pop dx
-    pop cx
-    pop bx
-    pop bp
-    ret
-
+; wd_hit - GONE IN WAVE 4, and named here so the absence is a decision rather
+; than a hole. It wrapped os88ui_bfind over a table of every laid-out
+; component's rect, and wave 4 removed the TABLE - 2,000 bytes of bss against
+; four multiplies to derive one rect (wpaint.c's head has the arithmetic). A
+; hit test over rects that no longer exist has nothing to read, so the loop
+; moved into wpaint.c's w_hit(), which walks w_lay[] in the painter's own
+; order; the walk produces no overlaps (WEAVE-SPEC 7.2), so first-match is the
+; answer bfind gave. `index + 1, 0 = none` is still the convention, because
+; os88ui_arm and os88ui_fire use that sentinel.
 ; =============================================================================
 ; THE INPUT FIELD (WEAVE-SPEC 6.7)
 ; =============================================================================

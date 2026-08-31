@@ -141,6 +141,8 @@
 #define WA_ONCHANGE  49
 #define WA_ONKEY     50
 #define WA_ONSELECT  51
+#define WA_ONEDIT    52
+#define WA_ONCALC    53
 #define WA_ONCOMMAND 58
 #define WA_ONTIMER   59
 #define WA_ONALERT   60
@@ -184,6 +186,9 @@ unsigned w_b(unsigned seg, unsigned off);      /* one byte, UNSIGNED - `char`
                                                 * and 0x80 would read as -128 */
 unsigned w_w(unsigned seg, unsigned off);      /* the little-endian word */
 void     w_copy(unsigned seg, unsigned off, char *dst, unsigned n);
+void     w_pb(unsigned seg, unsigned off, unsigned v);     /* INTO a claim */
+void     w_pw(unsigned seg, unsigned off, unsigned v);
+void     w_pcopy(char *src, unsigned seg, unsigned off, unsigned n);
 int      w_print(unsigned seg, unsigned off, unsigned n);  /* all 0x20..0x7E? */
 int      w_zero(unsigned seg, unsigned off, unsigned n);   /* all 0x00? */
 
@@ -233,7 +238,30 @@ void wd_glyph(int x, int y, int radio, int on, int dis);
 void wd_sbar(int *blk);                /* os88ui.inc's 7-word scroll block */
 void wd_sbmove(int *blk, int oldpos);
 int  wd_sbhit(int *blk, int x, int y); /* WD_SB_* */
-int  wd_hit(int *rects, int n, int x, int y);   /* index + 1, 0 = none */
+
+/* ============================================================================
+ * THE FX FORMULA VM (WEAVE-SPEC 5), apps/weave/wfx.inc
+ *
+ * A SECOND CORE, and the two share only WEAVE-SPEC 4.10's slice: WJS is
+ * 16-bit signed over the VM claim and FX is 32-bit 16.16 over the GRID claim.
+ * Every value below is a PAIR of ints, low word then high, because this
+ * toolchain has no long at all (SPEC.md 73.7) - which is the whole reason the
+ * arithmetic is not here.
+ * ==========================================================================*/
+
+void wfx_bind(unsigned gseg, unsigned cols, unsigned rows);
+int  wfx_cell(int r, int c, int *out2);      /* 0 empty/label, 1 num, 2 err */
+int  wfx_eval(unsigned seg, unsigned off, unsigned len, int *out3);
+int  wfx_mag(int lo, int hi, int *out2);     /* |v|; 1 when it was negative */
+unsigned wfx_cents(unsigned lo);             /* 5.2.1's two truncated cents */
+unsigned wfx_frac(unsigned num, unsigned den);   /* 5.1's decimal -> 16.16 */
+
+/* --- apps/weave/wband.inc: the grid's band composer (WEAVE-SPEC 6.9.1) ----
+ * WG_STRIDE is that file's own constant and weave.asm carries a %if that
+ * fails the build if it stops covering the widest content grid. */
+#define WG_STRIDE 90
+
+void wg_band(unsigned char *dst, const char *chars, int n, int inv0, int inv1);
 
 /* ============================================================================
  * THE WJS VM (WEAVE-SPEC 4), apps/weave/wvm.inc
@@ -278,7 +306,10 @@ int  wd_hit(int *rects, int n, int x, int y);   /* index + 1, 0 = none */
 #define WE_GCELL  12            /* grid cell %d,%d of %dx%d. */
 #define WE_CARD   13            /* card %s of %d. */
 #define WE_RAND   14            /* rand of %s. */
-#define WE_NERR   15
+#define WE_GDIV0  15            /* cell is #DIV0. */
+#define WE_GRANGE 16            /* cell %s is out of int range. */
+#define WE_GPOOL  17            /* grid pool full. */
+#define WE_NERR   18
 
 /* The native block (wvm.inc's WN_*), in WORDS - the C side indexes an int
  * array and the assembly side a byte offset, so every name here is the

@@ -400,7 +400,6 @@ static void w_flow(void)
             first = 1;
         }
 
-        w_lay[id].row = row;
         w_lay[id].cx = x;
         w_lay[id].cw = w;
         w_lay[id].ch = h;
@@ -413,38 +412,42 @@ static void w_flow(void)
     /* --- pass 2: row heights, the alignment shift, and the stacking ------
      * A row of n components carries n-1 gutters, NOT n: the gutter left after
      * the last component is the space before a component that went to the next
-     * row, and is not part of this one. */
+     * row, and is not part of this one.
+     *
+     * A ROW IS A CONTIGUOUS RUN OF w_lay[], and that is what lets pass 2 be
+     * one linear walk with no `row` field to carry. The components were
+     * appended in UISTREAM order and x only ever grows within a row, so a row
+     * begins exactly where cx is 0 again - and two components cannot both
+     * have cx = 0 in one row, because 7.3's floor makes every width at least
+     * one cell. Wave 2 stored the row index in the layout record and scanned
+     * the whole table once per row; this is the same answer in one pass and
+     * 250 bytes of bss less (weave.c's struct says why that matters). */
     ytop = 0;
-    for (row = 0; row < w_nrow; row++) {
+    k = 0;
+    while (k < w_nlay) {
+        first = k;                      /* the row runs [first, k) below */
         sum = 0;
         cnt = 0;
         maxh = 0;
-        align = 0;
-        for (k = 0; k < w_nlay; k++) {
-            if (w_lay[k].row != row)
-                continue;
-            if (cnt == 0)
-                align = (w_lay[k].style & WS_ALIGN) >> WS_ALIGNSH;
+        align = (w_lay[k].style & WS_ALIGN) >> WS_ALIGNSH;
+        while (k < w_nlay && (k == first || w_lay[k].cx != 0)) {
             if (w_lay[k].ch == 0)       /* the deferred <grid> height */
                 w_lay[k].ch = (w_ch > ytop + 6) ? (w_ch - ytop) : 6;
             sum += w_lay[k].cw;
             cnt++;
             if (w_lay[k].ch > maxh)
                 maxh = w_lay[k].ch;
+            k++;
         }
-        if (cnt == 0)
-            continue;
         slack = w_cw - (sum + (cnt - 1));
         if (align == 1)
             slack = slack / 2;
-        else if (align == 0)
+        else if (align != 2)
             slack = 0;
-        for (k = 0; k < w_nlay; k++) {
-            if (w_lay[k].row != row)
-                continue;
-            w_lay[k].cx += slack;       /* ALIGN of the row's FIRST component
+        for (row = first; row < k; row++) {
+            w_lay[row].cx += slack;     /* ALIGN of the row's FIRST component
                                          * shifts the whole row (7.2) */
-            w_lay[k].cy = ytop;         /* components shorter than their row
+            w_lay[row].cy = ytop;       /* components shorter than their row
                                          * top-align within it */
         }
         ytop += maxh;                   /* rows abut: no blank pixel row */

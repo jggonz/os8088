@@ -243,8 +243,34 @@ static void w_press(int i, int x, int y)
         w_lclick(i, x, y);
         break;
 
+    case WC_GRID:
+        /* 6.9.4: a click in a data band moves the selection and does NOT arm
+         * the bar; a click in the bar arms it. Both are native and neither
+         * runs a bytecode op - the selection's own event goes in the ring. */
+        k = w_gclick(i, x, y);
+        if (!k) {
+            w_setfocus(-1);
+            break;
+        }
+        k = w_iblk(id);
+        if (k < 0)
+            break;
+        if (w_focus != k)
+            w_setfocus(k);
+        if (w_caron) {
+            wd_lcaroff(w_fld[k]);
+            w_caron = 0;
+        }
+        wd_lclick(w_fld[k], x, y);
+        wd_lcaron(w_fld[k]);
+        w_caron = 1;
+        break;
+
     default:
         w_setfocus(-1);
+        w_gactive = 0;                  /* 6.9.4: the arrows belong to the
+                                         * grid only while it is what was
+                                         * last clicked */
         break;
     }
 }
@@ -268,7 +294,7 @@ static void w_release(int x, int y)
     }
     if (armed == 0)
         return;
-    hit = wd_hit(w_rect, w_nlay, x, y);
+    hit = w_hit(x, y);
     if (hit != armed)
         return;                         /* released elsewhere: a CANCEL, and
                                          * it draws nothing and fires nothing */
@@ -350,9 +376,33 @@ static int w_key(void *win, int ascii, int scan)
         w_tab();
         return 1;
     }
+    /* 6.9.4's arrows move the grid's selection, but only while the grid is
+     * what was last clicked AND the formula bar is not the armed field - a
+     * left arrow inside a formula being typed is a caret move, not a cell
+     * move, and the two would otherwise fight over the same keystroke. */
+    if (w_focus < 0 || w_iof[w_focus] != (unsigned char)w_gid) {
+        if (w_gkey(ascii, scan))
+            return 1;
+    }
     if (w_focus < 0)
         return 0;
     k = w_focus;
+    if (ascii == 27 && w_gid && w_iof[k] == (unsigned char)w_gid) {
+        w_gload();                      /* 6.9.4: Escape is the cancel */
+        wd_ldraw(w_fld[k]);
+        return 1;
+    }
+    if (ascii == 13 && w_gid && w_iof[k] == (unsigned char)w_gid) {
+        /* 6.9.3, and it is NOT an onchange: a grid's bar commits a CELL.
+         * Tenant 7 lives in the overlay (1.2.1), so "it ran" is asked
+         * separately from what it decided - a refused module must say so
+         * rather than swallow the keystroke. */
+        w_gcommitran = 0;
+        ovl_gcommit();
+        if (!w_gcommitran)
+            os88_toast("WEAVE.OVL is gone; no cell can be committed.", 0);
+        return 1;
+    }
     if (ascii == 13) {                  /* Enter COMMITS (3.3, 6.7) */
         /* AND NOTHING IS COPIED ANYWHERE. An earlier version of this line
          * made a VM string out of the field and parked it in w_ctext, so

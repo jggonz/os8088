@@ -175,9 +175,9 @@ static int w_getp(int id, int atom)
 
     case WC_GRID:
         if (atom == WA_ROWS)
-            return w_nres(WT_INT, (int)w_pint(props, WA_ROWS, 1));
+            return w_nres(WT_INT, w_grows);
         if (atom == WA_COLS)
-            return w_nres(WT_INT, (int)w_pint(props, WA_COLS, 1));
+            return w_nres(WT_INT, w_gcols);
         if (atom == WA_SELROW)
             return w_nres(WT_INT, w_gsel_r);
         if (atom == WA_SELCOL)
@@ -387,16 +387,17 @@ static int w_callm(int id, int atom, int argc)
     }
 
     if (ct == WC_GRID) {
-        /* WAVE 4's SEAM, and it is deliberately not a refusal.  The cell
-         * store, the band composer and the FX VM are WEAVE-SPEC 13.1's next
-         * wave; what a grid HAS in this one is its rows and its cols, read
-         * straight out of the record, so every range check 6.9 asks for is
-         * real. An empty cell reads as int 0 in the model too, so
-         * `g.cell(r,c)` answers 0 rather than an error - which is what lets
-         * SHEET's handlers run today and lets wave 4 change the answer
-         * without changing the surface. */
-        r = (int)w_pint(props, WA_ROWS, 1);
-        c = (int)w_pint(props, WA_COLS, 1);
+        /* WEAVE-SPEC 6.9's surface, over the real cell store this time. Wave
+         * 3 answered 0 and no-op here so that SHEET's handlers would run
+         * against a grid that had no store yet; wave 4 replaces the ANSWERS
+         * and not the surface, which is what that seam was for.
+         *
+         * Row and col are 1-BASED in WJS and in FX alike (6.9), and they are
+         * range-checked against the sheet's own dimensions rather than
+         * against the record's - the two agree, and the store is what the
+         * answer will come out of. */
+        r = w_grows;
+        c = w_gcols;
         if (atom == WA_CELL || atom == WA_SETCELL || atom == WA_SELECT) {
             if (argc < 2 || w_argt(0) != WT_INT || w_argt(1) != WT_INT)
                 return w_nerr(WE_TYPE, 0, 0);
@@ -404,15 +405,49 @@ static int w_callm(int id, int atom, int argc)
                     || w_argv(1) < 1 || w_argv(1) > c)
                 return w_nerr(WE_GCELL, w_argv(0), w_argv(1));
         }
-        if (atom == WA_CELL)
-            return w_nres(WT_INT, 0);
+        if (atom == WA_CELL) {
+            n = w_gcellint(w_argv(0) - 1, w_argv(1) - 1);
+            if (w_gcellerr == 1)
+                return w_nerr(WE_GDIV0, 0, 0);
+            if (w_gcellerr == 2)
+                return w_nerr(WE_GRANGE, 0, 0);
+            return w_nres(WT_INT, n);
+        }
         if (atom == WA_SELECT) {
-            w_gsel_r = w_argv(0);
-            w_gsel_c = w_argv(1);
+            /* NO onselect FIRES. 6.9.4 says every selection move enqueues
+             * one, and this is the move a HANDLER made - firing here would
+             * put a handler's own action back in the ring behind it, which
+             * is the list's `sel =` rule (the model does not fire either). */
+            w_gselect(w_argv(0), w_argv(1), 0);
             return w_nres(WT_NULL, 0);
         }
-        if (atom == WA_SETCELL || atom == WA_RECALC || atom == WA_CLEAR)
+        if (atom == WA_SETCELL) {
+            if (argc < 3)
+                return w_nerr(WE_TYPE, 0, 0);
+            k = 0;
+            if (w_argt(2) == WT_INT || w_argt(2) == WT_BOOL)
+                k = w_gsetnum(w_argv(0) - 1, w_argv(1) - 1, 0, w_argv(2));
+            else if (w_argt(2) == WT_STR) {
+                wvm_str_read(w_argv(2), w_str, W_STRMAX);
+                k = w_gsetstr(w_argv(0) - 1, w_argv(1) - 1, w_str);
+            } else
+                return w_nerr(WE_TYPE, 0, 0);
+            if (!k)
+                return w_nerr(WE_GPOOL, 0, 0);
+            w_growdirty(w_argv(0) - 1);
+            w_gtrigger();               /* 5.5: multiple triggers before the
+                                         * passes start collapse to one */
             return w_nres(WT_NULL, 0);
+        }
+        if (atom == WA_RECALC) {
+            w_gtrigger();
+            return w_nres(WT_NULL, 0);
+        }
+        if (atom == WA_CLEAR) {
+            w_gclear();
+            w_gtrigger();
+            return w_nres(WT_NULL, 0);
+        }
         return w_nerr(WE_NOMETH, atom, 0);
     }
     return w_nerr(WE_NOMETH, atom, 0);
