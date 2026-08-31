@@ -204,7 +204,7 @@ exactly like the feature being broken.
 `286-sound`,
 `386sx`, `386`, `386-sound`, `486`, `pentium`, `xt-z`, `386-z`, `xt-word`,
 `386-word`, `386-c-word`, `xt-runcpm`, `286-runcpm`, `386-runcpm`, `xt-c64`,
-`286-c64`, `386-c64`;
+`286-c64`, `386-c64`, `xt-weave`, `386-weave`;
 plus `marty` (MartyPC). `xt-multimon` is the
 **two-card** XT — a CGA and a Hercules, a monitor window each — and the only
 86Box machine that can show §39.12–§39.19's extended desktop; it boots Single,
@@ -214,8 +214,12 @@ machines (§68.5), `386-c-word` is the C word processor's (§73.12) and
 `xt-runcpm`/`286-runcpm`/`386-runcpm` the CP/M emulator's, one per floppy
 geometry because the three disks carry different software and the machines
 run at different speeds — which for a CP/M game IS the play speed (§74.5,
-§74.6) — the eight that put a dedicated
-floppy in B: instead of the apps disk. `make zdisk` builds the story disk
+§74.6) — `xt-c64`/`286-c64`/`386-c64` the C64 emulator's (C64-SPEC §14.3,
+one per geometry for that same reason), and `xt-weave`/`386-weave` the Weave
+runtime's (WEAVE-SPEC §13.1) — the thirteen that put a dedicated
+floppy in B: instead of the apps disk. `xt-weave` takes the **360KB** Weave
+disk rather than a 3.5" one — it fits in 33 of 354 clusters — so it is where
+that geometry of it is booted at all. `make zdisk` builds the story disk
 (`tools/getstories.py` fetches the stories, which are never committed), `make
 worddisk` the Word disk, `make cworddisk` the CWORD disk — which carries
 `WELCOME.RTF`, the same welcome document the Word disk carries as a `.DOC`,

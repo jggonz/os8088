@@ -2151,6 +2151,17 @@ of which the load-bearing one was §7.1.1's Hercules grid, wrong at 89×36
 because it had been inherited from the browser's viewport rather than
 derived.
 
+**`vm/xt-weave` and `vm/386-weave` came forward out of wave 7** — a 640KB
+IBM XT at 4.77MHz with `build/weave360.img` in B: and a 386DX/25 with
+`build/weave.img` — because a runtime whose whole subject is what fits and
+what refuses on a period machine (§1.4) needs that machine available from
+the wave it becomes bootable, not from the wave that packages it. Nothing
+else in wave 7 moved with them: the `xt` target's 256KB one-app refusal is
+still that wave's row, because it needs WEAVE on a disk the `xt` machine
+sees, which is the ALLAPPSFILES work. Both machines are manual evidence —
+`make xt-weave` launches 86Box and cannot assert that anything booted, so
+no gate in this family rests on either.
+
 The rest, each gated before the next begins:
 
 | wave | ships | the gate |
@@ -2160,7 +2171,7 @@ The rest, each gated before the next begins:
 | 4 | `<grid>`: cell store, `wband.inc` benched against Set 68's numbers (`make weavebandbench`), per-row damage, formula bar, `wfx.inc` + resident formula compiler, sliced recalc | `weavegrid` (recalc vs model + tpdraw identity), `weavegfx` |
 | 5 | `<canvas>`/`<sprite>`: `wspr.inc` mask composition, dirty-band emit, worker loop, AABB, KEY_DOWN input, worker tones, ontick budget enforcement | `weavegame` (wirefps/wireflick); **commission the field run** — 5150 fps and the XT ops/s reading that converts §4.12 to measurement |
 | 6 | Loom: `lm_` editor transplant, project folder + file switcher, LOOM.OVL compilers + packer, Pack, Preview, templates, APPDATA prefs, W_ONCLOSE/ASAVE close guard | `weavepack` byte-identity on all templates and demos, in the OS |
-| 7 | distribution: `make weavedisk` in three geometries with cluster-fit refusal + `--verify`, writable `PROJECTS/` folder, CATALOG.TXT, `BUNDLES=` knob; `vm/xt-weave` + `vm/386-weave`; ALLAPPSFILES rows (one `WEAVE/` folder — package + overlay + bundles share it, SPEC.md §19.10); the 256KB one-app refusal exercised on the `xt` target | the release checklist |
+| 7 | distribution: `make weavedisk` in three geometries with cluster-fit refusal + `--verify`, writable `PROJECTS/` folder, CATALOG.TXT, `BUNDLES=` knob; ALLAPPSFILES rows (one `WEAVE/` folder — package + overlay + bundles share it, SPEC.md §19.10); the 256KB one-app refusal exercised on the `xt` target | the release checklist |
 
 Wave order within a wave follows the size line: `os88pkg.py`'s resident
 count is printed and recorded every wave, 55,000 is the overlay-split

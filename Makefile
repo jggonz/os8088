@@ -134,6 +134,24 @@ VM286C64 := $(CURDIR)/vm/286-c64
 VMXTC64 := $(CURDIR)/vm/xt-c64
 VM286C64 := $(CURDIR)/vm/286-c64
 
+# The WEAVE machines (WEAVE-SPEC §13.1, wave 7's row landed early
+# because a runtime nobody can boot on a period machine is a runtime nobody
+# has looked at): the Word pairing again - an XT with the Weave disk in B:, a
+# 386 with the 1.44MB one - and no sound card on either: WEAVE-SPEC §8.4's
+# floor voice is `tone` on the SPEAKER, which every machine here has, and
+# `playSound` has no clip carriage in v1, so a card would test nothing yet.
+#
+# THE XT IS 640KB AND THAT IS THE POINT OF PICKING IT. WEAVE-SPEC §1.4's
+# ladder: a 256KB XT holds EXACTLY ONE Weave app and the second launch
+# refuses before any I/O, a 640KB machine holds four or five. This machine is
+# for running the family; the 256KB refusal is the `xt` target's row in
+# WEAVE-SPEC §13.1 wave 7, and it needs WEAVE on a disk that machine sees,
+# which is that wave's ALLAPPSFILES work and not this. `mem_size = 256` in
+# vm/xt-weave/86box.cfg is the one line that swaps the question if you want
+# to look at the refusal by hand before then.
+VMXTWEAVE := $(CURDIR)/vm/xt-weave
+VM386WEAVE := $(CURDIR)/vm/386-weave
+
 # VIDEO=cga|herc|vga forces the adapter instead of probing for it (SPEC.md
 # 39.1). The shipped images are always built without it, so they auto-detect;
 # this exists because QEMU emulates no CGA and no Hercules card, and forcing
@@ -1231,7 +1249,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         xt-runcpm 286-runcpm \
         allapps usb iso live burn rcbandbench \
         c64 c64disk c64rom c64bandbench c64cputest c64memtest 386-c64 xt-c64 286-c64 \
-        weave weavedisk \
+        weave weavedisk xt-weave 386-weave \
         checkdocs test-fast test-full test-soak clean clean-cc clean-marty distclean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
@@ -3684,6 +3702,51 @@ $(BUILD)/weave720.img: $(WEAVEDISK) tools/os88disk.py
 $(BUILD)/weave360.img: $(WEAVEDISK) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(WEAVEDISK)
 	@python3 tools/os88disk.py --verify $@
+
+# The two WEAVE machines (WEAVE-SPEC §13.1), with the Weave disk in B: instead
+# of the apps disk - Frotz's precedent and Word's, for their reason: an app
+# whose documents live on its own disk is best launched from that disk, and a
+# .WAB IS the document here (WEAVE-SPEC §1.5 launches the runtime by
+# double-clicking one).
+#
+#   xt-weave   An IBM XT at 4.77MHz with the FULL 640KB, booting the 360KB
+#              system floppy with build/weave360.img in B: - TWO 5.25" drives,
+#              no fdd_02_type override, which is where this differs from
+#              xt-word: the Word disk did not fit 360KB and this one uses 33
+#              of 354 clusters. So this is the only target that boots
+#              build/weave360.img - QEMU is driven with the 720KB and 1.44MB
+#              images (CLAUDE.md's three geometries) - and the 360KB FAT is
+#              the one a real XT reads.
+#
+#              640KB rather than 256KB is deliberate and is argued at
+#              $(VMXTWEAVE)'s definition above.
+#
+#   386-weave  The comfortable target the same code also has to be right on:
+#              a 386DX/25 with TWO 1.44MB drives, B: = build/weave.img.
+#              AT-class, so the first launch stops at the BIOS setup wanting
+#              a CMOS - pick EXIT FOR BOOT once and 86Box writes
+#              vm/386-weave/nvr/ for every later boot.
+#
+# Each config is a copy of the corresponding Word machine - one that has been
+# BOOTED - with fdd_02_fn and the uuid changed and nothing else, the rule
+# vm/386-c-word records: 86Box does not reject an unrecognised key, it
+# substitutes a default and rewrites the config on exit, so a hand-written
+# profile is a machine whose clock nobody chose.
+#
+# Both call $(UNPROTECT) for the standing reason: 86Box re-adds wp:// to its
+# floppy paths on exit, which turns every guest write into FERR_WPROT - and
+# from wave 3 that is every saveState (WEAVE-SPEC §8.3), reading as a Weave bug
+# rather than an emulator setting.
+#
+# ON DEMAND, like every C target: `all` does not build build/weave.o88, so
+# these depend on the disk and the disk needs SmallerC (tools/setup-cc.sh).
+xt-weave: $(IMG360) $(BUILD)/weave360.img
+	@$(UNPROTECT) $(VMXTWEAVE)/86box.cfg
+	$(BOX) -P $(VMXTWEAVE) -N
+
+386-weave: $(IMG) $(BUILD)/weave.img
+	@$(UNPROTECT) $(VM386WEAVE)/86box.cfg
+	$(BOX) -P $(VM386WEAVE) -N
 
 # =============================================================================
 # FROTZ and its story floppy (SPEC.md 61) - ON DEMAND: `make zdisk`
