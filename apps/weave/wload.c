@@ -242,7 +242,7 @@ static int ovl_open(void *win, const char *name, unsigned size_lo,
      *    one segment. This is a MALFORMED bundle, not a memory refusal - the
      *    file cannot be what it claims to be at any heap size. */
     if (size_hi != 0 || size_lo > W_CAP || size_lo < W_HDR_SIZE) {
-        w_bad("total size");
+        w_bad(w_f_total);
         return 1;
     }
     w_fsize = size_lo;

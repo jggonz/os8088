@@ -35,7 +35,6 @@ at one of them.
 """
 import argparse
 import os
-import subprocess
 import sys
 import time
 
@@ -95,10 +94,9 @@ def main():
     ap.add_argument("--blit", default="gfx_blitp")
     a = ap.parse_args()
 
-    if a.apps == "/tmp/paintbig.img" and not os.path.exists(a.apps):
-        subprocess.check_call(
-            [sys.executable, "tools/os88disk.py", "-o", a.apps, "--size",
-             "360", "APPS:build/paint.o88", "MEDIA:" + a.gif])
+    if a.apps == "/tmp/paintbig.img":
+        os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
+                               "MEDIA:" + a.gif)
 
     iw, ih, px = gif_pixels(a.gif)
     sym = pkg_syms("apps/paint/paint.asm")
@@ -111,6 +109,11 @@ def main():
                           boot=False) as m:
         m.run()
         os88marty.settle(m, gate=os88marty.desktop_up)
+        os88marty.no_saver(m)           # ...or the first long settle below
+                                        # meets SPEC.md 79's blanker, which
+                                        # DRAWS - so nothing ever settles and
+                                        # the row dies on the harness rather
+                                        # than on the picture
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")
         disk = dispcp.win_list(m, S)[-1]
@@ -150,10 +153,23 @@ def main():
         os88marty.settle(m)
         time.sleep(8)
         if r is None:
-            sys.exit("paintbig: the grown canvas never blitted - the resize "
-                     "refused")
-        ox, oy, cw, ch = r["ax"], r["bx"], r["cx"], r["dx"]
-        print("   grown canvas at %d,%d, %dx%d (was %dx%d)"
+            sys.exit("paintbig: the picture never blitted after the grow, so "
+                     "there is nowhere to read it back from")
+        ox, oy = r["ax"], r["bx"]
+
+        # THE CANVAS SIZE COMES FROM PAINT, NOT FROM THE BLIT. It used to be
+        # the blit's own CX/DX, on the assumption that growing the canvas
+        # repaints the whole of it - and that stopped being true: the repaint
+        # after a grow lays the white ground and then blits the PICTURE'S
+        # rect, 466x110, so CX/DX report the picture and the row concluded
+        # "the canvas did not grow" about a canvas that had just gone
+        # 472x110 -> 512x390. The blit still gives the picture's ORIGIN,
+        # which is what the compare below actually needs.
+        cw = m.read(pkgbase + sym["pt_cw"], 2)
+        ch = m.read(pkgbase + sym["pt_ch"], 2)
+        cw = cw[0] | (cw[1] << 8)
+        ch = ch[0] | (ch[1] << 8)
+        print("   picture back at %d,%d; canvas now %dx%d (picture %dx%d)"
               % (ox, oy, cw, ch, iw, ih))
         if cw <= iw and ch <= ih:
             sys.exit("paintbig: the canvas did not grow, so nothing here is "

@@ -73,8 +73,9 @@ they need no relocation, because the shed already gives their room back.
 | **SB staging pool** (20KB) | **MOVABLE** | §66.5.5. One word, because a grant is an *offset* and the staging copy is the v3 boundary |
 | **SB DMA double-buffer** | **PINNED (forever)** | `MC_DMA` |
 | **HDD** install buffer | **PINNED (rule)** | §66.5.10. An `OSAPI_FILE_READ`/`WRITE` target at all four uses, and claimed for one install and freed at the end of it — Note Pad's staging buffer again |
-| **HDD** per-partition listing (6KB) | **PINNED (forever, structurally)** | §66.5.10.1. **Donated** to the kernel by `osapi_vol_add`, so the segment is written down in three places and the callback — which dispatches to the *owner*, the driver — can reach only one. Fixing it is a kernel-side change |
-| **HDD** second image (`HDDTOOL.DRV`) | **PINNED (forever)** | base is CS (§52.11.7) |
+| **HDD** per-partition listing (6KB) | **MOVABLE** | §66.5.10.2, and it was **PINNED (forever, structurally)** until then. **Donated** to the kernel by `osapi_vol_add`, so three words name it and the callback — which dispatches to the *owner*, the driver — reaches one; the kernel now fixes its own two (`dsk_dseg_reloc`) for every move, before the owner's proc runs. `hd_lst_reloc` is the driver's half and is **one word**. Stays claimed LOW (§50.3.2.1): sent high it cost 9KB |
+| **HDD** second image (`HDDTOOL.DRV`) | **PINNED (forever)** | base is CS (§52.11.7). **Claimed top-down** since §50.3.2.1 |
+| **RAM disk** second image (`RAMPAGE.DRV`) | **PINNED (forever)** | base is CS (§62.9.9) — `[rd_pfar]` is `PKG_DISP:[rd_pseg]`. **Claimed top-down** since §50.3.2.1, where claiming it low was measured at **64.5KB** of what a claimant can have |
 | **RAM disk** store | **MOVABLE** | §66.5.10. `rd_reloc`, **one** word — nothing outside `ramdisk.asm` sees the arena, and every handle into it is an offset |
 
 ---
@@ -92,12 +93,41 @@ cannot be done"* look identical from the outside a year later.
 | a **bus master** may be looking at it | SB double-buffer, the copy buffer (`MC_DMA`) | **yes** | nothing. The 64KB page rule is a property of the address and the chip may be mid-transfer |
 | **purgeable** | window raise cache, directory read-ahead | by design | not a proc — a decision to move the caches out from under the region ceiling (§50.6.1). The shed already gives their room back |
 | a **file target**, and **transient** | Note Pad CR/LF staging, Paint GIF staging, Frotz save/transcript/picture/probe, HDD install buffer | no, but cheap for a reason | §66.5.7.1's pin/unpin pair, two far calls per file operation. **A transient cannot be a barrier for longer than it exists**, so the gain is bounded by the operation's own length |
-| it was **given away** | HDD per-partition listing, 6KB (§66.5.10.1) | structural | a **kernel** change: `mem_reloc_call` recognising a claim in a `dsk_vtab` row and fixing the row and `[dsk_dseg]` before dispatching |
-| nobody has done the **audit** | `MEM_K_FATW` FAT window, 4.5KB per volume | **no** — the one honest DECLARABLE left | two words *plus* an audit: `dsk_next_clus` reads it inside chain walks that themselves call `disk_read`, **which claims**. Claimed at mount, so it tends to sit low |
+| ~~it was **given away**~~ | ~~HDD per-partition listing, 6KB~~ | **DONE** | the kernel change was taken (§66.5.10.2) and it is not what that row predicted: `mem_reloc_call` recognises nothing, it calls `dsk_dseg_reloc` for **every** move, so the next driver to donate a claim is movable the day it declares a proc. Struck through rather than deleted for the reason the row above it is: the shape of what closing one takes is worth more than a blank |
+| ~~nobody has done the **audit**~~ | ~~`MEM_K_FATW` FAT window~~ | **DONE** | the audit was taken and the window MOVES (§66.5.6.1): `dsk_fatw_reloc`, two words — `dsk_fatwc[vol]` where the claim is recorded and `[dsk_fatseg]` where the FAT is read from — scanned by value, because a compaction can fire while a different volume is current. This row is kept struck through rather than deleted: it is the only DECLARABLE this table ever carried, and the shape of what closing one takes is worth more than a blank |
 
 **Nine packages have nothing to declare at all** (§66.5.11): Task Manager,
 Solitaire, Arkanoid, Missile, Tamegram, Minesweeper, Piano, Recorder, Hello.
 Measured, after this document claimed otherwise.
+
+## …and PLACEMENT is a second axis this table does not have
+
+Every verdict above answers *can the compactor move this block*. Since §50.3.2
+there is a second question with a different answer — *which END of the heap
+was it claimed from* — and a row here reading **PINNED (forever)** settles the
+first and says nothing about the second. `OSAPI_MEM_CLAIM_HI` is the top-down
+door; §50.3.2.1 is the two claims that should have gone through it and did
+not, both of them a driver's second image.
+
+**A verdict here is a declaration, not an observation — check `MC_RLOC` on a
+running machine.** §66.5.6.2 is why: `fm_kinit_x` said `; ...and it is MOVABLE`
+on the line that failed to make it so, because `fmv_movable` derived the owner
+from `[fm_vinst]` sixty lines before `fm_vp_set` published it and
+`mem_movable`'s fence refused a claim it did not recognise — silently, into a
+`popf`. Every Disk window on a floppy volume carried a **PINNED** 3KB cache in
+the arena's floor, and this table said MOVABLE the whole time. `tests/heaphi.py`
+and `tools/heapmap.py` both read `MC_RLOC` out of `mem_tab` for that reason.
+
+**The rule is not "pinned belongs high", and that was measured rather than
+assumed.** A pinned claim's cost is decided by **what is above it**: below
+every movable claim it costs nothing, because `mem_cp_plan` resumes its fill
+point above each barrier and the movables pack straight past; above them it
+cuts the arena in two for as long as it is held. The HDD's per-partition
+listing claim is the case that separates the two — pinned for ever, sitting
+directly under the 63KB read-ahead, and **free where it is**; sent high it
+measured 9KB worse and was put back. `tests/heaphi.py` is the gate, and it
+asserts the compaction number rather than a predicate over the map, because no
+predicate over the map tells the two apart.
 
 **The standing limit is none of the six.** It is §66.5.5's all-or-nothing
 driver park: `TF_SERVICE` cannot say *which* service task is running, so one

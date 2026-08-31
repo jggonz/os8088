@@ -16,6 +16,17 @@ and the counter off a pixel that is otherwise eight shifts (SPEC.md 42.13.1.2)
 column of a row. Unrolling a loop and leaving its exit condition behind is the
 classic way to write a routine that is right for 63 columns of 59.
 
+**IT IS CURRENTLY RED, ON PURPOSE, AND IT IS RIGHT.** Since SPEC.md 11.94.5
+put a window's SIZE on the byte grid, opening this 466-wide picture leaves
+`[pt_cw]` at 472: the snap rounds Paint's content width up and `pt_track`,
+which defines the canvas as the content area, grows the document to match.
+`pt_bmp_hdr` writes `biWidth` from `[pt_cw]`, so a Save then writes a 472-wide
+file with six columns of white on the end, and nothing warns. The width
+assertion below is what catches it - `make NOSIZESNAP=1` gives 466 and this
+row passes every check. **Do not relax it to 472**; that blesses the defect.
+docs/SAVEUNDER-LIVE-PLAN.md 28 has the measurement and the three candidate
+fixes, which are a decision rather than a patch.
+
 **IT CALLS THE ROUTINE, rather than driving something that calls it.** Paint
 is stopped at `pt_blit`'s entry, so CS and DS are already the package's, and
 five bytes written over that entry - `call pt_line_get` / `jmp` back to it -
@@ -36,7 +47,6 @@ so every row tests the fast path 58 times and the partial path once.
 """
 import argparse
 import os
-import subprocess
 import sys
 import time
 
@@ -73,7 +83,35 @@ def patch_caller(m, base, sym):
 
 
 def call_line_get(m, base, sym, spin, row, cw):
-    """pt_line_get(DI=row), through the loop patch_caller left behind."""
+    """pt_line_get(DI=row), through the loop patch_caller left behind.
+
+    **THIS RIG DOES NOT SURVIVE ITS SECOND CALL, AND THAT IS AN OPEN BUG IN
+    THE RIG rather than in pt_line_get** (SPEC.md 42.20). Nothing had noticed
+    because the row loop has not run since SPEC.md 11.94.5: the width
+    assertion above it exits first, and was correctly red from that commit
+    until 42.20 stopped the canvas growing into the snap's slack.
+
+    What happens: the first call is made from a stop at `pt_blit+0` and
+    returns good data - row 0 comes back matching the file exactly. Every call
+    after it resumes from `spin` itself, because that is where the previous
+    one stopped, and the breakpoint at `spin` is then never reported again.
+    The guest is NOT hung: it spins round the patched loop for ever, which is
+    why the CS:IP sampled at the timeout is a different one every run and
+    never inside this package - it is whatever interrupt was in hand. The
+    symptom reads as "pt_line_get(N) never came back", which points squarely
+    at the routine under test.
+
+    Ruled out: it is not the row (reordering ROWS to (54, 0, 1) fails on the
+    SECOND call, whichever row that is), not `setreg` (DI is read back as the
+    value written), and not the patch bytes (`e8 1f 45 eb fb` are still there
+    at the stall). Stepping off the address with `advance(cycles=)` before
+    re-arming does leave the guest provably elsewhere - inside pt_line_get -
+    and the breakpoint at `spin` still does not fire; nor does arming
+    pt_line_get's entry and `spin` alternately, which never resumes from an
+    armed address at all. The remaining suspect is `patch_caller`'s own
+    warning one level down: MartyPC's `pc` is the FETCH pointer, and
+    `pt_blit+3` sits inside the prefetch window of the `call` at `pt_blit+0`.
+    """
     m.setreg("di", row)
     m.bp_exec(spin)
     m.run()
@@ -96,10 +134,9 @@ def main():
     ap.add_argument("--gif", default="build/OS8088.GIF")
     a = ap.parse_args()
 
-    if a.apps == "/tmp/paintrow.img" and not os.path.exists(a.apps):
-        subprocess.check_call(
-            [sys.executable, "tools/os88disk.py", "-o", a.apps, "--size",
-             "360", "APPS:build/paint.o88", "MEDIA:" + a.gif])
+    if a.apps == "/tmp/paintrow.img":
+        os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
+                               "MEDIA:" + a.gif)
 
     iw, ih, px = gif_pixels(a.gif)
     sym = pkg_syms("apps/paint/paint.asm")

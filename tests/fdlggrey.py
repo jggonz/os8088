@@ -14,6 +14,7 @@ white-fills the pane first.
 """
 import sys, struct
 sys.path.insert(0, "tools")
+import os88geom
 import os88marty as M
 from os88mouse import Mouse
 
@@ -60,17 +61,24 @@ def wins(m):
 
 
 def mup(m):
-    return next((w for w in wins(m) if w[2] == 240 and w[3] == 100), None)
+    return next((w for w in wins(m)
+                 if w[2] == SNAP(240) and w[3] == 100), None)
+
+
+SNAP = os88geom.snapw               # SPEC.md 11.94.5: a frame comes up
+                                    # rounded UP until its content is whole
+                                    # bytes, so every width below is the
+                                    # TEMPLATE's put through the kernel's own
+                                    # arithmetic rather than retyped
 
 
 def dlg(m):
-    return next((w for w in wins(m) if w[2] == 300), None)
+    return next((w for w in wins(m) if w[2] == SNAP(300)), None)
 
 
 def disk_win(m):
-    return next((w for w in wins(m)
-                 if (w[2], w[3]) not in ((240, 100), (300, 170), (300, 155))),
-                None)
+    skip = tuple((SNAP(w), h) for w, h in ((240, 100), (300, 170), (300, 155)))
+    return next((w for w in wins(m) if (w[2], w[3]) not in skip), None)
 
 
 def btn(m):

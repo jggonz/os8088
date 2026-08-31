@@ -191,6 +191,9 @@ entry:
     push ax                     ; the target goes on the stack and comes back
     retf                        ; off it as CS:IP
 .nomem:
+%ifdef BOOT_DIAG
+    xor dx, dx                  ; nothing to print after this one either (.tail)
+%endif
     mov si, msg_mem             ; DS is 0 and we are still where the BIOS put
     jmp .halt                   ; us, so every label here resolves
 .moved:
@@ -202,7 +205,39 @@ entry:
     sti
     cld
 
-    mov [boot_drive], dl        ; BIOS told us where we came from; believe it
+    ; --- WHICH DRIVE DID WE COME FROM? (SPEC.md 2.9.11) ---------------------
+    ; The BIOS is supposed to say, in DL, and A HANDFUL OF THEM DO NOT. The
+    ; Packard Bell 286 - 86Box `pb286`, BIOS dated 09/17/86 - jumps to
+    ; 0000:7C00 with DL holding 0x61: not a drive, just whatever was in the
+    ; register. Every int 13h below then names a unit that is not there, all
+    ; three attempts answer status 01, and the machine prints `Disk error`.
+    ; It has done that since the first commit of this repository, through four
+    ; rewrites of this sector, because none of them touched the one line that
+    ; believed DL (docs/FIELD-NOTES.md 36).
+    ;
+    ; THIS SECTOR IS THE FLOPPY VOLUME BOOT RECORD AND NOTHING ELSE - the hard
+    ; disk has boot/boothd.asm behind boot/mbr.asm (SPEC.md 2.9.9), and the
+    ; live USB stick and CD use that pair too (SPEC.md 80). So a unit above 3
+    ; is not a drive this sector can have come from, whatever the register
+    ; says, and 0 is the only defensible guess left.
+    ;
+    ; IT DOES NOT TRY DL AND FALL BACK ON FAILURE, which is what
+    ; tests/bootdiag/bdboot.asm does and is right for a diagnostic: a fallback
+    ; fires on a genuinely bad disk in drive B and loads a kernel off whatever
+    ; happens to be in drive A, which is a worse outcome than the error. A
+    ; range check cannot pick up the wrong disk. If a ROM ever turns up
+    ; leaving a PLAUSIBLE wrong unit in DL, bootdiag prints what it was handed
+    ; and that is the report to act on then.
+%ifdef DL_JUNK
+    mov dl, DL_JUNK             ; DLJUNK=<n>: pretend the ROM never set it. No
+%endif                          ; emulator in this tree has such a ROM, and
+                                ; MartyPC cannot run a 286 at all, so this is
+                                ; the only way the fix above is testable here
+    cmp dl, 3
+    jbe .dlok
+    xor dl, dl
+.dlok:
+    mov [boot_drive], dl
 
     ; --- TAKE OVER THE DISKETTE PARAMETER TABLE (SPEC.md 18.92, 2.9.8) -------
     ; **BEFORE THE FIRST MULTI-SECTOR READ, AND THIS SECTOR NOW MAKES ONE.**
@@ -397,38 +432,17 @@ entry:
     ; that sector's own sum and tools can name it; a region something else
     ; overwrote leaves an unrelated figure. Four digits decide between them.
     ;
-    ; DX because int 10h wants BX for the attribute, and BX is the sum.
+    ; DX because int 10h wants BX for the attribute, and BX is the sum. The
+    ; DIGITS are printed by .tail below, which every halt path already passes
+    ; through - so this is the ordinary message-and-stop with one word of
+    ; argument, and the sector holds ONE teletype loop rather than two. The
+    ; read-failure path's `xor dx, dx` above has said "see .tail" since
+    ; SPEC.md 2.9.7 was written; the label is finally there, and finding the
+    ; six bytes SPEC.md 2.9.11's range check needed is what wrote it.
     mov dx, bx
-    mov si, msg_blob
-    mov bx, 0x0007
-.bmsg:
-    lodsb
-    test al, al
-    jz .bhex
-    mov ah, 0x0E
-    int 0x10
-    jmp short .bmsg
-.bhex:
-    mov cx, 4
-.bdig:
-    push cx
-    mov cl, 4
-    rol dx, cl                  ; the top nibble down into DL...
-    pop cx
-    mov al, dl
-    and al, 0x0F
-    add al, 0x90                ; ...and the classic six bytes: 0..15 -> '0'..'F'
-    daa
-    adc al, 0x40
-    daa
-    mov ah, 0x0E
-    int 0x10
-    loop .bdig
-    jmp .stop
-%else
+%endif
     mov si, msg_blob
     jmp .halt
-%endif
 .blobok:
 %endif
 %endif
@@ -462,10 +476,34 @@ entry:
 .pnext:                         ; nothing is saved or restored.
     lodsb
     test al, al
-    jz .stop
+    jz .tail
     mov ah, 0x0E
     int 0x10
     jmp short .pnext
+.tail:
+%ifdef BOOT_DIAG
+    ; ...and DX after it as four hex digits, or nothing at all when DX is 0.
+    ; Only SPEC.md 2.9.7's checksum has a number to give; the other two ways
+    ; in zero DX to say so, which is what makes this a tail on the shared
+    ; printer rather than a second printer of its own.
+    or dx, dx
+    jz .stop
+    mov cx, 4
+.bdig:
+    push cx
+    mov cl, 4
+    rol dx, cl                  ; the top nibble down into DL...
+    pop cx
+    mov al, dl
+    and al, 0x0F
+    add al, 0x90                ; ...and the classic six bytes: 0..15 -> '0'..'F'
+    daa
+    adc al, 0x40
+    daa
+    mov ah, 0x0E
+    int 0x10
+    loop .bdig
+%endif
 .stop:
     cli
     hlt

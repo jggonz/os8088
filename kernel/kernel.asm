@@ -260,12 +260,26 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
   %endif
 %endif
 
+KERN_RESIDENT_KB equ 128        ; RULE 3: kern_big fully RESIDES in this once
+                                ; it is at the desktop - every non-purgeable
+                                ; byte, no drivers, no XMS, on VGA. See
+                                ; MIN_RAM_KB for the three rules and which
+                                ; guard each is.
 %ifdef KERN_BIG
-KERN_BUDGET equ 122368          ; kern_big's FOOTPRINT guard, and the SHIPPED
-                                ; one: big is the default build. Free to move
-                                ; on its own terms - it has a machine with RAM
-                                ; behind it - where KERN_SMALL_BUDGET below is
-                                ; the one that has to be defended.
+KERN_BUDGET equ KERN_RESIDENT_KB*1024 - KERNEL_SEG*16
+                                ; = 129,536. DERIVED and no longer a policy
+                                ; figure: the kernel's span starts at
+                                ; KERNEL_SEG and rule 3 says where it ends, so
+                                ; there is nothing left to choose. The ledger
+                                ; in docs/KERNEL-MEMORY.md stops at move 35
+                                ; for that reason - a 36th would be a change
+                                ; to the RULE, not to a number.
+                                ;
+                                ; The static half only. What an assembler
+                                ; cannot see is a claim made during boot and
+                                ; never given back, and tests/kernresident.py
+                                ; is that half: it walks mem_tab at a bare
+                                ; desktop and adds up what is PINNED.
                                 ;
                                 ; THE THIRTY-FIFTH MOVE, 121,344 ->
                                 ; 122,368, TWO STEPS, ASKED FOR AND
@@ -1841,20 +1855,34 @@ KERN_CODE_MAX equ 65536         ; the kernel's own SEGMENT: .text + .bss are
 ; of it rather than of the smallest one we support.
 BOOT_SECT   equ 512             ; the sector itself, sitting at the very top
 BOOT_STACK  equ 2048            ; ...and its stack, growing down from there
-MIN_RAM_KB  equ 128             ; the smallest machine os8088 claims to run.
-                                ; A POLICY figure exactly like KERN_BUDGET,
-                                ; and the same kind of decision: it is not
-                                ; the smallest machine that CAN boot (that is
-                                ; roughly the kernel's own size plus this
-                                ; sector, and it lands you a desktop with a
-                                ; heap too small to open anything), it is the
-                                ; one the shipped system is claimed to work
-                                ; on. Guard 5 turns it into the footprint
-                                ; ceiling: 126,976 bytes, against KERN_BUDGET
-                                ; 86,528. When the kernel approaches THAT the
-                                ; answer is not another raise - it is two
-                                ; kernels, a big one and a minimum one, off
-                                ; the same tree (docs/KERNEL-MEMORY.md)
+; MIN_RAM_KB - THE MACHINE THIS CONFIGURATION BOOTS ON, and it is not the
+; same machine for both kernels any more (docs/KERNEL-MEMORY.md). The rule set
+; is three sentences and each names a different quantity:
+;
+;   1. kern_small BOOTS on 128KB.
+;   2. kern_big BOOTS on 196KB.
+;   3. kern_big fully RESIDES in 128KB once it is at the desktop - every
+;      non-purgeable byte it has claimed by then, with no drivers loaded and
+;      no XMS, on VGA.
+;
+; 1 and 2 are guard 5 below, which asks whether stage 1 can put its sector and
+; its stack at the top of that machine and still read the kernel AND its
+; stage-2 blob in underneath. 3 is guard 1's KERN_BUDGET, derived from 128KB
+; rather than chosen, plus tests/kernresident.py for the part an assembler
+; cannot see - a claim made at boot and never given back.
+;
+; **THE TWO WERE ONE NUMBER AND THAT IS WHAT WENT WRONG.** Boot-time reach and
+; resident footprint are different questions, and with one constant answering
+; both, the BOOT ceiling silently became the binding one: measured at the
+; commit this changed, the shipped kernel had 1,670 bytes before guard 5 and
+; 3,584 before KERN_BUDGET, so the budget everything steers by could not be
+; reached and a recovery of ~5KB showed up as slack under a guard that was not
+; the ceiling. kernsize now prints both.
+%ifdef KERN_BIG
+MIN_RAM_KB  equ 196
+%else
+MIN_RAM_KB  equ 128
+%endif
 
 DSK_FAT_SECS equ 9              ; resident FAT cap, sectors (4,608 bytes).
                                 ; Exactly what the largest geometry this OS
@@ -2071,6 +2099,18 @@ XM_MAX_BLKS equ 8               ; the pool's fixed block table, entries: a
 ; is. Stage 1 has to know the second before anything has told it - SPL_RESIDENT's
 ; reason - and the Makefile reads it out of this file with one `sed` so the two
 ; cannot disagree.
+; SPLSTARS' blob is one sector longer, and this is where the Makefile reads it
+; from: its `sed` anchors on `^BOOT2_SECS  *equ  *<digits>`, which this line
+; misses on the underscore and the line below it misses on the value not being
+; a number - so the shipped 13 stays the one the pattern finds, and the knob's
+; override is a deliberate second lookup rather than an accident of ordering.
+; See SPEC.md 15.3.8.5 for why the knob arm needs it and the shipped one does
+; not.
+BOOT2_SECS_STARS equ 14
+
+%ifdef SPLSTARS
+BOOT2_SECS  equ BOOT2_SECS_STARS
+%else
 BOOT2_SECS  equ 13              ; sectors stage 1 reads before it jumps.
                                 ; THIRTEEN: four for the loader and its screen,
                                 ; NINE for the overlay - which is 4,608 bytes,
@@ -2082,14 +2122,48 @@ BOOT2_SECS  equ 13              ; sectors stage 1 reads before it jumps.
                                 ; splash pixel - about 216 ms at
                                 ; PERFORMANCE.md's measured 24 ms a sector, on
                                 ; a load that is 206 of them
-OVL_AT      equ 2048            ; ...and where `.ovl` begins inside it. FOUR
-                                ; sectors for `.boot2`, which is what it took
-                                ; before the overlay joined it: three left 46
-                                ; bytes and BOOTDIAG=1's hex printer did not
-                                ; fit. Trading bytes against a diagnostic is
-                                ; the exact thing the sector did and 2.9 exists
-                                ; to stop, so the answer is the rung and not a
-                                ; smaller printer
+%endif
+; OVL_AT is where `.ovl` begins inside the blob, and the value is at the FOOT
+; of this comment rather than the head of it because SPLSTARS gives it a second
+; one. FIVE sectors for `.boot2`. It was FOUR, which is what it took before the
+; overlay joined it: three left 46 bytes and BOOTDIAG=1's hex printer did not
+; fit. Trading bytes against a diagnostic is the exact thing the sector did and
+; 2.9 exists to stop, so the answer is the rung and not a smaller printer - and
+; SPEC.md 15.3.4's row composer is the same call one rung along: it was 63
+; bytes over four sectors, and shaving it would have bought those bytes with
+; the readability of the one routine in this tree that draws an animation.
+;
+; IT COSTS NOTHING TO MOVE: the blob is BOOT2_SECS sectors either way, so no
+; image byte, no RAM and no extra int 13h changes - only the split. What it
+; does spend is the blob's last slack: `.ovl` ends 159 bytes short of
+; BOOT2_PAD, so the NEXT claim on this file is BOOT2_SECS, and that one is a
+; real ~24 ms on every boot.
+%ifdef SPLSTARS
+OVL_AT      equ 3072            ; ...AND SPLSTARS=1 IS THAT CLAIM, arriving as a
+                                ; KNOB rather than as a shipped feature (SPEC.md
+                                ; 15.3.7, 15.3.8.5). The twinkle wants 2,824
+                                ; bytes of `.boot2` and the overlay 3,930, which
+                                ; is 6,754 of a 6,656-byte blob - so it is over
+                                ; by 98 WHEREVER the split falls, and moving
+                                ; OVL_AT alone cannot pay for it. The knob build
+                                ; therefore takes the 14th sector this file's
+                                ; comment above has been predicting, and takes
+                                ; it ALONE: the shipped blob is 13 sectors, its
+                                ; `.boot2` is where it was, and the ~24 ms is
+                                ; not spent by anybody who boots this.
+                                ;
+                                ; Six sectors for `.boot2` and eight for `.ovl`
+                                ; leaves 248 bytes on one side and 166 on the
+                                ; other, which is roughly the room the shipped
+                                ; split has - so the knob arm stops being the
+                                ; one that breaks first, and both assertions at
+                                ; the foot still say which half ran out if it
+                                ; ever does. tests/unit/t_buildmatrix.py is what
+                                ; asks.
+%else
+OVL_AT      equ 2560            ; ...and the shipped split, unchanged
+%endif
+
 BOOT2_PAD   equ BOOT2_SECS * 512
 
 section .boot2   start=0 vstart=0
@@ -2289,7 +2363,14 @@ dbg_reg_at:                     ; 0060:000E - THE DEBUG REGISTRY (SPEC.md 57)
 %endmacro
 
 %macro OSAPI_JSLOT 1                ; a cell that defers to a longer stub
-    jmp near %1                     ; E9 rel16 = 3 bytes
+    ; STRICT, and the whole slot depends on it. Without it NASM shortens the
+    ; jump to EB rel8 whenever the target is within 127 bytes - which
+    ; api_icon_draw became - and the slot emits 2 + 5 = SEVEN bytes. The
+    ; padding here is a fixed `times 5`, so it cannot absorb the difference:
+    ; every slot after the shortened one slides down a byte and answers at the
+    ; wrong address. That is the whole reason the length assertion below
+    ; exists, and it is what caught this.
+    jmp strict near %1              ; E9 rel16 = 3 bytes, always
     times 5 db 0
 %endmacro
 
@@ -3305,7 +3386,43 @@ osapi_table:
     OSAPI_JSLOT api_mem_claim_dma_hi ; 0x04D0 - ...and with CX = the 64KB
                                   ;          page-safe HEAD, which is what a
                                   ;          sound card's DMA ring wants
-osapi_table_end:                  ; 0x04D8
+    OSAPI_JSLOT api_gfx_spans     ; 0x04D8 - X: AX = the first row, ES:SI = CX
+                                  ;          records of {x1, x2} - ONE INTERVAL
+                                  ;          A ROW, on CONSECUTIVE rows, x1 > x2
+                                  ;          being an empty one. Fills them all
+                                  ;          in [gfx_color] with ONE row base
+                                  ;          computed and one clip (SPEC.md
+                                  ;          5.10). out CF = 1 REFUSED and a
+                                  ;          caller must read it: an armed clip
+                                  ;          region, two displays, or
+                                  ;          kern_small - and the answer to all
+                                  ;          three is a GFX_FILL a row, which
+                                  ;          draws the identical pixels
+    OSAPI_SLOT wm_ownseg          ; 0x04E0 - AL = a window SLOT; out CF = 1 no
+                                  ;          live window there, else DX = the
+                                  ;          segment that owns it (KERNEL_SEG
+                                  ;          for a window the kernel made).
+                                  ;          SPEC.md 11.96.3.1: the only way to
+                                  ;          read back the slot a raise cache's
+                                  ;          owner tag carries. IT ASKED FOR
+                                  ;          0x04D8 AND SO DID gfx_spans, on
+                                  ;          another branch, in the same cycle
+                                  ;          - the collision CLAUDE.md asks to
+                                  ;          be checked by hand, caught by the
+                                  ;          merge and then by t_api_abi
+    OSAPI_SLOT fsx_page           ; 0x04E8 - AL = a page index; shows it, and
+                                  ;          waits for the retrace that latches
+                                  ;          it. Bracket-only, exclusive task
+                                  ;          only, graphics modes with more
+                                  ;          than one page only (SPEC.md 53.10).
+                                  ;          FSI_PAGES has been published since
+                                  ;          53.4 with no supported way to act
+                                  ;          on it: Mode X moves the CRTC start
+                                  ;          address, a Hercules flips a bit in
+                                  ;          3B8h that does nothing until 3BFh
+                                  ;          allows it, and neither is
+                                  ;          derivable from the info block
+osapi_table_end:                  ; 0x04F0
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -3313,8 +3430,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 153 * 8
-%error "os8088 API jump table must be exactly 153 8-byte slots"
+%if OSAPI_TABLE_LEN != 156 * 8
+%error "os8088 API jump table must be exactly 156 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -3440,6 +3557,7 @@ dbg_reg:
     OSAPI_XSTUB api_fsx_run,    fsx_run
     OSAPI_XSTUB api_assoc_set,  osapi_assoc_set
     OSAPI_XSTUB api_drv_call,   drv_pkg_call_x
+    OSAPI_XSTUB api_gfx_spans,  gfx_spans
 
 ; N: the name at the caller's DS:SI is staged into kernel scratch first,
 ; because ES:BX belongs to the caller's data buffer and cannot carry it.
@@ -3770,6 +3888,20 @@ api_name2:  times 13 db 0       ; slots are reachable before anything clears
 ; survive a spl_step.
 spl_fp:     dw mod_gone
 spl_fseg:   dw COLD_SEG
+
+; ...AND AN INTERRUPT MAY NOT BORROW THAT WORD (SPEC.md 15.3.8.3). SPLCALL
+; stages its target in [spl_fp] and does the `call far` two instructions later,
+; so IRQ0 landing in that window with a SPLCALL of its own sends the MAIN
+; LINE's call to the interrupt's target instead. The window is a couple of
+; microseconds of every SPLCALL and a boot makes about two hundred of them, so
+; it is roughly one boot in fifty - which lands dsk_xfer's per-sector notch on
+; the loading screen's animation, silently, and never twice in the same place.
+;
+; sch_isr therefore stages its own, and copies the segment at call time rather
+; than mirroring it: [spl_fseg] is written once when stage 2 publishes the blob
+; and once when kmain gives it back, and the copy is two instructions.
+spl_ifp:    dw mod_gone
+spl_ifseg:  dw COLD_SEG
 
 api_sysap:  db 0                ; which verb the shared fenced cell runs:
                                 ; 0 = dskw_write_sys, 1 = dskw_append_sys.
@@ -4132,8 +4264,20 @@ kmain:
                                 ; no app instances exist until launched
     MARK 17
     BPMARK 4                    ; ...the window manager, the bar, the table
-    SPLGATE splf_step           ; a notch: the mode set and the font are done
+    SPLGATE splf_step           ; a notch: the mode set and the font are done.
+                                ; ON A HARD DISK THIS IS THE FRAME THAT PUTS
+                                ; THE SCREEN UP, at 0 of SPL_POST (SPEC.md
+                                ; 2.9.9.1) - so the line below is the first
+                                ; thing written under a bar that is about to
+                                ; sit still for over a second
+%ifdef MOU_DIAG
+    mov ax, [ticks]             ; SPEC.md 9.4.6.1: the bar's own 0%% frame
+    mov [mdg_n0], ax
+%endif
     MARK 18
+    OVLGATE ovl_spl_msg_mouse   ; ...and SAY SO (SPEC.md 15.6.4). AFTER the
+                                ; notch, which is what raises [spl_live]:
+                                ; composed before it, the line is never drawn
     call mouse_init             ; IRQ4 live; cursor stays hidden until shown
     MARK 19
     BPMARK 5                    ; ...and SPEC.md 9.4.1's two waits, which are
@@ -4143,7 +4287,17 @@ kmain:
                                 ; DTR/RTS low for MOU_RSTLOW ticks (~165ms),
                                 ; which is the only non-I/O phase up here
                                 ; long enough to see (SPEC.md 15.3)
+%ifdef MOU_DIAG
+    mov ax, [ticks]             ; SPEC.md 9.4.6.1: the bar's own 6%% frame
+    mov [mdg_n1], ax
+%endif
     MARK 20
+    OVLGATE ovl_spl_msg_fdd     ; ...and the SECOND stall the hard disk exposed
+                                ; (SPEC.md 15.6.4): desk_init asks SPEC.md
+                                ; 18.97's TRACK 0 question about unit 1, and a
+                                ; drive heading for the absent verdict costs
+                                ; FDD_MOTORW + FDD_SEEKW - 32 ticks, 1.76 s,
+                                ; the longest single wait in the whole boot
     OVLGATE ovl_desk_init  ; volume zones for the desktop (SPEC.md 26.1)
     MARK 21
     call dock_init              ; dock strip scratch (SPEC.md 30)
@@ -4175,6 +4329,10 @@ kmain:
     SPLGATE splf_step           ; a notch, and the last one kmain spends by
                                 ; hand: everything below is sectors, and
                                 ; dsk_xfer ticks the bar itself (SPEC 15.3)
+%ifdef MOU_DIAG
+    mov ax, [ticks]             ; SPEC.md 9.4.6.1: the bar's own 12%% frame
+    mov [mdg_n2], ax
+%endif
     MARK 28
 
     call drv_boot               ; ...and load what SYSTEM.CFG asks for
@@ -4273,6 +4431,9 @@ kmain:
                                 ; window needs a screen that has been painted
     BPMARK 10                   ; ...the cursor and the driver notice
 
+%ifdef MOU_DIAG
+    call mdg_show               ; SPEC.md 9.4.6: what mouse_init's identify
+%endif                          ; window saw. NEAR - moudiag is `.text`
 %ifdef BOOT_PROFILE
     call COLD_SEG:bpf_bprof_show ; SPEC.md 15.5: the table on the glass, LAST,
                                 ; so nothing above paints over it. It draws on
@@ -4743,6 +4904,11 @@ section .text
                                 ; both and defines neither
 %include "mouse.inc"
 %include "bootprof.inc"       ; the boot phase table (SPEC.md 15.5), BOOTPROF=1
+%include "moudiag.inc"        ; ...and what the identify window saw (SPEC.md
+                                ; 9.4.6), MOUDIAG=1. Both are knob-only and
+                                ; both draw on the finished desktop, because
+                                ; the machines they answer questions about are
+                                ; the ones with no debugger
                               ; only: after sched.inc, whose PIT programming its
                               ; clock depends on, and before nothing - kmain
                               ; forward-references bprof_mark through the macro
@@ -4836,6 +5002,7 @@ section .text
 ; error and not a wrong address, and it is not theoretical: both of these were
 ; found by the assembler within a minute of each other, one by `make` and one
 ; by test-full's kern_small row.
+    SPLSTUB splf_stepq
     SPLSTUB ovl_cpu_detect
 %ifdef KERN_BIG
     SPLSTUB ovl_xm_sniff        ; the store above 1MB is kern_big's alone
@@ -4846,6 +5013,12 @@ section .text
 %endif                          ; the ROM through a NEAR font_init and
                                 ; ovl_font_init is not assembled (SPEC.md 6.2)
     SPLSTUB ovl_desk_init
+    SPLSTUB ovl_spl_msg_mouse   ; SPEC.md 15.6.4's two lines. They are kmain's
+    SPLSTUB ovl_spl_msg_fdd     ; and not the phase's, because the phase
+                                ; boundary is legible HERE and a reader of the
+                                ; boot sequence sees the line beside the call
+                                ; it names - drv_boot's three are composed the
+                                ; same way
     SPLSTUB drv_snd_sniff
     SPLSTUB ovl_snd_init
     SPLSTUB splf_step
@@ -5445,6 +5618,10 @@ cw_wm_minsize:          call wm_minsize
 cw_wm_snap:             call wm_snap    ; OUTSIDE the KERN_BIG gate below:
                     retf                    ; app_tmr_kinit asks for the snap
                                             ; on every kernel (SPEC.md 11.94)
+cw_wm_saveu:            call wm_saveu   ; ...and the Control Panel answers
+                    retf                    ; SPEC.md 11.96.1's promise per
+                                            ; PAGE, from its module (SPEC.md
+                                            ; 31.12)
 %ifdef KERN_BIG
 cw_wm_onmouseup:        call wm_onmouseup
                     retf
@@ -5473,6 +5650,10 @@ cw_wm_pkgcall:          call wm_pkgcall
                     retf
 cw_wm_show:             call wm_show
                     retf
+cw_wm_wake_call:        call wm_wake_call   ; assoc_run's second phase (SPEC.md
+                    retf                    ; 54.10): the launched window is on
+                                            ; the glass, so the package may now
+                                            ; spend the document it was handed
 %ifdef WM_ANIM
 cw_inst_unmin:          call inst_unmin
                     retf
@@ -6004,6 +6185,11 @@ KBUF_KB    equ ((FAT_PARA + LOW_PARA) * 16 + 1023) / 1024
   %assign KS_LOW    KLOW_SIZE
   %assign KS_VGAB   KVGABUF_SIZE
   %assign KS_OVL    OVL_SIZE
+  %assign KS_BOOT2  BOOT2_SIZE   ; NOT a rung anybody spends into - the
+                                 ; loader blob is padded to BOOT2_PAD - but
+                                 ; splash.inc lives in it, so without this
+                                 ; the per-module table reads a 967-byte
+                                 ; module as costing nothing
   %assign KS_STK0   STK0_SIZE
   %assign KS_IMGP   KIMG_PARA
   %assign KS_COLDP  COLD_PARA
@@ -6015,7 +6201,12 @@ KBUF_KB    equ ((FAT_PARA + LOW_PARA) * 16 + 1023) / 1024
   %assign KS_CODEM  KERN_CODE_MAX
   %assign KS_END    KERN_END
   %assign KS_KSEG   KERNEL_SEG
-  %warning ks: text=KS_TEXT bss=KS_BSS cold=KS_COLD lowbss=KS_LOW vgabuf=KS_VGAB ovl=KS_OVL stk0=KS_STK0 imgpara=KS_IMGP coldpara=KS_COLDP fatpara=KS_FATP lowpara=KS_LOWP vgabufpara=KS_VGABP ksize=KS_SIZE budget=KS_BUDGET codemax=KS_CODEM kend=KS_END kseg=KS_KSEG
+  %assign KS_MINRAM MIN_RAM_KB   ; ...and guard 5's ceiling, because a report
+  %assign KS_BOOTMX MIN_RAM_KB*1024 - BOOT_SECT - BOOT_STACK - KERNEL_SEG*16 - BOOT2_PAD
+                                 ; that names one guard teaches everybody to
+                                 ; steer by it, and for a while the one it
+                                 ; named was the looser of the two
+  %warning ks: text=KS_TEXT bss=KS_BSS cold=KS_COLD lowbss=KS_LOW vgabuf=KS_VGAB ovl=KS_OVL boot2=KS_BOOT2 stk0=KS_STK0 imgpara=KS_IMGP coldpara=KS_COLDP fatpara=KS_FATP lowpara=KS_LOWP vgabufpara=KS_VGABP ksize=KS_SIZE budget=KS_BUDGET codemax=KS_CODEM kend=KS_END kseg=KS_KSEG minramkb=KS_MINRAM bootmax=KS_BOOTMX
 %endif
 
 ; 1. KERN_BUDGET - the FOOTPRINT. The whole kernel - image, scratch, FAT
@@ -6153,15 +6344,28 @@ KBUF_KB    equ ((FAT_PARA + LOW_PARA) * 16 + 1023) / 1024
 ;    MIN_RAM_KB the sector and its stack occupy the top 2,560 bytes, and
 ;    everything below that is the kernel's to spend.
 ;
-;    This is a POLICY guard now, like guard 1 and unlike guard 2 - which is
-;    the whole reason the constant it reads is named for the machine rather
-;    than for an address. It used to be the binding one: KERN_BUDGET was
-;    exactly equal to its ceiling, so raising the budget bought nothing and
-;    the only way up was to move the sector. Now it is 44.5KB above the
-;    budget, and the budget is free to move again the way it always did -
-;    once, asked for, and granted.
+;    This is a POLICY guard, like guard 1 and unlike guard 2 - which is the
+;    whole reason the constant it reads is named for the machine rather than
+;    for an address. MIN_RAM_KB is per configuration now (196 for kern_big,
+;    128 for kern_small), because BOOTING on a machine and RESIDING in one are
+;    different questions and one constant answering both made the boot ceiling
+;    silently the binding guard. See MIN_RAM_KB above for the measurement.
+;
+;    **A KNOB KERNEL IS EXEMPT, for guard 1's reason and not a new one.** It
+;    is not what anybody boots; it exists to answer a question about a machine,
+;    and every machine this project tests on has 640KB or could have. That does
+;    not make a RAM-constrained test impossible - it makes the test state its
+;    own constraint instead of borrowing the shipped kernel's.
+;
+;    This paragraph used to say the opposite - that guard 5 binds a knob build
+;    because it is "about a machine rather than a policy" - and the list of
+;    five knobs above is what that cost: five afternoons, each ending in a
+;    diagnostic that would not assemble. The machine it is about is the one we
+;    SHIP to.
+%ifndef KERN_KNOB
 %if KERNEL_SEG*16 + KERN_SIZE + BOOT2_PAD > MIN_RAM_KB*1024 - BOOT_SECT - BOOT_STACK
-%error "the kernel does not fit MIN_RAM_KB - see docs/KERNEL-MEMORY.md"
+%error "the kernel cannot BOOT on MIN_RAM_KB - see docs/KERNEL-MEMORY.md"
+%endif
 %endif
 ; 5b. ...and BOOT2_PAD is in that sum because STAGE 2 SITS ON THE HEAP'S FLOOR
 ;    (SPEC.md 2.9.5), which is the kernel's own last paragraph. It is given

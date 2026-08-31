@@ -797,6 +797,13 @@ fd_paint:
     push di
     call fd_layout
     call fd_draw_all
+    call fd_promise                 ; a full paint settles the face, so the
+                                    ; window may be banked again - and this is
+                                    ; where the promise comes BACK after a
+                                    ; covered server withdrew it. fd_draw_all
+                                    ; leaves FDD_LOG set for a line the worker
+                                    ; claimed mid-paint, and the predicate
+                                    ; reads that correctly (SPEC.md 77.47)
     pop di
     pop si
     pop dx
@@ -1884,6 +1891,62 @@ fd_flush_glass:
     ret                             ; now, which the wake path shares (77.33)
 
 ; -----------------------------------------------------------------------------
+; fd_promise - "the glass matches the face" / "it does not"
+; in:  [fd_dirty]; THE GFX LOCK HELD BY THE CALLER
+; out: nothing (every register and the flags preserved)
+;
+; SPEC.md 77.47, which is SPEC.md 11.96.1's promise answered per DEBT rather
+; than per session - Telnet's 70.7 in a second window, and for the same
+; reason a size larger. A file server spends its whole life RUNNING AND
+; QUIET: the thing the browser's per-fetch promise (71.11) would call live is
+; the state this window is in from the moment somebody starts it until they
+; stop it, which is to say always.
+;
+; [fd_dirty] already answers the finer question, and it is the byte this file
+; has always used for it - "what says the glass is behind". Zero means the
+; four things on the face (the button, the Read Only box, the status line and
+; the log) are all on the glass, and a cache taken then is exactly what a
+; repaint would draw. It is set by a log line arriving, a start, a stop and a
+; page change, and by nothing periodic: an idle server sets it never.
+;
+; Called at both edges of fd_paint_now's lock hold - on the way in, where the
+; guard above has already established [fd_dirty] is non-zero and this
+; WITHDRAWS (taking the cache with it, 11.96), and after fd_spend, which
+; zeroes it. A clip that refuses leaves through .unlock instead and the
+; promise stays withdrawn, which is right: 77.33's rule is that the bit stays
+; SET and the next flush tries again, so the debt is still owed.
+;
+; This window is the one that most wants it. 400x176 is 32,670 bytes at four
+; planes and its face is nine CBLACK and nine CWHITE - nothing else - so the
+; depth claim rides along (11.96.17) and the cache is 8,178. What it saves is
+; a repaint of the log ring, which is the densest lettering here.
+;
+; WHAT IT DOES NOT CLOSE is one worker pass: fd_log sets the bit with no lock
+; held, so a raise between that and the next flush restores the frame before
+; it. 77.33's own rule is what heals it - the bit survives, so the next flush
+; draws the line. Up to one tick of a stale log against a whole-face repaint
+; every time the window is uncovered.
+; -----------------------------------------------------------------------------
+fd_promise:
+    pushf
+    push ax
+    push bx
+    mov bx, [fd_win]
+    or bx, bx                       ; before wm_create, and after a refused
+    jz .out                         ; one: nothing to promise about
+    mov al, 0                       ; something is owed: withdraw
+    cmp byte [fd_dirty], 0
+    jne .say
+    mov al, OSAPI_SAVEU_ON | OSAPI_SAVEU_1BPP
+.say:
+    call OSAPI_WM_SAVEU             ; BX is [fd_win] and not whatever was in it
+.out:                               ; (SPEC.md 11.96.11.4)
+    pop bx
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
 ; fd_paint_now - take the lock, ARM THE CLIP, spend what changed, unlock
 ;
 ; THE ONE BODY for every path that draws WITHOUT being a paint callback: the
@@ -1902,6 +1965,13 @@ fd_paint_now:
     jc .out                         ; nothing to draw on and the ring keeps
                                     ; the lines
     call OSAPI_GFX_LOCK
+    call fd_promise                 ; [fd_dirty] is non-zero by construction
+                                    ; here (it is what got us past the guard),
+                                    ; so this WITHDRAWS and the raise cache
+                                    ; goes with it - before the clip below,
+                                    ; because a clip that refuses is exactly
+                                    ; the case where the debt is not about to
+                                    ; be settled (SPEC.md 77.47)
     mov bx, [fd_win]                ; **AND THE CLIP, WHICH WAS MISSING.** A
     call OSAPI_WM_CLIP_SET          ; NOTHING has armed a clip for us. An
     jc .unlock                      ; earlier version of this comment said a
@@ -1936,6 +2006,8 @@ fd_paint_now:
     mov si, [fd_win]
     call fd_layout
     call fd_spend
+    call fd_promise                 ; ...and fd_spend zeroed [fd_dirty], so the
+                                    ; glass matches the face again: promise
 .unlock:
     call OSAPI_GFX_UNLOCK
 .out:

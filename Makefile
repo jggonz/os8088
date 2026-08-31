@@ -71,6 +71,14 @@ VM386DX := $(CURDIR)/vm/386dx
 # that asked for it - a machine whose BIOS claimed 3MB extended and whose Task
 # Manager showed no XMS bar.
 VM386XMS := $(CURDIR)/vm/386-xms
+# THE PS/2 MOUSE MACHINE (SPEC.md 9.9), and the only one in this tree: every
+# other vm/ config is `mouse_type = msserial`, so until this existed nothing
+# here could reach the auxiliary port at all. A Packard Bell Legend 300SX,
+# which is a 386SX whose bus_flags carry MACHINE_BUS_PS2_PORTS - that is what
+# gives 86Box's 8042 its aux port, and a machine without it answers 0xA8 and
+# 0xA9 with nothing whatever `mouse_type` says. It is the machine SPEC.md
+# 9.9.1's IRQ1 mask was found on.
+VM386PS2 := $(CURDIR)/vm/386-ps2
 # ...and the sound-card profiles for those machines (SPEC.md 51.4).
 # QEMU's -device adlib/sb16 is the only other way to give the driver
 # something to attach to, and it is not a real card: these are.
@@ -302,6 +310,28 @@ endif
 # modem, which is why SPEC.md 9.5's modem cases are on docs/TESTING.md's QEMU
 # list. It is a Compaq Portable III with a modem in it that settles this, and
 # this knob is what that machine is A/B'd with.
+# MOUDIAG=1 draws SPEC.md 9.4.6's table on the finished desktop: per port, the
+# base, how many bytes the identify window saw, the FIRST of them, the tick the
+# last one arrived at and the verdict - plus the ticks the window spent against
+# MOU_IDWIN. It is what says WHICH of 9.4.5's three tests a machine with a
+# working mouse and a full 1,200 ms window is failing, and it is a knob rather
+# than a registry entry because the machines that ask the question - 86Box and
+# the 5150 - cannot run a reader (57.2's rule, and 15.5's delivery argument).
+# FDDSLOW=1 makes SPEC.md 18.97's probe take its SLOW path whatever ST3 says,
+# which is the only way the reorder in 18.97.5 can be exercised outside the
+# field: both emulators answer TRK0 SET unconditionally (18.97.2), so the fast
+# exit always fires and `.recal` onward is never reached.
+ifneq ($(FDDSLOW),)
+VIDDEF += -DFDD_NO_FAST
+endif
+ifneq ($(MOUDIAG),)
+# ...and it may be built WITH BOOTPROF=1 again. That pair was refused here for
+# a hard-disk boot that executed wild; it does not reproduce at any commit, and
+# SPEC.md 9.4.6.3 has the account. The guard is two tests now instead of a
+# refusal - tests/unit/t_vbrseg.py in the fast tier and tests/knobhd.py in
+# soak, which installs THIS pair and boots it off a disk on both adapters.
+VIDDEF += -DMOU_DIAG
+endif
 ifneq ($(MOUIDSLOW),)
 VIDDEF += -DMOU_ID_SLOW
 endif
@@ -380,6 +410,22 @@ endif
 ifneq ($(FLOPPY1),)
 VIDDEF += -DFLOPPY_ONE
 BOOTDEF += -DFLOPPY_ONE
+endif
+
+# DLJUNK=<n> makes stage 1 pretend the BIOS never set DL (SPEC.md 2.9.11) - it
+# overwrites the register with <n> immediately before the range check that
+# fixes it, so `DLJUNK=0x61` is the Packard Bell 286 exactly: a machine that
+# boots is the check working, and `Disk error` is the bug it closed.
+#
+# IT IS THE ONLY WAY THE FIX IS TESTABLE HERE. No ROM in this tree fails to
+# set DL, and MartyPC cannot run a 286 at all, so without this the check is a
+# line nothing in the build ever executes. tests/dljunk.py is the row.
+#
+# A value 0..3 is a legal floppy unit and the check leaves it alone, which is
+# the other half of the A/B: `DLJUNK=1` must NOT boot from a machine whose
+# disk is in drive 0, or the check is clamping something it should not.
+ifneq ($(DLJUNK),)
+BOOTDEF += -DDL_JUNK=$(DLJUNK)
 endif
 
 # TRACKRUN=1 puts a transfer run's bound back at the end of the TRACK instead
@@ -470,7 +516,15 @@ endif
 # disagree (SPEC.md 2.9). The sector needs it to know how many sectors to
 # fetch before anything has told it; kernel.asm asserts that stage 2 fits.
 BOOT2_SECS := $(shell sed -n 's/^BOOT2_SECS  *equ  *\([0-9][0-9]*\).*/\1/p' kernel/kernel.asm)
-BOOT2_PAD  := $(shell echo $$(( $(shell sed -n 's/^BOOT2_SECS  *equ  *\([0-9][0-9]*\).*/\1/p' kernel/kernel.asm) * 512 )))
+# ...and SPLSTARS' blob is a sector longer (SPEC.md 15.3.8.5), read from its own
+# constant for the reason above: the two must not be able to disagree. The
+# %ifdef that picks it is in kernel.asm; this is the SECTOR the boot sector is
+# told to fetch, and a boot sector fetching 13 for a 14-sector stage 2 jumps
+# into a blob whose last sector never landed.
+ifneq ($(SPLSTARS),)
+BOOT2_SECS := $(shell sed -n 's/^BOOT2_SECS_STARS  *equ  *\([0-9][0-9]*\).*/\1/p' kernel/kernel.asm)
+endif
+BOOT2_PAD  := $(shell echo $$(( $(BOOT2_SECS) * 512 )))
 
 # IT IS A MEMORY OFFSET, AND THE FILE SECTOR IS 13 FURTHER IN (SPEC.md 2.9).
 # Stage 2 sits in front of the image now, so the sector this names in KERNEL.SYS
@@ -524,6 +578,22 @@ BLOBSUMDEF = $$(python3 -c "import sys; d = open(sys.argv[1], 'rb').read()[:$(BO
 # and no emulator here models one.
 ifneq ($(DIRW1),)
 VIDDEF += -DDIRW_ONE
+endif
+
+# FATWNONE=1 refuses every MEM_K_FATW heap window, so every volume on the
+# machine runs on SPEC.md 18.8.3's PIN and each mount evicts the last one -
+# the ping-pong, which is the degradation case the design promises is no worse
+# than the fallback it replaced. FATWGATE=<KB> moves 18.8.2's comfort gate
+# instead, so the steal is reachable while the heap is still healthy - and it
+# is compared as a WORD, so 65535 is the largest value and the way to say
+# "refuse every floppy" without touching the driver volumes FATWNONE also
+# reaches. Both are %ifdef'd and cost the shipped kernel nothing.
+ifneq ($(FATWNONE),)
+VIDDEF += -DFATW_NONE
+endif
+
+ifneq ($(FATWGATE),)
+VIDDEF += -DFATW_GATE=$(FATWGATE)
 endif
 
 # INSTRO=1 leaves dskw_write_sys's replace mask refusing READ-ONLY, which is
@@ -670,6 +740,52 @@ ifneq ($(TITLESNAP),)
 VIDDEF += -DTITLESNAP
 endif
 
+# SPLSTARS=1 swaps the loading screen's animation (SPEC.md 15.3.7): the "8088"
+# stops spinning and stands still, and six stars twinkle around it instead -
+# a crossed pair of lines that grows and shrinks, with two rings of single
+# pixel clumps appearing at the peak. TITLESNAP's shape and there for its
+# reason: it is a LOOK question, so it is a knob to be looked at rather than a
+# change to be argued, and the default is the spinner that ships.
+#
+# BOTH ARMS TAKE THEIR TIME FROM SPEC.md 15.3.6's WALL CLOCK, which is the
+# point: this is an A/B of the animation and not of the change underneath it.
+# It is also the only thing that keeps spl_stars assembling.
+#
+# In $(VIDSTAMP) and $(KNOBS) below, like every other knob.
+ifneq ($(SPLSTARS),)
+VIDDEF += -DSPLSTARS
+endif
+
+# NOSIZESNAP=1 puts a window's WIDTH back to whatever it was given, snapping
+# only the ORIGIN the way SPEC.md 11.94 did before 11.94.5. The A/B for the
+# whole size snap, and it skips the two calls while leaving wm_snap_w
+# compiled - 11.96.15's NOSUOCCL shape, so both sides carry the same disk and
+# the same free space. What the default buys: the LAST cell in a row stops
+# spilling into a second framebuffer byte exactly as the first one does, and a
+# raise cache's edge merge (SPEC.md 11.96.2) becomes a no-op, which 11.96.8
+# measures at 18.22 ms of a 47.86 ms restore. What it costs is a grow box that
+# steps 8px across and 1px down, and a window that can come up to 7px
+# narrower than its template asked for.
+ifneq ($(NOSIZESNAP),)
+VIDDEF += -DNOSIZESNAP
+endif
+
+# NOFLUSHR=1 puts the RIGHT border back on a window that spans the screen,
+# which SPEC.md 11.95.3 drops along with the left one that 11.95.2 already
+# dropped. The A/B for 11.95.3 alone, and it moves one answer - wm_bordr's -
+# so both sides carry the same disk and the same free space. What the default
+# buys: a maximized window's content is the FULL frame width, 640 on VGA and
+# CGA and 720 on Hercules, all three exact multiples of 8, instead of 639 or
+# 719 - which is 79 whole 8px cells and SEVEN COLUMNS that can hold no cell,
+# so the last character of a full-width row had nowhere to go and text could
+# not be aligned to a maximized window's right edge. What it costs is the one
+# dark column down that edge, which on a 1bpp adapter is the only thing
+# between the content and the glass - a LOOK question, and this is how to look
+# at it.
+ifneq ($(NOFLUSHR),)
+VIDDEF += -DNOFLUSHR
+endif
+
 # NOUNAL=1 sends an UNALIGNED font_run back to gfx_fill + font_str, which is
 # what it did before SPEC.md 6.1.11. The A/B: the same session through a kernel
 # that has no one-pass unaligned path, which is the only way to show that the
@@ -737,6 +853,16 @@ endif
 
 ifneq ($(NOPLANE),)
 VIDDEF += -DNOPLANE
+endif
+
+# NOBLITCUT=1 puts a STRADDLING gfx_blit4 back on the whole-virtual path it
+# took before SPEC.md 39.14.7.2 - the block keeps its virtual destination and
+# every coalesced run splits itself through gfx_fill's own GFXDISP, which is
+# 39.14.7's mechanism and gives up 5.4.1's fast path on all of the block's
+# pixels rather than only on the seam. The A/B the cut is measured by, and
+# the only thing keeping the whole-virtual path assembling.
+ifneq ($(NOBLITCUT),)
+VIDDEF += -DNOBLITCUT
 endif
 
 ifneq ($(KERN_SMALL),)
@@ -1116,13 +1242,13 @@ endif
 # BUILD on api-abi. KERN_SMALL was the sharp one: `make KERN_SMALL=1` is the
 # second build CLAUDE.md asks for after every change, and it exited 1.
 KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
-                             KFZ DIRW1 INSTRO KEEPH STRAD DIRTYRAM HEAPCOMPACT HEAPPARK HEAPPARKLK FDDPROBE FDDABSENT REDRAWFULL NOSPLIT NOSUOCCL SNDSNIFF RAMKB DRAGCACHE \
+                             KFZ DIRW1 INSTRO KEEPH STRAD DIRTYRAM HEAPCOMPACT HEAPPARK HEAPPARKLK FDDPROBE FDDABSENT REDRAWFULL NOSPLIT NOSUOCCL SNDSNIFF RAMKB DRAGCACHE FATWNONE FATWGATE \
                              SNAPAUDIT SCROLLROW QUANTUM GFXAUDIT \
                              CURFIX \
                              FONT INSTCHUNK PICOMEM PM_BASE PM_SB_PORT ANIMOFF DISINK0 \
-                             BOOTPROF BOOTMARK BOOTHALT BOOTSTOP NOPS2 MOUIDSLOW TRACKRUN SBDRAGOFF SBRATE \
+                             BOOTPROF BOOTMARK BOOTHALT BOOTSTOP NOPS2 MOUIDSLOW MOUDIAG FDDSLOW TRACKRUN SBDRAGOFF SBRATE \
                              ETHPROF FTPDSLOW FTPDBG \
-                             KERN_SMALL FSNOSTAMP THEMEDARK TITLESNAP NOUNAL BAND NOPLANE NOUIBLOCK VGADIRTY,\
+                             KERN_SMALL FSNOSTAMP THEMEDARK TITLESNAP SPLSTARS NOSIZESNAP NOFLUSHR NOUNAL BAND NOPLANE NOBLITCUT NOUIBLOCK VGADIRTY DLJUNK,\
                              $(if $($(k)),$(k)=$($(k)))))
 # **A KNOB KERNEL IS NOT THE SHIPPED KERNEL, so KERN_BUDGET does not bind it**
 # (kernel.asm guard 1). It is built to answer a question about a machine and
@@ -1164,7 +1290,7 @@ endif
 # asked for it read a PLAIN kernel, so its assertion was about a build nobody
 # had made. Both halves, every time - the list above so the knob announces
 # itself, this string so the kernel is rebuilt when it changes.
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(STRAD),-st$(STRAD))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(GFXAUDIT),-ga$(GFXAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(QUANTUM),-q$(QUANTUM))$(if $(DIRTYRAM),-dr$(DIRTYRAM))$(if $(FSNOSTAMP),-fn$(FSNOSTAMP))$(if $(ANIMOFF),-ao$(ANIMOFF))$(if $(THEMEDARK),-td$(THEMEDARK))$(if $(DISINK0),-di$(DISINK0))$(if $(BOOTPROF),-bp$(BOOTPROF))$(if $(BOOTMARK),-bm$(BOOTMARK))$(if $(BOOTHALT),-bh$(BOOTHALT))$(if $(BOOTSTOP),-bs$(BOOTSTOP))$(if $(NOPS2),-np$(NOPS2))$(if $(MOUIDSLOW),-mis$(MOUIDSLOW))$(if $(TRACKRUN),-tr$(TRACKRUN))$(if $(SBDRAGOFF),-sbo$(SBDRAGOFF))$(if $(SBRATE),-sbr$(SBRATE))$(if $(TITLESNAP),-ts$(TITLESNAP))$(if $(NOUNAL),-nu$(NOUNAL))$(if $(BAND),-bnd$(BAND))$(if $(NOPLANE),-npl$(NOPLANE))$(if $(NOUIBLOCK),-nub$(NOUIBLOCK))$(if $(VGADIRTY),-vd$(VGADIRTY))$(if $(BOOTDIAG),-bd$(BOOTDIAG))$(if $(PICOMEM),-pm$(PICOMEM))$(if $(PM_BASE),-pmb$(PM_BASE))$(if $(PM_SB_PORT),-pms$(PM_SB_PORT))$(if $(ETHPROF),-ep$(ETHPROF))$(if $(FTPDSLOW),-fs$(FTPDSLOW))$(if $(FTPDBG),-fd$(FTPDBG))
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(STRAD),-st$(STRAD))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(GFXAUDIT),-ga$(GFXAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(QUANTUM),-q$(QUANTUM))$(if $(DIRTYRAM),-dr$(DIRTYRAM))$(if $(FSNOSTAMP),-fn$(FSNOSTAMP))$(if $(ANIMOFF),-ao$(ANIMOFF))$(if $(THEMEDARK),-td$(THEMEDARK))$(if $(DISINK0),-di$(DISINK0))$(if $(BOOTPROF),-bp$(BOOTPROF))$(if $(BOOTMARK),-bm$(BOOTMARK))$(if $(BOOTHALT),-bh$(BOOTHALT))$(if $(BOOTSTOP),-bs$(BOOTSTOP))$(if $(NOPS2),-np$(NOPS2))$(if $(MOUIDSLOW),-mis$(MOUIDSLOW))$(if $(MOUDIAG),-mdg$(MOUDIAG))$(if $(FDDSLOW),-fsl$(FDDSLOW))$(if $(TRACKRUN),-tr$(TRACKRUN))$(if $(SBDRAGOFF),-sbo$(SBDRAGOFF))$(if $(SBRATE),-sbr$(SBRATE))$(if $(TITLESNAP),-ts$(TITLESNAP))$(if $(SPLSTARS),-sst$(SPLSTARS))$(if $(NOSIZESNAP),-nzs$(NOSIZESNAP))$(if $(NOFLUSHR),-nfr$(NOFLUSHR))$(if $(NOUNAL),-nu$(NOUNAL))$(if $(BAND),-bnd$(BAND))$(if $(NOPLANE),-npl$(NOPLANE))$(if $(NOBLITCUT),-nbc$(NOBLITCUT))$(if $(NOUIBLOCK),-nub$(NOUIBLOCK))$(if $(VGADIRTY),-vd$(VGADIRTY))$(if $(BOOTDIAG),-bd$(BOOTDIAG))$(if $(PICOMEM),-pm$(PICOMEM))$(if $(PM_BASE),-pmb$(PM_BASE))$(if $(PM_SB_PORT),-pms$(PM_SB_PORT))$(if $(ETHPROF),-ep$(ETHPROF))$(if $(FTPDSLOW),-fs$(FTPDSLOW))$(if $(FTPDBG),-fd$(FTPDBG))$(if $(DLJUNK),-dlj$(DLJUNK))$(if $(FATWNONE),-fwn$(FATWNONE))$(if $(FATWGATE),-fwg$(FATWGATE))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/kernel-full.bin \
@@ -1247,7 +1373,7 @@ KERNEL_SRC := kernel/kernel.asm
 KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
 
 .PHONY: small kernsplit all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
-        xt-hercules xt-multimon 286 386sx 386 386-xms xt-sound xt-sound-1.44 \
+        xt-hercules xt-multimon 286 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 \
         286-sound 386-sound 486 pentium \
         bench field combo combo144 combo720 stackprobe trklog trkscrl npbench clicktest marty \
         comscan lptlink calcref \
@@ -1543,6 +1669,135 @@ $(BUILD)/rdiag360.img: $(BUILD)/rdboot360.bin $(BUILD)/rdiag.bin
 	@echo "rdiag: $@ - boot it. '.' is a sector that arrived, 'X' one that did"
 	@echo "       not; the tail line gives the count, the first bad sector and"
 	@echo "       what it held instead."
+
+# BOOTDIAG (SPEC.md 2.9.10) - WHY does this BIOS answer `Disk error` on boot
+#
+# A handful of 86Box BIOSes have refused to boot this OS since the first
+# commit, and every one of them says the same eleven characters and stops.
+# `Disk error` means "int 13h set carry three times running" and nothing else,
+# so it narrows nothing: the loader has been rewritten four times underneath
+# that string. This asks the machine instead - the BIOS's identity, the DL it
+# handed over, its diskette parameter table and whether our replacement stays
+# installed, whether the RAM stage 1 relocates into is there AND stays there,
+# and int 13h's answer to each of the eight read shapes the loader uses, every
+# one checked against the DATA rather than against the carry flag.
+#
+# THE TWO IMAGES ARE THE EXPERIMENT, and neither alone is:
+#
+#   build/bootdiag*.img   the payload behind tests/bootdiag/bdboot.asm, a
+#                         loader that depends on NONE of the things under test
+#                         - one sector an int 13h, no relocation, no int 1Eh
+#                         patch, and a DL fallback. If the machine can read a
+#                         single sector this boots and prints the report.
+#   build/bootdiagx*.img  the SAME payload behind the SHIPPED boot/boot.asm,
+#                         which relocates, patches the table and reads whole
+#                         tracks. Identical bytes above the boot sector, so
+#                         one booting and the other not is a one-bit answer
+#                         that no amount of reading the source gives.
+#
+# BOOTDIAG.COM rides on both disks for a machine that boots DOS but not this;
+# `BOOTDIAG > BD.TXT` captures the report, and `BOOTDIAG B:` surveys the other
+# drive. Nothing here ever writes to a disk.
+#
+# All three geometries, because which drive the failing machine has is exactly
+# the sort of thing that turns out to matter. ON DEMAND - nothing in `all`
+# builds it.
+BD_SECS   := 48
+BD_STAMP0 := 16
+
+$(BUILD)/bootdiag.bin: tests/bootdiag/bootdiag.asm Makefile | $(BUILD)
+	$(NASM) -f bin -w+error -DSECS=$(BD_SECS) -DSTAMP0=$(BD_STAMP0) \
+		-o $(BUILD)/bootdiag0.bin tests/bootdiag/bootdiag.asm
+	@python3 -c "import sys; \
+	  o = bytearray(open('$(BUILD)/bootdiag0.bin','rb').read()); \
+	  n = $(BD_STAMP0) * 512; \
+	  sys.exit('bootdiag: the code is %d bytes and STAMP0 leaves %d - raise '  \
+	           'BD_STAMP0 (and BD_SECS with it), never let it overflow into '  \
+	           'the stamped sectors' % (len(o), n)) if len(o) > n else None; \
+	  o.extend(b'\0' * (n - len(o))); \
+	  [o.extend(k.to_bytes(2,'little') * 256) \
+	   for k in range($(BD_STAMP0), $(BD_SECS))]; \
+	  open('$@','wb').write(o); \
+	  print('bootdiag: %d sectors, %d of code and %d that name themselves' \
+	        % (len(o)//512, $(BD_STAMP0), $(BD_SECS)-$(BD_STAMP0)))"
+
+$(BUILD)/bootdiag.com: tests/bootdiag/bootdiag.asm | $(BUILD)
+	$(NASM) -f bin -w+error -DCOMFILE -DSECS=$(BD_SECS) -DSTAMP0=$(BD_STAMP0) \
+		-o $@ tests/bootdiag/bootdiag.asm
+	@echo "bootdiag.com: $(call FILESIZE,$@) bytes"
+
+# The paranoid sector. ONE binary for all three geometries: it reads SPT and
+# HEADS out of the BPB rather than having them assembled in, which the shipped
+# sector cannot do because it has no bytes to spare for the divides.
+$(BUILD)/bdboot.bin: tests/bootdiag/bdboot.asm Makefile | $(BUILD)
+	$(NASM) -f bin -w+error -DSECS=$(BD_SECS) -o $@ tests/bootdiag/bdboot.asm
+	@test $(call FILESIZE,$@) -eq 512 || { echo "bdboot is not 512 bytes"; exit 1; }
+
+# ...and the shipped one, carrying the same payload as a FLAT_PAYLOAD. No
+# BOOTDIAG=1 on it: the point of this half is the loader AS IT SHIPS.
+$(BUILD)/bdxboot360.bin: boot/boot.asm $(BUILD)/bootdiag.bin Makefile | $(BUILD)
+	$(NASM) -f bin -w+error -DSPT=9 -DHEADS=2 -DFLAT_PAYLOAD \
+		-DKERNEL_SECTORS=$(BD_SECS) \
+		$(call KSIGDEF,$(BUILD)/bootdiag.bin) -o $@ boot/boot.asm
+
+$(BUILD)/bdxboot720.bin: boot/boot.asm $(BUILD)/bootdiag.bin Makefile | $(BUILD)
+	$(NASM) -f bin -w+error -DSPT=9 -DHEADS=2 -DFLAT_PAYLOAD \
+		-DKERNEL_SECTORS=$(BD_SECS) \
+		$(call KSIGDEF,$(BUILD)/bootdiag.bin) -o $@ boot/boot.asm
+
+$(BUILD)/bdxboot144.bin: boot/boot.asm $(BUILD)/bootdiag.bin Makefile | $(BUILD)
+	$(NASM) -f bin -w+error -DFLAT_PAYLOAD \
+		-DKERNEL_SECTORS=$(BD_SECS) \
+		$(call KSIGDEF,$(BUILD)/bootdiag.bin) -o $@ boot/boot.asm
+
+BD_IMGS := $(BUILD)/bootdiag360.img $(BUILD)/bootdiag720.img \
+           $(BUILD)/bootdiag144.img $(BUILD)/bootdiagx360.img \
+           $(BUILD)/bootdiagx720.img $(BUILD)/bootdiagx144.img
+
+.PHONY: bootdiag
+bootdiag: $(BD_IMGS) $(BUILD)/bootdiag.com
+	@echo "bootdiag: six images. Boot bootdiag<size>.img FIRST - it loads"
+	@echo "          through tests/bootdiag/bdboot.asm, which cannot fail the"
+	@echo "          way the shipped loader can - then bootdiagx<size>.img,"
+	@echo "          which loads through the SHIPPED boot/boot.asm. The pair"
+	@echo "          booting differently IS the finding. BOOTDIAG.COM is on"
+	@echo "          every disk for a machine that boots DOS."
+
+$(BUILD)/bootdiag360.img: $(BUILD)/bdboot.bin $(BUILD)/bootdiag.bin \
+                          $(BUILD)/bootdiag.com tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+		--boot $(BUILD)/bdboot.bin --kernel $(BUILD)/bootdiag.bin \
+		$(BUILD)/bootdiag.com
+
+$(BUILD)/bootdiag720.img: $(BUILD)/bdboot.bin $(BUILD)/bootdiag.bin \
+                          $(BUILD)/bootdiag.com tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 \
+		--boot $(BUILD)/bdboot.bin --kernel $(BUILD)/bootdiag.bin \
+		$(BUILD)/bootdiag.com
+
+$(BUILD)/bootdiag144.img: $(BUILD)/bdboot.bin $(BUILD)/bootdiag.bin \
+                          $(BUILD)/bootdiag.com tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/bdboot.bin --kernel $(BUILD)/bootdiag.bin \
+		$(BUILD)/bootdiag.com
+
+$(BUILD)/bootdiagx360.img: $(BUILD)/bdxboot360.bin $(BUILD)/bootdiag.bin \
+                           $(BUILD)/bootdiag.com tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+		--boot $(BUILD)/bdxboot360.bin --kernel $(BUILD)/bootdiag.bin \
+		$(BUILD)/bootdiag.com
+
+$(BUILD)/bootdiagx720.img: $(BUILD)/bdxboot720.bin $(BUILD)/bootdiag.bin \
+                           $(BUILD)/bootdiag.com tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 \
+		--boot $(BUILD)/bdxboot720.bin --kernel $(BUILD)/bootdiag.bin \
+		$(BUILD)/bootdiag.com
+
+$(BUILD)/bootdiagx144.img: $(BUILD)/bdxboot144.bin $(BUILD)/bootdiag.bin \
+                           $(BUILD)/bootdiag.com tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/bdxboot144.bin --kernel $(BUILD)/bootdiag.bin \
+		$(BUILD)/bootdiag.com
 
 # The system disk is a FAT12 volume with the kernel in its RESERVED AREA
 # (SPEC.md 19.3). The boot sector still reads LBA 1..K raw - reserved sectors
@@ -1870,7 +2125,7 @@ $(BUILD)/mbr.bin: boot/mbr.asm | $(BUILD)
 # not start.
 BOOTHD_DEFS = import sys, subprocess, json; sys.path.insert(0, 'tools'); \
               import os88sym; \
-              k = json.loads(subprocess.check_output(['python3','tools/kernsize.py','--json','--build','$(BUILD)'])); \
+              k = json.loads(subprocess.check_output(['python3','tools/kernsize.py','--json','--build','$(BUILD)'] + sys.argv[1:])); \
               print('-DBLOB_SEG=%d -DSPL_FSEG=%d' % (k['kseg'] + k['ksize'] // 16, os88sym.syms()['spl_fseg']))
 
 # BLOB_SEG follows the SHIPPED kernel's ladder. A kern_small installed to a
@@ -1879,14 +2134,42 @@ BOOTHD_DEFS = import sys, subprocess, json; sys.path.insert(0, 'tools'); \
 # over wherever [spl_fseg] says the blob is. Nothing in `all` builds that
 # combination.
 #
-# THE EXTRACTION IS ITS OWN STEP, and that is the other half of the same bug.
+# THE EXTRACTION IS ITS OWN STEP, and that is one half of the same bug.
 # `$$(python3 ...)` inside the nasm line throws the interpreter's exit status
 # away, so a refusal reached nasm as an EMPTY STRING and the failure was
 # reported by the assembler, about a symbol, several lines further on. Run it
-# first and let it fail here, where its traceback is the error.
+# first and let it fail here, where its traceback is the error. It also puts
+# the environment where it belongs: the `VAR=x python3 ...` prefix names the
+# process that reads it, which a prefix on the old nasm line never could -
+# the shell expanded the substitution before nasm ever started.
+#
+# $OS88_DEFINES IS WHAT MAKES THIS RULE WORK UNDER A KNOB, and without it no
+# knob kernel could build an image at all: os88sym re-assembles kernel.asm and
+# refuses the map unless the result is byte-identical to the built kernel, so
+# `make BOOTPROF=1` (or MOUDIAG=1, or any of them) died here with
+# `symbol BLOB_SEG not defined` - the python having raised, printed nothing,
+# and left nasm two defines short. The knobs are already in $(VIDDEF); this
+# hands the same set to the tool, which is the mechanism os88sym documents.
+# $OS88_BUILD is that idea one directory further on: os88sym takes BOTH the -I
+# of the generated includes and the image it compares against from there, so a
+# `BUILD=<dir>` sub-make - `make field`, `make small`, any knob built into a
+# directory of its own - was checking its own map against build/'s PLAIN
+# kernel. With no defines at all that check PASSED and the two constants were
+# simply wrong: a hard-disk VBR publishing the blob at an offset that build's
+# kernel does not use.
+#
+# **AND $(VIDDEF) IS PASSED TO kernsize TOO, WHICH IS THE HALF THAT WAS SILENT**
+# (SPEC.md 52.10.2.1). kernsize re-ASSEMBLES the kernel to measure it and takes
+# its defines as arguments, so `--json` with none describes the SHIPPED kernel
+# whatever is in build/ - and BLOB_SEG is `kseg + ksize/16`, the heap floor. A
+# knob kernel big enough to move KERN_SIZE by a rung therefore got a volume
+# boot record that loads its blob to the SHIPPED kernel's heap floor: on top of
+# its own image. Its --build says WHICH directory, the argv says WHICH KERNEL,
+# and it needs both. The floppy path cannot have this bug at all, stage 2
+# publishing the segment it actually relocated itself to.
 $(BUILD)/boothd.bin: boot/boothd.asm kernel/kernel.asm $(BUILD)/kernel.bin | $(BUILD)
-	@D=$$(OS88_DEFINES="$(subst -D,,$(VIDDEF))" OS88_BUILD="$(BUILD)" \
-	     python3 -c "$(BOOTHD_DEFS)") && \
+	@D=$$(OS88_DEFINES="$(patsubst -D%,%,$(VIDDEF))" OS88_BUILD="$(BUILD)" \
+	     python3 -c "$(BOOTHD_DEFS)" $(VIDDEF)) && \
 	 echo "$(NASM) -f bin -w+error -DBOOT2_SECS=$(BOOT2_SECS) $$D -o $@ $<" && \
 	 $(NASM) -f bin -w+error -DBOOT2_SECS=$(BOOT2_SECS) $$D -o $@ $<
 	@echo "boothd: $(call FILESIZE,$@) bytes"
@@ -2293,6 +2576,22 @@ $(IMG360): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(CORE
 # apps disks - their directory order is pinned (SPEC.md 24) - so it rides its
 # own scratch image, the filetest precedent:
 #   make test-snd ADLIB=1 TESTAPPS=build/fmtest.img
+# SPANTEST: the gate on SPEC.md 5.10's gfx_spans (tests/spantest.py). Like
+# fmtest it is never shipped and gets its own scratch image.
+#   make spantest && python3 tests/spantest.py
+$(BUILD)/spantest.bin: tests/spantest/spantest.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/spantest/spantest.asm
+	@echo "spantest: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/spantest.o88: $(BUILD)/spantest.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/spantest.bin -o $@
+
+$(BUILD)/spantest.img: $(BUILD)/spantest.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/spantest.o88
+
+.PHONY: spantest
+spantest: $(BUILD)/spantest.img
+
 $(BUILD)/fmtest.bin: tests/fmtest/fmtest.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ tests/fmtest/fmtest.asm
 	@echo "fmtest: $(call FILESIZE,$@) bytes"
@@ -2847,6 +3146,24 @@ $(BUILD)/solitair.o88: $(BUILD)/solitair.bin tools/os88pkg.py
 # driven FROM the worker - which snd_req_inst attributes correctly by falling
 # back to the running task's instance. 'ARKANOID' is exactly eight characters,
 # so unlike SOLITAIR.O88 the file name needs no truncating.
+# TANK ATTACK (SPEC.md 85): a first-person wireframe tank game that runs
+# inside an fsx bracket in a FOREIGN mode, so every pixel in it is the
+# package's own - no kernel drawing slot is legal past fsx_mode (SPEC.md
+# 53.7). Several sources, because the raster, the geometry, the game and the
+# attract window are separate subjects and the tables are generated.
+$(BUILD)/tank.bin: apps/tank/tank.asm apps/tank/tkraster.inc \
+                    apps/tank/tk3d.inc apps/tank/tkgame.inc \
+                    apps/tank/tkattr.inc apps/tank/tkhs.inc \
+                    apps/tank/tksin.inc apps/tank/tkridge.inc \
+                    apps/tank/tktan.inc apps/tank/tknib.inc \
+                    apps/tank/tkover.inc apps/tank/tklogo.inc \
+                    apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/tank/ -o $@ apps/tank/tank.asm
+	@echo "tank:  $(call FILESIZE,$@) bytes"
+
+$(BUILD)/tank.o88: $(BUILD)/tank.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/tank.bin -o $@
+
 $(BUILD)/arkanoid.bin: apps/arkanoid/arkanoid.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/arkanoid/arkanoid.asm
 	@echo "arkanoid: $(call FILESIZE,$@) bytes"
@@ -2884,11 +3201,53 @@ $(BUILD)/missile.o88: $(BUILD)/missile.bin tools/os88pkg.py
 # rect the host writes into the app's bss - the instrument that settled which
 # routine was erasing the movers, after three source-reading theories missed.
 # It is not in `all` and costs the shipped build nothing.
+#
+# DRSTEP=n sets the frames between the AI droid's hunting steps (SPEC.md
+# 67.9.4; default 6, a third of a second at 18fps), so a play-test can try
+# speeds without editing the source. The droid's OTHER arm - pinned two lanes
+# off the claw instead of hunting - was a knob for one cycle and is gone: drift
+# won on the glass, and PERFORMANCE.md Set 113 had already priced the two the
+# same, so there was nothing to keep the loser assembling for.
 CYCFLAGS :=
 ifdef CYTRACE
 CYCFLAGS += -DCYTRACE
 endif
-$(BUILD)/cyclone.bin: apps/cyclone/cyclone.asm apps/os88api.inc | $(BUILD)
+ifdef DRSTEP
+CYCFLAGS += -DCY_DRSTEP=$(DRSTEP)
+endif
+# DROIDNOW=1 arms the AI droid at NEW GAME instead of making you earn it. It is
+# an INSTRUMENT and never ships: the droid is a level-6 drop, so comparing the
+# droid honestly would otherwise mean grinding to level 6
+# twice and getting lucky with the kind - which is a lot of play between you
+# and a question about how a 7x5 box moves. `make DROIDNOW=1` is
+# the disk that answers it in the first ten seconds.
+ifdef DROIDNOW
+CYCFLAGS += -DDROIDNOW
+endif
+# CYPROF=1 counts every gfx_fill CALL the app makes, in cy_fillx, which is the
+# single funnel every drawing primitive in this game goes through. A redraw is
+# priced in CALLS and not in pixels (PERFORMANCE.md), so this is the number a
+# Cyclone measurement is made of; cy_frame beside it is the game-frame count,
+# and the pair gives fills-per-frame directly. An INSTRUMENT, never shipped.
+ifdef CYPROF
+CYCFLAGS += -DCYPROF
+endif
+
+# ...AND A STAMP, for exactly SBSTAMP's and VIDSTAMP's reason, which this rule
+# has been missing since CYTRACE was added: cyclone.bin depends on its SOURCES
+# and not on the flags, so `make DROIDNOW=1` after a plain `make` saw an
+# up-to-date .bin and rebuilt nothing. The disks then carry the PREVIOUS arm
+# and the A/B comes back null - which for a knob whose whole purpose is to be
+# play-tested against its other arm is the one failure that looks like "I
+# cannot tell them apart". The stamp is named for the flags, so changing any
+# of them names a file that does not exist yet.
+CYCSTAMP := $(BUILD)/.cycpkg$(if $(CYTRACE),-trace)$(if $(DRSTEP),-s$(DRSTEP))$(if $(DROIDNOW),-now)$(if $(CYPROF),-prof)
+
+$(CYCSTAMP): | $(BUILD)
+	@rm -f $(BUILD)/.cycpkg*
+	@touch $@
+
+$(BUILD)/cyclone.bin: apps/cyclone/cyclone.asm apps/os88api.inc $(CYCSTAMP) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ $(CYCFLAGS) -o $@ apps/cyclone/cyclone.asm
 	@echo "cyclone: $(call FILESIZE,$@) bytes"
 
@@ -5643,7 +6002,8 @@ APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
               $(BUILD)/paint.o88 $(BUILD)/piano.o88 $(BUILD)/recorder.o88 \
               $(BUILD)/ftpd.o88 $(BUILD)/sheet.o88 $(BUILD)/telnet.o88 \
               $(BUILD)/texpad.o88 $(BUILD)/tracker.o88
-APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/cyclone.o88 $(BUILD)/mines.o88 \
+APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/tank.o88 $(BUILD)/cyclone.o88 \
+              $(BUILD)/mines.o88 \
               $(BUILD)/missile.o88 $(BUILD)/solitair.o88 $(BUILD)/tamegram.o88
 
 # The CORE PACKAGES (SPEC.md 24.3) are a SECOND copy on the system disk and
@@ -6569,6 +6929,22 @@ xt-multimon: $(IMG360) $(APPSIMG360)
 386-xms: $(IMG) $(APPSIMG)
 	@$(UNPROTECT) $(VM386XMS)/86box.cfg
 	$(BOX) -P $(VM386XMS) -N
+
+# The PS/2 MOUSE machine (SPEC.md 9.9). A Packard Bell Legend 300SX - 386SX @
+# 25MHz, 4MB, OTI-067 - with `mouse_type = ps2` and NO serial mouse at all, so
+# the serial contest cannot be entered and the pointer either comes from the
+# auxiliary port or does not come. THE ONLY MACHINE HERE THAT HAS ONE: every
+# other vm/ config is msserial, which is why 9.9 shipped and sat untested on
+# anything but QEMU for months.
+#
+# What a working machine looks like: a pointer that moves. What a broken one
+# looks like: the KEYBOARD MOUSE (SPEC.md 9.6) - the arrows drive the pointer
+# and the mouse does nothing - because [mou_ptr] is 0 when no packet has ever
+# arrived. `make MOUDIAG=1` then draws SPEC.md 9.9.6's table over the desktop
+# and its `aux`, `sub`, `pic` and `p2st` columns say which step stopped.
+386-ps2: $(IMG) $(APPSIMG)
+	@$(UNPROTECT) $(VM386PS2)/86box.cfg
+	$(BOX) -P $(VM386PS2) -N
 
 # The sound machines: an XT with a Sound Blaster 2.0 (so the OPL2 is the FM
 # tier and the DSP the stream tier on the CPU this OS is FOR), a second XT

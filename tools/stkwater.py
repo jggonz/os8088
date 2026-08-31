@@ -127,6 +127,16 @@ def _near(syms, off, window=1024):
 def is_call_site(img, w):
     """Does a `call` end exactly at offset `w` in `img`?
 
+    **`img` MUST BE INDEXED THE WAY `w` IS.** `w` comes off a guest stack, so
+    it is a segment-relative offset; for the kernel that means `.text`, and
+    since SPEC.md 2.9 the raw kernel.bin is NOT that image - stage 2 sits in
+    front of it. Handed the raw file this recognised 126 of 3,000 real
+    near-call sites, which does not read as a bug: the dump simply loses its
+    "<- call" attributions and keeps a few coincidences, which is the false
+    confidence the guard below exists to prevent, arriving by another road.
+    os88layout.kernel_text() is the image to pass. A driver image needs no
+    such adjustment - `.text` is where it starts.
+
     **This is what turns the dump into a chain.** A near return address points
     at the byte after a call, so the bytes just before it have to BE a call -
     and almost no random word passes. Without it every stack word matched some

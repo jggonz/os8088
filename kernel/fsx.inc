@@ -392,6 +392,22 @@ fsx_mode:
     test dx, bx
     jz .fail
 
+    cmp byte [fpg_on], 0        ; **NO KERNEL CHROME SURVIVES INTO A FOREIGN
+    je .nofpg                   ; MODE** (SPEC.md 12.8.5). fpg_arm refuses to
+    call fpg_finish             ; arm once [fsx_cur] is set, but a caller may
+.nofpg:                         ; have armed the progress widget from a file
+                                ; read EARLIER IN THE SAME LOCK HOLD - the hold
+                                ; this bracket inherited from its callback - and
+                                ; then fpg_step would draw into the app's raster
+                                ; and fpg_finish would repair a menu bar that is
+                                ; not on the screen. Its own teardown is the
+                                ; right one and it is called HERE, before a
+                                ; single mode register moves, so its erase, its
+                                ; bar repaint and the cursor debt it may owe
+                                ; (SPEC.md 12.8.4) all land on the desktop that
+                                ; is still up. AFTER the caps test, so a
+                                ; REFUSED mode still changes nothing at all.
+
 %ifdef KERN_BIG
     push ax                     ; ...and ONLY NOW is the machine one display
     mov al, [fsx_wdisp]         ; with every other card dark (SPEC.md 39.18):
@@ -735,6 +751,106 @@ fsx_wait:
     ret
 
 ; -----------------------------------------------------------------------------
+; fsx_page - show one of the pages FSI_PAGES advertises (SPEC.md 53.10, slot
+;            0x04E8)
+;
+; in:       AL = the page index. Bracket-only, exclusive task only, and only
+;           after an fsx_mode call in a mode that HAS more than one page.
+; out:      CF=0 and that page is on the glass - the write is latched at the
+;           next vertical retrace and this waits for it, so the caller may
+;           start drawing on another page the moment it returns. CF=1 refused,
+;           with nothing written. Preserves every register.
+;
+; WHY THIS IS A SLOT AND NOT FOLKLORE. FSI_PAGES has been published since
+; SPEC.md 53.4 and until now there was no supported way to act on it: the
+; mechanism is different on every adapter that offers one - Mode X moves the
+; CRTC start address in BYTES, a Hercules does not move it at all but flips
+; bit 7 of 3B8h, and that bit does nothing until 3BFh bit 1 allows it, which
+; vid_setmode deliberately leaves clear (SPEC.md 39.6). None of that is
+; derivable from the info block, so every app that page-flips would rediscover
+; it, and the two ways to get it wrong - writing the start address without
+; waiting for the latch, and enabling the Hercules page without its
+; configuration bit - both look like a card that has stopped working.
+;
+; It answers for the GRAPHICS modes that offer a page. Text pages are the
+; BIOS's own 4KB convention rather than this table's stride x height, and no
+; consumer here wants one; a text bracket that does can have this routine
+; learn it, which is where that belongs.
+; -----------------------------------------------------------------------------
+fsx_page:
+    push ax
+    push bx
+    push dx
+    mov ah, [fsx_task]
+    cmp ah, 0xFF
+    je .fail
+    cmp ah, [sch_cur]
+    jne .fail
+    mov ah, [fsx_cur]
+    cmp ah, FSXM_HERC
+    je .herc
+    cmp ah, FSXM_MODEX
+    jne .fail
+    cmp al, 3                       ; Mode X: three pages of 19,200 bytes,
+    jae .fail                       ; and 3 x 19,200 still fits a segment
+    mov bl, al
+    xor bh, bh
+    mov ax, 19200
+    mul bx                          ; DX:AX, and DX is 0 by construction
+    mov bx, ax
+    mov dx, 0x3D4
+    mov al, 0x0C                    ; start address high...
+    mov ah, bh
+    out dx, ax
+    mov al, 0x0D                    ; ...and low
+    mov ah, bl
+    out dx, ax
+    jmp short .sync
+.herc:
+    cmp al, 2
+    jae .fail
+    mov bl, 0x0A                    ; graphics, video on...
+    mov ah, 1                       ; ...and 3BFh bit 0 alone, which is what
+    or al, al                       ; vid_setmode leaves (SPEC.md 39.6)
+    jz .h0
+%ifdef KERN_BIG
+    call vid_dual_ok                ; **AND THE SECOND PAGE IS REFUSED ON A
+    jnc .fail                       ; MACHINE THAT HAS A COLOUR CARD TOO**
+%endif                              ; (SPEC.md 53.10). vid_setmode leaves 3BFh
+                                    ; bit 1 clear for a reason it states at the
+                                    ; write: that page is at B8000, where a CGA
+                                    ; in the same machine lives, and turning
+                                    ; the decode on puts two cards on the bus
+                                    ; for the same addresses. A bracket does
+                                    ; not make that safe, so the page is
+                                    ; refused rather than the decode forced,
+                                    ; and a lone-Hercules XT still gets it.
+                                    ; NOT [vid_ndisp]: vid_fsx_enter has
+                                    ; already forced that to 1 by the time any
+                                    ; call can reach here
+    or bl, 0x80                     ; ...and page 1
+    mov ah, 3                       ; ...whose decode has to be allowed with it
+.h0:
+    mov dx, 0x3BF                   ; ALLOW the second page: bit 0 graphics,
+    mov al, ah                      ; bit 1 the page - and bit 1 goes back off
+    out dx, al                      ; for page 0, which needs no second decode
+    mov dx, 0x3B8                   ; and is the state the desktop comes back
+    mov al, bl                      ; to
+    out dx, al
+.sync:
+    mov al, FSXW_VSYNC              ; the latch happens at the retrace, so the
+    call fsx_wait                   ; page is only really shown after one -
+    clc                             ; and fsx_wait's own timeout means a dead
+    jmp short .out                  ; status port cannot hang this
+.fail:
+    stc
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; fsx_insync - CF = 1 when the adapter at DX is in vertical retrace.
 ; VGA/CGA (3DAh): bit 3 set. Hercules (3BAh): bit 7 LOW while vertical sync
 ; is active - the polarity is inverted there.
@@ -798,20 +914,43 @@ fsx_bmodes:                     ; the plain-BIOS rows' mode numbers; ids 0,
     db 0x13
 
 ; --- state -------------------------------------------------------------------
+; **`.text`, SEEDED, AND NOT `.bss`** (SPEC.md 12.8.5.1). This byte used to be
+; `.bss` on the note that fsx_run writes it before anything reads it - true of
+; every reader it had, because every one of them was INSIDE a bracket, where
+; fsx_run has already stored 0xFF.
+;
+; fpg_arm's refusal (SPEC.md 12.8.5) is the first reader outside one, and it
+; runs on a machine that has never entered a bracket. `-f bin` emits nothing
+; for `.bss` (SPEC.md 2.6) and the boot read lands the image's inter-section
+; padding on these bytes, so the byte was 0 - which is FSXM_TEXT80, not
+; "unswitched" - and the progress widget was refused for every file operation
+; on the machine from boot until some fsx app had run and restored. An install
+; is minutes of int 13h behind a held gfx lock with the widget as the only
+; sign of life, so it was reported as a LOCK.
+;
+; One byte of `.text` against one given back from `.bss`, no boot-time store,
+; and the value is right from the kernel's first instruction. api_name's rule
+; and spl_fp's: a byte whose RESTING value is not zero cannot live in `.bss`
+; here.
+fsx_cur:   db 0xFF              ; the FSXM id on screen, 0xFF = unswitched
+
 section .bss
 
-fsx_cur:   resb 1               ; the FSXM id on screen, 0xFF = unswitched.
-                                ; Written by fsx_run before anything reads
-                                ; it, so it needs no boot-time init.
 fsx_evtmp: resb 8               ; fsx_restore's event-drain scratch
 %ifdef KERN_BIG
 fsx_wdisp: resb 1               ; the display the running bracket's window is
                                 ; on (SPEC.md 39.18.3). Written by fsx_run
                                 ; before the app's proc runs and read only by
                                 ; fsx_mode, so it needs no boot-time init
-                                ; either - and it is the ONE fact fsx_run
-                                ; still establishes about displays, the acting
-                                ; on it having moved to the mode set
+                                ; either - and STILL CORRECT after the byte
+                                ; above lost the same argument (SPEC.md
+                                ; 12.8.5.1), because fsx_mode is legal only
+                                ; inside the bracket. The claim is about the
+                                ; SET OF READERS, so a new one reached from
+                                ; desktop code falsifies it - and it is the
+                                ; ONE fact fsx_run still establishes about
+                                ; displays, the acting on it having moved to
+                                ; the mode set
 %endif
 
 section .text

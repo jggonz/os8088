@@ -919,6 +919,14 @@ tm_entry:
     mov si, tm_tpl
     call OSAPI_WM_CREATE        ; BX = window ptr, CF = the table is full
     jc .out
+    push ax                     ; **WE PAINT EVERY PIXEL** (SPEC.md 11.90.1,
+    mov al, 1                   ; 28.10): the kernel's white fill was the first
+    call OSAPI_WM_OWNBG         ; layer of a double draw on a window whose
+    pop ax                      ; W_PAINT is ~450 ms, so the content went white
+                                ; and re-lettered on every repaint. It also
+                                ; unlocks OSAPI_WM_DAMAGE, which answers
+                                ; "whole" without this flag (SPEC.md 11.90.2's
+                                ; interlock)
     call tm_kinit               ; preserves the flags, so the CF our ret owes
 .out:                           ; the loader is wm_create's
     pop si                      ; POP leaves the flags alone
@@ -1114,7 +1122,6 @@ tm_ktab:
     dw MEM_K_SAVE,  tm_s_tsave
     dw MEM_K_DRV,   tm_s_tdrv
     dw MEM_K_COPY,  tm_s_tcopy
-    dw MEM_K_FATW,  tm_s_tfatw
     dw MEM_K_ASC,   tm_s_tasc
     dw MEM_K_CLIP,  tm_s_tclip
     dw MEM_K_MOD,   tm_s_tmod
@@ -1282,6 +1289,18 @@ tm_worker:
                                 ; "more than 16 fragments", which genuinely
                                 ; do mean skip. gfx_unlock disarms it
     call tm_update              ; incremental redraw, lock held
+    mov ax, [tm_qkey]           ; THE PAINT HAPPENED, so record what tm_quiet
+    mov [tm_elck + 2*TMC_QUIET], ax     ; asked about (SPEC.md 28.6.1). Here
+                                ; and not in tm_quiet, which only PEEKS: it is
+                                ; asked with no lock and the paint can still be
+                                ; refused two lines above, and recording a
+                                ; change on an interval that drew nothing
+                                ; leaves the page stale until something else
+                                ; moves. Nothing recorded it at all between
+                                ; 28.11 and here, so the answer was always
+                                ; `changed`: the lock was taken and the cache
+                                ; dropped (11.96.18) on every TM_SLOW interval,
+                                ; whatever tm_quiet computed
 .skip:
     call OSAPI_GFX_UNLOCK
     jmp .interval
@@ -1311,6 +1330,28 @@ tm_worker:
 ; [tm_kb] (the RAM, HEAP and XMS figures), and the instance block (the
 ; headings, the names' presence, the sizes and the per-instance heap). All
 ; three are refreshed by tm_sample or by this routine, both outside the lock.
+;
+; TWO HOLES IN THE KEY, AND THEY ARE THE SAME HOLE (SPEC.md 28.8.1). OUR OWN
+; raise cache is left out of the claim span, and SK_CLAIM/SK_KCLAIM are left
+; out of the KB span because they move with it. This window is the only one in
+; the tree whose content is a report of the machine's memory, so it is the only
+; one whose cache it CAUSES by looking: the cache appears, the page has changed,
+; the page paints, and wm_clip_set drops the cache to let it (SPEC.md 11.96.18).
+; Measured before this: a drag that partially covered the memory page banked
+; 33KB, binned it one interval later, and cost 527 cells - about 505 ms on a
+; 4.77 MHz 8088 - to come back, every time.
+;
+; It is NOT a mask on the range. Another window's raise cache is real memory
+; arriving: it persists while that window stays covered, it does not go away
+; because this one came to the front, and the page wakes for it exactly as it
+; wakes for any other claim. Only the self-reference is cut, which is what
+; 28.8's loop is made of.
+;
+; And it costs no arithmetic. Dropping the two totals from the key rather than
+; subtracting our own paragraphs out of them is not a shortcut: both are
+; derived from the table already hashed, so every real claim is still caught by
+; the record it occupies - while a paragraphs-to-KB correction ROUNDS, and a
+; rounding key is a key that sometimes lies in both directions.
 ; -----------------------------------------------------------------------------
 tm_quiet:
     cmp byte [tm_view], 0
@@ -1318,27 +1359,81 @@ tm_quiet:
     push ax                     ; construction: a percentage, a graph column
     push bx                     ; and a spin count that are never twice the
     push cx                     ; same
-    push si
+    push dx                     ; OSAPI_WM_OWNSEG answers in it, and this
+    push si                     ; routine's contract is "clobbers: flags"
     push di
     push es
     TM_ES_DATA
     mov di, tm_claims
     TM_CLAIM_SNAPSHOT           ; ...into the buffer the paint would use anyway
     pop es
+
+    ; RECORD BY RECORD rather than one span, so OUR OWN raise cache can be
+    ; left out of the key (SPEC.md 28.8.1). Nothing is written to the
+    ; snapshot: the paint below draws every claim including that one, and
+    ; truthfully. What is skipped is the REASON to paint.
     mov si, tm_claims
-    mov cx, CLAIM_SNAPSHOT_SIZE
-    xor ax, ax
-    call tm_sumb                ; AX chains through all three spans
-    mov si, tm_kb
-    mov cx, SYSKB_SIZE
-    call tm_sumb
+    xor ax, ax                  ; AX chains through all three spans
+    mov cx, MEM_MAX
+.rec:
+    push cx
+    cmp word [si+CLS_SEG], 0    ; A FREE RECORD WEIGHS NOTHING, and that is
+    je .zero                    ; half of what makes this work: its CLS_PARA
+                                ; and CLS_OWN are a previous tenant's leftovers,
+                                ; the page draws no band for it, and they are
+                                ; what our own record BECOMES the moment the
+                                ; cache is freed
+    mov dx, [si+CLS_OWN]        ; a raise cache at all? Its tag is a base plus
+    sub dx, MEM_P_WSAVE         ; the window's SLOT (SPEC.md 11.96.3), so this
+    cmp dx, MEM_P_WSAVE_N       ; is a range and not an equality - unsigned, so
+    jae .hash                   ; a lower owner wraps high and fails
+    push ax
+    mov ax, dx                  ; AL = the slot the tag carries...
+    call OSAPI_WM_OWNSEG        ; ...and 11.96.3.1 turns it back into a segment
+    mov di, ds                  ; (CF and DX survive both of these)
+    pop ax
+    jc .hash                    ; no live window in that slot: not ours
+    cmp dx, di
+    jne .hash                   ; SOMEBODY ELSE'S, and that one is real memory
+                                ; arriving - it persists while its window stays
+                                ; covered, it does not go away because we came
+                                ; to the front, and this page should wake for it
+.zero:
+    mov cl, CLS_RECSZ           ; ...OURS, or free: weigh it as SIX ZERO BYTES
+    rol ax, cl                  ; instead of stepping past it. tm_sumb is
+    add si, CLS_RECSZ           ; rol/add PER BYTE and so position-sensitive -
+    jmp short .next             ; skipping a record shifts every byte after it
+                                ; and changes the very key this is trying to
+                                ; hold still. Six zero bytes IS `rol ax, 6` to
+                                ; the chain, and weighing a free record the
+                                ; same way makes the key blind to WHICH record
+                                ; the cache lands in as well as to whether it
+                                ; is there at all
+.hash:
+    mov cx, CLS_RECSZ
+    call tm_sumb                ; AX chains; SI advances past the record
+.next:
+    pop cx
+    loop .rec
+
+    mov si, tm_kb               ; ...and the two TOTALS that move with our own
+    mov cx, SK_CLAIM            ; cache are SKIPPED rather than corrected: both
+    call tm_sumb                ; are derived from the table just hashed, so a
+    add si, 4                   ; real claim is still caught by the record it
+    mov cx, SYSKB_SIZE - (SK_KCLAIM + 2)    ; occupies, and the arithmetic to
+    call tm_sumb                ; take our paragraphs back out of a KB figure
+                                ; - which rounds - is not owed at all
     mov si, tm_ist
     mov cx, TM_IHASH
     call tm_sumb
     mov bx, tm_elck + 2*TMC_QUIET
-    call tm_elchk               ; CF = 1 unchanged, which IS the skip - and the
+    call tm_qpeek               ; CF = 1 unchanged, which IS the skip - and the
+    mov [tm_qkey], ax           ; AX is the key AFTER tm_qpeek's never-zero
+                                ; rule, which is the value the store below has
+                                ; to match; a mov writes no flags
     pop di                      ; pops below write no flags
     pop si
+    pop dx
     pop cx
     pop bx
     pop ax
@@ -1796,15 +1891,372 @@ tm_sample:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; tm_paint - W_PAINT: bare, unconditional full redraw of the active view
+; tm_promise - the raise cache, and the promise that is a REPAIR
+; in:  [tm_win], [tm_view]; THE GFX LOCK HELD BY THE CALLER
+; out: nothing (every register, ES and the flags preserved)
+;
+; SPEC.md 28.11, and it is 28.8 answered rather than restated. That section
+; measured why this window could not hold a cache: the cache is a purgeable
+; heap claim, these two pages are the tree's only reporters of purgeable
+; claims, so taking one changes what the page must show and showing it frees
+; the cache. The loop existed only because a promise had to be WITHDRAWN when
+; the content moved. It does not have to be, if the window repairs itself on
+; the way back.
+;
+; THE BAND IS THE DOORWAY AND IT COSTS NO KERNEL BYTES. SPEC.md 11.96.11's
+; contract is "the kernel banks the band, and wm_damage tells you you owe the
+; rest"; a band covering the WHOLE content is the degenerate case of it -
+; everything banked, nothing owed - and wm_draw_win already routes a banded
+; restore through W_PAINT (its `wm_su_bget / jnc .paint`) where a plain one
+; skips it. wm_su_orect then insets x1 past x2 and wm_damage answers the
+; EMPTY rect 11.90.2 documents as legal. So the app is called, told it owes
+; nothing, and spends its own debt.
+;
+; Named on every paint: OSAPI_WM_BAND drops nothing when the extent has not
+; changed, so this is free after the first and it follows a resize for
+; nothing. The extent is a BYTE (11.96.11.1), so a content wider than 255
+; refuses - and a refusal is a normal path: no band, no promise, and this
+; window behaves exactly as it did before.
+;
+; PER PAGE, like the Control Panel's (31.12): the performance view is the load
+; meter and moves every TM_INT by construction, so it is never promised.
+;
+; NO DEPTH CLAIM: wm_su_1bpp refuses a banded window, so this is four planes -
+; 32,874 bytes for a 232x265 content, inside wm_su_kb's 64,512 ceiling.
+;
+; ES IS PRESERVED: OSAPI_WM_BAND and OSAPI_WM_SAVEU are X stubs and leave the
+; CALLER's segment in ES, and every [es:bx+W_*] read in this file needs
+; KERNEL_SEG (TM_ES_DATA exists for exactly that).
+; -----------------------------------------------------------------------------
+tm_promise:
+    pushf
+    push ax
+    push bx
+    push cx
+    push dx                     ; OSAPI_WM_GEOM answers the content SIZE, so DX
+    push es                     ; is an output of it whether or not we read it
+    mov bx, [tm_win]
+    or bx, bx                   ; before wm_create, and after a refused one
+    jz .out
+    cmp byte [tm_view], 0
+    je .no                      ; the live page: never
+    call OSAPI_WM_GEOM          ; CX = content width, CF = not visible
+    jc .no
+    xor al, al                  ; edge 0 = left, the whole content
+    call OSAPI_WM_BAND
+    jc .no                      ; wider than 255, or the kernel declined
+    mov al, 1
+    call OSAPI_WM_SAVEU         ; ...and the promise is 28.11's, not 11.96.1's:
+    jmp short .out              ; "I will make the restored pixels right"
+.no:
+    xor al, al
+    call OSAPI_WM_SAVEU         ; withdraw, and wm_saveu drops the cache
+    xor al, al
+    xor cx, cx
+    call OSAPI_WM_BAND          ; ...and retire the band with it, or a later
+.out:                           ; cache is laid out for one nobody claims
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_paint - W_PAINT: redraw the active view, WHOLE or as a repair
 ; in:  SI = window ptr (gfx lock held by caller; no lock, no visibility
 ;      check in here - SPEC.md 28)
 ; out: nothing
 ; clobbers: nothing (flags only)
+;
+; SPEC.md 28.11. tm_clear_owed asks OSAPI_WM_DAMAGE and answers CF, so the
+; question is asked once: CF = 1 means the restore put the WHOLE content back
+; and this paint owes nothing but its own debt - the elements whose keys moved
+; while it was covered, and nothing else. tm_qpeek is what leaves those keys
+; standing to be read.
 ; -----------------------------------------------------------------------------
 tm_paint:
     call tm_hire                ; the first paint is the earliest point at
-    call tm_draw_full           ; which our instance exists to attach one to
+                                ; which our instance exists to attach one to
+    call tm_clear_owed          ; the GROUND is ours now (SPEC.md 28.10) - and
+    jc .repair                  ; the rect it filled is in [tm_dmg], which
+                                ; every checked draw below asks (28.10.2): a
+                                ; chunk, a caption or a map the damage never
+    mov word [tm_elck + 2*TMC_HSB], 0   ; touched keeps the pixels it has.
+                                ; THE SCROLL BAR IS THE ONE EXCEPTION and is
+                                ; forced: it is the only element with no band
+                                ; written down (tm_elchk_y says why), and a
+    call tm_draw_band           ; strip the damage erased has to come back
+    jmp short .out
+.repair:
+    call tm_update
+.out:
+    call tm_dmg_none            ; the band is this paint's and no later one's
+    call tm_promise             ; ...and the promise, re-stated: free when
+    ret                         ; nothing changed, and it follows a resize for
+                                ; the same nothing
+
+; -----------------------------------------------------------------------------
+; tm_clear_content - white-fill this window's whole content
+; in:  SI = window ptr; the gfx lock held
+; out: nothing; preserves all registers
+;
+; SPEC.md 28.10. It was inline in tm_click's view swap and is a routine now
+; because the kernel stopped doing it: this window carries WF_OWNBG, so
+; wm_draw_win skips its white fill and W_PAINT owes the ground as well as the
+; ink (SPEC.md 11.90.1).
+;
+; THE FAR CORNER COMES OFF THE RECORD, not from a pair of constants: this is
+; the only thing that erases the outgoing view, and a short one leaves its
+; tail rows lettered under the incoming one (they were 198x245 against a
+; content that had grown to 231x282). TWO, not one - y+h-1 and x+w-1 are the
+; frame's own bottom and right BORDERS, and a fill that reached them left the
+; window open-sided until something repainted the frame.
+; -----------------------------------------------------------------------------
+tm_clear_content:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, si
+    call OSAPI_WM_CONTENT       ; AX = content left, DX = content top
+    push ax
+    mov ax, [es:bx+W_Y]
+    add ax, [es:bx+W_H]
+    sub ax, 2
+    mov cx, [es:bx+W_X]
+    add cx, [es:bx+W_W]
+    sub cx, 2
+    mov bx, dx
+    mov dx, ax
+    pop ax
+    TM_INK CWHITE
+    call OSAPI_GFX_FILL
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_clear_owed - white-fill only the part of the content this paint OWES
+; in:  SI = window ptr; the gfx lock held
+; out: CF = 1 the rect was EMPTY and nothing was filled; preserves all registers
+;
+; SPEC.md 28.10.1. OSAPI_WM_DAMAGE answers CF = 1 "the whole content" or CF = 0
+; and a rect, absolute and inclusive, which may be EMPTY. A window redrawn
+; because something ABOVE it moved owes only the strip that moved, and the
+; rest of its pixels are on the glass and correct - so filling the whole
+; content is a white hole across a window whose W_PAINT is ~450 ms on the
+; target (PERFORMANCE.md, the heap page's list repaint).
+;
+; The DRAWING is still whole, and that is deliberate rather than unfinished.
+; A repaint is priced by the primitive calls it makes and not by the pixels
+; they cover, so skipping elements outside the rect is what would save the
+; 450 ms - and for the commonest damage here, a narrow VERTICAL strip where a
+; window beside this one moved, every row intersects it and nothing can be
+; skipped. The fill is the half that pays either way. SPEC.md 28.10.2 records
+; what element-level skipping would take and when it would pay.
+;
+; It cannot paint anything wrong: wm_dmg_wins redraws marked windows WHOLE and
+; bottom to top, so a window drawing outside its damage is covered by the ones
+; above it in the same pass (SPEC.md 11.90.2 says so in as many words - "a
+; caller that never tests for it cannot paint anything wrong, only waste the
+; answer").
+;
+; THE EMPTY ANSWER IS PASSED ON IN CF, and that is why tm_paint asks nothing
+; itself: an empty rect is SPEC.md 28.11's whole-content band coming back off
+; the raise cache, which is the one case where the ink is owed and the ground
+; is not. A pop writes no flag, so the answer survives the four below it.
+; -----------------------------------------------------------------------------
+tm_clear_owed:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, si
+    call OSAPI_WM_DAMAGE        ; AX/BX/CX/DX = the rect we owe
+    jc .whole                   ; CF = 1: all of it
+    cmp ax, cx
+    jg .none                    ; empty (x1 > x2): we owe NOTHING, and the
+    cmp bx, dx                  ; kernel promises a primitive would treat it
+    jg .none                    ; as a no-op anyway
+    call tm_dmg_set             ; ...AND THE ROWS READ THE SAME RECT: what was
+    TM_INK CWHITE               ; filled is exactly what has to be lettered
+    call OSAPI_GFX_FILL         ; again (SPEC.md 28.10.2)
+    jmp short .out
+.whole:
+    call tm_dmg_all
+    call tm_clear_content
+.out:
+    clc
+    jmp short .pop
+.none:
+    call tm_dmg_none
+    stc
+.pop:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_dmg_* - WHICH ROWS THIS PAINT OWES, as a rect the chunk loop can ask
+;
+; SPEC.md 28.10.2. tm_clear_owed has always filled only the part of the
+; content wm_damage named; the DRAWING was still whole, and on the window
+; whose W_PAINT is the densest in the tree that is ~450 ms of glyphs for a
+; strip a person dragged a window off. The rows are almost all of it - a heap
+; page is 19 rows of 25 characters, and a glyph cell is ~900 us on the target.
+;
+; The structure to ask with was already there. SPEC.md 28.2 made a row FIVE
+; independently-checked chunks so that a percentage ticking over would not
+; redraw the name beside it, and every one of them comes through tm_elchk. So
+; the rule the chunk loop wants is one word wider than the one it had:
+;
+;     draw this chunk if its key CHANGED, or if the damage took its pixels
+;
+; and the second half is this rect. It is absolute, like [tm_rowy] and
+; [tm_penx] and like wm_damage's own answer, so no coordinate is converted
+; anywhere; two columns come out right for free, because the test reads the
+; live pen rather than deriving x from a row index.
+;
+; BOTH AXES, and the x half is the one that pays for the common damage. A
+; window moved off this one's right leaves a VERTICAL strip - every row
+; intersects it, so a y band alone would force the lot - and the chunks are
+; 40px each, so the strip names two or three of five. The y half is what a
+; window uncovering the bottom, a dock repaint or a downward drag hits.
+;
+; tm_dmg_all is a repaint that owes everything and tm_dmg_none one that owes
+; nothing: mirrors, sharing their four stores. `none` is what the WORKER's
+; own update runs under, where the keys alone decide, and tm_paint restores
+; it on the way out so no later interval inherits this paint's rect.
+; -----------------------------------------------------------------------------
+tm_dmg_set:                     ; AX/BX/CX/DX = x1/y1/x2/y2 (all preserved)
+    mov [tm_dmg+0], ax
+    mov [tm_dmg+2], bx
+    mov [tm_dmg+4], cx
+    mov [tm_dmg+6], dx
+    ret
+
+tm_dmg_all:
+    push ax
+    push bx
+    xor ax, ax                  ; x1/y1 = 0, x2/y2 = 0xFFFF: everything hits
+    mov bx, 0FFFFh
+    jmp short tm_dmg_w
+tm_dmg_none:
+    push ax
+    push bx
+    mov ax, 0FFFFh              ; ...and the mirror, which nothing can
+    xor bx, bx
+tm_dmg_w:
+    mov [tm_dmg+0], ax
+    mov [tm_dmg+2], ax
+    mov [tm_dmg+4], bx
+    mov [tm_dmg+6], bx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_dmg_hit - does the chunk the row loop is on lie in this paint's damage?
+; in:  [tm_rowy], [tm_penx], [tm_ci]
+; out: CF = 0 it does (draw it), CF = 1 it does not (its pixels are still
+;      there); all registers preserved
+;
+; The y test is first because it rejects a whole row in two compares, and the
+; unsigned forms are deliberate: tm_dmg_all's 0xFFFF is a maximum only if
+; nothing here reads it as -1.
+; -----------------------------------------------------------------------------
+tm_dmg_hit:
+    push ax
+    push bx
+    push cx
+    mov ax, [tm_rowy]
+    cmp ax, [tm_dmg+6]
+    ja .no                      ; the row starts below the damage
+    add ax, 7                   ; a row band is one glyph tall
+    cmp ax, [tm_dmg+2]
+    jb .no                      ; ...or ends above it
+    mov ax, [tm_ci]             ; --- x1, and a chunk's band is not always its
+    mov cl, TM_CW               ; own text: 5 chunks of 40px, so AL is the
+    mul cl                      ; whole of the multiply
+    mov bx, ax
+    add ax, [tm_penx]
+    or bx, bx
+    jnz .x1
+    mov ax, [tm_rowx]           ; CHUNK 0 OWNS THE LEAD-IN, here as in the
+    add ax, 6                   ; draw (tm_row_lead's own left edge). A damage
+.x1:                            ; rect ending inside those pixels erased a
+    cmp ax, [tm_dmg+4]          ; legend square, and this is the chunk that
+    ja .no                      ; has to put it back - test from the pen and
+                                ; it is erased until the row's key moves
+    mov ax, [tm_ci]             ; --- x2
+    inc ax
+    cmp ax, TM_NCHUNK
+    jae .yes                    ; THE LAST CHUNK HAS NO RIGHT EDGE to test:
+    mov cl, TM_CW               ; tm_rowr runs it on to the row's own, so it
+    mul cl                      ; owns the tail past the text and damage out
+    add ax, [tm_penx]           ; there is still its to repair
+    dec ax
+    cmp ax, [tm_dmg+0]
+    jb .no
+.yes:
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_elchk_y - tm_elchk, and the damage clause for an element with a BAND
+; in:  AX = key, BX = the check word, CX/DX = the element's CONTENT-relative
+;      y range, inclusive
+; out: CF = 1 skip the draw, CF = 0 draw it; all registers preserved
+;
+; SPEC.md 28.10.2. The rows get their band from the chunk loop's own pen; the
+; seven TMC_* elements have nothing to derive one from, so each site names its
+; y range - which is a constant it already had, being the one it hands tm_lrun
+; or tm_map_rect three instructions later.
+;
+; X IS NOT ASKED. Every one of these spans the pane, so a damage rect that
+; crosses the band at all crosses the element, and the two compares would
+; always answer the same. The rows are the opposite case and that is where the
+; x half pays (tm_dmg_hit).
+;
+; tm_hbar is deliberately NOT on this: its own prologue does not save DX, and
+; a scroll bar is a full-height strip that a damage rect crossing this window
+; at all is going to cross. Sixteen drawing calls, kept.
+; -----------------------------------------------------------------------------
+tm_elchk_y:
+    call tm_elchk
+    jnc .out                    ; changed: drawn whatever the damage says
+    push ax
+    push bx
+    mov ax, [tm_cy]
+    add ax, dx
+    cmp ax, [tm_dmg+2]
+    jb .no                      ; the band ends above the damage
+    mov ax, [tm_cy]
+    add ax, cx
+    cmp ax, [tm_dmg+6]
+    ja .no                      ; ...or starts below it
+    pop bx
+    pop ax
+    clc                         ; a pop writes no flag, so the answer is set
+    ret                         ; after them and survives
+.no:
+    pop bx
+    pop ax
+    stc
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1911,6 +2363,10 @@ tm_ckz:
 ; -----------------------------------------------------------------------------
 tm_draw_full:
     call tm_rowck_clear
+tm_draw_band:                   ; ...and the entry that does NOT, for a damage
+                                ; repaint: [tm_dmg] decides which rows are
+                                ; forced and the keys decide the rest
+                                ; (SPEC.md 28.10.2)
     cmp byte [tm_view], 1       ; 0 performance, 1 memory, 2 heap (SPEC.md 28.4)
     je tm_draw_mem
     ja tm_draw_heap
@@ -2068,24 +2524,11 @@ tm_click:
                                 ; first unattended refresh of a page arrives
                                 ; one interval after it opened rather than up
                                 ; to TM_SLOW of them (SPEC.md 28.6)
-    mov bx, si
-    call OSAPI_WM_CONTENT             ; AX = content left, DX = content top
-    push ax                     ; ...and the far corner off the record, not
-    mov ax, [es:bx+W_Y]            ; a pair of constants: this fill is the ONLY
-    add ax, [es:bx+W_H]            ; thing that erases the outgoing view, and a
-    sub ax, 2                   ; short one leaves its tail rows lettered
-    mov cx, [es:bx+W_X]            ; under the incoming one (they were 198x245
-    add cx, [es:bx+W_W]            ; against a content that had grown to 231x282).
-    sub cx, 2                   ; TWO, not one: y+h-1 and x+w-1 are the frame's
-                                ; own bottom and right BORDERS, and a fill that
-                                ; reached them left the window open-sided until
-                                ; something repainted the frame
-    mov bx, dx
-    mov dx, ax
-    pop ax
-    TM_INK CWHITE
-    call OSAPI_GFX_FILL
-    call tm_draw_full           ; SI = window ptr still
+    call tm_clear_content       ; SI = window ptr; the ONLY thing that erases
+    call tm_draw_full           ; the outgoing view (SPEC.md 28.10)
+    call tm_promise             ; ...and WHICH page it is now decides whether
+                                ; this window promises at all: 0 -> 1 takes the
+                                ; band, 2 -> 0 retires it (SPEC.md 28.11)
 .out:
     pop dx
     pop cx
@@ -2373,7 +2816,9 @@ tm_cap_xms:
 
     call tm_rowsum              ; unchanged? then so are its pixels
     mov bx, tm_elck + 2*TMC_XMS
-    call tm_elchk
+    mov cx, TMM_XMS_Y
+    mov dx, TMM_XMS_Y + 7
+    call tm_elchk_y
     jc .out
 
     mov ax, TMM_XMS_Y              ; SPEC.md 28.5.1: placed, padded and drawn as
@@ -2457,7 +2902,9 @@ tm_map_ram:
     xor ax, ax                  ; at build time and the total is the boot int
     call tm_sumb                ; 12h figure - so it IS the key
     mov bx, tm_elck + 2*TMC_MRAM
-    call tm_elchk
+    mov cx, TMM_M1_Y1
+    mov dx, TMM_M1_Y2
+    call tm_elchk_y
     jc .out
 
     TM_INK CWHITE
@@ -3034,10 +3481,26 @@ tm_hkb:
 ; REGION is stamped with the slot and its data claims with the segment
 ; (SPEC.md 50.2/20.1). A built-in has no region and stamps everything with the
 ; slot, which the same two tests cover without a special case.
+;
+; ...AND A THIRD, WHICH IS NOT THE INSTANCE'S OWN WORD AT ALL (SPEC.md
+; 28.4.5). A raise cache is stamped MEM_P_WSAVE plus a WINDOW slot (11.96.3),
+; which is a kernel tag, so every one of them landed under System - tens of KB
+; of a 640KB machine appearing on the one page that reports memory as an
+; anonymous row belonging to nobody, whoever actually caused it.
+; OSAPI_WM_OWNSEG (11.96.3.1) turns that slot back into the segment that owns
+; the window, and tm_ispt already holds the same thing per instance, so the
+; claim can be filed under the package that caused it. It costs no columns:
+; the page is grouped and TMH_IND is the indent that puts a claim under its
+; owner already.
+;
+; A window the KERNEL made answers KERNEL_SEG, which no tm_ispt ever holds, so
+; the Disk window's cache stays under System of its own accord - no special
+; case, and the two arms below stay each other's exact complement.
 ; -----------------------------------------------------------------------------
 tm_hmatch:
     push ax
     push bx                     ; BX is the group AND, below, the slot's word
+    push dx                     ; ...and tm_wsown answers in DX
     mov ax, [si+CLS_SEG]        ; index: DX cannot index on an 8086 (SPEC.md 1)
     or ax, ax
     jz .no                      ; a free record
@@ -3051,18 +3514,54 @@ tm_hmatch:
     je .no
     cmp ax, [tm_ispt+bx]        ; ...a package's data claims carry it
     je .yes
+    call tm_wsown               ; ...and a raise cache carries a WINDOW slot,
+    jc .no                      ; which names a segment one call away
+    cmp dx, [tm_ispt+bx]
+    je .yes
     jmp short .no
 .sys:
     cmp ah, MEM_PG_MIN          ; 0xFB..0xFF is a kernel tag, purgeable or not.
     jb .no                      ; A SEGMENT can never reach that: conventional
-.yes:                           ; memory tops out at 0xA000
+                                ; memory tops out at 0xA000
+    call tm_wsown               ; ...but a raise cache is only System's if the
+    jc .yes                     ; window is (KERNEL_SEG). Anybody else's has
+    cmp dx, KERNEL_SEG          ; just been claimed by the arm above, and a
+    jne .no                     ; claim counted twice is a total that lies
+.yes:
     clc
     jmp short .out
 .no:
     stc
 .out:
-    pop bx                      ; pop leaves the flags alone
+    pop dx                      ; pop leaves the flags alone
+    pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_wsown - whose WINDOW does the raise cache at SI belong to?
+; in:  SI = a claim record
+; out: CF = 1 it is not a raise cache, or names no live window - and DX is
+;      unspecified; CF = 0 and DX = the segment that owns that window
+; clobbers: DX and the flags
+;
+; SPEC.md 11.96.3.1. The range test is the same shape as everywhere else in
+; this file - a base plus an ordinal, compared unsigned so a lower owner wraps
+; high and fails - and the far call is only reached for a record already known
+; to be in it, which on a live desktop is one or two of the thirty-two.
+; -----------------------------------------------------------------------------
+tm_wsown:
+    push ax
+    mov ax, [si+CLS_OWN]
+    sub ax, MEM_P_WSAVE
+    cmp ax, MEM_P_WSAVE_N
+    jae .no
+    call OSAPI_WM_OWNSEG        ; AL = the window slot; out CF, DX
+    pop ax
+    ret
+.no:
+    pop ax
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3247,6 +3746,10 @@ tm_htype:
     sub dx, MEM_P_WSAVE         ; slot (SPEC.md 11.96.3), so it is not in the
     cmp dx, MEM_P_WSAVE_N       ; exact-match table below
     jb .wsave
+    mov dx, ax                  ; ...and the FAT windows, one per VOLUME, which
+    sub dx, MEM_P_FATW          ; became a range when they became a cache
+    cmp dx, MEM_P_FATW_N        ; (SPEC.md 18.8.4)
+    jb .fatw
     mov si, tm_ktab
 .scan:
     mov dx, [si]
@@ -3261,6 +3764,9 @@ tm_htype:
     jmp short .put
 .wsave:
     mov si, tm_s_twsav
+    jmp short .put
+.fatw:
+    mov si, tm_s_tfatw
     jmp short .put
 .hex:
     call tm_put4x               ; AX is still the owner word
@@ -3660,7 +4166,9 @@ tm_cap_htot:
 
     call tm_rowsum
     mov bx, tm_elck + 2*TMC_HTOT
-    call tm_elchk
+    mov cx, TMH_TOT_Y
+    mov dx, TMH_TOT_Y + 7
+    call tm_elchk_y
     jc .out
 
     mov ax, TMH_TOT_Y              ; SPEC.md 28.5.1: placed, padded and drawn as
@@ -3734,7 +4242,9 @@ tm_cap_hspl:
 
     call tm_rowsum
     mov bx, tm_elck + 2*TMC_HSPL
-    call tm_elchk
+    mov cx, TMH_SPL_Y
+    mov dx, TMH_SPL_Y + 7
+    call tm_elchk_y
     jc .out
 
     mov ax, TMH_SPL_Y              ; SPEC.md 28.5.1: placed, padded and drawn as
@@ -3795,7 +4305,9 @@ tm_cap_hfrg:
 
     call tm_rowsum
     mov bx, tm_elck + 2*TMC_HFRG
-    call tm_elchk
+    mov cx, TMH_FRG_Y
+    mov dx, TMH_FRG_Y + 7
+    call tm_elchk_y
     jc .out
 
     mov ax, TMH_FRG_Y              ; SPEC.md 28.5.1: placed, padded and drawn as
@@ -4298,7 +4810,10 @@ tm_row_draw:
     call tm_chunksum            ; AX = their hash (DI preserved)
     mov bx, [tm_ckb]
     call tm_elchk               ; changed? (BX = this chunk's check word)
-    jc .next                    ; no - its pixels are already right
+    jnc .draw
+    call tm_dmg_hit             ; no - so its pixels are right UNLESS this
+    jc .next                    ; paint's damage took them (SPEC.md 28.10.2)
+.draw:
     call tm_row_lead            ; the FIRST chunk owns the band's LEAD-IN too
     jc .rect                    ; - and erasing it counts as a draw, because
     pop si                      ; the legend square lives in it and the caller
@@ -4630,6 +5145,37 @@ tm_sumb:
     mov ax, bx
     pop cx
     pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_qpeek - tm_elchk's answer WITHOUT recording it
+; in:  AX = key, BX = a TMC_* check word's address
+; out: CF = 1 unchanged, CF = 0 changed; the stored key is NOT touched
+; clobbers: nothing else
+;
+; SPEC.md 28.11. tm_elchk records what it was asked about, which is right for
+; a draw - it has just put those pixels on the glass. tm_quiet is not a draw:
+; it is the question "is a paint owed at all", asked with no lock held and
+; answered on intervals where the paint may then be REFUSED (the window is
+; wholly covered and OSAPI_WM_CLIP_SET says so). Recording there spends the
+; change on an interval that drew nothing, and the page sits stale until
+; something else moves - 28.6.1 names that hazard and works around it by
+; ordering the two calls; this removes it.
+;
+; It is the precondition for 28.11's repair: a debt that is consumed while
+; covered cannot be replayed when the window comes back.
+; -----------------------------------------------------------------------------
+tm_qpeek:
+    or ax, ax                   ; the never-zero rule is tm_elchk's and applies
+    jnz .cmp                    ; here for the same reason: 0 is what
+    inc ax                      ; tm_rowck_clear writes
+.cmp:
+    cmp ax, [bx]
+    je .same
+    clc
+    ret
+.same:
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -4978,7 +5524,10 @@ tm_txt_ram_y:
 .built:
     call tm_rowsum              ; unchanged since the last refresh? then the
     mov bx, tm_elck + 2*TMC_LINE            ; pixels on screen are already right
-    call tm_elchk
+    mov cx, [tm_liny]           ; ...and neither view puts this line at the
+    mov dx, cx                  ; same y, so the band comes off the variable
+    add dx, 7                   ; the draw below reads (SPEC.md 28.10.2)
+    call tm_elchk_y
     jc .out
 
     mov ax, [tm_liny]           ; SPEC.md 28.5.1: placed, padded and drawn as
@@ -5016,7 +5565,9 @@ tm_bar:
 
     mov ax, [tm_barw]           ; the bar IS its width: same width, same two
     mov bx, tm_elck + 2*TMC_BAR             ; rectangles, same pixels
-    call tm_elchk
+    mov cx, TM_BAR_Y1
+    mov dx, TM_BAR_Y2
+    call tm_elchk_y
     jc .done
 
     mov si, [tm_barw]
@@ -5095,7 +5646,9 @@ tm_xbar:
 
     mov ax, [tm_xbarw]
     mov bx, tm_elck + 2*TMC_XBAR
-    call tm_elchk
+    mov cx, TMM_XB_Y1
+    mov dx, TMM_XB_Y2
+    call tm_elchk_y
     jc .done
 
     mov si, [tm_xbarw]
@@ -5779,7 +6332,13 @@ tm_sqp      equ tm_sqox + 2  ; ...and its texture, or 0 for no square. A
                                 ; would be erased again
 tm_elck     equ tm_sqp + 2  ; the last drawn state of the non-row
                                 ; elements, one word each (TMC_*)
-tm_rowx     equ tm_elck + TMC_N * 2  ; the left edge of the row being drawn: tm_cx
+tm_qkey     equ tm_elck + TMC_N * 2  ; tm_quiet's key, held until a paint
+                                ; actually happens (SPEC.md 28.6.1): the
+                                ; question is asked with no lock and the paint
+                                ; can still be REFUSED under it, so the answer
+                                ; is recorded by whoever draws and not by
+                                ; whoever asks
+tm_rowx     equ tm_qkey + 2  ; the left edge of the row being drawn: tm_cx
                                 ; for column 0, one TM_COLW on for column 1
 tm_xbarw    equ tm_rowx + 2  ; the XMS bar's black run, px (TMC_XBAR)
 tm_penx     equ tm_xbarw + 2  ; where the row's text starts: the process
@@ -5896,4 +6455,11 @@ tm_hsb      equ tm_hpad + 2  ; the shared bar's seven-word block
                                        ; (SPEC.md 13.10.2): x1 y1 x2 y2, then
                                        ; total, fit, pos
 
-TM_BSS_TOTAL equ tm_hsb + 14 - os88_image_end
+tm_dmg      equ tm_hsb + 14  ; THIS PAINT'S DAMAGE, absolute, x1 y1 x2
+                                       ; y2 (SPEC.md 28.10.2) - the rect
+                                       ; tm_clear_owed filled, which is
+                                       ; exactly the rect that has to be
+                                       ; lettered again. Read by tm_dmg_hit
+                                       ; once per chunk and by nothing else
+
+TM_BSS_TOTAL equ tm_dmg + 8 - os88_image_end

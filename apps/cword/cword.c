@@ -620,6 +620,21 @@ static char cw_st_lamp[20];
 
 static int cw_dlg;                      /* CW_DLG_*, 0 = none */
 static int cw_pending;                  /* the CWA_* a save is running ahead of */
+
+/* --- the launch document (SPEC.md 54.10) ---------------------------------
+ * Double-clicking a .RTF launches this program, and until 54.10 that was all
+ * it did: the association was registered and os88_arg_file() was never called,
+ * so the document the user picked opened EMPTY. It is read from os88_onwake()
+ * and not from os88_main(), for the reason 54.10 gives every app in the tree -
+ * an entry proc runs under the loader's own lock burst with no window on the
+ * glass, so the read would freeze the desktop with the file manager still the
+ * only thing on it. File scope, not automatics: `&local` does not build here
+ * (SPEC.md 73). */
+static char cw_argname[16];             /* the document, 8.3 + NUL */
+static struct os88_place cw_argplace;   /* ...and the folder it lives in */
+static int cw_argp;                     /* ...and whether one is pending: 0,0
+                                         * is a real place (drive A's root), so
+                                         * the pair cannot speak for itself */
 static int cw_quit;                     /* File > Close/Exit was chosen */
 static int cw_hired;                    /* the worker is running */
 static int cw_dragging;                 /* the button is down in the text */
@@ -2588,5 +2603,42 @@ void *os88_main(void)
     os88_assoc_set("RTF", "CWORD");     /* double-clicking a document on the
                                          * desktop launches this (SPEC.md 54.5) */
     os88_wm_onmouseup(win);             /* the release half of a drag */
+
+    /* ...and the document that double-click named. BANKED, not read: the
+     * kernel calls os88_onwake() once this window is on the glass and that is
+     * where the floppy is touched (SPEC.md 54.10). */
+    if (os88_arg_file(cw_argname, &cw_argplace) == 0)
+        cw_argp = 1;
+    os88_wm_onwake(win);
     return win;
+}
+
+/* os88_onwake - W_ONWAKE (SPEC.md 54.10/74.1): open the launch document.
+ *
+ * The UI task with the gfx lock NOT held, which is exactly what this needs:
+ * os88_file_goto() is a remount and the file slots are the UI task's. It takes
+ * the lock for the burst 74.1 lets it state - one remount, one read, one parse
+ * and one repaint - because everything below ovl_file_load() draws.
+ *
+ * Below the goto it is os88_onfile()'s OPEN arm, deliberately: a document
+ * opened by double-click and the same document opened through File > Open now
+ * differ in nothing but where the name came from. The size is passed as 0,
+ * which is ovl_file_load()'s own "no size known" - the association path has
+ * none to give, where the Standard File dialog does - so the ceiling is
+ * os88_file_read()'s CW_RTF_MAX rather than a refusal before the motor. */
+void os88_onwake(void *win)
+{
+    if (!cw_argp)
+        return;
+    cw_argp = 0;
+    os88_gfx_lock();
+    /* THE GOTO GETS ITS OWN ARM.  It answers -1 when the folder could not be
+     * listed, and with no arm the whole launch failed in silence: the window
+     * came up empty and a double-click looked like it had done nothing. */
+    if (os88_file_goto(&cw_argplace) != 0)
+        cw_toast("Could not open that folder.");
+    else
+        ovl_file_load(win, cw_argname, 0, 0);
+    cw_redraw_all(win);
+    os88_gfx_unlock();
 }

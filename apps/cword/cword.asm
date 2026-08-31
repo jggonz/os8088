@@ -24,6 +24,8 @@
 %define CC_HAS_ONMOUSEUP            ; void os88_onmouseup(int, int, void *)
 %define CC_HAS_ABOUT                ; void os88_about(void *)
 %define CC_HAS_FDLG                 ; void os88_onfile(...)
+%define CC_HAS_ONWAKE               ; void os88_onwake(void *) - the launch
+                                    ; document (SPEC.md 54.10)
 %define CC_HAS_WORKER               ; void os88_worker(void *) - the close path
                                     ; (there is no self-close slot: SPEC.md
                                     ; 65.2, and apps/cword/cwcmd.c says how)

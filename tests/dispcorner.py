@@ -58,6 +58,7 @@ import time
 
 sys.path.insert(0, "/home/user/os8088/tools")
 sys.path.insert(0, "/home/user/os8088/tests")
+import os88geom                                             # noqa: E402
 import os88marty, os88mouse, os88sym, dispcp                # noqa: E402
 
 def S(name, _d=[()]):
@@ -71,6 +72,9 @@ def S(name, _d=[()]):
 
 TITLE_H, MBAR_H = 18, 20
 PARK = (4, MBAR_H + 4)
+
+
+snapw = os88geom.snapw          # SPEC.md 11.94.5, mirrored once
 
 # `hello` IS THE SUBJECT BECAUSE IT DOES NOTHING - no worker, no animation, a
 # 240x90 window that draws one string. That is what makes "capture, force a
@@ -548,9 +552,15 @@ def main():
             hx, hy, hw, hh = dispcp.win_rect(m, S, h)
             print("%s at (%d,%d) %dx%d - its shadow corner is (%d,%d)"
                   % (HELLO_FILE, hx, hy, hw, hh, hx, hy + hh))
-            if (hw, hh) != (240, 90):       # hl_tpl. A window of another size
-                sys.exit("that is not %s: hl_tpl is 240x90 and this is %dx%d"
-                         % (HELLO_FILE, hw, hh))   # is another PROGRAM
+            want = (snapw(240), 90)         # hl_tpl, THROUGH SPEC.md 11.94.5's
+            if (hw, hh) != want:            # size snap - the kernel rounds a
+                sys.exit("that is not %s: hl_tpl is %dx%d after 11.94.5 and "
+                         "this is %dx%d"    # frame down until its CONTENT is
+                         % (HELLO_FILE, want[0], want[1], hw, hh))
+                                            # whole bytes, so 240 lands at 242
+                                            # and a literal here reads as
+                                            # "another PROGRAM", which is what
+                                            # this check exists to say
 
             prev = [None]           # the last check's post-repaint capture
             # SPEC.md 11.96.13.1's residue is possible on this leg from the

@@ -38,15 +38,22 @@ INST_MAX = 12
 
 # 0xFF00 | tag - the kernel's own claims (SPEC.md 50.2); 0xFB..0xFE in the
 # high byte is a PURGEABLE tag carrying its priority (50.6.4).
-KTAG = {0xFF01: "SAVE",  0xFF03: "DRV",   0xFF04: "COPY", 0xFF05: "FATW",
+KTAG = {0xFF01: "SAVE",  0xFF03: "DRV",   0xFF04: "COPY",
         0xFF06: "ASC",   0xFF07: "CLIP",  0xFF08: "MOD",  0xFF09: "CLONE",
         0xFF0A: "BAND",  0xFF0B: "OVL"}
+# Purgeable RANGES: base -> (name, count). The consumer adds an ordinal to the
+# base, so these are decoded before the exact-match table (SPEC.md 50.6).
+# 0xFF05 was MEM_K_FATW until the FAT window became a cache (SPEC.md 18.8.4).
+PGRANGE = {0xFB10: ("WSAVE", 16), 0xFD20: ("FATW", 8)}
 PGO_MIN, PGO_MAX = 0xFB, 0xFE
 PURGE = {0xFB: "TRIV", 0xFC: "LOW", 0xFD: "MED", 0xFE: "HIGH"}
 
 
 def owner(w):
     hi = w >> 8
+    for base, (nm, n) in PGRANGE.items():
+        if 0 <= w - base < n:
+            return "purge:%s/%s%d" % (PURGE[base >> 8], nm, w - base)
     if hi in PURGE:
         return "purge:%s/%02X" % (PURGE[hi], w & 0xFF)
     if w in KTAG:
