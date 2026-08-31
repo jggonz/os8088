@@ -54,7 +54,7 @@ whole develop–run cycle lives on the target with zero new kernel bytes.
 | **`WEAVE.WSM`** | the runtime's **canvas core** (§1.2.2): a second, RESIDENT segment, read ONCE at open and only when the bundle declares a `<canvas>`, far-called from the worker as well as from the UI task. It is not an overlay and does not carry the `.OVL` extension, because an overlay is refusable and on-demand and this is neither — `cc_ovneed` refuses a worker outright (SPEC.md §73.14), and every byte in here runs per frame on one |
 | **`LOOM.O88`** | the IDE. A separate native package (the WORD/CWORD precedent: two things may not answer to one name). Note Pad's editor engine transplanted with prefix `lm_` — **by way of `apps/cword`'s C realisation of it, not out of `notepad.asm`** (§1.2.3 has the arithmetic) — a file-list sidebar, one editor pane |
 | **`LOOM.OVL`** | Loom's one overlay: the WML compiler, the WJS compiler, the FX pre-compiler, the atom interner, the bundle writer. Pack is a menu command and menu commands may refuse — the canonical overlay tenant |
-| **`apps/weave/*.inc`** | the shared component library: **paint and hit-test** cores as assembly source `%include`d by BOTH packages (the `apps/os88ui.inc` model, SPEC.md §20.5.1 — this platform's only code-sharing mechanism). They are assembly from wave 2 because they run under the gfx lock, once per callback, and are what LOOM's Preview (§1.7) paints with. **The flow walk (§7) is C in the runtime** and is not one of them: it emits no gfx call, runs over at most 250 records in microseconds (§7.2), and has exactly one caller until LOOM exists. When LOOM lands (wave 6) it takes the same walk — moved to a shared `.inc`, or called through one — and **never a second copy**: two layouts that must agree cell-for-cell (§12) is the failure §11's byte-identity rule exists to prevent, said about code instead of about bundles |
+| **`apps/weave/*.inc`** | the shared component library: **paint and hit-test** cores as assembly source `%include`d by BOTH packages (the `apps/os88ui.inc` model, SPEC.md §20.5.1 — this platform's only code-sharing mechanism). They are assembly from wave 2 because they run under the gfx lock, once per callback, and are what LOOM's Preview (§1.7) paints with. **The flow walk (§7) is C in the runtime** and is not one of them: it emits no gfx call, runs over at most 250 records in microseconds (§7.2), and has exactly one caller until LOOM exists. When LOOM lands (wave 6) it takes the same walk — moved to a shared `.inc`, or called through one — and **never a second copy**: two layouts that must agree cell-for-cell (§12) is the failure §11's byte-identity rule exists to prevent, said about code instead of about bundles. **Wave 6 did not need it and did not write one**: Preview shipped without its picture (§1.7.1), so LOOM lays nothing out and the walk still has exactly one caller. The rule is unbroken because there is no second copy, not because one was shared — and it binds the wave-7 row that draws the pane. What LOOM *does* share as source today is `wblob.inc` (the claim accessors), `wnum.inc` (§5.1's conversion, extracted for it), `weave.h` and — the load-bearing one — `wfxc.c`, which is LOOM's whole FX pre-compiler |
 | **`tools/weavesim.py`** | the host reference implementation, written FIRST (the `tools/htmsim.py` precedent): parser, compiler, packer (`--pack`), WVM and FX interpreters, flow-walk layout, gfx-call cost model (`--costs`, §14), `--render`, `--emit-optab`, `--emit-foldtab`, `--selfcheck`. Deterministic, byte-for-byte |
 | **`tests/unit/t_wab.py`** | the independent second reader of `.WAB`, written from THIS file, sharing no code with any packer |
 
@@ -3341,6 +3341,16 @@ spellings above**: a project whose entry file is `FORM.WML` may carry
 attribute names the script outright and is authoritative for that one file.
 Both packers must agree about WHICH FILE they read or §11.1's byte-identity
 gate is comparing two different projects.
+
+**A FLAT FOLDER holding several projects is legal and slightly confusing**,
+and it is worth saying because `make loomdisk` and `make weavedisk` build one:
+the fallback spellings are per-DIRECTORY, so `FORM.WML` beside `SHEET.WFX`
+lists that sheet as its own. Nothing is miscompiled — a project with no
+`<grid>` never reads a `.WFX` at all, and both packers do the same thing for
+the same reason, so the gate is safe — but the file switcher shows a file the
+project does not use. **A folder per project is what §11.2 describes** and
+what wave 7's `PROJECTS/` will build; the flat disk is a distribution
+convenience and this paragraph is its footnote.
 
 ### 11.3 What the packer validates
 
