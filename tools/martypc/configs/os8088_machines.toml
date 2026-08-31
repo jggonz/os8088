@@ -1142,3 +1142,48 @@ overlays = ["pcxt_2_360k_floppies", "us_modelf_keyboard"]
     bus_type = "ISA"
     type = "CGA"
     clock_mode = "Default"
+
+# =============================================================================
+# ...and the SAME MACHINE AT 256KB, which is a different question rather than a
+# smaller machine (WEAVE-SPEC 1.4, 13.1's wave-7 row).
+#
+# 256KB is the Weave family's FLOOR: at 128KB the kernel is kern_small, which
+# refuses GFX_BLIT1, WM_TIMER and WM_ONDRAG by CF=1, and WEAVE-SPEC 9.12 puts
+# the family's floor at this machine for that reason. What 1.4 states about it
+# is an arithmetic - "exactly ONE Weave app at a time... the second launch
+# refuses BEFORE ANY I/O" - and tests/weaveone.py is what reads that off the
+# glass rather than off the document.
+#
+# WHY IT IS NOT os8088_5150_sb_256k, WHICH ALREADY EXISTS. That machine asks
+# for rom_set = "ibm5150_82_v4", which is IBM's ROM: tools/martypc/build.sh
+# says in as many words that it is not in this tree and cannot be, and a
+# container or a fresh clone therefore cannot boot it. A gate that only runs on
+# a machine with a licensed ROM on it is a gate that quietly does not run, so
+# this one is GLaBIOS - the same rom_set every other automated row in this tree
+# uses - and CGA, which is the target class (SPEC.md 39.4).
+#
+# THE BOOT IS SLOWER AT THIS SIZE and the harness has to be told: the 128KB
+# machine's own note in docs/MARTYPC-DEBUG.md says `settle`'s menu-bar gate
+# fires on the splash there, because a slow machine holds a still frame for
+# longer than the gate's patience. The same applies here and tests/weaveone.py
+# waits on the desktop rather than on the gate.
+[[machine]]
+name = "os8088_5150_cga_gla_256k"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0x40000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"

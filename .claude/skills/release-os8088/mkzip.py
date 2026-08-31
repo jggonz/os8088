@@ -59,9 +59,10 @@ MANIFEST = [
                               "read-only, so settings and saved files last until "
                               "power-off; the USB image keeps them."),
     ("apps-all.img",   False, "Every program on one 1.44MB software disk, including both "
-                              "word processors, the story reader, the CP/M emulator and "
-                              "the Commodore 64. Use this instead of apps.img if you "
-                              "would rather swap one disk than five."),
+                              "word processors, the story reader, the CP/M emulator, the "
+                              "Commodore 64 and the Weave programs and their editor. Use "
+                              "this instead of apps.img if you would rather swap one disk "
+                              "than seven."),
     ("word.img",       False, "Word processor disk, 1.44MB."),
     ("word720.img",    False, "Word processor disk, 720KB."),
     ("word360.img",    False, "Word processor disk, 360KB."),
@@ -78,6 +79,13 @@ MANIFEST = [
                               "Commodore ROM images it reads at launch, and COPYING."),
     ("c64720.img",     False, "Commodore 64 disk, 720KB."),
     ("c64360.img",     False, "Commodore 64 disk, 360KB."),
+    ("weave.img",      False, "Weave disk, 1.44MB. Web-style programs - markup, script "
+                              "and formulas - compiled into one bundle file and run "
+                              "natively. Carries the runtime, three demo programs, the "
+                              "editor that builds them and the sources they were built "
+                              "from."),
+    ("weave720.img",   False, "Weave disk, 720KB."),
+    ("weave360.img",   False, "Weave disk, 360KB."),
 ]
 
 # Files packed beside the images, when the image they belong to is here.

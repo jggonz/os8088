@@ -137,6 +137,19 @@ make c64disk    #   3.10's x64 as a windowed Commodore 64 — a 6510 in a 64KB
                 #   in raw QEMU), `make c64bandbench` the composer's bench, and
                 #   `make c64cputest` the 6510's — it arrives with the core.
                 #   THE CONTRACT IS docs/C64-SPEC.md, not a section of SPEC.md
+make weave      # WEAVE (WEAVE-SPEC §1.2), the family's runtime: web-style
+make weavedisk  #   apps - markup, script and formulas - compiled at pack time
+                #   into one `.WAB` bundle and interpreted natively. `make
+                #   weavedisk` builds the family's floppy in all three
+                #   geometries: the runtime, `WEAVE.OVL`, `WEAVE.WSM`
+                #   (WEAVE-SPEC §1.2.2's canvas core), the three demo
+                #   bundles, LOOM and its `LOOM.WPV` (WEAVE-SPEC §1.2.4), a
+                #   writable `PROJECTS/` folder holding the demo sources a
+                #   folder each (WEAVE-SPEC §11.2) and a
+                #   `CATALOG.TXT` per geometry. `BUNDLES='path/MYAPP.WAB'`
+                #   adds your own, the way `CPMSW=` and `STORIES=` do — and
+                #   the geometry still has to hold them, which is what the
+                #   recipe's cluster arithmetic refuses on
 make loom       # LOOM (WEAVE-SPEC §1.2), the family's second package: the
 make loomdisk   #   in-OS IDE that edits a project's sources and packs the
                 #   `.WAB` ON THE MACHINE, byte-identical to what
@@ -145,8 +158,12 @@ make loomdisk   #   in-OS IDE that edits a project's sources and packs the
                 #   host half of it every time (the `lmpack` row, four
                 #   seconds), and `python3 tools/os88test.py soak -k
                 #   'weave*'` runs the machine's. `make loomdisk` puts both
-                #   packages, both overlays, WEAVE.WSM, the demo bundles and
-                #   the demo SOURCES on one floppy in all three geometries
+                #   packages, both overlays, WEAVE.WSM, LOOM.WPV, the demo
+                #   bundles and the demo SOURCES FLAT on one floppy in all
+                #   three geometries — flat because that is what WEAVE-SPEC §12.3's
+                #   pack gate opens, where `make weavedisk`'s `PROJECTS/` is
+                #   WEAVE-SPEC §11.2's folder-per-project shape. Two disks,
+                #   two shapes
 make netbench   # THE STACK'S PROFILER (SPEC.md 72.15): NETBENCH.O88 beside
                 #   FTPD.O88 on one disk, in all three geometries. ETHER.DRV
                 #   brackets its own ten stages with the PIT and this is the
@@ -164,8 +181,12 @@ make ethertest  # THE ETHERNET GATE'S DISK (§72.9): a SYSTEM.CFG that already
                 #   speed because the machine under it is not an 8088
 make browsertest # ...and the browser's page disk, for tests/br*.py
 make allapps  # build/apps-all.img (§19.10): ONE 1.44MB floppy with every app
-              #   on it, Frotz, both Words and RunCPM (with its drive A)
-              #   included, for a release page. Needs the C toolchain and
+              #   on it, Frotz, both Words, RunCPM (with its drive A), the
+              #   C64 and the Weave family's two — one folder each, so
+              #   `WEAVE/` carries the package, both modules and the bundles
+              #   and `LOOM/` the IDE and its own — for a release page. The
+              #   payload is DERIVED, so `make live` carries it too and
+              #   neither list is edited twice. Needs the C toolchain and
               #   the RunCPM fetch, so it is on demand like cworddisk —
               #   it and the live media below are the only targets outside
               #   §73/§74 that do
@@ -214,7 +235,7 @@ exactly like the feature being broken.
 `286-sound`,
 `386sx`, `386`, `386-sound`, `486`, `pentium`, `xt-z`, `386-z`, `xt-word`,
 `386-word`, `386-c-word`, `xt-runcpm`, `286-runcpm`, `386-runcpm`, `xt-c64`,
-`286-c64`, `386-c64`, `xt-weave`, `386-weave`;
+`286-c64`, `386-c64`, `xt-weave`, `386-weave`, `xt-weave-256`;
 plus `marty` (MartyPC). `xt-multimon` is the
 **two-card** XT — a CGA and a Hercules, a monitor window each — and the only
 86Box machine that can show §39.12–§39.19's extended desktop; it boots Single,
@@ -225,11 +246,18 @@ machines (§68.5), `386-c-word` is the C word processor's (§73.12) and
 geometry because the three disks carry different software and the machines
 run at different speeds — which for a CP/M game IS the play speed (§74.5,
 §74.6) — `xt-c64`/`286-c64`/`386-c64` the C64 emulator's (C64-SPEC §14.3,
-one per geometry for that same reason), and `xt-weave`/`386-weave` the Weave
-runtime's (WEAVE-SPEC §13.1) — the thirteen that put a dedicated
+one per geometry for that same reason), and
+`xt-weave`/`386-weave`/`xt-weave-256` the Weave family's
+(WEAVE-SPEC §13.1) — the fourteen that put a dedicated
 floppy in B: instead of the apps disk. `xt-weave` takes the **360KB** Weave
-disk rather than a 3.5" one — it fits in 33 of 354 clusters — so it is where
-that geometry of it is booted at all. `make zdisk` builds the story disk
+disk rather than a 3.5" one — it fits in 209 of 354 clusters, the whole
+family on one floppy — so it is where that geometry of it is booted at all,
+and **`xt-weave-256` is the same 4.77MHz XT with 256KB** rather than 640,
+which is WEAVE-SPEC §1.4's floor machine: it holds exactly ONE Weave app and
+the second launch refuses before any I/O with the arithmetic on the glass.
+That machine is for LOOKING at the refusal — 86Box cannot assert anything
+(docs/TESTING.md) — and `tests/weaveone.py` asserts the same sentence under
+MartyPC. `make zdisk` builds the story disk
 (`tools/getstories.py` fetches the stories, which are never committed), `make
 worddisk` the Word disk, `make cworddisk` the CWORD disk — which carries
 `WELCOME.RTF`, the same welcome document the Word disk carries as a `.DOC`,
@@ -238,7 +266,8 @@ runcpmdisk` the RUNCPM disks (`tools/getruncpm.py` fetches RunCPM's CCP and
 master disk at a pinned commit and `tools/getcpmsw.py` the CP/M games and
 applications that ride beside it, §74.6 — never committed, either of them;
 `make rczex` and `make rcz80test` are the Z80 core's ZEXDOC gates, in the OS
-and in raw QEMU). **`make wiredisk`** is the same shape for a package that
+and in raw QEMU), `make c64disk` the C64 disks, and `make weavedisk` /
+`make loomdisk` the Weave family's two. **`make wiredisk`** is the same shape for a package that
 DOES NOT SHIP: WIREFRAME is an instrument rather than an application (§78.9),
 so `all` builds `wire.o88` and no shipped floppy carries it, and the three
 tests that drive it — `wireflick`, `wirefps`, `uilat` — default to that disk.

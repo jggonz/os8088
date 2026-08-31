@@ -351,6 +351,90 @@ is 60% of what wave 5 opened with.
 
 ---
 
+### 2.10 Preview's painter is a SECOND SEGMENT too, and the alternatives are priced
+
+**The decision wave 7 turns on, recorded here so that whoever reverses it
+starts from the arithmetic rather than from the shape of the code.** The
+contract is WEAVE-SPEC §1.2.4; this is why. It is §2.9's decision taken again
+for a different reason, and the difference between the two reasons is the
+whole of this section: §2.9's code could not be an overlay tenant because a
+**worker** cannot enter one; wave 7's code could enter one perfectly well, and
+the thing that does not fit is not code at all.
+
+**What wave 7 opened with.** `loom.o88` at 54,648 image + 6,198 bss =
+**60,846 resident** against SPEC.md §20.1's `APP_MAX_SIZE` of 0xF000 = 61,440.
+**594 bytes.** And WEAVE-SPEC §1.7.1's row to pay: Preview's picture.
+
+**What Preview's picture needs, and why an overlay does not move it.** The
+picture is WEAVE-SPEC §7's flow walk and WEAVE-SPEC §6's component painter —
+`apps/weave/wflow.c`, `apps/weave/wpaint.c` and the assembly cores in
+`apps/weave/wdraw.inc`. SPEC.md §73.14 moves **code** into a module and leaves
+*"every global, literal and bss byte it names resident and DS-relative"*, and
+what those files name is:
+
+| what | bytes |
+|---|---|
+| `w_lay[W_MAXLAY]` — the walk's output table, ten bytes a record | 2,500 |
+| `w_lpos`, `w_lsel1`, `w_ctext`, `w_cflag` — four byte tables keyed by comp_id | 1,004 |
+| `w_cval`, `w_cvold` — two word tables, ditto | 1,004 |
+| `w_str` (the staged string), `w_sbblk`, the list-override pool, the walk's own statics | ~250 |
+| the rest of the module's `.bss` as built | — |
+| **measured, `LOOM.WPV`'s `.bss` as it shipped** | **5,268** |
+
+against **594**. An overlay moves none of it. That is the paragraph, and every
+alternative below is judged against it.
+
+**The four alternatives, each with the number that lost it.**
+
+| alternative | the arithmetic | verdict |
+|---|---|---|
+| **Make `wflow.c`/`wpaint.c` `ovl_*` tenants of `LOOM.OVL`** | The obvious answer, and the one WEAVE-SPEC §1.7.1 asks to be judged honestly. The CODE moves and 5,268 bytes of data do not, against 594. The overlay's own size was never the constraint — `LOOM.OVL` is 42,902 bytes against a segment's 64KB — and neither was the callback rule: a `W_PAINT` runs on the UI task, so it *may* enter an overlay and would simply have to draw WEAVE-SPEC §1.7.1's label when it could not. It is the data | **Refused, by 4,674 bytes.** The instrument does not cut in this direction |
+| **Write a smaller painter inside LOOM** | It fits, and WEAVE-SPEC §1.2 forbids it by name: *"never a second copy… two layouts that must agree cell-for-cell is the failure §11's byte-identity rule exists to prevent, said about code instead of about bundles."* A Preview that drew a different picture from the runtime's is worse than one that draws none, because the whole point of the pane is to answer "what will this look like" before `^R` | **Refused, and it is the one alternative that is refused on principle rather than on arithmetic** |
+| **Move the tables into a claim and keep the code in the overlay** | Reachable: `w_lay[]` and the six tables become `w_w(seg,…)` accessors against a claim. It costs a far call per field on the walk's and the painter's hot paths — and it is a rewrite of `wflow.c` and `wpaint.c`, which are **WEAVE's** files, so the cost lands on the RUNTIME's per-paint path to buy the IDE a pane. Wave 5's own measured refusal of the same idea (§2.9's second row) applies twice over here | **Refused: it spends the runtime's speed on the IDE's feature**, and WEAVE closed wave 5 with 32 bytes spare, so it could not have absorbed the change either |
+| **Raise `APP_MAX_SIZE`** | §2.9's first row, unchanged and still not this project's to take: a package addresses itself with 16-bit offsets, 0xF000 leaves the loader its headroom, and raising it spends a kernel constant every package in the tree is measured against | **Refused, and it is the owner's** |
+
+**What was taken instead** is §2.9's answer with one difference: `LOOM.WPV` is
+a second, resident segment beside `LOOM.O88`, read once the first time Preview
+is opened and held until the instance closes — and it is **compiled C** rather
+than hand-written assembly, which is new in this tree. That costs exactly one
+thing beyond WEAVE-SPEC §1.2.2's shape, stated in WEAVE-SPEC §1.2.4: a C module
+has a `.bss` its file does not carry, so the header carries a bss word, LOOM
+claims image + bss, and the module zeroes the tail itself on its first entry.
+Everything else — the three-word stamp grown to four, the far-call seam, the
+`OSAPI_*` far immediates that need no vector back into the package — is the
+canvas core's, one wave later.
+
+**What it costs, and it is not free.** One more claim record: LOOM's ladder
+goes to **five at peak against SPEC.md §50.2's cap of eight** (WEAVE-SPEC
+§1.4), which is comfortable where WEAVE's is not. 21KB of heap and one floppy
+read, on the first Preview of an instance and never again — and nothing at all
+for a LOOM the user never previews in. 228 resident bytes in `LOOM.O88` for
+the seam, the loader and the three refusal sentences, leaving **366 under**
+the ceiling. One more file that has to travel with the package, which is one
+more `LOOM.WPV is not on this disk.` and one more reason `make weavedisk`,
+`make loomdisk` and SPEC.md §19.10's `LOOM/` folder put the three files
+together.
+
+**And the honest savings were taken first**, because §2.9 set that rule and a
+wave that reaches for a mechanism without them has not earned it. Wave 6's
+Preview pane carried six rows of prose in it; the pane now carries a picture,
+so the prose is three one-line refusals and the label moved to the status row.
+That is where most of the 228 came back from: the first build of the seam
+closed at 61,402 — **38 bytes under** — and trimming the sentences a pane no
+longer needs took it to 61,074.
+
+**What it does NOT buy, named rather than left to be found.** A `<grid>` and a
+`<canvas>` draw as their frame in Preview (WEAVE-SPEC §1.7.1), because a
+grid's body is the band composer over a cell store and a canvas's is the
+compositor inside `WEAVE.WSM` on a worker — a second claim, a second module
+and a recalculation apiece. And the pane does not ARM: WEAVE-SPEC §1.7's
+*"widgets draw and arm/fire natively"* is drawing in wave 7 and not the
+gesture, which needs `apps/weave/wact.c`'s press/release pair and the field
+pool under it, and firing needs the event ring, which is the VM's. Both are in
+WEAVE-SPEC §13.2.
+
+---
+
 ## 3. The platform facts that shaped everything
 
 None of these was derived during design; each was verified in the tree by

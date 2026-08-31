@@ -90,13 +90,27 @@ make 386-runcpm # 86Box: the 386DX with the 1.44MB one - everything
 make c64disk  # build the C64 floppy - a Commodore 64: the package, its
               # overlay and C64.ROM, the KERNAL/BASIC/CHARGEN sidecar
               # (make c64rom builds that from the ROMs in apps/c64/rom/)
-make c64disk  # ...in all three geometries: c64.img, c64720.img, c64360.img
+              # ...in all three geometries: c64.img, c64720.img, c64360.img
 make xt-c64   # 86Box: the 4.77MHz XT with the 360KB C64 disk in B: - where
               # the speed figure on the status row is the one that matters
 make 286-c64  # 86Box: the 12.5MHz 286 with the 720KB one
 make 386-c64  # 86Box: the 386DX with the 1.44MB one
-make allapps  # one 1.44MB floppy with every program on it, both word
-              # processors, Frotz and RunCPM included
+make weavedisk # build the Weave floppy - web-style apps compiled to a .WAB
+              # bundle and run natively: the runtime, its two companion
+              # modules, three demo bundles, LOOM (the in-OS IDE that edits
+              # and packs them), a writable PROJECTS folder with the demo
+              # sources and a CATALOG.TXT saying what is on it. All three
+              # geometries. BUNDLES='path/to/MYAPP.WAB' adds your own
+make xt-weave # 86Box: the 640KB 4.77MHz XT with the 360KB Weave disk in B:
+make 386-weave # 86Box: the 386DX with the 1.44MB one
+make xt-weave-256 # ...and the 256KB XT, which holds exactly ONE Weave app:
+              # the second one refuses before it touches the disk, with the
+              # arithmetic on the glass
+make loomdisk # the IDE's own floppy: LOOM and the runtime beside it, with
+              # the demo sources flat, in all three geometries
+make allapps  # one 1.44MB floppy with every program on it - both word
+              # processors, Frotz, RunCPM, the Commodore 64 and the Weave
+              # family included
 make live     # the live media (docs/LIVE-MEDIA.md): os8088-usb.img, a
               # bootable hard-disk image for a USB stick, and os8088.iso,
               # the same image as a live CD - the whole OS and every app
@@ -512,7 +526,10 @@ cleanly and runs wrong when C meets this machine.
 | `build/word*.img`      | 1.44MB / 720KB / 360KB   | Microsoft Word floppies (`make worddisk`) |
 | `build/cword*.img`     | 1.44MB / 720KB / 360KB   | Word in C, package + `CWORD.OVL` (`make cworddisk`) |
 | `build/runcpm*.img`    | 1.44MB / 720KB / 360KB   | RunCPM, package + `RUNCPM.OVL` + CP/M drive A + the games and applications each holds (`make runcpmdisk`) |
-| `build/apps-all.img`   | 1.44MB FAT12             | every program on one floppy, the four above included (`make allapps`) |
+| `build/c64*.img`       | 1.44MB / 720KB / 360KB   | Commodore 64, package + `C64.OVL` + the `C64.ROM` sidecar (`make c64disk`) |
+| `build/weave*.img`     | 1.44MB / 720KB / 360KB   | Weave: the runtime and its two modules, the demo bundles, LOOM, `PROJECTS/` and `CATALOG.TXT` (`make weavedisk`) |
+| `build/loom*.img`      | 1.44MB / 720KB / 360KB   | the Weave IDE's own disk, with the demo sources flat (`make loomdisk`) |
+| `build/apps-all.img`   | 1.44MB FAT12             | every program on one floppy, the seven above included (`make allapps`) |
 
 The boot sector takes its geometry from `-DSPT` / `-DHEADS` at assembly
 time and reads exactly as many sectors as the measured kernel occupies.
@@ -620,6 +637,16 @@ All targets, at a glance:
 | `386-z` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | Sound Blaster 16 |
 | `xt-word` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | — |
 | `386-word` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | — |
+| `386-c-word` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | — |
+| `xt-runcpm` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | — |
+| `286-runcpm` | AMI 286 clone | 286 @ 12.5MHz | 1MB | OTI-067 VGA | — |
+| `386-runcpm` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | — |
+| `xt-c64` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | — |
+| `286-c64` | AMI 286 clone | 286 @ 12.5MHz | 1MB | OTI-067 VGA | — |
+| `386-c64` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | — |
+| `xt-weave` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | — |
+| `386-weave` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | — |
+| `xt-weave-256` | IBM PC/XT | 8088 @ 4.77MHz | **256KB** | OTI-067 VGA | — |
 
 The XT-class machines boot the 360KB system disk; most pair it with the 360KB
 apps disk, while `xt-sound-1.44` mounts the everything disk in a 1.44MB B:
@@ -629,7 +656,11 @@ drive. The AT-class machines boot the 1.44MB pair.
 each — and the only 86Box machine that can show the extended desktop. It boots
 Single; Control Panel → Display → Desktop is what extends it.
 
-The last four put a **dedicated floppy** in B: instead of the apps disk.
+The last sixteen put a **dedicated floppy** in B: instead of the apps disk.
+`xt-weave-256` is the same 4.77MHz XT as `xt-weave` with 256KB rather than
+640KB, because that is the machine the Weave runtime's memory arithmetic is
+written about: it holds exactly one Weave app, and the second one refuses
+before it touches the disk.
 `xt-z` and `386-z` are the Frotz machines and take a **story floppy** — `xt-z`
 with a 720KB 3.5" DD drive (360KB does not hold a library), `386-z` with two
 1.44MB drives and a second library disk to swap in. Both carry the full 640KB,

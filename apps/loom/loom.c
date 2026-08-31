@@ -600,9 +600,19 @@ void os88_onclick(int x, int y, void *win)
         return;
     }
     if (lm_state == LM_ST_PREVIEW)
-        return;                         /* 1.7: Preview's widgets arm and fire
-                                         * natively, and there are none until
-                                         * the painter lands - see lmprev.c */
+        return;                         /* 1.7, as wave 7 amended it: the pane
+                                         * DRAWS and does not arm. Arming a
+                                         * control in there needs wact.c's
+                                         * press/release pair and the field
+                                         * pool under it inside LOOM.WPV, and
+                                         * firing needs the event ring, which
+                                         * is the VM's - and a Preview is the
+                                         * thing that does not run one
+                                         * (WEAVE-SPEC 13.2). The click is
+                                         * swallowed rather than falling
+                                         * through to the editor, because the
+                                         * editor is not what is on the
+                                         * glass */
     lm_ed_click(x, y);
 }
 

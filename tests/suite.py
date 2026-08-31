@@ -331,6 +331,50 @@ SOAK = [
         "that happens. The retry is weavesmoke's and is not loosened here - "
         "a gate that hid it would hide a host that had really got slower",
         needs=("marty", "cc"), serial=True, timeout=600),
+    Row("weaveprev", "soak", py("tests/weaveprev.py"), 260.0,
+        "WEAVE-SPEC 1.7.1 and 12.3: LOOM's PREVIEW PANE against "
+        "`weavesim --render --preview`. Wave 7 draws the pane with WEAVE's "
+        "own flow walk and WEAVE's own component painter, compiled a second "
+        "time into LOOM.WPV - a second RESIDENT segment (1.2.4) - and "
+        "NOTHING ELSE IN THIS FAMILY ENTERS THAT MODULE AT ALL: weavegfx "
+        "reads the runtime's window and every assertion it makes would pass "
+        "with the pane blank. Because the two images run the same TEXT "
+        "(apps/weave/wflow.c and apps/weave/wpaint.c are #included rather "
+        "than reimplemented, 1.2's 'never a second copy'), a wrong picture "
+        "here is the SEAM or the SEGMENT and never the painter - the pane "
+        "rect arriving wrong, the module's .bss not zeroed, the caller's DS "
+        "not banked, a stale module believed. Those are exactly the failures "
+        "a second segment adds and an overlay does not. weavegfx's three "
+        "assertions, aimed at the pane; all THREE demo projects, because "
+        "SHEET has a <grid> and PONG a <canvas> and 1.7.1's rule is that a "
+        "Preview draws those as their frame - which the model was taught in "
+        "one flag rather than the test being taught to ignore two "
+        "components. Both 1bpp adapters. 260s is 218s MEASURED over three "
+        "consecutive runs (215, 218, 221) with a margin for the one thing "
+        "that flakes in this family, a double-click whose two presses "
+        "straddle the kernel's 9-tick window; the retry is weavesmoke's and "
+        "is not loosened here",
+        needs=("marty", "cc"), serial=True, timeout=600),
+    Row("weaveone", "soak", py("tests/weaveone.py"), 90.0,
+        "WEAVE-SPEC 1.4's 256KB machine, ASSERTED: the family's floor board "
+        "holds exactly ONE Weave app, and the second launch is refused while "
+        "the first goes on running. It is the one row in this family about "
+        "MEMORY rather than about a picture or a number, and the arithmetic "
+        "it checks is the one WEAVE-SPEC 1.4 states and nothing else "
+        "exercised - wave 5 moved it by one claim and wave 7 found the "
+        "document naming the wrong refusal: the second launch never reaches "
+        "WEAVE, because a package region is claimed by the KERNEL before the "
+        "package runs (SPEC.md 20.1, 21) and WEAVE's is 61,408 bytes, so the "
+        "loader answers LD_ENOMEM and the Finder says `Out of memory`. What "
+        "is asserted is that byte and not the toast drawn from it, which is "
+        "a ~3s transient no polling rate worth having catches; plus that the "
+        "first app is STILL THERE, which is kernel/loader.inc's own opening "
+        "promise and the thing a refusal that took the running app down "
+        "with it would break. MartyPC on a GLaBIOS 256KB machine, because a "
+        "machine wanting IBM's ROM cannot boot in this tree; `make "
+        "xt-weave-256` is the same question on 86Box and is manual evidence "
+        "only (docs/TESTING.md). 90s is 61s measured over three runs",
+        needs=("marty", "cc"), serial=True, timeout=300),
     Row("weavegame", "soak", py("tests/weavegame.py"), 50.0,
         "WEAVE-SPEC 6.10, 12.3, 14: PONG.WAB under MartyPC, and it asks "
         "wirefps's and wireflick's two questions of a sprite canvas "

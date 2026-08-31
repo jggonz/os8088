@@ -4355,11 +4355,20 @@ def natural_h(rt, comp, w, cw, ch, y):
     return 1
 
 
-def flow_walk(rt, adapter, card=None):
+def flow_walk(rt, adapter, card=None, cells=None):
     """The normative walk (WEAVE-SPEC 7.2): one pass, deterministic; hidden
-    components still take part. Returns ([Placed], total_rows)."""
+    components still take part. Returns ([Placed], total_rows).
+
+    `cells` overrides the adapter's standard content grid with a (CW, CH) the
+    caller measured. The walk reads the LIVE content box on the machine
+    (7.1.1) and there is more than one box a card can be laid out in: LOOM's
+    Preview pane is a CHILD AREA inside a window (1.7, 1.2.4), narrower than
+    the window by the sidebar and the scroll bar and shorter by the status
+    row. Nothing about the walk changes - this is the same two numbers
+    arriving from somewhere else, which is exactly what os88_wm_content()
+    does for the runtime."""
     A = ADAPTERS[adapter]
-    cw, ch = A["cw"], A["ch"]
+    cw, ch = cells if cells else (A["cw"], A["ch"])
     card = card or rt.b.entry
     comps = [c for c in rt.b.cards[card - 1] if c.tag != "sprite"]
     rows, cur, x = [], [], 0
@@ -4393,12 +4402,22 @@ def flow_walk(rt, adapter, card=None):
     return placed, y
 
 
-def render(rt, adapter, card=None, out=print):
+def render(rt, adapter, card=None, out=print, preview=False, cells=None):
     """--render: the walk drawn as text, one char per cell, one line per
-    8-px row - the htmsim --render shape."""
+    8-px row - the htmsim --render shape.
+
+    `preview` is LOOM's pane rather than the runtime's window (WEAVE-SPEC
+    1.7.1): the SAME walk and the SAME components, with <grid> and <canvas>
+    drawn as their frame and nothing inside it. That is not a second picture
+    invented for the model - it is what LOOM.WPV draws, because a grid's body
+    is the band composer over a CELL STORE and a canvas's is the sprite
+    compositor inside WEAVE.WSM, and a Preview builds neither. Everything
+    else on the card is identical, which is the point: the one flag is what
+    lets tests/weaveprev.py diff the pane against this oracle for the same
+    three demo bundles tests/weavegfx.py diffs the runtime against."""
     A = ADAPTERS[adapter]
-    cw, ch = A["cw"], A["ch"]
-    placed, total = flow_walk(rt, adapter, card)
+    cw, ch = cells if cells else (A["cw"], A["ch"])
+    placed, total = flow_walk(rt, adapter, card, cells)
     grid_h = max(total, 1)
     canvas = [[" "] * cw for _ in range(grid_h)]
 
@@ -4406,6 +4425,16 @@ def render(rt, adapter, card=None, out=print):
         for k, chr_ in enumerate(s):
             if 0 <= x + k < cw and 0 <= y < grid_h:
                 canvas[y][x + k] = chr_
+
+    def frame(p):
+        """A component's rect and nothing inside it - what wd_box() draws.
+        <box> is the component this IS (WEAVE-SPEC 6.3); a <grid> and a
+        <canvas> borrow it in `preview`, because that is the call LOOM.WPV
+        makes for them (apps/loom/lmpvmod.c's w_gframe)."""
+        put(p.x, p.y, "+" + "-" * (p.w - 2) + "+")
+        for k in range(1, p.h - 1):
+            put(p.x, p.y + k, "|" + " " * (p.w - 2) + "|")
+        put(p.x, p.y + p.h - 1, "+" + "-" * (p.w - 2) + "+")
 
     for p in placed:
         st = rt.comps[p.comp.comp_id]
@@ -4424,10 +4453,7 @@ def render(rt, adapter, card=None, out=print):
         elif t == "rule":
             put(p.x, p.y, "-" * p.w)
         elif t == "box":
-            put(p.x, p.y, "+" + "-" * (p.w - 2) + "+")
-            for k in range(1, p.h - 1):
-                put(p.x, p.y + k, "|" + " " * (p.w - 2) + "|")
-            put(p.x, p.y + p.h - 1, "+" + "-" * (p.w - 2) + "+")
+            frame(p)
         elif t == "meter":
             fill = 0 if st["max"] == 0 else \
                 (p.w - 2) * st["value"] // st["max"]
@@ -4452,6 +4478,8 @@ def render(rt, adapter, card=None, out=print):
                 else:
                     row = ""
                 put(p.x, p.y + k, row.ljust(p.w - 1) + "|")
+        elif t == "grid" and preview:
+            frame(p)                    # 1.7.1: the rect, and nothing in it
         elif t == "grid":
             # WEAVE-SPEC 6.9.1, and the 8086 draws these same characters:
             # the formula bar, the header band, then one data band a row.
@@ -4463,18 +4491,18 @@ def render(rt, adapter, card=None, out=print):
             for k in range(vr):
                 put(p.x, p.y + WG_BAR + WG_HDR + k, g.band(p.w, p.h, k))
         elif t == "canvas":
-            put(p.x, p.y, "+" + "-" * (p.w - 2) + "+")
-            for k in range(1, p.h - 1):
-                put(p.x, p.y + k, "|" + " " * (p.w - 2) + "|")
-            put(p.x, p.y + p.h - 1, "+" + "-" * (p.w - 2) + "+")
+            frame(p)
+            if preview:
+                continue                # ...and no sprites: they live in the
+                                        # canvas claim WEAVE.WSM composes into
             for scid in st["sprites"]:
                 s = rt.comps[scid]
                 if s["shown"]:
                     put(p.x + max(0, min(p.w - 1, s["x"] // 8)),
                         p.y + max(0, min(p.h - 1, s["y"] // 8)), "o")
-    out("%s  card %d/%d  %s  content %dx%d cells"
+    out("%s  card %d/%d  %s  content %dx%d cells%s"
         % (rt.b.app_name, card or rt.b.entry, len(rt.b.cards),
-           A["name"], cw, ch))
+           A["name"], cw, ch, "  (Preview pane)" if preview else ""))
     out("+" + "-" * cw + "+")
     for i, row in enumerate(canvas):
         mark = "|" if i < ch else ":"       # beyond the window clips
@@ -5480,7 +5508,7 @@ def dump_state(rt):
     print("gfx calls this session: %d" % rt.gfx_calls)
 
 
-def cmd_render(path, adapters, card=None):
+def cmd_render(path, adapters, card=None, preview=False, cells=None):
     if path.lower().endswith(".wab"):
         rt = runtime_for(path)
     else:
@@ -5496,7 +5524,7 @@ def cmd_render(path, adapters, card=None):
                             "" if len(rt.b.cards) == 1 else "s",
                             len(rt.b.cards)))
     for ad in adapters:
-        render(rt, ad, card)
+        render(rt, ad, card, preview=preview, cells=cells)
         print()
 
 
@@ -6284,6 +6312,116 @@ def run_selfcheck(verbose=False):
 
 
 # --- main --------------------------------------------------------------------
+# --- the disk's own catalogue (WEAVE-SPEC 13.1's wave-7 distribution row) ----
+#
+# `make weavedisk` builds a floppy in three geometries and the three carry
+# different things, so each one says what is on it and why. GAMES.TXT on the
+# RUNCPM disks is the precedent (SPEC.md 74.6) and tools/getstories.py's
+# write_catalog() is the shape: CRLF because a .TXT on a FAT floppy is
+# expected to have it and these disks are meant to be readable on a DOS PC
+# (SPEC.md 19); Note Pad word-wraps prose (SPEC.md 27.11), so paragraphs run
+# on and only the SHAPED lines - the headings, the rules and the file list -
+# are hand-wrapped.
+#
+# IT LIVES HERE AND NOT IN THE MAKEFILE because this file already knows every
+# bundle: it packed them. A heredoc in a recipe would be a second list of what
+# the disk carries, kept in step by hand.
+
+WEAVE_CATALOG_BUNDLES = [
+    ("FORM.WAB", "a form: labels, a field, a button, a check and a meter, "
+                 "with a script behind them"),
+    ("SHEET.WAB", "a spreadsheet: a grid of formula cells and a formula bar"),
+    ("PONG.WAB", "a game: a canvas, sprites and a frame loop on a worker"),
+]
+
+WEAVE_CATALOG_PROJECTS = ["FORM", "SHEET", "PONG"]
+
+
+def catalog_text(geometry, loom):
+    """The disk's own note. `loom` says whether the IDE rode this geometry."""
+    o = []
+    o.append("WEAVE DISK")
+    o.append("=" * 28)
+    o.append("")
+    o.append("Web-style applications for os8088. A .WAB bundle is a whole")
+    o.append("program - markup, script and formulas, compiled on the host or")
+    o.append("on this machine - and WEAVE.O88 is what runs one. Double-click")
+    o.append("a .WAB.")
+    o.append("")
+    o.append("THE RUNTIME")
+    o.append("-" * 28)
+    o.append("  WEAVE.O88   the runtime itself")
+    o.append("  WEAVE.OVL   the part of it that loads on demand. Without")
+    o.append("              this file beside it, no bundle opens at all.")
+    o.append("  WEAVE.WSM   the canvas core, read only by a bundle that")
+    o.append("              draws sprites. PONG needs it; the other two do")
+    o.append("              not.")
+    o.append("")
+    o.append("All three have to stay in one folder. A disk with the program")
+    o.append("on it and not its two companions is a program that refuses")
+    o.append("politely and says which file is missing.")
+    o.append("")
+    o.append("THE BUNDLES")
+    o.append("-" * 28)
+    for name, what in WEAVE_CATALOG_BUNDLES:
+        o.append("  %-12s%s" % (name, what))
+    o.append("")
+    if loom:
+        o.append("THE IDE")
+        o.append("-" * 28)
+        o.append("  LOOM.O88    edit a project and build its bundle, here,")
+        o.append("  LOOM.OVL    on this machine. Open a .WML from PROJECTS,")
+        o.append("  LOOM.WPV    press ^P to pack and click Preview to see")
+        o.append("              the card before you run it. All three files")
+        o.append("              together, the same way the runtime's three")
+        o.append("              are.")
+        o.append("")
+        o.append("PROJECTS")
+        o.append("-" * 28)
+        o.append("  A folder for each of the three programs above, holding")
+        o.append("  the sources they were built from. Pack writes the new")
+        o.append("  bundle beside them, so these folders are the ones to")
+        o.append("  copy when you want to start from something that works.")
+        for name in WEAVE_CATALOG_PROJECTS:
+            o.append("    PROJECTS\\%s" % name)
+        o.append("")
+    else:
+        o.append("THE IDE IS NOT ON THIS DISK")
+        o.append("-" * 28)
+        o.append("  LOOM and the PROJECTS folder are on the 720KB and 1.44MB")
+        o.append("  builds of this disk; this geometry has no room for them.")
+        o.append("  `make loomdisk` builds a disk of the IDE's own in all")
+        o.append("  three sizes.")
+        o.append("")
+    o.append("YOUR OWN BUNDLES")
+    o.append("-" * 28)
+    o.append("  BUNDLES='path/to/MYAPP.WAB' in the Makefile puts your own on")
+    o.append("  a disk of your own, beside these. They must already be valid")
+    o.append("  8.3 names, and the geometry still has to hold them - the")
+    o.append("  disk build says so if it does not.")
+    o.append("")
+    o.append("This is the %dKB disk." % geometry)
+    return "\r\n".join(o) + "\r\n"
+
+
+def write_catalog(path, geometry, loom):
+    """Write it only when the bytes changed, so a regenerated catalogue does
+    not force a disk rebuild that has nothing in it (tools/getcpmsw.py's
+    write_if_changed, which tools/getstories.py notably does not do)."""
+    data = catalog_text(geometry, loom).encode("ascii", "replace")
+    if os.path.exists(path):
+        with open(path, "rb") as fh:
+            if fh.read() == data:
+                return
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    with open(path, "wb") as fh:
+        fh.write(data)
+    print("weavesim: catalogue for the %dKB disk -> %s (%d bytes)"
+          % (geometry, path, len(data)))
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="Weave's host reference implementation "
@@ -6301,6 +6439,25 @@ def main():
                     help="the bundle's source, for the id map")
     ap.add_argument("--render", metavar="WML_OR_WAB",
                     help="draw the flow-walk layout as text")
+    ap.add_argument("--cells", metavar="CWxCH",
+                    help="--render: lay the card out in this content grid "
+                         "instead of the adapter's standard one - LOOM's "
+                         "Preview pane is a child area inside a window "
+                         "(WEAVE-SPEC 1.7.1) and tests/weaveprev.py measures "
+                         "it off the glass")
+    ap.add_argument("--catalog", metavar="FILE",
+                    help="write the Weave disk's CATALOG.TXT (CRLF) and exit; "
+                         "needs --geometry, and --with-loom when the IDE "
+                         "rides that geometry")
+    ap.add_argument("--geometry", type=int, choices=(360, 720, 1440),
+                    help="which disk --catalog is describing")
+    ap.add_argument("--with-loom", action="store_true",
+                    help="--catalog: this geometry carries LOOM and PROJECTS")
+    ap.add_argument("--preview", action="store_true",
+                    help="render LOOM's Preview pane rather than the "
+                         "runtime's window (WEAVE-SPEC 1.7.1): the same walk "
+                         "and the same components, with a <grid> and a "
+                         "<canvas> drawn as their frame")
     ap.add_argument("--card", type=int, help="card to render (default: "
                     "the entry card)")
     ap.add_argument("--adapter", default="cga",
@@ -6336,6 +6493,11 @@ def main():
     adapters = sorted(ADAPTERS) if args.all_adapters else [adapter]
 
     try:
+        if args.catalog:
+            if not args.geometry:
+                raise SystemExit("--catalog needs --geometry 360|720|1440")
+            write_catalog(args.catalog, args.geometry, args.with_loom)
+            return 0
         if args.selfcheck:
             return run_selfcheck(args.verbose)
         if args.emit_optab:
@@ -6380,7 +6542,16 @@ def main():
                     args.render_after)
             return 0
         if args.render:
-            cmd_render(args.render, adapters, args.card)
+            cells = None
+            if args.cells:
+                try:
+                    cw, ch = (int(v) for v in args.cells.lower().split("x"))
+                except ValueError:
+                    raise SystemExit("--cells wants CWxCH, e.g. 60x15")
+                if cw < 1 or ch < 1:
+                    raise SystemExit("--cells: CW and CH are both at least 1")
+                cells = (cw, ch)
+            cmd_render(args.render, adapters, args.card, args.preview, cells)
             return 0
     except PackError as ex:
         print(ex, file=sys.stderr)

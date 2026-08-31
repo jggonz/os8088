@@ -170,6 +170,8 @@ when they exist:
 tools/setup-cc.sh                     # SmallerC; needed by cword and allapps
 make allapps                          # apps-all.img -- every program, one disk
 make worddisk cworddisk               # word*.img, cword*.img
+make c64disk                          # c64*.img
+make weavedisk                        # weave*.img -- the Weave family's disk
 make runcpm-src && make runcpmdisk    # runcpm*.img
 make live                             # os8088-usb.img + os8088.iso -- the live
                                       # USB image and the live CD (SPEC.md 80).

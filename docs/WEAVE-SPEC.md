@@ -54,7 +54,8 @@ whole develop–run cycle lives on the target with zero new kernel bytes.
 | **`WEAVE.WSM`** | the runtime's **canvas core** (§1.2.2): a second, RESIDENT segment, read ONCE at open and only when the bundle declares a `<canvas>`, far-called from the worker as well as from the UI task. It is not an overlay and does not carry the `.OVL` extension, because an overlay is refusable and on-demand and this is neither — `cc_ovneed` refuses a worker outright (SPEC.md §73.14), and every byte in here runs per frame on one |
 | **`LOOM.O88`** | the IDE. A separate native package (the WORD/CWORD precedent: two things may not answer to one name). Note Pad's editor engine transplanted with prefix `lm_` — **by way of `apps/cword`'s C realisation of it, not out of `notepad.asm`** (§1.2.3 has the arithmetic) — a file-list sidebar, one editor pane |
 | **`LOOM.OVL`** | Loom's one overlay: the WML compiler, the WJS compiler, the FX pre-compiler, the atom interner, the bundle writer. Pack is a menu command and menu commands may refuse — the canonical overlay tenant |
-| **`apps/weave/*.inc`** | the shared component library: **paint and hit-test** cores as assembly source `%include`d by BOTH packages (the `apps/os88ui.inc` model, SPEC.md §20.5.1 — this platform's only code-sharing mechanism). They are assembly from wave 2 because they run under the gfx lock, once per callback, and are what LOOM's Preview (§1.7) paints with. **The flow walk (§7) is C in the runtime** and is not one of them: it emits no gfx call, runs over at most 250 records in microseconds (§7.2), and has exactly one caller until LOOM exists. When LOOM lands (wave 6) it takes the same walk — moved to a shared `.inc`, or called through one — and **never a second copy**: two layouts that must agree cell-for-cell (§12) is the failure §11's byte-identity rule exists to prevent, said about code instead of about bundles. **Wave 6 did not need it and did not write one**: Preview shipped without its picture (§1.7.1), so LOOM lays nothing out and the walk still has exactly one caller. The rule is unbroken because there is no second copy, not because one was shared — and it binds the wave-7 row that draws the pane. What LOOM *does* share as source today is `wblob.inc` (the claim accessors), `wnum.inc` (§5.1's conversion, extracted for it), `weave.h` and — the load-bearing one — `wfxc.c`, which is LOOM's whole FX pre-compiler |
+| **`LOOM.WPV`** | Loom's **preview module** (§1.2.4): a second, RESIDENT segment carrying WEAVE's flow walk and WEAVE's component painter, compiled a second time out of the same source, read once the first time Preview is opened. `WEAVE.WSM`'s lifecycle exactly (§1.2.2); the difference is that this one is compiled C rather than assembly, so it carries a `.bss` word in its header and zeroes that region itself on its first entry |
+| **`apps/weave/*.inc`** | the shared component library: **paint and hit-test** cores as assembly source `%include`d by BOTH packages (the `apps/os88ui.inc` model, SPEC.md §20.5.1 — this platform's only code-sharing mechanism). They are assembly from wave 2 because they run under the gfx lock, once per callback, and are what LOOM's Preview (§1.7) paints with. **The flow walk (§7) is C in the runtime** and is not one of them: it emits no gfx call, runs over at most 250 records in microseconds (§7.2), and has exactly one caller until LOOM exists. When LOOM lands (wave 6) it takes the same walk — moved to a shared `.inc`, or called through one — and **never a second copy**: two layouts that must agree cell-for-cell (§12) is the failure §11's byte-identity rule exists to prevent, said about code instead of about bundles. **Wave 7 took it, and took it whole**: `LOOM.WPV` (§1.2.4) `#include`s `wflow.c` and `wpaint.c` and compiles them into a segment of its own, so the two images run the same TEXT and the rule holds the way it was meant to hold — one description of the picture, two copies of the object code, which is what SPEC.md §20.5.1 says code sharing IS on this platform. What LOOM shares as source is therefore `wflow.c` and `wpaint.c` (in the module), and `wblob.inc` (the claim accessors), `wnum.inc` (§5.1's conversion), `watom.c` (§2.7's atom accessors, extracted in wave 7 for the module), `weave.h` and — the load-bearing one — `wfxc.c`, which is LOOM's whole FX pre-compiler |
 | **`tools/weavesim.py`** | the host reference implementation, written FIRST (the `tools/htmsim.py` precedent): parser, compiler, packer (`--pack`), WVM and FX interpreters, flow-walk layout, gfx-call cost model (`--costs`, §14), `--render`, `--emit-optab`, `--emit-foldtab`, `--selfcheck`. Deterministic, byte-for-byte |
 | **`tests/unit/t_wab.py`** | the independent second reader of `.WAB`, written from THIS file, sharing no code with any packer |
 
@@ -288,6 +289,129 @@ to force into assembly (fit is width/8, pen is cell×8, hit is px/8).
 So the sentence in §1.2 stands as written and this section says what it
 means. The engine is Note Pad's; the transplant is `cword`'s.
 
+#### 1.2.4 `LOOM.WPV` — the preview module, resident and beside the package
+
+**This is §1.2.2's decision taken a second time, for a second reason, and it
+is the owner's to reverse.** Wave 6 shipped Preview's plumbing and its label
+and not its picture, and §1.7.1 carried the arithmetic. Wave 7 pays it.
+
+**Why an overlay is the wrong instrument here, which is not the same as its
+being full.** SPEC.md §73.14 moves **code** into a module beside the package
+and leaves *"every global, literal and bss byte it names resident and
+DS-relative"*. What does not fit in LOOM is the **data**: `wflow.c`'s output
+table is `W_MAXLAY` × 10 = 2,500 bytes, `wpaint.c` names six more tables keyed
+by comp_id (`w_lpos`, `w_lsel1`, `w_ctext`, `w_cval`, `w_cvold`, `w_cflag` —
+2,159 bytes with the list-override pool and the staged string), and the module
+as built measures **5,268 bytes of `.bss`**. LOOM closed wave 6 with **594**.
+An overlay cannot move one byte of that, so the tenant list of §1.2.1 does not
+come into it — the instrument does not cut in this direction. The alternatives
+are priced in docs/WEAVE-PLAN.md §2.10.
+
+The answer is CLAUDE.md's own hard rule read through §1.2.2's precedent: a
+second segment, and a resident one. It takes that section's lifecycle almost
+unchanged, and the three places it differs are stated rather than left to be
+found:
+
+- **A separate compilation AND a separate `nasm -f bin` assembly**, built from
+  `apps/loom/lmpvmod.c` and `apps/loom/lmpvmod.asm`. It is not part of LOOM's
+  one translation unit (SPEC.md §73.1) and names no package label; the two
+  agree about nothing except this section's ABI, in `apps/weave/wpvabi.inc`
+  (with `apps/weave/wpvabi.h` its C copy, guarded by `%if` in **both**
+  assemblies). **It is the first C second segment in this tree**, so it does
+  not go through `apps/cc/Makefile.inc`'s `CC_PACKAGE`: that macro builds a
+  PACKAGE — a 32-byte `O8` header, an entry the loader calls, callback
+  trampolines — and a module has none of those. What it does share with a
+  package is everything that matters: the same `smlrcc`, the same
+  `tools/cc8086.py` gate (SS ≠ DS, no `&local`, no `movs`/`stos`, 96-byte
+  frames), and `apps/cc/os88thunk.asm`.
+- **Read ONCE, on the UI task, the first time Preview is opened** — from
+  `lm_prev_on()` and deliberately **not** from inside the paint, because a
+  claim and a floppy read under the gfx lock is seconds of held lock on the
+  target machine. By the time `W_PAINT` far-calls the module, the module is
+  either resident or known to be absent. A LOOM instance whose user never
+  opens the pane pays nothing: not a byte of heap, not a disk revolution.
+- **Resident from that moment until the instance closes.** No unload, no
+  re-read, no refusal after the first success — which is what makes it safe to
+  far-call from a paint.
+- **DS is the caller's on entry and the module never changes it for the
+  caller.** Inside a verb the module sets DS = CS for the body's duration and
+  restores it, so the compiled C is ordinary C against its own statics. SS is
+  LOOM's task stack, never the module's. `OSAPI_*` are `KERNEL_SEG:offset` far
+  immediates, so the module calls the kernel directly and needs no vector back
+  into the package — §1.2.2's own sentence.
+
+**The layout.** Eight bytes of header, then the entry at a fixed offset:
+
+| offset | size | field |
+|---|---|---|
+| +0 | 2 | magic `0x5057` (`'W','P'` little-endian) |
+| +2 | 2 | ABI number — `WPV_ABI`, from `apps/weave/wpvabi.inc`, which BOTH assemblies `%include` |
+| +4 | 2 | the module's own image size in bytes |
+| +6 | 2 | **bytes of `.bss` past the image** |
+| +8 | — | **the entry**: `WPV_ENTRY` = 8, far-called, `AL` = verb |
+
+**The bss word is where this differs from `WEAVE.WSM`, and the difference is
+the whole difference between an assembly module and a C one.**
+`apps/weave/wcanvas.asm`'s state is initialised bytes inside its own image, so
+its claim is exactly the file. This module is compiled C with a `.bss` the
+file does not carry, so **LOOM claims image + bss** and **the module zeroes
+the tail itself on its first entry** — a flag in its `.data`, which is the
+only place such a flag can live, because a flag inside the region being
+cleared cannot say whether the region has been cleared. Claim the file's size
+alone and the walk's layout table lands outside the claim: a module that draws
+one correct picture and then writes over the heap.
+
+**The verbs.** Entered by `call far`, `AL` = the verb; `BX`/`CX`/`DX` its
+arguments; `AX` the answer; `BP`, `DS`, `ES`, `SI`, `DI`, `SS:SP` and `DF` as
+they arrived.
+
+| verb | |
+|---|---|
+| `WPVV_PAINT` = 0 | `BX` = the staged bundle's claim segment, `CX` → a parameter block in the CALLER's DS, `DX` = the window. out `AX` = 1 the card was walked and painted, or 0 with a `WPVE_*` code in `AH` |
+| `WPVV_ABOUT` = 1 | out `AX` = `WPV_ABI`. The one verb that needs no bundle, so a caller can say which module is actually loaded rather than which one it asked for |
+
+`WPVV_PAINT`'s block is five words in the caller's DS — the pane's `x`, `y`,
+`w`, `h` in screen pixels and the card index (1-based; 0 = the bundle's own
+entry card, §2.2). **It is a RECT and not a window, and that is the one thing
+this module cannot ask the window manager for**: Preview is a child area
+inside LOOM's content box (§1.7), and `OSAPI_WM_CONTENT` would answer with the
+sidebar and the status row in it. That is also the whole of the conditional
+this module puts into shared source — three lines in `wflow.c`'s `w_grid()`
+under `#ifdef W_PREVIEW`, where the caller has already written the box.
+
+The refusal codes are **codes and not sentences**, for §10.5's own reason said
+about a module: a string literal in here is a byte of a file LOOM has to read
+off a floppy, and LOOM already owns every sentence it prints. `WPVE_MAGIC` 1,
+`WPVE_SECT` 2, `WPVE_CARD` 3, `WPVE_PANE` 4.
+
+**The stamp, and what it catches.** Four words rather than §1.2.2's three —
+magic, ABI, image size and bss size — checked before the module is entered.
+The fourth is not decoration: a module whose bss grew and whose image did not
+would be claimed too small, and that is the one staleness a C module can have
+that an assembly one cannot. They do **not** catch two builds of the same ABI
+at the same two sizes, which is stated rather than implied — the same sentence
+SPEC.md §73.14 writes about its own two words.
+
+**The refusals name the file** (§10.3):
+
+> `LOOM.WPV is not on this disk.`
+> `LOOM.WPV does not match this program.`
+> `Not enough memory for LOOM.WPV.`
+
+`make weavedisk` and `make loomdisk` put LOOM, `LOOM.OVL` and `LOOM.WPV` in
+one folder for exactly this reason, and SPEC.md §19.10's `LOOM/` folder is the
+same rule on the everything disk.
+
+**What it costs, counted.** As built in wave 7: **16,174 bytes of image +
+5,268 of bss = 21,442, one 21KB claim**, taken the first time the pane is
+opened and held until the instance closes. Against the alternative it beat,
+that is the trade: LOOM's resident count grew by **228 bytes** — 214 of
+image and 14 of bss — for the seam, the loader and the three sentences, and
+the picture cost nothing else. LOOM closed wave 7 at 54,862 + 6,212 = 61,074,
+**366 under** SPEC.md §20.1's ceiling.
+
+---
+
 ### 1.3 The languages, and where compilation lives
 
 | language | what it writes | compiled to |
@@ -335,6 +459,27 @@ shapes each declare one. A wave that wants an eighth claim has to take one
 back first, and the obvious candidate is the transient — §8.3 could stage
 through the VM claim's own scratch at the cost of a bound on state size.
 
+**LOOM's own ladder is separate and shorter, and wave 7 moved it by one
+claim.** The IDE holds the sources claim, `LOOM.OVL`'s (SPEC.md §73.14), and —
+from the first time Preview is opened — **`LOOM.WPV`'s 21KB** (§1.2.4). Pack
+adds §11.4's two transients, the 62KB output claim and the 50KB scratch, and
+Preview keeps the first of those while the pane is up. **Five claim records at
+peak against the eight**, and the resident half of LOOM's own arithmetic is
+therefore:
+
+| piece | KB |
+|---|---|
+| LOOM package region (image+bss) | ~60 |
+| `LOOM.OVL` (§1.2.1's shape, on demand) | ~42 |
+| `LOOM.WPV` (§1.2.4; only once Preview has been opened) | 0–21 |
+| the sources claim | ~24 |
+| Pack's two transients (§11.4), while Pack or Preview runs | 0–112 |
+
+which is why §11.4's floor machine for LOOM is the 640KB XT `vm/xt-weave` is
+and not §1.4's 256KB one: a machine that runs bundles is not necessarily a
+machine that builds them, and 21KB more of resident module does not change
+which side of that line a machine falls on.
+
 Against the machine ladder — heap figures are `tools/kernsize.py`'s, the
 authority per docs/KERNEL-MEMORY.md (SPEC.md §61.4's 551/167 figures are
 stale and are not quoted here):
@@ -343,8 +488,25 @@ stale and are not quoted here):
   once, or two plus Loom. Loom + one WEAVE + Finder leaves ~250KB spare.
 - **256KB XT, ~140.5KB heap:** exactly **ONE** Weave app at a time. A full
   spreadsheet instance (~110KB) fits with ~30KB slack; the second launch
-  refuses **before any I/O** with §10.1's sentence naming both figures.
-  This is stated here and tested on the `xt` target, not discovered.
+  refuses **before any I/O**. This is stated here and **asserted** by
+  `tests/weaveone.py` (§12.3) on a 256KB MartyPC, and looked at on 86Box with
+  `make xt-weave-256`.
+
+  **WHICH refusal fires was wrong in this document until wave 7 ran it**, and
+  the correction is worth more than the sentence it replaces. This section
+  used to say the second launch refuses *"with §10.1's sentence naming both
+  figures"*. It does not, and it cannot: §10.1 is the **runtime** refusing its
+  own bundle's claims, and on this machine the runtime never starts. A
+  package's region is claimed by the **kernel's loader** before the package
+  runs at all (SPEC.md §20.1, §21), WEAVE's is 61,408 bytes, and with one
+  instance up there is not that much left — so `loader_run` answers
+  `LD_ENOMEM` and the Finder says `Out of memory` in the Disk window's status
+  row and in a toast (SPEC.md §22.9, §59). Both refusals are before any I/O
+  and the kernel's is *earlier*; §10.1's is what a **single** instance sees
+  when its own bundle, VM, grid and canvas asks do not fit, which is the case
+  a 256KB machine reaches with one large bundle rather than with two small
+  ones. Measured, not reasoned: `[ld_status]` = 5 on the second double-click,
+  no second window, and the first app still running.
 - **128KB machine, kern_small, ~22KB heap:** WEAVE refuses at launch with
   the arithmetic. kern_small also refuses `GFX_BLIT1`, `WM_TIMER` and
   `WM_ONDRAG` by CF=1, so the floor machine for the family is **256KB**.
@@ -411,39 +573,85 @@ nothing could type yet, would have been eaten by the first field on the
 card.
 
 Loom additionally offers **Preview** — the compiled UI stream rendered in a
-child area by the SAME shared component includes WEAVE paints with; widgets
-draw and arm/fire natively but no bytecode runs, and the pane is labelled
+child area by the SAME shared component includes WEAVE paints with; no
+bytecode runs, and the pane is labelled
 `Preview: layout and controls only - Run runs the app`.
 
-#### 1.7.1 What Preview is in wave 6, and the arithmetic that stopped it
+**Two things in that sentence moved in wave 7 and both are amendments rather
+than drift.** The label is in LOOM's **status row** and not in the pane's first
+row: the pane holds a picture now, and a label inside it would cost the card a
+row of cells on the adapter that has fewest of them. And this draft said
+*"widgets draw and arm/fire natively"* — **wave 7 ships the drawing and not
+the gesture**, with the arithmetic in §1.7.1. The gate §13.1 sets for the row
+is *"the pane draws what `weavesim --render` predicts"*, which is a drawing
+gate; arming a control in the pane needs `apps/weave/wact.c`'s press/release
+pair and the field pool underneath it, and firing it needs the event ring,
+which is the VM's — and a Preview is defined as the thing that does not run
+one. It is listed in §13.2 with what it would cost.
 
-**Wave 6 ships Preview's PLUMBING and its LABEL, and not its picture.** The
-pane packs the project into the transient output claim, keeps the claim while
-it is up, gives it back on the way out, refuses with §10.5's sentence and
-jumps the caret to the offending line — and then says, on the glass, what it
-cannot draw. That is the whole of it, and it is stated here rather than
-discovered by somebody who opens the pane.
+#### 1.7.1 What Preview is, and the arithmetic that shaped it
 
-The reason is a number and it is worth writing down, because the obvious fix
-is the one §1.2 forbids. Rendering the stream needs two things: the flow walk,
-which is `apps/weave/wflow.c` — fourteen of WEAVE's globals plus
-`w_draw_run` — and a PAINTER. The only painter is `apps/weave/wpaint.c`, 880
-lines that additionally name the per-component value arrays, the field pool,
-the grid's cell store and the canvas module's seam. LOOM closed this wave at
-**594 bytes** under SPEC.md §20.1's ceiling (§13.1), and standing wpaint.c up
-inside LOOM needs far more than that.
+**Wave 6 shipped Preview's plumbing and its label and not its picture; wave 7
+ships the picture.** The pane packs the project into the transient output
+claim, keeps the claim while it is up, gives it back on the way out, refuses
+with §10.5's sentence and jumps the caret to the offending line — and then
+draws the card, with the flow walk of §7 and the component painter of §6.
 
-**Writing a smaller painter is what §1.2 forbids by name** — "never a second
-copy… two layouts that must agree cell-for-cell is the failure §11's
-byte-identity rule exists to prevent, said about code instead of about
-bundles" — and a Preview that drew a *different* picture from the runtime's
-would be worse than one that draws none, because the whole point of the pane
-is to answer "what will this look like" before `^R`.
+**It draws with WEAVE's own code and not with a copy of it.** §1.2 forbids a
+second painter by name — *"never a second copy… two layouts that must agree
+cell-for-cell is the failure §11's byte-identity rule exists to prevent, said
+about code instead of about bundles"* — and a Preview that drew a *different*
+picture from the runtime's would be worse than one that draws none, because
+the whole point of the pane is to answer "what will this look like" before
+`^R`. So `apps/loom/lmpvmod.c` `#include`s `apps/weave/wflow.c` and
+`apps/weave/wpaint.c` verbatim and `%include`s `apps/weave/wdraw.inc`, and
+compiles the three into `LOOM.WPV` (§1.2.4). One description of the picture,
+two copies of the object code, which is what SPEC.md §20.5.1 says code sharing
+IS on this platform.
 
-So it is a wave-7 row with a price attached, and the price is the same one
-wave 5 paid: what LOOM needs is a second segment for the shared paint stack,
-or wpaint.c reached the way `WEAVE.WSM` is reached (§1.2.2). The seam is one
-function, `lm_prev_paint()`, and nothing else in LOOM has to move.
+**Why that needed a segment, in numbers, because the obvious answer is an
+overlay and the obvious answer is wrong.** SPEC.md §73.14 moves CODE and
+leaves every global, literal and bss byte resident and DS-relative. What does
+not fit in LOOM is the DATA: `w_lay[]` is `W_MAXLAY` × 10 = **2,500 bytes**,
+`wpaint.c`'s six tables keyed by comp_id plus the list-override pool and the
+staged string are **2,159**, and the module measured **5,268 bytes of `.bss`**
+when it was built. LOOM closed wave 6 at **594 bytes** under SPEC.md §20.1's
+ceiling. The overlay's own size was never the binding fact either — `LOOM.OVL`
+is 42,902 bytes against a segment's 64KB, with room for the painter's code —
+and neither was the callback rule: a `W_PAINT` runs on the UI task, so it
+*may* enter an overlay, and would simply have to show a refusal when it could
+not. It is the **data** that does not move, and no arrangement of the overlay
+moves it. docs/WEAVE-PLAN.md §2.10 prices the four alternatives the segment
+beat.
+
+**What the pane does NOT draw, stated here rather than discovered by somebody
+who opens it with SHEET or PONG loaded.** A `<grid>` and a `<canvas>` are
+drawn as their **frame** — `wd_box()` at the rect the shared walk computed,
+the same core `<box>` draws with (§6.3) — and nothing inside it. Neither
+component's body is a layout fact:
+
+- a grid's picture is §6.9.1's band composer over a **cell store**, a claim of
+  its own built by §1.2.1's tenant 6 and filled by §5.5's recalculation;
+- a canvas's is §6.10.2's sprite compositor inside **`WEAVE.WSM`**, on a
+  worker task, over a canvas claim of its own.
+
+Standing either up inside Preview is a second claim, a second module and a
+recalculation a preview has no reason to run — and what a preview owes the
+author about those two components is *where* they are and *how big*, which is
+the frame. **The oracle draws exactly this**: `weavesim --render --preview`
+frames a grid and a canvas and draws nothing inside them, and
+`tests/weaveprev.py` diffs the pane against it. That is the difference between
+a scope decision and a divergence: the model was taught the same rule, in one
+flag, in the same file that owns every other number in this document.
+
+**What Preview costs on the target, counted rather than felt.** It is a card's
+first paint and §14 already prices one: ~1.25 s fully lettered on CGA, ~2.59 s
+on VGA, ~2.85 s on Hercules. A Preview is a repaint of exactly that, and it
+happens once per toggle because Preview is a MENU COMMAND — the pane is not
+the editor and nothing repaints it per keystroke. On the first toggle of an
+instance it also costs one 21KB claim and one floppy read for the module,
+which is ~400 ms of `int 13h` on the target (CLAUDE.md's table), spent on the
+UI task and deliberately outside the gfx lock.
 
 ---
 
@@ -3151,6 +3359,15 @@ for WEAVE.WSM.` (§1.2.2). A disk somebody has taken the package off without
 its two modules is the case, it is paid once and visibly, and it is why
 `make weavedisk` puts all four in one folder.
 
+**LOOM's preview module refuses in the same three sentences** (§1.2.4), and
+they are LOOM's rather than the pane's: `LOOM.WPV is not on this disk.` /
+`LOOM.WPV does not match this program.` / `Not enough memory for LOOM.WPV.`
+The pane does **not** come up when one of them fires — there would be nothing
+in it to look at — so the sentence goes to the status row and the editor
+stays. It is checked when Preview is opened and never inside the paint, which
+is §1.2.4's own rule and why a `W_PAINT` can far-call the module without
+having to be able to refuse.
+
 ### 10.4 Malformed bundle
 
 Bad magic, version ≠ 1, size word ≠ directory size, section count under
@@ -3354,9 +3571,17 @@ the fallback spellings are per-DIRECTORY, so `FORM.WML` beside `SHEET.WFX`
 lists that sheet as its own. Nothing is miscompiled — a project with no
 `<grid>` never reads a `.WFX` at all, and both packers do the same thing for
 the same reason, so the gate is safe — but the file switcher shows a file the
-project does not use. **A folder per project is what §11.2 describes** and
-what wave 7's `PROJECTS/` will build; the flat disk is a distribution
-convenience and this paragraph is its footnote.
+project does not use. **A folder per project is what §11.2 describes**, and wave 7's `PROJECTS/`
+builds it: `make weavedisk` puts `PROJECTS/FORM/`, `PROJECTS/SHEET/` and
+`PROJECTS/PONG/` on the disk, each holding the sources its bundle was packed
+from, each with directory slots to spare so that **Pack writes the new bundle
+beside them** (§11.4) — the kernel does not grow a directory (SPEC.md §18.5,
+`FERR_DIRFULL`), so that room is built in rather than hoped for, on
+`tools/getcpmsw.py`'s own formula: two slots for `.` and `..`, one per file
+shipped, plus sixteen spare. `make loomdisk` still builds the FLAT folder, and
+that is deliberate too: §12.3's pack gate opens the demo sources by name and
+compares the result byte for byte, and the flat disk is what it opens. Two
+disks, two shapes, a stated reason each.
 
 ### 11.3 What the packer validates
 
@@ -3553,6 +3778,8 @@ Respecting the enforced tier budgets (fast 30 s host-only; full 600 s —
 | soak | `weavegame` | wirefps/wireflick with PONG.WAB as the load |
 | soak | `weavelat` | uilat's cycle-exact bar with a Weave form as the load |
 | soak | `weavepack` | Loom's pack byte-identical to weavesim --pack, in the OS — every demo and every template packed ON THE MACHINE, read back off the guest's floppy and compared whole; then `tests/weave/packerr/` through LOOM for §10.5's sentence identity |
+| soak | `weaveprev` | LOOM's Preview pane against `weavesim --render --preview` (§1.7.1) — `weavegfx`'s three assertions, aimed at the pane instead of at the runtime's window, for all three demo projects on both 1bpp adapters. Wave 7's FIRST gate: the module is a second compilation of the runtime's own painter, so a defect here is either the seam or the segment and never the picture |
+| soak | `weaveone` | §1.4's 256KB machine: two bundles opened on a 256KB MartyPC, the second refused BEFORE ANY I/O with §10.1's sentence and both figures read off the glass. The `xt` target's question, ASSERTED — `make xt-weave-256` is the same machine on 86Box and is manual evidence, because 86Box has no automation socket (docs/TESTING.md) |
 | fast | `lmpack` | ...and its HOST half (§12.3.3), which is not the same gate and says so |
 
 Every `tests/weave*.py` is registered in `tests/suite.py` or excused in
@@ -3802,7 +4029,50 @@ grammar. It cost the pack-time sentences their old wording — §10.5 records th
 amendment and what it buys.
 
 **PREVIEW SHIPPED AS PLUMBING AND A LABEL, NOT A PICTURE**, and §1.7.1 carries
-the arithmetic rather than leaving it to be found. It is the wave's one gap.
+the arithmetic rather than leaving it to be found. It was the wave's one gap
+and wave 7 closed it.
+
+**Wave 7 shipped Preview's PICTURE and the family's DISTRIBUTION**, and it is
+the last wave: this table has no unshipped row left.
+
+**The picture is `LOOM.WPV`** (§1.2.4), and it is §1.2.2's decision taken a
+second time for a different reason. `apps/loom/lmpvmod.c` `#include`s
+`apps/weave/wflow.c` and `apps/weave/wpaint.c` — the same text WEAVE.O88
+compiles — and `apps/loom/lmpvmod.asm` `%include`s `apps/weave/wdraw.inc`, so
+§1.2's "never a second copy" is kept the way it was meant to be kept: one
+description of the picture, two copies of the object code. What forced a
+segment was not the tenant list but the fact that an overlay moves **code**
+and what did not fit is **data** — 5,268 bytes of `.bss` against the 594 wave 6
+closed with (§1.7.1 has the table; docs/WEAVE-PLAN.md §2.10 prices the four
+alternatives it beat). The module is 16,174 image + 5,268 bss = one 21KB
+claim, read the first time the pane is opened and never again.
+
+**Two extractions in shared source were needed and both were proved
+zero-drift** by rebuilding `build/weave.bin` and comparing it whole — wave 6's
+own check for `wnum.inc`, and it came back byte-identical: `apps/weave/watom.c`
+(§2.7's two atom accessors, `#include`d by `wval.c` where they used to stand)
+and one three-line `#ifdef W_PREVIEW` in `wflow.c`'s `w_grid()`, because the
+box a Preview lays out in is a PANE inside a window and not a window's content
+area. `weave.o88` did not move: **52,212 + 9,196 = 61,408**, byte for byte what
+wave 5 closed at. `loom.o88` is **54,862 + 6,212 = 61,074, 366 under**, with
+`LOOM.OVL` at 42,902 and `LOOM.WPV` at 16,174 + 5,268.
+
+**The distribution row is `make weavedisk` carrying the whole family** — the
+runtime, its two modules, the three bundles, LOOM and its three, a writable
+`PROJECTS/` folder a project each (§11.2) and a per-geometry `CATALOG.TXT` —
+in all three geometries, 209 of 354 clusters at 360KB. `BUNDLES=` adds a
+user's own the way `CPMSW=` does, and the cluster-fit refusal is
+`tools/os88disk.py`'s own arithmetic: `packages need 366 clusters; disk holds
+354`. SPEC.md §19.10 gained a `WEAVE/` folder and a `LOOM/` folder, so
+`make allapps` and `make live` carry the family too.
+
+**And the 256KB row found the document wrong**, which is what it was for.
+§1.4 said the second Weave app on a 256KB machine refuses with §10.1's
+sentence; it does not, because the second launch never reaches the runtime —
+the kernel's loader cannot claim WEAVE's 61,408-byte region with one instance
+up, and answers `LD_ENOMEM`. `tests/weaveone.py` asserts the byte, that no
+second window opens, and that the first app is still running; §1.4 now says
+what the machine says.
 
 The rest, each gated before the next begins:
 
@@ -3813,8 +4083,8 @@ The rest, each gated before the next begins:
 | 4 | `<grid>`: cell store, `wband.inc` benched against Set 68's numbers (`make weavebandbench`), per-row damage, formula bar, `wfx.inc` + the formula compiler (§1.2.1's tenant 7, not resident — the size line decided it), sliced recalc | `weavegrid` (recalc vs model + tpdraw identity), `weavegfx`, and the FX half of `weavevm` FIRST |
 | 5 | ~~`<canvas>`/`<sprite>`~~ **SHIPPED**, above — and in `WEAVE.WSM`, a second RESIDENT segment (§1.2.2), which is the decision the wave turns on | `weavecanvas` FIRST (§12.1.3), then `weavegame`; the field run is COMMISSIONED and pending (WEAVE-PLAN §4.2) |
 | 6 | ~~Loom~~ **SHIPPED**, above — except Preview's PICTURE (§1.7.1), which needs the shared paint stack in a segment LOOM has not got | `weavepack` byte-identity on all templates and demos, in the OS |
-| 7 | Preview's picture (§1.7.1): `wflow.c` and `wpaint.c` reachable from LOOM, the way `WEAVE.WSM` is reachable from a worker (§1.2.2) — a second segment, priced the same way | the pane draws what `weavesim --render` predicts |
-| 7 | distribution: `make weavedisk` in three geometries with cluster-fit refusal + `--verify`, writable `PROJECTS/` folder, CATALOG.TXT, `BUNDLES=` knob; ALLAPPSFILES rows (one `WEAVE/` folder — package + overlay + **`WEAVE.WSM`** + bundles share it, SPEC.md §19.10: wave 5 added the fourth file, and a canvas bundle that cannot find it refuses at open with §10.3's sentence); the 256KB one-app refusal exercised on the `xt` target, whose arithmetic §1.4 moved by one claim | the release checklist |
+| 7 | ~~Preview's picture~~ **SHIPPED**, above — `LOOM.WPV` (§1.2.4), a second RESIDENT segment carrying `wflow.c` and `wpaint.c` themselves, which is the decision the wave turns on | `weaveprev`: the pane against `weavesim --render --preview`, three demo projects, both 1bpp adapters |
+| 7 | ~~distribution~~ **SHIPPED**, above — the family's disk in three geometries with `PROJECTS/`, `CATALOG.TXT` and `BUNDLES=`; SPEC.md §19.10's `WEAVE/` and `LOOM/` folders on the everything disk and the live media; the Weave disks in the release zip; and §1.4's 256KB arithmetic corrected against the machine | the release checklist, and `weaveone` |
 
 Wave order within a wave follows the size line: `os88pkg.py`'s resident
 count is printed and recorded every wave, 55,000 is the overlay-split
@@ -3839,6 +4109,20 @@ NOT promising:
   v1's canvas is windowed, arkanoid-class.
 - **v2 cut list, written in advance**: multiline field, a second grid,
   clip carriage for `playSound`, SOURCE-section editing conveniences.
+- **Preview's GESTURE** — §1.7's *"widgets draw and arm/fire natively"* is
+  drawing in wave 7 and not arming. The picture is the row §13.1 gates
+  (*"the pane draws what `weavesim --render` predicts"*), and the gesture needs
+  `apps/weave/wact.c`'s press/release pair and the field pool under it in
+  `LOOM.WPV`, plus a click verb, plus a rule for what a fired handler means in
+  a program with no VM. Deferred with that list rather than half-built.
+- **A `<grid>` and a `<canvas>` body in Preview** — drawn as their frame
+  (§1.7.1), because a grid's picture is the band composer over a cell store
+  (a claim, a load path and a recalculation) and a canvas's is the compositor
+  inside `WEAVE.WSM` on a worker (a second module and a second claim). The
+  oracle draws the same frame, so this is a stated scope and not a divergence.
+- **A card switcher in Preview** — `WPVV_PAINT` takes a card index (§1.2.4)
+  precisely so that one is a UI question rather than an ABI one; wave 7 always
+  passes 0, the bundle's entry card.
 
 ---
 
