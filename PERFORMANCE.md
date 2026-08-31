@@ -10232,3 +10232,74 @@ and the only one that draws every frame, so it is the worst case in `apps.inc`
 and was chosen for that. The Timer wakes at 9 ticks and redraws only the
 digit cells that changed; About draws on repaint alone. Neither was measured,
 and neither is claimed.
+
+---
+
+### Set 111 — WEAVE's grid band composer, against Set 68's numbers (WEAVE-SPEC §6.9.1, §14)
+
+`apps/weave/wband.inc` is the grid's painter: one row of cells composed into a
+1bpp band in RAM and put down with ONE `OSAPI_GFX_BLIT1` (WEAVE-SPEC §6.9.1).
+It is RUNCPM's `rcband.inc` shape - Set 68's own subject - with WEAVE's
+inversion rule in place of RunCPM's attribute cursor, and WEAVE-SPEC §14's
+whole grid pricing is computed from the constants Set 68 measured. Rule 4 says
+measure before quoting, and rule 5 says keeping the SHAPE of an optimisation
+is not keeping the optimisation. So this is the same loop, measured again, on
+the same harness and in the same units.
+
+**Harness**: `tests/weaveband/weavebandbench.asm`, `make weavebandbench`, run
+under `qemu-system-i386 -icount shift=3`; one count is **0.359 ms of real XT**
+(Part 4's conversion). Eight iterations a row. The line is 79 cells - CGA's
+own `CW` (WEAVE-SPEC §7.1.1) and a framed 640-px window's whole content - and
+the seed string is shaped like a GRID ROW (`  1 Item  3.5  #DIV0  22.75  -7`)
+rather than prose, because that is the glyph mix the composer actually sees.
+
+| row | counts (8 iters) | per call | XT |
+|---|---|---|---|
+| `FONT_RUN 79 aligned` | 558 | 69.75 | **25.0 ms** |
+| `WG_BAND 79 plain` (compose only) | 262 | 32.75 | **11.76 ms** |
+| `WG_BAND 79 inverted` (compose only) | 263 | 32.88 | **11.80 ms** |
+| `BLIT1 632x8 stride 90` (emit only) | 45 | 5.63 | **2.02 ms** |
+| `BAND 79 compose+blit` | 306 | 38.25 | **13.73 ms** |
+| `BAND 8 = one grid column` | 50 | 6.25 | **2.24 ms** |
+| `BAND 1 cell` | 24 | 3.00 | **1.08 ms** |
+| `FONT_RUN 1 cell` | 24 | 3.00 | **1.08 ms** |
+
+**The composer's own constants, solved from the 79-cell and 1-cell rows**:
+
+```
+per cell = (13.73 - 1.08) ms / 78 = 162 us
+per call = 1.08 ms - 162 us       = 915 us
+```
+
+against **Set 68's 173 µs a cell and 860 µs a call**. Six per cent apart in
+opposite directions on a harness whose own quantum is 0.359 ms - which is
+within one count on the 1-cell row and is the answer this set was taken to
+get. **WEAVE-SPEC §14's grid rows are Set 68's numbers, and they are quotable
+for this composer too**: §14 prices a 79-cell row at 14.5 ms and this loop
+measures 13.7.
+
+**The inversion is free, and that was a claim until now.** WEAVE-SPEC §6.9.1
+draws the selected cell and the whole column-header band INVERTED, and says
+the inversion costs nothing because a cell's mask byte is `0xFF` or `0x00` and
+the glyph is XOR-ed with it either way. Measured: 262 counts against 263 over
+eight iterations of 79 cells - **0.6 µs a cell, 0.4%**, one count on the whole
+row. A selection frame drawn with a second `gfx` call would have been ~756 µs.
+
+**What this set does NOT say, and it is the interesting half.** The
+`FONT_RUN 79` bar measures 25.0 ms here, where the field figure implies
+~60–71 ms (CLAUDE.md's cost table: ~900 µs a glyph cell, ~71 ms for a 78-cell
+row; §14 prices the row it replaces at ~60 ms). So the ratio this harness
+prints - `FONT_RUN/BAND x100 = 182`, 1.8× - is a **floor** on the real one and
+not a measurement of it. The reason is the harness rather than either loop:
+Part 4's icount conversion is calibrated for straight-line 8086 work, and
+`OSAPI_FONT_RUN`'s per-cell cost on a real 5150 is dominated by things icount
+prices differently. Set 68 took the band constants on this same harness, which
+is exactly why the band numbers agree to 6% and this one does not - and it is
+why the composer's own constants are what §14 quotes, never the ratio.
+
+**And the identity rows are the correctness half.** The bench draws the same
+79-cell string three times: lettered by `OSAPI_FONT_RUN`, composed by
+`wg_band` and blitted directly under it, and composed again with cells 12..20
+inverted. The first two are pixel-identical on the glass and the third differs
+in exactly those eight cells - which is the one thing a plain-text screendump
+would never exercise, and the reason the bench draws a picture at all.

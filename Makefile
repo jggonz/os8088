@@ -1249,7 +1249,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         xt-runcpm 286-runcpm \
         allapps usb iso live burn rcbandbench \
         c64 c64disk c64rom c64bandbench c64cputest c64memtest 386-c64 xt-c64 286-c64 \
-        weave weavedisk weavevm xt-weave 386-weave \
+        weave weavedisk weavevm weavebandbench xt-weave 386-weave \
         checkdocs test-fast test-full test-soak clean clean-cc clean-marty distclean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
@@ -4584,6 +4584,26 @@ $(BUILD)/rcbband.o88: $(BUILD)/rcbband.bin tools/os88pkg.py
 
 $(BUILD)/rcband.img: $(BUILD)/rcbband.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/rcbband.o88
+
+# ...and WEAVE's GRID band composer on the same harness (WEAVE-SPEC 6.9.1,
+# 14): apps/weave/wband.inc timed against the 79-cell FONT_RUN it replaces, in
+# the same units as rcbandbench so PERFORMANCE.md Set 68's numbers and this
+# wave's can be read against each other. Its own disk, on demand, because it
+# exists to answer one question once:
+#   make weavebandbench
+#   make test TESTAPPS=build/weaveband.img QEMU="qemu-system-i386 -icount shift=3,sleep=off"
+weavebandbench: $(BUILD)/weaveband.img
+
+$(BUILD)/wbband.bin: tests/weaveband/weavebandbench.asm apps/weave/wband.inc tests/benchlib.inc apps/os88api.inc tools/benchlint.py | $(BUILD)
+	python3 tools/benchlint.py tests/weaveband/weavebandbench.asm
+	$(NASM) -f bin -w+error -I apps/ -I tests/ -o $@ tests/weaveband/weavebandbench.asm
+	@echo "wbband: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/wbband.o88: $(BUILD)/wbband.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/wbband.bin -o $@
+
+$(BUILD)/weaveband.img: $(BUILD)/wbband.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/wbband.o88
 
 $(BUILD)/bench.img: $(BENCHPKGS) $(BENCHDATA) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BENCHPKGS) $(BENCHDATA)

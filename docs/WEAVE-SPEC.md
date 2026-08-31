@@ -3013,6 +3013,16 @@ composer 860 µs/call + 173 µs/cell, PERFORMANCE.md Set 68). Regenerate
 after any change to §6 or to the model. Field figures land on the 5150
 and supersede modelled ones row by row (§12.4).
 
+**The band composer's two constants were Set 68's and are now measured for
+`wband.inc` itself**: PERFORMANCE.md **Set 111** ran the shipping file on Set
+68's own harness and solved 915 µs a call and 162 µs a cell against 860 and
+173 — six per cent apart in opposite directions, on a harness whose quantum is
+one count of 0.359 ms. A 79-cell row measured **13.7 ms** against the 14.5 this
+table prices. Set 111 also settles the one claim §6.9.1 was making without
+evidence: inverting the header band and the selected cell costs **0.4%**, one
+count over eight iterations of 79 cells, where a second `gfx` call would have
+been ~756 µs.
+
 | component | interaction | gfx calls | modelled cost |
 | label | .text set (20 cells) | 1 | ~19 ms |
 | text | repaint (per wrapped row, 40 cells) | 1/row | ~37 ms/row |
@@ -3027,6 +3037,7 @@ and supersede modelled ones row by row (§12.4).
 | grid | selection move (2 XOR rects) | 2 | ~1.5 ms |
 | grid | 79-cell row compose+blit | 1 | ~14.5 ms |
 | grid | full 20-row page | 20 | ~291 ms |
+| grid | scroll one row (GFX_SCROLL + 1 composed band) | 2 | ~83-90 ms |
 | canvas | frame, 2 sprites (dirty bands) | 2-4 | ~2-5 ms |
 | card | switch (full-card repaint, text-heavy CGA card) | ~1/row | ~0.3-1.2 s |
 | card | first paint, fully lettered CGA 640x200 (17 rows x 79 cells) | 17 | ~1.25 s |

@@ -4448,6 +4448,8 @@ def costs_table(adapter="cga"):
         ("grid", "79-cell row compose+blit", "1",
          "~%.1f ms" % band_row(79)),
         ("grid", "full 20-row page", "20", "~%.0f ms" % (20 * band_row(79))),
+        ("grid", "scroll one row (GFX_SCROLL + 1 composed band)", "2",
+         "~%d-%d ms" % LIST_SCROLL_MS),
         ("canvas", "frame, 2 sprites (dirty bands)", "2-4",
          "~%.0f-%.0f ms" % (ms(2 * CALL_US) + 0.5, ms(4 * CALL_US) + 2)),
         ("card", "switch (full-card repaint, text-heavy CGA card)",
@@ -4475,7 +4477,8 @@ def print_costs(adapter):
           "(%s exact: %d us)" % (CALL_US, GLYPH_US, A["name"],
                                  A["cell_us"]))
     print("           band composer %d us/call + %d us/cell "
-          "(PERFORMANCE.md Set 68)" % (BAND_CALL_US, BAND_CELL_US))
+          "(PERFORMANCE.md Set 68, confirmed for wband.inc by Set 111 at "
+          "915/162)" % (BAND_CALL_US, BAND_CELL_US))
     print("           field rows carried as measured: glyph toggle "
           "%d-%d ms, list scroll %d-%d ms/line,"
           % (GLYPH_TOGGLE_MS + LIST_SCROLL_MS))
