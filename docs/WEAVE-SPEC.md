@@ -50,7 +50,7 @@ whole develop–run cycle lives on the target with zero new kernel bytes.
 | piece | what it is |
 |---|---|
 | **`WEAVE.O88`** | the runtime. A C package (`CC_PACKAGE(weave,weave,WEAVE.OVL)`, SPEC.md §73) with hand-written 8086 cores for the hot loops, RUNCPM's shape (SPEC.md §74). Opens one `.WAB` per instance. Resident target ≤52KB image+bss; 55,000 bytes is the overlay-split trigger (SPEC.md §73.14) |
-| **`WEAVE.OVL`** | the runtime's one overlay: refusable, UI-task-only paths — verbose bundle diagnostics, About, **the bundle validator** (§10.4; it runs once per open and is the runtime's largest single body of code), state import/export dialogs, formula-function help. Nothing an event handler needs mid-run lives here |
+| **`WEAVE.OVL`** | the runtime's one overlay: refusable, UI-task-only paths — the tenant list is §1.2.1. Nothing an event handler needs mid-run lives here |
 | **`LOOM.O88`** | the IDE. A separate native package (the WORD/CWORD precedent: two things may not answer to one name). Note Pad's editor engine transplanted with prefix `lm_` (the SPEC.md §68 precedent), a file-list sidebar, one editor pane |
 | **`LOOM.OVL`** | Loom's one overlay: the WML compiler, the WJS compiler, the FX pre-compiler, the atom interner, the bundle writer. Pack is a menu command and menu commands may refuse — the canonical overlay tenant |
 | **`apps/weave/*.inc`** | the shared component library: **paint and hit-test** cores as assembly source `%include`d by BOTH packages (the `apps/os88ui.inc` model, SPEC.md §20.5.1 — this platform's only code-sharing mechanism). They are assembly from wave 2 because they run under the gfx lock, once per callback, and are what LOOM's Preview (§1.7) paints with. **The flow walk (§7) is C in the runtime** and is not one of them: it emits no gfx call, runs over at most 250 records in microseconds (§7.2), and has exactly one caller until LOOM exists. When LOOM lands (wave 6) it takes the same walk — moved to a shared `.inc`, or called through one — and **never a second copy**: two layouts that must agree cell-for-cell (§12) is the failure §11's byte-identity rule exists to prevent, said about code instead of about bundles |
@@ -65,6 +65,67 @@ drains the ring in adaptive `OSAPI_WM_ONWAKE` slices (§4.10). One worker
 task exists only while a `<canvas>` game runs (§6.10) and obeys
 SPEC.md §20.6 to the letter — it never touches a file, a memory slot, or
 anything a worker may not.
+
+#### 1.2.1 The overlay's tenants, in the order they move
+
+The split is by **FREQUENCY** and not by size (SPEC.md §73.14): a keystroke's
+path stays resident, a once-per-open or once-per-command path can go out,
+because a menu command may refuse and a keystroke may not. The list is
+ordered, and a wave that crosses the 55,000-byte trigger moves the next
+entries until it is under with room for the wave after it — the point of
+naming them in advance is that the split is a move rather than a scramble.
+
+| # | tenant | how often it runs | shipped in |
+|---|---|---|---|
+| 1 | verbose bundle diagnostics (Bundle Info) | a menu command | wave 2 |
+| 2 | About | a menu command | wave 2 |
+| 3 | **the bundle validator** (§10.4) | once per open; the runtime's largest single body of code | wave 3 |
+| 4 | **the load path** — the size probe, the capability tests, the directory search, the claim and the read, the component birth state, the field pool's assignment, the menu build, the VM bind and §2.6.2's module-init call | once per open, and once per `^R` (§1.7), which is a COMMAND keystroke and not an editing one | wave 3 |
+| 5 | **`saveState` / `loadState`** (§8.3) | a builtin, so MID-RUN — the one stated exception, below | wave 3 |
+| 6 | state import/export dialogs | a menu command | — |
+| 7 | formula-function help | a menu command | — |
+| 8 | the flow walk's NATURAL SIZES (§7.3) | once per open and per resize — **not** movable while `app.go()` can reflow from a handler (§6.12) | — |
+
+Entries 6 and 7 do not exist yet. **Entry 8 is listed with its own
+disqualification**, because it is the obvious next thing to reach for and it
+is wrong: a card switch runs the walk from inside a handler, so the walk is
+mid-run by §6.12's own design and moving it would put a refusable call on the
+path a running script takes.
+
+**Entry 5 is the one exception to "nothing an event handler needs mid-run",
+and it is stated rather than stretched.** `saveState()` and `loadState()` are
+builtins: a script calls them from inside a slice, which is exactly the case
+the rule exists to protect. Three things make them the exception and nothing
+else is:
+
+- **The refusal already exists and is already the answer.** §8.3 says the
+  pair "returns false — never a crash — on refusal (no room, no file, no
+  `SYSTEM/APPDATA`, write-protected disk)". A module that will not load is
+  one more reason the state was not written, arriving on a path the app
+  already has to handle. Every other mid-run body would have to invent a
+  meaning for a refusal.
+- **They are already the slowest thing a handler can do.** Both take a
+  transient claim and touch a floppy — ~400 ms of `int 13h` on the target
+  (CLAUDE.md's cost table) — so one more module read is a fraction of a cost
+  the app author already chose to pay, where on any drawing or arithmetic path
+  it would be the whole cost.
+- **They cannot be called from a worker**, so the overlay's UI-task-only rule
+  (SPEC.md §73.14) is met by construction: §8.3 puts them on the UI task
+  inside the ONWAKE slice, and SPEC.md §20.6 rule 7 is why.
+
+An implementation that moves anything else mid-run has to write a paragraph
+like this one for it, and if it cannot, the body stays resident.
+
+**What a refused overlay costs, per tenant, and it must be stated rather than
+discovered.** A refused load returns 0 (`apps/cc/crt0.asm`), so every tenant
+whose natural answer is a pointer or a count has to be written to answer
+"did it run" separately from "what did it say" — the validator's `const char *`
+where 0 means VALID is the worked example (§10.4). With tenants 3 and 4 out,
+a missing or stale `WEAVE.OVL` means **no bundle opens at all**, refused with
+the sentence naming the overlay rather than the bundle. That is the price of
+the split and it is paid once, visibly, on a disk somebody has taken the
+package off without its module — which is why `make weavedisk` puts both in
+one folder and `weavesmoke` boots that folder.
 
 ### 1.3 The languages, and where compilation lives
 

@@ -461,10 +461,10 @@ static int w_built(int bi, int argc)
         return w_nres(WT_NULL, 0);
 
     case WB_SAVE:
-        return w_nres(WT_BOOL, w_savestate() ? 1 : 0);
+        return w_nres(WT_BOOL, ovl_savestate() ? 1 : 0);
 
     case WB_LOAD:
-        return w_nres(WT_BOOL, w_loadstate() ? 1 : 0);
+        return w_nres(WT_BOOL, ovl_loadstate() ? 1 : 0);
 
     case WB_PLAY:
         /* 8.4: v1 ships no clip carriage, so this refuses politely and says
@@ -532,14 +532,14 @@ static int w_menu_fn(int mi, int ii)
     return -1;
 }
 
-/* w_menubuild - the bundle's own menus, out of the app block's MENUS blob
+/* ovl_menubuild - the bundle's own menus, out of the app block's MENUS blob
  * (2.6.2), into strings the kernel can letter from.
  *
  * THE BLOB IS IN THE CLAIM AND THE KERNEL READS A NEAR POINTER, so every
  * title and label is COPIED into our segment - the same reason wui.inc's
  * alert message is a static rather than a staged one. It runs once per
  * bundle, over at most 4 x 8 short strings. */
-static void w_menubuild(void *win)
+static void ovl_menubuild(void *win)
 {
     unsigned off, pos, a, n;
     int m, k, nit, nm;

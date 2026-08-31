@@ -84,8 +84,14 @@ static int  w_sbblk[7];                 /* os88ui.inc's scroll block */
  * w_flow() and rebuilds w_lay[] from scratch, and a scroll position that came
  * back to the top every time the user dragged the window would be a defect
  * nobody could name. */
-static unsigned w_lpos[256];
-static unsigned w_lsel1[256];
+/* BYTES, not words, and the cap that makes it safe is the FORMAT's: 2.6.1
+ * bounds a list's items at 64 and wval.c refuses a blob over it, so a scroll
+ * position is 0..64 and a selection 0..65. Wave 2 spent words here against a
+ * count that might grow; it cannot grow without the bundle format changing,
+ * and that change would come through wval.c first. 512 bytes of a package
+ * whose resident count is the wave's own headline (1.2.1). */
+static unsigned char w_lpos[256];
+static unsigned char w_lsel1[256];
 
 /* ============================================================================
  * THE COMPONENT STATE THE SCRIPT CAN MOVE (WEAVE-SPEC 6)
@@ -105,7 +111,10 @@ static unsigned w_lsel1[256];
  * one predicate, three consumers (SPEC.md 47 rule 4) - it greys the control,
  * refuses its click and answers `.enabled`.
  */
-static unsigned      w_ctext[256];      /* a VM string handle, 0 = the atom */
+static unsigned char w_ctext[256];      /* a VM string handle, 0 = the atom -
+                                         * a BYTE, because 4.8's table is 256
+                                         * entries and handle 0 is never
+                                         * allocated */
 static int           w_cval[256];       /* meter .value / check .checked */
 static int           w_cvold[256];      /* ...and what a meter last DREW,
                                          * which 6.4's delta needs */
@@ -118,7 +127,7 @@ static unsigned char w_cflag[256];      /* the live CF_HIDDEN | CF_DISABLED */
  * target for a feature most bundles do not use. */
 static unsigned char w_lsetc[W_NLSET];  /* comp_id */
 static unsigned char w_lseti[W_NLSET];  /* item index */
-static unsigned      w_lseth[W_NLSET];  /* the string handle */
+static unsigned char w_lseth[W_NLSET];  /* the string handle, ditto */
 static int           w_nlset;
 
 static void w_pstate(void)              /* a new bundle: forget the old one's */

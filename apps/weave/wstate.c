@@ -41,11 +41,18 @@
  * the 256KB XT's whole slack with a Weave app open is ~30KB (1.4). */
 #define W_SAVKB   8
 
+/* THE WHOLE FILE IS `ovl_*` (WEAVE-SPEC 1.2.1, tenant 5) - the one body in
+ * this runtime that is mid-run and still in the overlay, and 1.2.1 carries
+ * the three reasons at length. The short one: a refused module load returns
+ * 0, `saveState()` answers false, and 8.3 already says false is a normal
+ * answer with the status row saying why. Every other mid-run body would have
+ * had to invent a meaning for a refusal; this one already had it. */
+
 static struct os88_place w_savhere;
 static struct os88_find  w_savf;
 static char              w_savname[16];
 
-/* w_dive - find the visible directory `name` where we stand and go into it.
+/* ovl_dive - find the visible directory `name` where we stand and go into it.
  * 1 = we are in it, 0 = it is not here and nothing moved.
  *
  * SPEC.md 19.9 is explicit that SYSTEM/ is FOUND BY WALKING and not assumed,
@@ -53,7 +60,7 @@ static char              w_savname[16];
  * global cwd and deliberately not the instance's, so the quiet move is undone
  * by the very next FILE_WRITE. Cyclone's own header records the save that
  * wrote nothing at all while the load path appeared to work. */
-static int w_dive(const char *name)
+static int ovl_dive(const char *name)
 {
     int ord;
 
@@ -73,23 +80,23 @@ static int w_dive(const char *name)
     return 0;
 }
 
-/* w_data_enter - bank where we stand and go to SYSTEM/APPDATA on OUR volume.
+/* ovl_data_enter - bank where we stand and go to SYSTEM/APPDATA on OUR volume.
  * 1 = we are there, 0 = we are not and nothing was moved. */
-static int w_data_enter(void)
+static int ovl_data_enter(void)
 {
     os88_file_here(&w_savhere);
     w_savhere2.clus = 0;                /* the ROOT of that same volume */
     w_savhere2.vol = w_savhere.vol;
     if (os88_file_goto(&w_savhere2) != 0)
         return 0;
-    if (!w_dive("SYSTEM") || !w_dive("APPDATA")) {
+    if (!ovl_dive("SYSTEM") || !ovl_dive("APPDATA")) {
         os88_file_goto(&w_savhere);
         return 0;
     }
     return 1;
 }
 
-static void w_data_leave(void)
+static void ovl_data_leave(void)
 {
     os88_file_goto(&w_savhere);         /* leaving the instance elsewhere would
                                          * move where every unqualified name it
@@ -97,9 +104,9 @@ static void w_data_leave(void)
                                          * where its next dialog opens (19.9) */
 }
 
-/* w_savstem - `<bundle stem>.SAV`, 8.3's name.  The stem is the bundle's own
+/* ovl_savstem - `<bundle stem>.SAV`, 8.3's name.  The stem is the bundle's own
  * 8.3 name with its extension replaced, so FORM.WAB saves to FORM.SAV. */
-static void w_savstem(void)
+static void ovl_savstem(void)
 {
     int i;
 
@@ -116,7 +123,7 @@ static void w_savstem(void)
  * saveState / loadState
  * ==========================================================================*/
 
-static int w_savestate(void)
+static int ovl_savestate(void)
 {
     unsigned seg, n;
     int ok;
@@ -134,10 +141,10 @@ static int w_savestate(void)
         return 0;
     }
     ok = 0;
-    if (w_data_enter()) {
-        w_savstem();
+    if (ovl_data_enter()) {
+        ovl_savstem();
         ok = os88_file_write_seg(w_savname, seg, n) == 0;
-        w_data_leave();
+        ovl_data_leave();
     } else
         w_saysav("saveState: this disk has no SYSTEM/APPDATA.");
     os88_mem_free(seg);
@@ -146,7 +153,7 @@ static int w_savestate(void)
     return ok;
 }
 
-static int w_loadstate(void)
+static int ovl_loadstate(void)
 {
     unsigned seg, n;
     int ok, g, t, v;
@@ -157,10 +164,10 @@ static int w_loadstate(void)
     if (seg == 0)
         return 0;
     n = 0;
-    if (w_data_enter()) {
-        w_savstem();
+    if (ovl_data_enter()) {
+        ovl_savstem();
         n = os88_file_read_seg(w_savname, seg, W_SAVKB << 10);
-        w_data_leave();
+        ovl_data_leave();
     }
     ok = 0;
     if (n)

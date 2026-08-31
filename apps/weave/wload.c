@@ -134,7 +134,7 @@ static void w_missing(void)
  * `bits` is 1 = lit, so a zero byte is eight pixels of background. */
 static const unsigned char w_blitprobe = 0;
 
-/* w_can_canvas - does THIS kernel carry GFX_BLIT1?
+/* ovl_can_canvas - does THIS kernel carry GFX_BLIT1?
  *
  * 10.2 says the flags are checked against machine capabilities BY TESTING THE
  * FACT - the slot's own answer - and never by a guess about machine size
@@ -149,14 +149,14 @@ static const unsigned char w_blitprobe = 0;
  * call, once per instance, over a cell that was about to be painted anyway.
  * It is not a double-draw of anything, and it is the honest alternative to
  * inferring the kernel from the machine. */
-static int w_can_canvas(void)
+static int ovl_can_canvas(void)
 {
     return os88_gfx_blit1(&w_blitprobe, 1, w_ox, w_oy, 8, 1) == 0;
 }
 
 /* --- the header probe (10.1) -------------------------------------------- */
 
-/* w_probe_read - one cluster of `name` at offset 0, into w_probe[].
+/* ovl_probe_read - one cluster of `name` at offset 0, into w_probe[].
  * 1 = the header is in the buffer; 0 = we could not take a probe at all.
  *
  * BOTH the offset and the capacity must be a whole number of clusters, or the
@@ -170,7 +170,7 @@ static int w_can_canvas(void)
  * probed, because reading LESS than a whole cluster is refused rather than
  * mis-read. We do not guess a smaller read and we do not pretend the header
  * said something; we answer 0, and w_open() says which fact was tested. */
-static int w_probe_read(const char *name)
+static int ovl_probe_read(const char *name)
 {
     unsigned cap, n;
 
@@ -205,8 +205,8 @@ static int w_probe_read(const char *name)
  * already the whole instance's, because 10.1 refuses on the total and a
  * refusal that only counted what wave 2 happens to claim would let a bundle
  * start and then run out. */
-static void w_open(void *win, const char *name, unsigned size_lo,
-                   unsigned size_hi)
+static int ovl_open(void *win, const char *name, unsigned size_lo,
+                    unsigned size_hi)
 {
     const char *e;
     unsigned kb, ask, biggest, got;
@@ -231,17 +231,17 @@ static void w_open(void *win, const char *name, unsigned size_lo,
      *    file cannot be what it claims to be at any heap size. */
     if (size_hi != 0 || size_lo > W_CAP || size_lo < W_HDR_SIZE) {
         w_bad("total size");
-        return;
+        return 1;
     }
     w_fsize = size_lo;
 
     /* 2. The first cluster, and the header out of it (10.1). */
-    probed = w_probe_read(name);
+    probed = ovl_probe_read(name);
     if (probed) {
         e = w_val_header();
         if (e) {
             w_bad(e);
-            return;
+            return 1;
         }
 
         /* 3. The ask, and BOTH halves of the refusal. os88_mem_avail answers
@@ -259,7 +259,7 @@ static void w_open(void *win, const char *name, unsigned size_lo,
             biggest = w_canvaskb;
         if (ask > os88_mem_total_kb() || biggest > os88_mem_largest_kb()) {
             w_short(ask, os88_mem_largest_kb());
-            return;
+            return 1;
         }
 
         /* 4. Capability, by the slot's own answer (10.2). WABF_CANVAS refuses
@@ -268,10 +268,10 @@ static void w_open(void *win, const char *name, unsigned size_lo,
          *    OSAPI_WM_TIMER has no C thunk and the alternative is guessing the
          *    kernel from the machine, which SPEC.md 47 forbids. See the
          *    report; it is a missing thunk, not a missing decision. */
-        if ((w_flags & WABF_CANVAS) && !w_can_canvas()) {
+        if ((w_flags & WABF_CANVAS) && !ovl_can_canvas()) {
             w_fail("This app draws on a canvas (GFX_BLIT1); "
                    "this kernel does not carry it.");
-            return;
+            return 1;
         }
     } else {
         /* The probe could not be taken - the volume's cluster is larger than
@@ -291,7 +291,7 @@ static void w_open(void *win, const char *name, unsigned size_lo,
     w_seg = os88_mem_claim((int)kb);
     if (w_seg == 0) {
         w_short((kb + w_vmkb + w_gridkb + w_canvaskb), os88_mem_largest_kb());
-        return;
+        return 1;
     }
     w_claimkb = kb;
     got = os88_file_read_seg(name, w_seg, kb << 10);
@@ -299,7 +299,7 @@ static void w_open(void *win, const char *name, unsigned size_lo,
         w_missing();                    /* 10.3: missing OR unreadable - the
                                          * file went away between the FIND and
                                          * here, or the read failed */
-        return;
+        return 1;
     }
 
     if (!probed) {
@@ -311,12 +311,12 @@ static void w_open(void *win, const char *name, unsigned size_lo,
         e = w_val_header();
         if (e) {
             w_bad(e);
-            return;
+            return 1;
         }
-        if ((w_flags & WABF_CANVAS) && !w_can_canvas()) {
+        if ((w_flags & WABF_CANVAS) && !ovl_can_canvas()) {
             w_fail("This app draws on a canvas (GFX_BLIT1); "
                    "this kernel does not carry it.");
-            return;
+            return 1;
         }
     }
 
@@ -324,7 +324,7 @@ static void w_open(void *win, const char *name, unsigned size_lo,
     e = w_validate();
     if (e) {
         w_bad(e);
-        return;
+        return 1;
     }
 
     w_state = W_ST_RUN;
@@ -333,31 +333,32 @@ static void w_open(void *win, const char *name, unsigned size_lo,
                                          * and they are indexed by comp_id -
                                          * which the new bundle reuses (2.5) */
     w_istate();
-    w_comp_init();                      /* every component's birth state, and
+    ovl_comp_init();                      /* every component's birth state, and
                                          * a field block for every <input> */
     w_lay_cw = -1;                      /* force the walk on the next paint */
     if (w_grid(win))
         w_flow();
     w_menusync();
-    w_menubuild(win);                   /* 6.11: the bundle's own menus */
-    w_vmstart(win);                     /* ...and the VM, last: it is the one
+    ovl_menubuild(win);                   /* 6.11: the bundle's own menus */
+    ovl_vmstart(win);                     /* ...and the VM, last: it is the one
                                          * thing that can run a line of the
                                          * app's own code, and 2.6.2's
                                          * module-init function must not run
                                          * against a half-built card */
+    return 1;
 }
 
 /* ============================================================================
  * THE COMPONENTS' BIRTH STATE, AND THE VM (WEAVE-SPEC 2.5, 4.7)
  * ==========================================================================*/
 
-/* w_comp_init - walk the WHOLE display list, not just the entry card.
+/* ovl_comp_init - walk the WHOLE display list, not just the entry card.
  *
  * The flow walk lays out ONE card (7.2); this fills in every component the
  * bundle declares, on any card, because `app.go(2)` makes the second card's
  * components live without reloading anything - and because `hidden` and
  * `checked` are birth state that a card switch must not reset. */
-static void w_comp_init(void)
+static void ovl_comp_init(void)
 {
     unsigned s, n, i, rec, id, ct, props;
 
@@ -383,13 +384,13 @@ static void w_comp_init(void)
             w_cval[id] = w_pint(props, WA_CHECKED, 0) ? 1 : 0;
         else if (ct == WC_INPUT) {
             w_ialloc((int)id, (int)w_pint(props, WA_COLS, 20));
-            w_iload((int)id, props);
+            ovl_iload((int)id, props);
         }
     }
 }
 
-/* w_iload - an <input>'s initial contents, out of its `text` attribute. */
-static void w_iload(int id, unsigned props)
+/* ovl_iload - an <input>'s initial contents, out of its `text` attribute. */
+static void ovl_iload(int id, unsigned props)
 {
     int k;
 
@@ -401,13 +402,13 @@ static void w_iload(int id, unsigned props)
     wd_lset(w_fld[k], w_str);
 }
 
-/* w_vmstart - the VM claim, the bind and 2.6.2's module-init function.
+/* ovl_vmstart - the VM claim, the bind and 2.6.2's module-init function.
  *
  * THE CLAIM'S SIZE IS THE BUNDLE'S OWN ASK (2.2's vm KB byte), which 10.1
  * already counted before any I/O - so a failure here is a heap that moved
  * under us between the refusal and now, and it is reported as the same
  * sentence rather than as a new kind of trouble. */
-static void w_vmstart(void *win)
+static void ovl_vmstart(void *win)
 {
     unsigned start;
 
@@ -471,7 +472,7 @@ static int w_samename(const char *a, const char *b)
     return 1;
 }
 
-static void w_find_open(void *win)
+static int ovl_find_open(void *win)
 {
     int ord;
 
@@ -486,10 +487,48 @@ static void w_find_open(void *win)
             continue;                   /* a folder with the bundle's name is
                                          * not it, and neither is the `..` row
                                          * (OS88_FT_UP) */
-        w_open(win, w_name, w_find.size_lo, w_find.size_hi);
-        return;
+        ovl_open(win, w_name, w_find.size_lo, w_find.size_hi);
+        return 1;   /* the overlay is HERE, so it ran */
     }
     w_missing();
+    return 1;
+}
+
+/* ============================================================================
+ * THE RESIDENT SEAM (WEAVE-SPEC 1.2.1, tenant 4)
+ *
+ * Everything above between the birth-state walk and here is `ovl_*` and ships
+ * in WEAVE.OVL: the size probe, the capability tests, the directory search,
+ * the claim and the read, the component birth state, the field pool, the menu
+ * build and the VM bind. It runs once per open and once per `^R`, which is a
+ * COMMAND keystroke and not an editing one, and it is not on any path a
+ * running handler takes.
+ *
+ * THE TWO WRAPPERS EXIST FOR ONE REASON and it is the validator's, said again
+ * one level up: A REFUSED OVERLAY LOAD RETURNS 0 (apps/cc/crt0.asm), and the
+ * load path's natural answer is `void` - so a missing WEAVE.OVL would have
+ * been a double-click that opened a window, drew the Deck, and said nothing
+ * at all. `ovl_open` and `ovl_find_open` therefore answer 1 at every exit
+ * INCLUDING their own refusals (which have already put their own sentence on
+ * the glass), so a 0 can only mean the module is not there.
+ * ==========================================================================*/
+
+static void w_ovlgone(void)
+{
+    w_fail("WEAVE.OVL is missing; a bundle cannot be opened without it.");
+}
+
+static void w_open(void *win, const char *name, unsigned size_lo,
+                   unsigned size_hi)
+{
+    if (!ovl_open(win, name, size_lo, size_hi))
+        w_ovlgone();
+}
+
+static void w_find_open(void *win)
+{
+    if (!ovl_find_open(win))
+        w_ovlgone();
 }
 
 /* w_openpend - spend the banked launch document.  Called from the FIRST
