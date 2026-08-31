@@ -624,7 +624,9 @@ scramble.
 
 LOOM is a SECOND package with a ceiling of its own, so wave 6 opens two size
 lines rather than moving one. It closed at **54,648 image + 6,198 bss =
-60,846 resident, 594 under** SPEC.md §20.1's 61,440, with `LOOM.OVL` at
+60,846 resident, 594 under** SPEC.md §20.1's 61,440 (54,752 and 490 under
+after the merge with `main` — the same shared-SDK growth §5.2 prices for
+WEAVE, paid here without a cut because the headroom absorbs it), with `LOOM.OVL` at
 42,902 — and WEAVE did not move a byte: exactly wave 5's number,
 verified by rebuilding `weave.bin` and comparing it whole after each of the
 two changes LOOM needed there (`wfx_frac` extracted into a shared `.inc`, and

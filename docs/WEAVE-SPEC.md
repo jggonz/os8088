@@ -3808,7 +3808,7 @@ caret jumping to the offending line, and the close guard runs on a
 negotiator had no C door at all, so every C package that ever wanted to ask
 *"save the changes?"* had no way to be asked.
 
-`loom.o88` is **54,648 image + 6,198 bss = 60,846 resident, 594 under**
+`loom.o88` is **54,752 image + 6,198 bss = 60,950 resident, 490 under**
 SPEC.md §20.1's ceiling, with `LOOM.OVL` at 42,902. WEAVE did not move:
 51,124 + 9,196 = 60,320, byte for byte what wave 5 closed at, and the two
 things LOOM needed from it — `wfx_frac` extracted into `apps/weave/wnum.inc`,
