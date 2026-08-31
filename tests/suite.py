@@ -116,6 +116,19 @@ FAST = [
         "implementations written from WEAVE-SPEC that can disagree, and "
         "until the 8086 runtime lands this row is the disagreement's only "
         "audience"),
+    Row("lmpack", "fast", py("tests/unit/t_lmpack.py"), 5.0,
+        "WEAVE-SPEC 11.1's byte-identity gate, host-side: LOOM's five "
+        "SHIPPING compilers built with the host cc, packing every demo, "
+        "every template and every case in tests/weave/packerr/, diffed "
+        "against tools/weavesim.py bundle for bundle and sentence for "
+        "sentence. It is NOT the gate - `weavepack` packs on the MACHINE, "
+        "and the difference between the two is one word wide (int is 32 "
+        "bits here) - but it is what makes an on-machine compiler writable "
+        "at all, and it puts a weavesim change in front of the next `make` "
+        "rather than the next soak run. SKIPS with no host compiler, "
+        "because a clone with nasm and python3 builds every floppy this "
+        "project ships and a red suite there would be reporting on the box",
+        needs=()),
     Row("textrules", "fast", py("tests/unit/t_textrules.py"), 0.4,
         "SPEC.md 6.6's ratchet: transparent text (font_char/font_str) draws every "
         "pixel twice and flashes on the target machine, so every call site is "
