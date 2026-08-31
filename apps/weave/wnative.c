@@ -202,16 +202,19 @@ static int w_settext(int id, int i)
 
     if (w_argt(0) != WT_STR)
         return w_nerr(WE_TYPE, 0, 0);
-    w_ctext[id] = (unsigned)w_argv(0);
     k = w_iblk(id);
     if (k >= 0) {                       /* an <input>: the field's own buffer
-                                         * is the truth (6.7), so the string
-                                         * has to go INTO it, not beside it */
+                                         * IS the state (6.7), so the string
+                                         * goes into it and w_ctext is left
+                                         * alone - parking a handle there too
+                                         * would be a GC root holding a copy
+                                         * nothing ever reads */
         wvm_str_read(w_argv(0), w_str, W_STRMAX);
         wd_lset(w_fld[k], w_str);
         if (w_focus == k)
             w_caron = 0;
-    }
+    } else
+        w_ctext[id] = (unsigned)w_argv(0);
     w_touch(id);
     (void)i;
     return w_nres(WT_NULL, 0);

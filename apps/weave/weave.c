@@ -171,7 +171,6 @@ static int  w_samename(const char *a, const char *b);
 static void w_infield(int i, int x1, int y1, int x2, int y2, int dis);
 static void w_press(int i, int x, int y);
 static int  w_radio_holder(int i);
-static void w_itext_to_state(int k);
 static int  w_iblk(int id);
 static void w_enq(int comp, int atom, int d1, int d2);
 static void w_kick(void);

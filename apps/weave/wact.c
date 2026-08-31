@@ -354,7 +354,17 @@ static int w_key(void *win, int ascii, int scan)
         return 0;
     k = w_focus;
     if (ascii == 13) {                  /* Enter COMMITS (3.3, 6.7) */
-        w_itext_to_state(k);
+        /* AND NOTHING IS COPIED ANYWHERE. An earlier version of this line
+         * made a VM string out of the field and parked it in w_ctext, so
+         * that `who.text` would read what was typed - which meant allocating
+         * OUTSIDE a slice, under the gfx lock, and collecting there when the
+         * arena was full. WEAVE-SPEC 4.8 says the collector runs only BETWEEN
+         * slices, never under the lock, and it says so for a reason.
+         *
+         * It was also unnecessary: w_getp reads a live <input>'s buffer
+         * directly (6.7 - "the LIVE field, which is what `who.text` has to
+         * mean"), so the field IS the state and there is nothing to mirror.
+         * The commit is the event and the event is all of it. */
         w_enq(w_iof[k], WA_ONCHANGE, 0, 0);
         return 1;
     }
@@ -373,27 +383,4 @@ static int w_key(void *win, int ascii, int scan)
     wd_lcaron(w_fld[k]);
     w_caron = 1;
     return used;
-}
-
-/* w_itext_to_state - the field's bytes become the component's `.text`, so
- * that `who.text` from script reads what the user typed (6.7).
- *
- * IT ALLOCATES, and this is the one place in the runtime that allocates
- * OUTSIDE a slice - so a full arena has nowhere to report to and the write is
- * simply skipped, leaving `.text` as it was. That is honest: a commit whose
- * string will not fit has not happened, and the next collection (which the
- * slice after this one will run) makes room for the next one. */
-static void w_itext_to_state(int k)
-{
-    int h, id;
-
-    id = w_iof[k];
-    h = wvm_str_make((const char *)w_fld[k][LNW_BUF]);
-    if (h == 0) {
-        w_gcmark();
-        wvm_gc();
-        h = wvm_str_make((const char *)w_fld[k][LNW_BUF]);
-    }
-    if (h > 0)
-        w_ctext[id] = (unsigned)h;
 }
