@@ -225,28 +225,45 @@ static unsigned lmj_trow(int k)
     return LMW_TOKS + (unsigned) k * LM_TOKSZ;
 }
 
+/* EVERY TOKEN READ IS BOUNDS-CHECKED, and it is a rule about hostile bytes
+ * rather than about correctness. A `.WJS` is a file somebody typed, so a
+ * malformed one can walk the cursor past the end - and past the end of
+ * LMW_TOKS is the next region of the scratch claim, whose bytes would decode
+ * as tokens and keep the parser going. An index past the last token reads as
+ * EOF, which every loop in this file already terminates on. WEAVE-SPEC
+ * 4.5.1's argument, made one level earlier. */
 static int lmj_kind(int k)
 {
+    if (k < 0 || k >= lmj_ntok)
+        return LMTK_EOF;
     return (int) lm_wb(lmj_trow(k) + LMT_KIND);
 }
 
 static int lmj_aux(int k)
 {
+    if (k < 0 || k >= lmj_ntok)
+        return 0;
     return (int) lm_wb(lmj_trow(k) + LMT_AUX);
 }
 
 static int lmj_tline(int k)
 {
+    if (k < 0 || k >= lmj_ntok)
+        return 0;
     return (int) lm_ww(lmj_trow(k) + LMT_LINE);
 }
 
 static int lmj_val(int k)
 {
+    if (k < 0 || k >= lmj_ntok)
+        return 0;
     return (int) lm_ww(lmj_trow(k) + LMT_VAL);
 }
 
 static unsigned lmj_toff(int k)
 {
+    if (k < 0 || k >= lmj_ntok)
+        return 0;
     return lm_ww(lmj_trow(k) + LMT_OFF);
 }
 

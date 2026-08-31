@@ -3332,7 +3332,7 @@ cannot load or the claim cannot be had — Pack is a menu command and menu
 commands may refuse (SPEC.md §73.14).
 
 **It takes TWO transient claims, not one, and both are freed when Pack ends:**
-the 62KB OUTPUT claim above, and a 53KB SCRATCH claim holding every compiler
+the 62KB OUTPUT claim above, and a 50KB SCRATCH claim holding every compiler
 table. The second one exists for SPEC.md §73.14's reason rather than for
 convenience: the compilers are overlay tenants, so their CODE ships in
 `LOOM.OVL` and costs the resident image nothing, while *"every global,
@@ -3343,7 +3343,7 @@ offsets into a claim and the resident cost of the whole pack step is one
 segment word. `apps/loom/loom.h` lays the regions out and each carries the
 sentence that refuses past it.
 
-**115KB of transient claim is a number, and it is stated rather than
+**112KB of transient claim is a number, and it is stated rather than
 discovered.** §10.1's arithmetic runs before any of it is taken, and a
 machine that cannot spare it refuses with both figures in the same voice a
 bundle's refusal uses. A 640KB machine packs with room; the family's floor

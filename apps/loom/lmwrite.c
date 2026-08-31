@@ -213,17 +213,28 @@ static unsigned lmo_extra[9];
 static int      lmo_nsec;
 
 static unsigned lmo_at;             /* the write cursor inside a section */
+static int      lmo_over;           /* ...and whether it ever left the claim */
 
+/* THE CURSOR KEEPS COUNTING PAST THE CAP AND THE WRITE STOPS, which is the
+ * order that matters: 2.1 bounds a bundle at 63,488 bytes and the OUTPUT
+ * CLAIM is exactly that, so a project whose sections would overrun it must
+ * not write one byte past the claim on its way to finding out. Every section
+ * length here is already bounded by its scratch region (11.4), so this cannot
+ * fire on anything the compilers will accept - it is the guard that makes
+ * that sentence a fact rather than an argument. */
 static void lmo_b(unsigned v)
 {
-    lm_opb(lmo_at, v);
+    if (lmo_at < W_CAP)
+        lm_opb(lmo_at, v);
+    else
+        lmo_over = 1;
     lmo_at++;
 }
 
 static void lmo_w(unsigned v)
 {
-    lm_opw(lmo_at, v);
-    lmo_at += 2;
+    lmo_b(v & 0xFF);
+    lmo_b((v >> 8) & 0xFF);
 }
 
 /* --- 2.5: UISTREAM ------------------------------------------------------- */
@@ -552,6 +563,7 @@ int ovl_write(void)
     unsigned nsec;
 
     lmo_nsec = 0;
+    lmo_over = 0;
     lmo_type[lmo_nsec] = W_UISTREAM;
     lmo_nsec++;
     lmo_type[lmo_nsec] = W_PROPS;
@@ -637,13 +649,16 @@ int ovl_write(void)
          * and the padding between them is 0x00. */
         {
             unsigned nxt = lmo_align16(at + len);
-            lm_ofill(at + len, 0, nxt - (at + len));
+            if (nxt <= W_CAP)
+                lm_ofill(at + len, 0, nxt - (at + len));
+            else
+                lmo_over = 1;
             at = nxt;
         }
     }
     /* 2.3: the file ends at the LAST section's unpadded end. */
     total = lmo_off[lmo_nsec - 1] + lmo_slen[lmo_nsec - 1];
-    if (total > W_CAP) {
+    if (lmo_over || total > W_CAP) {
         lmw_msg[0] = 0;
         lm_cat(lmw_msg, "bundle is ");
         lm_catu(lmw_msg, total);

@@ -90,10 +90,15 @@
 #define LMW_CELLS     0xA210        /*  3072: 384 CELLS rows of 8 */
 #define LMW_SPRD      0xAE10        /*   256: 16 sprite rows of 16 */
 #define LMW_SPRB      0xAF10        /*  6144: 2.11's image + mask bytes */
-#define LMW_UI        0xC710        /*  2560: 256 UISTREAM records of 10 */
-#define LMW_END       0xD110        /* = 53,520 */
+#define LMW_END       0xC710        /* = 50,960 */
 
-#define LM_WORKKB     53            /* ...and the claim that holds it */
+/* There is NO UISTREAM region, and its absence is worth a line: the writer
+ * emits 2.5's records straight into the OUTPUT image at their final offset,
+ * because the section count - and therefore where the first section starts -
+ * is known before any body is built (2.3). A staging area for it would have
+ * been 2,560 bytes of claim that nothing ever read. */
+
+#define LM_WORKKB     50            /* ...and the claim that holds it */
 
 /* The per-region capacities, each with the sentence that refuses past it. */
 #define LM_MAXATOM   187            /* 2.7: ids 64..250 */
@@ -110,7 +115,6 @@
 #define LM_MAXCELL   384
 #define LM_MAXSPR     16            /* 2.11 */
 #define LM_SPRBMAX  6144
-#define LM_MAXREC    256            /* 2.5: cards + components + REC_END */
 
 /* The row strides, in bytes. */
 #define LM_TOKSZ       8
