@@ -82,15 +82,28 @@ naming them in advance is that the split is a move rather than a scramble.
 | 3 | **the bundle validator** (§10.4) | once per open; the runtime's largest single body of code | wave 3 |
 | 4 | **the load path** — the size probe, the capability tests, the directory search, the claim and the read, the component birth state, the field pool's assignment, the menu build, the VM bind and §2.6.2's module-init call | once per open, and once per `^R` (§1.7), which is a COMMAND keystroke and not an editing one | wave 3 |
 | 5 | **`saveState` / `loadState`** (§8.3) | a builtin, so MID-RUN — the one stated exception, below | wave 3 |
-| 6 | state import/export dialogs | a menu command | — |
-| 7 | formula-function help | a menu command | — |
-| 8 | the flow walk's NATURAL SIZES (§7.3) | once per open and per resize — **not** movable while `app.go()` can reflow from a handler (§6.12) | — |
+| 6 | **the grid's load path** — the grid claim, the CELLS section read into the cell store, the formula cells' pool slots and the first recalculation's arming (§5.6) | once per open, beside tenant 4 and for tenant 4's reason | wave 4 |
+| 7 | state import/export dialogs | a menu command | — |
+| 8 | formula-function help | a menu command | — |
+| 9 | the flow walk's NATURAL SIZES (§7.3) | once per open and per resize — **not** movable while `app.go()` can reflow from a handler (§6.12) | — |
 
-Entries 6 and 7 do not exist yet. **Entry 8 is listed with its own
+Entries 7 and 8 do not exist yet. **Entry 9 is listed with its own
 disqualification**, because it is the obvious next thing to reach for and it
 is wrong: a card switch runs the walk from inside a handler, so the walk is
 mid-run by §6.12's own design and moving it would put a refusable call on the
 path a running script takes.
+
+**Entry 6 was added in wave 4 and the list it joined was spent** — 3, 4 and 5
+had all moved, 7 and 8 did not exist and 9 is disqualified above — so it is
+worth saying what qualified it rather than letting a wave extend the list by
+reaching. It runs exactly once per bundle, at open, on the UI task, from
+inside tenant 4's own body; it draws nothing and no handler can reach it; and
+its refusal already has a meaning, because a grid claim that cannot be had is
+§10.1's sentence and that path exists whether the overlay loads or not.
+Everything ELSE the grid does — the band composer, the FX VM, the resident
+formula compiler, the sliced recalculation — is on a keystroke's path and
+stays resident, which is why wave 4 spends the size line rather than saving
+it.
 
 **Entry 5 is the one exception to "nothing an event handler needs mid-run",
 and it is stated rather than stretched.** `saveState()` and `loadState()` are
@@ -1450,6 +1463,42 @@ integer part** in the int's range; out of range is a script error. This
 seam is stated, not hidden: WJS is 16-bit, FX is 16.16, and the grid is
 FX's domain.
 
+#### 5.2.1 The display form, pinned
+
+A 16.16 value reaches the glass as characters, and `weavegrid` (§12.3)
+compares the machine's picture with the model's cell for cell — so the
+conversion is part of the contract and not the model's private business. It
+was `fmt_16_16`'s "recorded decision" until wave 4 went to write the 8086's
+half and found nothing to write it from.
+
+Given a cell whose value is `v`:
+
+| case | display |
+|---|---|
+| the error value (§5.2) | `#DIV0` |
+| a formula marked CIRC (§5.5) | `#CIRC` |
+| a label | its string |
+| an empty cell | the empty string |
+| otherwise | as below |
+
+```
+neg   = v < 0            ; the sign is emitted first and separately
+a     = |v|              ; as an unsigned 32-bit magnitude
+ip    = a >> 16
+cents = ((a & 0xFFFF) * 100) >> 16      ; TRUNCATED, never rounded
+if cents == 0:  ip in decimal
+else:           ip, '.', cents as EXACTLY TWO digits, then ONE trailing
+                '0' removed if the second digit is '0'
+```
+
+So `3.5` is `3.5`, `7.25` is `7.25`, `12` is `12`, `1/3` is `0.33`, and
+`-0.001` is `-0` — the last is named because it looks like a defect and is
+the arithmetic: a magnitude under 1/200 has no cents and an integer part of
+zero, and inventing a rounding rule for it would be a second conversion to
+keep in step. The truncation is likewise deliberate: rounding at two places
+would make `0.999` display `1` while `=A1=1` is false, which is the class of
+disagreement a spreadsheet must not have.
+
 ### 5.3 The RPN encoding
 
 Formulas compile (shunting-yard, §5.1's precedence, left-associative) to a
@@ -1505,13 +1554,57 @@ in v1:
    follows §6.9's band discipline.
 
 Recalc is **sliced**: FX ops count against §4.10's slice budget one for
-one, the grid's status cell shows `Calculating...` while passes are
-pending, and `oncalc` fires (once) when pass 2 completes. Arithmetic for
+one, and `oncalc` fires (once) when pass 2 completes. Arithmetic for
 the stated worst case: 500 formula cells × ~10 ops × 2 passes = 10k FX
 ops ≈ 300–600 ms across 7–14 capped slices at ~30–60 µs/FX-op.
 
 Triggers: a cell commit from the formula bar, `setCell()`, `recalc()`.
 Multiple triggers before the passes start collapse to one recalculation.
+
+#### 5.5.1 The slice boundary falls INSIDE the passes, so the state is pinned
+
+A recalculation that only ran whole would be the runaway §4.11 exists to
+prevent, wearing a different hat: 10k FX ops is 300–600 ms with the desktop
+stopped. So the walk is resumable and its state is named here rather than
+left to an implementer, because two of the four fields are the ones an
+implementation would keep on a stack a slice does not own.
+
+| field | what |
+|---|---|
+| `pass` | 0 idle, 1 pass 1 running, 2 pass 2 running |
+| `cursor` | the next cell index in row-major order, 0..rows×cols |
+| `changed` | display strings that have changed so far, for `oncalc` |
+| the **pass-1 value** | per formula cell, in its own pool slot (§5.6) |
+
+The pass-1 value is per CELL and not a list, because §5.5's step 2 compares
+each formula's pass-2 value with its own pass-1 value and the two passes are
+separated by an unbounded number of slices — a vector allocated for the
+duration would be a second allocation on a heap the app has already been
+refused against (§10.1), and a local would not survive the return.
+
+**A trigger arriving mid-walk restarts at pass 1, cursor 0.** That is what
+§5.5's "multiple triggers collapse to one" means once the passes can be
+interrupted: a `setCell` landing between the two passes has changed an input
+the first pass already read, and finishing the walk would publish values from
+before it. Restarting is bounded — the trigger came from a handler, handlers
+run one at a time (§4.9), and each restart is one more pass over the same
+cells.
+
+**`Calculating...` goes in the FORMULA BAR**, not in a status cell. §5.5 said
+"the grid's status cell" until wave 4 went to draw one and found the family
+has no status row while a card is up (§10.6.0's own reason, and §7.1.1 gives
+the grid no chrome of its own to put a cell in). The bar is already the
+grid's one line of text, it is already repainted per commit, and it is where
+the eye is after an Enter. Pass 2's completion restores it to the selected
+cell's source (§6.9.3).
+
+**The damage rule.** A cell whose DISPLAY string (§5.2.1) differs from what
+it displayed before the walk began marks its grid ROW dirty (the cell
+record's flags bit 1, §5.6). At the end of pass 2 exactly the dirty visible
+rows are re-composed and blitted — one `GFX_BLIT1` each (§6.9.1) — and
+nothing else on the card is touched. A recalculation that changes one cell
+costs one gfx call, which is §14's `edit one cell` row and the whole reason
+the store carries a dirty bit rather than the painter carrying a compare.
 
 ### 5.6 The grid claim — the cell store
 
@@ -1533,8 +1626,27 @@ payload word.
 | 1 | inline int | signed 16-bit value (a whole number in int range) |
 | 2 | pool number | pool offset of a 4-byte 16.16 value |
 | 3 | atom label | atom id |
-| 4 | formula | FXCODE index; its cached value lives in a pool slot allocated at load (payload's pool slot holds the FXCODE index word + the 4-byte cached value) |
+| 4 | bundle formula | pool offset of a **10-byte** slot: FXCODE index word, the 4-byte cached value, the 4-byte pass-1 value (§5.5.1) |
 | 5 | pool string | pool offset: length byte + bytes (a runtime `setCell` string, copied in) |
+| 6 | **runtime formula** | pool offset of a slot: RPN length word, the 4-byte cached value, the 4-byte pass-1 value, then `len` bytes of §5.3 RPN — the resident compiler's output (§6.9.2) |
+
+Kinds 4 and 6 are one cell kind wearing two addresses. The RPN a bundle
+carried is in the BUNDLE claim, which is pinned and read-only (§2.1); the RPN
+a user typed into the formula bar has nowhere to be but the grid claim's own
+pool, and a wave that made the formula bar work without saying so would have
+had to write it into a read-only section. The FX VM therefore takes a
+(segment, offset) pair for the stream rather than an index, and the only
+difference between the two kinds is which segment it is handed.
+
+Both slots carry the **pass-1 value** §5.5.1 requires, which is why kind 4's
+slot is 10 bytes and not 6. A runtime formula's slot is `10 + len` bytes and
+is bump-allocated like every other pool object: **re-typing a formula into
+the same cell allocates a new slot and leaks the old one**, which is stated
+rather than discovered — the pool is never freed (this section's own rule),
+so a session that edits one formula five hundred times meets `grid pool
+full.` (§10.6) and an app that edits a handful does not notice. The
+alternative is a free list in a 2KB pool, which is more machinery than the
+whole component.
 
 A whole-number store in int range is kind 1 (no pool cost); a fractional
 value allocates a pool slot once and overwrites it thereafter. Pool
@@ -1698,9 +1810,9 @@ Prices, from Set 68's constants:
 
 The formula bar is a library-wired `input` bound to the grid: clicking a
 cell loads its source (formula text or value) into the bar; Enter commits,
-recompiles the formula **with the resident in-grid compiler** (~1.5KB,
-shunting-yard — resident because commit is a keystroke-path action and
-overlay calls are refusable), and triggers §5.5's recalc. Column headers
+recompiles the formula **with the resident in-grid compiler** (§6.9.2 —
+resident because commit is a keystroke-path action and overlay calls are
+refusable), and triggers §5.5's recalc. Column headers
 A.. and row numbers compose into the same bands.
 
 Events: `onselect(row, col)`, `onedit(row, col)`, `oncalc(changed)`.
@@ -1708,6 +1820,129 @@ Surface: `cell(r,c)` (CALLM → int, §5.2's truncation), `setCell(r,c,v)`
 (int or string), `recalc()`, `select(r,c)`, `clear()` (empties every
 non-formula cell), `selrow`/`selcol` (get), `rows`/`cols` (get).
 Row/col arguments are 1-based in WJS and FX alike.
+
+#### 6.9.1 What the grid looks like, cell by cell
+
+Pinned, because `weavegrid` (§12.3) diffs the machine's picture against
+`weavesim --render`'s and a picture that is not pinned is not a diff. The
+component's rect from the walk is `w` cells by `h` rows of 8 px. Inside it:
+
+| rows | band |
+|---|---|
+| 0..1 | the **formula bar** — an `os88line` field spanning all `w` cells, the same editor an `<input>` is (§6.7), out of the same eight-block pool |
+| 2 | the **column header** band |
+| 3..h−1 | the **data** bands, one grid row each |
+
+```
+WG_GUT  = 4 cells      the row-number gutter
+WG_COLW = 8 cells      every data column, fixed
+VC = max(1, min(cols, (w - WG_GUT) / WG_COLW))     visible columns
+VR = max(0, min(rows, h - 3))                      visible rows
+```
+
+The column width is **fixed at 8 cells and not fitted to the content**. A
+fitted width would have to be recomputed whenever any cell in the column
+changed, which turns a one-cell edit — §14's one-blit row — into a re-compose
+of every band; and the two implementations would have to fit identically or
+the diff is noise. Eight cells is seven characters and a separator, which
+holds `-32768` and `#DIV0` whole.
+
+Each band is composed left to right as exactly `w` cells of text and emitted
+as ONE `GFX_BLIT1`:
+
+```
+header band:  WG_GUT spaces, then per visible column c:
+                3 spaces, the column letter 'A'+(left+c), 4 spaces
+              ...and the WHOLE band is drawn INVERTED (ink and paper
+              swapped). Inverting costs nothing here - the band is bytes in
+              RAM and the composer complements them - and it is the only
+              chrome the grid has
+data band r:  the 1-based grid row number, right-justified in 3 cells, then
+              one space; then per visible column c: the cell's display
+              string (5.2.1) clipped to WG_COLW-1 characters and justified
+              LEFT for a label, RIGHT for a number, an empty cell or an
+              error value, then one space
+```
+
+Cells past `WG_GUT + VC × WG_COLW` are blank. Rows and columns scroll: `top`
+and `left` are the first visible grid row and column, both 0-based, and both
+move only far enough to keep the selection visible (§6.9.4).
+
+**The selected cell is drawn INVERTED** — its `WG_COLW` cells within its data
+band. A selection move whose two cells are both on screen is **2 XOR rects**
+over exactly those cell spans (§14's row, ~1.5 ms); a move that scrolls
+re-composes. The two agree by construction: XOR-ing an inverted cell restores
+it and XOR-ing a plain one inverts it, so the incremental path lands on the
+same pixels a full re-compose would — which is precisely what `weavegrid`'s
+tpdraw identity asserts.
+
+**A one-row scroll is one `GFX_SCROLL` plus one composed band**; any other
+step re-composes every visible band. That is §6.8's list rule with the same
+arithmetic behind it and the same end-stop refusal: a scroll that would move
+nothing draws nothing at all.
+
+#### 6.9.2 The resident formula compiler
+
+§9.4 says the runtime never parses text. This is the one carve-out, it is
+named there too, and it is **the whole of §5.1's grammar and not a subset**.
+
+Two grammars for one language is the drift §11's byte-identity rule exists to
+prevent, said about a language instead of about a file: a subset would let a
+formula pack on the host, load on the machine, and refuse the moment its
+author clicked its cell to look at it. So the resident compiler is §5.1's
+recursive descent emitting §5.3's RPN, with §5.3's depth cap and §5.4's
+function set, and its output for a given source is the same bytes
+`weavesim --pack` would have written for it.
+
+It is **resident** because a commit is a keystroke-path action: an overlay
+call may refuse (SPEC.md §73.14) and "your formula did not compile because a
+module would not load" is not an answer a spreadsheet may give. Its cost
+against the size line is recorded per wave like everything else (§13.1).
+
+Its refusals are §10.5's, reduced to one line: the runtime has no file and no
+line number to name, so the toast reads `Formula: <message>` with §10.5's own
+message text, and the bar keeps the text the user typed so it can be fixed
+rather than retyped.
+
+#### 6.9.3 What Enter commits
+
+The bar's text is classified in this order, and the order is the contract:
+
+1. **empty** (no non-space character) → the cell becomes empty (kind 0);
+2. **begins with `=`** → §6.9.2 compiles the rest; on success the cell
+   becomes a runtime formula (§5.6 kind 6), on a refusal **nothing is
+   committed** and the message is shown;
+3. **parses whole as a §5.1 `number`** (optional `-`, digits, optional `.`
+   and digits, nothing else) → a numeric cell: kind 1 when the value is a
+   whole number in signed 16-bit range, kind 2 otherwise;
+4. **anything else** → a label (kind 5, copied into the pool).
+
+Then `onedit(row, col)` is enqueued and §5.5's recalculation is triggered.
+The classification is tried in that order and never re-tried: `=` first means
+a formula is never mistaken for a label, and the number test before the label
+means `12` is twelve and not the word.
+
+Loading the bar is the same rule run backwards — a formula shows as `=` plus
+its source, a number as its §5.2.1 display, a label as its text, an empty
+cell as nothing. **The source of a BUNDLE formula (§5.6 kind 4) cannot be
+shown**: the bundle carries compiled RPN and no formula text (§2.9), and
+decompiling RPN to source would be a third implementation of §5.1 to keep in
+step. It loads as `=?` — the cell's own answer to "what is in you" when the
+honest answer is "a formula this machine cannot spell". Committing over it
+replaces it, which is the operation the user was reaching for.
+
+#### 6.9.4 Selection, keys and scrolling
+
+- A click in a data band moves the selection to that cell, loads the bar
+  (§6.9.3) and does **not** arm the bar; a click in the formula bar arms it;
+  a click in the header band or the gutter does nothing.
+- The four arrow keys move the selection by one cell when the grid was the
+  last component clicked and the bar is not armed. They scroll `top`/`left`
+  by the minimum needed to keep the new cell visible.
+- Enter commits (§6.9.3). Escape reloads the bar from the selected cell,
+  which is the cancel.
+- Every selection move — click, arrow key or `select()` — enqueues
+  `onselect(row, col)`, 1-based, exactly once.
 
 ### 6.10 `canvas` + `sprite` — the game component
 
@@ -2158,6 +2393,18 @@ WEAVE interprets bytecode and display lists only. Parsing lives in
 machine compiles C (SPEC.md §73) and the pack step is the only compiler
 surface.
 
+**One carve-out, and it is FX in the formula bar** (§6.9.2). A spreadsheet
+whose cells cannot be typed into is not one, and a cell's source is text: it
+is compiled where it is typed, by a resident recursive-descent compiler over
+the whole of §5.1's grammar, emitting §5.3's RPN. The exclusion still holds
+where it matters — **no WML and no WJS is ever parsed on the machine by
+WEAVE**, so the display list and the bytecode still arrive compiled and the
+pack step is still the only surface that compiles a program. What is
+carved out is one expression language of nine productions and eight
+functions, entered one line at a time by a person who is looking at the
+result. The line this draws is the same one §5's own split draws: WJS is the
+app's, FX is the user's.
+
 ### 9.5 No floats, longs, closures, objects, `this`, `new`, try/catch, regex, eval
 
 16-bit int is WJS's number type — the toolchain has no long/float
@@ -2460,6 +2707,29 @@ corpus carries **negative controls** — cases whose expected state is
 deliberately wrong, which the harness must FAIL. A differential that cannot
 see a broken core has proved nothing.
 
+#### 12.1.2 `--emit-fxcorpus` — the FX VM's half of the same gate
+
+`apps/weave/wfx.inc` is a second interpreter and it gets the same treatment,
+in the same boot sector, generated by
+`python3 tools/weavesim.py --emit-fxcorpus <dir> -o <out.inc>`. The corpus
+lives in `tests/weave/fxcorpus/`, one `.fx` file per subject, each carrying a
+`grid <cols> <rows>` line, `<cellref> = <number|"label"|=formula>` lines in
+`.WFX`'s own syntax (§11.2), and then `? <formula>` lines — the expressions to
+evaluate. The generator compiles each with the model's `FxCompiler`, evaluates
+it against the model's own cell store, and writes per case: the cell store as
+§5.6 bytes, the compiled RPN, and the expected 16.16 result or `#DIV0`.
+
+**It is generated from a cell store and not from a table of answers**, which
+is the point: the machine's FX VM reads the same §5.6 image the runtime's does
+— dense array, pool slots, kinds 1 through 6 — so a defect in how a cell is
+READ shows here rather than in the app. The negative controls are the same
+rule as §12.1.1's: cases whose expected answer is deliberately wrong, which
+the harness must FAIL.
+
+The FX rows run **before** the grid is wired to the VM, which is §13.1's own
+ordering said again: an interpreter diffed after its component is built
+reports its defects as widget defects.
+
 `--selfcheck` runs its unit corpus and the pack/read round-trip;
 `build/.weave-hostchecks` stamps it as a prerequisite of the future
 `.raw.asm`, so a broken model stops the 8086 compile (the RunCPM stamp
@@ -2485,7 +2755,7 @@ Respecting the enforced tier budgets (fast 30 s host-only; full 600 s —
 | fast | `t_wab` | §12.2 |
 | fast | (checkdocs) | picks up WEAVE-SPEC/WEAVE-PLAN citations automatically once tracked |
 | full | `weavesmoke` | MartyPC boots, opens FORM.WAB, asserts drawn-window STRUCTURE (never a golden screenshot) on both 1bpp GLaBIOS twins; needs=(marty,), serial — the family's ONE full row, forever |
-| soak | `weavevm` | raw-QEMU SS≠DS boot-sector differential corpus vs weavesim end states (the rcz80test shape) |
+| soak | `weavevm` | raw-QEMU SS≠DS boot-sector differential corpus vs weavesim (the rcz80test shape) — **both cores**: the WVM's end states (§12.1.1) and the FX VM's results and errors (§12.1.2) |
 | soak | `weavesession` | MartyPC scripted replay of a real session, diffed against `weavesim --run`'s end state |
 | soak | `weavegfx` | pixels-vs-model with no goldens — transcript diffing is structurally blind to drawing defects (zgfx's whole reason) |
 | soak | `weavegrid` | recalc vs weavesim + incremental-equals-full-repaint (the tests/tpdraw.py identity gate) |
