@@ -3140,13 +3140,31 @@ def wrap16(v):
     return ((v + 0x8000) & 0xFFFF) - 0x8000
 
 
+# WEAVE-SPEC 6.9.1's pinned geometry.  The column width is FIXED - a fitted
+# one would turn a one-cell edit into a re-compose of every band, and two
+# implementations would have to fit identically or the diff is noise.
+WG_GUT = 4                              # the row-number gutter, in cells
+WG_COLW = 8                             # every data column, in cells
+WG_BAR = 2                              # the formula bar, in 8-px rows
+WG_HDR = 1                              # ...and the column-header band
+
+
+def grid_geom(cols, rows, w, h):
+    """WEAVE-SPEC 6.9.1: (visible columns, visible rows) for a `w` x `h`
+    component rect."""
+    vc = max(1, min(cols, (w - WG_GUT) // WG_COLW))
+    vr = max(0, min(rows, h - (WG_BAR + WG_HDR)))
+    return vc, vr
+
+
 class GridRt:
     """The grid cell store and WEAVE-SPEC 5.5's two-pass recalc."""
 
     def __init__(self, cols, rows, bundle):
         self.cols, self.rows, self.b = cols, rows, bundle
         self.vals = {}                  # (r,c) -> ['num',v] ['label',s]
-        self.circ = set()               # ['formula',idx,cached]
+        self.circ = set()               # ['formula',idx,cached] (bundle RPN)
+        self.top = self.left = 0        # 6.9.1's scroll origin
         for r, c, kind, payload in bundle.cells:
             if kind == 1:
                 self.vals[(r, c)] = ["num", payload]
@@ -3154,7 +3172,14 @@ class GridRt:
                 self.vals[(r, c)] = ["label", bundle.atom_str(payload)]
             else:
                 self.vals[(r, c)] = ["formula", payload, 0]
+        self.dirty = set()              # 5.5.1's damage: grid ROWS
         self.recalc()                   # cached values computed at load
+
+    # -- reading ----------------------------------------------------------
+    def rpn(self, v):
+        """The RPN stream of a formula cell: the BUNDLE's for kind 4, the
+        cell's own for a runtime formula (WEAVE-SPEC 5.6 kind 6)."""
+        return v[3] if len(v) > 3 else self.b.formulas[v[1]]
 
     def read_cell(self, r, c):
         v = self.vals.get((r, c))
@@ -3172,6 +3197,81 @@ class GridRt:
             return "#CIRC"
         return fmt_16_16(v[1] if v[0] == "num" else v[2])
 
+    def is_label(self, r, c):
+        """WEAVE-SPEC 6.9.1 justifies a LABEL left and everything else -
+        a number, an empty cell, an error - right."""
+        v = self.vals.get((r, c))
+        return v is not None and v[0] == "label"
+
+    def source(self, r, c):
+        """WEAVE-SPEC 6.9.3 run backwards: what the formula bar loads.
+
+        A BUNDLE formula has no source anywhere - 2.9 carries compiled RPN
+        and no text - so it loads as `=?`, the cell's own honest answer to
+        "what is in you"."""
+        v = self.vals.get((r, c))
+        if v is None:
+            return ""
+        if v[0] == "label":
+            return v[1]
+        if v[0] == "formula":
+            return "=" + v[4] if len(v) > 4 else "=?"
+        return fmt_16_16(v[1])
+
+    def band(self, w, h, row):
+        """WEAVE-SPEC 6.9.1's band text: `row` = -1 for the header band,
+        else the BAND index 0..VR-1 (grid row `top` + row).  Exactly `w`
+        characters."""
+        vc, _ = grid_geom(self.cols, self.rows, w, h)
+        if row < 0:
+            s = " " * WG_GUT
+            for k in range(vc):
+                c = self.left + k
+                s += "   " + (chr(65 + c) if c < self.cols else " ") + "    "
+            return s[:w].ljust(w)
+        r = self.top + row
+        s = ("%3d " % (r + 1)) if r < self.rows else " " * WG_GUT
+        for k in range(vc):
+            c = self.left + k
+            if r >= self.rows or c >= self.cols:
+                s += " " * WG_COLW
+                continue
+            t = self.display(r, c)[:WG_COLW - 1]
+            s += (t.ljust(WG_COLW - 1) if self.is_label(r, c)
+                  else t.rjust(WG_COLW - 1)) + " "
+        return s[:w].ljust(w)
+
+    # -- writing (WEAVE-SPEC 6.9.3) ---------------------------------------
+    def set_num(self, r, c, v1616):
+        self.vals[(r, c)] = ["num", wrap32(v1616)]
+
+    def set_label(self, r, c, s):
+        self.vals[(r, c)] = ["label", s]
+
+    def clear_cell(self, r, c):
+        self.vals.pop((r, c), None)
+
+    def commit(self, r, c, text, fname="formula bar"):
+        """WEAVE-SPEC 6.9.3's classification, in its pinned order.  Returns
+        None, or the message a refusal shows."""
+        t = text.strip()
+        if not t:
+            self.clear_cell(r, c)
+            return None
+        if t.startswith("="):
+            try:
+                rpn = FxCompiler(self.cols, self.rows, fname, 0).compile(t[1:])
+            except PackError as e:
+                return e.args[0] if e.args else "cannot read the formula"
+            self.vals[(r, c)] = ["formula", -1, 0, rpn, t[1:]]
+            return None
+        if re.match(r"^-?[0-9]+(\.[0-9]+)?$", t):
+            self.set_num(r, c, parse_number_16_16(t, fname, 0))
+            return None
+        self.set_label(r, c, fold_text(t))
+        return None
+
+    # -- 5.5's two passes -------------------------------------------------
     def formula_cells(self):
         return sorted(k for k, v in self.vals.items() if v[0] == "formula")
 
@@ -3180,16 +3280,22 @@ class GridRt:
         pass1 = {}
         for rc in self.formula_cells():   # pass 1: current values
             v = self.vals[rc]
-            v[2] = fx_eval(self.b.formulas[v[1]], self.read_cell)
+            v[2] = fx_eval(self.rpn(v), self.read_cell)
             pass1[rc] = v[2]
         self.circ.clear()
         for rc in self.formula_cells():   # pass 2: differ -> #CIRC, pass-2
             v = self.vals[rc]             # value stands
-            v[2] = fx_eval(self.b.formulas[v[1]], self.read_cell)
+            v[2] = fx_eval(self.rpn(v), self.read_cell)
             if v[2] != pass1[rc]:
                 self.circ.add(rc)
-        return sum(1 for k in set(before) | set(self.vals)
-                   if before.get(k, "") != self.display(*k))
+        # 5.5.1's damage: a cell whose DISPLAY changed marks its grid ROW.
+        self.dirty = set()
+        n = 0
+        for k in set(before) | set(self.vals):
+            if before.get(k, "") != self.display(*k):
+                self.dirty.add(k[0])
+                n += 1
+        return n
 
 
 # ring policy classes (WEAVE-SPEC 4.9)
@@ -3260,6 +3366,8 @@ class Runtime:
         self.gfx_calls = 0
         self.comps = {}
         self.grid = None
+        self.adapter = "cga"            # the layout a scroll clamp uses
+        self._grect = None              # ...and the grid's rect on it
         self.canvas = None
         canvas_cid = None
         for comps in bundle.cards:
@@ -3324,6 +3432,7 @@ class Runtime:
             st["grid"] = self.grid
             self.grid_cid = c.comp_id
             self.grid_pending = False
+            st["barsrc"] = self.grid.source(0, 0)   # 6.9.3, run backwards
         elif t == "canvas":
             st["walls"] = g(WK["walls"], 0xF)
             st["tick"] = g(WK["tick"], 0)
@@ -3680,9 +3789,9 @@ class Runtime:
                 self.grid_pending = True    # triggers collapse to one
                 return NULL
             if name == "select":
-                st["selrow"], st["selcol"] = r + 1, c + 1
-                self.paint(cid, "%s.select(%d, %d)" % (self.cname(cid),
-                                                       r + 1, c + 1))
+                self.gselect(cid, r + 1, c + 1)   # 6.9.4: one body for the
+                self.paint(cid, "%s.select(%d, %d)"     # click, the arrow key
+                           % (self.cname(cid), r + 1, c + 1))   # and this
                 return NULL
             if name == "recalc":
                 self.grid_pending = True
@@ -3968,7 +4077,41 @@ class Runtime:
                               cv["frame"] & 0xFFFF, 0)
 
     # -- user gestures, as the scripted event file drives them --
-    def gesture(self, verb, target, a1="", a2=""):
+    def grid_rect(self):
+        """The grid's laid-out (w, h) in cells on `self.adapter` - the walk's
+        own answer, so a scroll clamp and a picture cannot disagree about how
+        much of the sheet is on screen."""
+        if self._grect is None:
+            self._grect = (1, 1)
+            for p in flow_walk(self, self.adapter)[0]:
+                if p.comp.tag == "grid":
+                    self._grect = (p.w, p.h)
+        return self._grect
+
+    def gselect(self, cid, r1, c1):
+        """WEAVE-SPEC 6.9.4: move the selection to (r1, c1), 1-based, scroll
+        by the MINIMUM that keeps it visible, reload the bar, and enqueue
+        onselect exactly once.  One body for the click, the arrow key and
+        `select()` - three copies of a scroll clamp is three places to get
+        the minimum wrong in."""
+        st = self.comps[cid]
+        g = st["grid"]
+        st["selrow"], st["selcol"] = r1, c1
+        r, c = r1 - 1, c1 - 1
+        gw, gh = self.grid_rect()
+        vc, vr = grid_geom(g.cols, g.rows, gw, gh)
+        if r < g.top:
+            g.top = r
+        elif vr and r >= g.top + vr:
+            g.top = r - vr + 1
+        if c < g.left:
+            g.left = c
+        elif c >= g.left + vc:
+            g.left = c - vc + 1
+        st["barsrc"] = g.source(r, c)
+        self.ring.enqueue(cid, WK["onselect"], r1, c1)
+
+    def gesture(self, verb, target, a1="", a2="", a3=""):
         cid = None
         if target:
             if target.startswith("#"):
@@ -4014,10 +4157,19 @@ class Runtime:
                 st["sel"] = int(a1)
                 self.ring.enqueue(cid, WK["onselect"], int(a1), 0)
             else:
-                st["selrow"], st["selcol"] = int(a1), int(a2)
-                self.ring.enqueue(cid, WK["onselect"], int(a1), int(a2))
+                self.gselect(cid, int(a1), int(a2))
         elif verb == "edit":
-            self.ring.enqueue(cid, WK["onedit"], int(a1), int(a2))
+            # 6.9.3: the bar's text is CLASSIFIED and committed, then onedit
+            # and 5.5's recalculation.  A gesture that only enqueued the
+            # event would test the ring and nothing the grid does.
+            r, c = int(a1) - 1, int(a2) - 1
+            msg = st["grid"].commit(r, c, a3)
+            if msg:
+                self.log("Formula: %s" % msg)
+            else:
+                st["barsrc"] = st["grid"].source(r, c)
+                self.ring.enqueue(cid, WK["onedit"], r + 1, c + 1)
+                self.grid_pending = True
         elif verb == "command":
             mi, ii = int(target), int(a1)
             if self.menu_fn(mi, ii) is None:
@@ -4196,17 +4348,15 @@ def render(rt, adapter, card=None, out=print):
                     row = ""
                 put(p.x, p.y + k, row.ljust(p.w - 1) + "|")
         elif t == "grid":
+            # WEAVE-SPEC 6.9.1, and the 8086 draws these same characters:
+            # the formula bar, the header band, then one data band a row.
             g = st["grid"]
-            colw = max(6, (p.w - 4) // max(1, min(g.cols, p.w // 7)))
-            ncols = min(g.cols, max(1, (p.w - 4) // colw))
-            head = "    " + "".join(chr(65 + c).center(colw)
-                                    for c in range(ncols))
-            put(p.x, p.y, head[:p.w])
-            for r in range(min(g.rows, p.h - 1)):
-                line = "%3d " % (r + 1)
-                for c in range(ncols):
-                    line += g.display(r, c)[:colw - 1].rjust(colw - 1) + " "
-                put(p.x, p.y + 1 + r, line[:p.w])
+            _, vr = grid_geom(g.cols, g.rows, p.w, p.h)
+            put(p.x, p.y, "[" + st["barsrc"][:p.w - 2].ljust(p.w - 2, "_")
+                + "]")
+            put(p.x, p.y + WG_BAR, g.band(p.w, p.h, -1))
+            for k in range(vr):
+                put(p.x, p.y + WG_BAR + WG_HDR + k, g.band(p.w, p.h, k))
         elif t == "canvas":
             put(p.x, p.y, "+" + "-" * (p.w - 2) + "+")
             for k in range(1, p.h - 1):
@@ -4547,6 +4697,166 @@ def emit_vmcorpus(dirname):
     return "\n".join(out)
 
 
+# --- the FX differential corpus (WEAVE-SPEC 12.1.2) --------------------------
+def grid_image(g):
+    """A GridRt serialized as WEAVE-SPEC 5.6's cell store, exactly as the
+    grid claim holds it: the 16-byte header, the dense row-major array of
+    4-byte records, then the bump-allocated pool.
+
+    THE MODEL OWNS THESE BYTES, which is what makes 12.1.2 a differential:
+    the machine's FX VM reads an image this function wrote, so a defect in
+    how a cell is READ shows in the corpus rather than in the app. Labels
+    become kind 5 (a pool string) and formulas kind 6 (a pool RPN) so that
+    the image is self-contained - kinds 3 and 4 name a bundle, and the read
+    path for a formula is the pool slot's cached value whichever kind it is.
+    """
+    ncell = g.rows * g.cols
+    cells = bytearray(ncell * 4)
+    pool = bytearray()
+    base = 16 + ncell * 4
+
+    def alloc(b):
+        off = base + len(pool)
+        pool.extend(b)
+        if len(pool) & 1:
+            pool.append(0)              # slots stay even, as the claim's do
+        return off
+
+    for (r, c), v in sorted(g.vals.items()):
+        k = (r * g.cols + c) * 4
+        if v[0] == "num":
+            val = v[1]
+            if (val & 0xFFFF) == 0 and -32768 <= (val >> 16) <= 32767:
+                cells[k] = 1
+                struct.pack_into("<h", cells, k + 2, val >> 16)
+            else:
+                cells[k] = 2
+                struct.pack_into("<H", cells, k + 2,
+                                 alloc(struct.pack("<i", val)))
+        elif v[0] == "label":
+            s = v[1].encode("ascii", "replace")[:255]
+            cells[k] = 5
+            struct.pack_into("<H", cells, k + 2,
+                             alloc(bytes([len(s)]) + s))
+        else:
+            rpn = g.rpn(v)
+            cached = v[2]
+            body = struct.pack("<H", len(rpn))
+            body += struct.pack("<i", 0 if cached is FX_ERR else cached)
+            body += struct.pack("<i", 0)
+            body += bytes(rpn)
+            cells[k] = 6
+            if (r, c) in g.circ:
+                cells[k + 1] |= 1       # 5.6's CIRC bit
+            struct.pack_into("<H", cells, k + 2, alloc(body))
+            if cached is FX_ERR:        # the error value is a KIND, not a
+                cells[k + 1] |= 4       # number - see wfx.inc's WG_FERR
+    hdr = bytearray(16)
+    hdr[0] = g.cols
+    struct.pack_into("<H", hdr, 2, g.rows)
+    struct.pack_into("<H", hdr, 4, base + len(pool))     # pool-next
+    struct.pack_into("<H", hdr, 6, base + len(pool))     # pool-end
+    return bytes(hdr) + bytes(cells) + bytes(pool)
+
+
+def parse_fxcase(text, fname):
+    """One `tests/weave/fxcorpus/*.fx` file -> (name, GridRt, [(src, rpn,
+    expected)]).  The syntax is .WFX's (11.2) plus a `grid` line and `?`
+    lines for the expressions to evaluate."""
+    name = None
+    cols = rows = None
+    cellsrc, asks = [], []
+    for lineno, line in enumerate(text.split("\n"), 1):
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            if name is None:
+                name = line[1:].strip()
+            continue
+        if line.startswith("grid "):
+            cols, rows = (int(x) for x in line.split()[1:3])
+            continue
+        if line.startswith("?"):
+            asks.append((line[1:].strip().lstrip("="), lineno))
+            continue
+        cellsrc.append((line, lineno))
+    if cols is None:
+        raise SystemExit("%s: no `grid <cols> <rows>` line" % fname)
+    g = GridRt.__new__(GridRt)
+    g.cols, g.rows, g.b = cols, rows, None
+    g.vals, g.circ, g.dirty = {}, set(), set()
+    g.top = g.left = 0
+    for line, lineno in cellsrc:
+        m = re.match(r"^(\S+)\s*=\s*(.+)$", line)
+        if not m:
+            raise SystemExit("%s:%d: <cellref> = <value>" % (fname, lineno))
+        r, c = parse_cellref(m.group(1), cols, rows, fname, lineno)
+        msg = g.commit(r, c, m.group(2).strip().strip('"')
+                       if m.group(2).strip().startswith('"')
+                       else m.group(2).strip(), fname)
+        if msg:
+            raise SystemExit("%s:%d: %s" % (fname, lineno, msg))
+    g.recalc()
+    out = []
+    for src, lineno in asks:
+        rpn = FxCompiler(cols, rows, fname, lineno).compile(src)
+        out.append((src, rpn, fx_eval(rpn, g.read_cell)))
+    return name or os.path.basename(fname), g, out
+
+
+def emit_fxcorpus(dirname):
+    """WEAVE-SPEC 12.1.2.  Answers the nasm text."""
+    files = sorted(f for f in os.listdir(dirname) if f.endswith(".fx"))
+    if not files:
+        raise SystemExit("--emit-fxcorpus: no .fx in %s" % dirname)
+    out = ["; The FX differential corpus (WEAVE-SPEC 12.1.2).",
+           "; GENERATED by `python3 tools/weavesim.py --emit-fxcorpus "
+           "tests/weave/fxcorpus`.",
+           "; Do not edit - regenerate. Every expected value is the MODEL's,",
+           "; computed over a 5.6 cell store the model also wrote.",
+           ";",
+           "; Row: name, store, storelen, cols, rows, rpn, rpnlen,",
+           ";      type (0 number, 2 #DIV0), value lo, value hi, neg",
+           "FXC_ROW equ 22"]
+    rows, blobs, n = [], [], 0
+    for fi, f in enumerate(files):
+        path = os.path.join(dirname, f)
+        name, g, asks = parse_fxcase(open(path).read(), path)
+        img = grid_image(g)
+        stag = "fxs%d" % fi
+        blobs += _vmc_bytes(stag, img)
+        for k, (src, rpn, want) in enumerate(asks):
+            tag = "fxc%d" % n
+            ty = 2 if want is FX_ERR else 0
+            v = 0 if want is FX_ERR else want & 0xFFFFFFFF
+            rows.append("    dw %s_name, %s, %d, %d, %d, %s_rpn, %d, "
+                        "%d, 0x%04X, 0x%04X, 0"
+                        % (tag, stag, len(img), g.cols, g.rows, tag,
+                           len(rpn), ty, v & 0xFFFF, (v >> 16) & 0xFFFF))
+            blobs.append("%s_name: db '%s: %s', 0"
+                         % (tag, name.replace("'", " ")[:20],
+                            src.replace("'", " ")[:28]))
+            blobs += _vmc_bytes(tag + "_rpn", rpn)
+            n += 1
+            # ...and the NEGATIVE CONTROL on the FIRST expression of the
+            # FIRST case: the same formula against a value one bit wrong,
+            # which the harness must FAIL (12.1.1's rule, said for FX).
+            if n == 1:
+                rows.append("    dw fxcN_name, %s, %d, %d, %d, %s_rpn, %d, "
+                            "%d, 0x%04X, 0x%04X, 1"
+                            % (stag, len(img), g.cols, g.rows, tag,
+                               len(rpn), ty, (v ^ 1) & 0xFFFF,
+                               (v >> 16) & 0xFFFF))
+                blobs.append("fxcN_name: db 'NEG fx value', 0")
+                n += 1
+    out.append("FXC_N equ %d" % n)
+    out.append("fxc_tab:")
+    out += rows
+    out += blobs
+    return "\n".join(out)
+
+
 # --- CLI verbs ---------------------------------------------------------------
 def cmd_pack(path, out_path, with_source):
     res = pack_project(path, with_source)
@@ -4597,8 +4907,9 @@ def runtime_for(bundle_path, src=None):
     return Runtime(b, idmap=idmap, sav_path=sav)
 
 
-def cmd_run(bundle_path, events_path, src=None):
+def cmd_run(bundle_path, events_path, src=None, adapter="cga"):
     rt = runtime_for(bundle_path, src)
+    rt.adapter = adapter            # 6.9.4's scroll clamp needs a layout
     print("%s: %d cards, %d components, entry card %d"
           % (rt.b.app_name, len(rt.b.cards), len(rt.b.comps), rt.b.entry))
     for lineno, line in enumerate(open(events_path), 1):
@@ -4613,8 +4924,13 @@ def cmd_run(bundle_path, events_path, src=None):
             dump_state(rt)
         elif verb == "set":
             rt.gesture("set", parts[1], " ".join(parts[2:]))
-        elif verb in ("click", "change", "key", "select", "edit",
-                      "command"):
+        elif verb == "edit":
+            # `edit <grid> <row> <col> <text...>` - the text runs to the end
+            # of the line, because a label and a formula both have spaces in
+            # them and splitting on the fourth field would truncate both.
+            rt.gesture("edit", parts[1], parts[2], parts[3],
+                       " ".join(parts[4:]))
+        elif verb in ("click", "change", "key", "select", "command"):
             rt.gesture(verb, parts[1] if len(parts) > 1 else "",
                        parts[2] if len(parts) > 2 else "",
                        parts[3] if len(parts) > 3 else "")
@@ -5462,6 +5778,9 @@ def main():
     ap.add_argument("--emit-vmcorpus", metavar="DIR",
                     help="the WVM differential corpus for weavevm "
                          "(WEAVE-SPEC 12.1.1)")
+    ap.add_argument("--emit-fxcorpus", metavar="DIR",
+                    help="the FX differential corpus for weavevm "
+                         "(WEAVE-SPEC 12.1.2)")
     ap.add_argument("--selfcheck", action="store_true")
     ap.add_argument("--verbose", "-v", action="store_true")
     args = ap.parse_args()
@@ -5487,6 +5806,13 @@ def main():
             else:
                 print(text)
             return 0
+        if args.emit_fxcorpus:
+            text = emit_fxcorpus(args.emit_fxcorpus)
+            if args.o:
+                open(args.o, "w").write(text + "\n")
+            else:
+                print(text)
+            return 0
         if args.costs:
             print_costs(adapter)
             return 0
@@ -5496,7 +5822,7 @@ def main():
         if args.run:
             if not args.events:
                 ap.error("--run needs --events")
-            cmd_run(args.run, args.events, args.src)
+            cmd_run(args.run, args.events, args.src, adapter)
             return 0
         if args.render:
             cmd_render(args.render, adapters, args.card)

@@ -1,0 +1,16 @@
+# ABS, ROUND and IF - and ROUND rounds HALF AWAY FROM ZERO (WEAVE-SPEC 5.2)
+grid 3 8
+A1 = 2.5
+A2 = -2.5
+A3 = 2.4
+A4 = -2.6
+A5 = 0.5
+? ABS(A1)
+? ABS(A2)
+? ROUND(A1)
+? ROUND(A2)
+? ROUND(A3)
+? ROUND(A4)
+? ROUND(A5)
+? ABS(A2)+ROUND(A3)
+? IF(A1>A3,ABS(A2),ROUND(A4))
