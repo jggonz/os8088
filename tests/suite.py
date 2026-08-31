@@ -318,7 +318,7 @@ SOAK = [
         "that happens. The retry is weavesmoke's and is not loosened here - "
         "a gate that hid it would hide a host that had really got slower",
         needs=("marty", "cc"), serial=True, timeout=600),
-    Row("weavegame", "soak", py("tests/weavegame.py"), 90.0,
+    Row("weavegame", "soak", py("tests/weavegame.py"), 50.0,
         "WEAVE-SPEC 6.10, 12.3, 14: PONG.WAB under MartyPC, and it asks "
         "wirefps's and wireflick's two questions of a sprite canvas "
         "(SPEC.md 78.9). HOW MANY GFX CALLS A FRAME, read out of WEAVE.WSM's "
@@ -334,8 +334,8 @@ SOAK = [
         "on TIME - wirefps's rule, that a number which fails a build when a "
         "harness gets slower teaches nobody anything - so the fps is printed "
         "and the FIELD RUN (docs/FIELD-MACHINES.md, WEAVE-PLAN 4.2) is what "
-        "turns it into a claim. 90s is ~70s measured plus the navigation "
-        "retry weavesmoke's flake can cost",
+        "turns it into a claim. 50s is 34s MEASURED plus room for the one "
+        "navigation retry weavesmoke's own flake can cost",
         needs=("marty",), serial=True, timeout=300),
     Row("weavelat", "soak", py("tests/weavelat.py"), 120.0,
         "SPEC.md 7.3's click-to-action bar with a WEAVE FORM as the load "
