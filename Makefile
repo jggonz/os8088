@@ -3783,47 +3783,58 @@ WEAVEDISK := $(BUILD)/weave.o88 $(BUILD)/WEAVE.OVL $(BUILD)/WEAVE.WSM \
 
 # --- WHAT WAVE 7 ADDED TO THIS DISK (WEAVE-SPEC 13.1's distribution row) -----
 #
-# THE IDE RIDES IT, and the arithmetic is why rather than a preference: LOOM
-# is 54,862 + LOOM.OVL 42,902 + LOOM.WPV 16,174 = ~113KB, the runtime's three
+# THE IDE RIDES IT, and the arithmetic is why rather than a preference: LOOM is
+# 54,862 + LOOM.OVL 42,902 + LOOM.WPV 16,174 = ~113KB, the runtime's three
 # files are ~78KB, the bundles and the sources ~6KB, and the smallest geometry
 # holds 354 clusters of 1KB. So all three geometries carry the family whole -
 # edit, pack, preview and run on one floppy - and the recipe's own --verify
-# prints the cluster count that says so. `make loomdisk` still builds the
-# IDE's own disk: that one carries the demo sources FLAT, which is what
-# WEAVE-SPEC 12.3's pack gate opens, and this one carries them as PROJECTS/,
-# which is what 11.2 describes. Two disks, two shapes, one stated reason each.
+# prints the cluster count that says so.
 #
-# PROJECTS/ IS A FOLDER PER PROJECT (WEAVE-SPEC 11.2), and 11.2's own
-# footnote is why it is not the flat folder loomdisk builds: "the fallback
-# spellings are per-DIRECTORY, so FORM.WML beside SHEET.WFX lists that sheet
-# as its own... A folder per project is what 11.2 describes and what wave 7's
-# PROJECTS/ will build."
+# ---------------------------------------------------------------------------
+# THE WHOLE DISK IS ONE FOLDER, AND IT IS A CORRECTNESS REQUIREMENT
+# ---------------------------------------------------------------------------
+# Wave 7 built this disk with a PROJECTS/ folder holding a folder per project,
+# which is the shape WEAVE-SPEC 11.2 describes - and then opened it on the
+# machine, which is the only reason this paragraph exists rather than that
+# layout.
 #
-# IT IS WRITABLE, and that is the point of the slot arithmetic below rather
-# than tidiness: Pack writes MYAPP.WAB BESIDE the sources (11.4), the kernel
-# does not grow a directory (SPEC.md 18.5, FERR_DIRFULL), so the room has to
-# be built in. The formula is tools/getcpmsw.py's own - 2 for `.` and `..`,
-# one per file shipped, plus SPARE_SLOTS - and 21 is that with the three-file
-# project and 16 spare, which is one 1KB cluster at 360/720KB and two 512-byte
-# ones at 1.44MB.
-WEAVEPROJ := FORM SHEET PONG
-WEAVEPROJARGS := \
-    $(addprefix PROJECTS/FORM:,apps/weave/demos/form.wml \
-                               apps/weave/demos/form.wjs) \
-    $(addprefix PROJECTS/SHEET:,apps/weave/demos/sheet.wml \
-                                apps/weave/demos/sheet.wjs \
-                                apps/weave/demos/sheet.wfx) \
-    $(addprefix PROJECTS/PONG:,apps/weave/demos/pong.wml \
-                               apps/weave/demos/pong.wjs \
-                               apps/weave/demos/pong.wsp)
-WEAVEPROJSLOTS := $(foreach p,$(WEAVEPROJ),--dir-slots PROJECTS/$(p)=21)
-WEAVEPROJSRC := apps/weave/demos/form.wml apps/weave/demos/form.wjs \
-                apps/weave/demos/sheet.wml apps/weave/demos/sheet.wjs \
-                apps/weave/demos/sheet.wfx \
-                apps/weave/demos/pong.wml apps/weave/demos/pong.wjs \
-                apps/weave/demos/pong.wsp
+# A DOUBLE-CLICK ON A SOURCE leaves the launched instance standing in the
+# DOCUMENT's directory (SPEC.md 54.9, 19.2.1), and LOOM.OVL is resolved in
+# that directory (SPEC.md 73.14). The loomdisk block below has said so since
+# wave 6. What wave 7 found is that FILE > OPEN PROJECT... IS NO DIFFERENT:
+# the standard file dialog walks the volume by moving the instance's own
+# current directory, so navigating into PROJECTS/FORM moves it there too, and
+# the very next command refuses with `LOOM.OVL is missing; a project cannot be
+# opened.` Photographed on the glass, both routes, before this was rewritten.
+#
+# And the fence cuts the other way as well: a bundle Pack writes beside its
+# sources is a bundle a double-click then opens with WEAVE, whose own two
+# modules have to be in THAT directory too (WEAVE-SPEC 10.3).
+#
+# So a disk that carries the runtime, the IDE and a project has exactly one
+# directory it can put them in. The sources ride the root, flat, the way
+# `make loomdisk` carries them - WEAVE-SPEC 11.2's own footnote calls a flat
+# folder of several projects "legal and slightly confusing" and that is
+# precisely the trade being taken. A folder per project is for a project a
+# person keeps beside a LOOM launched from ITS directory; it is not something
+# a distribution disk can build.
+#
+# SYSTEM/APPDATA is the one folder that is safe, because nothing resolves an
+# overlay in it: it is written to, never launched from (SPEC.md 19.9).
 
 WEAVELOOM := $(BUILD)/loom.o88 $(BUILD)/LOOM.OVL $(BUILD)/LOOM.WPV
+
+# The demo SOURCES, flat - one list, used by this disk, by `make loomdisk` and
+# by `make allapps`'s LOOM/ folder. It is defined HERE, above the first rule
+# that names it, because make expands a PREREQUISITE list at parse time: the
+# same list a hundred lines lower would be empty in every prerequisite and
+# correct in every recipe, which is a disk that never rebuilds when a demo
+# source changes.
+LOOMSRCS := apps/weave/demos/form.wml apps/weave/demos/form.wjs \
+            apps/weave/demos/sheet.wml apps/weave/demos/sheet.wjs \
+            apps/weave/demos/sheet.wfx \
+            apps/weave/demos/pong.wml apps/weave/demos/pong.wjs \
+            apps/weave/demos/pong.wsp
 
 # ...and your own: BUNDLES='path/to/MYAPP.WAB' puts bundles on the disk beside
 # these, unmodified - the same knob CPMSW= is for the RunCPM disks and
@@ -3867,27 +3878,27 @@ $(BUILD)/wcat/1440/CATALOG.TXT: tools/weavesim.py
 # value, so a --dir-slots in the middle silently swallows the rest. Wave 6 put
 # APPDATAFOLDER last and got away with it because nothing followed; wave 7
 # adds three --dir-slots and a --folder, so they all move to the front.
-WEAVEDISKOPTS = --deep-folders $(WEAVEPROJSLOTS) $(APPDATAFOLDER)
+WEAVEDISKOPTS = $(APPDATAFOLDER)
 
 $(BUILD)/weave.img: $(WEAVEDISK) $(WEAVELOOM) $(BUILD)/wcat/1440/CATALOG.TXT \
-                    $(WEAVEPROJSRC) tools/os88disk.py
+                    $(LOOMSRCS) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(WEAVEDISKOPTS) \
 		$(WEAVEDISK) $(WEAVELOOM) $(BUILD)/wcat/1440/CATALOG.TXT \
-		$(WEAVEPROJARGS) $(BUNDLES)
+		$(LOOMSRCS) $(BUNDLES)
 	@python3 tools/os88disk.py --verify $@
 
 $(BUILD)/weave720.img: $(WEAVEDISK) $(WEAVELOOM) $(BUILD)/wcat/720/CATALOG.TXT \
-                       $(WEAVEPROJSRC) tools/os88disk.py
+                       $(LOOMSRCS) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 $(WEAVEDISKOPTS) \
 		$(WEAVEDISK) $(WEAVELOOM) $(BUILD)/wcat/720/CATALOG.TXT \
-		$(WEAVEPROJARGS) $(BUNDLES)
+		$(LOOMSRCS) $(BUNDLES)
 	@python3 tools/os88disk.py --verify $@
 
 $(BUILD)/weave360.img: $(WEAVEDISK) $(WEAVELOOM) $(BUILD)/wcat/360/CATALOG.TXT \
-                       $(WEAVEPROJSRC) tools/os88disk.py
+                       $(LOOMSRCS) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(WEAVEDISKOPTS) \
 		$(WEAVEDISK) $(WEAVELOOM) $(BUILD)/wcat/360/CATALOG.TXT \
-		$(WEAVEPROJARGS) $(BUNDLES)
+		$(LOOMSRCS) $(BUNDLES)
 	@python3 tools/os88disk.py --verify $@
 
 # The two WEAVE machines (WEAVE-SPEC §13.1), with the Weave disk in B: instead
@@ -4123,11 +4134,6 @@ loom: $(BUILD)/loom.o88 $(BUILD)/LOOM.WPV
 # here, never to drop the WEAVE half: a 360KB disk that cannot run what it
 # just packed is the geometry the edit-run loop matters most on, because that
 # is the real XT.
-LOOMSRCS := apps/weave/demos/form.wml apps/weave/demos/form.wjs \
-            apps/weave/demos/sheet.wml apps/weave/demos/sheet.wjs \
-            apps/weave/demos/sheet.wfx \
-            apps/weave/demos/pong.wml apps/weave/demos/pong.wjs \
-            apps/weave/demos/pong.wsp
 
 LOOMDISK := $(BUILD)/loom.o88 $(BUILD)/LOOM.OVL $(BUILD)/LOOM.WPV \
             $(BUILD)/weave.o88 $(BUILD)/WEAVE.OVL $(BUILD)/WEAVE.WSM \
@@ -5881,7 +5887,7 @@ ALLAPPSFILES := $(APPS) $(BUILD)/frotz.o88 \
                 $(BUILD)/cword.o88 $(BUILD)/CWORD.OVL $(BUILD)/WELCOME.RTF \
                 $(BUILD)/c64.o88 $(BUILD)/C64.OVL $(BUILD)/c64-rom/C64.ROM \
                 apps/c64/README.TXT apps/c64/COPYING \
-                $(WEAVEDISK) $(WEAVELOOM) $(WEAVEPROJSRC) \
+                $(WEAVEDISK) $(WEAVELOOM) $(LOOMSRCS) \
                 $(RUNCPMDISK)
 ALLAPPS := $(ALLAPPSFILES) $(RUNCPMDEPS)
 
@@ -5897,7 +5903,7 @@ ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(BUILD)/frotz.o88) \
                                 $(BUILD)/c64-rom/C64.ROM \
                                 apps/c64/README.TXT apps/c64/COPYING) \
                $(addprefix WEAVE:,$(WEAVEDISK)) \
-               $(addprefix LOOM:,$(WEAVELOOM) $(WEAVEPROJSRC)) \
+               $(addprefix LOOM:,$(WEAVELOOM) $(LOOMSRCS)) \
                $(SYSAPPSARGS) \
                $(addprefix SYSTEM/DOS:,$(APPS_DOS))
 ALLAPPSDIRS := $(sort $(foreach a,$(ALLAPPSARGS),$(firstword $(subst :, ,$a))) \

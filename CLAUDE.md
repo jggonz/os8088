@@ -143,10 +143,12 @@ make weavedisk  #   apps - markup, script and formulas - compiled at pack time
                 #   weavedisk` builds the family's floppy in all three
                 #   geometries: the runtime, `WEAVE.OVL`, `WEAVE.WSM`
                 #   (WEAVE-SPEC §1.2.2's canvas core), the three demo
-                #   bundles, LOOM and its `LOOM.WPV` (WEAVE-SPEC §1.2.4), a
-                #   writable `PROJECTS/` folder holding the demo sources a
-                #   folder each (WEAVE-SPEC §11.2) and a
-                #   `CATALOG.TXT` per geometry. `BUNDLES='path/MYAPP.WAB'`
+                #   bundles, LOOM and its `LOOM.WPV` (WEAVE-SPEC §1.2.4), the
+                #   demo sources and a `CATALOG.TXT` per geometry. ONE
+                #   FOLDER, and WEAVE-SPEC §11.2 has the reason: SPEC.md
+                #   §73.14 resolves an overlay in the LAUNCHED-FROM
+                #   directory, so a project in a subfolder opens an IDE
+                #   without its compilers — by either route. `BUNDLES='path/MYAPP.WAB'`
                 #   adds your own, the way `CPMSW=` and `STORIES=` do — and
                 #   the geometry still has to hold them, which is what the
                 #   recipe's cluster arithmetic refuses on
@@ -160,10 +162,9 @@ make loomdisk   #   in-OS IDE that edits a project's sources and packs the
                 #   'weave*'` runs the machine's. `make loomdisk` puts both
                 #   packages, both overlays, WEAVE.WSM, LOOM.WPV, the demo
                 #   bundles and the demo SOURCES FLAT on one floppy in all
-                #   three geometries — flat because that is what WEAVE-SPEC §12.3's
-                #   pack gate opens, where `make weavedisk`'s `PROJECTS/` is
-                #   WEAVE-SPEC §11.2's folder-per-project shape. Two disks,
-                #   two shapes
+                #   three geometries. `make weavedisk` is the same shape plus
+                #   `CATALOG.TXT`: one folder is a correctness requirement on
+                #   both (WEAVE-SPEC §11.2), not a layout choice
 make netbench   # THE STACK'S PROFILER (SPEC.md 72.15): NETBENCH.O88 beside
                 #   FTPD.O88 on one disk, in all three geometries. ETHER.DRV
                 #   brackets its own ten stages with the PIT and this is the

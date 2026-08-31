@@ -3571,17 +3571,39 @@ the fallback spellings are per-DIRECTORY, so `FORM.WML` beside `SHEET.WFX`
 lists that sheet as its own. Nothing is miscompiled — a project with no
 `<grid>` never reads a `.WFX` at all, and both packers do the same thing for
 the same reason, so the gate is safe — but the file switcher shows a file the
-project does not use. **A folder per project is what §11.2 describes**, and wave 7's `PROJECTS/`
-builds it: `make weavedisk` puts `PROJECTS/FORM/`, `PROJECTS/SHEET/` and
-`PROJECTS/PONG/` on the disk, each holding the sources its bundle was packed
-from, each with directory slots to spare so that **Pack writes the new bundle
-beside them** (§11.4) — the kernel does not grow a directory (SPEC.md §18.5,
-`FERR_DIRFULL`), so that room is built in rather than hoped for, on
-`tools/getcpmsw.py`'s own formula: two slots for `.` and `..`, one per file
-shipped, plus sixteen spare. `make loomdisk` still builds the FLAT folder, and
-that is deliberate too: §12.3's pack gate opens the demo sources by name and
-compares the result byte for byte, and the flat disk is what it opens. Two
-disks, two shapes, a stated reason each.
+project does not use. **A folder per project is what §11.2 describes, and wave 7 found that a
+DISTRIBUTION DISK cannot build one.** It tried: `make weavedisk` shipped
+`PROJECTS/FORM/`, `PROJECTS/SHEET/` and `PROJECTS/PONG/` with directory slots
+to spare so that Pack could write beside the sources — and then the disk was
+opened on the machine, which is the only reason this paragraph reads the way
+it does.
+
+**The fence is SPEC.md §73.14's, and it cuts both ways.** A double-click on a
+source leaves the launched instance standing in the DOCUMENT's directory
+(SPEC.md §54.9, §19.2.1) and `LOOM.OVL` is resolved in *that* directory, so
+LOOM opens in a project folder without the half of itself that compiles:
+`LOOM.OVL is missing; a project cannot be opened.` **`File → Open Project…` is
+no different** — the standard file dialog walks the volume by moving the
+instance's own current directory, so navigating into `PROJECTS/FORM` moves it
+there too and the very next command refuses. Both routes were photographed
+failing before this was rewritten. And the same fence catches the other end:
+a bundle Pack writes beside its sources is a bundle a double-click opens with
+WEAVE, whose own two modules have to be in that directory too (§10.3).
+
+So **a disk that carries the runtime, the IDE and a project has exactly one
+directory it can put them in**, and `make weavedisk` puts them there: the
+sources ride the root, flat, beside `LOOM.O88`, `LOOM.OVL`, `LOOM.WPV`,
+`WEAVE.O88`, `WEAVE.OVL`, `WEAVE.WSM` and the three bundles. `CATALOG.TXT` on
+the disk says why in the reader's own words. The paragraph above this one
+calls a flat folder of several projects *"legal and slightly confusing"*, and
+that is precisely the trade being taken with its eyes open.
+
+**A folder per project remains the right shape for a project a person KEEPS**
+— sources a person edits from a LOOM launched beside its own files, on a data
+disk of their own — and it is what `weavesim --pack PROJECT/` takes on the
+host, where no overlay has to be found. It is not something a disk carrying
+the IDE can build, and this section says so rather than leaving the next
+person to find it the way wave 7 did.
 
 ### 11.3 What the packer validates
 
@@ -4058,9 +4080,12 @@ wave 5 closed at. `loom.o88` is **54,862 + 6,212 = 61,074, 366 under**, with
 `LOOM.OVL` at 42,902 and `LOOM.WPV` at 16,174 + 5,268.
 
 **The distribution row is `make weavedisk` carrying the whole family** — the
-runtime, its two modules, the three bundles, LOOM and its three, a writable
-`PROJECTS/` folder a project each (§11.2) and a per-geometry `CATALOG.TXT` —
-in all three geometries, 209 of 354 clusters at 360KB. `BUNDLES=` adds a
+runtime, its two modules, the three bundles, LOOM and its three, the demo
+sources and a per-geometry `CATALOG.TXT` — in all three geometries, 206 of 354
+clusters at 360KB. It ships as ONE FOLDER, and §11.2 records why: the wave
+built `PROJECTS/` a folder per project first, opened it on the machine, and
+found that SPEC.md §73.14's overlay fence makes a project in a subfolder
+unopenable by both routes. `BUNDLES=` adds a
 user's own the way `CPMSW=` does, and the cluster-fit refusal is
 `tools/os88disk.py`'s own arithmetic: `packages need 366 clusters; disk holds
 354`. SPEC.md §19.10 gained a `WEAVE/` folder and a `LOOM/` folder, so

@@ -98,9 +98,10 @@ make 386-c64  # 86Box: the 386DX with the 1.44MB one
 make weavedisk # build the Weave floppy - web-style apps compiled to a .WAB
               # bundle and run natively: the runtime, its two companion
               # modules, three demo bundles, LOOM (the in-OS IDE that edits
-              # and packs them), a writable PROJECTS folder with the demo
-              # sources and a CATALOG.TXT saying what is on it. All three
-              # geometries. BUNDLES='path/to/MYAPP.WAB' adds your own
+              # and packs them), the sources they were built from and a
+              # CATALOG.TXT saying what is on it. One folder, which the
+              # catalogue explains. All three geometries.
+              # BUNDLES='path/to/MYAPP.WAB' adds your own
 make xt-weave # 86Box: the 640KB 4.77MHz XT with the 360KB Weave disk in B:
 make 386-weave # 86Box: the 386DX with the 1.44MB one
 make xt-weave-256 # ...and the 256KB XT, which holds exactly ONE Weave app:
@@ -527,7 +528,7 @@ cleanly and runs wrong when C meets this machine.
 | `build/cword*.img`     | 1.44MB / 720KB / 360KB   | Word in C, package + `CWORD.OVL` (`make cworddisk`) |
 | `build/runcpm*.img`    | 1.44MB / 720KB / 360KB   | RunCPM, package + `RUNCPM.OVL` + CP/M drive A + the games and applications each holds (`make runcpmdisk`) |
 | `build/c64*.img`       | 1.44MB / 720KB / 360KB   | Commodore 64, package + `C64.OVL` + the `C64.ROM` sidecar (`make c64disk`) |
-| `build/weave*.img`     | 1.44MB / 720KB / 360KB   | Weave: the runtime and its two modules, the demo bundles, LOOM, `PROJECTS/` and `CATALOG.TXT` (`make weavedisk`) |
+| `build/weave*.img`     | 1.44MB / 720KB / 360KB   | Weave: the runtime and its two modules, the demo bundles, LOOM, the demo sources and `CATALOG.TXT` (`make weavedisk`) |
 | `build/loom*.img`      | 1.44MB / 720KB / 360KB   | the Weave IDE's own disk, with the demo sources flat (`make loomdisk`) |
 | `build/apps-all.img`   | 1.44MB FAT12             | every program on one floppy, the seven above included (`make allapps`) |
 

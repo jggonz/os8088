@@ -6334,7 +6334,11 @@ WEAVE_CATALOG_BUNDLES = [
     ("PONG.WAB", "a game: a canvas, sprites and a frame loop on a worker"),
 ]
 
-WEAVE_CATALOG_PROJECTS = ["FORM", "SHEET", "PONG"]
+WEAVE_CATALOG_SOURCES = [
+    ("FORM", "FORM.WML, FORM.WJS"),
+    ("SHEET", "SHEET.WML, SHEET.WJS, SHEET.WFX"),
+    ("PONG", "PONG.WML, PONG.WJS, PONG.WSP"),
+]
 
 
 def catalog_text(geometry, loom):
@@ -6357,40 +6361,44 @@ def catalog_text(geometry, loom):
     o.append("              draws sprites. PONG needs it; the other two do")
     o.append("              not.")
     o.append("")
-    o.append("All three have to stay in one folder. A disk with the program")
-    o.append("on it and not its two companions is a program that refuses")
-    o.append("politely and says which file is missing.")
-    o.append("")
     o.append("THE BUNDLES")
     o.append("-" * 28)
     for name, what in WEAVE_CATALOG_BUNDLES:
         o.append("  %-12s%s" % (name, what))
     o.append("")
     if loom:
-        o.append("THE IDE")
+        o.append("THE EDITOR")
         o.append("-" * 28)
-        o.append("  LOOM.O88    edit a project and build its bundle, here,")
-        o.append("  LOOM.OVL    on this machine. Open a .WML from PROJECTS,")
-        o.append("  LOOM.WPV    press ^P to pack and click Preview to see")
-        o.append("              the card before you run it. All three files")
-        o.append("              together, the same way the runtime's three")
-        o.append("              are.")
+        o.append("  LOOM.O88    edit a program and build its bundle, here, on")
+        o.append("  LOOM.OVL    this machine. Double-click a .WML below,")
+        o.append("  LOOM.WPV    press ^P to pack it and use View > Preview to")
+        o.append("              see the card before you run it. Then")
+        o.append("              double-click the .WAB it wrote.")
         o.append("")
-        o.append("PROJECTS")
+        o.append("THE SOURCES")
         o.append("-" * 28)
-        o.append("  A folder for each of the three programs above, holding")
-        o.append("  the sources they were built from. Pack writes the new")
-        o.append("  bundle beside them, so these folders are the ones to")
-        o.append("  copy when you want to start from something that works.")
-        for name in WEAVE_CATALOG_PROJECTS:
-            o.append("    PROJECTS\\%s" % name)
+        o.append("  What the three programs above were built from. Pack")
+        o.append("  writes the new bundle beside them, over the old one.")
+        for name, files in WEAVE_CATALOG_SOURCES:
+            o.append("    %-8s%s" % (name, files))
+        o.append("")
+        o.append("WHY EVERYTHING IS IN ONE PLACE")
+        o.append("-" * 28)
+        o.append("  There are no folders on this disk, and that is not")
+        o.append("  untidiness. A program opened by double-clicking a file")
+        o.append("  looks for its own companion files in THAT file's folder.")
+        o.append("  Put the sources in a folder of their own and the editor")
+        o.append("  opens without the half of itself that does the work; put")
+        o.append("  a bundle in one and the same thing happens to the")
+        o.append("  runtime. Both were tried. Keep your own programs here")
+        o.append("  too, or copy this whole disk and edit the copy.")
         o.append("")
     else:
-        o.append("THE IDE IS NOT ON THIS DISK")
+        o.append("THE EDITOR IS NOT ON THIS DISK")
         o.append("-" * 28)
-        o.append("  LOOM and the PROJECTS folder are on the 720KB and 1.44MB")
+        o.append("  LOOM and the demo sources are on the 720KB and 1.44MB")
         o.append("  builds of this disk; this geometry has no room for them.")
-        o.append("  `make loomdisk` builds a disk of the IDE's own in all")
+        o.append("  `make loomdisk` builds a disk of the editor's own in all")
         o.append("  three sizes.")
         o.append("")
     o.append("YOUR OWN BUNDLES")
