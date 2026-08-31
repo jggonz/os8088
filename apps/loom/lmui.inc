@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/loom/lmui.inc      LOOM's hand-written cores
 ;
-; Part of LOOM, the in-OS IDE for the Weave family (docs/WEAVE-SPEC.md 1.2).
+; Part of LOOM, the in-OS IDE for the Weave family (WEAVE-SPEC 1.2).
 ; %included by apps/loom/loom.asm AFTER the compiled C (the C names these
 ; labels), AFTER os88ui.inc (this file calls into it) and AFTER
 ; apps/weave/wblob.inc (whose header carries the calling convention and the

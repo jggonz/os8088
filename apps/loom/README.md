@@ -34,7 +34,7 @@ package's own header and explicitly **not** the contract.
 | `lmprev.c` | WEAVE-SPEC §1.7's Preview |
 | `lmwml.c` | the WML compiler (WEAVE-SPEC §3) — **in the overlay** |
 | `lmwjs.c` | the WJS compiler and code generator (WEAVE-SPEC §4) — in the overlay |
-| `lmsheet.c` | the FX pre-compiler and the sprite reader (WEAVE-SPEC §5, §3.6) — in the overlay |
+| `lmsheet.c` | the FX pre-compiler and the sprite reader (WEAVE-SPEC §5 and WEAVE-SPEC §3.6) — in the overlay |
 | `lmwrite.c` | the resolve pass and the bundle writer (WEAVE-SPEC §2) — in the overlay. **This is where byte identity is either true or not** |
 | `lmovl.c` | `LOOM.OVL`'s remaining tenants: About and New Project |
 | `lmui.inc` | the alert, the scroll bar, the two claim movers, the line scanner and the glass shadow's comparator (assembly) |

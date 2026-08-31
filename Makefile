@@ -3755,16 +3755,25 @@ weavegame: tests/weavegame.py
 WEAVEDISK := $(BUILD)/weave.o88 $(BUILD)/WEAVE.OVL $(BUILD)/WEAVE.WSM \
              $(WEAVEWABS)
 
+# SYSTEM/APPDATA IS BUILT AND NOT CREATED ON DEMAND (SPEC.md 19.9), and the
+# Weave disk had no such folder until wave 6 went looking for LOOM's. The
+# effect was invisible and exactly wrong: WEAVE-SPEC 8.3's saveState() writes
+# the app's .SAV into SYSTEM/APPDATA on the LAUNCH volume and "returns false -
+# never a crash - on refusal (no room, no file, no SYSTEM/APPDATA...)", so a
+# bundle that saved its state refused politely, on WEAVE's own floppy, for the
+# whole of waves 3, 4 and 5. It costs one directory cluster a disk.
+# APPDATAFOLDER GOES LAST here for the reason the note above APPSARGS gives:
+# argparse stops collecting positionals at an option that takes a value.
 $(BUILD)/weave.img: $(WEAVEDISK) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(WEAVEDISK)
+	python3 tools/os88disk.py -o $@ --size 1440 $(WEAVEDISK) $(APPDATAFOLDER)
 	@python3 tools/os88disk.py --verify $@
 
 $(BUILD)/weave720.img: $(WEAVEDISK) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 720 $(WEAVEDISK)
+	python3 tools/os88disk.py -o $@ --size 720 $(WEAVEDISK) $(APPDATAFOLDER)
 	@python3 tools/os88disk.py --verify $@
 
 $(BUILD)/weave360.img: $(WEAVEDISK) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 360 $(WEAVEDISK)
+	python3 tools/os88disk.py -o $@ --size 360 $(WEAVEDISK) $(APPDATAFOLDER)
 	@python3 tools/os88disk.py --verify $@
 
 # The two WEAVE machines (WEAVE-SPEC §13.1), with the Weave disk in B: instead

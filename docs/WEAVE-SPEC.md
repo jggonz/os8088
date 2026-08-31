@@ -415,6 +415,36 @@ child area by the SAME shared component includes WEAVE paints with; widgets
 draw and arm/fire natively but no bytecode runs, and the pane is labelled
 `Preview: layout and controls only - Run runs the app`.
 
+#### 1.7.1 What Preview is in wave 6, and the arithmetic that stopped it
+
+**Wave 6 ships Preview's PLUMBING and its LABEL, and not its picture.** The
+pane packs the project into the transient output claim, keeps the claim while
+it is up, gives it back on the way out, refuses with §10.5's sentence and
+jumps the caret to the offending line — and then says, on the glass, what it
+cannot draw. That is the whole of it, and it is stated here rather than
+discovered by somebody who opens the pane.
+
+The reason is a number and it is worth writing down, because the obvious fix
+is the one §1.2 forbids. Rendering the stream needs two things: the flow walk,
+which is `apps/weave/wflow.c` — fourteen of WEAVE's globals plus
+`w_draw_run` — and a PAINTER. The only painter is `apps/weave/wpaint.c`, 880
+lines that additionally name the per-component value arrays, the field pool,
+the grid's cell store and the canvas module's seam. LOOM closed this wave at
+**536 bytes** under SPEC.md §20.1's ceiling (§13.1), and standing wpaint.c up
+inside LOOM needs far more than that.
+
+**Writing a smaller painter is what §1.2 forbids by name** — "never a second
+copy… two layouts that must agree cell-for-cell is the failure §11's
+byte-identity rule exists to prevent, said about code instead of about
+bundles" — and a Preview that drew a *different* picture from the runtime's
+would be worse than one that draws none, because the whole point of the pane
+is to answer "what will this look like" before `^R`.
+
+So it is a wave-7 row with a price attached, and the price is the same one
+wave 5 paid: what LOOM needs is a second segment for the shared paint stack,
+or wpaint.c reached the way `WEAVE.WSM` is reached (§1.2.2). The seam is one
+function, `lm_prev_paint()`, and nothing else in LOOM has to move.
+
 ---
 
 ## 2. The .WAB bundle
