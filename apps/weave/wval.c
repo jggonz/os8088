@@ -261,23 +261,12 @@ static int w_atom_ok(unsigned a)
     return a >= WA_APP_FIRST && a < WA_APP_FIRST + w_natoms;
 }
 
-/* w_atom_len / w_atom_off - an app atom's bytes in the claim.  Well-known ids
- * have NO string table in the runtime (2.7), which is why every PUSHA operand
- * is 64..250 and why these answer 0 for one. */
-static unsigned w_atom_off(unsigned a)
-{
-    if (a < WA_APP_FIRST || a >= WA_APP_FIRST + w_natoms)
-        return 0;
-    return w_soff[W_ATOMS] + w_w(w_seg, w_soff[W_ATOMS] + 2 +
-                                 2 * (a - WA_APP_FIRST)) + 1;
-}
-
-static unsigned w_atom_len(unsigned a)
-{
-    if (a < WA_APP_FIRST || a >= WA_APP_FIRST + w_natoms)
-        return 0;
-    return w_b(w_seg, w_atom_off(a) - 1);
-}
+/* w_atom_len / w_atom_off - an app atom's bytes in the claim.  THE BODIES ARE
+ * IN apps/weave/watom.c, #included here at the point they used to stand:
+ * LOOM's Preview module needs the pair without the rest of this reader
+ * (WEAVE-SPEC 1.2.4), and WEAVE-SPEC 1.2's rule is that what the two packages
+ * share they share as source. That file's header says the rest. */
+#include "watom.c"
 
 /* --- CODE (WEAVE-SPEC 2.8) ---------------------------------------------- */
 

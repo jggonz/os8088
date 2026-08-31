@@ -183,6 +183,16 @@
                                     ; scroll bar, the line scanner and the
                                     ; two claim movers wblob.inc has no reason
                                     ; to carry
+%include "weave/wpvabi.inc"         ; the LOOM.WPV contract (WEAVE-SPEC 1.2.4)
+                                    ; - the ONE file this assembly and
+                                    ; apps/loom/lmpvmod.asm share, and the
+                                    ; reason a separate `nasm -f bin` job can
+                                    ; be trusted to agree with this one about
+                                    ; anything at all
+%include "loom/lmpv.inc"            ; ...and the five-routine seam to it. The
+                                    ; module is NOT in this image: it is read
+                                    ; once, the first time Preview is opened,
+                                    ; into a claim of its own
 
 ; --- THE DRIFT GUARDS, and they are %if and not a comment --------------------
 ; loom.h carries C copies of two of os88ui.inc's own numbers, because a C file
@@ -198,6 +208,29 @@
 %endif
 %if OS88UI_SBPGUP != 3 || OS88UI_SBPGDN != 4 || OS88UI_SBTHUMB != 5
   %error "os88ui.inc's OS88UI_SB* renumbered; LM_SB_* in apps/loom/loom.c follow"
+%endif
+
+; ...and the same guard over LOOM.WPV's ABI, which is the one contract in this
+; package whose two readers are in DIFFERENT ASSEMBLIES (apps/weave/weave.asm
+; makes this exact sentence about WEAVE.WSM). apps/weave/wpvabi.h carries a C
+; copy of the verb numbers, the header offsets and the parameter block,
+; because a C file may not name an nasm equ; a copy that went stale here would
+; enter the module at the right offset and read its arguments at the wrong
+; ones, assemble cleanly and draw a picture of nothing.
+%if WPV_ABI != 1 || WPV_MAGIC != 0x5057
+  %error "wpvabi.inc's stamp moved; apps/weave/wpvabi.h must follow"
+%endif
+%if WPV_H_MAGIC != 0 || WPV_H_ABI != 2 || WPV_H_SIZE != 4 || WPV_H_BSS != 6
+  %error "wpvabi.inc's header moved; apps/weave/wpvabi.h must follow"
+%endif
+%if WPV_ENTRY != 8 || WPVV_PAINT != 0 || WPVV_ABOUT != 1
+  %error "wpvabi.inc's entry or verbs moved; apps/weave/wpvabi.h must follow"
+%endif
+%if WPVP_X != 0 || WPVP_Y != 2 || WPVP_W != 4 || WPVP_H != 6 || WPVP_CARD != 8
+  %error "wpvabi.inc's parameter block moved; apps/weave/wpvabi.h must follow"
+%endif
+%if WPVE_MAGIC != 1 || WPVE_SECT != 2 || WPVE_CARD != 3 || WPVE_PANE != 4
+  %error "wpvabi.inc's refusal codes moved; apps/weave/wpvabi.h must follow"
 %endif
 
     CC_IMAGE_END                    ; cc_bss_end, cc_modc_end and cc_image_end

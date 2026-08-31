@@ -56,9 +56,21 @@
  * requirement is on x alone. */
 static int w_grid(void *win)
 {
+#ifdef W_PREVIEW
+    /* WEAVE-SPEC 1.2.4: in LOOM's Preview module the box is not a window's
+     * content area but the EDITOR PANE inside one, so the caller has already
+     * written w_org and w_sz and there is nothing to ask the window manager
+     * for. Everything below this line is the same arithmetic on the same two
+     * structures, which is the whole point of the conditional being three
+     * lines and here rather than a second w_grid() somewhere else (1.2).
+     * WEAVE itself compiles token-for-token what it compiled before: wave 7
+     * rebuilt build/weave.bin and compared it whole. */
+    (void)win;
+#else
     if (os88_wm_geom(win, &w_sz) != 0)
         return 0;
     os88_wm_content(win, &w_org);
+#endif
     w_ox = (w_org.x + 7) & ~7;
     w_oy = w_org.y;
     w_cw = (w_org.x + w_sz.w - w_ox) / 8;

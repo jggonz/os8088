@@ -3896,9 +3896,60 @@ $(BUILD)/loom.o88: $(BUILD)/loom.bin tools/os88pkg.py tools/os88ovl.py
 LOOMSRC := $(wildcard apps/loom/*.c apps/loom/*.h)
 LOOMINC := $(wildcard apps/loom/*.inc)
 $(BUILD)/loom.raw.asm: $(LOOMSRC)
-$(BUILD)/loom.bin:     $(LOOMINC) $(WEAVEINC)
+$(BUILD)/loom.bin:     $(LOOMINC) $(WEAVEINC) $(BUILD)/wpvsize.inc
 
-loom: $(BUILD)/loom.o88
+# --- LOOM.WPV, the preview module (WEAVE-SPEC 1.2.4) -------------------------
+# A SECOND RESIDENT SEGMENT holding WEAVE's flow walk and WEAVE's component
+# painter, so that 1.7's Preview draws the card with the SAME code the runtime
+# draws it with (1.2: never a second copy). It is a SEPARATE compilation and a
+# separate `nasm -f bin` job, not part of LOOM's one translation unit
+# (SPEC.md 73.1), and the ORDER below is what makes its third and fourth stamp
+# words a real staleness check rather than a tautology: the module is built
+# first, its byte counts are written into build/wpvsize.inc, and the package is
+# assembled after and compares what it read off the disk against those numbers.
+#
+# IT IS NOT AN OVERLAY and does not go through tools/os88ovl.py, and the reason
+# is the one WEAVE-SPEC 1.7.1 has the arithmetic for: an overlay moves CODE and
+# leaves every global, literal and bss byte resident (SPEC.md 73.14), while
+# what does not fit here is ~4.7KB of DATA - the walk's layout table and the
+# painter's six tables keyed by comp_id - against the 594 bytes wave 6 closed
+# with. An overlay cannot move one byte of that.
+#
+# IT IS THE FIRST C SECOND SEGMENT IN THIS TREE, which is why the compile line
+# is open-coded here rather than reached through apps/cc/Makefile.inc's
+# CC_PACKAGE: that macro builds a PACKAGE - a 32-byte OS88 header, an entry the
+# loader calls, callback trampolines - and a module has none of those. What it
+# DOES share with a package is everything that matters: the same smlrcc, the
+# same tools/cc8086.py gate (SS != DS, no &local, no movs/stos, 96-byte
+# frames), and apps/cc/os88thunk.asm.
+$(BUILD)/lmpvmod.raw.asm: apps/loom/lmpvmod.c $(CC_RUNTIME) $(LOOMSRC) \
+                          $(WEAVESRC) | $(BUILD) cc-toolchain
+	PATH="$(CURDIR)/$(CC_SC):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I $(BUILD) \
+		apps/loom/lmpvmod.c -o $@
+
+$(BUILD)/lmpvmod.gen.asm: $(BUILD)/lmpvmod.raw.asm tools/cc8086.py
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME)
+
+$(BUILD)/LOOM.WPV: apps/loom/lmpvmod.asm $(BUILD)/lmpvmod.gen.asm \
+                   apps/weave/wpvabi.inc $(WEAVEINC) $(LOOMINC) \
+                   $(CC_RUNTIME) apps/os88ui.inc apps/os88line.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -o $@ apps/loom/lmpvmod.asm
+	@echo "LOOM.WPV: $(call FILESIZE,$@) bytes (resident, on demand at Preview)"
+
+# The two words the package assembles in. The bss one is what WEAVE.WSM does
+# not need: that module is hand-written assembly whose state is initialised
+# bytes inside its own image, and this one is compiled C whose .bss the file
+# does not carry - so LOOM claims image + bss and the module zeroes the tail
+# on its first entry (apps/loom/lmpvmod.asm). Read out of the header the
+# module has just written rather than recomputed here, so there is one
+# arithmetic and not two.
+$(BUILD)/wpvsize.inc: $(BUILD)/LOOM.WPV
+	@python3 -c "import struct,sys; d=open('$<','rb').read(); \
+	    s,b=struct.unpack_from('<HH',d,4); \
+	    sys.stdout.write('WPV_SIZE equ %d\nWPV_BSS  equ %d\n'%(s,b))" > $@
+
+loom: $(BUILD)/loom.o88 $(BUILD)/LOOM.WPV
 
 # --- the LOOM floppy ---------------------------------------------------------
 # All three geometries, as every disk-visible image in this tree is built

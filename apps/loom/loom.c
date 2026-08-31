@@ -70,6 +70,10 @@
 #include "../weave/weave.h"             /* WEAVE-SPEC 2's format constants -
                                          * SHARED SOURCE (1.2), which is why
                                          * this reaches into apps/weave/ */
+#include "../weave/wpvabi.h"            /* LOOM.WPV's contract, C side
+                                         * (WEAVE-SPEC 1.2.4) - guarded
+                                         * against apps/weave/wpvabi.inc in
+                                         * BOTH assemblies */
 #include "loom.h"
 
 /* ============================================================================

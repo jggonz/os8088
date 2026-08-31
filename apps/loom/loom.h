@@ -411,6 +411,25 @@ int ovl_pack_rest(void);
 int ovl_pack(void);
 
 /* ============================================================================
+ * THE SEAM TO LOOM.WPV (WEAVE-SPEC 1.2.4)
+ *
+ * apps/loom/lmpv.inc's five routines. The module is a SECOND RESIDENT SEGMENT
+ * holding WEAVE's flow walk and WEAVE's component painter, read once when
+ * Preview is first opened; apps/weave/wpvabi.inc is the contract and
+ * apps/weave/wpvabi.h its C side, guarded in both assemblies.
+ *
+ * lpv_call() answers 0 with no module bound, which is the same "it did not
+ * happen" a refused overlay gives (apps/cc/crt0.asm) - so a caller asks "did
+ * it run" separately from "what did it say".
+ * ==========================================================================*/
+unsigned lpv_call(unsigned verb, unsigned a, unsigned b, unsigned c);
+void     lpv_bindmod(unsigned seg);     /* 0 = forget it */
+int      lpv_kb(void);                  /* the claim, in KB: image + bss */
+unsigned lpv_bytes(void);               /* WPV_SIZE, to check the read */
+int      lpv_stamp(unsigned seg);       /* 0 ok, 1 not ours/truncated,
+                                         * 2 stale (ABI, size or bss) */
+
+/* ============================================================================
  * THE IDE'S OWN STATE
  * ==========================================================================*/
 
