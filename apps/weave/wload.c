@@ -219,8 +219,8 @@ static int ovl_open(void *win, const char *name, unsigned size_lo,
     (void)win;
     os88_strcpy(w_name, name, sizeof(w_name));
     w_free();
-    w_status[0] = 0;
-    w_msg[0] = 0;
+    w_status[0] = 0;   /* one array, and the error screen's row 0 draws
+                        * from it too (weave.c) */
     w_vmkb = 0;                         /* so that a refusal taken before the
                                          * header was read names an ask made
                                          * only of what IS known - the file

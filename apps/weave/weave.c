@@ -67,8 +67,29 @@ static void *w_win;                     /* our window, banked at create */
 static int   w_state;                   /* W_ST_* - and 1.5's trap 3 is that
                                          * the load CHANGES it, so nothing may
                                          * branch on it before the load runs */
-static char  w_msg[W_MSG];              /* section 10's sentence, on the glass */
-static char  w_status[W_MSG];           /* ...and the row that keeps it */
+static char  w_status[W_MSG];           /* section 10's sentence: the row that
+                                         * keeps it, AND the copy the W_ST_ERR
+                                         * screen draws on row 0.
+                                         *
+                                         * THERE USED TO BE TWO. `w_msg` held
+                                         * the same 88 bytes: w_say() is the
+                                         * only writer of either and copies
+                                         * one sentence into both, and both
+                                         * are cleared together at open. So
+                                         * the error screen drew w_msg on row
+                                         * 0 and w_status on the last row -
+                                         * the same string, twice, out of two
+                                         * arrays. Wave 5 needed the bytes and
+                                         * this was 88 of them, free.
+                                         *
+                                         * THE ONE THING THAT WOULD BREAK IT:
+                                         * a w_saysav() on the W_ST_ERR path.
+                                         * That function writes w_serr and not
+                                         * this, today - but if a later wave
+                                         * gives it the status row as well,
+                                         * the error screen's two rows stop
+                                         * agreeing and this comment is where
+                                         * to start */
 static char  w_serr[W_MSG];             /* 10.6's LAST SCRIPT ERROR, in full -
                                          * a string of its own and not
                                          * w_status, because Bundle Info is
@@ -104,7 +125,13 @@ static unsigned char w_shave[W_NSECTYPE];
 static unsigned w_lastend;
 static unsigned w_natoms, w_nfunc, w_nsprite, w_nformula;
 static unsigned w_ncomp, w_ncard;
-static unsigned char w_idseen[256];     /* comp_id uniqueness (2.5) */
+/* comp_id uniqueness (2.5) used to be a 256-byte seen[] here, and it was
+ * SUBSUMED: ovl_val_uistream refuses any record whose id is not exactly
+ * w_ncomp + 1 - ids are 1..n in document order (2.14 rule 2) - three lines
+ * below where the seen[] test stood, with the same field name in the same
+ * sentence. A duplicate id fails the sequential test first and always, so the
+ * array could never be the thing that fired. 256 bytes, free, and wave 5
+ * needed them (WEAVE-PLAN 2.9). */
 
 /* The header probe (10.1): one cluster, read before the claim exists. */
 static unsigned char w_probe[W_PROBE];
@@ -278,7 +305,6 @@ static void w_saysav(const char *s)
 
 static void w_say(const char *s)
 {
-    os88_strcpy(w_msg, s, sizeof(w_msg));
     os88_strcpy(w_status, s, sizeof(w_status));
     os88_toast(s, 0);
 }
@@ -477,7 +503,7 @@ static void w_repaint2(void *win, int clear)
     }
 
     if (w_state == W_ST_ERR) {
-        w_row(0, w_msg);
+        w_row(0, w_status);
         w_row(2, "File > Open Bundle... tries another one.");
     } else
         w_paint_deck();

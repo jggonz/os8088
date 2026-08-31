@@ -2180,7 +2180,8 @@ round(18.2/fps))` ticks):
    the arkanoid technique.
 2. Bounce on `walls` edges (negate the component, emit `onwall`); a
    sprite fully out an open edge stops and emits `onscore` **once, and is
-   re-armed the frame it is no longer fully out of that edge** (§6.10.1).
+   re-armed the frame it is no longer fully out of any open edge**
+   (§6.10.1).
 3. AABB collision over shown sprites (≤ 16 per canvas; pairs emit
    `oncollide` once per contact, re-armed on separation — **and a pair
    either of whose sprites is not `shown` counts as separated**, §6.10.1).
@@ -2236,22 +2237,25 @@ for each sprite, in UISTREAM order:
     px16 += vx ;  py16 += vy
     x = px16 >> 4 ;  y = py16 >> 4           ; ARITHMETIC shift: floor, not
                                              ; truncation toward zero
+    hitT = y < 0 ; hitB = y + ph > H         ; ALL FOUR taken here, from the
+    hitL = x < 0 ; hitR = x + pw > W         ; position after the move
+    outedge = none
     for edge in (T, B, L, R):                ; all four, in this order, no break
-        hit = (T: y < 0) (B: y + ph > H) (L: x < 0) (R: x + pw > W)
-        if not hit: continue
+        if not hit<edge>: continue
         if walls has this edge:
             T: py16 = -py16
             B: py16 = 2*(H - ph)*16 - py16
             L: px16 = -px16
             R: px16 = 2*(W - pw)*16 - px16
             negate vy (T,B) or vx (L,R)
-            x = px16 >> 4 ;  y = py16 >> 4   ; recomputed BEFORE the next edge
+            x = px16 >> 4 ;  y = py16 >> 4   ; the next edge's `out` sees these
             emit onwall(sprite, edge)
-        else:
+        else if outedge is none:
             out = (T: y + ph < 0) (B: y > H) (L: x + pw < 0) (R: x > W)
-            if out and not scored:  scored = 1 ; vx = vy = 0
-                                    emit onscore(sprite, edge)
-            if not out:             scored = 0
+            if out: outedge = edge
+    if outedge is none:      scored = 0
+    else if not scored:      scored = 1 ; vx = vy = 0
+                             emit onscore(sprite, outedge)
 for each pair i<j of SHOWN sprites, in UISTREAM order:
     overlap = ax < bx+bpw and bx < ax+apw and ay < by+bph and by < ay+aph
     if overlap and not in contact:  mark contact ; emit oncollide(A, B)
@@ -2265,9 +2269,13 @@ answer:
 - **`>> 4` is arithmetic.** `-17 >> 4` is −2, and `-17 / 16` truncating is
   −1. Every negative sprite position diverges by a pixel otherwise. On the
   8086 that is four `sar`s and never an `idiv`.
-- **Edge order is T, B, L, R with no early exit**, and `x`/`y` are recomputed
-  from the accumulators after each bounce, so a sprite in a corner bounces
-  twice and emits two `onwall` records in one frame.
+- **Edge order is T, B, L, R with no early exit**, so a sprite in a corner
+  bounces twice and emits two `onwall` records in one frame. The four `hit`
+  tests are all taken **before any bounce**, from the position the move left,
+  and are not re-derived as the loop proceeds; `x`/`y` ARE recomputed after
+  each bounce, so the `out` test of a later open edge sees the bounced
+  position. Both halves are the model's and both are load-bearing at high
+  velocity.
 - **The far edges use `>` and not `>=`**: a sprite exactly flush with the
   right edge (`x + pw == W`) has not hit it.
 - **All four AABB comparisons are strict `<`**: touching edges do not
@@ -2287,8 +2295,11 @@ exactly one goal per launch, and a sprite hidden mid-contact could never
 collide again. Both are the same omission with two faces: an event that fires
 "once per contact" needs a definition of *leaving* the contact, and §6.10's
 own sentence already had one for collisions. `scored` clears the frame the
-sprite is no longer fully out of that edge; a contact clears when the pair
-stops overlapping **or either sprite stops being shown**.
+sprite is no longer fully out of **any** open edge — decided after the whole
+edge loop rather than inside it, so the answer does not depend on which edge
+was examined last; a contact clears when the pair stops overlapping **or
+either sprite stops being shown**, which means the AABB pass walks every
+sprite pair and not only the shown ones.
 
 **The frame clock.** `start(fps)` takes fps 1–18 (anything else is the
 `start(%s): fps is 1..18.` script error, §10.6.1), sets

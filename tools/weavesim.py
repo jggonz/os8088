@@ -2601,8 +2601,15 @@ def _assemble(app, prog, start_fn, atoms, formulas, cells, sprites,
     canvas_kb = 0
     cc = next((c for c in app.comps if c.canvas), None)
     if cc:
-        buf = (cc.canvas["w"] // 8) * cc.canvas["h"]
-        canvas_kb = min(8, max(2, (buf + 1023) // 1024))
+        # WEAVE-SPEC 6.10.4: the claim holds a 16-byte header, 24 bytes per
+        # sprite record and the 1bpp buffer - and the buffer's height is the
+        # ROUNDED one the runtime derives from the record byte (cc.h * 8),
+        # never the WML `h`.  Sizing it from the WML `h` under-asked by up to
+        # seven rows: a canvas of h="153" asked for 6KB and needed 6,800
+        # bytes.  The largest legal canvas, 320x160 with sixteen sprites, is
+        # 16 + 384 + 6,400 = 6,800 -> 7KB, inside the byte's 8.
+        need = 16 + 24 * len(cc.sprites) + (cc.canvas["w"] // 8) * (cc.h * 8)
+        canvas_kb = min(8, max(2, (need + 1023) // 1024))
 
     # lay the file out (rule 1)
     first = align16(32 + 8 * len(sections))
@@ -4041,6 +4048,7 @@ class Runtime:
             if not s["shown"]:
                 continue
             shown.append(cid)
+            outedge = -1
             # sub-pixel velocities: 1/16 px per frame, remainders kept
             s["px16"] += s["vx"]
             s["py16"] += s["vy"]
@@ -4070,26 +4078,42 @@ class Runtime:
                     s["x"], s["y"] = s["px16"] >> 4, s["py16"] >> 4
                     self.ring.enqueue(self.canvas_cid, WK["onwall"],
                                       cid, edge)
-                else:
+                elif outedge < 0:
                     # fully out an open edge: stop, onscore
                     out = ((edge == 0 and s["y"] + s["ph"] < 0)
                            or (edge == 1 and s["y"] > H)
                            or (edge == 2 and s["x"] + s["pw"] < 0)
                            or (edge == 3 and s["x"] > W))
-                    if out and not s["scored"]:
-                        s["scored"] = True
-                        s["vx"] = s["vy"] = 0
-                        self.ring.enqueue(self.canvas_cid, WK["onscore"],
-                                          cid, edge)
-        # AABB collision, once per contact, re-armed on separation
-        for i in range(len(shown)):
-            for j in range(i + 1, len(shown)):
-                a, bb = self.comps[shown[i]], self.comps[shown[j]]
-                overlap = (a["x"] < bb["x"] + bb["pw"]
+                    if out:
+                        outedge = edge
+            # WEAVE-SPEC 6.10.1: onscore fires ONCE per exit and RE-ARMS the
+            # frame the sprite is no longer fully out of any open edge.  The
+            # latch used to be permanent, which made PONG score exactly one
+            # goal per launch - doServe() put the ball back and it could never
+            # score again.  An event that fires "once per contact" needs a
+            # definition of leaving the contact, and 6.10 already had one for
+            # collisions; this is that sentence said about an edge.
+            if outedge < 0:
+                s["scored"] = False
+            elif not s["scored"]:
+                s["scored"] = True
+                s["vx"] = s["vy"] = 0
+                self.ring.enqueue(self.canvas_cid, WK["onscore"],
+                                  cid, outedge)
+        # AABB collision, once per contact, re-armed on separation - and a
+        # pair either of whose sprites is not shown counts as SEPARATED
+        # (6.10.1).  Walking `shown` alone left such a pair latched forever:
+        # hide a sprite mid-contact, unhide it, and it never collides again.
+        sprs = cv["sprites"]
+        for i in range(len(sprs)):
+            for j in range(i + 1, len(sprs)):
+                a, bb = self.comps[sprs[i]], self.comps[sprs[j]]
+                overlap = (a["shown"] and bb["shown"]
+                           and a["x"] < bb["x"] + bb["pw"]
                            and bb["x"] < a["x"] + a["pw"]
                            and a["y"] < bb["y"] + bb["ph"]
                            and bb["y"] < a["y"] + a["ph"])
-                pair = (shown[i], shown[j])
+                pair = (sprs[i], sprs[j])
                 if overlap and pair not in cv["contacts"]:
                     cv["contacts"].add(pair)
                     self.ring.enqueue(self.canvas_cid, WK["oncollide"],
@@ -5414,6 +5438,28 @@ def selfcheck_demos(ck, tmp):
           "pong: a ball out an open edge scored (score %r)" % score)
     ck.ok(not rt.canvas["running"], "pong: the score handler stopped the "
           "worker")
+    # 6.10.1's two re-arms, and both rows are REGRESSION guards rather than
+    # feature checks.  `scored` used to latch for the life of the instance,
+    # so a second serve could never score and PONG was a one-goal game; a
+    # contact whose sprite had been hidden was never discarded, because the
+    # AABB pass walked only the SHOWN list.  Neither is visible in a
+    # single-shot harness, which is why these rows serve twice and hide one.
+    first = rt.comps[res.app.idmap["score"]]["text"]
+    rt.gesture("click", "serve")
+    rt.tick(3000)
+    ck.ok(rt.comps[res.app.idmap["score"]]["text"] != first,
+          "pong: a SECOND ball out an open edge scores too (6.10.1)")
+    pad = rt.comps[res.app.idmap["pad"]]
+    ball["x"], ball["y"] = pad["x"], pad["y"]
+    ball["px16"], ball["py16"] = ball["x"] * 16, ball["y"] * 16
+    rt.canvas["running"] = True
+    rt.tick(1)
+    ck.ok(rt.canvas["contacts"], "pong: an overlap latches a contact")
+    ball["shown"] = 0
+    rt.tick(1)
+    ck.ok(not rt.canvas["contacts"],
+          "pong: hiding a sprite SEPARATES its contacts (6.10.1)")
+    rt.canvas["running"] = False
     return sizes
 
 

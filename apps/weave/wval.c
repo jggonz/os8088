@@ -524,8 +524,6 @@ static const char *ovl_val_uistream(void)
     if (len != W_REC_SIZE * n || n == 0)
         return "record count";
 
-    for (i = 0; i < 256; i++)
-        w_idseen[i] = 0;
     cards = 0;
     ended = 0;
     grids = 0;
@@ -573,12 +571,15 @@ static const char *ovl_val_uistream(void)
 
         if (id < 1 || id > 250)
             return "comp_id";
-        if (w_idseen[id])
-            return "comp_id";           /* unique across the bundle (2.5) */
-        w_idseen[id] = 1;
         if (id != w_ncomp + 1)
-            return "comp_id";           /* ...and assigned in document order
-                                         * (2.14 rule 2; t_wab pins it) */
+            return "comp_id";           /* unique across the bundle AND in
+                                         * document order (2.5, 2.14 rule 2;
+                                         * t_wab pins it). ONE test does both:
+                                         * ids that are exactly 1..n in order
+                                         * cannot repeat, so the 256-byte
+                                         * seen[] that used to stand here was
+                                         * dead weight refusing the same
+                                         * bundles with the same word */
         w_ncomp++;
         if (ctype < WC_LABEL || ctype > WC_MAX)
             return "ctype";             /* 0x0F+ is unassigned (2.5.1) */
