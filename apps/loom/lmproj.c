@@ -147,14 +147,6 @@ void lm_ofill(unsigned off, unsigned v, unsigned n)
     lm_sfill(lm_outseg, off, v, n);
 }
 
-void lm_ocopyw(unsigned dst, unsigned src, unsigned n)
-{
-    if (lm_outseg == 0 || lm_workseg == 0)
-        return;
-    if (dst + n > W_CAP || src + n > LMW_END)
-        return;
-    lm_scopy(lm_outseg, dst, lm_workseg, src, n);
-}
 
 unsigned lm_srclen(int slot)
 {
@@ -801,6 +793,22 @@ static void lm_pack(void)
     lm_packran = 1;
     lm_packok = 0;
     lm_packlen = 0;
+
+    /* SAY SO BEFORE IT STARTS, because a Pack is SECONDS on the target and a
+     * program that goes quiet for seconds is one the user thinks has died
+     * (SPEC.md 47: refusal - and delay - is a normal, VISIBLE path).
+     *
+     * The arithmetic, from CLAUDE.md's cost table. Saving the sources is one
+     * `int 13h` a modified file at ~400 ms; the compilers run in LOOM.OVL and
+     * SPEC.md 73.14 makes EVERY call out of the module a far call through a
+     * shim at 46.7 us, and the scanners call lm_sb() once a source character,
+     * so FORM's 1,578 bytes of source cost of the order of a second before
+     * anything is written; and the .WAB write is one more ~400 ms. Two
+     * seconds for the smallest demo, more for PONG's sprite art. One
+     * status-row line - 78 cells, ~71 ms - is a cheap thing to spend on
+     * saying so. */
+    lm_say("Packing...");
+    lm_status_paint(1);
 
     /* Save first. WEAVE-SPEC 11.3 calls pack-on-save Loom's default, and the
      * reason is sharper than tidiness: `weavesim --pack` reads the FILES, so

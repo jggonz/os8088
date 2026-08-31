@@ -46,16 +46,22 @@
 char lm_sbuf[LM_SBUF];
 int  lm_sbn;
 int  lm_sbover;
+int  lm_sbwant;                     /* how many bytes were PUSHED, overflow
+                                     * included - 2.7's refusal names the
+                                     * length that was written, not the
+                                     * length that fitted */
 
 void lm_sbclear(void)
 {
     lm_sbn = 0;
     lm_sbover = 0;
+    lm_sbwant = 0;
     lm_sbuf[0] = 0;
 }
 
 void lm_sbputc(int c)
 {
+    lm_sbwant++;
     if (lm_sbn >= LM_SBUF - 1) {
         lm_sbover = 1;
         return;
@@ -144,9 +150,22 @@ int ovl_intern(int slot, int line)
     unsigned len;
     int k;
 
+    /* 2.7 bounds an atom at 1..255 bytes, and BOTH ends refuse. The empty one
+     * is the end an implementer forgets: `group=""` on a <radio> reaches here
+     * with nothing in the builder, and an interner that pooled it would put a
+     * zero-length row in a section whose length byte says otherwise. */
     if (lm_sbover) {
-        lm_perr(slot, line, "a string is over 255 characters; the atom's "
-                "length is one byte (WEAVE-SPEC 2.7)");
+        static char msg[LM_ERRMAX];
+        msg[0] = 0;
+        lm_cat(msg, "string is ");
+        lm_catn(msg, lm_sbwant);
+        lm_cat(msg, " bytes; the cap is 255 (WEAVE-SPEC 2.7)");
+        lm_perr(slot, line, msg);
+        return 0;
+    }
+    if (lm_sbn == 0) {
+        lm_perr(slot, line,
+                "empty string: an atom is 1..255 bytes (WEAVE-SPEC 2.7)");
         return 0;
     }
     len = (unsigned) lm_sbn;
@@ -184,19 +203,4 @@ int ovl_intern(int slot, int line)
     lm_wpw(LMW_ATOFF + 4 + 2 * (unsigned) n, free_ + len);
     lm_wpw(LMW_ATOFF, (unsigned) (n + 1));
     return WA_APP_FIRST + n;
-}
-
-/* ovl_intern_str - the same, from a C string literal. The .WSP and .WFX
- * paths build their strings a byte at a time; this is for the handful of
- * places a compiler interns something it already holds whole. */
-int ovl_intern_str(int slot, int line, const char *s)
-{
-    unsigned i = 0;
-
-    lm_sbclear();
-    while (s[i] != 0) {
-        lm_sbfold((int) (unsigned char) s[i]);
-        i++;
-    }
-    return ovl_intern(slot, line);
 }

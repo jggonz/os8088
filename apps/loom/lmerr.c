@@ -150,42 +150,12 @@ void lm_perr(int slot, int line, const char *msg)
     lm_cat(lm_err, msg);
 }
 
-void lm_perr2(int slot, int line, const char *a, const char *b)
-{
-    if (lm_errflag)
-        return;
-    lm_perr(slot, line, a);
-    lm_cat(lm_err, b);
-}
-
 void lm_perrn(int slot, int line, const char *a, int n, const char *b)
 {
     if (lm_errflag)
         return;
     lm_perr(slot, line, a);
     lm_catn(lm_err, n);
-    lm_cat(lm_err, b);
-}
-
-/* lm_perrs - ...and the same with a SOURCE RUN in the middle, which is what
- * "no such element" and "no such attribute" need: the offending name is a
- * span of the file, not a C string, and copying it into a buffer first would
- * be a second bound to get wrong. */
-void lm_perrs(int slot, int line, const char *a, int sslot, unsigned off,
-              unsigned len, const char *b)
-{
-    unsigned n;
-    unsigned i;
-
-    if (lm_errflag)
-        return;
-    lm_perr(slot, line, a);
-    n = os88_strlen(lm_err);
-    for (i = 0; i < len && n + 1 < LM_ERRMAX; i++) {
-        lm_err[n] = (char) lm_sb(sslot, off + i);
-        n++;
-    }
-    lm_err[n] = 0;
     lm_cat(lm_err, b);
 }
 

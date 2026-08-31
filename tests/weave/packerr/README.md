@@ -127,6 +127,19 @@ their order, are the contract; the table's example is prose.
 | `fx-range-outside-aggregate/` | an FX range outside an aggregate's argument | `formula: a range is legal only in an aggregate.` |
 | `fx-five-decimals/` | an FX fraction with five decimals | `1.23456: at most 4 fraction digits; 16.16 resolves to 1/65536 (WEAVE-SPEC 5.1)` |
 
+## Two cases wave 6 added
+
+| case directory | the rule it exercises | the sentence |
+|---|---|---|
+| `atom-empty/` | WEAVE-SPEC §2.7's LOWER bound - `group=""` reaches the interner with nothing in the builder | `empty string: an atom is 1..255 bytes (WEAVE-SPEC 2.7)` |
+| `atom-too-long/` | ...and its upper one: an atom's length is ONE BYTE, and the sentence names the length that was WRITTEN rather than the length that fitted | `string is 300 bytes; the cap is 255 (WEAVE-SPEC 2.7)` |
+
+Both were found by writing the second implementation: the empty one because
+`ovl_intern()` had no lower-bound check at all and would have pooled a
+zero-length row, and the long one because the on-machine builder stops at 255
+and had to be taught to keep counting so that its sentence could name the same
+number the host's does.
+
 ## The FX sentences are the RESIDENT compiler's
 
 Three rows above read differently from the way `tools/weavesim.py` first

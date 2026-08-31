@@ -1,0 +1,8 @@
+<!-- WEAVE-SPEC 2.7: ...and the other end. An atom's length is ONE BYTE, so
+     a 300-character label has nowhere to go, and the sentence names the
+     length that was WRITTEN rather than the length that fitted. -->
+<app name="Long">
+  <card id="m">
+    <label>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</label>
+  </card>
+</app>

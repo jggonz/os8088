@@ -159,12 +159,6 @@ void lm_ofill(unsigned off, unsigned v, unsigned n)
         lm_opb(off + i, v);
 }
 
-void lm_ocopyw(unsigned dst, unsigned src, unsigned n)
-{
-    unsigned i;
-    for (i = 0; i < n; i++)
-        lm_opb(dst + i, lm_wb(src + i));
-}
 
 unsigned lm_srclen(int slot)
 {

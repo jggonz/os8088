@@ -1,0 +1,9 @@
+<!-- WEAVE-SPEC 2.7: an atom is 1..255 bytes, and BOTH ends refuse. The
+     empty one is the end an implementer forgets - group="" reaches the
+     interner with nothing in the builder. -->
+<app name="Empty">
+  <card id="m">
+    <radio group="" br="1">One</radio>
+    <radio group="">Two</radio>
+  </card>
+</app>

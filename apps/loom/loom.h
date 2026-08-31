@@ -227,7 +227,6 @@ unsigned lm_ob(unsigned off);               /* the output image */
 void     lm_opb(unsigned off, unsigned v);
 void     lm_opw(unsigned off, unsigned v);
 void     lm_ofill(unsigned off, unsigned v, unsigned n);
-void     lm_ocopyw(unsigned dst, unsigned src, unsigned n);  /* work -> out */
 
 /* The four source texts, as the compilers see them. A source is a NUL-free
  * byte run the editor owns; lm_src() answers its base and lm_srclen() its
@@ -252,7 +251,6 @@ unsigned lm_sb(int slot, unsigned off);     /* one byte, 0 past the end */
 #define LM_ERRMAX    160            /* one message, NUL included */
 
 void        lm_perr(int slot, int line, const char *msg);
-void        lm_perr2(int slot, int line, const char *a, const char *b);
 void        lm_perrn(int slot, int line, const char *a, int n,
                      const char *b);
 int         lm_failed(void);
@@ -267,8 +265,6 @@ int         lm_errslot(void);
 void        lm_cat(char *dst, const char *s);
 void        lm_catn(char *dst, int v);
 void        lm_catu(char *dst, unsigned v);
-void        lm_perrs(int slot, int line, const char *a, int sslot,
-                     unsigned off, unsigned len, const char *b);
 const char *lm_fname(int slot);
 void        lm_setfname(int slot, const char *s);
 
@@ -299,7 +295,8 @@ int lm_srceqi(int sslot, unsigned off, unsigned len, const char *lit);
 #define LM_SBUF  256
 extern char lm_sbuf[LM_SBUF];
 extern int  lm_sbn;
-extern int  lm_sbover;              /* the builder overflowed - the caller
+extern int  lm_sbover;
+extern int  lm_sbwant;              /* the builder overflowed - the caller
                                      * raises 2.7's length refusal */
 void     lm_sbclear(void);
 void     lm_sbputc(int c);          /* RAW - already folded */
