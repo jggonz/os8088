@@ -930,6 +930,58 @@ reproducibly:
 The rule of thumb: **send it a question about time or about what a human
 sees; keep every question about work.**
 
+### Standing requests, unanswered
+
+One at a time, newest last, each with what to boot, what to read, and what the
+number settles. A request that has been answered moves into PERFORMANCE.md
+Part 9 with its four provenance lines and comes off this list.
+
+**W1 — WEAVE's VM speed and its canvas frame rate (WEAVE-SPEC §4.12, WEAVE-SPEC §14;
+WEAVE-PLAN §4.2). Commissioned by wave 5, unanswered.**
+
+*What it settles.* WEAVE-SPEC §4.12 contracts the bytecode VM at **10,000–
+30,000 ops/s on the 4.77 MHz target**, and that figure is design arithmetic
+derived from two shipped interpreters' slice budgets. Every handler budget in
+the family rests on it: WEAVE-SPEC §4.10's 1,536-op slice cap is 51–154 ms *because* of
+it, and WEAVE-SPEC §4.11.1's 64-op `ontick` bound is "under 10% of the VM contract"
+*because* of it. If the reading lands below ~10k, both shrink. WEAVE-SPEC §14's canvas
+rows are the same question about the picture — the CALL count is settled
+(MartyPC is exact about work: 1.00–1.06 gfx calls a frame, three runs), and
+the milliseconds are not.
+
+*What to boot.* Two 360KB disks built from the commit the request quotes, no
+knobs: the plain system floppy in A: and **`make weavedisk`**'s
+`build/weave360.img` in B:. It carries `WEAVE.O88`, `WEAVE.OVL`,
+`WEAVE.WSM` and three bundles in one folder, and all four have to be together
+or the canvas refuses at open by design (WEAVE-SPEC §10.3).
+
+*What to do, and it is four gestures.*
+
+1. Open drive B, double-click **`FORM.WAB`**, type a name into the field and
+   press the button a few times — anything that runs script. Then
+   **Bundle → Bundle Info** and read the line in the content area. It ends
+   `; WVM <n> ops/s`. **That `n` is the number.** It is also in About, but
+   About is a toast and takes itself down in about three seconds — Bundle
+   Info's line stays until the card is repainted, which is why it is there.
+2. `n` reads `-` until a full one-second window of EXHAUSTED slices has
+   closed (WEAVE-SPEC §4.12). If it does, the app has not been made to think hard enough:
+   open **`SHEET.WAB`** instead, put `=SUM(A1:A20)` in a cell and press Enter,
+   and read Bundle Info again.
+3. Open **`PONG.WAB`**, click **Serve**, and **watch it**. Two questions no
+   instrument here can answer: does the ball move SMOOTHLY, and does anything
+   FLICKER — the ball vanishing for a frame, the paddles blinking, the field
+   tearing. Both are judged by a person looking at the glass (Part 3), and
+   the composer is designed so that neither happens.
+4. Bundle Info again, on PONG, after the rally. The same line then ends
+   `; canvas <frames> frames <blits> blits <n> ovf`. **Report all three.**
+   `blits/frames` is WEAVE-SPEC §14's row; `ovf` is the staging ring's dropped-record
+   count and must be **0** — it is the only one of the three
+   emulator-invisible defects that this family can turn into a number.
+
+*What NOT to ask for.* Nothing about how many calls a frame makes — that is
+settled and reproducible in the container. Only the ops/s figure, the two
+things a person sees, and the three canvas counters.
+
 ### Handing over a build
 
 State the **commit**, and hand over the images rather than a branch name — a

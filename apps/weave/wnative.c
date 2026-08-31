@@ -377,7 +377,7 @@ static int w_callm(int id, int atom, int argc)
                 return w_nerr(WE_FPS, n, 0);
             if (!w_chire())
                 return w_nerr(WE_FPS, n, 0);
-            wcv_call(WSMV_START, (unsigned)n, 0, 0);
+            wcv_call(WSMV_START, (unsigned)n, (unsigned)w_win, 0);
             return w_nres(WT_NULL, 0);
         }
         if (atom == WA_STOP) {

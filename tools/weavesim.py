@@ -4474,6 +4474,8 @@ def costs_table(adapter="cga"):
         ("grid", "full 20-row page", "20", "~%.0f ms" % (20 * band_row(79))),
         ("grid", "scroll one row (GFX_SCROLL + 1 composed band)", "2",
          "~%d-%d ms" % LIST_SCROLL_MS),
+        ("canvas", "frame, 1 moving sprite (one dirty run)", "1-2",
+         "~%.0f-%.0f ms" % (ms(1 * CALL_US) + 0.3, ms(2 * CALL_US) + 1)),
         ("canvas", "frame, 2 sprites (dirty bands)", "2-4",
          "~%.0f-%.0f ms" % (ms(2 * CALL_US) + 0.5, ms(4 * CALL_US) + 2)),
         ("card", "switch (full-card repaint, text-heavy CGA card)",
@@ -4684,7 +4686,7 @@ class CvCanvas:
     def __init__(self, w, h, walls, tick, cid):
         self.w, self.h, self.walls, self.tick, self.cid = w, h, walls, tick, cid
         self.stride = w // 8
-        self.buf = bytearray(self.stride * h)
+        self.buf = bytearray(b"\xFF" * (self.stride * h))
         self.spr = []
         self.contacts = set()
         self.dirty = [0] * (h // 8)
@@ -4796,7 +4798,14 @@ class CvCanvas:
                 self.markrows(s.y, s.y + s.ph - 1)
 
     def compose(self, s, r0, r1):
-        """dst = (dst AND mask) OR image, per byte, shifted into place."""
+        """2.11's rule, complemented into the FRAMEBUFFER's polarity (6.10.2):
+
+            dst = (dst OR coverage) AND NOT image
+
+        where coverage is NOT(mask).  The buffer is 1 = LIT because on a 1bpp
+        adapter GFX_BLIT1_PEN is not read at all (SPEC.md 5.4.2.2) and two
+        adapters of three are 1bpp.
+        """
         if not s.shown or not s.wb:
             return
         top = max(r0, s.y, 0)
@@ -4829,7 +4838,7 @@ class CvCanvas:
                 col = col0 + j
                 if 0 <= col < self.stride:
                     p = r * self.stride + col
-                    self.buf[p] = (self.buf[p] & (~outc & 0xFF)) | outi
+                    self.buf[p] = (self.buf[p] | outc) & (~outi & 0xFF)
 
     def flush(self):
         """One GFX_BLIT1 per maximal run of dirty bands."""
@@ -4846,7 +4855,7 @@ class CvCanvas:
             r0, r1 = b0 * 8, b * 8 - 1
             for r in range(r0, r1 + 1):
                 for c in range(self.stride):
-                    self.buf[r * self.stride + c] = 0
+                    self.buf[r * self.stride + c] = 0xFF   # paper is LIT
             for s in self.spr:
                 self.compose(s, r0, r1)
             self.blits.append((b0, b - b0))

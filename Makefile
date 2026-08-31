@@ -1249,7 +1249,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         xt-runcpm 286-runcpm \
         allapps usb iso live burn rcbandbench \
         c64 c64disk c64rom c64bandbench c64cputest c64memtest 386-c64 xt-c64 286-c64 \
-        weave weavedisk weavevm weavecanvas weavebandbench \
+        weave weavedisk weavevm weavecanvas weavegame weavebandbench \
         xt-weave 386-weave \
         checkdocs test-fast test-full test-soak clean clean-cc clean-marty distclean
 
@@ -3743,6 +3743,13 @@ weavecanvas: apps/weave/wspr.inc apps/weave/wwork.inc apps/weave/wsmdata.inc \
          apps/weave/wsmabi.inc apps/weave/hosttest/weavecv.asm \
          apps/weave/hosttest/weavecv.sh tools/weavesim.py docs/WEAVE-SPEC.md
 	apps/weave/hosttest/weavecv.sh
+
+# ...and what the canvas COSTS on a machine, which the boot sector cannot say:
+# PONG under MartyPC, its own frames/blits counters read out of WEAVE.WSM's
+# state block, and the glass sampled once per displayed frame (WEAVE-SPEC 14,
+# SPEC.md 78.9's instruments). `make weavedisk` first - it needs the disk.
+weavegame: tests/weavegame.py
+	python3 tests/weavegame.py
 
 WEAVEDISK := $(BUILD)/weave.o88 $(BUILD)/WEAVE.OVL $(BUILD)/WEAVE.WSM \
              $(WEAVEWABS)

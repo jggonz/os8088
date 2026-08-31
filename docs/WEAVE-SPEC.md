@@ -2329,11 +2329,32 @@ There is **no oracle for this half** — `weavesim` models the semantics and
 deliberately not the pixels — so the rules are normative here and the gate is
 `weavegame`'s counted blits (§12.3), never a golden picture.
 
-The canvas claim holds one 1bpp buffer, `stride = W/8` bytes a row, `H`
-rows, in the framebuffer's own polarity (1 = a LIT pixel, SPEC.md §5.4.2) —
-which is the polarity `GFX_BLIT1` wants and the polarity §2.11's images and
-masks were packed in. The pen is set once per lock hold with
-`GFX_BLIT1_PEN` (ink `CBLACK`, paper `CWHITE`), so a set bit is ink.
+The canvas claim holds one 1bpp buffer, `stride = W/8` bytes a row, `H` rows,
+in the **framebuffer's own polarity — 1 is a LIT pixel** (SPEC.md §5.4.2), so
+paper is 0xFF and ink is 0. §2.11's sprite images are packed the OTHER way up
+(1 = ink), and the composition complements them on the way in: 2.11's
+
+```
+dst = (dst AND mask) OR image        ...in the sprite's polarity
+dst = (dst OR coverage) AND NOT image   ...in the buffer's, where coverage
+                                            is NOT(mask)
+```
+
+Those are the same statement, and the second is the one the machine executes.
+
+**It is not done with `GFX_BLIT1_PEN`, and the reason is a shipped defect
+rather than a preference.** The obvious reconciliation is to leave the buffer
+in §2.11's polarity and set the pen to ink = `CBLACK`, paper = `CWHITE`; wave
+5 wrote it that way, and PONG came up on CGA as a black field with white
+paddles. SPEC.md §5.4.2.2: **on 1bpp the pen is not read.** A set band bit is
+lit and nothing a package does changes that — the pen is the VGA path's, where
+the colours really are a mapping — and two adapters of three are 1bpp
+(SPEC.md §39). So the pen is a mechanism that works on one adapter of three
+and is silently ignored on the two this project targets, which is CLAUDE.md's
+own rule about looking at a drawing change on a 1bpp adapter, arriving as the
+thing it warns about. The complemented composition needs the same number of
+instructions, works with the DEFAULT pen on all three, and is exactly what
+`apps/weave/wband.inc` already does when it composes `glyph XOR 0xFF`.
 
 A **band** is eight pixel rows of the buffer, 8-aligned to the buffer's own
 top: band *k* covers rows `8k .. 8k+7`, and there are `H/8` of them (`H` is a
@@ -2389,7 +2410,7 @@ preserved. Verbs, pinned:
 |---|---|---|---|
 | 0 | `BIND` | `BX` = canvas claim seg, `CX` = bundle claim seg, `DX` = a 12-byte parameter block in the caller's `DS` (W, H, walls, tick, nspr, SPRITES offset) | `AX` = 1 bound |
 | 1 | `SPRITE` | `BX` = sprite index, `CX` = the record's field id, `DX` = the value; `AH` = 0 read / 1 write | `AX` = the value read, or 1/0 for a write accepted/refused |
-| 2 | `START` | `BX` = fps 1..18 | `AX` = 1 running, 0 = fps out of range |
+| 2 | `START` | `BX` = fps 1..18, `CX` = the window pointer | `AX` = 1 running, 0 = fps out of range |
 | 3 | `STOP` | — | `AX` = 1 once the worker has acknowledged |
 | 4 | `PAINT` | `BX` = screen x, `CX` = screen y; the gfx lock is HELD by the caller | `AX` = blits emitted |
 | 5 | `DRAIN` | `DX` = a 4-word record block in the caller's `DS` | `AX` = 1 a record was written, 0 the ring is empty |
@@ -3507,6 +3528,39 @@ table), and the dirty-component set became one bit a comp_id. `weave.o88` is
 50,360 image + 10,502 bss = **60,862 resident**, `WEAVE.OVL` 19,475 — 578
 bytes under the ceiling, which is the number wave 5 has to plan around.
 
+**Wave 5 shipped `<canvas>`/`<sprite>`** — `apps/weave/wcanvas.asm` and its
+two includes (`wspr.inc`, the mask composer and the dirty-band emit;
+`wwork.inc`, §6.10's frame loop, AABB, the 37-key poll and the staging ring),
+`apps/weave/wcanv.c`'s UI-task seams, and §4.12's ops/s banner.
+
+**And it shipped them in a SECOND SEGMENT**, `WEAVE.WSM` (§1.2.2), which is
+the decision the wave turns on and the one an owner may reverse. Wave 4 left
+578 bytes under SPEC.md §20.1's ceiling and §1.2.1's tenant list spent — but
+the tenant list was not what decided it: every byte of this wave's code runs
+on a WORKER, and SPEC.md §73.14's overlay is loaded by `cc_ovneed`, whose
+first instruction refuses one. The list is inapplicable, not merely full.
+docs/WEAVE-PLAN.md §2.9 prices the four alternatives it beat.
+
+Getting under the line was the wave's second half: the first build came in at
+62,850, **1,410 over**, and five structural cuts brought it to
+**52,212 image + 9,196 bss = 61,408 resident, 32 bytes under**, with
+`WEAVE.OVL` at 20,740 and `WEAVE.WSM` at 4,593. The cuts are in the pull
+request; the two worth naming here are that `w_gband` and `w_fxc_out` now
+live inside the header probe — `w_probe` is a whole 1,024-byte cluster
+because §10.1's refuse-before-read needs one, and nothing had ever read past
+its first 32 bytes — and that `w_ctname`'s fourteen-case switch, which
+SmallerC compiles to a 161-instruction compare chain, is a table walk.
+
+It was gated FIRST by `weavecanvas` (§12.1.3), the raw-QEMU differential
+against a composer written into the model for it, because §6.10.2 had no
+oracle at all. Two defects the model carried are fixed with it (§6.10.1's two
+re-arms), and **one this wave shipped was found only on the glass**: the
+composition used `GFX_BLIT1_PEN` to reconcile §2.11's polarity with the
+framebuffer's, and SPEC.md §5.4.2.2 says the pen is not read on 1bpp — so
+PONG came up on CGA as a black field with white paddles, on two adapters of
+three, and passed every differential. §6.10.2 now pins the buffer in the
+framebuffer's own polarity.
+
 The rest, each gated before the next begins:
 
 | wave | ships | the gate |
@@ -3514,9 +3568,9 @@ The rest, each gated before the next begins:
 | 2 | WEAVE viewer: CC_PACKAGE from day one, the Frotz accept idiom verbatim (ASSOC16, ARG_FILE banking, first-paint spend, §10.1–§10.4's refusals), flow walk, static components, list with scroll | `weavesmoke` on both 1bpp adapters |
 | 3 | interaction + the VM: widget arm/fire, os88line input, event ring, `wvm.inc` (gated FIRST by the raw-QEMU differential corpus), adaptive slices, onclick/onchange/onkey, alert/timer/tone/state builtins, `^R` Reload | `weavevm`, `weavesession`, the §7.3 bar via `weavelat` |
 | 4 | `<grid>`: cell store, `wband.inc` benched against Set 68's numbers (`make weavebandbench`), per-row damage, formula bar, `wfx.inc` + the formula compiler (§1.2.1's tenant 7, not resident — the size line decided it), sliced recalc | `weavegrid` (recalc vs model + tpdraw identity), `weavegfx`, and the FX half of `weavevm` FIRST |
-| 5 | `<canvas>`/`<sprite>`: `wspr.inc` mask composition, dirty-band emit, worker loop, AABB, KEY_DOWN input, worker tones, ontick budget enforcement | `weavegame` (wirefps/wireflick); **commission the field run** — 5150 fps and the XT ops/s reading that converts §4.12 to measurement |
+| 5 | ~~`<canvas>`/`<sprite>`~~ **SHIPPED**, above — and in `WEAVE.WSM`, a second RESIDENT segment (§1.2.2), which is the decision the wave turns on | `weavecanvas` FIRST (§12.1.3), then `weavegame`; the field run is COMMISSIONED and pending (WEAVE-PLAN §4.2) |
 | 6 | Loom: `lm_` editor transplant, project folder + file switcher, LOOM.OVL compilers + packer, Pack, Preview, templates, APPDATA prefs, W_ONCLOSE/ASAVE close guard | `weavepack` byte-identity on all templates and demos, in the OS |
-| 7 | distribution: `make weavedisk` in three geometries with cluster-fit refusal + `--verify`, writable `PROJECTS/` folder, CATALOG.TXT, `BUNDLES=` knob; ALLAPPSFILES rows (one `WEAVE/` folder — package + overlay + bundles share it, SPEC.md §19.10); the 256KB one-app refusal exercised on the `xt` target | the release checklist |
+| 7 | distribution: `make weavedisk` in three geometries with cluster-fit refusal + `--verify`, writable `PROJECTS/` folder, CATALOG.TXT, `BUNDLES=` knob; ALLAPPSFILES rows (one `WEAVE/` folder — package + overlay + **`WEAVE.WSM`** + bundles share it, SPEC.md §19.10: wave 5 added the fourth file, and a canvas bundle that cannot find it refuses at open with §10.3's sentence); the 256KB one-app refusal exercised on the `xt` target, whose arithmetic §1.4 moved by one claim | the release checklist |
 
 Wave order within a wave follows the size line: `os88pkg.py`'s resident
 count is printed and recorded every wave, 55,000 is the overlay-split
@@ -3578,12 +3632,25 @@ been ~756 µs.
 | grid | 79-cell row compose+blit | 1 | ~14.5 ms |
 | grid | full 20-row page | 20 | ~291 ms |
 | grid | scroll one row (GFX_SCROLL + 1 composed band) | 2 | ~83-90 ms |
+| canvas | frame, 1 moving sprite (one dirty run) | 1-2 | ~1-3 ms |
 | canvas | frame, 2 sprites (dirty bands) | 2-4 | ~2-5 ms |
 | card | switch (full-card repaint, text-heavy CGA card) | ~1/row | ~0.3-1.2 s |
 | card | first paint, fully lettered CGA 640x200 (17 rows x 79 cells) | 17 | ~1.25 s |
 | card | first paint, fully lettered Hercules 720x348 (35 rows x 89 cells) | 35 | ~2.85 s |
 | card | first paint, fully lettered VGA 640x480 (52 rows x 79 cells) | 52 | ~2.59 s |
 | alert | raise + dismiss | ~8 | ~30-40 ms |
+
+**The canvas's two rows are now COUNTED on a machine**, which is
+`tests/weavegame`'s first job and §12.3's newest row: PONG under MartyPC,
+reading the frame and blit counters WEAVE.WSM keeps in its own state block
+(§6.10.4). Three consecutive runs on a 5150/CGA gave **17.7–18.7 fps at
+`start(18)`** — one frame a tick, which is 18.2 Hz's own answer — and
+**1.00–1.06 gfx calls a frame**; Hercules gave 18.6 fps and 0.95. PONG has
+one MOVING sprite and two still ones, so that is the one-sprite row and it
+lands under it. The two-sprite row is still modelled. Those figures are
+MartyPC's, which is a model of the machine and not the machine
+(docs/FIELD-MACHINES.md) — what it settles is the CALL COUNT, which an
+emulator is exact about; the milliseconds wait on the 5150 (WEAVE-PLAN §4.2).
 
 A change that moves a row of this table upward is a regression against a
 documented number, not a neutral refactor — PERFORMANCE.md Part 5's

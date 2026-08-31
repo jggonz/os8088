@@ -650,10 +650,9 @@ wsm_doframe:
     jz .unlock
     call OSAPI_WM_CLIP_SET          ; BX = our window
     jc .unlock                      ; not one pixel shows: draw nothing
-    mov al, CBLACK
-    mov ah, CWHITE
-    call OSAPI_GFX_BLIT1_PEN        ; a set bit is INK (6.10.2's polarity)
-    mov byte [wsm_ack], 0
+    mov byte [wsm_ack], 0           ; the pen is wsm_flush's, because both
+                                    ; callers need it and a pen is valid for
+                                    ; one lock hold only
     mov es, [wsm_cvseg]
     call wsm_place                  ; AX, BX = the canvas's screen origin
     call wsm_flush

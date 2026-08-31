@@ -362,6 +362,13 @@ wsm_v_start:
     xor ax, ax
     cmp word [wsm_cvseg], 0
     je .out
+    mov ax, [wsm_ac]                ; the WINDOW, taken here and not only from
+    mov [wsm_win], ax               ; the worker's own entry. The worker needs
+                                    ; it for TASK_ALIVE (SPEC.md 20.6 rule 2)
+                                    ; and for WM_WAKE, and the UI task is the
+                                    ; half that certainly has it: start() is
+                                    ; called from a handler, which is a
+                                    ; callback, which was given the window
     mov bx, [wsm_ab]
     cmp bx, 1
     jb .out

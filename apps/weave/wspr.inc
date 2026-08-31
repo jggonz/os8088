@@ -26,20 +26,40 @@
 ; regression against a documented number.
 ;
 ; -----------------------------------------------------------------------------
-; POLARITY, WHICH IS THE ONE THING TO GET RIGHT (wband.inc says this too)
+; POLARITY, WHICH IS THE ONE THING TO GET RIGHT - AND THE FIRST BOOT GOT IT
+; WRONG, WHICH IS WHY THIS PARAGRAPH IS LONGER THAN IT LOOKS LIKE IT SHOULD BE
 ; -----------------------------------------------------------------------------
-; The framebuffer's 1 is a LIT pixel (SPEC.md 5.4.2) and 2.11's images are
-; packed in FINAL SCREEN POLARITY with 1 = ink - so the caller sets
-; GFX_BLIT1_PEN to ink=CBLACK, paper=CWHITE once per lock hold and a set bit
-; is ink. Getting it backwards gives a photographic negative, which is at
-; least obvious.
+; The framebuffer's 1 is a LIT pixel (SPEC.md 5.4.2) and 2.11's sprite images
+; are packed the other way up, in "final screen polarity" with 1 = INK. The
+; obvious reconciliation is OSAPI_GFX_BLIT1_PEN - set ink = CBLACK, paper =
+; CWHITE and a set band bit becomes ink - and it was written that way, and on
+; the glass PONG came up as a black field with white paddles.
 ;
-; The AND mask is shifted as its COMPLEMENT and complemented back, and that is
-; not a flourish: a mask shifted directly would bring ZEROS in from the end of
-; the byte, and a zero mask bit means "the sprite covers this pixel". The
-; coverage NOT(mask) brings zeros in correctly - nothing is covered outside
-; the sprite - so one shift register serves both halves and the last output
-; byte falls out of the carry.
+; SPEC.md 5.4.2.2: **on 1bpp the pen is not read**. A set band bit is LIT and
+; nothing a package does changes that; the pen is the VGA path's, where the
+; colours really are a mapping. Two adapters of three are 1bpp (SPEC.md 39),
+; so the pen is not the mechanism - it is a mechanism that works on one
+; adapter and is silently ignored on the two this project targets.
+;
+; So THE BUFFER IS THE FRAMEBUFFER'S WAY UP: 1 = lit = paper, 0 = ink. A band
+; run is cleared to 0xFF, and 2.11's rule
+;
+;     dst = (dst AND mask) OR image          ...in the sprite's polarity
+;
+; becomes, complemented throughout,
+;
+;     dst = (dst OR coverage) AND NOT image  ...in the buffer's
+;
+; where `coverage` is NOT(mask). The two are the same statement and the
+; instruction count is identical - the shift register already has both halves
+; - and it works with the DEFAULT pen on all three adapters, which is exactly
+; what apps/weave/wband.inc does and why that file composes `glyph XOR 0xFF`.
+;
+; The AND mask is shifted as its COMPLEMENT for a second, independent reason:
+; a mask shifted directly would bring ZEROS in from the end of the byte, and a
+; zero mask bit means "the sprite covers this pixel" - so a sprite at an
+; unaligned x would grow a covered column out of nothing. The coverage brings
+; zeros in correctly, and the last output byte falls out of its carry.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -324,11 +344,12 @@ wsm_drawspr:
     cmp di, [wsm_rowhi]
     jae .skip
     mov al, [es:di]
-    not dh                          ; back to a mask: 0 where the sprite is
-    and al, dh
-    or al, ah
-    mov [es:di], al
-.skip:
+    or al, dh                       ; the coverage lights it...
+    not ah                          ; ...and the image's ink puts it out again
+    and al, ah                      ; (6.10.2's polarity - see the head of this
+    mov [es:di], al                 ; file: the buffer is the FRAMEBUFFER's way
+.skip:                              ; up, 1 = LIT, because the pen is not read
+                                    ; on 1bpp and two adapters of three are)
     inc si
     inc di
     dec ch
@@ -339,10 +360,10 @@ wsm_drawspr:
     cmp di, [wsm_rowhi]
     jae .norow
     mov al, [es:di]
-    mov dh, bh
+    or al, bh
+    mov dh, bl
     not dh
     and al, dh
-    or al, bl
     mov [es:di], al
 .norow:
     pop di
@@ -416,10 +437,12 @@ wsm_flush:
     add ax, [es:WSC_BUF]
     mov di, ax
     mov [wsm_bofs], di
-    xor al, al
-    rep stosb                       ; the background is PAPER: v1 carries no
-                                    ; background art, and a bundle that wants
-                                    ; one draws it with sprites
+    mov al, 0xFF
+    rep stosb                       ; the background is PAPER, which in the
+                                    ; framebuffer's own polarity is every bit
+                                    ; LIT. v1 carries no background art, and a
+                                    ; bundle that wants one draws it with
+                                    ; sprites
     xor bx, bx
 .spr:
     cmp bx, [wsm_nspr]
