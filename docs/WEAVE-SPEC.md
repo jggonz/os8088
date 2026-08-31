@@ -430,7 +430,7 @@ which is `apps/weave/wflow.c` — fourteen of WEAVE's globals plus
 `w_draw_run` — and a PAINTER. The only painter is `apps/weave/wpaint.c`, 880
 lines that additionally name the per-component value arrays, the field pool,
 the grid's cell store and the canvas module's seam. LOOM closed this wave at
-**536 bytes** under SPEC.md §20.1's ceiling (§13.1), and standing wpaint.c up
+**594 bytes** under SPEC.md §20.1's ceiling (§13.1), and standing wpaint.c up
 inside LOOM needs far more than that.
 
 **Writing a smaller painter is what §1.2 forbids by name** — "never a second
@@ -3780,8 +3780,8 @@ caret jumping to the offending line, and the close guard runs on a
 negotiator had no C door at all, so every C package that ever wanted to ask
 *"save the changes?"* had no way to be asked.
 
-`loom.o88` is **54,904 image + 6,036 bss = 60,930 resident, 536 under**
-SPEC.md §20.1's ceiling, with `LOOM.OVL` at 42,894. WEAVE did not move:
+`loom.o88` is **54,648 image + 6,198 bss = 60,846 resident, 594 under**
+SPEC.md §20.1's ceiling, with `LOOM.OVL` at 42,902. WEAVE did not move:
 52,212 + 9,196 = 61,408, byte for byte what wave 5 closed at, and the two
 things LOOM needed from it — `wfx_frac` extracted into `apps/weave/wnum.inc`,
 and an `#ifndef` around `wfxc.c`'s output buffer — were each checked by

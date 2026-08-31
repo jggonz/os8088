@@ -10,7 +10,8 @@ function doGreet() {
     return;
   }
   count = count + 1;
-  out.text = "Hello, " + name + "! (" + str(count) + ")";
+  // list.get(i) is 1-based and answers the item's text (WEAVE-SPEC 6.8).
+  out.text = how.get(how.sel) + ", " + name + "! (" + str(count) + ")";
 }
 
 // A string literal must be 1..255 bytes: there is no "" in WJS

@@ -623,15 +623,15 @@ scramble.
 ### 5.3 Wave 6's own size line, and the one thing it could not afford
 
 LOOM is a SECOND package with a ceiling of its own, so wave 6 opens two size
-lines rather than moving one. It closed at **54,904 image + 6,036 bss =
-60,930 resident, 536 under** SPEC.md §20.1's 61,440, with `LOOM.OVL` at
-42,894 — and WEAVE did not move a byte: 61,408, exactly wave 5's number,
+lines rather than moving one. It closed at **54,648 image + 6,198 bss =
+60,846 resident, 594 under** SPEC.md §20.1's 61,440, with `LOOM.OVL` at
+42,902 — and WEAVE did not move a byte: 61,408, exactly wave 5's number,
 verified by rebuilding `weave.bin` and comparing it whole after each of the
 two changes LOOM needed there (`wfx_frac` extracted into a shared `.inc`, and
 an `#ifndef` around `wfxc.c`'s output buffer).
 
-**Where the 536 went, and it is the interesting half.** An overlay's CODE is
-free — `LOOM.OVL` carries 42,894 bytes of compiler and costs the resident
+**Where the 594 went, and it is the interesting half.** An overlay's CODE is
+free — `LOOM.OVL` carries 42,902 bytes of compiler and costs the resident
 image nothing — but SPEC.md §73.14's rule is that *"every global, literal and
 bss byte it names stays resident and DS-relative"*, and a compiler is made of
 sentences. WEAVE-SPEC §10.5 pins forty-odd of them and every one is a
@@ -644,7 +644,7 @@ runs once per Pack.
 **And it is why Preview ships without its picture** (WEAVE-SPEC §1.7.1).
 Rendering the compiled stream needs `apps/weave/wflow.c` and
 `apps/weave/wpaint.c` — 880 lines that name the component value arrays, the
-field pool, the grid's cell store and the canvas seam — and 536 bytes will not
+field pool, the grid's cell store and the canvas seam — and 594 bytes will not
 host them. Writing a SMALLER painter is what WEAVE-SPEC §1.2 forbids by name,
 and it would be the worse failure: a Preview that draws a different picture
 from the runtime's is worse than one that draws none, because the whole point
