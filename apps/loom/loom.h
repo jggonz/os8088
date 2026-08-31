@@ -262,6 +262,7 @@ int         lm_errslot(void);
  * os88_itoa needs a caller-owned buffer, which a static one is. */
 void        lm_cat(char *dst, const char *s);
 void        lm_catn(char *dst, int v);
+void        lm_catu(char *dst, unsigned v);
 void        lm_perrs(int slot, int line, const char *a, int sslot,
                      unsigned off, unsigned len, const char *b);
 const char *lm_fname(int slot);

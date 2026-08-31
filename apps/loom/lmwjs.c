@@ -215,9 +215,6 @@ static const char *lmj_ctname[15] = {
     "check", "radio", "input", "list", "grid", "canvas", "sprite"
 };
 
-/* --- the model globals this file owns ------------------------------------ */
-int lm_used;
-
 /* --- the tokenizer's state ----------------------------------------------- */
 static int      lmj_ntok;
 static unsigned lmj_i;              /* the scanner's cursor over the WJS */
@@ -420,16 +417,22 @@ static int ovl_tokenize(void)
             continue;
         }
         if (lm_isdigit(c)) {
-            long v = 0;
+            unsigned v = 0;
+            int over = 0;
             unsigned s = lmj_i;
             unsigned k = lmj_i;
+            /* No `long` (SPEC.md 73.7 - SmallerC refuses the TOKEN), so the
+             * accumulator STOPS at a value no bound can accept rather than
+             * growing past 16 bits. 4.2 caps a literal at 32767 and the
+             * message quotes the text that was written. */
             while (k < n && lm_isdigit((int) lm_sb(LM_SLOT_WJS, k))) {
-                v = v * 10 + (lm_sb(LM_SLOT_WJS, k) - '0');
-                if (v > 1000000L)
-                    v = 1000000L;
+                if (v > 3276)
+                    over = 1;
+                else
+                    v = v * 10 + (unsigned) (lm_sb(LM_SLOT_WJS, k) - '0');
                 k++;
             }
-            if (v > 32767) {
+            if (over || v > 32767) {
                 lmj_m0("");
                 {
                     unsigned m = os88_strlen(lmw_msg);
@@ -637,40 +640,45 @@ static int lmj_declare(int t)
 }
 
 /* js_initexpr: number | string | true | false | null | array(n). Answers the
- * next token index, or -1 on a pack error. */
-static int lmj_initexpr(int i, int *kind, int *val)
+ * next token index, or -1 on a pack error; the initializer itself comes back
+ * in lmj_ikind / lmj_ival, because SS != DS makes `&local` a stack offset
+ * dereferenced through the package segment (SPEC.md 73.5). */
+static int lmj_ikind;
+static int lmj_ival;
+
+static int lmj_initexpr(int i)
 {
     int t = i;
 
     if (lmj_kind(t) == LMTK_NUM) {
-        *kind = LMGK_INT;
-        *val = lmj_val(t);
+        lmj_ikind = LMGK_INT;
+        lmj_ival = lmj_val(t);
         return i + 1;
     }
     if (lmj_kind(t) == LMTK_STR) {
-        *kind = LMGK_STR;
-        *val = lmj_val(t);
+        lmj_ikind = LMGK_STR;
+        lmj_ival = lmj_val(t);
         return i + 1;
     }
     if (lmj_kind(t) == LMTK_PUNCT && lmj_aux(t) == LMP_MINUS
         && lmj_kind(t + 1) == LMTK_NUM) {
-        *kind = LMGK_INT;
-        *val = -lmj_val(t + 1);
+        lmj_ikind = LMGK_INT;
+        lmj_ival = -lmj_val(t + 1);
         return i + 2;
     }
     if (lmj_kind(t) == LMTK_KW && lmj_aux(t) == LMK_TRUE) {
-        *kind = LMGK_BOOL;
-        *val = 1;
+        lmj_ikind = LMGK_BOOL;
+        lmj_ival = 1;
         return i + 1;
     }
     if (lmj_kind(t) == LMTK_KW && lmj_aux(t) == LMK_FALSE) {
-        *kind = LMGK_BOOL;
-        *val = 0;
+        lmj_ikind = LMGK_BOOL;
+        lmj_ival = 0;
         return i + 1;
     }
     if (lmj_kind(t) == LMTK_KW && lmj_aux(t) == LMK_NULL) {
-        *kind = LMGK_NULL;
-        *val = 0;
+        lmj_ikind = LMGK_NULL;
+        lmj_ival = 0;
         return i + 1;
     }
     if (lmj_toklit(t, "array")) {
@@ -690,8 +698,8 @@ static int lmj_initexpr(int i, int *kind, int *val)
             lmj_err(t, lmw_msg);
             return -1;
         }
-        *kind = LMGK_ARRAY;
-        *val = n;
+        lmj_ikind = LMGK_ARRAY;
+        lmj_ival = n;
         return i + 4;
     }
     lmj_err(t, "an initializer is a constant: number, string, true/false, "
@@ -718,8 +726,6 @@ static int ovl_collect(void)
     while (lmj_kind(i) != LMTK_EOF) {
         if (lmj_iskw(i, LMK_VAR)) {
             int nt = i + 1;
-            int kind = LMGK_ZERO;
-            int val = 0;
             unsigned r;
 
             if (lmj_kind(nt) != LMTK_ID) {
@@ -729,8 +735,10 @@ static int ovl_collect(void)
             if (!lmj_declare(nt))
                 return 0;
             i = nt + 1;
+            lmj_ikind = LMGK_ZERO;
+            lmj_ival = 0;
             if (lmj_ispunct(i, LMP_ASSIGN)) {
-                i = lmj_initexpr(i + 1, &kind, &val);
+                i = lmj_initexpr(i + 1);
                 if (i < 0)
                     return 0;
             }
@@ -747,8 +755,8 @@ static int ovl_collect(void)
             r = lmj_grow(lm_nglob);
             lm_wpw(r + LMG_NAMEOFF, lmj_toff(nt));
             lm_wpb(r + LMG_NAMELEN, (unsigned) lmj_val(nt));
-            lm_wpb(r + LMG_KIND, (unsigned) kind);
-            lm_wpw(r + LMG_VAL, (unsigned) val & 0xFFFF);
+            lm_wpb(r + LMG_KIND, (unsigned) lmj_ikind);
+            lm_wpw(r + LMG_VAL, (unsigned) lmj_ival & 0xFFFF);
             lm_nglob++;
             continue;
         }
@@ -1037,7 +1045,11 @@ static int lmc_expect(int p, const char *what)
 #define LMR_BUILTIN 5
 #define LMR_NONE    6
 
-static int lmc_resolve(int t, int *v)
+/* The resolved VALUE comes back in lmc_rv, not through a pointer
+ * (SPEC.md 73.5). */
+static int lmc_rv;
+
+static int lmc_resolve(int t)
 {
     int i;
 
@@ -1051,17 +1063,17 @@ static int lmc_resolve(int t, int *v)
                 lmc_fail = 1;
                 return LMR_NONE;
             }
-            *v = i;
+            lmc_rv = i;
             return LMR_LOCAL;
         }
     }
     i = lmj_gfind(t);
     if (i >= 0) {
-        *v = i;
+        lmc_rv = i;
         return LMR_GLOBAL;
     }
     if (lmj_toklit(t, "app")) {
-        *v = 0;
+        lmc_rv = 0;
         return LMR_COMP;
     }
     for (i = 0; i < lm_ncomp; i++) {
@@ -1071,24 +1083,24 @@ static int lmc_resolve(int t, int *v)
         if (off == 0 || len == 0)
             continue;
         if (lmj_tokwml(t, off, len)) {
-            *v = (int) lm_wb(r + LMC_ID);
+            lmc_rv = (int) lm_wb(r + LMC_ID);
             return LMR_COMP;
         }
     }
     for (i = 0; i < lm_ncard; i++) {
         if (lmj_tokwml(t, lmw_cardoff[i], (unsigned) lmw_cardlen[i])) {
-            *v = i + 1;
+            lmc_rv = i + 1;
             return LMR_CARD;
         }
     }
     i = lmj_ffind(t);
     if (i >= 0) {
-        *v = i;
+        lmc_rv = i;
         return LMR_FN;
     }
     i = lmj_builtin(t);
     if (i >= 0) {
-        *v = i;
+        lmc_rv = i;
         return LMR_BUILTIN;
     }
     lmj_m0("");
@@ -1100,13 +1112,11 @@ static int lmc_resolve(int t, int *v)
     return LMR_NONE;
 }
 
-static int lmc_push_value(int t, int *outv)
+static int lmc_push_value(int t)
 {
-    int v = 0;
-    int k = lmc_resolve(t, &v);
+    int k = lmc_resolve(t);
+    int v = lmc_rv;
 
-    if (outv)
-        *outv = v;
     switch (k) {
     case LMR_LOCAL:
         lmc_opb(OP_LDL, v);
@@ -1246,8 +1256,8 @@ static void lmc_push_init(int kind, int val)
 
 static void lmc_incdec(int t, int isinc)
 {
-    int v = 0;
-    int k = lmc_resolve(t, &v);
+    int k = lmc_resolve(t);
+    int v = lmc_rv;
 
     if (k == LMR_GLOBAL) {
         lmc_opb(isinc ? OP_INCG : OP_DECG, v);
@@ -1283,16 +1293,15 @@ static void lmc_local_var(int semi)
     }
     lmc_locdecl[slot] = 1;
     if (lmj_ispunct(lmc_i, LMP_ASSIGN)) {
-        int kind, val;
         int nx;
         lmc_i++;
-        nx = lmj_initexpr(lmc_i, &kind, &val);
+        nx = lmj_initexpr(lmc_i);
         if (nx < 0) {
             lmc_fail = 1;
             return;
         }
         lmc_i = nx;
-        lmc_push_init(kind, val);
+        lmc_push_init(lmj_ikind, lmj_ival);
         lmc_opb(OP_STL, slot);
     }
     if (semi)
@@ -1363,8 +1372,8 @@ static void lmc_call(int t)
         return;
     }
     {
-        int v = 0;
-        int k = lmc_resolve(t, &v);
+        int k = lmc_resolve(t);
+        int v = lmc_rv;
         int want;
         if (k != LMR_FN) {
             if (k != LMR_NONE) {
@@ -1500,7 +1509,7 @@ static void lmc_primary(void)
         lmc_expr();
         lmc_expect(LMP_RPAR, ")");
     } else if (lmj_kind(t) == LMTK_ID) {
-        lmc_push_value(t, 0);
+        lmc_push_value(t);
     } else {
         lmj_m0("cannot read '");
         lmj_mtok(t);
@@ -1518,13 +1527,14 @@ static void lmc_postfix(void)
         lmc_i++;
         lmc_call(t);
     } else if (lmj_kind(t) == LMTK_ID && lmc_pv(1) == LMP_DOT) {
-        int v = 0;
+        int v;
         int k;
         lmc_i++;
-        k = lmc_resolve(t, &v);
+        k = lmc_resolve(t);
+        v = lmc_rv;
         if (lmc_fail)
             return;
-        lmc_push_value(t, 0);
+        lmc_push_value(t);
         lmc_suffixes(k, v);
         return;
     } else {
@@ -1691,10 +1701,11 @@ static int lmc_try_assign(void)
     if (lmj_kind(t) != LMTK_ID)
         return 0;
     if (lmc_pv(1) == LMP_ASSIGN && lmc_pv(2) != LMP_ASSIGN) {
-        int v = 0;
+        int v;
         int k;
         lmc_i += 2;
-        k = lmc_resolve(t, &v);
+        k = lmc_resolve(t);
+        v = lmc_rv;
         if (k == LMR_FN) {
             lmj_m0("");
             lmj_mtok(t);
@@ -1719,12 +1730,13 @@ static int lmc_try_assign(void)
     }
     if (lmc_pv(1) == LMP_DOT && lmj_kind(lmc_i + 2) == LMTK_ID
         && lmc_pv(3) == LMP_ASSIGN && lmc_pv(4) != LMP_ASSIGN) {
-        int v = 0;
+        int v;
         int k;
         int ptok;
         int atom;
         lmc_i++;
-        k = lmc_resolve(t, &v);
+        k = lmc_resolve(t);
+        v = lmc_rv;
         if (lmc_fail)
             return 1;
         lmc_i++;                    /* '.' */
@@ -1734,7 +1746,7 @@ static int lmc_try_assign(void)
         if (lmc_fail)
             return 1;
         /* 4.6.1: c.p = e -> [c] [e] SETP atom */
-        lmc_push_value(t, 0);
+        lmc_push_value(t);
         lmc_expr();
         lmc_opb(OP_SETP, atom);
         return 1;
@@ -1760,7 +1772,7 @@ static int lmc_try_assign(void)
         if (lmj_ispunct(j + 1, LMP_ASSIGN)
             && !lmj_ispunct(j + 2, LMP_ASSIGN)) {
             lmc_i++;
-            lmc_push_value(t, 0);   /* 4.6.1: a[i] = e -> [a] [i] [e] ASET */
+            lmc_push_value(t);   /* 4.6.1: a[i] = e -> [a] [i] [e] ASET */
             if (!lmc_expect(LMP_LBRK, "["))
                 return 1;
             lmc_expr();
@@ -2258,8 +2270,9 @@ int ovl_wjs(void)
                 continue;
             if (k == LMGK_INT && v == 0)
                 continue;
-            if (k == LMGK_INT && v > 32767)
-                v -= 65536;
+            /* No sign fix-up and no 65536: lmc_push_init() masks the
+             * immediate to sixteen bits, which is the only width 4.5's
+             * PUSHI has. */
             lmc_push_init(k, v);
             lmc_opb(OP_STG, i);
         }

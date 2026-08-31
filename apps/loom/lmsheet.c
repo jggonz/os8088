@@ -68,8 +68,14 @@ static unsigned lms_at(int slot, unsigned k)
     return lm_sb(slot, k);
 }
 
-/* One line of the .WFX, [from, to) with the ends already stripped. 0 = EOF. */
-static int lms_nextline(int slot, unsigned *from, unsigned *to)
+/* One line of the .WFX, [lms_from, lms_to) with the ends already stripped.
+ * 0 = EOF. The span comes back in statics rather than through pointers: SS !=
+ * DS, so `&local` is a stack offset dereferenced through the package segment
+ * (SPEC.md 73.5). */
+static unsigned lms_from;
+static unsigned lms_to;
+
+static int lms_nextline(int slot)
 {
     unsigned n = lm_srclen(slot);
     unsigned s, e;
@@ -91,18 +97,19 @@ static int lms_nextline(int slot, unsigned *from, unsigned *to)
             continue;               /* blank */
         if (lms_at(slot, s) == '#')
             continue;               /* 11.2's comment, which the demo uses */
-        *from = s;
-        *to = e;
+        lms_from = s;
+        lms_to = e;
         return 1;
     }
 }
 
 /* --- weavesim's parse_cellref, sentence for sentence --------------------- */
-static int lms_cellref(int slot, unsigned off, unsigned len, int *r, int *c,
-                       int line)
+static int lms_r, lms_c;
+
+static int lms_cellref(int slot, unsigned off, unsigned len, int line)
 {
     int col;
-    long row = 0;
+    unsigned row = 0;
     unsigned k;
 
     if (len < 2 || len > 4 || !lm_isalpha((int) lms_at(slot, off)))
@@ -112,9 +119,11 @@ static int lms_cellref(int slot, unsigned off, unsigned len, int *r, int *c,
             goto notref;
     col = lm_lower((int) lms_at(slot, off)) - 'a';
     for (k = 1; k < len; k++)
-        row = row * 10 + (long) (lms_at(slot, off + k) - '0');
-    row--;
-    if (col < 0 || col >= lm_gridcols || row < 0 || row >= lm_gridrows) {
+        row = row * 10 + (lms_at(slot, off + k) - '0');
+    /* len <= 4, so row <= 999 and there is nothing here to overflow: the
+     * cellref grammar is a letter and one to three digits (5.1). */
+    if (row == 0 || col < 0 || col >= lm_gridcols
+        || (int) row > lm_gridrows) {
         lmw_msg[0] = 0;
         {
             unsigned m = 0;
@@ -133,8 +142,8 @@ static int lms_cellref(int slot, unsigned off, unsigned len, int *r, int *c,
         lm_perr(slot, line, lmw_msg);
         return 0;
     }
-    *r = (int) row;
-    *c = col;
+    lms_r = (int) row - 1;
+    lms_c = col;
     return 1;
 
 notref:
@@ -161,12 +170,14 @@ notref:
 }
 
 /* --- weavesim's parse_number_16_16, sentence for sentence ---------------- */
-static int lms_number(int slot, unsigned off, unsigned len, int line,
-                      int *lo, int *hi)
+static int lms_lo, lms_hi;
+
+static int lms_number(int slot, unsigned off, unsigned len, int line)
 {
     unsigned k = 0;
     int neg = 0;
-    long ip = 0;
+    unsigned ip = 0;
+    int ipover = 0;
     unsigned frac = 0;
     unsigned nd = 0;
     unsigned den;
@@ -181,9 +192,10 @@ static int lms_number(int slot, unsigned off, unsigned len, int line,
     if (k >= len || !lm_isdigit((int) lms_at(slot, off + k)))
         goto notnum;
     while (k < len && lm_isdigit((int) lms_at(slot, off + k))) {
-        ip = ip * 10 + (long) (lms_at(slot, off + k) - '0');
-        if (ip > 100000L)
-            ip = 100000L;
+        if (ip > 3276)
+            ipover = 1;         /* past 5.1's |value| < 32768 either way */
+        else
+            ip = ip * 10 + (unsigned) (lms_at(slot, off + k) - '0');
         k++;
     }
     if (k < len) {
@@ -199,7 +211,7 @@ static int lms_number(int slot, unsigned off, unsigned len, int line,
         if (k < len || nd == 0)
             goto notnum;
     }
-    if (ip > 32767) {
+    if (ipover || ip > 32767) {
         lmw_msg[0] = 0;
         {
             unsigned m = 0;
@@ -231,13 +243,13 @@ static int lms_number(int slot, unsigned off, unsigned len, int line,
         return 0;
     }
     den = p10[nd];
-    *hi = (int) ip;
-    *lo = nd ? (int) wfx_frac(frac, den) : 0;
+    lms_hi = (int) ip;
+    lms_lo = nd ? (int) wfx_frac(frac, den) : 0;
     if (neg) {                      /* a 32-bit negate in two words */
-        *lo = -*lo;
-        *hi = -*hi;
-        if (*lo != 0)
-            (*hi)--;
+        lms_lo = -lms_lo;
+        lms_hi = -lms_hi;
+        if (lms_lo != 0)
+            lms_hi--;
     }
     return 1;
 
@@ -290,7 +302,6 @@ static unsigned ovl_formlen(int i)
 
 int ovl_sheet(void)
 {
-    unsigned from, to;
     int i;
     unsigned fxn = 0;
 
@@ -304,7 +315,9 @@ int ovl_sheet(void)
     /* --- pass 1: parse into row-major order --- */
     lms_i = 0;
     lms_line = 0;
-    while (lms_nextline(LM_SLOT_WFX, &from, &to)) {
+    while (lms_nextline(LM_SLOT_WFX)) {
+        unsigned from = lms_from;
+        unsigned to = lms_to;
         unsigned refto = from;
         unsigned rhs;
         int r = 0, c = 0;
@@ -331,8 +344,10 @@ int ovl_sheet(void)
                     "<cellref> = <formula|number|\"label\">");
             return 0;
         }
-        if (!lms_cellref(LM_SLOT_WFX, from, refto - from, &r, &c, line))
+        if (!lms_cellref(LM_SLOT_WFX, from, refto - from, line))
             return 0;
+        r = lms_r;
+        c = lms_c;
         if (lms_at(LM_SLOT_WFX, rhs) == '=')
             tag = LMS_T_FORM;
         else if (lms_at(LM_SLOT_WFX, rhs) == '"')
@@ -407,8 +422,10 @@ int ovl_sheet(void)
             end--;
 
         if (tag == LMS_T_NUM) {
-            if (!lms_number(LM_SLOT_WFX, rhs, end - rhs, line, &lo, &hi))
+            if (!lms_number(LM_SLOT_WFX, rhs, end - rhs, line))
                 return 0;
+            lo = lms_lo;
+            hi = lms_hi;
             lm_wpb(rr + 2, 1);
             lm_wpb(rr + 3, 0);
             lm_wpw(rr + 4, (unsigned) lo & 0xFFFF);
@@ -581,32 +598,43 @@ static int lms_close_sprite(int line)
     return 1;
 }
 
-static int lms_word(unsigned *p, unsigned to, unsigned *off, unsigned *len)
+/* The .WSP header line's word scanner. The cursor, the span and the parsed
+ * number are all file-scope for SPEC.md 73.5's reason - one sprite line is
+ * read at a time and nothing here nests. */
+static unsigned lms_wp;             /* the cursor */
+static unsigned lms_woff, lms_wlen;
+static unsigned lms_int_v;
+
+static int lms_word(unsigned to)
 {
-    while (*p < to && lm_isspace((int) lm_sb(LM_SLOT_WSP, *p)))
-        (*p)++;
-    *off = *p;
-    while (*p < to && !lm_isspace((int) lm_sb(LM_SLOT_WSP, *p)))
-        (*p)++;
-    *len = *p - *off;
-    return *len > 0;
+    while (lms_wp < to && lm_isspace((int) lm_sb(LM_SLOT_WSP, lms_wp)))
+        lms_wp++;
+    lms_woff = lms_wp;
+    while (lms_wp < to && !lm_isspace((int) lm_sb(LM_SLOT_WSP, lms_wp)))
+        lms_wp++;
+    lms_wlen = lms_wp - lms_woff;
+    return lms_wlen > 0;
 }
 
-static int lms_int(unsigned off, unsigned len, long *out)
+/* 3.6 bounds every number on a sprite line at 64, so an accumulator that
+ * STOPS at 1000 refuses everything the grammar refuses and needs no `long`
+ * (SPEC.md 73.7 - SmallerC refuses the token). */
+static int lms_int(unsigned off, unsigned len)
 {
     unsigned k;
-    long v = 0;
+    unsigned v = 0;
 
     if (len == 0)
         return 0;
     for (k = 0; k < len; k++) {
         if (!lm_isdigit((int) lm_sb(LM_SLOT_WSP, off + k)))
             return 0;
-        v = v * 10 + (long) (lm_sb(LM_SLOT_WSP, off + k) - '0');
-        if (v > 100000L)
-            v = 100000L;
+        if (v > 1000)
+            v = 1001;
+        else
+            v = v * 10 + (unsigned) (lm_sb(LM_SLOT_WSP, off + k) - '0');
     }
-    *out = v;
+    lms_int_v = v;
     return 1;
 }
 
@@ -637,37 +665,59 @@ static int ovl_wsp(void)
         if (s == e)
             continue;
         if (lm_srceq(LM_SLOT_WSP, s, 7, "sprite ")) {
-            unsigned p = s + 6;
-            unsigned no, nl, o2, l2, o3, l3, o4, l4;
-            long w, h, nf = 1;
+            unsigned no, nl, o2, l2, o3, l3;
+            unsigned w, h, nf = 1;
             int q;
             unsigned r;
 
             if (!lms_close_sprite(line))
                 return 0;
-            if (!lms_word(&p, e, &no, &nl)
-                || !lms_word(&p, e, &o2, &l2)
-                || !lms_word(&p, e, &o3, &l3)) {
+            lms_wp = s + 6;
+            if (!lms_word(e)) {
                 lm_perr(LM_SLOT_WSP, line,
                         "sprite <name> <w_px> <h_px> [<frames>]");
                 return 0;
             }
-            if (lms_word(&p, e, &o4, &l4)) {
-                unsigned o5, l5;
-                if (lms_word(&p, e, &o5, &l5)) {
+            no = lms_woff;
+            nl = lms_wlen;
+            if (!lms_word(e)) {
+                lm_perr(LM_SLOT_WSP, line,
+                        "sprite <name> <w_px> <h_px> [<frames>]");
+                return 0;
+            }
+            o2 = lms_woff;
+            l2 = lms_wlen;
+            if (!lms_word(e)) {
+                lm_perr(LM_SLOT_WSP, line,
+                        "sprite <name> <w_px> <h_px> [<frames>]");
+                return 0;
+            }
+            o3 = lms_woff;
+            l3 = lms_wlen;
+            if (lms_word(e)) {
+                unsigned o4 = lms_woff;
+                unsigned l4 = lms_wlen;
+                if (lms_word(e)) {
                     lm_perr(LM_SLOT_WSP, line,
                             "sprite <name> <w_px> <h_px> [<frames>]");
                     return 0;
                 }
-                if (!lms_int(o4, l4, &nf)) {
+                if (!lms_int(o4, l4)) {
                     lm_perr(LM_SLOT_WSP, line, "sprite: numbers expected");
                     return 0;
                 }
+                nf = lms_int_v;
             }
-            if (!lms_int(o2, l2, &w) || !lms_int(o3, l3, &h)) {
+            if (!lms_int(o2, l2)) {
                 lm_perr(LM_SLOT_WSP, line, "sprite: numbers expected");
                 return 0;
             }
+            w = lms_int_v;
+            if (!lms_int(o3, l3)) {
+                lm_perr(LM_SLOT_WSP, line, "sprite: numbers expected");
+                return 0;
+            }
+            h = lms_int_v;
             if ((w % 8) || w < 8 || w > 64 || h < 1 || h > 64
                 || nf < 1 || nf > 8) {
                 lmw_msg[0] = 0;

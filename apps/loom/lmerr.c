@@ -96,6 +96,16 @@ void lm_catn(char *dst, int v)
     lm_cat(dst, os88_itoa(v, buf));
 }
 
+/* ...and the UNSIGNED one, because 2.1's cap is 63,488 and a bundle that
+ * overruns it has a size no `int` can print (SPEC.md 73.7: there is no long
+ * here, and `unsigned` is the whole of the range this format needs). */
+void lm_catu(char *dst, unsigned v)
+{
+    static char ubuf[8];
+
+    lm_cat(dst, os88_utoa(v, ubuf));
+}
+
 int lm_failed(void)
 {
     return lm_errflag;

@@ -57,6 +57,12 @@ static char *os88_itoa(int v, char *dst7)
     return dst7;
 }
 
+static char *os88_utoa(unsigned v, char *dst6)
+{
+    sprintf(dst6, "%u", v);
+    return dst6;
+}
+
 static void os88_memset(void *p, int c, unsigned n)
 {
     memset(p, c, n);

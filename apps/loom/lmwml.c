@@ -46,28 +46,33 @@
 
 /* --- the model, defined here and declared in apps/loom/loom.h ------------ */
 char     lm_appname[16];
-int      lm_vmkb;
-int      lm_entrycard;
-int      lm_ncard;
-int      lm_ncomp;
-int      lm_nprop;
-int      lm_nblob;
-int      lm_nrec;
-int      lm_nfunc;
-int      lm_nglob;
-int      lm_ncell;
-int      lm_nform;
-int      lm_nspr;
-int      lm_nspr_art;
-int      lm_nmenu;
-int      lm_startfn;
-int      lm_hasgrid, lm_hascanvas, lm_hasscript;
-int      lm_gridcols, lm_gridrows;
-int      lm_canvw, lm_canvh, lm_canvspr;
-int      lm_flags;
-int      lm_used;
+int      lm_vmkb = 0;
+int      lm_entrycard = 0;
+int      lm_ncard = 0;
+int      lm_ncomp = 0;
+int      lm_nprop = 0;
+int      lm_nblob = 0;
+int      lm_nrec = 0;
+int      lm_nfunc = 0;
+int      lm_nglob = 0;
+int      lm_ncell = 0;
+int      lm_nform = 0;
+int      lm_nspr = 0;
+int      lm_nspr_art = 0;
+int      lm_nmenu = 0;
+int      lm_startfn = 0;
+int      lm_hasgrid = 0;
+int      lm_hascanvas = 0;
+int      lm_hasscript = 0;
+int      lm_gridcols = 0;
+int      lm_gridrows = 0;
+int      lm_canvw = 0;
+int      lm_canvh = 0;
+int      lm_canvspr = 0;
+int      lm_flags = 0;
+int      lm_used = 0;
 char     lm_scriptsrc[13];
-int      lm_scriptline;
+int      lm_scriptline = 0;
 
 unsigned char lm_mtitle[LM_MAXMENU];
 unsigned char lm_mcount[LM_MAXMENU];
@@ -81,7 +86,7 @@ unsigned char lm_evatom[LM_MAXEV];
 unsigned      lm_evoff[LM_MAXEV];
 unsigned char lm_evlen[LM_MAXEV];
 int           lm_evline[LM_MAXEV];
-int           lm_nev;
+int           lm_nev = 0;
 
 /* --- the scanner's cursor ------------------------------------------------ */
 static unsigned lmw_i;
@@ -320,10 +325,16 @@ static int ovl_wscomment(void)
     }
 }
 
-/* 3.1's four entities, and nothing else. */
-static int ovl_entity(unsigned *k, int *out)
+/* 3.1's four entities, and nothing else. The cursor goes IN and comes back
+ * OUT through lmw_ek, and the character through lmw_ec, for ovl_intattr's
+ * reason: SS != DS, so the address of an automatic is not a thing this
+ * package may take (SPEC.md 73.5). */
+static unsigned lmw_ek;
+static int      lmw_ec;
+
+static int ovl_entity(void)
 {
-    unsigned p = *k + 1;
+    unsigned p = lmw_ek + 1;
     unsigned e = p;
     unsigned n = lm_srclen(LM_SLOT_WML);
 
@@ -342,8 +353,8 @@ static int ovl_entity(unsigned *k, int *out)
         else if (lm_srceq(LM_SLOT_WML, p, len, "quot"))
             c = '"';
         if (c) {
-            *out = c;
-            *k = e + 1;
+            lmw_ec = c;
+            lmw_ek = e + 1;
             return 1;
         }
     }
@@ -476,12 +487,13 @@ static int ovl_opentag(void)
                 if (lm_sb(LM_SLOT_WML, k) == '"')
                     break;
                 if (lm_sb(LM_SLOT_WML, k) == '&') {
-                    unsigned kk = k;
-                    if (!ovl_entity(&kk, &ch)) {
+                    lmw_ek = k;
+                    if (!ovl_entity()) {
                         ovl_badentity(aline, k);
                         return 0;
                     }
-                    k = kk;
+                    k = lmw_ek;
+                    ch = lmw_ec;
                 } else {
                     ch = (int) lm_sb(LM_SLOT_WML, k);
                     k++;
@@ -577,17 +589,35 @@ static int ovl_aveq(int ai, const char *s)
 }
 
 /* _int_attr (weavesim's), and its two sentences verbatim. Python's int()
- * takes an optional sign and digits; anything else is "not a number". */
+ * takes an optional sign and digits; anything else is "not a number".
+ *
+ * THE ANSWER COMES BACK IN A FILE-SCOPE WORD AND NOT THROUGH A POINTER.
+ * SS != DS here, so `&ok` on an automatic is a stack offset dereferenced
+ * through the package segment: it assembles cleanly and writes into somebody
+ * else's data, and tools/cc8086.py fails the build over it (SPEC.md 73.5).
+ * apps/weave/weave.c's rule is the fix and it is used everywhere below - an
+ * out-parameter is a static.
+ *
+ * THERE IS NO `long` EITHER (SPEC.md 73.7), and SmallerC does not merely
+ * refuse the type: it refuses the TOKEN. So the accumulator is an `unsigned`
+ * that STOPS at a value no bound can accept rather than growing past 16 bits -
+ * the range test only has to answer "outside", and the message quotes the
+ * TEXT that was written rather than the number it parsed to. */
+static int lmw_ok;
+static int lmw_intover;
+
 static int ovl_intattr(const char *tag, const char *attr, int ai, int lo,
-                       int hi, int sgn, int *ok)
+                       int hi, int sgn)
 {
     unsigned k = 0;
     int neg = 0;
-    long v = 0;
+    unsigned v = 0;
+    int val;
     unsigned n = lmw_avlen[ai];
     const char *p = lmw_valbuf + lmw_avoff[ai];
 
-    *ok = 0;
+    lmw_ok = 0;
+    lmw_intover = 0;
     if (n > 0 && (p[0] == '-' || p[0] == '+')) {
         neg = (p[0] == '-');
         k = 1;
@@ -597,14 +627,15 @@ static int ovl_intattr(const char *tag, const char *attr, int ai, int lo,
     for (; k < n; k++) {
         if (!lm_isdigit((int) (unsigned char) p[k]))
             goto notnum;
-        v = v * 10 + (p[k] - '0');
-        if (v > 1000000L)
-            v = 1000000L;           /* clamped: out of range either way, and
-                                     * the message quotes the TEXT */
+        if (v > 3276)
+            lmw_intover = 1;        /* past anything 3.3 bounds; see above */
+        else
+            v = v * 10 + (unsigned) (p[k] - '0');
     }
+    val = (int) v;
     if (neg)
-        v = -v;
-    if ((v < 0 && !sgn) || v < lo || v > hi) {
+        val = -val;
+    if (lmw_intover || (val < 0 && !sgn) || val < lo || val > hi) {
         ovl_m0(tag);
         ovl_mc(": ");
         ovl_mc(attr);
@@ -617,8 +648,8 @@ static int ovl_intattr(const char *tag, const char *attr, int ai, int lo,
         ovl_raise(lmw_aline[ai]);
         return 0;
     }
-    *ok = 1;
-    return (int) v;
+    lmw_ok = 1;
+    return val;
 
 notnum:
     ovl_m0(tag);
@@ -631,14 +662,14 @@ notnum:
     return 0;
 }
 
-static int ovl_boolattr(const char *tag, const char *attr, int ai, int *ok)
+static int ovl_boolattr(const char *tag, const char *attr, int ai)
 {
-    *ok = 1;
+    lmw_ok = 1;
     if (ovl_aveq(ai, "1"))
         return 1;
     if (ovl_aveq(ai, "0"))
         return 0;
-    *ok = 0;
+    lmw_ok = 0;
     ovl_m0(tag);
     ovl_mc(": ");
     ovl_mc(attr);
@@ -729,17 +760,18 @@ static int ovl_checkattrs(int ei)
     const char **tab = lmw_attrs[ei];
 
     for (i = 0; i < lmw_nattr; i++) {
-        int ok = 0;
+        int legal = 0;
+
         if (flow) {
             for (k = 0; lmw_common[k]; k++)
                 if (lm_srceq(LM_SLOT_WML, lmw_anoff[i], lmw_anlen[i],
                              lmw_common[k]))
-                    ok = 1;
+                    legal = 1;
         }
         for (k = 0; tab[k]; k++)
             if (lm_srceq(LM_SLOT_WML, lmw_anoff[i], lmw_anlen[i], tab[k]))
-                ok = 1;
-        if (!ok) {
+                legal = 1;
+        if (!legal) {
             ovl_badattr(ei, i);
             return 0;
         }
@@ -846,14 +878,13 @@ static int ovl_text_run(unsigned from, unsigned to, int line)
     for (k = from; k < to; k++) {
         int ch = (int) lm_sb(LM_SLOT_WML, k);
         if (ch == '&') {
-            unsigned kk = k;
-            int e;
-            if (!ovl_entity(&kk, &e)) {
+            lmw_ek = k;
+            if (!ovl_entity()) {
                 ovl_badentity(line, k);
                 return 0;
             }
-            k = kk - 1;
-            ch = e;
+            k = lmw_ek - 1;
+            ch = lmw_ec;
         }
         ch = lm_fold(ch);
         if (ch >= 0)
@@ -1014,7 +1045,6 @@ static int ovl_setid(int comp, int ei)
 static int ovl_common(int comp, int ei)
 {
     int ai;
-    int ok;
     int style = 0;
     int cflags = 0;
 
@@ -1023,15 +1053,15 @@ static int ovl_common(int comp, int ei)
     if (ei != LMW_E_CANVAS) {       /* a canvas's w/h are PIXELS (3.3) */
         ai = ovl_afind("w");
         if (ai >= 0) {
-            int v = ovl_intattr(lmw_elem[ei], "w", ai, 0, 160, 0, &ok);
-            if (!ok)
+            int v = ovl_intattr(lmw_elem[ei], "w", ai, 0, 160, 0);
+            if (!lmw_ok)
                 return 0;
             ovl_cset(comp, LMC_W, v);
         }
         ai = ovl_afind("h");
         if (ai >= 0) {
-            int v = ovl_intattr(lmw_elem[ei], "h", ai, 0, 40, 0, &ok);
-            if (!ok)
+            int v = ovl_intattr(lmw_elem[ei], "h", ai, 0, 40, 0);
+            if (!lmw_ok)
                 return 0;
             ovl_cset(comp, LMC_H, v);
         }
@@ -1094,26 +1124,34 @@ static int ovl_common(int comp, int ei)
         style |= a << 2;
     }
     ai = ovl_afind("br");
-    if (ai >= 0 && ovl_boolattr(lmw_elem[ei], "br", ai, &ok))
-        cflags |= CF_BREAK;
-    if (!ok)
-        return 0;
+    if (ai >= 0) {
+        if (ovl_boolattr(lmw_elem[ei], "br", ai))
+            cflags |= CF_BREAK;
+        if (!lmw_ok)
+            return 0;
+    }
     ai = ovl_afind("hidden");
-    if (ai >= 0 && ovl_boolattr(lmw_elem[ei], "hidden", ai, &ok))
-        cflags |= CF_HIDDEN;
-    if (!ok)
-        return 0;
+    if (ai >= 0) {
+        if (ovl_boolattr(lmw_elem[ei], "hidden", ai))
+            cflags |= CF_HIDDEN;
+        if (!lmw_ok)
+            return 0;
+    }
     ai = ovl_afind("disabled");
-    if (ai >= 0 && ovl_boolattr(lmw_elem[ei], "disabled", ai, &ok))
-        cflags |= CF_DISABLED;
-    if (!ok)
-        return 0;
+    if (ai >= 0) {
+        if (ovl_boolattr(lmw_elem[ei], "disabled", ai))
+            cflags |= CF_DISABLED;
+        if (!lmw_ok)
+            return 0;
+    }
     ovl_cset(comp, LMC_STYLE, style);
     ovl_cset(comp, LMC_CFLAGS, cflags);
     return 1;
 }
 
-static int ovl_newcomp(int ei, int card, int *out)
+/* -1 = refused (the sentence is already set); else the component's index.
+ * An out-parameter would be an `&local` at every call site. */
+static int ovl_newcomp(int ei, int card)
 {
     int i;
     unsigned r;
@@ -1122,7 +1160,7 @@ static int ovl_newcomp(int ei, int card, int *out)
         ovl_m0("251 components; comp_id is one byte, 1..250 "
                "(WEAVE-SPEC 2.5)");
         ovl_raise(lmw_tagline);
-        return 0;
+        return -1;
     }
     i = lm_ncomp;
     r = ovl_crow(i);
@@ -1133,14 +1171,19 @@ static int ovl_newcomp(int ei, int card, int *out)
     lm_wpw(r + LMC_PROP, (unsigned) lm_nprop);
     lm_wpw(r + LMC_LINE, (unsigned) lmw_tagline);
     lm_ncomp++;
-    *out = i;
-    return 1;
+    return i;
 }
 
 static int ovl_component(int ei, int card);
 
 /* --- <item> inside a <list> ---------------------------------------------- */
-static int ovl_list_item(int *nitem, unsigned char *items)
+/* 2.6.1's items. The count and the array are file-scope for SPEC.md 73.5's
+ * reason and because a <list> cannot nest inside another one, so one of each
+ * is all there can ever be in flight. */
+static int           lmw_nitem;
+static unsigned char lmw_items[66];
+
+static int ovl_list_item(void)
 {
     int openline = lmw_tagline;
     int ai;
@@ -1196,9 +1239,9 @@ static int ovl_list_item(int *nitem, unsigned char *items)
         ovl_raise(openline);
         return 0;
     }
-    if (*nitem >= 65) {
+    if (lmw_nitem >= 65) {
         ovl_m0("");
-        ovl_mn(*nitem + 1);
+        ovl_mn(lmw_nitem + 1);
         ovl_mc(" list items; the blob count byte caps at 64 "
                "(WEAVE-SPEC 2.6.1)");
         ovl_raise(lmw_tagline);
@@ -1208,8 +1251,8 @@ static int ovl_list_item(int *nitem, unsigned char *items)
         int a = ovl_intern(LM_SLOT_WML, openline);
         if (a == 0)
             return 0;
-        items[*nitem] = (unsigned char) a;
-        (*nitem)++;
+        lmw_items[lmw_nitem] = (unsigned char) a;
+        lmw_nitem++;
     }
     return 1;
 }
@@ -1219,14 +1262,14 @@ static int ovl_sprite_elem(int card)
 {
     int comp;
     int ai;
-    int ok;
     int x = 0, y = 0, shown = 1;
     unsigned imgoff;
     unsigned imglen;
 
     if (!ovl_checkattrs(LMW_E_SPRITE))
         return 0;
-    if (!ovl_newcomp(LMW_E_SPRITE, card, &comp))
+    comp = ovl_newcomp(LMW_E_SPRITE, card);
+    if (comp < 0)
         return 0;
     if (!ovl_setid(comp, LMW_E_SPRITE))
         return 0;
@@ -1246,20 +1289,20 @@ static int ovl_sprite_elem(int card)
     }
     ai = ovl_afind("x");
     if (ai >= 0) {
-        x = ovl_intattr("sprite", "x", ai, -320, 320, 1, &ok);
-        if (!ok)
+        x = ovl_intattr("sprite", "x", ai, -320, 320, 1);
+        if (!lmw_ok)
             return 0;
     }
     ai = ovl_afind("y");
     if (ai >= 0) {
-        y = ovl_intattr("sprite", "y", ai, -160, 160, 1, &ok);
-        if (!ok)
+        y = ovl_intattr("sprite", "y", ai, -160, 160, 1);
+        if (!lmw_ok)
             return 0;
     }
     ai = ovl_afind("shown");
     if (ai >= 0) {
-        shown = ovl_boolattr("sprite", "shown", ai, &ok);
-        if (!ok)
+        shown = ovl_boolattr("sprite", "shown", ai);
+        if (!lmw_ok)
             return 0;
     }
     if (x && !ovl_prop(comp, WA_X, PK_INT, x))
@@ -1332,21 +1375,19 @@ static int ovl_component(int ei, int card)
 {
     int comp;
     int ai;
-    int ok;
     int openline = lmw_tagline;
     int takestext = (ei == LMW_E_LABEL || ei == LMW_E_TEXT
                      || ei == LMW_E_BUTTON || ei == LMW_E_CHECK
                      || ei == LMW_E_RADIO);
     int textatom = (ei == LMW_E_LABEL || ei == LMW_E_TEXT) ? WA_TEXT
                                                            : WA_LABEL;
-    int nitem = 0;
-    static unsigned char items[66];
     int tick = 0;
     int meter_max = 100;
 
     if (!ovl_checkattrs(ei))
         return 0;
-    if (!ovl_newcomp(ei, card, &comp))
+    comp = ovl_newcomp(ei, card);
+    if (comp < 0)
         return 0;
     if (!ovl_common(comp, ei))
         return 0;
@@ -1370,16 +1411,16 @@ static int ovl_component(int ei, int card)
     case LMW_E_METER:
         ai = ovl_afind("max");
         if (ai >= 0) {
-            meter_max = ovl_intattr("meter", "max", ai, 1, 32000, 0, &ok);
-            if (!ok)
+            meter_max = ovl_intattr("meter", "max", ai, 1, 32000, 0);
+            if (!lmw_ok)
                 return 0;
             if (!ovl_prop(comp, WA_MAX, PK_INT, meter_max))
                 return 0;
         }
         ai = ovl_afind("value");
         if (ai >= 0) {
-            int v = ovl_intattr("meter", "value", ai, 0, meter_max, 0, &ok);
-            if (!ok)
+            int v = ovl_intattr("meter", "value", ai, 0, meter_max, 0);
+            if (!lmw_ok)
                 return 0;
             if (!ovl_prop(comp, WA_VALUE, PK_INT, v))
                 return 0;
@@ -1392,8 +1433,8 @@ static int ovl_component(int ei, int card)
     case LMW_E_CHECK:
         ai = ovl_afind("checked");
         if (ai >= 0) {
-            int v = ovl_boolattr("check", "checked", ai, &ok);
-            if (!ok)
+            int v = ovl_boolattr("check", "checked", ai);
+            if (!lmw_ok)
                 return 0;
             if (!ovl_prop(comp, WA_CHECKED, PK_INT, v))
                 return 0;
@@ -1425,8 +1466,8 @@ static int ovl_component(int ei, int card)
         }
         ai = ovl_afind("checked");
         if (ai >= 0) {
-            int v = ovl_boolattr("radio", "checked", ai, &ok);
-            if (!ok)
+            int v = ovl_boolattr("radio", "checked", ai);
+            if (!lmw_ok)
                 return 0;
             if (!ovl_prop(comp, WA_CHECKED, PK_INT, v))
                 return 0;
@@ -1437,8 +1478,8 @@ static int ovl_component(int ei, int card)
     case LMW_E_INPUT:
         ai = ovl_afind("cols");
         if (ai >= 0) {
-            int v = ovl_intattr("input", "cols", ai, 2, 60, 0, &ok);
-            if (!ok)
+            int v = ovl_intattr("input", "cols", ai, 2, 60, 0);
+            if (!lmw_ok)
                 return 0;
             if (!ovl_prop(comp, WA_COLS, PK_INT, v))
                 return 0;
@@ -1467,8 +1508,8 @@ static int ovl_component(int ei, int card)
     case LMW_E_LIST:
         ai = ovl_afind("rows");
         if (ai >= 0) {
-            int v = ovl_intattr("list", "rows", ai, 1, 40, 0, &ok);
-            if (!ok)
+            int v = ovl_intattr("list", "rows", ai, 1, 40, 0);
+            if (!lmw_ok)
                 return 0;
             if (!ovl_prop(comp, WA_ROWS, PK_INT, v))
                 return 0;
@@ -1490,12 +1531,12 @@ static int ovl_component(int ei, int card)
                 ovl_raise(openline);
                 return 0;
             }
-            cols = ovl_intattr("grid", "cols", ai, 1, 26, 0, &ok);
-            if (!ok)
+            cols = ovl_intattr("grid", "cols", ai, 1, 26, 0);
+            if (!lmw_ok)
                 return 0;
-            rows = ovl_intattr("grid", "rows", ovl_afind("rows"), 1, 256, 0,
-                               &ok);
-            if (!ok)
+            rows = ovl_intattr("grid", "rows", ovl_afind("rows"), 1, 256,
+                               0);
+            if (!lmw_ok)
                 return 0;
             if (rows * cols > 6140) {
                 ovl_m0("grid is ");
@@ -1537,11 +1578,11 @@ static int ovl_component(int ei, int card)
                 ovl_raise(openline);
                 return 0;
             }
-            w = ovl_intattr("canvas", "w", ovl_afind("w"), 64, 320, 0, &ok);
-            if (!ok)
+            w = ovl_intattr("canvas", "w", ovl_afind("w"), 64, 320, 0);
+            if (!lmw_ok)
                 return 0;
-            h = ovl_intattr("canvas", "h", ovl_afind("h"), 32, 160, 0, &ok);
-            if (!ok)
+            h = ovl_intattr("canvas", "h", ovl_afind("h"), 32, 160, 0);
+            if (!lmw_ok)
                 return 0;
             if (w % 8) {
                 ovl_m0("canvas: w=\"");
@@ -1573,8 +1614,8 @@ static int ovl_component(int ei, int card)
             }
             ai = ovl_afind("tick");
             if (ai >= 0) {
-                tick = ovl_intattr("canvas", "tick", ai, 0, 255, 0, &ok);
-                if (!ok)
+                tick = ovl_intattr("canvas", "tick", ai, 0, 255, 0);
+                if (!lmw_ok)
                     return 0;
                 if (tick && !ovl_prop(comp, WA_TICK, PK_INT, tick))
                     return 0;
@@ -1609,6 +1650,7 @@ static int ovl_component(int ei, int card)
     /* -- the content, in document order -- */
     lm_sbclear();
     lmw_hastext = 0;
+    lmw_nitem = 0;
     lm_canvspr = 0;
     if (!lmw_selfclose) {
         for (;;) {
@@ -1652,7 +1694,7 @@ static int ovl_component(int ei, int card)
                     }
                     if (!ovl_opentag())
                         return 0;
-                    if (!ovl_list_item(&nitem, items))
+                    if (!ovl_list_item())
                         return 0;
                     continue;
                 }
@@ -1723,22 +1765,22 @@ static int ovl_component(int ei, int card)
                 return 0;
         }
     }
-    if (ei == LMW_E_LIST && nitem > 0) {
+    if (ei == LMW_E_LIST && lmw_nitem > 0) {
         /* 2.6.1's blob: the count byte then the item atoms. It is written
          * into the blob store by lmwrite.c; here the records are handed over
          * as a run in the name store, which is the same claim region. */
         unsigned at = (unsigned) lmw_namen;
         int k;
-        if (at + (unsigned) nitem + 1 > LM_NAMEMAX) {
+        if (at + (unsigned) lmw_nitem + 1 > LM_NAMEMAX) {
             ovl_m0("the list items do not fit this machine's pack claim "
                    "(WEAVE-SPEC 11.4)");
             ovl_raise(openline);
             return 0;
         }
-        lm_wpb(LMW_NAMES + at, (unsigned) nitem);
-        for (k = 0; k < nitem; k++)
-            lm_wpb(LMW_NAMES + at + 1 + (unsigned) k, items[k]);
-        lmw_namen = (int) (at + (unsigned) nitem + 1);
+        lm_wpb(LMW_NAMES + at, (unsigned) lmw_nitem);
+        for (k = 0; k < lmw_nitem; k++)
+            lm_wpb(LMW_NAMES + at + 1 + (unsigned) k, lmw_items[k]);
+        lmw_namen = (int) (at + (unsigned) lmw_nitem + 1);
         if (!ovl_prop(comp, WA_ITEMS, PK_BLOB, (int) at))
             return 0;
     }
@@ -2303,9 +2345,8 @@ int ovl_wml(void)
     }
     ai = ovl_afind("vm");
     if (ai >= 0) {
-        int ok;
-        lm_vmkb = ovl_intattr("app", "vm", ai, 16, 32, 0, &ok);
-        if (!ok)
+            lm_vmkb = ovl_intattr("app", "vm", ai, 16, 32, 0);
+        if (!lmw_ok)
             return 0;
     }
     {

@@ -499,12 +499,14 @@ static void ovl_sec_sprites(unsigned base)
 
 static unsigned ovl_gridkb(void)
 {
-    long need;
+    unsigned need;
 
     if (!lm_hasgrid)
         return 0;
-    /* 5.6: max(8, ceil((16 + rows*cols*4)/1024) + 2), capped at 26 */
-    need = 16L + (long) lm_gridrows * lm_gridcols * 4L;
+    /* 5.6: max(8, ceil((16 + rows*cols*4)/1024) + 2), capped at 26.
+     * 3.3 caps cols x rows at 6,140, so 16 + 6140*4 = 24,576 - the whole
+     * arithmetic fits sixteen bits and needs no `long` (SPEC.md 73.7). */
+    need = 16 + (unsigned) lm_gridrows * (unsigned) lm_gridcols * 4;
     need = (need + 1023) / 1024 + 2;
     if (need < 8)
         need = 8;
@@ -515,7 +517,7 @@ static unsigned ovl_gridkb(void)
 
 static unsigned ovl_canvaskb(void)
 {
-    long need;
+    unsigned need;
     int hrows;
     int i;
     int nspr = 0;
@@ -530,7 +532,10 @@ static unsigned ovl_canvaskb(void)
      * at the ROUNDED height the runtime derives from the record byte - never
      * the WML `h`. Sizing it from the WML h under-asks by up to seven rows. */
     hrows = (lm_canvh + 7) / 8;
-    need = 16L + 24L * nspr + (long) (lm_canvw / 8) * (hrows * 8);
+    /* The largest legal canvas is 320x160 with sixteen sprites:
+     * 16 + 384 + 40*160 = 6,800. Sixteen bits, no `long`. */
+    need = 16 + 24 * (unsigned) nspr
+         + (unsigned) (lm_canvw / 8) * (unsigned) (hrows * 8);
     need = (need + 1023) / 1024;
     if (need < 2)
         need = 2;
@@ -641,7 +646,7 @@ int ovl_write(void)
     if (total > W_CAP) {
         lmw_msg[0] = 0;
         lm_cat(lmw_msg, "bundle is ");
-        lm_catn(lmw_msg, (int) total);
+        lm_catu(lmw_msg, total);
         lm_cat(lmw_msg, " bytes; the cap is 63488 - the directory size must "
                "stand for the resident ask");
         lm_perr(LM_SLOT_WML, 1, lmw_msg);
@@ -687,11 +692,9 @@ int ovl_write(void)
     lm_opb(13, (unsigned) lm_entrycard);
     lm_opb(14, ovl_canvaskb());
     lm_opb(15, 0);
-    for (i = 0; i < 16; i++)
-        lm_opb(16 + (unsigned) i,
-               (unsigned) (unsigned char) lm_appname[i] ?
-               (unsigned) (unsigned char) lm_appname[i] : 0);
     {
+        /* 2.2: 15 characters and a NUL, and the bytes after the NUL are 0x00
+         * - "space-padded before the NUL is not allowed". */
         int n = (int) os88_strlen(lm_appname);
         for (i = 0; i < 16; i++)
             lm_opb(16 + (unsigned) i,
