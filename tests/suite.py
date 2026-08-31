@@ -229,7 +229,7 @@ SOAK = [
         "in well under a second) plus the corpus generation and the nasm "
         "run, with room for the corpus growing",
         needs=("qemu", "nasm"), serial=True, timeout=300),
-    Row("weavesession", "soak", py("tests/weavesession.py"), 90.0,
+    Row("weavesession", "soak", py("tests/weavesession.py"), 150.0,
         "WEAVE-SPEC 12.3, 12.3.1: a scripted session driven through the "
         "SHIPPING package under MartyPC - type in a field, press a button, "
         "toggle a check, take a menu command, dismiss an alert - and every "
@@ -242,8 +242,12 @@ SOAK = [
         "at length). It is the only row that exercises the ring, the slice "
         "and the native surface END TO END - weavevm cannot reach any of "
         "them, having no runtime under it. 90s is 55s MEASURED here for one "
-        "boot, one navigation, one launch and eleven gestures, taken up by "
-        "the ~1.6x a boot costs on the slowest box this suite is written for",
+        "boot, one navigation, one launch and eleven gestures per adapter, "
+        "MEASURED at 135s over two clean runs and 150s over one that lost a "
+        "double-click to host load and spent its three navigation retries. "
+        "It is not the 90s this row was declared at before it had ever been "
+        "run, and a declared figure nobody has taken is the thing this "
+        "registry's budgets exist to stop drifting",
         needs=("marty", "cc"), serial=True, timeout=360),
     Row("weavelat", "soak", py("tests/weavelat.py"), 120.0,
         "SPEC.md 7.3's click-to-action bar with a WEAVE FORM as the load "

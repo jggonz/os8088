@@ -41,10 +41,18 @@ UILAT_MAX is uilat's own: well above 7.3's 37-70 ms and far below the
 1,382-14,722 ms the same click cost before the lock handover existed, so the
 row fails loudly if the handover is lost and does not flake on the spread.
 
-NOT YET RUN ANYWHERE. Written in a checkout with no Rust toolchain, so
-MartyPC could not be built and this has never executed - `needs=("marty",...)`
-makes it a SKIP there rather than a failure. It is the first thing to run
-where MartyPC exists, and its author expects to owe it a fix.
+WHAT THE THIRD LEG DOES NOT PROVE, and it is worth reading before trusting
+the number. FORM's `doGreet` is about fifty bytecode ops - one slice at any
+budget - so "handler running" is really "immediately after a wake was
+posted". That exercises the wake, the dispatch and the flush's lock hold,
+which is where a runtime that took the lock for the whole slice would already
+show; it does NOT exercise a handler that spans several slices, because wave
+3 ships no bundle with one. A leg that did would need a `.WAB` built for it,
+and building one here would mean the row testing a bundle that no user has -
+so the honest thing is to measure what the demos actually do and say what
+that leaves out. The `weavevm` corpus covers the multi-slice case for
+CORRECTNESS (every case runs at a budget of one); nothing yet covers it for
+LATENCY.
 """
 
 import argparse

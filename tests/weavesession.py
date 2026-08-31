@@ -42,10 +42,16 @@ NAVIGATION IS weavesmoke's, IMPORTED AND NOT COPIED. That file's
 both, all of them paid for in lost runs; a second copy here would drift from
 it on the first fix. This file owns the SESSION and nothing else.
 
-NOT YET RUN ANYWHERE. It was written in a checkout with no Rust toolchain, so
-MartyPC could not be built and this has never executed - `needs=("marty",...)`
-makes it a SKIP there rather than a failure. It is the first thing to run
-where MartyPC exists, and its author expects to owe it a fix.
+WHAT FLAKES, AND IT IS NOT THIS FILE. The navigation is weavesmoke's and so
+is its failure mode: a double-click whose two presses straddle the kernel's
+9-tick window is seen as two FIRST clicks, and on a loaded host that happens.
+Measured here across three consecutive runs on a box that had just run three
+emulator sessions: two clean at 135 s, one that spent all three of
+`_open_bundle`'s retries and failed before a single assertion about WEAVE had
+run. That is a statement about the machine running the test - the guest says
+so itself, in those words - and the right response to it is the one
+weavesmoke already documents: retry the navigation, never the assertions, and
+print every retry so a host that has really got slower is visible.
 """
 
 import argparse
