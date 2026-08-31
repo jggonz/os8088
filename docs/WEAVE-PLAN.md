@@ -667,9 +667,9 @@ Elendilon work `main` carried grew the SHARED SDK includes (`os88api.inc`,
 `os88ui.inc` — the scroll bar's arrow buttons and arrow-drag, which `<list>`
 and `<grid>` reach, so the feature cannot be `%define`d out), and a package
 that shares a library pays for the library's growth. **The cut is duplicated
-DATA, and it is the last cut of its kind this file knows of**: WEAVE-SPEC
-§10.4's validator answers with the name of the field that refused, and SmallerC emits
-a string literal once per site rather than pooling — `section table` eighteen
+DATA, and it is the last cut of its kind this file knows of**: the validator
+(WEAVE-SPEC §10.4) answers with the name of the field that refused, and
+SmallerC emits a string literal once per site — `section table` eighteen
 times, `prop block` twenty-one — while a literal an `ovl_` function names
 stays RESIDENT even though its code does not (SPEC.md §73.14). Spelling the
 twenty-four names once each in `apps/weave/wval.c` is **1,194 bytes** with
