@@ -4,8 +4,8 @@
 #
 # Generate the WVM differential corpus with tools/weavesim.py, assemble
 # apps/weave/hosttest/weavevm.asm - which %includes the SHIPPING
-# apps/weave/wvm.inc - and boot it in raw QEMU. It prints one '.' per case
-# passed, 'X' per case failed, 'N' per negative control correctly caught and
+# apps/weave/wvm.inc and apps/weave/wfx.inc - and boot it in raw QEMU. It
+# prints one '.' per case passed, 'X' per case failed, 'N' per negative control correctly caught and
 # 'x' per control that slipped through, then a summary line on COM1, and exits
 # nonzero unless every case agreed with the model. See the head of the .asm
 # for what each row checks and why SS != DS is the whole point.
@@ -20,10 +20,12 @@ BUILD=build
 TMO=${1:-120}
 mkdir -p $BUILD
 
-# The corpus is GENERATED, never committed: the expected states are the
-# model's, so a change to tools/weavesim.py must move them (WEAVE-SPEC 12.1.1).
+# Both corpora are GENERATED, never committed: the expected states and values
+# are the model's, so a change to tools/weavesim.py must move them
+# (WEAVE-SPEC 12.1.1, 12.1.2).
 python3 tools/weavesim.py --emit-optab > $BUILD/wvmtab.inc
 python3 tools/weavesim.py --emit-vmcorpus tests/weave/vmcorpus -o $BUILD/weavevmcorp.inc
+python3 tools/weavesim.py --emit-fxcorpus tests/weave/fxcorpus -o $BUILD/weavefxcorp.inc
 
 nasm -f bin -w+error -I apps/weave/ -I $BUILD/ \
     -o $BUILD/weavevm.img apps/weave/hosttest/weavevm.asm

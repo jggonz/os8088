@@ -1187,7 +1187,7 @@ One claim per instance, pinned, default 16KB, header-declared 16–32KB.
 | 0x0600 | 256 | eval stack: 64 × 4-byte cells |
 | 0x0700 | 128 | frame stack: 16 × 6-byte frames + 32 pad |
 | 0x0780 | 128 | event ring: 16 × 8-byte records (§4.9) |
-| 0x0800 | 128 | FX eval stack: 16 × 6-byte slots + 32 pad (§5.3) |
+| 0x0800 | 128 | reserved (§5.3's FX eval stack is **not** here — below) |
 | 0x0880 | S−0x0880−2,064 | string arena |
 | S−2,064 | 2,048 | array arena |
 | S−16 | 16 | hot scratch: slice counter, budget, ring head/tail, GC request — parked in the claim's top 16 bytes, not package bss (the measured RunCPM TCG lesson: a bss word sharing a page with translated code cost 5×) |
@@ -1195,6 +1195,18 @@ One claim per instance, pinned, default 16KB, header-declared 16–32KB.
 Eval-stack overflow (64 cells, locals included) and frame overflow (call
 depth 16) stop the handler with §10.6's sentence. The CPU stacks (1,024
 UI / 384 worker) never carry VM state.
+
+**The 128 bytes at 0x0800 were §5.3's FX eval stack and are now reserved**,
+because wave 4 went to write the FX VM and found the stack in the wrong
+segment. The FX VM's hot memory is the GRID claim — every `FCELL` and every
+aggregate reads it — and an 8086 has two data segment registers, one of which
+is the RPN stream's. A stack in the VM claim would need a third. So §5.3's
+sixteen 6-byte slots are 96 bytes of the RUNTIME's own bss, which is where a
+value that never outlives one `wfx_eval` call belongs, and the region here
+stays reserved rather than reclaimed so that no offset in this table moves.
+It is also what lets the FX VM run in §12.1.2's boot sector with **no VM
+claim bound at all** — the two cores are independent, and the corpus proves
+it by not providing one.
 
 #### 4.7.2 The hot scratch, byte by byte
 
@@ -1617,8 +1629,21 @@ A dedicated pinned claim, header-declared (§2.2), one grid per app in v1
 | +16 | rows×cols×4 | the dense cell array, row-major, 4 bytes/cell |
 | then | to claim end | the pool: bump-allocated, never freed |
 
-Cell record: kind byte, flags byte (bit 0 CIRC, bit 1 row-dirty mirror),
-payload word.
+Cell record: kind byte, flags byte, payload word.
+
+| bit | name | meaning |
+|---|---|---|
+| 0 | `CELLF_CIRC` | §5.5's circular marker; the cell displays `#CIRC` |
+| 1 | `CELLF_DIRTY` | the row-dirty mirror (§5.5.1) |
+| 2 | `CELLF_ERR` | **the cached value IS the error value** (§5.2); the cell displays `#DIV0` |
+| 3–7 | — | 0 |
+
+Bit 2 is named here because it cannot be inferred: FX's error is not a
+number, every one of the 2³² bit patterns of a 16.16 slot is a legal value,
+and a cached dword therefore cannot carry "this is `#DIV0`" in itself. An
+implementation that reserved a sentinel value instead would make one real
+number un-storable and would disagree with the model on the first sheet that
+computed it.
 
 | kind | meaning | payload |
 |---|---|---|

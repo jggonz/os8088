@@ -37,6 +37,12 @@
 ;   3. the error rows: the ones that stop must stop with 10.6.1's code AND
 ;      leave the globals the model leaves - `divide by zero.` after two
 ;      assignments is two assignments, not none;
+;   6. the FX VM (WEAVE-SPEC 12.1.2): every expression in
+;      tests/weave/fxcorpus/, evaluated over a WEAVE-SPEC 5.6 cell store the
+;      MODEL wrote, against the model's own 16.16 answer. The second core
+;      gets the same treatment as the first, and 13.1's wave 4 is gated on
+;      it BEFORE the grid is wired to it - an interpreter diffed after its
+;      component is built reports its defects as widget defects;
 ;   4. the RING's overflow policy (4.9) against the model's own Ring - the
 ;      coalesce-in-place / collapse-to-the-back distinction 4.9 pins, which is
 ;      invisible in any single-event test;
@@ -56,6 +62,8 @@ SEG_STACK   equ 0x1000          ; SS, and SS != DS is the whole point
 SEG_KERNEL  equ 0x3000          ; the ES sentinel: it must come back intact
 SEG_VM      equ 0x4000          ; the VM claim (WEAVE-SPEC 4.7)
 SEG_SAVE    equ 0x5000          ; where wvm_save writes the image we compare
+SEG_GRID    equ 0x6000          ; ...and the FX rows' grid claim (WEAVE-SPEC
+                                ; 5.6), built from the model's own bytes
 VM_BYTES    equ 16384           ; 2.2's default ask
 IMG_SECTORS equ 64              ; 32KB, and it is a CEILING and not a choice:
                                 ; stage 1 loads with ES = 0 and a 16-bit BX,
@@ -137,7 +145,7 @@ body:
     xor si, si                  ; SI = the row index
 .case:
     cmp si, WVC_N
-    jae .rings
+    jae .fxs
     mov word [budget], 256
     call runcase
     mov [r1], ax
@@ -149,6 +157,19 @@ body:
     call verdict
     inc si
     jmp .case
+
+    ; --- 6: the FX VM, over a cell store the model wrote (12.1.2) -----------
+.fxs:
+    mov si, msg_fx
+    call puts
+    xor si, si
+.fx:
+    cmp si, FXC_N
+    jae .rings
+    call runfx
+    call verdict
+    inc si
+    jmp .fx
 
     ; --- 4: the ring policy --------------------------------------------------
 .rings:
@@ -518,6 +539,118 @@ runring:
     ret
 
 ; =============================================================================
+; ONE FX CASE (WEAVE-SPEC 12.1.2)
+; in:  SI = the row index.  out: AX = 1 it agreed with the model, 0 it did not
+;
+; The cell store is copied into a claim of its own and wfx_bind is pointed at
+; it, so what runs is the SHIPPING reader over WEAVE-SPEC 5.6's own bytes -
+; the RPN stream stays in our segment, which is the kind-6 case (a formula the
+; resident compiler wrote into the pool) addressed from somewhere else.
+; =============================================================================
+runfx:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov ax, si
+    mov cx, FXC_ROW
+    mul cx
+    mov bx, ax
+    add bx, fxc_tab
+    mov ax, [bx]
+    mov [nameptr], ax
+    mov ax, [bx+20]
+    mov [negrow], ax
+    mov ax, [bx+2]
+    mov [f_store], ax
+    mov ax, [bx+4]
+    mov [f_slen], ax
+    mov ax, [bx+6]
+    mov [f_cols], ax
+    mov ax, [bx+8]
+    mov [f_rows], ax
+    mov ax, [bx+10]
+    mov [f_rpn], ax
+    mov ax, [bx+12]
+    mov [f_rlen], ax
+    mov ax, [bx+14]
+    mov [f_type], ax
+    mov ax, [bx+16]
+    mov [f_lo], ax
+    mov ax, [bx+18]
+    mov [f_hi], ax
+
+    ; the store into the claim, byte by byte - no string instruction, so the
+    ; direction flag the discipline check asserts about cannot be this file's
+    mov si, [f_store]
+    mov cx, [f_slen]
+    xor di, di
+    push es
+    mov ax, SEG_GRID
+    mov es, ax
+.cp:
+    jcxz .bound
+    mov al, [si]
+    mov [es:di], al
+    inc si
+    inc di
+    dec cx
+    jmp short .cp
+.bound:
+    pop es
+
+    push word [f_rows]
+    push word [f_cols]
+    mov ax, SEG_GRID
+    push ax
+    call _wfx_bind
+    add sp, 6
+
+    mov ax, fxout
+    push ax
+    push word [f_rlen]
+    push word [f_rpn]
+    xor ax, ax                  ; the RPN's segment: ours, which is 0 here
+    push ax
+    call _wfx_eval
+    add sp, 8
+    or ax, ax
+    jle .no                     ; -1 malformed, or no ops at all
+    mov ax, [fxout]
+    cmp ax, [f_type]
+    jne .no
+    cmp ax, 2
+    je .ok                      ; the error value carries no number
+    mov ax, [fxout+2]
+    cmp ax, [f_lo]
+    jne .no
+    mov ax, [fxout+4]
+    cmp ax, [f_hi]
+    jne .no
+.ok:
+    mov ax, 1
+    jmp short .out
+.no:
+    xor ax, ax
+.out:
+    push ax
+    xor ax, ax                  ; unbind, so a later row cannot read this
+    push ax                     ; row's store by accident
+    push ax
+    push ax
+    call _wfx_bind
+    add sp, 6
+    pop ax
+    call discipline
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; =============================================================================
 ; 5: THE DISCIPLINE CHECK - ES, DF and the stack, after every call out
 ; A routine that left ES on the claim would write into the kernel on a real
 ; machine and NOT fault (LESSONS.md 4); a routine that left DF set would run
@@ -608,8 +741,9 @@ putdec:
     ret
 
 section .data
-msg_hello: db 'weavevm: the WJS VM in raw QEMU, SS != DS', 13, 10, 0
+msg_hello: db 'weavevm: the WJS and FX cores in raw QEMU, SS != DS', 13, 10, 0
 msg_ring:  db 13, 10, 'ring: ', 0
+msg_fx:    db 13, 10, 'fx: ', 0
 msg_tail:  db ' failures - weavevm OK', 13, 10, 0
 msg_bad:   db ' FAILURES in weavevm', 13, 10, 0
 msg_nl:    db 13, 10, 0
@@ -622,6 +756,7 @@ msg_nl:    db 13, 10, 0
 ; about wdraw.inc's OS88LINE_SZ, and for the same reason).
 section .text
 %include "wvm.inc"
+%include "wfx.inc"
 
 section .bss
 budget:   resw 1
@@ -641,6 +776,16 @@ c_explen: resw 1
 c_err:    resw 1
 rec:      resw 4
 nblk:     resw WN_SIZE / 2
+f_store:  resw 1
+f_slen:   resw 1
+f_cols:   resw 1
+f_rows:   resw 1
+f_rpn:    resw 1
+f_rlen:   resw 1
+f_type:   resw 1
+f_lo:     resw 1
+f_hi:     resw 1
+fxout:    resw 3
 
 section .text
 
@@ -658,4 +803,5 @@ wvm_native:
 ; --- THE CORPUS, GENERATED (WEAVE-SPEC 12.1.1) ------------------------------
 section .rodata
 %include "weavevmcorp.inc"
+%include "weavefxcorp.inc"
 section .text
