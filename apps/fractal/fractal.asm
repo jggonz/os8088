@@ -639,6 +639,60 @@ fr_nowork:
     ret
 
 ; -----------------------------------------------------------------------------
+; fr_promise - "the picture has stopped moving" / "it is being drawn"
+; in:  [fr_pass], [fr_win]; THE GFX LOCK HELD BY THE CALLER
+; out: nothing (every register and the flags preserved)
+;
+; SPEC.md 40.4, which is SPEC.md 11.96.1's promise answered per FRAME.
+;
+; This app is the disqualifier in its purest form while it renders - the
+; worker emits a band a row and goes on doing it with the window buried,
+; because fr_emit_body only makes the PAINTING conditional on visibility and
+; caches and steps regardless (that is what makes uncovering cheap) - and it
+; is the flattest window in the tree once the frame lands. Pass 3 is the
+; whole distinction: at pass 3 the worker takes .idle and sleeps, arming no
+; clip and touching no pixel until a menu command or a repaint moves it.
+;
+; So the promise is [fr_pass] >= 3, and the three sites below are every place
+; that word changes under a lock: fr_kick resets it to 0, fr_redraw
+; republishes a resume point, and fr_advance steps it - the last of which is
+; the only one that can ever reach 3.
+;
+; NO DEPTH CLAIM (SPEC.md 11.96.17): the canvas is sixteen colours by
+; construction - fr_emit_body sets the pen per run from the palette - so a
+; two-colour claim would be a lie. It does not need one: a 322x199 window is
+; 320x180 of content and 30,254 bytes at four planes, inside wm_su_kb's
+; 64,512 ceiling with room over.
+;
+; THE LOCK IS A CONDITION, NOT POLITENESS (SPEC.md 20.6 rule 7): the clear
+; frees the raise cache, so a worker calling it outside a hold could free a
+; buffer the UI task is blitting out of. The one worker-side site is inside
+; fr_emit_body's hold.
+;
+; The window pointer comes from [fr_win] and not from whatever BX holds -
+; SPEC.md 11.96.11.4, where a screen HEIGHT reached the kernel as a window
+; record and set a bit inside the API jump table.
+; -----------------------------------------------------------------------------
+fr_promise:
+    pushf
+    push ax
+    push bx
+    mov bx, [fr_win]
+    or bx, bx                       ; before wm_create, and after a refused
+    jz .out                         ; one: nothing to promise about
+    xor al, al                      ; still rendering: withdraw, and wm_saveu
+    cmp word [fr_pass], 3           ; drops any cache made under the last
+    jb .say                         ; promise with it
+    mov al, OSAPI_SAVEU_ON
+.say:
+    call OSAPI_WM_SAVEU
+.out:
+    pop bx
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
 ; fr_kick - UI-side restart: recompute the geometry, reset the state machine,
 ;           clear the canvas, redraw the status strip, ask the worker to
 ;           start over
@@ -668,6 +722,7 @@ fr_kick:
     mov word [fr_prog], 0
     mov byte [fr_pct], 0
     mov word [fr_restart], 1
+    call fr_promise             ; back to pass 0: the picture is moving again
     call fr_clear
     call fr_status
     call fr_hire
@@ -730,6 +785,8 @@ fr_redraw:
     mov ax, [fr_cnrow]
     mov [fr_prog], ax
     mov word [fr_restart], 2        ; 2 = resume, not restart
+    call fr_promise                 ; ...and a resume is rendering, whatever
+                                    ; the cache put back here (SPEC.md 40.4)
     call fr_pctcalc                 ; the WHOLE strip, with the RESUMED number
     mov [fr_pct], al                ; rather than 0% - wm_paint_all has just
     call fr_status                   ; white-filled it, so every field is owed.
@@ -1702,7 +1759,11 @@ fr_emit_body:
                                     ; machine here, under the same lock hold
                                     ; and the same restart check that decided
                                     ; it was ours to consume
-.out:
+    cmp word [fr_pass], 3           ; ...and THAT was the last row: the frame
+    jb .out                         ; is complete, so the picture stands still
+    call fr_promise                 ; and can be banked (SPEC.md 40.4). Fires
+                                    ; once a frame - the worker takes .idle
+.out:                               ; from here and emits nothing more
     pop di
     pop si
     pop dx

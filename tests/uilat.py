@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """How long does a click take to be ACTED ON while a worker draws? (SPEC.md 7.3)
 
-    make wiredisk && python3 tests/uilat.py [--machine os8088_5150_cga]
+    make wiredisk && python3 tests/uilat.py [--machine os8088_5150_cga_gla]
 
 WIREFRAME DOES NOT SHIP (SPEC.md 78.9), so `make wiredisk` is what puts
 WIRE.O88 on a floppy for this to open. `make` alone still builds the
@@ -24,6 +24,13 @@ THE GATE is SPEC.md 7.3's regression: before the lock handover this click cost
 1,382-14,722 ms with apps/wire drawing, and 37-70 ms after. UILAT_MAX is set
 well above the latter and far below the former, so the row fails loudly if the
 handover is lost and does not flake on the spread.
+
+**ON THE GLaBIOS TWIN**, `os8088_5150_herc_gla`, because `os8088_5150_herc`
+wants the IBM ROM this repo cannot ship. Checked with that ROM dropped in
+beside GLaBIOS: PASS on both, idle desktop 2 ms on both, and the wire legs
+overlap - 14/24/174 ms against 41/60/66 edge-at-a-time, 32/78/21 against
+29/25/56 whole-figure. The within-machine spread swamps any difference between
+them, which is why the budget is 500 ms and not a figure.
 """
 import argparse
 import os
@@ -80,7 +87,7 @@ def report(label, got):
 
 def main(argv):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--machine", default="os8088_5150_herc")
+    ap.add_argument("--machine", default="os8088_5150_herc_gla")
     ap.add_argument("--image", default="build/os8088-360.img")
     ap.add_argument("--apps", default="build/wire360.img")
     a = ap.parse_args(argv)

@@ -36,7 +36,6 @@ thinks it is on this layout.
 """
 import argparse
 import os
-import subprocess
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -70,9 +69,8 @@ def main(argv):
     ap.add_argument("--apps", default="build/npdisk.img")
     a = ap.parse_args(argv)
 
-    if not os.path.exists(a.apps):
-        subprocess.check_call([sys.executable, "tools/os88disk.py", "-o",
-                               a.apps, "--size", "360", "build/notepad.o88"])
+    if a.apps == "build/npdisk.img":
+        os88marty.scratch_disk(a.apps, "build/notepad.o88")
 
     fail = []
     say = lambda s: print("  " + s)

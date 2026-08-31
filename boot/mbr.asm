@@ -34,7 +34,9 @@
 ; tested on its own. It is set anyway, because other people's boot sectors
 ; expect it and a disk this tool partitions should chain-load them too:
 ;
-;   DL    = the BIOS drive number, untouched from what we were given
+;   DL    = the BIOS drive number, as we read it - clamped to 0x80 or
+;           above first, because a ROM that never set it leaves whatever
+;           was in the register (SPEC.md 2.9.11)
 ;   DS:SI = the 16-byte partition entry we booted
 ;
 ; Two failures print and halt rather than falling through into whatever
@@ -66,6 +68,23 @@ entry:
     mov sp, LOAD_AT             ; a stack below the address we are clearing
     cld
     sti
+
+    ; --- WHICH DRIVE DID WE COME FROM? (SPEC.md 2.9.11) ---------------------
+    ; The same question boot/boot.asm asks, and the same ROM gets it wrong: a
+    ; BIOS that does not set DL at the boot jump leaves whatever was in the
+    ; register, and every int 13h after that names a unit that is not there.
+    ; It cost the floppy path `Disk error` on a Packard Bell 286 for the life
+    ; of this repository (docs/FIELD-NOTES.md 36); there is no reason to think
+    ; such a ROM sets DL for a hard disk and not for a floppy.
+    ;
+    ; An MBR is only ever on a fixed disk, so DL below 0x80 is not a unit this
+    ; sector can have come from and 0x80 is the only guess. It covers
+    ; boot/boothd.asm too, which takes the drive from us and is 25 bytes from
+    ; full - the clamp lives HERE, once, rather than in both.
+    cmp dl, 0x80
+    jae .dlok
+    mov dl, 0x80
+.dlok:
 
     ; --- move ourselves to 0000:0600 ----------------------------------------
     ; Nothing above this line touches a label, so it runs correctly at the
@@ -137,8 +156,9 @@ moved:
     cmp word [LOAD_AT + 510], 0xAA55
     jne .nosig
 
-    ; DL is still the BIOS drive - nothing above changed it - and SI still
-    ; points at the entry we chose.
+    ; DL is still the drive we read with - the clamp at `entry` is the only
+    ; thing that has touched it, and it ran before our own first int 13h - and
+    ; SI still points at the entry we chose.
     jmp 0x0000:LOAD_AT
 
 .nosig:

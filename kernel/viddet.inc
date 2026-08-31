@@ -710,6 +710,14 @@ vid_setmode:
     push di
     push bp
     push es
+    inc byte [spl_busy]         ; SPEC.md 15.3.8.3's lock, and the one entry on
+                                ; that list which is not splash code: for part
+                                ; of what follows [vid_seg] does not describe
+                                ; the mode the card is in, so a loading-screen
+                                ; frame arriving from IRQ0 would write its box
+                                ; at an address that is not the framebuffer.
+                                ; It is a COUNTER because this nests - spl_tick
+                                ; reaches here through spl_chrome
     cmp byte [vid_kind], VID_HERC
     je .herc
     call vid_cga_equip          ; EITHER COLOUR CARD, NOT JUST THE CGA (SPEC.md
@@ -854,6 +862,7 @@ vid_setmode:
     mov al, 0x0A                ; framebuffer that is already black
     out dx, al
 .done:
+    dec byte [spl_busy]         ; ...and the card describes itself again
     pop es
     pop bp
     pop di
@@ -1138,8 +1147,38 @@ spw_gfx_rowbase:  call gfx_rowbase
                   retf
 spw_resident_end:
 
-; ...and the ONE BYTE of splash.inc that could not go with it. viddet's mode
-; guard, fprog's boot test and vidsel's spl_reset all ask it through DS, so it
-; lives where DS reaches it. 967 bytes left; this stayed.
+; ...and the THREE BYTES of splash.inc that could not go with it. viddet's mode
+; guard, fprog's boot test and vidsel's spl_reset all ask [spl_live] through
+; DS, so it lives where DS reaches it. 967 bytes left; these stayed.
 spl_live    db 0
+
+; [spl_busy] IS THE LOADING SCREEN'S ONE LOCK (SPEC.md 15.3.8). It is raised
+; around every path that draws while [spl_live] is up, and spl_isr - which
+; fires from IRQ0 in the middle of a BIOS disk call - refuses the tick unless
+; it is clear, then raises it itself for the duration of its own frame. So the
+; same byte is the main line's "I am drawing" and the interrupt's re-entrancy
+; lock, and there is one rule rather than two.
+;
+; It is HERE and not beside the rest of splash.inc's state for spl_live's
+; reason and one more: vid_setmode raises it, and that is kernel `.text` which
+; cannot reach a `.boot2` byte through DS. What it guards is not the pixels -
+; the animation writes its own box and nothing else does - it is the VGA's
+; GRAPHICS CONTROLLER. spl_bitmask arms the Bit Mask and restores it, and
+; font_run programs the write mode and the Map Mask; an opaque `rep movsb`
+; landing between one of those and its restore draws through somebody else's
+; mask, which is a defect no emulator run would repeat twice the same way.
+spl_busy    db 0
+
+; [spl_quiet] IS THE THIRD, and it is here for spl_busy's second reason
+; (SPEC.md 15.3.3.1, 15.3.8.2). It was a `.boot2` byte read `cs:`, which was
+; right while spl_paint was its only reader - and then 15.3.8 gave the
+; animation to IRQ0, where BOTH handlers are kernel `.text` and `cs:` names
+; the KERNEL segment rather than the blob. So the flag stopped reaching the
+; only two callers that could still spend the 28.7 ms it exists to refuse:
+; spl_stepq raised it, mouse_init's identify window ran, and the interrupt
+; drew the spinner straight through it. An 8250 holds ONE byte and a
+; 1200-baud 7N1 frame is 7.5 ms, so that is three bytes of the burst 9.4
+; exists to capture - a mouse that is on the wire and not detected, which is
+; PERFORMANCE.md's input overrun and is invisible in an emulator.
+spl_quiet   db 0
 

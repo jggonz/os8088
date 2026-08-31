@@ -19,6 +19,7 @@ Read first: [§11 wm.inc — windows](../SPEC.md#11-wminc-windows); [§20 Loadab
 | `0x0090` | `OSAPI_WM_FRONT` | BX=win ptr |
 | `0x0098` | `OSAPI_WM_CONTENT` | BX=win ptr; out AX=content left, DX=top |
 | `0x00A0` | `OSAPI_WM_OBSCURED` | BX=win ptr; out CF=1 if covered - which INCLUDES your window being hidden, so a worker gating a draw on this needs no visibility test of its own... |
+| `0x04E0` | `OSAPI_WM_OWNSEG` | AL = a window slot; out CF=1 no live window in that slot, else CF=0 and DX = the owning segment... |
 | `0x0108` | `OSAPI_WM_SIZABLE` | BX=win ptr, AL = 0 clear / non-zero set WF_SIZABLE; call from the entry proc after OSAPI_WM_CREATE... |
 | `0x0118` | `OSAPI_WM_GROW` | BX=win ptr; caller holds the gfx lock. A resizable window's self-initiated content repaint must END with this: the white-fill idiom erases the grow... |
 | `0x0170` | `OSAPI_WM_CLIP_SET` | BX = YOUR window ptr; the gfx lock must be HELD. out CF = 1: not one pixel of your content is visible... |
@@ -38,7 +39,7 @@ Read first: [§11 wm.inc — windows](../SPEC.md#11-wminc-windows); [§20 Loadab
 | `0x03D0` | `OSAPI_WM_CURSOR` | BX = your window ptr, AL = OSAPI_CUR_*. The pointer wears it over your window's CONTENT and nowhere else... |
 | `0x03B0` | `OSAPI_WM_DAMAGE` | BX = your window ptr, called from inside your own W_PAINT... |
 | `0x03A8` | `OSAPI_WM_OWNBG` | BX = window ptr, AL = 0 clear / non-0 set. "I paint EVERY PIXEL of my content myself", so the kernel's white fill in front of W_PAINT is skipped... |
-| `0x0378` | `OSAPI_WM_SAVEU` | BX = window ptr, AL = 0 clear / non-0 set. A PROMISE: this window's content does not change while it is not drawing, so a raise may put its old... |
+| `0x0378` | `OSAPI_WM_SAVEU` | BX = window ptr, AL = 0 clear / OSAPI_SAVEU_* set. A PROMISE: this window's content does not change while it is not drawing, so a raise may put its... |
 | `0x01F0` | `OSAPI_WM_ONMOUSEUP` | BX = win ptr, AX = a near proc in YOUR segment (0 clears it): the RELEASE half of a content click (SPEC.md 13.7)... |
 | `0x0490` | `OSAPI_WM_ONRCLICK` | BX = win ptr, AX = a near proc in YOUR segment (0 clears it): the RIGHT button, pressed in your content (SPEC.md 13.11)... |
 | `0x03D8` | `OSAPI_WM_ONRESIZE` | BX = win ptr, AX = a near proc in YOUR segment (0 clears it): "your content box CHANGED, and you did not ask" (SPEC.md 11.98)... |
@@ -81,6 +82,7 @@ Read first: [§5 vga12.inc](../SPEC.md#5-vga12inc); [§32 softgfx.inc — the so
 | `0x00C0` | `OSAPI_SET_COLOR` | AL -> [gfx_color] |
 | `0x01F8` | `OSAPI_GFX_SCROLL` | move a rect's contents up or down instead of redrawing them (SPEC.md 5.5): AX/BX/CX/DX = x1/y1/x2/y2 inclusive ABSOLUTE screen coords, SI = signed... |
 | `0x04C0` | `OSAPI_GFX_BLITP` | ES:SI = plane 0's first row, DI = the step to the next plane, BP = the row stride inside one, AX = x (A MULTIPLE OF 8), BX = y, CX = width in pixels,... |
+| `0x04D8` | `OSAPI_GFX_SPANS` | AX = the y of the FIRST span, ES:SI = CX records of two words each, x1 then x2, both INCLUSIVE; CX = rows, row n being y+n... |
 | `0x01D8` | `OSAPI_GFX_BLIT4` | ES:SI = packed 4bpp pixels (two per byte, high nibble leftmost), BP = source stride in BYTES, AX/BX = destination x/y, CX/DX = width/height in... |
 | `0x0418` | `OSAPI_GFX_BLIT1` | ES:SI = a 1bpp BAND in the framebuffer's own bit order (row-major, bit 7 leftmost, 1 = a LIT pixel), BP = its stride in BYTES per row, AX =... |
 | `0x02B0` | `OSAPI_GFX_FILL_PAT` | AX/BX/CX/DX = the rect, SI = 8 pattern bytes in YOUR segment: row y takes byte [SI + (y & 7)], a set bit is WHITE and bit 7 is the leftmost pixel of... |
@@ -222,6 +224,7 @@ Read first: [§53 fsx.inc — fullscreen exclusive](../SPEC.md#53-fsxinc-fullscr
 | `0x02C8` | `OSAPI_FSX_RUN` | the bracket (SPEC.md 53.1). In AX = a near proc in your image, BX = your window ptr, CX = flags (bit 0 = FSXF_KEEPWORKER... |
 | `0x02D0` | `OSAPI_FSX_MODE` | in AL = FSXM_*, ES:DI = an FSI_SIZE buffer of yours (set ES = DS). Bracket-only... |
 | `0x02D8` | `OSAPI_FSX_WAIT` | in AL = FSXW_TICK (0) the next tick / FSXW_VSYNC (1) vertical retrace (bounded... |
+| `0x04E8` | `OSAPI_FSX_PAGE` | AL = a page index; out CF=1 refused. SHOW that page, and wait for the vertical retrace that latches it... |
 | `0x03F8` | `OSAPI_FSX_SURF` | THE RECT YOUR BRACKET OWNS (SPEC.md 53.7.1). No inputs... |
 
 ### Randomness and maths
@@ -291,6 +294,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | SHEET | `apps/sheet/sheet.asm` | §81 |
 | SOLITAIRE | `apps/solitaire/solitaire.asm` | §43 |
 | TAMEGRAM | `apps/tamegram/tamegram.asm` | §49 |
+| TANK | `apps/tank/tank.asm` | §85 |
 | TELNET | `apps/telnet/telnet.asm` | §70 |
 | TEXPAD | `apps/texpad/texpad.asm` | §69 |
 | TRACKER | `apps/tracker/tracker.asm` | §45 |
@@ -386,12 +390,13 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 82 | CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`) |
 | 83 | Text input for packages (`apps/os88line.inc`, `apps/os88text.inc`) |
 | 84 | Software floating point (`apps/os88fp.inc`) |
+| 85 | TANK ATTACK — a wireframe tank duel in a foreign mode (`apps/tank/`) |
 
 ## docs/
 
 **`*-PLAN.md` files are DESIGN RECORDS, not descriptions of what shipped.** They record what was considered, including options that were rejected. SPEC.md is the current state; these are how it got there.
 
-*Design records (38):* `ASSOC-PLAN.md`, `BROWSER-PLAN.md`, `C64-PORT-PLAN.md`, `CURSOR-PLAN.md`, `DBLCLICK-PLAN.md`, `DEBUG-PLAN.md`, `DISK-PERF-PLAN.md`, `DUAL-DISPLAY-PLAN.md`, `FROTZ-PLAN.md`, `FSX-PLAN.md`, `GFX-REWORK-PLAN.md`, `HDD-PLAN.md`, `HDD-SPLIT-PLAN.md`, `HEAP-COMPACTION-PLAN.md`, `KERN-SPLIT-PLAN.md`, `LINE-PERF-PLAN.md`, `MEMORY-PLAN.md`, `MOUSEUP-PLAN.md`, `NET-PLAN.md`, `NET-STACK-PLAN.md`, `ONDEMAND-PLAN.md`, `PROXY-PLAN.md`, `RUNCPM-PORT-PLAN.md`, `SCHED-IDLE-PLAN.md`, `SNAP-PLAN.md`, `SNAPSHOT-PLAN.md`, `SOUND-PLAN.md`, `TEXT-PLAN.md`, `TITLE-PLAN.md`, `TOAST-PLAN.md`, `TRACKER-PLAN.md`, `UIHELPERS-PLAN.md`, `WEAVE-PLAN.md`, `WINDOW-ANIM-PLAN.md`, `WINDOW-SIZING-PLAN.md`, `WMEVENT-PLAN.md`, `WORD-PLAN.md`, `XMEM-DRIVER-PLAN.md`
+*Design records (42):* `ASSOC-PLAN.md`, `BOOT-PERF-PLAN.md`, `BROWSER-PLAN.md`, `C64-PORT-PLAN.md`, `CURSOR-PLAN.md`, `DBLCLICK-PLAN.md`, `DEBUG-PLAN.md`, `DISK-PERF-PLAN.md`, `DUAL-DISPLAY-PLAN.md`, `FROTZ-PLAN.md`, `FSX-PLAN.md`, `GFX-FSX-PLAN.md`, `GFX-REWORK-PLAN.md`, `HDD-PLAN.md`, `HDD-SPLIT-PLAN.md`, `HEAP-COMPACTION-PLAN.md`, `KERN-SPLIT-PLAN.md`, `LINE-PERF-PLAN.md`, `MEMORY-PLAN.md`, `MOUSEUP-PLAN.md`, `NET-PLAN.md`, `NET-STACK-PLAN.md`, `ONDEMAND-PLAN.md`, `PAINT-STROKE-PLAN.md`, `PROXY-PLAN.md`, `RUNCPM-PORT-PLAN.md`, `SAVEUNDER-LIVE-PLAN.md`, `SCHED-IDLE-PLAN.md`, `SNAP-PLAN.md`, `SNAPSHOT-PLAN.md`, `SOUND-PLAN.md`, `TEXT-PLAN.md`, `TITLE-PLAN.md`, `TOAST-PLAN.md`, `TRACKER-PLAN.md`, `UIHELPERS-PLAN.md`, `WEAVE-PLAN.md`, `WINDOW-ANIM-PLAN.md`, `WINDOW-SIZING-PLAN.md`, `WMEVENT-PLAN.md`, `WORD-PLAN.md`, `XMEM-DRIVER-PLAN.md`
 
 *Notes and reference (25):* `BIFF-NOTES.md`, `C-TOOLCHAIN.md`, `C64-SPEC.md`, `DUAL-DISPLAY-BUG2.md`, `DUAL-DISPLAY-VGA.md`, `FIELD-MACHINES.md`, `FIELD-NOTES.md`, `FTP-PERF.md`, `HANDOFF-DISK-IO.md`, `HANDOFF-REDRAW.md`, `HANDOFF-SOUND-MEMORY.md`, `HANDOFF.md`, `HEAP-CLAIMS.md`, `HERCULES-TESTING.md`, `KERNEL-MEMORY.md`, `LAST-DROP.md`, `LIVE-MEDIA.md`, `MARTYPC-DEBUG.md`, `NOTEPAD-NOTES.md`, `PAINT-NOTES.md`, `SETTINGS-COST.md`, `TESTING.md`, `UPSTREAM.md`, `WEAVE-SPEC.md`, `WM-ARTIFACTS.md`
 

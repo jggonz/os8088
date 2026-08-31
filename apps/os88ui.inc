@@ -409,7 +409,42 @@ os88ui_btn:
     sub dx, 8                   ; a glyph cell is 8 rows
     shr dx, 1
     add dx, [ds:bp+2]
+
+    ; --- OPAQUE WHERE THE INTERIOR IS OURS, transparent where it is not ----
+    ; SPEC.md 6.6's rule wants the run, and the one thing that stopped it is
+    ; above: a button with neither DOWN nor FILL never fills its interior, so
+    ; the ground under these cells belongs to whatever drew it and an opaque
+    ; run would repaint it. Every other shape DID fill - black for a pressed
+    ; button, white for a filled or a greyed-pressed one - so the paper is
+    ; known and the pair can be named.
+    ;
+    ; THE GREYED CASE NEEDS NOTHING HERE. font_run reads [gfx_dis] itself,
+    ; substitutes [gfx_disink] for the ink it was handed and lays SPEC.md 47
+    ; rule 1's checkerboard over the result - on EVERY adapter, which the
+    ; transparent path does only on a 1bpp one. That is what lets a window
+    ; declare its content two colours and still say which of its controls are
+    ; dead (SPEC.md 11.96.17.1).
+    test di, OS88UI_DOWN | OS88UI_FILL
+    jz .xparent
+    mov al, CBLACK              ; AL = ink, AH = paper (SPEC.md 6.1)
+    mov ah, CWHITE
+    test di, OS88UI_INK
+    jz .rdown
+    mov bx, di                  ; ...or the caller's, out of DI's high byte -
+    mov al, bh                  ; BX is free, BP having taken the rect
+.rdown:
+    test di, OS88UI_DOWN
+    jz .run
+    test di, OS88UI_DIS
+    jnz .run                    ; greyed outranks pressed and .fillw made the
+    mov al, CWHITE              ; interior WHITE, so the pair above stands
+    mov ah, CBLACK              ; pressed: white on the black fill
+.run:
+    UI_RUN
+    jmp short .lpen
+.xparent:
     UI_STR
+.lpen:
     clc
     UI_PEN                      ; ...and the pen back, always
     pop bp
@@ -1826,7 +1861,12 @@ os88ui_ask:
     mov byte [os88ui_adown], 0FFh
     mov ax, os88ui_aup
     call OSAPI_WM_ONMOUSEUP     ; the buttons fire on the RELEASE (SPEC.md
-    mov ax, os88ui_aclose       ; 13.6), and the close box is intercepted
+    mov ax, os88ui_adrag        ; 13.6), they TRACK between the press and it
+    call OSAPI_WM_ONDRAG        ; (SPEC.md 13.8.2/75.3.0 - CF = 1 on
+                                ; kern_small, which installs nothing and
+                                ; degrades to the release re-testing the
+                                ; button under it), and the close box is
+    mov ax, os88ui_aclose       ; intercepted
     call OSAPI_WM_ONCLOSE       ; (SPEC.md 75.1) so it can be the CANCEL
     mov [os88ui_awin], bx       ; take the gate LAST: until this store the
     call OSAPI_WM_SHOW          ; window is an ordinary one
@@ -1972,20 +2012,46 @@ os88ui_arect:
 ; -----------------------------------------------------------------------------
 os88ui_abtns:
     push ax
+    push cx
+    call os88ui_aset_p          ; CX = the count (SI is spent)
+    xor al, al
+.next:
+    call os88ui_abtn1
+    inc al
+    loop .next
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; os88ui_abtn1 - draw ONE button (internal)
+; in:  AL = its index; an index that is not a button draws nothing, which is
+;      what lets os88ui_adn hand it 0xFF for "none was down"
+; out: nothing; preserves all registers
+;
+; SPEC.md 75.3.0: os88ui_adn used to redraw the whole ROW for a state change
+; that can only ever touch two buttons, which on OS88UI_ASAVE is three lettered
+; where one was needed - PERFORMANCE.md rule 1, in the control every package's
+; dialog goes through.
+; -----------------------------------------------------------------------------
+os88ui_abtn1:
+    push ax
     push bx
     push cx
     push dx
     push si
     push di
     call os88ui_aset_p          ; SI -> the labels, CX = the count
-    xor dx, dx                  ; DX = the index
-.next:
-    push cx
-    push si
-    mov ax, dx
-    call os88ui_arect           ; BX -> the rect
+    cmp al, cl
+    jae .out                    ; not a button: 0xFF arrives here every press
+    mov dl, al
+    xor dh, dh
+    mov di, dx
+    add di, di
+    add si, di                  ; SI -> this button's label pointer
+    call os88ui_arect           ; BX -> the rect (AX is still the index)
     mov di, OS88UI_FILL
-    or dx, dx
+    or dl, dl
     jnz .nodef
     or di, OS88UI_DEF           ; button 0 carries the ring, and Enter fires
 .nodef:                         ; it - one fact, drawn and acted on from the
@@ -1995,11 +2061,7 @@ os88ui_abtns:
 .nodown:                        ; XOR-ed (SPEC.md 13.8)
     mov si, [si]
     call os88ui_btn
-    pop si
-    add si, 2
-    inc dx
-    pop cx
-    loop .next
+.out:
     pop di
     pop si
     pop dx
@@ -2110,8 +2172,13 @@ os88ui_adn:
                                 ; the whitespace between buttons - answered 0,
                                 ; wrote the same 0xFF back and re-lettered the
                                 ; whole row for nothing (PERFORMANCE.md rule 1)
-    mov [os88ui_adown], al
-    call os88ui_abtns
+    mov ah, [os88ui_adown]      ; the one that WAS down...
+    mov [os88ui_adown], al      ; ...and the state first, because os88ui_abtn1
+    push ax                     ; reads it to decide the pressed look
+    mov al, ah
+    call os88ui_abtn1           ; upright again
+    pop ax
+    call os88ui_abtn1           ; ...and the one that is down now
 .out:
     pop ax
     ret
@@ -2128,15 +2195,49 @@ os88ui_aclick:
     pop ax
     ret
 
+; os88ui_adrag - W_ONDRAG: the pointer moved while a press is armed
+; in:  CX = x, DX = y, SI = the alert window; gfx lock held
+;
+; **IT READS THE ARM** (SPEC.md 75.3.0, 13.8.2), through os88ui_armed's PEEK
+; rather than os88ui_fire's take - which is the distinction that routine's own
+; header exists to make. What it buys is the armed button going back UP as the
+; pointer slides off it, which is what says the gesture is cancelled before the
+; finger commits.
+;
+; Written as "os88ui_aclick without the arm" it pressed whatever the pointer
+; happened to be over, armed or not - and a press that started on the alert's
+; MESSAGE arms nothing, so the release took os88ui_aup's `jz .out` and never
+; put it back up. One drag across an alert left a button drawn pressed for as
+; long as the alert stood.
+os88ui_adrag:
+    push ax
+    push bx
+    call os88ui_armed           ; PEEK: the arm is the RELEASE's to spend
+    or ax, ax
+    jz .out                     ; the press armed nothing: track nothing
+    mov bx, ax
+    call os88ui_ahit            ; AX = the button under the pointer NOW
+    cmp ax, bx
+    je .set
+    xor ax, ax                  ; off the armed one: nothing is down
+.set:
+    call os88ui_adn             ; ...which draws only on a change
+.out:
+    pop bx
+    pop ax
+    ret
+
 os88ui_aup:
     push ax
     push di
     call os88ui_fire            ; AX = what the press armed, and it is CLEARED
-    or ax, ax
-    jz .out
     mov di, ax
     xor ax, ax
-    call os88ui_adn             ; upright again, whatever happens next
+    call os88ui_adn             ; UP FIRST, unconditionally: whatever is drawn
+                                ; pressed has to come up whether this release
+                                ; fires anything or not (SPEC.md 13.8.2)
+    or di, di
+    jz .out
     call os88ui_ahit            ; AX = the button under the RELEASE
     cmp ax, di
     jne .out                    ; a different button, or none: CANCELLED

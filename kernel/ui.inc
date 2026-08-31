@@ -643,6 +643,13 @@ ui_task:
     call mou_hotplug            ; a mouse plugged in after boot gets its
                                 ; reset edge (SPEC.md 9.4); one cmp per pass
                                 ; once any packet has ever arrived
+%ifdef MOU_DIAG
+    call mdg_tick               ; MOUDIAG=1 only: KEEP the table live (SPEC.md
+%endif                          ; 9.9.6). Its irq/pkt/b0 columns count what the
+                                ; USER does after the desktop is up, and drawn
+                                ; once at the end of kmain they would every one
+                                ; of them read zero on the machine the question
+                                ; is about
     call clk_tick               ; AL: bit0 = a second passed, bit1 = the bar
     mov bl, al                  ; text changed
     or al, al
@@ -1219,6 +1226,7 @@ ui_tdbl:
 ; below, so when neither coordinate changes the screen is already correct.
 ; -----------------------------------------------------------------------------
 ui_drag:
+    KFZ 26                      ; a title-bar drag
     mov [ui_dragwin], bx
     mov [ui_startx], cx         ; mousedown point = drag origin
     mov [ui_starty], dx
@@ -1419,6 +1427,15 @@ ui_drag:
                                 ; different branches and the merge of them
                                 ; assembled perfectly with the bank in the wrong
                                 ; place, which is what a merge is for catching
+
+%ifndef REDRAWFULL
+    mov ax, [ui_origx]          ; ...AND WHAT THE DROP IS ABOUT TO LAND ON
+    mov bx, [ui_origy]          ; (SPEC.md 11.96.16.2): banked here, judged
+    mov cx, [ui_dragw]          ; against the glass, which still shows this
+    mov dx, [ui_dragh]          ; window where it was. wm_rz_paint is the
+    mov si, [ui_dragwin]        ; funnel for every GEOMETRY change and a drag
+    call wm_dg_precover         ; is not one of them
+%endif
 
     ; It moved. Only two rects changed: the one it left and the one it now
     ; occupies - everything outside their union is still correct on screen,
@@ -1799,7 +1816,13 @@ ui_grow:
     jge .wok
     mov ax, WMIN_W
 .wok:
-    mov [ui_dragw], ax
+%ifndef NOSIZESNAP
+    push bx                     ; THE OUTLINE SNAPS TOO (SPEC.md 11.94.5), so
+    mov bx, [ui_dragwin]        ; the frame that lands is the frame the hand
+    call wm_snap_w              ; let go of - the release below already ends in
+    pop bx                      ; wm_snap_win, so without this the window would
+%endif                          ; jump up to 7px inside the rectangle on the
+    mov [ui_dragw], ax          ; glass. The grow box then steps 8px across
     mov ax, [mouse_y]
     sub ax, [ui_starty]
     add ax, [ui_origy]
@@ -1883,6 +1906,22 @@ ui_grow:
     mov dx, cx
     pop cx
 
+%ifndef NOSIZESNAP
+    mov ax, cx                  ; ...AND SNAPPED BEFORE THE ASK, not after it
+    call wm_snap_w              ; (SPEC.md 11.94.5): the two clamps above can
+    mov cx, ax                  ; each move an already-snapped outline off the
+%endif                          ; grid, and offering the window a width the
+                                ; kernel is about to take 7px off is not a
+                                ; negotiation. wm_snap_win below stays the
+                                ; backstop for one that answers with its own
+    mov ax, [bx + W_X]          ; SPEC.md 11.90.3: the rect BEFORE it changes,
+    mov [ui_rzx], ax            ; because the repaint at the bottom has to tell
+    mov ax, [bx + W_Y]          ; a pure SHRINK from anything else - and the
+    mov [ui_rzy], ax            ; record is rewritten between here and there by
+    mov ax, [bx + W_W]          ; wm_dock_snap, wm_land_fit and wm_snap_win,
+    mov [ui_rzw], ax            ; any of which can move the origin
+    mov ax, [bx + W_H]
+    mov [ui_rzh], ax
     call wm_ask_size            ; the window gets a say BEFORE the record
     mov [bx + W_W], cx          ; changes (SPEC.md 11.1): it answers with the
     mov [bx + W_H], dx          ; size it will take, per axis, and by then
@@ -1920,6 +1959,30 @@ ui_grow:
                                 ; and after the straddle fit for its reason
                                 ; (SPEC.md 39.11.2.1)
 
+    ; --- A PURE SHRINK OWES ITS CONTENT NOTHING (SPEC.md 11.90.3) ----------
+    ; Every pixel inside the new content rect is still what the application
+    ; drew: wm_dmg_gray clips the dither to the windows about to cover it and
+    ; wm_draw_win writes the frame whole. Armed HERE, while BX is still the
+    ; window and before the union arithmetic below spends it; AX is the old
+    ; last row and that comparison is still to come.
+    push ax
+    mov word [wm_dmg_rzwin], 0
+    mov ax, [bx + W_X]
+    cmp ax, [ui_rzx]
+    jne .norz                   ; the origin moved: the content went with it
+    mov ax, [bx + W_Y]
+    cmp ax, [ui_rzy]
+    jne .norz
+    mov ax, [bx + W_W]
+    cmp ax, [ui_rzw]
+    ja .norz                    ; wider: the new columns were never drawn
+    mov ax, [bx + W_H]
+    cmp ax, [ui_rzh]
+    ja .norz
+    mov [wm_dmg_rzwin], bx
+.norz:
+    pop ax
+
     ; Only the rect it had and the rect it has changed, so the repaint is
     ; their union: wm_paint_dmg's case, not wm_paint_all's (SPEC.md 11.91).
     ; Dragging a corner used to repaint every window on the screen.
@@ -1950,6 +2013,7 @@ ui_grow:
 .ux:
     mov bx, [bx + W_Y]          ; (the read completes before BX changes)
     call wm_paint_dmg           ; caller-held lock, per the wm contract
+    mov word [wm_dmg_rzwin], 0  ; a one-shot, and its life is that one call
     call gfx_unlock             ; NO second gfx_lock here - already held (§7)
     ret
 
@@ -2789,6 +2853,10 @@ ui_starty:  resw 1
 ui_origx:   resw 1              ; window frame position at drag start
 ui_origy:   resw 1
 ui_curx:    resw 1              ; where the outline currently sits
+ui_rzx:     resw 1              ; SPEC.md 11.90.3: the window's rect before
+ui_rzy:     resw 1              ; ui_grow's commit rewrote it, so the repaint
+ui_rzw:     resw 1              ; can tell a pure shrink from a move or a grow
+ui_rzh:     resw 1
 ui_cury:    resw 1
 ui_dragw:   resw 1              ; frame size, cached across the drag
 ui_dragh:   resw 1

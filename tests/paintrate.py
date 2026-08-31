@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Is apps/paint's brush stroke TICK-BOUND? (SPEC.md 42.8.1)
 
-    make && python3 tests/paintrate.py [--machine os8088_5150_cga]
+    make && python3 tests/paintrate.py [--machine os8088_5150_cga_gla]
 
 pt_stroke polls OSAPI_MOUSE, draws the segment, and waits. The wait it takes
 when the pointer is where it already was used to be pt_wait_tick - a spin to
@@ -17,6 +17,38 @@ to the digit - and 88 after. With THIS row's breakpoint and nudge schedule:
 83 before, 882 after. The absolute numbers differ because the two drive the
 pointer differently; the separation is an order of magnitude either way, which
 is what PAINTRATE_MIN sits in the middle of.
+
+**IT RUNS ON THE GLaBIOS TWIN**, `os8088_5150_herc_gla` - the same machine with
+one field changed (same Ibm5150v256K, same 640KB, same overlays, same Hercules
+MDA, same clock mode, `rom_set = "glabios_pc"`). It had to: `ibm5150_82_v4` is
+the reader's own dump of the 27 OCT 82 BIOS and this repo cannot ship it, so on
+a clean tree this row died inside `os88marty.launch` - "ROM set ibm5150_82_v4
+not found in ROM set map" - having never reached its subject at all.
+
+**AND THE SWAP IS MEASURED, NOT ARGUED.** With the IBM ROM dropped in beside
+GLaBIOS, three runs each, same build, same disk:
+
+    IBM 5150 82 v4     567   554   553   samples/s
+    GLaBIOS            666   570   591
+
+The two overlap. What the machines' own caveat covers is the DISK and part of
+the CGA path (tools/martypc/configs/os8088_machines.toml says which), and this
+window contains neither: it is WINDOW guest seconds off the guest's own cycle
+counter, opened after Paint is up and the button is already down, with no int
+13h in it and Hercules rather than a CGA on the bus. What turns in it is
+`pt_stroke`'s poll/draw/wait and the mouse ISR - os8088's own code, same 4.77
+MHz 8088, same PIT.
+
+**NEITHER MACHINE REPRODUCES THE 882 ABOVE**, and that is a finding rather than
+a rounding: 882 was taken on the IBM ROM machine and that machine now reads
+553-567. The row still passes with room - the floor is 300 and tick-bound is 83
+- so what drifted is the headroom, not the verdict, and the separation this
+asserts is intact. Do not quietly restate 882 as 558; if the stroke loop is
+meant to be where it was, the gap is the question.
+
+The spread also has a harness component. `hits` counts breakpoint stops, and
+those can be dropped when the host is loaded, so a busy machine reads LOW. That
+is one more reason this row asserts a separation and not a figure.
 
 WHAT THIS CANNOT DO is show you the curve. os88mouse's injection path costs
 ~0.51 guest seconds per report (SPEC.md 7.3.1), so a scripted circle is drawn
@@ -54,7 +86,7 @@ WINDOW = 4.0                    # guest seconds of stroke to measure over
 
 def main(argv):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--machine", default="os8088_5150_herc")
+    ap.add_argument("--machine", default="os8088_5150_herc_gla")
     ap.add_argument("--image", default="build/os8088-360.img")
     ap.add_argument("--apps", default="build/apps360.img")
     a = ap.parse_args(argv)

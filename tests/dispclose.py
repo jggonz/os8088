@@ -39,6 +39,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import os88geom                                            # noqa: E402
 import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
@@ -206,7 +207,10 @@ def main(argv):
         if ask is None:
             return report()
         ax, ay, aw, ah = dispcp.win_rect(m, S, ask)
-        check((aw, ah) == (288, 92),
+        # ...THROUGH SPEC.md 11.94.5's size snap, which rounds 288 to 290.
+        # A literal here reads as "that is not the alert", which is what this
+        # check exists to say and what it said the day the snap landed.
+        check((aw, ah) == (os88geom.snapw(288), 92),
               "the alert is os88ui_ask's window: %dx%d" % (aw, ah))
 
         # --- 3. a SECOND close click RAISES it (SPEC.md 75.3.1) --------------

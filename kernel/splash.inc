@@ -91,6 +91,17 @@ SPL_GC      equ 0x3CE           ; VGA Graphics Controller index port
 %%r:
 %endmacro
 
+; ...and the same three words read through CS, for SPEC.md 15.3.4's row loop -
+; the one place in this module that points DS at CS so the copy out of a
+; composed buffer can be a `rep movsb` instead of five instructions a byte.
+%macro SPL_NEXTROW_CS 0
+    add di, [cs:spl_radd]
+    test di, [cs:spl_rwbit]
+    jz %%r
+    add di, [cs:spl_rwfix]
+%%r:
+%endmacro
+
 ; The bar counts SECTORS, and the boot sector's read is not the last of them:
 ; kmain's tail mounts A:, reads SYSTEM.CFG and loads whatever it asks for,
 ; which on the 1.44MB system disk is thirteen more sectors before a pixel of
@@ -107,13 +118,36 @@ SPL_GC      equ 0x3CE           ; VGA Graphics Controller index port
 ; that has enabled the sound or disk driver spends twenty-seven more sectors
 ; here and the bar waits at 100% for them, which is what every boot used to
 ; do for all of it.
-SPL_POST    equ 16
+SPL_POST    equ 27           ; 13 mount + 3 kmain notches + 11 for the mouse
+                                ; wait, which charges a notch a TICK now
+                                ; (SPEC.md 15.3.3): MOU_RSTLOW + MOU_IDFLOOR is
+                                ; what a machine WITH a mouse spends, and a
+                                ; machine without one holds instead of jumping
 
 ; Spinner: "8088" as 19 stroke segments in a 104x40 box, screen-centred at
 ; x=320 with its top at SPL_TOP. The coin-flip transform only ever scales x
 ; about the box centre, so strokes stay horizontal/vertical after it.
 SPL_TOP     equ 118
 SPL_HALFW   equ 52
+
+; ...and its ANGLE is the wall clock (SPEC.md 15.3.6). It was [spl_done] & 15 -
+; the progress bar - and a boot notches that bar at three rates that differ
+; eighteen-fold: once per coalesced int 13h run in stage 2 (~430 ms), once per
+; SECTOR at the boot mount (~24 ms), once per system tick in the mouse wait.
+; The logo inherited all three and read as turning a little, stopping, and
+; turning further. The bar is SUPPOSED to move in fits and starts, because that
+; is the truth about the disk; the logo is not.
+;
+; One of the sixteen positions per 1 << SPL_SPINSH ticks, so a revolution is
+; 16 << SPL_SPINSH of them: at 2 that is four ticks a position, 64 a revolution
+; and 3.52 s of it at 18.2065 Hz.
+;
+; The value was picked off the FRAME rate - the spinner was composed ~29 times
+; in a boot, half a second apart - and 15.3.8 removed that constraint by moving
+; the animation onto IRQ0. Every one of the sixteen positions is drawn now, on
+; time, so this is a LOOK question with nothing mechanical left in it: 1 gives
+; 1.76 s a revolution and 0 gives 0.88, and all three are equally smooth.
+SPL_SPINSH  equ 2
 
 ; Dialog and bar geometry. The dialog is VGA-only and stays at its 640x480
 ; coordinates; the BAR is the one thing that draws on all three adapters, so
@@ -122,19 +156,35 @@ SPL_BAR_PX  equ 288             ; bar interior width in pixels
 SPL_BAR_Y   equ 264             ; bar interior top row on VGA - inside the
                                 ; trough spl_chrome draws at rows 262..281
 SPL_BAR_H   equ 16
+SPL_TTL_Y   equ 244             ; VGA's rows. Every COLUMN is the screen's
+SPL_PCT_Y   equ 308             ; centre plus a constant and so needs no
+SPL_DLG_T   equ 208             ; adapter of its own (SPEC.md 15.3.5.1); these
+SPL_DLG_B   equ 343             ; five are the vertical layout, and mono packs
+                                ; the same elements around the bar because
+                                ; VGA's 226-row block does not fit 200 rows
+SPL_TTLC    equ 17              ; the caption's cells, and the percentage's
+SPL_PCTC    equ 4
 
 ; -----------------------------------------------------------------------------
-; The three entries the KERNEL still reaches, and it reaches them FAR: the
+; The entries the KERNEL still reaches, and it reaches them FAR: the
 ; splash is in `.boot2` and the kernel is not (SPEC.md 2.9.4). Four bytes each,
 ; the boot overlay's ovl_* shape exactly, so every body below keeps its near
 ; `ret` and changed in no other way.
 ; -----------------------------------------------------------------------------
 splf_step:      call spl_step
                 retf
+splf_stepq:     call spl_stepq
+                retf
 splf_finish:    call spl_finish
                 retf
 splf_reset:     call spl_reset
                 retf
+splf_anim:      call spl_anim
+                retf            ; ...and SPEC.md 15.3.8.2's: sch_isr owns int
+                                ; 08h for the second half of the loading
+                                ; screen's life, so the animation reaches the
+                                ; blob the same way every other kernel caller
+                                ; does
 splf_fill:      call spl_fill
                 retf            ; ...and SPEC.md 15.5's BOOTMARK beacon, which
                                 ; borrows the splash's byte-granular fill and
@@ -185,13 +235,26 @@ spl_tick:
 .cnt:                           ; bar climbs from 0 again when it does - the
     mov [cs:spl_done], bx          ; sector derives the count from what is LEFT
 
+    inc byte [spl_busy]        ; SPEC.md 15.3.8.3: the one lock, and spl_isr
+                                ; refuses the tick while it is up
     cmp byte [cs:spl_on], 0
     jne .running
     mov byte [cs:spl_on], 1
     mov byte [spl_live], 1      ; ...and from here the splash OWNS the screen
     call spl_chrome             ; and the video mode, until spl_finish
+    call spl_hook               ; ...and IRQ0 (15.3.8.2). HERE and not in
+                                ; spl_chrome's body, which spl_rechrome shares:
+                                ; a hard-disk boot starts the splash from
+                                ; inside kmain with sched_init already holding
+                                ; the vector, and sch_isr's gated call covers it
+    call spl_kern_on            ; ...and SAY what the next nine seconds are
+                                ; (SPEC.md 15.6.5). Here and not in spl_chrome
+                                ; because spl_rechrome shares that body: on a
+                                ; hard-disk boot nothing is loading a kernel
+                                ; and spl_step's start path must not say so
 .running:
     call spl_paint
+    dec byte [spl_busy]
 
     pop es
     pop ds
@@ -216,10 +279,17 @@ spl_tick:
 spl_paint:
     call spl_bar                ; the ONE stage that runs on all three
                                 ; adapters - see spl_chrome
-    cmp byte [vid_mono], 0
-    jne .out
-    call spl_pct
-    call spl_spin
+    call spl_pct                ; ...on ALL THREE adapters now (SPEC.md 15.3.5)
+    cmp byte [spl_quiet], 0     ; ...and the animation only when the caller can
+    jne .out                    ; afford it (SPEC.md 15.3.3.1). Through DS, not
+                                ; `cs:`: the flag is viddet.inc's now, so that
+                                ; the two IRQ0 handlers can read it too
+    call spl_anim               ; ...which since 15.3.8 is IRQ0's job, and this
+                                ; call is the FAIL-SAFE: on a machine whose
+                                ; IRQ0 never arrives the logo still moves, on
+                                ; the notch, exactly as it did before. The
+                                ; phase test inside makes it a compare when the
+                                ; interrupt is doing its work
 .out:
     ret
 
@@ -248,6 +318,27 @@ spl_paint:
 ; machine whose loader finished the load before the kernel ran, kmain's own
 ; tail IS what is left to measure.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; spl_stepq - one notch WITHOUT the spinner (SPEC.md 15.3.3.1)
+; in:  nothing;  DS = KERNEL_SEG.  out: nothing - every register and the flags
+;      preserved, spl_step's own contract, which the two `mov`s below keep
+;      (an immediate to memory touches no flag and spends no register)
+;
+; spl_paint is 32.4 ms and spl_spin is 28.7 of them. That is affordable between
+; two sectors and NOT affordable inside mouse_init's identify window, where an
+; 8250 holds one byte and a 1200-baud 7N1 frame is 7.5 ms: 32.4 ms away loses
+; three of the burst 9.4 exists to capture. Bar and percentage together are
+; 3.7 ms, which clears one byte time twice over.
+;
+; It sets the flag, calls the ordinary notch and clears it again, so there is
+; ONE body and no other caller has to know this entry exists.
+; -----------------------------------------------------------------------------
+spl_stepq:
+    mov byte [spl_quiet], 1
+    call spl_step
+    mov byte [spl_quiet], 0
+    ret
+
 spl_step:
     pushf
     cmp byte [spl_live], 0
@@ -263,13 +354,29 @@ spl_step:
     push di
     push bp
     push es
+    inc byte [spl_busy]        ; SPEC.md 15.3.8.3's lock. DS is the kernel's
+                                ; on every caller of this entry, which is what
+                                ; lets a `.text` byte be the one the ISR shares
     cmp byte [cs:spl_on], 0
     jne .notch
     mov byte [cs:spl_on], 1     ; the first call of a boot nobody ticked
     mov byte [spl_live], 1
+%ifdef MOU_DIAG
+    mov ax, [ticks]             ; SPEC.md 9.4.6.2: everything below this line is
+    mov [mdg_nlive], ax         ; drawn INSIDE the frame the bar first shows, and
+%endif                          ; on a hard disk that is the loading screen's
+                                ; whole chrome. DS is the kernel's here
     mov word [cs:spl_total], SPL_POST
     mov word [cs:spl_done], 0
-    call spl_chrome
+    call spl_rechrome           ; ...and NOT spl_chrome (SPEC.md 2.9.9.2): the
+                                ; three calls it opens with are vid_detect,
+                                ; vid_apply and vid_setmode, and every caller
+                                ; that can reach THIS path is downstream of
+                                ; kmain's vid_init, which has already run all
+                                ; three. spl_tick is stage 2's alone and keeps
+                                ; the full entry; a hard-disk boot used to set
+                                ; the mode twice and pay two of vid_setmode's
+                                ; ~110 ms wipes for the second one
     jmp short .draw
 .notch:
     mov ax, [cs:spl_done]
@@ -282,6 +389,7 @@ spl_step:
     mov [cs:spl_done], ax
 .draw:
     call spl_paint
+    dec byte [spl_busy]
     pop es
     pop bp
     pop di
@@ -319,10 +427,12 @@ spl_finish:
     push di
     push bp
     push es
+    inc byte [spl_busy]        ; SPEC.md 15.3.8.3's lock
     mov ax, [cs:spl_total]
     mov [cs:spl_done], ax
     call spl_paint
-    mov byte [spl_live], 0
+    mov byte [spl_live], 0      ; ...and the ISR is refused from here by THIS
+    dec byte [spl_busy]        ; byte, before the blob is given back (2.9.5)
     pop es
     pop bp
     pop di
@@ -369,6 +479,12 @@ spl_reset:
     push di
     push bp
     push es
+    inc byte [spl_busy]        ; SPEC.md 15.3.8.3's lock: vid_setmode has just
+                                ; wiped the screen and this is what puts it
+                                ; back, so a frame landing inside it would draw
+                                ; a logo the very next call erases
+    mov byte [cs:spl_anlast], 0xFF  ; ...and the animation is FORCED, because
+                                ; the wipe took it and its phase has not moved
     call spl_rechrome
     call spl_paint
     OVLCALL ovl_spl_redraw      ; ...and SPEC.md 15.6's status line with it.
@@ -382,6 +498,7 @@ spl_reset:
                                 ; (2.9.5), which is the right answer: by then
                                 ; the desktop owns the screen and [spl_live]
                                 ; would have refused anyway
+    dec byte [spl_busy]
     pop es
     pop bp
     pop di
@@ -395,7 +512,8 @@ spl_reset:
 
 ; -----------------------------------------------------------------------------
 ; spl_chrome - first tick only: mode 12h, the double-framed welcome dialog,
-;              the bar trough, the title. clobbers: ax, bx, cx, dx, si, es
+;              the bar trough, the title. clobbers: ax, bx, cx, dx, si, di,
+;              bp, es
 ; -----------------------------------------------------------------------------
 spl_chrome:
     call KERNEL_SEG:spw_vid_detect ; the adapter probe happens HERE, before any
@@ -403,22 +521,77 @@ spl_chrome:
     call KERNEL_SEG:spw_vid_setmode; splash owns the first mode set, and kmain's
                                 ; vid_init later re-runs all three (SPEC 39.1)
 
-; ...and the same chrome onto a mode SOMEBODY ELSE has just set: spl_reset's
-; entry, for when drv_boot moves the machine onto the adapter SYSTEM.CFG asks
-; for while the loading screen is still up (SPEC.md 39.11.3). Entering above
-; would re-run vid_detect, which answers with the PROBE's adapter and would
-; undo the switch three instructions after it happened. Costs nothing: it is
-; a label, and the geometry below is read live either way.
+; ...and the same chrome onto a mode SOMEBODY ELSE has just set. TWO callers
+; enter here, and neither may re-run the three calls above:
+;
+;   spl_reset, for when drv_boot moves the machine onto the adapter SYSTEM.CFG
+;   asks for while the loading screen is still up (SPEC.md 39.11.3). Entering
+;   above would re-run vid_detect, which answers with the PROBE's adapter and
+;   would undo the switch three instructions after it happened.
+;
+;   spl_step's start path, for a boot whose loader ticked nothing (SPEC.md
+;   2.9.9.2). Every caller of spl_step is in the kernel proper and therefore
+;   downstream of vid_init, which has already probed, applied and SET the
+;   mode - so entering above is a second BIOS mode set and a second ~110 ms
+;   wipe of a framebuffer this routine is about to draw on anyway.
+;
+; Costs nothing either way: it is a label, and the geometry below is read live.
 spl_rechrome:
-    mov ax, [vid_ch]            ; the bar's origin, centred on whatever screen
-    shr ax, 1                   ; we got. On VGA this would be row 232, but
-    cmp byte [vid_mono], 0      ; the bar has to sit inside the dialog's
-    je .barv                    ; trough at 264, so VGA keeps its constant.
-    sub ax, 8
-    jmp short .bary
+    mov ax, [vid_cw]            ; --- the layout, banked once (SPEC.md 15.3.5)
+    shr ax, 1                   ; the x centre: EVERY column below is this plus
+    mov [cs:spl_l_cx], ax       ; a constant, and at 320 they are the literals
+    sub ax, 56                  ; they replace. The spinner's box is 120 wide
+    and al, 0xF8                ; and centred, floored to a byte
+    mov [cs:spl_l_spp], ax
+    mov cl, 3
+    shr ax, cl
+    mov [cs:spl_l_spx], ax
+
+    mov ax, [vid_ch]            ; the bar's origin. On VGA the dialog's trough
+    shr ax, 1                   ; is at 264 and the bar sits in it, so VGA
+    cmp byte [vid_mono], 0      ; keeps its constant; mono places the bar so
+    je .barv                    ; that the BLOCK is centred, which is +10 and
+    add ax, 10                  ; not the -8 it was when the bar was the only
+    jmp short .bary             ; thing on the screen (SPEC.md 15.3.5.1): the
+                                ; block runs bar-81 to bar+59, so centring it
+                                ; in vid_ch puts the bar at vid_ch/2 + 10
 .barv:
     mov ax, SPL_BAR_Y
 .bary:
+    mov [cs:spl_l_bar], ax
+    push ax
+    cmp byte [vid_mono], 0      ; ...and the rows around it: VGA by its own
+    je .lvga                    ; five constants, mono PACKED, because a
+    mov bx, ax                  ; 200-row screen cannot take VGA's padding
+    sub ax, 20
+    mov [cs:spl_l_ttl], ax
+    mov ax, bx
+    add ax, 40
+    mov [cs:spl_l_pct], ax
+    mov ax, bx
+    sub ax, 32
+    mov [cs:spl_l_dt], ax
+    mov ax, bx
+    add ax, 59
+    mov [cs:spl_l_db], ax
+    mov ax, bx
+    sub ax, 81
+    mov [cs:spl_l_spn], ax
+    jmp short .lok
+.lvga:
+    mov word [cs:spl_l_ttl], SPL_TTL_Y
+    mov word [cs:spl_l_pct], SPL_PCT_Y
+    mov word [cs:spl_l_dt], SPL_DLG_T
+    mov word [cs:spl_l_db], SPL_DLG_B
+    mov word [cs:spl_l_spn], SPL_TOP
+.lok:
+    mov ax, [cs:spl_l_bar]      ; ...and 15.6's line, which is bar + 24 on
+    add ax, 24                  ; EVERY adapter: 264 + 24 is SPL_MSG_Y. It was
+    mov [cs:spl_l_msg], ax      ; computed three times from two formulas -
+                                ; here, spl_kern_on and vidsel.inc's spl_mgeom
+                                ; - and banking it is what makes moving the
+                                ; mono layout one edit instead of three
+    pop ax
     call KERNEL_SEG:spw_gfx_rowbase
     mov bx, [vid_cw]            ; x = (width - bar) / 2, in whole bytes: 22 at
     sub bx, SPL_BAR_PX          ; 640 (which is what SPL_BAR_ADR always was),
@@ -429,38 +602,76 @@ spl_rechrome:
 
     mov ax, [vid_seg]
     mov es, ax
-
-    cmp byte [vid_mono], 0      ; everything below is 640x480 chrome drawn
-    jne .mono                   ; with BIOS text: the dialog does not fit in
-                                ; 200 rows, and int 10h teletype into a
-                                ; Hercules card already in graphics writes
-                                ; character/attribute pairs into the bitmap.
-                                ; The bar alone carries the mono splash.
-
-    mov cx, 152                 ; dialog: two nested 1px frames, the mode 3
-    mov si, 487                 ; splash's double-line box reborn in pixels
-    mov bx, 208
-    mov dx, 343
+                                ; ...and ALL THREE ADAPTERS draw it now
+                                ; (SPEC.md 15.3.5). It was VGA-only because
+                                ; the chrome was BIOS text and int 10h
+                                ; teletype into a Hercules card already in
+                                ; graphics writes character/attribute pairs
+                                ; into the bitmap. 15.3.2 took the teletype
+                                ; out; what was left was the pixel literals.
+    mov bx, [cs:spl_l_dt]       ; dialog: two nested 1px frames, the mode 3
+    mov dx, [cs:spl_l_db]       ; splash's double-line box reborn in pixels
+    mov cx, [cs:spl_l_cx]
+    mov si, cx
+    sub cx, 168
+    add si, 167
     call spl_rect
-    mov cx, 156
-    mov si, 483
-    mov bx, 212
-    mov dx, 339
+    mov bx, [cs:spl_l_dt]
+    add bx, 4
+    mov dx, [cs:spl_l_db]
+    sub dx, 4
+    mov cx, [cs:spl_l_cx]
+    mov si, cx
+    sub cx, 164
+    add si, 163
     call spl_rect
 
-    mov cx, 174                 ; bar trough, 1px inset from the fill
-    mov si, 465
-    mov bx, 262
-    mov dx, 281
+    mov bx, [cs:spl_l_bar]      ; bar trough, 1px inset from the fill
+    mov dx, bx
+    sub bx, 2
+    add dx, SPL_BAR_H + 1
+    mov cx, [cs:spl_l_cx]
+    mov si, cx
+    sub cx, 146
+    add si, 145
     call spl_rect
 
-    mov ah, 0x02                ; title via BIOS teletype (mode 12h text is
-    xor bh, bh                  ; legal this early - SPEC.md 15): row 15,
-    mov dx, (15 << 8) | 31      ; col 31 centres 18 chars on the 80-cell grid
-    int 0x10
-    mov si, spl_s_welcome
-    jmp spl_print               ; tail call
-.mono:
+    mov ax, [cs:spl_l_ttl]      ; the caption, BLITTED (SPEC.md 15.3.2) - it
+    mov bx, SPL_TTLC            ; was 18 BIOS teletype characters and they
+    call spl_cell               ; cost 40 ms each, 717 ms of a screen whose
+    mov si, spl_s_welcome       ; whole contract is that it costs nothing
+    jmp spl_text                ; tail call
+
+; -----------------------------------------------------------------------------
+; spl_cell - ES:DI = the first byte of a field BX cells wide, centred on the
+;            screen, with its top on row AX.  clobbers: ax, bx, cx, es
+; -----------------------------------------------------------------------------
+spl_cell:
+    call KERNEL_SEG:spw_gfx_rowbase
+    push ax
+    mov ax, [cs:spl_l_cx]
+    mov cl, 2
+    shl bx, cl                  ; BX = half the field, in pixels (cells * 8 / 2)
+    sub ax, bx
+    mov cl, 3
+    shr ax, cl                  ; ...and the byte it starts in
+    pop bx
+    add ax, bx
+    mov di, ax
+    mov ax, [vid_seg]
+    mov es, ax
+    ret
+
+; -----------------------------------------------------------------------------
+; spl_spinadr - ES:DI = the spinner box's top-left byte.  clobbers: ax, es
+; -----------------------------------------------------------------------------
+spl_spinadr:
+    mov ax, [cs:spl_l_spn]
+    call KERNEL_SEG:spw_gfx_rowbase
+    add ax, [cs:spl_l_spx]
+    mov di, ax
+    mov ax, [vid_seg]
+    mov es, ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -508,8 +719,8 @@ spl_bar:
     ret
 
 ; -----------------------------------------------------------------------------
-; spl_pct - right-aligned percentage under the bar, via BIOS teletype.
-; clobbers: ax, bx, cx, dx, si
+; spl_pct - right-aligned percentage under the bar, BLITTED (SPEC.md 15.3.2).
+; clobbers: ax, bx, cx, dx, si, di, bp, es
 ; -----------------------------------------------------------------------------
 spl_pct:
     mov ax, [cs:spl_done]
@@ -529,98 +740,422 @@ spl_pct:
     test ax, ax
     jnz .digit
 
-    mov ah, 0x02                ; row 19, col 38: "100%" sits dead centre
-    xor bh, bh
-    mov dx, (19 << 8) | 38
-    int 0x10
-    mov si, spl_pctbuf
-    ; fall through
+    mov ax, [cs:spl_l_pct]      ; ...and blitted, which is what actually pays:
+    mov bx, SPL_PCTC            ; four characters a TICK and ~16 ticks a load
+    call spl_cell               ; was ~2.5 s of a VGA boot (SPEC.md 15.3.2).
+    mov si, spl_pctbuf          ; The leading blanks are what erase the
+                                ; previous reading - spl_text is opaque, so
+                                ; ' 9%' -> '10%' needs no separate wipe
+    jmp spl_text                ; tail call
 
 ; -----------------------------------------------------------------------------
-; spl_print - BIOS-teletype the NUL-terminated string at DS:SI in bright
-;             white. clobbers: ax
+; spl_kern_on - 'Loading Kernel', for the stretch that IS a floppy boot
+;               (SPEC.md 15.6.5)
+; in:  nothing.  out: nothing (every register and the flags preserved)
+;
+; Nine of a floppy boot's twelve seconds are this read and 15.6's line cannot
+; say so: that line is font_run into the framebuffer and font_run is `.text` -
+; the very thing being read. So the glyphs are blitted HERE, out of the ROM
+; 8x8 set, with this module's own primitives.
+;
+; **AND NOT WITH BIOS TELETYPE, WHICH IS WHAT THIS DID FIRST.** int 10h AH=0Eh
+; into mode 12h costs **40 ms A CHARACTER** on a 4.77MHz 8088 - measured, and
+; linear: one character added 40.9 ms to the load and fourteen added 557.4.
+; Writing the caption and taking it down again was 1,075 ms on a 9.3 s read,
+; which is 11% spent to say what the 11% was doing. spl_wrbyte writes the same
+; glyph in eight byte-stores. The same measurement prices what is ALREADY here:
+; spl_pct is four teletyped characters a tick and ~16 ticks a load, so the
+; percentage alone is ~2.6 s of a VGA boot (15.3.2).
+;
+; It lands in 15.6's OWN field, so the boot has one place where it says what it
+; is doing, and at 8 rows rather than a teletype cell's 16 - which is what lets
+; it need no erase at all: `Looking for Mouse` is the same 8 rows at the same
+; origin, padded to the same width, and covers it exactly (15.6.4).
+;
+; Raised from spl_tick and NOT from spl_chrome, which is the distinction
+; SPEC.md 2.9.9.2 draws one routine along: spl_rechrome shares spl_chrome's
+; body and spl_step's start path enters there, and on a hard-disk boot nothing
+; is loading a kernel.
 ; -----------------------------------------------------------------------------
-spl_print:
+SPL_KCELLS  equ 32              ; the field, in cells - spl_mgeom's
+SPL_KY      equ 288             ; SPL_MSG_CELLS and SPL_MSG_Y, which live in
+                                ; `.ovl` and are %included AFTER this module.
+                                ; vidsel.inc asserts the pair rather than
+                                ; trusting the comment: two copies of a
+                                ; geometry that must agree is exactly what a
+                                ; build check is for
+
+spl_kern_on:
+    push ax
     push bx
+    push cx
+    push dx
     push si
-    mov bx, 0x000F              ; page 0; BL = foreground in graphics modes
-.next:
-    mov al, [cs:si]             ; OUR string, so not lodsb: DS is the kernel's
-    inc si
-    test al, al
-    jz .done
-    mov ah, 0x0E
-    int 0x10
-    jmp .next
-.done:
+    push di
+    push bp
+    push es
+
+    ; --- 15.6's field, at the row spl_rechrome banked ----------------------
+    ; The typeface is spl_text's own question now (spl_kfont), asked at the
+    ; first glyph of the boot whichever caller gets there first.
+    mov ax, [cs:spl_l_msg]
+    mov bx, SPL_KCELLS
+    call spl_cell
+    mov si, spl_s_kern
+    call spl_text
+
+    pop es
+    pop bp
+    pop di
     pop si
+    pop dx
+    pop cx
     pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; spl_spin - one animation step: blank the spinner box, then redraw every
-;            stroke with x scaled by cos(angle), angle = done mod 16 of a
-;            revolution. cos < 0 mirrors the endpoints, so the back face
-;            renders itself. clobbers: ax, bx, cx, dx, si, di, bp, es
+; spl_kfont - the ROM 8x8 set into [cs:spl_kf*], once a boot
+; in:  nothing.  out: nothing (every register preserved)
+;
+; font_init's own question (SPEC.md 6.2), asked here rather than taken from
+; font_glyphs - which is LOW_SEG and is not filled until kmain - and asked of
+; the BIOS, which is the one thing that IS resident this early. BAKED_FONT
+; would put a copy in the blob and is not an option: it is a knob (`FONT=`),
+; and a shipped kernel has no baked typeface.
+;
+; [spl_kfseg] is the latch as well as the answer: AX=1130h reports through
+; ES:BP and F000:FA6E is the fallback, so a segment of 0 cannot be a result.
+; It has to be a latch because spl_pct reaches spl_text every tick and this
+; is an int 10h - the one call the whole of 15.3.2 exists to stop making.
 ; -----------------------------------------------------------------------------
-spl_spin:
-    mov ax, [vid_seg]           ; VGA only - spl_tick gates the call
+spl_kfont:
+    cmp word [cs:spl_kfseg], 0
+    jne .out
+    push dx                     ; AX=1130h answers in ES:BP and spends CX/DL;
+    push bp                     ; ES is spl_text's framebuffer and BP its cell
+    push es
+    xor ax, ax
     mov es, ax
+    xor bp, bp
+    mov ax, 0x1130
+    mov bh, 0x03
+    int 0x10
+    mov ax, es
+    or ax, bp
+    jnz .have
+    mov ax, 0xF000              ; no EGA+ BIOS: the IBM PC's own 8x8 set
+    mov es, ax
+    mov bp, 0xFA6E
+.have:
+    mov [cs:spl_kfseg], es
+    mov [cs:spl_kfoff], bp
+    pop es
+    pop bp
+    pop dx
+.out:
+    ret
 
-    mov di, SPL_TOP * 80 + 33   ; bounding box: x 264..383, 41 rows
-    mov cx, 15
-    mov bx, 41
-    xor al, al
-    call spl_fill
+; -----------------------------------------------------------------------------
+; spl_text - blit an ASCIIZ string, 8x8 OPAQUE, one byte a row
+; in:  CS:SI -> the string, ES:DI = the top-left BYTE of the first cell
+; out: nothing.  clobbers: ax, bx, cx, si, di
+;
+; One store a row, and the same store on all three adapters: with the Bit Mask
+; at 0FFh every bit of the byte comes from the CPU, so a VGA plane takes the
+; glyph row as it stands - white where a bit is set and BLACK where it is not -
+; and a 1bpp framebuffer is that byte already. spl_fill's own write (15.3).
+;
+; OPAQUE is what makes it a renderer rather than a stencil, and it is the whole
+; of why spl_pct can use it: the reading changes every tick and the leading
+; blanks of spl_pctbuf are the erase. The mask+merge pair this drew with first
+; left the previous digits underneath, and cost a latch read and two OUTs a row
+; to do it. Nothing writes a pixel twice here (PERFORMANCE.md, rule 2).
+; -----------------------------------------------------------------------------
+spl_text:
+    call spl_kfont              ; the ROM set, once a boot - ES is the caller's
+    mov al, 0xFF                ; framebuffer and this preserves it
+    call spl_bitmask            ; every bit of the byte from the CPU
+.char:
+    mov al, [cs:si]
+    inc si
+    or al, al
+    jz .done
+    push si                     ; the STRING cursor; the CELL rides in BP,
+    mov bp, di                  ; because DI walks eight rows below and
+    call spl_kglyph             ; spl_kglyph spends it as well (-> spl_krow)
+    mov si, spl_krow
+    mov bx, 8
+    mov di, bp
+.row:
+    mov al, [cs:si]
+    inc si
+    mov [es:di], al             ; opaque, one pass - see the header
+    SPL_NEXTROW
+    dec bx
+    jnz .row
+    mov di, bp                  ; back to the cell, and on to the next BYTE
+    inc di
+    pop si
+    jmp short .char
+.done:
+    ret                         ; the mask is still 0FFh, which everything else
+                                ; in this module assumes on entry
 
-    mov bx, [cs:spl_done]
-    and bx, 15
+; -----------------------------------------------------------------------------
+; spl_kglyph - the eight rows of character AL into [cs:spl_krow]
+; in:  AL = the character (>= FONT_FIRST), the ROM set in [cs:spl_kf*]
+; out: nothing.  clobbers: ax, cx, si, di
+;
+; BUFFERED rather than read in place, because three segments are live at once
+; and there are only two to read through: ES is the framebuffer and DS is the
+; KERNEL's, which SPL_NEXTROW needs for [vid_rowadd] and the wrap pair. Eight
+; bytes of `.boot2` is cheaper than banking three words and a second macro.
+; -----------------------------------------------------------------------------
+spl_kglyph:
+    push ds
+    mov ah, 0                   ; ...and NO `sub al, FONT_FIRST`: the ROM set
+                                ; is indexed from character 0. font_init's own
+                                ; `add si, FONT_FIRST * 8` is what makes
+                                ; font_glyphs the table that needs subtracting
+    mov cl, 3
+    shl ax, cl
+    add ax, [cs:spl_kfoff]
+    mov si, ax
+    mov ds, [cs:spl_kfseg]
+    mov di, spl_krow
+    mov cx, 8
+.b:
+    mov al, [si]
+    mov [cs:di], al
+    inc si
+    inc di
+    loop .b
+    pop ds
+    ret
+
+; -----------------------------------------------------------------------------
+; spl_clock - AX = the low word of the BIOS 18.2065 Hz tick count at 0040:006C.
+;             clobbers: ax, es
+;
+; THE WORD IS LIVE AT BOTH ENDS OF THE LOADING SCREEN (SPEC.md 15.3.6), which
+; is the whole of why the animation may rest on it: during the load the BIOS
+; still owns int 08h, and after sched_init sch_isr CHAINS the BIOS handler
+; first (SPEC.md 8.1). It is the same guarantee 15.4's boot timer already rests
+; on - the boot sector reads this word and kmain reads it again at the first
+; desktop frame. A 16-bit read is atomic on an 8088 because the interrupt is
+; taken between instructions, and the word wraps once an hour, which a boot is
+; not.
+;
+; ES and not DS: every caller here has the KERNEL's DS and needs to keep it,
+; and each of them clobbers ES on the way to the framebuffer anyway.
+; -----------------------------------------------------------------------------
+spl_clock:
+    mov ax, 0x40
+    mov es, ax
+    mov ax, [es:0x6C]
+    ret
+
+; -----------------------------------------------------------------------------
+; spl_spin - one animation step: the "8088" with x scaled by cos(angle), angle
+;            = the WALL CLOCK mod 16 of a revolution (SPEC.md 15.3.6). cos < 0
+;            mirrors the endpoints, so the back face renders itself.
+;            clobbers: ax, bx, cx, dx, si, di, bp, es
+;
+; IT COMPOSES EACH ROW AND STORES IT ONCE (SPEC.md 15.3.4). It used to blank
+; the whole 15x41 box with spl_fill and then stroke nineteen lines into it -
+; the erase-then-letter pair at the largest scale in the tree, 615 bytes
+; cleared to redraw about 370, with the logo ABSENT in between. A boot
+; repaints ~29 times half a second apart, so it is not subliminal: it reads as
+; the logo BLINKING and was reported from the field as exactly that.
+;
+; The shape is what makes the composer cheap: 38 of the 41 rows are the same
+; row - the eight verticals - and only 0, 20 and 40 carry a bar. So two 15-byte
+; buffers hold every row this frame needs, they are built in RAM where a store
+; is a store, and the box is written top to bottom with each byte visited
+; ONCE. No blank, no read-modify-write, no Graphics Controller OUT.
+; -----------------------------------------------------------------------------
+SPL_SPINB   equ 15              ; the spinner box, in bytes
+SPL_SPINR   equ 41              ; ...and its rows. WHERE it is is the layout's
+                                ; (SPEC.md 15.3.5.2): it was SPL_TOP * 80 + 33,
+                                ; a hard stride of 80 that is VGA's and not
+                                ; Hercules' 90
+spl_spin:
+%ifdef SPLSTARS
+    mov word [cs:spl_cos], 64   ; SPEC.md 15.3.7: the logo is STILL and the
+                                ; stars are the animation. It is composed and
+                                ; written every frame all the same - the box
+                                ; is every-pixel-once (15.3.4), so redrawing
+                                ; the same picture is invisible, and both arms
+                                ; of the A/B then pay the identical logo cost
+%else
+    call spl_clock              ; SPEC.md 15.3.6: the angle is the WALL CLOCK,
+    mov cl, SPL_SPINSH          ; and [spl_done] drives the BAR alone
+    shr ax, cl
+    and ax, 15
+    mov bx, ax
     shl bx, 1
     mov ax, [cs:spl_cos_tab + bx]
     mov [cs:spl_cos], ax
+%endif
 
-    mov si, spl_segs
-    mov cx, SPL_NSEGS
-.seg:
+    mov ax, [vid_rowadd]        ; the row walk's three words, banked into CS
+    mov [cs:spl_radd], ax       ; because everything below runs with DS = CS
+    mov ax, [vid_wrapbit]
+    mov [cs:spl_rwbit], ax
+    mov ax, [vid_wrapfix]
+    mov [cs:spl_rwfix], ax
+    call spl_spinadr            ; ES:DI, through gfx_rowbase like every other
+                                ; row here - so CGA's bank interleave and
+                                ; Hercules' four are SPL_NEXTROW_CS's, as they
+                                ; already are for the bar. BEFORE the DS
+                                ; switch below: it reads [vid_seg], which is
+                                ; the KERNEL's, and pointing DS at CS first
+                                ; read a `.boot2` byte instead and left ES
+                                ; wherever that landed - the spinner vanished
+                                ; on all three adapters
+    push ds
+    mov ax, cs
+    mov ds, ax                  ; ...so the row copy is one `rep movsb`
+
+    xor al, al                  ; ...the plain row: verticals only
+    mov bx, spl_rowa
+    call spl_rowmk
+    mov al, 0x0F                ; ...and every digit's bar, for rows 0 and 40
+    mov bx, spl_rowb
+    call spl_rowmk
+
+    call spl_putrow             ; row 0
+    mov cx, 19
+    call spl_putplain           ; rows 1..19
+    mov al, 0x0D                ; row 20 is the MIDDLE bar, and the second
+    mov bx, spl_rowb            ; digit is a 0 - SPL_DIG0 has no middle
+    call spl_rowmk
+    call spl_putrow             ; row 20
+    mov cx, 19
+    call spl_putplain           ; rows 21..39
+    mov al, 0x0F
+    mov bx, spl_rowb
+    call spl_rowmk
+    call spl_putrow             ; row 40
+    pop ds
+    ret
+
+; -----------------------------------------------------------------------------
+; spl_putplain - CX rows of [spl_rowa].  spl_putrow - one row of [spl_rowb].
+; Both take ES:DI at the row's first byte and leave it at the next row's.
+; clobbers: ax, cx, si
+; -----------------------------------------------------------------------------
+spl_putplain:
+    mov si, spl_rowa
+    call spl_prow
+    loop spl_putplain
+    ret
+spl_putrow:
+    mov si, spl_rowb
+spl_prow:
     push cx
-    mov al, [cs:si]             ; the stroke table is OURS, so every read of it
-    inc si                      ; is cs: - four of them a segment
-    call spl_xform
-    mov bx, ax
-    mov al, [cs:si]             ; y1
-    inc si
-    xor ah, ah
-    mov dx, ax
-    mov al, [cs:si]             ; x2
-    inc si
-    call spl_xform
-    mov bp, ax
-    mov al, [cs:si]             ; y2
-    inc si
-    xor ah, ah
-
-    cmp dx, ax
-    jne .vert
-    mov cx, bx                  ; horizontal: y1 == y2
-    mov bx, dx
-    add bx, SPL_TOP
-    mov dx, bp
-    cmp cx, dx
-    jbe .ordered
-    xchg cx, dx                 ; mirrored frames swap the endpoints
-.ordered:
-    call spl_hline
-    jmp .next
-.vert:
-    mov cx, bx                  ; vertical: x1 == x2, y1 < y2 by data order
-    mov bx, dx
-    add bx, SPL_TOP
-    mov dx, ax
-    add dx, SPL_TOP
-    call spl_vline
-.next:
+    push si
+    push di
+    mov cx, SPL_SPINB
+    rep movsb                   ; DS = CS (spl_spin set it): OPAQUE, and the
+    pop di                      ; only write each of these bytes gets
+    pop si
     pop cx
-    loop .seg
+    SPL_NEXTROW_CS
+    ret
+
+; -----------------------------------------------------------------------------
+; spl_rowmk - build a row into the 15-byte buffer at CS:BX: the eight verticals
+;             always, plus the horizontal bar of each digit whose bit is set in
+;             AL.  clobbers: ax, cx, dx, si, bp - and PRESERVES DI
+;
+; A digit's bar runs from its left vertical to its right one, so the two x
+; values a digit needs are the same three ways up. spl_span does a single
+; pixel as the degenerate case (x1 == x2), which is why there is no setpixel.
+; -----------------------------------------------------------------------------
+spl_rowmk:
+    push di                     ; DI IS THE CALLER'S VRAM ROW POINTER. It is
+    mov [cs:spl_rbar], al       ; spent below and spl_spin rebuilds the bar
+    mov di, bx                  ; row twice DURING the walk down the box, so
+    mov cx, SPL_SPINB           ; forgetting this drew the whole spinner into
+    xor al, al                  ; whatever the zero loop left behind - which
+.z:                             ; is a box of nothing, measured
+    mov [cs:di], al             ; (the buffer is CS's, so no rep stosb: that
+    inc di                      ; would address ES, the framebuffer)
+    loop .z
+
+    mov byte [cs:spl_rdig], 0
+.digit:
+    mov al, 28
+    mul byte [cs:spl_rdig]      ; AL = the digit's box-relative x
+    push ax
+    call spl_xform
+    mov bp, ax                  ; BP = one end, screen x
+    pop ax
+    add al, 20
+    call spl_xform              ; AX = the other
+    mov dx, ax
+    mov ax, bp
+    cmp ax, dx                  ; a mirrored frame swaps them
+    jbe .ordered
+    xchg ax, dx
+.ordered:
+    mov cl, [cs:spl_rdig]
+    mov ch, 1
+    shl ch, cl                  ; CH = this digit's bit
+    test [cs:spl_rbar], ch
+    jnz .bar
+    push dx                     ; no bar: the two verticals, a pixel each
+    mov dx, ax
+    call spl_span
+    pop dx
+    mov ax, dx
+.bar:
+    call spl_span
+    inc byte [cs:spl_rdig]
+    cmp byte [cs:spl_rdig], 4
+    jb .digit
+    pop di
+    ret
+
+; -----------------------------------------------------------------------------
+; spl_span - OR the run of screen x from AX to DX (AX <= DX) into the buffer at
+;            CS:BX.  clobbers: ax, cx, dx, si
+; -----------------------------------------------------------------------------
+spl_span:
+    sub ax, [cs:spl_l_spp]      ; box-relative, in pixels
+    sub dx, [cs:spl_l_spp]
+    mov cx, ax
+    and cl, 7
+    mov si, ax
+    mov ax, 0x00FF
+    shr al, cl                  ; AL = the first byte's mask
+    mov cl, 3
+    shr si, cl                  ; SI = the first byte
+    mov cx, dx
+    and cl, 7
+    xor cl, 7
+    mov ah, 0xFF
+    shl ah, cl                  ; AH = the last byte's mask
+    mov cl, 3
+    shr dx, cl                  ; DX = the last byte
+    cmp si, dx
+    jne .multi
+    and al, ah                  ; one byte carries both edges
+    or [cs:bx+si], al
+    ret
+.multi:
+    or [cs:bx+si], al
+    inc si
+.mid:
+    cmp si, dx
+    jae .last
+    mov byte [cs:bx+si], 0xFF
+    inc si
+    jmp short .mid
+.last:
+    or [cs:bx+si], ah
     ret
 
 ; -----------------------------------------------------------------------------
@@ -635,10 +1170,352 @@ spl_xform:
     imul word [cs:spl_cos]         ; DX:AX = rel * cos; |result| <= 3328
     mov cl, 6
     sar ax, cl
-    add ax, 320
+    add ax, [cs:spl_l_cx]       ; ...and NOT 320, which is VGA's centre alone
     pop dx
     pop cx
     ret
+
+%ifdef SPLSTARS
+; =============================================================================
+; SPEC.md 15.3.7 - the still logo's twinkle, `make SPLSTARS=1`
+;
+; The A/B for the loading screen's ANIMATION, and a knob for TITLESNAP's
+; reason: it is a look question, so it is something to be looked at rather than
+; argued. spl_spin pins cos at 64 above - full width, no flip - and these six
+; stars are what moves instead.
+;
+; A STAR IS A TABLE, NOT A DRAWING (15.3.7.1). Five shapes exist - dark, then
+; radius 1, 2, 3 and 4 with their clump rings - and the twinkle is which of the
+; five a star is showing this frame, so the whole of drawing one is a single
+; `rep movsb` of its 22 bytes into the framebuffer. That is 15.3.4's every-
+; pixel-once at a smaller scale and for its reason: a twinkle that grew and
+; shrank procedurally would be an erase followed by a draw, which is
+; PERFORMANCE.md rule 2's pair and is exactly what the logo's own BLINK was.
+; The dark shape is 22 zero bytes, so a star that goes out is erased BY the
+; write that replaces it and never by a pass of its own.
+;
+; Six of them are 132 opaque byte writes a frame against the logo's 615, with
+; no read, no Bit Mask and no Graphics Controller `out`.
+; =============================================================================
+SPL_STARB   equ 2               ; a star's box, in bytes (16 px)
+SPL_STARR   equ 11              ; ...and in rows. The centre is col 8, row 5,
+SPL_STARCY  equ 5               ; which leaves room for the outer ring at 5
+SPL_STARSZ  equ SPL_STARB * SPL_STARR
+SPL_NSTAR   equ 6
+SPL_STARSH  equ 3               ; one phase step per 8 ticks - 440 ms, 128 ticks
+                                ; a cycle, 7.0 s, half of it dark. Picked off
+                                ; the FRAME rate like SPL_SPINSH and with the
+                                ; same expiry date: 15.3.8 put the animation on
+                                ; IRQ0, every step is drawn on time now, and 1
+                                ; would twinkle in 0.88 s
+
+; -----------------------------------------------------------------------------
+; spl_stars - one frame of the twinkle, phased off spl_clock.
+; in:  DS = KERNEL_SEG   out: DS = KERNEL_SEG
+; clobbers: ax, bx, cx, dx, si, di, bp, es
+; -----------------------------------------------------------------------------
+spl_stars:
+    call spl_clock              ; the SAME wall clock the spinner uses
+    mov cl, SPL_STARSH          ; (15.3.6), so this is an A/B of the animation
+    shr ax, cl                  ; and not of the change that drives it
+    mov [cs:spl_stphase], ax
+
+    mov ax, [vid_rowadd]        ; the row walk's three words, banked into CS
+    mov [cs:spl_radd], ax       ; for SPL_NEXTROW_CS. spl_spin banks them too
+    mov ax, [vid_wrapbit]       ; and runs first - but a routine that depends
+    mov [cs:spl_rwbit], ax      ; on the ORDER spl_paint makes two calls that
+    mov ax, [vid_wrapfix]       ; look independent in is a routine that breaks
+    mov [cs:spl_rwfix], ax      ; when somebody swaps them
+
+    mov byte [cs:spl_stn], 0
+.one:
+    mov bl, [cs:spl_stn]        ; --- where this star is, banked so that
+    xor bh, bh                  ; nothing below has to keep an index alive
+    mov si, bx
+    shl si, 1
+    add si, bx                  ; SI = star * 3
+    mov al, [cs:spl_star_tab+si]
+    mov [cs:spl_stdx], al
+    mov al, [cs:spl_star_tab+si+1]
+    mov [cs:spl_stdy], al
+
+    mov al, [cs:spl_star_tab+si+2]  ; --- and WHICH SHAPE it is showing. The
+    xor ah, ah                  ; six offsets are 0, 6, 3, 9, 12 and 5 of the
+    add ax, [cs:spl_stphase]    ; sixteen, so about three are lit at any
+    and ax, 15                  ; instant and they do not pulse in unison
+    mov si, ax
+    mov al, [cs:spl_star_ph+si]
+    mov ah, SPL_STARSZ
+    mul ah                      ; AX = shape * 22
+    add ax, spl_star_sh
+    mov si, ax                  ; SI = this frame's 22 bytes
+
+    call spl_staradr            ; ES:DI = where they go. BEFORE the DS switch
+                                ; below, because it reads [vid_seg] and that is
+                                ; the KERNEL's - 15.3.5.3's bug, which cost the
+                                ; spinner every adapter at once. It preserves
+                                ; SI, which gfx_rowbase does too
+    push ds
+    mov ax, cs
+    mov ds, ax                  ; ...so the row copy is one `rep movsb`
+    mov bp, SPL_STARR
+.row:
+    push di
+    mov cx, SPL_STARB
+    rep movsb                   ; OPAQUE, and the only write these bytes get
+    pop di
+    SPL_NEXTROW_CS
+    dec bp
+    jnz .row
+    pop ds
+
+    inc byte [cs:spl_stn]
+    cmp byte [cs:spl_stn], SPL_NSTAR
+    jb .one
+    ret
+
+; -----------------------------------------------------------------------------
+; spl_staradr - ES:DI = the current star's box, top-left byte.
+;               in: DS = KERNEL_SEG (it reads [vid_seg])
+;               clobbers: ax, bx, cx, dx, di, es - and PRESERVES SI
+;
+; Through spw_gfx_rowbase like every other row in this module, so CGA's bank
+; interleave and Hercules' four are handled where they already are.
+; -----------------------------------------------------------------------------
+spl_staradr:
+    mov al, [cs:spl_stdy]
+    cbw                         ; SIGNED: two of the six sit ABOVE the logo box
+    add ax, [cs:spl_l_spn]
+    sub ax, SPL_STARCY          ; ...and a box starts five rows above centre
+    call KERNEL_SEG:spw_gfx_rowbase
+    mov bx, ax
+    mov al, [cs:spl_stdx]
+    cbw                         ; ...signed too: four of the six are LEFT of it
+    add ax, [cs:spl_l_spx]
+    add ax, bx
+    mov di, ax
+    mov ax, [vid_seg]
+    mov es, ax
+    ret
+
+; --- 15.3.7's data -----------------------------------------------------------
+; Six stars, held RELATIVE TO THE LOGO BOX because 15.3.5 gives the three
+; adapters three layouts and a screen literal is right on exactly one of them:
+; a signed byte column from [spl_l_spx], a signed row from [spl_l_spn], and an
+; offset into the sixteen-step cycle.
+;
+; NONE SITS BELOW THE LOGO. VGA leaves 50 rows between the box and the dialog
+; and both 1bpp adapters leave NINE (15.3.7.2), which is not a star - so four
+; are level with the logo and outside it left and right, and two are above it.
+; The highest reaches 19 rows above the box top, which on CGA - where the box
+; top is row 29 - is row 10, and that is the constraint that fixes the layout.
+spl_star_tab:
+    db  -5,   8, 0              ; left, level with the logo's upper half
+    db  -4,  33, 6              ; left, lower
+    db  16,   5, 3              ; right, upper
+    db  17,  30, 9              ; right, lower
+    db   3, -13, 12             ; above, left of centre
+    db  12, -14, 5              ; above, right of centre
+
+spl_star_ph:                    ; the twinkle: which shape, per step of 16
+    db 0, 1, 2, 3, 4, 3, 2, 1   ; grow, peak, shrink...
+    db 0, 0, 0, 0, 0, 0, 0, 0   ; ...and out for the other half
+
+; The five shapes, 2 bytes by 11 rows each, centre col 8 / row 5. A crossed
+; pair of lines that grows, with a ring of single-pixel clumps at distance 3
+; from radius 3 and a second at 5 for the one frame at the peak.
+spl_star_sh:
+    times SPL_STARSZ db 0       ; 0: out
+
+    db 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00   ; 1: radius 1
+    db 0x00,0x80, 0x01,0xC0, 0x00,0x80
+    db 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00
+
+    db 0x00,0x00, 0x00,0x00, 0x00,0x00              ; 2: radius 2
+    db 0x00,0x80, 0x00,0x80, 0x03,0xE0, 0x00,0x80, 0x00,0x80
+    db 0x00,0x00, 0x00,0x00, 0x00,0x00
+
+    db 0x00,0x00, 0x00,0x00                         ; 3: radius 3, inner ring
+    db 0x04,0x90, 0x00,0x80, 0x00,0x80, 0x07,0xF0
+    db 0x00,0x80, 0x00,0x80, 0x04,0x90
+    db 0x00,0x00, 0x00,0x00
+
+    db 0x10,0x04                                    ; 4: radius 4, both rings
+    db 0x00,0x80, 0x04,0x90, 0x00,0x80, 0x00,0x80, 0x0F,0xF8
+    db 0x00,0x80, 0x00,0x80, 0x04,0x90, 0x00,0x80
+    db 0x10,0x04
+
+spl_stphase dw 0                ; the cycle step this frame, before the offset
+spl_stn     db 0                ; which star spl_stars is on...
+spl_stdx    db 0                ; ...and where that star is
+spl_stdy    db 0
+%endif
+
+; =============================================================================
+; SPEC.md 15.3.8 - the animation runs on IRQ0
+;
+; 15.3.6 fixed the rate the logo turns at and could not fix the FRAME rate:
+; spl_paint is called 1.72 times a second during a load, with a median gap of
+; 581 ms and a worst of 1.21 s, because the machine spends 83% of the boot
+; inside the ROM. THAT DOES NOT LOCK US OUT - int 13h runs with interrupts
+; enabled, and the tick was measured at 18.2198 Hz across a whole load against
+; the PIT's 18.2065, with 21 of them fired inside ONE unbroken stretch of BIOS
+; execution. The CPU in there is not busy, it is waiting on IRQ6 while the DMA
+; controller moves the sector - so a frame drawn from this ISR is drawn in a
+; gap the machine was going to spend idle.
+; =============================================================================
+%ifdef SPLSTARS
+SPL_ANSH    equ SPL_STARSH      ; the FINER of the two - under the knob the
+%else                           ; logo is still and the stars are the clock
+SPL_ANSH    equ SPL_SPINSH      ; that matters
+%endif
+
+; -----------------------------------------------------------------------------
+; spl_anim - one frame of the animation, IF its phase has moved.
+; in:  DS = KERNEL_SEG.  out: DS = KERNEL_SEG.
+; clobbers: ax, bx, cx, dx, si, di, bp, es
+;
+; MOST TICKS THIS DRAWS NOTHING, which is what makes the ISR affordable: the
+; phase changes every 1 << SPL_ANSH ticks - four for the spinner, eight for the
+; stars - so the steady cost is one frame per phase and not one per tick.
+;
+; spl_paint calls it as well, and that is a FAIL-SAFE rather than a duplicate:
+; on a machine where IRQ0 never arrives - masked, or a PIT somebody else has
+; reprogrammed - the animation goes on being drawn on the notch exactly as it
+; was before 15.3.8, and the phase test makes the second caller a compare.
+; -----------------------------------------------------------------------------
+spl_anim:
+    call spl_clock
+    mov cl, SPL_ANSH
+    shr ax, cl
+    and al, 15
+    cmp al, [cs:spl_anlast]
+    je .out                     ; the picture has not changed
+    mov [cs:spl_anlast], al
+    call spl_spin
+%ifdef SPLSTARS
+    call spl_stars
+%endif
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; spl_isr - int 08h while the BIOS still owns it (SPEC.md 15.3.8.2)
+;
+; Installed by spl_chrome, which is STAGE 2's entry alone, and taken back down
+; by stage 2 immediately before the handover. A hard-disk boot starts the
+; splash from inside kmain with sched_init already holding the vector, reaches
+; spl_rechrome instead, and is driven by sch_isr's gated call.
+; -----------------------------------------------------------------------------
+spl_isr:
+    pushf                       ; CHAIN FIRST, sch_isr's rule and for its two
+    call far [cs:spl_old08]     ; reasons: the BIOS keeps the tick count that
+                                ; 15.4 and 15.3.6 both read, and it sends the
+                                ; EOI, which we must not
+    push ax
+    push ds
+    mov ax, KERNEL_SEG
+    mov ds, ax                  ; both flags are `.text` bytes (15.3.8.3)
+    cmp byte [spl_live], 0
+    je .out
+    cmp byte [spl_quiet], 0     ; ...AND THE CALLER MAY NOT BE ABLE TO AFFORD
+    jne .out                    ; ONE (SPEC.md 15.3.3.1). spl_stepq raises this
+                                ; around mouse_init's identify window, where a
+                                ; 28.7 ms spinner frame costs three bytes of a
+                                ; 1200-baud burst - and until this test existed
+                                ; the interrupt drew straight through it, which
+                                ; is the very overrun spl_stepq was written to
+                                ; prevent. sch_isr carries the same test
+    cmp byte [spl_busy], 0      ; ...somebody is drawing, and what they may be
+    jne .out                    ; holding is the Graphics Controller
+    inc byte [spl_busy]        ; TAKE IT: the main line's flag is the ISR's
+                                ; re-entrancy lock too, and the test-and-set is
+                                ; atomic because it is above the sti
+    sti                         ; ...and IRQ6 MUST NOT WAIT ON A FRAME: the
+                                ; machine we interrupted is usually the BIOS
+                                ; spinning on the floppy's completion
+                                ; interrupt, and a frame is 4 to 12 ms
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    cld                         ; spl_spin's row copy is a `rep movsb` and this
+                                ; is an ISR: DF belongs to whatever we
+                                ; interrupted, which during the load is a BIOS
+                                ; int 13h (SPEC.md 1 - sched.inc says the same
+                                ; thing above its own in-ISR blit)
+    call spl_anim
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    cli
+    dec byte [spl_busy]
+.out:
+    pop ds
+    pop ax
+    iret
+
+; -----------------------------------------------------------------------------
+; spl_hook / spl_unhook - take and give back int 08h.  preserve all registers
+;
+; spl_unhook is stage 2's, and calling it is not tidiness: leave the vector in
+; place and sched_init saves OUR handler as sch_old08 and goes on calling it,
+; while spl_finish gives the whole blob back to the heap (SPEC.md 2.9.5) - so
+; the chain would end in a far call into freed memory.
+; -----------------------------------------------------------------------------
+spl_hook:
+    cmp byte [cs:spl_hooked], 0
+    jne spl_hk_out              ; twice would chain us to ourselves
+    push ax
+    push es
+    xor ax, ax
+    mov es, ax
+    pushf
+    cli                         ; no half-written vector, ever
+    mov ax, [es:0x20]
+    mov [cs:spl_old08], ax
+    mov ax, [es:0x22]
+    mov [cs:spl_old08+2], ax
+    mov word [es:0x20], spl_isr
+    mov [es:0x22], cs
+    popf
+    mov byte [cs:spl_hooked], 1
+    jmp short spl_hk_pop
+
+spl_unhook:
+    cmp byte [cs:spl_hooked], 0
+    je spl_hk_out
+    push ax
+    push es
+    xor ax, ax
+    mov es, ax
+    pushf
+    cli
+    mov ax, [cs:spl_old08]
+    mov [es:0x20], ax
+    mov ax, [cs:spl_old08+2]
+    mov [es:0x22], ax
+    popf
+    mov byte [cs:spl_hooked], 0
+spl_hk_pop:
+    pop es
+    pop ax
+spl_hk_out:
+    ret
+
+spl_old08   dw 0, 0             ; the BIOS's int 08h, while we stand in front
+spl_hooked  db 0                ; ...and whether we are standing there
+spl_anlast  db 0xFF             ; the phase spl_anim last DREW. 0xFF is no
+                                ; phase at all, so the next call draws - which
+                                ; is what spl_rechrome wants after a mode set
+                                ; has wiped the screen under a still logo
 
 ; -----------------------------------------------------------------------------
 ; spl_hline - white pixel-granular horizontal line, CX = x1, DX = x2
@@ -852,27 +1729,11 @@ spl_wrbyte:
 ; data (in .text on purpose - .bss is off-limits here, see the header)
 ; -----------------------------------------------------------------------------
 
-; "8088" stroke digits: 20 wide, 40 tall, on 28px centres.
-%macro SPL_DIG8 1
-    db %1,      0,  %1,      40
-    db %1 + 20, 0,  %1 + 20, 40
-    db %1,      0,  %1 + 20, 0
-    db %1,      20, %1 + 20, 20
-    db %1,      40, %1 + 20, 40
-%endmacro
-%macro SPL_DIG0 1
-    db %1,      0,  %1,      40
-    db %1 + 20, 0,  %1 + 20, 40
-    db %1,      0,  %1 + 20, 0
-    db %1,      40, %1 + 20, 40
-%endmacro
-
-spl_segs:
-    SPL_DIG8 0
-    SPL_DIG0 28
-    SPL_DIG8 56
-    SPL_DIG8 84
-SPL_NSEGS equ ($ - spl_segs) / 4
+; The "8088" stroke table WAS here - nineteen segments of four bytes, 76 of
+; them - and SPEC.md 15.3.4's row composer stopped reading it two years ago
+; without taking it out. Nothing referenced `spl_segs` or `SPL_NSEGS`; it was
+; DATA, so no unreachable-code check could see it. 15.3.8 is what found it,
+; by needing the space.
 
 spl_cos_tab:                    ; cos(k/16 rev) * 64, k = 0..15
     dw 64, 59, 45, 24, 0, -24, -45, -59
@@ -880,6 +1741,30 @@ spl_cos_tab:                    ; cos(k/16 rev) * 64, k = 0..15
 
 spl_bar_adr dw 0            ; the bar's top-left byte, set by spl_chrome
 spl_mask    db 0xFF          ; mono: what the GC's Bit Mask holds on VGA
+spl_rowa    times SPL_SPINB db 0    ; the spinner's two composed rows, and
+spl_rowb    times SPL_SPINB db 0    ; the whole of what 15.3.4 costs in RAM
+spl_rdig    db 0             ; spl_rowmk's digit cursor and bar mask
+spl_rbar    db 0
+spl_l_cx    dw 0             ; SPEC.md 15.3.5's layout, banked by spl_rechrome
+spl_l_bar   dw 0             ; once for whatever screen this machine has: the
+spl_l_ttl   dw 0             ; x centre, then the bar's row and the five rows
+spl_l_pct   dw 0             ; laid out around it
+spl_l_dt    dw 0
+spl_l_db    dw 0
+spl_l_spn   dw 0
+spl_l_spx   dw 0             ; the spinner box's left byte, and the same in
+spl_l_spp   dw 0             ; PIXELS, which is what spl_span subtracts
+spl_l_msg   dw SPL_KY        ; 15.6's line, read by spl_kern_on AND by
+                             ; vidsel.inc's spl_mgeom one section along. The
+                             ; initialiser is VGA's, for a caller that somehow
+                             ; reaches the line before the chrome
+spl_radd    dw 0             ; vid_rowadd/wrapbit/wrapfix, banked into CS for
+spl_rwbit   dw 0             ; SPL_NEXTROW_CS - the row loop runs with DS = CS
+spl_rwfix   dw 0
+; [spl_quiet] is NOT here any more: it moved to viddet.inc's `.text` beside
+; [spl_live] and [spl_busy], because since 15.3.8 the readers that matter are
+; the two IRQ0 handlers and both are kernel `.text`, where `cs:` names the
+; KERNEL segment and not this blob (SPEC.md 15.3.3.1).
 spl_on      db 0             ; the chrome has been drawn - spl_tick's latch
 ; ...and [spl_live] is NOT here: it is the one byte of this module the KERNEL
 ; reads - viddet's mode guard, fprog's boot test and vidsel's spl_reset all ask
@@ -889,7 +1774,11 @@ spl_done    dw 0
 spl_total   dw 1
 spl_cos     dw 64
 spl_pctbuf  db '   %', 0
-spl_s_welcome db 'Welcome to os8088.', 0
+spl_s_welcome db 'Welcome to os8088', 0
+spl_s_kern  db 'Loading Kernel', 0
+spl_kfseg   dw 0                ; the ROM 8x8 set, asked for once at the first
+spl_kfoff   dw 0                ; tick and read through DS a glyph at a time
+spl_krow    times 8 db 0        ; ...into here, one character's eight rows
 
 ; THE MODULE'S OWN SIZE IS NOT A BUDGET ANY MORE (SPEC.md 2.9.4). It used to
 ; have to fit the image's opening SPL_RESIDENT sectors, because the boot sector

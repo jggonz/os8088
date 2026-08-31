@@ -138,8 +138,16 @@ MODS_BEGIN = "<!-- BEGIN generated table -->"
 MODS_END = "<!-- END generated table -->"
 THEMES_BEGIN = "<!-- kernsize:themes -->"
 THEMES_END = "<!-- /kernsize:themes -->"
-MOD_SECTIONS = ("text", "bss", "lowbss", "vgabuf", "cold", "ovl")
+# The same, per module, plus `.boot2`: splash.inc has no section directive
+# of its own and takes the `.boot2` it is included at (SPEC.md 2.9.4), so
+# without it here a 967-byte module reports as costing nothing.
+MOD_SECTIONS = ("text", "bss", "lowbss", "vgabuf", "cold", "ovl", "boot2")
 INCLUDE = re.compile(r'^%include\s+"([\w.]+)"')
+# Column 0 only, which is where every one of kernel.asm's own switches sits -
+# a `section` inside a module is that module's business and it has to hand
+# .text back (SPEC.md 4).  None of kernel.asm's is inside a %if, and the
+# binary compare in measure_modules() is what says so on every run.
+SECTION = re.compile(r'^section\s+\.(\w+)')
 RESIDUAL = "kernel.asm"
 
 # How the modules group, for the theme table.  This lives here rather than in
@@ -161,8 +169,12 @@ THEMES = (
     ("the window system and its furniture",
      ("wm.inc", "ui.inc", "menu.inc", "instance.inc", "desk.inc", "dock.inc",
       "fsx.inc", "clip.inc", "fprog.inc", "toast.inc")),
+    # moudiag.inc (SPEC.md 9.4.4) goes with the mouse and NOT with
+    # bootprof.inc below, although both are knob-only: what it records is what
+    # mouse_init's identify window saw, so a byte it grows is the mouse's
+    # question. It is 0 in a shipped build either way.
     ("hardware: drivers, clock, mouse, sound, CPU, XMS",
-     ("mouse.inc", "clock.inc", "driver.inc", "snd.inc",
+     ("mouse.inc", "moudiag.inc", "clock.inc", "driver.inc", "snd.inc",
       "cpudet.inc", "xmem.inc")),
     # blank.inc (SPEC.md 64) is here and not under hardware, although all it
     # does is write a video port: what it owns is whether the SIGNAL is on,
@@ -213,18 +225,41 @@ def measure(nasm_args=()):
     return vals, None
 
 
-def _markers(i):
-    """A bare label in each section, then back to .text.
+def _markers(i, back):
+    """A bare label in each section, then back to the one we were HANDED.
 
     Bare labels emit nothing, which is the whole reason this measurement is
-    allowed to exist - but see assemble_modules(), which proves it rather
-    than asserting it.  Ending in .text matters: every %include in
-    kernel.asm sits at .text scope and every module is required to switch
-    back before it ends (SPEC.md 4), so the marker must hand over what it
-    was given.
+    allowed to exist - but see measure_modules(), which proves it rather than
+    asserting it.
+
+    Handing back the right section is the load-bearing half, and this used to
+    do it by ending in `section .text` on the reasoning that "every %include
+    in kernel.asm sits at .text scope".  THAT STOPPED BEING TRUE: SPEC.md
+    2.9.4 moved the loading screen into stage 2, so kernel.asm now reads
+    `section .boot2` / `%include "splash.inc"` / `section .text`, and
+    splash.inc carries no section directive of its own - it takes the one it
+    is included at.  A marker set ending in .text therefore assembled 967
+    bytes into the wrong section and moved every byte after them.  The binary
+    compare caught it and refused to report, which is exactly what it is for;
+    what it could not do is fix it, so `--bless` returned 1 without writing
+    and t_kernbudget's advice - "one command, tools/kernsize.py --bless" -
+    was false for as long as that lasted.
+
+    NASM CAN ANSWER THIS AND THE ANSWER RACES.  `__?SECT?__` is the smacro
+    holding the current section's directive, and `%xdefine BACK __?SECT?__`
+    captures it correctly in a file on its own.  In kernel.asm it does not:
+    the SECTION directive is the assembler's and %xdefine is the
+    preprocessor's, the preprocessor runs ahead, and the capture lands on
+    whichever section the assembler had reached rather than the one the text
+    is in.  It fails in a different place for every trailing section - .bss
+    gives "attempt to initialize memory in a nobits section" in the module's
+    first data line, .cold assembles and moves bytes, .ovl overflows the boot
+    blob - and none of them names the marker.  So the section is tracked in
+    PYTHON, over kernel.asm's own text, where there is no second reader to
+    disagree with.
     """
     out = [f"section .{s}\nKSM{i}_{s}:\n" for s in MOD_SECTIONS]
-    return "".join(out) + "section .text\n"
+    return "".join(out) + f"section {back}\n"
 
 
 def instrument(src):
@@ -235,17 +270,21 @@ def instrument(src):
     exists: %assign takes a critical expression, so a label it names has to
     have been seen already.
     """
-    mods, out, last_at = [], [], None
+    mods, out, last_at, sect, at = [], [], None, ".text", ".text"
     for line in src.splitlines(keepends=True):
+        d = SECTION.match(line)
+        if d:
+            sect = "." + d.group(1)
         m = INCLUDE.match(line)
         if m:
-            out.append(_markers(len(mods)))
+            out.append(_markers(len(mods), sect))
             mods.append(m.group(1))
             last_at = len(out) + 1        # ...after the include line itself
+            at = sect
         out.append(line)
     if not mods:
         return None, []
-    out.insert(last_at, _markers(len(mods)))
+    out.insert(last_at, _markers(len(mods), at))
 
     rep = []
     for j in range(len(mods)):
@@ -428,6 +467,22 @@ def report(cur, base, variant="big", out=sys.stdout):
                  f"  [{delta(cur['ksize'] - base['ksize'])}]")
     p(line)
 
+    # ...AND THE BOOT CEILING BESIDE IT, because for a long time this printed
+    # only the line above and the line above was not the binding guard.
+    # kernel.asm's guard 5 asks whether stage 1 can put its sector and its
+    # stack at the top of MIN_RAM_KB and still read the kernel AND its stage-2
+    # blob underneath - a different question from "does it reside in", with a
+    # different and, at one point, TIGHTER answer. Measured the day this line
+    # was added: 3,584 bytes spare against KERN_BUDGET and 1,670 against guard
+    # 5, so a ~5KB recovery read as slack under a ceiling that could not be
+    # reached. A report that names one guard teaches everybody to steer by it.
+    boot = cur.get("bootmax")
+    if boot:
+        room = boot - cur["ksize"]
+        p(f"{tag} boot       KERN_SIZE {kb(cur['ksize'])} of {kb(boot)}"
+          f" -> {kb(room)} before it cannot BOOT on"
+          f" {cur['minramkb']}KB (guard 5)")
+
     # THE BUDGET MOVING IS THE ONE THING HERE THAT IS A DECISION, and it was
     # the one thing this report could not see: it compared SPARE, which is
     # budget minus size, so a raise and a shrink of the same amount read
@@ -541,10 +596,10 @@ def module_rows(per, totals):
     rows = []
     for name, v in per.items():
         rows.append([name, desc.get(name, ""), v["text"], v["cold"],
-                     v["text"] + v["cold"], v["bss"], v["lowbss"]])
-    rows.sort(key=lambda r: -r[4])
+                     v["text"] + v["cold"], v["bss"], v["lowbss"], v["boot2"]])
+    rows.sort(key=lambda r: (-r[4], -r[7]))
     resid = [RESIDUAL, desc.get(RESIDUAL, "")]
-    for i, key in enumerate(("text", "cold", None, "bss", "lowbss")):
+    for i, key in enumerate(("text", "cold", None, "bss", "lowbss", "boot2")):
         if key is None:
             resid.append(resid[2] + resid[3])
         else:
@@ -557,15 +612,16 @@ def render_modules(rows, totals):
     def cell(n):
         return f"{n:,}" if n else "—"
     out = [MODS_BEGIN,
-           "| module | `.text` | `.cold` | code | `.bss` | `.lowbss` |",
-           "|---|---:|---:|---:|---:|---:|"]
-    for name, d, t, c, code, b, lb in rows:
+           "| module | `.text` | `.cold` | code | `.bss` | `.lowbss` | `.boot2` |",
+           "|---|---:|---:|---:|---:|---:|---:|"]
+    for name, d, t, c, code, b, lb, b2 in rows:
         label = f"`{name}`" + (f" — {d}" if d else " — **(undescribed)**")
         out.append(f"| {label} | {cell(t)} | {cell(c)} | **{code:,}** |"
-                   f" {cell(b)} | {cell(lb)} |")
+                   f" {cell(b)} | {cell(lb)} | {cell(b2)} |")
     out.append(f"| **total** | **{totals['text']:,}** | **{totals['cold']:,}**"
                f" | **{totals['text'] + totals['cold']:,}** |"
-               f" **{totals['bss']:,}** | **{totals['lowbss']:,}** |")
+               f" **{totals['bss']:,}** | **{totals['lowbss']:,}** |"
+               f" **{totals['boot2']:,}** |")
     out.append(MODS_END)
     return "\n".join(out)
 

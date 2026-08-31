@@ -900,11 +900,13 @@ zi_load:
     ; zf_hire lives in zf_paint, so nothing ever started the VM and the story
     ; sat there fully loaded with a blank window and a correct status line.
     ;
-    ; It looked story-specific for a while because the other two ways in do
+    ; It looked story-specific for a while because the other two ways in did
     ; get a paint: a fresh instance is shown by the loader after the entry
-    ; proc returns (SPEC.md 21 step 9), and an association hands its name to
-    ; the first W_PAINT (zi_openpend). Only File > Open Story into a live
-    ; window missed, which is the ordinary way to open a story.
+    ; proc returns (SPEC.md 21 step 9), and an association used to hand its
+    ; name to the first W_PAINT. Only File > Open Story into a live window
+    ; missed, which is the ordinary way to open a story - and since SPEC.md
+    ; 54.10 the association is the same case, zf_onwake running after that
+    ; paint rather than inside it, so this call is now load-bearing twice.
     ;
     ; Safe to call twice - zf_hire is idempotent on [zf_hired] - and safe if
     ; it is refused, because a full task table is transient and every later
@@ -2481,8 +2483,9 @@ zi_m_scrfull: db 'Transcript full - it stops here.', 0
                                                     ; zi_savname's +40..+52
 
 ; -----------------------------------------------------------------------------
-; zi_openpend - open the story a double-click named (UI TASK, first paint)
-; in:  [zf_pend] = a NUL 8.3 name; out: nothing; the notice says why on failure
+; zi_openpend - open the story a double-click named (UI TASK, zf_onwake)
+; in:  [zf_pend] = a NUL 8.3 name, the gfx lock HELD; out: nothing; the notice
+;      says why on failure
 ;
 ; The association path (SPEC.md 54.7) hands over a name and a LOCATOR, while
 ; the file dialog hands over a name AND the size - and the size is what
@@ -2535,8 +2538,8 @@ zi_openpend:
     jc .nofile
 .located:
 
-    ; ES SECOND, and this is not a formality. We are called from W_PAINT, so ES
-    ; is KERNEL_SEG (SPEC.md 20.5) - and `rep movsb` stores through ES:DI. The
+    ; ES SECOND, and this is not a formality. We are called from a callback, so
+    ; ES is KERNEL_SEG (SPEC.md 20.5) - and `rep movsb` stores through ES:DI. The
     ; first version of this proc copied the name before setting ES and wrote
     ; thirteen bytes into the KERNEL's segment, which assembles cleanly, runs,
     ; and leaves [zi_name] empty so the search below finds nothing. It is set

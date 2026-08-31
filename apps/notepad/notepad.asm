@@ -412,15 +412,30 @@ np_entry:
     push ax
     mov al, 1                       ; resizable (SPEC.md 11.1/27): np_paint
     call OSAPI_WM_SIZABLE           ; already lays out from the live record,
-    mov al, 1                       ; so the next repaint re-wraps for free
-    mov al, 1                       ; ...and it PROMISES its content stands
-    call OSAPI_WM_SAVEU             ; still while it is not drawing, so a
+                                    ; so the next repaint re-wraps for free
+                                    ; (wm_sizable preserves AL, so the second
+                                    ; `mov al, 1` that used to sit here was a
+                                    ; dead store into a register still holding
+                                    ; the value)
+    mov al, OSAPI_SAVEU_ON | OSAPI_SAVEU_1BPP
+    call OSAPI_WM_SAVEU             ; ...and it PROMISES its content stands
+                                    ; still while it is not drawing, so a
                                     ; raise puts the old pixels back instead
                                     ; of lettering 464 cells (SPEC.md 11.96.1).
                                     ; True of this app: everything that draws
                                     ; goes through np_redraw or np_paint, and
                                     ; the worker's two background drawers ask
-                                    ; OSAPI_WM_OBSCURED first
+                                    ; OSAPI_WM_OBSCURED first.
+                                    ; ...AND THAT IT IS TWO COLOURS (SPEC.md
+                                    ; 11.96.17), which is a quarter of the
+                                    ; cache and a quarter of the blit. True
+                                    ; here and in no other window that
+                                    ; promises: the text is CBLACK on CWHITE
+                                    ; and the only other thing inside the
+                                    ; content is os88ui_sbar, whose track is
+                                    ; gfx_fill_gray - a 50% dither of 15 and 0
+                                    ; rather than a grey. Minesweeper, Piano
+                                    ; and Solitaire all draw in real colours
     mov al, 1
     call OSAPI_WM_SNAP              ; ...and snapped (SPEC.md 11.94), because
     pop ax                          ; every keystroke redraws a row of text and
@@ -447,6 +462,9 @@ np_entry:
     mov [np_nodrag], al             ; the grab site tests
     popf
 %endif
+    mov ax, np_onwake               ; SPEC.md 54.10: the kernel calls this once
+    call OSAPI_WM_ONWAKE            ; our window is on the glass, and the
+                                    ; launch document loads in front of it
     mov ax, np_onclose              ; SPEC.md 75.1: the kernel asks before it
     call OSAPI_WM_ONCLOSE           ; closes us, and a note with unsaved work
                                     ; answers. A side table, so this goes here
@@ -6321,7 +6339,7 @@ np_goto:
     ret
 
 ; -----------------------------------------------------------------------------
-; np_arg - open the document we were launched to open (SPEC.md 54.5)
+; np_arg - BANK the document we were launched to open (SPEC.md 54.5/54.10)
 ; in:  nothing; called from np_entry once the window and the claim exist
 ; out: nothing; preserves all registers AND the flags, because the CF this
 ;      package owes the loader is still riding in them
@@ -6329,8 +6347,14 @@ np_goto:
 ; The kernel hands over a name and a (cluster, volume) pair rather than
 ; putting us in the right folder, because it cannot: the loader read our own
 ; image out of OUR directory and far-called this entry as one unit. So the
-; whole of accepting a document is to copy the name, record the folder the
-; way Save As already records one, and let np_load do what Ctrl-O does.
+; whole of accepting a document is to copy the name and record the folder the
+; way Save As already records one.
+;
+; **IT RECORDS AND DOES NOT LOAD.** It called np_load here until SPEC.md
+; 54.10, and an entry proc runs under the loader's own gfx-lock burst with no
+; window on the glass yet - so a double-clicked note froze the desktop at the
+; disk, showing the file manager and nothing else, for as many int 13h calls
+; as the file took. np_onwake spends it once the window is drawn.
 ;
 ; The name lives in the KERNEL segment, so ES is loaded explicitly rather
 ; than trusted: it happens to still be KERNEL_SEG here, and a later edit that
@@ -6367,7 +6391,8 @@ np_arg:
 .named:
     push ds
     pop es                          ; ES = DS again, the callback default
-    call np_load                    ; ...and this is Ctrl-O, unchanged
+    mov byte [np_argp], 1           ; np_onwake reads it; np_load is Ctrl-O and
+                                    ; is what it calls (SPEC.md 54.10)
 .out:
     pop es
     pop di
@@ -6377,6 +6402,36 @@ np_arg:
     pop bx
     pop ax
     popf
+    ret
+
+; -----------------------------------------------------------------------------
+; np_onwake - W_ONWAKE: open the launch document (SPEC.md 54.10/74.1)
+; in:  SI = our window; the UI task, gfx lock NOT held
+; out: nothing; no register need be preserved
+;
+; The kernel calls this once assoc_run has shown our window, so the read
+; happens in front of a Note Pad the user can see and SPEC.md 12.8's widget
+; steps through it. It takes the lock for the burst SPEC.md 74.1 lets it state
+; - one file read and one repaint - because np_redraw draws.
+;
+; np_mark is here and not left behind in np_entry: it records what we agree
+; with the disk about (SPEC.md 27.15), and with the load deferred the entry
+; proc's np_mark now marks the EMPTY note. Without this a note opened by
+; double-click reads DIRTY from its first keystroke and the close alert asks
+; about work nobody did.
+; -----------------------------------------------------------------------------
+np_onwake:
+    cmp byte [np_argp], 0           ; not the document's wake, or the document
+    je .out                         ; is already open
+    mov byte [np_argp], 0           ; once, whatever happens below
+    call OSAPI_GFX_LOCK
+    push si
+    call np_load                    ; ...and this is Ctrl-O, unchanged
+    call np_mark                    ; whatever we start with is clean
+    pop si
+    call np_redraw                  ; SI = the window ptr
+    call OSAPI_GFX_UNLOCK
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -10765,6 +10820,13 @@ np_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
     NPVAR npb_t,   2        ; word } the row being emitted: ticks over
     NPVAR npb_i,   2        ; word } iterations
 %endif
+
+; --- the launch document (SPEC.md 54.10) -------------------------------------
+    NPVAR np_argp,  1       ; byte: np_arg banked a document and np_onwake has
+                            ; not spent it yet. The pair np_load needs is
+                            ; already kept - np_dir/np_drv/np_dirok are Save
+                            ; As's own - so this one byte is the whole of
+                            ; deferring the read out of the entry proc
 
 ; --- closing (SPEC.md 27.15) -------------------------------------------------
 ; What the document looked like the last time it agreed with the disk. A

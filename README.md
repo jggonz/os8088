@@ -175,8 +175,10 @@ multi-instance:
 - **Apps** — Note Pad (word wrap, DOS-readable text files), TeXPad, Paint,
   ArtfulType, Fractal, Calculator, Piano, Recorder, Tracker and ModPlug Player
   (both play Amiga MOD files).
-- **Games** — Minesweeper, Solitaire, Arkanoid, Missile Command, Cyclone 88
-  and TameGram.
+- **Games** — Minesweeper, Solitaire, Arkanoid, Missile Command, Cyclone 88,
+  Tank Attack (a first-person wireframe tank duel that takes the whole
+  machine, in 320x200 colour on CGA, Mode X on VGA and 640x200 mono in the
+  middle of a Hercules) and TameGram.
 - ...plus the Task Manager itself, and HELLO, a minimal package that exists to
   be the smallest thing the SDK can build.
 

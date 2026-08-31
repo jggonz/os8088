@@ -63,7 +63,15 @@ def _map(app):
     mp = "/tmp/os88_%s.map" % app
     open(tmp, "w").write(open(src).read() + "\n[map all %s]\n" % mp)
     inc = ["-I", os.path.join(ROOT, "apps") + os.sep,
-           "-I", os.path.join(ROOT, "apps", app) + os.sep]
+           "-I", os.path.join(ROOT, "apps", app) + os.sep,
+           "-I", os.path.join(ROOT, "drivers", "net") + os.sep]
+                                        # apps/telnet and apps/ftpd include
+                                        # netpkg.inc from the driver that
+                                        # publishes the socket surface, which
+                                        # is what their Makefile lines pass
+                                        # too. Harmless for every other app -
+                                        # nasm only reaches a -I when an
+                                        # %include misses
     r = subprocess.run(["nasm", "-f", "bin", "-w+error"] + inc +
                        ["-o", "/dev/null", tmp],
                        capture_output=True, text=True)

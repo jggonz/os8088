@@ -238,7 +238,7 @@ def _win(m, S, slot):
 
 
 def _flush(x, w, flags, vidw):
-    """Is this window's LEFT BORDER suppressed? (SPEC.md 11.95.2)
+    """Are this window's SIDE BORDERS suppressed? (SPEC.md 11.95.2/11.95.3)
 
     `wm_flush` is `wm_snap_want` AND `W_X == 0` AND `W_X + W_W >= [vid_w]`,
     and `wm_snap_want` is neither WF_NOSNAP nor WF_FULL (kernel/wm.inc). It is
@@ -261,12 +261,14 @@ def _oracle_cells(adapter):
     """(CW, CH) for this adapter, from tools/weavesim.py (WEAVE-SPEC 12.1).
 
     THE ORACLE ANSWERS, NOT THIS FILE. WEAVE-SPEC 7.1.1 ends "Nothing else in
-    this document may hard-code 79, 89, 17, 35 or 52", and a test that mirrors
+    this document may hard-code 80, 90, 17, 35 or 52", and a test that mirrors
     a constant is a constant that goes stale - so the numbers come from the
     reference implementation every differential in the family already diffs
-    against. The formula is `CW = floor(([vid_w]-1)/8)`,
+    against. The formula is `CW = floor([vid_w]/8)`,
     `CH = floor(([vid_h]-64)/8)`; it is here as documentation and is computed
-    nowhere in this file.
+    nowhere in this file. It was `([vid_w]-1)/8` while only SPEC.md 11.95.2's
+    LEFT border had gone; 11.95.3 took the right one and `_flush` below is
+    where that is decided.
 
     The grid is a property of the ADAPTER rather than of the bundle - it falls
     out of the standard rect - so which bundle is rendered does not matter.
@@ -523,7 +525,7 @@ def _drive(machine, card, want_w, want_h, S, t0, png_dir, m):
     # out so a resized window would still be measured correctly.
     flush = _flush(x, w, flags, vidw)
     cl = x if flush else x + 1
-    cwpx = (w - 1) if flush else (w - 2)
+    cwpx = w if flush else (w - 2)
     ct, chpx = y + th, h - th - 1
     ox = (cl + 7) & ~7
     cells = ((cl + cwpx - ox) // 8, chpx // 8)
@@ -565,10 +567,11 @@ def _drive(machine, card, want_w, want_h, S, t0, png_dir, m):
           "rather than any lit region at that y",
           got=sep, want="< %d" % int(cwpx * 0.1))
 
-    # 3 - THE EDGES, AND HOW MANY OF THEM THERE ARE. SPEC.md 11.95.2: a
-    # snapped window spanning the screen draws THREE sides, because a
-    # border separates a window from what is beside it and at x = 0 there
-    # is nothing beside it. WEAVE's standard rect is exactly that window,
+    # 3 - THE EDGES, AND HOW MANY OF THEM THERE ARE. SPEC.md 11.95.2 and
+    # 11.95.3: a snapped window spanning the screen draws TWO sides, because
+    # a border separates a window from what is beside it and at x = 0 - and
+    # at the far edge, which is the same sentence - there is nothing beside
+    # it. It was three sides until 11.95.3 took the right border too. WEAVE's standard rect is exactly that window,
     # so a gate that asserted a dark column 0 would fail on the correct
     # build - and one that asserted it only for the non-flush case would
     # be asserting nothing at all here. Both shapes are checked, and which
@@ -578,10 +581,10 @@ def _drive(machine, card, want_w, want_h, S, t0, png_dir, m):
     # too, so "row y+h-1 is dark" is equally true of y+h. Each edge is
     # paired with something NOT dark just inside it.
     edges = [("top",    _row_lit(rows, y, x, x + w),         w),
-             ("bottom", _row_lit(rows, y + h - 1, x, x + w), w),
-             ("right",  _col_lit(rows, x + w - 1, y, y + h), h)]
+             ("bottom", _row_lit(rows, y + h - 1, x, x + w), w)]
     if not flush:
-        edges.append(("left", _col_lit(rows, x, y, y + h), h))
+        edges.append(("left",  _col_lit(rows, x, y, y + h), h))
+        edges.append(("right", _col_lit(rows, x + w - 1, y, y + h), h))
     for what, got, span in edges:
         check(got < span * 0.1,
               "%s: the %s frame edge is where the record says"

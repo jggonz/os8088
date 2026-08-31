@@ -35,7 +35,6 @@ different question (39.3's banking) at the same time.
 import argparse
 import os
 import struct
-import subprocess
 import sys
 import time
 
@@ -113,10 +112,9 @@ def main():
     ap.add_argument("--gif", default="build/OS8088.GIF")
     a = ap.parse_args()
 
-    if a.apps == "/tmp/blitpair.img" and not os.path.exists(a.apps):
-        subprocess.check_call(
-            [sys.executable, "tools/os88disk.py", "-o", a.apps, "--size",
-             "360", "APPS:build/paint.o88", "MEDIA:" + a.gif])
+    if a.apps == "/tmp/blitpair.img":
+        os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
+                               "MEDIA:" + a.gif)
 
     iw, ih, px = gif_pixels(a.gif)
     black = sum(1 for v in px if v == 1)

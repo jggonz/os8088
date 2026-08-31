@@ -297,6 +297,18 @@ br_entry:
                                     ; every paint and relayouts on a WIDTH
                                     ; change (BROWSER-PLAN 3.5), so the window
                                     ; can be resized without anything else
+    mov al, OSAPI_SAVEU_ON | OSAPI_SAVEU_1BPP
+                                    ; ...AND NOTHING HAS BEEN FETCHED YET, so
+    call OSAPI_WM_SAVEU             ; the page is standing still and a raise
+                                    ; may put it back instead of lettering it
+                                    ; (SPEC.md 11.96.1). Only the STARTING
+                                    ; answer: br_promise re-answers it per
+                                    ; fetch, which is SPEC.md 71.11 and the
+                                    ; whole reason this app can promise at all
+                                    ; - its worker advances the page and skips
+                                    ; drawing when covered, which is the
+                                    ; disqualifier, but only while a fetch is
+                                    ; in flight
     mov si, br_pref                 ; **AND THE THREE HEIGHTS BECOME A
     call OSAPI_WM_PREFER            ; DECLARATION** (SPEC.md 11.100.1). br_size
                                     ; above still decides what we OPEN at and
@@ -306,7 +318,11 @@ br_entry:
     mov ax, br_onresize
     call OSAPI_WM_ONRESIZE          ; ...and tell us, so the dock question gets
                                     ; asked again (SPEC.md 11.98)
-    call br_arg                     ; launched ON a document? then open it
+    mov ax, br_onwake               ; SPEC.md 54.10: the kernel calls this once
+    call OSAPI_WM_ONWAKE            ; our window is on the glass, and the launch
+                                    ; document loads in front of it
+    call br_arg                     ; launched ON a document? then BANK it -
+                                    ; br_onwake above is what opens it
                                     ; WF_SNAP is the DEFAULT now (SPEC.md
                                     ; 11.94), so the content origin is already
                                     ; 8-aligned and every font_run in here gets
@@ -465,9 +481,9 @@ br_onresize:
     ret
 
 ; -----------------------------------------------------------------------------
-; br_arg - open the document we were launched on (SPEC.md 54.5)
+; br_arg - BANK the document we were launched on (SPEC.md 54.5/54.10)
 ; in:  entry-proc context: UI task, no lock, window created but not shown
-; out: nothing; a failure just leaves an empty window
+; out: nothing; br_onwake is what opens it once the window is drawn
 ;
 ; Double-clicking a .HTM is the ordinary way in, and it is also what makes a
 ; scripted session simple: no dialog to drive. The name lives in the KERNEL
@@ -510,10 +526,15 @@ br_arg:
 .done:
     pop bx
     pop dx
-    call OSAPI_FILE_GOTO            ; stand in the document's folder
-    jc .out
-    mov word [br_srclen], 0         ; unknown: br_load claims the ceiling
-    call br_load
+    mov [br_argclus], dx            ; **BANK, DO NOT READ** (SPEC.md 54.10).
+    mov [br_argdrv], bl             ; This did the GOTO and the br_load right
+    mov byte [br_argp], 1           ; here, in the entry proc - under the
+                                    ; loader's own gfx-lock burst, with no
+                                    ; window on the glass and the file manager
+                                    ; still the only thing on screen, for as
+                                    ; many int 13h calls as the page took.
+                                    ; br_onwake spends the three once the window
+                                    ; is drawn
 .out:
     pop es
     pop di
@@ -522,6 +543,44 @@ br_arg:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; br_onwake - W_ONWAKE: open the launch document (SPEC.md 54.10/74.1)
+; in:  SI = our window; the UI task, gfx lock NOT held
+; out: nothing; no register need be preserved
+;
+; The kernel calls this once assoc_run has shown our window, so the read
+; happens in front of a Browser the user can see and SPEC.md 12.8's widget
+; steps through it. It takes the lock for the burst SPEC.md 74.1 lets it state
+; - one file read, one parse, one relayout and one band repaint.
+;
+; Below the load it is br_opened's own tail, which is the point: a page opened
+; by double-click and the same page opened through File > Open now differ in
+; nothing but where the name came from.
+; -----------------------------------------------------------------------------
+br_onwake:
+    cmp byte [br_argp], 0           ; not the document's wake, or the document
+    je .out                         ; is already open
+    mov byte [br_argp], 0           ; once, whatever happens below
+    call OSAPI_GFX_LOCK
+    mov dx, [br_argclus]
+    mov bl, [br_argdrv]
+    call OSAPI_FILE_GOTO            ; stand in the document's folder
+    jc .unlock
+    mov word [br_srclen], 0         ; unknown: br_load claims the ceiling
+    call br_load
+    jc .unlock
+    mov si, [br_win]
+    call br_measure
+    mov word [br_top], 0
+    mov word [br_ptop], 0
+    call br_layout
+    call br_paint_band
+    call br_sbar
+.unlock:
+    call OSAPI_GFX_UNLOCK
+.out:
     ret
 
 ; =============================================================================
@@ -6745,4 +6804,14 @@ br_abw      equ br_abon + 2           ; its measured rect, SCREEN coords
 br_abh      equ br_abon + 4
 br_abl      equ br_abon + 6
 br_abt      equ br_abon + 8
-BR_BSS      equ (br_abon - os88_image_end) + 10
+
+; --- the launch document (SPEC.md 54.10) -------------------------------------
+; br_arg banks all three and br_onwake spends them, because the read cannot
+; happen in the entry proc: there is no window on the glass to read in front of.
+br_argclus  equ br_abon + 10          ; word: the folder the document lives in
+br_argdrv   equ br_abon + 12          ; byte: ...and its volume
+br_argp     equ br_abon + 13          ; byte: ...and whether one is pending at
+                                      ; all - 0,0 is a real locator (drive 0's
+                                      ; root), so the pair cannot speak for
+                                      ; itself
+BR_BSS      equ (br_abon - os88_image_end) + 14

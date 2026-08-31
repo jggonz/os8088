@@ -18,7 +18,8 @@ naming one), and nothing builds them until somebody types the knob by hand:
     `REDRAWFULL=`, `HEAPCOMPACT=`, `FDDPROBE=`, `SNAPAUDIT=`, `BOOTPROF=`,
     `MOUIDSLOW=`, `TRACKRUN=`, `QUANTUM=`, `SBDRAGOFF=`/`SBRATE=`,
     `DIRW1=`, `PICOMEM=`, `BOOTMARK=`/`BOOTHALT=`/`BOOTSTOP=`, `NOPS2=`,
-    `BAND=`, `TITLESNAP=`, `NOUNAL=`.
+    `BAND=`, `TITLESNAP=`, `SPLSTARS=`, `NOUNAL=`,
+    `NOFLUSHR=`, `FATWGATE=`, `FDDSLOW=`.
     Each one is
     `%ifdef`'d code that no ordinary build compiles, so it rots in silence -
     and every one of them is the A/B half of a gate somewhere in `tests/`.
@@ -133,7 +134,24 @@ KNOBS = [
     # pass for a configuration nobody assembled.
     ("band",        ["BAND=1"]),
     ("titlesnap",   ["TITLESNAP=1"]),
+    # SPLSTARS= is TITLESNAP's sentence one screen along - the loading screen's
+    # animation A/B (SPEC.md 15.3.7) - and it carries a second reason this
+    # roster is the only thing watching: it is the ONE configuration that
+    # re-splits the blob, moving OVL_AT to 2704 so the twinkle fits `.boot2`.
+    # That leaves 34 bytes on one side of the split and 30 on the other, so the
+    # next byte spent in EITHER section breaks this arm and nothing else - and
+    # it breaks it at `nasm`, naming which half ran out, which is exactly the
+    # failure a build matrix is for.
+    ("splstars",    ["SPLSTARS=1"]),
     ("nounal",      ["NOUNAL=1"]),
+    # The three this PR added and nothing else names: NOFLUSHR is SPEC.md
+    # 11.95.3's A/B for the right border alone, FATWGATE moves 18.8.2's heap
+    # gate, FDDSLOW puts the pre-18.92 floppy timing back. None of them has a
+    # gate in tests/ the way NOBLITCUT and FATWNONE do, so this roster is the
+    # ONLY thing keeping them assembling - which is what this file is for.
+    ("noflushr",    ["NOFLUSHR=1"]),
+    ("fatwgate",    ["FATWGATE=64"]),
+    ("fddslow",     ["FDDSLOW=1"]),
     # NOPLANE= is the same sentence as BAND one polarity over, and the
     # Makefile says so at its definition: it is "the only thing keeping the
     # run-only path assembling",

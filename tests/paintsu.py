@@ -20,6 +20,15 @@ content is ~9 KB on 1bpp against ~36 on VGA and ~150 grown large. On a colour
 adapter Paint therefore banks the tool column as a BAND and redraws the
 canvas; on a 1bpp one it banks the lot.
 
+THREE ASSERTIONS NOW, and the third is what stops the second lying. A
+restore is only answerable for what CHANGED across it, so the picture is
+compared against the file BEFORE the cover as well as after: pixels that were
+already wrong are reported as the draw's, pixels the cover changed are the
+cache's. Without that split this row spent its life saying "the cache put back
+the wrong pixels" about a cache that was restoring them faithfully - measured,
+486 differing before the Control Panel opened and 455 after, the same rows
+both times.
+
 TWO ASSERTIONS, and the second is the one the measurement does not make.
 That the canvas is not redrawn - no gfx_blit4 as wide as the picture crosses
 the uncover, where the band build issues one 376 pixels wide. And that what
@@ -34,7 +43,6 @@ pointer clamped so every click after it lands somewhere else.
 """
 import argparse
 import os
-import subprocess
 import sys
 import threading
 import time
@@ -73,10 +81,9 @@ def main():
     ap.add_argument("--gif", default="build/OS8088.GIF")
     a = ap.parse_args()
 
-    if a.apps == "/tmp/paintsu.img" and not os.path.exists(a.apps):
-        subprocess.check_call(
-            [sys.executable, "tools/os88disk.py", "-o", a.apps, "--size",
-             "360", "APPS:build/paint.o88", "MEDIA:" + a.gif])
+    if a.apps == "/tmp/paintsu.img":
+        os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
+                               "MEDIA:" + a.gif)
 
     iw, ih, px = gif_pixels(a.gif)
     kbase = os88sym.KERNEL_SEG << 4
@@ -119,6 +126,21 @@ def main():
         m.bp_exec()
         m.run()
         time.sleep(6)
+
+        # --- WHAT IS ON THE GLASS BEFORE ANYTHING IS COVERED ---------------
+        # WITHOUT THIS THE ROW BLAMES THE CACHE FOR WHAT THE DRAW GOT WRONG,
+        # and it did: the picture came back from the cache pixel for pixel and
+        # the row still said "the cache put back the wrong pixels", because
+        # the two rows it compared were already wrong before the Control Panel
+        # ever opened. A restore is only answerable for what CHANGED across
+        # it, so both sides are measured and the two failures are named apart.
+        mo.to(4, 4)                     # ...THE POINTER OFF THE CANVAS FIRST,
+        os88marty.settle(m)             # which the uncover capture below has
+        fw0, fh0, fb0 = m.fbuf(card=0)  # always done: it is parked over the
+        before = _differs(fb0, fw0, ox, oy, iw, ih, px)   # file's icon at this
+                                        # point, and an arrow drawn on the
+                                        # canvas is 31 differing pixels that
+                                        # belong to nothing
 
         # --- WHAT THE CACHE IS ASKED FOR, off wm_su_kb's own answer
         serialise(m)
@@ -175,26 +197,40 @@ def main():
     print("   uncover: a canvas-sized gfx_blit4 %s"
           % ("never ran - the cache put it back" if wide is None
              else "RAN, x=%d y=%d w=%d h=%d" % wide))
-    bad = [(c, rw) for rw in range(ih) for c in range(iw)
-           if (fb[((oy + rw) * fw + ox + c) * 3] < 128) != (px[rw * iw + c] == 1)]
-    print("   what came back: %d of %d pixels differ from the file"
-          % (len(bad), iw * ih))
-    if bad:
-        xs = [b[0] for b in bad]
-        ys = [b[1] for b in bad]
-        print("      box x %d..%d y %d..%d, first 8: %r"
-              % (min(xs), max(xs), min(ys), max(ys), bad[:8]))
+    bad = _differs(fb, fw, ox, oy, iw, ih, px)
+    print("   against the file: %d of %d pixels differed BEFORE the cover, "
+          "%d after" % (len(before), iw * ih, len(bad)))
+    for tag, w in (("before", before), ("after", bad)):
+        if w:
+            xs, ys = [b[0] for b in w], [b[1] for b in w]
+            print("      %-6s box x %d..%d y %d..%d, first 8: %r"
+                  % (tag, min(xs), max(xs), min(ys), max(ys), w[:8]))
+    kept = set(before) & set(bad)
+    lost = [b for b in bad if b not in set(before)]
     if want is None or want < BAND_KB:
         sys.exit("paintsu: the cache is %s KB - that is a BAND, so Paint did "
                  "not take the whole content on a 1bpp adapter" % want)
     if wide:
         sys.exit("paintsu: the canvas was redrawn, so the cache did not cover "
                  "it")
-    if bad:
-        sys.exit("paintsu: FAILED - the cache put back the wrong pixels")
+    if lost:
+        sys.exit("paintsu: FAILED - the cache changed %d pixel(s) that were "
+                 "right before the cover" % len(lost))
+    if before:
+        sys.exit("paintsu: FAILED - the canvas was ALREADY wrong in %d "
+                 "pixel(s) before anything covered it, and the cache put "
+                 "those same pixels back faithfully. This is not the raise "
+                 "cache: look at what DREW them" % len(before))
     print("paintsu: the canvas came back from the cache, %d pixels, undrawn"
           % (iw * ih))
     return 0
+
+
+def _differs(fb, fw, ox, oy, iw, ih, px):
+    """Every canvas pixel that is not the file's, as (x, y)."""
+    return [(c, rw) for rw in range(ih) for c in range(iw)
+            if (fb[((oy + rw) * fw + ox + c) * 3] < 128)
+            != (px[rw * iw + c] == 1)]
 
 
 def _open(m, mo):

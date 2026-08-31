@@ -197,7 +197,7 @@ FS_DRV      equ 10              ; byte: the drive it shows
 FS_MOK      equ 11              ; byte: 1 = that listing came from a good mount
 FS_VIEW     equ 12              ; byte: 0 = list, 1 = icon grid
 FS_EDIT     equ 13              ; byte: the status-line editor is armed here
-                                ; +14 and +15 are FREE: FS_FERR and FS_LDST,
+                                ; +14 and +15 WERE FREE: FS_FERR and FS_LDST,
                                 ; the FERR_* of the last file operation in
                                 ; this window and the LD_* of the last load it
                                 ; posted. Both were per window because a
@@ -208,9 +208,12 @@ FS_EDIT     equ 13              ; byte: the status-line editor is armed here
                                 ; claiming to have been asked. A verdict is a
                                 ; TOAST now (SPEC.md 59.5) and belongs to no
                                 ; window at all, which DISSOLVES that question
-                                ; rather than answering it. The offsets are
-                                ; left as a hole deliberately: every one below
-                                ; is hand-written, and FS_SIZE is unchanged.
+                                ; rather than answering it. The offsets were
+                                ; left as a hole deliberately - every one below
+                                ; is hand-written, so FS_SIZE never moved - and
+                                ; both have since been spent, +14 on FS_2UP and
+                                ; +15 on FS_IOFH. The hole is CLOSED: the next
+                                ; per-window byte costs FM_MAXWIN of them.
 FS_2UP      equ 14              ; byte: 1 = this window's LAST PAINT left a
                                 ; two-line prompt's first line up in the row
                                 ; area (SPEC.md 22.20.1). One of the two free
@@ -218,6 +221,25 @@ FS_2UP      equ 14              ; byte: 1 = this window's LAST PAINT left a
                                 ; the Disk window is multi-instance, so a
                                 ; global was cleared by another window's paint
                                 ; while a prompt was still on this one's glass
+FS_IOFH     equ 15              ; byte: the HIGH byte of where the ICON slots
+                                ; start inside this window's own cache, 0 = it
+                                ; has none (SPEC.md 22.6.1). The low byte is
+                                ; always zero and is asserted to be below, so
+                                ; one byte carries the whole offset.
+                                ;
+                                ; A CACHE KEEPS THE SHAPE IT WAS FILLED WITH,
+                                ; and [dsk_nmax] is the volume mounted LAST -
+                                ; which after fmv_reload_all is whichever Disk
+                                ; window the inst_tab walk ended on. Reading
+                                ; the global here drew one window's icons out
+                                ; of another window's arithmetic: measured, a
+                                ; hard disk's window after a drop from a
+                                ; floppy, every icon a block of stripes made
+                                ; of its own directory entries. It cannot be
+                                ; derived from FS_VKB either - fmv_fit only
+                                ; ever GROWS the claim, so a window back from
+                                ; a hard disk holds a 32-entry listing in a
+                                ; 64-entry claim
 FS_VSEG     equ 16              ; word: this window's listing-cache claim
                                 ; (SPEC.md 50.2), 0 = none - fm_kinit claims
                                 ; VIEW_KB and the instance's teardown frees
@@ -354,6 +376,8 @@ fm_kinit_x:
 
     mov word [di+FS_VSEG], 0    ; the listing cache: VIEW_KB of the heap,
     mov byte [di+FS_VKB], 0     ; owned by THIS instance so its teardown
+    mov byte [di+FS_IOFH], 0    ; ...and NOTHING in it yet, whatever the last
+                                ; tenant of this KD_POOL block left (22.6.1)
     push bx                     ; frees it (SPEC.md 50.2/50.4). fmv_fit
     push dx                     ; RE-claims it at DSK_VKB the moment this
     mov ax, si                  ; window lists a driver-backed volume (22.6)
@@ -366,7 +390,19 @@ fm_kinit_x:
     jc .nocache                 ; no room: the window still works, it just
     mov [di+FS_VSEG], dx        ; re-reads the global snapshot to paint
     mov byte [di+FS_VKB], VIEW_KB
-    call fmv_movable            ; ...and it is MOVABLE (SPEC.md 66.5.6)
+    mov ax, fm_reloc            ; ...and it is MOVABLE (SPEC.md 66.5.6) - with
+    call mem_movable_x          ; the owner ALREADY IN BX, which is the whole
+                                ; fix (SPEC.md 66.5.6.2). fmv_movable derives
+                                ; it from [fm_vinst] instead, and fm_vp_set
+                                ; does not publish this window until 60-odd
+                                ; lines below - so the fence in mem_movable
+                                ; (`yours, or not at all') compared this
+                                ; claim's owner against the PREVIOUS acting
+                                ; window's slot, or 0 on the first one, and
+                                ; refused. fmv_movable throws its CF away in
+                                ; a popf, so every Disk window on a floppy
+                                ; volume has carried a PINNED 3KB cache in
+                                ; the arena's floor since 66.5.6 landed
 .nocache:
     pop dx
     pop bx
@@ -565,6 +601,35 @@ fmv_iofs:
     ret
 
 ; -----------------------------------------------------------------------------
+; fmv_viofs - where they start inside the ACTING WINDOW'S OWN CACHE (22.6.1)
+; in:  nothing ([fm_vp] published, which fm_layout does for every painter)
+; out: BX = the slot-relative offset
+; clobbers: BX (the output), flags
+;
+; fmv_iofs above answers for the GLOBAL snapshot, whose shape IS [dsk_nmax] -
+; and that is the volume mounted LAST, which is not this window's after
+; fmv_reload_all has walked every one of them. The shape a slot was FILLED
+; with is recorded in FS_IOFH when it is filled, and this is the only reader.
+;
+; FS_IOFH = 0 is "no cache of its own", where fmv_copy_in falls back to the
+; global snapshot - so this defers to fmv_iofs there, or the offset this hands
+; out and the base fmv_copy_in subtracts from it would be two different
+; volumes' arithmetic.
+; -----------------------------------------------------------------------------
+%if ((DSK_NENT * DSK_DE_SIZE) & 0xFF) || ((DSK_VENT * DSK_DE_SIZE) & 0xFF)
+%error "FS_IOFH holds an icon base in ONE byte: nmax*32 must be a multiple of 256"
+%endif
+fmv_viofs:
+    push si
+    mov si, [fm_vp]
+    mov bh, [si+FS_IOFH]
+    xor bl, bl
+    pop si
+    or bh, bh
+    jz fmv_iofs                 ; no cache: the global's, for the reason above
+    ret
+
+; -----------------------------------------------------------------------------
 ; fmv_get_dir - stage one entry out of THIS window's cache
 ; in:  AX = entry index (0..31; callers bound it by FS_N)
 ; out: SI -> dsk_ent, holding that entry's 32 bytes
@@ -603,8 +668,8 @@ fmv_get_icon:
     push di
     mov cl, 6                   ; index * 64, past the entry images
     shl ax, cl
-    call fmv_iofs
-    add ax, bx
+    call fmv_viofs              ; THIS WINDOW'S base, not the global's - the
+    add ax, bx                  ; one place the two can differ (SPEC.md 22.6.1)
     mov si, ax
     mov di, dsk_ico
     mov cx, DSK_ICO_SIZE
@@ -684,9 +749,12 @@ fmv_store:
                                 ; so nothing may bank them until it is redrawn
 .nowin:
     call fmv_fit                ; the claim has to be big enough for THIS
-    mov ax, [di+FS_VSEG]        ; volume's listing before anything is copied
+    mov byte [di+FS_IOFH], 0    ; volume's listing before anything is copied
+    mov ax, [di+FS_VSEG]
     or ax, ax
-    jz .none                    ; no cache: nothing to write it into
+    jz .none                    ; no cache: nothing to write it into, and
+                                ; nothing but the GLOBAL shape to read it
+                                ; back with (SPEC.md 22.6.1)
     push di
     call fmv_iofs               ; BX = where the icons start in a slot
     mov si, [dsk_doff]
@@ -704,6 +772,10 @@ fmv_store:
     pop ax
     call fmv_copy_out
     pop di
+    mov [di+FS_IOFH], bh        ; ...AND THE SHAPE IT WAS FILLED WITH, which
+                                ; is this mount's and not whichever one paints
+                                ; it next (SPEC.md 22.6.1). BL is 0 by the
+                                ; assertion at fmv_viofs
 .none:
     pop di
     pop si
@@ -3003,6 +3075,16 @@ fm_onkey_x:
                                 ; second press
 .edkey:
     call fm_editkey
+    sbb bx, bx                  ; BANK THE ANSWER (0 / -1) BEFORE THE COMPARE
+                                ; BELOW WRITES CF (SPEC.md 22.13.3).
+                                ; `cmp word [x], 0` cannot borrow, so it
+                                ; CLEARED the carry every time and the `jc`
+                                ; under it was dead code: a Delete, a Rename
+                                ; or a New Folder committed and then took the
+                                ; status line's cheap path, leaving the row it
+                                ; had just removed on the glass. BX is free
+                                ; here - fm_onkey_x pushed it and nothing
+                                ; below this label reads it
     cmp word [fdlg_win], 0
     jne .out                    ; **THIS KEYSTROKE PUT A MODAL DIALOG UP**
                                 ; (SPEC.md 18.99.8/38.2), so everything it
@@ -3019,7 +3101,8 @@ fm_onkey_x:
                                 ; it cannot fire wrongly: a dialog that was
                                 ; already up would have taken this key
                                 ; (fdlg_top)
-    jc .redraw                  ; it changed the listing or the mode
+    or bx, bx
+    jnz .redraw                 ; it changed the listing or the mode
     call fm_status_only         ; ...otherwise the name being typed lives on
     jc .redraw                  ; the status line and that is ALL that moved.
     jmp .out                    ; CF = 1 is 11.3's granularity refusal
@@ -5001,17 +5084,26 @@ fm_editkey:
     mov bl, [fm_elen]
     xor bh, bh
     cmp bl, 12
-    jae .out                    ; 8 + '.' + 3 is the whole 8.3 budget
+    jae .nochg                  ; 8 + '.' + 3 is the whole 8.3 budget
     cmp al, '.'
     jne .ordinary
     or bl, bl
-    jz .out                     ; a short name may not start with the dot
+    jz .nochg                   ; a short name may not start with the dot
     call fm_hasdot
-    jc .out                     ; ...and may not carry a second one
+    jc .nochg                   ; ...and may not carry a second one
     jmp short .store
+.nochg:                         ; A REFUSED CHARACTER MOVED NOTHING, so it owes
+    jmp .lineonly               ; what an accepted one owes and no more - the
+                                ; prompt already says what it says. These four
+                                ; sites answered .out, "the caller owes the
+                                ; whole window", which was harmless only for
+                                ; as long as nothing read that answer (SPEC.md
+                                ; 22.13.3): reconnecting the branch without
+                                ; this would repaint the window every time a
+                                ; rename prompt was typed a comma
 .ordinary:
     call dskw_char_x            ; upper-cases, or CF=1 = not in the FAT set
-    jc .out
+    jc .nochg
 .store:
     mov [fm_ebuf+bx], al
     inc bx
@@ -5024,7 +5116,13 @@ fm_editkey:
     mov bl, [fm_elen]
     xor bh, bh
     or bl, bl
-    jz .out
+    jz .nochg                   ; ...and a BACKSPACE THAT REMOVED NOTHING owes
+                                ; the same as a refused character: the prompt
+                                ; is already empty. `.out` answers CF=1, which
+                                ; fm_onkey_x now reads as "repaint the whole
+                                ; window" - so holding Backspace on an empty
+                                ; Rename or New Folder box repainted the
+                                ; listing at every typematic repeat
     dec bl                      ; `dec bl` IS `dec bx` here (BH is 0), so BX
     mov [fm_elen], bl           ; is the NEW length and the terminator lands
     mov byte [fm_ebuf+bx], 0    ; on the character just dropped - the -1 that

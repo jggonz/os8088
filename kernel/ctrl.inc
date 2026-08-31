@@ -2021,6 +2021,50 @@ cp_divider:
     ret
 
 ; -----------------------------------------------------------------------------
+; cp_promise - the panel's content stands still unless the CLOCK is on it
+; in:  nothing; the gfx lock HELD by the caller (cp_page's contract)
+; out: nothing (every register and the flags preserved)
+;
+; SPEC.md 31.12, which is SPEC.md 11.96.1's promise answered per PAGE.
+;
+; The panel has NO WORKER, and on every page but one nothing in it changes
+; without a click - which cannot reach a window that is not frontmost, and a
+; frontmost window never holds a cache (11.96.4 drops it). The exception is
+; Date & Time: ui_task calls cp_tick once a second, and cp_tick_x SKIPS
+; DRAWING when wm_obscured says so. That is 11.96.1's disqualifier exactly -
+; the clock advances and the glass does not - so a cache taken before it
+; shows the wrong time on the raise.
+;
+; So the promise is [cp_sel] != CP_ITIME. No depth claim goes with it: the
+; panel's content is 22,190 bytes at four planes and already fits under
+; wm_su_kb's ceiling, and it draws in CDGRAY (SPEC.md 47), so a two-colour
+; claim would be a lie for nothing.
+; -----------------------------------------------------------------------------
+cp_promise:
+    pushf
+    push ax
+    push bx
+    push di
+    mov al, KIND_CTRL
+    call KERNEL_SEG:cw_inst_find_kind   ; CF = 1: no live panel, nothing to
+    jc .out                             ; promise about - cp_page runs from
+                                        ; the paint, and the record is what
+                                        ; carries the flag
+    mov bx, [di+I_WIN]
+    mov al, 1
+    cmp byte [cp_sel], CP_ITIME
+    jne .say
+    xor al, al                          ; the clock is on the pane: withdraw,
+.say:                                   ; and wm_saveu drops the claim with it
+    call KERNEL_SEG:cw_wm_saveu
+.out:
+    pop di
+    pop bx
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
 ; cp_page - draw the right pane: the selected item's page
 ;
 ; in:  DI = content left, BP = content top; caller holds the gfx lock
@@ -2031,6 +2075,12 @@ cp_divider:
 ; erase is what makes this the redraw path when the selection moves.
 ; -----------------------------------------------------------------------------
 cp_page:
+    call cp_promise             ; ...and WHICH page it is decides whether this
+                                ; window's content stands still (SPEC.md
+                                ; 31.12). Here because every path that
+                                ; changes the answer - the click, the paint,
+                                ; and cp_open's first draw - goes through this
+                                ; one routine
     push ax
     push bx
     push cx

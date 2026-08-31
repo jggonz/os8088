@@ -263,6 +263,25 @@ fpg_arm:
     jne .yes
     cmp byte [spl_live], 0      ; boot: the splash owns screen and mode
     jne .no
+    cmp byte [fsx_cur], 0xFF    ; **A FOREIGN MODE IS ON THE GLASS** (SPEC.md
+    jne .no                     ; 53.7): there is no menu bar to put a widget
+                                ; at the end of, and everything below composes
+                                ; one in the DESKTOP's geometry - so the icon,
+                                ; the box and the bar all land inside whatever
+                                ; the exclusive app is drawing, in its raster,
+                                ; in its colours. Reported off a 5150: a game
+                                ; saving a high score inside its bracket drew
+                                ; the widget over its own screen, and nothing
+                                ; took it away again - the app's own erase is
+                                ; its dirty spans and it never knew those
+                                ; pixels were dirty.
+                                ;
+                                ; The refusal belongs HERE and not at the call
+                                ; sites because a package's file write is a
+                                ; perfectly ordinary thing to do inside a
+                                ; bracket (SPEC.md 53.7 forbids DRAWING slots,
+                                ; not the file API), and the disk path has no
+                                ; business knowing which mode is set.
     cmp byte [gfx_lock_flag], 0 ; **ANOTHER TASK OWNS THE SCREEN** - and this
     je .free                    ; routine COMPOSES THE BAR (menu_draw_bar
     push ax                     ; below), which is drawing, so arming here
@@ -650,15 +669,23 @@ fpg_end:
 ; in:  nothing;  DS = KERNEL_SEG, gfx lock held by the caller
 ; out: nothing - all registers and the flags preserved
 ;
-; **gfx_unlock is its ONE caller, and that is the whole safety argument**
-; (SPEC.md 12.8.3) - dsk_batch_end's, one section over (SPEC.md 18.9.3). The
+; **gfx_unlock is its ONE ROUTINE caller, and that is the whole safety
+; argument** (SPEC.md 12.8.3) - dsk_batch_end's, one section over (SPEC.md
+; 18.9.3). The
 ; freeze this widget reports IS a gfx-lock hold: the disk is the UI task's,
 ; dsk_xfer raises [sch_lock] across every int 13h, and the caller has held the
 ; lock since before it started. So every way out of a locked run of kernel
 ; code - return, failure, a question, a swap prompt - comes through here, and
 ; the widget cannot be left on the bar by anything: not by forgetting a
 ; bracket, not by returning early, not by a file operation that failed.
-; Nothing anywhere has to call this and nothing may.
+; Nothing anywhere HAS to call this.
+;
+; ONE OTHER SITE MAY, and it is an exception with a reason rather than a
+; loophole: fsx_mode calls it before setting a foreign mode (SPEC.md 12.8.5),
+; because the desktop this routine repairs is about to stop existing. It calls
+; the TEARDOWN and not a state reset for the sake of bit 1 of [fpg_on] -
+; clearing that byte by hand would drop the cursor debt and leave the arrow
+; gone for the rest of the session.
 ;
 ; It is a compare and a return on every unlock that saw no file work, which is
 ; nearly all of them.

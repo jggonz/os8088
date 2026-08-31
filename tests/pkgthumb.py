@@ -187,9 +187,7 @@ elif APP == "word":
     from os88fixture import need
     need("build/word.o88", "build/WORD.OVL", "build/WELCOME.DOC")
     EXTRA = ["build/WORD.OVL", "build/WELCOME.DOC"]
-if not os.path.exists(DISK):
-    subprocess.check_call([sys.executable, "tools/os88disk.py", "-o", DISK,
-                           "--size", "360", PKG] + (EXTRA or [LONG]))
+M.scratch_disk(DISK, PKG, *(EXTRA or [LONG]))
 
 OPEN = {"word": "WELCOME.DOC", "frotz": "ZOPS.Z5"}.get(APP, DOC[0])
 

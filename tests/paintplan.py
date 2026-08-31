@@ -29,7 +29,6 @@ fallen back to nibbles (pt_topacked) before the first frame.
 """
 import argparse
 import os
-import subprocess
 import sys
 import time
 
@@ -55,10 +54,9 @@ def main():
     ap.add_argument("--gif", default="build/OS8088.GIF")
     a = ap.parse_args()
 
-    if a.apps == "/tmp/paintplan.img" and not os.path.exists(a.apps):
-        subprocess.check_call(
-            [sys.executable, "tools/os88disk.py", "-o", a.apps, "--size",
-             "360", "APPS:build/paint.o88", "MEDIA:" + a.gif])
+    if a.apps == "/tmp/paintplan.img":
+        os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
+                               "MEDIA:" + a.gif)
 
     iw, ih, px = gif_pixels(a.gif)
     black = sum(1 for v in px if v == 1)
