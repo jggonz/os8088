@@ -3675,7 +3675,23 @@ $(eval $(call CC_PACKAGE,weave,weave,WEAVE.OVL))
 WEAVESRC := $(wildcard apps/weave/*.c apps/weave/*.h)
 WEAVEINC := $(wildcard apps/weave/*.inc)
 $(BUILD)/weave.raw.asm: $(WEAVESRC)
-$(BUILD)/weave.bin:     $(WEAVEINC) $(BUILD)/wsmsize.inc
+$(BUILD)/weave.bin:     $(WEAVEINC) $(BUILD)/wsmsize.inc $(BUILD)/wvmtab.inc
+
+# --- the WVM's dispatch table, GENERATED (WEAVE-SPEC 4.5, 12.1) --------------
+# apps/weave/wvm.inc `%include`s it so that an opcode added to the model with
+# no handler in the core is an nasm error naming the missing label rather than
+# a silent disagreement between two interpreters.
+#
+# IT HAD NO RULE UNTIL WAVE 7, and the file's own comment said it was "a
+# Makefile prerequisite of build/weave.bin" - which was true of the line above
+# and false of the generator. The only thing that wrote it was
+# apps/weave/hosttest/weavevm.sh, the soak row's script, so `make clean && make
+# weavedisk` failed on a tree where that row had never run and worked
+# everywhere else, which is the shape of bug a clean build finds and nothing
+# else does. Found by wave 7's determinism check, which is what that check is
+# for. `all` never built weave.bin, so no SHIPPED floppy was ever affected.
+$(BUILD)/wvmtab.inc: tools/weavesim.py docs/WEAVE-SPEC.md | $(BUILD)
+	python3 tools/weavesim.py --emit-optab > $@
 
 # --- WEAVE.WSM, the canvas core (WEAVE-SPEC 1.2.2) ---------------------------
 # A SEPARATE `nasm -f bin` job, not part of the package's one translation unit
