@@ -4648,12 +4648,377 @@ def _vmc_ring(path):
     return out
 
 
+# =============================================================================
+# THE CANVAS COMPOSER (WEAVE-SPEC 6.10.2) AND ITS DIFFERENTIAL CORPUS
+#
+# The model deliberately does not draw pixels for any other component - the
+# docstring at the top of this file says so - and for the canvas it has to,
+# because 6.10.2 is the ONE part of wave 5 with no other oracle. weavegrid
+# diffs the band composer against `band()`; weavegfx diffs a card against
+# `--render`; the canvas's buffer is not on any card and its dirty-band choice
+# is not visible in a picture at all. So this is the reference implementation
+# of a thing the machine does, written from 6.10.2 and from nothing else, and
+# apps/weave/hosttest/weavecv.asm runs the SHIPPING wspr.inc against it in raw
+# QEMU with no kernel underneath (WEAVE-SPEC 12.1.3).
+# =============================================================================
+
+
+class CvSprite:
+    """One sprite record (WEAVE-SPEC 6.10.4), host-side."""
+
+    def __init__(self, desc, img, msk, wb, ph, nfr, x, y, vx, vy, shown):
+        self.desc, self.img, self.msk = desc, img, msk
+        self.wb, self.ph, self.nfr = wb, ph, nfr
+        self.pw = wb * 8
+        self.x, self.y, self.vx, self.vy = x, y, vx, vy
+        self.px16, self.py16 = x * 16, y * 16
+        self.shown, self.frame, self.scored = shown, 0, False
+        self.ox, self.oy, self.oframe, self.oshown = x, y, 0, False
+
+
+class CvCanvas:
+    """WEAVE-SPEC 6.10's frame, 6.10.2's composition and 6.10.6's ring."""
+
+    RING = 32
+
+    def __init__(self, w, h, walls, tick, cid):
+        self.w, self.h, self.walls, self.tick, self.cid = w, h, walls, tick, cid
+        self.stride = w // 8
+        self.buf = bytearray(self.stride * h)
+        self.spr = []
+        self.contacts = set()
+        self.dirty = [0] * (h // 8)
+        self.frame = 0
+        self.ring = []              # the STAGING ring (6.10.6), not 4.9's
+        self.tickp = False
+        self.ovf = 0
+        self.bels = 0
+        self.blits = []             # (band0, nbands) per emitted run
+
+    # --- 6.10.6: the staging ring -------------------------------------------
+    def stage(self, comp, atom, d1, d2):
+        if atom == 57:                              # ontick collapses to one
+            if self.tickp:
+                return
+            self.tickp = True
+        if len(self.ring) >= self.RING - 1:         # head == tail is empty, so
+            self.ovf += 1                           # 31 of 32 slots are usable
+            if atom != 50:
+                return
+            if self.ring and self.ring[-1][1] != 50 and len(self.ring) > 1:
+                self.ring[-1] = (comp, atom, d1 & 0xFFFF, d2 & 0xFFFF)
+                return
+            self.bels += 1
+            return
+        self.ring.append((comp, atom, d1 & 0xFFFF, d2 & 0xFFFF))
+
+    # --- 6.10.1: the frame's arithmetic -------------------------------------
+    def step(self):
+        self.frame += 1
+        W, H, walls = self.w, self.h, self.walls
+        for k, s in enumerate(self.spr):
+            if not s.shown:
+                continue
+            s.px16 = _w16(s.px16 + s.vx)
+            s.py16 = _w16(s.py16 + s.vy)
+            s.x, s.y = s.px16 >> 4, s.py16 >> 4
+            hits = ((s.y < 0), (s.y + s.ph > H), (s.x < 0), (s.x + s.pw > W))
+            outedge = -1
+            for edge in range(4):
+                if not hits[edge]:
+                    continue
+                if walls & (1 << edge):
+                    if edge == 0:
+                        s.py16 = _w16(-s.py16)
+                    elif edge == 1:
+                        s.py16 = _w16(2 * (H - s.ph) * 16 - s.py16)
+                    elif edge == 2:
+                        s.px16 = _w16(-s.px16)
+                    else:
+                        s.px16 = _w16(2 * (W - s.pw) * 16 - s.px16)
+                    if edge < 2:
+                        s.vy = _w16(-s.vy)
+                    else:
+                        s.vx = _w16(-s.vx)
+                    s.x, s.y = s.px16 >> 4, s.py16 >> 4
+                    self.stage(self.cid, 55, self.cid + 1 + k, edge)
+                elif outedge < 0:
+                    out = ((edge == 0 and s.y + s.ph < 0)
+                           or (edge == 1 and s.y > H)
+                           or (edge == 2 and s.x + s.pw < 0)
+                           or (edge == 3 and s.x > W))
+                    if out:
+                        outedge = edge
+            if outedge < 0:
+                s.scored = False
+            elif not s.scored:
+                s.scored = True
+                s.vx = s.vy = 0
+                self.stage(self.cid, 56, self.cid + 1 + k, outedge)
+        # AABB over every PAIR, hidden counting as separated (6.10.1)
+        for i in range(len(self.spr)):
+            for j in range(i + 1, len(self.spr)):
+                a, b = self.spr[i], self.spr[j]
+                ov = (a.shown and b.shown
+                      and a.x < b.x + b.pw and b.x < a.x + a.pw
+                      and a.y < b.y + b.ph and b.y < a.y + a.ph)
+                pair = (i, j)
+                if ov and pair not in self.contacts:
+                    self.contacts.add(pair)
+                    self.stage(self.cid, 54, self.cid + 1 + i, self.cid + 1 + j)
+                elif not ov:
+                    self.contacts.discard(pair)
+        self.mark()
+        self.flush()
+        if self.tick and self.frame % self.tick == 0:
+            self.stage(self.cid, 57, self.frame & 0xFFFF, 0)
+
+    # --- 6.10.2: the dirty bands --------------------------------------------
+    def markrows(self, r0, r1):
+        r0 = max(0, r0)
+        r1 = min(self.h - 1, r1)
+        if r0 > r1:
+            return
+        for b in range(r0 >> 3, (r1 >> 3) + 1):
+            self.dirty[b] = 1
+
+    def markall(self):
+        self.dirty = [1] * len(self.dirty)
+
+    def mark(self):
+        for s in self.spr:
+            if (s.shown == s.oshown and s.x == s.ox and s.y == s.oy
+                    and s.frame == s.oframe):
+                continue
+            if s.oshown:
+                self.markrows(s.oy, s.oy + s.ph - 1)
+            if s.shown:
+                self.markrows(s.y, s.y + s.ph - 1)
+
+    def compose(self, s, r0, r1):
+        """dst = (dst AND mask) OR image, per byte, shifted into place."""
+        if not s.shown or not s.wb:
+            return
+        top = max(r0, s.y, 0)
+        bot = min(r1, s.y + s.ph - 1, self.h - 1)
+        if top > bot:
+            return
+        shift = s.x & 7
+        col0 = s.x >> 3
+        fsz = s.ph * s.wb
+        base = s.frame * fsz            # img and msk are per-frame runs here;
+                                        # 2.11 interleaves them in the SECTION
+                                        # and wsm_drawspr walks that, which is
+                                        # the machine's business and not the
+                                        # picture's
+        for r in range(top, bot + 1):
+            srow = r - s.y
+            ci = cc = 0
+            for j in range(s.wb + 1):
+                if j < s.wb:
+                    v = s.img[base + srow * s.wb + j]
+                    c = (~s.msk[base + srow * s.wb + j]) & 0xFF
+                else:
+                    v = c = 0
+                oi = (v << 8) >> shift
+                outi = ci | ((oi >> 8) & 0xFF)
+                ci = oi & 0xFF
+                oc = (c << 8) >> shift
+                outc = cc | ((oc >> 8) & 0xFF)
+                cc = oc & 0xFF
+                col = col0 + j
+                if 0 <= col < self.stride:
+                    p = r * self.stride + col
+                    self.buf[p] = (self.buf[p] & (~outc & 0xFF)) | outi
+
+    def flush(self):
+        """One GFX_BLIT1 per maximal run of dirty bands."""
+        self.blits = []
+        b = 0
+        n = len(self.dirty)
+        while b < n:
+            if not self.dirty[b]:
+                b += 1
+                continue
+            b0 = b
+            while b < n and self.dirty[b]:
+                b += 1
+            r0, r1 = b0 * 8, b * 8 - 1
+            for r in range(r0, r1 + 1):
+                for c in range(self.stride):
+                    self.buf[r * self.stride + c] = 0
+            for s in self.spr:
+                self.compose(s, r0, r1)
+            self.blits.append((b0, b - b0))
+        self.dirty = [0] * n
+        for s in self.spr:
+            s.ox, s.oy, s.oframe, s.oshown = s.x, s.y, s.frame, bool(s.shown)
+
+
+def _w16(v):
+    """The 8086's word, signed: every accumulator in 6.10.1 is one."""
+    v &= 0xFFFF
+    return v - 0x10000 if v & 0x8000 else v
+
+
 def _vmc_bytes(label, data):
     lines = ["%s:" % label]
     for k in range(0, len(data), 16):
         lines.append("    db " + ", ".join("0x%02X" % x
                                            for x in data[k:k + 16]))
     return lines
+
+
+# --- --emit-cvcorpus: the canvas differential (WEAVE-SPEC 12.1.3) ------------
+
+def _cv_spritesec(sprites):
+    """The SPRITES section (2.11) for a list of Sprite, exactly as the packer
+    lays one out - so the machine's wsm_desc reads a real section and not a
+    shape invented for the harness."""
+    sp = bytearray([len(sprites), 0])
+    at = 2 + 8 * len(sprites)
+    blobs = []
+    for s in sprites:
+        sp += bytes([s.w // 8, s.h, s.frames, 0])
+        sp += struct.pack("<H", at)
+        sp += b"\0\0"
+        blob = b"".join(i + m for i, m in zip(s.images, s.masks))
+        blobs.append(blob)
+        at += len(blob)
+    for b in blobs:
+        sp += b
+    return bytes(sp)
+
+
+# The corpus itself.  It is a TABLE and not a directory of files, which is a
+# deliberate divergence from 12.1.1's and 12.1.2's shape and is worth the
+# sentence: a WVM case is one .wjs and an FX case is one .fx, but a canvas
+# case is a canvas, a set of sprite images, an initial placement AND a frame
+# count - four kinds of thing - and a text format for it would be a fifth
+# language in a family that already has four (3, 4, 5 and the .WSP art).  The
+# art is real .WSP text, parsed by parse_wsp, so the one part that HAS a
+# language keeps it.
+_CV_ART = {
+    "BALL": "sprite BALL 8 8\n..####..\n.######.\n########\n########\n"
+            "########\n########\n.######.\n..####..\n",
+    "BAR":  "sprite BAR 8 16\n" + "########\n" * 16,
+    "DOT":  "sprite DOT 8 8\n#.......\n........\n........\n........\n"
+            "........\n........\n........\n.......#\n",
+    "TWO":  "sprite TWO 8 8 2\n####....\n####....\n####....\n####....\n"
+            "####....\n####....\n####....\n####....\n-\n....####\n....####\n"
+            "....####\n....####\n....####\n....####\n....####\n....####\n",
+}
+
+#  name, W, H, walls, tick, cid, [(art, x, y, vx, vy, shown, frame)],
+#  frames, negctl, hideframe (0 = never; else the sprite 0 is hidden BEFORE
+#  that frame, which is the only mid-run change a case can make)
+_CV_CASES = [
+    ("still", 64, 32, 0xF, 0, 3, [("BALL", 8, 8, 0, 0, 1, 0)], 3, 0, 0),
+    ("slide", 64, 32, 0xF, 0, 3, [("BALL", 8, 8, 32, 0, 1, 0)], 4, 0, 0),
+    ("subpixel", 64, 32, 0xF, 0, 3, [("BALL", 8, 8, 1, 0, 1, 0)], 40, 0, 0),
+    ("bounce-r", 64, 32, 0xF, 0, 3, [("BALL", 48, 8, 64, 0, 1, 0)], 6, 0, 0),
+    ("bounce-t", 64, 32, 0xF, 0, 3, [("BALL", 8, 4, 0, -48, 1, 0)], 5, 0, 0),
+    ("negx", 64, 32, 0, 0, 3, [("BALL", -3, 8, 0, 0, 1, 0)], 2, 0, 0),
+    ("shift3", 64, 32, 0, 0, 3, [("DOT", 3, 5, 0, 0, 1, 0)], 2, 0, 0),
+    ("shift7", 64, 32, 0, 0, 3, [("DOT", 57, 9, 0, 0, 1, 0)], 2, 0, 0),
+    ("overlap", 64, 32, 0xF, 0, 3,
+     [("BAR", 8, 4, 0, 0, 1, 0), ("DOT", 10, 6, 0, 0, 1, 0)], 2, 0, 0),
+    ("collide", 64, 32, 0xF, 0, 3,
+     [("BALL", 8, 8, 48, 0, 1, 0), ("BAR", 32, 8, 0, 0, 1, 0)], 8, 0, 0),
+    ("hide-separates", 64, 32, 0xF, 0, 3,
+     [("BALL", 8, 8, 0, 0, 1, 0), ("BAR", 10, 8, 0, 0, 1, 0)], 3, 0, 2),
+    ("score-open", 64, 32, 0x3, 0, 3, [("BALL", 8, 8, -48, 0, 1, 0)], 8, 0, 0),
+    ("frames", 64, 32, 0, 0, 3, [("TWO", 16, 8, 0, 0, 1, 1)], 3, 0, 0),
+    ("tick", 64, 32, 0xF, 3, 3, [("BALL", 8, 8, 16, 0, 1, 0)], 7, 0, 0),
+    # ...and the staging ring's OVERFLOW, which is where a lost event would
+    # live. A sprite crossing a 32-pixel canvas at 20 px a frame bounces every
+    # other frame, so 120 frames stage far more than 6.10.6's 31 usable slots
+    # and nothing ever drains them.
+    ("ring-flood", 64, 32, 0xF, 0, 3,
+     [("BALL", 8, 4, 0, -320, 1, 0)], 120, 0, 0),
+    # NEGATIVE CONTROLS: the expected answer is deliberately wrong and the
+    # harness must FAIL them.  A differential that cannot see a broken core
+    # has proved nothing (12.1.1's rule).
+    ("NEG-buffer", 64, 32, 0xF, 0, 3, [("BALL", 8, 8, 32, 0, 1, 0)], 4, 1, 0),
+    ("NEG-state", 64, 32, 0xF, 0, 3, [("BALL", 48, 8, 64, 0, 1, 0)], 6, 2, 0),
+]
+
+
+def _cv_run(case):
+    name, w, h, walls, tick, cid, places, nframes, neg, hidef = case
+    names = []
+    for pl in places:
+        if pl[0] not in names:
+            names.append(pl[0])
+    sprites = []
+    for n in names:
+        sprites += parse_wsp(_CV_ART[n], n + ".wsp")
+    sec = _cv_spritesec(sprites)
+    cv = CvCanvas(w, h, walls, tick, cid)
+    for art, x, y, vx, vy, sh, fr in places:
+        k = names.index(art)
+        s = sprites[k]
+        cv.spr.append(CvSprite(k, b"".join(s.images), b"".join(s.masks),
+                               s.w // 8, s.h, s.frames, x, y, vx, vy, sh))
+        cv.spr[-1].frame = fr
+    cv.markall()
+    cv.flush()                      # the birth composition, as the load does
+    for f in range(nframes):
+        if hidef and f + 1 == hidef:
+            cv.spr[0].shown = 0
+        cv.step()
+    return cv, sec, sprites, names
+
+
+def emit_cvcorpus():
+    """WEAVE-SPEC 12.1.3.  Answers the nasm text."""
+    out = ["; GENERATED by `python3 tools/weavesim.py --emit-cvcorpus` - do",
+           "; not edit. WEAVE-SPEC 12.1.3: the canvas core's differential, and",
+           "; the ONLY oracle 6.10.2's composition has.",
+           "",
+           "cv_ncase: dw %d" % len(_CV_CASES),
+           "cv_tab:"]
+    body = []
+    for k, case in enumerate(_CV_CASES):
+        name, w, h, walls, tick, cid, places, nframes, neg, hidef = case
+        cv, sec, sprites, names = _cv_run(case)
+        out.append("    dw cvn_%d, cvs_%d, cvi_%d, cve_%d, cvr_%d, cvb_%d, "
+                   "cvx_%d" % (k, k, k, k, k, k, k))
+        out.append("    dw %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d"
+                   % (w, h, walls, tick, cid, len(places), nframes, neg,
+                      cv.ovf, cv.bels, hidef))
+        body.append('cvn_%d: db "%s", 0' % (k, name))
+        body += _vmc_bytes("cvs_%d" % k, sec)
+        init = bytearray()
+        for art, x, y, vx, vy, sh, fr in places:
+            init += struct.pack("<7H", names.index(art), x & 0xFFFF,
+                                y & 0xFFFF, vx & 0xFFFF, vy & 0xFFFF, sh, fr)
+        body += _vmc_bytes("cvi_%d" % k, bytes(init))
+        exp = bytearray()
+        for s in cv.spr:
+            fl = (1 if s.shown else 0) | (2 if s.scored else 0) \
+                 | (4 if s.oshown else 0)
+            exp += struct.pack("<8H", s.px16 & 0xFFFF, s.py16 & 0xFFFF,
+                               s.x & 0xFFFF, s.y & 0xFFFF, s.vx & 0xFFFF,
+                               s.vy & 0xFFFF, fl,
+                               (s.frame & 0x0F) | ((s.oframe & 0x0F) << 4))
+        if neg == 2:
+            exp[0] ^= 0x01          # the negative control's wrong end state
+        body += _vmc_bytes("cve_%d" % k, bytes(exp))
+        ring = bytearray(struct.pack("<H", len(cv.ring)))
+        for comp, atom, d1, d2 in cv.ring:
+            ring += bytes([comp & 0xFF, atom & 0xFF])
+            ring += struct.pack("<2H", d1, d2)
+        body += _vmc_bytes("cvr_%d" % k, bytes(ring))
+        bl = bytearray(struct.pack("<H", len(cv.blits)))
+        for b0, nb in cv.blits:
+            bl += struct.pack("<2H", b0, nb)
+        body += _vmc_bytes("cvb_%d" % k, bytes(bl))
+        buf = bytes(cv.buf)
+        if neg == 1:
+            buf = bytes([buf[0] ^ 0xFF]) + buf[1:]
+        body += _vmc_bytes("cvx_%d" % k, struct.pack("<H", len(buf)) + buf)
+    return "\n".join(out + [""] + body)
 
 
 def emit_vmcorpus(dirname):
@@ -5861,6 +6226,9 @@ def main():
                          "(WEAVE-SPEC 12.1.1)")
     ap.add_argument("--render-after", action="store_true",
                     help="--run: print the CARD when the events are spent")
+    ap.add_argument("--emit-cvcorpus", action="store_true",
+                    help="the CANVAS differential corpus for weavecv "
+                         "(WEAVE-SPEC 12.1.3)")
     ap.add_argument("--emit-fxcorpus", metavar="DIR",
                     help="the FX differential corpus for weavevm "
                          "(WEAVE-SPEC 12.1.2)")
@@ -5884,6 +6252,13 @@ def main():
             return 0
         if args.emit_vmcorpus:
             text = emit_vmcorpus(args.emit_vmcorpus)
+            if args.o:
+                open(args.o, "w").write(text + "\n")
+            else:
+                print(text)
+            return 0
+        if args.emit_cvcorpus:
+            text = emit_cvcorpus()
             if args.o:
                 open(args.o, "w").write(text + "\n")
             else:

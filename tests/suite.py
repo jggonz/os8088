@@ -229,6 +229,24 @@ SOAK = [
         "in well under a second) plus the corpus generation and the nasm "
         "run, with room for the corpus growing",
         needs=("qemu", "nasm"), serial=True, timeout=300),
+    Row("weavecanvas", "soak", py("tests/weavecanvas.py"), 20.0,
+        "WEAVE-SPEC 12.1.3: the SHIPPING apps/weave/wspr.inc and "
+        "apps/weave/wwork.inc - WEAVE.WSM's composer and frame loop - run in "
+        "a raw-QEMU BOOT SECTOR with SS != DS and no OS under them, diffed "
+        "case by case against the model's own canvas composer. It is the one "
+        "differential in this family whose ORACLE HAD TO BE WRITTEN: every "
+        "other row diffs against something that was already there, and "
+        "6.10.2's composition had nothing - the model does not draw pixels "
+        "and the canvas buffer is on no card, so a sprite composed a byte to "
+        "the left or a dirty run a band too short is invisible in every "
+        "screenshot this family takes. Four comparisons a case: the sprite "
+        "records (the 1/16-px accumulators, the bounce mirrors, the score "
+        "latch), the staging ring record for record, the DIRTY-BAND RUNS the "
+        "last frame emitted - which is the 2-4 that 14 prices - and the "
+        "composed buffer byte for byte. Negative controls the harness must "
+        "FAIL, one wrong buffer and one wrong end state. 20s is 1s MEASURED "
+        "plus the corpus generation and the nasm run",
+        needs=("qemu", "nasm"), serial=True, timeout=300),
     Row("weavesession", "soak", py("tests/weavesession.py"), 150.0,
         "WEAVE-SPEC 12.3, 12.3.1: a scripted session driven through the "
         "SHIPPING package under MartyPC - type in a field, press a button, "
