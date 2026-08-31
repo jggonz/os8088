@@ -298,7 +298,12 @@ fork** — fetch it, merge `main` into it, review it, fix it, push the fixes
 back to their branch, comment — is `.claude/skills/review-fork-pr`
 (`/review-fork-pr <PR#>`), whose `LESSONS.md` is what seven of those reviews
 learned. `docs/UPSTREAM.md` is the same cycle seen from the fork's side and
-binds both.
+binds both. Verifying a change **on the glass** before it merges — boot the
+build in QEMU, drive the UI it claims over QMP, screenshot the evidence per
+claim, then (when asked) merge a stacked series in order — is
+`.claude/skills/functional-check` (`/functional-check [PR#|branch]`), whose
+`LESSONS.md` is what checking and merging the Weave waves (#124–#128)
+learned.
 
 ## Hard rules (§1 — these break silently if violated)
 
