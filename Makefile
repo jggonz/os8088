@@ -3194,7 +3194,7 @@ $(BUILD)/missile.o88: $(BUILD)/missile.bin tools/os88pkg.py
 # 67.9.4; default 6, a third of a second at 18fps), so a play-test can try
 # speeds without editing the source. The droid's OTHER arm - pinned two lanes
 # off the claw instead of hunting - was a knob for one cycle and is gone: drift
-# won on the glass, and PERFORMANCE.md Set 112 had already priced the two the
+# won on the glass, and PERFORMANCE.md Set 113 had already priced the two the
 # same, so there was nothing to keep the loser assembling for.
 CYCFLAGS :=
 ifdef CYTRACE

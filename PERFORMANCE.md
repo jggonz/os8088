@@ -10395,7 +10395,7 @@ travels, and even that is workload-shaped: 44.6x on a dither, and Set 63's
 4.17x is the floor a flat blit sees.
 ---
 
-### Set 112 — WEAVE's grid band composer, against Set 68's numbers (WEAVE-SPEC §6.9.1, §14)
+### Set 113 — WEAVE's grid band composer, against Set 68's numbers (WEAVE-SPEC §6.9.1, §14)
 
 `apps/weave/wband.inc` is the grid's painter: one row of cells composed into a
 1bpp band in RAM and put down with ONE `OSAPI_GFX_BLIT1` (WEAVE-SPEC §6.9.1).
