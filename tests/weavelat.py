@@ -60,6 +60,7 @@ import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
 import dispcp                                               # noqa: E402
 import uilat                                                # noqa: E402
+import weavesession                                         # noqa: E402
 import weavesmoke                                           # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -110,13 +111,19 @@ def main(argv):
         # a wake; the measurement starts immediately, so the slices are still
         # going while the pull-down is asked for. A runtime holding the gfx
         # lock across a slice shows up here and nowhere else.
-        vw = m.screen()[0]
-        cx = x if weavesmoke._flush(x, w, flags, vw) else x + 1
-        cy = y + 18 + 1
+        vw = m.vram()[0]                        # vram answers (w, h, rows);
+                                                # screen() is TEXT rows
+        cx, cy, cw, ch = weavesession._content(m, S, new[0], vw)
         mo.click(cx + 4, cy + 4)                # focus the card
         m.advance(frames=20)
         m.run()
-        mo.click(cx + 268, cy + 29)             # the Greet button's row
+        # THE BUTTON'S PLACE COMES FROM THE ORACLE, not from a guess. A
+        # hard-coded pixel is what made weavesession's first real run press
+        # the card's TITLE - "Weave GREETer" - instead of its button, and
+        # report the miss as a runtime that ignored three clicks.
+        bx, by = weavesession._find_label(m, a.machine.split("_")[2],
+                                          cx, cy, "Greet")
+        mo.click(bx, by)
         mo.to(*CHIP)
         bad += uilat.report("weave, handler running",
                             uilat.click_latency(m, mo, S))

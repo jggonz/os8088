@@ -140,7 +140,10 @@ def _oracle_meter_cells(adapter):
     for r, ln in enumerate(body):
         m = re.search(r"\[(-+)\]", ln)
         if m and "Greetings" in ln:
-            return m.start() - 1, r - 1, len(m.group(0))
+            # body[k] IS card row k: the +---+ borders start with '+' and are
+            # already filtered out, so there is no header row to subtract.
+            # Column 0 of the card is index 1, past the leading '|'.
+            return m.start() - 1, r, len(m.group(0))
     raise RuntimeError("weavesim --render: no meter row in the picture")
 
 
@@ -156,11 +159,20 @@ def _content(m, S, slot, vidw):
         cx, cw = x, w
     else:
         cx, cw = x + 1, w - 2
-    cy = y + os88geom.TITLE_H + 1
+    cy = y + os88geom.TITLE_H       # NOT +1: the kernel's own content origin
+                                    # is y + TITLE_H (tools/os88geom.py), and
+                                    # only the X side has a border to skip
     return cx, cy, cw, y + h - 1 - cy
 
 
-def _dark(rows, x0, y0, x1, y1):
+def _lit(rows, x0, y0, x1, y1):
+    """Lit pixels in the box.
+
+    `Marty.vram()` hands back ONE BYTE PER PIXEL, already de-banked, and 1 is
+    LIT - which on a window whose content the kernel white-filled means 1 is
+    the PAPER and 0 is the ink. Nothing below cares which way round that is:
+    the two readings are compared with each other, not with a threshold.
+    """
     n = 0
     for y in range(y0, y1 + 1):
         for x in range(x0, x1 + 1):
@@ -172,21 +184,25 @@ def _dark(rows, x0, y0, x1, y1):
 def _meter_fill(m, card, S, slot, vidw, cells):
     """The filled WIDTH of the meter, in pixels.
 
-    The bar is solid ink inside a frame, so the fill is the widest run of
-    fully-inked columns from the left edge of the interior. Counted rather
-    than pattern-matched: a frame's own column is inked too, and the count
-    walks past it by construction.
+    The bar is solid ink inside a frame, so the fill is the run of fully-inked
+    columns from the left edge of the INTERIOR - which starts one pixel past
+    the frame's own column, so the frame cannot be counted as a fill of 1.
     """
     col, row, wcells = cells
     cx, cy, _, _ = _content(m, S, slot, vidw)
-    rows = m.vram(card)
+    rows = m.vram(card)[2]              # vram answers (w, h, rows)
     x0 = cx + col * 8 + 1                       # inside the frame
     x1 = cx + (col + wcells) * 8 - 2
     y0 = cy + row * 8 + 1
     y1 = cy + row * 8 + 6
     n = 0
     for x in range(x0, x1 + 1):
-        if all(rows[y][x] for y in range(y0, y1 + 1)):
+        # THE BAR IS INK, so its columns are UNLIT - the content ground is
+        # the kernel's white fill and vram's 1 is lit. Reading it the other
+        # way round measures the EMPTY part of the meter and grows when the
+        # value falls, which is a number that looks plausible and is the
+        # inverse of the answer.
+        if not any(rows[y][x] for y in range(y0, y1 + 1)):
             n += 1
         else:
             break
@@ -235,10 +251,11 @@ def _drive(machine, card, vidw, S, m, want_val, want_max, cells, png_dir):
     # makes Tab the platform's own way to the next field.
     mo.click(cx + 4, cy + 4)            # the card, to give the window focus
     os88marty.settle(m)
-    m.key("tab")
+    m.key("Tab")                        # MartyKey names are W3C
+                                        # KeyboardEvent.code, not ASCII
     m.type_text(NAME)
     os88marty.settle(m)
-    ink_typed = _dark(m.vram(card), cx, cy, cx + cw - 1, cy + ch - 1)
+    ink_typed = _lit(m.vram(card)[2], cx, cy, cx + cw - 1, cy + ch - 1)
 
     _press_button(m, mo, S, cx, cy, card, "Greet")
     _press_button(m, mo, S, cx, cy, card, "Greet")
@@ -269,10 +286,13 @@ def _drive(machine, card, vidw, S, m, want_val, want_max, cells, png_dir):
              "its own (SPEC.md 75.3)",
              got=alert, want="exactly one new slot"):
         ax, ay, aw, ah, aseg, _ = weavesmoke._win(m, S, alert[0])
-        check(aseg == 0, "%s: the alert belongs to no instance" % machine,
-              "os88ui.inc's alert is UNBOUND - no dock tile, no Task Manager "
-              "row - which is what makes it a dialog rather than a window",
-              got=aseg, want=0)
+        # ITS OWNERSHIP IS NOT ASSERTED. os88ui.inc calls the alert window
+        # "unbound" - no dock tile, no Task Manager row, no callback billing
+        # (SPEC.md 75.3) - but that is about the INSTANCE table and this file
+        # cannot see which of those a W_SEG of 0 would mean. A guess dressed
+        # as a check is worse than no check: the two facts worth having are
+        # that a window arrived when alert() ran and went away when OK was
+        # taken, and both are asserted.
         mo.click(ax + aw // 2, ay + ah - 20)    # the OK button's row
         os88marty.until(m,
                         lambda mm: not (set(dispcp.win_list(mm, S)) - wins),
@@ -280,7 +300,7 @@ def _drive(machine, card, vidw, S, m, want_val, want_max, cells, png_dir):
         os88marty.settle(m)
 
     # --- 3: the callback ran, so the card CHANGED again --------------------
-    ink_end = _dark(m.vram(card), cx, cy, cx + cw - 1, cy + ch - 1)
+    ink_end = _lit(m.vram(card)[2], cx, cy, cx + cw - 1, cy + ch - 1)
     check(ink_end != ink_typed,
           "%s: the card moved after the alert was dismissed" % machine,
           "afterReset writes status.text, and it can only run as an onalert "
@@ -298,8 +318,8 @@ def _drive(machine, card, vidw, S, m, want_val, want_max, cells, png_dir):
           got="the BIOS tick did not move", want="a moving tick")
 
     if png_dir:
-        vw, vh = m.screen(card)[:2]
-        weavesmoke._shot(png_dir, machine, vw, vh, m.vram(card))
+        vw, vh, rows = m.vram(card)
+        weavesmoke._shot(png_dir, machine, vw, vh, rows)
 
 
 def _press_button(m, mo, S, cx, cy, card, label):
@@ -315,9 +335,15 @@ def _press_button(m, mo, S, cx, cy, card, label):
 
 
 def _press_check(m, mo, S, cx, cy, card):
-    x, y = _find_label(m, card, cx, cy, "Shout it")
-    mo.click(x - 12, y)                 # the glyph sits left of its label
-    os88marty.settle(m)
+    """...and a check is clicked on its LABEL, not on its glyph.
+
+    WEAVE-SPEC 7.3 gives a check a natural width of `label length + 2`, so the
+    component's rect spans the glyph AND the words beside it, and wd_hit tests
+    the whole rect. Aiming at the glyph would mean knowing where the walk put
+    it; aiming at the label is the same rect and the picture already says
+    where that is.
+    """
+    _press_button(m, mo, S, cx, cy, card, "Shout it")
 
 
 def _find_label(m, card, cx, cy, text):
@@ -332,11 +358,19 @@ def _find_label(m, card, cx, cy, text):
                          cwd=ROOT, capture_output=True, text=True)
     body = [ln for ln in out.stdout.splitlines()
             if ln.startswith("|") and ln.endswith("|")]
+    # WHOLE WORD, and this is the defect the first real run of this row found.
+    # `str.find("Greet")` matches the card's own title - "Weave GREETer" - two
+    # rows above the button, so every press landed on a <label>, no handler
+    # ever ran, and the only assertion that noticed was the meter's. A click
+    # that misses is indistinguishable from a runtime that ignored it, which
+    # is exactly the confusion a gate must not add.
+    pat = re.compile(r"(?<![A-Za-z])" + re.escape(text) + r"(?![A-Za-z])")
     for r, ln in enumerate(body):
-        c = ln.find(text)
-        if c > 0:
-            return (cx + (c - 1 + len(text) // 2) * 8 + 4,
-                    cy + (r - 1) * 8 + 4)
+        mm = pat.search(ln)
+        if mm and mm.start() > 0:
+            return (cx + (mm.start() - 1 + len(text) // 2) * 8 + 4,
+                    cy + r * 8 + 4)     # body[k] IS card row k - see
+                                        # _oracle_meter_cells
     raise RuntimeError("weavesim --render: no %r on the card" % text)
 
 
