@@ -144,14 +144,19 @@ make weavedisk  #   apps - markup, script and formulas - compiled at pack time
                 #   geometries: the runtime, `WEAVE.OVL`, `WEAVE.WSM`
                 #   (WEAVE-SPEC §1.2.2's canvas core), the three demo
                 #   bundles, LOOM and its `LOOM.WPV` (WEAVE-SPEC §1.2.4), the
-                #   demo sources and a `CATALOG.TXT` per geometry. ONE
-                #   FOLDER, and WEAVE-SPEC §11.2 has the reason: SPEC.md
-                #   §73.14 resolves an overlay in the LAUNCHED-FROM
-                #   directory, so a project in a subfolder opens an IDE
-                #   without its compilers — by either route. `BUNDLES='path/MYAPP.WAB'`
-                #   adds your own, the way `CPMSW=` and `STORIES=` do — and
-                #   the geometry still has to hold them, which is what the
-                #   recipe's cluster arithmetic refuses on
+                #   demo sources and a `CATALOG.TXT` per geometry. TWO
+                #   FOLDERS — `WEAVE/` is the runtime and the compiled
+                #   bundles, `LOOM/` the IDE and the sources — and each is
+                #   WHOLE, because SPEC.md §73.14 resolves an overlay in the
+                #   LAUNCHED-FROM directory: a bundle opens only beside
+                #   WEAVE's three files, a source only beside LOOM's, so
+                #   `LOOM/` carries a second copy of the runtime for the
+                #   bundles Pack writes there (WEAVE-SPEC §11.2 has the
+                #   photographs of the folder-per-project layout refusing by
+                #   either route). `BUNDLES='path/MYAPP.WAB'`
+                #   adds your own to `WEAVE/`, the way `CPMSW=` and `STORIES=`
+                #   do — and the geometry still has to hold them, which is
+                #   what the recipe's cluster arithmetic refuses on
 make loom       # LOOM (WEAVE-SPEC §1.2), the family's second package: the
 make loomdisk   #   in-OS IDE that edits a project's sources and packs the
                 #   `.WAB` ON THE MACHINE, byte-identical to what
@@ -161,10 +166,11 @@ make loomdisk   #   in-OS IDE that edits a project's sources and packs the
                 #   seconds), and `python3 tools/os88test.py soak -k
                 #   'weave*'` runs the machine's. `make loomdisk` puts both
                 #   packages, both overlays, WEAVE.WSM, LOOM.WPV, the demo
-                #   bundles and the demo SOURCES FLAT on one floppy in all
-                #   three geometries. `make weavedisk` is the same shape plus
-                #   `CATALOG.TXT`: one folder is a correctness requirement on
-                #   both (WEAVE-SPEC §11.2), not a layout choice
+                #   bundles and the demo SOURCES on one floppy in all three
+                #   geometries, in the same two folders as `make weavedisk`,
+                #   which is the same shape plus `CATALOG.TXT`: a WHOLE
+                #   program per folder is a correctness requirement on both
+                #   (WEAVE-SPEC §11.2), not a layout choice
 make netbench   # THE STACK'S PROFILER (SPEC.md 72.15): NETBENCH.O88 beside
                 #   FTPD.O88 on one disk, in all three geometries. ETHER.DRV
                 #   brackets its own ten stages with the PIT and this is the

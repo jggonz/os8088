@@ -3612,13 +3612,29 @@ failing before this was rewritten. And the same fence catches the other end:
 a bundle Pack writes beside its sources is a bundle a double-click opens with
 WEAVE, whose own two modules have to be in that directory too (§10.3).
 
-So **a disk that carries the runtime, the IDE and a project has exactly one
-directory it can put them in**, and `make weavedisk` puts them there: the
-sources ride the root, flat, beside `LOOM.O88`, `LOOM.OVL`, `LOOM.WPV`,
-`WEAVE.O88`, `WEAVE.OVL`, `WEAVE.WSM` and the three bundles. `CATALOG.TXT` on
-the disk says why in the reader's own words. The paragraph above this one
-calls a flat folder of several projects *"legal and slightly confusing"*, and
-that is precisely the trade being taken with its eyes open.
+So **every document on a distribution disk has to sit beside the WHOLE of the
+program that opens it**, and the family disks (`make weavedisk`, `make
+loomdisk`) are laid out as two such folders — the compiled programs apart
+from the source they were built from, which is the one separation the fence
+allows:
+
+| folder | carries | because |
+|---|---|---|
+| `WEAVE/` | `WEAVE.O88`, `WEAVE.OVL`, `WEAVE.WSM`, `FORM.WAB`, `SHEET.WAB`, `PONG.WAB`, and `BUNDLES=` | a `.WAB` opens only beside the runtime's three files (§10.3) |
+| `LOOM/` | `LOOM.O88`, `LOOM.OVL`, `LOOM.WPV`, the demo sources — **and a second copy of `WEAVE.O88`, `WEAVE.OVL`, `WEAVE.WSM`** | a `.WML` opens only beside LOOM's three; and Pack writes its bundle BESIDE the sources (§11.4), so the first run of a bundle built on the machine is a double-click on `LOOM/<X>.WAB`, which needs the runtime *there* — without it the IDE builds programs the disk cannot run |
+| root | `CATALOG.TXT`, `SYSTEM/APPDATA/` | the note that says the above in the reader's words; the state folder nothing is launched from (SPEC.md §19.9) |
+
+The runtime's second copy is ~77KB a disk and it is a copy and never a move
+(SPEC.md §24.3's rule for the core packages, applied here): the 360KB disk
+went from 209 to 285 of 354 clusters and still holds the family whole. `LOOM/`
+ships with 32 directory slots (`--dir-slots`) because the kernel does not grow
+a directory (SPEC.md §18.5) and Pack SAVES into that folder — on a 1.44MB disk
+a cluster is one sector, sixteen entries, and the folder ships with fourteen.
+Until this layout the whole disk was one flat root, which the paragraph above
+calls *"legal and slightly confusing"*; the two folders keep exactly the
+guarantee the flat root had and lose the confusion. `weavesmoke` opens
+`WEAVE/` before the bundle and `weaveprev` opens `LOOM/` before the source,
+so both routes are driven on every soak run.
 
 **A folder per project remains the right shape for a project a person KEEPS**
 — sources a person edits from a LOOM launched beside its own files, on a data
@@ -4121,10 +4137,14 @@ wave 5 closed at. `loom.o88` is **54,966 + 6,212 = 61,178, 262 under**, with
 **The distribution row is `make weavedisk` carrying the whole family** — the
 runtime, its two modules, the three bundles, LOOM and its three, the demo
 sources and a per-geometry `CATALOG.TXT` — in all three geometries, 206 of 354
-clusters at 360KB. It ships as ONE FOLDER, and §11.2 records why: the wave
-built `PROJECTS/` a folder per project first, opened it on the machine, and
-found that SPEC.md §73.14's overlay fence makes a project in a subfolder
-unopenable by both routes. `BUNDLES=` adds a
+clusters at 360KB. Wave 7 shipped it as ONE FLAT FOLDER, and §11.2 records
+why: the wave built `PROJECTS/` a folder per project first, opened it on the
+machine, and found that SPEC.md §73.14's overlay fence makes a project in a
+subfolder unopenable by both routes. **It ships as TWO folders now** —
+`WEAVE/` the runtime and the compiled bundles, `LOOM/` the IDE, the sources
+and a second copy of the runtime — which is the same fence honoured with the
+two kinds of file apart; §11.2 has the table and the arithmetic (285 of 354
+clusters at 360KB). `BUNDLES=` adds a
 user's own the way `CPMSW=` does, and the cluster-fit refusal is
 `tools/os88disk.py`'s own arithmetic: `packages need 366 clusters; disk holds
 354`. SPEC.md §19.10 gained a `WEAVE/` folder and a `LOOM/` folder, so

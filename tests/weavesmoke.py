@@ -62,19 +62,21 @@ left in build/, and a stale disk runs an earlier build's package while every
 assertion below reports on this one. `full` is the tier that is allowed to
 build (tools/os88test.py), and `make` is what knows whether anything is stale.
 
-WHY THE RUNTIME AND ITS BUNDLES ARE ALL IN THE ROOT. WEAVE.OVL, WEAVE.WSM and
-the .WAB bundles ride the root beside WEAVE.O88: a double-click on a bundle
-leaves the launched instance's current directory on the DOCUMENT's (SPEC.md
-54.9), and the overlay is resolved in that directory (SPEC.md 73.14) - so a
-bundle in a folder of its own opens a program whose every overlay path then
-refuses, politely and inexplicably.
+WHY THE RUNTIME AND ITS BUNDLES SHARE ONE FOLDER, AND WHY THIS ROW OPENS IT
+FIRST. WEAVE.OVL, WEAVE.WSM and the .WAB bundles ride the WEAVE/ folder beside
+WEAVE.O88 (WEAVE-SPEC 11.2): a double-click on a bundle leaves the launched
+instance's current directory on the DOCUMENT's (SPEC.md 54.9), and the overlay
+is resolved in that directory (SPEC.md 73.14) - so a bundle in a folder
+without the runtime opens a program whose every overlay path then refuses,
+politely and inexplicably. The disk's other folder, LOOM/, is the IDE and the
+demo sources (and a second copy of the runtime, for the bundles Pack writes
+there); weaveprev points FOLDER at it.
 
-Wave 7's disk is no longer ONLY the root - it also carries LOOM's three files,
-a PROJECTS/ folder a project (WEAVE-SPEC 11.2) and SYSTEM/APPDATA - and none
-of that touches the sentence above, because the runtime and the bundles this
-row double-clicks are still root to root. What it does mean is that the
-listing this row scrolls is longer than it was, which open_named handles and
-which is worth knowing when a navigation retry is being read.
+So `_open_bundle` is two double-clicks and not one - the folder, then the
+file - and both go through open_named, which re-reads the listing before it
+clicks; the retry that covers a lost double-click covers either of them. The
+Disk window navigates IN PLACE (the same slot, and its rect is re-read after
+the folder opens), which is brpromise's APPS/BROWSER.O88 precedent.
 
 BOTH 1bpp ADAPTERS out of one body, because they are the target class and they
 differ in kind rather than in depth - 640x200 against 720x348, two different
@@ -139,7 +141,10 @@ MACHINES = [
 # The 360KB geometry, because the 5150 machines above have 360KB drives. It is
 # also the tightest of the three, which is the one worth booting.
 DISK = "build/weave360.img"
-BUNDLE = "FORM.WAB"             # the file this double-clicks in the B: window
+FOLDER = "WEAVE"                # the folder this opens first in the B: window
+                                # (WEAVE-SPEC 11.2's layout; weaveprev sets
+                                # it to LOOM). None: the file is in the root
+BUNDLE = "FORM.WAB"             # the file this double-clicks in it
 PKG = "WEAVE"                   # CC_PKG_NAME, as os88pkg.py stamps it at +16
 RENDER_WAB = "build/FORM.WAB"   # ...and the one weavesim renders for its cell
                                 # grid. The same file today and deliberately a
@@ -417,6 +422,31 @@ def _open_bundle(m, mo, S, machine):
                             "drive B's Disk window to open", limit=20.0)
             disk = sorted(set(dispcp.win_list(m, S)) - desk)[-1]
             wx, wy = dispcp.win_rect(m, S, disk)[:2]
+            # INTO THE FOLDER FIRST (the module docstring's second block). A
+            # Disk window navigates in place: the slot is the same one, the
+            # rect is re-read because a listing that changes length can move
+            # it, and open_named's settle has already waited out the
+            # directory read. Idempotent like the rest, BY LOOKING: a retry
+            # after a lost double-click on the bundle finds the window
+            # already inside the folder, where the bundle is listed and the
+            # folder is not, so the step is skipped rather than repeated; a
+            # window standing somewhere else again goes up by ".." first.
+            # (The first draft went up by ".." whenever the folder was not
+            # listed, and the very first retry it met turned into
+            # dispcp.scroll_to's "scrolled PAST entry 0" - a RuntimeError,
+            # which this loop deliberately does not catch.)
+            if FOLDER:
+                names = [r[0].upper() for r in dispcp.listing(m, S)]
+                if BUNDLE.upper() in names and FOLDER.upper() not in names:
+                    pass                        # already inside it
+                else:
+                    if FOLDER.upper() not in names and ".." in names:
+                        dispcp.open_named(m, mo, S, os88marty.settle,
+                                          wx, wy, "..")
+                        wx, wy = dispcp.win_rect(m, S, disk)[:2]
+                    dispcp.open_named(m, mo, S, os88marty.settle,
+                                      wx, wy, FOLDER)
+                    wx, wy = dispcp.win_rect(m, S, disk)[:2]
             # BEFORE is taken with the Disk window already open, not at the
             # desktop: taken earlier it counts the Disk window's own arrival
             # as the bundle's, and the gate then passes on a machine where

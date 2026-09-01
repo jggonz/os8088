@@ -434,6 +434,33 @@ gesture, which needs `apps/weave/wact.c`'s press/release pair and the field
 pool under it, and firing needs the event ring, which is the VM's. Both are in
 WEAVE-SPEC §13.2.
 
+### 2.11 The family disk is TWO whole folders, not one flat root and not a folder per project
+
+**The ask was the obvious one** — the compiled programs apart from the source
+they were built from — and wave 7 had already shown the obvious layout for it
+refusing on the machine: a `PROJECTS/` folder per project opened LOOM without
+`LOOM.OVL` by both routes (WEAVE-SPEC §11.2), because SPEC.md §73.14 resolves
+a package's overlay and sidecars in the directory the instance stands in, and
+a double-click on a document stands it in the DOCUMENT's. Wave 7's answer was
+a flat root. Three shapes were judged after it:
+
+| shape | what breaks | verdict |
+|---|---|---|
+| flat root (wave 7) | nothing; the listing mixes 22 files of five kinds | correct and confusing |
+| `WEAVE/` bundles + runtime, `LOOM/` IDE + sources | the bundle Pack writes into `LOOM/` opens with WEAVE, whose modules are in `WEAVE/`: `WEAVE.OVL is missing or stale` on the first run of anything built on the machine — the edit-run loop (WEAVE-SPEC §1.7) dead on the disk that exists to show it | rejected |
+| the same, **plus a second copy of the runtime in `LOOM/`** | 75 clusters a disk (51,124 + 20,983 + 4,593 bytes); 285 of 354 at 360KB | **taken** |
+| kernel: resolve the overlay in the PACKAGE's directory instead | a kernel change with 512 bytes spare (docs/KERNEL-MEMORY.md), touching every overlay package's launch (CWORD, C64, RUNCPM, WORD) for a layout preference | not proposed |
+
+The copy is a copy and never a move — SPEC.md §24.3's rule for the core
+packages on the system disk — and it is the only cost: nothing changes at run
+time, and a person who launches WEAVE from `LOOM/` gets the same program. A
+folder per project stays what §11.2 describes for a project a person keeps
+beside a LOOM of its own. `make allapps` had shipped the `LOOM/` folder
+without the runtime since wave 7 — the same dead first run — and gained the
+copy in the same change, along with the `--dir-slots` the folder needs on a
+disk whose cluster is one sector (SPEC.md §18.5: the kernel does not grow a
+directory, and Pack saves into this one).
+
 ---
 
 ## 3. The platform facts that shaped everything

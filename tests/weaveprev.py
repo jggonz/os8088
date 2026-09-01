@@ -63,13 +63,11 @@ BOTH 1bpp ADAPTERS, because they are the target class and grey rounds to black
 on them (SPEC.md 39.4) - and because the GLaBIOS twins are the only pair that
 boots in a tree with no IBM ROM (tools/martypc/build.sh).
 
-IT DRIVES THE LOOM DISK AND NOT THE WEAVE ONE, and the difference is
-WEAVE-SPEC 11.2's footnote: `make loomdisk` carries the demo sources FLAT, so
-FORM.WML is one double-click from the Disk window, while `make weavedisk`'s
-PROJECTS/ is a folder per project (which is what 11.2 describes and what a
-person wants). Two folder levels is two more double-clicks and two more
-chances for the 9-tick window to eat one; the pane under test is the same
-pane.
+IT DRIVES THE LOOM DISK, and the sources are in its LOOM/ folder (WEAVE-SPEC
+11.2: the IDE beside what it edits, the runtime beside what it runs), so the
+navigation is weavesmoke's two double-clicks with FOLDER pointed at LOOM
+rather than WEAVE. `make weavedisk` carries the same two folders and would do
+as well; the pane under test is the same pane.
 """
 
 import argparse
@@ -283,6 +281,7 @@ def session(machine, card, vidw, vidh, png_dir=None, only=None):
         if only and stem != only:
             continue
         weavesmoke.BUNDLE = "%s.WML" % stem
+        weavesmoke.FOLDER = "LOOM"          # the sources' folder (11.2)
         with os88marty.launch("build/os8088-360.img", apps=DISK,
                               machine=machine) as m:
             try:
