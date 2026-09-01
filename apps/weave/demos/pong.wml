@@ -1,16 +1,19 @@
 <!-- PONG: the canvas component - two paddles, a ball, sub-pixel
-     velocities, oncollide/onscore handlers, tones. Top and bottom walls
-     bounce; left and right are open edges, so a ball fully out fires
-     onscore (WEAVE-SPEC 6.10). Keys: a up, z down. -->
+     velocities, oncollide/onscore handlers, tones, and a bounded per-frame
+     hook. Top and bottom walls bounce; left and right are open edges, so a
+     ball fully out fires onscore (WEAVE-SPEC 6.10). You are the LEFT
+     paddle: a up, z down. The RIGHT one is the computer's, steered from
+     ontick every frame (tick="1") inside WEAVE-SPEC 4.11.1's budget. -->
 <app name="Pong" vm="16">
   <card id="main">
     <label style="bold">Weave Pong</label>
     <label id="score" align="right" w="12">0 : 0</label>
-    <canvas id="field" w="240" h="120" br="1" walls="TB"
-            onkey="onPad" oncollide="onHit" onscore="onGoal">
+    <canvas id="field" w="240" h="120" br="1" walls="TB" tick="1"
+            onkey="onPad" oncollide="onHit" onscore="onGoal"
+            ontick="onTick">
       <sprite id="ball" img="BALL" x="116" y="56"/>
       <sprite id="pad" img="PAD" x="4" y="48"/>
-      <sprite id="wall" img="PAD" x="228" y="48"/>
+      <sprite id="cpu" img="PAD" x="228" y="48"/>
     </canvas>
     <button id="serve" onclick="doServe" br="1">Serve</button>
   </card>

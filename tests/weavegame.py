@@ -67,6 +67,9 @@ MODULE = "build/WEAVE.WSM"
 WSS_RUN, WSS_ACK, WSS_SLEEP = 0, 1, 2
 WSS_FRAME, WSS_CVSEG, WSS_WIN = 6, 8, 10
 WSS_BLITS, WSS_FRAMES, WSS_OVF = 18, 20, 22
+# ...and the canvas claim's sprite records (wsmabi.inc WSC_SPR / WSR_*): the
+# records start at +16 of the claim, 24 bytes each, y at +6 of a record.
+WSC_SPR, WSR_SIZE, WSR_Y = 16, 24, 6
 
 
 def find_modules(m, img):
@@ -173,6 +176,21 @@ def session(machine, png_dir=None):
               "%s: 18 fps asks for one frame a tick" % machine,
               "sleep = %d" % sw(WSS_SLEEP))
 
+        # The computer's paddle is PONG's third sprite (demos/pong.wml: ball,
+        # pad, cpu) and its y lives in the canvas claim's sprite record. It
+        # is read here and again after the frames because its handler is an
+        # ONTICK handler and this is the only row that can say ontick fired
+        # more than once: WEAVE.WSM shipped from wave 5 to wave 7 delivering
+        # exactly one ontick per start() (6.10.6's pending flag was never
+        # re-armed by the drain), and no counter shows that - frames ran,
+        # blits ran, and a paddle that should have chased the ball sat where
+        # it was born.
+        cv = sw(WSS_CVSEG)
+
+        def spr_y(i):
+            return int.from_bytes(m.readseg(cv, WSC_SPR + i * WSR_SIZE + WSR_Y,
+                                            2), "little", signed=True)
+        cpu0 = spr_y(2)
         c0, f0, b0 = m.status()["cycles"], sw(WSS_FRAMES), sw(WSS_BLITS)
         m.advance(frames=60)
         m.run()
@@ -181,6 +199,13 @@ def session(machine, png_dir=None):
         secs = (c1 - c0) / 4772727.0
         df, db = f1 - f0, b1 - b0
         check(df > 0, "%s: frames ran" % machine, "%d frames" % df)
+        cpu1 = spr_y(2)
+        check(cpu1 != cpu0,
+              "%s: the computer's paddle moved (ontick fired more than once)"
+              % machine,
+              "cpu.y %d -> %d over %d frames; onTick moves it 1 px a frame "
+              "towards the ball, which is a different row from `frames ran` "
+              "(6.10.6, 4.11.1)" % (cpu0, cpu1, df))
         if df:
             fps = df / secs
             per = db / float(df)

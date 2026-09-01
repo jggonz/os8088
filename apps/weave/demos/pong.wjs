@@ -1,14 +1,24 @@
 // PONG's handlers. The game loop is native worker code; these run only on
 // discrete events (WEAVE-SPEC 6.10 - the loop never executes a bytecode
 // op). Velocities are 1/16-px per frame: 32 = 2 px/frame.
+//
+// The left paddle is yours (a up, z down). The right one is the
+// COMPUTER's, steered from onTick - the one per-frame hook there is, and
+// a bounded one (WEAVE-SPEC 4.11.1): 64 straight-line ops, no loop, NO
+// call - not str(), not tone(). Chasing a sprite is a few compares and
+// property writes, which is exactly what the hook is for; the score is
+// formatted in onGoal, a human-rate event, because str() is a call.
 var ptsL;
 var ptsR;
+var dir;                // the next serve's vx: it alternates ends
 
 function doServe() {
+  if (dir == 0) { dir = 32; }
   ball.x = 116;
   ball.y = 56;
-  ball.vx = 32;
+  ball.vx = dir;
   ball.vy = 4;
+  dir = -dir;
   field.start(18);
 }
 
@@ -20,8 +30,31 @@ function onPad(ch, down) {
   if (pad.y > 96) { pad.y = 96; }
 }
 
+// The computer's paddle. It chases the ball's centre once the ball has
+// crossed the middle and is coming its way, drifts back to the middle
+// otherwise, and moves 1 px a frame at most: the ball climbs at up to
+// 2 px a frame after an edge hit (onHit), so a steep return outruns it.
+// That is the whole of the difficulty, and it is deliberate.
+function onTick(frame) {
+  var t = 48;
+  if (ball.vx > 0 && ball.x > 120) { t = ball.y - 8; }
+  if (cpu.y < t) { cpu.y = cpu.y + 1; }
+  if (cpu.y > t) { cpu.y = cpu.y - 1; }
+}
+
+// Where the ball struck the paddle sets its new climb: the middle sends
+// it back flat, an edge sends it away steeply. The ball is 8 px tall and a
+// paddle 24, so ball.y - paddle.y - 8 is the offset of one centre from the
+// other, -15..15 px, and twice that in sixteenths is up to 2 px a frame.
+// Each return is also a little faster, up to 3 px a frame.
 function onHit(a, b) {
+  var off;
+  if (ball.vx < 0) { off = ball.y - pad.y - 8; }
+  else { off = ball.y - cpu.y - 8; }
+  ball.vy = off * 2;
   ball.vx = -ball.vx;
+  if (ball.vx > 0 && ball.vx < 48) { ball.vx = ball.vx + 2; }
+  if (ball.vx < 0 && ball.vx > -48) { ball.vx = ball.vx - 2; }
   tone(880, 1);
 }
 

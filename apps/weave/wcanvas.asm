@@ -447,6 +447,19 @@ wsm_v_drain:
     mov al, [si + 1]                ; atom
     xor ah, ah
     mov bp, ax
+    cmp al, 57                      ; the ontick leaving the ring RE-ARMS the
+    jne .notick                     ; pending flag wsm_stage collapses on
+    mov byte [wsm_tickp], 0         ; (6.10.6). Until this line existed the
+.notick:                            ; flag was cleared only by bind, stop and
+                                    ; unbind, so a running canvas fired ONE
+                                    ; ontick per start() and dropped every
+                                    ; other - PONG's computer paddle was the
+                                    ; first handler whose effect was looked
+                                    ; at on the machine. The worker may set
+                                    ; the flag again between our read and this
+                                    ; clear; that drops one ontick, which is
+                                    ; the collapse the rule allows, and needs
+                                    ; no lock
     mov cx, [si + 2]                ; data1
     mov dx, [si + 4]                ; data2
     mov si, [wsm_ad]

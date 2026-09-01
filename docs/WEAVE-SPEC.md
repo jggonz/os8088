@@ -2816,7 +2816,18 @@ nothing between the frame and the drain:
 
 - **`ontick` collapses to one** (§4.9 rule 3), by a pending flag rather than
   by a scan: at most one `ontick` is ever staged, and a second in the same
-  drain window replaces nothing because there is nothing to replace.
+  drain window replaces nothing because there is nothing to replace. **The
+  flag is set by the worker when it stages an `ontick` and cleared by the UI
+  task when the drain (verb 5) hands that record on** — the same
+  one-writer-per-byte discipline as head and tail, and a worker that sets it
+  again between the drain's read and its clear loses one `ontick`, which is
+  the collapse the rule allows. It is written down because the module
+  shipped from wave 5 to wave 7 with the clear missing: the flag was reset
+  only by bind, `stop()` and unbind, so a running canvas delivered exactly
+  ONE `ontick` per `start()` and dropped every other, and nothing noticed
+  until PONG's computer paddle (steered from `ontick`) stood still on the
+  machine while the model moved it. `weavegame` now asserts that the paddle
+  moved, which is a statement that `ontick` fired more than once.
 - **A full ring receiving a key drops the oldest non-key record** (§4.9 rule
   4's shape) and appends the key; **a ring genuinely full of keys answers
   with the BEL** — `OSAPI_SND_TONE`, the one worker-legal voice (§8.4,
@@ -4228,9 +4239,17 @@ been ~756 µs.
 reading the frame and blit counters WEAVE.WSM keeps in its own state block
 (§6.10.4). Three consecutive runs on a 5150/CGA gave **17.7–18.7 fps at
 `start(18)`** — one frame a tick, which is 18.2 Hz's own answer — and
-**1.00–1.06 gfx calls a frame**; Hercules gave 18.6 fps and 0.95. PONG has
-one MOVING sprite and two still ones, so that is the one-sprite row and it
-lands under it. The two-sprite row is still modelled. Those figures are
+**1.00–1.06 gfx calls a frame**; Hercules gave 18.6 fps and 0.95. In the
+window that row measures — the first second after Serve — PONG has one
+MOVING sprite and two still ones, so that is the one-sprite row and it lands
+under it (1.06 again, 17.7 fps, after the computer paddle arrived: it starts
+chasing only once the ball is past the middle and the ball's climb is a
+quarter-pixel a frame at serve, so it moves on a handful of those frames).
+In a rally the computer's paddle moves every frame the ball is coming, which
+makes PONG the two-sprite row from then on — still modelled, not yet
+counted; a second measuring window later in the run is the way to count it,
+and `weavegame`'s new assertion that the paddle MOVED at all is a statement
+about `ontick` (§6.10.6), not about calls. Those figures are
 MartyPC's, which is a model of the machine and not the machine
 (docs/FIELD-MACHINES.md) — what it settles is the CALL COUNT, which an
 emulator is exact about; the milliseconds wait on the 5150 (WEAVE-PLAN §4.2).
