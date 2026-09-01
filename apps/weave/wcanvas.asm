@@ -181,6 +181,23 @@ wsm_v_bind:
     mov byte [wsm_rhead], 0
     mov byte [wsm_rtail], 0
     mov byte [wsm_posted], 0
+    ; 6.10.7's pen, read last because every register above is spoken for. The
+    ; low byte is the canvas's PAPER colour and the high one is `colored` -
+    ; raised here for a paper that is not white, and by a WSMF_COLOR write for
+    ; an ink that is not black. Clear, and wsm_flush is the file wave 5
+    ; shipped, instruction for instruction.
+    mov si, [wsm_ad]
+    push ds
+    mov ds, [cs:wsm_cds]
+    mov ax, [si + WSMP_COLOR]
+    pop ds
+    and ax, 0x000F                  ; a hostile bundle cannot reach the kernel
+    mov [wsm_pen], al               ; with a colour outside 0..15
+    mov byte [wsm_pen + 1], 0
+    cmp al, CWHITE
+    je .plain
+    mov byte [wsm_pen + 1], 1
+.plain:
     ; the dirty bands, the contact bits and last frame's key states all belong
     ; to the bundle that is going away, and a stale bit in any of them is an
     ; event fired against a component the new bundle does not have
@@ -228,7 +245,7 @@ wsm_v_sprite:
     mov si, ax                      ; ES:SI = the record
     mov bx, [wsm_ac]                ; the field id, in BL
     and bx, 0x00FF
-    cmp bl, WSMF_DESC
+    cmp bl, WSMF_COLOR
     ja .zero
     shl bx, 1
     cmp byte [wsm_af], 0
@@ -242,7 +259,7 @@ wsm_v_sprite:
     jmp wsm_out
 
 wsm_get:
-    dw .x, .y, .vx, .vy, .frame, .shown, .nfr, .zero
+    dw .x, .y, .vx, .vy, .frame, .shown, .nfr, .zero, .color
 .x:     mov ax, [es:si + WSR_X]
         jmp wsm_out
 .y:     mov ax, [es:si + WSR_Y]
@@ -260,11 +277,16 @@ wsm_get:
 .nfr:   mov al, [es:si + WSR_NFR]
         xor ah, ah
         jmp wsm_out
+.color: mov al, [es:si + WSR_FLAGS]
+        mov cl, WSRF_COLSH
+        shr al, cl
+        and ax, 0x000F
+        jmp wsm_out
 .zero:  xor ax, ax
         jmp wsm_out
 
 wsm_set:
-    dw .x, .y, .vx, .vy, .frame, .shown, .nofr, .desc
+    dw .x, .y, .vx, .vy, .frame, .shown, .nofr, .desc, .color
     ; A write to x or y RE-SEEDS the 1/16-px accumulator and therefore
     ; DISCARDS the sub-pixel remainder (WEAVE-SPEC 6.10.1). The model does the
     ; same and this is the sentence that says so on both sides.
@@ -305,6 +327,24 @@ wsm_set:
         jmp .ok
 .nofr:  jmp .no
 .desc:  call wsm_desc
+        jmp .ok2
+        ; 6.10.7. The colour is the flags byte's TOP nibble, so this is a
+        ; masked read-modify-write and every other writer of that byte is one
+        ; too. `colored` is raised here and never lowered - by a NON-ZERO
+        ; colour only, so the load path can write this field for every sprite
+        ; (it does) and a canvas whose sprites are all black on white paper
+        ; still ends the load with the palette off, which is the wave-5
+        ; composer exactly.
+.color: mov al, [wsm_ad]
+        and al, 0x0F                  ; ...which is also the `colored` test
+        jz .colst
+        mov byte [wsm_pen + 1], 1
+.colst: mov cl, WSRF_COLSH
+        shl al, cl
+        mov ah, [es:si + WSR_FLAGS]
+        and ah, WSRF_STMASK
+        or al, ah
+        mov [es:si + WSR_FLAGS], al
         jmp .ok2
 .ok:    or byte [es:si + WSR_FLAGS], WSRF_DIRTY
 .ok2:   mov ax, 1

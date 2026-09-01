@@ -34,7 +34,9 @@
 ; need not change a size - and it is why the stamp here is three words rather
 ; than two.
 ; -----------------------------------------------------------------------------
-WSM_ABI     equ 1
+WSM_ABI     equ 2                   ; 2: WEAVE-SPEC 6.10.7's palette - the
+                                    ; BIND block's colour word, WSMF_COLOR,
+                                    ; and the sprite flags' top nibble
 
 WSM_MAGIC   equ 0x5357              ; 'W','S' little-endian
 
@@ -85,7 +87,15 @@ WSMP_NSPR   equ 8                   ; word: sprites, 0..16
 WSMP_SPOFF  equ 10                  ; word: the SPRITES section's offset in
                                     ; the bundle claim
 WSMP_CID    equ 12                  ; word: the canvas's own comp_id
-WSMP_SIZE   equ 14
+WSMP_COLOR  equ 14                  ; word: WEAVE-SPEC 6.10.7's palette. The
+                                    ; low byte is the canvas's PAPER colour,
+                                    ; 0..15, which is what a SET band bit
+                                    ; becomes (6.10.2's polarity, so the names
+                                    ; cross over). The load path passes
+                                    ; CWHITE on a 1bpp adapter whatever the
+                                    ; bundle says, and that one byte is the
+                                    ; whole of "colour is a VGA thing"
+WSMP_SIZE   equ 16
 
 ; --- WSMV_SPRITE's field ids -------------------------------------------------
 ; The six of WEAVE-SPEC 6.10's surface, plus the four the load path writes.
@@ -103,6 +113,12 @@ WSMF_NFRAME equ 6                   ; read-only: the sprite's frame count, so
 WSMF_DESC   equ 7                   ; write-only: DX = the SPRITES descriptor
                                     ; index, taken at load from the PK_SPRITE
                                     ; record. Sets pw/ph/wb/nframes/data offset
+WSMF_COLOR  equ 8                   ; write-only: DX = 6.10.7's colour, 0..15,
+                                    ; into the flags byte's top nibble. Load
+                                    ; path only - `color` is deliberately NOT
+                                    ; on 6.10's script surface (9.2.1), so
+                                    ; a running bundle cannot invent a pen
+                                    ; pair the packer never checked
 
 ; --- the canvas claim (WEAVE-SPEC 6.10.4) ------------------------------------
 WSC_W       equ 0                   ; word: W in pixels
@@ -135,7 +151,11 @@ WSR_DOFF    equ 16                  ; word: frame 0's image offset within the
                                     ; SPRITES section
 WSR_OX      equ 18                  ; word signed: x as last COMPOSED
 WSR_OY      equ 20                  ; word signed
-WSR_FLAGS   equ 22                  ; byte: WSRF_*
+WSR_FLAGS   equ 22                  ; byte: WSRF_* in bits 0-3, and the
+                                    ; sprite's COLOUR in bits 4-7 (6.10.7).
+                                    ; Every site that writes this byte already
+                                    ; writes through a mask, which is why the
+                                    ; colour fits here and not in a 25th byte
 WSR_FRAME   equ 23                  ; byte: frame | (last composed frame << 4)
 WSR_SIZE    equ 24
 
@@ -143,9 +163,13 @@ WSRF_SHOWN  equ 1
 WSRF_SCORED equ 2
 WSRF_WASSH  equ 4                   ; shown as last composed
 WSRF_DIRTY  equ 8                   ; needs its bands marked this frame
+WSRF_STMASK equ 0x0F                ; ...and the colour is the other nibble
+WSRF_COLSH  equ 4
 
 WSM_MAXSPR  equ 16                  ; 2.11's own cap
 WSM_MAXBAND equ 20                  ; 160 px / 8, 3.3's tallest canvas
+WSM_MAXCOL  equ 40                  ; 320 px / 8, 3.3's widest - one byte a
+                                    ; column of 6.10.7's colour map
 
 ; --- the module's state block, at WSM_H_STATE ---------------------------------
 ; The package reads and writes it with wblob.inc's w_b/w_w/w_pb/w_pw, which is
@@ -186,7 +210,15 @@ WSS_DIRTY   equ 36                  ; WSM_MAXBAND bytes: the dirty bands
 WSS_CONT    equ 56                  ; 15 bytes: the contact bitmap, one bit a
                                     ; pair over 16 sprites (120 pairs)
 WSS_RING    equ 71                  ; WSM_RING x 6 bytes
-WSS_SIZE    equ WSS_RING + WSM_RING * WSM_REC
+WSS_PEN     equ WSS_RING + WSM_RING * WSM_REC
+                                    ; word: 6.10.7's pen. Low byte the PAPER
+                                    ; colour, high byte 1 when this canvas
+                                    ; draws in colour at all - and appended
+                                    ; AFTER the ring rather than beside its
+                                    ; neighbours, so not one existing offset
+                                    ; moves and the package's w_b/w_w reads
+                                    ; are the same bytes they were
+WSS_SIZE    equ WSS_PEN + 2
 
 WSM_RING    equ 32                  ; slots; 31 usable, head == tail is empty
 WSM_REC     equ 6                   ; comp byte, atom byte, data1 word, data2

@@ -107,8 +107,8 @@ CT_LABEL, CT_TEXT, CT_RULE, CT_BOX, CT_SPACER, CT_METER, CT_BUTTON, \
     CT_CHECK, CT_RADIO, CT_INPUT, CT_LIST, CT_GRID, CT_CANVAS, CT_SPRITE = \
     range(0x01, 0x0F)
 
-# S2.7.1 - the assigned well-known atom ids (25-31, 42-47, 63 reserved).
-WK_PROPS = set(range(1, 25))                              # text..tick
+# S2.7.1 - the assigned well-known atom ids (28-31, 42-47, 63 reserved).
+WK_PROPS = set(range(1, 28))                              # text..paper
 WK_METHODS = set(range(32, 42))                           # cell..clear
 WK_EVENTS = set(range(48, 61))                            # onclick..onalert
 ATOM_ITEMS, ATOM_MENUS = 61, 62
@@ -117,6 +117,7 @@ ATOM_FRAME, ATOM_START = 11, 40
 ATOM_TEXT, ATOM_VALUE, ATOM_LABEL, ATOM_CHECKED = 1, 2, 3, 5
 ATOM_X, ATOM_Y, ATOM_SHOWN, ATOM_MAX = 7, 8, 12, 14
 ATOM_GROUP, ATOM_WALLS, ATOM_TICK = 19, 23, 24
+ATOM_COLOR, ATOM_INK, ATOM_PAPER = 25, 26, 27             # S6.10.7's palette
 ATOM_ONCLICK, ATOM_ONCHANGE, ATOM_ONKEY, ATOM_ONSELECT = 48, 49, 50, 51
 ATOM_ONEDIT, ATOM_ONCALC, ATOM_ONCOLLIDE = 52, 53, 54
 ATOM_ONWALL, ATOM_ONSCORE, ATOM_ONTICK = 55, 56, 57
@@ -166,6 +167,8 @@ S33_PROPS = {
                 ATOM_ONCALC: (PK_FUNC, None, None)},
     CT_CANVAS: {ATOM_WALLS: (PK_INT, 0, 15),              # or PK_ATOM - see below
                 ATOM_TICK: (PK_INT, 0, 255),
+                ATOM_INK: (PK_INT, 0, 15),                # S6.10.7's palette,
+                ATOM_PAPER: (PK_INT, 0, 15),              # by NAME in the WML
                 ATOM_ONKEY: (PK_FUNC, None, None),
                 ATOM_ONCOLLIDE: (PK_FUNC, None, None),
                 ATOM_ONWALL: (PK_FUNC, None, None),
@@ -174,7 +177,8 @@ S33_PROPS = {
     CT_SPRITE: {ATOM_FRAME: (PK_SPRITE, None, None),      # S3.3: `img` compiles here
                 ATOM_X: (PK_INT, None, None),             # signed px
                 ATOM_Y: (PK_INT, None, None),
-                ATOM_SHOWN: (PK_INT, 0, 1)},
+                ATOM_SHOWN: (PK_INT, 0, 1),
+                ATOM_COLOR: (PK_INT, 0, 15)},             # S6.10.7
 }
 assert len(S33_PROPS) == 14                               # S2.5.1's fourteen ctypes
 
@@ -198,6 +202,7 @@ ATOM_NAMES = {ATOM_TEXT: "text", ATOM_VALUE: "value", ATOM_LABEL: "label",
               ATOM_FRAME: "frame", ATOM_SHOWN: "shown", ATOM_MAX: "max",
               ATOM_ROWS: "rows", ATOM_COLS: "cols", ATOM_GROUP: "group",
               ATOM_WALLS: "walls", ATOM_TICK: "tick", ATOM_ITEMS: "ITEMS",
+              ATOM_COLOR: "color", ATOM_INK: "ink", ATOM_PAPER: "paper",
               ATOM_ONCLICK: "onclick", ATOM_ONCHANGE: "onchange",
               ATOM_ONKEY: "onkey", ATOM_ONSELECT: "onselect",
               ATOM_ONEDIT: "onedit", ATOM_ONCALC: "oncalc",
@@ -484,6 +489,18 @@ def walk_prop_block(w, off, owner):
         off += 4
 
 
+def check_pen(w, cid, attr, ink, paper):
+    """S6.10.7 / SPEC.md 5.4.2.2: `paper` and `ink` must share a plane in one
+    direction or the other.  White paper is legal against all sixteen and so
+    is black, so this only ever fires on a hand-made bundle."""
+    check((paper & ~ink & 0x0F) == 0 or (~paper & ink & 0x0F) == 0,
+          "%s: comp %d pen pair (paper %d, %s %d) is one GFX_BLIT1 takes"
+          % (w.name, cid, paper, attr, ink),
+          "S6.10.7: the packer refuses a pair whose two colours share no "
+          "plane either way, because a run-time refusal here is a band that "
+          "silently does not arrive (SPEC.md 5.4.2.2's fourth refusal)")
+
+
 def check_comp_props(w, cid, ctype, recs):
     """S3.3 - one component's block against the attribute table: every
     pairing legal on that element, every kind the one S3.3 compiles to,
@@ -550,6 +567,23 @@ def check_comp_props(w, cid, ctype, recs):
               "clamps to it; a packed value outside means the two "
               "implementations disagree about the clamp",
               got=val, want="0..%d" % mx)
+    # S6.10.7 - the palette, and the one thing about it a READER can settle:
+    # SPEC.md 5.4.2.2's fourth refusal.  GFX_BLIT1 takes a pen pair only when
+    # one colour's planes are a subset of the other's, and the composer hands
+    # it (paper, ink) for the canvas's own ink and (paper, colour) for every
+    # sprite - so a bundle carrying a pair outside that was not written by a
+    # conforming packer, and the band it describes would silently not arrive.
+    # UISTREAM order is what makes this checkable here: a <sprite> record
+    # follows its <canvas> directly (S2.5), so the paper is already known.
+    if ctype == CT_CANVAS:
+        w.cv_ink = signed(seen[ATOM_INK]) if ATOM_INK in seen else 0
+        w.cv_paper = signed(seen[ATOM_PAPER]) if ATOM_PAPER in seen else 15
+        check_pen(w, cid, "ink", w.cv_ink, w.cv_paper)
+    if ctype == CT_SPRITE:
+        paper = getattr(w, "cv_paper", 15)
+        col = (signed(seen[ATOM_COLOR]) if ATOM_COLOR in seen
+               else getattr(w, "cv_ink", 0))
+        check_pen(w, cid, "color", col, paper)
     if ctype == CT_CANVAS and ATOM_ONTICK in seen:
         check(signed(seen.get(ATOM_TICK, 0)) >= 1,
               "%s: canvas comp %d binds ontick and carries tick >= 1" % (n, cid),

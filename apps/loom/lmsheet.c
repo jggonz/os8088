@@ -564,6 +564,13 @@ static int lms_close_frame(int line)
     return 1;
 }
 
+/* SPELLED ONCE, for SPEC.md 73.14's reason and lmwml.c's: a literal an
+ * ovl_ function names is RESIDENT, and SmallerC emits one per SITE.
+ * Four sites and three. */
+static const char lm_s_wspline[] =
+    "sprite <name> <w_px> <h_px> [<frames>]";
+static const char lm_s_wspnum[] = "sprite: numbers expected";
+
 static int lms_close_sprite(int line)
 {
     unsigned r;
@@ -675,21 +682,21 @@ static int ovl_wsp(void)
             lms_wp = s + 6;
             if (!lms_word(e)) {
                 lm_perr(LM_SLOT_WSP, line,
-                        "sprite <name> <w_px> <h_px> [<frames>]");
+                        lm_s_wspline);
                 return 0;
             }
             no = lms_woff;
             nl = lms_wlen;
             if (!lms_word(e)) {
                 lm_perr(LM_SLOT_WSP, line,
-                        "sprite <name> <w_px> <h_px> [<frames>]");
+                        lm_s_wspline);
                 return 0;
             }
             o2 = lms_woff;
             l2 = lms_wlen;
             if (!lms_word(e)) {
                 lm_perr(LM_SLOT_WSP, line,
-                        "sprite <name> <w_px> <h_px> [<frames>]");
+                        lm_s_wspline);
                 return 0;
             }
             o3 = lms_woff;
@@ -699,22 +706,22 @@ static int ovl_wsp(void)
                 unsigned l4 = lms_wlen;
                 if (lms_word(e)) {
                     lm_perr(LM_SLOT_WSP, line,
-                            "sprite <name> <w_px> <h_px> [<frames>]");
+                            lm_s_wspline);
                     return 0;
                 }
                 if (!lms_int(o4, l4)) {
-                    lm_perr(LM_SLOT_WSP, line, "sprite: numbers expected");
+                    lm_perr(LM_SLOT_WSP, line, lm_s_wspnum);
                     return 0;
                 }
                 nf = lms_int_v;
             }
             if (!lms_int(o2, l2)) {
-                lm_perr(LM_SLOT_WSP, line, "sprite: numbers expected");
+                lm_perr(LM_SLOT_WSP, line, lm_s_wspnum);
                 return 0;
             }
             w = lms_int_v;
             if (!lms_int(o3, l3)) {
-                lm_perr(LM_SLOT_WSP, line, "sprite: numbers expected");
+                lm_perr(LM_SLOT_WSP, line, lm_s_wspnum);
                 return 0;
             }
             h = lms_int_v;

@@ -1,0 +1,7 @@
+<app name="Err">
+  <card id="main">
+    <canvas id="c" w="64" h="32" paper="blue">
+      <sprite id="s" img="B" color="red"/>
+    </canvas>
+  </card>
+</app>

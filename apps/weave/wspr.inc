@@ -379,6 +379,155 @@ wsm_drawspr:
     ret
 
 ; -----------------------------------------------------------------------------
+; wsm_emit - one span of one run onto the glass (WEAVE-SPEC 6.10.2 step 3,
+; 6.10.7's spans).
+;
+; in:  ES = the canvas claim, AX = the span's first byte COLUMN, CX = how many
+;      columns, DL = the ink a CLEAR bit takes, or 0xFF for "no pen".
+;      [wsm_r0]/[wsm_r1] are the run's pixel rows and [wsm_bofs] its first
+;      byte. Clobbers AX BX CX DX SI DI BP.
+;
+; The pen is (AL = the canvas's PAPER colour, AH = this span's ink) and the
+; names cross over because the buffer is the FRAMEBUFFER's way up: a set bit
+; is the background (6.10.2). An implementation that "fixes" the naming by
+; turning the buffer over reintroduces wave 5's inverted CGA picture exactly.
+; -----------------------------------------------------------------------------
+wsm_emit:
+    mov di, ax                      ; DI = the span's first column
+    mov bx, cx                      ; BX = its column count
+    mov word [wsm_curpen], 0xFFFF
+    cmp dl, 0xFF
+    je .nopen
+    mov dh, dl                      ; DH = this span's ink...
+    mov dl, [wsm_pen]               ; ...DL = the canvas's paper colour
+    mov [wsm_curpen], dx            ; the harness's reading: low byte paper,
+                                    ; high byte ink, which is the model's own
+                                    ; order and not 5.4.2.2's register one
+%ifndef WSM_HOSTTEST
+    mov al, dl                      ; AL = ink: what a SET band bit becomes,
+    mov ah, dh                      ; which is the BACKGROUND (6.10.2)
+    call OSAPI_GFX_BLIT1_PEN        ; preserves every register (5.4.2.2), and
+                                    ; is a no-op on 1bpp - where the load path
+                                    ; has already left `colored` clear anyway
+%endif
+.nopen:
+    mov si, [wsm_bofs]
+    add si, di                      ; ES:SI = the span's first byte
+    mov bp, [es:WSC_STRIDE]         ; ...and the walk is still the BUFFER's
+    mov ax, di                      ; stride, which is what lets a narrower
+    mov cl, 3                       ; blit read the same rows
+    shl ax, cl
+    add ax, [wsm_sx]                ; AX = the span's screen x
+    shl bx, cl                      ; ...and BX = 8 x its columns. CX is loaded
+    push bx                         ; LAST, because CL is the shift count and
+    mov bx, [wsm_sy]                ; `mov cx, bx` would eat it - which it did,
+    add bx, [wsm_r0]                ; and the harness caught it as a 256-column
+    mov dx, [wsm_r1]                ; span
+    sub dx, [wsm_r0]
+    inc dx
+    pop cx
+%ifdef WSM_HOSTTEST
+    call wsm_hostblit               ; the boot-sector differential has no
+%else                               ; kernel under it, so it records the span
+    call OSAPI_GFX_BLIT1            ; x and CX are multiples of 8 by
+%endif                              ; construction (3.3 requires w to be, and
+                                    ; 7.1.2 puts the content origin on one)
+    inc word [wsm_nblit]
+    ret
+
+; -----------------------------------------------------------------------------
+; wsm_mkcolmap - 6.10.7's colour map for the run [wsm_r0]..[wsm_r1]: one byte a
+; byte column, 0xFF where no shown sprite reaches.
+;
+; in: ES = the canvas claim. Clobbers AX BX CX DX SI DI.
+;
+; UISTREAM order, LAST writer wins - which is composition order, so a byte
+; column two sprites share wears the colour of the one whose pixels are on
+; top. Two frames of PONG's contact, and stated rather than fixed: the
+; alternative is a second pass over the same pixels, which is
+; PERFORMANCE.md's double-draw flash bought with a colour.
+; -----------------------------------------------------------------------------
+wsm_mkcolmap:
+    mov di, wsm_colmap
+    mov cx, [wsm_ncol]
+    mov al, 0xFF
+    push es
+    push cs
+    pop es
+    cld
+    rep stosb
+    pop es
+    xor bx, bx
+.s:
+    cmp bx, [wsm_nspr]
+    jae .out
+    mov al, WSR_SIZE
+    mul bl
+    add ax, WSC_SPR
+    mov si, ax                      ; ES:SI = the record
+    test byte [es:si + WSR_FLAGS], WSRF_SHOWN
+    jz .next
+    cmp byte [es:si + WSR_WB], 0
+    je .next
+    ; does it reach these rows?  SIGNED, and the same two compares 6.10.2's
+    ; compose makes about the same rectangle
+    mov ax, [es:si + WSR_Y]
+    cmp ax, [wsm_r1]
+    jg .next
+    mov cl, [es:si + WSR_PH]
+    xor ch, ch
+    add ax, cx
+    dec ax
+    cmp ax, [wsm_r0]
+    jl .next
+    ; ...and which byte columns
+    mov ax, [es:si + WSR_X]
+    mov cl, 3
+    sar ax, cl                      ; ARITHMETIC: a sprite at a negative x is
+    or ax, ax                       ; left of the buffer, not 8,191 bytes into
+    jns .c0
+    xor ax, ax
+.c0:
+    push ax
+    mov ax, [es:si + WSR_X]
+    mov cl, [es:si + WSR_PW]
+    xor ch, ch
+    add ax, cx
+    dec ax
+    mov cl, 3
+    sar ax, cl
+    mov dx, [wsm_ncol]
+    dec dx
+    cmp ax, dx
+    jle .c1
+    mov ax, dx
+.c1:
+    pop cx                          ; CX = the first column
+    cmp ax, cx
+    jl .next                        ; wholly outside the buffer's columns
+    sub ax, cx
+    inc ax                          ; AX = how many
+    mov di, cx
+    add di, wsm_colmap
+    mov cx, ax
+    mov al, [es:si + WSR_FLAGS]
+    push cx
+    mov cl, WSRF_COLSH
+    shr al, cl
+    pop cx
+    and al, 0x0F
+    push es
+    push cs
+    pop es
+    rep stosb
+    pop es
+.next:
+    inc bx
+    jmp .s
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
 ; wsm_flush - compose and emit every dirty band run.
 ;
 ; in:  ES = the canvas claim, AX = the canvas's screen x, BX = its screen y.
@@ -453,25 +602,85 @@ wsm_flush:
     inc bx
     jmp short .spr
 .blit:
-    mov si, [wsm_bofs]              ; ES:SI = the run's first byte
-    mov bp, [es:WSC_STRIDE]
-    mov ax, [wsm_sx]
-    mov bx, [wsm_sy]
-    add bx, [wsm_r0]
-    mov cx, [es:WSC_W]
-    mov dx, [wsm_r1]
-    sub dx, [wsm_r0]
-    inc dx
-%ifdef WSM_HOSTTEST
-    call wsm_hostblit               ; the boot-sector differential has no
-%else                               ; kernel under it, so it records the run
-    call OSAPI_GFX_BLIT1            ; x and CX are multiples of 8 by
-%endif                              ; construction (3.3 requires w to be, and
-                                    ; 7.1.2 puts the content origin on one)
-    inc word [wsm_nblit]
+    mov ax, [es:WSC_STRIDE]
+    mov [wsm_ncol], ax
+    cmp byte [wsm_pen + 1], 0
+    jne .colored
+    ; --- the uncoloured run: 6.10.2 step 3, unchanged and un-penned ---------
+    xor ax, ax
+    mov cx, [wsm_ncol]
+    mov dl, 0xFF                    ; "no GFX_BLIT1_PEN call at all"
+    call wsm_emit
+    jmp short .runend
+    ; --- 6.10.7's colour map and span walk ---------------------------------
+.colored:
+    call wsm_mkcolmap
+    xor si, si                      ; the column cursor
+    mov word [wsm_sstart], 0
+    mov byte [wsm_scur], 0xFF       ; ...and the span's colour: NONE yet
+.cw:
+    cmp si, [wsm_ncol]
+    jae .ctail
+    mov bx, si
+    mov al, [wsm_colmap + bx]
+    cmp al, 0xFF
+    je .cnext                       ; NEUTRAL: every bit is paper, so its ink
+                                    ; cannot show and it absorbs into the span
+                                    ; to its LEFT
+    cmp byte [wsm_scur], 0xFF
+    jne .ccmp
+    mov [wsm_scur], al              ; the run's first coloured column names
+    jmp short .cnext                ; the span that started at column 0
+.ccmp:
+    cmp al, [wsm_scur]
+    je .cnext
+    push si
+    push ax
+    mov ax, [wsm_sstart]
+    mov cx, si
+    sub cx, ax
+    mov dl, [wsm_scur]
+    call wsm_emit
+    pop ax
+    pop si
+    mov [wsm_sstart], si
+    mov [wsm_scur], al
+.cnext:
+    inc si
+    jmp short .cw
+.ctail:
+    mov dl, [wsm_scur]
+    cmp dl, 0xFF
+    jne .ct1
+    xor dl, dl                      ; a run no sprite reaches is all paper, so
+                                    ; the ink is arbitrary - and CBLACK is the
+                                    ; one colour legal against every paper
+                                    ; (0 is a subset of all sixteen), which is
+                                    ; why the fallback is pinned rather than
+                                    ; borrowed from the canvas's `ink`
+.ct1:
+    mov ax, [wsm_sstart]
+    mov cx, [wsm_ncol]
+    sub cx, ax
+    call wsm_emit
+.runend:
     pop bx
     jmp .scan
 .done:
+    ; The pen dies with the gfx lock (SPEC.md 5.4.2.2) and the caller holds it
+    ; past this return - WSMV_PAINT runs inside a paint callback whose other
+    ; components are lettered after us, and wband.inc puts down bands too. So
+    ; a coloured flush that drew anything puts the default pair back.
+    cmp byte [wsm_pen + 1], 0
+    je .nopenrst
+    cmp word [wsm_nblit], 0
+    je .nopenrst
+%ifndef WSM_HOSTTEST
+    mov al, CWHITE
+    mov ah, CBLACK
+    call OSAPI_GFX_BLIT1_PEN
+%endif
+.nopenrst:
     mov di, wsm_dirty
     mov cx, WSM_MAXBAND
     xor al, al

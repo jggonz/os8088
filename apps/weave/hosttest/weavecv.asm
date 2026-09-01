@@ -68,6 +68,10 @@ org 0x7C00
 SEG_STACK   equ 0x1000              ; SS, and SS != DS is the whole point
 SEG_KERNEL  equ 0x3000              ; the ES sentinel: it must come back intact
 SEG_CANVAS  equ 0x4000              ; the canvas claim (WEAVE-SPEC 6.10.4)
+HB_ROW      equ 10                  ; 6.10.7: one recorded blit is five words -
+HB_MAX      equ 64                  ; band, bands, column, columns, pen - and
+                                    ; a coloured run can emit more spans than
+                                    ; the old 32-run bound allowed
 IMG_SECTORS equ 64                  ; 32KB, weavevm.asm's ceiling and for its
                                     ; reason - stage 1 loads with ES = 0 and a
                                     ; 16-bit BX
@@ -212,12 +216,13 @@ verdict:
     pop ax
     ret
 
-; caseptr - BX -> case SI's 36-byte record in cv_tab. Preserves everything else.
+; caseptr - BX -> case SI's 38-byte record in cv_tab. Preserves everything else.
 caseptr:
     push ax
     push dx
     mov ax, si
-    mov dx, 36                      ; 7 pointers + 11 words (12.1.3)
+    mov dx, 38                      ; 7 pointers + 12 words (12.1.3) - the
+                                    ; twelfth is 6.10.7's palette
     mul dx
     mov bx, ax
     add bx, cv_tab
@@ -272,6 +277,12 @@ runcase:
     mov word [wsm_ovf], 0
     mov word [wsm_bels], 0
     mov word [wsm_blits], 0
+    mov ax, [bx + 36]               ; 6.10.7's palette: the PAPER colour in the
+    mov [wsm_pen], ax               ; low byte, `colored` in the high one. The
+                                    ; module's own BIND and WSMF_COLOR compute
+                                    ; both; here the corpus states them, which
+                                    ; is what lets a case turn the palette on
+                                    ; without a load path under it
     mov word [wsm_bseg], 0          ; the "bundle claim" is segment 0, which
     mov ax, [bx + 2]                ; is where the corpus's SPRITES sections
     mov [wsm_spoff], ax             ; live
@@ -402,7 +413,7 @@ runcase:
 setspr:
     push di
     mov ax, di
-    mov cx, 14
+    mov cx, 16                      ; 6.10.7 added the colour word
     mul cx
     mov bx, [cvrec]
     add ax, [bx + 4]                ; desc x y vx vy shown frame
@@ -454,6 +465,11 @@ setspr:
     je .sh
     mov al, WSRF_SHOWN
 .sh:
+    mov ah, [si + 14]               ; 6.10.7's colour, into the flags byte's
+    and ah, 0x0F                    ; TOP nibble - the load path's WSMF_COLOR
+    mov cl, WSRF_COLSH              ; write, done here because this harness
+    shl ah, cl                      ; lays the claim out itself
+    or al, ah
     mov [es:di + WSR_FLAGS], al
     mov ax, [si + 12]               ; the initial frame, in both nibbles: the
     and al, 0x0F                    ; birth composition is what puts the
@@ -630,7 +646,7 @@ cmpring:
 
 cmpblits:
     mov bx, [cvrec]
-    mov si, [bx + 10]               ; the expected runs
+    mov si, [bx + 10]               ; the expected spans
     mov cx, [si]
     add si, 2
     cmp cx, [hbn]
@@ -641,18 +657,21 @@ cmpblits:
     jcxz .out
     mov di, hbruns
 .b:
+    push cx
+    mov cx, HB_ROW / 2              ; all five words: band, bands, column,
+.w:                                 ; columns, pen (6.10.7)
     mov ax, [di]
     cmp ax, [si]
-    jne .bad
-    mov ax, [di + 2]
-    cmp ax, [si + 2]
-    jne .bad
-    add di, 4
-    add si, 4
+    jne .bad2
+    add di, 2
+    add si, 2
+    loop .w
+    pop cx
     loop .b
 .out:
     ret
-.bad:
+.bad2:
+    pop cx
     mov word [ok], 0
     ret
 
@@ -683,30 +702,53 @@ cmpbuf:
 
 ; -----------------------------------------------------------------------------
 ; wsm_hostblit - what wspr.inc calls in place of OSAPI_GFX_BLIT1 under
-; WSM_HOSTTEST: record the run's first band and its band count, which is what
-; WEAVE-SPEC 14 prices and what a picture cannot show.
-; in: BX = screen y + the run's first row, DX = the run's rows. Preserves all.
+; WSM_HOSTTEST: record the SPAN this blit put down - first band, band count,
+; first byte column, column count - and the pen wsm_emit set for it. That is
+; what WEAVE-SPEC 14 prices and what a picture cannot show, and 6.10.7 widened
+; it from two words to five because a span that is right about its rows and
+; wrong about its columns draws the same picture in the wrong colours.
+; in: AX = screen x + 8 x col0, BX = screen y + the run's first row,
+;     CX = 8 x columns, DX = the run's rows. The harness's canvas is at 0,0.
+;     Preserves all.
 ; -----------------------------------------------------------------------------
 wsm_hostblit:
     push ax
     push bx
+    push cx
+    push dx
     push di
+    mov [hbax], ax                  ; the four geometry registers, banked -
+    mov [hbcx], cx                  ; the index multiply below needs DX and
+    mov [hbdx], dx                  ; the row count is in it
     mov di, [hbn]
-    cmp di, 32
+    cmp di, HB_MAX
     jae .out
-    shl di, 1
-    shl di, 1
+    mov ax, HB_ROW
+    mul di
+    mov di, ax
     add di, hbruns
-    mov ax, bx
     mov cl, 3
+    mov ax, bx
     shr ax, cl
     mov [di], ax                    ; the first band
-    mov ax, dx
+    mov ax, [hbdx]
     shr ax, cl
     mov [di + 2], ax                ; ...and how many
+    mov ax, [hbax]
+    shr ax, cl
+    mov [di + 4], ax                ; the first byte COLUMN - the harness puts
+                                    ; the canvas at screen 0,0, so the blit's
+                                    ; x IS 8 x col0
+    mov ax, [hbcx]
+    shr ax, cl
+    mov [di + 6], ax                ; ...and how many columns
+    mov ax, [wsm_curpen]
+    mov [di + 8], ax                ; 6.10.7's pen, 0xFFFF for "no pen call"
     inc word [hbn]
 .out:
     pop di
+    pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -797,4 +839,7 @@ cvrec:   resw 1
 nspr:    resw 1
 frames:  resw 1
 hbn:     resw 1
-hbruns:  resw 64
+hbax:    resw 1
+hbcx:    resw 1
+hbdx:    resw 1
+hbruns:  resw HB_MAX * (HB_ROW / 2)

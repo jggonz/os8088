@@ -102,7 +102,7 @@ WK = {"text": 1, "value": 2, "label": 3, "enabled": 4, "checked": 5,
       "hidden": 6, "x": 7, "y": 8, "vx": 9, "vy": 10, "frame": 11,
       "shown": 12, "min": 13, "max": 14, "rows": 15, "cols": 16, "sel": 17,
       "editing": 18, "group": 19, "card": 20, "selrow": 21, "selcol": 22,
-      "walls": 23, "tick": 24,
+      "walls": 23, "tick": 24, "color": 25, "ink": 26, "paper": 27,
       "cell": 32, "setCell": 33, "recalc": 34, "select": 35, "stop": 36,
       "go": 37, "set": 38, "get": 39, "start": 40, "clear": 41,
       "onclick": 48, "onchange": 49, "onkey": 50, "onselect": 51,
@@ -111,6 +111,24 @@ WK = {"text": 1, "value": 2, "label": 3, "enabled": 4, "checked": 5,
       "onalert": 60, "ITEMS": 61, "MENUS": 62}
 WK_NAME = {v: k for k, v in WK.items()}
 APP_ATOM0, APP_ATOM_MAX = 64, 187       # ids 64..250; the cap is 187
+
+# The canvas palette (WEAVE-SPEC 6.10.7): SPEC.md 3's own sixteen, in its
+# order, by NAME - `color="4"` is not accepted, because the reader of the WML
+# is the person who has to know that 4 is red.
+PALETTE = ["black", "blue", "green", "cyan", "red", "magenta", "brown",
+           "lightgray", "darkgray", "lightblue", "lightgreen", "lightcyan",
+           "lightred", "lightmagenta", "yellow", "white"]
+COLOR = {n: i for i, n in enumerate(PALETTE)}
+CBLACK, CWHITE = 0, 15
+
+
+def pen_legal(paper, ink):
+    """SPEC.md 5.4.2.2's fourth refusal, said the way WEAVE-SPEC 6.10.7 uses
+    it: GFX_BLIT1 takes a pair only when one colour's planes are a subset of
+    the other's. `white` paper and `black` paper are legal against all
+    sixteen, which is why no palette anyone writes meets this."""
+    return (paper & ~ink & 0x0F) == 0 or (~paper & ink & 0x0F) == 0
+
 
 # The 38 WVM opcodes, 0x00-0x25, WEAVE-SPEC 4.5. Operand spec: '' none,
 # 'b' one byte, 'w' imm16, 'r' rel16, 'bb' two bytes.
@@ -202,9 +220,9 @@ ELEM_ATTRS = {
     "input":  ["cols", "text", "onchange", "onkey"],
     "list":   ["rows", "onselect"],
     "grid":   ["cols", "rows", "onselect", "onedit", "oncalc"],
-    "canvas": ["w", "h", "walls", "tick", "onkey", "oncollide", "onwall",
-               "onscore", "ontick"],
-    "sprite": ["id", "img", "x", "y", "shown"],
+    "canvas": ["w", "h", "ink", "paper", "walls", "tick", "onkey",
+               "oncollide", "onwall", "onscore", "ontick"],
+    "sprite": ["id", "img", "x", "y", "shown", "color"],
     "menu":   ["title"],
     "item":   ["oncommand"],
     "script": ["src"],
@@ -421,9 +439,13 @@ def unknown_attr_error(fname, line, elem, attr):
                         "reaches a package only between press and release "
                         "(SPEC.md 13.7)" % attr)
     if "color" in attr or attr in ("fg", "bg", "font", "size"):
-        raise PackError(fname, line, "%s: there are no colors; grey rounds "
-                        "to black on 1bpp and state never rides on color "
-                        "(SPEC.md 39.4)" % attr)
+        # 9.2.1 amended the exclusion and the sentence had to follow it: a
+        # palette exists now, on the canvas and nowhere else, and a refusal
+        # that says "there are no colors" to somebody looking at PONG.WML is
+        # a refusal they cannot look up.
+        raise PackError(fname, line, "%s: no color here; a palette is a "
+                        "canvas's (WEAVE-SPEC 9.2.1) - grey rounds to black "
+                        "on 1bpp (SPEC.md 39.4)" % attr)
     raise PackError(fname, line, '%s: no such attribute "%s"; style is '
                     "bold/invert/align only - two of three adapters are 1bpp"
                     % (elem, attr))
@@ -522,6 +544,7 @@ class Analyzer:
         self.fname, self.atoms = fname, interner
         self.app = AppModel()
         self.next_comp = 1
+        self.canvas_ink = CBLACK        # 6.10.7: what a <sprite> inherits
 
     def err(self, line, msg):
         raise PackError(self.fname, line, msg)
@@ -805,6 +828,19 @@ class Analyzer:
         if w % 8:
             self.err(node.attrs["w"][1], 'canvas: w="%d" is not a multiple '
                      "of 8 - bands are byte-aligned (WEAVE-SPEC 3.3)" % w)
+        # 6.10.7's palette, PRESENT -> PROP: the three colour attributes emit
+        # a record whenever they are written, even at their default, which is
+        # `walls`'s rule and not `tick`'s. Two packers agree about "was it
+        # written" with no arithmetic at all, and a sprite that says
+        # color="black" under an ink="yellow" canvas needs the record to mean
+        # anything (2.14).
+        ink = self.color_attr(node, "canvas", "ink", CBLACK)
+        paper = self.color_attr(node, "canvas", "paper", CWHITE)
+        self.canvas_ink = ink           # what a <sprite> child inherits
+        if "ink" in node.attrs:
+            comp.props.append((WK["ink"], PK_INT, ink))
+        if "paper" in node.attrs:
+            comp.props.append((WK["paper"], PK_INT, paper))
         walls = "TBLR"
         if "walls" in node.attrs:
             walls, ln = node.attrs["walls"]
@@ -819,7 +855,8 @@ class Analyzer:
                              *node.attrs["tick"], 0, 255)
             if tick:
                 comp.props.append((WK["tick"], PK_INT, tick))
-        comp.canvas = dict(w=w, h=h, walls=walls, tick=tick)
+        comp.canvas = dict(w=w, h=h, walls=walls, tick=tick, ink=ink,
+                           paper=paper)
         # REC_COMP w/h carry the pixel size in cells/rows; a height not a
         # multiple of 8 rounds the buffer UP to the next band (recorded
         # interpretation - the record has no finer granularity).
@@ -836,6 +873,31 @@ class Analyzer:
         if len(comp.sprites) > 16:
             self.err(node.line, "%d sprites; a canvas composes 16 at most "
                      "(WEAVE-SPEC 6.10)" % len(comp.sprites))
+        # 6.10.7: SPEC.md 5.4.2.2's FOURTH refusal, decided here so that it is
+        # never a band that silently does not arrive. Every pair the composer
+        # can hand GFX_BLIT1 is (paper, some ink), and they are all known now.
+        self.check_pen(node, "ink", ink, paper, node.line)
+        for sp in comp.sprites:
+            self.check_pen(node, "color", sp.sprite["color"], paper,
+                           sp.sprite["line"])
+
+    def color_attr(self, node, elem, attr, default):
+        """One palette attribute, by NAME (WEAVE-SPEC 6.10.7)."""
+        if attr not in node.attrs:
+            return default
+        name, ln = node.attrs[attr]
+        if name not in COLOR:
+            self.err(ln, '%s: %s="%s" is not one of the sixteen colours '
+                     "(WEAVE-SPEC 6.10.7)" % (elem, attr, name))
+        return COLOR[name]
+
+    def check_pen(self, node, attr, ink, paper, line):
+        if pen_legal(paper, ink):
+            return
+        self.err(line, 'canvas: paper="%s" against %s="%s": the two share no '
+                 "plane either way and GFX_BLIT1 refuses the pair "
+                 "(SPEC.md 5.4.2.2)"
+                 % (PALETTE[paper], attr, PALETTE[ink]))
 
     def el_sprite(self, comp, node):
         if "img" not in node.attrs:
@@ -851,14 +913,18 @@ class Analyzer:
         if "shown" in node.attrs:
             shown = _bool_attr(self.fname, "sprite", "shown",
                                *node.attrs["shown"])
+        color = self.color_attr(node, "sprite", "color", None)
         comp.sprite = dict(img=node.attrs["img"][0].upper(), x=x, y=y,
-                           shown=shown, line=node.line)
+                           shown=shown, line=node.line,
+                           color=self.canvas_ink if color is None else color)
         if x:
             comp.props.append((WK["x"], PK_INT, x))
         if y:
             comp.props.append((WK["y"], PK_INT, y))
         if not shown:
             comp.props.append((WK["shown"], PK_INT, 0))
+        if color is not None:
+            comp.props.append((WK["color"], PK_INT, color))
         comp.w = comp.h = 0     # sprites are not flow components
 
     def menu(self, node):
@@ -4566,6 +4632,17 @@ def costs_table(adapter="cga"):
          "~%.0f-%.0f ms" % (ms(1 * CALL_US) + 0.3, ms(2 * CALL_US) + 1)),
         ("canvas", "frame, 2 sprites (dirty bands)", "2-4",
          "~%.0f-%.0f ms" % (ms(2 * CALL_US) + 0.5, ms(4 * CALL_US) + 2)),
+        # 6.10.7's palette: a COLOUR SPAN is a call, so the row above is what
+        # a coloured canvas pays when its sprites share a colour or are alone
+        # in the run, and this is what PONG's three-colour field pays when the
+        # ball is level with a paddle.  MEASURED off the model over a 400-frame
+        # rally, not modelled: 1.005 calls a frame uncoloured, 1.955 coloured
+        # (1 for 210 frames, 3 for 188, 4 for 2).  On any 1bpp adapter the
+        # load path leaves the palette off, so the figure there is the first
+        # one, exactly.
+        ("canvas", "frame, PONG's 3 colours, VGA (measured, 400 frames)",
+         "1-4 (mean 1.96)", "~%.0f-%.0f ms" % (ms(1 * CALL_US) + 0.3,
+                                               ms(4 * CALL_US) + 2)),
         ("card", "switch (full-card repaint, text-heavy CGA card)",
          "~1/row", "~0.3-1.2 s"),
     ]
@@ -4778,7 +4855,8 @@ def _vmc_ring(path):
 class CvSprite:
     """One sprite record (WEAVE-SPEC 6.10.4), host-side."""
 
-    def __init__(self, desc, img, msk, wb, ph, nfr, x, y, vx, vy, shown):
+    def __init__(self, desc, img, msk, wb, ph, nfr, x, y, vx, vy, shown,
+                 color=0):
         self.desc, self.img, self.msk = desc, img, msk
         self.wb, self.ph, self.nfr = wb, ph, nfr
         self.pw = wb * 8
@@ -4786,6 +4864,7 @@ class CvSprite:
         self.px16, self.py16 = x * 16, y * 16
         self.shown, self.frame, self.scored = shown, 0, False
         self.ox, self.oy, self.oframe, self.oshown = x, y, 0, False
+        self.color = color              # 6.10.7, flags bits 4-7 on the machine
 
 
 class CvCanvas:
@@ -4793,8 +4872,12 @@ class CvCanvas:
 
     RING = 32
 
-    def __init__(self, w, h, walls, tick, cid):
+    def __init__(self, w, h, walls, tick, cid, paper=CWHITE, ink=CBLACK):
         self.w, self.h, self.walls, self.tick, self.cid = w, h, walls, tick, cid
+        # 6.10.7. `colored` is one test and false is BIT-FOR-BIT the composer
+        # wave 5 shipped; the load path forces it false on any 1bpp adapter
+        # whatever the bundle says, by not reading the three props there.
+        self.paper, self.ink = paper, ink
         self.stride = w // 8
         self.buf = bytearray(b"\xFF" * (self.stride * h))
         self.spr = []
@@ -4805,7 +4888,8 @@ class CvCanvas:
         self.tickp = False
         self.ovf = 0
         self.bels = 0
-        self.blits = []             # (band0, nbands) per emitted run
+        self.blits = []             # 6.10.7: (band0, nbands, col0, ncols,
+                                    # pen or None) per emitted BLIT
 
     # --- 6.10.6: the staging ring -------------------------------------------
     def stage(self, comp, atom, d1, d2):
@@ -4950,8 +5034,56 @@ class CvCanvas:
                     p = r * self.stride + col
                     self.buf[p] = (self.buf[p] | outc) & (~outi & 0xFF)
 
+    @property
+    def colored(self):
+        """WEAVE-SPEC 6.10.7, and it is the MODULE's test rather than a
+        summary of the bundle: BIND raises it for a paper that is not white,
+        and a WSMF_COLOR write raises it for any colour that is not black.
+        A canvas whose paper is white and whose sprites are all black IS the
+        default pair, and takes 6.10.2 step 3 with no pen call at all."""
+        return self.paper != CWHITE or any(s.color for s in self.spr)
+
+    def spans(self, r0, r1):
+        """6.10.7's colour map and span walk, over one composed run.
+
+        Answers a list of (col0, ncol, colour). An uncoloured canvas answers
+        the single full-width span 6.10.2 step 3 already emitted, so the two
+        paths are one algorithm and the flag is only ever a saving."""
+        if not self.colored:
+            return [(0, self.stride, None)]
+        NEUTRAL = -1
+        col = [NEUTRAL] * self.stride
+        for s in self.spr:                      # UISTREAM order: LAST wins,
+            if not s.shown or not s.wb:         # which is composition order
+                continue
+            if s.y > r1 or s.y + s.ph - 1 < r0:
+                continue
+            c0 = max(0, s.x >> 3)               # arithmetic, as everywhere
+            c1 = min(self.stride - 1, (s.x + s.pw - 1) >> 3)
+            for j in range(c0, c1 + 1):
+                col[j] = s.color
+        out, cur, start = [], None, 0
+        for j in range(self.stride):
+            if col[j] == NEUTRAL:               # every bit of it is paper, so
+                continue                        # its ink colour cannot show:
+            if cur is None:                     # it absorbs into the span to
+                cur = col[j]                    # its left
+                continue
+            if col[j] == cur:
+                continue
+            out.append((start, j - start, cur))
+            start, cur = j, col[j]
+        # A run no shown sprite reaches is all paper, so its ink is arbitrary
+        # - and CBLACK is the one colour legal against EVERY paper (0 is a
+        # subset of all sixteen, SPEC.md 5.4.2.2), which is why the fallback
+        # is pinned rather than borrowed from the canvas's `ink`. The machine
+        # pins the same constant and `col-empty` is the case that proves it.
+        out.append((start, self.stride - start, CBLACK if cur is None else cur))
+        return out
+
     def flush(self):
-        """One GFX_BLIT1 per maximal run of dirty bands."""
+        """One GFX_BLIT1 per maximal run of dirty bands - and per COLOUR SPAN
+        of one, when the canvas has a palette (6.10.7)."""
         self.blits = []
         b = 0
         n = len(self.dirty)
@@ -4968,7 +5100,13 @@ class CvCanvas:
                     self.buf[r * self.stride + c] = 0xFF   # paper is LIT
             for s in self.spr:
                 self.compose(s, r0, r1)
-            self.blits.append((b0, b - b0))
+            for c0, nc, colour in self.spans(r0, r1):
+                # The pen is (AL = the canvas's paper colour, AH = this
+                # span's ink) - the names cross over because the BUFFER's
+                # set bit is the background (6.10.2). `None` records "no
+                # GFX_BLIT1_PEN call was made at all".
+                pen = None if colour is None else (self.paper, colour)
+                self.blits.append((b0, b - b0, c0, nc, pen))
         self.dirty = [0] * n
         for s in self.spr:
             s.ox, s.oy, s.oframe, s.oshown = s.x, s.y, s.frame, bool(s.shown)
@@ -5023,6 +5161,7 @@ _CV_ART = {
     "BAR":  "sprite BAR 8 16\n" + "########\n" * 16,
     "DOT":  "sprite DOT 8 8\n#.......\n........\n........\n........\n"
             "........\n........\n........\n.......#\n",
+    "WIDE": "sprite WIDE 24 8\n" + ("#" * 24 + "\n") * 8,
     "TWO":  "sprite TWO 8 8 2\n####....\n####....\n####....\n####....\n"
             "####....\n####....\n####....\n####....\n-\n....####\n....####\n"
             "....####\n....####\n....####\n....####\n....####\n....####\n",
@@ -5031,6 +5170,14 @@ _CV_ART = {
 #  name, W, H, walls, tick, cid, [(art, x, y, vx, vy, shown, frame)],
 #  frames, negctl, hideframe (0 = never; else the sprite 0 is hidden BEFORE
 #  that frame, which is the only mid-run change a case can make)
+#
+#  ...and an OPTIONAL eleventh field, (paper, ink, [per-sprite colour]), which
+#  is 6.10.7's palette. It is optional rather than a column on every row for
+#  one reason worth the sentence: a row without it is the wave-5 case
+#  UNTOUCHED, so the seventeen that were passing before the palette existed
+#  are the same bytes of expectation afterwards, and a regression in the
+#  uncoloured path cannot hide behind an edit to its own fixture.
+_CV_PLAIN = (CWHITE, CBLACK, [])
 _CV_CASES = [
     ("still", 64, 32, 0xF, 0, 3, [("BALL", 8, 8, 0, 0, 1, 0)], 3, 0, 0),
     ("slide", 64, 32, 0xF, 0, 3, [("BALL", 8, 8, 32, 0, 1, 0)], 4, 0, 0),
@@ -5060,11 +5207,63 @@ _CV_CASES = [
     # has proved nothing (12.1.1's rule).
     ("NEG-buffer", 64, 32, 0xF, 0, 3, [("BALL", 8, 8, 32, 0, 1, 0)], 4, 1, 0),
     ("NEG-state", 64, 32, 0xF, 0, 3, [("BALL", 48, 8, 64, 0, 1, 0)], 6, 2, 0),
+
+    # --- 6.10.7's palette ---------------------------------------------------
+    # Every one of these is a SPAN question and none of them is a pixel
+    # question: the buffer these compose is byte-identical to the same case
+    # without a palette, which is the amendment's whole claim (9.2.1) and is
+    # asserted here by cmpbuf as much as by cmpblits.
+    #
+    # one colour, and the NEUTRAL columns either side of it absorb: 1 span
+    ("col-one", 64, 32, 0xF, 0, 3, [("BALL", 8, 8, 32, 0, 1, 0)], 4, 0, 0,
+     (CWHITE, CBLACK, [COLOR["red"]])),
+    # two colours, horizontally clear of each other: 2 spans, and the break is
+    # at the FIRST column of the second colour.  Both sprites MOVE, because a
+    # still frame has no dirty run and a case whose last frame emits nothing
+    # asserts nothing (which is how the first draft of these five was wrong)
+    ("col-two", 64, 32, 0xF, 0, 3,
+     [("BAR", 8, 4, 0, 16, 1, 0), ("DOT", 48, 6, 0, 16, 1, 0)], 2, 0, 0,
+     (CWHITE, CBLACK, [COLOR["red"], COLOR["cyan"]])),
+    # ...and sharing a byte column: the LAST sprite in UISTREAM order wins it,
+    # which is composition order.  WIDE holds three columns and DOT takes the
+    # last two of them back
+    ("col-share", 64, 32, 0xF, 0, 3,
+     [("WIDE", 0, 4, 0, 0, 1, 0), ("DOT", 10, 6, 0, 16, 1, 0)], 2, 0, 0,
+     (CWHITE, CBLACK, [COLOR["red"], COLOR["yellow"]])),
+    # a coloured PAPER, which is what raises `colored` with no sprite colour
+    # at all - and black paper against white ink is 5.4.2.2's COMPLEMENTED
+    # arm, the one that is a hand loop rather than a rep movsw
+    ("col-paper", 64, 32, 0xF, 0, 3, [("BALL", 8, 8, 32, 0, 1, 0)], 4, 0, 0,
+     (CBLACK, CWHITE, [CWHITE])),
+    # a hidden sprite is not in the colour map either: one span, the shown
+    # sprite's colour, and the hidden one's columns are neutral
+    ("col-hidden", 64, 32, 0xF, 0, 3,
+     [("BALL", 8, 8, 0, 0, 1, 0), ("BAR", 40, 8, 0, 16, 1, 0)], 3, 0, 2,
+     (CWHITE, CBLACK, [COLOR["red"], COLOR["green"]])),
+    # a run NO sprite reaches, which is the span walk's one fallback: the ball
+    # moves 16 px a frame, so its old band and its new band have a clean band
+    # between them and the old one composes to bare paper.  The colour it is
+    # blitted in cannot show, and both implementations have to pin the SAME
+    # arbitrary constant or the differential is a coin toss
+    ("col-empty", 64, 32, 0xF, 0, 3, [("BALL", 8, 0, 0, 256, 1, 0)], 1, 0, 0,
+     (CBLACK, CWHITE, [CWHITE])),
+    # NEGATIVE CONTROL for the span record itself: without one, a harness that
+    # compares two words of a five-word row proves nothing about the other
+    # three
+    ("NEG-span", 64, 32, 0xF, 0, 3,
+     [("BAR", 8, 4, 0, 16, 1, 0), ("DOT", 48, 6, 0, 16, 1, 0)], 2, 3, 0,
+     (CWHITE, CBLACK, [COLOR["red"], COLOR["cyan"]])),
 ]
 
 
+def _cv_pal(case):
+    """The optional eleventh field, defaulted (see _CV_CASES)."""
+    return case[10] if len(case) > 10 else _CV_PLAIN
+
+
 def _cv_run(case):
-    name, w, h, walls, tick, cid, places, nframes, neg, hidef = case
+    name, w, h, walls, tick, cid, places, nframes, neg, hidef = case[:10]
+    paper, ink, colors = _cv_pal(case)
     names = []
     for pl in places:
         if pl[0] not in names:
@@ -5073,12 +5272,13 @@ def _cv_run(case):
     for n in names:
         sprites += parse_wsp(_CV_ART[n], n + ".wsp")
     sec = _cv_spritesec(sprites)
-    cv = CvCanvas(w, h, walls, tick, cid)
-    for art, x, y, vx, vy, sh, fr in places:
+    cv = CvCanvas(w, h, walls, tick, cid, paper, ink)
+    for j, (art, x, y, vx, vy, sh, fr) in enumerate(places):
         k = names.index(art)
         s = sprites[k]
         cv.spr.append(CvSprite(k, b"".join(s.images), b"".join(s.masks),
-                               s.w // 8, s.h, s.frames, x, y, vx, vy, sh))
+                               s.w // 8, s.h, s.frames, x, y, vx, vy, sh,
+                               colors[j] if j < len(colors) else ink))
         cv.spr[-1].frame = fr
     cv.markall()
     cv.flush()                      # the birth composition, as the load does
@@ -5099,19 +5299,22 @@ def emit_cvcorpus():
            "cv_tab:"]
     body = []
     for k, case in enumerate(_CV_CASES):
-        name, w, h, walls, tick, cid, places, nframes, neg, hidef = case
+        name, w, h, walls, tick, cid, places, nframes, neg, hidef = case[:10]
+        paper, ink, colors = _cv_pal(case)
         cv, sec, sprites, names = _cv_run(case)
         out.append("    dw cvn_%d, cvs_%d, cvi_%d, cve_%d, cvr_%d, cvb_%d, "
                    "cvx_%d" % (k, k, k, k, k, k, k))
-        out.append("    dw %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d"
+        out.append("    dw %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d"
                    % (w, h, walls, tick, cid, len(places), nframes, neg,
-                      cv.ovf, cv.bels, hidef))
+                      cv.ovf, cv.bels, hidef,
+                      paper | (1 if cv.colored else 0) << 8))
         body.append('cvn_%d: db "%s", 0' % (k, name))
         body += _vmc_bytes("cvs_%d" % k, sec)
         init = bytearray()
-        for art, x, y, vx, vy, sh, fr in places:
-            init += struct.pack("<7H", names.index(art), x & 0xFFFF,
-                                y & 0xFFFF, vx & 0xFFFF, vy & 0xFFFF, sh, fr)
+        for j, (art, x, y, vx, vy, sh, fr) in enumerate(places):
+            init += struct.pack("<8H", names.index(art), x & 0xFFFF,
+                                y & 0xFFFF, vx & 0xFFFF, vy & 0xFFFF, sh, fr,
+                                colors[j] if j < len(colors) else ink)
         body += _vmc_bytes("cvi_%d" % k, bytes(init))
         exp = bytearray()
         for s in cv.spr:
@@ -5130,8 +5333,17 @@ def emit_cvcorpus():
             ring += struct.pack("<2H", d1, d2)
         body += _vmc_bytes("cvr_%d" % k, bytes(ring))
         bl = bytearray(struct.pack("<H", len(cv.blits)))
-        for b0, nb in cv.blits:
-            bl += struct.pack("<2H", b0, nb)
+        if neg == 3:
+            cv.blits = [(b0, nb, c0 ^ 1, nc, pen)          # the span's COLUMN,
+                        for b0, nb, c0, nc, pen in cv.blits]   # which two of
+                                                    # the five words are not
+        for b0, nb, c0, nc, pen in cv.blits:
+            # 6.10.7 widened this row from two words to five: the harness
+            # records the SPAN a blit put down and the pen it set for it, and
+            # 0xFFFF is "no GFX_BLIT1_PEN call".
+            bl += struct.pack("<5H", b0, nb, c0, nc,
+                              0xFFFF if pen is None
+                              else pen[0] | (pen[1] << 8))
         body += _vmc_bytes("cvb_%d" % k, bytes(bl))
         buf = bytes(cv.buf)
         if neg == 1:
@@ -5623,7 +5835,25 @@ def selfcheck(verbose=False):
         "unknown element sentence")
     rej('<app name="x"><card id="m"><button color="red">b</button>'
         "</card></app>",
-        'there are no colors', "color attribute sentence")
+        "no color here; a palette is a canvas's",
+        "color attribute sentence")
+    # ...and 6.10.7's own three, which is the other side of that sentence
+    rej('<app name="x"><card id="m"><canvas id="c" w="64" h="32" '
+        'paper="beige"><sprite id="s" img="B"/></canvas></card></app>',
+        'canvas: paper="beige" is not one of the sixteen colours',
+        "palette name sentence", wsp="sprite B 8 8\n" + "########\n" * 8)
+    rej('<app name="x"><card id="m"><canvas id="c" w="64" h="32" '
+        'paper="blue" ink="red"><sprite id="s" img="B"/></canvas></card>'
+        "</app>",
+        'canvas: paper="blue" against ink="red": the two share no plane '
+        "either way", "palette pair sentence",
+        wsp="sprite B 8 8\n" + "########\n" * 8)
+    rej('<app name="x"><card id="m"><canvas id="c" w="64" h="32" '
+        'paper="blue"><sprite id="s" img="B" color="red"/></canvas></card>'
+        "</app>",
+        'canvas: paper="blue" against color="red": the two share no plane '
+        "either way", "palette pair sentence, sprite",
+        wsp="sprite B 8 8\n" + "########\n" * 8)
     rej('<app name="x"><card id="m"><button zork="1">b</button>'
         "</card></app>",
         'button: no such attribute "zork"; style is bold/invert/align only',

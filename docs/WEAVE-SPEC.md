@@ -939,6 +939,16 @@ Pinned. Property atoms:
 | 7 | `x` | | 15 | `rows` | | 23 | `walls` |
 | 8 | `y` | | 16 | `cols` | | 24 | `tick` |
 
+...and the canvas palette's three (§6.10.7), **added rather than
+renumbered** — ids 1–63 are pinned and a bundle packed before them is
+byte-identical after them:
+
+| id | name | on | |
+|---|---|---|---|
+| 25 | `color` | `sprite` | the sprite's ink, 0–15 |
+| 26 | `ink` | `canvas` | the default sprite ink, 0–15 |
+| 27 | `paper` | `canvas` | the canvas background, 0–15 |
+
 Method atoms:
 
 | id | name | | id | name |
@@ -962,7 +972,7 @@ Event atoms:
 | | | | 60 | `onalert` (internal: alert button, never written in WML) |
 
 Structural atoms: 61 `ITEMS` (the list-items blob name, §2.6.1), 62 `MENUS`
-(§2.6.2), 63 reserved. Ids 25–31 and 42–47 are unassigned and reserved.
+(§2.6.2), 63 reserved. Ids 28–31 and 42–47 are unassigned and reserved.
 
 ### 2.8 CODE — bytecode and the function table
 
@@ -1209,6 +1219,8 @@ Per element:
 | | `oncalc` | fn name | — | a recalculation finished |
 | `canvas` | `w` | px | required | multiple of 8, 64–320 |
 | | `h` | px | required | 32–160 |
+| | `ink` | colour | `black` | the default sprite colour → `ink` prop (§6.10.7) |
+| | `paper` | colour | `white` | the background → `paper` prop (§6.10.7) |
 | | `walls` | string | `TBLR` | subset of `TBLR`: bouncing edges; missing edges are open (§6.10) |
 | | `tick` | frames | 0 | 0 = no ontick; 1–255 = every N frames |
 | | `onkey` | fn name | — | key transitions while the game runs |
@@ -1219,6 +1231,7 @@ Per element:
 | `sprite` | `img` | name | required | a `.WSP` sprite name → a `PK_SPRITE` record **named by atom 11 `frame`** — no `img` atom exists; the record doubles as the `frame` property's initial value (§6.10) |
 | | `x`,`y` | px, signed | 0 | initial position |
 | | `shown` | bool | 1 | |
+| | `color` | colour | the canvas's `ink` | this sprite's ink → `color` prop (§6.10.7). Pack-time only: it is **not** on §6.10's script surface |
 | `menu` | `title` | string | required | ≤ 8 chars |
 | `item` | `oncommand` | fn name | — | menu items only; content = the label, ≤ 24 glyphs |
 | `script` | `src` | 8.3 name | required | the `.WJS` file; **no inline script** — the runtime never parses text, and the pack step is the only compiler surface |
@@ -1263,6 +1276,14 @@ cells. **That is the entire styling system.** There are no colors, no
 fonts, no sizes, no margins, no hover states, no CSS of any kind; the
 packer rejects unknown vocabulary with a message naming the platform fact
 (§10.5), because the discovery must happen at pack, never at run.
+
+**The canvas's palette (§6.10.7) is not an exception to that sentence, and
+the line between them is the one §9.2 now draws**: `ink`, `paper` and
+`color` are attributes of a `<canvas>` and its `<sprite>`s — of the game's
+ART — and there is no colour vocabulary on any flow component, in the style
+byte or beside it. A label, a button, a grid cell and an alert are exactly
+as colourless as they were. §9.2 has the reasoning and §13.2 prices what
+carrying it to the flow components would cost.
 
 ### 3.6 Sprite art — the `.WSP` source
 
@@ -2660,6 +2681,16 @@ thing it warns about. The complemented composition needs the same number of
 instructions, works with the DEFAULT pen on all three, and is exactly what
 `apps/weave/wband.inc` already does when it composes `glyph XOR 0xFF`.
 
+**...and that is exactly why the palette §6.10.7 adds is safe.** The
+paragraph above rejects the pen as a mechanism for the POLARITY, because a
+polarity the pen fixes is a polarity two adapters of three get wrong. A
+COLOUR is the other case of the same fact: the buffer is already the way up
+all three adapters want, so a pen adds a mapping on the one adapter that has
+one and is ignored — not reduced, not dithered, *ignored* — on the two that
+do not. The defect this paragraph records is what makes §6.10.7 a pure
+addition, and it is why the palette is spelled as a pen over an unchanged
+buffer rather than as a second buffer with a depth.
+
 A **band** is eight pixel rows of the buffer, 8-aligned to the buffer's own
 top: band *k* covers rows `8k .. 8k+7`, and there are `H/8` of them (`H` is a
 multiple of 8 by §2.5's rounding, so the last band is whole). Per frame:
@@ -2681,7 +2712,11 @@ multiple of 8 by §2.5's rounding, so the last band is whole). Per frame:
    `BP` = the stride, `AX` = the canvas's screen x, `BX` = its screen y plus
    `8 × first band`, `CX` = `W`, `DX` = `8 × band count`. x and `CX` are
    multiples of 8 by construction (§3.3 requires `w` to be, and §7.1.2 puts
-   the content origin on a multiple of 8).
+   the content origin on a multiple of 8). **A canvas with a palette splits
+   that run into colour SPANS and emits one call per span (§6.10.7); a
+   canvas without one — which is every bundle packed before §6.10.7 existed,
+   and every bundle at all on a 1bpp adapter — takes this path exactly as
+   written.**
 
 The background is **paper** and there is no background art in v1 — a bundle
 that wants one draws it with sprites. Step 2's clear-then-compose writes each
@@ -2712,7 +2747,7 @@ preserved. Verbs, pinned:
 
 | `AL` | verb | in | out |
 |---|---|---|---|
-| 0 | `BIND` | `BX` = canvas claim seg, `CX` = bundle claim seg, `DX` = a 12-byte parameter block in the caller's `DS` (W, H, walls, tick, nspr, SPRITES offset) | `AX` = 1 bound |
+| 0 | `BIND` | `BX` = canvas claim seg, `CX` = bundle claim seg, `DX` = a 16-byte parameter block in the caller's `DS` (W, H, walls, tick, nspr, SPRITES offset, comp_id, **the palette word — the `paper` colour in the low byte, §6.10.7**) | `AX` = 1 bound |
 | 1 | `SPRITE` | `BX` = sprite index, `CX` = the record's field id, `DX` = the value; `AH` = 0 read / 1 write | `AX` = the value read, or 1/0 for a write accepted/refused |
 | 2 | `START` | `BX` = fps 1..18, `CX` = the window pointer | `AX` = 1 running, 0 = fps out of range |
 | 3 | `STOP` | — | `AX` = 1 once the worker has acknowledged |
@@ -2750,11 +2785,21 @@ records inside the canvas, 0–16.
    +10  word       vy, signed           +18  word  ox, last composed x
                                         +20  word  oy, last composed y
                                         +22  byte  flags: 1 shown, 2 scored,
-                                                   4 was shown, 8 dirty
+                                                   4 was shown, 8 dirty;
+                                                   bits 4-7 are the sprite's
+                                                   COLOUR (6.10.7)
                                         +23  byte  frame | (last composed
                                                    frame << 4)
 +          the 1bpp buffer, stride x H bytes
 ```
+
+**The colour is four bits of the flags byte and not a twenty-fifth**, which
+is worth one sentence because it looks like a squeeze and is not: the record
+is 24 bytes and every one is spoken for, growing it moves the buffer for
+every sprite count and changes the arithmetic below, and the flags byte's top
+nibble was free — every site that writes it already writes through a mask
+(`wsm_composed` clears `WASSH|DIRTY` and sets `WASSH`; `wsm_markspr` and the
+AABB pass only test). A colour is 0–15 and a nibble holds one exactly.
 
 **The claim's size is derived and the packer computes it from the same
 numbers**, which is a wave-5 correction to §2.2's canvas KB byte:
@@ -2831,6 +2876,175 @@ nothing between the frame and the drain:
 
 `stop()` and the close/reload path both drain to empty and clear the pending
 flag, so a stale record cannot arrive against the next bundle's components.
+
+#### 6.10.7 The palette — colour, as a pen over the same buffer
+
+**The buffer does not change, the composition does not change, and the
+dirty-band arithmetic does not change.** All that is added is *which two
+colours a band's set and clear bits mean*, which SPEC.md §5.4.2.2 makes a
+register pair rather than a picture. §9.2.1 is the amendment this realises
+and has the reasoning; this section is the mechanism.
+
+**The vocabulary, and it is closed.** Three attributes, sixteen names, no
+numbers:
+
+| where | attribute | default |
+|---|---|---|
+| `<canvas>` | `paper` | `white` — the background |
+| `<canvas>` | `ink` | `black` — every sprite that does not say otherwise |
+| `<sprite>` | `color` | the canvas's `ink` |
+
+```
+black  blue      green      cyan     red      magenta      brown  lightgray
+0      1         2          3        4        5            6      7
+darkgray lightblue lightgreen lightcyan lightred lightmagenta yellow white
+8        9         10         11        12       13           14     15
+```
+
+These are SPEC.md §3's own sixteen and the same order (`CBLACK`…`CWHITE`);
+a name outside the list is a pack error naming the list (§10.5). Numbers are
+not accepted — the discovery that `color="4"` means red belongs to the
+person writing the WML, not to the person reading it.
+
+**Which register gets which.** The buffer is the framebuffer's way up
+(§6.10.2): a SET bit is the background and a CLEAR bit is a sprite's ink. So
+
+```
+gfx_blit1_pen   AL = ink   (a SET band bit)   = the canvas's `paper` colour
+                AH = paper (a CLEAR one)      = this span's sprite colour
+```
+
+The names cross over, and they cross over because the buffer's polarity is
+the one §6.10.2 chose for a reason it explains at length. An implementation
+that "fixes" the naming by turning the buffer over reintroduces the wave-5
+defect exactly.
+
+##### The colour map, and the span walk
+
+A span is a **byte-column range of one dirty band run**, and the runs
+themselves are unchanged. Per run, after §6.10.2's step 2 has composed it:
+
+```
+if not colored:                          ; the whole of 6.10.7's cost, absent
+    emit the run as 6.10.2 step 3 writes it, with no pen call at all
+else:
+    col[0 .. stride-1] = NEUTRAL         ; NEUTRAL is "no sprite reaches this
+                                         ; byte column in these rows"
+    for each sprite, in UISTREAM order:
+        if not shown: continue
+        if its rect does not intersect rows r0..r1: continue
+        c0 = max(0, x >> 3)              ; ARITHMETIC shift, as everywhere
+        c1 = min(stride-1, (x + pw - 1) >> 3)
+        if c0 > c1: continue
+        col[c0 .. c1] = this sprite's colour      ; LAST writer wins
+    cur = NONE ; start = 0
+    for j in 0 .. stride-1:
+        if col[j] is NEUTRAL: continue   ; absorbs into the span to its LEFT
+        if cur is NONE: cur = col[j] ; continue
+        if col[j] == cur: continue
+        emit span [start, j) in colour cur ; start = j ; cur = col[j]
+    emit span [start, stride) in colour (cur is NONE ? BLACK : cur)
+```
+
+and a span `[a, b)` is one `GFX_BLIT1_PEN` followed by one `GFX_BLIT1` with
+`ES:SI` = the run's first byte **plus a**, `AX` = the canvas's screen x
+**plus 8a**, `CX` = `8 × (b - a)`, and `BP`, `BX`, `DX` exactly §6.10.2's.
+`BP` is still the buffer's stride, which is what lets a narrower blit walk
+the same rows.
+
+**Five things an implementer would otherwise guess:**
+
+- **A run no sprite reaches is blitted in BLACK, and the constant is pinned
+  rather than chosen.** Every bit of such a run is paper, so the ink cannot
+  show and any colour would draw the same picture — which is exactly why both
+  implementations have to name the *same* arbitrary one or the differential
+  becomes a coin toss (`col-empty` is the case, §12.1.3). `black` is the one
+  colour legal against every paper, 0 being a subset of all sixteen, so it is
+  the choice that can never meet §5.4.2.2's fourth refusal either.
+- **A NEUTRAL column is provably free to merge.** Every bit of it is set —
+  no sprite reaches it, and step 2 cleared the run to paper — so the pen's
+  *ink* half is the only colour those bytes can take and it is the same in
+  every span. Merging changes no pixel; it is what keeps PONG at one call a
+  frame while its ball is clear of the paddles.
+- **A byte column two differently-coloured sprites share takes the LAST
+  one's colour**, in UISTREAM order — the same order step 2 composes in, so
+  the column's colour is the colour of the sprite whose pixels are on top.
+  In PONG that is two frames of contact in which the ball's overlapping byte
+  column wears the paddle's colour, and it is stated rather than fixed: the
+  alternative is a second pass over the same pixels, which is
+  PERFORMANCE.md's double-draw flash bought with a colour.
+- **`colored` is a fact the LOAD PATH decides, once.** It is true when the
+  canvas's `paper` is not `white`, or any sprite's effective colour is not
+  `black` — and it is **false on any 1bpp adapter, whatever the bundle
+  says**, because the load path does not read the three props there at all.
+  So CGA and Hercules take §6.10.2 step 3 unchanged: the same runs, the same
+  count, the same pixels, and not one `GFX_BLIT1_PEN` call. That is the
+  strongest form of "degrades to exactly today's picture" available — it is
+  not a degradation, it is the same code.
+- **The pen dies with the gfx lock** (SPEC.md §5.4.2.2), and the composer
+  holds the lock for the whole flush, so the last span's pen would still be
+  armed when the flush returns. A coloured flush therefore **restores
+  `CWHITE`/`CBLACK` before it returns** — one extra call a frame, 46.7 µs —
+  because `WSMV_PAINT` runs inside a paint callback whose other components
+  are lettered after it, and `apps/weave/wband.inc` puts down bands too.
+
+##### The pair that cannot be drawn, refused at pack
+
+SPEC.md §5.4.2.2's fourth refusal: `GFX_BLIT1` answers `CF = 1` for a pair
+whose two colours share no plane in either direction — `ink & ~paper` and
+`~ink & paper` both non-empty. In this section's terms the pair is
+(`paper` colour, some ink colour), so the legal condition is
+
+```
+paper ⊆ ink   or   ink ⊆ paper        (as 4-bit plane sets)
+```
+
+`white` paper is legal against all sixteen inks (everything is a subset of
+15) and so is `black` paper (0 is a subset of everything), which is why the
+two palettes anyone actually writes never meet this. `blue` paper with `red`
+sprites does: 1 and 4 share no plane either way. **The packer computes it for
+every (paper, ink) and (paper, sprite colour) pair in the bundle and refuses
+with §10.5's sentence** — a run-time refusal here would be a band that
+silently does not arrive, which §6.10.2 says the canvas has no second path
+for.
+
+The VALIDATOR's share of this is smaller and is the one a hostile `.WAB`
+needs: §10.4's `property range`, over the three atoms, `0..15`. It does not
+re-derive the pair — that is the packer's arithmetic and a hand-edited
+bundle carrying an illegal pair draws its band in whatever pair the previous
+call left, a colour defect and never a memory one — but a colour outside the
+sixteen is refused out loud rather than quietly clamped, which is what the
+load path's own mask would otherwise do.
+
+##### The count, which is the budget
+
+One call per span, and the span count per run is bounded by the sprites that
+reach it: **at most `2n + 1` for `n` coloured shown sprites in the run**, and
+exactly **1** when they all share a colour, when only one of them is in the
+run, or when the canvas is uncoloured. PONG, **measured over a 400-frame
+rally** against the model's own composer (§14's newest row):
+
+| | calls a frame |
+|---|---|
+| uncoloured, or **any 1bpp adapter** | 1.005 (398 frames of 1, 2 frames of 2) |
+| coloured, VGA | **1.955** (210 frames of 1, 188 of 3, 2 of 4) |
+
+Half the frames are 3 because PONG's ball serves at `vy = 4` — a quarter of a
+pixel a frame — so it spends most of a rally level with the paddles' rows, and
+a run holding all three sprites is `[pad][ball][wall]`. **+0.95 calls a frame
+is 718 µs of a 55 ms frame, 1.3%**, and the worst frame is 3 extra calls,
+2.3 ms, 4.1%. It lands inside §14's existing two-sprite row (2–4 calls,
+~2–5 ms) and well inside `tests/weavegame`'s 0.5–4.0 assertion, which is
+unchanged.
+
+**What would remove it, and why this wave does not do it**: a run is emitted
+full width because a dirty BAND is full width, so the still paddles are
+re-blitted whenever the ball's bands reach them. Narrowing a run to the byte
+columns the moved sprites actually touched would put PONG back at one call a
+frame *and* cut the bytes on the wire — but it changes the uncoloured path
+too, which is wave 5's shipped behaviour and §12.1.3's whole corpus. §13.2
+carries it with that arithmetic; it is a dirty-rectangle change wearing a
+palette's clothes, and the two should not be merged.
 
 ### 6.11 Menus
 
@@ -3233,12 +3447,60 @@ and the release of one gesture, and polling `OSAPI_MOUSE` alongside
 tracking is forbidden (SPEC.md §13.7). The markup has no hover vocabulary
 at all, so the gap is closed at the spec, not met in the field.
 
-### 9.2 No CSS and no colors
+### 9.2 No CSS, and no colors on anything a reader reads
 
 Style is §2.5.2's closed byte — bold, invert, align, cell w/h. Grey rounds
 to black on 1bpp, two of three adapters are 1bpp, and half-honoured
 fg/bg pairs produced invisible text twice in this tree
 (docs/BROWSER-PLAN.md §2.2.1). State never rides on color (SPEC.md §39.4).
+
+#### 9.2.1 The amendment: a `<canvas>` takes a palette
+
+**This exclusion said "no colors" flat, and it is now "no colors on the flow
+components".** A `<canvas>` and its `<sprite>`s take `paper`, `ink` and
+`color` (§3.3, §6.10.7) out of the sixteen the adapter has. The amendment is
+here rather than in §6.10 because an exclusion that quietly stops applying is
+worse than one that never existed, and because what changed is not the
+platform fact — it is which side of the fact the canvas was on.
+
+**The fact has not moved: on a 1bpp adapter `OSAPI_GFX_BLIT1_PEN` is NOT
+READ** (SPEC.md §5.4.2.2). That is the sentence §6.10.2 was written around —
+wave 5 tried to use the pen to fix a polarity and PONG came up inverted on
+CGA — and read the other way round it is exactly the property a palette
+wants: the composer already stores its buffer the framebuffer's way up, so a
+pen is a **pure addition on VGA and a no-op on the other two**. Not a
+reduction, not a dither, not a rounding: the identical band, in the identical
+call, and CGA and Hercules produce the picture they produced before this
+section existed, pixel for pixel.
+
+**That is asserted in two halves rather than assumed.** The COMPOSER's half
+is `weavecanvas` (§12.1.3): an uncoloured canvas emits the same spans in the
+same count, and the six colour cases compose buffers byte-identical to the
+same cases without a palette — the pen is a mapping on the way to the glass
+and not a change to what was composed. The LOAD PATH's half is that a 1bpp
+machine never sees a palette at all: `w_cvid.bpp` is 1 there, the three props
+are not read, and `weavegame`'s 0.5–4.0 calls-a-frame assertion — PONG's own
+counters, on a CGA MartyPC — is unmoved by this wave.
+
+**Three things keep the original reasoning intact, and each is a rule rather
+than an intention:**
+
+- **Nothing a reader reads is coloured.** Every character WEAVE puts on a
+  screen — labels, buttons, list rows, grid cells, the formula bar, alerts,
+  menus — goes through the same painter with the same `CBLACK` on `CWHITE`
+  it used before. The invisible-text defect BROWSER-PLAN §2.2.1 names needs
+  text and a background pair, and there is still no way to spell one.
+- **State never rides on colour** (SPEC.md §39.4) — and here it *cannot*,
+  because the canvas is the one component with no state a reader is meant to
+  recover: a sprite's position, its collisions and its score are events and
+  properties the app renders into ordinary components. PONG's score is a
+  `<label>`, and it is a `<label>` on VGA too.
+- **A colour is art, and art already has a pack step.** `color` is a
+  pack-time attribute and is deliberately NOT on §6.10's script surface
+  (§13.2 prices making it one), so a running bundle cannot invent a pair the
+  packer never saw — which is what keeps §5.4.2.2's fourth refusal a
+  pack-time sentence (§10.5) rather than a frame that silently does not
+  arrive.
 
 ### 9.3 No per-frame JS
 
@@ -3420,7 +3682,9 @@ one case per rule, §12):
 | unknown element | `<zap>: not a Weave element; the inventory is closed (WEAVE-SPEC 3.2)` |
 | unknown attribute | `button: no such attribute "pad"; style is bold/invert/align only - two of three adapters are 1bpp` |
 | hover vocabulary | `onhover: no hover exists; pointer movement reaches a package only between press and release (SPEC.md 13.7)` |
-| color vocabulary | `color: there are no colors; grey rounds to black on 1bpp and state never rides on color (SPEC.md 39.4)` |
+| color vocabulary | `color: no color here; a palette is a canvas's (WEAVE-SPEC 9.2.1) - grey rounds to black on 1bpp (SPEC.md 39.4)` |
+| palette name | `canvas: paper="beige" is not one of the sixteen colours (WEAVE-SPEC 6.10.7)` |
+| pen pair | `canvas: paper="blue" against ink="red": the two share no plane either way and GFX_BLIT1 refuses the pair (SPEC.md 5.4.2.2)` |
 | oversize bundle | `bundle is 68112 bytes; the cap is 63488 - the directory size must stand for the resident ask` |
 | ontick over budget | `ontick handler is 91 ops; the cap is 64 - per-frame JS does not fit 10-30k ops/s` |
 | too many atoms | `188 app atoms; the cap is 187 - atom ids are one byte` |
@@ -3430,6 +3694,14 @@ one case per rule, §12):
 Unknown events, bad arity, undeclared identifiers, frame/stack overdepth
 and every §3/§4/§5 limit refuse in the same voice: what was written, the
 bound, the fact.
+
+**The colour row's sentence changed in the palette's wave, and the wording is
+the point of the row.** It said "there are no colors" flat, and §9.2.1 made
+that false: a `<canvas>` takes one. A refusal that denies the existence of a
+feature the reader has just seen in `PONG.WML` is a refusal they cannot look
+up, so the sentence now says where colour LIVES and keeps the platform fact
+that bounds it. Both packers print it and
+`tests/weave/packerr/color-vocabulary/` is the case.
 
 **The unknown-attribute row illustrates itself with `pad`, and it used to
 say `color`** — which no input can reach, because the colour vocabulary is
@@ -3754,11 +4026,24 @@ row is the machine's half of it.
 Per case the harness builds a canvas claim, places its sprites, runs N frames
 and compares four things: **the sprite records** (the 1/16-px accumulators,
 the pixel positions, the velocities after every bounce, the score latch, the
-frame nibbles), **the staging ring** record for record, **the dirty-band
-runs** the last frame emitted — the `(first band, band count)` pairs
-`GFX_BLIT1` would have been called with, which is the number §14 prices at 2–4
-— and **the composed buffer, byte for byte**. Plus DF, which every routine in
-both files promises to leave clear.
+frame nibbles), **the staging ring** record for record, **the SPANS** the last
+frame emitted — five words each, `(first band, band count, first byte column,
+column count, pen)`, one per `GFX_BLIT1` the module would have called, which
+is the number §14 prices — and **the composed buffer, byte for byte**. Plus DF,
+which every routine in both files promises to leave clear.
+
+**§6.10.7 widened that row from two words to five and added seven cases**, and
+both halves are worth the sentence. A span that is right about its rows and
+wrong about its columns draws the same picture in the wrong colours, which no
+two-word record can see; and the six colour cases (`col-one`, `col-two`,
+`col-share`, `col-paper`, `col-hidden`, `col-empty`) assert the palette's
+central claim as much by `cmpbuf` as by `cmpblits` — **their composed buffers are byte-identical
+to the same cases without a palette**, because a pen is a mapping applied on
+the way to the glass and not a change to what was composed. The palette rides
+in an OPTIONAL eleventh field of the case row, so the seventeen cases that
+existed before it are the same bytes of expectation afterwards and a
+regression in the uncoloured path cannot hide behind an edit to its own
+fixture.
 
 Two divergences from §12.1.1's and §12.1.2's shape, both deliberate:
 
@@ -3775,8 +4060,12 @@ Two divergences from §12.1.1's and §12.1.2's shape, both deliberate:
   dispatcher's own verbs are exercised on the machine, by `weavegame`.
 
 The negative controls are §12.1.1's: one case whose expected BUFFER is
-deliberately wrong and one whose expected STATE is, both of which must FAIL,
-and `weavecv.sh` refuses a run in which neither fired.
+deliberately wrong, one whose expected STATE is, and — since §6.10.7 — one
+whose expected SPAN COLUMN is, all of which must FAIL, and `weavecv.sh`
+refuses a run in which none fired. The third arrived with the five words: a
+harness that compares two words of a five-word row proves nothing about the
+other three, and `NEG-span` is what says the columns and the pen are really
+read.
 
 `--selfcheck` runs its unit corpus and the pack/read round-trip;
 `build/.weave-hostchecks` stamps it as a prerequisite of the future
@@ -3807,7 +4096,7 @@ Respecting the enforced tier budgets (fast 30 s host-only; full 600 s —
 | soak | `weavesession` | MartyPC scripted replay of a real session, diffed against `weavesim --run`'s end state |
 | soak | `weavegfx` | pixels-vs-model with no goldens — transcript diffing is structurally blind to drawing defects (zgfx's whole reason) |
 | soak | `weavegrid` | recalc vs weavesim + incremental-equals-full-repaint (the tests/tpdraw.py identity gate) |
-| soak | `weavecanvas` | raw-QEMU SS≠DS differential of the CANVAS core against the model's composer — sprite records, the staging ring, the dirty-band runs and the composed buffer (§12.1.3). Wave 5's FIRST gate |
+| soak | `weavecanvas` | raw-QEMU SS≠DS differential of the CANVAS core against the model's composer — sprite records, the staging ring, the emitted SPANS (§6.10.7) and the composed buffer (§12.1.3). Wave 5's FIRST gate |
 | soak | `weavegame` | wirefps/wireflick with PONG.WAB as the load |
 | soak | `weavelat` | uilat's cycle-exact bar with a Weave form as the load |
 | soak | `weavepack` | Loom's pack byte-identical to weavesim --pack, in the OS — every demo and every template packed ON THE MACHINE, read back off the guest's floppy and compared whole; then `tests/weave/packerr/` through LOOM for §10.5's sentence identity |
@@ -4065,7 +4354,7 @@ and an `#ifndef` around `wfxc.c`'s output buffer — were each checked by
 rebuilding `weave.bin` and comparing it whole.
 
 **The gate is green host-side and on the machine.** Every demo and every
-template packs byte-identically to `weavesim --pack`, and all forty cases in
+template packs byte-identically to `weavesim --pack`, and all forty-four cases in
 `tests/weave/packerr/` refuse with the identical sentence
 (`tests/unit/t_lmpack.py`, a fast row). `tests/weavefuzz.py` then damaged a
 thousand projects and found **no** case where the two packers disagreed about
@@ -4139,9 +4428,26 @@ The rest, each gated before the next begins:
 | 7 | ~~Preview's picture~~ **SHIPPED**, above — `LOOM.WPV` (§1.2.4), a second RESIDENT segment carrying `wflow.c` and `wpaint.c` themselves, which is the decision the wave turns on | `weaveprev`: the pane against `weavesim --render --preview`, three demo projects, both 1bpp adapters |
 | 7 | ~~distribution~~ **SHIPPED**, above — the family's disk in three geometries with `PROJECTS/`, `CATALOG.TXT` and `BUNDLES=`; SPEC.md §19.10's `WEAVE/` and `LOOM/` folders on the everything disk and the live media; the Weave disks in the release zip; and §1.4's 256KB arithmetic corrected against the machine | the release checklist, and `weaveone` |
 
+| 8 | ~~the canvas PALETTE~~ **SHIPPED** — §6.10.7's `paper`/`ink`/`color`, §9.2.1's amendment to the exclusion, PONG in four colours | `weavecanvas` FIRST again (six new cases and a third negative control), then the two packers on the coloured `PONG.WAB` |
+
 Wave order within a wave follows the size line: `os88pkg.py`'s resident
 count is printed and recorded every wave, 55,000 is the overlay-split
 trigger, and the pre-named OVL candidates (§1.2) move first.
+
+**The palette's size line, both packages.** `weave.o88` went 51,124 + 9,196
+to **51,134 + 9,210 = 60,344, 1,096 under** — twenty-four bytes, because the
+whole load path is inside overlay tenant 8 (`ovl_canvasload`) and the only
+resident addition is the `struct os88_video` the `bpp` probe fills.
+`WEAVE.WSM` went 4,593 → 5,077, which is a claim rather than §20.1's segment.
+**`loom.o88` is the one that had to pay**: LOOM's compiler literals are
+resident even though `ovl_` code is not (SPEC.md §73.14), so the palette's
+two sentences and its sixteen names cost 436 bytes against wave 7's 262
+spare. It was paid the way WEAVE-PLAN §5.3 paid its own: **two sentences
+spelled once instead of nine times** — `>: not a Weave element; the inventory
+is closed` had five sites and `sprite <name> <w_px> <h_px> [<frames>]` four —
+for 426 bytes, leaving `loom.o88` at **54,976 + 6,216 = 61,192, 248 under**.
+A cut of that kind is a real one and is recorded here so the next wave does
+not spend it twice.
 
 ### 13.2 Deferred, with the arithmetic attached
 
@@ -4176,6 +4482,51 @@ NOT promising:
 - **A card switcher in Preview** — `WPVV_PAINT` takes a card index (§1.2.4)
   precisely so that one is a UI question rather than an ABI one; wave 7 always
   passes 0, the bundle's entry card.
+
+The palette's wave (§6.10.7, §9.2.1) added four, and each is a fork it
+deliberately did not take:
+
+- **A 4bpp canvas buffer and `GFX_BLIT4`** — the expensive fork, rejected with
+  arithmetic rather than deferred. PONG's buffer is `(240/8) × 120` = 3,600
+  bytes; at four bits a pixel it is **14,400**, which is past the 8KB
+  §2.2's canvas byte can express and past §6.10.4's whole derivation, so the
+  claim, the packer's `canvasKB` and the header all move. The composition cost
+  moves with it: the run's clear and every sprite's OR are four times the
+  bytes, and the mask shifter becomes a nibble shifter with no shared carry —
+  and it buys **per-pixel** colour where §6.10.7's spans buy per-sprite
+  colour, which is the only thing sprite art in this family has ever wanted.
+  Against 1.3% of a frame for the pen, a composer rewrite that quadruples the
+  per-frame byte count is not a close call.
+- **A scriptable `color`** — `sprite.color = 4` from WJS. It is two lines in
+  `wcanv.c` (the field id already exists) and it costs the one property that
+  makes §6.10.7 safe: a pair the packer never saw. SPEC.md §5.4.2.2's fourth
+  refusal would then arrive mid-frame, as a band that does not appear, on a
+  path §6.10.2 says has no second answer. A version that wants it needs either
+  a run-time legality clamp (and a rule for what a clamped colour looks like)
+  or a palette restricted to black and white paper — a decision, not an
+  addition.
+- **Colour on the flow components** — `<label color="red">`. It is CHEAPER
+  than it looks and still wrong here: `OSAPI_FONT_RUN` already takes an
+  ink/paper pair, so a coloured label is **zero extra gfx calls** and about
+  100–150 resident bytes (the prop read is one `w_pint` per painted component,
+  ~20–40 µs against a card paint measured in hundreds of milliseconds — no
+  eleventh field in `w_lay` needed, which is where the 500 bytes would have
+  gone). What stops it is not the cost but §39.4: a glyph rounds to BLACK on
+  1bpp, so a coloured *ink* would degrade exactly, but a coloured *paper*
+  goes through `gfx_ink`'s reduction and can come back a dither — so the
+  vocabulary would have to be half of a pair, and a half-honoured fg/bg pair
+  is the defect §9.2 exists to name. It also puts colour on the things a
+  reader READS, which is the line §9.2.1 draws and the reason that amendment
+  is defensible at all. `LOOM.WPV` compiles the same painter a second time,
+  so the change is two images, not one.
+- **Narrowing a dirty run to its dirty COLUMNS** — §6.10.7 measures PONG at
+  1.955 calls a frame against 1.005, and every one of the extra 0.95 is a
+  still paddle being re-blitted because a band is full width. Column-bounded
+  runs would take it back to ~1 and cut the bytes as well, on both the
+  coloured and the uncoloured path — which is precisely why it is not in this
+  wave: it changes wave 5's shipped behaviour, §12.1.3's whole corpus and
+  §14's two existing canvas rows. It is a dirty-rectangle change, and merging
+  it into a palette would leave neither reviewable.
 
 ---
 
@@ -4217,6 +4568,7 @@ been ~756 µs.
 | grid | scroll one row (GFX_SCROLL + 1 composed band) | 2 | ~83-90 ms |
 | canvas | frame, 1 moving sprite (one dirty run) | 1-2 | ~1-3 ms |
 | canvas | frame, 2 sprites (dirty bands) | 2-4 | ~2-5 ms |
+| canvas | frame, PONG's 3 colours, VGA (measured, 400 frames) | 1-4 (mean 1.96) | ~1-5 ms |
 | card | switch (full-card repaint, text-heavy CGA card) | ~1/row | ~0.3-1.2 s |
 | card | first paint, fully lettered CGA 640x200 (17 rows x 80 cells) | 17 | ~1.26 s |
 | card | first paint, fully lettered Hercules 720x348 (35 rows x 90 cells) | 35 | ~2.88 s |
@@ -4234,6 +4586,15 @@ lands under it. The two-sprite row is still modelled. Those figures are
 MartyPC's, which is a model of the machine and not the machine
 (docs/FIELD-MACHINES.md) — what it settles is the CALL COUNT, which an
 emulator is exact about; the milliseconds wait on the 5150 (WEAVE-PLAN §4.2).
+
+**The palette's row is a NEW row and not a moved one, and that is the claim
+worth reading twice** (§6.10.7, §9.2.1). The two canvas rows above it are what
+an uncoloured canvas costs, and they are what EVERY canvas costs on CGA and
+Hercules — the load path does not read the three colour attributes on a 1bpp
+adapter, so the composer runs the same code over the same runs and emits the
+same calls. What the palette adds it adds on VGA, where a colour span is a
+call: PONG measured 1.005 calls a frame uncoloured against 1.955 coloured,
++718 µs of a 55 ms frame, 1.3%.
 
 A change that moves a row of this table upward is a regression against a
 documented number, not a neutral refactor — PERFORMANCE.md Part 5's

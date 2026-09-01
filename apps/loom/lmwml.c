@@ -144,6 +144,15 @@ static char lmw_msg[LM_ERRMAX];
 static const char *lmw_common[] = {
     "id", "w", "h", "style", "align", "br", "hidden", "disabled", 0
 };
+/* SPELLED ONCE, and the reason is SPEC.md 73.14 rather than tidiness: a
+ * string literal an ovl_ function names stays RESIDENT even though its code
+ * does not, and SmallerC emits one per SITE.  This sentence has five sites -
+ * every place a tag that is not in 3.2's inventory can appear - and five
+ * copies of it were 256 resident bytes against a package that closed wave 7
+ * with 262 spare.  The same cut apps/weave/wval.c took (WEAVE-PLAN 5.3). */
+static const char lm_s_noelem[] =
+    ">: not a Weave element; the inventory is closed (WEAVE-SPEC 3.2)";
+
 static const char *lmw_a_app[]    = { "name", "vm", 0 };
 static const char *lmw_a_card[]   = { "id", 0 };
 static const char *lmw_a_none[]   = { 0 };
@@ -155,10 +164,13 @@ static const char *lmw_a_input[]  = { "cols", "text", "onchange", "onkey", 0 };
 static const char *lmw_a_list[]   = { "rows", "onselect", 0 };
 static const char *lmw_a_grid[]   = { "cols", "rows", "onselect", "onedit",
                                       "oncalc", 0 };
-static const char *lmw_a_canvas[] = { "w", "h", "walls", "tick", "onkey",
+static const char *lmw_a_canvas[] = { "w", "h", "ink", "paper", "walls",
+                                      "tick", "onkey",
                                       "oncollide", "onwall", "onscore",
                                       "ontick", 0 };
-static const char *lmw_a_sprite[] = { "id", "img", "x", "y", "shown", 0 };
+static const char *lmw_a_sprite[] = { "id", "img", "x", "y", "shown",
+                                      "color", 0 };
+
 static const char *lmw_a_menu[]   = { "title", 0 };
 static const char *lmw_a_item[]   = { "oncommand", 0 };
 static const char *lmw_a_script[] = { "src", 0 };
@@ -781,8 +793,8 @@ static void ovl_badattr(int ei, int ai)
 colour:
     ovl_m0("");
     ovl_msrcl(off, len);
-    ovl_mc(": there are no colors; grey rounds to black on 1bpp and state "
-           "never rides on color (SPEC.md 39.4)");
+    ovl_mc(": no color here; a palette is a canvas's (WEAVE-SPEC 9.2.1) - "
+           "grey rounds to black on 1bpp (SPEC.md 39.4)");
     ovl_raise(lmw_aline[ai]);
 }
 
@@ -1294,12 +1306,70 @@ static int ovl_list_item(void)
     return 1;
 }
 
+/* WEAVE-SPEC 6.10.7's palette, in SPEC.md 3's order so the index IS the
+ * colour. A name outside it is a pack error naming the list; numbers are not
+ * accepted, because the reader of the WML is the person who has to know that
+ * 4 is red. */
+static const char *lmw_pal[16] = {
+    "black", "blue", "green", "cyan", "red", "magenta", "brown", "lightgray",
+    "darkgray", "lightblue", "lightgreen", "lightcyan", "lightred",
+    "lightmagenta", "yellow", "white"
+};
+static int lm_canvink;                  /* what a <sprite> child inherits */
+static int lm_canvpaper;
+
+/* One palette attribute, by name. Answers the colour, or the default when the
+ * attribute is absent; sets lmw_ok = 0 on a name that is not one of the
+ * sixteen. weavesim's color_attr(), sentence for sentence. */
+static int ovl_colorattr(const char *tag, const char *attr, int ai, int dflt)
+{
+    int k;
+
+    lmw_ok = 1;
+    if (ai < 0)
+        return dflt;
+    for (k = 0; k < 16; k++)
+        if (ovl_aveq(ai, lmw_pal[k]))
+            return k;
+    ovl_m0(tag);
+    ovl_mc(": ");
+    ovl_mc(attr);
+    ovl_mc("=\"");
+    ovl_mv(ai);
+    ovl_mc("\" is not one of the sixteen colours (WEAVE-SPEC 6.10.7)");
+    ovl_raise(lmw_aline[ai]);
+    lmw_ok = 0;
+    return dflt;
+}
+
+/* ...and SPEC.md 5.4.2.2's FOURTH refusal, which is why this is decided at
+ * pack: GFX_BLIT1 takes a pair only when one colour's planes are a subset of
+ * the other's, and a run-time refusal would be a band that silently does not
+ * arrive (WEAVE-SPEC 6.10.2 has no second path for one). `white` paper is
+ * legal against all sixteen and so is `black`, so no palette anybody writes
+ * meets this. */
+static int ovl_penok(const char *attr, int ink, int paper, int line)
+{
+    if ((paper & ~ink & 0x0F) == 0 || (~paper & ink & 0x0F) == 0)
+        return 1;
+    ovl_m0("canvas: paper=\"");
+    ovl_mc(lmw_pal[paper]);
+    ovl_mc("\" against ");
+    ovl_mc(attr);
+    ovl_mc("=\"");
+    ovl_mc(lmw_pal[ink]);
+    ovl_mc("\": the two share no plane either way and GFX_BLIT1 refuses the "
+           "pair (SPEC.md 5.4.2.2)");
+    ovl_raise(line);
+    return 0;
+}
+
 /* --- <sprite> ------------------------------------------------------------ */
 static int ovl_sprite_elem(int card)
 {
     int comp;
     int ai;
-    int x = 0, y = 0, shown = 1;
+    int x = 0, y = 0, shown = 1, color;
     unsigned imgoff;
     unsigned imglen;
 
@@ -1342,11 +1412,23 @@ static int ovl_sprite_elem(int card)
         if (!lmw_ok)
             return 0;
     }
+    ai = ovl_afind("color");
+    color = ovl_colorattr("sprite", "color", ai, -1);
+    if (!lmw_ok)
+        return 0;
+    if (ai >= 0 && !ovl_penok("color", color, lm_canvpaper, lmw_aline[ai]))
+        return 0;
     if (x && !ovl_prop(comp, WA_X, PK_INT, x))
         return 0;
     if (y && !ovl_prop(comp, WA_Y, PK_INT, y))
         return 0;
     if (!shown && !ovl_prop(comp, WA_SHOWN, PK_INT, 0))
+        return 0;
+    /* 6.10.7, PRESENT -> PROP: written means a record, even at the canvas's
+     * own ink, which is `walls`'s rule and not `tick`'s. It is what lets two
+     * packers agree with no arithmetic, and what makes color="black" mean
+     * something under an ink="yellow" canvas. */
+    if (ai >= 0 && !ovl_prop(comp, WA_COLOR, PK_INT, color))
         return 0;
     /* The .WSP name and its length ride in the row: LMC_IDOFF is the id's and
      * a sprite's img is kept beside it in LMC_AUXOFF/LMC_AUX. */
@@ -1630,6 +1712,24 @@ static int ovl_component(int ei, int card)
                 ovl_raise(lmw_aline[ovl_afind("w")]);
                 return 0;
             }
+            /* 6.10.7's palette, before `walls` because 3.3's table order is
+             * the interning order (2.14 rule 3a) - these intern nothing, but
+             * the two packers walk the same table in the same direction and a
+             * divergence here would be found by a bundle that does. */
+            ai = ovl_afind("ink");
+            lm_canvink = ovl_colorattr("canvas", "ink", ai, 0);
+            if (!lmw_ok)
+                return 0;
+            if (ai >= 0 && !ovl_prop(comp, WA_INK, PK_INT, lm_canvink))
+                return 0;
+            ai = ovl_afind("paper");
+            lm_canvpaper = ovl_colorattr("canvas", "paper", ai, 15);
+            if (!lmw_ok)
+                return 0;
+            if (ai >= 0 && !ovl_prop(comp, WA_PAPER, PK_INT, lm_canvpaper))
+                return 0;
+            if (!ovl_penok("ink", lm_canvink, lm_canvpaper, openline))
+                return 0;
             ai = ovl_afind("walls");
             if (ai >= 0) {
                 int mask = 0;
@@ -1716,9 +1816,7 @@ static int ovl_component(int ei, int card)
                         ovl_mtag();
                         ovl_mc(ce >= 0 ? ">: not a child of <list> "
                                          "(WEAVE-SPEC 3.2)"
-                                       : ">: not a Weave element; the "
-                                         "inventory is closed "
-                                         "(WEAVE-SPEC 3.2)");
+                                       : lm_s_noelem);
                         ovl_raise(lmw_tagline);
                         return 0;
                     }
@@ -1732,9 +1830,7 @@ static int ovl_component(int ei, int card)
                         ovl_mtag();
                         ovl_mc(ce >= 0 ? ">: not a child of <canvas> "
                                          "(WEAVE-SPEC 3.2)"
-                                       : ">: not a Weave element; the "
-                                         "inventory is closed "
-                                         "(WEAVE-SPEC 3.2)");
+                                       : lm_s_noelem);
                         ovl_raise(lmw_tagline);
                         return 0;
                     }
@@ -1878,8 +1974,7 @@ static int ovl_element_card(void)
             if (ce < 0) {
                 ovl_m0("<");
                 ovl_mtag();
-                ovl_mc(">: not a Weave element; the inventory is closed "
-                       "(WEAVE-SPEC 3.2)");
+                ovl_mc(lm_s_noelem);
                 ovl_raise(lmw_tagline);
                 return 0;
             }
@@ -1986,8 +2081,7 @@ static int ovl_element_menu(void)
                 ovl_m0("<");
                 ovl_mtag();
                 ovl_mc(ce >= 0 ? ">: not a child of <menu> (WEAVE-SPEC 3.2)"
-                               : ">: not a Weave element; the inventory is "
-                                 "closed (WEAVE-SPEC 3.2)");
+                               : lm_s_noelem);
                 ovl_raise(lmw_tagline);
                 return 0;
             }
@@ -2407,9 +2501,7 @@ int ovl_wml(void)
                         ovl_msrcl(toff, tlen);
                         ovl_mc(ce >= 0 ? ">: not a child of <app> "
                                          "(WEAVE-SPEC 3.2)"
-                                       : ">: not a Weave element; the "
-                                         "inventory is closed "
-                                         "(WEAVE-SPEC 3.2)");
+                                       : lm_s_noelem);
                         ovl_raise(lmw_tagline);
                         return 0;
                     }

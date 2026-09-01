@@ -436,6 +436,126 @@ WEAVE-SPEC §13.2.
 
 ---
 
+### 2.11 The palette is a PEN, not a deeper buffer — and it is canvas-only
+
+**The fork the colour wave turns on**, recorded here so that whoever reverses
+it starts from the arithmetic. The contract is WEAVE-SPEC §6.10.7 and the
+amendment it makes is WEAVE-SPEC §9.2.1; this is why each half went the way
+it did.
+
+**What was asked for**: colour in Weave, and colour in PONG. What the
+platform offers: sixteen indices on VGA and **one plane** on CGA and
+Hercules, where SPEC.md §39.4 rounds every colour to black, white or a
+dither — and, decisively, where SPEC.md §5.4.2.2 says the `GFX_BLIT1` pen is
+**not read at all**.
+
+**Fork 1: where the colour lives.** Three candidates.
+
+| | what it buys | what it costs |
+|---|---|---|
+| **the PEN over the existing 1bpp buffer** (taken) | per-sprite colour, per band span | one `GFX_BLIT1_PEN` per span, and a span split per colour change in a run |
+| a 4bpp buffer + `GFX_BLIT4` | per-PIXEL colour | 4× the buffer (PONG 3,600 → 14,400 bytes, past §2.2's 8KB canvas byte), a nibble-shifting composer rewrite, 4× the per-frame compose bytes |
+| a second 1bpp plane per colour class | 2 colours free | one more buffer, one more compose pass, and a hard cap of two |
+
+The middle one is the one a reader expects and it is the one the arithmetic
+refuses: it buys per-pixel colour, and **sprite art in this family has never
+wanted per-pixel colour** — a `.WSP` is `#` and `.`, one bit, by
+WEAVE-SPEC §3.6's own grammar. Paying a composer rewrite and four times the
+frame's byte count for a capability the source language cannot express is
+not a close call. The pen costs 1.3% of a PONG frame (below) and needs no
+new byte in the buffer at all.
+
+**And the pen is safe here for the precise reason wave 5 said it was NOT.**
+WEAVE-SPEC §6.10.2 carries a shipped defect: wave 5 used the pen to fix the
+buffer's POLARITY, and on CGA — where the pen is not read — PONG came up a
+black field with white paddles. That paragraph is what makes this one
+possible. The buffer is now stored the way all three adapters want it, so a
+pen is a pure *addition* on the adapter that has colours and a *no-op* on the
+two that do not: not a reduction, not a dither, ignored. The load path makes
+that structural rather than incidental — it does not read the three colour
+attributes at all when `OSAPI_VIDEO` says `bpp == 1`, so on CGA and Hercules
+the composer runs the same instructions over the same runs and emits the same
+calls as before the feature existed.
+
+**Fork 2: how a run with two colours is emitted.** A dirty band run is full
+width and can hold sprites of different colours, and `GFX_BLIT1` is opaque
+and takes one pen. Three candidates:
+
+- **base pass + a re-blit per coloured sprite** — writes the sprite's pixels
+  twice a frame. That is PERFORMANCE.md's *double-draw flash*, one of the
+  three defects no emulator shows, bought with a colour. Rejected outright.
+- **one colour per run, chosen by whichever sprites are in it** — costs
+  nothing and makes a sprite's colour depend on what shares its band, so the
+  ball changes colour when it passes a paddle. That is a half-honoured
+  colour, which is the exact failure WEAVE-SPEC §9.2 was written about.
+- **disjoint column SPANS** (taken) — the run is cut at byte columns where
+  the colour changes, and each span is one blit. No pixel is written twice,
+  every sprite is always its own colour, and the split is deterministic.
+
+Two rules make the spans cheap. **A column no sprite reaches is NEUTRAL and
+merges into its neighbour** — every bit of it is paper, so the pen's ink half
+cannot show, and merging is provably pixel-identical. And **a column two
+sprites share takes the last one's colour in UISTREAM order**, which is
+composition order — so the sprite whose pixels are on top is the one whose
+colour shows. In PONG that is two frames of contact in which the ball's
+overlapping byte column wears the paddle's colour; the alternative is the
+second pass rejected above.
+
+**The count, measured over a 400-frame rally** against the model's own
+composer, not modelled: **1.005 calls a frame uncoloured, 1.955 coloured** —
+1 call for 210 frames, 3 for 188, 4 for 2. The 3-call frames are the ball
+level with the paddles, which is most of a rally because PONG serves at
+`vy = 4`, a quarter of a pixel a frame. **+0.95 calls is 718 µs of a 55 ms
+frame, 1.3%**; the worst frame is +2.3 ms, 4.1%. WEAVE-SPEC §14 carries it as
+a NEW row beside the two uncoloured ones rather than moving them, because the
+uncoloured rows are still exactly what CGA and Hercules pay.
+
+**What would remove even that, and why it is not in this wave**: every extra
+call is a still paddle re-blitted because a dirty BAND is full width. Bounding
+a run to the columns the moved sprites actually touched would put PONG back at
+~1 call a frame and cut bytes on both paths — which is why it is a separate
+change: it moves wave 5's shipped behaviour, WEAVE-SPEC §12.1.3's whole corpus
+and §14's two existing canvas rows. A dirty-rectangle change wearing a
+palette's clothes; merging the two would leave neither reviewable.
+WEAVE-SPEC §13.2 carries it.
+
+**Fork 3: canvas-only, and this is the load-bearing restraint.** Colour on
+`<label>`/`<button>` is CHEAPER than the canvas's — `OSAPI_FONT_RUN` already
+takes an ink/paper pair, so it is **zero extra gfx calls** and roughly
+100–150 resident bytes (one `w_pint` per painted component at ~20–40 µs,
+against a card paint measured in hundreds of milliseconds; no eleventh field
+in `w_lay`, so not the 500 bytes that would have cost). It was left out
+anyway, for three reasons that are about the picture and not the price:
+
+1. **The 1bpp degrade is only half-clean.** SPEC.md §39.4 rounds a *glyph* to
+   black, so a coloured ink would degrade exactly — but *paper* goes through
+   `gfx_ink` and can come back a dither. The vocabulary would have to be half
+   of a pair, and a half-honoured fg/bg pair is what WEAVE-SPEC §9.2 names.
+2. **It puts colour on the things a reader READS.** The line
+   WEAVE-SPEC §9.2.1 draws — art takes a palette, text does not — is what
+   keeps SPEC.md §39.4's "state never rides on colour" true by construction
+   rather than by review. PONG's score is a `<label>` and is a `<label>` on
+   VGA too.
+3. **It is two images, not one.** `LOOM.WPV` compiles the same painter a
+   second time (§2.10), so every painter change lands twice.
+
+**Where the bytes went.** `weave.o88` moved 51,124 + 9,196 = 60,320 to
+51,134 + 9,210 = **60,344 resident, 1,096 under** SPEC.md §20.1's 61,440 —
+**24 bytes**, because the whole load path is inside overlay tenant 8
+(`ovl_canvasload`) and only the `bpp` probe's static struct is resident.
+`WEAVE.WSM` went 4,593 → 5,077, and it is a claim rather than the package's
+segment, so that is the composer's own budget and not §20.1's.
+
+**The refusal is at PACK, and it had to be.** SPEC.md §5.4.2.2 has a fourth
+refusal: `GFX_BLIT1` answers `CF = 1` for a pair whose colours share no plane
+in either direction. At run time that is a band that silently does not
+arrive, on a path WEAVE-SPEC §6.10.2 states has no second answer. So both
+packers compute it for every (paper, ink) and (paper, sprite colour) pair,
+`tests/weave/packerr/canvas-pen-pair/` is the case, and `tests/unit/t_wab.py`
+asserts it independently as a bundle invariant. It is also why **`color` is
+not on the script surface** (WEAVE-SPEC §13.2): a running bundle that could
+write a colour could invent a pair the packer never saw.
+
 ## 3. The platform facts that shaped everything
 
 None of these was derived during design; each was verified in the tree by

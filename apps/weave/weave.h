@@ -131,6 +131,9 @@
 #define WA_GROUP     19
 #define WA_WALLS     23
 #define WA_TICK      24
+#define WA_COLOR     25             /* 6.10.7's palette, 2.7.1's newest three */
+#define WA_INK       26
+#define WA_PAPER     27
 #define WA_CARD      20
 #define WA_START     40
 #define WA_SEL       17
@@ -441,7 +444,8 @@ void wd_lcaroff(int *blk);
 #define WSMP_NSPR   4
 #define WSMP_SPOFF  5
 #define WSMP_CID    6
-#define WSMP_NW     7               /* ...in WORDS: the C side hands over an
+#define WSMP_COLOR  7               /* 6.10.7: paper colour in the low byte */
+#define WSMP_NW     8               /* ...in WORDS: the C side hands over an
                                      * int array and the module reads bytes */
 
 #define WSMF_X      0               /* WSMV_SPRITE's fields */
@@ -452,6 +456,7 @@ void wd_lcaroff(int *blk);
 #define WSMF_SHOWN  5
 #define WSMF_NFRAME 6
 #define WSMF_DESC   7
+#define WSMF_COLOR  8               /* 6.10.7, load path only */
 
 #define WSS_RUN     0               /* the state block, at WSM_H_STATE */
 #define WSS_ACK     1

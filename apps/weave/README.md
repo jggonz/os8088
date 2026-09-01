@@ -10,6 +10,14 @@ host packer. The binding contract for every byte, opcode and refusal is
 host reference implementation, and `demos/` holds the three committed demo
 projects (FORM, SHEET, PONG) it packs.
 
+**Colour**: a `<canvas>` and its `<sprite>`s take `paper`, `ink` and `color`
+out of the adapter's sixteen (WEAVE-SPEC §6.10.7) — PONG is the worked
+example. Nothing else in the family takes a colour, and the reasoning for
+that line, including what it would cost to cross it, is WEAVE-SPEC §9.2.1.
+The pen is not read on a 1bpp adapter (SPEC.md §5.4.2.2), and the load path
+does not even ask for the attributes there, so CGA and Hercules draw exactly
+the picture they drew before the palette existed.
+
 ## The files
 
 | file | what |
@@ -25,11 +33,16 @@ projects (FORM, SHEET, PONG) it packs.
 | `wnative.c` | WEAVE-SPEC §6's get/set/method surface and WEAVE-SPEC §8.1's six impure builtins |
 | `wstate.c` | WEAVE-SPEC §8.3's `.SAV`, the only file surface |
 | `wovl.c` | `WEAVE.OVL`'s own tenants: About and Bundle Info |
+| `wcanv.c` | the `<canvas>`/`<sprite>` component's UI-TASK half (WEAVE-SPEC §6.10): the load, the paint arm, the native surface, the drain. The other half is a second segment |
+| `wcanvas.asm` | ...which is `WEAVE.WSM` (WEAVE-SPEC §1.2.2): a resident module beside the package, far-called from the WORKER as well as the UI task |
+| `wspr.inc` | the sprite composer and the dirty-band emit (WEAVE-SPEC §6.10.2), plus WEAVE-SPEC §6.10.7's colour spans — assembled into `WEAVE.WSM` |
+| `wwork.inc` | ...and the frame loop, the collisions, the key poll and the staging ring |
+| `wsmabi.inc` | the ONE file both assemblies include: the verbs, the claim layout and the ABI number |
 | `wblob.inc` | the bundle claim's accessors (assembly) |
 | `wdraw.inc` | the paint and hit-test cores (assembly, WEAVE-SPEC §1.2's seam — LOOM's Preview paints with these) |
 | `wui.inc` | the shared alert, the arm word, the `os88line` wrappers, and the bridge the bytecode core leaves through |
 | `wvm.inc` | **the WJS VM** (WEAVE-SPEC §4). Named by nothing outside itself but `wvm_native`, which is what lets `hosttest/weavevm.asm` run it in a boot sector |
-| `hosttest/` | that gate: `weavevm.asm` + `weavevm.sh`, the rcz80test / c64memtest shape |
+| `hosttest/` | that gate: `weavevm.asm` + `weavevm.sh`, the rcz80test / c64memtest shape — and `weavecv.asm` + `weavecv.sh`, the same idea for the canvas composer |
 
 ## Building and testing
 
@@ -37,6 +50,9 @@ projects (FORM, SHEET, PONG) it packs.
 make weave        # the package and its overlay
 make weavedisk    # ...and the floppy, in all three geometries
 make weavevm      # the VM against the model, in raw QEMU (seconds, no OS)
+make weavecanvas  # ...and the canvas composer, the same way - sprite records,
+                  #   the staging ring, the colour spans and the composed
+                  #   buffer, all against tools/weavesim.py
 python3 tools/os88test.py soak -k 'weave*'      # the family's one command
 ```
 

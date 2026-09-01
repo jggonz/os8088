@@ -207,10 +207,10 @@
 %if WSMV_PAINT != 4 || WSMV_DRAIN != 5 || WSMV_UNBIND != 6 || WSMV_PLACE != 8
   %error "wsmabi.inc's verbs moved; weave.h's WSMV_* must follow"
 %endif
-%if WSMP_SIZE != 14 || WSMP_CID != 12
+%if WSMP_SIZE != 16 || WSMP_CID != 12 || WSMP_COLOR != 14
   %error "wsmabi.inc's BIND block moved; weave.h's WSMP_NW must follow"
 %endif
-%if WSMF_DESC != 7 || WSMF_NFRAME != 6
+%if WSMF_DESC != 7 || WSMF_NFRAME != 6 || WSMF_COLOR != 8
   %error "wsmabi.inc's sprite fields moved; weave.h's WSMF_* must follow"
 %endif
 %if WSS_RUN != 0 || WSS_FRAME != 6 || WSS_BLITS != 18 || WSS_FRAMES != 20

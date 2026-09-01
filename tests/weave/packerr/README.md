@@ -53,7 +53,7 @@ their order, are the contract; the table's example is prose.
 | `unknown-element/` | unknown element - the inventory is closed (WEAVE-SPEC §3.2) | `<zap>: not a Weave element; the inventory is closed (WEAVE-SPEC 3.2)` |
 | `unknown-attribute/` | unknown attribute (WEAVE-SPEC §3.3) | `button: no such attribute "pad"; style is bold/invert/align only - two of three adapters are 1bpp` |
 | `hover-vocabulary/` | hover vocabulary - `onhover` (WEAVE-SPEC §9.1) | `onhover: no hover exists; pointer movement reaches a package only between press and release (SPEC.md 13.7)` |
-| `color-vocabulary/` | colour vocabulary - `color` (WEAVE-SPEC §9.2) | `color: there are no colors; grey rounds to black on 1bpp and state never rides on color (SPEC.md 39.4)` |
+| `color-vocabulary/` | colour vocabulary on a FLOW component - `color` (WEAVE-SPEC §9.2.1) | `color: no color here; a palette is a canvas's (WEAVE-SPEC 9.2.1) - grey rounds to black on 1bpp (SPEC.md 39.4)` |
 | `ontick-over-budget/` | `ontick` over the 64-op budget (WEAVE-SPEC §4.11.1) | `ontick handler is 66 ops; the cap is 64 - per-frame JS does not fit 10-30k ops/s` |
 | `too-many-atoms/` | more than 187 app atoms (WEAVE-SPEC §2.7) | `188 app atoms; the cap is 187 - atom ids are one byte` |
 | `grid-too-big/` | grid over 6,140 cells (WEAVE-SPEC §5.6) | `grid is 26x256 = 6656 cells; the cap is 6140 - the cell store plus its pool must fit a 26KB claim` |
@@ -90,6 +90,8 @@ their order, are the contract; the table's example is prose.
 | `input-cols-range/` | `input` `cols` outside 2..60 | `input: cols="80" is outside 2..60` |
 | `list-rows-range/` | `list` `rows` outside 1..40 | `list: rows="50" is outside 1..40` |
 | `canvas-w-not-byte/` | `canvas` `w` not a multiple of 8 | `canvas: w="100" is not a multiple of 8 - bands are byte-aligned (WEAVE-SPEC 3.3)` |
+| `canvas-color-name/` | a palette name outside the sixteen (WEAVE-SPEC §6.10.7) | `canvas: paper="beige" is not one of the sixteen colours (WEAVE-SPEC 6.10.7)` |
+| `canvas-pen-pair/` | a pen pair `GFX_BLIT1` refuses (WEAVE-SPEC §6.10.7, SPEC.md §5.4.2.2's fourth refusal) | `canvas: paper="blue" against color="red": the two share no plane either way and GFX_BLIT1 refuses the pair (SPEC.md 5.4.2.2)` |
 
 
 ## WML vocabulary and syntax (WEAVE-SPEC §3.1, WEAVE-SPEC §3.5)

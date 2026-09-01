@@ -465,6 +465,12 @@ static const char *ovl_val_block(unsigned off, unsigned ctype)
             w_pv_rows = val;
             w_pv_seen |= WP_ROWS;
         }
+        if (name >= WA_COLOR && name <= WA_PAPER && val > 15)
+            return w_f_prange;          /* 6.10.7's palette is 0..15; the load
+                                         * path masks as well, but a colour
+                                         * outside the sixteen is a bundle no
+                                         * packer wrote and 10.4 says so out
+                                         * loud rather than quietly clamping */
         if (name == WA_GROUP)
             w_pv_seen |= WP_GROUP;
 

@@ -43,6 +43,10 @@ wsm_kstate: times 5 db 0
 wsm_dirty:  times WSM_MAXBAND db 0
 wsm_cont:   times 15 db 0
 wsm_ring:   times WSM_RING * WSM_REC db 0
+wsm_pen:    dw CWHITE               ; 6.10.7: low byte the canvas's PAPER
+                                    ; colour, high byte `colored`. The default
+                                    ; IS the wave-5 composer - white paper,
+                                    ; colour off, not one GFX_BLIT1_PEN call
 
 %if (wsm_run    - wsm_state) != WSS_RUN
   %error "WEAVE.WSM state block: WSS_RUN moved"
@@ -79,6 +83,9 @@ wsm_ring:   times WSM_RING * WSM_REC db 0
 %endif
 %if (wsm_ring   - wsm_state) != WSS_RING
   %error "WEAVE.WSM state block: WSS_RING moved"
+%endif
+%if (wsm_pen    - wsm_state) != WSS_PEN
+  %error "WEAVE.WSM state block: WSS_PEN moved"
 %endif
 
 ; --- the dispatcher's banked arguments, and the composer's scratch -----------
@@ -135,6 +142,20 @@ wsm_rowlo:  dw 0
 wsm_rowhi:  dw 0
 wsm_shift:  db 0
             db 0
+
+; 6.10.7's span walk. The colour map is one byte a BYTE COLUMN of the run -
+; 0xFF is NEUTRAL, "no shown sprite reaches this column in these rows", and
+; every bit of such a column is paper, which is why merging one into its
+; neighbour changes no pixel.
+wsm_colmap: times WSM_MAXCOL db 0
+wsm_ncol:   dw 0                    ; the run's byte columns (= the stride)
+wsm_sstart: dw 0                    ; the span under construction
+wsm_scur:   db 0                    ; ...and its colour, 0xFF = none yet
+            db 0
+wsm_curpen: dw 0                    ; what the last emit set, or 0xFFFF for
+                                    ; "no pen call" - the boot-sector
+                                    ; differential's reading, and nothing on
+                                    ; the machine asks for it
 wsm_bels:   dw 0                    ; 4.9 rule 5's BELs emitted. Not in the
                                     ; state block: it is the boot-sector
                                     ; differential's reading and nothing on

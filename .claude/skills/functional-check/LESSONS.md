@@ -20,7 +20,7 @@ because recognizing it is how the trap is caught the second time.
   bar and swallows every event until OK. Take the full shot first.
 - **Stillness can be the contract.** PONG's frames were byte-identical
   before Serve - correct, because nothing moves until the loop starts
-  (§9.3: no per-frame work without motion). And after a goal the paddle
+  (WEAVE-SPEC §9.3: no per-frame work without motion). And after a goal the paddle
   ignored keys - correct, because `onGoal` calls `field.stop()` and the
   key poll is a step OF the running loop. Wrong conclusion both times:
   "canvas/input is dead". Read the demo's own handlers before judging.
@@ -37,7 +37,7 @@ because recognizing it is how the trap is caught the second time.
   conclusion: "the editor corrupted the file".
 - **Some contracts need reading before driving.** The grid's formula bar is
   LOADED by a cell click but ARMED only by a click in the bar itself
-  (§6.9.4) - typing after a cell click goes nowhere. Wrong conclusion:
+  (WEAVE-SPEC §6.9.4) - typing after a cell click goes nowhere. Wrong conclusion:
   "the bar is broken". When input seems ignored, check what the spec says
   arms it.
 - **Mouse cursor photobombs.** The XOR cursor sits exactly where you were
