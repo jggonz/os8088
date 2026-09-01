@@ -22,9 +22,9 @@ new graphics backend. It is a second **setup** — geometry + BIOS mode number +
 one detection branch — in front of the `vga12.inc` primitives the OS already
 has.
 
-`docs/FSX-PLAN.md §197` already saw this coming: *"vid_detect step 2 admits
-EGA-class cards as VID_VGA, and an EGA sets 0Dh but not 12h/13h; if those
-machines ever…"*. This is that footnote, cashed in.
+`docs/FSX-PLAN.md` already saw this coming — a footnote there reads *"vid_detect
+step 2 admits EGA-class cards as VID_VGA, and an EGA sets 0Dh but not 12h/13h;
+if those machines ever…"*. This is that footnote, cashed in.
 
 ---
 
