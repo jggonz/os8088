@@ -92,8 +92,15 @@ def find_modules(m, img):
     out = []
     for seg in range(0x0800, 0xA000, 0x40):     # a claim base is KB-aligned
         b = m.readseg(seg, 0, 8)
-        if not (b[0] == 0x57 and b[1] == 0x53 and b[2] == 1 and b[3] == 0
-                and int.from_bytes(b[4:6], "little") == len(img)):
+        # The magic, the ABI and the size, taken FROM THE IMAGE rather than
+        # spelled here: this used to hard-code ABI 1 (`b[2] == 1`), and
+        # WEAVE-SPEC 6.10.7's palette bumped WSM_ABI to 2 - so the scan
+        # matched nothing, found "0 bound of 0 image(s)", and reported a
+        # module that had loaded perfectly as one that never loaded at all.
+        # A number that is pinned in wsmabi.inc and copied into a test is a
+        # number that goes stale on the one wave that changes it; reading it
+        # out of the file the test already opened cannot.
+        if bytes(b[0:6]) != img[0:6]:
             continue
         if bytes(m.readseg(seg, len(img) - 16, 16)) != img[-16:]:
             continue

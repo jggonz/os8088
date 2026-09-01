@@ -3046,9 +3046,34 @@ Half the frames are 3 because PONG's ball serves at `vy = 4` — a quarter of a
 pixel a frame — so it spends most of a rally level with the paddles' rows, and
 a run holding all three sprites is `[pad][ball][cpu]`. **+1.035 calls a frame
 is 782 µs of a 55 ms frame, 1.4%**, and the worst frame is 3 extra calls,
-2.3 ms, 4.1%. It lands inside §14's existing two-sprite row (2–4 calls,
-~2–5 ms) and well inside `tests/weavegame`'s 0.5–4.0 assertion, which is
-unchanged.
+2.3 ms, 4.1%.
+
+**...and then the MACHINE counted it, which is what §14's canvas rows are
+for.** `tests/weavegame` reads `WEAVE.WSM`'s own `blits` and `frames`
+counters out of the state block over the ~19 displayed frames after Serve,
+and it now runs on a VGA MartyPC as well as a CGA one — the same package, the
+same bundle, the palette on in one and off in the other:
+
+| | fps | calls a frame |
+|---|---|---|
+| `os8088_5150_cga_gla`, palette OFF | 18.7 | **2.84** |
+| `os8088_xt_vga`, palette ON | 17.7 | **3.17** |
+
+**+0.33 calls a frame, 249 µs of a 55 ms frame, 0.45%** — and both sit inside
+§14's existing two-sprite row (2–4) and inside `weavegame`'s own 0.5–4.0
+assertion, which is unchanged.
+
+**The two tables measure different WINDOWS and the difference is the computer
+paddle, not a disagreement.** The model's is a 400-frame average over a whole
+rally, most of which the computer paddle spends parked at `y = 48` (§4.11.1's
+`onTick` only chases once the ball has crossed the middle and is coming its
+way), so its runs are the ball's alone and a colour cut costs a whole extra
+call. The machine's window is the frames right after Serve, when the ball IS
+coming and the paddle moves every frame — so its bands are dirty anyway, the
+absolute count is higher on both adapters, and the palette's marginal cost is
+LOWER because the run it cuts was already being emitted. Both are true; the
+machine's is the one to quote about PONG, and the model's is the one that
+isolates the palette.
 
 **What would remove it, and why this wave does not do it**: a run is emitted
 full width because a dirty BAND is full width, so the still paddles are
@@ -4635,8 +4660,12 @@ an uncoloured canvas costs, and they are what EVERY canvas costs on CGA and
 Hercules — the load path does not read the three colour attributes on a 1bpp
 adapter, so the composer runs the same code over the same runs and emits the
 same calls. What the palette adds it adds on VGA, where a colour span is a
-call: PONG measured 1.005 calls a frame uncoloured against 2.040 coloured,
-+782 µs of a 55 ms frame, 1.4%.
+call. Two readings, both real and of different windows (§6.10.7 says why):
+the MODEL over a 400-frame rally, 1.005 calls a frame uncoloured against
+2.040 coloured; and the MACHINE over the frames after Serve, `weavegame`
+reading WEAVE.WSM's own counters — **2.84 on a CGA MartyPC with the palette
+off against 3.17 on a VGA one with it on: +0.33 calls, 249 µs of a 55 ms
+frame, 0.45%**.
 
 A change that moves a row of this table upward is a regression against a
 documented number, not a neutral refactor — PERFORMANCE.md Part 5's

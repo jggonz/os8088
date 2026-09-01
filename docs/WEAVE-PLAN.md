@@ -535,9 +535,19 @@ a frame uncoloured, 2.040 coloured** — 1 call for 193 frames, 3 for 205, 4
 for 2. The 3-call frames are the ball level with the paddles, which is most
 of a rally because PONG serves at `vy = 4`, a quarter of a pixel a frame.
 **+1.035 calls is 782 µs of a 55 ms frame, 1.4%**; the worst frame is
-+2.3 ms, 4.1%. **The uncoloured figure is unchanged by the computer paddle**,
-which is the half that matters: it is what a 1bpp machine pays, and what
-`weavegame` reads on a CGA MartyPC. WEAVE-SPEC §14 carries it as
++2.3 ms, 4.1%.
+
+**And the MACHINE counted it, on both adapters, which is the reading to
+quote.** `tests/weavegame` reads WEAVE.WSM's own blits/frames counters over
+the frames after Serve, and it runs on a VGA MartyPC as well as a CGA one:
+**2.84 calls a frame with the palette off (CGA, 18.7 fps) against 3.17 with
+it on (VGA, 17.7 fps) — +0.33 calls, 249 µs, 0.45%**. That delta is LOWER
+than the model's, for a reason worth keeping: the model averages a whole
+rally, most of which the computer paddle spends parked at y = 48, so the run
+a colour cuts was the ball's alone and the cut costs a whole extra call; the
+machine's window is the chase right after Serve, when the paddle moves every
+frame, its bands are dirty anyway and the run being cut was already being
+emitted. WEAVE-SPEC §14 carries it as
 a NEW row beside the two uncoloured ones rather than moving them, because the
 uncoloured rows are still exactly what CGA and Hercules pay.
 
