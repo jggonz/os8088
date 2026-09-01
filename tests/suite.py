@@ -264,7 +264,7 @@ FULL = [
         "[vid_avail], which reads identically until somebody switches a VGA "
         "machine to mono",
         needs=("marty",), serial=True),
-    Row("weavesmoke", "full", py("tests/weavesmoke.py"), 75.0,
+    Row("weavesmoke", "full", py("tests/weavesmoke.py"), 100.0,
         "WEAVE opens FORM.WAB and draws a window on both 1bpp GLaBIOS twins - "
         "the Weave family's ONE full-tier row, forever (WEAVE-SPEC 12.3), and "
         "the widest reach per second the family has: the .WAB association, "
@@ -401,7 +401,7 @@ SOAK = [
         "that happens. The retry is weavesmoke's and is not loosened here - "
         "a gate that hid it would hide a host that had really got slower",
         needs=("marty", "cc"), serial=True, timeout=600),
-    Row("weaveprev", "soak", py("tests/weaveprev.py"), 260.0,
+    Row("weaveprev", "soak", py("tests/weaveprev.py"), 320.0,
         "WEAVE-SPEC 1.7.1 and 12.3: LOOM's PREVIEW PANE against "
         "`weavesim --render --preview`. Wave 7 draws the pane with WEAVE's "
         "own flow walk and WEAVE's own component painter, compiled a second "

@@ -26804,7 +26804,7 @@ The tree, and the one part of it that is a correctness requirement:
 | `RUNCPM/`, `RUNCPM/A/0/` | `RUNCPM.O88`, `RUNCPM.OVL`, the CCP and its `LICENSE` — and CP/M drive A below them (§74.5) |
 | `C64/` | `C64.O88`, `C64.OVL`, `C64.ROM`, `README.TXT` and `COPYING` (`docs/C64-SPEC.md` §14.2) |
 | `WEAVE/` | `WEAVE.O88`, `WEAVE.OVL`, `WEAVE.WSM` and the three demo bundles (`WEAVE-SPEC 1.2`) |
-| `LOOM/` | `LOOM.O88`, `LOOM.OVL`, `LOOM.WPV` and the demo sources (`WEAVE-SPEC 1.2`, `1.2.4`) |
+| `LOOM/` | `LOOM.O88`, `LOOM.OVL`, `LOOM.WPV`, the demo sources — and a second copy of `WEAVE.O88`, `WEAVE.OVL` and `WEAVE.WSM`, so that a bundle Pack writes beside its sources opens where it was written (`WEAVE-SPEC 1.2`, `1.2.4`, `11.2`) |
 | `MEDIA/` | the module, the two `.TEX` documents and `DEMO.HTM` — where a File Open starts (§38.10) |
 | `SYSTEM/`, `SYSTEM/DOS/` | the Task Manager (§28.3) and `OS88NET.COM` (§62) |
 | `SYSTEM/APPDATA/` | empty and **built rather than made on demand** (§19.9) — a Weave bundle's `saveState` writes its `.SAV` here (`WEAVE-SPEC 8.3`) |
