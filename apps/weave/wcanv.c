@@ -37,6 +37,10 @@ static int      w_cink;                 /* 6.10.7: what a <sprite> with no
                                          * `color` of its own inherits */
 static struct os88_video w_cvid;        /* ...and the one question the palette
                                          * asks the machine, at open */
+static int      w_cpal;                 /* ...whose answer: 1 = this adapter
+                                         * HAS planes, so 6.10.7's three props
+                                         * are read. 0 on CGA and Hercules and
+                                         * every prop skipped - see below */
 
 /* ============================================================================
  * THE SPRITE TABLE
@@ -154,7 +158,7 @@ static int w_chire(void)
 static void ovl_canvasload(void)
 {
     unsigned s, n, i, rec, id, ct, props, got, need;
-    int k;
+    int k, col;
 
     w_cldstate = 0;
     w_cid = 0;
@@ -198,10 +202,11 @@ static void ovl_canvasload(void)
         w_cink = OS88_BLACK;
         w_cparm[WSMP_COLOR] = OS88_WHITE;
         os88_video(&w_cvid);
-        if (w_cvid.bpp == 4) {          /* the FACT, asked as the fact: the pen
+        w_cpal = (w_cvid.bpp == 4);     /* the FACT, asked as the fact: the pen
                                          * is not read where there is one plane
                                          * (SPEC.md 5.4.2.2), and `bpp` is what
                                          * OSAPI_VIDEO answers about that */
+        if (w_cpal) {
             w_cink = (int)w_pint(props, WA_INK, OS88_BLACK) & 15;
             w_cparm[WSMP_COLOR] =
                 (int)w_pint(props, WA_PAPER, OS88_WHITE) & 15;
@@ -276,11 +281,21 @@ static void ovl_canvasload(void)
         w_sprset(k, WSMF_X, (int)w_pint(props, WA_X, 0));
         w_sprset(k, WSMF_Y, (int)w_pint(props, WA_Y, 0));
         w_sprset(k, WSMF_SHOWN, (int)w_pint(props, WA_SHOWN, 1));
-        /* 6.10.7: absent means the canvas's `ink`, and w_cink is already
-         * CBLACK on a 1bpp adapter - so the write is a black nibble the
-         * module's `colored` test does not raise, and the whole palette
-         * costs a still canvas nothing. */
-        w_sprset(k, WSMF_COLOR, (int)w_pint(props, WA_COLOR, w_cink) & 15);
+        /* 6.10.7, and w_cpal GUARDS THIS ONE TOO - which it did not at first,
+         * and the defect is the one PERFORMANCE.md names: keeping the shape
+         * of an optimisation is not keeping it.  `ink` and `paper` were
+         * skipped on a 1bpp adapter and `color` was not, so a bundle that
+         * carries the prop (PONG does) set the sprite nibbles anyway, raised
+         * the module's `colored` flag, and put the composer on the SPAN path
+         * on CGA: the same pixels, because the pen is not read there, and
+         * 2.84 gfx calls a frame against 1.06 - a 2.7x regression against
+         * 14's own row that no screenshot could show.  The adapter test has
+         * to cover all THREE props or 9.2.1's sentence is not true of the
+         * code. */
+        col = w_cink;
+        if (w_cpal)
+            col = (int)w_pint(props, WA_COLOR, w_cink) & 15;
+        w_sprset(k, WSMF_COLOR, col);
         k++;
     }
 }

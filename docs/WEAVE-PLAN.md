@@ -540,14 +540,23 @@ of a rally because PONG serves at `vy = 4`, a quarter of a pixel a frame.
 **And the MACHINE counted it, on both adapters, which is the reading to
 quote.** `tests/weavegame` reads WEAVE.WSM's own blits/frames counters over
 the frames after Serve, and it runs on a VGA MartyPC as well as a CGA one:
-**2.84 calls a frame with the palette off (CGA, 18.7 fps) against 3.17 with
-it on (VGA, 17.7 fps) — +0.33 calls, 249 µs, 0.45%**. That delta is LOWER
-than the model's, for a reason worth keeping: the model averages a whole
-rally, most of which the computer paddle spends parked at y = 48, so the run
-a colour cuts was the ball's alone and the cut costs a whole extra call; the
-machine's window is the chase right after Serve, when the paddle moves every
-frame, its bands are dirty anyway and the run being cut was already being
-emitted. WEAVE-SPEC §14 carries it as
+**0.95-1.06 calls a frame with the palette off (CGA, 18-19 blits over 18-19
+frames) against 2.84-3.17 with it on (VGA, 54-57 blits) — about +1.8 calls,
+~1.35 ms, 2.4%**. The 1bpp figure is `origin/main`'s own, run for run.
+
+**And the first version of this feature FAILED that comparison, which is why
+it is now a gate.** `ink` and `paper` were skipped on a 1bpp adapter and
+`color` was not — `w_pint(props, WA_COLOR, w_cink)` answers the PROP when the
+bundle carries one, and PONG carries three — so the sprite nibbles were set
+anyway, the module's `colored` flag came up, and the composer cut full-width
+runs into colour spans on CGA. The picture was identical, because the pen is
+not read there; the count was **2.84 against 1.06, a 2.7x regression on the
+target adapter class**, and nothing in a screenshot or in `weavegame`'s
+0.5-4.0 assertion could see it. PERFORMANCE.md's own sentence, arriving as
+the thing it warns about: keeping the SHAPE of an optimisation is not keeping
+the optimisation. The fix is one flag covering all three reads, and
+`weavegame` now asserts the flag itself — `colored` is 1 on `vga` and 0
+everywhere else — because a count has a band and a flag does not. WEAVE-SPEC §14 carries it as
 a NEW row beside the two uncoloured ones rather than moving them, because the
 uncoloured rows are still exactly what CGA and Hercules pay.
 

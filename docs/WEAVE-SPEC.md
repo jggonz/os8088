@@ -3054,14 +3054,27 @@ counters out of the state block over the ~19 displayed frames after Serve,
 and it now runs on a VGA MartyPC as well as a CGA one — the same package, the
 same bundle, the palette on in one and off in the other:
 
-| | fps | calls a frame |
-|---|---|---|
-| `os8088_5150_cga_gla`, palette OFF | 18.7 | **2.84** |
-| `os8088_xt_vga`, palette ON | 17.7 | **3.17** |
+| | frames | blits | calls a frame |
+|---|---|---|---|
+| `os8088_5150_cga_gla`, palette OFF | 18–19 | 18–19 | **0.95–1.06** |
+| `os8088_xt_vga`, palette ON | 18–19 | 54–57 | **2.84–3.17** |
 
-**+0.33 calls a frame, 249 µs of a 55 ms frame, 0.45%** — and both sit inside
-§14's existing two-sprite row (2–4) and inside `weavegame`'s own 0.5–4.0
-assertion, which is unchanged.
+The 1bpp figure is `origin/main`'s own, run for run — three runs of each tree
+gave the same 18–19 blits over 18–19 frames — which is the claim §9.2.1 makes
+and now the number that carries it. **On VGA the palette costs about +1.8
+calls a frame, ~1.35 ms of a 55 ms frame, 2.4%**, still inside §14's
+two-sprite row (2–4) and inside `weavegame`'s 0.5–4.0.
+
+**That row is a REGRESSION GATE now, and it was written because the first
+version of this feature failed it.** The load path skipped `ink` and `paper`
+on a 1bpp adapter and did NOT skip `color`, so a bundle carrying the prop —
+PONG does — set the sprite nibbles anyway, raised the module's `colored`
+flag, and put the composer on the span path on CGA: **the same picture,
+because the pen is not read there, at 2.84 gfx calls a frame against 1.06**.
+No screenshot could show it and the 0.5–4.0 assertion passed straight through
+it. `weavegame` therefore asserts the FLAG and not only the count — `colored`
+must be 1 on `vga` and 0 on every other adapter — which is this section's
+sentence rather than a symptom of it.
 
 **The two tables measure different WINDOWS and the difference is the computer
 paddle, not a disagreement.** The model's is a 400-frame average over a whole
@@ -4663,9 +4676,10 @@ same calls. What the palette adds it adds on VGA, where a colour span is a
 call. Two readings, both real and of different windows (§6.10.7 says why):
 the MODEL over a 400-frame rally, 1.005 calls a frame uncoloured against
 2.040 coloured; and the MACHINE over the frames after Serve, `weavegame`
-reading WEAVE.WSM's own counters — **2.84 on a CGA MartyPC with the palette
-off against 3.17 on a VGA one with it on: +0.33 calls, 249 µs of a 55 ms
-frame, 0.45%**.
+reading WEAVE.WSM's own counters — **0.95–1.06 on a CGA MartyPC with the
+palette off, which is `origin/main`'s own figure run for run, against
+2.84–3.17 on a VGA one with it on: about +1.8 calls, ~1.35 ms of a 55 ms
+frame, 2.4%**.
 
 A change that moves a row of this table upward is a regression against a
 documented number, not a neutral refactor — PERFORMANCE.md Part 5's

@@ -4644,8 +4644,9 @@ def costs_table(adapter="cga"):
         #
         # THE MACHINE COUNTS IT TOO, over a different window: tests/weavegame
         # reads WEAVE.WSM's own counters over the frames after Serve and gets
-        # 2.84 calls a frame on a CGA MartyPC (palette off) against 3.17 on a
-        # VGA one (palette on).  6.10.7 has why the two windows differ.
+        # 0.95-1.06 calls a frame on a CGA MartyPC (palette off, which is
+        # origin/main's own figure run for run) against 2.84-3.17 on a VGA one
+        # (palette on).  6.10.7 has why the two windows differ.
         ("canvas", "frame, PONG's 3 colours, VGA (measured, 400 frames)",
          "1-4 (mean 2.04)", "~%.0f-%.0f ms" % (ms(1 * CALL_US) + 0.3,
                                                ms(4 * CALL_US) + 2)),
