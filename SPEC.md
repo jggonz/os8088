@@ -41130,13 +41130,17 @@ offers only VGA-class devices), and 86Box has no automation socket. So:
 - `make xt-cga` / `make xt-hercules` — 86Box, `ibmxt`, 256KB, real `cga` and
   `hercules` cards. The **only** way to exercise the §39.1 probe and the
   Hercules 6845 programming. Interactive; no automation exists.
-- `make test VID_FORCE=4` — the EGA geometry under the QMP harness. A real
-  VGA in mode 12h is driven as if it were 640x350: `vid_detect` is skipped,
-  `vid_tab`'s EGA row publishes `[vid_ch] = 350`, and `wm_fit` / the chrome /
-  the clip core all confine to it. It does **not** exercise the §39.1
-  EGA branch (still a VGA) or mode 10h itself (the BIOS is asked for 0012h so
-  the visible framebuffer is still 480 tall — the point is that nothing the
-  kernel lays out reaches rows 350–479). Drive it with
+- `make test VIDEO=ega` — the EGA geometry under the QMP harness. **The knob
+  is `VIDEO=`, not `VID_FORCE=`**: the Makefile maps `VIDEO=ega` to
+  `-DVID_FORCE=4` and only `VIDEO=` is in the stamp, so `make test
+  VID_FORCE=4` sets a variable nothing reads, leaves `kernel.bin` up to date
+  and boots the PREVIOUS configuration — which reads exactly like the feature
+  being broken. `vid_detect` is skipped, `vid_tab`'s EGA row publishes
+  `[vid_ch] = 350`, and `wm_fit` / the chrome / the clip core all confine to
+  it. It does **not** exercise the §39.1 EGA branch — the card is still a VGA
+  — but it DOES set mode 10h, because that is what the EGA arm of
+  `vid_setmode` asks the BIOS for and QEMU's VGA honours it: the screendump
+  comes back 640x350, not 640x480. Drive it with
   `tools/mouse.py --screen 640x350`.
 - `make xt-ega` — 86Box, `ibmxt`, real IBM `ega` card and a 5154 monitor.
   The **only** way to exercise the §39.1 EGA detection branch and the mode

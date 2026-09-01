@@ -261,7 +261,10 @@ tui_track:
     call OSAPI_FSX_CAPS             ; DL = THIS display's VID_* kind - the only
     mov dh, 1                       ; place the DEPTH can come from, since
     cmp dl, VID_VGA                 ; OSAPI_VIDEO answers about the primary and
-    jne .fsdep                      ; the two cards of a mixed machine disagree
+    je .fscol                       ; the two cards of a mixed machine disagree
+    cmp dl, VID_EGA                 ; ...and EGA is that same planar 4bpp path
+    jne .fsdep                      ; at 640x350 (SPEC.md 39.24)
+.fscol:
     mov dh, 4
 .fsdep:
     mov ax, [tui_cw]

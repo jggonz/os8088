@@ -681,7 +681,8 @@ port-61h NMI/speaker latch instead. There is no 8255 anywhere in
 before video, and beeps.
 
 **86Box is the answer to that question and the repo already has it
-configured** — `make xt`, `xt-640`, `xt-cga`, `xt-hercules`, `286`, `386sx`,
+configured** — `make xt`, `xt-640`, `xt-cga`, `xt-hercules`, `xt-ega`,
+`286`, `386sx`,
 `386dx`, each with the real ROM set. That is what the "What 86Box is genuinely
 for" section below is about.
 
@@ -2447,7 +2448,7 @@ Narrower than it was, now that MartyPC covers the 8088 probe, the 6845 and
 the sound cards: **a machine that is not an 8088** (the 286, 386, 486 and
 Pentium targets), a **period bus** under a card rather than a modelled one,
 and a second opinion on the video probe. `make xt`,
-`xt-640`, `xt-cga`, `xt-hercules`, `xt-multimon`, `xt-sound`, `286`,
+`xt-640`, `xt-cga`, `xt-hercules`, `xt-ega`, `xt-multimon`, `xt-sound`, `286`,
 `286-sound`, `386sx`, `386`, `386-sound`, `486`, `pentium`, `xt-z`, `386-z`.
 
 `xt-multimon` is the **two-card** XT — a CGA and a Hercules in one box, one

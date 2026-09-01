@@ -72,6 +72,7 @@ from harness import check, done                           # noqa: E402
 KNOBS = [
     ("video-cga",   ["VIDEO=cga"]),
     ("video-herc",  ["VIDEO=herc", "HERCSEG=0x7000"]),
+    ("video-ega",   ["VIDEO=ega"]),
     ("rtc-bios",    ["RTC=bios"]),
     ("rtc-none",    ["RTC=none"]),
     ("rtc-ns",      ["RTC=ns"]),

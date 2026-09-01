@@ -430,10 +430,13 @@ mc_adapter:
     mov dh, 4                       ; kind, which is also how deep it is.
     cmp dl, VID_VGA                 ; OSAPI_VIDEO's DH answers about the
     je .bpp                         ; PRIMARY (SPEC.md 39.2.1) - right for
-    mov dh, 1                       ; sizing a window and wrong for this, and
-.bpp:                               ; taking both from one call is what keeps
-                                    ; mc_mono and mc_caps from disagreeing
-                                    ; about which monitor this game is on
+    cmp dl, VID_EGA                 ; sizing a window and wrong for this, and
+    je .bpp                         ; taking both from one call is what keeps
+    mov dh, 1                       ; mc_mono and mc_caps from disagreeing
+.bpp:                               ; about which monitor this game is on.
+                                    ; BOTH planar kinds are 4bpp - EGA is
+                                    ; VGA's path at 350 rows (SPEC.md 39.24) -
+                                    ; so the depth is two compares, not one
     mov byte [mc_mono], 0
     mov byte [mc_ecoarse], 0
     mov byte [mc_expfr], MC_EXPFR   ; bss is zeroed, and a life of zero kills

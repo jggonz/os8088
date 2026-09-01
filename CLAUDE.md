@@ -220,7 +220,7 @@ make clean
 
 | knob | effect |
 |---|---|
-| `VIDEO=cga\|herc` | force an adapter instead of probing |
+| `VIDEO=cga\|herc\|ega` | force an adapter instead of probing. `ega` is SPEC.md 39.24's 640x350 geometry on a VGA - drive it with `tools/mouse.py --screen 640x350` |
 | `RTC=at\|ns\|rp\|bios\|none` | force one rung of the clock ladder |
 | `ADLIB=1` / `SB16=1` | give the sound driver a card to attach to |
 | `HDD=<MB>` | give the hard-disk driver a disk |
@@ -238,7 +238,8 @@ sees an up-to-date `kernel.bin`, boots the previous configuration, and it reads
 exactly like the feature being broken.
 
 86Box targets for period hardware, one per `vm/` directory: `xt`, `xt-640`,
-`xt-cga`, `xt-hercules`, `xt-multimon`, `xt-sound`, `xt-sound-1.44`, `286`,
+`xt-cga`, `xt-hercules`, `xt-ega`, `xt-multimon`, `xt-sound`,
+`xt-sound-1.44`, `286`,
 `286-sound`,
 `386sx`, `386`, `386-sound`, `486`, `pentium`, `xt-z`, `386-z`, `xt-word`,
 `386-word`, `386-c-word`, `xt-runcpm`, `286-runcpm`, `386-runcpm`, `xt-c64`,

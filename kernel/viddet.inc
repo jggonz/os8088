@@ -840,7 +840,11 @@ vid_setmode:
     xor di, di
     mov ax, 0xDBDB
     mov cx, SCREEN_H * ROW_BYTES / 2
-    cld
+    cmp byte [vid_kind], VID_EGA    ; ...and the SAME 350 rows the clear below
+    jne .dirtygo                    ; uses, for the same reason: this arm must
+    mov cx, EGA_H * ROW_BYTES / 2   ; dirty exactly what that one is asked to
+.dirtygo:                           ; clean, and neither may run off a 128KB
+    cld                             ; EGA's 32KB plane (SPEC.md 39.23/39.24)
     rep stosw
 %endif
 

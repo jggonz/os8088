@@ -110,6 +110,8 @@ tk_at_layout:
     mov ah, TK_C_GLEAM              ; window is on rather than a build-time
     cmp byte [tk_vidk], VID_VGA     ; guess: on a two-card machine the two
     je .ink                         ; halves are different adapters
+    cmp byte [tk_vidk], VID_EGA     ; ...and EGA is that same planar 16-colour
+    je .ink                         ; path at 640x350 (SPEC.md 39.24)
     mov al, TK_M_TUBE
     mov ah, TK_M_GLEAM
 .ink:

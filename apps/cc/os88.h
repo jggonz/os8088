@@ -201,7 +201,9 @@ struct os88_video {                              /* OSAPI_VIDEO, SPEC.md 39.2 */
     int dock_top;                                /* first row the dock owns:
                                                   * the desktop is OS88_MBAR_H
                                                   * .. dock_top-1 */
-    int kind;                                    /* OS88_VID_VGA / HERC / CGA */
+    int kind;                                    /* OS88_VID_VGA / HERC / CGA
+                                                  * / EGA - but ask BPP, not
+                                                  * this (SPEC.md 39.24) */
     int bpp;                                     /* 4 or 1 - see os88_gfx_pen */
 };
 
@@ -291,6 +293,9 @@ static char os88__sz_find[sizeof(struct os88_find)    == 24 ? 1 : -1];
 #define OS88_VID_VGA   0                         /* struct os88_video.kind */
 #define OS88_VID_HERC  1
 #define OS88_VID_CGA   2
+#define OS88_VID_EGA   3                         /* 640x350x16 - VGA's planar
+                                                  * path, so test .bpp == 4
+                                                  * for "colour", never this */
 
 #define OS88_CPU_8086  0                         /* os88_cpu() - the target */
 #define OS88_CPU_286   1

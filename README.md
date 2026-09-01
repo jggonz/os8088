@@ -62,6 +62,7 @@ make xt       # boot the 360KB image on an emulated IBM PC/XT in 86Box
 make xt-640   # the same XT with a full 640KB of RAM
 make xt-cga   # the same XT with a CGA card instead of VGA
 make xt-hercules  # ...and the same XT with a Hercules card
+make xt-ega   # ...and the same XT with an IBM EGA, at 640x350
 make xt-multimon  # ...and an XT with BOTH mono cards, a monitor window each
 make 286      # 86Box: 286 @ 12.5MHz, 1MB, VGA
 make 386sx    # 86Box: 386SX @ 16MHz, 2MB, VGA
@@ -579,12 +580,13 @@ RAM (`vm/xt640/86box.cfg`) — on the 1986 XT board revision (`ibmxt86`),
 because the original 1982 planar maxes out at 256KB and 86Box silently
 clamps `mem_size` back to the board's limit.
 
-`make xt-cga` and `make xt-hercules` are the same 256KB XT with the other two
-adapters os8088 supports (`vm/xt-cga`, `vm/xt-hercules`) — CGA, and the
-Hercules mono card of 1982. **These two are the only way to exercise the
-adapter detection probe at all**: QEMU has no Hercules card, so `make test
-VIDEO=cga` drives the mono renderer but never the code that works out which
-card is fitted. A drawing change is not checked on 1bpp until it has been
+`make xt-cga`, `make xt-hercules` and `make xt-ega` are the same 256KB XT
+with the other three adapters os8088 supports (`vm/xt-cga`,
+`vm/xt-hercules`, `vm/xt-ega`) — CGA, the Hercules mono card of 1982, and the
+IBM EGA at 640x350 (SPEC.md §39.24). **These three are the only way to
+exercise the adapter detection probe at all**: QEMU has no Hercules and no
+EGA card, so `make test VIDEO=cga` and `make test VIDEO=ega` drive those
+geometries but never the code that works out which card is fitted. A drawing change is not checked on 1bpp until it has been
 looked at here — grey rounds to black on both, so a greyed-out menu item is
 a checkerboard rather than a pale one.
 
@@ -626,6 +628,7 @@ All targets, at a glance:
 | `xt-640` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | — |
 | `xt-cga` | IBM PC/XT | 8088 @ 4.77MHz | 256KB | CGA | — |
 | `xt-hercules` | IBM PC/XT | 8088 @ 4.77MHz | 256KB | Hercules | — |
+| `xt-ega` | IBM PC/XT | 8088 @ 4.77MHz | 256KB | IBM EGA (640x350) | — |
 | `xt-sound` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | Sound Blaster 2.0 |
 | `xt-sound-1.44` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | Sound Blaster 1.0 |
 | `286` | AMI 286 clone | 286 @ 12.5MHz | 1MB | OTI-067 VGA | — |

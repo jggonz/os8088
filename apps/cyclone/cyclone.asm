@@ -507,6 +507,8 @@ cy_pal:
     mov ah, CY_C_ESHOT
     cmp dl, VID_VGA
     je .have
+    cmp dl, VID_EGA                 ; planar at 640x350 too (SPEC.md 39.24)
+    je .have
     mov al, CWHITE
     mov ah, CWHITE
 .have:

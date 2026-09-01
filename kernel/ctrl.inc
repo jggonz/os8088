@@ -2737,7 +2737,9 @@ cp_vid_pick:
 ; -----------------------------------------------------------------------------
 ; cp_vid_slot - which adapter is drawn in row slot AL? (module internal)
 ;
-; in:  AL = slot, 0..2 (the visible row, top to bottom)
+; in:  AL = slot, 0..2 (the visible row, top to bottom - THREE is still the
+;      most any machine has, VID_VGA and VID_EGA being mutually exclusive at
+;      detection, so the bands below are still laid out for three)
 ; out: AL = the VID_* kind in it, CF = 0; CF = 1 = that slot has no row
 ; clobbers: AL, flags
 ;

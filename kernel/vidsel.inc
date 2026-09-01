@@ -161,10 +161,12 @@ vid_memchk:
 ; The running adapter is marked available without being probed, because the
 ; probe writes and that is the screen.
 ;
-; VGA IS NOT PROBED AT ALL, because vid_detect already answered it: steps 1
-; and 2 of SPEC.md 39.1 run before the equipment word, so [vid_kind] is
-; VID_VGA on every machine with a VGA or EGA BIOS. And such a machine can
-; always do CGA as well - mode 6 is a standard BIOS mode on every VGA and
+; NEITHER PLANAR KIND IS PROBED AT ALL, because vid_detect already answered
+; it: steps 1 and 2 of SPEC.md 39.1 run before the equipment word, so
+; [vid_kind] is VID_VGA or VID_EGA on every machine with a VGA or EGA BIOS -
+; which is what [vid_mono] = 0 above is asking, rather than the kind. And such
+; a machine can always do CGA as well - mode 6 is a standard BIOS mode on
+; every VGA and
 ; EGA ever made, and it is the same byte-exact 640x200 framebuffer this
 ; kernel's CGA path already drives (SPEC.md 39.9's VIDEO=cga has relied on
 ; that for as long as it has existed).
@@ -1109,11 +1111,8 @@ vid_blank_kind:
     out dx, al
     jmp short .out
 .ega:
-    mov dx, 0x3DA              ; reset the AC index/data flip-flop to INDEX
-    in al, dx                  ; (a read of Input Status 1 - 3DA colour)
-    mov dx, 0x3C0
     xor al, al                 ; index 0, bit 5 (PAS) = 0: video output OFF
-    out dx, al
+    call vid_ac_pas
     jmp short .out
 .mono:
     mov dx, 0x3B8               ; graphics + page 0, video OFF (bit 3 clear) -
@@ -1146,11 +1145,8 @@ vid_unblank_kind:
     out dx, al
     jmp short .out
 .ega:
-    mov dx, 0x3DA              ; flip-flop to INDEX, then AC index 0 with
-    in al, dx                  ; bit 5 (PAS) = 1: video output back ON
-    mov dx, 0x3C0
-    mov al, 0x20
-    out dx, al
+    mov al, 0x20               ; index 0, bit 5 (PAS) = 1: video back ON
+    call vid_ac_pas
     jmp short .out
 .mono:
     mov dx, 0x3BF               ; the order vid_setmode uses: allow graphics
@@ -1213,6 +1209,47 @@ vid_seq1_blank:
     popf
     pop dx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; vid_ac_pas - internal: the EGA's Attribute Controller video-enable bit
+;
+; in:       AL = 0x20 to light the screen, 0 to dark it (bit 5, Palette
+;           Address Source - 1 = video on, 0 = video off and the host may
+;           load the palette)
+; out:      -
+; clobbers: flags (AL is consumed)
+;
+; The EGA has no SR01 bit 5 and does not decode 3D8h, so this bit is the only
+; blank it owns - but reaching it is THREE accesses with two gaps in them, and
+; vid_seq1_blank one screen up is the argument for why that matters: the gap
+; is reachable, and a task switch landing in it corrupts a register neither
+; caller asked about. pushf/cli ... popf, never cli/sti (SPEC.md 1).
+;
+; THE FLIP-FLOP IS PUT BACK, and that is the other half. 3C0h is one port for
+; both the index and the data, and which one a write lands in is a toggle that
+; a read of Input Status 1 resets to INDEX. Writing the index and stopping
+; leaves the toggle expecting DATA with palette register 0 selected, so the
+; next code to write 3C0h as an index writes it into palette entry 0 instead -
+; the desktop's black becomes whatever that byte was. The trailing read costs
+; two bytes and leaves the port in the state every other reader assumes.
+; -----------------------------------------------------------------------------
+vid_ac_pas:
+    push ax
+    push dx
+    mov ah, al                  ; the wanted state of bit 5
+    pushf
+    cli
+    mov dx, 0x3DA               ; Input Status 1: reset the flip-flop to INDEX
+    in al, dx
+    mov dx, 0x3C0
+    mov al, ah                  ; index 0 with bit 5 carrying the answer
+    out dx, al
+    mov dx, 0x3DA               ; ...and back to INDEX for whoever is next
+    in al, dx
+    popf
+    pop dx
     pop ax
     ret
 
