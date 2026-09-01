@@ -463,7 +463,7 @@ directory, and Pack saves into this one).
 
 ---
 
-### 2.11 The palette is a PEN, not a deeper buffer — and it is canvas-only
+### 2.12 The palette is a PEN, not a deeper buffer — and it is canvas-only
 
 **The fork the colour wave turns on**, recorded here so that whoever reverses
 it starts from the arithmetic. The contract is WEAVE-SPEC §6.10.7 and the
