@@ -26,6 +26,8 @@
 VID_A_VGA   equ 1 << VID_VGA
 VID_A_HERC  equ 1 << VID_HERC
 VID_A_CGA   equ 1 << VID_CGA
+VID_A_EGA   equ 1 << VID_EGA     ; bit 3. An EGA machine is EGA + CGA (mode 6),
+                                 ; never part of an extended desktop (39.24)
 
 ; SPEC.md 39.19.2's placements. TWO and not four, because the primary is
 ; always at the virtual origin, so "which monitor is on the left" is answered
@@ -177,9 +179,9 @@ vid_probe_avail:
     shl al, cl
     mov [vid_avail], al
 
-    cmp byte [vid_kind], VID_VGA    ; ...and a VGA/EGA does mode 6 too
-    jne .herc
-    or byte [vid_avail], VID_A_CGA
+    cmp byte [vid_mono], 0          ; ...and a VGA OR EGA does mode 6 too - it
+    jne .herc                      ; is a standard BIOS mode on every one of
+    or byte [vid_avail], VID_A_CGA  ; them, so the CGA bit is set unprobed
 .herc:
     cmp byte [vid_kind], VID_HERC
     je .cga                     ; already marked, and its RAM is the screen
@@ -334,9 +336,9 @@ vid_cga_alias:
 vid_avail_test:
     push cx
     push bx
-    cmp al, VID_CGA             ; a byte from SYSTEM.CFG written by a kernel
-    ja .no                      ; that knew a fourth adapter
-    mov cl, al
+    cmp al, VID_EGA            ; VID_EGA (3) is the fourth adapter now; a byte
+    ja .no                     ; above it is a SYSTEM.CFG from a still-newer
+    mov cl, al                 ; kernel and is refused
     mov bl, 1
     shl bl, cl
     test [vid_avail], bl
@@ -1095,13 +1097,22 @@ vid_blank_kind:
     push es
     cmp al, VID_HERC
     je .mono
-    cmp al, VID_VGA
-    je .vga
-    mov ax, 0x0040
+    cmp al, VID_EGA           ; EGA has no SR01 bit 5 and does not decode
+    je .ega                   ; 3D8h. It DOES have the Attribute Controller's
+    cmp al, VID_VGA           ; video-enable bit, which is the period-correct
+    je .vga                   ; blank on an EGA (and a VGA, but that keeps its
+    mov ax, 0x0040            ; SR01 path). See .ega below.
     mov es, ax
     mov al, [es:0x0065]         ; the BIOS's shadow of 3D8h...
     and al, ~8                  ; ...minus the video-enable bit
     mov dx, 0x3D8
+    out dx, al
+    jmp short .out
+.ega:
+    mov dx, 0x3DA              ; reset the AC index/data flip-flop to INDEX
+    in al, dx                  ; (a read of Input Status 1 - 3DA colour)
+    mov dx, 0x3C0
+    xor al, al                 ; index 0, bit 5 (PAS) = 0: video output OFF
     out dx, al
     jmp short .out
 .mono:
@@ -1124,12 +1135,21 @@ vid_unblank_kind:
     push es
     cmp al, VID_HERC
     je .mono
+    cmp al, VID_EGA
+    je .ega
     cmp al, VID_VGA
     je .vga
     mov ax, 0x0040
     mov es, ax
     mov al, [es:0x0065]         ; ...exactly what the ROM's mode set left
     mov dx, 0x3D8
+    out dx, al
+    jmp short .out
+.ega:
+    mov dx, 0x3DA              ; flip-flop to INDEX, then AC index 0 with
+    in al, dx                  ; bit 5 (PAS) = 1: video output back ON
+    mov dx, 0x3C0
+    mov al, 0x20
     out dx, al
     jmp short .out
 .mono:
@@ -1861,6 +1881,13 @@ vid_pt_clamp:
 ; which is vid_cga_alias's problem again on a machine nobody has.
 ; -----------------------------------------------------------------------------
 vid_dual_ok:
+    cmp byte [vid_kind], VID_EGA    ; EGA is a single-display adapter here
+    je .no                          ; (SPEC.md 39.24: the per-display context
+                                    ; is not in scope for it). A machine that
+                                    ; booted EGA and holds a Hercules too
+                                    ; still gets one desktop; switching the
+                                    ; primary to CGA re-opens the HERC|CGA
+                                    ; case, which this then allows as before
     test byte [vid_avail], VID_A_HERC
     jz .no                      ; nothing to extend ONTO...
     test byte [vid_avail], VID_A_VGA | VID_A_CGA

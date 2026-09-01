@@ -494,12 +494,19 @@ FDLG_SAVE  equ 1                 ; coming back
                                  ; (SPEC.md 39.2). No inputs. Out: AX = width,
                                  ; BX = height, CX = the first row the dock
                                  ; owns (so the usable desktop is rows MBAR_H
-                                 ; .. CX-1), DL = 0 VGA / 1 Hercules / 2 CGA,
-                                 ; DH = bits per pixel, 4 or 1. Callable from
-                                 ; any context, lock held or not.
+                                 ; .. CX-1), DL = 0 VGA / 1 Hercules / 2 CGA /
+                                 ; 3 EGA, DH = bits per pixel, 4 or 1. Callable
+                                 ; from any context, lock held or not.
+                                 ;
+                                 ; DON'T switch on DL as a fourth case: EGA is
+                                 ; VGA's planar path at 640x350 (DH = 4). The
+                                 ; two real questions are DH (depth) and your
+                                 ; window size - test `cmp dh, 1` / `ja` for
+                                 ; "colour", never `cmp dl, VID_VGA`.
 VID_VGA    equ 0                 ; the DL values
 VID_HERC   equ 1
 VID_CGA    equ 2
+VID_EGA    equ 3                 ; 640x350x16 - a VGA-path adapter (SPEC.md 39.24)
 ;
 ; On a 1bpp adapter every colour you pass is reduced to black, white or a
 ; 50% dither (SPEC.md 39.4): 0..6 go black, 12/14/15 go white, and 7..11
@@ -2034,9 +2041,9 @@ WT_SIZE    equ 16
 ; -----------------------------------------------------------------------------
 %macro OS88_PREFER 7
 %1:
-    dw %2, %3                   ; VID_VGA   640x480
-    dw %4, %5                   ; VID_HERC  720x348
-    dw %6, %7                   ; VID_CGA   640x200
+    dw %2, %3                   ; VID_VGA   640x480  (also VID_EGA 640x350 -
+    dw %4, %5                   ; VID_HERC  720x348   the kernel takes this row
+    dw %6, %7                   ; VID_CGA   640x200   for an EGA, SPEC.md 39.8)
 %endmacro
 
 ; -----------------------------------------------------------------------------

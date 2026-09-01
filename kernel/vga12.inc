@@ -3,7 +3,10 @@
 ;
 ; VGA mode 12h (640x480x16, planar) primitives, region save/restore, and the
 ; global drawing mutex. Everything here programs the Graphics Controller
-; (index 0x3CE / data 0x3CF) and Sequencer (0x3C4/0x3C5) directly.
+; (index 0x3CE / data 0x3CF) and Sequencer (0x3C4/0x3C5) directly - both
+; byte-identical on an EGA, which runs this same code in mode 10h at 350
+; rows ([vid_mono] = 0, SPEC.md 39.24). The width and stride are 640/80 on
+; both; only the two bottom-edge clips here read the live [vid_ch].
 ;
 ; Conventions (SPEC.md 1, 5, 7):
 ;   - Solid fills use Set/Reset (GC0 = color, GC1 = 0Fh) with the Bit Mask
@@ -3762,15 +3765,15 @@ vga_vline_core:
     push si
     push di
     push es
-    cmp ax, SCREEN_W            ; catches x < 0 too (unsigned)
-    jae .done
+    cmp ax, SCREEN_W            ; catches x < 0 too (unsigned). Width is 640
+    jae .done                  ; on both planar adapters, so a constant here
     or bx, bx
     jns .y1ok
     xor bx, bx
 .y1ok:
-    cmp dx, SCREEN_H
-    jl .y2ok
-    mov dx, SCREEN_H-1
+    cmp dx, [vid_ch]           ; ...but the HEIGHT is 480 on VGA and 350 on
+    jl .y2ok                   ; EGA, so this bottom clip is the live one
+    mov dx, [vid_chm1]         ; (SPEC.md 39.24). Identical to SCREEN_H on VGA.
 .y2ok:
     cmp dx, bx
     jl .done
@@ -4442,13 +4445,13 @@ vga_xor_hline:
     push si
     push di
     push es
-    cmp dx, SCREEN_H
-    jae .done
+    cmp dx, [vid_ch]           ; live height: 480 VGA / 350 EGA (SPEC.md
+    jae .done                  ; 39.24). Identical to SCREEN_H on VGA.
     or ax, ax
     jns .x1ok
     xor ax, ax
 .x1ok:
-    cmp bx, SCREEN_W
+    cmp bx, SCREEN_W           ; width is 640 on both, a constant is fine
     jl .x2ok
     mov bx, SCREEN_W-1
 .x2ok:

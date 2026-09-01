@@ -59,6 +59,7 @@ VM    := $(CURDIR)/vm/xt
 VM640 := $(CURDIR)/vm/xt640
 VMCGA := $(CURDIR)/vm/xt-cga
 VMHERC := $(CURDIR)/vm/xt-hercules
+VMEGA := $(CURDIR)/vm/xt-ega
 # The DUAL-DISPLAY machine (SPEC.md 39.12-39.19): the same XT with BOTH mono
 # cards in it, each on its own monitor window.
 VMMULTI := $(CURDIR)/vm/xt-multimon
@@ -170,15 +171,20 @@ VM386WEAVE := $(CURDIR)/vm/386-weave
 # tests/weaveone.py, under MartyPC.
 VMXTWEAVE256 := $(CURDIR)/vm/xt-weave-256
 
-# VIDEO=cga|herc|vga forces the adapter instead of probing for it (SPEC.md
+# VIDEO=cga|herc|vga|ega forces the adapter instead of probing for it (SPEC.md
 # 39.1). The shipped images are always built without it, so they auto-detect;
 # this exists because QEMU emulates no CGA and no Hercules card, and forcing
 # the CGA path onto a VGA - whose int 10h mode 6 IS a CGA framebuffer, same
 # segment, same two banks, same stride - is the only way to drive the mono
-# renderer under the QMP harness.
+# renderer under the QMP harness. VIDEO=ega is the same trick for the 640x350
+# geometry: mode 10h's framebuffer is byte-compatible with the planar path
+# (SPEC.md 39.24), so a VGA under QEMU renders the shorter desktop and every
+# clip/fit/chrome path can be checked. Drive it with
+# `tools/mouse.py --screen 640x350`.
 VIDFORCE_vga  := 1
 VIDFORCE_herc := 2
 VIDFORCE_cga  := 3
+VIDFORCE_ega  := 4
 ifneq ($(VIDEO),)
 VIDDEF := -DVID_FORCE=$(VIDFORCE_$(VIDEO))
 endif
@@ -1373,7 +1379,7 @@ KERNEL_SRC := kernel/kernel.asm
 KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
 
 .PHONY: small kernsplit all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
-        xt-hercules xt-multimon 286 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 \
+        xt-hercules xt-ega xt-multimon 286 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 \
         286-sound 386-sound 486 pentium \
         bench field combo combo144 combo720 stackprobe trklog trkscrl npbench clicktest marty \
         comscan lptlink calcref \
@@ -6861,6 +6867,15 @@ xt-cga: $(IMG360) $(APPSIMG360)
 xt-hercules: $(IMG360) $(APPSIMG360)
 	@$(UNPROTECT) $(VMHERC)/86box.cfg
 	$(BOX) -P $(VMHERC) -N
+
+# The IBM EGA machine (SPEC.md 39.24, docs/EGA-PLAN.md): an ibmxt with a real
+# EGA card and the enhanced monitor. The ONLY way to exercise the §39.1 EGA
+# detection branch (DCC absent, "get EGA info" succeeds) and the mode 10h set
+# on a period BIOS - QEMU has no EGA, and `make test VIDEO=ega` forces the
+# geometry onto a VGA but never the probe or the real mode. Interactive.
+xt-ega: $(IMG360) $(APPSIMG360)
+	@$(UNPROTECT) $(VMEGA)/86box.cfg
+	$(BOX) -P $(VMEGA) -N
 
 # ...and the same XT with BOTH of them in it: SPEC.md 39.12-39.19's extended
 # desktop on the machine it was written for. A CGA at B8000 and a Hercules at

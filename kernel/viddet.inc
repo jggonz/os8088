@@ -4,13 +4,20 @@
 ; Video adapter detection, runtime screen geometry, and the two addressing
 ; helpers every drawing path in the kernel goes through (SPEC.md 39).
 ;
-; One kernel binary drives three adapters, chosen at boot in this order:
+; One kernel binary drives four adapters, chosen at boot in this order:
 ;
 ;   VID_VGA    640x480, 16 colours, 4 planes at A000:0000  (mode 12h)
 ;   VID_HERC   720x348, monochrome, 4 banks at B000:0000   (no BIOS mode)
 ;   VID_CGA    640x200, monochrome, 2 banks at B800:0000   (mode 6)
+;   VID_EGA    640x350, 16 colours, 4 planes at A000:0000  (mode 10h)
 ;
-; The two fallbacks are both 1 bit per pixel with a BANKED framebuffer -
+; VID_EGA is VID_VGA's row of vid_tab with a shorter height and a different
+; BIOS mode number - the planar framebuffer is byte-for-byte the same shape.
+; Everything in this file that is not detection or the mode set treats it
+; exactly as VGA, because [vid_mono] is 0 for both (SPEC.md 39.24,
+; docs/EGA-PLAN.md).
+;
+; The two mono fallbacks are both 1 bit per pixel with a BANKED framebuffer -
 ; consecutive scan lines do not sit consecutively in memory. That is the
 ; only structural difference between them, so ONE parameterized driver
 ; serves both: the bank count, the bank shift, the row stride and the
@@ -54,6 +61,17 @@
 VID_VGA     equ 0
 VID_HERC    equ 1
 VID_CGA     equ 2
+VID_EGA     equ 3              ; VGA's planar path at 640x350 (SPEC.md 39.24,
+                               ; docs/EGA-PLAN.md). NOT a fourth renderer:
+                               ; mode 10h is mode 12h's framebuffer, shorter -
+                               ; [vid_mono] = 0, vga12.inc reused unchanged.
+
+EGA_H       equ 350            ; mode 10h's active rows. Only vid_setmode's own
+                               ; framebuffer clear needs it as a constant (the
+                               ; live height is [vid_ch], 350, from vid_tab);
+                               ; that clear runs from the splash, gated on
+                               ; SPL_RESIDENT, so it stays on a constant like
+                               ; the VGA arm's SCREEN_H (SPEC.md 39.23).
 
 VID_REC     equ 18              ; bytes per vid_tab record
 VID_LIVE_W  equ 9               ; words in the live block below
@@ -77,6 +95,12 @@ vid_tab:
     dw VGA_SEG,      80,    0,     0,     80,       0,      0, 640, 480
     dw VID_HERC_SEG, 90,    3,     2, 0x2000,  0x8000, 0x805A, 720, 348
     dw  0xB800,      80,    1,     1, 0x2000,  0x4000, 0xC050, 640, 200
+    dw VGA_SEG,      80,    0,     0,     80,       0,      0, 640, EGA_H
+    ; ^ VID_EGA: byte-for-byte the VGA row but 350 tall. bmask/bshift/wrapbit
+    ;   all 0, so gfx_rowbase is y*80 and gfx_nextrow is `add di,80` with no
+    ;   adapter test, exactly as on VGA (SPEC.md 39.3/39.24). 349*80 = 27,920,
+    ;   well inside one 0x8000 plane, so nothing here needs the intra-bank
+    ;   assertion the two mono rows do.
 
 ; -----------------------------------------------------------------------------
 ; The live geometry block (SPEC.md 39.2). NINE CONTIGUOUS WORDS, in vid_tab's
@@ -185,7 +209,7 @@ vid_desk_zr dw SCREEN_W-6       ; and its EXCLUSIVE right, zx + 50: the
                                 ; zr - 1 as their inclusive right (633 at
                                 ; 640 wide, which is what they open-coded).
 
-vid_kind    db VID_VGA          ; VID_VGA / VID_HERC / VID_CGA
+vid_kind    db VID_VGA          ; VID_VGA / VID_HERC / VID_CGA / VID_EGA
 vid_mono    db 0                ; 1bpp adapter? This is what routes every
                                 ; draw through the software renderer (32/39.5)
 vid_planes  db 4                ; 4 or 1
@@ -301,14 +325,29 @@ section .text                   ; AND spend KERN_CODE_MAX, which is the guard
 ; out:      [vid_kind]
 ; clobbers: flags
 ;
-; Order is binding. The equipment word is consulted LAST because an EGA or
-; VGA driving a monochrome monitor also reports bits 5:4 = 11b, and we want
-; those machines on the mode 12h path, not the Hercules one.
+; Order is binding.
+;
+; Step 1 (int 10h AX=1A00h, the Display Combination Code) answers for every
+; VGA and MCGA - the DCC call is part of the VGA BIOS - so a card that
+; answers step 2 (int 10h AH=12h "get EGA info") and NOT step 1 is an EGA.
+; An IBM EGA has no mode 12h, only mode 10h (640x350), so it gets its own
+; kind, VID_EGA, which is VGA's planar path at that height (SPEC.md 39.24).
+;
+; The equipment word is consulted LAST because an EGA or VGA driving a
+; monochrome monitor also reports bits 5:4 = 11b. Those machines belong on
+; the planar path: a VGA on step 1, an EGA on step 2, and only a machine that
+; answers neither is a real mono card.
 ;
 ; Documented scope cut: no Hercules-versus-plain-MDA discrimination (the
 ; 0x3BA vertical-sync toggle test). A plain MDA is text-only, so there is no
 ; better action available; driving it as a Hercules is strictly less wrong
 ; than driving it as a CGA at B800.
+;
+; Documented scope cut: a VGA whose BIOS does not implement the DCC call is
+; classed VID_EGA (640x350) rather than VID_VGA. Such a card is vanishingly
+; rare - the DCC is in the 1987 VGA BIOS spec - and VID_FORCE=1 is the
+; escape hatch. The target is period XT hardware, where a real EGA is the
+; common case this trades for.
 ; -----------------------------------------------------------------------------
 vid_detect:
     push ax
@@ -322,24 +361,27 @@ vid_detect:
     mov al, [vid_force]
     or al, al
     jz .probe
-    dec al                      ; 1/2/3 -> VID_VGA/VID_HERC/VID_CGA
+    dec al                      ; 1/2/3/4 -> VID_VGA/VID_HERC/VID_CGA/VID_EGA
     jmp short .set
 .probe:
     mov ax, 0x1A00              ; VGA/MCGA: read Display Combination Code.
-    int 0x10                    ; A pre-EGA BIOS ignores AH=1Ah and leaves
+    int 0x10                    ; A pre-VGA BIOS ignores AH=1Ah and leaves
     cmp al, 0x1A                ; AL as we set it, which is 00h.
     je .vga
-    mov ah, 0x12                ; EGA: "get EGA info" overwrites BL with the
-    mov bl, 0x10                ; card's memory size. An XT BIOS leaves 10h
-    int 0x10                    ; alone. An EGA does mode 12h, so it counts.
-    cmp bl, 0x10
-    jne .vga
+    mov ah, 0x12                ; "get EGA info" overwrites BL with the card's
+    mov bl, 0x10                ; memory size. An XT BIOS leaves 10h alone.
+    int 0x10                    ; Step 1 already claimed every VGA, so a card
+    cmp bl, 0x10                ; that answers HERE is an EGA - and an EGA has
+    jne .ega                    ; no mode 12h, only mode 10h (SPEC.md 39.24).
     int 0x11                    ; equipment word, bits 5:4
     and al, 0x30
     cmp al, 0x30                ; 11b = a monochrome card at B000
     mov al, VID_CGA
     jne .set
     mov al, VID_HERC
+    jmp short .set
+.ega:
+    mov al, VID_EGA
     jmp short .set
 .vga:
     mov al, VID_VGA
@@ -399,6 +441,8 @@ vid_detect:
 vid_depth_set:
     cmp al, VID_VGA
     je .colour
+    cmp al, VID_EGA            ; EGA is the same four-plane 16-colour depth as
+    je .colour                ; VGA - mode 10h, just shorter (SPEC.md 39.24)
     mov byte [vid_mono], 1      ; 1bpp: the software renderer IS the direct
     mov byte [vid_planes], 1    ; path (SPEC.md 39.5)
     mov word [vid_planes_w], 1
@@ -525,15 +569,15 @@ vid_apply:
 
     mov al, [vid_kind]          ; --- the renderer's DEPTH, in one place
     call vid_depth_set          ; (see there: a display swap needs it too)
-    xor ax, ax                  ; VGA: the renderer has no target until
-    mov bx, SW_PLANE_PARA       ; unreachable: [vid_rseg] is 0 here
-    xor dx, dx
-    cmp byte [vid_kind], VID_VGA
-    je .rend
-    mov ax, [vid_seg]           ; the software renderer draws straight into
-    mov bx, 1                   ; the framebuffer - one "plane", and a step
-    mov dx, ax                  ; of 1 paragraph purely so sw_xfer's segment
-    inc dx                      ; compare can terminate
+    xor ax, ax                  ; PLANAR (VGA or EGA): the software renderer
+    mov bx, SW_PLANE_PARA       ; has no target - [vid_rseg] is 0, nothing
+    xor dx, dx                  ; routes through it (SPEC.md 39.5/39.24)
+    cmp byte [vid_mono], 0      ; keyed on the DEPTH vid_depth_set just set,
+    je .rend                    ; not the kind - EGA is planar and 0 here too
+    mov ax, [vid_seg]           ; MONO: the software renderer draws straight
+    mov bx, 1                   ; into the framebuffer - one "plane", and a
+    mov dx, ax                  ; step of 1 paragraph purely so sw_xfer's
+    inc dx                      ; segment compare can terminate
 .rend:
     mov [vid_rseg], ax
     mov [vid_rpara], bx
@@ -720,6 +764,14 @@ vid_setmode:
                                 ; reaches here through spl_chrome
     cmp byte [vid_kind], VID_HERC
     je .herc
+    cmp byte [vid_kind], VID_EGA
+    jne .colorbios
+    mov ax, 0x0010             ; EGA: mode 10h, 640x350x16 planar. NO
+    jmp short .bios            ; vid_cga_equip - that call is the XT ROM's
+                              ; CGA-equipment quirk (see below), and an EGA
+                              ; BIOS is not equipment-driven that way; it
+                              ; sets mode 10h whatever 40:10 says.
+.colorbios:
     call vid_cga_equip          ; EITHER COLOUR CARD, NOT JUST THE CGA (SPEC.md
                                 ; 39.19.4). The XT ROM's mode set is
                                 ; EQUIPMENT-driven: with 40:10 saying mono it
@@ -764,8 +816,11 @@ vid_setmode:
     mov ax, 0x0006              ; CGA: 640x200 monochrome
 .bios:
     int 0x10
-    cmp byte [vid_kind], VID_VGA
-    jne .nowipe
+    cmp byte [vid_kind], VID_VGA    ; the two PLANAR arms clear A0000
+    je .wipe                        ; themselves (SPEC.md 39.23) - the ROM's
+    cmp byte [vid_kind], VID_EGA    ; clear is not to be trusted on either.
+    jne .nowipe                     ; CGA and Hercules do their own above.
+.wipe:
 
 %ifdef VGA_DIRTY
     ; --- make VGADIRTY=1: BE the BIOS that did not clear (SPEC.md 39.23) ----
@@ -813,7 +868,9 @@ vid_setmode:
     ; plane 0 is one of the ways the garbage survives. They are inline rather
     ; than vga_gc_reset's because THIS RUNS FROM THE SPLASH, whose first tick
     ; is gated on SPL_RESIDENT sectors: vga12.inc is thousands of bytes past
-    ; that window and is not resident yet.
+    ; that window and is not resident yet. EGA shares every one of these
+    ; writes - the GC and Sequencer are byte-identical on it - and differs
+    ; only in the row count below.
     mov dx, VGA_SEQ
     mov ax, 0x0F02              ; SEQ2 Map Mask: all four planes
     out dx, ax
@@ -831,7 +888,11 @@ vid_setmode:
     xor di, di
     xor ax, ax
     mov cx, SCREEN_H * ROW_BYTES / 2
-    cld
+    cmp byte [vid_kind], VID_EGA    ; EGA: 350 rows, not 480. Mode 10h on a
+    jne .wipego                     ; 128KB card is 32KB per plane and 480*80
+    mov cx, EGA_H * ROW_BYTES / 2   ; would run 5,632 bytes off it (SPEC.md
+.wipego:                            ; 39.23). Stays a constant like SCREEN_H
+    cld                             ; - this runs from the splash.
     rep stosw                   ; ~110 ms on a 4.77MHz 8088, ONCE: vid_init
                                 ; skips the mode set while [spl_live] is up,
                                 ; and every later caller owes a full repaint

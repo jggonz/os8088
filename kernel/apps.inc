@@ -133,10 +133,11 @@ app_about_s3c:  db 'cooperative', 0
 ; [vid_kind], so it can never disagree with what is on the glass - the old
 ; third line asserted '640x480 - 16 colors' unconditionally, which stopped
 ; being true the moment the kernel learned to drive a mono card.
-app_about_vid:  dw app_about_v0, app_about_v1, app_about_v2
+app_about_vid:  dw app_about_v0, app_about_v1, app_about_v2, app_about_v3
 app_about_v0:   db 'VGA - 640x480 - 16 colors', 0
 app_about_v1:   db 'Hercules - 720x348 - mono', 0
 app_about_v2:   db 'CGA - 640x200 - mono', 0
+app_about_v3:   db 'EGA - 640x350 - 16 colors', 0
 
 ; =============================================================================
 ; EVERYTHING BELOW IS COLD (SPEC.md 2.6). The data above is not, and cannot

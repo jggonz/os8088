@@ -443,7 +443,8 @@ cp_s_vid:   db 'Display', 0     ; list name AND the page heading
 cp_s_vvga:  db 'Vga 640x480', 0
 cp_s_vherc: db 'Hercules 720x348', 0
 cp_s_vcga:  db 'Cga 640x200', 0
-cp_vidnam:  dw cp_s_vvga, cp_s_vherc, cp_s_vcga
+cp_s_vega:  db 'Ega 640x350', 0
+cp_vidnam:  dw cp_s_vvga, cp_s_vherc, cp_s_vcga, cp_s_vega
 cp_s_vact:  db 'Set Primary', 0
 ; The caption, inside the pane's 27-character limit. It is ONE string and the
 ; page's only constant line: it says what the button does, on every state the
@@ -2762,7 +2763,7 @@ cp_vid_slot:
     inc cl
 .skip:
     inc bl
-    cmp bl, 3
+    cmp bl, 4                   ; VID_VGA / VID_HERC / VID_CGA / VID_EGA
     jb .n
     pop cx
     pop bx
