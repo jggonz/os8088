@@ -4636,12 +4636,13 @@ def costs_table(adapter="cga"):
         # a coloured canvas pays when its sprites share a colour or are alone
         # in the run, and this is what PONG's three-colour field pays when the
         # ball is level with a paddle.  MEASURED off the model over a 400-frame
-        # rally, not modelled: 1.005 calls a frame uncoloured, 1.955 coloured
-        # (1 for 210 frames, 3 for 188, 4 for 2).  On any 1bpp adapter the
-        # load path leaves the palette off, so the figure there is the first
-        # one, exactly.
+        # rally against PONG.WJS's own handlers - onTick's computer paddle
+        # included - and not modelled: 1.005 calls a frame uncoloured, 2.040
+        # coloured (1 for 193 frames, 3 for 205, 4 for 2).  On any 1bpp
+        # adapter the load path leaves the palette off, so the figure there is
+        # the first one, exactly.
         ("canvas", "frame, PONG's 3 colours, VGA (measured, 400 frames)",
-         "1-4 (mean 1.96)", "~%.0f-%.0f ms" % (ms(1 * CALL_US) + 0.3,
+         "1-4 (mean 2.04)", "~%.0f-%.0f ms" % (ms(1 * CALL_US) + 0.3,
                                                ms(4 * CALL_US) + 2)),
         ("card", "switch (full-card repaint, text-heavy CGA card)",
          "~1/row", "~0.3-1.2 s"),

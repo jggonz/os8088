@@ -502,16 +502,20 @@ overlapping byte column wears the paddle's colour; the alternative is the
 second pass rejected above.
 
 **The count, measured over a 400-frame rally** against the model's own
-composer, not modelled: **1.005 calls a frame uncoloured, 1.955 coloured** —
-1 call for 210 frames, 3 for 188, 4 for 2. The 3-call frames are the ball
-level with the paddles, which is most of a rally because PONG serves at
-`vy = 4`, a quarter of a pixel a frame. **+0.95 calls is 718 µs of a 55 ms
-frame, 1.3%**; the worst frame is +2.3 ms, 4.1%. WEAVE-SPEC §14 carries it as
+composer — driven by `PONG.WJS`'s own `onTick`, `onHit` and `onGoal`, so the
+sprite motion is the game's and not a guess — and not modelled: **1.005 calls
+a frame uncoloured, 2.040 coloured** — 1 call for 193 frames, 3 for 205, 4
+for 2. The 3-call frames are the ball level with the paddles, which is most
+of a rally because PONG serves at `vy = 4`, a quarter of a pixel a frame.
+**+1.035 calls is 782 µs of a 55 ms frame, 1.4%**; the worst frame is
++2.3 ms, 4.1%. **The uncoloured figure is unchanged by the computer paddle**,
+which is the half that matters: it is what a 1bpp machine pays, and what
+`weavegame` reads on a CGA MartyPC. WEAVE-SPEC §14 carries it as
 a NEW row beside the two uncoloured ones rather than moving them, because the
 uncoloured rows are still exactly what CGA and Hercules pay.
 
 **What would remove even that, and why it is not in this wave**: every extra
-call is a still paddle re-blitted because a dirty BAND is full width. Bounding
+call is a paddle re-blitted because a dirty BAND is full width. Bounding
 a run to the columns the moved sprites actually touched would put PONG back at
 ~1 call a frame and cut bytes on both paths — which is why it is a separate
 change: it moves wave 5's shipped behaviour, WEAVE-SPEC §12.1.3's whole corpus

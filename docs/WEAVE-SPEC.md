@@ -3033,26 +3033,30 @@ One call per span, and the span count per run is bounded by the sprites that
 reach it: **at most `2n + 1` for `n` coloured shown sprites in the run**, and
 exactly **1** when they all share a colour, when only one of them is in the
 run, or when the canvas is uncoloured. PONG, **measured over a 400-frame
-rally** against the model's own composer (§14's newest row):
+rally** against the model's own composer, driven by `PONG.WJS`'s own
+handlers — `onTick`'s computer paddle included, so the motion is the game's
+and not a guess (§14's newest row):
 
 | | calls a frame |
 |---|---|
 | uncoloured, or **any 1bpp adapter** | 1.005 (398 frames of 1, 2 frames of 2) |
-| coloured, VGA | **1.955** (210 frames of 1, 188 of 3, 2 of 4) |
+| coloured, VGA | **2.040** (193 frames of 1, 205 of 3, 2 of 4) |
 
 Half the frames are 3 because PONG's ball serves at `vy = 4` — a quarter of a
 pixel a frame — so it spends most of a rally level with the paddles' rows, and
-a run holding all three sprites is `[pad][ball][wall]`. **+0.95 calls a frame
-is 718 µs of a 55 ms frame, 1.3%**, and the worst frame is 3 extra calls,
+a run holding all three sprites is `[pad][ball][cpu]`. **+1.035 calls a frame
+is 782 µs of a 55 ms frame, 1.4%**, and the worst frame is 3 extra calls,
 2.3 ms, 4.1%. It lands inside §14's existing two-sprite row (2–4 calls,
 ~2–5 ms) and well inside `tests/weavegame`'s 0.5–4.0 assertion, which is
 unchanged.
 
 **What would remove it, and why this wave does not do it**: a run is emitted
 full width because a dirty BAND is full width, so the still paddles are
-re-blitted whenever the ball's bands reach them. Narrowing a run to the byte
-columns the moved sprites actually touched would put PONG back at one call a
-frame *and* cut the bytes on the wire — but it changes the uncoloured path
+re-blitted whenever the ball's bands reach them — the computer paddle moves a
+pixel a frame at most (§4.11.1's `onTick`), so it is still in the run and
+still full width. Narrowing a run to the byte columns the moved sprites
+actually touched would put PONG back at about one call a frame *and* cut the
+bytes on the wire — but it changes the uncoloured path
 too, which is wave 5's shipped behaviour and §12.1.3's whole corpus. §13.2
 carries it with that arithmetic; it is a dirty-rectangle change wearing a
 palette's clothes, and the two should not be merged.
@@ -4531,8 +4535,8 @@ deliberately did not take:
   is defensible at all. `LOOM.WPV` compiles the same painter a second time,
   so the change is two images, not one.
 - **Narrowing a dirty run to its dirty COLUMNS** — §6.10.7 measures PONG at
-  1.955 calls a frame against 1.005, and every one of the extra 0.95 is a
-  still paddle being re-blitted because a band is full width. Column-bounded
+  2.040 calls a frame against 1.005, and every one of the extra 1.035 is a
+  paddle being re-blitted because a band is full width. Column-bounded
   runs would take it back to ~1 and cut the bytes as well, on both the
   coloured and the uncoloured path — which is precisely why it is not in this
   wave: it changes wave 5's shipped behaviour, §12.1.3's whole corpus and
@@ -4579,7 +4583,7 @@ been ~756 µs.
 | grid | scroll one row (GFX_SCROLL + 1 composed band) | 2 | ~83-90 ms |
 | canvas | frame, 1 moving sprite (one dirty run) | 1-2 | ~1-3 ms |
 | canvas | frame, 2 sprites (dirty bands) | 2-4 | ~2-5 ms |
-| canvas | frame, PONG's 3 colours, VGA (measured, 400 frames) | 1-4 (mean 1.96) | ~1-5 ms |
+| canvas | frame, PONG's 3 colours, VGA (measured, 400 frames) | 1-4 (mean 2.04) | ~1-5 ms |
 | card | switch (full-card repaint, text-heavy CGA card) | ~1/row | ~0.3-1.2 s |
 | card | first paint, fully lettered CGA 640x200 (17 rows x 80 cells) | 17 | ~1.26 s |
 | card | first paint, fully lettered Hercules 720x348 (35 rows x 90 cells) | 35 | ~2.88 s |
@@ -4612,8 +4616,8 @@ an uncoloured canvas costs, and they are what EVERY canvas costs on CGA and
 Hercules — the load path does not read the three colour attributes on a 1bpp
 adapter, so the composer runs the same code over the same runs and emits the
 same calls. What the palette adds it adds on VGA, where a colour span is a
-call: PONG measured 1.005 calls a frame uncoloured against 1.955 coloured,
-+718 µs of a 55 ms frame, 1.3%.
+call: PONG measured 1.005 calls a frame uncoloured against 2.040 coloured,
++782 µs of a 55 ms frame, 1.4%.
 
 A change that moves a row of this table upward is a regression against a
 documented number, not a neutral refactor — PERFORMANCE.md Part 5's
