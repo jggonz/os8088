@@ -3442,8 +3442,9 @@ read, no write, no directory listing, no path (§9.7).
 went to write one. SPEC.md §19.9 is the platform's rule and it is not
 negotiable per family: *an application's own state goes in
 `SYSTEM/APPDATA/` rather than beside the user's documents*, and a `.WAB`
-is a user's document — wave 7 puts them in a writable `PROJECTS/` folder
-(§13.1) precisely because that is where the user keeps things. A `.SAV`
+is a user's document — the family disk puts them in its `WEAVE/` and
+`LOOM/` folders (§11.2) precisely because that is where the user keeps
+things. A `.SAV`
 dropped next to one would be the pattern SPEC.md §19.9 exists to prevent,
 appearing in the same folder listing the user browses for apps, and on the
 common arrangement — the bundle on a data floppy, the system on the boot
@@ -4499,7 +4500,7 @@ The rest, each gated before the next begins:
 | 5 | ~~`<canvas>`/`<sprite>`~~ **SHIPPED**, above — and in `WEAVE.WSM`, a second RESIDENT segment (§1.2.2), which is the decision the wave turns on | `weavecanvas` FIRST (§12.1.3), then `weavegame`; the field run is COMMISSIONED and pending (WEAVE-PLAN §4.2) |
 | 6 | ~~Loom~~ **SHIPPED**, above — except Preview's PICTURE (§1.7.1), which needs the shared paint stack in a segment LOOM has not got | `weavepack` byte-identity on all templates and demos, in the OS |
 | 7 | ~~Preview's picture~~ **SHIPPED**, above — `LOOM.WPV` (§1.2.4), a second RESIDENT segment carrying `wflow.c` and `wpaint.c` themselves, which is the decision the wave turns on | `weaveprev`: the pane against `weavesim --render --preview`, three demo projects, both 1bpp adapters |
-| 7 | ~~distribution~~ **SHIPPED**, above — the family's disk in three geometries with `PROJECTS/`, `CATALOG.TXT` and `BUNDLES=`; SPEC.md §19.10's `WEAVE/` and `LOOM/` folders on the everything disk and the live media; the Weave disks in the release zip; and §1.4's 256KB arithmetic corrected against the machine | the release checklist, and `weaveone` |
+| 7 | ~~distribution~~ **SHIPPED**, above — the family's disk in three geometries with `WEAVE/` and `LOOM/` (§11.2 — first shipped flat, and as two folders since #132), `CATALOG.TXT` and `BUNDLES=`; SPEC.md §19.10's `WEAVE/` and `LOOM/` folders on the everything disk and the live media; the Weave disks in the release zip; and §1.4's 256KB arithmetic corrected against the machine | the release checklist, and `weaveone` |
 | 8 | ~~the canvas PALETTE~~ **SHIPPED** — §6.10.7's `paper`/`ink`/`color`, §9.2.1's amendment to the exclusion, PONG in four colours | `weavecanvas` FIRST again (six new cases and a third negative control), then the two packers on the coloured `PONG.WAB` |
 
 Wave order within a wave follows the size line: `os88pkg.py`'s resident
