@@ -4462,7 +4462,6 @@ The rest, each gated before the next begins:
 | 6 | ~~Loom~~ **SHIPPED**, above — except Preview's PICTURE (§1.7.1), which needs the shared paint stack in a segment LOOM has not got | `weavepack` byte-identity on all templates and demos, in the OS |
 | 7 | ~~Preview's picture~~ **SHIPPED**, above — `LOOM.WPV` (§1.2.4), a second RESIDENT segment carrying `wflow.c` and `wpaint.c` themselves, which is the decision the wave turns on | `weaveprev`: the pane against `weavesim --render --preview`, three demo projects, both 1bpp adapters |
 | 7 | ~~distribution~~ **SHIPPED**, above — the family's disk in three geometries with `PROJECTS/`, `CATALOG.TXT` and `BUNDLES=`; SPEC.md §19.10's `WEAVE/` and `LOOM/` folders on the everything disk and the live media; the Weave disks in the release zip; and §1.4's 256KB arithmetic corrected against the machine | the release checklist, and `weaveone` |
-
 | 8 | ~~the canvas PALETTE~~ **SHIPPED** — §6.10.7's `paper`/`ink`/`color`, §9.2.1's amendment to the exclusion, PONG in four colours | `weavecanvas` FIRST again (six new cases and a third negative control), then the two packers on the coloured `PONG.WAB` |
 
 Wave order within a wave follows the size line: `os88pkg.py`'s resident
