@@ -67,7 +67,7 @@ list with the reasoning attached.
 | `vid_tab` row | `A000,80,0,0,80,0,0,640,480` | `A000,80,0,0,80,0,0,640,`**`350`** |
 | mode set | `int 10h AX=0012h` | `int 10h AX=`**`0010h`** |
 | framebuffer clear (§39.23) | manual A000 wipe, `SCREEN_H` rows | same five register writes, `EGA_H` (350) rows |
-| Colour theme (§76.12) | DAC | Attribute Controller — **deferred; EGA gets Bright/Dark** (§7) |
+| Colour theme (§76.12) | eligible | **eligible** — `thm_set` / `cp_thm_colgrey` gate on `[vid_mono]`, not `VID_VGA` (§7) |
 
 Three `vga12.inc` sites still hold the assembly-time `SCREEN_H` (480) because
 "it only ever runs on VGA" (§39.3): `vga_vline_core`, `vga_xor_hline`, and the
@@ -152,11 +152,33 @@ rows. `VID_ROWTAB` is left at 348 on `kern_big` — bumping it to 350 to cover
 EGA's last two rows is free (same 512-byte rung) but not done here; the miss
 path on two rows is unmeasurable.
 
-## 7. Deferred
+## 7. The Colour theme — done, in a commit of its own
 
-- EGA **Colour theme** via the Attribute Controller (`int 10h AX=1002h`) — a
-  clean follow-up once the desktop is correct. Until then `thm_set` keeps its
-  `cmp [vid_kind], VID_VGA` and an EGA machine gets Bright/Dark.
+The first draft of this plan deferred the Colour system theme (§76.12) on EGA
+"via the Attribute Controller (`int 10h AX=1002h`)". **That reason was wrong.**
+The Colour theme does no palette programming at all — it is six palette
+*indices* (`CBLACK`, `CBLUE`, `CTEAL`, `CLGRAY`, `CDGRAY`, `CWHITE` =
+0/1/3/7/8/15) that `thm_set` copies into an eight-byte live block, after which
+every chrome site draws with the same `OSAPI_SET_COLOR` + `gfx_fill` /
+`font_run` path that already renders Solitaire and Cyclone at 16 colours on an
+EGA. The default 16-colour table is identical under EGA mode 10h and VGA
+mode 12h.
+
+The only thing that gated it was `thm_set`'s `cmp [vid_kind], VID_VGA` — an
+**identity test standing in for a capability**, written while VGA was the only
+colour adapter. `VID_EGA` is a colour adapter that is not a VGA, so the proxy
+broke. Both that check and `cp_thm_colgrey`'s copy of it now read
+`[vid_mono] == 0` (a four-plane adapter, VGA *or* EGA). No palette code, no
+new draw logic, `THM_COLOR` and its `thm_tab` row already existed. Landed as a
+separate commit from the geometry/detection work, with the §76.12 / §76.12.1
+contract update. §76.12.4 (the extended desktop) is unaffected: an EGA is
+never the primary of a *live* extended desktop — §39.13 pairs a colour card
+with a mono one, and a switch to an EGA primary collapses the span
+(`vid_disp_init`, §39.24) rather than sustaining it — so the primary there
+is always the VGA and `[vid_mono] = 0` means exactly what `VID_VGA` did.
+
+## 7.1 Still deferred
+
 - EGA in a **`KERN_BIG` dual-display** pair (EGA+MDA, EGA+Hercules). Note
   that `vid_dual_ok` refusing an EGA primary is not the whole story: because
   `vid_switch` moves `[vid_kind]`, the refusal has to be able to arrive with

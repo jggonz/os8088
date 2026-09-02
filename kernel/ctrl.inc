@@ -2368,10 +2368,13 @@ cp_thm_btn:
 ; SPEC.md 47 rule 1: ONE predicate drives the greying, the glyph and the
 ; refusal, so the three cannot disagree - and it is a FACT (rule 3), not a
 ; guess: SPEC.md 39.4 reduces every index outside {0,15} to black, white or
-; the 50% dither, so on a 1bpp adapter Color would BE Bright.
+; the 50% dither, so on a 1bpp adapter Color would BE Bright. The test is the
+; DEPTH ([vid_mono] = 0 is a 4-plane adapter, VGA or EGA), not the kind - it
+; was `cmp [vid_kind], VID_VGA` while VGA was the only colour adapter, and it
+; must match thm_set's own refusal (SPEC.md 76.12.1).
 %ifdef KERN_BIG
 cp_thm_colgrey:
-    cmp byte [vid_kind], VID_VGA
+    cmp byte [vid_mono], 0
     je .live
     stc
     ret

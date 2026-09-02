@@ -5274,11 +5274,16 @@ thm_set:
 %ifdef KERN_BIG
     cmp al, THM_COLOR           ; COLOUR IS A FACT ABOUT THE ADAPTER, and it is
     jne .ok                     ; refused HERE rather than at the two callers
-    cmp byte [vid_kind], VID_VGA; (SPEC.md 76.12.1) - so a settings disk
-    je .ok                      ; carried to a Hercules machine, and SPEC.md
-    xor al, al                  ; 39.11's Display page moving this one onto a
-.ok:                            ; card with no colour in it, both land on the
-%endif                          ; same refusal and both fall back to Bright.
+    cmp byte [vid_mono], 0      ; (SPEC.md 76.12.1). The test is the DEPTH, not
+    je .ok                      ; the kind: [vid_mono] = 0 is a 4-plane adapter
+    xor al, al                  ; (VGA or EGA), = 1 is 1bpp. This was
+.ok:                            ; `cmp [vid_kind], VID_VGA` while VGA was the
+%endif                          ; only colour adapter - a proxy that VID_EGA
+                                ; broke. So a settings disk carried to a
+                                ; Hercules machine, and SPEC.md 39.11's Display
+                                ; page moving this one onto a card with no
+                                ; colour in it, both land on the same refusal
+                                ; and both fall back to Bright.
                                 ; On kern_small THM_NKIND is 2, so the range
                                 ; test above has already clamped it
     mov [thm_kind], al
