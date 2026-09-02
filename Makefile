@@ -6275,9 +6275,25 @@ ALLAPPSFILES := $(APPS) $(BUILD)/frotz.o88 \
                 $(BUILD)/cword.o88 $(BUILD)/CWORD.OVL $(BUILD)/WELCOME.RTF \
                 $(BUILD)/c64.o88 $(BUILD)/C64.OVL $(BUILD)/c64-rom/C64.ROM \
                 apps/c64/README.TXT apps/c64/COPYING \
-                $(WEAVEDISK) $(WEAVELOOM) $(LOOMSRCS) \
+                $(WEAVEDISK) $(WEAVELOOM) $(LOOMRUN) $(LOOMSRCS) \
                 $(RUNCPMDISK)
 ALLAPPS := $(ALLAPPSFILES) $(RUNCPMDEPS)
+
+# LOOMRUN IS NAMED TWICE ON THIS DISK AND MUST BE PRICED TWICE. ALLAPPSARGS
+# below places the runtime's three files under WEAVE\ and again under LOOM\,
+# because WEAVE-SPEC 11.2 makes each folder a WHOLE program - a bundle Pack
+# writes beside the sources opens only beside a runtime that is there. The
+# --reserve list is what --select prices the disk against, so listing
+# $(WEAVEDISK) alone under-priced it by the second copy - 152 clusters at
+# 1.44MB - and getruncpm.py handed back an A\0 selection that os88disk.py
+# then refused as 27 clusters over. Duplicates in --reserve are summed,
+# which is the arithmetic wanted here.
+#
+# ...and one cluster more, which --folders cannot see. It prices every folder
+# directory at one cluster; LOOM asks os88disk.py for 32 directory slots
+# (ALLAPPSARGS), and 32 entries x 32 bytes is 1,024 - two clusters at
+# 1.44MB's 512. The second is the difference.
+ALLAPPSEXTRA := 1
 
 ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(BUILD)/frotz.o88) \
                $(addprefix GAMES:,$(APPS_GAMES)) \
@@ -6303,7 +6319,7 @@ ALLAPPSFOLDERS := $(words $(ALLAPPSDIRS))
 allapps: $(ALLAPPSIMG)
 
 $(ALLAPPSIMG): $(ALLAPPS) tools/os88disk.py
-	sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select 1440 --dir-slots $(RUNCPMSLOTS) --folders $(ALLAPPSFOLDERS) --reserve $(ALLAPPSFILES) | sed 's,^,RUNCPM/A/0:,')"; \
+	sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select 1440 --dir-slots $(RUNCPMSLOTS) --folders $(ALLAPPSFOLDERS) --reserve-clusters $(ALLAPPSEXTRA) --reserve $(ALLAPPSFILES) | sed 's,^,RUNCPM/A/0:,')"; \
 	[ -n "$$sel" ] || { echo "allapps: getruncpm.py --select 1440 chose nothing"; exit 1; }; \
 	python3 tools/os88disk.py -o $@ --size 1440 --deep-folders --dir-slots RUNCPM/A/0=$(RUNCPMSLOTS) --dir-slots LOOM=32 --folder DOCS $(APPDATAFOLDER) $(ALLAPPSARGS) $$sel
 	@python3 tools/os88disk.py --verify $@
@@ -6357,7 +6373,7 @@ live: $(USBIMG) $(LIVEISO)
 $(USBIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(BUILD)/kernel.bin \
            $(DRIVERS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) \
            $(ALLAPPS) tools/os88disk.py
-	sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select 1440 --dir-slots $(RUNCPMSLOTS) --folders $(ALLAPPSFOLDERS) --reserve $(ALLAPPSFILES) | sed 's,^,RUNCPM/A/0:,')"; \
+	sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select 1440 --dir-slots $(RUNCPMSLOTS) --folders $(ALLAPPSFOLDERS) --reserve-clusters $(ALLAPPSEXTRA) --reserve $(ALLAPPSFILES) | sed 's,^,RUNCPM/A/0:,')"; \
 	[ -n "$$sel" ] || { echo "usb: getruncpm.py --select 1440 chose nothing"; exit 1; }; \
 	python3 tools/os88disk.py -o $@ --hdd \
 		--mbr $(BUILD)/mbr.bin --boot $(BUILD)/boothd.bin \
