@@ -251,6 +251,7 @@ Read first: [§84 Software floating point (`apps/os88fp.inc`)](../SPEC.md#84-sof
 | `0x0388` | `OSAPI_BATCH_BEGIN` | no arguments, no answer |
 | `0x0390` | `OSAPI_BATCH_END` | ...and the other end |
 | `0x0368` | `OSAPI_REBOOT` | AL = 0 the ordinary restart / non-0 restart WITHOUT touching a disk. No answer, every register AND THE FLAGS preserved... |
+| `0x04F0` | `OSAPI_BOOT_UNIT` | AL = the BIOS drive unit to boot (1 = the second floppy). No answer, every register preserved... |
 | `0x02F8` | `OSAPI_BOOT_TICKS` | out AX = how long this machine took to boot, in SYSTEM TICKS (18.2065 Hz, 54.925 ms each): the boot sector's first instruction to the first desktop... |
 
 ## Shared includes
@@ -284,6 +285,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | CYCLONE 88 | `apps/cyclone/cyclone.asm` | §67 |
 | FPTEST | `apps/fptest/fptest.asm` |  |
 | FRACTAL | `apps/fractal/fractal.asm` | §40 |
+| FREEDOS | `apps/freedos/freedos.asm` | §86 |
 | FTPD | `apps/ftpd/ftpd.asm` | §77 |
 | HELLO | `apps/hello/hello.asm` | §27 |
 | LOOM | `apps/loom/loom.asm` | `docs/WEAVE-SPEC.md` |
@@ -396,6 +398,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 83 | Text input for packages (`apps/os88line.inc`, `apps/os88text.inc`) |
 | 84 | Software floating point (`apps/os88fp.inc`) |
 | 85 | TANK ATTACK — a wireframe tank duel in a foreign mode (`apps/tank/`) |
+| 86 | FreeDOS — booting a foreign volume |
 
 ## docs/
 

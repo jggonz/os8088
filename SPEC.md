@@ -83070,3 +83070,315 @@ the `VID_*` kind `fsx_caps` hands back in DL, which `tk_adapter` already asks
 for and re-asks on a resize, so a window dragged to the other card of a
 two-card machine (§39.18.2) re-answers it rather than carrying VGA's palette
 onto a Hercules.
+
+## 86. FreeDOS — booting a foreign volume
+
+os8088 can hand the whole machine to FreeDOS, which lives on a floppy of its
+own in the second drive. This section is the contract for that: the volume, the
+handover, the way back, and — because it is the first question everyone asks —
+why DOS does not run in a window.
+
+**DOS and os8088 are two BOOTS of one machine, not two programs.** That single
+sentence is the design. Everything below follows from it, and §86.7 is why
+there was never a second option.
+
+### 86.1 The DOS volume
+
+A FAT12 floppy built by `tools/os88disk.py --dos`, carrying FreeDOS's own boot
+sector and its own `KERNEL.SYS`. It is not an os8088 volume and nothing on it
+is in os8088's format.
+
+FreeDOS cannot be a package. `APP_MAX_SIZE` is 0xF000 — 60KB for image plus bss
+— and `KERNEL.SYS` and `COMMAND.COM` are about 158KB between them. So it gets a
+volume, and the package that starts it (§86.2) carries none of it.
+
+`--dos` changes exactly two things, and both are about the disk not being ours:
+
+- **Attributes.** `sys_attr` normally stamps every file on a `--boot` disk
+  `RDONLY|ARCH`, and anything ending `DRV` `RDONLY|HIDDEN|SYS`. Both are wrong
+  here: a read-only `COMMAND.COM` is a DOS installation nobody can `SYS` over,
+  and the `.DRV` rule would hide a DOS device driver from the `DIR` meant to
+  find it. `--dos` takes the data-disk path — plain `ARCH` — for everything.
+  The one entry that still wants `RDONLY|HIDDEN|SYS` is `KERNEL.SYS`, and it
+  never goes through `sys_attr`: `--kernel` stamps it at its own root slot.
+- **The label**, `FREEDOS`, overridable with `--label`.
+
+The layout needs no other special case, and that is worth stating because it
+looks like it should. `--kernel` already lays its blob down **from cluster 2,
+contiguously, never scrambled** so that os8088's own boot sector can find it
+with a raw LBA read — and the same placement satisfies FreeDOS, which does not
+need it: FreeDOS's boot sector scans the root directory for an 11-byte name
+match and then walks the real FAT12 chain. It would cope with fragmentation.
+It gets contiguity anyway.
+
+`os88disk.py` also accepts FreeDOS's boot sector unmodified. It requires a boot
+blob to open `EB 3C 90` and FreeDOS's does; it then rewrites the BPB in the
+hole between that jump and the loader body, and leaves bytes 28–37 and 62–509
+exactly as assembled. The FreeDOS loader survives untouched.
+
+**One patch is applied to the boot sector**, by `tools/build-freedos.sh`, and
+it is not cosmetic. FreeDOS probes for INT 13h extensions (`AH=41h`) unless the
+boot unit is 0 — and our boot unit is 1 (§86.4). On an XT that probe goes to a
+ROM written before the call existed. It *should* return CF=1 and fall through.
+A boot sector is not the place to find out, so `test dl,dl` at offset 0x17B
+becomes `xor dl,dl`, forcing the following `jz` and skipping the probe. This is
+precisely what `SYS /FORCE:CHS` does. It is safe with `DL=1` because the read
+path reloads the unit from `[drive]` before every INT 13h. The build asserts
+the original two bytes before poking them: if upstream moves that instruction,
+a blind patch would turn a working sector into a plausible-looking broken one.
+
+The root file set:
+
+| file | what it is |
+|---|---|
+| `KERNEL.SYS` | the 8086 FreeDOS kernel, via `--kernel` |
+| `COMMAND.COM` | FreeCOM |
+| `FDCONFIG.SYS` | tried before `CONFIG.SYS`, so it is the one to edit |
+| `AUTOEXEC.BAT` | sets the path and says how to get out |
+| `OS8088.COM` | the way back (§86.5) |
+
+`FDCONFIG.SYS` is tuned for an 8088 and every line is either buying back low
+memory or staying clear of a 286. `BUFFERS=5` rather than 20 saves about 8KB;
+`STACKS=0` saves 2KB more. **`DOS=HIGH`, `HIMEM.SYS` and `FDXMS.SYS` must never
+appear**: there is no HMA and no XMS on this machine, so everything DOS
+allocates is unconditionally low and these are the only levers there are.
+
+FreeCOM is an `XMS_Swap` build, which on a machine with no XMS never swaps —
+all ~86KB of it stays resident. On a 640KB machine that still leaves roughly
+510KB free, which is why `xt-dos` is a 640KB `ibmxt86` and not the 256KB `xt`.
+At 256KB the free space is about 130KB: a prompt, and nothing to run at it.
+
+### 86.2 The FREEDOS package
+
+A normal v3 package, `apps/freedos/freedos.asm`, shipped in the root of the
+os8088 system disk — not the apps disk, because in a `*-dos` configuration the
+second drive holds DOS and the apps disk is not in the machine.
+
+It carries none of FreeDOS (§86.1). It is a window, a warning and one call.
+
+The warning is the point of it. Starting FreeDOS ends the os8088 session:
+open windows, the clipboard and anything unsaved are gone, and the way back is
+a reboot. That is not a surprise to spring on someone who double-clicked an
+icon to see what it was, so the window says it plainly and needs a second,
+deliberate click to proceed. Cancel is the safe default.
+
+**The Start handler POSTS the handover; it does not perform it.** This is not
+a style preference, it is the same constraint that produced `ui_reboot_post`
+in §20.10, and for the same reason: a package callback runs on the UI task
+**with the gfx lock already held**, while the handover path takes that lock
+itself and, before it, waits for every driver's worker to die — a wait that
+yields to a task which may want the lock. Called inline from a callback it is a
+deadlock with the machine half torn down. So the slot sets a byte and returns,
+and `ui_task` spends it at the top of its next pass, where nothing is held.
+
+The slot takes the BIOS unit to boot rather than assuming 1 (§86.4).
+
+### 86.3 Teardown and handover
+
+The handover reuses `ui_cmd_reboot` (§20.10) verbatim and replaces only its
+last instruction. That is deliberate: the teardown sequence is load-bearing,
+its ordering constraints are subtle and already documented at the routine, and
+a second copy of it would be a second copy to get wrong.
+
+| # | step | what it restores |
+|---|---|---|
+| 1 | `cp_flush_close` | settings written to disk while there is still a screen for a failure to happen on |
+| 2 | `drv_shutdown` | every loaded driver: IRQ vectors, 8259 masks, auto-init DMA. Before `sched_unhook`, which the unload's wait needs alive, and before the lock, because that wait yields |
+| 3 | `gfx_lock` | never released — the GUI is done |
+| 4 | `vid_text` | back to a text mode, per adapter |
+| 5 | `sched_unhook` | int 08h/0Ch, the mouse, the speaker gate, and the PIT back to mode 3 / divisor 65536 |
+| 6 | **the handover** | §86.3's stub — new |
+| 7 | `int 19h` | reached only when no unit was posted, or the handover refused |
+
+**Step 6 must first repair the diskette parameter table.** `dsk_dpt_init`
+repoints `0000:0078` at `KERNEL_SEG:dsk_dpt` and saves nothing, and `dsk_xfer`
+rewrites that table's EOT field before every transfer. Today that is harmless,
+because `int 19h` boots our own disk and our own boot sector re-establishes the
+table immediately. **With FreeDOS it is fatal:** FreeDOS's boot sector loads a
+70KB `KERNEL.SYS` at `0060:0000` and therefore overwrites `dsk_dpt` with kernel
+bytes *while the BIOS is still reading through it as the DPT*. The load fails
+partway, or succeeds with corrupt geometry, and it looks exactly like bad
+media. The repair is nearly free because the repo already owns an address for
+this: `boot/boot.asm` defines `DPT_AT` at `0x0580`, above the BIOS data area
+and below anything the kernel or heap can claim, and already copies the table
+there at boot. Copy the live table back there, then point the vector at it.
+FreeDOS installs its own table soon after, so this only has to survive the
+boot-sector load.
+
+**Step 6 must not run where it is standing.** A boot sector has to be entered
+at `0000:7C00`, which is `KERNEL_SEG:0x7600` — inside os8088's own `.text`.
+Whether the handover routine itself happens to sit in that range is a
+link-order accident, so the code that does the reading is copied to
+`0000:0500` and jumped to. Anyone who later "simplifies" this by reading in
+place will find it works until a build shifts by 512 bytes.
+
+The stub resets the controller, reads unit 1's boot sector to `0000:7C00`,
+checks for `AA55`, and enters it with `DL` set to the unit. A drive that is
+empty or unformatted falls through to `int 19h` instead — deliberately benign,
+so a missing DOS disk restarts os8088 rather than jumping into rubble.
+
+### 86.4 The boot drive
+
+**The DOS floppy is the second drive — BIOS unit 1, `B:` — and FreeDOS treats
+it as its boot drive with no patching at all.** `DL` at entry to the boot
+sector is the entire protocol: the boot sector stores it, hands it to the
+kernel, and the kernel makes it the boot drive. Boot drive, current drive, the
+`FDCONFIG.SYS` search, `COMMAND.COM`'s path, `%COMSPEC%` and `AUTOEXEC.BAT` all
+land on `B:` as a consequence.
+
+That is the whole mechanism, and the temptations around it are all worse:
+
+- **Do not swap the BIOS drive mapping.** A real XT BIOS has no remap service.
+- **Do not install an INT 13h shim.** DOS installs its own and yours is gone.
+
+The unit is a parameter, not a constant, so a DOS volume in `A:` (unit 0) or a
+future hard disk (unit 0x80) costs nothing later.
+
+**Two drives must be present.** With one, DOS maps `A:` and `B:` onto the same
+physical unit and every access to the second letter raises *"Insert diskette
+for drive B: / Press any key"*. That is not a bug to fix, it is what a
+single-floppy machine does — but a `*-dos` VM config that forgets the second
+drive produces exactly that, and it reads like the port being broken.
+
+### 86.5 Getting back
+
+`OS8088.COM`, on the DOS disk. It sets the BIOS reset flag at `0040:0072` to
+`1234h` and jumps to `FFFF:0000`.
+
+**It is not called `EXIT.COM`.** That is the obvious name and it does not work:
+`EXIT` is a FreeCOM *internal* command, an internal always shadows a `.COM` of
+the same name, and for a primary shell (`SHELL=... /P`) `EXIT` is defined to do
+nothing. So `EXIT` at the prompt silently returns to the prompt, and the user
+concludes the machine is stuck. Measured, not reasoned about.
+
+**Why a warm boot and not `int 19h`.** `int 19h` is faster and FreeDOS hooks it
+to restore the vectors it saved. But **`int 19h` resets no hardware** — §51.2
+already says so, which is why `ui_cmd_reboot` unhooks every driver before
+calling it. os8088 can rely on that because os8088 cleans up after itself. **A
+DOS game does not.** It leaves the PIT at its own tick rate, IRQs masked in the
+8259, the CRTC in a mode of its own devising, and with a sound card an
+auto-init DMA transfer still running. Bootstrapping from there hands os8088 a
+machine with, variously, no timer tick — a scheduler that never runs — no
+keyboard, or a display it cannot probe.
+
+`1234h` at `0040:0072` re-runs POST, which reinitialises the PIT, both 8259s,
+the DMA controller, the keyboard controller and the video card; `1234h`
+specifically is the *warm* value, which skips the memory test. The cost over
+`int 19h` is a second or two. What it buys is a return that works after **any**
+DOS program rather than after well-behaved ones.
+
+POST then boots unit 0, the os8088 disk, because the DOS floppy is unit 1.
+Ctrl-Alt-Del does the same thing and is the fallback when a DOS program has
+hung too hard to type at. **Nothing survives the switch** — no open windows, no
+clipboard, no unsaved work. The package says so before it starts (§86.2).
+
+### 86.6 Building the payload
+
+`tools/build-freedos.sh`, run by `make dos`. **On demand only, never `make
+all`**: the first run fetches a ~148MB toolchain, and a default target that
+needs the network is a default target that fails on a train.
+
+It builds from the sibling `../kernel` and `../freecom` checkouts into *copies*
+under `build/freedos/` — those trees are somebody else's repository, and a
+patched working tree there is a trap for whoever next types `git pull` in them.
+
+`tools/freedos/README.md` is the account of the two modifications it makes and
+why both are silent when wrong. The load-bearing facts:
+
+- Open Watcom V2's snapshot ships **native Apple-Silicon host binaries** in
+  `armo64/`. No Docker, no Rosetta, no `ia16-elf-gcc`, no `upx`. This is worth
+  writing down because every account of building FreeDOS points at Linux —
+  its own CI uses the Linux binaries — and the macOS host build is easy to
+  conclude does not exist.
+- `XCPU=86`, because the target is an 8088 and CI defaults to 386. The kernel
+  comes out as `bin/kwc8616.sys`, **not** `kernl086.sys`, which is the name the
+  ibiblio *release* uses.
+- The snapshot URL is a **rolling tag**. The script records the hash it was
+  proven against and warns rather than fails on a mismatch — hard-failing would
+  break the build every time upstream ships. If DOS starts misbehaving after a
+  toolchain refresh, that warning is the first suspect.
+
+### 86.7 Why DOS does not run in a window
+
+It cannot, on this machine, and the reason is architectural rather than a
+matter of effort.
+
+**The 8088 has one privilege level, no V86 mode, no MMU, no segment limits and
+no I/O trap.** The only interception mechanism in the machine is replacing an
+IVT entry, which catches `int n` and nothing else. It does not catch
+`mov [0xB800:di], ax`. It does not catch `out 0x3C4, al`. It does not catch a
+program that overwrites the IVT to install its own `int 08h`, which is most
+games with sound or smooth motion.
+
+A hook layer over `int 21h` and `int 10h` would genuinely work for programs
+that do all their I/O through those calls — `DIR`, `TYPE`, text filters. It
+would fail for everything that writes video memory directly, which is
+essentially every graphical game and every full-screen TUI. And it would fail
+*silently*, with a corrupted screen or a hung machine rather than an error,
+because there is no mechanism that could detect the write and refuse it.
+
+There is also a collision that settles it independently: FreeDOS's boot sector
+loads `KERNEL.SYS` at segment `0x0060`, which is `KERNEL_SEG` — the same
+paragraph os8088 occupies, both having picked the first paragraph above the
+BIOS data area. os8088 cannot stay resident underneath DOS even in principle.
+
+So the machine is handed over whole. That is not a compromise forced on the
+feature; on this CPU it is the only arrangement in which a real DOS program
+behaves the way it was written to behave.
+
+`tests/chainb/chainb.asm` is the capability gate for the part of this that is
+not os8088 machinery: a 512-byte boot sector that chain-boots unit 1 and does
+nothing else, so that "can this machine boot the disk in B:, and does FreeDOS
+come up on B:" is answered with nothing else in the frame. It is deliberately
+the same code as the kernel's handover stub. Keep the two in step.
+
+### 86.8 The hard-disk machines, and the plan they are for
+
+Two 86Box machines and one image put §52.10's installed machine and the DOS
+floppy in one box, which nothing in `vm/` had done before — no config in the
+tree attached a hard disk at all until these; §52.10 was verified under QEMU,
+on MartyPC's XT-IDE machines and in the field. They exist for
+**docs/FREEDOS-PLAN.md**: hibernation to the hard disk (its wave 1) and
+FreeDOS *on* the hard disk as a guest that os8088's own loader starts (its
+wave 2), both of which rest on a machine that boots from C: with DOS beside
+it. That document is the plan; this section is what has shipped of it.
+
+- **`vm/xt-dos-hdd`** is `xt-dos` (§86.4) with `hdc_1 = xtide` — the XTIDE
+  Universal BIOS for the XT, whose `int 13h` is §52.1's rung 0 on an 8088,
+  the one rung that CPU has — and **`vm/386-dos-hdd`** is `386-dos` with
+  `hdc_1 = xtide_at`. Both carry a drive of **63 sectors × 16 heads × 65
+  cylinders** on IDE channel 0:0, backed by `build/dos-hdd.img`.
+- **`build/dos-hdd.img`** (`make dos-hdd`, on demand with `make dos` because
+  it carries the DOS payload) is §80.1's live image made with the system
+  disk's payload instead of the everything-disk's, plus FreeDOS laid out for
+  a hard disk: `DOS\KERNEL.SYS`, `DOS\COMMAND.COM` and `DOS\OS8088.COM` in a
+  folder, and `dos/hd/`'s editions of `FDCONFIG.SYS` and `AUTOEXEC.BAT` in
+  the root, where FreeDOS looks for them. **The folder is not a preference**:
+  FreeDOS's kernel file is called `KERNEL.SYS`, and so is os8088's, and
+  `boot/boothd.asm` loads whichever `KERNEL.SYS` is first in the root
+  (§52.10.2). The two can share a volume; they cannot share a directory.
+- **The geometry is the live image's, and the config's three numbers must
+  match it.** `boot/boothd.asm` reads its geometry from the BPB
+  (§52.10.2), and an emulated drive told a different shape reads the kernel
+  from sectors nothing wrote — docs/FIELD-NOTES.md 33's failure, reproduced
+  on purpose by editing one number. The keys themselves were established by
+  docs/TESTING.md's method: 86Box 6.0 rewrote `hdc =` as `hdc_1 =`, kept
+  the parameters and the channel, and added `hdd_01_speed`; the files carry
+  what it wrote.
+- **`HDBOOT=1`** empties drive A: for the launch, so the ROM boots C: and
+  the desktop comes up from the hard disk with the DOS floppy still in B:;
+  without it the os8088 floppy is in A: and boots first, which is the
+  install path (§52.10.4) and the floppy-handover path (§86.3). The floppy
+  line is deleted and re-inserted rather than blanked, because 86Box drops
+  an empty `fdd_01_fn` on exit and the next launch would find nothing to
+  edit.
+
+Verified on the XT: the loading screen from the floppy with the XTIDE ROM
+in the machine, and the desktop from the hard disk with no floppy in A:,
+through `make xt-dos-hdd HDBOOT=1` itself. The 386 stops in its BIOS setup
+on the first boot of a fresh `nvr/`, as every AT-class machine here does —
+EXIT FOR BOOT once and it is written (CLAUDE.md's `RESET=` note) — and was
+not driven past that screen. Not verified: the handover end to end on
+86Box, which needs a person at the window (docs/TESTING.md). What the DOS on this disk cannot yet do — be
+started from C:, and hand the session back — is the plan's wave 2, and the
+`DOS\` folder is where it will already be.

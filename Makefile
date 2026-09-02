@@ -16,6 +16,9 @@ IMG360 := $(BUILD)/os8088-360.img
 APPSIMG := $(BUILD)/apps.img
 APPSIMG720 := $(BUILD)/apps720.img
 APPSIMG360 := $(BUILD)/apps360.img
+# The FreeDOS floppy (SPEC.md 86.1). No 720KB variant: nothing uses one.
+DOSIMG := $(BUILD)/dos.img
+DOSIMG360 := $(BUILD)/dos360.img
 # ...and the MEDIA disk, which exists at 360KB ALONE (SPEC.md 24.4): the third
 # shipped disk of that geometry, carrying BEVERLY.MOD, which is 114 of that
 # disk's 354 clusters and which the apps disk has run out of room for. There
@@ -66,6 +69,22 @@ VMMULTI := $(CURDIR)/vm/xt-multimon
 VM286 := $(CURDIR)/vm/286
 VM386SX := $(CURDIR)/vm/386sx
 VM386DX := $(CURDIR)/vm/386dx
+# The two DOS machines (SPEC.md 86.4): the same 8088 and 386DX, with the
+# FreeDOS floppy in the SECOND drive in place of the apps disk. The XT one is
+# `ibmxt86` at 640KB and NOT the 256KB `ibmxt` of `make xt` - FreeDOS plus
+# FreeCOM leave about 130KB free on a 256KB machine, which is a prompt with
+# nothing to run at it. Both drives must be populated or DOS maps A: and B:
+# onto one unit and prompts for a disk swap (SPEC.md 86.4).
+VMXTDOS := $(CURDIR)/vm/xt-dos
+VM386DOS := $(CURDIR)/vm/386-dos
+# ...and the same two machines with a HARD DISK in them (SPEC.md 86.8): the
+# pre-installed build/dos-hdd.img on an XTIDE controller - the XT's rung-0
+# int 13h comes from the XTIDE Universal BIOS ROM, the 386's from its AT
+# flavour - plus both floppies. This is the machine docs/FREEDOS-PLAN.md's
+# hibernation and FreeDOS-on-C: waves are tested on, and today it is where
+# SPEC.md 52.10's installed machine meets the DOS floppy in B:.
+VMXTDOSHD := $(CURDIR)/vm/xt-dos-hdd
+VM386DOSHD := $(CURDIR)/vm/386-dos-hdd
 # ...and the SAME 386DX with 4MB in it, for the store above 1MB (SPEC.md 41).
 # It is vm/386dx with mem_size doubled and nothing else, so a difference
 # between the two is a difference about MEMORY. SPEC.md 41.12.5 is the report
@@ -1380,7 +1399,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
 
 .PHONY: small kernsplit all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
         xt-hercules xt-ega xt-multimon 286 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 \
-        286-sound 386-sound 486 pentium \
+        286-sound 386-sound 486 pentium dos xt-dos 386-dos dos-hdd xt-dos-hdd 386-dos-hdd \
         bench field combo combo144 combo720 stackprobe trklog trkscrl npbench clicktest marty \
         comscan lptlink calcref \
         fonts fontsheets fontlist \
@@ -1876,6 +1895,11 @@ DRIVERS += $(BUILD)/saver.drv
 DRIVERS += $(KMODS)
 SYSAPPS := $(BUILD)/taskmgr.o88
 SYSAPPSARGS := $(addprefix SYSTEM:,$(SYSAPPS))
+# ...and the packages that ship in the ROOT of the system disk rather than
+# in SYSTEM/. FREEDOS is here and not on the apps disk because in a *-dos
+# configuration the second drive holds FreeDOS and the apps disk is not in
+# the machine at all (SPEC.md 86.2).
+SYSPKGS := $(BUILD)/freedos.o88
 
 # --- the CORE PACKAGES (SPEC.md 24.3) ----------------------------------------
 # Six programs that ride the SYSTEM disk as well as the apps disk, each in
@@ -2420,10 +2444,10 @@ $(BUILD)/os88net.com: drivers/net/os88net.asm drivers/net/lplink.inc \
 	$(NASM) -f bin -w+error -I drivers/net/ -I drivers/ether/ -o $@ $<
 	@echo "os88net.com: $(call FILESIZE,$@) bytes - the DOS end, for the FAR machine"
 
-$(IMG): $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) tools/os88disk.py
+$(IMG): $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS) $(SYSPKGS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(BUILD)/boot.bin --kernel $(BUILD)/kernel.bin \
-		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS) $(SYSPKGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(APPDATAFOLDER)
 
 # The 720KB 3.5" DD disk (SPEC.md 19). It is the geometry the machines
@@ -2435,10 +2459,10 @@ $(IMG): $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS) 
 #
 # Same boot sector as the 360KB disk (see boot360.bin above): 9 spt, 2 heads,
 # 80 cylinders instead of 40, and the boot sector never counts cylinders.
-$(IMG720): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) tools/os88disk.py
+$(IMG720): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS) $(SYSPKGS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 \
 		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin \
-		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS) $(SYSPKGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(APPDATAFOLDER)
 
 # ETHERTEST - the system disk with a SYSTEM.CFG that already asks for the
@@ -2572,10 +2596,10 @@ $(BUILD)/ftpapps.img: $(FTPDFILES) tools/os88disk.py
 		--deep-folders \
 		--folder SYSTEM/APPDATA
 
-$(IMG360): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) tools/os88disk.py
+$(IMG360): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS) $(SYSPKGS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin \
-		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS) $(SYSPKGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(APPDATAFOLDER)
 
 # FMTEST: the AdLib gate package (SPEC.md 34.2/51.4). NEVER on the shipped
@@ -2749,6 +2773,14 @@ $(BUILD)/hello.bin: apps/hello/hello.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/hello.o88: $(BUILD)/hello.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/hello.bin -o $@
 
+# FREEDOS, the package that hands the machine to FreeDOS (SPEC.md 86.2). It
+# carries none of FreeDOS - that is `make dos` and a floppy of its own.
+$(BUILD)/freedos.bin: apps/freedos/freedos.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/freedos/freedos.asm
+	@echo "freedos: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/freedos.o88: $(BUILD)/freedos.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/freedos.bin -o $@
 # WIREFRAME (SPEC.md 78): a rotating solid drawn with nothing but
 # OSAPI_GFX_LINE, and a frame-rate readout, so 5.6.4.1's walk can be SEEN
 # rather than only measured. wiresin.inc is a generated constant table and is
@@ -6846,6 +6878,72 @@ test-snd: $(IMG) $(TESTAPPS)
 # perl -pi behaves identically on GNU and BSD/macOS, unlike sed -i.
 UNPROTECT = perl -pi -e 's{^fdd_01_fn = wp://}{fdd_01_fn = }; s{^fdd_02_fn = wp://}{fdd_02_fn = }'
 
+# --- the FreeDOS disk (ON DEMAND: `make dos`) --------------------------------
+# NOT a dependency of `all`, deliberately: the first build fetches a ~148MB
+# toolchain, and a default target that needs the network is a default target
+# that fails on a train. tools/freedos/README.md is the account of what that
+# build does and why; SPEC.md 86.6 is the contract.
+#
+# KERNEL.SYS goes in through --kernel rather than as a positional, which lays
+# it down from cluster 2 and contiguously (SPEC.md 86.1). --dos stops the
+# system-disk attribute rules applying to somebody else's operating system.
+DOSDIR    := $(BUILD)/dos
+DOSKERNEL := $(DOSDIR)/KERNEL.SYS
+DOSBOOT   := $(DOSDIR)/FAT12CHS.BIN
+DOSFILES  := $(DOSDIR)/COMMAND.COM $(DOSDIR)/OS8088.COM \
+             dos/fdconfig.sys dos/autoexec.bat
+DOSDISK    = python3 tools/os88disk.py --dos --boot $(DOSBOOT) \
+             --kernel $(DOSKERNEL) $(DOSFILES)
+
+dos: $(DOSIMG) $(DOSIMG360)
+
+# THE PRE-INSTALLED HARD DISK (SPEC.md 86.8): build/dos-hdd.img is SPEC.md
+# 52.10's installed machine made by the build, exactly as `make usb` makes the
+# live image - boot/mbr.asm, boot/boothd.asm, KERNEL.SYS first and contiguous,
+# the system disk's payload - and then FreeDOS beside it: the DOS binaries in
+# DOS/ (FreeDOS's KERNEL.SYS cannot share a root with os8088's, which is the
+# name the hard-disk boot sector loads), and the hard-disk editions of
+# FDCONFIG.SYS and AUTOEXEC.BAT in the root, where FreeDOS looks for them
+# (dos/hd/). The geometry is the live image's, 63/16/65, and vm/*-dos-hdd's
+# hdd_01_parameters MUST say the same three numbers: boot/boothd.asm reads
+# its geometry from the BPB, and an emulated drive told a different shape
+# reads the kernel from sectors nothing wrote (docs/FIELD-NOTES.md 33).
+#
+# On demand with `make dos` (it carries the DOS payload, so it needs the
+# fetch). Nothing here is hibernation yet: that is docs/FREEDOS-PLAN.md wave
+# 1, and the HIBERNAT.SYS it preallocates will be created by this rule when
+# it exists.
+DOSHDDIMG := $(BUILD)/dos-hdd.img
+DOSHDARGS := DOS:$(DOSDIR)/KERNEL.SYS DOS:$(DOSDIR)/COMMAND.COM \
+             DOS:$(DOSDIR)/OS8088.COM dos/hd/fdconfig.sys dos/hd/autoexec.bat
+
+dos-hdd: $(DOSHDDIMG)
+
+$(DOSHDDIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(BUILD)/kernel.bin \
+              $(DRIVERS) $(SYSAPPS) $(COREAPPS) $(SYSPKGS) $(SYSDOC) $(SYSLOGO) \
+              $(FACES) $(FACELIC) $(DOSKERNEL) $(DOSFILES) dos/hd/fdconfig.sys \
+              dos/hd/autoexec.bat tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --hdd \
+		--mbr $(BUILD)/mbr.bin --boot $(BUILD)/boothd.bin \
+		--kernel $(BUILD)/kernel.bin $(APPDATAFOLDER) \
+		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS) $(SYSPKGS) $(SYSDOC) \
+		$(SYSLOGOARG) $(FACESARG) $(DOSHDARGS)
+	@python3 tools/os88disk.py --verify-hdd $@
+	@echo "dos-hdd: $@ - os8088 installed, FreeDOS in DOS/ (SPEC.md 86.8)"
+
+$(DOSKERNEL) $(DOSBOOT) $(DOSDIR)/COMMAND.COM: tools/build-freedos.sh
+	bash tools/build-freedos.sh
+
+# The way back out of DOS (SPEC.md 86.5). Not EXIT.COM - see that section.
+$(DOSDIR)/OS8088.COM: dos/os8088.asm $(DOSKERNEL)
+	$(NASM) -f bin -o $@ $<
+
+$(DOSIMG): $(DOSBOOT) $(DOSKERNEL) $(DOSFILES) tools/os88disk.py
+	$(DOSDISK) -o $@ --size 1440
+
+$(DOSIMG360): $(DOSBOOT) $(DOSKERNEL) $(DOSFILES) tools/os88disk.py
+	$(DOSDISK) -o $@ --size 360
+
 # Boot the 360KB image on emulated period hardware in 86Box.
 xt: $(IMG360) $(APPSIMG360)
 	@$(UNPROTECT) $(VM)/86box.cfg
@@ -6958,6 +7056,43 @@ xt-multimon: $(IMG360) $(APPSIMG360)
 386: $(IMG) $(APPSIMG)
 	@$(UNPROTECT) $(VM386DX)/86box.cfg
 	$(BOX) -P $(VM386DX) -N
+
+# The two DOS machines: os8088 in drive A, FreeDOS in drive B (SPEC.md 86).
+# The apps disk is not in these - there are two floppy drives and DOS wants
+# the second one. Under QEMU the same arrangement is `make test
+# TESTAPPS=build/dos360.img`, which needs no target of its own and is the one
+# to use while developing: 86Box has no automation socket.
+xt-dos: $(IMG360) $(DOSIMG360)
+	@$(UNPROTECT) $(VMXTDOS)/86box.cfg
+	$(BOX) -P $(VMXTDOS) -N
+
+386-dos: $(IMG) $(DOSIMG)
+	@$(UNPROTECT) $(VM386DOS)/86box.cfg
+	$(BOX) -P $(VM386DOS) -N
+
+# ...and the same two with the pre-installed hard disk in them (SPEC.md 86.8).
+# Drive A holds the os8088 floppy by default, so the machine boots the floppy
+# and the disk is there to be mounted (Control Panel -> Drivers -> HDD, then
+# the Hard Drive page) or installed over; `HDBOOT=1` EMPTIES drive A, and
+# then the ROM boots C: and the desktop comes up from the hard disk with
+# FreeDOS still in B:. The floppy line is deleted and re-inserted rather than
+# blanked because 86Box drops an empty fdd_01_fn on exit and the next plain
+# launch would find no line to edit. 86Box's own Media menu swaps either
+# floppy at run time; this knob is for the launch.
+DOSHD_EJECT = perl -0pi -e 's{^fdd_01_fn = [^\n]*\n}{}m'
+DOSHD_INSERT = perl -0pi -e 's{^(\[Floppy and CD-ROM drives\]\n)}{$$1fdd_01_fn = ../../build/$(1)\n}m'
+
+xt-dos-hdd: $(IMG360) $(DOSIMG360) $(DOSHDDIMG)
+	@$(UNPROTECT) $(VMXTDOSHD)/86box.cfg
+	@$(DOSHD_EJECT) $(VMXTDOSHD)/86box.cfg
+	@if [ -z "$(HDBOOT)" ]; then $(call DOSHD_INSERT,os8088-360.img) $(VMXTDOSHD)/86box.cfg; fi
+	$(BOX) -P $(VMXTDOSHD) -N
+
+386-dos-hdd: $(IMG) $(DOSIMG) $(DOSHDDIMG)
+	@$(UNPROTECT) $(VM386DOSHD)/86box.cfg
+	@$(DOSHD_EJECT) $(VM386DOSHD)/86box.cfg
+	@if [ -z "$(HDBOOT)" ]; then $(call DOSHD_INSERT,os8088.img) $(VM386DOSHD)/86box.cfg; fi
+	$(BOX) -P $(VM386DOSHD) -N
 
 # The 4MB 386. Task Manager, then CLICK THE CONTENT ONCE for the Memory view -
 # the XMS line and its bar are there and not on the process page. A working

@@ -116,6 +116,7 @@ ALIAS = {
     "OSAPI_BATCH_BEGIN":  "dsk_batch_begin",
     "OSAPI_BATCH_END":    "dsk_batch_end",
     "OSAPI_REBOOT":       "ui_reboot_post",
+    "OSAPI_BOOT_UNIT":    "ui_boot_post",
     # ...and SPEC.md 75.2's, where the divergence IS the contract: the slot
     # does not close the window, it REQUESTS a close that the next UI pass
     # spends - because the caller is standing in the segment the close is

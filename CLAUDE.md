@@ -70,6 +70,7 @@ make test     # boot headless, QMP socket at build/qmp.sock — this is how you 
 make test-snd # ...plus PC speaker capture to build/snd.wav (verify: tools/sndcheck.py)
 make debug    # boot halted, waiting for gdb on :1234
 make bench    # build the tests/ apps — ON DEMAND ONLY; nothing under tests/ ships
+make dos      # build the FreeDOS floppy — ON DEMAND ONLY; fetches a ~148MB toolchain
 make test-fast   # THE REGRESSION SUITE (docs/TESTING.md, tools/os88test.py,
 make test-full   #   tests/suite.py). Three tiers, each with an ENFORCED
 make test-soak   #   wall-clock budget — the runner FAILS a tier that
@@ -243,7 +244,8 @@ exactly like the feature being broken.
 `286-sound`,
 `386sx`, `386`, `386-sound`, `486`, `pentium`, `xt-z`, `386-z`, `xt-word`,
 `386-word`, `386-c-word`, `xt-runcpm`, `286-runcpm`, `386-runcpm`, `xt-c64`,
-`286-c64`, `386-c64`, `xt-weave`, `386-weave`, `xt-weave-256`;
+`286-c64`, `386-c64`, `xt-weave`, `386-weave`, `xt-weave-256`, `xt-dos`,
+`386-dos`, `xt-dos-hdd`, `386-dos-hdd`;
 plus `marty` (MartyPC). `xt-multimon` is the
 **two-card** XT — a CGA and a Hercules, a monitor window each — and the only
 86Box machine that can show §39.12–§39.19's extended desktop; it boots Single,
@@ -282,6 +284,16 @@ tests that drive it — `wireflick`, `wirefps`, `uilat` — default to that disk
 `make allapps` collapses all of them onto one 1.44MB floppy (§19.10), and
 `make live` puts that same payload plus the system on the bootable live
 USB image and live CD (§80).
+
+`xt-dos` and `386-dos` are the same 8088 and 386DX with the **FreeDOS
+floppy in the second drive** in place of the apps disk (§86) — under QEMU
+that arrangement is `make test TESTAPPS=build/dos360.img`, which needs no
+target of its own.
+`xt-dos-hdd` and `386-dos-hdd` add a **hard disk on an XTIDE controller**
+carrying `build/dos-hdd.img` (`make dos-hdd`): os8088 installed, FreeDOS in
+`DOS\` beside it (§86.8) — the machines docs/FREEDOS-PLAN.md's hibernation
+and FreeDOS-on-C: waves are built against. `HDBOOT=1` empties A: so C:
+boots. The config's `hdd_01_parameters` must equal the image's 63/16/65.
 
 **`RESET=` clears a machine's non-volatile state on the way in**, and it
 reaches every one of those targets because they all launch through the same

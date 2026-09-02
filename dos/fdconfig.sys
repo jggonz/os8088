@@ -1,0 +1,14 @@
+; FreeDOS configuration for the os8088 DOS floppy (SPEC.md 86.1).
+; Tuned for an 8088: every line here is either buying back low memory or
+; staying away from something that needs a 286.
+;
+; NEVER add DOS=HIGH or DEVICE=HIMEM.SYS/FDXMS.SYS. Both need a 286 or
+; better - there is no HMA and no XMS on this machine, so everything DOS
+; allocates is unconditionally low and the tuning below is the only lever.
+
+FILES=10
+BUFFERS=5
+STACKS=0
+LASTDRIVE=C
+SWITCHES=/N
+SHELL=B:\COMMAND.COM B:\ /P /E:512

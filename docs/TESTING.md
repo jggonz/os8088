@@ -2476,6 +2476,31 @@ on an XT. 86Box takes it as `fdd_02_type = 35_2dd`, and that was established
 the way every other machine setting in this file was: launch a throwaway copy
 of the config, `kill -TERM`, read the file back and see what it kept.
 
+`xt-dos` and `386-dos` are those first two machines with the FreeDOS floppy in
+the second drive instead of the apps disk (SPEC.md 86). **86Box is the only
+place one of them answers a question QEMU cannot**: whether an XT BIOS reports
+two floppy drives in the equipment word. If it does not, FreeDOS marks B:
+single-logical and every access to it raises *"Insert diskette for drive B:"*,
+which makes the whole arrangement unusable — and QEMU always reports two, so
+it can never show this. If it bites, set `fdd_01_type` and `fdd_02_type` to
+`525_2dd` in `vm/xt-dos/86box.cfg`; no other XT config sets a type, so that
+line is a deviation to make on evidence rather than in advance.
+
+`xt-dos-hdd` and `386-dos-hdd` are those two with a **hard disk** in them —
+the first 86Box machines in this tree to carry one. The controller is the
+XTIDE Universal BIOS (`hdc_1 = xtide` on the XT, `xtide_at` on the 386),
+because §52.1's rung 0 on an 8088 *is* a controller ROM's `int 13h`, and the
+ROM set 86Box ships has it while the IBM/Xebec ROM it also ships would tie
+the image to a 10MB drive-type geometry the host builder does not make. The
+disk is `build/dos-hdd.img` at the live image's 63/16/65, and **the three
+numbers in `hdd_01_parameters` must match the image's BPB** (SPEC.md 86.8).
+The keys were established the usual way: `hdc =` came back as `hdc_1 =`
+from 86Box 6.0, the parameters and `hdd_01_ide_channel = 0:0` survived
+unchanged, and `hdd_01_speed` was added. `HDBOOT=1` deletes the A: line so
+the ROM boots C:. What these answer that QEMU cannot: whether a period
+`int 13h` reads the kernel run and, after docs/FREEDOS-PLAN.md's wave 1,
+writes and reads a hibernation image, on a BIOS that is not SeaBIOS.
+
 The last two are the *fast* end rather than the period end: a 486DX2/66 and a
 Pentium 133, both with an SB16. 8086 real-mode code runs on them verbatim, so
 what they answer is whether the constants sized against a 4.77 MHz 8088 still

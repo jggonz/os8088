@@ -31,6 +31,24 @@ KERNEL_SEG  equ 0x0060          ; linear 0x00600 - the first paragraph above
                                 ; longer floors it: boot/boot.asm relocates
                                 ; itself out of the landing zone before it
                                 ; reads a single sector
+; The 0x500 page, the one scrap of low memory that is neither the BIOS's nor
+; ours. boot/boot.asm owns the argument for it in full and defines DPT_AT to
+; the same value; these are here because ui.inc needs them and is included
+; long before disk.inc. If one moves, both move.
+DPT_AT      equ 0x0580          ; the diskette parameter table's safe home:
+                                ; above the BIOS data area, below KERNEL_SEG,
+                                ; and clear of every documented use of this
+                                ; page. The handover puts the table back here
+                                ; before it lets a foreign kernel land on
+                                ; KERNEL_SEG (SPEC.md 59.3)
+HANDOFF_AT  equ 0x0500          ; ...and where the handover stub is copied to
+                                ; run from, for the same reason: it must not
+                                ; be standing where the boot sector lands.
+                                ; The page: stub 0x0500-0x057E, unit 0x057F,
+                                ; DPT 0x0580-0x058A
+HANDOFF_UNIT equ DPT_AT - 1     ; the BIOS drive the stub is to boot, where the
+                                ; stub can reload it before each int 13h
+                                ; without a register the BIOS might eat
 VGA_SEG     equ 0xA000          ; mode 12h planar framebuffer
 SCREEN_W    equ 640
 SCREEN_H    equ 480
@@ -3422,7 +3440,14 @@ osapi_table:
                                   ;          3B8h that does nothing until 3BFh
                                   ;          allows it, and neither is
                                   ;          derivable from the info block
-osapi_table_end:                  ; 0x04F0
+    OSAPI_SLOT ui_boot_post       ; 0x04F0  AL = BIOS drive unit. POST a
+                                  ;         handover to the operating system
+                                  ;         on that drive (SPEC.md 86.2) -
+                                  ;         ui_reboot_post's twin, deferred
+                                  ;         for exactly the same reason, and
+                                  ;         the same teardown with a different
+                                  ;         last instruction
+osapi_table_end:                  ; 0x04F8
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -3430,8 +3455,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 156 * 8
-%error "os8088 API jump table must be exactly 156 8-byte slots"
+%if OSAPI_TABLE_LEN != 157 * 8
+%error "os8088 API jump table must be exactly 157 8-byte slots"
 %endif
 
 ; =============================================================================

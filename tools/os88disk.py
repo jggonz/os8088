@@ -75,6 +75,7 @@ SECTOR = 512
 MAX_FILES = 32                # kernel listing cap (SPEC.md section 19)
 VOL_LABEL = b"OS8088APPS "    # 11 bytes, BS_VolLab == root label entry
 SYS_LABEL = b"OS8088SYS  "    # ...and what a --boot/--kernel disk is called
+DOS_LABEL = b"FREEDOS    "    # ...and a --dos one (SPEC.md 86.1)
 VOL_ID = 0x88000888           # fixed serial -> deterministic images
 FIXED_DATE = 0x5C21           # 2026-01-01 in FAT date encoding
 FIXED_TIME = 0x0000
@@ -347,9 +348,18 @@ def build_assoc(groups):
     return buf, rowdirs
 
 
-def sys_attr(name11: bytes, boot: bool) -> int:
+def sys_attr(name11: bytes, boot: bool, dos: bool = False) -> int:
     """An entry's attributes. Only a SYSTEM disk locks anything down: a
     data disk is the user's and everything on it is an ordinary file.
+
+    A --dos volume is a system disk by construction - it carries a boot
+    sector and a KERNEL.SYS - but it is NOT one of ours, and the lock-down
+    above would be actively wrong there: COMMAND.COM read-only is a DOS
+    installation nobody can SYS over, and the .DRV rule would hide a DOS
+    device driver from the DIR that is supposed to find it. So --dos takes
+    the data-disk path for everything, and the one entry that still wants
+    RDONLY|HIDDEN|SYS - KERNEL.SYS itself - never comes through here: it is
+    stamped A_SYSTEM at its own root slot (see build()).
 
     The rule is by EXTENSION so it needs no maintenance as drivers are added:
     a `.DRV` on the boot disk is kernel machinery and disappears, anything
@@ -363,7 +373,7 @@ def sys_attr(name11: bytes, boot: bool) -> int:
     left."""
     if name11 == ASC_NAME:
         return A_HIDDEN | A_SYS     # the kernel rewrites it, so not read-only
-    if not boot:
+    if not boot or dos:
         return A_ARCH
     return A_SYSTEM if name11.endswith(b"DRV") else A_LOCKED
 
@@ -567,13 +577,15 @@ def build(args) -> int:
         boot = read_blob(args.boot, "boot sector")
         kern = read_blob(args.kernel, "kernel")
         ksecs = (len(kern) + SECTOR - 1) // SECTOR
-        label = SYS_LABEL
+        label = DOS_LABEL if args.dos else SYS_LABEL
     if args.hdd:
         label = HDD_LABEL
         lay = hdd_layout(tot)
         spc, fatsz, root_ent = lay.spc, lay.fatsz, lay.root_ent
     else:
         lay = Layout(spc, 1, 2, root_ent, tot, fatsz)
+    if args.label:
+        label = args.label.encode("ascii", "replace")[:11].ljust(11)
 
     # Group by folder, keeping first-appearance order. Names are checked for
     # duplicates PER DIRECTORY: two folders may each hold a MINES.O88.
@@ -653,7 +665,7 @@ def build(args) -> int:
     for key in dirs:
         shown = len(kids[key]) + sum(
             1 for n, _, _ in groups[key]
-            if not sys_attr(n, bool(boot)) & A_HIDDEN)
+            if not sys_attr(n, bool(boot), args.dos) & A_HIDDEN)
         if shown > MAX_FILES and not args.deep_folders:
             fail(f"{shown} listed entries in folder {key}; the kernel "
                  f"lists at most {MAX_FILES} per directory (--deep-folders "
@@ -663,7 +675,7 @@ def build(args) -> int:
     # against it: a hidden system file (SPEC.md 19.6) never takes a listing
     # slot. It still takes a directory slot, which is the second check.
     shown = len(root_dirs) + sum(1 for n, _, _ in root_files
-                                 if not sys_attr(n, bool(boot)) & A_HIDDEN)
+                                 if not sys_attr(n, bool(boot), args.dos) & A_HIDDEN)
     if shown > MAX_FILES:
         fail(f"{shown} listed root entries; the kernel lists "
              f"at most {MAX_FILES} per directory")
@@ -778,7 +790,7 @@ def build(args) -> int:
             slot += 1
         for i, (name11, body, _) in enumerate(groups[k]):
             off = (slot + i) * 32
-            raw[off:off + 32] = dirent(name11, sys_attr(name11, boot),
+            raw[off:off + 32] = dirent(name11, sys_attr(name11, boot, args.dos),
                                        chains[at + i][0], len(body))
         at += len(groups[k])
         put(dir_chains[k], bytes(raw))
@@ -797,7 +809,7 @@ def build(args) -> int:
     for i, (name11, body, _) in enumerate(root_files):
         chain = chains[len(files) - len(root_files) + i]
         root[slot * 32:(slot + 1) * 32] = dirent(
-            name11, sys_attr(name11, boot), chain[0], len(body))
+            name11, sys_attr(name11, boot, args.dos), chain[0], len(body))
         slot += 1
 
     image = bytearray(boot_sector(spt, heads, tot, spc, fatsz, root_ent,
@@ -1258,6 +1270,13 @@ def main() -> int:
     ap.add_argument("--kernel", metavar="KERNEL.bin",
                     help="the kernel, placed in the FAT reserved area so the "
                          "boot sector's raw LBA read still finds it")
+    ap.add_argument("--dos", action="store_true",
+                    help="this is a FreeDOS volume, not an os8088 one: every "
+                         "file is an ordinary archive file rather than "
+                         "read-only/system (SPEC.md 86.1)")
+    ap.add_argument("--label", metavar="NAME",
+                    help="11-char volume label, overriding the default for "
+                         "the disk kind")
     ap.add_argument("--folder", metavar="PATH", action="append", default=[],
                     help="create this folder even if no file names it "
                          "(repeatable); each component an 8.3 stem with no "
@@ -1289,7 +1308,8 @@ def main() -> int:
         return verify_hdd(args.verify_hdd)
     if args.verify:
         if args.output or args.size or args.scramble or args.packages \
-                or args.folder or args.dir_slots or args.hdd:
+                or args.folder or args.dir_slots or args.hdd \
+                or args.dos or args.label:
             ap.error("--verify takes no other arguments")
         return verify(args.verify)
     if args.size and args.hdd:

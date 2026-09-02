@@ -110,6 +110,12 @@ make xt-weave-256 # ...and the 256KB XT, which holds exactly ONE Weave app:
               # arithmetic on the glass
 make loomdisk # the IDE's own floppy: LOOM and the runtime beside it, with
               # the demo sources flat, in all three geometries
+make dos      # build the FreeDOS floppy (on demand: fetches a ~148MB toolchain)
+make xt-dos   # the XT with FreeDOS in drive B instead of the apps disk
+make 386-dos  # the same on the 386DX
+make dos-hdd  # a pre-installed hard disk with FreeDOS in DOS\ beside os8088
+make xt-dos-hdd    # ...the XT with that disk on an XTIDE, both floppies in
+make 386-dos-hdd   # ...and the 386DX; HDBOOT=1 empties A: so C: boots
 make allapps  # one 1.44MB floppy with every program on it - both word
               # processors, Frotz, RunCPM, the Commodore 64 and the Weave
               # family included
@@ -677,6 +683,33 @@ uses a 720KB 3.5" DD drive, `386-word` two 1.44MB drives.
 None of them can be scripted — 86Box has no automation socket, so
 these are all interactive, and `make test` over QMP remains the only way to
 drive the system from a script.
+
+## FreeDOS
+
+`make dos` builds a FreeDOS floppy — kernel, `COMMAND.COM` and all — from the
+FreeDOS sources next door, and `make xt-dos` / `make 386-dos` boot the machine
+with that floppy in drive B in place of the apps disk. Opening **FREEDOS** on
+the system disk warns you, and then hands the whole machine over: os8088 tears
+itself down and the DOS floppy boots, with B: as the DOS boot drive. Typing
+`OS8088` at the prompt brings the desktop back.
+
+It really is a handover and not a window, and on this hardware it could not be
+anything else — the 8088 has no protection of any kind, so there is no way to
+stop a DOS program writing straight to video memory or reprogramming the
+timer. Giving DOS the entire machine is what makes real DOS software behave
+the way it was written to. SPEC.md §86 has the whole account.
+
+This is on demand because the first build downloads a ~148MB Open Watcom
+toolchain; `tools/freedos/README.md` covers what it does. It needs no Docker
+and no Linux — Open Watcom ships native Apple-Silicon binaries.
+
+`make dos-hdd` builds a hard-disk image with os8088 installed on it and
+FreeDOS in `DOS\` beside it, and `make xt-dos-hdd` / `make 386-dos-hdd` boot
+the same two machines with that disk on an XTIDE controller — `HDBOOT=1`
+empties drive A so the machine starts from the hard disk. Those are the
+machines for what comes next: hibernating the session to the hard disk and
+starting FreeDOS from it, with `OS8088` bringing every window back.
+`docs/FREEDOS-PLAN.md` is that plan; SPEC.md §86.8 is what has shipped of it.
 
 ## Scripted testing
 

@@ -49,7 +49,7 @@ MENU BAR
 The strip across the top: the system menu (the small logo), the name of the program you are using, that program's menus, and the clock. Short messages appear here too - "Settings Saved" - and fade after a moment.
 
 DESKTOP
-The patterned area behind everything. A drive icon sits near the right edge for each disk, labelled with its letter: A:, B:, and C: onwards for a hard disk, a RAM disk or a linked DOS PC. A machine with the external floppy connector can have four floppy drives.
+The patterned area behind everything. A drive icon sits near the right edge for each disk, labelled with its letter: A:, B:, and C: onwards for a hard disk, a RAM disk or a linked DOS PC.
 
 DOCK
 The white strip along the bottom, one small tile per running program. A heavy border marks the one in use; a tile drawn in reverse is a program put away out of sight. Clicking a tile does whatever it is not: it brings back a program put away, puts away the one in use, and brings any other to the front. The right button offers Close.
@@ -117,7 +117,7 @@ File > Format Disk prepares a floppy, erasing anything on it. os8088 offers the 
 6. RUNNING PROGRAMS
 ----------------------------
 
-Programs live in the folders APPS and GAMES. The apps disk holds them all; the system disk carries Note Pad, Calculator, Paint and Mines. Open a disk window, open the folder, and double-click a program.
+Programs live in the folders APPS and GAMES. The apps disk holds them all; the system disk carries Note Pad, Calculator, Paint and Mines. Open a disk window, open the folder, and double-click a program. FREEDOS, in the root of the system disk, hands the whole machine to a FreeDOS disk in drive B; os8088 closes, and OS8088 at the DOS prompt brings it back.
 
 Several programs can run at once, and most can be started more than once. The machine shares time between them, so a game keeps moving while a file is copied. Programs that handle text share one clipboard, so you can copy in one and paste in another, even after closing the first.
 
@@ -195,7 +195,7 @@ Tick os88net once in Control Panel > Drivers. That adds an os88net page to the l
 
 No partner means the trouble is the cable or the far end rather than os8088: check that it is a data-transfer cable, that it is in the printer socket at both ends, and that OS88NET is really running and waiting. If the two machines use different ports, tell the DOS end which with /P:.
 
-The cable is slower than the floppy - about a quarter its speed - so a large file takes a while and the machine sits still while it moves. Nothing times out, so leave the link connected as long as you like.
+The cable is slower than the floppy - about a quarter its speed - so a large file takes a while and the machine sits still while it moves.
 
 
 ----------------------------
