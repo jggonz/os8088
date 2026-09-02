@@ -113,7 +113,12 @@ def sections_raw(path):
 
 
 def main():
-    kfiles = sorted(glob.glob('kernel/*.inc')) + ['kernel/kernel.asm']
+    # glob yields the pattern's own separator, which is a backslash on
+    # Windows - and then the forward-slash keys in EXTRA never match, so
+    # clockw.inc / splash.inc file as .text and 42 far calls out of them read
+    # as near crossings that are not. Normalise to '/'; open() takes it fine.
+    kfiles = sorted(p.replace('\\', '/')
+                    for p in glob.glob('kernel/*.inc')) + ['kernel/kernel.asm']
     # dedup: an EXTRA under kernel/ is already in the glob, and scanning it
     # twice reports every finding in it twice.
     files = kfiles + [f for f in sorted(EXTRA) if f not in kfiles]
