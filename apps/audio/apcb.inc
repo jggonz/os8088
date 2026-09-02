@@ -258,6 +258,16 @@ ap_onwake:                         ; SI = window
     push si
     push di
 
+    ; 0. the settled first repaint (SPEC.md 86.7): the loader shows the window
+    ;    after the entry proc, so the first W_PAINT can beat wm_fit.
+    cmp byte [ap_first_paint], 0
+    je .no_first
+    mov byte [ap_first_paint], 0
+    call OSAPI_GFX_LOCK
+    call apu_repaint
+    call OSAPI_GFX_UNLOCK
+.no_first:
+
     ; 1. the disk-refill handshake (time-critical: do it first)
     cmp byte [ap_req], FR_READ
     jne .norefill

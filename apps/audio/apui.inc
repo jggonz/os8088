@@ -31,9 +31,21 @@ apu_layout:
     push si
     push di
     mov bx, [ap_win]
-    call OSAPI_WM_GEOM             ; CX = content w, DX = content h
+    call OSAPI_WM_GEOM             ; CX = content w, DX = content h, CF=1 hidden
+    jc .keep                      ; not laid out yet: keep the last good values
+    or cx, cx
+    jz .keep
     mov [apu_cw], cx
     mov [apu_ch], dx
+    jmp .have
+.keep:
+    mov cx, [apu_cw]
+    or cx, cx
+    jnz .have
+    mov cx, 292                    ; a sane default until the real geometry lands
+    mov [apu_cw], cx
+    mov word [apu_ch], 210
+.have:
 
     ; progress bar: x 46 .. w-46, y 31 .. 39
     mov word [apu_pbx1], 46
@@ -84,12 +96,18 @@ apu_layout:
 ; preserves BX, CX, SI, DI
 ; =============================================================================
 apu_origin:
+    push ax
     push bx
+    push dx
     mov bx, [ap_win]
-    call OSAPI_WM_CONTENT          ; out AX = left, DX = top
+    call OSAPI_WM_CONTENT          ; out AX = left, DX = top (CF=1 not visible)
+    jc .keep
     mov [apu_ox], ax
     mov [apu_oy], dx
+.keep:
+    pop dx
     pop bx
+    pop ax
     ret
 
 ; =============================================================================
@@ -499,42 +517,35 @@ apu_gt: db '>', 0
 ; =============================================================================
 ; apu_hit - a content-relative click point -> AL = AP_B_* or AP_B_NONE
 ; in:  CX = x (content-relative), DX = y (content-relative)
+;
+; The buttons tile the row gap-free: column = (x - 4) / pitch, so a click
+; anywhere on the row lands on a button and there is no 3px dead lane between
+; two of them (found on the glass).
 ; =============================================================================
 apu_hit:
     push bx
-    push si
-    push di
-    xor di, di
-.b:
-    cmp di, 7
+    push dx
+    ; y must be on the transport row (rects[0] carries y1/y2 for all seven)
+    cmp dx, [apu_rects+2]
+    jb .none
+    cmp dx, [apu_rects+6]
+    ja .none
+    mov ax, cx
+    cmp ax, [apu_rects+0]              ; left edge of button 0
+    jb .none
+    sub ax, [apu_rects+0]
+    cmp word [apu_bpitch], 0
+    je .none
+    xor dx, dx
+    div word [apu_bpitch]             ; AX = column
+    cmp ax, 7
     jae .none
-    mov bx, di
-    push cx
-    mov cl, 3
-    shl bx, cl
-    pop cx
-    add bx, apu_rects
-    ; inside [x1,x2] and [y1,y2] ?
-    cmp cx, [bx+0]
-    jb .next
-    cmp cx, [bx+4]
-    ja .next
-    cmp dx, [bx+2]
-    jb .next
-    cmp dx, [bx+6]
-    ja .next
-    mov ax, di
-    pop di
-    pop si
+    pop dx
     pop bx
     ret
-.next:
-    inc di
-    jmp .b
 .none:
     mov ax, AP_B_NONE
-    pop di
-    pop si
+    pop dx
     pop bx
     ret
 

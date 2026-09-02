@@ -161,6 +161,7 @@ AP_B_NONE  equ 0xFF
     APW ap_rate
     APB ap_req
     APB ap_pcmbits                 ; 8 for PCM8, effective 8 after ADPCM decode
+    APB ap_first_paint             ; 1 until ap_onwake does the settled repaint
 
 ; --- decoder state (apdec.inc) --------------------------------------
     APB apd_codec
@@ -279,6 +280,15 @@ ap_entry:
     mov word [ap_msg], ap_s_nosb
 .m_ok:
     mov byte [ap_state], AP_ST_STOP
+
+    ; The loader shows the window AFTER the entry proc returns, so the first
+    ; W_PAINT can run before wm_fit has settled the frame and OSAPI_WM_GEOM /
+    ; OSAPI_WM_CONTENT answer for it. Kick ourselves once: ap_onwake then does
+    ; a clean repaint with the window fully on the glass (SPEC.md 86.7).
+    mov byte [ap_first_paint], 1
+    mov bx, [ap_win]
+    call OSAPI_WM_WAKE
+
     clc
     ret
 .fail:
