@@ -372,7 +372,17 @@ vid_detect:
     mov bl, 0x10                ; memory size. An XT BIOS leaves 10h alone.
     int 0x10                    ; Step 1 already claimed every VGA, so a card
     cmp bl, 0x10                ; that answers HERE is an EGA - and an EGA has
-    jne .ega                    ; no mode 12h, only mode 10h (SPEC.md 39.24).
+    je .equip                   ; no mode 12h, only mode 10h (SPEC.md 39.24).
+    or bh, bh                   ; ...BUT THE SAME CALL SAYS WHICH DISPLAY IT
+    jz .ega                     ; DRIVES, and it is free: BH = 0 colour (3Dx),
+                                ; 1 monochrome (3Bx). An EGA on a 5151 has
+                                ; modes 7 and 0Fh and NOT 10h, so claiming it
+                                ; would set a mode the card does not have and
+                                ; then paint A000 - a BLANK TUBE, not a
+                                ; degraded one. It falls through to the
+                                ; equipment word instead (SPEC.md 39.1's
+                                ; third scope cut).
+.equip:
     int 0x11                    ; equipment word, bits 5:4
     and al, 0x30
     cmp al, 0x30                ; 11b = a monochrome card at B000

@@ -40431,11 +40431,24 @@ Probe order is binding, and the equipment word is consulted **last**:
 3. `int 11h` equipment word bits 5:4. `11b` = a monochrome card at B000 →
    `VID_HERC`; anything else → `VID_CGA`.
 
-Step 3 is last because an EGA or VGA driving a monochrome monitor **also**
-reports `11b`, and those machines belong on the planar path, not the
-Hercules one. An EGA on a mono monitor is still detected as `VID_EGA` by
-step 2 and then driven in mode 10h — less wrong than mode 7 text, and the
-only planar mode it has.
+Step 3 is last because a **VGA** driving a monochrome monitor also reports
+`11b`, and that machine belongs on the planar path: mode 12h is a VGA mode
+whatever monitor is on the end of it, and it comes out as grey levels.
+
+**Documented scope cut:** an **EGA driving a monochrome display is not
+claimed.** Step 2's own call answers this for nothing — `int 10h AH=12h`
+returns `BH` = 0 for a colour attachment (3Dx) and 1 for a monochrome one
+(3Bx) — and the answer is binding, because an EGA's mode list follows the
+display its DIP switches name: with a 5153/5154 it has modes 0–6 and 10h,
+and with a **5151 it has modes 7 and 0Fh and nothing else**. Mode 10h is not
+in that card's table, so claiming it would set a mode that does not exist
+and then paint `A000`, which is a *blank tube* rather than a degraded
+picture — and `vid_probe_avail` would go on to offer mode 6 as well, which
+that machine also does not have. So `BH = 1` falls through to step 3 and is
+handled as the mono card it is presenting as. That is not a good answer, it
+is an honest one; the right answer is **mode 0Fh** (640x350 mono, planes 0
+and 2, at `B000`), which is a second setup and not this one. Untested and
+unclaimed rather than asserted — see `EGA-PLAN.md §7`.
 
 **Documented scope cut:** no Hercules-versus-plain-MDA discrimination (the
 0x3BA vertical-sync toggle). A plain MDA is text-only, so no better action
@@ -43300,8 +43313,9 @@ still on screen. The app took the machine, not the monitors.
 
 *"Missile Command would not go into Mode X"*, on a VGA-primary machine with a
 Hercules beside it. Mode X is gated on the **adapter and nothing else** —
-`fsx_capstab` is indexed by `VID_*` (VGA `0x01EF` carries bit 8, HERC `0x0011`
-and CGA `0x000F` do not) and neither `fsx_caps` nor `fsx_mode` consults the
+`fsx_capstab` is indexed by `VID_*` (VGA `0x01EF` carries bit 8, and HERC
+`0x0011`, CGA `0x000F` and EGA `0x000F` do not) and neither `fsx_caps` nor
+`fsx_mode` consults the
 CPU tier. What was wrong is *which display* got asked.
 
 **`fsx_caps` used to GUESS the asking window, and the guess was `wm_top`.**
@@ -43572,17 +43586,34 @@ chain, `wm_fit`, the chrome, `desk_rowcalc` and the cursor all follow from
 | `vga_vline_core`, `vga_xor_hline` | clip y to `SCREEN_H` (a VGA-only constant) | now clip to `[vid_ch]` — a no-op edit on VGA, byte-checked (§39.9) |
 | Colour theme (§76.12) | DAC, `int 10h AX=1002h` on a VGA | **VGA only** — an EGA machine gets Bright/Dark; an Attribute-Controller path is deferred (`EGA-PLAN.md §7`) |
 | `OSAPI_WM_PREFER` kind index | `vid_kind` = 0 | clamped to 0 — an EGA takes VGA's preference row (§39.8) |
+| the idle **blank** (§64) | SR01 bit 5, Screen Off | **the PALETTE** — `vid_ac_pal`, all sixteen AC registers to black and mode 10h's own sixteen back. An EGA has neither enable bit: SR01 bit 5 and the AC index's bit 5 (Palette Address Source) are both VGA additions, so writing either on an EGA lands in a reserved field and blanks nothing |
+| `vid_dual_ok` | `[vid_avail]` alone | **also `[vid_kind]`** — and that is what makes the predicate non-invariant, below |
 
 `vid_probe_avail` treats `VID_EGA` like `VID_VGA`: available by definition,
-`VID_A_CGA` set **unprobed** (mode 6 is a standard BIOS mode on every EGA),
-and no mode-12h path offered. So the Display page on an EGA machine lists
-**EGA + CGA** and `vid_switch` between them works through the §39.11.2
-sequence unchanged.
+`VID_A_CGA` set **unprobed** (mode 6 is a standard BIOS mode on every EGA
+that drives a colour display, which §39.1 now guarantees is the only kind of
+EGA that reaches here), and no mode-12h path offered. So the Display page on
+an EGA machine lists **EGA + CGA** and `vid_switch` between them works
+through the §39.11.2 sequence unchanged.
+
+**`vid_dual_ok` is no longer invariant across a boot, and `vid_disp_init`
+owes a teardown because of it.** Every input it had was `[vid_avail]`, which
+is fixed for the life of the machine, so a refusal could never follow a
+non-refusal and `vid_disp_init` could return on one without doing anything.
+`VID_EGA` adds `[vid_kind]`, which `vid_switch` moves — so on an EGA +
+Hercules machine the sequence *primary → CGA, Extend on, primary → EGA*
+reaches a refusal with an arrangement **live**. `vid_disp_init`'s refusal arm
+therefore checks `[vid_ndisp]` and, when something is running, collapses it
+through the SINGLE arm (the other card darked, `[vid_ndisp]` back to 1, the
+desktop re-unioned) instead of returning. `[vid_dmode]` is **kept**: the
+arrangement is impossible on this primary, not forgotten, so switching back
+restores it.
 
 **Out of scope**, recorded so the next reader does not re-open it: `VID_EGA`
-in a `KERN_BIG` per-display pair (§39.12 — `vid_dual_ok` already refuses
-everything but an exact Hercules+CGA pairing), the Colour theme on EGA, and
-a 64KB EGA (§39.1's second scope cut).
+as a member of a `KERN_BIG` per-display pair (§39.12 — it may be the primary
+that *ends* one, per the paragraph above, but never a half of one), the
+Colour theme on EGA, an EGA on a **monochrome display** (§39.1's second scope
+cut — mode 0Fh is the right answer and is a second setup), and a 64KB EGA.
 
 ## 40. apps/fractal — the progressive renderer and its restore cache
 
@@ -50840,7 +50871,8 @@ that is the right question there rather than this one.
 considered and both are §47 rule 3's *grey a guess*:
 
 - `FSXM_TEXT80` is **bit 0 of every adapter's caps** — VGA `0x01EF`, Hercules
-  `0x0011`, CGA `0x000F` (§53.8) — so there is no adapter here that cannot
+  `0x0011`, CGA `0x000F`, EGA `0x000F` (§53.8) — so there is no adapter here
+  that cannot
   set the mode, and a refusal keyed on the card would be inventing one.
 - A tier-0 8088 with XT mode **off** cannot hold 22 kHz in *either* surface —
   the mixer alone wants ~62% of the machine at 11 kHz (§45.9.3) — so a CPU
@@ -58578,25 +58610,30 @@ catches what it leaks at close.
 Mode ids (`FSXM_*`), availability decided by `[vid_kind]` alone — a fact,
 not a guess, §47:
 
-| id | mode                    | set via                  | VGA | CGA | HERC |
-|----|-------------------------|--------------------------|-----|-----|------|
-| 0  | 80x25 text              | `vid_text` (mode 3; mode 7 + 3BFh←0 on Herc) | Y | Y | Y |
-| 1  | 40x25 text              | int 10h AX=0001          | Y | Y | – |
-| 2  | 320x200x4 (CGA)         | int 10h AX=0004          | Y | Y | – |
-| 3  | 640x200x2 (CGA)         | int 10h AX=0006          | Y | Y | – |
-| 4  | 720x348 mono (Herc gfx) | `vid_setmode` (the 6845 body + 32KB clear) | – | – | Y |
-| 5  | 320x200x16 planar (0Dh) | int 10h AX=000D          | Y | – | – |
-| 6  | 320x200x256 (13h)       | int 10h AX=0013          | Y | – | – |
-| 7  | 640x480x16 (12h)        | int 10h AX=0012          | Y | – | – |
-| 8  | 320x240x256 "Mode X"    | 13h + the unchain/retime sequence | Y | – | – |
+| id | mode                    | set via                  | VGA | CGA | HERC | EGA |
+|----|-------------------------|--------------------------|-----|-----|------|-----|
+| 0  | 80x25 text              | `vid_text` (mode 3; mode 7 + 3BFh←0 on Herc) | Y | Y | Y | Y |
+| 1  | 40x25 text              | int 10h AX=0001          | Y | Y | – | Y |
+| 2  | 320x200x4 (CGA)         | int 10h AX=0004          | Y | Y | – | Y |
+| 3  | 640x200x2 (CGA)         | int 10h AX=0006          | Y | Y | – | Y |
+| 4  | 720x348 mono (Herc gfx) | `vid_setmode` (the 6845 body + 32KB clear) | – | – | Y | – |
+| 5  | 320x200x16 planar (0Dh) | int 10h AX=000D          | Y | – | – | – |
+| 6  | 320x200x256 (13h)       | int 10h AX=0013          | Y | – | – | – |
+| 7  | 640x480x16 (12h)        | int 10h AX=0012          | Y | – | – | – |
+| 8  | 320x240x256 "Mode X"    | 13h + the unchain/retime sequence | Y | – | – | – |
+
+The EGA column is the **CGA-compatible modes only** (§39.24). Its own mode
+10h has no `FSXM_*` id — a fullscreen mode the desktop is already in buys
+nothing — and 0Dh, which the card does have, is a safe later addition rather
+than pass 1.
 
 `fsx_caps` (slot 0x02C0) — out AX = the bitmask of settable ids (bit n =
 id n), DL = `vid_kind`; callable from any context, lock held or not (the
 `osapi_video` precedent), so an app can grey its mode menu per §47
-*before* entering. The masks: VGA 0x1EF, CGA 0x00F, HERC 0x011. One
-documented approximation: `vid_detect` admits EGA-class cards as
-`VID_VGA` (§39.1), and an EGA sets 0Dh but not 12h/13h; if those machines
-ever matter, this is the routine that learns the finer probe.
+*before* entering. The masks: VGA 0x1EF, CGA 0x00F, HERC 0x011, EGA 0x00F.
+The approximation that used to stand here — *"`vid_detect` admits EGA-class
+cards as `VID_VGA`"* — is gone: §39.24 gave the EGA its own kind and its own
+row of `fsx_capstab`, and this is the finer probe that paragraph asked for.
 
 `fsx_mode` (slot 0x02D0) — in AL = id, ES:DI = a 16-byte `FSI_*` block the
 kernel fills (ES is the caller's own, like `gfx_blit4`). Legal only inside

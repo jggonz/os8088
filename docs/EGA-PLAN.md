@@ -157,7 +157,21 @@ path on two rows is unmeasurable.
 - EGA **Colour theme** via the Attribute Controller (`int 10h AX=1002h`) — a
   clean follow-up once the desktop is correct. Until then `thm_set` keeps its
   `cmp [vid_kind], VID_VGA` and an EGA machine gets Bright/Dark.
-- EGA in a **`KERN_BIG` dual-display** pair (EGA+MDA, EGA+Hercules).
+- EGA in a **`KERN_BIG` dual-display** pair (EGA+MDA, EGA+Hercules). Note
+  that `vid_dual_ok` refusing an EGA primary is not the whole story: because
+  `vid_switch` moves `[vid_kind]`, the refusal has to be able to arrive with
+  an Extend already running, and `vid_disp_init` collapses one when it does
+  (§39.24). That is a teardown, not the pairing itself.
+- An EGA driving a **monochrome display** (5151-class). It is detected —
+  `int 10h AH=12h` returns `BH = 1` — and deliberately **not claimed**,
+  because such a card has modes 7 and 0Fh and neither mode 10h nor mode 6,
+  so every one of `vid_setmode`'s EGA arm, `vid_probe_avail`'s unprobed CGA
+  bit and `vid_blank_kind`'s 3DAh would be addressing hardware that is not
+  there. The right answer is a **mode 0Fh setup** — 640×350, planes 0 and 2,
+  at `B000`, `[vid_mono]` 0 but only four colours — which is a second
+  adapter setup rather than a flag on this one. Until then such a machine
+  falls through to the equipment word and is driven as the mono card it is
+  presenting as: untested, and honest about it (§39.1).
 - **64 KB EGA** — mode 10h degrades to 640×350×4 (two planes); the four-plane
   writer's upper planes are ignored and the sixteen colours collapse toward
   black. Documented unsupported (§39.1), not a crash.
