@@ -2369,12 +2369,20 @@ cp_thm_btn:
 ; refusal, so the three cannot disagree - and it is a FACT (rule 3), not a
 ; guess: SPEC.md 39.4 reduces every index outside {0,15} to black, white or
 ; the 50% dither, so on a 1bpp adapter Color would BE Bright. The test is the
-; DEPTH ([vid_mono] = 0 is a 4-plane adapter, VGA or EGA), not the kind - it
-; was `cmp [vid_kind], VID_VGA` while VGA was the only colour adapter, and it
-; must match thm_set's own refusal (SPEC.md 76.12.1).
+; PRIMARY'S DEPTH - VID_VGA and VID_EGA are the two 4-plane kinds - and it
+; must match thm_set's own refusal (SPEC.md 76.12.1). It was `cmp [vid_kind],
+; VID_VGA` while VGA was the only colour adapter. It is NOT [vid_mono]: this
+; is reached from the page's own paint and click, inside a lock hold in which
+; the panel has just drawn on ITS display, and on a two-card desktop that byte
+; names the display last drawn on (SPEC.md 39.14.3) - so spelt that way a
+; panel dragged onto the Hercules greyed Color, and cancelled the click, on a
+; machine whose primary is a VGA. [vid_kind] is the primary's and vid_ctx_act
+; never moves it.
 %ifdef KERN_BIG
 cp_thm_colgrey:
-    cmp byte [vid_mono], 0
+    cmp byte [vid_kind], VID_VGA
+    je .live
+    cmp byte [vid_kind], VID_EGA
     je .live
     stc
     ret

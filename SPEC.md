@@ -43584,7 +43584,7 @@ chain, `wm_fit`, the chrome, `desk_rowcalc` and the cursor all follow from
 | `vid_setmode` | `int 10h AX=0012h` + A000 clear of `SCREEN_H` rows | `int 10h AX=`**`0010h`** + A000 clear of `EGA_H` (350) rows (§39.6, §39.23) |
 | `vid_depth_set` | colour: `[vid_mono]=0`, `[vid_planes]=4` | identical — `VID_EGA` takes the colour arm |
 | `vga_vline_core`, `vga_xor_hline` | clip y to `SCREEN_H` (a VGA-only constant) | now clip to `[vid_ch]` — a no-op edit on VGA, byte-checked (§39.9) |
-| Colour theme (§76.12) | eligible | eligible — the theme is six palette *indices*, no DAC or AC programming; `thm_set` / `cp_thm_colgrey` gate on `[vid_mono]`, not `VID_VGA` (§76.12.1) |
+| Colour theme (§76.12) | eligible | eligible — the theme is six palette *indices*, no DAC or AC programming; `thm_set` / `cp_thm_colgrey` accept `VID_EGA` beside `VID_VGA`, the two four-plane kinds (§76.12.1) |
 | `OSAPI_WM_PREFER` kind index | `vid_kind` = 0 | clamped to 0 — an EGA takes VGA's preference row (§39.8) |
 | the idle **blank** (§64) | SR01 bit 5, Screen Off | **the PALETTE** — `vid_ac_pal`, all sixteen AC registers to black and mode 10h's own sixteen back. An EGA has neither enable bit: SR01 bit 5 and the AC index's bit 5 (Palette Address Source) are both VGA additions, so writing either on an EGA lands in a reserved field and blanks nothing |
 | `vid_dual_ok` | `[vid_avail]` alone | **also `[vid_kind]`** — and that is what makes the predicate non-invariant, below |
@@ -75728,7 +75728,8 @@ under EGA mode 10h and VGA mode 12h. Nothing in the theme programs a palette,
 touches the DAC or the Attribute Controller, or names a colour any other way
 than by index; `thm_set` copies eight bytes and every chrome site draws with
 the primitives that already render Solitaire and Cyclone at 16 colours on an
-EGA. The gate is a **depth** test, not an adapter one — see §76.12.1.
+EGA. The gate is a **depth** test — the primary's kind, planar or not — see
+§76.12.1.
 
 | surface | colour |
 |---|---|
@@ -75776,17 +75777,23 @@ dither, so **Color on a 1bpp adapter would be Bright with extra steps**. It is
 therefore refused rather than reduced, and the refusal lives in `thm_set` —
 the one routine both callers go through — rather than at the callers.
 
-**The test is `[vid_mono]`, not the kind.** `[vid_mono] = 0` is a four-plane
-adapter — `VID_VGA` or `VID_EGA` — and `= 1` is a banked 1bpp one. It was
-`cmp [vid_kind], VID_VGA` for as long as VGA was the only colour adapter,
-where the identity and the capability were the same fact; `VID_EGA` (§39.24)
-is a colour adapter that is not a VGA, so the identity test would have refused
-Color on the one machine class this whole capability is patterned on (§76.12
-— "because that is all an EGA palette has"). `[vid_mono]` is published by
-`vid_apply` → `vid_depth_set` before every `thm_set` caller runs (the boot
-resolve, `drv_cfg_unpack`, `vid_switch`, and the Control Panel), and
-`cp_thm_colgrey` reads the same byte so the greying and the refusal cannot
-disagree.
+**The test is the PRIMARY's kind mapped to a depth, and NOT `[vid_mono]`.**
+`VID_VGA` and `VID_EGA` are the two four-plane kinds and qualify; `VID_HERC`
+and `VID_CGA` are 1bpp and are refused. It was `cmp [vid_kind], VID_VGA` for
+as long as VGA was the only colour adapter, where the identity and the
+capability were the same fact; `VID_EGA` (§39.24) is a colour adapter that is
+not a VGA, so the identity test refused Color on the one machine class this
+whole capability is patterned on (§76.12 — "because that is all an EGA palette
+has"). `[vid_mono]` looks like the shorter spelling of the same test and is the
+wrong one: on a two-card desktop it is a fact about the display **last drawn
+on** (§39.14.3, §5.4.2.4), and `cp_thm_colgrey` is read from the Theme page's
+own paint and click, inside a lock hold in which the panel has just drawn on
+its own display — so spelt that way a Control Panel dragged onto the Hercules
+greyed Color, and cancelled its click, on a machine whose primary is a VGA,
+while the same panel on the VGA accepted it. `[vid_kind]` is the primary's and
+`vid_ctx_act` never moves it (§39.12), so `cp_thm_colgrey` reads the same byte
+as `thm_set` and the greying and the refusal cannot disagree — with each
+other, or with which monitor the panel happens to be on.
 
 - The Control Panel's row is **greyed** on a 1bpp machine (§47 rule 3: grey a
   *fact*), and `cp_thm_colgrey` is the single predicate behind the greying,
@@ -75807,12 +75814,11 @@ refuses both an unknown kind and Color on a machine without one.
 
 ### 76.12.4 …and a SECOND MONITOR is a card `[vid_kind]` says nothing about
 
-§76.12.1 refuses Color on a machine with no colour in it, and asks `[vid_mono]`
+§76.12.1 refuses Color on a machine with no colour in it, and asks `[vid_kind]`
 to decide. **That is the PRIMARY's adapter** — and the primary of a *live*
 extended desktop is always the VGA: §39.13 pairs a colour card with a mono
 one, and a switch to a `VID_EGA` primary collapses the span rather than
-sustaining it (`vid_disp_init`, §39.24). So `[vid_mono] = 0` here means the
-VGA exactly as `[vid_kind] == VID_VGA` did. The answer is right about the
+sustaining it (`vid_disp_init`, §39.24). The answer is right about the
 primary and silent about the other monitor: Color is accepted, and every
 window dragged onto a 1bpp secondary draws its chrome through §39.4's
 reduction.

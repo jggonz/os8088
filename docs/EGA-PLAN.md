@@ -67,7 +67,7 @@ list with the reasoning attached.
 | `vid_tab` row | `A000,80,0,0,80,0,0,640,480` | `A000,80,0,0,80,0,0,640,`**`350`** |
 | mode set | `int 10h AX=0012h` | `int 10h AX=`**`0010h`** |
 | framebuffer clear (§39.23) | manual A000 wipe, `SCREEN_H` rows | same five register writes, `EGA_H` (350) rows |
-| Colour theme (§76.12) | eligible | **eligible** — `thm_set` / `cp_thm_colgrey` gate on `[vid_mono]`, not `VID_VGA` (§7) |
+| Colour theme (§76.12) | eligible | **eligible** — `thm_set` / `cp_thm_colgrey` accept `VID_EGA` beside `VID_VGA` (§7) |
 
 Three `vga12.inc` sites still hold the assembly-time `SCREEN_H` (480) because
 "it only ever runs on VGA" (§39.3): `vga_vline_core`, `vga_xor_hline`, and the
@@ -167,15 +167,19 @@ mode 12h.
 The only thing that gated it was `thm_set`'s `cmp [vid_kind], VID_VGA` — an
 **identity test standing in for a capability**, written while VGA was the only
 colour adapter. `VID_EGA` is a colour adapter that is not a VGA, so the proxy
-broke. Both that check and `cp_thm_colgrey`'s copy of it now read
-`[vid_mono] == 0` (a four-plane adapter, VGA *or* EGA). No palette code, no
+broke. Both that check and `cp_thm_colgrey`'s copy of it now accept `VID_EGA`
+beside `VID_VGA` — the two four-plane kinds. (A first cut read
+`[vid_mono] == 0` instead. On a VGA+Hercules extended desktop that byte names
+the display *last drawn on* rather than the machine, and the Control Panel
+reads the predicate from its own paint, so a panel dragged onto the Hercules
+greyed Color on a VGA machine; §76.12.1 has the account.) No palette code, no
 new draw logic, `THM_COLOR` and its `thm_tab` row already existed. Landed as a
 separate commit from the geometry/detection work, with the §76.12 / §76.12.1
 contract update. §76.12.4 (the extended desktop) is unaffected: an EGA is
 never the primary of a *live* extended desktop — §39.13 pairs a colour card
 with a mono one, and a switch to an EGA primary collapses the span
 (`vid_disp_init`, §39.24) rather than sustaining it — so the primary there
-is always the VGA and `[vid_mono] = 0` means exactly what `VID_VGA` did.
+is always the VGA and `[vid_kind]` answers as it always did.
 
 ## 7.1 Still deferred
 
