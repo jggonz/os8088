@@ -1,8 +1,11 @@
 ; =============================================================================
 ; os8088 - apps/tracker/trktxt.inc
 ;
-; XT mode's fullscreen is an 80x25 TEXT screen (SPEC.md 45.13). Prefix ttx_;
-; included by tracker.asm AFTER trkui.inc, so every tui_ helper it borrows -
+; The fullscreen 80x25 TEXT screen (SPEC.md 45.13). Prefix ttx_; XT mode
+; forces this surface and View > Text Screen picks it outright (45.13.7), and
+; NOTHING IN THIS FILE KNOWS WHICH - it never read [mp_xt], which is why
+; decoupling the two was a gate change and not a port. Included by tracker.asm
+; AFTER trkui.inc, so every tui_ helper it borrows -
 ; tui_scpy, tui_hexb, tui_dec3, tui_viewrow, tui_vu_step - is already defined.
 ;
 ; WHY THIS EXISTS, in one paragraph. The FT2 screen (SPEC.md 45.6) is drawn
@@ -306,8 +309,13 @@ ttx_begin:
 ttx_clkpick:
     push ax
     mov byte [ttx_clk], FSXW_FRAME  ; the PIT, not the CRTC (SPEC.md 53.5.1)
+%ifdef TTXNOFAST
+    mov byte [ttx_fdiv], 1          ; no sub-tick: one frame per tick, and
+    mov byte [ttx_fcnt], 1          ; FSXW_FRAME then waits on a [sch_subs]
+%else                               ; that only moves once a tick
     mov byte [ttx_fdiv], FSX_SUBTICK
     mov byte [ttx_fcnt], FSX_SUBTICK
+%endif
     mov al, TTX_SHCHUNKF            ; one row a frame: TTX_SHCHUNK's four are
     mov [ttx_chunk], al             ; ~25 ms and a frame's slot is now 18
     pop ax
@@ -373,6 +381,33 @@ ttx_shbuild:
 ; the screen", reached without a second buffer, because the shadow already
 ; holds the rows.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; ttx_shvalid - CF=0 when the shadow already holds what the screen wants
+;
+; Factored out of ttx_draw_dyn so the FRAME test and the ENTRY test (SPEC.md
+; 45.13.6) cannot drift apart: the whole value of skipping a build is that the
+; two agree about what "still current" means.
+;
+; in:  tui_sync has run (this reads tui_a*). out: CF, AL spent.
+; -----------------------------------------------------------------------------
+ttx_shvalid:
+    cmp byte [ttx_shok], 0          ; a position move can change the pattern,
+    je .no                          ; and a pattern is a whole new shadow
+    mov al, [tui_apat]
+    cmp al, [ttx_shpat]
+    jne .no
+    mov al, [mp_ploop]              ; P makes the pattern its own neighbour
+    cmp al, [ttx_shloop]            ; both ways (SPEC.md 45.13.4)
+    jne .no
+    mov al, [tui_apos]              ; the pads are the ORDERS either side, so
+    cmp al, [ttx_shpos]             ; two orders naming the same pattern move
+    jne .no                         ; them without moving the pattern. A Bxx
+    clc                             ; needs no guard here: a stamp carries the
+    ret                             ; position its row belonged to, never the
+.no:                                ; parked one (SPEC.md 45.15)
+    stc
+    ret
+
 ttx_shstart:
     push ax
     push bx                         ; mp_order decodes through it
@@ -783,20 +818,100 @@ ttx_name:
     mov cx, 21
     mov ah, TTX_A_INV
     call ttx_putn
-    mov di, TTXAT(TTX_NAMEY, TTX_COLS - 12)
-    mov si, ttx_s_xtrate            ; XT mode IS 5,500 Hz for as long as it is
-    mov ah, TTX_A_INV               ; on (SPEC.md 45.9), and this screen only
-%ifdef TRKLOG                       ; exists while it is - so it is a fact...
-    call tlog_xtrate_stamp          ; ...unless K has moved it, in which case
-%endif                              ; the screen has to SAY which (FIELD-NOTES
-    call ttx_put                    ; 16): a swept rate nobody can read off
-                                    ; the machine is not a measurement
+    call ttx_rate_cell              ; the rate, STAMPED - it used to be the
+                                    ; constant 'XT 5500 Hz' and the comment
+                                    ; here said why that was a fact: XT mode
+                                    ; IS 5,500 Hz and this screen only existed
+                                    ; while XT mode was on. SPEC.md 45.13.7
+                                    ; retired the second half of that sentence
     pop es
     pop di
     pop si
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ttx_rate_stamp - put the LIVE rate into the nameplate's own string
+;
+; It was a CONSTANT, and that was correct while the text screen was XT mode's
+; and nothing else: XT mode IS 5,500 Hz (SPEC.md 45.9). SPEC.md 45.13.7 made
+; the surface a pick, so this screen now runs at 22 or 44 kHz with XT mode
+; off - and a header reading `XT 5500 Hz` over a 22,050 Hz stream is the app
+; lying about its own state, which is the one thing SPEC.md 45.8's honest
+; degradations are all shaped to avoid. K moving the rate under TRKLOG was the
+; SAME defect arriving first (docs/FIELD-NOTES.md 16) and had its own bench
+; stamper; there is one stamper now, in the shipped build, because the shipped
+; build has the problem too.
+;
+; [mp_mixrate], not the Rate menu's pick: what the header owes is the rate the
+; stream was OPENED at, and a pick takes effect at the next Play. mp_init
+; seeds it 11,000, so this never reads a zero.
+;
+; Preserves everything. Leading zeros become spaces and so does the `XT `
+; prefix when the mode is off, so the field keeps its width in every state and
+; the pen behind it never moves.
+; -----------------------------------------------------------------------------
+ttx_rate_stamp:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov di, ttx_s_xtrate
+    mov ax, '  '                    ; `XT ` is a FACT only while the mode is
+    cmp byte [mp_xt], 0             ; on - off, it is a claim about the rate
+    je .pfx                         ; that the digits then contradict
+    mov ax, 'XT'
+.pfx:
+    mov [di], al
+    mov [di + 1], ah
+    mov di, ttx_s_xtrate + 7        ; the last of the five digits
+    mov ax, [mp_mixrate]
+    mov cx, 5
+    mov bx, 10
+.d:
+    xor dx, dx
+    div bx
+    add dl, '0'
+    mov [di], dl
+    dec di
+    loop .d
+    mov di, ttx_s_xtrate + 3        ; '05500' is not a five-digit rate; four
+    mov cx, 4                       ; of the five may blank, never the last
+.z:
+    cmp byte [di], '0'
+    jne .out
+    mov byte [di], ' '
+    inc di
+    loop .z
+.out:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ttx_rate_cell - stamp it and draw that one cell. ES = [ttx_seg] on entry from
+; ttx_name; ttx_draw_dyn's delta call sets its own. Preserves everything.
+; -----------------------------------------------------------------------------
+ttx_rate_cell:
+    push ax
+    push si
+    push di
+    call ttx_rate_stamp
+    mov di, TTXAT(TTX_NAMEY, TTX_COLS - 12)
+    mov si, ttx_s_xtrate
+    mov ah, TTX_A_INV
+    call ttx_put
+    mov ax, [mp_mixrate]
+    mov [ttx_lrate], ax
+    pop di
+    pop si
     pop ax
     ret
 
@@ -881,7 +996,7 @@ ttx_status:
     mov si, [tui_msgp]
     or si, si
     jnz .have
-    mov si, tui_s_hint
+    call tui_hintp
 .have:
     mov ax, [ttx_seg]
     mov es, ax
@@ -1118,15 +1233,21 @@ ttx_draw_all:
     mov cx, TTX_COLS * TTX_ROWS
     mov ax, (TTX_A_NORM << 8) | ' '
     call ttx_fill
-    mov byte [ttx_shok], 0
-    mov byte [ttx_shbusy], 0
+    call ttx_shvalid                ; ...but the SHADOW is package bss, so it
+    mov byte [ttx_shbusy], 0        ; survived the last bracket (SPEC.md
+    jnc .shkeep                     ; 45.13.6): if it still holds this pattern,
+    mov byte [ttx_shok], 0          ; at this order, in this loop mode, then
+.shkeep:                            ; 328 mp_cell2txt calls are already done
     call ttx_name
     call ttx_header
     call ttx_vuframe
     call ttx_readout
     call ttx_status
     call tui_viewrow                ; before the build: ttx_shstart's cursor
-    call ttx_shbuild                ; starts at the visible window
+    cmp byte [ttx_shok], 0          ; starts at the visible window
+    jne .shdone
+    call ttx_shbuild
+.shdone:
     call ttx_blit
     mov al, [tui_cvr]
     mov [tui_lcvr], al
@@ -1160,6 +1281,17 @@ ttx_draw_dyn:
 %ifdef TRKLOG
     call tlog_fstart                ; this frame's span starts here
 %endif
+%ifdef TTXNOALL
+    jmp .out                        ; the TRUE drawing ceiling (PERFORMANCE.md
+%endif                              ; Set 67): TTXNODRAW takes out the grid
+                                    ; BLIT and nothing else, and the blit is
+                                    ; under half of what this screen costs -
+                                    ; the readouts, the VU needles, the shadow
+                                    ; rebuild and tui_sync are the rest. A
+                                    ; ceiling that only removes the blit is
+                                    ; not the ceiling on DRAWING, and reading
+                                    ; it as one is how Set 66 concluded that
+                                    ; no drawing change could help
     call tui_sync                   ; the position being HEARD (SPEC.md 45.15):
                                     ; everything below quotes tui_a*, so the
                                     ; grid, the readout and the needles all
@@ -1171,22 +1303,19 @@ ttx_draw_dyn:
     mov [tui_lplay], al             ; legend into [tui_msgp] and parks the view
     call trk_transport              ; row; the status line below spends it
 .noxn:
+    mov ax, [mp_mixrate]            ; ...and the nameplate's rate cell with it:
+    cmp ax, [ttx_lrate]             ; Play opens the stream INSIDE the bracket,
+    je .norate                      ; so a header stamped at ttx_name would
+    push es                         ; otherwise stand at whatever the rate was
+    mov ax, [ttx_seg]               ; before it. One cell, and only when the
+    mov es, ax                      ; value moved (SPEC.md 45.13.1)
+    call ttx_rate_cell
+    pop es
+.norate:
     cmp byte [ttx_shbusy], 0        ; a spread rebuild continues before
     jne .step                       ; anything looks at the pattern again
-    cmp byte [ttx_shok], 0          ; a position move can change the pattern,
-    je .rebuild                     ; and a pattern is a whole new shadow
-    mov al, [tui_apat]
-    cmp al, [ttx_shpat]
-    jne .rebuild
-    mov al, [mp_ploop]              ; P makes the pattern its own neighbour
-    cmp al, [ttx_shloop]            ; both ways (SPEC.md 45.13.4)
-    jne .rebuild
-    mov al, [tui_apos]              ; the pads are the ORDERS either side, so
-    cmp al, [ttx_shpos]             ; two orders naming the same pattern move
-    je .nosh                        ; them without moving the pattern. A Bxx
-                                    ; needs no guard here: a stamp carries the
-                                    ; position its row belonged to, never the
-                                    ; parked one (SPEC.md 45.15)
+    call ttx_shvalid
+    jnc .nosh
 .rebuild:
     call ttx_shstart                ; TTX_SHCHUNK rows a frame from here on,
 %ifdef TRKLOG
@@ -1211,7 +1340,17 @@ ttx_draw_dyn:
     je .norows
 .rows:
     mov byte [ttx_vdirty], 0
+%ifdef TTXPAGE
+    dec byte [ttx_pgn]              ; the PAGE-FLIP proxy (PERFORMANCE.md Set
+    jnz .norows                     ; 66): blit once every TTX_VIS row changes
+    mov byte [ttx_pgn], TTX_VIS     ; instead of once per row - the window
+%endif                              ; jumping a page rather than sliding a row.
+                                    ; It does NOT move the band in between, so
+                                    ; it is a LOWER BOUND on the real thing's
+                                    ; cost by 59 attribute writes a row
+%ifndef TTXNODRAW
     call ttx_blit
+%endif
 %ifdef TRKLOG
     mov al, TLOGF_BLIT
     call tlog_flag
@@ -1258,10 +1397,18 @@ ttx_draw_dyn:
 .novu:                              ; in the field (SPEC.md 45.16.1)
 %ifdef TRKLOG
     call tlog_frame                 ; the log's status line is live, so it is
-    call ttx_status                 ; redrawn every frame: the [ttx_lmsg]
-    jmp short .out                  ; pointer compare cannot see digits change
-.msg:                               ; inside one buffer
-%endif
+  %ifndef TTXQSTAT                  ; redrawn every frame: the [ttx_lmsg]
+    call ttx_status                 ; pointer compare cannot see digits change
+    jmp short .out                  ; inside one buffer
+  %endif                            ; ...and TTXQSTAT takes that back, because
+.msg:                               ; it is the LOG's cost and not the app's:
+%endif                              ; the shipped build redraws this line on a
+                                    ; message CHANGE, so a capacity measurement
+                                    ; taken with it live prices ttx_putn at 59
+                                    ; characters 54.6 times a second that
+                                    ; TRACKER.O88 never spends (PERFORMANCE.md
+                                    ; Set 66). Bench-only, like everything else
+                                    ; behind TRKLOG
     mov ax, [tui_msgp]
     cmp ax, [ttx_lmsg]
     je .out
@@ -1280,11 +1427,11 @@ ttx_draw_dyn:
 ; =============================================================================
 ttx_s_name:   db 'TRACKER', 0
 ttx_s_nomod:  db 'no module loaded', 0
-%ifdef TRKLOG
-ttx_s_xtrate: db 'XT 00000 Hz', 0   ; K sweeps it, so it is stamped per paint
-%else                               ; (docs/FIELD-NOTES.md 16); TTX_COLS - 12
-ttx_s_xtrate: db 'XT 5500 Hz', 0    ; leaves room for the extra digit
-%endif
+ttx_s_xtrate: db 'XT 00000 Hz', 0   ; STAMPED per paint in every build now
+                                    ; (SPEC.md 45.13.7): the rate is not a
+                                    ; constant once the surface is a pick.
+                                    ; TTX_COLS - 12 leaves room for the fifth
+                                    ; digit, which 44,100 needs
 ttx_s_pos:    db 'Pos ', 0
 ttx_s_slash:  db '/', 0
 ttx_s_ptn:    db '  Ptn ', 0
@@ -1318,6 +1465,9 @@ ttx_s_mute:   db '   MUTE', 0
     TRKB ttx_shnext                 ; ...and the one below row 63
     TRKB ttx_shok                   ; ...and whether it holds anything
     TRKB ttx_vdirty                 ; force the next blit (a fresh shadow)
+%ifdef TTXPAGE
+    TRKB ttx_pgn                    ; TTXPAGE's countdown to the next page
+%endif
     TRKBUF ttx_line, TTX_RW + 8     ; one composed line, ascii
     TRKB ttx_row                    ; ttx_rowtext's row (mp_cell2txt spends
                                     ; every general register, so it cannot
@@ -1336,6 +1486,13 @@ ttx_s_mute:   db '   MUTE', 0
                                     ; never inferred from a measurement
     TRKW ttx_vutick                 ; the tick the needles last decayed on
     TRKW ttx_lmsg                   ; the status string last drawn
+    TRKW ttx_lrate                  ; ...and the rate last stamped into the
+                                    ; nameplate (SPEC.md 45.13.7). The
+                                    ; nameplate is drawn ONCE per bracket and
+                                    ; the rate can move inside one - Play
+                                    ; opens the stream at the pick - so the
+                                    ; cell is delta-drawn on this, the
+                                    ; [tui_lplay] idiom one field over
     TRKBUF ttx_vuc, 4               ; last-drawn bar widths, CELLS (SPEC.md
                                     ; 45.12's delta baseline, in this mode's
                                     ; own units - never tui_vupx, which is px)

@@ -13,7 +13,9 @@
 ; mutually exclusive in practice (a minimized window is not visible, so it
 ; cannot be frontmost) but nothing depends on that, and a heavier border
 ; survives the 1bpp reduction (SPEC.md 39.4) where a second colour would not.
-; Clicking a tile restores a minimized instance or fronts a visible one.
+; Clicking a tile does whatever its own mark says is not true yet (SPEC.md
+; 30.4): a minimized one restores, an ACTIVE one minimizes, any other comes
+; to the front.
 ;
 ; dock_paint runs inside wm_paint_all right after desk_paint, under the
 ; caller's gfx lock - windows paint over the dock exactly like they cover
@@ -97,7 +99,8 @@ dock_init:
     push di
     mov byte [dock_gcol], 0
     mov byte [dock_full], 0     ; .bss is not zeroed at boot (-f bin), and
-    call dock_force             ; the first paint owes the whole strip
+    call dock_px_none           ; the first paint owes the whole strip - and
+    call dock_force             ; nothing has been PAINTED yet (SPEC.md 30.3.3)
     mov di, dock_ck
     mov cx, INST_MAX
 .z:
@@ -134,7 +137,7 @@ dock_force:
     push ax
     push cx
     xor ax, ax
-    mov cx, [vid_wm1]
+    mov cx, [vid_pwm1]
     call dock_force_x
     pop cx
     pop ax
@@ -145,7 +148,26 @@ dock_force_x:
     push cx
 %ifdef REDRAWFULL
     xor ax, ax                  ; REFERENCE BUILD: every damage is the whole
-    mov cx, [vid_wm1]           ; strip, the behaviour this replaced
+    mov cx, [vid_pwm1]           ; strip, the behaviour this replaced
+%endif
+%ifdef KERN_BIG
+    ; --- THE STRIP IS THE PRIMARY'S, AND SO IS ITS DAMAGE (SPEC.md 39.19.5) -
+    ; The span comes from a CALLER - wm_paint_dmg hands over the damage a drag
+    ; made - and that damage is in VIRTUAL coordinates, so on an extended
+    ; desktop it runs straight past the primary's last column. dock_paint then
+    ; drew its rule and white field at [vid_dock_y0] across it, and the
+    ; primary's dock ROW is inside the secondary's extent, so a full-width
+    ; white band appeared across the second monitor on every drag. dock_force
+    ; already clamped; this is the entry that did not, and clamping HERE is
+    ; what makes it true of every caller rather than of the ones that
+    ; remembered. The second monitor carries no menu bar (39.19.3) and it
+    ; carries no dock either.
+    cmp cx, [vid_pwm1]
+    jbe .xok
+    mov cx, [vid_pwm1]
+.xok:
+    cmp ax, cx
+    ja .out                     ; wholly past the primary: nothing to restore
 %endif
     cmp byte [dock_full], 0
     jne .union
@@ -195,6 +217,9 @@ dock_paint:
     mov al, [gfx_color]         ; byte-only save: gfx_lock_flag lives next
     mov [dock_gcol], al         ; door (see desk_draw_zone's precedent)
     mov byte [dock_drew], 0
+    call dock_px_none           ; ...and nothing of the strip is painted YET
+                                ; (SPEC.md 30.3.3): [dock_px1]/[dock_px2] are
+                                ; this pass's answer, not the last one's
 
     call wm_top                 ; who owns the frontmost visible window? Its
     mov word [dock_act], 0      ; tile gets the active mark (0 = nobody), and
@@ -208,19 +233,22 @@ dock_paint:
     je .scan                    ; they covered, and the tiles they reached
     mov byte [dock_full], 0
     mov byte [dock_drew], 1
+    mov ax, [dock_dx1]          ; ...over exactly this span, and it is the
+    mov cx, [dock_dx2]          ; span a window has to overlap to be damaged
+    call dock_px_add            ; by it (SPEC.md 30.3.3)
 
-    mov byte [gfx_color], CBLACK
+    call thm_ink                
     mov ax, [dock_dx1]          ; the rule, over the damaged span only
     mov bx, [dock_dx2]
     mov dx, [vid_dock_y0]
     call gfx_hline
 
-    mov byte [gfx_color], CWHITE
+    call thm_bg                
     mov ax, [dock_dx1]          ; ...and the white field under it, down to
     mov cx, [dock_dx2]          ; the last row
     mov bx, [vid_dock_y0]
     inc bx
-    mov dx, [vid_hm1]
+    mov dx, [vid_phm1]
     call gfx_fill
 
     mov ax, DOCK_X0             ; ...and the tiles it actually covered: a
@@ -252,6 +280,10 @@ dock_paint:
     je .next                    ; already drawn that way
     mov [dock_ck+bx], ax
     mov byte [dock_drew], 1
+    call dock_px_tile           ; ...and this tile's columns join the painted
+                                ; span, wherever it stands - a tile outside the
+                                ; forced span still puts pixels down, so the
+                                ; span is the UNION of the two (SPEC.md 30.3.3)
 
     xor dx, ax                  ; DX = what MOVED (SPEC.md 30.3)
 %ifdef REDRAWFULL
@@ -298,6 +330,101 @@ dock_paint:
 .clean:
     clc
     ret
+
+; -----------------------------------------------------------------------------
+; dock_px_none - the painted span is empty
+; dock_px_add  - ...grow it to cover x AX..CX as well (inclusive)
+; dock_px_tile - ...and to cover tile CX's own columns
+; out: nothing; every register preserved (dock_px_add spends flags, which no
+;      caller of it needs)
+;
+; SPEC.md 30.3.3. [dock_px1]/[dock_px2] is what dock_paint PUT PIXELS ON in
+; the pass that has just run, which is not [dock_dx1]/[dock_dx2]: that pair is
+; what somebody drew OVER US and is only half the answer, because a tile whose
+; key moved is repainted wherever it stands, damage or no damage.
+;
+; Empty is 0x7FFF..0x8000, so an untouched span refuses every rect through
+; dock_px_hit's signed compares rather than accepting all of them - the same
+; empty-bounding-box idiom wm_dmg_bands uses.
+; -----------------------------------------------------------------------------
+dock_px_none:
+    mov word [dock_px1], 07FFFh
+    mov word [dock_px2], 08000h
+    ret
+
+dock_px_add:
+    cmp ax, [dock_px1]
+    jge .x2
+    mov [dock_px1], ax
+.x2:
+    cmp cx, [dock_px2]
+    jle .out
+    mov [dock_px2], cx
+.out:
+    ret
+
+dock_px_tile:
+    push ax
+    push bx                     ; dock_tile_x eats BX, and the tile loop holds
+    push cx                     ; the instance index in CX and a key in AX
+    call dock_tile_x            ; AX = its left edge
+    mov cx, ax
+    add cx, DOCK_TILE_W-1
+    call dock_px_add
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dock_px_hit - does this rect overlap the strip dock_paint just painted?
+; in:  AX = x1, BX = y1, CX = x2, DX = y2 - inclusive, VIRTUAL coordinates
+; out: CF = 1 = the strip was drawn under it, so it owes a redraw;
+;      all registers preserved
+;
+; SPEC.md 30.3.3. wm_dmg_wins asked `y + h >= [vid_dock_y0]` and marked the
+; window on that alone, which is wrong in two directions at once and both of
+; them cost a whole window repaint, W_PAINT included.
+;
+;   - The strip is painted over a SPAN (30.3.1) and the test had no x in it,
+;     so a window over one end of the strip was redrawn because something
+;     moved at the other end.
+;   - The strip is the PRIMARY's and this rect is virtual (39.19.5), so on an
+;     extended desktop a window on the second monitor - which has no dock at
+;     all - was marked for reaching the primary's dock ROW. That is the
+;     expensive one: a window across the seam can hold no raise cache
+;     (39.14.8), so its redraw is a full W_PAINT rather than a ~10 ms blit.
+;
+; So it is an ordinary rect overlap against the strip that was drawn: the
+; painted span in x, and [vid_dock_y0]..[vid_phm1] in y, the primary sitting
+; at the virtual origin by construction (39.16). A one-display machine reads
+; [vid_phm1] = [vid_hm1] and the y half is exactly what it always was.
+; -----------------------------------------------------------------------------
+dock_px_hit:
+%ifdef REDRAWFULL
+    cmp dx, [vid_dock_y0]       ; THE REFERENCE BUILD (SPEC.md 30.3.3): every
+    jge .yes                    ; window whose rect reaches the strip's rows,
+    clc                         ; anywhere on the desktop, as this asked before
+    ret                         ; the span and the primary's own bounds
+.yes:
+    stc
+    ret
+%else
+    cmp ax, [dock_px2]
+    jg .no
+    cmp cx, [dock_px1]
+    jl .no
+    cmp bx, [vid_phm1]
+    jg .no                      ; below the primary altogether: a second
+                                ; monitor stacked under it carries no strip
+    cmp dx, [vid_dock_y0]
+    jl .no
+    stc
+    ret
+.no:
+    clc
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; dock_key - what tile i should look like, in one word
@@ -358,6 +485,27 @@ dock_tile_x:
     add ax, DOCK_X0
     ret
 
+%ifdef WM_ANIM
+; -----------------------------------------------------------------------------
+; dock_tile_rect - tile i's rect, for SPEC.md 11.99's minimize zoom
+; in:  CX = instance index
+; out: AX/BX/CX/DX = x1,y1,x2,y2 inclusive
+; clobbers: the outputs and flags
+;
+; Lifted out of dock_erase_tile rather than open-coded a second time, for
+; dock_hit's reason (SPEC.md 30.2): where a tile IS has one answer here, not
+; one per caller that can drift from the others.
+; -----------------------------------------------------------------------------
+dock_tile_rect:
+    call dock_tile_x            ; AX = tile left
+    mov cx, ax
+    add cx, DOCK_TILE_W-1
+    mov bx, [vid_dock_ty0]
+    mov dx, bx
+    add dx, DOCK_TILE_H-1
+    ret
+%endif
+
 ; -----------------------------------------------------------------------------
 ; dock_erase_tile - white out tile i's rect
 ; in:  CX = instance index; gfx lock held by the caller
@@ -374,7 +522,7 @@ dock_erase_tile:
     push cx
     push dx
     call dock_tile_x            ; AX = tile left
-    mov byte [gfx_color], CWHITE
+    call thm_bg                
     mov cx, ax
     add cx, DOCK_TILE_W-1
     mov bx, [vid_dock_ty0]
@@ -458,7 +606,7 @@ dock_draw_tile:
     call dock_tile_x
     mov si, ax                  ; SI = tile left for the duration
 
-    mov byte [gfx_color], CBLACK
+    call thm_ink                
     mov ax, si                  ; 1px tile frame
     mov bx, [vid_dock_ty0]
     mov cx, si
@@ -481,7 +629,7 @@ dock_draw_tile:
 
     cmp di, [dock_act]          ; active: a second frame just inside the
     jne .mini                   ; first, which reads as a heavier border and
-    mov byte [gfx_color], CBLACK; costs no colour (SPEC.md 39.4). The icon
+    call thm_ink                ; costs no colour (SPEC.md 39.4). The icon
     mov ax, si                  ; body is at +4,+2 and 16x16, so it clears
     inc ax                      ; both new edges by 2px and 1px
     mov bx, [vid_dock_ty0]
@@ -562,8 +710,26 @@ dock_hit:
 ; out: CF = 1 the click was consumed (anywhere in the strip, tile or not),
 ;      CF = 0 not in the dock. All registers preserved.
 ;
-; Tile hit on a live instance: minimized -> inst_restore (clears the flag,
-; wm_show); visible -> wm_front on its window. Single click activates.
+; **The tile is a TOGGLE** (SPEC.md 30.4): the click does whatever the tile's
+; own mark says is not currently true. Minimized (inverted interior) ->
+; inst_restore; ACTIVE (doubled border - this instance owns the frontmost
+; visible window) -> inst_minimize; anything else -> wm_front. The active
+; tile used to call wm_front on a window that was already frontmost, which
+; repaints no window at all (SPEC.md 11.90) - a click that consumed itself
+; and did nothing.
+;
+; Two things about the active test. It asks wm_top HERE rather than reading
+; [dock_act], which is dock_paint's scratch and valid only inside the paint
+; that resolved it - fdlg_sel_bar's rule about [fdlg_shown] (SPEC.md 38.3) in
+; another module. And it compares WINDOWS where dock_key compares records:
+; inst_bind_win is the only writer of I_WIN and of wm_owner and writes both
+; together, so wm_top == [di+I_WIN] and inst_win_owner(wm_top) == di cannot
+; disagree - this is the same predicate the tile's own mark is drawn from,
+; taken the cheaper way round.
+;
+; A window hidden WITHOUT being minimized is never wm_top's answer (it counts
+; visible windows only), so it still takes the wm_front path exactly as
+; before.
 ; -----------------------------------------------------------------------------
 dock_click:
     push ax
@@ -584,9 +750,21 @@ dock_click:
     jmp .consumed
 
 .front:
-    call gfx_lock               ; visible: bring to front (idempotent)
-    mov bx, [di+I_WIN]
-    call wm_front
+    call gfx_lock               ; visible: front it - or minimize it, if it is
+    mov cx, [di+I_WIN]          ; already the front one (SPEC.md 30.4). CX is
+    jcxz .fdone                 ; free (the click x is on the stack) and holds
+                                ; the window across wm_top, which answers in BX
+    call wm_top                 ; BX = the frontmost VISIBLE window, or 0
+    cmp bx, cx
+    mov bx, cx                  ; mov does not touch flags: BX = our window for
+    je .fmin                    ; whichever of the two calls is taken
+    call wm_front               ; in: BX
+    jmp short .fdone
+.fmin:
+    call inst_minimize          ; in: BX; sets I_FLAGS bit0 and wm_hides, so
+                                ; the tile inverts (SPEC.md 30.3) and the
+                                ; repaint is 11.91's over the vacated frame
+.fdone:
     call gfx_unlock
 
 .consumed:
@@ -690,6 +868,11 @@ dock_dx1:   resw 1              ; ...over this x span, and no wider: the union
 dock_dx2:   resw 1              ; of what has been drawn over us since the
                                 ; last dock_paint (SPEC.md 30.3)
 dock_drew:  resb 1              ; ...and dock_paint's CF: did anything move?
+dock_px1:   resw 1              ; the x span dock_paint PUT PIXELS ON in the
+dock_px2:   resw 1              ; pass that has just run - the forced span
+                                ; above unioned with every tile it redrew, and
+                                ; the question dock_px_hit answers about a
+                                ; window (SPEC.md 30.3.3)
 dock_act:   resw 1              ; the instance record owning the frontmost
                                 ; visible window, 0 = none. Read per tile, so
                                 ; it is resolved once per dock_paint

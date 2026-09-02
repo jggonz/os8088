@@ -67,6 +67,10 @@ HTW_ROWH     equ 12
 HTW_BY       equ 96             ; the button row
 HTW_BH       equ 16
 HTW_CAPY     equ 120
+HTW_CFORMAT  equ 1              ; control ids (SPEC.md 13.8.4), 1-based so 0
+HTW_CDELETE  equ 2              ; can mean "nothing is down"
+HTW_CCLOSE   equ 3
+
 HTW_B0X      equ 4              ; 'Format'
 HTW_B1X      equ 76             ; 'Delete'
 HTW_B2X      equ 148            ; 'Close'
@@ -89,6 +93,21 @@ HTS_VOL      equ 2              ; a volume
 HTS_ALIEN    equ 3              ; foreign type, or over the 65,535-sector
                                 ; ceiling (SPEC.md 18.7) - either way this
                                 ; kernel will never mount it
+HTS_GEOM     equ 5              ; a FAT-typed extent whose OWN CHS does not
+                                ; correspond to its LBA at this device's
+                                ; geometry - so the platter was laid out at a
+                                ; geometry we are not using, every read of it
+                                ; lands on the wrong sector, and the volume is
+                                ; unreachable rather than absent (SPEC.md
+                                ; 52.2.6). It reads as Not Formatted without
+                                ; this, which is the one answer that is both
+                                ; false and destructive: Format believes it
+HTS_LIVE     equ 4              ; ...and the volume THIS MACHINE BOOTED FROM,
+                                ; which Format and Delete must both refuse
+                                ; (SPEC.md 52.10.4.1). It is a state and not a
+                                ; flag beside one because it is the most
+                                ; important thing about that slot and the row
+                                ; is where a user looks for it
 
 hd_ttpl:    dw 90, 90, HTW_W, HTW_H, hd_s_ttitle, hd_tw_paint, 0, hd_tw_click
 hd_s_ttitle: db 'Format', 0
@@ -129,6 +148,11 @@ hd_tw_open:
     call OSAPI_WM_CREATE
     jc .out
     mov [hd_twin], bx
+    mov ax, hd_tw_up            ; SPEC.md 13.7/13.8.1: not template words, so
+    call OSAPI_WM_ONMOUSEUP     ; a window installs them itself after create
+    mov ax, hd_tw_drag
+    call OSAPI_WM_ONDRAG
+    mov byte [hd_tdown], 0
 .show:
     call OSAPI_WM_SHOW
 .out:
@@ -147,6 +171,65 @@ hd_tw_open:
 ; a type we do not mount are facts about the TABLE, so neither costs a read;
 ; only a slot that could carry a volume is asked whether it does.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; hd_tw_geomok - does this entry's own CHS agree with its LBA? (internal)
+; in:       SI = the partition entry
+; out:      CF = 0 they agree, or the entry declines to say; CF = 1 they differ
+; clobbers: flags
+;
+; AN MBR ENTRY CARRIES BOTH ADDRESSES for its first sector - the packed CHS at
+; HP_SHEAD/HP_SSEC/HP_SCYL and the LBA at HP_LBA - and the two are only
+; consistent under ONE geometry: the one the volume was laid out with. So the
+; disagreement is detectable HERE, from the table alone, with no read and no
+; second opinion from the drive.
+;
+; That matters because the read is exactly what cannot be trusted: hd_fmt_isfat
+; reaches the platter through hd_raw -> hd_chs at the CURRENT geometry, so a
+; mismatch does not make it fail loudly, it makes it read a DIFFERENT SECTOR
+; and answer honestly about that one. Every path in this driver goes the same
+; way, which is why the volume is unreachable and not merely mislabelled.
+;
+; The comparison is against hd_lba_chs + hd_chs_pack - the same pair partw.inc
+; WRITES an entry with - so a clamped entry compares equal to a clamped
+; expectation instead of reading as a mismatch.
+;
+; A sector field of 0 is not a disagreement: sectors are 1-based, so 0 is an
+; entry that declines to name a CHS at all, and a tool that called that a
+; geometry fault would refuse to format a perfectly formattable extent.
+; -----------------------------------------------------------------------------
+hd_tw_geomok:
+    push ax
+    push dx
+    push di
+    mov al, [si+HP_SSEC]
+    and al, 0x3F                ; the sector, 1-based: 0 = no CHS claimed
+    jz .ok
+    mov al, [hd_tdev]           ; hd_tdev and never [hd_sel] - the panel
+    call hd_dev_row             ; underneath stays clickable (52.10.4.1)
+    mov ax, [si+HP_LBA]
+    mov dx, [si+HP_LBA+2]
+    call hd_lba_chs             ; [hd_cyl]/[hd_head]/[hd_sec] at OUR geometry
+    call hd_chs_pack            ; AL = sector|cyl-high, AH = cyl-low
+    cmp al, [si+HP_SSEC]
+    jne .bad
+    cmp ah, [si+HP_SCYL]
+    jne .bad
+    mov al, [hd_head]
+    cmp al, [si+HP_SHEAD]
+    jne .bad
+.ok:
+    pop di
+    pop dx
+    pop ax
+    clc
+    ret
+.bad:
+    pop di
+    pop dx
+    pop ax
+    stc
+    ret
+
 hd_tw_scan:
     push ax
     push bx
@@ -163,11 +246,23 @@ hd_tw_scan:
     jne .store                  ; over 65,535 sectors (SPEC.md 18.7)
     call hd_part_isfat
     jc .store                   ; a type this driver does not mount
-    mov al, HTS_VOL
+    call hd_tw_geomok           ; ...and BEFORE the read, because the read is
+    mov al, HTS_GEOM            ; the thing a geometry fault corrupts: ask the
+    jc .store                   ; table, which cannot be pointed at the wrong
+    mov al, HTS_VOL             ; sector (SPEC.md 52.2.6)
     call hd_fmt_isfat
     jnc .store
     mov al, HTS_RAW
 .store:
+    cmp al, HTS_FREE            ; ...unless it is the one we are RUNNING FROM
+    je .put                     ; (SPEC.md 52.10.4.1). Last, after every fact
+    push ax                     ; about the TABLE, and skipped for a free slot,
+    mov al, [hd_tdev]           ; which has no base to compare. The DEVICE is
+    call hd_kvol                ; hd_tdev and never [hd_sel]: the panel
+    pop ax                      ; underneath stays clickable while this window
+    jc .put                     ; is up, which is the same reason every write
+    mov al, HTS_LIVE            ; in here uses it
+.put:
     push bx
     xor bh, bh
     mov [bx+hd_tstate], al
@@ -199,14 +294,14 @@ hd_tw_paint:
     mov di, ax
     mov bp, dx
 
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov si, hd_s_thdr
+    mov si, hd_s_thdr               ; NO PEN: font_run takes the pair in AX and
+                                    ; never reads [gfx_color] (SPEC.md 52.12)
     mov cx, di
     add cx, HTW_LX
     mov dx, bp
     add dx, HTW_HY
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: the tool window's own white
+    call OSAPI_FONT_RUN
 
     xor cl, cl
 .row:
@@ -240,46 +335,50 @@ hd_tw_paint:
     add dx, 9
     call OSAPI_GFX_FILL
     pop cx
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
+    mov word [hd_pair], (CBLACK << 8) | CWHITE  ; white on the bar just laid,
+                                    ; and the PAIR is the whole of it - the fill
+                                    ; above owns the pen (SPEC.md 52.12)
     jmp short .text
 .plain:
-    mov al, CBLACK              ; every row in the SAME pen: the State column
-    call OSAPI_SET_COLOR        ; is what says what a slot is (SPEC.md 52.2.2)
+    mov word [hd_pair], (CWHITE << 8) | CBLACK  ; every row in the SAME pair:
+                                ; the State column is what says what a slot is
+                                ; (SPEC.md 52.2.2)
 .text:
     pop dx
     mov si, hd_line
     mov cx, di
     add cx, HTW_LX
-    call OSAPI_FONT_STR
+    mov ax, [hd_pair]           ; OPAQUE (SPEC.md 52.12)
+    call OSAPI_FONT_RUN
     pop cx
     inc cl
     cmp cl, 4
     jb .row
 
-    mov al, CBLACK              ; the pen for the buttons and the caption:
-    call OSAPI_SET_COLOR        ; hd_tw_button cannot set it (AX is the x)
-    mov si, hd_s_tfmt
-    mov ax, HTW_B0X
-    mov bx, HTW_BW0
-    call hd_tw_button
+    mov si, hd_s_tfmt           ; the shared control takes the pen itself and
+    mov ax, HTW_B0X             ; leaves it live, so there is no CBLACK to set
+    mov bx, HTW_BW0             ; here and none to put back after Delete
+    call hd_tw_fmtok            ; ...and the same predicate/carry idiom Delete
+    mov cl, 0                   ; uses below (SPEC.md 47 rule 2): it greys the
+    adc cl, 0                   ; button here and refuses the click in
+    mov ch, HTW_CFORMAT
+    call hd_tw_button           ; hd_tw_format
     call hd_tw_delok            ; the ONE predicate (SPEC.md 47 rule 2): it
-    call OSAPI_GFX_PEN          ; greys the button here and refuses the click
-                                ; in hd_tw_delete, so a greyed Delete can never
+    mov cl, 0                   ; greys the button here and refuses the click
+    adc cl, 0                   ; in hd_tw_delete, so a greyed Delete can never
                                 ; be one that would have worked. CF is what
-                                ; both of them answer in, so the pen takes it
-                                ; with no test in between - and it carries
-                                ; [gfx_dis], so the label dithers on mono
-                                ; along with the frame (SPEC.md 47 rule 3)
+                                ; both answer in, and OS88UI_DIS is 1, so the
+                                ; flag IS the carry (`mov` does not touch it)
     mov si, hd_s_tdel
     mov ax, HTW_B1X
     mov bx, HTW_BW1
+    mov ch, HTW_CDELETE
     call hd_tw_button
-    clc                         ; ...and back to the live pen for the rest:
-    call OSAPI_GFX_PEN          ; the flag would dither Close and the caption
     mov si, hd_s_close
     mov ax, HTW_B2X
     mov bx, HTW_BW2
+    xor cl, cl
+    mov ch, HTW_CCLOSE
     call hd_tw_button
 
     mov si, [hd_tmsg]
@@ -287,7 +386,8 @@ hd_tw_paint:
     add cx, HTW_LX
     mov dx, bp
     add dx, HTW_CAPY
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: the tool window's own white
+    call OSAPI_FONT_RUN
 
     pop bp
     pop di
@@ -311,11 +411,17 @@ hd_tw_paint:
 ; button here with a predicate, and it is a fact rather than a guess: an empty
 ; slot has nothing to give back (SPEC.md 52.2.4).
 ;
-; **The pen is the CALLER's**, because AX is the x here and OSAPI_SET_COLOR
-; took its colour in AL: setting it inside drew both buttons at the same place,
-; one on top of the other. It is also what lets the caller grey one button and
-; not the others without this routine knowing any predicate - and what makes
-; the frame and the label share one pen, so on mono they dither together.
+; **The greying is a FLAG in CL now, not the caller's pen.** It used to be the
+; pen because AX is the x here and OSAPI_SET_COLOR took its colour in AL, so
+; setting it inside drew both buttons at the same place - which is a real
+; constraint that the shared control simply does not have, its rect arriving
+; as a pointer. The caller still owns the predicate, which is the half that
+; mattered: one predicate per control, shared with the click refusal.
+;
+; THE LABEL IS CENTRED NOW and it was flush left at x+4, so it moves - Format
+; and Delete (48px in 64) by 4px, Close (40px in 56) by 4px. Named because it
+; is visible: the labels were the only ones in the system not centred in their
+; buttons.
 ; -----------------------------------------------------------------------------
 hd_tw_button:
     push ax
@@ -323,34 +429,37 @@ hd_tw_button:
     push cx
     push dx
     push si
-    add ax, di                  ; AX = x1
-    mov cx, ax
-    add cx, bx
-    dec cx                      ; CX = x2
-    mov bx, bp
-    add bx, HTW_BY              ; BX = y1
-    mov dx, bx
-    add dx, HTW_BH - 1          ; DX = y2
-    push ax
-    push bx
-    push cx
-    push dx
-    call OSAPI_GFX_FRAME
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    add ax, 4                   ; the label, 4px in and centred vertically
-    mov cx, ax
-    mov dx, bx
-    add dx, 4
-    call OSAPI_FONT_STR
+    push di
+    add ax, di                  ; the rect, in screen coordinates
+    mov [hd_tbrect+0], ax
+    add ax, bx
+    dec ax
+    mov [hd_tbrect+4], ax
+    mov ax, bp
+    add ax, HTW_BY
+    mov [hd_tbrect+2], ax
+    add ax, HTW_BH - 1
+    mov [hd_tbrect+6], ax
+    mov dl, cl                  ; CL = the flag word; DI is about to be it
+    xor dh, dh
+    mov di, dx
+    mov al, ch                  ; CH = the control's id (SPEC.md 13.8.4)
+    cmp al, [hd_tdown]
+    jne .nodn
+    or di, OS88UI_DOWN          ; DIS outranks it inside the control, so a
+.nodn:                          ; greyed button never says it will fire
+    mov bx, hd_tbrect           ; OS88UI_FILL because a RELEASE redraws this
+    or di, OS88UI_FILL          ; button over a pressed one; on a full repaint
+    call os88ui_btn             ; hd_win_erase has already whited the ground
+    pop di
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
     ret
+
+hd_tbrect:  dw 0, 0, 0, 0       ; the button being drawn, screen coordinates
 
 ; -----------------------------------------------------------------------------
 ; hd_tw_rowtext - one slot's line, into hd_line (module internal)
@@ -395,10 +504,22 @@ hd_tw_rowtext:
     mov al, [bx+hd_tstate]
     cmp al, HTS_ALIEN
     je .alien
+    cmp al, HTS_LIVE
+    je .live
     cmp al, HTS_VOL
     je .vol
+    cmp al, HTS_GEOM
+    je .geom
     mov si, hd_s_traw           ; free and partitioned-but-empty read the same
     call hd_scat                ; on purpose: both mean Format makes a volume
+    jmp short .done
+.geom:
+    mov si, hd_s_tgeom          ; ...and this one does NOT join them, which is
+    call hd_scat                ; the whole point: there IS a volume here and
+    jmp short .done             ; Format would destroy it (SPEC.md 52.2.6)
+.live:
+    mov si, hd_s_tlive          ; NOT its FAT type: what matters about this one
+    call hd_scat                ; is that the machine is standing on it
     jmp short .done
 .alien:
     mov si, hd_s_talien
@@ -496,31 +617,17 @@ hd_tw_click:
     jmp short .repaint
 
 .buttons:
-    cmp dx, HTW_BY + HTW_BH
-    jge .done
-    mov ax, cx
-    cmp ax, HTW_B0X
-    jl .done
-    cmp ax, HTW_B0X + HTW_BW0
-    jl .format
-    cmp ax, HTW_B1X
-    jl .done
-    cmp ax, HTW_B1X + HTW_BW1
-    jl .delete
-    cmp ax, HTW_B2X
-    jl .done
-    cmp ax, HTW_B2X + HTW_BW2
-    jge .done
-    mov byte [hd_tarm], 0
-    mov bx, [hd_twin]
-    call OSAPI_WM_HIDE
+    ; SPEC.md 13.6/13.8.4: none of the three has a safe prefix action - Format
+    ; writes a partition table, Delete takes a volume away and Close ends the
+    ; window - so the press only ARMS and DRAWS, and hd_tw_up acts.
+    call hd_tbhit
+    or al, al
+    jz .done
+    xor ah, ah
+    call os88ui_arm
+    call hd_tsetdown
     jmp short .done
 
-.delete:
-    call hd_tw_delete
-    jmp short .repaint
-.format:
-    call hd_tw_format
 .repaint:
     call hd_tw_repaint
 .done:
@@ -532,6 +639,225 @@ hd_tw_click:
     pop bx
     pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; hd_tbhit - which button is this CONTENT-relative point in?
+; in:  CX = content-relative x, DX = content-relative y
+; out: AL = HTW_C*, or 0; AH clobbered, everything else preserved
+;
+; One description, read by the press, the drag and the release - and by the
+; painter through the same HTW_B* constants, which is what keeps the drawn
+; control and the clickable one the same rectangle (SPEC.md 22.18's rule, one
+; window along).
+; -----------------------------------------------------------------------------
+hd_tbhit:
+    cmp dx, HTW_BY
+    jl .no
+    cmp dx, HTW_BY + HTW_BH
+    jge .no
+    mov al, HTW_CFORMAT
+    cmp cx, HTW_B0X
+    jl .no
+    cmp cx, HTW_B0X + HTW_BW0
+    jl .out
+    inc al
+    cmp cx, HTW_B1X
+    jl .no
+    cmp cx, HTW_B1X + HTW_BW1
+    jl .out
+    inc al
+    cmp cx, HTW_B2X
+    jl .no
+    cmp cx, HTW_B2X + HTW_BW2
+    jl .out
+.no:
+    xor al, al
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_tw_pt - a SCREEN point to a content-relative one (module internal)
+; in:  CX = x, DX = y, SI = the window
+; out: CX/DX content-relative, DI = content left, BP = content top; AX, BX
+;      clobbered
+; -----------------------------------------------------------------------------
+hd_tw_pt:
+    push si
+    mov bx, si
+    mov si, dx
+    call OSAPI_WM_CONTENT
+    mov di, ax
+    mov bp, dx
+    sub cx, di
+    mov dx, si
+    sub dx, bp
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_tsetdown - AL becomes the button drawn pressed (0 = none), and it DRAWS
+; in:  AL = an id or 0; DI = content left, BP = content top; the lock is held
+; out: nothing (all registers preserved)
+;
+; Draws only what CHANGED, and one button rather than the window: hd_tw_repaint
+; erases the whole content, so driving the pressed look through it would be
+; PERFORMANCE.md's double-draw flash on every press and every slide.
+; -----------------------------------------------------------------------------
+hd_tsetdown:
+    push ax
+    cmp al, [hd_tdown]
+    je .out
+    push ax
+    mov al, [hd_tdown]          ; the one being let go, upright again
+    or al, al
+    jz .take
+    mov byte [hd_tdown], 0
+    call hd_tctlpaint
+.take:
+    pop ax
+    mov [hd_tdown], al
+    or al, al
+    jz .out
+    call hd_tctlpaint           ; ...and the one being taken, pressed
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_tctlpaint - redraw ONE button, in whatever state [hd_tdown] says
+; in:  AL = a control id, DI = content left, BP = content top; lock held
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+hd_tctlpaint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov ch, al
+    cmp al, HTW_CDELETE
+    je .del
+    ja .close
+    mov si, hd_s_tfmt           ; Format: live on every row there is
+    mov ax, HTW_B0X
+    mov bx, HTW_BW0
+    call hd_tw_fmtok
+    mov cl, 0
+    adc cl, 0
+    jmp short .draw
+.del:
+    mov si, hd_s_tdel           ; Delete: the ONE predicate, shared with the
+    mov ax, HTW_B1X             ; click refusal (SPEC.md 47 rule 2)
+    mov bx, HTW_BW1
+    call hd_tw_delok
+    mov cl, 0
+    adc cl, 0
+    jmp short .draw
+.close:
+    mov si, hd_s_close
+    mov ax, HTW_B2X
+    mov bx, HTW_BW2
+    xor cl, cl
+.draw:
+    call hd_tw_button
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_tw_up - W_ONMOUSEUP (SPEC.md 13.7): the three buttons fire HERE
+; in:  CX = x, DX = y (SCREEN, possibly outside the window), SI = the window
+; out: nothing
+; -----------------------------------------------------------------------------
+hd_tw_up:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    call os88ui_fire            ; AX = what the press armed, and it is CLEARED
+    or ax, ax
+    jz .done
+    push ax
+    call hd_tw_pt
+    pop bx                      ; BL = the armed control
+    call hd_tbhit               ; still on it?
+    cmp al, bl
+    je .fire
+    xor al, al                  ; no: thought better of, and nothing fires
+    call hd_tsetdown
+    jmp short .done
+.fire:
+    mov byte [hd_tdown], 0      ; NOT hd_tsetdown: every path below either
+                                ; repaints the window or hides it, and drawing
+                                ; this button upright first is
+                                ; PERFORMANCE.md's double-draw
+    cmp al, HTW_CCLOSE
+    je .close
+    cmp al, HTW_CDELETE
+    je .delete
+    call hd_tw_format
+    jmp short .repaint
+.delete:
+    call hd_tw_delete
+.repaint:
+    call hd_tw_repaint
+    jmp short .done
+.close:
+    mov byte [hd_tarm], 0
+    mov bx, [hd_twin]
+    call OSAPI_WM_HIDE
+.done:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_tw_drag - W_ONDRAG (SPEC.md 13.8.1): the pointer moved, press still down
+; in:  CX = x, DX = y (SCREEN), SI = the window
+; out: nothing
+; -----------------------------------------------------------------------------
+hd_tw_drag:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    call os88ui_armed           ; PEEK: the arm is the release's to spend
+    or ax, ax
+    jz .done
+    push ax
+    call hd_tw_pt
+    pop bx
+    call hd_tbhit
+    cmp al, bl
+    je .set
+    xor al, al                  ; off it: nothing is down
+.set:
+    call hd_tsetdown            ; ...which draws only if that CHANGED
+.done:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+hd_tdown:   db 0                ; which button is DRAWN pressed, 0 = none
 
 ; -----------------------------------------------------------------------------
 ; hd_tw_format - partition and format the selected slot (module internal)
@@ -555,6 +881,12 @@ hd_tw_format:
     push si
     push di
 
+    call hd_tw_fmtok            ; the boot partition is refused here as well as
+    jnc .table                  ; greyed (SPEC.md 47 rule 2), and says nothing
+    jmp .out                    ; more than the greyed button already does
+                                ; (rule 5). NEAR, like the confirm's jump
+                                ; below: .out is well past 127 bytes
+.table:
     cmp byte [hd_mbrok], HMB_BAD    ; we could not read what this would
     je .notable                     ; replace: never commit a fabrication
 
@@ -672,6 +1004,7 @@ hd_tw_delete:
     jc .out                     ; the caption is asking
 
     mov al, [hd_tsel]
+    mov ah, [hd_tdev]
     call hd_tw_unmount_slot     ; -> [hd_tdrop]
     cmp byte [hd_tdrop], 0
     je .table
@@ -679,7 +1012,7 @@ hd_tw_delete:
                                 ; boot reads, and it just changed: STAGED, like
                                 ; every other setting in the machine, and
                                 ; written when the panel closes (SPEC.md 31.8)
-    mov word [hd_msg], hd_s_pick    ; ...and the PAGE's caption records what the
+    call hd_page_pick               ; ...and the PAGE's caption records what the
                                     ; last PAGE click did, so it is sitting
                                     ; there saying 'Mounted 1 volume' about a
                                     ; volume this click has just taken away. The
@@ -720,7 +1053,6 @@ hd_tw_delete:
     call hd_dev_row             ; off what we hoped we wrote
     call hd_tw_scan
     jmp short .out
-    jmp short .out
 .notable:
     mov byte [hd_tarm], 0
     mov word [hd_tmsg], hd_s_tnomb
@@ -756,9 +1088,11 @@ hd_tw_delok:
     mov al, [bx+hd_tstate]
     cmp al, HTS_FREE
     je .no
-    pop bx
-    pop ax
-    clc
+    cmp al, HTS_LIVE            ; taking the boot partition's entry away is the
+    je .no                      ; same act as formatting it, one indirection
+    pop bx                      ; further out: the volume is live, the kernel
+    pop ax                      ; is reading its own files off it, and next
+    clc                         ; boot there would be nothing to boot
     ret
 .no:
     pop bx
@@ -767,42 +1101,38 @@ hd_tw_delok:
     ret
 
 ; -----------------------------------------------------------------------------
-; hd_tw_unmount_slot - drop every volume mounted on one partition (internal)
-; in:  AL = the slot, [hd_tdev] = the device; the gfx lock is HELD
-; out: [hd_tdrop] = 1 if anything was unmounted, 0 if not
-; clobbers: flags
+; hd_tw_fmtok - may Format be clicked? (module internal)
+; out: CF = 0 yes / 1 no.  SPEC.md 47 rule 2's predicate for that button.
 ;
-; EVERY row and not the first, for hd_unmount's own reason: one partition is
-; one volume today, and a scan that stops early is the kind of thing that
-; stops being true quietly.
+; Every slot is formattable - free, raw, alien or a volume - which is why this
+; button had no predicate at all until SPEC.md 52.10.4.1. There is exactly one
+; that is not: the partition this machine booted from, whose FAT and root the
+; format would rewrite under a kernel that is reading its own files out of
+; them, with a live FAT window (SPEC.md 18.8.1) and cached directory sectors
+; (19.2.3) describing a disk that stopped existing. It cannot be unmounted
+; first the way 52.10.8's destination is - it is where the kernel LIVES.
 ; -----------------------------------------------------------------------------
-hd_tw_unmount_slot:
+hd_tw_fmtok:
     push ax
     push bx
-    push cx
-    push dx
-    mov dl, al                  ; DL = the slot: AL is the comparison's
-    mov byte [hd_tdrop], 0
-    mov cx, HD_MAXVOL
-    mov bx, hd_vols
-.scan:
-    cmp byte [bx+HDV_USED], 0
-    je .next
-    mov al, [bx+HDV_DEV]
-    cmp al, [hd_tdev]
-    jne .next
-    mov al, [bx+HDV_PART]
-    cmp al, dl
-    jne .next
-    call hd_unmount_row
-    mov byte [hd_tdrop], 1
-.next:
-    add bx, HDV_SIZE
-    loop .scan
-    pop dx
-    pop cx
+    mov bl, [hd_tsel]
+    xor bh, bh
+    cmp byte [bx+hd_tstate], HTS_LIVE
+    je .no
+    cmp byte [bx+hd_tstate], HTS_GEOM
+    je .no                      ; the one state where the ROW ABOVE THE BUTTON
+                                ; is false: there is a volume here and this
+                                ; driver cannot see it, so 'Erase slot N?' is
+                                ; a fair question asked of a user who has just
+                                ; been shown a wrong picture (SPEC.md 52.2.6)
     pop bx
     pop ax
+    clc
+    ret
+.no:
+    pop bx
+    pop ax
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -922,6 +1252,11 @@ hd_s_four:    db '     ', 0     ; slot digit -> size column
 hd_s_nosize:  db '     ', 0     ; ...and the size column when nothing claims it
 hd_s_traw:    db 'Not Formatted', 0
 hd_s_talien:  db 'Unmountable', 0
+hd_s_tgeom:   db 'Wrong Geometry', 0   ; 14 chars, the longest of the five -
+                                       ; hd_s_traw is 13 and the column fits
+hd_s_tlive:   db 'Booted From', 0   ; the installer's word for the same fact
+                                    ; (SPEC.md 52.10.4.1): two windows, one
+                                    ; thing to learn
 hd_s_tfmt:    db 'Format', 0
 hd_s_tdel:    db 'Delete', 0
 hd_s_tready:  db 'Pick a slot, then a button', 0
@@ -939,3 +1274,31 @@ hd_s_tdsk1:   db '? Click Delete again', 0
 hd_s_tdeleted: db 'Slot deleted', 0
 hd_s_tdelunm: db 'Deleted - volume unmounted', 0
 hd_s_tdempty: db 'Nothing in that slot', 0
+
+; --- state this module owns (moved out of hdd.asm's data block) ---
+hd_twin:     dw 0               ; the disk tool's window, 0 = never opened
+hd_tdev:     db 0               ; the DEVICE the tool is bound to, banked when
+                                ; it opened. hd_mbr and hd_tstate describe THIS
+                                ; device; [hd_sel] is the Control Panel's
+                                ; highlight and the panel stays clickable
+                                ; underneath, so a write that reads [hd_sel]
+                                ; can commit one disk's table to another's
+                                ; LBA 0. Everything destructive reads this
+hd_tsel:     db 0               ; ...the slot it has selected,
+hd_tarm:     db 0               ; the ARMED ACTION when a destructive button is
+                                ; one click from happening, 0 when none is:
+                                ; slot+1 in the low nibble and HTA_DEL for
+                                ; which button, so Format and Delete cannot arm
+                                ; each other (52.2.3)
+hd_tdropv:   db 0xFF            ; the last kernel volume index an unmount took,
+                                ; 0xFF = none. The install repairs SPEC.md
+                                ; 51.5.2's banked drive against this: the
+                                ; volume it unmounts may be the one the user
+                                ; was standing on (SPEC.md 52.10.8)
+hd_tdrop:    db 0               ; a Delete unmounted a volume, so the caption
+                                ; says so and the mounted set is re-staged
+hd_tmsg:     dw 0               ; ...and its caption
+hd_tstate:   times 4 db 0       ; HTS_* per slot, worked out when the tool
+                                ; opens and after every format
+hd_ask:      times 40 db 0      ; the confirm question, built into a buffer of
+                                ; its own: hd_line belongs to the row painter

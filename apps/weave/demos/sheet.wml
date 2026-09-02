@@ -1,0 +1,15 @@
+<!-- SHEET: the grid component with initial CELLS and FX formulas - a small
+     picnic budget. Formulas are 32-bit 16.16 fixed point (WEAVE-SPEC 5);
+     cell() into WJS truncates to the integer part, and showTotal makes
+     that seam visible on purpose. -->
+<app name="Budget" vm="16">
+  <card id="main">
+    <label style="bold">Picnic Budget</label>
+    <grid id="g" cols="3" rows="8" br="1" h="10"
+          onselect="showSel" oncalc="calcDone"/>
+    <label id="status" br="1" w="40">Ready.</label>
+    <button id="btnTotal" onclick="showTotal" br="1">Show total</button>
+    <button id="btnBump" onclick="bump">Cider +1</button>
+  </card>
+  <script src="SHEET.WJS"/>
+</app>

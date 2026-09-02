@@ -1,0 +1,17 @@
+// SHEET's handlers: the grid surface (WEAVE-SPEC 6.9). Row/col arguments
+// are 1-based; cell() truncates 16.16 to the int part (WEAVE-SPEC 5.2).
+function calcDone(changed) {
+  status.text = "Recalculated " + str(changed) + " cells.";
+}
+
+function showSel(r, c) {
+  status.text = "R" + str(r) + "C" + str(c) + " = " + str(g.cell(r, c));
+}
+
+function showTotal() {
+  alert("Total is " + str(g.cell(6, 2)));
+}
+
+function bump() {
+  g.setCell(4, 2, g.cell(4, 2) + 1);
+}

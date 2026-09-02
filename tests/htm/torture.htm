@@ -1,0 +1,147 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+<html><head>
+<meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1">
+<title>Browser torture test</title>
+<style type="text/css">
+  body { font-family: "not a font we have"; }
+  /* this block must never reach the renderer, and it contains <p>markup</p> */
+</style>
+<script language="JavaScript">
+  // nor must this, and it also contains </p> and <table> to bait a bad parser
+  document.write("<h1>you should never see this</h1>");
+</script>
+</head>
+<body bgcolor=#c0c0c0 text=#000000>
+
+<h1>Browser torture test</h1>
+
+<p>Every section here is a case that will not be met until a real page does
+it. If this page renders, the parser is not guessing. Back to the
+<a href="demo.htm">demo page</a>.</p>
+
+<hr>
+
+<h2>1. Words that do not fit</h2>
+
+<p>A forty-character word:
+Supercalifragilisticexpialidocious123456 &mdash; and one longer than any line
+this browser can draw:
+AAAAAAAAAABBBBBBBBBBCCCCCCCCCCDDDDDDDDDDEEEEEEEEEEFFFFFFFFFFGGGGGGGGGGHHHHHHHHHHIIIIIIIIII
+&mdash; the break in front of a row is decided by the length of the word
+behind it, which is why a wrap walk cannot resume exactly at the row it
+wants.</p>
+
+<h2>2. A table wider than any screen</h2>
+
+<table border=1 cellpadding=2>
+<tr><th>c1</th><th>c2</th><th>c3</th><th>c4</th><th>c5</th><th>c6</th><th>c7</th><th>c8</th><th>c9</th><th>c10</th><th>c11</th><th>c12</th><th>c13</th><th>c14</th><th>c15</th><th>c16</th><th>c17</th><th>c18</th><th>c19</th><th>c20</th><th>c21</th><th>c22</th><th>c23</th><th>c24</th><th>c25</th><th>c26</th><th>c27</th><th>c28</th><th>c29</th><th>c30</th><th>c31</th><th>c32</th><th>c33</th><th>c34</th><th>c35</th><th>c36</th><th>c37</th><th>c38</th><th>c39</th><th>c40</th></tr>
+<tr><td>7</td><td>14</td><td>21</td><td>28</td><td>35</td><td>42</td><td>49</td><td>56</td><td>63</td><td>70</td><td>77</td><td>84</td><td>91</td><td>98</td><td>105</td><td>112</td><td>119</td><td>126</td><td>133</td><td>140</td><td>147</td><td>154</td><td>161</td><td>168</td><td>175</td><td>182</td><td>189</td><td>196</td><td>203</td><td>210</td><td>217</td><td>224</td><td>231</td><td>238</td><td>245</td><td>252</td><td>259</td><td>266</td><td>273</td><td>280</td></tr>
+</table>
+
+<h2>3. Three tables that are not tables</h2>
+
+<p>A one-by-one table, which is a box:</p>
+<table border=0 bgcolor=#000080 cellpadding=6 width="85%">
+<tr><td align=middle><font color=#ffffff><b>White on navy.</b> Honour one of
+foreground and background and this is invisible; honour neither and it is
+legible.</font></td></tr>
+</table>
+
+<p>A table whose cells hold no text, which is decoration:</p>
+<table border=0 cellpadding=0 cellspacing=0 height=10 width=200 bgcolor=#000000>
+<tr><td bgcolor=#444444 width="100%"></td></tr>
+</table>
+
+<p>A one-by-one table nested inside a one-by-one table, which is nothing:</p>
+<table border=0 cellpadding=4><tr><td>
+  <table border=0 cellpadding=2><tr><td>Both of these collapse.</td></tr></table>
+</td></tr></table>
+
+<h2>4. A real table, with a colspan</h2>
+
+<table border=1 cellpadding=3 cellspacing=0>
+<tr><th colspan=3>One header across three columns</th></tr>
+<tr><td>alpha</td><td>beta</td><td>gamma</td></tr>
+<tr><td>1</td><td>22</td><td>333</td></tr>
+<tr><td>a much longer cell than the others</td><td>x</td><td>y</td></tr>
+</table>
+
+<h2>5. Nesting thirty deep</h2>
+
+<p><b><i><small><font size=2><font size=2><b><i><small><font size=2><font size=2><b><i><small><font size=2><font size=2><b><i><small><font size=2><font size=2><b><i><small><font size=2><font size=2><b><i><small><font size=2><font size=2><b><i><small><font size=2><font size=2><b><i><small><font size=2><font size=2><b><i><small><font size=2><font size=2><b><i><small><font size=2><font size=2>Thirty levels of inline markup around one sentence.</font></font></small></i></b></font></font></small></i></b></font></font></small></i></b></font></font></small></i></b></font></font></small></i></b></font></font></small></i></b></font></font></small></i></b></font></font></small></i></b></font></font></small></i></b></font></font></small></i></b></p>
+
+<h2>6. Entities</h2>
+
+<p>Named: &amp; &lt; &gt; &quot; &nbsp; &copy; &reg; &mdash; &ndash; &hellip;
+&laquo; &raquo;<br>
+Numeric, inside ASCII: &#65; &#66; &#67; &#33;<br>
+Numeric, outside anything the cell font has: &#9749; &#8364; &#9731;<br>
+Malformed, and must not eat the rest of the line: &amp &#; &#xZZ; &notanentity;
+&amp;amp; is a literal ampersand-a-m-p.</p>
+
+<h2>7. High-bit bytes, declared ISO-8859-1</h2>
+
+<p>These are real bytes above 0x7E, not entities:
+Köln, naïve, Zürich, señor, café, Æsop, ß, ½, µ, ©, £, ×.
+A fold to ASCII should make every one of them readable rather than dropping
+the word.</p>
+
+<h2>8. An unclosed tag</h2>
+
+<p>This paragraph opens a bold and never closes it: <b>bold from here on.
+
+<h2>9. Preformatted</h2>
+
+<pre>
+  column1   column2   column3
+  -------   -------   -------
+  a         b         c
+  a line inside PRE that is much longer than any window this browser will ever be given, and must not wrap
+       leading   spaces   preserved
+</pre>
+
+<h2>10. Empty structure</h2>
+
+<p></p>
+<p>   </p>
+<br><br><br>
+<table border=1><tr><td></td></tr></table>
+<ul></ul>
+<p>Four empty blocks are above this line.</p>
+
+<h2>11. Comments</h2>
+
+<!-- a comment containing <h1>markup</h1> and an unclosed <table> -->
+<p>The comment above must not render and must not break the table below.</p>
+<table border=1><tr><td>intact</td></tr></table>
+
+<h2>12. Long enough to scroll</h2>
+<p>Paragraph 1. The scroll tiers in the plan are unreachable on a page that fits in one window, so this page deliberately does not. Holding the arrow key here is the input-overrun test.</p>
+<p>Paragraph 2. The scroll tiers in the plan are unreachable on a page that fits in one window, so this page deliberately does not. Holding the arrow key here is the input-overrun test.</p>
+<p>Paragraph 3. The scroll tiers in the plan are unreachable on a page that fits in one window, so this page deliberately does not. Holding the arrow key here is the input-overrun test.</p>
+<p>Paragraph 4. The scroll tiers in the plan are unreachable on a page that fits in one window, so this page deliberately does not. Holding the arrow key here is the input-overrun test.</p>
+<p>Paragraph 5. The scroll tiers in the plan are unreachable on a page that fits in one window, so this page deliberately does not. Holding the arrow key here is the input-overrun test.</p>
+<p>Paragraph 6. The scroll tiers in the plan are unreachable on a page that fits in one window, so this page deliberately does not. Holding the arrow key here is the input-overrun test.</p>
+<p>Paragraph 7. The scroll tiers in the plan are unreachable on a page that fits in one window, so this page deliberately does not. Holding the arrow key here is the input-overrun test.</p>
+<p>Paragraph 8. The scroll tiers in the plan are unreachable on a page that fits in one window, so this page deliberately does not. Holding the arrow key here is the input-overrun test.</p>
+<p>Paragraph 9. The scroll tiers in the plan are unreachable on a page that fits in one window, so this page deliberately does not. Holding the arrow key here is the input-overrun test.</p>
+<p>Paragraph 10. The scroll tiers in the plan are unreachable on a page that fits in one window, so this page deliberately does not. Holding the arrow key here is the input-overrun test.</p>
+<p>Paragraph 11. The scroll tiers in the plan are unreachable on a page that fits in one window, so this page deliberately does not. Holding the arrow key here is the input-overrun test.</p>
+<p>Paragraph 12. The scroll tiers in the plan are unreachable on a page that fits in one window, so this page deliberately does not. Holding the arrow key here is the input-overrun test.</p>
+<p>Paragraph 13. The scroll tiers in the plan are unreachable on a page that fits in one window, so this page deliberately does not. Holding the arrow key here is the input-overrun test.</p>
+<p>Paragraph 14. The scroll tiers in the plan are unreachable on a page that fits in one window, so this page deliberately does not. Holding the arrow key here is the input-overrun test.</p>
+<p>Paragraph 15. The scroll tiers in the plan are unreachable on a page that fits in one window, so this page deliberately does not. Holding the arrow key here is the input-overrun test.</p>
+<p>Paragraph 16. The scroll tiers in the plan are unreachable on a page that fits in one window, so this page deliberately does not. Holding the arrow key here is the input-overrun test.</p>
+<p>Paragraph 17. The scroll tiers in the plan are unreachable on a page that fits in one window, so this page deliberately does not. Holding the arrow key here is the input-overrun test.</p>
+<p>Paragraph 18. The scroll tiers in the plan are unreachable on a page that fits in one window, so this page deliberately does not. Holding the arrow key here is the input-overrun test.</p>
+<p>Paragraph 19. The scroll tiers in the plan are unreachable on a page that fits in one window, so this page deliberately does not. Holding the arrow key here is the input-overrun test.</p>
+<p>Paragraph 20. The scroll tiers in the plan are unreachable on a page that fits in one window, so this page deliberately does not. Holding the arrow key here is the input-overrun test.</p>
+<p>Paragraph 21. The scroll tiers in the plan are unreachable on a page that fits in one window, so this page deliberately does not. Holding the arrow key here is the input-overrun test.</p>
+<p>Paragraph 22. The scroll tiers in the plan are unreachable on a page that fits in one window, so this page deliberately does not. Holding the arrow key here is the input-overrun test.</p>
+<p>Paragraph 23. The scroll tiers in the plan are unreachable on a page that fits in one window, so this page deliberately does not. Holding the arrow key here is the input-overrun test.</p>
+<p>Paragraph 24. The scroll tiers in the plan are unreachable on a page that fits in one window, so this page deliberately does not. Holding the arrow key here is the input-overrun test.</p>
+<p>Paragraph 25. The scroll tiers in the plan are unreachable on a page that fits in one window, so this page deliberately does not. Holding the arrow key here is the input-overrun test.</p>
+
+<hr>
+<center><small><a href="demo.htm">Back to the demo page</a></small></center>
+</body></html>

@@ -1,0 +1,67 @@
+\documentclass[letterpaper,12pt]{article}
+\title{A Compact Measure for Working Papers}
+\author{TeXPad / os8088}
+\date{August 2026}
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This note is a short working paper set in one monospaced face on
+US Letter stock. The pad understands enough TeX for text, sections
+and ruled tables. Colour is not used.
+\end{abstract}
+
+\section{Introduction}
+A research note should be readable in hard copy. TeXPad keeps the
+measure, the padding and the page number under the Layout menu, and
+the same values may be written in the source.
+
+Paragraphs wrap to the text width. A blank line starts a new
+paragraph. \textbf{Bold} and \emph{emphasis} are the only faces.
+
+\section{Method}
+\subsection{Page}
+Letter paper is 612 by 792 points. Normal margins are one inch on
+every side. Narrow and wide steps are three-quarter and one-and-a-half
+inches. Compact, normal and loose padding change paragraph skip,
+leading and table cell inset.
+
+\subsection{Tables}
+Columns are \texttt{l}, \texttt{c} or \texttt{r}. A bar in the
+preamble draws a rule. Cell padding follows the padding setting.
+
+\begin{tabular}{|l|c|r|}
+\hline
+Part & Qty & Notes \\
+\hline
+8088 CPU & 1 & 4.77 MHz, 8-bit bus \\
+8259A & 1 & PIC, master \\
+2764 & 8 & 8K EPROM each \\
+\hline
+\end{tabular}
+
+\begin{quote}
+Quoted extracts are inset from both margins. They are meant for a
+sentence taken from another page, not for decoration.
+\end{quote}
+
+\section{Results}
+File, Export PDF and Export PS write a PDF 1.4 or a
+PostScript Level 1 file, which a reader on another machine
+opens. The body is Courier; rules are ordinary path strokes.
+
+The book class adds chapter openings. Article is the default for a
+note of this length.
+
+\newpage
+\section{Notes}
+Special characters: 50\%, A \& B, \$32, file\_name. Line break\\
+stays on the same paragraph.
+
+\begin{itemize}
+\item F5 typesets the preview.
+\item Layout cycles class, margins and padding.
+\item The system 8x8 font is the preview face.
+\end{itemize}
+
+\end{document}

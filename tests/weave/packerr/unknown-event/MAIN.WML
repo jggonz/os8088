@@ -1,0 +1,5 @@
+<app name="Err">
+  <card id="main">
+    <label onclick="f">Hi</label>
+  </card>
+</app>

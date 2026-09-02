@@ -26,35 +26,35 @@
 ;    apps/fractal, sleeping one tick a frame for ~18 fps. Everything the UI
 ;    task does is set a word the worker reads.
 ;
-;  - **A hold is recognised by the repeat RATE, and that is what buys three
-;    clean speeds.** int 16h gives keypresses and no key-up, and a typematic
-;    repeat is byte-identical to a fresh press, so "is left held" cannot be
-;    asked and the INTERVAL between events is the only evidence there is. Every
-;    earlier version read it the hard way: a fresh press latched the paddle in
-;    motion for longer than the typematic DELAY (~9 ticks) so that the first
-;    repeat would arrive while it still stood, and that latch doubled as the
-;    tap. Which made the tap 11 ticks long whether the player wanted it or not
-;    - 44 pixels at the old speed, a whole paddle width, a fifth of the
-;    paddle's travel, for a key already released, and the paddle could not be
-;    aimed at all. Shortening it broke the hold; tapering it made a hold
-;    decelerate and then surge, which read worse than the overshoot; slowing it
-;    to keep the tap short made both a crawl. All three failures are the same
-;    one: with the DELAY as the discriminator, the tap and the first
-;    half-second of a hold are the same event and every number serves both.
-;    The typematic RATE is a far better discriminator, because nothing else
-;    produces it. Repeats arrive ~1.7 ticks apart and no human taps six times a
-;    second, so TWO events within ARK_PRATE ticks of each other mean the key is
-;    held - and nothing else does. A press whose neighbour is further off is
-;    the player pressing again, and it simply restarts the tap. So the tap
-;    length stopped having to outlast anything and became a pure feel knob, and
-;    what is left is three speeds with nothing between them: stopped, tapping
-;    at ARK_PSTEP for ARK_PTAP ticks and then stopping mid-stride, holding at
-;    ARK_PFAST until the repeats stop refilling it. [ark_pspd] is those three
-;    values and is the whole state machine.
-;    The first repeat of a real hold is 9 ticks after the press and so reads as
-;    a re-press, restarting the tap - which is exactly right, and it is why a
-;    hold keeps moving through the delay it cannot see the end of. The second
-;    repeat, 1.7 ticks later, is what promotes it.
+;  - **A hold is the KEY BEING DOWN, and the kernel is asked (SPEC.md 9.7).**
+;    int 16h gives keypresses and no key-up, and a typematic repeat is
+;    byte-identical to a fresh press, so "is left held" cannot be asked OF IT -
+;    and every version of this file until now inferred a hold from the INTERVAL
+;    between events instead. Two of those inferences shipped and both failed in
+;    the same place, because the evidence they need is not there to be read.
+;    Reading the typematic DELAY meant latching the paddle in motion for longer
+;    than ~9 ticks so the first repeat would land while the latch still stood,
+;    and that latch doubled as the tap: 11 ticks whether the player wanted them
+;    or not, 44 pixels, a whole paddle width, for a key already released.
+;    Reading the RATE fixed the tap - two events inside ~2 ticks are a repeat
+;    and nothing else produces that - but it cannot see the delay at all, so
+;    between the tap running out at 7 ticks and the first repeat arriving at 9
+;    the paddle STOPPED, and then went again: measured on a cycle-accurate
+;    5150, six ticks at 5 px, two ticks at zero, then eight. That is the "go,
+;    stop, then go" the field reported, and no arrangement of the constants
+;    removes it - a tap that ends before the delay does stops, and one that
+;    does not is the 44-pixel tap again. The rate reading also lost the key
+;    entirely when a SECOND key was pressed, the keyboard repeating only the
+;    last key down, so serving with Space froze the paddle until the arrow was
+;    released and pressed afresh.
+;    So the kernel tracks the scancodes - make and break, which do carry it -
+;    and ark_do_paddle asks once a tick. What is left is three speeds with
+;    nothing between them: stopped, tapping at ARK_PSTEP for ARK_PTAP ticks and
+;    then stopping mid-stride, and holding at ARK_PFAST, promoted the moment
+;    the key has been down for those same ARK_PTAP ticks. The first 35 pixels
+;    of a hold are pixel-for-pixel a tap, because until the tap would have
+;    ended the player has not done anything different. [ark_pspd] is those
+;    three values and is still the whole state machine.
 ;
 ;  - **Sound comes from the worker**, which the SDK's worker-safe list does not
 ;    mention and which is nevertheless correct: `snd_req_inst` (SPEC.md 34.3)
@@ -147,6 +147,40 @@
 
 ; --- the board ------------------------------------------------------------------
 ARK_COLS    equ 10                  ; bricks across, both metric sets
+
+; --- THE THREE FIELDS A WINDOW SIZE IS A FUNCTION OF ------------------------
+; Named here and spent twice: once in the metric records at the bottom of this
+; file, and once in the per-adapter preferences ark_entry publishes (SPEC.md
+; 11.100.1). Two places that must agree about a number is how a size drifts
+; from the layout it is meant to hold, and the answer is that only one of them
+; carries the number.
+ARK_BW_BIG   equ 24                 ; brick width, VGA and Hercules
+ARK_RAIL_BIG equ 4                  ; side rail
+ARK_CHW_BIG  equ 300                ; content height the layout wants
+ARK_BW_SML   equ 20                 ; ...and CGA's 200 rows
+ARK_RAIL_SML equ 3
+ARK_CHW_SML  equ 137
+
+; ark_entry's own arithmetic, as constants: content = bricks + both rails, and
+; the frame is that plus the 1px border either side / the title bar and one
+; more. A GENEROUS height is the idiom (docs/WINDOW-SIZING-PLAN.md 9) - no
+; package can know how tall another adapter's band is, so publish a number the
+; kernel's clamp can bring down. On Hercules it comes back 303.
+ARK_PREF_BW  equ ARK_BW_BIG * ARK_COLS + 2 * ARK_RAIL_BIG + 2
+ARK_PREF_BH  equ ARK_CHW_BIG + TITLE_H + 1
+ARK_PREF_SW  equ ARK_BW_SML * ARK_COLS + 2 * ARK_RAIL_SML + 2
+ARK_PREF_SH  equ ARK_CHW_SML + TITLE_H + 1
+
+; ...AND THE FLOOR IS ONE PIXEL SHORTER THAN THE PREFERENCE, because a floor
+; is the one number no clamp may cut. On a CGA wm_fit's height cap is
+; vid_dock_y0 - MBAR_H - 1 = 155 - the `dec di` that keeps a frame off the
+; dock strip, which is the same pixel ark_entry's own `sub bx, MBAR_H + 1`
+; below takes - and wm_min_floor runs AFTER that clamp and wins. Published as
+; the floor, ARK_PREF_SH's 156 put it straight back, y floored at MBAR_H, and
+; the frame's drop shadow landed on row 176: exactly vid_dock_y0. From there
+; wm_dock_clear's `jae` is true for this window forever, so every window
+; opened or moved over the game pays a dock repaint it did not owe.
+ARK_MIN_SH   equ ARK_CHW_SML + TITLE_H
 ARK_MAXROW  equ 6                   ; ...and the most rows either set uses
 ARK_NZONE   equ 5                   ; paddle zones the bounce divides it into
                                     ; (ark_zbias/ark_zbq)
@@ -154,40 +188,26 @@ ARK_CELLS   equ ARK_COLS * ARK_MAXROW
 ARK_NMET    equ 12                  ; words in a metrics record (ark_met_*)
 
 ARK_LIVES   equ 3
+ARK_LIVEMAX equ 6                   ; spare-paddle slots drawn: more than this
+                                    ; would run into the level field
 ; --- the paddle has three speeds and nothing between them (SPEC.md 44.2) ------
 ; [ark_pspd] IS the state machine: 0 stopped, ARK_PSTEP tapping, ARK_PFAST
 ; holding. Nothing ramps, tapers or coasts between them.
-ARK_PRATE   equ 2                   ; THE discriminator. Two key events this
-                                    ; many ticks apart or closer are typematic
-                                    ; repeats - ~1.65 ticks at the usual 10.9
-                                    ; cps, which [ark_page] samples as 1 or 2 -
-                                    ; so this and only this promotes a press to
-                                    ; a HOLD. Anything slower is the player
-                                    ; pressing again, which restarts the tap.
-                                    ; int 16h has no key-up and a repeat is
-                                    ; byte-identical to a fresh press, so the
-                                    ; interval is the only evidence there is.
-                                    ; Err LOW rather than high: too high and a
-                                    ; player tapping to walk the paddle trips
-                                    ; into a hold (measured: 3 puts that at
-                                    ; ~4.5 taps a second, 2 at ~7), while too
-                                    ; low, on a machine whose repeat RATE is
-                                    ; slower than this, costs only the fast
-                                    ; speed - every repeat then restarts the
-                                    ; tap instead, so a held key still moves,
-                                    ; just at ARK_PSTEP
 ARK_PTAP    equ 7                   ; ticks a TAP moves for, then stops dead.
                                     ; Times ARK_PSTEP this is the whole tap:
-                                    ; 35 pixels. It is a pure feel knob - it
-                                    ; used to have to outlast the typematic
-                                    ; DELAY, which is what forced it to 11 and
-                                    ; the speed down to a crawl, and ARK_PRATE
-                                    ; retired that duty (SPEC.md 44.2)
-ARK_PHOLD   equ 4                   ; ...and what each repeat of a confirmed
-                                    ; hold refills, so it is also exactly how
-                                    ; long the paddle coasts once the key comes
-                                    ; up. It has to outlast the typematic RATE:
-                                    ; it tolerates one down to ~4.5 cps
+                                    ; 35 pixels. It is ALSO how long a HOLD
+                                    ; spends at the slow speed before it is
+                                    ; promoted, which is what makes the first
+                                    ; 35 pixels of a hold identical to a tap -
+                                    ; they have to be, because for those ticks
+                                    ; the two are the same gesture
+ARK_PHOLD   equ 4                   ; ...and what a tick with the key DOWN
+                                    ; refills, so it is also exactly how long
+                                    ; the paddle coasts once the key comes up.
+                                    ; Refilled only when it has fallen BELOW
+                                    ; this, so the first three ticks of a tap's
+                                    ; countdown are untouched and a tap is
+                                    ; still exactly ARK_PTAP long
 ARK_VQ      equ 4                   ; QUARTER pixels: the sub-pixel unit BOTH
                                     ; the paddle (just below) and the ball
                                     ; (SPEC.md 44.3.2, further below) move in
@@ -326,6 +346,24 @@ ARK_MAXSHOT equ 4                   ; bullets in the air at once - a volley is
                                     ; presses' worth exactly as it was when a
                                     ; volley was a single bolt
 ARK_PUCHANCE equ 8                  ; 1 in this many broken bricks drops one
+; --- the composed capsule (SPEC.md 44.10.6) ---------------------------------
+; A capsule is ONE gfx_blit1 now: body, edge, mark and the strip it vacated,
+; composed into a 1bpp band at level start and put down in one call. It used to
+; be SEVEN drawing calls a frame per capsule and the mark was a transparent
+; pass over a body drawn in that same frame - so there was a letter-less
+; instant, every frame, on every falling capsule.
+ARK_SPW     equ 2                   ; band stride: 16 px, because gfx_blit1
+                                    ; wants a whole number of BYTES and the
+                                    ; capsule is 12. The four spare columns are
+                                    ; paper, and paper is ARK_BG
+ARK_SPTOP   equ 8                   ; blank rows ABOVE the capsule, which is
+                                    ; how the ERASE rides in the same call: a
+                                    ; capsule that fell `d` rows blits from row
+                                    ; ARK_SPTOP-d for ARK_PUH+d rows, and the
+                                    ; first d of them are background
+ARK_SPH     equ ARK_SPTOP + ARK_PUH ; rows in one sprite
+ARK_SPN     equ PU_KINDS + 1        ; ...and one sprite per kind, PU_NONE spare
+
 ARK_PUW     equ 12                  ; capsule size. The height must CONTAIN the
 ARK_PUH     equ 10                  ; 8px glyph drawn one row in, or the letter
                                     ; hangs a row below the rect that erases
@@ -364,30 +402,23 @@ ARK_BALLCOL equ CWHITE
 ark_entry:
     push si
     push di
+    mov al, KSC_LEFT                ; ARM the key-state map, here and not at
+    call OSAPI_KEY_DOWN             ; the first steer: asking is what starts
+                                    ; the kernel tracking scancodes (SPEC.md
+                                    ; 9.7), and a map armed by the first arrow
+                                    ; has already MISSED that arrow's make
+                                    ; code - so the paddle read the key as up
+                                    ; until its first typematic repeat and
+                                    ; stopped for the whole delay, which is
+                                    ; the exact defect this was meant to fix.
+                                    ; The answer is meaningless and discarded
     call OSAPI_VIDEO                ; AX=w, BX=h, CX=dock top row, DH=bpp
     mov [ark_scrw], ax
     mov [ark_dock], cx
     mov [ark_bpp], dh
 
-    mov si, ark_met_big
-    cmp bx, 300
-    jae .metric
-    mov si, ark_met_sml
-.metric:
-    mov di, ark_bw                  ; copied wholesale: the bss words below
-    mov cx, ARK_NMET                ; must stay in the record's order
-.mcopy:
-    mov ax, [si]
-    mov [di], ax
-    add si, 2
-    add di, 2
-    loop .mcopy
-
-    call ark_scale_vel              ; ...and the speeds that record implies
-
-    mov ax, [ark_pw0]               ; the widest an Expand can make it
-    add ax, 24
-    mov [ark_pwmax], ax
+    call ark_metrics            ; the record this screen wants, and everything
+                                ; it implies (SPEC.md 11.98 re-runs this)
 
     mov ax, [ark_bw]                ; content width = the wall plus both rails
     mov bx, ARK_COLS
@@ -446,6 +477,26 @@ ark_entry:
     call OSAPI_WM_CREATE
     jc .full
     mov [ark_win], bx
+    mov ax, ark_onresize            ; the metric record is picked from the
+    call OSAPI_WM_ONRESIZE          ; SCREEN, so an adapter change invalidates
+                                    ; it and nothing else would say so
+                                    ; (SPEC.md 11.98)
+    mov si, ark_pref                ; **AND THE WINDOW FOLLOWS THE METRICS**
+    call OSAPI_WM_PREFER            ; (SPEC.md 11.100.1). ark_metrics has always
+                                    ; had two records and picked the right one;
+                                    ; what never followed was the FRAME, so a
+                                    ; game dragged onto a CGA re-derived a
+                                    ; fatter, squatter wall and then drew it
+                                    ; into a window still 303 rows tall - this
+                                    ; window is not WF_SIZABLE, so until it
+                                    ; published these three sizes the kernel
+                                    ; had none for it that anyone had designed
+    mov cx, ARK_PREF_SW             ; ...and the floor is the small record's
+    mov dx, ARK_MIN_SH              ; own size, because a straddle still CLAMPS
+    call OSAPI_WM_MINSIZE           ; a published size to the rows both cards
+                                    ; have (SPEC.md 39.16.3) and a wall with
+                                    ; the rows squeezed out of it is a
+                                    ; different game
     mov si, ark_menus
     call OSAPI_MENU_SET
     mov si, ark_about
@@ -612,6 +663,116 @@ ark_scale_one:
 ; in:  [ark_chgt]; out: [ark_bricky], [ark_pady], [ark_floor]
 ; preserves all registers
 ; -----------------------------------------------------------------------------
+; ark_metrics - the metric record this screen wants, and what it implies
+; in:  BX = the screen HEIGHT
+; out: ark_bw.. filled, the velocities scaled, ark_pwmax derived
+; clobbers: AX, CX, SI, DI
+; -----------------------------------------------------------------------------
+ark_metrics:
+    mov si, ark_met_big
+    cmp bx, 300
+    jae .metric
+    mov si, ark_met_sml
+.metric:
+    mov di, ark_bw                  ; copied wholesale: the bss words below
+    mov cx, ARK_NMET                ; must stay in the record's order
+.mcopy:
+    mov ax, [si]
+    mov [di], ax
+    add si, 2
+    add di, 2
+    loop .mcopy
+
+    call ark_scale_vel              ; ...and the speeds that record implies
+
+    mov ax, [ark_pw0]               ; the widest an Expand can make it
+    add ax, 24
+    mov [ark_pwmax], ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_lvx - the level field's pen: the right end of the strip, rounded DOWN to
+;           a multiple of 8 (SPEC.md 44.10.5)
+; out: AX; preserves every other register
+;
+; DERIVED at the point of use rather than kept, because [ark_cwid] is computed
+; by ark_entry AFTER ark_metrics and again on every resize - a copy taken in
+; the metrics reads a width that does not exist yet, comes out 0, and puts the
+; level field on top of the score.
+; -----------------------------------------------------------------------------
+ark_lvx:
+    mov ax, [ark_cwid]
+    sub ax, ARK_LFW * 8
+    and ax, ~7
+    jns .out
+    xor ax, ax                      ; a screen too narrow for the field: the
+.out:                               ; left edge, and the padding still erases
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_onresize - the adapter changed under us (SPEC.md 11.98)
+;
+; in:  SI = our window, CX/DX = the new content size; the gfx lock is HELD and
+;      this may not draw
+; out: nothing (all registers preserved)
+;
+; ark_track already reads the live box every frame, so the field's EXTENT
+; follows a resize on its own. What does not is the metric RECORD: brick and
+; paddle sizes, the ball, the rail width and the velocity scale are picked once
+; from the screen height at launch, and a 480-row VGA taken to its 200-row CGA
+; leaves a game laid out in 24x10 bricks inside 137 rows of content.
+;
+; THE LEVEL RESTARTS, and that is the honest answer rather than a shortcut. The
+; wall's row COUNT is one of the metric words (6 against 5), so the alive map
+; changes shape - a ball in flight is inside a wall that no longer exists at
+; those coordinates, and there is no rescaling that makes a half-broken 6-row
+; wall into a half-broken 5-row one. Score, lives and level survive; the ball
+; goes back on the paddle, which is a state the game already has and the player
+; already understands (M_READY).
+;
+; It does NOT resize the window. The kernel has already decided the box - that
+; is why this is being called - and ark_track lays the field into whatever it
+; is, which is what every other app in the tree does with its content.
+; -----------------------------------------------------------------------------
+ark_onresize:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, si                      ; **THE CARD THIS WINDOW IS ON** (SPEC.md
+    call OSAPI_WM_DISPLAY           ; 39.16.4), not the primary: this handler
+                                    ; fires on a DRAG across the seam as well
+                                    ; as on Activate Mode, and OSAPI_VIDEO
+                                    ; answers about the primary either way.
+                                    ; AX=w, BX=h, CX=dock row, SI=band top,
+                                    ; DH=bpp - and SI stops being the window
+                                    ; here, which is why BX was taken first
+    mov [ark_scrw], ax              ; the bpp is banked again too, because a
+    mov [ark_bpp], dh               ; switch is exactly when it stops being true
+    sub cx, si                      ; the BAND - not CX - MBAR_H on a secondary,
+    add cx, MBAR_H                  ; which has no menu bar and no dock - put
+    mov [ark_dock], cx              ; back into the primary-shaped number every
+                                    ; reader of [ark_dock] already subtracts
+                                    ; MBAR_H from
+    call ark_metrics                ; ...which reads BX, now THIS card's height:
+                                    ; the one number the big/small choice turns
+                                    ; on
+    cmp byte [ark_mode], M_OVER     ; a finished game has nothing to restart,
+    je .out                         ; and putting a ball back on the paddle
+                                    ; there would look like a free life
+    call ark_startlevel
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ark_layout:
     push ax
     mov ax, [ark_status]            ; the wall starts under the status strip
@@ -728,21 +889,19 @@ ark_onkey:
 .steer:
     cmp al, [ark_pdir]              ; the other arrow is always a fresh tap
     jne .fresh
-    cmp word [ark_pspd], ARK_PFAST  ; already holding? then this is just the
-    je .hold                        ; next repeat, and it only refills
-    cmp word [ark_page], ARK_PRATE  ; otherwise it is a hold ONLY if it arrived
-    ja .fresh                       ; a typematic RATE after the last event;
-.hold:                              ; slower than that is a deliberate press
-    mov word [ark_pspd], ARK_PFAST  ; again, and restarts the tap from here
-    mov word [ark_pkeep], ARK_PHOLD
-    mov word [ark_page], 0
-    jmp .out
+    cmp word [ark_pspd], 0          ; same arrow and the paddle is ALREADY
+    jne .out                        ; moving that way: this is a typematic
+                                    ; repeat, and ark_do_paddle is following
+                                    ; the KEY rather than these events, so
+                                    ; there is nothing to do. Restarting the
+                                    ; tap here is what used to drop a hold back
+                                    ; to the slow speed on every repeat
 .fresh:
     mov [ark_pdir], al
     mov word [ark_pspd], ARK_PSTEP
     mov word [ark_pacc], 0          ; a new press owes no sub-pixel: the first
     mov word [ark_pkeep], ARK_PTAP  ; tick of a nudge must always move
-    mov word [ark_page], 0
+    mov word [ark_pdn], 0           ; ...and it has been held for no ticks yet
     jmp .out
 
 .ascii:
@@ -1268,30 +1427,50 @@ ark_focuschk:
 
 ; -----------------------------------------------------------------------------
 ; ark_do_paddle - move the paddle at whichever of the three speeds is set
-; in:  [ark_pdir]/[ark_pkeep]/[ark_pspd]/[ark_pacc]; out: [ark_px] moved,
-;      clamped; preserves all registers; ages [ark_page]
+; in:  [ark_pdir]/[ark_pkeep]/[ark_pspd]/[ark_pacc]/[ark_pdn]; out: [ark_px]
+;      moved, clamped; preserves all registers
 ;
 ; [ark_pkeep] is written by the UI task and decremented here. Both are plain
 ; word accesses, and the 8086 recognises interrupts only at instruction
 ; boundaries, so neither can be torn by the other - the same no-protocol
 ; sharing apps/fractal uses for its restart flag. [ark_pspd], [ark_pacc] and
-; [ark_page] are written by both, and the same argument covers them: the UI
+; [ark_pdn] are written by both, and the same argument covers them: the UI
 ; task only ever stores a whole word, never reads one back to modify it.
 ;
-; There is nothing here but a speed and a countdown. [ark_pspd] holds one of
-; exactly three values and this routine changes it only one way - to 0, when
-; the countdown runs out. Every ramp, taper and coast that used to live here is
-; gone; a tap runs at its speed for ARK_PTAP ticks and stops mid-stride, and a
-; hold runs at its speed until the repeats stop refilling it. The abrupt stop
-; is the point rather than a compromise, because the paddle can then be aimed
-; by tapping - see the head of this file.
+; THE KEY ITSELF SAYS WHETHER IT IS HELD (SPEC.md 9.7), and that is what this
+; routine is built around now. It used to infer a hold from the INTERVAL
+; between int 16h events, because int 16h has no key-up in it - and that
+; inference has two failures no arrangement of its constants can fix. It
+; cannot see the typematic DELAY, so for the ~9 ticks between a press and its
+; first repeat a held key produces no evidence at all and the paddle stopped
+; dead in the middle of a hold - go, stop, go, which is what the field
+; reported. And the keyboard repeats the LAST key pressed, so serving with
+; Space ended the arrow's repeats while the finger was still on it and the
+; paddle would not move again until the arrow was released and pressed afresh.
 ;
-; Two smaller things. [ark_pacc] carries the quarter pixels a fractional speed
-; owes between frames, which is what lets ARK_PSTEP be 2.0 or 1.75 rather than
-; only a whole 1 or 2 (SPEC.md 44.3.2's argument, applied to the paddle). And
-; [ark_page] counts ticks since the last key event, for ark_onkey's repeat
-; test; it stops counting at ARK_PRATE, which is the only question ever asked
-; of it, so it cannot wrap.
+; So each tick asks OSAPI_KEY_DOWN. Down: refill the countdown (only when it
+; has fallen below ARK_PHOLD, so a tap's first three ticks are untouched) and
+; age [ark_pdn], the ticks this press has been held for. Up: the countdown
+; runs out exactly as it always did. The SPEED is then one comparison -
+; ARK_PSTEP until [ark_pdn] reaches ARK_PTAP, ARK_PFAST after - so the first
+; 35 pixels of a hold are pixel-for-pixel a tap, which they have to be,
+; because for those ticks the player has not yet done anything different.
+; There is no stop anywhere in it.
+;
+; [ark_pspd] still holds one of exactly three values and is still the state
+; machine; what changed is who sets it. Every ramp, taper and coast stays gone,
+; and a tap still stops mid-stride, because the paddle is aimed by tapping.
+;
+; A LOST BREAK CODE is the failure this borrows from 9.7, and it degrades the
+; way that section says: the key reads down until it is next pressed, so the
+; paddle runs to a rail and clamps there. It also degrades if key state never
+; works at all - [ark_pdn] then never reaches ARK_PTAP, and each repeat finds
+; [ark_pspd] at 0 and starts a fresh tap, so a held key still moves, just
+; always at ARK_PSTEP. Neither needs a line of code here.
+;
+; [ark_pacc] carries the quarter pixels a fractional speed owes between frames,
+; which is what lets ARK_PSTEP be 2.0 or 1.75 rather than only a whole 1 or 2
+; (SPEC.md 44.3.2's argument, applied to the paddle).
 ; -----------------------------------------------------------------------------
 ark_do_paddle:
     push ax
@@ -1299,16 +1478,30 @@ ark_do_paddle:
     push dx
     mov word [ark_pvel], 0          ; how far the paddle moves THIS frame,
                                     ; signed - the ball reads it on contact
-    cmp word [ark_page], ARK_PRATE  ; age the last key event, and stop at the
-    ja .aged                        ; only value ever asked about so a paddle
-    inc word [ark_page]             ; left alone cannot wrap it back into range
+    call ark_pkey                   ; is the arrow the paddle is following
+    jnc .aged                       ; still down? then it is a HOLD, whatever
+                                    ; int 16h has or has not delivered
+    cmp word [ark_pkeep], ARK_PHOLD ; refill only from BELOW: a tap that is
+    jge .held                       ; still inside its own countdown owns it
+    mov word [ark_pkeep], ARK_PHOLD
+.held:
+    cmp word [ark_pdn], ARK_PTAP    ; ticks held, stopped at the only value
+    jge .aged                       ; ever asked about so it cannot wrap
+    inc word [ark_pdn]
 .aged:
     cmp word [ark_pkeep], 0
     jg .live
     mov word [ark_pspd], 0          ; stopped, the third speed - and what tells
-    jmp .out                        ; ark_onkey that a hold is over
+    mov word [ark_pdn], 0           ; ark_onkey that this arrow is free again
+    jmp .out
 .live:
     dec word [ark_pkeep]
+    mov ax, ARK_PSTEP               ; the promotion, and the whole of it: the
+    cmp word [ark_pdn], ARK_PTAP    ; first ARK_PTAP ticks of a hold are a tap
+    jl .spd
+    mov ax, ARK_PFAST
+.spd:
+    mov [ark_pspd], ax
     mov ax, [ark_pacc]              ; the quarter pixels owed, plus this tick's
     add ax, [ark_pspd]              ; worth...
     xor dx, dx
@@ -1344,6 +1537,61 @@ ark_do_paddle:
 .out:
     pop dx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_park - sit the ball on the middle of the bat
+; out: [ark_bx]/[ark_by] set; preserves all registers
+;
+; One copy, because ark_nextwall needs it for a reason that is not "the ball is
+; parked this frame": a ball still standing among the bricks when the next wall
+; is BUILT would be drawn on it and then erased to background from there
+; (SPEC.md 44.10.2).
+; -----------------------------------------------------------------------------
+ark_park:
+    push ax
+    push bx
+    mov ax, [ark_px]
+    mov bx, [ark_pw]
+    shr bx, 1
+    add ax, bx
+    mov bx, [ark_bsz]
+    shr bx, 1
+    sub ax, bx
+    mov [ark_bx], ax
+    mov ax, [ark_pady]
+    sub ax, [ark_bsz]
+    mov [ark_by], ax
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_pkey - is the arrow the paddle is following still DOWN? (SPEC.md 9.7)
+; out: CF = 1 held, CF = 0 not; preserves every register
+;
+; [ark_pdir] is the direction, so the scancode falls out of its sign. A paddle
+; with no direction latched at all answers "not held" without asking, which is
+; also the one case where the answer would be meaningless.
+;
+; The slot takes no lock and touches no port, so this is legal from the worker
+; task - which is where the game loop is (SPEC.md 44.1), and the whole reason
+; the answer is a cheap read rather than an event.
+; -----------------------------------------------------------------------------
+ark_pkey:
+    push ax
+    cmp byte [ark_pdir], 0
+    je .no
+    mov al, KSC_RIGHT
+    jg .ask
+    mov al, KSC_LEFT
+.ask:
+    call OSAPI_KEY_DOWN             ; CF is the answer, and the pop below
+    pop ax                          ; leaves it alone
+    ret
+.no:
+    clc
     pop ax
     ret
 
@@ -1522,17 +1770,7 @@ ark_do_ball:
     push di
     cmp byte [ark_stuck], 0
     je .free
-    mov ax, [ark_px]                ; parked: ride the paddle
-    mov bx, [ark_pw]
-    shr bx, 1
-    add ax, bx
-    mov bx, [ark_bsz]
-    shr bx, 1
-    sub ax, bx
-    mov [ark_bx], ax
-    mov ax, [ark_pady]
-    sub ax, [ark_bsz]
-    mov [ark_by], ax
+    call ark_park                   ; parked: ride the paddle
     jmp .out
 .free:
     ; --- quarter-pixel velocity -> whole-pixel delta for THIS frame ---------
@@ -2056,6 +2294,13 @@ ark_maybe_pu:
     add ax, bx
     pop bx
     sub ax, ARK_PUW / 2
+    add ax, [ark_ox]                ; SPEC.md 44.10.6: gfx_blit1 wants an x on
+    add ax, 4                       ; the BYTE grid, so snap the capsule's -
+    and ax, 0FFF8h                  ; once, at spawn, since it falls straight
+    sub ax, [ark_ox]                ; down and its x never changes again. At
+                                    ; most 4px, on a 12px capsule dropped from
+                                    ; a brick 20-odd wide, and the alternative
+                                    ; is the whole band refusing
     mov [ark_pux+bx], ax
     pop ax
     mul word [ark_bh]
@@ -2158,6 +2403,13 @@ ark_apply:
     mov ax, [ark_pwmax]
 .setw:
     mov [ark_pw], ax
+    mov bx, [ark_cwid]              ; A BAT THAT GREW MUST BE PUT BACK INSIDE
+    sub bx, [ark_rail]              ; THE RAILS. Only ark_do_paddle clamped,
+    sub bx, ax                      ; and it clamps a MOVE - so an Expand taken
+    cmp [ark_px], bx                ; while the bat sat against a rail simply
+    jle .setw2                      ; made it 12 pixels longer THROUGH the rail
+    mov [ark_px], bx                ; (SPEC.md 44.10.1)
+.setw2:
     mov byte [ark_padwipe], 1
     jmp .done
 .catch:
@@ -2396,6 +2648,16 @@ ark_nextwall:
     mov byte [ark_laser], 0
     mov ax, [ark_pw0]
     mov [ark_pw], ax
+    call ark_park                   ; PARK THE BALL BEFORE THE WALL IS DRAWN.
+                                    ; The wall was cleared by a hit up among
+                                    ; the bricks, so that is where the ball
+                                    ; still is - and the full repaint below
+                                    ; would draw it there, ON the new wall,
+                                    ; making that its erase-from position. The
+                                    ; next frame parks it for real and erases
+                                    ; the old rect to BACKGROUND, which is a
+                                    ; ball-sized hole in a brand new board
+                                    ; (SPEC.md 44.10.2)
     mov byte [ark_mode], M_READY
     mov byte [ark_full], 1
     pop ax
@@ -2441,6 +2703,20 @@ ark_newgame:
     mov word [ark_score], 0
     mov byte [ark_lives], ARK_LIVES
     mov byte [ark_level], 1
+    call ark_startlevel
+    pop ax
+    ret
+
+; ark_startlevel - lay this level out and park the ball (all regs preserved)
+ark_startlevel:
+    push ax
+    call ark_pu_compose             ; SPEC.md 44.10.6: the capsule sprites, once
+                                    ; a level rather than once a frame. Here and
+                                    ; not at ark_entry because 11.98.1 rescales
+                                    ; the board when the window moves cards -
+                                    ; the capsule does not scale, but a level
+                                    ; start is the one place that is certain to
+                                    ; run after every metrics change
     call ark_setspeed               ; AFTER the level is 1: it reads it
     mov ax, [ark_pw0]
     mov [ark_pw], ax
@@ -2453,6 +2729,7 @@ ark_newgame:
     mov byte [ark_stuck], 1
     mov byte [ark_mode], M_READY
     mov word [ark_pkeep], 0
+    mov word [ark_pdn], 0
     mov word [ark_pspd], 0          ; stopped, before the worker's next tick
                                     ; can say so - a key arriving in between
                                     ; would otherwise read as a live hold
@@ -2641,12 +2918,20 @@ ark_draw_all:
     call ark_draw_ball
     call ark_draw_pu
     call ark_draw_shots
-    call ark_draw_status
+    call ark_status_all             ; all three fields: the fill above took
+                                    ; whatever was on the glass with it, so
+                                    ; "unchanged" would draw nothing at all
     call ark_draw_msg
     mov ax, [ark_bx]                ; the erase trail starts here
     mov [ark_obx], ax
     mov ax, [ark_by]
     mov [ark_oby], ax
+    mov ax, [ark_px]                ; ...and so does the bat's (SPEC.md 44.10):
+    mov [ark_opx], ax               ; a subtraction is against what is ON THE
+    mov ax, [ark_pw]                ; GLASS, so every full repaint has to say
+    mov [ark_opw], ax               ; what it just put there
+    mov al, [ark_laser]
+    mov [ark_olaser], al
     cmp byte [ark_abon], 0          ; the credits sit on top of everything, and
     je .noab                        ; every full repaint puts them back
     call ark_abdraw
@@ -2755,8 +3040,153 @@ ark_draw_brick:
     pop ax
     ret
 
+; =============================================================================
+; Moving a thing writes every pixel ONCE (SPEC.md 44.10)
+;
+; Both movers here were erase-then-draw: fill the old place with background,
+; then draw the new one. Every pixel the two places SHARE is therefore written
+; twice a frame - background, then colour - and at 18 fps on a real machine
+; the glass catches the gap. That is PERFORMANCE.md Part 1's double-draw flash
+; and it is what the field reported as the paddle and ball flickering. The
+; paddle had it twice over: its erase was the whole LANE, rail to rail, so a
+; 380-pixel band went to background and back on every frame the paddle moved.
+;
+; The fix is the kernel's own (SPEC.md 7.1.2, and apps/paint's pointer at
+; 42.7.1): draw the NEW rect first, then erase only the part of the OLD rect
+; the new one does not cover. Nothing is ever absent, nothing is written
+; twice, and a move that clears its old place entirely degenerates to one
+; erase by itself - so there is no gate on how far the thing moved.
+;
+; ark_rsub is that subtraction, shared by both movers because both move a
+; RECT and a second copy of this arithmetic is a second opinion about which
+; pixels belong to the thing that moved.
+; =============================================================================
+
 ; -----------------------------------------------------------------------------
-; ark_draw_paddle / ark_move_paddle - the bat, and the erase-then-draw pair
+; ark_rsub - fill with the background the part of the OLD rect that the NEW
+;            rect does not cover
+; in:  [ark_sol..ark_sob] = the old rect, [ark_snl..ark_snb] = the new one,
+;      both (left, top, right, bottom) inclusive and in CONTENT coordinates;
+;      the pen is set here; gfx lock held
+; out: nothing; preserves every register
+;
+; Four strips - left of the overlap, right of it, then what is left above and
+; below it between those two - and an empty one costs a compare. No overlap at
+; all is the whole old rect in one call.
+; -----------------------------------------------------------------------------
+ark_rsub:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov al, ARK_BG
+    call OSAPI_SET_COLOR
+    mov ax, [ark_sol]               ; the overlap, or the whole-rect exit
+    cmp ax, [ark_snl]
+    jge .ovl
+    mov ax, [ark_snl]
+.ovl:
+    mov cx, [ark_sor]
+    cmp cx, [ark_snr]
+    jle .ovr
+    mov cx, [ark_snr]
+.ovr:
+    cmp ax, cx
+    jg .whole
+    mov bx, [ark_sot]
+    cmp bx, [ark_snt]
+    jge .ovt
+    mov bx, [ark_snt]
+.ovt:
+    mov dx, [ark_sob]
+    cmp dx, [ark_snb]
+    jle .ovb
+    mov dx, [ark_snb]
+.ovb:
+    cmp bx, dx
+    jg .whole
+    mov [ark_ovl], ax
+    mov [ark_ovr], cx
+    mov [ark_ovt], bx
+    mov [ark_ovb], dx
+    mov ax, [ark_sol]               ; left of the overlap, full height
+    mov cx, [ark_ovl]
+    dec cx
+    cmp ax, cx
+    jg .right
+    mov bx, [ark_sot]
+    mov dx, [ark_sob]
+    call ark_fillc
+.right:
+    mov ax, [ark_ovr]               ; right of it, full height
+    inc ax
+    mov cx, [ark_sor]
+    cmp ax, cx
+    jg .above
+    mov bx, [ark_sot]
+    mov dx, [ark_sob]
+    call ark_fillc
+.above:
+    mov bx, [ark_sot]               ; above it, between the two
+    mov dx, [ark_ovt]
+    dec dx
+    cmp bx, dx
+    jg .below
+    mov ax, [ark_ovl]
+    mov cx, [ark_ovr]
+    call ark_fillc
+.below:
+    mov bx, [ark_ovb]               ; ...and below it
+    inc bx
+    mov dx, [ark_sob]
+    cmp bx, dx
+    jg .out
+    mov ax, [ark_ovl]
+    mov cx, [ark_ovr]
+    call ark_fillc
+    jmp short .out
+.whole:
+    mov ax, [ark_sol]
+    mov bx, [ark_sot]
+    mov cx, [ark_sor]
+    mov dx, [ark_sob]
+    call ark_fillc
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_muzsub - subtract one MUZZLE's old rect from where that same muzzle is
+;              now; both are 2x2, two rows above the bat
+; in:  AX = the old muzzle's left x, BX = the new one's; gfx lock held
+; out: nothing; preserves every register
+; -----------------------------------------------------------------------------
+ark_muzsub:
+    push ax
+    push bx
+    mov [ark_sol], ax
+    inc ax
+    mov [ark_sor], ax
+    mov [ark_snl], bx
+    inc bx
+    mov [ark_snr], bx
+    mov ax, [ark_pady]
+    sub ax, 2
+    mov [ark_sot], ax
+    mov [ark_snt], ax
+    inc ax
+    mov [ark_sob], ax
+    mov [ark_snb], ax
+    call ark_rsub
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_draw_paddle / ark_move_paddle - the bat, and the draw-then-subtract pair
 ; that follows it when it has moved; both preserve every register
 ; -----------------------------------------------------------------------------
 ark_draw_paddle:
@@ -2812,7 +3242,49 @@ ark_move_paddle:
     cmp byte [ark_padwipe], 0
     je .out
     mov byte [ark_padwipe], 0
-    mov al, ARK_BG                  ; the whole lane, so a shrink or a move
+    mov ax, [ark_pw]                ; a WIDTH change (an Expand) is the
+    cmp ax, [ark_opw]               ; whole-lane case, and so is the laser
+    jne .lane                       ; being ARMED or lost - a muzzle that
+    mov al, [ark_laser]             ; appears or goes has no old rect to
+    cmp al, [ark_olaser]            ; subtract from. A muzzle that merely MOVED
+    jne .lane                       ; is handled below
+    mov ax, [ark_px]                ; a plain move: the new bat FIRST, then
+    cmp ax, [ark_opx]               ; only the part of the old one it does not
+    je .drawn                       ; cover (SPEC.md 44.10)
+    call ark_draw_paddle
+    mov ax, [ark_opx]
+    mov [ark_sol], ax
+    add ax, [ark_opw]
+    dec ax
+    mov [ark_sor], ax
+    mov ax, [ark_px]
+    mov [ark_snl], ax
+    add ax, [ark_pw]
+    dec ax
+    mov [ark_snr], ax
+    mov ax, [ark_pady]              ; the bat's own rows; the muzzles stand
+    mov [ark_sot], ax               ; two rows ABOVE them and are their own
+    mov [ark_snt], ax               ; subtraction, below
+    add ax, [ark_ph]
+    dec ax
+    mov [ark_sob], ax
+    mov [ark_snb], ax
+    call ark_rsub
+    cmp byte [ark_laser], 0         ; ...and the two muzzles, each against the
+    je .drawn                       ; one it IS rather than against the body:
+    mov ax, [ark_opx]               ; the body rect covers the muzzle rows at
+    mov bx, [ark_px]                ; no x at all, so subtracting them there
+    call ark_muzsub                 ; would leave every stale muzzle pixel the
+    mov ax, [ark_opx]               ; move uncovered (SPEC.md 44.10.3)
+    mov bx, [ark_px]
+    add ax, [ark_pw]
+    add bx, [ark_pw]
+    sub ax, 2
+    sub bx, 2
+    call ark_muzsub
+    jmp short .drawn
+.lane:
+    mov al, ARK_BG                  ; the whole lane, so a shrink or a muzzle
     call OSAPI_SET_COLOR            ; leaves nothing behind
     mov ax, [ark_rail]
     mov bx, [ark_pady]
@@ -2825,6 +3297,13 @@ ark_move_paddle:
     dec dx
     call ark_fillc
     call ark_draw_paddle
+.drawn:
+    mov ax, [ark_px]                ; what is on the glass now, for the next
+    mov [ark_opx], ax               ; frame to subtract against
+    mov ax, [ark_pw]
+    mov [ark_opw], ax
+    mov al, [ark_laser]
+    mov [ark_olaser], al
     cmp byte [ark_stuck], 0         ; a parked ball rides in that lane
     je .out
     call ark_draw_ball
@@ -2877,24 +3356,44 @@ ark_move_ball:
     cmp ax, [ark_oby]
     je .out
 .go:
-    mov al, ARK_BG
-    call OSAPI_SET_COLOR
+    call ark_draw_ball              ; the new ball FIRST, then only the part of
+                                    ; the old one it does not cover: the two
+                                    ; overlap on almost every frame, and
+                                    ; erasing first writes that overlap
+                                    ; background-then-white where the glass can
+                                    ; catch it (SPEC.md 44.10)
     mov ax, [ark_obx]
-    mov bx, [ark_oby]
-    mov cx, ax
-    add cx, [ark_bsz]
-    dec cx
-    mov dx, bx
-    add dx, [ark_bsz]
-    dec dx
-    call ark_fillc
+    mov [ark_sol], ax
+    add ax, [ark_bsz]
+    dec ax
+    mov [ark_sor], ax
+    mov ax, [ark_oby]
+    mov [ark_sot], ax
+    add ax, [ark_bsz]
+    dec ax
+    mov [ark_sob], ax
+    mov ax, [ark_bx]
+    mov [ark_snl], ax
+    add ax, [ark_bsz]
+    dec ax
+    mov [ark_snr], ax
+    mov ax, [ark_by]
+    mov [ark_snt], ax
+    add ax, [ark_bsz]
+    dec ax
+    mov [ark_snb], ax
+    call ark_rsub
     mov ax, [ark_oby]               ; did the erase reach the paddle's lane?
     add ax, [ark_bsz]
     cmp ax, [ark_pady]
     jle .nopad
-    call ark_draw_paddle
+    call ark_draw_paddle            ; the bat is under the ball there, and the
+    call ark_draw_ball              ; strips just took a bite out of it - and
+                                    ; the bat draws OVER the ball, so the ball
+                                    ; goes back on top. Both are rare: the ball
+                                    ; is reflected before the step that would
+                                    ; put it inside the bat
 .nopad:
-    call ark_draw_ball
     mov ax, [ark_bx]
     mov [ark_obx], ax
     mov ax, [ark_by]
@@ -2924,21 +3423,30 @@ ark_draw_pu:
     mov al, [ark_pukind+si]
     cmp al, PU_NONE
     je .next
+    cmp byte [ark_spok], 0          ; SPEC.md 44.10.6: one blit, if the kernel
+    je .slow                        ; carries one (kern_small refuses gfx_blit1
+    call ark_blit_pu                ; outright, SPEC.md 5.4.2)
+    jnc .next                       ; ...and CF=1 means it would not take THIS
+                                    ; band, so fall through and draw it the way
+.slow:                              ; this always did rather than losing it
+    mov byte [ark_puband+si], 0     ; ...and SAY SO: this draw lays no vacated
+                                    ; strip, so the next frame's ark_wipe_pu
+                                    ; owns the erase again (SPEC.md 44.10.6.2)
+    mov al, [ark_pukind+si]
     mov ah, 0
     mov di, ax                      ; DI = kind, for the colour/letter tables
     mov bx, si
     add bx, bx                      ; BX = the word-indexed slot
 
-    mov al, CBLACK                  ; the 1px frame, as a SOLID rect that the
-    call OSAPI_SET_COLOR            ; body is then inset into: two fills for
-    mov ax, [ark_pux+bx]            ; what a fill plus a gfx_frame did in five
-    mov bx, [ark_puy+bx]            ; (a frame is four of them inside the
-    mov cx, ax                      ; kernel), and the same pixels. A capsule
-    add cx, ARK_PUW - 1             ; still has an edge against the background
-    mov dx, bx                      ; when its own colour is a light one
-    add dx, ARK_PUH - 1
-    call ark_fillc
-
+    ; THE BODY FIRST, THEN THE EDGE AS FOUR STRIPS (SPEC.md 44.10.4). This was
+    ; a solid black rect over the whole capsule with the body inset into it -
+    ; two fills instead of five, and the same pixels once it settled. But a
+    ; capsule is redrawn on EVERY frame it falls, so every body pixel was
+    ; written black and then coloured 18 times a second, which is exactly the
+    ; double-draw flash 44.10 is about; the letter went with it, since the body
+    ; fill erased the glyph the frame before had drawn. Five fills, no pixel
+    ; written twice, and the letter now lands on a body that is already the
+    ; right colour.
     mov al, [ark_pucol+di]
     call OSAPI_SET_COLOR
     mov bx, si
@@ -2951,6 +3459,45 @@ ark_draw_pu:
     add cx, ARK_PUW - 3             ; x+1 .. x+PUW-2, y+1 .. y+PUH-2
     mov dx, bx
     add dx, ARK_PUH - 3
+    call ark_fillc
+
+    mov al, CBLACK                  ; ...and the 1px edge around it, which a
+    call OSAPI_SET_COLOR            ; capsule needs against the background when
+    mov bx, si                      ; its own colour is a light one
+    add bx, bx
+    mov ax, [ark_pux+bx]
+    mov bx, [ark_puy+bx]
+    mov cx, ax
+    add cx, ARK_PUW - 1
+    mov dx, bx                      ; the top row, full width
+    call ark_fillc
+    mov bx, si
+    add bx, bx
+    mov ax, [ark_pux+bx]
+    mov bx, [ark_puy+bx]
+    add bx, ARK_PUH - 1
+    mov cx, ax
+    add cx, ARK_PUW - 1
+    mov dx, bx                      ; the bottom row, full width
+    call ark_fillc
+    mov bx, si
+    add bx, bx
+    mov ax, [ark_pux+bx]
+    mov bx, [ark_puy+bx]
+    inc bx
+    mov cx, ax
+    mov dx, bx
+    add dx, ARK_PUH - 3             ; the left column, between the two
+    call ark_fillc
+    mov bx, si
+    add bx, bx
+    mov ax, [ark_pux+bx]
+    add ax, ARK_PUW - 1
+    mov bx, [ark_puy+bx]
+    inc bx
+    mov cx, ax
+    mov dx, bx
+    add dx, ARK_PUH - 3             ; ...and the right column
     call ark_fillc
 
     mov al, CBLACK                  ; the mark is black on the body, and the
@@ -2989,6 +3536,314 @@ ark_draw_pu:
     ret
 
 ; -----------------------------------------------------------------------------
+; ark_blit_pu - capsule SI as ONE gfx_blit1 (SPEC.md 44.10.6)
+; in:  SI = the slot; out: CF = 0 drawn, CF = 1 not taken (caller draws it the
+;      old way); preserves all registers but the flags
+;
+; The band carries the strip the capsule VACATED as well as the capsule, which
+; is why there is no erase to pair with this: a capsule that fell `d` rows
+; blits from band row ARK_SPTOP-d for ARK_PUH+d rows, and the first d of those
+; are paper. Same idea as SPEC.md 27.2's "the padding IS the erase", one
+; dimension over.
+;
+; It refuses rather than clamping when `d` is larger than the blank margin -
+; a frame ark_render skipped - because the honest fallback is the old path,
+; which erases what it has to and does not care how far anything moved.
+; -----------------------------------------------------------------------------
+ark_blit_pu:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si                         ; the SLOT, and the band pointer spends SI
+    push di
+    push bp
+    push es
+
+    mov bx, si
+    add bx, bx
+    mov ax, [ark_puy+bx]            ; DX = rows fallen since it was last drawn
+    sub ax, [ark_puold+bx]
+    jb .no                          ; upwards: not a thing a capsule does
+    cmp ax, ARK_SPTOP
+    ja .no
+    mov dx, ax
+
+    mov al, [ark_pukind+si]         ; DI = this kind's band, backed up by the
+    mov ah, 0                       ; rows the erase needs
+    push dx
+    mov cx, ARK_SPH * ARK_SPW
+    mul cx
+    mov di, ax
+    pop dx
+    add di, ark_sprite
+    push dx
+    mov ax, ARK_SPTOP
+    sub ax, dx
+    mov cx, ARK_SPW
+    mul cx
+    add di, ax
+    pop dx
+
+    mov ax, [ark_pux+bx]            ; where: the vacated strip's top-left, in
+    add ax, [ark_ox]                ; ABSOLUTE coordinates - gfx_blit1 takes no
+    mov bx, [ark_puold+bx]          ; window origin, and clips signed
+    add bx, [ark_oy]
+
+    cmp byte [ark_bpp], 1           ; SPEC.md 5.4.2.2: the pen is not read on a
+    jbe .pen_done                   ; 1bpp adapter - a band there already means
+    push ax                         ; lit and unlit - so this is the VGA half
+    push bx                         ; only, and mono gets white on black, which
+    mov bl, [ark_pukind+si]         ; is what the reduction gave it anyway
+    mov bh, 0
+    mov al, [ark_pucol+bx]          ; ink = the capsule's colour...
+    mov ah, ARK_BG                  ; ...on background paper, which is CBLACK -
+    call OSAPI_GFX_BLIT1_PEN        ; and 0 is a subset of every colour, so
+    pop bx                          ; 5.4.2.2's SINGLE-PASS arm takes it
+    pop ax
+.pen_done:
+
+    add dx, ARK_PUH                 ; DX = rows: the capsule plus the strip
+    mov cx, ARK_SPW * 8             ; CX = width, 16 px
+    mov bp, ARK_SPW
+    mov si, di
+    push ds                         ; ES:SI is the band, and it is OURS: the
+    pop es                          ; slot is not an X stub, so nothing puts
+                                    ; our segment in ES for us (SPEC.md 20.1)
+    call OSAPI_GFX_BLIT1
+    jc .no
+
+    pop es                          ; drawn: and THIS is where it now sits,
+    pop bp                          ; which is the only honest thing the next
+    pop di                          ; frame can erase from
+    pop si                          ; SI BEFORE DX - they were pushed dx-then-si
+    pop dx                          ; and the pair was swapped here (SPEC.md
+                                    ; 44.10.6.1): SI came back holding the
+                                    ; caller's DX, so the slot below was junk
+    mov bx, si
+    add bx, bx
+    mov ax, [ark_puy+bx]
+    mov [ark_puold+bx], ax
+    mov byte [ark_puband+si], 1     ; ...and the band it laid carries the erase
+                                    ; for the strip below it, which is the one
+                                    ; thing ark_wipe_pu must not repeat
+                                    ; (SPEC.md 44.10.6.2)
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.no:
+    pop es
+    pop bp
+    pop di
+    pop si                          ; SI before DX, as above
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_pu_compose - build one 1bpp sprite per capsule kind (SPEC.md 44.10.6)
+;
+; Called once, from ark_reset_level. Composing at level start rather than per
+; frame is the whole point: the expensive half of compose-and-blit is the
+; compose, and a capsule's picture does not change while it falls.
+;
+; A SET bit is the BODY and takes the ink; a CLEAR bit is paper, which is the
+; edge, the mark and everything outside the 12px capsule. That polarity is
+; chosen so the pen's varying planes want the band AS IT STANDS - ink over
+; CBLACK paper, and 0 is a subset of every colour, so SPEC.md 5.4.2.2's
+; single-pass arm takes it (a black-ink pen would want the complement and cost
+; the slower loop). It also means the four spare columns and the blank rows
+; above compose to ARK_BG for free.
+;
+; The mark CLEARS bits, which is SPEC.md 6.3's rule in the other direction and
+; the one bug in this area that produces a plausible wrong result: OR the ink
+; in against a set body and nothing changes at all.
+; preserves all registers
+; -----------------------------------------------------------------------------
+ark_pu_compose:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    push bp
+
+    mov di, ark_sprite              ; every byte starts as paper
+    mov cx, ARK_SPN * ARK_SPH * ARK_SPW
+    xor al, al
+.zero:
+    mov [di], al
+    inc di
+    loop .zero
+
+    mov bp, 1                       ; BP = kind, 1..PU_KINDS
+.kind:
+    mov ax, bp                      ; DI = this kind's first band byte
+    mov bx, ARK_SPH * ARK_SPW
+    mul bx
+    mov di, ax
+    add di, ark_sprite
+    add di, ARK_SPTOP * ARK_SPW     ; ...past the blank rows, at capsule row 0
+
+    mov cx, ARK_PUH - 2             ; the BODY: rows 1..PUH-2, columns 1..10.
+    add di, ARK_SPW                 ; Row 0 and row PUH-1 are the edge and stay
+.body:                              ; paper, as do columns 0 and 11
+    mov word [di], 0xE07F           ; little-endian: byte 0 = 7Fh (x1..x7),
+    add di, ARK_SPW                 ; byte 1 = E0h (x8..x10)
+    loop .body
+
+    mov bx, bp                      ; the MARK: a letter, or the heart
+    mov al, [ark_puletter+bx]
+    or al, al
+    jz .heart
+    call ark_pu_letter
+    jmp short .knext
+.heart:
+    call ark_pu_heart
+.knext:
+    inc bp
+    cmp bp, ARK_SPN
+    jb .kind
+
+    mov byte [ark_spok], 1
+    pop bp
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_pu_letter - clear the letter's pixels out of kind BP's body
+; in:  AL = the character, BP = kind; preserves all registers
+;
+; The glyph comes from OSAPI_FONT_GLYPHS - the SAME table OSAPI_FONT_CHAR draws
+; from, which is the point: no second typeface, and it works on all three
+; adapters. It answers ES = DX, and the table is NOT in KERNEL_SEG.
+; -----------------------------------------------------------------------------
+ark_pu_letter:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov bl, al                      ; bank the character: FONT_GLYPHS returns
+    call OSAPI_FONT_GLYPHS          ; the range in AL/AH and the table in DX:SI
+    cmp bl, al
+    jb .out                         ; outside the table: no mark rather than a
+    cmp bl, ah                      ; walk past the end of it
+    ja .out
+    sub bl, al                      ; BL = the glyph's index
+    mov bh, 0
+    mov es, dx                      ; ES:SI is the table - and ES FIRST, because
+                                    ; the `mul` below returns DX:AX and would
+                                    ; take the segment with it
+    mov al, cl                      ; CX = bytes per glyph (8)
+    xor ah, ah                      ; ...and AH is still FONT_GLYPHS' last
+                                    ; character, which a 16-bit mul would use
+    mul bx
+    add si, ax                      ; SI = this glyph's first row
+
+    mov ax, bp                      ; DI = kind BP's capsule row 1
+    mov bx, ARK_SPH * ARK_SPW
+    mul bx
+    mov di, ax
+    add di, ark_sprite
+    add di, (ARK_SPTOP + 1) * ARK_SPW
+
+    mov cx, 8                       ; eight glyph rows onto body rows 1..8
+.row:
+    mov al, [es:si]                 ; the glyph row, bit 7 leftmost
+    inc si
+    mov ah, 0
+    push cx
+    mov cl, 6                       ; column c sits at capsule x = 2+c, and a
+    shl ax, cl                      ; word here has x0 in bit 15 - so bit
+    pop cx                          ; (7-c) has to reach bit (13-c): shift 6
+    xchg al, ah                     ; ...and the band is little-endian bytes
+    not ax
+    and [di], ax                    ; the mark CLEARS body bits
+    add di, ARK_SPW
+    loop .row
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_pu_heart - the same, from ark_heartrun's horizontal runs
+; in:  BP = kind; preserves all registers
+; -----------------------------------------------------------------------------
+ark_pu_heart:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov ax, bp
+    mov bx, ARK_SPH * ARK_SPW
+    mul bx
+    mov di, ax
+    add di, ark_sprite              ; ...at the row the heart is centred on
+    add di, (ARK_SPTOP + (ARK_PUH - ARK_HEARTH) / 2) * ARK_SPW
+    mov si, ark_heartrun
+    mov dx, ARK_HEARTH
+.row:
+    mov cx, 2                       ; two run slots a row; 0xFF ends them
+.run:
+    mov al, [si]
+    cmp al, 0xFF
+    je .rend
+    mov ah, [si+1]                  ; AL..AH inclusive, in heart columns
+.px:
+    push cx
+    push ax
+    mov bl, al
+    add bl, (ARK_PUW - ARK_HEARTW) / 2  ; ...into capsule columns
+    mov cl, bl
+    mov ax, 0x8000                  ; x0 is bit 15
+    shr ax, cl
+    xchg al, ah                     ; ...and the band is little-endian bytes
+    not ax
+    and [di], ax
+    pop ax
+    pop cx
+    inc al
+    cmp al, ah
+    jbe .px
+.rend:
+    add si, 2
+    loop .run
+    add di, ARK_SPW
+    dec dx
+    jnz .row
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; ark_wipe_pu - erase every capsule from where it was last frame
 ; preserves all registers
 ; -----------------------------------------------------------------------------
@@ -3008,6 +3863,21 @@ ark_wipe_pu:
     mov dx, ARK_PUH - 1
     jmp short .wipe
 .fall:                              ; still falling: only the strip it VACATED
+    cmp byte [ark_puband+si], 0     ; ...and NOT EVEN THAT once the capsule's
+    jne .next                       ; LAST DRAW WAS A BAND (SPEC.md 44.10.6):
+                                    ; the vacated strip is the band's own first
+                                    ; rows, so erasing it here would write those
+                                    ; pixels twice - which is the defect the
+                                    ; band was built to remove, moved one
+                                    ; routine over.
+                                    ; PER SLOT AND SET BY THE DRAW THAT
+                                    ; HAPPENED, never by ark_spok: that byte
+                                    ; only says a band is worth offering, and a
+                                    ; kernel that refuses every one of them
+                                    ; (kern_small has no gfx_blit1 at all) left
+                                    ; this erase to nobody and streaked two rows
+                                    ; of capsule black down the glass every
+                                    ; frame - SPEC.md 44.10.6.2
     mov bx, si                      ; since it was last drawn. Two rows in the
     add bx, bx                      ; ordinary frame; more if ark_render
     mov ax, [ark_puy+bx]            ; skipped one and the capsule kept moving;
@@ -3122,56 +3992,86 @@ ark_wipe_shots:
 ;
 ; The lives are little paddles rather than a number - it is the one figure a
 ; player reads mid-rally, and three white bars parse faster than a digit.
+;
+; THREE FIELDS THAT REDRAW SEPARATELY, AND NONE OF THEM BLANKS FIRST (SPEC.md
+; 44.10.5). This used to fill the whole strip and re-letter all of it whenever
+; anything changed - which is every brick - so the score, the lives and the
+; level all went dark and came back several times a second to move one digit.
+; That is PERFORMANCE.md Part 1's erase-and-letter pair in its classic form,
+; and it is the same fix apps/missile took at SPEC.md 48.9.3.
+;
+; The score and the level are space-padded to a fixed width and drawn with ONE
+; opaque OSAPI_FONT_RUN each: the padding IS the erase, so there is no fill in
+; the path at all and no instant with the field missing. Both pens are
+; multiples of 8, which is what earns 6.1's single-store path on the two mono
+; adapters - a cell row becomes one store, no shift, no read, no second byte.
+;
+; Each field is drawn only when ITS OWN text changed, so a brick costs the
+; score field and nothing else, and the commonest frame costs three compares.
+; ark_status_all forces all three, for the full repaint that has just filled
+; the content black underneath them.
 ; -----------------------------------------------------------------------------
+ARK_SFW     equ 8                   ; the score field, in CELLS: 8 digits is
+                                    ; more score than this game can produce
+ARK_LFW     equ 6                   ; ...and the level field, 'LV' + 4
+
+ark_status_all:
+    push ax
+    mov word [ark_oscore], 0xFFFF   ; nothing on the glass matches these, so
+    mov byte [ark_olevel], 0xFF     ; every field below redraws
+    mov byte [ark_olives], 0xFF
+    call ark_draw_status
+    pop ax
+    ret
+
 ark_draw_status:
     push ax
     push bx
     push cx
     push dx
     push si
-    mov al, ARK_BG
-    call OSAPI_SET_COLOR
-    xor ax, ax
-    xor bx, bx
-    mov cx, [ark_cwid]
-    dec cx
-    mov dx, [ark_status]
-    dec dx
-    call ark_fillc
+    push di
 
     mov ax, [ark_status]            ; the text baseline, centred in the strip
     sub ax, 8
     shr ax, 1
     mov [ark_texty], ax
 
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    mov ax, [ark_score]
+    mov ax, [ark_score]             ; --- the score, left, in ARK_SFW cells ---
+    cmp ax, [ark_oscore]
+    je .lives
+    mov [ark_oscore], ax
     call ark_num2str
     mov si, [ark_numptr]
-    mov cx, 2
-    mov dx, [ark_texty]
-    call ark_textc
+    mov di, ark_sbuf
+    mov cx, ARK_SFW
+    call ark_padl                   ; left in the field, spaces after
+    mov si, ark_sbuf
+    mov cx, 8                       ; a multiple of 8, because the window's own
+    mov dx, [ark_texty]             ; origin is (WF_SNAP is the default) - and
+                                    ; 8 rather than 0, which is legal and sits
+                                    ; flush against the frame
+    mov al, CWHITE
+    mov ah, ARK_BG
+    call ark_runc
 
-    mov al, CLGREEN                 ; the lives, as spare paddles
-    call OSAPI_SET_COLOR
-    mov cl, [ark_lives]
-    mov ch, 0
-    cmp cx, 6
-    jbe .lives
-    mov cx, 6                       ; more than six would run into the level
 .lives:
-    jcxz .level
+    mov al, [ark_lives]             ; --- the lives, as spare paddles --------
+    cmp al, [ark_olives]
+    je .level
+    mov [ark_olives], al
+    mov cl, al
+    mov ch, 0
+    cmp cx, ARK_LIVEMAX
+    jbe .livesn
+    mov cx, ARK_LIVEMAX             ; more than six would run into the level
+.livesn:
+    mov al, CLGREEN
+    call OSAPI_SET_COLOR
     xor si, si
+    jcxz .livesx
 .life:
-    mov ax, [ark_cwid]
-    shr ax, 1
-    sub ax, 16
-    mov bx, si
-    add bx, bx
-    add bx, bx
-    add bx, bx
-    add ax, bx                      ; 8px apart
+    call ark_lifex                  ; SI -> AX = that slot's left x
     mov bx, [ark_texty]
     add bx, 3
     push cx
@@ -3184,31 +4084,50 @@ ark_draw_status:
     inc si
     cmp si, cx
     jb .life
+.livesx:
+    cmp si, ARK_LIVEMAX             ; ...and the slots that are no longer used,
+    jae .level                      ; erased in ONE fill from the first free
+    mov al, ARK_BG                  ; one to the end: drawing the live ones and
+    call OSAPI_SET_COLOR            ; then erasing past them writes no pixel
+    call ark_lifex                  ; twice, where blanking the band first
+    mov bx, [ark_texty]             ; would have flashed the ones that stayed
+    add bx, 3
+    push ax
+    mov si, ARK_LIVEMAX - 1
+    call ark_lifex
+    mov cx, ax
+    add cx, 5
+    pop ax
+    mov dx, bx
+    add dx, 1
+    call ark_fillc
 
 .level:
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    mov si, ark_s_lv
-    call OSAPI_FONT_WIDTH
-    mov [ark_tmpa], ax
-    mov al, [ark_level]
+    mov al, [ark_level]             ; --- the level, right, in ARK_LFW cells -
+    cmp al, [ark_olevel]
+    je .out
+    mov [ark_olevel], al
     mov ah, 0
     call ark_num2str
+    mov si, ark_s_lv                ; 'LV' then the number, right-aligned in
+    mov di, ark_lbuf                ; the field so the digits sit at its end
+    call ark_strcpy
     mov si, [ark_numptr]
-    call OSAPI_FONT_WIDTH
-    add ax, [ark_tmpa]
-    mov cx, [ark_cwid]
-    sub cx, ax
-    sub cx, 3
-    mov [ark_tmpb], cx
-    mov si, ark_s_lv
+    call ark_strcpy
+    mov byte [di], 0
+    mov si, ark_lbuf
+    mov di, ark_lbuf2
+    mov cx, ARK_LFW
+    call ark_padr
+    mov si, ark_lbuf2
+    call ark_lvx
+    mov cx, ax
     mov dx, [ark_texty]
-    call ark_textc
-    mov cx, [ark_tmpb]
-    add cx, [ark_tmpa]
-    mov si, [ark_numptr]
-    mov dx, [ark_texty]
-    call ark_textc
+    mov al, CWHITE
+    mov ah, ARK_BG
+    call ark_runc
+.out:
+    pop di
     pop si
     pop dx
     pop cx
@@ -3217,8 +4136,137 @@ ark_draw_status:
     ret
 
 ; -----------------------------------------------------------------------------
-; ark_msgy - the row the banner sits on: the middle of the open play area,
-;            between the bottom of the wall and the paddle
+; ark_lifex - the left x of life slot SI
+; out: AX; preserves every other register
+; -----------------------------------------------------------------------------
+ark_lifex:
+    push bx
+    mov ax, [ark_cwid]
+    shr ax, 1
+    sub ax, 16
+    mov bx, si
+    add bx, bx
+    add bx, bx
+    add bx, bx                      ; 8px apart
+    add ax, bx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_strcpy - append the NUL string at SI to DI, leaving DI on its NUL
+; ark_padl   - copy SI into DI left-aligned in a CX-cell field, space padded
+; ark_padr   - ...and right-aligned. Both NUL-terminate.
+; all preserve every register but DI, which ark_strcpy advances
+;
+; The padding is what makes the field opaque: a space paints background on
+; OSAPI_FONT_RUN's fast path, so a field that got SHORTER erases the cells it
+; gave up in the same pass that letters the rest, and never blanks.
+; -----------------------------------------------------------------------------
+ark_strcpy:
+    push ax
+.c:
+    mov al, [si]
+    or al, al
+    jz .done
+    mov [di], al
+    inc si
+    inc di
+    jmp short .c
+.done:
+    mov byte [di], 0
+    pop ax
+    ret
+
+ark_padl:
+    push ax
+    push cx
+    push si
+    push di
+.c:
+    mov al, [si]
+    or al, al
+    jz .pad
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jnz .c
+    jmp short .end
+.pad:
+    mov byte [di], ' '
+    inc di
+    dec cx
+    jnz .pad
+.end:
+    mov byte [di], 0
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+ark_padr:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push si                         ; how long is it?
+    xor bx, bx
+.len:
+    cmp byte [si], 0
+    je .lend
+    inc si
+    inc bx
+    jmp short .len
+.lend:
+    pop si
+    sub cx, bx                      ; that many spaces in front of it
+    jbe .copy
+.pad:
+    mov byte [di], ' '
+    inc di
+    dec cx
+    jnz .pad
+.copy:
+    mov al, [si]
+    or al, al
+    jz .end
+    mov [di], al
+    inc si
+    inc di
+    jmp short .copy
+.end:
+    mov byte [di], 0
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+ARK_MSGLH   equ 8                   ; banner line pitch: the glyph cell, so the
+                                    ; blank line between M_OVER's two strings is
+                                    ; exactly one empty row of text
+
+; -----------------------------------------------------------------------------
+; ark_msgh - how tall the banner is for the mode it is about to draw: one line
+;            of glyphs, except M_OVER's three (the message, a blank, the key)
+; out: AX = height in rows; preserves all other registers
+; -----------------------------------------------------------------------------
+ark_msgh:
+    mov ax, ARK_MSGLH
+    cmp byte [ark_mode], M_OVER
+    jne .out
+    mov ax, ARK_MSGLH * 3
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_msgy - the row the banner's FIRST line sits on: the banner is centred on
+;            the middle of the open play area, between the bottom of the wall
+;            and the paddle, so a taller banner grows symmetrically about the
+;            same middle rather than hanging off the one-line row
 ; out: AX = content y; preserves all other registers
 ; -----------------------------------------------------------------------------
 ark_msgy:
@@ -3229,8 +4277,12 @@ ark_msgy:
     add ax, [ark_bricky]
     mov bx, [ark_pady]
     add ax, bx
+    shr ax, 1                       ; the middle of the open play area...
+    mov dx, ax
+    call ark_msgh                   ; ...less half of what is about to sit on it
     shr ax, 1
-    sub ax, 4
+    sub dx, ax
+    mov ax, dx
     pop dx
     pop bx
     ret
@@ -3248,12 +4300,13 @@ ark_clear_msg:
     call OSAPI_SET_COLOR
     call ark_msgy
     mov bx, ax
+    call ark_msgh                   ; the band is whatever the banner is tall,
+    mov dx, bx                      ; plus the row of air it always had
+    add dx, ax
     mov ax, [ark_rail]
     mov cx, [ark_cwid]
     sub cx, [ark_rail]
     dec cx
-    mov dx, bx
-    add dx, 8
     call ark_fillc
     pop dx
     pop cx
@@ -3284,18 +4337,36 @@ ark_draw_msg:
 .have:
     mov al, CYELLOW
     call OSAPI_SET_COLOR
-    call OSAPI_FONT_WIDTH           ; centred in the content
-    mov cx, [ark_cwid]
-    sub cx, ax
-    shr cx, 1
     call ark_msgy
     mov dx, ax
-    call ark_textc
+    call ark_msgline
+    cmp byte [ark_mode], M_OVER     ; and M_OVER carries a second line, one
+    jne .out                        ; blank row under the first: 'GAME OVER - N'
+    add dx, ARK_MSGLH * 2           ; on one line read as a sentence cut off
+    mov si, ark_s_overn
+    call ark_msgline
 .out:
     pop si
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_msgline - one line of the banner, centred in the content
+; in:  SI = string, DX = content y; the pen is already set
+; out: nothing; preserves every register
+; -----------------------------------------------------------------------------
+ark_msgline:
+    push ax
+    push cx
+    call OSAPI_FONT_WIDTH
+    mov cx, [ark_cwid]
+    sub cx, ax
+    shr cx, 1
+    call ark_textc
+    pop cx
     pop ax
     ret
 
@@ -3478,7 +4549,7 @@ ark_textc:
     push dx
     add cx, [ark_ox]
     add dx, [ark_oy]
-    call OSAPI_FONT_STR
+    call OSAPI_FONT_STR_XPARENT
     pop dx
     pop cx
     ret
@@ -3488,7 +4559,20 @@ ark_charc:
     push dx
     add cx, [ark_ox]
     add dx, [ark_oy]
-    call OSAPI_FONT_CHAR
+    call OSAPI_FONT_CHAR_XPARENT
+    pop dx
+    pop cx
+    ret
+
+; ark_runc: SI = string, CX = x, DX = y, AL = ink, AH = background - ONE
+; opaque run (SPEC.md 6.1), which is ark_fillc + ark_textc as a single
+; decision per cell and so can never leave the field blank between them
+ark_runc:
+    push cx
+    push dx
+    add cx, [ark_ox]
+    add dx, [ark_oy]
+    call OSAPI_FONT_RUN
     pop dx
     pop cx
     ret
@@ -3504,6 +4588,8 @@ ark_tpl:
     dw ark_ttl, ark_paint, ark_onkey, ark_onclick
 
 ; --- app menu set (SPEC.md 12.2) -----------------------------------------------
+    OS88_PREFER ark_pref, ARK_PREF_BW, ARK_PREF_BH,  ARK_PREF_BW, ARK_PREF_BH,  ARK_PREF_SW, ARK_PREF_SH
+
     OS88_MENUSET ark_menus, ark_m_name, ark_oncmd
         OS88_MENU ark_m_game, ark_mi_game, 2
     OS88_MENUSET_END ark_menus
@@ -3517,7 +4603,13 @@ ark_s_pcmd:  db 'Pause', 0
 ark_ttl:     db 'Arkanoid', 0
 ark_s_ready: db 'SPACE TO SERVE', 0
 ark_s_pause: db 'PAUSED', 0
-ark_s_over:  db 'GAME OVER - N', 0
+ark_s_over:  db 'GAME OVER', 0
+ark_s_overn: db 'N - NEW GAME', 0   ; the second line of the game-over banner,
+                                    ; a blank line under the first. On one line
+                                    ; it read 'GAME OVER - N', and a player took
+                                    ; the trailing letter for a message that had
+                                    ; been cut off rather than for the key that
+                                    ; starts the next game
 ark_s_clear: db 'WALL CLEARED', 0
 ark_s_lv:    db 'LV', 0
 
@@ -3525,14 +4617,13 @@ ark_s_lv:    db 'LV', 0
 ; 206px content (SPEC.md 44.6) and 21 glyphs plus the margins is what fits it.
 ARK_ABLH equ 10                     ; line pitch, px (8px glyphs + 2 of air)
 ark_ablines:
-    dw ark_ab1, ark_ab2, ark_ab3, ark_ab4, ark_ab5, ark_ab6, ark_ab7, 0
+    dw ark_ab1, ark_ab2, ark_ab3, ark_ab4, ark_ab5, 0
 ark_ab1:     db 'Arkanoid for os8088', 0
 ark_ab2:     db 'A brick-breaker', 0
 ark_ab3:     db 0                   ; a blank line is a line with no glyphs
-ark_ab4:     db 'Contributed by', 0
-ark_ab5:     db 'github.com/Elendilon,', 0
-ark_ab6:     db 'who forked os8088 and', 0
-ark_ab7:     db 'wrote Solitaire too.', 0
+ark_ab4:     db 'Contributed by', 0  ; two lines rather than one because the
+ark_ab5:     db 'Elendilon', 0       ; whole credit is 24 glyphs and this
+                                     ; window's CGA content holds 21
 
 ; What each fifth of the paddle ADDS to the ball's existing vx. Not a velocity
 ; to replace it with: replacing is what made the bounce feel arbitrary, because
@@ -3584,9 +4675,9 @@ ARK_HEARTH  equ 6
 ; made CGA feel 2.7x too fast. The measured bands are 198px (VGA), 182px
 ; (Hercules) and 72px (CGA), against one shared 18.2fps frame clock.
 ark_met_big:                        ; VGA 640x480 and Hercules 720x348
-    dw 24, 10, 6, 4, 14, 10, 44, 6, 4, 18, 300, 100
+    dw ARK_BW_BIG, 10, 6, ARK_RAIL_BIG, 14, 10, 44, 6, 4, 18, ARK_CHW_BIG, 100
 ark_met_sml:                        ; CGA 640x200: 137 rows of content, all in
-    dw 20,  7, 5, 3, 11,  5, 34, 4, 3, 13, 137,  37
+    dw ARK_BW_SML,  7, 5, ARK_RAIL_SML, 11,  5, 34, 4, 3, 13, ARK_CHW_SML,  37
 
 ; =============================================================================
 ; .bss (SPEC.md 20.5: the loader zeroes ARK_BSS bytes after the image, and
@@ -3665,8 +4756,10 @@ ark_met_sml:                        ; CGA 640x200: 137 rows of content, all in
                                     ; QUARTER pixels a tick...
     AWORD ark_pacc                  ; ...and the quarter pixels that speed owes
                                     ; it, carried between frames
-    AWORD ark_page                  ; ticks since the last key event, capped at
-                                    ; ARK_PRATE: repeat or deliberate re-press?
+    AWORD ark_pdn                   ; ticks this press has been HELD for
+                                    ; (SPEC.md 9.7), capped at ARK_PTAP, which
+                                    ; is the only value ever asked about; it is
+                                    ; what promotes a tap to a hold
     AWORD ark_pvel                  ; pixels the paddle moved this frame
     AWORD ark_vymag                 ; the rally's vertical speed, QUARTER px
     AWORD ark_accx                  ; ...and the sub-pixel remainder each axis
@@ -3693,6 +4786,7 @@ ark_met_sml:                        ; CGA 640x200: 137 rows of content, all in
     ABYTE ark_stat                  ; ...or at least the status strip
     ABYTE ark_msg                   ; ...or at least the banner
     ABYTE ark_padwipe
+    ABYTE ark_olaser                ; whether the bat on the glass has muzzles
 
 ; --- the ball -----------------------------------------------------------------
     AWORD ark_bx
@@ -3701,6 +4795,21 @@ ark_met_sml:                        ; CGA 640x200: 137 rows of content, all in
     AWORD ark_bvy
     AWORD ark_obx                   ; where it was drawn last
     AWORD ark_oby
+    AWORD ark_opx                   ; ...and the same for the bat: where it was
+    AWORD ark_opw                   ; last DRAWN, and how wide it was, which is
+                                    ; what ark_rsub subtracts against
+    AWORD ark_sol                   ; ark_rsub's two rects, (left, top, right,
+    AWORD ark_sot                   ; bottom) inclusive: the OLD one...
+    AWORD ark_sor
+    AWORD ark_sob
+    AWORD ark_snl                   ; ...the NEW one...
+    AWORD ark_snt
+    AWORD ark_snr
+    AWORD ark_snb
+    AWORD ark_ovl                   ; ...and their overlap, which is the only
+    AWORD ark_ovt                   ; part of the old rect that must NOT be
+    AWORD ark_ovr                   ; erased
+    AWORD ark_ovb
     AWORD ark_nx                    ; the candidate position ark_move1 tests
     AWORD ark_ny
     AWORD ark_adx                   ; the Bresenham walk
@@ -3722,15 +4831,47 @@ ark_met_sml:                        ; CGA 640x200: 137 rows of content, all in
     AWORD ark_tmpb
     AWORD ark_numptr
     ABUF  ark_numbuf, 8
+    AWORD ark_oscore                ; the three status fields as they are ON
+    ABYTE ark_olevel                ; THE GLASS, so a frame that changed none
+    ABYTE ark_olives                ; of them draws nothing (SPEC.md 44.10.5)
+    ABUF  ark_sbuf, ARK_SFW + 1     ; the padded score...
+    ABUF  ark_lbuf, ARK_LFW + 1     ; ...and the level, composed then padded
+    ABUF  ark_lbuf2, ARK_LFW + 1
 
 ; --- the board and everything in flight ---------------------------------------
     ABUF  ark_grid,  ARK_CELLS      ; hits left in each brick, 0 = gone
     ABUF  ark_dirty, ARK_CELLS      ; ...and which ones need redrawing
     ABUF  ark_pukind, ARK_MAXPU
     ABUF  ark_puwipe, ARK_MAXPU
+    ABUF  ark_puband, ARK_MAXPU     ; 1 = THIS SLOT'S LAST DRAW WAS A BAND, so
+                                    ; the strip it vacated is already erased and
+                                    ; ark_wipe_pu must not erase it again
+                                    ; (SPEC.md 44.10.6.2). Written by the draw
+                                    ; that HAPPENED - set by ark_blit_pu's
+                                    ; success path, cleared by ark_draw_pu's
+                                    ; .slow - and never by the offer that was
+                                    ; made, which is the whole distinction
+                                    ; ark_spok could not carry
     ABUF  ark_pux, ARK_MAXPU*2
     ABUF  ark_puy, ARK_MAXPU*2
     ABUF  ark_puold, ARK_MAXPU*2
+    ABUF  ark_sprite, ARK_SPN * ARK_SPH * ARK_SPW   ; SPEC.md 44.10.6
+    ABYTE ark_spok                  ; 1 = the sprites are composed, so a band is
+                                    ; worth OFFERING. ark_draw_pu reads this and
+                                    ; NOTHING ELSE DOES: it does not say the
+                                    ; kernel will TAKE the band - a kern_small
+                                    ; kernel refuses gfx_blit1 outright
+                                    ; (SPEC.md 5.4.2) - so the wipe cannot be
+                                    ; driven from it, and ark_puband above is
+                                    ; what the wipe reads instead
+                                    ; (SPEC.md 44.10.6.2).
+                                    ; It is not latched off on a refusal,
+                                    ; because the other two refusals are
+                                    ; per-frame and latching would strand the
+                                    ; capsule on the slow path for the rest of
+                                    ; the level. A refused blit costs one far
+                                    ; call, which is nothing against the six
+                                    ; fills behind it
     ABUF  ark_shot, ARK_MAXSHOT
     ABUF  ark_shwipe, ARK_MAXSHOT
     ABUF  ark_shx, ARK_MAXSHOT*2

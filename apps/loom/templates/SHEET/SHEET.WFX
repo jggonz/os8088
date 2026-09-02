@@ -1,0 +1,14 @@
+# One cell per line: <ref> = <number | "label" | =formula>.
+# Aggregates skip empty and label cells (WEAVE-SPEC 5.3).
+A1 = "Item"
+B1 = "Qty"
+A2 = "Apples"
+B2 = 4
+A3 = "Pears"
+B3 = 2.5
+A4 = "Plums"
+B4 = 6
+A5 = "Total"
+B5 = =SUM(B2:B4)
+A6 = "Average"
+B6 = =AVG(B2:B4)

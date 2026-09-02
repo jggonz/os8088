@@ -255,6 +255,25 @@ MC_MSGW     equ 28                  ; the banner's span: 'THE END - N FOR A NEW
 ; OSAPI_TASK_SPAWN would refuse (SPEC.md 20.6); the first W_PAINT hires the
 ; worker, exactly as apps/arkanoid does.
 ; -----------------------------------------------------------------------------
+; --- WHAT THIS GAME WANTS ON EACH CARD (SPEC.md 11.100.1) ---------------------
+; Frame sizes, and each is what mc_entry's own arithmetic below produces on
+; that adapter: 7/8 of the screen width, and a height the kernel clamps into
+; the band. A GENEROUS height is the idiom (WINDOW-SIZING-PLAN 9) - no package
+; can know how tall another adapter's band is, so the number to publish is one
+; the clamp can bring down.
+MC_PREF_VW  equ 560                 ; VGA 640x480, band 435
+MC_PREF_VH  equ 435
+MC_PREF_HW  equ 630                 ; Hercules 720x348, band 303
+MC_PREF_HH  equ 303
+MC_PREF_CW  equ 560                 ; CGA 640x200, band 155
+MC_PREF_CH  equ 155
+MC_MIN_W    equ MC_PREF_CW          ; the smallest card's own face, named as
+MC_MIN_H    equ MC_PREF_CH          ; that rather than repeated - if one moves
+                                    ; the other must, and the kernel caps a
+                                    ; minimum at the display's own extent
+                                    ; anyway, so this can never cost a window
+                                    ; its title bar (SPEC.md 11.100.2)
+
 mc_entry:
     push si
     push di
@@ -262,27 +281,9 @@ mc_entry:
     mov [mc_scrw], ax
     mov [mc_dock], cx
 
-    mov byte [mc_expfr], MC_EXPFR   ; bss is zeroed, and a life of zero kills
-                                    ; every burst on the frame it is lit
-    cmp dh, 1                       ; a 1bpp adapter, or a tier-0 CPU, gets
-    ja .chkcpu                      ; the three-state explosion (SPEC.md
-    mov byte [mc_mono], 1           ; 48.8). Both are FACTS this code can
-    jmp short .coarse               ; test, which is the honest way to spend
-.chkcpu:                            ; an optimisation only the slow machine
-    call OSAPI_CPU_INFO             ; needs (PERFORMANCE.md rule 10). The
-    cmp al, CPU_8086                ; 1bpp half is banked as well, because
-    jne .fine                       ; SPEC.md 48.21's trail pens want it
-.coarse:
-    mov byte [mc_ecoarse], 1
-    mov byte [mc_expfr], MC_EXPFR3
-.fine:
-
-    call OSAPI_FSX_CAPS             ; can this adapter set Mode X? A fact,
-    mov [mc_caps], ax               ; decided once (SPEC.md 47/53.4): the
-    test ax, 1 << FSXM_MODEX        ; menu item is renamed to say WHY not,
-    jnz .fsxok                      ; and mc_cmd_modex refuses with the same
-    mov word [mc_mi_game+6], mc_s_xcmdn ; bit - one predicate for both
-.fsxok:
+    call mc_adapter                 ; everything this code believes about the
+                                    ; CARD, which SPEC.md 11.98's handler
+                                    ; re-runs when the machine changes it
 
     ; The window wants to be big: seven eighths of the desktop band, capped so
     ; a 640x480 screen still shows the desktop around it. Fullscreen (SPEC.md
@@ -347,9 +348,28 @@ mc_entry:
     call OSAPI_WM_CREATE
     jc .full
     mov [mc_win], bx
+    mov ax, mc_onresize             ; mc_mono / mc_ecoarse / mc_caps are facts
+    call OSAPI_WM_ONRESIZE          ; about the CARD, and it can change under
+                                    ; us (SPEC.md 11.98)
+    mov si, mc_pref                 ; **THE PLAYFIELD IS THE RULES** (SPEC.md
+    call OSAPI_WM_PREFER            ; 11.100.1): this window is not WF_SIZABLE,
+                                    ; so until it published these three sizes
+                                    ; the kernel had no size for it that anyone
+                                    ; had designed - and wm_reflows' old second
+                                    ; arm let a straddle cut it to whatever
+                                    ; rows two displays happened to share. What
+                                    ; came out was a letterbox: six cities and
+                                    ; three bases across a band a missile
+                                    ; crosses in a third of the time
+    mov cx, MC_MIN_W                ; ...and the floor is the CGA size, because
+    mov dx, MC_MIN_H                ; a straddle still CLAMPS a published size
+    call OSAPI_WM_MINSIZE           ; to the rows both cards have (SPEC.md
+                                    ; 39.16.3) and the small card's own face is
+                                    ; the smallest this game is still itself
     mov al, 1                       ; keep our CONTENT ORIGIN 8-aligned
-    call OSAPI_WM_SNAP              ; (SPEC.md 11.94): mono-only, a no-op on
-                                    ; VGA, and what lets the status strip's
+    call OSAPI_WM_SNAP              ; (SPEC.md 11.94): EVERY adapter - it was
+                                    ; mono-only and VGA turned out to gain
+                                    ; more - and what lets the status strip's
                                     ; three opaque runs take font_run's
                                     ; single-store path WINDOWED as well as
                                     ; fullscreen (SPEC.md 48.9). It preserves
@@ -357,6 +377,13 @@ mc_entry:
                                     ; still WM_CREATE's. The price is 8px
                                     ; drag steps on the two 1bpp adapters,
                                     ; which for a game window is nothing
+    mov al, OSAPI_CUR_CROSS         ; the pointer IS the gunsight, so the
+    call OSAPI_WM_CURSOR            ; kernel draws it over our content and we
+                                    ; stop drawing a second one on top of the
+                                    ; arrow (SPEC.md 7.2). Windowed only in
+                                    ; effect: inside an fsx bracket the held
+                                    ; lock keeps the kernel's pointer off the
+                                    ; screen, so mc_cross_* still runs there
     mov si, mc_menus
     call OSAPI_MENU_SET
     mov si, mc_about
@@ -377,6 +404,93 @@ mc_entry:
 ; WF_FULL (SPEC.md 11.2) the frame IS the content, so the -2 / -TITLE_H-1 an
 ; app would subtract itself is wrong in exactly the mode this game most wants
 ; to run in. One call answers both.
+; -----------------------------------------------------------------------------
+; mc_adapter - everything this game believes about the card it is drawing on
+;
+; in:  nothing
+; out: mc_mono, mc_ecoarse, mc_expfr, mc_caps and the Mode X item's caption
+;      (all registers preserved - mc_onresize is a callback and its caller's
+;      contract is the kernel's)
+;
+; EVERY BRANCH WRITES BOTH WAYS, which is the difference between this and the
+; entry-time code it came out of. That code only ever SET mc_mono and
+; mc_ecoarse - correct exactly once, on a machine whose adapter never changed
+; - so re-running it on a CGA -> VGA switch would leave a 4bpp machine on the
+; three-state explosion for ever, and the Mode X item greyed on a card that
+; has it.
+; -----------------------------------------------------------------------------
+mc_adapter:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, [mc_win]                ; ONE QUESTION FOR BOTH FACTS, and it is
+    call OSAPI_FSX_CAPS             ; about OUR WINDOW'S DISPLAY: AX = the
+    mov [mc_caps], ax               ; Mode X mask, DL = that display's VID_*
+    mov dh, 4                       ; kind, which is also how deep it is.
+    cmp dl, VID_VGA                 ; OSAPI_VIDEO's DH answers about the
+    je .bpp                         ; PRIMARY (SPEC.md 39.2.1) - right for
+    cmp dl, VID_EGA                 ; sizing a window and wrong for this, and
+    je .bpp                         ; taking both from one call is what keeps
+    mov dh, 1                       ; mc_mono and mc_caps from disagreeing
+.bpp:                               ; about which monitor this game is on.
+                                    ; BOTH planar kinds are 4bpp - EGA is
+                                    ; VGA's path at 350 rows (SPEC.md 39.24) -
+                                    ; so the depth is two compares, not one
+    mov byte [mc_mono], 0
+    mov byte [mc_ecoarse], 0
+    mov byte [mc_expfr], MC_EXPFR   ; bss is zeroed, and a life of zero kills
+                                    ; every burst on the frame it is lit
+    cmp dh, 1                       ; a 1bpp adapter, or a tier-0 CPU, gets
+    ja .chkcpu                      ; the three-state explosion (SPEC.md
+    mov byte [mc_mono], 1           ; 48.8). Both are FACTS this code can
+    jmp short .coarse               ; test, which is the honest way to spend
+.chkcpu:                            ; an optimisation only the slow machine
+    call OSAPI_CPU_INFO             ; needs (PERFORMANCE.md rule 10). The
+    cmp al, CPU_8086                ; 1bpp half is banked as well, because
+    jne .fine                       ; SPEC.md 48.21's trail pens want it
+.coarse:
+    mov byte [mc_ecoarse], 1
+    mov byte [mc_expfr], MC_EXPFR3
+.fine:
+
+    mov ax, [mc_caps]               ; ...and the menu item says WHY not, from
+    mov dx, mc_s_xcmd               ; the mask read above. mc_cmd_modex
+    test ax, 1 << FSXM_MODEX        ; refuses with the same bit - one
+    jnz .fsxok                      ; predicate for both (SPEC.md 47/53.4)
+    mov dx, mc_s_xcmdn
+.fsxok:
+    mov [mc_mi_game+6], dx
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; mc_onresize - the adapter changed under us (SPEC.md 11.98)
+;
+; in:  SI = our window, CX/DX = the new content size; the gfx lock is HELD and
+;      this may not draw
+; out: nothing (all registers preserved)
+;
+; THE BOX IS NOT WHAT THIS IS FOR. mc_track already reads the content rect
+; every frame, so the playfield follows a resize on its own and always has.
+; What does not follow is what mc_entry decided about the CARD: mc_mono,
+; mc_ecoarse and mc_caps are facts about bits per pixel and Mode X, taken once
+; at launch, and a VGA taken to its CGA leaves this game drawing the fine
+; explosion ramp on a 1bpp adapter - SPEC.md 48.8's measured unplayable case,
+; reached by a change that used to tell it nothing.
+;
+; It is also why SPEC.md 11.98's notice has no "did the box move" test in it:
+; this handler wants to run when the box did NOT move.
+; -----------------------------------------------------------------------------
+mc_onresize:
+    call mc_adapter
+    mov byte [mc_full], 1           ; the ramp and the pens changed under every
+    ret                             ; burst on screen, so the next frame owes a
+                                    ; whole one rather than a difference
+
 ; -----------------------------------------------------------------------------
 mc_track:
     push ax
@@ -937,6 +1051,8 @@ mc_fsx_main:
     mov si, [mc_win]
     call mc_track                   ; 0,0,320,240 and the layout from it
     mov byte [mc_full], 1           ; everything draws from scratch
+    mov byte [mc_inbr], 1           ; ...and the crosshair is ours again for
+                                    ; the life of the bracket (SPEC.md 7.2)
     mov byte [mc_chshown], 0        ; the crosshair is not on this screen yet
     call OSAPI_MOUSE
     mov [mc_pbtn], al               ; no fire from the click that got us here
@@ -977,6 +1093,8 @@ mc_fsx_main:
     jmp .loop
 .done:
     mov byte [mc_fsx], 0
+    mov byte [mc_inbr], 0           ; the kernel's pointer comes back with the
+                                    ; desktop, so ours stops being drawn
     mov byte [mc_chshown], 0        ; the crosshair on THIS screen dies with
                                     ; it - or the thawed worker XOR-erases
                                     ; one that was never drawn on the desktop
@@ -1243,7 +1361,8 @@ mc_abdraw:
     shr cx, 1
     add cx, [mc_abl]
     mov dx, di
-    call mc_textc
+    mov ah, CWHITE                  ; the panel this routine filled six calls
+    call mc_textc                   ; ago; the ink is still mc_setcol's CBLACK
     pop si
     add di, MC_ABLH
     jmp short .line
@@ -1301,9 +1420,55 @@ mc_worker:
     jg .frame                       ; deadline, so the next short frame catches
     mov [mc_due], ax                ; up. Hopelessly late and the deadline is
 .frame:                             ; re-anchored, or it runs away and this
-    call mc_update                  ; loop never sleeps again
+    call mc_dispck                  ; loop never sleeps again
+    call mc_update
     call mc_render
     jmp .loop
+
+; -----------------------------------------------------------------------------
+; mc_dispck - has our window moved to a display that answers differently?
+; preserves all registers
+;
+; SPEC.md 39.18.2. mc_adapter's three facts - mc_mono, mc_ecoarse and mc_caps -
+; are questions about a DISPLAY, and on an extended desktop a window moves
+; between them: dragged from a VGA to a Hercules this game would go on drawing
+; SPEC.md 48.8's fine explosion ramp on a 1bpp card, which is the measured
+; unplayable case, and its Mode X item would go on offering a mode that card
+; does not have. mc_onresize (SPEC.md 11.98) catches an adapter CHANGE and a
+; move is not one.
+;
+; So it is asked every frame, which is Arkanoid's SPEC.md 44.8 pattern and for
+; the same reason: there is no "your window moved" callback, the worker is
+; already running, and the call is a far call plus two point-in-rect tests
+; against a 55 ms tick. mc_adapter runs only when the answer actually differs.
+;
+; NOT inside a bracket: [mc_fsx] says the mode is foreign and [mc_fs] that the
+; SPEC.md 11.2 surface is up, and in the first the caps are the bracket's
+; rather than the desktop's. The worker does not run inside an fsx bracket at
+; all (no FSXF_KEEPWORKER), so this is belt and braces for the same-mode case.
+;
+; THE CAPTION STORE IS SAFE FROM HERE even though the UI task reads it when it
+; draws the menu: it is one word, and an 8086 recognises an interrupt only at
+; an instruction boundary, so a task switch cannot land inside the store.
+; -----------------------------------------------------------------------------
+mc_dispck:
+    push ax
+    push bx
+    push dx
+    cmp byte [mc_fsx], 0
+    jne .out
+    mov bx, [mc_win]
+    or bx, bx
+    jz .out
+    call OSAPI_FSX_CAPS             ; AX = the mask, DL = that display's kind
+    cmp ax, [mc_caps]
+    je .out                         ; the same display, or one that answers
+    call mc_adapter                 ; the same: nothing to re-decide
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; mc_update - advance one frame. NO lock held, nothing drawn.
@@ -2490,6 +2655,7 @@ mc_add_exp:
     mov byte [mc_et + si], 0
     mov byte [mc_er + si], 0
     mov byte [mc_edef + si], 0
+    mov byte [mc_ehol + si], 0
     mov byte [mc_ea + si], 1
 .out:
     pop si
@@ -5251,7 +5417,8 @@ mc_draw_exp:
     jae .draw
     call mc_erase_ring              ; shrank: give the ring back to the sky
 .draw:
-    mov [mc_er + si], bl
+    mov byte [mc_ehol + si], 0      ; a whole disc goes down here, so whatever
+    mov [mc_er + si], bl            ; bit into it is filled back in (48.22.1)
     call mc_exp_pen
     mov ax, [mc_ex + di]
     mov dx, [mc_ey + di]
@@ -5262,7 +5429,7 @@ mc_draw_exp:
 
 .coarse:                            ; SPEC.md 48.8: with no colour cycle the
     cmp bx, cx                      ; radius is the only thing that can have
-    je .next                        ; changed, and the shipped ramp grows it
+    je .csame                       ; changed, and the shipped ramp grows it
     ja .cdraw                       ; exactly ONCE (48.12)
     push bx                         ; shrank: the old blob back to the sky
     mov al, MC_BG                   ; whole. Unreachable with mc_step3 as it
@@ -5272,7 +5439,12 @@ mc_draw_exp:
     mov bx, cx                      ; a ring behind. The annulus was MEASURED
     call mc_blob                    ; against this pair and lost, 22 calls to
     pop bx                          ; 16, bands or not (48.11)
+    jmp short .cdraw
+.csame:                             ; SPEC.md 48.22.1: the radius has not moved,
+    cmp byte [mc_ehol + si], 0      ; so the only reason left to draw is that a
+    je .next                        ; dying neighbour took a bite out of it
 .cdraw:
+    mov byte [mc_ehol + si], 0
     mov [mc_er + si], bl
     call mc_exp_pen
     mov ax, [mc_ex + di]
@@ -5441,9 +5613,12 @@ mc_exp_hole:
 .yp:
     cmp cx, bx
     ja .next
-    mov byte [mc_er + si], 0        ; "not drawn", which is all it takes: the
-                                    ; NEXT frame's mc_draw_exp finds target !=
-                                    ; drawn and puts it back (SPEC.md 48.24)
+    mov byte [mc_ehol + si], 1      ; "holed": the NEXT frame's mc_draw_exp
+                                    ; paints it again (SPEC.md 48.24). It is a
+                                    ; flag of its own and NOT mc_er := 0, which
+                                    ; is what this was - mc_er is the radius on
+                                    ; the GLASS, and .gone and mc_erase_ring
+                                    ; both subtract from it (SPEC.md 48.22.1)
 .next:
     inc si
     cmp si, MC_MAXEXP
@@ -5473,6 +5648,7 @@ mc_draw_exp_all:
     mov bh, 0
     mov bl, [mc_erad + bx]
     mov [mc_er + si], bl
+    mov byte [mc_ehol + si], 0      ; a full repaint owes nobody a repair
     call mc_exp_pen
     mov ax, [mc_ex + di]
     mov dx, [mc_ey + di]
@@ -6084,6 +6260,17 @@ MC_CHARM  equ 8                     ; arm length. Big enough to read AROUND the
 
 mc_cross_on:
     push ax
+    cmp byte [mc_inbr], 0       ; WINDOWED the kernel draws it for us now
+    je .out                     ; (SPEC.md 7.2): OSAPI_WM_CURSOR put a
+                                ; crosshair on our window at launch, so this
+                                ; whole mechanism would be the SECOND pointer
+                                ; it exists to remove. Gating the DRAW alone
+                                ; disables all of it - mc_cross_off,
+                                ; mc_cross_moved and the eight mc_cross_need
+                                ; hooks all early-out on [mc_chshown], which
+                                ; nothing then sets. In a bracket the held
+                                ; lock keeps the kernel's pointer off the
+                                ; glass, so there it is still ours to draw
     cmp byte [mc_chshown], 0
     jne .out
     mov ax, [mc_chx]
@@ -7015,6 +7202,12 @@ mc_clamp:
     stc
     ret
 
+; mc_textc - SI = string at content-relative CX/DX; AH = the GROUND a windowed
+;            run letters onto (the Mode X twin does not read it)
+;
+; The ink is [mc_col], which mc_setcol banks on every pen change - a package
+; cannot read [gfx_color] back (SPEC.md 6.6.5), and this one had already
+; written the answer down for its own reasons.
 mc_textc:
     push cx
     push dx
@@ -7022,7 +7215,8 @@ mc_textc:
     add dx, [mc_oy]
     cmp byte [mc_fsx], 0
     jne .fsx
-    call OSAPI_FONT_STR
+    mov al, [mc_col]
+    call OSAPI_FONT_RUN
     jmp short .out
 .fsx:
     call mx_text
@@ -7308,6 +7502,8 @@ mc_tpl:
     dw mc_ttl, mc_paint, mc_onkey, mc_onclick
 
 ; --- app menu set (SPEC.md 12.2) -----------------------------------------------
+    OS88_PREFER mc_pref, MC_PREF_VW, MC_PREF_VH,  MC_PREF_HW, MC_PREF_HH,  MC_PREF_CW, MC_PREF_CH
+
     OS88_MENUSET mc_menus, mc_m_name, mc_oncmd
         OS88_MENU mc_m_game, mc_mi_game, 4
     OS88_MENUSET_END mc_menus
@@ -7457,6 +7653,14 @@ mc_coast:    db 0, 1, 2, 3, 2, 1, 0, 2, 4, 3, 1, 0, 1, 3, 2, 1
                                     ; same-mode bracket (SPEC.md 53.7) leaves
                                     ; this 0, because what it changes is who
                                     ; owns the machine and not how to draw
+    MBYTE mc_inbr                   ; inside a bracket AT ALL, which mc_fsx
+                                    ; above deliberately does not answer. It
+                                    ; is the crosshair's question and only the
+                                    ; crosshair's: a bracket holds the gfx
+                                    ; lock for its whole life, so the kernel's
+                                    ; pointer is off the glass and ours is the
+                                    ; only one - windowed it is the second
+                                    ; (SPEC.md 7.2)
     MBYTE mc_fsxm                   ; ...and the FSXM_* to set, or 0FFh for
                                     ; the same-mode bracket
                                     ; (SPEC.md 53) - the four primitives,
@@ -7606,6 +7810,10 @@ mc_coast:    db 0, 1, 2, 3, 2, 1, 0, 2, 4, 3, 1, 0, 1, 3, 2, 1
                                     ; frame; the rest wait (SPEC.md 48.24)
     MBUF  mc_edef,   MC_MAXEXP      ; ...and frames it has waited for a lit
                                     ; neighbour to go first (SPEC.md 48.25.1)
+    MBUF  mc_ehol,   MC_MAXEXP      ; a dying neighbour's erase bit into this
+                                    ; burst: repaint it (SPEC.md 48.22.1). NOT
+                                    ; mc_er := 0, which cannot say this without
+                                    ; also forgetting what is on the glass
     MWORD mc_ehx                    ; ...and the disc of background it laid
     MWORD mc_ehy
     MWORD mc_ehr

@@ -1,0 +1,12 @@
+<!-- SHEET: a grid whose starting cells live in SHEET.WFX. The grid's own
+     rows 0-1 are the formula bar and row 2 the column header, so h="9"
+     shows six data rows (WEAVE-SPEC 6.9.1). -->
+<app name="Sheet" vm="16">
+  <card id="main">
+    <label style="bold">Sheet</label>
+    <grid id="g" cols="2" rows="6" h="9" br="1"
+          onedit="edited" oncalc="calced"/>
+    <label id="out" br="1" w="34">Ready.</label>
+  </card>
+  <script src="MAIN.WJS"/>
+</app>

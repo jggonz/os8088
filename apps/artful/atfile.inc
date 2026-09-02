@@ -170,11 +170,20 @@ at_save_named:
     call at_gapto                   ; gap to the end - text is contiguous
     mov cx, ax                      ; wait: at_gapto wants AX = position =
     ; the length itself; AX already holds it. CX = byte count for write.
+    push ax                         ; PIN it across the write (66.5.7.1): the
+    xor ax, ax                      ; source below is a pointer INTO this
+    call at_dmov                    ; claim and OSAPI_FILE_WRITE holds it
+    pop ax                          ; across the sector cache's own claims
+                                    ; (SPEC.md 18.95), which can compact
     mov es, [at_dseg]               ; ES:BX = the document itself - no staging
     xor bx, bx                      ; pass, because the gap is parked at the
     xor dx, dx                      ; end and [0..len) is one straight run
     mov si, at_name                 ; (SPEC.md 18.4.1/46.9)
     call OSAPI_FILE_WRITE
+    push ax                         ; movable again on BOTH paths out, before
+    mov ax, at_reloc                ; the CF below picks one
+    call at_dmov
+    pop ax
     jc .err
     mov byte [at_dirty], 0
     jmp short .out
@@ -217,12 +226,20 @@ at_load_named:
                                     ; the file lands in the document buffer
                                     ; itself (SPEC.md 46.9). at_dfit gives the
                                     ; rest back at the end of both paths
+    push ax                         ; PIN it across the read, at_save_named's
+    xor ax, ax                      ; reasoning exactly (SPEC.md 66.5.7.1) -
+    call at_dmov                    ; and AFTER at_dresize above, whose regrow
+    pop ax                          ; is unaffected either way
     mov es, [at_dseg]
     xor bx, bx
     mov cx, [at_dcap]
     xor dx, dx                      ; DX:CX = the capacity; a file bigger than
     mov si, at_name                 ; the gap buffer is FERR_BIG, as before
     call OSAPI_FILE_READ            ; DX:AX = bytes read, and DX is 0 here
+    push ax
+    mov ax, at_reloc
+    call at_dmov
+    pop ax
     jc .err
     ; fold in place: SI reads, DI writes, both inside the document claim
     mov cx, ax
@@ -339,8 +356,10 @@ at_e_big:     db 'Too large to open here.', 0
 ;
 ; It RECORDS and does not load. at_load_named repaints and can enter
 ; fullscreen, which want the gfx lock HELD, and an entry proc holds none
-; (SPEC.md 20.2) - the first W_PAINT spends it, where the window is also
-; placed and the geometry is known.
+; (SPEC.md 20.2) - at_onwake spends it, where the window is placed, the
+; geometry is known AND the splash is already on the glass. The first W_PAINT
+; spent it until SPEC.md 54.10, and that paint runs inside wm_show's own
+; repaint, so the read still happened before the desktop was finished.
 ; -----------------------------------------------------------------------------
 at_arg:
     pushf
@@ -384,23 +403,46 @@ at_arg:
     ret
 
 ; -----------------------------------------------------------------------------
-; at_argload - spend it, from the first paint (SPEC.md 54.5)
-; in:  the gfx lock HELD, the window visible
-; out: CF=1 = the screen is already painted, the caller must draw nothing;
-;      CF=0 = nothing happened, paint the splash. All registers preserved.
+; at_onwake - W_ONWAKE: open the launch document (SPEC.md 54.10/74.1)
+; in:  SI = our window; the UI task, gfx lock NOT held
+; out: nothing; no register need be preserved
 ;
-; The load AND at_ondlg's fullscreen entry, because the paint this runs
-; inside would otherwise draw the SPLASH over a perfectly loaded document -
-; [at_fs] is 0 at launch, so at_paint's own test sends it to at_splash. The
-; entry is what makes the document visible at all, and it repaints
-; everything itself (through W_PAINT, re-entering this proc with [at_argp]
-; already spent), which is what the CF is for.
+; The kernel calls this once assoc_run has shown our window, so the read
+; happens in front of an Artful the user can see - the splash, drawn by the
+; W_PAINT wm_show already ran - and SPEC.md 12.8's widget steps through it. It
+; takes the lock for the burst SPEC.md 74.1 lets it state: at_load_named reads
+; and at_fs_enter takes the screen, and both draw.
+; -----------------------------------------------------------------------------
+at_onwake:
+    cmp byte [at_argp], 0           ; not the document's wake, or the document
+    je .out                         ; is already open
+    call OSAPI_GFX_LOCK
+    call at_argload
+    call OSAPI_GFX_UNLOCK
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; at_argload - spend it, from at_onwake (SPEC.md 54.10)
+; in:  the gfx lock HELD, the window visible AND DRAWN
+; out: CF=1 = the screen is already painted; CF=0 = nothing happened and the
+;      splash W_PAINT already drew is still the honest picture. All registers
+;      preserved.
+;
+; The load AND at_ondlg's fullscreen entry, because the entry is what makes
+; the document visible at all: [at_fs] is 0 at launch, so at_paint's own test
+; sends it to at_splash, and without the entry a perfectly loaded document
+; would sit behind one. at_fs_enter repaints everything itself (through
+; W_PAINT, re-entering with [at_argp] already spent), which is what the CF
+; used to be for when the caller WAS a paint proc; it is kept because
+; at_ondlg's caller reads it too.
 ;
 ; A failure of any kind - unlistable folder, unreadable file, or a
 ; fullscreen refused because another window owns the screen - leaves
-; [at_fs] at 0, and that one test answers all three: the splash is then the
-; honest thing to show, over the fresh untitled document at_cmd_newdoc
-; already made, with no alert over a window that has not been seen yet.
+; [at_fs] at 0, and that one test answers all three: the splash already on the
+; glass is then the honest thing to have shown, over the fresh untitled
+; document at_cmd_newdoc already made, with no alert over a window that has
+; not been seen yet.
 ; -----------------------------------------------------------------------------
 at_argload:
     push ax

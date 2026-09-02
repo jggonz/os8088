@@ -2,8 +2,11 @@
 """os88disk: build (or verify) a FAT data floppy image from .o88 packages.
 
     python3 tools/os88disk.py -o OUT.img --size {1440,720,360}
-                             [--folder NAME ...] [[DIR:]PKG.o88 ...]
+                             [--folder PATH ...] [[DIR[/DIR...]:]PKG.o88 ...]
+    python3 tools/os88disk.py -o OUT.img --hdd --mbr MBR.bin
+                             --boot BOOTHD.bin --kernel KERNEL.bin [...]
     python3 tools/os88disk.py --verify IMG
+    python3 tools/os88disk.py --verify-hdd HDD.img
 
 The image is a canonical DOS FAT floppy (SPEC.md section 19): boot sector
 with a full BPB (OEM "MSDOS5.0", boot signature 0x29, fixed serial
@@ -27,6 +30,20 @@ when DSK_FAT_SECS fell to 10 sectors, which is below the 16 a FAT has to
 have to be FAT16 at all, so mount rule 10 (SPEC.md 18.2) now turns every
 FAT16 volume away and there is nothing left to test with.
 
+--hdd (SPEC.md 80.1) builds a bootable HARD-DISK image instead of a floppy:
+boot/mbr.asm's 446 bytes and one active partition entry at LBA 0,
+boot/boothd.asm as the volume boot record with this volume's BPB over its
+first 62 bytes and the kernel sector count in the pinned word at offset 508
+(SPEC.md 52.10.2), and a FAT16 volume laid out by the same code as every
+floppy - KERNEL.SYS first and contiguous, the folder tree, the attribute
+rules and the warm ASSOC.DAT are all the one implementation. It is what
+SPEC.md 52.10.4's installer writes, made at build time: the live-USB image,
+and the boot image inside the live CD (SPEC.md 80.2). The geometry is fixed
+(16 heads x 63 spt x 65 cylinders, partition base 63) and the partition
+entry's CHS and LBA columns describe the same sectors under it, because a
+BIOS booting a USB stick derives its virtual geometry from that table.
+--verify-hdd checks the result exactly as it checks an installer's disk.
+
 Boot-sector stub (offset 62): fixed hand-assembled bytes that print
 "Not a bootable disk. Press any key." via int 10h AH=0Eh teletype, wait
 with int 16h AH=00h, and reboot via int 19h. It uses org-correct absolute
@@ -44,7 +61,10 @@ interleaved across files: a legally fragmented image for chain-walk tests.
 
 Zero packages is legal (an empty disk). Fails with exit 1 + stderr on more
 than 32 packages (the kernel listing cap), data over capacity, duplicate
-or invalid 8.3 names, or an invalid .o88.
+or invalid 8.3 names, or an invalid .o88. --deep-folders lifts the 32-entry
+cap for SUBFOLDERS only: it is a listing cap (the Disk window shows the
+first 31 of such a folder), and the file API walks every entry - a CP/M
+drive folder on the RUNCPM disk holds 78 (SPEC.md 71.3).
 """
 import argparse
 import os
@@ -55,7 +75,7 @@ SECTOR = 512
 MAX_FILES = 32                # kernel listing cap (SPEC.md section 19)
 VOL_LABEL = b"OS8088APPS "    # 11 bytes, BS_VolLab == root label entry
 SYS_LABEL = b"OS8088SYS  "    # ...and what a --boot/--kernel disk is called
-DOS_LABEL = b"FREEDOS    "    # ...and a --dos one (SPEC.md 59.1)
+DOS_LABEL = b"FREEDOS    "    # ...and a --dos one (SPEC.md 86.1)
 VOL_ID = 0x88000888           # fixed serial -> deterministic images
 FIXED_DATE = 0x5C21           # 2026-01-01 in FAT date encoding
 FIXED_TIME = 0x0000
@@ -68,6 +88,23 @@ GEOMETRY = {
     720: (9, 2, 1440, 2, 3, 112, 0xF9),
     360: (9, 2, 720, 2, 2, 112, 0xFD),
 }
+
+# --hdd (SPEC.md 80.1): ONE fixed hard-disk shape, not a knob. 65 cylinders
+# puts the partition at 65,457 sectors - just under the kernel's
+# 65,535-sector volume ceiling (SPEC.md 52.10.3) and under 32MB, so the
+# partition type is 04h. The base is one track, the era convention
+# drivers/hdd/part.inc follows. 16x63 is for the consumer the floppies never
+# had: a BIOS booting a USB stick or an El Torito hard disk derives its
+# virtual geometry from the partition table's own CHS fields, so the entry
+# is written CHS/LBA-consistent under exactly this shape.
+HDD_SPT, HDD_HEADS, HDD_CYLS = 63, 16, 65
+HDD_BASE = HDD_SPT                       # the MBR's own track
+HDD_TOT = HDD_SPT * HDD_HEADS * HDD_CYLS # 65,520 sectors, the whole image
+HDD_PSECS = HDD_TOT - HDD_BASE           # 65,457 - the partition
+HDD_ROOT_ENT = 512                       # what drivers/hdd/fmt.inc formats
+HDD_LABEL = b"OS8088LIVE "
+BOOTHD_KSECS = 508                       # boot/boothd.asm's pinned patch word
+HP_TBL = 446                             # the partition table's offset
 
 # Hand-assembled A.4 stub (verified against nasm; see module docstring):
 #   xor ax,ax / mov ds,ax / mov si,0x7C59
@@ -352,12 +389,19 @@ def dirent(name11: bytes, attr: int, clus: int, size: int) -> bytes:
 
 
 def boot_sector(spt, heads, tot, spc, fatsz, root_ent, media,
-                lay: Layout, code: bytes = None, label: bytes = None) -> bytes:
-    """One BPB, two uses. `code` is os8088's own 512-byte boot sector: its
-    first three bytes are already EB 3C 90 and bytes 62.. are its loader, so
-    the BPB is written into the hole between them and everything else is left
-    exactly as nasm assembled it. Without `code` the sector carries the
-    not-bootable stub instead."""
+                lay: Layout, code: bytes = None, label: bytes = None,
+                hidden: int = 0, drvnum: int = 0, ksecs: int = 0) -> bytes:
+    """One BPB, three uses. `code` is os8088's own 512-byte boot sector -
+    boot/boot.asm's on a floppy, boot/boothd.asm's under --hdd: either way
+    its first three bytes are already EB 3C 90 and bytes 62.. are its
+    loader, so the BPB is written into the hole between them and everything
+    else is left exactly as nasm assembled it. Without `code` the sector
+    carries the not-bootable stub instead.
+
+    `hidden`/`drvnum`/`ksecs` are the hard-disk volume boot record's three
+    extras (SPEC.md 52.10.2): the partition base boothd.asm adds to every
+    LBA, BS_DrvNum 80h, and the kernel sector count in the pinned word at
+    offset 508 that the installer would otherwise patch."""
     bs = bytearray(code if code else SECTOR)
     if code:
         if len(code) != SECTOR:
@@ -377,15 +421,50 @@ def boot_sector(spt, heads, tot, spc, fatsz, root_ent, media,
     struct.pack_into("<H", bs, 22, fatsz)       # BPB_FATSz16
     struct.pack_into("<H", bs, 24, spt)         # BPB_SecPerTrk
     struct.pack_into("<H", bs, 26, heads)       # BPB_NumHeads
-    # BPB_HiddSec, BPB_TotSec32 stay 0; BS_DrvNum 0; BS_Reserved1 0.
+    # On a floppy BPB_HiddSec, BS_DrvNum and BPB_TotSec32 stay 0.
+    struct.pack_into("<I", bs, 28, hidden)      # BPB_HiddSec
+    bs[36] = drvnum                             # BS_DrvNum
     bs[38] = 0x29                               # BS_BootSig
     struct.pack_into("<I", bs, 39, VOL_ID)      # BS_VolID
     bs[43:54] = label or VOL_LABEL              # BS_VolLab
     bs[54:62] = b"FAT12   " if lay.fat12 else b"FAT16   "
     if not code:
         bs[62:62 + len(BOOT_STUB)] = BOOT_STUB
+    if ksecs:
+        struct.pack_into("<H", bs, BOOTHD_KSECS, ksecs)
     bs[510:512] = b"\x55\xAA"
     return bytes(bs)
+
+
+def hdd_layout(tot: int) -> Layout:
+    """The FAT16 layout for `tot` sectors: the smallest cluster that keeps
+    the count inside FAT16's range - the shape drivers/hdd/fmt.inc's own
+    capacity table produces, and the one tools/os88hdd.py builds for the
+    installer's test fixture (SPEC.md 52.10)."""
+    root_secs = (HDD_ROOT_ENT * 32 + SECTOR - 1) // SECTOR
+    for spc in (4, 8, 16, 32, 64):
+        fatsz = 1
+        nclus = 0
+        for _ in range(64):                     # converges in two or three
+            data = tot - 1 - 2 * fatsz - root_secs
+            nclus = data // spc
+            need = ((nclus + 2) * 2 + SECTOR - 1) // SECTOR
+            if need == fatsz:
+                break
+            fatsz = need
+        if 4085 <= nclus < 65525:
+            return Layout(spc, 1, 2, HDD_ROOT_ENT, tot, fatsz)
+    fail(f"no FAT16 layout fits {tot} sectors")
+
+
+def hdd_chs(lba: int) -> bytes:
+    """LBA as the 3-byte CHS field of a partition entry, under the fixed
+    --hdd geometry. Never clamped: 65 cylinders is far inside CHS range,
+    and the two columns agreeing IS the contract (SPEC.md 80.1) - a BIOS
+    booting this image derives its virtual geometry from these fields."""
+    c, r = divmod(lba, HDD_SPT * HDD_HEADS)
+    h, s = divmod(r, HDD_SPT)
+    return bytes([h, ((s + 1) & 0x3F) | ((c >> 2) & 0xC0), c & 0xFF])
 
 
 def read_data_file(path: str) -> bytes:
@@ -413,8 +492,37 @@ def folder83(name: str) -> bytes:
     return up.encode().ljust(11)
 
 
+def folder_key(spec: str) -> str:
+    """Normalise a folder specification to its key: 'system/dos' -> the
+    key 'SYSTEM/DOS'. A key is the path from the root with '/' between the
+    components and '' for the root itself, so a folder's parent is one
+    rpartition away and no second structure records the tree.
+
+    Every component is validated as an 8.3 stem, which is what makes a
+    nested folder exactly as constrained as a top-level one - the kernel
+    walks '..' off the disk (SPEC.md 19.2) and so has no idea how deep it
+    is, but a directory ENTRY is 8.3 at every level."""
+    parts = spec.replace("\\", "/").split("/")
+    if any(not p for p in parts):
+        fail(f"folder '{spec}': empty path component")
+    for p in parts:
+        folder83(p)                              # per component, not per path
+    return "/".join(p.upper() for p in parts)
+
+
+def folder_parent(key: str) -> str:
+    """The key of this folder's parent ('' = the root)."""
+    return key.rpartition("/")[0]
+
+
+def folder_leaf(key: str) -> str:
+    """The folder's own name - what its directory ENTRY is called."""
+    return key.rpartition("/")[2]
+
+
 def split_spec(arg: str):
-    """'GAMES:build/mines.o88' -> ('GAMES', 'build/mines.o88')."""
+    """'GAMES:build/mines.o88' -> ('GAMES', 'build/mines.o88'), and
+    'SYSTEM/DOS:build/os88net.com' -> ('SYSTEM/DOS', ...)."""
     folder, sep, path = arg.partition(":")
     if not sep:
         return None, arg
@@ -432,7 +540,20 @@ def read_blob(path: str, what: str) -> bytes:
 
 
 def build(args) -> int:
-    spt, heads, tot, spc, fatsz, root_ent, media = GEOMETRY[args.size]
+    mbr = b""
+    if args.hdd:
+        # A hard-disk image (SPEC.md 80.1) is a SYSTEM disk by construction:
+        # its whole point is booting, so the three parts of the chain are
+        # required rather than optional the way --boot/--kernel are.
+        if not (args.boot and args.kernel and args.mbr):
+            fail("--hdd needs --mbr (mbr.bin), --boot (boothd.bin) "
+                 "and --kernel")
+        mbr = read_blob(args.mbr, "MBR boot code")
+        if len(mbr) != HP_TBL:
+            fail(f"{args.mbr} is {len(mbr)} bytes, not {HP_TBL}")
+        spt, heads, tot, media = HDD_SPT, HDD_HEADS, HDD_PSECS, 0xF8
+    else:
+        spt, heads, tot, spc, fatsz, root_ent, media = GEOMETRY[args.size]
 
     # --- the system disk (SPEC.md 19.3) --------------------------------------
     # The kernel is an ordinary FILE, KERNEL.SYS, allocated FIRST and
@@ -457,14 +578,32 @@ def build(args) -> int:
         kern = read_blob(args.kernel, "kernel")
         ksecs = (len(kern) + SECTOR - 1) // SECTOR
         label = DOS_LABEL if args.dos else SYS_LABEL
+    if args.hdd:
+        label = HDD_LABEL
+        lay = hdd_layout(tot)
+        spc, fatsz, root_ent = lay.spc, lay.fatsz, lay.root_ent
+    else:
+        lay = Layout(spc, 1, 2, root_ent, tot, fatsz)
     if args.label:
         label = args.label.encode("ascii", "replace")[:11].ljust(11)
-    lay = Layout(spc, 1, 2, root_ent, tot, fatsz)
 
     # Group by folder, keeping first-appearance order. Names are checked for
     # duplicates PER DIRECTORY: two folders may each hold a MINES.O88.
     groups: dict = {}                            # folder ('' = root) -> list
     seen: dict = {}                              # folder -> set of name11
+
+    # A folder comes into existence because something named it, and naming
+    # SYSTEM/DOS names SYSTEM too - so `ensure` walks up, and a parent is
+    # therefore always created BEFORE its children. Everything below reads
+    # that ordering: the directory chains are laid out in it, and a folder's
+    # entry in its parent is written from the same list.
+    def ensure(key: str):
+        if key in groups:
+            return
+        if key:
+            ensure(folder_parent(key))
+        groups[key] = []
+        seen[key] = set()
 
     # --folder makes a folder with NOTHING in it. A folder normally comes into
     # existence because a package named it, which cannot express the one case
@@ -473,20 +612,12 @@ def build(args) -> int:
     # empty directory is one cluster holding '.' and '..', so the code below
     # needs no special case - only a key with an empty list.
     for folder in args.folder:
-        key = folder.upper()
-        if key not in groups:
-            folder83(key)
-            groups[key] = []
-            seen[key] = set()
+        ensure(folder_key(folder))
 
     for arg in args.packages:
         folder, path = split_spec(arg)
-        key = folder or ""
-        if key not in groups:
-            groups[key] = []
-            seen[key] = set()
-            if folder:
-                folder83(folder)                 # validate once, on creation
+        key = folder_key(folder) if folder else ""
+        ensure(key)
         name11 = name83(path, seen[key])
         # Only *.O88 entries are packages; anything else ships as data, so a
         # disk can carry a module, a picture or a text file next to the
@@ -500,8 +631,12 @@ def build(args) -> int:
         groups[key].append((name11, data, nclusters))
 
     # Root order: every folder first, in first-appearance order, then the
-    # root-level packages. Folders cost one root entry each.
+    # root-level packages. Only a TOP-LEVEL folder costs a root entry; a
+    # nested one costs an entry in its parent instead, which is the whole of
+    # what nesting changes about the directory arithmetic below.
     dirs = [k for k in groups if k]
+    kids = {k: [c for c in dirs if folder_parent(c) == k] for k in dirs}
+    root_dirs = [k for k in dirs if not folder_parent(k)]
     root_files = groups.get("", [])
 
     # A warm ASSOC.DAT (SPEC.md 54.7), from the packages on this disk. It is
@@ -512,22 +647,60 @@ def build(args) -> int:
         root_files = root_files + [(
             ASC_NAME, asc,
             max(1, (len(asc) + lay.cluster_bytes - 1) // lay.cluster_bytes))]
+    # A folder and a file are two entries in the same directory, so they can
+    # collide - `SYSTEM/DOS` beside a file called `DOS` writes one name twice
+    # and the volume is broken in a way no FAT rule catches. The per-file
+    # duplicate check cannot see it: `seen` holds files, and a folder is not
+    # one. This is the second half of it, and it is new because a folder had
+    # nowhere but the root to be until folders nested.
+    for key in list(dirs) + [""]:
+        taken = dict.fromkeys(n for n, _, _ in groups.get(key, []))
+        for c in (kids[key] if key else root_dirs):
+            n = folder83(folder_leaf(c))
+            if n in taken:
+                fail(f"'{folder_leaf(c)}' is both a folder and a file in "
+                     f"{key or 'the root'}")
+            taken[n] = None
+
     for key in dirs:
-        if len(groups[key]) > MAX_FILES:
-            fail(f"{len(groups[key])} entries in folder {key}; the kernel "
-                 f"lists at most {MAX_FILES} per directory")
+        shown = len(kids[key]) + sum(
+            1 for n, _, _ in groups[key]
+            if not sys_attr(n, bool(boot), args.dos) & A_HIDDEN)
+        if shown > MAX_FILES and not args.deep_folders:
+            fail(f"{shown} listed entries in folder {key}; the kernel "
+                 f"lists at most {MAX_FILES} per directory (--deep-folders "
+                 f"if this folder is a data store the file API walks, not "
+                 f"one the Disk window shows)")
     # MAX_FILES is a DISPLAY cap, so only what the kernel would list counts
     # against it: a hidden system file (SPEC.md 19.6) never takes a listing
     # slot. It still takes a directory slot, which is the second check.
-    shown = len(dirs) + sum(1 for n, _, _ in root_files
-                            if not sys_attr(n, bool(boot), args.dos) & A_HIDDEN)
+    shown = len(root_dirs) + sum(1 for n, _, _ in root_files
+                                 if not sys_attr(n, bool(boot), args.dos) & A_HIDDEN)
     if shown > MAX_FILES:
         fail(f"{shown} listed root entries; the kernel lists "
              f"at most {MAX_FILES} per directory")
 
     # A folder's own directory is a cluster chain like any other file: two
-    # link entries ('.', '..') plus its members, rounded up to clusters.
-    dir_nclus = {k: max(1, ((2 + len(groups[k])) * 32 + lay.cluster_bytes - 1)
+    # link entries ('.', '..'), one entry per subfolder, and its files,
+    # rounded up to clusters.
+    # ...or to the slots --dir-slots asked for. THE KERNEL DOES NOT GROW A
+    # DIRECTORY (SPEC.md 18.5: FERR_DIRFULL when the scan reaches the end
+    # of the chain with no reusable slot), so a folder that programs will
+    # SAVE INTO ships with spare slots, or the first few saves after the
+    # last one fill it - RUNCPM's A\0 is built with room for the files a
+    # CP/M session makes (SPEC.md 71.3).
+    min_slots = {}
+    for spec in args.dir_slots:
+        key, sep, n = spec.rpartition("=")
+        if not sep or not n.isdigit():
+            fail(f"--dir-slots wants FOLDER=N, not '{spec}'")
+        min_slots[folder_key(key)] = int(n)
+    for key in min_slots:
+        if key not in dirs:
+            fail(f"--dir-slots {key}: no such folder on this disk")
+    dir_nclus = {k: max(1, (max(2 + len(kids[k]) + len(groups[k]),
+                                min_slots.get(k, 0)) * 32
+                            + lay.cluster_bytes - 1)
                         // lay.cluster_bytes) for k in dirs}
 
     files = [f for k in dirs for f in groups[k]] + root_files
@@ -537,7 +710,7 @@ def build(args) -> int:
         fail(f"packages need {need} clusters; disk holds {lay.nclus}")
     # The root directory is a fixed number of 32-byte slots: the volume
     # label, KERNEL.SYS on a boot disk, then every folder and root file.
-    slots = 1 + (1 if boot else 0) + len(dirs) + len(root_files)
+    slots = 1 + (1 if boot else 0) + len(root_dirs) + len(root_files)
     if slots > root_ent:
         fail(f"{slots} root entries; the root directory holds {root_ent}")
 
@@ -603,10 +776,20 @@ def build(args) -> int:
     at = 0
     for k in dirs:
         raw = bytearray(len(dir_chains[k]) * lay.cluster_bytes)
+        parent = folder_parent(k)
         raw[0:32] = dirent(b".".ljust(11), 0x10, dir_chains[k][0], 0)
-        raw[32:64] = dirent(b"..".ljust(11), 0x10, 0, 0)   # 0 = the root
+        # '..' is the PARENT's first cluster, with the FAT convention that a
+        # parent of the root is written 0 - which is what dsk_dotdot reads to
+        # go up, so a nested folder needs nothing else to be navigable.
+        raw[32:64] = dirent(b"..".ljust(11), 0x10,
+                            dir_chains[parent][0] if parent else 0, 0)
+        slot = 2
+        for c in kids[k]:
+            raw[slot * 32:(slot + 1) * 32] = dirent(
+                folder83(folder_leaf(c)), 0x10, dir_chains[c][0], 0)
+            slot += 1
         for i, (name11, body, _) in enumerate(groups[k]):
-            off = (i + 2) * 32
+            off = (slot + i) * 32
             raw[off:off + 32] = dirent(name11, sys_attr(name11, boot, args.dos),
                                        chains[at + i][0], len(body))
         at += len(groups[k])
@@ -619,9 +802,9 @@ def build(args) -> int:
         root[slot * 32:(slot + 1) * 32] = dirent(
             KERNEL_NAME, A_SYSTEM, kchain[0], len(kern))
         slot += 1
-    for k in dirs:
+    for k in root_dirs:
         root[slot * 32:(slot + 1) * 32] = dirent(
-            folder83(k), 0x10, dir_chains[k][0], 0)
+            folder83(folder_leaf(k)), 0x10, dir_chains[k][0], 0)
         slot += 1
     for i, (name11, body, _) in enumerate(root_files):
         chain = chains[len(files) - len(root_files) + i]
@@ -630,11 +813,33 @@ def build(args) -> int:
         slot += 1
 
     image = bytearray(boot_sector(spt, heads, tot, spc, fatsz, root_ent,
-                                  media, lay, boot, label))
+                                  media, lay, boot, label,
+                                  hidden=HDD_BASE if args.hdd else 0,
+                                  drvnum=0x80 if args.hdd else 0,
+                                  ksecs=ksecs if args.hdd else 0))
     image += fat.buf + fat.buf                   # FAT2 = FAT1
     image += root
     image += data_area
     assert len(image) == tot * SECTOR
+
+    if args.hdd:
+        # The MBR sector in front of the volume: boot/mbr.asm's 446 bytes,
+        # one active entry whose CHS and LBA columns agree (SPEC.md 80.1),
+        # type 04h - the partition is under 32MB by construction - and the
+        # rest of the MBR's track left zero, which is where the era left it.
+        sec0 = bytearray(SECTOR)
+        sec0[0:HP_TBL] = mbr
+        ent = bytearray(16)
+        ent[0] = 0x80                            # active
+        ent[1:4] = hdd_chs(HDD_BASE)
+        ent[4] = 0x04                            # FAT16 under 32MB
+        ent[5:8] = hdd_chs(HDD_BASE + HDD_PSECS - 1)
+        struct.pack_into("<I", ent, 8, HDD_BASE)
+        struct.pack_into("<I", ent, 12, HDD_PSECS)
+        sec0[HP_TBL:HP_TBL + 16] = ent
+        sec0[510:512] = b"\x55\xAA"
+        image = bytes(sec0) + bytes((HDD_BASE - 1) * SECTOR) + bytes(image)
+        assert len(image) == HDD_TOT * SECTOR
 
     try:
         with open(args.output, "wb") as f:
@@ -642,13 +847,215 @@ def build(args) -> int:
     except OSError as e:
         fail(f"cannot write {args.output}: {e}")
 
-    print(f"os88disk: {args.output} ({args.size}KB, {spt} spt, "
+    geom = (f"{HDD_CYLS}/{HDD_HEADS}/{HDD_SPT} hdd, partition at LBA "
+            f"{HDD_BASE} for {HDD_PSECS} sectors" if args.hdd
+            else f"{args.size}KB, {spt} spt")
+    print(f"os88disk: {args.output} ({geom}, "
           f"{lay.type_name}) {len(files)} file(s)"
           + (f" in {len(dirs)} folder(s)" if dirs else "")
           + f", {need}/{lay.nclus} clusters"
           + (f", KERNEL.SYS {ksecs} sectors at LBA {lay.data_lba}"
              if boot else "")
           + (", scrambled" if args.scramble and files else ""))
+    return 0
+
+
+def verify_hdd(path: str) -> int:
+    """Structural fsck for a PARTITIONED image - a hard disk, not a floppy.
+
+    `--verify` is a floppy's: it fails a BPB whose geometry is not one of six
+    real floppy shapes, and a FAT bigger than DSK_FAT_SECS. Neither rule
+    applies to a driver-backed volume (SPEC.md 18.7/52.4), and the machine
+    this project is calibrated against has a 20MB ST-225 in it, so there was
+    no way to answer "is the hard disk corrupt?" without writing a throwaway
+    script - which is how a throwaway answer gets trusted.
+
+    **THE MBR IS FOUND, NOT ASSUMED AT LBA 0.** A Seagate ST-11M reserves the
+    first sectors of the drive for itself and presents the one after them as
+    the BIOS's LBA 0, so a raw image of that drive has its partition table 68
+    sectors in and every partition LBA is relative to there. Read the raw
+    sector 0 of one and you get the controller's own geometry block - which
+    looks exactly like a destroyed MBR, and was read as one for a while. The
+    tell is that the partition's `hidden` field agrees with its table entry
+    only at the right offset, and that is what this searches for.
+    """
+    errors = []
+    try:
+        with open(path, "rb") as f:
+            img = f.read()
+    except OSError as e:
+        fail(f"cannot read {path}: {e}")
+
+    def sig_at(base):
+        o = base * SECTOR
+        return len(img) >= o + SECTOR and img[o + 510:o + 512] == b"\x55\xaa"
+
+    def parts_at(base):
+        o = base * SECTOR
+        out = []
+        for i in range(4):
+            e = img[o + 446 + i * 16:o + 446 + i * 16 + 16]
+            typ = e[4]
+            lba, cnt = struct.unpack("<II", e[8:16])
+            # The physical extent is base + lba + cnt: partition LBAs are
+            # relative to the table's own sector on these images, so a bound
+            # that omits base admits a partition reaching past a truncated
+            # image - which then dies in psec() with an IndexError traceback
+            # instead of a diagnostic.
+            if typ and cnt and base + lba + cnt <= len(img) // SECTOR:
+                out.append((i, typ, lba, cnt))
+        return out
+
+    base = None
+    for cand in range(0, 129):               # 68 on an ST-11M; 0 on anything
+        if not sig_at(cand):                 # sane. The agreement test below
+            continue                         # is what makes the search safe
+        ps = parts_at(cand)
+        if not ps:
+            continue
+        ok = True
+        for _, _, lba, _ in ps:
+            b = img[(cand + lba) * SECTOR:(cand + lba) * SECTOR + SECTOR]
+            if len(b) < SECTOR or b[510:512] != b"\x55\xaa":
+                ok = False
+                break
+            hid, = struct.unpack_from("<I", b, 28)
+            if hid != lba:                   # the volume's own opinion of
+                ok = False                   # where it starts must match the
+                break                        # table's, or this is not it
+        if ok:
+            base = cand
+            break
+    if base is None:
+        fail(f"{path}: no partition table whose entries agree with their "
+             "volumes, at any offset in the first 128 sectors")
+    if base:
+        print(f"os88disk: verify-hdd: {path}: partition table at physical "
+              f"sector {base} - {base} reserved sectors in front of it "
+              "(an ST-11M-style controller area)")
+
+    total_files = 0
+    for idx, typ, plba, pcnt in parts_at(base):
+        o = (base + plba) * SECTOR
+        bs = img[o:o + SECTOR]
+        bps, = struct.unpack_from("<H", bs, 11)
+        spc = bs[13]
+        rsvd, = struct.unpack_from("<H", bs, 14)
+        nfats = bs[16]
+        root_ent, = struct.unpack_from("<H", bs, 17)
+        tot, = struct.unpack_from("<H", bs, 19)
+        fatsz, = struct.unpack_from("<H", bs, 22)
+        if not tot:
+            tot, = struct.unpack_from("<I", bs, 32)
+        rootsecs = (root_ent * 32 + bps - 1) // bps
+        data_lba = rsvd + nfats * fatsz + rootsecs
+        nclus = (tot - data_lba) // spc if spc else 0
+        fat16 = nclus >= 4085
+        print(f"os88disk: verify-hdd: {path}: partition {idx} type 0x{typ:02X} "
+              f"at LBA {plba}, {pcnt} sectors: {'FAT16' if fat16 else 'FAT12'}, "
+              f"{nclus} clusters of {spc * bps} bytes")
+        if bps != 512:
+            errors.append(f"partition {idx}: BPB_BytsPerSec {bps} != 512")
+            continue
+
+        def psec(n, count=1):
+            a = o + n * SECTOR
+            return img[a:a + SECTOR * count]
+
+        f1 = psec(rsvd, fatsz)
+        f2 = psec(rsvd + fatsz, fatsz) if nfats > 1 else f1
+
+        def ent(fat, n):
+            if fat16:
+                return struct.unpack_from("<H", fat, n * 2)[0]
+            b = n + n // 2
+            v = fat[b] | (fat[b + 1] << 8)
+            return (v >> 4) if (n & 1) else (v & 0xFFF)
+
+        eoc = 0xFFF8 if fat16 else 0xFF8
+        if nfats > 1:
+            d = [n for n in range(nclus + 2) if ent(f1, n) != ent(f2, n)]
+            if d:
+                errors.append(f"partition {idx}: FAT1 and FAT2 differ at "
+                              f"{len(d)} entries, first {d[:8]}")
+
+        owner = {}
+
+        def chain(start, name):
+            c, n, seen = start, 0, set()
+            while True:
+                if c < 2 or c > nclus + 1:
+                    if c and c < eoc:
+                        errors.append(f"{name}: chain ends on cluster "
+                                      f"0x{c:04X}, outside 2..{nclus + 1}")
+                    return n
+                if c in seen:
+                    errors.append(f"{name}: CLUSTER LOOP at {c}")
+                    return n
+                if c in owner:
+                    errors.append(f"{name}: CROSS-LINKED with {owner[c]} "
+                                  f"at cluster {c}")
+                    return n
+                seen.add(c)
+                owner[c] = name
+                n += 1
+                c = ent(f1, c)
+
+        def walk(start, path_, is_root):
+            nonlocal total_files
+            if is_root:
+                d = psec(rsvd + nfats * fatsz, rootsecs)
+            else:
+                d, c, guard, seen = b"", start, 0, set()
+                while 2 <= c <= nclus + 1 and guard < 4096:
+                    if c in seen:
+                        errors.append(f"{path_}: DIRECTORY CHAIN LOOP at {c}")
+                        break
+                    seen.add(c)
+                    d += psec(data_lba + (c - 2) * spc, spc)
+                    c = ent(f1, c)
+                    guard += 1
+            subs = []
+            for i in range(0, len(d), 32):
+                e = d[i:i + 32]
+                if not e or e[0] == 0:
+                    break
+                if e[0] == 0xE5:
+                    continue
+                attr = e[11]
+                if attr & 0x08 and not attr & 0x10:
+                    continue
+                nm = e[0:8].decode("latin-1").rstrip()
+                ex = e[8:11].decode("latin-1").rstrip()
+                if nm in (".", ".."):
+                    continue
+                clus, = struct.unpack_from("<H", e, 26)
+                size, = struct.unpack_from("<I", e, 28)
+                full = path_ + nm + ("." + ex if ex else "")
+                if attr & 0x10:
+                    if clus:
+                        chain(clus, full + "/ (dir)")
+                    subs.append((clus, full + "/"))
+                else:
+                    total_files += 1
+                    got = chain(clus, full) if clus else 0
+                    want = (size + spc * bps - 1) // (spc * bps)
+                    if got != want:
+                        errors.append(f"{full}: size {size} needs {want} "
+                                      f"cluster(s), the chain has {got}")
+            for c, p in subs:
+                walk(c, p, False)
+
+        walk(0, "/", True)
+
+    for e in errors:
+        print(f"os88disk: verify-hdd: {path}: {e}", file=sys.stderr)
+    if errors:
+        print(f"os88disk: verify-hdd FAILED: {path}: {len(errors)} problem(s)",
+              file=sys.stderr)
+        return 1
+    print(f"os88disk: verify-hdd OK: {path}: {total_files} file(s), FATs "
+          "agree, no loops, no cross-links, every chain matches its size")
     return 0
 
 
@@ -838,8 +1245,23 @@ def main() -> int:
     ap.add_argument("--size", type=int, choices=(1440, 720, 360),
                     help="disk size in KB: 1440 (18 spt), 720 or 360 (9 spt; "
                          "80 and 40 cylinders)")
+    ap.add_argument("--hdd", action="store_true",
+                    help="build a bootable HARD-DISK image instead of a "
+                         "floppy (SPEC.md 80.1): MBR + partition table, "
+                         "boothd.bin as the volume boot record, one FAT16 "
+                         "partition. Needs --mbr, --boot and --kernel; "
+                         "excludes --size")
+    ap.add_argument("--mbr", metavar="MBR.bin",
+                    help="with --hdd: boot/mbr.asm's 446 bytes of MBR boot "
+                         "code (build/mbr.bin)")
     ap.add_argument("--scramble", action="store_true",
                     help="fragment cluster chains round-robin (test only)")
+    ap.add_argument("--verify-hdd", metavar="IMG",
+                    help="structural fsck of a PARTITIONED image (a hard "
+                         "disk). Finds the partition table even behind an "
+                         "ST-11M-style reserved area, and allows the FAT16 "
+                         "and geometry a driver volume has and a floppy "
+                         "cannot")
     ap.add_argument("--verify", metavar="IMG",
                     help="structural fsck of an existing image (no build)")
     ap.add_argument("--boot", metavar="BOOT.bin",
@@ -851,25 +1273,49 @@ def main() -> int:
     ap.add_argument("--dos", action="store_true",
                     help="this is a FreeDOS volume, not an os8088 one: every "
                          "file is an ordinary archive file rather than "
-                         "read-only/system (SPEC.md 59.1)")
+                         "read-only/system (SPEC.md 86.1)")
     ap.add_argument("--label", metavar="NAME",
                     help="11-char volume label, overriding the default for "
                          "the disk kind")
-    ap.add_argument("--folder", metavar="NAME", action="append", default=[],
+    ap.add_argument("--folder", metavar="PATH", action="append", default=[],
                     help="create this folder even if no file names it "
-                         "(repeatable); an 8.3 stem, no extension")
-    ap.add_argument("packages", metavar="[DIR:]PKG.o88", nargs="*",
+                         "(repeatable); each component an 8.3 stem with no "
+                         "extension, '/' between them for a nested one")
+    ap.add_argument("--deep-folders", action="store_true",
+                    help="allow more than the kernel's 32-entry LISTING cap "
+                         "in a subfolder (never the root): the Disk window "
+                         "shows the first 31, the file API - OSAPI_FILE_FIND "
+                         "and every name-taking cell - reaches them all "
+                         "(SPEC.md 19, 71.3: a CP/M drive folder)")
+    ap.add_argument("--dir-slots", metavar="FOLDER=N", action="append",
+                    default=[],
+                    help="size this folder's directory for at least N "
+                         "entries ('.' and '..' included), rounded up to "
+                         "whole clusters (repeatable): the kernel does not "
+                         "grow a directory (SPEC.md 18.5), so a folder "
+                         "programs save into ships with spare slots")
+    ap.add_argument("packages", metavar="[DIR[/DIR...]:]PKG.o88", nargs="*",
                     help="package files, in directory order "
-                         "(none = empty disk)")
+                         "(none = empty disk); the prefix is the folder to "
+                         "put it in, and naming a nested one makes every "
+                         "folder above it too")
     args = ap.parse_args()
 
+    if args.verify_hdd:
+        if args.output or args.size or args.scramble or args.packages \
+                or args.folder or args.dir_slots or args.verify or args.hdd:
+            ap.error("--verify-hdd takes no other arguments")
+        return verify_hdd(args.verify_hdd)
     if args.verify:
         if args.output or args.size or args.scramble or args.packages \
-                or args.folder or args.dos or args.label:
+                or args.folder or args.dir_slots or args.hdd \
+                or args.dos or args.label:
             ap.error("--verify takes no other arguments")
         return verify(args.verify)
-    if not args.output or not args.size:
-        ap.error("-o and --size are required to build")
+    if args.size and args.hdd:
+        ap.error("--size and --hdd are mutually exclusive")
+    if not args.output or not (args.size or args.hdd):
+        ap.error("-o and --size (or --hdd) are required to build")
     return build(args)
 
 

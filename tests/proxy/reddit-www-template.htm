@@ -1,0 +1,34 @@
+<!doctype html>
+<html><head><title>Reddit - The heart of the internet</title></head>
+<body>
+<shreddit-app routename="frontpage">
+  <!-- THE FEED IS INSIDE A TEMPLATE, which is what the field's 597KB front
+       page does: hydration clones these out, and a machine with no
+       JavaScript sees an empty page unless the parser reads them. Synthetic,
+       and small on purpose - the real capture is 597KB and every byte of it
+       past this shape is chrome. -->
+  <template for="s_24f05_0">
+    <div class="my-xs mx-2xs">
+      <shreddit-post permalink="/r/AskReddit/comments/aaa111/what_do_you_do/"
+                     content-href="https://www.reddit.com/r/AskReddit/comments/aaa111/what_do_you_do/"
+                     comment-count="4339" post-title="Making it sound as illegal as possible, what do you do for a living?"
+                     score="21000" author="someone" post-type="text"
+                     created-timestamp="2026-08-18T09:00:00.000000+0000"
+                     id="t3_aaa111" subreddit-prefixed-name="r/AskReddit"
+                     subreddit-name="AskReddit">
+        <div id="t3_aaa111-post-rtjson-content"><p>Tell us.</p></div>
+      </shreddit-post>
+      <shreddit-post permalink="/r/MadeMeSmile/comments/bbb222/toy/"
+                     content-href="https://v.redd.it/xyz"
+                     comment-count="112" post-title="This toy gets funnier every time it pops back up"
+                     score="9000" author="another" post-type="video"
+                     created-timestamp="2026-08-18T10:00:00.000000+0000"
+                     id="t3_bbb222" subreddit-prefixed-name="r/MadeMeSmile"
+                     subreddit-name="MadeMeSmile"></shreddit-post>
+    </div>
+  </template>
+  <faceplate-partial slot="load-after" id="feed-next-page-partial"
+     src="/svc/shreddit/feeds/popular-feed?after=dDNfMXZycmtndQ%3D%3D&amp;distance=3"
+     method="GET"></faceplate-partial>
+</shreddit-app>
+</body></html>

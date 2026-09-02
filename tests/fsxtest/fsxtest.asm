@@ -39,9 +39,10 @@ FX_CONT_H equ 59
 ; -----------------------------------------------------------------------------
 fx_entry:
     push si
-    call OSAPI_FSX_CAPS             ; AX = mask, DL = vid_kind
-    mov [fx_caps], ax
-    mov [fx_kind], dl
+    xor bx, bx                      ; no window yet, so the frontmost - which
+    call OSAPI_FSX_CAPS             ; on a one-display machine is every
+    mov [fx_caps], ax               ; window there is. AX = mask, DL = the
+    mov [fx_kind], dl               ; answering display's kind (39.18.2)
     mov byte [fx_res], '-'          ; bss arrives zeroed and a NUL here
     mov si, fx_tpl                  ; would truncate the caps line
     call OSAPI_WM_CREATE
@@ -71,13 +72,16 @@ fx_paint:
     call OSAPI_SET_COLOR
     add dx, 10
     mov si, fx_s_caps
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     add dx, 16
     mov si, fx_s_key1
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     add dx, 12
     mov si, fx_s_key2
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     pop si
     pop dx
     pop cx

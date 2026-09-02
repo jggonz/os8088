@@ -2,7 +2,9 @@
 ; os8088 - events.inc
 ;
 ; The system event queue (SPEC.md 10): a single ring of 16 fixed 8-byte
-; records in .bss. Producers may be ISRs (the mouse ISR pushes button
+; records in .bss. A FULL ring discards its OLDEST INPUT rather than refusing
+; the newest (SPEC.md 10.1) - see evq_push, and the one exception it makes.
+; Producers may be ISRs (the mouse ISR pushes button
 ; events with IF=0), consumers are tasks (the UI task pops), so both push
 ; and pop guard their whole read-modify-write with pushf/cli ... popf -
 ; the caller's interrupt flag is preserved and never a bare sti.
@@ -26,6 +28,16 @@ EVT_RDOWN   equ 3               ; a=x, b=y, c=birth tick; RIGHT button PRESS.
                                 ; for record symmetry and is read by nobody -
                                 ; a right double-click would need no format
                                 ; change to arrive.
+EVT_WAKE    equ 4               ; a=window ptr, b/c unused. A PACKAGE'S OWN
+                                ; KICK (SPEC.md 74.1): posted through
+                                ; OSAPI_WM_WAKE from any context, popped by
+                                ; the UI task and dispatched to the window's
+                                ; W_ONWAKE handler WITHOUT the gfx lock, so
+                                ; the handler may call the file slots and may
+                                ; take the lock itself for a stated burst.
+                                ; wm_wake coalesces: one queued wake per
+                                ; window at a time, so a package that kicks
+                                ; from every callback cannot fill the ring.
 
 EVQ_RECSIZE equ 8               ; bytes per record
 EVQ_CAP     equ 16              ; records in the ring
@@ -36,11 +48,20 @@ EVQ_MASK    equ (EVQ_RECSIZE * EVQ_CAP) - 1     ; byte-offset wrap mask (0x7F)
 ; in:  nothing
 ; out: nothing
 ; clobbers: nothing (flags only)
+; ISR-safe, and it has to be: kmain is no longer the only caller - blk_pass
+; drops the press that woke the screen with it (SPEC.md 64.2), from the UI
+; task with the mouse ISR live. An evq_push landing between the tail store
+; and the count store writes at tail 0 and leaves tail one record ahead of
+; head for the rest of the session, so every later evq_pop answers the
+; PREVIOUS push's record.
 ; -----------------------------------------------------------------------------
 evq_init:
+    pushf
+    cli
     mov word [evq_head], 0
     mov word [evq_tail], 0
     mov word [evq_count], 0
+    popf
     ret
 
 ; -----------------------------------------------------------------------------
@@ -52,7 +73,8 @@ evq_init:
 ; caller running with IF=0 (the mouse ISR) stays that way throughout.
 ; -----------------------------------------------------------------------------
 evq_push:
-    push ax
+    call sch_wake_ui            ; an event means the UI task has work
+    push ax                     ; work (docs/SCHED-IDLE-PLAN.md 6.3)
     push cx
     push si
     push di
@@ -61,8 +83,22 @@ evq_push:
     cli
 
     cmp word [evq_count], EVQ_CAP
-    jae .full                   ; full: drop silently
-
+    jb .room
+    ; --- SPEC.md 10.1: full, so something is lost. Lose the OLDEST ----------
+    mov di, [evq_head]          ; ...unless the oldest is a WAKE, which is a
+    add di, evq_buf             ; PROMISE and not a sample: wm_wake coalesces
+    cmp word [di + EV_TYPE], EVT_WAKE   ; on a per-window flag that only a
+    je .full                    ; DISPATCH clears, so discarding one hangs
+                                ; that window's handshake for the session.
+                                ; A ring full of input has input at its head,
+                                ; so this falls back to dropping the newest
+                                ; about as often as a wake is the oldest
+    mov ax, [evq_head]
+    add ax, EVQ_RECSIZE
+    and ax, EVQ_MASK
+    mov [evq_head], ax
+    dec word [evq_count]        ; ...and the copy below puts it straight back
+.room:
     mov ax, ds                  ; copy runs DS:SI -> ES:DI within the kernel
     mov es, ax
     mov di, [evq_tail]

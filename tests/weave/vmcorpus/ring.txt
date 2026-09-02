@@ -1,0 +1,71 @@
+# WEAVE-SPEC 4.9's overflow policy, driven through the model's own Ring.
+# Atom ids: 48 onclick, 49 onchange, 50 onkey, 51 onselect, 56 onscore,
+# 57 ontick, 59 ontimer.  Verbs: enq <comp> <atom> <d1> <d2>, deq.
+
+case plain-fifo
+enq 1 48 0 0
+enq 2 49 1 0
+enq 3 50 65 0
+deq
+
+case coalesce-in-place
+enq 1 49 1 0
+enq 2 50 65 0
+enq 1 49 7 0
+enq 3 48 0 0
+enq 1 49 9 0
+
+case collapse-to-one
+enq 0 59 3 0
+enq 1 48 0 0
+enq 0 59 4 0
+enq 0 57 1 0
+enq 0 57 2 0
+
+case full-non-key-dropped
+enq 1 48 0 0
+enq 2 48 0 0
+enq 3 48 0 0
+enq 4 48 0 0
+enq 5 48 0 0
+enq 6 48 0 0
+enq 7 48 0 0
+enq 8 48 0 0
+enq 9 48 0 0
+enq 10 48 0 0
+enq 11 48 0 0
+enq 12 48 0 0
+enq 13 48 0 0
+enq 14 48 0 0
+enq 15 48 0 0
+enq 16 48 0 0
+enq 17 48 0 0
+
+case full-key-evicts-newest-non-key
+enq 1 50 65 0
+enq 2 48 0 0
+enq 3 48 0 0
+enq 4 48 0 0
+enq 5 48 0 0
+enq 6 48 0 0
+enq 7 48 0 0
+enq 8 48 0 0
+enq 9 48 0 0
+enq 10 48 0 0
+enq 11 48 0 0
+enq 12 48 0 0
+enq 13 48 0 0
+enq 14 48 0 0
+enq 15 48 0 0
+enq 16 48 0 0
+enq 1 50 66 0
+
+case head-wraps
+enq 1 48 0 0
+enq 2 49 1 0
+deq
+deq
+enq 3 51 4 0
+enq 4 50 65 0
+deq
+enq 5 48 0 0

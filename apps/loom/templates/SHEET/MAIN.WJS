@@ -1,0 +1,10 @@
+// Grid rows and columns are 1-based. Cells are 16.16 fixed point and
+// cell() truncates to the integer part (WEAVE-SPEC 5.2, 6.9).
+function edited(r, c) {
+  out.text = "Edited R" + str(r) + "C" + str(c) + ".";
+}
+
+function calced(changed) {
+  out.text = "Total " + str(g.cell(5, 2)) + " over "
+           + str(changed) + " cells.";
+}

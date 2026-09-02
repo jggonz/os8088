@@ -36,15 +36,19 @@
 ; the kernel's own work once every callback has been debited away. The two
 ; are disjoint by construction, so the rows partition one total.
 ;
-; tm_worker is the monitor task and doubles as the system idle soak: it never
-; sleeps, spinning { count += 1; OSAPI_TASK_YIELD } for 9-tick intervals. The
-; spin count measures how quickly a yield loop gets the CPU back, calibrated
-; against a rolling maximum - this self-calibrates away the UI task's constant
-; busy-poll cost, so the gauge reads ~0% at idle and rises when any task
-; (including the UI) holds the CPU. It also absorbs the far-call overhead of
-; every measurement below, for the same reason: the percentages are shares of
-; a rolling maximum, not absolute rates, so a spin iteration that costs more
-; recalibrates within two epochs and only the granularity moves.
+; tm_worker is the monitor task: it SLEEPS its 9-tick interval and then takes
+; one sample (SPEC.md 28.7). The load gauge is 100 - 100*idle/total off the
+; idle task's own cycles (SPEC.md 8.1.2), which is the same interval and the
+; same total the rows below are shares of - so the gauge and the process list
+; cannot disagree.
+;
+; IT USED TO SPIN, and the spin WAS the instrument: { count += 1; yield } for
+; the interval, calibrated against a rolling maximum over two epochs, because
+; a spin count has no absolute scale. That is why it could not simply be
+; deleted - and it cost 34-38% of the machine for as long as this page was
+; open, which the page charged to itself, correctly, while the graph beside it
+; drew 0-2%. Both numbers were right and they were measuring different things:
+; one CPU time, the other how much spinning got done.
 ;
 ; Locking follows the Timer pattern (SPEC.md 14): tm_paint is a bare,
 ; unconditional full redraw (the kernel calls it with the gfx lock already
@@ -98,7 +102,24 @@
 
 ; --- geometry / cadence (SPEC.md 28) -----------------------------------------
 TM_INT      equ 9               ; sample interval, ticks (~0.5s)
-TM_EPOCH    equ 20              ; samples per calibration epoch (~10s)
+; ...and how many of those intervals a PAINT of the memory view or the heap
+; page waits for (SPEC.md 28.6). 4 x TM_INT is 36 ticks, 1.98 s.
+;
+; IT IS THE PAINT THAT SLOWS AND NOT THE SAMPLE, which is the whole of the
+; design: tm_sample takes the cycle diffs over exactly TM_INT ticks and pushes
+; one history column per interval, so an interval that changed with the page
+; would change what the performance view MEANS - a graph whose columns are 2 s
+; wide on one page and 0.5 s on another. So the worker samples at the rate it
+; always did and only DRAWS at this one.
+;
+; Measured on a 5150/CGA with tools/os88lockw.py, one quiet refresh, nothing
+; changed on screen: the heap page held the gfx lock for 51.2 ms and the
+; memory view for 45.1 ms, and BOTH DREW NOTHING AT ALL - no font_run, no
+; gfx_fill, no gfx_hline, no gfx_frame. The cost is not drawing, it is the
+; snapshot and the compose-and-hash of every row to conclude that nothing
+; moved, and the pointer is frozen for all of it (SPEC.md 7.1.4). At TM_INT
+; that was 102 ms of every second on the heap page; at TM_SLOW it is 26.
+TM_SLOW     equ 4               ; intervals per paint on views 1 and 2
 TM_GW       equ TM_RW - 7       ; graph interior width = history ring size
                                 ; (7..TM_RW-1 inclusive), so it follows TM_RW
                                 ; and the two maps below always fill their
@@ -133,8 +154,13 @@ TMM_RAM_Y   equ 4               ; 'RAM nnn/nnnK [] HEAP nnn/nnnK' - the
                                 ; conventional map's caption, both figures
 TMM_M1_Y1   equ 14              ; conventional-memory map frame top
 TMM_M1_Y2   equ 29              ; frame bottom (interior rows 15..28)
-TMM_HSQ_X   equ 105             ; the claim swatch, centred in the two-space
-                                ; gap between the RAM and HEAP figure pairs
+TMM_HSQ_X   equ 108             ; the claim swatch, centred in the two-space
+                                ; gap between the RAM and HEAP figure pairs.
+                                ; It was 105, when this line alone lettered
+                                ; from the band's edge + 6 instead of TM_PEN;
+                                ; the line is a tm_lrun now, so the gap is
+                                ; [104,119] and an 8px square centred in it
+                                ; starts here (SPEC.md 28.5.3)
 TMM_XMS_Y   equ 33              ; 'XMS nnn/nnnK' - memory above 1MB
                                 ; (SPEC.md 41), directly BELOW the map
                                 ; because that is where it is NOT: the map
@@ -149,6 +175,32 @@ TMM_XB_Y2   equ 51              ; figures - same shape as the RAM bar in the
                                 ; same question about a different pool
 TMM_HDR_Y   equ 55              ; "NAME    ADDR SIZE   HEAP" header line
 
+; --- ...and what all of that becomes on a machine with NO store above 1MB ----
+; A bar whose scale is zero is not a reading, it is an empty rectangle: on the
+; target machine the XMS row was 'XMS 0/ 0K' over a frame with nothing in it,
+; twenty-two pixels of window saying that a thing which cannot exist here does
+; not exist. So on a machine whose pool is 0 KB the bar is not drawn, the
+; figures come off the caption (the CPU TIER stays - it is the only place in
+; the UI that names it, and SPEC.md 60 is why it is a fact worth keeping), and
+; everything below moves UP by TMM_XSHIFT.
+;
+; This is SPEC.md 31.10.1's rule rather than a new one - "one adapter is not a
+; choice, so the page is not drawn at all" - and it is deliberately NOT
+; SPEC.md 47's greying: greying says "this control is unavailable", and there
+; is no control here and nothing unavailable. There is simply no such memory.
+;
+; TMM_XSHIFT is TM_ROW_H exactly, and that is the whole point rather than a
+; coincidence: the space the bar gave back is one process row, so a machine
+; that cannot show an XMS bar shows one more line of the list instead. It is
+; asserted below, because the two are separately plausible numbers.
+TMM_XSHIFT  equ 11              ; px the header, the rows and the frame rise
+%if TMM_XSHIFT != TM_ROW_H
+%error "TMM_XSHIFT must be one row pitch - the reclaimed space IS a row"
+%endif
+%if TMM_HDR_Y - TMM_XSHIFT <= TMM_XMS_Y + 8
+%error "the no-XMS header would land on the caption line above it"
+%endif
+
 ; --- what the periodic refresh checks before it draws (SPEC.md 28) -----------
 ; The rows have tm_rowck; these are the seven things AROUND them that cost
 ; real pixels and mostly do not move. A map interior is ~3,000 pixels of
@@ -162,7 +214,25 @@ TMC_MRAM    equ 2               ; the conventional-memory map interior
 TMC_BAR     equ 3               ; the performance view's RAM bar
 TMC_XMS     equ 4               ; the XMS readout line (SPEC.md 41)
 TMC_XBAR    equ 5               ; ...and its bar
-TMC_N       equ 6
+TMC_HTOT    equ 6               ; the heap page's totals line (SPEC.md 28.4)
+TMC_HSPL    equ 7               ; ...its held/purgeable split
+TMC_HFRG    equ 8               ; ...and its free/largest-run pair
+TMC_HSB     equ 9               ; ...and its scroll bar (SPEC.md 28.4.4),
+                                ; keyed on the whole seven-word block so that
+                                ; a window MOVE redraws it as readily as a
+                                ; claim does
+TMC_QUIET   equ 10              ; ...and the WHOLE of what the memory view and
+                                ; the heap page draw from (SPEC.md 28.6.1),
+                                ; which is the one key tested with no lock
+                                ; held and before one is taken
+TMC_N       equ 11
+
+; The instance fields those two pages draw from, as ONE contiguous span for
+; tm_quiet's hash: tm_ist, tm_pist, tm_itsk, tm_isz, tm_ispt, tm_iknd, tm_ikb,
+; at 1+1+1+2+2+1+2 bytes a slot. The NAMES are not in it and do not need to
+; be: a name changes only when an instance appears or goes, and that moves
+; tm_ist. Asserted where those labels exist, at the bottom of the file.
+TM_IHASH    equ INST_MAX * 10
 
 ; Every line in this window is composed into tm_str before any of it is
 ; drawn - that is what lets one hash decide whether to draw it at all - so
@@ -239,6 +309,20 @@ TM_PEN      equ 8               ; the process list's and the captions' inset
                                 ; memory list's own inset was already 16. Two
                                 ; pixels of margin bought the whole window
                                 ; font_run's single-store path
+; SPEC.md 28.5.1: cells in one caption line, so a padded run covers the band
+; tm_rowfill used to erase. Asserted, because "the run is its own erase" is only
+; true if it reaches exactly TM_RW.
+TM_LCELLS   equ (TM_RW - TM_PEN + 1) / 8
+%if TM_LCELLS * 8 != TM_RW - TM_PEN + 1
+  %error "TM_RW - TM_PEN + 1 must be a whole number of 8px cells for tm_lrun"
+%endif
+; ...and tm_lrun pads INTO tm_str, so the buffer has to hold a full band plus
+; its NUL. The RAM line is 27 characters and TM_LCELLS is 27, so this is EXACT
+; rather than comfortable: it is the padding, not any label, that would be the
+; first thing to write past the end of .bss if TM_RW grew.
+%if TM_LCELLS + 1 > TM_STRMAX
+  %error "tm_str cannot hold a padded tm_lrun band - widen TM_STRMAX"
+%endif
 TM_MPEN     equ 16              ; ...and the memory list's, which leaves the
                                 ; band's first ten pixels for the legend
                                 ; square and was already aligned
@@ -298,6 +382,127 @@ TMM_ROWS    equ INST_MAX + 7    ; System, its four buffer rows, the two
                                 ; the LIVE frame on top of this, for the
                                 ; screens where wm_fit shrinks the window
 
+; --- THE TWO FRAMES THIS WINDOW WANTS (SPEC.md 11.100.1) ---------------------
+; tm_layout has always worked out the frame its column count needs; these are
+; that arithmetic as CONSTANTS, so the KERNEL can apply one at the one moment a
+; resize is safe. It has to be the kernel: an 11.98 handler may not draw, a
+; resize repaints, and a repaint from the WORKER runs every overlapped window's
+; W_PAINT on a worker task holding the gfx lock - which hard froze the machine
+; the one build that tried it (a Disk window open, then dragged across twice).
+;
+; A GENEROUS height is the idiom (docs/WINDOW-SIZING-PLAN.md 9): the clamp
+; brings it down, and on a CGA it comes back at the band.
+;
+; THE HEIGHT IS THE ONE A MACHINE WITH A STORE WANTS, and tm_entry SUBTRACTS
+; [tm_xoff] from it before publishing: TMM_XSHIFT is added back when there is
+; no XMS bar to draw, which is a property of the MACHINE and not of the
+; adapter, so a constant is a row wrong on one kind of machine or the other.
+; The table is in our own segment and the flag is settled long before the
+; window exists, so it is written in rather than guessed at.
+TM_PREF_H   equ TMM_ROWS * TM_ROW_H + TITLE_H + 1 + TMM_ROW_Y
+TM_PREF_W1  equ TM_W                ; one column: VGA and Hercules
+TM_PREF_W2  equ TM_W + TM_COLW      ; two: a CGA's band is 155 and a column is
+                                    ; seven rows deep there, so the list runs
+                                    ; in two of them and the frame doubles
+
+; --- heap-page geometry (SPEC.md 28.4) ---------------------------------------
+; The third page: every claim record, grouped under the owner that holds it.
+; Its rows start far higher up the content than either list above, because it
+; has no map and no bar to sit under - two caption lines and a header, and the
+; rest is list.
+; Three caption lines, because the heap answers three different questions and
+; one line running them together is what made the memory view's single HEAP
+; figure ambiguous in the first place (SPEC.md 28.4.1): how big is the heap,
+; how much of it is spoken for and on what terms, and how much is left.
+; ...and the three read DOWN as well as across (SPEC.md 28.4.2): the right
+; label starts at column 13 on every one of them and the right figure at 19,
+; so the second column is a column. The pads that buy that are in the strings
+; themselves (tm_s_havl, tm_s_hpurg, tm_s_hfrag), which is where the sums are.
+;   col  0            13    19
+;        |            |     |
+;        HEAP  84K    AVAIL  60K
+;        HELD 24K( 3) PURGE   0K( 0)
+;        MAX RUN  60K FRAG    0K
+TMH_TOT_Y   equ 4               ; 'HEAP nnnK    AVAIL nnnK' - the SIZE against
+                                ; what a claim can still get out of it
+TMH_SPL_Y   equ 15              ; 'HELD nnnK(nn) PURGE nnnK(nn)' - claimed,
+                                ; split by whether the kernel can take it back
+TMH_FRG_Y   equ 26              ; 'MAX RUN nnnK  FRAG nnnK' - the fragmentation
+                                ; pair, and the reading this page exists for
+                                ; (docs/FIELD-NOTES.md 2)
+TMH_HDR_Y   equ 37              ; 'TYPE      ADDR SIZE TIER'
+TMH_ROW_Y   equ 48              ; first claim row, same TM_ROW_H pitch
+
+; Every record, plus a heading each, plus System. This is the TABLE's bound
+; and not the screen's - tm_row_place still clamps to the live frame - and it
+; is what tm_rowck has to be sized for, since a row past the array is a check
+; word written over whatever follows it.
+; ...plus one for the blank tm_mrow_nolast spends to keep a heading off the
+; foot of a column. At most ONE, however many headings there are: only one row
+; index per column is that column's last, and the list passes it once.
+TMH_ROWS    equ MEM_MAX + INST_MAX + 3
+
+; The claim row, in characters: two of indent, the type, A SEPARATOR, the
+; segment, the KB column tm_kcol emits, a gap and the purge tier. Stated here
+; because the header string has to land on the same columns and nothing else
+; checks it. The separator is load-bearing rather than spacing - five of the
+; type names use all seven columns, and without it 'DirRead' and its segment
+; read as 'DirRead2000' (the memory list's 'ARKANOI9E40', SPEC.md 28).
+TMH_IND     equ 2               ; the indent that puts a claim under its owner
+TMH_TYPEC   equ 7               ; TYPE - seven, the memory list's name width
+TMH_TIERC   equ 4               ; TIER - 'TRIV'/'LOW'/'MED'/'HIGH'/'-'
+%if TMH_IND + TMH_TYPEC + 1 + 4 + 5 + 1 + TMH_TIERC > TM_NCHUNK * TM_CHUNK
+  %error "taskmgr: the heap row is wider than the chunk span it is padded to"
+%endif
+
+; --- ...and the SCROLL BAR that makes the rest of the table reachable --------
+; TMH_ROWS is 47 and no screen here shows more than 22, so this page has
+; always been able to run off the bottom of its own frame - silently, because
+; tm_row_place refuses a row past tm_ylim and says nothing about the rows
+; behind it (SPEC.md 28.4.4). The standard bar (SPEC.md 13.10) owns the
+; rightmost TMH_SB_W of the LAST column's band and the rows stop short of it.
+;
+; THE ROWS GIVE UP 8 PIXELS ON THE LEFT TO BUY 14 ON THE RIGHT: this page
+; letters from TM_PEN where the memory list letters from TM_MPEN, whose first
+; ten pixels are the legend square's and which this page has already declined
+; to draw (tm_hclaim). That leaves the two pixels between the chunk span and
+; the bar as a gutter, and keeps the pen on a multiple of 8 - which is what
+; font_run's single-store path is sized by (SPEC.md 6.1), and is the reason
+; TM_PEN is 8 rather than the 6 it started at.
+TMH_SB_W    equ 14              ; the standard bar's width (SPEC.md 13.10.2):
+                                ; what both kernel bars use and what the arrow
+                                ; glyph's 9 pixels are drawn for
+TMH_SB_X1   equ TM_RW - TMH_SB_W + 1    ; band-relative, so it is one number
+TMH_RW      equ TMH_SB_X1 - 1   ; ...and a heap row's own right edge, which is
+                                ; what tm_rowr hands the last chunk's fill
+%if TM_PEN + TM_NCHUNK * TM_CW > TMH_RW + 1
+  %error "taskmgr: a heap row now runs under its own scroll bar"
+%endif
+
+; The widest of this page's three captions is the HELD/PURGE line, at 27
+; characters - and since tm_put2 it is 27 at EVERY count, not just two-digit
+; ones:
+;   'HELD' nnn 'K(' nn ')' ' PURGE ' nnn 'K(' nn ')'
+; which is exactly TM_STRMAX's limit, so a label lengthened there has to be
+; paid for somewhere. The other two are 23 and have four characters spare.
+; Said as a guard rather than a comment, because the note beside TM_STRMAX is
+; that it has ONE character of slack, and a caption grown here is exactly how
+; that gets spent silently.
+%if (4+3+2+2+1) + (7+3+2+2+1) > TM_STRMAX - 1
+  %error "taskmgr: the heap page's HELD/PURGE line no longer fits tm_str"
+%endif
+%if (5+3+1) + (10+3+1) > TM_STRMAX - 1
+  %error "taskmgr: the heap page's HEAP/AVAIL line no longer fits tm_str"
+%endif
+%if (8+3+1) + (7+3+1) > TM_STRMAX - 1
+  %error "taskmgr: the heap page's MAX RUN/FRAG line no longer fits tm_str"
+%endif
+; What no guard here can check is the ALIGNMENT, because both sides of it are
+; characters inside string literals rather than constants: each line's left
+; half plus the pad leading its right-hand label has to come to 13, and the
+; three arrive there as 9+4, 12+1 and 12+1. That sum is stated at tm_s_havl,
+; beside the spaces that carry it, and it is verified by looking at the page.
+
 ; The CPU/scheduler caption is chunked too, and it borrows the row machinery
 ; whole by being a row that no list draws: it is a 20-character line whose
 ; first two chunks carry a percentage that moves every interval and whose
@@ -305,9 +510,15 @@ TMM_ROWS    equ INST_MAX + 7    ; System, its four buffer rows, the two
 ; word it redrew all twenty glyphs twice a second on a machine doing nothing,
 ; which on the mono adapters made it the single largest recurring cost of
 ; having this window open.
-TMR_CPU     equ TMM_ROWS        ; the virtual row index it draws as
-TM_NCK      equ TMM_ROWS + 1    ; ...so tm_rowck holds one more row than
-                                ; either list can show
+TMR_CPU     equ TMH_ROWS        ; the virtual row index it draws as: past
+                                ; every real row of the DEEPEST list, which
+                                ; is the heap page's (SPEC.md 28.4) and no
+                                ; longer the memory view's
+TM_NCK      equ TMH_ROWS + 1    ; ...so tm_rowck holds one more row than any
+                                ; of the three lists can show
+%if TMH_ROWS < TMM_ROWS || TMH_ROWS < TM_ROWS
+  %error "taskmgr: tm_rowck is no longer sized for the deepest list"
+%endif
 
 ; =============================================================================
 ; How this module reaches kernel state (SPEC.md 20.9)
@@ -386,6 +597,28 @@ tm_init:
     push dx
     int 0x12                    ; AX = conventional memory, KB
     mov [tm_totkb], ax
+
+    ; --- is there a store above 1MB at all? ----------------------------------
+    ; Asked ONCE, here, because everything below derives the frame from it and
+    ; the answer cannot change while the machine runs: xm_init sizes the pool
+    ; at boot and nothing resizes it (SPEC.md 41.5). Asked of the POOL SIZE and
+    ; never of xm_caps' free figure - a full pool answers 0 free and still very
+    ; much exists - and on kern_small the slot is a stub answering tier 0's
+    ; answers, so this needs no build-time test and gets that build right for
+    ; free (SPEC.md 41.11).
+    push di
+    push es
+    TM_ES_DATA
+    mov di, tm_kb
+    TM_SYS_KB
+    pop es
+    pop di
+    mov word [tm_xoff], 0
+    cmp word [tm_kb+SK_XMS], 0
+    jne .xms
+    mov word [tm_xoff], TMM_XSHIFT
+.xms:
+
     call OSAPI_VIDEO            ; and the live geometry (SPEC.md 39.2): AX =
     mov [tm_vw], ax             ; width, CX = the dock strip's top row. Banked
     mov [tm_vdock], cx          ; because everything below spends AX..DX
@@ -410,7 +643,68 @@ tm_init:
     ; it must not.
     mov ax, [tm_vdock]
     sub ax, MBAR_H + 1          ; AX = px available to the whole frame
+    call tm_layout              ; ...and everything derived from it, which the
+                                ; SPEC.md 11.98 handler below re-runs when the
+                                ; box moves under us
+    mov ax, [tm_tpl+6]          ; ...and AGAIN, from the frame it just CHOSE.
+    call tm_layout              ; The first pass answers "how many rows would
+                                ; the band allow", which is not the same
+                                ; question as "how many does this window have"
+                                ; whenever TMM_ROWS caps the height - 32 against
+                                ; 19 on a 480-row screen. The handler can only
+                                ; ever ask the second, so without this the two
+                                ; paths disagree about an identical frame and
+                                ; the launch figure is the loose one. It
+                                ; converges in one step by construction: the
+                                ; height is min(rows, TMM_ROWS) * pitch +
+                                ; chrome, so feeding it back yields
+                                ; min(rows, TMM_ROWS) and then stops
+
+    mov ax, [tm_tpl+6]          ; (the y clamp below wants the height back)
+
+    mov dx, [tm_vdock]          ; ...and a top that keeps y+h off the dock.
+    dec dx                      ; Deriving the height is not enough on its
+    sub dx, ax                  ; own: wm_fit clamps y to dock_y0 - h, which
+    cmp dx, 100                 ; puts the shadow row back on the strip for
+    jge .ykeep                  ; any frame tall enough to be clamped at all
+    cmp dx, MBAR_H              ; (signed - a tiny screen can drive this below
+    jge .yset                   ; the menu bar, and there it simply cannot win)
+    mov dx, MBAR_H
+.yset:
+    mov [tm_tpl+2], dx
+.ykeep:
+
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_layout - every derived layout word, from a frame this window can have
+;
+; in:  AX = the frame HEIGHT available, [tm_vw] = the frame WIDTH available
+; out: tm_colrows, tm_cols, tm_hcolrows, tm_col2rows, tm_maxrow and
+;      tm_tpl+4 / tm_tpl+6, all set
+; clobbers: AX, BX, DX
+;
+; FACTORED OUT OF tm_init FOR SPEC.md 11.98, and the two callers hand it two
+; different things that mean the same thing. At launch the frame does not
+; exist yet, so what is available is the desktop band and the screen's width,
+; and the template is what comes out. On a resize the frame is a fact and the
+; window cannot change it from inside the handler - so the caller passes the
+; box it was GIVEN, and the template words it writes are inert.
+;
+; Nothing here clears tm_rowck: the caller's repaint reaches tm_draw_full,
+; which calls tm_rowck_clear, and that routine's own comment already names a
+; resize as one of the three things that arrive there.
+; -----------------------------------------------------------------------------
+tm_layout:
     sub ax, TITLE_H + 1 + TMM_ROW_Y     ; ...less the chrome and the maps
+    add ax, [tm_xoff]           ; ...and back the bar's height on a machine
+                                ; with no store, which is what turns the
+                                ; reclaimed space into a ROW rather than into
+                                ; a shorter window (TMM_XSHIFT = TM_ROW_H)
     jbe .norows
     mov bl, TM_ROW_H
     div bl                      ; AL = rows that fit in ONE column
@@ -442,7 +736,32 @@ tm_init:
     mov dx, TM_ROW_H
     mul dx
     add ax, TITLE_H + 1 + TMM_ROW_Y
+    sub ax, [tm_xoff]           ; the list starts higher with no bar above it
     mov [tm_tpl+6], ax          ; the frame height the machine can take
+
+    ; --- how deep is the HEAP page's column 0? --------------------------------
+    ; The same frame, but its list starts at TMH_ROW_Y instead of TMM_ROW_Y
+    ; (SPEC.md 28.4) - there is no map and no bar above it - so it holds the
+    ; rows that fit in the extra height.
+    ;
+    ; Derived from the FRAME and never from the dock, which is what
+    ; [tm_colrows] above uses. On a screen where TMM_ROWS caps the height
+    ; below what the dock would allow, a dock-derived depth names rows the
+    ; frame cannot show - and tm_row_place would then wrap PAST rows tm_ylim
+    ; had already refused, so they would be lost rather than moved into
+    ; column 1.
+    push ax
+    sub ax, TITLE_H + 1 + TMH_ROW_Y
+    jbe .nohrow
+    mov bl, TM_ROW_H
+    div bl                      ; AL = rows, and the quotient fits: the tallest
+    xor ah, ah                  ; frame here is 295px against an 11px pitch
+    jmp short .havehrow
+.nohrow:
+    mov ax, 1
+.havehrow:
+    mov [tm_hcolrows], ax
+    pop ax
 
     ; --- how deep is a LATER column? -----------------------------------------
     ; Not [tm_colrows]: a later column is top-anchored (TM_C2_ROW_Y), so it
@@ -462,27 +781,73 @@ tm_init:
     mov bx, [tm_cols]           ; the whole list's depth: column 0, plus every
     dec bx                      ; later column's own
     mul bx
-    add ax, [tm_colrows]
-    cmp ax, TMM_ROWS
-    jbe .rowcap
-    mov ax, TMM_ROWS            ; never more than there is data for
-.rowcap:
-    mov [tm_maxrow], ax
+    add ax, [tm_hcolrows]       ; the DEEPEST column 0 of the three pages, so
+                                ; the heap page is not clipped by a cap sized
+                                ; for a shallower one. Safe for the other two:
+                                ; the performance list is bounded by its own
+                                ; `cmp si, TM_ROWS`, the memory list tests
+                                ; TMM_ROWS first, and tm_ylim clamps both
+    cmp ax, TMH_ROWS            ; never more than there is data for - and the
+    jbe .rowcap                 ; DEEPEST list is the heap page's now, so a
+    mov ax, TMH_ROWS            ; tall screen may show more than the memory
+.rowcap:                        ; view's TMM_ROWS (SPEC.md 28.4). The frame
+    mov [tm_maxrow], ax         ; HEIGHT above is still TMM_ROWS' and did not
+                                ; move; the performance list is bounded by its
+                                ; own `cmp si, TM_ROWS`, and the memory list's
+                                ; blank loop tests TMM_ROWS before this
+    ret
 
-    mov ax, [tm_tpl+6]          ; (the y clamp below wants the height back)
-
-    mov dx, [tm_vdock]          ; ...and a top that keeps y+h off the dock.
-    dec dx                      ; Deriving the height is not enough on its
-    sub dx, ax                  ; own: wm_fit clamps y to dock_y0 - h, which
-    cmp dx, 100                 ; puts the shadow row back on the strip for
-    jge .ykeep                  ; any frame tall enough to be clamped at all
-    cmp dx, MBAR_H              ; (signed - a tiny screen can drive this below
-    jge .yset                   ; the menu bar, and there it simply cannot win)
-    mov dx, MBAR_H
-.yset:
-    mov [tm_tpl+2], dx
-.ykeep:
-
+; -----------------------------------------------------------------------------
+; tm_onresize - the box moved and we did not ask for it (SPEC.md 11.98)
+;
+; in:  SI = our window, CX = the new content width, DX = the new content
+;      height; the gfx lock is HELD and this may not draw
+; out: nothing (all registers preserved)
+;
+; The Task Manager derives its row count and its column count ONCE, at launch,
+; from the desktop band - which is exactly the shape SPEC.md 11.98 exists for.
+; Without this, switching a VGA to its CGA left it laying out for 284 rows of
+; frame inside 155, and the surplus went through the bottom of its own frame
+; onto the desktop (gfx_* clips to the SCREEN, not to the window).
+;
+; It re-derives and returns. The repaint that follows is the kernel's, and it
+; is what puts the new layout on the glass.
+; -----------------------------------------------------------------------------
+tm_onresize:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push cx                     ; **THE CONTENT BOX THIS PROC WAS HANDED** -
+    push dx                     ; the kernel applies a published frame BEFORE
+                                ; it notifies (SPEC.md 39.16.3.3), so CX/DX
+                                ; already describe the window we now have
+    mov bx, si                  ; ...and the CARD it is on (SPEC.md 39.16.4):
+    call OSAPI_WM_DISPLAY       ; AX = w, CX = the first row the dock owns,
+                                ; SI = the first the band has
+    mov [tm_vw], ax             ; ...and it is THE DISPLAY'S WIDTH, not the
+                                ; frame's. This used to pass the frame, and
+                                ; tm_layout's one reader of it asks "is there
+                                ; room for a SECOND COLUMN" - so a window that
+                                ; had one column was 232px wide, 232 is less
+                                ; than TM_W + TM_COLW, and the answer was NO
+                                ; FOR EVER. A one-column Task Manager dragged
+                                ; onto a CGA could never reach two columns,
+                                ; which is what the field reported
+    mov [tm_vdock], cx
+    pop ax                      ; the CONTENT height, back as a FRAME one -
+    pop cx                      ; tm_layout's argument is a frame. Handing it
+    add ax, TITLE_H + 1         ; the display's BAND instead makes tm_colrows
+                                ; what fits the SCREEN rather than what fits
+                                ; the window, which is 32 rows on a VGA against
+                                ; the 19 the frame holds
+    call tm_layout              ; ...which re-derives the column count and
+                                ; everything under it. The FRAME is the
+                                ; kernel's: this proc may not draw and a resize
+                                ; repaints, so the size is PUBLISHED once at
+                                ; launch and applied by wm_land_fit
+    pop si
     pop dx
     pop cx
     pop bx
@@ -503,11 +868,35 @@ tm_kinit:
     push ax
     mov [tm_win], bx
 
+    mov ax, TM_PREF_H           ; **THE HEIGHT IS PATCHED, NOT FUDGED.**
+    sub ax, [tm_xoff]           ; TMM_XSHIFT is added back on a machine with no
+    mov [tm_pref + 2], ax       ; XMS bar to draw, which is a property of the
+    mov [tm_pref + 6], ax       ; MACHINE and not of the adapter - so a static
+    mov [tm_pref + 10], ax      ; table is one row wrong on one kind of machine
+                                ; or the other. [tm_xoff] is settled well
+                                ; before the window exists and this table is
+                                ; our own segment's, so the honest answer is to
+                                ; write the number in rather than pick which
+                                ; machine to be wrong on
+    mov si, tm_pref             ; **THE FRAME PER ADAPTER** (SPEC.md 11.100.1).
+    call OSAPI_WM_PREFER        ; tm_layout has always worked out the frame its
+                                ; column count needs and nothing applied it
+                                ; after launch, so a Task Manager that started
+                                ; one-column could never become two - and the
+                                ; kernel is the only thing that may resize a
+                                ; window at a moment when drawing is safe
+    mov ax, tm_onresize         ; tell us when the box moves under us and we
+    call OSAPI_WM_ONRESIZE      ; did not ask - an adapter change (SPEC.md
+                                ; 11.98). BX is the window, which is what this
+                                ; routine was handed
     mov al, 1                   ; every row this window draws is an opaque
     call OSAPI_WM_SNAP          ; text run, so it asks for its content origin
                                 ; on a multiple of 8 and every one of them
                                 ; reaches font_run's single-store path
-                                ; (SPEC.md 11.94/6.1). A no-op on VGA. It
+                                ; (SPEC.md 11.94/6.1). EVERY adapter: this was
+                                ; mono-only until VGA was measured and gained
+                                ; more (verified aligned there - content
+                                ; origin 248). It
                                 ; PRESERVES FLAGS, which the entry proc's own
                                 ; ret owes the loader
 
@@ -530,6 +919,14 @@ tm_entry:
     mov si, tm_tpl
     call OSAPI_WM_CREATE        ; BX = window ptr, CF = the table is full
     jc .out
+    push ax                     ; **WE PAINT EVERY PIXEL** (SPEC.md 11.90.1,
+    mov al, 1                   ; 28.10): the kernel's white fill was the first
+    call OSAPI_WM_OWNBG         ; layer of a double draw on a window whose
+    pop ax                      ; W_PAINT is ~450 ms, so the content went white
+                                ; and re-lettered on every repaint. It also
+                                ; unlocks OSAPI_WM_DAMAGE, which answers
+                                ; "whole" without this flag (SPEC.md 11.90.2's
+                                ; interlock)
     call tm_kinit               ; preserves the flags, so the CF our ret owes
 .out:                           ; the loader is wm_create's
     pop si                      ; POP leaves the flags alone
@@ -562,6 +959,8 @@ tm_hire:
     ret
 
 ; --- window template: {x, y, w, h, title, paint, onkey, onclick} words -------
+    OS88_PREFER tm_pref, TM_PREF_W1, TM_PREF_H,  TM_PREF_W1, TM_PREF_H,  TM_PREF_W2, TM_PREF_H
+
 tm_tpl:     dw 250, 100, 232, 312, tm_ttl, tm_paint, 0, tm_click
 tm_ttl:     db 'Task Manager', 0
 tm_sname:   db 'TaskMgr', 0     ; KD_NAME: fits the memory view's 7-char
@@ -642,6 +1041,113 @@ tm_s_bstk:  db '  Stacks', 0
 tm_s_bdsk:  db '  Disk bufs', 0
 tm_s_bfat:  db '  FAT snap', 0
 
+; --- heap page (SPEC.md 28.4) ------------------------------------------------
+; The header's gaps are what put ADDR at column 9, SIZE's four digits at 14
+; and TIER at 19 - exactly where tm_hclaim composes them, and where a heading
+; row's tm_kcol total lands too.
+tm_s_hhdr:  db 'TYPE      ADDR SIZE TIER', 0
+; The three captions are a two-column TABLE and the gaps below are what make
+; them one (SPEC.md 28.4.2). Each right-hand label starts at column 13 and
+; each right-hand figure at 19, whatever the left half of its own line spent -
+; so AVAIL, PURGE and FRAG read down the page instead of stepping across it.
+; The leading spaces here are therefore load-bearing arithmetic, not spacing:
+; change a left-hand label and the pad in front of the right-hand one owes the
+; same number back. The left figures are deliberately NOT aligned with each
+; other - a common left column would need 8 (label) + 4 (nnnK) + 4 ('(nn)')
+; + 1 + 6 + 4 + 4 = 31 characters and the line has 27 (TM_STRMAX), so the
+; choice was one aligned column or none.
+tm_s_hheap: db 'HEAP ', 0
+tm_s_hheld: db 'HELD', 0        ; the two halves of what is claimed, never one
+tm_s_hpurg: db ' PURGE ', 0     ; figure: they are owed on different terms.
+                                ; 'HELD' takes no trailing space - tm_put3
+                                ; right-aligns into three and brings its own
+tm_s_havl:  db '    AVAIL ', 0  ; NOT 'FREE': this counts the purgeables, so
+                                ; it is what a claim can GET rather than what
+                                ; is unused, and the two differ by PURGE
+                                ; exactly (SPEC.md 28.4.1)
+tm_s_hmax:  db 'MAX RUN ', 0    ; the largest single RUN of AVAIL - not a
+                                ; maximum heap size, which is what a bare
+                                ; 'MAX' beside 'HEAP' reads as. It is the
+                                ; biggest claim that can succeed in ONE call,
+                                ; and 'run' is the kernel's own word for it
+                                ; (mem_run, SPEC.md 50.3)...
+tm_s_hfrag: db ' FRAG  ', 0     ; ...and everything available OUTSIDE it, so
+                                ; the two SUM to AVAIL. Without it the page
+                                ; said '519K available, 515K max', which is
+                                ; arithmetic nobody can close (SPEC.md 28.4.1)
+                                ; Two trailing spaces: FRAG is a character
+                                ; shorter than AVAIL and PURGE, and it is the
+                                ; FIGURES that have to line up, not the label
+
+; TYPE names, seven columns. A claim the table does not know prints its owner
+; word in hex instead (tm_htype) - a debug page must not label an unknown tag
+; as the nearest thing it recognises.
+tm_s_tregn: db 'Region', 0      ; owner = the slot, base = I_SPTR (SPEC.md 20.1)
+tm_s_tdata: db 'Data', 0        ; ...anything else that instance holds (50.3)
+tm_s_tsave: db 'MenuSav', 0
+tm_s_tdrv:  db 'DrvImg', 0
+tm_s_tcopy: db 'CopyBuf', 0
+tm_s_tfatw: db 'FATwin', 0
+tm_s_tasc:  db 'Assoc', 0
+tm_s_tclip: db 'Clipbrd', 0
+tm_s_twsav: db 'WinSave', 0
+tm_s_tdirw: db 'DirRead', 0
+; ...and the three that were MISSING, every one of which this page had been
+; printing as a bare owner word (SPEC.md 28.4.3). The hex fallback below is
+; the table's honesty rule about a tag this build has never SEEN, and not a
+; place to leave one the kernel ships: MEM_K_BAND is claimed at boot and
+; never freed, so 'FF0A' was a permanent row on every machine with a band
+; composer. tests/unit/t_ktags.py is the gate that stops a fourth.
+tm_s_tmod:  db 'ModImg', 0      ; ...beside DrvImg, because it is the same
+                                ; thing one rung down: an image claimed
+                                ; top-down whose base IS its CS (SPEC.md 2.8)
+tm_s_tclon: db 'Cloner', 0      ; the job block AND the sectors in flight,
+                                ; which is why freeing it is the whole of a
+                                ; clone's teardown (SPEC.md 18.99)
+tm_s_tband: db 'BandBuf', 0     ; the 1bpp composer's, one per machine (5.9.2)
+; (owner word, name) pairs, ended by a 0 owner. MEM_P_WSAVE is NOT here: it is
+; a RANGE (SPEC.md 11.96.3), one cache per window slot, and tm_htype tests it
+; before it walks this.
+;
+; MEM_K_OVL used to be a row, and was the one kernel tag with a lifetime
+; SHORTER than the session - a heap page open early enough could catch it. The
+; boot overlay rides stage 2's blob now (SPEC.md 2.9.6), which is not a claim,
+; so there is no moment of any boot at which it is on this page.
+;
+; NOTHING MAY GO BETWEEN THESE `dw` LINES: tests/unit/t_ktags.py reads the table
+; out of this file with a regex over consecutive rows, and a comment inside it
+; ends the capture early - which drops every row below it from the gate without
+; failing anything.
+tm_ktab:
+    dw MEM_K_SAVE,  tm_s_tsave
+    dw MEM_K_DRV,   tm_s_tdrv
+    dw MEM_K_COPY,  tm_s_tcopy
+    dw MEM_K_ASC,   tm_s_tasc
+    dw MEM_K_CLIP,  tm_s_tclip
+    dw MEM_K_MOD,   tm_s_tmod
+    dw MEM_K_CLONE, tm_s_tclon
+    dw MEM_K_BAND,  tm_s_tband
+    dw MEM_P_DIRW,  tm_s_tdirw
+    dw 0
+
+; TIER names, four columns, indexed by the owner's high byte - MEM_PG_TRIV
+; first, so the index is (high byte - MEM_PG_MIN). An unpurgeable claim gets
+; the dash, which is the answer for every instance-owned row as well.
+tm_ztab:
+    dw tm_s_ztriv, tm_s_zlow, tm_s_zmed, tm_s_zhigh
+tm_s_ztriv: db 'TRIV', 0
+tm_s_zlow:  db 'LOW', 0
+tm_s_zmed:  db 'MED', 0
+tm_s_zhigh: db 'HIGH', 0
+tm_s_zno:   db 'HELD', 0        ; NOT a dash. The tiers are what LOSING a
+                                ; block costs, and a dash in that column read
+                                ; as a rank BELOW 'TRIV' - the opposite of the
+                                ; truth, since an ordinary claim is the only
+                                ; rank that outranks every cache (MEM_LVL_TOP,
+                                ; SPEC.md 50.6.4). 'HELD' says the thing the
+                                ; scale cannot: this one is not a cache at all
+                                ; and the kernel cannot take it back
+
 ; The kernel-buffer texture for the RAM map (SPEC.md 28): 2-on-2-off
 ; horizontal bars. The band is 14 rows tall and, on a 640KB machine, four
 ; pixels wide - so a texture has to carry its signature VERTICALLY or it has
@@ -713,18 +1219,18 @@ tm_pats:
 ; -----------------------------------------------------------------------------
 tm_worker:
 .interval:
-    call OSAPI_GET_TICKS
-    mov [tm_t0], ax
-    mov word [tm_cnt], 0
-    mov word [tm_cnt+2], 0
-.spin:
-    add word [tm_cnt], 1        ; 32-bit spin counter
-    adc word [tm_cnt+2], 0
-    call OSAPI_TASK_YIELD
-    call OSAPI_GET_TICKS
-    sub ax, [tm_t0]             ; wrap-safe interval check
-    cmp ax, TM_INT
-    jb .spin
+    mov ax, TM_INT              ; SLEEP the interval (SPEC.md 28.7). It used to
+    call OSAPI_TASK_SLEEP       ; SPIN it - { count += 1; yield } - because the
+                                ; count WAS the load meter, and a spin counter
+                                ; has no absolute scale so it had to be
+                                ; calibrated against a rolling maximum. That
+                                ; cost 34-38% of the machine for as long as
+                                ; this page was open, and the page charged it
+                                ; to itself, correctly, while the graph beside
+                                ; it drew 0-2%. Both numbers were right and
+                                ; they were measuring different things. The
+                                ; idle task (SPEC.md 8.1.2) is the scale now,
+                                ; so the spin can go
 
     mov bx, [tm_win]            ; close requested? (once per interval) - this
     call OSAPI_TASK_ALIVE       ; may never come back, and the lock is free
@@ -732,12 +1238,49 @@ tm_worker:
 
     call tm_sample              ; no lock: computes load, shares, RAM
 
+    call tm_paintdue            ; does this interval owe a PAINT at all? On
+    jc .interval                ; views 1 and 2 only every TM_SLOW of them
+    call tm_quiet               ; ...and if it does, has anything those pages
+    jc .interval                ; draw FROM moved? (SPEC.md 28.6.1) - no lock
+                                ; held, and none taken if the answer is no
+                                ;
+                                ; THIS ORDER IS LOAD-BEARING and the other one
+                                ; LOSES UPDATES. tm_quiet answers through
+                                ; tm_elchk, which RECORDS the key it was asked
+                                ; about - so asking on an interval that is not
+                                ; going to paint anyway banks the change and
+                                ; answers "unchanged" on the interval that
+                                ; would have drawn it. The page then sits
+                                ; stale until something else moves. Measured
+                                ; the wrong way round first, and it does not
+                                ; fail every time: an opener that touches the
+                                ; table over several intervals still lands on
+                                ; one that paints, so this reads as a page
+                                ; that updates unreliably rather than as one
+                                ; that is broken
+                                ; does (SPEC.md 28.6). BEFORE the lock and not
+                                ; inside it: what costs on those pages is the
+                                ; walk, and the walk is what the lock is held
+                                ; across - a skip that still took the lock
+                                ; would save the work and keep the freeze
     call OSAPI_GFX_LOCK
     mov bx, [tm_win]
     test word [es:bx+W_FLAGS], 2   ; re-check under the lock (SPEC.md 14).
     jz .skip                    ; ES is KERNEL_SEG here: task_spawn seeds a
                                 ; worker's ES with it and every TM_ES_DATA in
                                 ; this file puts it back
+                                ; **A WORKER MAY NOT CALL OSAPI_WM_RESIZE.**
+                                ; This is where a deferred one lived for one
+                                ; build and it HARD FROZE the machine: a resize
+                                ; repaints, and a repaint runs every overlapped
+                                ; window's W_PAINT through wm_pkgcall - on THIS
+                                ; task, holding the gfx lock. A Disk window's
+                                ; is fm_repaint, which can re-list a folder, so
+                                ; the reproduction was "open a file manager,
+                                ; then drag me across twice". The frame comes
+                                ; from OSAPI_WM_PREFER now (SPEC.md 11.100.1),
+                                ; which the KERNEL applies at the one moment it
+                                ; is safe - and in ONE repaint rather than two
     call OSAPI_WM_CLIP_SET            ; a REGION, not wm_obscured's veto (SPEC.md
     jc .skip                    ; 11.3): one covered pixel used to skip the
                                 ; whole refresh, so a Task Manager with a
@@ -746,15 +1289,194 @@ tm_worker:
                                 ; "more than 16 fragments", which genuinely
                                 ; do mean skip. gfx_unlock disarms it
     call tm_update              ; incremental redraw, lock held
+    mov ax, [tm_qkey]           ; THE PAINT HAPPENED, so record what tm_quiet
+    mov [tm_elck + 2*TMC_QUIET], ax     ; asked about (SPEC.md 28.6.1). Here
+                                ; and not in tm_quiet, which only PEEKS: it is
+                                ; asked with no lock and the paint can still be
+                                ; refused two lines above, and recording a
+                                ; change on an interval that drew nothing
+                                ; leaves the page stale until something else
+                                ; moves. Nothing recorded it at all between
+                                ; 28.11 and here, so the answer was always
+                                ; `changed`: the lock was taken and the cache
+                                ; dropped (11.96.18) on every TM_SLOW interval,
+                                ; whatever tm_quiet computed
 .skip:
     call OSAPI_GFX_UNLOCK
     jmp .interval
 
 ; -----------------------------------------------------------------------------
+; tm_quiet - has anything the two quiet pages DRAW FROM moved? (SPEC.md 28.6.1)
+; in:  [tm_view]; the worker calls this with NO lock held
+; out: CF = 1 nothing moved, so skip the paint; CF = 0 paint it
+; clobbers: nothing else (flags)
+;
+; SPEC.md 28.6 slowed those pages to a quarter and left 51 ms on the table:
+; the walk still runs, still concludes nothing changed, and still holds the
+; gfx lock while it does. This is that walk's question asked the cheap way -
+; three hashes over 334 bytes against one key - and asked BEFORE the lock,
+; which is the whole point: a skip that took the lock would save the cycles
+; and keep the pointer frozen.
+;
+; IT IS SAFE WITHOUT THE LOCK BECAUSE THE SNAPSHOT ALWAYS WAS. The claim
+; table's API takes no cli and says why (SPEC.md 20.9): a claim is published
+; by a single word store, so a record is there or it is not, and the gfx lock
+; never guarded it. A torn read hashes to neither the before nor the after and
+; so forces a paint, which is the safe direction - the same direction
+; tm_elchk's collision risk already runs in.
+;
+; The three spans are the whole of what those pages read: the claim table
+; (every row and every caption on the heap page, and the memory map's bands),
+; [tm_kb] (the RAM, HEAP and XMS figures), and the instance block (the
+; headings, the names' presence, the sizes and the per-instance heap). All
+; three are refreshed by tm_sample or by this routine, both outside the lock.
+;
+; TWO HOLES IN THE KEY, AND THEY ARE THE SAME HOLE (SPEC.md 28.8.1). OUR OWN
+; raise cache is left out of the claim span, and SK_CLAIM/SK_KCLAIM are left
+; out of the KB span because they move with it. This window is the only one in
+; the tree whose content is a report of the machine's memory, so it is the only
+; one whose cache it CAUSES by looking: the cache appears, the page has changed,
+; the page paints, and wm_clip_set drops the cache to let it (SPEC.md 11.96.18).
+; Measured before this: a drag that partially covered the memory page banked
+; 33KB, binned it one interval later, and cost 527 cells - about 505 ms on a
+; 4.77 MHz 8088 - to come back, every time.
+;
+; It is NOT a mask on the range. Another window's raise cache is real memory
+; arriving: it persists while that window stays covered, it does not go away
+; because this one came to the front, and the page wakes for it exactly as it
+; wakes for any other claim. Only the self-reference is cut, which is what
+; 28.8's loop is made of.
+;
+; And it costs no arithmetic. Dropping the two totals from the key rather than
+; subtracting our own paragraphs out of them is not a shortcut: both are
+; derived from the table already hashed, so every real claim is still caught by
+; the record it occupies - while a paragraphs-to-KB correction ROUNDS, and a
+; rounding key is a key that sometimes lies in both directions.
+; -----------------------------------------------------------------------------
+tm_quiet:
+    cmp byte [tm_view], 0
+    je .paint                   ; the performance view moves every interval by
+    push ax                     ; construction: a percentage, a graph column
+    push bx                     ; and a spin count that are never twice the
+    push cx                     ; same
+    push dx                     ; OSAPI_WM_OWNSEG answers in it, and this
+    push si                     ; routine's contract is "clobbers: flags"
+    push di
+    push es
+    TM_ES_DATA
+    mov di, tm_claims
+    TM_CLAIM_SNAPSHOT           ; ...into the buffer the paint would use anyway
+    pop es
+
+    ; RECORD BY RECORD rather than one span, so OUR OWN raise cache can be
+    ; left out of the key (SPEC.md 28.8.1). Nothing is written to the
+    ; snapshot: the paint below draws every claim including that one, and
+    ; truthfully. What is skipped is the REASON to paint.
+    mov si, tm_claims
+    xor ax, ax                  ; AX chains through all three spans
+    mov cx, MEM_MAX
+.rec:
+    push cx
+    cmp word [si+CLS_SEG], 0    ; A FREE RECORD WEIGHS NOTHING, and that is
+    je .zero                    ; half of what makes this work: its CLS_PARA
+                                ; and CLS_OWN are a previous tenant's leftovers,
+                                ; the page draws no band for it, and they are
+                                ; what our own record BECOMES the moment the
+                                ; cache is freed
+    mov dx, [si+CLS_OWN]        ; a raise cache at all? Its tag is a base plus
+    sub dx, MEM_P_WSAVE         ; the window's SLOT (SPEC.md 11.96.3), so this
+    cmp dx, MEM_P_WSAVE_N       ; is a range and not an equality - unsigned, so
+    jae .hash                   ; a lower owner wraps high and fails
+    push ax
+    mov ax, dx                  ; AL = the slot the tag carries...
+    call OSAPI_WM_OWNSEG        ; ...and 11.96.3.1 turns it back into a segment
+    mov di, ds                  ; (CF and DX survive both of these)
+    pop ax
+    jc .hash                    ; no live window in that slot: not ours
+    cmp dx, di
+    jne .hash                   ; SOMEBODY ELSE'S, and that one is real memory
+                                ; arriving - it persists while its window stays
+                                ; covered, it does not go away because we came
+                                ; to the front, and this page should wake for it
+.zero:
+    mov cl, CLS_RECSZ           ; ...OURS, or free: weigh it as SIX ZERO BYTES
+    rol ax, cl                  ; instead of stepping past it. tm_sumb is
+    add si, CLS_RECSZ           ; rol/add PER BYTE and so position-sensitive -
+    jmp short .next             ; skipping a record shifts every byte after it
+                                ; and changes the very key this is trying to
+                                ; hold still. Six zero bytes IS `rol ax, 6` to
+                                ; the chain, and weighing a free record the
+                                ; same way makes the key blind to WHICH record
+                                ; the cache lands in as well as to whether it
+                                ; is there at all
+.hash:
+    mov cx, CLS_RECSZ
+    call tm_sumb                ; AX chains; SI advances past the record
+.next:
+    pop cx
+    loop .rec
+
+    mov si, tm_kb               ; ...and the two TOTALS that move with our own
+    mov cx, SK_CLAIM            ; cache are SKIPPED rather than corrected: both
+    call tm_sumb                ; are derived from the table just hashed, so a
+    add si, 4                   ; real claim is still caught by the record it
+    mov cx, SYSKB_SIZE - (SK_KCLAIM + 2)    ; occupies, and the arithmetic to
+    call tm_sumb                ; take our paragraphs back out of a KB figure
+                                ; - which rounds - is not owed at all
+    mov si, tm_ist
+    mov cx, TM_IHASH
+    call tm_sumb
+    mov bx, tm_elck + 2*TMC_QUIET
+    call tm_qpeek               ; CF = 1 unchanged, which IS the skip - and the
+    mov [tm_qkey], ax           ; AX is the key AFTER tm_qpeek's never-zero
+                                ; rule, which is the value the store below has
+                                ; to match; a mov writes no flags
+    pop di                      ; pops below write no flags
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.paint:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_paintdue - does this interval owe a paint? (SPEC.md 28.6)
+; in:  [tm_view]
+; out: CF = 0 paint it, CF = 1 skip it; all registers preserved
+;
+; The performance view is the live one - a graph column, a percentage and a
+; scheduler mode that move every interval by construction - so it is never
+; slowed. The other two are a list of claims and a map of memory: on a machine
+; that is sitting there they are the SAME PIXELS twice a second, and the
+; measurement beside TM_SLOW says they are drawn zero times to prove it.
+;
+; A view switch and a scroll do not come through here at all: tm_click
+; repaints inline and tm_hscroll calls tm_upd_heap directly, so interaction
+; stays immediate and only the unattended refresh waits.
+; -----------------------------------------------------------------------------
+tm_paintdue:
+    cmp byte [tm_view], 0
+    je .now                     ; the performance view keeps TM_INT
+    inc byte [tm_slow]
+    cmp byte [tm_slow], TM_SLOW
+    jb .not_yet
+.now:
+    mov byte [tm_slow], 0
+    clc
+    ret
+.not_yet:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
 ; tm_sample - one measurement pass: load gauge, history push, per-instance CPU
 ;             shares, RAM usage. Touches only module state; no lock needed.
-; in:  [tm_cnt] = the interval's spin count
-; out: tm_load/tm_hist/tm_pos/tm_lastcol/tm_pct/tm_state/tm_self/tm_usedk/
+; in:  nothing - it reads the kernel's snapshot, not a counter of its own
+; out: tm_load/tm_hist/tm_pos/tm_lastcol/tm_pct/tm_state/tm_idle/tm_self/
+;      tm_usedk/
 ;      tm_barw and the whole instance snapshot block updated
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
@@ -770,90 +1492,6 @@ tm_sample:
     TM_ES_DATA                  ; the heap's totals, for the RAM figure below
     mov di, tm_kb
     TM_SYS_KB
-
-    ; --- phased-window max calibration (SPEC.md 28) --------------------------
-    ; Epoch rotation first: every TM_EPOCH samples, the current epoch's max
-    ; becomes the previous one and the current restarts from this count. A
-    ; poisoned-high calibration (menu_track's cheap poll loop) ages out in
-    ; at most two epochs; an all-time max would stick forever.
-    inc byte [tm_epc]
-    cmp byte [tm_epc], TM_EPOCH
-    jb .noroll
-    mov byte [tm_epc], 0
-    mov ax, [tm_cmax]
-    mov [tm_pmax], ax
-    mov ax, [tm_cmax+2]
-    mov [tm_pmax+2], ax
-    mov word [tm_cmax], 0
-    mov word [tm_cmax+2], 0
-.noroll:
-    mov ax, [tm_cnt+2]          ; tm_cmax = max(tm_cmax, count)
-    cmp ax, [tm_cmax+2]
-    ja .newmax
-    jb .maxed
-    mov ax, [tm_cnt]
-    cmp ax, [tm_cmax]
-    jbe .maxed
-.newmax:
-    mov ax, [tm_cnt]
-    mov [tm_cmax], ax
-    mov ax, [tm_cnt+2]
-    mov [tm_cmax+2], ax
-.maxed:
-    ; effective max = max(tm_cmax, tm_pmax) - always >= count, since cmax
-    ; was just raised to at least count (no clamp needed before the DIV)
-    mov cx, [tm_cmax]
-    mov dx, [tm_cmax+2]
-    cmp dx, [tm_pmax+2]
-    ja .load
-    jb .usepmax
-    cmp cx, [tm_pmax]
-    jae .load
-.usepmax:
-    mov cx, [tm_pmax]
-    mov dx, [tm_pmax+2]
-
-    ; --- load% = 100 - 100*count/max_eff -------------------------------------
-.load:
-    mov ax, [tm_cnt]            ; normalize both to 16 bits (count <= max,
-    mov bx, [tm_cnt+2]          ; so count's high word clears first)
-.norm:
-    test dx, dx
-    jz .normed
-    shr dx, 1
-    rcr cx, 1
-    shr bx, 1
-    rcr ax, 1
-    jmp .norm
-.normed:
-    jcxz .load0                 ; max is 0: nothing measurable yet
-    mov bx, cx                  ; BX = max16
-    mov cx, 100
-    mul cx                      ; DX:AX = count16 * 100
-    div bx                      ; AX = 100*count/max <= 100
-    mov cx, 100
-    sub cx, ax                  ; CX = load
-    jmp .loadok
-.load0:
-    xor cx, cx
-.loadok:
-    mov [tm_load], cx
-
-    ; --- history push: v = load*40/100, sweep index advances -----------------
-    mov ax, cx
-    mov cx, TM_GH
-    mul cx
-    mov cx, 100
-    div cx                      ; AX = 0..40
-    mov bx, [tm_pos]
-    mov [tm_hist+bx], al
-    mov [tm_lastcol], bx
-    inc bx
-    cmp bx, TM_GW
-    jb .posok
-    xor bx, bx
-.posok:
-    mov [tm_pos], bx
 
     ; --- snapshot scheduler + instance state (one atomic block, 8.1/28) ------
     ; Task cycles and T_STATE, then the whole instance table: I_STATE, I_TASK,
@@ -884,9 +1522,16 @@ tm_sample:
     mov si, tm_snapshot + SS_TSTATE
     mov di, tm_state
     mov cx, MAX_TASKS
-.ssnap:
-    mov al, [si]
-    mov [di], al
+    mov byte [tm_idle], 0xFF    ; ...and WHICH slot is the idle task, which the
+.ssnap:                         ; snapshot names with a state of its own
+    mov al, [si]                ; (SPEC.md 28.7). Found here rather than by a
+    mov [di], al                ; second walk, because this one is already
+    cmp al, 3                   ; touching every byte of it
+    jne .snotidle
+    mov al, MAX_TASKS
+    sub al, cl                  ; CX counts DOWN from MAX_TASKS: the slot is
+    mov [tm_idle], al           ; MAX_TASKS - CX
+.snotidle:
     inc si
     inc di
     loop .ssnap
@@ -1027,6 +1672,29 @@ tm_sample:
     mov ax, [tm_tdif+2]
     mov [tm_rcyc+2], ax
 
+    ; ...AND THE IDLE TASK, into the same row (SPEC.md 28.7). It owns no
+    ; instance, so it belongs to no application, and a machine that is 97%
+    ; idle reads as a System row of 97% - which is what the older Windows
+    ; Task Manager shows and what a reader expects. Kept in tm_idlec as well
+    ; because it is the load meter's numerator, and the meter's denominator
+    ; has to be this same total or the two can disagree again.
+    xor ax, ax
+    mov [tm_idlec], ax
+    mov [tm_idlec+2], ax
+    mov bl, [tm_idle]
+    cmp bl, MAX_TASKS           ; 0xFF when no slot answered to state 3
+    jae .noidle
+    xor bh, bh
+    shl bx, 1
+    shl bx, 1
+    mov ax, [tm_tdif+bx]
+    mov dx, [tm_tdif+bx+2]
+    mov [tm_idlec], ax
+    mov [tm_idlec+2], dx
+    add [tm_rcyc], ax
+    adc [tm_rcyc+2], dx
+.noidle:
+
     xor bx, bx                  ; BX = instance index
 .rowc:
     mov si, bx
@@ -1073,6 +1741,8 @@ tm_sample:
     je .tnormed
     shr word [tm_total+2], 1
     rcr word [tm_total], 1
+    shr word [tm_idlec+2], 1    ; the meter's numerator rides the SAME shift,
+    rcr word [tm_idlec], 1      ; or it is a ratio of two different scales
     xor bx, bx
 .tshr:
     shr word [tm_rcyc+bx+2], 1
@@ -1111,6 +1781,52 @@ tm_sample:
     cmp bx, TM_ROWS * 4
     jb .pct
 
+    ; --- the LOAD METER: 100 - 100*idle/total (SPEC.md 28.7) ----------------
+    ; Off the same interval and the same total as the rows above, which is the
+    ; whole point: the meter and the process list cannot disagree any more.
+    ; They did, and both were right - the page charged its own spinning worker
+    ; 34-38% of CPU TIME while the graph drew 0-2% of SPIN COUNT.
+    ;
+    ; No total (nothing accounted yet, or the very first sample) reads 0 rather
+    ; than 100: an unknown load is better drawn as quiet than as a machine
+    ; apparently pinned.
+    mov cx, [tm_total]
+    xor ax, ax
+    jcxz .loadok
+    mov ax, [tm_idlec+2]
+    or ax, ax
+    jnz .loadidle               ; idle > 64K units: it is the whole total
+    mov ax, [tm_idlec]
+    cmp ax, cx
+    jae .loadidle
+    mov si, 100
+    mul si                      ; DX:AX = idle*100
+    div cx                      ; AX = idle% <= 100
+    jmp .loadsub
+.loadidle:
+    mov ax, 100
+.loadsub:
+    mov cx, 100
+    sub cx, ax
+    mov ax, cx
+.loadok:
+    mov [tm_load], ax
+
+    ; --- history push: v = load*TM_GH/100, sweep index advances -------------
+    mov cx, TM_GH
+    mul cx
+    mov cx, 100
+    div cx                      ; AX = 0..TM_GH
+    mov bx, [tm_pos]
+    mov [tm_hist+bx], al
+    mov [tm_lastcol], bx
+    inc bx
+    cmp bx, TM_GW
+    jb .posok
+    xor bx, bx
+.posok:
+    mov [tm_pos], bx
+
     ; --- RAM: the kernel's footprint, plus everything claimed (SPEC.md 28) --
     ; TWO terms, not three. There used to be a third - a sum of every resident
     ; package REGION off the instance snapshot - because a region came out of
@@ -1123,12 +1839,19 @@ tm_sample:
     ; of an already-inflated figure could read as more RAM than the machine
     ; has. It cannot now - claims live in the heap, the heap is what is left
     ; above the kernel, so kernel + claims is bounded by the total.
+    ;
+    ; SK_CLAIM leaves the PURGEABLES out (SPEC.md 50.6.3/28.4.1), which is
+    ; what makes this figure the one the rows underneath add up to. It did
+    ; not, and on the field machine that read `RAM 195/384K` over rows
+    ; accounting for 132 - the missing 63 being the DirRead window, which
+    ; belongs to no instance and so appears in no column. The map below still
+    ; DRAWS it: a map is about addresses, and a cache occupies a real one.
     mov ax, [tm_kb+SK_KERN]     ; the WHOLE kernel (SPEC.md 2): image,
                                 ; scratch, FAT snapshot, disk buffers and
                                 ; every task stack are one contiguous span,
                                 ; and there is no growth room in it to bill
     add ax, [tm_kb+SK_CLAIM]    ; + everything claimed out of the heap
-                                ; (SPEC.md 50): the back buffer while it is
+                                ; (SPEC.md 50): the clipboard while it is
                                 ; armed, the menu save-under while a menu is
                                 ; down, each open Disk window's listing
                                 ; cache, and every package's region and data
@@ -1168,15 +1891,372 @@ tm_sample:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; tm_paint - W_PAINT: bare, unconditional full redraw of the active view
+; tm_promise - the raise cache, and the promise that is a REPAIR
+; in:  [tm_win], [tm_view]; THE GFX LOCK HELD BY THE CALLER
+; out: nothing (every register, ES and the flags preserved)
+;
+; SPEC.md 28.11, and it is 28.8 answered rather than restated. That section
+; measured why this window could not hold a cache: the cache is a purgeable
+; heap claim, these two pages are the tree's only reporters of purgeable
+; claims, so taking one changes what the page must show and showing it frees
+; the cache. The loop existed only because a promise had to be WITHDRAWN when
+; the content moved. It does not have to be, if the window repairs itself on
+; the way back.
+;
+; THE BAND IS THE DOORWAY AND IT COSTS NO KERNEL BYTES. SPEC.md 11.96.11's
+; contract is "the kernel banks the band, and wm_damage tells you you owe the
+; rest"; a band covering the WHOLE content is the degenerate case of it -
+; everything banked, nothing owed - and wm_draw_win already routes a banded
+; restore through W_PAINT (its `wm_su_bget / jnc .paint`) where a plain one
+; skips it. wm_su_orect then insets x1 past x2 and wm_damage answers the
+; EMPTY rect 11.90.2 documents as legal. So the app is called, told it owes
+; nothing, and spends its own debt.
+;
+; Named on every paint: OSAPI_WM_BAND drops nothing when the extent has not
+; changed, so this is free after the first and it follows a resize for
+; nothing. The extent is a BYTE (11.96.11.1), so a content wider than 255
+; refuses - and a refusal is a normal path: no band, no promise, and this
+; window behaves exactly as it did before.
+;
+; PER PAGE, like the Control Panel's (31.12): the performance view is the load
+; meter and moves every TM_INT by construction, so it is never promised.
+;
+; NO DEPTH CLAIM: wm_su_1bpp refuses a banded window, so this is four planes -
+; 32,874 bytes for a 232x265 content, inside wm_su_kb's 64,512 ceiling.
+;
+; ES IS PRESERVED: OSAPI_WM_BAND and OSAPI_WM_SAVEU are X stubs and leave the
+; CALLER's segment in ES, and every [es:bx+W_*] read in this file needs
+; KERNEL_SEG (TM_ES_DATA exists for exactly that).
+; -----------------------------------------------------------------------------
+tm_promise:
+    pushf
+    push ax
+    push bx
+    push cx
+    push dx                     ; OSAPI_WM_GEOM answers the content SIZE, so DX
+    push es                     ; is an output of it whether or not we read it
+    mov bx, [tm_win]
+    or bx, bx                   ; before wm_create, and after a refused one
+    jz .out
+    cmp byte [tm_view], 0
+    je .no                      ; the live page: never
+    call OSAPI_WM_GEOM          ; CX = content width, CF = not visible
+    jc .no
+    xor al, al                  ; edge 0 = left, the whole content
+    call OSAPI_WM_BAND
+    jc .no                      ; wider than 255, or the kernel declined
+    mov al, 1
+    call OSAPI_WM_SAVEU         ; ...and the promise is 28.11's, not 11.96.1's:
+    jmp short .out              ; "I will make the restored pixels right"
+.no:
+    xor al, al
+    call OSAPI_WM_SAVEU         ; withdraw, and wm_saveu drops the cache
+    xor al, al
+    xor cx, cx
+    call OSAPI_WM_BAND          ; ...and retire the band with it, or a later
+.out:                           ; cache is laid out for one nobody claims
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_paint - W_PAINT: redraw the active view, WHOLE or as a repair
 ; in:  SI = window ptr (gfx lock held by caller; no lock, no visibility
 ;      check in here - SPEC.md 28)
 ; out: nothing
 ; clobbers: nothing (flags only)
+;
+; SPEC.md 28.11. tm_clear_owed asks OSAPI_WM_DAMAGE and answers CF, so the
+; question is asked once: CF = 1 means the restore put the WHOLE content back
+; and this paint owes nothing but its own debt - the elements whose keys moved
+; while it was covered, and nothing else. tm_qpeek is what leaves those keys
+; standing to be read.
 ; -----------------------------------------------------------------------------
 tm_paint:
     call tm_hire                ; the first paint is the earliest point at
-    call tm_draw_full           ; which our instance exists to attach one to
+                                ; which our instance exists to attach one to
+    call tm_clear_owed          ; the GROUND is ours now (SPEC.md 28.10) - and
+    jc .repair                  ; the rect it filled is in [tm_dmg], which
+                                ; every checked draw below asks (28.10.2): a
+                                ; chunk, a caption or a map the damage never
+    mov word [tm_elck + 2*TMC_HSB], 0   ; touched keeps the pixels it has.
+                                ; THE SCROLL BAR IS THE ONE EXCEPTION and is
+                                ; forced: it is the only element with no band
+                                ; written down (tm_elchk_y says why), and a
+    call tm_draw_band           ; strip the damage erased has to come back
+    jmp short .out
+.repair:
+    call tm_update
+.out:
+    call tm_dmg_none            ; the band is this paint's and no later one's
+    call tm_promise             ; ...and the promise, re-stated: free when
+    ret                         ; nothing changed, and it follows a resize for
+                                ; the same nothing
+
+; -----------------------------------------------------------------------------
+; tm_clear_content - white-fill this window's whole content
+; in:  SI = window ptr; the gfx lock held
+; out: nothing; preserves all registers
+;
+; SPEC.md 28.10. It was inline in tm_click's view swap and is a routine now
+; because the kernel stopped doing it: this window carries WF_OWNBG, so
+; wm_draw_win skips its white fill and W_PAINT owes the ground as well as the
+; ink (SPEC.md 11.90.1).
+;
+; THE FAR CORNER COMES OFF THE RECORD, not from a pair of constants: this is
+; the only thing that erases the outgoing view, and a short one leaves its
+; tail rows lettered under the incoming one (they were 198x245 against a
+; content that had grown to 231x282). TWO, not one - y+h-1 and x+w-1 are the
+; frame's own bottom and right BORDERS, and a fill that reached them left the
+; window open-sided until something repainted the frame.
+; -----------------------------------------------------------------------------
+tm_clear_content:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, si
+    call OSAPI_WM_CONTENT       ; AX = content left, DX = content top
+    push ax
+    mov ax, [es:bx+W_Y]
+    add ax, [es:bx+W_H]
+    sub ax, 2
+    mov cx, [es:bx+W_X]
+    add cx, [es:bx+W_W]
+    sub cx, 2
+    mov bx, dx
+    mov dx, ax
+    pop ax
+    TM_INK CWHITE
+    call OSAPI_GFX_FILL
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_clear_owed - white-fill only the part of the content this paint OWES
+; in:  SI = window ptr; the gfx lock held
+; out: CF = 1 the rect was EMPTY and nothing was filled; preserves all registers
+;
+; SPEC.md 28.10.1. OSAPI_WM_DAMAGE answers CF = 1 "the whole content" or CF = 0
+; and a rect, absolute and inclusive, which may be EMPTY. A window redrawn
+; because something ABOVE it moved owes only the strip that moved, and the
+; rest of its pixels are on the glass and correct - so filling the whole
+; content is a white hole across a window whose W_PAINT is ~450 ms on the
+; target (PERFORMANCE.md, the heap page's list repaint).
+;
+; The DRAWING is still whole, and that is deliberate rather than unfinished.
+; A repaint is priced by the primitive calls it makes and not by the pixels
+; they cover, so skipping elements outside the rect is what would save the
+; 450 ms - and for the commonest damage here, a narrow VERTICAL strip where a
+; window beside this one moved, every row intersects it and nothing can be
+; skipped. The fill is the half that pays either way. SPEC.md 28.10.2 records
+; what element-level skipping would take and when it would pay.
+;
+; It cannot paint anything wrong: wm_dmg_wins redraws marked windows WHOLE and
+; bottom to top, so a window drawing outside its damage is covered by the ones
+; above it in the same pass (SPEC.md 11.90.2 says so in as many words - "a
+; caller that never tests for it cannot paint anything wrong, only waste the
+; answer").
+;
+; THE EMPTY ANSWER IS PASSED ON IN CF, and that is why tm_paint asks nothing
+; itself: an empty rect is SPEC.md 28.11's whole-content band coming back off
+; the raise cache, which is the one case where the ink is owed and the ground
+; is not. A pop writes no flag, so the answer survives the four below it.
+; -----------------------------------------------------------------------------
+tm_clear_owed:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, si
+    call OSAPI_WM_DAMAGE        ; AX/BX/CX/DX = the rect we owe
+    jc .whole                   ; CF = 1: all of it
+    cmp ax, cx
+    jg .none                    ; empty (x1 > x2): we owe NOTHING, and the
+    cmp bx, dx                  ; kernel promises a primitive would treat it
+    jg .none                    ; as a no-op anyway
+    call tm_dmg_set             ; ...AND THE ROWS READ THE SAME RECT: what was
+    TM_INK CWHITE               ; filled is exactly what has to be lettered
+    call OSAPI_GFX_FILL         ; again (SPEC.md 28.10.2)
+    jmp short .out
+.whole:
+    call tm_dmg_all
+    call tm_clear_content
+.out:
+    clc
+    jmp short .pop
+.none:
+    call tm_dmg_none
+    stc
+.pop:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_dmg_* - WHICH ROWS THIS PAINT OWES, as a rect the chunk loop can ask
+;
+; SPEC.md 28.10.2. tm_clear_owed has always filled only the part of the
+; content wm_damage named; the DRAWING was still whole, and on the window
+; whose W_PAINT is the densest in the tree that is ~450 ms of glyphs for a
+; strip a person dragged a window off. The rows are almost all of it - a heap
+; page is 19 rows of 25 characters, and a glyph cell is ~900 us on the target.
+;
+; The structure to ask with was already there. SPEC.md 28.2 made a row FIVE
+; independently-checked chunks so that a percentage ticking over would not
+; redraw the name beside it, and every one of them comes through tm_elchk. So
+; the rule the chunk loop wants is one word wider than the one it had:
+;
+;     draw this chunk if its key CHANGED, or if the damage took its pixels
+;
+; and the second half is this rect. It is absolute, like [tm_rowy] and
+; [tm_penx] and like wm_damage's own answer, so no coordinate is converted
+; anywhere; two columns come out right for free, because the test reads the
+; live pen rather than deriving x from a row index.
+;
+; BOTH AXES, and the x half is the one that pays for the common damage. A
+; window moved off this one's right leaves a VERTICAL strip - every row
+; intersects it, so a y band alone would force the lot - and the chunks are
+; 40px each, so the strip names two or three of five. The y half is what a
+; window uncovering the bottom, a dock repaint or a downward drag hits.
+;
+; tm_dmg_all is a repaint that owes everything and tm_dmg_none one that owes
+; nothing: mirrors, sharing their four stores. `none` is what the WORKER's
+; own update runs under, where the keys alone decide, and tm_paint restores
+; it on the way out so no later interval inherits this paint's rect.
+; -----------------------------------------------------------------------------
+tm_dmg_set:                     ; AX/BX/CX/DX = x1/y1/x2/y2 (all preserved)
+    mov [tm_dmg+0], ax
+    mov [tm_dmg+2], bx
+    mov [tm_dmg+4], cx
+    mov [tm_dmg+6], dx
+    ret
+
+tm_dmg_all:
+    push ax
+    push bx
+    xor ax, ax                  ; x1/y1 = 0, x2/y2 = 0xFFFF: everything hits
+    mov bx, 0FFFFh
+    jmp short tm_dmg_w
+tm_dmg_none:
+    push ax
+    push bx
+    mov ax, 0FFFFh              ; ...and the mirror, which nothing can
+    xor bx, bx
+tm_dmg_w:
+    mov [tm_dmg+0], ax
+    mov [tm_dmg+2], ax
+    mov [tm_dmg+4], bx
+    mov [tm_dmg+6], bx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_dmg_hit - does the chunk the row loop is on lie in this paint's damage?
+; in:  [tm_rowy], [tm_penx], [tm_ci]
+; out: CF = 0 it does (draw it), CF = 1 it does not (its pixels are still
+;      there); all registers preserved
+;
+; The y test is first because it rejects a whole row in two compares, and the
+; unsigned forms are deliberate: tm_dmg_all's 0xFFFF is a maximum only if
+; nothing here reads it as -1.
+; -----------------------------------------------------------------------------
+tm_dmg_hit:
+    push ax
+    push bx
+    push cx
+    mov ax, [tm_rowy]
+    cmp ax, [tm_dmg+6]
+    ja .no                      ; the row starts below the damage
+    add ax, 7                   ; a row band is one glyph tall
+    cmp ax, [tm_dmg+2]
+    jb .no                      ; ...or ends above it
+    mov ax, [tm_ci]             ; --- x1, and a chunk's band is not always its
+    mov cl, TM_CW               ; own text: 5 chunks of 40px, so AL is the
+    mul cl                      ; whole of the multiply
+    mov bx, ax
+    add ax, [tm_penx]
+    or bx, bx
+    jnz .x1
+    mov ax, [tm_rowx]           ; CHUNK 0 OWNS THE LEAD-IN, here as in the
+    add ax, 6                   ; draw (tm_row_lead's own left edge). A damage
+.x1:                            ; rect ending inside those pixels erased a
+    cmp ax, [tm_dmg+4]          ; legend square, and this is the chunk that
+    ja .no                      ; has to put it back - test from the pen and
+                                ; it is erased until the row's key moves
+    mov ax, [tm_ci]             ; --- x2
+    inc ax
+    cmp ax, TM_NCHUNK
+    jae .yes                    ; THE LAST CHUNK HAS NO RIGHT EDGE to test:
+    mov cl, TM_CW               ; tm_rowr runs it on to the row's own, so it
+    mul cl                      ; owns the tail past the text and damage out
+    add ax, [tm_penx]           ; there is still its to repair
+    dec ax
+    cmp ax, [tm_dmg+0]
+    jb .no
+.yes:
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_elchk_y - tm_elchk, and the damage clause for an element with a BAND
+; in:  AX = key, BX = the check word, CX/DX = the element's CONTENT-relative
+;      y range, inclusive
+; out: CF = 1 skip the draw, CF = 0 draw it; all registers preserved
+;
+; SPEC.md 28.10.2. The rows get their band from the chunk loop's own pen; the
+; seven TMC_* elements have nothing to derive one from, so each site names its
+; y range - which is a constant it already had, being the one it hands tm_lrun
+; or tm_map_rect three instructions later.
+;
+; X IS NOT ASKED. Every one of these spans the pane, so a damage rect that
+; crosses the band at all crosses the element, and the two compares would
+; always answer the same. The rows are the opposite case and that is where the
+; x half pays (tm_dmg_hit).
+;
+; tm_hbar is deliberately NOT on this: its own prologue does not save DX, and
+; a scroll bar is a full-height strip that a damage rect crossing this window
+; at all is going to cross. Sixteen drawing calls, kept.
+; -----------------------------------------------------------------------------
+tm_elchk_y:
+    call tm_elchk
+    jnc .out                    ; changed: drawn whatever the damage says
+    push ax
+    push bx
+    mov ax, [tm_cy]
+    add ax, dx
+    cmp ax, [tm_dmg+2]
+    jb .no                      ; the band ends above the damage
+    mov ax, [tm_cy]
+    add ax, cx
+    cmp ax, [tm_dmg+6]
+    ja .no                      ; ...or starts below it
+    pop bx
+    pop ax
+    clc                         ; a pop writes no flag, so the answer is set
+    ret                         ; after them and survives
+.no:
+    pop bx
+    pop ax
+    stc
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1283,8 +2363,13 @@ tm_ckz:
 ; -----------------------------------------------------------------------------
 tm_draw_full:
     call tm_rowck_clear
-    cmp byte [tm_view], 0
-    jne tm_draw_mem
+tm_draw_band:                   ; ...and the entry that does NOT, for a damage
+                                ; repaint: [tm_dmg] decides which rows are
+                                ; forced and the keys decide the rest
+                                ; (SPEC.md 28.10.2)
+    cmp byte [tm_view], 1       ; 0 performance, 1 memory, 2 heap (SPEC.md 28.4)
+    je tm_draw_mem
+    ja tm_draw_heap
     ; fall through: performance view
 
 tm_draw_perf:
@@ -1348,7 +2433,9 @@ tm_draw_perf:
     push dx
     add cx, TM_PEN              ; the PEN, not the band's left edge: the
     mov si, tm_s_hdr            ; captions have to stand over the columns
-    call OSAPI_FONT_STR               ; they name, and tm_rows letters from here
+    mov ax, (CWHITE << 8) | CBLACK  ; they name, and tm_rows letters from here
+    call OSAPI_FONT_RUN         ; opaque, over the content fill W_PAINT just
+                                ; laid down (SPEC.md 28.5.2)
     pop dx
     pop cx
     add cx, TM_COLW
@@ -1380,8 +2467,9 @@ tm_draw_perf:
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
 tm_update:
-    cmp byte [tm_view], 0
-    jne tm_upd_mem
+    cmp byte [tm_view], 1
+    je tm_upd_mem
+    ja tm_upd_heap
     push ax
     push bx
     push dx
@@ -1420,26 +2508,101 @@ tm_click:
     push cx
     push dx
 
-    xor byte [tm_view], 1
-    mov bx, si
-    call OSAPI_WM_CONTENT             ; AX = content left, DX = content top
-    push ax                     ; ...and the far corner off the record, not
-    mov ax, [es:bx+W_Y]            ; a pair of constants: this fill is the ONLY
-    add ax, [es:bx+W_H]            ; thing that erases the outgoing view, and a
-    sub ax, 2                   ; short one leaves its tail rows lettered
-    mov cx, [es:bx+W_X]            ; under the incoming one (they were 198x245
-    add cx, [es:bx+W_W]            ; against a content that had grown to 231x282).
-    sub cx, 2                   ; TWO, not one: y+h-1 and x+w-1 are the frame's
-                                ; own bottom and right BORDERS, and a fill that
-                                ; reached them left the window open-sided until
-                                ; something repainted the frame
-    mov bx, dx
-    mov dx, ax
+    cmp byte [tm_view], 2       ; the heap page's SCROLL BAR gets the point
+    jne .cycle                  ; first (SPEC.md 28.4.4), and answers CF = 1
+    call tm_hscroll             ; for anything that is not in it - so the one
+    jnc .out                    ; click target below is untouched everywhere
+.cycle:                         ; the bar is not
+    mov al, [tm_view]           ; CYCLE 0 -> 1 -> 2 -> 0 (SPEC.md 28.4), not a
+    inc al                      ; toggle: the content has exactly one click
+    cmp al, 3                   ; target and this is the whole of the
+    jb .vset                    ; navigation a third page needs - no tabs, no
+    xor al, al                  ; chrome, no second hit-test
+.vset:
+    mov [tm_view], al
+    mov byte [tm_slow], 0       ; ...and the slow count starts over, so the
+                                ; first unattended refresh of a page arrives
+                                ; one interval after it opened rather than up
+                                ; to TM_SLOW of them (SPEC.md 28.6)
+    call tm_clear_content       ; SI = window ptr; the ONLY thing that erases
+    call tm_draw_full           ; the outgoing view (SPEC.md 28.10)
+    call tm_promise             ; ...and WHICH page it is now decides whether
+                                ; this window promises at all: 0 -> 1 takes the
+                                ; band, 2 -> 0 retires it (SPEC.md 28.11)
+.out:
+    pop dx
+    pop cx
+    pop bx
     pop ax
-    TM_INK CWHITE
-    call OSAPI_GFX_FILL
-    call tm_draw_full           ; SI = window ptr still
+    ret
 
+; -----------------------------------------------------------------------------
+; tm_hscroll - a press on the heap page: did the scroll bar take it?
+; in:  CX = x, DX = y (ABSOLUTE, W_ONCLICK's own coordinates), the gfx lock
+;      held; [tm_hsb] as the last paint left it, which is where the bar is on
+;      the glass right now
+; out: CF = 0 the bar took it, CF = 1 it did not and the caller owns the click
+; clobbers: nothing else (flags)
+;
+; A page is `fit - 1` rows - one row of overlap, so the reader keeps a line
+; they have already read to place the new ones against - and an arrow is one
+; row. A press on the THUMB pages toward it, which is SPEC.md 13.10.1's "the
+; caller decides" answered the way files.inc answers it: the alternative is a
+; part of the bar that does nothing at all.
+;
+; IT REDRAWS ONLY IF THE POSITION ACTUALLY MOVED, which is what makes an end
+; stop free rather than a repaint of the same twenty rows.
+; -----------------------------------------------------------------------------
+tm_hscroll:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, tm_hsb
+    call os88ui_sbhit           ; AL = OS88UI_SB*, and NONE for a point that
+    cmp al, OS88UI_SBNONE       ; is not in the bar at all - so the cycle
+    je .no                      ; click needs no rect of its own
+
+    mov dx, [tm_htop]           ; DX = where the view would go
+    mov cx, [tm_maxrow]         ; ...and CX = one page of it
+    dec cx
+    jnz .page                   ; a frame with one row on it still pages by
+    inc cx                      ; one, or the bar would have an inert half
+.page:
+    cmp al, OS88UI_SBUP
+    je .up
+    cmp al, OS88UI_SBDOWN
+    je .down
+    cmp al, OS88UI_SBPGUP
+    je .pgup
+    add dx, cx                  ; PGDN, and the THUMB pages the way it lies
+    jmp short .set
+.pgup:
+    sub dx, cx
+    jnc .set
+    xor dx, dx                  ; ...which is the only place this can wrap
+    jmp short .set
+.up:
+    or dx, dx
+    jz .set                     ; already at the top: a dec would wrap, and
+    dec dx                      ; the compare below turns it into an end stop
+    jmp short .set
+.down:
+    inc dx
+.set:
+    mov [tm_htop], dx
+    call tm_hclamp              ; ...and the bottom end stop, which is the one
+                                ; place that knows how far down there is to go
+    mov cx, [tm_htop]           ; DID THE VIEW MOVE? The block still carries
+    cmp cx, [tm_hsb+12]         ; what the last paint drew from, so an end stop
+    je .took                    ; costs nothing instead of repainting twenty
+    call tm_upd_heap            ; rows that did not move
+.took:
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
     pop dx
     pop cx
     pop bx
@@ -1460,6 +2623,8 @@ tm_upd_mem:
 
     mov bx, [tm_win]
     call tm_view_begin          ; [tm_cx]/[tm_cy]/[tm_rowx]/[tm_ylim]
+    call tm_hsnap               ; ...and the claim table, which the caption
+                                ; reads as well as the map (SPEC.md 28.4.1)
 
     mov ax, TMM_RAM_Y
     call tm_txt_ram_y
@@ -1490,6 +2655,7 @@ tm_draw_mem:
 
     mov bx, si
     call tm_view_begin          ; [tm_cx]/[tm_cy]/[tm_rowx]/[tm_ylim]
+    call tm_hsnap               ; ...and the claim table (SPEC.md 28.4.1)
 
     mov ax, TMM_RAM_Y
     call tm_txt_ram_y
@@ -1506,6 +2672,10 @@ tm_draw_mem:
     call OSAPI_GFX_FRAME
 
 
+    cmp word [tm_xoff], 0       ; a machine with no store above 1MB draws no
+    jne .nobar                  ; bar at all - not an empty one. The figures
+                                ; come off the caption to match and everything
+                                ; below rises by TMM_XSHIFT
     mov ax, [tm_cx]             ; XMS bar frame (6,71)-(TM_RW,80) - here and
     add ax, 6                   ; not in tm_xbar, which is element-checked and
     mov bx, [tm_cy]             ; skips itself on an empty pool
@@ -1515,17 +2685,20 @@ tm_draw_mem:
     mov dx, [tm_cy]
     add dx, TMM_XB_Y2
     call OSAPI_GFX_FRAME
+.nobar:
 
     mov cx, [tm_cx]             ; header, at the rows' text x - once per
     mov bx, [tm_cols]           ; COLUMN, because each carries its own list
     mov dx, [tm_cy]
     add dx, TMM_HDR_Y           ; column 0's sits under the maps...
+    sub dx, [tm_xoff]           ; ...higher when there is no bar between them
 .hdr:
     push cx
     push dx
     add cx, 16
     mov si, tm_s_mhdr
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN         ; opaque (SPEC.md 28.5.2)
     pop dx
     pop cx
     add cx, TM_COLW
@@ -1621,6 +2794,12 @@ tm_cap_xms:
     mov si, tm_s_t386
 .tier:
     call tm_copy
+    cmp word [tm_xoff], 0       ; no store above 1MB: the line is the TIER and
+    je .figs                    ; nothing else. 'XMS 0/ 0K' is the same empty
+    pop bx                      ; statement the bar was making, and the tier is
+    pop ax                      ; what makes the absence legible - 'CPU 8086'
+    jmp short .term             ; IS the reason there is none (SPEC.md 60.2)
+.figs:
     mov si, tm_s_xms
     call tm_copy
     pop bx                      ; BX = total, AX = used
@@ -1632,26 +2811,21 @@ tm_cap_xms:
     call tm_put5
     mov byte [di], 'K'
     inc di
+.term:
     mov byte [di], 0
 
     call tm_rowsum              ; unchanged? then so are its pixels
     mov bx, tm_elck + 2*TMC_XMS
-    call tm_elchk
+    mov cx, TMM_XMS_Y
+    mov dx, TMM_XMS_Y + 7
+    call tm_elchk_y
     jc .out
 
-    mov ax, TMM_XMS_Y
-    call tm_lfill
-    jnc .draw                   ; a clip edge crosses it: neither half draws,
-    mov word [bx], 0            ; so the key must not stand either
-    jmp short .out
-.draw:
-    TM_INK CBLACK
-    mov cx, [tm_cx]
-    add cx, 6
-    mov dx, [tm_cy]
-    add dx, TMM_XMS_Y
-    mov si, tm_str
-    call OSAPI_FONT_STR
+    mov ax, TMM_XMS_Y              ; SPEC.md 28.5.1: placed, padded and drawn as
+    call tm_lrun                ; ONE opaque run - no fill, no blank interval
+    jnc .out
+    mov word [bx], 0            ; a clip edge crossed it: nothing was drawn, so
+                                ; the key just recorded would keep it stale
 .out:
     pop di
     pop si
@@ -1720,18 +2894,17 @@ tm_map_ram:
     push si
     push di
 
-    push es                     ; the claim table, whole, before anything is
-    TM_ES_DATA                  ; hashed or drawn: the walk below wants every
-    mov di, tm_claims           ; record and the check word wants every record,
-    TM_CLAIM_SNAPSHOT               ; so one call serves both (SPEC.md 20.9)
-    pop es
-
+    ; The snapshot is taken by tm_upd_mem/tm_draw_mem above, because the
+    ; CAPTION reads it too now (SPEC.md 28.4.1) and two calls a refresh would
+    ; walk the table twice for one picture.
     mov si, tm_claims           ; the claim map is the only part of this that
     mov cx, CLAIM_SNAPSHOT_SIZE      ; moves - the kernel and its buffers are fixed
     xor ax, ax                  ; at build time and the total is the boot int
     call tm_sumb                ; 12h figure - so it IS the key
     mov bx, tm_elck + 2*TMC_MRAM
-    call tm_elchk
+    mov cx, TMM_M1_Y1
+    mov dx, TMM_M1_Y2
+    call tm_elchk_y
     jc .out
 
     TM_INK CWHITE
@@ -2020,6 +3193,8 @@ tm_rows_mem:
     call tm_buf_row
 
     ; --- the Builtins heading, then every live built-in -----------------------
+    call tm_mrow_nolast         ; ...not on a column's foot, where the rows it
+                                ; heads are in the next one (SPEC.md 28.4)
     call tm_mrow_open
     push si
     mov si, tm_s_bhdr
@@ -2051,6 +3226,7 @@ tm_rows_mem:
     ; the map above (SPEC.md 20.1/28).
     call tm_pool_kb             ; AX = KB of region held
     push ax
+    call tm_mrow_nolast
     call tm_mrow_open
     push si
     mov si, tm_s_phdr
@@ -2238,6 +3414,1000 @@ tm_buf_row:
     pop ax
     ret
 
+; =============================================================================
+; The heap page (SPEC.md 28.4)
+;
+; mem_tab itself, grouped under the owner that holds each record. The memory
+; view above answers how MUCH heap an instance holds - one figure, out of
+; SSI_KB - and that is the wrong shape for the two questions a heap goes wrong
+; in: WHICH of an app's claims is the big one, and WHAT is still purgeable when
+; the next claim is refused.
+;
+; It cost the kernel nothing. The owner word already carries the namespace
+; (SPEC.md 50.2) and, since SPEC.md 50.6, the purge tier in its high byte -
+; the encoding was chosen so this module could pick the class out of what it
+; already reads, and this is that being cashed. No new cell, no new snapshot
+; field, no .o88 invalidated anywhere else in the tree.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; tm_hsnap - refresh the claim table (SPEC.md 20.9)
+; in:  nothing
+; out: nothing (all registers preserved)
+;
+; The memory view takes its copy inside tm_map_ram, because the map is the only
+; thing there that reads it. Here BOTH captions and the whole list do, so it is
+; taken once at the top of each paint instead - a snapshot per element would
+; let the count in the caption disagree with the rows under it.
+; -----------------------------------------------------------------------------
+tm_hsnap:
+    push ax
+    push di
+    push es
+    TM_ES_DATA
+    mov di, tm_claims
+    TM_CLAIM_SNAPSHOT
+    pop es
+    push bx                     ; ...and the heap's two live figures with it:
+    call OSAPI_MEM_AVAIL        ; AX = largest run, BX = total available. Once
+    mov [tm_maxrun], ax         ; a refresh, because BOTH captions read them
+    mov [tm_avl], bx            ; and mem_avail walks the table per candidate
+    pop bx
+    pop di
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_hkb - a claim's size in KB
+; in:  AX = paragraphs (MC_PARA/CLS_PARA)
+; out: AX = KB
+; clobbers: nothing else (flags)
+; -----------------------------------------------------------------------------
+tm_hkb:
+    push cx
+    mov cl, 6                   ; MEM_PARA_KB: the heap deals in whole KB, so
+    shr ax, cl                  ; this divides exactly
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_hmatch - does the record at SI belong to group BX?
+; in:  SI = a claim record, BX = 0xFFFF for System (every kernel tag) or an
+;      instance slot
+; out: CF = 0 it does, CF = 1 it does not (or the record is free)
+; clobbers: nothing else (flags)
+;
+; An instance owns claims under TWO owner words and both belong on its row: the
+; REGION is stamped with the slot and its data claims with the segment
+; (SPEC.md 50.2/20.1). A built-in has no region and stamps everything with the
+; slot, which the same two tests cover without a special case.
+;
+; ...AND A THIRD, WHICH IS NOT THE INSTANCE'S OWN WORD AT ALL (SPEC.md
+; 28.4.5). A raise cache is stamped MEM_P_WSAVE plus a WINDOW slot (11.96.3),
+; which is a kernel tag, so every one of them landed under System - tens of KB
+; of a 640KB machine appearing on the one page that reports memory as an
+; anonymous row belonging to nobody, whoever actually caused it.
+; OSAPI_WM_OWNSEG (11.96.3.1) turns that slot back into the segment that owns
+; the window, and tm_ispt already holds the same thing per instance, so the
+; claim can be filed under the package that caused it. It costs no columns:
+; the page is grouped and TMH_IND is the indent that puts a claim under its
+; owner already.
+;
+; A window the KERNEL made answers KERNEL_SEG, which no tm_ispt ever holds, so
+; the Disk window's cache stays under System of its own accord - no special
+; case, and the two arms below stay each other's exact complement.
+; -----------------------------------------------------------------------------
+tm_hmatch:
+    push ax
+    push bx                     ; BX is the group AND, below, the slot's word
+    push dx                     ; ...and tm_wsown answers in DX
+    mov ax, [si+CLS_SEG]        ; index: DX cannot index on an 8086 (SPEC.md 1)
+    or ax, ax
+    jz .no                      ; a free record
+    mov ax, [si+CLS_OWN]
+    cmp bx, 0xFFFF
+    je .sys
+    cmp ax, bx                  ; its slot: a package's region, or a built-in's
+    je .yes                     ; claim
+    shl bx, 1
+    cmp word [tm_isz+bx], 0     ; a built-in owns no segment to match against
+    je .no
+    cmp ax, [tm_ispt+bx]        ; ...a package's data claims carry it
+    je .yes
+    call tm_wsown               ; ...and a raise cache carries a WINDOW slot,
+    jc .no                      ; which names a segment one call away
+    cmp dx, [tm_ispt+bx]
+    je .yes
+    jmp short .no
+.sys:
+    cmp ah, MEM_PG_MIN          ; 0xFB..0xFF is a kernel tag, purgeable or not.
+    jb .no                      ; A SEGMENT can never reach that: conventional
+                                ; memory tops out at 0xA000
+    call tm_wsown               ; ...but a raise cache is only System's if the
+    jc .yes                     ; window is (KERNEL_SEG). Anybody else's has
+    cmp dx, KERNEL_SEG          ; just been claimed by the arm above, and a
+    jne .no                     ; claim counted twice is a total that lies
+.yes:
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop dx                      ; pop leaves the flags alone
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_wsown - whose WINDOW does the raise cache at SI belong to?
+; in:  SI = a claim record
+; out: CF = 1 it is not a raise cache, or names no live window - and DX is
+;      unspecified; CF = 0 and DX = the segment that owns that window
+; clobbers: DX and the flags
+;
+; SPEC.md 11.96.3.1. The range test is the same shape as everywhere else in
+; this file - a base plus an ordinal, compared unsigned so a lower owner wraps
+; high and fails - and the far call is only reached for a record already known
+; to be in it, which on a live desktop is one or two of the thirty-two.
+; -----------------------------------------------------------------------------
+tm_wsown:
+    push ax
+    mov ax, [si+CLS_OWN]
+    sub ax, MEM_P_WSAVE
+    cmp ax, MEM_P_WSAVE_N
+    jae .no
+    call OSAPI_WM_OWNSEG        ; AL = the window slot; out CF, DX
+    pop ax
+    ret
+.no:
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_hsum - one group's total and how many records are in it
+; in:  BX = the group (tm_hmatch)
+; out: AX = KB, CX = records
+; clobbers: nothing else (flags)
+; -----------------------------------------------------------------------------
+tm_hsum:
+    push dx
+    push si
+    xor ax, ax
+    xor cx, cx
+    mov si, tm_claims
+.rec:
+    call tm_hmatch
+    jc .next
+    mov dx, [si+CLS_PARA]
+    xchg ax, dx
+    call tm_hkb
+    xchg ax, dx
+    add ax, dx
+    inc cx
+.next:
+    add si, CLS_RECSZ
+    cmp si, tm_claims + CLAIM_SNAPSHOT_SIZE
+    jb .rec
+    pop si
+    pop dx
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_put2 - a record count in exactly two columns, right-aligned
+; in:  AX = value (0..99), DI = dest
+; out: DI advanced by 2
+; clobbers: nothing else (flags)
+;
+; The parenthesised counts on the HELD/PURGE caption are the one variable-width
+; field on the heap page's three caption lines, and a variable width is what
+; stopped PURGE lining up with AVAIL and FRAG: at nine records the line is a
+; character shorter than at ten, so the label moved sideways as claims came
+; and went (SPEC.md 28.4.2). Two columns is the NARROWEST fixed field that
+; holds MEM_MAX, which is what tm_putn's note about '(  5)' was really
+; objecting to - three columns of padding, not the idea of a column. The
+; guard below is the whole of what makes two enough.
+;
+; It JUMPS to tm_putn rather than falling through into it, though tm_putn is
+; the next thing in the file and three bytes cheaper that way: a routine
+; inserted between the two would assemble cleanly, boot, and pad every count
+; with whatever that routine left at DI.
+; -----------------------------------------------------------------------------
+%if MEM_MAX > 99
+  %error "taskmgr: MEM_MAX no longer fits tm_put2's two columns"
+%endif
+tm_put2:
+    cmp ax, 10                  ; AX survives a cmp, and tm_putn clobbers no
+    jae .n                      ; more than the flags this just spent
+    mov byte [di], ' '
+    inc di
+.n:
+    jmp tm_putn
+
+; -----------------------------------------------------------------------------
+; tm_putn - an unsigned count in as few digits as it needs
+; in:  AX = value, DI = dest
+; out: DI advanced by 1..5
+; clobbers: nothing else (flags)
+;
+; tm_put3 pads to three columns, which is right for a KB figure in a column
+; and wrong for a parenthesised count: '(  5)' against '(5)'. The split line
+; is 27 characters at two-digit counts and there is no room for the padding.
+; -----------------------------------------------------------------------------
+tm_putn:
+    push ax
+    push bx
+    push cx
+    push dx
+    xor cx, cx
+    mov bx, 10
+.split:
+    xor dx, dx
+    div bx                      ; AX = quotient, DX = this digit
+    push dx
+    inc cx
+    or ax, ax
+    jnz .split
+.emit:                          ; ...back off the stack, most significant first
+    pop ax
+    add al, '0'
+    mov [di], al
+    inc di
+    loop .emit
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_hsplit - what is claimed, split by whether the kernel can take it back
+; in:  the claim snapshot
+; out: AX = KB held (unpurgeable), DX = KB purgeable,
+;      BX = records held,           CX = records purgeable
+; clobbers: nothing else (flags)
+;
+; The two are never added into one figure anywhere the user can see, and that
+; is the whole point (SPEC.md 28.4.1): they are owed on completely different
+; terms. AX is also exactly what the memory view's rows account for between
+; their SIZE and HEAP columns - a region is a claim owned by the instance slot
+; and lands in SIZE, a data claim lands in HEAP, and a PURGEABLE claim lands
+; in neither because it belongs to no instance at all.
+; -----------------------------------------------------------------------------
+tm_hsplit:
+    push si
+    push di                     ; DI and not BP: a callback's BP is the task's
+    xor ax, ax                  ; instance record and is never scratch here
+    xor bx, bx                  ; (tm_row_draw says so for the same reason)
+    xor di, di                  ; AX/BX = held KB and records, DI/CX = the
+    xor cx, cx                  ; purgeable pair
+    mov si, tm_claims
+.rec:
+    cmp word [si+CLS_SEG], 0
+    je .next                    ; a free record
+    push ax
+    mov ax, [si+CLS_PARA]
+    call tm_hkb
+    mov dx, ax
+    pop ax
+    cmp byte [si+CLS_OWN+1], MEM_PG_MIN   ; the owner's high byte IS the rank
+    jb .held
+    cmp byte [si+CLS_OWN+1], MEM_PG_MAX
+    ja .held                    ; MEM_LVL_TOP: an ordinary kernel claim
+    add di, dx
+    inc cx
+    jmp short .next
+.held:
+    add ax, dx
+    inc bx
+.next:
+    add si, CLS_RECSZ
+    cmp si, tm_claims + CLAIM_SNAPSHOT_SIZE
+    jb .rec
+    mov dx, di
+    pop di
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_htype - the TYPE column: what KIND of claim is this?
+; in:  AX = CLS_OWN, BX = CLS_SEG, DI = dest
+; out: DI advanced by TMH_TYPEC
+; clobbers: nothing else (flags)
+;
+; An owner word the table does not know prints as ITSELF, in hex. A debug page
+; must not label an unknown tag as the nearest thing it recognises: a tag added
+; to the kernel and not mirrored into apps/os88api.inc shows up here as a bare
+; number, which is visible and true, where a wrong name would be neither.
+; -----------------------------------------------------------------------------
+tm_htype:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    cmp ah, MEM_PG_MIN
+    jae .kern
+    cmp ax, INST_MAX
+    jae .data                   ; a package's own segment: one of its claims
+    mov si, ax                  ; an instance slot: its region, or a built-in's
+    shl si, 1                   ; claim. SI, not DX: an 8086 indexes through
+    cmp word [tm_isz+si], 0     ; BX/BP/SI/DI only (SPEC.md 1)
+    je .data
+    cmp bx, [tm_ispt+si]        ; the region is the claim AT the region's base
+    jne .data
+    mov si, tm_s_tregn
+    jmp short .put
+.data:
+    mov si, tm_s_tdata
+    jmp short .put
+.kern:
+    mov dx, ax                  ; the raise-cache RANGE first: one per window
+    sub dx, MEM_P_WSAVE         ; slot (SPEC.md 11.96.3), so it is not in the
+    cmp dx, MEM_P_WSAVE_N       ; exact-match table below
+    jb .wsave
+    mov dx, ax                  ; ...and the FAT windows, one per VOLUME, which
+    sub dx, MEM_P_FATW          ; became a range when they became a cache
+    cmp dx, MEM_P_FATW_N        ; (SPEC.md 18.8.4)
+    jb .fatw
+    mov si, tm_ktab
+.scan:
+    mov dx, [si]
+    or dx, dx
+    jz .hex
+    cmp dx, ax
+    je .found
+    add si, 4
+    jmp short .scan
+.found:
+    mov si, [si+2]
+    jmp short .put
+.wsave:
+    mov si, tm_s_twsav
+    jmp short .put
+.fatw:
+    mov si, tm_s_tfatw
+    jmp short .put
+.hex:
+    call tm_put4x               ; AX is still the owner word
+    mov cx, TMH_TYPEC - 4
+.pad:
+    mov byte [di], ' '
+    inc di
+    loop .pad
+    jmp short .out
+.put:
+    mov cx, TMH_TYPEC
+    call tm_copyn
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_htier - the TIER column: what does LOSING this block cost? (SPEC.md 50.6.4)
+; in:  AX = CLS_OWN, DI = dest
+; out: DI advanced by TMH_TIERC
+; clobbers: nothing else (flags)
+;
+; The high byte alone answers it, which is the whole point of the encoding. A
+; dash covers both unpurgeable cases - MEM_LVL_TOP and every instance-owned
+; row - because neither can be taken and the reader does not need them
+; distinguished here.
+; -----------------------------------------------------------------------------
+tm_htier:
+    push ax
+    push bx
+    push cx
+    push si
+    mov si, tm_s_zno
+    cmp ah, MEM_PG_MIN
+    jb .put                     ; an instance's own: never a cache
+    cmp ah, MEM_PG_MAX
+    ja .put                     ; MEM_LVL_TOP: an ordinary kernel claim
+    mov bl, ah
+    sub bl, MEM_PG_MIN
+    xor bh, bh
+    shl bx, 1
+    mov si, [tm_ztab+bx]
+.put:
+    mov cx, TMH_TIERC
+    call tm_copyn
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_hhead - a group's heading row: the owner's name and what it holds
+; in:  SI = the name, AX = the group's KB
+; out: nothing (all registers preserved); [tm_mrow] advanced
+;
+; The pad is what puts the total in the SIZE column, on the same vertical rule
+; as every claim row under it - a heading is not a claim, so it fills neither
+; ADDR nor TIER.
+; -----------------------------------------------------------------------------
+tm_hhead:
+    push ax
+    push cx
+    push di
+    push si
+    call tm_mrow_nolast         ; ...never at the foot of a column, where the
+                                ; rows it heads are in the next one
+    call tm_mrow_open
+    call tm_copy7
+    mov cx, TMH_IND + TMH_TYPEC + 1 + 4 - 7
+.pad:
+    mov byte [di], ' '
+    inc di
+    loop .pad
+    call tm_kcol
+    call tm_mrow_close
+    pop si
+    pop di
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_hclaim - one claim row, indented under the owner that holds it
+; in:  SI = a claim record
+; out: nothing (all registers preserved); [tm_mrow] advanced
+; -----------------------------------------------------------------------------
+tm_hclaim:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    call tm_mrow_open           ; no legend square: the band a claim wears on
+    mov cx, TMH_IND             ; the memory view's map is THAT page's statement
+.ind:
+    mov byte [di], ' '
+    inc di
+    loop .ind
+    mov ax, [si+CLS_OWN]
+    mov bx, [si+CLS_SEG]
+    call tm_htype
+    mov byte [di], ' '          ; the separator, and it is NOT decoration: a
+    inc di                      ; type that uses all seven columns - DirRead,
+                                ; Clipbrd, CopyBuf, MenuSav, WinSave - runs
+                                ; straight into the segment without it, which
+                                ; is 'DirRead2000'. The memory list learned
+                                ; this the same way, with 'ARKANOI9E40'
+    mov ax, [si+CLS_SEG]
+    call tm_put4x
+    mov ax, [si+CLS_PARA]
+    call tm_hkb
+    call tm_kcol
+    mov byte [di], ' '
+    inc di
+    mov ax, [si+CLS_OWN]
+    call tm_htier
+    call tm_mrow_close
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_hgrp - one owner group: the heading, then every claim it holds
+; in:  BX = the group (tm_hmatch), SI = the owner's name
+; out: nothing (all registers preserved); [tm_mrow] advanced
+; -----------------------------------------------------------------------------
+tm_hgrp:
+    push ax
+    push cx
+    push si
+    call tm_hsum                ; AX = KB, and SI is still the name
+    call tm_hhead
+    mov si, tm_claims
+.rec:
+    call tm_hmatch
+    jc .next
+    call tm_hclaim
+.next:
+    add si, CLS_RECSZ
+    cmp si, tm_claims + CLAIM_SNAPSHOT_SIZE
+    jb .rec
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_rows_heap - the heap page's list (SPEC.md 28.4)
+;
+; System first - every kernel tag, purgeable or not - then one group per live
+; instance in slot order. An instance with no claims still gets its heading:
+; "this app holds nothing" is an answer, and leaving it out would read as the
+; app not running.
+;
+; in:  the claim snapshot and the instance snapshot
+; out: nothing
+; clobbers: nothing (flags only)
+; -----------------------------------------------------------------------------
+tm_rows_heap:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    call tm_hclamp              ; the scroll offset against what the LAST walk
+    mov ax, [tm_htop]           ; counted (SPEC.md 28.4.4), then spend it: a
+    mov [tm_hskip], ax          ; row above the view is composed and dropped
+    mov word [tm_mrow], 0       ; by tm_mrow_close, so this counts from the
+    mov word [tm_hpad], 0       ; first row that is actually on screen
+    mov bx, 0xFFFF
+    mov si, tm_s_sys
+    call tm_hgrp
+
+    xor bx, bx
+.inst:
+    cmp byte [tm_ist+bx], 0
+    je .next
+    mov si, bx                  ; its I_NAME snapshot, 16 bytes per slot
+    mov cl, 4
+    shl si, cl
+    add si, tm_inm
+    call tm_hgrp                ; BX survives: tm_hgrp banks AX/CX/SI only
+.next:
+    inc bx
+    cmp bx, INST_MAX
+    jb .inst
+
+    mov ax, [tm_htop]           ; how deep the TABLE is: the rows that were
+    sub ax, [tm_hskip]          ; drawn, plus the ones dropped above them -
+    add ax, [tm_mrow]           ; which is [tm_htop] less whatever the walk
+    sub ax, [tm_hpad]           ; was too short to spend...
+                                ;
+                                ; ...LESS THE ROWS tm_mrow_nolast SPENT, and
+                                ; that subtraction is the whole of SPEC.md
+                                ; 28.4.4's limit cycle. A pad row is a
+                                ; property of the LAYOUT and not of the table:
+                                ; WHICH heading lands on a column's foot
+                                ; depends on the scroll offset, so counting it
+                                ; made [tm_hrows] a function of [tm_htop].
+                                ; Measured on a two-column CGA: 21 rows at
+                                ; offset 0 and 22 at offset 4, so tm_hclamp
+                                ; allowed 5 from one position and 4 from the
+                                ; next and the view stuck one row short of its
+                                ; own end, for ever. One column never spends a
+                                ; pad row at all (tm_mrow_nolast does nothing
+                                ; in the LAST column), which is why no VGA or
+                                ; Hercules machine could show this
+    add ax, [tm_cols]           ; ...and the RANGE carries the worst case back,
+    dec ax                      ; one per column but the last, so the bottom of
+                                ; the table stays reachable when a pad row is
+                                ; eating a screen slot under it. Position-
+                                ; independent, which is the property that
+                                ; matters: a bound that moves with the view is
+                                ; a bound the view can never settle against
+    mov [tm_hrows], ax          ; The bar's `total`, and what tm_hclamp
+                                ; measures against next time
+    mov word [tm_hskip], 0      ; NOTHING below here skips: the blank loop
+                                ; runs in screen rows, and tm_mrow_close is
+                                ; the memory view's too
+.blank:                         ; blank whatever rows the list did not reach
+    cmp word [tm_mrow], TMH_ROWS
+    jae .done
+    mov ax, [tm_maxrow]
+    cmp word [tm_mrow], ax
+    jae .done
+    call tm_mrow_open
+    call tm_mrow_close
+    jmp .blank
+.done:
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_hclamp - hold [tm_htop] inside what there is to look at
+; in:  [tm_hrows] from the last walk, [tm_maxrow]
+; out: nothing (all registers preserved)
+;
+; Measured against the LAST walk's count and not this one's, because this
+; one has not happened yet - which means a list that SHRANK under a scrolled
+; view corrects itself on the next refresh rather than on the paint that
+; discovered it. That is one interval, twice a second; clamping after the walk
+; would need a second walk to act on it.
+;
+; [tm_maxrow] is the right `fit` for this page without qualification: it is
+; already tm_layout's sum of the heap page's own column 0 (tm_hcolrows) and
+; every later column, which is exactly the set of rows the frame shows.
+; -----------------------------------------------------------------------------
+tm_hclamp:
+    push ax
+    mov ax, [tm_hrows]
+    sub ax, [tm_maxrow]
+    jbe .top                    ; the whole table fits: there is nothing to
+    cmp [tm_htop], ax           ; scroll and the view is pinned at the top
+    jbe .out
+    mov [tm_htop], ax
+    jmp short .out
+.top:
+    mov word [tm_htop], 0
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_hsbset - fill the scroll bar's seven-word block (SPEC.md 13.10.2/28.4.4)
+; in:  [tm_cx]/[tm_cy]/[tm_ylim]/[tm_cols] (tm_view_begin), [tm_hrows]
+; out: nothing (all registers preserved)
+;
+; Called TWICE per paint and that is deliberate rather than wasteful: the
+; GEOMETRY has to be standing before the rows draw, because tm_rowr stops a
+; row's band where the bar begins; the COUNT is only known once the walk has
+; finished. Thirty instructions is cheaper than either a second place that
+; knows where the bar is or a flag saying which half to fill.
+;
+; The bar goes beside the LAST column, which is the one a row wrapping off the
+; bottom of column 0 arrives in - so it is at the end of the list in reading
+; order as well as on the glass.
+; -----------------------------------------------------------------------------
+tm_hsbset:
+    push ax
+    push dx
+    mov ax, [tm_cols]           ; x2 = the last column's own right edge...
+    dec ax
+    mov dx, TM_COLW
+    mul dx
+    add ax, [tm_cx]
+    add ax, TM_RW
+    mov [tm_hsb+4], ax
+    sub ax, TMH_SB_W - 1        ; ...and the bar is its rightmost TMH_SB_W
+    mov [tm_hsb], ax
+
+    mov ax, [tm_cy]             ; y1 = that column's FIRST ROW: column 0 sits
+    cmp word [tm_cols], 1       ; under two caption lines and a header, every
+    je .y1                      ; later one at the top of the content
+    add ax, TM_C2_ROW_Y
+    jmp short .y1set
+.y1:
+    add ax, TMH_ROW_Y
+.y1set:
+    mov [tm_hsb+2], ax
+    mov ax, [tm_ylim]           ; y2 = the bottom of the lowest row band the
+    add ax, 7                   ; frame holds, which is one pixel clear of the
+    mov [tm_hsb+6], ax          ; frame's own bottom border
+
+    mov ax, [tm_hrows]
+    mov [tm_hsb+8], ax          ; total
+    mov ax, [tm_maxrow]
+    mov [tm_hsb+10], ax         ; fit
+    mov ax, [tm_htop]
+    mov [tm_hsb+12], ax         ; pos
+    pop dx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_hbar - draw the scroll bar, if anything about it moved
+; in:  the block, after the walk that settled [tm_hrows]
+; out: nothing (all registers preserved)
+;
+; Keyed on the WHOLE block rather than on `pos` alone, so a window move or a
+; resize redraws the bar as readily as a claim does - the same reason every
+; other element in this window is keyed on the thing it is a function of. It
+; costs os88ui_sbar's sixteen drawing calls when it fires and nothing at all
+; on the twice-a-second refresh of a machine where no claim has moved, which
+; is the normal case.
+; -----------------------------------------------------------------------------
+tm_hbar:
+    push ax
+    push bx
+    push cx
+    push si
+    call tm_hsbset              ; ...again: the walk has settled the count,
+                                ; and tm_hclamp may have moved pos with it
+    mov si, tm_hsb
+    mov cx, 14
+    xor ax, ax
+    call tm_sumb
+    mov bx, tm_elck + 2*TMC_HSB
+    call tm_elchk
+    jc .out
+    mov bx, tm_hsb
+    call os88ui_sbar
+.out:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_cap_htot - 'HEAP nnnK    AVAIL nnnK' (SPEC.md 28.4)
+;
+; How big the heap is, against how much of it a claim can still get. The pad
+; inside tm_s_havl is what puts AVAIL on the same column as PURGE and FRAG
+; below (SPEC.md 28.4.2); this line spends 9 characters before it, so the
+; string carries 4.
+; in:  nothing
+; out: nothing (flags only)
+; -----------------------------------------------------------------------------
+tm_cap_htot:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov di, tm_str
+    mov si, tm_s_hheap
+    call tm_copy
+    mov ax, [tm_kb+SK_HEAP]     ; the heap, and what a claim can get out of
+    call tm_put3                ; it: HEAP - AVAIL is HELD, so the pair closes
+    mov byte [di], 'K'
+    inc di
+    mov si, tm_s_havl
+    call tm_copy
+    mov ax, [tm_avl]
+    call tm_put3
+    mov byte [di], 'K'
+    inc di
+    mov byte [di], 0
+
+    call tm_rowsum
+    mov bx, tm_elck + 2*TMC_HTOT
+    mov cx, TMH_TOT_Y
+    mov dx, TMH_TOT_Y + 7
+    call tm_elchk_y
+    jc .out
+
+    mov ax, TMH_TOT_Y              ; SPEC.md 28.5.1: placed, padded and drawn as
+    call tm_lrun                ; ONE opaque run - no fill, no blank interval
+    jnc .out
+    mov word [bx], 0            ; a clip edge crossed it: nothing was drawn, so
+                                ; the key just recorded would keep it stale
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_cap_hspl - 'HELD nnnK(nn) PURGE nnnK(nn)' (SPEC.md 28.4.1)
+;
+; What is claimed, and on what terms. One figure could not say it: HELD is
+; memory nothing can get back, PURGE is memory the next claim can have for the
+; price in the TIER column, and adding them produces a number that answers no
+; question anybody has.
+;
+; The record counts go through tm_put2 rather than tm_putn, so this is 27
+; characters at any count and PURGE cannot slide off AVAIL's and FRAG's column
+; when a claim is made or released (SPEC.md 28.4.2). It is the widest of the
+; three captions and has no slack at all - see the guard beside TMH_ROWS.
+; in:  nothing
+; out: nothing (flags only)
+; -----------------------------------------------------------------------------
+tm_cap_hspl:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    call tm_hsplit              ; AX/BX = held KB and records, DX/CX = the
+    push dx                     ; purgeable pair
+    push cx
+    push bx
+    mov di, tm_str
+    mov si, tm_s_hheld
+    call tm_copy
+    call tm_put3
+    mov byte [di], 'K'
+    inc di
+    mov byte [di], '('
+    inc di
+    pop ax                      ; held records
+    call tm_put2                ; two columns, so PURGE below cannot move
+    mov byte [di], ')'
+    inc di
+    mov si, tm_s_hpurg
+    call tm_copy
+    pop cx                      ; purgeable records, banked across the KB
+    pop ax                      ; purgeable KB
+    push cx
+    call tm_put3
+    mov byte [di], 'K'
+    inc di
+    mov byte [di], '('
+    inc di
+    pop ax
+    call tm_put2                ; ...and so the line is one fixed width
+    mov byte [di], ')'
+    inc di
+    mov byte [di], 0
+
+    call tm_rowsum
+    mov bx, tm_elck + 2*TMC_HSPL
+    mov cx, TMH_SPL_Y
+    mov dx, TMH_SPL_Y + 7
+    call tm_elchk_y
+    jc .out
+
+    mov ax, TMH_SPL_Y              ; SPEC.md 28.5.1: placed, padded and drawn as
+    call tm_lrun                ; ONE opaque run - no fill, no blank interval
+    jnc .out
+    mov word [bx], 0            ; a clip edge crossed it: nothing was drawn, so
+                                ; the key just recorded would keep it stale
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_cap_hfrg - 'MAX RUN nnnK  FRAG nnnK' (SPEC.md 28.4)
+;
+; The LARGEST single run against everything available outside it, from one
+; OSAPI_MEM_AVAIL. That pair IS the fragmentation reading, and it is the one
+; thing this page exists to put on screen: docs/FIELD-NOTES.md 2 is a refusal
+; where the total says there is room and the largest run does not, and nothing
+; in the OS showed both at once until here.
+;
+; tm_s_hfrag carries a leading space and two trailing ones: one to reach
+; column 13, where AVAIL and PURGE start, and one to make up FRAG's missing
+; fourth letter so the FIGURES line up too (SPEC.md 28.4.2).
+; in:  nothing
+; out: nothing (flags only)
+; -----------------------------------------------------------------------------
+tm_cap_hfrg:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov di, tm_str
+    mov si, tm_s_hmax
+    call tm_copy
+    mov ax, [tm_maxrun]
+    call tm_put3
+    mov byte [di], 'K'
+    inc di
+    mov si, tm_s_hfrag
+    call tm_copy
+    mov ax, [tm_avl]            ; everything available OUTSIDE the largest run,
+    sub ax, [tm_maxrun]         ; so MAX + FRAG = AVAIL exactly. The largest
+    jnc .frag                   ; run is a subset of the total by construction,
+    xor ax, ax                  ; so this cannot go negative - but a wrong 0
+.frag:                          ; beats a wrong 65,000 if it ever does
+    call tm_put3
+    mov byte [di], 'K'
+    inc di
+    mov byte [di], 0
+
+    call tm_rowsum
+    mov bx, tm_elck + 2*TMC_HFRG
+    mov cx, TMH_FRG_Y
+    mov dx, TMH_FRG_Y + 7
+    call tm_elchk_y
+    jc .out
+
+    mov ax, TMH_FRG_Y              ; SPEC.md 28.5.1: placed, padded and drawn as
+    call tm_lrun                ; ONE opaque run - no fill, no blank interval
+    jnc .out
+    mov word [bx], 0            ; a clip edge crossed it: nothing was drawn, so
+                                ; the key just recorded would keep it stale
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_upd_heap - the heap page's periodic redraw (gfx lock held): everything
+;               but the static column header
+; in:  nothing ([tm_win] set)
+; out: nothing
+; clobbers: nothing (flags only)
+; -----------------------------------------------------------------------------
+tm_upd_heap:
+    push ax
+    push bx
+    push dx
+
+    mov bx, [tm_win]
+    call tm_view_begin          ; [tm_cx]/[tm_cy]/[tm_rowx]/[tm_ylim]
+    call tm_hsnap               ; ...and one claim table for all four below
+    call tm_cap_htot
+    call tm_cap_hspl
+    call tm_cap_hfrg
+    call tm_hsbset              ; BEFORE the rows: a row's band stops where
+    call tm_rows_heap           ; the bar begins (tm_rowr)...
+    call tm_hbar                ; ...and the bar itself once the walk has said
+                                ; how deep the table is (SPEC.md 28.4.4)
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_draw_heap - the heap page's full redraw: the header plus everything
+;                tm_upd_heap redraws
+; in:  SI = window ptr (gfx lock held)
+; out: nothing
+; clobbers: nothing (flags only)
+; -----------------------------------------------------------------------------
+tm_draw_heap:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov bx, si
+    call tm_view_begin
+
+    TM_INK CBLACK               ; the column header, at the ROWS' text x and
+    mov cx, [tm_cx]             ; once per column, exactly as the memory view
+    mov bx, [tm_cols]           ; places its own (SPEC.md 28.1.1)
+    mov dx, [tm_cy]
+    add dx, TMH_HDR_Y
+.hdr:
+    push cx
+    push dx
+    add cx, TM_PEN              ; the ROWS' text x, which on this page is
+                                ; TM_PEN and not the memory list's TM_MPEN -
+                                ; the ten pixels that pen leaves for a legend
+                                ; square are the scroll bar's here (28.4.4)
+    mov si, tm_s_hhdr
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN         ; opaque (SPEC.md 28.5.2)
+    pop dx
+    pop cx
+    add cx, TM_COLW
+    mov dx, [tm_cy]
+    add dx, TM_C2_HDR_Y
+    dec bx
+    jnz .hdr
+
+    call tm_hsnap
+    call tm_cap_htot
+    call tm_cap_hspl
+    call tm_cap_hfrg
+    call tm_hsbset
+    call tm_rows_heap
+    call tm_hbar
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; -----------------------------------------------------------------------------
 ; tm_row_place - where on screen does list row AX go?
 ;
@@ -2261,16 +4431,29 @@ tm_row_place:
     push bx
     push cx
     push dx
+    push si
+
+    mov si, [tm_colrows]        ; column 0's depth, and the HEAP page has its
+    cmp byte [tm_view], 2       ; own: its list starts 30px higher (no map, no
+    jne .depth                  ; bar), so the column takes more rows before it
+    mov si, [tm_hcolrows]       ; has to wrap. Sharing this one wrapped early
+.depth:                         ; and left a map's height of white at the foot
 
     push ax                     ; the index again, for the tm_maxrow test
     mov cx, [tm_cx]
-    cmp ax, [tm_colrows]
+    cmp ax, si
     jb .place                   ; inside column 0: BX and CX already stand
 
-    sub ax, [tm_colrows]        ; ...otherwise which LATER column, and how far
+    sub ax, si                  ; ...otherwise which LATER column, and how far
     xor dx, dx                  ; down it
     div word [tm_col2rows]
     inc ax                      ; 0 was column 1
+    cmp ax, [tm_cols]           ; ...which has to EXIST: [tm_maxrow] is ONE
+    jb .col                     ; bound over three pages whose column 0 are not
+    pop cx                      ; the same depth (SPEC.md 28.4), so it can name
+    jmp short .nofit            ; an index this page has no column for - and the
+.col:                           ; row then went a TM_COLW past the frame's right
+                                ; edge, onto the desktop, which nothing clips
     push dx                     ; DX is the row within the column and `mul`
     mov bx, ax                  ; writes it - it does not survive this
     mov ax, TM_COLW
@@ -2297,6 +4480,7 @@ tm_row_place:
 .nofit:                         ; of the list would be lettered over the dock
     stc                         ; strip once a second
 .out:
+    pop si
     pop dx
     pop cx
     pop bx
@@ -2313,7 +4497,13 @@ tm_mrow_open:
     push ax
     push bx
     mov ax, [tm_mrow]
-    mov bx, TMM_ROW_Y
+    mov bx, TMM_ROW_Y           ; ...or the heap page's own first row, which is
+    sub bx, [tm_xoff]           ; 30px higher: what the memory view has above
+    cmp byte [tm_view], 2       ; its list is a MAP and a BAR, and this page
+    jne .y                      ; has two caption lines. Shared, the list sat a
+    mov bx, TMH_ROW_Y           ; map's height below its own header.
+.y:                             ; The heap page has no bar to lose, so
+                                ; [tm_xoff] is the memory view's alone
     call tm_row_place
     mov byte [tm_mfit], 1
     jnc .fits
@@ -2339,13 +4529,25 @@ tm_mrow_close:
     push dx
     push si
     push di
-    mov bx, [tm_mrow]
-    shl bx, 1
+    cmp word [tm_hskip], 0      ; ABOVE the top of the view (SPEC.md 28.4.4):
+    je .live                    ; composed, not drawn, and - the whole point -
+    dec word [tm_hskip]         ; NOT counted, so every [tm_mrow] below the
+    jmp short .gone             ; offset is a SCREEN row rather than a table
+.live:                          ; one. tm_rowck is indexed by where a row is
+                                ; DRAWN, so a scroll reuses the cache instead
+                                ; of invalidating it; subtracting the offset
+                                ; down in tm_row_place would have left every
+                                ; check word describing pixels that had moved
     cmp byte [tm_mfit], 0       ; off the bottom: nothing was drawn, and
     je .forget                  ; forget what used to be here so it comes
     mov byte [di], 0            ; back if the window ever grows
     mov ax, [tm_rowx]           ; this list letters from tm_rowx+TM_MPEN,
     add ax, TM_MPEN             ; leaving the band's first pixels for the square
+    cmp byte [tm_view], 2       ; ...except on the heap page, which draws no
+    jne .pen                    ; square (tm_hclaim) and wants those pixels
+    mov ax, [tm_rowx]           ; at the other end, for its scroll bar
+    add ax, TM_PEN
+.pen:
     mov [tm_penx], ax
     mov bx, [tm_mrow]
     call tm_row_draw            ; chunked: only what changed, and only what
@@ -2356,11 +4558,93 @@ tm_mrow_close:
     call tm_sq_pat
     jmp short .out
 .forget:
-    mov word [tm_rowck+bx], 0
+    ; A ROW is TM_NCHUNK check words, at row*TM_NCHUNK - which is where
+    ; tm_row_draw puts them, and the only place that indexes this array.
+    ; This zeroed ONE word at row*2, so it invalidated nothing it meant to
+    ; and instead cleared a word belonging to an EARLIER row: row n reached
+    ; chunk (2n mod TM_NCHUNK) of row (2n div TM_NCHUNK). Harmless-looking
+    ; while the lists were shorter than the window and .forget almost never
+    ; ran; on the heap page (SPEC.md 28.4) most rows are off the bottom on a
+    ; small screen, so every refresh was spuriously dirtying a visible row's
+    ; chunk - a redraw twice a second, for ever, of text that had not moved.
+    mov ax, [tm_mrow]
+    mov cl, TM_NCHUNK
+    mul cl                      ; AX = row * TM_NCHUNK (both are small)
+    shl ax, 1
+    add ax, tm_rowck
+    mov bx, ax
+    mov cx, TM_NCHUNK
+    call tm_ckz
 .out:
     inc word [tm_mrow]
+.gone:                          ; ...a skipped row advances nothing at all
     pop di
     pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_mrow_nolast - keep a HEADING off the foot of a column
+;
+; The list is column-major (tm_row_place), so a heading landing on a column's
+; last row is separated from every row it heads: on CGA the heap page put
+; 'APPS' at the foot of column 0 and its one claim at the top of column 1. A
+; heading is a label for what follows it and says nothing on its own, so it
+; gives up that row and starts the next column instead.
+;
+; WHICH heading this catches is not fixed - it is whichever one the claim
+; count happens to push there, and one claim fewer makes it a different one.
+;
+; It costs at most ONE row per column however many headings there are, because
+; only one row index per column is that column's last and the list passes it
+; once. TMH_ROWS carries that one.
+;
+; Does nothing in the LAST column, where there is nowhere to push to and the
+; foot of the column is simply the end of the list - a heading pushed there
+; would be lost rather than moved.
+;
+; in:       [tm_mrow]
+; out:      [tm_mrow] advanced over a blank row if it was about to be the last
+; clobbers: nothing (flags)
+; -----------------------------------------------------------------------------
+tm_mrow_nolast:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [tm_mrow]
+    mov bx, [tm_colrows]        ; ...the depth of the column this row is in
+    cmp byte [tm_view], 2
+    jne .d0
+    mov bx, [tm_hcolrows]
+.d0:
+    xor cx, cx                  ; CX = which column
+    cmp ax, bx
+    jb .have                    ; column 0, and BX is already its depth
+    sub ax, bx
+    mov bx, [tm_col2rows]       ; every later column is top-anchored and so
+    xor dx, dx                  ; deeper - never 0, by tm_init
+    div bx
+    inc ax
+    mov cx, ax                  ; 1 + how many later columns in
+    mov ax, dx                  ; ...and the row within this one
+.have:
+    inc cx                      ; is there a column AFTER this one to push to?
+    cmp cx, [tm_cols]
+    jae .out                    ; no - see the header
+    inc ax
+    cmp ax, bx
+    jne .out                    ; not this column's last row: nothing to do
+    cmp word [tm_hskip], 0      ; ...and a row spent while the walk is still
+    jne .spend                  ; SKIPPING is not on the screen at all, so it
+    inc word [tm_hpad]          ; is not one of the layout's either
+.spend:
+    call tm_mrow_open           ; spend it on a blank row, and DRAW it, so
+    call tm_mrow_close          ; whatever used to be here is erased
+.out:
     pop dx
     pop cx
     pop bx
@@ -2374,23 +4658,80 @@ tm_mrow_close:
 ; Both views' row loops erase before they letter, and only once they know the
 ; row changed, so the rect lives in one place rather than in each of them.
 ; -----------------------------------------------------------------------------
-; tm_lfill is the same band named by a CONTENT-RELATIVE y, which is how the
-; caption lines above the list ask for it. They are chrome and live in column 0
-; whatever the list is doing, so this says so rather than relying on being
-; called before the row loop has moved [tm_rowx] - every row draw sets it back
-; through tm_row_place, so putting it back here costs nothing.
-tm_lfill:
+; It had a twin, tm_lfill, which named the same band by a CONTENT-RELATIVE y
+; for the caption lines above the list. Every caption is a tm_lrun now - the
+; padding IS the erase (SPEC.md 27.2), because a caption band is exactly a
+; glyph tall - so nothing erases a caption any more and the twin is gone.
+
+; -----------------------------------------------------------------------------
+; tm_lrun - a caption line, placed and drawn as ONE OPAQUE RUN (SPEC.md 28.5.1)
+;
+; in:  AX = the line's content-relative y; tm_str composed and NUL-terminated
+; out: CF = 0 it was drawn, CF = 1 the clip region refused it and NOTHING was
+;      drawn - the caller must then clear its check word, or the line stays
+;      stale behind whatever uncovers it
+; clobbers: nothing else (flags)
+;
+; This replaces tm_lfill + a font_str at four call sites. The pair wrote every
+; pixel of the band twice - white, then the glyphs over it - and left it BLANK
+; in between, which on a 4.77MHz machine is visible (SPEC.md 6.6). Padding
+; tm_str to the band's full width instead makes the run its own erase (27.2),
+; so there is no fill and no blank interval.
+;
+; THE GEOMETRY HAS TO LINE UP EXACTLY and it is asserted rather than trusted:
+; the band runs from the pen to TM_RW inclusive, and TM_LCELLS cells of 8px
+; must cover precisely that. The two pixels tm_rowfill used to whiten to the
+; LEFT of the pen are not covered and do not need to be - nothing ever writes
+; there, so what is on them is the page's own white.
+tm_lrun:
     push ax
-    mov ax, [tm_cx]
-    mov [tm_rowx], ax
-    pop ax
-    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov cx, [tm_cx]
+    mov [tm_rowx], cx
     add ax, [tm_cy]
     mov [tm_rowy], ax
-    call tm_rowok               ; a caption erases a band and then letters it,
-    jc .out                     ; so BOTH halves answer to one test and the
-    call tm_rowfill             ; caller skips its font_str on CF=1 (SPEC.md
-.out:                           ; 11.3's granularity rule)
+    call tm_rowok
+    jc .out
+
+    mov di, tm_str              ; pad to the band's width, in place
+    xor cx, cx
+.len:
+    cmp byte [di], 0
+    je .lend
+    inc di
+    inc cx
+    cmp cx, TM_LCELLS
+    jb .len
+.lend:
+    mov ax, TM_LCELLS
+    sub ax, cx                  ; ...however many spaces that takes
+    jbe .term                   ; already the full width, or over it
+    mov cx, ax
+    mov al, ' '
+.sp:
+    mov [di], al
+    inc di
+    loop .sp
+.term:
+    mov byte [di], 0
+
+    mov cx, [tm_cx]
+    add cx, TM_PEN
+    mov dx, [tm_rowy]
+    mov si, tm_str
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the pane's own ground
+    call OSAPI_FONT_RUN
+    clc                         ; ...and CF = 0 says so. The pops below write
+.out:                           ; no flags, so tm_rowok's CF survives them
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -2469,7 +4810,10 @@ tm_row_draw:
     call tm_chunksum            ; AX = their hash (DI preserved)
     mov bx, [tm_ckb]
     call tm_elchk               ; changed? (BX = this chunk's check word)
-    jc .next                    ; no - its pixels are already right
+    jnc .draw
+    call tm_dmg_hit             ; no - so its pixels are right UNLESS this
+    jc .next                    ; paint's damage took them (SPEC.md 28.10.2)
+.draw:
     call tm_row_lead            ; the FIRST chunk owns the band's LEAD-IN too
     jc .rect                    ; - and erasing it counts as a draw, because
     pop si                      ; the legend square lives in it and the caller
@@ -2487,8 +4831,7 @@ tm_row_draw:
     inc ax                      ; right edge instead, so the tail past the
     cmp ax, TM_NCHUNK           ; text - which no chunk covers, the pen being
     jb .x2ok                    ; inset from the band - is scrubbed by
-    mov cx, [tm_rowx]           ; something
-    add cx, TM_RW
+    call tm_rowr                ; something
 .x2ok:
     pop ax
     mov dx, [tm_rowy]
@@ -2530,8 +4873,7 @@ tm_row_draw:
     push dx
     mov ax, [tm_penx]
     add ax, TM_NCHUNK * TM_CW
-    mov cx, [tm_rowx]
-    add cx, TM_RW
+    call tm_rowr
     mov bx, [tm_rowy]           ; y1/y2 FROM THE ROW, not from whatever the
     mov dx, bx                  ; run above left behind - terminating the
     add dx, 7                   ; chunk needed a register and BX was it
@@ -2576,6 +4918,35 @@ tm_row_draw:
     ret
 .drew:
     clc
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_rowr - CX = the right edge of the band the row being drawn may use
+; in:  [tm_rowx], and [tm_hsb] filled by the paint that is running
+; out: CX = the edge; every other register preserved (flags)
+;
+; TM_RW everywhere, less the scroll bar on the heap page (SPEC.md 28.4.4).
+; BOTH of tm_row_draw's users are the scrub past the text - the last chunk's
+; clip rect and the fill under it - so without this the twice-a-second refresh
+; would white the bar out from under itself, one row at a time, for ever.
+;
+; It asks whether the BAND would reach the bar rather than which column this
+; row is in, which is the same question with no second opinion about the
+; layout in it: on a two-column screen the bar is beside column 1 and column 0
+; keeps its whole band, and neither this nor tm_hsbset has to say so twice.
+; That does mean tm_hsbset has to run BEFORE the rows, which is why both paint
+; bodies call it there and tm_hbar calls it again for the count.
+; -----------------------------------------------------------------------------
+tm_rowr:
+    mov cx, [tm_rowx]
+    add cx, TM_RW
+    cmp byte [tm_view], 2
+    jne .out
+    cmp cx, [tm_hsb]            ; the bar's x1: does this band reach it?
+    jb .out
+    mov cx, [tm_hsb]
+    dec cx
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2774,6 +5145,37 @@ tm_sumb:
     mov ax, bx
     pop cx
     pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_qpeek - tm_elchk's answer WITHOUT recording it
+; in:  AX = key, BX = a TMC_* check word's address
+; out: CF = 1 unchanged, CF = 0 changed; the stored key is NOT touched
+; clobbers: nothing else
+;
+; SPEC.md 28.11. tm_elchk records what it was asked about, which is right for
+; a draw - it has just put those pixels on the glass. tm_quiet is not a draw:
+; it is the question "is a paint owed at all", asked with no lock held and
+; answered on intervals where the paint may then be REFUSED (the window is
+; wholly covered and OSAPI_WM_CLIP_SET says so). Recording there spends the
+; change on an interval that drew nothing, and the page sits stale until
+; something else moves - 28.6.1 names that hazard and works around it by
+; ordering the two calls; this removes it.
+;
+; It is the precondition for 28.11's repair: a debt that is consumed while
+; covered cannot be replayed when the window comes back.
+; -----------------------------------------------------------------------------
+tm_qpeek:
+    or ax, ax                   ; the never-zero rule is tm_elchk's and applies
+    jnz .cmp                    ; here for the same reason: 0 is what
+    inc ax                      ; tm_rowck_clear writes
+.cmp:
+    cmp ax, [bx]
+    je .same
+    clc
+    ret
+.same:
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3113,38 +5515,33 @@ tm_txt_ram_y:
     je .built
     mov si, tm_s_heap           ; ...whose two leading spaces are where the
     call tm_copy                ; claim swatch goes
-    mov ax, [tm_kb+SK_CLAIM]    ; AX = claimed KB, BX = heap size KB
-    mov bx, [tm_kb+SK_HEAP]
-    call tm_kpair
+    mov ax, [tm_kb+SK_CLAIM]    ; the claimed half EXCLUDES the purgeables,
+    mov bx, [tm_kb+SK_HEAP]     ; because no row below shows one (28.4.1) -
+    call tm_kpair               ; and it is SK_CLAIM that does the excluding
+                                ; now, so the two pairs on this one line
+                                ; cannot disagree about what claimed MEANS:
+                                ; RAM's used half is SK_KERN + this word
 .built:
     call tm_rowsum              ; unchanged since the last refresh? then the
     mov bx, tm_elck + 2*TMC_LINE            ; pixels on screen are already right
-    call tm_elchk
+    mov cx, [tm_liny]           ; ...and neither view puts this line at the
+    mov dx, cx                  ; same y, so the band comes off the variable
+    add dx, 7                   ; the draw below reads (SPEC.md 28.10.2)
+    call tm_elchk_y
     jc .out
 
-    mov ax, [tm_liny]
-    call tm_lfill               ; only NOW is the line worth erasing
+    mov ax, [tm_liny]           ; SPEC.md 28.5.1: placed, padded and drawn as
+    call tm_lrun                ; ONE opaque run - no fill, no blank interval
     jnc .draw                   ; ...unless a clip edge crosses it, in which
     mov word [bx], 0            ; case nothing was drawn and the key tm_elchk
     jmp short .out              ; just recorded is a lie that would keep this
 .draw:                          ; line stale until its content moved again
-    TM_INK CBLACK
-    mov cx, [tm_cx]
-    add cx, 6
-    mov dx, [tm_cy]
-    add dx, [tm_liny]
-    mov si, tm_str
-    call OSAPI_FONT_STR
-
     cmp byte [tm_view], 0
     je .out
-    mov ax, [tm_cy]             ; ...and the claim legend square, last, over
-    add ax, [tm_liny]           ; the gap the string just lettered white
-    mov [tm_rowy], ax
-    mov word [tm_sqox], TMM_HSQ_X
-    mov si, tm_pat_clm
-    call tm_sq_pat
-.out:
+    mov word [tm_sqox], TMM_HSQ_X   ; ...and the claim legend square, last, over
+    mov si, tm_pat_clm              ; the gap the run just lettered white.
+    call tm_sq_pat                  ; [tm_rowx]/[tm_rowy] are tm_lrun's - it
+.out:                               ; places the band before it draws it
     pop di
     pop si
     pop dx
@@ -3168,7 +5565,9 @@ tm_bar:
 
     mov ax, [tm_barw]           ; the bar IS its width: same width, same two
     mov bx, tm_elck + 2*TMC_BAR             ; rectangles, same pixels
-    call tm_elchk
+    mov cx, TM_BAR_Y1
+    mov dx, TM_BAR_Y2
+    call tm_elchk_y
     jc .done
 
     mov si, [tm_barw]
@@ -3218,12 +5617,21 @@ tm_bar:
 ; rectangles and the refresh draws nothing at all - which on a desktop that
 ; is merely sitting there is every refresh, twice a second, forever.
 ;
-; On tier 0 the width is 0 and the bar stands empty beside the 'XMS 0/ 0K'
-; figures. That is deliberate - an absent bar would read as a missing feature
-; rather than an empty pool - and it is the reason the FRAME is drawn by
-; tm_draw_mem and not here, exactly as the perf view draws the RAM bar's. A
-; zero width matches the cleared check word, so this body skips on the very
-; first paint, and a frame drawn inside the gate would never appear at all.
+; ON A MACHINE WITH NO STORE THERE IS NO BAR AT ALL, and that REVERSES what
+; this comment used to say. The old reasoning was that "an absent bar would
+; read as a missing feature rather than an empty pool", so tier 0 got an empty
+; rectangle beside 'XMS 0/ 0K'. Looked at on the target machine that is the
+; wrong way round: it is twenty-two pixels of window devoted to saying that a
+; thing which cannot exist here does not exist, and an empty frame reads as a
+; reading of zero rather than as an absence. The pool's SIZE - not its free
+; figure - decides, once, in tm_init, and everything below rises to fill the
+; space (TMM_XSHIFT). SPEC.md 31.10.1 is the precedent: a Display page with one
+; adapter on it is not drawn either.
+;
+; The FRAME is still drawn by tm_draw_mem and not here, exactly as the perf
+; view draws the RAM bar's: a zero width matches the cleared check word, so
+; this body skips on the very first paint, and a frame drawn inside the gate
+; would never appear at all. tm_draw_mem carries the same [tm_xoff] test.
 ; -----------------------------------------------------------------------------
 tm_xbar:
     push ax
@@ -3232,9 +5640,15 @@ tm_xbar:
     push dx
     push si
 
+    cmp word [tm_xoff], 0       ; no store: no bar, and the rows are DOWN there
+    jne .done                   ; now - ungated this would paint the interior
+                                ; across the process list
+
     mov ax, [tm_xbarw]
     mov bx, tm_elck + 2*TMC_XBAR
-    call tm_elchk
+    mov cx, TMM_XB_Y1
+    mov dx, TMM_XB_Y2
+    call tm_elchk_y
     jc .done
 
     mov si, [tm_xbarw]
@@ -3387,7 +5801,7 @@ tm_rows:
                                 ; - the same term the RAM line above uses, so
                                 ; the rows still sum to the bar
     add ax, [tm_kb+SK_KCLAIM]   ; + the kernel's OWN heap claims (SPEC.md
-                                ; 42.2): the save-under and the back buffer.
+                                ; 42.2): the save-under and the clipboard.
                                 ; A package's claim belongs to its own row.
     call tm_memcol_kb
     jmp .draw
@@ -3558,7 +5972,7 @@ tm_memcol:
 
 ; -----------------------------------------------------------------------------
 ; tm_memcol_kb - tm_memcol's tail for a caller that already has KB in AX
-;                (nonzero) - the System row adds the 150K back buffer,
+;                (nonzero) - the System row adds the kernel's own claims,
 ;                which cannot be expressed as a 16-bit byte count
 ; in:  AX = KB (> 0), DI = dest
 ; out: DI advanced by 4
@@ -3811,6 +6225,28 @@ tm_put3:
     pop ax
     ret
 
+; --- the shared scroll bar (SPEC.md 13.10) -----------------------------------
+; AT THE END OF THE CODE, just before OS88_BSS, because the header and the
+; icon block are at fixed offsets in the image (SPEC.md 20.2) and code emitted
+; between them fails the icon macro's own offset assertion.
+;
+; BARONLY (SPEC.md 13.10.6.5): this window draws no standard button - its one
+; click target is the content itself (tm_click) - so it pays for the bar and
+; not for os88ui_btn, os88ui_glyph and four 12x12 bitmaps beside it.
+;
+; NO SBDRAG, and that is a refusal rather than an omission (PERFORMANCE.md
+; rule 6). A scroll here is a LIST REPAINT: rows move between screen slots and,
+; on a two-column layout, between COLUMNS, so there is no rectangle for
+; OSAPI_GFX_SCROLL to blit and Note Pad's answer (SPEC.md 27.7.2) does not
+; transfer. At SPEC.md 28.2's granularity that is ~20 rows of changed text,
+; ~450 ms on the target machine - which is about what a page switch already
+; costs and is fine for a deliberate click, and is unusable at one per pixel
+; of thumb travel. The travel is two page-downs in any case: 47 rows, 22 of
+; them on screen.
+%define OS88UI_BARONLY
+%define OS88UI_SCROLL
+%include "os88ui.inc"
+
     OS88_BSS TM_BSS_TOTAL
     OS88_IMAGE_END
 
@@ -3820,102 +6256,120 @@ tm_put3:
 ; cleared by hand at every kinit, because .bss survives between instances of a
 ; kind; a package gets a fresh image and a zeroed bss per launch instead.
 
-tm_win      equ os88_image_end + 0     ; word: our window ptr
+tm_win      equ os88_image_end     ; word: our window ptr
 
 ; --- what the API cells fill (SPEC.md 20.9) ----------------------------------
 ; Three buffers this module owns and the kernel writes through ES:DI.
 ; tm_snapshot is unpacked into the per-slot arrays below the moment it lands (see
 ; tm_sample); tm_claims and tm_kb are read where they sit.
-tm_snapshot     equ os88_image_end + 2     ; osapi_sys_snapshot: scheduler + instance table
-tm_claims   equ os88_image_end + 428   ; osapi_claim_snapshot: the claim map
-tm_kb       equ os88_image_end + 620   ; osapi_sys_kb: the kernel's footprint and the
+tm_snapshot equ tm_win + 2     ; osapi_sys_snapshot: scheduler + instance table
+tm_claims   equ tm_snapshot + SYS_SNAPSHOT_SIZE   ; osapi_claim_snapshot: the claim map
+tm_kb       equ tm_claims + CLAIM_SNAPSHOT_SIZE   ; osapi_sys_kb: the kernel's footprint and the
                                 ; heap's totals, refreshed by tm_view_begin
                                 ; and by every sample
 
-tm_hist     equ os88_image_end + 642   ; history ring: column heights 0..40
+tm_hist     equ tm_kb + SYSKB_SIZE   ; history ring: column heights 0..40,
+                                ; TM_GW of them - the hand-chained map gave it
+                                ; NINE MORE than the ring can ever use, which
+                                ; is the sort of thing a literal hides and a
+                                ; derivation cannot
 
-; The three buffer slices above are hand-chained literals; these pin them to
-; the SDK's derived sizes, so a kernel table growing (MAX_TASKS, INST_MAX,
-; MEM_MAX, a record gaining a field) fails THIS assembly instead of letting
-; osapi_sys_snapshot write through tm_claims/tm_kb/tm_hist with no diagnostic.
-%if (tm_claims - tm_snapshot) != SYS_SNAPSHOT_SIZE
-  %error "tm_snapshot's slice != SYS_SNAPSHOT_SIZE - re-derive the bss map below"
-%endif
-%if (tm_kb - tm_claims) != CLAIM_SNAPSHOT_SIZE
-  %error "tm_claims' slice != CLAIM_SNAPSHOT_SIZE - re-derive the bss map below"
-%endif
-%if (tm_hist - tm_kb) != SYSKB_SIZE
-  %error "tm_kb's slice != SYSKB_SIZE - re-derive the bss map below"
-%endif
-tm_pos      equ os88_image_end + 867   ; sweep index = next column to write
-tm_lastcol  equ os88_image_end + 869   ; column written by the latest sample
-tm_cnt      equ os88_image_end + 871   ; interval spin count, dword
-tm_cmax     equ os88_image_end + 875   ; calibration max, current epoch, dword
-tm_pmax     equ os88_image_end + 879   ; calibration max, previous epoch, dword
-tm_epc      equ os88_image_end + 883   ; samples into the current epoch
-tm_t0       equ os88_image_end + 884   ; interval start tick
-tm_load     equ os88_image_end + 886   ; latest load, 0..100
-tm_told     equ os88_image_end + 888   ; previous sch_cycles snapshot
-tm_tnew     equ os88_image_end + 936   ; current snapshot
-tm_tdif     equ os88_image_end + 984   ; per-task interval cycles
-tm_state    equ os88_image_end + 1032  ; T_STATE snapshot
-tm_pstate   equ os88_image_end + 1044  ; previous sample's T_STATE (appeared rule)
-tm_self     equ os88_image_end + 1056  ; our own slot ([sch_cur] at snapshot)
-tm_iold     equ os88_image_end + 1057  ; previous I_CYC snapshot
-tm_inew     equ os88_image_end + 1105  ; current snapshot
-tm_idif     equ os88_image_end + 1153  ; per-instance interval callback cycles
-tm_ist      equ os88_image_end + 1201  ; I_STATE snapshot
-tm_pist     equ os88_image_end + 1213  ; previous sample's I_STATE (appeared rule)
-tm_itsk     equ os88_image_end + 1225  ; I_TASK snapshot (owning task or 0xFF)
-tm_isz      equ os88_image_end + 1237  ; I_SIZE snapshot, bytes
-tm_ispt     equ os88_image_end + 1261  ; I_SPTR snapshot (memory view, SPEC.md 28)
-tm_iknd     equ os88_image_end + 1285  ; I_KIND snapshot: the Builtins/Packages split
+; **EVERY OFFSET BELOW IS DERIVED, and that is the whole of what makes
+; MAX_TASKS a constant and a rebuild.** It was a chain of hand-written
+; literals - `tm_claims equ os88_image_end + 428` - so a kernel table changing
+; size renumbered sixty-odd of them by hand, and two fields at the end are
+; still sitting out of subject order because inserting one mid-block was too
+; expensive to contemplate. Dropping MAX_TASKS from 12 to 10 shrank
+; SYS_SNAPSHOT_SIZE by ten bytes and the `%error` guards that used to stand
+; here fired, correctly, on every one below it.
+;
+; Each field now names the one before it plus that one's SIZE, and every size
+; that depends on a kernel table says so - MAX_TASKS, INST_MAX, MEM_MAX,
+; TM_ROWS, TM_NCK. Change the constant, rebuild, done. The guards are gone
+; because there is nothing left for them to catch: the thing they checked is
+; now the way the offsets are computed.
+;
+; Proven equal to the literals it replaced: with the one deliberate difference
+; below held back, the assembled package was byte-for-byte the old one.
+tm_pos      equ tm_hist + TM_GW   ; sweep index = next column to write
+tm_lastcol  equ tm_pos + 2   ; column written by the latest sample
+tm_idlec    equ tm_lastcol + 2   ; the interval's IDLE cycles, dword: the load
+                                 ; meter's numerator (SPEC.md 28.7), normalised
+                                 ; alongside tm_total so the ratio is one scale
+tm_idle     equ tm_idlec + 4  ; the idle task's slot, 0xFF = none answered
+tm_load     equ tm_idle + 1   ; latest load, 0..100
+tm_told     equ tm_load + 2   ; previous sch_cycles snapshot
+tm_tnew     equ tm_told + MAX_TASKS * 4   ; current snapshot
+tm_tdif     equ tm_tnew + MAX_TASKS * 4   ; per-task interval cycles
+tm_state    equ tm_tdif + MAX_TASKS * 4  ; T_STATE snapshot
+tm_pstate   equ tm_state + MAX_TASKS  ; previous sample's T_STATE (appeared rule)
+tm_self     equ tm_pstate + MAX_TASKS  ; our own slot ([sch_cur] at snapshot)
+tm_iold     equ tm_self + 1  ; previous I_CYC snapshot
+tm_inew     equ tm_iold + INST_MAX * 4  ; current snapshot
+tm_idif     equ tm_inew + INST_MAX * 4  ; per-instance interval callback cycles
+tm_ist      equ tm_idif + INST_MAX * 4  ; I_STATE snapshot
+tm_pist     equ tm_ist + INST_MAX  ; previous sample's I_STATE (appeared rule)
+tm_itsk     equ tm_pist + INST_MAX  ; I_TASK snapshot (owning task or 0xFF)
+tm_isz      equ tm_itsk + INST_MAX  ; I_SIZE snapshot, bytes
+tm_ispt     equ tm_isz + INST_MAX * 2  ; I_SPTR snapshot (memory view, SPEC.md 28)
+tm_iknd     equ tm_ispt + INST_MAX * 2  ; I_KIND snapshot: the Builtins/Packages split
                                 ; (SPEC.md 28) needs bit 7, and the CLAIM
                                 ; column needs to know which owner word an
                                 ; instance's claims carry (SPEC.md 50.2)
-tm_ikb      equ os88_image_end + 1297  ; ...and the KB it holds off the heap, which
+tm_ikb      equ tm_iknd + INST_MAX  ; ...and the KB it holds off the heap, which
                                 ; the kernel derives from that same rule
-tm_coop     equ os88_image_end + 1321  ; the scheduler mode at the last sample
-tm_mrow     equ os88_image_end + 1322  ; the memory view's row cursor
-tm_mfit     equ os88_image_end + 1324  ; ...and whether the row it names is on screen
-tm_sqox     equ os88_image_end + 1325  ; ...and where its legend square starts
-tm_sqp      equ os88_image_end + 1327  ; ...and its texture, or 0 for no square. A
+%if tm_ikb + INST_MAX * 2 - tm_ist != TM_IHASH
+  %error "taskmgr: the instance block tm_quiet hashes is no longer contiguous"
+%endif
+tm_coop     equ tm_ikb + INST_MAX * 2  ; the scheduler mode at the last sample
+tm_mrow     equ tm_coop + 1  ; the memory view's row cursor
+tm_mfit     equ tm_mrow + 2  ; ...and whether the row it names is on screen
+tm_sqox     equ tm_mfit + 1  ; ...and where its legend square starts
+tm_sqp      equ tm_sqox + 2  ; ...and its texture, or 0 for no square. A
                                 ; REQUEST, not a draw: tm_mrow_close erases
                                 ; the band before it letters it, so a square
                                 ; drawn while the row was being composed
                                 ; would be erased again
-tm_elck     equ os88_image_end + 1329  ; the last drawn state of the non-row
+tm_elck     equ tm_sqp + 2  ; the last drawn state of the non-row
                                 ; elements, one word each (TMC_*)
-tm_rowx     equ os88_image_end + 1341  ; the left edge of the row being drawn: tm_cx
+tm_qkey     equ tm_elck + TMC_N * 2  ; tm_quiet's key, held until a paint
+                                ; actually happens (SPEC.md 28.6.1): the
+                                ; question is asked with no lock and the paint
+                                ; can still be REFUSED under it, so the answer
+                                ; is recorded by whoever draws and not by
+                                ; whoever asks
+tm_rowx     equ tm_qkey + 2  ; the left edge of the row being drawn: tm_cx
                                 ; for column 0, one TM_COLW on for column 1
-tm_xbarw    equ os88_image_end + 1343  ; the XMS bar's black run, px (TMC_XBAR)
-tm_penx     equ os88_image_end + 1345  ; where the row's text starts: the process
+tm_xbarw    equ tm_rowx + 2  ; the XMS bar's black run, px (TMC_XBAR)
+tm_penx     equ tm_xbarw + 2  ; where the row's text starts: the process
                                 ; list letters from tm_rowx+6 and the memory
                                 ; list from tm_rowx+16, and tm_row_draw has to
                                 ; be told which - drawing a process row at the
                                 ; memory list's pen puts it 10px right of the
                                 ; text it is replacing
-tm_ci       equ os88_image_end + 1347  ; tm_row_draw's chunk index (BP is the task's
+tm_ci       equ tm_penx + 2  ; tm_row_draw's chunk index (BP is the task's
                                 ; instance record and cannot be borrowed)
-tm_ckb      equ os88_image_end + 1349  ; ...and the running check-word pointer, for
+tm_ckb      equ tm_ci + 2  ; ...and the running check-word pointer, for
                                 ; the same reason
-tm_rowck    equ os88_image_end + 1351  ; the last drawn content of each row, a
+tm_rowck    equ tm_ckb + 2  ; the last drawn content of each row, a
                                 ; word per CHUNK (tm_chunksum), plus one
                                 ; virtual row for the CPU caption (TMR_CPU).
-                                ; Shared by both views - TM_ROWS is the
-                                ; smaller of the two and a view switch clears
-                                ; it either way. tm_rowck_clear names this
+                                ; Shared by all THREE pages, so it is sized
+                                ; for the deepest of them - the heap page's
+                                ; TMH_ROWS (SPEC.md 28.4) - and a page switch
+                                ; clears it whichever way it went.
+                                ; tm_rowck_clear names this
                                 ; and tm_elck separately; they used to be
                                 ; cleared as one span on the strength of
                                 ; being declared adjacent, which they have
                                 ; not been for some time
-tm_view     equ os88_image_end + 1551  ; 0 = performance view, 1 = memory view
-tm_inm      equ os88_image_end + 1552  ; I_NAME snapshots
-tm_rcyc     equ os88_image_end + 1744  ; per-ROW cycles: task + instance, dword
-tm_total    equ os88_image_end + 1796  ; sum of the rows, dword
-tm_pct      equ os88_image_end + 1800  ; per-row share, 0..100
-tm_usedk    equ os88_image_end + 1813  ; used RAM, KB
-tm_barw     equ os88_image_end + 1815  ; RAM bar black width, 0..TM_GW
+tm_view     equ tm_rowck + TM_NCK * TM_NCHUNK * 2  ; 0 = performance, 1 = memory, 2 = heap
+tm_inm      equ tm_view + 1  ; I_NAME snapshots
+tm_rcyc     equ tm_inm + INST_MAX * 16  ; per-ROW cycles: task + instance, dword
+tm_total    equ tm_rcyc + TM_ROWS * 4  ; sum of the rows, dword
+tm_pct      equ tm_total + 4  ; per-row share, 0..100
+tm_usedk    equ tm_pct + TM_ROWS  ; used RAM, KB
+tm_barw     equ tm_usedk + 2  ; RAM bar black width, 0..TM_GW
 
 ; --- worked out once by tm_init, before the window exists --------------------
 ; These used to need saying out loud, because a built-in's .bss survives
@@ -3924,32 +6378,88 @@ tm_barw     equ os88_image_end + 1815  ; RAM bar black width, 0..TM_GW
 ; first launch. It cost a divide by zero the first time the window was opened,
 ; tm_colrows being a divisor. A package has no such hazard: the bss is zeroed
 ; once per launch, before the entry proc runs, and tm_init runs inside it.
-tm_cols     equ os88_image_end + 1817  ; process-list columns, 1 or 2 (SPEC.md 28.1)
-tm_colrows  equ os88_image_end + 1819  ; rows in COLUMN 0, which starts under the maps
-tm_col2rows equ os88_image_end + 1821  ; rows in each LATER column, which starts at the
+tm_cols     equ tm_barw + 2  ; process-list columns, 1 or 2 (SPEC.md 28.1)
+tm_colrows  equ tm_cols + 2  ; rows in COLUMN 0, which starts under the maps
+tm_col2rows equ tm_colrows + 2  ; rows in each LATER column, which starts at the
                                 ; top and so holds more - A DIVISOR, never 0
-tm_maxrow   equ os88_image_end + 1823  ; rows this SCREEN shows, <= TMM_ROWS: derived
+tm_maxrow   equ tm_col2rows + 2  ; rows this SCREEN shows, <= TMM_ROWS: derived
                                 ; from [vid_dock_y0] so the window never
                                 ; overlaps the dock (SPEC.md 28.1)
-tm_totkb    equ os88_image_end + 1825  ; total conventional RAM (int 12h, boot)
-tm_vw       equ os88_image_end + 1827  ; the live screen width and the dock strip's
-tm_vdock    equ os88_image_end + 1829  ; top row (osapi_video, SPEC.md 39.2), banked
+tm_totkb    equ tm_maxrow + 2  ; total conventional RAM (int 12h, boot)
+tm_vw       equ tm_totkb + 2  ; the live screen width and the dock strip's
+tm_vdock    equ tm_vw + 2  ; top row (osapi_video, SPEC.md 39.2), banked
                                 ; at boot: the template's whole geometry is
                                 ; derived from them
-tm_cx       equ os88_image_end + 1831  ; cached content origin (draw paths only,
-tm_cy       equ os88_image_end + 1833  ; always under the gfx lock)
-tm_ord      equ os88_image_end + 1835  ; tm_order: display row - 1 -> instance slot
-tm_rowi     equ os88_image_end + 1847  ; ...the one tm_rows is drawing right now
-tm_rowy     equ os88_image_end + 1848  ; tm_rows/tm_rows_mem scratch: current row y
-tm_ylim     equ os88_image_end + 1850  ; ...and the lowest row top the frame holds
+tm_cx       equ tm_vdock + 2  ; cached content origin (draw paths only,
+tm_cy       equ tm_cx + 2  ; always under the gfx lock)
+tm_ord      equ tm_cy + 2  ; tm_order: display row - 1 -> instance slot
+tm_rowi     equ tm_ord + INST_MAX  ; ...the one tm_rows is drawing right now
+tm_rowy     equ tm_rowi + 1  ; tm_rows/tm_rows_mem scratch: current row y
+tm_ylim     equ tm_rowy + 2  ; ...and the lowest row top the frame holds
                                 ; (tm_view_begin): the row lists are fixed-pitch
                                 ; and nothing clips a draw to a window
-tm_liny     equ os88_image_end + 1852  ; tm_txt_ram_y scratch: the line's y
-tm_str      equ os88_image_end + 1854  ; line-format scratch
+tm_liny     equ tm_ylim + 2  ; tm_txt_ram_y scratch: the line's y
+tm_str      equ tm_liny + 2  ; line-format scratch
 
-tm_spawned  equ os88_image_end + 1882  ; byte: 1 = this instance owns its
+tm_spawned  equ tm_str + TM_STRMAX  ; byte: 1 = this instance owns its
                                        ; worker. Latches on SUCCESS only, so
                                        ; every paint retries until a task slot
                                        ; frees up (SPEC.md 20.6)
 
-TM_BSS_TOTAL equ 1883
+tm_hcolrows equ tm_spawned + 1  ; the HEAP page's column-0 depth
+                                       ; (SPEC.md 28.4) - its list starts
+                                       ; higher than the memory view's, so it
+                                       ; wraps later. Frame-derived, never
+                                       ; dock-derived: see tm_init
+tm_avl      equ tm_hcolrows + 2  ; OSAPI_MEM_AVAIL's pair, banked once a
+tm_maxrun   equ tm_avl + 2  ; refresh by tm_hsnap: total available,
+                                       ; and the largest single run of it.
+                                       ; Both captions read them and mem_avail
+                                       ; walks the claim table once per
+                                       ; candidate, so it is not a call to
+                                       ; make twice (SPEC.md 28.4.1)
+tm_xoff     equ tm_maxrun + 2  ; 0, or TMM_XSHIFT on a machine with no
+                                       ; store above 1MB: how far the memory
+                                       ; view's header, rows and frame rise
+                                       ; where the XMS bar would have been.
+                                       ; SET ONCE, by tm_init, and never from
+                                       ; a draw - the frame is SIZED from it,
+                                       ; so a value that could change under a
+                                       ; live window would leave the height
+                                       ; and the row placement disagreeing.
+
+tm_htop     equ tm_xoff + 2  ; the heap page's scroll position: the
+                                       ; first row of the TABLE that is on
+                                       ; screen (SPEC.md 28.4.4). Survives a
+                                       ; page switch - coming back to where
+                                       ; you were is the better behaviour, and
+                                       ; tm_hclamp is what keeps it honest
+tm_hskip    equ tm_htop + 2  ; ...how many rows THIS paint still owes
+                                       ; the offset. tm_mrow_close spends one
+                                       ; instead of drawing, and does not
+                                       ; advance [tm_mrow] - which is what
+                                       ; makes that a SCREEN row and leaves
+                                       ; tm_rowck indexed by the thing it is
+                                       ; drawn at
+tm_hrows    equ tm_hskip + 2  ; ...and how many rows the last walk
+                                       ; produced in all: the bar's `total`,
+                                       ; and what tm_hclamp measures against
+tm_slow     equ tm_hrows + 2  ; byte: intervals since the last paint of a
+                                       ; SLOW page (SPEC.md 28.6). A byte and
+                                       ; not a word: TM_SLOW is 4
+tm_hpad     equ tm_slow + 2  ; ...and how many of the rows this paint
+                                       ; drew were tm_mrow_nolast's BLANKS,
+                                       ; which belong to the layout and not to
+                                       ; the table (SPEC.md 28.4.4)
+tm_hsb      equ tm_hpad + 2  ; the shared bar's seven-word block
+                                       ; (SPEC.md 13.10.2): x1 y1 x2 y2, then
+                                       ; total, fit, pos
+
+tm_dmg      equ tm_hsb + 14  ; THIS PAINT'S DAMAGE, absolute, x1 y1 x2
+                                       ; y2 (SPEC.md 28.10.2) - the rect
+                                       ; tm_clear_owed filled, which is
+                                       ; exactly the rect that has to be
+                                       ; lettered again. Read by tm_dmg_hit
+                                       ; once per chunk and by nothing else
+
+TM_BSS_TOTAL equ tm_dmg + 8 - os88_image_end

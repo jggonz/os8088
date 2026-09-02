@@ -1,16 +1,16 @@
 ; =============================================================================
 ; os8088 - apps/freedos/freedos.asm
 ;
-; FREEDOS (SPEC.md 59.2). The package that hands the machine to FreeDOS.
+; FREEDOS (SPEC.md 86.2). The package that hands the machine to FreeDOS.
 ;
 ; It carries none of FreeDOS and could not: APP_MAX_SIZE is 60KB and
 ; KERNEL.SYS plus COMMAND.COM are about 158KB between them, which is why
-; FreeDOS gets a floppy of its own (SPEC.md 59.1). This is a window, a warning
+; FreeDOS gets a floppy of its own (SPEC.md 86.1). This is a window, a warning
 ; and one call.
 ;
 ; THE WARNING IS THE POINT OF IT. Starting FreeDOS ends the os8088 session -
 ; every window, the clipboard and anything unsaved go with it, and the way back
-; is a reboot (SPEC.md 59.5). That is not a thing to spring on someone who
+; is a reboot (SPEC.md 86.5). That is not a thing to spring on someone who
 ; double-clicked an icon to find out what it was. So the window says so in
 ; plain words and waits for a second, deliberate click; the close box is the
 ; cancel, which is why there is no Cancel button competing with it.
@@ -120,8 +120,6 @@ fd_paint:
     mov [fd_ox], ax
     mov [fd_oy], dx
 
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
     mov si, fd_lines
     mov di, FD_TEXT_Y
 .line:
@@ -134,7 +132,9 @@ fd_paint:
     mov dx, [fd_oy]
     add dx, di
     mov si, ax
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the content's own ground:
+    call OSAPI_FONT_RUN             ; W_PAINT arrives white-filled, so the cells
+                                    ; are lettered in ONE pass (SPEC.md 6.1)
     pop si
     add si, 2
     add di, FD_LINE_H
@@ -184,7 +184,8 @@ fd_btn:
     add cx, FD_BTN_X                ; centred in the button
     mov dx, [fd_oy]
     add dx, FD_BTN_Y + (FD_BTN_H - 8) / 2
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; the frame is a line, not a fill, so the
+    call OSAPI_FONT_RUN             ; caption's ground is the content's white
 
     pop si
     pop dx
@@ -202,7 +203,7 @@ fd_btn:
 ; This is the one control in the system where a click that ALMOST hit should
 ; cost nothing, so a near miss is silence rather than a machine that reboots.
 ;
-; OSAPI_BOOT_UNIT returns (SPEC.md 59.2), and this proc returns after it, and
+; OSAPI_BOOT_UNIT returns (SPEC.md 86.2), and this proc returns after it, and
 ; the desktop carries on for another pass or two before ui_task spends the
 ; post. That is the contract, not a race: everything the teardown needs is done
 ; on the UI task with nothing held.
@@ -234,7 +235,7 @@ fd_onclick:
     cmp dx, FD_BTN_Y + FD_BTN_H
     jge .out
 
-    mov al, 1                       ; the second floppy (SPEC.md 59.4)
+    mov al, 1                       ; the second floppy (SPEC.md 86.4)
     call OSAPI_BOOT_UNIT
 .out:
     pop si

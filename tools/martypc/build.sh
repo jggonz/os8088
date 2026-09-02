@@ -26,9 +26,32 @@ PIN=$(sed -n 's/^commit=//p' "$HERE/UPSTREAM")
 command -v cargo >/dev/null || { echo "build.sh: cargo not found - install Rust" >&2; exit 1; }
 
 # --- source, at the pin ------------------------------------------------------
-if [ ! -d "$SRC/.git" ]; then
+# THREE STATES, not two, and the third is what any CACHING build is in on every
+# run after the first. A cache that keeps `build/martypc/src/target` - the
+# cargo output, which is the several minutes worth keeping - RECREATES that
+# path when it restores, so `src/` comes back holding `target/` and nothing
+# else. No `.git`, so this used to take the clone branch, and
+# `git clone` into a non-empty directory is a hard error:
+#
+#     fatal: destination path '.../build/martypc/src' already exists
+#            and is not an empty directory
+#
+# Deleting it and cloning fresh would work and would make the cache pointless,
+# which is the whole reason it is there. So a directory with no `.git` is
+# adopted in place instead: `git init`, point origin at the pin, and let the
+# fetch and checkout below do exactly what they do for a real clone. `target/`
+# is in MartyPC's own .gitignore, so the `git clean -qfd` below leaves it
+# alone (no -x) and the cached build survives the checkout.
+mkdir -p "$BUILD"
+if [ -d "$SRC/.git" ]; then
+    :                                   # a real checkout: fetch/checkout below
+elif [ -d "$SRC" ]; then
+    echo "==> adopting the restored $SRC (no .git - a cache hit)"
+    git -C "$SRC" init --quiet
+    git -C "$SRC" remote add origin "$REPO" 2>/dev/null \
+        || git -C "$SRC" remote set-url origin "$REPO"
+else
     echo "==> cloning $REPO"
-    mkdir -p "$BUILD"
     git clone "$REPO" "$SRC"
 fi
 echo "==> checking out $PIN"
@@ -54,6 +77,7 @@ rm -rf "$RUN"
 cp -r "$SRC/install" "$RUN"
 mkdir -p "$RUN/media/roms" "$RUN/media/floppies"
 cat "$HERE/configs/os8088_machines.toml" >> "$RUN/configs/machines/ibm5150.toml"
+cp "$HERE/configs/os8088_field_roms.toml" "$RUN/configs/rom_definitions/"
 
 # The IBM BIOS is IBM's. It is not in this tree and cannot be - CONTRIBUTING.md
 # puts the whole tree under one MIT file, and IBM has never licensed this ROM

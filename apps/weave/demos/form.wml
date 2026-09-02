@@ -1,0 +1,22 @@
+<!-- FORM: the smallest working Weave app - inputs, a button, a label a
+     handler rewrites, a check that changes the handler's path, a meter,
+     a menu, an alert with a callback. docs/WEAVE-SPEC.md section 3 is the
+     contract for every element here. -->
+<app name="Greeter" vm="16">
+  <card id="main">
+    <label style="bold" align="center" w="30">Weave Greeter</label>
+    <rule br="1"/>
+    <label br="1">Your name:</label>
+    <input id="who" cols="16" onchange="doGreet"/>
+    <button id="greet" onclick="doGreet">Greet</button>
+    <check id="loud" br="1">Shout it</check>
+    <label id="status" br="1" w="34">Ready.</label>
+    <label br="1">Greetings so far:</label>
+    <meter id="count" max="10" value="0"/>
+    <button id="reset" onclick="doReset" br="1">Reset</button>
+  </card>
+  <menu title="Party">
+    <item oncommand="doReset">Reset the tally</item>
+  </menu>
+  <script src="FORM.WJS"/>
+</app>

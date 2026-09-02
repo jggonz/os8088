@@ -83,11 +83,71 @@ MOU_IDSTRICT equ 3              ; ...and THIS many to lower [mou_need], which
                                 ; mouse off for the session - 9.5.1's original
                                 ; bug. 3 is 'M', 'M3' and 'MZ@' and nothing
                                 ; with room for a banner in it
+MOU_IDFLOOR equ 8               ; SPEC.md 9.4.5: the earliest
+                                ; tick the window may close, ~440ms. It is a
+                                ; floor on the DRAIN and not on the identify:
+                                ; a modem answers the same DTR/RTS raise the
+                                ; mouse does, so anything that is going to talk
+                                ; at all has started by here - and a port that
+                                ; has started keeps the window open on its own
+                                ; through MOU_IDQUIET below
 MOU_IDQUIET equ 4               ; ...and nothing for the last ~220ms of the
                                 ; window. This is the test that separates a
                                 ; burst from a stream, and MOU_IDMAX alone
                                 ; cannot: a banner that happens to be short is
                                 ; still arriving when the window closes
+
+; --- the PS/2 mouse (SPEC.md 9.9) --------------------------------------------
+; The 8042 keyboard controller's AUXILIARY device port, on IRQ12, which is
+; where every machine above an XT puts its mouse. Probed AFTER both serial
+; ports - that is SPEC.md 9.9's order, and it is an order rather than a
+; preference because the serial half has no probe at all and its identify
+; window is a whole second of mouse_init.
+MOU_P2DAT   equ 0x60            ; the 8042's data port...
+MOU_P2CMD   equ 0x64            ; ...and its status (read) / command (write)
+MOU_P2ROW   equ 4               ; [mou_port] once the PS/2 mouse has won: ONE
+                                ; PAST the last serial row, so every `cmp bl,
+                                ; [mou_port]` in the serial decoder fails and
+                                ; mou_lockon retires both UARTs (SPEC.md 9.9.4)
+MOU_P2LINE  equ 0xFF            ; ...and [mou_line]'s value then. NOT a master
+                                ; 8259 bit, so 9.5.2.1's "never mask the line
+                                ; the winning packets came in on" guard masks
+                                ; both serial lines and neither of the two
+                                ; wires this mouse is actually on
+MOU_P2KIRQ  equ 0x02            ; IRQ1's bit in the MASTER 8259's OCW1 (0x21),
+                                ; masked for the length of the probe. NOT
+                                ; tidiness and NOT covered by 0xAD: the
+                                ; keyboard interface being off stops the
+                                ; KEYBOARD putting scancodes in the output
+                                ; buffer, and IRQ1 is tied to OBF and gated by
+                                ; the command byte's bit 0 - so the
+                                ; CONTROLLER'S OWN REPLIES raise it too, and a
+                                ; BIOS int 09h that reads 60h takes them
+                                ; (SPEC.md 9.9.1)
+MOU_P2SL    equ 0x10            ; IRQ12's bit in the SLAVE 8259's OCW1 (0xA1)
+MOU_P2CASC  equ 0x04            ; ...and IRQ2's in the master's: the CASCADE,
+                                ; without which the slave's line reaches
+                                ; nothing, and the symptom is a mouse that
+                                ; passes every step of the probe and is silent
+MOU_P2VEC   equ 0x74*4          ; int 74h's IVT offset
+MOU_P2KOFF  equ 0x10            ; the command byte's bit 4: THE KEYBOARD
+                                ; INTERFACE DISABLED, which is what 0xAD sets
+                                ; and what every command byte written inside
+                                ; the probe window has to keep set (SPEC.md
+                                ; 9.9.1). It is not the same bit as MOU_P2SL
+                                ; and shares its value by coincidence - one is
+                                ; the 8042's command byte and the other the
+                                ; slave 8259's mask, so they are named apart
+
+MOU_P2TMO   equ 2               ; ticks one handshake step may take (~110ms).
+                                ; TICKS AND NOT A SPIN COUNT: a count sized on
+                                ; a 286 is some fifty times too short on a 486
+                                ; and one sized on a 486 is minutes on a 286,
+                                ; while [ticks] is the same quantity on both
+MOU_P2BAT   equ 5               ; ...and the reset's self-test, which the part
+                                ; is allowed half a second for, is that short
+                                ; wait RETRIED this many times rather than a
+                                ; second timeout to size
 
 CUR_W       equ 16              ; cursor cell size, px - the size of the two
 CUR_H       equ 16              ; bitmap TABLES, and nothing else
@@ -104,6 +164,21 @@ CUR_H       equ 16              ; bitmap TABLES, and nothing else
 ; THIRD byte: a 16-bit row whose low byte is zero cannot reach one however far
 ; it is shifted, so `row << (8-shift)` was a byte that was always 0 and a
 ; branch that was never taken, once per row per pass.
+CUR_MVGRACE equ 6               ; ticks since the last movement packet within
+                                ; which the pointer counts as MOVING (SPEC.md
+                                ; 7.1.4.3). ~330ms, and it is MEASURED rather
+                                ; than reasoned: a report is 3 bytes at 1200
+                                ; baud and the 8250 has no FIFO, so a hold
+                                ; that delays IRQ4 loses one and the decoder
+                                ; waits for the next - gaps of 3 and 4 ticks
+                                ; are ordinary DURING a steady sweep. At 2 the
+                                ; gate called those gaps "stopped" and the
+                                ; stutter came back in 16 of 56 lock holds.
+                                ; The cost of the larger value is that the
+                                ; arrow keeps blinking for a third of a second
+                                ; after the hand stops, which is a third of a
+                                ; second of the behaviour that shipped for
+                                ; years before 7.1.4
 CUR_GW      equ 8               ; the arrow's own width, px...
 CUR_GH      equ 12              ; ...and height, rows
 CUR_SPAN    equ 2               ; ...and the framebuffer bytes it spans once
@@ -111,6 +186,21 @@ CUR_SPAN    equ 2               ; ...and the framebuffer bytes it spans once
 CUR_TABSZ   equ CUR_H * 2       ; cur_data is exactly one table past cur_and,
                                 ; so one SI walks both (asserted below)
 CUR_SAVE_SZ equ CUR_SPAN * CUR_GH * 4       ; ...x four planes, for VGA
+
+; --- the shapes (SPEC.md 7.2) ------------------------------------------------
+; A window names one of these and the pointer wears it over that window and
+; nowhere else. They all share the cell above, which is the whole reason a
+; shape costs 64 bytes of .text and not one instruction anywhere in the draw:
+; every walk here is bounded by CUR_GW/CUR_GH/CUR_SPAN, so a shape needing a
+; bigger cell would hand back SPEC.md 7.1's savings on every lock hold in the
+; machine rather than only over the window that asked for it.
+CUR_ARROWSH equ 0               ; the Mac arrow, hot spot (0,0) - the default,
+                                ; and 0 for the reason W_FLAGS' spare byte
+                                ; arrives 0 (SPEC.md 7.2.1)
+CUR_CROSSSH equ 1               ; the aiming crosshair, hot spot at its centre
+CUR_NSHAPE  equ 2
+CUR_XHX     equ 3               ; the crosshair's hot spot inside the cell...
+CUR_XHY     equ 5               ; ...which is the only reason 7.2.2 exists
 
 ; -----------------------------------------------------------------------------
 ; The port table (SPEC.md 9.5)
@@ -243,6 +333,7 @@ mouse_init:
     push si
     push es
 
+    MARK 40
     ; --- which ports are actually there? (SPEC.md 9.5) -----------------------
     xor bx, bx
 .probe:
@@ -277,6 +368,7 @@ mouse_init:
     mov [mou_need], al          ; per port (SPEC.md 9.4.1): the identify burst
     mov [mou_need+2], al        ; below may lower ONE of them again
 
+    MARK 41
     ; --- save each present port's old vector, install ours -------------------
     xor ax, ax
     mov es, ax
@@ -300,6 +392,25 @@ mouse_init:
     cmp bx, MOU_PEND
     jb .hook
 
+    ; --- int 09h, for the one button key some BIOSes discard (SPEC.md 9.6.4) -
+    ; EVERY TIER, which is a change from the first version and is what the
+    ; guard in kbm_btn buys: the hook is a FALLBACK for a BIOS that throws
+    ; keypad 5 away, and on one that delivers it int 16h wins and this claims
+    ; nothing. The peek reads port 60h without acknowledging it, which is the
+    ; same access DOS's own keyboard code makes.
+    xor ax, ax
+    mov es, ax
+    pushf
+    cli
+    mov ax, [es:0x24]           ; int 09h's vector, saved for the chain
+    mov [kbm_old9], ax
+    mov ax, [es:0x26]
+    mov [kbm_old9+2], ax
+    mov word [es:0x24], kbm_isr
+    mov [es:0x26], cs
+    popf
+
+    MARK 42
     ; --- UART: 1200 baud, 7 data bits, no parity, 1 stop ---------------------
     mov ax, 0x0382              ; LCR: DLAB=1 + 7N1 bits
     call mou_pall
@@ -310,6 +421,7 @@ mouse_init:
     mov ax, 0x0302              ; LCR: DLAB=0, 7N1
     call mou_pall
 
+    MARK 43
     ; --- reset the mouse: DTR/RTS LOW, hold, then raise ----------------------
     ; A serial mouse is POWERED by DTR/RTS and resets itself on the RISING
     ; edge. Writing the final MCR value straight away only makes that edge on
@@ -324,15 +436,22 @@ mouse_init:
     call mou_pall               ; stays up throughout so the IRQ gate never
                                 ; glitches the bus
     mov bx, [ticks]
-.rstlow:
+    mov byte [mou_splt], 0      ; SPEC.md 15.3.3: the bar moves THROUGH this
+.rstlow:                        ; wait now instead of over it
     mov ax, [ticks]
     sub ax, bx
+    cmp al, [mou_splt]          ; a notch a tick, and nothing to lose by it:
+    je .rstheld                 ; the mouse has no power during these three
+    mov [mou_splt], al
+    SPLGATE splf_stepq
+.rstheld:
     cmp ax, MOU_RSTLOW
     jb .rstlow
     mov ax, 0x040B              ; MCR: DTR|RTS|OUT2 - powers the mouse and
     call mou_pall               ; gates the IRQ onto the bus; this rising
                                 ; edge is the mouse's reset
 
+    MARK 44
     ; --- drain the identify burst (IER still 0, the IRQs still masked) -------
     ; The DTR/RTS edge makes a real Microsoft mouse announce itself: 'M',
     ; maybe '3', maybe a whole PnP string - bytes with bit 6 set that the
@@ -347,6 +466,10 @@ mouse_init:
     ; throwing it away is what left a plugged-in mouse being power-cycled
     ; every MOU_REPOLL ticks for the whole session.
     mov cx, [ticks]
+    mov byte [mou_splt], 0      ; ...and through this one, which is the long
+%ifdef MOU_DIAG                 ; half (SPEC.md 15.3.3)
+    mov [mdg_open], cx          ; SPEC.md 9.4.6: the window's own t=0, which is
+%endif                          ; what makes mou_idlast a readable number
 .settle:
     xor bx, bx
 .sport:
@@ -366,9 +489,34 @@ mouse_init:
     jb .sport
     mov ax, [ticks]
     sub ax, cx
-    cmp ax, MOU_IDWIN
+    cmp al, [mou_splt]          ; SPEC.md 15.3.3: a notch a tick, up to the
+    je .idheld                  ; GUESS and no further - a machine with no
+    mov [mou_splt], al          ; mouse spends MOU_IDWIN and holds for the
+    cmp al, MOU_IDFLOOR         ; difference rather than jumping at the end.
+    ja .idheld                  ; splf_stepq and not splf_step: 3.7 ms against
+    SPLGATE splf_stepq          ; 32.4, and a 1200-baud 7N1 byte is 7.5 ms of
+.idheld:                        ; line time (15.3.3.1)
+%ifndef MOU_ID_SLOW
+    cmp ax, MOU_IDWIN           ; the ceiling is unchanged: nothing waits longer
+    jae .settled                ; than the window always did (SPEC.md 9.4.5)
+    cmp ax, MOU_IDFLOOR         ; ...below the floor, never close early
     jb .settle
+    call mou_idquiet            ; ...above it, CF = 1 means every port that has
+    jnc .settle                 ; spoken has finished and one of them sounded
+.settled:                       ; like a mouse
+%else
+    cmp ax, MOU_IDWIN           ; MOUIDSLOW=1: always spend the whole window.
+    jb .settle                  ; The two arms are written out in full rather
+%endif                          ; than sharing the compare, so this one emits
+                                ; the same two instructions the pre-9.4.5
+                                ; kernel did - a 2-byte drift here moves every
+                                ; address in .text after it
 
+%ifdef MOU_DIAG
+    mov ax, [ticks]             ; SPEC.md 9.4.6: ticks SPENT, and the one fact
+    sub ax, [mdg_open]          ; nothing else keeps - AX is dead here, the
+    mov [mdg_used], ax          ; judge taking no argument
+%endif
     call mou_idjudge            ; ...and who sounded like a mouse?
 
     mov ax, 0x0101              ; IER: RX data available only
@@ -376,6 +524,7 @@ mouse_init:
     call mou_newround           ; ...before anything is unmasked, or the store
                                 ; could land on a packet already in progress
 
+    MARK 45
     ; --- flush whatever is stale, then unmask (in that order, per port) ------
     xor bx, bx
 .flush:
@@ -396,6 +545,21 @@ mouse_init:
     add bx, 2
     cmp bx, MOU_PEND
     jb .flush
+
+    MARK 46
+    ; --- ...and ONLY NOW the other socket (SPEC.md 9.9) ----------------------
+    ; Serial first, then PS/2. It is an order rather than a preference: the
+    ; serial half has no probe at all - only the identify burst and a contest -
+    ; and the burst alone is MOU_IDWIN of this routine, so it runs to
+    ; completion and this runs after it. Where both mice exist both end up
+    ; live, and SPEC.md 9.5's contest settles it exactly as it settles two
+    ; UARTs: the first complete packet wins.
+%ifdef KERN_BIG
+%ifndef NO_PS2
+    call mou_p2_init
+%endif
+%endif
+    MARK 47
 
     pop es
     pop si
@@ -435,6 +599,75 @@ mou_idbyte:
     pop ax
     ret
 
+%ifndef MOU_ID_SLOW
+; -----------------------------------------------------------------------------
+; mou_idquiet - may the identify window close now? (SPEC.md 9.4.5)
+;
+; THE DEFAULT since SPEC.md 9.4.5 shipped it - `make MOUIDSLOW=1` is the knob
+; now, and it brings back the FULL window, not this. (The paragraph that stood
+; here said the opposite - "MOUIDFAST=1 ONLY... it ships OFF" - the polarity
+; of a knob that no longer exists, kept long enough to mislead.) The window
+; has TWO jobs and this shortens only one of them safely. The identify half
+; is finished the moment a port has said its piece and gone quiet -
+; mou_idjudge's rules 3 and 4 are exactly that question, and asking them
+; early asks nothing new. The DRAIN half is what protects a machine with a
+; modem on the other port: bytes still in flight when IER goes on are
+; bit-6-set and the ISR's resync rule reads them as packet headers, which is
+; phantom clicks (SPEC.md 9.5.1). So the early close is bounded from BELOW by
+; MOU_IDFLOOR as well as gated on quiet, and MOU_IDWIN remains the ceiling: a
+; port that is still talking holds the window exactly as long as it ever did.
+;
+; The A/B is `make MOUIDSLOW=1` against the default, on the field machine -
+; MartyPC has one serial mouse and no modem, and SPEC.md 9.5's awkward cases
+; are the QEMU list (docs/TESTING.md).
+;
+; ins:  none (the test is per port, against each port's own last byte)
+; outs: CF = 1 if the window may close; all registers preserved
+; -----------------------------------------------------------------------------
+mou_idquiet:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov dx, [ticks]
+    xor cx, cx                  ; CL = has a port answered LIKE A MOUSE and
+    xor bx, bx                  ; finished? CH is spare
+.port:
+    cmp word [bx+mou_bases], 0
+    je  .next                   ; a port the probe rejected cannot answer
+    mov al, [bx+mou_idn]
+    or  al, al
+    jz  .next                   ; silent so far - MOU_IDFLOOR covers this one,
+                                ; and mou_idjudge's rule 1 refuses it anyway
+    mov ax, dx
+    sub ax, [bx+mou_idlast]     ; wrap-safe, like every other elapsed here
+    cmp ax, MOU_IDQUIET
+    jb  .talking                ; STILL ARRIVING on this port: hold the window
+                                ; open, exactly as long as today would
+    cmp byte [bx+mou_idb0], MOU_IDBYTE
+    jne .next                   ; it spoke and stopped, but not like a mouse -
+    mov al, [bx+mou_idn]        ; a short modem banner lands here, and gets the
+    cmp al, MOU_IDMAX           ; FULL window rather than an early close
+    ja  .next
+    mov cl, 1                   ; mou_idjudge's rules 1-3, asked early. Rule 4
+.next:                          ; is the quiet test above, and it is the same
+    add bx, 2                   ; comparison against the same word
+    cmp bx, MOU_PEND
+    jb  .port
+    or  cl, cl                  ; no mouse yet: there is nothing to close the
+    jz  .talking                ; window FOR, so wait for the ceiling
+    stc
+    jmp short .out
+.talking:
+    clc
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+%endif
 ; -----------------------------------------------------------------------------
 ; mou_idjudge - which ports answered like a mouse? (SPEC.md 9.4.1)
 ;
@@ -564,6 +797,8 @@ mou_claim:
     jb .out
     mov [mou_port], bl          ; settled. mou_hotplug's next pass retires
     mov byte [mou_seen], 1      ; every other port
+    mov byte [mou_ptr], 1       ; ...and the machine HAS a pointer, which is
+                                ; the other question (SPEC.md 9.6.6)
     mov al, [mou_lfired]        ; ...and THIS is the line those packets came in
     mov [mou_line], al          ; on, which the base cannot say (SPEC 9.5.2.1)
 .out:
@@ -634,6 +869,14 @@ mou_lockon:
     add bx, 2
     cmp bx, MOU_PEND
     jb .port
+%ifdef KERN_BIG
+    cmp byte [mou_port], MOU_P2ROW  ; ...and the same question asked of the
+    je .keep                        ; OTHER SOCKET: a serial port winning makes
+    call mou_p2_off                 ; the PS/2 mouse the loser, and a loser is
+.keep:                              ; silenced (SPEC.md 9.9.4). Row 4 is no
+                                    ; port, so when IT won the loop above has
+                                    ; just retired both UARTs on its behalf
+%endif
     pop cx
     pop bx
     pop ax
@@ -677,6 +920,15 @@ mou_hotplug:
     sub ax, [mou_hpt]           ; wrap-safe: elapsed since the state's stamp
     cmp byte [mou_hpst], 1
     je .low
+%ifdef KERN_BIG
+    cmp byte [mou_p2], 0        ; a PS/2 MOUSE answered its own reset (SPEC.md
+    jne .done                   ; 9.9.4), which is the same statement as the
+                                ; one below and a stronger one: there IS a
+                                ; mouse on this machine, so stop offering the
+                                ; serial ports power cycles under the user's
+                                ; hand. Beside [mou_idany] and in state 0 ONLY,
+                                ; for the reason spelled out there
+%endif
     cmp byte [mou_idany], 0     ; a port answered our reset edge like a mouse
     jne .done                   ; (SPEC.md 9.4.1), so there IS one and it must
                                 ; not be power-cycled under the user's hand.
@@ -771,12 +1023,676 @@ mouse_unhook:
     cmp bx, MOU_PEND
     jb .port
 
+    ; --- ...and the AUXILIARY PORT, if a mouse ever answered on it (9.9.4) ---
+    ; mou_p2_off is a no-op unless the PS/2 mouse is live - it may already have
+    ; lost the contest and been retired - but the VECTOR is owed back either
+    ; way, which is why [mou_p2st] and not [mou_p2] is what gates it: 8 is the
+    ; step that installed it, and mou_p2_off clears [mou_p2] without touching
+    ; int 74h. It is int 09h's trap below, on the other line.
+%ifdef KERN_BIG
+    call mou_p2_off
+    cmp byte [mou_p2st], 8
+    jb .nop2
+    mov si, MOU_P2VEC
+    pushf
+    cli
+    mov ax, [mou_p2old]
+    mov [es:si], ax
+    mov ax, [mou_p2old+2]
+    mov [es:si+2], ax
+    popf
+.nop2:
+%endif
+
+    ; --- AND INT 09h, WHICH NOTHING PUT BACK (SPEC.md 9.6.5) -----------------
+    ; mouse_init hooks int 09h for keypad 5 and this is the only place that
+    ; can undo it. It went missing because the loop above walks mou_ivecs and
+    ; the keyboard is not a UART, so the one vector installed outside that
+    ; table was the one vector nothing restored - and the cost of that is not
+    ; a leak, it is a HARD FREEZE ON THE NEXT KEYSTROKE.
+    ;
+    ; The only caller is sched_unhook, and the only caller of THAT is the
+    ; Chip menu's Restart, which ends in int 19h. int 19h is the bootstrap
+    ; loader and not POST: it does not reset the interrupt vector table. So
+    ; int 09h survived the restart pointing at KERNEL_SEG:kbm_isr, the boot
+    ; sector read a fresh kernel over that same segment, and mouse_init then
+    ; saved the vector it found - its own predecessor, at its own offset -
+    ; into kbm_old9. kbm_isr's `jmp far [cs:kbm_old9]` was a jump to itself.
+    ;
+    ; It does not grow the stack, so nothing overruns and nothing faults: it
+    ; is a tight loop inside an interrupt gate, so IF is 0, IRQ1 is in service
+    ; with no EOI coming, and the machine stops dead with the picture it had.
+    ; The first key pressed after a soft restart ended the session.
+    pushf
+    cli
+    mov ax, [kbm_old9]
+    mov [es:0x24], ax
+    mov ax, [kbm_old9+2]
+    mov [es:0x26], ax
+    popf
+
     pop es
     pop si
     pop cx
     pop bx
     pop ax
     ret
+
+%ifdef KERN_BIG
+; =============================================================================
+; The PS/2 mouse (SPEC.md 9.9)
+;
+; KERN_BIG ONLY, and that is SPEC.md 62.9.15's split used the way it is meant
+; to be: kern_small is the 128-256KB machine's kernel, every one of which is an
+; XT whose keyboard is an 8255 and whose [cpu_tier] would refuse all of this at
+; run time anyway. So it is compiled out there rather than carried as ~700
+; bytes that provably cannot execute - the STATE below stays in both builds, so
+; that SPEC.md 9.4.2's published block is the same shape whatever kernel a test
+; package is reading.
+;
+; The 8042 keyboard controller's AUXILIARY device port, on IRQ12 / int 74h,
+; which is where every machine above an XT puts its mouse.
+;
+; UNLIKE A SERIAL MOUSE, THIS ONE ANSWERS. SPEC.md 9.4 opens with "there is no
+; probe - a machine with no mouse is indistinguishable from one whose mouse has
+; not spoken yet", and that is a fact about a serial mouse and false here: a
+; reset the device acknowledges with 0xFA and completes with 0xAA is a probe in
+; exactly the sense the serial side has never had. So there is no run threshold
+; on this side and nothing to weigh against - the aux port carries ONE device -
+; and the first complete packet settles [mou_port] and is acted on, which is
+; SPEC.md 9.5's "one port is not a contest" reached by a stronger road.
+;
+; NOTHING HERE RUNS ON THE TARGET MACHINE. An 8088's keyboard is an 8255 PPI at
+; 60h-63h, 64h is not decoded at all, and what a write there reaches is a
+; question about one machine's address decoding that nobody should have to
+; answer to boot a desktop. The whole module is behind [cpu_tier], so on an XT
+; mou_p2_init is one compare and a ret (SPEC.md 9.9.2).
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; mou_p2wr - wait until the 8042's input buffer is empty, so a write is safe
+; ins:  none
+; outs: CF = 1 on timeout (all registers preserved)
+; -----------------------------------------------------------------------------
+mou_p2wr:
+    push ax
+    push cx
+    push dx
+    mov dx, [ticks]
+.w:
+    in  al, MOU_P2CMD
+    test al, 0x02               ; IBF: the controller has not taken the last
+    jz .ok                      ; byte yet
+    mov cx, [ticks]
+    sub cx, dx                  ; wrap-safe: elapsed since the wait began
+    cmp cx, MOU_P2TMO
+    jb .w
+    stc
+    jmp short .out
+.ok:
+    clc
+.out:
+    pop dx                      ; a pop does not touch the flags, so CF is the
+    pop cx                      ; answer all the way out
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; mou_p2rd - take the next byte the 8042 offers
+; ins:  none
+; outs: AL = the byte, CF = 1 on timeout. Every other register preserved.
+;
+; It takes whatever is in that buffer, and that is safe ONLY because every
+; caller runs inside mou_p2_init's 0xAD window: with the keyboard interface
+; disabled nothing but the auxiliary device can put a byte there. Outside that
+; window this would steal keystrokes from int 09h, which is why mou_p2_off
+; below - the one PS/2 routine that runs on the UI task - reads nothing.
+; -----------------------------------------------------------------------------
+mou_p2rd:
+    push cx
+    push dx
+    mov dx, [ticks]
+.w:
+    in  al, MOU_P2CMD
+    test al, 0x01               ; OBF: is there anything to take?
+    jnz .got
+    mov cx, [ticks]
+    sub cx, dx
+    cmp cx, MOU_P2TMO
+    jb .w
+    stc
+    jmp short .out
+.got:
+    in  al, MOU_P2DAT
+    clc
+.out:
+    pop dx
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; mou_p2cw / mou_p2dw - a command byte to 64h / a data byte to 60h
+; ins:  AL = the byte
+; outs: CF = 1 if the controller never took it (all registers preserved)
+; -----------------------------------------------------------------------------
+mou_p2cw:
+    call mou_p2wr
+    jc .out
+    out MOU_P2CMD, al
+    clc
+.out:
+    ret
+
+mou_p2dw:
+    call mou_p2wr
+    jc .out
+    out MOU_P2DAT, al
+    clc
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; mou_p2wcmd - write AL as the 8042's COMMAND BYTE (0x60, then the value)
+; ins:  AL = the new command byte
+; outs: CF = 1 if either half stalled (all registers preserved)
+; -----------------------------------------------------------------------------
+mou_p2wcmd:
+    push ax
+    mov al, 0x60
+    call mou_p2cw
+    pop ax
+    jc .out
+    call mou_p2dw
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; mou_p2dev - send AL to the AUXILIARY DEVICE and collect its acknowledgement
+; ins:  AL = the device command
+; outs: CF = 1 if the write stalled or the device did not answer 0xFA.
+;       AL destroyed; every other register preserved.
+; -----------------------------------------------------------------------------
+mou_p2dev:
+    push ax
+    mov al, 0xD4                ; "the next data byte is for the aux device"
+    call mou_p2cw
+    pop ax
+    jc .out
+    call mou_p2dw
+    jc .out
+    call mou_p2rd
+    jc .out
+    cmp al, 0xFA                ; ACK, and nothing else will do: 0xFE is a
+    je .out                     ; resend and 0xFF is a device that is not there
+    stc
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; mou_p2flush - empty the 8042's output buffer
+; ins:  none
+; outs: none (all registers preserved)
+; -----------------------------------------------------------------------------
+mou_p2flush:
+    push ax
+    push cx
+    mov cx, 16                  ; BOUNDED: a controller wedged with OBF stuck
+.f:                             ; set must not hang the boot
+    in  al, MOU_P2CMD
+    test al, 0x01
+    jz .out
+    in  al, MOU_P2DAT
+    loop .f
+.out:
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; mou_p2_init - probe the auxiliary port and, if a mouse answers, commit to it
+;
+; The five steps of SPEC.md 9.9.1, each a QUESTION whose wrong answer abandons
+; the whole thing and puts the controller back exactly as it was found, and
+; then the commitment - which nothing reaches until a device has answered
+; 0xFA 0xAA to a reset edge this kernel made.
+;
+; ins:  none
+; outs: none (all registers preserved). [mou_p2] = 1 if the mouse is live and
+;       [mou_p2st] = how far the handshake got either way (SPEC.md 9.4.4).
+; -----------------------------------------------------------------------------
+mou_p2_init:
+    cmp byte [cpu_tier], CPU_8086
+    je .none                    ; an XT has no 8042 - and this is the whole of
+                                ; what it costs there (SPEC.md 9.9.2). NOTHING
+                                ; below has run, so nothing has been written
+    push ax
+    push bx
+    push si
+    push es
+
+    in  al, 0x21                ; IRQ1 MASKED FOR THE LENGTH OF THE PROBE, and
+    mov [mou_p2m1], al          ; its old state banked so .quit puts back what
+    or  al, MOU_P2KIRQ          ; it found. This is the same argument as the
+    out 0x21, al                ; IRQ12 mask below and it was MISSED, because
+                                ; 0xAD looks like it covers it and does not:
+                                ; disabling the keyboard interface stops the
+                                ; KEYBOARD reaching the output buffer, while
+                                ; IRQ1 is tied to OBF and gated by the command
+                                ; byte's bit 0 - so every reply the CONTROLLER
+                                ; makes raises it, the BIOS's int 09h reads
+                                ; 60h, and our byte is gone. It is a RACE, so
+                                ; it reads as a controller that answers
+                                ; sometimes: the same build read the command
+                                ; byte on one boot and timed out on the next.
+                                ; The byte stays in the buffer for us while the
+                                ; line is masked, and a keystroke that arrives
+                                ; is still pending when it is unmasked
+
+    in  al, 0xA1                ; IRQ12 MASKED BEFORE ANYTHING IS ASKED. The
+    or  al, MOU_P2SL            ; machine's BIOS may have left the line armed
+    out 0xA1, al                ; with a handler of its own, and that handler
+                                ; reading 60h takes the replies below out from
+                                ; under this routine - which reads exactly like
+                                ; a controller that stopped answering. It stays
+                                ; masked to the last instruction, so nothing
+                                ; here is ever racing an interrupt
+
+    mov al, 0xAD                ; THE KEYBOARD INTERFACE OFF, and not for
+    call mou_p2cw               ; tidiness: the 8042 has ONE output buffer and
+    jc .quit                    ; int 09h is live, so a keystroke landing in
+                                ; the middle of this raises IRQ1, the BIOS
+                                ; reads 60h, and the byte it takes is OUR
+                                ; device's reply. The keystroke is delivered
+                                ; out of the keyboard's own buffer when 0xAE
+                                ; puts the interface back below
+    call mou_p2flush
+
+    mov byte [mou_p2st], 1      ; THE COMMAND BYTE, READ ONCE AND READ EARLY.
+%ifdef MOU_DIAG                 ; This is the position the read WORKS in on
+    in  al, MOU_P2CMD           ; every controller seen so far, and the probe
+    mov [mou_p2pre], al         ; now spends it here and asks nothing else of
+    mov byte [mou_p2sub], 1     ; the controller before the device reset
+%endif
+    mov al, 0x20
+    call mou_p2cw
+    jc .quit                    ; NOT .fail: nothing is banked yet, so there is
+    call mou_p2rd               ; no command byte to put back and .fail would
+    jc .quit                    ; write a zero over this machine's
+%ifdef MOU_DIAG
+    mov [mou_p2cm1], al
+    mov byte [mou_p2sub], 2
+%endif
+    mov ah, al                  ; AH = it as the BIOS left it, plus bit 4 from
+    and al, 0xEF                ; the 0xAD above. Banked WITHOUT bit 4, so that
+    or  al, 0x20                ; mou_p2_off does not disable the keyboard on
+    mov [mou_p2cmd0], al        ; the UI task, and WITH bit 5, because the only
+                                ; readers of the bank are .fail and mou_p2_off
+                                ; and both want the port off - both send 0xA7
+                                ; beside it, and banking bit 5 clear made this
+                                ; write undo the 0xA7 it follows. The success
+                                ; path masks bit 5 off again anyway
+
+    mov byte [mou_p2st], 2      ; IS THERE AN AUXILIARY PORT HERE AT ALL?
+    test ah, 0x02               ; BIT 1: this machine's own firmware armed
+    jnz .haveaux                ; IRQ12 for a device on that port. A BIOS does
+                                ; not arm an interrupt for a port its
+                                ; controller has not got, so this is the
+                                ; evidence the probe was reaching for - and it
+                                ; is already in the byte just read, which costs
+                                ; the controller no second question
+    test ah, 0x20               ; ...or bit 5 already clear, which says the
+    jz .haveaux                 ; same thing more directly: the port is CLOCKED
+
+    ; --- no evidence in the byte: ask 0xA8 and look, the older road ---------
+    ; Kept for the controller whose BIOS left both bits saying nothing. It is
+    ; the road that does not work on a Phoenix 8042 - enabling the port with
+    ; the keyboard interface disabled puts that controller somewhere it will
+    ; not answer a second command byte read from - so it is now the FALLBACK
+    ; rather than the path, and a machine that has to take it is no worse off
+    ; than it was.
+%ifdef MOU_DIAG
+    mov byte [mou_p2sub], 3
+%endif
+    mov al, 0xA8
+    call mou_p2cw
+    jc .noaux
+    call mou_p2flush
+    mov al, 0x20
+    call mou_p2cw
+    jc .noaux
+    call mou_p2rd
+    jc .noaux
+%ifdef MOU_DIAG
+    mov byte [mou_p2sub], 4
+    mov [mou_p2cm1], al
+%endif
+    test al, 0x20               ; did 0xA8 take?
+    jz .haveaux
+%ifdef MOU_DIAG
+    mov byte [mou_p2aux], 0xE1  ; no: nothing here has an auxiliary port
+%endif
+    jmp .noaux
+
+.haveaux:
+%ifdef MOU_DIAG
+    mov byte [mou_p2aux], 0xE0
+%endif
+    mov al, 0xA8                ; enable it - and NOTHING is read back. Step 3
+    call mou_p2cw               ; writes the command byte with bit 5 clear as
+    jc .fail                    ; well, so the port is enabled BOTH ways that
+    call mou_p2flush            ; controllers differ about, and the device
+                                ; reset below is what actually decides
+
+    mov byte [mou_p2st], 3
+    mov al, [mou_p2cmd0]
+    and al, 0xDD                ; bit 5 clear: run the aux clock. Bit 1 clear:
+    or  al, MOU_P2KOFF          ; IRQ12 stays OFF until the vector is ours
+    call mou_p2wcmd             ; ...AND BIT 4 STAYS SET, which is 0xAD's own
+    jc .fail                    ; doing held rather than handed back. The bank
+                                ; above deliberately clears it - mou_p2_off
+                                ; writes that byte on the UI task and must not
+                                ; disable the keyboard - so every write made
+                                ; INSIDE this window has to put it back, or
+                                ; this one line undoes step 1 for the whole of
+                                ; the reset below (SPEC.md 9.9.1)
+
+    mov byte [mou_p2st], 4      ; reset the device...
+    mov al, 0xFF
+    call mou_p2dev
+    jc .fail
+    mov byte [mou_p2st], 5      ; ...and wait out its self-test, which the part
+    mov bx, MOU_P2BAT           ; is allowed half a second for. The SHORT wait
+.bat:                           ; retried, rather than a second timeout to size
+    call mou_p2rd
+    jnc .bdone
+    dec bx
+    jnz .bat
+    jmp short .fail
+.bdone:
+    cmp al, 0xAA                ; BAT passed?
+    jne .fail
+    mov byte [mou_p2st], 6
+    call mou_p2rd               ; the device ID: BANKED AND PUBLISHED, never
+    jc .fail                    ; tested - a wheel mouse sitting in its 3-byte
+    mov [mou_p2id], al          ; boot mode is exactly the mouse this decoder
+                                ; wants, and refusing it would buy nothing
+
+    ; --- a mouse answered: from here it is commitment, not probing -----------
+    ; THE VECTOR FIRST, and that ordering is not tidiness - it is the defect
+    ; this was found with. Arming IRQ12 in the command byte while int 74h still
+    ; points at the machine's own BIOS hands the very next byte - the 0xF4
+    ; acknowledgement - to a handler that reads 60h and drops it, and the enable
+    ; then times out with [mou_p2st] stuck at this step. It looks exactly like
+    ; a controller that stopped answering, on a machine where every earlier
+    ; step passed.
+    mov byte [mou_p2st], 7
+    xor ax, ax
+    mov es, ax
+    mov si, MOU_P2VEC
+    pushf
+    cli
+    mov ax, [es:si]
+    mov [mou_p2old], ax
+    mov ax, [es:si+2]
+    mov [mou_p2old+2], ax
+    mov word [es:si], mou_p2_isr
+    mov [es:si+2], cs
+    popf
+    mov byte [mou_p2st], 8      ; ...and 8 is what says the vector is OURS,
+                                ; which is the one thing mouse_unhook has to
+                                ; know and [mou_p2] cannot tell it: mou_p2_off
+                                ; clears that byte when this mouse loses the
+                                ; contest, and the vector is still owed back
+
+    mov al, [mou_p2cmd0]
+    and al, 0xDF                ; the aux clock on...
+    or  al, 0x02 | MOU_P2KOFF   ; ...and IRQ12 armed AT THE CONTROLLER, still
+    call mou_p2wcmd             ; masked at the 8259 and now pointing at us -
+    jc .fail                    ; and bit 4 still SET, because the 0xF4 below
+                                ; is one more reply to collect and the 0xAE at
+                                ; the bottom is what hands the keyboard back
+    mov al, 0xF4                ; start data reporting
+    call mou_p2dev
+    jc .fail
+    mov byte [mou_p2st], 9      ; live
+
+    call mou_p2flush            ; before 0xAE, so a keystroke arriving as the
+    mov al, 0xAE                ; interface comes back is not flushed away
+    call mou_p2cw
+    in  al, 0xA1                ; IRQ12 at the SLAVE...
+    and al, 0xEF                ; ...clearing MOU_P2SL
+    out 0xA1, al
+    in  al, 0x21                ; ...and IRQ2 at the master, the CASCADE -
+    and al, 0xFB                ; clearing MOU_P2CASC. Without it the slave's
+    out 0x21, al                ; line reaches nothing, and the symptom is a
+                                ; mouse that passed every step above and is
+                                ; then silent for the session
+    mov byte [mou_p2], 1
+    jmp short .quit
+
+.noaux:                         ; 0xA8 did nothing, or the read never came:
+                                ; either way nothing here has an auxiliary port
+                                ; to talk to. Only 0xAD and 0xA8 have been sent
+                                ; and the command byte was never banked, so the
+                                ; whole of putting this machine back is 0xA7
+                                ; and the 0xAE every path below already sends
+%ifdef MOU_DIAG
+    in  al, MOU_P2CMD
+    mov [mou_p2sta], al
+%endif
+    mov al, 0xA7
+    call mou_p2cw
+    jmp short .quit
+
+.fail:                          ; put the controller back the way it was found
+%ifdef MOU_DIAG
+    in  al, MOU_P2CMD           ; ...but FIRST, what 64h said at the moment it
+    mov [mou_p2sta], al         ; gave up. IBF, OBF and AUXB in one byte, which
+%endif                          ; is the fact no amount of reading this source
+                                ; can supply (SPEC.md 9.9.6)
+    mov al, 0xA7                ; the auxiliary port off again...
+    call mou_p2cw
+    mov al, [mou_p2cmd0]        ; ...and its command byte exactly as the BIOS
+    call mou_p2wcmd             ; had it. IRQ12 is deliberately LEFT masked:
+                                ; nothing else in this kernel uses that line,
+                                ; the port above is now unclocked so nothing
+                                ; can drive it, and a probe that failed has no
+                                ; business handing the line back to a handler
+                                ; whose device it just power-cycled. It
+                                ; self-heals - int 19h re-enters mouse_init,
+                                ; which unmasks on the path that succeeds
+.quit:
+    mov al, 0xAE                ; the keyboard interface, ON EVERY PATH - a
+    call mou_p2cw               ; boot that leaves it disabled is a machine
+    in  al, 0x21                ; ...and IRQ1 back as it was found, which is
+    and al, 0xFF & ~MOU_P2KIRQ  ; the bit alone: the success path has just
+    mov ah, [mou_p2m1]          ; cleared the cascade in this same byte and
+    and ah, MOU_P2KIRQ          ; must not have it put back
+    or  al, ah
+    out 0x21, al
+    pop es                      ; with no keyboard, which is worse than every
+    pop si                      ; failure this routine is guarding against
+    pop bx
+    pop ax
+.none:
+    ret
+
+; -----------------------------------------------------------------------------
+; mou_p2_off - retire the PS/2 mouse: a serial port won the contest
+;
+; The mirror of mou_lockon's IER = 0 (SPEC.md 9.9.4). The vector is deliberately
+; LEFT installed, for the reason a retired UART keeps its base: mouse_unhook
+; still owes int 74h its own back, and a vector pointing into KERNEL_SEG after
+; the handoff is a vector nobody owns.
+;
+; NOTHING HERE READS 60h. This is the one PS/2 routine that runs on the UI task
+; rather than inside mouse_init's 0xAD window, so the keyboard interface is
+; live and a read there would take a keystroke away from int 09h. Switching the
+; auxiliary port off at the controller is enough: an unclocked device cannot
+; report, so there is nothing to acknowledge and nothing to drain.
+;
+; ins:  none
+; outs: none (all registers preserved)
+; -----------------------------------------------------------------------------
+mou_p2_off:
+    cmp byte [mou_p2], 0
+    je .out
+    push ax
+    mov byte [mou_p2], 0
+    in  al, 0xA1                ; IRQ12 masked at the slave...
+    or  al, MOU_P2SL
+    out 0xA1, al
+    mov al, 0xA7                ; ...the auxiliary port switched off, so the
+    call mou_p2cw               ; device is not even clocked...
+    mov al, [mou_p2cmd0]        ; ...and the command byte back as the BIOS had
+    call mou_p2wcmd             ; it, IRQ12 bit and all
+    pop ax
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; mou_p2_isr - IRQ12, int 74h (SPEC.md 9.9.3)
+;
+; The 8042 has ONE output buffer for two devices, so the first question here is
+; whose byte this is: status bit 5 set means the auxiliary device's. A KEYBOARD
+; BYTE IS LEFT WHERE IT IS - int 09h owns it, and reading 60h here would make
+; it vanish, which is a keystroke lost with nothing to show for it.
+;
+; IRQ12 is on the SLAVE 8259, so the EOI at the bottom is two of them: the
+; slave for the line itself and the master for the cascade.
+; Runs with IF = 0 throughout; never sti (SPEC.md 7).
+; -----------------------------------------------------------------------------
+mou_p2_isr:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push ds
+    push es
+    mov ax, KERNEL_SEG
+    mov ds, ax
+    cld
+%ifdef MOU_DIAG
+    inc word [mou_p2irq]        ; COUNTED BEFORE THE TESTS BELOW: "the line
+%endif                          ; fires and the buffer is empty" and "the line
+                                ; never fires" are different faults and look
+                                ; identical from anywhere else (SPEC.md 9.9.6)
+    in  al, MOU_P2CMD
+    test al, 0x01               ; anything in the buffer at all?
+    jz .eoi
+    test al, 0x20               ; ...and is it the AUXILIARY device's?
+    jz .eoi
+    in  al, MOU_P2DAT           ; ...and THIS read is what drops the request
+    call mou_p2_byte
+.eoi:
+    mov al, 0x20                ; the SLAVE first and then the master: the BIOS
+    out 0xA0, al                ; handles IRQ12 for nobody, and a cascaded line
+    out 0x20, al                ; owes both controllers an EOI
+    pop es
+    pop ds
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    iret
+
+; -----------------------------------------------------------------------------
+; mou_p2_byte - one byte from the auxiliary device
+;
+;   byte 0    YV XV YS XS  1 MB RB LB
+;   byte 1    X movement, 8 bits, sign in byte 0's XS
+;   byte 2    Y movement, likewise - AND POSITIVE IS UP
+;
+; in:  AL = the byte; ISR context, IF = 0
+; -----------------------------------------------------------------------------
+mou_p2_byte:
+    cmp byte [mou_seen], 0
+    je .take                    ; nothing has won yet
+    cmp byte [mou_port], MOU_P2ROW
+    jne .out                    ; a serial port won: this device is on its way
+                                ; to being retired and its bytes are nobody's.
+                                ; The same instruction mou_byte uses, asked of
+                                ; the other socket
+.take:
+    cmp byte [mou_p2ph], 1
+    je .b1
+    ja .b2
+    test al, 0x08               ; byte 0's bit 3 is ALWAYS set, and it is the
+    jz .out                     ; only sync this protocol offers
+    mov [mou_p2b0], al
+%ifdef MOU_DIAG
+    mov [mou_p2lb0], al
+%endif
+    mov byte [mou_p2ph], 1
+    ret
+.b1:
+    mov [mou_p2b1], al
+    mov byte [mou_p2ph], 2
+    ret
+
+.b2:
+    mov byte [mou_p2ph], 0
+    mov bl, al                  ; BL = the Y magnitude
+    mov dh, [mou_p2b0]          ; DH = byte 0, and it stays there to the end
+    test dh, 0xC0               ; either overflow bit: the deltas are a LIE, so
+    jnz .out                    ; the packet is dropped WHOLE rather than
+                                ; clamped. A dropped packet costs one report of
+                                ; motion; a believed overflow flag costs a
+                                ; pointer that jumps the width of the screen
+
+    cmp byte [mou_seen], 0      ; the FIRST packet settles it and is acted on -
+    jne .go                     ; there is no run threshold on this side.
+    mov byte [mou_port], MOU_P2ROW  ; [mou_need] exists because a Hayes result
+    mov byte [mou_line], MOU_P2LINE ; code is a well-formed Microsoft packet
+    mov byte [mou_ptr], 1       ; ...and the machine HAS a pointer (SPEC.md
+                                ; 9.6.6): the keyboard mouse asks THIS, not
+                                ; "who won the serial contest", so it stands
+                                ; down beside a PS/2 winner too
+    mov byte [mou_seen], 1      ; (SPEC.md 9.5.1); the aux port carries ONE
+                                ; device and it answered a reset before its
+                                ; interrupt was ever armed (SPEC.md 9.9.4).
+                                ; MOU_P2LINE is not a master-8259 bit, so
+                                ; mou_lockon masks both serial lines and
+                                ; neither of this mouse's own
+.go:
+%ifdef MOU_DIAG
+    inc word [mou_p2pkt]        ; a WHOLE packet, past sync and past overflow
+%endif
+    mov al, [mou_p2b1]          ; --- dx: 8 bits, sign in byte 0's bit 4 ------
+    xor ah, ah
+    test dh, 0x10
+    jz .xp
+    dec ah                      ; AH = 0FFh. Sign-extended BY HAND: an 8086 has
+.xp:                            ; no movsx, and cbw would take the magnitude's
+    mov si, ax                  ; own top bit for the sign
+
+    mov al, bl                  ; --- dy, AND POSITIVE IS UP ON THIS WIRE -----
+    xor ah, ah
+    test dh, 0x20
+    jz .yp
+    dec ah
+.yp:
+    neg ax                      ; ...so the screen's dy is its negation, and
+    mov bx, ax                  ; this one line is the whole difference. Getting
+                                ; it wrong looks exactly like a working mouse
+
+    mov cl, dh
+    and cl, 0x03                ; bit 0 = left, bit 1 = right: already
+                                ; mouse_btn's own order, so the shared back end
+                                ; needs no translation. The middle button (bit
+                                ; 2) is read and dropped - SPEC.md 10's event
+                                ; set has no record for it
+    mov ax, si
+    jmp mou_apply
+.out:
+    ret
+%endif                          ; KERN_BIG - the PS/2 mouse (SPEC.md 9.9)
 
 ; =============================================================================
 ; The keyboard mouse (SPEC.md 9.6)
@@ -861,7 +1777,7 @@ KBM_NDIR    equ 8
 ;      (all registers preserved)
 ; -----------------------------------------------------------------------------
 kbm_key:
-    cmp byte [mou_seen], 0
+    cmp byte [mou_ptr], 0
     jne kbm_pass                ; a real mouse has spoken: never intercept
     call kbm_slock              ; ...or ScrollLock is on and the user has asked
     jnz kbm_pass                ; for the keys back
@@ -923,13 +1839,38 @@ kbm_slock:
     pop ax
     ret
 
-; --- a direction: step, clamp, and move the arrow ----------------------------
-kbm_move:
-    call kbm_accel              ; DL = px this press is worth, and imul does
-    mov al, [bx+1]              ; not disturb it, so it serves both axes
-    imul dl                     ; dx (-1, 0, +1) x the step -> AX, signed
-    add ax, [mouse_x]
-    or  ax, ax                  ; clamp 0..[vid_wm1], exactly as the ISR does
+; -----------------------------------------------------------------------------
+; mou_clamp - the nearest legal pointer position (SPEC.md 39.15.4)
+;
+; in:       AX = x, BX = y, virtual, possibly outside every display
+; out:      AX/BX legal
+; clobbers: AX, BX, flags. CX and DX SURVIVE - mou_isr still has the staged
+;           button byte in DX and kbm_move its step in DL.
+;
+; ONE DISPLAY IS THE OLD PER-AXIS CLAMP, unchanged: [vid_wm1]/[vid_hm1] are
+; display 0's extent there, and this is the same six compares the two callers
+; used to carry inline.
+;
+; TWO IS NOT A RECTANGLE. The virtual desktop is a union (SPEC.md 39.2.1), so
+; clamping each axis independently would walk the pointer into the DEAD ZONE
+; and lose it. The rule instead:
+;
+;     inside SOME display -> take it
+;     otherwise           -> clamp into the display the arrow is on
+;
+; which produces every behaviour the seam needs without naming any of them.
+; Off display 0's right edge at a y both cover is inside display 1, so the
+; pointer CROSSES. Off display 1's outer edge is inside nothing, so it stops
+; there. Down off display 0 beside display 1's left edge is inside nothing
+; either, so it stops at display 0's last row rather than vanishing into the
+; gap. And back left from display 1 at a y display 0 covers crosses home.
+; -----------------------------------------------------------------------------
+mou_clamp:
+%ifdef KERN_BIG
+    cmp byte [vid_ndisp], 1
+    ja .multi
+%endif
+    or ax, ax                   ; x into 0..[vid_wm1]
     jns .xlo
     xor ax, ax
 .xlo:
@@ -937,20 +1878,69 @@ kbm_move:
     jle .xok
     mov ax, [vid_wm1]
 .xok:
-    mov [mouse_x], ax
+    or bx, bx                   ; ...and y into 0..[vid_hm1]
+    jns .ylo
+    xor bx, bx
+.ylo:
+    cmp bx, [vid_hm1]
+    jle .yok
+    mov bx, [vid_hm1]
+.yok:
+    ret
+%ifdef KERN_BIG
+.multi:
+    push cx
+    push ax                     ; vid_disp_find answers in AL
+    call vid_disp_find
+    pop ax
+    jnc .mout                   ; inside a display already: nothing to correct
+    push bx
+    push ax
+    mov ax, [mouse_x]           ; the display under the PRE-STEP position,
+    mov bx, [mouse_y]           ; which the clamp invariant keeps inside SOME
+    call vid_disp_find          ; display - NOT [cur_disp]: that is where the
+    mov cl, al                  ; arrow was last DRAWN, and it freezes while
+    pop ax                      ; the gfx lock is held, so a seam crossed
+    pop bx                      ; during a repaint and then clamped into it
+    call vid_pt_clamp           ; dragged the pointer a whole monitor back
+.mout:
+    pop cx
+    ret
+%endif
 
+; --- a direction: step, clamp, and move the arrow ----------------------------
+; A DROPPED MENU IS A LIST, and gets asked first (SPEC.md 9.6.3): a press with
+; a vertical component there moves one ITEM rather than KBM_MIN pixels, and
+; menu_kbnav has already placed the pointer when it answers CF = 0. Asking it
+; ABOVE kbm_accel is what keeps the two mechanisms apart - a placed press never
+; stamps [kbm_last], so the first arrow AFTER the menu closes sees a large tick
+; gap and starts fresh at KBM_MIN, which is what it should do anyway.
+kbm_move:
+    mov al, [bx+2]              ; dy: the axis a menu is a list along
+    call menu_kbnav
+    jnc .paint                  ; placed - the repaint below is all that is left
+    call kbm_accel              ; DL = px this press is worth, and imul does
+    mov al, [bx+1]              ; not disturb it, so it serves both axes
+    imul dl                     ; dx (-1, 0, +1) x the step -> AX, signed
+    add ax, [mouse_x]
+    push ax                     ; banked on OUR stack until y is ready, for
+                                ; mou_clamp's 2-D reason (SPEC.md 39.15.4).
+                                ; NOT in [mou_nx]: that word is the IRQ4
+                                ; ISR's staging area, and a serial byte
+                                ; landing between our store and read-back
+                                ; paired the ISR's x with our y
     mov al, [bx+2]              ; dy, the same way
     imul dl
     add ax, [mouse_y]
-    or  ax, ax
-    jns .ylo
-    xor ax, ax
-.ylo:
-    cmp ax, [vid_hm1]
-    jle .yok
-    mov ax, [vid_hm1]
-.yok:
-    mov [mouse_y], ax
+    mov bx, ax
+    pop ax
+    call mou_clamp
+    mov [mouse_x], ax
+    mov [mouse_y], bx
+    mov byte [cur_shchk], 1     ; THE POINTER MOVED (SPEC.md 7.2.1.1)
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
+    call sch_wake_ui            ; ...and WAKE the UI task (SPEC.md 8.1.2.2)
+.paint:
     call kbm_paint
     pop dx
     pop cx
@@ -1064,6 +2054,15 @@ kbm_paint:
 ; produced. The stamp moves on an ignored repeat too, so a key held down stays
 ; held rather than firing again once the repeats have drifted KBM_GAP apart.
 kbm_btn:
+    mov byte [kbm_p5], 0        ; WHICHEVER ROUTE GOT HERE, one press (9.6.4):
+                                ; whether this BIOS discards keypad 5 or
+                                ; delivers it is a property of the BIOS, so on
+                                ; one that delivers it BOTH kbm_isr and this
+                                ; would claim the same keystroke - the menu
+                                ; opening and shutting in one press. int 16h
+                                ; is always looked at first, so cancelling the
+                                ; pending scancode here is what makes the hook
+                                ; a FALLBACK rather than a second opinion
     push ax
     mov ax, [ticks]
     sub ax, [kbm_btick]         ; wrap-safe, like every other tick compare here
@@ -1081,6 +2080,435 @@ kbm_btn:
     mov [kbm_btick], ax
     pop ax
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; kbm_isr - int 09h, because the BIOS will not deliver the keypad's 5
+;           (SPEC.md 9.6.4)
+;
+; Keypad 5 is the one keypad key with NO cursor function, and that is not only
+; why 9.6.1 has to match it on its scancode alone - it is why, with NumLock
+; OFF, THE BIOS HAS NOTHING TO TRANSLATE IT TO AND THROWS IT AWAY. Measured on
+; a period BIOS, pressing it moves the keyboard buffer's head and tail not at
+; all, where Ins gives 5200h and Up 4800h. So int 16h can never report it, and
+; kbm_key's `cmp ah, 0x4C` can only ever fire with NumLock ON - which is the
+; mode where the ASCII gate makes the arrows digits and there is no keyboard
+; mouse to press a button for. The key worked only where the feature did not.
+;
+; That is also why every test of it passed: 9.6.1 verified this key by turning
+; NumLock on, which is the one mode in which it arrives. A harness kinder than
+; the machine hides exactly the bug it exists to find.
+;
+; So the kernel reads the SCANCODE rather than the BIOS's translation of it.
+; This is the only place os8088 touches the keyboard hardware, and it does the
+; least a hook can do: it PEEKS port 60h and chains. On the 8088's 8255 the
+; byte is latched in port A until the BIOS acknowledges it with bit 7 of port
+; 61h, so reading it early is not consuming it - the real handler below reads
+; the same byte and does all the work, including the ack, the shift states and
+; the EOI. Nothing here writes a port, queues a key or ends an interrupt.
+;
+; WHETHER THE BIOS DISCARDS IT IS A PROPERTY OF THE BIOS, NOT OF THE MACHINE
+; CLASS, which is why this is installed on every tier and not only on the
+; 8088. Measured: a period 5150 ROM throws keypad 5 away in cursor mode, and
+; SeaBIOS DELIVERS it (AL = 0, AH = 4Ch) on the same setting. So the hook is a
+; FALLBACK: on a BIOS that delivers the key, int 16h is looked at first,
+; kbm_key claims it and clears [kbm_p5], and this claims nothing. Without that
+; guard both would fire and one press would open a menu and shut it again.
+;
+; Three gates around the peek, in cost order: a mouse that has spoken (so a
+; machine with one reads the port only if SPEC.md 9.7's map is armed), then
+; NumLock - on, int 16h delivers the key on every BIOS tried and kbm_key has
+; it - and ScrollLock, which is 9.6.2's hatch and must hand this key back with
+; all the others.
+;
+; THE PEEK IS ALSO SPEC.md 9.7's, and that is why the first gate moved rather
+; than went. A key-state map has to see every byte, including on a machine
+; with a mouse - so `[kbd_armed]` is a second reason to read the port, and a
+; machine where nothing has ever asked for key state still never reads it.
+; That is the whole reason the map arms on being ASKED: the 8042 paragraph
+; below is a claim no period AT ROM has been put to, and it stays scoped to
+; the machines that need it rather than being spent on every machine.
+;
+; ON THE 8042 THE READ IS NOT ACKNOWLEDGED EITHER, but the reasoning differs
+; and is worth stating because the first version gated this to tier 0 over it.
+; An 8088's 8255 latches the byte until the BIOS pulses port 61h, so a peek is
+; provably free. A 286+ 8042 clears output-buffer-full on the read while the
+; data register keeps the byte, so a BIOS that tests OBF before reading would
+; find none. No int 09h handler tried does test it - SeaBIOS reads 60h
+; directly, and the IBM ROM is already inside the interrupt when it reads -
+; and the keyboard is verified alive through this hook on both. It is the one
+; claim here that a period AT ROM has not been put to.
+;
+; The break code (0CCh) matches nothing, and typematic repeats collapse into
+; one press because kbm_btn's own KBM_GAP guard is what spends this.
+; -----------------------------------------------------------------------------
+KBM_5SCAN   equ 0x4C            ; the keypad's centre key, make code
+
+kbm_isr:
+    push ax
+    push ds
+    mov ax, KERNEL_SEG
+    mov ds, ax
+    call sch_wake_ui            ; A KEYSTROKE WAKES THE UI TASK (SPEC.md
+                                ; 8.1.2.2). Here at the head and not after the
+                                ; chain below, because the chain is a `jmp far`
+                                ; and never comes back - and it is safe here,
+                                ; because the BIOS handler runs inside THIS
+                                ; interrupt and stores the key before any task
+                                ; runs again. int 16h is polled once a pass and
+                                ; a blocked ui_task has no other reason to
+                                ; take one; without this a keystroke waits for
+                                ; the tick
+    call kbd_ovflow             ; SPEC.md 9.8, and AHEAD of every gate below:
+                                ; a BIOS about to find its buffer full is a
+                                ; nested beep and a dead machine, and that is
+                                ; true on a machine with a mouse and on one
+                                ; whose software never asked for key state
+    mov ah, [kbd_armed]         ; SPEC.md 9.7's key-state map wants every byte
+    or ah, ah                   ; that arrives; the keypad-5 half wants one
+    jnz .peek                   ; byte on a mouseless machine. EITHER is a
+    cmp byte [mou_ptr], 0       ; reason to read the port, and neither being
+    jne .chain                  ; one is what keeps an idle machine off it
+.peek:
+%ifdef KERN_BIG
+    ; --- ...and on an 8042, is the byte waiting even the KEYBOARD's? --------
+    ; SPEC.md 9.6.6. One data register serves both devices and only status
+    ; bit 5 says which, so a bare read here can judge a MOUSE byte as a
+    ; scancode - which on the key-state map (9.7) sets a bit for a key nobody
+    ; touched. Gated on [mou_p2] and not on [cpu_tier]: an XT has an 8255
+    ; and no status register at 0x64 at all, so the machine this OS is for
+    ; must not read that port, and a machine with no aux device has nothing
+    ; the test could ever catch. AL is dead here - it is about to be loaded
+    ; from 0x60 - and AH ([kbd_armed]) is what must survive.
+    cmp byte [mou_p2], 0
+    je .peek60
+    in  al, MOU_P2CMD
+    test al, 0x20               ; status bit 5: the AUXILIARY device's byte
+    jnz .chain                  ; the mouse's, and LEFT for mou_p2_isr to take
+.peek60:
+%endif
+    in al, 0x60                 ; PEEK - see above: the 8255 holds it until the
+                                ; BIOS acks, so this consumes nothing
+    or ah, ah
+    jz .p5                      ; nobody is tracking keys: keypad 5 only
+    call kbd_track              ; SPEC.md 9.7 - preserves AL
+.p5:
+    cmp byte [mou_ptr], 0
+    jne .chain                  ; a real mouse has spoken: never intercept
+    cmp al, KBM_5SCAN
+    jne .chain
+    push es
+    mov ax, 0x40                ; the BIOS data area, NOT zero: KB_FLAG is at
+    mov es, ax                  ; 0040:0017, and an ES of 0 reads the middle of
+                                ; the vector table instead - which has bits in
+                                ; 0x30 set, so the test below always chained
+                                ; and this key stayed dead (kbm_slock is the
+                                ; idiom; the vector install above is not)
+    test byte [es:0x17], 0x30   ; KB_FLAG: NumLock (20h) - int 16h will deliver
+    pop es                      ; it and kbm_key claims it - or ScrollLock
+    jnz .chain                  ; (10h), the hatch. pop leaves the flags alone
+    mov byte [kbm_p5], 1        ; ...otherwise it is a press, spent in task
+                                ; context by kbm_p5spend
+.chain:
+    ; A CHAIN TO OURSELVES IS A DEAD MACHINE, so it is refused rather than
+    ; taken (SPEC.md 9.6.5). mouse_unhook puts int 09h back now and that is
+    ; what stops kbm_old9 ever naming this routine - but the vector outlives
+    ; any path that skips the unhook, and the failure it produces is the worst
+    ; in the system: a tight loop inside an interrupt gate, IF clear, IRQ1 in
+    ; service and no EOI ever sent. Nothing faults, nothing overruns, the
+    ; screen keeps whatever it had and every clock in the machine stops.
+    ;
+    ; No BIOS handler lives in the kernel's segment, so the segment alone is
+    ; the whole test. Refusing costs the keystroke and an EOI the BIOS would
+    ; otherwise have sent - a keyboard that has stopped working, on a machine
+    ; that is still running, in a state this can no longer reach.
+    mov ax, cs
+    cmp [cs:kbm_old9+2], ax
+    je .selfchain
+    pop ds
+    pop ax
+    jmp far [cs:kbm_old9]       ; CS, not DS: DS is the interrupted code's again
+.selfchain:
+    mov al, 0x20                ; the EOI is the BIOS's job and there is no
+    out 0x20, al                ; BIOS below us: without it IRQ1 stays in
+    pop ds                      ; service and takes the mouse's IRQ3/IRQ4 down
+    pop ax                      ; with it
+    iret
+
+; =============================================================================
+; The key-state map (SPEC.md 9.7) - IS THIS KEY DOWN RIGHT NOW?
+;
+; int 16h answers "what was typed", which is a different question, and for a
+; real-time app it is the WRONG one: there is no key-up in it and a typematic
+; repeat is byte-identical to a fresh press, so "is left held" cannot be asked
+; of it at all. Every consumer therefore ended up inferring a hold from the
+; INTERVAL between events, and that inference has two failures nothing inside
+; it can fix. It cannot see the typematic DELAY - about 9 ticks in which a
+; held key produces no evidence whatever, so the app either stops dead in the
+; middle of a hold or must move for the whole delay whether the key came up or
+; not. And the keyboard repeats the LAST key pressed, so pressing a second key
+; (a fire button) silently ends the first key's evidence while the finger is
+; still on it. Both are apps/arkanoid's, both were reported off the field
+; machine, and neither is an app bug.
+;
+; The scancodes carry the answer and always did: a make code and its break
+; code differ by bit 7, and the kernel is already inside int 09h for SPEC.md
+; 9.6.4's keypad 5. So one bit per key, written by that ISR, read by anyone.
+;
+; It is 128 bits - one per set-1 make code - and E0/E1 are skipped, because
+; those are PREFIXES and name no key of their own: the key's own code follows
+; the prefix and its break code follows a second one, so an extended arrow and
+; the keypad arrow beside it land on the same bit, which is what a caller
+; asking "is left down" means.
+;
+; ASKING IS WHAT ARMS IT (kbd_down), and the first answer after arming is
+; always "up". A machine whose software never asks never reads port 60h at
+; all - which keeps kbm_isr's unproven 8042 claim scoped to the machines that
+; want the feature - and a key already held when the map arms is simply not
+; seen until it is pressed again. Nothing latches wrong: a break code clears a
+; bit that is already clear.
+;
+; What it cannot survive is a LOST break code - an interrupt dropped inside a
+; long IF=0 window leaves that key reading down until it is pressed and
+; released again. That is why this is advice and not an oracle: a consumer
+; bounds what it does with the answer (apps/arkanoid clamps at its rails), and
+; the state self-heals on the next press of the same key.
+; =============================================================================
+KBD_MAPSZ   equ 16              ; 128 bits, one per set-1 make code
+
+; -----------------------------------------------------------------------------
+; kbd_bit - where does this scancode live in the map?
+; in:  AL = a scancode, make or break
+; out: BX = the byte index, AH = the bit's mask; AL and every other register
+;      kept. ONE copy of this arithmetic, because a reader and a writer that
+;      disagree about which bit a key is would be a bug with no symptom until
+;      one particular key was pressed.
+; -----------------------------------------------------------------------------
+kbd_bit:
+    push cx
+    mov bl, al
+    and bl, 0x7F                ; make and break index the SAME bit
+    mov cl, bl
+    and cl, 7
+    shr bl, 1                   ; 8086: no shr reg, imm - and three of these is
+    shr bl, 1                   ; smaller than loading CL to shift by 3
+    shr bl, 1
+    mov bh, 0
+    mov ah, 1
+    shl ah, cl
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; kbd_track - one scancode from kbm_isr into the map
+; in:  AL = the byte port 60h just gave; DS = KERNEL_SEG
+; out: nothing; preserves every register and the flags are the caller's to
+;      ignore. INSIDE AN INTERRUPT, so it touches no port and ends no
+;      interrupt: it is four instructions and a store.
+; -----------------------------------------------------------------------------
+kbd_track:
+    push ax
+    push bx
+    cmp al, 0xE0                ; a prefix names no key: the code that follows
+    je .out                     ; it does, and that code's break follows a
+    cmp al, 0xE1                ; second prefix
+    je .out
+    call kbd_bit
+    test al, 0x80               ; bit 7 = break
+    jnz .up
+    or [kbd_dnmap+bx], ah
+    jmp short .out
+.up:
+    not ah
+    and [kbd_dnmap+bx], ah
+.out:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; kbd_down - is this key down right now? (SPEC.md 9.7, slot 0x03F0)
+; in:  AL = a make scancode (0x4B left, 0x4D right, 0x39 space, ...)
+; out: CF = 1 down, CF = 0 up; every register preserved
+;
+; No lock, no VRAM, no port: legal from a worker task, from a callback, and
+; from anywhere else a package can call at all.
+; -----------------------------------------------------------------------------
+kbd_down:
+    push ax
+    push bx
+    cmp byte [kbd_armed], 0
+    je .arm
+.go:
+    call kbd_bit
+    mov al, ah
+    and al, [kbd_dnmap+bx]
+    add al, 0xFF                ; CF = 1 exactly when the bit was set, and the
+    pop bx                      ; pops leave the flags alone
+    pop ax
+    ret
+.arm:
+    ; The map starts from "nothing is down" rather than from whatever .bss
+    ; happened to hold: a bit stuck ON here is a key an app believes is held
+    ; for the rest of the session, which is the one failure worth spending
+    ; nine bytes to make impossible.
+    mov bx, KBD_MAPSZ
+.z:
+    dec bx
+    mov byte [kbd_dnmap+bx], 0  ; a store leaves the flags alone, so the jnz
+    jnz .z                      ; below is still testing the dec
+    mov byte [kbd_armed], 1     ; ...and only NOW may the ISR write here
+    jmp short .go
+
+; =============================================================================
+; The overrun guard (SPEC.md 9.8) - A FULL BIOS BUFFER IS A HANG, NOT A BEEP
+;
+; The BIOS beeps when its 16-entry key buffer fills, and on the period IBM ROM
+; that beep is `call F000:E8C0`: two `loop $` delays run with INTERRUPTS
+; ENABLED. So every IRQ1 arriving inside one nests another int 09h - and
+; another beep - on whichever task stack is current, and a worker gets 256
+; bytes (SPEC.md 8). Measured on a 5150: seven nested copies of the same
+; 26-byte frame and a halt in sch_stkdie, about a second after the first held
+; key. It is a stack overrun with no bug anywhere near the stack.
+;
+; A margin cannot absorb it - a beep is up to ~60ms, LONGER than the ~50ms gap
+; between two held keys, so once one starts every following key lands inside
+; it. The buffer must never be full when the BIOS goes to write to it, which
+; is the whole of the invariant below.
+; =============================================================================
+KBD_BUFB    equ 0x1E            ; 0040:001E - the BIOS key buffer, and one past
+KBD_BUFE    equ 0x3E            ; its end. LITERAL, not 0040:0080/0082: those
+                                ; two BDA words do not exist on the earliest
+                                ; 5150 ROM, and winding the tail back to what
+                                ; happens to be at 40:80 is a keyboard that has
+                                ; stopped working (SPEC.md 9.8)
+KBD_OVBEEPS equ 3               ; ...and the beeps one overrun burst is worth
+
+; -----------------------------------------------------------------------------
+; kbd_ovflow - keep the BIOS buffer off full, from inside int 09h
+; in:  DS = KERNEL_SEG
+; out: nothing; preserves every register, clobbers the flags (kbm_isr calls
+;      this before it loads any of its own)
+;
+; Full, by the BIOS's own definition, is tail + 2 == head. When it is, the
+; NEWEST entry is un-enqueued - the tail winds back one slot - so the handler
+; below finds room, stores the arriving key where the previous newest sat, and
+; never reaches its beep. What gets dropped is therefore the NEW input: the
+; fifteen keys already queued keep their order and reach the application
+; untouched, which is the half of the queue the user is still waiting on.
+;
+; IT PREDICTS NOTHING. An earlier version read the scancode and made room only
+; for codes that would actually enqueue - skipping modifiers, prefixes and
+; break codes, so a key RELEASE on a full buffer cost nothing. Every such
+; filter is a guess with holes in it (Alt released with a pending Alt-numpad
+; value enqueues a character from a BREAK code), and a hole here is not a lost
+; keystroke, it is the hang above. So on a full buffer any int 09h at all
+; costs the newest queued key. That is a real cost, paid knowingly, in a state
+; where keys are being dropped regardless.
+;
+; It reads no port, which is what lets it sit ahead of SPEC.md 9.6.4's gates:
+; 9.7 arms the peek on being ASKED, and a guard every machine needs must not
+; quietly widen that. Two words of the BIOS data area are the whole input.
+; -----------------------------------------------------------------------------
+kbd_ovflow:
+    push ax
+    push bx
+    push es
+    mov ax, 0x40
+    mov es, ax
+    mov ax, [es:0x1A]           ; head - where the reader is
+    mov bx, [es:0x1C]           ; tail - where the BIOS is about to write
+    cmp ax, bx
+    je .drained                 ; empty: the reader has caught up, so the next
+                                ; burst is a new one and beeps again
+    cmp ax, KBD_BUFB            ; a head this arithmetic cannot reason about is
+    jb .out                     ; left alone and the old behaviour stands - it
+    cmp ax, KBD_BUFE            ; is a BIOS whose buffer is not where every
+    jae .out                    ; BIOS this boots on puts it
+    test al, 1
+    jnz .out
+    add bx, 2                   ; the slot the BIOS is about to fill...
+    cmp bx, KBD_BUFE
+    jb .nowrap
+    mov bx, KBD_BUFB
+.nowrap:
+    cmp bx, ax
+    jne .out                    ; ...is not the head: there is room, and this
+                                ; is the path every ordinary keystroke takes
+    sub ax, 4                   ; FULL. head - 4 is the slot BEFORE the newest,
+    cmp ax, KBD_BUFB            ; which is where the tail belongs once the
+    jae .wind                   ; newest is gone
+    add ax, KBD_BUFE - KBD_BUFB
+.wind:
+    mov [es:0x1C], ax
+    cmp byte [kbd_ovn], KBD_OVBEEPS
+    jae .out                    ; three beeps is the lot: past that the drop is
+                                ; silent, so the machine spends the time
+                                ; catching up rather than announcing that it
+                                ; has not (SPEC.md 9.8)
+    inc byte [kbd_ovn]
+    mov byte [kbd_ovb], 1       ; THE ISR ONLY EVER SETS A BYTE: snd_beep takes
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
+                                ; a critical section and may reach a loaded
+                                ; driver, and stack inside a nested keyboard
+                                ; interrupt is the one thing this routine
+                                ; exists to stop spending. kbd_ovspend sounds
+                                ; it in task context
+.out:
+    pop es
+    pop bx
+    pop ax
+    ret
+.drained:
+    mov byte [kbd_ovn], 0
+    jmp short .out
+
+; -----------------------------------------------------------------------------
+; kbd_ovspend - sound the overrun beep the ISR asked for, in TASK context
+;
+; Called from the two places that between them cover every state the machine
+; can be in: ui_task's deferred ladder (every pass, mouse or no mouse - kbm_ui
+; returns early on a machine that has one, so this cannot ride on its tail the
+; way kbm_p5spend does) and kbm_poll0, for the modal loops that ladder never
+; reaches. A pending beep that waits a pass is a beep slightly late, and the
+; overrun it is announcing is still going on.
+; out: nothing (all registers preserved, flags clobbered)
+; -----------------------------------------------------------------------------
+kbd_ovspend:
+    push ax
+    xor al, al
+    xchg al, [kbd_ovb]          ; read-and-clear in one, kbm_p5spend's idiom
+    or al, al                   ; and for its reason
+    jz .out
+    call snd_beep               ; SPEC.md 34.3, and a refusal by a higher
+.out:                           ; priority owner is fine: something louder than
+    pop ax                      ; a full keyboard buffer is already sounding
+    ret
+
+; -----------------------------------------------------------------------------
+; kbm_p5spend - turn a keypad-5 press the ISR saw into the button press
+;
+; The ISR only ever sets a byte: everything else the button does - the event,
+; the latch, the repeat guard - is kbm_btn's, and kbm_btn runs in TASK context
+; where every other button key already reaches it. So IRQ1 pushes nothing onto
+; the event queue and this needed no new rule about what an ISR may call.
+;
+; Called from the two places the keyboard mouse is serviced from, which
+; between them cover every state the machine can be in: kbm_poll0 (the modal
+; loops and a package's own tracking loop) and the end of kbm_ui (an ordinary
+; ui_task pass). In kbm_ui it must come AFTER .relax, or the press is released
+; by the same pass that made it - 9.6.1's flashing menu from a third direction.
+; out: nothing (all registers preserved, flags clobbered)
+; -----------------------------------------------------------------------------
+kbm_p5spend:
+    push ax
+    xor al, al
+    xchg al, [kbm_p5]           ; read-and-clear in one, so a press arriving
+    or al, al                   ; between the test and the store cannot be lost
+    jz .out                     ; (fr_restart's idiom, and for its reason)
+    call kbm_btn                ; the same one action Ins and Space take
+.out:
+    pop ax
     ret
 
 kbm_rclick:                     ; latches too - menu_popup ends on a level poll
@@ -1139,15 +2567,22 @@ kbm_poll0:
     push ax
     mov ah, 0x01
     int 0x16
-    jz .out                     ; nothing waiting
+    jz .p5                      ; nothing waiting
     call kbm_key
     jc .take                    ; ours, and acted on: take it out
     cmp byte [kbm_eat], 0
-    je .out                     ; not ours, and somebody else will read it
+    je .p5                      ; not ours, and somebody else will read it
 .take:
     mov ah, 0x00
     int 0x16
-.out:
+.p5:
+    call kbm_p5spend            ; LAST, so int 16h gets first refusal: on a
+                                ; BIOS that delivers keypad 5 the call above
+                                ; has already claimed it and cleared the flag
+                                ; (SPEC.md 9.6.4), and this finds nothing
+    call kbd_ovspend            ; ...and a modal loop is exactly where the
+                                ; buffer overruns unheard otherwise: ui_task's
+                                ; ladder is not running (SPEC.md 9.8)
     pop ax
     ret
 
@@ -1180,7 +2615,7 @@ kbm_poll0:
 ;      promising more than it keeps costs here.
 ; -----------------------------------------------------------------------------
 kbm_ui:
-    cmp byte [mou_seen], 0
+    cmp byte [mou_ptr], 0
     jne .out                    ; a machine with a mouse pays this compare
     xor al, al                  ; AL = the ScrollLock level, 0 or 1. kbm_slock
     call kbm_slock              ; preserves AX and answers in ZF, and the pops
@@ -1204,14 +2639,18 @@ kbm_ui:
     call gfx_unlock
 .relax:
     cmp word [ui_ev + EV_TYPE], EVT_MDOWN
-    jne .out
-    test byte [mouse_btn], 0x01
-    jz .out
+    jne .p5                     ; .p5 and NOT .out: nothing to release is the
+    test byte [mouse_btn], 0x01 ; commonest pass there is, and it is exactly
+    jz .p5                      ; the pass a fresh keypad-5 press arrives in
     push ax
     and byte [mouse_btn], 0xFE  ; bit 1 is the right button's own latch, and is
     mov ax, EVT_MUP             ; released by its own key (SPEC.md 12.4)
     call kbm_post
     pop ax
+.p5:
+    call kbm_p5spend            ; LAST, and after .relax: a press spent above
+                                ; the release would be taken back by the very
+                                ; pass that made it (SPEC.md 9.6.4)
 .out:
     ret
 
@@ -1230,6 +2669,11 @@ kbm_post:
     pop si
     ret
 
+kbm_old9    dd 0                ; the BIOS's int 09h, chained by kbm_isr
+                                ; (SPEC.md 9.6.4). .text with a real
+                                ; initialiser: -f bin zeroes nothing, and the
+                                ; ISR reads this through CS
+kbm_p5      db 0                ; ...and a keypad-5 press it saw, not yet spent
 kbm_step    db KBM_MIN          ; px the current run of repeats is worth
 kbm_lastk   db 0                ; ...and which direction it is a run OF
 kbm_last    dw 0                ; tick of the last movement key
@@ -1237,6 +2681,22 @@ kbm_btick   dw 0                ; ...and of the last button key, for the repeat
 kbm_slast   db 0                ; the ScrollLock level kbm_ui last saw (9.6.2)
 kbm_eat     db 0                ; kbm_pollm: eat a key we did not claim
 kbm_ev      times 8 db 0        ; the record kbm_post fills for evq_push
+kbd_armed   db 0                ; SPEC.md 9.7: has anything ever ASKED for key
+                                ; state? Until it has, kbm_isr does not read
+                                ; the port for it. .text with a real
+                                ; initialiser for kbm_old9's reason - the ISR
+                                ; reads it on the machine's first keystroke,
+                                ; and a 1 here would let it write a map
+                                ; kbd_down has not cleared yet
+kbd_dnmap   times KBD_MAPSZ db 0 ; ...and the bit per key. Zeroed again at the
+                                ; arm, so this initialiser is belt and braces
+kbd_ovn     db 0                ; SPEC.md 9.8: beeps this overrun burst has
+                                ; already spent, reset when the buffer next
+                                ; reads empty
+kbd_ovb     db 0                ; ...and one the ISR has asked for and no pass
+                                ; has sounded yet. Both .text with a real
+                                ; initialiser for kbd_armed's reason - the ISR
+                                ; reads them on the machine's first keystroke
 
 ; -----------------------------------------------------------------------------
 ; mou_isr / mou_isr3 - IRQ4 and IRQ3. Microsoft
@@ -1379,16 +2839,10 @@ mou_byte:
     and ah, 0x3F
     or  al, ah
     cbw                         ; AX = dx, signed
-    add ax, [mouse_x]
-    or  ax, ax                  ; clamp 0..[vid_wm1]
-    jns .xlo
-    xor ax, ax
-.xlo:
-    cmp ax, [vid_wm1]
-    jle .xok
-    mov ax, [vid_wm1]
-.xok:
-    mov [mouse_x], ax
+    mov si, ax                  ; ...banked, because mou_apply below wants both
+                                ; deltas at once. SI is the ISR's to spend - it
+                                ; is pushed - and it is the one register the
+                                ; y decode does not need
 
     ; --- dy = sign-extended {Y7Y6 from b0, Y5..Y0 from b2}; positive = down --
     mov al, dh
@@ -1398,28 +2852,83 @@ mou_byte:
     and bl, 0x3F
     or  al, bl
     cbw                         ; AX = dy, signed
-    add ax, [mouse_y]
-    or  ax, ax                  ; clamp 0..[vid_hm1]
-    jns .ylo
-    xor ax, ax
-.ylo:
-    cmp ax, [vid_hm1]
-    jle .yok
-    mov ax, [vid_hm1]
-.yok:
-    mov [mouse_y], ax
+    mov bx, ax
 
     ; --- buttons: b0 bit 5 = left, bit 4 = right -----------------------------
-    mov al, dh                  ; ...still the staged b0: nothing between here
-    xor bl, bl                  ; and evq_push touches DX
-    test al, 0x20
+    ; Into mouse_btn's OWN two bits here rather than inside mou_apply, because
+    ; this is the whole of what THIS protocol has to say about them - and the
+    ; PS/2 packet already carries them in that order (SPEC.md 9.9.3), so the
+    ; shared back end never has to know which mouse it is serving.
+    xor cl, cl
+    test dh, 0x20
     jz .nol
-    or  bl, 0x01
+    or  cl, 0x01
 .nol:
-    test al, 0x10
+    test dh, 0x10
     jz .nor
-    or  bl, 0x02
+    or  cl, 0x02
 .nor:
+    mov ax, si
+    jmp mou_apply               ; ...which ends in the ret this needs
+.bout:
+    ret
+
+; -----------------------------------------------------------------------------
+; mou_apply - one decoded report, whatever hardware carried it (SPEC.md 9.9.3)
+;
+; From the moment a packet is a signed dx, a signed dy and two button bits,
+; NOTHING about it is protocol-specific - so both mice end here: the staging
+; through mou_nx, mou_clamp's 2-D answer (SPEC.md 39.15.4), the event rules
+; including the binding fall-through that makes a both-buttons packet queue the
+; LEFT event only (SPEC.md 9), [blk_act] (SPEC.md 64.1), [cur_mvt] (SPEC.md
+; 7.1.4.3) and SPEC.md 7's draw-or-defer decision.
+;
+; A second copy of this would be a second place for that fall-through to be got
+; wrong, and it would be got wrong.
+;
+; ins:  AX = dx signed, BX = dy signed (POSITIVE IS DOWN - the PS/2 decoder
+;       negates its own), CL = the buttons (bit 0 left, bit 1 right).
+;       ISR context, IF = 0; the caller has already settled the contest.
+; outs: none
+; -----------------------------------------------------------------------------
+mou_apply:
+    mov byte [blk_act], 1       ; a packet on a SETTLED port IS user input
+                                ; (SPEC.md 64.1), and only a settled one: both
+                                ; callers do the contest before they get here,
+                                ; so a modem losing it cannot keep the screen
+                                ; awake all night. One store, no register - the
+                                ; UI task spends it, so nothing in an ISR
+                                ; touches a video port or reads a clock
+    add ax, [mouse_x]
+    mov [mou_nx], ax            ; STAGED, not stored: the clamp is 2-D on a
+                                ; machine with two displays (SPEC.md 39.15.4)
+                                ; and cannot answer about x until y is known
+    mov ax, bx
+    add ax, [mouse_y]
+    mov bx, ax
+    mov ax, [mou_nx]
+    call mou_clamp              ; ...and CX is untouched by it, which the
+    mov [mouse_x], ax           ; button decode below relies on
+    mov [mouse_y], bx
+    mov byte [cur_shchk], 1     ; THE POINTER MOVED, so the window under it
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
+    call sch_wake_ui            ; ...and WAKE the UI task (SPEC.md 8.1.2.2)
+                                ; may have changed (SPEC.md 7.2.1.1). One byte
+                                ; in the report path is what lets
+                                ; cur_shape_pass be one compare, not three
+%ifdef CURFIX
+    mov ax, [ticks]             ; THE HAND IS MOVING (SPEC.md 7.1.4.3), which
+    mov [cur_mvt], ax           ; is what decides whether the deferred hide is
+                                ; worth keeping. AX is dead here - the clamped
+                                ; x is already stored - and CL is NOT: it is
+                                ; still the buttons. Gated with its reader, so
+                                ; a DEFAULT build is the pre-7.1.4.2 ISR too
+                                ; and not that one with a dead store in it - an
+                                ; A/B disk carrying half of what it is testing
+                                ; is not an A/B
+%endif
+
+    mov bl, cl                  ; the buttons, in mouse_btn's own two bits
     mov bh, [mouse_btn]
     mov [mouse_btn], bl
     xor bh, bl                  ; changed bits
@@ -1463,6 +2972,21 @@ mou_byte:
     ; --- cursor: draw only if the lock is free AND cur_level >= 0 (SPEC 7) ---
     cmp byte [gfx_lock_flag], 0
     jne .dirty
+    cmp byte [fpg_on], 0        ; ...OR AN UNLOCKED PAINTER IS UP (SPEC.md
+                                ; 12.8.4). The progress widget is the one
+                                ; painter in the machine that draws with the
+                                ; lock FREE, and free is the one state this ISR
+                                ; draws in - so without this compare a fill and
+                                ; IRQ4 share vga_rect_setup's module scratch,
+                                ; the Graphics Controller's state and the glass
+                                ; itself, and what that leaves behind is an
+                                ; arrow written into somebody's window content
+                                ; for good (docs/FIELD-NOTES.md 34)
+%ifdef GFXAUDIT
+    jne .fpgd                   ; ...counted under the audit knob; the two arms
+%else                           ; are otherwise the same instruction
+    jne .dirty
+%endif
     mov al, [cur_level]
     or  al, al
     js .dirty
@@ -1472,15 +2996,32 @@ mou_byte:
     cmp ax, [cur_drawn_x]       ; button-only packet: nothing to redraw
     jne .redraw
     cmp bx, [cur_drawn_y]
-    je .bout
+    je .out
 .redraw:
+%ifdef GFXAUDIT
+    inc word [gfx_aud_mv]       ; the control: how many draws there were AT ALL
+    cmp byte [fpg_on], 0        ; **THE GATE** (SPEC.md 12.8.4): a draw here
+    je .nogate                  ; with the widget up is the defect itself -
+    inc word [gfx_aud_gate]     ; unreachable on a kernel that has the compare
+.nogate:                        ; above, and one per packet on one that does not
+    cmp byte [gfx_aud_dep], 0   ; ...and the COLLISION: a rect primitive in
+    je .norace                  ; flight in the task we interrupted, which is
+    inc word [gfx_aud_race]     ; the same defect caught in the act rather than
+.norace:                        ; at the door
+%endif
     call cur_move               ; SPEC.md 7.1.2: erase-old and draw-new as one
     mov byte [cur_dirty], 0
-    jmp .bout
+    ret
 
+%ifdef GFXAUDIT
+.fpgd:                          ; the deferral the gate above bought, counted -
+    inc word [gfx_aud_def]      ; the control for [gfx_aud_gate] being 0, which
+                                ; a session that never armed the widget would
+                                ; also manage
+%endif
 .dirty:
     mov byte [cur_dirty], 1     ; cursor_show catches up later
-.bout:
+.out:
     ret
 
 mou_eoi:
@@ -1496,6 +3037,33 @@ mou_eoi:
     pop ax
     pop bx
     iret
+
+%ifdef GFXAUDIT
+; cur_logput - one ring entry: the tag, the refcount, and where the pixels are
+; in:  AL = tag;  clobbers: AX, SI (the macro banks them)
+cur_logput:
+    pushf
+    mov si, [ss:cur_log_i]
+    cmp si, CURLOG_N*CURLOG_SZ
+    jae .out                    ; **IT STOPS WHEN FULL** rather than wrapping,
+                                ; and the harness re-arms it by storing 0 in
+                                ; [cur_log_i]: the question is always "what
+                                ; happened NEXT", and a ring answers "what
+                                ; happened last", which on an idle desktop is
+                                ; the clock
+    mov [ss:cur_log + si], al
+    mov al, [cur_level]
+    mov [ss:cur_log + si + 1], al
+    mov ax, [cur_drawn_x]
+    mov [ss:cur_log + si + 2], ax
+    mov ax, [cur_drawn_y]
+    mov [ss:cur_log + si + 4], ax
+    add si, CURLOG_SZ
+    mov [ss:cur_log_i], si
+.out:
+    popf
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; cursor_show - increment cur_level; on the -1 -> 0 transition, save under and
@@ -1523,7 +3091,14 @@ cursor_show:
     mov bx, [mouse_y]           ; clipped at the screen edges in cur_draw
     mov [cur_drawn_x], ax
     mov [cur_drawn_y], bx
+%ifdef KERN_BIG
+    push ax                     ; ...and WHICH display that is (SPEC.md
+    call vid_disp_of            ; 39.15.2) - the one place besides cur_move's
+    mov [cur_disp], al          ; jump where the arrow can change display
+    pop ax
+%endif
     mov byte [cur_dirty], 0
+    CURLOG 'S'                  ; DRAWN, at the position just stored
     call cur_put
 .done:
     popf
@@ -1558,6 +3133,7 @@ cursor_hide:
     dec byte [cur_level]
     cmp byte [cur_level], -1
     jne .done                   ; only the 0 -> -1 edge erases
+    CURLOG 'H'                  ; ERASED, from where the pixels are
     call cur_get
 .done:
     popf
@@ -1593,13 +3169,58 @@ cursor_hide:
 ; Internal; the caller guarantees IF = 0 or the gfx lock.
 ; clobbers: ax, bx, cx, dx, si, di, bp, es
 ; -----------------------------------------------------------------------------
+%ifdef KERN_BIG
+; --- the display bracket (SPEC.md 39.15.2) -----------------------------------
+; cur_put/cur_get/cur_move own this themselves rather than inheriting it,
+; because cur_get is reached from gfx_lock's deferred hide AND from the mouse
+; ISR - neither of which is inside a 39.14 drawing hook, so the display live at
+; either moment is whatever the last primitive left.
+;
+; CUR_DBEGIN banks the outgoing display on the stack and makes [cur_disp]
+; current; CUR_DEND puts it back, preserving every register and the flags.
+%macro CUR_DBEGIN 0
+    push ax
+    mov al, [vid_cur]
+    mov [cur_dprev], al
+    mov al, [cur_disp]
+    call vid_ctx_act
+    pop ax
+%endmacro
+
+%macro CUR_DEND 0
+    pushf
+    push ax
+    mov al, [cur_dprev]
+    call vid_ctx_act
+    pop ax
+    popf
+%endmacro
+%else
+%macro CUR_DBEGIN 0
+%endmacro
+%macro CUR_DEND 0
+%endmacro
+%endif
+
 cur_put:
+    CUR_DBEGIN
+    call cur_put_1
+    CUR_DEND
+    ret
+
+cur_put_1:
     cmp byte [vid_mono], 0
     jne cur_put_mono
     call cur_saveu
     jmp cur_draw
 
 cur_get:
+    CUR_DBEGIN
+    call cur_get_1
+    CUR_DEND
+    ret
+
+cur_get_1:
     cmp byte [vid_mono], 0
     jne cur_get_mono
     ; fall through to cur_restoreu
@@ -1607,17 +3228,34 @@ cur_get:
 ; -----------------------------------------------------------------------------
 ; cur_restoreu - write cur_save back under (cur_drawn_x, cur_drawn_y).
 ;                VRAM-direct (SPEC.md 32) - the cursor lives on the screen
-;                only, never in the back buffer, and this runs from the ISR
+;                only, and this runs from the ISR
 ;                where the bb dispatch must not apply.
 ; clobbers: ax, bx, cx, dx, si
 ; -----------------------------------------------------------------------------
 cur_restoreu:
     push es
+    push word [vga_pn]          ; **AND THE POINTER IS ALWAYS FOUR PLANES**
+    call gfx_1bpp_off           ; (SPEC.md 11.96.17, 32). vga_pn/vga_pm's own
+                                ; header says an arm "cannot leak onto the
+                                ; pointer, which reaches vga_restore_vram
+                                ; DIRECTLY out of IRQ4, below the two routines
+                                ; that disarm" - and gfx_save/gfx_restore call
+                                ; cur_unlazy FIRST, above their own disarm, so
+                                ; a window that promised OSAPI_SAVEU_1BPP hid
+                                ; the arrow with the one-plane arm still up.
+                                ; A restore seeded 0Fh does ONE pass with the
+                                ; Map Mask on all four planes, so plane 0 of a
+                                ; four-plane cur_save is broadcast into all of
+                                ; them and the cell under the arrow comes back
+                                ; black or white. Two words, at the one point
+                                ; both cursor paths pass through; the mono
+                                ; branch is inside vga_restore_vram, below this
     call cur_rect
     push ds
     pop es
     mov si, cur_save
     call vga_restore_vram
+    pop word [vga_pn]           ; ...and the caller's arm is its own again
     pop es
     ret
 
@@ -1630,11 +3268,15 @@ cur_restoreu:
 ; -----------------------------------------------------------------------------
 cur_saveu:
     push es
+    push word [vga_pn]          ; four planes, cur_restoreu's reason exactly -
+    call gfx_1bpp_off           ; and it has to be BOTH halves or the save and
+                                ; the restore disagree about the buffer
     call cur_rect
     push ds
     pop es                      ; buffer lives in kernel .bss
     mov di, cur_save
     call vga_save_vram
+    pop word [vga_pn]
     pop es
     ret
 
@@ -1646,6 +3288,20 @@ cur_saveu:
 cur_rect:
     mov ax, [cur_drawn_x]
     mov bx, [cur_drawn_y]
+%ifdef KERN_BIG
+    sub ax, [vid_ox]            ; ...into the ACTIVE display's own coordinates
+    sub bx, [vid_oy]            ; (SPEC.md 39.15.1). Unconditional rather than
+%endif                          ; gated on [vid_ndisp]: display 0 is always at
+                                ; the virtual origin, so on a one-card machine
+                                ; this subtracts zero
+    sub ax, [cur_hx]            ; ...and off the HOT SPOT, clamped at the
+    jns .xok                    ; display origin rather than clipped there
+    xor ax, ax                  ; (SPEC.md 7.2.2)
+.xok:
+    sub bx, [cur_hy]
+    jns .yok
+    xor bx, bx
+.yok:
     mov cx, ax
     add cx, CUR_GW-1
     mov dx, bx
@@ -1666,9 +3322,29 @@ cur_rect:
 ; -----------------------------------------------------------------------------
 cur_geom:
     mov ax, [cur_drawn_y]       ; DI = rowbase(y) + x/8
+%ifdef KERN_BIG
+    sub ax, [vid_oy]            ; cur_rect's subtraction, and for cur_rect's
+%endif                          ; reason: these two are the ONLY places a
+                                ; position becomes an ADDRESS (SPEC.md 39.15.1)
+    sub ax, [cur_hy]            ; ...and cur_rect's hot spot, clamped the same
+    jns .yok                    ; way, or a centred shape near the top edge
+    xor ax, ax                  ; addresses the row above the framebuffer
+.yok:
+    mov [cur_celly], ax         ; BANKED: the bottom clip below and
+                                ; cur_move_mono's row test both want the
+                                ; CELL's top row, which is no longer the
+                                ; pointer's y (SPEC.md 7.2.2)
     call gfx_rowbase
     mov di, ax
     mov bx, [cur_drawn_x]
+%ifdef KERN_BIG
+    sub bx, [vid_ox]
+%endif
+    sub bx, [cur_hx]
+    jns .xok
+    xor bx, bx
+.xok:
+    mov [cur_cellx], bx         ; ...and its left column, for cur_move_mono
     mov ax, bx
     mov cl, 3
     shr ax, cl
@@ -1687,9 +3363,13 @@ cur_geom:
     jb .cols_done
     mov byte [cur_b1ok], 1
 .cols_done:
-    mov ax, [vid_h]             ; UNSIGNED - vid_apply homes the cursor into
-    sub ax, [cur_drawn_y]       ; the new screen precisely so this cannot
-                                ; borrow. rows on screen at this y (>= 1)
+    mov ax, [vid_ch]            ; UNSIGNED - vid_apply homes the cursor into
+    sub ax, [cur_celly]         ; the new screen precisely so this cannot
+                                ; borrow. rows on screen at this y (>= 1).
+                                ; [cur_celly] is already this DISPLAY's and
+                                ; already hot-spot-relative, so the two
+                                ; corrections that used to be spelled out
+                                ; here are spent above, once
     cmp ax, CUR_GH
     jbe .rows_set
     mov ax, CUR_GH
@@ -1725,7 +3405,7 @@ cur_put_mono:
     jz .out                     ; wholly off the bottom: nothing to bank
     mov ax, [vid_seg]
     mov es, ax
-    mov si, cur_and
+    mov si, [cur_tabp]
     mov bp, [cur_sptr]          ; the live save buffer (SPEC.md 7.1.2)
 .row:
     mov ax, [si]                ; the white pass's row...
@@ -1834,30 +3514,62 @@ cur_unlazy:
 .out:
     ret
 
-; cur_lazyck - spend the deferred hide unless SI's window provably cannot
-;              reach the cursor. The test is the window's FRAME rect, not the
-;              clip region: the region is the content minus what covers it, so
-;              outside the frame is outside every fragment, and one rect test
-;              is a great deal cheaper than sixteen.
-; in:  SI = window ptr - wm_win_rect's own register, deliberately, so this
-;      cannot be called with the window in the wrong one
+; cur_lazyck - spend the deferred hide unless the ARMED REGION provably cannot
+;              reach the cursor.
+;
+; THE TEST IS THE REGION, NOT THE WINDOW'S FRAME, and that distinction is the
+; whole of SPEC.md 7.1.4.2. The frame is the cheaper question and it answers a
+; different one: the region is the content rect minus every window ON TOP,
+; so a pointer resting on the window in FRONT of the painter is outside every
+; fragment while sitting squarely inside the frame. The frame test called that
+; reachable and spent the hide - so a Task Manager refreshing twice a second
+; behind a Control Panel blinked the arrow forever, which is 7.1.4's own
+; reported defect seen one window along.
+;
+; The walk is not the sixteen rect tests the frame test was chosen to avoid,
+; either. A background painter with nothing on top of it - the ordinary case,
+; and the one the frame test was measured on - arms exactly ONE fragment, so
+; this is four compares against that rect's four words where the frame test
+; was four compares against a rect wm_win_rect had to build first. It costs
+; more only when the region is genuinely fragmented, which is exactly when
+; some of those fragments are somebody else's window and the answer is worth
+; having.
+;
+; in:  the region is armed in wm_clip_tab / [wm_clip_n]
 ; out: nothing (all registers preserved)
 cur_lazyck:
     cmp byte [cur_lazy], 0
     je .out
+%ifdef CURFIX
+    push ax                     ; IS THE HAND MOVING? (SPEC.md 7.1.4.3) If it
+    mov ax, [ticks]             ; is, keeping the arrow lit is the WRONG trade:
+    sub ax, [cur_mvt]           ; the ISR cannot move it under the lock either
+    cmp ax, CUR_MVGRACE         ; way, so lit means the pointer sits still
+    pop ax                      ; while the hand moves and then teleports -
+    jbe cur_unlazy              ; which is what the region test was reported
+                                ; as. Hidden, the same freeze is a blink the
+                                ; eye does not track. Modular subtraction, so
+                                ; the wrap is a 2-tick false "moving" per hour
+                                ; and its cost is one redundant hide. `pop`
+                                ; leaves the flags the `cmp` set
+%endif
+%ifndef CURFIX
     push ax
     push bx
     push cx
     push dx
     push si
+    mov si, [wm_clipwin]
     call wm_win_rect            ; AX/BX/CX/DX = the frame, drop shadow included
     mov si, [cur_drawn_x]       ; separated on x?  cell is [x, x+CUR_GW-1]
+    sub si, [cur_hx]
     cmp si, cx
     jg .clear                   ; ...wholly right of the frame
     add si, CUR_GW-1
     cmp si, ax
     jl .clear                   ; ...wholly left of it
     mov si, [cur_drawn_y]       ; ...and the same on y
+    sub si, [cur_hy]
     cmp si, dx
     jg .clear
     add si, CUR_GH-1
@@ -1875,6 +3587,71 @@ cur_lazyck:
     pop cx
     pop bx
     pop ax
+%else
+    cmp word [wm_clip_n], 0
+    je cur_unlazy               ; NOTHING ARMED BOUNDS NOTHING, so the hide is
+                                ; owed - the safe direction, and the same
+                                ; answer every unarmed painter already gets
+                                ; from its own cur_unlazy. wm_clip_set only
+                                ; reaches here with a region built, so this is
+                                ; the contract stated rather than a live path
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov ax, [cur_drawn_x]       ; the cell, as x1/y1/x2/y2 in AX/BX/CX/DX
+    sub ax, [cur_hx]            ; ...off the HOT SPOT, and deliberately NOT
+                                ; clamped (SPEC.md 7.2.2): unclamped is a
+                                ; superset of where the cell really is, so the
+                                ; error can only ever be a redundant hide.
+                                ; Forgetting it entirely is the other
+                                ; direction and does not show up for weeks -
+                                ; a painter told the cursor was out of reach
+                                ; draws through the part of the cell that
+                                ; reaches further left than this test does,
+                                ; and 7.1.4's smear is permanent
+    mov bx, [cur_drawn_y]
+    sub bx, [cur_hy]
+    mov cx, ax
+    add cx, CUR_GW-1
+    mov dx, bx
+    add dx, CUR_GH-1
+    mov si, wm_clip_tab         ; VIRTUAL rects (SPEC.md 39.14.9), and so is
+    mov di, [wm_clip_n]         ; [cur_drawn_x] - the display subtraction
+                                ; happens where a position becomes an ADDRESS
+                                ; (cur_rect, cur_geom) and nowhere else, so
+                                ; the two are already in one space
+.frag:                          ; OVERLAP, not containment: wm_clip_test asks
+    cmp ax, [si+WCR_X2]         ; whether a whole shape fits one fragment and
+    jg .next                    ; this asks whether any pixel of the cell
+    cmp cx, [si+WCR_X1]         ; could be written at all
+    jl .next
+    cmp bx, [si+WCR_Y2]
+    jg .next
+    cmp dx, [si+WCR_Y1]
+    jge .hit
+.next:
+    add si, WCR_SZ
+    dec di
+    jnz .frag
+    pop di                      ; outside every fragment: the region cannot
+    pop si                      ; reach the arrow, so it stays on screen
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.hit:
+    pop di                      ; a fragment covers part of the cell: owed
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    jmp short cur_unlazy
+%endif
 .out:
     ret
 
@@ -1934,6 +3711,143 @@ cur_lazyend:
     ret
 
 ; -----------------------------------------------------------------------------
+; The SHAPE (SPEC.md 7.2)
+;
+; A window names one of CUR_NSHAPE built-in pictures and the pointer wears it
+; over that window and nowhere else. Three things make it as cheap as it is:
+;
+;   - every shape shares the 8x12 cell, so nothing in the draw loops changed
+;     but `mov si, cur_and` becoming `mov si, [cur_tabp]` in three places;
+;   - the shape lives in the SPARE HIGH BYTE of W_FLAGS, so no window record
+;     grew, no template changed, and wm_create/wm_destroy already zero it -
+;     which is the arrow, so the default falls out rather than being arranged;
+;   - the question "which window is the pointer over" is asked on the UI TASK,
+;     once per pass and only when something moved, never in the ISR.
+;
+; That last one is not just a cost argument. The UI task is the ONLY mutator
+; of wm_zord and the window rects, so wm_hit answers from it without the gfx
+; lock and without a race - which is exactly what the ISR could not do.
+; -----------------------------------------------------------------------------
+
+; cur_shape_set - wear shape AL from now on.
+; in:  AL = CUR_*SH; the gfx lock held by the caller
+; out: nothing (all registers preserved)
+;
+; The picture may only change while the cursor is OFF THE GLASS, and
+; cur_unlazy is the whole of what that costs. gfx_lock merely PROMISES the
+; hide (SPEC.md 7.1.4); a promise that survives would leave the old picture on
+; screen with [cur_shape] naming the new one, and the move inside cur_lazyend
+; would then take pass 1's background from one shape's save buffer and draw
+; pass 2 from another's. Spending it here also hands cur_move_mono its
+; standing precondition - within one move the shape, and so the hot spot, is
+; fixed - and needs no hide/show pair of its own: gfx_unlock already owes a
+; cursor_show for the hide this just took, and that show draws the new shape.
+cur_shape_set:
+    cmp al, [cur_shape]
+    je .out                     ; the common answer, and the reason the UI
+                                ; pass may call this every time it looks
+    cmp al, CUR_NSHAPE
+    jae .out                    ; a shape nobody ships: keep the one we have
+                                ; rather than index off the end of the table
+    push ax
+    push bx
+    call cur_unlazy
+    mov [cur_shape], al
+    mov bl, al                  ; BX = shape * 2, which indexes BOTH tables -
+    xor bh, bh                  ; cur_shtab is a word a shape and cur_shhot is
+    add bx, bx                  ; two bytes a shape
+    mov ax, [bx + cur_shtab]
+    mov [cur_tabp], ax
+    mov al, [bx + cur_shhot]
+    xor ah, ah
+    mov [cur_hx], ax
+    mov al, [bx + cur_shhot + 1]
+    xor ah, ah
+    mov [cur_hy], ax
+    pop bx
+    pop ax
+.out:
+    ret
+
+; cur_shape_pass - the UI task's end-of-pass service: which window is the
+;                  pointer over, and does it want a different picture?
+; in:  nothing; NO lock held (this is a .yield-tail caller)
+; out: nothing (all registers preserved)
+;
+; One compare per pass when nothing moved, which is toast_pass's discipline
+; and for toast_pass's reason: this runs as fast as the scheduler lets ui_task
+; go round, and wm_hit is a z-order walk with a multiply per candidate.
+; [cur_shchk] covers the case the position compare cannot see - the pointer
+; standing still while the window under it is raised, hidden, closed or
+; dragged out from under it.
+cur_shape_pass:
+    ; THE "NOTHING MOVED" TEST IS ABOVE THE FRAME, and that is the whole of
+    ; SPEC.md 7.2.2. It used to sit below four pushes, so the pass that has
+    ; nothing to do - which is nearly every pass - paid 108 cycles of banking
+    ; to reach three compares. The UI ladder calls this 671 times a second on
+    ; an idle desktop: 300 cycles a pass, 4.2% of the machine, to answer no.
+    ;
+    ; One register is enough to ask, so one is what the fast path banks.
+    cmp byte [cur_shchk], 0
+    je .quiet                   ; ONE BYTE, and the UI ladder asks it too, so
+                                ; on a quiet pass this routine is not even
+                                ; called (SPEC.md 7.2.1.1)
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [mouse_x]
+    mov bx, [mouse_y]
+.look:
+    mov byte [cur_shchk], 0
+    mov cx, ax
+    mov dx, bx
+    call wm_hit                 ; BX = the topmost visible window over the
+                                ; point (0 = none), AL = which part of it
+    mov ah, CUR_ARROWSH
+    or bx, bx
+    jz .set                     ; the desktop, the dock and the menu bar are
+                                ; the kernel's, and the kernel points with an
+                                ; arrow
+    or al, al
+    jnz .set                    ; the title bar and its three boxes are the
+                                ; kernel's too, drawn by the kernel and
+                                ; clicked through the kernel - only a window's
+                                ; CONTENT is the application's to dress
+    mov ah, [bx + W_FLAGS + 1]  ; the high byte (SPEC.md 7.2.1), whose TOP bit
+    and ah, ~WF_HIBITS & 0xFF   ; the kernel's bits are NOT a shape (SPEC.md
+                                ; 11.99.2, 11.96.17) - WF_STALE, WF_NOANIM and
+                                ; WF_1BPP, named once in wm.inc so a fourth
+                                ; cannot be added to one mask and not this one
+.set:
+    cmp ah, [cur_shape]
+    je .out                     ; THE COMMON ANSWER, and the compare has to be
+                                ; HERE rather than only inside cur_shape_set:
+                                ; a pointer moving INSIDE the window it was
+                                ; already over would otherwise pay a
+                                ; gfx_lock/gfx_unlock pair per move for a
+                                ; shape that did not change - which is
+                                ; PERFORMANCE.md Part 9 Set 4's 21.8%, the
+                                ; single most expensive thing in this kernel,
+                                ; charged to every mouse move on every
+                                ; machine. It also leaves a window in which
+                                ; the arrow is off the glass, which is how it
+                                ; was caught: the no-regression A/B against a
+                                ; reference kernel found the pointer MISSING
+                                ; from 5 of 18 captured frames
+    mov al, ah
+    call gfx_lock               ; cur_shape_set draws, so it needs the lock -
+    call cur_shape_set          ; and this is a .yield caller, which holds
+    call gfx_unlock             ; none
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.quiet:
+    ret
+
+; -----------------------------------------------------------------------------
 ; cur_move - move the cursor to (AX, BX), writing every byte EXACTLY ONCE
 ;
 ; SPEC.md 7.1.2. A move used to be `cur_get` then `cur_put`: two walks, and
@@ -1962,7 +3876,77 @@ cur_lazyend:
 ;           still describe where the cursor IS. IF = 0 (ISR, or the gfx lock).
 ; clobbers: ax, bx, cx, dx, si, di, bp, es
 ; -----------------------------------------------------------------------------
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; cur_move_multi - the same move, on a machine with more than one display
+;
+; in:       AX = new x, BX = new y, VIRTUAL; [cur_disp] and [cur_drawn_x/y]
+;           still describe where the arrow IS. IF = 0.
+; out:      as cur_move
+; clobbers: as cur_move
+;
+; SPEC.md 39.15.3. cur_move_mono writes every framebuffer byte exactly once by
+; walking the old cell and the new one together and taking the overlap's
+; background from the save buffer (7.1.2) - and a cell straddling the seam
+; would span two cards with two strides and two segments, and would need that
+; loop rewritten. So it does not straddle: the arrow leaves the old display
+; WHOLE and arrives on the new one WHOLE, one cell in flight at a time.
+;
+; Same display, which is nearly every packet, is the fused pass unchanged -
+; made current first, because the display live when the ISR fires is whatever
+; the last primitive left (39.15.2).
+; -----------------------------------------------------------------------------
+cur_move_multi:
+    push cx
+    push dx
+    mov dl, [vid_cur]           ; the display to come back to...
+    mov dh, [cur_disp]          ; ...and the one the arrow is on
+    mov [cur_dprev], dl
+    push ax
+    call vid_disp_of            ; AL = the display the NEW position is on
+    mov cl, al
+    pop ax
+    cmp cl, dh
+    jne .jump
+
+    push ax                     ; --- same display: the fused pass ----------
+    mov al, dh
+    call vid_ctx_act
+    pop ax
+    call cur_move_1
+    jmp short .out
+
+.jump:                          ; --- erase whole, then draw whole ----------
+    push ax
+    push bx
+    push cx
+    mov al, dh
+    call vid_ctx_act
+    call cur_get_1              ; the arrow leaves the display it was on...
+    pop cx
+    pop bx
+    pop ax
+    mov [cur_disp], cl
+    mov [cur_drawn_x], ax
+    mov [cur_drawn_y], bx
+    mov al, cl
+    call vid_ctx_act
+    call cur_put_1              ; ...and arrives on the one it crossed onto
+.out:
+    mov al, [cur_dprev]
+    call vid_ctx_act
+    pop dx
+    pop cx
+    ret
+%endif
+
 cur_move:
+%ifdef KERN_BIG
+    cmp byte [vid_ndisp], 1
+    ja cur_move_multi           ; SPEC.md 39.15.3: it does not straddle
+%endif
+cur_move_1:
+    CURLOG 'm'                  ; ...from HERE (cur_drawn is still the old one)
     cmp byte [vid_mono], 0
     jne cur_move_mono
     push ax                     ; planar: the save is four planes through Read
@@ -1972,6 +3956,7 @@ cur_move:
     pop ax
     mov [cur_drawn_x], ax
     mov [cur_drawn_y], bx
+    CURLOG 'M'                  ; ...to HERE
     call cur_saveu
     jmp cur_draw
 
@@ -1979,12 +3964,19 @@ cur_move_mono:
     push ax
     push bx
     ; --- bank the OLD geometry, which cur_geom is about to overwrite ---------
-    mov ax, [cur_drawn_y]
+    ; [cur_cellx]/[cur_celly] and NOT [cur_drawn_x/y]: with a hot spot the two
+    ; differ, and everything below is about where the CELL is (SPEC.md 7.2.2).
+    ; A shape may only change while the cursor is hidden, so both cells here
+    ; are the same shape's and the row test stays an honest subtraction.
+    mov ax, [cur_celly]
     mov [mv_oy], ax
-    mov ax, [cur_drawn_x]
+    mov ax, [cur_cellx]
     mov cl, 3
     shr ax, cl
-    mov dx, ax                  ; DX = the old byte column
+    mov [mv_d], ax              ; the OLD byte column, banked in the word that
+                                ; will hold the DELTA: cur_geom clobbers DX
+                                ; and the new column is not known until it has
+                                ; run, so the subtraction moved below it
     mov al, [cur_rows]
     mov [mv_orows], al
     mov al, [cur_b1ok]
@@ -2004,12 +3996,15 @@ cur_move_mono:
     pop ax
     mov [cur_drawn_x], ax
     mov [cur_drawn_y], bx
-    mov cl, 3                   ; AX = new x still; d = newcol - oldcol
-    shr ax, cl
-    sub ax, dx
-    mov [mv_d], ax
     call cur_geom               ; DI = new offset, CL = shift, [cur_rows],
-                                ; [cur_b1ok], [cur_off] - all NEW now
+                                ; [cur_b1ok], [cur_off], [cur_cellx/y] - all
+                                ; NEW now
+    mov ax, [cur_cellx]         ; d = newcol - oldcol, and the shifts are
+    shr ax, 1                   ; single-bit because CL is cur_geom's answer
+    shr ax, 1                   ; and the pass-2 loop below still wants it -
+    shr ax, 1                   ; `mov cl, 3` here would eat the shift
+    sub ax, [mv_d]
+    mov [mv_d], ax
     call cur_mvcols             ; ...and the four per-column answers
 
     ; --- pass 1: the old background back, except where pass 2 will draw ------
@@ -2023,7 +4018,8 @@ cur_move_mono:
     mov bx, [mv_oy]
 .p1row:
     mov ax, bx                  ; is this row one pass 2 will draw into?
-    sub ax, [cur_drawn_y]
+    sub ax, [cur_celly]         ; the NEW cell's top row, which cur_geom has
+                                ; just published - not the pointer's y
     mov dl, [cur_rows]
     xor dh, dh
     cmp ax, dx
@@ -2068,7 +4064,7 @@ cur_move_mono:
     mov ax, [vid_seg]
     mov es, ax
     mov di, [cur_off]
-    mov si, cur_and
+    mov si, [cur_tabp]
     mov bp, [mv_nsave]
 .p2row:
     call cur_mvrow              ; [mv_orp] = this row's slot in the OLD save,
@@ -2166,8 +4162,8 @@ cur_mvcols:
 ; clobbers: ax, bx, flags
 cur_mvrow:
     push dx
-    mov ax, [cur_drawn_y]
-    add ax, [mv_prow]
+    mov ax, [cur_celly]         ; the NEW cell's top row (SPEC.md 7.2.2), not
+    add ax, [mv_prow]           ; the pointer's y - [mv_oy] is the OLD cell's
     sub ax, [mv_oy]             ; AX = the row's index in the OLD cell
     mov word [mv_orp], 0
     mov bl, [mv_orows]
@@ -2218,7 +4214,7 @@ cur_draw:
     jz .done                    ; wholly off the bottom
     mov ax, [vid_seg]
     mov es, ax
-    mov si, cur_and
+    mov si, [cur_tabp]
     mov dx, VGA_GC              ; the INDEX port: index and data go as one word
 .row:
     mov ax, [si]                ; AX = white: every pixel the arrow touches...
@@ -2325,30 +4321,105 @@ cur_draw:
     CUR_ROW 0x0000,             0x0000
 %endmacro
 
+; The crosshair (SPEC.md 7.2), hot spot at its centre. A 1px cross dilated by
+; a pixel is a 3px white bar with the black cross inside it - the same
+; outline-and-body construction the arrow uses, and the only one that reads on
+; both a white desktop and a black sky. It is 8x11 inside the arrow's own
+; 8x12 cell, which is the whole reason it costs the drawing code nothing:
+; CUR_GW/CUR_GH/CUR_SPAN are what every walk in this file is bounded by, and a
+; shape that needed a bigger cell would give SPEC.md 7.1's third-byte and
+; row-count savings back on EVERY lock hold in the machine, for every app.
+; The gap in the horizontal stroke must fall on the SAME column as the
+; vertical one - both are the hot spot, (CUR_XHX, CUR_XHY), and drawn a column
+; apart the cross reads as broken rather than as aiming at anything. Nothing
+; can assert that: it is a statement about which column means the hot spot,
+; and the tables do not know. Look at it.
+%macro CUR_CROSS 0
+    CUR_ROW 0x3800,             0x1000      ; ..***...  ...#....
+    CUR_ROW 0x3800,             0x1000
+    CUR_ROW 0x3800,             0x1000
+    CUR_ROW 0x3800,             0x1000
+    CUR_ROW 0xFF00,             0x0000      ; ********  ........
+    CUR_ROW 0xFF00,             0xEF00      ; ********  ###.####
+    CUR_ROW 0xFF00,             0x0000      ; ********  ........
+    CUR_ROW 0x3800,             0x1000
+    CUR_ROW 0x3800,             0x1000
+    CUR_ROW 0x3800,             0x1000
+    CUR_ROW 0x3800,             0x1000
+    CUR_ROW 0x0000,             0x0000
+    CUR_ROW 0x0000,             0x0000
+    CUR_ROW 0x0000,             0x0000
+    CUR_ROW 0x0000,             0x0000
+    CUR_ROW 0x0000,             0x0000
+%endmacro
+
+; --- the shape table (SPEC.md 7.2) -------------------------------------------
+; One entry per shape, each a white table immediately followed by its black
+; one, so [cur_tabp] points at the white table and [si+CUR_TABSZ] still reads
+; the black row - the idiom every draw loop here already uses, unchanged.
+;
+; CUR_SHAPE_END asserts the SAME three facts per shape that the arrow alone
+; used to assert: the widest bit set, the last row that sets one, and that
+; every black bit is also a white one (that last inside CUR_ROW). All three
+; fail silently - a wider shape loses its right-hand column on the two mono
+; adapters, a taller one leaves its bottom rows on screen for the rest of the
+; session, and an escaped black bit is simply not drawn on VGA - so a shape
+; added here is checked at assembly time or it is not checked at all.
+%macro CUR_SHAPE_END 1
+  %if cur_hi > CUR_GH
+    %error %strcat("mouse: cursor shape ", %1, " is taller than CUR_GH")
+  %endif
+  %if (cur_bits & ((1 << (16 - CUR_GW)) - 1)) != 0
+    %error %strcat("mouse: cursor shape ", %1, " is wider than CUR_GW")
+  %endif
+%endmacro
+
+%assign cur_bits 0
+%assign cur_hi   0
 %assign cur_tab   0
 %assign cur_row_i 0
+cur_shapes:
 cur_and:                        ; white: the body dilated by 1px, right and down
     CUR_ARROW
-
 %assign cur_tab   1
 %assign cur_row_i 0
 cur_data:                       ; black: the arrow body itself
     CUR_ARROW
-
 cur_tabend:
+CUR_SHAPE_END "arrow"
 
-; --- what the drawing code above claims about those two tables ---------------
+%assign cur_bits 0
+%assign cur_hi   0
+%assign cur_tab   0
+%assign cur_row_i 0
+cur_cross_and:
+    CUR_CROSS
+%assign cur_tab   1
+%assign cur_row_i 0
+cur_cross_data:
+    CUR_CROSS
+CUR_SHAPE_END "crosshair"
+
+; --- the hot spot per shape, in the same order (SPEC.md 7.2) -----------------
+; Two bytes a shape: the pixel inside the cell that sits under the pointer.
+; The arrow's is (0,0), which is what every walk in this file assumed for
+; years - cur_geom and cur_rect subtract it now, and clamp the result at the
+; screen origin rather than clipping the cell (SPEC.md 7.2.2).
+cur_shtab   dw cur_and,       cur_cross_and
+cur_shhot   db 0, 0,          CUR_XHX, CUR_XHY
+
+; --- what the drawing code above claims about those tables -------------------
 %if cur_data - cur_and != CUR_TABSZ
   %error "mouse: cur_data must sit exactly one table past cur_and - cur_put_mono reads the black row at [si+CUR_TABSZ]"
 %endif
 %if cur_tabend - cur_data != CUR_TABSZ
   %error "mouse: a cursor table is not CUR_H rows"
 %endif
-%if cur_hi > CUR_GH
-  %error "mouse: the arrow is taller than CUR_GH - raise it, or its bottom rows are neither drawn nor erased"
+%if cur_cross_data - cur_cross_and != CUR_TABSZ
+  %error "mouse: a shape's black table must sit exactly one table past its white one"
 %endif
-%if (cur_bits & ((1 << (16 - CUR_GW)) - 1)) != 0
-  %error "mouse: the arrow is wider than CUR_GW - raise it, and give cur_pass and cur_put_mono the third byte back"
+%if (cur_shhot - cur_shtab) != CUR_NSHAPE * 2
+  %error "mouse: cur_shtab does not carry one entry per CUR_NSHAPE"
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -2358,15 +4429,60 @@ mouse_x     dw SCREEN_W/2       ; public: cursor position, 0..639
 mouse_y     dw SCREEN_H/2       ; public: 0..479
 mouse_btn   db 0                ; public: bit 0 = left, bit 1 = right
 
+%ifdef CURFIX
+cur_mvt     dw 0                ; [ticks] at the last movement packet (SPEC.md
+                                ; 7.1.4.3). In .text with a real initialiser
+                                ; for cur_sptr's reason below - and 0 is the
+                                ; right one either way: it reads as "moved at
+                                ; tick 0", so a machine that has never seen a
+                                ; packet is STILL, which is what it is
+%endif
+
 cur_sptr    dw cur_save         ; -> whichever save buffer is live. In .text
                                 ; with a REAL initialiser, not .bss: .bss
                                 ; arrives zeroed (kernel.asm - NASM pads the
-                                ; gap to OVL_START), and 0 here is a pointer
+                                ; gap to COLD_START), and 0 here is a pointer
                                 ; at the API jump table
+cur_tabp    dw cur_and          ; -> the live shape's white table (SPEC.md
+                                ; 7.2). In .text with a real initialiser, for
+                                ; cur_sptr's reason above: -f bin zeroes
+                                ; nothing and 0 here is the API jump table.
+                                ; The three draw loops read it instead of
+                                ; naming cur_and, and that is the WHOLE of
+                                ; what changing the picture costs
+cur_hx      dw 0                ; ...and its hot spot: the pixel inside the
+cur_hy      dw 0                ; cell that sits under the pointer. WORDS
+                                ; rather than the bytes the table stores,
+                                ; because all three readers subtract them from
+                                ; a position and the two that matter have no
+                                ; scratch register left to widen a byte in
+cur_shape   db CUR_ARROWSH      ; which shape that is - compared per UI pass,
+                                ; so the swap is what is rare, not the check
+cur_shchk   db 0                ; "the window under the pointer may have
+                                ; changed without the pointer moving": a
+                                ; raise, a hide, a destroy or a drag. One
+                                ; byte, the [fm_fchk] shape (SPEC.md 22.8)
 cur_level   db -1               ; refcount; < 0 = hidden (boot state)
+mou_nx      dw 0                ; the candidate x, staged across the y decode
+                                ; because mou_clamp is 2-D (SPEC.md 39.15.4)
 cur_dirty   db 0                ; set when the ISR could not move the cursor
-cur_drawn_x dw 0                ; where the cursor pixels actually are
-cur_drawn_y dw 0                ; (valid only while cur_level >= 0)
+cur_drawn_x dw 0                ; where the cursor pixels actually are, in
+cur_drawn_y dw 0                ; VIRTUAL coordinates (SPEC.md 39.15) - the
+                                ; same space as mouse_x/mouse_y, so every
+                                ; comparison in this file is between two
+                                ; positions of the same kind. cur_rect and
+                                ; cur_geom are the only two places that turn
+                                ; one into an ADDRESS, and the only two that
+                                ; subtract a display's origin.
+                                ; (valid only while cur_level >= 0)
+%ifdef KERN_BIG
+cur_disp    db 0                ; which display the arrow is ON, and cur_dprev
+cur_dprev   db 0                ; the one to put back afterwards (39.15.2).
+                                ; .text with real initialisers, like cur_sptr
+                                ; above and for its reason: -f bin zeroes
+                                ; nothing, and a garbage display index indexes
+                                ; past vid_ctx
+%endif
 
 mou_old_off dw 0, 0             ; the vectors we displaced, per port row
 mou_old_seg dw 0, 0
@@ -2391,6 +4507,7 @@ mou_dbg_blk:
     dw 0x4F4D                   ; 'MO' - the magic, dsk_dbg_blk's 0x4444 idiom
     dw mou_bases                ; -> the probed bases, 2 words, 0 = no UART
     dw mou_run                  ; -> the state span below
+mou_dbg_cur:
     dw mouse_x                  ; -> the CURSOR: mouse_x, mouse_y, mouse_btn.
                                 ; APPENDED, so every offset above is unmoved
                                 ; and an older reader is unaffected.
@@ -2413,12 +4530,33 @@ mou_dbg_blk:
                                 ; scripted test exists to exercise. The packet
                                 ; still does all the work; this only says where
                                 ; it landed
+mou_dbg_p2:
+    dw mou_p2                   ; -> the PS/2 mouse's 7-byte span (SPEC.md
+                                ; 9.4.4). APPENDED, and APPENDED MEANS LAST:
+                                ; the first draft of this put it in front of
+                                ; the word above, which moved the one thing in
+                                ; the block that a HOST tool reads by a
+                                ; hard-coded offset - tools/os88mouse.py's
+                                ; blk+6 - and turned every scripted click into
+                                ; a read of two unrelated bytes. The two %errors
+                                ; below are what stops that being found again
+                                ; by a harness that has quietly stopped working
+
+; --- ...and the WORD POSITIONS, which are as readable-by-offset as the span --
+%if mou_dbg_cur - mou_dbg_blk != 6
+  %error "mouse: SPEC.md 9.4.3 block - the cursor word moved (os88mouse.py)"
+%endif
+%if mou_dbg_p2 - mou_dbg_blk != 8
+  %error "mouse: SPEC.md 9.4.4 block - the PS/2 word is not the fifth"
+%endif
 
 mou_run     db 0,0,0,0          ; clean packets in a row on this port
 
 mou_port    db 0                ; the mouse's row, settled by [mou_need] clean
                                 ; packets and never moved again (SPEC.md 9.5).
-                                ; A row index (0, 2), not a COM number
+                                ; A row index (0, 2), not a COM number - or
+                                ; MOU_P2ROW = 4, which is no serial row at all
+                                ; and means the PS/2 mouse won (SPEC.md 9.9.4)
 mou_need    db 1,0,1,0          ; the run a port must manage to be believed:
                                 ; 1 where the probe found one port, MOU_LOCKN
                                 ; where it found two - and 1 again on the one
@@ -2460,10 +4598,93 @@ mou_line    db 0                ; the 8259 bit of the line the WINNING packets
                                 ; 9.5.2.1) is otherwise indistinguishable from
                                 ; an ordinary one, and only on real iron
 ; --- ...and here the published span ENDS. Scratch below it ------------------
+mou_splt    db 0                ; the elapsed tick the loading screen was last
+                                ; notched at, in whichever of mouse_init's two
+                                ; waits is running (SPEC.md 15.3.3). Scratch,
+                                ; and deliberately below the published span:
+                                ; a byte inside it moves 9.4.2's offsets and
+                                ; the four %errors there are what say so
 mou_lfired  db 0                ; the line CURRENTLY being serviced, stamped by
                                 ; the ISR entry. Live for the length of one
                                 ; interrupt, meaningless outside it, and so not
                                 ; state anyone off-machine should read
+mou_ptr     db 0                ; A POINTING DEVICE HAS PROVEN ITSELF, whichever
+                                ; backend it was (SPEC.md 9.6.6). NOT the same
+                                ; question as [mou_seen], which is "the serial
+                                ; CONTEST is settled and this is the winning
+                                ; port" - a distinction with no difference for
+                                ; as long as serial was the only backend, and
+                                ; the reason the keyboard mouse stayed switched
+                                ; on next to a working PS/2 one. Set beside
+                                ; [mou_seen] in mou_claim and in mou_p2_byte at
+                                ; its settle; never cleared. BELOW
+                                ; the published span on purpose: 9.4.2's block
+                                ; is read by offset off a floppy and nothing
+                                ; may be inserted into it
+
+; --- the PS/2 mouse, and the span SPEC.md 9.4.4 publishes --------------------
+mou_p2      db 0                ; a PS/2 mouse answered and is LIVE. Cleared
+                                ; again by mou_p2_off if a serial port wins
+mou_p2st    db 0                ; ...and how far mou_p2_init's handshake got,
+                                ; which is what separates "this machine has no
+                                ; auxiliary port" from "it has one with nothing
+                                ; plugged in": 0 the tier or the 8042 refused
+                                ; it outright, 2 no aux port, 4/5/6 the device
+                                ; did not answer its reset, 8 int 74h is ours,
+                                ; 9 live (SPEC.md 9.9.1). It is the STEP and
+                                ; not a flag: mou_p2_off clears [mou_p2] and
+                                ; leaves this alone, because the vector is
+                                ; still owed back
+mou_p2id    db 0                ; the device ID it answered the reset with - 0
+                                ; is a plain mouse. Banked and published, never
+                                ; tested: a wheel mouse in its 3-byte boot mode
+                                ; is exactly the mouse this decoder wants
+mou_p2ph    db 0                ; packet state: 0 idle, 1 got b0, 2 got b1
+mou_p2b0    db 0                ; byte 0: YV XV YS XS 1 MB RB LB
+mou_p2b1    db 0                ; byte 1: the X magnitude
+mou_p2cmd0  db 0                ; the 8042's command byte AS THE BIOS LEFT IT,
+                                ; which every failure path above puts back and
+                                ; which no reading of this source can supply
+; --- ...and here THAT span ends. Scratch below it ---------------------------
+%ifdef KERN_BIG                 ; ...and this one really is the code's, so it
+mou_p2old   dw 0, 0             ; goes with it: int 74h's old vector, restored
+mou_p2m1    db 0                ; ...as is the master 8259's mask as
+%endif                          ; mou_p2_init found it, so .quit can put IRQ1
+                                ; back without disturbing the cascade bit the
+                                ; success path clears in the same byte
+                                ; (mouse_unhook restores the vector)
+
+%ifdef MOU_DIAG                 ; --- MOUDIAG=1 only (SPEC.md 9.9.6) ----------
+                                ; BELOW the published span deliberately: a knob
+                                ; kernel is bound by the segment alone, so
+                                ; these cost a shipped machine nothing, and
+                                ; putting them above would move every offset
+                                ; SPEC.md 9.4.2 asserts and silently misread
+                                ; tests/sysbench on the one build that has them
+mou_p2aux   db 0xEE             ; what step 2 concluded: E0 is "0xA8 took, so
+                                ; there is an auxiliary port", E1 is "it did
+                                ; not", and EE - the initial value - is "the
+                                ; command byte never came back", so the
+                                ; question was never put at all (SPEC.md
+                                ; 9.9.1). 0xA9 is NOT asked: this controller
+                                ; would not answer it, and bit 5 says the same
+                                ; thing off a read that had to happen anyway
+mou_p2irq   dw 0                ; times int 74h has been entered AT ALL - the
+                                ; one fact that separates a handshake that
+                                ; failed from a line that never fires
+mou_p2pkt   dw 0                ; ...and complete three-byte packets decoded
+mou_p2sub   db 0                ; WHICH CALL of step 2 was in flight: 1 the
+                                ; 0xA8 write, 2 the 0xA9 write, 3 its read, 4
+                                ; the command-byte re-read's write, 5 its read,
+                                ; 6 past it. [mou_p2st] says which STEP and
+                                ; four of step 2's calls fail the same way
+mou_p2sta   db 0                ; ...and the 8042 status at the moment .fail
+                                ; was taken
+mou_p2pre   db 0                ; the status before 0xA8...
+mou_p2cm1   db 0                ; the command byte re-read in the fallback
+mou_p2lb0   db 0                ; the last byte 0 accepted, so a stream that
+                                ; arrives but never syncs is visible as bytes
+%endif                          ; with bit 3 clear rather than as silence
 
 ; --- what SPEC.md 9.4.2 says the published block IS --------------------------
 ; A test package reads these by offset, off a floppy, on a machine with no
@@ -2493,18 +4714,87 @@ mou_lfired  db 0                ; the line CURRENTLY being serviced, stamped by
   %error "mouse: SPEC.md 9.4.2 block - mou_line moved"
 %endif
 
+%ifdef MOU_DIAG
+; SPEC.md 9.4.6's two words, and the ONLY state that knob adds: everything else
+; on its table is already banked per port by mou_idbyte and is dead for the life
+; of the machine (9.4.1). [ticks] at the close is what nothing keeps.
+;
+; BELOW the assertions, and that is where the first draft did NOT put them: a
+; knob's two words inside 9.4.2's contiguous span shifted mou_idany and every
+; member after it, and all four %errors fired at once. Which is the assertions
+; doing exactly what their own comment promises - a reordering here republishes
+; the block as a different thing and the reader is a program on a floppy.
+mdg_open    dw 0                ; [ticks] when the identify window opened
+mdg_used    dw 0                ; ...and how many it spent, against MOU_IDWIN
+mdg_nlive   dw 0                ; [ticks] when spl_step RAISED the screen - only
+                                ; a loader-less boot has one, and n0 minus this
+                                ; is the chrome the hard-disk path draws INSIDE
+                                ; the frame the bar first shows (SPEC.md 9.4.6.2)
+mdg_n0      dw 0                ; ...and kmain's three notches (SPEC.md 9.4.6.1):
+mdg_n1      dw 0                ; [ticks] at the frame the bar shows 0%, at 6%
+mdg_n2      dw 0                ; and at 12%. n1-n0 IS mouse_init and n2-n1 is
+                                ; desk_init's floppy probe, so one screenshot
+                                ; says whether a stall is the phase we think
+%endif
+
+; --- ...and what SPEC.md 9.4.4 says the PS/2 span is ------------------------
+; Seven bytes, read by the same reader through the fifth word of the block
+; above, and asserted here for the identical reason: nothing in NASM notices a
+; member that moved, and the program that reads it is on a floppy.
+%define MOUP2(x) ((x) - mou_p2)
+%if MOUP2(mou_p2st) != 1 || MOUP2(mou_p2id)   != 2
+  %error "mouse: SPEC.md 9.4.4 block - mou_p2st/mou_p2id moved"
+%endif
+%if MOUP2(mou_p2ph) != 3 || MOUP2(mou_p2b0)   != 4
+  %error "mouse: SPEC.md 9.4.4 block - mou_p2ph/mou_p2b0 moved"
+%endif
+%if MOUP2(mou_p2b1) != 5 || MOUP2(mou_p2cmd0) != 6
+  %error "mouse: SPEC.md 9.4.4 block - mou_p2b1/mou_p2cmd0 moved"
+%endif
+
 section .bss
 cur_save    resb CUR_SAVE_SZ    ; save-under: CUR_SPAN bytes x CUR_GH rows,
                                 ; x four planes on VGA
 cur_savex   resb CUR_SPAN * CUR_GH  ; ...and its twin. A MOVE reads one while
                                 ; it fills the other (SPEC.md 7.1.2); 24 bytes,
                                 ; and the pointer swap means nothing is copied
+%ifdef GFXAUDIT
+CURLOG_N    equ 64              ; a WRAPPING ring of cursor events, for the
+CURLOG_SZ   equ 6               ; sessions where the question is "which draw
+                                ; had no erase".
+                                ;
+                                ; IN .lowbss AND NOT HERE, which is the second
+                                ; half of the sentence this used to carry. A
+                                ; knob kernel is not bound by KERN_BUDGET
+                                ; (kernel.asm guard 1) - true, and it says
+                                ; nothing about guard 2, the 64KB SEGMENT,
+                                ; which nobody can raise and which .bss spends.
+                                ; 386 bytes of ring is a third of what the
+                                ; shipped kernel has left there, and adding it
+                                ; to .text+.bss is what put `make GFXAUDIT=1`
+                                ; 189 bytes over the segment. .lowbss costs the
+                                ; segment nothing (SPEC.md 2.1), is not zeroed
+                                ; either way so the ring behaves identically,
+                                ; and os88sym.linear already answers LOW_SEG
+                                ; for it, so tools/os88snap.py and the CURLOG
+                                ; readers need no change.
+section .lowbss
+cur_log_i   resw 1              ; write cursor, in BYTES
+cur_log     resb CURLOG_N*CURLOG_SZ
+section .bss
+%endif
 cur_lazy    resb 1              ; gfx_lock deferred the hide (SPEC.md 7.1.4):
                                 ; the arrow is still on screen this hold
 cur_off     resw 1              ; cur_geom's answers, banked for cur_get_mono:
 cur_rows    resb 1              ; the cell's top-left framebuffer byte, the
 cur_b1ok    resb 1              ; rows of it on screen, and whether the DI+1
                                 ; byte of each row is still inside the row
+cur_cellx   resw 1              ; ...and where the CELL is, display-local and
+cur_celly   resw 1              ; hot-spot-relative (SPEC.md 7.2.2). Banked
+                                ; for the same reason the three above are:
+                                ; cur_move_mono asks about it three times and
+                                ; two derivations of a save-under's geometry
+                                ; are two chances to disagree by a byte
 
 mv_oy       resw 1              ; cur_move's banked OLD geometry: top row,
 mv_ooff     resw 1              ; framebuffer offset, rows, right-byte clip

@@ -8,8 +8,8 @@
 ; anywhere: it falls out of the kernel clearing the DISK class's publication
 ; slot at detach (SPEC.md 31.9/51.2.1).
 ;
-; The pane is 221 x 121 px - 27 characters by 13 rows - and the panel is not
-; resizable, so this page is a list, an editor and two buttons, and anything
+; The pane is 221 x 132 px - 27 characters by 14 rows - and the panel is not
+; resizable, so this page is a list, an editor and three buttons, and anything
 ; that needs more room is a window of its own. Format opens the disk tool
 ; (tool.inc), which is partitioning and formatting in one window because they
 ; are one operation to the user.
@@ -18,7 +18,7 @@
 ;    IDE0  980x 10x 17   81M      <- one row per probed device, the selected
 ;    BIOS  615x  4x 17   20M         one drawn as a black bar
 ;   C[ 980] H[ 10] S[ 17]  - +    <- the geometry, editable when the probe
-;   [Format] [Mount]                 could not determine it
+;   [Format] [Install] [Mount]       could not determine it
 ;   Mounted as C:                 <- and the caption is where the truth goes
 ;
 ; **EVERY STRING HERE FITS ITS BOX, and that is a rule and not a habit.** The
@@ -50,12 +50,29 @@ HDP_PX       equ 186
 HDP_BTW      equ 24
 HDP_BY       equ 82             ; the button row
 HDP_BH       equ 16
+; The button row reads Format, Install, Mount, evenly spaced (SPEC.md 52.4):
+; 64 + 8 + 64 + 8 + 72 from x=2 ends at 218, inside the 221px pane, with the
+; two that open a WINDOW together and the one that acts on the spot at the end.
+; The INDICES did not move with the positions - 0 Format, 1 Mount, 2 Install
+; is still what hd_btn_ok is asked and what hd_page_button draws - so B1 is to
+; the right of B2 and the hit test walks the row 0, 2, 1.
 HDP_B0X      equ 2              ; 'Format'
-HDP_B1X      equ 78             ; 'Mount' / 'Unmount'
-HDP_B2X      equ 154            ; 'Install' (SPEC.md 52.10.4)
+HDP_B1X      equ 146            ; 'Mount' / 'Unmount' - LAST on the row
+HDP_B2X      equ 74             ; 'Install' (SPEC.md 52.10.4) - in the middle
 HDP_BW0      equ 64
 HDP_BW1      equ 72
-HDP_BW2      equ 64             ; 154 + 64 = 218, inside the 221px pane - the
+; --- control ids (SPEC.md 13.8.4) -------------------------------------------
+; 1-based so 0 can mean "nothing is down", and per PAGE, exactly as ctrl.inc's
+; are: changing the page needs a click in the item list and the button is
+; already down, so the selection cannot move between the press and the release.
+HDP_CFORMAT  equ 1
+HDP_CMOUNT   equ 2
+HDP_CINSTALL equ 3
+HDP_CMINUS   equ 4
+HDP_CPLUS    equ 5
+
+HDP_BW2      equ 64             ; Install's; the row's right edge is Mount's,
+                                ; 146 + 72 = 218, inside the 221px pane - the
                                 ; same arithmetic the caption column obeys
 HDP_CAPY     equ 104
 
@@ -76,14 +93,13 @@ hd_page_paint:
     push bp
     mov bp, dx                  ; BP = pane top for the rest of the routine
 
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov si, hd_s_page
-    mov cx, di
+    mov si, hd_s_page               ; NO PEN: font_run takes the pair in AX and
+    mov cx, di                      ; never reads [gfx_color] (SPEC.md 52.12)
     add cx, HDP_LX
     mov dx, bp
     add dx, HDP_HY
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: cp_page's pane (SPEC.md 52.12)
+    call OSAPI_FONT_RUN
 
     ; --- one row per probed device -------------------------------------------
     xor cl, cl
@@ -118,50 +134,51 @@ hd_page_paint:
     add dx, 9
     call OSAPI_GFX_FILL
     pop dx
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
+    mov word [hd_pair], (CBLACK << 8) | CWHITE  ; white on the bar just laid,
+                                    ; and the PAIR is the whole of it - the fill
+                                    ; above owns the pen (SPEC.md 52.12)
     jmp short .text
 .plain:
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
+    mov word [hd_pair], (CWHITE << 8) | CBLACK  ; ...or black on the pane
 .text:
     mov si, hd_line
     mov cx, di
     add cx, HDP_LX
-    call OSAPI_FONT_STR
+    mov ax, [hd_pair]           ; OPAQUE (SPEC.md 52.12)
+    call OSAPI_FONT_RUN
     pop cx
     inc cl
     jmp short .row
 .rows_done:
     cmp byte [hd_ndev], 0
     jne .geom
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
     mov si, hd_s_nodev
     mov cx, di
     add cx, HDP_LX
     mov dx, bp
     add dx, HDP_R0Y
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: cp_page's pane (SPEC.md 52.12)
+    call OSAPI_FONT_RUN
 
     ; --- the C/H/S editor ----------------------------------------------------
 .geom:
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
     mov si, hd_s_c
     mov cx, di
     add cx, HDP_LX
     mov dx, bp
     add dx, HDP_EY + 2
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: cp_page's pane (SPEC.md 52.12)
+    call OSAPI_FONT_RUN
     mov si, hd_s_h
     mov cx, di
     add cx, HDP_F1X - 10
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: cp_page's pane (SPEC.md 52.12)
+    call OSAPI_FONT_RUN
     mov si, hd_s_s
     mov cx, di
     add cx, HDP_F2X - 10
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: cp_page's pane (SPEC.md 52.12)
+    call OSAPI_FONT_RUN
 
     mov byte [hd_fldi], 0
 .field:
@@ -178,19 +195,6 @@ hd_page_paint:
     add bx, HDP_EY
     mov dx, bx
     add dx, HDP_FH - 1
-    call OSAPI_GFX_FRAME
-    mov al, [hd_fldi]
-    cmp al, [hd_field]
-    jne .fvalue
-    mov ax, di                  ; the selected field: a second frame just
-    add ax, [hd_fldx]           ; inside the first, which is how the
-    inc ax                      ; Date/Time page says "this one"
-    mov cx, ax
-    add cx, HDP_FW - 3
-    mov bx, bp
-    add bx, HDP_EY + 1
-    mov dx, bx
-    add dx, HDP_FH - 3
     call OSAPI_GFX_FRAME
 .fvalue:
     mov al, [hd_fldi]
@@ -209,7 +213,33 @@ hd_page_paint:
     mov dx, bp
     add dx, HDP_EY + 2
     mov si, hd_line
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: cp_page's pane (SPEC.md 52.12)
+    call OSAPI_FONT_RUN
+
+    ; --- the SELECTED field's inner frame, ON TOP OF the value -------------
+    ; It used to be drawn before it, and with a transparent value that was
+    ; invisible: the two overlap on exactly one row. The box is HDP_FH = 11
+    ; rows at HDP_EY, the inner frame HDP_EY+1 .. HDP_EY+8, and the value's
+    ; eight cell rows are HDP_EY+2 .. HDP_EY+9 - so the frame's BOTTOM edge
+    ; and the value's LAST row are the same row. A transparent glyph left it
+    ; alone; an opaque run paints it, and the selected field lost the bottom
+    ; of its ring. Chrome wins, so it is drawn last (SPEC.md 52.12)
+    mov al, [hd_fldi]
+    cmp al, [hd_field]
+    jne .fnext
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    mov ax, di                  ; a second frame just inside the first, which
+    add ax, [hd_fldx]           ; is how the Date/Time page says "this one"
+    inc ax
+    mov cx, ax
+    add cx, HDP_FW - 3
+    mov bx, bp
+    add bx, HDP_EY + 1
+    mov dx, bx
+    add dx, HDP_FH - 3
+    call OSAPI_GFX_FRAME
+.fnext:
     inc byte [hd_fldi]
     cmp byte [hd_fldi], 3
     jb .field
@@ -217,12 +247,14 @@ hd_page_paint:
     ; --- the +/- pair ---------------------------------------------------------
     mov si, hd_s_minus
     mov ax, HDP_MX
+    mov cl, HDP_CMINUS
     call hd_page_pm
     mov si, hd_s_plus
     mov ax, HDP_PX
+    mov cl, HDP_CPLUS
     call hd_page_pm
 
-    ; --- the two buttons ------------------------------------------------------
+    ; --- the three buttons, drawn by INDEX and placed by their own x ---------
     mov si, hd_s_format
     mov ax, HDP_B0X
     mov bx, HDP_BW0
@@ -244,14 +276,13 @@ hd_page_paint:
     call hd_page_button
 
     ; --- and the caption, which is where the truth goes ----------------------
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
     mov si, [hd_msg]
     mov cx, di
     add cx, HDP_LX
     mov dx, bp
     add dx, HDP_CAPY
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: cp_page's pane (SPEC.md 52.12)
+    call OSAPI_FONT_RUN
 
     pop bp
     pop di
@@ -278,46 +309,202 @@ hd_page_button:
     push cx
     push dx
     push si
+    push di
     push ax
     push bx
     push si
+    mov al, cl                  ; ...and PRESSED if it is the one being held.
+    inc al                      ; ASKED FIRST, because CL is the button index
+    call hd_isdown              ; on the way in and the DIS flag on the way
+    mov dx, 0                   ; out - two meanings, one register, four
+    jne .nodn                   ; instructions apart
+    mov dx, OS88UI_DOWN
+.nodn:
     mov al, cl
     call hd_btn_ok              ; CF = 1 = this control is disabled, which is
-    call OSAPI_GFX_PEN          ; the shape the pen takes: one call, no test.
-                                ; It sets CDGRAY and [gfx_dis] together, and
-                                ; it colours the FRAME as well as the label -
-                                ; greying half a control is worse than not
-                                ; greying it, and on mono the flag is what
-                                ; stops the label being the half that is left
+    mov cx, 0                   ; the shape the shared control's flag takes:
+    adc cx, 0                   ; OS88UI_DIS is 1 and `mov` does not touch CF,
+                                ; so the flag IS the carry, with no test in
+                                ; between. It sets CDGRAY and [gfx_dis]
+                                ; together and colours the FRAME as well as
+                                ; the label - greying half a control is worse
+                                ; than not greying it, and on mono the flag is
+                                ; what stops the label being the half left
     pop si
     pop bx
     pop ax
-    add ax, di
-    mov cx, ax
-    add cx, bx
-    dec cx
-    mov bx, bp
-    add bx, HDP_BY
-    mov dx, bx
-    add dx, HDP_BH - 1
-    push ax
-    push bx
-    push cx
-    push dx
-    call OSAPI_GFX_FRAME
+    add ax, di                  ; ...and the rect, in screen coordinates
+    mov [hd_pbrect+0], ax
+    add ax, bx
+    dec ax
+    mov [hd_pbrect+4], ax
+    mov ax, bp
+    add ax, HDP_BY
+    mov [hd_pbrect+2], ax
+    add ax, HDP_BH - 1
+    mov [hd_pbrect+6], ax
+    mov di, cx
+    or di, dx                   ; DIS | DOWN - and DIS outranks it inside the
+                                ; control, so a greyed button never says it
+                                ; will fire (SPEC.md 13.8)
+    mov bx, hd_pbrect           ; OS88UI_FILL: the ground behind this is the
+    or di, OS88UI_FILL          ; pane's white on a full paint and a PRESSED
+    call os88ui_btn             ; button on a release, and only the fill covers
+                                ; the control leaves the pen live by itself,
+                                ; so the clc/GFX_PEN that used to close this
+                                ; routine is gone
+    pop di
+    pop si
     pop dx
     pop cx
     pop bx
     pop ax
-    add ax, 4
-    mov cx, ax
-    mov dx, bx
-    add dx, 4
-    call OSAPI_FONT_STR
-    clc                         ; a button leaves the pen LIVE. The colour was
-    call OSAPI_GFX_PEN          ; put back by whatever drew next anyway; the
-                                ; FLAG is not, and a disabled Mount button
-                                ; would otherwise dither the caption under it
+    ret
+
+hd_pbrect:  dw 0, 0, 0, 0       ; the button being drawn, screen coordinates
+
+; --- SPEC.md 13.8.4: this page acts on the RELEASE ---------------------------
+; THE LADDER IS THE HIT TEST, which is ctrl.inc's own answer (SPEC.md 13.8.3)
+; and for its reason: splitting hd_page_click into a hit test and an action
+; would be a SECOND description of five controls' geometry that then has to
+; agree with two painters. So the ladder is RUN to identify, and [hd_pgpr]
+; (hd_pgpr - `hd_probe' is the HARDWARE probe) says which of three a pass is:
+;
+;   0  act - the release, once it knows the pointer is still on the control
+;   1  identify only - the drag, and the release's own hit test
+;   2  the PRESS: a row or a field still SELECTS (a safe prefix action keeps
+;      the press, SPEC.md 13.6) while a button only reports its id
+;
+; That third mode is the whole reason hd_ctl takes an id of 0: it is what a
+; site that is not an armable control passes, and it is the only thing that
+; can tell the two species apart in one ladder.
+hd_pgpr:    db 0
+hd_ctlid:   db 0                ; ...and what the pass resolved to
+hd_down:    db 0                ; which control is DRAWN pressed, 0 = none
+
+; -----------------------------------------------------------------------------
+; hd_ctl - a ladder site reports itself
+; in:  AL = this site's id, or 0 for a site that is not an armable control
+; out: CF = 1: return without acting. CF = 0: act. Every register preserved.
+; -----------------------------------------------------------------------------
+hd_ctl:
+    cmp byte [hd_pgpr], 0
+    je .act
+    or al, al
+    jz .row
+    mov [hd_ctlid], al
+    stc
+    ret
+.row:
+    cmp byte [hd_pgpr], 2      ; the press: rows and fields still select
+    je .act
+    stc
+    ret
+.act:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_isdown - is control AL the one drawn pressed?
+; out: ZF = 1 if it is; every register preserved
+; -----------------------------------------------------------------------------
+hd_isdown:
+    cmp al, [hd_down]
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_page_probe - run the ladder to IDENTIFY
+; in:  DI = pane left, DX = pane top, CX/BX = pane-relative point, AL = the
+;      mode wanted (1 = identify only, 2 = the press)
+; out: AL = the control the point landed on, 0 = none
+; -----------------------------------------------------------------------------
+hd_page_probe:
+    mov [hd_pgpr], al
+    mov byte [hd_ctlid], 0
+    call hd_page_ladder
+    mov byte [hd_pgpr], 0      ; cleared on EVERY path out, not by the three
+    mov al, [hd_ctlid]          ; callers: a page left probing would take no
+    ret                         ; clicks at all for the rest of the session
+
+; -----------------------------------------------------------------------------
+; hd_page_click - DSV_CPCLICK: the PRESS
+; in:  DI = pane left, DX = pane top, CX/BX = pane-relative point
+; out: nothing
+;
+; A row or a field still SELECTS here - a safe prefix action keeps the press
+; (SPEC.md 13.6) - and a BUTTON only arms and draws itself down. That split is
+; what mode 2 is for, and it is the whole difference between this page and a
+; window: a window can afford two ladders, a page ABI hands over one entry.
+; -----------------------------------------------------------------------------
+hd_page_click:
+    push ax
+    push bp
+    mov al, 2
+    call hd_page_probe
+    or al, al
+    jz .out
+    mov bp, dx                  ; the painters take the pane top in BP
+    xor ah, ah
+    call os88ui_arm
+    call hd_setdown             ; ...and the pressed look
+.out:
+    pop bp
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_ctlpaint - redraw ONE control, in whatever state [hd_down] says
+; in:  AL = a control id, DI = pane left, BP = pane top; the lock is held
+; out: nothing (all registers preserved)
+;
+; NOT hd_page_repaint: that erases the whole pane, so driving the pressed look
+; through it would white 221x131 and letter it again on every press and every
+; slide across a control - PERFORMANCE.md's double-draw flash, introduced by
+; the feature whose whole argument is that it does not flash.
+; -----------------------------------------------------------------------------
+hd_ctlpaint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    cmp al, HDP_CMINUS
+    jb .btn
+    mov cl, al                  ; the +/- pair; CL is the id hd_page_pm reads
+    mov si, hd_s_minus
+    mov ax, HDP_MX
+    cmp cl, HDP_CMINUS
+    je .pm
+    mov si, hd_s_plus
+    mov ax, HDP_PX
+.pm:
+    call hd_page_pm
+    jmp short .out
+.btn:
+    dec al                      ; the three framed buttons, 0-based
+    mov cl, al
+    mov si, hd_s_format
+    mov ax, HDP_B0X
+    mov bx, HDP_BW0
+    or cl, cl
+    jz .draw
+    cmp cl, 2
+    je .inst
+    mov si, hd_s_mount          ; Mount says Unmount when this device already
+    call hd_mounted             ; has a volume (hd_page_paint's own branch)
+    jc .m
+    mov si, hd_s_unmount
+.m:
+    mov ax, HDP_B1X
+    mov bx, HDP_BW1
+    jmp short .draw
+.inst:
+    mov si, hd_s_install
+    mov ax, HDP_B2X
+    mov bx, HDP_BW2
+.draw:
+    call hd_page_button
+.out:
     pop si
     pop dx
     pop cx
@@ -326,8 +513,125 @@ hd_page_button:
     ret
 
 ; -----------------------------------------------------------------------------
+; hd_setdown - AL becomes the control drawn pressed (0 = none), and it DRAWS
+; in:  AL = an id or 0; DI = pane left, BP = pane top; the lock is held
+; out: nothing (all registers preserved)
+;
+; Draws only what CHANGED - the control being let go and the one being taken -
+; so a pointer moving inside the control it pressed costs one compare and no
+; pixels (SPEC.md 13.8.1).
+; -----------------------------------------------------------------------------
+hd_setdown:
+    push ax
+    cmp al, [hd_down]
+    je .out
+    push ax
+    mov al, [hd_down]           ; ...the one being let go, upright again
+    or al, al
+    jz .take
+    mov byte [hd_down], 0
+    call hd_ctlpaint
+.take:
+    pop ax
+    mov [hd_down], al
+    or al, al
+    jz .out
+    call hd_ctlpaint            ; ...and the one being taken, pressed
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_page_up - DSV_CPUP (SPEC.md 13.8.4). Same arguments as DSV_CPCLICK.
+; -----------------------------------------------------------------------------
+hd_page_up:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    call os88ui_fire            ; AX = what the press armed, and it is CLEARED
+    or ax, ax
+    jz .out
+    mov si, ax                  ; SI = the armed control. NOT BX and NOT the
+                                ; stack: BX is the ladder's own pane-relative
+                                ; Y, so banking the id there hands the second
+                                ; probe below a click at y = 2
+    mov bp, dx                  ; BP = pane top, the painters' convention
+    mov al, 1                   ; identify only
+    call hd_page_probe
+    xor ah, ah
+    cmp ax, si
+    je .fire
+    xor al, al                  ; a different control, or none: CANCELLED
+    call hd_setdown
+    jmp short .out
+.fire:
+    mov byte [hd_down], 0       ; NOT hd_setdown: every path below repaints the
+                                ; pane, which draws this control upright with
+                                ; it - and drawing it upright here first is
+                                ; PERFORMANCE.md's double-draw
+    xor al, al                  ; ...and now for real
+    call hd_page_probe
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_page_drag - DSV_CPDRAG (SPEC.md 13.8.1/13.8.4)
+; -----------------------------------------------------------------------------
+hd_page_drag:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    call os88ui_armed           ; PEEK: the arm is the release's to spend
+    or ax, ax
+    jz .out
+    mov si, ax                  ; SI, for hd_page_up's reason: BX is the
+    mov bp, dx                  ; ladder's pane-relative y
+    mov al, 1
+    call hd_page_probe          ; AL = what the pointer is over now
+    xor ah, ah
+    cmp ax, si
+    je .set
+    xor al, al                  ; off it: nothing is down
+.set:
+    call hd_setdown             ; ...which draws only if that CHANGED
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+
+; -----------------------------------------------------------------------------
 ; hd_page_pm - one of the two adjust buttons (module internal)
 ; in:  AX = x, SI = its label, DI/BP = the pane origin
+;
+; The Control Panel's Date/Time page has the same pair and draws it with the
+; same shared control (SPEC.md 31.2), which is the whole reason this one is
+; converted as well: two +/- pairs one page apart in the same window should
+; not be two different controls.
+;
+; ONE PIXEL: the glyph's y was the literal +3 in a 13-row box and the shared
+; control centres at (13-8)/2 = 2, so it sits one row higher. Horizontally it
+; already WAS centred - HDP_BTW/2 - 4 is (24-8)/2 - and never looked it.
 ; -----------------------------------------------------------------------------
 hd_page_pm:
     push ax
@@ -335,37 +639,27 @@ hd_page_pm:
     push cx
     push dx
     push si
+    push di
     add ax, di
-    mov cx, ax
-    add cx, HDP_BTW - 1
-    mov bx, bp
-    add bx, HDP_EY - 1
-    mov dx, bx
-    add dx, HDP_FH + 1
-    push ax
-    push bx
-    push cx
-    push dx
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    push ax
-    push bx
-    push cx
-    push dx
-    call OSAPI_GFX_FRAME
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    add ax, HDP_BTW/2 - 4
-    mov cx, ax
-    mov dx, bx
-    add dx, 3
-    call OSAPI_FONT_STR
+    mov [hd_pbrect+0], ax
+    add ax, HDP_BTW - 1
+    mov [hd_pbrect+4], ax
+    mov ax, bp
+    add ax, HDP_EY - 1
+    mov [hd_pbrect+2], ax
+    add ax, HDP_FH + 1
+    mov [hd_pbrect+6], ax
+    mov di, OS88UI_FILL         ; always live, never the default - and it FILLS
+                                ; for the reason hd_page_button does: a
+                                ; release redraws it over a pressed one
+    mov al, cl                  ; CL = the id, set by the caller (nothing here
+    call hd_isdown              ; overwrites CX, unlike hd_page_button)
+    jne .nodn
+    or di, OS88UI_DOWN
+.nodn:
+    mov bx, hd_pbrect
+    call os88ui_btn
+    pop di
     pop si
     pop dx
     pop cx
@@ -630,12 +924,15 @@ hd_dev_line:
     ret
 
 ; -----------------------------------------------------------------------------
-; hd_page_click - DSV_CPCLICK
+; hd_page_ladder - the page's one coordinate ladder (module internal)
 ; in:  DI = pane left, DX = pane top, CX = pane-relative x, BX = relative y
-;      (the gfx lock is HELD)
+;      (the gfx lock is HELD); [hd_pgpr] says whether this pass ACTS
 ; out: nothing
+;
+; THE LADDER IS THE HIT TEST (SPEC.md 13.8.4), so the press, the drag and the
+; release all run this one description rather than three that have to agree.
 ; -----------------------------------------------------------------------------
-hd_page_click:
+hd_page_ladder:
     push ax
     push bx
     push cx
@@ -659,6 +956,10 @@ hd_page_click:
     jmp .done
 
 .devrow:
+    xor al, al                  ; NOT an armable control: a row SELECTS, which
+    call hd_ctl                 ; is a safe prefix action and keeps the press
+    jc .done                    ; (SPEC.md 13.6) - but it must not happen a
+                                ; second time on the release's own hit test
     mov ax, dx
     sub ax, HDP_R0Y - 2
     mov bl, HDP_ROWH
@@ -679,14 +980,23 @@ hd_page_click:
     jl .done
     cmp cx, HDP_PX + HDP_BTW
     jge .done
+    mov al, HDP_CPLUS
+    call hd_ctl
+    jc .done
     mov al, 1
     call hd_page_adjust
     jmp .repaint
 .minus:
+    mov al, HDP_CMINUS
+    call hd_ctl
+    jc .done
     mov al, 0
     call hd_page_adjust
     jmp .repaint
 .pickfield:
+    xor al, al                  ; a field SELECTS too - .devrow's reasoning
+    call hd_ctl
+    jc .done
     xor bl, bl
 .fscan:
     mov al, bl
@@ -705,23 +1015,32 @@ hd_page_click:
     jmp .done
 
 .buttons:
+    ; LEFT TO RIGHT, which is 0, 2, 1: the row reads Format, Install, Mount and
+    ; the indices did not move with it (SPEC.md 52.4). The ladder walks the
+    ; row in x order because each rung's `jl .done` means "in the gap before
+    ; this button", and a rung out of order turns a gap into another button's
+    ; interior - the click would land on whichever index was tested first.
     mov cx, [hd_clx]
     xor bl, bl                  ; BL = which button
     cmp cx, HDP_B0X
     jl .done
     cmp cx, HDP_B0X + HDP_BW0
     jl .hit
-    mov bl, 1
-    cmp cx, HDP_B1X
-    jl .done
-    cmp cx, HDP_B1X + HDP_BW1
-    jl .hit
     mov bl, 2
     cmp cx, HDP_B2X
     jl .done
     cmp cx, HDP_B2X + HDP_BW2
+    jl .hit
+    mov bl, 1
+    cmp cx, HDP_B1X
+    jl .done
+    cmp cx, HDP_B1X + HDP_BW1
     jge .done
 .hit:
+    mov al, bl                  ; ids are 1-based (0 means "nothing is down"),
+    inc al                      ; and BL is the 0-based index hd_btn_ok wants
+    call hd_ctl
+    jc .done
     mov al, bl
     call hd_btn_ok
     jc .refused
@@ -749,13 +1068,22 @@ hd_page_click:
                                 ; pane repaint AFTER wm_show paints straight
                                 ; over the window it has just put up - which is
                                 ; what the Install dialog arrived doing.
+                                ; ...and a REFUSED open is the exception to
+                                ; that ordering, because there is no window to
+                                ; paint over: the caption it just set would
+                                ; otherwise sit undrawn until something else
+                                ; repainted the page (hdtool.inc)
 .dofmt:
     call hd_page_repaint
-    call hd_tw_open
+    mov al, HDT_FORMAT          ; the tool is a second image now, read off
+    call hd_tool_open           ; the system volume on this click (52.11)
+    jc .repaint
     jmp short .done
 .doinst:                        ; Install stages nothing either, for the tool's
     call hd_page_repaint        ; reason: what it changes is a DISK, and about
-    call hd_iw_open             ; the machine's settings nothing at all
+    mov al, HDT_INSTALL         ; the machine's settings nothing at all
+    call hd_tool_open
+    jc .repaint
     jmp short .done
 .refused:
     ; A greyed control explains itself (SPEC.md 47 rule 5), so the refusal
@@ -794,10 +1122,10 @@ hd_page_repaint:
     mov ax, di
     mov bx, bp
     mov cx, di
-    add cx, 221
-    mov dx, bp
-    add dx, 120
-    call OSAPI_GFX_FILL
+    add cx, 221                 ; the pane: 221 x 132, and it GREW when a third
+    mov dx, bp                  ; driver published a page (ctrl.inc's CP_CH).
+    add dx, 131                 ; A short clear here leaves a stale strip at the
+    call OSAPI_GFX_FILL         ; bottom of a click-repaint, and nothing says so
     mov dx, bp
     call hd_page_paint
     pop dx
@@ -849,8 +1177,23 @@ hd_mount:
     jne .big                    ; over 65,535 sectors: not a volume this
                                 ; kernel can carry (SPEC.md 18.7)
     call hd_already
-    jnc .next                   ; this one is already mounted
+    jnc .have                   ; this one is already mounted - by us...
+    mov al, [hd_sel]            ; ...or by the KERNEL, which adopted the
+    call hd_kvol                ; partition it booted from before we were
+    jnc .have                   ; loaded at all (SPEC.md 52.10.3). Mounting it
+                                ; again is a second icon on the same sectors.
+                                ; It is hdcom.inc's and takes the DEVICE as an
+                                ; argument, because the installer asks the
+                                ; same question of a device of its own
+                                ; (SPEC.md 52.10.4.1)
     call hd_mount_one
+    jmp short .next
+.have:
+    mov word [hd_msg], hd_s_mhave   ; and SAY so: the caption was still
+                                    ; 'No FAT partition on it' from the top of
+                                    ; the loop, which about a partition that is
+                                    ; mounted and on the desktop is the one
+                                    ; answer that is not true
     jmp short .next
 .big:
     mov word [hd_msg], hd_s_mbig    ; the tool calls this slot Unmountable and
@@ -908,12 +1251,24 @@ hd_mount_one:
     mov ax, [si+HP_SECS]
     mov [bx+HDV_SECS], ax
 
-    mov ax, HDD_LISTKB          ; the listing claim (SPEC.md 22.6)
-    call OSAPI_MEM_CLAIM
-    jnc .claimed
+    mov ax, HDD_LISTKB          ; the listing claim (SPEC.md 22.6), and it
+    call OSAPI_MEM_CLAIM        ; STAYS LOW - measured, not assumed (SPEC.md
+    jnc .claimed                ; 50.3.2.1): sent high it cost 9KB, because a
+                                ; pinned claim BELOW every movable one is
+                                ; packed past and costs the big run nothing
     xor dx, dx                  ; refused: the kernel's 32-entry floor, which
 .claimed:                       ; works and shows fewer files
-    mov [bx+HDV_LSEG], dx
+    mov [bx+HDV_LSEG], dx       ; ...and PINNED for a moment longer: DX is
+                                ; still this base and OSAPI_VOL_ADD below is
+                                ; about to write it down as the kernel's own
+                                ; DV_SEG (SPEC.md 18.7). Declared movable up
+                                ; here, a compaction between the two calls
+                                ; moved the block, hd_lst_reloc corrected
+                                ; HDV_LSEG - and the STALE DX went into DV_SEG
+                                ; anyway, from where dsk_list_pick copies it
+                                ; into [dsk_dseg]. Nothing here holds sch_lock,
+                                ; and hd_mount_one runs under the gfx lock,
+                                ; which yields
 
     mov al, [bx+HDV_VOLH]       ; our own handle IS the row index
     mov cx, [bx+HDV_SECS]
@@ -922,7 +1277,21 @@ hd_mount_one:
     jc .novol                   ; place that knows it (SPEC.md 26.1)
     mov [bx+HDV_VOL], al
     mov byte [bx+HDV_USED], 1
-    call OSAPI_VOL_MOUNT        ; AL is still the volume index
+
+    mov dx, [bx+HDV_LSEG]       ; ...AND NOW IT MOVES (SPEC.md 66.5.10.2).
+    or dx, dx                   ; Where it lands is a property of the SESSION
+    jz .nolist                  ; and not of the code - on a desktop that has
+    push bx                     ; been used, the gap under 18.95's read-ahead
+    mov ax, hd_lst_reloc        ; is taken and this first-fits ABOVE that cache
+    call OSAPI_MEM_MOVABLE      ; instead, where pinned it costs the whole
+    pop bx                      ; 63KB. TWO words, not one: HDV_LSEG here and
+.nolist:                        ; the kernel's DV_SEG, which dsk_dseg_reloc
+                                ; already scans BY VALUE for every move - and
+                                ; that is exactly why the ORDER matters. BX is
+                                ; the hd_vols row and is needed below
+
+    mov al, [bx+HDV_VOL]        ; reloaded: hd_lst_reloc's address went through
+    call OSAPI_VOL_MOUNT        ; AX, so the volume index is no longer in it
     jc .badvol
     inc byte [hd_nmnt]
     jmp short .out
@@ -943,6 +1312,42 @@ hd_mount_one:
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_lst_reloc - the listing claim moved (SPEC.md 66.5.10.2)
+; in:  BX = the base it WAS at, DX = the base it is at now; DS = CS = ours,
+;      ES = KERNEL_SEG
+; out: nothing (every register preserved)
+;
+; ONE WORD. HDV_LSEG is the only place this driver writes the segment down, and
+; it writes it for exactly one purpose - to free the block - so there is no
+; derived pointer, no offset banked off it and nothing paragraph-aligned to
+; recompute. The kernel's own two naming words (dsk_vtab's DV_SEG and
+; [dsk_dseg]) are fixed by dsk_dseg_reloc before this is reached, which is what
+; makes a DONATED claim movable at all: the callback reaches the owner, and the
+; owner is only one of the three holders (SPEC.md 66.5.10.1).
+;
+; BY VALUE and not by [hd_sel]'s row, because a compaction can fire while a
+; different partition is the selected one - and because a driver's proc is
+; handed the old base and nothing else.
+; -----------------------------------------------------------------------------
+hd_lst_reloc:
+    push ax
+    push cx
+    push si
+    mov si, hd_vols
+    mov cx, HD_MAXVOL
+.scan:
+    cmp [si+HDV_LSEG], bx
+    jne .next
+    mov [si+HDV_LSEG], dx
+.next:
+    add si, HDV_SIZE
+    loop .scan
+    pop si
+    pop cx
     pop ax
     ret
 
@@ -1097,84 +1502,107 @@ hd_unmount_row:
     ret
 
 ; -----------------------------------------------------------------------------
+; hd_vol_of - which kernel volume is mounted on one partition (SPEC.md 52.12)
+; in:  AL = the device index, AH = the partition slot
+; out: AL = the kernel's volume index, or 0FFh if nothing is mounted there
+; clobbers: AX (the output), flags
+;
+; hd_mount_one publishes its result by filling a row rather than by answering,
+; so somebody has to go and look; the installer used to, and this is that walk
+; moved to the side of the boundary the volume table is on.
+; -----------------------------------------------------------------------------
+hd_vol_of:
+    push bx
+    push cx
+    push dx
+    mov dx, ax                  ; DL = device, DH = slot
+    mov cx, HD_MAXVOL
+    mov bx, hd_vols
+.scan:
+    cmp byte [bx+HDV_USED], 0
+    je .next
+    mov al, [bx+HDV_DEV]
+    cmp al, dl
+    jne .next
+    mov al, [bx+HDV_PART]
+    cmp al, dh
+    jne .next
+    mov al, [bx+HDV_VOL]
+    jmp short .out
+.next:
+    add bx, HDV_SIZE
+    loop .scan
+    mov al, 0xFF
+.out:
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_unmount_part - drop every volume mounted on one partition (SPEC.md 52.12)
+; in:  AL = the device index, AH = the partition slot
+; out: AL = 1 if anything was unmounted, 0 if not
+; clobbers: AX (the output), flags
+;
+; The disk tool's, until the split moved the volume table out of its reach.
+; It is the right place for it either way: hd_vols is the RESIDENT's - the
+; kernel's volume indices are registered from here and given back from here -
+; so the tool naming a partition and this doing the whole job is one crossing
+; instead of a shared table.
+;
+; EVERY row and not the first, for hd_unmount's own reason: one partition is
+; one volume today, and a scan that stops early is the kind of thing that
+; stops being true quietly.
+; -----------------------------------------------------------------------------
+hd_unmount_part:
+    push bx
+    push cx
+    push dx
+    mov dx, ax                  ; DL = device, DH = slot
+    xor al, al
+    mov ah, 0xFF                ; ...and AH = the last volume index dropped,
+    push ax                     ; 0xFF = none. The answer, built on the stack
+    mov cx, HD_MAXVOL
+    mov bx, hd_vols
+.scan:
+    cmp byte [bx+HDV_USED], 0
+    je .next
+    mov al, [bx+HDV_DEV]
+    cmp al, dl
+    jne .next
+    mov al, [bx+HDV_PART]
+    cmp al, dh
+    jne .next
+    pop ax                      ; the answer FIRST, because the pop would
+    mov al, 1                   ; clobber AH, and the row is still live here:
+    mov ah, [bx+HDV_VOL]        ; SPEC.md 52.10.8 needs WHICH volume went and
+    push ax                     ; not only that one did
+    call hd_unmount_row
+.next:
+    add bx, HDV_SIZE
+    loop .scan
+    pop ax
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
 ; hd_win_close_all - hide the tool window (detach's obligation)
 ; in:  nothing
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 hd_win_close_all:
-    push bx
-    mov bx, [hd_twin]
-    or bx, bx
-    jz .inst
-    call OSAPI_WM_HIDE
-.inst:
-    call hd_iw_shut             ; ...and the installer's (SPEC.md 52.10.4). A
-                                ; window of ours left on screen at detach is a
-                                ; paint through freed memory: the kernel
-                                ; releases this image the moment we return
-    pop bx
-    ret
+    call hd_tool_drop           ; HDT_SHUT and then the free, in that order. A
+    ret                         ; window of the TOOL's left on screen is a paint
+                                ; through freed memory twice over - the kernel
+                                ; releases this image the moment we return, and
+                                ; we release the tool's before that
 
 ; =============================================================================
 ; Shared helpers
 ; =============================================================================
-
-; -----------------------------------------------------------------------------
-; hd_win_erase - white-fill one of our windows' CONTENT, and nothing else
-; in:  BX = the window; the gfx lock is HELD
-; out: nothing (all registers preserved)
-;
-; **The size comes from OSAPI_WM_GEOM, never from the template's own
-; constants**, and that is not caution - it is a bug this had. A window's
-; CONTENT is `W_W - 2` by `W_H - TITLE_H - 1`, and TITLE_H is EIGHTEEN; a
-; repaint that open-coded `HPW_H - 14` filled six rows past the bottom of the
-; content, straight through the window's border and its drop shadow and into
-; whatever was behind it. The kernel's primitives clip to the SCREEN and not
-; to a window (SPEC.md 5), so nothing downstream was ever going to catch it.
-;
-; The frame size is not the answer either, even with the right subtraction:
-; wm_fit clamps a template that does not fit the live screen (SPEC.md 39.7),
-; so the record - not the template - is the truth. Asking is the only thing
-; that is right on all three adapters.
-; -----------------------------------------------------------------------------
-hd_win_erase:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    call OSAPI_WM_GEOM          ; CX = content width, DX = content height
-    jc .out                     ; not visible: nothing to erase
-    mov si, cx
-    mov di, dx
-    call OSAPI_WM_CONTENT       ; AX = content left, DX = content top
-    mov bx, dx
-    mov cx, ax
-    add cx, si
-    dec cx                      ; x2 = left + width - 1
-    mov dx, bx
-    add dx, di
-    dec dx                      ; y2 = top + height - 1
-    push ax
-    push bx
-    push cx
-    push dx
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    call OSAPI_GFX_FILL
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
 
 ; -----------------------------------------------------------------------------
 ; hd_raw - one raw transfer to a DEVICE, outside any volume
@@ -1212,87 +1640,6 @@ hd_raw_op:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; hd_scat - append the NUL string at SI to DI, leaving DI past it
-; in:  SI = source, DI = destination
-; out: DI advanced to the NUL (which is not written)
-; clobbers: DI (the output), flags
-; -----------------------------------------------------------------------------
-hd_scat:
-    push ax
-    push si
-.next:
-    mov al, [si]
-    or al, al
-    jz .done
-    mov [di], al
-    inc si
-    inc di
-    jmp short .next
-.done:
-    mov [hd_lineptr], di
-    pop si
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_utoa / hd_utoa3 / hd_utoa4 - AX as decimal at DI, DI advanced
-; in:  AX = the value, DI = the destination
-; out: DI past the last digit
-; clobbers: DI (the output), flags
-;
-; The padded forms right-align a column of numbers without a second pass, and
-; a value too wide for its field simply prints wide - a geometry the user can
-; see is worth more than a column that lines up.
-; -----------------------------------------------------------------------------
-hd_utoa:
-    push cx
-    xor cx, cx
-    jmp short hd_utoa_body
-hd_utoa3:
-    push cx
-    mov cx, 3
-    jmp short hd_utoa_body
-hd_utoa4:
-    push cx
-    mov cx, 4
-hd_utoa_body:
-    push ax
-    push bx
-    push dx
-    push si
-    mov si, cx                  ; SI = the width wanted. It CANNOT stay on
-    mov bx, 10                  ; the stack: the digits go there next, and
-    xor cx, cx                  ; the pop would take the last of them
-.divide:
-    xor dx, dx
-    div bx
-    push dx                     ; the digits, least significant first
-    inc cx
-    or ax, ax
-    jnz .divide
-    cmp si, cx
-    jbe .emit
-    sub si, cx                  ; pad with leading spaces
-.pad:
-    mov byte [di], ' '
-    inc di
-    dec si
-    jnz .pad
-.emit:
-    pop dx
-    add dl, '0'
-    mov [di], dl
-    inc di
-    loop .emit
-    mov [hd_lineptr], di
-    pop si
-    pop dx
-    pop bx
-    pop ax
-    pop cx
-    ret
-
 hd_s_install: db 'Install', 0
 hd_s_bios:    db 'BIOS', 0
 hd_s_ide:     db 'IDE', 0
@@ -1314,7 +1661,10 @@ hd_s_mounted: db 'Mounted ', 0
 hd_s_vol1:    db ' volume', 0
 hd_s_vols:    db ' volumes', 0
 hd_s_mnofat:  db 'No FAT partition on it', 0
+hd_s_mhave:   db 'Already mounted', 0
 hd_s_unmounted: db 'Unmounted', 0
 hd_s_mnotab:  db 'No partition table yet', 0
 hd_s_mfull:   db 'No free volume', 0
 hd_s_mbig:    db 'Partition is over 32MB', 0
+hd_s_nosys:   db 'Need the system disk', 0
+hd_s_notool:  db 'Tool would not open', 0

@@ -5,13 +5,92 @@ description: Build os8088 and publish the floppy images to the os8088.com websit
 
 # Release os8088
 
-Builds the four floppy images, publishes them into the website repository next
+Builds the floppy images, publishes them into the website repository next
 door along with the notes for its releases page, opens a pull request there,
-and cuts a GitHub release on this repo with the images attached.
+and cuts a GitHub release on this repo.
+
+**The GitHub release carries ONE asset: a zip.** `os8088-<version>.zip` holds
+every image, a README that says which two of them a reader needs, and a
+SHA256SUMS covering all of them. Eleven loose `.img` files used to hang off
+the release, and a reader had to know which pair they wanted before they could
+download anything. Step 3a builds it. The website is unchanged -- its download
+page still serves the images individually out of `public/disk/`, because the
+browser demo streams them and a table of per-image checksums is the point of
+that page.
 
 The release notes get written once and used twice: `data/releases.json` in the
 website repo (step 4a) and the GitHub release (step 6) say the same thing, and
 the site's /releases/ page is that file rendered.
+
+When the release adds a whole program -- or there is a video about it -- it
+also gets a **Spotlight page** (step 4b), which is a page of its own under
+`/spotlight/` with its own screenshots. A line on the releases page does not
+carry a new program.
+
+**Read "Writing the copy" below before writing a word of any of them.**
+
+## Writing the copy
+
+The reader is someone who found the project and is curious. They may write
+assembly, or they may just like old computers. Write so both finish the
+sentence. Assume interest, never knowledge.
+
+**Say it in this order:** what changed, what it does now, and what that means
+for someone using it. Nothing else is required.
+
+Rules, in order of how often they get broken:
+
+1. **Short sentences, one idea each.** If a sentence needs a comma-spliced
+   aside or a dash to hold together, it is two sentences.
+2. **Explain the term the first time you use it**, in the same sentence and in
+   a few words: "Hercules, a monochrome graphics card from 1982", "the FAT12
+   filesystem DOS floppies use". Do this once per release, not once per
+   highlight.
+3. **No internal shorthand.** A `§` number, a source label, an `.inc` file, a
+   register name or a symbol like `gfx_fill` means nothing outside this repo.
+   If a spec section is the authority, name it in a short closing sentence --
+   never use it as the explanation.
+4. **Numbers instead of adjectives.** "Redraw dropped from 158 character cells
+   a frame to 14" beats "much faster". If there is no measurement, say what
+   changed and leave the speed claim out.
+5. **No marketing.** Cut "powerful", "seamless", "blazing", "beautiful",
+   "exciting", "we're thrilled", "the best yet", "finally". No superlatives, no
+   exclamation marks, no first-person plural selling the work. State the fact
+   and stop.
+6. **No fluff.** Every sentence adds something a reader did not already have.
+   Do not restate the title in the body. Do not open with throat-clearing
+   ("As part of our ongoing work..."). Do not pad a small change into a
+   paragraph -- a one-sentence highlight is a fine highlight.
+7. **Leave out the war story** unless it changes what someone does. The
+   debugging that got you there is interesting to you and to nobody reading a
+   download page.
+8. **Plain words.** "Faster" not "performant". "Uses less memory" not
+   "optimises the footprint". "You can now" not "enables the ability to".
+
+The check before you commit: read each sentence and ask whether someone who
+has never opened this repository understands it. If they would have to, rewrite
+it or cut it.
+
+An example of the difference, on a real change:
+
+> **Too dense:** The player now gates widget drawing on a word of dirty bits,
+> applying the period's update-region idea at the widget -- 28,365 glyph cells
+> down to 2,468 over the same ten seconds of playback, per the spec section
+> that owns it.
+
+> **Write this instead:** The player used to redraw its whole face every time
+> the screen updated, which was more work than the machine could finish between
+> frames, so playback stuttered. It now redraws only the parts that changed.
+> Over the same ten seconds of music that is 2,468 character cells drawn
+> instead of 28,365.
+
+Lengths that fit the page and stay readable:
+
+| field | length |
+|---|---|
+| `summary` | 2-4 sentences. What this release is, leading with the one thing that matters most. |
+| `highlights[].body` | 2-5 sentences. One change each. |
+| `notes` | 1-3 sentences, written as instructions to the reader. |
 
 ## Locating the two repositories
 
@@ -73,14 +152,44 @@ to a fresh branch off `main` and would otherwise sweep unrelated work into it.
 ```bash
 cd "$OS_REPO"
 make clean && make
-ls -l build/os8088.img build/os8088-360.img build/apps.img build/apps360.img
+ls -l build/os8088.img build/os8088-720.img build/os8088-360.img \
+      build/apps.img build/apps720.img build/apps360.img build/media360.img
 ```
 
-All four must exist. The build enforces its own invariants -- a 512-byte boot
-sector and a kernel that fits under offset 0xA000 -- so a build failure here is
-a real problem, not something to work around. Report the kernel size; if it has
+All seven must exist -- step 3a refuses to pack without them. The build
+enforces its own invariants -- a 512-byte boot sector and a kernel that fits
+under offset 0xA000 -- so a build failure here is a real problem, not
+something to work around. Report the kernel size; if it has
 grown, say by how much and how much headroom is left (the ceiling is 0xA000 =
 40,960 bytes for image + bss).
+
+**Then the on-demand disks**, which `make` does not build and the zip carries
+when they exist:
+
+```bash
+tools/setup-cc.sh                     # SmallerC; needed by cword and allapps
+make allapps                          # apps-all.img -- every program, one disk
+make worddisk cworddisk               # word*.img, cword*.img
+make c64disk                          # c64*.img
+make weavedisk                        # weave*.img -- the Weave family's disk
+make runcpm-src && make runcpmdisk    # runcpm*.img
+make live                             # os8088-usb.img + os8088.iso -- the live
+                                      # USB image and the live CD (SPEC.md 80).
+                                      # Needs the fetch on the line above and
+                                      # the C toolchain, like allapps
+```
+
+Offer these, do not assume them. If `tools/setup-cc.sh` cannot run -- no
+network, no host toolchain -- **release the seven and say which on-demand disks
+were skipped**; they are a convenience, and a release that waits on one is a
+release that does not happen. `mkzip.py` prints the ones it did not find, so
+that list is generated rather than remembered. Boot any that were built in step
+3 like any other image (they go in B:, `make test TESTAPPS=build/word.img`).
+
+**Do not build the story disk for a release.** `make zdisk` fetches Infocom
+story files that nobody here has the right to redistribute, and they are not
+release content. `mkzip.py` will not pack them -- its manifest is an allowlist,
+not a glob -- but do not put them in `build/` on a release run either.
 
 ### 3. Smoke-test the build before publishing
 
@@ -97,10 +206,75 @@ magick build/smoke.ppm build/smoke.png    # or: convert, on older ImageMagick
 ```
 
 **Look at `build/smoke.png` with the Read tool.** You are checking for: the
-menu bar across the top with the chip glyph, File and Special; the dithered
-desktop; a Disk A (and Disk B) icon at the right; the dock strip at the bottom.
+menu bar across the top with the chip glyph, then Locator, File and Builtins;
+a Disk A and a Disk B icon down the right-hand side; the mouse pointer.
 If the screen is blank or garbled, stop -- do not publish. Delete the two
 scratch files afterwards; `build/` is gitignored, but leave it tidy.
+
+**If `make live` ran, boot both live images the same way** -- the rule is
+per image, and a zip does not exempt the two biggest files in it:
+
+```bash
+qemu-system-i386 -display none -qmp unix:build/qmp.sock,server,nowait \
+  -drive file=build/os8088-usb.img,format=raw -boot c \
+  -chardev msmouse,id=m0 -serial chardev:m0 &
+sleep 10
+python3 tools/qmp.py build/qmp.sock 'screendump build/smoke-usb.ppm'
+python3 tools/qmp.py build/qmp.sock 'quit'
+# ...then the same five lines with `-cdrom build/os8088.iso -boot d`
+```
+
+**Look at both screenshots.** The desktop must show a Disk A icon AND a
+Disk C icon down the right-hand side -- C: is the live partition the kernel
+adopted, and its absence means the image booted the kernel and lost the
+volume, which is exactly the failure a screenshot catches and a checksum
+cannot.
+
+### 3a. Pack the release zip
+
+The one asset the GitHub release gets. Build it only after step 3 has booted
+the images -- the zip is what people download, and packing an unbooted image is
+the same mistake with an extra layer of wrapping on it.
+
+```bash
+cd "$OS_REPO"
+python3 .claude/skills/release-os8088/mkzip.py --version "$VERSION"
+```
+
+It writes `build/os8088-<version>.zip` and prints the entry count, the packed
+and unpacked sizes, the zip's own sha256, and which on-demand disks were not
+built. **Quote that sha256 in the release notes** -- it is the only checksum a
+reader of the GitHub release gets, since there is no longer a per-file table
+there.
+
+The script does three things worth knowing about:
+
+- **Its file list is an allowlist, not a glob.** `build/` also holds the story
+  disks and every test gate's scratch image, and a glob ships those the first
+  time somebody runs an unrelated target before cutting a release. If a new
+  disk should be in releases, add it to `MANIFEST` in `mkzip.py` -- that is the
+  only place the list lives.
+- **It refuses to pack a partial release.** A missing image that `make` builds
+  stops it; a missing on-demand disk is reported and skipped.
+- **The zip is byte-for-byte reproducible.** Timestamps come from the date in
+  the version string and the images are already deterministic, so the same
+  version from the same commit packs to the same bytes. Do not add anything
+  that varies per run.
+
+Then look inside it, the same way step 3 makes you look at the screenshot:
+
+```bash
+cd "$(mktemp -d)" && unzip -q "$OS_REPO/build/os8088-$VERSION.zip"
+cd "os8088-$VERSION" && shasum -a 256 -c SHA256SUMS && cat README.txt
+```
+
+**Read the README with the Read tool.** It is written for someone who has never
+seen this project, so "Writing the copy" governs it exactly as it governs the
+release notes. Check the version, the commit and the file list are this
+release's, and that every image listed is one that was actually built. The
+QEMU command line in it is the real one -- if `make run`'s invocation ever
+changes, `README` in `mkzip.py` has to change with it, and the way to know is
+to run the command out of the unpacked directory and see the desktop come up.
 
 ### 4. Publish into the website repo
 
@@ -130,20 +304,33 @@ os8088.com/releases/) renders them, so an unfilled entry ships as a version
 number with no story attached.
 
 Write the same words you are about to put in the GitHub release notes in step
-6 -- write them once, here, and reuse them there:
+6 -- write them once, here, and reuse them there. **Follow "Writing the copy"
+above for all three fields:**
 
-- `summary` -- one sentence naming what this release is.
+- `summary` -- what this release is, in 2-4 plain sentences, most important
+  thing first.
 - `highlights` -- one entry per change worth reading about: `title`, the
   optional PR number as `issue`, and a `body` that explains it rather than
-  restating the title. HTML is allowed in `body`; keep it ASCII, and use `--`
-  the way the rest of the site does.
+  restating the title. Titles are plain too: name the change, do not sell it.
+  HTML is allowed in `body`; keep it ASCII, and use `--` the way the rest of
+  the site does.
 - `notes` -- anything that changes how the system is *used* and would
   otherwise surprise someone (a menu item that moved, a default that flipped).
-  Rendered as a call-out.
+  Write it as an instruction to the reader. Rendered as a call-out.
+
+**Check whether the images actually changed** -- `git diff --stat HEAD --
+public/disk/` in the website repo, after `release.py` has run. The build is
+deterministic, so a release whose work was all in a package or on the story
+disk produces four images byte for byte identical to the previous release.
+That is a fine release to cut, and it is a lie by omission not to say so: the
+headline feature is not in the download, and someone will boot the image
+looking for it. Put it in the summary and again in `notes`.
 
 The optional `ramBytes` / `ramCap` / `sourceLines` / `modules` fields render
-the size figures on the page. `ramCap` is always 40960 (`0xA000`). The other
-three are not printed by the build, so measure them -- from `$OS_REPO`:
+the size figures on the page. `ramCap` is `KERN_CODE_MAX` -- **65536**, and
+read it out of `kernel/kernel.asm` rather than trusting this line, because it
+has moved once already. The other three are not printed by the build, so
+measure them -- from `$OS_REPO`:
 
 ```bash
 # ramBytes: image + .bss, the number the build-time assertion guards.
@@ -152,16 +339,72 @@ sed 's/%error "kernel too big.*/%warning bypassed/' kernel/kernel.asm > /tmp/ksz
 printf '%%assign KT KTEXT_SIZE\n%%assign KB KBSS_SIZE\n%%warning KTEXT=KT KBSS=KB\n' >> /tmp/ksz.asm
 nasm -f bin -I kernel/ -o /dev/null /tmp/ksz.asm     # warning prints both; ramBytes = KT + KB
 
-# sourceLines and modules, counted the way the FAQ counts them: the boot
-# sector, kernel.asm and everything it actually includes, the SDK header and
-# the example packages. The dead .inc files are not included and do not count.
-# Keep the include list as an inline $(...): this shell is zsh, where an
-# unquoted $VAR does NOT word-split and wc would be handed one long filename.
-wc -l boot/boot.asm kernel/kernel.asm \
-      $(grep '%include' kernel/kernel.asm | sed -E 's/.*"(.*)".*/kernel\/\1/') \
-      apps/os88api.inc apps/*/*.asm | tail -1      # sourceLines
-grep -c '%include' kernel/kernel.asm                # modules
+# sourceLines and modules: the boot sector, kernel.asm and everything it
+# actually includes, the SDK header, and every package's .asm AND the .inc
+# files that .asm includes. The dead kernel .inc files are not included by
+# anything and do not count; neither does apps/frotz/zharness.inc, which is
+# development-only and never in a shipped build.
+#
+# ANCHOR THE GREP. `grep '%include'` also matches the word in a comment, and
+# both figures were wrong for it: a stray match became a garbage filename wc
+# silently skipped, and `grep -c` counted it as a 35th kernel module when
+# there are 34.
+python3 - <<'EOF'
+import glob, os, re
+def n(p):
+    return open(p, 'rb').read().count(b'\n')
+def incs(path, dirs):
+    out = []
+    for f in re.findall(r'^\s*%include\s+"([^"]+)"', open(path).read(), re.M):
+        for d in dirs:                  # an .asm names its include EITHER
+            q = os.path.normpath(os.path.join(d, f))   # beside itself or
+            if os.path.exists(q):       # apps/-relative, because that is the
+                out.append(q)           # -I nasm is given. Resolve BOTH: the
+                break                   # apps/-relative form is how cword and
+    return out                          # runcpm name theirs, and only trying
+                                        # the sibling form silently drops them
+kern = incs('kernel/kernel.asm', ['kernel'])
+apps = sorted(glob.glob('apps/*/*.asm'))
+pkg = []
+for a in apps:
+    for q in incs(a, [os.path.dirname(a), 'apps']):
+        if q not in pkg and 'zharness' not in q and 'crt0' not in q:
+            pkg.append(q)               # crt0.asm is the C runtime, counted
+                                        # once with the SDK rather than per
+                                        # C package that includes it
+files = ['boot/boot.asm', 'kernel/kernel.asm'] + kern + ['apps/os88api.inc'] + apps + pkg
+files = list(dict.fromkeys(files))
+print('sourceLines', sum(n(p) for p in files if os.path.exists(p)))
+print('modules    ', len(kern))
+# The C is NOT in sourceLines -- the page labels that figure "lines of
+# assembly". Count it separately and quote it in the entry when it moves.
+csrc = [p for p in sorted(glob.glob('apps/*/*.c') + glob.glob('apps/*/*.h'))
+        if 'hosttest' not in p]
+print('C lines    ', sum(n(p) for p in csrc))
+EOF
 ```
+
+**This recipe changed AGAIN at v1.0.20260818 and the series steps there too.**
+Package includes are named `apps/`-relative as often as they are named beside
+the `.asm` -- `%include "cword/cwmove.inc"` -- and resolving only the sibling
+form dropped them, cword's and runcpm's bulk among them; the same pass also
+counted `apps/os88api.inc` and `apps/cc/os88thunk.asm` twice, once as a glob
+hit and once as an include, hence the `dict.fromkeys`. Net 9,324 lines out on
+that tree: the old recipe reported 222,280 lines, this one 231,604, and the
+previous release recounts to 228,855 -- **which is the number that entry's
+note quotes, so the +2,749 that is real growth is not read as +9,765.**
+Entries before v1.0.20260818 still hold their own recipe's numbers.
+
+**And it changed at v1.0.20260810 before that.** It used
+to glob `apps/*/*.asm` only, which missed the `.inc` files four packages keep
+their bulk in -- ArtfulType, ModPlug, Tracker and Frotz, 37,309 lines between
+them at that release. The old recipe reported 115,528 lines and 35 modules for
+that tree; this one reports 152,837 and 34, and `data/releases.json` was
+restated to the new figures rather than left carrying a known undercount.
+Entries before it still hold old-recipe numbers and are not being recounted --
+so **the step is between v1.0.20260809 and v1.0.20260810, and the entry says
+so.** When a figure jumps because the counting changed, say so where the
+figure is, or the jump reads as growth that did not happen.
 
 If you update these, the same figures are hardcoded in the website's prose --
 `site/index.html`, `site/faq.html`, `site/how-it-works.html`,
@@ -187,6 +430,119 @@ whose entry renders as an empty window is worse than no page at all:
 # has its summary, its highlights, its figures and its four files
 ```
 
+#### 4b. The Spotlight page, when the release earns one
+
+`/spotlight/` is the hub for one-page write-ups: a new program, a feature too
+big for a highlight, or anything with a video about it. `site/spotlight.html`
+is the index and `site/spotlight/<name>.html` is the page. The nav already
+carries Spotlight (File menu in `tools/build.py`, and the footer dock in
+`site/_layout.html`), so a new page needs no wiring beyond its own entry on the
+index.
+
+**Decide first, and it is usually no.** A bug fix, a speed-up or a new menu
+item is a highlight on the releases page and nothing more. Write a Spotlight
+page when a reader would want a page: a program that did not exist before, or a
+video that needs somewhere to live. If in doubt, ask the user rather than
+producing a page nobody asked for.
+
+**1. Capture the screenshots.** They come out of the emulator, never a mockup.
+Scenes live in the website repo beside the others:
+
+```bash
+cd "$WEB_REPO"
+# scenes.frotz.json is the worked example: five scenes, one per story.
+python3 tools/capture.py --scenes tools/scenes.<name>.json \
+        --out public/img/<name> --repo "$OS_REPO" --jobs 3
+```
+
+A scene may set `"diskB": "<image>.img"` to put a different floppy in drive B:
+than the software disk -- that is how Frotz's scenes reach the story disk
+`make zdisk` builds. Whatever the page shows must be built first; `make` alone
+does not build an on-demand disk.
+
+**Look at every captured PNG with the Read tool.** A lost click gives a
+plausible-looking screenshot of the wrong thing, and file size will not tell
+you: two of Frotz's five first came out sitting on an unanswered "Do you need
+instructions?" prompt with an otherwise empty window.
+
+**2. Write the page.** Copy `site/spotlight/frotz.html` and change it. Set
+`body_class: spot` in the metadata block -- that is what turns on the article
+layout, and without it the page is the ordinary stack of one-screendump-wide
+windows, which is what these pages exist to stop being.
+
+The layout has **two widths and nothing between**: 800px for anything with
+sentences in it, the full two columns for anything to look at. Alternating them
+is the structure. The pieces, all in the stylesheet's `spotlight` section:
+
+| | |
+|---|---|
+| masthead | a `.grid` of two: the pitch, `.specs` with three numbers, the buttons and a `.spot-toc` of jump links -- beside the one screendump that proves it |
+| `.spot-band` | inverted full-width section heading, each with one line saying why you would read that section. These are the anchors somebody skims by |
+| gallery | the screendumps in a plain `.grid`, two abreast |
+| `.spot-cards` | a `.grid` of short titled cards, for what would otherwise be one window with four `h3`s in it |
+| `.spot-steps` | numbered instructions, for the part somebody follows while typing |
+
+Order: masthead, what it *is* for someone who has never heard of it, the video,
+the gallery, how it works, what it deliberately does not do, how to run it.
+
+The copy rules above apply, plus one more: **a Spotlight page is written for
+someone who does not know the subject at all**, so explain the domain and not
+only the change. The Frotz page spends three paragraphs on what a Z-machine is
+before it says a word about the implementation. That is the right proportion.
+Still no marketing, still numbers instead of adjectives, and still no `§`
+numbers or symbol names.
+
+Two things a reader gets in the first five seconds, so write them last and
+hardest: the **deck** (`.spot-deck`, one or two sentences that are the whole
+page) and the **three numbers** in the `.specs` block. If you cannot fill those
+three cells with facts, the page is probably a highlight and not a spotlight.
+
+The copy rules above apply, plus one more: **a Spotlight page is written for
+someone who does not know the subject at all**, so explain the domain and not
+only the change. The Frotz page spends three paragraphs on what a Z-machine is
+before it says a word about the implementation. That is the right proportion.
+Still no marketing, still numbers instead of adjectives, and still no `§`
+numbers or symbol names.
+
+**3. Embed the video, if there is one.** Reuse the markup on the Frotz page --
+an `<a class="vid__poster" data-video="<id>">` around an
+`<img src="/videos/thumb/<id>.jpg">`, plus `<script src="/js/videos.js" defer>`
+at the foot of the page. That gets the same bargain `/videos/` makes: the
+poster is a plain link until someone presses play, the still is proxied through
+this site so loading the page tells YouTube nothing, and the embed is
+`youtube-nocookie.com`, which is the one host `frame-src` allows.
+
+Get the real title from YouTube rather than inventing one:
+
+```bash
+curl -sS "https://www.youtube.com/oembed?url=https%3A//www.youtube.com/watch%3Fv%3D<id>&format=json"
+```
+
+`/videos/thumb/` is served by the Worker, not from `public/`, so **the poster
+is a broken image on a local `http.server` and correct in production.** That is
+expected. `tools/linkcheck.py` knows -- `WORKER_ROUTES` -- and a new
+Worker-served path has to be added there or the link check fails on a link that
+works.
+
+**4. Add it to the index and link it.** One `figure.win.shot` block at the top
+of the list in `site/spotlight.html` (newest first), and a pointer from
+wherever a reader would otherwise look for it -- for Frotz that is
+`site/applications.html`, which lists the programs it is *not* among. Link the
+page from the matching `highlights[].body` in `data/releases.json` too.
+
+**5. Rebuild, link-check, and look at both pages** in the browser, the same way
+step 4a makes you look at the releases page. Three things that will fool you:
+
+- **Look at it at 1600px wide.** A row of two screendumps needs a 1,360px
+  viewport, so at anything narrower the page folds to one column and looks
+  exactly like the thing this layout replaced. Check 390px too -- nothing may
+  scroll sideways.
+- **The stylesheet is cached and `build.py` does not touch it.** `public/css/`
+  is committed by hand, so a CSS change plus a reload shows you the old page. A
+  band that renders as plain text on the dither is that, not a broken rule.
+- **The video poster is a broken image locally** and correct in production; see
+  step 3.
+
 ### 5. Commit and open the pull request
 
 ```bash
@@ -207,6 +563,11 @@ Check the diff includes `data/releases.json` with its prose filled in. A
 release PR that touches the images and the manifest but not the release log
 means step 4a was skipped.
 
+If step 4b produced a Spotlight page, say so in the PR body and give its path,
+list the scenes captured, and name the video it embeds. Mention that the video
+poster only resolves once the Worker is serving the page, so a reviewer reading
+a local build does not file it as a broken image.
+
 End the PR body with:
 
 ```
@@ -215,7 +576,7 @@ End the PR body with:
 
 ### 6. Tag and cut the GitHub release
 
-Only after the images are verified.
+Only after the images are booted and the zip is unpacked and checked.
 
 ```bash
 cd "$OS_REPO"
@@ -224,8 +585,23 @@ git push origin "$VERSION"
 gh release create "$VERSION" \
   --title "os8088 $VERSION" \
   --notes "<notes>" \
-  build/os8088.img build/os8088-360.img build/apps.img build/apps360.img
+  "build/os8088-$VERSION.zip"
 ```
+
+**One asset, and it is the zip.** Do not attach loose `.img` files beside it --
+that is the arrangement this replaced, and half of each is worse than either.
+Confirm the file exists before running the command: a missing asset makes `gh
+release create` fail with the tag already pushed, which is the one failure in
+this whole procedure that cannot simply be re-run.
+
+Because the release page no longer lists a file per image, the notes have to
+say what the zip contains and how big it is -- one sentence naming the two
+images a reader actually needs, the packed size, and the sha256 step 3a
+printed. When the zip carries the live media, name them too: a reader with no
+floppy drive needs to hear that `os8088-usb.img` and `os8088.iso` boot a PC
+or an emulator directly, or the two files that serve them best read as
+padding. Someone who wants a per-image checksum finds it in the SHA256SUMS
+inside the zip, or on the download page, and the notes should say which.
 
 `gh` infers the repository from the checkout's remote, so this works for a
 fork or a rename without any edit here.
@@ -233,7 +609,9 @@ fork or a rename without any edit here.
 The notes should name what changed since the previous tag
 (`git log <prev>..HEAD --oneline`), the kernel size, and point at the download
 page of whatever site this project publishes to (os8088.com/download/ for the
-upstream project).
+upstream project). A commit log is not release notes -- "Writing the copy"
+applies here exactly as it does on the website, and a reader who lands on the
+release from a search has no more context than one who lands on the page.
 
 These are the notes you already wrote in step 4a. Say the same thing in both
 places -- the releases page exists to mirror this, and the two disagreeing is
@@ -243,21 +621,47 @@ and update `data/releases.json` to match before the website PR is merged.
 ### 7. Report
 
 Tell the user: the version, the PR URL, the release URL, the kernel size and
-its delta, and anything you skipped or that needs their attention. If the
-website PR is merged, the site's own CI deploys from its `main` branch -- say
-so, and say the site is not live until that merge happens.
+its delta, the zip's packed size and how many images went into it, the
+Spotlight page's URL if step 4b ran, and anything you skipped or that needs
+their attention -- naming any on-demand disk that did not get built, since a
+reader of the zip's README cannot tell a disk that was left out from one that
+does not exist. If the website PR is merged, the site's own CI
+deploys from its `main` branch -- say so, and say the site is not live until
+that merge happens.
+
+Driving the OS to take screenshots is also the most thorough anyone uses it all
+week, and it turns defects up. Report those separately from the release, with
+what you did and what happened -- they are not release business, and burying
+them in a status line is how they get lost.
 
 ## Rules
 
-- **Never publish an unbooted image.** Step 3 is not optional.
+- **Never publish an unbooted image.** Step 3 is not optional, and packing one
+  into a zip does not make it booted.
+- **The GitHub release gets the zip and nothing else.** Never attach loose
+  images beside it, and never build the zip from a glob of `build/` -- the
+  manifest in `mkzip.py` is the list, and it exists so a story disk or a test
+  gate's scratch image cannot ride out with a release.
+- **Never hand-assemble the zip.** `mkzip.py` writes the README, the checksums
+  and a reproducible archive; a `zip -r` by hand gets none of those and looks
+  identical until somebody checks.
 - **Never invent a checksum or a size.** Everything on the download page comes
   from `releases.json`, which `release.py` computes from the actual bytes.
 - **Never ship a release with an empty entry on the releases page.** Step 4a is
   not optional either: the numbers are generated, the notes are not, and a
   version with nothing written against it is what an unfilled entry looks like
   to a reader.
-- **Do not claim a software license.** This repo carries no LICENSE file. If
-  the user wants one, that is a separate decision, not part of a release.
+- **Never ship copy that only a contributor can read.** Spec section numbers,
+  symbol names and register talk stay out of the notes, and so does marketing
+  language. "Writing the copy" is the standard for the website entry, the
+  GitHub release and any Spotlight page.
+- **Never put a screenshot on a Spotlight page that you have not looked at.**
+  Step 4b captures them from a real boot and you read every one. A mockup, a
+  crop of an old shot, or a scene whose click was lost are all the same defect
+  to a reader: a picture of something that did not happen.
+- **The licence is MIT** -- `LICENSE` is in the root of this repo and the FAQ
+  says so. Do not restate the terms in release copy, and do not claim a
+  different one.
 - Both repositories get branches, never direct commits to `main`.
 - If any step fails, stop and report rather than continuing with a partial
   release. A half-published release is worse than none.

@@ -1,6 +1,6 @@
 ; chainb - a 512-byte boot sector that chain-boots the DOS floppy in drive B:.
 ;
-; A CAPABILITY GATE (SPEC.md 59.7), not shipped software. It answers the one
+; A CAPABILITY GATE (SPEC.md 86.7), not shipped software. It answers the one
 ; question the FreeDOS handover rests on, with nothing else in the frame: can
 ; the machine boot the disk in unit 1, and does FreeDOS then come up with B: as
 ; its boot drive? Everything else in the handover - the teardown, the driver

@@ -1,0 +1,12 @@
+// arithmetic: wrap, truncation toward zero, the dividend's sign
+var a; var b; var c; var d; var e; var f; var g; var h;
+function main() {
+  a = 7 * 6;
+  b = 30000 + 30000;          // wraps; 4.4 says defined, not an error
+  c = 1000 * 1000;
+  d = 0 - 7;
+  e = d / 2;                  // -3, truncating toward zero
+  f = d % 2;                  // -1, the dividend's sign
+  g = 0 - 32767 - 1;          // -32768: the literal cap is 32767 (4.2)
+  h = g / (0 - 1);            // 4.4's NAMED case: idiv would raise INT 0
+}

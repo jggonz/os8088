@@ -27,6 +27,94 @@
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
+; icon_draw_x - the API's entry: the record is the CALLER'S (SPEC.md 25.6.1)
+; in:       CX = x, DX = y, ES:SI -> record; caller holds the gfx lock
+; out:      CF = 0 drawn, CF = 1 refused (a record this cannot stage)
+; clobbers: nothing else
+;
+; ico_pass reads the rows through DS and every ico_* variable through DS too,
+; so DS cannot be moved to the caller's segment the way gfx_blit1_x moves it
+; to the caller's band (SPEC.md 5.4.2) - the pass would then read its own
+; geometry out of the package. The record is STAGED instead: it is 66 bytes at
+; the outside, one `movsb` loop, and nothing measurable beside two passes over
+; twelve rows.
+;
+; The bound is what the stage holds and it is a REFUSAL rather than a
+; truncation: one word a row, sixteen rows - a 16x16 icon, and every control
+; os88ui.inc draws. A wider record is a caller error, not a shape to clip.
+; -----------------------------------------------------------------------------
+ICO_STAGE_H equ 16              ; rows the stage holds, at one word a row
+; ...and the ceiling on the SHARED control glyph, asserted here because this is
+; the first point both constants exist: kernel.asm includes fdlg.inc (and with
+; it apps/os88ui.inc, which sets OS88UI_GW) one line above icons.inc.
+;
+; os88ui_glyph hands icon_draw_x the constant record `db 1, OS88UI_GW` and has
+; NO fallback - the branch that used to stand in for one could not draw a
+; glyph, so it went rather than being kept (SPEC.md 25.6.1). Of the four shapes
+; icon_draw_x refuses - ww = 0, ww > 1, rows = 0, rows > ICO_STAGE_H - three
+; are pinned by the literal `1`; this is the fourth, and a glyph grown past the
+; stage would otherwise turn every control in every package into nothing at
+; all, silently.
+; No %ifdef around it: `equ` defines an ASSEMBLER symbol and %ifdef tests the
+; PREPROCESSOR's, so `%ifdef OS88UI_GW` is false however defined it is - which
+; is a guard that never fires. This file is the kernel's alone, so the symbol
+; is always there and the %if can stand bare.
+%if OS88UI_GW > ICO_STAGE_H
+  %error "OS88UI_GW is taller than the icon stage: icon_draw_x refuses the control-glyph record and os88ui_glyph has no fallback (SPEC.md 25.6.1)"
+%endif
+icon_draw_x:
+    push ax
+    push cx
+    push si
+    push di
+    mov al, [es:si]             ; the header: words a row, then rows
+    mov ah, [es:si+1]
+    cmp al, 1
+    ja .refuse
+    or al, al
+    jz .refuse
+    or ah, ah
+    jz .refuse
+    cmp ah, ICO_STAGE_H
+    ja .refuse
+    push cx                     ; CX IS THE X, and the copy below wants it for
+                                ; the count - so it is banked a second time
+                                ; rather than spent. Without this the record
+                                ; staged perfectly and drew at a byte count
+    mov cl, ah                  ; CX = 2 + h * 4: the header, h mask words
+    xor ch, ch                  ; and h data words
+    shl cx, 1
+    shl cx, 1
+    add cx, 2
+    mov di, ico_stage
+.cp:
+    mov al, [es:si]
+    mov [di], al                ; DS is KERNEL_SEG here - the X stub's doing
+    inc si
+    inc di
+    loop .cp
+    pop cx                      ; ...and x back
+    mov si, ico_stage
+    call icon_draw
+    clc
+.out:
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret                         ; a pop writes no flags, so CF survives it
+.refuse:
+    mov word [ico_c1], (CBLACK << 8) | CWHITE   ; SPEC.md 25.6: the pen is
+                                ; ONE-SHOT, and a refusal spends it too. Without
+                                ; this the pair a refused draw was set for is
+                                ; still armed for whatever the caller draws
+                                ; next - which on the failing path is the one
+                                ; time nobody is looking. A `mov` writes no
+                                ; flags, so it goes ABOVE the `stc`
+    stc
+    jmp short .out
+
+; -----------------------------------------------------------------------------
 ; icon_draw - draw a full icon record (header + mask + data)
 ;
 ; in:       CX = x, DX = y (top-left, screen px), SI -> record;
@@ -34,6 +122,7 @@
 ; out:      nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 icon_draw:
+    GFXAUDIT_HOOK
     push ax
     push bx
     push cx
@@ -48,7 +137,10 @@ icon_draw:
     mov al, [si+1]              ; AH still 0
     mov [ico_h], ax
     add si, 2                   ; SI -> body (mask rows first)
+    GFXDENTERCD                 ; whole-shape, like a glyph (SPEC.md 39.14.2)
     call ico_core
+    mov word [ico_c1], (CBLACK << 8) | CWHITE   ; SPEC.md 25.6: ONE-SHOT
+    GFXDLEAVE
     pop es
     pop bp
     pop di
@@ -78,7 +170,10 @@ icon_draw16:
     push es
     mov word [ico_ww], 1
     mov word [ico_h], 16
+    GFXDENTERCD                 ; whole-shape, like a glyph (SPEC.md 39.14.2)
     call ico_core
+    mov word [ico_c1], (CBLACK << 8) | CWHITE   ; SPEC.md 25.6: ONE-SHOT
+    GFXDLEAVE
     pop es
     pop bp
     pop di
@@ -137,7 +232,7 @@ ico_core:
     add ax, si
     mov [ico_datap], ax
 
-    ; --- vertical clip to 0..[vid_hm1] (y is signed here) --------------------
+    ; --- vertical clip to 0..[vid_chm1] (y is signed here) --------------------
     mov bx, [ico_h]             ; BX = rows to draw
     mov ax, [ico_y]
     or  ax, ax
@@ -152,12 +247,12 @@ ico_core:
     mov word [ico_y], 0
 .top_ok:
     mov ax, [ico_y]
-    cmp ax, [vid_h]
+    cmp ax, [vid_ch]
     jae .none                   ; fully below the screen
     add ax, bx
-    cmp ax, [vid_h]
+    cmp ax, [vid_ch]
     jbe .rows_ok
-    mov bx, [vid_h]
+    mov bx, [vid_ch]
     sub bx, [ico_y]             ; hang off the bottom edge: draw what fits
 .rows_ok:
     mov [ico_rows], bx
@@ -179,7 +274,7 @@ ico_core:
     mov ch, 8
     sub ch, cl                  ; CH = 8 - shift
 
-    cmp byte [bb_on], 0         ; double-buffered? (SPEC.md 32) - the bb
+    cmp byte [vid_mono], 0      ; 1bpp? (SPEC.md 39.5) - the software
     jne ico_core_bb             ; twin returns straight to the wrapper
 
     mov ax, VGA_SEG
@@ -188,9 +283,9 @@ ico_core:
     mov dx, 0x3CE               ; GC1: enable Set/Reset on all planes
     mov ax, 0x0F01
     out dx, ax
-    mov ah, CWHITE              ; GC0: Set/Reset color = white
-    mov al, 0
-    out dx, ax
+    mov ah, [ico_c1]            ; GC0: Set/Reset color = the underlay
+    mov al, 0                   ; (SPEC.md 25.6; CWHITE unless icon_pen said
+    out dx, ax                  ; otherwise)
     mov al, 8                   ; leave the index at GC8 (Bit Mask)
     out dx, al
     mov si, [ico_maskp]
@@ -199,7 +294,7 @@ ico_core:
     pop di
 
     mov dx, 0x3CE
-    mov ah, CBLACK              ; GC0: Set/Reset color = black
+    mov ah, [ico_c2]            ; GC0: Set/Reset color = the picture's
     mov al, 0
     out dx, ax
     mov al, 8
@@ -284,7 +379,7 @@ ico_pass:
     ret
 
 ; -----------------------------------------------------------------------------
-; ico_core_bb - back-buffer icon renderer (SPEC.md 32): the white underlay
+; ico_core_bb - the software renderer's icon body (SPEC.md 32/39.5): the white underlay
 ;               ORs the shifted mask-row bits into all four planes, the
 ;               black pass AND-NOTs the data-row bits out of them - color
 ;               15 under the mask, 0 under the data, like the VRAM passes.
@@ -304,14 +399,6 @@ ico_core_bb:
     jb .rok
     mov bx, [vid_strm1]
 .rok:
-    push cx                     ; CL/CH shift pair survives bb_dirty setup
-    mov cx, [ico_y]
-    mov dx, cx
-    add dx, [ico_rows]
-    dec dx
-    call bb_dirty               ; AX is STILL the left byte column here - do
-    pop cx                      ; not borrow it before this call
-
     mov al, [vid_strm1]         ; the three right-edge limits ico_pass_bb
     mov [ico_lim1], al          ; needs as BYTES - see the compares there
     dec al
@@ -319,17 +406,33 @@ ico_core_bb:
     mov al, [vid_stride]
     mov [ico_lim0], al
 
-    mov byte [ico_bbop], 0      ; white underlay: OR the mask rows in
-    mov si, [ico_maskp]
-    call ico_pass_bb
-    mov byte [ico_bbop], 1      ; black pixels: AND-NOT the data rows out
+    mov al, [ico_c1]            ; SPEC.md 25.6: WHITE ors the rows in and
+    call ico_bbop_of            ; anything else ands them out - which is the
+    mov [ico_bbop], al          ; hardcoded pair's own behaviour, and gives a
+    mov si, [ico_maskp]         ; pressed control its black underlay and a
+    call ico_pass_bb            ; disabled one its stipple for free (the
+    mov al, [ico_c2]            ; CALLER dithers the data rows; a 1bpp op has
+    call ico_bbop_of            ; nowhere to put a grey)
+    mov [ico_bbop], al
     mov si, [ico_datap]
     call ico_pass_bb
 .none:
     ret
 
+; ico_bbop_of - AL = a colour -> AL = 0 (or) for white, 1 (and-not) otherwise
+; The 1bpp reduction is gfx_ink's (SPEC.md 39.4): only pure white lights a
+; pixel, and the dither class is a black stipple, so it ands out like black.
+ico_bbop_of:
+    call gfx_ink
+    cmp al, 0xFF
+    mov al, 0
+    je .out
+    inc al
+.out:
+    ret
+
 ; -----------------------------------------------------------------------------
-; ico_pass_bb - one masked pass over all four back-buffer planes: the same
+; ico_pass_bb - one masked pass over every renderer plane: the same
 ;               3-byte shifted window and edge clipping as ico_pass, with
 ;               [ico_bbop] picking OR (0) or AND-NOT (1) per byte.
 ; in:       SI -> word rows, DI = row offset, CL = shift, CH = 8-shift,
@@ -484,6 +587,74 @@ ico_disk32:
     dw 0x3FFF, 0xFFFC           ; 31  ..############################..
 
 ; -----------------------------------------------------------------------------
+; ico_disk14 - the same diskette, 32 wide by 14 ROWS (SPEC.md 26.4)
+;
+; The CGA's pixels are 2.4:1 TALL - 640x200 on a 4:3 tube - so ico_disk32
+; above renders 32 wide by about 77 high there: a stretched column, not a
+; diskette. 14 rows is 33.6 real units against 32, which is square to within
+; 5% and is also what a 3.5" diskette actually is (90 x 94mm).
+;
+; It is drawn and not squashed. Halving ico_disk32 by OR-ing row pairs was
+; the cheap option and it thickens every 1px feature into 2 - the shutter
+; window, the label box and the two vertical rules are all single lines, so
+; what comes out is a blob with the diskette's outline. Selecting alternate
+; rows loses them instead. The shutter keeps 3 rows of window and the label
+; box 5 of interior, which is the proportion the 32-row icon has.
+; -----------------------------------------------------------------------------
+ico_disk14:
+    db 2, 14                    ; wwords, height
+
+    ; --- mask: solid silhouette x=2..29, as the tall one ---------------------
+    times 14 dw 0x3FFF, 0xFFFC
+
+    ; --- data ----------------------------------------------------------------
+    dw 0x3FFF, 0xFFFC           ;  0  ..############################..
+    dw 0x2040, 0x0204           ;  1  ..#......#............#......#..
+    dw 0x204F, 0x0204           ;  2  ..#......#..####......#......#..
+    dw 0x204F, 0x0204           ;  3  ..#......#..####......#......#..
+    dw 0x204F, 0x0204           ;  4  ..#......#..####......#......#..
+    dw 0x207F, 0xFE04           ;  5  ..#......##############......#..
+    dw 0x2000, 0x0004           ;  6  ..#..........................#..
+    dw 0x27FF, 0xFFE4           ;  7  ..#..######################..#..
+    dw 0x2400, 0x0024           ;  8  ..#..#....................#..#..
+    dw 0x2400, 0x0024           ;  9  ..#..#....................#..#..
+    dw 0x2400, 0x0024           ; 10  ..#..#....................#..#..
+    dw 0x2400, 0x0024           ; 11  ..#..#....................#..#..
+    dw 0x2400, 0x0024           ; 12  ..#..#....................#..#..
+    dw 0x3FFF, 0xFFFC           ; 13  ..############################..
+
+; -----------------------------------------------------------------------------
+; ico_hdd14 - the hard disk at the same 32 x 14 (SPEC.md 26.4)
+;
+; ico_hdd32's three stacked sections - platter, bays, feet - in the rows
+; there are for them: one platter with its hub, one row of three bays, and
+; the two feet that make it sit on a desk rather than float.
+; -----------------------------------------------------------------------------
+ico_hdd14:
+    db 2, 14                    ; wwords, height
+
+    ; --- mask: the case is solid, the feet are not ---------------------------
+    dw 0x0000, 0x0000           ;  0
+    times 12 dw 0x3FFF, 0xFFFC  ;  1..12  the case
+    dw 0x0C00, 0x0030           ; 13      the feet
+
+    ; --- data ----------------------------------------------------------------
+    dw 0x0000, 0x0000           ;  0  ................................
+    dw 0x3FFF, 0xFFFC           ;  1  ..############################..
+    dw 0x2000, 0x0004           ;  2  ..#..........................#..
+    dw 0x23FF, 0xFFC4           ;  3  ..#...####################...#..
+    dw 0x2400, 0x0024           ;  4  ..#..#....................#..#..
+    dw 0x241F, 0xF824           ;  5  ..#..#.....##########.....#..#..
+    dw 0x2400, 0x0024           ;  6  ..#..#....................#..#..
+    dw 0x23FF, 0xFFC4           ;  7  ..#...####################...#..
+    dw 0x3FFF, 0xFFFC           ;  8  ..############################..
+    dw 0x2000, 0x0004           ;  9  ..#..........................#..
+    dw 0x27E7, 0xE7E4           ; 10  ..#..######..######..######..#..
+    dw 0x27E7, 0xE7E4           ; 11  ..#..######..######..######..#..
+    dw 0x3FFF, 0xFFFC           ; 12  ..############################..
+    dw 0x0C00, 0x0030           ; 13  ....##....................##....
+
+; -----------------------------------------------------------------------------
 ; ico_app16 - 16x16 generic application: a diamond outline with a filled
 ;             square at the center; mask = the solid diamond silhouette.
 ;
@@ -612,7 +783,39 @@ ico_hdd32:
     times 6 dw 0x0000, 0x0000   ; 26..31
 
 
+; --- SPEC.md 25.6: the two colours a record is drawn in ----------------------
+; The mask pass lays [ico_c1] and the data pass draws [ico_c2] over it. They
+; were CWHITE and CBLACK, written into GC0 as immediates, which is every icon
+; in the system and is not every 1bpp SHAPE the pass can draw: a pressed
+; control is the same shape with the two exchanged, and a disabled one wants
+; the overlay in CDGRAY (SPEC.md 47).
+;
+; ONE-SHOT, like gfx_blit1_pen (SPEC.md 5.4.2.2): icon_pen sets the pair and
+; ico_core puts it back on the way out, so a caller that does not set it gets
+; the icon pair and no icon site had to change.
+ico_c1:     db CWHITE           ; the mask pass's colour: the underlay
+ico_c2:     db CBLACK           ; ...and the data pass's: the picture
+%if ico_c2 - ico_c1 != 1
+  %error "ico_c1/ico_c2 must stay adjacent: icon_pen sets both in one word store"
+%endif
+
+; -----------------------------------------------------------------------------
+; icon_pen - set the pair the NEXT icon_draw uses (SPEC.md 25.6)
+; in:       AL = the mask pass's colour, AH = the data pass's
+; out:      nothing
+; clobbers: nothing (flags)
+; -----------------------------------------------------------------------------
+icon_pen:
+    mov [ico_c1], ax
+    ret
+
+
 section .bss
+ico_stage   resb 2 + ICO_STAGE_H * 4   ; SPEC.md 25.6.1: a package's record,
+                                ; copied where the pass can read it. One of it
+                                ; for os88ui_krect's reason - every caller is
+                                ; under the gfx lock and nothing in a drawing
+                                ; path re-enters
 ico_ww      resw 1              ; current record: words per row
 ico_h       resw 1              ; current record: total rows
 ico_rows    resw 1              ; rows after vertical clip

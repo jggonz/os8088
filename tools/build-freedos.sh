@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build the FreeDOS payload for the DOS floppy: KERNEL.SYS, COMMAND.COM and a
-# CHS-only FAT12 boot sector. See SPEC.md 59.6 for why each step is what it is.
+# CHS-only FAT12 boot sector. See SPEC.md 86.6 for why each step is what it is.
 #
 # ON DEMAND ONLY - `make dos`, never `make all`. This fetches a ~148MB
 # toolchain the first time it runs, and a default-target dependency that needs

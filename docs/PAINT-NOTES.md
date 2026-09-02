@@ -14,8 +14,9 @@ for them are marked **RESOLVED** where that is so. In short:
 
 | asked for | shipped as |
 |-----------|------------|
-| `alloc(paragraphs)`/`free`, a `largest_free` query, and the same map governing the kernel's own speculative RAM | the **claim heap**, SPEC.md §50 — `OSAPI_MEM_CLAIM` / `OSAPI_MEM_FREE` / `OSAPI_MEM_AVAIL`, freed at instance teardown, billed by the Task Manager, and `bb_set` asking it for the back buffer like anyone else |
-| a `gfx_blit4` slot | SPEC.md §5.4 — packed 4bpp, adapter- and back-buffer- and clip-aware |
+| `alloc(paragraphs)`/`free`, a `largest_free` query, and the same map governing the kernel's own speculative RAM | the **claim heap**, SPEC.md §50 — `OSAPI_MEM_CLAIM` / `OSAPI_MEM_FREE` / `OSAPI_MEM_AVAIL`, freed at instance teardown, billed by the Task Manager, and the kernel's own speculative claims going through it like anyone else |
+| a way to put the canvas up without rearranging it first | SPEC.md §5.4.3's `gfx_blitp` and §42.13: the canvas is **four planes** on a colour adapter, in the layout the card wants, so a repaint is a copy. 466x110 goes **1,148 ms → 162**, and it costs no heap because `ceil(w/2)` rounded up to 4 IS `4 * ceil(w/8)` — the two formats want the identical stride, so the undo image, the clipboard and `pt_resize` never found out |
+| a `gfx_blit4` slot | SPEC.md §5.4 — packed 4bpp, adapter- and clip-aware. And since then a decoder on each kind of adapter, so a repaint is priced per PIXEL rather than per RUN wherever the picture is detailed: §5.4.1.1 on 1bpp, §5.4.1.3 on VGA. The canvas that this document says costs `runs x 0.5 ms` still does on a FLAT row, and os8088.gif went **7,146 ms → 1,148** (PERFORMANCE.md Sets 44 and 107) |
 | the kernel's glyph table | `OSAPI_FONT_GLYPHS`, SPEC.md §6 |
 | `wm_resize(BX, w, h)`, and a resize callback whose refusal `ui_grow` honours | `OSAPI_WM_RESIZE` and `W_ONSIZE`/`OSAPI_WM_ONSIZE`, SPEC.md §11.1 |
 | a way to stop paying the drawing lock on every mouse sample of a stroke | **fullscreen exclusive**, SPEC.md §53 — and Paint is its same-mode consumer (SPEC.md §42.7): `OSAPI_FSX_RUN` holds the lock for the whole session, so `pt_wait` stops being an unlock/yield/lock round trip and becomes `OSAPI_FSX_WAIT`. It takes the bracket *without* the §11.2 surface, because for an app this expensive to repaint the surface costs a spare full-canvas draw on the way home |
@@ -482,3 +483,196 @@ was audited against that; the largest possible count is 24 (`pt_bmp_pal`'s
 `1 << biBitCount`), so none of them can diverge. Worth re-checking if a shift
 count ever becomes a computed value rather than a small constant or a validated
 field.
+
+---
+
+## The toast is the kernel's now
+
+`pt_msg_show` was a framed white box at the canvas's top-left corner: it sat
+**on the picture**, cost a canvas blit to hide, and did not survive a repaint —
+so `pt_msgon` had to be cleared by every repaint path and `pt_msg_hide` had to
+be called at the top of the click, key and menu handlers so that any
+interaction took it down.
+
+It is SPEC.md 59's strip in the menu bar. `pt_msg_show` is nine instructions
+around `OSAPI_TOAST`; `pt_msg_hide`, `[pt_msgon]` and `[pt_msgw]` are gone,
+with the three "an interaction retires the toast" calls and the two repaint
+stores. **−138 bytes**, and the artwork stops being covered.
+
+`[pt_msgp]` stays. It was never the toast — it is the *choice* of message,
+which `pt_save` and `pt_load` set and their callers say.
+
+Two things worth knowing before adding another message here:
+
+- **A message put up BEFORE a long operation still works**, and that took
+  kernel work rather than luck. `Encoding...` precedes seconds of LZW inside a
+  window callback, so a purely deferred toast would have appeared *after* the
+  thing it announced; SPEC.md 59.4's `toast_now` draws on the spot when the
+  caller provably holds the gfx lock, which a menu command always does. The
+  `pt_wait` that used to exist to flush it on a double-buffered machine is
+  no longer needed for that reason — `toast_now` draws on the spot itself.
+- **A file operation retires it.** `fpg_begin` (SPEC.md §12.8) is in the same
+  pixels and is a live progress bar rather than a static line, so it wins.
+  That is why `Saving...` before a `pt_save` is redundant with the widget and
+  only `Encoding...`, which precedes work the widget cannot see, is not.
+
+## The background is ours now (SPEC.md §11.90.1)
+
+`wm_draw_win` white-filled the whole content before every `W_PAINT`, and Paint
+sets **`WF_OWNBG`** (`OSAPI_WM_OWNBG`, slot 0x03A8) to stop it. The flag says
+*I paint every pixel of my content myself*, and Paint can, in four parts that
+already existed: `pt_fsbed` lays the tool column's bed and any band right of the
+canvas, `pt_draw_pal` and `pt_draw_strip` draw their own beds, `pt_cfill` draws
+the divider, and `pt_blit_all` covers the canvas.
+
+**`pt_fsbed` was already exactly this routine** — written for §53's bracket,
+which has no `wm_draw_win` in front of it — so windowed it was dead code the
+kernel's fill stood in for. Adopting the flag is calling it. The one addition is
+a fill in the `pt_mode` notice path, because two lines of black text is not
+every pixel of anything.
+
+**The reason is the FLASH, not the milliseconds.** The fill is one `gfx_fill`,
+~24 ms, which as work is noise. As a picture it is the first layer of a double
+draw whose second layer takes as long as `W_PAINT` does — and on a textured
+bitmap that is 8.7 s (PERFORMANCE.md Set 32). Measured with a canvas sample box
+on a cycle-accurate 5150/CGA: **fully white for 2,617 ms** before, and **never
+blank at all** after (peak whiteness 0.818, i.e. never uniform). The 2.6 s is
+the box's own figure — the blit works down the canvas in bands, so the bottom
+rows stay white until it reaches them, which is the whole 8.7 s.
+
+Verified against a build that still gets the fill: **0 differing pixels** on
+CGA, Hercules and VGA mode 12h, over a session that covers Paint, raises it,
+drags a Disk window across it and raises it again — `tools/ptcheck.py`, which
+uses a textured BMP on purpose, because a blank canvas is uniform white and
+therefore the one picture that cannot tell a kept promise from a broken one.
+
+## `gfx_blit4` paid a drawing call per RUN — half done, SPEC.md §5.4.1
+
+Not a defect, and not a criticism of `gfx_blit4`, which was created for exactly
+this canvas and did the thing it was built to do: Paint used to coalesce runs
+itself and emit one `OSAPI_GFX_HLINE` per run, and since packages own a segment
+every one of those is a FAR call, so a detailed picture cost thousands. Moving
+the identical scan inside the kernel removed all of them.
+
+What it did **not** remove is the per-call floor on the other side. `gfx_blit4`
+still emits one `gfx_hline` per run, and §5.7 prices a drawing call at ~756 µs
+of arriving whatever it draws — so the blit costs `runs × ~0.77 ms` and the
+pixel count barely enters it. Measured (PERFORMANCE.md Set 32): a 492×133
+16-colour picture at 84.9 runs a row is **8,670 ms**, against 211 ms for the
+same canvas blank. That is now the single largest drawing cost in the system.
+
+The shape of the fix is to stop treating a blit as a sequence of rect
+primitives and let it write framebuffer bytes directly, the way `gfx_restore`
+does — priced per byte those two are **5.5 µs against 244 µs** (Set 32), a 45x
+gap that is entirely the per-call floor. It wants care on three fronts and is
+therefore its own piece of work:
+
+**The 1bpp half of that landed — SPEC.md §5.4.1, PERFORMANCE.md Set 43 —
+and it is worth 2.25–2.27x, not 45x.** `sw_blit_span` writes the run itself,
+so the ~756 µs of *arriving* goes; what stays is ~315 µs of per-RUN work (the
+scan's three 4-bit shifts, the `repe scasb` setup, the tail nibble decode, the
+span writer's own forty instructions). **The 45x was a per-BYTE figure and this
+is a per-RUN change**, which is why the two numbers are so far apart and why the
+ratio is identical on 85-runs-a-row art and on 308. Getting the rest means not
+working per run at all — a byte-by-byte decoder, **costed in
+docs/HANDOFF-REDRAW.md item B2** against two-point fits of the measured per-run
+cost: 20.8 clocks a pixel, a crossover at one run per 85 pixels on 1bpp, 15.8x
+further on textured art and **3.8x WORSE on a flat row**, so the end state is a
+hybrid keyed on run density and it wants a `KERN_BUDGET` step for its table. All
+three fronts below are now answered:
+
+- **1bpp and VGA are different problems**, and that is exactly how it went: the
+  1bpp side is `sw_blit_span`, a byte span with table-driven edge masks; the VGA
+  side is `vga_blit_span`, the same shape with Set/Reset supplying the four
+  planes and Enable Set/Reset hoisted to once a CALL.
+- **The banked layout** (§39.3) means a row walk must go through `gfx_nextrow`,
+  and PERFORMANCE.md Part 9 Set 3's rule applies: inline it in the row loop.
+- **It must stay byte-identical**, and the gate exists — `tools/ptcheck.py`
+  compares a textured canvas pixel for pixel across builds on all three
+  adapters, which is what a change of this kind needs and what a blank canvas
+  would silently pass. **`PTROW=1` is the one to add to it**: `FINE.BMP`'s 1–2
+  pixel runs put every run inside ONE framebuffer byte, touching neither edge —
+  the narrowest case the masks have, and one a picture barely reaches.
+
+## It is told which rect it owes (SPEC.md §11.90.2)
+
+`WF_OWNBG` stopped the kernel whitening the content; `OSAPI_WM_DAMAGE` is the
+other half — asked once per paint (`pt_dmg_get`, right after `pt_org`) and spent
+two ways:
+
+- **Per element, for the small parts.** `pt_dmg_hit` tests a content-relative
+  rect against the damage, and the tool column, the colour strip, the divider and
+  `pt_fsbed`'s two beds are each drawn or skipped whole. That is `tm_row_draw`'s
+  answer (SPEC.md §11.3): each part is small and self-contained, so the part is
+  the unit and there is no fill-versus-glyph granularity trap to fall into.
+- **Narrowed, for the canvas.** `pt_blit_dmg` converts the rect to canvas
+  coordinates and hands it to `pt_blit`, which has always taken one. No clamping
+  is needed: `pt_clip` reads its four words as signed, floors at 0, caps at the
+  canvas and refuses an empty rect.
+
+Measured (PERFORMANCE.md Set 34) on a Disk window dragged off Paint: the canvas
+blit **8,669.8 ms → 6,758.8 ms**, the damage having covered 73% of the width.
+Proportional, which is the whole design — and bounded by geometry, because a
+drag's damage is at least the moving window's own rect.
+
+Three things in the adoption are load-bearing:
+
+- **A SELECTION disqualifies us.** The marquee is an XOR and every paint re-shows
+  it unconditionally, so a partial blit would leave the part outside the rect lit
+  and the re-show would then invert it *off*. `pt_dmg_get` asks for nothing while
+  `[pt_selon]` is set.
+- **The fullscreen bracket asks nothing**, there being no window damage on a
+  surface that is the machine's (§42.7). `[pt_fsx]` is the test, and it is what
+  keeps `pt_fsbed` drawing both its beds unconditionally in there.
+- **`pt_repaint` forces `[pt_dall]` back to 1**, because it is a FULL repaint and
+  must not inherit the last `W_PAINT`'s rect — which would skip whichever parts
+  that paint owed and this one does not. It also calls `pt_fsbed` itself now, so
+  that its own comment ("every part of this draws its own background") is true
+  rather than true-because-a-`W_PAINT`-ran-first.
+
+## A window that resizes itself inside its own paint (SPEC.md §42.10)
+
+Found by §11.96.10's gate and **not caused by it**: on a picture that makes the
+window grow, `pt_wfix` rewrites `W_W`/`W_H` from `pt_track` — which runs at the
+top of `W_PAINT`, *after* `pt_org` has already derived `[pt_contw]`,
+`[pt_conth]`, `[pt_stripy]` and the strip's right-hand controls. So the rest of
+that paint laid out at the width the window used to be, and the band between the
+two widths was written by nobody: `WF_OWNBG` means the kernel fills nothing, so
+what showed through, inside Paint's own content, was **the desktop dither**.
+Measured on VGA with the 492×133 test bitmap: 41 columns of it, the full height
+of the colour strip.
+
+Two things about it are worth more than the one-line fix (`pt_org` again,
+straight after `pt_wfix`):
+
+- **It repaired itself, which is why nobody saw it.** Any later WHOLE repaint —
+  a raise, a `wm_paint_all` — re-derived from the corrected record and covered
+  the band. §11.96.10 stopped a raise being whole, and the defect became
+  permanent; `ptcheck` then reported it as 2,218 differing pixels against the
+  reference, in a region **outside** the rect the change was about. *A gate
+  failure whose bbox is nowhere near your change is evidence about the tree, not
+  about your change.*
+- **`[pt_apend]`'s `OSAPI_WM_FRONT` was supposed to be the repair and never
+  was.** `wm_front` on a window that is already frontmost and unobscured draws no
+  window at all (SPEC.md §11.90) — which is precisely the situation at launch,
+  where this defect is born. The deferred call still earns its keep for the
+  frame; it was never the thing that put those pixels down.
+
+## Deferred: the grow box is drawn twice per repaint
+
+Found while retiring the "`W_PAINT` runs twice" bug (PERFORMANCE.md Set 42) and
+left alone on purpose. `pt_draw_strip` ends in `pt_growbox` because **the
+strip's white bed erases the box and the click paths have no `W_PAINT` behind
+them** — a tool, colour, width or toggle click repaints the strip and nothing
+else would put it back. Inside a `W_PAINT` that reasoning does not apply:
+`wm_draw_win`'s `.growbox` draws the same box a few hundred milliseconds later,
+so the two land back to back from the user's point of view.
+
+`wm_grow_paint` is **14 drawing calls** — fill, frame, frame, fill, frame — at
+SPEC.md §5.7's ~756 µs of *arriving* each: about **10.6 ms**, paid twice, plus
+Part 1's double draw on the glass.
+
+The fix is a "we are inside our own paint proc" test in `pt_growbox`, not a
+deletion, and not `wm_draw_win` learning which windows draw their own box. It is
+~21 ms of a repaint that is otherwise seconds long, which is why it is written
+down rather than done.

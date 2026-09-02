@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Restoring an IBM 5150 &mdash; The Bench</title>
+<link rel="stylesheet" href="/assets/app.4f2c.css">
+<style>.hero{display:flex}.card{flex:1 1 0}</style>
+<script src="/assets/app.4f2c.js" defer></script>
+<script>window.__DATA__={"user":null,"ads":[1,2,3]};</script>
+</head>
+<body class="page page--article">
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <nav class="nav nav--primary">
+    <ul><li><a href="/">Home</a></li><li><a href="/archive">Archive</a></li>
+    <li><a href="/about">About</a></li></ul>
+  </nav>
+  <div class="cookie-banner">We use cookies. <button>Accept all</button></div>
+</header>
+<div class="wrapper">
+<table cellpadding="0" cellspacing="0" border="0" role="presentation" width="100%">
+<tr><td>
+<main id="main">
+<article class="post">
+  <h1>Restoring an IBM 5150 &mdash; part&nbsp;three</h1>
+  <p class="byline">By <a href="/authors/jo">Jo</a> &middot; <time datetime="2026-03-02">2&nbsp;March&nbsp;2026</time></p>
+  <figure><img src="/img/5150-psu.jpg" alt="The opened power supply, with the fan removed" width="1200" height="800"><figcaption>The PSU, opened.</figcaption></figure>
+  <p>The machine arrived with the original 63.5&nbsp;W supply and a fan that
+  sounded like a hairdryer. &ldquo;Recap it&rdquo; is the usual advice &mdash;
+  and it is right, but only after you have measured the rails. See the
+  <a href="/archive/2026/02/psu-rails/">rail measurements</a> from last month,
+  and the <a href="https://www.minuszerodegrees.net/5150/early/5150_early_power_supply.htm">reference tables at MinusZeroDegrees</a>.</p>
+  <div class="hero row" style="display:flex;gap:1rem">
+    <div class="card"><h3>+5&nbsp;V</h3><p>4.98&nbsp;V, 40&nbsp;mV ripple</p></div>
+    <div class="card"><h3>+12&nbsp;V</h3><p>11.9&nbsp;V, 90&nbsp;mV ripple</p></div>
+    <div class="card"><h3>&minus;5&nbsp;V</h3><p>&minus;5.1&nbsp;V, quiet</p></div>
+  </div>
+  <h2>What the caps measured</h2>
+  <table class="data">
+    <tr><th>Cap</th><th>Marked</th><th>Measured</th><th>ESR</th></tr>
+    <tr><td>C1</td><td>220&micro;F</td><td>204&micro;F</td><td>0.31&nbsp;&#937;</td></tr>
+    <tr><td>C2</td><td>220&micro;F</td><td>96&micro;F</td><td>2.80&nbsp;&#937;</td></tr>
+    <tr><td>C7</td><td>10&micro;F</td><td>9.6&micro;F</td><td>0.90&nbsp;&#937;</td></tr>
+  </table>
+  <h2>Parts</h2>
+  <dl>
+    <dt>Nichicon UPW</dt><dd>105&nbsp;&deg;C, low impedance, the usual choice</dd>
+    <dt>Panasonic FR</dt><dd>Also fine, slightly taller</dd>
+    <dt>Fan</dt><dd>Noctua NF-A8 with the 12&nbsp;V line dropped to 7&nbsp;V</dd>
+  </dl>
+  <blockquote><p>Do not power a 5150 with a dead &minus;5&nbsp;V rail: the DRAM
+  needs it and you will not enjoy finding out which chips died.</p></blockquote>
+  <h2>The teardown, step by step</h2>
+  <ol>
+    <li>Discharge the primary caps &mdash; <em>twice</em>.</li>
+    <li>Photograph every connector before unplugging it.</li>
+    <li>Desolder from the <strong>component</strong> side.</li>
+  </ol>
+  <pre><code>$ dd if=/dev/zero of=disk.img bs=512 count=720 &amp;&amp; echo "a 360K image, ready for os88disk.py --verify and a long boring afternoon of testing"</code></pre>
+  <p>Questions? <a href="mailto:jo@example.invalid">Mail me</a>, or use the
+  form, or read the <a href="#footnotes">footnotes</a>.</p>
+  <form class="search" action="/search" method="get">
+    <input type="search" name="q" placeholder="Search the bench" size="30">
+    <input type="hidden" name="section" value="archive">
+    <input type="submit" value="Search">
+  </form>
+  <form class="comment" action="/comment" method="post">
+    <input type="text" name="name" size="20">
+    <input type="text" name="email" size="20">
+    <input type="text" name="website" size="20">
+    <input type="text" name="nickname" size="20">
+    <input type="text" name="fifth" size="20">
+    <textarea name="body" rows="8"></textarea>
+    <input type="hidden" name="csrf" value="9f2b7c1e5a4d8e6f0b3a9c7d1e5f2a8b4c6d0e9f1a3b5c7d">
+    <input type="submit" value="Post">
+  </form>
+</article>
+</main>
+</td>
+<td width="300" class="sidebar">
+  <div class="widget widget--related"><h4>Related</h4>
+  <ul><li><a href="/archive/2026/01/keyboard/">The Model F</a></li>
+  <li><a href="/archive/2025/12/mfm/">MFM drives, again</a></li></ul></div>
+  <div class="advert"><a href="https://ads.example.invalid/click?id=99&amp;campaign=spring&amp;creative=banner-728x90&amp;placement=sidebar-top&amp;utm_source=bench">Buy something</a></div>
+</td></tr></table>
+</div>
+<footer class="site-footer"><p>&copy; 2026 The Bench &middot; <a href="/privacy">Privacy</a></p></footer>
+<div class="share sharing"><a href="https://twitter.com/intent/tweet?url=x">Share</a></div>
+<noscript><p>Please enable JavaScript.</p></noscript>
+</body>
+</html>

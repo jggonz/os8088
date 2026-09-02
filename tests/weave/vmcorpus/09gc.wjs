@@ -1,0 +1,11 @@
+// churn the string arena hard enough that the collector has to run
+var last; var n;
+function main() {
+  var i; var s;
+  n = 0;
+  for (i = 0; i < 120; i = i + 1) {
+    s = "abcdefghijklmnopqrstuvwxyz" + str(i) + "-padding-padding-padding";
+    n = n + len(s);
+  }
+  last = s;
+}

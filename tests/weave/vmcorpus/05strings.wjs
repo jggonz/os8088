@@ -1,0 +1,11 @@
+// concat, str(), len, substr, find, and bytewise order
+var a; var b; var c; var d; var e; var f; var g;
+function main() {
+  a = "Hello, " + "world" + ".";
+  b = str(0 - 42);
+  c = len(a);
+  d = substr(a, 7, 5);
+  e = find(a, "world");
+  f = find(a, "zz");
+  g = str(true) + str(null) + str(false);
+}

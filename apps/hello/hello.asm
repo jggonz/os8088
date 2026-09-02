@@ -49,6 +49,17 @@ hl_entry:
     jc .out
     mov si, hl_menus
     call OSAPI_MENU_SET              ; BX = the window we just created
+                                     ; NO WF_SAVEU: the promise holds, and the
+                                     ; repaint is one fixed string - a raise
+                                     ; that draws it costs nothing worth
+                                     ; spending a claim on. It used to say
+                                     ; "there is ONE cache for the machine, so
+                                     ; taking it for this would be taking it
+                                     ; from something that letters"; SPEC.md
+                                     ; 11.96.3 retired that bound - the cache
+                                     ; is per WINDOW now and ranks TRIVIAL, so
+                                     ; it is not taken from anybody. The
+                                     ; reason left is the honest one
 .out:
     pop si
     ret
@@ -71,8 +82,8 @@ hl_paint:
     mov bx, si
     call OSAPI_WM_CONTENT            ; AX = content left, DX = content top
     mov bx, ax                      ; keep the content left in BX
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
+                                    ; ...and no pen: hl_line is an OPAQUE run
+                                    ; now and nothing else here draws
     mov al, [hl_page]               ; 0 or 1: hl_oncmd is its only writer
     xor ah, ah
     shl ax, 1
@@ -107,7 +118,8 @@ hl_line:
     sub cx, ax
     shr cx, 1
     add cx, bx
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the content's own ground:
+    call OSAPI_FONT_RUN             ; W_PAINT arrives white-filled
     pop cx
     pop ax
     ret

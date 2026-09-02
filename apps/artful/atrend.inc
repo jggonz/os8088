@@ -38,7 +38,17 @@ at_geom_init:
     push bx
     push cx
     push dx
-    call OSAPI_VIDEO                ; AX=w, BX=h, CX=dock row, DL=adapter
+    push si                         ; this proc PRESERVES ALL and does not
+    mov bx, [at_win]                ; frame SI, where the cell answers the
+    call OSAPI_WM_DISPLAY           ; band's top
+    pop si                          ; AX=w, BX=h, CX=dock row, DL=adapter,
+                                    ; DH=bpp - **FOR THE CARD THIS WINDOW IS
+                                    ; ON** (SPEC.md 39.16.4). It matters here
+                                    ; because the second caller is at_fs_enter:
+                                    ; SPEC.md 11.2 sizes a fullscreen window to
+                                    ; the display it is ON, so a Writer entered
+                                    ; on the second card was laying its text
+                                    ; column out for the primary's width
     mov [at_vw], ax
     mov [at_vh], bx
     mov [at_vbpp], dh

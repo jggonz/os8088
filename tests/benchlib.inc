@@ -110,15 +110,46 @@
 BL_MAXLINE  equ 78              ; characters in a report line. 78 * 8 = 624 px,
                                 ; which fits the content of a 632-wide window
                                 ; on the narrowest adapter (CGA, 640 px)
-BL_MAXROWS  equ 240             ; report lines. Sized for the longest suite,
+BL_MAXROWS  equ 380             ; report lines. Sized for the longest suite,
                                 ; WITH HEADROOM - it was 190 and sysbench's
                                 ; longest report is 190, so folding SPEC.md
                                 ; 18.94's disk block and 37.92's clock block
                                 ; into every field kernel truncated it on the
                                 ; exact run it was built for. The banner says
                                 ; so, which is the only reason that was caught
-                                ; and not carried off the machine in a photo.
-BL_ARENA    equ 11500           ; bytes of packed NUL-terminated line text
+                                ; and not carried off the machine in a photo -
+                                ; and it caught the SECOND one too, at 240,
+                                ; when 18.95.2's and 18.95.4's blocks landed.
+                                ; A report that is one round from its ceiling
+                                ; is a report that truncates on somebody
+                                ; else's machine, and it happened a THIRD
+                                ; time at 300 when SPEC.md 18.4's write block
+                                ; landed. 380 for 305, and 337 after Set 35's
+                                ; seek and spin-up blocks.
+BL_ARENA    equ 16000           ; bytes of packed NUL-terminated line text.
+                                ; **THIS CEILING IS INVISIBLE UNTIL IT IS
+                                ; HIT, AND IT CANNOT SIMPLY BE RAISED**, which
+                                ; together are why it needs a paragraph. The
+                                ; row ceiling above was raised three times
+                                ; after the fact; this one never has been,
+                                ; because `bl_full` says a report TRUNCATED
+                                ; and nothing said how close a report that did
+                                ; not had come. Set 35's two blocks landed it
+                                ; at 14,806 of 16,000 - 7% spare.
+                                ;
+                                ; And raising it costs TWICE what it looks
+                                ; like: `bl_out` below is BL_ARENA-sized too,
+                                ; so every byte here is two, and sysbench's
+                                ; image plus bss is already within ~5KB of the
+                                ; 64KB SEGMENT a package gets (SPEC.md 20.1).
+                                ; +3,456 here overflows it, and the failure is
+                                ; a wall of `word data exceeds bounds` at
+                                ; unrelated lines rather than anything naming
+                                ; this constant. The next round wants a row
+                                ; DROPPED, or the suite split - not a bigger
+                                ; number here. sysbench's trailer prints both
+                                ; figures so that decision can be taken before
+                                ; a field report truncates rather than after.
 BL_OUTSZ    equ BL_ARENA + BL_MAXROWS * 2 + 64   ; ...plus a CR LF each
 BL_BASE_N   equ 400             ; iterations of the empty body, for the
                                 ; overhead every method-P row is net of
@@ -130,7 +161,16 @@ BL_SUSPECT  equ 40000           ; a single iteration past this many counts
 ; heading line below cannot drift from the rows.
 BL_C_N      equ 24              ; iterations, width 5
 BL_C_CNT    equ 30              ; total PIT counts, width 9
-BL_C_US     equ 41              ; us/op: 7 digits, '.', 2 digits
+BL_C_US     equ 39              ; us/op: 9 digits, '.', 2 digits. IT WAS 7 AT
+                                ; COLUMN 41, AND SEVEN DIGITS WRAP AT TEN
+                                ; SECONDS - silently, mod 10,000,000, so a
+                                ; 41.96-second row printed 1.96 and read as
+                                ; the fastest thing on the page. Found when
+                                ; SPEC.md 18.4's write rows came back from the
+                                ; 5150 with an append that beat the create it
+                                ; was three times slower than. Nine digits is
+                                ; 999 seconds; the counts column ends at 38, so
+                                ; this starts at 39 and still clears the unit
 BL_C_UNIT   equ 52              ; 'us'
 BL_C_FLAG   equ 55              ; 't' method T, '!' suspicious iteration
 
@@ -804,10 +844,10 @@ bl_usfield:
     mov cx, 100
     call bl_div32               ; DX:AX = whole us, BX = hundredths (0..99)
     mov si, bx                  ; park them - bl_dec wants DX:AX
-    mov cx, 7
-    call bl_dec                 ; the whole part, right-aligned 7 wide
+    mov cx, 9
+    call bl_dec                 ; the whole part, right-aligned 9 wide
     add di, bl_lscr
-    add di, 7
+    add di, 9
     mov byte [di], '.'
     mov ax, si                  ; AH is 0: SI is under 100
     mov bl, 10
@@ -999,9 +1039,10 @@ bl_head:
 ; Every line is ONE OSAPI_FONT_RUN, space-padded to the full content width, so
 ; the old row goes straight to the new one a cell at a time: no fill pass, no
 ; blank instant, and no SPEC.md 11.3 granularity failure to gate against
-; (SPEC.md 6.1). On a mono adapter with WF_SNAP set - which the callers ask for
-; - the content origin is a multiple of 8 and every one of these takes the
-; single-store path.
+; (SPEC.md 6.1). With WF_SNAP set - which the callers ask for, and which now
+; takes on every adapter (SPEC.md 11.94) - the content origin is a multiple of
+; 8, so on mono every one of these takes the single-store path and on VGA the
+; fallback's glyphs are at least aligned.
 ; -----------------------------------------------------------------------------
 bl_paint:
     push ax
@@ -1317,6 +1358,45 @@ bl_key:
     clc
     ret
 
+; --- READING A REPORT BACK: DO NOT SCREEN-READ IT ----------------------------
+;
+; The report is a FILE and there is a harness for getting it onto the host:
+; `tools/os88flush.py`, docs/MARTYPC-DEBUG.md. MartyPC mounts an image by
+; reading it once and every sector the guest writes lands in the emulator's
+; RAM and nowhere else, so `bl_save`'s output does not exist on the host until
+; something spends it - and it dies with the process. That is what makes this
+; look unreachable from a script, and it is not:
+;
+;   f = os88flush.Flush(marty=m)              # SHARES m's connection: a
+;   txt = f.volume(0).read("GFXCGA.TXT")      # second Marty HANGS, it does
+;                                             # not error
+;
+; ...or from the shell, against a machine already running:
+;
+;   python3 tools/os88flush.py 127.0.0.1:9001 ls 1
+;   python3 tools/os88flush.py 127.0.0.1:9001 get 1 GFXCGA.TXT /tmp/gfx.txt
+;
+; `volume(N)` is the DRIVE the report landed on, and the report lands in the
+; CURRENT directory of the CURRENT volume (gb_s_end2 says so on the About
+; page) - which is the disk the package was launched from, so a bench started
+; out of a B: window writes to drive 1 and not drive 0. Look at both.
+;
+; THE ALTERNATIVE COSTS A SESSION AND IT HAS. A screen-read is 11 pages of
+; PgDn, one framebuffer capture each, and then a human or a model reading
+; digits off 8x8 glyphs - which is how `GFX_XOR_RECT 256x1` was first taken
+; here, and its middle digits are genuinely ambiguous at that cell size. Every
+; figure in PERFORMANCE.md deserves better than an OCR of a CGA screenshot.
+;
+; Three traps sit in front of the file and all three are in docs/TESTING.md's
+; "Driving one from a SCRIPT" list rather than here, because they are about
+; the RUN and not about the report: reach Run through the Bench MENU and not a
+; keystroke (a scripted key did not start sysbench in a measured run, and the
+; splash was still up 150 s later - `mo.menu(110, 8, 110, 26)` did every
+; time); do NOT `settle()` after starting, because the machine is deliberately
+; frozen while a row is timed, so stillness means nothing and the wait never
+; returns; and sleep a fixed generous span instead. Read that list before
+; writing a driver, not after.
+;
 ; -----------------------------------------------------------------------------
 ; bl_save - write the whole report to a file (SPEC.md 18.4)
 ; in:       SI = a NUL 8.3 name
@@ -1390,6 +1470,16 @@ bl_save:
     xor dx, dx
     mov bx, bl_out
     pop si                      ; the name
+    push si                     ; **SAY SO FIRST** - bl_progress exists for
+    push cx                     ; this and this is the one place that was not
+    push dx                     ; using it. A write creates or truncates a
+    push bx                     ; file, updates two FAT copies and a directory
+    mov si, bl_s_writing        ; entry: on a 4.77MHz machine with a floppy
+    call bl_progress            ; that is SEVERAL SECONDS with the gfx lock
+    pop bx                      ; held, the cursor parked and nothing moving -
+    pop dx                      ; which is indistinguishable from a hung
+    pop cx                      ; machine, and was read as one twice in one
+    pop si                      ; afternoon (docs/FIELD-NOTES.md 27.4)
     call OSAPI_FILE_WRITE       ; ES:BX = the text, DX:CX = the count
     mov byte [bl_saved], 1
     mov word [bl_savemsg], bl_s_wrote
@@ -1421,16 +1511,68 @@ bl_drive:
     pop bx
     ret
 
+; -----------------------------------------------------------------------------
+; bl_dbgfind - look a published block up in the debug registry (SPEC.md 57)
+; in:       AX = the two-character tag
+; out:      CF=0 and ES:BX -> the block; CF=1 = not published in this build
+; clobbers: BX, ES, flags
+;
+; A TEST package reads kernel state this way and shipped software never does
+; (SPEC.md 57). A reader that cannot find its block SAYS SO AND CONTINUES,
+; which is what lets one build of a harness run against a plain kernel and a
+; knob-built one - so every caller here treats CF=1 as a row it cannot fill
+; rather than as a failure.
+;
+; It checks the tag TWICE: once in the registry pair and again as the block's
+; own first word, which is SPEC.md 57's whole reason for putting it there. An
+; offset followed to the wrong place then answers "not published" instead of
+; handing back somebody else's words.
+;
+; It lives in benchlib because BOTH harnesses want it - sysbench for its four
+; state dumps, gfxbench to find out which DISPLAY its sandbox is on (39.14.7's
+; report, and the reason gfxbench used to name its file after the primary).
+; -----------------------------------------------------------------------------
+bl_dbgfind:
+    push ax
+    push si
+    mov bx, KERNEL_SEG
+    mov es, bx
+    mov si, [es:0x000E]         ; the registry, or 0
+    or si, si
+    jz .none
+.scan:
+    mov bx, [es:si]             ; the tag
+    or bx, bx
+    jz .none                    ; end of list: not published here
+    cmp bx, ax
+    je .hit
+    add si, 4
+    jmp short .scan
+.hit:
+    mov bx, [es:si+2]           ; ...and the block behind it
+    cmp [es:bx], ax             ; which must lead with the same tag
+    jne .none
+    pop si
+    pop ax
+    clc
+    ret
+.none:
+    pop si
+    pop ax
+    stc
+    ret
+
 ; --- benchlib data -----------------------------------------------------------
 
 bl_s_nul:   db 0
 bl_s_us:    db 'us', 0
-bl_s_head:  db 'measurement                 N    counts       us/op', 0
+bl_s_head:  db 'measurement                 N    counts         us/op', 0
 bl_s_stat:  db 'rows', 0
 bl_s_dash:  db '-', 0
 bl_s_of:    db 'of', 0
 bl_s_keys:  db 'Spc/PgDn PgUp Up Dn Home End', 0
 bl_s_trunc: db 'REPORT TRUNCATED', 0
+bl_s_writing: db 'WRITING THE REPORT - a floppy write is seconds on this machine', 0
 bl_s_wrote: db 'saved', 0
 bl_s_werr:  db 'SAVE FAILED', 0
 

@@ -1,0 +1,5 @@
+<app name="Err">
+  <card id="main">
+    <radio group="size">Small</radio>
+  </card>
+</app>

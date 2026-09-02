@@ -1,0 +1,15 @@
+# Adventure (ZILF), the opening. Every line has to be legal at the point it is
+# typed or the transcript diverges from dfrotz for a reason that is not a bug.
+n
+look
+inventory
+south
+north
+east
+take lamp
+inventory
+west
+look
+help
+south
+look

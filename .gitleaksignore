@@ -1,0 +1,20 @@
+# Fingerprints gitleaks flags that are not credentials. One line per finding,
+# `path:rule:line`, and a reason for each - an unexplained entry is how a real
+# leak gets filed as a known one.
+
+# A comment in a worked example, showing the SHAPE of a batch entry. The
+# "key" is a batch label and the value is the name of a review dimension.
+.claude/skills/review-fork-pr/workflows/fix.js:generic-api-key:11
+
+# Saved pages, byte-for-byte, that the browser's fixtures are built from
+# (SPEC.md 71). The string is a reCAPTCHA SITE key, which is public by
+# definition - it is served to every visitor of the page and is worthless
+# without the secret key, which is not here and never was. Re-saving either
+# fixture moves these line numbers; take the new fingerprints from
+# `gitleaks protect --staged` rather than deleting the entries.
+tests/proxy/reddit-www-listing.htm:generic-api-key:98
+tests/proxy/reddit-www-listing.htm:generic-api-key:6537
+tests/proxy/reddit-www-listing.htm:generic-api-key:6779
+tests/proxy/reddit-www-comments.htm:generic-api-key:97
+tests/proxy/reddit-www-comments.htm:generic-api-key:9324
+tests/proxy/reddit-www-comments.htm:generic-api-key:9561

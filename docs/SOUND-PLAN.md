@@ -28,7 +28,7 @@ plus the amendments listed at the end).
 Lens: every promise in the API is backed by a per-device budget on the floor machine
 (IBM XT, 8088 @ 4.77 MHz ≈ 4,772,727 cycles/s). Where the floor cannot deliver, the API
 says so at call time (CF/error return) and the Control Panel says so in prose — the
-`bb_avail` idiom, three layers deep: the probe flag gates the setter AND the caption AND
+three-layer refusal idiom (SPEC.md §31.3): the probe flag gates the setter AND the caption AND
 the click. Cycle figures below are 8086-nominal; a real 8088's 8-bit bus and prefetch
 stalls inflate them — and that inflation has since been MEASURED, which changes how
 to read every figure below. It is not a percentage: an 8088 costs
@@ -53,7 +53,7 @@ Consequences baked into the abstraction:
 
 - **No software mixing.** The router assigns one owner per (sink, tier). Mixing two PCM
   streams costs 20+ cycles/sample/stream — a fast-machine luxury that would need its own
-  `bb_avail`-style gate. Out of scope for all five phases; the ownership contracts are
+  three-layer gate. Out of scope for all five phases; the ownership contracts are
   shaped so a future mixer changes no caller.
 - **PCM has two tiers with different contracts**, and a request states which it needs:
   `PCM_BG` (background, block/IRQ semantics — SB only) and `PCM_EXCL` (exclusive clip;
@@ -155,7 +155,7 @@ per-sample multiply).
 
 ```
 SDRV_CAPS   equ 0   ; db  capability bits the hardware class supports
-SDRV_FLAGS  equ 1   ; db  bit0 = present (probe result; published LAST, bb_avail idiom)
+SDRV_FLAGS  equ 1   ; db  bit0 = present (probe result; published LAST, 31.3 idiom)
 SDRV_TONE   equ 2   ; dw  near ptr: tone op
 SDRV_NOTE   equ 4   ; dw  near ptr: FM op        (0 if unsupported)
 SDRV_PCM    equ 6   ; dw  near ptr: PCM-out op   (0 if unsupported)
@@ -846,7 +846,7 @@ kernel image changes even when nothing sound-side ships on disk).
   Notification is the STREAM status verb, polled from callbacks; the kernel refill
   task is what acts on block completion.
 - **Software mixing.** 20+ cycles/sample/stream; a fast-machine luxury behind a future
-  `bb_avail`-style gate at most. The ownership contracts already leave room for it.
+  three-layer gate at most. The ownership contracts already leave room for it.
 - **Buffers in `.bss` or `.lowbss`.** The kernel window is for code; `.lowbss`'s
   4,094 remaining bytes are task-stack clearance. SND_SEG costs nothing and exists on
   every machine.

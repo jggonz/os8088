@@ -1,4 +1,4 @@
-; FreeDOS configuration for the os8088 DOS floppy (SPEC.md 59.1).
+; FreeDOS configuration for the os8088 DOS floppy (SPEC.md 86.1).
 ; Tuned for an 8088: every line here is either buying back low memory or
 ; staying away from something that needs a 286.
 ;

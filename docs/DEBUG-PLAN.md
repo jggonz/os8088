@@ -30,11 +30,17 @@ and what was rejected.
 > **OUTCOME — both halves are built. Read this document for the reasoning and
 > the two others for what exists.**
 >
-> - **SPEC.md §58 / `drivers/debug/debug.asm`** — DEBUG.DRV, the serial
->   monitor, built as a loadable driver rather than the `SERDBG=1` kernel this
->   plan proposed. A knob kernel is a different binary, so the machine you
->   debugged is not the machine that ships; a driver loads into the shipped
->   one. It is the only half that works on real iron.
+>   **THE SERIAL HALF HAS SINCE BEEN REMOVED (SPEC.md §58).** DEBUG.DRV was
+>   built as a loadable driver rather than the `SERDBG=1` kernel this plan
+>   proposed — a knob kernel is a different binary, so the machine you debugged
+>   would not be the machine that ships — and it was the only half that worked
+>   on real iron. It then lost its Control Panel row to the RAM disk, shipped
+>   on no floppy, and was named by nothing in the kernel; `drivers/debug/` and
+>   `tools/os88dbg.py` are gone with it. **This document is kept for the
+>   REASONING, which two live plans still build on, and not as a description of
+>   anything in the tree.** On iron what is left is SPEC.md §57's registry read
+>   out of a photograph (`tools/kfzread.py`) and a MartyPC dump taken by
+>   whoever has the machine (docs/FIELD-MACHINES.md).
 > - **docs/MARTYPC-DEBUG.md / `tools/martypc/`** — a debug server in MartyPC's
 >   headless frontend. It costs the guest **nothing** (no driver, no UART, no
 >   IRQ, not one cycle), answers on a frozen machine, and does what a guest
@@ -42,14 +48,19 @@ and what was rejected.
 >   emulator it supersedes the driver entirely.
 >
 > **And MartyPC is now the FIRST tool to reach for, not the last**
-> (docs/TESTING.md carries the ordering). The one boundary that matters:
-> **cycle-accurate is not disk-accurate** — its floppy is 30x fast and it
-> would not have caught SPEC.md §18.91's `AL` bug any more than QEMU did.
+> (docs/TESTING.md carries the ordering). The boundary this paragraph used to
+> draw has moved twice and is now somewhere else entirely: its floppy was 30x
+> fast and is within a measurement quantum of the field machine (Sets 35/37),
+> and it *does* catch SPEC.md §18.91's `AL` bug, because MartyPC runs the IBM
+> ROM and the bug is the ROM's. What is left to the 5150 is the CHIP — what a
+> real 765 puts in ST1, whether a real drive returns short — and anything
+> taken off a GLaBIOS machine, whose `int 13h` is 1.61x lighter than the
+> period ROM's (Set 38).
 >
 > Two things in the plan below were **not** built and the reasons are in the
 > outcome docs: the **disk data plane** of section 3 (it needs a `[sch_lock]`
-> entry point, which is kernel code — §58.4's divisor switch is the bulk path
-> instead), and **Stage 0's trace hook** into the benchmarks. Section 5's
+> entry point, which is kernel code — the monitor's own divisor switch was the
+> bulk path instead), and **Stage 0's trace hook** into the benchmarks. Section 5's
 > rejection of "patch the emulator" was **wrong about MartyPC** and right
 > about 86Box: the objection was that patching means *building* a debugger and
 > owning a fork, and MartyPC already has the debugger — the work was exposing
@@ -420,8 +431,9 @@ host tails a file. No protocol, no host tool, no ISR.
 it fixes three things about how this tree reports results today:
 
 - `gfxbench` and `sysbench` write their reports to a **file on the floppy**.
-  A floppy write is ~65 ms/sector in a run on the calibration machine (it was
-  238 before SPEC.md §18.91's `AL` fix) — the harness is
+  A floppy WRITE is ~73 ms/sector on the calibration machine — writes are 3.0x
+  dearer than reads and Set 24 is where the two were finally split (this said
+  65, a READ figure, and from Set 17 at that) — the harness is
   paying, in the same units it is measuring, for the privilege of reporting.
   Serial costs the guest a polled `out` per byte and no disk at all.
 - A run that hangs before it writes its report loses **everything**. Streamed,

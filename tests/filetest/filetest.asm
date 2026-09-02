@@ -617,7 +617,8 @@ ft_paint:
     mov cx, [ft_x]
     mov dx, bp
     mov si, ft_num
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     mov si, ft_s_pass
     cmp byte [di+ft_res], 0
     je .label
@@ -626,7 +627,8 @@ ft_paint:
     mov cx, [ft_x]
     add cx, 28
     mov dx, bp
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     add bp, 10
     inc di
     jmp short .row
@@ -635,21 +637,24 @@ ft_paint:
     mov si, ft_s_free
     mov cx, [ft_x]
     mov dx, bp
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     mov ax, [ft_free0]          ; the low word is enough to show a change
     call ft_num5
     mov cx, [ft_x]
     add cx, 48
     mov dx, bp
     mov si, ft_num
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     mov ax, [ft_free1]
     call ft_num5
     mov cx, [ft_x]
     add cx, 96
     mov dx, bp
     mov si, ft_num
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     pop bp
     pop di
     pop si

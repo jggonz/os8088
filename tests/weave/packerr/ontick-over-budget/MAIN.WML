@@ -1,0 +1,6 @@
+<app name="Err">
+  <card id="main">
+    <canvas id="c" w="64" h="32" tick="1" ontick="tick"/>
+  </card>
+  <script src="MAIN.WJS"/>
+</app>

@@ -27,7 +27,7 @@
 ;     capture buffer (5 s at 8 kHz), verb 4 opens the input stream, and the
 ;     kernel drain task fills the grant. Without the cap the button is drawn
 ;     grayed AND a click on it only explains in the status line (the
-;     bb_avail three-layer idiom, SPEC.md 32) - the app stays fully usable
+;     three-layer refusal idiom, SPEC.md 31.3) - the app stays fully usable
 ;     as a player on speaker-only machines.
 ;   - Progress is POLLED (there are no sound events, SPEC.md 34.3): every
 ;     paint and click runs rc_poll, which reads STREAM verb 3 and retires
@@ -179,6 +179,14 @@ rc_entry:
     mov si, rc_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
     jc .out
+    push ax                         ; SPEC.md 13.7: the buttons fire on the
+    mov ax, rc_onup                 ; RELEASE, over the button the press
+    call OSAPI_WM_ONMOUSEUP         ; landed on - so a mis-aimed press can be
+    mov ax, rc_ondrag               ; slid off and cancelled - and 13.8.1's
+    call OSAPI_WM_ONDRAG            ; tracking edge, so it comes back UP while
+    pop ax                          ; the pointer is off it rather than at the
+                                    ; release. Not template words; set after
+                                    ; wm_create, like MENU_SET
     mov si, rc_menus                ; BX = the window wm_create just returned
     call OSAPI_MENU_SET             ; (draws nothing, takes no lock, and
                                     ; preserves the flags as well as the
@@ -237,41 +245,131 @@ rc_onclick:
     mov [rc_oy], dx
     pop dx
     pop cx
-    sub cx, [rc_ox]                 ; -> content-relative click
-    sub dx, [rc_oy]
+    call rc_layout                  ; the rects follow the window; CX/DX are
+    mov ax, 4                       ; already SCREEN coords, which is what
+    mov bx, rc_rects                ; os88ui_bfind wants
+    call os88ui_bfind               ; AX = button+1, 0 = none
+    call os88ui_arm                 ; ...and that is all a press ACTS on
+    mov [rc_down], ax               ; (SPEC.md 13.7): no action, nothing to
+    or ax, ax                       ; undo if the user slides off. What it now
+    jz .out                         ; DRAWS is the pressed state (SPEC.md 13.8)
+    call rc_draw_btns               ; ...through the ONE painter, which is what
+.out:                               ; keeps the enable rules in a single place -
+                                    ; four buttons rather than one, and a press
+                                    ; is a human-rate event
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret                             ; near: dispatched (SPEC.md 20.5)
+
+; -----------------------------------------------------------------------------
+; rc_ondrag - W_ONDRAG (SPEC.md 13.8.1): the pointer moved, press still down
+; in:  CX = x, DX = y (SCREEN), SI = the window; gfx lock held
+; out: nothing (all registers preserved)
+;
+; The same question rc_onup asks at the release, one pass early, so what is
+; drawn pressed is exactly what would fire. It redraws only on a CHANGE, so a
+; pointer moving inside the button it pressed costs one compare and no pixels.
+; -----------------------------------------------------------------------------
+rc_ondrag:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call os88ui_armed               ; PEEK: the arm is the release's to spend
+    or ax, ax
+    jz .out
+    mov di, ax
+    mov bx, si
+    call OSAPI_WM_CONTENT           ; the window may have moved since the press
+    mov [rc_ox], ax
+    mov [rc_oy], dx
+    call rc_layout
+    mov ax, 4
+    mov bx, rc_rects
+    call os88ui_bfind               ; AX = the button under the pointer now
+    cmp ax, di
+    je .same
+    xor ax, ax                      ; off it: nothing is down
+.same:
+    cmp ax, [rc_down]
+    je .out                         ; unchanged: no pixels
+    mov [rc_down], ax
+    call rc_draw_btns
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; rc_onup - W_ONMOUSEUP (SPEC.md 13.7): the button fires HERE
+; in:  CX = x, DX = y (SCREEN), SI = window; UI task, gfx lock held
+; out: nothing
+;
+; The action happens on the release, and only if the release is over the
+; button the press armed - so a press on Stop that the user thinks better of
+; is cancelled by sliding off it, which is what every control in this OS's
+; Macintosh model does and what a hand on a 1200-baud mouse needs.
+;
+; CX/DX may be OUTSIDE the window entirely; that is the contract, and it is
+; why os88ui_bfind simply answers 0 there and the compare below fails.
+; -----------------------------------------------------------------------------
+rc_onup:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, si
+    call OSAPI_WM_CONTENT           ; the window may have moved since the press
+    mov [rc_ox], ax
+    mov [rc_oy], dx
+    call rc_layout
+    call os88ui_fire                ; AX = what the press armed, and it is
+    or ax, ax                       ; cleared - one release per press, so
+    jz .out                         ; there is no stale arm to guard against
+    mov di, ax
+    cmp word [rc_down], 0           ; ...and the pressed button comes back UP
+    je .find                        ; first and unconditionally, whatever the
+    mov word [rc_down], 0           ; release turns out to mean. Every path
+    call rc_draw_btns               ; below either acts (and repaints) or
+.find:                              ; cancels (and must leave it upright)
+    mov ax, 4
+    mov bx, rc_rects
+    call os88ui_bfind               ; AX = the button under the RELEASE
+    cmp ax, di
+    jne .out                        ; a different button, or none: cancelled
     call rc_poll                    ; retire a finished stream first, so the
                                     ; button logic sees the current state
-    cmp dx, RC_BTN_Y                ; the button row?
-    jl .repaint
-    cmp dx, RC_BTN_Y+RC_BTN_H
-    jge .repaint
-    cmp cx, 4
-    jl .repaint
-    cmp cx, 56
-    jl .rec
-    cmp cx, 58
-    jl .repaint
-    cmp cx, 110
-    jl .stop
-    cmp cx, 112
-    jl .repaint
-    cmp cx, 164
-    jl .play
-    cmp cx, 166
-    jl .repaint
-.demo:
-    call rc_do_demo
-    jmp .repaint
-.rec:
+    dec ax
+    jnz .n1
     call rc_do_rec
-    jmp .repaint
-.stop:
+    jmp short .repaint
+.n1:
+    dec ax
+    jnz .n2
     call rc_do_stop
-    jmp .repaint
-.play:
+    jmp short .repaint
+.n2:
+    dec ax
+    jnz .n3
     call rc_do_play
+    jmp short .repaint
+.n3:
+    call rc_do_demo
 .repaint:
     call rc_repaint
+.out:
     pop di
     pop si
     pop dx
@@ -887,14 +985,13 @@ rc_draw_wave:
 ; out: nothing; clobbers AX, BX, CX, DX, SI
 ; -----------------------------------------------------------------------------
 rc_draw_status:
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
     mov cx, [rc_ox]
     add cx, 4
     mov dx, [rc_oy]
     add dx, RC_ST1_Y
     mov si, [rc_msg]
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the content's own ground
+    call OSAPI_FONT_RUN             ; (rc_draw_all's header; SPEC.md 6.6.5)
     mov ax, [rc_len]                ; render the byte count into line 2
     mov bx, rc_s_line2
     call rc_putu5
@@ -903,7 +1000,8 @@ rc_draw_status:
     mov dx, [rc_oy]
     add dx, RC_ST2_Y
     mov si, rc_s_line2
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
     ret
 
 ; -----------------------------------------------------------------------------
@@ -913,6 +1011,7 @@ rc_draw_status:
 ; out: nothing; clobbers AX, CX, SI (and rc_btn's scratch)
 ; -----------------------------------------------------------------------------
 rc_draw_btns:
+    call rc_layout
     mov cl, 0                       ; REC: needs PCM_IN and idle
     test byte [rc_caps], SND_CAP_PCM_IN
     jz .rec
@@ -920,7 +1019,7 @@ rc_draw_btns:
     jne .rec
     mov cl, 1
 .rec:
-    mov ax, 4
+    mov ax, 0
     mov si, rc_l_rec
     call rc_btn
 
@@ -929,7 +1028,7 @@ rc_draw_btns:
     je .stop
     mov cl, 1
 .stop:
-    mov ax, 58
+    mov ax, 1
     mov si, rc_l_stop
     call rc_btn
 
@@ -942,7 +1041,7 @@ rc_draw_btns:
     jz .play
     mov cl, 1
 .play:
-    mov ax, 112
+    mov ax, 2
     mov si, rc_l_play
     call rc_btn
 
@@ -951,67 +1050,125 @@ rc_draw_btns:
     jne .demo
     mov cl, 1
 .demo:
-    mov ax, 166
+    mov ax, 3
     mov si, rc_l_demo
     call rc_btn
     ret
 
 ; -----------------------------------------------------------------------------
-; rc_btn - one button: 1px frame + centered label, live or disabled
+; rc_btn - one button, through the shared control (apps/os88ui.inc)
 ; in:  AX = content-relative x1, SI = label, CL = 1 enabled / 0 disabled
 ; out: nothing; preserves all registers
 ;
-; OSAPI_GFX_PEN and not OSAPI_SET_COLOR (SPEC.md 47 rule 3): a disabled control
-; is CDGRAY *and* [gfx_dis], and the flag is what makes the LABEL a
-; checkerboard on Hercules and CGA. With the colour alone this drew a dotted
-; frame - gfx_ink dithers a shape without help - around a solid-black caption,
-; which is rule 2's own failure, the two halves of one control disagreeing.
+; The drawing used to be here: frame, centred label, and OSAPI_GFX_PEN rather
+; than OSAPI_SET_COLOR so that a disabled control is CDGRAY *and* [gfx_dis]
+; (SPEC.md 47 rule 1 - with the colour alone this drew a dotted frame around a
+; solid-black caption, which is rule 2's own failure). All of that is
+; os88ui_btn now, and this is the adapter: it turns Recorder's
+; content-relative x into the rect the shared routine takes.
+;
+; The rect is a STORED 4-word block rather than four registers, because
+; os88ui_bhit reads the same words - so the drawn button and the clickable
+; button cannot drift (fm_hit's discipline, SPEC.md 22).
+;
+; THE DOWN STATE IS READ HERE AND NOT PASSED IN, which is what makes every
+; repaint agree with it for free (SPEC.md 13.8): rc_draw_btns is the one
+; painter, a W_PAINT goes through it, and [rc_down] is consulted per button.
+; Passing it as an argument would mean the press path knew and W_PAINT did not.
 ; -----------------------------------------------------------------------------
 rc_btn:
     push ax
     push bx
-    push cx
-    push dx
-    push si
     push di
-    mov di, ax                      ; DI = x1, content-relative
-    or cl, cl                       ; CF = 1 when disabled, which is the shape
-    jnz .live                       ; the pen takes
-    stc
-    jmp short .col
+    mov bx, ax                      ; AX = the button index
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1                       ; *8: four words a rect (8086: no shl imm)
+    add bx, rc_rects
+    mov di, OS88UI_FILL             ; NOT `xor di, di`, and this was the bug
+                                    ; reported as "the buttons stay black with
+                                    ; no text visible after mouse-on
+                                    ; mouse-off". A release redraws this button
+                                    ; over a PRESSED one, whose interior is
+                                    ; black - so without the fill the upright
+                                    ; redraw keeps that black interior and
+                                    ; letters a black caption onto it, and the
+                                    ; button goes INVISIBLE rather than coming
+                                    ; up. OS88UI_FILL asks "can this be drawn a
+                                    ; second time without the ground being
+                                    ; repainted first?", not "is my background
+                                    ; white" - os88ui.inc's own header, and the
+                                    ; same defect os88net's Connect had
+                                    ; (SPEC.md 13.8.4)
+    or cl, cl
+    jnz .live
+    or di, OS88UI_DIS               ; ADDS to the fill rather than replacing
+                                    ; it, as the DOWN branch below does - a
+                                    ; control does not stop needing the erase
+                                    ; by being greyed
 .live:
-    clc
-.col:
-    call OSAPI_GFX_PEN
-    mov ax, [rc_ox]
-    add ax, di
-    mov di, ax                      ; DI = x1, absolute
-    mov bx, [rc_oy]
-    add bx, RC_BTN_Y
-    mov cx, ax
-    add cx, RC_BTN_W-1
-    mov dx, bx
-    add dx, RC_BTN_H-1
-    call OSAPI_GFX_FRAME
-    call OSAPI_FONT_WIDTH           ; AX = label width, px
-    mov cx, RC_BTN_W
-    sub cx, ax
-    shr cx, 1
-    add cx, di                      ; centered label x
-    mov dx, [rc_oy]
-    add dx, RC_BTN_Y+4
-    call OSAPI_FONT_STR
-    clc                             ; ...and put the pen back. Leaving CDGRAY
-    call OSAPI_GFX_PEN              ; behind was untidy; leaving the FLAG
-                                    ; behind draws the next string in this
-                                    ; lock hold as a checkerboard
+    inc ax                          ; [rc_down] is index+1, os88ui_bfind's own
+    cmp ax, [rc_down]               ; sentinel, so 0 can mean "none"
+    jne .draw
+    or di, OS88UI_DOWN              ; ...and DIS still outranks it inside
+.draw:                              ; os88ui_btn, which is where that rule lives
+    call os88ui_btn
     pop di
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; rc_layout - rebuild the four button rects from the live content origin
+; in:  [rc_ox]/[rc_oy]
+; out: nothing; preserves all registers
+;
+; ONE table, read by the drawing (os88ui_btn) and by the hit test
+; (os88ui_bfind) alike. The hit test used to be a ladder of literals in
+; rc_onclick - 4/56, 58/110, 112/164, 166 - against a drawing that used
+; 4/58/112/166 and RC_BTN_W: two descriptions of one row of buttons, agreeing
+; by hand. They cannot disagree now (SPEC.md 22's fm_hit discipline).
+; -----------------------------------------------------------------------------
+rc_layout:
+    push ax
+    push bx
+    push cx
+    push si
+    mov si, rc_bx                   ; the four content-relative x1s
+    mov bx, rc_rects
+    mov cx, 4
+.one:
+    lodsw
+    add ax, [rc_ox]
+    mov [bx+0], ax                  ; x1
+    add ax, RC_BTN_W-1
+    mov [bx+4], ax                  ; x2
+    mov ax, [rc_oy]
+    add ax, RC_BTN_Y
+    mov [bx+2], ax                  ; y1
+    add ax, RC_BTN_H-1
+    mov [bx+6], ax                  ; y2
+    add bx, 8
+    loop .one
     pop si
-    pop dx
     pop cx
     pop bx
     pop ax
     ret
+
+rc_bx:      dw 4, 58, 112, 166      ; the button row, content-relative
+rc_rects:   times 16 dw 0           ; ...as four {x1,y1,x2,y2}, screen coords
+rc_down:    dw 0                    ; SPEC.md 13.8: which button is being HELD,
+                                    ; as os88ui_bfind's index+1 (0 = none). It
+                                    ; is DATA rather than bss for os88ui_armw's
+                                    ; own reason - a package's bss is one total
+                                    ; with equ offsets (OS88_BSS) and two bytes
+                                    ; of image is cheaper than renumbering it.
+                                    ; rc_draw_btns reads it, so a full repaint
+                                    ; arriving mid-press draws the held button
+                                    ; down and the state cannot part from the
+                                    ; glass (13.8's idempotence, which is the
+                                    ; whole reason DOWN is drawn and not XOR-ed)
 
 ; -----------------------------------------------------------------------------
 ; rc_putu5 - AX as 5 zero-padded decimal chars at DS:BX
@@ -1117,6 +1274,9 @@ rc_sine:
     db  47, 48, 48, 49, 50, 51, 53, 54, 55, 56, 57, 59, 60, 61, 63, 64
     db  66, 67, 69, 71, 72, 74, 76, 77, 79, 81, 83, 85, 87, 88, 90, 92
     db  94, 96, 98,100,102,105,107,109,111,113,115,117,119,122,124,126
+
+; --- the shared controls (SPEC.md 47 rule 1 in one place) -------------------
+%include "os88ui.inc"
 
     OS88_BSS 4022
     OS88_IMAGE_END

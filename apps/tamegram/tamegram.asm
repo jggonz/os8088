@@ -126,11 +126,41 @@ TG_FALLMIN  equ 3
 TG_FLASH_T  equ 10
 
 TG_HUD_H    equ 28              ; three 8px text rows and their margins
-TG_HUD_W    equ 248             ; the widest HUD row is 242px; this is the
-                                ; content width the layout will not go under,
-                                ; because tg_str drops a string that would
-                                ; leave the box and a silently missing THREAT
-                                ; counter is worse than a wide window
+TG_HUD_W    equ 248             ; the widest HUD row is 240px (LOCK's 32 at
+                                ; TG_HC_LOCK); this is the content width the
+                                ; layout will not go under, because tg_str drops
+                                ; a string that would leave the box and a
+                                ; silently missing THREAT counter is worse than
+                                ; a wide window
+
+; The HUD's text columns. EVERY ONE IS A MULTIPLE OF 8 (SPEC.md 11.94.3): this
+; window's content origin is byte-aligned (11.94.1), so a pen's offset mod 8 IS
+; its phase on the glass, and font_char writes one framebuffer byte per cell row
+; instead of two only at phase 0 - on the two 1bpp adapters and, since 11.94's
+; gate came off, on VGA's four planes as well.
+;
+; They were 4, 60, 108, 164, 116, 180 and 210 - SIX OF THE SEVEN at 4 mod 8,
+; which made this the most uniformly off-grid face in the tree and by far the
+; cheapest to correct: +4 on six numbers. What that is WORTH is small and is
+; measured rather than implied - 109 glyph cells in 17.7s of play, all of them
+; off-grid, which at PERFORMANCE.md's ~1ms a cell is 0.6% of the machine and the
+; alignment saves 3.4% of that (Set 52). It is taken because it is free, because
+; it puts this face on the same 8px margin as the rest of the tree, and because
+; leaving the last uniformly-fixable entry on the survey invites the next reader
+; to re-derive the whole census. It is NOT taken for the time.
+TG_HC_L     equ 8               ; row 1's title, row 2's THREAT, row 3's VECTOR
+TG_HC_LV    equ 64              ; the value beside whichever left label has one
+TG_HC_R     equ 112             ; row 2's PURGES
+TG_HC_RV    equ 168             ; ...and its count
+TG_HC_F     equ 120             ; row 3's FACTION - one cell right of PURGES
+TG_HC_FV    equ 184             ; ...and its name; 'ORANGE' ends at 232
+TG_HC_LOCK  equ 208             ; row 1's LOCK flag. This one moved LEFT by 2
+                                ; rather than right by 6, which would have ended
+                                ; the row at exactly TG_HUD_W and left the
+                                ; minimum-width case with no margin at all
+%if (TG_HC_L | TG_HC_LV | TG_HC_R | TG_HC_RV | TG_HC_F | TG_HC_FV | TG_HC_LOCK) & 7
+  %error "a HUD column is not a multiple of 8 - see SPEC.md 11.94.3"
+%endif
 TG_CSZ_MAX  equ 8
 TG_ABLH     equ 10              ; panel line pitch, and the floor tg_pmeas
 TG_ABLH_MIN equ 8               ; walks down to on a short content box
@@ -1894,40 +1924,76 @@ tg_framec:
     ret
 
 ; -----------------------------------------------------------------------------
-; tg_str - a string in content coords
-; in:  CX = x, CX/DX = content coords, SI = NUL string; pen already set
+; tg_run / tg_str - a string in content coords, opaque and transparent
+; in:  CX = x, CX/DX = content coords, SI = NUL string
+;      tg_run: AL = ink, AH = the ground the caller has just laid down
+;      tg_str: the pen, already set
 ;
-; All-or-nothing, and deliberately so: font_char draws a whole 8x8 cell or
-; none of it, so a string half outside the box cannot be trimmed to fit. One
-; that would leave the box is DROPPED rather than clipped - a missing HUD
-; field is a layout bug you can see, and a glyph painted onto the window next
-; door is one you cannot.
+; All-or-nothing, and deliberately so: a cell is drawn whole or not at all, so
+; a string half outside the box cannot be trimmed to fit. One that would leave
+; the box is DROPPED rather than clipped - a missing HUD field is a layout bug
+; you can see, and a glyph painted onto the window next door is one you cannot.
+;
+; TWO ENTRIES because one caller cannot name a ground: the PAUSE / GAME OVER
+; banner lands on the matrix, which is a grid of coloured cells and not a
+; colour - SPEC.md 6.6.2 case 1, and the only transparent text left in this
+; package. Everything else letters onto something this same routine's caller
+; filled a few instructions earlier: the HUD band is [tg_hudbg] and the About
+; card is its own panel.
 ; -----------------------------------------------------------------------------
-tg_str:
+tg_run:
     push ax
     push bx
     push cx
     push dx
-    or cx, cx
-    js .out
-    or dx, dx
-    js .out
-    mov ax, dx
-    add ax, 8
-    cmp ax, [tg_chgt]
-    jg .out
-    call OSAPI_FONT_WIDTH           ; AX = the string's pixel width
-    add ax, cx
-    cmp ax, [tg_cwid]
-    jg .out
-    add cx, [tg_ox]
-    add dx, [tg_oy]
-    call OSAPI_FONT_STR
+    push ax                         ; the pair, banked across FONT_WIDTH
+    call tg_str_gate
+    pop ax
+    jc .out
+    call OSAPI_FONT_RUN
 .out:
     pop dx
     pop cx
     pop bx
     pop ax
+    ret
+
+tg_str:
+    push ax
+    push bx
+    push cx
+    push dx
+    call tg_str_gate
+    jc .out
+    call OSAPI_FONT_STR_XPARENT
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; tg_str_gate - the shared box test. CF=1 drop it; CF=0 draw at CX/DX, which
+; it has moved to SCREEN coordinates. Clobbers AX.
+tg_str_gate:
+    or cx, cx
+    js .no
+    or dx, dx
+    js .no
+    mov ax, dx
+    add ax, 8
+    cmp ax, [tg_chgt]
+    jg .no
+    call OSAPI_FONT_WIDTH           ; AX = the string's pixel width
+    add ax, cx
+    cmp ax, [tg_cwid]
+    jg .no
+    add cx, [tg_ox]
+    add dx, [tg_oy]
+    clc
+    ret
+.no:
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1948,24 +2014,27 @@ tg_draw_hud:
     dec cx
     mov dx, TG_HUD_H - 1
     call tg_fillc
-
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    mov cx, 4
+                                    ; ...and no pen from here on: every field
+                                    ; below is an opaque run carrying its own
+    mov cx, TG_HC_L
     mov dx, 2
     mov si, tg_s_title
-    call tg_str
+    mov al, CWHITE                  ; AL = ink, AH = the band tg_draw_hud
+    mov ah, [tg_hudbg]              ; filled at the top of this routine
+    call tg_run
     cmp byte [tg_glock], 0
     je .rows
-    mov al, CYELLOW
-    call OSAPI_SET_COLOR
-    mov cx, 210
+    mov cx, TG_HC_LOCK
     mov dx, 2
     mov si, tg_s_lock
-    call tg_str
+    mov al, CYELLOW                 ; the one field on this band that is not
+    mov ah, [tg_hudbg]              ; white
+    call tg_run
 .rows:
     ; Every column here is one glyph clear of the field before it, and the
-    ; rightmost - FACTION's 'ORANGE' at 180 - ends at 228, inside TG_HUD_W.
+    ; rightmost - FACTION's 'ORANGE' at TG_HC_FV - ends at 232, inside TG_HUD_W.
+    ; The columns are named constants and every one is a multiple of 8; see the
+    ; TG_HC_* block, which is where the reason lives.
     ;
     ; CWHITE, not the CLGRAY this had: SPEC.md 39.4 rounds an UNFLAGGED glyph
     ; to black or white rather than dithering it, and CLGRAY rounds to black -
@@ -1977,44 +2046,54 @@ tg_draw_hud:
     ; A DISABLED label is the separate case and it does dither, legibly, via
     ; [gfx_dis] and OSAPI_GFX_PEN (SPEC.md 47 rule 3) - nothing here is
     ; disabled, so nothing here wants it.
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    mov cx, 4
+    mov cx, TG_HC_L
     mov dx, 11
     mov si, tg_s_score
-    call tg_str
+    mov al, CWHITE                  ; AL = ink, AH = the band tg_draw_hud
+    mov ah, [tg_hudbg]              ; filled at the top of this routine
+    call tg_run
     mov ax, [tg_score]
-    mov cx, 60
+    mov cx, TG_HC_LV
     mov dx, 11
     call tg_num
-    mov cx, 108
+    mov cx, TG_HC_R
     mov dx, 11
     mov si, tg_s_purges
-    call tg_str
+    mov al, CWHITE                  ; AL = ink, AH = the band tg_draw_hud
+    mov ah, [tg_hudbg]              ; filled at the top of this routine
+    call tg_run
     mov ax, [tg_purges]
-    mov cx, 164
+    mov cx, TG_HC_RV
     mov dx, 11
     call tg_num
 
-    mov cx, 4
+    mov cx, TG_HC_L
     mov dx, 20
     mov si, tg_s_vec
-    call tg_str
+    mov al, CWHITE                  ; AL = ink, AH = the band tg_draw_hud
+    mov ah, [tg_hudbg]              ; filled at the top of this routine
+    call tg_run
     mov bl, [tg_grav]
     xor bh, bh
     shl bx, 1
     mov si, [tg_vecname + bx]
-    mov cx, 60
+    mov cx, TG_HC_LV
     mov dx, 20
-    call tg_str
-    mov cx, 116
+    mov al, CWHITE                  ; AL = ink, AH = the band tg_draw_hud
+    mov ah, [tg_hudbg]              ; filled at the top of this routine
+    call tg_run
+    mov cx, TG_HC_F
     mov dx, 20
     mov si, tg_s_fac
-    call tg_str
+    mov al, CWHITE                  ; AL = ink, AH = the band tg_draw_hud
+    mov ah, [tg_hudbg]              ; filled at the top of this routine
+    call tg_run
     call tg_fac_name                ; SI = the name
-    mov cx, 180
+    mov cx, TG_HC_FV
     mov dx, 20
-    call tg_str
+    mov al, CWHITE                  ; AL = ink, AH = the band tg_draw_hud
+    mov ah, [tg_hudbg]              ; filled at the top of this routine
+    call tg_run
     pop si
     pop dx
     pop cx
@@ -2081,7 +2160,9 @@ tg_num:
 .dr:
     mov dx, si                      ; ...and back
     mov si, di
-    call tg_str
+    mov al, CWHITE                  ; a HUD value: white on the band. AL is
+    mov ah, [tg_hudbg]              ; NOT the caller's pen here - the divide
+    call tg_run                     ; above has been using it as a digit
     pop di
     pop si
     pop dx
@@ -2504,7 +2585,8 @@ tg_draw_panel:
     add cx, 8                       ; the margin tg_pmeas budgeted for
 .draw:
     mov dx, di
-    call tg_str
+    mov ax, (CWHITE << 8) | CBLACK  ; the panel tg_draw_panel
+    call tg_run                     ; filled four calls ago
     pop si
     add di, [tg_ablh]
     jmp .line

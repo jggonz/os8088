@@ -1,0 +1,18 @@
+# The initial cells, one per line: <cellref> = <formula|number|"label">.
+# Packed row-major into the CELLS section (WEAVE-SPEC 2.10).
+A1 = "Item"
+B1 = "Cost"
+C1 = "Note"
+A2 = "Bread"
+B2 = 3.50
+A3 = "Cheese"
+B3 = 7.25
+A4 = "Cider"
+B4 = 12
+A6 = "Total"
+B6 = =SUM(B2:B4)
+C6 = =ROUND(B6)
+A7 = "Average"
+B7 = =AVG(B2:B4)
+A8 = "Cheap?"
+B8 = =IF(B6<25,1,0)

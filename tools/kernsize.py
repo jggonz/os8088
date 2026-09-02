@@ -40,6 +40,14 @@ USAGE
     tools/kernsize.py --bless          rewrite baseline AND tables to match
     tools/kernsize.py --json           machine-readable, no baseline needed
 
+A BUDGET MOVE IS REPORTED SEPARATELY from a size move, and that is not a
+formatting choice.  `KERN_BUDGET` is a decision somebody takes with whoever
+asked for the feature (CLAUDE.md's memory rule); `KERN_SIZE` is what the
+assembler answered.  This report compared only their difference until
+tests/unit/t_kernbudget.py went looking, so a raise read as the kernel having
+got smaller, and docs/KERNEL-MEMORY.md fell two moves behind with every run
+saying nothing.
+
 The baseline lives in docs/KERNEL-MEMORY.md between the kernsize markers, so
 that the document's headline figures cannot drift from the build without the
 next `make` saying so.  Bless it in the same commit as the change.
@@ -55,16 +63,57 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KERNEL = os.path.join(ROOT, "kernel", "kernel.asm")
+
+# The build directory, which is NOT always build/: `make small` and the
+# per-typeface targets (SPEC.md 6.2) run a sub-make with BUILD= pointed
+# somewhere else, and the generated includes the kernel needs - associco.inc
+# always, font8x8.inc under FONT= - are in THAT directory.  Assuming build/
+# measured the wrong kernel for `small` silently and could not assemble a
+# baked-font one at all.  --build is how the Makefile says which.
+BUILDDIR = os.path.join(ROOT, "build")
 DOC = os.path.join(ROOT, "docs", "KERNEL-MEMORY.md")
 BEGIN = "<!-- kernsize:begin -->"
 END = "<!-- kernsize:end -->"
+
+# --- the two builds (docs/KERN-SPLIT-PLAN.md) --------------------------------
+# kern_big and kern_small are two kernels off one tree, and BOTH ARE SHIPPED
+# PRODUCTS - big by default, small for the 128KB floor. That makes the variant
+# a different kind of flag from every other -D this script forwards:
+#
+#   VIDEO=cga, DISKCNT=1, REDRAWFULL=1 ... are KNOBS. They produce a kernel
+#   nobody ships, so blessing one would write a baseline describing a binary
+#   that does not exist on any disk, and --bless refuses them.
+#
+#   KERN_BIG / KERN_SMALL are VARIANTS. Each has a baseline of its own, and
+#   each is blessable, because each IS a shipped kernel.
+#
+# Conflating the two is the bug this section exists to prevent: with one flat
+# baseline, `make KERN_SMALL=1` reported small's sections against big's
+# figures and every line was a delta of the difference between the products -
+# noise that looks exactly like a regression, in the build that is supposed to
+# be defended byte by byte.
+VARIANTS = ("big", "small")
+VARIANT_DEFS = {"-DKERN_BIG": "big", "-DKERN_SMALL": "small"}
+
+
+def variant_of(nasm_args):
+    """Which product is this? Defaults to big, as the Makefile does."""
+    for arg in nasm_args:
+        if arg in VARIANT_DEFS:
+            return VARIANT_DEFS[arg]
+    return "big"
+
+
+def knob_args(nasm_args):
+    """The args that make this a KNOB build rather than a shipped variant."""
+    return [x for x in nasm_args if x not in VARIANT_DEFS]
 
 # The sections an author can actually move a byte into, in the order the
 # ladder lays them out.  `ovl` is here because it has to be watched, not
 # because it costs anything: the boot overlay lands in the FAT window and is
 # overwritten by the first mount (SPEC.md 2.5), so its rung is somebody
 # else's.  It still has a ceiling - see the guard on OVL_SIZE.
-SECTIONS = ("text", "bss", "cold", "lowbss", "ovl")
+SECTIONS = ("text", "bss", "cold", "lowbss", "vgabuf", "ovl")
 
 # Which rung each section rounds into.  .text and .bss share one; that is why
 # a byte moved from .bss to .lowbss can cost 512 rather than saving anything
@@ -73,15 +122,32 @@ RUNGS = (
     ("image", ("text", "bss"), "imgpara"),
     ("cold", ("cold",), "coldpara"),
     ("low", ("lowbss", "stk0"), "lowpara"),
+    ("vgabuf", ("vgabuf",), "vgabufpara"),
 )
+
+# ...and therefore the sections a rung CHARGES for, which is not SECTIONS: the
+# boot overlay lands in the FAT window and is charged to no rung at all
+# (SPEC.md 2.5), so counting `.ovl` in the spend would price a change that
+# only moved overlay code as if it had eaten the image rung's slack.  Derived
+# from RUNGS rather than written out, so the two cannot drift apart.
+RUNG_SECTIONS = tuple(dict.fromkeys(
+    s for _, members, _ in RUNGS for s in members))
 
 # --- the per-module pass ------------------------------------------------------
 MODS_BEGIN = "<!-- BEGIN generated table -->"
 MODS_END = "<!-- END generated table -->"
 THEMES_BEGIN = "<!-- kernsize:themes -->"
 THEMES_END = "<!-- /kernsize:themes -->"
-MOD_SECTIONS = ("text", "bss", "lowbss", "cold", "ovl")
+# The same, per module, plus `.boot2`: splash.inc has no section directive
+# of its own and takes the `.boot2` it is included at (SPEC.md 2.9.4), so
+# without it here a 967-byte module reports as costing nothing.
+MOD_SECTIONS = ("text", "bss", "lowbss", "vgabuf", "cold", "ovl", "boot2")
 INCLUDE = re.compile(r'^%include\s+"([\w.]+)"')
+# Column 0 only, which is where every one of kernel.asm's own switches sits -
+# a `section` inside a module is that module's business and it has to hand
+# .text back (SPEC.md 4).  None of kernel.asm's is inside a %if, and the
+# binary compare in measure_modules() is what says so on every run.
+SECTION = re.compile(r'^section\s+\.(\w+)')
 RESIDUAL = "kernel.asm"
 
 # How the modules group, for the theme table.  This lives here rather than in
@@ -93,20 +159,36 @@ RESIDUAL = "kernel.asm"
 # exists entirely for file operations: it is a widget in the menu bar
 # (SPEC.md 12.8), and the theme is about where the code lives in the design.
 THEMES = (
+    # clone.inc (SPEC.md 18.99) is the file system's and not hardware's for
+    # fprog.inc's reason turned around: it drives int 13h directly and knows
+    # nothing about FAT, but what it IS to a reader is a File Manager command
+    # on a volume, which is where disk.inc and diskw.inc already live.
     ("the file system, end to end",
      ("disk.inc", "diskw.inc", "files.inc", "filecp.inc", "fdlg.inc",
-      "loader.inc", "assoc.inc")),
+      "loader.inc", "assoc.inc", "clone.inc")),
     ("the window system and its furniture",
      ("wm.inc", "ui.inc", "menu.inc", "instance.inc", "desk.inc", "dock.inc",
-      "fsx.inc", "clip.inc", "fprog.inc")),
+      "fsx.inc", "clip.inc", "fprog.inc", "toast.inc")),
+    # moudiag.inc (SPEC.md 9.4.4) goes with the mouse and NOT with
+    # bootprof.inc below, although both are knob-only: what it records is what
+    # mouse_init's identify window saw, so a byte it grows is the mouse's
+    # question. It is 0 in a shipped build either way.
     ("hardware: drivers, clock, mouse, sound, CPU, XMS",
-     ("mouse.inc", "clock.inc", "driver.inc", "snd.inc", "cpudet.inc",
-      "xmem.inc")),
+     ("mouse.inc", "moudiag.inc", "clock.inc", "driver.inc", "snd.inc",
+      "cpudet.inc", "xmem.inc")),
+    # blank.inc (SPEC.md 64) is here and not under hardware, although all it
+    # does is write a video port: what it owns is whether the SIGNAL is on,
+    # which is a property of the adapter the rest of this group programs.
     ("drawing: adapters, primitives, glyphs, icons",
-     ("vga12.inc", "vgabb.inc", "font.inc", "icons.inc", "viddet.inc",
-      "vidsel.inc", "splash.inc")),
+     ("vga12.inc", "softgfx.inc", "font.inc", "band.inc", "icons.inc",
+      "viddet.inc", "vidsel.inc", "splash.inc", "blank.inc")),
+    # bootprof.inc (SPEC.md 15.5) is here because what it measures is kmain's
+    # own phase sequence, which lives in kernel.asm - and because it is not in
+    # a shipped build at all (`make BOOTPROF=1`), so no other theme's figure
+    # should move when it is compiled in.
     ("the kernel proper: API table, heap, scheduler, events",
-     (RESIDUAL, "memory.inc", "sched.inc", "events.inc")),
+     (RESIDUAL, "memory.inc", "sched.inc", "events.inc", "mod.inc",
+      "bootprof.inc")),
     ("the Control Panel", ("ctrl.inc",)),
     ("the three built-in kinds", ("apps.inc",)),
 )
@@ -124,7 +206,8 @@ def measure(nasm_args=()):
     try:
         cmd = ["nasm", "-f", "bin", "-w+error", "-w-error=user", "-DKERNSIZE",
                "-I", os.path.join(ROOT, "kernel") + os.sep,
-               "-I", os.path.join(ROOT, "build") + os.sep,
+               "-I", os.path.join(ROOT, "apps") + os.sep,
+               "-I", BUILDDIR + os.sep,
                *nasm_args, "-o", out_path, KERNEL]
         r = subprocess.run(cmd, capture_output=True, text=True)
     finally:
@@ -142,18 +225,41 @@ def measure(nasm_args=()):
     return vals, None
 
 
-def _markers(i):
-    """A bare label in each section, then back to .text.
+def _markers(i, back):
+    """A bare label in each section, then back to the one we were HANDED.
 
     Bare labels emit nothing, which is the whole reason this measurement is
-    allowed to exist - but see assemble_modules(), which proves it rather
-    than asserting it.  Ending in .text matters: every %include in
-    kernel.asm sits at .text scope and every module is required to switch
-    back before it ends (SPEC.md 4), so the marker must hand over what it
-    was given.
+    allowed to exist - but see measure_modules(), which proves it rather than
+    asserting it.
+
+    Handing back the right section is the load-bearing half, and this used to
+    do it by ending in `section .text` on the reasoning that "every %include
+    in kernel.asm sits at .text scope".  THAT STOPPED BEING TRUE: SPEC.md
+    2.9.4 moved the loading screen into stage 2, so kernel.asm now reads
+    `section .boot2` / `%include "splash.inc"` / `section .text`, and
+    splash.inc carries no section directive of its own - it takes the one it
+    is included at.  A marker set ending in .text therefore assembled 967
+    bytes into the wrong section and moved every byte after them.  The binary
+    compare caught it and refused to report, which is exactly what it is for;
+    what it could not do is fix it, so `--bless` returned 1 without writing
+    and t_kernbudget's advice - "one command, tools/kernsize.py --bless" -
+    was false for as long as that lasted.
+
+    NASM CAN ANSWER THIS AND THE ANSWER RACES.  `__?SECT?__` is the smacro
+    holding the current section's directive, and `%xdefine BACK __?SECT?__`
+    captures it correctly in a file on its own.  In kernel.asm it does not:
+    the SECTION directive is the assembler's and %xdefine is the
+    preprocessor's, the preprocessor runs ahead, and the capture lands on
+    whichever section the assembler had reached rather than the one the text
+    is in.  It fails in a different place for every trailing section - .bss
+    gives "attempt to initialize memory in a nobits section" in the module's
+    first data line, .cold assembles and moves bytes, .ovl overflows the boot
+    blob - and none of them names the marker.  So the section is tracked in
+    PYTHON, over kernel.asm's own text, where there is no second reader to
+    disagree with.
     """
     out = [f"section .{s}\nKSM{i}_{s}:\n" for s in MOD_SECTIONS]
-    return "".join(out) + "section .text\n"
+    return "".join(out) + f"section {back}\n"
 
 
 def instrument(src):
@@ -164,17 +270,21 @@ def instrument(src):
     exists: %assign takes a critical expression, so a label it names has to
     have been seen already.
     """
-    mods, out, last_at = [], [], None
+    mods, out, last_at, sect, at = [], [], None, ".text", ".text"
     for line in src.splitlines(keepends=True):
+        d = SECTION.match(line)
+        if d:
+            sect = "." + d.group(1)
         m = INCLUDE.match(line)
         if m:
-            out.append(_markers(len(mods)))
+            out.append(_markers(len(mods), sect))
             mods.append(m.group(1))
             last_at = len(out) + 1        # ...after the include line itself
+            at = sect
         out.append(line)
     if not mods:
         return None, []
-    out.insert(last_at, _markers(len(mods)))
+    out.insert(last_at, _markers(len(mods), at))
 
     rep = []
     for j in range(len(mods)):
@@ -189,7 +299,8 @@ def _nasm(path, out_path, nasm_args=()):
     return subprocess.run(
         ["nasm", "-f", "bin", "-w+error", "-w-error=user",
          "-I", os.path.join(ROOT, "kernel") + os.sep,
-         "-I", os.path.join(ROOT, "build") + os.sep,
+         "-I", os.path.join(ROOT, "apps") + os.sep,
+         "-I", BUILDDIR + os.sep,
          *nasm_args, "-o", out_path, path],
         capture_output=True, text=True)
 
@@ -244,11 +355,28 @@ def measure_modules(nasm_args=()):
 
 
 def rung_bytes(v, para_key):
-    return v[para_key] * 16
+    # `.get`, because a BASELINE taken before a rung existed has no key for it
+    # (SPEC.md 39.22's `.vgabuf` is the case that arrived): a rung nobody had
+    # measured was 0 bytes, which is the honest reading and makes the first
+    # report after it lands price the whole thing rather than crashing.
+    return v.get(para_key, 0) * 16
 
 
 def rung_used(v, parts):
-    return sum(v[p] for p in parts)
+    return sum(v.get(p, 0) for p in parts)
+
+
+def rung_accrued(size, used):
+    """How far into the CURRENT rung a build already is, in bytes.
+
+    A rung is `ceil(used/512)*512`, so `used` sits in `(size-512, size]` and
+    the bytes already spent into a rung nobody has been billed for are simply
+    `512 - slack`.  DERIVED, never stored, and that is deliberate: a floor
+    kept in the baseline would be one more figure that can go stale (this
+    file's whole reason for existing), and this one cannot - it is arithmetic
+    on two numbers the report already had.
+    """
+    return 0 if size <= 0 else 512 - (size - used)
 
 
 def kb(n):
@@ -259,13 +387,32 @@ def delta(n):
     return f"{n:+,}" if n else "+0"
 
 
-def report(cur, base, out=sys.stdout):
-    """Five lines. The sum first, because that is the number an author
-    controls; the rungs second, because that is what the machine feels."""
-    p = lambda s: print(s, file=out)
+def report(cur, base, variant="big", out=sys.stdout):
+    """Six lines. The sum first, because that is the number an author
+    controls; the rungs second, because that is what the machine feels; the
+    ACCRUAL third, because that is the one an author gets wrong.
 
+    The accrual line is the rungs' `left` figure inverted, and the inversion
+    is the whole of it.  "4 left" reads as headroom and invites the next four
+    bytes; "508/512 spent" reads as a bill nobody has been handed yet, which
+    is what it is.  A rung decides WHEN the machine pays and never what a
+    change cost (CLAUDE.md's rung rule): every byte in that line was added by
+    some change that crossed nothing and was called free for it.
+
+    EVERY LINE NAMES ITS VARIANT, and that is not decoration: the two builds
+    have separate baselines and separate budgets, and a run of figures with no
+    label is a run of figures somebody will compare against the other build's.
+    """
+    p = lambda s: print(s, file=out)
+    tag = "kernsize[%s]:" % variant
+
+    # `.get` on BOTH sides, for `rung_bytes`'s reason one level up: a section
+    # a build does not declare is 0 bytes of it, which is the honest reading
+    # and is what lets this report on a kernel from either side of the commit
+    # that added one (SPEC.md 39.22's `.vgabuf` is the case that arrived).
     def d(key):
-        return None if base is None else cur[key] - base.get(key, cur[key])
+        return (None if base is None
+                else cur.get(key, 0) - base.get(key, cur.get(key, 0)))
 
     parts = []
     total = 0
@@ -273,11 +420,16 @@ def report(cur, base, out=sys.stdout):
         dv = d(s)
         if dv is not None:
             total += dv
-            parts.append(f"{s} {kb(cur[s])} {delta(dv)}")
+            parts.append(f"{s} {kb(cur.get(s, 0))} {delta(dv)}")
         else:
-            parts.append(f"{s} {kb(cur[s])}")
-    p("kernsize: sections   " + "  ".join(parts)
+            parts.append(f"{s} {kb(cur.get(s, 0))}")
+    p(tag + " sections   " + "  ".join(parts)
       + (f"   (sum {delta(total)})" if base is not None else ""))
+
+    # NOT `total`: see RUNG_SECTIONS. This is what the change took out of the
+    # rungs, which is the number the verdict at the bottom prices.
+    charged = (None if base is None
+               else sum(d(s) or 0 for s in RUNG_SECTIONS))
 
     crossed = []
     cells = []
@@ -296,10 +448,18 @@ def report(cur, base, out=sys.stdout):
         else:
             cell += f" ({kb(slack)} left)"
         cells.append(cell)
-    p("kernsize: rungs      " + "   ".join(cells))
+    p(tag + " rungs      " + "   ".join(cells))
+
+    acc = []
+    for name, members, para in RUNGS:
+        size = rung_bytes(cur, para)
+        spent = rung_accrued(size, rung_used(cur, members))
+        acc.append(f"{name} {spent}/512 ({spent * 100 // 512}%)")
+    p(tag + " accrued    " + "   ".join(acc)
+      + "   - spent into the current rung and NOT YET BILLED")
 
     spare = cur["budget"] - cur["ksize"]
-    line = (f"kernsize: footprint  KERN_SIZE {kb(cur['ksize'])}"
+    line = (f"{tag} footprint  KERN_SIZE {kb(cur['ksize'])}"
             f" of KERN_BUDGET {kb(cur['budget'])} -> {kb(spare)} spare"
             f" ({spare // 512} step{'' if spare // 512 == 1 else 's'})")
     if base is not None:
@@ -307,8 +467,39 @@ def report(cur, base, out=sys.stdout):
                  f"  [{delta(cur['ksize'] - base['ksize'])}]")
     p(line)
 
+    # ...AND THE BOOT CEILING BESIDE IT, because for a long time this printed
+    # only the line above and the line above was not the binding guard.
+    # kernel.asm's guard 5 asks whether stage 1 can put its sector and its
+    # stack at the top of MIN_RAM_KB and still read the kernel AND its stage-2
+    # blob underneath - a different question from "does it reside in", with a
+    # different and, at one point, TIGHTER answer. Measured the day this line
+    # was added: 3,584 bytes spare against KERN_BUDGET and 1,670 against guard
+    # 5, so a ~5KB recovery read as slack under a ceiling that could not be
+    # reached. A report that names one guard teaches everybody to steer by it.
+    boot = cur.get("bootmax")
+    if boot:
+        room = boot - cur["ksize"]
+        p(f"{tag} boot       KERN_SIZE {kb(cur['ksize'])} of {kb(boot)}"
+          f" -> {kb(room)} before it cannot BOOT on"
+          f" {cur['minramkb']}KB (guard 5)")
+
+    # THE BUDGET MOVING IS THE ONE THING HERE THAT IS A DECISION, and it was
+    # the one thing this report could not see: it compared SPARE, which is
+    # budget minus size, so a raise and a shrink of the same amount read
+    # identically and a raise on its own read as "the kernel got smaller".
+    # docs/KERNEL-MEMORY.md went two moves stale behind exactly that, because
+    # nothing in the output ever said the baseline was describing a different
+    # KERN_BUDGET from the one that had just been assembled.
+    budged = base is not None and base["budget"] != cur["budget"]
+    if budged:
+        steps = (cur["budget"] - base["budget"]) // 512
+        p(f"{tag} *** KERN_BUDGET MOVED: {kb(base['budget'])} ->"
+          f" {kb(cur['budget'])}, {delta(steps)} rung"
+          f"{'' if abs(steps) == 1 else 's'} of 512 - the machine's RAM"
+          f" moved, and this baseline is stale until `--bless` ***")
+
     seg = cur["text"] + cur["bss"]
-    p(f"kernsize: segment    .text+.bss {kb(seg)} of KERN_CODE_MAX"
+    p(f"{tag} segment    .text+.bss {kb(seg)} of KERN_CODE_MAX"
       f" {kb(cur['codemax'])} -> {kb(cur['codemax'] - seg)} left")
 
     # The ladder, because every base in it moves whenever a rung does - and
@@ -318,22 +509,57 @@ def report(cur, base, out=sys.stdout):
     cold = ks + cur["imgpara"]
     fat = cold + cur["coldpara"]
     low = fat + cur["fatpara"]
-    p(f"kernsize: ladder     KERNEL {ks:#06x}  COLD {cold:#06x}"
-      f"  FAT {fat:#06x}  LOW {low:#06x}  HEAP {cur['kend']:#06x}"
+    vgabuf = low + cur["lowpara"]
+    p(f"{tag} ladder     KERNEL {ks:#06x}  COLD {cold:#06x}"
+      f"  FAT {fat:#06x}  LOW {low:#06x}  VGABUF {vgabuf:#06x}"
+      f"  HEAP {cur['kend']:#06x}"
       f" = {cur['kend'] * 16 / 1024:.1f} KB   (heap KB = int 12h"
       f" - {cur['kend'] * 16 / 1024:.1f})")
 
     if base is None:
-        p("kernsize: no baseline in docs/KERNEL-MEMORY.md - run --bless")
+        p(tag + " no baseline for this variant in docs/KERNEL-MEMORY.md"
+                       " - run `--bless` on it")
+    elif budged:
+        pass                            # already said, and louder
     elif crossed:
+        # A CROSSING GOES BOTH WAYS, and the down direction used to read as
+        # the up one. A saving that clears a rung hands 512 bytes back to
+        # every machine, which is the largest single thing an optimisation
+        # pass in this kernel can do, and the report called it "the machine's
+        # RAM moved" in the same words it used for a regression.
         for name, a, b in crossed:
-            p(f"kernsize: *** the {name} rung CROSSED: {a} -> {b}"
-              f" steps of 512 - the machine's RAM moved ***")
+            # ...and it can move more than one step, which is why the byte
+            # figure is computed rather than written as 512.
+            moved = abs(b - a) * 512
+            if b > a:
+                p(f"{tag} *** the {name} rung CROSSED: {a} -> {b}"
+                  f" steps of 512 - {kb(moved)} bytes of every machine's"
+                  f" RAM, gone ***")
+            else:
+                p(f"{tag} *** the {name} rung UNCROSSED: {a} -> {b}"
+                  f" steps of 512 - {kb(moved)} bytes of every machine's"
+                  f" RAM, back ***")
+    # THE TWO SENTENCES BELOW ARE THE POINT OF THIS TOOL, and for a long time
+    # the first of them said the opposite. It read "the machine pays nothing
+    # YET, and the slack above is what the next feature has left" - which is
+    # true and lands as "this was free, and here is more free", the exact
+    # argument CLAUDE.md's rung rule now refuses. The rung says WHEN the
+    # machine pays. It never said what the change cost.
+    elif charged > 0:
+        p(f"{tag} no rung crossed - AND THIS CHANGE WAS NOT FREE: it spent"
+          f" {kb(charged)} bytes of rung slack that belonged to whoever comes"
+          f" next, and the 512 it did not pay is now theirs to pay. A byte"
+          f" costs a byte (CLAUDE.md's rung rule)")
+    elif charged < 0:
+        p(f"{tag} no rung uncrossed - AND THE SAVING IS STILL REAL:"
+          f" {kb(-charged)} bytes bought back is {kb(-charged)} the next"
+          f" feature does not have to ask for. A saving is priced in bytes,"
+          f" not in steps (CLAUDE.md's rung rule)")
     elif total:
-        p("kernsize: no rung crossed - the machine pays nothing YET, and the"
-          " slack above is what the next feature has left")
+        p(f"{tag} .ovl moved and no rung did - the overlay lands in the FAT"
+          f" window and is charged to no rung at all (SPEC.md 2.5)")
     else:
-        p("kernsize: unchanged")
+        p(f"{tag} unchanged")
     return crossed
 
 
@@ -370,10 +596,10 @@ def module_rows(per, totals):
     rows = []
     for name, v in per.items():
         rows.append([name, desc.get(name, ""), v["text"], v["cold"],
-                     v["text"] + v["cold"], v["bss"], v["lowbss"]])
-    rows.sort(key=lambda r: -r[4])
+                     v["text"] + v["cold"], v["bss"], v["lowbss"], v["boot2"]])
+    rows.sort(key=lambda r: (-r[4], -r[7]))
     resid = [RESIDUAL, desc.get(RESIDUAL, "")]
-    for i, key in enumerate(("text", "cold", None, "bss", "lowbss")):
+    for i, key in enumerate(("text", "cold", None, "bss", "lowbss", "boot2")):
         if key is None:
             resid.append(resid[2] + resid[3])
         else:
@@ -386,15 +612,16 @@ def render_modules(rows, totals):
     def cell(n):
         return f"{n:,}" if n else "—"
     out = [MODS_BEGIN,
-           "| module | `.text` | `.cold` | code | `.bss` | `.lowbss` |",
-           "|---|---:|---:|---:|---:|---:|"]
-    for name, d, t, c, code, b, lb in rows:
+           "| module | `.text` | `.cold` | code | `.bss` | `.lowbss` | `.boot2` |",
+           "|---|---:|---:|---:|---:|---:|---:|"]
+    for name, d, t, c, code, b, lb, b2 in rows:
         label = f"`{name}`" + (f" — {d}" if d else " — **(undescribed)**")
         out.append(f"| {label} | {cell(t)} | {cell(c)} | **{code:,}** |"
-                   f" {cell(b)} | {cell(lb)} |")
+                   f" {cell(b)} | {cell(lb)} | {cell(b2)} |")
     out.append(f"| **total** | **{totals['text']:,}** | **{totals['cold']:,}**"
                f" | **{totals['text'] + totals['cold']:,}** |"
-               f" **{totals['bss']:,}** | **{totals['lowbss']:,}** |")
+               f" **{totals['bss']:,}** | **{totals['lowbss']:,}** |"
+               f" **{totals['boot2']:,}** |")
     out.append(MODS_END)
     return "\n".join(out)
 
@@ -418,7 +645,7 @@ def render_themes(rows):
     return "\n".join(lines), missing
 
 
-def read_baseline():
+def read_baseline(variant):
     try:
         doc = open(DOC).read()
     except OSError:
@@ -427,10 +654,29 @@ def read_baseline():
     if not m:
         return None
     try:
-        return json.loads(re.sub(r"^```\w*$", "", m.group(1).strip(),
+        blob = json.loads(re.sub(r"^```\w*$", "", m.group(1).strip(),
                                  flags=re.M).strip())
     except ValueError:
         return None
+    return baseline_pick(blob, variant)
+
+
+def baseline_pick(blob, variant):
+    """One variant out of the block, tolerating the pre-split flat form.
+
+    The old baseline was the figures themselves, with no variant above them.
+    That form is read as BIG - which is what it described, big being the
+    default and the split having removed nothing - so an un-blessed tree keeps
+    reporting instead of going quiet the moment this landed. A missing variant
+    answers None and `report` prints the absolute numbers with no deltas, which
+    is the honest thing to say about a build nobody has blessed yet.
+    """
+    if not isinstance(blob, dict):
+        return None
+    if any(k in blob for k in VARIANTS):
+        v = blob.get(variant)
+        return v if isinstance(v, dict) else None
+    return blob if variant == "big" else None
 
 
 def write_block(begin, end, body, what):
@@ -447,9 +693,22 @@ def write_block(begin, end, body, what):
     return 0
 
 
-def write_baseline(v):
+def write_baseline(v, variant):
     doc = open(DOC).read()
-    body = json.dumps({k: v[k] for k in sorted(v)}, indent=2)
+    # MERGE, never replace: blessing big must not delete small's figures, and
+    # the two are blessed by two different commands minutes apart.
+    m = re.search(re.escape(BEGIN) + r"(.*?)" + re.escape(END), doc, re.S)
+    blob = {}
+    if m:
+        try:
+            old = json.loads(re.sub(r"^```\w*$", "", m.group(1).strip(),
+                                    flags=re.M).strip())
+            if isinstance(old, dict):
+                blob = old if any(k in old for k in VARIANTS) else {"big": old}
+        except ValueError:
+            blob = {}
+    blob[variant] = {k: v[k] for k in sorted(v)}
+    body = json.dumps({k: blob[k] for k in sorted(blob)}, indent=2)
     block = f"{BEGIN}\n```json\n{body}\n```\n{END}"
     new, n = re.subn(re.escape(BEGIN) + r".*?" + re.escape(END), block, doc,
                      flags=re.S)
@@ -470,10 +729,18 @@ def main():
     ap.add_argument("--modules", action="store_true",
                     help="the per-module attribution")
     ap.add_argument("--json", action="store_true", help="the raw figures")
+    ap.add_argument("--build", metavar="DIR",
+                    help="where the generated includes are (default build/); "
+                         "a sub-make with BUILD= set needs this")
     # Anything else is handed to NASM verbatim - parse_known_args rather than
     # a positional, because the knobs arrive looking like options
     # (-DVID_FORCE=3) and argparse would claim them.
     a, nasm_args = ap.parse_known_args()
+    if a.build:
+        global BUILDDIR
+        BUILDDIR = os.path.abspath(a.build)
+    variant = variant_of(nasm_args)
+    knobs = knob_args(nasm_args)
 
     cur, err = measure(nasm_args)
     if cur is None:
@@ -508,19 +775,27 @@ def main():
                       file=sys.stderr)
 
     if a.bless:
-        if nasm_args:
-            print("kernsize: refusing to bless a knob build - the baseline is"
-                  " the SHIPPED kernel", file=sys.stderr)
+        if knobs:
+            print("kernsize: refusing to bless a knob build (%s) - a baseline"
+                  " describes a SHIPPED kernel, and no disk carries this one"
+                  % " ".join(knobs), file=sys.stderr)
             return 1
-        report(cur, read_baseline())
-        rc = write_baseline(cur)
-        if per is not None:
+        report(cur, read_baseline(variant), variant)
+        rc = write_baseline(cur, variant)
+        # THE MODULE AND THEME TABLES ARE THE DEFAULT VARIANT'S, and there is
+        # one of each rather than one per variant. Written by whichever bless
+        # ran LAST they would silently describe kern_small on a document whose
+        # every other figure is the shipped kernel's - an ordering dependency
+        # nobody would think to preserve, producing a table that is wrong in a
+        # way no gate can see. So only big writes them; `--modules
+        # -DKERN_SMALL` prints small's on demand.
+        if per is not None and variant == "big":
             rc = write_block(MODS_BEGIN, MODS_END, table, "module table") or rc
             rc = write_block(THEMES_BEGIN, THEMES_END, themes,
                              "theme table") or rc
         return rc
 
-    report(cur, read_baseline())
+    report(cur, read_baseline(variant), variant)
     return 0
 
 

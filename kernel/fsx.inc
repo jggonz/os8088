@@ -60,17 +60,52 @@ FSIF_PLANAR equ 2
 FSIF_BANKED equ 4
 
 ; -----------------------------------------------------------------------------
-; fsx_caps - which FSXM ids the live adapter can set (SPEC.md 53.8, 0x02C0)
+; fsx_caps - which FSXM ids a window's display can set (SPEC.md 53.8, 0x02C0)
 ;
-; in:       nothing
-; out:      AX = bitmask (bit n = FSXM id n settable), DL = [vid_kind]; CF=0
+; in:       BX = the window to ask ABOUT, or 0 for "whatever is frontmost"
+; out:      AX = bitmask (bit n = FSXM id n settable), DL = the answering
+;           display's VID_* kind; CF=0
 ; clobbers: nothing else. Any context, lock held or not (the osapi_video
 ;           precedent) - an app greys its mode menu with this per SPEC.md 47,
 ;           and fsx_mode refuses with the same bit, one predicate for both.
+;
+; IT TAKES THE WINDOW BECAUSE IT USED TO GUESS ONE (SPEC.md 39.18.2). The
+; guess was wm_top, on the reasoning that an app greying its own mode menu is
+; frontmost by construction - true when the menu is used and false when the
+; question is asked, because a package's entry proc runs BEFORE its window
+; exists and gets an answer about the window it was launched from. Missile
+; Command launched off a Disk window on the Hercules read HERC's caps and
+; greyed Mode X on a machine with a VGA in it.
 ; -----------------------------------------------------------------------------
 fsx_caps:
     push bx
     mov dl, [vid_kind]
+%ifdef KERN_BIG
+    cmp byte [vid_ndisp], 1     ; ...of the display the ASKED-ABOUT window is
+    jbe .kind                   ; on (SPEC.md 39.18.1). ONE DISPLAY covers a
+                                ; mode-setting bracket too, which is what
+                                ; collapsed the machine (39.18.3) and moved
+                                ; [vid_kind] to the bracket's own card - so
+                                ; there is no second test for that, and a
+                                ; SAME-MODE bracket, which does not collapse,
+                                ; correctly falls through and answers about
+                                ; the window it was handed
+    push ax
+    or bx, bx                   ; BX = 0: no window to ask about - an entry
+    jnz .win                    ; proc, or a caller that has none. Fall back
+    call wm_top                 ; to the frontmost, and to the primary below
+    or bx, bx                   ; if nothing is visible at all
+    jz .notop
+.win:
+    push di
+    call wm_disp_of             ; the CENTRE, then the origin, then the
+    call vid_ctx_ptr            ; primary (SPEC.md 39.17) - so a straddling
+    mov dl, [di+VID_CTX_KIND]   ; window belongs to the display holding more
+    pop di                      ; of it, which is the same rule wm_fullscreen
+.notop:                         ; and wm_zoom ask
+    pop ax
+.kind:
+%endif
     mov bl, dl
     xor bh, bh
     shl bx, 1
@@ -79,10 +114,15 @@ fsx_caps:
     clc
     ret
 
-fsx_capstab:                    ; indexed by VID_* (VGA 0, HERC 1, CGA 2)
+fsx_capstab:                    ; indexed by VID_* (VGA 0, HERC 1, CGA 2, EGA 3)
     dw 0x01EF                   ; VGA:  0,1,2,3 + 5,6,7,8
     dw 0x0011                   ; HERC: 0 (mode 7 text) + 4 (its own graphics)
     dw 0x000F                   ; CGA:  0,1,2,3
+    dw 0x000F                   ; EGA:  0,1,2,3 - the CGA-compatible modes only,
+                               ; which an EGA BIOS all has. Its own mode 10h
+                               ; has no FSXM id, and mode 0Dh (native, planar)
+                               ; is a safe later addition, not pass 1
+                               ; (SPEC.md 39.24, docs/EGA-PLAN.md 7)
 
 ; -----------------------------------------------------------------------------
 ; fsx_run - the bracket (SPEC.md 53.1, slot 0x02C8 via X stub)
@@ -116,7 +156,7 @@ fsx_run:
     jne .fail                   ; bracket would freeze the UI task mid-frame
     cmp byte [fsx_task], 0xFF   ; one bracket at a time
     jne .fail
-    call cur_unlazy             ; the bracket owns the machine and the held
+    call cur_unlazy              ; the bracket owns the machine and the held
                                 ; lock is what keeps the arrow off it - which
                                 ; a DEFERRED hide would not (SPEC.md 7.1.4).
                                 ; A same-mode bracket (SPEC.md 53.7) never
@@ -187,6 +227,22 @@ fsx_run:
     loop .rel
     pop ax
 
+%ifdef KERN_BIG
+    push ax                     ; WHICH DISPLAY this bracket is on - banked,
+    call wm_disp_of             ; not acted on (SPEC.md 39.18.3). BX is still
+    mov [fsx_wdisp], al         ; the window; AX is the app's entry, owed
+    pop ax                      ; below.
+                                ;
+                                ; THE SINGLE-DISPLAY COLLAPSE MOVED TO
+                                ; fsx_mode, because it is a consequence of
+                                ; SETTING A MODE and not of taking the
+                                ; machine. A same-mode bracket (SPEC.md 53.7)
+                                ; promises that "the drawing slots stay legal
+                                ; and the geometry is still the desktop's",
+                                ; and collapsing here broke exactly that
+                                ; promise on the secondary display.
+%endif
+
     push bp                     ; the app owns the machine from here to its
     mov si, bx                  ; ret: wm_pkgcall's contract, record in SI,
     mov bp, ax                  ; offset in BP (SPEC.md 53.1)
@@ -247,13 +303,21 @@ fsx_restore:
 .ed:
     mov di, fsx_evtmp           ; drain the event queue
     call evq_pop
-    jnc .ed
+    jc .edone
+    call wm_wake_eaten          ; ...but a package's wake is OWED, not dropped
+    jmp short .ed               ; (SPEC.md 74.1.1)
+.edone:
     pushf
     cli
     mov byte [fsx_task], 0xFF   ; disarm - sleepers marked ready during the
     mov byte [fsx_worker], 0xFF ; bracket run from the next tick
     popf
     mov byte [fsx_cur], 0xFF
+%ifdef KERN_BIG
+    call vid_fsx_leave          ; the DESKTOP's shape back - the union, the
+                                ; primary's chrome - before anything draws on
+                                ; it (SPEC.md 39.18)
+%endif
     call menu_force             ; the bar and the strip really WERE overdrawn -
     call dock_force             ; an exclusive app owned the whole screen
     call wm_paint_all           ; (SPEC.md 12.9/30.3), so the logo, the rule
@@ -261,6 +325,29 @@ fsx_restore:
                                 ; not force either any more, because nothing
                                 ; inside it destroys them; this is a caller
                                 ; that genuinely did
+%ifdef KERN_BIG
+    call vid_fsx_unblank        ; ...and only NOW the dark monitors, because a
+                                ; blanked card still holds the frame it was
+                                ; blanked on and lighting it first shows that
+                                ; one (SPEC.md 39.18.1)
+%endif
+    call blk_wake               ; the idle clock restarts here (SPEC.md 64.4).
+                                ; The UI task does not run inside a bracket
+                                ; (53.1), so nothing spends that clock while
+                                ; one is up and nothing may - the app owns the
+                                ; video mode, and blanking a card the kernel
+                                ; is not driving is the one thing this feature
+                                ; must never do. What that leaves is the
+                                ; arithmetic on the way out: somebody plays a
+                                ; game or a module for as long as they like,
+                                ; and an hour of it comes back to a
+                                ; [ticks] - [blk_t0] that has not only passed
+                                ; BLK_IDLE but wrapped, so the very first pass
+                                ; after this would dark the screen on a
+                                ; machine somebody is sitting in front of.
+                                ; The bracket WAS the user. CF is not read:
+                                ; the screen cannot be dark here, because
+                                ; entering a bracket took the input that lit it
     pop di
     pop ax
     ret
@@ -271,10 +358,8 @@ fsx_restore:
 ; in:       AL = FSXM_* id, ES:DI = an FSI_SIZE buffer (ES is the caller's
 ;           own, the gfx_blit4 idiom). Bracket-only, exclusive task only.
 ; out:      CF=0 mode set, buffer filled. CF=1 refused: no bracket, wrong
-;           task, id out of range, not on this adapter (fsx_caps' own bit),
-;           or the back buffer is armed - it describes desktop geometry and
-;           nothing else, so osapi_gfx_dbuf off comes first (SPEC.md 53.5).
-;           Every register preserved.
+;           task, id out of range, or not on this adapter (fsx_caps' own
+;           bit). Every register preserved.
 ; -----------------------------------------------------------------------------
 fsx_mode:
     push ax
@@ -288,12 +373,22 @@ fsx_mode:
     je .fail
     cmp ah, [sch_cur]
     jne .fail
-    cmp byte [bb_dbl], 0
-    jne .fail
     cmp al, FSXM_COUNT
     jae .fail
     mov bl, [vid_kind]          ; the caps bit - the same predicate the
-    xor bh, bh                  ; app's greying used (SPEC.md 47)
+%ifdef KERN_BIG                 ; app's greying used (SPEC.md 47), and for
+    cmp byte [vid_ndisp], 1     ; THE DISPLAY THIS BRACKET IS ON rather than
+    jbe .kind                   ; the primary (SPEC.md 39.18.3/39.18.2). Once
+    push ax                     ; the collapse below has run there is only one
+    push di                     ; display left and [vid_kind] IS that one, so
+    mov al, [fsx_wdisp]         ; a second fsx_mode call takes the short path
+    call vid_ctx_ptr
+    mov bl, [di+VID_CTX_KIND]
+    pop di
+    pop ax
+.kind:
+%endif
+    xor bh, bh
     shl bx, 1
     mov dx, [bx+fsx_capstab]
     mov cl, al
@@ -301,6 +396,31 @@ fsx_mode:
     shl bx, cl
     test dx, bx
     jz .fail
+
+    cmp byte [fpg_on], 0        ; **NO KERNEL CHROME SURVIVES INTO A FOREIGN
+    je .nofpg                   ; MODE** (SPEC.md 12.8.5). fpg_arm refuses to
+    call fpg_finish             ; arm once [fsx_cur] is set, but a caller may
+.nofpg:                         ; have armed the progress widget from a file
+                                ; read EARLIER IN THE SAME LOCK HOLD - the hold
+                                ; this bracket inherited from its callback - and
+                                ; then fpg_step would draw into the app's raster
+                                ; and fpg_finish would repair a menu bar that is
+                                ; not on the screen. Its own teardown is the
+                                ; right one and it is called HERE, before a
+                                ; single mode register moves, so its erase, its
+                                ; bar repaint and the cursor debt it may owe
+                                ; (SPEC.md 12.8.4) all land on the desktop that
+                                ; is still up. AFTER the caps test, so a
+                                ; REFUSED mode still changes nothing at all.
+
+%ifdef KERN_BIG
+    push ax                     ; ...and ONLY NOW is the machine one display
+    mov al, [fsx_wdisp]         ; with every other card dark (SPEC.md 39.18):
+    call vid_fsx_enter          ; a mode is about to be set, which makes every
+    pop ax                      ; other display's geometry meaningless. After
+%endif                          ; the caps test, so a REFUSED mode leaves the
+                                ; desktop exactly as it found it; idempotent,
+                                ; because vid_fsx_enter no-ops at ndisp <= 1
 
     mov ch, al                  ; CH = the id, live across the mode set
     cmp al, FSXM_TEXT80
@@ -369,6 +489,74 @@ fsx_mode:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fsx_surf - the rect this bracket owns (SPEC.md 53.7.1, slot 0x03F8)
+;
+; in:       nothing. Bracket-only, exclusive task only.
+; out:      CF=0 with AX = x, BX = y, CX = w, DX = h - the surface the app may
+;           draw on, in the coordinates the DRAWING SLOTS take. CF=1 outside a
+;           bracket or on the wrong task, with every register preserved.
+;
+; A SAME-MODE BRACKET (SPEC.md 53.7) DOES NOT COLLAPSE THE DESKTOP (39.18.3),
+; so inside one the coordinate system is still the whole virtual desktop -
+; and an app that reads "fullscreen" as (0,0) plus OSAPI_VIDEO's size then
+; draws on the PRIMARY however far away its own window is. Measured on a
+; cycle-accurate XT with a VGA and a Hercules extended right, Tracker's
+; window wholly on the Hercules: pressing F took the VGA from 189,477 lit
+; pixels to 95,619 - the FT2 screen, on the monitor Tracker is not on - while
+; the Hercules kept the stale windowed desktop it had. Both come back on the
+; way out, because SPEC.md 53.6's wm_paint_all repaints the world, so what
+; this defect costs is the whole of the fullscreen session and nothing after
+; it: "switching Tracker to full screen corrupts the other screen".
+;
+; Missile Command never had it because it stacks SPEC.md 11.2 on the bracket
+; and wm_fullscreen sizes the window to THE DISPLAY IT IS ON (39.17.1) - so
+; its geometry came out of the window record and was already right. This is
+; that same answer for the two consumers that deliberately take no 11.2
+; surface (SPEC.md 42.7's measured reason), handed over rather than derived.
+;
+; IT ANSWERS (0,0,w,h) ON EVERY ONE-DISPLAY MACHINE and after any fsx_mode
+; call, because the collapse has then run and the machine really is one
+; display at the virtual origin - which is exactly what those apps used to
+; hard-code, so a single-display machine cannot see this change at all.
+;
+; The extent comes out of the DISPLAY'S RECORD and not out of [vid_cw]: the
+; live block follows vid_ctx_act, which every straddling primitive moves, so
+; a read of it answers about whichever display the last drawing call touched.
+; -----------------------------------------------------------------------------
+fsx_surf:
+    push di
+    push ax
+    mov ah, [fsx_task]
+    cmp ah, 0xFF
+    je .fail
+    cmp ah, [sch_cur]
+    jne .fail
+    pop ax
+    xor ax, ax
+    xor bx, bx
+    mov cx, [vid_cw]
+    mov dx, [vid_ch]
+%ifdef KERN_BIG
+    cmp byte [vid_ndisp], 1
+    jbe .done
+    mov al, [fsx_wdisp]
+    call vid_ctx_ptr            ; DI = that display's record; AX preserved
+    mov ax, [di+VID_CTX_VX]
+    mov bx, [di+VID_CTX_VY]
+    mov cx, [di+VID_CTX_CW]
+    mov dx, [di+VID_CTX_CH]
+.done:
+%endif
+    pop di
+    clc
+    ret
+.fail:
+    pop ax
+    pop di
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -474,10 +662,7 @@ fsx_xcrtc:                      ; Mode X CRTC retiming, index in the low byte
 ;           not fail); CF=1 outside a bracket or on an unknown AL. Every
 ;           register preserved.
 ;
-; The present: while [bb_dbl] is armed and no mode switch has happened, the
-; armed buffer is flushed BEFORE the wait - the bracket never calls
-; gfx_unlock, so this is the only flush a buffered renderer gets. Every
-; retrace poll is bounded by a [ticks] delta (SPEC.md 37.90's rule: the one
+; Every retrace poll is bounded by a [ticks] delta (SPEC.md 37.90's rule: the one
 ; way to hang is waiting forever for a bit that never changes on a machine
 ; where every read is 0FFh).
 ;
@@ -520,12 +705,6 @@ fsx_wait:
     cmp al, FSXW_FRAME          ; the argument is checked BEFORE the present,
     ja .fail                    ; so an unknown clock never flushes and then
                                 ; refuses (SPEC.md 53.1's all-or-nothing)
-    cmp byte [fsx_cur], 0xFF    ; the present clause: unswitched + armed
-    jne .nopresent
-    cmp byte [bb_dbl], 0
-    je .nopresent
-    call gfx_flush
-.nopresent:
     cmp al, FSXW_FRAME
     je .frame
     or al, al
@@ -568,6 +747,106 @@ fsx_wait:
 .ok:
     clc
     jmp short .out
+.fail:
+    stc
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fsx_page - show one of the pages FSI_PAGES advertises (SPEC.md 53.10, slot
+;            0x04E8)
+;
+; in:       AL = the page index. Bracket-only, exclusive task only, and only
+;           after an fsx_mode call in a mode that HAS more than one page.
+; out:      CF=0 and that page is on the glass - the write is latched at the
+;           next vertical retrace and this waits for it, so the caller may
+;           start drawing on another page the moment it returns. CF=1 refused,
+;           with nothing written. Preserves every register.
+;
+; WHY THIS IS A SLOT AND NOT FOLKLORE. FSI_PAGES has been published since
+; SPEC.md 53.4 and until now there was no supported way to act on it: the
+; mechanism is different on every adapter that offers one - Mode X moves the
+; CRTC start address in BYTES, a Hercules does not move it at all but flips
+; bit 7 of 3B8h, and that bit does nothing until 3BFh bit 1 allows it, which
+; vid_setmode deliberately leaves clear (SPEC.md 39.6). None of that is
+; derivable from the info block, so every app that page-flips would rediscover
+; it, and the two ways to get it wrong - writing the start address without
+; waiting for the latch, and enabling the Hercules page without its
+; configuration bit - both look like a card that has stopped working.
+;
+; It answers for the GRAPHICS modes that offer a page. Text pages are the
+; BIOS's own 4KB convention rather than this table's stride x height, and no
+; consumer here wants one; a text bracket that does can have this routine
+; learn it, which is where that belongs.
+; -----------------------------------------------------------------------------
+fsx_page:
+    push ax
+    push bx
+    push dx
+    mov ah, [fsx_task]
+    cmp ah, 0xFF
+    je .fail
+    cmp ah, [sch_cur]
+    jne .fail
+    mov ah, [fsx_cur]
+    cmp ah, FSXM_HERC
+    je .herc
+    cmp ah, FSXM_MODEX
+    jne .fail
+    cmp al, 3                       ; Mode X: three pages of 19,200 bytes,
+    jae .fail                       ; and 3 x 19,200 still fits a segment
+    mov bl, al
+    xor bh, bh
+    mov ax, 19200
+    mul bx                          ; DX:AX, and DX is 0 by construction
+    mov bx, ax
+    mov dx, 0x3D4
+    mov al, 0x0C                    ; start address high...
+    mov ah, bh
+    out dx, ax
+    mov al, 0x0D                    ; ...and low
+    mov ah, bl
+    out dx, ax
+    jmp short .sync
+.herc:
+    cmp al, 2
+    jae .fail
+    mov bl, 0x0A                    ; graphics, video on...
+    mov ah, 1                       ; ...and 3BFh bit 0 alone, which is what
+    or al, al                       ; vid_setmode leaves (SPEC.md 39.6)
+    jz .h0
+%ifdef KERN_BIG
+    call vid_dual_ok                ; **AND THE SECOND PAGE IS REFUSED ON A
+    jnc .fail                       ; MACHINE THAT HAS A COLOUR CARD TOO**
+%endif                              ; (SPEC.md 53.10). vid_setmode leaves 3BFh
+                                    ; bit 1 clear for a reason it states at the
+                                    ; write: that page is at B8000, where a CGA
+                                    ; in the same machine lives, and turning
+                                    ; the decode on puts two cards on the bus
+                                    ; for the same addresses. A bracket does
+                                    ; not make that safe, so the page is
+                                    ; refused rather than the decode forced,
+                                    ; and a lone-Hercules XT still gets it.
+                                    ; NOT [vid_ndisp]: vid_fsx_enter has
+                                    ; already forced that to 1 by the time any
+                                    ; call can reach here
+    or bl, 0x80                     ; ...and page 1
+    mov ah, 3                       ; ...whose decode has to be allowed with it
+.h0:
+    mov dx, 0x3BF                   ; ALLOW the second page: bit 0 graphics,
+    mov al, ah                      ; bit 1 the page - and bit 1 goes back off
+    out dx, al                      ; for page 0, which needs no second decode
+    mov dx, 0x3B8                   ; and is the state the desktop comes back
+    mov al, bl                      ; to
+    out dx, al
+.sync:
+    mov al, FSXW_VSYNC              ; the latch happens at the retrace, so the
+    call fsx_wait                   ; page is only really shown after one -
+    clc                             ; and fsx_wait's own timeout means a dead
+    jmp short .out                  ; status port cannot hang this
 .fail:
     stc
 .out:
@@ -640,11 +919,43 @@ fsx_bmodes:                     ; the plain-BIOS rows' mode numbers; ids 0,
     db 0x13
 
 ; --- state -------------------------------------------------------------------
+; **`.text`, SEEDED, AND NOT `.bss`** (SPEC.md 12.8.5.1). This byte used to be
+; `.bss` on the note that fsx_run writes it before anything reads it - true of
+; every reader it had, because every one of them was INSIDE a bracket, where
+; fsx_run has already stored 0xFF.
+;
+; fpg_arm's refusal (SPEC.md 12.8.5) is the first reader outside one, and it
+; runs on a machine that has never entered a bracket. `-f bin` emits nothing
+; for `.bss` (SPEC.md 2.6) and the boot read lands the image's inter-section
+; padding on these bytes, so the byte was 0 - which is FSXM_TEXT80, not
+; "unswitched" - and the progress widget was refused for every file operation
+; on the machine from boot until some fsx app had run and restored. An install
+; is minutes of int 13h behind a held gfx lock with the widget as the only
+; sign of life, so it was reported as a LOCK.
+;
+; One byte of `.text` against one given back from `.bss`, no boot-time store,
+; and the value is right from the kernel's first instruction. api_name's rule
+; and spl_fp's: a byte whose RESTING value is not zero cannot live in `.bss`
+; here.
+fsx_cur:   db 0xFF              ; the FSXM id on screen, 0xFF = unswitched
+
 section .bss
 
-fsx_cur:   resb 1               ; the FSXM id on screen, 0xFF = unswitched.
-                                ; Written by fsx_run before anything reads
-                                ; it, so it needs no boot-time init.
 fsx_evtmp: resb 8               ; fsx_restore's event-drain scratch
+%ifdef KERN_BIG
+fsx_wdisp: resb 1               ; the display the running bracket's window is
+                                ; on (SPEC.md 39.18.3). Written by fsx_run
+                                ; before the app's proc runs and read only by
+                                ; fsx_mode, so it needs no boot-time init
+                                ; either - and STILL CORRECT after the byte
+                                ; above lost the same argument (SPEC.md
+                                ; 12.8.5.1), because fsx_mode is legal only
+                                ; inside the bracket. The claim is about the
+                                ; SET OF READERS, so a new one reached from
+                                ; desktop code falsifies it - and it is the
+                                ; ONE fact fsx_run still establishes about
+                                ; displays, the acting on it having moved to
+                                ; the mode set
+%endif
 
 section .text

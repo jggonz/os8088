@@ -113,66 +113,6 @@ TLOG_KB     equ (TLOG_RECS * TLOG_RSZ + 1023) / 1024
 TLOG_LINE   equ 76                  ; 70 columns + CR LF
 TLOG_TXTKB  equ (TLOG_RECS * TLOG_LINE + 1024 + 1023) / 1024
 
-; --- the windowed pacing experiment, on the E key (SPEC.md 45.16.4) ---------
-;
-; `every` is the shipped cadence. The other two are the SAME burst - TLOG_BURST
-; rows at one per frame, then a hold until the music catches up - and they
-; differ only in what covers the hold, so the tests below are `jb` against
-; TLOG_PACE_BURST and never `jne`.
-;
-; THERE WERE SEVEN AND THERE ARE THREE, which is what the experiment was for.
-; The every-other-frame grid (45.16.3) went first, measured widest and read as
-; the worst; then the field judged the five hold animations and kept the one
-; that was not a variation on a theme - a shape expanding from the centre -
-; plus hiding the wait entirely. `bar`, `sweep` and `in` are gone.
-;
-; AND SO IS THE BEAT RULER. It was the instrument for judging evenness by eye,
-; and it made the body - and therefore the animation, which replaces the body -
-; sixteen cells wider than it needed to be, which is too wide to read as one
-; object. In a burst mode it was redundant anyway: the row it tracks is on the
-; burst grid rather than the music's. The MODE LABEL stays: it does not move,
-; so it competes with nothing.
-;
-; They are named and not lettered because the list has now been renumbered
-; three times, and a `PACE C` meaning a different thing in two builds is worse
-; than no letter at all.
-TLOG_PACE_EVERY equ 0               ; every frame - the shipped behaviour,
-                                    ;   an irregular 110/165 (45.16.2)
-TLOG_PACE_OUT   equ 1               ; burst, then stars centre -> edges
-TLOG_PACE_HIDE  equ 2               ; burst, all stars, then the letters
-                                    ;   revealed from the centre once synced
-TLOG_PACE_N     equ 3
-TLOG_PACE_BURST equ TLOG_PACE_OUT   ; the first burst mode
-
-TLOG_BURST      equ 8               ; rows in a burst; a power of two, so the
-TLOG_BURST_MASK equ (256 - TLOG_BURST) & 0xFF   ; base is one AND
-TLOG_NOBAR      equ 0xFF            ; [tlog_sweep] during a BURST: not holding,
-                                    ; and the value the hold recognises as its
-                                    ; own first frame
-TLOG_SWMAX      equ 63              ; ...so the counter saturates BELOW it -
-                                    ; and below 40h, because the visual
-                                    ; field's redraw key packs "holding, frame
-                                    ; k" into 0..3Fh and tags the other two
-                                    ; states with 40h and 80h
-TLOG_REVN       equ 4               ; frames `hide` takes to reveal the letters
-TLOG_ANIMC      equ TLOG_BODYW / 2  ; the animation's centre cell - it reaches
-                                    ; an edge in TLOG_ANIMC frames, which is
-                                    ; about a hold at one cell a frame, so it
-                                    ; needs no scale constant
-TLOG_PACEW      equ 12              ; 'PACE C bar  ' - the mode AND what its
-                                    ; hold draws, because seven of them cannot
-                                    ; be told apart by a letter alone. It is a
-                                    ; FIELD OF ITS OWN and it is never blanked:
-                                    ; it is the one thing on the line that is
-                                    ; not part of the experiment, so a label
-                                    ; blinking once a second competes with the
-                                    ; animation it is labelling
-TLOG_BODYW      equ TUI_WPOSW       ; 'Pos xx/yy  Row zz' - and the span an
-                                    ; animation covers, because it REPLACES
-                                    ; them rather than sitting beside them
-                                    ; span an animation covers, because the
-                                    ; animation REPLACES them rather than
-                                    ; sitting beside them
 
 TLOGF_REBUILD equ 1
 TLOGF_STEP    equ 2
@@ -463,57 +403,6 @@ tlog_clk_key:
     ret
 
 ; -----------------------------------------------------------------------------
-; tlog_even_key (E) - the WINDOWED readout on an even two-frame grid
-;                     (SPEC.md 45.16.3). Bench-only, like Y and T, and for the
-;                     same reason: it settles a question about what LOOKS
-;                     better, which no measurement here can answer.
-;
-; Windowed the frame is 55 ms and the row is 125, so the intervals between
-; row changes must be two frames or three - 110 ms and 165 - and that
-; alternation is the floor (45.16.2). This makes every interval a multiple of
-; TWO frames instead, by drawing on every other wake: a steady 110 with an
-; occasional 220 where the drift is taken up, rather than an irregular
-; 110/165.
-;
-; The arithmetic says this is WORSE - 110 seven times then 220 has a wider
-; spread than 110 twice then 165 - and the arithmetic is not what is being
-; asked. A rhythm the eye can lock onto may read better than a smaller but
-; irregular one. That is what the key is for.
-;
-; The bracket is left alone: it has a 54.6 Hz clock of its own (SPEC.md
-; 53.5.1) and nothing to fix.
-; -----------------------------------------------------------------------------
-tlog_even_key:
-    push ax
-    push si
-    mov al, [tlog_pace]             ; E CYCLES every -> out -> hide
-    inc al
-    cmp al, TLOG_PACE_N
-    jb .set
-    xor al, al
-.set:
-    mov [tlog_pace], al
-    mov byte [tlog_bbase], 0xFF     ; the burst restarts on the next row, with
-    mov byte [tlog_sweep], TLOG_NOBAR       ; nothing held over from the mode
-    mov byte [tlog_rev], TLOG_REVN          ; being left - a half-finished
-    mov byte [tlog_lsweep], 0               ; reveal would star the new mode's
-    mov byte [tlog_tkey], 0                 ; own first frames
-    mov byte [tlog_llbl], 0              ; ...and the LABEL has changed
-    mov byte [tui_lrow], 0xFF       ; ...and the LABEL has changed, so both
-                                    ; fields owe a redraw that no row change
-                                    ; has asked for yet
-    xor ah, ah
-    mov si, ax
-    shl si, 1
-    mov si, [tlog_pace_str + si]
-    call tui_msg
-    pop si
-    pop ax
-    ret
-
-tlog_pace_str:  dw tlog_s_eveno, tlog_s_out, tlog_s_hide
-
-; -----------------------------------------------------------------------------
 ; tlog_rate_key (K) - XT mode's SAMPLE RATE, without leaving XT mode
 ;                     (docs/FIELD-NOTES.md 16). Bench-only.
 ;
@@ -553,6 +442,11 @@ tlog_rate_key:
     shl bx, 1
     mov ax, [tlog_xrates + bx]
     mov [tlog_xrate], ax
+    mov byte [trk_xhi], 0           ; ...and the app's own byte follows, so
+    cmp ax, TRK_RATE_XT2            ; File > Xt Rate never names a rate that
+    jne .lab                        ; is not the one playing. 4,000 has no
+    mov byte [trk_xhi], 1           ; label of its own and reads as 5.5, which
+.lab:                               ; is the honest half-truth of the two
     mov si, [tlog_xrstr + bx]
     call tui_msg
     pop si
@@ -560,287 +454,46 @@ tlog_rate_key:
     pop ax
     ret
 
-tlog_xrates:    dw 4000, 5500, 11000
-tlog_xrstr:     dw tlog_s_r4, tlog_s_r55, tlog_s_r11
+; tlog_xrate_set - move K's sweep onto whatever trk_xhi now says (SPEC.md
+; 45.9.3). Called by trk_xrate_tog, so the two controls cannot disagree: this
+; file's rate is the one trk_play reads, and the app's byte is the one the
+; menu draws. Preserves everything.
+tlog_xrate_set:
+    push ax
+    push bx
+    mov bl, 0                       ; trk_xhi 0 -> index 0 (5,500)
+    mov ax, TRK_RATE_XT
+    cmp byte [trk_xhi], 0
+    je .set
+    mov bl, 2                       ; ...and 1 -> index 2 (11,000). 4,000 is
+    mov ax, TRK_RATE_XT2            ; K's alone: the shipped build has no such
+.set:                               ; rate and SPEC.md Set 20 closed it
+    mov [tlog_xrate], ax
+    mov [tlog_xr], bl
+    pop bx
+    pop ax
+    ret
+
+tlog_xrates:    dw 5500, 4000, 11000    ; 5,500 is XT mode's own rate and the
+                                        ; start, so the FIRST press is the one
+                                        ; worth testing: PERFORMANCE.md Set 20
+                                        ; makes the rate the only large lever
+                                        ; on the mixer's 45%
+tlog_xrstr:     dw tlog_s_r55, tlog_s_r4, tlog_s_r11
 tlog_xrate:     dw TRK_RATE_XT      ; the live one, and the index that names it
-tlog_xr:        db 1                ; - in the IMAGE and not in bss, because
+tlog_xr:        db 0                ; - in the IMAGE and not in bss, because
                                     ; trk_stream_open reads the rate and a
                                     ; package's bss arrives zeroed, which here
                                     ; would be a request for 0 Hz
 
-; -----------------------------------------------------------------------------
-; tlog_xtrate_stamp - put the LIVE rate into the text screen's header string
-;                     (SPEC.md 45.13's 'XT 5500 Hz' cell)
-;
-; The shipped build bakes 5,500 in because XT mode IS 5,500 Hz. Here K moves
-; it, so the screen has to say which one is running - a swept rate nobody can
-; read off the machine is not a measurement.
-;
-; Called from ttx_put's caller with SI already on the string, DI the VRAM
-; offset and AH the attribute, so it preserves EVERYTHING. [mp_mixrate] and
-; not [tlog_xrate], because what the header owes is the rate the stream was
-; OPENED at, and K takes effect at the next Play.
-; -----------------------------------------------------------------------------
-tlog_xtrate_stamp:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
-    mov di, ttx_s_xtrate + 7        ; the last of the five digits
-    mov ax, [mp_mixrate]
-    mov cx, 5
-    mov bx, 10
-.d:
-    xor dx, dx
-    div bx
-    add dl, '0'
-    mov [di], dl
-    dec di
-    loop .d
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+; tlog_xtrate_stamp is GONE: SPEC.md 45.13.7 gave the shipped build the same
+; problem K gave the bench one - a nameplate rate that is not a constant - so
+; ttx_rate_stamp does it for every build and a second stamper here would be a
+; second opinion about the same cell.
+
 tlog_s_r4:      db 'XT rate 4000 Hz - block 512ms = 4.1 rows (press Enter)', 0
 tlog_s_r55:     db 'XT rate 5500 Hz - block 372ms = 3.0 rows (press Enter)', 0
 tlog_s_r11:     db 'XT rate 11000 Hz - block 186ms = 1.5 rows (press Enter)', 0
-
-; -----------------------------------------------------------------------------
-; tlog_burst (C) - put the DISPLAYED row on a burst grid (SPEC.md 45.16.4).
-;
-; The other two modes try to be RIGHT: they show each row as near to when it
-; is played as a 55 ms frame allows, and the arithmetic then forces an
-; irregular 110/165. This one stops trying. It shows TLOG_BURST rows at ONE
-; PER FRAME - a fast, perfectly even scroll, faster than the music - and then
-; HOLDS on the last of them until the music catches up, with a sweep running
-; through the hold so the eye has something moving to follow.
-;
-; At CLICK.MOD's 125 ms row and a 55 ms frame, TLOG_BURST = 8 gives a 385 ms
-; burst and a 615 ms hold, repeating once a second. Nothing is ever late by
-; accident; the display is exactly right at every burst boundary and
-; deliberately ahead inside one.
-;
-; out: ZF=0 when the sweep moved, so the caller redraws on a frame whose ROW
-;      did not change. Every register preserved but the flags.
-; -----------------------------------------------------------------------------
-tlog_burst:
-    push ax
-    push bx
-    mov al, [tui_arow]              ; the burst this row belongs to
-    and al, TLOG_BURST_MASK         ; (a power of two, so this is the base)
-    cmp al, [tlog_bbase]
-    je .same
-    mov [tlog_bbase], al            ; a new burst: snap to its first row, start
-    mov [tlog_drow], al             ; the scroll, drop the hold's animation -
-    mov byte [tlog_sweep], TLOG_NOBAR       ; and, for G, begin the REVEAL,
-    mov byte [tlog_rev], 0                  ; because the burst starting IS
-    jmp short .show                         ; "you are synced again"
-.same:
-    mov al, [tlog_rev]              ; inside a burst: the reveal, if one is
-    cmp al, TLOG_REVN               ; running, widens a frame at a time
-    jae .norev
-    inc byte [tlog_rev]
-.norev:
-    mov al, [tlog_drow]             ; ...and one row per FRAME until the last
-    sub al, [tlog_bbase]            ; of them, then hold
-    cmp al, TLOG_BURST - 1
-    jae .hold
-    inc byte [tlog_drow]
-    jmp short .show
-.hold:                              ; the hold: [tlog_sweep] counts FRAMES
-    mov al, [tlog_sweep]            ; SINCE the burst ended, and BOTH hold
-    cmp al, TLOG_NOBAR              ; animations are a function of it - so
-    je .bang                        ; TLOG_NOBAR being the burst's own value
-    cmp al, TLOG_SWMAX              ; means "which frame is the first of the
-    jae .sw                         ; hold" needs no flag of its own, and the
-    inc al                          ; count saturates BELOW that sentinel
-    jmp short .sw
-.bang:
-    xor al, al
-.sw:
-    mov [tlog_sweep], al
-.show:
-    mov al, [tlog_drow]
-    mov [tui_arow], al              ; what every windowed drawer will quote
-    pop bx
-    pop ax
-    ret                             ; the caller compares [tlog_sweep] against
-                                    ; what it last DREW, so a fully decayed
-                                    ; bar and the whole of a burst cost no
-                                    ; drawing at all
-
-; -----------------------------------------------------------------------------
-; THE WINDOWED READOUT IS TWO FIELDS, and during a burst mode's HOLD the
-; first one is BLANK (SPEC.md 45.16.4).
-;
-;   TEXT    'PACE C bar  Pos 01  Row 12'   TLOG_TXTW cells at x = 8
-;   VISUAL  '|.#.............'             TLOG_RULEW cells, beyond it
-;
-; That split is the correction a field report forced. The burst modes hold the
-; row still while the music catches up, and the hold was covered by a small
-; animation NEXT TO a row number that had stopped - so what the eye saw was a
-; frozen number, which is the exact opposite of the thing being sold. "The
-; numbers freeze entirely, and that is not smooth." So the text POOFS on the
-; first frame of the hold and there is nothing on screen that is standing
-; still: only the animation, in the visual field, on its own.
-;
-; It also makes the whole thing affordable. The text is blanked ONCE per
-; cycle, not per frame, and the animation is TLOG_RULEW cells - ~13 ms on the
-; machine this is for (SPEC.md 6.1.1), against ~34 for the whole line.
-; -----------------------------------------------------------------------------
-
-; tlog_pace_draw - the label that says which of the seven is live, at [DI]
-;
-; The E key already SAYS which mode it moved to, and a transient message is
-; the wrong shape: what is being judged is what the line does over a minute,
-; so by the time an opinion has formed the message has gone. It is in the same
-; run as the position, so it costs no drawing call of its own.
-tlog_pace_draw:
-    push ax
-    push cx
-    push si
-    mov al, [tlog_pace]
-    xor ah, ah
-    mov cl, TLOG_PACEW              ; a fixed-width table, so there is no
-    mul cl                          ; terminator to walk
-    mov si, tlog_pace_lbl
-    add si, ax
-    mov cx, TLOG_PACEW
-.c:
-    mov al, [si]
-    mov [di], al
-    inc si
-    inc di
-    loop .c
-    pop si
-    pop cx
-    pop ax
-    ret
-
-tlog_pace_lbl:
-    db 'PACE every  ', 'BURST out   ', 'BURST hide  '
-
-; -----------------------------------------------------------------------------
-; tlog_blank - CX cells of space at [DI]
-; -----------------------------------------------------------------------------
-tlog_blank:
-    push ax
-    push cx
-    mov al, ' '
-.c:
-    mov [di], al
-    inc di
-    loop .c
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; tlog_hold_draw - the HOLD's animation at [DI], TLOG_BODYW cells - the
-;                  WHOLE body, in place of the position and the ruler
-;
-; Five of them, and they are five answers to one question: a burst mode is
-; deliberately ahead of the music and then waits, and the wait has to read as
-; punctuation rather than as a stall. Which of them does that is a claim about
-; perception, so they are all here and E cycles them.
-;
-;   C bar    a bar full at the seam, one cell shorter each frame - an impact
-;            at the front and a decay across it
-;   D sweep  one cell running the field, wrapping - the quietest: it says
-;            "still going" where the bar says "here is the seam", and it is
-;            still moving when the bar has decayed to nothing
-;   E out    a solid block growing from the centre to the edges
-;   F in     a solid block growing from the edges to the centre
-;   G hide   every cell at once, and it never changes for the whole hold -
-;            so this one costs ONE drawing call per cycle, and what it trades
-;            for that is the reveal on the far side (tlog_rev)
-;
-; in:  [tlog_sweep] = frames since the burst ended, 0 on the seam
-; -----------------------------------------------------------------------------
-tlog_hold_draw:
-    push ax
-    push bx
-    push cx
-    push dx
-    mov bl, [tlog_sweep]            ; BL = k, the frame within the hold
-    mov bh, [tlog_pace]
-    mov cx, TLOG_BODYW
-    xor dh, dh                      ; DH = the cell index
-.c:
-    cmp bh, TLOG_PACE_HIDE          ; hide: every cell, every frame - so the
-    je .lit                         ; whole hold is ONE drawing call, and what
-                                    ; it trades for that is the reveal on the
-                                    ; far side (tlog_rev)
-    mov al, dh                      ; out: lit while |i - centre| <= k, so the
-    sub al, TLOG_ANIMC              ; frame the burst ends is the centre cell
-    jns .pos                        ; alone and it reaches the edges in
-    neg al                          ; TLOG_ANIMC frames - about a hold
-.pos:
-    cmp al, bl
-    jbe .lit
-    mov al, ' '
-    jmp short .put
-.lit:
-    mov al, '*'
-.put:
-    mov [di], al
-    inc di
-    inc dh
-    loop .c
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; tlog_mask - G's REVEAL: keep the middle N cells of a CX-cell field at [DI]
-;             and star the rest
-;
-; "Instantly all to stars, wait until you are synced, then reveal the letters
-; over a few frames from the centre." The waiting is the hold (tlog_hold_draw's
-; `hide`); this is the far side of it, and it runs during the BURST - which is
-; the point: by the time anything legible is on screen the display is back in
-; step with the music, so the seam was never visible.
-;
-; in:  DI = field, CX = its width, AL = [tlog_rev] (0 = nothing, TLOG_REVN =
-;      everything). Advances nothing; the caller has already built the content.
-; -----------------------------------------------------------------------------
-tlog_mask:
-    push ax
-    push bx
-    push cx
-    push dx
-    xor ah, ah
-    mul cl                          ; AX = width * rev
-    mov bl, TLOG_REVN
-    div bl                          ; AL = revealed cells, 0..width
-    mov bl, al                      ; ...centred, so the margin is half what
-    mov al, cl                      ; is NOT revealed
-    sub al, bl
-    shr al, 1
-    mov bh, al                      ; BH = first revealed cell
-    add bl, al                      ; BL = one past the last
-    xor dh, dh
-.c:
-    cmp dh, bh
-    jb .star
-    cmp dh, bl
-    jb .keep
-.star:
-    mov byte [di], '*'
-.keep:
-    inc di
-    inc dh
-    loop .c
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
 
 ; -----------------------------------------------------------------------------
 ; tlog_tick - write one record IF the tick has moved since the last one
@@ -1010,9 +663,13 @@ tlog_dec4:
 ; bracket owns the machine until it returns (SPEC.md 53.7), so Esc first. The
 ; text is a TRANSIENT claim held across this one call - 44KB of it, which has
 ; no business living in a region that caps at 60 (SPEC.md 27.6's rule, and
-; Note Pad's) - and the write itself is ~20 seconds of floppy at the measured
-; 7,457 bytes/second (PERFORMANCE.md Part 2), which is why the status line
-; says so before it starts.
+; Note Pad's) - and the write itself is several seconds of floppy, which is why
+; the status line says so before it starts. It was estimated here at ~20 s from
+; a 7,457 bytes/second read figure that was two Part 9 rounds stale (Set 17
+; against Sets 22/24's 21,307); the honest figure is that a WRITE is not a read
+; and this path has never been timed - PERFORMANCE.md Set 24 prices a 32KB
+; create at 4.67 s and an 8KB-chunked append at 11.04 s for the same bytes, so
+; the answer depends entirely on which of those shapes this is.
 ; -----------------------------------------------------------------------------
 tlog_save:
     push ax
@@ -1288,9 +945,6 @@ tlog_s_synco:   db 'Sync ON: the screen follows the card', 0
 tlog_s_syncx:   db 'Sync OFF: the screen follows the mixer', 0
 tlog_s_clkt:    db 'Clock: one frame per tick', 0
 tlog_s_clkr:    db 'Clock: one frame per sub-tick', 0
-tlog_s_eveno:   db 'Every frame - 110/165, the shipped cadence', 0
-tlog_s_out:     db 'Burst, then stars OUT from the centre', 0
-tlog_s_hide:    db 'Burst, all stars, then the letters REVEALED', 0
 
 ; --- bss ---------------------------------------------------------------------
     TRKW tlog_seg                   ; the record claim, 0 = not armed
@@ -1309,16 +963,6 @@ tlog_s_hide:    db 'Burst, all stars, then the letters REVEALED', 0
     TRKB tlog_wloop                 ; worker loop passes since the record
     TRKB tlog_src                   ; which producer is opening this one
     TRKB tlog_nosync                ; Y: the display is back on the mixer
-    TRKB tlog_pace                  ; ...which of the three modes E has picked
-    TRKB tlog_bbase                 ; C: the burst's first row, its displayed
-    TRKB tlog_drow                  ; row, how far the hold's BANG has decayed
-    TRKB tlog_sweep                 ; - and the VISUAL field's key as last
-    TRKB tlog_lsweep                ; drawn, so neither field redraws for the
-    TRKB tlog_rev                   ; other. G's reveal progress, 0..TLOG_REVN
-    TRKB tlog_tkey                  ; what the BODY is showing: 0 animation,
-    TRKB tlog_wtk                   ; 0FFh text, 1..REVN revealing - and what
-    TRKB tlog_llbl                  ; this frame wants; plus the pace the LABEL
-                                    ; was last drawn for
     TRKW tlog_cons                  ; what the worker last saw...
     TRKW tlog_totl
     TRKB tlog_state

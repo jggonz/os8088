@@ -1,4 +1,4 @@
-; OS8088.COM - leave FreeDOS and go back to os8088 (SPEC.md 59.5).
+; OS8088.COM - leave FreeDOS and go back to os8088 (SPEC.md 86.5).
 ;
 ; NOT called EXIT.COM, which is the obvious name and does not work: EXIT is a
 ; FreeCOM INTERNAL command, and an internal command always shadows a .COM of
@@ -34,7 +34,7 @@
 ;   DOS program has hung hard enough that this one cannot be typed.
 ;
 ; The BIOS then boots drive 0 - the os8088 system disk - because the DOS floppy
-; is in drive 1 (SPEC.md 59.4). Nothing survives the switch.
+; is in drive 1 (SPEC.md 86.4). Nothing survives the switch.
 
     cpu 8086
     org 0x100

@@ -95,6 +95,15 @@ TC_WBG    equ 16                    ; windowed splash / About panel bg
 TC_WTX    equ 17                    ; ...and its text
 TC_N      equ 18
 
+; --- the scroll path's reach (SPEC.md 45.12.2) --------------------------------
+; How many rows of view movement tui_scrl will still answer with a blit. The
+; cost is 2n+1 strips against tui_draw_pat's RAB+RBE+1 - 35 on the VGA layout,
+; 29 on the Hercules one - so the arithmetic alone allows far more than this;
+; what caps it is that past a few rows the move is a SEEK rather than a late
+; frame, and a seek has nothing worth preserving in the region. Swept on the
+; 286 in SPEC.md 45.12.2.
+TUI_SCRL_MAX equ 4
+
 ; set the pen from the colour table
 %macro TSETC 1
     push ax
@@ -111,13 +120,39 @@ TC_N      equ 18
 tui_layout_init:
     push ax
     push bx
+    push dx
+    call OSAPI_VIDEO                ; AX = w, BX = h, DL = adapter, DH = bpp
+    mov [tui_scrh], bx              ; ...banked, so tui_track can tell "the
+    call tui_layout_for             ; tables are the screen's" from "the tables
+    pop dx                          ; are some bracket surface's" with a
+    pop bx                          ; compare rather than a far call per draw
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tui_layout_for - ...and the same pick for a SURFACE that is not the screen
+; in:       AX = width, BX = height, DH = bits per pixel (OSAPI_VIDEO's own
+;           three outputs, so the caller above just forwards them)
+; preserves all registers
+;
+; IT IS A PARAMETER NOW BECAUSE OF THE SECOND DISPLAY. The layout is chosen by
+; HEIGHT - it is really "which class of machine is this" - and a bracket on a
+; two-display desktop owns one display which need not be the primary and need
+; not be the same shape (SPEC.md 53.7.1): a 480-row VGA layout drawn onto a
+; 350-row Hercules loses its bottom third. tui_track re-picks per draw, which
+; costs two compares in the steady state because [tui_layh] records what the
+; live tables were picked FOR.
+; -----------------------------------------------------------------------------
+tui_layout_for:
+    push ax
+    push bx
     push cx
     push dx
     push si
     push di
-    call OSAPI_VIDEO                ; AX = w, BX = h, DL = adapter, DH = bpp
     mov [tui_vw], ax
     mov [tui_vh], bx
+    mov [tui_layh], bx
     mov byte [tui_mono], 0
     cmp dh, 1
     jne .depth
@@ -195,16 +230,63 @@ tui_track:
     push cx
     push dx
     cmp byte [trk_fs], 0            ; on the fsx surface (SPEC.md 53) the
-    je .win                         ; screen IS the content: origin 0, the
-    xor ax, ax                      ; whole adapter. fsx does not resize the
-    mov [tui_ox], ax                ; window record the way WF_FULL did, so
-    mov [tui_oy], ax                ; the kernel would answer the WINDOWED
-    mov ax, [tui_vw]                ; box - the FT2 screen is drawn from the
-    mov [tui_cw], ax                ; live adapter size instead (tui_vw/vh,
-    mov ax, [tui_vh]                ; from OSAPI_VIDEO at layout init)
+    je .win                         ; SURFACE is the content, and it is asked
+                                    ; for rather than assumed (SPEC.md 53.7.1).
+                                    ; fsx does not resize the window record the
+                                    ; way WF_FULL did, so the kernel would
+                                    ; answer the WINDOWED box - and the old
+                                    ; answer here, (0,0) plus the live adapter
+                                    ; size, is only right while the desktop is
+                                    ; ONE display: a same-mode bracket does not
+                                    ; collapse a two-display desktop (39.18.3),
+                                    ; so (0,0) is the PRIMARY and Tracker
+                                    ; fullscreened on the second monitor drew
+                                    ; the FT2 screen over the OTHER one
+    call OSAPI_FSX_SURF             ; AX = x, BX = y, CX = w, DX = h
+    jc .fsold                       ; refused: not in a bracket after all -
+                                    ; keep the historical answer rather than
+                                    ; draw at a garbage origin
+    mov [tui_ox], ax
+    mov [tui_oy], bx
+    mov [tui_cw], cx
+    mov [tui_ch], dx
+    mov [tui_vw], cx                ; ...and the fullscreen EXTENT, which most
+    mov [tui_vh], dx                ; of this file's fills reach for by name.
+                                    ; Written whatever the layout does below,
+                                    ; so a surface that shares the screen's
+                                    ; height but not its width is still right
+    cmp dx, [tui_layh]              ; ...and the layout is picked by HEIGHT, so
+    je .out                         ; a surface of a different shape from the
+    mov bx, [trk_win]               ; screen needs its own (see tui_layout_for)
+    call OSAPI_FSX_CAPS             ; DL = THIS display's VID_* kind - the only
+    mov dh, 1                       ; place the DEPTH can come from, since
+    cmp dl, VID_VGA                 ; OSAPI_VIDEO answers about the primary and
+    je .fscol                       ; the two cards of a mixed machine disagree
+    cmp dl, VID_EGA                 ; ...and EGA is that same planar 4bpp path
+    jne .fsdep                      ; at 640x350 (SPEC.md 39.24)
+.fscol:
+    mov dh, 4
+.fsdep:
+    mov ax, [tui_cw]
+    mov bx, [tui_ch]
+    call tui_layout_for
+    jmp short .out
+.fsold:
+    xor ax, ax
+    mov [tui_ox], ax
+    mov [tui_oy], ax
+    mov ax, [tui_vw]
+    mov [tui_cw], ax
+    mov ax, [tui_vh]
     mov [tui_ch], ax
     jmp short .out
 .win:
+    mov ax, [tui_layh]              ; ...and the way back: a bracket that took
+    cmp ax, [tui_scrh]              ; a differently-shaped surface left the
+    je .winok                       ; tables AND [tui_vw]/[tui_vh] picked for
+    call tui_layout_init            ; IT, and the windowed face is drawn
+.winok:                             ; against the SCREEN's class. Both come
+                                    ; back in the one call
     mov bx, [trk_win]
     call OSAPI_WM_CONTENT           ; AX = content left, DX = top
     mov [tui_ox], ax
@@ -303,7 +385,7 @@ tui_textc:                          ; SI = string, CX = x, DX = y
     push dx
     add cx, [tui_ox]
     add dx, [tui_oy]
-    call OSAPI_FONT_STR
+    call OSAPI_FONT_STR_XPARENT
     pop dx
     pop cx
     ret
@@ -321,8 +403,8 @@ tui_textc:                          ; SI = string, CX = x, DX = y
 ; Hercules and on CGA. The harness that says so is apps/fontbench, which lives
 ; on the testing branch - the numbers are recorded in 6.1.1 either way.
 ;
-; On a colour adapter [bb_on] is 0 unless Smooth borrowed the back buffer, so
-; the kernel would fall back to its own fill plus FONT_STR - a second fill of
+; On a colour adapter [vid_mono] is 0, so the kernel would fall back to its
+; own fill plus FONT_STR - a second fill of
 ; ground the caller has already covered. There it stays FONT_STR: the row
 ; band was filled once, which is cheaper than filling it again per run.
 tui_runc:
@@ -358,14 +440,48 @@ tui_runc:
     pop ax
     ret
 
-tui_charc:                          ; AL = char, CX = x, DX = y
+; tui_runo - the same run, OPAQUE ON EVERY ADAPTER (SPEC.md 45.20)
+;
+; tui_runc's gate is right for the PATTERN VIEW, whose caller fills the row band
+; once and would pay for it twice on a colour adapter - and wrong for a field
+; that owns its own background, which is every tui_rdout readout. This entry is
+; that second case: it skips the test and takes the run, so on colour
+; font_run's OWN fallback (a gfx_fill of the run's rect, then font_str over it)
+; does the fill rather than tui_rdout doing it by hand. Same pixels, one path,
+; and the pen is aligned on both adapters instead of only on mono.
+;
+; An ENTRY POINT rather than a flag argument because the five pushes and the
+; epilogue are shared exactly, and a flag would want a register nothing here has
+; spare: AL and AH are the two colour ROLES and BX is the lookup's scratch.
+tui_runo:
+    push ax
+    push bx
     push cx
     push dx
-    add cx, [tui_ox]
-    add dx, [tui_oy]
-    call OSAPI_FONT_CHAR
+    push si
+    jmp tui_runc.run
+
+; tui_charc - AL = char, CX = x, DX = y: ONE CELL, opaque
+;
+; A one-character STRING rather than a font_char, because there is no opaque
+; font_char and a run of one cell is the same call at the same cost - fractal's
+; zoom exponent took the same shape (SPEC.md 40.2.2). Its one caller,
+; tui_el_scopes, fills the cell with TC_BG and bevels it two instructions
+; earlier, so the pair is the caller's own ground and its own TC_TEXT.
+tui_charc:
+    push ax
+    push cx
+    push dx
+    push si
+    mov [tui_cbuf], al
+    mov byte [tui_cbuf + 1], 0
+    mov si, tui_cbuf
+    mov ax, (TC_BG << 8) | TC_TEXT  ; AL = ink role, AH = ground role
+    call tui_runo
+    pop si
     pop dx
     pop cx
+    pop ax
     ret
 
 tui_clipc:                          ; AX,BX,CX,DX rect -> CF=1 partly covered
@@ -512,6 +628,23 @@ tui_hex2:
     pop di
     ret
 
+; tui_hexnp - the pattern count as two hex digits, clamped.
+;
+; [mp_npat] is a WORD (SPEC.md 45.5.1) and this readout is FT2's two-digit
+; one, so the single value that does not fit - P = 256, reachable now that a
+; module may be larger than 128KB - is shown as FF rather than as AL, which
+; would print it as 00 and say the module has no patterns at all.
+tui_hexnp:
+    push ax
+    mov ax, [mp_npat]
+    cmp ax, 255
+    jbe .fits
+    mov al, 255
+.fits:
+    call tui_hex2
+    pop ax
+    ret
+
 ; tui_dec3 - AL -> tui_nbuf as three decimal digits, NUL-terminated
 tui_dec3:
     push ax
@@ -548,32 +681,36 @@ tui_dec3:
 ; seven times a second, so the field visibly strobes. Reported from the field
 ; as "windowed mode is drawing flashing characters".
 ;
-; On a mono adapter it is now ONE OSAPI_FONT_RUN (SPEC.md 6.1): the string is
-; space-padded to the field's width and a space paints background on the fast
-; path, so THE PADDING IS THE ERASE and every cell goes from its old contents
-; to its final contents in a single store. There is no moment at which the
-; field is empty.
+; It is now ONE OSAPI_FONT_RUN on EVERY adapter (SPEC.md 6.1, 45.20): the
+; string is space-padded to the field's width and a space paints background, so
+; THE PADDING IS THE ERASE and every cell goes from its old contents to its
+; final contents in one pass. There is no moment at which the field is empty.
 ;
-; Two things earn that fast path and both are needed. The window is WF_SNAP
+; On mono that pass is font_run's single-store cell path. On a colour adapter
+; font_run's own FALLBACK is a gfx_fill of the run's rect plus font_str over
+; it - which is exactly the erase-and-letter pair this routine used to write by
+; hand there, so the pixels are the same and the pen is now aligned. tui_runo
+; rather than tui_runc is what asks for that: tui_runc's mono gate is right for
+; the PATTERN VIEW, whose caller fills the row band once and would pay for it
+; twice, and wrong for a field that owns its own background.
+;
+; Two things earn the fast path and both are needed. The window is WF_SNAP
 ; (SPEC.md 11.94), so [tui_ox] is a multiple of 8; and the field's x must be
-; too, which is what the round-down below is for - font_run's fallback is
-; literally the fill-then-letter pair this routine is escaping, so an
-; unaligned run would buy nothing. Rounding DOWN rather than moving the
-; callers is safe because the up-to-7 extra pixels are inside the field's own
-; background - a value sits in a box face with its label a cell or more to
-; the left - and it makes every caller aligned, including ones not yet
+; too, which is what the round-down below is for. Rounding DOWN rather than
+; moving the callers is safe because the up-to-7 extra pixels are inside the
+; field's own background - a value sits in a box face with its label a cell or
+; more to the left - and it makes every caller aligned, including ones not yet
 ; written. The one site where the pixels to the left are NOT this field's
 ; background is the song title, whose x is 296 rather than 295 for exactly
-; this reason.
+; this reason. Measured: of every windowed readout only the STATUS LINE was
+; unaligned on VGA, and its pen moves from content x = 4 to x = 0 - where the
+; two mono adapters have always drawn it, the widening having been theirs.
 ;
-; On a colour adapter tui_runc has no fill (its callers there have already
-; filled the band), so this keeps the pair: VGA is unchanged, and VGA is not
-; where the flash was reported from.
-;
-; A string longer than the field is now TRUNCATED where it used to overflow
-; the erase rect and draw outside it. That is the better behaviour and no
-; shipped string reaches it - the widest field is the status line at ~51
-; cells and the longest message is far shorter.
+; A string longer than the field is TRUNCATED - on every adapter now - where it
+; used to overflow the erase rect and draw outside it. That is the better
+; behaviour and no shipped string reaches it: the widest field is the status
+; line, 51 cells at [tui_cw] = 418, and the longest string sent to it is
+; 'ENTER play  SPACE stop  HOME top  P pattern' at 43.
 ; -----------------------------------------------------------------------------
 ; The windowed position readout's row, measured UP from the bottom of the
 ; content. It was 22, which put it on rows [ch-22 .. ch-15] - and on the two
@@ -583,7 +720,9 @@ tui_dec3:
 ; 38 clears the splash at every geometry this window has (ch = 136 puts it at
 ; 98..105, against a keys line ending at 95) and still clears the status line.
 TUI_WPOSY   equ 38
-TUI_WPOSW   equ 17                  ; 'Pos xx/yy  Row zz'
+TUI_WPOSW   equ 9                   ; 'Pos xx/yy' - SPEC.md 45.16.6: the ROW is
+                                    ; NOT here, because windowed it cannot be
+                                    ; right and the position always is
 
 TUI_RDCELLS equ 56                  ; the widest field is [tui_cw]/8 and the
                                     ; frame is TRK_WINW = 420, so 52 cells;
@@ -598,13 +737,19 @@ tui_rdout:
     push es
     mov [tui_tcol], al
     mov [tui_ecol], ah
-    cmp byte [tui_mono], 0
-    je .keep
-    mov ax, cx                      ; mono: widen the field LEFT to the byte
-    and ax, 7                       ; boundary, so the run takes font_run's
-    sub cx, ax                      ; single-store path (see the header)
-    add bx, ax
-.keep:
+    mov ax, cx                      ; widen the field LEFT to the byte boundary
+    and ax, 7                       ; on EVERY adapter (SPEC.md 45.20). It was
+    sub cx, ax                      ; mono-only, on the premise that what an
+    add bx, ax                      ; aligned pen buys is font_run's
+                                    ; single-store cell path - which is 1bpp's
+                                    ; alone. Mode 12h is also eight pixels to a
+                                    ; byte, four planes of one bit, so an
+                                    ; unaligned cell spills into a second
+                                    ; framebuffer byte there too and font_char
+                                    ; pays a second GC8 Bit Mask `out` plus a
+                                    ; second latched read-modify-write for it,
+                                    ; once per row per cell (11.94). VGA gains
+                                    ; 9.4% against mono's 3.4%
     mov [tui_rdw], bx
     mov [tui_rdx], cx
     mov [tui_rdy], dx
@@ -616,8 +761,6 @@ tui_rdout:
     add dx, 7                       ; y2
     call tui_clipc
     jc .out
-    cmp byte [tui_mono], 0
-    je .pair
     push ds                         ; stosb writes through ES, and ES is
     pop es                          ; KERNEL_SEG on entry to a callback
     cld
@@ -648,25 +791,9 @@ tui_rdout:
     mov dx, [tui_rdy]
     mov al, [tui_tcol]
     mov ah, [tui_ecol]
-    call tui_runc
-    jmp short .out
-.pair:
-    mov ax, [tui_rdx]               ; colour: the erase-and-letter pair, as
-    mov bx, [tui_rdy]               ; before - tui_runc does not fill there
-    mov cx, [tui_rdw]
-    add cx, ax
-    dec cx
-    mov dx, bx
-    add dx, 7
-    mov al, [tui_ecol]
-    call tui_setcol
-    call tui_fillc
-    mov al, [tui_tcol]
-    call tui_setcol
-    mov cx, [tui_rdx]
-    mov dx, [tui_rdy]
-    call tui_textc
-.out:
+    call tui_runo               ; opaque on BOTH adapters now (SPEC.md 45.20):
+.out:                           ; on colour font_run's own fallback is the fill
+                                ; and the font_str this used to write by hand
     pop es
     pop di
     pop si
@@ -702,7 +829,7 @@ tui_msg_draw:
     mov si, [tui_msgp]
     or si, si
     jnz .have
-    mov si, tui_s_hint
+    call tui_hintp
 .have:
     cmp byte [trk_fs], 0
     je .win
@@ -946,8 +1073,7 @@ tui_val_ptn:
     mov ah, TC_FACE
     mov al, TC_FACET
     call tui_rdout
-    mov al, [mp_npat]
-    call tui_hex2
+    call tui_hexnp
     mov si, tui_nbuf
     mov cx, 258
     mov dx, 64
@@ -1078,8 +1204,7 @@ tui_el_ptn:
     mov cx, 210
     mov dx, 64
     call tui_textc
-    mov al, [mp_npat]
-    call tui_hex2
+    call tui_hexnp
     mov si, tui_nbuf
     mov cx, 258
     call tui_textc
@@ -1110,7 +1235,7 @@ tui_el_status:
     mov si, [tui_msgp]
     or si, si
     jnz .have
-    mov si, tui_s_hint
+    call tui_hintp
 .have:
     TSETC TC_STATT
     mov cx, [tui_lay + TL_STX]
@@ -2151,6 +2276,9 @@ tui_xt_on:
     ret
 
 tui_draw_pat:
+%ifdef TRKDBG
+    inc word [tds_pat]              ; tests/trkscrl.inc
+%endif
     push ax
     push bx
     push cx
@@ -2198,14 +2326,43 @@ tui_draw_pat:
     ret
 
 ; -----------------------------------------------------------------------------
-; tui_scrl - the one-row scroll path (SPEC.md 45.12): when the view moved by
-; exactly one row inside one pattern/position, the row area's content is the
-; same pixels eight rows away - scroll the upper and lower regions (the band
-; between them breaks the 8-row rhythm, so they move separately) and repaint
-; three strips: band, the strip that left it, the row entering at the far
-; edge. out CF=0 done (markers updated); CF=1 not eligible, or gfx_scroll
-; refused (a clip cutting the area - the dialog) - caller runs tui_draw_pat,
-; whose per-strip gates are then the correct renderer.
+; tui_scrl - the scroll path (SPEC.md 45.12): when the view moved by a few rows
+; inside one pattern/position, the row area's content is the same pixels 8n
+; rows away - scroll the upper and lower regions (the band between them breaks
+; the 8-row rhythm, so they move separately) and relight 2n+1 strips: the n
+; that entered each region at its far edge, and the band. out CF=0 done
+; (markers updated); CF=1 not eligible, or gfx_scroll refused (a clip cutting
+; the area - the dialog) - caller runs tui_draw_pat, whose per-strip gates are
+; then the correct renderer.
+;
+; N IS NOT 1, AND THAT IS THE WHOLE OF SPEC.md 45.12.2. A frame that arrives
+; late sees the view two rows on, and a path that only knew ONE row handed
+; that frame to tui_draw_pat - 35 strips on the VGA layout against the three
+; a scroll costs. The full repaint then takes longer than the frame it was
+; drawn in, the next frame is later still, and the machine settles into
+; repainting the whole grid at every row change: the failure is a RATCHET, not
+; a slowdown, and it reads on the screen as a pattern view that has stopped
+; scrolling and started re-lettering itself. Reproduced under QEMU at
+; `-icount shift=9`, which is about the 12.5 MHz 286 the field reported it
+; from, with that report's module (125 BPM, speed 6 - 8.3 rows a second
+; against the tick's 18.2 frames): the counters in this file read 6.8 scrolls
+; and 0.72 full repaints a second, where the music only turns the pattern
+; over once every 7.7 s. It is 8.2 and 0.13 now - every row change scrolled,
+; and every repaint a pattern. THE SECOND FIGURE IS AN INSTRUCTION COUNT
+; STANDING IN FOR A CLOCK: QEMU charges nothing for the VGA's bus, so the real
+; machine spends more of its frame drawing than this and the ratchet shuts
+; harder there, not softer.
+;
+; The generalisation is exact rather than approximate: n rows of view is 8n
+; pixels of content, one gfx_scroll each way still, and the strips that need
+; relighting are the n at the region's trailing edge instead of the one. So
+; the cost is 2n+1 strips and the ceiling is where that stops beating
+; tui_draw_pat's RAB+RBE+1.
+;
+; TUI_SCRL_MAX is that ceiling and it is a MEASUREMENT, not a guess: see
+; SPEC.md 45.12.2 for the sweep. Past it the jump is a seek rather than a late
+; frame - a pattern loop, a HOME, an Up/Down held down - and the region has
+; too little left in it to be worth preserving.
 ; -----------------------------------------------------------------------------
 tui_scrl:
     push ax
@@ -2222,25 +2379,31 @@ tui_scrl:
     jne .no
     call tui_viewrow                ; [tui_cvr] = the row the band shows now
     mov al, [tui_cvr]
-    sub al, [tui_lcvr]
-    cmp al, 1
-    je .up
-    cmp al, -1
-    jne .no
-    mov si, -8                      ; view moved up: content moves down
-    jmp .go
-.up:
-    mov si, 8                       ; view advanced: content moves up
-.go:
+    sub al, [tui_lcvr]              ; both are 0..63, so the byte difference is
+    cbw                             ; a signed row delta and cbw is exact
+    or ax, ax
+    jz .no                          ; nothing moved: the caller's own gate has
+    mov si, ax                      ; already decided otherwise, so this is a
+    jns .npos                       ; belt rather than a path
+    neg ax
+.npos:
+    cmp ax, TUI_SCRL_MAX
+    ja .no                          ; too far to be a late frame (see above)
+    mov [tui_srn], ax               ; AX = n from here to the strip runs
+    mov cl, 3
+    shl si, cl                      ; SI = 8n, SIGNED: positive moves the
+                                    ; content UP, which is the view advancing
     mov ax, [tui_lay + TL_RAB]      ; upper region: ROWT .. ROWT + RAB*8 - 1
     mov cl, 3
     shl ax, cl
-    mov bx, [tui_lay + TL_ROWT]
-    mov dx, bx
-    add dx, ax
-    dec dx
-    xor ax, ax                      ; full width: x2+1 = vid_w, a multiple
-    mov cx, [tui_vw]                ; of 8 on all three adapters
+    mov bx, [tui_lay + TL_ROWT]     ; THE TWO RAW SITES IN THIS FILE - every
+    add bx, [tui_oy]                ; other drawing call goes through the
+    mov dx, bx                      ; tui_*c helpers, which add the origin. On
+    add dx, ax                      ; a bracket that origin is the DISPLAY's
+    dec dx                          ; now and not (0,0) (SPEC.md 53.7.1), so a
+    mov ax, [tui_ox]                ; scroll left here would move the primary's
+    mov cx, ax                      ; pixels while the rest of the screen drew
+    add cx, [tui_cw]                ; on the second monitor
     dec cx
     call OSAPI_GFX_SCROLL
     jc .no
@@ -2248,56 +2411,97 @@ tui_scrl:
     mov cl, 3
     shl ax, cl
     mov bx, [tui_lay + TL_LOWY]
+    add bx, [tui_oy]
     mov dx, bx
     add dx, ax
     dec dx
-    xor ax, ax
-    mov cx, [tui_vw]
+    mov ax, [tui_ox]
+    mov cx, ax
+    add cx, [tui_cw]
     dec cx
     call OSAPI_GFX_SCROLL
     jc .no                          ; half-scrolled: the full repaint the
                                     ; caller falls back to repairs it whole
-    mov al, [tui_cvr]               ; the three strips (SPEC.md 45.12)
+    mov al, [tui_cvr]               ; the 2n+1 strips (SPEC.md 45.12)
     cbw
     mov byte [tui_band], 0
     or si, si
     js .dstrips
-    mov bx, ax                      ; up: the strip that LEFT the band is
-    dec bx                          ; row view-1, the last upper strip...
-    mov dx, [tui_lay + TL_RAB]
-    dec dx
+
+    ; --- the view ADVANCED n rows: the last n strips of each region ----------
+    mov bx, ax                      ; upper: rows view-n .. view-1, ending at
+    sub bx, [tui_srn]               ; the strip immediately above the band
+    mov [tui_sru], bx
+    mov bx, [tui_lay + TL_RAB]
+    sub bx, [tui_srn]
     mov cl, 3
-    shl dx, cl
-    add dx, [tui_lay + TL_ROWT]
-    call tui_row1
-    mov bx, ax                      ; ...and row view+RBE enters at the
-    add bx, [tui_lay + TL_RBE]      ; last lower strip
-    mov dx, [tui_lay + TL_RBE]
-    dec dx
+    shl bx, cl
+    add bx, [tui_lay + TL_ROWT]
+    mov [tui_sruy], bx
+    mov bx, ax                      ; lower: rows view+RBE-n+1 .. view+RBE,
+    add bx, [tui_lay + TL_RBE]      ; ending at the region's bottom strip
+    sub bx, [tui_srn]
+    inc bx
+    mov [tui_srl], bx
+    mov bx, [tui_lay + TL_RBE]
+    sub bx, [tui_srn]
     mov cl, 3
-    shl dx, cl
-    add dx, [tui_lay + TL_LOWY]
-    call tui_row1
-    jmp .band
+    shl bx, cl
+    add bx, [tui_lay + TL_LOWY]
+    mov [tui_srly], bx
+    jmp short .strips
+
+    ; --- ...or moved BACK n: the first n strips of each region ---------------
 .dstrips:
-    mov bx, ax                      ; down: row view-RAB enters at the first
-    sub bx, [tui_lay + TL_RAB]      ; upper strip...
-    mov dx, [tui_lay + TL_ROWT]
+    mov bx, ax
+    sub bx, [tui_lay + TL_RAB]      ; upper: rows view-RAB .. view-RAB+n-1
+    mov [tui_sru], bx
+    mov bx, [tui_lay + TL_ROWT]
+    mov [tui_sruy], bx
+    mov bx, ax
+    inc bx                          ; lower: rows view+1 .. view+n
+    mov [tui_srl], bx
+    mov bx, [tui_lay + TL_LOWY]
+    mov [tui_srly], bx
+
+.strips:
+    push ax                         ; AX = the view row, wanted by the band
+    mov cx, [tui_srn]
+    mov bx, [tui_sru]
+    mov dx, [tui_sruy]
+.ustrip:
+    push cx
     call tui_row1
-    mov bx, ax                      ; ...and the strip that LEFT the band is
-    inc bx                          ; row view+1, the first lower strip
-    mov dx, [tui_lay + TL_LOWY]
+    pop cx
+    inc bx
+    add dx, 8
+    loop .ustrip
+    mov cx, [tui_srn]
+    mov bx, [tui_srl]
+    mov dx, [tui_srly]
+.lstrip:
+    push cx
     call tui_row1
-.band:
+    pop cx
+    inc bx
+    add dx, 8
+    loop .lstrip
+    pop ax
     mov bx, ax                      ; the band itself, on the new view row
     mov byte [tui_band], 1
     mov dx, [tui_lay + TL_BANDY]
     call tui_row1
     mov byte [tui_band], 0
     call tui_marks
+%ifdef TRKDBG
+    inc word [tds_scrl]             ; tests/trkscrl.inc
+%endif
     clc
     jmp .out
 .no:
+%ifdef TRKDBG
+    inc word [tds_no]               ; tests/trkscrl.inc
+%endif
     stc
 .out:
     pop di
@@ -2597,6 +2801,10 @@ tui_draw_all:
     jmp .about
 .win:
     TSETC TC_WBG                    ; the windowed splash card
+    mov byte [tui_wdrawn], 0        ; ...which covers the readout, and the
+                                    ; position may not move again for nine
+                                    ; seconds, so the marker alone would leave
+                                    ; the line blank until it did
     xor ax, ax
     xor bx, bx
     mov cx, [tui_cw]
@@ -2623,9 +2831,16 @@ tui_draw_all:
     mov si, tui_s_keys2
     mov dx, 88
     call tui_cline
-    mov si, tui_s_anykey
-    mov dx, 108
-    call tui_cline
+    mov si, tui_s_anykey            ; ...and NOT while 11 kHz is picked, where
+    call trk_fs_ok                  ; F and the click are both refused
+    jnc .hint                       ; (SPEC.md 45.9.3). View > Fullscreen is
+    mov si, tui_s_nofs              ; greyed on the same predicate; a legend
+.hint:                              ; is the one place with no greying to do
+    mov dx, 108                     ; the explaining, so it says the other
+    call tui_cline                  ; thing instead. The tree has been here
+                                    ; before: trk_s_stopdf's own comment is
+                                    ; about a legend that went on advertising
+                                    ; a key it was written to stop advertising
     call tui_msg_draw
 .about:
     cmp byte [trk_abon], 0
@@ -2730,6 +2945,9 @@ tui_cline:
 ;                the top band every 16th call
 ; -----------------------------------------------------------------------------
 tui_draw_dyn:
+%ifdef TRKDBG
+    inc word [tds_frame]            ; tests/trkscrl.inc
+%endif
     push ax
     push bx
     push cx
@@ -2840,16 +3058,21 @@ tui_draw_dyn:
 .win:
     cmp byte [mp_playing], 0        ; windowed: a live position line on the
     je .out                         ; splash while something plays
-%ifndef TRKLOG
-    mov al, [tui_arow]
-    cmp al, [tui_lrow]
-    jne .wupd
+    ; ONLY when it changes - and what changes is the POSITION alone, once every
+    ; 64 rows. It used to compare the row too, so this drew a 17-cell run seven
+    ; times a second on Beverly, a millisecond a cell (SPEC.md 6.1.1), for a
+    ; number that windowed cannot be right anyway (SPEC.md 45.16.5/45.16.6).
+    ; [tui_wdrawn] is the "is it on screen" half, because a repaint fills the
+    ; card and the position may not move again for nine seconds - the same trap
+    ; a zeroed bss marker sets, one step further along: here the marker is
+    ; correct and the PIXELS are gone.
+    cmp byte [tui_wdrawn], 0
+    je .wupd
     mov al, [tui_apos]
     cmp al, [tui_lpos]
     je .out
 .wupd:
-    mov al, [tui_arow]
-    mov [tui_lrow], al
+    mov byte [tui_wdrawn], 1
     mov al, [tui_apos]
     mov [tui_lpos], al
     mov di, tui_pbuf
@@ -2858,105 +3081,6 @@ tui_draw_dyn:
     mov byte [di], 0
     mov cx, 8
     call tui_wfld
-%else
-; --- the bench readout: a fixed LABEL and a BODY the hold takes over --------
-;
-;   LABEL  'PACE every  '          TLOG_PACEW cells at x = 8
-;   BODY   'Pos 01/04  Row 12'      TLOG_BODYW cells, beyond it
-;
-; The label is NEVER blanked and changes only when the mode does: it is the one
-; thing on the line that is not part of the experiment, and a label blinking
-; once a second competes with the animation it is labelling.
-;
-; The body is everything that is part of it - the position and the row - and
-; in a burst mode the hold REPLACES it, whole. That is the
-; point rather than a saving: a frozen row number beside a moving animation is
-; a frozen row number, so there is no number, and the animation is where the
-; numbers were rather than off to one side of them.
-;
-; [tlog_tkey] is what the body is currently SHOWING - 0 an animation, 0FFh the
-; text, 1..TLOG_REVN a `hide` reveal in progress - so it redraws only when its
-; own content moved.
-    cmp byte [tlog_pace], TLOG_PACE_BURST
-    jb .nob
-    call tlog_burst                 ; the burst grid: rewrites [tui_arow] and
-.nob:                               ; steps [tlog_sweep]/[tlog_rev]
-    mov al, [tlog_pace]             ; --- the LABEL, on a mode change alone ---
-    inc al                          ; ...stored PLUS ONE, because a package's
-    cmp al, [tlog_llbl]             ; bss arrives zeroed and mode 0 is a real
-    je .body                        ; mode: at 0 == 0 the label would match
-    mov [tlog_llbl], al             ; before it had ever been drawn and never
-    dec al                          ; be drawn at all
-    mov di, tui_pbuf
-    call tlog_pace_draw
-    mov byte [di], 0
-    mov bx, TLOG_PACEW * 8
-    mov cx, 8
-    call tui_wfld
-.body:
-    mov ah, 0xFF                    ; AH = the body state this frame wants
-    cmp byte [tlog_pace], TLOG_PACE_BURST
-    jb .tk
-    cmp byte [tlog_sweep], TLOG_NOBAR
-    jne .hold
-    cmp byte [tlog_pace], TLOG_PACE_HIDE
-    jne .tk                         ; the other four come straight back to the
-    mov al, [tlog_rev]              ; text; only `hide` reveals it
-    cmp al, TLOG_REVN
-    jae .tk
-    mov ah, al
-    inc ah                          ; 1..TLOG_REVN, never 0 (that is the
-    jmp short .tk                   ; animation)
-.hold:
-    xor ah, ah
-.tk:
-    mov [tlog_wtk], ah
-    cmp ah, [tlog_tkey]
-    jne .wupd                       ; the state moved
-    or ah, ah
-    jnz .ntext
-    mov al, [tlog_sweep]            ; an animation: redraw when its frame moved
-    cmp al, [tlog_lsweep]
-    jne .wupd
-    jmp .out
-.ntext:
-    mov al, [tui_arow]
-    cmp al, [tui_lrow]
-    jne .wupd
-    mov al, [tui_apos]
-    cmp al, [tui_lpos]
-    jne .wupd
-    jmp .out
-.wupd:
-    mov al, [tui_arow]
-    mov [tui_lrow], al
-    mov al, [tui_apos]
-    mov [tui_lpos], al
-    mov al, [tlog_sweep]
-    mov [tlog_lsweep], al
-    mov al, [tlog_wtk]
-    mov [tlog_tkey], al
-    mov di, tui_pbuf
-    or al, al
-    jnz .thave
-    call tlog_hold_draw             ; the hold owns the whole body
-    jmp short .tdraw
-.thave:
-    call tui_wpos
-    mov al, [tlog_tkey]
-    cmp al, 0xFF
-    je .tdraw
-    mov di, tui_pbuf                ; a `hide` reveal: star everything outside
-    mov cx, TLOG_BODYW              ; the middle, widening each frame
-    call tlog_mask
-.tdraw:
-    mov di, tui_pbuf
-    add di, TLOG_BODYW
-    mov byte [di], 0
-    mov bx, TLOG_BODYW * 8
-    mov cx, 8 + TLOG_PACEW * 8
-    call tui_wfld
-%endif
 .out:
     pop di
     pop si
@@ -2975,6 +3099,17 @@ tui_draw_dyn:
 ; that row and they redraw on different things - the text on a row change, the
 ; hold's animation on a frame - so neither may redraw for the other.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; tui_hintp - SI = the status legend this SURFACE should carry
+; -----------------------------------------------------------------------------
+tui_hintp:
+    mov si, tui_s_hint
+    cmp byte [trk_fs], 0
+    je .out
+    mov si, tui_s_hintf
+.out:
+    ret
+
 tui_wpos:
     push ax
     push si
@@ -2982,16 +3117,12 @@ tui_wpos:
     call tui_scpy
     mov al, [tui_apos]
     call tui_hexb
-    mov byte [di], '/'              ; ...OF the song's length, because a bare
-    inc di                          ; 'Pos 09' beside a row counter running at
-    mov al, [mp_songlen]            ; eight a second reads as a dead field -
-    call tui_hexb                   ; it steps once every 64 rows, which at
-    mov si, tui_s_rowl              ; Beverly's tempo is 8.9 SECONDS, and the
-    call tui_scpy                   ; denominator is what says so
-    mov al, [tui_arow]
-    call tui_hexb
-    pop si
-    pop ax
+    mov byte [di], '/'              ; ...OF the song's length. A bare 'Pos 09'
+    inc di                          ; steps once every 64 rows, which at
+    mov al, [mp_songlen]            ; Beverly's tempo is 8.9 SECONDS, and with
+    call tui_hexb                   ; no row counter beside it the denominator
+    pop si                          ; is the only thing saying the field is
+    pop ax                          ; alive rather than stuck
     ret
 
 tui_wfld:
@@ -3128,7 +3259,11 @@ tui_s_spdc:  db 'SPD:', 0
 tui_s_posc:  db 'POS:', 0
 tui_s_ptnc:  db 'PTN:', 0
 tui_s_posl:  db 'Pos ', 0
-tui_s_rowl:  db '  Row ', 0
+
+; "is the windowed readout on the glass" - .text, not bss, because it wants a
+; real initialiser and every launch reloads the image (SPEC.md 20.1), so a
+; fresh instance starts owing the line rather than believing it drew one.
+tui_wdrawn:  db 0
 
 ; the FT2 button stacks (decorative in v1; each names its key)
 tui_mbl:     dw tui_b_about, tui_b_mute, tui_b_scroll, tui_b_pos, tui_b_exit, 0
@@ -3149,18 +3284,37 @@ tui_b_full:  db 'Full F', 0
 tui_s_splash1: db 'T R A C K E R', 0
 tui_s_splash2: db 'A FastTracker II style MOD player', 0
 tui_s_none:    db 'No module loaded', 0
-tui_s_keys1:   db 'ENTER play  SPACE stop  P pattern', 0
-tui_s_keys2:   db 'ARROWS position  1-4 mute  L load  X xt', 0
+tui_s_keys1:   db 'ENTER play  SPACE stop  HOME top  P pattern', 0
+tui_s_keys2:   db 'ARROWS position  1-4 mute  L load  X xt  V screen', 0
+                                    ; 'a key nothing names is a key nobody
+                                    ; finds' (just below) applies to V as much
+                                    ; as it did to the bench keys, and the
+                                    ; SURFACE is the one setting whose effect
+                                    ; is invisible until F is pressed
+                                    ; (SPEC.md 45.13.7). 49 cells against
+                                    ; tui_cline's centred [tui_cw] = 418 = 52,
+                                    ; and tui_cw does not move with the
+                                    ; adapter - only tui_ch does - so this
+                                    ; fits on all three of SPEC.md 39's
 %ifdef TRKLOG                       ; the bench keys are on screen, because a
                                     ; key nothing names is a key nobody finds:
                                     ; this line said 'P pattern' one row above
                                     ; it and P was reached for as the pace
                                     ; cycler for a whole round of testing
-tui_s_anykey:  db 'F full  E pace ABCD  K rate  D log  W write  M mark', 0
+tui_s_anykey:  db 'F full  K rate  D log  W write  M mark', 0
 %else
 tui_s_anykey:  db 'Press F or click for fullscreen', 0
 %endif
-tui_s_hint:    db 'ENTER play  SPACE stop  L load', 0
+tui_s_nofs:    db 'Full screen needs Rate 5.5 kHz', 0
+; Two status legends, because L IS REFUSED on the exclusive surface
+; (SPEC.md 53.7 - the file dialog's answer comes back through an event ladder a
+; bracket is not running) and offering a key that answers "not here" is worse
+; than not offering it. The refusal stays: a key the user presses anyway still
+; says WHY, which is SPEC.md 47 rule 3's shape - the greyed thing explains
+; itself and the unlisted thing has to.
+tui_s_hint:    db 'ENTER play  SPACE stop  HOME top  L load', 0
+tui_s_hintf:   db 'ENTER play  SPACE stop  F/ESC', 0
+
 
 ; the About panel
 tui_ablines:
@@ -3176,8 +3330,12 @@ tui_ab5:     db 'Any key closes', 0
 ; =============================================================================
     TRKB tui_inited                 ; layout + colours are live
     TRKB tui_mono                   ; 1bpp adapter (SPEC.md 39.4)
-    TRKW tui_vw                     ; the live screen (OSAPI_VIDEO)
-    TRKW tui_vh
+    TRKW tui_vw                     ; the surface the LAYOUT was picked for -
+    TRKW tui_vh                     ; the screen windowed, the bracket's own
+                                    ; display inside one (SPEC.md 53.7.1)
+    TRKW tui_layh                   ; ...its height, so a re-pick is a compare
+    TRKW tui_scrh                   ; ...and the SCREEN's, so the way back out
+                                    ; of a bracket is one too
     TRKW tui_ox                     ; content origin + size, re-read per draw
     TRKW tui_oy
     TRKW tui_cw
@@ -3187,6 +3345,11 @@ tui_ab5:     db 'Any key closes', 0
     TRKW tui_chend                  ; right edge of the channel block
     TRKW tui_rend                   ; right edge of a row strip
     TRKW tui_vuw                    ; volume bar full width
+    TRKW tui_srn                    ; the scroll's row delta n (SPEC.md 45.12.2)
+    TRKW tui_sru                    ; first row to relight in the upper region
+    TRKW tui_sruy                   ; ...and that strip's y
+    TRKW tui_srl                    ; the same pair for the lower region
+    TRKW tui_srly
     TRKB tui_vrow                   ; the Up/Down scroll row while stopped
     TRKB tui_cvr                    ; the view row this frame
 
@@ -3218,6 +3381,7 @@ tui_ab5:     db 'Any key closes', 0
                                     ; view's start/stop transition (45.9.1)
     TRKW tui_rrole                  ; tui_row1's ink/background role pair
     TRKB tui_rbg                    ; tui_runc's resolved background colour
+    TRKBUF tui_cbuf, 2              ; tui_charc's one character and its NUL
     TRKB tui_vonly                  ; 1 = draw an element's VALUES only, the
                                     ; face/bevel/labels being on screen already
     TRKB tui_lrow                   ; last-drawn markers for tui_draw_dyn

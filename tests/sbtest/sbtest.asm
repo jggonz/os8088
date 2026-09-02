@@ -91,13 +91,16 @@ sb_paint:
     call OSAPI_SET_COLOR
     add dx, 12
     mov si, sb_s1                   ; 'g:<offset> o:<result>'
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     add dx, 16
     mov si, sb_s2                   ; 'st:<state> c:<consumed>'
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     add dx, 16
     mov si, sb_s3                   ; the legend
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = this window's ground
+    call OSAPI_FONT_RUN
     pop si
     pop dx
     pop cx

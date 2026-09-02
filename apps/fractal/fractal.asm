@@ -82,7 +82,6 @@
 ; A refused claim degrades one rung further, to the pre-cache behaviour of a
 ; repaint being a restart, and is retried on every kick.
 ;
-; Colors beyond 0/15 retire [bb_mono] (SPEC.md 32) - supported, expected.
 ; On a 1bpp adapter (SPEC.md 39.4) the entry proc defaults to the Contour
 ; palette, whose 48 entries use only the white and dither classes in runs of
 ; four: twelve legible contour bands, and the interior is then the ONLY
@@ -188,10 +187,28 @@ FT_SIZE     equ 16
 ; the desktop is 156 rows and the content becomes 320x137.
 FR_STRIP_H  equ 10                  ; status strip: content rows 0..9
 FR_TXT_Y    equ 1                   ; text baseline inside the strip
-FR_X_ZOOM   equ 130                 ; status strip column layout
-FR_X_ZNUM   equ 170
-FR_X_PCT    equ 200
-FR_X_PAL    equ 250
+; Status strip column layout, EVERY COLUMN A MULTIPLE OF 8 (SPEC.md 11.94.3).
+; They were 2, 130, 170, 200, 250 - four of the five at 2 mod 8, which the
+; SNAPAUDIT histogram saw as 2,323 of 2,801 sampled glyphs in bucket 2, the
+; worst entry in the survey. The content origin is a multiple of 8 (11.94.1),
+; so a pen's offset mod 8 IS its screen phase, and on the two mono adapters an
+; aligned pen is what earns OSAPI_FONT_RUN's single-store cell path (6.1).
+; They all moved LEFT except the name, because FR_X_PAL + 'Spectrum' is 312 of
+; a 320px content and there is nowhere to the right to go.
+FR_X_NAME   equ 8                   ; ...and the name moved right, off the
+                                    ; border: 0 would abut the window frame
+FR_X_ZOOM   equ 128
+FR_X_ZNUM   equ 168
+FR_X_PCT    equ 200                 ; the one that was already aligned
+FR_X_PAL    equ 248
+FR_PCT_CELLS equ 5                  ; the percentage field's WIDTH in cells:
+                                    ; '100%' is four and the run is padded to
+                                    ; five, so it erases whatever the last one
+                                    ; wrote whether that was longer or shorter.
+                                    ; Asserted against fr_numbuf at the foot of
+                                    ; this file, because these bss offsets are
+                                    ; hand-computed and the gap to fr_line is
+                                    ; exactly six bytes
 
 ; --- the restore cache (see the file header) -----------------------------------
 ; ONE WORD per run: colour in bits 15..12, the run's last column in 11..0.
@@ -539,6 +556,27 @@ fr_hire:
     cmp byte [fr_spawned], 1
     je .out                         ; we own one already: a second
                                     ; OSAPI_TASK_SPAWN would only be refused
+    mov al, 1                       ; PARK-SAFE (SPEC.md 66.5.4): nothing here
+    call OSAPI_MEM_PARKSAFE         ; holds a cache-derived pointer across a
+                                    ; call that can yield. The worker's ONLY
+                                    ; lock site is fr_emit, which takes the
+                                    ; lock and then calls fr_emit_body - and
+                                    ; the body re-reads [fr_cseg] rather than
+                                    ; inheriting it, so the interval spent
+                                    ; blocked in OSAPI_GFX_LOCK holds nothing
+                                    ; at all. fr_take DOES hold [fr_cseg] in
+                                    ; AX for its whole walk, and is lock-free,
+                                    ; but a task pre-empted there is not
+                                    ; parked: this marks the task only while
+                                    ; it is descheduled INSIDE gfx_lock.
+                                    ; It is a WIDENING here and not the thing
+                                    ; that makes the cache movable (SPEC.md
+                                    ; 66.5.7.2) - this worker sleeps between
+                                    ; passes and reaches OSAPI_TASK_ALIVE
+                                    ; inside INST_PARKW anyway, measured. What
+                                    ; it buys is the pass where the worker
+                                    ; happens to be waiting on a lock some
+                                    ; long repaint is holding
     mov ax, fr_worker               ; a whole-word package address: os88pkg
     mov bx, [fr_win]                ; relocates it as class 0 (SPEC.md 20.2)
     call OSAPI_TASK_SPAWN           ; CF=1 refused, nothing was created
@@ -567,9 +605,7 @@ fr_nowork:
     push cx
     push dx
     push si
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov si, fr_s_now1
+    mov si, fr_s_now1               ; no pen: .line carries its own pair
     mov bx, -10
     call .line
     mov si, fr_s_now2
@@ -598,7 +634,62 @@ fr_nowork:
 .y_ok:
     add dx, [fr_oy]
     add dx, FR_STRIP_H
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the canvas's own ground -
+    call OSAPI_FONT_RUN             ; fr_clear/wm_paint_all just laid it down
+    ret
+
+; -----------------------------------------------------------------------------
+; fr_promise - "the picture has stopped moving" / "it is being drawn"
+; in:  [fr_pass], [fr_win]; THE GFX LOCK HELD BY THE CALLER
+; out: nothing (every register and the flags preserved)
+;
+; SPEC.md 40.4, which is SPEC.md 11.96.1's promise answered per FRAME.
+;
+; This app is the disqualifier in its purest form while it renders - the
+; worker emits a band a row and goes on doing it with the window buried,
+; because fr_emit_body only makes the PAINTING conditional on visibility and
+; caches and steps regardless (that is what makes uncovering cheap) - and it
+; is the flattest window in the tree once the frame lands. Pass 3 is the
+; whole distinction: at pass 3 the worker takes .idle and sleeps, arming no
+; clip and touching no pixel until a menu command or a repaint moves it.
+;
+; So the promise is [fr_pass] >= 3, and the three sites below are every place
+; that word changes under a lock: fr_kick resets it to 0, fr_redraw
+; republishes a resume point, and fr_advance steps it - the last of which is
+; the only one that can ever reach 3.
+;
+; NO DEPTH CLAIM (SPEC.md 11.96.17): the canvas is sixteen colours by
+; construction - fr_emit_body sets the pen per run from the palette - so a
+; two-colour claim would be a lie. It does not need one: a 322x199 window is
+; 320x180 of content and 30,254 bytes at four planes, inside wm_su_kb's
+; 64,512 ceiling with room over.
+;
+; THE LOCK IS A CONDITION, NOT POLITENESS (SPEC.md 20.6 rule 7): the clear
+; frees the raise cache, so a worker calling it outside a hold could free a
+; buffer the UI task is blitting out of. The one worker-side site is inside
+; fr_emit_body's hold.
+;
+; The window pointer comes from [fr_win] and not from whatever BX holds -
+; SPEC.md 11.96.11.4, where a screen HEIGHT reached the kernel as a window
+; record and set a bit inside the API jump table.
+; -----------------------------------------------------------------------------
+fr_promise:
+    pushf
+    push ax
+    push bx
+    mov bx, [fr_win]
+    or bx, bx                       ; before wm_create, and after a refused
+    jz .out                         ; one: nothing to promise about
+    xor al, al                      ; still rendering: withdraw, and wm_saveu
+    cmp word [fr_pass], 3           ; drops any cache made under the last
+    jb .say                         ; promise with it
+    mov al, OSAPI_SAVEU_ON
+.say:
+    call OSAPI_WM_SAVEU
+.out:
+    pop bx
+    pop ax
+    popf
     ret
 
 ; -----------------------------------------------------------------------------
@@ -631,6 +722,7 @@ fr_kick:
     mov word [fr_prog], 0
     mov byte [fr_pct], 0
     mov word [fr_restart], 1
+    call fr_promise             ; back to pass 0: the picture is moving again
     call fr_clear
     call fr_status
     call fr_hire
@@ -693,8 +785,16 @@ fr_redraw:
     mov ax, [fr_cnrow]
     mov [fr_prog], ax
     mov word [fr_restart], 2        ; 2 = resume, not restart
-    mov byte [fr_pct], 0xFF         ; no percentage: force the strip out with
-    call fr_status_maybe            ; the RESUMED number, not 0%
+    call fr_promise                 ; ...and a resume is rendering, whatever
+                                    ; the cache put back here (SPEC.md 40.4)
+    call fr_pctcalc                 ; the WHOLE strip, with the RESUMED number
+    mov [fr_pct], al                ; rather than 0% - wm_paint_all has just
+    call fr_status                   ; white-filled it, so every field is owed.
+                                    ; It used to park an impossible [fr_pct]
+                                    ; and go through fr_status_maybe; that path
+                                    ; draws one field now, so a repaint asking
+                                    ; it for the strip would get the percentage
+                                    ; alone on an empty band
     call fr_hire
     ret
 
@@ -719,10 +819,34 @@ fr_cache_claim:
     jc .out
     mov [fr_cseg], dx
     mov word [fr_ckb], FR_CACHE_KB0
+    push ax                         ; ...and it MOVES (SPEC.md 66.5.7). Safe
+    mov ax, fr_reloc                ; from the instant it exists, unlike
+    call OSAPI_MEM_MOVABLE          ; Tracker's module (66.5.2): nothing has
+    pop ax                          ; been read into it yet, and every later
+                                    ; reader re-aims ES from [fr_cseg]
     call fr_cache_size
 .out:
     pop dx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fr_reloc - the compactor moved the run cache (SPEC.md 66.5.7)
+; in:  BX = the base it WAS at, DX = the base it is at NOW, DS = CS = ours
+; out: nothing; preserves every register
+;
+; ONE word, and that is a property of the cache's design rather than luck:
+; every cursor into it - [fr_cpos], [fr_cn], [fr_cmax], [fr_ctlen] - is a
+; byte OFFSET, and an offset is exactly what a move does not change. The
+; three walkers (the render, the frontier and the replay cursor) all re-aim
+; ES from [fr_cseg] per row or per run, so there is no second copy of the
+; base anywhere to fall out of step with this one.
+; -----------------------------------------------------------------------------
+fr_reloc:
+    cmp bx, [fr_cseg]
+    jne .out
+    mov [fr_cseg], dx
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1635,7 +1759,11 @@ fr_emit_body:
                                     ; machine here, under the same lock hold
                                     ; and the same restart check that decided
                                     ; it was ours to consume
-.out:
+    cmp word [fr_pass], 3           ; ...and THAT was the last row: the frame
+    jb .out                         ; is complete, so the picture stands still
+    call fr_promise                 ; and can be banked (SPEC.md 40.4). Fires
+                                    ; once a frame - the worker takes .idle
+.out:                               ; from here and emits nothing more
     pop di
     pop si
     pop dx
@@ -1645,28 +1773,110 @@ fr_emit_body:
     ret
 
 ; -----------------------------------------------------------------------------
-; fr_status_maybe - redraw the status strip only when the percentage moved
+; fr_status_maybe - the PERCENTAGE, and only when it moved
 ; in:  [fr_prog], [fr_ch]; lock held, [fr_ox]/[fr_oy] valid
 ; out: nothing; preserves all registers
-; At most 100 strip redraws per frame instead of one per row - the strip
-; would otherwise flicker white-then-text on every scanline. fr_redraw forces
-; it by parking an impossible [fr_pct]: after a repaint the strip has to be
-; drawn whatever the number is, because wm_paint_all just white-filled it.
+;
+; At most 100 of these per frame instead of one per row. What each one costs is
+; the change: it used to call fr_status, which white-fills the whole strip and
+; re-letters all five fields - about 27 glyph cells and a fill, ~100 times a
+; pass, to move a digit. PERFORMANCE.md prices a cell at ~1ms on the machine
+; this app exists for, so that was seconds of drawing per pass, and the old
+; comment here admitted the shape of it ("the strip would otherwise flicker
+; white-then-text on every scanline") while still doing it a hundred times.
+;
+; Nothing but the percentage can change while a render runs: the type, the zoom
+; and the palette all move through fr_kick, which calls fr_status itself. So
+; this draws ONE field, as one OPAQUE run - SPEC.md 12.9's rule at the menu bar,
+; 48.9.3's at Missile's banner and 56.12's at ModPlug's face, which is to say
+; only the segment that changed may put pixels on a strip.
+;
+; Two things it no longer needs. There is no FILL, so the field is never
+; momentarily blank - the padding IS the erase (SPEC.md 6.1), which is what
+; removes the flicker rather than merely reducing it. And there is no
+; wm_clip_test gate: font_run decides one cell at a time and cannot produce
+; 11.3's granularity failure, so a clipped caller may draw through it
+; unguarded, where fr_status has to ask about its whole rect because its fill
+; and its glyphs clip differently.
 ; -----------------------------------------------------------------------------
 fr_status_maybe:
     push ax
+    call fr_pctcalc
+    cmp al, [fr_pct]
+    je .out
+    mov [fr_pct], al
+    call fr_status_pct
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fr_pctcalc - the render progress as 0..100
+; in:  [fr_prog], [fr_ch]
+; out: AL = the percentage; every other register preserved
+; Its own routine because fr_redraw wants the number without the comparison:
+; after a repaint the whole strip has to go out whatever the number is, and
+; that is fr_status, not this file's incremental path.
+; -----------------------------------------------------------------------------
+fr_pctcalc:
     push bx
     push dx
     mov ax, [fr_prog]
     mov bx, 100
     mul bx                          ; prog <= ch <= 460, so DX = 0 and the
     div word [fr_ch]                ; quotient 0..100 always fits AL
-    cmp al, [fr_pct]
-    je .out
-    mov [fr_pct], al
-    call fr_status
-.out:
     pop dx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; fr_status_pct - the percentage field alone: one opaque, space-padded run
+; in:  [fr_pct] already stored; [fr_ox]/[fr_oy] valid; lock held
+; out: nothing; preserves all registers
+;
+; The padding is what makes this safe to call without erasing first: the run is
+; FR_PCT_CELLS wide whatever the number is, so the field carries its own erase.
+; That is INSURANCE rather than a case this path reaches today - fr_prog only
+; ever increments while a render runs, so the number only grows, and the one
+; thing that lowers it (fr_redraw, resuming from the cache) draws the whole
+; strip through fr_status instead. The padding costs four instructions and
+; means nobody has to re-derive that argument before adding a field.
+; -----------------------------------------------------------------------------
+fr_status_pct:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov di, fr_numbuf
+    mov al, [fr_pct]
+    mov ah, 0
+    call fr_u2s                     ; DI -> the NUL it wrote
+    mov byte [di], '%'
+    inc di
+    mov bx, fr_numbuf               ; pad to the field width with spaces
+    add bx, FR_PCT_CELLS
+.pad:
+    cmp di, bx
+    jae .done
+    mov byte [di], ' '
+    inc di
+    jmp short .pad
+.done:
+    mov byte [di], 0
+    mov si, fr_numbuf
+    mov cx, [fr_ox]
+    add cx, FR_X_PCT
+    mov dx, [fr_oy]
+    add dx, FR_TXT_Y
+    mov al, CBLACK
+    mov ah, CWHITE
+    call OSAPI_FONT_RUN
+    pop di
+    pop si
+    pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -1711,8 +1921,9 @@ fr_status:
     mov dx, bx
     add dx, FR_STRIP_H-1
     call OSAPI_GFX_FILL
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
+                                    ; ...and NO pen: every field below carries
+                                    ; its own pair, so nothing here reads
+                                    ; [gfx_color] any more (SPEC.md 40.2.2)
 
     mov ax, [fr_type]               ; the fractal's name
     mov cl, 4
@@ -1721,24 +1932,30 @@ fr_status:
     add si, ax
     mov si, [si+FT_NAME]
     mov cx, [fr_ox]
-    add cx, 2
+    add cx, FR_X_NAME
     mov dx, [fr_oy]
     add dx, FR_TXT_Y
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
 
     mov si, fr_s_zoom               ; 'Zoom' + the exponent 0..4
     mov cx, [fr_ox]
     add cx, FR_X_ZOOM
     mov dx, [fr_oy]
     add dx, FR_TXT_Y
-    call OSAPI_FONT_STR
-    mov al, [fr_z]
-    add al, '0'
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
+    mov al, [fr_z]                  ; ...and the exponent as a one-cell STRING,
+    add al, '0'                     ; because there is no opaque font_char and
+    mov [fr_numbuf], al             ; a run is the same call. fr_numbuf is free
+    mov byte [fr_numbuf+1], 0       ; until the percentage below composes into
+    mov si, fr_numbuf               ; it, and this is the only other user
     mov cx, [fr_ox]
     add cx, FR_X_ZNUM
     mov dx, [fr_oy]
     add dx, FR_TXT_Y
-    call OSAPI_FONT_CHAR
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
 
     mov di, fr_numbuf               ; the render progress, 0..100%
     mov al, [fr_pct]
@@ -1751,7 +1968,8 @@ fr_status:
     add cx, FR_X_PCT
     mov dx, [fr_oy]
     add dx, FR_TXT_Y
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
 
     mov bx, [fr_pal]                ; the palette, named by its own menu item
     shl bx, 1
@@ -1760,7 +1978,8 @@ fr_status:
     add cx, FR_X_PAL
     mov dx, [fr_oy]
     add dx, FR_TXT_Y
-    call OSAPI_FONT_STR
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
 .out:
     pop di
     pop si
@@ -2011,3 +2230,11 @@ fr_cfrom   equ os88_image_end + 410  ; byte: 1 = fr_line was REPLAYED, not
                                      ; computed
 fr_ckb     equ os88_image_end + 412  ; word: the claim's size in KB, which is
                                      ; what doubles; total 414 = FR_BSS_TOTAL
+
+; The percentage field's padding is written into fr_numbuf, and fr_numbuf's
+; size is the gap to the next bss symbol rather than a declaration - these are
+; hand-computed offsets, so nothing but this check stands between a wider field
+; and FR_PCT_CELLS silently overwriting the first byte of fr_line.
+%if FR_PCT_CELLS + 1 > fr_line - fr_numbuf
+  %error "FR_PCT_CELLS + a NUL does not fit fr_numbuf - widen the gap to fr_line"
+%endif

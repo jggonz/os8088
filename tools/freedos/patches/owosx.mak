@@ -1,5 +1,5 @@
 # Open Watcom hosted on macOS - dropped into the kernel copy's mkfiles/ by
-# tools/build-freedos.sh and selected with COMPILER=owosx (SPEC.md 59.6).
+# tools/build-freedos.sh and selected with COMPILER=owosx (SPEC.md 86.6).
 #
 # Everything about the 16-bit code generation is owlinux's; the two things
 # that differ are the host, and they differ for the same reason: Open Watcom

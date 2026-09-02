@@ -1,0 +1,35 @@
+// vx/vy are 1/16 px per frame: 24 is 1.5 px/frame (WEAVE-SPEC 6.10).
+var hits;
+var secs;
+
+function doStart() {
+  ball.x = 76;
+  ball.y = 44;
+  ball.vx = -24;
+  ball.vy = 12;
+  hits = 0;
+  secs = 0;
+  field.start(12);
+}
+
+function onKey(ch, down) {
+  if (down == 0) { return; }
+  if (ch == 97) { pad.y = pad.y - 8; }
+  if (ch == 122) { pad.y = pad.y + 8; }
+  if (pad.y < 0) { pad.y = 0; }
+  if (pad.y > 84) { pad.y = 84; }
+}
+
+function onHit(a, b) {
+  ball.vx = -ball.vx;
+  hits = hits + 1;
+  out.text = "Hits: " + str(hits);
+  tone(880, 1);
+}
+
+// ontick: 64 straight-line ops, NO call - not str(), not tone()
+// (WEAVE-SPEC 4.11.1). A property write is fine.
+function onTick(frame) {
+  secs = secs + 1;
+  clock.value = secs;
+}

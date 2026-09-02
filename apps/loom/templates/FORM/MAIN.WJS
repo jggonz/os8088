@@ -1,0 +1,22 @@
+// Handlers are the only entry points - no top-level code runs, and
+// numbers are 16-bit signed ints (WEAVE-SPEC 4.1).
+var count;
+
+function doGreet() {
+  var name;
+  name = who.text;
+  if (len(name) == 0) {
+    out.text = "Type a name first.";
+    return;
+  }
+  count = count + 1;
+  // list.get(i) is 1-based and answers the item's text (WEAVE-SPEC 6.8).
+  out.text = how.get(how.sel) + ", " + name + "! (" + str(count) + ")";
+}
+
+// A string literal must be 1..255 bytes: there is no "" in WJS
+// (WEAVE-SPEC 2.7), so a field is cleared by the user, not from here.
+function doReset() {
+  count = 0;
+  out.text = "Ready.";
+}

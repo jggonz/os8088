@@ -1,0 +1,5 @@
+<app name="Err">
+  <card id="main">
+    <label align="middle">Hi</label>
+  </card>
+</app>

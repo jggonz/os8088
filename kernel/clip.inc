@@ -97,9 +97,19 @@ clip_put:
                                 ; overwritten and a regrow would need both
                                 ; blocks free at once to preserve them
     mov bx, MEM_K_CLIP
-    call mem_claim              ; out CF = 0, DX = base segment
+    push word [mem_pinseg]      ; THE SOURCE IS PINNED ACROSS THE CLAIM (SPEC.md
+    mov [mem_pinseg], bp        ; 66.3 rule 5): the caller's text is very
+    call mem_claim              ; often a document claim that is itself
+    pop word [mem_pinseg]       ; movable, this claim can compact, and the
+                                ; copy of its segment in BP is on OUR stack -
+                                ; a stale one no relocation proc can repair
     jc .toobig                  ; clip_drop already emptied it
     mov [clip_seg], dx
+    push ax                     ; ...and MOVABLE (SPEC.md 66.5.6): one word,
+    mov ax, clip_reloc          ; read immediately before each copy, and a
+    mov bx, MEM_K_CLIP          ; claim that outlives the app that filled it -
+    call COLD_SEG:mmf_mem_movable ; so it is long-lived by design and exactly
+    pop ax                      ; the shape that ends up mid-arena
     mov [clip_kb], ax
 .room:
     mov [clip_bytes], cx        ; while DS is still ours
@@ -228,6 +238,18 @@ clip_drop:
     pop bx
     pop ax
     popf
+    ret
+
+section .text
+
+; clip_reloc - the compactor moved the clipboard (SPEC.md 66.2). One word:
+; clip_put and clip_get each load it immediately before their rep movsb, and
+; nothing derives anything from it.
+clip_reloc:
+    cmp bx, [clip_seg]
+    jne .out
+    mov [clip_seg], dx
+.out:
     ret
 
 section .bss
