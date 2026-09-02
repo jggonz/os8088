@@ -3030,6 +3030,37 @@ $(BUILD)/tracker.bin: apps/tracker/tracker.asm apps/tracker/trkplay.inc \
 $(BUILD)/tracker.o88: $(BUILD)/tracker.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/tracker.bin -o $@
 
+# AUDIO.O88 - the Audio Player (SPEC.md 86): lightweight background music from
+# a streamed WAV (unsigned 8-bit PCM, or IMA/DVI 4-bit ADPCM decoded straight
+# to PCM8), over the existing Sound Blaster ring-stream infrastructure
+# (OSAPI_SND_STREAM, SPEC.md 34.5). A look-ahead heap claim in front of the
+# decoder keeps a disk read's sch_lock hold from starving the DMA. Seven
+# sources, one binary.
+$(BUILD)/audio.bin: apps/audio/audio.asm apps/audio/apengine.inc \
+                    apps/audio/apwork.inc apps/audio/apcb.inc \
+                    apps/audio/apwav.inc apps/audio/apdec.inc \
+                    apps/audio/apui.inc apps/audio/aplist.inc \
+                    apps/os88api.inc apps/os88ui.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/audio/ -o $@ apps/audio/audio.asm
+	@echo "audio: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/audio.o88: $(BUILD)/audio.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/audio.bin -o $@
+
+# A stand-alone Audio Player test disk (ON DEMAND: `make audiodisk`): AUDIO.O88
+# at the root beside whatever WAV files AUDIOWAV= names, so
+#   make audiodisk AUDIOWAV="pcm-11k.wav adpcm-11k.wav"
+#   make test-snd SB16=1 TESTAPPS=build/audio-test.img
+# boots straight to a drive with the player and the clips on it.
+AUDIOWAV ?=
+$(BUILD)/audio-test.img: $(BUILD)/audio.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+	    $(BUILD)/audio.o88 $(AUDIOWAV)
+	@echo "audio-test: $@  (AUDIOWAV=$(AUDIOWAV))"
+
+.PHONY: audiodisk
+audiodisk: $(BUILD)/audio-test.img
+
 # ModPlug Player, the fourteenth shipped package (SPEC.md 56): a port of
 # ModPlug Player V2's LOOK AND FEEL - the skinned player window with its LCD
 # panel, LED transport row and visualiser, the Setup window with its page
