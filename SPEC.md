@@ -83331,3 +83331,54 @@ not os8088 machinery: a 512-byte boot sector that chain-boots unit 1 and does
 nothing else, so that "can this machine boot the disk in B:, and does FreeDOS
 come up on B:" is answered with nothing else in the frame. It is deliberately
 the same code as the kernel's handover stub. Keep the two in step.
+
+### 86.8 The hard-disk machines, and the plan they are for
+
+Two 86Box machines and one image put §52.10's installed machine and the DOS
+floppy in one box, which nothing in `vm/` had done before — no config in the
+tree attached a hard disk at all until these; §52.10 was verified under QEMU,
+on MartyPC's XT-IDE machines and in the field. They exist for
+**docs/FREEDOS-PLAN.md**: hibernation to the hard disk (its wave 1) and
+FreeDOS *on* the hard disk as a guest that os8088's own loader starts (its
+wave 2), both of which rest on a machine that boots from C: with DOS beside
+it. That document is the plan; this section is what has shipped of it.
+
+- **`vm/xt-dos-hdd`** is `xt-dos` (§86.4) with `hdc_1 = xtide` — the XTIDE
+  Universal BIOS for the XT, whose `int 13h` is §52.1's rung 0 on an 8088,
+  the one rung that CPU has — and **`vm/386-dos-hdd`** is `386-dos` with
+  `hdc_1 = xtide_at`. Both carry a drive of **63 sectors × 16 heads × 65
+  cylinders** on IDE channel 0:0, backed by `build/dos-hdd.img`.
+- **`build/dos-hdd.img`** (`make dos-hdd`, on demand with `make dos` because
+  it carries the DOS payload) is §80.1's live image made with the system
+  disk's payload instead of the everything-disk's, plus FreeDOS laid out for
+  a hard disk: `DOS\KERNEL.SYS`, `DOS\COMMAND.COM` and `DOS\OS8088.COM` in a
+  folder, and `dos/hd/`'s editions of `FDCONFIG.SYS` and `AUTOEXEC.BAT` in
+  the root, where FreeDOS looks for them. **The folder is not a preference**:
+  FreeDOS's kernel file is called `KERNEL.SYS`, and so is os8088's, and
+  `boot/boothd.asm` loads whichever `KERNEL.SYS` is first in the root
+  (§52.10.2). The two can share a volume; they cannot share a directory.
+- **The geometry is the live image's, and the config's three numbers must
+  match it.** `boot/boothd.asm` reads its geometry from the BPB
+  (§52.10.2), and an emulated drive told a different shape reads the kernel
+  from sectors nothing wrote — docs/FIELD-NOTES.md 33's failure, reproduced
+  on purpose by editing one number. The keys themselves were established by
+  docs/TESTING.md's method: 86Box 6.0 rewrote `hdc =` as `hdc_1 =`, kept
+  the parameters and the channel, and added `hdd_01_speed`; the files carry
+  what it wrote.
+- **`HDBOOT=1`** empties drive A: for the launch, so the ROM boots C: and
+  the desktop comes up from the hard disk with the DOS floppy still in B:;
+  without it the os8088 floppy is in A: and boots first, which is the
+  install path (§52.10.4) and the floppy-handover path (§86.3). The floppy
+  line is deleted and re-inserted rather than blanked, because 86Box drops
+  an empty `fdd_01_fn` on exit and the next launch would find nothing to
+  edit.
+
+Verified on the XT: the loading screen from the floppy with the XTIDE ROM
+in the machine, and the desktop from the hard disk with no floppy in A:,
+through `make xt-dos-hdd HDBOOT=1` itself. The 386 stops in its BIOS setup
+on the first boot of a fresh `nvr/`, as every AT-class machine here does —
+EXIT FOR BOOT once and it is written (CLAUDE.md's `RESET=` note) — and was
+not driven past that screen. Not verified: the handover end to end on
+86Box, which needs a person at the window (docs/TESTING.md). What the DOS on this disk cannot yet do — be
+started from C:, and hand the session back — is the plan's wave 2, and the
+`DOS\` folder is where it will already be.

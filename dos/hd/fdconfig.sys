@@ -1,0 +1,17 @@
+; FreeDOS configuration for FreeDOS INSTALLED ON THE HARD DISK (SPEC.md 86.8,
+; docs/FREEDOS-PLAN.md). The floppy edition is ../fdconfig.sys; the two differ
+; only in WHERE the shell is, because FreeDOS calls the partition it booted
+; from C: whatever letter os8088 gives it, and the DOS binaries live in C:\DOS
+; so that FreeDOS's KERNEL.SYS never shares a directory with os8088's own
+; KERNEL.SYS, which is the name the hard-disk boot sector loads.
+;
+; Everything ../fdconfig.sys says about an 8088 holds here unchanged: NEVER add
+; DOS=HIGH or DEVICE=HIMEM.SYS/FDXMS.SYS - there is no HMA and no XMS on this
+; machine.
+
+FILES=10
+BUFFERS=5
+STACKS=0
+LASTDRIVE=D
+SWITCHES=/N
+SHELL=C:\DOS\COMMAND.COM C:\DOS\ /P /E:512

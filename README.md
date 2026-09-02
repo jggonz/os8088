@@ -113,6 +113,9 @@ make loomdisk # the IDE's own floppy: LOOM and the runtime beside it, with
 make dos      # build the FreeDOS floppy (on demand: fetches a ~148MB toolchain)
 make xt-dos   # the XT with FreeDOS in drive B instead of the apps disk
 make 386-dos  # the same on the 386DX
+make dos-hdd  # a pre-installed hard disk with FreeDOS in DOS\ beside os8088
+make xt-dos-hdd    # ...the XT with that disk on an XTIDE, both floppies in
+make 386-dos-hdd   # ...and the 386DX; HDBOOT=1 empties A: so C: boots
 make allapps  # one 1.44MB floppy with every program on it - both word
               # processors, Frotz, RunCPM, the Commodore 64 and the Weave
               # family included
@@ -699,6 +702,14 @@ the way it was written to. SPEC.md §86 has the whole account.
 This is on demand because the first build downloads a ~148MB Open Watcom
 toolchain; `tools/freedos/README.md` covers what it does. It needs no Docker
 and no Linux — Open Watcom ships native Apple-Silicon binaries.
+
+`make dos-hdd` builds a hard-disk image with os8088 installed on it and
+FreeDOS in `DOS\` beside it, and `make xt-dos-hdd` / `make 386-dos-hdd` boot
+the same two machines with that disk on an XTIDE controller — `HDBOOT=1`
+empties drive A so the machine starts from the hard disk. Those are the
+machines for what comes next: hibernating the session to the hard disk and
+starting FreeDOS from it, with `OS8088` bringing every window back.
+`docs/FREEDOS-PLAN.md` is that plan; SPEC.md §86.8 is what has shipped of it.
 
 ## Scripted testing
 
