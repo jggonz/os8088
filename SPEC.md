@@ -83101,3 +83101,243 @@ the `VID_*` kind `fsx_caps` hands back in DL, which `tk_adapter` already asks
 for and re-asks on a resize, so a window dragged to the other card of a
 two-card machine (§39.18.2) re-answers it rather than carrying VGA's palette
 onto a Hercules.
+
+## 86. AUDIO PLAYER — background music from a streamed WAV (`apps/audio/`)
+
+`AUDIO.O88`, "AUDIO PLAYER" in the header name field. Lightweight background
+music for the IBM XT: a WAV file — unsigned 8-bit PCM, or IMA/DVI 4-bit ADPCM
+decoded straight to unsigned 8-bit PCM — is **streamed from disk, never loaded
+whole**, through the Sound Blaster ring-stream infrastructure (§34.5), and
+keeps playing while Sheet, Note Pad or anything else has the focus. It owns
+none of the hardware: not the DMA controller, not the SB IRQ, not the DSP, not
+the DMA page register. It is a client of the `OSAPI_SND_STREAM` verb contract,
+which is the architecture §34 / §45.2 were built for.
+
+Pure NASM assembly, the Tracker (§45) / ModPlug (§56) / Recorder (§35)
+precedent for this app class — the C SDK deliberately does not wrap the stream
+verbs (§73.7's "what is not wrapped" list), and `os88.h` directs a sound app
+to assembly. Prefixes `ap_` (shell/engine), `apw_` (WAV parser), `apd_`
+(decoder), `apu_` (UI), `apl_` (playlist).
+
+### 86.2 Files
+
+Seven files, one binary: `audio.asm` (header, 16×16 speaker icon, `.WAV`
+association, all bss, entry, window template, menus, strings); `apengine.inc`
+(the look-ahead ring, track open, the disk-refill service, stream open/close,
+reap, the transport commands); `apwork.inc` (the worker task and its feed
+pass); `apcb.inc` (the window callbacks — paint / click / key / menu / About /
+wake / close / fdlg-done); `apwav.inc` (the RIFF/WAVE parser and its
+validation); `apdec.inc` (PCM8 pass-through and the IMA/DVI ADPCM decoder,
+plus the two constant tables); `apui.inc` (adapter-parameterised layout and
+drawing); `aplist.inc` (the playlist store, Shuffle and Repeat).
+
+### 86.5 The engine — a look-ahead stage in front of §45.2
+
+§45.2's ring stream is the one this app is built on: **the UI task opens,
+closes and pre-mixes at open; the worker mixes and feeds; the close drains the
+worker first.** What this app adds in front of it is a **look-ahead stage**,
+because it is the first package that must genuinely stream from disk — Tracker
+and ModPlug load the whole module — and a disk read holds `sch_lock`, which
+pauses both the kernel refill task and the package worker (§34.5's pinned "a
+stream fed live from disk *will* underrun" rule):
+
+```
+disk --OSAPI_FILE_READ_AT--> 32 KB look-ahead ring (heap claim) --decoder-->
+    2048-byte halves --verb 6/1--> 16 KB SND ring --> SB DMA
+```
+
+- **The UI task does every disk read**, because the file slots are UI-task
+  context only (§20.6 rule 7). `ap_refill_chunk` reads **one cluster** at a
+  time from the data chunk, head-skipping the first read's pre-data bytes and
+  tail-clamping the last read at the data end, and `ap_ring_put`s the usable
+  bytes into the look-ahead ring. `AP_LA_SZ` (0x8000) is a power of two ≥ the
+  largest cluster §52.3 allows (8 KB), so a cluster write never crosses the
+  ring seam.
+- **The worker decodes and feeds**, lock-free, on the any-task verbs 1/3/6
+  (§20.3). `ap_feed` polls verb 3, and while the SND ring has room and fewer
+  than `AP_MAXFEED` halves have gone this wake, it calls `apd_pull` for a
+  2048-byte half, `verb 6` stages it at `grant + (total & rmask)` and `verb 1`
+  publishes the new total. A short final half is silence-padded to 2048 (a
+  ring feed is always whole halves, §34.5) and marks `ap_lasthalf`.
+- **The refill handshake is the FTPD one (§77.1)**: when the look-ahead ring
+  drops below `AP_LA_LOW`, the worker sets `[ap_req] = FR_READ` and
+  `OSAPI_WM_WAKE`s the UI task; `ap_onwake` services one `ap_refill_chunk` and
+  clears `[ap_req]` **last**. It is non-blocking on the worker's side — a
+  transient look-ahead underrun just feeds less that wake and the SND stream
+  underrun-pauses (§34.5), resuming on the next feed once data lands.
+- **`[ap_mixing]`** brackets a feed pass (set before the guards, cleared
+  last). `ap_stream_close` drops `[ap_sopen]`, spins `[ap_mixing]` to zero,
+  then hands the grant back (§34.6), so no UI-side reset of engine state can
+  race a worker suspended mid-feed.
+- **Track end**: `apd_pull` returning short with `ap_src_eof` true is the last
+  half; once the DSP has consumed `ap_total` the worker latches `[ap_ended]`
+  and `OSAPI_WM_WAKE`s the UI task, which `ap_reap`s — closes the stream and
+  advances the playlist (or stops at the end of the list).
+
+Pre-roll is **six halves** on the UI task before `verb 0` (§45.17.2's
+field-corrected number). Ring grant is **16 KB**, tiered to 8 KB (`verb 7`),
+freed by `ap_stream_close`. The look-ahead buffer is one 32 KB
+`OSAPI_MEM_CLAIM`, taken once and held for the instance's life.
+
+### 86.6 The WAV parser (`apw_parse`)
+
+Given a name (already GOTO'd) and the file size, it answers a parsed record or
+a refusal string. It does **not** assume `fmt ` is followed by `data`, a fixed
+header size, or the absence of `LIST` / `fact` / `INFO` / other chunks. It
+walks the chunk list, honours the RIFF odd-length pad byte, skips every chunk
+it does not recognise, and slides a fresh cluster window forward when a
+skipped chunk runs past the one it holds (`APW_WINDOWS` windows — a header
+larger than that is refused, not mis-read). Every size the file claims is
+bounds-checked against the file length before it is trusted.
+
+Accepted: `WAVE_FORMAT_PCM` (0x0001) mono 8-bit, and `WAVE_FORMAT_DVI_ADPCM`
+(0x0011) mono 4-bit. Rejected with a specific reason on the glass: non-mono,
+an unsupported tag, an unsupported bit depth, a sample rate not in
+{8000, 11025, 16000, 22050}, a bad `nBlockAlign`, and an ADPCM
+`wSamplesPerBlock` that does not equal `(nBlockAlign − 4) × 2 + 1`.
+
+### 86.4 The decoder (`apdec.inc`)
+
+PCM8 is a pass-through — `apd_pull` copies bytes out of the look-ahead ring.
+
+IMA/DVI ADPCM is decoded from the **public IMA/DVI specification** — the
+89-entry step table and the 16-entry index table are the ones every
+BSD/public-domain implementation carries; nothing is vendored (§86.17). The
+decoder is **resumable**: `apd_pull(want)` fills up to `want` PCM8 bytes and
+keeps predictor / index / block cursor / nibble phase across calls, so a
+2048-byte stage half never has to line up with an ADPCM block boundary. The
+predictor is a signed 16-bit value clamped to [−32768, 32767] each step; the
+sample handed on is
+
+        pcm8 = (predictor >> 8) + 128          ; arithmetic >>, exact
+
+which needs no clamp of its own — `predictor >> 8` is [−128, 127], `+ 128` is
+[0, 255]. **There is no intermediate 16-bit PCM buffer.**
+
+Measured decode cost is well inside the background budget: at 11,025 Hz the
+inner loop is an estimated ~10–15 % of a 4.77 MHz 8088, against Tracker's
+44–165 % mixer (`PERFORMANCE.md` Sets 20/68) — a streamer does no mixing. The
+decoder stays in assembly (it *is* the shim), not because C would be too slow
+but because the SDK does not expose the stream verbs to C at all.
+
+### 86.7 The window
+
+Layout is computed from the **live** content geometry every paint (§39 — three
+adapters, one binary), and drawing is deliberately plain (§86.20: no
+visualiser, no animation, no spectrum bars):
+
+```
+BEVERLY.WAV
+01:37  [==========------------]  04:12
+[ Prev ][ Play ][Pause][ Stop ][ Next ][ Shuf ][ Rep ]
+Playlist:
+  01  TRACK01.WAV
+> 02  BEVERLY.WAV
+```
+
+The transport buttons tile the row gap-free (`apu_hit` takes
+`column = (x − x1) / pitch`, so there is no dead lane between two of them —
+found on the glass). Shuffle and Repeat draw the `OS88UI_DOWN` pressed look
+while toggled on. The worker's one gfx-lock hold each pass redraws only the
+elapsed time and the progress-bar fill, and only while `OSAPI_WM_OBSCURED`
+says the window is visible — a backgrounded player does no UI work. The
+elapsed clock is derived from the free-running `verb 3` consumed count
+accumulated into a 32-bit `ap_played`, so it survives the counter's ~3–6 s
+wrap.
+
+**The first paint can beat `wm_fit`**: the loader shows the window after the
+entry proc returns, so `OSAPI_WM_GEOM` / `OSAPI_WM_CONTENT` can answer CF=1
+for the first `W_PAINT`. `ap_entry` kicks itself once with `OSAPI_WM_WAKE`;
+`ap_onwake` does the settled repaint with the window fully on the glass, and
+`apu_layout` / `apu_origin` keep their last good geometry on CF=1 meanwhile.
+
+### 86.10 The playlist
+
+A fixed array of at most `AP_MAXTRK` entries, `AP_ENTSZ` (16) bytes each: an
+8.3 name (NUL-terminated, ≤ 12), a volume byte and a directory-cluster word.
+**No full paths** — a track is reached by `OSAPI_FILE_GOTO_Q(dir, vol)` then a
+name lookup, the `OSAPI_ARG_FILE` / fdlg model. File ▸ Open adds a track
+(captured with `OSAPI_FILE_HERE` in the completion proc) and starts it if the
+player is idle; File ▸ Clear empties the list. Shuffle keeps a separate order
+array `apl_ord[]` filled by a Fisher-Yates over `OSAPI_RAND`, re-shuffled at
+each full wrap; **Repeat loops the whole playlist** (the last track advances
+to the first only while Repeat is on). Previous always wraps.
+
+### 86.11 File association
+
+`OS88_ASSOC16 'WAV'` in the header. Double-clicking a `.WAV` on the desktop
+launches `AUDIO.O88` with that file as the launch document (§54.10):
+`ap_entry` reads and banks `OSAPI_ARG_FILE`, and `ap_onwake` — which the
+kernel calls once itself after the window is shown — adds it to the playlist
+and starts it. `.M3U` association is future work (§86.20).
+
+### 86.12 Memory
+
+| item | size | where |
+|---|---|---|
+| image + bss | ~18 KB | the package region (cap `APP_MAX_SIZE` = 60 KB) |
+| look-ahead ring | 32 KB | one `OSAPI_MEM_CLAIM`, held for the instance's life |
+| header window / cluster bounce | 8 KB | `ap_scratch` in bss, shared between the parser and the refill path |
+| decoder scratch | 2 KB | `apd_out` in bss |
+| playlist | `AP_MAXTRK` × 16 B | bss |
+| SND ring grant + driver pool | ~28 KB | `SOUND.DRV`'s claims, released when the player stops |
+
+Comfortable on 640 KB; on 256 KB the look-ahead and ring tiers drop.
+
+### 86.15 Sample rates and the SB2.0 ceiling
+
+The four accepted rates are {8000, 11025, 16000, 22050}. 22050 Hz is the
+practical ceiling on an SB 2.0 — its time-constant path stops at ~22,222 Hz,
+and the wide-rate 44,100 Hz regime needs a DSP ≥ 4.0 (§34.5). The default is
+not hard-coded to one rate: the player takes whatever the file's `fmt ` chunk
+declares, within that set.
+
+### 86.16 Lessons inherited from existing os8088 audio applications
+
+- **Tracker (§45.2)** is the template for the whole engine: the UI-opens /
+  worker-feeds split, the `[ap_mixing]` drain before any state reset, the
+  six-half pre-roll (§45.17.2 raised it from two after a field report), the
+  16 KB ring in whole 2048-byte halves, `ap_reap` on every UI callback
+  because the worker cannot run `verb 2`. `PERFORMANCE.md` Set 21's
+  lead/underrun table is the shape the 86Box benchmark uses.
+- **Tracker also proved the negative**: its 4-channel mixer is 44–165 % of a
+  4.77 MHz 8088 (`PERFORMANCE.md` Sets 20/68), "a QEMU/286-era luxury" in its
+  own plan. A PCM/ADPCM streamer does no mixing, which is why this app is
+  feasible on the XT where a MOD player is not.
+- **ModPlug (§56.2)**: Pause leaves the stream open and only stops the
+  replayer advancing; Stop closes. This app does the same — Pause stops the
+  worker feeding (the stream underrun-pauses, §34.5) and keeps the position;
+  Stop closes and rewinds.
+- **Recorder (§35)**: size the driver-pool grant in tiers and keep the first
+  the driver will part with; keep working with no card by saying so honestly
+  (`ap_have_sb` from `OSAPI_SND_CAPS` greys playback and the status line says
+  "No Sound Blaster", not a memory error).
+- **FTPD (§77.1)**: the worker-stages / UI-task-commits handshake with a
+  single `[ap_req]` byte cleared last, and the `OSAPI_SND_STREAM` slot being
+  an X stub means the stage buffer for `verb 6` must be in the package's own
+  segment, not a heap claim (`ap_scratch` and `apd_out` are bss).
+- **Frotz / RunCPM (§74.1)**: `OSAPI_WM_ONWAKE` is the one UI-task callback
+  without the gfx lock and allowed the file slots — the disk-refill service
+  and the launch-document handover both live there.
+
+### 86.17 Licensing
+
+The IMA/DVI ADPCM decoder is an original implementation from the published
+IMA/DVI algorithm and its two standard tables. Nothing is vendored from
+`adpcm-xq`, `blueduckjf/adpcm`, `alexriegler12/adpcm`, `superctr/adpcm` or any
+console codec, and no historical Microsoft source is used — the format tag
+0x0011 is DVI/IMA, which is simpler than MS-ADPCM (0x0002) and specified in
+the open IMA document. Host-side test WAVs are produced by FFmpeg
+(`-c:a pcm_u8` and `-c:a adpcm_ima_wav`), a tool, not linked code.
+
+### 86.20 Deliberately not done
+
+No visualiser, no spectrum analyser, no animated channel bars, no seeking by
+clicking the progress bar (an ADPCM seek must respect block boundaries and
+decoder state — future work), no `.M3U` yet, no clickable playlist rows in
+v1, no arm-on-press / fire-on-release for the transport buttons (they are
+single-shot commands and fire on `W_ONCLICK`). Performance figures on the XT
+are 86Box's to measure (`docs/AUDIO-PLAN.md` has the procedure); QEMU is
+functional verification only, where 28 s of PCM8 @ 22 kHz streams gap-free
+(0 quiet windows in the capture) with 14 s of it while another window holds
+the focus.

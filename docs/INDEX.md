@@ -275,6 +275,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | package | source | SPEC |
 |---|---|---|
 | ARKANOID | `apps/arkanoid/arkanoid.asm` | §44 |
+| AUDIO PLAYER | `apps/audio/audio.asm` | §86 |
 | ArtfulType | `apps/artful/artful.asm` | §46 |
 | BROWSER | `apps/browser/browser.asm` | §71 |
 | C64 | `apps/c64/c64.asm` | `docs/C64-SPEC.md` |
@@ -396,6 +397,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 83 | Text input for packages (`apps/os88line.inc`, `apps/os88text.inc`) |
 | 84 | Software floating point (`apps/os88fp.inc`) |
 | 85 | TANK ATTACK — a wireframe tank duel in a foreign mode (`apps/tank/`) |
+| 86 | AUDIO PLAYER — background music from a streamed WAV (`apps/audio/`) |
 
 ## docs/
 

@@ -216,7 +216,8 @@ apu_draw:
     add cx, 6
     mov dx, [apu_oy]
     add dx, 4
-    call OSAPI_FONT_STR_XPARENT
+    mov ax, 0x0F00                 ; FONT_RUN: ink 0 on paper 15 (SPEC.md 6.6)
+    call OSAPI_FONT_RUN
 
     ; --- status line -------------------------------------------------
     mov si, [ap_msg]
@@ -224,7 +225,8 @@ apu_draw:
     add cx, 6
     mov dx, [apu_oy]
     add dx, 16
-    call OSAPI_FONT_STR_XPARENT
+    mov ax, 0x0F00                 ; FONT_RUN: ink 0 on paper 15 (SPEC.md 6.6)
+    call OSAPI_FONT_RUN
 
     ; --- time + bar -------------------------------------------------
     call apu_draw_time_full
@@ -263,7 +265,8 @@ apu_draw_time_full:
     add cx, 6
     mov dx, [apu_oy]
     add dx, 31
-    call OSAPI_FONT_STR_XPARENT
+    mov ax, 0x0F00                 ; FONT_RUN: ink 0 on paper 15 (SPEC.md 6.6)
+    call OSAPI_FONT_RUN
 
     mov si, apu_t2
     mov cx, [apu_ox]
@@ -271,7 +274,8 @@ apu_draw_time_full:
     sub cx, 40
     mov dx, [apu_oy]
     add dx, 31
-    call OSAPI_FONT_STR_XPARENT
+    mov ax, 0x0F00                 ; FONT_RUN: ink 0 on paper 15 (SPEC.md 6.6)
+    call OSAPI_FONT_RUN
 
     ; bar frame
     mov ax, [apu_ox]
@@ -467,7 +471,8 @@ apu_draw_list:
     add cx, 6
     mov dx, [apu_oy]
     add dx, 68
-    call OSAPI_FONT_STR_XPARENT
+    mov ax, 0x0F00                 ; FONT_RUN: ink 0 on paper 15 (SPEC.md 6.6)
+    call OSAPI_FONT_RUN
 
     call apl_count
     mov [apu_ln], ax
@@ -492,14 +497,16 @@ apu_draw_list:
     jne .nomark
     mov si, apu_gt
 .nomark:
-    call OSAPI_FONT_STR_XPARENT
+    mov ax, 0x0F00                 ; FONT_RUN: ink 0 on paper 15 (SPEC.md 6.6)
+    call OSAPI_FONT_RUN
     ; the name
     mov ax, di
     call apl_entptr               ; BX = &entry
     mov si, bx
     mov cx, [apu_ox]
     add cx, 20
-    call OSAPI_FONT_STR_XPARENT
+    mov ax, 0x0F00                 ; FONT_RUN: ink 0 on paper 15 (SPEC.md 6.6)
+    call OSAPI_FONT_RUN
     inc di
     jmp .row
 .done:

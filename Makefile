@@ -3105,7 +3105,7 @@ $(BUILD)/dbg/modplug.o88: $(BUILD)/dbg/modplug.bin tools/os88pkg.py
 $(BUILD)/dbg-apps360.img: $(BUILD)/dbg/modplug.o88 $(APPS_TOOLS) $(APPS_GAMES) \
                           $(SYSAPPS) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
-	    $(patsubst %,APPS:%,$(filter-out $(BUILD)/modplug.o88,$(APPS_TOOLS))) \
+	    $(patsubst %,APPS:%,$(filter-out $(BUILD)/modplug.o88 $(BUILD)/audio.o88,$(APPS_TOOLS))) \
 	    APPS:$(BUILD)/dbg/modplug.o88 \
 	    $(patsubst %,GAMES:%,$(APPS_GAMES)) \
 	    MEDIA:apps/tracker/beverly.mod \
@@ -6060,7 +6060,7 @@ APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
               $(BUILD)/hello.o88 $(BUILD)/modplug.o88 $(BUILD)/notepad.o88 \
               $(BUILD)/paint.o88 $(BUILD)/piano.o88 $(BUILD)/recorder.o88 \
               $(BUILD)/ftpd.o88 $(BUILD)/sheet.o88 $(BUILD)/telnet.o88 \
-              $(BUILD)/texpad.o88 $(BUILD)/tracker.o88
+              $(BUILD)/texpad.o88 $(BUILD)/tracker.o88 $(BUILD)/audio.o88
 APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/tank.o88 $(BUILD)/cyclone.o88 \
               $(BUILD)/mines.o88 \
               $(BUILD)/missile.o88 $(BUILD)/solitair.o88 $(BUILD)/tamegram.o88
@@ -6163,7 +6163,12 @@ APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS)
 # prerequisites name a file that is not on the disk it builds is a dependency
 # that lies in the direction that costs a rebuild for nothing, and one that
 # stops being harmless the day somebody reads it to find out what is on there.
-APPS360 := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA_360) $(APPS_SYS) $(APPS_DOS)
+# AUDIO.O88 is left off the 360KB disk: it fits with one cluster to spare
+# (353/354) which is too tight to be a good neighbour, and the XT/floppy is
+# exactly where streaming performance is least proven (docs/AUDIO-PLAN.md).
+# It ships on the 1.44MB and 720KB apps disks, which have room.
+APPS_TOOLS_360 := $(filter-out $(BUILD)/audio.o88,$(APPS_TOOLS))
+APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES) $(APPS_DATA_360) $(APPS_SYS) $(APPS_DOS)
 
 # ...and the same list with the folder each package lands in. os88disk.py
 # reads a "DIR:" prefix per package, so the grouping lives here rather than
@@ -6200,7 +6205,7 @@ APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
 # 24.4), and 59% OF THAT 34KB WAS LITERAL ZEROS. The buffers are reserved past
 # the image now rather than written into the file, so it is 18KB and 36 of the
 # 354 clusters. Being on this disk is the whole reason a user has it to hand.
-APPSARGS360 := $(addprefix APPS:,$(APPS_TOOLS)) \
+APPSARGS360 := $(addprefix APPS:,$(APPS_TOOLS_360)) \
                $(addprefix GAMES:,$(APPS_GAMES)) \
                $(addprefix MEDIA:,$(APPS_DATA_360)) \
                $(SYSAPPSARGS) \
