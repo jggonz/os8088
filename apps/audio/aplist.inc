@@ -190,6 +190,11 @@ apl_cur_name:
 ; =============================================================================
 ; apl_goto_cur - move this instance into the current entry's directory
 ; out: CF = 1 empty or the goto failed
+;
+; OSAPI_FILE_GOTO, not GOTO_Q: the by-name file ops that follow in
+; ap_open_track (ap_filesize, apw_parse) resolve in the INSTANCE's own current
+; folder, and GOTO_Q does not move it (SPEC.md 86.11.1). A track handed over
+; from another folder, or a playlist that spans folders, needs the real move.
 ; =============================================================================
 apl_goto_cur:
     call apl_curptr
@@ -198,7 +203,7 @@ apl_goto_cur:
     push dx
     mov dx, [bx+14]
     mov bl, [bx+13]
-    call OSAPI_FILE_GOTO_Q         ; DX = cluster, BL = volume; CF/AX on fail
+    call OSAPI_FILE_GOTO          ; DX = cluster, BL = volume; REMOUNT
     pop dx
     pop ax
     ret

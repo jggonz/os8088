@@ -80,7 +80,9 @@ AP_RING_MAXB   equ 16384
 
 AP_LA_SZ       equ 0x8000        ; look-ahead ring: 32 KB, power of two
 AP_LA_MASK     equ 0x7FFF
-AP_LA_LOW      equ 0x3000        ; refill when fewer than 12 KB remain
+AP_LA_LOW      equ 0x4000        ; refill when fewer than 16 KB remain - a whole
+                                 ; AP_RD_CHUNK of headroom before the ring could
+                                 ; starve the decoder on a slow (real) disk
 
 ; --- worker pacing (SPEC.md 86.5.1) -----------------------------------------
 AP_SLP_FEED    equ 1              ; ticks the worker sleeps while feeding

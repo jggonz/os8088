@@ -477,6 +477,7 @@ ap_open_track:
     call ap_stream_close          ; a clean slate (drains the worker)
 
     call apl_goto_cur             ; move into the track's directory
+    jc .badfile                   ; could not reach the folder - say so
     call apl_cur_name             ; SI = name
     jc .badfile
 
@@ -922,11 +923,22 @@ ap_add_file:
     mov bl, [ap_af_vol]
     call apl_find                  ; out AX = index, CF = 1 not found
     jc .fresh
-    mov [apl_cur], al
     mov word [ap_msg], ap_s_dup
     test byte [ap_af_flags], AP_ADD_PLAY
-    jz .ok
+    jz .selonly
+    ; already in the list: restart it ONLY if it is not the track already
+    ; playing. A re-poll of APQUEUE.DAT that keeps handing us the same file
+    ; must NOT keep tearing the stream down (SPEC.md 86.11.1).
+    cmp al, [apl_cur]
+    jne .selplay
+    cmp byte [ap_state], AP_ST_PLAY
+    je .ok                         ; same track, already playing - leave it
+.selplay:
+    mov [apl_cur], al
     jmp .startcur
+.selonly:
+    mov [apl_cur], al
+    jmp .ok
 .fresh:
     mov si, [ap_af_name]
     mov dx, [ap_af_dir]
