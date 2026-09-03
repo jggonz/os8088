@@ -609,6 +609,19 @@ ap_stage_half:
     push dx
     push si
     push di
+    ; The decoder is STATEFUL for ADPCM, and consuming a shared ring for PCM:
+    ; a short apd_pull advances ap_la_rd and the predictor, and then .under
+    ; discards the output - a permanent gap in the audio, heard as a stutter
+    ; (SPEC.md 86.4 / 86.5.2). So decode a half only when a whole half's worth
+    ; of INPUT is already in the look-ahead ring. At EOF the tail is
+    ; silence-padded on purpose, so let that through.
+    cmp byte [ap_src_done], 0
+    jne .haveinput
+    call ap_la_avail
+    cmp ax, AP_HALF
+    jb .under                    ; not enough yet - the SND ring has slack and
+                                 ; ap_feed has already asked for a refill
+.haveinput:
     mov cx, AP_HALF
     call apd_pull                 ; AX = PCM8 bytes produced into apd_out
     mov bx, ax
@@ -655,6 +668,7 @@ ap_stage_half:
     pop bx
     ret
 .under:
+    APCNT apc_pdisc
     xor ax, ax                    ; produced nothing usable this call
     pop di
     pop si

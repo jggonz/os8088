@@ -339,6 +339,9 @@ apu_draw_stats:
     mov si, aps_l_prim
     mov ax, [apc_prime]
     call aps_kv
+    mov si, aps_l_pdsc
+    mov ax, [apc_pdisc]
+    call aps_kv
     mov si, aps_hint
     call aps_line
 %endif
@@ -378,6 +381,7 @@ aps_l_open: db 'open_track    ', 0
 aps_l_pars: db 'wav parse     ', 0
 aps_l_slid: db 'wav slide     ', 0
 aps_l_prim: db 'prime         ', 0
+aps_l_pdsc: db 'input-starved ', 0
 
 ; aps_line - SI = string; draw it at the current row, advance the row by 8
 aps_line:
@@ -633,6 +637,9 @@ apdg_l_open:  db 'opentk ', 0
 apdg_l_pars:  db 'parse ', 0
 apdg_l_slid:  db 'slide ', 0
 apdg_l_prim:  db 'prime ', 0
+apdg_l_pdsc:  db 'inpstarved ', 0
+apdg_l_rate:  db 'rate ', 0
+apdg_l_doff:  db 'dataoff ', 0
 
 ap_diag_dump:
     push ax
@@ -669,6 +676,9 @@ ap_diag_dump:
     APDGV   apdg_l_pars, apc_parse
     APDGV   apdg_l_slid, apc_slide
     APDGV   apdg_l_prim, apc_prime
+    APDGV   apdg_l_pdsc, apc_pdisc
+    APDGV   apdg_l_rate, ap_rate       ; parsed values, to catch a bad parse
+    APDGV32 apdg_l_doff, ap_data_off
     mov si, di
     mov ax, si
     sub ax, apdg_buf

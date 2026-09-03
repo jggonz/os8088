@@ -172,6 +172,7 @@ AP_B_NONE  equ 0xFF
     APCW apc_parse                 ; apw_parse calls
     APCW apc_slide                 ; apw_slide calls
     APCW apc_prime                 ; ap_prime calls
+    APCW apc_pdisc                 ; ap_stage_half input-starved, decoded nothing
     APBUF apdg_buf, 900            ; APDIAG.TXT staging (formatted on the 'D' key)
     APW   apdg_t0                  ; scratch: byte count for the write
     APB   apdg_req                 ; 1 = ap_onwake owes an APDIAG.TXT dump
