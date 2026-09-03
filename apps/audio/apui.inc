@@ -242,7 +242,98 @@ apu_draw:
 
     ; --- playlist ------------------------------------------------
     call apu_draw_list
+
+    ; --- the About card, on top of everything ------------------
+    cmp byte [ap_abon], 0
+    je .done
+    call apu_about_card
 .done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; =============================================================================
+; apu_about_card - the OSAPI_ABOUT_SET card (SPEC.md 86.7): a white panel with
+; a black frame and three lines, centred in the content box, on top of the
+; player. Any click or key takes it down (ap_onclick / ap_onkey). Drawn under
+; the gfx lock from apu_draw, so it survives a repaint and needs no flag of the
+; window manager's.
+; =============================================================================
+apu_ab1: db 'Audio Player for os8088', 0
+apu_ab2: db 'Version 0.6b', 0
+apu_ab3: db 'Play PCM and ADPCM audio files', 0
+
+apu_about_card:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    ; rect: inset 8 px each side of the content, 52 px tall, vertically centred
+    mov ax, [apu_cw]
+    cmp ax, 40
+    jb .out                        ; content absurdly small - skip
+    mov ax, [apu_ox]
+    add ax, 8
+    mov [apab_x1], ax              ; x1
+    mov ax, [apu_ch]
+    sub ax, 52
+    jns .yok
+    xor ax, ax
+.yok:
+    shr ax, 1
+    add ax, [apu_oy]
+    mov [apab_y1], ax              ; y1
+    ; --- white fill ---
+    mov al, 15
+    call OSAPI_SET_COLOR
+    mov ax, [apab_x1]
+    mov bx, [apab_y1]
+    mov cx, [apu_ox]
+    add cx, [apu_cw]
+    sub cx, 9                      ; x2
+    mov dx, bx
+    add dx, 51                     ; y2
+    call OSAPI_GFX_FILL
+    ; --- black frame ---
+    mov al, 0
+    call OSAPI_SET_COLOR
+    mov ax, [apab_x1]
+    mov bx, [apab_y1]
+    mov cx, [apu_ox]
+    add cx, [apu_cw]
+    sub cx, 9
+    mov dx, bx
+    add dx, 51
+    call OSAPI_GFX_FRAME
+    ; --- three lines (ink 0 on paper 15) ---
+    mov si, apu_ab1
+    mov cx, [apab_x1]
+    add cx, 8
+    mov dx, [apab_y1]
+    add dx, 7
+    mov ax, 0x0F00
+    call OSAPI_FONT_RUN
+    mov si, apu_ab2
+    mov cx, [apab_x1]
+    add cx, 8
+    mov dx, [apab_y1]
+    add dx, 21
+    mov ax, 0x0F00
+    call OSAPI_FONT_RUN
+    mov si, apu_ab3
+    mov cx, [apab_x1]
+    add cx, 8
+    mov dx, [apab_y1]
+    add dx, 35
+    mov ax, 0x0F00
+    call OSAPI_FONT_RUN
+.out:
     pop di
     pop si
     pop dx

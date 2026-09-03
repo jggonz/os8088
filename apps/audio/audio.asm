@@ -314,6 +314,9 @@ apw_hdrbuf equ ap_scratch
     APW   apu_pby2
     APW   apu_cw                   ; last content w/h laid out against
     APW   apu_ch
+    APB   ap_abon                  ; 1 = the About card is up
+    APW   apab_x1                  ; ...its top-left, for the text lines
+    APW   apab_y1
 
 ; =============================================================================
 ; ap_entry - the loader calls this once (SPEC.md 20.1). The loader shows the

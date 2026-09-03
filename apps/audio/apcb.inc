@@ -17,7 +17,6 @@
 ; =============================================================================
 
     APBUF ap_dlgname, 14
-apu_cred: db 'Audio Player - WAV PCM8 / IMA ADPCM', 0
 
 ; --- apu_repaint - white-fill our live content, then draw it -----------------
 apu_repaint:
@@ -78,6 +77,11 @@ ap_onclick:                        ; CX = x, DX = y (SCREEN); SI = window
     push dx
     push si
     push di
+    cmp byte [ap_abon], 0
+    je .noab
+    mov byte [ap_abon], 0          ; a click anywhere dismisses the About card
+    jmp .rep
+.noab:
     call ap_reap
     push cx
     push dx
@@ -153,6 +157,11 @@ ap_onkey:                          ; AL = ascii, AH = scancode; SI = window
     call ap_reap
     pop ax
 
+    cmp byte [ap_abon], 0
+    je .noab
+    mov byte [ap_abon], 0          ; any key dismisses the About card
+    jmp .rep
+.noab:
     cmp ah, KSC_LEFT
     je .prev
     cmp ah, KSC_RIGHT
@@ -263,15 +272,20 @@ ap_oncmd:                          ; AL = item, AH = menu; SI = window
 
 ; =============================================================================
 ap_about:                          ; SI = window; gfx lock held
-    push si
+    push ax
+    push bx
     push cx
-    push ds
-    pop es
-    mov si, apu_cred
-    xor cx, cx                      ; default ~3s
-    call OSAPI_TOAST
-    pop cx
+    push dx
+    push si
+    push di
+    mov byte [ap_abon], 1          ; apu_draw draws the card last while this is set
+    call apu_repaint
+    pop di
     pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; =============================================================================
