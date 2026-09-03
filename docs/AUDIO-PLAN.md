@@ -195,24 +195,28 @@ when neither the elapsed second nor the bar pixel moved) and capped at
 - **Open does not interrupt.** `ap_onfile` calls `ap_add_file` with
   `AP_ADD_CUR | AP_ADD_IDLE`: add and select always, begin playback only when
   the player is idle.
-- **Single instance (§86.11.1).** A `.WAV` double-clicked while a player runs
-  now reaches the running instance instead of opening a second window.
-  `assoc_run` has no already-running check and there is no public "wake that
-  window" slot, so the second instance's `ap_entry` finds the sibling
-  (`OSAPI_SYS_SNAPSHOT`), appends the document to `APQUEUE.DAT` on the
-  system-volume root, and returns CF = 1 (no window). The running instance's
-  `ap_onwake` polls that file (throttled ~5 s, skipped while the ring is low —
-  the poll remounts the root), replays it through `ap_add_file`, and deletes
-  it. Verified on the glass: double-clicking `ADP8K.WAV` while `PCM8K.WAV`
-  plays adds it to the playlist, switches to it and plays it, with no second
-  window and `APQUEUE.DAT` consumed.
-  - `ap_que_root` uses `OSAPI_FILE_GOTO` (real remount + bank/restore, the
-    FONTS/ pattern), not `GOTO_Q` — measured: after `GOTO_Q`,
-    `OSAPI_FILE_WRITE`/`_READ` by name still resolve in the caller's own
-    launched-from folder, so the file missed the root.
-  - The queue file is a whole-file read-modify-write (`OSAPI_FILE_WRITE`), not
-    `OSAPI_FILE_APPEND` — append needs a pre-existing cluster-aligned file and
-    a 16-byte-record queue is neither.
+- **Single instance (§86.11.1) — built, then DISABLED by default.** A `.WAV`
+  double-clicked while a player runs was meant to reach the running instance
+  through an `APQUEUE.DAT` rendezvous file on the system-volume root: the
+  second instance's `ap_entry` finds the sibling (`OSAPI_SYS_SNAPSHOT`), writes
+  the document, and returns CF = 1 (no window); the running instance's
+  `ap_onwake` polls, replays through `ap_add_file`, deletes. It works under
+  QEMU. **On an 86Box XT it does not**: the poll must `OSAPI_FILE_GOTO` the
+  system root to read the file — a full remount (BPB, FAT window, root scan,
+  sort, icon harvest), *seconds* on a 4.77 MHz machine — and a playing ADPCM
+  track polls often enough that the machine spends much of its time
+  remounting. APDIAG.TXT off the disk: `quechk 10`, `opentk 3` (a stale
+  two-record queue had the poll re-add and restart both tracks), heard as
+  "plays a second, stalls". The whole path is now behind `-DAP_HANDOFF`, off;
+  a second double-click opens a second window, the OS default. What the
+  attempt established is kept in §86.11.1:
+  - `assoc_run` has no already-running check and there is no public "wake that
+    window" slot (a snapshot record carries no window pointer).
+  - `GOTO_Q` does **not** redirect `OSAPI_FILE_WRITE`/`_READ` by name — they
+    resolve in the instance's own folder — so a cross-folder rendezvous needs
+    the real `OSAPI_FILE_GOTO`, which is the expensive part.
+  - The queue file must be a whole-file read-modify-write (`OSAPI_FILE_WRITE`),
+    not `OSAPI_FILE_APPEND` (which needs a pre-existing cluster-aligned file).
 - **Drag-and-drop is not possible** with the current window manager — see
   Limitations.
 
