@@ -83418,25 +83418,29 @@ number of clusters — a 16-byte-record queue is neither.
 
 Comfortable on 640 KB; on 256 KB the look-ahead and ring tiers drop.
 
-### 86.15 Sample rates — the SB2.0 set and the SB Pro mono tier
+### 86.15 Sample rates — the SB2.0 set and the wide (SB16) tier
 
-Accepted: **{8000, 11025, 16000, 22050}** — the SB 2.0 set, playable on the
-XT — plus **{24000, 32000, 44100}**, the **SB Pro (v1 / v2, DSP 3.x) mono
-tier**. Everything stays **mono, unsigned 8-bit**: there is no stereo and no
-16-bit path anywhere in this player or its driver, and the high rates are for
-an SB Pro on a faster machine (the same `AUDIO.O88` runs on a 286), not for an
-SB16's wide-rate 16-bit regime. 22050 Hz is the practical ceiling on an SB 2.0
-— its time-constant path stops at ~22,222 Hz; an SB Pro clocks a single mono
-channel up to 44,100 (§34.5).
+Accepted: **{8000, 11025, 16000, 22050}** — the SB 2.0 set, on any Sound
+Blaster including the XT's — plus **{24000, 32000, 44100}**. Everything stays
+**mono, unsigned 8-bit**: there is no stereo and no 16-bit path in this player.
+
+The high three need **`SOUND.DRV`'s wide regime**, which the driver gates at
+**DSP ≥ 4.00 — a Sound Blaster 16** (`drivers/sound/sb.inc` `sbl_v_open`: above
+22,222 Hz it checks `sbl_verhi >= 4` and returns err 2 otherwise). It uses DSP
+command `41h` (rate in Hz), an SB16 command. **An SB Pro is refused** the same
+way, even though real SB Pro hardware clocks a mono channel to ~44.1 kHz via
+high-speed mode (`48h`+`91h`) — that path is simply not implemented in the OS
+driver, a gap recorded in `docs/AUDIO-PLAN.md`, not something the Audio Player
+works around.
 
 The player does not probe the card's rate ceiling — `OSAPI_SND_CAPS` has no bit
-for it — so `apw_parse` accepts any of the seven and lets the **driver** be the
+for it — so `apw_parse` accepts all seven and lets the **driver** be the
 authority: a `verb 0` refusal above 22 kHz is reported as *"Rate needs a Sound
-Blaster Pro"* rather than the generic load error (`ap_open_track` `.snderr`). On
-an XT with an SB 2.0 the four low rates play and the three high ones say why
-they cannot; on an SB Pro (or QEMU's emulated card) all seven play. The default
-is still not hard-coded: the player takes whatever the file's `fmt ` chunk
-declares, within the set.
+Blaster 16"* rather than the generic load error (`ap_open_track` `.snderr`). On
+anything short of an SB16 the four low rates play and the three high ones say
+why they cannot; on an SB16 (or QEMU's emulated card) all seven play. The
+default is still not hard-coded: the player takes whatever the file's `fmt `
+chunk declares, within the set.
 
 ### 86.16 Lessons inherited from existing os8088 audio applications
 

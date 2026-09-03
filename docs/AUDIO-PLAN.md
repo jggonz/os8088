@@ -227,6 +227,18 @@ when neither the elapsed second nor the bar pixel moved) and capped at
   it takes (`PERFORMANCE.md`).
 - No seeking (an ADPCM seek must respect block boundaries and decoder state).
 - No `.M3U` playlists yet, no clickable playlist rows.
+- **High rates (24/32/44.1 kHz) need a Sound Blaster 16, not an SB Pro.**
+  `apw_parse` accepts all seven rates and lets the driver decide, but
+  `SOUND.DRV`'s wide regime (`drivers/sound/sb.inc` `sbl_v_open`) gates
+  anything above 22,222 Hz at `sbl_verhi >= 4` — DSP ≥ 4.00, i.e. an SB16 —
+  and uses DSP command `41h`, an SB16 command. **An SB Pro is refused** even
+  though real SB Pro hardware does mono up to ~44.1 kHz through its high-speed
+  mode (`48h`+`91h` with a 16-bit-ish time constant). That path is not
+  implemented in the OS driver. This is an **OS-level gap** — adding SB Pro
+  high-speed support belongs in `SOUND.DRV`, which the brief puts off-limits
+  to this work — so the player just reports *"Rate needs a Sound Blaster 16"*
+  and moves on. Verified: 24/32/44.1 kHz PCM u8 mono plays on QEMU's emulated
+  SB16 and refuses cleanly on an 86Box SB Pro v2.
 - **No drag-and-drop from the File Manager.** The window manager has no
   cross-app file-drop event: `fm_drag` (`files.inc`) recognises only a Disk
   window's folder targets and acts by a file *move* (`fcp_paste`), and
