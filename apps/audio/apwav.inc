@@ -47,6 +47,7 @@ apw_e_rate:   db 'Unsupported sample rate', 0
 apw_e_blk:    db 'Bad WAV block alignment', 0
 apw_e_spb:    db 'Bad ADPCM samples per block', 0
 apw_e_io:     db 'Cannot read the file', 0
+apw_e_clu:    db 'Cluster too large for this player', 0
 
 apw_s_riff:   db 'RIFF'
 apw_s_wave:   db 'WAVE'
@@ -78,11 +79,9 @@ apw_parse:
     mov cl, 9
     shl ax, cl                     ; * 512
     mov [apw_clu], ax
-    cmp ax, AP_HDRBUF_SZ
-    jbe .capok
-    mov ax, AP_HDRBUF_SZ
-.capok:
-    mov [apw_rdcap], ax
+    cmp ax, AP_HDRBUF_SZ            ; a cluster the 16 KB bounce cannot hold
+    ja .eclu                        ; (FAT16's 32 KB): the reason, not "Cannot
+    mov [apw_rdcap], ax             ; read the file" on a readable disk
 
     ; --- first window at offset 0 -----------------------------------------
     xor ax, ax
@@ -143,6 +142,7 @@ apw_parse:
     mov bx, [apw_pos]
     add bx, 8
     add bx, ax                      ; end of fmt body in window coords
+    jc .ebig                        ; ...a size that wrapped the word is too big
     cmp bx, [apw_winlen]
     ja .ebig                        ; a fmt we cannot fully see
     mov bx, apw_hdrbuf
@@ -192,6 +192,8 @@ apw_parse:
     mov dx, [apw_datoff+2]
     add ax, [apw_datlen]
     adc dx, [apw_datlen+2]
+    jc .datclamp                   ; past 4 GB: the sum wrapped, so the
+                                   ; compare below would pass it unclamped
     cmp dx, [apw_flen+2]
     jb .datok
     ja .datclamp
@@ -233,7 +235,8 @@ apw_parse:
     jnz .slidenow
     mov bx, [apw_pos]
     add bx, ax
-    cmp bx, [apw_winlen]
+    jc .slidenow                    ; the sum wrapped (a 64 KB tag block): past
+    cmp bx, [apw_winlen]            ; the window, not inside it
     ja .slidenow
     mov [apw_pos], bx
     jmp .walk
@@ -255,6 +258,9 @@ apw_parse:
     jae .enodat
     jmp .ebig
 
+.eclu:
+    mov word [apw_err], apw_e_clu
+    jmp .out
 .eio:
     mov word [apw_err], apw_e_io
     jmp .out
@@ -318,9 +324,11 @@ apw_validate:
     ret
 .adpb:
     mov byte [apw_fmt], AP_FMT_ADPCM
-    ; blockalign: 4 < balign <= APD_BLKMAX, and (balign-4)*2 + 1 == spb
+    ; blockalign: 8 <= balign <= APD_BLKMAX, and (balign-4)*2 + 1 == spb.
+    ; Below 8, 2048 input bytes can yield under 2048 samples, and apd_pull's
+    ; 4-byte block header is not resumable across a dry ring.
     mov ax, [apw_balign]
-    cmp ax, 5
+    cmp ax, 8
     jb .eblk2
     cmp ax, APD_BLKMAX
     ja .eblk2

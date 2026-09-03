@@ -191,10 +191,14 @@ apl_cur_name:
 ; apl_goto_cur - move this instance into the current entry's directory
 ; out: CF = 1 empty or the goto failed
 ;
-; OSAPI_FILE_GOTO, not GOTO_Q: the by-name file ops that follow in
-; ap_open_track (ap_filesize, apw_parse) resolve in the INSTANCE's own current
-; folder, and GOTO_Q does not move it (SPEC.md 86.11.1). A track handed over
-; from another folder, or a playlist that spans folders, needs the real move.
+; OSAPI_FILE_GOTO_QM: the by-name file ops that follow in ap_open_track
+; (ap_filesize, apw_parse, every refill) resolve in the INSTANCE's own current
+; folder, and GOTO_Q does not move it (SPEC.md 86.11.1) - QM is the quiet stand
+; that DOES. Not OSAPI_FILE_GOTO either: that is the listing remount (directory
+; scan, sort, an icon read per file - seconds on a 4.77 MHz XT, SPEC.md 19.2.2)
+; and it would be paid under the gfx lock at every track boundary, the
+; automatic one between two songs included. A track handed over from another
+; folder, or a playlist that spans folders, still gets the real move.
 ; =============================================================================
 apl_goto_cur:
     call apl_curptr
@@ -203,7 +207,7 @@ apl_goto_cur:
     push dx
     mov dx, [bx+14]
     mov bl, [bx+13]
-    call OSAPI_FILE_GOTO          ; DX = cluster, BL = volume; REMOUNT
+    call OSAPI_FILE_GOTO_QM       ; DX = cluster, BL = volume; quiet, and moves us
     pop dx
     pop ax
     ret

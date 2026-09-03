@@ -171,13 +171,28 @@ apu_progress:
     mov bx, ax
     or bx, dx
     jz .zero                      ; unknown length
+    push si
+    push di
+    mov si, [ap_played]
+    mov di, [ap_played+2]
+.scale:
+    cmp dx, cx                    ; DX:AX / CX must fit AX, or the 8086
+    jb .fits                      ; faults (int 0): a track past ~14 MB, or
+    shr dx, 1                     ; a hostile size. Halve total and played
+    rcr ax, 1                     ; together - the ratio is what the bar shows
+    shr di, 1
+    rcr si, 1
+    jmp .scale
+.fits:
     ; step = total / barw   (>= 1 for any real track)
     div cx                        ; AX = total / barw  (DX:AX / cx)
     mov bx, ax
+    xchg ax, si                   ; DX:AX = played (scaled), SI = step
+    mov dx, di
+    pop di
+    pop si
     or bx, bx
     jz .full
-    mov ax, [ap_played]
-    mov dx, [ap_played+2]
     cmp dx, bx
     jae .full
     div bx                        ; AX = played / step  ~= filled px
@@ -909,6 +924,49 @@ apu_draw_bar_fill:
     pop ax
     ret
 
+; --- apu_draw_bar_delta - the tick's bar update: only the strip it grew by ---
+; The bar never shrinks while a track plays (no seeking, SPEC.md 86.20), so
+; the pixels left of [ap_last_bar] are already black and those right of the
+; new edge already white: one fill, never white-then-black (PERFORMANCE.md
+; rule 2). A bar that is starting (last = 0) or went backwards (a new track)
+; takes the full apu_draw_bar_fill.
+apu_draw_bar_delta:
+    push ax
+    push bx
+    push cx
+    push dx
+    call apu_progress             ; AX = filled px now
+    mov bx, [ap_last_bar]         ; ...and at the last draw
+    or bx, bx
+    jz .full
+    cmp ax, bx
+    jb .full
+    je .done                      ; only the clock moved
+    mov cx, [apu_ox]
+    add cx, [apu_pbx1]
+    inc cx                        ; x1 of the interior
+    add ax, cx                    ; x2 = x1 + new
+    add cx, bx
+    inc cx                        ; x1 + old + 1
+    xchg ax, cx                   ; AX = left edge, CX = right edge
+    mov bx, [apu_oy]
+    add bx, [apu_pby1]
+    inc bx
+    mov dx, [apu_oy]
+    add dx, [apu_pby2]
+    dec dx
+    call apu_penb
+    call OSAPI_GFX_FILL
+    jmp .done
+.full:
+    call apu_draw_bar_fill
+.done:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 apu_penw:
     push ax
     mov al, 15
@@ -943,7 +1001,7 @@ apu_draw_dyn:
     mov al, 0                      ; ink black
     mov ah, 15                     ; paper white
     call OSAPI_FONT_RUN
-    call apu_draw_bar_fill
+    call apu_draw_bar_delta
     pop di
     pop si
     pop dx

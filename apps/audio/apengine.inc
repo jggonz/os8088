@@ -284,6 +284,15 @@ ap_grant_ring:
     mov ax, cx
     dec ax
     mov [ap_rmask], ax
+    mov ax, cx                     ; the pre-roll follows the ring: halves =
+    mov cl, 11                     ; ring / AP_HALF - 1, capped at AP_PREROLL -
+    shr ax, cl                     ; 6 on the 16 KB tier, 3 on the 8 KB one.
+    dec ax                         ; A fixed six (12 KB) is more than the small
+    cmp ax, AP_PREROLL             ; ring holds, and verb 0 refuses CX > the
+    jbe .pr                        ; ring, so that tier could never play (the
+    mov ax, AP_PREROLL             ; Tracker's trk_ring_set rule)
+.pr:
+    mov [ap_preroll], ax
     mov byte [ap_ghave], 1
 .have:
     clc
@@ -346,6 +355,23 @@ ap_refill_chunk:
     jb .out                        ; not room for even one cluster - later
     mov [ap_rd_len], bx
 
+    ; still standing in the track's folder? The Open dialog moves the
+    ; instance to whatever folder the user picked (SPEC.md 38.10), and the
+    ; name below resolves THERE - not found reads as EOF, a same-named file
+    ; as audio. GOTO back first; only a user who browsed away pays it.
+    call OSAPI_FILE_HERE
+    cmp dx, [ap_trk_dir]
+    jne .goback
+    cmp bl, [ap_trk_vol]
+    je .inplace
+.goback:
+    mov dx, [ap_trk_dir]
+    mov bl, [ap_trk_vol]
+    call OSAPI_FILE_GOTO_QM        ; the quiet stand that MOVES us: a word
+    jc .ioerr                      ; compare inside one volume, a quiet mount
+                                   ; across; CF: the folder is gone - the track
+                                   ; ends, and says why
+.inplace:
     ; read [ap_rd_pos, +ap_rd_len) into ap_scratch
     push ds
     pop es
@@ -357,7 +383,7 @@ ap_refill_chunk:
     call OSAPI_FILE_READ_AT        ; out CF, DX:AX = bytes delivered
     APCNT apc_readat
     APCNT apc_refill
-    jc .done_all                  ; treat an I/O error as end of data
+    jc .ioerr                     ; an I/O error ends the data - and says why
     APADD apc_rbytes, ax
     ; DX:AX = got; it fits a word (AP_RD_CHUNK <= 16384)
     mov bx, ax                     ; BX = got (low word; DX must be 0)
@@ -422,6 +448,9 @@ ap_refill_chunk:
     ja .done_all
     cmp ax, [ap_data_end]
     jb .out
+.ioerr:
+    mov word [ap_msg], apw_e_io    ; a bad sector or a pulled disk: the status
+                                   ; line says so, not "End of playlist"
 .done_all:
     mov byte [ap_src_done], 1
 .out:
@@ -450,9 +479,9 @@ ap_prime:
     ; with headroom, and the worker tops the ring up once playing. Filling the
     ; whole 32 KB here was a second disk read in the "Opening..." wait, which
     ; on a real XT is a visible extra second per track.
-    cmp ax, AP_RD_CHUNK
-    jae .done
-    call ap_refill_chunk
+    cmp ax, AP_RD_CHUNK - AP_HALF  ; less the head skip: data never starts on
+    jae .done                      ; a cluster boundary, so a full gulp is
+    call ap_refill_chunk           ; never quite AP_RD_CHUNK of audio
     loop .l
 .done:
     pop cx
@@ -482,6 +511,9 @@ ap_open_track:
 
     call apl_goto_cur             ; move into the track's directory
     jc .badfile                   ; could not reach the folder - say so
+    call OSAPI_FILE_HERE          ; ...and bank it: the refill reads BY NAME,
+    mov [ap_trk_dir], dx          ; and a File > Open in another folder moves
+    mov [ap_trk_vol], bl          ; the instance there (SPEC.md 38.10, 86.3)
     call apl_cur_name             ; SI = name
     jc .badfile
 
@@ -550,8 +582,8 @@ ap_open_track:
 
     call ap_prime                 ; fill the look-ahead ring
 
-    ; --- pre-roll AP_PREROLL halves straight into the grant --------------
-    mov cx, AP_PREROLL
+    ; --- pre-roll [ap_preroll] halves straight into the grant ------------
+    mov cx, [ap_preroll]
 .pre:
     push cx
     call ap_stage_half            ; decode one half -> verb 6 -> ap_total += 2048
@@ -575,9 +607,9 @@ ap_open_track:
     jne .running
     mov ax, ap_worker
     mov bx, [ap_win]
-    call OSAPI_TASK_SPAWN         ; CF = 1 refused (transient)
-    jc .running                   ; no worker slot now: the feed just won't run
-    mov byte [ap_have_worker], 1
+    call OSAPI_TASK_SPAWN         ; CF = 1 refused (transient, SPEC.md 20.6)
+    jc .notask                    ; no worker slot: say so and stop, rather than
+    mov byte [ap_have_worker], 1  ; "Playing" over a ring nothing will feed
 .running:
     mov byte [ap_state], AP_ST_PLAY
     mov word [ap_msg], ap_s_playing
@@ -594,6 +626,9 @@ ap_open_track:
 .nomem:
     mov word [ap_msg], ap_s_nomem
     jmp .refuse
+.notask:
+    mov word [ap_msg], ap_s_notask
+    jmp .snderr_msg               ; the stream is open: close it on the way out
 .snderr:
     ; a verb-0 refusal above 22 kHz is the driver's rate gate: 24/32/44.1 kHz
     ; need an SB Pro (DSP >= 3.00) or an SB16 (SPEC.md 34.5/86.15). Name the

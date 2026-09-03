@@ -1967,7 +1967,7 @@ trk_play:
     call mp_stop
     mov si, trk_s_snderr
     cmp ax, 2                       ; err 2 = rate refused: the 44 kHz pick
-    jne .ofmsg                      ; on a pre-4.x DSP (SPEC.md 45.10)
+    jne .ofmsg                      ; on a pre-3.x DSP (SPEC.md 45.10)
     mov si, trk_s_norate
 .ofmsg:
     call tui_msg
@@ -2937,7 +2937,7 @@ trk_s_ioerr:  db 'Disk error', 0
 trk_s_snderr: db 'Sound open failed', 0
 trk_s_xtmon:  db 'XT mode on - Enter plays', 0
 trk_s_xtmoff: db 'XT mode off - Enter plays', 0
-trk_s_norate: db '44 kHz needs a DSP 4.x card', 0
+trk_s_norate: db '44 kHz needs an SB Pro or SB16', 0
 trk_s_buffer: db 'Buffering...', 0
 trk_s_txxt:   db 'Windowed only: Esc first', 0
                                         ; THREE keys share this and sharing it

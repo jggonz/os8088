@@ -38810,7 +38810,17 @@ and `SBL_WD_WIDE` watchdog. Its one hardware quirk drives the last column: once
 8237 channel 1 instead of writing `D0h`, `sbl_go_on` unmasks, and
 `sbl_stop_stream` masks in the `cli` window then runs `sbl_dsp_reset` after
 `popf` (the stream already dead) to leave high-speed mode for the next open.
-Everything below DSP 3.00, and every rate ≤ 22,222, is byte-for-byte unchanged.
+A TC byte can only say 1,000,000 / n, so the high-speed regime **rounds** the
+division where the legacy path truncates: 44,100 lands on TC 233 (43,478 Hz,
+−1.4%) rather than 234 (45,454 Hz, +3.1%, half a semitone sharp), 24,000 on
+23,810 Hz. The SB16's `41h` takes the rate in Hz and has no such error.
+`sbl_dsp_reset` answers CF = 1 on a timeout and `sbl_stop_stream` retries it
+once — nothing else ever resets the DSP, and one left in `90h` swallows every
+later open's commands.
+Everything below DSP 3.00, and every rate ≤ 22,222, behaves exactly as before:
+those paths gained only a test of `sbl_hisp` (in `sbl_hw_start`, `sbl_halt`,
+`sbl_go_on`, `sbl_stop_stream` and the TC division), never a different byte
+to the card.
 
 ### 34.6 Recording and staging — back, as a driver
 
@@ -50302,9 +50312,9 @@ other direction, and it is settled the same way, on hardware and by ear.
 
 The XT trades fidelity for cycles; a 286/386 has cycles to spend, and the
 **Rate** menu spends them: `11 kHz` (default, requested as 11,000),
-`22 kHz` (22,050) and `44 kHz` (44,100 — the §34.5 wide-rate regime, so a
-DSP ≥ 4.00; on an older card the open refuses err 2 and the status line
-says so, the three-layer refusal pattern). The active item is its own
+`22 kHz` (22,050) and `44 kHz` (44,100 — §34.5's wide regime on a DSP ≥ 4.00,
+its high-speed regime on an SB Pro's DSP 3.xx; on an older card the open
+refuses err 2 and the status line says so, the three-layer refusal pattern). The active item is its own
 `MENU_DIS`-disabled twin — the Solitaire Deal-menu radio idiom — and the
 **R** key cycles the selection for fullscreen reach. A rate change while
 playing stops playback first (the §45.2 drain), exactly like the XT
@@ -83206,6 +83216,15 @@ only when the player is idle — a deliberate choice so that queueing up the nex
 song never cuts off the one playing. File ▸ Clear (`ap_stream_close` +
 `apl_clear`) empties the list and stops.
 
+Open in another folder **moves the instance** (§38.10): every by-name file
+call afterwards — the refill's `OSAPI_FILE_READ_AT` included — resolves there,
+so the playing track would be read in the wrong folder (not found reads as
+end of data; a same-named file as audio). `ap_open_track` therefore banks the
+track's `OSAPI_FILE_HERE` (`ap_trk_dir`/`ap_trk_vol`) and `ap_refill_chunk`
+re-stands there with `OSAPI_FILE_GOTO_QM` before a read whenever the two
+differ — a word compare inside one volume, a quiet mount across, never the
+listing remount.
+
 ### 86.5 The engine — a look-ahead stage in front of §45.2
 
 §45.2's ring stream is the one this app is built on: **the UI task opens,
@@ -83250,9 +83269,15 @@ disk --OSAPI_FILE_READ_AT--> 32 KB look-ahead ring (heap claim) --decoder-->
   and `OSAPI_WM_WAKE`s the UI task, which `ap_reap`s — closes the stream and
   advances the playlist (or stops at the end of the list).
 
-Pre-roll is **six halves** on the UI task before `verb 0` (§45.17.2's
-field-corrected number). Ring grant is **16 KB**, tiered to 8 KB (`verb 7`),
-freed by `ap_stream_close`. The look-ahead buffer is one 32 KB
+Pre-roll is **`[ap_preroll]` halves** on the UI task before `verb 0`: the
+ring's halves less one, capped at `AP_PREROLL` = 6 (§45.17.2's field-corrected
+number) — six on the 16 KB grant, **three on the 8 KB tier**, because `verb 0`
+refuses a total larger than the ring and a fixed six (12 KB) meant that tier
+could never play at all. Ring grant is **16 KB**, tiered to 8 KB (`verb 7`),
+freed by `ap_stream_close`. A refused `OSAPI_TASK_SPAWN` for the worker is a
+refusal like any other (`No free task - close an app and retry`, the FTPD
+sentence): the stream is closed again, not left open under a "Playing" that
+nothing feeds. The look-ahead buffer is one 32 KB
 `OSAPI_MEM_CLAIM`, taken once and held for the instance's life.
 
 ### 86.5.1 Worker pacing and the redraw throttle
@@ -83274,7 +83299,11 @@ budgeted for the 4.77 MHz target, not the emulator:
   `ap_worker_draw` now recomputes the elapsed second and the bar-fill pixel,
   returns with **no lock and no draw** when neither changed, and otherwise
   takes the gfx lock at most every `AP_DRAW_TICKS` (~2×/s) and only when
-  `OSAPI_WM_OBSCURED` says the window is visible. Measured: progress updates
+  `OSAPI_WM_OBSCURED` says the window is visible — and the bar update it then
+  draws is **one fill of the strip the bar grew by** (`apu_draw_bar_delta`,
+  from `[ap_last_bar]` to the new edge), not a white fill of the interior
+  followed by a black one: two fills a tick is PERFORMANCE.md rule 2's
+  double write, visible on the target as a flicker. Measured: progress updates
   fell from ~18–24/s to ~2/s.
 
 `APROF` (`make … AUDIOPROF=1`, `AUDIOP.O88`) compiles in a block of `inc word`
@@ -83283,7 +83312,10 @@ counters — worker iterations, `verb 3`/`verb 1`/`verb 6` calls, `WM_WAKE` /
 paints and progress updates, decoder calls and bytes, `ap_open_track` /
 `apw_parse` / `apw_slide` / `ap_prime` calls. The **D** key shows them in the
 window and writes `APDIAG.TXT` to the system-volume root (from `ap_onwake`, so
-the file I/O is off the gfx lock). The shipping `AUDIO.O88` compiles none of it.
+the file I/O is off the gfx lock). The shipping `AUDIO.O88` compiles none of it, and its File ▸ Diagnostics item
+is greyed (`MENU_DIS`, §47 rule 5 — whether the counters exist is a
+compile-time fact); the **D** key still answers there with the one-line
+"rebuild with -DAPROF" note.
 
 ### 86.5.2 Why the read is 16 KB, not one cluster — the ModPlug comparison
 
@@ -83305,8 +83337,19 @@ Reading a `AP_RD_CHUNK` (16 KB) gulp instead — the ring has room, and
 (measured: 14 reads in 20 s vs. 106 before), and with it the worker →
 `WM_WAKE` → `ap_onwake` refill handshake it drove (182 `WM_ONWAKE` in 20 s →
 14). No underruns, PCM8 or ADPCM. The chunk is not sacred: it is bounded by
-`ap_scratch` and by the 32 KB ring, and `AP_LA_LOW` (12 KB) still leaves room
-for one full gulp when a refill triggers.
+`ap_scratch` and by the 32 KB ring, and `AP_LA_LOW` (16 KB) still leaves room
+for one full gulp when a refill triggers. `ap_prime` starts after ONE gulp:
+its test is `AP_RD_CHUNK − AP_HALF`, because data never starts on a cluster
+boundary and a full gulp is never quite `AP_RD_CHUNK` of audio.
+
+**`ap_scratch` is 512-byte aligned by construction** — it is the `int 13h`
+target (CLAUDE.md's hard rule, §2.4): the loader's claim is whole KB, so the
+bss offset decides, and `audio.asm` rounds the accumulator up to 512 before
+it and pads the image end to 512. A base that is not answers error 09h on the
+one transfer in four that straddles a 64 KB page, and the refill would take
+that CF as end of data. An `OSAPI_FILE_READ_AT` error mid-track (a bad sector,
+a pulled disk) still ends the data, but the status line says `Cannot read the
+file` rather than posing as the end of the track.
 
 ### 86.6 The WAV parser (`apw_parse`)
 
@@ -83317,7 +83360,18 @@ walks the chunk list, honours the RIFF odd-length pad byte, skips every chunk
 it does not recognise, and slides a fresh cluster window forward when a
 skipped chunk runs past the one it holds (`APW_WINDOWS` windows — a header
 larger than that is refused, not mis-read). Every size the file claims is
-bounds-checked against the file length before it is trusted.
+bounds-checked against the file length before it is trusted — including a
+`data` length whose 32-bit sum with its offset **wraps**, which is clamped like
+any other overrun rather than passed because the wrapped sum compared small.
+The progress bar (`apu_progress`) then halves the 32-bit total and the played
+count together until `total / bar width` fits 16 bits: a real track past
+~14 MB (ten minutes at 22 kHz) would otherwise fault the divide. The walker's
+16-bit window arithmetic tests the carry, so a 64 KB tag block before `data`
+slides the window rather than wrapping the cursor into it; a cluster the 16 KB
+bounce cannot hold (FAT16's 32 KB, §19) is refused as `Cluster too large for
+this player`; and an ADPCM `nBlockAlign` below 8 is refused, because below it
+2,048 input bytes can yield fewer than 2,048 samples and the decoder's 4-byte
+block header is not resumable across a dry ring.
 
 Accepted: `WAVE_FORMAT_PCM` (0x0001) mono 8-bit, and `WAVE_FORMAT_DVI_ADPCM`
 (0x0011) mono 4-bit. Rejected with a specific reason on the glass: non-mono,
@@ -83369,7 +83423,11 @@ The transport buttons tile the row gap-free (`apu_hit` takes
 found on the glass). Shuffle and Repeat draw the `OS88UI_DOWN` pressed look
 while toggled on. The worker's one gfx-lock hold each pass redraws only the
 elapsed time and the progress-bar fill, and only while `OSAPI_WM_OBSCURED`
-says the window is visible — a backgrounded player does no UI work. The
+says the window is visible — a backgrounded player does no UI work. **Every
+self-initiated content repaint arms `OSAPI_WM_CLIP_SET` first** (`apu_repaint`,
+which the track-end, launch-document, first-paint and command paths all go
+through): outside `W_PAINT` the `gfx_*` calls are absolute (§11.3), and without
+the region the player painted over its own Open dialog. The
 elapsed clock is derived from the free-running `verb 3` consumed count
 accumulated into a 32-bit `ap_played`, so it survives the counter's ~3–6 s
 wrap.
@@ -83390,8 +83448,11 @@ click or key clears the flag and repaints.
 
 A fixed array of at most `AP_MAXTRK` entries, `AP_ENTSZ` (16) bytes each: an
 8.3 name (NUL-terminated, ≤ 12), a volume byte and a directory-cluster word.
-**No full paths** — a track is reached by `OSAPI_FILE_GOTO_Q(dir, vol)` then a
-name lookup, the `OSAPI_ARG_FILE` / fdlg model. File ▸ Open adds a track
+**No full paths** — a track is reached by `OSAPI_FILE_GOTO_QM(dir, vol)` then a
+name lookup, the `OSAPI_ARG_FILE` / fdlg model: the quiet stand that also
+moves the instance, never `OSAPI_FILE_GOTO`'s listing remount, which is seconds
+on a 4.77 MHz XT (§19.2.2) and would be paid under the gfx lock at every track
+boundary. File ▸ Open adds a track
 (captured with `OSAPI_FILE_HERE` in the completion proc) and starts it if the
 player is idle; File ▸ Clear empties the list. Shuffle keeps a separate order
 array `apl_ord[]` filled by a Fisher-Yates over `OSAPI_RAND`, re-shuffled at
@@ -83454,9 +83515,9 @@ number of clusters — a 16-byte-record queue is neither.
 
 | item | size | where |
 |---|---|---|
-| image + bss | ~20 KB | the package region (cap `APP_MAX_SIZE` = 60 KB) |
+| image + bss | ~30 KB (9,216 B image, 512-padded, + 20,958 B bss) | the package region (cap `APP_MAX_SIZE` = 60 KB) |
 | look-ahead ring | 32 KB | one `OSAPI_MEM_CLAIM`, held for the instance's life |
-| header window / streaming read bounce | 16 KB | `ap_scratch` in bss, shared between the parser and the `AP_RD_CHUNK` refill read (§86.5.2) |
+| header window / streaming read bounce | 16 KB | `ap_scratch` in bss, 512-aligned (§86.5.2), shared between the parser and the `AP_RD_CHUNK` refill read |
 | decoder scratch | 2 KB | `apd_out` in bss |
 | playlist | `AP_MAXTRK` × 16 B | bss |
 | SND ring grant + driver pool | ~28 KB | `SOUND.DRV`'s claims, released when the player stops |

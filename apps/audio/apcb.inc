@@ -27,6 +27,12 @@ apu_repaint:
     push si
     push di
     APCNT apc_uipaint
+    mov bx, [ap_win]
+    call OSAPI_WM_CLIP_SET          ; SPEC.md 11.3: outside W_PAINT the gfx_*
+    jc .done                        ; calls are absolute - without the region
+                                    ; armed this paints over whatever is on
+                                    ; top of us (the Open dialog, found on the
+                                    ; glass). CF=1: not a pixel of us shows
     call apu_layout
     call apu_origin
     mov al, 15
@@ -43,6 +49,7 @@ apu_repaint:
     mov al, 0
     call OSAPI_SET_COLOR
     call apu_draw
+.done:
     pop di
     pop si
     pop dx

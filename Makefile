@@ -3082,7 +3082,8 @@ audiodisk: $(BUILD)/audio-test.img
 # ...and a BOOTABLE HARD-DISK image (ON DEMAND: `make audio-hdd`) - the vehicle
 # for a full set of multi-MB WAVs, and the realistic streaming scenario
 # (docs/AUDIO-PLAN.md: floppy streaming is marginal, HDD is where it works).
-# The system core plus AUDIO.O88 and every WAV under AUDIOWAVDIR (8.3 names)
+# The system core plus AUDIO.O88 and every WAV under AUDIOWAVDIR (8.3 names,
+# either case of extension - a file called BIG.WAV is the usual one)
 # in APPS/. The partition auto-sizes to the payload; the kernel adopts it
 # as C:. 86Box: attach as the XT's hard disk. QEMU:
 #   qemu-system-i386 -drive file=build/audio-hdd.img,format=raw,if=ide -boot c \
@@ -3103,7 +3104,7 @@ $(BUILD)/audio-hdd.img: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(BUILD)/kernel.bin
 	    --mbr $(BUILD)/mbr.bin --boot $(BUILD)/boothd.bin \
 	    --kernel $(BUILD)/kernel.bin \
 	    $(DRIVERS) SYSTEM:$(BUILD)/taskmgr.o88 APPS:$(AUDIO_O88) \
-	    $(patsubst %,APPS:%,$(sort $(wildcard $(AUDIOWAVDIR)/*.wav)))
+	    $(patsubst %,APPS:%,$(sort $(wildcard $(AUDIOWAVDIR)/*.wav $(AUDIOWAVDIR)/*.WAV)))
 	@python3 tools/os88disk.py --verify-hdd $@
 	@echo "audio-hdd: $@  (WAVs from $(AUDIOWAVDIR)/)"
 

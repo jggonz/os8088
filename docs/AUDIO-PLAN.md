@@ -163,8 +163,9 @@ fine.
 
 **Fix.** `AP_RD_CHUNK` = 16 KB: `ap_refill_chunk` now reads a gulp bounded by
 the ring's free room and floored to a whole number of clusters, and
-`ap_scratch` is sized to hold it (bss +8 KB, ~20 KB total — still a quarter of
-`APP_MAX_SIZE`). Same 20-second run after:
+`ap_scratch` is sized to hold it (bss +8 KB; the shipped build is a 9,216-byte
+image, padded to 512 for the aligned read bounce, + 20,958 bytes of bss, ~30 KB
+— under half of `APP_MAX_SIZE`). Same 20-second run after:
 
 | counter | before | after |
 |---|---|---|

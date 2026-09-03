@@ -120,9 +120,9 @@ MPP_HALF    equ 2048                ; the fill unit, pinned: fills are whole
                                     ; so a half never crosses the ring seam
 MPP_RATE    equ 11000               ; Setup > Audio > Frequency, the default
 MPP_RATE22  equ 22050
-MPP_RATE44  equ 44100               ; the SPEC.md 34.5 wide-rate regime: a
-                                    ; DSP 4.x card, and an honest refusal on
-                                    ; anything older
+MPP_RATE44  equ 44100               ; SPEC.md 34.5's wide regime (DSP 4.x) or
+                                    ; high-speed regime (SB Pro), and an honest
+                                    ; refusal on anything older
 MPP_RATE_XT equ 5500                ; XT mode's own rate (SPEC.md 56.7)
 MPP_MAXFEED equ 6                   ; halves per worker wake: bounds the
                                     ; lock-free burst at ~1.1 s of mixing
@@ -1359,7 +1359,7 @@ mpp_play:
     call mpm_stop
     mov si, mpp_s_snderr
     cmp ax, 2                       ; err 2 = rate refused: the 44 kHz pick on
-    jne .ofmsg                      ; a pre-4.x DSP (SPEC.md 56.5)
+    jne .ofmsg                      ; a pre-3.x DSP (SPEC.md 34.5, 56.5)
     mov si, mpp_s_norate
 .ofmsg:
     call mppu_msg
@@ -2187,7 +2187,7 @@ mpp_s_toobig:  db 'File too big', 0
 mpp_s_noent:   db 'File not found', 0
 mpp_s_ioerr:   db 'Disk error', 0
 mpp_s_snderr:  db 'Sound open failed', 0
-mpp_s_norate:  db '44 kHz needs a DSP 4.x card', 0
+mpp_s_norate:  db '44 kHz needs an SB Pro or SB16', 0
 mpp_s_xtmon:   db 'XT mode on - the DSP tail is off', 0
 mpp_s_xtmoff:  db 'XT mode off', 0
 mpp_s_hint:    db 'Z X C V B transport  L load  E setup  P list', 0

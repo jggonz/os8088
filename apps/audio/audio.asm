@@ -241,6 +241,8 @@ AP_B_NONE  equ 0xFF
     APB ap_ghave
     APW ap_ring
     APW ap_rmask
+    APW ap_preroll                 ; halves staged before verb 0: ring/AP_HALF - 1,
+                                   ; capped at AP_PREROLL (6 at 16 KB, 3 at 8 KB)
     APB ap_hand
     APB ap_sopen
     APB ap_mixing
@@ -273,6 +275,8 @@ AP_B_NONE  equ 0xFF
 
 ; --- WAV parser state (apwav.inc) ---------------------------------
     APW apw_name
+    APW ap_trk_dir                 ; the playing track's folder (OSAPI_FILE_HERE):
+    APB ap_trk_vol                 ; File > Open elsewhere MOVES us (SPEC.md 38.10)
     APD apw_flen
     APW apw_clu
     APW apw_rdcap
@@ -296,6 +300,13 @@ AP_B_NONE  equ 0xFF
     APW apw_err
 
 ; --- shared header window / cluster bounce -----------------------
+; THE int 13h TARGET, so 512-ALIGNED (CLAUDE.md, SPEC.md 2.4): the loader's
+; claim is whole KB, so the OFFSET decides - align the accumulator here and
+; pad the image end to 512 below. A base that is not answers 09h on the one
+; transfer in four that straddles a 64 KB page, and the refill takes that CF
+; as end of data: the song stops a few seconds in, on the machine whose heap
+; happened to put the package there.
+%assign AP_BSS ((AP_BSS + 511) / 512) * 512
     APBUF ap_scratch, AP_HDRBUF_SZ
 apw_hdrbuf equ ap_scratch
 
@@ -445,7 +456,11 @@ AP_CMD_DIAG  equ 2
 AP_CMD_EXIT  equ 3
 ap_it_open:  db 'Open...', 0
 ap_it_clear: db 'Clear playlist', 0
+%ifdef APROF
 ap_it_diag:  db 'Diagnostics (D)', 0
+%else
+ap_it_diag:  db MENU_DIS, 'Diagnostics (D)', 0   ; no counters in this build
+%endif                                            ; (SPEC.md 47 rule 5)
 ap_it_exit:  db 'Exit', 0
 ap_m_play:   db 'Play', 0
 ap_i_play:   dw ap_it_play, ap_it_pause, ap_it_stop, ap_it_prev, ap_it_next, \
@@ -474,6 +489,7 @@ ap_s_nosb:    db 'No Sound Blaster - playback off', 0
 ap_s_nomem:   db 'Out of memory', 0
 ap_s_nofile:  db 'Playlist is empty', 0
 ap_s_loaderr: db 'Cannot play this file', 0
+ap_s_notask:  db 'No free task - close an app and retry', 0
 ap_s_hirate:  db 'Rate needs a Sound Blaster Pro', 0
 ap_s_opening: db 'Opening...', 0
 ap_s_endlist: db 'End of playlist', 0
@@ -486,4 +502,5 @@ ap_qfile:     db 'APQUEUE.DAT', 0
 
 %include "os88ui.inc"
     OS88_BSS AP_BSS
-    OS88_IMAGE_END
+    align 512, db 0                ; os88_image_end on a 512 boundary, so the
+    OS88_IMAGE_END                 ; aligned AP_BSS offset above is physical

@@ -563,7 +563,8 @@ sbl_halt:
 ; -----------------------------------------------------------------------------
 ; sbl_dsp_reset - reset the DSP at [sbl_base] and wait for 0AAh (near; the
 ;                 high-speed exit path, SPEC.md 34.5). Bounded by SBL_POLLS.
-; in/out: nothing; clobbers nothing (flags)
+; in/out: CF = 1 timed out (the DSP is still in high-speed mode); clobbers
+;         nothing else
 ; -----------------------------------------------------------------------------
 sbl_dsp_reset:
     push ax
@@ -588,10 +589,12 @@ sbl_dsp_reset:
     test al, 0x80
     jnz .rd
     loop .poll
-    jmp .done                   ; timed out - the next open resets again
+    stc                         ; timed out: nothing else ever resets the DSP
+    jmp .done                   ; (only the probe does), so the caller retries
 .rd:
     sub dx, 4                   ; 2xAh: consume the 0AAh identity byte
     in al, dx
+    clc
 .done:
     pop dx
     pop cx
@@ -1116,7 +1119,7 @@ sbl_v_open:
     push dx
     push si
     mov byte [sbl_ropen], 0     ; latch the ring flag before AH dies (a
-    mov byte [sbl_hisp], 0      ; high-speed regime off unless the rate needs it
+    mov byte [sbl_hsopen], 0    ; high-speed off unless the rate needs it (TEMP)
     test ah, 1                  ; TEMP, not the live record byte: the busy
     jz .lin                     ; refusal below must not disturb an OPEN
     mov byte [sbl_ropen], 1     ; stream's [sbl_ring_on])
@@ -1138,7 +1141,7 @@ sbl_v_open:
     jae .widehalf              ; takes the rate in Hz (SPEC.md 34.5)
     cmp byte [sbl_verhi], 3     ; DSP >= 3.00 (SB Pro v1/v2): high-speed mono,
     jb .e2                      ; 90h + a TC byte (SPEC.md 34.5). SB 2.0 could
-    mov byte [sbl_hisp], 1      ; too but is not opted in here.
+    mov byte [sbl_hsopen], 1    ; too but is not opted in here.
 .widehalf:
     mov word [sbl_hopen], 2*SBL_HALF   ; both wide regimes use the 4KB half
 .ratok:
@@ -1177,7 +1180,9 @@ sbl_v_open:
     or al, al
     jz .e4                      ; no candidate confirmed: no usable card
 .irqok:
-    mov ax, [sbl_hopen]         ; commit the half width (safe pre-publish:
+    mov al, [sbl_hsopen]        ; commit the regime, then the half width
+    mov [sbl_hisp], al          ; (safe pre-publish:
+    mov ax, [sbl_hopen]
     mov [sbl_half], ax          ; sbl_str_act == 0 held at .e1, so nothing
     mov byte [sbl_wide], 0      ; live reads these)
     cmp byte [sbl_hisp], 0
@@ -1194,6 +1199,15 @@ sbl_v_open:
 .tcrate:
     mov ax, 0x4240              ; TC = 256 - 1,000,000/rate (SPEC.md 34.5)
     mov dx, 0x000F
+    cmp byte [sbl_hisp], 0
+    je .tcdiv                   ; legacy: truncate, as it always has
+    push cx                     ; high-speed: ROUND. Truncation puts 44,100
+    mov cx, bx                  ; on TC 234 = 45,454 Hz, half a semitone
+    shr cx, 1                   ; sharp and 3% short; 233 = 43,478 Hz is
+    add ax, cx                  ; the nearest the byte can say
+    adc dx, 0
+    pop cx
+.tcdiv:
     div bx                      ; AX = 1e6/rate (45..250 in the TC range,
     neg al                      ; ~22 at 44.1kHz for the high-speed regime)
     mov [sbl_tc], al
@@ -1416,6 +1430,9 @@ sbl_stop_stream:
     cmp byte [sbl_hisp], 0
     je .out
     call sbl_dsp_reset          ; the only way out of high-speed mode
+    jnc .reset_ok
+    call sbl_dsp_reset          ; once more; a DSP still in 90h swallows
+.reset_ok:                      ; every later open's commands (silence)
     mov al, 0xD3               ; speaker off now that the DSP takes commands
     call sbl_dsp_wr
     mov byte [sbl_hisp], 0
@@ -3171,6 +3188,9 @@ sbl_hisp:     times 1 db 0            ;   1 = SB Pro high-speed: TC + 90h, and
 sbl_rate:     times 1 dw 0            ;   wide: the open rate in Hz (41h operand)
 sbl_hopen:    times 1 dw 0            ;   verb 0's half width - a TEMP, the
                                 ;   sbl_ropen idiom (committed at .irqok)
+sbl_hsopen:   times 1 db 0            ;   verb 0's regime pick - the same TEMP:
+                                ;   a refused open (busy, err 7, no IRQ)
+                                ;   must leave a LIVE stream's sbl_hisp alone
 
 ; --- where our DMA buffer landed (SPEC.md 51.4) ------------------------------
 ; It was a pinned 64KB segment whose page and offset were constants. A
