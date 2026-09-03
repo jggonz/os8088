@@ -266,7 +266,7 @@ apu_draw:
 apu_ab1: db 'Audio Player for os8088', 0
 apu_ab2: db 'Version 0.6b', 0
 apu_ab3: db 'Play PCM and ADPCM audio files', 0
-apu_ab4: db 'Rates 8-22 kHz  +24/32/44 SB16', 0
+apu_ab4: db 'Rates 8-22 kHz  +24/32/44 SB Pro', 0
 
 apu_about_card:
     push ax

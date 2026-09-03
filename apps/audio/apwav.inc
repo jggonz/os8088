@@ -9,11 +9,11 @@
 ; Accepted:
 ;   WAVE_FORMAT_PCM       0x0001  mono, 8 bits/sample, unsigned
 ;   WAVE_FORMAT_DVI_ADPCM 0x0011  mono, 4 bits/sample, IMA/DVI
-; and only sample rates in apw_rates. 8000..22050 are the SB 2.0 set (any SB);
-; 24000, 32000, 44100 need SOUND.DRV's wide regime, which is DSP >= 4.00 - a
-; Sound Blaster 16 - only (SPEC.md 86.15). Still mono 8-bit throughout. The
-; parser accepts all seven; the DRIVER refuses what the card cannot clock, and
-; ap_open_track reports it as "needs a Sound Blaster 16".
+; and only sample rates in apw_rates. 8000..22050 play on any SB; 24000,
+; 32000, 44100 need an SB Pro (DSP >= 3.00) or an SB16 - SOUND.DRV's rate
+; regime split (SPEC.md 34.5/86.15). Mono 8-bit throughout. The parser accepts
+; all seven; the DRIVER refuses what the card cannot clock, and ap_open_track
+; reports it as "needs a Sound Blaster Pro".
 ;
 ; NOT assumed (SPEC.md 86.6): that `fmt ` is followed by `data`; a fixed
 ; header size; the absence of LIST / fact / INFO / id3 / other chunks. The

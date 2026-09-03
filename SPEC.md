@@ -38779,6 +38779,24 @@ the rate on 0 and 4, the consumed count on 3. The stub banks it for the
 former and must not for the latter — getting that wrong made every poller
 believe a finished stream was still playing.
 
+**Output rate has three regimes**, chosen in `sbl_v_open` by rate and DSP
+version, and all mono unsigned-8:
+
+| rate | regime | rate cmd | start cmd | stop / pause |
+|---|---|---|---|---|
+| ≤ 22,222 Hz | time-constant (any DSP) | `40h` + TC | `1Ch` (auto-init) / `14h` (single) | `D0h` / `D4h` |
+| 22,223–44,100, DSP ≥ 4.00 | wide (SB16) | `41h` + Hz | `C6h` + mode | `D0h` / `D4h` |
+| 22,223–44,100, DSP ≥ 3.00 | **high-speed (SB Pro v1/v2)** | `40h` + TC | `90h` | mask/unmask DMA ch 1; DSP **reset** on close |
+
+The high-speed regime is what an XT/286 with an SB Pro actually uses — there is
+no SB16 for an 8-bit ISA XT. It borrows the wide regime's 4 KB double buffer
+and `SBL_WD_WIDE` watchdog. Its one hardware quirk drives the last column: once
+`90h` runs the DSP accepts **no command** until a reset, so `sbl_halt` masks
+8237 channel 1 instead of writing `D0h`, `sbl_go_on` unmasks, and
+`sbl_stop_stream` masks in the `cli` window then runs `sbl_dsp_reset` after
+`popf` (the stream already dead) to leave high-speed mode for the next open.
+Everything below DSP 3.00, and every rate ≤ 22,222, is byte-for-byte unchanged.
+
 ### 34.6 Recording and staging — back, as a driver
 
 Went with §34.5 and came back with it. Verb 7 grants out of the driver's
@@ -83418,29 +83436,27 @@ number of clusters — a 16-byte-record queue is neither.
 
 Comfortable on 640 KB; on 256 KB the look-ahead and ring tiers drop.
 
-### 86.15 Sample rates — the SB2.0 set and the wide (SB16) tier
+### 86.15 Sample rates — the SB2.0 set and the SB Pro high-speed tier
 
-Accepted: **{8000, 11025, 16000, 22050}** — the SB 2.0 set, on any Sound
-Blaster including the XT's — plus **{24000, 32000, 44100}**. Everything stays
-**mono, unsigned 8-bit**: there is no stereo and no 16-bit path in this player.
+Accepted: **{8000, 11025, 16000, 22050}** on any Sound Blaster, plus
+**{24000, 32000, 44100}** on a **Sound Blaster Pro (v1 / v2)** or an SB16.
+Everything stays **mono, unsigned 8-bit** — there is no stereo or 16-bit path
+in this player.
 
-The high three need **`SOUND.DRV`'s wide regime**, which the driver gates at
-**DSP ≥ 4.00 — a Sound Blaster 16** (`drivers/sound/sb.inc` `sbl_v_open`: above
-22,222 Hz it checks `sbl_verhi >= 4` and returns err 2 otherwise). It uses DSP
-command `41h` (rate in Hz), an SB16 command. **An SB Pro is refused** the same
-way, even though real SB Pro hardware clocks a mono channel to ~44.1 kHz via
-high-speed mode (`48h`+`91h`) — that path is simply not implemented in the OS
-driver, a gap recorded in `docs/AUDIO-PLAN.md`, not something the Audio Player
-works around.
+The high three go through `SOUND.DRV`'s regime split (§34.5): DSP ≥ 4.00 takes
+the SB16 wide path (`41h`), DSP ≥ 3.00 the **SB Pro high-speed path** (`90h` +
+a time constant), and below 3.00 the driver returns err 2. That last driver
+piece — SB Pro high-speed — was added for this feature, because an 8-bit ISA
+XT has no SB16 to fall back on.
 
-The player does not probe the card's rate ceiling — `OSAPI_SND_CAPS` has no bit
-for it — so `apw_parse` accepts all seven and lets the **driver** be the
-authority: a `verb 0` refusal above 22 kHz is reported as *"Rate needs a Sound
-Blaster 16"* rather than the generic load error (`ap_open_track` `.snderr`). On
-anything short of an SB16 the four low rates play and the three high ones say
-why they cannot; on an SB16 (or QEMU's emulated card) all seven play. The
-default is still not hard-coded: the player takes whatever the file's `fmt `
-chunk declares, within the set.
+The player does not probe the card's rate ceiling (`OSAPI_SND_CAPS` has no bit
+for it), so `apw_parse` accepts all seven and the **driver** is the authority:
+a `verb 0` refusal above 22 kHz is reported as *"Rate needs a Sound Blaster
+Pro"* rather than the generic load error (`ap_open_track` `.snderr`). On an
+SB 2.0 the four low rates play and the three high ones say why they cannot; on
+an SB Pro or SB16 (or QEMU's emulated card) all seven play. The default is
+still not hard-coded — the player takes whatever the file's `fmt ` chunk
+declares, within the set.
 
 ### 86.16 Lessons inherited from existing os8088 audio applications
 

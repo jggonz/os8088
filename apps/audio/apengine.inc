@@ -595,9 +595,9 @@ ap_open_track:
     mov word [ap_msg], ap_s_nomem
     jmp .refuse
 .snderr:
-    ; a verb-0 refusal above 22 kHz is the driver's rate gate: SOUND.DRV's
-    ; wide regime (command 41h) needs DSP >= 4.00 - a Sound Blaster 16. SB Pro
-    ; is refused too (SPEC.md 86.15). Name the card instead of a load error.
+    ; a verb-0 refusal above 22 kHz is the driver's rate gate: 24/32/44.1 kHz
+    ; need an SB Pro (DSP >= 3.00) or an SB16 (SPEC.md 34.5/86.15). Name the
+    ; card instead of the generic load error.
     mov word [ap_msg], ap_s_loaderr
     cmp word [ap_rate], 22050
     jbe .snderr_msg

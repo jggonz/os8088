@@ -474,7 +474,7 @@ ap_s_nosb:    db 'No Sound Blaster - playback off', 0
 ap_s_nomem:   db 'Out of memory', 0
 ap_s_nofile:  db 'Playlist is empty', 0
 ap_s_loaderr: db 'Cannot play this file', 0
-ap_s_hirate:  db 'Rate needs a Sound Blaster 16', 0
+ap_s_hirate:  db 'Rate needs a Sound Blaster Pro', 0
 ap_s_opening: db 'Opening...', 0
 ap_s_endlist: db 'End of playlist', 0
 ap_s_queued:  db 'Sent to the running Audio Player', 0

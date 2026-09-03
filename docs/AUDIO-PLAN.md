@@ -227,18 +227,20 @@ when neither the elapsed second nor the bar pixel moved) and capped at
   it takes (`PERFORMANCE.md`).
 - No seeking (an ADPCM seek must respect block boundaries and decoder state).
 - No `.M3U` playlists yet, no clickable playlist rows.
-- **High rates (24/32/44.1 kHz) need a Sound Blaster 16, not an SB Pro.**
-  `apw_parse` accepts all seven rates and lets the driver decide, but
-  `SOUND.DRV`'s wide regime (`drivers/sound/sb.inc` `sbl_v_open`) gates
-  anything above 22,222 Hz at `sbl_verhi >= 4` — DSP ≥ 4.00, i.e. an SB16 —
-  and uses DSP command `41h`, an SB16 command. **An SB Pro is refused** even
-  though real SB Pro hardware does mono up to ~44.1 kHz through its high-speed
-  mode (`48h`+`91h` with a 16-bit-ish time constant). That path is not
-  implemented in the OS driver. This is an **OS-level gap** — adding SB Pro
-  high-speed support belongs in `SOUND.DRV`, which the brief puts off-limits
-  to this work — so the player just reports *"Rate needs a Sound Blaster 16"*
-  and moves on. Verified: 24/32/44.1 kHz PCM u8 mono plays on QEMU's emulated
-  SB16 and refuses cleanly on an 86Box SB Pro v2.
+- **High rates (24/32/44.1 kHz) need a Sound Blaster Pro or an SB16.**
+  `apw_parse` accepts all seven rates and lets the driver decide. `SOUND.DRV`
+  originally gated anything above 22,222 Hz at `sbl_verhi >= 4` (an SB16), and
+  an 8-bit ISA XT has no SB16 — so `drivers/sound/sb.inc` gained an **SB Pro
+  high-speed path**: DSP ≥ 3.00, DSP command `90h` after a `40h` time
+  constant, the wide regime's 4 KB double buffer, and — because `90h` locks
+  the DSP out of commands — `sbl_halt` masks 8237 channel 1 rather than
+  writing `D0h`, `sbl_go_on` unmasks, and `sbl_stop_stream` runs a DSP reset
+  to leave high-speed mode. Everything ≤ 22,222 Hz and every DSP < 3.00 is
+  byte-for-byte unchanged. Below DSP 3.00 the player reports *"Rate needs a
+  Sound Blaster Pro"* and moves on. Tested: 24/32/44.1 kHz PCM u8 mono plays
+  on QEMU's emulated card (the SB16 wide path) with pause/resume intact; the
+  SB Pro high-speed path itself needs an 86Box SB Pro v1/v2 to validate on the
+  glass (QEMU only emulates DSP 4.05).
 - **No drag-and-drop from the File Manager.** The window manager has no
   cross-app file-drop event: `fm_drag` (`files.inc`) recognises only a Disk
   window's folder targets and acts by a file *move* (`fcp_paste`), and
