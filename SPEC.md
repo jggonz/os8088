@@ -83335,6 +83335,11 @@ for the first `W_PAINT`. `ap_entry` kicks itself once with `OSAPI_WM_WAKE`;
 `ap_onwake` does the settled repaint with the window fully on the glass, and
 `apu_layout` / `apu_origin` keep their last good geometry on CF=1 meanwhile.
 
+**About** (`OSAPI_ABOUT_SET`, §12.2) draws a white, black-framed card over the
+content — sized and centred from the live content box — with the package name,
+`Version 0.6b`, and a one-line blurb. `[ap_abon]` gates it; `apu_draw` lays it
+last so it is on top, and the next click or key clears the flag and repaints.
+
 ### 86.10 The playlist
 
 A fixed array of at most `AP_MAXTRK` entries, `AP_ENTSZ` (16) bytes each: an

@@ -9,7 +9,7 @@
 ;   ap_onclick   W_ONCLICK     hit-test the transport buttons, act, repaint
 ;   ap_onkey     W_ONKEY       Space/Enter play-pause, S stop, N/P next/prev
 ;   ap_oncmd     menu          File > Open / Clear ; Play > the 7 commands
-;   ap_about     About         a one-line credit toast
+;   ap_about     About         a white card over the content (name/version/blurb)
 ;   ap_onwake    WM_ONWAKE     the disk-refill service + track-end reap + the
 ;                              launch-document handover (SPEC.md 54.10)
 ;   ap_onclose   WM_ONCLOSE    stop the DSP cleanly, allow the close
