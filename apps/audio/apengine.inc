@@ -595,7 +595,14 @@ ap_open_track:
     mov word [ap_msg], ap_s_nomem
     jmp .refuse
 .snderr:
+    ; a verb-0 refusal above 22 kHz is almost always the card: the SB 2.0
+    ; time-constant path stops near 22,222 Hz; SB Pro (DSP 3.x) does mono up to
+    ; 44,100 (SPEC.md 86.15). Name that instead of the generic load error.
     mov word [ap_msg], ap_s_loaderr
+    cmp word [ap_rate], 22050
+    jbe .snderr_msg
+    mov word [ap_msg], ap_s_hirate
+.snderr_msg:
     call ap_stream_close
 .refuse:
     stc

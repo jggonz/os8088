@@ -9,7 +9,11 @@
 ; Accepted:
 ;   WAVE_FORMAT_PCM       0x0001  mono, 8 bits/sample, unsigned
 ;   WAVE_FORMAT_DVI_ADPCM 0x0011  mono, 4 bits/sample, IMA/DVI
-; and only sample rates in apw_rates (8000, 11025, 16000, 22050).
+; and only sample rates in apw_rates. 8000..22050 are the SB 2.0 set; 24000,
+; 32000 and 44100 are the SB Pro (DSP 3.x) mono tier (SPEC.md 86.15) - still
+; mono 8-bit, there is no stereo/16-bit driver. The parser accepts them and the
+; DRIVER refuses if the card cannot clock it, which ap_open_track reports as
+; "needs a Sound Blaster Pro".
 ;
 ; NOT assumed (SPEC.md 86.6): that `fmt ` is followed by `data`; a fixed
 ; header size; the absence of LIST / fact / INFO / id3 / other chunks. The
@@ -49,7 +53,7 @@ apw_s_wave:   db 'WAVE'
 apw_s_fmt:    db 'fmt '
 apw_s_data:   db 'data'
 
-apw_rates:    dw 8000, 11025, 16000, 22050, 0
+apw_rates:    dw 8000, 11025, 16000, 22050, 24000, 32000, 44100, 0
 
 ; =============================================================================
 ; apw_parse - parse the named WAV

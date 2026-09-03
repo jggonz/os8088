@@ -266,6 +266,7 @@ apu_draw:
 apu_ab1: db 'Audio Player for os8088', 0
 apu_ab2: db 'Version 0.6b', 0
 apu_ab3: db 'Play PCM and ADPCM audio files', 0
+apu_ab4: db 'Rates 8-22 kHz  +24/32/44 SB Pro', 0
 
 apu_about_card:
     push ax
@@ -274,7 +275,7 @@ apu_about_card:
     push dx
     push si
     push di
-    ; rect: inset 8 px each side of the content, 52 px tall, vertically centred
+    ; rect: inset 8 px each side of the content, 66 px tall, vertically centred
     mov ax, [apu_cw]
     cmp ax, 40
     jb .out                        ; content absurdly small - skip
@@ -282,7 +283,7 @@ apu_about_card:
     add ax, 8
     mov [apab_x1], ax              ; x1
     mov ax, [apu_ch]
-    sub ax, 52
+    sub ax, 66
     jns .yok
     xor ax, ax
 .yok:
@@ -298,7 +299,7 @@ apu_about_card:
     add cx, [apu_cw]
     sub cx, 9                      ; x2
     mov dx, bx
-    add dx, 51                     ; y2
+    add dx, 65                     ; y2
     call OSAPI_GFX_FILL
     ; --- black frame ---
     mov al, 0
@@ -309,9 +310,9 @@ apu_about_card:
     add cx, [apu_cw]
     sub cx, 9
     mov dx, bx
-    add dx, 51
+    add dx, 65
     call OSAPI_GFX_FRAME
-    ; --- three lines (ink 0 on paper 15) ---
+    ; --- four lines (ink 0 on paper 15) ---
     mov si, apu_ab1
     mov cx, [apab_x1]
     add cx, 8
@@ -331,6 +332,13 @@ apu_about_card:
     add cx, 8
     mov dx, [apab_y1]
     add dx, 35
+    mov ax, 0x0F00
+    call OSAPI_FONT_RUN
+    mov si, apu_ab4
+    mov cx, [apab_x1]
+    add cx, 8
+    mov dx, [apab_y1]
+    add dx, 49
     mov ax, 0x0F00
     call OSAPI_FONT_RUN
 .out:
