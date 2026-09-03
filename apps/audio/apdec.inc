@@ -60,8 +60,50 @@ apd_start:
     mov byte [apd_hinib], 0
     mov word [apd_pred], 0
     mov word [apd_index], 0
+    mov word [apd_inlen], 0         ; input bounce empty
+    mov word [apd_inpos], 0
     pop cx
     pop ax
+    ret
+
+; =============================================================================
+; apd_getb - next ADPCM input byte from the look-ahead ring, via a 512-byte
+;            bounce so the per-byte cost is a compare and an index, not an
+;            ap_la_get call (SPEC.md 86.4).
+; out: AL = the byte, CF = 0; CF = 1 = the ring is dry (AL undefined)
+; preserves every register except AX and flags.
+; =============================================================================
+apd_getb:
+    push bx
+    mov bx, [apd_inpos]
+    cmp bx, [apd_inlen]
+    jb .have
+    push cx
+    push di
+    push es
+    push ds
+    pop es
+    mov cx, APD_INBUF
+    mov di, apd_inbuf
+    call ap_la_get                  ; AX = bytes copied into apd_inbuf
+    pop es
+    pop di
+    pop cx
+    mov [apd_inlen], ax
+    xor bx, bx
+    or ax, ax
+    jz .dry
+.have:
+    mov al, [apd_inbuf + bx]
+    inc bx
+    mov [apd_inpos], bx
+    pop bx
+    clc
+    ret
+.dry:
+    mov [apd_inpos], bx             ; = 0, and inlen = 0
+    pop bx
+    stc
     ret
 
 ; =============================================================================
@@ -103,21 +145,24 @@ apd_pull:
     cmp word [apd_bleft], 0
     jne .adata                      ; still inside the current block's data
 
-    ; --- start of a block: pull its 4-byte header ---------------------------
-    mov cx, 4
-    mov di, apd_hdr
-    call ap_la_get
-    cmp ax, 4
-    jb .adone                       ; short read -> nothing more to give now
-    mov ax, [apd_hdr]               ; int16 LE predictor (also this block's s0)
+    ; --- start of a block: pull its 4-byte header (predictor, index, pad) --
+    call apd_getb
+    jc .adone
+    mov ah, al
+    call apd_getb
+    jc .adone
+    xchg al, ah                     ; AX = LE predictor
     mov [apd_pred], ax
-    mov al, [apd_hdr+2]             ; step index byte
+    call apd_getb                   ; step index byte
+    jc .adone
     xor ah, ah
     cmp al, 88
     jbe .idxok
     mov ax, 88
 .idxok:
     mov [apd_index], ax
+    call apd_getb                   ; the 4th header byte (reserved)
+    jc .adone
     mov cx, [apd_balign]
     sub cx, 4
     mov [apd_bleft], cx             ; data bytes still to consume this block
@@ -135,12 +180,8 @@ apd_pull:
     jne .havebyte
     cmp word [apd_bleft], 0
     je .aloop                       ; block's data exhausted -> next header
-    mov cx, 1
-    mov di, apd_tmp
-    call ap_la_get
-    cmp ax, 1
-    jb .adone                       ; end of stream mid-block
-    mov al, [apd_tmp]
+    call apd_getb
+    jc .adone                       ; end of stream mid-block
     mov [apd_curbyte], al
     mov byte [apd_hasbyte], 1
     mov byte [apd_hinib], 0

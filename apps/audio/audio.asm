@@ -69,6 +69,10 @@ AP_RD_CHUNK    equ 16384           ; bytes one ap_refill_chunk read pulls (SPEC.
                                    ; second. One big gulp every few seconds instead.
 APD_OUTSZ      equ 2048            ; decoder scratch = one stage half
 APD_BLKMAX     equ 2048            ; sanity cap on nBlockAlign
+APD_INBUF      equ 512             ; ADPCM input bounce: one ap_la_get feeds many
+                                   ; nibbles, instead of ap_la_get per byte (the
+                                   ; call overhead was most of the decode cost on
+                                   ; a real XT - SPEC.md 86.4)
 
 AP_HALF        equ 2048           ; stage/feed granularity (SPEC.md 34.5)
 AP_PREROLL     equ 6              ; halves staged before verb 0 (SPEC.md 45.17.2)
@@ -262,6 +266,9 @@ AP_B_NONE  equ 0xFF
     APB apd_curbyte
     APBUF apd_hdr, 4
     APBUF apd_tmp, 2
+    APW   apd_inlen                ; bytes currently in apd_inbuf
+    APW   apd_inpos                ; read cursor into apd_inbuf
+    APBUF apd_inbuf, APD_INBUF
     APBUF apd_out, APD_OUTSZ
 
 ; --- WAV parser state (apwav.inc) ---------------------------------
