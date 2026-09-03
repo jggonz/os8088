@@ -3048,10 +3048,12 @@ $(BUILD)/audio.o88: $(BUILD)/audio.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/audio.bin -o $@
 
 # A stand-alone Audio Player test disk (ON DEMAND: `make audiodisk`): AUDIO.O88
-# at the root beside whatever WAV files AUDIOWAV= names, so
-#   make audiodisk AUDIOWAV="pcm-11k.wav adpcm-11k.wav"
-#   make test-snd SB16=1 TESTAPPS=build/audio-test.img
-# boots straight to a drive with the player and the clips on it.
+# at the root beside whatever WAV files AUDIOWAV= names (each an 8.3 name), so
+#   make audiodisk AUDIOWAV="build/wav/adp11k.wav"
+#   make test-snd SB16=1 TESTAPPS=build/audio-test.img   # QEMU; add SNDSNIFF=sb
+# boots straight to a drive with the player and the clips on it. A 1.44MB
+# floppy holds AUDIO.O88 and ~1.3MB of audio - one ADPCM clip, not a whole
+# set. For more than that use `make audio-hdd` below.
 AUDIOWAV ?=
 $(BUILD)/audio-test.img: $(BUILD)/audio.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
@@ -3060,6 +3062,29 @@ $(BUILD)/audio-test.img: $(BUILD)/audio.o88 tools/os88disk.py
 
 .PHONY: audiodisk
 audiodisk: $(BUILD)/audio-test.img
+
+# ...and a BOOTABLE HARD-DISK image (ON DEMAND: `make audio-hdd`) - the vehicle
+# for a full set of multi-MB WAVs, and the realistic streaming scenario
+# (docs/AUDIO-PLAN.md: floppy streaming is marginal, HDD is where it works).
+# The system core plus AUDIO.O88 and every WAV under AUDIOWAVDIR (8.3 names)
+# in APPS/. The partition auto-sizes to the payload; the kernel adopts it
+# as C:. 86Box: attach as the XT's hard disk. QEMU:
+#   qemu-system-i386 -drive file=build/audio-hdd.img,format=raw,if=ide -boot c \
+#     -device sb16,audiodev=snd -audiodev none,id=snd
+AUDIOWAVDIR ?= build/awav
+$(BUILD)/audio-hdd.img: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(BUILD)/kernel.bin \
+                        $(DRIVERS) $(BUILD)/taskmgr.o88 $(BUILD)/audio.o88 \
+                        tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --hdd \
+	    --mbr $(BUILD)/mbr.bin --boot $(BUILD)/boothd.bin \
+	    --kernel $(BUILD)/kernel.bin \
+	    $(DRIVERS) SYSTEM:$(BUILD)/taskmgr.o88 APPS:$(BUILD)/audio.o88 \
+	    $(patsubst %,APPS:%,$(sort $(wildcard $(AUDIOWAVDIR)/*.wav)))
+	@python3 tools/os88disk.py --verify-hdd $@
+	@echo "audio-hdd: $@  (WAVs from $(AUDIOWAVDIR)/)"
+
+.PHONY: audio-hdd
+audio-hdd: $(BUILD)/audio-hdd.img
 
 # ModPlug Player, the fourteenth shipped package (SPEC.md 56): a port of
 # ModPlug Player V2's LOOK AND FEEL - the skinned player window with its LCD
