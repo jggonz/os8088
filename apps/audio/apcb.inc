@@ -27,6 +27,7 @@ apu_repaint:
     push dx
     push si
     push di
+    APCNT apc_uipaint
     call apu_layout
     call apu_origin
     mov al, 15
@@ -59,6 +60,7 @@ ap_paint:
     push dx
     push si
     push di
+    APCNT apc_uipaint
     call apu_draw
     pop di
     pop si
@@ -166,6 +168,18 @@ ap_onkey:                          ; AL = ascii, AH = scancode; SI = window
     je .next
     cmp al, 'p'
     je .prev
+    cmp al, 'd'
+    je .diag
+    jmp .rep
+.diag:
+    xor byte [ap_diag], 1
+%ifdef APROF
+    cmp byte [ap_diag], 0
+    je .rep
+    mov byte [apdg_req], 1        ; the dump does file I/O - ap_onwake owns that
+    mov bx, [ap_win]              ; (W_ONKEY holds the gfx lock; WM_ONWAKE does not)
+    call OSAPI_WM_WAKE
+%endif
     jmp .rep
 .toggle:
     cmp byte [ap_state], AP_ST_PLAY
@@ -205,21 +219,34 @@ ap_oncmd:                          ; AL = item, AH = menu; SI = window
     or ah, ah
     jnz .playmenu
 
-    ; --- File menu -------------------------------------------------------
-    cmp al, 0
-    jne .clear
-    ; Open...
+    ; --- File menu: Open / Clear / Diagnostics / Exit -------------------
+    cmp al, AP_CMD_OPEN
+    jne .n_open
     mov al, FDLG_OPEN
     mov bx, [ap_win]
     mov di, ap_onfile
     xor si, si
     call OSAPI_FILE_DLG
     jmp .rep
-.clear:
+.n_open:
+    cmp al, AP_CMD_CLEAR
+    jne .n_clear
     call ap_stream_close
     call apl_clear
     mov byte [ap_state], AP_ST_STOP
     mov word [ap_msg], ap_s_ready
+    jmp .rep
+.n_clear:
+    cmp al, AP_CMD_DIAG
+    jne .n_diag
+    xor byte [ap_diag], 1
+    jmp .rep
+.n_diag:
+    cmp al, AP_CMD_EXIT
+    jne .rep
+    call ap_stream_close
+    mov bx, [ap_win]
+    call OSAPI_WM_CLOSE             ; SPEC.md 75.2 - deferred to the next UI pass
     jmp .rep
 
 .playmenu:
@@ -257,6 +284,7 @@ ap_onwake:                         ; SI = window
     push dx
     push si
     push di
+    APCNT apc_onwake
 
     ; 0. the settled first repaint (SPEC.md 86.7): the loader shows the window
     ;    after the entry proc, so the first W_PAINT can beat wm_fit.
@@ -291,24 +319,38 @@ ap_onwake:                         ; SI = window
     call OSAPI_GFX_UNLOCK
 .noend:
 
-    ; 3. the launch document, once (SPEC.md 54.10)
+    ; 3. the launch document, once (SPEC.md 54.10) - double-click means "play
+    ;    this now", so AP_ADD_CUR | AP_ADD_PLAY.
     cmp byte [ap_arg_pending], 0
     je .noarg
     mov byte [ap_arg_pending], 0
+    call OSAPI_GFX_LOCK
     mov si, ap_arg_name
     mov dx, [ap_arg_dir]
     mov bl, [ap_arg_vol]
-    call apl_add                    ; CF if the list is full
-    mov al, [apl_n]
-    or al, al
-    jz .noarg
-    dec al
-    mov [apl_cur], al
-    call OSAPI_GFX_LOCK
-    call ap_open_track
+    mov al, AP_ADD_CUR | AP_ADD_PLAY
+    call ap_add_file
     call apu_repaint
     call OSAPI_GFX_UNLOCK
 .noarg:
+
+    ; 4. a would-be second instance may have queued a document for us
+    ;    (SPEC.md 86.11.1). ap_que_poll self-throttles and returns CF=0 only
+    ;    when it actually added something.
+    call ap_que_poll
+    jc .noque
+    call OSAPI_GFX_LOCK
+    call apu_repaint
+    call OSAPI_GFX_UNLOCK
+.noque:
+%ifdef APROF
+    ; 5. the Diagnostics 'D' key asked for a counter dump (file I/O, no lock)
+    cmp byte [apdg_req], 0
+    je .nodump
+    mov byte [apdg_req], 0
+    call ap_diag_dump
+.nodump:
+%endif
     pop di
     pop si
     pop dx
@@ -352,18 +394,10 @@ ap_onfile:
     mov byte [ap_dlgname+13], 0
     call OSAPI_FILE_HERE            ; DX = current dir cluster, BL = drive
     mov si, ap_dlgname
-    call apl_add                    ; SI = name, DX = dir, BL = vol
-    mov al, [apl_n]
-    or al, al
-    jz .rep
-    ; if nothing is playing, make this the current track and start it
-    cmp byte [ap_state], AP_ST_PLAY
-    je .rep
-    mov al, [apl_n]
-    dec al
-    mov [apl_cur], al
-    call ap_stream_close
-    call ap_open_track
+    ; Open adds and selects; it starts the track ONLY if nothing is playing
+    ; (SPEC.md 86.3) - it must not interrupt the current song.
+    mov al, AP_ADD_CUR | AP_ADD_IDLE
+    call ap_add_file
 .rep:
     call apu_repaint
     pop di

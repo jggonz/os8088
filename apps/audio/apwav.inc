@@ -60,6 +60,7 @@ apw_rates:    dw 8000, 11025, 16000, 22050, 0
 ; clobbers: AX..DI  (top-level call from a UI callback)
 ; =============================================================================
 apw_parse:
+    APCNT apc_parse
     mov [apw_name], si
     mov [apw_flen], ax
     mov [apw_flen+2], dx
@@ -370,7 +371,9 @@ apw_readwin:
     mov ax, [apw_winb]
     mov dx, [apw_winb+2]
     call OSAPI_FILE_READ_AT         ; out CF, DX:AX = bytes delivered
+    APCNT apc_readat
     jc .err
+    APADD apc_rbytes, ax
     ; DX:AX bytes; cap fits a word (<= AP_HDRBUF_SZ)
     or dx, dx
     jz .stlen
@@ -397,6 +400,7 @@ apw_readwin:
 ;             CF = 1 when out of windows or the file ended before lpos.
 ; =============================================================================
 apw_slide:
+    APCNT apc_slide
     push ax
     push dx
     cmp byte [apw_winn], APW_WINDOWS

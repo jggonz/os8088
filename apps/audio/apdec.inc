@@ -81,6 +81,7 @@ apd_pull:
     push es
     push ds
     pop es                          ; ES = DS: apd_out and the scratch are ours
+    APCNT apc_declc
     mov [apd_want], cx
     xor bx, bx                      ; BX = bytes produced so far
 
@@ -166,6 +167,15 @@ apd_pull:
 .adone:
     mov ax, bx                      ; ADPCM path returns the produced count
 .ret:
+%ifdef APROF
+    push ax
+    push dx
+    xor dx, dx
+    add word [apc_decby], ax
+    adc word [apc_decby+2], dx
+    pop dx
+    pop ax
+%endif
     pop es
     pop di
     pop si

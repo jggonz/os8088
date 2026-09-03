@@ -327,28 +327,43 @@ ap_refill_chunk:
     push es
     cmp byte [ap_src_done], 0
     jne .out
-    ; room for a whole cluster?
+    ; --- how big a gulp? min(AP_RD_CHUNK, free) floored to a cluster ---------
+    ; A read holds sch_lock and costs ~1-2 disk revolutions whatever it moves
+    ; (SPEC.md 34.5 / 86.5.2), so we want the FEWEST, biggest reads the ring
+    ; has room for - not one cluster at a time.
     call ap_la_avail
     mov bx, AP_LA_SZ
     sub bx, ax                     ; BX = free bytes in the ring
+    cmp bx, AP_RD_CHUNK
+    jbe .cap
+    mov bx, AP_RD_CHUNK
+.cap:
+    mov ax, [ap_clu]
+    dec ax
+    not ax
+    and bx, ax                     ; floor to a whole number of clusters
     cmp bx, [ap_clu]
-    jb .out                        ; too full - try again later
+    jb .out                        ; not room for even one cluster - later
+    mov [ap_rd_len], bx
 
-    ; read [ap_rd_pos, +ap_clu) into ap_scratch
+    ; read [ap_rd_pos, +ap_rd_len) into ap_scratch
     push ds
     pop es
     mov si, [apw_name]
     mov bx, ap_scratch
-    mov cx, [ap_clu]
+    mov cx, [ap_rd_len]
     mov ax, [ap_rd_pos]
     mov dx, [ap_rd_pos+2]
     call OSAPI_FILE_READ_AT        ; out CF, DX:AX = bytes delivered
+    APCNT apc_readat
+    APCNT apc_refill
     jc .done_all                  ; treat an I/O error as end of data
-    ; DX:AX = got; it fits a word (<= cluster <= 8192)
+    APADD apc_rbytes, ax
+    ; DX:AX = got; it fits a word (AP_RD_CHUNK <= 16384)
     mov bx, ax                     ; BX = got (low word; DX must be 0)
     or dx, dx
     jz .g0
-    mov bx, [ap_clu]
+    mov bx, [ap_rd_len]
 .g0:
     or bx, bx
     jz .done_all                  ; nothing delivered -> at/after EOF
@@ -394,8 +409,8 @@ ap_refill_chunk:
     add [ap_got], ax
     adc [ap_got+2], dx
 .advance:
-    ; ap_rd_pos += ap_clu
-    mov ax, [ap_clu]
+    ; ap_rd_pos += ap_rd_len
+    mov ax, [ap_rd_len]
     xor dx, dx
     add [ap_rd_pos], ax
     adc [ap_rd_pos+2], dx
@@ -424,6 +439,7 @@ ap_refill_chunk:
 ;            the sch_lock cost is paid here, not while the DSP is running).
 ; =============================================================================
 ap_prime:
+    APCNT apc_prime
     push cx
     mov cx, 24                     ; hard cap on read iterations
 .l:
@@ -444,6 +460,7 @@ ap_prime:
 ; clobbers: AX..DI (top-level, from a callback or ap_onwake)
 ; =============================================================================
 ap_open_track:
+    APCNT apc_opentk
     cmp byte [ap_have_sb], 0
     jne .havesb
     mov word [ap_msg], ap_s_nosb
@@ -622,6 +639,7 @@ ap_stage_half:
     mov cx, AP_HALF
     mov al, 6                     ; verb 6: stage (kernel copies from our seg)
     call OSAPI_SND_STREAM
+    APCNT apc_stage
     add word [ap_total], AP_HALF
     or dl, dl
     jz .notlast
@@ -821,3 +839,376 @@ ap_cmd_repeat:
     xor al, 1
     mov [ap_repeat], al
     ret
+
+; =============================================================================
+; ap_has_wav_ext - SI -> NUL name.  ZF = 1 iff it ends ".WAV" (any case).
+; preserves every register except flags.
+; =============================================================================
+ap_has_wav_ext:
+    push ax
+    push cx
+    push si
+    xor cx, cx
+.cl:
+    cmp byte [si], 0
+    je .got
+    inc si
+    inc cx
+    cmp cx, 64
+    jb .cl
+.got:
+    cmp cx, 4
+    jb .ne
+    sub si, 4                      ; SI back to the '.' (SI is at the NUL now)
+    mov al, [si]
+    cmp al, '.'
+    jne .ne
+    mov al, [si+1]
+    call ap_upcase
+    cmp al, 'W'
+    jne .ne
+    mov al, [si+2]
+    call ap_upcase
+    cmp al, 'A'
+    jne .ne
+    mov al, [si+3]
+    call ap_upcase
+    cmp al, 'V'
+    jne .ne
+    xor al, al                    ; ZF = 1
+    jmp .done
+.ne:
+    or al, 1                       ; ZF = 0
+.done:
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; =============================================================================
+; ap_add_file - the ONE way a track enters the playlist (SPEC.md 86.2.1).
+; Open, drag/drop (n/a), association and the startup ARG_FILE all converge here.
+; in:  SI -> NUL 8.3 name (this segment), DX = dir cluster, BL = volume,
+;      AL = AP_ADD_* flags
+; out: CF = 0 accepted (ap_msg set), CF = 1 refused (ap_msg set to the reason)
+; clobbers: AX..DI (UI-task callers)
+; =============================================================================
+ap_add_file:
+    mov [ap_af_flags], al
+    mov [ap_af_dir], dx
+    mov [ap_af_vol], bl
+    mov [ap_af_name], si
+
+    call ap_has_wav_ext
+    jne .notwav
+
+    ; duplicate? same name + dir + vol -> select it, do not add again
+    mov si, [ap_af_name]
+    mov dx, [ap_af_dir]
+    mov bl, [ap_af_vol]
+    call apl_find                  ; out AX = index, CF = 1 not found
+    jc .fresh
+    mov [apl_cur], al
+    mov word [ap_msg], ap_s_dup
+    test byte [ap_af_flags], AP_ADD_PLAY
+    jz .ok
+    jmp .startcur
+.fresh:
+    mov si, [ap_af_name]
+    mov dx, [ap_af_dir]
+    mov bl, [ap_af_vol]
+    call apl_add                   ; CF = 1 list full
+    jc .full
+    mov al, [apl_n]
+    dec al                         ; index of the entry just added
+    mov ah, al                     ; keep it
+    test byte [ap_af_flags], AP_ADD_CUR | AP_ADD_PLAY
+    jz .notcur
+    mov [apl_cur], al
+.notcur:
+    mov word [ap_msg], ap_s_added
+
+    test byte [ap_af_flags], AP_ADD_PLAY
+    jnz .startcur
+    test byte [ap_af_flags], AP_ADD_IDLE
+    jz .ok
+    cmp byte [ap_state], AP_ST_PLAY
+    je .ok                         ; Open while playing: added, not interrupted
+    mov [apl_cur], ah
+.startcur:
+    call ap_stream_close
+    call ap_open_track             ; sets ap_msg itself
+.ok:
+    clc
+    ret
+.notwav:
+    mov word [ap_msg], ap_s_notwav
+    stc
+    ret
+.full:
+    mov word [ap_msg], ap_s_full
+    stc
+    ret
+
+    APW ap_af_name
+    APW ap_af_dir
+    APB ap_af_vol
+    APB ap_af_flags
+
+; =============================================================================
+; ap_find_sibling - CF = 0 iff another live "AUDIO PLAYER" instance exists in a
+;                   different region segment (SPEC.md 86.11.1). Entry-proc only.
+; clobbers: AX..DI
+; =============================================================================
+ap_pkgname: db 'AUDIO PLAYER', 0
+
+ap_find_sibling:
+    push ds
+    pop es
+    mov di, ap_snap
+    call OSAPI_SYS_SNAPSHOT        ; AX = MAX_TASKS, BX = INST_MAX
+    mov cx, INST_MAX
+    mov si, ap_snap + SS_INST
+    mov bx, cs                     ; our own region segment
+.rec:
+    cmp byte [si+SSI_STATE], 1
+    jne .next
+    test byte [si+SSI_KIND], KIND_PKG
+    jz .next
+    cmp [si+SSI_SEG], bx
+    je .next                       ; that record is us
+    lea di, [si+SSI_NAME]
+    push si
+    mov si, di
+    mov di, ap_pkgname
+    call ap_nameeq                 ; ZF = 1 equal
+    pop si
+    je .found
+.next:
+    add si, SSI_RECSZ
+    loop .rec
+    stc
+    ret
+.found:
+    clc
+    ret
+
+; =============================================================================
+; ap_que_root - move this instance to the system volume's root (where
+;               APQUEUE.DAT lives).  clobbers AX, BX, DX.  CF = 1 on failure.
+;
+; OSAPI_FILE_GOTO, not its quiet twin: GOTO_Q sets only a transient by-cluster
+; resolution dir and OSAPI_FILE_WRITE / _READ by NAME still land in the
+; instance's own launched-from folder (measured - APDIAG.TXT and the queue file
+; both missed the root). The real GOTO moves the instance, so every caller
+; banks OSAPI_FILE_HERE first and GOTOs back (the FONTS/ pattern, os88type.inc).
+; =============================================================================
+ap_que_root:
+    call OSAPI_VOL_SYS             ; BL = the volume this machine booted from
+    xor dx, dx
+    call OSAPI_FILE_GOTO          ; DX = 0 (root), BL = volume; REMOUNT
+    ret
+
+; =============================================================================
+; ap_que_write - append the banked ARG_FILE document to APQUEUE.DAT on the
+;                system volume root (SPEC.md 86.11.1).  Entry-proc only.
+;
+; READ-MODIFY-WRITE, not OSAPI_FILE_APPEND: the queue grows one 16-byte record
+; at a time and APPEND needs the file's size to be a whole number of clusters
+; (it never is here) AND needs the file to already exist (the first handoff's
+; would not). The queue is <= 128 bytes, so read it whole, add our record,
+; write it whole.
+;
+; out: CF = 1 could not write (read-only volume) - caller falls back to a
+;      normal launch (a second window).
+; =============================================================================
+ap_que_write:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call OSAPI_FILE_HERE           ; bank our launched-from folder
+    mov [ap_que_bdir], dx
+    mov [ap_que_bvol], bl
+
+    call ap_que_root
+    jc .fail
+
+    ; --- read the existing queue (if any) into the front of the buffer -----
+    push ds
+    pop es
+    mov si, ap_qfile
+    mov bx, ap_querec
+    mov cx, AP_QUEREC * 7          ; 112: room for our record after it
+    xor dx, dx
+    call OSAPI_FILE_READ           ; CF=0 -> DX:AX = bytes; CF=1 -> none yet
+    jnc .haveold
+    xor ax, ax                     ; no file -> start empty
+.haveold:
+    mov di, ap_querec
+    add di, ax                     ; DI -> where our record goes
+    push ax                        ; keep the old length
+
+    ; --- stage our 16-byte record: 13 name (NUL-padded) + word dir + byte vol
+    mov si, ap_arg_name
+    xor cx, cx
+.c:
+    cmp cx, AP_QUENAME_LEN
+    jae .cpad
+    mov al, [si]
+    mov [di], al
+    or al, al
+    jz .cpad
+    inc si
+    inc di
+    inc cx
+    jmp .c
+.cpad:
+    cmp cx, AP_QUENAME_LEN
+    jae .cdone
+    mov byte [di], 0
+    inc di
+    inc cx
+    jmp .cpad
+.cdone:
+    pop ax                         ; old length
+    push ax
+    mov di, ap_querec
+    add di, ax
+    mov dx, [ap_arg_dir]
+    mov [di+13], dx
+    mov dl, [ap_arg_vol]
+    mov [di+15], dl
+
+    pop ax                         ; old length
+    add ax, AP_QUEREC              ; total to write
+    mov cx, ax
+    push ds
+    pop es
+    mov si, ap_qfile
+    mov bx, ap_querec
+    xor dx, dx
+    call OSAPI_FILE_WRITE          ; whole-file: creates or overwrites
+    pushf
+    ; --- restore our folder regardless -----------------------------------
+    mov dx, [ap_que_bdir]
+    mov bl, [ap_que_bvol]
+    call OSAPI_FILE_GOTO
+    popf
+    jc .fail
+    clc
+    jmp .out
+.fail:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; =============================================================================
+; ap_que_poll - a live player checks APQUEUE.DAT for documents handed off by a
+;               would-be second instance, adds them, and deletes the file.
+;               Called from ap_onwake; throttled to AP_QUE_TICKS.  UI task.
+; clobbers: AX..DI
+; =============================================================================
+; out: CF = 0 iff a document was added (the caller should repaint); CF = 1
+;      otherwise (throttled, or the queue was empty).
+; =============================================================================
+ap_que_poll:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov byte [ap_que_hit], 0
+    call OSAPI_GET_TICKS
+    mov bx, ax
+    sub ax, [ap_que_t]
+    cmp ax, AP_QUE_TICKS
+    jb .done
+    mov [ap_que_t], bx
+    ; the check REMOUNTS the root - never while a refill is already urgent
+    cmp byte [ap_sopen], 0
+    je .qfull
+    cmp byte [ap_paused], 0
+    jne .qfull
+    call ap_la_avail
+    cmp ax, AP_LA_LOW
+    jb .done                      ; ring below low-water - wait 5 s more
+.qfull:
+    APCNT apc_quechk
+
+    call OSAPI_FILE_HERE           ; DX = our cwd, BL = our drive
+    mov [ap_que_bdir], dx
+    mov [ap_que_bvol], bl
+
+    call ap_que_root
+    push ds
+    pop es
+    mov si, ap_qfile
+    mov bx, ap_querec
+    mov cx, 128
+    xor dx, dx
+    call OSAPI_FILE_READ          ; out CF=0 DX:AX = bytes, else AX = FERR_*
+    mov cx, 0
+    jc .back                      ; no queue file: nothing pending
+    mov cx, ax                     ; bytes read (< 128, DX = 0)
+
+    ; delete it while we are still standing in the root, then leave the root
+    ; BEFORE touching ap_add_file - the records carry their own dir/vol and
+    ; apl_goto_cur navigates by cluster, so they are processed from our own
+    ; home folder, not from a root we would then have to get back out of.
+    push cx
+    mov si, ap_qfile
+    call OSAPI_FILE_DELETE
+    pop cx
+.back:
+    push cx
+    mov dx, [ap_que_bdir]
+    mov bl, [ap_que_bvol]
+    call OSAPI_FILE_GOTO          ; back to where we were (real remount)
+    pop cx
+
+    or cx, cx
+    jz .done
+    mov si, ap_querec
+.rec:
+    cmp cx, AP_QUEREC
+    jb .done
+    push cx
+    push si
+    mov dx, [si+13]
+    mov bl, [si+15]
+    mov al, AP_ADD_CUR | AP_ADD_PLAY
+    call ap_add_file              ; SI already -> the name
+    mov byte [ap_que_hit], 1
+    pop si
+    pop cx
+    add si, AP_QUEREC
+    sub cx, AP_QUEREC
+    jmp .rec
+.done:
+    cmp byte [ap_que_hit], 0
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    je .miss
+    clc
+    ret
+.miss:
+    stc
+    ret
+
+    APB  ap_que_hit
+    APW  ap_que_bdir
+    APB  ap_que_bvol

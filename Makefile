@@ -3036,16 +3036,30 @@ $(BUILD)/tracker.o88: $(BUILD)/tracker.bin tools/os88pkg.py
 # (OSAPI_SND_STREAM, SPEC.md 34.5). A look-ahead heap claim in front of the
 # decoder keeps a disk read's sch_lock hold from starving the DMA. Seven
 # sources, one binary.
-$(BUILD)/audio.bin: apps/audio/audio.asm apps/audio/apengine.inc \
-                    apps/audio/apwork.inc apps/audio/apcb.inc \
-                    apps/audio/apwav.inc apps/audio/apdec.inc \
-                    apps/audio/apui.inc apps/audio/aplist.inc \
-                    apps/os88api.inc apps/os88ui.inc | $(BUILD)
+AUDIO_SRC := apps/audio/audio.asm apps/audio/apengine.inc \
+             apps/audio/apwork.inc apps/audio/apcb.inc \
+             apps/audio/apwav.inc apps/audio/apdec.inc \
+             apps/audio/apui.inc apps/audio/aplist.inc \
+             apps/os88api.inc apps/os88ui.inc
+# NB: apps/audio/audio.asm is named explicitly (as well as via $(AUDIO_SRC),
+# which begins with it) so tools/os88index.py finds the package here.
+$(BUILD)/audio.bin: apps/audio/audio.asm $(AUDIO_SRC) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/audio/ -o $@ apps/audio/audio.asm
 	@echo "audio: $(call FILESIZE,$@) bytes"
 
 $(BUILD)/audio.o88: $(BUILD)/audio.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/audio.bin -o $@
+
+# ...and the SAME SOURCE with -DAPROF (SPEC.md 86.5.1): the diagnostic-counter
+# build, for the profiling tests in docs/AUDIO-PLAN.md. Every counter is inside
+# %ifdef APROF, so the shipped AUDIO.O88 above carries none of it. Press D in
+# the player to see / hide the counters. Never on a shipped disk.
+$(BUILD)/audio-prof.bin: $(AUDIO_SRC) | $(BUILD)
+	$(NASM) -f bin -w+error -DAPROF -I apps/ -I apps/audio/ -o $@ apps/audio/audio.asm
+	@echo "audio (APROF): $(call FILESIZE,$@) bytes"
+
+$(BUILD)/audiop.o88: $(BUILD)/audio-prof.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/audio-prof.bin -o $@
 
 # A stand-alone Audio Player test disk (ON DEMAND: `make audiodisk`): AUDIO.O88
 # at the root beside whatever WAV files AUDIOWAV= names (each an 8.3 name), so
@@ -3071,14 +3085,22 @@ audiodisk: $(BUILD)/audio-test.img
 # as C:. 86Box: attach as the XT's hard disk. QEMU:
 #   qemu-system-i386 -drive file=build/audio-hdd.img,format=raw,if=ide -boot c \
 #     -device sb16,audiodev=snd -audiodev none,id=snd
+# AUDIOPROF=1 puts the -DAPROF diagnostic build (AUDIOP.O88) on the disk
+# instead of the shipped AUDIO.O88. AUDIOP carries its own 'WAV' association,
+# so double-click still opens it - it is the only player on the disk.
 AUDIOWAVDIR ?= build/awav
+ifeq ($(AUDIOPROF),1)
+AUDIO_O88 := $(BUILD)/audiop.o88
+else
+AUDIO_O88 := $(BUILD)/audio.o88
+endif
 $(BUILD)/audio-hdd.img: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(BUILD)/kernel.bin \
-                        $(DRIVERS) $(BUILD)/taskmgr.o88 $(BUILD)/audio.o88 \
+                        $(DRIVERS) $(BUILD)/taskmgr.o88 $(AUDIO_O88) \
                         tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --hdd \
 	    --mbr $(BUILD)/mbr.bin --boot $(BUILD)/boothd.bin \
 	    --kernel $(BUILD)/kernel.bin \
-	    $(DRIVERS) SYSTEM:$(BUILD)/taskmgr.o88 APPS:$(BUILD)/audio.o88 \
+	    $(DRIVERS) SYSTEM:$(BUILD)/taskmgr.o88 APPS:$(AUDIO_O88) \
 	    $(patsubst %,APPS:%,$(sort $(wildcard $(AUDIOWAVDIR)/*.wav)))
 	@python3 tools/os88disk.py --verify-hdd $@
 	@echo "audio-hdd: $@  (WAVs from $(AUDIOWAVDIR)/)"

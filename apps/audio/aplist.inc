@@ -108,6 +108,59 @@ apl_add:
     stc
     ret
 
+; =============================================================================
+; apl_find - is this exact track already in the playlist?
+; in:  SI -> NUL name (this segment), DX = dir cluster, BL = volume
+; out: CF = 0 and AL = its index; CF = 1 not present
+; clobbers: AX (BX/CX/DX/SI/DI preserved)
+; =============================================================================
+apl_find:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov [apl_tvol], bl
+    mov [apl_tdir], dx
+    xor cx, cx
+.e:
+    cmp cl, [apl_n]
+    jae .none
+    mov al, cl
+    xor ah, ah
+    call apl_entptr               ; BX = &entry
+    mov ax, [bx+14]
+    cmp ax, [apl_tdir]
+    jne .next
+    mov al, [bx+13]
+    cmp al, [apl_tvol]
+    jne .next
+    push si
+    mov di, bx                    ; entry name
+    call ap_nameeq                ; ZF = 1 equal (SI = query name)
+    pop si
+    je .hit
+.next:
+    inc cx
+    jmp .e
+.hit:
+    mov al, cl
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.none:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    stc
+    ret
+
 ; apl_curptr -> BX = &current entry ; CF = 1 if the list is empty
 apl_curptr:
     cmp byte [apl_n], 0

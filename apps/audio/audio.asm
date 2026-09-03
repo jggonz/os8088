@@ -59,7 +59,14 @@
 AP_FMT_PCM8    equ 0
 AP_FMT_ADPCM   equ 1
 
-AP_HDRBUF_SZ   equ 8192            ; header window / cluster bounce (shared)
+AP_HDRBUF_SZ   equ 16384           ; header window / streaming read bounce (shared)
+AP_RD_CHUNK    equ 16384           ; bytes one ap_refill_chunk read pulls (SPEC.md
+                                   ; 86.5.2): cost disk work in int-13h CALLS,
+                                   ; not sectors - a 4.77 MHz XT pays ~1-2 disk
+                                   ; revolutions per call whatever it moves, and
+                                   ; the read holds sch_lock (SPEC.md 34.5), so a
+                                   ; 2 KB-per-call refill froze the machine ~5x a
+                                   ; second. One big gulp every few seconds instead.
 APD_OUTSZ      equ 2048            ; decoder scratch = one stage half
 APD_BLKMAX     equ 2048            ; sanity cap on nBlockAlign
 
@@ -75,6 +82,17 @@ AP_LA_SZ       equ 0x8000        ; look-ahead ring: 32 KB, power of two
 AP_LA_MASK     equ 0x7FFF
 AP_LA_LOW      equ 0x3000        ; refill when fewer than 12 KB remain
 
+; --- worker pacing (SPEC.md 86.5.1) -----------------------------------------
+AP_SLP_FEED    equ 1              ; ticks the worker sleeps while feeding
+AP_SLP_IDLE    equ 6             ; ...and while stopped / paused / ended
+AP_DRAW_TICKS  equ 8             ; min ticks between dynamic redraws (~2/s)
+AP_REAP_TICKS  equ 18            ; min ticks between end-of-track UI kicks
+AP_QUE_TICKS   equ 90            ; how often a running player checks APQUEUE.DAT
+                                ; (~5 s): the check REMOUNTS the system root
+                                ; (ap_que_root), so it is deliberately rare and
+                                ; skipped entirely while the ring is low. A
+                                ; forwarded file appearing within 5 s is fine.
+
 FR_NONE        equ 0
 FR_READ        equ 1
 
@@ -82,8 +100,15 @@ AP_ST_STOP     equ 0
 AP_ST_PLAY     equ 1
 AP_ST_PAUSE    equ 2
 
+; ap_add_file flags
+AP_ADD_CUR     equ 1              ; make the new entry current
+AP_ADD_PLAY    equ 2             ; ...and start it now (double-click / association)
+AP_ADD_IDLE    equ 4             ; ...but only start it if nothing is playing (Open)
+
 AP_MAXTRK      equ 48             ; playlist capacity
 AP_ENTSZ      equ 16             ; per entry: 13 name + word dir + byte vol
+AP_QUENAME_LEN equ 13
+AP_QUEREC      equ 16             ; APQUEUE.DAT record: 13 name + word dir + byte vol
 
 ; button ids (apu_hit / dispatch)
 AP_B_PREV  equ 0
@@ -114,6 +139,56 @@ AP_B_NONE  equ 0xFF
 %assign AP_BSS AP_BSS + (%2)
 %endmacro
 
+; --- diagnostic counters (SPEC.md 86.5.1) - built only with -DAPROF, so the
+;     shipping AUDIO.O88 pays nothing. Each is one `inc word` (~11 cycles) or
+;     an `add`/`adc` for the dwords; the numbers are FORMATTED only when the
+;     'D' key opens the Diagnostics view, never in the hot path.
+%ifdef APROF
+%macro APCW 1
+%1 equ os88_image_end + AP_BSS
+%assign AP_BSS AP_BSS + 2
+%endmacro
+%macro APCD 1
+%1 equ os88_image_end + AP_BSS
+%assign AP_BSS AP_BSS + 4
+%endmacro
+    APCW apc_iter                  ; worker loop iterations
+    APCW apc_status                ; OSAPI_SND_STREAM verb 3 (status) calls
+    APCW apc_stage                 ; verb 6 (stage) calls
+    APCW apc_feed                  ; verb 1 (feed) calls
+    APCW apc_wake                  ; OSAPI_WM_WAKE issued by us
+    APCW apc_onwake                ; ap_onwake entries
+    APCW apc_readat                ; OSAPI_FILE_READ_AT calls
+    APCD apc_rbytes                ; bytes delivered by read_at
+    APCW apc_refill                ; ap_refill_chunk that actually read
+    APCW apc_under                 ; SND_ST_UNDER observed
+    APCW apc_wend                  ; SND_ST_ENDED / watchdog observed
+    APCW apc_uipaint               ; full content repaints (apu_draw / apu_repaint)
+    APCW apc_progupd               ; dynamic redraws (apu_draw_dyn)
+    APCW apc_declc                 ; apd_pull calls
+    APCD apc_decby                 ; PCM8 bytes / ADPCM samples produced
+    APCW apc_quechk                ; APQUEUE.DAT poll attempts
+    APCW apc_opentk                ; ap_open_track calls
+    APCW apc_parse                 ; apw_parse calls
+    APCW apc_slide                 ; apw_slide calls
+    APCW apc_prime                 ; ap_prime calls
+    APBUF apdg_buf, 900            ; APDIAG.TXT staging (formatted on the 'D' key)
+    APW   apdg_t0                  ; scratch: byte count for the write
+    APB   apdg_req                 ; 1 = ap_onwake owes an APDIAG.TXT dump
+%macro APCNT 1
+    inc word [%1]
+%endmacro
+%macro APADD 2
+    add word [%1], %2
+    adc word [%1+2], 0
+%endmacro
+%else
+%macro APCNT 1
+%endmacro
+%macro APADD 2
+%endmacro
+%endif
+
 ; --- shell / window state ------------------------------------------------
     APW ap_win
     APB ap_state
@@ -132,6 +207,14 @@ AP_B_NONE  equ 0xFF
     APW  ap_bpt_hi
     APW  ap_sub                    ; sub-tick byte remainder for the clock
     APW  ap_t0                     ; OSAPI_GET_TICKS at play start (unused net)
+    APB  ap_diag                   ; 1 = the window shows the Diagnostics view
+    APW  ap_last_s                 ; last elapsed second the dynamic redraw drew
+    APW  ap_last_bar               ; last progress-bar fill (px) it drew
+    APW  ap_last_draw_t            ; OSAPI_GET_TICKS at that redraw (throttle)
+    APW  ap_reap_kick_t            ; ...and at the last end-of-track UI kick
+    APW  ap_que_t                  ; ...and at the last APQUEUE.DAT poll
+    APBUF ap_snap, SYS_SNAPSHOT_SIZE   ; single-instance probe buffer (entry only)
+    APBUF ap_querec, 128           ; APQUEUE.DAT records, staged for a poll
 
 ; --- look-ahead ring ---------------------------------------------------
     APW ap_la_seg
@@ -140,6 +223,7 @@ AP_B_NONE  equ 0xFF
     APW ap_clu
     APD ap_rd_pos
     APW ap_skip
+    APW ap_rd_len                  ; bytes the current ap_refill_chunk read pulls
     APD ap_data_off
     APD ap_data_end
     APD ap_got
@@ -254,6 +338,22 @@ ap_entry:
     mov [ap_arg_dir], dx
     mov [ap_arg_vol], bl
     mov byte [ap_arg_pending], 1
+
+    ; --- single instance (SPEC.md 86.11.1): if an Audio Player is already
+    ;     live, hand it this document through APQUEUE.DAT and DO NOT open a
+    ;     second window. The running instance's ap_onwake poll picks it up.
+    call ap_find_sibling          ; CF = 0: a live sibling exists
+    jc .nodoc
+    call ap_que_write             ; append the banked arg to APQUEUE.DAT
+    jc .nodoc                     ; could not write (read-only volume): fall
+                                  ; back to a normal launch rather than lose it
+    mov si, ap_s_queued
+    push ds
+    pop es
+    xor cx, cx
+    call OSAPI_TOAST
+    stc                           ; abort THIS launch - the loader frees the
+    ret                           ; region, no window, no handover (SPEC.md 21)
 .nodoc:
     call aplist_init
 
@@ -316,13 +416,19 @@ ap_tpl:
 ap_ttl:   db 'Audio Player', 0
 
     OS88_MENUSET ap_menus, ap_ttl, ap_oncmd
-        OS88_MENU ap_m_file, ap_i_file, 2
+        OS88_MENU ap_m_file, ap_i_file, 4
         OS88_MENU ap_m_play, ap_i_play, 7
     OS88_MENUSET_END ap_menus
 ap_m_file:   db 'File', 0
-ap_i_file:   dw ap_it_open, ap_it_clear
+ap_i_file:   dw ap_it_open, ap_it_clear, ap_it_diag, ap_it_exit
+AP_CMD_OPEN  equ 0
+AP_CMD_CLEAR equ 1
+AP_CMD_DIAG  equ 2
+AP_CMD_EXIT  equ 3
 ap_it_open:  db 'Open...', 0
 ap_it_clear: db 'Clear playlist', 0
+ap_it_diag:  db 'Diagnostics (D)', 0
+ap_it_exit:  db 'Exit', 0
 ap_m_play:   db 'Play', 0
 ap_i_play:   dw ap_it_play, ap_it_pause, ap_it_stop, ap_it_prev, ap_it_next, \
                 ap_it_shuf, ap_it_rep
@@ -352,6 +458,12 @@ ap_s_nofile:  db 'Playlist is empty', 0
 ap_s_loaderr: db 'Cannot play this file', 0
 ap_s_opening: db 'Opening...', 0
 ap_s_endlist: db 'End of playlist', 0
+ap_s_queued:  db 'Sent to the running Audio Player', 0
+ap_s_added:   db 'Added to playlist', 0
+ap_s_notwav:  db 'Not a .WAV file', 0
+ap_s_full:    db 'Playlist is full', 0
+ap_s_dup:     db 'Already in the playlist', 0
+ap_qfile:     db 'APQUEUE.DAT', 0
 
 %include "os88ui.inc"
     OS88_BSS AP_BSS

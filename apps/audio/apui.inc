@@ -207,6 +207,12 @@ apu_draw:
     call apu_layout
     call apu_origin
 
+    cmp byte [ap_diag], 0
+    je .normal
+    call apu_draw_stats
+    jmp .done
+.normal:
+
     ; --- filename line -------------------------------------------------
     call apl_cur_name             ; SI = &name, CF = 1 empty
     jnc .havename
@@ -236,7 +242,7 @@ apu_draw:
 
     ; --- playlist ------------------------------------------------
     call apu_draw_list
-
+.done:
     pop di
     pop si
     pop dx
@@ -244,6 +250,451 @@ apu_draw:
     pop bx
     pop ax
     ret
+
+; =============================================================================
+; apu_draw_stats - the Diagnostics view (SPEC.md 86.5.1). Formatted ONCE per
+; repaint, which is a rare event (a key press, or a queue add) - never in the
+; hot path. Built only with -DAPROF; otherwise a one-line note.
+; =============================================================================
+apu_draw_stats:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+%ifndef APROF
+    mov si, aps_none
+    mov cx, [apu_ox]
+    add cx, 6
+    mov dx, [apu_oy]
+    add dx, 6
+    mov ax, 0x0F00
+    call OSAPI_FONT_RUN
+    jmp .out
+%else
+    mov word [aps_row], 4
+    mov si, aps_title
+    call aps_line
+    ; ---- one label + one number per row --------------------------------
+    mov si, aps_l_iter
+    mov ax, [apc_iter]
+    call aps_kv
+    mov si, aps_l_stat
+    mov ax, [apc_status]
+    call aps_kv
+    mov si, aps_l_stag
+    mov ax, [apc_stage]
+    call aps_kv
+    mov si, aps_l_feed
+    mov ax, [apc_feed]
+    call aps_kv
+    mov si, aps_l_wake
+    mov ax, [apc_wake]
+    call aps_kv
+    mov si, aps_l_onwk
+    mov ax, [apc_onwake]
+    call aps_kv
+    mov si, aps_l_read
+    mov ax, [apc_readat]
+    call aps_kv
+    mov si, aps_l_rby
+    mov ax, [apc_rbytes]
+    mov dx, [apc_rbytes+2]
+    call aps_kv32
+    mov si, aps_l_refl
+    mov ax, [apc_refill]
+    call aps_kv
+    mov si, aps_l_undr
+    mov ax, [apc_under]
+    call aps_kv
+    mov si, aps_l_wend
+    mov ax, [apc_wend]
+    call aps_kv
+    mov si, aps_l_uip
+    mov ax, [apc_uipaint]
+    call aps_kv
+    mov si, aps_l_prg
+    mov ax, [apc_progupd]
+    call aps_kv
+    mov si, aps_l_dec
+    mov ax, [apc_declc]
+    call aps_kv
+    mov si, aps_l_dby
+    mov ax, [apc_decby]
+    mov dx, [apc_decby+2]
+    call aps_kv32
+    mov si, aps_l_que
+    mov ax, [apc_quechk]
+    call aps_kv
+    mov si, aps_l_open
+    mov ax, [apc_opentk]
+    call aps_kv
+    mov si, aps_l_pars
+    mov ax, [apc_parse]
+    call aps_kv
+    mov si, aps_l_slid
+    mov ax, [apc_slide]
+    call aps_kv
+    mov si, aps_l_prim
+    mov ax, [apc_prime]
+    call aps_kv
+    mov si, aps_hint
+    call aps_line
+%endif
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+%ifndef APROF
+aps_none: db 'Diagnostics: rebuild with -DAPROF', 0
+%else
+    APW aps_row
+    APBUF aps_num, 12
+aps_title: db 'Audio Player diagnostics  (D to hide)', 0
+aps_hint:  db '(press D twice to refresh)', 0
+aps_l_iter: db 'worker iters  ', 0
+aps_l_stat: db 'status polls  ', 0
+aps_l_stag: db 'stage (v6)    ', 0
+aps_l_feed: db 'feed (v1)     ', 0
+aps_l_wake: db 'WM_WAKE       ', 0
+aps_l_onwk: db 'WM_ONWAKE     ', 0
+aps_l_read: db 'FILE_READ_AT  ', 0
+aps_l_rby:  db 'bytes read    ', 0
+aps_l_refl: db 'refill events ', 0
+aps_l_undr: db 'underruns     ', 0
+aps_l_wend: db 'ended/watchdog', 0
+aps_l_uip:  db 'full repaints ', 0
+aps_l_prg:  db 'progress upd  ', 0
+aps_l_dec:  db 'decoder calls ', 0
+aps_l_dby:  db 'decoded bytes ', 0
+aps_l_que:  db 'queue polls   ', 0
+aps_l_open: db 'open_track    ', 0
+aps_l_pars: db 'wav parse     ', 0
+aps_l_slid: db 'wav slide     ', 0
+aps_l_prim: db 'prime         ', 0
+
+; aps_line - SI = string; draw it at the current row, advance the row by 8
+aps_line:
+    push ax
+    push cx
+    push dx
+    mov cx, [apu_ox]
+    add cx, 6
+    mov dx, [apu_oy]
+    add dx, [aps_row]
+    mov ax, 0x0F00
+    call OSAPI_FONT_RUN
+    add word [aps_row], 8
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; aps_kv - SI = label, AX = value; one row "label   NNNNN", then row += 8
+aps_kv:
+    push di
+    mov di, aps_num
+    call aps_u16
+    call aps_kv_emit
+    pop di
+    ret
+
+; aps_kv32 - SI = label, DX:AX = value
+aps_kv32:
+    push di
+    mov di, aps_num
+    call aps_u32
+    call aps_kv_emit
+    pop di
+    ret
+
+; aps_kv_emit - SI = label, aps_num holds the formatted value
+aps_kv_emit:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov cx, [apu_ox]
+    add cx, 6
+    mov dx, [apu_oy]
+    add dx, [aps_row]
+    mov ax, 0x0F00
+    call OSAPI_FONT_RUN            ; the label (SI)
+    mov si, aps_num
+    mov cx, [apu_ox]
+    add cx, 6 + 110
+    mov dx, [apu_oy]
+    add dx, [aps_row]
+    mov ax, 0x0F00
+    call OSAPI_FONT_RUN            ; the value
+    add word [aps_row], 8
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; aps_u16 - AX unsigned -> decimal NUL string at DI
+aps_u16:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, 10
+    xor cx, cx
+.d:
+    xor dx, dx
+    div bx
+    push dx
+    inc cx
+    or ax, ax
+    jnz .d
+.e:
+    pop dx
+    add dl, '0'
+    mov [di], dl
+    inc di
+    loop .e
+    mov byte [di], 0
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; aps_u32 - DX:AX unsigned -> decimal NUL string at DI
+aps_u32:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    xor cx, cx                     ; digit count
+    mov si, 10
+.d:
+    ; DX:AX / 10 -> DX:AX quotient, BX remainder
+    push ax
+    mov ax, dx
+    xor dx, dx
+    div si                         ; AX = hi quotient, DX = hi rem
+    mov bx, ax
+    pop ax
+    div si                         ; AX = lo quotient, DX = remainder
+    push dx                        ; the digit
+    mov dx, bx                     ; carry the hi quotient
+    inc cx
+    mov bx, ax
+    or bx, dx
+    jnz .d
+.e:
+    pop dx
+    add dl, '0'
+    mov [di], dl
+    inc di
+    loop .e
+    mov byte [di], 0
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; =============================================================================
+; ap_diag_dump - write every counter to APDIAG.TXT on the system-volume root,
+; one "name value" per line, so the host can read exact numbers off the image
+; instead of squinting at a 8px on-screen column. APROF only; not shipped.
+; UI-task context (the 'D' key). Saves and restores the current directory.
+; =============================================================================
+apdg_nl: db 10, 0
+
+; apdg_s - append the NUL string at SI to [DI], DI walks
+apdg_s:
+    push ax
+.l:
+    mov al, [si]
+    or al, al
+    jz .d
+    mov [di], al
+    inc di
+    inc si
+    jmp .l
+.d:
+    pop ax
+    ret
+
+; apdg_num - append decimal AX then newline at [DI], DI walks
+apdg_num:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, 10
+    xor cx, cx
+.dv:
+    xor dx, dx
+    div bx
+    push dx
+    inc cx
+    or ax, ax
+    jnz .dv
+.em:
+    pop dx
+    add dl, '0'
+    mov [di], dl
+    inc di
+    loop .em
+    mov byte [di], 10
+    inc di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; apdg_num32 - append decimal DX:AX then newline at [DI], DI walks
+apdg_num32:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    xor cx, cx
+    mov si, 10
+.dv:
+    push ax
+    mov ax, dx
+    xor dx, dx
+    div si
+    mov bx, ax
+    pop ax
+    div si
+    push dx
+    mov dx, bx
+    inc cx
+    mov bx, ax
+    or bx, dx
+    jnz .dv
+.em:
+    pop dx
+    add dl, '0'
+    mov [di], dl
+    inc di
+    loop .em
+    mov byte [di], 10
+    inc di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+%macro APDGV 2
+    mov si, %1
+    call apdg_s
+    mov ax, [%2]
+    call apdg_num
+%endmacro
+%macro APDGV32 2
+    mov si, %1
+    call apdg_s
+    mov ax, [%2]
+    mov dx, [%2 + 2]
+    call apdg_num32
+%endmacro
+
+apdg_fname: db 'APDIAG.TXT', 0
+apdg_l_iter:  db 'iter ', 0
+apdg_l_stat:  db 'status ', 0
+apdg_l_stag:  db 'stage ', 0
+apdg_l_feed:  db 'feed ', 0
+apdg_l_wake:  db 'wmwake ', 0
+apdg_l_onwk:  db 'onwake ', 0
+apdg_l_read:  db 'readat ', 0
+apdg_l_rby:   db 'rbytes ', 0
+apdg_l_refl:  db 'refill ', 0
+apdg_l_undr:  db 'under ', 0
+apdg_l_wend:  db 'wend ', 0
+apdg_l_uip:   db 'uipaint ', 0
+apdg_l_prg:   db 'progupd ', 0
+apdg_l_dec:   db 'declc ', 0
+apdg_l_dby:   db 'decby ', 0
+apdg_l_que:   db 'quechk ', 0
+apdg_l_open:  db 'opentk ', 0
+apdg_l_pars:  db 'parse ', 0
+apdg_l_slid:  db 'slide ', 0
+apdg_l_prim:  db 'prime ', 0
+
+ap_diag_dump:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    call OSAPI_FILE_HERE           ; DX = cwd cluster, BL = drive
+    mov [ap_que_bdir], dx
+    mov [ap_que_bvol], bl
+
+    mov di, apdg_buf
+    APDGV   apdg_l_iter, apc_iter
+    APDGV   apdg_l_stat, apc_status
+    APDGV   apdg_l_stag, apc_stage
+    APDGV   apdg_l_feed, apc_feed
+    APDGV   apdg_l_wake, apc_wake
+    APDGV   apdg_l_onwk, apc_onwake
+    APDGV   apdg_l_read, apc_readat
+    APDGV32 apdg_l_rby,  apc_rbytes
+    APDGV   apdg_l_refl, apc_refill
+    APDGV   apdg_l_undr, apc_under
+    APDGV   apdg_l_wend, apc_wend
+    APDGV   apdg_l_uip,  apc_uipaint
+    APDGV   apdg_l_prg,  apc_progupd
+    APDGV   apdg_l_dec,  apc_declc
+    APDGV32 apdg_l_dby,  apc_decby
+    APDGV   apdg_l_que,  apc_quechk
+    APDGV   apdg_l_open, apc_opentk
+    APDGV   apdg_l_pars, apc_parse
+    APDGV   apdg_l_slid, apc_slide
+    APDGV   apdg_l_prim, apc_prime
+    mov si, di
+    mov ax, si
+    sub ax, apdg_buf
+    mov [apdg_t0], ax             ; reuse: byte count for the write
+
+    call ap_que_root             ; -> system volume root (clobbers AX/BX/DX)
+    push ds
+    pop es
+    mov si, apdg_fname
+    mov bx, apdg_buf
+    xor dx, dx
+    mov cx, [apdg_t0]
+    call OSAPI_FILE_WRITE         ; whole-file write: creates / overwrites
+
+    mov dx, [ap_que_bdir]
+    mov bl, [ap_que_bvol]
+    call OSAPI_FILE_GOTO          ; back to the track's directory (real remount)
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
 
 ; --- apu_draw_time_full - the "MM:SS [bar] MM:SS" row, all of it -------------
 apu_draw_time_full:

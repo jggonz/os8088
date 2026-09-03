@@ -83131,6 +83131,36 @@ validation); `apdec.inc` (PCM8 pass-through and the IMA/DVI ADPCM decoder,
 plus the two constant tables); `apui.inc` (adapter-parameterised layout and
 drawing); `aplist.inc` (the playlist store, Shuffle and Repeat).
 
+### 86.2.1 `ap_add_file` — the one way a track enters the playlist
+
+Every route a file can arrive by converges on **`ap_add_file(name, dir, vol,
+flags)`** (`apengine.inc`), so the add rules live in one place:
+
+| route | flags | behaviour |
+|---|---|---|
+| File ▸ Open (fdlg completion) | `AP_ADD_CUR | AP_ADD_IDLE` | add, select; start it **only if nothing is playing** — Open must not interrupt the current song |
+| launch document (§86.11) | `AP_ADD_CUR | AP_ADD_PLAY` | add, select, play it now — a double-click means "play this" |
+| handoff from a second instance (§86.11.1) | `AP_ADD_CUR | AP_ADD_PLAY` | same |
+| startup `OSAPI_ARG_FILE` | `AP_ADD_CUR | AP_ADD_PLAY` | same |
+
+`ap_add_file` validates the `.WAV` extension (`ap_has_wav_ext`), de-duplicates
+on name + dir + vol (`apl_find` — a repeat just re-selects, and with
+`AP_ADD_PLAY` restarts, the existing entry), appends through `apl_add`, and on
+`AP_ADD_PLAY` (or `AP_ADD_IDLE` while stopped) calls `ap_stream_close` then
+`ap_open_track`. Drag-and-drop from the File Manager is **not** a route: there
+is no cross-app file-drop event in the window manager (`fm_drag` only targets
+Disk-window folders, via a file *move*), documented as a limitation in §86.20.
+
+### 86.3 File ▸ Open
+
+`AP_CMD_OPEN` runs `OSAPI_FILE_DLG` with `FDLG_OPEN`; the completion proc
+`ap_onfile` copies the chosen name out of the kernel buffer (valid only during
+the call), banks `OSAPI_FILE_HERE`, and calls `ap_add_file` with `AP_ADD_CUR |
+AP_ADD_IDLE`. So Open **adds to the playlist and selects**, and begins playback
+only when the player is idle — a deliberate choice so that queueing up the next
+song never cuts off the one playing. File ▸ Clear (`ap_stream_close` +
+`apl_clear`) empties the list and stops.
+
 ### 86.5 The engine — a look-ahead stage in front of §45.2
 
 §45.2's ring stream is the one this app is built on: **the UI task opens,
@@ -83147,12 +83177,13 @@ disk --OSAPI_FILE_READ_AT--> 32 KB look-ahead ring (heap claim) --decoder-->
 ```
 
 - **The UI task does every disk read**, because the file slots are UI-task
-  context only (§20.6 rule 7). `ap_refill_chunk` reads **one cluster** at a
-  time from the data chunk, head-skipping the first read's pre-data bytes and
-  tail-clamping the last read at the data end, and `ap_ring_put`s the usable
-  bytes into the look-ahead ring. `AP_LA_SZ` (0x8000) is a power of two ≥ the
-  largest cluster §52.3 allows (8 KB), so a cluster write never crosses the
-  ring seam.
+  context only (§20.6 rule 7). `ap_refill_chunk` reads a **`AP_RD_CHUNK`
+  (16 KB) gulp** — clamped to the free room in the ring and floored to a whole
+  number of clusters — from the data chunk, head-skipping the first read's
+  pre-data bytes and tail-clamping the last read at the data end, and
+  `ap_ring_put`s the usable bytes into the look-ahead ring. The gulp size is a
+  performance decision, not an arbitrary one — see §86.5.2. `AP_LA_SZ` (0x8000)
+  is a power of two, so a wrapped write splits at the seam exactly once.
 - **The worker decodes and feeds**, lock-free, on the any-task verbs 1/3/6
   (§20.3). `ap_feed` polls verb 3, and while the SND ring has room and fewer
   than `AP_MAXFEED` halves have gone this wake, it calls `apd_pull` for a
@@ -83178,6 +83209,59 @@ Pre-roll is **six halves** on the UI task before `verb 0` (§45.17.2's
 field-corrected number). Ring grant is **16 KB**, tiered to 8 KB (`verb 7`),
 freed by `ap_stream_close`. The look-ahead buffer is one 32 KB
 `OSAPI_MEM_CLAIM`, taken once and held for the instance's life.
+
+### 86.5.1 Worker pacing and the redraw throttle
+
+The worker loop is `ALIVE → sleep → reap → feed → draw`, and each step is
+budgeted for the 4.77 MHz target, not the emulator:
+
+- **Adaptive sleep.** `OSAPI_TASK_SLEEP AP_SLP_FEED` (1 tick) only while the
+  stream is open, unpaused and not ended; otherwise `AP_SLP_IDLE` (6 ticks). A
+  stopped or paused player has no ring to starve, so it does not wake ~18×/s.
+- **Feed early-out.** `ap_feed` polls `verb 3` every pass (cheap — it is the
+  clock's source) but stages nothing while the SND ring still holds more than
+  `ring − 2 halves`; a "skip" that is one tick early costs at most another
+  half-KB of DSP drain and never an underrun.
+- **The end-of-track kick is throttled** to `AP_REAP_TICKS`, not sent every
+  pass while `[ap_ended]` is latched and the UI has not yet reaped.
+- **The dynamic redraw is change-gated and throttled.** The old worker
+  repainted `MM:SS` + the progress bar ~18×/s onto identical pixels.
+  `ap_worker_draw` now recomputes the elapsed second and the bar-fill pixel,
+  returns with **no lock and no draw** when neither changed, and otherwise
+  takes the gfx lock at most every `AP_DRAW_TICKS` (~2×/s) and only when
+  `OSAPI_WM_OBSCURED` says the window is visible. Measured: progress updates
+  fell from ~18–24/s to ~2/s.
+
+`APROF` (`make … AUDIOPROF=1`, `AUDIOP.O88`) compiles in a block of `inc word`
+counters — worker iterations, `verb 3`/`verb 1`/`verb 6` calls, `WM_WAKE` /
+`WM_ONWAKE`, `FILE_READ_AT` calls and bytes, refill / underrun / end events, UI
+paints and progress updates, decoder calls and bytes, `ap_open_track` /
+`apw_parse` / `apw_slide` / `ap_prime` calls. The **D** key shows them in the
+window and writes `APDIAG.TXT` to the system-volume root (from `ap_onwake`, so
+the file I/O is off the gfx lock). The shipping `AUDIO.O88` compiles none of it.
+
+### 86.5.2 Why the read is 16 KB, not one cluster — the ModPlug comparison
+
+On the target, an `int 13h` costs ~1–2 disk revolutions **whatever it moves**
+(PERFORMANCE.md: cost disk work in *calls*, not sectors), and the read holds
+`sch_lock` for its duration, freezing the scheduler — the kernel refill task
+and this package's own worker included (§34.5). The first cut read **one
+cluster (2 KB) per `ap_refill_chunk`**, ~5 times a second at 8 kHz PCM8 — five
+system-wide stalls a second.
+
+That is the whole of why PCM8/8k was *heavier than ModPlug* on the same 8088:
+ModPlug's module is resident, so it issues **zero** `int 13h` during playback;
+the Audio Player was issuing five a second and taking `sch_lock` on each. It is
+not decoder cost — PCM8 has no decoder — and it is invisible on an emulator,
+which is exact about the work and useless about the time.
+
+Reading a `AP_RD_CHUNK` (16 KB) gulp instead — the ring has room, and
+`ap_scratch` is sized to hold it — drops the streaming read rate to **~0.6/s**
+(measured: 14 reads in 20 s vs. 106 before), and with it the worker →
+`WM_WAKE` → `ap_onwake` refill handshake it drove (182 `WM_ONWAKE` in 20 s →
+14). No underruns, PCM8 or ADPCM. The chunk is not sacred: it is bounded by
+`ap_scratch` and by the 32 KB ring, and `AP_LA_LOW` (12 KB) still leaves room
+for one full gulp when a refill triggers.
 
 ### 86.6 The WAV parser (`apw_parse`)
 
@@ -83271,13 +83355,45 @@ launches `AUDIO.O88` with that file as the launch document (§54.10):
 kernel calls once itself after the window is shown — adds it to the playlist
 and starts it. `.M3U` association is future work (§86.20).
 
+### 86.11.1 Single instance — the `APQUEUE.DAT` handoff
+
+`assoc_run` (§54.4) always loads a fresh instance; there is no
+"already-running" check and no public slot to wake another instance's window by
+name (a snapshot record — `OSAPI_SYS_SNAPSHOT` — carries no window pointer).
+So single-instance is an **Audio-Player-local rendezvous file**:
+
+1. `ap_entry`, after banking `OSAPI_ARG_FILE`, calls `ap_find_sibling` —
+   `OSAPI_SYS_SNAPSHOT`, match a live `KIND_PKG` record whose name is
+   `AUDIO PLAYER` and whose region segment is not ours.
+2. If one exists, `ap_que_write` appends a 16-byte record (13-byte name,
+   dir-cluster word, volume byte) to **`APQUEUE.DAT` on the system-volume
+   root**, then `ap_entry` returns **CF = 1** — the loader frees the region,
+   no second window, no handover. If the write fails (read-only volume) it
+   falls back to a normal launch rather than lose the document.
+3. The running instance's `ap_onwake` calls `ap_que_poll`, throttled to
+   `AP_QUE_TICKS` (~5 s) and skipped while the look-ahead ring is below
+   `AP_LA_LOW` (the poll **remounts** the system root — `OSAPI_FILE_GOTO`, real
+   I/O — so it is deliberately rare and never competes with an urgent refill).
+   It reads the file, **deletes it while still standing in the root**, restores
+   its own folder, then replays each record through `ap_add_file` with
+   `AP_ADD_CUR | AP_ADD_PLAY`.
+
+`ap_que_root` uses `OSAPI_FILE_GOTO`, not its quiet twin: `GOTO_Q` sets only a
+transient by-cluster resolution and `OSAPI_FILE_WRITE`/`_READ` **by name**
+still resolve in the instance's own launched-from folder (measured — the file
+missed the root). Every caller banks `OSAPI_FILE_HERE` and GOTOs back, the
+FONTS/ pattern (`os88type.inc`). The queue file is written with
+`OSAPI_FILE_WRITE` (read-modify-write of the whole ≤128-byte file), **not**
+`OSAPI_FILE_APPEND`, which needs a pre-existing file whose size is a whole
+number of clusters — a 16-byte-record queue is neither.
+
 ### 86.12 Memory
 
 | item | size | where |
 |---|---|---|
-| image + bss | ~18 KB | the package region (cap `APP_MAX_SIZE` = 60 KB) |
+| image + bss | ~20 KB | the package region (cap `APP_MAX_SIZE` = 60 KB) |
 | look-ahead ring | 32 KB | one `OSAPI_MEM_CLAIM`, held for the instance's life |
-| header window / cluster bounce | 8 KB | `ap_scratch` in bss, shared between the parser and the refill path |
+| header window / streaming read bounce | 16 KB | `ap_scratch` in bss, shared between the parser and the `AP_RD_CHUNK` refill read (§86.5.2) |
 | decoder scratch | 2 KB | `apd_out` in bss |
 | playlist | `AP_MAXTRK` × 16 B | bss |
 | SND ring grant + driver pool | ~28 KB | `SOUND.DRV`'s claims, released when the player stops |
@@ -83336,8 +83452,19 @@ No visualiser, no spectrum analyser, no animated channel bars, no seeking by
 clicking the progress bar (an ADPCM seek must respect block boundaries and
 decoder state — future work), no `.M3U` yet, no clickable playlist rows in
 v1, no arm-on-press / fire-on-release for the transport buttons (they are
-single-shot commands and fire on `W_ONCLICK`). Performance figures on the XT
-are 86Box's to measure (`docs/AUDIO-PLAN.md` has the procedure); QEMU is
-functional verification only, where 28 s of PCM8 @ 22 kHz streams gap-free
-(0 quiet windows in the capture) with 14 s of it while another window holds
-the focus.
+single-shot commands and fire on `W_ONCLICK`).
+
+**No drag-and-drop from the File Manager.** The window manager has no cross-app
+file-drop event — `fm_drag` (`files.inc`) recognises only a Disk window's
+folder targets and acts by a file *move* (`fcp_paste`); `OSAPI_WM_ONDRAG` is
+the scrollbar/content tracking edge (§13.8.2), not a receiver. A `W_ONDROP`
+event with a file payload is the OS feature this would need, and it does not
+exist. Until then a dragged `.WAV` reaches the player only by File ▸ Open, by
+double-click (a new instance hands it over, §86.11.1), or from the command the
+launcher passes as `OSAPI_ARG_FILE`.
+
+Performance figures on the XT are 86Box's to measure (`docs/AUDIO-PLAN.md` has
+the procedure); QEMU is functional verification only, where 28 s of PCM8 @
+22 kHz streams gap-free (0 quiet windows in the capture) with 14 s of it while
+another window holds the focus, and where the `AP_RD_CHUNK` change (§86.5.2)
+cut streaming reads from ~5/s to ~0.6/s with no underruns for either codec.

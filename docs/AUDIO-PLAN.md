@@ -125,13 +125,112 @@ Three defects were found on the glass and fixed: a blank first paint before
 3px dead lane between transport buttons (`apu_hit` now tiles the row
 gap-free); `apu_layout` / `apu_origin` now keep last-good geometry on CF=1.
 
+## The performance round — why PCM8/8k was heavier than ModPlug
+
+Real 86Box testing on an XT reported PCM u8 @ 8000 Hz — the *cheapest* format,
+no decoder at all — sitting near ~70 % CPU per the Task Manager, and heavier
+than ModPlug playback on the same machine. The brief called that suspicious and
+asked for a measured root cause before any optimisation.
+
+**Instrumentation.** `make … AUDIOPROF=1` builds `AUDIOP.O88` with a block of
+`inc word` counters (all inside `%ifdef APROF`, so the shipping binary carries
+none). The **D** key shows them in the window and writes `APDIAG.TXT` to the
+system-volume root. A 20-second PCM8/8k run under QEMU, before the fix:
+
+| counter | /20 s | note |
+|---|---|---|
+| worker iterations | 455 | ~23/s — adaptive sleep working, not a busy loop |
+| `verb 3` status polls | 455 | one per iteration; ~1 ms/s on the target — negligible |
+| `verb 6`/`verb 1` stage/feed | 103 / 97 | ~5/s — one 2 KB half, matches 8 kB/s + margin |
+| **`FILE_READ_AT` calls** | **106** | **~5/s — the problem** |
+| refill events | 105 | one disk read per `FILE_READ_AT` |
+| `WM_WAKE` / `WM_ONWAKE` | 90 / 182 | the worker→UI refill handshake, ~5–9/s |
+| `ap_open_track` / `apw_parse` / `apw_slide` | 1 / 1 / 0 | **no parser re-entry** — an earlier screenshot misread of "106" as "6176" had suggested a parse storm; there is none |
+| underruns / watchdog | 0 / 0 | |
+| progress updates | 42 | ~2/s — the redraw throttle holds |
+
+**Root cause.** `ap_refill_chunk` read **one cluster (2 KB) at a time**, ~5×/s.
+On the target an `int 13h` costs ~1–2 disk revolutions *whatever it moves*
+(`PERFORMANCE.md`: cost disk work in calls, not sectors), and the read holds
+`sch_lock`, freezing the scheduler — the kernel refill task and this package's
+own worker included (§34.5). Five system-wide stalls a second, plus the
+worker→`WM_WAKE`→`ap_onwake` handshake driving them (182 `WM_ONWAKE` in 20 s).
+
+That is exactly what ModPlug does *not* pay: its module is resident, so it
+issues **zero** `int 13h` during playback. It is invisible on an emulator,
+which is exact about work and useless about time — every QEMU run streamed
+fine.
+
+**Fix.** `AP_RD_CHUNK` = 16 KB: `ap_refill_chunk` now reads a gulp bounded by
+the ring's free room and floored to a whole number of clusters, and
+`ap_scratch` is sized to hold it (bss +8 KB, ~20 KB total — still a quarter of
+`APP_MAX_SIZE`). Same 20-second run after:
+
+| counter | before | after |
+|---|---|---|
+| `FILE_READ_AT` | 106 | **14** (~0.6/s) |
+| refill events | 105 | 14 |
+| `WM_WAKE` / `WM_ONWAKE` | 90 / 182 | 14 / 14 |
+| underruns | 0 | 0 |
+
+7–8× fewer disk reads, the same drop in `sch_lock` stalls and in the WM
+round-trip. IMA/DVI ADPCM @ 8 kHz — the "severe stalls" case — was the *same*
+bug (8 reads/20 s after the fix, 0 underruns); it is not decoder cost. Per the
+brief, the IMA nibble loop was left alone: measurement did not justify touching
+it.
+
+Also in this round: adaptive worker sleep (`AP_SLP_FEED` 1 tick while feeding,
+`AP_SLP_IDLE` 6 otherwise); the end-of-track UI kick throttled to
+`AP_REAP_TICKS`; `ap_feed` stages nothing while the SND ring still holds
+> `ring − 2 halves`; and the dynamic redraw is change-gated (no lock, no draw
+when neither the elapsed second nor the bar pixel moved) and capped at
+`AP_DRAW_TICKS` (~2/s) and skipped entirely when `OSAPI_WM_OBSCURED`.
+
+## The file-workflow round
+
+- **One add path.** File ▸ Open, the launch document, the startup
+  `OSAPI_ARG_FILE` and the single-instance handoff all converge on
+  `ap_add_file(name, dir, vol, flags)` (§86.2.1). It validates the extension,
+  de-duplicates on name + dir + vol, and starts the track per the flags.
+- **Open does not interrupt.** `ap_onfile` calls `ap_add_file` with
+  `AP_ADD_CUR | AP_ADD_IDLE`: add and select always, begin playback only when
+  the player is idle.
+- **Single instance (§86.11.1).** A `.WAV` double-clicked while a player runs
+  now reaches the running instance instead of opening a second window.
+  `assoc_run` has no already-running check and there is no public "wake that
+  window" slot, so the second instance's `ap_entry` finds the sibling
+  (`OSAPI_SYS_SNAPSHOT`), appends the document to `APQUEUE.DAT` on the
+  system-volume root, and returns CF = 1 (no window). The running instance's
+  `ap_onwake` polls that file (throttled ~5 s, skipped while the ring is low —
+  the poll remounts the root), replays it through `ap_add_file`, and deletes
+  it. Verified on the glass: double-clicking `ADP8K.WAV` while `PCM8K.WAV`
+  plays adds it to the playlist, switches to it and plays it, with no second
+  window and `APQUEUE.DAT` consumed.
+  - `ap_que_root` uses `OSAPI_FILE_GOTO` (real remount + bank/restore, the
+    FONTS/ pattern), not `GOTO_Q` — measured: after `GOTO_Q`,
+    `OSAPI_FILE_WRITE`/`_READ` by name still resolve in the caller's own
+    launched-from folder, so the file missed the root.
+  - The queue file is a whole-file read-modify-write (`OSAPI_FILE_WRITE`), not
+    `OSAPI_FILE_APPEND` — append needs a pre-existing cluster-aligned file and
+    a 16-byte-record queue is neither.
+- **Drag-and-drop is not possible** with the current window manager — see
+  Limitations.
+
 ## Limitations / future work
 
 - **86Box performance figures are owed** — the numbers above are QEMU
   functional checks; QEMU is exact about work done and useless about how long
   it takes (`PERFORMANCE.md`).
 - No seeking (an ADPCM seek must respect block boundaries and decoder state).
-- No `.M3U` playlists yet, no clickable playlist rows, no drag-drop.
+- No `.M3U` playlists yet, no clickable playlist rows.
+- **No drag-and-drop from the File Manager.** The window manager has no
+  cross-app file-drop event: `fm_drag` (`files.inc`) recognises only a Disk
+  window's folder targets and acts by a file *move* (`fcp_paste`), and
+  `OSAPI_WM_ONDRAG` is the scrollbar/content tracking edge (§13.8.2), not a
+  receiver. This needs a new `W_ONDROP` event carrying a file payload — an OS
+  feature, out of scope for the package. Until then a dragged `.WAV` reaches
+  the player by File ▸ Open, by double-click (handed over to the running
+  instance), or as the launch document.
 - Transport buttons fire on `W_ONCLICK` (press), not the arm-on-press /
   fire-on-release model (§13.7) — acceptable for single-shot commands, could
   be tightened.
@@ -154,3 +253,8 @@ one-line fix, unrelated to the Audio Player but blocking `make` on Windows:
   boundary" positives. Normalise to `/`.
 - `tools/os88index.py`: the writer used text-mode `open`, so on Windows it
   rewrote `docs/INDEX.md` CRLF and every line showed as changed. `newline="\n"`.
+- `tools/os88index.py` package discovery: it scans each `$(BUILD)/x.bin:` rule
+  for an `apps/x/x.asm` on the dependency line. The Audio Player's rule was
+  refactored to `$(BUILD)/audio.bin: $(AUDIO_SRC)`, which hid the path and
+  dropped AUDIO PLAYER from the generated INDEX. Fixed by naming
+  `apps/audio/audio.asm` explicitly on the rule line (alongside the variable).
