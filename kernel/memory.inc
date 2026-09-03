@@ -114,6 +114,11 @@ MEM_K_CLONE equ 0xFF09          ; the disk cloner's buffer (SPEC.md 18.99) -
 ; a value that has meant one thing in a shipped kernel and something else in
 ; the next is exactly the kind of collision a debug read cannot see.
 MEM_K_BAND equ 0xFF0A           ; the 1bpp band composer's buffer (SPEC.md
+MEM_K_HIB  equ 0xFF0B           ; the resume's extent list (SPEC.md 86.5):
+                                ; claimed on the way into the stub and never
+                                ; freed, because the machine it is in is
+                                ; about to be overwritten; freed on the one
+                                ; path that turns back
                                 ; 5.9.2) - taken ONCE at boot and never freed,
                                 ; because a composer with nowhere to compose
                                 ; is a composer that silently stops composing.

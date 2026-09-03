@@ -806,8 +806,9 @@ sector nothing: unset, the `%ifdef` is not assembled.
 **A module is `.cold` code that ships as a file instead of as part of the
 kernel image.** It is read into a heap claim when its feature is asked for,
 far-called through a table of entry pointers, and freed when the feature is
-finished. Two exist: `CTRL.DRV`, the Control Panel (§31), and `FORMAT.DRV`,
-the floppy formatter (§18.96).
+finished. Four exist: `CTRL.DRV`, the Control Panel (§31), `FORMAT.DRV`,
+the floppy formatter (§18.96), `CLONE.DRV`, the disk cloner (§18.99), and
+`HIBER.DRV`, hibernate and resume (§86).
 
 **This is the fourth lever on the footprint, and the only one that relieves
 `KERN_BUDGET` without relieving nothing else.** §2.5's overlay is run-once
@@ -2006,6 +2007,7 @@ VIEW_KB       equ 3          ; each window's cache, claimed when it opens
 | `kernel/disk.inc`   | BIOS int 13h floppy transfers (`disk_read`/`disk_write`), FAT12/16 mount + directory + chain walk (§18–19) |
 | `kernel/diskw.inc`  | the FAT write path (§18.4): name parsing, cluster allocation + free, FAT flush, directory entry create/update/delete, the five whole-file operations — prefix `dskw_`; the ONLY caller of `disk_write`. **`.cold`** (§2.6) |
 | `kernel/clone.inc`  | the disk cloner (§18.99): the on-demand `CLONE.DRV` — sector-for-sector copy between any two floppy drives or one drive twice, its XMS/heap planner, its own geometry probe and its status-line prompts — prefix `clo_`; the resident half is one word and one thunk, both **`.cold`**/`.text` (§2.6) |
+| `kernel/hiber.inc`  | hibernate and resume (§86): the on-demand `HIBER.DRV` — the Hibernate window, the image write, the boot-time question, the extent walk, the stub that puts memory back from the text framebuffer and the wake — prefix `hbm_`/`hbs_`; the resident half is the template, the state block, the `.text` thunks a kernel window needs, and in **`.cold`** the boot probe, the greying predicate and the loading thunks (`hb_`/`hbf_`/`hbk_`) |
 | `kernel/loader.inc` | package validation, pool allocation, per-instance load + relocate, launch (§21). **`.cold`** (§2.6) |
 | `kernel/files.inc`  | Disk window: file list UI, selection, open, refresh (§22). **`.cold`** (§2.6), with its strings and dispatch tables toggled back to `.text` |
 | `kernel/filecp.inc` | the file manager's clipboard: Cut, Copy, Paste and the recursive paste engine (§22.3) — prefix `fcp_`. **`.cold`** (§2.6) |
@@ -9105,7 +9107,8 @@ opposed, and no single number satisfies both.
 
 **Worse, the highlight goes AWAY rather than merely lagging.** Separators are
 `MENU_DIS` items (§12.2 — `menu_s_msep`, `fm_s_fsep`), so the System menu is
-About / Control Panel / Task Manager / **rule** / Restart, and `menu_hover`
+About / Control Panel / Task Manager / **rule** / Hibernate... / Restart
+(§86; `kern_small` has no Hibernate), and `menu_hover`
 answers `0xFFFF` for the whole of that fourth cell. Six presses in the middle
 of a menu that highlight nothing at all do not read as slowness; they read as
 the menu having stopped working.
@@ -27944,6 +27947,13 @@ The first consumer is the hard disk installer's Restart button (§52.10.6),
 which is the case that needed it: the user has just written a bootable
 volume and the next thing they want is to boot it.
 
+**The same byte carries three more values** (§86): `UI_RBQ_HIBER`,
+`UI_RBQ_RESUME` and `UI_RBQ_ASK`, spent at the same top-of-pass site for the
+same reason — a hibernate detaches drivers and a resume waits on their
+workers, neither of which can be done from the callback that decided it.
+Unlike a restart these can RETURN: on a refusal, a Discard, or once the
+question is on the screen. A restart already posted wins over any of them.
+
 #### 20.10.1 …and `AL` says whether it may touch a disk
 
 `AL` = 0 is the System menu's restart, which calls `cp_flush_close` on the
@@ -36322,7 +36332,8 @@ row keeps 0.
 Pinned caps: About 1 (stateless), Timer 10
 (stride 16 — 8 of state and 8 of §14.1's TMR_SHOWN), Bounce 10 (stride 8),
 **Files 4 (stride `FS_SIZE`, pool `fm_pool`)**,
-TaskMgr 1 (one sampler), Control Panel 1 (no per-instance state, §31). The
+TaskMgr 1 (one sampler), Control Panel 1 (no per-instance state, §31),
+Hibernate 1 (stateless, painted by its module, §86.1). The
 Files cap is 4 because each window claims its own `VIEW_KB` cache (§2.3); `KD_CAP`, `VIEW_SLOTS` and the `fm_pool` size are one
 number wearing three hats and must move together. The
 per-kind caps deliberately over-subscribe INST_MAX now that Timer and
@@ -55972,6 +55983,13 @@ DSV_BLK      in  AL = 0 read / 1 write
 DSV_CPNAME   -> a NUL page name in ITS segment (0 = no page)
 DSV_CPPAINT  near proc: DI = pane left, DX = pane top
 DSV_CPCLICK  near proc: the same, plus CX/BX = the click
+DSV_GEOM     in  AH = the DRIVER's own volume handle
+             out CF = 0: DL = the int 13h drive, CX:BX = the partition's
+                 first LBA, SI = sectors per track, DI = heads - the
+                 TRANSPORT FACTS, for a caller that must reach the volume's
+                 sectors with every driver detached (§86.5's resume stub);
+                 CF = 1: no such volume, or one the ROM does not reach
+                 (§52.1's rung 1). 0 = never, which reads as CF = 1
 ```
 
 **`DX:BX` and not `ES:BX`, deliberately.** The buffer is in `LOW_SEG`, the FAT
@@ -83101,3 +83119,303 @@ the `VID_*` kind `fsx_caps` hands back in DL, which `tk_adapter` already asks
 for and re-asks on a resize, so a window dragged to the other card of a
 two-card machine (§39.18.2) re-answers it rather than carrying VGA's palette
 onto a Hercules.
+
+## 86. Hibernate — the machine to a file on the hard disk, and back (`kernel/hiber.inc`, `HIBER.DRV`)
+
+**What it is.** `Hibernate...` is the System menu's item above `Restart`
+(§12.1). It writes everything in conventional memory to `HIBERNAT.IMG` in the
+root of the hard disk the machine booted from — or of the first hard disk
+there is, when the boot was a floppy — then stops the machine with a
+text-mode sentence saying it is safe to switch off. Nothing is asked but a
+confirmation. The next boot finds that file by itself and asks, on the
+desktop, whether to **Resume** it or **Discard** it and start normally. A
+resume puts every byte back where it was and returns into the UI task's loop
+exactly where the hibernate left it: the windows, the running packages, their
+tasks and the clipboard are all as they were.
+
+**What it is not.** Not a suspend: nothing is kept powered. Not a snapshot of
+the hardware: the drivers that own hardware are detached before the image is
+written and loaded again after it is restored (§86.4). And not a feature of
+the kernel image: the whole of it except the menu item, the greying
+predicate, a window kind, the boot probe and their thunks is **an on-demand
+module** (§2.8), `HIBER.DRV`, `MOD_HIBER`, read into a heap claim when the
+item is picked or a hibernation file is found at boot, and freed when the
+Hibernate window closes. It qualifies under docs/ONDEMAND-PLAN.md §1's test
+twice over: at hibernate the user is leaving the machine, and at boot the
+system disk is in the drive by definition.
+
+### 86.1 The Hibernate window (`KIND_HIBER`)
+
+A task-less, stateless singleton kind (§29.3), 320 px wide, with one mode byte
+`[hb_mode]` in kernel `.bss` and three faces:
+
+```
+HB_M_ASK     Save everything in memory to                  [Hibernate] [Cancel]
+             C:\HIBERNAT.IMG and stop the machine?
+             Restarting offers to resume it.
+HB_M_BUSY    Hibernating...                                (no buttons)
+HB_M_RESUME  A hibernation file is on drive C:.            [Resume]  [Discard]
+             Resume where you left off, or discard it
+             and start normally?
+```
+
+The drive letter in both faces is patched into the string at paint time,
+because the disk is chosen when the window opens: `hbm_pickvol` takes
+`[dsk_bootvol]` when that row is a fixed disk (§18.7, §52.10.3) and the first
+fixed row otherwise, and the window is the confirmation — Hibernate stops
+the machine, and `Restart` beside it asks nothing only because a restart
+costs seconds and a hibernate costs a file and a minute.
+
+Every string, every button label and the whole painter live in the module and
+are read through `CS` (§2.8.6): nothing can draw them while the image is not
+loaded, because every callback of this window is a `.text` thunk that
+far-calls a `.cold` thunk that runs `mod_need` first — `cpf_cp_paint`'s shape
+exactly (§2.8). The buttons fire on the **release** (§13.8.3): `W_ONCLICK`
+arms `[hb_down]`, `W_ONMOUSEUP` fires when the release lands on the same
+button, and the painter draws the armed one with `OS88UI_DOWN`. `Enter` is the
+first button and `Esc` the second.
+
+**There is no file dialog, and there was one.** The first cut opened the
+Standard File dialog (§38) on this window and let the user name the image
+anywhere on any hard disk. It was taken out on request: a hibernation file
+is not a document, nobody wants to be asked where to put it, and a fixed
+place is what lets the next boot find it without a pointer's path. What it
+cost the kernel was a `.text` thunk for the completion proc and 32 bytes of
+`.bss` for the folder path, both gone.
+
+`Cancel` and `Discard` close the window through `app_close_win` from inside
+the release handler — safe for §38.7's reason — and set `[hb_mode]` to
+`HB_M_GONE`, which is what tells the `.cold` thunk that made the far call to
+`mod_drop` the image on the way back. The module is never freed from inside
+its own code.
+
+### 86.2 The greying predicate, and what it refuses
+
+`hb_ok` (`.cold`, one call from `ui_loc_gate` on the press that opens the bar,
+§47 rule 5) points item 4 of `menu_items_logo` at one of three strings:
+
+| string | when |
+|---|---|
+| `Hibernate...` | a fixed volume exists (§18.7: a `DVK_DRV` row, or a `DVK_BIOS` row whose unit has bit 7 set) and the store above 1MB has no block allocated |
+| `Hibernate (No HD)` (`MENU_DIS`) | no fixed volume |
+| `Hibernate (XMS)` (`MENU_DIS`) | `OSAPI_XM_CAPS` reports fewer than `XM_MAX_BLKS` free entries: a package holds extended memory, and the image does not carry it (§86.7) |
+
+Two more refusals are made when the Hibernate button is taken (`hbm_arm`),
+with a toast each (§47 rule 6 — they need the volume mounted, which the bar
+cannot afford on every press):
+
+- **The disk's transport must be int 13h.** A `DVK_DRV` volume whose driver
+  answers `DSV_GEOM` with CF = 1 — §52.1's rung 1, the IDE task file, which
+  the resume stub cannot speak (§86.5) — is refused: `Hibernate needs a
+  BIOS-known hard disk`.
+- **There must be room**: `dskw_dfree` on the root plus the size of the
+  `HIBERNAT.IMG` already there, if any, must cover `[mem_top]` × 16 + 4,096.
+  `Not enough room for the hibernation file`.
+
+### 86.3 The two files
+
+The **image** is the memory of the machine, linear 0 to `[mem_top]` × 16,
+written as ONE `dskw_write` from `0000:0000` (§18.4.1's segment-walking
+source) as `HIBERNAT.IMG` in the root of the chosen disk. It has no header:
+file offset *n* is linear address *n*, which is what lets the restore be a
+list of sector runs and nothing else.
+
+The **pointer**, `HIBERNAT.PTR`, is written beside it after the image, so a
+boot that finds no pointer finds no hibernation whatever else is on the disk
+— a write that failed half way leaves nothing to resume. It is 64 bytes of
+header and then the image's name; the path field is reserved and zero, and a
+pointer with a path in it is refused as another build's:
+
+```
++0   db 'HIB1'                   magic
++4   dw BUILD_NUM                the commit (§14.2)
++6   dw MOD_STAMP                the layout of this build of it (§2.8.2)
++8   dw [mem_top]                paragraphs of conventional memory
++10  db [vid_kind]               the adapter the desktop was on
++11  db 0
++12  dw SP, dw SS                hb_perform's entry frame (§86.4)
++16  dw off, dw seg              hb_wake, in the module's own segment
++20  dw driver mask              drv_tab rows detached before the image
++22  db 0 x 10
++32  db path[32]                 the folder from the root, 'A\B', NUL (PTH_BUF)
++64  db name[13]                 the image's 8.3 name, NUL
+```
+
+A pointer whose build, stamp, memory size or adapter differ from the kernel
+reading it names an image this kernel cannot enter, and `hb_ask` says so —
+`Hibernation file is from another build` — and deletes it. The same-build
+requirement is what makes the whole design cheap: the fresh kernel's code and
+the image's are byte-identical, so the restore may write over the running
+kernel's `.text` without the machine noticing, and every kernel address the
+resume needs is the fresh kernel's own symbol.
+
+### 86.4 Hibernate — what happens, in order
+
+`hbm_arm` makes the two checks above, repaints the window as `HB_M_BUSY`,
+and **posts** `UI_RBQ_HIBER` in `[ui_rebootq]` — §20.10's deferral, for
+§20.10's reason: a button's release runs with the gfx lock held and what
+follows detaches drivers, which yields. `ui_task` spends the post at the top
+of its pass with nothing held, in `hb_perform`:
+
+1. `dsk_chdir` to the root of `[hb_vol]`.
+2. **Detach every loaded driver whose class is not `DRVC_DISK` or
+   `DRVC_FILE`** (`drv_unload` per row: sound, the parallel link, the NIC),
+   recording the rows in `[hb_drvmask]`. Their hardware state cannot cross a
+   power cycle and their claims would be restored to addresses a fresh boot
+   has given to somebody else; the disk driver and the RAM disk own no
+   hardware the BIOS does not already own, and their state is memory.
+3. `gfx_lock`, and `inc [sch_lock]`: the image must be one instant of the
+   machine, so no other task runs while it is written. Interrupts stay on —
+   int 13h needs them on an AT — and the tick, the mouse and the keyboard
+   ISRs touch nothing the image cares about.
+4. Bank `hb_perform`'s **entry** `SS:SP` and the far address of `hb_wake`.
+   Everything above that SP — the dispatcher's return, the thunk's, the UI
+   task's frame — is written into the image untouched, because the write
+   itself only ever uses the stack below it.
+5. The image, as one `dskw_write`. The progress widget (§12.8) is on the bar
+   throughout, because the lock is held by the task that calls it.
+6. The pointer, in the root.
+7. `vid_reboot` to text mode, the sentence, `int 16h`, then `drv_shutdown`,
+   `sched_unhook` and `int 19h` — the reboot path's tail (§20.10), so a key
+   restarts the machine into the question below.
+
+A failure at 5 or 6 undoes 2–4 — the drivers are loaded again from the mask,
+the lock and `sch_lock` released — and toasts `Hibernate failed`; the window
+goes back to `HB_M_ASK`.
+
+**The image is captured progressively and that is why the disk caches are
+discarded on resume** (§86.6): the FAT window, the read-ahead and the write
+path's own words are written into the image in the state they were in when
+the write reached their addresses, which is mid-write. Nothing else in the
+kernel changes during the write — no task runs — so nothing else needs the
+treatment.
+
+### 86.5 Resume — the probe, the question, the stub
+
+**The probe** (`hb_probe`, `.cold`, resident, from `kmain` after `drv_boot`
+and before the first paint) walks `dsk_vtab` for fixed volumes and looks in
+each one's root for `HIBERNAT.PTR`, inside a `drv_vol_bank`/`drv_vol_back`
+bracket (§51.5.2). A floppy-only machine pays eight compares. A hit records the
+volume in `[hb_vol]` and posts `UI_RBQ_ASK`, which `ui_task`'s first pass
+spends — on the desktop, with nothing held — by loading the module and running
+`hb_ask`: read the pointer, validate it (§86.3), find `HIBERNAT.IMG` beside it
+and check its size against `[mem_top]`, ask the transport question (§86.2),
+and open the window in `HB_M_RESUME`. Any refusal is a toast and a deleted
+pointer.
+
+**Resume** posts `UI_RBQ_RESUME`; `hb_perform` then:
+
+1. Asks the transport facts. For the boot partition (§52.10.3) they are the
+   kernel's own — `DV_UNIT`, `dsk_vbase`, `dsk_bootspt`/`dsk_boothds`; for a
+   driver volume they are `DSV_GEOM`'s (§51.8): the int 13h unit, the
+   partition's 32-bit base, sectors per track and heads.
+2. Walks the image's FAT chain into a list of **extents** — absolute LBA and
+   sector count, contiguous clusters coalesced — in a 10KB `MEM_K_HIB` claim.
+3. `drv_shutdown` (the fresh boot's drivers go, as before any restart),
+   `gfx_lock`, `vid_reboot` to text mode.
+4. Copies the **stub**, its parameters, the fresh clock's twelve bytes and the
+   extents into the text framebuffer — `B800:0000` on a colour primary,
+   `B000:0000` on a Hercules — which is the one RAM on the machine that no
+   rung of §2's ladder owns and every adapter has at least 16KB of. Puts the
+   BIOS's own int 08h vector back (`sch_old08`), masks IRQ 1, 3, 4 and 12 so no
+   kernel ISR can run on a half-restored kernel, and far-jumps to the stub.
+
+**The stub** runs with `CS`, `DS` and `SS` in the framebuffer and reads every
+sector of the image to its own linear address with int 13h `AH=02h`, one run
+per call, a run stopping at the end of the track and at the 64KB DMA page
+(§52.1's rung-0 rules) and retried three times with a controller reset
+between. Its CHS arithmetic is `hd_chs`'s, one `div` pair. File sectors 0..2
+are the one exception: they are read to `0060:0000` and sectors 0..1 copied
+into the staging area, because the IVT can only go back **last**, under
+`cli`, after the final int 13h — and sector 2, the BIOS data area, is never
+written at all: it is the ROM's, and the ROM is the one thing that kept
+running. Then the PIC masks go back, `DS` becomes `KERNEL_SEG`, `SS:SP`
+becomes the banked frame, and a far jump lands in `hb_wake` — inside the
+image's copy of the module, at the segment the pointer recorded. A read that
+still fails after its retries prints one sentence through int 10h and waits
+for a key before `int 19h`: half a memory is not a machine, and the ROM's
+teletype is the only thing left that can be trusted to say so.
+
+### 86.6 `hb_wake` — putting the machine back on its feet
+
+In the restored kernel, on the restored stack, interrupts off, `[sch_lock]`
+still up from step 3 of §86.4 and the gfx lock still held:
+
+1. `sti`. The IVT is the image's, the PIT is in the kernel's mode 2 (the
+   fresh boot's `sched_init` set it and nothing on the resume path unset it),
+   and with `sch_lock` up the tick counts and switches nobody.
+2. The clock: the twelve bytes `clk_sec`..`clk_year` come out of the staging
+   area, where step 4 put the fresh boot's — the RTC ladder is boot-overlay
+   code (§37.90) and cannot be run again, so the boot that just happened is the
+   clock's source. `clk_last` is re-seeded from `[ticks]`.
+3. **The disk caches are discarded** (§86.4): every private FAT window
+   dropped (`dsk_fatw_drop`), the dirty range and the resident window marked
+   empty, the read-ahead flushed, the write gate shut, the batch depths
+   zeroed, `mem_pinseg` cleared and the progress widget given back with
+   `fpg_end` — every one of them a word the write was in the middle of.
+4. `vid_setmode`, then the Hibernate window closed with `app_close_win`, then
+   `menu_force`, `dock_force`, `wm_paint_all` — `fsx_restore`'s return from a
+   foreign mode (§53), which is what a text screen is. Before any disk work,
+   so the widget the next step arms has a graphics mode to draw in.
+5. The pointer and the image are deleted, which is the one mount the resume
+   makes. Both files, because a resumed hibernation is spent, and 640KB of a
+   32MB disk is not nothing.
+6. The drivers in `[hb_drvmask]` are loaded again, in row order, exactly as
+   `drv_boot` would have loaded them.
+7. `blk_wake`, `[hb_resumes]` += 1, `[hb_mode]` = `HB_M_GONE`, `gfx_unlock`,
+   **`[sch_lock]` = 0** — set, not decremented: the image holds the count as
+   the write left it, and `dsk_xfer` raises it around every int 13h, so it
+   reads 2 and one down from that is a machine that never switches again
+   (`tests/hibernate.py` found exactly that) — and a near `ret` into the
+   module's dispatcher with `SP` at the banked frame, which returns through
+   the `.cold` thunk (where the image is dropped) into `ui_task`'s loop.
+
+**What deliberately does not survive**: the BIOS data area (the ROM's, and
+a key typed during the restore is in its buffer, not the kernel's); the
+state of any driver that owns hardware (loaded fresh); extended memory (the
+item greys while any is held); and the disk caches (rebuilt). The mouse
+needs nothing: the fresh boot's `mouse_init` left the UART and the 8042 in
+the state the image's kernel expects, because the image's kernel set them
+up the same way, and the resume path never calls `mouse_unhook`.
+
+### 86.7 What it costs, and what is owed
+
+Resident: the three strings, the template, the two file names, the kind row,
+five `.text` thunks and seven `cw_` shims, and in `.cold` the probe, the
+predicate, eleven far entries and the seven thunks that load the module —
+248 bytes of `.text`, 94 of `.bss` and 329 of `.cold`, which crossed both
+rungs; docs/KERNEL-MEMORY.md has the account. The module is `HIBER.DRV` on
+every system disk, 3,462 bytes, fourth in `mod_tab`, and the stub is ~300
+bytes of it.
+
+Time on the 5150: the image is 1,280 sectors on a 640KB machine, and both the
+write and the read go out in track-sized runs, so it is ~80 int 13h calls
+each way against an XT hard disk — seconds, not minutes. `tests/hibernate.py`
+measures nothing; docs/FIELD-MACHINES.md is where the number would come from.
+
+Owed, and refused rather than guessed at meanwhile: **extended memory** in the
+image (the store's blocks would have to be copied down and up through
+`xm_copy`, a second section of the file); **IDE rung 1** volumes (the stub
+would need the task-file transport); and a **two-card** desktop's second
+display, which comes back as the primary alone until the next
+`vid_disp_init` — the text-mode framebuffer used for staging is the
+primary's.
+
+### 86.8 Testing
+
+`tests/hibernate.py` (soak, MartyPC's `os8088_xt_hdd`, rung 0 — the same
+transport as the field machine) boots a fixture volume built by
+`tools/os88hdd.py` with `HIBER.DRV` on it, opens an About box as the witness,
+picks `Hibernate...` and **clicks** the window's button with the mouse — the
+release path, which once had a hit test that clobbered the click's y so that
+only `Enter` worked — watches the machine reach the text-mode sentence,
+presses a key, sees the question on the fresh desktop, clicks `Resume`, and
+then reads `[hb_resumes]`, the instance table, the two locks and the tick out
+of the guest: the About instance must be live with a visible window,
+`[sch_lock]` and the gfx lock must be down, the tick must advance, and
+`HIBERNAT.PTR` must be gone from the volume. A second pass goes through the
+keyboard and takes `Discard`, and asserts the opposite. The driver-backed shape — a floppy boot
+with a `SYSTEM.CFG` that wants `HDD.DRV`, the same VHD mounted through it —
+is the same script with `--driver`, registered as `hibernatedrv`. Both write
+four rendered screenshots to `build/hiber-*.png`; docs/TESTING.md has the
+recipe and what it cannot see.

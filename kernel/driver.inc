@@ -310,7 +310,15 @@ DSV_PKGCALL equ 34              ; dw: THE FENCE for OSAPI_DRV_CALL. A driver
                                 ; a package could name DRVC_DISK and arrive at
                                 ; DSV_BLK, which is a raw sector write to the
                                 ; hard disk from any .O88 on the floppy
-DSV_SIZE    equ 36              ; ...and it must stay EVEN: drv_publish copies
+DSV_GEOM    equ 36              ; dw: DRVC_DISK only - one volume's TRANSPORT
+                                ; FACTS (SPEC.md 51.8, 86.5): in AH = the
+                                ; driver's handle; out CF = 0 and DL = the
+                                ; int 13h drive, CX:BX = the partition's first
+                                ; LBA, SI = sectors per track, DI = heads; or
+                                ; CF = 1 for a volume the ROM does not reach.
+                                ; For the resume stub, which runs after every
+                                ; driver has been detached and speaks CHS
+DSV_SIZE    equ 38              ; ...and it must stay EVEN: drv_publish copies
                                 ; the table DSV_SIZE/2 WORDS at a time
 DSV_TAB0    equ 28              ; ...and the length every driver that carries 0
                                 ; at DRV_H_DSV has: the table stood at 28 until

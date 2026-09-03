@@ -1031,6 +1031,17 @@ SOAK = [
         "tree - the empty SYSTEM/APPDATA and SYSTEM/DOS/OS88NET.COM included, "
         "which one folder level could not reach. It ERASES the VHD.",
         needs=("marty",), serial=True, timeout=1200),
+    Row("hibernate", "soak", py("tests/hibernate.py"), 300.0,
+        "SPEC.md 86: Hibernate... writes the machine to the hard disk and the "
+        "next boot offers to resume it - the About box is the witness, read "
+        "out of the restored instance table; then the same again with "
+        "Discard. Builds its own VHD under build/",
+        needs=("marty",), serial=True, timeout=1500),
+    Row("hibernatedrv", "soak", py("tests/hibernate.py", "--driver"), 300.0,
+        "SPEC.md 86 through HDD.DRV: a floppy boot whose SYSTEM.CFG wants the "
+        "driver, so C: is a DVK_DRV volume and the resume's transport facts "
+        "come through DSV_GEOM",
+        needs=("marty",), serial=True, timeout=1500),
     Row("instrest", "soak", py("tests/instrest.py"), 240.0,
         "SPEC.md 52.10.6.1: the installer's ACTION BUTTON reads Install and "
         "then Restart, there is no third button, and clicking it at the end "

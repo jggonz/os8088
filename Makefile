@@ -57,6 +57,7 @@ endif
 
 VM    := $(CURDIR)/vm/xt
 VM640 := $(CURDIR)/vm/xt640
+VMMFM := $(CURDIR)/vm/xt-mfm
 VMCGA := $(CURDIR)/vm/xt-cga
 VMHERC := $(CURDIR)/vm/xt-hercules
 VMEGA := $(CURDIR)/vm/xt-ega
@@ -1301,7 +1302,7 @@ $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/kernel-full.bin \
                                       $(BUILD)/ctrl.drv $(BUILD)/format.drv \
-                                      $(BUILD)/clone.drv \
+                                      $(BUILD)/clone.drv $(BUILD)/hiber.drv \
                                       $(BUILD)/boot.bin $(BUILD)/boot360.bin \
                                       $(BUILD)/hdd.bin $(BUILD)/hdd.drv \
                                       $(BUILD)/hddtool.bin $(BUILD)/hddtool.drv \
@@ -1378,7 +1379,7 @@ KERNEL_SRC := kernel/kernel.asm
 # a map that described "a DIFFERENT kernel".
 KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
 
-.PHONY: small kernsplit all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
+.PHONY: small kernsplit all run run-640 run-720 debug test test-snd xt xt-640 xt-mfm xt-cga \
         xt-hercules xt-ega xt-multimon 286 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 \
         286-sound 386-sound 486 pentium \
         bench field combo combo144 combo720 stackprobe trklog trkscrl npbench clicktest marty \
@@ -1535,9 +1536,10 @@ $(FONTINC): $(FONTSRC) tools/os88font.py | $(BUILD)
 # (SPEC.md 2.8.2), so shipping the wrong one is refused rather than executed;
 # this is what stops it happening in the first place.
 KMODDIR = $(BUILD)
-KMODS = $(KMODDIR)/ctrl.drv $(KMODDIR)/format.drv $(KMODDIR)/clone.drv
+KMODS = $(KMODDIR)/ctrl.drv $(KMODDIR)/format.drv $(KMODDIR)/clone.drv \
+        $(KMODDIR)/hiber.drv
 KMODARGS = -m 0=$(BUILD)/ctrl.drv -m 1=$(BUILD)/format.drv \
-           -m 2=$(BUILD)/clone.drv
+           -m 2=$(BUILD)/clone.drv -m 3=$(BUILD)/hiber.drv
 
 # THE KERNEL IS ASSEMBLED WHOLE AND THEN CUT UP (SPEC.md 2.8). Everything
 # from .modc onward is an on-demand module: kernel code that ships as a file
@@ -6871,6 +6873,26 @@ xt: $(IMG360) $(APPSIMG360)
 xt-640: $(IMG360) $(APPSIMG360)
 	@$(UNPROTECT) $(VM640)/86box.cfg
 	$(BOX) -P $(VM640) -N
+
+# ...AND A 20MB MFM HARD DISK: an ST-225 (615 cylinders, 4 heads, 17 sectors)
+# on IBM's Fixed Disk Adapter, the Xebec card whose option ROM presents the
+# drive as int 13h unit 80h - SPEC.md 52.1's rung 0, the transport the field
+# machine uses (docs/FIELD-MACHINES.md: an ST-225 on an ST-11M, which 86Box
+# also has as `st506_xt_st11_m`, but that ROM keeps its geometry ON THE DISK
+# and wants its own low-level format first, so the Xebec is the one a blank
+# image boots on). The image is created blank, once, and KEPT: partitioning
+# and formatting it is the OS's job (Control Panel -> Drivers -> tick Hard
+# Drive -> Format), and so is installing to it (SPEC.md 52.10.4) and
+# hibernating to it (SPEC.md 86), which is what this machine is for -
+# hibernate and resume on period hardware, MFM and all. The size is the
+# geometry's exactly, because 86Box refuses a raw image that disagrees.
+MFMIMG := $(BUILD)/mfm20.img
+$(MFMIMG): | $(BUILD)
+	dd if=/dev/zero of=$@ bs=512 count=$$(( 615 * 4 * 17 )) 2>/dev/null
+
+xt-mfm: $(IMG360) $(APPSIMG360) $(MFMIMG)
+	@$(UNPROTECT) $(VMMFM)/86box.cfg
+	$(BOX) -P $(VMMFM) -N
 
 # The two monochrome machines (SPEC.md 39), both 256KB - which is all an
 # ibmxt takes anyway, and the floor os8088 targets. These are the ONLY way to

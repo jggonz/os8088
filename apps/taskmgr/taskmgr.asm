@@ -1105,6 +1105,8 @@ tm_s_tclon: db 'Cloner', 0      ; the job block AND the sectors in flight,
                                 ; which is why freeing it is the whole of a
                                 ; clone's teardown (SPEC.md 18.99)
 tm_s_tband: db 'BandBuf', 0     ; the 1bpp composer's, one per machine (5.9.2)
+tm_s_thib:  db 'Resume', 0      ; the resume's extent list (SPEC.md 86.5), alive
+                                ; only on the way into the stub
 ; (owner word, name) pairs, ended by a 0 owner. MEM_P_WSAVE is NOT here: it is
 ; a RANGE (SPEC.md 11.96.3), one cache per window slot, and tm_htype tests it
 ; before it walks this.
@@ -1127,6 +1129,7 @@ tm_ktab:
     dw MEM_K_MOD,   tm_s_tmod
     dw MEM_K_CLONE, tm_s_tclon
     dw MEM_K_BAND,  tm_s_tband
+    dw MEM_K_HIB,   tm_s_thib
     dw MEM_P_DIRW,  tm_s_tdirw
     dw 0
 

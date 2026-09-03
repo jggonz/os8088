@@ -1138,6 +1138,7 @@ MEM_K_CLIP  equ 0xFF07          ; the system clipboard's text (SPEC.md 55)
 MEM_K_MOD   equ 0xFF08          ; an on-demand kernel module's image (SPEC.md 2.8)
 MEM_K_CLONE equ 0xFF09          ; the disk cloner's buffer (SPEC.md 18.99)
 MEM_K_BAND  equ 0xFF0A          ; the 1bpp band composer's buffer (SPEC.md 5.9.2)
+MEM_K_HIB   equ 0xFF0B          ; the resume's extent list (SPEC.md 86.5)
 ; 0xFF0B WAS MEM_K_OVL, the relocated boot overlay. It rides stage 2's blob
 ; now (SPEC.md 2.9.6) and is not a claim at all, so the tag is retired and
 ; LEFT UNUSED - a value that meant one thing in a shipped kernel and another

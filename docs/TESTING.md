@@ -1049,6 +1049,36 @@ for n,a,c,sz in ents(v):
 EOF
 ```
 
+### Hibernate and resume (SPEC.md §86)
+
+```sh
+python3 tests/hibernate.py            # the boot partition, DVK_BIOS
+python3 tests/hibernate.py --driver   # ...and the same VHD through HDD.DRV
+```
+
+Both on `os8088_xt_hdd`, both building their own fixture volume with
+`tools/os88hdd.py` (`HIBER.DRV`, `CTRL.DRV` and `HDD.DRV` in its root) under
+`build/`, and the second one a 360KB floppy whose `SYSTEM.CFG` wants the
+driver, the `ethertest` shape. Each opens an About box as the witness, picks
+`Hibernate...` from the System menu (item 4: `mo.menu(8, 8, 8, 88)`), takes the
+window's first button - with the MOUSE on the first pass, `Enter` on the
+second, because the two are different code paths and the mouse one shipped
+broken once - waits for the ROM's text mode (`os88marty.video_is_text`),
+restarts with a key, and answers the question the same two ways: a click on
+`Resume`, `Esc` to discard. **The assertions
+are memory reads, not pixels**: `[hb_mode]`, `[hb_resumes]`, the instance
+table (the About box must be live with a visible window after a resume and
+absent after a discard), `[sch_lock]` and `[gfx_lock_flag]` back to 0, the
+tick advancing, and `HIBERNAT.PTR` gone from the VHD, read on the host with
+`tests/instdeep.py`'s FAT reader. Four rendered screenshots land in
+`build/hiber-*.png` for the eye. It ERASES `build/hiber.vhd` every run.
+
+**What it cannot see**: time (MartyPC is not disk-accurate), a VGA desktop
+coming back with its palette (the machine is CGA), and IDE rung 1, which the
+stub refuses by design - QEMU's `HDD=` disk is SeaBIOS int 13h and would pass
+the same way; `make test HDD=40` and the Control Panel are how to look at it
+by hand there.
+
 **Persistence: EVERYTHING needs the panel closed first.** Nothing on this page
 writes `SYSTEM.CFG` from a click any more - not the geometry editor, and since
 SPEC.md 51.9's verb 2 was retired not Mount and Unmount either. All of it is

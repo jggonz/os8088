@@ -2228,6 +2228,24 @@ thunks rather than through the window record.
 more except doing less. There is one precedent for doing less, and it is the
 Task Manager.
 
+> **The fourth MODULE, and the first feature to cross two rungs for a
+> feature the kernel does not carry: HIBERNATE (SPEC.md §86).** `HIBER.DRV`
+> is 3,462 bytes on the system disk and 0 resident. What the kernel spends
+> is **248 bytes of `.text`, 94 of `.bss` and 329 of `.cold`** — three menu
+> strings, a window template, a title and two file names, a kind row, five
+> `.text` thunks and seven `cw_` shims; the state block the image carries;
+> and in `.cold` the boot probe, the greying predicate, eleven far entries
+> and the seven thunks that load the module — against rungs that had 96
+> (image) and 157 (`.cold`) left. So both crossed: `KERN_SIZE` 120,320 →
+> **121,344**, spare under `KERN_BUDGET` 9,216 → **8,192** (16 steps). The
+> `.bss` is the part worth a second look: a button label and its rect are
+> staged there because the button drawer reads through `DS`, and a module's
+> own bytes are not `DS` — the pointer file's 80-byte buffer and every
+> string went into the module for the same reason in reverse. It was 141
+> while a file dialog chose the image's place; the path it needed went with
+> the dialog. Nothing was reclaimed to pay for it; the two steps are spent
+> out of the spare, which is what the spare is for.
+>
 > **A THIRD lever, and the third thing has gone through it: an OVERLAY.**
 > SPEC.md §79's animated screen saver ships as `SAVER.DRV`, 10,064 bytes,
 > `DRVC_OVL` like `XMEM.DRV` and `HDDTOOL.DRV` (SPEC.md §41.12, §52.11). It is

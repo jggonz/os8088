@@ -396,6 +396,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 83 | Text input for packages (`apps/os88line.inc`, `apps/os88text.inc`) |
 | 84 | Software floating point (`apps/os88fp.inc`) |
 | 85 | TANK ATTACK — a wireframe tank duel in a foreign mode (`apps/tank/`) |
+| 86 | Hibernate — the machine to a file on the hard disk, and back (`kernel/hiber.inc`, `HIBER.DRV`) |
 
 ## docs/
 

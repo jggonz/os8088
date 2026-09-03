@@ -60,6 +60,7 @@ make run-640  # the same, on a 640KB machine
 make run-720  # the same, off the 720KB pair
 make xt       # boot the 360KB image on an emulated IBM PC/XT in 86Box
 make xt-640   # the same XT with a full 640KB of RAM
+make xt-mfm   # ...and a 20MB MFM hard disk on IBM's Fixed Disk Adapter
 make xt-cga   # the same XT with a CGA card instead of VGA
 make xt-hercules  # ...and the same XT with a Hercules card
 make xt-ega   # ...and the same XT with an IBM EGA, at 640x350
@@ -578,7 +579,13 @@ fancy period configuration. Expect the real 4.77MHz experience: repaints
 you can watch. `make xt-640` boots the same setup with a full 640KB of
 RAM (`vm/xt640/86box.cfg`) — on the 1986 XT board revision (`ibmxt86`),
 because the original 1982 planar maxes out at 256KB and 86Box silently
-clamps `mem_size` back to the board's limit.
+clamps `mem_size` back to the board's limit. `make xt-mfm` is that machine
+with a **20MB MFM hard disk** (`vm/xt-mfm/86box.cfg`): an ST-225 on IBM's
+Fixed Disk Adapter, whose option ROM is the int 13h the kernel's hard-disk
+driver calls (SPEC.md 52.1). The image, `build/mfm20.img`, is created blank
+and kept between runs; partition and format it from Control Panel → Drivers
+→ Hard Drive → Format, and from then on it is C: — the machine to install
+to (SPEC.md 52.10) and to hibernate on (SPEC.md 86) at a real 4.77MHz.
 
 `make xt-cga`, `make xt-hercules` and `make xt-ega` are the same 256KB XT
 with the other three adapters os8088 supports (`vm/xt-cga`,
@@ -626,6 +633,7 @@ All targets, at a glance:
 |---|---|---|---|---|---|
 | `xt` | IBM PC/XT | 8088 @ 4.77MHz | 256KB | OTI-067 VGA | — |
 | `xt-640` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | — |
+| `xt-mfm` | XT, 1986 board + 20MB ST-225 on a Xebec MFM controller | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | — |
 | `xt-cga` | IBM PC/XT | 8088 @ 4.77MHz | 256KB | CGA | — |
 | `xt-hercules` | IBM PC/XT | 8088 @ 4.77MHz | 256KB | Hercules | — |
 | `xt-ega` | IBM PC/XT | 8088 @ 4.77MHz | 256KB | IBM EGA (640x350) | — |

@@ -63,18 +63,27 @@
 CMD_ABOUT   equ 1               ; --- System (cell 0, every application) ---
 CMD_CTRL    equ 2
 CMD_TASKS   equ 3
-CMD_SEP     equ 4               ; the RULE above Restart. It is a MENU_DIS
+CMD_SEP     equ 4               ; the RULE above Hibernate. It is a MENU_DIS
                                 ; item, so menu_hover can never land on it -
                                 ; and it needs no handler either, because
                                 ; ui_cmd is a compare ladder and an id it
                                 ; does not match falls out of the bottom and
                                 ; returns. The id exists only so that
-                                ; CMD_REBOOT below it still equals base+item
+                                ; the items below it still equal base+item
+%ifdef KERN_BIG
+CMD_HIBER   equ 5               ; Hibernate... (SPEC.md 86), kern_big only:
+CMD_REBOOT  equ 6               ; kern_small's menu has no such item and its
+CMD_CLOSE   equ 7               ; ids stay one lower
+CMD_TIMER   equ 8               ; --- Locator: Builtins (SPEC.md 12.3.1) ---
+CMD_BOUNCE  equ 9
+CMD_FILES   equ 10
+%else
 CMD_REBOOT  equ 5
 CMD_CLOSE   equ 6               ; --- Locator: File ---
 CMD_TIMER   equ 7               ; --- Locator: Builtins (SPEC.md 12.3.1) ---
 CMD_BOUNCE  equ 8
 CMD_FILES   equ 9
+%endif
 
 ; --- app menu set layout (SPEC.md 12.2; mirrored in apps/os88api.inc) --------
 AM_NAME     equ 0               ; word: NUL app name for the bar label; 0 =
@@ -2538,11 +2547,23 @@ menu_s_closex   db MENU_DIS, 'Close Window', 0  ; ...with nothing to close;
                                 ; other before the menu can drop (SPEC.md 47)
 menu_s_tasks    db 'Task Manager', 0
 menu_s_restart  db 'Restart', 0
+%ifdef KERN_BIG
+menu_s_hiber    db 'Hibernate...', 0        ; SPEC.md 86.2: ui_loc_gate points
+menu_s_hibernh  db MENU_DIS, 'Hibernate (No HD)', 0  ; item 4 at one of the
+menu_s_hiberxm  db MENU_DIS, 'Hibernate (XMS)', 0    ; three, and the two
+                                ; greyed ones say WHY NOT (SPEC.md 47 rule 3)
+menu_s_msep     db MENU_DIS, '-----------------', 0
+                                ; the rule above Hibernate: seventeen dashes,
+                                ; the width of 'Hibernate (No HD)', so it
+                                ; reads as a rule across the menu rather than
+                                ; as a short dash in the middle of one
+%else
 menu_s_msep     db MENU_DIS, '---------------', 0
                                 ; the rule above Restart: fifteen dashes, the
                                 ; width of 'About os8088...', so it reads as a
                                 ; rule across the menu rather than as a short
                                 ; dash in the middle of one
+%endif
 
 ; The app-name menu's bottom item (SPEC.md 12.7), and the whole of the dock
 ; tile's context menu (SPEC.md 30.2) - dock_ctx_items points here. One
@@ -2559,8 +2580,14 @@ menu_items_logo:
     dw menu_s_ctrl
     dw menu_s_tasks
     dw menu_s_msep
+%ifdef KERN_BIG
+    dw menu_s_hiber             ; item 4, swapped by ui_loc_gate (SPEC.md 86.2)
+    dw menu_s_restart
+MENU_LOGO_N equ 6               ; ...and menu_relayout stamps this into cell
+%else
     dw menu_s_restart
 MENU_LOGO_N equ 5               ; ...and menu_relayout stamps this into cell
+%endif
                                 ; 0's MB_NITEM. It was a literal 3 there, in
                                 ; a different file from the list it counts
 menu_items_file:
