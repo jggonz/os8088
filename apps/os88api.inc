@@ -1142,6 +1142,7 @@ MEM_K_BAND  equ 0xFF0A          ; the 1bpp band composer's buffer (SPEC.md 5.9.2
 ; now (SPEC.md 2.9.6) and is not a claim at all, so the tag is retired and
 ; LEFT UNUSED - a value that meant one thing in a shipped kernel and another
 ; in the next is a collision a debug read cannot see.
+MEM_K_HIB   equ 0xFF0C          ; the resume's extent list (SPEC.md 87.5)
 
 MEM_PG_TRIV equ 0xFB            ; the purge tiers (SPEC.md 50.6.4), low to
 MEM_PG_LOW  equ 0xFC            ; high: what LOSING the block costs, which is

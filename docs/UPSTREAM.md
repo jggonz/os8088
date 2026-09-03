@@ -250,7 +250,11 @@ squashed, and that shapes what to write:
   toolchain became **§70** and its Word/TeXPad references followed Word and
   TeXPad to §68/§69. Git merges that cleanly and `checkdocs` cannot see the
   duplicate `§67` heading, so after any merge in either direction check
-  `grep -oE '^#+ [0-9.]+' SPEC.md | sort | uniq -d` by hand.
+  `grep -oE '^#+ [0-9.]+' SPEC.md | sort | uniq -d` by hand. The third time
+  was PR #144: `main`'s §86 Hibernate (#143) met the branch's §86 Audio
+  Player, so Hibernate became **§87** - 99 lines across `kernel/hiber.inc`,
+  `kernel/ui.inc`, `tests/hibernate.py` and the rest, scoped to the lines
+  #143 added and nothing else.
 
 ## Quick reference
 

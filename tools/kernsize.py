@@ -174,7 +174,7 @@ THEMES = (
     # mouse_init's identify window saw, so a byte it grows is the mouse's
     # question. It is 0 in a shipped build either way.
     ("hardware: drivers, clock, mouse, sound, CPU, XMS",
-     ("mouse.inc", "moudiag.inc", "clock.inc", "driver.inc", "snd.inc",
+     ("mouse.inc", "moudiag.inc", "clock.inc", "driver.inc", "hiber.inc", "snd.inc",
       "cpudet.inc", "xmem.inc")),
     # blank.inc (SPEC.md 64) is here and not under hardware, although all it
     # does is write a video port: what it owns is whether the SIGNAL is on,

@@ -29,6 +29,7 @@ vm/xt-c64/nvr/
 vm/286-c64/nvr/
 vm/xt-weave/nvr/
 vm/386-weave/nvr/
+vm/xt-mfm/nvr/
 
 # Page snapshots the Playwright MCP server drops in the working directory
 .playwright-mcp/

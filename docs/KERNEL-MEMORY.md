@@ -897,32 +897,32 @@ Three things about it:
   "big": {
     "boot2": 2498,
     "bootmax": 189952,
-    "bss": 5955,
+    "bss": 6049,
     "budget": 129536,
     "codemax": 65536,
-    "cold": 40803,
-    "coldpara": 2560,
+    "cold": 41168,
+    "coldpara": 2592,
     "fatpara": 288,
-    "imgpara": 3968,
-    "kend": 7616,
+    "imgpara": 4000,
+    "kend": 7680,
     "kseg": 96,
-    "ksize": 120320,
+    "ksize": 121344,
     "lowbss": 8982,
     "lowpara": 640,
     "minramkb": 196,
     "ovl": 3969,
     "stk0": 1024,
-    "text": 57437,
+    "text": 57696,
     "vgabuf": 848,
     "vgabufpara": 64
   },
   "small": {
     "boot2": 2498,
     "bootmax": 120320,
-    "bss": 5442,
+    "bss": 5484,
     "budget": 107520,
     "codemax": 65536,
-    "cold": 37889,
+    "cold": 37900,
     "coldpara": 2400,
     "fatpara": 288,
     "imgpara": 3392,
@@ -934,7 +934,7 @@ Three things about it:
     "minramkb": 128,
     "ovl": 3886,
     "stk0": 1024,
-    "text": 48660,
+    "text": 48678,
     "vgabuf": 0,
     "vgabufpara": 0
   }
@@ -1748,14 +1748,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 33,628 | 34.2% |
-| the window system and its furniture | 26,240 | 26.7% |
-| drawing: adapters, primitives, glyphs, icons | 17,048 | 17.4% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 10,119 | 10.3% |
-| the kernel proper: API table, heap, scheduler, events | 8,288 | 8.4% |
+| the file system, end to end | 33,628 | 34.0% |
+| the window system and its furniture | 26,366 | 26.7% |
+| drawing: adapters, primitives, glyphs, icons | 17,048 | 17.2% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 10,562 | 10.7% |
+| the kernel proper: API table, heap, scheduler, events | 8,343 | 8.4% |
 | the three built-in kinds | 1,843 | 1.9% |
 | the Control Panel | 1,074 | 1.1% |
-| **total** | **98,240** | |
+| **total** | **98,864** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -1768,12 +1768,12 @@ generated in the first place.
 | `fdlg.inc` — the Standard File dialog (§38) | 274 | 5,323 | **5,597** | 169 | — | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 5,067 | **5,246** | 155 | — | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 4,828 | — | **4,828** | 149 | — | — |
-| `ui.inc` — the UI task and the event ladder (§13) | 3,516 | — | **3,516** | 58 | — | — |
-| `menu.inc` — the menu bar and pull-downs (§12) | 3,086 | — | **3,086** | 197 | 98 | — |
-| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 543 | 2,491 | **3,034** | 348 | — | — |
+| `ui.inc` — the UI task and the event ladder (§13) | 3,562 | — | **3,562** | 58 | — | — |
+| `menu.inc` — the menu bar and pull-downs (§12) | 3,139 | — | **3,139** | 197 | 98 | — |
+| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 543 | 2,498 | **3,041** | 358 | — | — |
 | `assoc.inc` — file type associations (§54) | 528 | 2,415 | **2,943** | 43 | — | — |
 | `memory.inc` — the claim heap (§50) | 20 | 2,765 | **2,785** | 20 | 324 | — |
-| `instance.inc` — instances and the built-in kinds (§29) | 2,452 | — | **2,452** | 694 | — | — |
+| `instance.inc` — instances and the built-in kinds (§29) | 2,479 | — | **2,479** | 694 | — | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,440 | **2,440** | 148 | — | — |
 | `font.inc` — the 8×8 glyph renderer (§6) | 2,167 | — | **2,167** | 218 | 768 | — |
 | `apps.inc` — the three built-in kinds (§14) | 279 | 1,564 | **1,843** | 15 | 240 | — |
@@ -1791,8 +1791,9 @@ generated in the first place.
 | `fprog.inc` — the file-operation progress widget (§12.8) | 682 | — | **682** | — | — | — |
 | `clock.inc` — the clock ladder (§37) | 678 | — | **678** | 89 | — | — |
 | `toast.inc` — the menu bar's transient message (§59) | 537 | — | **537** | 25 | — | — |
-| `mod.inc` — on-demand kernel modules (§2.8) | 54 | 416 | **470** | 98 | — | — |
+| `mod.inc` — on-demand kernel modules (§2.8) | 72 | 420 | **492** | 130 | — | — |
 | `blank.inc` — the idle screen blanker (§64) | 208 | 240 | **448** | — | — | — |
+| `hiber.inc` — **(undescribed)** | 82 | 354 | **436** | 52 | — | — |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 263 | 104 | **367** | 22 | — | — |
 | `clip.inc` — the system clipboard (§55) | 229 | — | **229** | 6 | — | — |
 | `events.inc` — the event ring (§10) | 173 | — | **173** | 134 | — | — |
@@ -1802,8 +1803,8 @@ generated in the first place.
 | `band.inc` — the 1bpp band composer (§5.9), `BAND=1` | — | — | **0** | — | — | — |
 | `bootprof.inc` — the boot phase table (§15.5), `BOOTPROF=1` | — | — | **0** | — | — | — |
 | `moudiag.inc` — what the identify window saw (§9.4.6), `MOUDIAG=1` | — | — | **0** | — | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 3,583 | — | **3,583** | — | — | 468 |
-| **total** | **57,437** | **40,803** | **98,240** | **5,955** | **8,982** | **2,498** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 3,616 | — | **3,616** | — | — | 468 |
+| **total** | **57,696** | **41,168** | **98,864** | **6,049** | **8,982** | **2,498** |
 <!-- END generated table -->
 
 ### Reading it
@@ -2228,6 +2229,24 @@ thunks rather than through the window record.
 more except doing less. There is one precedent for doing less, and it is the
 Task Manager.
 
+> **The fourth MODULE, and the first feature to cross two rungs for a
+> feature the kernel does not carry: HIBERNATE (SPEC.md §87).** `HIBER.DRV`
+> is 3,515 bytes on the system disk and 0 resident. What the kernel spends
+> is **259 bytes of `.text`, 94 of `.bss` and 365 of `.cold`** — three menu
+> strings, a window template, a title and two file names, a kind row, five
+> `.text` thunks and seven `cw_` shims; the state block the image carries;
+> and in `.cold` the boot probe, the greying predicate, eleven far entries
+> and the seven thunks that load the module — against rungs that had 96
+> (image) and 157 (`.cold`) left. So both crossed: `KERN_SIZE` 120,320 →
+> **121,344**, spare under `KERN_BUDGET` 9,216 → **8,192** (16 steps). The
+> `.bss` is the part worth a second look: a button label and its rect are
+> staged there because the button drawer reads through `DS`, and a module's
+> own bytes are not `DS` — the pointer file's 80-byte buffer and every
+> string went into the module for the same reason in reverse. It was 141
+> while a file dialog chose the image's place; the path it needed went with
+> the dialog. Nothing was reclaimed to pay for it; the two steps are spent
+> out of the spare, which is what the spare is for.
+>
 > **A THIRD lever, and the third thing has gone through it: an OVERLAY.**
 > SPEC.md §79's animated screen saver ships as `SAVER.DRV`, 10,064 bytes,
 > `DRVC_OVL` like `XMEM.DRV` and `HDDTOOL.DRV` (SPEC.md §41.12, §52.11). It is

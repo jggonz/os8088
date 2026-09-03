@@ -678,6 +678,38 @@ hd_bn_hit:
 %endif
 
 ; -----------------------------------------------------------------------------
+; hd_geom - DSV_GEOM (SPEC.md 51.8, 87.5)
+; in:  AH = our volume handle
+; out: CF = 0 and DL = the int 13h drive, CX:BX = the partition's first LBA,
+;      SI = sectors per track, DI = heads; CF = 1 no such volume, or a device
+;      on rung 1 (the task file), which the ROM cannot read for the caller
+; clobbers: the outputs, flags
+; -----------------------------------------------------------------------------
+hd_geom:
+    push ax
+    mov al, ah
+    call hd_vol_row             ; BX = the volume row
+    jc .no
+    mov si, bx
+    mov al, [si+HDV_DEV]
+    call hd_dev_row             ; DI = its device
+    cmp byte [di+HDD_KIND], HDK_BIOS
+    jne .no
+    mov dl, [di+HDD_UNIT]
+    mov bx, [si+HDV_BASE]
+    mov cx, [si+HDV_BASE+2]
+    mov ax, [di+HDD_SPT]
+    mov di, [di+HDD_HEADS]
+    mov si, ax
+    pop ax
+    clc
+    ret
+.no:
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
 ; hd_vol_row - a volume handle's row
 ; in:  AL = handle (0..HD_MAXVOL-1)
 ; out: CF = 0 and BX = the row (live); CF = 1 otherwise
@@ -1310,6 +1342,9 @@ hd_services:
     dw hd_page_up               ; DSV_CPUP    - the page acts on the RELEASE
     dw hd_page_drag             ; DSV_CPDRAG  - ...and follows the pointer
                                 ;               between the edges (13.8.4)
+    dw 0                        ; DSV_PKGCALL - no package reaches a raw sector
+    dw hd_geom                  ; DSV_GEOM    - the transport facts (SPEC.md
+                                ;               87.5), for the resume stub
     times DSV_SIZE - ($ - hd_services) db 0
                                 ; drv_publish copies DSV_SIZE bytes
                                 ; whatever this table's length is, so

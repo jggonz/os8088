@@ -282,7 +282,19 @@ DSV_PKGCALL  equ 34             ; dw: near proc reached by OSAPI_DRV_CALL -
                                 ; no lock and raises no sch_lock, so a verb of
                                 ; yours is callable from a package's worker
                                 ; only if what it does is. Say so per verb.
-DSV_SIZE     equ 36
+DSV_GEOM     equ 36             ; dw: near proc, DRVC_DISK only (SPEC.md 51.8,
+                                ; 87.5): the TRANSPORT FACTS of one volume,
+                                ; for a caller that has to reach its sectors
+                                ; without you - the resume stub, which runs
+                                ; after every driver has been detached.
+                                ;   in  AH = your volume handle
+                                ;   out CF = 0: DL = the int 13h drive,
+                                ;       CX:BX = the partition's first LBA,
+                                ;       SI = sectors per track, DI = heads;
+                                ;       CF = 1: no such volume, or one the
+                                ;       ROM's int 13h does not reach (52.1's
+                                ;       rung 1). 0 = never, which is CF = 1
+DSV_SIZE     equ 38
 
 ; --- DSV_FS: the file redirector's verbs (SPEC.md 62.9) ----------------------
 ; A DRVC_FILE volume has NO SECTORS - no BPB, no FAT, no directory to walk -

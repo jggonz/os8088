@@ -238,6 +238,8 @@ sees an up-to-date `kernel.bin`, boots the previous configuration, and it reads
 exactly like the feature being broken.
 
 86Box targets for period hardware, one per `vm/` directory: `xt`, `xt-640`,
+`xt-mfm` (a 20MB ST-225 on a Xebec MFM controller — the machine to install
+and hibernate on; `build/mfm20.img` is created blank and kept),
 `xt-cga`, `xt-hercules`, `xt-ega`, `xt-multimon`, `xt-sound`,
 `xt-sound-1.44`, `286`,
 `286-sound`,
@@ -345,6 +347,18 @@ learned.
   one 64KB window because offsets are 16 bits. They are relieved by different
   mechanisms. **Raising either is a decision to take with whoever asked for the
   feature, not a build fix.**
+- **Before spending a resident byte, ask whether the feature is an ON-DEMAND
+  MODULE** (§2.8, `kernel/mod.inc`, docs/ONDEMAND-PLAN.md §1's test): kernel
+  code that ships as a file (`CTRL.DRV`, `FORMAT.DRV`, `CLONE.DRV`,
+  `HIBER.DRV`) and is
+  read into a heap claim when the feature is asked for, freed when it is
+  done. A feature qualifies when the system disk is already required to use
+  it, or can be required without interrupting what the user was doing. When
+  it qualifies, the resident part is the menu item, the greying predicate and
+  the thunks; everything else goes in the module. Only a feature that fails
+  the test may grow `.text`/`.cold`, and moving code to `.cold` or the boot
+  overlay relieves `KERN_CODE_MAX` but not `KERN_BUDGET` — a module relieves
+  both. Check `tools/kernsize.py` before and after: a byte costs a byte.
 - **A heap claim can MOVE, and the default is that it may not** (§66). A record
   is born `MC_RLOC` = 0, PINNED; `OSAPI_MEM_MOVABLE` opts one in and takes a
   relocation **proc**, not the address of the word naming the block — a holder
