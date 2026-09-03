@@ -194,11 +194,10 @@ apd_pull:
     mov byte [apd_hinib], 1
     jmp .donib
 .hi:
-    push cx
-    mov cl, 4
-    shr al, cl                      ; high nibble
-    pop cx
-    and al, 0x0F
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    shr al, 1                       ; high nibble (single shifts: CL stays free)
     mov byte [apd_hasbyte], 0       ; the pair is spent
 .donib:
     call apd_step_nib              ; AL = nibble -> AX = new predictor
@@ -228,11 +227,14 @@ apd_pull:
 ; -----------------------------------------------------------------------------
 ; apd_emit - store signed-16 sample AX as PCM8 into apd_out, advance BX
 ; in:  AX = sample, BX = count so far (also the write index into apd_out)
-; out: BX incremented.  clobbers: AX.
+; out: BX incremented.  clobbers: AX, CX, DI.
+;
+; NO push/pop: this runs once per decoded sample (~8000/s), where the ~55
+; cycles of stack traffic dominated on a 4.77 MHz XT (SPEC.md 86.4). Every
+; caller reloads CX from [apd_want] at the top of the ADPCM loop and needs no
+; DI across the call.
 ; -----------------------------------------------------------------------------
 apd_emit:
-    push cx
-    push di
     mov cl, 8
     sar ax, cl                      ; arithmetic shift: -> [-128..127]
     add al, 128                     ; -> [0..255]
@@ -240,32 +242,31 @@ apd_emit:
     add di, bx
     mov [di], al
     inc bx
-    pop di
-    pop cx
     ret
 
 ; -----------------------------------------------------------------------------
 ; apd_step_nib - advance the IMA predictor by one 4-bit code
 ; in:  AL = nibble (0..15)
 ; out: AX = new predictor (signed 16); [apd_pred] / [apd_index] updated
-; preserves every register except AX.
+; clobbers: CX, DX, SI, DI.  Preserves BX (the ADPCM loop's output index).
+;
+; NO push/pop for the same reason as apd_emit - ~135 cycles of stack traffic
+; per sample. The one push/pop kept is the predictor across the index update.
+; The algorithm is unchanged and still byte-identical to ffmpeg's
+; adpcm_ima_wav; the >>2 / >>3 use single shifts so CL is never a divisor.
 ; -----------------------------------------------------------------------------
 apd_step_nib:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     xor ah, ah
     mov si, ax                      ; SI = nibble (0..15)
 
-    mov bx, [apd_index]
-    add bx, bx
-    mov di, [apd_step + bx]         ; DI = step (1..32767), kept across
+    mov di, [apd_index]
+    add di, di
+    mov di, [apd_step + di]         ; DI = step (1..32767), kept across
 
     mov ax, di                      ; diff = step >> 3
-    mov cl, 3
-    shr ax, cl
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
     mov cx, ax                      ; CX = diff accumulator (unsigned)
 
     test si, 4
@@ -281,10 +282,8 @@ apd_step_nib:
     test si, 1
     jz .n1
     mov ax, di
-    push cx
-    mov cl, 2
-    shr ax, cl
-    pop cx
+    shr ax, 1
+    shr ax, 1
     add cx, ax                      ; + step>>2
 .n1:
     mov ax, [apd_pred]
@@ -318,9 +317,8 @@ apd_step_nib:
 .stp:
     mov [apd_pred], ax
 
-    push ax                         ; keep the sample
-    mov bx, si
-    mov al, [apd_idxtab + bx]
+    push ax                         ; keep the sample across the index update
+    mov al, [apd_idxtab + si]       ; SI still = nibble
     cbw                             ; AX = signed adjustment
     add ax, [apd_index]
     jns .ipos
@@ -333,10 +331,4 @@ apd_step_nib:
 .isave:
     mov [apd_index], ax
     pop ax                          ; AX = the clamped predictor (the sample)
-
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
     ret
