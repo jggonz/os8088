@@ -16171,7 +16171,8 @@ Window" (CMD_CLOSE); and **Builtins**: "Timer" (CMD_TIMER), "Bounce"
 (CMD_BOUNCE), "Disk" (CMD_FILES) — see §12.3.1 for why that is not how they
 started. The System menu is cell 0 for every application: "About os8088..."
 (CMD_ABOUT), "Control Panel" (CMD_CTRL, §31), "Task Manager" (CMD_TASKS,
-§28), a rule, and "Restart" (CMD_REBOOT).
+§28), a rule, "Hibernate..." (CMD_HIBER, §86 — kern_big only, so the ids
+below it are one lower in kern_small), and "Restart" (CMD_REBOOT).
 
 **"Close Window" greys when there is nothing to close.** `ui_loc_gate` points
 that item at its `MENU_DIS` twin from `wm_top`, on the press that opens the
@@ -16187,12 +16188,13 @@ predicate is per-kind rather than one word.
 CMD_ABOUT  equ 1   ; --- System (cell 0, every application) ---
 CMD_CTRL   equ 2
 CMD_TASKS  equ 3
-CMD_SEP    equ 4   ; the rule above Restart - no handler, see below
-CMD_REBOOT equ 5
-CMD_CLOSE  equ 6   ; --- Locator: File ---
-CMD_TIMER  equ 7   ; --- Locator: Builtins ---
-CMD_BOUNCE equ 8
-CMD_FILES  equ 9
+CMD_SEP    equ 4   ; the rule above Hibernate - no handler, see below
+CMD_HIBER  equ 5   ; kern_big only (§86); kern_small has no such item and
+CMD_REBOOT equ 6   ;   its ids from here stay one lower: REBOOT 5, CLOSE 6,
+CMD_CLOSE  equ 7   ;   TIMER 7, BOUNCE 8, FILES 9
+CMD_TIMER  equ 8   ; --- Locator: Builtins ---
+CMD_BOUNCE equ 9
+CMD_FILES  equ 10
 ```
 
 The ids are contiguous **within** a menu, because that is what makes
@@ -35161,7 +35163,8 @@ decoded from `CLS_OWN`:
 | `MEM_K_MOD` | `ModImg` | an on-demand kernel module's image (§2.8) |
 | `MEM_K_CLONE` | `Cloner` | the disk cloner's buffer (§18.99) |
 | `MEM_K_BAND` | `BandBuf` | the 1bpp band composer's buffer (§5.9.2) |
-| `MEM_K_OVL` | `BootOvl` | the relocated boot overlay (§2.5.1) |
+| `MEM_K_OVL` | `BootOvl` | the relocated boot overlay (§2.5.1) — retired, and its value 0xFF0B left unused (§2.9.6) |
+| `MEM_K_HIB` | `Resume` | the resume's extent list (§86.5) — 0xFF0C, the next free value |
 | `MEM_P_WSAVE` + slot | `WinSave` | a window's raise cache (a RANGE, §11.96.3) |
 | `MEM_P_DIRW` | `DirRead` | the directory read-ahead window |
 | anything else | `xxxx` | **the raw owner word, in hex** |
@@ -36270,7 +36273,8 @@ KIND_BOUNCE  equ 2       ;  NOTEPAD package, §27 — the numbering closed up;
                          ;  kind 1 was the Clock until it gained its buttons
                          ;  and became the Timer, §14)
 KIND_FILES   equ 3
-KIND_CTRL    equ 5       ; Control Panel (§31)
+KIND_CTRL    equ 4       ; Control Panel (§31)
+KIND_HIBER   equ 5       ; the Hibernate window (§86.1), kern_big only
 KIND_PKG     equ 0x80    ; bit 7: package instance
 ```
 
@@ -55159,7 +55163,12 @@ So the dispatcher's pad byte at **+15 is `DRV_H_DSV`, the byte length of the
 there for every class; `drv_publish` copies that many bytes and **publishes 0
 for every cell past it**, so a cell the driver does not have is refused by the
 `or bp, bp` / `jz` test every consumer already makes — `drv_pkg_call`'s fence,
-`cp_drv_ev`'s three page cells — instead of being far-called. **A byte of 0
+`cp_drv_ev`'s three page cells — instead of being far-called — `drv_publish` copies exactly that length,
+clamped to `DSV_SIZE`, over a table it has zeroed first. (It was "all or
+`DSV_TAB0`" until `DSV_GEOM` took `DSV_SIZE` 36 → 38 in §86, when every
+released driver became "shorter" and lost its four newest cells — the Control
+Panel page's and `DSV_PKGCALL`, which for `ETHER.DRV` is the whole socket
+surface.) **A byte of 0
 means `DSV_TAB0` = 28**, the length every released driver has, so a mismatched
 floppy set degrades to a driver with no page key and no package door rather
 than a wild far call. `DRV_VER` does not change, for §62.9.1.1's reason: every
@@ -83160,7 +83169,7 @@ HB_M_RESUME  A hibernation file is on drive C:.            [Resume]  [Discard]
 ```
 
 The drive letter in both faces is patched into the string at paint time,
-because the disk is chosen when the window opens: `hbm_pickvol` takes
+because the disk is chosen when the window opens: `hb_pick` (`.cold`) takes
 `[dsk_bootvol]` when that row is a fixed disk (§18.7, §52.10.3) and the first
 fixed row otherwise, and the window is the confirmation — Hibernate stops
 the machine, and `Restart` beside it asks nothing only because a restart
@@ -83187,7 +83196,13 @@ cost the kernel was a `.text` thunk for the completion proc and 32 bytes of
 the release handler — safe for §38.7's reason — and set `[hb_mode]` to
 `HB_M_GONE`, which is what tells the `.cold` thunk that made the far call to
 `mod_drop` the image on the way back. The module is never freed from inside
-its own code.
+its own code. Every **other** way the window closes — the close box, Locator's
+Close Window, the Task Manager, the restart sweep — reaches `app_close_win`
+with nothing of the module on the stack, and `app_close_win`'s `KIND_HIBER`
+hook (`hbf_closed`, `.cold`) drops the image there; the module's own closes
+set `HB_M_GONE` *before* calling `app_close_win`, and a GONE window is how the
+hook knows to leave that drop to the thunk. So the claim really is freed when
+the window closes, by whichever route.
 
 ### 86.2 The greying predicate, and what it refuses
 
@@ -83196,7 +83211,7 @@ its own code.
 
 | string | when |
 |---|---|
-| `Hibernate...` | a fixed volume exists (§18.7: a `DVK_DRV` row, or a `DVK_BIOS` row whose unit has bit 7 set) and the store above 1MB has no block allocated |
+| `Hibernate...` | a fixed volume exists (§18.7: a `DVK_DRV` row, or a `DVK_BIOS` row whose unit has bit 7 set — never a `DVK_FILE` one: a RAM disk or a redirected volume answers `dsk_vol_fixed` as fixed and has no sectors the stub could read, so `hb_pick` — THE predicate, the one `hb_ok`, `hb_probe` and the window all ask, so what greys, what is probed and what is written to cannot disagree — skips it) and the store above 1MB has no block allocated |
 | `Hibernate (No HD)` (`MENU_DIS`) | no fixed volume |
 | `Hibernate (XMS)` (`MENU_DIS`) | `OSAPI_XM_CAPS` reports fewer than `XM_MAX_BLKS` free entries: a package holds extended memory, and the image does not carry it (§86.7) |
 
@@ -83222,7 +83237,13 @@ list of sector runs and nothing else.
 
 The **pointer**, `HIBERNAT.PTR`, is written beside it after the image, so a
 boot that finds no pointer finds no hibernation whatever else is on the disk
-— a write that failed half way leaves nothing to resume. It is 64 bytes of
+— a write that failed half way leaves nothing to resume. And the **old**
+pointer goes first: `hbm_hib` deletes both files (pointer, then image) before
+it writes a byte, because a pointer that outlived its question — the window
+closed by its box, or a boot that could not load the module to ask — would
+otherwise name the new image with the old session's wake address for as long
+as the new image's write took, and for good if the new pointer's write
+failed. It is 64 bytes of
 header and then the image's name; the path field is reserved and zero, and a
 pointer with a path in it is refused as another build's:
 
@@ -83257,17 +83278,20 @@ and **posts** `UI_RBQ_HIBER` in `[ui_rebootq]` — §20.10's deferral, for
 follows detaches drivers, which yields. `ui_task` spends the post at the top
 of its pass with nothing held, in `hb_perform`:
 
-1. `dsk_chdir` to the root of `[hb_vol]`.
-2. **Detach every loaded driver whose class is not `DRVC_DISK` or
+1. **Detach every loaded driver whose class is not `DRVC_DISK` or
    `DRVC_FILE`** (`drv_unload` per row: sound, the parallel link, the NIC),
    recording the rows in `[hb_drvmask]`. Their hardware state cannot cross a
    power cycle and their claims would be restored to addresses a fresh boot
    has given to somebody else; the disk driver and the RAM disk own no
    hardware the BIOS does not already own, and their state is memory.
-3. `gfx_lock`, and `inc [sch_lock]`: the image must be one instant of the
+2. `gfx_lock`, and `inc [sch_lock]`: the image must be one instant of the
    machine, so no other task runs while it is written. Interrupts stay on —
    int 13h needs them on an AT — and the tick, the mouse and the keyboard
    ISRs touch nothing the image cares about.
+3. `dsk_chdir` to the root of `[hb_vol]` — only now, because the detach
+   yields and a task that took the turn could have moved the current
+   directory — and `hbm_forget`: the old pointer and image are deleted before
+   a byte is written (§86.3).
 4. Bank `hb_perform`'s **entry** `SS:SP` and the far address of `hb_wake`.
    Everything above that SP — the dispatcher's return, the thunk's, the UI
    task's frame — is written into the image untouched, because the write
@@ -83275,11 +83299,13 @@ of its pass with nothing held, in `hb_perform`:
 5. The image, as one `dskw_write`. The progress widget (§12.8) is on the bar
    throughout, because the lock is held by the task that calls it.
 6. The pointer, in the root.
-7. `vid_reboot` to text mode, the sentence, `int 16h`, then `drv_shutdown`,
+7. The ROM's keyboard buffer emptied (a key typed during the write is not
+   the answer), `vid_reboot` to text mode, the sentence, `int 16h`, then `drv_shutdown`,
    `sched_unhook` and `int 19h` — the reboot path's tail (§20.10), so a key
    restarts the machine into the question below.
 
-A failure at 5 or 6 undoes 2–4 — the drivers are loaded again from the mask,
+A failure at 3, 5 or 6 undoes 1, 2 and 4 — the drivers are loaded again from the mask, the user's volume and folder
+put back (`drv_vol_bank`/`back`, as `hbm_arm` and a refused resume do),
 the lock and `sch_lock` released — and toasts `Hibernate failed`; the window
 goes back to `HB_M_ASK`.
 
@@ -83293,15 +83319,22 @@ treatment.
 ### 86.5 Resume — the probe, the question, the stub
 
 **The probe** (`hb_probe`, `.cold`, resident, from `kmain` after `drv_boot`
-and before the first paint) walks `dsk_vtab` for fixed volumes and looks in
-each one's root for `HIBERNAT.PTR`, inside a `drv_vol_bank`/`drv_vol_back`
-bracket (§51.5.2). A floppy-only machine pays eight compares. A hit records the
+and before the first paint) looks for `HIBERNAT.PTR` in the root of the ONE
+volume a hibernate writes to — `hb_pick`'s — inside a
+`drv_vol_bank`/`drv_vol_back` bracket (§51.5.2), and reaches it the way
+`drv_load` reaches a driver: a quiet navigation (§18.9, no listing and no
+icon harvest) and `drv_find`'s walk of the directory sectors rather than the
+snapshot. A floppy-only machine pays eight compares and no I/O; a machine
+with a hard disk pays one quiet mount of its root, which on a hard-disk boot
+is the root it is already standing in. A hit records the
 volume in `[hb_vol]` and posts `UI_RBQ_ASK`, which `ui_task`'s first pass
 spends — on the desktop, with nothing held — by loading the module and running
 `hb_ask`: read the pointer, validate it (§86.3), find `HIBERNAT.IMG` beside it
 and check its size against `[mem_top]`, ask the transport question (§86.2),
-and open the window in `HB_M_RESUME`. Any refusal is a toast and a deleted
-pointer.
+empty the ROM's keyboard buffer — a key held at the hibernate's own "press
+any key" repeats through `int 19h` into this boot, `ui_task`'s next step
+hands it to the front window, and `Esc` there is Discard — and open the
+window in `HB_M_RESUME`. Any refusal is a toast and a deleted pointer.
 
 **Resume** posts `UI_RBQ_RESUME`; `hb_perform` then:
 
@@ -83311,13 +83344,16 @@ pointer.
    partition's 32-bit base, sectors per track and heads.
 2. Walks the image's FAT chain into a list of **extents** — absolute LBA and
    sector count, contiguous clusters coalesced — in a 10KB `MEM_K_HIB` claim.
-3. `drv_shutdown` (the fresh boot's drivers go, as before any restart),
-   `gfx_lock`, `vid_reboot` to text mode.
-4. Copies the **stub**, its parameters, the fresh clock's twelve bytes and the
+3. `cp_flush_close` (the Control Panel's unsaved settings, §31.8), then
+   `drv_shutdown` (the fresh boot's drivers go) — `ui_cmd_reboot`'s order,
+   as before any restart — then `gfx_lock`, `vid_reboot` to text mode.
+4. Copies the **stub**, its parameters, the fresh clock's ten bytes and the
    extents into the text framebuffer — `B800:0000` on a colour primary,
    `B000:0000` on a Hercules — which is the one RAM on the machine that no
    rung of §2's ladder owns and every adapter has at least 16KB of. Puts the
-   BIOS's own int 08h vector back (`sch_old08`), masks IRQ 1, 3, 4 and 12 so no
+   BIOS's own int 08h vector back (`sch_old08`), masks IRQ 1, 3, 4 — and 12
+   on a machine that has a second 8259; an XT has none, and its port 0xA0 is
+   the NMI mask register, §9.9.2 — so no
    kernel ISR can run on a half-restored kernel, and far-jumps to the stub.
 
 **The stub** runs with `CS`, `DS` and `SS` in the framebuffer and reads every
@@ -83332,9 +83368,12 @@ written at all: it is the ROM's, and the ROM is the one thing that kept
 running. Then the PIC masks go back, `DS` becomes `KERNEL_SEG`, `SS:SP`
 becomes the banked frame, and a far jump lands in `hb_wake` — inside the
 image's copy of the module, at the segment the pointer recorded. A read that
-still fails after its retries prints one sentence through int 10h and waits
-for a key before `int 19h`: half a memory is not a machine, and the ROM's
-teletype is the only thing left that can be trusted to say so.
+still fails after its retries prints one sentence through int 10h — from row
+8 of the page down, over the IVT copy that is dead on that path, because rows
+0–2 of the same page *are* the stub and the teletype writes at the cursor the
+mode set homed — and waits for a key before `int 19h`: half a memory is not a
+machine, and the ROM's teletype is the only thing left that can be trusted to
+say so.
 
 ### 86.6 `hb_wake` — putting the machine back on its feet
 
@@ -83344,7 +83383,8 @@ still up from step 3 of §86.4 and the gfx lock still held:
 1. `sti`. The IVT is the image's, the PIT is in the kernel's mode 2 (the
    fresh boot's `sched_init` set it and nothing on the resume path unset it),
    and with `sch_lock` up the tick counts and switches nobody.
-2. The clock: the twelve bytes `clk_sec`..`clk_year` come out of the staging
+2. The clock: the ten bytes `clk_sec`..`clk_year` (not the two display
+   toggles after them, which are the image's) come out of the staging
    area, where step 4 put the fresh boot's — the RTC ladder is boot-overlay
    code (§37.90) and cannot be run again, so the boot that just happened is the
    clock's source. `clk_last` is re-seeded from `[ticks]`.
@@ -83353,7 +83393,9 @@ still up from step 3 of §86.4 and the gfx lock still held:
    empty, the read-ahead flushed, the write gate shut, the batch depths
    zeroed, `mem_pinseg` cleared and the progress widget given back with
    `fpg_end` — every one of them a word the write was in the middle of.
-4. `vid_setmode`, then the Hibernate window closed with `app_close_win`, then
+4. `vid_setmode`, then `[hb_mode]` = `HB_M_GONE` and the Hibernate window
+   closed with `app_close_win` — GONE first, so §86.1's hook leaves this
+   image, which is the code running, to the thunk — then
    `menu_force`, `dock_force`, `wm_paint_all` — `fsx_restore`'s return from a
    foreign mode (§53), which is what a text screen is. Before any disk work,
    so the widget the next step arms has a graphics mode to draw in.
@@ -83362,7 +83404,7 @@ still up from step 3 of §86.4 and the gfx lock still held:
    32MB disk is not nothing.
 6. The drivers in `[hb_drvmask]` are loaded again, in row order, exactly as
    `drv_boot` would have loaded them.
-7. `blk_wake`, `[hb_resumes]` += 1, `[hb_mode]` = `HB_M_GONE`, `gfx_unlock`,
+7. `blk_wake`, `[hb_resumes]` += 1, `gfx_unlock`,
    **`[sch_lock]` = 0** — set, not decremented: the image holds the count as
    the write left it, and `dsk_xfer` raises it around every int 13h, so it
    reads 2 and one down from that is a machine that never switches again
@@ -83383,10 +83425,13 @@ up the same way, and the resume path never calls `mouse_unhook`.
 Resident: the three strings, the template, the two file names, the kind row,
 five `.text` thunks and seven `cw_` shims, and in `.cold` the probe, the
 predicate, eleven far entries and the seven thunks that load the module —
-248 bytes of `.text`, 94 of `.bss` and 329 of `.cold`, which crossed both
-rungs; docs/KERNEL-MEMORY.md has the account. The module is `HIBER.DRV` on
-every system disk, 3,462 bytes, fourth in `mod_tab`, and the stub is ~300
-bytes of it.
+259 bytes of `.text`, 94 of `.bss` and 365 of `.cold`, which crossed both
+rungs; docs/KERNEL-MEMORY.md has the account. (The first cut was 248/94/329;
+the review's `app_close_win` hook and `hbf_closed`, the `DVK_FILE` test in
+three places, the keyboard drain and `drv_publish`'s exact-length copy are
+the rest.) The module is `HIBER.DRV` on
+every system disk, 3,515 bytes, fourth in `mod_tab`, and the stub is ~450 bytes of it,
+its one message included.
 
 Time on the 5150: the image is 1,280 sectors on a 640KB machine, and both the
 write and the read go out in track-sized runs, so it is ~80 int 13h calls
@@ -83412,10 +83457,12 @@ only `Enter` worked — watches the machine reach the text-mode sentence,
 presses a key, sees the question on the fresh desktop, clicks `Resume`, and
 then reads `[hb_resumes]`, the instance table, the two locks and the tick out
 of the guest: the About instance must be live with a visible window,
-`[sch_lock]` and the gfx lock must be down, the tick must advance, and
-`HIBERNAT.PTR` must be gone from the volume. A second pass goes through the
-keyboard and takes `Discard`, and asserts the opposite. The driver-backed shape — a floppy boot
+`[sch_lock]` and the gfx lock must be down, the tick must advance, and both
+`HIBERNAT.PTR` and `HIBERNAT.IMG` must be gone from the volume — read on the
+host by a FAT reader that is not the kernel's, after a positive control that
+the pointer was there once the text-mode sentence was up. A second pass goes
+through the keyboard and takes `Discard`, and asserts the opposite. The driver-backed shape — a floppy boot
 with a `SYSTEM.CFG` that wants `HDD.DRV`, the same VHD mounted through it —
 is the same script with `--driver`, registered as `hibernatedrv`. Both write
-four rendered screenshots to `build/hiber-*.png`; docs/TESTING.md has the
+three rendered screenshots to `build/hiber-*.png`; docs/TESTING.md has the
 recipe and what it cannot see.

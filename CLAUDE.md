@@ -349,7 +349,8 @@ learned.
   feature, not a build fix.**
 - **Before spending a resident byte, ask whether the feature is an ON-DEMAND
   MODULE** (§2.8, `kernel/mod.inc`, docs/ONDEMAND-PLAN.md §1's test): kernel
-  code that ships as a file (`CTRL.DRV`, `FORMAT.DRV`, `CLONE.DRV`) and is
+  code that ships as a file (`CTRL.DRV`, `FORMAT.DRV`, `CLONE.DRV`,
+  `HIBER.DRV`) and is
   read into a heap claim when the feature is asked for, freed when it is
   done. A feature qualifies when the system disk is already required to use
   it, or can be required without interrupting what the user was doing. When

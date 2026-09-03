@@ -35,7 +35,7 @@
 ; NOTHING HERE CAN STOP ANYTHING. Every failure - no system disk, no heap, a
 ; short read, a stamp mismatch - is CF = 1 out of mod_need, and every caller
 ; owes a refusal the user can act on (SPEC.md 47 rule 3, and 59's toast is
-; where all three of the current ones say it).
+; where all four of the current ones say it).
 ; =============================================================================
 
 MOD_MAX     equ 4               ; rows in mod_tab

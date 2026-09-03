@@ -61,8 +61,8 @@ KIND_FILES   equ 3
 KIND_CTRL    equ 4              ; (the Task Manager was kind 4 until it
                                 ;  became the TASKMGR package - SPEC.md 28)
 KIND_HIBER   equ 5              ; the Hibernate window (SPEC.md 86.1): the
-                                ; file dialog's requester, and the boot-time
-                                ; question. kern_big only
+                                ; confirmation, and the boot-time question.
+                                ; kern_big only
 KIND_PKG     equ 0x80           ; bit 7: package instance
 
 ; --- osapi_sys_snapshot's buffer, API slot 0x0298 (SPEC.md 20.9) ------------------
@@ -1549,6 +1549,13 @@ app_close_win:
                                 ; with it, and the ordering is what makes
                                 ; that impossible rather than a claim about
                                 ; whose slot inst_caller answers with
+%ifdef KERN_BIG
+    cmp byte [di+I_KIND], KIND_HIBER
+    jne .nohib
+    call COLD_SEG:hbf_closed    ; the Hibernate window went by a route its
+.nohib:                         ; module did not take - the close box, Close
+%endif                          ; Window, the Task Manager - so the image can
+                                ; go now (SPEC.md 86.1)
     cmp byte [di+I_KIND], KIND_CTRL
     jne .noflush                ; the Control Panel defers its settings write
     call COLD_SEG:drv_cp_closed_x ; ...and tell the drivers, which is where the

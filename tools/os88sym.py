@@ -77,7 +77,8 @@ SECTION_SEG = {".text": "KERNEL_SEG", ".bss": "KERNEL_SEG",
                # two-step read the caller has to do for itself: the kernel's
                # own row says where the claim went (tests/xmcheck.py does
                # exactly that for XMEM.DRV, SPEC.md 41.12).
-               ".modc": None, ".modf": None, ".modl": None, ".modmap": None}
+               ".modc": None, ".modf": None, ".modl": None, ".modh": None,
+               ".modmap": None}
 
 _cache = {}
 

@@ -2805,25 +2805,27 @@ drv_publish:
     mov al, [bx+DRVR_CLASS]
     call drv_cls_svc_x            ; DI = this CLASS's copy, not the one copy
     jc .out
-    mov cx, DSV_SIZE / 2        ; ...AS FAR AS THE DRIVER'S TABLE REACHES
-                                ; (SPEC.md 51.2), which is DRV_H_FSV's test one
-                                ; level up: the header says how long a table it
-                                ; was built with, a LONGER one still means
-                                ; these cells, and anything shorter - 0 is a
-                                ; driver written before the byte existed - has
-                                ; only DSV_TAB0 of them. The rest are published
-                                ; as 0, so every consumer's `or bp, bp / jz`
-                                ; refuses them as unpublished instead of
-                                ; far-calling the name string a released driver
-                                ; keeps directly after its table
-    cmp byte [es:DRV_H_DSV], DSV_SIZE
-    jae .copy
-    mov cx, DSV_TAB0 / 2
-    xor ax, ax
-    mov [di+DSV_CPKEY], ax
-    mov [di+DSV_CPUP], ax
-    mov [di+DSV_CPDRAG], ax
-    mov [di+DSV_PKGCALL], ax
+    push di                     ; every cell is published as 0 FIRST, so a
+    xor ax, ax                  ; cell the driver's table stops short of is
+    mov cx, DSV_SIZE / 2        ; refused by every consumer's `or bp, bp / jz`
+.zero:                          ; instead of far-calling the name string a
+    mov [di], ax                ; released driver keeps directly after it
+    inc di
+    inc di
+    loop .zero
+    pop di
+    mov cl, [es:DRV_H_DSV]      ; ...then AS FAR AS THE DRIVER'S TABLE REACHES
+    or cl, cl                   ; (SPEC.md 51.2), which is DRV_H_FSV's test one
+    jnz .len                    ; level up: the header says how long a table it
+    mov cl, DSV_TAB0            ; was built with; 0 is a driver written before
+.len:                           ; the byte existed and means DSV_TAB0. EXACTLY
+    cmp cl, DSV_SIZE            ; that many, not "all or DSV_TAB0": when
+    jbe .fit                    ; DSV_GEOM took DSV_SIZE 36 -> 38 every released
+    mov cl, DSV_SIZE            ; driver became "shorter" and the old two-way
+.fit:                           ; test threw its four newest cells away - the
+    xor ch, ch                  ; Control Panel page's and DSV_PKGCALL, which
+    shr cx, 1                   ; for ETHER.DRV is the whole socket surface.
+                                ; A LONGER table still means these cells
 .copy:
     mov ax, [es:si]
     mov [di], ax

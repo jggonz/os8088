@@ -4976,8 +4976,7 @@ section .text
 %include "ctrl.inc"
 %include "hiber.inc"            ; hibernate and resume (SPEC.md 86): the
                                 ; resident thunks, the probe, and HIBER.DRV.
-                                ; After files.inc for PTH_MAX and after
-                                ; mod.inc for MOD_NENT - both are sizes here
+                                ; After mod.inc for MOD_NENT, a size here
 %include "driver.inc"           ; loadable drivers (SPEC.md 51): after
                                 ; diskw (it reads and writes the system disk)
                                 ; and memory (a driver image is a claim)

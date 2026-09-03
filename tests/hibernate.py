@@ -152,14 +152,22 @@ def quiet(m, s=8.0):
         pass
 
 
-def ptr_present():
-    """Does the VHD's root carry HIBERNAT.PTR? Read on the host with a FAT
-    reader that is not the kernel's."""
+def root_has(name):
+    """Does the VHD's root carry NAME? Read on the host with a FAT reader
+    that is not the kernel's."""
     import instdeep
     blob = open(VHD, "rb").read()
     base = int.from_bytes(blob[446 + 8:446 + 12], "little")
     vol = instdeep.Vol(blob[base * 512:])
-    return "HIBERNAT.PTR" in [e[0] for e in vol.entries(0)]
+    return name in [e[0] for e in vol.entries(0)]
+
+
+def ptr_present():
+    return root_has("HIBERNAT.PTR")
+
+
+def img_present():
+    return root_has("HIBERNAT.IMG")
 
 
 def boot(driver):
@@ -185,6 +193,9 @@ def hibernate(m, mo, mouse):
         m.key("Enter")
     M.until(m, lambda mm: M.video_is_text(mm.video()),
             "the hibernated sentence in text mode", poll=0.5, limit=240)
+    check(ptr_present() and img_present(),
+          "both files reached the disk (the positive control for the "
+          "'gone' checks below)")
 
 
 def pass_resume(driver):
@@ -200,7 +211,13 @@ def pass_resume(driver):
         hibernate(m, mo, mouse=True)
         m.key("Space")                            # ...and restart
         time.sleep(1.0)
-        M.settle(m, limit=240)
+        M.until(m, lambda mm: byte(mm, "hb_mode") == HB_M_RESUME,
+                "the fresh boot to ask the question", poll=1.0, limit=240)
+        quiet(m)                                  # ...and paint it. Not a
+                                                  # settle: the ROM's disk
+                                                  # probe holds a static
+                                                  # screen long enough to
+                                                  # pass for a quiet desktop
         check(byte(m, "hb_mode") == HB_M_RESUME,
               "the fresh boot asks the question",
               got=byte(m, "hb_mode"), want=HB_M_RESUME)
@@ -234,6 +251,7 @@ def pass_resume(driver):
         mo.menu(CHIP_X, CHIP_Y, CHIP_X, CHIP_Y)
         quiet(m)
     check(not ptr_present(), "HIBERNAT.PTR is gone after a resume")
+    check(not img_present(), "...and so is HIBERNAT.IMG (SPEC.md 86.6 step 5)")
 
 
 def pass_discard(driver):
@@ -245,7 +263,9 @@ def pass_discard(driver):
         hibernate(m, mo, mouse=False)
         m.key("Space")
         time.sleep(1.0)
-        M.settle(m, limit=240)
+        M.until(m, lambda mm: byte(mm, "hb_mode") == HB_M_RESUME,
+                "the fresh boot to ask the question", poll=1.0, limit=240)
+        quiet(m)
         check(byte(m, "hb_mode") == HB_M_RESUME, "the question, again",
               got=byte(m, "hb_mode"), want=HB_M_RESUME)
         m.key("Escape")                           # Discard
@@ -258,6 +278,7 @@ def pass_discard(driver):
         check(word(m, "hb_resumes") == 0, "nothing was resumed",
               got=word(m, "hb_resumes"), want=0)
     check(not ptr_present(), "HIBERNAT.PTR is gone after a discard")
+    check(not img_present(), "...and so is HIBERNAT.IMG")
 
 
 def main():
