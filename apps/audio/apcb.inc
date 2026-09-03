@@ -335,14 +335,18 @@ ap_onwake:                         ; SI = window
 .noarg:
 
     ; 4. a would-be second instance may have queued a document for us
-    ;    (SPEC.md 86.11.1). ap_que_poll self-throttles and returns CF=0 only
-    ;    when it actually added something.
+    ;    (SPEC.md 86.11.1). OFF by default: the poll has to REMOUNT the system
+    ;    root to read APQUEUE.DAT (OSAPI_FILE_GOTO), and on a 4.77 MHz XT that
+    ;    is seconds - a playing ADPCM track polls often enough that the machine
+    ;    spends half its time remounting. Build with -DAP_HANDOFF to re-enable.
+%ifdef AP_HANDOFF
     call ap_que_poll
     jc .noque
     call OSAPI_GFX_LOCK
     call apu_repaint
     call OSAPI_GFX_UNLOCK
 .noque:
+%endif
 %ifdef APROF
     ; 5. the Diagnostics 'D' key asked for a counter dump (file I/O, no lock)
     cmp byte [apdg_req], 0

@@ -446,7 +446,11 @@ ap_prime:
     cmp byte [ap_src_done], 0
     jne .done
     call ap_la_avail
-    cmp ax, AP_LA_SZ - 4096        ; nearly full
+    ; one AP_RD_CHUNK gulp is enough to start - it covers the six-half pre-roll
+    ; with headroom, and the worker tops the ring up once playing. Filling the
+    ; whole 32 KB here was a second disk read in the "Opening..." wait, which
+    ; on a real XT is a visible extra second per track.
+    cmp ax, AP_RD_CHUNK
     jae .done
     call ap_refill_chunk
     loop .l
@@ -1160,22 +1164,23 @@ ap_que_poll:
     cmp ax, AP_QUE_TICKS
     jb .done
     mov [ap_que_t], bx
-    ; the check REMOUNTS the root - never while a refill is already urgent
     cmp byte [ap_sopen], 0
     je .qfull
     cmp byte [ap_paused], 0
     jne .qfull
     call ap_la_avail
     cmp ax, AP_LA_LOW
-    jb .done                      ; ring below low-water - wait 5 s more
+    jb .done                      ; ring below low-water - wait
 .qfull:
     APCNT apc_quechk
 
-    call OSAPI_FILE_HERE           ; DX = our cwd, BL = our drive
-    mov [ap_que_bdir], dx
-    mov [ap_que_bvol], bl
-
-    call ap_que_root
+    ; GOTO_Q, not the real GOTO: this runs on every idle ap_onwake, and a real
+    ; remount of the system root (scan + sort + icon harvest) is seconds on an
+    ; XT. GOTO_Q only re-points name resolution and does not move us, so there
+    ; is nothing to restore afterwards.
+    call OSAPI_VOL_SYS            ; BL = the system volume
+    xor dx, dx
+    call OSAPI_FILE_GOTO_Q        ; resolve names at the root; cheap, no move
     push ds
     pop es
     mov si, ap_qfile
@@ -1183,27 +1188,20 @@ ap_que_poll:
     mov cx, 128
     xor dx, dx
     call OSAPI_FILE_READ          ; out CF=0 DX:AX = bytes, else AX = FERR_*
-    mov cx, 0
-    jc .back                      ; no queue file: nothing pending
-    mov cx, ax                     ; bytes read (< 128, DX = 0)
-
-    ; delete it while we are still standing in the root, then leave the root
-    ; BEFORE touching ap_add_file - the records carry their own dir/vol and
-    ; apl_goto_cur navigates by cluster, so they are processed from our own
-    ; home folder, not from a root we would then have to get back out of.
-    push cx
+    jc .qhome                     ; no queue file: nothing pending
+    or ax, ax
+    jz .qhome
+    push ax                      ; keep the byte count
     mov si, ap_qfile
-    call OSAPI_FILE_DELETE
+    call OSAPI_FILE_DELETE        ; still resolving at the root
     pop cx
-.back:
+    ; re-point name resolution back to our own folder before ap_add_file:
+    ; OSAPI_FILE_HERE is unmoved by GOTO_Q, so it still names where we live.
     push cx
-    mov dx, [ap_que_bdir]
-    mov bl, [ap_que_bvol]
-    call OSAPI_FILE_GOTO          ; back to where we were (real remount)
+    call OSAPI_FILE_HERE
+    call OSAPI_FILE_GOTO_Q
     pop cx
 
-    or cx, cx
-    jz .done
     mov si, ap_querec
 .rec:
     cmp cx, AP_QUEREC
@@ -1213,13 +1211,16 @@ ap_que_poll:
     mov dx, [si+13]
     mov bl, [si+15]
     mov al, AP_ADD_CUR | AP_ADD_PLAY
-    call ap_add_file              ; SI already -> the name
+    call ap_add_file
     mov byte [ap_que_hit], 1
     pop si
     pop cx
     add si, AP_QUEREC
     sub cx, AP_QUEREC
     jmp .rec
+.qhome:
+    call OSAPI_FILE_HERE
+    call OSAPI_FILE_GOTO_Q        ; name resolution back to our folder
 .done:
     cmp byte [ap_que_hit], 0
     pop di

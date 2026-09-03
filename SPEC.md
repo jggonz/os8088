@@ -83355,7 +83355,19 @@ launches `AUDIO.O88` with that file as the launch document (§54.10):
 kernel calls once itself after the window is shown — adds it to the playlist
 and starts it. `.M3U` association is future work (§86.20).
 
-### 86.11.1 Single instance — the `APQUEUE.DAT` handoff
+### 86.11.1 Single instance — the `APQUEUE.DAT` handoff (OFF by default)
+
+**Disabled unless built with `-DAP_HANDOFF`.** The mechanism below is correct
+and works under QEMU, but the running instance's poll has to **remount the
+system root** (`OSAPI_FILE_GOTO`) to read `APQUEUE.DAT`, and on a 4.77 MHz XT a
+remount — BPB, FAT window, root scan, sort, icon harvest — is *seconds*. A
+playing track polls often enough (especially ADPCM, whose look-ahead ring
+drains slowly and so clears the "ring low" gate) that the machine spends much
+of its time remounting: measured on an 86Box XT as a track that "plays a
+second, stalls, plays a second". With the feature off, a second double-click
+opens a **second window** — the OS default, and no worse than every other
+multi-instance package. Kept in the source, and in this section, because the
+design is sound where a remount is cheap.
 
 `assoc_run` (§54.4) always loads a fresh instance; there is no
 "already-running" check and no public slot to wake another instance's window by

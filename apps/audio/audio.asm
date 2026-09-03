@@ -342,9 +342,13 @@ ap_entry:
     mov [ap_arg_vol], bl
     mov byte [ap_arg_pending], 1
 
-    ; --- single instance (SPEC.md 86.11.1): if an Audio Player is already
-    ;     live, hand it this document through APQUEUE.DAT and DO NOT open a
-    ;     second window. The running instance's ap_onwake poll picks it up.
+    ; --- single instance (SPEC.md 86.11.1): OFF by default (-DAP_HANDOFF to
+    ;     enable). If an Audio Player is already live, hand it this document
+    ;     through APQUEUE.DAT and DO NOT open a second window. Disabled because
+    ;     the running instance's poll must REMOUNT the system root every few
+    ;     seconds to read the file, which stalls a 4.77 MHz XT badly. Without
+    ;     it, a second double-click opens a second window (the OS default).
+%ifdef AP_HANDOFF
     call ap_find_sibling          ; CF = 0: a live sibling exists
     jc .nodoc
     call ap_que_write             ; append the banked arg to APQUEUE.DAT
@@ -357,6 +361,7 @@ ap_entry:
     call OSAPI_TOAST
     stc                           ; abort THIS launch - the loader frees the
     ret                           ; region, no window, no handover (SPEC.md 21)
+%endif
 .nodoc:
     call aplist_init
 
