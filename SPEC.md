@@ -29219,9 +29219,18 @@ Four things about the convention:
   from the root, matching `type == OSAPI_FT_DIR` — the folder is an ordinary
   visible directory, unlike the system *files* inside it (§19.6).
 
-Cyclone (§67.20) is the first consumer and, at the time of writing, the only
-one: Note Pad, Paint, TeXPad and Word write **documents**, which are the user's
-and belong exactly where the user put them.
+Cyclone (§67.20) is the first consumer: Note Pad, Paint, TeXPad and Word write
+**documents**, which are the user's and belong exactly where the user put them.
+FTPD's `FTPD.CFG` (§77) is the second.
+
+**`WIRE.CFG` is the third, and it is the first that is only ever READ** (§88.4).
+One line, `host[:port][/prefix/]`, naming where the Wire fetches its catalog;
+absent — which is what every shipped disk carries — the package uses
+`os8088.com:80/wire/` and says nothing. That is `19.9`'s tolerate-the-missing-
+folder rule with nothing to tolerate: the default is the shipping
+configuration, and the file exists so that a gate can point one machine at a
+host server (`make thewiretest`) and a user can point theirs at a mirror.
+Nothing on the machine writes it.
 ### 19.10 `apps-all.img` — one floppy with everything, and why it is on demand
 
 The shipped apps floppy is built in four geometries (§19) and carries the
@@ -34681,6 +34690,16 @@ second copy, never a move:** the apps disks carry every package there is
 exactly as before, and a single-floppy machine that swaps to the apps disk
 (§28.1) finds everything where it was.
 
+**`THEWIRE.O88` is on the system disks too and is NOT one of the six.** It is
+a `SYSAPPS` package like `TASKMGR.O88` — it lives in `SYSTEM/`, it is launched
+by name by the kernel rather than found in a folder, and it is on **all four**
+geometries where the core six are on three. The reason is the one this section
+already gives for Browser and Telnet, taken one step: a network machine's
+system disk carries the driver, so it should carry the program that turns the
+driver into software you do not have. It is the *only* copy — there is no
+Wire on the apps disk, because a program whose whole subject is fetching
+software off the network belongs on the disk the machine booted from.
+
 **Entirely build-side. Not one line of the kernel changed for it**, and none
 had to — every mechanism it leans on already existed and already covers "some
 other volume happens to have this program on it", because that is what a
@@ -34693,9 +34712,12 @@ it off the system disk (§72.9, §62) — so that disk already carries the
 machine's whole ability to talk to something. Carrying the driver and not the
 two programs that use it is a machine whose link is configured and which has
 nothing on the disk in the drive that can speak over it: working, and
-indistinguishable from broken. Telnet is 4KB and Browser 14KB against the
-360KB disk's 60 free clusters, which is what makes the pair affordable where
-Tracker's 30KB and the module it exists to play are not.
+indistinguishable from broken. Telnet is 4KB and Browser 14KB against what the
+360KB disk had free, which is what makes the pair affordable where Tracker's
+30KB and the module it exists to play are not. (That figure was **60 free
+clusters** here for two releases and was stale the day it was written: it
+described the disk *before* those two went on it. §88.11 measures it rather
+than remembering it.)
 
 **`CORE_TOOLS` / `CORE_GAMES` in the Makefile are the list**, defined up
 beside `DRIVERS` and `SYSAPPS` rather than down with `APPS_TOOLS`, for a
@@ -91448,3 +91470,458 @@ with a `SYSTEM.CFG` that wants `HDD.DRV`, the same VHD mounted through it —
 is the same script with `--driver`, registered as `hibernatedrv`. Both write
 three rendered screenshots to `build/hiber-*.png`; docs/TESTING.md has the
 recipe and what it cannot see.
+
+## 88. THE WIRE — the online software library (`apps/thewire/thewire.asm`)
+
+The Wire is a window listing every program the project publishes, fetched
+over `ETHER.DRV` from `os8088.com`, with a picture, a description, a
+recommended-machine filter and two actions: **Load Program** runs it now out
+of memory, **Add to Disk...** writes it and its sidecars to a floppy. A
+networked XT with one 360KB drive reaches the whole collection without ever
+seeing a second disk.
+
+`docs/WIRE-PLAN.md` is the design record — what was considered and why each
+fork went the way it did. This section is the contract.
+
+**`apps/wire/` is WIREFRAME (§78) and is not renamed.** The package is
+`apps/thewire/`, the file `THEWIRE.O88`, the header name `The Wire`. Nothing
+the user sees carries the file name.
+
+### 88.1 The four parts, and where the boundaries are
+
+```
+ kernel/desk.inc         kernel/loader.inc        apps/thewire/          ../os8088-web
+ the Wire zone   --dbl-> OSAPI_PKG_RUN    <--WM_- THEWIRE.O88   <--HTTP-- /wire/catalog.bin
+ (paint, hit)     click  (an image in      ONWAKE  catalog, list,          /wire/pic/*.PIC
+                         memory -> a               picture, filter,        /wire/pkg/*.O88
+                         running instance)         Load / Add
+```
+
+- The two kernel parts (§26's zone, §21's slot) know nothing about HTTP.
+- The package is the only reader of the catalog format on the machine and the
+  only caller of `OSAPI_PKG_RUN` today. It ships on the **system** disks in
+  all four geometries, in `SYSTEM/` beside `TASKMGR.O88` (§24.3), and is in
+  `SMALLOMIT` — `kern_small` has no NIC.
+- The catalog format below is the contract between the machine and the site.
+  The OS repo owns it: `tools/os88wire.py` packs, verifies and dumps it, and
+  the website's packer is an independent second writer of the same bytes. The
+  arrangement is `tests/unit/t_wab.py`'s over a `.WAB`, one format along.
+
+### 88.2 The catalog — `catalog.bin`, format version 1
+
+Little-endian throughout, fixed offsets, so the 8088 reads with `mov` and
+never parses. Every text field is ASCII 0x20..0x7E, NUL-padded to its width,
+and the **writer** refuses anything else. The **reader** refuses on any check
+below with `Catalog not understood` and leaves the window usable.
+
+```
+HEADER, 32 bytes
+ +0   4   'WIRE'
+ +4   1   format version, 1
+ +5   1   record size in 16-byte units, 16 (= 256)
+ +6   2   record count N (1..255)
+ +8   2   header size, 32
+ +10  2   sidecar table offset from file start
+ +12  2   sidecar table entry count S
+ +14  8   catalog date 'YYYYMMDD'
+ +22  10  zero
+
+RECORD i, 256 bytes at 32 + 256*i
+ +0   8   stem, uppercase A-Z 0-9 _ -, space-padded ('HELLO   ');
+          the package file is /wire/pkg/<STEM>.O88 and the picture
+          /wire/pic/<STEM>.PIC
+ +8   24  title (<= 23 chars)
+ +32  1   kind: 0 program, 1 game, 2 utility, 3 document, 4 update,
+          5 shared file. Only 0..2 are used today. A reader shows a kind it
+          does not know as a program.
+ +33  1   tier: 0 = 8088/8086, 1 = 286, 2 = 386, 3 = 486+ - the machine this
+          program is RECOMMENDED for. The filter 'X' shows tier <= X.
+ +34  1   flags
+          bit 0  WF_DISK    needs its files on a disk: an overlay, parts
+                            (header flags bit 2) or sidecars. Load Program is
+                            refused with that reason; Add to Disk works.
+          bit 1  WF_PIC     /wire/pic/<STEM>.PIC exists
+          bit 2  WF_NEW     new on the Wire
+          bit 3  WF_FLOPPY  only as a floppy image from os8088.com - its files
+                            live in a folder tree the Wire does not create
+                            (RunCPM's A/0/). Both actions refused.
+ +35  1   sidecar count n, 0..8
+ +36  2   first sidecar index into the table (meaningless when n = 0)
+ +38  4   size of <STEM>.O88 in bytes
+ +42  4   total bytes, the .O88 plus every sidecar - Add to Disk refuses
+          before touching the disk when OSAPI_FILE_DFREE is short
+ +46  2   zero
+ +48  64  icon: 16 mask words then 16 data words, bit 15 = leftmost - the
+          package's own OS88_ICON16 block (file offset 32..95 when its header
+          flags bit 0 is set) or the site's generic program icon. Drawn per
+          list row with OSAPI_ICON_DRAW.
+ +112 140 description: 5 lines x 28 bytes, each NUL-terminated within its 28
+          (<= 27 chars). PRE-WRAPPED BY THE WRITER; the machine wraps nothing.
+          Unused lines are all-NUL.
+ +252 4   zero
+
+SIDECAR TABLE entry j, 16 bytes at (header +10) + 16*j
+ +0   12  NUL-terminated 8.3 name, uppercase ('WEAVE.OVL') - fetched from
+          /wire/pkg/<NAME>, written beside the .O88
+ +12  4   size in bytes
+```
+
+The offsets are `WC_*` equs in `apps/thewire/wcat.inc` and are **mirrored in
+`tools/os88wire.py`**; `tests/unit/t_wire.py` compares the two files and
+fails the fast tier when they disagree, which is `t_mirror`'s arrangement for
+a constant that lives on both sides of a wire.
+
+**The generic icon is the kernel's own `ico_app16`** — a diamond outline over
+a solid diamond mask, which is what the Disk window already draws for a
+package with no `OS88_ICON16`, so a program looks the same in the Wire's list
+as it does in the folder it comes from. `tools/os88wire.py` carries the rows
+baked in rather than parsed, because the website's packer runs in a checkout
+with no kernel in it, and `t_wire` compares that copy against
+`kernel/icons.inc`'s own `dw` rows.
+
+**What `--verify --pkgdir` cross-checks, and the one thing it deliberately
+does not.** Given the *published* `/wire/pkg/` — where a file is named
+`<STEM>.O88` — it checks every `WC_SIZE` and every sidecar size against the
+file on disk, that every sidecar named in the table is actually there, and
+that `WC_TOTAL` is the `.O88` plus its sidecars to the byte. It checks a
+record's icon **exactly** when the package declares one (header flags bit 0);
+when the package declares none, the record carries a generic and *which*
+generic is the writer's choice by the sentence above — two independent writers
+may pick differently and both be right. What it still refuses there is the one
+thing that is a fault either way: an icon with no pixels in it, or one whose
+data rows are all zero, both of which `icon_draw_x` accepts and draws as
+nothing. That distinction is not hypothetical — the first spelling of this
+verifier compared the generic too, and failed the site's real catalog on the
+three packages that have no icon of their own.
+
+**Limits the reader enforces**, each a refusal and not a crash: the whole file
+`<= WIRE_CATMAX` = 16,384 bytes (the claim is made before `Content-Length` is
+known); the magic, the version and the two size fields exactly as above;
+`N >= 1`; the record array and the sidecar table both inside the file; every
+sidecar index in range; every file size `<= WIRE_FILEMAX` = 64,512 (63 KB —
+one claim, one `OSAPI_FILE_WRITE`). A larger file gets `WF_FLOPPY` from the
+writer, which is the site's job and the verifier's check.
+
+`WIRE_CATMAX` bounds `N` well below the format's 255: 16,384 bytes is 63
+records with no sidecar table at all, and the record array may not run past
+the end of the file. That is also what keeps `32 + 256*i` inside 16 bits,
+which the reader's addressing depends on.
+
+### 88.3 The picture — `<STEM>.PIC`
+
+**1,024 bytes, raw: 128 x 64 pixels, 1 bit per pixel**, 16 bytes a row, bit 7
+of a byte its leftmost pixel, **1 = ink (black)**, 0 = paper. No header; the
+reader refuses any other `Content-Length`. It is a 1:1 **crop** of a real
+screenshot, never a scaled one — a scaled 16-colour UI is mush and a crop is
+the program.
+
+**The reader inverts the 1,024 bytes as they arrive**, and that one `not` per
+byte is what makes the draw free of adapter branches. `OSAPI_GFX_BLIT1` takes
+a band in *final screen polarity* where a set bit is a LIT pixel, and its
+default pen is `CWHITE` ink on `CBLACK` paper (§5.4.2.2) — while on a 1bpp
+adapter the pen is ignored and a set bit is simply white. Inverted, the file's
+paper bits are the set ones on both, so the same band is correct on a VGA, a
+Hercules and a CGA with no pen call and no second buffer.
+
+`OSAPI_GFX_BLIT1` first: x and width must be multiples of 8, which 128 is, and
+the picture's x is a multiple of 8 from a content origin §11.94 has already
+snapped. When it answers CF = 1 — a `kern_small` kernel, which carries the
+slot and not the body — the fallback expands **one row at a time** into a
+64-byte scratch and calls `OSAPI_GFX_BLIT4` with `DX = 1`. Whole-picture
+`BLIT4` would want 4,096 bytes of packed 4bpp; a row wants 64.
+
+### 88.4 The HTTP profile
+
+Request, exactly:
+
+```
+GET /wire/<file> HTTP/1.0\r\n
+Host: <host>\r\n
+User-Agent: os8088 Wire 1.0\r\n
+Connection: close\r\n
+\r\n
+```
+
+The reply is read a header LINE at a time into a 32-byte buffer rather than
+through the browser's four-state CR-LF-CR-LF machine (§71): the Wire needs
+`Content-Length` and the browser does not, so it has to look at a header's
+contents anyway and a line buffer is both smaller and the thing that makes
+the length readable. A line longer than the buffer is clipped, which cannot
+lose a length header. The status code is columns 9..11 of line 0 — `br_hdrb`'s
+scan, done once on a complete line.
+
+- **`Content-Length` is required.** It bounds the body, drives the progress
+  figure, and its absence is `The Wire did not answer (0)`. A body longer than
+  its claim is truncated and the transfer marked failed.
+- **No chunked decoding, no redirects, no keep-alive.** A 3xx or a 4xx is
+  reported as `The Wire did not answer (NNN)` with the body discarded.
+- One socket at a time. `NETE_BUSY` is an ordinary answer and is retried next
+  pass, never a failure (`drivers/net/netpkg.inc`).
+- Everything off the wire is hostile: the only thing trusted about the server
+  is how many bytes it just handed over, and that is bounded by the capacity
+  passed to `NETV_RECV`.
+
+**Host, port and path prefix come from `WIRE.CFG`** (§19.9), read once at
+launch: one line, `host[:port][/prefix/]`, default when the file is absent
+`os8088.com:80/wire/`. The name goes to `NETV_OPEN` as is — resolution is the
+driver's. The gate's disk carries `10.0.2.2:8092/wire/`.
+
+### 88.5 The task division, and the one byte between the halves
+
+§71.1's division, and it is forced rather than chosen: **a worker may not call
+`OSAPI_MEM_*`, the file slots or the dialog** (§20.6 rule 7), and every
+`NETV_*` verb is non-blocking.
+
+| | does |
+|---|---|
+| the **UI task** | claims, sets the request, and is the only caller of `OSAPI_MEM_CLAIM`/`_FREE`, `OSAPI_FILE_WRITE`, `OSAPI_FILE_DLG` and `OSAPI_PKG_RUN` |
+| the **worker** (one, `OS88_STACK_192`) | opens, polls `NETV_STATUS`, sends, drains into a 1,024-byte staging buffer **in its own segment**, copies into the claim, and paints the status cell under the lock with §20.6 rule 5's obscured and clip tests |
+
+The handshake is `apps/ftpd`'s one byte (§77): the worker writes `wr_wkind`
+and everything else the handler will read, and writes `wr_wake` **last**; the
+handler banks the code, clears the flag, and only then acts. Clearing before
+acting rather than after is not a departure from the ftpd shape — acting is
+what starts the *next* request, and a flag cleared after that would clear the
+new request's wake.
+
+**And a generation counter checked INSIDE the store loop**, which is §71.11's
+lesson written out. `wr_gen` is bumped by the UI task on every abort and every
+new request; the worker banks it at the top of each pass and re-reads it per
+byte in the drain loop. Without the per-byte check a selection change landing
+mid-picture writes the rest of that chunk into a buffer the UI task has
+already freed — the check at the top of the pass is true when the pass starts
+and stale 512 stores later.
+
+### 88.6 The window
+
+Title `The Wire`, content **384 px wide**, height from the adapter through
+`OS88_PREFER` (§11.100.1): **386 x 243** on VGA, EGA and Hercules, **386 x
+147** on CGA, with `OSAPI_WM_MINSIZE` at the CGA size so no display may cut
+the layout below it.
+
+```
+ Show: (*) All  ( ) 8088/8086  ( ) 286  ( ) 386  ( ) 486+
+ +--------------+ +-----------------------------------+
+ | [i] Browser  | | [    128 x 64 picture, or the    ] |
+ | [i] Calculato| | [    words 'No picture'          ] |
+ | [i] Hello   ^| | Browser                           |
+ | [i] Mineswee#| | 8088/8086     15K                 |
+ | [i] Paint   v| | A web browser for the IBM PC.     |
+ | [i] Solitair| | Plain HTTP, no TLS.               |
+ |              | | [         Load Program          ] |
+ |              | | [        Add to Disk...         ] |
+ +--------------+ +-----------------------------------+
+ Available on the Wire: 31 programs
+```
+
+Everything below is content-relative; the content origin is 8-aligned by
+§11.94, so every text pen and the picture's x are 8-aligned too and take
+`font_run`'s single-store path and `gfx_blit1`'s only path.
+
+| element | where |
+|---|---|
+| filter radios | y 2..13, five `os88ui_glyph` rings at x 48, 96, 192, 240, 288, `Show:` at x 0 |
+| list pane | x 0..143, y 18..`y2`; rows 16 px from y 19, icon at x 3, one `OSAPI_FONT_RUN` of **13 cells** per row at x 24 |
+| scroll bar | x 129..142, the same y extent — `os88ui_sbar` with `OS88UI_SBDRAG` |
+| detail pane | x 152..383, same y extent; its text pen at x 160 and the picture at x 208 |
+| buttons | x 156..379, **stacked**, `y2-37..y2-21` and `y2-19..y2-3` |
+| status cell | y `ch-10`, one 48-character space-padded `OSAPI_FONT_RUN` across the full 384 |
+
+**THE DETAIL PANE IS SIZED FROM THE CATALOG FORMAT AND THE LIST GETS WHAT IS
+LEFT**, which is the second place the shipped window departs from
+`docs/WIRE-PLAN.md`'s mock. That mock starts the detail pane at 176 — 208 px —
+and draws a 27-column description in it, and 27 cells is 216 px: the first
+build ran the last two words of every description off the right-hand edge and
+into the frame. §88.2's 27 is the *format*, which the website implements too,
+so what moved is the pane. A pen at 160 ends at 375 with the frame at 383,
+eight pixels clear, and `WR_DESCC` is derived from those two edges so that
+moving either moves the ceiling with it. `wrtxt.inc`'s `WR_PANE` macro asserts
+every hand-written pane line against it at **assembly time** — the pane's own
+sentences do not come through the writer's wrapper, and the no-driver advice
+was thirty characters wide in the one state whose whole point is that a person
+can read it.
+
+What it costs is three cells off a list row, 13 rather than 16, and that is
+the right side to lose them on: a list row is an *index* and the detail pane
+is where the title is shown in full.
+
+`y2 = 18 + PH - 1` and `PH = ch - 29`, so the visible row count is
+`(PH - 2) / 16`: **12 rows on VGA and Hercules, 6 on CGA**, which is the
+floor `docs/WIRE-PLAN.md` §7 asks for.
+
+**The buttons are stacked and not side by side**, and the arithmetic is why:
+`Load Program` and `Add to Disk...` are 12 and 14 cells, so two standard
+buttons want 110 + 6 + 126 = 242 px against a 208-px detail pane. The captions
+are brand and are not shortened (`docs/WIRE-PLAN.md`'s table), so the column
+is what fits.
+
+**The CGA drops the PICTURE, not the description**, and this is the one place
+the shipped window differs from the plan's mock. A 108-row detail pane cannot
+hold a 64-row picture, a title, a tier line and any description at all: with
+the picture, the tier line already runs into the top button. Between a picture
+and the sentences that say what the program is, the sentences are what a
+person acts on. The test is the pane's own height — `>= 170 rows` draws the
+picture — so it is the *screen* that decides and not a `VID_*` compare, which
+is §39's rule.
+
+### 88.7 The two buttons, one predicate, three consumers
+
+§47. One routine answers, for the selected record, "may Load?" / "may Add?"
+with a **reason string**, and three call sites read it: the painter greys on
+it, the click refuses on it and says the reason in the status cell, and the
+File menu's items carry a `MENU_DIS` prefix from it.
+
+| reason | when |
+|---|---|
+| `Select a program first` | nothing is selected |
+| `The catalog is not loaded` | no catalog, or it was refused |
+| `A transfer is already running` | the state machine is in flight |
+| `Needs its files on a disk - use Add to Disk` | `WF_DISK`, Load only |
+| `Available as a floppy from os8088.com` | `WF_FLOPPY`, both |
+| `Needs NNNK free on the disk` | the Save completion's `OSAPI_FILE_DFREE` |
+
+The last one is not in the painter's answer and cannot be: it is knowable
+only once a *volume and folder* have been chosen, which is what §38.6's
+completion is. It is a refusal in the completion, before the first byte moves,
+and `OSAPI_FILE_DFREE` is asked **once** there rather than per file — §77.40's
+finding, where asking per chunk was 44% of an upload. **That call WRITES BX**
+(it is the sectors-per-cluster output), so the figure it is compared against
+is banked first: held in BX it is compared against 1, 2, 4 or 8 and the check
+never fires — on exactly the nearly-full disk it exists for.
+
+**The painter records its own answer in `[wr_grey]`**, bit 0 for Load Program
+and bit 1 for Add to Disk, written where the greying is drawn. That is §13.8's
+rule ("keep which control is down in a variable your `W_PAINT` reads") rather
+than an instrument, and it is what makes §47 assertable by a gate at all: a
+greyed caption on a VGA is `CDGRAY` and on a 1bpp adapter a checkerboard, and
+neither is a thing a screendump comparison can state cleanly. `tests/thewire.py`
+reads the byte.
+
+The predicate keeps the question in **BL and not AH**, and that is not a
+style: the body does `mov ax, [wr_sel]` on its way to the record, so a
+question in AH does not survive it. In AH, every Add to Disk came back with
+Load Program's answer — greying the one button a `WF_DISK` record exists to be
+used with.
+
+### 88.8 What each action does
+
+- **Load Program** — claim the exact size, fetch `/wire/pkg/<STEM>.O88`, and
+  on the wake call `OSAPI_PKG_RUN` with `ES:SI` = the claim, `DX:CX` = the
+  length and `DI` = `<STEM>.O88`; free the claim; status `Loaded <title> from
+  the Wire` and a toast. An `LD_*` refusal is said in the status cell in
+  words. The new instance's current directory is the Wire's (§19.2.1), which
+  is why a `WF_DISK` record is refused rather than launched into a folder
+  where its overlay is not.
+- **Add to Disk...** — `OSAPI_FILE_DLG` Save with `<STEM>.O88` as the default
+  name. The dialog moves the instance's directory to the chosen folder, so
+  every later write lands there. The completion checks free space and then
+  runs the chain: the `.O88` under the chosen name, then each sidecar under
+  its own, each one claim -> fetch -> the wake writes it with
+  `OSAPI_FILE_WRITE` -> free -> next. Status `Adding <title>... N of M
+  files`; a toast on the last. **A failure mid-chain leaves what was
+  written** and says which file failed — there is no undo on this system
+  (§22).
+- **A selection change** fetches the record's `.PIC` when it has `WF_PIC` and
+  the worker is idle, and repaints the detail pane and the two rows whose
+  selection changed and nothing else. A second selection change while a
+  picture is in flight bumps the generation and the worker drops the bytes.
+- **Refresh** re-fetches the catalog. **About** is `OSAPI_ABOUT_SET` (§12.2):
+  `The Wire`, `Online Software Library`, `Software by wire.`, the catalog
+  date, `os8088.com`.
+
+### 88.9 No driver, no link
+
+`net_find` answering CF = 1, or `NETV_STATE` without `NSTF_SOCK`, is an
+ordinary state and **never a modal alert**: the window opens with the status
+`Wire connection unavailable`, the list empty, both buttons greyed, and the
+detail pane carrying three lines a person can act on —
+
+```
+The Wire needs ETHER.DRV and a
+network card.
+Control Panel > Drivers turns it on.
+Or browse it at os8088.com/wire
+```
+
+Refresh retries. That is §47 rule 3 at the scale of a whole window: the grey
+says the buttons will refuse and the pane says what to do about it.
+
+### 88.10 The numbers
+
+Measured on this tree. The times are PERFORMANCE.md Part 2's XT figures
+applied to the calls each path makes — this is an 8088 cost model and not a
+stopwatch, because the machine that can hold a stopwatch to it is a 4.77 MHz
+one somebody is holding and the only harness for the network half is QEMU
+(§88.12).
+
+**The picture, 128 × 64 (§88.3).** One `OSAPI_GFX_BLIT1`: one drawing call, so
+**~756 µs of fixed cost** plus 64 rows × 16 bytes of `rep movsb` per plane —
+the traffic `OSAPI_GFX_SCROLL` moves for the same area, and the floor a 1bpp
+block has on this card. The `kern_small` fallback is **64 `OSAPI_GFX_BLIT4`
+calls**, one a row, at ~756 µs of wrapper each: **~48 ms**, plus the nibble
+expansion. Sixty-four times the fixed cost is what a whole-picture `BLIT4`
+would have avoided, and it would have wanted 4,096 bytes of bss to do it on a
+kernel that is *the* memory-constrained one. That is the trade, stated: the
+fallback is slow where the slot is refused, and it is refused on one kernel.
+
+**A list row.** One `OSAPI_GFX_FILL`, one `OSAPI_ICON_DRAW`, one
+`OSAPI_FONT_RUN` — **three drawing calls, ~2.3 ms**. A full twelve-row list is
+36 calls, ~27 ms, and it is drawn on a filter change, a scroll or a `W_PAINT`.
+A **selection change draws two rows and the detail pane** and nothing else,
+which is PERFORMANCE.md rule 1 written into §88.8.
+
+**The status cell.** One opaque `OSAPI_FONT_RUN` of 48 cells at an 8-aligned
+pen: `font_run`'s single-store path, one store a row a cell. The worker
+redraws it **when the KILOBYTE figure changes** and not per `NETV_RECV` — a
+40KB package is 40 repaints rather than the ~80 its chunks would give, and
+what the cell shows is kilobytes, so it is redrawn exactly when the picture
+changes.
+
+### 88.11 Sizes, and the 360KB disk
+
+The 360KB system disk is the binding one: its cluster is 1,024 bytes, and
+`docs/WIRE-PLAN.md` §7 sized the package against what was left on it.
+Measured with `python3 tools/os88disk.py --verify`:
+
+| | |
+|---|---|
+| `THEWIRE.O88` image | **10,174 bytes** (the ceiling is 12,288) |
+| bss | **2,997 bytes** |
+| 360KB system disk before | 354 clusters, 337 in use, **17 free** |
+| 360KB system disk after | 354 clusters, 347 in use, **7 free** |
+
+Seven clusters is about 7 KB, which is the margin the ceiling was chosen for.
+**The enforcement is `os88disk.py` refusing an image that does not fit**, not
+this table: a cluster count in prose goes stale the next time anything ships,
+and the figure that used to sit in `Makefile`'s core-package comment (60 free
+clusters, describing the disk before Browser and Telnet went on it) is what
+that looks like.
+
+The bss is a 1,024-byte receive buffer, the 1,024-byte picture, a 64-byte
+`BLIT4` scratch row, the request and header buffers, the two message buffers
+and the state. **The receive buffer is in the package's own segment and has to
+be**: `NETV_RECV` takes `ES:DI` and `OSAPI_DRV_CALL` puts the *caller's*
+segment in ES, so a staging buffer in a heap claim is written into our own
+image instead — which reads as memory corruption rather than as a wrong
+segment register, because the bytes really are ours (§77.10).
+
+### 88.12 The tests
+
+| row | tier | what |
+|---|---|---|
+| `tests/unit/t_wire.py` | fast | pack -> verify -> dump round trip on a fixture built from `build/hello.o88` and `build/mines.o88`; the writer's refusals; and the `WC_*`/`WIRE_*` equs in `wcat.inc` compared against `tools/os88wire.py`'s |
+| `tests/thewire.py` (`make thewiretest`) | soak | QEMU with an NE2000 and a host HTTP server on 8092. Seven assertions: the catalog loads and `wr_catck` accepts it, the host saw `GET /wire/catalog.bin HTTP/1.0` with a `Host:` and a `User-Agent:`, the list lists three rows, the `8088/8086` filter cuts it to two, a tier-3 `WF_DISK` record greys Load Program and **not** Add to Disk, the 128 × 64 picture on the glass matches the served `.PIC` **pixel for pixel**, and Add to Disk writes the `.O88` and its sidecar byte-identical — read back on the host by a FAT12 reader in that file after `quit` |
+
+**The picture assertion is the one nothing else can make.** §88.3 stores the
+band inverted so that one `gfx_blit1` is right on all three adapters, and an
+inversion that went the other way draws a perfectly plausible picture in
+negative: every gate that counts lit pixels, diffs two frames or looks for a
+block of the right size passes it. So the fixture's pattern is deliberately
+asymmetric — diagonal stripes with a solid block in one corner — and the
+comparison is per pixel against the file's own bits. All 8,192 wrong is the
+polarity; a few hundred is the block landing at the wrong x or y.
+
+**`tests/thewire.py` is QEMU's and cannot be MartyPC's**: MartyPC has no
+network card of any kind, so `ETHER.DRV` cannot be hosted on it at all
+(§72.9). Every assertion in it is about behaviour and none about speed,
+because the machine under it is not an 8088.

@@ -308,6 +308,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | TEXPAD | `apps/texpad/texpad.asm` | §69 |
 | TRACKER | `apps/tracker/tracker.asm` | §45 |
 | TaskMgr | `apps/taskmgr/taskmgr.asm` | §28 |
+| The Wire | `apps/thewire/thewire.asm` | §88 |
 | WEAVE | `apps/weave/weave.asm` | `docs/WEAVE-SPEC.md` |
 | WIRE | `apps/wire/wire.asm` | §78 |
 
@@ -403,6 +404,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 85 | TANK ATTACK — a wireframe tank duel in a foreign mode (`apps/tank/`) |
 | 86 | AUDIO PLAYER — background music from a streamed WAV (`apps/audio/`) |
 | 87 | Hibernate — the machine to a file on the hard disk, and back (`kernel/hiber.inc`, `HIBER.DRV`) |
+| 88 | THE WIRE — the online software library (`apps/thewire/thewire.asm`) |
 
 ## docs/
 

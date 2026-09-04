@@ -2333,7 +2333,24 @@ DRIVERS += $(BUILD)/vmmouse.drv
 # non-default image rules override per target - which is also why DRIVERS is a
 # recursive `=` and not a `:=`.
 DRIVERS += $(KMODS)
-SYSAPPS := $(BUILD)/taskmgr.o88
+# ...and THE WIRE (SPEC.md 88) beside it, which is a SYSAPPS package and not
+# one of $(CORE_TOOLS) below. The distinction is not size: a core package is a
+# second copy of something that also rides the apps disk, in the folder it
+# occupies over there; the Wire is in SYSTEM/, it is launched BY NAME by the
+# kernel (the desktop zone, SPEC.md 26), and it is on all FOUR geometries where
+# the core six are on three. It is also the only copy - a program whose whole
+# subject is fetching software off the network belongs on the disk the machine
+# booted from, and nowhere else.
+#
+# **THE 360KB SYSTEM DISK IS THE BINDING ONE**, and the arithmetic is
+# re-stated here because the comment two hundred lines below still says the
+# figure it had when Browser and Telnet went on (see there). Measured with
+# `python3 tools/os88disk.py --verify build/os8088-360.img`: 354 clusters of
+# 1,024 bytes, 337 in use before this and 17 free. THEWIRE.O88 is ~10.2KB, so
+# 10 clusters, and what is left is 7 - about 7KB. SPEC.md 88.11 keeps the
+# package under 12,288 bytes for exactly that margin, and os88disk.py refusing
+# the image is the enforcement rather than this comment.
+SYSAPPS := $(BUILD)/taskmgr.o88 $(BUILD)/thewire.o88
 SYSAPPSARGS := $(addprefix SYSTEM:,$(SYSAPPS))
 
 # --- the CORE PACKAGES (SPEC.md 24.3) ----------------------------------------
@@ -2371,9 +2388,16 @@ SYSAPPSARGS := $(addprefix SYSTEM:,$(SYSAPPS))
 # (SPEC.md 72.9, 62), and the disk that carries the driver ought to carry the
 # two programs that use it - "the link is configured and there is nothing on
 # this disk that can speak over it" is a working machine that looks broken.
-# Telnet is 4KB and Browser 14KB against this disk's 60 free clusters, which
-# is what makes the pair affordable where Tracker's 30KB and the module it
-# exists to play are not.
+# Telnet is 4KB and Browser 14KB against this disk's free clusters, which is
+# what makes the pair affordable where Tracker's 30KB and the module it exists
+# to play are not. **THE FIGURE THAT USED TO BE HERE WAS 60 AND IS STALE** -
+# it was true of the disk before those two went on it. Measured rather than
+# remembered, with `python3 tools/os88disk.py --verify build/os8088-360.img`:
+# 354 clusters of 1,024 bytes, 337 in use and 17 free before the Wire
+# (SPEC.md 88.11), 7 after it. A cluster count in a comment is a number that
+# goes stale the next time anything ships, so the enforcement is os88disk.py
+# refusing an image that does not fit, and this is the arithmetic behind the
+# decision rather than a live figure.
 #
 # NOTHING IN THE KERNEL CHANGED FOR THIS and nothing had to: every mechanism
 # it uses already covers "some other volume has this program on it", which is
@@ -3048,6 +3072,52 @@ vmmousetest: $(BUILD)/vmmouse.img
 	@echo "vmmousetest: build/vmmouse.img - VMMOUSE.DRV already wanted."
 	@echo "             Run it with: python3 tests/vmmouse.py"
 
+# THEWIRETEST: the Wire's gate disks (SPEC.md 88.12), ethertest's shape and
+# for ethertest's reason - the driver is asked for by a SYSTEM.CFG that is ON
+# THE DISK, so the card is up and DHCP has bound before the first paint and
+# tests/thewire.py reads state instead of driving the Control Panel.
+#
+# The second file is what makes it a WIRE gate rather than an Ethernet one:
+# SYSTEM/APPDATA/WIRE.CFG (SPEC.md 19.9) names the HOST's own HTTP server
+# instead of os8088.com, so the machine fetches a fixture catalog the test
+# built and every assertion is about bytes the test chose. Port 8092 rather
+# than tests/ethernet.py's 8090, deliberately: the two gates may be run side
+# by side and a bound port is a gate that reads the OTHER one's answers.
+#
+# The B: floppy is a SCRATCH disk of its own and not the apps image. Add to
+# Disk WRITES, and QEMU mounts a floppy writable - so pointing it at
+# build/apps.img would leave the shipped image dirty and the next `make test`
+# testing a disk this gate had edited.
+$(BUILD)/wirecfg/WIRE.CFG: | $(BUILD)
+	@mkdir -p $(BUILD)/wirecfg
+	printf '10.0.2.2:8092/wire/\n' > $@
+
+$(BUILD)/thewire360.img: $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/system.cfg $(BUILD)/wirecfg/WIRE.CFG tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin \
+		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/system.cfg SYSTEM/APPDATA:$(BUILD)/wirecfg/WIRE.CFG
+
+# THEWIRE.O88 IS ON THE DATA DISK TOO, in its ROOT, and its own WIRE.CFG with
+# it. That is not where it ships (SPEC.md 24.3 puts it in SYSTEM/ on the
+# SYSTEM disk, which build/thewire360.img above carries) - it is where a test
+# can double-click it without navigating two folders, and, more to the point,
+# where launching it puts the INSTANCE'S CURRENT DIRECTORY (SPEC.md 19.2.1):
+# B: root, which is where the Save dialog then opens and where Add to Disk
+# then writes. The config goes with it because SPEC.md 19.9 reads APPDATA off
+# the volume the program was LAUNCHED from, which is this one.
+$(BUILD)/thewiredata.img: $(BUILD)/thewire.o88 $(BUILD)/wirecfg/WIRE.CFG tools/os88disk.py | $(BUILD)
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		$(BUILD)/thewire.o88 SYSTEM/APPDATA:$(BUILD)/wirecfg/WIRE.CFG \
+		--folder MEDIA
+
+.PHONY: thewiretest
+thewiretest: $(BUILD)/thewire360.img $(BUILD)/thewiredata.img
+	@echo "thewiretest: build/thewire360.img - ETHER.DRV already wanted, and"
+	@echo "             SYSTEM/APPDATA/WIRE.CFG naming 10.0.2.2:8092/wire/."
+	@echo "             build/thewiredata.img is the scratch B: it writes to."
+	@echo "             Run it with: python3 tests/thewire.py"
+
 .PHONY: ethertest
 ethertest: $(BUILD)/ether360.img
 	@echo "ethertest: build/ether360.img - the Ethernet driver already wanted."
@@ -3494,6 +3564,22 @@ $(BUILD)/telnet.bin: apps/telnet/telnet.asm apps/telnet/tetxt.inc \
 
 $(BUILD)/telnet.o88: $(BUILD)/telnet.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/telnet.bin -o $@
+
+# THE WIRE (SPEC.md 88) - Telnet's include set for Telnet's reason: netpkg.inc
+# is the DRIVER's own ABI header and both ends include it, so the two cannot
+# drift (SPEC.md 20.11). wcat.inc is the catalog format, and its every equ is
+# mirrored in tools/os88wire.py - `tests/unit/t_wire.py` compares the two in
+# the fast tier, which is what stops a format that lives on both sides of a
+# wire from being typed out twice and drifting once.
+$(BUILD)/thewire.bin: apps/thewire/thewire.asm apps/thewire/wrhttp.inc \
+                      apps/thewire/wrtxt.inc apps/thewire/wcat.inc \
+                      apps/os88api.inc apps/os88ui.inc apps/os88sock.inc \
+                      drivers/net/netpkg.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/thewire/ -I drivers/net/ -o $@ apps/thewire/thewire.asm
+	@echo "thewire: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/thewire.o88: $(BUILD)/thewire.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/thewire.bin -o $@
 
 # THE FTP SERVER (SPEC.md 77) - docs/NET-STACK-PLAN.md stage F, and the first
 # thing here that SERVES. Same include set as Telnet's for the same reason:
@@ -6491,9 +6577,14 @@ small: $(BUILD)/small360.img $(BUILD)/small.img
 # read (SPEC.md 42.6 is the worked example). A package that cannot reach its
 # DRIVER cannot say anything at all.
 #
-#   browser, ftpd, telnet   ETHER.DRV. The NIC is not in $(SMALLDRIVERS) and
-#                           SPEC.md 72's whole surface is driver verbs, so
-#                           there is no socket to refuse on
+#   browser, ftpd, telnet,  ETHER.DRV. The NIC is not in $(SMALLDRIVERS) and
+#   thewire                 SPEC.md 72's whole surface is driver verbs, so
+#                           there is no socket to refuse on. The Wire is the
+#                           odd one: it rides the SYSTEM disk rather than the
+#                           apps disk (SPEC.md 24.3), so what drops it is
+#                           $(SMALLSYSAPPS) below rather than the apps lists -
+#                           and it is named HERE so that one list stays the
+#                           authority for "kern_small cannot run this at all"
 #   modplug, recorder,      SOUND.DRV, which a 128-256KB machine has nothing
 #   tracker, audio          to spare for - the same judgement that took
 #                           RAMDISK.DRV and RAMPAGE.DRV out of $(SMALLDRIVERS)
@@ -6505,9 +6596,16 @@ small: $(BUILD)/small360.img $(BUILD)/small.img
 # 99,749 bytes of a 360KB floppy - 27% of it - for eight programs that could
 # not have started (SPEC.md 24.5 has the same figures, re-measured together).
 SMALLOMIT := $(BUILD)/browser.o88 $(BUILD)/ftpd.o88 $(BUILD)/telnet.o88 \
+             $(BUILD)/thewire.o88 \
              $(BUILD)/modplug.o88 $(BUILD)/recorder.o88 $(BUILD)/tracker.o88 \
              $(BUILD)/audio.o88
 SMALLOMIT_GAMES := $(BUILD)/tank.o88
+
+# ...and the SYSTEM disk's half of that list, DERIVED from it rather than
+# written a second time: whatever in $(SYSAPPS) kern_small cannot run comes
+# off the small system disks, and today that is the Wire alone.
+SMALLSYSAPPS := $(filter-out $(SMALLOMIT),$(SYSAPPS))
+SMALLSYSAPPSARGS := $(addprefix SYSTEM:,$(SMALLSYSAPPS))
 
 # ...and DEMO.HTM with the browser, for the same reason one step along: a .HTM
 # is openable by nothing else on the machine (SPEC.md 71).
@@ -6596,13 +6694,13 @@ $(BUILD)/small360.img: KMODDIR := $(SMALLDIR)
 # fall out of $(BUILD)/kernel.bin, so any kernel source change makes them
 # newer than the disk. And a module the sub-make somehow failed to write is
 # LOUD rather than silent - os88disk.py is handed the name and refuses.
-$(BUILD)/small360.img: $(SMALLDRIVERS) $(SYSAPPS) \
+$(BUILD)/small360.img: $(SMALLDRIVERS) $(SMALLSYSAPPS) \
                        $(SMALLCORE_TOOLS) $(SMALLCORE_GAMES) $(SYSDOC) \
                        tools/os88disk.py
 	@$(MAKE) BUILD=$(SMALLDIR) KERN_SMALL=1 $(SMALLDIR)/boot360.bin
 	python3 tools/os88disk.py --fatcap 2 -o $@ --size 360 \
 		--boot $(SMALLDIR)/boot360.bin --kernel $(SMALLDIR)/kernel.bin \
-		$(SMALLDRIVERS) $(SMALLMODS) $(SYSAPPSARGS) $(SMALLCOREARGS) \
+		$(SMALLDRIVERS) $(SMALLMODS) $(SMALLSYSAPPSARGS) $(SMALLCOREARGS) \
 		$(SYSDOC) $(MEDIAFOLDER)
 	@echo "small: $@ - kern_small on 360KB. Pair it with"
 	@echo "       build/smallapps360.img (\`make smallapps\`)"
@@ -6610,13 +6708,13 @@ $(BUILD)/small360.img: $(SMALLDRIVERS) $(SYSAPPS) \
 # its kernel is $(SMALLDIR)'s, so its modules are too
 $(BUILD)/small.img: KMODDIR := $(SMALLDIR)
 
-$(BUILD)/small.img: $(SMALLDRIVERS) $(SYSAPPS) \
+$(BUILD)/small.img: $(SMALLDRIVERS) $(SMALLSYSAPPS) \
                     $(SMALLCORE_TOOLS) $(SMALLCORE_GAMES) $(SYSDOC) \
                     tools/os88disk.py
 	@$(MAKE) BUILD=$(SMALLDIR) KERN_SMALL=1 $(SMALLDIR)/boot.bin
 	python3 tools/os88disk.py --fatcap 2 -o $@ --size 1440 \
 		--boot $(SMALLDIR)/boot.bin --kernel $(SMALLDIR)/kernel.bin \
-		$(SMALLDRIVERS) $(SMALLMODS) $(SYSAPPSARGS) $(SMALLCOREARGS) \
+		$(SMALLDRIVERS) $(SMALLMODS) $(SMALLSYSAPPSARGS) $(SMALLCOREARGS) \
 		$(SYSDOC) $(MEDIAFOLDER)
 
 # --- THE SMALL APPS DISK (SPEC.md 27.16) -------------------------------------

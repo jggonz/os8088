@@ -307,6 +307,17 @@ FAST = [
         "implementations written from WEAVE-SPEC that can disagree, and "
         "until the 8086 runtime lands this row is the disagreement's only "
         "audience"),
+    Row("wire", "fast", py("tests/unit/t_wire.py"), 1.5,
+        "the Wire's catalog format (SPEC.md 88.2), from both ends at once: "
+        "tools/os88wire.py packs a fixture out of build/hello.o88 and "
+        "build/mines.o88 and a reader written from the SPEC alone reads it "
+        "back, every refusal the writer owns is fed the input that breaks it, "
+        "and every WC_*/WIRE_* equ in apps/thewire/wcat.inc is compared "
+        "against the tool's. The mirror is the half that cannot be got by "
+        "reading either file - there is no linker here, so a half-applied "
+        "format change packs perfectly and the 8088 then reads a record at "
+        "the wrong offset (t_mirror's argument, for a pair of files it does "
+        "not cover)"),
     Row("lmpack", "fast", py("tests/unit/t_lmpack.py"), 6.5,
         "WEAVE-SPEC 11.1's byte-identity gate, host-side: LOOM's five "
         "SHIPPING compilers built with the host cc, packing every demo, "
@@ -517,6 +528,28 @@ FULL = [
         "(`make small`, into build/smallk/) because there is no capability "
         "to probe for and `all` never builds that kernel",
         needs=("marty",), serial=True, builds=True),
+    Row("thewire", "soak", py("tests/thewire.py"), 260.0,
+        "THE WIRE, end to end over a real card (SPEC.md 88.12): a host HTTP "
+        "server on 8092 serves a fixture catalog packed by tools/os88wire.py "
+        "out of build/hello.o88, build/mines.o88 and a tier-3 WF_DISK entry, "
+        "and the machine fetches it because `make thewiretest`'s "
+        "SYSTEM/APPDATA/WIRE.CFG says to. Six assertions: the catalog is "
+        "understood, the host saw the request it expected, the list is the "
+        "catalog, the 8088/8086 filter cuts three rows to two, the predicate "
+        "greys Load Program on a WF_DISK record and NOT Add to Disk, and Add "
+        "to Disk writes both files to B: byte-identical - read back on the "
+        "host by an independent FAT12 reader after `quit`. "
+        "**SOAK AND NOT FULL, and the tier's own rule is why**: this file's "
+        "header lists eight emulator rows as what ten minutes buys, and what "
+        "earns one is BREADTH PER SECOND. This is four minutes of boot, "
+        "clicks and a floppy write that can only fail for one package's "
+        "reasons - the definition of a soak row. It is also QEMU's and "
+        "cannot be MartyPC's: MartyPC has no network card of any kind, so "
+        "ETHER.DRV cannot be hosted on it at all (SPEC.md 72.9). It builds "
+        "its own two disks, and it DELETES them first - QEMU mounts B: "
+        "writable and the write assertion would otherwise find last run's "
+        "files already there",
+        needs=("qemu",), serial=True, builds=True),
     Row("stk0water", "soak", py("tests/stk0water.py"), 300.0,
         "how deep TASK 0's stack has actually been (SPEC.md 15.1). That "
         "section says `redo the fill probe before lowering either` and the "
