@@ -54,19 +54,16 @@
                                     ; two ends cannot drift (SPEC.md 20.11)
 %include "wcat.inc"                 ; the catalog format (SPEC.md 88.2)
 
-; --- OSAPI_PKG_RUN (SPEC.md 21.x) --------------------------------------------
-; The 158th slot, and the KERNEL branch owns the line in apps/os88api.inc.
-; This %ifndef is what lets the package half build and be reviewed before that
-; line lands; it can never DISAGREE with the SDK, because the SDK wins.
-%ifndef OSAPI_PKG_RUN
-%define OSAPI_PKG_RUN       KERNEL_SEG:0x04F8
-%endif
-%ifndef LD_EBAD
-LD_EBAD     equ 1
-LD_EBIG     equ 2
-LD_ENOMEM   equ 3
-LD_EABORT   equ 4
-%endif
+; OSAPI_PKG_RUN is apps/os88api.inc's (SPEC.md 21.5). While the two halves of
+; this feature were being built on separate branches there was an %ifndef here
+; that defined the slot and four LD_* codes locally, so the package half could
+; assemble and be reviewed before the kernel half landed. It is gone with the
+; merge, and the LD_* half of it was worth deleting on its own: the codes it
+; guessed (1..4) are not the ones the slot answers (2 the header is not a
+; package's or it carries PARTS, 3 too large, 4 the entry proc declined, 5 no
+; region or no instance record), so what it left behind was a set of names
+; nothing used and a reader could believe. wr_pkgrun prints the NUMBER and
+; cites SPEC.md 21.4, which is the list.
 
     OS88_HEADER 'The Wire', wr_entry, OS88_F_ICON, OS88_STACK_192
                                 ; **OS88_STACK_192, ARGUED THE WAY
