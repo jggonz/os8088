@@ -31449,6 +31449,46 @@ just proved equal — parts being refused above.
 kept in `ES:SI`, because `ld_alloc`'s chain reaches `mem_compact` and a
 package's relocation procs and no register survives that by contract.
 
+#### 21.5.1 The copy reads every kernel word BEFORE it moves DS
+
+`[ld_msrc]` is a kernel `.bss` offset and the copy needs it in SI, so the
+order of two instructions is the whole of this section:
+
+```
+    mov si, [ld_msrc]           ; through the KERNEL's DS, while it is still
+    push ds                     ; the kernel's
+    mov ds, [ld_msrc+2]         ; ...and only now the source segment
+    rep movsb
+```
+
+Written the other way round — the `mov ds` first — the `mov si` reads
+`[ld_msrc]` **out of the caller's segment**, at a kernel `.bss` offset that
+means nothing there, and the copy then runs from `caller:<whatever is there>`
+instead of `caller:<the image>`. Nothing refuses it: `ld_check_hdr` ran BEFORE
+the copy, on the bytes the caller actually named, so the header was valid; the
+region is filled with something else; and step 8 far-calls a `PKG_DISP` that
+is not a dispatcher. The machine ends at **CS=0000 IP=0003, executing the
+interrupt vector table**, and one run painted a third of the framebuffer.
+
+**It was intermittent, and that is what made it expensive.** `ld_msrc`'s
+offset is past the end of a small package's image and bss, so the stray read
+lands in whatever the HEAP has next to the caller's region — and the same
+fixture on the same build wedged or worked according to whether a Disk window
+was open, because a listing claim is what sits there. Six runs differing only
+in what had happened before the call: nothing, works; a dialog opened and
+cancelled, works; a Disk window opened and closed, works; a Disk window left
+open, wedge. That reads as a heap defect, and it was two instructions in the
+wrong order.
+
+**The gate that missed it and the gate that catches it.** `tests/pkgrun.py`
+passed throughout, because its test package handed the slot `SI = 0` — so an
+implementation that lost the offset entirely still copied from the right
+place. It now stages the image at `PR_OFF` = 64 bytes into its claim, behind
+64 bytes of poison, and the host compares the RUNNING INSTANCE's region
+against `build/hello.o88` byte for byte. An instance existing only says the
+slot returned. With the fix reverted, the row fails on the first call and the
+machine never comes back.
+
 **The new instance's current directory is the CALLER's** at the time of the
 call (§19.2.1), so a package with an overlay or sidecars run this way looks
 for them where the caller is standing and refuses cleanly. The Wire never

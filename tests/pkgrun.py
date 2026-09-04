@@ -17,8 +17,14 @@ WHAT IT ASSERTS, and the first one is asserted against the KERNEL:
 
   A  an instance named HELLO is LIVE in `inst_tab` - the kernel's own table,
      read through the symbol map, so the pass does not rest on the test
-     package's opinion of what happened. `hello.o88` is the shipped one and
-     not a fixture: the claim is that the slot runs an ORDINARY package.
+     package's opinion of what happened - AND the region that instance names
+     is byte-for-byte `build/hello.o88`. The second half is not belt and
+     braces: the slot's first version lost the source OFFSET (it read it out
+     of the caller's segment instead of the kernel's) and copied from
+     whatever was next to the caller's claim, which still passed
+     `ld_check_hdr`, still registered an instance, and then far-called a
+     dispatcher that was not one. `hello.o88` is the shipped one and not a
+     fixture: the claim is that the slot runs an ORDINARY package.
   B  a spoiled magic answers CF=1 with AL = LD_EBAD.
   C  header flags bit 2 - a package carrying PARTS (SPEC.md 20.12), which are
      read out of a FILE that does not exist here - answers CF=1 / LD_EBAD too,
@@ -209,6 +215,26 @@ def main():
         if "HELLO" not in names:
             fails.append("A: no live instance named HELLO - OSAPI_PKG_RUN did "
                          "not run the image (SPEC.md 21.5)")
+        else:
+            # --- AND THE COPY LANDED, byte for byte -----------------------
+            # An instance existing says the slot returned; it does not say it
+            # copied the RIGHT bytes. The first version of the slot read the
+            # source OFFSET out of the caller's segment instead of the
+            # kernel's and copied from whatever was there - which passed
+            # ld_check_hdr (that reads the caller's bytes, before the copy),
+            # registered an instance, and then far-called a dispatcher that
+            # was not one. So the region is compared against the FILE.
+            hseg = dict(live)["HELLO"]
+            want = open(os.path.join(ROOT, "build", "hello.o88"), "rb").read()
+            got = bytes(q.read(hseg * 16, min(len(want), 512)))
+            if got != want[:len(got)]:
+                n = next((i for i in range(len(got))
+                          if got[i] != want[i]), 0)
+                fails.append("A: the copy is wrong at byte %d - the region "
+                             "holds %02X where build/hello.o88 has %02X. The "
+                             "instance exists, so the slot RETURNED; what it "
+                             "copied is not the image it was given "
+                             "(SPEC.md 21.5)" % (n, got[n], want[n]))
 
         # --- ...and what the package recorded --------------------------------
         if seg:

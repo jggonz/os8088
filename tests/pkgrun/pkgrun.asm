@@ -67,6 +67,16 @@ pr_ent:     db 0                    ; +45 how many times pr_onwake was ENTERED,
 
 PR_CLAIM_KB equ 4                   ; HELLO.O88 is under a kilobyte; four is
                                     ; room for it to grow without this file
+PR_OFF      equ 64                  ; ...and the image sits THIS FAR INTO the
+                                    ; claim, which is a regression guard and
+                                    ; not tidiness. The first version read it
+                                    ; to offset 0 and passed SI = 0, so the
+                                    ; slot could - and did - lose the source
+                                    ; OFFSET entirely and still copy the right
+                                    ; bytes. A non-zero offset makes the
+                                    ; argument load-bearing, and the poison
+                                    ; below is what a lost one reads instead
+PR_POISON   equ 0xA5
 PR_CONT_W  equ 286                  ; content width:  288 outer - 2px borders
 PR_CONT_H  equ 57                  ; ...and 76 outer - TITLE_H - 1
 PR_ROW_H   equ 12
@@ -137,8 +147,22 @@ pr_onwake:
     jc .done
     mov [pr_seg], dx
     mov es, dx
-    xor bx, bx
-    mov cx, PR_CLAIM_KB * 1024
+
+    ; --- poison the head of the claim, THEN read the image in behind it ----
+    ; A slot that loses the source offset copies from here, and PR_POISON is
+    ; what it gets: not a package header, so ld_check_hdr's own re-read would
+    ; refuse it - except that the check happens BEFORE the copy, on the bytes
+    ; the caller named. So the poison does not make the failure loud, it makes
+    ; it DIFFERENT from the truth, which is what the host's byte-for-byte
+    ; compare of the running instance's image needs.
+    xor di, di
+    mov cx, PR_OFF
+    mov al, PR_POISON
+    cld
+    rep stosb
+
+    mov bx, PR_OFF
+    mov cx, PR_CLAIM_KB * 1024 - PR_OFF
     xor dx, dx                      ; DX:CX = the buffer's capacity
     mov si, pr_s_file
     call OSAPI_FILE_READ            ; out CF=0 and DX:AX = the bytes read
@@ -162,7 +186,7 @@ pr_onwake:
     ; --- B: a corrupt magic is refused ------------------------------------
 .b:
     mov es, [pr_seg]
-    mov byte [es:0], 0              ; 'O' of the 'O8' magic (SPEC.md 20.2)
+    mov byte [es:PR_OFF], 0         ; 'O' of the 'O8' magic (SPEC.md 20.2)
     call pr_run
     mov [pr_cfb], bl
     mov [pr_alb], al
@@ -175,8 +199,8 @@ pr_onwake:
     ; --- C: a PARTS image is refused --------------------------------------
 .c:
     mov es, [pr_seg]
-    mov byte [es:0], 'O'            ; the magic back...
-    or byte [es:3], 4               ; ...and header flags bit 2 instead
+    mov byte [es:PR_OFF], 'O'       ; the magic back...
+    or byte [es:PR_OFF+3], 4        ; ...and header flags bit 2 instead
     call pr_run
     mov [pr_cfc], bl
     mov [pr_alc], al
@@ -226,7 +250,8 @@ pr_onwake:
 ; -----------------------------------------------------------------------------
 pr_run:
     mov es, [pr_seg]
-    xor si, si                      ; ES:SI = the image
+    mov si, PR_OFF                  ; ES:SI = the image, and NOT at offset 0:
+                                    ; see PR_OFF
     mov cx, [pr_len]
     xor dx, dx                      ; DX:CX = its length
     mov di, pr_s_file               ; DI = the name, in OUR segment and not in

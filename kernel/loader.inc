@@ -1085,13 +1085,30 @@ ld_pkg_run_x:
     ; NO DISK-SWAP RE-CHECK - the bytes came from memory the caller owns and
     ; ld_check_hdr read those very bytes, so there is nothing that could have
     ; been swapped underneath them.
+    ; **EVERY KERNEL WORD IS READ WHILE DS STILL NAMES THE KERNEL**, and the
+    ; `mov si` below is the load-bearing one. It used to sit UNDER the
+    ; `mov ds`, so it read [ld_msrc] out of the CALLER'S segment - a kernel
+    ; .bss offset, in a package's image - and the copy then ran from
+    ; caller:<whatever is there> instead of caller:<the image>. It assembles
+    ; cleanly, it passes ld_check_hdr (which read the RIGHT bytes, before
+    ; this), and what it produces is a region full of something else whose
+    ; PKG_DISP is not a dispatcher: step 8's far call lands at CS=0000
+    ; IP=0003, in the interrupt vector table.
+    ;
+    ; It was INTERMITTENT, which is what made it expensive. `ld_msrc`'s offset
+    ; is past the end of a small package's image and bss, so the stray read
+    ; lands in whatever the HEAP has next to the caller's region - and the
+    ; same fixture wedged or worked according to whether a Disk window was
+    ; open, because a listing claim is what sits there. Six runs differing
+    ; only in that; the answer was two instructions in the wrong order.
     mov es, [ld_base]           ; ES:DI = the region at offset 0
     xor di, di
     mov cx, [ld_img]
+    mov si, [ld_msrc]           ; ...the source OFFSET, first and through the
+                                ; kernel's own DS
     push ds
-    mov ds, [ld_msrc+2]         ; DS:SI = the caller's image
-    mov si, [ld_msrc]
-    cld
+    mov ds, [ld_msrc+2]         ; ...and only now the source SEGMENT, which is
+    cld                         ; the last thing this block may read
     rep movsb
     pop ds
     call ld_start               ; 7, 8 and 9 - and ES is the region, which is
