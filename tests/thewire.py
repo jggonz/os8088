@@ -36,7 +36,14 @@ SIX ASSERTIONS.
 5. THE PREDICATE GREYS THE RIGHT BUTTON. Selecting the tier-3 `WF_DISK` entry
    leaves `wr_grey` bit 0 set and bit 1 clear: Load Program refuses (its files
    must be on a disk) and Add to Disk does not.
-6. ADD TO DISK WRITES BOTH FILES, BYTE-IDENTICAL. The Save dialog's default
+6. THE PICTURE IS DRAWN, AND THE RIGHT WAY UP. HELLO carries a `.PIC` with a
+   pattern this file chose; selecting it fetches the picture and the 128 x 64
+   block on the glass is compared PIXEL FOR PIXEL against the file's bits.
+   That is the one assertion nothing else can make: SPEC.md 88.3 stores the
+   band INVERTED so that one `gfx_blit1` is correct on all three adapters, and
+   an inversion that went the wrong way draws a perfectly plausible picture in
+   negative.
+7. ADD TO DISK WRITES BOTH FILES, BYTE-IDENTICAL. The Save dialog's default
    button is clicked, the chain runs, and after `quit` the B: image is read on
    the HOST by an independent FAT12 reader (`tools/os88disk.py --verify`, then
    the directory walked here) and both files are compared with what the server
@@ -94,6 +101,24 @@ FIXTURE = {
 }
 SIDECAR = "MINES.O88"                   # what BIGONE's second file is called
                                         # in /wire/pkg/ and on the disk
+PICX, PICY = 208, 21                    # WR_PICX and the picture's y in the
+                                        # detail pane, both content-relative
+
+
+def fixture_pic():
+    """A 128 x 64 band with a pattern that cannot look right upside down.
+
+    SPEC.md 88.3's polarity: 1 = INK. Diagonal stripes plus a solid block in
+    one corner - a symmetric pattern (a checkerboard, a border) is exactly
+    what an inverted blit still passes.
+    """
+    out = bytearray(os88wire.WIRE_PICSZ)
+    for y in range(os88wire.WIRE_PICH):
+        for x in range(os88wire.WIRE_PICW):
+            ink = ((x + y) % 16) < 5 or (x < 24 and y < 12)
+            if ink:
+                out[y * os88wire.WIRE_PICB + (x >> 3)] |= 0x80 >> (x & 7)
+    return bytes(out)
 
 
 def say(*a):
@@ -374,8 +399,12 @@ def main():
     tmp = tempfile.mkdtemp()
     man = os.path.join(tmp, "wire.json")
     json.dump(FIXTURE, open(man, "w"))
+    pics = os.path.join(tmp, "pic")
+    os.makedirs(pics, exist_ok=True)
+    pic = fixture_pic()
+    open(os.path.join(pics, "HELLO.PIC"), "wb").write(pic)
     try:
-        cat = os88wire.pack(json.load(open(man)), "build", None)
+        cat = os88wire.pack(json.load(open(man)), "build", pics)
     except os88wire.Refused as e:
         sys.exit("thewire: the fixture will not pack: %s" % e)
     hello = open("build/hello.o88", "rb").read()
@@ -383,7 +412,8 @@ def main():
     served = {"/wire/catalog.bin": cat,
               "/wire/pkg/HELLO.O88": hello,
               "/wire/pkg/MINES.O88": mines,
-              "/wire/pkg/BIGONE.O88": hello}
+              "/wire/pkg/BIGONE.O88": hello,
+              "/wire/pic/HELLO.PIC": pic}
     srv = Server(served)
     srv.start()
     say("http server on 10.0.2.2:%d, catalog %d bytes, 3 records"
@@ -517,11 +547,51 @@ def main():
         if shown() != 3:
             no("back on All the list shows %d rows" % shown())
 
+        # --- 6: the picture, pixel for pixel --------------------------------
+        # HELLO is row 0 and carries WF_PIC, so selecting it starts a second
+        # transfer of its own - which is also the one place the generation
+        # counter is exercised by an ordinary click (SPEC.md 88.5).
+        mo.click(ox + 40, oy + 19 + 8)
+        for _ in range(40):
+            time.sleep(0.5)
+            if b("wr_picok")[0]:
+                break
+        say("wr_picok = %d after selecting HELLO" % b("wr_picok")[0])
+        if not b("wr_picok")[0]:
+            no("the picture never arrived: WF_PIC is set on HELLO and "
+               "/wire/pic/HELLO.PIC was served")
+        elif "/wire/pic/HELLO.PIC" not in b"".join(srv.asked).decode(
+                "latin1", "replace"):
+            no("the host was never asked for /wire/pic/HELLO.PIC")
+        else:
+            time.sleep(1.0)
+            shot("06-picture")
+            png = os.path.join(tempfile.mkdtemp(), "pic.png")
+            subprocess.run(["python3", "tools/shot.py", SOCK, png],
+                           check=True, capture_output=True)
+            _, _, px = os88wire.png_read(png)
+            bad = 0
+            for y in range(os88wire.WIRE_PICH):
+                for x in range(os88wire.WIRE_PICW):
+                    bit = (pic[y * os88wire.WIRE_PICB + (x >> 3)]
+                           >> (7 - (x & 7))) & 1
+                    r, g, bl = px(ox + PICX + x, oy + PICY + y)
+                    dark = (r * 299 + g * 587 + bl * 114) // 1000 < 128
+                    if dark != bool(bit):
+                        bad += 1
+            say("the picture on the glass differs from the file in %d of %d "
+                "pixels" % (bad, os88wire.WIRE_PICW * os88wire.WIRE_PICH))
+            if bad:
+                no("%d of %d picture pixels are wrong. All 8,192 wrong is the "
+                   "INVERSION going the other way (SPEC.md 88.3), which draws "
+                   "a plausible picture in negative; a few hundred is the "
+                   "block landing at the wrong x or y" % (bad, 8192))
+
         # --- 5: the predicate greys the right button ------------------------
         # Row 2 is BIGONE: tier 3, two files, so WF_DISK. Load Program must
         # refuse with 'Needs its files on a disk' and Add to Disk must not.
         mo.click(ox + 40, oy + 19 + 2 * 16 + 8)
-        time.sleep(1.5)
+        time.sleep(2.0)
         shot("03-selected")
         sel, grey = w("wr_sel"), b("wr_grey")[0]
         say("wr_sel = %d, wr_grey = %d" % (sel, grey))

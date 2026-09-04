@@ -91410,7 +91410,24 @@ The last one is not in the painter's answer and cannot be: it is knowable
 only once a *volume and folder* have been chosen, which is what §38.6's
 completion is. It is a refusal in the completion, before the first byte moves,
 and `OSAPI_FILE_DFREE` is asked **once** there rather than per file — §77.40's
-finding, where asking per chunk was 44% of an upload.
+finding, where asking per chunk was 44% of an upload. **That call WRITES BX**
+(it is the sectors-per-cluster output), so the figure it is compared against
+is banked first: held in BX it is compared against 1, 2, 4 or 8 and the check
+never fires — on exactly the nearly-full disk it exists for.
+
+**The painter records its own answer in `[wr_grey]`**, bit 0 for Load Program
+and bit 1 for Add to Disk, written where the greying is drawn. That is §13.8's
+rule ("keep which control is down in a variable your `W_PAINT` reads") rather
+than an instrument, and it is what makes §47 assertable by a gate at all: a
+greyed caption on a VGA is `CDGRAY` and on a 1bpp adapter a checkerboard, and
+neither is a thing a screendump comparison can state cleanly. `tests/thewire.py`
+reads the byte.
+
+The predicate keeps the question in **BL and not AH**, and that is not a
+style: the body does `mov ax, [wr_sel]` on its way to the record, so a
+question in AH does not survive it. In AH, every Add to Disk came back with
+Load Program's answer — greying the one button a `WF_DISK` record exists to be
+used with.
 
 ### 88.8 What each action does
 
@@ -91519,7 +91536,16 @@ segment register, because the bytes really are ours (§77.10).
 | row | tier | what |
 |---|---|---|
 | `tests/unit/t_wire.py` | fast | pack -> verify -> dump round trip on a fixture built from `build/hello.o88` and `build/mines.o88`; the writer's refusals; and the `WC_*`/`WIRE_*` equs in `wcat.inc` compared against `tools/os88wire.py`'s |
-| `tests/thewire.py` (`make thewiretest`) | soak | QEMU with an NE2000 and a host HTTP server on 8092: the catalog loads and lists three rows, the `8088/8086` filter cuts it to two, a tier-3 `WF_DISK` record greys Load Program, and Add to Disk writes the `.O88` and its sidecar to B: byte-identical, read back on the host with the suite's own FAT12 reader |
+| `tests/thewire.py` (`make thewiretest`) | soak | QEMU with an NE2000 and a host HTTP server on 8092. Seven assertions: the catalog loads and `wr_catck` accepts it, the host saw `GET /wire/catalog.bin HTTP/1.0` with a `Host:` and a `User-Agent:`, the list lists three rows, the `8088/8086` filter cuts it to two, a tier-3 `WF_DISK` record greys Load Program and **not** Add to Disk, the 128 × 64 picture on the glass matches the served `.PIC` **pixel for pixel**, and Add to Disk writes the `.O88` and its sidecar byte-identical — read back on the host by a FAT12 reader in that file after `quit` |
+
+**The picture assertion is the one nothing else can make.** §88.3 stores the
+band inverted so that one `gfx_blit1` is right on all three adapters, and an
+inversion that went the other way draws a perfectly plausible picture in
+negative: every gate that counts lit pixels, diffs two frames or looks for a
+block of the right size passes it. So the fixture's pattern is deliberately
+asymmetric — diagonal stripes with a solid block in one corner — and the
+comparison is per pixel against the file's own bits. All 8,192 wrong is the
+polarity; a few hundred is the block landing at the wrong x or y.
 
 **`tests/thewire.py` is QEMU's and cannot be MartyPC's**: MartyPC has no
 network card of any kind, so `ETHER.DRV` cannot be hosted on it at all
