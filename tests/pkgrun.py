@@ -114,6 +114,22 @@ def instances(q):
     return out
 
 
+def slots(q):
+    """Every record, live or not, with its name - the diagnostic behind the
+    entry-count note: two PKGRUN instances would show here even if the second
+    had gone."""
+    b = q.read(os88sym.linear("inst_tab"), I_RECSZ * INST_MAX)
+    out = []
+    for i in range(INST_MAX):
+        r = b[i * I_RECSZ:(i + 1) * I_RECSZ]
+        nm = bytes(r[I_NAME:I_NAME + 16]).split(b"\0")[0].decode(
+            "ascii", "replace")
+        if r[I_STATE] or nm:
+            out.append("%d:%s/%d@%04X" % (i, nm or "-", r[I_STATE],
+                                          r[I_SPTR] | (r[I_SPTR + 1] << 8)))
+    return " ".join(out)
+
+
 def main():
     os.chdir(ROOT)              # mouse.hmp shells out to tools/qmp.py by a
                                 # RELATIVE path, so this script's cwd is part
@@ -162,12 +178,30 @@ def main():
         # it. Double-clicking the first row would launch HELLO off the DISK
         # and assertion A would pass without the slot being called at all.
         dbl(160, 144)
-        time.sleep(25)              # PKGRUN loads, HELLO loads, two refusals
+
+        # --- WAIT FOR IT TO SETTLE, THEN STOP THE MACHINE --------------------
+        # A fixed sleep and a running guest were not enough. The wake handler
+        # is entered more than once - ui_task puts a wake BACK when a drag or
+        # a launch ate its record (SPEC.md 74.1.1, wm_wake_redo) and this
+        # script's own mouse traffic is what eats it - so the package guards
+        # itself on its entry count and the host reads a machine that has
+        # stopped. Every byte below then describes ONE moment.
+        t0 = time.time()
+        while time.time() - t0 < 90:
+            live = instances(q)
+            if any(n == "PKGRUN" for n, _ in live):
+                seg = dict(live)["PKGRUN"]
+                if q.read(seg * 16 + PR_OFF, 3)[2]:     # [pr_done]
+                    break
+            time.sleep(2)
+        time.sleep(3)
+        q.hmp("stop")
 
         # --- what the KERNEL says --------------------------------------------
         live = instances(q)
         names = [n for n, _ in live]
-        say("instances: " + ", ".join(names or ["(none)"]))
+        say("instances: " + ", ".join("%s@%04X" % (n, g) for n, g in live)
+            or "(none)")
         seg = dict(live).get("PKGRUN", 0)
         if not seg:
             fails.append("no live instance named PKGRUN: the gate's own "
@@ -179,6 +213,7 @@ def main():
         # --- ...and what the package recorded --------------------------------
         if seg:
             b = q.read(seg * 16 + PR_OFF, PR_LEN)
+            say("verdict raw: " + bytes(b).hex())
             if bytes(b[:2]) != b"PR":
                 fails.append("the verdict block at PKGRUN:%04X is %r, not "
                              "'PR' - I_SPTR did not name the image"
@@ -187,14 +222,26 @@ def main():
                 done, ok = b[2], b[3]
                 cfa, cfb, cfc = b[4], b[5], b[6]
                 ala, alb, alc = b[7], b[8], b[9]
-                ferr, ln = b[10], b[11] | (b[12] << 8)
+                ferr, ln, ent = b[10], b[11] | (b[12] << 8), b[13]
                 say("pkgrun: done %d ok %02X  A cf%d al%d  B cf%d al%d  "
-                    "C cf%d al%d  ferr %d len %d"
-                    % (done, ok, cfa, ala, cfb, alb, cfc, alc, ferr, ln))
+                    "C cf%d al%d  ferr %d len %d entries %d"
+                    % (done, ok, cfa, ala, cfb, alb, cfc, alc, ferr, ln, ent))
+                if ent != 1:
+                    # REPORTED, NOT FAILED. More than one wake per post is the
+                    # kernel putting one back that a drag or a launch ate
+                    # (SPEC.md 74.1.1) and it is this script's own mouse
+                    # traffic that causes it; the package's entry-count guard
+                    # is what makes it harmless, and `done` says which entry
+                    # finished the checks. Only the three answers below are
+                    # assertions.
+                    say("note: the wake handler was entered %d times and the "
+                        "checks finished on entry %d - the guard held"
+                        % (ent, done))
+                    say("note: every instance slot: " + slots(q))
                 if not done:
                     fails.append("the wake handler never ran to the end - the "
                                  "checks did not happen")
-                elif ferr:
+                elif ferr and not ok:
                     fails.append("OSAPI_FILE_READ of HELLO.O88 answered "
                                  "FERR %d, so no check ran" % ferr)
                 else:

@@ -46,7 +46,10 @@
 ; offset has to be told again every time this file changes.
 pr_res:
     db 'P', 'R'                     ; +32 the tag
-pr_done:    db 0                    ; +34 1 = the wake handler ran to the end
+pr_done:    db 0                    ; +34 the ENTRY COUNT at the moment the
+                                    ;     checks finished, so 1 = they ran to
+                                    ;     the end on the first wake and every
+                                    ;     later one arrived after them
 pr_ok:      db 0                    ; +35 bit 0 = A, bit 1 = B, bit 2 = C
 pr_cfa:     db 0                    ; +36 the CF each call answered, 0 or 1
 pr_cfb:     db 0                    ; +37
@@ -56,7 +59,8 @@ pr_alb:     db 0                    ; +40
 pr_alc:     db 0                    ; +41
 pr_ferr:    db 0                    ; +42 OSAPI_FILE_READ's FERR_*, 0 = read
 pr_len:     dw 0                    ; +43 ...and the bytes it delivered
-pr_pad:     db 0                    ; +45
+pr_ent:     db 0                    ; +45 how many times pr_onwake was ENTERED,
+                                    ;     which is what guards it - see there
 %if ($ - $$) != 46
   %error "the verdict block must start at offset 32 and be 14 bytes: tests/pkgrun.py reads it by ARITHMETIC, not by a map"
 %endif
@@ -110,8 +114,22 @@ pr_onwake:
     push di
     push es
 
-    cmp byte [pr_done], 0
-    jne .done                       ; a stale wake after the checks have run
+    ; THE GUARD IS THE ENTRY COUNT and not [pr_done], because the two are not
+    ; the same question. A stale wake AFTER the checks is ordinary and
+    ; [pr_done] would catch it; a SECOND ENTRY WHILE THEY RUN would re-enter
+    ; the loader through the very slot under test, and it would do it with the
+    ; image already spoiled by check B - so the first pass's answers get
+    ; overwritten by a second pass's and the block reads as three refusals
+    ; beside an all-passed mask, which is a contradiction rather than a
+    ; failure. It was seen once, on one run of this gate, and no path in
+    ; ui_task's wake dispatch explains it - so the count is BOTH the guard and
+    ; the evidence: tests/pkgrun.py prints it, and any value but 1 is a
+    ; finding whether the checks passed or not. A wake handler has to be
+    ; indifferent to being called with nothing to do (SPEC.md 74.1) and this
+    ; is that, written so it also cannot be called with something to do TWICE.
+    inc byte [pr_ent]
+    cmp byte [pr_ent], 1
+    jne .done
 
     ; --- the image, off the disk beside us --------------------------------
     mov ax, PR_CLAIM_KB
@@ -173,7 +191,8 @@ pr_onwake:
     call OSAPI_MEM_FREE             ; and never adopted (SPEC.md 21.5)
     mov word [pr_seg], 0
 .paint:
-    mov byte [pr_done], 1
+    mov al, [pr_ent]                ; ...and WHICH entry finished them
+    mov [pr_done], al
     mov si, [pr_win]                ; the one callback that is NOT under the
     mov bx, si                      ; lock, so it takes it itself for a burst
     call OSAPI_GFX_LOCK             ; it can state (SPEC.md 74.1) - and it may
