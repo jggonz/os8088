@@ -91327,16 +91327,16 @@ the layout below it.
 
 ```
  Show: (*) All  ( ) 8088/8086  ( ) 286  ( ) 386  ( ) 486+
- +-----------------+ +--------------------------------+
- | [i] Browser  NEW| | [   128 x 64 picture, or the  ] |
- | [i] Calculator  | | [   words 'No picture'        ] |
- | [i] Hello      ^| | Browser                        |
- | [i] Minesweeper#| | 8088/8086     15K              |
- | [i] Paint      v| | A web browser for the IBM PC.  |
- | [i] Solitaire   | | Plain HTTP, no TLS.            |
- |                 | | [        Load Program        ] |
- |                 | | [       Add to Disk...       ] |
- +-----------------+ +--------------------------------+
+ +--------------+ +-----------------------------------+
+ | [i] Browser  | | [    128 x 64 picture, or the    ] |
+ | [i] Calculato| | [    words 'No picture'          ] |
+ | [i] Hello   ^| | Browser                           |
+ | [i] Mineswee#| | 8088/8086     15K                 |
+ | [i] Paint   v| | A web browser for the IBM PC.     |
+ | [i] Solitair| | Plain HTTP, no TLS.               |
+ |              | | [         Load Program          ] |
+ |              | | [        Add to Disk...         ] |
+ +--------------+ +-----------------------------------+
  Available on the Wire: 31 programs
 ```
 
@@ -91346,12 +91346,30 @@ Everything below is content-relative; the content origin is 8-aligned by
 
 | element | where |
 |---|---|
-| filter radios | y 2..13, five `os88ui_glyph` rings at x 48, 92, 184, 228, 272, `Show:` at x 0 |
-| list pane | x 0..167, y 18..`y2`; rows 16 px from y 19, icon at x 3, one `OSAPI_FONT_RUN` per row at x 24 |
-| scroll bar | x 153..166, the same y extent — `os88ui_sbar` with `OS88UI_SBDRAG` |
-| detail pane | x 176..383, same y extent |
-| buttons | x 180..379, **stacked**, `y2-37..y2-21` and `y2-19..y2-3` |
+| filter radios | y 2..13, five `os88ui_glyph` rings at x 48, 96, 192, 240, 288, `Show:` at x 0 |
+| list pane | x 0..143, y 18..`y2`; rows 16 px from y 19, icon at x 3, one `OSAPI_FONT_RUN` of **13 cells** per row at x 24 |
+| scroll bar | x 129..142, the same y extent — `os88ui_sbar` with `OS88UI_SBDRAG` |
+| detail pane | x 152..383, same y extent; its text pen at x 160 and the picture at x 208 |
+| buttons | x 156..379, **stacked**, `y2-37..y2-21` and `y2-19..y2-3` |
 | status cell | y `ch-10`, one 48-character space-padded `OSAPI_FONT_RUN` across the full 384 |
+
+**THE DETAIL PANE IS SIZED FROM THE CATALOG FORMAT AND THE LIST GETS WHAT IS
+LEFT**, which is the second place the shipped window departs from
+`docs/WIRE-PLAN.md`'s mock. That mock starts the detail pane at 176 — 208 px —
+and draws a 27-column description in it, and 27 cells is 216 px: the first
+build ran the last two words of every description off the right-hand edge and
+into the frame. §88.2's 27 is the *format*, which the website implements too,
+so what moved is the pane. A pen at 160 ends at 375 with the frame at 383,
+eight pixels clear, and `WR_DESCC` is derived from those two edges so that
+moving either moves the ceiling with it. `wrtxt.inc`'s `WR_PANE` macro asserts
+every hand-written pane line against it at **assembly time** — the pane's own
+sentences do not come through the writer's wrapper, and the no-driver advice
+was thirty characters wide in the one state whose whole point is that a person
+can read it.
+
+What it costs is three cells off a list row, 13 rather than 16, and that is
+the right side to lose them on: a list row is an *index* and the detail pane
+is where the title is shown in full.
 
 `y2 = 18 + PH - 1` and `PH = ch - 29`, so the visible row count is
 `(PH - 2) / 16`: **12 rows on VGA and Hercules, 6 on CGA**, which is the

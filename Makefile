@@ -3098,9 +3098,18 @@ $(BUILD)/thewire360.img: $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(S
 		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(BUILD)/system.cfg SYSTEM/APPDATA:$(BUILD)/wirecfg/WIRE.CFG
 
-$(BUILD)/thewiredata.img: tools/os88disk.py | $(BUILD)
+# THEWIRE.O88 IS ON THE DATA DISK TOO, in its ROOT, and its own WIRE.CFG with
+# it. That is not where it ships (SPEC.md 24.3 puts it in SYSTEM/ on the
+# SYSTEM disk, which build/thewire360.img above carries) - it is where a test
+# can double-click it without navigating two folders, and, more to the point,
+# where launching it puts the INSTANCE'S CURRENT DIRECTORY (SPEC.md 19.2.1):
+# B: root, which is where the Save dialog then opens and where Add to Disk
+# then writes. The config goes with it because SPEC.md 19.9 reads APPDATA off
+# the volume the program was LAUNCHED from, which is this one.
+$(BUILD)/thewiredata.img: $(BUILD)/thewire.o88 $(BUILD)/wirecfg/WIRE.CFG tools/os88disk.py | $(BUILD)
 	python3 tools/os88disk.py -o $@ --size 1440 \
-		--folder MEDIA --folder SYSTEM/APPDATA
+		$(BUILD)/thewire.o88 SYSTEM/APPDATA:$(BUILD)/wirecfg/WIRE.CFG \
+		--folder MEDIA
 
 .PHONY: thewiretest
 thewiretest: $(BUILD)/thewire360.img $(BUILD)/thewiredata.img

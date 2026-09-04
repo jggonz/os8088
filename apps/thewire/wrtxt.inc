@@ -29,7 +29,7 @@ wr_s_avail:  db 'Available on the Wire: ', 0    ; + 'N program(s)'
 wr_s_progs:  db ' programs', 0
 wr_s_prog1:  db ' program', 0
 wr_s_newtag: db 'NEW', 0                ; `New on the Wire`, in the 3 cells a
-                                        ; 16-cell row has to spare
+                                        ; 13-cell row has to spare
 wr_s_nodrv:  db 'Wire connection unavailable', 0
 
 ; --- the File menu, and the two buttons, which are the same two strings ------
@@ -60,16 +60,31 @@ wr_filwid:   db 40, 88, 40, 40, 48
 
 ; --- tier words, indexed by WC_TIER ------------------------------------------
 wr_tiers:    dw wr_f_t0, wr_f_t1, wr_f_t2, wr_f_t3
-wr_s_mach:   db 'This machine: ', 0
+wr_s_mach:   db 'This machine: ', 0     ; + a tier word: 23 cells at the worst
 
 ; --- the detail pane's empty and no-driver states ----------------------------
-wr_s_nopic:  db 'No picture', 0
-wr_s_pick:   db 'Pick a program from the list.', 0
-wr_nodrv1:   db 'The Wire needs ETHER.DRV and a', 0
-wr_nodrv2:   db 'network card.', 0
-wr_nodrv3:   db 'Control Panel > Drivers turns', 0
-wr_nodrv4:   db 'it on. Or browse the library', 0
-wr_nodrv5:   db 'at os8088.com/wire', 0
+; **WR_PANE ASSERTS THE WIDTH AT ASSEMBLY TIME.** Everything the catalog
+; supplies is wrapped to WC_DESCW - 1 by the writer and refused if it will not
+; fit (SPEC.md 88.2), but the pane's OWN sentences are written here by hand -
+; and the first spelling of the four below ran thirty characters into a pane
+; that holds twenty-seven, so the no-driver advice was cut off at the frame in
+; the one state where the whole point is that a person can read it. A `%strlen`
+; costs nothing and cannot be forgotten.
+%macro WR_PANE 2
+%1: db %2, 0
+    %strlen %%n %2
+    %if %%n > WR_DESCC
+        %error "a detail-pane line is at most WR_DESCC cells wide"
+    %endif
+%endmacro
+
+    WR_PANE wr_s_nopic, 'No picture'
+    WR_PANE wr_s_pick,  'Pick one from the list.'
+    WR_PANE wr_nodrv1,  'The Wire needs ETHER.DRV'
+    WR_PANE wr_nodrv2,  'and a network card.'
+    WR_PANE wr_nodrv3,  'Control Panel > Drivers'
+    WR_PANE wr_nodrv4,  'turns it on. Or browse the'
+    WR_PANE wr_nodrv5,  'library at os8088.com/wire'
 wr_nodrvl:   dw wr_nodrv1, wr_nodrv2, wr_nodrv3, wr_nodrv4, wr_nodrv5, 0
 
 ; --- the predicate's reasons (SPEC.md 88.7, SPEC.md 47) ----------------------

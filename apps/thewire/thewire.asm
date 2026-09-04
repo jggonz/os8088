@@ -138,20 +138,50 @@ WR_FRW      equ WR_CW + 2       ; ...and the frame's, 1px border each side
 WR_FY       equ 2               ; the filter row: 12px glyphs
 WR_FTY      equ 4               ; ...and its labels' pen
 WR_PY       equ 18              ; the two panes' top
-WR_LX2      equ 167             ; the list pane's right edge
-WR_SBX1     equ 153             ; ...with the scroll bar inside it
-WR_SBX2     equ 166
+WR_LX2      equ 143             ; the list pane's right edge
+WR_SBX1     equ 129             ; ...with the scroll bar inside it
+WR_SBX2     equ 142
 WR_ICX      equ 3               ; the row icon
 WR_TXX      equ 24              ; ...and the row text, 8-ALIGNED
-WR_TXN      equ 16              ; 16 cells of it: 24 + 128 = 152
-WR_ROWH     equ 16              ; a row is an icon tall
-WR_DX1      equ 176             ; the detail pane
+WR_TXN      equ 13              ; 13 cells of it: 24 + 104 = 128
+WR_DX1      equ 152             ; the detail pane
 WR_DX2      equ WR_CW - 1
-WR_DTX      equ 184             ; ...its text pen, 8-ALIGNED
-WR_PICX     equ 216             ; ...and the picture, 8-ALIGNED and centred in
-                                ; the pane (176 + (208-128)/2 = 216)
-WR_BX1      equ 180             ; the two buttons, STACKED - see SPEC.md 88.6:
-WR_BX2      equ 379             ; side by side they want 242px of a 208px pane
+WR_DTX      equ 160             ; ...its text pen, 8-ALIGNED
+                                ; **THE PANE IS SIZED FROM THE FORMAT AND THE
+                                ; LIST GETS WHAT IS LEFT**, which is the one
+                                ; place the shipped window departs from
+                                ; docs/WIRE-PLAN.md's mock. That mock has the
+                                ; detail pane start at 176 - 208px - and a
+                                ; 27-column description in it, and 27 cells is
+                                ; 216px: the first build drew the last two
+                                ; words of every description off the
+                                ; right-hand edge. The 27 is the CATALOG
+                                ; FORMAT (SPEC.md 88.2) and the website
+                                ; implements it too, so the pane is what
+                                ; moved: a pen at 160 ends at 375 with the
+                                ; frame at 383, eight pixels clear.
+                                ;
+                                ; What it costs is three cells off a list row
+                                ; - 13 rather than 16 - and that is the right
+                                ; side to lose them on: a list row is an
+                                ; INDEX and the detail pane is where the
+                                ; title is shown in full, which is what a
+                                ; master-and-detail window is for
+WR_PICX     equ 208             ; the picture, 8-ALIGNED and centred in the
+                                ; pane (152 + (232-128)/2 = 204, snapped down
+                                ; to the byte grid gfx_blit1 requires)
+WR_ROWH     equ 16              ; a row is an icon tall
+WR_DESCC    equ (WR_DX2 - WR_DTX) / 8   ; 27 cells: a pen at WR_DTX with 27
+                                ; cells ends at WR_DX2 - 8, which leaves the
+                                ; pane's own frame column clear. It is DERIVED
+                                ; so that moving either edge moves the ceiling
+                                ; with it, and wrtxt.inc's WR_PANE macro
+                                ; asserts every hand-written line against it
+%if WR_DESCC < WC_DESCW - 1
+  %error "the detail pane is narrower than a catalog description line (SPEC.md 88.2)"
+%endif
+WR_BX1      equ 156             ; the two buttons, STACKED - see SPEC.md 88.6:
+WR_BX2      equ 379             ; side by side they want 242px of a 232px pane
 WR_BH       equ 17
 WR_LNH      equ 10              ; a description line's pitch: an 8-row face
                                 ; and two of air, which is what gets five of
@@ -1126,11 +1156,24 @@ wr_dbtns:
                                         ; state: every one of them ends by
                                         ; drawing the buttons, so this is the
                                         ; one edge that cannot be forgotten
+    mov byte [wr_grey], 0               ; ...and so does [wr_grey], which is
+                                        ; SPEC.md 13.8's rule rather than an
+                                        ; instrument: "keep which control is
+                                        ; down in a variable your W_PAINT
+                                        ; reads". What is kept here is which
+                                        ; control is GREYED, written where it
+                                        ; is drawn, so the drawn state and the
+                                        ; recorded one cannot disagree - and
+                                        ; it is what makes 47's greying
+                                        ; assertable by a gate at all
+                                        ; (tests/thewire.py), where the pixels
+                                        ; of a checkerboard caption are not
     xor al, al                          ; Load Program
     call wr_may
     mov di, OS88UI_FILL
     jnc .a
     or di, OS88UI_DIS
+    or byte [wr_grey], 1
 .a:
     mov bx, wr_ra
     mov si, wr_s_run
@@ -1140,6 +1183,7 @@ wr_dbtns:
     mov di, OS88UI_FILL
     jnc .b
     or di, OS88UI_DIS
+    or byte [wr_grey], 2
 .b:
     mov bx, wr_rb
     mov si, wr_s_add
@@ -1699,7 +1743,14 @@ wr_may:
     push bx
     push si                             ; SI is an OUTPUT on the refusal and
     push es                             ; must be untouched on the other arm
-    mov ah, al                          ; AH = which question
+    mov bl, al                          ; **BL, NOT AH.** The question has to
+                                        ; survive `mov ax, [wr_sel]` below, and
+                                        ; in AH it did not: every Add to Disk
+                                        ; came back refused with Load
+                                        ; Program's reason, which greys the
+                                        ; one button a WF_DISK record exists
+                                        ; to be used with. tests/thewire.py
+                                        ; read wr_grey = 3 and found it
     mov al, [wr_state]
     cmp al, WS_OPEN
     jb .notbusy
@@ -1717,7 +1768,7 @@ wr_may:
     mov al, [es:si+WC_FLAGS]
     test al, WF_FLOPPY
     jnz .flop
-    or ah, ah
+    or bl, bl
     jnz .yes                            ; Add works for a WF_DISK record: that
     test al, WF_DISK                    ; is what Add is FOR
     jnz .disk
@@ -2439,21 +2490,21 @@ wr_saved:
     push si
     push di
     push es
+    mov si, di                          ; **THE NAME IS IN THE KERNEL'S
+    mov di, wr_savename                 ; SEGMENT**, which is where ES still
+    mov cx, 13                          ; points on the way in (SPEC.md 20.1),
+.c:                                     ; and the buffer is valid for THIS CALL
+    mov al, [es:si]                     ; only - so it is copied here, through
+    mov [di], al                        ; an override, BEFORE ES is turned
+    inc si                              ; round below. Without the override
+    inc di                              ; this reads our own image at that
+    or al, al                           ; offset: it assembles, it runs, and
+    jz .named                           ; what reaches OSAPI_FILE_WRITE is four
+    loop .c                             ; bytes of garbage under a status cell
+    mov byte [di-1], 0                  ; reading `Could not write ?)33`
+.named:
     push ds
     pop es
-    mov si, di                          ; the kernel's buffer is valid for this
-    mov di, wr_savename                 ; call only: COPY IT
-    mov cx, 13
-.c:
-    mov al, [si]
-    mov [di], al
-    inc si
-    inc di
-    or al, al
-    jz .named
-    loop .c
-    mov byte [di-1], 0
-.named:
     call wr_geom
     jc .out
     mov ax, [wr_sel]
@@ -3387,6 +3438,9 @@ wr_kind     equ os88_image_end + 15     ; byte: WK_*
 wr_hnd      equ os88_image_end + 16     ; byte: the socket handle, 0 = none
 wr_hstate   equ os88_image_end + 17     ; byte: the header scan's line state
 wr_dbdrv    equ os88_image_end + 18     ; byte: the banked drive (19.9)
+wr_grey     equ os88_image_end + 19     ; byte: bit 0 = Load Program is greyed,
+                                        ; bit 1 = Add to Disk... is - written
+                                        ; by the painter that greys them
 
 wr_ox       equ os88_image_end + 20     ; word: the content origin...
 wr_oy       equ os88_image_end + 22
