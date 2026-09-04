@@ -719,17 +719,10 @@ mouse_init:
     ; and the burst alone is MOU_IDWIN of this routine, so it runs to
     ; completion and this runs after it. Where both mice exist both end up
     ; live, and SPEC.md 9.5's contest settles it exactly as it settles two
-    ; UARTs: the first complete packet wins.
 %ifdef KERN_BIG
-    call vmm_init               ; the VMware absolute pointer (SPEC.md 9.11):
-    jc .vmm_no                  ; not present -> the serial/PS/2 path stands
-    call mou_lockon             ; present and it won the contest at boot -
-    jmp short .vmm_done         ; retire the UARTs hooked above, skip PS/2
-.vmm_no:
 %ifndef NO_PS2
     call mou_p2_init
 %endif
-.vmm_done:
 %endif
     OVLMARK 47
 
@@ -1901,386 +1894,6 @@ mou_p2_byte:
     ret
 %endif                          ; KERN_BIG - the PS/2 mouse (SPEC.md 9.9)
 
-%ifdef KERN_BIG
-; =============================================================================
-; The VMware absolute pointer (SPEC.md 9.11)
-;
-; os8088 runs in the browser under v86, which emulates the VMware mouse
-; backdoor on I/O port 0x5658. The browser side feeds it absolute canvas
-; coordinates with no pointer lock, so a guest that speaks the protocol gets a
-; grabless absolute pointer. This is that guest half.
-;
-; NOTHING HERE RUNS ON THE TARGET MACHINE, and the reason is sharper than the
-; PS/2 half's: the protocol is 32-bit - EAX/EBX/ECX/EDX and `in eax, dx` - and
-; on a real 8086 the 0x66 operand-size prefix is not a prefix at all. So every
-; 32-bit instruction sits in a `cpu 386` island (vmm_bd) closed by `cpu 8086`,
-; and every entry to it is behind `cmp byte [cpu_tier], CPU_386`. That is
-; XMEM.DRV's arrangement (SPEC.md 41.9 rule 2) - assembly-time permission plus
-; a run-time gate - and this is the FIRST such island in kernel/.
-;
-; KERN_BIG only. kern_small is the 128-256KB product and every machine it runs
-; on is an 8086; the module is compiled out there entire, state included.
-;
-; There is nothing to detect but the backdoor itself: the GETVERSION probe
-; reads an undriven port on bare metal (0x5658 was chosen because no hardware
-; decodes it) and EBX comes back unchanged. No v86 detection, no hypervisor
-; CPUID bit.
-; =============================================================================
-
-VMM_MAGIC   equ 0x564D5868       ; 'VMXh' - EAX in, and EBX back on success
-VMM_PORT    equ 0x5658           ; 'VX'   - the backdoor port, in DX
-                                 ; (the ABSPOINTER version id 0x3442554A that
-                                 ;  READ_ID queues is deliberately NOT checked -
-                                 ;  see vmm_enable)
-
-VMM_GETVER  equ 10              ; commands (in CX -> ECX)
-VMM_DATA    equ 39
-VMM_STATUS  equ 40
-VMM_COMMAND equ 41
-
-VMM_READID  equ 0x45414552      ; EBX for VMM_COMMAND: READ_ID - queues the
-                                ; version word AND clears a disabled backdoor
-VMM_ABS     equ 0x53424152      ; ...REQUEST_ABSOLUTE
-
-VMM_ROW     equ 6               ; [mou_port] once the backdoor has won: past
-                                ; MOU_P2ROW (4), no serial row, so every
-                                ; `cmp bl, [mou_port]` in the serial decoder
-                                ; fails and mou_lockon retires both UARTs
-VMM_QMIN    equ 4               ; words queued before a packet can be read
-VMM_DRAIN   equ 24              ; ...packets drained in one poll - a bound like
-                                ; ui_task's EVQ_CAP so the queue cannot
-                                ; starve the caller
-
-VMM_S_LEFT  equ 0x20            ; buttons in the status word
-VMM_S_RIGHT equ 0x10
-; the RELATIVE_PACKET bit is 0x00010000 - tested in the high word as 0x0001
-
-; -----------------------------------------------------------------------------
-; vmm_bd - one backdoor call
-;
-; in:  CX = command, [vmm_ebx] = the EBX argument
-; out: [vmm_eax]/[vmm_ebx]/[vmm_ecx]/[vmm_edx] = the four result registers;
-;      every 8086 register preserved, and the 32-bit halves with them (an IRQ
-;      taken mid-call re-enters os8088 in 16-bit code, which leaves the top
-;      halves alone - xmem.asm's reasoning, one level down - and the BIOS is
-;      bracketed here anyway).
-; -----------------------------------------------------------------------------
-cpu 386                         ; ---- 386-only island, tier 2 only ----------
-vmm_bd:
-    push eax
-    push ebx
-    push ecx
-    push edx
-    mov  eax, VMM_MAGIC
-    movzx ecx, cx
-    mov  ebx, [vmm_ebx]
-    mov  edx, VMM_PORT
-    in   eax, dx
-    mov  [vmm_eax], eax
-    mov  [vmm_ebx], ebx
-    mov  [vmm_ecx], ecx
-    mov  [vmm_edx], edx
-    pop  edx
-    pop  ecx
-    pop  ebx
-    pop  eax
-    ret
-cpu 8086                        ; ---- island closed ------------------------
-
-; -----------------------------------------------------------------------------
-; vmm_flush - read the queue to empty, discarding, in <= 6-word chunks
-;
-; The whole point: the 4-word packet framing only holds if reads start from an
-; empty queue. READ_ID (below) queues a LONE version word, and QEMU's vmmouse
-; disables the backdoor outright if a DATA read ever asks for more words than
-; are queued - so a misframed read that then underflows costs the mouse for
-; the session. Draining after every enable keeps the framing honest.
-; in:  none (the CPU gate is the caller's)
-; out: nothing (all registers preserved)
-; -----------------------------------------------------------------------------
-vmm_flush:
-    push ax
-    push cx
-.f:
-    mov word [vmm_ebx],   0
-    mov word [vmm_ebx+2], 0
-    mov cx, VMM_STATUS
-    call vmm_bd
-    mov ax, [vmm_eax+2]
-    cmp ax, 0xFFFF                  ; disabled - the caller re-enables, nothing
-    je .fout                        ; here to drain
-    mov ax, [vmm_eax]              ; words queued
-    or ax, ax
-    jz .fout
-    cmp ax, 6
-    jbe .rd
-    mov ax, 6                      ; at most 6 a call (QEMU's cap)
-.rd:
-    mov [vmm_ebx], ax
-    mov word [vmm_ebx+2], 0
-    mov cx, VMM_DATA
-    call vmm_bd                    ; ...into vmm_eax..edi, discarded
-    jmp .f                         ; count strictly fell, so this terminates
-.fout:
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; vmm_enable - READ_ID, go ABSOLUTE, then drain (SPEC.md 9.11.1)
-;
-; READ_ID (0x45414552) is the one command that clears QEMU's disabled state
-; (status = 0xFFFF) - REQUEST_ABSOLUTE alone is ignored while disabled - and it
-; queues a version word as a side effect. So enable is always: READ_ID,
-; REQUEST_ABSOLUTE, then vmm_flush to throw away that word and anything the
-; re-added handler queued behind it. The version is NOT read back and checked:
-; that check is a DATA read whose size can only be guessed, and guessing wrong
-; is what desynced the framing and stuck the pointer. vmm_init's GETVERSION
-; probe is the gate; this path just has to not make things worse.
-; in:  none (the CPU gate is the caller's)
-; out: nothing (all registers preserved)
-; -----------------------------------------------------------------------------
-vmm_enable:
-    push ax
-    push cx
-    mov word [vmm_ebx],   VMM_READID & 0xFFFF
-    mov word [vmm_ebx+2], VMM_READID >> 16
-    mov cx, VMM_COMMAND
-    call vmm_bd                     ; READ_ID: clears 0xFFFF, re-adds the handler
-
-    mov word [vmm_ebx],   VMM_ABS & 0xFFFF
-    mov word [vmm_ebx+2], VMM_ABS >> 16
-    mov cx, VMM_COMMAND
-    call vmm_bd                     ; ABSOLUTE
-
-    call vmm_flush                  ; ...and start the framing from empty
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; vmm_p2wake - tell the emulated 8042 the guest wants the mouse (SPEC.md 9.11.2)
-;
-; os8088 reads positions from the backdoor and never decodes a PS/2 packet, so
-; it does not run mou_p2_init. But v86 only starts DELIVERING mouse events to
-; the page (and hides the host cursor) once the guest ENABLES the PS/2 mouse
-; stream - the browser's mouse handler is dead until then, so the pointer does
-; not move at all. QEMU and VMware deliver regardless; v86 gates on this.
-;
-; So: 0xF4 (enable - the host flips its handler on), then immediately 0xF5
-; (disable the stream) so no PS/2 packet is ever queued and int 74h can stay
-; unhooked - a stray aux byte in the output buffer would be read as a scancode
-; by int 09h. 0xF5 does NOT undo the host's "mouse enabled" state, so
-; mouse-absolute keeps flowing to the backdoor. Each command's 0xFA ack is
-; drained. Best-effort: a controller that stalls was already delivering.
-; in:  none.  out: nothing (all registers preserved).
-; -----------------------------------------------------------------------------
-vmm_p2wake:
-    push ax
-    mov al, 0xD4                    ; "the next 0x60 byte is for the AUX device"
-    call mou_p2cw
-    mov al, 0xF4                   ; ENABLE data reporting -> host: mouse-enable
-    call mou_p2dw
-    call mou_p2rd                   ; its 0xFA ack (or a timeout) - discard
-    mov al, 0xD4
-    call mou_p2cw
-    mov al, 0xF5                  ; ...and STOP the stream: no packet, no IRQ12
-    call mou_p2dw
-    call mou_p2rd
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; vmm_init - probe the backdoor; on success claim the pointer (SPEC.md 9.11.2)
-;
-; Called from mouse_init where it would call mou_p2_init. On success the
-; caller retires the UARTs (mou_lockon) and skips the PS/2 probe.
-; in:  none
-; out: CF = 0 and [vmm_on] = 1 if the backdoor answered and ABSOLUTE is armed;
-;      CF = 1 otherwise. All registers preserved.
-; -----------------------------------------------------------------------------
-vmm_init:
-    cmp byte [cpu_tier], CPU_386
-    jne .no                         ; the island is 386 code - never reached on
-                                    ; the target (SPEC.md 41.9 rule 2)
-    push ax
-    push cx
-
-    mov word [vmm_ebx],   0         ; --- GETVERSION probe ---
-    mov word [vmm_ebx+2], 0
-    mov cx, VMM_GETVER
-    call vmm_bd
-    mov ax, [vmm_ebx]
-    cmp ax, VMM_MAGIC & 0xFFFF
-    jne .noreg
-    mov ax, [vmm_ebx+2]
-    cmp ax, VMM_MAGIC >> 16
-    jne .noreg
-    mov ax, [vmm_eax+2]             ; EAX != 0xFFFFFFFF: the high half alone is
-    cmp ax, 0xFFFF                  ; enough to tell an undriven port
-    je .noreg
-
-    call vmm_enable                 ; READ_ID / ABSOLUTE / drain (SPEC.md 9.11.1)
-    call vmm_p2wake                 ; ...and make v86 start delivering events
-
-    mov byte [mou_port],  VMM_ROW   ; --- won: settle the contest, as
-    mov byte [mou_line],  MOU_P2LINE ;    mou_claim / mou_p2_byte do ---
-    mov byte [mou_seen],  1
-    mov byte [mou_ptr],   1         ; the machine HAS a pointer (SPEC.md 9.6.6)
-    mov byte [mou_idany], 1         ; ...so mou_hotplug stands down too
-    mov byte [vmm_on],    1
-    pop cx
-    pop ax
-    clc
-    ret
-.noreg:
-    pop cx
-    pop ax
-.no:
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; vmm_poll - drain the backdoor's queue, apply each packet (SPEC.md 9.11.3)
-;
-; UI-task context, the gfx lock MAY be held (a drag sub-loop calls this). The
-; caller gates on [vmm_on] - the VMM_POLL macro - so this body runs only under
-; an emulator, where cost is not the target machine's.
-; in:  [vmm_on] set
-; out: nothing (all registers preserved)
-; -----------------------------------------------------------------------------
-vmm_poll:
-    mov al, 1                      ; RE-ENTRANCY GUARD (xchg is atomic on 8086):
-    xchg al, [vmm_busy]           ; task_yield calls this, so an IF=1 window
-    or al, al                    ; between a STATUS write and its `in` can be
-    jz .go                       ; preempted into another task that yields and
-    ret                          ; also polls - and the vmm_ebx scratch is
-                                 ; shared. The other slice will drain; skip
-.go:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    push es                        ; mou_apply's tail is written for ISR
-                                   ; context, where every register was saved
-                                   ; on entry - cur_move spends SI/DI/BP and
-                                   ; loads ES for VRAM. From the UI task this
-                                   ; routine owes all of that back itself
-    mov byte [vmm_drn], VMM_DRAIN   ; a MEMORY counter, not a register: the
-                                    ; apply path below spends SI
-.pass:
-    mov word [vmm_ebx],   0
-    mov word [vmm_ebx+2], 0
-    mov cx, VMM_STATUS
-    call vmm_bd
-    mov ax, [vmm_eax+2]             ; high half of the status word
-    cmp ax, 0xFFFF                  ; 0xFFFF???? -> the backdoor disabled itself
-    je .redo                       ; (a DATA underflow, or a v86 queue overflow)
-    mov ax, [vmm_eax]              ; low half = WORDS queued
-    cmp ax, VMM_QMIN               ; a whole 4-word packet?
-    jb .out
-    test al, 3                     ; ...and 4-aligned. vmm_enable drains to empty
-    jnz .resync                   ; so this never fails - but a stray word would
-                                  ; misframe EVERY packet behind it, so a
-                                  ; non-multiple of 4 means throw the lot away
-    call vmm_read                  ; one packet -> mou_apply(_abs)
-    dec byte [vmm_drn]
-    jnz .pass
-.out:
-    mov byte [vmm_busy], 0
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-.redo:
-    call vmm_enable                ; READ_ID clears the disable, then drain -
-    jmp short .out                 ; [vmm_on] stays set, and next pass's STATUS
-                                  ; confirms it took. Under v86 the disable is
-                                  ; a transient queue overflow; under QEMU it
-                                  ; is a DATA underflow vmm_flush now prevents
-.resync:
-    call vmm_flush                 ; misframed: drop everything and start clean
-    jmp short .out                ; on the next 4-word packet
-
-; -----------------------------------------------------------------------------
-; vmm_read - read one queued packet and apply it (SPEC.md 9.11.3)
-;
-; in:  a packet is known to be queued
-; out: nothing (clobbers AX/BX/CX/DX/SI/DI/BP/ES - vmm_poll saved them all)
-;
-; mou_apply / mou_apply_abs are written for ISR context (IF = 0, every
-; register already saved). This runs on the UI task with IF = 1, so the apply
-; is bracketed pushf/cli...popf - kbm_paint's arrangement - or a task switch
-; mid-cur_move interleaves raw Graphics Controller state with another task's
-; drawing. The apply's own evq_push nests its pushf/cli harmlessly.
-; -----------------------------------------------------------------------------
-vmm_read:
-    mov word [vmm_ebx],   4         ; read the 4-dword packet
-    mov word [vmm_ebx+2], 0
-    mov cx, VMM_DATA
-    call vmm_bd
-    ; [vmm_eax] status, [vmm_ebx] x, [vmm_ecx] y, [vmm_edx] z (wheel: dropped)
-
-    xor cl, cl                      ; buttons into mouse_btn's own two bits
-    test byte [vmm_eax], VMM_S_LEFT
-    jz .nol
-    or cl, 0x01
-.nol:
-    test byte [vmm_eax], VMM_S_RIGHT
-    jz .nor
-    or cl, 0x02
-.nor:
-    test byte [vmm_eax+2], 0x01     ; RELATIVE_PACKET (0x00010000) in the high
-    jnz .rel                        ; word: v86 sends these while the host
-                                    ; pointer is LOCKED (the user hit "capture
-                                    ; pointer") - route to the delta path. Not
-                                    ; needed here, but it works (SPEC.md 9.11.1)
-
-    mov ax, [vid_w]                 ; absolute: scale 0..0xFFFF to the screen
-    mul word [vmm_ebx]              ; DX:AX = x * vid_w ; DX = (x * vid_w) >> 16
-    push dx
-    mov ax, [vid_h]
-    mul word [vmm_ecx]
-    mov bx, dx
-    pop ax                          ; AX = x, BX = y, CL = buttons
-    pushf
-    cli
-    call mou_apply_abs
-    popf
-    ret
-
-.rel:
-    mov ax, [vmm_ebx]              ; x delta, signed (low word)
-    mov bx, [vmm_ecx]              ; y delta - positive is UP on this wire, like
-    neg bx                        ; the PS/2 one, so the screen's dy is its
-    pushf                         ; negation (SPEC.md 9.9.3)
-    cli
-    call mou_apply
-    popf
-    ret
-
-%endif                          ; KERN_BIG - the VMware absolute pointer
-
-; VMM_POLL - drain the VMware backdoor's queue if it won the contest (SPEC.md
-; 9.11.3). One byte compare off a browser; expands to nothing on kern_small.
-; Used by ui_task's pass and by the drag / grow / menu-track sub-loops, beside
-; their kbm_pollm.
-%macro VMM_POLL 0
-%ifdef KERN_BIG
-    cmp byte [vmm_on], 0
-    jz %%no_vmm
-    call vmm_poll
-%%no_vmm:
-%endif
-%endmacro
 
 ; =============================================================================
 ; The keyboard mouse (SPEC.md 9.6)
@@ -3482,6 +3095,36 @@ mou_byte:
 .bout:
     ret
 
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; mou_apply_abs - an ABSOLUTE report (SPEC.md 9.11)
+;
+; The VMware backdoor knows where the pointer IS, not how far it moved. From
+; the clamp on nothing is protocol-specific, so this shares mou_apply's tail
+; rather than carrying a second copy of the event rules - the binding
+; both-buttons fall-through (SPEC.md 9) is the one that would be got wrong
+; twice.
+;
+; ins:  AX = x, BX = y - already scaled to the live screen; CL = the buttons
+;       in mouse_btn's own two bits. IF = 0 and ON mou_pstack: vmm_poll swaps
+;       to the mouse's private stack around this call, because .tail's
+;       cur_move chain is exactly what SPEC.md 9.10 moved OFF task stacks and
+;       vmm_poll runs on every task's. The contest was settled at boot by
+;       vmm_boot_x (SPEC.md 9.11.2).
+; outs: none
+; -----------------------------------------------------------------------------
+mou_apply_abs:
+    mov byte [blk_act], 1       ; a report IS user input (SPEC.md 64.1) - the
+                                ; contest is long settled, so unlike mou_apply
+                                ; there is no losing device to keep the screen
+                                ; awake
+    call mou_clamp              ; bounds, and 2-D on a two-display machine
+                                ; (SPEC.md 39.15.4). Preserves CX
+    mov [mouse_x], ax
+    mov [mouse_y], bx
+    jmp mou_apply.tail
+%endif
+
 ; -----------------------------------------------------------------------------
 ; mou_apply - one decoded report, whatever hardware carried it (SPEC.md 9.9.3)
 ;
@@ -3500,32 +3143,6 @@ mou_byte:
 ;       ISR context, IF = 0; the caller has already settled the contest.
 ; outs: none
 ; -----------------------------------------------------------------------------
-%ifdef KERN_BIG
-; -----------------------------------------------------------------------------
-; mou_apply_abs - an ABSOLUTE report (SPEC.md 9.11)
-;
-; The VMware backdoor knows where the pointer IS, not how far it moved. From
-; the clamp on nothing is protocol-specific, so this shares mou_apply's tail
-; rather than carrying a second copy of the event rules - the binding
-; both-buttons fall-through (SPEC.md 9) is the one that would be got wrong
-; twice.
-;
-; ins:  AX = x, BX = y - already scaled to the live screen; CL = the buttons
-;       in mouse_btn's own two bits. UI-task context, IF = 1; the caller has
-;       settled the contest (vmm_init did, at boot).
-; outs: none
-; -----------------------------------------------------------------------------
-mou_apply_abs:
-    mov byte [blk_act], 1       ; a report IS user input (SPEC.md 64.1) - the
-                                ; contest is long settled, so unlike mou_apply
-                                ; there is no losing device to keep the screen
-                                ; awake
-    call mou_clamp              ; bounds, and 2-D on a two-display machine
-                                ; (SPEC.md 39.15.4). Preserves CX
-    mov [mouse_x], ax
-    mov [mouse_y], bx
-    jmp mou_apply.tail
-%endif
 
 mou_apply:
     mov byte [blk_act], 1       ; a packet on a SETTLED port IS user input
@@ -5391,26 +5008,6 @@ mou_p2m1    db 0                ; ...as is the master 8259's mask as
                                 ; success path clears in the same byte
                                 ; (mouse_unhook restores the vector)
 
-%ifdef KERN_BIG
-; --- the VMware absolute pointer (SPEC.md 9.11) ----------------------------
-; .text with real 0 initialisers, cur_mvt's idiom: -f bin zeroes nothing, and
-; the answer a machine reads when vmm_init never ran has to be "off". Below
-; every published span - SPEC.md 9.11 publishes no block a test reads by
-; offset - and KERN_BIG only, so kern_small carries none of it.
-vmm_on      db 0                ; the backdoor answered and ABSOLUTE mode is
-                                ; armed: vmm_poll runs, the serial/PS/2 ports
-                                ; are retired
-vmm_drn     db 0                ; vmm_poll's drain counter - a byte, not a
-                                ; register, because the apply path spends SI.
-                                ; Live only inside one poll
-vmm_busy    db 0                ; vmm_poll's re-entrancy guard (task_yield is a
-                                ; caller now, so two task slices can race the
-                                ; vmm_ebx scratch)
-vmm_eax     dd 0               ; vmm_bd's four result registers, read back by
-vmm_ebx     dd 0               ; the 8086 half as word pairs. vmm_ebx is also
-vmm_ecx     dd 0               ; the EBX *input* - the command's argument
-vmm_edx     dd 0
-%endif
 
 %ifdef MOU_DIAG                 ; --- MOUDIAG=1 only (SPEC.md 9.9.6) ----------
                                 ; BELOW the published span deliberately: a knob

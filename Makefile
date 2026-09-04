@@ -8,15 +8,26 @@
 # =============================================================================
 
 NASM  := nasm
-# The `pc` machine carries a `vmport` and a `vmmouse` by default, so the
-# kernel's VMware absolute pointer (SPEC.md 9.10) PROBES SUCCESSFULLY here and
-# WINS the mouse contest - which is right in v86 and on a desktop hypervisor,
-# and wrong for automated testing, where tools/mouse.py drives the msserial
-# device by relative deltas and the backdoor's event queue stays empty (the
-# pointer would never move). So every driving recipe turns the port off;
-# `tests/vmmouse.py` and `make run VMPORT=on` turn it back on.
+# The `pc` machine carries a `vmport` and a `vmmouse` by default, so a guest
+# that speaks SPEC.md 9.11's backdoor WINS the mouse contest here - which is
+# right in v86 and on a desktop hypervisor, and wrong for automated testing,
+# where tools/mouse.py drives the msserial device by relative deltas and the
+# backdoor's event queue stays empty (the pointer would never move). So every
+# driving recipe turns the port off; `tests/vmmouse.py` and
+# `make run VMPORT=on` turn it back on.
+#
+# IT IS ITS OWN VARIABLE, APPENDED AT EACH USE SITE, and that is not style.
+# Six recipes and four documents tell the reader to replace $(QEMU) WHOLESALE
+# - `make test QEMU="qemu-system-i386 -icount shift=3,sleep=off"` is the band
+# benchmarks' documented form - and an override that swallowed the machine
+# flag would put the default `pc` back with $(MOUSE)'s msmouse still on the
+# command line. That is both pointing devices at once, which splits absolute
+# coordinates and button events across two of them and sticks [mouse_btn]
+# pressed: a drag that starts and never ends. A knob whose safety depends on
+# nobody using a documented override is not a knob.
 VMPORT ?= off
-QEMU  := qemu-system-i386 -machine pc,vmport=$(VMPORT)
+QEMUMACH := -machine pc,vmport=$(VMPORT)
+QEMU  := qemu-system-i386
 BUILD := build
 IMG   := $(BUILD)/os8088.img
 # ...and the 1.2MB 5.25" HD pair (SPEC.md 19), which is the AT-class machine
@@ -2267,6 +2278,15 @@ DRIVERS += $(BUILD)/xmem.drv
 # back out ($(SMALLDRIVERS) below): drv_load_at, its only loader, is inside
 # %ifdef KERN_BIG and nothing on that kernel can name the file
 DRIVERS += $(BUILD)/saver.drv
+# ...and SPEC.md 9.11's absolute pointer, which is an overlay for a reason
+# neither of those two has: its code is 386 instructions and the target machine
+# is an 8088, so this is the one file in the tree that MUST NOT BE EXECUTED on
+# the machine the project is calibrated against. It differs from XMEM and the
+# saver in having a drv_tab row and a SYSTEM.CFG bit - the probe is 386 code,
+# so there is no resident sniff that could decide for the user the way
+# xm_sniff does. kern_small filters it out ($(SMALLDRIVERS)): every machine
+# that kernel runs on is an 8086
+DRIVERS += $(BUILD)/vmmouse.drv
 # ...and the ON-DEMAND KERNEL MODULES (SPEC.md 2.8), which are neither a driver
 # nor an overlay. Both of those are SELF-CONTAINED images with a dispatcher and
 # an ABI; a module is this kernel's OWN CODE, cut out of the assembled binary by
@@ -2690,6 +2710,19 @@ $(BUILD)/net.bin: drivers/net/net.asm drivers/net/netui.inc \
 $(BUILD)/net.drv: $(BUILD)/net.bin tools/os88drv.py
 	python3 tools/os88drv.py $(BUILD)/net.bin -o $@
 
+# VMMOUSE.DRV - the VMware absolute pointer (SPEC.md 9.11). kernel/vmmabi.inc
+# is SHARED AS SOURCE with kernel/vmmouse.inc; it sits in kernel/ so that the
+# three tools which re-assemble kernel.asm with include paths of their own do
+# not each need a new one (the file says why), and $(KERNEL_INC)'s wildcard
+# makes it a kernel prerequisite for free. `-I kernel/` here is the other half
+$(BUILD)/vmmouse.bin: drivers/vmmouse/vmmouse.asm kernel/vmmabi.inc \
+                      drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I kernel/ -I drivers/ -I apps/ -o $@ $<
+	@echo "vmmouse: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/vmmouse.drv: $(BUILD)/vmmouse.bin tools/os88drv.py
+	python3 tools/os88drv.py $(BUILD)/vmmouse.bin -o $@
+
 # RAMDISK.DRV - a DRVC_FILE volume with no hardware behind it (SPEC.md 62.9),
 # and the FILE REDIRECTOR'S HARNESS: every branch site the redirector added to
 # the kernel runs on a cycle-accurate 8088 in a container, which is the one
@@ -2951,6 +2984,36 @@ $(BUILD)/system.cfg: | $(BUILD)
 	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
 	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
 	  (1 << 4).to_bytes(2,'little') + b'\0\0')" > $@
+
+# VMMOUSETEST - the same shape for SPEC.md 9.11's absolute pointer, and it
+# exists for the same reason: the driver is DRVC_OVL with a drv_tab row, so
+# NOTHING LOADS UNLESS SYSTEM.CFG ASKS FOR IT (SPEC.md 51.3) and a plain
+# os8088.img boots with the backdoor untouched - which is correct, and is why
+# the gate needs a disk of its own rather than a scripted Control Panel click.
+#
+# **BIT 5 IS THE ABSOLUTE MOUSE'S AND IS NOT ITS ROW NUMBER**, exactly as bit 4
+# is Ethernet's and not row 2's (drv_cfgbit). It is 1.44MB rather than 360KB
+# because tests/vmmouse.py drives a VGA screen and the 360KB disk is where the
+# geometry gets tight; nothing here depends on the size.
+# IN A DIRECTORY OF ITS OWN because os88disk.py names a file on the volume from
+# its BASENAME, and this has to land as SYSTEM.CFG - which build/system.cfg,
+# the Ethernet gate's, already is with a different bit set.
+$(BUILD)/vmmcfg/system.cfg: | $(BUILD)
+	@mkdir -p $(BUILD)/vmmcfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
+	  (1 << 5).to_bytes(2,'little') + b'\0\0')" > $@
+
+$(BUILD)/vmmouse.img: $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/vmmcfg/system.cfg tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(BUILD)/kernel.bin \
+		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/vmmcfg/system.cfg
+
+.PHONY: vmmousetest
+vmmousetest: $(BUILD)/vmmouse.img
+	@echo "vmmousetest: build/vmmouse.img - VMMOUSE.DRV already wanted."
+	@echo "             Run it with: python3 tests/vmmouse.py"
 
 .PHONY: ethertest
 ethertest: $(BUILD)/ether360.img
@@ -5497,7 +5560,7 @@ ZHDEV = -chardev socket,id=zh,path=$(BUILD)/zh.sock,server=on,wait=off \
         -device isa-serial,chardev=zh,iobase=0x3e8,irq=3
 
 zhboot: $(IMG)
-	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
+	$(QEMU) $(QEMUMACH) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
 		-drive file=$(ZHIMG),format=raw,if=floppy,index=1 \
 		-display none -qmp unix:$(BUILD)/qmp.sock,server,nowait \
 		-daemonize -pidfile $(BUILD)/qemu.pid $(ZHDEV)
@@ -7648,7 +7711,7 @@ endif
 RUNAPPS ?= $(APPSIMG)
 
 run: $(IMG) $(RUNAPPS)
-	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
+	$(QEMU) $(QEMUMACH) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
 		-drive file=$(RUNAPPS),format=raw,if=floppy,index=1 $(DEVCARD)
 
 # A maxed-out 640KB machine. QEMU/SeaBIOS cannot boot with less than 1MB
@@ -7656,7 +7719,7 @@ run: $(IMG) $(RUNAPPS)
 # but conventional memory tops out at 640K regardless of installed RAM, so
 # -m 1M makes int 12h report 640K - same as a fully populated XT.
 run-640: $(IMG) $(APPSIMG)
-	$(QEMU) -m 1M -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
+	$(QEMU) $(QEMUMACH) -m 1M -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
 		-drive file=$(APPSIMG),format=raw,if=floppy,index=1 $(DEVCARD)
 
 # The 720KB pair. QEMU picks a floppy's geometry from the image SIZE, and
@@ -7668,15 +7731,15 @@ run-640: $(IMG) $(APPSIMG)
 # standard one (2 heads x 80 cyl x 15 spt), so naming the images is the whole
 # recipe - and an image the BIOS reads as some other shape fails right here.
 run-120: $(IMG120) $(APPSIMG120)
-	$(QEMU) -drive file=$(IMG120),format=raw,if=floppy -boot a $(MOUSE) \
+	$(QEMU) $(QEMUMACH) -drive file=$(IMG120),format=raw,if=floppy -boot a $(MOUSE) \
 		-drive file=$(APPSIMG120),format=raw,if=floppy,index=1 $(DEVCARD)
 
 run-720: $(IMG720) $(APPSIMG720)
-	$(QEMU) -drive file=$(IMG720),format=raw,if=floppy -boot a $(MOUSE) \
+	$(QEMU) $(QEMUMACH) -drive file=$(IMG720),format=raw,if=floppy -boot a $(MOUSE) \
 		-drive file=$(APPSIMG720),format=raw,if=floppy,index=1 $(DEVCARD)
 
 debug: $(IMG) $(APPSIMG)
-	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) -s -S \
+	$(QEMU) $(QEMUMACH) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) -s -S \
 		-drive file=$(APPSIMG),format=raw,if=floppy,index=1 $(DEVCARD)
 
 # Headless boot with a QMP socket, for scripted screendumps and input:
@@ -7794,7 +7857,7 @@ ETHERDEV = -netdev user,id=n0$(ETHFWDS) -device ne2k_isa,netdev=n0,iobase=0x300,
 endif
 
 test: $(TESTIMG) $(TESTAPPS) $(HDDIMG)
-	$(QEMU) -drive file=$(TESTIMG),format=raw,if=floppy -boot a $(MOUSE) \
+	$(QEMU) $(QEMUMACH) -drive file=$(TESTIMG),format=raw,if=floppy -boot a $(MOUSE) \
 		-drive file=$(TESTAPPS),format=raw,if=floppy,index=1 $(HDDDEV) \
 		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid \
 		$(CARDAUDIO) $(ADLIBDEV) $(SBDEV) $(DEVCARD) $(ETHERDEV)
@@ -7804,7 +7867,7 @@ test: $(TESTIMG) $(TESTAPPS) $(HDDIMG)
 # tools/sndcheck.py (RMS + dominant-frequency assertions). TESTAPPS (defined
 # above `test`) swaps the B: disk for a scratch image.
 test-snd: $(IMG) $(TESTAPPS)
-	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
+	$(QEMU) $(QEMUMACH) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
 		-drive file=$(TESTAPPS),format=raw,if=floppy,index=1 \
 		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid \
 		-audiodev wav,id=snd,path=build/snd.wav -machine pcspk-audiodev=snd \

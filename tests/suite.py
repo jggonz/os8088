@@ -1271,15 +1271,21 @@ SOAK = [
         needs=("qemu", "nasm"), serial=True, timeout=420, builds=True),
     Row("vmmouse", "full", py("tests/vmmouse.py"), 45.0,
         "The VMware absolute pointer (SPEC.md 9.11), the browser's grabless "
-        "mouse. QEMU's pc machine carries a vmport and a vmmouse by default, "
-        "so `vmm_init`'s backdoor probe succeeds here exactly as it does under "
-        "v86 - which makes this the one CI gate a browser-only feature gets. "
-        "vmport ON and -serial none: the backdoor is the only pointing "
-        "device. Asserts cpu_tier 2, vmm_on 1, mou_port 6 (VMM_ROW, so "
+        "mouse - and the one CI gate a browser-only feature gets. QEMU's pc "
+        "machine carries a vmport and a vmmouse by default, so VMMOUSE.DRV's "
+        "backdoor probe succeeds here exactly as it does under v86. It boots "
+        "build/vmmouse.img and NOT os8088.img: the driver is DRVC_OVL with a "
+        "drv_tab row and is NOT WANTED BY DEFAULT, so a stock disk never "
+        "reads it (SPEC.md 51.3) - `make vmmousetest` builds one whose "
+        "SYSTEM.CFG has bit 5 set, ether360.img's shape. vmport ON and "
+        "-serial none, so the backdoor is the only pointing device. Asserts "
+        "cpu_tier 2 (vmm_boot_x refuses to READ the image below it, the last "
+        "CPU gate in the tree), vmm_on 1, mou_port 6 (MOU_VMROW, so "
         "mou_lockon retired the serial rows), then absolute positions "
         "injected through vmmouse landing within a few px - the sign and axis "
-        "handling that a boot-state read cannot see. QEMU by name on "
-        "CLAUDE.md's closed list - MartyPC has no backdoor",
+        "handling that a boot-state read cannot see - and a drag through a "
+        "menu, which is what proves the task_yield service point. QEMU by "
+        "name on CLAUDE.md's closed list - MartyPC has no backdoor",
         needs=("qemu", "nasm"), serial=True, timeout=420, builds=True),
     Row("heapmap", "soak", py("tests/heapmap.py"), 120.0,
         "What does the claim heap look like when the boot is over? (SPEC.md "

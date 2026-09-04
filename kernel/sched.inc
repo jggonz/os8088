@@ -929,21 +929,26 @@ task_yield:
 %ifdef KERN_BIG
     ; --- the VMware absolute pointer's service point (SPEC.md 9.11.3) --------
     ; vmmouse is POLLED, not interrupt-driven, so every spin loop that waits on
-    ; the mouse - a drag, a menu, the file manager's icon drag - has to pump it
-    ; or the button-release it is waiting for never arrives (a freeze). They
-    ; ALL call task_yield, so draining it here services every one, present and
-    ; future, near and far (the cold segment's cw_task_yield lands here too).
-    ; One byte compare off a browser. Before the cli/frame build: this is still
-    ; the caller's task context with IF as it left it, exactly as ui_task's own
-    ; VMM_POLL - and vmm_read brackets the apply in cli itself.
+    ; the mouse - a drag, a grow, a menu track, the file manager's icon drag -
+    ; has to pump it or the button-release it is waiting for never arrives (a
+    ; freeze). They ALL call task_yield, so draining it here services every one,
+    ; present and future, near and far (the cold segment's cw_task_yield lands
+    ; here too).
+    ;
+    ; Before the cli/frame build: this is still the caller's task context with
+    ; IF as it left it, exactly as ui_task's own VMM_POLL - and vmm_poll takes
+    ; its own cli, and its own STACK, around the apply.
+    ;
+    ; It costs the target machine 16 bytes and ~91 clocks - 19.1 us, 2.8% of a
+    ; 693 us switch (PERFORMANCE.md Part 2's fetch floor, not the clock count
+    ; alone). That is the price of the compare on a machine that will never
+    ; take the branch, and it is why [vmm_on] is one byte in .text rather than
+    ; anything that needs computing.
     push ds
     push ax
     mov ax, KERNEL_SEG
     mov ds, ax
-    cmp byte [vmm_on], 0
-    jz .noyvmm
-    call vmm_poll
-.noyvmm:
+    VMM_POLL
     pop ax
     pop ds
 %endif

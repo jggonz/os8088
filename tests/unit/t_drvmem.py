@@ -68,6 +68,11 @@ ROWS = [
     ("Ethernet",   "DRVM_ETH", "DRVM_IMG_ETH", "ether.drv"),
     ("Ram Disk",   "DRVM_RAM", "DRVM_IMG_RAM", "ramdisk.drv"),
     ("os88net",    "DRVM_NET", "DRVM_IMG_NET", "net.drv"),
+    # SPEC.md 9.11's absolute pointer. THE ONE DRVC_OVL ROW IN drv_tab, so
+    # unlike the five above it publishes nothing - but it is a row, it has a
+    # SYSTEM.CFG bit and the Drivers page prices it, so it is in drv_memk and
+    # therefore here
+    ("Absolute mouse", "DRVM_VMM", "DRVM_IMG_VMM", "vmmouse.drv"),
 ]
 
 EQU = re.compile(r"^\s*([A-Z][A-Z0-9_]*)\s+equ\s+(.+?)\s*(?:;.*)?$", re.M)
@@ -198,6 +203,9 @@ def main():
                      + s["RD_TABMAXKB"]                     # the chain table
                      + s["RD_EXTMAXKB"]) | plus,            # ...and the bounce
         "DRVM_NET": s["DRVM_IMG_NET"],                      # no heap claim at all
+        # ...and nor does the absolute mouse: it hooks no vector, owns no port
+        # and keeps no buffer, so the image IS the whole footprint
+        "DRVM_VMM": s["DRVM_IMG_VMM"],
     }
     for title, total, _img, _drv in ROWS:
         eq(s.get(total), want[total],

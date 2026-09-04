@@ -196,9 +196,14 @@ THEMES = (
     # bootprof.inc below, although both are knob-only: what it records is what
     # mouse_init's identify window saw, so a byte it grows is the mouse's
     # question. It is 0 in a shipped build either way.
+    # vmmouse.inc (SPEC.md 9.11) goes with the mouse and not with driver.inc,
+    # although it is a row, a dispatch and a boot attach: what a byte it grows
+    # is is the POINTER's question, and its other half - the 386 protocol
+    # itself - is VMMOUSE.DRV and weighs nothing here at all. xmem.inc is the
+    # same shape one subject over, and is already on this row.
     ("hardware: drivers, clock, mouse, sound, CPU, XMS",
-     ("mouse.inc", "moudiag.inc", "clock.inc", "driver.inc", "hiber.inc", "snd.inc",
-      "cpudet.inc", "xmem.inc")),
+     ("mouse.inc", "moudiag.inc", "vmmouse.inc", "clock.inc", "driver.inc",
+      "hiber.inc", "snd.inc", "cpudet.inc", "xmem.inc")),
     # blank.inc (SPEC.md 64) is here and not under hardware, although all it
     # does is write a video port: what it owns is whether the SIGNAL is on,
     # which is a property of the adapter the rest of this group programs.

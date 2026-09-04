@@ -40,7 +40,7 @@ nothing here duplicates it — a second copy is a copy that goes stale.
 | **[docs/C-TOOLCHAIN.md](docs/C-TOOLCHAIN.md)** | writing or building a package in C (§73) — how to install the compiler, the four C rules and what each refusal means, and what the language does not have here |
 | **[docs/NET-STACK-PLAN.md](docs/NET-STACK-PLAN.md)** | anything on the wire (§72) — the stack's stages, what each layer refuses, and why TLS is not on this machine |
 | **[docs/BROWSER-PLAN.md](docs/BROWSER-PLAN.md)** | the browser (§71) — the renderer's steps, and `tools/htmsim.py` is its reference implementation |
-| **[docs/VMMOUSE-PLAN.md](docs/VMMOUSE-PLAN.md)** | the browser's grabless absolute pointer (§9.11) — why the VMware backdoor probe is the whole of "detect the browser", and the first `cpu 386` island in `kernel/` (behind `[cpu_tier]`, `XMEM.DRV`'s arrangement one level down) |
+| **[docs/VMMOUSE-PLAN.md](docs/VMMOUSE-PLAN.md)** | the browser's grabless absolute pointer (§9.11) — why the VMware backdoor probe is the whole of "detect the browser". **Its §15 is the fork**: the study plans resident kernel code behind `[cpu_tier]`, and `VMMOUSE.DRV` is what shipped — the protocol is 32-bit, and a tier gate cannot survive a hibernate image carried to an 8088 |
 | **[docs/PROXY-PLAN.md](docs/PROXY-PLAN.md)** | the host-side proxy — it exists because an RSA-2048 private operation is *minutes* on a 4.77 MHz 8088, so TLS terminates off the machine |
 | **[docs/MARTYPC-DEBUG.md](docs/MARTYPC-DEBUG.md)** | driving the emulator — `launch`/`settle`/`sym`, the debug server, reading the guest's floppy back on the host, and installing the deps in a fresh Ubuntu container |
 | **[docs/UPSTREAM.md](docs/UPSTREAM.md)** | any claim about what is ahead, behind, merged or unrelated. **Its Rule 0: a fresh clone is SHALLOW, and git answers ancestry questions confidently and wrongly on one** |
@@ -179,6 +179,13 @@ make netbench   # THE STACK'S PROFILER (SPEC.md 72.15): NETBENCH.O88 beside
                 #   MartyPC has NO NIC, so the milliseconds are only real on
                 #   86Box or the 5150; under QEMU the calls and bytes are
                 #   exact and the times are the host's
+make vmmousetest # THE ABSOLUTE POINTER'S DISK (§9.11.6): a SYSTEM.CFG with
+                #   VMMOUSE.DRV's bit already set, ethertest's shape - the
+                #   driver is NOT wanted by default, so a stock os8088.img
+                #   never reads it and the gate would have nothing to test.
+                #   `make vmmousetest && python3 tests/vmmouse.py`. QEMU by
+                #   name: its `pc` machine carries the backdoor and MartyPC
+                #   has none, and `make run VMPORT=on` is the interactive form
 make ethertest  # THE ETHERNET GATE'S DISK (§72.9): a SYSTEM.CFG that already
                 #   asks for ETHER.DRV, so the card is up and DHCP has run
                 #   before the first paint and the test reads state instead of

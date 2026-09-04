@@ -42,8 +42,12 @@
 ; =============================================================================
 
 %ifdef KERN_BIG
-DRV_MAX     equ 5               ; rows in drv_tab, and the FIFTH is SPEC.md
-                                ; 72's Ethernet card. The settings word carries
+DRV_MAX     equ 6               ; rows in drv_tab. The FIFTH is SPEC.md 72's
+                                ; Ethernet card and the SIXTH is SPEC.md
+                                ; 9.11's absolute mouse - the one DRVC_OVL row
+                                ; in the table, which takes no publication
+                                ; class and exists only so SYSTEM.CFG carries
+                                ; a bit for it and the page can untick it. The settings word carries
                                 ; one bit per row, so the FILE FORMAT allows
                                 ; 16 - and the CONTROL PANEL now allows any
                                 ; number too: the Drivers page fits CP_DVIS
@@ -640,7 +644,7 @@ DRV_CFG_MAPN equ 8
 ; the kernel at the image's offset.
 %1 %+ _bit:
 %ifdef KERN_BIG
-    db 0, 1, 4, 2, 3            ; sound, hdd, ether, ramdisk, net
+    db 0, 1, 4, 2, 3, 5         ; sound, hdd, ether, ramdisk, net, vmmouse
 %else
     db 0, 1, 3, 2               ; sound, hdd, ether, net
 %endif
@@ -714,6 +718,9 @@ drv_t_net:   db 'os88net', 0
 drv_f_ram:   db 'RAMDISK.DRV', 0
 drv_t_ram:   db 'Ram Disk', 0
 %endif
+drv_f_vmm:   db 'VMMOUSE.DRV', 0 ; SPEC.md 9.11's absolute pointer. kern_big
+drv_t_vmm:   db 'Absolute mouse', 0  ; alone - the row below is inside the
+                                ; %ifdef and so is every byte that reads it
 drv_f_eth:   db 'ETHER.DRV', 0   ; ...and the card's, on BOTH builds: the store
 drv_t_eth:   db 'Ethernet', 0    ; a RAM disk is made of is what kern_small has
                                 ; none of, and a network card is not
@@ -888,6 +895,44 @@ drv_tab:
     db DRVE_OK
     db 0
 
+%ifdef KERN_BIG
+vmm_row:                        ; row 5: the VMware absolute pointer (SPEC.md
+    dw PKG_DISP, 0              ; 9.11) - THE ONE DRVC_OVL ROW IN drv_tab, and
+    dw drv_f_vmm, drv_t_vmm     ; the combination is deliberate. DRVC_OVL means
+    dw 0, 0                     ; it takes no publication slot, so DRVC_MAX
+    db DRVC_OVL                 ; stays 5: a class is how a PACKAGE finds a
+                                ; driver (SPEC.md 51.2.1) and the kernel is
+                                ; this one's only caller. drv_load_row already
+                                ; stops a DRVC_OVL row after drv_check with
+                                ; DRVR_SEG and DRVR_ENT live and nothing
+                                ; called, which is the path XMEM.DRV takes
+                                ; through drv_load_at; here the same stop is
+                                ; reached by index, and vmm_boot_x is the
+                                ; owner that attaches it.
+                                ;
+                                ; The ROW is what XMEM deliberately does NOT
+                                ; have, and SPEC.md 41.12 gives the reason it
+                                ; declined one: "a machine either has memory
+                                ; up there or it does not", so a tick box
+                                ; "would only ever be a way to break a working
+                                ; machine". Half of that holds here. Whether
+                                ; the backdoor answers is likewise not a
+                                ; matter of opinion - but the PROBE IS 386
+                                ; CODE, so unlike xm_sniff there is no
+                                ; resident test that could ask it, and
+                                ; whether a user wants the pointer ungrabbed
+                                ; is a decision in a way that "is there RAM
+                                ; above 1MB" is not
+    db 0                        ; NOT wanted by default, like every other row.
+                                ; The browser and hypervisor images ship a
+                                ; SYSTEM.CFG with bit 5 set; a floppy that
+                                ; carries no settings file at all reads no
+                                ; sector of this driver, which is exactly what
+                                ; the XT should pay
+    db DRVE_OK
+    db 0
+%endif
+
 
 ; =============================================================================
 ; What a driver costs to RUN, in KB (SPEC.md 31.6.2)
@@ -926,6 +971,7 @@ DRVM_IMG_HDD equ 8              ; ceil(build/hdd.drv     / 1024)   checks
 DRVM_IMG_ETH equ 18             ; ceil(build/ether.drv   / 1024)   every one
 DRVM_IMG_RAM equ 9              ; ceil(build/ramdisk.drv / 1024)   of these
 DRVM_IMG_NET equ 6              ; ceil(build/net.drv     / 1024)
+DRVM_IMG_VMM equ 1              ; ceil(build/vmmouse.drv / 1024)
 
 DRVM_SND     equ DRVM_IMG_SND + 8 + 20    ; SBL_DMASZ (the DMA-visible double
                                 ; buffer and record ring) + SBL_POOLKB (the
@@ -947,6 +993,9 @@ DRVM_RAM     equ (DRVM_IMG_RAM + 4 + 8) | DRVM_PLUS
                                 ; exclusive - conventional takes an arena
                                 ; instead of a bounce - so this is the larger,
                                 ; and the arena is what the '+' stands for
+DRVM_VMM     equ DRVM_IMG_VMM   ; the absolute mouse claims nothing either: it
+                                ; hooks no vector, owns no port and keeps no
+                                ; buffer. The image IS the whole footprint
 DRVM_NET     equ DRVM_IMG_NET   ; the parallel link claims NOTHING: its packet
                                 ; buffers are bss, and a driver's bss ships
                                 ; INSIDE its image (DRV_H_IMG)
@@ -959,6 +1008,9 @@ drv_memk:                       ; one word per drv_tab row, in the same order
     dw DRVM_RAM                 ; row 3: the RAM disk (kern_big alone)
 %endif
     dw DRVM_NET                 ; the parallel link, last on both builds
+%ifdef KERN_BIG
+    dw DRVM_VMM                 ; row 5: the absolute mouse (kern_big alone)
+%endif
 %if ($ - drv_memk) / 2 != DRV_MAX
   %error "drv_memk has drifted from drv_tab: one word per row, same order"
 %endif

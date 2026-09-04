@@ -1,9 +1,13 @@
 # The VMware absolute pointer — `vmmouse`, for the browser
 
-**Research document, not a contract — and now IMPLEMENTED.**
-> The study below was written before the code. **SPEC.md §9.11 is the binding
-> account**; where the two disagree, the SPEC wins. §12 records what actually
-> shipped and where it differed from the plan.
+**Research document, not a contract — and now IMPLEMENTED, in a different
+shape from the one studied here.**
+> The study below was written before the code and **plans a resident feature
+> in `kernel/mouse.inc`, gated on `[cpu_tier]`. That is not what shipped.**
+> Everything it says about the protocol, the packet, the contest and the
+> 8042 still holds; everything it says about where the code LIVES was
+> overtaken at review — see §15. **SPEC.md §9.11 is the binding account**;
+> where the two disagree, the SPEC wins.
 
 Read it before touching `kernel/mouse.inc`'s pointer path or the `cpu 386`
 island.
@@ -408,6 +412,12 @@ recipe would have. Resolved:
   `VMPORT ?= off`. Every recipe that routes through `$(QEMU)` — `make test`
   and the ~8 QEMU tests built on it, plus `functional-check` — is back to the
   serial mouse.
+  > **Superseded at review (§15.2).** Folding the machine flag INTO `$(QEMU)`
+  > meant a documented `QEMU=` override dropped it — six recipes and four
+  > documents tell the reader to replace that variable wholesale, and the band
+  > benchmarks' `QEMU="qemu-system-i386 -icount shift=3,sleep=off"` is one of
+  > them. The tree now carries `QEMUMACH := -machine pc,vmport=$(VMPORT)` as
+  > its own variable, appended at each of the eight use sites.
 - **Direct launchers**: `tests/ps2mouse.py`, `tests/heapmap.py`,
   `tests/vgadirty.py` spell `vmport=off` themselves (`rczex` goes through
   `make test`).
@@ -512,3 +522,71 @@ carries a Lock-mouse button; `<Esc>` releases.
 - `MOUDIAG` row, if a browser report ever needs one.
 - The v86 page + smoke test currently live in the `../v86` checkout; they
   belong in the `os8088-web` sibling repo.
+
+---
+
+## 15. The fork: why it is a driver and not kernel code
+
+The plan's §2 chose a resident implementation behind two gates, and §41.9
+rule 2 licenses exactly that. It assembled, it worked, and the review that
+followed rejected the placement rather than the feature, on two grounds.
+
+**The arithmetic.** `tools/kernsize.py` priced the resident version at **548
+bytes of `.text`** and printed its own alarm — *"the image rung CROSSED: 512
+bytes of every machine's RAM, gone"*. That is RAM an IBM PC/XT keeps, forever,
+for code it can never execute, on a kernel that #147 had just spent 12KB of
+work shrinking. §41.12 had already made this exact argument once, for
+`XMEM.DRV`, in almost these words: about 1.2KB of kernel image "reserved
+forever on a machine that can never reach it".
+
+**The hibernate hole, which no `[cpu_tier]` gate could have closed.** §87
+writes the machine's RAM wholesale and validates magic, build, stamp,
+`mem_top` and `vid_kind` on resume — **not the CPU**. Hibernate on a 386,
+carry the disk to an 8088 with the same kernel and adapter, resume: the image
+restores `cpu_tier = 2` and `vmm_on = 1` over the correct values `cpu_detect`
+has just written, and the 8088 executes `push eax`. CLAUDE.md names `xt-mfm`
+as the machine to install and hibernate on, so this is a supported flow rather
+than a contrived one. `XMEM.DRV` is immune because §87.4 step 1 detaches every
+non-disk driver before writing; the plan's island would have been the first
+386 code in the **resident kernel**, which is what hibernate restores verbatim.
+
+### 15.1 What was judged, and what it cost
+
+| option | verdict |
+|---|---|
+| **Resident, `[cpu_tier]`-gated** (the plan's §2) | rejected: 548 bytes and two footprint rungs on every XT, plus the hibernate hole |
+| **`XMEM.DRV`'s shape** — `DRVC_OVL`, no row, a resident sniff | rejected: `xm_sniff` is 8086 code and **this probe is `in eax, dx`**. Either ~70 bytes of island stay resident to ask the question, or the image is read speculatively on every 386+ machine (~1 s of boot I/O on a real 386 with no hypervisor) |
+| **A full driver** — its own `DRVC_MOUSE` class | rejected: a class is a *publication slot* and nothing needs to find this image by class. `DRVC_MAX` 5 → 6 for nothing, and §58's doctrine forbids reclaiming the retired class 3 |
+| **`DRVC_OVL` *with* a `drv_tab` row** | **shipped.** No class, so `DRVC_MAX` stays 5; a row, so `SYSTEM.CFG` carries the request and the Drivers page can withdraw it — which is also the only thing that can decide a question no resident code is able to ask |
+
+The result is **+259 `.text` and +124 `.cold`**, one rung rather than two, and
+**no 386 instruction anywhere in `kernel/`**. `kern_small` is byte-identical.
+
+### 15.2 What else the review changed
+
+Each of these was a defect in the resident version, and each is fixed in the
+image rather than moved into it:
+
+- **`vmm_p2wake` fed the 8042's acks to `int 09h`.** It wrote `0xD4`/`0xF4`/
+  `0xD4`/`0xF5` with IRQ1 unmasked and the keyboard interface live, and read
+  the acks testing OBF alone. §9.9.1 step 1 says `mou_p2_init`'s `0xAD` is
+  "not tidiness" for precisely this reason — the controller's own replies
+  raise IRQ1 — and `kbm_isr`'s aux filter is gated on `[mou_p2]`, which this
+  path leaves at 0. A `0xFA` therefore reached the BIOS as scan `0x7A`, and a
+  keystroke arriving in the window could be eaten instead. Now bracketed,
+  one command at a time, with bit-5-filtered reads.
+- **`vmm_bd` ran with `IF` as the caller left it**, citing `xmem.asm` as
+  precedent. `xmem.asm` does the opposite: its islands sit inside
+  `pushf`/`cli`…`popf` and its header calls that window "the whole
+  correctness argument". Now it does too.
+- **`vmm_flush` was unbounded**, at attach, inside the boot sequence.
+- **The apply ran on the calling task's stack.** §9.10 had just moved that
+  chain onto `mou_pstack` so it would stop being a cost every slice pays;
+  polling from `task_yield` put it back by another door, measured at
+  `task_yield` 28 → 66 bytes and the idle slice within one word of
+  `sch_stkdie`. Now `MOUPRIV_ENTER`/`MOUPRIV_LEAVE`.
+- **The `vmport=off` mitigation lived inside `$(QEMU)`**, which six recipes
+  and four documents tell the reader to replace wholesale. Now `$(QEMUMACH)`.
+- And, found only by merging `main` in: **four calls crossed the `.ovlw`
+  boundary as near calls** after #147 moved `mouse_init` into the boot
+  overlay. `tools/os88ovlchk.py` caught them; nothing else would have.

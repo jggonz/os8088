@@ -4147,6 +4147,13 @@ ovw_mou_p2dw:       call mou_p2dw
                     retf
 ovw_mou_p2wcmd:     call mou_p2wcmd
                     retf
+ovw_mou_lockon:     call mou_lockon     ; ...and a sixth, for SPEC.md 9.11:
+                    retf                ; vmm_boot_x settles the contest on the
+                                        ; backdoor and has to retire the UARTs
+                                        ; from `.ovl`, where mouse_init already
+                                        ; is. The five above were mouse_init's
+                                        ; own; this is the one the absolute
+                                        ; pointer added
 %endif
 ovw_font_run_x:     call font_run_x     ; SPEC.md 15.6's status line composes
                     retf                ; into the OVERLAY, so its string is
@@ -4753,6 +4760,16 @@ kmain:
     MARK 28
 
     OVLGATE1 drv_boot_x         ; ...and load what SYSTEM.CFG asks for
+%ifdef KERN_BIG
+    call COLD_SEG:vmm_boot_x    ; ...one of which may be SPEC.md 9.11's
+                                ; absolute pointer, which is DRVC_OVL and so
+                                ; stops at drv_check with nothing called: the
+                                ; kernel is its owner and this is where it
+                                ; attaches it. AFTER drv_boot_x because that
+                                ; is what read it, and after mouse_init above
+                                ; because settling the contest a second time
+                                ; is what winning it looks like from here
+%endif
                                 ; (SPEC.md 51.3). Before the first paint, so
                                 ; a machine whose sound driver loads has
                                 ; sound from the first frame; nothing here
@@ -5343,6 +5360,12 @@ section .text
                                 ; after vga12.inc for gfx_blit1_x - it calls
                                 ; both and defines neither
 %include "mouse.inc"
+%include "vmmouse.inc"          ; the VMware absolute pointer (SPEC.md 9.11) -
+                                ; a row, a gate and a pump; the protocol and
+                                ; its 386 island are VMMOUSE.DRV. AFTER
+                                ; mouse.inc, which defines mou_apply_abs and
+                                ; MOUPRIV_ENTER, and BEFORE sched.inc and
+                                ; ui.inc, which use the VMM_POLL macro
 %include "bootprof.inc"       ; the boot phase table (SPEC.md 15.5), BOOTPROF=1
 %include "stkdiag.inc"        ; what an interrupt costs a task stack
                               ; (docs/STACK-SLOTS-PLAN.md), STKDIAG=1
