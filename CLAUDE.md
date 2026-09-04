@@ -49,6 +49,7 @@ nothing here duplicates it — a second copy is a copy that goes stale.
 | **[docs/FTP-PERF.md](docs/FTP-PERF.md)** | picking the FTP server's speed back up (§77, §72.15) — what moved it from 7 to 15 KB/s, the four things that did NOT work, where the time goes now (57% of it is ABOVE the driver), and the next five candidates in the order the evidence ranks them |
 | **[docs/LIVE-MEDIA.md](docs/LIVE-MEDIA.md)** | answering any user-facing "how do I write, burn or boot the live USB/CD" — it is the reader's guide (dd, Rufus, BIOS settings, troubleshooting) and the README links it; §80 stays the design record and this file must follow it, never lead |
 | **[docs/WEAVE-SPEC.md](docs/WEAVE-SPEC.md)** | touching anything in the Weave family (`apps/weave/` and `apps/loom/`, the `.WAB` bundle, WML/WJS/FX) — the binding contract, outside SPEC.md on the C64 precedent, cited as `WEAVE-SPEC §N`; `tools/weavesim.py` is its reference implementation and `tests/unit/t_wab.py` its independent second reader. **Two packages share one document and a lot of source**: WEAVE runs a bundle, LOOM builds one, and what they share they share as SOURCE (`%include`/`#include`), never as a copy — WEAVE-SPEC §1.2 is the rule and `apps/weave/wfxc.c` is the worked example, being LOOM's FX compiler as well as WEAVE's formula bar's |
+| **[docs/WIRE-PLAN.md](docs/WIRE-PLAN.md)** | anything in The Wire (§88, `apps/thewire/`, the desktop zone and `OSAPI_PKG_RUN`) — the design record: the four facts that decided the shape, the catalog and picture formats as they were pinned, and what was deferred with the arithmetic attached. SPEC.md §88 is the contract and this is why it reads that way; its brand table is **fixed by the user and not to be reworded** |
 | **[docs/WEAVE-PLAN.md](docs/WEAVE-PLAN.md)** | re-opening a Weave design decision — why each fork went the way it did, the judged alternatives, and what was deferred with the arithmetic attached |
 
 ## Commands
@@ -186,6 +187,14 @@ make vmmousetest # THE ABSOLUTE POINTER'S DISK (§9.11.6): a SYSTEM.CFG with
                 #   `make vmmousetest && python3 tests/vmmouse.py`. QEMU by
                 #   name: its `pc` machine carries the backdoor and MartyPC
                 #   has none, and `make run VMPORT=on` is the interactive form
+make thewiretest # THE WIRE'S GATE DISKS (§88.12): ethertest's shape plus one
+                #   file - a SYSTEM/APPDATA/WIRE.CFG naming 10.0.2.2:8092
+                #   instead of os8088.com, so the machine fetches a fixture
+                #   catalog the test packed with tools/os88wire.py and every
+                #   assertion is about bytes the test chose. The B: floppy is
+                #   a SCRATCH image of its own because Add to Disk WRITES.
+                #   `make thewiretest && python3 tests/thewire.py`. QEMU by
+                #   name, for tests/ethernet.py's reason: MartyPC has no NIC
 make ethertest  # THE ETHERNET GATE'S DISK (§72.9): a SYSTEM.CFG that already
                 #   asks for ETHER.DRV, so the card is up and DHCP has run
                 #   before the first paint and the test reads state instead of
@@ -622,3 +631,9 @@ its own (§24.4); every other apps disk carries it in `MEDIA/`, which is why
 there is no 720KB or 1.2MB media disk to go with it. The **core packages** ship on the system disk too, a second
 copy and never a move (§24.3), and an application's own state goes in
 `SYSTEM/APPDATA/` rather than beside the user's documents (§19.9).
+**`THEWIRE.O88` is the exception to both halves of that** (§88): it is a
+`SYSAPPS` package like `TASKMGR.O88`, so it lives in `SYSTEM/` on all FOUR
+system-disk geometries and on **no** apps disk — a program whose whole subject
+is fetching software off the network belongs on the disk the machine booted
+from. `kern_small` leaves it off (`SMALLSYSAPPS`, derived from `SMALLOMIT`):
+there is no NIC there, so there is nothing for it to refuse on.

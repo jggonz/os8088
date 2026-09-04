@@ -306,6 +306,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | TEXPAD | `apps/texpad/texpad.asm` | §69 |
 | TRACKER | `apps/tracker/tracker.asm` | §45 |
 | TaskMgr | `apps/taskmgr/taskmgr.asm` | §28 |
+| The Wire | `apps/thewire/thewire.asm` | §88 |
 | WEAVE | `apps/weave/weave.asm` | `docs/WEAVE-SPEC.md` |
 | WIRE | `apps/wire/wire.asm` | §78 |
 
@@ -401,12 +402,13 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 85 | TANK ATTACK — a wireframe tank duel in a foreign mode (`apps/tank/`) |
 | 86 | AUDIO PLAYER — background music from a streamed WAV (`apps/audio/`) |
 | 87 | Hibernate — the machine to a file on the hard disk, and back (`kernel/hiber.inc`, `HIBER.DRV`) |
+| 88 | THE WIRE — the online software library (`apps/thewire/thewire.asm`) |
 
 ## docs/
 
 **`*-PLAN.md` files are DESIGN RECORDS, not descriptions of what shipped.** They record what was considered, including options that were rejected. SPEC.md is the current state; these are how it got there.
 
-*Design records (52):* `ASSOC-PLAN.md`, `AUDIO-PLAN.md`, `BOOT-LADDER-PLAN.md`, `BOOT-PERF-PLAN.md`, `BROWSER-PLAN.md`, `C64-PORT-PLAN.md`, `CURSOR-PLAN.md`, `DBLCLICK-PLAN.md`, `DEBUG-PLAN.md`, `DISK-PERF-PLAN.md`, `DUAL-DISPLAY-PLAN.md`, `EGA-PLAN.md`, `FROTZ-PLAN.md`, `FSX-PLAN.md`, `GFX-FSX-PLAN.md`, `GFX-REWORK-PLAN.md`, `HDD-PLAN.md`, `HDD-SPLIT-PLAN.md`, `HEAP-COMPACTION-PLAN.md`, `KERN-SMALL-CUT-PLAN.md`, `KERN-SPLIT-PLAN.md`, `LINE-PERF-PLAN.md`, `MEMORY-PLAN.md`, `MONO-RECLAIM-PLAN.md`, `MOUSEUP-PLAN.md`, `NET-PLAN.md`, `NET-STACK-PLAN.md`, `O88-MULTISEG-PLAN.md`, `ONDEMAND-PLAN.md`, `PAINT-1BPP-PLAN.md`, `PAINT-STROKE-PLAN.md`, `PROXY-PLAN.md`, `RUNCPM-PORT-PLAN.md`, `SAVEUNDER-LIVE-PLAN.md`, `SCHED-IDLE-PLAN.md`, `SNAP-PLAN.md`, `SNAPSHOT-PLAN.md`, `SOUND-PLAN.md`, `STACK-SLOTS-PLAN.md`, `TEXT-PLAN.md`, `TITLE-PLAN.md`, `TOAST-PLAN.md`, `TRACKER-PLAN.md`, `UI-FREEZE-PLAN.md`, `UIHELPERS-PLAN.md`, `VMMOUSE-PLAN.md`, `WEAVE-PLAN.md`, `WINDOW-ANIM-PLAN.md`, `WINDOW-SIZING-PLAN.md`, `WMEVENT-PLAN.md`, `WORD-PLAN.md`, `XMEM-DRIVER-PLAN.md`
+*Design records (53):* `ASSOC-PLAN.md`, `AUDIO-PLAN.md`, `BOOT-LADDER-PLAN.md`, `BOOT-PERF-PLAN.md`, `BROWSER-PLAN.md`, `C64-PORT-PLAN.md`, `CURSOR-PLAN.md`, `DBLCLICK-PLAN.md`, `DEBUG-PLAN.md`, `DISK-PERF-PLAN.md`, `DUAL-DISPLAY-PLAN.md`, `EGA-PLAN.md`, `FROTZ-PLAN.md`, `FSX-PLAN.md`, `GFX-FSX-PLAN.md`, `GFX-REWORK-PLAN.md`, `HDD-PLAN.md`, `HDD-SPLIT-PLAN.md`, `HEAP-COMPACTION-PLAN.md`, `KERN-SMALL-CUT-PLAN.md`, `KERN-SPLIT-PLAN.md`, `LINE-PERF-PLAN.md`, `MEMORY-PLAN.md`, `MONO-RECLAIM-PLAN.md`, `MOUSEUP-PLAN.md`, `NET-PLAN.md`, `NET-STACK-PLAN.md`, `O88-MULTISEG-PLAN.md`, `ONDEMAND-PLAN.md`, `PAINT-1BPP-PLAN.md`, `PAINT-STROKE-PLAN.md`, `PROXY-PLAN.md`, `RUNCPM-PORT-PLAN.md`, `SAVEUNDER-LIVE-PLAN.md`, `SCHED-IDLE-PLAN.md`, `SNAP-PLAN.md`, `SNAPSHOT-PLAN.md`, `SOUND-PLAN.md`, `STACK-SLOTS-PLAN.md`, `TEXT-PLAN.md`, `TITLE-PLAN.md`, `TOAST-PLAN.md`, `TRACKER-PLAN.md`, `UI-FREEZE-PLAN.md`, `UIHELPERS-PLAN.md`, `VMMOUSE-PLAN.md`, `WEAVE-PLAN.md`, `WINDOW-ANIM-PLAN.md`, `WINDOW-SIZING-PLAN.md`, `WIRE-PLAN.md`, `WMEVENT-PLAN.md`, `WORD-PLAN.md`, `XMEM-DRIVER-PLAN.md`
 
 *Notes and reference (39):* `BIFF-NOTES.md`, `C-TOOLCHAIN.md`, `C64-SPEC.md`, `DUAL-DISPLAY-BUG2.md`, `DUAL-DISPLAY-VGA.md`, `FIELD-MACHINES.md`, `FIELD-NOTES.md`, `FTP-PERF.md`, `HANDOFF-DISK-IO.md`, `HANDOFF-FONTCHAR-SEAM.md`, `HANDOFF-KERNEL-SIZE-P2.md`, `HANDOFF-KERNEL-SIZE-P3.md`, `HANDOFF-KERNEL-SIZE-P4.md`, `HANDOFF-KERNEL-SIZE.md`, `HANDOFF-REDRAW.md`, `HANDOFF-SOAK-FINDINGS.md`, `HANDOFF-SOUND-MEMORY.md`, `HANDOFF-TESTS-A-STRADDLE.md`, `HANDOFF-TESTS-B-LAUNCH.md`, `HANDOFF-TESTS-C-FRESH.md`, `HANDOFF-TESTS.md`, `HANDOFF.md`, `HEAP-CLAIMS.md`, `HERCULES-TESTING.md`, `KERN-SMALL-MODULE-SPLIT.md`, `KERNEL-MEMORY.md`, `LAST-DROP-BYTES.md`, `LAST-DROP-PERF.md`, `LIVE-MEDIA.md`, `MARTYPC-DEBUG.md`, `NOTEPAD-NOTES.md`, `PAINT-NOTES.md`, `SDK-INCLUDE-SIZE.md`, `SETTINGS-COST.md`, `STKBALANCE-KERNEL.md`, `TESTING.md`, `UPSTREAM.md`, `WEAVE-SPEC.md`, `WM-ARTIFACTS.md`
 

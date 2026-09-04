@@ -413,6 +413,39 @@ window's — and from one of those it can claim a single pre-empted worker task
 of its own. Closing a package frees its claim, its task and its instance
 slot.
 
+### The Wire — the online software library
+
+A desktop icon marked **Wire** opens a window listing every program the
+project publishes, fetched over `ETHER.DRV` from **os8088.com** as plain
+HTTP/1.0. Each entry has a picture cropped 1:1 out of a real screenshot, a
+short description, and a recommended machine — 8088/8086, 286, 386 or 486+ —
+that the filter row across the top sorts by. Two buttons: **Load Program**
+runs it now, straight out of memory, without it ever touching a disk;
+**Add to Disk...** writes it and any files that go with it to a floppy you
+pick in the Standard File dialog.
+
+That is the point of it. A networked XT with one 360KB drive reaches the whole
+collection without a second disk, a host computer or a download.
+
+`THEWIRE.O88` is 10KB and rides the **system** disk in `SYSTEM/`, on all four
+geometries — the disk that already carries the network driver ought to carry
+the program that turns it into software you do not have yet. With no card, or
+no driver, the window opens anyway and says so, with the three lines that
+would fix it and both buttons greyed; it never puts up an alert about a card
+you do not have.
+
+The catalog is 32 bytes of header and a 256-byte record per program, at fixed
+offsets so the 8088 reads it with `mov` and never parses. `tools/os88wire.py`
+packs it, verifies it and dumps it, and cuts a picture out of a PNG
+screenshot; the site's own packer is an independent second writer of the same
+bytes, and running `--verify` against what the site publishes is how the two
+are kept honest. Everything off the wire is checked field by field before a
+pixel of it is drawn — a catalog that does not pass leaves the window working
+and says `Catalog not understood`.
+
+SPEC.md §88 is the format and the contract; `docs/WIRE-PLAN.md` is why it
+reads that way.
+
 ### A package can also be written in C
 
 The OS itself is assembly and stays that way. But a **package** can be written

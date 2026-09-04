@@ -549,6 +549,54 @@ step 4a makes you look at the releases page. Three things that will fool you:
 - **The video poster is a broken image locally** and correct in production; see
   step 3.
 
+#### 4c. The Wire's library, every time
+
+**The site is now where the machine gets its software from** (SPEC.md 88), so
+a release ships a *catalog* as well as four floppy images, and nothing on the
+OS side can tell you it went wrong: a stale `catalog.bin` is a Wire that lists
+last release's programs at last release's sizes and hands out last release's
+bytes, and the window looks perfectly healthy while it does it.
+
+Three things, in this order:
+
+**1. `tools/release.py` fills `public/wire/pkg/`.** It copies every file
+`data/wire.json` names out of `<os-repo>/build/` — the `.o88`s and their
+sidecars — the way it already copies floppy images into `public/disk/`. A name
+it cannot find is a refusal, not a warning. **If a package was added, renamed
+or split this release, `data/wire.json` needs the edit before this runs**, and
+the tier and the description are a judgement somebody makes rather than a
+field to fill: check the entry against that program's own SPEC section or its
+Spotlight page, and flag every tier you touched as reviewable in the PR.
+
+**2. The site build packs the catalog.** `tools/wire.py`, called by
+`build.py`, writes `public/wire/catalog.bin` and `public/wire/pic/<STEM>.PIC`
+from `data/wire.json` and `public/wire/pkg/`. It is a build product committed
+under `public/` like every other one, so the deploy job's
+`git status --porcelain public/` check is what catches a build that was not
+re-run.
+
+**3. Check it changed, and verify it FROM THE OS REPO.** A package changed and
+a catalog that did not is the failure this step exists for:
+
+```bash
+git -C "$WEB_REPO" status --porcelain public/wire/
+python3 tools/os88wire.py --verify "$WEB_REPO/public/wire/catalog.bin" \
+                          --pkgdir "$WEB_REPO/public/wire/pkg"
+python3 tools/os88wire.py --dump   "$WEB_REPO/public/wire/catalog.bin"
+```
+
+Run from the **OS** repo on purpose. `tools/os88wire.py` and the website's
+`tools/wire.py` are two independent writers of one format (SPEC.md 88.2), and
+this is the one moment they meet: the OS repo's reader checking the website's
+bytes, with `--pkgdir` cross-checking every declared size and every embedded
+icon against the files actually published. Read the `--dump` output against
+what you know shipped — a missing program, a stale size or a `NEW` mark left
+on last release's entry are all things only a person notices.
+
+Nothing may redirect `http://` to `https://` for `/wire/*`. The machine
+cannot follow one, and a redirect there is a Wire that says
+`The Wire did not answer (301)` on every fetch.
+
 ### 5. Commit and open the pull request
 
 ```bash
