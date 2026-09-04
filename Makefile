@@ -3098,18 +3098,18 @@ $(BUILD)/thewire360.img: $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(S
 		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(BUILD)/system.cfg SYSTEM/APPDATA:$(BUILD)/wirecfg/WIRE.CFG
 
-# THEWIRE.O88 IS ON THE DATA DISK TOO, in its ROOT, and its own WIRE.CFG with
-# it. That is not where it ships (SPEC.md 24.3 puts it in SYSTEM/ on the
-# SYSTEM disk, which build/thewire360.img above carries) - it is where a test
-# can double-click it without navigating two folders, and, more to the point,
-# where launching it puts the INSTANCE'S CURRENT DIRECTORY (SPEC.md 19.2.1):
-# B: root, which is where the Save dialog then opens and where Add to Disk
-# then writes. The config goes with it because SPEC.md 19.9 reads APPDATA off
-# the volume the program was LAUNCHED from, which is this one.
-$(BUILD)/thewiredata.img: $(BUILD)/thewire.o88 $(BUILD)/wirecfg/WIRE.CFG tools/os88disk.py | $(BUILD)
+# THE DATA DISK IS SCRATCH AND CARRIES NO PACKAGE. It used to hold a second
+# THEWIRE.O88 and a second WIRE.CFG, because before the desktop zone existed
+# the gate had to double-click the package somewhere and the launch volume is
+# what SPEC.md 19.9 reads APPDATA off. The zone launches out of the BOOT
+# volume's SYSTEM/ (SPEC.md 26.7), so both copies are dead now and a dead file
+# on a gate disk is one a reader has to work out the meaning of. What is left
+# is what Add to Disk needs: somewhere to write, MEDIA for the Save dialog to
+# open in (SPEC.md 38.10) and SYSTEM/APPDATA because every disk that carries
+# an application carries one (SPEC.md 19.9).
+$(BUILD)/thewiredata.img: tools/os88disk.py | $(BUILD)
 	python3 tools/os88disk.py -o $@ --size 1440 \
-		$(BUILD)/thewire.o88 SYSTEM/APPDATA:$(BUILD)/wirecfg/WIRE.CFG \
-		--folder MEDIA
+		--folder MEDIA --folder SYSTEM/APPDATA
 
 .PHONY: thewiretest
 thewiretest: $(BUILD)/thewire360.img $(BUILD)/thewiredata.img

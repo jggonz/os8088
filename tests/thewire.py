@@ -49,10 +49,20 @@ SIX ASSERTIONS.
    the directory walked here) and both files are compared with what the server
    sent.
 
-**AND ONE MORE, PENDING THE KERNEL HALF.** Load Program is `OSAPI_PKG_RUN`
-(SPEC.md 21.x), which is the other branch's. The assertion is written and runs
-the moment `apps/os88api.inc` carries the slot - there is no flag to remember
-and no second visit to this file.
+8. LOAD PROGRAM RUNS ONE OUT OF MEMORY. HELLO is selected and the button
+   clicked; `OSAPI_PKG_RUN` (SPEC.md 21.5) copies the fetched image into a
+   region of the kernel's own and a window titled HELLO appears. Nothing was
+   written to a disk and nothing was read from one - the bytes came off the
+   host's socket, through a claim, into a running instance.
+
+**THE LAUNCH IS THE DESKTOP ZONE** (SPEC.md 26.7). `ETHER.DRV` registers it,
+so the ethertest-shaped disk that already asks for the driver has the icon on
+it, and this file double-clicks the icon rather than a row in a Disk window.
+Three things follow from that and all three are handled below: the zone
+launches out of the BOOT volume's `SYSTEM/`, so the instance's current
+directory is **A:** and `WIRE.CFG` is read off A:; and the Save dialog
+therefore opens on A: and has to be walked to B: with its Drive button before
+the write.
 """
 import argparse
 import json
@@ -83,7 +93,10 @@ DATIMG = "build/thewiredata.img"
 
 WS_DONE, WS_FAIL = 6, 7
 TITLE_H = 18
-FD_BX1, FD_BX2, FD_BY0, FD_BH = 224, 286, 20, 13     # kernel/fdlg.inc's button
+FD_BX1, FD_BX2, FD_BH = 224, 286, 13    # kernel/fdlg.inc's button column
+FD_BY0, FD_BY2 = 20, 60                 # ...Save, and Drive two rows down
+VOL_B = ord("B") - ord("A")             # a VOLUME INDEX, which is what
+                                        # [disk_drive] holds since SPEC.md 52
 
 FIXTURE = {
     "date": "20260904",
@@ -163,6 +176,34 @@ def bss_offsets():
                      "block - the block moved and every offset this file "
                      "would read is plausible and wrong" % want)
     return out
+
+
+# =============================================================================
+# THE DESKTOP SERVICE ZONE (SPEC.md 26.7)
+#
+# Its ordinal is one past the last VOLUME zone - `DESK_SVZ` is `DVOL_MAX` and
+# `desk_ord` hands it the count the volume walk just finished - so it is the
+# same walk `dispcp.drive_ordinal` does, without stopping at a letter.
+# dispcp.drive_xy then turns an ordinal into a point, which is the one place
+# the column-and-wrap arithmetic lives.
+# =============================================================================
+def svc_ordinal(m):
+    t = m.read(S("dsk_vtab"), dispcp.DVOL_MAX * dispcp.DV_SIZE)
+    n = 0
+    for v in range(dispcp.DVOL_MAX):
+        r = t[v * dispcp.DV_SIZE:(v + 1) * dispcp.DV_SIZE]
+        if r[dispcp.DV_KIND] == dispcp.DVK_FREE or not (r[dispcp.DV_FLAGS] & 1):
+            continue
+        n += 1
+    return n
+
+
+def zstr(m, sym, n):
+    return m.read(S(sym), n).split(b"\0")[0].decode("latin1", "replace")
+
+
+W_SEG = 22                              # the package's own segment, and
+                                        # os88geom stops at W_TITLE
 
 
 # =============================================================================
@@ -449,21 +490,40 @@ def main():
                             os.path.join(a.shots, tag + ".png")], check=True)
 
     try:
-        # --- launch it. **TODO: THE DESKTOP ZONE.** Once the kernel half
-        # (SPEC.md 26.x's Wire zone) merges, this is a DOUBLE-CLICK ON THE
-        # ICON and the two dispcp calls go. Two things change with it and
-        # both are in this file: the instance's current directory becomes A:
-        # (the zone launches out of SYSTEM/ on the boot volume, SPEC.md 88.1),
-        # so assertion 6's Save dialog has to be walked to B: first, and
-        # WIRE.CFG is then read off A: rather than off B:.
-        dispcp.open_drive(m, mo, S, settle, "B")
+        # --- 0: the zone exists, and it is the Wire's ----------------------
+        # ETHER.DRV registers it (SPEC.md 26.7), so a non-zero desk_svc_seg is
+        # also the proof that the driver attached at all - and the caption and
+        # the file are read back because a zone that launched something else
+        # would open a window this test would then measure.
+        seg = 0
+        for _ in range(60):
+            seg = u16(m.read(S("desk_svc_seg"), 2))
+            if seg:
+                break
+            time.sleep(0.5)
+        cap = zstr(m, "desk_svc_cap", 12)
+        fil = zstr(m, "desk_svc_file", 13)
+        say("service zone: driver %04X, caption %r, launches %r"
+            % (seg, cap, fil))
+        if not seg:
+            m.quit()
+            sys.exit("thewire: no desktop service zone - ETHER.DRV never "
+                     "attached, or SYSTEM.CFG did not ask for it")
+        if cap != "Wire":
+            no("the zone's caption is %r and the brand is 'Wire'" % cap)
+        if fil != "THEWIRE.O88":
+            no("the zone launches %r" % fil)
+
         wins = dispcp.win_list(m, S)
-        wx, wy = dispcp.win_rect(m, S, wins[-1])[:2]
-        dispcp.open_named(m, mo, S, settle, wx, wy, "THEWIRE.O88")
+        zx, zy = dispcp.drive_xy(m, S, svc_ordinal(m))
+        say("double-clicking the Wire zone at (%d, %d)" % (zx, zy))
+        mo.dblclick(zx, zy)
+        settle(m)
         wins2 = dispcp.win_list(m, S)
         if len(wins2) <= len(wins):
+            shot("00-zone")
             m.quit()
-            sys.exit("thewire: THEWIRE.O88 did not open a window")
+            sys.exit("thewire: the Wire zone opened no window")
         ww = wins2[-1]
         rec = m.read(S("wm_wins") + ww * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
         pseg = u16(rec, 22)
@@ -547,6 +607,38 @@ def main():
         if shown() != 3:
             no("back on All the list shows %d rows" % shown())
 
+        def rect(name):
+            """One of the Wire's own button rects, absolute, out of its bss.
+
+            **NOT A COORDINATE THIS FILE COMPUTES.** wr_geom fills wr_ra and
+            wr_rb and os88ui_btn draws from them, so reading them is reading
+            the four words the painter used - os88ui.inc's own "GEOMETRY IS A
+            POINTER" discipline, from the outside. A y derived here instead
+            missed the Load Program button by nothing visible and reported
+            OSAPI_PKG_RUN as broken.
+            """
+            return [u16(m.readseg(pseg, img + off[name] + i * 2, 2))
+                    for i in range(4)]
+
+        def press(name):
+            r = rect(name)
+            mo.click((r[0] + r[2]) // 2, (r[1] + r[3]) // 2)
+
+        def settled():
+            """Wait until no transfer is in flight and no chain is running.
+
+            A selection change starts a PICTURE fetch of its own (SPEC.md
+            88.8), and the predicate refuses both buttons while one is in
+            flight - correctly. A gate that clicks before it lands is testing
+            the refusal, and quietly.
+            """
+            for _ in range(80):
+                if (b("wr_state")[0] in (0, WS_DONE, WS_FAIL)
+                        and b("wr_job")[0] == 0):
+                    return True
+                time.sleep(0.5)
+            return False
+
         # --- 6: the picture, pixel for pixel --------------------------------
         # HELLO is row 0 and carries WF_PIC, so selecting it starts a second
         # transfer of its own - which is also the one place the generation
@@ -606,9 +698,8 @@ def main():
                "exactly what such a record is FOR (wr_grey = %d)" % grey)
 
         # --- 6: Add to Disk writes both files -------------------------------
-        wr = dispcp.win_rect(m, S, ww)
-        y2 = w("wr_y2")
-        mo.click(ox + 280, oy + y2 - 11)         # the lower button's middle
+        settled()
+        press("wr_rb")                           # Add to Disk...
         time.sleep(2.0)
         shot("04-savedlg")
         wins3 = dispcp.win_list(m, S)
@@ -616,8 +707,26 @@ def main():
             no("Add to Disk... put up no Save dialog")
         else:
             dx, dy = dispcp.win_rect(m, S, wins3[-1])[:2]
-            mo.click(dx + 1 + (FD_BX1 + FD_BX2) // 2,
-                     dy + TITLE_H + FD_BY0 + FD_BH // 2)
+            bx = dx + 1 + (FD_BX1 + FD_BX2) // 2
+
+            # THE DIALOG OPENS ON THE VOLUME THE WIRE WAS LAUNCHED FROM, which
+            # since the zone landed is A: - the boot disk, whose SYSTEM/ the
+            # zone reads the package out of. Its Drive button steps to the next
+            # LIVE volume and wraps (SPEC.md 38.11), so this walks rather than
+            # assuming one click is enough: a machine that mounted a hard disk
+            # would need two, and [disk_drive] is the machine's own answer.
+            for _ in range(dispcp.DVOL_MAX):
+                if m.read(S("disk_drive"), 1)[0] == VOL_B:
+                    break
+                mo.click(bx, dy + TITLE_H + FD_BY2 + FD_BH // 2)
+                time.sleep(1.2)
+            vol = m.read(S("disk_drive"), 1)[0]
+            say("the Save dialog is on volume %d (B: is %d)" % (vol, VOL_B))
+            shot("04b-onB")
+            if vol != VOL_B:
+                no("the Save dialog would not walk to B:, so the write below "
+                   "is about the wrong disk")
+            mo.click(bx, dy + TITLE_H + FD_BY0 + FD_BH // 2)
             time.sleep(2.0)
             for _ in range(60):
                 time.sleep(0.5)
@@ -628,36 +737,69 @@ def main():
             say("after the chain: wr_job = %d, wr_state = %d"
                 % (b("wr_job")[0], b("wr_state")[0]))
 
-        # --- and the one that waits on the kernel half ----------------------
+        # --- 8: Load Program, out of memory (SPEC.md 21.5, 88.8) -----------
         if have_pkg_run():
-            mo.click(ox + 40, oy + 19 + 0 * 16 + 8)   # HELLO, tier 0
-            time.sleep(1.5)
+            mo.click(ox + 40, oy + 19 + 0 * 16 + 8)   # HELLO: tier 0, one
+            time.sleep(1.5)                           # file, so both allowed
+            if not settled():
+                no("the picture fetch that selecting HELLO starts never "
+                   "settled, so Load Program would refuse with 'A transfer "
+                   "is already running' and this would be testing that")
+            say("before Load: sel=%d grey=%d state=%d job=%d"
+                % (w("wr_sel"), b("wr_grey")[0], b("wr_state")[0],
+                   b("wr_job")[0]))
+            if b("wr_grey")[0] & 1:
+                no("Load Program is greyed on HELLO, which is tier 0 with one "
+                   "file and no WF_DISK - the click below would be refused")
             before = dispcp.win_list(m, S)
-            mo.click(ox + 280, oy + w("wr_y2") - 30)  # the upper button
+            press("wr_ra")                            # Load Program
             for _ in range(60):
                 time.sleep(0.5)
                 if len(dispcp.win_list(m, S)) > len(before):
                     break
             after = dispcp.win_list(m, S)
+            # **AND SAY WHICH SIDE FAILED.** [wr_job] still WJ_LOAD with the
+            # transfer settled and the claim still held means the UI task went
+            # into OSAPI_PKG_RUN and did not come out - the Wire has done its
+            # whole half and the loader has the machine. Reported as that,
+            # with the CPU's own registers, rather than as "no window
+            # appeared", which reads as the package's fault.
+            if (b("wr_job")[0] == 1 and b("wr_fseg", 2) != b"\0\0"
+                    and b("wr_state")[0] in (WS_DONE, WS_FAIL)):
+                say("WEDGED INSIDE OSAPI_PKG_RUN - wr_job is still WJ_LOAD, "
+                    "the transfer settled at state %d and the claim %04X is "
+                    "still held, so wr_pkgrun never returned."
+                    % (b("wr_state")[0], w("wr_fseg")))
+                for ln in m.hmp("info registers").splitlines()[:5]:
+                    say("    " + ln.strip())
             shot("06-loaded")
             titles = []
             for slot in after:
                 r = m.read(S("wm_wins") + slot * dispcp.WIN_SIZE,
                            dispcp.WIN_SIZE)
-                ttl, seg = u16(r, 10), u16(r, 22)
-                titles.append(m.readseg(seg, ttl, 16).split(b"\0")[0]
-                              .decode("latin1", "replace"))
-            say("windows now: %r" % titles)
+                ttl = u16(r, dispcp.W_TITLE)
+                titles.append(m.readseg(u16(r, W_SEG), ttl, 16)
+                              .split(b"\0")[0].decode("latin1", "replace"))
+            say("windows now: %r, wr_msg = %04X"
+                % (titles, w("wr_msg")))
+            asked = b"".join(srv.asked).decode("latin1", "replace")
+            if "/wire/pkg/HELLO.O88" not in asked:
+                no("the host was never asked for /wire/pkg/HELLO.O88, so "
+                   "Load Program never started a transfer at all")
             if len(after) <= len(before):
                 no("Load Program opened no window: OSAPI_PKG_RUN refused, or "
                    "the wake never ran the image")
             elif "HELLO" not in [t.upper() for t in titles]:
                 no("Load Program opened a window and it is not HELLO's: %r"
                    % titles)
+            else:
+                say("HELLO is running, and nothing it needs was ever on a "
+                    "disk: the image came off the host's socket, through a "
+                    "claim, into OSAPI_PKG_RUN")
         else:
-            say("Load Program: SKIPPED - apps/os88api.inc has no "
-                "OSAPI_PKG_RUN yet, so the kernel half (SPEC.md 21.x) has "
-                "not merged. The assertion above runs the moment it does.")
+            no("apps/os88api.inc carries no OSAPI_PKG_RUN, so this build has "
+               "no kernel half - the assertion above cannot run and its "
+               "absence must not read as a pass")
     finally:
         if not a.keep:
             m.quit()
