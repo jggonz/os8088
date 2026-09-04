@@ -37,9 +37,10 @@ Four facts decided the shape (the exploration reports are the evidence):
 
 1. **There is no desktop-icon mechanism.** The desktop zones ARE the volume
    table (`dsk_vtab` rows with `DV_FLAGS` bit 0, SPEC §26.1); no Trash, no
-   application icon, and `OSAPI_VOL_ADD` is fenced to drivers. A `Wire` icon
-   is therefore kernel code in `kernel/desk.inc` — a second zone species —
-   and its click is the shape of `ui_tm_open` (SPEC §28's chip-menu launch of
+   application icon, and `OSAPI_VOL_ADD` is fenced to drivers. So the kernel
+   gains a second zone species a DRIVER registers (the shape of
+   `OSAPI_VOL_ADD`, §2), `ETHER.DRV` registers and paints the Wire's, and
+   the click is the shape of `ui_tm_open` (SPEC §28's chip-menu launch of
    `TASKMGR.O88` by name from the boot volume's `SYSTEM/`).
 2. **There is no way to launch a package image already in memory.** The
    loader (`kernel/loader.inc`, SPEC §21) is a disk pipeline end to end, and no
@@ -56,11 +57,15 @@ Four facts decided the shape (the exploration reports are the evidence):
    package is `apps/thewire/thewire.asm` → `THEWIRE.O88`, header name
    `The Wire`. Nothing the user sees carries the file name.
 
-What it costs the kernel is measured, not estimated, and stated in SPEC §26
-and §21 when it lands: `tools/kernsize.py` before and after, both kernels.
-The image rung had 284 bytes and the cold rung 66 when this was written, so
-**one rung will be crossed** (512 bytes of every machine's RAM). That is the
-price of a desktop icon that is not a volume, and the user asked for the icon.
+**Modular by requirement.** Most XTs have no network card, so a machine
+without one must not pay in kernel space or RAM: the kernel's whole share is
+a generic driver-registered desktop zone (≤ 200 bytes) and the memory
+launcher's delta over the disk loader (≤ 150 bytes, cold); the icon, its
+painter and the launch name live in `ETHER.DRV`; the package is on the disk
+and in RAM only while it runs. What it costs is measured, not estimated, and
+stated in SPEC §26 and §21 when it lands: `tools/kernsize.py` before and
+after, both kernels. The image rung had 284 bytes and the cold rung 66 when
+this was written, so a rung may still be crossed; the number is reported.
 
 ---
 
@@ -77,7 +82,9 @@ price of a desktop icon that is not a volume, and the user asked for the icon.
         K1                          K2                          P                        W
 ```
 
-- **K1** and **K2** are the only kernel changes. Neither knows what HTTP is.
+- **K1** and **K2** are the only kernel changes. Neither knows what HTTP is,
+  and neither knows the word Wire: K1 is a generic driver-registered zone
+  that `ETHER.DRV` fills, K2 a launcher any package may call.
 - **P** is an ordinary shipped package, on the SYSTEM disks (all four
   geometries) in `SYSTEM/` beside `TASKMGR.O88`; not on `kern_small` (no
   NIC there, `SMALLOMIT`'s reason). It is the only reader of the catalog
@@ -93,37 +100,62 @@ price of a desktop icon that is not a volume, and the user asked for the icon.
 
 ---
 
-## 2. K1 — the Wire zone in `kernel/desk.inc` (SPEC §26.x)
+## 2. K1 — a driver-registered desktop SERVICE zone (SPEC §26.x)
 
-- **One extra zone after the volumes**, in the same column flow (§26.1's
-  wrap included), index = the number of volume zones. It is a desktop
-  service, so it sits below the disks the way a Mac's Trash sits below them.
-- **Icon:** a 32-row glyph on VGA/EGA/Hercules and the 14-row form on CGA,
-  exactly as `ico_disk32`/`ico_disk14` (§26.4: the CGA's pixels are 2.4:1
-  tall). Draw something period-plausible: a telephone-handset or a spool of
-  cable with a plug, black outline, white body, drawn with the same
-  mask/data convention as the disk. Put the glyph rows in `.cold` beside the
-  disk's. **Caption `Wire`**, centred, white rect hugging the caption (§26.4).
-- **Hit, select, highlight, damage:** the zone goes through the same
-  `desk_zone_rect` / `desk_dmg_zones` / `desk_zone_hilite` paths as a
-  volume, so a window dragged across it repaints it and nothing else changes.
-  The damage mask is one byte (`kernel/desk.inc:724`'s `%error`): the Wire
-  zone takes the bit after the last volume's and is **not drawn at all when
-  eight volumes exist** — a fact, stated in SPEC, not a crash.
-- **Double-click** (§26's `DESK_DBLT` window) → `ui_sys_open` with
-  `SI = 'THEWIRE.O88'`: **refactor `ui_tm_open` into a name-taking routine**
-  and call it from both the chip menu (Task Manager) and here, so the launch
-  path is shared rather than copied. Semantics identical to the Task
-  Manager's: if an instance named `The Wire` is running, `inst_restore` it;
-  else quiet-mount the boot volume, step into `SYSTEM/`, `ld_run_name` it,
-  restore the user's volume and folder; on failure the same notice with the
-  lead `Cannot open the Wire:` and the `LD_*` reason.
-- **`kern_small` leaves the whole species out** (`%ifndef KERN_SMALL`), and
-  the Wire package is in `SMALLOMIT`. The knob kernels must still assemble.
-- **Budget:** ≤ 400 bytes across `.text`/`.cold` including the two glyphs.
-  Record the measured cost in SPEC §26.x.
-- **Look at it on all three adapters before calling it done** (§26.4, §47.2).
-  The CGA form must not be a squashed 32-row glyph.
+**The kernel learns nothing about the Wire.** Most XTs have no network card,
+and a desktop icon whose glyphs and painter sit in every kernel would charge
+those machines for a feature they cannot use. So the kernel gains one small
+GENERIC mechanism — a desktop zone a DRIVER registers — and `ETHER.DRV`
+(and `NET.DRV`, the parallel cable, through the same shared include) is what
+registers the Wire's. No driver, no zone, no bytes: the glyphs, the caption
+and the launch name are the driver's, in RAM only on a machine that loaded it.
+
+- **`OSAPI_DESK_SVC`** — the second new slot, fenced to drivers like the
+  `OSAPI_VOL_*` family (a package gets CF=1 and nothing else):
+  ```
+  in   AL = 1 add / 0 withdraw
+       ES:SI = (add) a record in the DRIVER's segment:
+               +0  12  caption, NUL-terminated (<= 11 chars; 'Wire')
+               +12 13  the 8.3 file the zone launches from the boot
+                       volume's SYSTEM/, NUL-terminated ('THEWIRE.O88')
+               +25  1   the driver's DRVC_* class
+               +26  1   the verb the kernel calls to PAINT the zone's icon
+  out  CF = 1 refused: not a driver, or a service zone is already registered
+       (ONE record, stated as the limit; room to grow is a count, later)
+  ```
+  The kernel keeps `desk_svc` in `.bss`: the record's segment and offset (0 =
+  none). Withdraw on detach (the driver's own teardown) and `OSAPI_VOL_PAINT`
+  or the equivalent repaint so the zone leaves the glass.
+- **The zone** takes the index after the last volume in the same column flow
+  (§26.1's wrap included), the same `desk_zone_rect` / `desk_dmg_zones` /
+  `desk_zone_hilite` / damage-mask paths as a volume, and is not drawn when
+  eight volumes exist (the one-byte mask — a fact, stated in SPEC).
+- **Painting:** `desk_draw_zone` on the service zone calls the driver's paint
+  verb through the kernel's own driver-call path with CX,DX = the icon's
+  top-left and the gfx lock held (desk_paint's context), then letters the
+  caption itself from the far string (copy ≤ 12 bytes to the stack, one
+  `font_str`), white rect hugging the caption (§26.4). The DRIVER draws the
+  glyph: 32 rows on VGA/EGA/Hercules, 14 on CGA (§26.4, read `[vid_h]`),
+  with the icon slot or `gfx_*` calls it already has access to, black
+  outline, white body — a spool of cable with a plug, or a handset.
+- **Double-click** (§26's `DESK_DBLT`) → `ui_sys_open` with SI = the file name
+  copied out of the driver's record: **refactor `ui_tm_open` into a
+  name-taking routine** shared with the chip menu's Task Manager item
+  (single instance by the package's header name — read it from the running
+  instance table; the launcher already resolves the file; restore if
+  running, else quiet-mount the boot volume, `SYSTEM/`, `ld_run_name`,
+  restore the user's folder; failure notice lead `Cannot open <caption>:`).
+- **`kern_small` leaves the species out** (`%ifndef KERN_SMALL`; it has no
+  NIC driver and the Wire is in `SMALLOMIT`). Knob kernels must assemble.
+- **Budget:** the kernel's resident share ≤ 200 bytes across `.text`/`.cold`
+  including the slot; measure with `tools/kernsize.py` before and after and
+  put both lines in SPEC §26.x. The driver's share (`drivers/wirezone.inc`,
+  included by ETHER.DRV and NET.DRV: the record, the two glyphs, the paint
+  verb, the attach-time register and detach-time withdraw) is measured too,
+  stated in SPEC §72/§62's size notes.
+- **Look at it on all three adapters before calling it done** (§26.4, §47.2),
+  with the driver loaded (`make ethertest`'s disk) — and confirm a plain
+  `os8088.img` boot shows NO zone and the kernel's bytes are the only cost.
 
 ## 3. K2 — `OSAPI_PKG_RUN`, slot `KERNEL_SEG:0x04F8` (SPEC §21.x)
 
@@ -164,7 +196,11 @@ OSAPI_PKG_RUN   KERNEL_SEG:0x04F8
   call (§19.2.1), so a package with an overlay or sidecars run this way would
   look for them in the Wire's folder and refuse cleanly; the Wire never
   offers Load Program for one (§7).
-- Cold segment, budget ≤ 250 bytes. Measured cost into SPEC §21.x.
+- Cold segment. The split makes the back half SHARED with the disk path, so
+  the resident delta is the copy loop and the argument marshalling: budget
+  ≤ 150 bytes. Measured cost into SPEC §21.x. It stays resident (a module
+  for 150 bytes costs more in thunks than it saves), and it is the ONLY
+  Wire-shaped byte a cardless machine carries in RAM.
 - **Capability gate `tests/pkgrun/`** (`make pkgrun`, the `mseg`/`covl`
   shape): a test package that reads `HELLO.O88` from beside itself into a
   claim, calls `OSAPI_PKG_RUN`, and reports on its own window what came back;
@@ -463,7 +499,7 @@ prose and flagged as reviewable in the PR:
 | `tests/unit/t_wire.py` | fast | pack → verify → dump round trip; `WC_*` equs mirrored; the writer's refusals |
 | `tests/pkgrun.py` (+ `tests/pkgrun/`, `make pkgrun`) | soak | `OSAPI_PKG_RUN` runs HELLO from memory; refuses a bad magic and a parts image |
 | `tests/thewire.py` (`make thewiretest`, `ethertest`'s shape: SYSTEM.CFG asking for `ETHER.DRV`, `SYSTEM/APPDATA/WIRE.CFG` naming `10.0.2.2:PORT/wire/`) | full if the 10-minute budget holds, else soak, and say which | QEMU + a host HTTP server serving a fixture catalog packed by `os88wire.py` from `build/hello.o88`, `build/mines.o88` and a tier-3 `WF_DISK` entry with one sidecar. Double-click the desktop zone; catalog loaded and 3 rows; filter `8088/8086` → 2 rows; select HELLO, Load Program → a `HELLO` instance; select the tier-3 entry → Load Program greyed, Add to Disk → Save → both files on B: byte-identical, read back on the host with the suite's independent FAT12 reader |
-| the zone's look | functional check, not a row | screenshots on VGA, Hercules and CGA with the Wire icon selected and unselected; the Wire window on all three |
+| the zone's look | functional check, not a row | screenshots on VGA, Hercules and CGA with the Wire icon selected and unselected (ETHER.DRV loaded), a plain boot showing no zone, and the Wire window on all three |
 
 Every row registered in `tests/suite.py` or exempted with a reason
 (`tests/unit/t_registry.py`).
