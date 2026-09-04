@@ -1613,7 +1613,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         fonts fontsheets fontlist \
         stories zdisk ztest zh zhboot zcheck zgfx zpic zgfxpic zscreens xt-z 386-z \
         worddisk wordcheck xt-word 386-word \
-        cc-note chello covl pkgbig cword cworddisk 386-c-word runcpm runcpmdisk \
+        cc-note chello covl pkgrun pkgbig cword cworddisk 386-c-word runcpm runcpmdisk \
         runcpm-src cpmsw rcz80test rcmemtest rczex 386-runcpm \
         xt-runcpm 286-runcpm \
         allapps usb iso live burn rcbandbench \
@@ -4253,6 +4253,38 @@ $(BUILD)/covl360.img: $(BUILD)/covl.o88 tools/os88disk.py
 #   make covl                            builds both images
 #   make test TESTAPPS=build/covl.img    boots with it in B:
 covl: $(BUILD)/covl.img $(BUILD)/covl360.img
+
+# --- PKGRUN, OSAPI_PKG_RUN's gate (ON DEMAND: `make pkgrun`) -----------------
+# SPEC.md 21.5: run a package image that is already in memory. The gate is a
+# test package that reads HELLO.O88 off the disk beside it into a claim and
+# hands it to the slot three times - once whole, once with a spoiled magic and
+# once with header flags bit 2 set. `make pkgrun` builds the disk and no
+# shipped floppy carries the package, exactly like mseg and covl (SPEC.md
+# 78.9); tests/pkgrun.py boots it under QEMU and reads the verdict.
+#
+# HELLO.O88 IS THE SHIPPED ONE, not a fixture: the claim under test is that
+# the slot runs an ordinary package, so a special one built for the gate would
+# be the wrong thing to run.
+$(BUILD)/pkgrun.bin: tests/pkgrun/pkgrun.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ $<
+	@echo "pkgrun: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/pkgrun.o88: $(BUILD)/pkgrun.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $< -o $@
+
+$(BUILD)/pkgrun.img: $(BUILD)/pkgrun.o88 $(BUILD)/hello.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		$(BUILD)/pkgrun.o88 $(BUILD)/hello.o88
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/pkgrun360.img: $(BUILD)/pkgrun.o88 $(BUILD)/hello.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+		$(BUILD)/pkgrun.o88 $(BUILD)/hello.o88
+	@python3 tools/os88disk.py --verify $@
+
+#   make pkgrun                            builds both images
+#   python3 tests/pkgrun.py                runs the gate on QEMU
+pkgrun: $(BUILD)/pkgrun.img $(BUILD)/pkgrun360.img
 
 # --- PKGBIG, the package-size rule's disk (ON DEMAND: `make pkgbig`) ---------
 # SPEC.md 19.1 types a *.O88 as a package by its EXTENSION and its SIZE, before

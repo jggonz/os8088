@@ -602,6 +602,50 @@ VID_EGA    equ 3                 ; 640x350x16 - a VGA-path adapter (SPEC.md 39.2
                                  ; releases your region, and your task
                                  ; ends inside this call.
 
+; --- running a package you are HOLDING (SPEC.md 21.5) -------------------------
+; The loader's back half with the disk read replaced by a copy. It exists for
+; the Wire (SPEC.md 26.7), which fetches a .O88 over the network into a claim
+; and has nowhere to put it: everything else in this system launches a package
+; by naming a FILE, and there is no file here.
+%define OSAPI_PKG_RUN       KERNEL_SEG:0x04F8   ; ES:SI = a package image, byte for byte
+                                 ; what the .O88 file holds, in a claim of
+                                 ; YOURS. ANY segment - it is COPIED into a
+                                 ; region of the kernel's own, never
+                                 ; adopted, so you may free your claim the
+                                 ; moment this returns. DX:CX = its length
+                                 ; in bytes, DX the high word. DI = a
+                                 ; NUL-terminated 8.3 name, at most 12
+                                 ; characters, in YOUR OWN segment (not
+                                 ; ES): what the new instance is told it
+                                 ; was launched from, which is its entry
+                                 ; proc's SI (SPEC.md 20.2).
+                                 ;
+                                 ; Out CF=0 with AX = 0: it is registered,
+                                 ; published and its window shown, exactly
+                                 ; as a Disk-window double-click leaves
+                                 ; one. CF=1 with AL = an LD_* code
+                                 ; (SPEC.md 21.4): 2 the header is not a
+                                 ; package's, or it carries PARTS (header
+                                 ; flags bit 2 - parts are read from the
+                                 ; package's own FILE and there is none
+                                 ; here); 3 too large; 4 its entry proc
+                                 ; declined; 5 no region or no instance
+                                 ; record.
+                                 ;
+                                 ; UI TASK ONLY - a window callback or an
+                                 ; OSAPI_WM_ONWAKE handler - with the gfx
+                                 ; lock NOT held. It takes the lock itself
+                                 ; around the new window's first paint, and
+                                 ; the entry proc it calls runs with the
+                                 ; lock free like every other package's.
+                                 ;
+                                 ; The new instance's CURRENT DIRECTORY is
+                                 ; YOURS at the time of the call (SPEC.md
+                                 ; 19.2.1), so a package with an overlay or
+                                 ; sidecars run this way looks for them
+                                 ; where you are standing. Run one that has
+                                 ; them from a disk instead.
+
 ; --- the clip region (SPEC.md 11.3) -------------------------------------------
 ; What replaced the wm_obscured veto for background painters. Arm it under
 ; the lock and every gfx_*/font_* call you make is cut to the part of YOUR

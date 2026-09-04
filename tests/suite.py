@@ -1287,6 +1287,22 @@ SOAK = [
         "menu, which is what proves the task_yield service point. QEMU by "
         "name on CLAUDE.md's closed list - MartyPC has no backdoor",
         needs=("qemu", "nasm"), serial=True, timeout=420, builds=True),
+    Row("pkgrun", "soak", py("tests/pkgrun.py"), 110.0,
+        "OSAPI_PKG_RUN (SPEC.md 21.5): the loader's back half with the disk "
+        "read replaced by a copy, which is how the Wire runs a package it "
+        "fetched over the network into a claim. `make pkgrun` builds a TEST "
+        "package no shipped floppy carries (the mseg/covl shape, SPEC.md "
+        "78.9); it reads the SHIPPED hello.o88 off the disk beside it into a "
+        "claim and hands it to the slot three times. Asserts a live instance "
+        "named HELLO in the KERNEL's own inst_tab - so the pass does not rest "
+        "on the test package's opinion - then CF=1 / LD_EBAD for a spoiled "
+        "magic and CF=1 / LD_EBAD for header flags bit 2, a package carrying "
+        "PARTS, which are read out of a FILE that does not exist here "
+        "(SPEC.md 20.12). The two refusals also say the region and the "
+        "instance record a failed load reserved were given back. QEMU because "
+        "nothing here is a time and all three answers are state; it builds "
+        "its own disk, so it needs no capability of its own",
+        needs=("qemu", "nasm"), serial=True, timeout=420, builds=True),
     Row("heapmap", "soak", py("tests/heapmap.py"), 120.0,
         "What does the claim heap look like when the boot is over? (SPEC.md "
         "50, 66) Every driver attached at once on a machine WITH memory above "

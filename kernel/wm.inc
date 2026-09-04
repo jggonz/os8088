@@ -5625,9 +5625,14 @@ wm_paint_dmg:
 
     cmp byte [wm_dmg_fs], 0
     jne .wins                   ; fullscreen: no zones to grow the rect to
-    call COLD_SEG:desk_dmg_zones_x ; AL = the zone mask; the rect grows to cover
-    mov [wm_dmg_zn], al         ; every zone it touched
-    or al, al
+    call COLD_SEG:desk_dmg_zones_x ; AX = the zone mask; the rect grows to cover
+    mov [wm_dmg_zn], ax         ; every zone it touched. A WORD since SPEC.md
+                                ; 26.7: the Wire zone's index is one past the
+                                ; last volume's and DVOL_MAX is 8, so its bit
+                                ; is bit 8 and no volume count makes it fit a
+                                ; byte. The two accessors are the same length
+                                ; either way (A1/A3 vs A0/A2)
+    or ax, ax
     jz .fill                    ; ...and a zone is redrawn WHOLE, so a window
     mov word [wm_dmg_stwin], 0  ; over one is damaged by something other than
                                 ; the move: 11.91.2's rect no longer describes
@@ -5641,7 +5646,7 @@ wm_paint_dmg:
     mov dx, [wm_dmg_y2]         ; be worked out here, from this rect's top-left
     call wm_dmg_gray            ; corner alone - see wm_dmg_bands
 .zones:
-    mov al, [wm_dmg_zn]
+    mov ax, [wm_dmg_zn]
     call COLD_SEG:desk_paint_mask_x ; the touched drive zones, whole
     mov ax, [wm_dmg_y2]         ; reached the strip? then the dither above
     cmp ax, [vid_dock_y0]       ; just ran over it, and whatever WAS covering
@@ -6276,7 +6281,9 @@ wm_dmg_shad dw 0                ; bit n = window n owes its DROP SHADOW and
                                 ; nothing else (SPEC.md 11.91.4). Never both:
                                 ; a window in wm_dmg_mask is redrawn whole and
                                 ; the shadow comes with it
-wm_dmg_zn   db 0                ; bit n = drive zone n must be redrawn
+wm_dmg_zn   dw 0                ; bit n = desktop zone n must be redrawn. A
+                                ; WORD, because zone DVOL_MAX is the Wire's
+                                ; (SPEC.md 26.7) and DVOL_MAX is 8
 wm_dmg_fs   db 0                ; 1 = a fullscreen window is over the chrome,
                                 ; so this pass draws windows and nothing else
 wm_dmg_dk   db 0                ; 1 = the dock strip really was drawn, so a

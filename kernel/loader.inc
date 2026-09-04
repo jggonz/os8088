@@ -669,7 +669,67 @@ ld_run_body_x:
     jc .ret1                    ; there is no staged copy to make and none to
                                 ; go stale. AL = LD_EBAD / LD_EBIG on failure
 
-    ; --- 4. size the allocation -------------------------------------------------
+    call ld_alloc               ; --- 4 and 5, shared with OSAPI_PKG_RUN
+    jc .ret1                    ; (SPEC.md 21.5): AL = LD_ENOMEM, and no
+                                ; region was left claimed
+    jmp short .read
+.disk1:
+    mov al, LD_EDISK
+.ret1:
+    ret
+.ret2:                          ; step 6 failed with a region already claimed
+    call ld_unreserve           ; (AL is the status): give it back, or a
+    ret                         ; failed load would hold heap for the session.
+                                ; The record itself is unpublished, so it
+                                ; needs nothing - and AL is NOT banked:
+                                ; ld_unreserve preserves AX (its banner, and
+                                ; every callee down to mem_free_owner_x's
+                                ; "all registers preserved")
+
+    ; --- 6. read the whole file into the region --------------------------------
+.read:
+    mov ax, [ld_img]            ; THE IMAGE, NOT THE FILE. On a v3 package the
+    call dsk_bytes_secs_x       ; two are equal and always were; on one
+                                ; carrying parts the region holds the primary
+                                ; alone and the rest is the package's to read
+                                ; (SPEC.md 20.12). DX = ceil(image/512)
+    mov ax, [ld_clus]
+    mov es, [ld_base]           ; the package's OWN segment, offset 0
+    xor bx, bx
+    call dsk_read_chain_x ; in: AX=cluster, DX=sectors, ES:BX -> dest.
+    jc .ret2                    ; on CF, AL is ALREADY the status: 1 =
+                                ; LD_EDISK (disk error), 2 = LD_EBAD (chain
+                                ; corrupt is bad data, not a disk error) -
+                                ; SPEC.md 21 step 6
+
+    xor si, si                  ; re-check against the in-region header - the
+    call ld_check_hdr           ; disk could have been swapped between the
+    jc .ret2                    ; peek and the read. ES IS STILL [ld_base]:
+                                ; dsk_read_chain_x is "everything else
+                                ; preserved", so the header is read where the
+                                ; read just put it. This used to stage 32
+                                ; bytes back into the kernel segment with a
+                                ; push ds/pop ds and a rep movsb, purely
+                                ; because ld_check_hdr read through DS
+
+    jmp ld_start                ; --- 7, 8 and 9, shared with OSAPI_PKG_RUN
+                                ; (SPEC.md 21.5). A TAIL jump: ld_start
+                                ; answers in AL exactly as this routine does,
+                                ; frees the region itself when the entry proc
+                                ; aborts, and is near - both are .cold
+
+; -----------------------------------------------------------------------------
+; ld_alloc - steps 4 and 5: size the region and reserve it, together with the
+;            instance record that OWNS it (SPEC.md 21, 21.5)
+; in:  [ld_img] and [ld_bss], both already bounded by ld_check_hdr
+; out: CF = 0 with [ld_rec], [ld_base] and [ld_need] filled;
+;      CF = 1 with AL = LD_ENOMEM - no instance record, or no region
+;
+; SPLIT OUT FOR OSAPI_PKG_RUN (SPEC.md 21.5), which has no directory entry, no
+; cluster and no disk, and needs every one of these three words before it can
+; copy an image anywhere. Nothing about the arithmetic moved.
+; -----------------------------------------------------------------------------
+ld_alloc:
     mov ax, [ld_img]            ; need = roundup512(img + bss)
     add ax, [ld_bss]            ; <= APP_MAX_SIZE, and NOW that is enforced:
     add ax, 511                 ; ld_check_hdr's `jc` above is what makes both
@@ -733,52 +793,30 @@ ld_run_body_x:
                                 ; fence, silently. Loosen either contract and
                                 ; this line has to come back.
     mov [ld_need], ax
-    jmp short .read
-.disk1:
-    mov al, LD_EDISK
-.ret1:
-    ret
+    clc                         ; `shl ax, cl` above WRITES CF, and this
+    ret                         ; routine's answer is CF - it was the caller's
+                                ; fall-through before the split, where the
+                                ; flag went nowhere
 .nomem:
     mov al, LD_ENOMEM
+    stc
     ret
-.ret2:                          ; step 6, 7 or 8 failed with a region already
-    call ld_unreserve           ; claimed (AL is the status): give it back,
-    ret                         ; or a failed load would hold heap for the
-                                ; session. The record itself is unpublished,
-                                ; so it needs nothing - and AL is NOT banked:
-                                ; ld_unreserve preserves AX (its banner, and
-                                ; every callee down to mem_free_owner_x's
-                                ; "all registers preserved"). IT SITS WITH
-                                ; THE OTHER STUBS rather than between step 8
-                                ; and .reg, so step 8 FALLS INTO .reg instead
-                                ; of jumping over it
 
-    ; --- 6. read the whole file into the region --------------------------------
-.read:
-    mov ax, [ld_img]            ; THE IMAGE, NOT THE FILE. On a v3 package the
-    call dsk_bytes_secs_x       ; two are equal and always were; on one
-                                ; carrying parts the region holds the primary
-                                ; alone and the rest is the package's to read
-                                ; (SPEC.md 20.12). DX = ceil(image/512)
-    mov ax, [ld_clus]
-    mov es, [ld_base]           ; the package's OWN segment, offset 0
-    xor bx, bx
-    call dsk_read_chain_x ; in: AX=cluster, DX=sectors, ES:BX -> dest.
-    jc .ret2                    ; on CF, AL is ALREADY the status: 1 =
-                                ; LD_EDISK (disk error), 2 = LD_EBAD (chain
-                                ; corrupt is bad data, not a disk error) -
-                                ; SPEC.md 21 step 6
-
-    xor si, si                  ; re-check against the in-region header - the
-    call ld_check_hdr           ; disk could have been swapped between the
-    jc .ret2                    ; peek and the read. ES IS STILL [ld_base]:
-                                ; dsk_read_chain_x is "everything else
-                                ; preserved", so the header is read where the
-                                ; read just put it. This used to stage 32
-                                ; bytes back into the kernel segment with a
-                                ; push ds/pop ds and a rep movsb, purely
-                                ; because ld_check_hdr read through DS
-
+; -----------------------------------------------------------------------------
+; ld_start - steps 7, 8 and 9: zero the package bss, call its entry proc
+;            through the dispatcher in its own header, and register, publish
+;            and show the instance (SPEC.md 21, 21.5)
+; in:  ES = the region, with the image already in it; [ld_rec], [ld_base] and
+;      [ld_need] as ld_alloc left them
+; out: AL = LD_OK, or LD_EABORT with the region and everything the entry proc
+;      claimed given back
+;
+; The other half of the split OSAPI_PKG_RUN needed: from here down the loader
+; does not care whether the image arrived off a disk or out of a caller's
+; claim, which is exactly why the slot is 100-odd bytes rather than a second
+; pipeline.
+; -----------------------------------------------------------------------------
+ld_start:
     ; --- 7. zero the package bss ------------------------------------------------
     mov di, [ld_img]            ; ...and ES is STILL the region here too
     mov cx, [ld_bss]
@@ -957,8 +995,140 @@ ld_run_body_x:
     ret
 
 ; -----------------------------------------------------------------------------
+; ld_pkg_run - OSAPI_PKG_RUN: run a package image that is ALREADY IN MEMORY
+;              (SPEC.md 21.5), slot KERNEL_SEG:0x04F8
+;
+; in:  ES:SI = the image, byte for byte what the .O88 file holds, in a claim
+;              of the caller's. ANY segment: it is COPIED, never adopted, so
+;              the caller may free it the moment this returns
+;      DX:CX = its length in bytes, DX the high word
+;      DI    = a NUL-terminated 8.3 name, at most 12 characters, in the
+;              CALLING INSTANCE's own segment (inst_caller, SPEC.md 19.2.1) -
+;              what the new instance is told it was launched from, which is
+;              step 1b's [ld_lname] and the SI of the entry contract (20.2)
+; out: CF = 0, AX = 0: the instance is registered, published and its window
+;              shown, exactly as a Disk-window double-click leaves one
+;      CF = 1, AL = LD_* (SPEC.md 21.4)
+;
+; UI TASK ONLY, GFX LOCK NOT HELD - the same context loader_run runs in, and
+; for its reasons: step 9 takes the lock itself around wm_show, and step 8
+; runs the package's entry proc, which creates windows and may draw. ui.inc's
+; ladder calls loader_run_x with the lock free (its `.chk_ld` step) and this
+; is reachable only from a window callback or an OSAPI_WM_ONWAKE handler, both
+; of which the UI task runs with the lock released.
+;
+; WHAT IT IS NOT: a second loader. Every check, the region claim, the entry
+; call and the publish are ld_check_hdr, ld_alloc and ld_start - the same
+; bodies the disk path enters. What is here is the three things a memory image
+; needs that a file does not: a length that arrives in registers rather than
+; out of a directory entry, a NAME out of the caller's segment, and a `rep
+; movsb` where step 6 has an int 13h.
+;
+; A PACKAGE WITH PARTS IS REFUSED (header flags bit 2, SPEC.md 20.12): parts
+; are read by the package from its OWN FILE, and there is no file here. That
+; is LD_EBAD and it is asked BEFORE ld_check_hdr, which would allow the bit.
+; -----------------------------------------------------------------------------
+ld_pkg_run_x:
+    mov [ld_fsz], cx            ; the size, in the two words ld_check_hdr
+    mov [ld_fsz+2], dx          ; bounds the image against
+    test byte [es:si+LD_H_FLAGS], 4
+    jnz .bad                    ; parts, and no file to read them out of
+    call ld_check_hdr           ; ES:SI IS where it reads - the same call the
+    jc .fail                    ; disk path makes against dsk_secbuf in
+                                ; LOW_SEG. AL = LD_EBAD / LD_EBIG
+
+    mov [ld_msrc], si           ; the source, banked: ld_alloc's chain reaches
+    mov ax, es                  ; mem_compact and a package relocation proc,
+    mov [ld_msrc+2], ax         ; and ES is nobody's to promise across that
+
+    ; --- the NAME, out of the caller's segment (SPEC.md 21 step 1b) ---------
+    ; DI is an offset in the CALLING INSTANCE's segment and not in ES: the
+    ; image is in a claim and the name is in the package's own data, which are
+    ; two different segments by construction. inst_caller is the published way
+    ; to ask which instance is calling (SPEC.md 19.2.1); a call from kernel
+    ; context answers 0xFF and the name is then read through KERNEL_SEG, which
+    ; is the only segment there is to read it through.
+    push ds
+    pop es                      ; ES = KERNEL for the copy's destination
+    call KERNEL_SEG:cw_inst_caller ; DH = the slot, 0xFF = the kernel itself
+    push ds                     ; DS is restored below whichever arm runs
+    mov ax, ds                  ; the fallback: our own segment
+    cmp dh, 0xFF
+    je .nseg
+    mov bl, dh
+    xor bh, bh
+    mov cl, 5                   ; inst_idx's arithmetic, 32-byte records -
+    shl bx, cl                  ; inline because instance.inc is .text and
+    mov ax, [bx+inst_tab+I_SPTR] ; this is .cold (SPEC.md 2.6)
+.nseg:
+    mov si, di                  ; DS:SI -> the caller's name, ES:DI -> ours
+    mov di, ld_lname
+    mov cx, LD_NAMELEN
+    mov ds, ax
+    cld
+.ncp:
+    lodsb
+    stosb
+    or al, al
+    jz .named
+    loop .ncp
+    mov byte [es:di], 0         ; twelve characters and no terminator: end it
+.named:
+    pop ds                      ; ...and DS is the kernel's again
+
+    call ld_alloc               ; steps 4 and 5: the record and the region
+    jc .fail                    ; AL = LD_ENOMEM
+
+    ; --- step 6, without a disk: the image, copied into the region ----------
+    ; [ld_img] and not the file length: ld_check_hdr has just proved them
+    ; equal, parts being refused above, and it is the value step 7 zeroes from.
+    ; NO DISK-SWAP RE-CHECK - the bytes came from memory the caller owns and
+    ; ld_check_hdr read those very bytes, so there is nothing that could have
+    ; been swapped underneath them.
+    mov es, [ld_base]           ; ES:DI = the region at offset 0
+    xor di, di
+    mov cx, [ld_img]
+    push ds
+    mov ds, [ld_msrc+2]         ; DS:SI = the caller's image
+    mov si, [ld_msrc]
+    cld
+    rep movsb
+    pop ds
+    call ld_start               ; 7, 8 and 9 - and ES is the region, which is
+.bad_out:                       ; what that routine's step 7 wants. It answers
+    ret                         ; in AL and frees the region itself when the
+                                ; entry proc aborts
+.bad:
+    mov al, LD_EBAD
+.fail:
+    ret                         ; AL ALONE, and the CF is not this routine's
+                                ; answer: ld_start's exits end in cw_gfx_unlock
+                                ; and an `or`, so the flag arriving here means
+                                ; nothing at all. The far entry below decides
+                                ; on the CODE, which every arm sets
+
+; -----------------------------------------------------------------------------
+; ...and the answer, which ld_start cannot give: it is the DISK path's body
+; too, and that one reports through [ld_status] rather than through a flag.
+; -----------------------------------------------------------------------------
+ldf_ld_pkg_run:
+    call ld_pkg_run_x
+    or al, al
+    jnz .fail                   ; every LD_* but LD_OK, ld_start's own
+    xor ax, ax                  ; LD_EABORT included: AX = 0 and CF = 0 on the
+    retf                        ; way out, and `xor` is what clears the flag
+.fail:
+    stc
+    retf                        ; retf touches no flags, so the answer stands
+
+; -----------------------------------------------------------------------------
 section .bss
 
+ld_msrc:    resw 2              ; OSAPI_PKG_RUN's source image, offset then
+                                ; segment (SPEC.md 21.5): banked because
+                                ; ld_alloc's chain runs mem_compact and a
+                                ; package's relocation procs, and no register
+                                ; survives that by contract
 ld_pending: resb 1              ; 0 = none, else directory index + 1
                                 ; (set by files.inc, consumed by ui.inc).
                                 ; A BYTE: the index is bounded by

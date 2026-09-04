@@ -3756,7 +3756,18 @@ osapi_table:
                                   ;          (SPEC.md 20.8 rule 4), and on
                                   ;          kern_small the bit is simply set
                                   ;          and never read
-osapi_table_end:                  ; 0x04F8
+    OSAPI_SLOT osapi_pkg_run      ; 0x04F8 - run a package image that is
+                                  ;          ALREADY IN MEMORY (SPEC.md 21.5):
+                                  ;          ES:SI = the image in a claim of
+                                  ;          yours, DX:CX its length, DI a
+                                  ;          NUL 8.3 name in your own segment.
+                                  ;          A PLAIN SLOT and not an X cell:
+                                  ;          ES is an ARGUMENT here and an X
+                                  ;          stub would overwrite it with the
+                                  ;          caller's DS (SPEC.md 20.3), which
+                                  ;          is the one segment the image is
+                                  ;          least likely to be in
+osapi_table_end:                  ; 0x0500
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -3764,8 +3775,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 157 * 8
-%error "os8088 API jump table must be exactly 157 8-byte slots"
+%if OSAPI_TABLE_LEN != 158 * 8
+%error "os8088 API jump table must be exactly 158 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -3941,6 +3952,19 @@ api_fdlg_open:
     pop si
     pop ds
     retf
+
+; -----------------------------------------------------------------------------
+; osapi_pkg_run - slot 0x04F8's resident thunk (SPEC.md 21.5)
+;
+; The body is loader.inc's and loader.inc is `.cold`, so this is the ordinary
+; six bytes - and it is in BOTH kernels, body included, because a slot that
+; exists in one build and not another is an ABI that depends on a knob
+; (SPEC.md 20.8 rule 4). `call far` and `retf` touch no flags, so the CF the
+; body answers with is what the caller's `pop ds / retf` returns.
+; -----------------------------------------------------------------------------
+osapi_pkg_run:
+    call COLD_SEG:ldf_ld_pkg_run
+    ret
 
 ; -----------------------------------------------------------------------------
 ; api_file_find - slot 0x0348 (X). in CX = ordinal, ES:DI = a DSK_FIND_SZ
@@ -6006,6 +6030,10 @@ cw_inst_alloc:          call inst_alloc
                     retf
 cw_inst_bind_win:       call inst_bind_win
                     retf
+cw_inst_caller:         call inst_caller    ; OSAPI_PKG_RUN reads its name
+                    retf                    ; argument through the CALLING
+                                            ; instance's segment (SPEC.md
+                                            ; 21.5), and loader.inc is cold
 cw_inst_find_kind:      call inst_find_kind
                     retf
 cw_inst_set_name_x:     call inst_set_name_x
@@ -6065,6 +6093,11 @@ cw_toast_show:          call toast_show
                     retf
 cw_ui_note:             call ui_note
                     retf
+%ifdef KERN_BIG
+cw_ui_wire_open:        call ui_wire_open   ; the Wire zone's double-click
+                    retf                    ; (SPEC.md 26.7): desk.inc is cold
+                                            ; and ui_sys_open is not
+%endif
 cw_vga_xor_rect_vram:   call vga_xor_rect_vram
                     retf
 cw_vid_avail_test:      call vid_avail_test

@@ -2371,11 +2371,66 @@ ui_s_tmname: db 'TaskMgr', 0     ; the 16-byte header name inst_set_name_x
                                  ; an already-running one
 
 ; -----------------------------------------------------------------------------
-; ui_tm_open - front the Task Manager, or load it off the system disk
+; The DESCRIPTOR (SPEC.md 28.3.2): everything ui_sys_open needs to say about
+; ONE system package. Six words in .text, one per surface the routine touches.
+;
+; It exists because the Wire's desktop zone (SPEC.md 26.7) opens a package out
+; of SYSTEM by exactly the Task Manager's route - front the running instance
+; by name, else bank the volume, mount the boot disk, step into SYSTEM,
+; ld_run_name, put the volume back, and say why in a notice on failure - and a
+; second copy of eighty bytes of that is the kind of copy that drifts.
+; -----------------------------------------------------------------------------
+UO_FILE  equ 0                  ; dw -> the 8.3 file name, in SYSTEM
+UO_NAME  equ 2                  ; dw -> the 16-byte header name a running
+                                ;       instance carries (SPEC.md 20.2)
+UO_TTL   equ 4                  ; dw -> the failure notice's title
+UO_LEAD  equ 6                  ; dw -> ...and its lead line
+UO_ERRS  equ 8                  ; dw -> six words, indexed by LD_*
+UO_NOFI  equ 10                 ; dw -> the "not in SYSTEM" reason, which is
+                                ;       not an LD_* code (SPEC.md 21.4 gives
+                                ;       LD_EBAD for both "not a package" and
+                                ;       "not there")
+UO_SIZE  equ 12
+
+ui_d_tm:
+    dw ui_s_tmfile, ui_s_tmname, ui_s_tmttl, ui_s_tmlead, ui_tm_errs
+    dw ui_s_nofile
+%ifndef KERN_SMALL
+ui_d_wire:                      ; the title and the instance name are ONE
+    dw ui_s_wfile, ui_s_wname, ui_s_wname, ui_s_wlead, ui_w_errs
+    dw ui_s_wnofile             ; string: the window is called The Wire and so
+%endif                          ; is the notice about it
+
+; -----------------------------------------------------------------------------
+; ui_tm_open / ui_wire_open - front a system package, or load it off the
+;                             system disk (SPEC.md 28.3, 26.7)
 ; in:  nothing; UI task, no lock held
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
+%ifndef KERN_SMALL
+ui_wire_open:
+    push si
+    mov si, ui_d_wire
+    jmp short ui_so_call
+%endif
 ui_tm_open:
+    push si
+    mov si, ui_d_tm
+ui_so_call:
+    call ui_sys_open
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; ui_sys_open - the body both of them are
+; in:  SI -> a descriptor above; UI task, no lock held
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+ui_sys_open:
+    mov [ui_desc], si           ; banked in .text for the same reason
+                                ; [ui_tm_cwd] is: this is UI-task-only and one
+                                ; load at a time, and every register below is
+                                ; spoken for
     push ax
     push bx
     push cx                     ; CX/BP/ES too: ld_run_body is documented as
@@ -2385,7 +2440,7 @@ ui_tm_open:
     push bp                     ; just-freed region segment
     push es
 
-    call ui_tm_find             ; already running? front it and stop
+    call ui_sys_find            ; already running? front it and stop
     jc .load
     call gfx_lock
     call inst_restore           ; un-minimize and show - the app_launch cap
@@ -2419,11 +2474,12 @@ ui_tm_open:
     mov si, ui_s_nodisk
     jc .fail
     call ui_tm_sysdir           ; into SYSTEM (SPEC.md 28.3); CF=1 = no such
-    mov si, ui_s_nofile         ; folder, which reads to the user as the file
-    jc .fail                    ; not being there, because it is not
+    mov bx, [ui_desc]           ; folder, which reads to the user as the file
+    mov si, [bx+UO_NOFI]        ; not being there, because it is not
+    jc .fail
 
     mov word [ld_pwin], 0       ; no poster: this is not a Disk window's load,
-    mov si, ui_s_tmfile         ; and so not loader_run either - there is no
+    mov si, [bx+UO_FILE]        ; and so not loader_run either - there is no
     call COLD_SEG:ldf_ld_run_name ; BY NAME (SPEC.md 21.4): no listing to build
                                 ; and none to refresh, and no status line to
                                 ; correct either ([ld_status] is loader_run's
@@ -2438,26 +2494,31 @@ ui_tm_open:
     or al, al
     jz .back                    ; LD_OK
     push ax                     ; ...and the reason, out of the same codes a
-    cmp al, LD_EBAD             ; Disk window's status line uses - EXCEPT that
-    jne .code                   ; ld_res_name answers LD_EBAD both for a file
-    mov si, ui_s_tmfile         ; that is not a package and for a file that is
-    call COLD_SEG:dwf_dskw_stat ; not THERE (SPEC.md 21.4), and those are not
-    jnc .code                   ; one message to a user (SPEC.md 28.3). The
-    pop ax                      ; index resolver could tell them apart because
-    mov si, ui_s_nofile         ; dsk_find_name failed first; by name they
-    jmp short .fail             ; arrive as one code, so ask - on the FAILURE
-.code:                          ; path only, still standing in SYSTEM, and for
-    pop ax                      ; the sector ld_res_name has just read
+    mov bx, [ui_desc]           ; Disk window's status line uses - EXCEPT that
+    cmp al, LD_EBAD             ; ld_res_name answers LD_EBAD both for a file
+    jne .code                   ; that is not a package and for a file that is
+    mov si, [bx+UO_FILE]        ; not THERE (SPEC.md 21.4), and those are not
+    call COLD_SEG:dwf_dskw_stat ; one message to a user (SPEC.md 28.3). The
+    jnc .code                   ; index resolver could tell them apart because
+    pop ax                      ; dsk_find_name failed first; by name they
+    mov bx, [ui_desc]           ; arrive as one code, so ask - on the FAILURE
+    mov si, [bx+UO_NOFI]        ; path only, still standing in SYSTEM, and for
+    jmp short .fail             ; the sector ld_res_name has just read.
+.code:                          ; dwf_dskw_stat is a far call and answers in
+    pop ax                      ; BX, so the descriptor is re-read after it
     mov bl, al
     xor bh, bh
     shl bx, 1
-    mov si, [bx + ui_tm_errs]
+    mov si, [ui_desc]
+    add bx, [si+UO_ERRS]
+    mov si, [bx]
 .fail:
     push si                     ; the volume FIRST, then the notice: putting
     call ui_tm_back             ; it back touches the floppy and the notice
     pop si                      ; takes the gfx lock, and neither wants the
-    mov di, ui_s_tmttl          ; other held while it runs
-    mov bx, ui_s_tmlead
+    mov bx, [ui_desc]           ; other held while it runs
+    mov di, [bx+UO_TTL]
+    mov bx, [bx+UO_LEAD]
     call ui_note
     jmp short .out
 .back:
@@ -2563,9 +2624,42 @@ ui_s_toobig: db 'TASKMGR.O88 is too large', 0
 ui_s_abort:  db 'It refused to start', 0
 ui_s_nomem:  db 'Not enough memory to open it', 0
 
+ui_desc:    dw ui_d_tm          ; ui_sys_open's descriptor for the load in
+                                ; hand. In .text with a resting value for the
+                                ; reason [ui_tm_cwd] is: -f bin zeroes no .bss
+
+%ifndef KERN_SMALL
+; --- the Wire (SPEC.md 26.7): the same six surfaces, its own six strings ----
+; The reasons name no file, where the Task Manager's three name TASKMGR.O88.
+; That is not a saving dressed up as a decision - the lead line above them
+; already says which program this is about, and 'THEWIRE.O88 is too large'
+; would be the only place in the interface where the user is told the Wire's
+; FILE name at all (the brand is 'The Wire' and the icon says 'Wire').
+ui_s_wfile:  db 'THEWIRE.O88', 0
+ui_s_wname:  db 'The '          ; TWO LABELS OVER ONE `db`, and nothing may be
+ui_s_wire:   db 'Wire', 0       ; inserted between these two lines: the header
+                                ; name, the window title and the notice title
+                                ; are 'The Wire', and desk.inc's desktop
+                                ; caption is its TAIL (SPEC.md 26.7), so the
+                                ; two cannot be renamed apart
+ui_s_wlead:  db 'Cannot open the Wire:', 0
+ui_s_wnofile: db 'It is not in SYSTEM', 0
+ui_s_wbad:   db 'It is not a valid package', 0
+ui_s_wbig:   db 'It is too large', 0
+
+ui_w_errs:                      ; indexed by LD_* (loader.inc), and three of
+    dw ui_s_wnofile             ; the six are the Task Manager's own: a disk
+    dw ui_s_dskerr              ; error, a refusal and an out-of-memory say
+    dw ui_s_wbad                ; nothing about which package they are about
+    dw ui_s_wbig
+    dw ui_s_abort
+    dw ui_s_nomem
+%endif
+
 ; -----------------------------------------------------------------------------
-; ui_tm_find - the running Task Manager, by the name in its instance record
-; in:  nothing
+; ui_sys_find - the running instance of [ui_desc]'s package, by the name in
+;               its instance record
+; in:  [ui_desc]
 ; out: CF = 0 and DI = its record; CF = 1 none open
 ; clobbers: DI (the output), flags
 ;
@@ -2574,10 +2668,13 @@ ui_s_nomem:  db 'Not enough memory to open it', 0
 ; moment this one closes, and fronting that is a bug with no symptom until
 ; someone notices the wrong window coming up.
 ; -----------------------------------------------------------------------------
-ui_tm_find:
+ui_sys_find:
     push ax
+    push bx
     push cx
     push si
+    mov bx, [ui_desc]           ; BX = the name to match, hoisted out of the
+    mov bx, [bx+UO_NAME]        ; scan: nothing in the loop writes it
     mov di, inst_tab
     mov cx, INST_MAX
 .scan:
@@ -2586,7 +2683,7 @@ ui_tm_find:
     test byte [di+I_KIND], KIND_PKG
     jz .next
     push di
-    mov si, ui_s_tmname
+    mov si, bx
     add di, I_NAME
 .cmp:
     mov al, [si]
@@ -2608,6 +2705,7 @@ ui_tm_find:
 .out:
     pop si
     pop cx
+    pop bx
     pop ax
     ret
 

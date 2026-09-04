@@ -31363,6 +31363,104 @@ error, no notice, and five sectors of I/O where a load is three hundred. An
 undocumented register contract at a jump target is exactly the difference
 that survives a build and a review.
 
+### 21.5 `OSAPI_PKG_RUN` — the loader's back half, with the read replaced by a copy
+
+Everything in this system launches a package by naming a FILE. The Wire
+(§26.7, docs/WIRE-PLAN.md) fetches a `.O88` over the network into a heap
+claim and has no file to name, so `Load Program` needs a way in that the
+loader did not have. Slot **`KERNEL_SEG:0x04F8`**, the 158th:
+
+```
+OSAPI_PKG_RUN   KERNEL_SEG:0x04F8
+  in   ES:SI  = a package image, byte for byte what the .O88 file holds,
+                in a claim of YOURS. ANY segment - it is COPIED into a region
+                of the kernel's own, never adopted, so the caller may free
+                its claim the moment this returns
+       DX:CX  = its length in bytes, DX the high word
+       DI     = a NUL-terminated 8.3 name, at most 12 characters, in the
+                CALLING INSTANCE's segment - what the new instance is told
+                it was launched from (step 1b's [ld_lname], and the entry
+                proc's SI, §20.2)
+  out  CF = 0, AX = 0: registered, published and its window shown, exactly
+                as a Disk-window double-click leaves one
+       CF = 1, AL = LD_* (§21.4): LD_EBAD a header ld_check_hdr refuses, or
+                flags bit 2 set; LD_EBIG over APP_MAX_SIZE; LD_ENOMEM no
+                region or no instance record; LD_EABORT the entry declined
+```
+
+**`DI` is read through the CALLING INSTANCE's segment and not through ES**,
+and the two really are different: the image is in a claim and the name is in
+the package's own data. `inst_caller` is the published way to ask who is
+calling (§19.2.1) and `I_SPTR` is that instance's segment; a call from kernel
+context answers `0xFF` and the name is then read through `KERNEL_SEG`, which
+is the only segment there is to read it through.
+
+**It is a plain `OSAPI_SLOT` and not an X cell.** ES is an *argument* here,
+and an X stub overwrites ES with the caller's DS (§20.3) — the one segment the
+image is least likely to be in.
+
+**Context: UI TASK ONLY, gfx lock NOT held** — a window callback or an
+`OSAPI_WM_ONWAKE` handler. That is `loader_run`'s own context and for its
+reasons: step 9 takes the lock itself around `wm_show`, and step 8 runs the
+package's entry proc, which creates windows and may draw. `ui_task`'s ladder
+calls `loader_run_x` with the lock free at its `.chk_ld` step, and both
+callback kinds are entered with it released.
+
+**A package carrying PARTS is refused** (header flags bit 2, §20.12): parts
+are read by the package out of its OWN FILE and there is none here. The test
+is `LD_EBAD` and it is asked **before** `ld_check_hdr`, which allows the bit.
+
+#### The split, which is what makes the slot 159 bytes and not a second loader
+
+`ld_run_body_x` gave up two routines, both entered by the disk path exactly
+where they used to be inline:
+
+- **`ld_alloc`** — steps 4 and 5: `roundup512(img + bss)`, `inst_alloc`,
+  `mem_bytes_kb`, `ld_slot`, `mem_claim_hi`. Out `CF = 0` with `[ld_rec]`,
+  `[ld_base]` and `[ld_need]` filled, or `CF = 1` with `AL = LD_ENOMEM`. The
+  one line that is new is a `clc`: `shl ax, cl` writes CF and used to fall
+  through into a caller that never looked at it.
+- **`ld_start`** — steps 7, 8 and 9: zero the bss, call the entry proc through
+  the dispatcher in the package's own header, register and publish the
+  instance and show its window; `.abort` and its `ld_unreserve` sweep come
+  with it. In `ES` = the region, out `AL` = `LD_OK` or `LD_EABORT`.
+
+The disk path is then `ld_check_hdr` → `ld_alloc` → **step 6, the file read
+and the disk-swap re-check** → `ld_start`, and the slot is `ld_check_hdr` →
+`ld_alloc` → **a far `rep movsb`** → `ld_start`. Nothing about the arithmetic,
+the fences or the entry contract moved.
+
+**No disk-swap re-check on the memory path**, and it is not an omission: the
+bytes came out of memory the caller owns and `ld_check_hdr` read *those very
+bytes*, so there is nothing that could have been swapped underneath them. The
+copy count is `[ld_img]` and not the file length, which `ld_check_hdr` has
+just proved equal — parts being refused above.
+
+**The source is banked in `[ld_msrc]`** (offset, then segment) rather than
+kept in `ES:SI`, because `ld_alloc`'s chain reaches `mem_compact` and a
+package's relocation procs and no register survives that by contract.
+
+**The new instance's current directory is the CALLER's** at the time of the
+call (§19.2.1), so a package with an overlay or sidecars run this way looks
+for them where the caller is standing and refuses cleanly. The Wire never
+offers `Load Program` for one.
+
+**The slot is in BOTH kernels, body included** — a slot that exists in one
+build and not another is an ABI that depends on a knob (§20.8 rule 4), which
+is `wm_noanim`'s own precedent. `kern_small` has no Wire and no caller for it,
+and it assembles and answers there like anywhere else.
+
+**What it cost, measured** (`tools/kernsize.py` either side, `kern_big`, on
+top of §26.7's):
+
+| | before | after | |
+|---|---:|---:|---|
+| `.text` | 51,287 | 51,305 | **+18** (the table cell, the resident thunk, `cw_inst_caller`) |
+| `.bss` | 6,069 | 6,073 | **+4** (`[ld_msrc]`) |
+| `.cold` | 37,384 | 37,521 | **+137** |
+
+**159 bytes.**
+
 ## 22. files.inc — the Disk window (file manager)
 
 Built-in app kind (KIND_FILES), **cap 4** — up to four windows, each on its
@@ -35098,6 +35196,34 @@ claim "I write my own buffer and nothing else" measured. The assembler holds
 the other end: every indexed record's height is checked against the buffer's
 at assembly time, and its two halves are counted.
 
+#### 25.7.3 The POOL is an argument, because a nibble holds sixteen rows
+
+A run byte's high nibble indexes the pool, so **a pool is sixteen rows and
+`ico_pool` holds sixteen**. That is not slack anybody left: the four volume
+records use every one of them.
+
+The Wire zone's icon (§26.7) is a cable reel and a plug and shares **no row at
+all** with a diskette or a hard disk, so it could not be drawn out of that
+pool at any price, and widening the nibble would move every run byte in the
+file. `icon_draw_ix` takes the pool in **BX** instead — `ico_pool` for the
+volume icons, `ico_wpool` for the Wire's two — and banks it in `[ico_pbase]`,
+which the walk adds to each run's row offset.
+
+```
+icon_draw_ix   in CX = x, DX = y, SI -> an indexed record, BX -> its row
+               pool; caller holds the gfx lock. Preserves every register.
+```
+
+It costs **one byte of code and two of `.bss`**: the walk's `xor bx, bx` above
+the loop becomes a `mov bh, 0` inside it (the add leaves the pool's own high
+byte in BH), and the two `[bx+ico_pool]` displacements become `[bx]` and
+`[bx+2]`, which pays for the `add` almost exactly. Per run it is one memory
+add and one immediate move, on a path that runs eleven to twenty-nine times
+per icon and only on a desktop repaint.
+
+`desk_draw_zone` is still the only caller of either, so the pool is chosen in
+the same three instructions that choose the record.
+
 ### 25.8 `kern_small`'s harvested icons are a POOL, because a listing repeats itself
 
 `disk_icons` is `DSK_NENT` × `DSK_ICO_SIZE` — **2,048 bytes of `.lowbss`**, one
@@ -35564,6 +35690,112 @@ desktop repaint and on every selection change. The caption is a `font_run` now.
 against an 8-px cell, so the run cannot be the erase for it; §22.11.3's rule.
 What the run buys is the cells, and that the caption is never momentarily
 missing from a rect that has just been whitened.
+
+### 26.7 The Wire zone — a second zone SPECIES, and the first icon that is not a volume
+
+Every desktop zone in this OS is a row of `dsk_vtab` (§26.1). The Wire
+(docs/WIRE-PLAN.md) is a desktop icon that is not a disk: double-clicking it
+opens `SYSTEM/THEWIRE.O88`, the online software library. `OSAPI_VOL_ADD` is
+fenced to drivers and a package cannot put an icon on the desktop, so this is
+kernel code — a **second zone species**, and the whole of what that means is
+one extra index.
+
+**`DESK_WZ` = `DVOL_MAX` and `DESK_NZ` = `DVOL_MAX + 1`.** Every loop in
+`desk.inc` was written against a zone INDEX and every index but this one is a
+volume index, so the loops now run to `DESK_NZ` and four routines carry a
+one-compare arm for the last of them:
+
+| routine | the Wire's arm |
+|---|---|
+| `desk_zflag` | `desk_wflag`: shown iff fewer than `DVOL_MAX` volumes have a zone |
+| `desk_ord` | its ordinal **is** the count the walk just finished, so it lands one place past the last volume — `cmp al, DESK_WZ` leaves CF = 0 when equal, which is what a found zone means there |
+| `desk_zone_label` | the caption `Wire`, fixed |
+| `desk_draw_zone` | `ico_wire32` / `ico_wire14` out of `ico_wpool` (§25.7.3), and no `dsk_vol_fixed` question — there is no volume row to ask |
+
+Everything else is the volume path unchanged: `desk_zone_rect`,
+`desk_zone_xy`, `desk_ord_xy`, `desk_zone_hilite`, `desk_zone_redraw`,
+`desk_dmg_zones` and `desk_paint_mask` are asked about an index and never
+about a drive, so the Wire selects, highlights, repaints under a dragged
+window and wraps into the next column exactly as a disk does.
+
+**It is not shown when EIGHT volumes are**, and that is a fact rather than a
+crash. The Wire is a desktop service and a machine with `DVOL_MAX` volumes
+mounted has said what it wants the right-hand edge for. One `cmp` answers it,
+in `desk_wflag`, and `desk_zones_shown` — which walks the volumes and is what
+that compare asks — never re-enters `desk_zflag`'s Wire arm, because
+`desk_ord` only ever asks about `0..DVOL_MAX-1`.
+
+**The damage mask is a WORD now.** It was one byte and `DVOL_MAX` = 8 sat
+exactly at that limit, so zone index 8 had no bit under **any** volume count —
+the eight-volume rule does not rescue it, because the volumes that are shown
+keep their own indices whatever their number. A bit that does not fit is a
+zone that `desk_paint_x` still draws and every damage-driven path silently
+stops repainting, which reads as an icon that survives one repaint and not the
+next. `[wm_dmg_zn]` is a `dw`, `desk_dmg_zones` answers in AX, and
+`desk_paint_mask` shifts DX: **two bytes**, because `mov [mem],ax` and
+`mov ax,[mem]` are the same length as their byte forms and only the cell
+itself and `desk_paint_x`'s full-mask immediate grew.
+
+**The grid's damage rect reaches it.** `desk_zones_dmg` sizes the rect from
+the number of zones the screen may be showing, and the Wire sits one ordinal
+past the last volume — so it MOVES whenever a volume is mounted or unmounted.
+One `inc` when the count is below `DVOL_MAX` covers it.
+
+**The double-click is `ui_wire_open`**, which is `ui_tm_open` (§28.3) with a
+different descriptor (§28.3.2): a running instance named `The Wire` is
+fronted with `inst_restore`, otherwise the boot volume is quiet-mounted, the
+loader is given the name inside `SYSTEM`, and the user's volume and folder go
+back. A failure raises the kernel's one-line notice with the lead
+`Cannot open the Wire:` and the `LD_*` reason. `desk_click` is `.cold` and
+`ui_sys_open` is not, so it goes out through `cw_ui_wire_open` — and with **no
+gfx lock held**, which is that routine's own contract and why the deselect and
+its redraw happen inside their own lock hold first.
+
+**The caption and the window title are one string.** `ui_s_wname` is `The `
+and `ui_s_wire` is `Wire`, 0 — two labels over one `db`, so the header name
+the instance carries, the notice's title and the desktop caption cannot be
+renamed apart. `desk_zone_label` returns the tail.
+
+**`kern_small` leaves the whole species out.** It carries no network driver
+and no Wire package (`SMALLOMIT`), so a zone that could only ever refuse is
+bytes that kernel has none of: `DESK_NZ` is `DVOL_MAX` there, every arm above
+is inside `%ifndef KERN_SMALL`, and the two glyphs and the second pool are not
+assembled at all.
+
+**What it cost, measured** (`tools/kernsize.py` either side, `kern_big`):
+
+| | before | after | |
+|---|---:|---:|---|
+| `.text` | 50,993 | 51,287 | **+294** |
+| `.bss` | 6,067 | 6,069 | **+2** |
+| `.cold` | 37,310 | 37,384 | **+74** |
+
+**370 bytes**, of which 93 are art: the second pool is 10 rows × 4 bytes and
+the two records are 32 and 21 bytes of run stream. The image rung had 284
+bytes left when this was written, so it crosses — 512 bytes of every machine's
+RAM, which is the price of a desktop icon that is not a volume.
+
+### 26.7.1 The icon is a reel of cable with a plug on the end
+
+`ico_wire32` and `ico_wire14`, the same 32-row / 14-row pair every volume icon
+comes in (§26.4 — the CGA's pixels are 2.4:1 tall, so the short form is drawn
+and not squashed). Black outline, white body, the diskette's own convention:
+mask = the filled silhouette so the desktop dither never shows through, data =
+the outline plus the winding ticks and the plug's edges.
+
+```
+   ...#####................#####...   flange top edges
+   ...#...#................#...#...   flange sides
+   ...#...##################...#...   the core, top and bottom
+   ...#...#..#..#..#..#....#...#...   ...and the winding on it
+   ..............##................   the cord
+   .........##############.........   the plug's body
+   ............##....##............   its two prongs
+```
+
+Ten distinct rows, which is what makes a second pool cheap: the flange row is
+also the mask of every flange-only row, the cord and the prongs are their own
+masks, and the plug body's outline row is the mask of its hollow ones.
 
 ## 27. HELLO and NOTEPAD — the second and third packages
 
@@ -38530,6 +38762,47 @@ The change made the kernel smaller: `.text` −29, `.cold` −16
 on either guard, `KERN_BUDGET` unmoved. Three resident thunks lost their only
 caller (`disk_mount`, `dsk_find_name`, `ld_run_body` — all three were
 `ui_tm_open`'s alone) and two took their place (`dskw_stat`, `ld_run_name`).
+
+### 28.3.2 `ui_sys_open` — one body, a descriptor per system package
+
+The Wire's desktop zone (§26.7) opens `SYSTEM/THEWIRE.O88` by exactly the
+route above: front the running instance by name, else bank the user's volume
+and folder, quiet-mount the boot volume's root, step into `SYSTEM`,
+`ld_run_name`, put the volume back, and on failure raise `ui_note` with a
+lead line and the `LD_*` reason. That is eighty bytes of sequencing with six
+strings threaded through it, and a second copy of it would drift from this one
+the first time either changed.
+
+So `ui_tm_open` is now a two-instruction entry into `ui_sys_open`, which takes
+`SI` -> a **descriptor**: six words in `.text`, one per surface the routine
+touches.
+
+```
+UO_FILE   dw -> the 8.3 file name, in SYSTEM
+UO_NAME   dw -> the 16-byte header name a running instance carries (§20.2)
+UO_TTL    dw -> the failure notice's title
+UO_LEAD   dw -> ...and its lead line
+UO_ERRS   dw -> six words, indexed by LD_*
+UO_NOFI   dw -> the "not in SYSTEM" reason, which is not an LD_* code
+```
+
+`UO_NOFI` is a field of its own because §21.4 answers `LD_EBAD` both for a
+file that is not a package and for one that is not there, and those are not
+one message to a user; the disambiguation — `dskw_stat` asked on the failure
+path only, still standing in `SYSTEM` — is unchanged and now reads the name to
+ask about out of `UO_FILE`.
+
+`ui_tm_find` is `ui_sys_find`, matching `UO_NAME` instead of a baked
+`ui_s_tmname`; the descriptor pointer lives in `[ui_desc]` for `[ui_tm_cwd]`'s
+reason — this is UI-task-only and one load at a time, and every register in
+the routine is spoken for.
+
+**The two descriptors do not share their reason strings, and the Wire's name
+no file.** The Task Manager's three say `TASKMGR.O88 is not a valid package`
+and so on; the Wire's say `It is not a valid package`. The lead line above
+them already names the program, and the brand is `The Wire` with a desktop
+caption of `Wire` — `THEWIRE.O88 is too large` would be the only place in the
+whole interface where the user is shown the Wire's file name at all.
 
 ### 28.4 The heap page — every claim, grouped under the app that holds it
 
