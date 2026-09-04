@@ -225,10 +225,15 @@ vmm_poll:
 %endif                          ; KERN_BIG
 
 ; VMM_POLL - drain the backdoor's queue if it won the contest (SPEC.md 9.11.3).
-; One byte compare off a hypervisor; expands to nothing on kern_small. Used by
-; ui_task's pass and by task_yield, which is what services every drag, grow and
-; menu-track sub-loop at once - they all yield, so none of them has to
-; remember, present or future.
+; Expands to nothing on kern_small. Used by ui_task's pass and by menu_drop,
+; both of which already hold DS = KERNEL_SEG; task_yield's site is written out
+; longhand in sched.inc because it does not.
+;
+; DS-RELATIVE HERE and cs-relative at task_yield's site, which is not an
+; inconsistency: a segment override costs two bytes, and these two callers
+; already hold the kernel's DS, so paying it here would buy nothing at either.
+; task_yield's caller may be a package, so that one site pays it and gets back
+; far more - see sched.inc.
 %macro VMM_POLL 0
 %ifdef KERN_BIG
     cmp byte [vmm_on], 0

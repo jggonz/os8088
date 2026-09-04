@@ -69,13 +69,28 @@ argue yourself into:
    field-verified on a real clock card). `RTC=ns` on QEMU exercises the
    *rejection* of an absent chip and that is all it exercises.
 
+7. **The VMware absolute pointer** (SPEC.md §9.11). MartyPC has no backdoor
+   of any kind — nothing decodes port `0x5658` there, which is the whole
+   reason the protocol chose it — so `VMMOUSE.DRV`'s probe cannot succeed on
+   it and there is nothing to host. QEMU's `pc` machine carries a `vmport`
+   and a `vmmouse` **by default**, which makes it the only emulator here that
+   can answer the guest at all. This entry was added by following the
+   instruction below, and it is entry 5's shape once more: the hardware is
+   simply absent. **Every assertion is about behaviour**, and about geometry —
+   never about speed, and never about the boot cost of loading the image,
+   because the machine under it is not a 4.77 MHz 8088. The gate needs a disk
+   of its own (`make vmmousetest`) because the driver is not wanted by
+   default: a stock image reads no sector of it, which is correct and is
+   exactly what makes the row need arranging rather than just running.
+
 That is the list. **"It is quicker to type" is not on it, and neither is
-"I already know the QMP commands."** If you find a seventh entry, add it here
+"I already know the QMP commands."** If you find an eighth entry, add it here
 rather than treating the rule as advisory.
 
-Note the shape entries 4, 5 and 6 share, because it is the only shape that
+Note the shape entries 4, 5, 6 and 7 share, because it is the only shape that
 gets on this list easily: **MartyPC does not have the hardware at all.** An
-8042 aux port, a NIC, an RTC — none of them exist on a 5150, so there is no
+8042 aux port, a NIC, an RTC, a hypervisor backdoor — none of them exist on a
+5150, so there is no
 "prefer MartyPC" to weigh. Entries 1-3 are the harder kind and the ones to
 argue with.
 

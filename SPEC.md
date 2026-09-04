@@ -11433,7 +11433,20 @@ terminates" is a statement about a host that behaves.
 
 `[vmm_busy]` is an `xchg` test-and-set, atomic on an 8086: `task_yield` is a
 caller, so two task slices can otherwise race the image's one scratch buffer.
-A slice that finds it held returns and lets the holder drain.
+A slice that finds it held returns and lets the holder drain. It is released
+on every exit, it is unreachable from any ISR, and the state is `.text` with
+real initialisers so a warm boot clears it.
+
+**One case is open and is written down rather than guarded.** If a task is
+preempted inside `vmm_poll` and an **exclusive bracket** (§53.2) is then
+armed, the holder may be ineligible for the whole bracket — it cannot reach
+its release, and every `task_yield` the exclusive task makes finds the guard
+held and returns. The pointer is then dead until the bracket ends, which for
+a full-screen game is unbounded. The window is tens of microseconds wide and
+the fix is not obviously the guard's — clearing it in `sch_switch` when
+switching *away* would work, and so would holding it only across the backdoor
+call rather than the whole drain — so it wants §53.2's eligibility rules
+confirmed before it is called a bug rather than a hazard.
 
 #### 9.11.4 Not done
 
@@ -11492,9 +11505,15 @@ tests that build their own QEMU command line (`tests/heapmap.py`,
 `tests/vmmouse.py` boots it with `vmport=on` and `-serial none`, the
 browser's own arrangement: the backdoor as the only pointing device. It
 asserts `[cpu_tier]` = 2, `[vmm_on]` = 1, `[mou_port]` = `MOU_VMROW`, then
-injects absolute positions through QEMU's `vmmouse` that must land on the
-pixel — the sign and axis handling a boot-state read cannot see — and drags
-through a menu to prove the `task_yield` service point. `make run VMPORT=on`
+injects absolute positions through QEMU's `vmmouse` that must land within 2 px
+— the sign and axis handling a boot-state read cannot see — and drags through
+a menu to prove the `task_yield` service point. **It reads `[vid_w]`/`[vid_h]`
+out of the guest rather than assuming 640x480**, so the row means the same
+under `VIDEO=cga` and `VIDEO=ega`; and **(0, 0) and (`vid_w`-1, `vid_h`-1) are
+among the points**, because the interior ones cannot see an off-by-one at
+either end and the claim in §9.11.3 is precisely about the ends. Every
+injected point must also land strictly inside the screen, whatever the
+tolerance allows in the middle. `make run VMPORT=on`
 is how a developer gets the grabless pointer interactively.
 
 MartyPC has no backdoor of any kind, so nothing there changes.

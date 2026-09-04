@@ -64,8 +64,7 @@ SOCK = os.path.join(ROOT, "build", "vmm.sock")
 PIDFILE = os.path.join(ROOT, "build", "vmm.pid")
 
 QEMU_ABS_MAX = 0x7FFF          # QEMU's INPUT_EVENT_ABS_MAX
-SCREEN_W, SCREEN_H = 640, 480  # `make test` default: VGA
-TOL = 4                        # px: two fixed-point scalings, each rounding
+TOL = 2                        # px. Two fixed-point scalings, each rounding
 
 
 def kill_stale():
@@ -137,9 +136,14 @@ def qmp_raw(*events):
         s.close()
 
 
-def abs_to(px, py):
-    vx = round(px / (SCREEN_W - 1) * QEMU_ABS_MAX)
-    vy = round(py / (SCREEN_H - 1) * QEMU_ABS_MAX)
+def abs_to(px, py, w, h):
+    """Put the host pointer on guest pixel (px, py) of a w x h screen.
+
+    The screen size is passed rather than assumed: the caller reads [vid_w] and
+    [vid_h] out of the guest, so this row means the same thing under VIDEO=cga
+    and VIDEO=ega as it does on the VGA `make test` defaults to."""
+    vx = round(px / (w - 1) * QEMU_ABS_MAX)
+    vy = round(py / (h - 1) * QEMU_ABS_MAX)
     qmp_raw({"type": "abs", "data": {"axis": "x", "value": vx}},
             {"type": "abs", "data": {"axis": "y", "value": vy}})
 
@@ -200,15 +204,39 @@ def main():
                 fails.append("%s %02X, want %02X" % (sym, got, want))
 
         # --- absolute positions: the sign handling and the axis order ------
+        #
+        # THE SCREEN IS READ, NOT ASSUMED. It was hardcoded 640x480, which is
+        # right for `make test` and wrong the moment anybody runs this row
+        # against VIDEO=cga or VIDEO=ega - and wrong SILENTLY, because a
+        # too-small target still lands inside a too-large screen.
+        w, h = word(q, "vid_w"), word(q, "vid_h")
+        if not fails and (w < 64 or h < 64):
+            fails.append("vid_w/vid_h read back as %d x %d - the screen is "
+                         "not up, so nothing below means anything" % (w, h))
+
+        # THE EXTREMES ARE THE POINT. SPEC.md 9.11.3 claims `(v * vid_w) >> 16`
+        # maps 0 to 0 and 0xFFFF to vid_w - 1 for every width, i.e. that the
+        # top of the range can never address one past the edge - which is what
+        # leaves mou_clamp nothing to catch. The interior points below cannot
+        # see an off-by-one at either end; these two are the assertion.
         if not fails:
-            for px, py in ((400, 300), (40, 40), (600, 450), (320, 240)):
-                abs_to(px, py)
+            for px, py in ((0, 0), (w - 1, h - 1),
+                           (w // 2, h // 2), (40, 40), (w - 40, h - 30)):
+                abs_to(px, py, w, h)
                 time.sleep(0.4)
                 gx, gy = word(q, "mouse_x"), word(q, "mouse_y")
                 if abs(gx - px) > TOL or abs(gy - py) > TOL:
                     fails.append("pointer at %d,%d, want ~%d,%d (+-%d) - a miss "
                                  "this large is the sign handling or a swapped "
                                  "axis, not scaling" % (gx, gy, px, py, TOL))
+                # ...and the edges must be ON the screen, whatever the
+                # tolerance allows in the middle: one past either is a cursor
+                # drawn off the framebuffer.
+                if not (0 <= gx < w and 0 <= gy < h):
+                    fails.append("pointer at %d,%d is OUTSIDE %d x %d - the "
+                                 "scaling addressed one past the edge, which "
+                                 "SPEC.md 9.11.3 says it cannot"
+                                 % (gx, gy, w, h))
 
         # (The RELATIVE_PACKET path - "capture pointer" - is exercised by the
         #  v86 headless smoke in ../v86/examples/os8088-smoke.mjs; QEMU's
@@ -222,14 +250,14 @@ def main():
         # machine wedges here with [mouse_btn] stuck at 1.
         if not fails:
             t0 = word(q, "ticks")
-            abs_to(200, 200)
+            abs_to(200, 200, w, h)
             time.sleep(0.3)
             btn(True)
             time.sleep(0.2)
             if byte(q, "mouse_btn") != 1:
                 fails.append("press not seen: mouse_btn 0 after btn-down")
             for yy in range(200, 280, 8):        # drag it
-                abs_to(200, yy)
+                abs_to(200, yy, w, h)
                 time.sleep(0.05)
             gy = word(q, "mouse_y")
             if gy < 250:
