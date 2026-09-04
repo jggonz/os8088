@@ -121,6 +121,10 @@ def abs_to(px, py):
             {"type": "abs", "data": {"axis": "y", "value": vy}})
 
 
+def btn(down):
+    qmp_raw({"type": "btn", "data": {"button": "left", "down": down}})
+
+
 def byte(q, sym):
     return q.read(os88sym.linear(sym), 1)[0]
 
@@ -181,6 +185,37 @@ def main():
                                  "this large is the sign handling or a swapped "
                                  "axis, not scaling" % (gx, gy, px, py, TOL))
 
+        # --- press, move WHILE HELD, release: the freeze regression --------
+        # vmmouse has no ISR, so a spin loop (a drag, a menu) that does not
+        # pump the backdoor never sees the release. task_yield is what drains
+        # it for every such loop (SPEC.md 9.10.3); if that stops working the
+        # machine wedges here with [mouse_btn] stuck at 1.
+        if not fails:
+            t0 = word(q, "ticks")
+            abs_to(200, 200)
+            time.sleep(0.3)
+            btn(True)
+            time.sleep(0.2)
+            if byte(q, "mouse_btn") != 1:
+                fails.append("press not seen: mouse_btn 0 after btn-down")
+            for yy in range(200, 280, 8):        # drag it
+                abs_to(200, yy)
+                time.sleep(0.05)
+            gy = word(q, "mouse_y")
+            if gy < 250:
+                fails.append("pointer did not track while held: y=%d, want "
+                             ">=250 - the drag-loop poll (task_yield) stalled" % gy)
+            btn(False)
+            time.sleep(0.3)
+            if byte(q, "mouse_btn") != 0:
+                fails.append("RELEASE NEVER ARRIVED: mouse_btn stuck at 1 - a "
+                             "spin loop that does not pump vmmouse (SPEC.md "
+                             "9.10.3), the freeze this test exists for")
+            t1 = word(q, "ticks")
+            if (t1 - t0) & 0xFFFF < 10:
+                fails.append("clock barely moved (%d ticks in ~1.5s) - the "
+                             "machine is wedged" % ((t1 - t0) & 0xFFFF))
+
         q.hmp("quit")
     finally:
         kill_stale()
@@ -189,8 +224,8 @@ def main():
         for f in fails:
             print("vmmouse: FAIL " + f)
         return 1
-    print("vmmouse: ok - vmm_on 1, port 06, line FF, ptr 1, pointer tracks "
-          "absolute within %d px" % TOL)
+    print("vmmouse: ok - vmm_on 1, port 06, line FF, ptr 1; pointer tracks "
+          "absolute within %d px; press/drag/release clean, no freeze" % TOL)
     return 0
 
 

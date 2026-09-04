@@ -619,6 +619,27 @@ task_spawn:
 ; clobbers: flags only (arithmetic flags; IF preserved via the frame)
 ; -----------------------------------------------------------------------------
 task_yield:
+%ifdef KERN_BIG
+    ; --- the VMware absolute pointer's service point (SPEC.md 9.10.3) --------
+    ; vmmouse is POLLED, not interrupt-driven, so every spin loop that waits on
+    ; the mouse - a drag, a menu, the file manager's icon drag - has to pump it
+    ; or the button-release it is waiting for never arrives (a freeze). They
+    ; ALL call task_yield, so draining it here services every one, present and
+    ; future, near and far (the cold segment's cw_task_yield lands here too).
+    ; One byte compare off a browser. Before the cli/frame build: this is still
+    ; the caller's task context with IF as it left it, exactly as ui_task's own
+    ; VMM_POLL - and vmm_read brackets the apply in cli itself.
+    push ds
+    push ax
+    mov ax, KERNEL_SEG
+    mov ds, ax
+    cmp byte [vmm_on], 0
+    jz .noyvmm
+    call vmm_poll
+.noyvmm:
+    pop ax
+    pop ds
+%endif
     pushf                       ; FLAGS slot - carries the caller's IF
     cli                         ; frame build + switch must be atomic
     push cs                     ; CS slot

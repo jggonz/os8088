@@ -1285,7 +1285,6 @@ ui_drag:
     call ui_drag_xor            ; erase...
     call gfx_unlock             ; ...only then may the lock drop
     call kbm_pollm              ; the keyboard mouse drags too (SPEC.md 9.6)
-    VMM_POLL                    ; ...and the VMware absolute pointer (9.10.3)
     call task_yield             ; background tasks stay live here
     call gfx_lock
     mov ax, [mouse_x]           ; outline pos = orig + (mouse - start)
@@ -1827,7 +1826,6 @@ ui_grow:
     call ui_drag_xor            ; erase...
     call gfx_unlock             ; ...only then may the lock drop
     call kbm_pollm              ; ...and resizes (SPEC.md 9.6)
-    VMM_POLL                    ; ...and the VMware absolute pointer (9.10.3)
     call task_yield
     call gfx_lock
     mov ax, [mouse_x]           ; tracked size = orig + (mouse - start),

@@ -419,10 +419,57 @@ recipe would have. Resolved:
   the plan's §9 open question, answered yes.
 - SPEC.md §9.10.6 and docs/TESTING.md carry it.
 
+### 13. The freeze — found on `make run VMPORT=on`, fixed
+
+The requester tried `make run VMPORT=on`, and it worked until *"I went to the
+A: drive and double click a folder it seems to freeze"*. Two bugs, one visible
+symptom:
+
+**13.1 The spin loops.** vmmouse is polled, and §11's `VMM_POLL` sites
+(`ui_task`, `ui_drag`, `ui_grow`, `menu_track`) were **not all the loops that
+wait on the mouse**. `files.inc`'s `fm_onclick` has its own icon-drag loop
+(`.wait` / `.track`), in the cold segment, spinning on `test [mouse_btn]` and
+`cw_evq_pop` with **no `kbm_pollm` and no `VMM_POLL`** — it relied entirely on
+the serial/PS/2 ISR running in the background. With vmmouse there is no ISR, so
+the release never arrived: infinite loop, `[mouse_btn]` stuck at 1, ticks
+still advancing.
+
+The fix moved the drain **into `task_yield`** — one `cmp byte [vmm_on], 0` at
+its head. Every spin loop in the tree calls `task_yield` (the cold segment via
+`cw_task_yield`), so this services all of them, present and future, with no
+per-loop `VMM_POLL`. The three sprinkled ones in `ui_drag` / `ui_grow` /
+`menu_track` were removed (redundant); `ui_task`'s one stayed, before
+`evq_pop`, so a click drains in time to dispatch the same pass. `task_yield`
+runs with `IF` on, so two task slices can now be inside `vmm_poll` over the
+shared `[vmm_ebx]` scratch — an `xchg` on `[vmm_busy]` serialises them.
+
+**13.2 QEMU disables the backdoor on a `DATA` underflow.** `hw/i386/vmmouse.c`:
+if a `DATA` read asks for more words than are queued, QEMU sets
+`status = 0xFFFF` and **removes the mouse handler**. READ_ID queues exactly
+one word. So the old `vmm_enable` — READ_ID, then a `DATA` of a *guessed* size
+to read the version back — could leave the queue at an odd length once real
+mouse events were interleaved, and from then on every `vmm_read` was misframed
+`[stale, buttons, x, y]`: pointer and button frozen mid-value. Fixed by
+**not reading the version back at all** (the `GETVERSION` probe is the gate)
+and draining the queue to empty after every enable (`vmm_flush`), plus
+`vmm_poll` refusing a `count` that is not a multiple of 4.
+
+**13.3 The multi-device collision.** With `-serial none` gone from
+`make run`'s `$(MOUSE)`, the QEMU PS/2 mouse and vmmouse both existed and QEMU
+split abs coordinates and button events between them. `make run VMPORT=on` /
+`make test VMPORT=on` now force `-serial none` (the Makefile's `MOUSE`), which
+is the browser's own shape — v86 has no serial mouse.
+
+Verified under QEMU (`vmport=on`, `-serial none`): open a drive, single-click
+selects, double-click opens the folder, drag-and-drop moves a file, a menu
+pull-down tracks — all clean, no freeze. `tests/vmmouse.py` now drives a
+press / move-while-held / release and asserts `[mouse_btn]` returns to 0 and
+the clock keeps advancing.
+
 **Not yet done / next.**
 
-- **Try it in v86.** The QEMU gate proves the protocol; v86 is the real
-  target and still a look.
+- **Try it in v86.** The QEMU gate proves the protocol *and* the spin loops;
+  v86 is the real target and still a look.
 - The `mouse_init` early-return (skip the ~1 s serial identify window on the
   browser build) — separate commit, its own before/after boot measurement.
 - `MOUDIAG` row, if a browser report ever needs one.

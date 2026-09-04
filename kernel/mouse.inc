@@ -1728,21 +1728,24 @@ mou_p2_byte:
 
 VMM_MAGIC   equ 0x564D5868       ; 'VMXh' - EAX in, and EBX back on success
 VMM_PORT    equ 0x5658           ; 'VX'   - the backdoor port, in DX
-VMM_ABS_ID  equ 0x3442554A       ; the ABSPOINTER protocol version dword
+                                 ; (the ABSPOINTER version id 0x3442554A that
+                                 ;  READ_ID queues is deliberately NOT checked -
+                                 ;  see vmm_enable)
 
 VMM_GETVER  equ 10              ; commands (in CX -> ECX)
 VMM_DATA    equ 39
 VMM_STATUS  equ 40
 VMM_COMMAND equ 41
 
-VMM_REQUEST equ 0x45414552      ; EBX for VMM_COMMAND: REQUEST (enable)
-VMM_ABS     equ 0x53424152      ; ...ABSOLUTE
+VMM_READID  equ 0x45414552      ; EBX for VMM_COMMAND: READ_ID - queues the
+                                ; version word AND clears a disabled backdoor
+VMM_ABS     equ 0x53424152      ; ...REQUEST_ABSOLUTE
 
 VMM_ROW     equ 6               ; [mou_port] once the backdoor has won: past
                                 ; MOU_P2ROW (4), no serial row, so every
                                 ; `cmp bl, [mou_port]` in the serial decoder
                                 ; fails and mou_lockon retires both UARTs
-VMM_QMIN    equ 4               ; dwords queued before a packet can be read
+VMM_QMIN    equ 4               ; words queued before a packet can be read
 VMM_DRAIN   equ 24              ; ...packets drained in one poll - a bound like
                                 ; ui_task's EVQ_CAP so the queue cannot
                                 ; starve the caller
@@ -1784,38 +1787,72 @@ vmm_bd:
 cpu 8086                        ; ---- island closed ------------------------
 
 ; -----------------------------------------------------------------------------
-; vmm_enable - REQUEST, check the version dword, go ABSOLUTE (SPEC.md 9.10.1)
-; in:  none (the caller has already cleared the CPU gate)
-; out: CF = 1 if the version dword did not match; all registers preserved
+; vmm_flush - read the queue to empty, discarding, in <= 6-word chunks
+;
+; The whole point: the 4-word packet framing only holds if reads start from an
+; empty queue. READ_ID (below) queues a LONE version word, and QEMU's vmmouse
+; disables the backdoor outright if a DATA read ever asks for more words than
+; are queued - so a misframed read that then underflows costs the mouse for
+; the session. Draining after every enable keeps the framing honest.
+; in:  none (the CPU gate is the caller's)
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+vmm_flush:
+    push ax
+    push cx
+.f:
+    mov word [vmm_ebx],   0
+    mov word [vmm_ebx+2], 0
+    mov cx, VMM_STATUS
+    call vmm_bd
+    mov ax, [vmm_eax+2]
+    cmp ax, 0xFFFF                  ; disabled - the caller re-enables, nothing
+    je .fout                        ; here to drain
+    mov ax, [vmm_eax]              ; words queued
+    or ax, ax
+    jz .fout
+    cmp ax, 6
+    jbe .rd
+    mov ax, 6                      ; at most 6 a call (QEMU's cap)
+.rd:
+    mov [vmm_ebx], ax
+    mov word [vmm_ebx+2], 0
+    mov cx, VMM_DATA
+    call vmm_bd                    ; ...into vmm_eax..edi, discarded
+    jmp .f                         ; count strictly fell, so this terminates
+.fout:
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; vmm_enable - READ_ID, go ABSOLUTE, then drain (SPEC.md 9.10.1)
+;
+; READ_ID (0x45414552) is the one command that clears QEMU's disabled state
+; (status = 0xFFFF) - REQUEST_ABSOLUTE alone is ignored while disabled - and it
+; queues a version word as a side effect. So enable is always: READ_ID,
+; REQUEST_ABSOLUTE, then vmm_flush to throw away that word and anything the
+; re-added handler queued behind it. The version is NOT read back and checked:
+; that check is a DATA read whose size can only be guessed, and guessing wrong
+; is what desynced the framing and stuck the pointer. vmm_init's GETVERSION
+; probe is the gate; this path just has to not make things worse.
+; in:  none (the CPU gate is the caller's)
+; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 vmm_enable:
     push ax
     push cx
-    mov word [vmm_ebx],   VMM_REQUEST & 0xFFFF
-    mov word [vmm_ebx+2], VMM_REQUEST >> 16
+    mov word [vmm_ebx],   VMM_READID & 0xFFFF
+    mov word [vmm_ebx+2], VMM_READID >> 16
     mov cx, VMM_COMMAND
-    call vmm_bd                     ; REQUEST
-
-    mov word [vmm_ebx],   1         ; read one DATA dword: the version id
-    mov word [vmm_ebx+2], 0
-    mov cx, VMM_DATA
-    call vmm_bd
-    mov ax, [vmm_eax]
-    cmp ax, VMM_ABS_ID & 0xFFFF
-    jne .bad
-    mov ax, [vmm_eax+2]
-    cmp ax, VMM_ABS_ID >> 16
-    jne .bad
+    call vmm_bd                     ; READ_ID: clears 0xFFFF, re-adds the handler
 
     mov word [vmm_ebx],   VMM_ABS & 0xFFFF
     mov word [vmm_ebx+2], VMM_ABS >> 16
     mov cx, VMM_COMMAND
     call vmm_bd                     ; ABSOLUTE
-    clc
-    jmp short .out
-.bad:
-    stc
-.out:
+
+    call vmm_flush                  ; ...and start the framing from empty
     pop cx
     pop ax
     ret
@@ -1850,8 +1887,7 @@ vmm_init:
     cmp ax, 0xFFFF                  ; enough to tell an undriven port
     je .noreg
 
-    call vmm_enable
-    jc .noreg                       ; the version handshake disagreed
+    call vmm_enable                 ; READ_ID / ABSOLUTE / drain (SPEC.md 9.10.1)
 
     mov byte [mou_port],  VMM_ROW   ; --- won: settle the contest, as
     mov byte [mou_line],  MOU_P2LINE ;    mou_claim / mou_p2_byte do ---
@@ -1880,6 +1916,13 @@ vmm_init:
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 vmm_poll:
+    mov al, 1                      ; RE-ENTRANCY GUARD (xchg is atomic on 8086):
+    xchg al, [vmm_busy]           ; task_yield calls this, so an IF=1 window
+    or al, al                    ; between a STATUS write and its `in` can be
+    jz .go                       ; preempted into another task that yields and
+    ret                          ; also polls - and the vmm_ebx scratch is
+                                 ; shared. The other slice will drain; skip
+.go:
     push ax
     push bx
     push cx
@@ -1900,15 +1943,20 @@ vmm_poll:
     mov cx, VMM_STATUS
     call vmm_bd
     mov ax, [vmm_eax+2]             ; high half of the status word
-    cmp ax, 0xFFFF                  ; 0xFFFF???? -> v86 disabled the backdoor
-    je .redo                       ; on its own queue overflow: re-arm, bail
-    mov ax, [vmm_eax]              ; low half = dwords queued
-    cmp ax, VMM_QMIN
-    jb .out                        ; nothing complete waiting
+    cmp ax, 0xFFFF                  ; 0xFFFF???? -> the backdoor disabled itself
+    je .redo                       ; (a DATA underflow, or a v86 queue overflow)
+    mov ax, [vmm_eax]              ; low half = WORDS queued
+    cmp ax, VMM_QMIN               ; a whole 4-word packet?
+    jb .out
+    test al, 3                     ; ...and 4-aligned. vmm_enable drains to empty
+    jnz .resync                   ; so this never fails - but a stray word would
+                                  ; misframe EVERY packet behind it, so a
+                                  ; non-multiple of 4 means throw the lot away
     call vmm_read                  ; one packet -> mou_apply(_abs)
     dec byte [vmm_drn]
     jnz .pass
 .out:
+    mov byte [vmm_busy], 0
     pop es
     pop bp
     pop di
@@ -1919,9 +1967,14 @@ vmm_poll:
     pop ax
     ret
 .redo:
-    call vmm_enable                ; [vmm_on] stays set: a still-broken backdoor
-    jmp short .out                 ; is caught by next pass's STATUS read, and
-                                  ; under v86 the disable is always transient
+    call vmm_enable                ; READ_ID clears the disable, then drain -
+    jmp short .out                 ; [vmm_on] stays set, and next pass's STATUS
+                                  ; confirms it took. Under v86 the disable is
+                                  ; a transient queue overflow; under QEMU it
+                                  ; is a DATA underflow vmm_flush now prevents
+.resync:
+    call vmm_flush                 ; misframed: drop everything and start clean
+    jmp short .out                ; on the next 4-word packet
 
 ; -----------------------------------------------------------------------------
 ; vmm_read - read one queued packet and apply it (SPEC.md 9.10.3)
@@ -4995,6 +5048,9 @@ vmm_on      db 0                ; the backdoor answered and ABSOLUTE mode is
 vmm_drn     db 0                ; vmm_poll's drain counter - a byte, not a
                                 ; register, because the apply path spends SI.
                                 ; Live only inside one poll
+vmm_busy    db 0                ; vmm_poll's re-entrancy guard (task_yield is a
+                                ; caller now, so two task slices can race the
+                                ; vmm_ebx scratch)
 vmm_eax     dd 0               ; vmm_bd's four result registers, read back by
 vmm_ebx     dd 0               ; the 8086 half as word pairs. vmm_ebx is also
 vmm_ecx     dd 0               ; the EBX *input* - the command's argument

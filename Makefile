@@ -6808,6 +6808,15 @@ else
 MOUSE := -chardev msmouse,id=m0 -serial chardev:m0
 endif
 
+# VMPORT=on: the VMware backdoor (SPEC.md 9.10) is the pointer, exactly as in
+# v86 - so drop the serial msmouse. With BOTH present, QEMU splits abs
+# coordinates and button events across two pointer devices and the guest's
+# [mouse_btn] sticks pressed - a press that starts a drag then never ends
+# (freeze). v86 has no serial mouse, so this is the browser's own shape.
+ifneq ($(VMPORT),off)
+MOUSE := -serial none
+endif
+
 # RUNAPPS is what goes in B:, and it exists so that a disk built on demand can
 # be LOOKED AT rather than only driven over QMP. `make test` has taken TESTAPPS
 # since the first test disk; the interactive target hardcoded the apps floppy,

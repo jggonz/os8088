@@ -7858,9 +7858,9 @@ reproduced here.
   `mouse_x` (word), `mouse_y` (word), `mouse_btn` (byte), `mou_hotplug`
   (§9.4, the UI task's per-pass call). The PS/2 half adds no entry point of
   its own: `mouse_init` probes it, `mou_lockon` retires it and `mouse_unhook`
-  gives its vector back (§9.9.4). The VMware half adds `vmm_poll`, the UI
-  task's other per-pass call — one byte compare (`[vmm_on]`) on a machine
-  that is not in a browser (`kern_big` only, §9.10).
+  gives its vector back (§9.9.4). The VMware half adds `vmm_poll`, drained
+  from `task_yield` and from `ui_task` — one byte compare (`[vmm_on]`) on a
+  machine that is not in a browser (`kern_big` only, §9.10).
 
 ### 9.4 Reset, absence and hot-plug (`mou_hotplug`)
 
@@ -9882,15 +9882,32 @@ through one helper (`vmm_bd`: command in `CX`, argument in the `[vmm_ebx]`
 scratch dword, four result dwords out).
 
 - **Enable** (`vmm_enable`, on the probe and after any disable): `ECX = 41`
-  (`ABSPOINTER_COMMAND`) `EBX = 0x45414552` → REQUEST; then read one dword via
-  `ECX = 39` `EBX = 1` and require `0x3442554A` (the protocol version); then
-  `ECX = 41` `EBX = 0x53424152` → ABSOLUTE.
+  (`ABSPOINTER_COMMAND`) `EBX = 0x45414552` → READ_ID (this is what clears a
+  *disabled* backdoor — `REQUEST_ABSOLUTE` alone is ignored while disabled —
+  and it queues a lone version word as a side effect); then `EBX = 0x53424152`
+  → ABSOLUTE; then **`vmm_flush`** — read the queue to empty in ≤6-word
+  chunks, discarding. The version is **not** read back and checked: that read
+  is a `DATA` of a guessed size, and a wrong guess is what desynced the
+  4-word framing and stuck the pointer (below). `vmm_init`'s `GETVERSION`
+  probe — `EBX` returns the `0x564D5868` magic — is the real gate.
 - **Poll** (`vmm_poll`, per §9.10.3): `ECX = 40` (`STATUS`) → `EAX`. If
-  `(EAX & 0xFFFF0000) == 0xFFFF0000` the backdoor was disabled (v86 does this
-  on its own queue overflow) — re-run enable and return. Otherwise
-  `count = EAX & 0xFFFF` dwords are queued; while `count >= 4`, read a packet
-  with `ECX = 39` `EBX = 4` → `EAX` status, `EBX` x, `ECX` y, `EDX` z, and
-  loop. The drain is bounded (`VMM_DRAIN`), like `ui_task`'s `EVQ_CAP`.
+  `(EAX & 0xFFFF0000) == 0xFFFF0000` the backdoor disabled itself — re-enable
+  and return. Otherwise `count = EAX & 0xFFFF` **words** queued; while
+  `count >= 4` **and** `count` is a multiple of 4, read a packet with
+  `ECX = 39` `EBX = 4` → `EAX` status, `EBX` x, `ECX` y, `EDX` z, and loop. A
+  `count` that is **not** a multiple of 4 means a stray word has misframed
+  every packet behind it — `vmm_flush` and start clean. The drain is bounded
+  (`VMM_DRAIN`), like `ui_task`'s `EVQ_CAP`. **`vmm_poll` guards re-entry**
+  with an `xchg` on `[vmm_busy]`: `task_yield` calls it (below), so two task
+  slices can race the shared `[vmm_ebx]` scratch, and the loser just returns.
+- **The disable trap** (QEMU, and the whole reason `vmm_flush` exists): QEMU's
+  `vmmouse` **disables the backdoor outright** if a `DATA` read asks for more
+  words than are queued, and READ_ID queues exactly one word — so a re-enable
+  that then reads a guessed number of words can leave the queue at an odd
+  length, every `vmm_read` from then on reads `[stale, buttons, x, y]` instead
+  of `[buttons, x, y, dz]`, and the pointer and button freeze mid-value.
+  Draining after every enable and refusing a non-multiple-of-4 `count` is what
+  keeps the framing honest.
 - **Status word**: `0x20`/`0x10`/`0x08` = left/right/middle button;
   `0x00010000` = RELATIVE_PACKET (x,y are signed deltas — v86 only sends
   these under pointer lock, which os8088 never engages, so this is a
@@ -9917,13 +9934,27 @@ its own boot-time measurement.
 
 #### 9.10.3 `vmm_poll` — the cadence
 
-`vmm_poll` runs once per `ui_task` pass (in `.events`, before the ring is
-drained, so a click lands the same pass) and beside every `kbm_pollm` in the
-drag / grow / menu-track sub-loops, through the `VMM_POLL` macro — a single
-`cmp byte [vmm_on], 0` when it is not a browser, the same price `mou_hotplug`
-and the keyboard-mouse tail already pay. Its body **only ever executes under
+vmmouse is **polled, not interrupt-driven**, and that is the constraint that
+shapes the cadence: every spin loop that waits on the mouse — a window drag, a
+menu pull-down, the file manager's icon drag (`files.inc`), the resize box —
+sits on a `test [mouse_btn]` / `evq_pop` that a serial or PS/2 ISR would keep
+fresh in the background. With no ISR, a loop that does not pump the backdoor
+never sees the button release it is waiting for: **a freeze.**
+
+So the drain runs from **`task_yield`** — one `cmp byte [vmm_on], 0` at its
+head, and `call vmm_poll` when set. Every one of those loops calls
+`task_yield` (the cold segment's `cw_task_yield` lands there too), so servicing
+it once covers all of them, present and future, with no `VMM_POLL` sprinkled
+per loop. `ui_task` keeps one explicit `VMM_POLL` in `.events` **before**
+`evq_pop`, so a click drained there is dispatched the same pass rather than
+the next. The `task_yield` compare is the price `mou_hotplug` and the
+keyboard-mouse tail already pay; `vmm_poll`'s body **only ever executes under
 an emulator**, where the CPU is ~1000× the 4.77 MHz target, so PERFORMANCE.md's
-budget does not reach it and the two backdoor `in`s a pass are not measured.
+budget does not reach it.
+
+Because `task_yield` runs with `IF` as the caller left it (usually on), two
+task slices can be inside `vmm_poll` at once over the shared `[vmm_ebx]`
+scratch — the `[vmm_busy]` `xchg` guard (§9.10.1) is what serialises them.
 
 Absolute reports enter `mou_apply` through a new `mou_apply_abs`: set
 `[blk_act]`, `mou_clamp`, store `[mouse_x]`/`[mouse_y]`, then join
@@ -9947,14 +9978,15 @@ relies on.
 
 #### 9.10.5 Cost
 
-`kern_big` only, and the whole module — code and the ~19 bytes of `.bss`-role
-state (`[vmm_on]` and four result dwords, all `.text` with real `0`
-initialisers, `cur_mvt`'s idiom) — is inside `%ifdef KERN_BIG`. `kern_small`
-pays nothing, not even the published-state shape §9.9 had to leave behind:
-§9.10 publishes no block a test package reads by offset. Check
-`tools/kernsize.py` before and after — §9.9.5 records `kern_big` with one
-512-byte image rung of `KERN_BUDGET` spare, and this may be the addition that
-spends it.
+`kern_big` only, and the whole module — code and the ~21 bytes of state
+(`[vmm_on]`, `[vmm_busy]`, `[vmm_drn]` and four result dwords, all `.text`
+with real `0` initialisers, `cur_mvt`'s idiom) — is inside `%ifdef KERN_BIG`,
+plus the one `cmp`/`jz` at `task_yield`'s head. `kern_small` pays nothing, not
+even the published-state shape §9.9 had to leave behind: §9.10 publishes no
+block a test package reads by offset. Measured with `tools/kernsize.py`:
+`.text` **+516 B** on `kern_big`, which crossed one 512-byte image rung
+(`KERN_BUDGET` spare 16 → 15 steps; `KERN_CODE_MAX` 1,275 B left).
+`kern_small` +0.
 
 #### 9.10.6 QEMU carries the backdoor — the harness turns it off
 
