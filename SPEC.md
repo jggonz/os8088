@@ -27889,6 +27889,39 @@ swapping the media disk in (§24.4), and `OS88NET.COM` competing with the games
 for room. `build/os8088-120.img` and `build/apps120.img` carry the **same
 payload as the 1.44MB pair** instead.
 
+**And so does every application floppy.** The shipped pair got this geometry
+first and the on-demand disks did not, on the argument that such a machine can
+read the 360KB disk in the same drive — which is true, and which spends the
+paragraph above twice: the 831KB it leaves on the floor, and the DD-media-in-
+an-HD-drive write this section is otherwise about avoiding. So `make zdisk`,
+`worddisk`, `cworddisk`, `runcpmdisk`, `c64disk`, `weavedisk`, `loomdisk` and
+`allapps` all build a 1.2MB image beside the others, and the payload is the
+**1.44MB one** wherever it fits, which is everywhere but the story disk.
+
+Two disks are the exceptions, in opposite directions:
+
+- **The story floppy is a CUT, not a fill** (§61.4). 1.2MB has 512-byte
+  clusters like the 1.44MB disk but 2,371 of them against 2,847, and the
+  1.44MB story list alone is 2,519 — over before `FROTZ.O88` is priced. Two
+  titles come off, chosen so no *title* is lost and every folder keeps more
+  than one story: `ADVENT5.Z5`, the v5 re-release of an `ADVENT.Z3` that
+  stays, and `905.Z5`, the smallest of MODERN's three. Nine of eleven ship,
+  at 2,139 of 2,371 clusters.
+- **There is no 1.2MB media disk, and that is not an omission** (§24.4). That
+  disk exists because `BEVERLY.MOD` is 114 of a 360KB volume's 354 clusters
+  and the apps disk cannot spare them — a split made AT THAT GEOMETRY ALONE.
+  `build/apps120.img` is built from the full apps list and already carries the
+  module in `MEDIA/`, so a second disk to swap in would carry a file the user
+  has. A media disk exists exactly where the apps disk had to drop the module,
+  and this is not such a geometry.
+
+The everything disk (§19.10) gains the geometry and keeps its floor: 1.44MB
+and 1.2MB build, 720KB and 360KB still cannot hold the payload at all. What
+re-shapes itself there is RunCPM's drive A, which is chosen by cluster budget
+at recipe time (§74.5) rather than listed — so the 1.2MB disk fills itself and
+names what it left off in its own `LEFT-OFF.TXT`, and there is no second
+hand-maintained everything-list to drift.
+
 There is a second reason, and it is about writing rather than room. A 1.2MB
 drive's head is narrower than a 360KB drive's, so a 360KB disk written in one
 is often unreadable in a real 360KB drive afterwards — the one combination of
@@ -29200,15 +29233,26 @@ two, **WEAVE** and **LOOM** (`WEAVE-SPEC 1.2`). That is right for
 the machines this runs on and awkward for a person downloading it, who wants to
 try the software rather than curate a shelf of floppies.
 
-`make allapps` builds **`build/apps-all.img`**: one 1.44MB volume with every
-application on it, offered beside the shipped images on a release page. It is a
-convenience and nothing in the tree boots it by default.
+`make allapps` builds **`build/apps-all.img`** and **`build/apps-all-120.img`**:
+one volume with every application on it, at 1.44MB and at 1.2MB, offered beside
+the shipped images on a release page. It is a convenience and nothing in the
+tree boots it by default.
 
-**It is 1.44MB and has no smaller variants.** The contents are ~1,360KB with
-RUNCPM's drive A and the C64's ROM sidecar on it, so a
-720KB or 360KB build of this list does not exist rather than being declined —
-and the machines those geometries are for are already served by the shipped
-disks. One size means no set of variants to keep in step.
+**Two geometries, and the two DD ones are a refusal rather than an omission.**
+The fixed payload is ~950KB before RUNCPM's drive A, so a 720KB or 360KB build
+of this list does not exist — and the machines those geometries are for are
+already served by the shipped disks. 1.2MB holds it: its clusters are 512 bytes
+like the 1.44MB disk's rather than 1,024 like the two DD disks', so it has
+2,371 of them — 1,185KB — against 1,423KB.
+
+**The two builds share one payload list and differ in two things**: the
+`--size`, and the RUNCPM drive-A `--select` that is priced against it. That
+selection is the only part of this disk that re-shapes itself per geometry
+(§74.5): it fills the master disk until the clusters run out, so the 1.2MB
+disk's `A\0` is 33 files where the 1.44MB one's is 66, and each names what it
+left off in its own `LEFT-OFF.TXT`. Nothing else here is a per-size list to
+keep in step, which is the point — two hand-maintained everything-lists is how
+they drift.
 
 **It is not in `all`, because `cword` needs a compiler this tree does not
 contain** (§70.1). A clone with `nasm` and `python3` builds every *shipped*
@@ -81029,7 +81073,7 @@ embedding, ABDOS, the alternate cores, and the three master-disk files above
 ### 74.5 Names, disks, targets
 
 Package `RUNCPM`, directory `apps/runcpm/`, images `build/runcpm.img` /
-`runcpm720.img` / `runcpm360.img` (each `--verify`'d), 86Box machine
+`runcpm720.img` / `runcpm120.img` / `runcpm360.img` (each `--verify`'d), 86Box machine
 `vm/386-runcpm` (a copy of `vm/386-c-word` with the B: image and uuid
 changed), on `apps-all.img` as a folder of its own `RUNCPM\` (§19.10 — the
 CCP, the `.OVL` and drive `A\0` must sit beside the package, below). **Nothing
@@ -81080,9 +81124,19 @@ directory and a disk full to its last cluster, which is how wave 4's 360KB
 build shipped, cannot take a `$$$.SUB`, an MBASIC program or TE's file);
 the 720KB and 1.44MB disks carry the whole master disk **when nothing else
 is on them** — since §74.6 put games and applications beside it they carry
-59 and 70 of the 77, the ranked fill dropping the sources for want of room
-(`apps-all.img`'s `RUNCPM\` folder, which carries no games, still carries
-all 77). **Whatever a
+59 and 70 of the 77, the ranked fill dropping the sources for want of room.
+**The 1.2MB disk is where that trade had to be made explicitly, and it is
+made in §74.6 rather than here** (`getcpmsw.py`'s `POLICY`, not
+`getruncpm.py`'s `CURATED`): it has 2,371 clusters against the 1.44MB disk's
+2,847, all five software areas cost 1,997, and taking all five leaves `A/0`
+136 clusters — at which the ranked fill stops halfway through the `.COM`s at
+`SUBMITD`, with no MBASIC, PIP, STAT, TE, Z80ASM or ZEXDOC. That is precisely
+the alphabetical-fill failure the 360KB curation exists to prevent, reached
+from the other end, so the LARGEST AREA comes off instead of the programs.
+At four areas `A/0` gets 660 clusters and carries **63 of the 77** — every
+`.COM`, both `.DOC`s, four `.LIB`s and four `.Z80` sources, more master-disk
+files than the 1.44MB disk's 59 — at 162 files and 2,246 of 2,371 clusters.
+**Whatever a
 geometry leaves off is named ON THAT DISK:** `--select` writes the
 geometry's own `LEFT-OFF.TXT` (`build/runcpm-disk/left-off/<kb>/`) in place
 of `A/0`'s — the three files above 65,535 bytes, every submit file whose
@@ -81118,9 +81172,12 @@ and libraries filled it to the last cluster and no session could save —
 and wave 2's 24,848-byte package left it 62 files: `--reserve` re-shaped
 the selection by itself each time). **`apps-all.img` (§19.10) carries the
 same package as a folder of its own, `RUNCPM\`** — the package, the
-`.OVL`, the CCP, LICENSE, 1STREAD.ME and `A\0` below it, the 1.44MB
-selection (all 77) chosen at recipe time exactly as `build/runcpm.img`'s
-is — `--reserve` names every file on the disk (`ALLAPPSFILES`, the files
+`.OVL`, the CCP, LICENSE, 1STREAD.ME and `A\0` below it, the geometry's own
+selection chosen at recipe time exactly as `build/runcpm.img`'s is. That
+folder carries no games, so what it holds is whatever the rest of the disk
+leaves: **66 files at 1.44MB and 33 at 1.2MB** (re-measured against the
+current payload; the figure below it was taken when this disk was smaller and
+`A\0` took all 77) — `--reserve` names every file on the disk (`ALLAPPSFILES`, the files
 behind the disk's arguments, not the prerequisite list) and `--folders`
 the folder directories the tree has besides `RUNCPM\A\0`, a cluster each
 — `ALLAPPSFOLDERS`, counted by make from the disk's arguments (every `DIR:`
@@ -81205,6 +81262,22 @@ itself (`getruncpm.py --select --reserve-clusters`, which the Makefile hands
   `apps-all.img`, whose `RUNCPM\` folder carries no games and still holds all
   77. **213 files in 7 folders, 2,722 of 2,847 clusters** — 125 clusters,
   62KB, free to save into (the Disk window says `Free 64K`).
+* **1.2MB**: **four of the five**, and the one that comes off is the
+  LARGEST — `H/3`, WordStar 3.30, 519 clusters. This is the geometry where
+  the pricing order has to be overruled, and the arithmetic is why: 2,371
+  clusters against 1.44MB's 2,847, five areas costing 1,997, so all five
+  leave `A/0` 136 and the ranked fill stops halfway through the `.COM`s at
+  `SUBMITD` — no MBASIC, no PIP, no STAT, no TE, no Z80ASM, no ZEXDOC. A
+  RunCPM disk without its programs is not RunCPM's disk, which is the 360KB
+  bullet's argument arrived at from the opposite end, so an AREA comes off
+  rather than the programs. At four areas the games are 1,473 clusters,
+  `A/0` gets 660 and carries **63 of the 77** — every `.COM`, both `.DOC`s,
+  four `.LIB`s and four `.Z80` sources, which is MORE master disk than the
+  1.44MB disk holds. Turbo Pascal (`D/0`) stays and WordStar goes because
+  the choice is by size; `GAMES.TXT` names it, under the heading that says
+  it is on the 1.44MB disk. **162 files in 6 folders, 2,246 of 2,371
+  clusters** — 125 clusters, 62KB, free to save into, the same headroom the
+  1.44MB disk ships with.
 * **720KB**: the arcade area only, beside 70 files of the master disk (the
   fill drops sources first, by rank). **89 files, 698 of 713 clusters.**
 * **360KB**: **no games** — 297 clusters cannot hold 206KB of arcade *and*
@@ -81221,7 +81294,9 @@ with no SPEC.md. Every game area ships **16 spare directory slots**
 file, LADDER and CATCHUM rewrite a score file, `TERMDEF` writes `TERM.DEF` —
 and the kernel does not grow a directory (§18.5). For the same reason
 `getruncpm.py` now holds **`SAVE_ROOM_KB`** back from `A/0`'s fill (64KB on
-1.44MB, 16KB on 720KB, 0 on 360KB, whose curation is its own guard): the
+1.44MB and on 1.2MB, which carries the same software area on the AT-class
+machine this section's timing note is least worried about; 16KB on 720KB, 0
+on 360KB, whose curation is its own guard): the
 first build with games on it filled the 720KB disk to 713 of 713 clusters,
 which is exactly what §74.5 says a disk must not ship as. **In KB and not in
 clusters**, which is how it was first written — 16 clusters is 16KB on the

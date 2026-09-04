@@ -367,8 +367,17 @@ def build_assoc(groups):
     # survives inside each half and a rebuild is byte-identical
     cand.sort(key=lambda c: c[0])
     if len(cand) > ASC_NAPP:
+        # ON STDERR, and that is not a style choice. assoc_clusters() is
+        # IMPORTED by tools/getruncpm.py to price the cache, and getruncpm's
+        # --select output is read by a `sel="$(...)"` shell substitution in
+        # the Makefile - so a note on stdout becomes a FILE NAME in the
+        # argument list. It arrives as `'OS88DISK:' is not a valid 8.3 name`,
+        # from the disk builder, about a disk that is fine. It went unseen
+        # while the everything disk had 32 packages or fewer, and fired the
+        # day AUDIO.O88 made it 33.
         print(f"os88disk: assoc: {len(cand)} packages, caching "
-              f"{ASC_NAPP} - {len(cand) - ASC_NAPP} harvested the slow way")
+              f"{ASC_NAPP} - {len(cand) - ASC_NAPP} harvested the slow way",
+              file=sys.stderr)
         cand = cand[:ASC_NAPP]
     apps, rowdirs = [], []
     for _, stem, size, icon, decl, key in cand:

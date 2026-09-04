@@ -97,6 +97,37 @@ VM286 := $(CURDIR)/vm/286
 # all: every other AT-class profile is `fdd_type = 35_2hd`, and a 5.25" HD
 # drive is what the 1.2MB pair exists for.
 VM286525 := $(CURDIR)/vm/286-525
+# ...and one per APPLICATION disk at that geometry, which is the same shape
+# `vm/xt-z`, `vm/386-word`, `vm/xt-runcpm`, `vm/386-c64` and `vm/386-weave`
+# already have at theirs: the machine with the app's own floppy in B: instead
+# of the shipped apps disk. Each is a copy of `vm/286-525` WITH TWO LINES
+# CHANGED - `fdd_02_fn` and the uuid - and nothing else, which is the rule the
+# C64 and RUNCPM blocks below state and the reason for it is theirs: 86Box
+# silently substitutes an unrecognised `cpu_family` at that family's default
+# speed and rewrites the config on the way out, so a hand-written profile is a
+# machine nobody has checked the clock of.
+#
+# It is ONE machine class and not three, where the RUNCPM and C64 families
+# have an XT, a 286 and a 386 - and that is the geometry's own doing rather
+# than a gap. A 1.2MB drive needs a 500 kbps controller, which is the AT's
+# (SPEC.md 19): an XT cannot read one of these disks at all, and every other
+# AT-class profile in this tree is fitted with 3.5" drives. `vm/286-525` is
+# the only 5.25" HD machine there is, so its copies are the only machines
+# these disks have.
+#
+# `286-525-loom` and `286-525-all` are the first machines their disks have had
+# at ANY geometry - LOOM has always been looked at through the Weave disk,
+# which carries it, and the everything disk only ever rode `xt-sound-1.44`.
+# They are here because 1.2MB is otherwise the one geometry whose disks no
+# period machine can open.
+VM286525Z := $(CURDIR)/vm/286-525-z
+VM286525WORD := $(CURDIR)/vm/286-525-word
+VM286525CWORD := $(CURDIR)/vm/286-525-cword
+VM286525RUNCPM := $(CURDIR)/vm/286-525-runcpm
+VM286525C64 := $(CURDIR)/vm/286-525-c64
+VM286525WEAVE := $(CURDIR)/vm/286-525-weave
+VM286525LOOM := $(CURDIR)/vm/286-525-loom
+VM286525ALL := $(CURDIR)/vm/286-525-all
 VM386SX := $(CURDIR)/vm/386sx
 VM386DX := $(CURDIR)/vm/386dx
 # ...and the SAME 386DX with 4MB in it, for the store above 1MB (SPEC.md 41).
@@ -1574,6 +1605,8 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
 
 .PHONY: stkdiag small kernsplit all run run-640 run-720 run-120 debug test test-snd xt xt-640 xt-mfm xt-cga \
         xt-hercules xt-ega xt-multimon 286 286-525 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 \
+        286-525-z 286-525-word 286-525-cword 286-525-runcpm 286-525-c64 \
+        286-525-weave 286-525-loom 286-525-all \
         286-sound 386-sound 486 pentium \
         bench field combo combo144 combo720 stackprobe trklog trkscrl npbench clicktest marty \
         comscan lptlink calcref \
@@ -4328,11 +4361,14 @@ $(BUILD)/cword.bin: apps/cword/cwmove.inc
 
 cword: $(BUILD)/cword.o88
 
-# All three geometries an APPLICATION's own floppy is built in (CLAUDE.md):
-# 1.44MB and 720KB for QEMU, 360KB for an 86Box XT or a real one. The shipped
-# system and apps pair gained a fourth, 1.2MB 5.25" (SPEC.md 19), and these did
-# not: an on-demand disk is for a machine somebody already has, and the machine
-# that wanted that geometry reads the 360KB disk in the same drive.
+# ALL FOUR geometries an APPLICATION's own floppy is built in (CLAUDE.md):
+# 1.44MB and 720KB for QEMU, 360KB for an 86Box XT or a real one, and 1.2MB
+# 5.25" HD (SPEC.md 19) for the AT-class machine. The fourth used to be the
+# shipped system and apps pair's alone, on the argument that such a machine
+# reads the 360KB disk in the same drive - true, and it costs the user the
+# 1.2MB disk's other 831KB and makes them write DD media in an HD drive,
+# which is this project's one combination known to be marginal (the note at
+# $(IMG120)). So every on-demand application floppy is built in it too.
 # The C toolchain has been booted from a 360KB floppy once, on chello, and
 # that is the geometry a 20KB image most wants re-checked on.
 #
@@ -4351,7 +4387,8 @@ cword: $(BUILD)/cword.o88
 $(BUILD)/WELCOME.RTF: tools/os88rtf.py tools/os88doc.py apps/cword/welcome.wtx | $(BUILD)
 	python3 tools/os88rtf.py apps/cword/welcome.wtx -o $@
 
-cworddisk: $(BUILD)/cword.img $(BUILD)/cword720.img $(BUILD)/cword360.img
+cworddisk: $(BUILD)/cword.img $(BUILD)/cword720.img $(BUILD)/cword120.img \
+           $(BUILD)/cword360.img
 
 CWORDDISK := $(BUILD)/cword.o88 $(BUILD)/CWORD.OVL $(BUILD)/WELCOME.RTF
 
@@ -4361,6 +4398,10 @@ $(BUILD)/cword.img: $(CWORDDISK) tools/os88disk.py
 
 $(BUILD)/cword720.img: $(CWORDDISK) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 $(CWORDDISK) --folder DOCS
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/cword120.img: $(CWORDDISK) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(CWORDDISK) --folder DOCS
 	@python3 tools/os88disk.py --verify $@
 
 $(BUILD)/cword360.img: $(CWORDDISK) tools/os88disk.py
@@ -4507,7 +4548,8 @@ sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select $(2) --dir-slots $(R
 python3 tools/os88disk.py -o $(1) --size $(2) --deep-folders --dir-slots A/0=$(RUNCPMSLOTS) $$gslot $(RUNCPMDISK) $(3) $$sel $$gsel $(CPMSW)
 endef
 
-runcpmdisk: $(BUILD)/runcpm.img $(BUILD)/runcpm720.img $(BUILD)/runcpm360.img
+runcpmdisk: $(BUILD)/runcpm.img $(BUILD)/runcpm720.img \
+            $(BUILD)/runcpm120.img $(BUILD)/runcpm360.img
 
 $(BUILD)/runcpm.img: $(RUNCPMDEPS)
 	$(call RUNCPMIMG,$@,1440)
@@ -4515,6 +4557,10 @@ $(BUILD)/runcpm.img: $(RUNCPMDEPS)
 
 $(BUILD)/runcpm720.img: $(RUNCPMDEPS)
 	$(call RUNCPMIMG,$@,720)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/runcpm120.img: $(RUNCPMDEPS)
+	$(call RUNCPMIMG,$@,1200)
 	@python3 tools/os88disk.py --verify $@
 
 $(BUILD)/runcpm360.img: $(RUNCPMDEPS)
@@ -4641,7 +4687,8 @@ C64DISK := $(BUILD)/c64.o88 $(BUILD)/C64.OVL \
 C64IMG = python3 tools/os88disk.py -o $(1) --size $(2) \
 	    C64:$(BUILD)/c64.o88 C64:$(BUILD)/C64.OVL \
 	    C64:apps/c64/README.TXT C64:apps/c64/COPYING
-c64disk: $(BUILD)/c64.img $(BUILD)/c64720.img $(BUILD)/c64360.img
+c64disk: $(BUILD)/c64.img $(BUILD)/c64720.img $(BUILD)/c64120.img \
+         $(BUILD)/c64360.img
 
 $(BUILD)/c64.img: $(C64DISK)
 	$(call C64IMG,$@,1440)
@@ -4649,6 +4696,10 @@ $(BUILD)/c64.img: $(C64DISK)
 
 $(BUILD)/c64720.img: $(C64DISK)
 	$(call C64IMG,$@,720)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/c64120.img: $(C64DISK)
+	$(call C64IMG,$@,1200)
 	@python3 tools/os88disk.py --verify $@
 
 $(BUILD)/c64360.img: $(C64DISK)
@@ -4796,11 +4847,14 @@ $(BUILD)/wsmsize.inc: $(BUILD)/WEAVE.WSM
 
 weave: $(BUILD)/weave.o88 $(BUILD)/WEAVE.WSM
 
-# All three geometries an APPLICATION's own floppy is built in (CLAUDE.md):
-# 1.44MB and 720KB for QEMU, 360KB for an 86Box XT or a real one. The shipped
-# system and apps pair gained a fourth, 1.2MB 5.25" (SPEC.md 19), and these did
-# not: an on-demand disk is for a machine somebody already has, and the machine
-# that wanted that geometry reads the 360KB disk in the same drive.
+# ALL FOUR geometries an APPLICATION's own floppy is built in (CLAUDE.md):
+# 1.44MB and 720KB for QEMU, 360KB for an 86Box XT or a real one, and 1.2MB
+# 5.25" HD (SPEC.md 19) for the AT-class machine. The fourth used to be the
+# shipped system and apps pair's alone, on the argument that such a machine
+# reads the 360KB disk in the same drive - true, and it costs the user the
+# 1.2MB disk's other 831KB and makes them write DD media in an HD drive,
+# which is this project's one combination known to be marginal (the note at
+# $(IMG120)). So every on-demand application floppy is built in it too.
 # --verify is a standalone structural fsck of what came out and it is in the
 # recipe rather than in a target of its own because it costs milliseconds and
 # catches the class of defect - a bad FAT chain, a directory entry pointing at
@@ -4817,7 +4871,8 @@ weave: $(BUILD)/weave.o88 $(BUILD)/WEAVE.WSM
 # rides beside CWORD.OVL two hundred lines up. The layout itself - what the
 # two folders are and why LOOM/ carries a second copy of the runtime - is the
 # block below WEAVEDISK, and WEAVE-SPEC 11.2 is its record.
-weavedisk: $(BUILD)/weave.img $(BUILD)/weave720.img $(BUILD)/weave360.img
+weavedisk: $(BUILD)/weave.img $(BUILD)/weave720.img $(BUILD)/weave120.img \
+           $(BUILD)/weave360.img
 
 # --- THE BOOT-SECTOR GATE (WEAVE-SPEC 12.3, 12.1.1) --------------------------
 # The SHIPPING apps/weave/wvm.inc, %included by a boot sector and run in raw
@@ -4960,6 +5015,9 @@ $(BUILD)/wcat/360/CATALOG.TXT: tools/weavesim.py
 $(BUILD)/wcat/720/CATALOG.TXT: tools/weavesim.py
 	@mkdir -p $(dir $@)
 	python3 tools/weavesim.py --catalog $@ --geometry 720 --with-loom
+$(BUILD)/wcat/1200/CATALOG.TXT: tools/weavesim.py
+	@mkdir -p $(dir $@)
+	python3 tools/weavesim.py --catalog $@ --geometry 1200 --with-loom
 $(BUILD)/wcat/1440/CATALOG.TXT: tools/weavesim.py
 	@mkdir -p $(dir $@)
 	python3 tools/weavesim.py --catalog $@ --geometry 1440 --with-loom
@@ -4997,6 +5055,12 @@ $(BUILD)/weave720.img: $(WEAVEDISK) $(WEAVELOOM) $(BUILD)/wcat/720/CATALOG.TXT \
                        $(LOOMSRCS) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 $(WEAVEDISKOPTS) \
 		$(WEAVEFOLDER) $(LOOMFOLDER) $(BUILD)/wcat/720/CATALOG.TXT
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/weave120.img: $(WEAVEDISK) $(WEAVELOOM) $(BUILD)/wcat/1200/CATALOG.TXT \
+                       $(LOOMSRCS) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(WEAVEDISKOPTS) \
+		$(WEAVEFOLDER) $(LOOMFOLDER) $(BUILD)/wcat/1200/CATALOG.TXT
 	@python3 tools/os88disk.py --verify $@
 
 $(BUILD)/weave360.img: $(WEAVEDISK) $(WEAVELOOM) $(BUILD)/wcat/360/CATALOG.TXT \
@@ -5195,11 +5259,14 @@ $(BUILD)/wpvsize.inc: $(BUILD)/LOOM.WPV
 loom: $(BUILD)/loom.o88 $(BUILD)/LOOM.WPV
 
 # --- the LOOM floppy ---------------------------------------------------------
-# All three geometries an APPLICATION's own floppy is built in (CLAUDE.md):
-# 1.44MB and 720KB for QEMU, 360KB for an 86Box XT or a real one. The shipped
-# system and apps pair gained a fourth, 1.2MB 5.25" (SPEC.md 19), and these did
-# not: an on-demand disk is for a machine somebody already has, and the machine
-# that wanted that geometry reads the 360KB disk in the same drive.
+# ALL FOUR geometries an APPLICATION's own floppy is built in (CLAUDE.md):
+# 1.44MB and 720KB for QEMU, 360KB for an 86Box XT or a real one, and 1.2MB
+# 5.25" HD (SPEC.md 19) for the AT-class machine. The fourth used to be the
+# shipped system and apps pair's alone, on the argument that such a machine
+# reads the 360KB disk in the same drive - true, and it costs the user the
+# 1.2MB disk's other 831KB and makes them write DD media in an HD drive,
+# which is this project's one combination known to be marginal (the note at
+# $(IMG120)). So every on-demand application floppy is built in it too.
 # --verify is a standalone structural fsck of what came out.
 #
 # WHAT IS ON IT, AND WHY EACH FILE IS THERE:
@@ -5247,7 +5314,8 @@ loom: $(BUILD)/loom.o88 $(BUILD)/LOOM.WPV
 
 LOOMDISK := $(WEAVELOOM) $(LOOMRUN) $(WEAVEDISK) $(LOOMSRCS)
 
-loomdisk: $(BUILD)/loom.img $(BUILD)/loom720.img $(BUILD)/loom360.img
+loomdisk: $(BUILD)/loom.img $(BUILD)/loom720.img $(BUILD)/loom120.img \
+          $(BUILD)/loom360.img
 
 # --folder SYSTEM/APPDATA IS NOT DECORATION (SPEC.md 19.9): LOOM.CFG - the last
 # project's folder and the last file slot - goes there, on the volume the
@@ -5265,6 +5333,11 @@ $(BUILD)/loom.img: $(LOOMDISK) tools/os88disk.py
 
 $(BUILD)/loom720.img: $(LOOMDISK) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 --folder SYSTEM/APPDATA \
+		--dir-slots LOOM=32 $(WEAVEFOLDER) $(LOOMFOLDER)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/loom120.img: $(LOOMDISK) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 --folder SYSTEM/APPDATA \
 		--dir-slots LOOM=32 $(WEAVEFOLDER) $(LOOMFOLDER)
 	@python3 tools/os88disk.py --verify $@
 
@@ -5327,12 +5400,26 @@ stories: $(BUILD)/stories.stamp
 #
 #   360KB   what a 256KB XT can also RUN: the v3 stories (SPEC.md 61.4)
 #   720KB   the xt-z disk
+#   1.2MB   the 5.25" HD disk (SPEC.md 19), and the one list here that is a
+#           CUT rather than a fill: its clusters are 512 bytes like the
+#           1.44MB disk's, but it has 2,371 of them against 2,847, and the
+#           1.44MB story set alone is 2,519 - over before the interpreter is
+#           priced. So two titles come off, chosen so that no TITLE is lost
+#           and every folder keeps more than one story: ADVENT5.Z5, which is
+#           the v5 re-release of an ADVENT.Z3 that stays, and 905.Z5, the
+#           smallest of MODERN's three. That leaves ~118KB free, which is
+#           the 1.44MB disk's own proportion of room to save into
 #   1.44MB  the 386-z disk, plus a second library disk you swap in
 ZS_360  := INFOCOM:$(STORYDIR)/MINIZORK.Z3 CLASSIC:$(STORYDIR)/ADVENT.Z3 \
            CLASSIC:$(STORYDIR)/ZORK285.Z5 CLASSIC:$(STORYDIR)/BALANCES.Z5
 ZS_720  := INFOCOM:$(STORYDIR)/MINIZORK.Z3 INFOCOM:$(STORYDIR)/ZTUU.Z5 \
            CLASSIC:$(STORYDIR)/ADVENT.Z3 CLASSIC:$(STORYDIR)/ZORK285.Z5 \
            MODERN:$(STORYDIR)/PHOTOPIA.Z5
+ZS_1200 := INFOCOM:$(STORYDIR)/MINIZORK.Z3 INFOCOM:$(STORYDIR)/SAMPLER1.Z3 \
+           INFOCOM:$(STORYDIR)/SAMPLER2.Z3 INFOCOM:$(STORYDIR)/ZTUU.Z5 \
+           CLASSIC:$(STORYDIR)/ADVENT.Z3 CLASSIC:$(STORYDIR)/ZORK285.Z5 \
+           CLASSIC:$(STORYDIR)/BALANCES.Z5 MODERN:$(STORYDIR)/PHOTOPIA.Z5 \
+           MODERN:$(STORYDIR)/BEAR.Z5
 ZS_1440 := INFOCOM:$(STORYDIR)/MINIZORK.Z3 INFOCOM:$(STORYDIR)/SAMPLER1.Z3 \
            INFOCOM:$(STORYDIR)/SAMPLER2.Z3 INFOCOM:$(STORYDIR)/ZTUU.Z5 \
            CLASSIC:$(STORYDIR)/ADVENT.Z3 CLASSIC:$(STORYDIR)/ADVENT5.Z5 \
@@ -5347,8 +5434,8 @@ ZS_DISK2 := MODERN:$(STORYDIR)/BRONZE.Z8 MODERN:$(STORYDIR)/DREAMHLD.Z8 \
 
 STORIES ?=
 
-zdisk: $(BUILD)/zork.img $(BUILD)/zork720.img $(BUILD)/zork360.img \
-       $(BUILD)/zork2.img
+zdisk: $(BUILD)/zork.img $(BUILD)/zork720.img $(BUILD)/zork120.img \
+       $(BUILD)/zork360.img $(BUILD)/zork2.img
 
 # The catalogue is CATALOG.TXT on every disk - os88disk.py takes the 8.3 name
 # from the file's BASENAME, so the four of them need four directories rather
@@ -5359,6 +5446,10 @@ $(BUILD)/zcat/360/CATALOG.TXT: tools/getstories.py
 $(BUILD)/zcat/720/CATALOG.TXT: tools/getstories.py
 	@mkdir -p $(dir $@)
 	python3 tools/getstories.py --catalog $@ MINIZORK.Z3 ZTUU.Z5 ADVENT.Z3 ZORK285.Z5 PHOTOPIA.Z5
+$(BUILD)/zcat/1200/CATALOG.TXT: tools/getstories.py
+	@mkdir -p $(dir $@)
+	python3 tools/getstories.py --catalog $@ MINIZORK.Z3 SAMPLER1.Z3 SAMPLER2.Z3 ZTUU.Z5 \
+		ADVENT.Z3 ZORK285.Z5 BALANCES.Z5 PHOTOPIA.Z5 BEAR.Z5
 $(BUILD)/zcat/1440/CATALOG.TXT: tools/getstories.py
 	@mkdir -p $(dir $@)
 	python3 tools/getstories.py --catalog $@ MINIZORK.Z3 SAMPLER1.Z3 SAMPLER2.Z3 ZTUU.Z5 \
@@ -5378,6 +5469,12 @@ $(BUILD)/zork720.img: $(BUILD)/frotz.o88 $(BUILD)/stories.stamp $(BUILD)/zcat/72
 	python3 tools/os88disk.py -o $@ --size 720 \
 		$(BUILD)/frotz.o88 $(BUILD)/zcat/720/CATALOG.TXT $(ZS_720) $(STORIES) \
 		--folder SAVES
+
+$(BUILD)/zork120.img: $(BUILD)/frotz.o88 $(BUILD)/stories.stamp $(BUILD)/zcat/1200/CATALOG.TXT \
+                      tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 \
+		$(BUILD)/frotz.o88 $(BUILD)/zcat/1200/CATALOG.TXT $(ZS_1200) $(STORIES) \
+		--folder SAVES --folder ART
 
 $(BUILD)/zork360.img: $(BUILD)/frotz.o88 $(BUILD)/stories.stamp $(BUILD)/zcat/360/CATALOG.TXT \
                       tools/os88disk.py
@@ -5445,13 +5542,17 @@ $(BUILD)/word.o88: $(BUILD)/word.bin tools/os88ovl.py tools/os88pkg.py
 
 $(BUILD)/WORD.OVL: $(BUILD)/word.o88 ;
 
-worddisk: $(BUILD)/word.img $(BUILD)/word720.img $(BUILD)/word360.img
+worddisk: $(BUILD)/word.img $(BUILD)/word720.img $(BUILD)/word120.img \
+          $(BUILD)/word360.img
 
 $(BUILD)/word.img: $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC --folder DOCS
 
 $(BUILD)/word720.img: $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC --folder DOCS
+
+$(BUILD)/word120.img: $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC --folder DOCS
 
 $(BUILD)/word360.img: $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC --folder DOCS
@@ -7209,6 +7310,15 @@ $(APPSIMG360): $(APPS360) tools/os88disk.py
 # there is nothing here to double-click and nothing for os88disk.py to
 # validate as one: it is data, on a disk whose whole job is to be swapped into
 # B: when the module is what you came for.
+#
+# AND THERE IS NO 1.2MB ONE, WHICH IS NOT AN OMISSION. This disk exists
+# because BEVERLY.MOD is 114 of a 360KB volume's 354 clusters and the apps
+# disk cannot spare them - so 24.4 splits it off AT THAT GEOMETRY ALONE. The
+# 1.2MB apps disk above is built from the FULL $(APPSARGS), the same list the
+# 1.44MB one uses, so it already carries the module in MEDIA/ and a second
+# disk to swap in would be a disk with a file the user already has. The rule
+# is the geometry's, not the disk's: a media disk exists exactly where the
+# apps disk had to drop the module, and 1.2MB is not such a geometry.
 $(MEDIAIMG360): $(MEDIA_DISK_DATA) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(MEDIAARGS360)
 
@@ -7229,11 +7339,22 @@ $(MEDIAIMG360): $(MEDIA_DISK_DATA) tools/os88disk.py
 # (SPEC.md 73.1). A clone with nasm and python3 builds every SHIPPED floppy;
 # this one target is the exception, so it is on demand exactly like cworddisk.
 #
-# WHY 1.44MB AND ONLY 1.44MB. The contents are ~1,050KB with RUNCPM's drive
-# on it (~430KB before). That is not a geometry choice made to be generous - a
-# 720KB or 360KB build of this list simply does not fit, and the shipped disks
-# already cover those machines. So there is one size here and no --size
-# variants to keep in step.
+# TWO GEOMETRIES, 1.44MB AND 1.2MB. The contents are ~1,050KB with RUNCPM's
+# drive on it (~430KB before). That is not a geometry choice made to be
+# generous - a 720KB or 360KB build of this list simply does not fit, and the
+# shipped disks already cover those machines. The 1.2MB 5.25" HD disk
+# (SPEC.md 19) does: its clusters are 512 bytes like the 1.44MB disk's rather
+# than 1,024 like the two DD disks', so it holds 2,371 of them - 1,185KB -
+# against 1,423KB, and the payload has room to spare.
+#
+# The two builds share ONE payload list (ALLAPPSARGS) and differ in the
+# --size and in the RunCPM drive-A --select that is priced against it, which
+# is the only part of this disk that re-shapes itself per geometry: it fills
+# the master disk until the clusters run out, so the 1.2MB disk's A\0 is the
+# 1.44MB one minus whatever the ranked fill reached last, and its own
+# LEFT-OFF.TXT names it. Nothing else here is a per-size list to keep in
+# step - which is the point, because two hand-maintained everything-lists is
+# exactly how they drift.
 #
 # THE TREE: each Word gets a FOLDER OF ITS OWN rather than a place in APPS/,
 # and that is a correctness requirement and not tidiness. Both carry an
@@ -7283,6 +7404,7 @@ $(MEDIAIMG360): $(MEDIA_DISK_DATA) tools/os88disk.py
 # taken (the tree nests one deep); a DIR/SUB/SUB2: entry would need its
 # grandparent added by hand.
 ALLAPPSIMG := $(BUILD)/apps-all.img
+ALLAPPSIMG120 := $(BUILD)/apps-all-120.img
 
 ALLAPPSFILES := $(APPS) $(BUILD)/frotz.o88 \
                 $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC \
@@ -7329,15 +7451,31 @@ ALLAPPSDIRS := $(sort $(ALLAPPSDIRS) \
                       $(patsubst %/,%,$(filter-out ./,$(dir $(ALLAPPSDIRS)))))
 ALLAPPSFOLDERS := $(words $(ALLAPPSDIRS))
 
-allapps: $(ALLAPPSIMG)
+allapps: $(ALLAPPSIMG) $(ALLAPPSIMG120)
+
+# One recipe body for both, because the two disks differ in a --size and in
+# the geometry the RunCPM selection is priced in, and nothing else. $(1) is
+# the image, $(2) the geometry. The empty-selection guard is RUNCPMIMG's and
+# is here for its reason: a --select that fails prints nothing on stdout, and
+# without this the disk would build with an empty A\0 and verify clean -
+# which reads exactly like a working disk.
+define ALLAPPSIMGRULE
+sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select $(2) --dir-slots $(RUNCPMSLOTS) --folders $(ALLAPPSFOLDERS) --reserve-clusters $(ALLAPPSEXTRA) --reserve $(ALLAPPSFILES) | sed 's,^,RUNCPM/A/0:,')"; \
+[ -n "$$sel" ] || { echo "allapps: getruncpm.py --select $(2) chose nothing"; exit 1; }; \
+python3 tools/os88disk.py -o $(1) --size $(2) --deep-folders --dir-slots RUNCPM/A/0=$(RUNCPMSLOTS) --dir-slots LOOM=32 --folder DOCS $(APPDATAFOLDER) $(ALLAPPSARGS) $$sel
+endef
 
 $(ALLAPPSIMG): $(ALLAPPS) tools/os88disk.py
-	sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select 1440 --dir-slots $(RUNCPMSLOTS) --folders $(ALLAPPSFOLDERS) --reserve-clusters $(ALLAPPSEXTRA) --reserve $(ALLAPPSFILES) | sed 's,^,RUNCPM/A/0:,')"; \
-	[ -n "$$sel" ] || { echo "allapps: getruncpm.py --select 1440 chose nothing"; exit 1; }; \
-	python3 tools/os88disk.py -o $@ --size 1440 --deep-folders --dir-slots RUNCPM/A/0=$(RUNCPMSLOTS) --dir-slots LOOM=32 --folder DOCS $(APPDATAFOLDER) $(ALLAPPSARGS) $$sel
+	$(call ALLAPPSIMGRULE,$@,1440)
 	@python3 tools/os88disk.py --verify $@
 	@echo "allapps: $@ - every app on one 1.44MB floppy; boot the system"
 	@echo "         disk with it in B: (make run RUNAPPS=$@)"
+
+$(ALLAPPSIMG120): $(ALLAPPS) tools/os88disk.py
+	$(call ALLAPPSIMGRULE,$@,1200)
+	@python3 tools/os88disk.py --verify $@
+	@echo 'allapps: $@ - the same disk at 1.2MB, for the 5.25" HD machine'
+	@echo "         (make run-120 RUNAPPS120=$@)"
 
 # =============================================================================
 # THE LIVE MEDIA (ON DEMAND: `make usb` / `make iso` / `make live`) - SPEC.md 80
@@ -7730,9 +7868,16 @@ run-640: $(IMG) $(APPSIMG)
 # QEMU picks a floppy's geometry from the image SIZE, and 1,228,800 bytes is a
 # standard one (2 heads x 80 cyl x 15 spt), so naming the images is the whole
 # recipe - and an image the BIOS reads as some other shape fails right here.
-run-120: $(IMG120) $(APPSIMG120)
+# RUNAPPS120 is RUNAPPS one geometry along: what goes in B: when the machine
+# is the 5.25" HD one, so a 1.2MB disk built on demand can be LOOKED at
+# rather than only listed.
+#   make zdisk && make run-120 RUNAPPS120=build/zork120.img
+#   make allapps && make run-120 RUNAPPS120=build/apps-all-120.img
+RUNAPPS120 ?= $(APPSIMG120)
+
+run-120: $(IMG120) $(RUNAPPS120)
 	$(QEMU) $(QEMUMACH) -drive file=$(IMG120),format=raw,if=floppy -boot a $(MOUSE) \
-		-drive file=$(APPSIMG120),format=raw,if=floppy,index=1 $(DEVCARD)
+		-drive file=$(RUNAPPS120),format=raw,if=floppy,index=1 $(DEVCARD)
 
 run-720: $(IMG720) $(APPSIMG720)
 	$(QEMU) $(QEMUMACH) -drive file=$(IMG720),format=raw,if=floppy -boot a $(MOUSE) \
@@ -8028,6 +8173,54 @@ xt-multimon: $(IMG360) $(APPSIMG360)
 286-525: $(IMG120) $(APPSIMG120)
 	@$(UNPROTECT) $(VM286525)/86box.cfg
 	$(BOX) -P $(VM286525) -N
+
+# ...and the same machine with an APPLICATION disk in B: instead of the apps
+# floppy - the pairing `xt-z`, `386-word`, `386-c-word`, `386-runcpm`,
+# `386-c64` and `386-weave` already are at their geometries, and the block
+# above VM286525Z says why there is one machine class here and not three.
+# Each is MANUAL EVIDENCE and never a gate: 86Box has no automation socket, so
+# a session can start one of these and cannot read the result
+# (docs/TESTING.md). Every one stops in BIOS setup on its FIRST launch, its
+# CMOS being empty - pick EXIT FOR BOOT once (the note above `286`).
+286-525-z: $(IMG120) $(BUILD)/zork120.img
+	@$(UNPROTECT) $(VM286525Z)/86box.cfg
+	$(BOX) -P $(VM286525Z) -N
+
+286-525-word: $(IMG120) $(BUILD)/word120.img
+	@$(UNPROTECT) $(VM286525WORD)/86box.cfg
+	$(BOX) -P $(VM286525WORD) -N
+
+286-525-cword: $(IMG120) $(BUILD)/cword120.img
+	@$(UNPROTECT) $(VM286525CWORD)/86box.cfg
+	$(BOX) -P $(VM286525CWORD) -N
+
+# The CP/M machine, and the geometry is the PLAY SPEED here as much as the
+# capacity (SPEC.md 74.6): nothing throttles the emulated Z80, so an arcade
+# game runs at whatever the host machine is. 12.5MHz is between `286-runcpm`'s
+# 720KB disk and `386-runcpm`'s 1.44MB one - which is the same 286, so this
+# and that machine differ in the DISK and not the clock.
+286-525-runcpm: $(IMG120) $(BUILD)/runcpm120.img
+	@$(UNPROTECT) $(VM286525RUNCPM)/86box.cfg
+	$(BOX) -P $(VM286525RUNCPM) -N
+
+286-525-c64: $(IMG120) $(BUILD)/c64120.img
+	@$(UNPROTECT) $(VM286525C64)/86box.cfg
+	$(BOX) -P $(VM286525C64) -N
+
+286-525-weave: $(IMG120) $(BUILD)/weave120.img
+	@$(UNPROTECT) $(VM286525WEAVE)/86box.cfg
+	$(BOX) -P $(VM286525WEAVE) -N
+
+286-525-loom: $(IMG120) $(BUILD)/loom120.img
+	@$(UNPROTECT) $(VM286525LOOM)/86box.cfg
+	$(BOX) -P $(VM286525LOOM) -N
+
+# The everything disk on period hardware. `xt-sound-1.44` is the only other
+# machine in the tree that boots one, and it is a 3.5" XT - so this is where
+# a 5.25" machine sees every program at once.
+286-525-all: $(IMG120) $(ALLAPPSIMG120)
+	@$(UNPROTECT) $(VM286525ALL)/86box.cfg
+	$(BOX) -P $(VM286525ALL) -N
 
 386sx: $(IMG) $(APPSIMG)
 	@$(UNPROTECT) $(VM386SX)/86box.cfg

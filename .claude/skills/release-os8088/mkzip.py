@@ -19,10 +19,12 @@ invisible in the zip listing until it is public.
 
 It does not build anything. Run `make` (and any on-demand target you want in
 the zip) first; a missing REQUIRED image stops the script, and a missing
-optional one is reported and skipped. That split is the point -- the seven
-images `make` produces are the release, and `apps-all`/`word`/`cword`/
-`runcpm` and the live media (`make live`, SPEC.md 80) are on-demand targets
-that a tree without the C toolchain cannot build at all.
+optional one is reported and skipped. That split is the point -- the nine
+images `make` produces are the release (four geometries of each pair since
+SPEC.md 19's 1.2MB disk, plus the 360KB-only media disk), and
+`apps-all`/`word`/`cword`/`runcpm`/`c64`/`weave`/`loom` and the live media
+(`make live`, SPEC.md 80) are on-demand targets that a tree without the C
+toolchain cannot build at all.
 
 The zip is byte-for-byte reproducible: entries are written in manifest order,
 every timestamp is the date in the version string, and permissions are fixed.
@@ -44,6 +46,11 @@ MANIFEST = [
     ("apps.img",       True,  "Software disk, 1.44MB. Goes in drive B."),
     ("os8088-720.img", True,  "System disk, 720KB."),
     ("apps720.img",    True,  "Software disk, 720KB."),
+    ("os8088-120.img", True,  "System disk, 1.2MB. The 5.25-inch high-density size -- "
+                              "for an AT-class machine whose only drive is 5.25-inch, "
+                              "which reads neither 3.5-inch disk."),
+    ("apps120.img",    True,  "Software disk, 1.2MB. Carries everything the 1.44MB one "
+                              "does, the music module included."),
     ("os8088-360.img", True,  "System disk, 360KB. This is the one a real IBM PC/XT reads."),
     ("apps360.img",    True,  "Software disk, 360KB."),
     ("media360.img",   True,  "Music disk, 360KB. The music module does not fit beside the "
@@ -63,21 +70,30 @@ MANIFEST = [
                               "Commodore 64 and the Weave programs and their editor. Use "
                               "this instead of apps.img if you would rather swap one disk "
                               "than seven."),
+    ("apps-all-120.img", False, "The same everything-disk at 1.2MB. There is no 720KB or "
+                              "360KB version -- the programs do not fit at those sizes."),
     ("word.img",       False, "Word processor disk, 1.44MB."),
     ("word720.img",    False, "Word processor disk, 720KB."),
+    ("word120.img",    False, "Word processor disk, 1.2MB."),
     ("word360.img",    False, "Word processor disk, 360KB."),
     ("cword.img",      False, "Word processor disk built by the C compiler, 1.44MB."),
     ("cword720.img",   False, "Word processor disk built by the C compiler, 720KB."),
+    ("cword120.img",   False, "Word processor disk built by the C compiler, 1.2MB."),
     ("cword360.img",   False, "Word processor disk built by the C compiler, 360KB."),
     ("runcpm.img",     False, "CP/M emulator disk, 1.44MB. Carries the emulator and the "
                               "CP/M programs that run under it."),
     ("runcpm720.img",  False, "CP/M emulator disk, 720KB. Carries the emulator and the "
                               "arcade games only."),
+    ("runcpm120.img",  False, "CP/M emulator disk, 1.2MB. Carries the emulator, four of "
+                              "the five program areas the 1.44MB disk has -- the word "
+                              "processor comes off, being the largest -- and more of "
+                              "CP/M's own disk than the 1.44MB one holds."),
     ("runcpm360.img",  False, "CP/M emulator disk, 360KB. Carries the emulator and no "
                               "programs -- there is no room for them at this size."),
     ("c64.img",        False, "Commodore 64 disk, 1.44MB. Carries the emulator, the three "
                               "Commodore ROM images it reads at launch, and COPYING."),
     ("c64720.img",     False, "Commodore 64 disk, 720KB."),
+    ("c64120.img",     False, "Commodore 64 disk, 1.2MB."),
     ("c64360.img",     False, "Commodore 64 disk, 360KB."),
     ("weave.img",      False, "Weave disk, 1.44MB. Web-style programs - markup, script "
                               "and formulas - compiled into one bundle file and run "
@@ -85,7 +101,16 @@ MANIFEST = [
                               "editor that builds them and the sources they were built "
                               "from."),
     ("weave720.img",   False, "Weave disk, 720KB."),
+    ("weave120.img",   False, "Weave disk, 1.2MB."),
     ("weave360.img",   False, "Weave disk, 360KB."),
+    ("loom.img",       False, "Weave editor disk, 1.44MB. The same editor and runtime as "
+                              "the Weave disk, with the demo programs' SOURCES to open "
+                              "rather than the finished bundles. Use this one if you want "
+                              "to change a program; the Weave disk if you want to run "
+                              "one."),
+    ("loom720.img",    False, "Weave editor disk, 720KB."),
+    ("loom120.img",    False, "Weave editor disk, 1.2MB."),
+    ("loom360.img",    False, "Weave editor disk, 360KB."),
 ]
 
 # Files packed beside the images, when the image they belong to is here.
@@ -115,6 +140,7 @@ You need two images: a system disk for drive A and a software disk for drive B.
 Pick the pair that matches the disk size your machine or emulator uses.
 
   1.44MB   os8088.img       and  apps.img
+  1.2MB    os8088-120.img   and  apps120.img   (5.25-inch high density)
   720KB    os8088-720.img   and  apps720.img
   360KB    os8088-360.img   and  apps360.img  (and media360.img, see below)
 

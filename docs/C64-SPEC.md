@@ -3455,7 +3455,7 @@ C64's own RAM (§3.5).
 | shipped files | `C64.O88` (with the ROM as part 0, §1.4), `C64.OVL` |
 | window title | `VICE (C64)` |
 | menu-set `AM_NAME` | `VICE` |
-| images | `build/c64.img` (1.44MB), `build/c64720.img` (720KB), `build/c64360.img` (360KB) |
+| images | `build/c64.img` (1.44MB), `build/c64720.img` (720KB), `build/c64120.img` (1.2MB), `build/c64360.img` (360KB) |
 | tools | `tools/c64rom.py` (builds the ROM the packer appends, §1.4), `tools/c64prg.py` (writes `.PRG` fixtures, §14.4), `tools/c64ref.py` (the reference compositor, §14.5) |
 
 The name is checked against `apps/`, `vm/`, the Makefile and `build/` before
@@ -3463,7 +3463,10 @@ wave 1 (LESSONS 1's rule about two programs sharing an ambition).
 
 ### 14.2 Disks
 
-Three geometries, each `os88disk.py --verify`'d in the recipe. Each carries
+Four geometries, each `os88disk.py --verify`'d in the recipe — the fourth,
+1.2MB 5.25" HD, is SPEC.md §19's and carries exactly what the other three do:
+this disk is ~62KB, so even 360KB holds it whole and no geometry here has ever
+had to choose. Each carries
 **`C64.O88` + `C64.OVL` in one folder**, plus a `README.TXT` naming the licence
 and carrying the ROM copyright line (§1.2, §1.3). The ROM is inside `C64.O88`
 (§1.4), so the byte count is unchanged and the file count is one lower.

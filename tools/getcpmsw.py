@@ -101,13 +101,28 @@ SPARE_SLOTS = 16
 
 # What each geometry carries (SPEC.md §74.6). A DECISION per geometry, in the
 # shape SPEC.md §74.5's CURATED already has: 1.44MB has room for all three
-# areas beside the whole master disk; the 720KB disk carries the arcade area
+# areas beside the whole master disk; the 1.2MB disk carries FOUR of the five
+# and drops the largest, H/3 (WordStar, 519 clusters), which is a DECISION and
+# not the fill's leftovers - its clusters are 512 bytes like the 1.44MB one's
+# rather than 1,024 like the two DD disks', but it has 2,371 of them against
+# 2,847, and all five areas cost 1,997. Taking all five leaves A/0 136
+# clusters, and the ranked fill then stops halfway through the .COMs at
+# SUBMITD - no MBASIC, no PIP, no STAT, no TE, no Z80ASM, no ZEXDOC. That is
+# the alphabetical-.COM-fill failure the docstring above warns about, arrived
+# at from the other end, and it is why an area comes off rather than the
+# programs: at four areas the games are 1,473 clusters, A/0 gets 660 and the
+# fill reaches past every .COM into the documentation and the first sources -
+# 63 of the 77, which is MORE master disk than the 1.44MB disk holds. Turbo
+# Pascal (D/0) stays and WordStar goes because the choice is by SIZE, and
+# GAMES.TXT names it under the heading that says it is on the 1.44MB disk;
+# the 720KB disk carries the arcade area
 # and pays for it out of the master disk's SOURCES, which is the trade the
 # 360KB disk already makes for room to save; the 360KB disk carries no games
 # at all - 297 clusters cannot hold 206KB of arcade AND the programs, and a
 # disk that dropped the programs for games would not be RunCPM's disk any
 # more. GAMES.TXT says so on the disk itself.
 POLICY = {1440: ["A/5", "N/0", "G/4", "D/0", "H/3"],
+          1200: ["A/5", "N/0", "G/4", "D/0"],
           720: ["A/5"],
           360: []}
 
@@ -792,9 +807,11 @@ def area_cost(sizes, cbytes):
 def select(out, geometry):
     """The areas a geometry carries (POLICY), and what they cost in its own
     clusters. Answers (chosen, dropped, used, sizes)."""
-    cbytes = {360: 1024, 720: 1024, 1440: 512}.get(geometry)
+    cbytes = {360: 1024, 720: 1024, 1200: 512, 1440: 512}.get(geometry)
     if cbytes is None:
-        fail(f"--select wants 360, 720 or 1440, not {geometry}")
+        fail("--select wants one of "
+             + ", ".join(str(g) for g in sorted(POLICY))
+             + f", not {geometry}")
     sizes = {}
     for area, _, _, _, _ in AREAS:
         d = os.path.join(out, *area.split("/"))
@@ -904,7 +921,7 @@ def main():
                     help="verify what is cached; never download")
     ap.add_argument("--list", action="store_true", help="print what is shipped and exit")
     ap.add_argument("--select", type=int, metavar="KB",
-                    help="print the files a 360/720/1440 disk carries, "
+                    help="print the files a 360/720/1200/1440 disk carries, "
                          "'<DRIVE>/<USER>:<path>' a line")
     ap.add_argument("--cost", type=int, metavar="KB",
                     help="print what --select would spend, in that geometry's clusters")

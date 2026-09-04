@@ -265,7 +265,11 @@ exactly like the feature being broken.
 and hibernate on; `build/mfm20.img` is created blank and kept),
 `xt-cga`, `xt-hercules`, `xt-ega`, `xt-multimon`, `xt-sound`,
 `xt-sound-1.44`, `286`,
-`286-sound`,
+`286-sound`, the eight `286-525-*` application machines (`-z`, `-word`,
+`-cword`, `-runcpm`, `-c64`, `-weave`, `-loom`, `-all` — `vm/286-525` with a
+1.2MB app disk in B: instead of the apps floppy, and the only machines in the
+tree that read that geometry at all: a 1.2MB drive wants the AT's 500 kbps
+controller, so no XT profile can host one),
 `386sx`, `386`, `386-sound`, `486`, `pentium`, `xt-z`, `386-z`, `xt-word`,
 `386-word`, `386-c-word`, `xt-runcpm`, `286-runcpm`, `386-runcpm`, `xt-c64`,
 `286-c64`, `386-c64`, `xt-weave`, `386-weave`, `xt-weave-256`;
@@ -604,13 +608,17 @@ There is **no relocation of any kind**, so `os88pkg.py` is a validator rather
 than a generator. Both disks are standard FAT12 volumes (§19) that any host OS
 mounts — and every byte read off one is still treated as hostile.
 
-**Every image is built in three geometries** — 1.44MB and 720KB (QEMU), 360KB
-(86Box / a real XT). Changing the boot path, the FAT driver or the disk layout
-means checking all three.
+**Every image is built in FOUR geometries** — 1.44MB and 720KB (QEMU), 360KB
+(86Box / a real XT) and 1.2MB 5.25" HD (§19, the AT-class machine with no 3.5"
+drive). Changing the boot path, the FAT driver or the disk layout means
+checking all four. This is the rule for the on-demand APPLICATION floppies too
+— `zdisk`, `worddisk`, `cworddisk`, `runcpmdisk`, `c64disk`, `weavedisk`,
+`loomdisk`, `allapps` — which were three-geometry until 1.2MB reached them.
 
-**Seven images, not six.** The system and apps disks in three geometries each,
+**Nine images, not seven.** The system and apps disks in four geometries each,
 plus `build/media360.img` — `BEVERLY.MOD` is 114 of a 360KB disk's 354 clusters
 and is data rather than software, so at that geometry alone it rides a disk of
-its own (§24.4). The **core packages** ship on the system disk too, a second
+its own (§24.4); every other apps disk carries it in `MEDIA/`, which is why
+there is no 720KB or 1.2MB media disk to go with it. The **core packages** ship on the system disk too, a second
 copy and never a move (§24.3), and an application's own state goes in
 `SYSTEM/APPDATA/` rather than beside the user's documents (§19.9).

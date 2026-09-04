@@ -6634,10 +6634,10 @@ def catalog_text(geometry, loom):
     else:
         o.append("THE EDITOR IS NOT ON THIS DISK")
         o.append("-" * 28)
-        o.append("  LOOM and the demo sources are on the 720KB and 1.44MB")
-        o.append("  builds of this disk; this geometry has no room for them.")
-        o.append("  `make loomdisk` builds a disk of the editor's own in all")
-        o.append("  three sizes.")
+        o.append("  LOOM and the demo sources are on the 720KB, 1.2MB and")
+        o.append("  1.44MB builds of this disk; this geometry has no room")
+        o.append("  for them. `make loomdisk` builds a disk of the editor's")
+        o.append("  own in all four sizes.")
         o.append("")
     o.append("YOUR OWN BUNDLES")
     o.append("-" * 28)
@@ -6695,7 +6695,7 @@ def main():
                     help="write the Weave disk's CATALOG.TXT (CRLF) and exit; "
                          "needs --geometry, and --with-loom when the IDE "
                          "rides that geometry")
-    ap.add_argument("--geometry", type=int, choices=(360, 720, 1440),
+    ap.add_argument("--geometry", type=int, choices=(360, 720, 1200, 1440),
                     help="which disk --catalog is describing")
     ap.add_argument("--with-loom", action="store_true",
                     help="--catalog: this geometry carries LOOM and PROJECTS")
@@ -6741,7 +6741,7 @@ def main():
     try:
         if args.catalog:
             if not args.geometry:
-                raise SystemExit("--catalog needs --geometry 360|720|1440")
+                raise SystemExit("--catalog needs --geometry 360|720|1200|1440")
             write_catalog(args.catalog, args.geometry, args.with_loom)
             return 0
         if args.selfcheck:

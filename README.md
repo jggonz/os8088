@@ -58,7 +58,8 @@ make          # build all nine floppy images
 make run      # boot it in QEMU (with an emulated serial mouse)
 make run-640  # the same, on a 640KB machine
 make run-720  # the same, off the 720KB pair
-make run-120  # the same, off the 1.2MB 5.25" HD pair
+make run-120  # the same, off the 1.2MB 5.25" HD pair. RUNAPPS120=<img>
+              # swaps the B: floppy, so any 1.2MB app disk can be looked at
 make xt       # boot the 360KB image on an emulated IBM PC/XT in 86Box
 make xt-640   # the same XT with a full 640KB of RAM
 make xt-mfm   # ...and a 20MB MFM hard disk on IBM's Fixed Disk Adapter
@@ -75,7 +76,7 @@ make xt-sound # the 640KB XT with a Sound Blaster 2.0 (OPL2 + DSP)
 make xt-sound-1.44 # the 640KB XT with SB 1.0 and every app on a 1.44MB B:
 make 286-sound  # 86Box: the 286, with a Sound Blaster 16
 make 386-sound  # 86Box: the 386DX, with a Sound Blaster 16
-make worddisk # build the Microsoft Word floppy, all three geometries
+make worddisk # build the Microsoft Word floppy, all four geometries
 make xt-word  # 86Box: the 640KB XT with the Word disk in B:
 make 386-word # 86Box: the 386DX with the Word disk in B:
 make zdisk    # build the Frotz story floppies (fetches the stories first)
@@ -86,7 +87,7 @@ make 386-c-word # 86Box: the 386DX with that disk in B:
 make runcpmdisk # build the RunCPM floppies - the CP/M 2.2 emulator, its
                 # overlay, DR's CCP, the master disk as CP/M drive A, and
                 # the CP/M games and applications beside it (make cpmsw
-                # fetches those; the 1.44MB disk carries the most)
+                # fetches those; the 1.44MB and 1.2MB disks carry the most)
 make xt-runcpm  # 86Box: the 4.77MHz XT with the 360KB RunCPM disk in B:
 make 286-runcpm # 86Box: the 12.5MHz 286 with the 720KB one - arcade games
 make 386-runcpm # 86Box: the 386DX with the 1.44MB one - everything
@@ -94,7 +95,8 @@ make c64disk  # build the C64 floppy - a Commodore 64: the package, its
               # overlay; the KERNAL/BASIC/CHARGEN ROM rides INSIDE the
               # package as an embedded part (SPEC.md 20.12)
               # (make c64rom builds that from the ROMs in apps/c64/rom/)
-              # ...in all three geometries: c64.img, c64720.img, c64360.img
+              # ...in all four geometries: c64.img, c64720.img, c64120.img,
+              # c64360.img
 make xt-c64   # 86Box: the 4.77MHz XT with the 360KB C64 disk in B: - where
               # the speed figure on the status row is the one that matters
 make 286-c64  # 86Box: the 12.5MHz 286 with the 720KB one
@@ -104,7 +106,7 @@ make weavedisk # build the Weave floppy - web-style apps compiled to a .WAB
               # modules, three demo bundles, LOOM (the in-OS IDE that edits
               # and packs them), the sources they were built from and a
               # CATALOG.TXT saying what is on it. One folder, which the
-              # catalogue explains. All three geometries.
+              # catalogue explains. All four geometries.
               # BUNDLES='path/to/MYAPP.WAB' adds your own
 make xt-weave # 86Box: the 640KB 4.77MHz XT with the 360KB Weave disk in B:
 make 386-weave # 86Box: the 386DX with the 1.44MB one
@@ -112,10 +114,15 @@ make xt-weave-256 # ...and the 256KB XT, which holds exactly ONE Weave app:
               # the second one refuses before it touches the disk, with the
               # arithmetic on the glass
 make loomdisk # the IDE's own floppy: LOOM and the runtime beside it, with
-              # the demo sources flat, in all three geometries
-make allapps  # one 1.44MB floppy with every program on it - both word
-              # processors, Frotz, RunCPM, the Commodore 64 and the Weave
-              # family included
+              # the demo sources flat, in all four geometries
+make 286-525-z    # 86Box: the 1.2MB 5.25" 286 with a 1.2MB app disk in B:
+make 286-525-word #   instead of the apps floppy - one per application disk:
+make 286-525-cword#   -z -word -cword -runcpm -c64 -weave -loom -all. The
+make 286-525-all  #   ONLY machines that read a 1.2MB disk (an XT cannot)
+make allapps  # one floppy with every program on it - both word processors,
+              # Frotz, RunCPM, the Commodore 64 and the Weave family
+              # included. 1.44MB and 1.2MB; the two DD geometries cannot
+              # hold the payload at all
 make live     # the live media (docs/LIVE-MEDIA.md): os8088-usb.img, a
               # bootable hard-disk image for a USB stick, and os8088.iso,
               # the same image as a live CD - the whole OS and every app
@@ -442,7 +449,7 @@ segment, `RUNCPM.OVL`, split by frequency: what a record, a console byte or a
 keystroke touches stays resident, and the per-command half of the disk layer
 goes out. Nothing of RunCPM's is committed: `tools/getruncpm.py` fetches the
 CCP and the master disk at a pinned commit and `make runcpmdisk` builds the
-three floppies from them (the 360KB one curated to the programs and texts,
+four floppies from them (the 360KB one curated to the programs and texts,
 with a `LEFT-OFF.TXT` naming what it leaves off).
 
 **And there is software to run on it.** `tools/getcpmsw.py` fetches CP/M
@@ -455,6 +462,7 @@ that the emulator's own icon stays on the first screen of the Disk window:
 | disk | machine | CP/M software |
 |---|---|---|
 | `build/runcpm.img` (1.44MB) | `make 386-runcpm` — 386DX/25 | **all of it**, in drive A's user areas: `USER 5` LADDER, CATCHUM, PM · `USER 6` Nemesis, Dungeon Master, Castle · `USER 7` GAINA · `USER 8` Turbo Pascal 3.01A · `USER 9` WordStar 3.30 — beside 59 files of the master disk |
+| `build/runcpm120.img` (1.2MB) | no 86Box machine yet — `make run-120 RUNAPPS120=build/runcpm120.img` | **four of the five**: `USER 5` · `USER 6` · `USER 7` · `USER 8` Turbo Pascal — WordStar comes off, being the largest area, so that the master disk keeps its programs — beside 63 files of it, which is more than the 1.44MB disk holds |
 | `build/runcpm720.img` (720KB) | `make 286-runcpm` — 286 at 12.5MHz | `USER 5`, the arcade games, beside 70 files of the master disk |
 | `build/runcpm360.img` (360KB) | `make xt-runcpm` — 4.77MHz XT | no room for games: the master disk's programs and texts, and a `GAMES.TXT` saying where they are |
 
@@ -530,15 +538,16 @@ cleanly and runs wrong when C meets this machine.
 | `build/apps120.img`    | 1.2MB FAT12              | 5.25" HD software floppy        |
 | `build/apps720.img`    | 720KB FAT12              | 3.5" DD software floppy         |
 | `build/apps360.img`    | 360KB FAT12              | 86Box / real XT software floppy |
-| `build/media360.img`   | 360KB FAT12              | 360KB media floppy — the shipped module, which the 360KB apps disk has no room for |
-| `build/zork*.img`      | 1.44MB / 720KB / 360KB   | Frotz story floppies (`make zdisk`) |
-| `build/word*.img`      | 1.44MB / 720KB / 360KB   | Microsoft Word floppies (`make worddisk`) |
-| `build/cword*.img`     | 1.44MB / 720KB / 360KB   | Word in C, package + `CWORD.OVL` (`make cworddisk`) |
-| `build/runcpm*.img`    | 1.44MB / 720KB / 360KB   | RunCPM, package + `RUNCPM.OVL` + CP/M drive A + the games and applications each holds (`make runcpmdisk`) |
-| `build/c64*.img`       | 1.44MB / 720KB / 360KB   | Commodore 64, package + `C64.OVL` + the `C64.ROM` sidecar (`make c64disk`) |
-| `build/weave*.img`     | 1.44MB / 720KB / 360KB   | Weave: the runtime and its two modules, the demo bundles, LOOM, the demo sources and `CATALOG.TXT` (`make weavedisk`) |
-| `build/loom*.img`      | 1.44MB / 720KB / 360KB   | the Weave IDE's own disk, with the demo sources flat (`make loomdisk`) |
+| `build/media360.img`   | 360KB FAT12              | 360KB media floppy — the shipped module, which the 360KB apps disk has no room for. It exists at that geometry **alone**: every other apps disk, the 1.2MB one included, carries `BEVERLY.MOD` in `MEDIA/` itself |
+| `build/zork*.img`      | 1.44MB / 720KB / 1.2MB / 360KB | Frotz story floppies (`make zdisk`). The 1.2MB one is the only list here that is a cut rather than a fill — the 1.44MB story set alone overruns it, so `ADVENT5.Z5` and `905.Z5` come off and nine of the eleven stay |
+| `build/word*.img`      | 1.44MB / 720KB / 1.2MB / 360KB | Microsoft Word floppies (`make worddisk`) |
+| `build/cword*.img`     | 1.44MB / 720KB / 1.2MB / 360KB | Word in C, package + `CWORD.OVL` (`make cworddisk`) |
+| `build/runcpm*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | RunCPM, package + `RUNCPM.OVL` + CP/M drive A + the games and applications each holds (`make runcpmdisk`). What drive A carries is chosen per geometry at build time, so the 1.2MB disk fills itself and names what it left off in its own `LEFT-OFF.TXT` |
+| `build/c64*.img`       | 1.44MB / 720KB / 1.2MB / 360KB | Commodore 64, package + `C64.OVL` + the `C64.ROM` sidecar (`make c64disk`) |
+| `build/weave*.img`     | 1.44MB / 720KB / 1.2MB / 360KB | Weave: the runtime and its two modules, the demo bundles, LOOM, the demo sources and `CATALOG.TXT` (`make weavedisk`) |
+| `build/loom*.img`      | 1.44MB / 720KB / 1.2MB / 360KB | the Weave IDE's own disk, with the demo sources flat (`make loomdisk`) |
 | `build/apps-all.img`   | 1.44MB FAT12             | every program on one floppy, the seven above included (`make allapps`) |
+| `build/apps-all-120.img` | 1.2MB FAT12            | the same disk for the 5.25" HD machine. There is no 720KB or 360KB build: the payload does not fit either |
 
 The boot sector takes its geometry from `-DSPT` / `-DHEADS` at assembly
 time and reads exactly as many sectors as the measured kernel occupies.
@@ -567,7 +576,21 @@ later, or a late XT with an HD controller — whose only drive is 5.25" reads
 neither 3.5" disk. It *can* boot the 360KB one, because a 1.2MB drive reads
 360KB media, and that is what it had to do; it then got 354 clusters of
 software in a drive with 2,371, and had to swap the media disk in for
-`BEVERLY.MOD`. The 1.2MB pair carries the full 1.44MB payload instead. It is
+`BEVERLY.MOD`. The 1.2MB pair carries the full 1.44MB payload instead, and so
+does every application floppy: the seven on-demand disks above are built in
+this geometry too, and so is the everything disk.
+
+Its clusters are 512 bytes like the 1.44MB disk's rather than 1,024 like the
+two DD disks', so it has 2,371 of them — 1,185KB against 1,423KB — and that
+ratio, not the raw one, is what each disk is measured against. Four of the
+seven (Word, cword, the C64, Weave/LOOM) are small enough that every geometry
+carries the identical payload. Three are not, and each answers it in its own
+way: the **story disk** is a straight cut, because the 1.44MB story list alone
+is 2,519 clusters and two titles have to come off; the **RunCPM disk** drops
+its largest CP/M software area so that the master disk keeps its programs, and
+ends up with more of that disk than the 1.44MB one holds; the **everything
+disk** re-prices RunCPM's drive A automatically and fills what is left. Only
+the first is a hand-written list. It is
 also the safer disk to write: a 1.2MB drive's head is narrower than a 360KB
 drive's, so a 360KB disk written in one is often unreadable in a real 360KB
 drive afterwards — and the OS writes its settings to the boot disk. It is the
@@ -680,13 +703,30 @@ All targets, at a glance:
 | `xt-weave` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | — |
 | `386-weave` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | — |
 | `xt-weave-256` | IBM PC/XT | 8088 @ 4.77MHz | **256KB** | OTI-067 VGA | — |
+| `286-525-z` | AMI 286 clone, two 1.2MB **5.25"** drives | 286 @ 12.5MHz | 1MB | OTI-067 VGA | — |
+| `286-525-word` | " | 286 @ 12.5MHz | 1MB | OTI-067 VGA | — |
+| `286-525-cword` | " | 286 @ 12.5MHz | 1MB | OTI-067 VGA | — |
+| `286-525-runcpm` | " | 286 @ 12.5MHz | 1MB | OTI-067 VGA | — |
+| `286-525-c64` | " | 286 @ 12.5MHz | 1MB | OTI-067 VGA | — |
+| `286-525-weave` | " | 286 @ 12.5MHz | 1MB | OTI-067 VGA | — |
+| `286-525-loom` | " | 286 @ 12.5MHz | 1MB | OTI-067 VGA | — |
+| `286-525-all` | " | 286 @ 12.5MHz | 1MB | OTI-067 VGA | — |
 
 The XT-class machines boot the 360KB system disk; most pair it with the 360KB
 apps disk, while `xt-sound-1.44` mounts the everything disk in a 1.44MB B:
-drive. The AT-class machines boot the 1.44MB pair — all but `286-525`, which
-is the same AMI 286 fitted with two **5.25" HD** drives and boots the 1.2MB
-pair. It is the only profile here with those drives, so it is the only place
-that geometry runs on period hardware.
+drive. The AT-class machines boot the 1.44MB pair — all but the
+`286-525` family, which is the same AMI 286 fitted with two **5.25" HD**
+drives and boots the 1.2MB pair. Those are the only profiles here with those
+drives, so they are the only place that geometry runs on period hardware.
+
+`286-525` itself carries the apps floppy; the eight `286-525-*` machines swap
+B: for an application disk, the way `xt-z`, `386-word` and `386-c64` do at
+their geometries. There is **one** machine class here rather than the three
+RunCPM and the C64 have, and that is the geometry's doing: a 1.2MB drive needs
+a 500 kbps controller, which is the AT's, so no XT can read one of these disks
+at all. `286-525-loom` and `286-525-all` are the first machines their disks
+have had at any geometry — LOOM has always been reached through the Weave
+disk that carries it, and the everything disk only ever rode `xt-sound-1.44`.
 
 `xt-multimon` is the **two-card** XT — a CGA and a Hercules, a monitor window
 each — and the only 86Box machine that can show the extended desktop. It boots
