@@ -2038,9 +2038,10 @@ vmm_read:
     or cl, 0x02
 .nor:
     test byte [vmm_eax+2], 0x01     ; RELATIVE_PACKET (0x00010000) in the high
-    jnz .rel                        ; word: v86 sends these only under pointer
-                                    ; lock, which os8088 never engages - route
-                                    ; them defensively to the delta path
+    jnz .rel                        ; word: v86 sends these while the host
+                                    ; pointer is LOCKED (the user hit "capture
+                                    ; pointer") - route to the delta path. Not
+                                    ; needed here, but it works (SPEC.md 9.10.1)
 
     mov ax, [vid_w]                 ; absolute: scale 0..0xFFFF to the screen
     mul word [vmm_ebx]              ; DX:AX = x * vid_w ; DX = (x * vid_w) >> 16

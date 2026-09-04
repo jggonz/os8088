@@ -496,6 +496,15 @@ To try it: `cd ../v86 && python3 -m http.server`, open
 `examples/os8088.html`. After a rebuild,
 `cp build/os8088.img ../v86/examples/`.
 
+**"Capture pointer" still works.** Nothing in os8088 needs it — absolute mode
+is 1:1 already — but v86's "Lock mouse" button engages pointer lock, after
+which v86 stops sending absolute positions and sends **signed deltas with the
+`RELATIVE_PACKET` (bit 16) flag**. `vmm_read`'s `.rel` branch routes those to
+`mou_apply`'s delta entry (`x` as-is, `y` negated — the wire is positive-up).
+Verified in the headless smoke: with capture on, a `movementX/Y` of
+`(-12, -6)` × 10 moves the guest pointer exactly `(-120, -60)`. `os8088.html`
+carries a Lock-mouse button; `<Esc>` releases.
+
 **Not yet done / next.**
 
 - The `mouse_init` early-return (skip the ~1 s serial identify window on the

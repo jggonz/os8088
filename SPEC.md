@@ -9909,9 +9909,11 @@ scratch dword, four result dwords out).
   Draining after every enable and refusing a non-multiple-of-4 `count` is what
   keeps the framing honest.
 - **Status word**: `0x20`/`0x10`/`0x08` = left/right/middle button;
-  `0x00010000` = RELATIVE_PACKET (x,y are signed deltas — v86 only sends
-  these under pointer lock, which os8088 never engages, so this is a
-  defensive route to §9's signed-delta path); otherwise x,y are `0..0xFFFF`
+  `0x00010000` = RELATIVE_PACKET (x,y are signed deltas — v86 sends these
+  while the host pointer is **locked**, i.e. the user hit "capture pointer";
+  routed to §9's signed-delta path, `x` as-is and `y` negated because this
+  wire is positive-up like PS/2). Nothing in os8088 needs capture — absolute
+  mode is already 1:1 — but it works. Otherwise x,y are `0..0xFFFF`
   absolute, scaled `screen = (v * [vid_w or vid_h]) >> 16` — **one `mul` an
   axis**. `z` (wheel) is read and dropped, as §9.9.5 drops the PS/2 wheel;
   §10 has nowhere to put it.

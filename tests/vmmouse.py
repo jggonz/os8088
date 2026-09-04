@@ -185,6 +185,11 @@ def main():
                                  "this large is the sign handling or a swapped "
                                  "axis, not scaling" % (gx, gy, px, py, TOL))
 
+        # (The RELATIVE_PACKET path - "capture pointer" - is exercised by the
+        #  v86 headless smoke in ../v86/examples/os8088-smoke.mjs; QEMU's
+        #  vmmouse only sends relative packets in relative mode, which this
+        #  driver never requests.)
+
         # --- press, move WHILE HELD, release: the freeze regression --------
         # vmmouse has no ISR, so a spin loop (a drag, a menu) that does not
         # pump the backdoor never sees the release. task_yield is what drains
