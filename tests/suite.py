@@ -307,6 +307,17 @@ FAST = [
         "implementations written from WEAVE-SPEC that can disagree, and "
         "until the 8086 runtime lands this row is the disagreement's only "
         "audience"),
+    Row("wire", "fast", py("tests/unit/t_wire.py"), 1.5,
+        "the Wire's catalog format (SPEC.md 88.2), from both ends at once: "
+        "tools/os88wire.py packs a fixture out of build/hello.o88 and "
+        "build/mines.o88 and a reader written from the SPEC alone reads it "
+        "back, every refusal the writer owns is fed the input that breaks it, "
+        "and every WC_*/WIRE_* equ in apps/thewire/wcat.inc is compared "
+        "against the tool's. The mirror is the half that cannot be got by "
+        "reading either file - there is no linker here, so a half-applied "
+        "format change packs perfectly and the 8088 then reads a record at "
+        "the wrong offset (t_mirror's argument, for a pair of files it does "
+        "not cover)"),
     Row("lmpack", "fast", py("tests/unit/t_lmpack.py"), 6.5,
         "WEAVE-SPEC 11.1's byte-identity gate, host-side: LOOM's five "
         "SHIPPING compilers built with the host cc, packing every demo, "
