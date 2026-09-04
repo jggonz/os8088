@@ -31455,7 +31455,7 @@ top of §26.7's):
 
 | | before | after | |
 |---|---:|---:|---|
-| `.text` | 51,287 | 51,305 | **+18** (the table cell, the resident thunk, `cw_inst_caller`) |
+| `.text` | 51,268 | 51,286 | **+18** (the table cell, the resident thunk, `cw_inst_caller`) |
 | `.bss` | 6,069 | 6,073 | **+4** (`[ld_msrc]`) |
 | `.cold` | 37,384 | 37,521 | **+137** |
 
@@ -35766,14 +35766,22 @@ assembled at all.
 
 | | before | after | |
 |---|---:|---:|---|
-| `.text` | 50,993 | 51,287 | **+294** |
+| `.text` | 50,993 | 51,268 | **+275** |
 | `.bss` | 6,067 | 6,069 | **+2** |
 | `.cold` | 37,310 | 37,384 | **+74** |
 
-**370 bytes**, of which 93 are art: the second pool is 10 rows × 4 bytes and
-the two records are 32 and 21 bytes of run stream. The image rung had 284
-bytes left when this was written, so it crosses — 512 bytes of every machine's
-RAM, which is the price of a desktop icon that is not a volume.
+**351 bytes**, of which 74 are art: the second pool is 8 rows × 4 bytes and the
+two records are 22 and 20 bytes of run stream. The image rung had 284 bytes
+left when this was written, so it crosses — 512 bytes of every machine's RAM,
+which is the price of a desktop icon that is not a volume.
+
+The `.text` figure is the one derivation in this pair rather than a reading:
+the kernel that was measured for it carried the icon's FIRST draft (§26.7.1),
+and the redraw is `.text` alone and exactly −19 bytes — two pool rows and
+twelve run bytes, counted and confirmed against the build either side. §21.5's
+table starts from this number and the two together are what
+`tools/kernsize.py` reports for the change whole: **`.text` +293, `.bss` +6,
+`.cold` +211**.
 
 ### 26.7.1 The icon is a reel of cable with a plug on the end
 
