@@ -31469,8 +31469,10 @@ top of §26.7's):
 | `.cold` | 37,485 | 37,622 | **+137** |
 
 **159 bytes**, 137 of them `.cold` — 9 over docs/WIRE-PLAN.md §3's 150-byte
-budget, and the 18 in `.text` are the three things that cannot be cold: the
-table cell, the resident thunk every cold body needs, and `cw_inst_caller`.
+budget, and **taken as it stands rather than contorted**: the 18 in `.text` are
+the three things that cannot be cold — the table cell, the resident thunk every
+cold body needs, and `cw_inst_caller` — so the cold half alone is inside 150
+and the target was a target.
 The measurement is taken on top of §26.7's, which is why the `before` column
 is not the pristine tree's; against that tree the two together are `.text`
 +86, `.cold` +312, `.bss` +71. §26.7's own split is that total less this

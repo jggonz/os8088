@@ -1320,6 +1320,27 @@ SOAK = [
         "menu, which is what proves the task_yield service point. QEMU by "
         "name on CLAUDE.md's closed list - MartyPC has no backdoor",
         needs=("qemu", "nasm"), serial=True, timeout=420, builds=True),
+    Row("wirezone", "soak", py("tests/wirezone.py"), 50.0,
+        "Does the desktop SERVICE zone arrive with its driver and LEAVE with "
+        "it? (SPEC.md 26.7) The kernel's half of the Wire is a generic zone a "
+        "driver registers - no glyph, no caption, no launch name in the "
+        "kernel - so a machine with no card pays one compare. Boots "
+        "`make ethertest`'s disk with an ne2k_isa, asserts [desk_svc_seg] is "
+        "set and the zone's rect HAS A PICTURE IN IT, then unticks Ethernet "
+        "on the Control Panel's Drivers page - the one user route to a "
+        "detach - and asserts the segment is 0 and the rect is bare desktop "
+        "with NO STALE PIXELS; then the shipped os8088.img with no NIC, where "
+        "both must be so from the start. The measure is the LONGEST "
+        "HORIZONTAL RUN of one colour in the rect: the desktop is a perfect "
+        "50% dither so its longest run is 1, and anything drawn over it is "
+        "solid somewhere - 36 px against 1 px measured, which separates the "
+        "two states by more than a tuned threshold could. It is the only "
+        "thing in the tree that reaches wz_withdraw, desk_zmark's delete edge "
+        "and the `inc byte [desk_zhw]` that covers the ordinal past the last "
+        "volume, and the bug they guard - an icon left on the glass after its "
+        "driver has gone - is invisible to every assertion about state. QEMU "
+        "by name: MartyPC has no network card of any kind",
+        needs=("qemu", "nasm"), serial=True, timeout=420, builds=True),
     Row("pkgrun", "soak", py("tests/pkgrun.py"), 110.0,
         "OSAPI_PKG_RUN (SPEC.md 21.5): the loader's back half with the disk "
         "read replaced by a copy, which is how the Wire runs a package it "
