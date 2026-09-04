@@ -74,6 +74,8 @@ make 486      # 86Box: 486DX2 @ 66MHz, 8MB, VGA, Sound Blaster 16
 make pentium  # 86Box: Pentium @ 133MHz, 16MB, VGA, Sound Blaster 16
 make xt-sound # the 640KB XT with a Sound Blaster 2.0 (OPL2 + DSP)
 make xt-sound-1.44 # the 640KB XT with SB 1.0 and every app on a 1.44MB B:
+make xt-wire  # the xt-sound XT with an NE1000 on slirp, ETHER.DRV
+              # loaded at boot and a scratch B: for The Wire to write to
 make 286-sound  # 86Box: the 286, with a Sound Blaster 16
 make 386-sound  # 86Box: the 386DX, with a Sound Blaster 16
 make worddisk # build the Microsoft Word floppy, all four geometries
@@ -713,6 +715,7 @@ All targets, at a glance:
 | `xt-ega` | IBM PC/XT | 8088 @ 4.77MHz | 256KB | IBM EGA (640x350) | — |
 | `xt-sound` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | Sound Blaster 2.0 |
 | `xt-sound-1.44` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | Sound Blaster 1.0 |
+| `xt-wire` | XT, 1986 board + Novell NE1000 | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | Sound Blaster 2.0 |
 | `286` | AMI 286 clone | 286 @ 12.5MHz | 1MB | OTI-067 VGA | — |
 | `286-525` | AMI 286 clone, two 1.2MB **5.25"** drives | 286 @ 12.5MHz | 1MB | OTI-067 VGA | — |
 | `286-sound` | AMI 286 clone | 286 @ 12.5MHz | 1MB | OTI-067 VGA | Sound Blaster 16 |
@@ -764,6 +767,16 @@ disk that carries it, and the everything disk only ever rode `xt-sound-1.44`.
 `xt-multimon` is the **two-card** XT — a CGA and a Hercules, a monitor window
 each — and the only 86Box machine that can show the extended desktop. It boots
 Single; Control Panel → Display → Desktop is what extends it.
+
+`xt-wire` is the **networked** XT and the only 86Box profile with a network
+card: `xt-sound`'s machine plus a Novell NE1000 — the 8-bit card an XT's bus
+can take — on 86Box's slirp, which NATs through the host with nothing to set
+up. It boots `make ethertest`'s system disk rather than the stock one, so
+`ETHER.DRV` is loaded before the first paint and The Wire's icon is on the
+desktop when it comes up; DHCP binds, slirp's DNS resolves os8088.com, and
+the catalog comes down over plain HTTP with no proxy in the path. B: is a
+scratch 360KB disk (`build/wiredata360.img`, built once and kept) because
+Add to Disk writes, and 86Box writes a floppy image back to its file.
 
 The last sixteen put a **dedicated floppy** in B: instead of the apps disk.
 `xt-weave-256` is the same 4.77MHz XT as `xt-weave` with 256KB rather than

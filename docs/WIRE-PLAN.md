@@ -536,3 +536,40 @@ Every row registered in `tests/suite.py` or exempted with a reason
   its bss; the Wire's `wrhttp.inc` is written so it could move to `apps/`
   when a third client wants it.
 - **Resuming a broken transfer**: no `Range:`; a failure is retried whole.
+
+## 12. Archives and run-from-RAM — the second wave (SPEC.md §88.13, §88.14, §62.9.16)
+
+§11's first deferred item, folder-tree sidecars, is answered by a container
+rather than by a path field: one HTTP stream carries the tree, entries carry
+paths, and the unpacker makes folders as it meets them. The four facts that
+decided the shape:
+
+1. **One connection is the win, compression the change.** Fifty-nine
+   connections on a stop-and-wait TCP over a 4.77 MHz 8088 are tens of
+   seconds of handshakes; the RunCPM master disk compresses 323KB to 196KB,
+   eight seconds of wire against three of decoding. So the container came
+   first and LZSS rode in on it, pinned by its decoder so two writers may
+   disagree about matches and never about bytes.
+2. **The RAM disk is a volume, so run-from-RAM is a decision and not a
+   subsystem.** Packages launch off a redirected volume, `FSV_MKDIR` exists,
+   and the file slots reach it - what the Wire adds is asking the driver
+   whether a store exists or could, mounting one, and standing on it before
+   the same chain Add to Disk runs. Two driver verbs and no kernel byte.
+3. **The program entry is last** so the launch is free: the claim still
+   holds the `.O88` when the tree has landed and `OSAPI_PKG_RUN` takes it from
+   there. A half-written tree therefore never has a runnable package in it.
+4. **`home` lives in the archive**, not in the catalog's spare word: a CP/M
+   game archive names `RUNCPM` and paths under `A/1/`, and lands beside a
+   RunCPM that is already there on either path.
+
+**The arithmetic on the 640KB XT** is in §88.14, and it is the reason the
+website publishes the 360KB curation as the RunCPM archive and not the 720KB
+one. **Deferred, still**: a resumable transfer (no `Range:`), a checksum per
+entry (TCP's and the structure's checks are what there is), games as
+archives on the site (the master disk ships first; each game is a decision
+about redistribution the site's owner takes), and WEAVE/LOOM as archives (they
+work as sidecar records and would only gain the one-connection saving).
+
+**The clip defect fixed in the same wave** (§88.6.1): the wake handler drew
+the buttons into the window Load Program had just opened. It was a background
+painter that never armed §11.3's region.

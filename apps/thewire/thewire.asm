@@ -398,6 +398,33 @@ wr_dy:                                  ; in/out DX
     add dx, [wr_oy]
     ret
 
+; --- wr_clip - arm the visible region for a BACKGROUND draw (SPEC.md 11.3) --
+; in:  the gfx lock held, in a context that is not W_PAINT and not a click
+; out: [wr_hid] = 1 when nothing of the window can be seen
+;
+; THE WAKE HANDLER IS A BACKGROUND PAINTER. It draws the list, the pane, the
+; buttons and the status cell after a transfer lands - and after `Load
+; Program` has just put a NEW WINDOW ON TOP OF OURS, which is exactly when it
+; redraws the two buttons. Drawn at absolute coordinates with no region
+; armed, they landed inside the launched program's content and stayed there
+; until that window was next repainted. So every lock hold in wr_onwake arms
+; the region first, and each painter below tests its own rect against it
+; (OSAPI_WM_CLIP_TEST) before it erases anything - the whole-unit gate of
+; 11.3's granularity rule, since each of them fills and then draws glyphs.
+; CF = 1 arms NOTHING (the window is hidden or wholly covered), so the state
+; work still runs and the drawing is skipped by the flag, not by the region.
+; -----------------------------------------------------------------------------
+wr_clip:
+    push bx
+    mov byte [wr_hid], 0
+    mov bx, [wr_win]
+    call OSAPI_WM_CLIP_SET
+    jnc .out
+    mov byte [wr_hid], 1
+.out:
+    pop bx
+    ret
+
 ; =============================================================================
 ; THE PAINTERS
 ; =============================================================================
@@ -533,6 +560,10 @@ wr_dlist:
     add cx, [wr_ox]
     mov dx, [wr_y2]
     call wr_dy
+    cmp byte [wr_hid], 0
+    jne .out
+    call OSAPI_WM_CLIP_TEST             ; the whole pane or none of it
+    jc .out                             ; (SPEC.md 11.3, wr_clip)
     call OSAPI_GFX_FRAME
     mov word [wr_selrow], 0xFFFF        ; wr_drow re-answers it below
     xor di, di
@@ -542,6 +573,7 @@ wr_dlist:
     cmp di, [wr_rows]
     jb .l
     call wr_dscroll
+.out:
     pop di
     pop si
     pop dx
@@ -776,6 +808,10 @@ wr_ddet:
     add cx, [wr_ox]
     mov dx, [wr_y2]
     call wr_dy
+    cmp byte [wr_hid], 0
+    jne .out
+    call OSAPI_WM_CLIP_TEST             ; the whole pane or none of it
+    jc .out                             ; (SPEC.md 11.3, wr_clip)
     call OSAPI_GFX_FRAME
     mov al, CWHITE                      ; the INTERIOR, so an incremental
     call OSAPI_SET_COLOR                ; repaint has a ground of its own
@@ -819,6 +855,7 @@ wr_ddet:
     call wr_ddesc                       ; five pre-wrapped lines
 .btns:
     call wr_dbtns
+.out:
     pop di
     pop si
     pop dx
@@ -1173,8 +1210,11 @@ wr_dbtns:
     or byte [wr_grey], 1
 .a:
     mov bx, wr_ra
-    mov si, wr_s_run
-    call os88ui_btn
+    call wr_btnok                       ; THE STATE IS RECORDED WHETHER OR NOT
+    jc .a2                              ; THE BUTTON IS DRAWN: a covered button
+    mov si, wr_s_run                    ; still answers a click and the gate
+    call os88ui_btn                     ; still reads [wr_grey]
+.a2:
     mov al, 1                           ; Add to Disk...
     call wr_may
     mov di, OS88UI_FILL
@@ -1183,14 +1223,41 @@ wr_dbtns:
     or byte [wr_grey], 2
 .b:
     mov bx, wr_rb
+    call wr_btnok
+    jc .b2
     mov si, wr_s_add
     call os88ui_btn
+.b2:
     pop di
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
+    ret
+
+; --- wr_btnok - may the button whose rect is at BX be drawn? out CF = 1 no --
+; The rect is the four screen words wr_geom left there. Every register but
+; the flags is preserved, which the two call sites above lean on.
+wr_btnok:
+    cmp byte [wr_hid], 0
+    jne .no
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [bx]
+    mov cx, [bx+4]
+    mov dx, [bx+6]
+    mov bx, [bx+2]
+    call OSAPI_WM_CLIP_TEST
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.no:
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1201,6 +1268,8 @@ wr_dbtns:
 ; 8-aligned, so the whole 48 cells are a single store a row.
 ; -----------------------------------------------------------------------------
 wr_dstat:
+    cmp byte [wr_hid], 0
+    jne .hid
     push ax
     push bx
     push cx
@@ -1221,6 +1290,7 @@ wr_dstat:
     pop cx
     pop bx
     pop ax
+.hid:
     ret
 
 ; --- wr_statbuild - what the status cell says, padded to WR_STATN cells ------
@@ -2853,6 +2923,9 @@ wr_onwake:
     call OSAPI_GFX_UNLOCK
     cmp byte [wr_wake0], WW_DONE
     jne .failed
+    ; EVERY HOLD BELOW ARMS THE REGION FIRST (wr_clip): this handler runs
+    ; from the UI task's wake, not from W_PAINT, and the window may be
+    ; behind the one Load Program has just opened (SPEC.md 11.3)
     mov al, [wr_wkind]
     cmp al, WK_CAT
     je .cat
@@ -2861,6 +2934,7 @@ wr_onwake:
     jmp .file
 .failed:
     call OSAPI_GFX_LOCK
+    call wr_clip
     cmp byte [wr_wkind], WK_PIC
     jne .fhard
     mov byte [wr_picok], 0              ; a picture that did not arrive is not
@@ -2878,6 +2952,7 @@ wr_onwake:
     mov word [wr_msg], wr_s_badcat
 .catok:
     call OSAPI_GFX_LOCK
+    call wr_clip
     call wr_geom
     mov word [wr_top], 0
     call wr_menufix
@@ -2890,6 +2965,7 @@ wr_onwake:
 .pic:
     mov byte [wr_picok], 1
     call OSAPI_GFX_LOCK
+    call wr_clip
     call wr_geom
     call wr_ddet
     call OSAPI_GFX_UNLOCK
@@ -2903,12 +2979,14 @@ wr_onwake:
     call wr_freefile
     inc word [wr_chain]
     call OSAPI_GFX_LOCK
+    call wr_clip
     call wr_geom
     call wr_fetchnext
     call OSAPI_GFX_UNLOCK
     jmp short .out
 .wfail:
     call OSAPI_GFX_LOCK
+    call wr_clip
     call wr_geom
     call wr_abandon
     call OSAPI_GFX_UNLOCK
@@ -2916,7 +2994,8 @@ wr_onwake:
 .run:
     call wr_pkgrun                      ; --- Load: hand the image to the
     call OSAPI_GFX_LOCK                 ; loader's back half
-    call wr_geom
+    call wr_clip                        ; ...which has just put ITS window on
+    call wr_geom                        ; top of ours
     mov byte [wr_job], WJ_NONE
     call wr_freefile
     call wr_menufix
@@ -2924,6 +3003,7 @@ wr_onwake:
     call wr_dbtns
     call OSAPI_GFX_UNLOCK
 .out:
+    mov byte [wr_hid], 0                ; the flag is this handler's alone
     pop es
     pop di
     pop si
@@ -3480,8 +3560,13 @@ wr_wname    equ os88_image_end + 90     ; word: the name OSAPI_FILE_WRITE was
                                         ; volume owns SI across that call
 wr_need     equ os88_image_end + 92     ; dword: WC_TOTAL, banked because
                                         ; OSAPI_FILE_DFREE WRITES BX
+wr_hid      equ os88_image_end + 96     ; byte: the wake handler is drawing
+                                        ; with NOTHING of the window visible
+                                        ; (wr_clip's CF), so every painter it
+                                        ; reaches returns at once. Set and
+                                        ; cleared inside wr_onwake alone
 
-WR_B0       equ 96
+WR_B0       equ 98
 wr_sb       equ os88_image_end + WR_B0              ; 7 words (13.10)
 wr_ra       equ os88_image_end + WR_B0 + 14         ; 4 words: Load Program
 wr_rb       equ os88_image_end + WR_B0 + 22         ; 4 words: Add to Disk...

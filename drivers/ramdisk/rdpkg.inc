@@ -55,7 +55,29 @@ RD_CLASS     equ DRVC_FILE      ; the publication slot this driver sits in -
                                 ; RDPV_IDENT load-bearing rather than tidy
 RD_SIG       equ 'DR'           ; ...and what RDPV_IDENT answers
 
+RDPV_STATE   equ 2              ; in  nothing
+                                ; out CF=0: AL = the volume index (0xFF = no
+                                ;     store mounted), AH = RDL_*, BX = the
+                                ;     store's KB (0 = none), CX = its free KB,
+                                ;     DX = the largest store RDPV_MOUNT could
+                                ;     claim now in KB (rd_kb_max), SI = free
+                                ;     directory rows. UI TASK ONLY: it asks
+                                ;     OSAPI_MEM_AVAIL (SPEC.md 62.9.16)
+RDPV_MOUNT   equ 3              ; in  AX = KB wanted, rounded UP to RD_STEPKB
+                                ; out CF=0: AL = the volume index, and a store
+                                ;     of at least that size is mounted - an
+                                ;     already-mounted store answers its own
+                                ;     index whatever AX said, resized never.
+                                ;     CF=1: AL = RDERR_MEM when rd_kb_max is
+                                ;     under the size (nothing claimed), or
+                                ;     rd_mount's RDERR_*. UI TASK ONLY. Sets
+                                ;     the LIVE size and not the page's setting
+                                ;     (no rd_cfg_mark)
 RDPV_MAX     equ 1              ; ...and anything above this is refused. A
+                                ; **BECOMES 3 WHEN rd_pkg ANSWERS THE TWO
+                                ; ABOVE** - until then a caller of either
+                                ; gets the refusal an OLD driver gives, which
+                                ; is the answer SPEC.md 62.9.16 pins for it
                                 ; verb table indexed by an unchecked verb is
                                 ; a wild near call, which is the same hazard
                                 ; FSV_SIZE guards on the other table
