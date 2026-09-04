@@ -1858,6 +1858,38 @@ vmm_enable:
     ret
 
 ; -----------------------------------------------------------------------------
+; vmm_p2wake - tell the emulated 8042 the guest wants the mouse (SPEC.md 9.10.2)
+;
+; os8088 reads positions from the backdoor and never decodes a PS/2 packet, so
+; it does not run mou_p2_init. But v86 only starts DELIVERING mouse events to
+; the page (and hides the host cursor) once the guest ENABLES the PS/2 mouse
+; stream - the browser's mouse handler is dead until then, so the pointer does
+; not move at all. QEMU and VMware deliver regardless; v86 gates on this.
+;
+; So: 0xF4 (enable - the host flips its handler on), then immediately 0xF5
+; (disable the stream) so no PS/2 packet is ever queued and int 74h can stay
+; unhooked - a stray aux byte in the output buffer would be read as a scancode
+; by int 09h. 0xF5 does NOT undo the host's "mouse enabled" state, so
+; mouse-absolute keeps flowing to the backdoor. Each command's 0xFA ack is
+; drained. Best-effort: a controller that stalls was already delivering.
+; in:  none.  out: nothing (all registers preserved).
+; -----------------------------------------------------------------------------
+vmm_p2wake:
+    push ax
+    mov al, 0xD4                    ; "the next 0x60 byte is for the AUX device"
+    call mou_p2cw
+    mov al, 0xF4                   ; ENABLE data reporting -> host: mouse-enable
+    call mou_p2dw
+    call mou_p2rd                   ; its 0xFA ack (or a timeout) - discard
+    mov al, 0xD4
+    call mou_p2cw
+    mov al, 0xF5                  ; ...and STOP the stream: no packet, no IRQ12
+    call mou_p2dw
+    call mou_p2rd
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; vmm_init - probe the backdoor; on success claim the pointer (SPEC.md 9.10.2)
 ;
 ; Called from mouse_init where it would call mou_p2_init. On success the
@@ -1888,6 +1920,7 @@ vmm_init:
     je .noreg
 
     call vmm_enable                 ; READ_ID / ABSOLUTE / drain (SPEC.md 9.10.1)
+    call vmm_p2wake                 ; ...and make v86 start delivering events
 
     mov byte [mou_port],  VMM_ROW   ; --- won: settle the contest, as
     mov byte [mou_line],  MOU_P2LINE ;    mou_claim / mou_p2_byte do ---

@@ -216,6 +216,26 @@ def main():
                 fails.append("clock barely moved (%d ticks in ~1.5s) - the "
                              "machine is wedged" % ((t1 - t0) & 0xFFFF))
 
+        # --- the keyboard survives vmm_p2wake's 8042 poke -----------------
+        # vmm_init sends AUX 0xF4/0xF5 through the 8042 (SPEC.md 9.10.2) so v86
+        # starts delivering mouse events. A stray aux ack left in the output
+        # buffer would be read as a scancode by int 09h. Six keys must advance
+        # the BIOS keyboard buffer tail (0040:001C) by exactly twelve bytes -
+        # ps2mouse.py's check, same reason.
+        if not fails:
+            KBHEAD = 0x41A                     # 0040:001A: head, then tail
+            before = q.read(KBHEAD, 4)
+            tail0 = before[2] | (before[3] << 8)
+            for k in "abcdef":
+                q.hmp("sendkey " + k)
+            time.sleep(1.0)
+            after = q.read(KBHEAD, 4)
+            tail1 = after[2] | (after[3] << 8)
+            if (tail1 - tail0) & 0xFFFF != 12:
+                fails.append("BIOS keyboard tail %04X -> %04X, want +12 for six "
+                             "keys: vmm_p2wake left a byte in the 8042 that "
+                             "int 09h ate (SPEC.md 9.10.2)" % (tail0, tail1))
+
         q.hmp("quit")
     finally:
         kill_stale()
@@ -225,7 +245,8 @@ def main():
             print("vmmouse: FAIL " + f)
         return 1
     print("vmmouse: ok - vmm_on 1, port 06, line FF, ptr 1; pointer tracks "
-          "absolute within %d px; press/drag/release clean, no freeze" % TOL)
+          "absolute within %d px; press/drag/release clean, no freeze; "
+          "keyboard intact" % TOL)
     return 0
 
 

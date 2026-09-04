@@ -466,10 +466,40 @@ pull-down tracks — all clean, no freeze. `tests/vmmouse.py` now drives a
 press / move-while-held / release and asserts `[mouse_btn]` returns to 0 and
 the clock keeps advancing.
 
+### 14. v86: the mouse didn't move at all
+
+Tried in the actual browser (v86): pointer completely dead, though QEMU was
+fine. **v86's browser mouse handler (`MouseAdapter`) stays disabled until the
+guest enables the PS/2 mouse stream** — `may_handle()` returns false on
+`!mouse.enabled`, and `mouse.enabled` is flipped only by a `mouse-enable` bus
+event, which v86's PS/2 controller sends on the AUX `0xF4` / `0xFF` commands.
+os8088's vmmouse path skips `mou_p2_init` entirely, so it never touched the
+8042 → no `mouse-enable` → no events, absolute or otherwise. (QEMU and VMware
+deliver backdoor events regardless; only v86 gates on this.)
+
+Fixed with **`vmm_p2wake`** in `vmm_init`: send AUX `0xF4` (enable → v86 fires
+`mouse-enable`, `MouseAdapter.enabled = true`, host cursor hidden), then
+immediately AUX `0xF5` (disable the packet stream so no PS/2 packet is queued
+and `int 74h` stays safely unhooked — a stray aux byte would be eaten by
+`int 09h` as a scancode). `0xF5` does not clear v86's "mouse enabled" state,
+so `mouse-absolute` keeps reaching the backdoor.
+
+**Verified headlessly against the real v86 build** (`../v86`, built with
+`make all`): `examples/os8088-smoke.mjs` boots `os8088.img`, shims a minimal
+DOM, runs v86's actual `MouseAdapter`, dispatches synthetic `mousemove`
+events over the "canvas", and reads the guest's kernel state back —
+`MouseAdapter.enabled` is true after boot, and `[mouse_x]` tracks the events
+to the pixel. `tests/vmmouse.py` (QEMU) gained a keyboard-survival check
+(six keys → BIOS buffer tail +12) since `vmm_p2wake` now pokes the 8042.
+
+To try it: `cd ../v86 && python3 -m http.server`, open
+`examples/os8088.html`. After a rebuild,
+`cp build/os8088.img ../v86/examples/`.
+
 **Not yet done / next.**
 
-- **Try it in v86.** The QEMU gate proves the protocol *and* the spin loops;
-  v86 is the real target and still a look.
 - The `mouse_init` early-return (skip the ~1 s serial identify window on the
   browser build) — separate commit, its own before/after boot measurement.
 - `MOUDIAG` row, if a browser report ever needs one.
+- The v86 page + smoke test currently live in the `../v86` checkout; they
+  belong in the `os8088-web` sibling repo.

@@ -9928,6 +9928,18 @@ down too) — then calls `mou_lockon` to retire the UARTs already hooked, and
 `mouse_init` skips the PS/2 probe. `mouse_unhook` has nothing extra to undo:
 nothing serial was left live and `vmm_poll` simply stops being called.
 
+**`vmm_init` also calls `vmm_p2wake`**: it sends the AUX device `0xF4`
+(enable) then `0xF5` (disable) through the 8042, draining each `0xFA` ack.
+os8088 never decodes a PS/2 packet, but **v86 only starts delivering mouse
+events to the page once the guest enables the PS/2 mouse stream** — its
+browser mouse handler is dead until then, so the pointer does not move at all.
+The `0xF4` flips that handler on (and hides the host cursor); the immediate
+`0xF5` stops the packet stream again so nothing is queued and `int 74h` can
+stay unhooked — a stray aux byte in the output buffer would be read as a
+scancode by `int 09h`. `0xF5` does not undo the host's "mouse enabled" state,
+so `mouse-absolute` keeps flowing to the backdoor. QEMU and VMware deliver
+regardless; this is v86's requirement.
+
 The serial identify window (§9.4.1, ~1 s) still runs ahead of `vmm_init` in
 this first cut; removing it on the browser build is a later optimisation with
 its own boot-time measurement.
@@ -9984,8 +9996,8 @@ with real `0` initialisers, `cur_mvt`'s idiom) — is inside `%ifdef KERN_BIG`,
 plus the one `cmp`/`jz` at `task_yield`'s head. `kern_small` pays nothing, not
 even the published-state shape §9.9 had to leave behind: §9.10 publishes no
 block a test package reads by offset. Measured with `tools/kernsize.py`:
-`.text` **+516 B** on `kern_big`, which crossed one 512-byte image rung
-(`KERN_BUDGET` spare 16 → 15 steps; `KERN_CODE_MAX` 1,275 B left).
+`.text` **+548 B** on `kern_big`, which crossed one 512-byte image rung
+(`KERN_BUDGET` spare 16 → 15 steps; `KERN_CODE_MAX` 1,243 B left).
 `kern_small` +0.
 
 #### 9.10.6 QEMU carries the backdoor — the harness turns it off
