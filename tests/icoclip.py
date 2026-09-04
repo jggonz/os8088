@@ -187,12 +187,6 @@ def run(machine, tag, fbseg, fbsize, verbose, dump=None,
 
         for recname in records:
             rec = os88sym.linear(recname) - KB
-            # ...and which pool that record's runs index (SPEC.md 25.7.3).
-            # By NAME, so a record added to a third pool says so here rather
-            # than drawing the wrong rows.
-            pool = os88sym.linear(
-                "ico_wpool" if recname.startswith("ico_wire")
-                else "ico_pool") - KB
             hdr = m.read(os88sym.linear(recname), 2)
             ww, ih = hdr[0], hdr[1]
             if not (1 <= ww <= 4 and 1 <= ih <= 64):
@@ -212,14 +206,7 @@ def run(machine, tag, fbseg, fbsize, verbose, dump=None,
 
             def draw(x):
                 clear()
-                # BX IS AN ARGUMENT TO icon_draw_ix (SPEC.md 25.7.3): the row
-                # POOL its run bytes index. It was a constant in the decoder
-                # until the Wire's icon needed a pool of its own, and a call
-                # that leaves BX alone hands it whatever was there - which
-                # decodes garbage rows and still clips them perfectly, so
-                # every assertion in this file would pass over a scrambled
-                # picture. The plain entries ignore it.
-                c.call(entry, cx=x, dx=ICON_Y, si=rec, bx=pool)
+                c.call(entry, cx=x, dx=ICON_Y, si=rec)
                 rows = [m.read(fb + rb, stride) for rb in rowbase]
                 return rows
 
@@ -341,9 +328,7 @@ def main():
                          "ico_disk32, which is what this row has always "
                          "done). `ico_disk32,ico_disk14,ico_hdd32,ico_hdd14` "
                          "is the four the DESKTOP draws, and is the set a "
-                         "change to the ART has to hold identical; "
-                         "ico_wire32/ico_wire14 are the Wire zone's and are "
-                         "swept out of their own pool (SPEC.md 26.7)")
+                         "change to the ART has to hold identical")
     ap.add_argument("--entry", default="icon_draw",
                     help="the kernel entry to draw them through (default "
                          "icon_draw). A record kind with its own entry is "

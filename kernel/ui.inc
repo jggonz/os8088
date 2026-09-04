@@ -2353,7 +2353,7 @@ ui_pcmd:    dw 0                ; posted CMD_*, 0 = none (see above)
 ; on TASKMGR.O88 in a Disk window is unaffected and still opens as many as
 ; you like - that is the package rule, and this is the menu item's rule.
 ; =============================================================================
-ui_s_nofile: db 'TASKMGR.O88 is not in '   ; ONE 'SYSTEM',0 serves both the
+ui_s_nofile: db 'It is not in '   ; ONE 'SYSTEM',0 serves both the
 ui_s_tmdir:  db 'SYSTEM', 0      ; folder name and the tail of the notice that
                                  ; says the file is not in it - two labels
                                  ; over one `db`, so nothing may be inserted
@@ -2396,21 +2396,25 @@ ui_d_tm:
     dw ui_s_tmfile, ui_s_tmname, ui_s_tmttl, ui_s_tmlead, ui_tm_errs
     dw ui_s_nofile
 %ifndef KERN_SMALL
-ui_d_wire:                      ; the title and the instance name are ONE
-    dw ui_s_wfile, ui_s_wname, ui_s_wname, ui_s_wlead, ui_w_errs
-    dw ui_s_wnofile             ; string: the window is called The Wire and so
-%endif                          ; is the notice about it
+; ...and the DESKTOP SERVICE zone's (SPEC.md 26.7), whose first four words
+; are .bss the registering driver filled: the file it launches, its package's
+; header name, the caption (which is the notice's title too) and the lead line
+; 'Cannot open <caption>:' the slot composed. Only the two tables are .text.
+ui_d_svc:
+    dw desk_svc_file, desk_svc_name, desk_svc_cap, desk_svc_lead, ui_tm_errs
+    dw ui_s_nofile
+%endif
 
 ; -----------------------------------------------------------------------------
-; ui_tm_open / ui_wire_open - front a system package, or load it off the
-;                             system disk (SPEC.md 28.3, 26.7)
+; ui_tm_open / ui_svc_open - front a system package, or load it off the
+;                            system disk (SPEC.md 28.3, 26.7)
 ; in:  nothing; UI task, no lock held
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 %ifndef KERN_SMALL
-ui_wire_open:
+ui_svc_open:
     push si
-    mov si, ui_d_wire
+    mov si, ui_d_svc
     jmp short ui_so_call
 %endif
 ui_tm_open:
@@ -2619,8 +2623,8 @@ ui_s_nodisk_l: db 'A:', 0       ; the LETTER, stamped once by dsk_boot_from
                                 ; being the only standalone 'A:' of the six.
                                 ; Reword the message; do not delete the label
 ui_s_dskerr: db 'Disk error reading it', 0
-ui_s_badpkg: db 'TASKMGR.O88 is not a valid package', 0
-ui_s_toobig: db 'TASKMGR.O88 is too large', 0
+ui_s_badpkg: db 'It is not a valid package', 0
+ui_s_toobig: db 'It is too large', 0
 ui_s_abort:  db 'It refused to start', 0
 ui_s_nomem:  db 'Not enough memory to open it', 0
 
@@ -2628,33 +2632,7 @@ ui_desc:    dw ui_d_tm          ; ui_sys_open's descriptor for the load in
                                 ; hand. In .text with a resting value for the
                                 ; reason [ui_tm_cwd] is: -f bin zeroes no .bss
 
-%ifndef KERN_SMALL
-; --- the Wire (SPEC.md 26.7): the same six surfaces, its own six strings ----
-; The reasons name no file, where the Task Manager's three name TASKMGR.O88.
-; That is not a saving dressed up as a decision - the lead line above them
-; already says which program this is about, and 'THEWIRE.O88 is too large'
-; would be the only place in the interface where the user is told the Wire's
-; FILE name at all (the brand is 'The Wire' and the icon says 'Wire').
-ui_s_wfile:  db 'THEWIRE.O88', 0
-ui_s_wname:  db 'The '          ; TWO LABELS OVER ONE `db`, and nothing may be
-ui_s_wire:   db 'Wire', 0       ; inserted between these two lines: the header
-                                ; name, the window title and the notice title
-                                ; are 'The Wire', and desk.inc's desktop
-                                ; caption is its TAIL (SPEC.md 26.7), so the
-                                ; two cannot be renamed apart
-ui_s_wlead:  db 'Cannot open the Wire:', 0
-ui_s_wnofile: db 'It is not in SYSTEM', 0
-ui_s_wbad:   db 'It is not a valid package', 0
-ui_s_wbig:   db 'It is too large', 0
 
-ui_w_errs:                      ; indexed by LD_* (loader.inc), and three of
-    dw ui_s_wnofile             ; the six are the Task Manager's own: a disk
-    dw ui_s_dskerr              ; error, a refusal and an out-of-memory say
-    dw ui_s_wbad                ; nothing about which package they are about
-    dw ui_s_wbig
-    dw ui_s_abort
-    dw ui_s_nomem
-%endif
 
 ; -----------------------------------------------------------------------------
 ; ui_sys_find - the running instance of [ui_desc]'s package, by the name in

@@ -31455,11 +31455,17 @@ top of §26.7's):
 
 | | before | after | |
 |---|---:|---:|---|
-| `.text` | 51,268 | 51,286 | **+18** (the table cell, the resident thunk, `cw_inst_caller`) |
-| `.bss` | 6,069 | 6,073 | **+4** (`[ld_msrc]`) |
-| `.cold` | 37,384 | 37,521 | **+137** |
+| `.text` | 51,061 | 51,079 | **+18** (the table cell, the resident thunk, `cw_inst_caller`) |
+| `.bss` | 6,134 | 6,138 | **+4** (`[ld_msrc]`) |
+| `.cold` | 37,485 | 37,622 | **+137** |
 
-**159 bytes.**
+**159 bytes**, 137 of them `.cold` — 9 over docs/WIRE-PLAN.md §3's 150-byte
+budget, and the 18 in `.text` are the three things that cannot be cold: the
+table cell, the resident thunk every cold body needs, and `cw_inst_caller`.
+The measurement is taken on top of §26.7's, which is why the `before` column
+is not the pristine tree's; against that tree the two together are `.text`
++86, `.cold` +312, `.bss` +71. §26.7's own split is that total less this
+one, which was measured on its own before the zone was rewritten.
 
 ## 22. files.inc — the Disk window (file manager)
 
@@ -35196,34 +35202,6 @@ claim "I write my own buffer and nothing else" measured. The assembler holds
 the other end: every indexed record's height is checked against the buffer's
 at assembly time, and its two halves are counted.
 
-#### 25.7.3 The POOL is an argument, because a nibble holds sixteen rows
-
-A run byte's high nibble indexes the pool, so **a pool is sixteen rows and
-`ico_pool` holds sixteen**. That is not slack anybody left: the four volume
-records use every one of them.
-
-The Wire zone's icon (§26.7) is a cable reel and a plug and shares **no row at
-all** with a diskette or a hard disk, so it could not be drawn out of that
-pool at any price, and widening the nibble would move every run byte in the
-file. `icon_draw_ix` takes the pool in **BX** instead — `ico_pool` for the
-volume icons, `ico_wpool` for the Wire's two — and banks it in `[ico_pbase]`,
-which the walk adds to each run's row offset.
-
-```
-icon_draw_ix   in CX = x, DX = y, SI -> an indexed record, BX -> its row
-               pool; caller holds the gfx lock. Preserves every register.
-```
-
-It costs **one byte of code and two of `.bss`**: the walk's `xor bx, bx` above
-the loop becomes a `mov bh, 0` inside it (the add leaves the pool's own high
-byte in BH), and the two `[bx+ico_pool]` displacements become `[bx]` and
-`[bx+2]`, which pays for the `add` almost exactly. Per run it is one memory
-add and one immediate move, on a path that runs eleven to twenty-nine times
-per icon and only on a desktop repaint.
-
-`desk_draw_zone` is still the only caller of either, so the pool is chosen in
-the same three instructions that choose the record.
-
 ### 25.8 `kern_small`'s harvested icons are a POOL, because a listing repeats itself
 
 `disk_icons` is `DSK_NENT` × `DSK_ICO_SIZE` — **2,048 bytes of `.lowbss`**, one
@@ -35691,119 +35669,211 @@ against an 8-px cell, so the run cannot be the erase for it; §22.11.3's rule.
 What the run buys is the cells, and that the caption is never momentarily
 missing from a rect that has just been whitened.
 
-### 26.7 The Wire zone — a second zone SPECIES, and the first icon that is not a volume
+### 26.7 A driver-registered desktop SERVICE zone, and the kernel keeps no glyph
 
 Every desktop zone in this OS is a row of `dsk_vtab` (§26.1). The Wire
-(docs/WIRE-PLAN.md) is a desktop icon that is not a disk: double-clicking it
-opens `SYSTEM/THEWIRE.O88`, the online software library. `OSAPI_VOL_ADD` is
-fenced to drivers and a package cannot put an icon on the desktop, so this is
-kernel code — a **second zone species**, and the whole of what that means is
-one extra index.
+(docs/WIRE-PLAN.md) needs one that is not a disk: double-clicking it opens
+`SYSTEM/THEWIRE.O88`, the online software library. A package cannot put an
+icon on the desktop and `OSAPI_VOL_ADD` is fenced to drivers, so this is
+kernel code — but **the kernel learns nothing about the Wire**, and that is
+the design rather than a nicety. Most XTs have no network card. A desktop
+icon whose glyph, caption and launch name sat in every kernel would be
+carried in RAM by every machine that can never use it, and this OS's own
+budget is measured in single-figure bytes per rung.
 
-**`DESK_WZ` = `DVOL_MAX` and `DESK_NZ` = `DVOL_MAX + 1`.** Every loop in
-`desk.inc` was written against a zone INDEX and every index but this one is a
-volume index, so the loops now run to `DESK_NZ` and four routines carry a
-one-compare arm for the last of them:
+So the kernel gains one small GENERIC mechanism: **a desktop zone a DRIVER
+registers**, whose picture the driver draws. `ETHER.DRV` and `NET.DRV`
+register the Wire's out of the shared `drivers/wirezone.inc`. No driver, no
+zone, and the only thing a cardless machine pays at runtime is one compare in
+`desk_svflag`.
 
-| routine | the Wire's arm |
-|---|---|
-| `desk_zflag` | `desk_wflag`: shown iff fewer than `DVOL_MAX` volumes have a zone |
-| `desk_ord` | its ordinal **is** the count the walk just finished, so it lands one place past the last volume — `cmp al, DESK_WZ` leaves CF = 0 when equal, which is what a found zone means there |
-| `desk_zone_label` | the caption `Wire`, fixed |
-| `desk_draw_zone` | `ico_wire32` / `ico_wire14` out of `ico_wpool` (§25.7.3), and no `dsk_vol_fixed` question — there is no volume row to ask |
+#### `OSAPI_DESK_SVC` — slot `KERNEL_SEG:0x0500`
 
-Everything else is the volume path unchanged: `desk_zone_rect`,
-`desk_zone_xy`, `desk_ord_xy`, `desk_zone_hilite`, `desk_zone_redraw`,
-`desk_dmg_zones` and `desk_paint_mask` are asked about an index and never
-about a drive, so the Wire selects, highlights, repaints under a dragged
-window and wraps into the next column exactly as a disk does.
+```
+  in   AL    = 1 add / 0 withdraw
+       ES:SI = (add) a 65-byte record in the DRIVER's own segment:
+               +0  12  caption, NUL (<= 11 chars; 'Wire')
+               +12 13  the 8.3 file the zone launches, from the BOOT
+                       volume's SYSTEM/ ('THEWIRE.O88')
+               +25  1  the driver's DRVC_* class
+               +26  1  the verb the kernel calls to PAINT the icon
+               +27 12  the package's HEADER name, NUL ('The Wire')
+               +39 26  the failure notice's lead ('Cannot open Wire:')
+  out  CF = 1 refused: not a published driver, a SECOND registration, or a
+              withdraw of somebody else's zone
+```
 
-**It is not shown when EIGHT volumes are**, and that is a fact rather than a
-crash. The Wire is a desktop service and a machine with `DVOL_MAX` volumes
-mounted has said what it wants the right-hand edge for. One `cmp` answers it,
-in `desk_wflag`, and `desk_zones_shown` — which walks the volumes and is what
-that compare asks — never re-enters `desk_zflag`'s Wire arm, because
-`desk_ord` only ever asks about `0..DVOL_MAX-1`.
+An **X cell**, so the caller's segment arrives in ES — which is both where
+the record is and what the fence tests. **The fence is `osapi_vol_fence`,
+unchanged and shared** (§51.8): the caller's segment must be the segment of a
+driver whose services are published. A package gets CF=1 and nothing else,
+for `OSAPI_VOL_ADD`'s reason — the kernel is about to far-call this segment
+on every desktop repaint.
 
-**The damage mask is a WORD now.** It was one byte and `DVOL_MAX` = 8 sat
-exactly at that limit, so zone index 8 had no bit under **any** volume count —
-the eight-volume rule does not rescue it, because the volumes that are shown
-keep their own indices whatever their number. A bit that does not fit is a
-zone that `desk_paint_x` still draws and every damage-driven path silently
-stops repainting, which reads as an icon that survives one repaint and not the
-next. `[wm_dmg_zn]` is a `dw`, `desk_dmg_zones` answers in AX, and
+**ONE record, stated as the limit.** A second registration is refused; whoever
+attaches first has the zone, and on a machine with both network drivers loaded
+they reach the same Wire either way. Room for more is a count and a table, and
+nothing has asked for one.
+
+**The strings are copied, once, at registration**, into a `.bss` mirror laid
+out in the record's own order so the copy is one `rep movsb`. Keeping seg:off
+and reading them far at each use is the obvious alternative and it is worse:
+`font_run` and `ld_run_name` both take an SI relative to DS, and **SS is not
+DS on this system** (§1 rule 2), so a caption staged on the stack is
+unreachable by either and every site would need a kernel buffer anyway. The
+caption's terminator is forced here because it is the one field drawn on every
+repaint — without a NUL it letters the rest of `.bss` across the desktop for
+ever. The other three are used once each and the driver is trusted about them
+exactly as it is about the offsets in its own DSV table, which the kernel
+far-calls without looking.
+
+**The lead line is the driver's, not the kernel's.** `Cannot open Wire:` names
+the driver's own program; a kernel that composed it would carry both the words
+and the composer on every machine. That one decision is 47 bytes of `.text`
+and `.cold` that a cardless machine does not pay.
+
+#### The zone itself
+
+`DESK_SVZ` = `DVOL_MAX`, one past the last volume row, so `desk_ord` answers
+"the number of volume zones shown" for it and it lands at the end of §26.1's
+column flow. Every other routine in `desk.inc` is asked about an INDEX and
+never about a drive, so the zone selects, highlights, repaints under a dragged
+window and wraps into the next column exactly as a disk does. Five routines
+carry a one-compare arm — `desk_zflag` (→ `desk_svflag`), `desk_ord`,
+`desk_zone_label`, `desk_draw_zone`, `desk_click` — and `desk_zones_dmg` gains
+one `inc`, because the zone sits one ordinal past the last volume and
+therefore MOVES whenever one is mounted.
+
+**Two conditions make it visible**: a driver has registered one
+(`[desk_svc_seg]` is its segment, and 0 is the whole of what a machine without
+such a driver tests), and fewer than `DVOL_MAX` volumes have zones. It is not
+shown when eight volumes are — a fact rather than a crash: it is a desktop
+SERVICE and a machine with `DVOL_MAX` mounted volumes has said what it wants
+the right-hand edge for.
+
+**Painting calls the driver back.** `desk_draw_zone` reaches `drv_pkg_call`
+with `BH` = the record's class, `BL` = its verb and `CX,DX` = the icon's
+top-left, under `desk_paint`'s own gfx lock — the same door a package reaches
+a driver by (§20.11), so the kernel gains no drawing contract it would then
+owe for ever. The refusal is free and correct: `drv_pkg_call` answers CF=1 /
+AX=0 when no driver of that class is published, so a driver that vanished
+without withdrawing draws nothing rather than far-calling a freed image. The
+kernel then letters the caption itself, white rect hugging it, exactly as a
+volume's (§26.4).
+
+**The paint verb must not touch the driver's hardware.** A desktop repaint can
+land while another task is inside one of the driver's other verbs, so both
+drivers answer it above their own claim, where `NETV_IDENT` is answered and for
+the same reason.
+
+**Double-click** → `ui_svc_open`, which is `ui_tm_open` (§28.3) with a
+different descriptor (§28.3.2): a running instance whose header name matches
+the record's is fronted with `inst_restore`, otherwise the boot volume is
+quiet-mounted, the loader is given the record's file inside `SYSTEM/`, and the
+user's volume and folder go back. A failure raises the kernel's one-line
+notice with the record's lead and the `LD_*` reason. `desk_click` is `.cold`
+and `ui_sys_open` is not, so it goes out through `cw_ui_svc_open` — with **no
+gfx lock held**, which is that routine's contract and why the deselect and its
+redraw happen inside their own lock hold first.
+
+**The repaint on both edges is `desk_zmark`'s** (§26.3), and the withdraw's is
+the interesting one: it marks while the zone is still counted and then adds one
+more to `[desk_zhw]`, because `desk_zones_dmg`'s own `+1` for this zone is
+gated on the segment the withdraw has just cleared and the stale pixels are at
+the ordinal past the last volume.
+
+**The damage mask is a WORD.** It was one byte and `DVOL_MAX` = 8 sat exactly
+at that limit, so zone index 8 had **no bit under any volume count** — the
+eight-volume rule does not rescue it, because the volumes that ARE shown keep
+their own indices whatever their number. A bit that does not fit is a zone
+`desk_paint_x` still draws and every damage-driven path silently stops
+repainting. `[wm_dmg_zn]` is a `dw`, `desk_dmg_zones` answers in AX and
 `desk_paint_mask` shifts DX: **two bytes**, because `mov [mem],ax` and
-`mov ax,[mem]` are the same length as their byte forms and only the cell
-itself and `desk_paint_x`'s full-mask immediate grew.
+`mov ax,[mem]` are the same length as their byte forms.
 
-**The grid's damage rect reaches it.** `desk_zones_dmg` sizes the rect from
-the number of zones the screen may be showing, and the Wire sits one ordinal
-past the last volume — so it MOVES whenever a volume is mounted or unmounted.
-One `inc` when the count is below `DVOL_MAX` covers it.
+**`kern_small` leaves the species out** (`%ifndef KERN_SMALL`) — it has no
+driver that would register one. **The CELL is in both kernels** and refuses in
+two instructions there, because a slot that exists in one build and not another
+is an ABI that depends on a knob (§20.8 rule 4, `wm_noanim`'s precedent).
 
-**The double-click is `ui_wire_open`**, which is `ui_tm_open` (§28.3) with a
-different descriptor (§28.3.2): a running instance named `The Wire` is
-fronted with `inst_restore`, otherwise the boot volume is quiet-mounted, the
-loader is given the name inside `SYSTEM`, and the user's volume and folder go
-back. A failure raises the kernel's one-line notice with the lead
-`Cannot open the Wire:` and the `LD_*` reason. `desk_click` is `.cold` and
-`ui_sys_open` is not, so it goes out through `cw_ui_wire_open` — and with **no
-gfx lock held**, which is that routine's own contract and why the deselect and
-its redraw happen inside their own lock hold first.
+#### What it cost, measured
 
-**The caption and the window title are one string.** `ui_s_wname` is `The `
-and `ui_s_wire` is `Wire`, 0 — two labels over one `db`, so the header name
-the instance carries, the notice's title and the desktop caption cannot be
-renamed apart. `desk_zone_label` returns the tail.
-
-**`kern_small` leaves the whole species out.** It carries no network driver
-and no Wire package (`SMALLOMIT`), so a zone that could only ever refuse is
-bytes that kernel has none of: `DESK_NZ` is `DVOL_MAX` there, every arm above
-is inside `%ifndef KERN_SMALL`, and the two glyphs and the second pool are not
-assembled at all.
-
-**What it cost, measured** (`tools/kernsize.py` either side, `kern_big`):
+`tools/kernsize.py` either side, `kern_big`:
 
 | | before | after | |
 |---|---:|---:|---|
-| `.text` | 50,993 | 51,268 | **+275** |
-| `.bss` | 6,067 | 6,069 | **+2** |
-| `.cold` | 37,310 | 37,384 | **+74** |
+| `.text` | 50,993 | 51,061 | **+68** |
+| `.cold` | 37,310 | 37,485 | **+175** |
+| `.bss` | 6,067 | 6,134 | **+67** |
 
-**351 bytes**, of which 74 are art: the second pool is 8 rows × 4 bytes and the
-two records are 22 and 20 bytes of run stream. The image rung had 284 bytes
-left when this was written, so it crosses — 512 bytes of every machine's RAM,
-which is the price of a desktop icon that is not a volume.
+**243 bytes of `.text` + `.cold`, and 67 of `.bss`** — 43 over
+docs/WIRE-PLAN.md §2's 200-byte budget, and the overrun is named rather than
+absorbed. The slot's own body is about 95 of it: a fence call, a 65-byte
+`rep movsb`, the caption's terminator, `desk_zmark` on both edges and a
+withdraw that checks it is yours. The zone's five arms are about 75. The rest
+is the API cell, two `cw_` shims and the descriptor. The three things that
+could close the gap are all fences or guards — the withdraw's identity check,
+the caption's terminator, the damage rect's gate — and none of them is worth
+43 bytes.
 
-The `.text` figure is the one derivation in this pair rather than a reading:
-the kernel that was measured for it carried the icon's FIRST draft (§26.7.1),
-and the redraw is `.text` alone and exactly −19 bytes — two pool rows and
-twelve run bytes, counted and confirmed against the build either side. §21.5's
-table starts from this number and the two together are what
-`tools/kernsize.py` reports for the change whole: **`.text` +293, `.bss` +6,
-`.cold` +211**.
+The `.bss` is the record's mirror plus the two words that find it, and it is
+the price of the strings being the driver's: the kernel holds a copy because
+nothing it hands them to can read the driver's segment.
 
-### 26.7.1 The icon is a reel of cable with a plug on the end
+**What a machine with no such driver pays**: those 243 + 67 bytes, and at
+runtime one `cmp word [desk_svc_seg], 0` per zone test. It carries no glyph,
+no caption, no file name and no lead line.
 
-`ico_wire32` and `ico_wire14`, the same 32-row / 14-row pair every volume icon
-comes in (§26.4 — the CGA's pixels are 2.4:1 tall, so the short form is drawn
-and not squashed). Black outline, white body, the diskette's own convention:
-mask = the filled silhouette so the desktop dither never shows through, data =
-the outline plus the winding ticks and the plug's edges.
+### 26.7.1 The picture is the driver's: `drivers/wirezone.inc`
+
+A reel of cable, side on, with a cord and a two-prong plug — 32 rows for
+VGA/EGA/Hercules and 14 for the CGA, drawn and not squashed (§26.4: the CGA's
+pixels are 2.4:1 tall, and OR-ing row pairs thickens every 1px feature into
+two). Black outline on a white body, the diskette's own mask/data convention.
+
+**Solid black masses, not a 1px outline**, and that is the difference between
+this and the first two drafts of it. Against the desktop's 50% dither a thin
+outline over a white silhouette reads as a pale BLOCK; the third draft stood
+the flanges two rows proud of the drum, which is what makes it a reel rather
+than a framed grille.
 
 ```
-   ...#####................#####...   flange top edges
-   ...#...#................#...#...   flange sides
-   ...#...##################...#...   the core, top and bottom
-   ...#...#..#..#..#..#....#...#...   ...and the winding on it
-   ..............##................   the cord
-   .........##############.........   the plug's body
-   ............##....##............   its two prongs
+  ..######................######..   1.. 2  flange caps
+  ..############################..   3      the drum's top edge
+  ..######.#..#..#..#..#..######..   4..12  ...and the cable wound on it
+  ..############################..  13      the drum's bottom edge
+  ..######................######..  14..15  flange caps
+  ..............####..............  16..19  the cord
+  ...........##########...........  20      the plug's shoulder
+  ........################........  21..25  ...its body
+  ...........###....###...........  26..30  ...and its two prongs
 ```
 
-Ten distinct rows, which is what makes a second pool cheap: the flange row is
-also the mask of every flange-only row, the cord and the prongs are their own
-masks, and the plug body's outline row is the mask of its hollow ones.
+**It is drawn as four 16×16 quadrants through `OSAPI_ICON_DRAW`**, two for the
+short form. That is not a stylistic choice: the slot refuses every record but
+16 px wide and at most 16 rows (§25.6.1 — it stages into a fixed cell and the
+bound is a refusal, not a truncation), and the kernel's own 32-wide icons go
+through `icon_draw_ix`, which is kernel-internal and reachable by no slot.
+Four far calls at ~47 µs is 188 µs on a 4.77 MHz 8088, against the 756 µs any
+one drawing call costs there — inside the noise of the draw it is part of, and
+paid on a desktop repaint and nowhere else.
+
+`drivers/wirezone.inc` is shared by `ETHER.DRV` and `NET.DRV` as **source**,
+never as a copy: `%define WZ_CLASS` before the `%include` is the whole of what
+differs. The include sits high in each file, above every call site, so
+`wz_paint` and `wz_register` are backward references — with it at the foot of
+`net.asm` nasm sized a forward `je` on pass 1 and resized it on pass 2, which
+is `label changed during code generation` on three labels and no build.
+
+**What it cost the two drivers**, and only machines that load one pay it:
+
+| | before | after | |
+|---|---:|---:|---|
+| `ETHER.DRV` | 17,668 | 18,274 | **+606** |
+| `NET.DRV` | 5,832 | 6,437 | **+605** |
+
+380 of those bytes are the six icon records; the rest is the 65-byte
+registration record, the paint verb and the two entry points.
 
 ## 27. HELLO and NOTEPAD — the second and third packages
 

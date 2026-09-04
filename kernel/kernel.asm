@@ -3767,7 +3767,33 @@ osapi_table:
                                   ;          caller's DS (SPEC.md 20.3), which
                                   ;          is the one segment the image is
                                   ;          least likely to be in
-osapi_table_end:                  ; 0x0500
+    OSAPI_XCELL osapi_desk_svc      ; 0x0500 - X: a DRIVER registers the
+                                  ;          desktop SERVICE zone (SPEC.md
+                                  ;          26.7). in AL = 1 add / 0
+                                  ;          withdraw, ES:SI = a 39-byte
+                                  ;          record in the driver's own
+                                  ;          segment: a caption, the 8.3 file
+                                  ;          the zone launches out of SYSTEM/,
+                                  ;          its DRVC_* class, the verb the
+                                  ;          kernel calls to PAINT its icon,
+                                  ;          and the package's header name.
+                                  ;          out CF=1 refused - not a
+                                  ;          published driver (osapi_vol_add's
+                                  ;          own fence), a second registration
+                                  ;          (there is ONE zone), or a
+                                  ;          withdraw of somebody else's.
+                                  ;          The kernel keeps no glyph: a
+                                  ;          desktop icon whose picture lived
+                                  ;          in here would be carried by every
+                                  ;          machine, and most of them have no
+                                  ;          card to use it with.
+                                  ;          THE CELL IS IN BOTH KERNELS
+                                  ;          (SPEC.md 20.8 rule 4) and on
+                                  ;          kern_small the body is two
+                                  ;          instructions that refuse: there is
+                                  ;          no driver there that would
+                                  ;          register one
+osapi_table_end:                  ; 0x0508
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -3775,8 +3801,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 158 * 8
-%error "os8088 API jump table must be exactly 158 8-byte slots"
+%if OSAPI_TABLE_LEN != 159 * 8
+%error "os8088 API jump table must be exactly 159 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -6094,9 +6120,12 @@ cw_toast_show:          call toast_show
 cw_ui_note:             call ui_note
                     retf
 %ifdef KERN_BIG
-cw_ui_wire_open:        call ui_wire_open   ; the Wire zone's double-click
+cw_ui_svc_open:         call ui_svc_open    ; the service zone's double-click
                     retf                    ; (SPEC.md 26.7): desk.inc is cold
                                             ; and ui_sys_open is not
+cw_drv_pkg_call:        call drv_pkg_call_x ; ...and its PAINT, which is the
+                    retf                    ; same door a package reaches a
+                                            ; driver by (SPEC.md 20.11)
 %endif
 cw_vga_xor_rect_vram:   call vga_xor_rect_vram
                     retf
@@ -6482,6 +6511,12 @@ osapi_vol_mount:  call COLD_SEG:osapi_vol_mount_x
               ret
 osapi_vol_paint:  call COLD_SEG:osapi_vol_paint_x
               ret
+osapi_desk_svc:   call COLD_SEG:osapi_desk_svc_x    ; SPEC.md 26.7, and the
+              ret                               ; same six bytes the four
+                                                ; volume slots above cost. In
+                                                ; BOTH kernels, like the cell:
+                                                ; on kern_small the body is
+                                                ; two instructions that refuse
 
 ; --- ...and driver.inc's (SPEC.md 51). Boot-time loading, the Control Panel
 ; pages and the class dispatch. One entry is reached from an ISR:

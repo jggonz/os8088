@@ -214,17 +214,8 @@ icon_draw16:
 ;                (SPEC.md 25.7). The desktop's four volume icons and nothing
 ;                else - 744 bytes of hand-authored rows became 135.
 ;
-; in:       CX = x, DX = y, SI -> an indexed record, BX -> the ROW POOL the
-;           record's run bytes index (ico_pool, or ico_wpool for the Wire's
-;           two - SPEC.md 26.7); caller holds the gfx lock
+; in:       CX = x, DX = y, SI -> an indexed record; caller holds the gfx lock
 ; out:      nothing (all registers preserved)
-;
-; THE POOL IS AN ARGUMENT and not a constant, which it was until the Wire
-; zone. A run byte's high nibble is the index, so ONE pool holds sixteen rows
-; and the volume icons' pool holds sixteen: the Wire's spool and plug cannot
-; be drawn out of it at any price, and widening the nibble would move every
-; existing run byte. A second pool costs the four bytes a row costs anywhere
-; and this register (SPEC.md 25.7.3).
 ;
 ; KERNEL-INTERNAL, and that is a contract rather than a convention: icon_draw
 ; and icon_draw_x take the PLAIN kind and their refusals do not change
@@ -239,7 +230,6 @@ icon_draw16:
 icon_draw_ix:
     GFXAUDIT_HOOK               ; the same primitive as far as the audit is
                                 ; concerned; empty in every shipped build
-    mov [ico_pbase], bx         ; the pool, banked before the walk spends BX
     push ax
     push bx
     push cx
@@ -278,6 +268,8 @@ icon_draw_ix:
     mov bp, [ico_h]
     shl bp, 1                   ; BP = rows still to produce
     mov di, ico_ibuf
+    xor bx, bx                  ; BH stays 0 for the whole walk: nothing below
+                                ; writes it and the mask keeps BL under 0x3C
 .run:
     mov bl, [si]                ; run byte: pool row << 4 | repeat count - 1
     inc si
@@ -286,12 +278,8 @@ icon_draw_ix:
     shr bl, 1                   ; 0x3C` is `(b >> 4) * 4` in two shifts and a
     and bl, 0x3C                ; mask rather than six shifts, and the mask is
                                 ; what drops the count nibble on the way past
-    mov bh, 0                   ; ...and BH is rebuilt PER RUN now, because the
-    add bx, [ico_pbase]         ; add below leaves the pool's own high byte in
-                                ; it. It used to be one `xor bx, bx` above the
-                                ; loop, which is what a fixed pool bought
-    mov ax, [bx]                ; the row, once, however many times it repeats
-    mov dx, [bx+2]
+    mov ax, [bx+ico_pool]       ; the row, once, however many times it repeats
+    mov dx, [bx+ico_pool+2]
     and cl, 0x0F
     inc cl
     mov ch, 0                   ; CX = the repeat count, 1..16
@@ -1006,124 +994,6 @@ ico_hdd32:
     IRUN IR_BLANK,   6      ; 26..31  ................................
     IHALF
 
-%ifndef KERN_SMALL
-; =============================================================================
-; THE WIRE'S SECOND POOL (SPEC.md 26.7, 25.7.3)
-;
-; A run byte's high nibble indexes the pool, so a pool is SIXTEEN rows and
-; ico_pool above holds sixteen. The Wire zone's reel and plug share not one
-; row with a diskette, so they are drawn out of a pool of their own, named in
-; BX by desk_draw_zone. Eight rows here, and the same IREC/IRUN/IHALF macros.
-;
-; The picture, 32 x 32: a reel of cable seen from the side - two SOLID flanges
-; with the winding between them - a cord below it, and a two-prong plug on the
-; end of the cord.
-;
-; SOLID BLACK, not an outline, and that is the whole difference between this
-; and the first version of it. The desktop is a 50% dither: a 1px outline over
-; a white silhouette reads as a white BLOCK on it, and the first draft's reel
-; and plug came out as two pale bars and a box (SPEC.md 26.7.1). The diskette
-; gets away with an outline because its shutter is a solid mass; this one has
-; no such mass unless the flanges are it.
-; -----------------------------------------------------------------------------
-ico_wpool:
-    dw 0x0000, 0x0000           ;  0 WR_BLANK  ................................
-    dw 0x3F00, 0x00FC           ;  1 WR_FLANGE ..######................######..
-    dw 0x3FFF, 0xFFFC           ;  2 WR_CORE   ..############################..
-    dw 0x3F49, 0x24FC           ;  3 WR_WIND   ..######.#..#..#..#..#..######..
-    dw 0x0003, 0xC000           ;  4 WR_CORD   ..............####..............
-    dw 0x001F, 0xF800           ;  5 WR_PNECK  ...........##########...........
-    dw 0x00FF, 0xFF00           ;  6 WR_PLUG   ........################........
-    dw 0x001C, 0x3800           ;  7 WR_PRONG  ...........###....###...........
-
-WR_BLANK    equ  0
-WR_FLANGE   equ  1              ; the reel's two flanges, standing one row
-                                ; proud of the winding at each end - which is
-                                ; what stops the whole thing reading as a box
-WR_CORE     equ  2              ; the reel's top and bottom edges, flanges
-                                ; included - AND the MASK of every reel row
-WR_WIND     equ  3              ; the flanges with the cable wound between them
-WR_CORD     equ  4              ; ...and its own mask: a cord is solid
-WR_PNECK    equ  5              ; the plug's shoulder, where the cord enters -
-                                ; the one row that stops the body reading as a
-                                ; slab, and its own mask
-WR_PLUG     equ  6              ; ...and the body, solid
-WR_PRONG    equ  7              ; the two prongs, and their own mask
-%if ($ - ico_wpool) > 16 * 4
-  %error "a pool is sixteen rows of two words - the run byte's high nibble indexes it and cannot reach a seventeenth"
-%endif
-
-; -----------------------------------------------------------------------------
-; ico_wire32 - the Wire zone's icon at 32 rows (VGA, EGA, Hercules)
-; -----------------------------------------------------------------------------
-ico_wire32:
-    IREC 2, 32                  ; wwords, height
-
-    ; --- mask: 32 rows, the white underlay ---------------------------------
-    IRUN WR_BLANK,   1      ;  0      ................................
-    IRUN WR_FLANGE,  2      ;  1.. 2  ..######................######..
-    IRUN WR_CORE,   11      ;  3..13  ..############################..
-    IRUN WR_FLANGE,  2      ; 14..15  ..######................######..
-    IRUN WR_CORD,    4      ; 16..19  ..............####..............
-    IRUN WR_PNECK,   1      ; 20      ...........##########...........
-    IRUN WR_PLUG,    5      ; 21..25  ........################........
-    IRUN WR_PRONG,   5      ; 26..30  ...........###....###...........
-    IRUN WR_BLANK,   1      ; 31      ................................
-    IHALF
-
-    ; --- data: 32 rows, the picture ----------------------------------------
-    ; The flanges stand TWO rows proud of the drum at each end, which is what
-    ; makes this a reel rather than a framed grille - the first version had
-    ; them flush and it read as a window with bars in it.
-    IRUN WR_BLANK,   1      ;  0      ................................
-    IRUN WR_FLANGE,  2      ;  1.. 2  ..######................######..
-    IRUN WR_CORE,    1      ;  3      ..############################..
-    IRUN WR_WIND,    9      ;  4..12  ..######.#..#..#..#..#..######..
-    IRUN WR_CORE,    1      ; 13      ..############################..
-    IRUN WR_FLANGE,  2      ; 14..15  ..######................######..
-    IRUN WR_CORD,    4      ; 16..19  ..............####..............
-    IRUN WR_PNECK,   1      ; 20      ...........##########...........
-    IRUN WR_PLUG,    5      ; 21..25  ........################........
-    IRUN WR_PRONG,   5      ; 26..30  ...........###....###...........
-    IRUN WR_BLANK,   1      ; 31      ................................
-    IHALF
-
-; -----------------------------------------------------------------------------
-; ico_wire14 - the same reel and plug at 32 x 14 (the CGA, SPEC.md 26.4)
-;
-; Drawn, not squashed, for ico_disk14's reason: OR-ing row pairs thickens
-; every 1px feature into 2, and the winding, the cord and the plug's walls are
-; all single features. The reel keeps three rows of winding and the plug one
-; hollow row, which is the proportion the 32-row form has.
-; -----------------------------------------------------------------------------
-ico_wire14:
-    IREC 2, 14                  ; wwords, height
-
-    ; --- mask: 14 rows, the white underlay ---------------------------------
-    IRUN WR_BLANK,   1      ;  0      ................................
-    IRUN WR_FLANGE,  1      ;  1      ..######................######..
-    IRUN WR_CORE,    4      ;  2.. 5  ..############################..
-    IRUN WR_FLANGE,  1      ;  6      ..######................######..
-    IRUN WR_CORD,    2      ;  7.. 8  ..............####..............
-    IRUN WR_PNECK,   1      ;  9      ...........##########...........
-    IRUN WR_PLUG,    2      ; 10..11  ........################........
-    IRUN WR_PRONG,   2      ; 12..13  ...........###....###...........
-    IHALF
-
-    ; --- data: 14 rows, the picture ----------------------------------------
-    IRUN WR_BLANK,   1      ;  0      ................................
-    IRUN WR_FLANGE,  1      ;  1      ..######................######..
-    IRUN WR_CORE,    1      ;  2      ..############################..
-    IRUN WR_WIND,    2      ;  3.. 4  ..######.#..#..#..#..#..######..
-    IRUN WR_CORE,    1      ;  5      ..############################..
-    IRUN WR_FLANGE,  1      ;  6      ..######................######..
-    IRUN WR_CORD,    2      ;  7.. 8  ..............####..............
-    IRUN WR_PNECK,   1      ;  9      ...........##########...........
-    IRUN WR_PLUG,    2      ; 10..11  ........################........
-    IRUN WR_PRONG,   2      ; 12..13  ...........###....###...........
-    IHALF
-%endif
-
 
 ; --- SPEC.md 25.6: the two colours a record is drawn in ----------------------
 ; The mask pass lays [ico_c1] and the data pass draws [ico_c2] over it. They
@@ -1172,9 +1042,6 @@ ico_stage:                      ; indexed kind's decode target and the X slot's
                                 ; writes into the cells below and the pixels
                                 ; can be perfect while it does
     resb ICO_IBUF_SZ
-ico_pbase   resw 1              ; icon_draw_ix: the ROW POOL this record's run
-                                ; bytes index (SPEC.md 25.7.3) - BX on entry,
-                                ; banked here because the walk spends BX
 ico_ww      resw 1              ; current record: words per row
 ico_h       resw 1              ; current record: total rows
 ico_rows    resw 1              ; rows after vertical clip

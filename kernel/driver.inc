@@ -970,7 +970,10 @@ DRVM_IMG_SND equ 6              ; ceil(build/sound.drv   / 1024) - t_drvmem
 DRVM_IMG_HDD equ 8              ; ceil(build/hdd.drv     / 1024)   checks
 DRVM_IMG_ETH equ 18             ; ceil(build/ether.drv   / 1024)   every one
 DRVM_IMG_RAM equ 9              ; ceil(build/ramdisk.drv / 1024)   of these
-DRVM_IMG_NET equ 6              ; ceil(build/net.drv     / 1024)
+DRVM_IMG_NET equ 7              ; ceil(build/net.drv     / 1024) - SEVEN
+                                ; since SPEC.md 26.7 put the Wire's desktop
+                                ; icon in drivers/wirezone.inc, which both
+                                ; network drivers include
 DRVM_IMG_VMM equ 1              ; ceil(build/vmmouse.drv / 1024)
 
 DRVM_SND     equ DRVM_IMG_SND + 8 + 20    ; SBL_DMASZ (the DMA-visible double

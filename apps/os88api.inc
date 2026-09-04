@@ -646,6 +646,49 @@ VID_EGA    equ 3                 ; 640x350x16 - a VGA-path adapter (SPEC.md 39.2
                                  ; where you are standing. Run one that has
                                  ; them from a disk instead.
 
+; --- the desktop SERVICE zone, DRIVERS ONLY (SPEC.md 26.7) --------------------
+; A driver puts an icon on the desktop. It is here rather than in
+; drivers/os88drv.inc for OSAPI_FILE_WRITE_SYS's reason: a driver assembles
+; against this same file, and an application author reading the list is owed
+; the refusal's reason rather than a silent CF=1.
+;
+; The kernel keeps no glyph and no name: it holds the record, draws the
+; caption, hit-tests the zone and launches the file, and calls the DRIVER back
+; to paint the picture. That is the whole design - most XTs have no network
+; card, and a desktop icon whose art sat in every kernel would be carried by
+; every machine that cannot use it.
+%define OSAPI_DESK_SVC      KERNEL_SEG:0x0500   ; AL = 1 add / 0 withdraw;
+                                 ; ES:SI = a 65-byte record in YOUR segment
+                                 ; (add only):
+                                 ;   +0  12  the caption, NUL (<= 11 chars)
+                                 ;   +12 13  the 8.3 file the zone launches,
+                                 ;           from the BOOT volume's SYSTEM/
+                                 ;   +25  1  your DRVC_* class
+                                 ;   +26  1  the verb the kernel calls to
+                                 ;           PAINT the icon: CX,DX = its
+                                 ;           top-left, the gfx lock HELD, and
+                                 ;           it MUST NOT touch your hardware -
+                                 ;           a desktop repaint can land while
+                                 ;           another task is inside one of
+                                 ;           your other verbs
+                                 ;   +27 12  the package's HEADER name, NUL -
+                                 ;           what makes the zone a singleton
+                                 ;   +39 26  the failure notice's lead line,
+                                 ;           NUL ('Cannot open Wire:')
+                                 ; out CF=1 refused: not a published driver
+                                 ; (OSAPI_VOL_ADD's own fence), a second
+                                 ; registration - there is ONE zone and
+                                 ; whoever attaches first has it - or a
+                                 ; withdraw of somebody else's.
+                                 ;
+                                 ; The record is COPIED, so it may be
+                                 ; anything of yours; the kernel terminates
+                                 ; the caption itself and trusts the other
+                                 ; three the way it trusts your DSV table.
+                                 ; WITHDRAW AT DETACH: the kernel is about to
+                                 ; free the image your paint verb lives in.
+                                 ; drivers/wirezone.inc is the worked example.
+
 ; --- the clip region (SPEC.md 11.3) -------------------------------------------
 ; What replaced the wm_obscured veto for background painters. Arm it under
 ; the lock and every gfx_*/font_* call you make is cut to the part of YOUR
