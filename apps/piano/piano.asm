@@ -128,7 +128,7 @@ PN_MAXN     equ 300                 ; sequence cap (policy: full-stop)
 PN_LIVEDUR  equ 5                   ; live note duration, ticks
 PN_PRIO     equ 0x40                ; tone priority (the package default)
 
-PN_BSS_TOTAL equ 926                ; see the bss layout after OS88_IMAGE_END
+PN_BSS_TOTAL equ 927                ; see the bss layout after OS88_IMAGE_END
 
 ; -----------------------------------------------------------------------------
 ; pn_entry - package entry point (SPEC.md 20.2)
@@ -158,6 +158,10 @@ pn_entry:
     call pn_metrics                 ; given, which on a CGA is 22 rows short
     mov si, pn_menus
     call OSAPI_MENU_SET             ; BX = window ptr, SI = the set
+    mov si, pn_about                ; ...and 'About Piano' above the Close the
+    call OSAPI_ABOUT_SET            ; kernel already puts in our pull-down
+                                    ; (SPEC.md 12.2). Flags preserved, like
+                                    ; menu_win_set above
     mov al, 1                       ; ...and it PROMISES its content stands
     call OSAPI_WM_SAVEU             ; still while it is not drawing (SPEC.md
                                     ; 11.96.1): no worker, and its one polling
@@ -261,6 +265,13 @@ pn_paint:
     call pn_draw_viewer
     call pn_draw_btns
     call pn_draw_keys
+    cmp byte [pn_abon], 0           ; ...and the About card LAST, over the
+    je .out                         ; keyboard it is opaque about (20.5.1)
+    push si
+    mov si, pn_ablines
+    call os88ui_about_d             ; _d: this paint's region is already armed
+    pop si
+.out:
     pop di
     pop si
     pop dx
@@ -281,6 +292,8 @@ pn_onclick:
     push dx
     push si
     push di
+    call pn_abdismiss               ; the credits are up: this click is spent
+    jc .out                         ; taking them down
     mov bx, si
     push cx
     push dx
@@ -367,6 +380,8 @@ pn_onkey:
     push si
     push di
     mov cl, al                      ; keep the key; wm_content returns AX/DX
+    call pn_abdismiss               ; any key takes the credits down, and is
+    jc .out                         ; spent doing it
     mov bx, si
     call OSAPI_WM_CONTENT
     mov [pn_ox], ax
@@ -413,7 +428,8 @@ pn_onkey:
 ; -----------------------------------------------------------------------------
 pn_oncmd:
     push ax                         ; wm_content returns in AX/DX
-    mov bx, si
+    call pn_abdismiss               ; a menu pick takes the credits down first,
+    mov bx, si                      ; and then does what it says
     call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
     mov [pn_ox], ax
     mov [pn_oy], dx
@@ -1455,6 +1471,75 @@ pn_cstr:                            ; SI=string CX=x DX=y (color set)
     ret
 
 ; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
+; =============================================================================
+; 'About Piano' - the credit card (SPEC.md 12.2, 20.5.1)
+; =============================================================================
+; The card is os88ui.inc's; what is here is the flag, the painter drawing it
+; last, and the three handlers taking it down. State, not a modal loop: a
+; loop would hold the gfx lock against every background task for as long as
+; the reader left the credits up.
+
+; -----------------------------------------------------------------------------
+; pn_about - the OSAPI_ABOUT_SET handler (slot 0x01E0)
+; in:  SI = our window ptr; the UI task, gfx lock HELD
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+pn_about:
+    push bx
+    push si
+    mov byte [pn_abon], 1
+    mov bx, si
+    mov si, pn_ablines
+    call os88ui_about               ; arms the clip itself: a menu dispatch
+    pop si                          ; arrives without one (SPEC.md 11.3)
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; pn_abdismiss - take the card down if it is up
+; in:  SI = our window ptr; gfx lock held
+; out: CF = 1 the click or key was spent doing it; preserves every register
+;
+; The way back is the whole content, which is what pn_paint draws: the card
+; covered the viewer, the buttons and the keyboard.
+; -----------------------------------------------------------------------------
+pn_abdismiss:
+    cmp byte [pn_abon], 0
+    je .none
+    push ax
+    push bx
+    push dx
+    mov byte [pn_abon], 0
+    mov bx, si
+    call OSAPI_WM_CONTENT           ; the window may have been dragged since
+    mov [pn_ox], ax                 ; the card went up
+    mov [pn_oy], dx
+    mov bx, si
+    call OSAPI_WM_CLIP_SET          ; ...and nothing armed a region for a
+    jc .gone                        ; click or a key either (SPEC.md 11.3)
+    call pn_draw_viewer
+    call pn_draw_btns
+    call pn_draw_keys
+.gone:
+    pop dx
+    pop bx
+    pop ax
+    stc
+    ret
+.none:
+    clc
+    ret
+
+; --- the About card's lines (SPEC.md 20.5.1) ----------------------------------
+; SHORT: the card is clamped to the content box and this window's is 222px on
+; VGA and narrower on a CGA, so the credit is two lines rather than one.
+pn_ablines:
+    dw pn_ab1, pn_ab2, pn_ab3, pn_ab4, 0
+pn_ab1:     db 'Piano for os8088', 0
+pn_ab2:     db 0
+pn_ab3:     db 'Contributed by', 0
+pn_ab4:     db 'Jorge Gonzalez', 0
+
 pn_tpl:
     dw 250, 100, 224, 177           ; x, y, w, h -> content 222 x 158
     dw pn_ttl, pn_paint, pn_onkey, pn_onclick
@@ -1551,7 +1636,8 @@ pn_song_mary:                       ; Mary Had a Little Lamb (26 notes)
     db 0xFF
 
 ; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
-%include "os88ui.inc"
+%define OS88UI_ABOUT            ; ...and the standard About card beside the
+%include "os88ui.inc"           ; buttons this already drew
 
     OS88_BSS PN_BSS_TOTAL
     OS88_IMAGE_END
@@ -1578,4 +1664,5 @@ pn_kby2  equ os88_image_end + 918   ; word: the white keys' last row
 pn_bky2  equ os88_image_end + 920   ; word: ...and the black keys'
 pn_wlbl  equ os88_image_end + 922   ; word: the white key letter's row
 pn_blbl  equ os88_image_end + 924   ; word: ...and the black one's
-                                    ; total 926 = PN_BSS_TOTAL
+pn_abon  equ os88_image_end + 926   ; byte: the About card is up
+                                    ; total 927 = PN_BSS_TOTAL

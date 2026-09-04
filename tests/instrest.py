@@ -42,7 +42,6 @@ tests/instdeep.py does - the two share that machine, that pristine copy and
 the clicks that drive the install.
 """
 import os
-import shutil
 import sys
 
 sys.path.insert(0, "tools")
@@ -168,11 +167,8 @@ def main():
     for img in ("build/os8088-360.img", "build/apps360.img"):
         if not os.path.exists(img):
             sys.exit("no %s - `make` first" % img)
-    if not os.path.exists(ID.PRISTINE):
-        shutil.copy2(ID.VHD, ID.PRISTINE)
-        print("  took a pristine copy of the VHD")
-    shutil.copy2(ID.PRISTINE, ID.VHD)
-
+    # NO PRISTINE DANCE. Every instance gets its own clone of the staged
+    # tree's VHD (os88marty.launch), so the disk this erases is this run's.
     with M.launch("build/os8088-360.img", apps="build/apps360.img",
                   machine=ID.MACHINE) as m:
         M.settle(m)

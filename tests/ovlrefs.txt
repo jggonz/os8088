@@ -1,0 +1,98 @@
+# tests/ovlrefs.txt - every reference from outside `.ovl` INTO it, and the
+# reason each one is safe.  Enforced by tools/os88ovlchk.py rule 2c.
+#
+# WHY THIS FILE EXISTS
+#
+# `.ovl` is the boot overlay.  It rides inside the stage-2 blob and is GIVEN
+# BACK TO THE HEAP at spl_finish (kernel/kernel.asm: "It costs no RAM after
+# that at all, and - this is the point -").  That is what makes it the right
+# home for boot-only code: those bytes stop costing anything the moment the
+# desktop is up, where the same code in `.cold` is resident for the life of
+# the machine.
+#
+# The price is that a body in `.ovl` is correct only as long as EVERY path
+# that reaches it runs before spl_finish.  Add one runtime caller and the
+# call lands in whatever the heap handed out instead - so the routine appears
+# to work until the machine is busy enough for that claim to be something
+# else.  No crash, no message, and nothing in this tree caught it: the
+# assembler is happy, `dispcold` byte-compares `.cold` and has no `.ovl`
+# counterpart, and a screenshot shows a working desktop.
+#
+# So the surface is registered rather than trusted, the way SPEC.md 6.6's
+# transparent-text sites are.  A NEW reference fails the build until somebody
+# writes down the answer to one question:
+#
+#     WHAT GUARANTEES THIS RUNS BEFORE spl_finish?
+#
+# "It looks like boot code" is not an answer.  Name the caller.
+#
+# The list may shrink freely - delete the row with the code.  A row here that
+# no longer has a reference is itself a build failure, so the file cannot rot
+# into a list of names nobody can account for.
+#
+# FORMAT: <symbol>   <the guarantee>
+
+# --- reached from kmain, which runs once and returns into the scheduler -----
+# kernel/kernel.asm:4086-4315.  kmain IS the boot path; there is no second
+# entry to it, and every one of these is called before spl_finish releases the
+# blob a few hundred lines later in the same routine.
+# The five `ovl_*` shims are gone and the BODIES are named here instead
+# (SPEC.md 2.6.1): each was `call <body> / retf` for a body already in `.ovl`,
+# four bytes to own a far return the body can own itself.
+cpu_detect          kmain on kern_small; xm_sniff's first instruction on
+#                     kern_big - the CPU tier, SPEC.md 60. NOT A20: it has not
+#                     touched the gate since SPEC.md 41.12, and 41.1 is a
+#                     signpost to 60 rather than a section about tiers. The
+#                     kern_big call is .ovlw -> .ovlw, which ovlchk skips by
+#                     construction; the %else arm is what keeps this row live
+xm_sniff            kmain only (kernel.asm) - the XMS probe, SPEC.md 41.12.1
+#                     (41.4 is unreal mode, and why it is FS and GS)
+clk_init            kmain only (kernel.asm) - the clock ladder's boot rung, SPEC.md 37
+desk_init           kmain only (kernel.asm) - first desktop paint, SPEC.md 14
+snd_init            kmain only (kernel.asm) - sound layer bring-up, SPEC.md 34
+ovl_font_init       kmain only (kernel.asm) - the BAKED_FONT typeface, SPEC.md 6.2. It keeps its name and its retf: it is a BODY, not a shim
+drv_snd_sniff       kmain only (kernel.asm) - what card is at 388h, SPEC.md 51.3.1
+
+# --- the boot-only bodies of docs/LAST-DROP-BYTES.md -----------------------
+# Each one is a routine kmain runs ONCE, moved out of `.text` or `.cold` into
+# the blob so that it stops costing RAM at spl_finish.  The register names the
+# caller for every row and the closure walk that proved there is no other; what
+# is repeated here is the answer to this file's one question.
+sched_init          kmain only (kernel.asm:4170) - the task table and the int 08h hook, SPEC.md 8. Nothing re-initialises the scheduler: the reboot path is sched_unhook (a different routine, which RESTORES the vector) and sch_fast_on/sch_fast_off re-programme the PIT without reaching this body
+mem_init_x          kmain only (kernel.asm) - the claim heap sized and the map cleared, SPEC.md 50. mem_unblob_x is a DIFFERENT body and stayed in `.cold`: it is what frees the blob, so it is the one routine in memory.inc that could not live in it
+drv_init_x          kmain only (kernel.asm) - the driver table seeded, SPEC.md 51. Nothing re-seeds it: drv_unload clears ONE row. drv_svc_clear_all moved with it and has no other caller
+xm_boot_x           kmain only (kernel.asm) - loads and attaches the XMS overlay, SPEC.md 41.12. Its `.cold` far entry xmf_xm_boot is deleted with the move, so this is the only edge; what it attaches outlives the blob, the attaching does not
+drv_boot_x          kmain only (kernel.asm) - SPEC.md 51.3: mount the settings volume, read SYSTEM.CFG, apply the adapter, load each wanted driver. Its `.text` thunk is deleted with the move, so this site is the only edge; drv_notice_x, which runs AFTER the first desktop paint and opens the Control Panel, stayed in `.cold`
+dsk_boot_from_x     kmain only (kernel.asm) - which volume the machine came off, SPEC.md 18.96, read out of the registers the boot sector left. dsk_bootltr moves with it and is named nowhere else: it stamps the letter into three fixed messages, once, and it stays stamped
+dsk_dpt_init_x      kmain only (kernel.asm) - int 1Eh becomes ours, SPEC.md 18.92. dsk_xfer READS the parameter table for the life of the machine; nothing rebuilds it
+dsk_flop_add_x      dsk_flop_add (kernel.asm) only, and that thunk's only caller is desk_init - which is ITSELF in `.ovl` already (ovl_desk_init above). SPEC.md 18.98: the BIOS floppies beyond A: and B:, counted once
+files_init_x        kmain only (kernel.asm) - the Disk module's state, SPEC.md 22. No window exists at boot to want it again, and fm_kinit_x - the one that runs per window - stayed in `.cold`
+mouse_init          kmain only (kernel.asm) - the whole serial+PS/2 probe, SPEC.md 9.4/9.5/9.9. ONE call site tree-wide, ~100 lines above SPLGATE splf_finish and mem_unblob_x, so the blob is live throughout. What it alone reaches went with it (mou_uart, mou_idbyte, mou_idquiet, mou_idjudge, mou_p2rd, mou_p2dev, mou_p2flush, mou_p2_init); what mou_hotplug or mouse_unhook can reach did NOT (mou_pall, mou_pout, mou_newround, mou_lockon, mouse_unhook, mou_p2_off and the four PS/2 writers), because a mouse replugged and Chip -> Restart both run all session
+dock_init           kmain only (kernel.asm:4342) - the dock strip's scratch, SPEC.md 30
+menu_init           kmain only (kernel.asm:4299) - the menu bar's owner and its dirty flags, SPEC.md 12. NOT the save-under: menu_drop claims that per drop and gives it back (SPEC.md 12.4), which is what leaves this body with nothing session-lived in it
+font_init           kmain only (kernel.asm:4287) - the ROM 8x8 probe, SPEC.md 6. It is the %ifndef BAKED_FONT half of a pair whose other half, ovl_font_init, has been in `.ovl` since SPEC.md 6.2 - so this is the twin joining it rather than a new claim
+wm_init             kmain only (kernel.asm:4291) - the window table cleared, SPEC.md 11. Four rep stos runs over `.bss` and nothing else
+inst_init           kmain only (kernel.asm:4302) - the instance table cleared, SPEC.md 29
+vid_ctx_init        kmain only (kernel.asm:4203) - display 0's geometry banked, SPEC.md 39.12. NOT called from vid_switch: the comment above the body said so for a while and vid_switch's own call list (vid_avail_test, cur_unlazy, vid_blank, wm_su_drop_all, vid_equip, vid_apply, vid_setmode, vid_disp_init, desk_rowcalc) does not contain it
+vid_probe_avail     kmain only (kernel.asm:4211) - which adapters this machine HAS, SPEC.md 39.11.1. One inbound edge in the repository and zero outbound; the other two bodies of the trio (vid_memchk, vid_cga_alias) are near-called from inside `.ovl` and are named nowhere else
+sch_idle_start      kmain only (kernel.asm:4182) - spawns the idle task, docs/SCHED-IDLE-PLAN.md 6.2. The TASK outlives the blob and the spawner does not: its entry is sch_idle_body, a `.text` label, which is what the BX = 0 (KERNEL_SEG) argument names
+
+# --- the loading screen's own captions, drawn while the blob is still live --
+# The splash is IN the blob (`.boot2`), so it cannot outlive `.ovl`: both are
+# released by the same spl_finish.  These are the phase captions, SPEC.md 15.6.
+ovl_spl_msg_mouse   kmain only (kernel.asm:4271) - "Mouse" caption
+ovl_spl_msg_fdd     kmain only (kernel.asm:4288) - "Drives" caption
+# ...and the three drv_boot_x reaches are GONE from this list, not deleted from
+# the kernel: drv_boot_x is inside `.ovl` now (SPEC.md 2.5.2), so the calls no
+# longer cross and there is nothing here to account for.
+ovl_spl_redraw      spl_reset only (splash.inc:488) - repaint after a mode set
+
+# --- the settings parser, SPEC.md 51.5 / docs/SETTINGS-COST.md -------------
+# ovl_cfg_load was here for the same reason and has left for the same one: its
+# only caller moved into the section with it.
+
+# --- not a call at all ------------------------------------------------------
+# kernel.asm:6008 `kbld_ovl: dw ovl_end` is the overlay's LENGTH, resolved by
+# the assembler and consumed by the build.  No code reaches it and none can:
+# it is a number in a table, not an entry point.
+ovl_end             kernel.asm:6008 - a build-time size constant, never called

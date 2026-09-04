@@ -144,19 +144,23 @@ fdlg_s_media:  db 'MEDIA', 0     ; the default location (SPEC.md 38.10).
 ; where the captions should be. In `.text` and not `.bss`: this is `nasm -f
 ; bin` and .bss is not zeroed.
 fdlg_paper:    db CWHITE
-fdlg_s_open:   db 'Open', 0
+fdlg_s_open    equ fdlg_s_topen  ; the button and the title are one string
 fdlg_s_save:   db 'Save', 0
 fdlg_s_cancel: db 'Cancel', 0
-fdlg_s_drive:  db 'Drive', 0
+                                ; fdlg_s_drive is DEFINED IN driver.inc, as
+                                ; the tail of drv_t_hdd's 'Hard Drive' - a
+                                ; forward reference, and .text either side
 fdlg_s_newf:   db 'New', 0      ; the two-line New Folder button (FD_BH2)
-fdlg_s_newf2:  db 'Folder', 0
+fdlg_s_newf2   equ fm_s_folder  ; ...whose second line, the Disk window's
+                                ; derived title and this module's own
+                                ; sub-folder label are one 'Folder',0 in
+                                ; files.inc - all three .text = KERNEL_SEG
 fdlg_s_lopen:  db 'Open:', 0
 fdlg_s_lsave:  db 'Save as:', 0
 fdlg_s_lfold:  db 'Folder:', 0 ; 8 glyphs is what fits before the box
 fdlg_s_folder: db 'folder', 0
-fdlg_s_up:     db 'up', 0
-fdlg_s_root:   db 'Disk', 0
-fdlg_s_sub:    db 'Folder', 0
+fdlg_s_root    equ fm_s_root
+fdlg_s_sub     equ fm_s_folder
 fdlg_s_nodisk: db 'no disk', 0
 fdlg_s_drv:    db 'A:', 0        ; the letter is STAMPED per paint (SPEC.md
                                  ; 38.11) - 'A' + [disk_drive], the same
@@ -184,11 +188,128 @@ fdlg_s_drv:    db 'A:', 0        ; the letter is STAMPED per paint (SPEC.md
 ; -----------------------------------------------------------------------------
 fdlg_win:   dw 0
 
+%ifdef FDLG_MOD
+FD_NENT     equ 7               ; entries FDLG.DRV publishes (SPEC.md 2.8).
+FDE_OPEN    equ 0               ; SEVEN and not nine: fdlg_onup and fdlg_ondrag
+FDE_PAINT   equ 1               ; are SPEC.md 13.10.5's thumb drag and already
+FDE_ONKEY   equ 2               ; kern_big's alone, so this build has neither
+FDE_ONCLICK equ 3
+FDE_REAP    equ 4
+FDE_GRAB    equ 5
+FDE_TOP     equ 6
+FDFP        equ mod_fp + MOD_FDLG*MODFP_STRIDE   ; this module's slot block
+%endif
+
+; =============================================================================
+; TWO SHAPES, ONE SOURCE - SPEC.md 22.3.0.1's three rules, second consumer
+; =============================================================================
+; kern_big keeps every body below resident in `.cold`, unchanged to the byte.
+; kern_small emits them into `.modd`, which tools/os88mod.py cuts out as
+; FDLG.DRV and mod_need reads back when the user opens a file dialog.
+;
+; The rules are SPEC.md 22.3.0.1's and filecp.inc is the worked example:
+; ONE conditional `section` with the module arm LAST, NO %ifdef inside a body,
+; and NO macro that ENDS a path. What is different here is the exits: this
+; file's entries return BOTH ways - fdlg_open and fdlg_paint near, the other
+; five far - so the header points a far-returning body at ITSELF and wraps a
+; near-returning one in `call/retf`.
+;
+;   FDBODY  the label a body carries: `fdlg_open_x` resident, `fdlg_open_x_m`
+;           in the image with a resident stub of the public name in front.
+;   FDX     a call OUT of the image, near on big and `call COLD_SEG:xd_<name>`
+;           on small - COLD_SEG being an assembly-time constant.
+;   FDXF    the resident far entry FDX names, `call <body> / retf`. The
+;           prefix is `xd_` and filecp.inc's is `xf_`: the two blocks share
+;           `.cold` and both wrap dsk_ncopy, so one prefix would be one
+;           label defined twice. All of them
+;           live in ONE block at the foot of this file: `.cold` is one segment,
+;           so an entry there reaches disk.inc's and os88ui.inc's bodies with
+;           an ordinary near call and no other file is touched.
+;   fdk_*   the shared register epilogues. A module may not `jmp kretc_di` -
+;           that is a near `ret` against a far frame - so the image carries its
+;           own ladder. On kern_big they are `equ` ALIASES of kernel.asm's, so
+;           that build pays NOTHING for this: not one byte, not one cycle.
+; =============================================================================
+%ifdef FDLG_MOD
+  %macro FDBODY 1
+%1 %+ _m:
+  %endmacro
+  %macro FDX 1
+    call COLD_SEG:xd_ %+ %1
+  %endmacro
+  %macro FDXF 1
+xd_ %+ %1:
+    call %1
+    retf
+  %endmacro
+%else
+  %macro FDBODY 1
+%1:
+  %endmacro
+  %macro FDX 1
+    call %1
+  %endmacro
+  %macro FDXF 1
+  %endmacro
+%endif
+
+%ifndef FDLG_MOD
 section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
                                 ; segment of its own, so it costs KERN_CODE_MAX
                                 ; nothing. DS is still KERNEL_SEG, so every data
                                 ; reference below is unchanged - and this module's
                                 ; data is all ABOVE, so there is one toggle
+%else
+section .modd                   ; THE ON-DEMAND IMAGE (SPEC.md 2.8). The header
+modd_hdr:                       ; is at offset 0 because vstart is 0 and
+    dw 0x384F                   ; mod_check reads it through ES
+    db MOD_VER
+    db MOD_FDLG
+    dw BUILD_NUM                ; the commit...
+    dw MOD_STAMP                ; ...and this build's LAYOUT
+    dw modd_end                 ; MOD_H_IMG - vstart 0, so the end label IS it
+    dw FD_NENT
+    dw modd_e_open              ; A FAR-RETURNING BODY IS ITS OWN ENTRY and a
+    dw modd_e_paint             ; near-returning one is wrapped: an entry is
+    dw fdlg_onkey_x_m           ; reached by `call far`, so what it ends in has
+    dw fdlg_onclick_x_m         ; to be a `retf`. onkey and onclick leave
+    dw fdlg_reap_x_m            ; through kretfc_dx and reap/grab/top through
+    dw fdlg_grab_x_m            ; their own, so all five already do; open and
+    dw fdlg_top_x_m             ; paint leave near and take the two below
+    times MOD_NENT - FD_NENT dw 0
+
+modd_e_open:    call fdlg_open_x_m
+            retf
+modd_e_paint:   call fdlg_paint_x_m
+            retf
+
+%endif
+
+; --- the shared register epilogues, and they are INSIDE the image -----------
+; Byte for byte kernel.asm's two ladders, which fall through into one another
+; there and do here too. On kern_small they MUST be local: the image is entered
+; by a FAR call, so `jmp kretc_bp` would return through a near `ret` against a
+; four-byte frame - which is why they sit BELOW the section pair and not above
+; it. On kern_big they are 13 bytes of duplication, and they are UNCONDITIONAL
+; rather than `equ` aliases of kernel.asm's because both gates that read this
+; file (tools/os88ovlchk.py, tools/stkbalance.py) read SOURCE and can evaluate
+; no %ifdef: an alias made kernel.asm's own kretc_* look ADDRESSED, so
+; stkbalance walked all five as routines and reported each at its own negative
+; depth. filecp.inc pays the same 7 bytes for the same reason (SPEC.md
+; 22.3.0.1 rule 3).
+fdk_bp:     pop bp
+fdk_di:     pop di
+fdk_si:     pop si
+fdk_dx:     pop dx
+            pop cx
+            pop bx
+            pop ax
+            ret
+fdkf_dx:    pop dx
+            pop cx
+            pop bx
+            pop ax
+            retf
 
 
 ; -----------------------------------------------------------------------------
@@ -207,7 +328,7 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; has had its region freed, and its near callback pointer stops meaning
 ; anything. The window pointer alone would not do - window slots are reused.
 ; -----------------------------------------------------------------------------
-fdlg_open_x:
+FDBODY fdlg_open_x
     push ax
     push bx
     push cx
@@ -216,7 +337,7 @@ fdlg_open_x:
     push di
 
     cmp word [fdlg_win], 0
-    jne .refuse                 ; the gate is a single word on purpose: no
+    jne .ref                    ; the gate is a single word on purpose: no
                                 ; dialog ever opens on top of another
     mov [fdlg_rqcb], di
     mov [fdlg_rqwin], bx
@@ -224,9 +345,12 @@ fdlg_open_x:
 
     call KERNEL_SEG:cw_inst_win_owner ; DI = the owning record, or 0; BX preserved
     or di, di
-    jz .refuse
+    jz .ref
     cmp byte [di+I_STATE], 1
-    jne .refuse
+    je .okrq                    ; ...and all three refusals land on ONE near
+.ref:                           ; jmp: .refuse is 155..186 bytes away and the
+    jmp .refuse                 ; 8086 has no near `jcc`
+.okrq:
     mov [fdlg_rqrec], di
     mov ax, [di+I_SPTR]
     mov [fdlg_rqsp], ax
@@ -271,13 +395,13 @@ fdlg_open_x:
     call KERNEL_SEG:cw_wm_onmouseup ; 13.8.3) and follows the pointer between
     mov ax, fdlg_ondrag         ; the two edges - both are .text thunks,
     call KERNEL_SEG:cw_wm_ondrag ; because this module is .cold and wm_pkgcall
-                                ; dispatches a W_SEG-0 window NEAR
-    mov ax, fdlg_s_topen        ; (AX was the title and is spent above; it is
-    cmp byte [fdlg_mode], 0     ; rebuilt here rather than banked because the
-    je .rt                      ; two stores below want it and a push/pop
-    mov ax, fdlg_s_tsave        ; across two far calls is longer)
-.rt:
-    mov [bx+W_TITLE], ax
+                                ; dispatches a W_SEG-0 window NEAR. NO SECOND
+                                ; W_TITLE store: it used to re-derive the title
+                                ; from [fdlg_mode] and write it again here, and
+                                ; the two calls in between are the whole gap -
+                                ; wm_onmouseup and wm_ondrag are one store and
+                                ; a `ret` each, neither touches W_TITLE and
+                                ; both preserve BX
 %endif
 %ifdef WM_ANIM
     or word [bx+W_FLAGS], WF_NOANIM  ; SPEC.md 11.99.2: modal, and put up and
@@ -292,13 +416,7 @@ fdlg_open_x:
 .refuse:
     stc
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fdk_di
 
 ; -----------------------------------------------------------------------------
 ; fdlg_hidx - the requesting instance's file-home row (internal, SPEC.md 38.10)
@@ -369,7 +487,7 @@ fdlg_home_go:
     push si                     ; the MEDIA lookup below stages an entry
 %ifdef KERN_BIG
     mov bx, fdlg_path           ; the dialog is being PLACED, so it has walked
-    call pth_clear              ; nowhere yet (docs/TITLE-PLAN.md 5). Cleared
+    FDX pth_clear              ; nowhere yet (docs/TITLE-PLAN.md 5). Cleared
                                 ; here rather than in fdlg_open_x because this
                                 ; is what MOVES it, and .bss arrives holding
                                 ; whatever the last dialog left
@@ -386,12 +504,12 @@ fdlg_home_go:
     je .media                   ; the user has chosen no folder for this app
     shl bx, 1                   ; ...otherwise the one they chose
     mov ax, [inst_fcwd+bx]
-    call dsk_chdir_x
+    FDX dsk_chdir_x
     jnc .done
 .cur:
     mov dl, [fdlg_hdrv]
     mov ax, [fdlg_hcwd]
-    call dsk_chdir_x
+    FDX dsk_chdir_x
     jmp short .done
 
     ; --- the default: MEDIA in the root of this instance's drive ---
@@ -401,25 +519,25 @@ fdlg_home_go:
 .media:
     mov [fdlg_idrv], dl         ; banked: the two chdirs below both need it
     xor ax, ax                  ; the root, whose listing names its folders
-    call dsk_chdir_x
+    FDX dsk_chdir_x
     jc .cur                     ; the volume itself will not mount
     mov si, fdlg_s_media
-    call dsk_find_name_x ; AX = its index; no I/O - the snapshot
+    FDX dsk_find_name_x ; AX = its index; no I/O - the snapshot
     jc .done                    ; no MEDIA here: this root IS the answer, and
                                 ; it is still an answer nothing drifted into
-    call dsk_get_dir_x ; SI -> the staged entry (SPEC.md 19)
+    FDX dsk_get_dir_x ; SI -> the staged entry (SPEC.md 19)
     cmp word [si+16], 2         ; a folder, not a FILE called MEDIA
     jb .done
     mov ax, [si+18]             ; its first cluster
     or ax, ax
     jz .done                    ; 0 is the root: not a folder to enter
     mov dl, [fdlg_idrv]
-    call dsk_chdir_x
+    FDX dsk_chdir_x
     jc .cur
 %ifdef KERN_BIG
     mov bx, fdlg_path           ; the ONE default that can be named: the
     mov si, fdlg_s_media        ; dialog really did walk into MEDIA, and BX
-    call pth_push               ; and SI are both saved by the prologue above
+    FDX pth_push               ; and SI are both saved by the prologue above
 %endif
 .done:
     pop si
@@ -529,16 +647,8 @@ fdlg_home_save:
     add di, ax
     mov si, fdlg_name
     mov cx, INST_FNSZ - 1
-.cp:
-    mov al, [si]
-    mov [di], al
-    or al, al
-    jz .out
-    inc si
-    inc di
-    loop .cp
-    mov byte [di], 0            ; a name that filled the row still terminates
-.out:
+    FDX fm_ncpy                ; bounded, always terminated (SPEC.md 4) - a
+.out:                           ; name that filled the row still ends in NUL
     pop di
     pop si
     pop cx
@@ -600,7 +710,7 @@ fdlg_gate:
 ; it once per UI pass costs three instructions when no dialog is up and
 ; makes both effects immediate.
 ; -----------------------------------------------------------------------------
-fdlg_reap_x:
+FDBODY fdlg_reap_x
     cmp word [fdlg_win], 0
     je .out
     push ax
@@ -624,7 +734,7 @@ fdlg_reap_x:
 ; through to the ordinary ladder, which is where its title-bar drag and its
 ; content clicks come from for free.
 ; -----------------------------------------------------------------------------
-fdlg_grab_x:
+FDBODY fdlg_grab_x
     push ax
     push bx
     xor al, al                  ; no lock held
@@ -662,7 +772,7 @@ fdlg_grab_x:
 ; every click outside it is being swallowed - but ten bytes is a cheap price
 ; for a keystroke never reaching the window behind.
 ; -----------------------------------------------------------------------------
-fdlg_top_x:
+FDBODY fdlg_top_x
     push ax
     push cx
     mov cx, bx                  ; keep wm_top's answer: fdlg_gate zeroes BX
@@ -703,13 +813,7 @@ fdlg_close:
     call KERNEL_SEG:cw_menu_activate
     call KERNEL_SEG:cw_menu_draw_bar
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fdk_di
 
 ; -----------------------------------------------------------------------------
 ; fdlg_commit - close, then answer the application (SPEC.md 38.6/38.7)
@@ -791,13 +895,7 @@ fdlg_commit:
     pop es
     pop word [snd_inst]         ; the outer dispatch's stamp, back
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fdk_di
 
 ; -----------------------------------------------------------------------------
 ; fdlg_setname - store a name in the box (internal)
@@ -894,48 +992,21 @@ fdlg_rows:
 ; -----------------------------------------------------------------------------
 fdlg_sizeof:
     push ax
-    push bx
     push si
     push di
     xor cx, cx                  ; the not-found answer
     xor dx, dx
-    call fdlg_rows              ; AX = how many entries this listing has
-    or ax, ax
-    jz .out
-    mov bx, ax
-    xor ax, ax
-.each:
-    call fdlg_stage             ; fdlg_row / fdlg_type / fdlg_size
-    cmp word [fdlg_type], 2     ; a folder has no size to report
-    jae .next
-    push ax
-    mov si, fdlg_row            ; case-sensitive is right: both sides are the
-    mov di, fdlg_name           ; mount's own 8.3 display form (SPEC.md 19)
-.cmp:
-    mov al, [si]
-    cmp al, [di]
-    jne .nomatch
-    or al, al
-    jz .match
-    inc si
-    inc di
-    jmp short .cmp
-.nomatch:
-    pop ax
-    jmp short .next
-.match:
-    pop ax
-    mov cx, [fdlg_size]
-    mov dx, [fdlg_sizeh]
-    jmp short .out
-.next:
-    inc ax
-    cmp ax, bx
-    jb .each
+    mov si, fdlg_name           ; case-sensitive is right: both sides are the
+    FDX dsk_find_name_x        ; mount's own 8.3 display form (SPEC.md 19),
+    jc .out                     ; and THIS IS THE SAME LISTING WALK the module
+    FDX dsk_get_dir_x          ; already borrows for fdlg_findname - it was
+    cmp word [si+16], 2         ; fdlg_rows, fdlg_stage per entry and a compare
+    jae .out                    ; loop, to read a size out of the entry it had
+    mov cx, [si+20]             ; just staged. A folder has no size to report;
+    mov dx, [si+22]             ; the size dword is at offsets 20/22
 .out:
     pop di
     pop si
-    pop bx
     pop ax
     ret
 
@@ -950,14 +1021,19 @@ fdlg_stage:
     push bx
     push cx
     push si
-    call dsk_get_dir_x ; SI -> the staged 32-byte entry (SPEC.md 19)
+    FDX dsk_get_dir_x ; SI -> the staged 32-byte entry (SPEC.md 19)
     mov bx, fdlg_row
     mov cx, 16
 .copy:
-    lodsb                       ; DF=0 on entry per SPEC.md 1
-    mov [bx], al
-    inc bx
-    loop .copy
+    mov al, [si]                ; NOT `lodsb`, and SPEC.md 2.8.6 is why: a
+    inc si                      ; module's own data is CS-relative, so
+    mov [bx], al                ; tools/os88ovlchk.py refuses a `lods` in an
+    inc bx                      ; image outright rather than judging each one.
+    loop .copy                  ; This read is legitimate - dsk_get_dir hands
+                                ; back a pointer into the KERNEL and DS is
+                                ; KERNEL_SEG here - but saying so explicitly
+                                ; costs one byte and keeps the gate absolute,
+                                ; which is worth more than the byte
     mov byte [fdlg_row+16], 0
     mov ax, [si]                ; SI has advanced to offset 16: the type...
     mov [fdlg_type], ax
@@ -1000,13 +1076,11 @@ fdlg_nextvol:
     xor dl, dl
 .test:
     mov bl, dl
-    mov bh, 0
-    shl bx, 1
-    shl bx, 1
-    shl bx, 1
-    shl bx, 1                   ; * DV_SIZE (16), the dsk_vol_slot shift
-    cmp byte [dsk_vtab+bx+DV_KIND], DVK_FREE
+    FDX dsk_vol_slot_x         ; ...which IS this shift, and the one place
+    jc .skip                    ; DV_SIZE is encoded (disk.inc)
+    cmp byte [bx+DV_KIND], DVK_FREE
     jne .out
+.skip:
     dec cl
     jnz .next
     mov dl, [disk_drive]        ; unreachable while A: and B: are permanent
@@ -1036,7 +1110,7 @@ fdlg_nextvol:
 ; -----------------------------------------------------------------------------
 fdlg_go:
     push ax
-    call dsk_chdir_x
+    FDX dsk_chdir_x
     jc .moved                   ; a FAILED mount lands at the root of the
     call fdlg_home_dir          ; drive it tried with the gate shut - not a
 .moved:                         ; folder to bring an app back to
@@ -1045,7 +1119,7 @@ fdlg_go:
     jne .haspath                ; so the dialog is in nothing it walked into.
     push bx                     ; files.inc's rule in the other module: the
     mov bx, fdlg_path           ; ONE clear site, so a new way of ending at a
-    call pth_clear              ; root cannot forget to
+    FDX pth_clear              ; root cannot forget to
     pop bx
 .haspath:
 %endif
@@ -1099,11 +1173,7 @@ fdlg_setsel:
 .store:
     mov [fdlg_scrl], cx
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fdk_dx
 .none:
     mov word [fdlg_sel], 0xFFFF
     jmp short .out
@@ -1114,8 +1184,8 @@ fdlg_setsel:
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 fdlg_clamp:
-    push ax
-    push cx
+    push ax                     ; NOT CX: fdlg_rows is `mov ax,[disk_nfiles] /
+                                ; ret` and nothing else here names it
     cmp word [fdlg_scrl], 0x8000    ; a decrement below zero wrapped: the
     jb .top                         ; floor is tested FIRST, or the wrapped
     mov word [fdlg_scrl], 0         ; value would clamp to the ceiling and
@@ -1129,7 +1199,6 @@ fdlg_clamp:
     jbe .out
     mov [fdlg_scrl], ax
 .out:
-    pop cx
     pop ax
     ret
 
@@ -1167,31 +1236,16 @@ fdlg_icon:
     push si
     add cx, [fdlg_cx]           ; content-relative -> absolute
     add dx, [fdlg_cy]
-    call dsk_get_icon_x ; SI -> the staged 64-byte body
-    mov bx, si
-    push cx
-    xor ax, ax
-    mov cx, 32
-.orw:
-    or ax, [bx]
-    inc bx
-    inc bx
-    loop .orw
-    pop cx
-    or ax, ax
-    jz .generic
+    FDX dsk_get_icon_x ; SI -> the staged 64-byte body
+    FDX fm_icon_blank          ; ZF=1 = the 32 words OR to 0 - files.inc's,
+    jz .generic                 ; `.cold` like this, so the call is near
     call KERNEL_SEG:cw_icon_draw16 ; a harvested, folder or composed body
     jmp short .out
 .generic:
     mov si, ico_app16           ; nothing earned one: the built-in
     call KERNEL_SEG:cw_icon_draw
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fdk_si
 
 ; -----------------------------------------------------------------------------
 ; fdlg_text - draw a string at a content-relative point (internal)
@@ -1276,7 +1330,6 @@ fdlg_actok:
                                ; before files.inc, which is included first;
                                ; kernel.asm carries it beside WM_ANIM and
                                ; OS88_THEME and says why
-%include "os88ui.inc"
 
 ; -----------------------------------------------------------------------------
 ; fdlg_defbtn - draw the default button (Open / Save) in the right pen
@@ -1293,10 +1346,9 @@ fdlg_defbtn:
     mov si, fdlg_s_save
 .lbl:
     call fdlg_actok
-    mov al, 0
-    adc al, 0                   ; AL = 1 refused, 0 live - and note ADC WRITES
-    mov [fdlg_actl], al         ; CF, so the carry the gate answered in is
-    mov ah, al                  ; gone by here, which is why the answer is
+    sbb al, al                  ; AL = 0xFF refused, 0 live - and note SBB
+    mov [fdlg_actl], al         ; WRITES CF, so the carry the gate answered in
+    mov ah, al                  ; is gone by here, which is why the answer is
                                 ; carried as a VALUE from here on rather than
                                 ; re-read from the flag (it used to be passed
                                 ; to gfx_pen_cf and drew the button live every
@@ -1349,12 +1401,13 @@ fdlg_defbtn:
 ; nothing can change what they say - so an erase there is a gfx_fill nobody
 ; needs. The default button is the exception because its state moves.
 ; -----------------------------------------------------------------------------
+
+; -----------------------------------------------------------------------------
 fdlg_btn:
-    push ax
-    push bx
+    push ax                     ; NOT SI: fdlg_off writes AX..DX only and
+    push bx                     ; os88ui_btn banks it
     push cx
     push dx
-    push si
     push di
     mov di, ax                  ; DI = the two flag bytes; AX is about to be a
                                 ; rect corner
@@ -1363,10 +1416,7 @@ fdlg_btn:
     mov dx, bx
     add dx, FD_BH
     call fdlg_off               ; AX..DX = the inclusive SCREEN rect
-    mov [os88ui_krect+0], ax
-    mov [os88ui_krect+2], bx
-    mov [os88ui_krect+4], cx
-    mov [os88ui_krect+6], dx
+    FDX ui_krect4              ; ...staged whole
     mov ax, di
     or ah, ah                   ; AL is already the flag word; the greying is
     jz .live                    ; the one bit that arrived separately
@@ -1375,9 +1425,8 @@ fdlg_btn:
     xor ah, ah
     mov di, ax
     mov bx, os88ui_krect
-    call os88ui_btn
+    FDX os88ui_btn
     pop di
-    pop si
     pop dx
     pop cx
     pop bx
@@ -1421,15 +1470,11 @@ fdlg_btn2:
     dec cx
     dec dx
     call KERNEL_SEG:cw_gfx_fill
-    pop ax
+    dec ax                      ; ...and the inset UNDONE for the frame, which
+    dec bx                      ; is the same rect: gfx_fill's own header says
+    inc cx                      ; "clobbers: flags", so AX-DX come back
+    inc dx
     mov byte [gfx_color], CBLACK
-    push ax
-    mov ax, FD_BX1
-    mov bx, bp
-    mov cx, FD_BX2
-    mov dx, bp
-    add dx, FD_BH2
-    call fdlg_off
     call KERNEL_SEG:cw_gfx_frame
     pop ax
     test al, OS88UI_DOWN        ; ...and the two captions in white over it
@@ -1446,14 +1491,7 @@ fdlg_btn2:
     call fdlg_blabel
     mov byte [fdlg_paper], CWHITE   ; UNCONDITIONALLY, so the up path cannot
                                     ; leave it black for the next caller
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fdk_bp
 
 ; -----------------------------------------------------------------------------
 ; fdlg_blabel - one line of button text, centred in the button column
@@ -1461,10 +1499,9 @@ fdlg_btn2:
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 fdlg_blabel:
-    push ax
-    push cx
-    push si
-    call KERNEL_SEG:cw_font_width ; AX = 8 * length
+    push ax                     ; NOT SI: font_width clobbers nothing else and
+    push cx                     ; fdlg_text preserves everything
+    call KERNEL_SEG:font_width ; AX = 8 * length
     mov cx, FD_BX2-FD_BX1+1
     sub cx, ax
     jns .pad                    ; a label wider than the button would make the
@@ -1473,7 +1510,6 @@ fdlg_blabel:
     shr cx, 1
     add cx, FD_BX1              ; centered in the 63px rect
     call fdlg_text
-    pop si
     pop cx
     pop ax
     ret
@@ -1483,7 +1519,7 @@ fdlg_blabel:
 ; in:  SI = window ptr; content already white-filled, gfx lock held
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
-fdlg_paint_x:
+FDBODY fdlg_paint_x
     push ax
     push bx
     push cx
@@ -1512,7 +1548,7 @@ fdlg_paint_x:
 %ifdef KERN_BIG
     push bx                     ; the folder's own name, when the dialog
     mov bx, fdlg_path           ; walked here (docs/TITLE-PLAN.md 5). The pen
-    call pth_leaf               ; is x=30 and the list frame starts at
+    FDX pth_leaf               ; is x=30 and the list frame starts at
     pop bx                      ; FD_LX2=213, so 22 cells are free and the
     or si, si                   ; longest 8.3 name needs 12 - measured before
     jnz .place                  ; it was allowed here, not after
@@ -1523,9 +1559,8 @@ fdlg_paint_x:
     jne .hdr                    ; an empty folder that is not empty
     mov si, fdlg_s_nodisk
 .hdr:
-    mov cx, 30
-    mov dx, 6
-    call fdlg_text
+    mov cx, 30                  ; DX is still 6, from the drive letter sixteen
+    call fdlg_text              ; lines up - a real coupling, said out loud
 
     ; --- the list frame ---
     mov ax, FD_LX1
@@ -1542,17 +1577,17 @@ fdlg_paint_x:
     ; of a gesture draws the held button held (SPEC.md 13.8.3). Open-coding
     ; the four here again is what would let the full paint and the two edges
     ; disagree about what is pressed.
-    mov ax, 1
-    call fdlg_btn1              ; Open / Save, greyed when it would refuse
-    mov ax, 2
-    call fdlg_btn1              ; Cancel
-    mov ax, 3
-    call fdlg_btn1              ; Drive
-    cmp byte [fdlg_mode], 0     ; New Folder is a SAVE-mode button: opening a
-    je .nonewf                  ; file has no use for one, and the fourth
-    mov ax, 4                   ; frame would be clutter in the common case
-    call fdlg_btn1
-.nonewf:
+    mov cx, 3                   ; Open/Save (greyed when it would refuse),
+    cmp byte [fdlg_mode], 0     ; Cancel, Drive - and New Folder is a
+    je .three                   ; SAVE-mode button: opening a file has no use
+    inc cx                      ; for one and the fourth frame would be
+.three:                         ; clutter in the common case. The MODE decides
+    mov ax, 1                   ; the count, so it sets the limit rather than
+.btn:                           ; guarding a fourth copy of the call
+    call fdlg_btn1              ; (which preserves AX and CX)
+    inc ax
+    cmp ax, cx
+    jbe .btn
 
     ; --- the name box ---
     mov si, fdlg_s_lopen
@@ -1576,14 +1611,7 @@ fdlg_paint_x:
     call KERNEL_SEG:cw_gfx_frame
     call fdlg_name_body
 
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fdk_bp
 
 ; =============================================================================
 ; Partial redraws - what a keystroke actually changes (SPEC.md 38.8)
@@ -1626,17 +1654,15 @@ fdlg_draw_name:
     call KERNEL_SEG:cw_gfx_fill
     call fdlg_name_body
     call fdlg_actok             ; typing the first character, or deleting the
-    mov al, 0                   ; last one, makes the default button live or
-    adc al, 0                   ; dead - and this is the only path a keystroke
-    cmp al, [fdlg_actl]         ; takes. Redrawn on the EDGE only: every caret
+    sbb al, al                  ; last one, makes the default button live or
+                                ; dead - and this is the only path a keystroke
+    cmp al, [fdlg_actl]         ; takes. THE SAME ENCODING as fdlg_defbtn's,
+                                ; which is what this compares against.
+                                ; Redrawn on the EDGE only: every caret
     je .out                     ; move comes through here too, and a frame
     call fdlg_defbtn            ; plus a label per keypress is real money on
 .out:                           ; the machines this has to run on
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fdk_dx
 
 fdlg_name_body:
     push ax
@@ -1664,12 +1690,7 @@ fdlg_name_body:
     add dx, [fdlg_cy]
     call KERNEL_SEG:cw_gfx_vline ; AX = x, BX = y1, DX = y2
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fdk_si
 
 ; -----------------------------------------------------------------------------
 ; fdlg_list_body / fdlg_draw_list - the listing and its scroll bar
@@ -1689,17 +1710,12 @@ fdlg_draw_list:
     call fdlg_off
     call KERNEL_SEG:cw_gfx_fill
     call fdlg_list_body
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fdk_dx
 
 fdlg_list_body:
     call fdlg_clamp
     call fdlg_draw_rows
-    call fdlg_draw_sbar
-    ret
+    jmp fdlg_draw_sbar          ; tail call, both ends `.cold`
 
 ; -----------------------------------------------------------------------------
 ; fdlg_draw_both - a selection move: the listing scrolled AND the box took the
@@ -1709,8 +1725,7 @@ fdlg_list_body:
 ; -----------------------------------------------------------------------------
 fdlg_draw_both:
     call fdlg_draw_list
-    call fdlg_draw_name
-    ret
+    jmp fdlg_draw_name          ; tail call, both ends `.cold`
 
 ; -----------------------------------------------------------------------------
 ; fdlg_draw_rows - the visible rows plus the selection bar (internal)
@@ -1771,11 +1786,11 @@ fdlg_draw_rows:
     mov dx, [fdlg_sizeh]
     push di
     mov di, fdlg_num
-    call fm_ultoa_x             ; the full dword (SPEC.md 19)
+    FDX fm_ultoa_x             ; the full dword (SPEC.md 19)
     pop di
     mov si, fdlg_num
 .right:
-    call KERNEL_SEG:cw_font_width ; AX = the string's width
+    call KERNEL_SEG:font_width ; AX = the string's width
     mov cx, 196
     sub cx, ax                  ; right-aligned, clear of the scroll bar
     mov dx, bp
@@ -1789,14 +1804,7 @@ fdlg_draw_rows:
     mov ax, [fdlg_sel]          ; the selection bar, drawn by the same proc a
     call fdlg_sel_bar           ; selection CHANGE uses (SPEC.md 22.2/38.3)
 .out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fdk_bp
 
 ; -----------------------------------------------------------------------------
 ; fdlg_sel_bar - XOR the selection band for ONE display row
@@ -1839,11 +1847,7 @@ fdlg_sel_bar:
     call fdlg_off
     call KERNEL_SEG:cw_gfx_xor_fill
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fdk_dx
 
 ; -----------------------------------------------------------------------------
 ; fdlg_sbset - fill os88ui_ksb with this dialog's bar (internal)
@@ -1857,17 +1861,15 @@ fdlg_sel_bar:
 ; -----------------------------------------------------------------------------
 fdlg_sbset:
     push ax
-    mov ax, [fdlg_cx]
-    add ax, FD_SBX
-    mov [os88ui_ksb+0], ax
-    mov ax, [fdlg_cx]
-    add ax, FD_LX2
+    mov ax, [fdlg_cx]           ; the second corner CHAINS off the first: both
+    add ax, FD_SBX              ; deltas are imm8, so the add stays three
+    mov [os88ui_ksb+0], ax      ; bytes where the reload was six
+    add ax, FD_LX2-FD_SBX
     mov [os88ui_ksb+4], ax
     mov ax, [fdlg_cy]
     add ax, FD_LY1
     mov [os88ui_ksb+2], ax
-    mov ax, [fdlg_cy]
-    add ax, FD_LY2
+    add ax, FD_LY2-FD_LY1
     mov [os88ui_ksb+6], ax
     call fdlg_rows
     mov [os88ui_ksb+8], ax      ; total
@@ -1876,7 +1878,7 @@ fdlg_sbset:
     mov [os88ui_ksb+12], ax
     mov bx, os88ui_ksb
 %ifdef OS88UI_SBDRAG
-    call os88ui_sbfix           ; ...and while a thumb drag is live ON THIS
+    FDX os88ui_sbfix           ; ...and while a thumb drag is live ON THIS
                                 ; BAR, word 6 is the HAND's pos rather than
                                 ; the view's (SPEC.md 13.10.5.6)
 %endif
@@ -1896,7 +1898,7 @@ fdlg_sbset:
 fdlg_draw_sbar:
     push bx
     call fdlg_sbset
-    call os88ui_sbar
+    FDX os88ui_sbar
     pop bx
     ret
 
@@ -1914,24 +1916,12 @@ fdlg_repaint:
     push bx
     push cx
     push dx
-    mov bx, si
-    call KERNEL_SEG:cw_wm_content ; AX = x1, DX = y1
-    mov cx, [bx+W_X]
-    add cx, [bx+W_W]
-    sub cx, 2                   ; CX = x2
-    push dx
-    mov dx, [bx+W_Y]
-    add dx, [bx+W_H]
-    sub dx, 2                   ; DX = y2
-    pop bx                      ; BX = y1
-    mov byte [gfx_color], CWHITE
-    call KERNEL_SEG:cw_gfx_fill
-    call fdlg_paint_x           ; SI is still the window
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    FDX fm_cfill               ; files.inc's, and this was its twelve
+                                ; instructions to the byte (the Note Pad idiom)
+    FDX fdlg_paint_x            ; SI is still the window - and OUT through the
+                                ; resident stub on kern_small, which is the
+                                ; public name there and re-enters the image
+    jmp fdk_dx
 
 ; -----------------------------------------------------------------------------
 ; fdlg_act - the default action: the Open/Save button, or Enter
@@ -2029,7 +2019,7 @@ fdlg_newfolder:
     cmp byte [fdlg_nlen], 0
     je .beep                    ; an empty name is not a folder name
     mov si, fdlg_name
-    call dskw_mkdir_x           ; CF=1 with AX = FERR_*; on success it has
+    FDX dskw_mkdir_x           ; CF=1 with AX = FERR_*; on success it has
     jc .beep                    ; already remounted (SPEC.md 18.5), so the
     mov si, fdlg_name           ; listing below is the fresh one
     call fdlg_findname          ; AX = its first cluster, CF=1 = not found
@@ -2045,11 +2035,7 @@ fdlg_newfolder:
     pop di                      ; every other refusal in this dialog gives.
     pop si                      ; SI first: the folder work above pointed it
     call fdlg_repaint           ; at fdlg_name, and fdlg_repaint wants the
-    pop dx                      ; WINDOW - through the name it silently draws
-    pop cx                      ; nothing and the dialog shows a stale screen
-    pop bx                      ; while the volume really has moved. The
-    pop ax                      ; repaint is here and not at the call sites
-    ret                         ; because both halves of the button change
+    jmp fdk_dx
                                 ; what the box says, and one of the two ways
                                 ; in (Enter, through fdlg_act) has none
 
@@ -2083,98 +2069,39 @@ fdlg_unfold:
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 fdlg_ncopy:
-    push ax
-    push cx
-    push si
-    push di
-    mov cx, 16
-.b:
-    mov al, [si]
-    mov [di], al
-    inc si
-    inc di
-    loop .b
-    pop di
-    pop si
-    pop cx
-    pop ax
+    push cx                     ; CX and not just the loop: fdlg_unfold banks
+    mov cx, 16                  ; AX, SI and DI while documenting "all
+    FDX dsk_ncopy              ; registers preserved", so this is where CX
+    pop cx                      ; has to be kept. disk.inc owns the loop
     ret
 
 ; -----------------------------------------------------------------------------
 ; fdlg_findname - the first cluster of the directory named SI, in this listing
-; in:  SI = a NUL 8.3 name; the volume already listed
+; in:  SI = a NUL 8.3 name; the volume already listed. That was a LIE until
+;      this became dsk_find_name's caller - the old body overwrote SI with
+;      fdlg_name, and its one caller happens to pass exactly that
 ; out: CF=0 with AX = its first cluster; CF=1 = no such folder
 ; clobbers: AX (the output), CF
 ; -----------------------------------------------------------------------------
 fdlg_findname:
-    push bx
-    push cx
-    push dx
     push si
-    push di
-    mov cx, [disk_nfiles]
-    jcxz .no
-    xor bx, bx                  ; BX = entry index
-.scan:
-    push cx
-    push bx
-    mov ax, bx
-    call dsk_get_dir_x ; SI -> the staged entry: name, then the type
-    cmp word [si+16], 2         ; word at +16 and the first cluster at +18
-    jne .next                   ; (SPEC.md 19) - only a folder can match
-    mov di, si
-    mov si, fdlg_name
-    call fdlg_streq             ; CF=0 = same name
-    jc .next
-    pop bx
-    pop cx
-    mov ax, bx
-    call dsk_get_dir_x
-    mov ax, [si+18]
-    clc
+    FDX dsk_find_name_x        ; AX = the index; CF=1 = no such entry. THE
+    jc .out                     ; SYSTEM STANDARD, and disk.inc's own header
+    FDX dsk_get_dir_x          ; names this caller. fdlg_home_go does exactly
+    cmp word [si+16], 2         ; this seventeen hundred lines above; here it
+    jb .no                      ; was a hand-rolled walk that staged the found
+    mov ax, [si+18]             ; entry a SECOND time to read its cluster
+    clc                         ;
+.out:                           ; The old walk only ever matched a FOLDER and
+    pop si                      ; this matches any entry, then rejects a file
+    ret                         ; on the `jb` - and a FAT directory cannot
+.no:                            ; hold both names, the caller having just made
+    stc                         ; the folder with dskw_mkdir_x and remounted
     jmp short .out
-.next:
-    pop bx
-    pop cx
-    inc bx
-    loop .scan
-.no:
-    stc
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
 
-; -----------------------------------------------------------------------------
-; fdlg_streq - do the NUL strings at DS:SI and DS:DI match? (internal)
-; out: CF=0 = equal; preserves all registers
-; -----------------------------------------------------------------------------
-fdlg_streq:
-    push ax
-    push si
-    push di
-.c:
-    mov al, [si]
-    cmp al, [di]
-    jne .no
-    or al, al
-    jz .yes
-    inc si
-    inc di
-    jmp short .c
-.no:
-    stc
-    jmp short .out
-.yes:
-    clc
-.out:
-    pop di
-    pop si
-    pop ax
-    ret
+; dsk_streq is disk.inc's, and it is the body this used to carry: three
+; modules compare two NUL strings in the kernel segment and disk.inc is the
+; first `.cold` %include, so every one of them reaches it backwards.
 
 ; -----------------------------------------------------------------------------
 ; fdlg_dive - enter the staged row's directory and repaint (internal)
@@ -2192,7 +2119,7 @@ fdlg_dive:
     push dx
     push si
     mov ax, [fdlg_sel]
-    call dsk_get_dir_x ; SI -> the staged entry
+    FDX dsk_get_dir_x ; SI -> the staged entry
     mov ax, [si+18]             ; its first cluster (SPEC.md 19)
 %ifdef KERN_BIG
     push ax                     ; ...and the NAME, while the staged entry is
@@ -2200,10 +2127,10 @@ fdlg_dive:
     mov bx, fdlg_path           ; mount rebuilds dsk_ent - the same trap
     cmp word [si+16], 3         ; fm_open_sel banks its own two values against
     je .updir                   ; 3 = the parent link (19.5): the way UP
-    call pth_push               ; SI -> the entry's 16-byte name field
+    FDX pth_push               ; SI -> the entry's 16-byte name field
     jmp short .pdone
 .updir:
-    call pth_pop                ; ...which is where the name comes BACK from
+    FDX pth_pop                ; ...which is where the name comes BACK from
 .pdone:
     pop bx
     pop ax
@@ -2228,7 +2155,7 @@ fdlg_dive:
 ; goes through diskw.inc's own dskw_char, so the box shows exactly the bytes
 ; that will be stored - the SPEC.md 22 rule, for the same reason.
 ; -----------------------------------------------------------------------------
-fdlg_onkey_x:
+FDBODY fdlg_onkey_x
     push ax
     push bx
     push cx
@@ -2246,16 +2173,32 @@ fdlg_onkey_x:
     je .cancel
     cmp al, 13
     je .enter
-    cmp ah, 0x48                ; Up
-    je .kup
-    cmp ah, 0x50                ; Down
-    je .kdn
-    cmp ah, 0x49                ; PgUp
-    je .kpgup
-    cmp ah, 0x51                ; PgDn
-    je .kpgdn
+    ; THE FOUR LIST KEYS ARE ONE EXPRESSION. Up is 0x48, PgUp 0x49, Down
+    ; 0x50, PgDn 0x51 - subtract 0x48 and the residues are 0, 1, 8 and 9, so
+    ; bit 0 says "a PAGE" and bit 3 says "DOWNWARD". Every other scan code
+    ; leaves a bit outside {1,8} set, checked exhaustively over all 256:
+    ; 0x47 Home, 0x4B/0x4D Left/Right, 0x4F End, 0x52 Ins and 0x53 Del are
+    ; all rejected, which is what the second ladder below needs. It has to
+    ; stay HERE, after the AL tests, or a key with AL=27 and one of those
+    ; scans would change meaning.
+    mov bl, ah
+    sub bl, 0x48
+    test bl, 0xF6
+    jnz .noarrow
+    mov ax, 1
+    test bl, 1                  ; ...a page, or one row
+    jz .kmag
+    mov ax, FD_ROWS
+.kmag:
+    test bl, 8                  ; ...downward, or up
+    jnz .ksign
+    neg ax
+.ksign:
+    add ax, [fdlg_sel]
+    jmp .move                   ; NEAR: .move is at the far end of the routine
+.noarrow:
     cmp byte [fdlg_mode], 0
-    je .out                     ; Open mode: nothing else is typing
+    je .outj                     ; Open mode: nothing else is typing
     or al, al
     jnz .typing                 ; an EXTENDED key has AL = 0. The numeric
     cmp ah, 0x4B                ; keypad sends '4' '6' '7' '1' '.' with these
@@ -2272,25 +2215,31 @@ fdlg_onkey_x:
     cmp al, 8
     je .bksp
     cmp al, 32
-    jb .out
+    jb .outj
 
     mov bl, [fdlg_nlen]
     xor bh, bh
     cmp bl, FD_NAMEMAX
-    jae .out
+    jae .outj
     cmp al, '.'
     jne .plain
     cmp byte [fdlg_ncur], 0
-    je .out                     ; a short name may not start with the dot...
-    call fdlg_hasdot
-    jc .out                     ; ...and may not carry a second one
+    je .outj                     ; a short name may not start with the dot...
+    FDX fdlg_hasdot
+    jc .outj                     ; ...and may not carry a second one
     jmp short .store
 .plain:
-    call dskw_char_x            ; upper-cases, CF = 1 = not in the FAT set
+    FDX dskw_char_x            ; upper-cases, CF = 1 = not in the FAT set
     jc .out
 .store:
     call fdlg_nins              ; at the caret, which moves past it
     jmp .rname
+.outj:                          ; a trampoline, on a path nothing falls into:
+    jmp .out                    ; .out is at the end of a 300-byte routine and
+                                ; the five tests above are 130..230 bytes short
+                                ; of reaching it. The 8086 has no near `jcc`,
+                                ; so each of them was NASM's inverted-short
+                                ; plus near-jmp, five bytes
 
 .bksp:
     cmp byte [fdlg_ncur], 0
@@ -2321,21 +2270,6 @@ fdlg_onkey_x:
     mov [fdlg_ncur], al
     jmp short .rname
 
-.kup:
-    mov ax, [fdlg_sel]
-    dec ax
-    jmp short .move
-.kdn:
-    mov ax, [fdlg_sel]
-    inc ax
-    jmp short .move
-.kpgup:
-    mov ax, [fdlg_sel]
-    sub ax, FD_ROWS
-    jmp short .move
-.kpgdn:
-    mov ax, [fdlg_sel]
-    add ax, FD_ROWS
 .move:
     cmp word [fdlg_sel], 0xFFFF
     jne .setsel
@@ -2367,11 +2301,7 @@ fdlg_onkey_x:
     call fdlg_repaint
 .out:
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    retf
+    jmp fdkf_dx                ; the shared far-cold epilogue (kernel.asm)
 
 ; -----------------------------------------------------------------------------
 ; fdlg_nins - insert AL at the caret, which then sits after it (internal)
@@ -2403,11 +2333,7 @@ fdlg_nins:
     mov [bx+fdlg_name], dl
     inc byte [fdlg_nlen]
     inc byte [fdlg_ncur]
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fdk_dx
 
 ; -----------------------------------------------------------------------------
 ; fdlg_ndel - delete the character the caret sits in front of (internal)
@@ -2433,32 +2359,6 @@ fdlg_ndel:
 .out:
     pop bx
     pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; fdlg_hasdot - does the name being typed already carry a '.'? (internal)
-; in:  nothing
-; out: CF = 1 = yes. Preserves all registers.
-; -----------------------------------------------------------------------------
-fdlg_hasdot:
-    push ax
-    push si
-    mov si, fdlg_name
-.scan:
-    mov al, [si]
-    or al, al
-    jz .no
-    inc si
-    cmp al, '.'
-    jne .scan
-    pop si
-    pop ax
-    stc
-    ret
-.no:
-    pop si
-    pop ax
-    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2508,10 +2408,10 @@ fdlg_onup_x:
     push di
     call fdlg_pt                ; CX = content y, DX = content x
 %ifdef OS88UI_SBDRAG
-    call os88ui_sbdragging      ; SPEC.md 13.10.5: the release COMMITS, and
+    FDX os88ui_sbdragging      ; SPEC.md 13.10.5: the release COMMITS, and
     jc .btn                     ; unconditionally - a position the rate refused
     call fdlg_sbset             ; mid-drag is never lost, and a release that
-    call os88ui_sbdrop          ; landed anywhere still ends the gesture
+    FDX os88ui_sbdrop          ; landed anywhere still ends the gesture
     jc .btn                     ; CF = 1 = it was the Disk window's bar
     cmp ax, [fdlg_scrl]
     je .out                     ; ...but a release on the row the press began
@@ -2520,7 +2420,7 @@ fdlg_onup_x:
     jmp short .out              ; fm_scroll_by's own `jz .same` (SPEC.md 22.11)
 .btn:
 %endif
-    call os88ui_fire            ; AX = what the press armed, and it is CLEARED
+    FDX os88ui_fire            ; AX = what the press armed, and it is CLEARED
     or ax, ax
     jz .out
     mov di, ax
@@ -2537,6 +2437,16 @@ fdlg_onup_x:
     pop bx
     pop ax
     ret
+
+; ...and its far entry, BESIDE the body rather than in the resident block at
+; the foot. Both halves are kern_big's, so on kern_small neither is emitted
+; and FDLG.DRV carries no routine that build cannot reach; and on kern_big
+; the entry sits in the SAME `.cold` as its body, which is what
+; tools/os88ovlchk.py needs - an entry in the resident half naming a body
+; inside the module's own extent reads as a segment crossing to a scanner
+; that cannot evaluate a %ifdef.
+fdf_fdlg_onup:          call fdlg_onup_x
+                    retf
 %endif                          ; KERN_BIG
 
 ; -----------------------------------------------------------------------------
@@ -2584,20 +2494,20 @@ fdlg_ondrag_x:
     push dx
     push di
 %ifdef OS88UI_SBDRAG
-    call os88ui_sbdragging      ; SPEC.md 13.10.5: a live thumb drag owns this
+    FDX os88ui_sbdragging      ; SPEC.md 13.10.5: a live thumb drag owns this
     jc .btn                     ; movement whole
     push dx                     ; the pointer's ABSOLUTE y - fdlg_pt eats DX,
     call fdlg_pt                ; and it is also what refreshes [fdlg_cx]/[cy]
     call fdlg_sbset             ; for the setter
     pop dx
-    call os88ui_sbtrack         ; CF = 1: nothing owed yet - the rate, the same
+    FDX os88ui_sbtrack         ; CF = 1: nothing owed yet - the rate, the same
     jc .out                     ; row, or another bar's gesture
     mov [fdlg_scrl], ax
     call fdlg_draw_list         ; no incremental tier here: the list and its
     jmp short .out              ; bar, whole (SPEC.md 13.10.6.2)
 .btn:
 %endif
-    call os88ui_armed
+    FDX os88ui_armed
     or ax, ax
     jz .out                     ; the press landed on nothing: nothing to track
     mov di, ax
@@ -2615,6 +2525,16 @@ fdlg_ondrag_x:
     pop bx
     pop ax
     ret
+
+; ...and its far entry, BESIDE the body rather than in the resident block at
+; the foot. Both halves are kern_big's, so on kern_small neither is emitted
+; and FDLG.DRV carries no routine that build cannot reach; and on kern_big
+; the entry sits in the SAME `.cold` as its body, which is what
+; tools/os88ovlchk.py needs - an entry in the resident half naming a body
+; inside the module's own extent reads as a segment crossing to a scanner
+; that cannot evaluate a %ifdef.
+fdf_fdlg_ondrag:        call fdlg_ondrag_x
+                    retf
 %endif                          ; KERN_BIG
 
 ; -----------------------------------------------------------------------------
@@ -2663,9 +2583,9 @@ fdlg_pt:
 fdlg_setdown:
     push ax
     cmp ax, [fdlg_down]
-    je .out
-    push bx
-    xchg ax, [fdlg_down]        ; AX = the OLD one, and the variable is already
+    je .out                     ; NOT banking BX: fdlg_btn1 is the only callee
+    xchg ax, [fdlg_down]        ; and it pushes it. AX = the OLD one, and the
+                                ; variable is already
     or ax, ax                   ; the new one - so a repaint racing this reads
     jz .down                    ; the new state on either side of the draw
     call fdlg_btn1
@@ -2675,7 +2595,6 @@ fdlg_setdown:
     jz .done
     call fdlg_btn1
 .done:
-    pop bx
 .out:
     pop ax
     ret
@@ -2798,7 +2717,7 @@ fdlg_bhit:
 ; order, and for the same reason: the bar overlaps the row band's right edge
 ; and has to win there.
 ; -----------------------------------------------------------------------------
-fdlg_onclick_x:
+FDBODY fdlg_onclick_x
     push ax
     push bx
     push cx
@@ -2809,10 +2728,10 @@ fdlg_onclick_x:
 %ifdef OS88UI_SBDRAG
     push cx                     ; A PRESS CANNOT ARRIVE DURING A LIVE DRAG, so
     push dx                     ; one that does means the release never came
-    call os88ui_sbdragging      ; (SPEC.md 13.10.5.7) - fm_onclick's net, and
+    FDX os88ui_sbdragging      ; (SPEC.md 13.10.5.7) - fm_onclick's net, and
     jc .nostale                 ; the dialog needs its own because it is MODAL:
     call fdlg_sbset             ; while it is up fdlg_grab swallows the clicks
-    call os88ui_sbdrop          ; that would otherwise reach the other one
+    FDX os88ui_sbdrop          ; that would otherwise reach the other one
 .nostale:
     pop dx
     pop cx
@@ -2828,7 +2747,7 @@ fdlg_onclick_x:
     or ax, ax
     jz .sbar
 %ifdef KERN_BIG
-    call os88ui_arm
+    FDX os88ui_arm
     call fdlg_setdown
 %else
     call fdlg_bact
@@ -2881,13 +2800,13 @@ fdlg_onclick_x:
     mov dx, ax
     add dx, [fdlg_cy]
     call fdlg_sbset
-    call os88ui_sbhit
+    FDX os88ui_sbhit
 %ifdef OS88UI_SBDRAG
     cmp al, OS88UI_SBTHUMB      ; SPEC.md 13.10.5: the thumb is DRAGGED here
     jne .nograb2                ; now, where it did nothing at all. BX is
     push ax                     ; still the block and DX still the press,
     mov al, FD_SBRATE           ; absolute - and AL has to survive, because a
-    call os88ui_sbgrab          ; unchanged and fall through to .out, which is
+    FDX os88ui_sbgrab          ; unchanged and fall through to .out, which is
     pop ax                      ; what a thumb press has always done here
 .nograb2:
 %endif
@@ -2901,7 +2820,14 @@ fdlg_onclick_x:
     je .s_pgup
     cmp al, OS88UI_SBPGDN
     je .s_pgdn
-    jmp .out                    ; the thumb itself, or off the bar entirely
+.outj:                          ; ...AND THE ROWS' REFUSAL TRAMPOLINE, at no
+    jmp .out                    ; cost: this `jmp` was already here for the bar,
+                                ; and `.out` is 190 bytes further on, so the
+                                ; three tests below were NASM's five-byte
+                                ; inverted-short-plus-near-jmp (an 8086 has no
+                                ; near `jcc`).  Aimed here they are two bytes
+                                ; each: -9, nothing added.  Every arm is a
+                                ; click that lands on no row and draws nothing
 .s_up:
     dec word [fdlg_scrl]
     jmp .rlist
@@ -2918,15 +2844,15 @@ fdlg_onclick_x:
     ; --- the rows ---
 .rows:
     cmp dx, FD_LX1
-    jl .out
+    jl .outj
     cmp cx, FD_ROW0
-    jl .out
+    jl .outj
     mov ax, cx
     sub ax, FD_ROW0
     mov cl, 4
     shr ax, cl                  ; / FD_ROWH
     cmp ax, FD_ROWS
-    jae .out
+    jae .outj
     add ax, [fdlg_scrl]
     push ax
     call fdlg_rows              ; AX = total rows
@@ -2997,16 +2923,12 @@ fdlg_onclick_x:
     jmp short .out
 .rname:                         ; only the caret in the box moved
     call fdlg_draw_name
-    jmp short .out
-.redraw:
-    call fdlg_repaint           ; SI is still the window ptr
-.out:
+.out:                           ; (no `.redraw` arm here: nothing in this
+                                ; routine jumped to it. fdlg_onkey_x has its
+                                ; own live one, which is where it was copied
+                                ; from)
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    retf
+    jmp fdkf_dx                ; the shared far-cold epilogue (kernel.asm)
 
 ; -----------------------------------------------------------------------------
 section .bss
@@ -3077,7 +2999,6 @@ fdlg_type:  resw 1              ; and its SPEC.md 19 type...
 fdlg_size:  resw 1              ; ...and size dword, lo...
 fdlg_sizeh: resw 1              ; ...and hi (SPEC.md 19)
 fdlg_num:   resb 11             ; the size column's digits (fm_ultoa: 10+NUL)
-fdlg_bdef:  resb 1              ; fdlg_btn: is this the default button?
 fdlg_actl:  resb 1              ; fdlg_actok's answer as last DRAWN, so a
                                 ; keystroke redraws the default button on the
                                 ; live/dead edge and not on every caret move
@@ -3088,15 +3009,204 @@ section .cold                   ; far entries (SPEC.md 2.6): the resident
                                 ; thunks in kernel.asm far-call these, and
                                 ; these near-call the bodies above - so every
                                 ; routine here keeps its ordinary near `ret`
-%ifdef KERN_BIG
-fdf_fdlg_onup:          call fdlg_onup_x
-                    retf
-fdf_fdlg_ondrag:        call fdlg_ondrag_x
-                    retf
-%endif
+
+; --- os88ui.inc IS RESIDENT, and that is what makes the split possible ------
+; It was %included inside the block above - ~1,140 bytes of `.cold` sitting in
+; the middle of what is now the image - and its kernel copy is SHARED: apps.inc
+; near-calls ui_krect4, and os88ui_btn / _arm / _armed / _fire / _krect are
+; used by five other files between them. Moving it into FDLG.DRV would have
+; taken the standard controls off every one of them. So it stays here, the
+; image far-calls in through the FDXF entries below, and tools/os88ovlchk.py's
+; own `EXTRA` table - which already files this include as `.cold` - stays true.
+%include "os88ui.inc"
+
+; -----------------------------------------------------------------------------
+; ui_krect4 - stage a whole inclusive rect into the kernel's ONE button rect
+; in:  AX = x1, BX = y1, CX = x2, DX = y2
+; out: os88ui_krect filled; ALL registers preserved
+;
+; os88ui_krect is declared in .bss by os88ui.inc and there is exactly one of
+; it, which is legal because every writer is on the UI task under the gfx lock
+; (SPEC.md 13).  Two callers stage a rect they already hold WHOLE - fdlg's
+; default button and apps.inc's Timer button - and both follow it with
+; `mov bx, os88ui_krect / call os88ui_btn`.  The eleven OTHER krect sites fill
+; the words one at a time as they compute them and are not candidates.
+;
+; IT IS DOWN HERE WITH os88ui.inc AND FOR ITS REASON (SPEC.md 38.0): apps.inc
+; near-calls it, so it cannot go into FDLG.DRV. It was in the middle of what is
+; now the image, and the only thing that noticed was tools/os88ovlchk.py.
+; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; fdlg_hasdot - does the name being typed already carry a '.'? (internal)
+; in:  nothing
+; out: CF = 1 = yes. Preserves all registers.
+;
+; RESIDENT ON BOTH BUILDS, and it is `fm_dotin`'s shape that puts it here
+; rather than the split.  files.inc's `fm_dotin` is a CONTINUATION and not a
+; routine: it is fallen into from `fm_hasdot`, and its `pop si` takes the SI
+; the ENTRY banked, so its near `ret` goes to that entry's caller.  A `jmp` is
+; therefore the only legal way in - `call fm_dotin / ret` makes the `pop si`
+; eat the return address, on kern_big as much as on kern_small, and
+; tools/stkbalance.py is what said so (`ret at depth +1`).  So this cannot go
+; through FDX at all: it sits here, keeps the `jmp` it has always had, and the
+; image reaches it as an ordinary far entry whose body ends in a near `ret`.
+; -----------------------------------------------------------------------------
+fdlg_hasdot:
+    push si                     ; files.inc's fm_dotin is this body, and the
+    mov si, fdlg_name           ; bank belongs to the ENTRY: fdlg_onkey_x does
+    jmp fm_dotin                ; not push SI and promises it back
+
+ui_krect4:
+    mov [os88ui_krect+0], ax
+    mov [os88ui_krect+2], bx
+    mov [os88ui_krect+4], cx
+    mov [os88ui_krect+6], dx
+    ret
+
 fdf_fdlg_open:          call fdlg_open_x
                     retf
 fdf_fdlg_paint:         call fdlg_paint_x
                     retf
+
+
+%ifdef FDLG_MOD
+; =============================================================================
+; THE RESIDENT HALF (SPEC.md 2.8.1) - kern_small only
+; =============================================================================
+; fdlg_load - is the image in RAM?
+; out: CF=1 it is not. AX and every other register preserved.
+fdlg_load:
+    push ax
+    mov al, MOD_FDLG
+    call mod_need
+    pop ax
+    ret
+
+; --- fdlg_open: the ONE place a human waits, so the ONE place that loads ----
+; Its CF=1 already means "refused - one is already up, or the table is full",
+; and every caller treats that as "the command does nothing". A module that
+; will not load is the same answer.
+fdlg_open_x:
+    call fdlg_load
+    jc .no
+    call far [FDFP + FDE_OPEN*4]
+    ret
+.no:
+    stc
+    ret
+
+; --- ...and the other six load NOTHING ---------------------------------------
+; [fdlg_win] is `.text` and resident, and it is non-zero exactly while a dialog
+; is up - which can only happen if fdlg_open loaded the image. So the image is
+; resident whenever any of these has work, and the no-dialog answer is the one
+; the body itself would have given through fdlg_gate's `.none`. That keeps
+; mod_* off the UI pass entirely: fdlg_reap runs once per pass, and fdlg_grab
+; on every press.
+fdlg_paint_x:
+    cmp word [fdlg_win], 0
+    je .no
+    call far [FDFP + FDE_PAINT*4]
+.no:
+    ret
+
+fdlg_onkey_x:
+    cmp word [fdlg_win], 0
+    je .no
+    call far [FDFP + FDE_ONKEY*4]
+    retf
+.no:
+    retf
+
+fdlg_onclick_x:
+    cmp word [fdlg_win], 0
+    je .no
+    call far [FDFP + FDE_ONCLICK*4]
+    retf
+.no:
+    retf
+
+; ...and reap is where the image goes back (SPEC.md 2.8.3): it is the routine
+; that collects a dialog whose close or commit has run, so "[fdlg_win] was set
+; and is not any more" is exactly the moment the feature is finished.
+fdlg_reap_x:
+    cmp word [fdlg_win], 0
+    je .drop                    ; ALREADY GONE, and the image is what is left
+                                ; (SPEC.md 38.0.1). This `je` used to be a
+                                ; `je .no`, which is the whole defect: the
+                                ; body below only handles the HIDDEN window,
+                                ; and the three routes that do not go through
+                                ; it - Open/Save, Cancel, Escape - all clear
+                                ; [fdlg_win] from inside the image's own
+                                ; W_ONCLICK, so by the time any pass got here
+                                ; there was nothing left to notice
+    call far [FDFP + FDE_REAP*4]
+    cmp word [fdlg_win], 0
+    jne .no                     ; still up: the image stays, and so does the
+.drop:                          ; guard that brought us here
+    push ax
+    mov al, MOD_FDLG
+    call mod_drop
+    pop ax
+.no:
+    retf
+
+fdlg_grab_x:
+    cmp word [fdlg_win], 0
+    je .no
+    call far [FDFP + FDE_GRAB*4]
+    retf
+.no:
+    clc                         ; fdlg_gate's `.none` answer: nothing to
+    retf                        ; swallow, so the press passes through
+
+fdlg_top_x:
+    cmp word [fdlg_win], 0
+    je .no
+    call far [FDFP + FDE_TOP*4]
+.no:
+    retf                        ; BX unchanged, which is wm_top's own answer
+
+; --- and the far entries the image calls out through (FDXF) -----------------
+    FDXF ui_krect4
+    FDXF fdlg_paint_x           ; ...and the image's own re-entry: fdlg_draw
+                                ; repaints through the PUBLIC name, which on
+                                ; this build is the resident stub
+    FDXF fm_cfill
+    FDXF fdlg_hasdot            ; ...and NOT fm_dotin, which is a continuation
+                                ; and cannot be the target of a `call` - see
+                                ; fdlg_hasdot above
+    FDXF fm_icon_blank
+    FDXF fm_ncpy
+%ifdef KERN_BIG                 ; files.inc's path stack is kern_big's alone,
+    FDXF pth_clear              ; and so are the fdlg call sites that use it -
+    FDXF pth_leaf               ; so the entries are gated with them rather
+    FDXF pth_pop                ; than left to name four symbols this build
+    FDXF pth_push               ; does not have
+%endif
+    FDXF fm_ultoa_x
+    FDXF dsk_chdir_x
+    FDXF dsk_find_name_x
+    FDXF dsk_get_dir_x
+    FDXF dsk_get_icon_x
+    FDXF dsk_ncopy
+    FDXF dsk_vol_slot_x
+    FDXF dskw_char_x
+    FDXF dskw_mkdir_x
+    FDXF os88ui_btn
+                                ; ...and NOT os88ui_arm / _fire / _armed: those
+                                ; three are `%ifdef OS88UI_ARM`, which nothing
+                                ; in this kernel defines, so the only fdlg
+                                ; sites that name them are inside KERN_BIG
+                                ; blocks and there is nothing here to reach
+    FDXF os88ui_sbar
+    FDXF os88ui_sbhit
+%ifdef OS88UI_SBDRAG
+    FDXF os88ui_sbgrab
+    FDXF os88ui_sbtrack
+    FDXF os88ui_sbdrop
+    FDXF os88ui_sbdragging
+    FDXF os88ui_sbfix
+%endif
+%endif
 
 section .text

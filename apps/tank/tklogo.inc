@@ -41,5 +41,11 @@ tk_lgword:
 
 TK_LGCELLS equ 11               ; cells in the word, spaces included
 TK_LGADV   equ 28               ; ...and the pixels between their origins
+TK_LGCW    equ 24               ; a glyph's own width on the 24x32 grid, which
+                                ; is four short of the advance
 TK_LGW     equ TK_LGCELLS * TK_LGADV
+TK_LGINK   equ TK_LGW - (TK_LGADV - TK_LGCW)
+                                ; ...so the INK is four short of the advance
+                                ; width too, and it is the ink a centred logo
+                                ; has to be centred on
 TK_LGH     equ 32

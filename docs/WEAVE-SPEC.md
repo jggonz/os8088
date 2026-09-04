@@ -4330,7 +4330,7 @@ displaying) and §4.5.1 (every indexed operand is bounds-checked, because a
 its own, `apps/weave/wfx.inc` (section 5's RPN machine and its 16.16
 arithmetic in assembly, because this toolchain has no `long` at all),
 `apps/weave/wband.inc` (§6.9.1's band composer, rcband's shape and Set 68's
-constants, now re-measured as PERFORMANCE.md Set 113), §5.5's sliced two-pass
+constants, now re-measured as PERFORMANCE.md Set 114), §5.5's sliced two-pass
 recalculation with §5.5.1's per-row damage, the formula bar over `os88line`,
 and `apps/weave/wfxc.c` — §9.4's one carve-out, the whole of §5.1's grammar
 compiled where it is typed.
@@ -4613,12 +4613,12 @@ after any change to §6 or to the model. Field figures land on the 5150
 and supersede modelled ones row by row (§12.4).
 
 **The band composer's two constants were Set 68's and are now measured for
-`wband.inc` itself**: PERFORMANCE.md **Set 113** ran the shipping file on Set
+`wband.inc` itself**: PERFORMANCE.md **Set 114** ran the shipping file on Set
 68's own harness and solved 915 µs a call and 162 µs a cell against 860 and
 173 — six per cent apart in opposite directions, on a harness whose quantum is
 one count of 0.359 ms. A 79-cell row measured **13.7 ms** against the model's
-14.5 for those cells (the rows were 79 cells when Set 113 was taken; SPEC.md
-§11.95.3 has since made a full CGA row 80, which the table below prices). Set 113 also settles the one claim §6.9.1 was making without
+14.5 for those cells (the rows were 79 cells when Set 114 was taken; SPEC.md
+§11.95.3 has since made a full CGA row 80, which the table below prices). Set 114 also settles the one claim §6.9.1 was making without
 evidence: inverting the header band and the selected cell costs **0.4%**, one
 count over eight iterations of 79 cells, where a second `gfx` call would have
 been ~756 µs.

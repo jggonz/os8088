@@ -997,7 +997,7 @@ cw_dsk_free_clus  cw_dsk_vol_row    cw_dsk_copy_seg
 ```
 
 …plus direct calls to `dskw_delete_x`, `dskw_rename_x`, `dskw_mkdir_x`,
-`dskw_rmdir`, `dskw_rmtree`, `dskw_format`, `dskw_fmt_row`, `dskw_fmt_probe`,
+`dskw_rmdir`, `dskw_rmtree`, `dskw_format`, `dskw_fmt_probe`,
 `dskw_fmt_reach` and `dskw_char_x`.
 
 **Not one of them mentions a FAT, a cluster, a BPB, a sector or `int 13h`.**

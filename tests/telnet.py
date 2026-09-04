@@ -56,6 +56,7 @@ import dispcp                                          # noqa: E402
 import os88marty                                       # noqa: E402
 import os88mouse                                       # noqa: E402
 import os88sym                                         # noqa: E402
+from os88geom import MB_ENTSZ                          # noqa: E402
 
 S = os88sym.linear
 MACHINE = {"cga": "os8088_5150_cga", "herc": "os8088_5150_herc"}
@@ -296,7 +297,7 @@ def main():
         # **THE APP-NAME CELL'S TITLE IS KERNEL DATA** (SPEC.md 12.7): both its
         # strings live in menu_abstr, so MB_SEG is 0 there and reading the
         # title through the package's segment answers with our own image.
-        MB_XL, MB_XR, MB_SEG, MB_ENTSZ = 6, 8, 12, 14
+        MB_XL, MB_XR, MB_SEG = 6, 8, 10
         KSEG = 0x0060
         ax_ = None
         for c in range(7):

@@ -65,6 +65,7 @@ sys.path.insert(0, "/home/user/os8088/tools")
 sys.path.insert(0, "/home/user/os8088/tests")
 import dispcp                                          # noqa: E402
 import os88sym                                         # noqa: E402
+import os88qemu                                              # noqa: E402
 
 S = os88sym.linear
 SOCK = "build/qmp.sock"
@@ -359,6 +360,9 @@ def main():
     for f in ("build/qmp.sock", "build/qemu.pid"):
         if os.path.exists(f):
             os.remove(f)
+    # `make test` DAEMONISES the emulator, so it outlives this script
+    # unless somebody kills it - and the somebody is us (os88qemu).
+    os88qemu.own()
     cmd = ["make", "test", "ETHER=1", "TESTIMG=build/ether360.img",
            "TESTAPPS=build/brtest360.img"]
     if os.environ.get("ETHDUMP"):       # every frame either way, to a pcap -

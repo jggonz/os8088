@@ -51,6 +51,7 @@ sys.path.insert(0, "/home/user/os8088")
 import dispcp                                          # noqa: E402
 from ethernet import (Qemu, ether_syms, u16, dotted, S, Mouse,  # noqa: E402
                       type_url)
+import os88qemu                                              # noqa: E402
 
 # the Control Panel's own geometry, as tests/ethernet.py reads it
 CP_I0Y, CP_IROWH, CP_RX = 6, 14, 96
@@ -85,6 +86,9 @@ def boot():
     for f in ("build/qmp.sock", "build/qemu.pid"):
         if os.path.exists(f):
             os.remove(f)
+    # `make test` DAEMONISES the emulator, so it outlives this script
+    # unless somebody kills it - and the somebody is us (os88qemu).
+    os88qemu.own()
     r = subprocess.run(["make", "test", "ETHER=1",
                         "TESTIMG=build/ether360.img"],
                        capture_output=True, text=True)

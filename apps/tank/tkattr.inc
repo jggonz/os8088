@@ -26,6 +26,12 @@
 ; the same recurrence as the draw, which is the one thing a whole-line call
 ; cannot promise (5.6.2). Which of the two inks is the brighter depends on the
 ; adapter: see the ink block below.
+;
+; THE PANEL IS THREE BLOCKS, NOT FOUR COLUMNS OF AIR. The logo is centred
+; across the top and the score table and the instructions sit under it side by
+; side, which is what the window's width is now measured from - see the layout
+; block below and SPEC.md 85.10. The play line under the instructions blinks
+; (85.10.3), on its own clock and drawn by nothing else.
 ; =============================================================================
 
 TK_GLLAG  equ 2                 ; wakes the gap's tail runs behind its head
@@ -72,17 +78,44 @@ TK_C_ROW   equ CWHITE
 TK_C_INST  equ CWHITE
 TK_C_PLAY  equ CLRED
 
-; The score table sits BESIDE the logo, sharing its top row, and the
-; instructions are centred in the space under both.
-TK_HEADY  equ 3
-TK_BANDY  equ 14                    ; six rows of nine reach 67
-TK_I1Y    equ 80
-TK_I2Y    equ 90
-TK_I3Y    equ 100
-TK_PLAYY  equ 118
+; --- where everything sits (SPEC.md 85.10) ------------------------------------
+; THE LOGO IS CENTRED ACROSS THE TOP and the two lists sit UNDER it, side by
+; side: the score table left, the instructions right, and the play line centred
+; on the INSTRUCTIONS rather than on the window (85.10.3). The logo used to
+; share its row with the table, which is what made the window 480 wide with a
+; band of nothing under the logo's left half; the width is now decided by the
+; bottom pair alone - the band's rect, a gutter, the widest instruction line -
+; and the logo, TK_LGINK wide, takes the margin that leaves either side.
+TK_COLX   equ TK_BANDX + TK_BANDW + 8   ; the right column, 8 clear of the
+TK_INSTW  equ 24 * 8                    ; band's RECT (which reaches further
+                                        ; right than its digits do), and as
+                                        ; wide as its own longest line
+TK_CELLH  equ 8                         ; the 8x8 face's own height
+TK_LOGOY  equ 8
+TK_HEADY  equ 52
+TK_BANDY  equ 63                    ; six rows of nine reach 117
+TK_I1Y    equ 63                    ; the instructions start on the band's
+TK_I2Y    equ 73                    ; FIRST ROW, so the two columns read as one
+TK_I3Y    equ 83                    ; block with the header labelling the left
+TK_PLAYY  equ 105                   ; one
+
+; THE WINDOW IS THAT BOTTOM PAIR PLUS ITS MARGINS. TK_WINW is declared in
+; tank.asm - before any of this, and it is what the window MANAGER is handed -
+; so the arithmetic is asserted here rather than written down twice. The
+; template's width IS the content width once wm_snap_w has rounded the frame up
+; (SPEC.md 11.94.5), which is what makes the two comparable at all.
+%if TK_WINW != TK_COLX + TK_INSTW + TK_BANDX
+  %error "TK_WINW is not the attract panel's two columns plus their margins"
+%endif
+
+; --- the play line's blink (SPEC.md 85.10.3) ----------------------------------
+; Two ticks a wake, so nine wakes is about a second: lit for a second and dark
+; for half of one, which is the attract-screen cadence and not a flash.
+TK_BLINKON  equ 9
+TK_BLINKOFF equ 5
 
 tk_s_press:  db 'PRESS F TO PLAY', 0
-tk_s_i1:     db 'ARROWS OR A D W S DRIVE', 0
+tk_s_i1:     db 'ARROWS OR W A S D DRIVE', 0
 tk_s_i2:     db 'SPACE FIRES    P PAUSES', 0
 tk_s_i3:     db 'ESC OR F LEAVES THE GAME', 0
 
@@ -92,13 +125,14 @@ tk_s_i3:     db 'ESC OR F LEAVES THE GAME', 0
 tk_at_layout:
     push ax
     push bx
-    mov ax, [tk_cw]                 ; the logo is right-hand and its width is
-    sub ax, TK_LGW + 10             ; fixed, so a narrow window pushes it left
-    jns .lx                         ; rather than off the edge
-    xor ax, ax
-.lx:
-    mov [tk_at_lx], ax
-    mov word [tk_at_ly], 3
+    mov ax, [tk_cw]                 ; the logo is CENTRED across the top and its
+    sub ax, TK_LGINK                ; width is fixed, so a window narrower than
+    jns .lx                         ; the word pins it at the left edge rather
+    xor ax, ax                      ; than hanging it off both. It is the INK
+.lx:                                ; that is centred and not the advance: the
+    shr ax, 1                       ; last cell's four blank columns are not
+    mov [tk_at_lx], ax              ; part of the word the eye reads
+    mov word [tk_at_ly], TK_LOGOY
     mov ax, [tk_winox]              ; the band's ends are settled HERE and in
     add ax, TK_BANDX + 7            ; absolute coordinates: OSAPI_GFX_SCROLL
     and al, 0F8h                    ; refuses an x1 or an x2+1 off the byte
@@ -726,27 +760,27 @@ tk_at_text:
     push cx
     push dx
     push si
-    mov si, tk_s_hshead
+    mov si, tk_s_hshead             ; the left column's header, over the band
     mov bx, TK_HEADY
     mov al, TK_C_HEAD
     mov cx, [tk_bx]
     call tk_at_left
-    mov al, TK_C_INST
-    mov si, tk_s_i1
-    mov bx, TK_I1Y
-    call tk_at_mid
-    mov al, TK_C_INST
+    mov cx, [tk_winox]              ; ...and the right one as a BLOCK: three
+    add cx, TK_COLX                 ; lines from one x, which is what makes it
+    mov al, TK_C_INST               ; read as a column beside the table rather
+    mov si, tk_s_i1                 ; than as three centred captions. tk_at_left
+    mov bx, TK_I1Y                  ; preserves every register, so the ink and
+    call tk_at_left                 ; the x are set once
     mov si, tk_s_i2
     mov bx, TK_I2Y
-    call tk_at_mid
-    mov al, TK_C_INST
+    call tk_at_left
     mov si, tk_s_i3
     mov bx, TK_I3Y
-    call tk_at_mid
-    mov al, TK_C_PLAY
-    mov si, tk_s_press
-    mov bx, TK_PLAYY
-    call tk_at_mid
+    call tk_at_left
+    cmp byte [tk_at_blink], 0       ; the play line BLINKS (85.10.3), and the
+    je .out                         ; ground under it was filled black by the
+    call tk_at_play                 ; caller - so a dark phase draws nothing
+.out:
     pop si
     pop dx
     pop cx
@@ -754,31 +788,69 @@ tk_at_text:
     pop ax
     ret
 
-; tk_at_mid - SI = string, BX = content row, AL = ink; centred on the content
-tk_at_mid:
+; -----------------------------------------------------------------------------
+; tk_at_playx - where the play line goes: AX = its absolute x, CX = its width
+;
+; ONE PLACE ANSWERS IT, because the lit run and the dark fill below have to
+; agree to the pixel: a fill that is a cell narrow leaves a stripe of red
+; standing for the whole dark phase.
+; -----------------------------------------------------------------------------
+tk_at_playx:
+    push si
+    mov si, tk_s_press
+    call tk_strlen
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    mov ax, TK_INSTW                ; centred on the INSTRUCTION COLUMN and not
+    sub ax, cx                      ; on the content box: the line belongs to
+    jns .ok                         ; the block above it, and centring it on the
+    xor ax, ax                      ; window would hang it half over the table
+.ok:
+    shr ax, 1
+    and al, 0F8h                    ; ...and onto a cell boundary, which is what
+    add ax, TK_COLX                 ; SPEC.md 6.1's single-store path wants
+    add ax, [tk_winox]
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; tk_at_play - the play line, lit or dark as [tk_at_blink] says (SPEC.md 85.10.3)
+;
+; The lit half is one opaque run: ground and glyph in the same pass (6.1). The
+; dark half is ONE FILL rather than a run in black ink - fifteen cells to write
+; what a single rect writes is the same picture for fifteen times the work, and
+; a phase turns over three times every two seconds for as long as the window is
+; open.
+; -----------------------------------------------------------------------------
+tk_at_play:
     push ax
     push bx
     push cx
     push dx
     push si
-    mov [tk_atink], al
-    mov [tk_atrow], bx
-    call tk_strlen
-    shl cx, 1
-    shl cx, 1
-    shl cx, 1
-    mov ax, [tk_cw]
-    sub ax, cx
-    jns .ok
-    xor ax, ax
-.ok:
-    shr ax, 1
-    and al, 0F8h
-    add ax, [tk_winox]
+    call tk_at_playx                ; AX = its x, CX = its width
+    cmp byte [tk_at_blink], 0
+    je .dark
+    mov si, tk_s_press
+    mov bx, TK_PLAYY
     mov cx, ax
-    mov bx, [tk_atrow]
-    mov al, [tk_atink]
+    mov al, TK_C_PLAY
     call tk_at_left
+    jmp short .out
+.dark:
+    add cx, ax                      ; the same rect, eight rows deep
+    dec cx
+    mov bx, [tk_winoy]
+    add bx, TK_PLAYY
+    mov dx, bx
+    add dx, TK_CELLH - 1
+    push ax
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    pop ax
+    call OSAPI_GFX_FILL
+.out:
     pop si
     pop dx
     pop cx
@@ -816,6 +888,10 @@ tk_at_step:
     push di
     push es
     call OSAPI_GFX_LOCK             ; **THE LOCK FIRST, THEN THE QUESTION**
+    cmp byte [tk_abon], 0           ; ...and the credits are the same question:
+    jne .unlock                     ; while they are up the UI task owns the
+                                    ; content, and tk_abdismiss repaints the
+                                    ; whole panel when they come down
     mov bx, [tk_win]                ; (SPEC.md 20.6 rule 5). wm_obscured's own
     call OSAPI_WM_OBSCURED          ; header says it is only trustworthy while
     jc .unlock                      ; the caller holds the lock, because the UI
@@ -918,9 +994,20 @@ tk_at_step:
 
 .scroll:
     dec byte [tk_at_scrt]
-    jnz .unlock
+    jnz .blink
     mov byte [tk_at_scrt], TK_SCRT
     call tk_band_roll
+.blink:
+    dec byte [tk_at_blt]            ; the play line's own clock (85.10.3): a
+    jnz .unlock                     ; lit stretch and a shorter dark one, each
+    xor byte [tk_at_blink], 1       ; reloaded as the phase turns over
+    mov al, TK_BLINKOFF
+    cmp byte [tk_at_blink], 0
+    je .blset
+    mov al, TK_BLINKON
+.blset:
+    mov [tk_at_blt], al
+    call tk_at_play
 .unlock:
     call OSAPI_GFX_UNLOCK
 .out:

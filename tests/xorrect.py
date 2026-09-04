@@ -56,7 +56,7 @@ def session(m, mo):
     time.sleep(0.4)
     mo.to(240, 120, l=True)
     time.sleep(0.6)
-    snap("drag-outline-up")         # vga_xor_rect_vram -> sw_xor_rect
+    snap("drag-outline-up")         # vga_xor_rect_vram -> gfx_xor_strips
     mo.to(300, 140, l=True)
     time.sleep(0.6)
     snap("drag-outline-moved")

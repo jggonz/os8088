@@ -432,7 +432,7 @@ static void c64_menu_state(void)
      * permanent line on the status row. c64_jam() and os88_main both call
      * this, which is what makes the two states reachable here. */
     c64_pref_items[C64_I_ADVANCE] =
-        c64_s_adv[(c64_norom || c64_state == C64_ST_JAM) ? 1 : 0];
+        c64_s_adv[(c64_state == C64_ST_JAM) ? 1 : 0];
     /* ...and the Edit menu's two, for the reasons written beside their
      * spellings above: Paste is dead in all THREE of its states, Copy only
      * without a machine. Every path that leaves C64_ST_JAM re-runs this
@@ -448,8 +448,13 @@ static void c64_menu_state(void)
      * already calls this routine, so the item greys and un-greys with the
      * state (SPEC.md 47: a greying must not outlive its fact). */
     c64_edit_items[C64_I_COPY] =
-        c64_s_copy[c64_norom ? 1 : 0];
+        c64_s_copy[0];                      /* ALWAYS LIVE. It was greyed with
+                                             * `no C64.ROM` too, and the ROM
+                                             * is a part now (1.4): a greying
+                                             * may not outlive its reason
+                                             * (SPEC.md 47), so the one fact
+                                             * left is none */
     c64_edit_items[C64_I_PASTE] =
-        c64_s_paste[(c64_norom || c64_state == C64_ST_JAM || c64_pause)
+        c64_s_paste[(c64_state == C64_ST_JAM || c64_pause)
                     ? 1 : 0];
 }

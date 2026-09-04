@@ -14,7 +14,7 @@
 ;
 ;  - **The decoder is a flat loop over an explicit cursor, not a recursion.**
 ;    An abbreviation (Standard 3.3) is itself a Z-string, and the obvious
-;    implementation calls the decoder again. The worker's stack is 256 bytes
+;    implementation calls the decoder again. The worker's stack is 384 bytes
 ;    total and shared with the tick, mouse and sound IRQs (docs/FROTZ-PLAN.md
 ;    4), so this decodes out of a cursor held in bss - the word being consumed,
 ;    which Z-character of it is next, the address of the next word, and the
@@ -47,7 +47,7 @@
 ; The decoder cursor is state rather than registers for the reason above, and
 ; the stream-3 stack is here rather than on SP for the same one: 16 nested
 ; tables is 64 bytes of table addresses and counts that must not live on a
-; 256-byte stack.
+; 384-byte stack.
 %define zt_s1off  (os88_image_end + ZTEXT_SLACK + 0)   ; byte: stream 1 OFF
                                                        ;   (so all-zero = the
                                                        ;   screen is selected)

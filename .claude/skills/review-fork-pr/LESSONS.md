@@ -108,7 +108,8 @@ Cross-check mechanically, by address and by name, and check the *contract* as
 well as the number — `docs/UPSTREAM.md` has the loop. The same address meaning
 something different is the version of this that survives a name check:
 `OSAPI_FONT_GLYPHS` answering `DX:SI` rather than `SI`, the file-dialog
-completion proc gaining `DX:CX`, worker stacks halving from 512 to 256 bytes.
+completion proc gaining `DX:CX`, worker stacks halving from 512 to 256 bytes
+(both trees are 384 now - that one converged, and the lesson is the SHAPE).
 
 The driver tables have the same shape one level down: #92 grew `FSV_SIZE` from
 28 to 30 verbs without bumping the driver header version, so an older `.DRV`

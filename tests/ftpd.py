@@ -119,6 +119,7 @@ import dispcp                                          # noqa: E402
 import ethernet as eth                                 # noqa: E402
 import os88sym                                         # noqa: E402
 import os88layout                                           # noqa: E402
+import os88qemu                                              # noqa: E402
 
 S = os88sym.linear
 
@@ -204,6 +205,9 @@ def main():
         if os.path.exists(f):
             os.remove(f)
 
+    # `make test` DAEMONISES the emulator, so it outlives this script
+    # unless somebody kills it - and the somebody is us (os88qemu).
+    os88qemu.own()
     r = subprocess.run(["make", "test", "ETHER=1", "ETHFWD=1",
                         "TESTIMG=" + SYSIMG, "TESTAPPS=" + APPIMG] + knob,
                        capture_output=True, text=True)
@@ -251,24 +255,29 @@ def stack_water(m):
     """Every task slice's deepest byte, after a whole FTP session.
 
     ONLY under --kfz, because only a `KFZ=1` `task_spawn` fills the slices with
-    0xCC. It prints and never fails: `SCH_STACK` is a number to decide with
+    0xCC. It prints and never fails: the classes are numbers to decide with
     whoever owns the memory budget (docs/KERNEL-MEMORY.md), and a gate here
     would turn that decision into a build break on somebody else's machine.
+
+    PER-SLOT SIZES since SPEC.md 8.7 - `slice_sizes()` decodes them off the
+    kernel. One number here read every small slice off the end of itself and
+    into the next task's fill, which is the failure this whole family of
+    readers keeps having in a new place each time.
     """
     import stkwater                                 # tools/ is already on the
-    n = stkwater.slice_len()                        # path (the header above)
+    sizes = stkwater.slice_sizes(stkwater.DEF)      # path (the header above)
     ns = stkwater.slots()
     base = os88sym.linear("sch_stacks", stkwater.DEF)
-    mem = m.read(base, ns * n)
+    mem = m.read(base, sum(sizes))
     say("")
-    worst = stkwater.report(mem, ns, n,
+    worst = stkwater.report(mem, ns, sizes,
                             "(after the whole ftpd gate, under QEMU)", base)
     if not worst:
         return
     # ...and WHERE those bytes went. The deepest slice's dead words still carry
     # the return addresses of the chain that made it deep, so the number gets
     # attributed instead of argued about (docs/KERNEL-MEMORY.md, "Task stacks").
-    rows = [r for r in stkwater.water(mem, ns, n)
+    rows = [r for r in stkwater.water(mem, ns, sizes)
             if r[1] == worst]
     slot = rows[0][0]
     row = m.read(S("drv_tab") + eth.ETH_ROW * eth.DRVR_SZ + eth.DRVR_SEG, 2)
@@ -278,7 +287,9 @@ def stack_water(m):
                           dimg=open("build/ether.bin", "rb").read(),
                           pseg=eth.u16(row))
     say("")
-    stkwater.annotate(mem[(slot - 1) * n:slot * n], worst, n,
+    at = sum(sizes[:slot - 1])                     # the slice's OWN offset and
+    sz = sizes[slot - 1]                           # size: they are not a stride
+    stkwater.annotate(mem[at:at + sz], worst, sz,
                       kern=os88sym.syms(stkwater.DEF), drv=eth.ether_syms(),
                       seg=eth.u16(row),
                       # ...as .TEXT OFFSETS index it, not the raw file: the

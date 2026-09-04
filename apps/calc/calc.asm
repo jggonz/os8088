@@ -52,6 +52,39 @@
 
 %include "os88api.inc"
 
+; -----------------------------------------------------------------------------
+; APP_SMALL - THE SMALL-APPS BUILD OF THIS PACKAGE (SPEC.md 65.10)
+;
+; Note Pad's SPEC.md 27.16 is the pattern and its rules hold unchanged: one
+; source assembled twice, `make smallapps` passes -DAPP_SMALL, the result goes
+; on build/smallapps*.img, and it is NEVER a second ABI - the small build runs
+; on kern_big exactly as it runs on kern_small.
+;
+; WHY A CALCULATOR IS WORTH GATING AT ALL, when it already claims 7,644 bytes
+; against the 34.0KB kern_small leaves on a 128KB machine: because the point
+; of the small disk is a HANDFUL of programs that run, not one large one that
+; barely does. Every byte off a small package is another package beside it.
+;
+; **AT THE TOP** for the reason apps/notepad/notepad.asm's own note gives -
+; these are preprocessor tests answered in FILE ORDER, and the blocks they
+; guard start ~900 lines below.
+;
+;   CALF_HIST   the foldaway history pane (SPEC.md 65), its eight rows, the
+;               disclosure triangle, the View menu and the ring that feeds
+;               them. The calculator KEEPS its four functions, sqrt, 1/x,
+;               percent, sign, the clipboard and the keyboard
+;   CALF_ABOUT  the standard About card (SPEC.md 12.2)
+;
+; What a small Calculator is, then: the display, the keypad, the Edit and Math
+; menus, and no pane. It opens at CAL_BASE_H and never resizes, which is what
+; the CGA already got (65.3) - so the small build is the shape this program
+; takes on the smallest screen it supports, made the only shape.
+; -----------------------------------------------------------------------------
+%ifndef APP_SMALL
+%define CALF_HIST
+%define CALF_ABOUT
+%endif
+
     OS88_HEADER 'CALCULATOR', cal_entry, 1
 
 ; --- embedded 16x16 icon (SPEC.md 20.2, flags bit 0) ---------------------------
@@ -162,7 +195,13 @@ CAL_HIST_Y0  equ CAL_BASE_H         ; row i's cells at + i * CAL_ROW_H
 CAL_HROW_X   equ 8
 CAL_HROW_N   equ 26                 ; 26 cells: x 8..215, inside CAL_CW
 CAL_HIST_N   equ 8                  ; kept, and the most rows ever shown
+%ifdef CALF_HIST
 CAL_OPEN_H   equ CAL_BASE_H + CAL_HIST_N * CAL_ROW_H ; the height we ASK for
+%else
+CAL_OPEN_H   equ CAL_BASE_H         ; ...which with no pane is the folded
+                                    ; height, and the window never resizes -
+                                    ; the shape a CGA already gets (65.3)
+%endif
 
 ; --- rect table indices (one table, drawn from and hit-tested from) ------------
 CAL_FLASH    equ 3                  ; ticks a TYPED key stays pressed (SPEC.md
@@ -174,7 +213,12 @@ CAL_FLASH    equ 3                  ; ticks a TYPED key stays pressed (SPEC.md
                                     ; duration is not worth one
 CAL_R_HDR    equ CAL_NKEY           ; 20: the disclosure strip
 CAL_R_HIST   equ CAL_NKEY + 1       ; 21..28: the history rows
+%ifdef CALF_HIST
 CAL_NRECT    equ CAL_R_HIST + CAL_HIST_N
+%else
+CAL_NRECT    equ CAL_NKEY           ; no strip and no rows: the keypad IS the
+                                    ; table, and cal_rects below follows it
+%endif
 
 ; =============================================================================
 ; The value (SPEC.md 65.2): sign-magnitude decimal, 8 bytes.
@@ -220,7 +264,8 @@ CAL_OP_NONE  equ 0                  ; [cal_op]; otherwise CK_ADD..CK_DIV
 CAL_PASTE_MAX equ 24                ; what a paste may read, into cal_pbuf
 CAL_CUT       equ '~'               ; a history line too long for the field
                                     ; keeps its HEAD and ends in this
-CAL_BSS_TOTAL equ 1136              ; see the bss layout after OS88_IMAGE_END
+                                    ; CAL_BSS_TOTAL is DERIVED from the counter
+                                    ; beside the fields themselves, further down
 
 ; -----------------------------------------------------------------------------
 ; cal_entry - package entry point (SPEC.md 20.2)
@@ -240,9 +285,10 @@ cal_entry:
     mov [cal_win], bx
     mov si, cal_menus
     call OSAPI_MENU_SET             ; the bar already says 'Calc' on frame one
+%ifdef CALF_ABOUT
     mov si, cal_about
     call OSAPI_ABOUT_SET            ; ...and 'About Calc' above its Close
-                                    ; (SPEC.md 12.2/12.7)
+%endif                              ; (SPEC.md 12.2/12.7)
     mov ax, cal_onup
     call OSAPI_WM_ONMOUSEUP         ; SPEC.md 13.7: a key fires on the RELEASE,
                                     ; over the key the press landed on, so a
@@ -302,6 +348,7 @@ cal_geom:
     mov [cal_oy], dx
     call OSAPI_WM_GEOM              ; CX = content width, DX = content height
     mov [cal_ch], dx
+%ifdef CALF_HIST
     xor ax, ax                      ; folded up: no rows, and no arithmetic
     cmp byte [cal_open], 0
     je .set
@@ -316,6 +363,7 @@ cal_geom:
     mov ax, CAL_HIST_N
 .set:
     mov [cal_nvis], ax
+%endif                              ; with no pane the count is a constant 0
     pop dx
     pop cx
     pop ax
@@ -378,6 +426,7 @@ cal_layout:
     cmp si, CAL_NKEY
     jb .key
 
+%ifdef CALF_HIST                    ; the strip and the rows are the pane's
     mov ax, [cal_ox]                ; the disclosure strip: the keypad's full
     add ax, CAL_KEY_X0              ; width, so the label and the triangle are
     mov cx, [cal_ox]                ; both inside one target
@@ -411,6 +460,9 @@ cal_layout:
     inc si
     cmp si, CAL_HIST_N
     jb .hrow
+%endif                              ; ...and so are their rects: CAL_NRECT is
+                                    ; CAL_NKEY without it, and cal_rects ends
+                                    ; where the keypad's do
 
     pop di
     pop si
@@ -425,8 +477,12 @@ cal_layout:
 ; out: AX = CAL_R_HIST + [cal_nvis]; all other registers preserved
 ; -----------------------------------------------------------------------------
 cal_nrect:
+%ifdef CALF_HIST
     mov ax, [cal_nvis]
     add ax, CAL_R_HIST
+%else
+    mov ax, CAL_NRECT               ; the keypad, and nothing above it
+%endif
     ret
 
 ; =============================================================================
@@ -628,6 +684,7 @@ cal_onup:
     dec di
     cmp di, CAL_NKEY
     jb .keypad
+%ifdef CALF_HIST
     je .hdr
     sub di, CAL_R_HIST              ; DI = the history row clicked
     mov ax, di
@@ -635,7 +692,8 @@ cal_onup:
     jmp short .out
 .hdr:
     call cal_hist_toggle            ; resizes AND repaints: nothing after it
-    jmp short .out
+%endif                              ; ...and with no pane there is no rect
+    jmp short .out                  ; above the keypad that could have been hit
 .keypad:
     mov bx, di
     add bx, bx
@@ -676,10 +734,12 @@ cal_onkey:
     call cal_asckey                 ; AL = CK_*, or CK_NONE
     cmp al, CK_NONE
     je .out
+%ifdef CALF_HIST
     cmp al, CK_HIST
     jne .clip
     call cal_hist_toggle
     jmp short .out
+%endif
 .clip:
     cmp al, CK_COPY                 ; the clipboard verbs are the menu's own
     jne .cpaste                     ; routines: one implementation each, the
@@ -860,6 +920,7 @@ cal_oncmd:
     dec ch
     jz .math
     ; --- View -----------------------------------------------------------------
+%ifdef CALF_HIST
     or cl, cl
     jnz .clrhist
     call cal_hist_toggle
@@ -869,6 +930,7 @@ cal_oncmd:
     mov byte [cal_hhead], 0
     call cal_repaint                ; a rare command, and the band has to be
     jmp short .out                  ; erased rather than merely re-lettered
+%endif   ; CALF_HIST - the View menu is the pane's, both items
     ; --- Edit -----------------------------------------------------------------
 .edit:
     or cl, cl
@@ -920,6 +982,16 @@ cal_oncmd:
 ; opaque over its own rect, so repainting the content first would be
 ; PERFORMANCE.md's double-draw flash with the credits as the second layer.
 ; -----------------------------------------------------------------------------
+%ifndef CALF_ABOUT
+; No About card (APP_SMALL). cal_abdismiss is called by the click, key and
+; menu paths before they do anything else and answers CF = 1 when it SPENT the
+; event taking the card down - so with no card it must answer "not spent".
+cal_abdismiss:
+    clc
+    ret
+%endif
+
+%ifdef CALF_ABOUT
 cal_about:
     push ax
     push bx
@@ -1115,6 +1187,7 @@ cal_abdraw:
 ; layer. This entry is for the paths that repaint with no kernel fill in
 ; front of them - a menu command.
 ; -----------------------------------------------------------------------------
+%endif   ; CALF_ABOUT
 cal_repaint:
     push ax
     push bx
@@ -1176,13 +1249,19 @@ cal_drawall:
     cmp si, CAL_NKEY
     jb .key
 
+%ifdef CALF_HIST
     call cal_draw_hdr
+%endif
+%ifdef CALF_HIST
     call cal_draw_rows
+%endif
 
+%ifdef CALF_ABOUT
     cmp byte [cal_abon], 0          ; ...and the credit card over the lot, or
     je .noab                        ; a W_PAINT under it would lose it
     call cal_abdraw
 .noab:
+%endif
     pop di
     pop si
     pop dx
@@ -1273,16 +1352,19 @@ cal_invert:
     dec ax
     cmp ax, CAL_NKEY
     jb .key
+%ifdef CALF_HIST
     je .hdr
     sub ax, CAL_R_HIST              ; a history ROW inverts by being drawn
     stc                             ; again with its two colours swapped -
     call cal_draw_row               ; the same opaque pass over the same
     jmp short .out                  ; cells the release will use
+%endif
 .key:
     mov di, OS88UI_DOWN             ; ...and a keypad key by being drawn down,
     stc                             ; over the upright one already there
     call cal_btn
     jmp short .out
+%ifdef CALF_HIST
 .hdr:
     mov si, cal_rects + CAL_R_HDR * 8
     mov ax, [si+0]
@@ -1290,6 +1372,7 @@ cal_invert:
     mov cx, [si+4]
     mov dx, [si+6]
     call OSAPI_GFX_XOR_FILL
+%endif
 .out:
     pop di
     pop si
@@ -1309,12 +1392,14 @@ cal_restore:
     dec ax
     cmp ax, CAL_NKEY
     jb .key
+%ifdef CALF_HIST
     je .hdr
     sub ax, CAL_R_HIST
     clc                             ; upright, and said rather than inherited
     call cal_draw_row               ; a row is one opaque run over EXACTLY its
     jmp short .out                  ; own rect, so drawing it again IS the
-                                    ; erase (SPEC.md 6.1) and no fill is owed
+%endif                              ; erase (SPEC.md 6.1) and no fill is owed
+%ifdef CALF_HIST
 .hdr:
     mov si, cal_rects + CAL_R_HDR * 8   ; the strip is a generous target and
     mov ax, [si+0]                      ; what is DRAWN in it is a triangle and
@@ -1328,6 +1413,7 @@ cal_restore:
     call OSAPI_GFX_FILL
     call cal_draw_hdr
     jmp short .out
+%endif
 .key:
     xor di, di                      ; upright - and the erase is not optional,
     stc                             ; because the ground under it is a pressed
@@ -1398,6 +1484,7 @@ cal_setdown:
 ; is static - the triangle's DIRECTION is the state - so nothing here changes
 ; on a fold and the strip is drawn once per repaint.
 ; -----------------------------------------------------------------------------
+%ifdef CALF_HIST
 cal_draw_hdr:
     push ax
     push bx
@@ -1481,6 +1568,7 @@ cal_draw_hdr:
 ; in:  the layout is current; gfx lock held
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
+; ...cal_draw_hdr above and the row painters below are one CALF_HIST block
 cal_draw_rows:
     push ax
     push bx
@@ -1601,6 +1689,7 @@ cal_hslot:
 ; in:  gfx lock held
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
+%endif   ; CALF_HIST
 cal_show:
     push ax
     push bx
@@ -2242,6 +2331,22 @@ cal_reduce:
 ; out: cal_line holds '<acc> <op> <cur> = ' and [cal_linep] points past it;
 ;      preserves all registers
 ; -----------------------------------------------------------------------------
+%ifndef CALF_HIST
+; No history (APP_SMALL). These three are called from the ARITHMETIC paths -
+; every `=`, every sqrt and every 1/x - so gating the call sites would have
+; meant six %ifdefs through code that is not the history's. Three entry points
+; on one `ret` instead, which is apps/notepad/notepad.asm's undo treatment.
+;
+; [cal_linep] STAYS in both builds and simply reads 0 here, which is what
+; cal_unary_end's `cmp word [cal_linep], 0 / je .out` already tests for - so
+; that path needs no gate either.
+cal_hist_prep:
+cal_hist_prep_un:
+cal_hist_push:
+    ret
+%endif
+
+%ifdef CALF_HIST
 cal_hist_prep:
     push ax
     push bx
@@ -2594,6 +2699,7 @@ cal_hist_toggle:
 ; cal_copy - the displayed number onto the system clipboard
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
+%endif   ; CALF_HIST
 cal_copy:
     push ax
     push bx
@@ -3617,7 +3723,11 @@ cal_tpl:
     OS88_MENUSET cal_menus, cal_m_name, cal_oncmd
         OS88_MENU cal_m_edit, cal_i_edit, 2
         OS88_MENU cal_m_math, cal_i_math, 4
+%ifdef CALF_HIST
         OS88_MENU cal_m_view, cal_i_view, 2
+%endif                              ; the View menu is the pane's, both items -
+                                    ; and it is LAST, so Edit and Math keep
+                                    ; their indices when it goes
     OS88_MENUSET_END cal_menus
 
 cal_m_name: db 'Calc', 0
@@ -3794,6 +3904,7 @@ cal_asctab:
 ; The disclosure triangle, four bands each, {x1,y1,x2,y2} relative to
 ; (CAL_TRI_X, CAL_HDR_TY). Two pictures rather than one rotated, because a
 ; 7x7 triangle at this size is drawn rather than computed.
+%ifdef CALF_HIST
 cal_tri_shut:                       ; folded up: pointing right
     db 0, 0, 0, 6
     db 1, 1, 1, 5
@@ -3804,6 +3915,7 @@ cal_tri_open:                       ; folded down: pointing down
     db 1, 2, 5, 2
     db 2, 3, 4, 3
     db 3, 4, 3, 4
+%endif   ; CALF_HIST
 
 ; --- constants, as values ------------------------------------------------------
 cal_zero:    dd 0
@@ -3816,80 +3928,119 @@ cal_e8:      dd 100000000           ; cal_div's precision-target multiplier
 
 %include "os88ui.inc"
 
-    OS88_BSS CAL_BSS_TOTAL
-    OS88_IMAGE_END
+%assign CAL_BSS 0
+%macro CALVAR 2                     ; name, bytes
+%1 equ os88_image_end + CAL_BSS
+%assign CAL_BSS CAL_BSS + (%2)
+%endmacro
 
 ; --- loader-zeroed bss (SPEC.md 21 step 5) -------------------------------------
+; Laid out by a PREPROCESSOR COUNTER, not by hand. It was ~52 lines of
+; `equ os88_image_end + N` with the offsets typed out, and two things came of
+; that: the note above cal_down says renumbering is expensive enough that a
+; variable was put in the IMAGE to avoid it, and the total drifted - the
+; fields end at 843 and `CAL_BSS_TOTAL equ 1136` had been sitting above them
+; since the package landed, so **293 bytes of every instance were reserved,
+; zeroed by the loader and never addressed by anything**.
+;
+; CAL_BSS_TOTAL now FALLS OUT of the counter, so it cannot drift again, and
+; the 293 bytes come back on both builds. The counter is also what makes the
+; history gateable at all: dropping a field from a hand-numbered table means
+; renumbering every field under it (SPEC.md 65.10).
+;
 ; All zero is a valid starting state: a zero entry, no pending operator, no
 ; history and the pane folded up. [cal_new] being 0 rather than 1 is right
 ; too - the display shows a plain 0 and the first digit extends it, which is
 ; what typing into a fresh calculator does.
-cal_win     equ os88_image_end + 0     ; word: our window
-cal_ox      equ os88_image_end + 2     ; word: content left  (per callback)
-cal_oy      equ os88_image_end + 4     ; word: content top
-cal_ch      equ os88_image_end + 6     ; word: content height
-cal_nvis    equ os88_image_end + 8     ; word: history rows that FIT
-cal_a       equ os88_image_end + 10    ; word: cal_calc's left operand ptr
-cal_b       equ os88_image_end + 12    ; word: ...and its right
-cal_linep   equ os88_image_end + 14    ; word: where the answer joins cal_line
-cal_penx    equ os88_image_end + 16    ; word: cal_emit's field pen
-cal_efirst  equ os88_image_end + 18    ; word: ...its first changed cell
-cal_eterm   equ os88_image_end + 20    ; word: ...and one past its last
+    CALVAR cal_win,     2    ; word: our window
+    CALVAR cal_ox,      2    ; word: content left  (per callback)
+    CALVAR cal_oy,      2    ; word: content top
+    CALVAR cal_ch,      2    ; word: content height
+%ifdef CALF_HIST
+    CALVAR cal_nvis,    2    ; word: history rows that FIT
+%endif
+    CALVAR cal_a,       2    ; word: cal_calc's left operand ptr
+    CALVAR cal_b,       2    ; word: ...and its right
+    CALVAR cal_linep,   2    ; word: where the answer joins cal_line
+    CALVAR cal_penx,    2    ; word: cal_emit's field pen
+    CALVAR cal_efirst,  2    ; word: ...its first changed cell
+    CALVAR cal_eterm,   2    ; word: ...and one past its last
 
-cal_open    equ os88_image_end + 22    ; byte: the history pane is folded down
-cal_err     equ os88_image_end + 23    ; byte: the refused state
-cal_op      equ os88_image_end + 24    ; byte: CAL_OP_NONE or CK_ADD..CK_DIV
-cal_new     equ os88_image_end + 25    ; byte: the display holds a RESULT
-cal_dot     equ os88_image_end + 26    ; byte: the entry is past its point
-cal_hn      equ os88_image_end + 27    ; byte: history entries kept, 0..8
-cal_hhead   equ os88_image_end + 28    ; byte: the newest one's ring slot
-cal_wd      equ os88_image_end + 29    ; byte: cal_pack's decimal count
-cal_wsgn    equ os88_image_end + 30    ; byte: ...and its sign
-cal_we      equ os88_image_end + 31    ; byte: cal_do_sqrt's even exponent
-cal_subf    equ os88_image_end + 32    ; byte: cal_addsub's subtract flag
-cal_fdot    equ os88_image_end + 33    ; byte: cal_fmtv's trailing-point flag
-cal_pneg    equ os88_image_end + 34    ; byte: a pasted leading '-'
-cal_kcode   equ os88_image_end + 35    ; byte: the key cal_dispatch is running
-cal_ebank   equ os88_image_end + 36    ; byte: cal_emit's banked terminator
-cal_wait    equ os88_image_end + 37    ; byte: an operator was the last key, so
+%ifdef CALF_HIST
+    CALVAR cal_open,    1    ; byte: the history pane is folded down
+%endif
+    CALVAR cal_err,     1    ; byte: the refused state
+    CALVAR cal_op,      1    ; byte: CAL_OP_NONE or CK_ADD..CK_DIV
+    CALVAR cal_new,     1    ; byte: the display holds a RESULT
+    CALVAR cal_dot,     1    ; byte: the entry is past its point
+%ifdef CALF_HIST
+    CALVAR cal_hn,      1    ; byte: history entries kept, 0..8
+    CALVAR cal_hhead,   1    ; byte: the newest one's ring slot
+%endif
+    CALVAR cal_wd,      1    ; byte: cal_pack's decimal count
+    CALVAR cal_wsgn,    1    ; byte: ...and its sign
+    CALVAR cal_we,      1    ; byte: cal_do_sqrt's even exponent
+    CALVAR cal_subf,    1    ; byte: cal_addsub's subtract flag
+    CALVAR cal_fdot,    1    ; byte: cal_fmtv's trailing-point flag
+    CALVAR cal_pneg,    1    ; byte: a pasted leading '-'
+    CALVAR cal_kcode,   1    ; byte: the key cal_dispatch is running
+    CALVAR cal_ebank,   1    ; byte: cal_emit's banked terminator
+    CALVAR cal_wait,    3    ; byte: an operator was the last key, so
                                        ; the number field is blank and waiting
                                        ; (38..39 spare, keeping the values
                                        ;  below on an even boundary)
 
-cal_acc     equ os88_image_end + 40    ; the accumulator
-cal_cur     equ os88_image_end + 48    ; ...and what is on show
-cal_res     equ os88_image_end + 56    ; cal_calc's answer
+    CALVAR cal_acc,     8    ; the accumulator
+    CALVAR cal_cur,     8    ; ...and what is on show
+    CALVAR cal_res,     8    ; cal_calc's answer
 
-cal_q       equ os88_image_end + 64    ; 64-bit scratch, four words each
-cal_q2      equ os88_image_end + 72
-cal_q3      equ os88_image_end + 80
-cal_dv      equ os88_image_end + 88    ; dword: cq_divmod's divisor
-cal_rem     equ os88_image_end + 92    ; dword: ...and its remainder
-cal_x       equ os88_image_end + 96    ; dword: cal_isqrt's running root
+    CALVAR cal_q,       8    ; 64-bit scratch, four words each
+    CALVAR cal_q2,      8    
+    CALVAR cal_q3,      8    
+    CALVAR cal_dv,      4    ; dword: cq_divmod's divisor
+    CALVAR cal_rem,     4    ; dword: ...and its remainder
+    CALVAR cal_x,       8    ; dword: cal_isqrt's running root
 
-cal_cbuf    equ os88_image_end + 104   ; the context field, 13 cells + NUL
-cal_cshad   equ os88_image_end + 120   ; ...and what is on the GLASS
-cal_nbuf    equ os88_image_end + 136   ; the number field, likewise
-cal_nshad   equ os88_image_end + 152
+    CALVAR cal_cbuf,    16   ; the context field, 13 cells + NUL
+    CALVAR cal_cshad,   16   ; ...and what is on the GLASS
+    CALVAR cal_nbuf,    16   ; the number field, likewise
+    CALVAR cal_nshad,   16   
 
-cal_dig     equ os88_image_end + 168   ; 12: cal_fmtv's digits, least first
-cal_scratch equ os88_image_end + 184   ; 48: formatting and clipboard staging
-cal_line    equ os88_image_end + 232   ; 64: a history line before it is padded
+    CALVAR cal_dig,     16   ; 12: cal_fmtv's digits, least first
+    CALVAR cal_scratch, 48   ; 48: formatting and clipboard staging
+%ifdef CALF_HIST
+    CALVAR cal_line,    64   ; 64: a history line before it is padded
+%endif                       ; ([cal_linep] above stays in BOTH builds - it is
+                             ; what cal_unary_end tests, and two bytes is
+                             ; cheaper than gating that test)
 
-cal_htext   equ os88_image_end + 296   ; 8 x 27: the rows, padded to the field
-cal_hval    equ os88_image_end + 512   ; 8 x 8: the answers they load back
+%ifdef CALF_HIST
+    CALVAR cal_htext,   216  ; 8 x 27: the rows, padded to the field
+    CALVAR cal_hval,    64   ; 8 x 8: the answers they load back
+%endif
 
-cal_rects   equ os88_image_end + 576   ; 29 x {x1,y1,x2,y2}, screen coords
-cal_pbuf    equ os88_image_end + 808   ; 25: a paste, and NOT cal_scratch -
+    CALVAR cal_rects,   CAL_NRECT * 8   ; {x1,y1,x2,y2} per rect, screen
+                             ; coords - DERIVED now, because the table shrinks
+                             ; with the pane (it was a typed 232)
+    CALVAR cal_pbuf,    26   ; 25: a paste, and NOT cal_scratch -
                                        ; every keystroke it feeds cal_key
                                        ; recomposes the display through that
                                        ; one, over the bytes still unread
-                                       ; 808 + 25 = 833
+                                       ; (the counter keeps this in step)
 
-cal_abw     equ os88_image_end + 834   ; word: the About card's measured width,
-cal_abh     equ os88_image_end + 836   ; word: ...height,
-cal_abl     equ os88_image_end + 838   ; word: ...and where it sits in the
-cal_abt     equ os88_image_end + 840   ; word:    content (SPEC.md 12.2/65)
-cal_abon    equ os88_image_end + 842   ; byte: 1 = the credits are up
-                                       ; 842 + 1 = 843, rounded up to
-                                       ; CAL_BSS_TOTAL = 1136
+%ifdef CALF_ABOUT
+    CALVAR cal_abw,     2    ; word: the About card's measured width,
+    CALVAR cal_abh,     2    ; word: ...height,
+    CALVAR cal_abl,     2    ; word: ...and where it sits in the
+    CALVAR cal_abt,     2    ; word:    content (SPEC.md 12.2/65)
+    CALVAR cal_abon,    1    ; byte: 1 = the credits are up
+%endif
+                                       ; ...and CAL_BSS_TOTAL now FALLS OUT of the
+                                       ; counter above rather than being typed
+
+%assign CAL_BSS_TOTAL CAL_BSS
+
+    OS88_BSS CAL_BSS_TOTAL
+    OS88_IMAGE_END
+
+

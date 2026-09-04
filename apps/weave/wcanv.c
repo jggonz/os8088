@@ -121,7 +121,7 @@ static int w_cspr_set(int k, int atom, int v)
  * session. So start()/stop() raise and clear a flag the loop reads, and the
  * task itself lives from the first start() to the close box.
  *
- * A REFUSAL IS NORMAL AND TRANSIENT (SPEC.md 20.6): MAX_TASKS is 8 and the
+ * A REFUSAL IS NORMAL AND TRANSIENT (SPEC.md 20.6): MAX_TASKS is 14 and the
  * Timers, the Task Manager and a transient SB task draw from the same seven
  * slots. So this RETRIES on every start() and latches only on success -
  * apps/fractal's fr_hire is the reference - and a canvas that cannot have one

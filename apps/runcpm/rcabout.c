@@ -74,9 +74,10 @@ static const struct rc_abl rc_ab_lines[] = {
     { 4, 5, "A native reimplementation of RunCPM 6.9 for" },
     { 4, 6, "os8088: a Z80 running CP/M 2.2 in a window, drives" },
     { 4, 7, "as folders, Digital Research's CCP at the prompt." },
-    { 4, 8, "MIT License, Copyright (c) 2017 Mockba the Borg." }   /* LICENSE */
+    { 4, 8, "MIT License, Copyright (c) 2017 Mockba the Borg." },  /* LICENSE */
+    { 4, 9, "Ported by Jorge Gonzalez" }
 };
-#define RC_AB_NL 7
+#define RC_AB_NL 8
 #define RC_AB_OKROW 10                       /* 6 + 10*10 + 10 = 116 < ~122 */
 
 /* the panel's live geometry, resident bss: the close fills it, the click

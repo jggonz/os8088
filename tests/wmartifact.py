@@ -53,7 +53,8 @@ S = os88sym.linear
 KERNEL_SEG = 0x0060
 TITLE_H = 18
 MBAR_H = 20
-DSK_DE_SIZE = 32
+DSK_DE_STRIDE = 24              # the LISTING's stride (SPEC.md 19.1), not
+                                # DSK_DE_SIZE's 32 - see tools/os88geom.py
 VID_HERC, VID_CGA = 1, 2
 
 fails = []
@@ -131,7 +132,7 @@ def row_of(m, name):
 
 
 def name_at(m, row):
-    e = m.read(S("disk_dir") + row * DSK_DE_SIZE, DSK_DE_SIZE)
+    e = m.read(S("disk_dir") + row * DSK_DE_STRIDE, DSK_DE_STRIDE)
     return e.split(b"\0")[0].decode("latin-1").strip()
 
 

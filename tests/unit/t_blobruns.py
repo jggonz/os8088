@@ -17,20 +17,26 @@ KERNEL.SYS starts wherever the BPB puts the data area - so the same
 BOOT2_SECS splits differently on each geometry, and the boundary is in a
 different place on each:
 
-    BOOT2_SECS   360KB          720KB          1.44MB
-        13       6 + 7          4 + 9          3 + 10
-        14       6 + 8          4 + 9 + 1      3 + 11
+    BOOT2_SECS   360KB          720KB          1.2MB        1.44MB
+        13       6 + 7          4 + 9          1 + 12       3 + 10
+        14       6 + 8          4 + 9 + 1      1 + 13       3 + 11
+        19       6 + 9 + 4      4 + 9 + 6      1 + 15 + 3   3 + 16
+        22       6 + 9 + 7      4 + 9 + 9      1 + 15 + 6   3 + 18 + 1
+        23       6 + 9 + 8      4 + 9 + 9 + 1  1 + 15 + 7   3 + 18 + 2
 
-**720KB is the tight one and 13 is exactly its last sector.** The 14th costs a
-whole extra int 13h to move ONE sector, which is the worst shape a read has.
-That was found by measuring SPLSTARS=1 (which does take 14, SPEC.md 15.3.8.5)
+**720KB is the tight one at 13 and 13 is exactly its last sector.** The 14th
+costs a whole extra int 13h to move ONE sector, which is the worst shape a read
+has. That was found by measuring SPLSTARS=1 (which took 14, SPEC.md 15.3.8.5)
 after it had been asserted in a commit message that the sector was free, on
 the strength of the 360KB arithmetic alone.
 
-So this asserts the SHIPPED blob is two calls on all three geometries. It is a
-ratchet rather than a law: growing the blob past a boundary is a decision
-somebody may take, and then MAX_RUNS moves with a reason beside it - what it
-may not be is a thing nobody noticed.
+So this asserts a CALL COUNT PER GEOMETRY, not one number for all of them - the
+table above is why, and one number was the shape of the original mistake.
+SPEC.md 2.9.12 spent the third call on the two 9-sector geometries; 1.44MB is
+still two and 21 is the last size that keeps it there. It is a ratchet rather
+than a law: growing the blob past a boundary is a decision somebody may take,
+and then THAT GEOMETRY's row moves with a reason beside it - what it may not be
+is a thing nobody noticed.
 
 Host-side and exact: it reads the images `make` just built, finds KERNEL.SYS
 in the root directory, and walks the runs the way the sector does. No emulator
@@ -44,8 +50,37 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 
-IMAGES = ("os8088-360.img", "os8088-720.img", "os8088.img")
-MAX_RUNS = 2                    # ...per geometry, for the SHIPPED blob
+# ...AND THE RATCHET IS PER GEOMETRY, because the four do not share an answer
+# and never did - the paragraph above is the whole reason this file exists, and
+# one number for all of them was the shape of the mistake it was written to
+# catch. SPEC.md 2.9.12 took the blob from 13 sectors to 19 for the boot-only
+# bodies in docs/LAST-DROP-BYTES.md, which spends the third call on the two
+# 9-sector geometries and none on the release one.
+#
+# **AND THEN SPEC.md 2.5.2 TOOK IT BACK TO 8**, by splitting the overlay by
+# lifetime: the bodies that are dead at the first mount ride the kernel's own
+# read into the FAT window instead, and only the 1,319 bytes that must outlive
+# it stay in the blob. So the third call is given back on both 9-sector
+# geometries and the ratchet closes behind it - all of them are TWO now, and
+# the 1.44MB row has been two throughout.
+#
+# The numbers each row cites are the sizes at which its own count changes, and
+# they are the reason to keep the rows apart rather than collapse them to one
+# figure: 13 is the last two-call blob on 720KB, 15 on 360KB, 16 on 1.2MB and
+# 21 on 1.44MB, so a growth that is free on the release geometry can still buy
+# a call on the other three - and 720KB is still the one that binds.
+IMAGES = {
+    "os8088-360.img": (2, "6 + 2 at 8 sectors; it was 6 + 9 + 4 at 19, and "
+                          "the third call arrived with the 16th sector"),
+    "os8088-720.img": (2, "4 + 4 at 8; 13 is this geometry's last two-call "
+                          "blob and the 14th sector was the price"),
+    "os8088-120.img": (2, "1 + 7 at 8 - the data area starts one sector "
+                          "short of a cylinder end here, so the first call "
+                          "is a single sector and 16 is the last two-call "
+                          "blob"),
+    "os8088.img":     (2, "3 + 5 at 8, and 21 is the last size that is two "
+                          "calls here - the next one is not free"),
+}
 
 
 def boot2_secs():
@@ -109,30 +144,38 @@ def main():
         print("  (asked for %d sectors, not the kernel's own %d)"
               % (nsec, boot2_secs()))
     fail = []
+    seen = []
     print("  stage 1 reads BOOT2_SECS = %d sectors of KERNEL.SYS" % nsec)
-    for img in IMAGES:
+    for img, (cap, why) in IMAGES.items():
         path = os.path.join(ROOT, "build", img)
         if not os.path.exists(path):
-            print("  %-16s not built - skipped" % img)
+            # a FAILURE, not a skip: this row used to print "not built" and
+            # pass, so a geometry nobody had built was a geometry whose
+            # blob ratchet was never read at all
+            fail.append("%s: not built - run make first; the ratchet for "
+                        "this geometry (%s) cannot be read off a disk that "
+                        "is not there" % (img, why))
             continue
         spt, r = runs(path, nsec)
-        print("  %-16s SPT=%-2d  %d call(s): %s"
-              % (img, spt, len(r),
+        seen.append(len(r))
+        print("  %-16s SPT=%-2d  %d call(s) of %d: %s"
+              % (img, spt, len(r), cap,
                  " + ".join("%d@C%dH%dS%d" % (n, c, h, s) for c, h, s, n in r)))
-        if len(r) > MAX_RUNS:
-            fail.append("%s: the blob takes %d int 13h calls and the ratchet is "
-                        "%d. One call is 1-2 revolutions WHATEVER it moves "
-                        "(PERFORMANCE.md Part 2), so the last run here costs a "
-                        "whole one to move %d sector(s). Either the blob fits "
-                        "again or MAX_RUNS moves with a reason beside it "
-                        "(SPEC.md 15.3.8.5)"
-                        % (img, len(r), MAX_RUNS, r[-1][3]))
+        if len(r) > cap:
+            fail.append("%s: the blob takes %d int 13h calls and this "
+                        "geometry's ratchet is %d (%s). One call is 1-2 "
+                        "revolutions WHATEVER it moves (PERFORMANCE.md Part "
+                        "2), so the last run here costs a whole one to move %d "
+                        "sector(s). Either the blob fits again or THIS "
+                        "geometry's row moves with a reason beside it "
+                        "(SPEC.md 15.3.8.5, 2.9.12)"
+                        % (img, len(r), cap, why, r[-1][3]))
 
     for f in fail:
         print("FAIL: %s" % f)
     print("blobruns: %s" % ("FAILED" if fail else
-                            "the blob is %d int 13h call(s) on every geometry"
-                            % MAX_RUNS))
+                            "the blob is %s int 13h call(s), 360/720/1.2/1.44"
+                            % "/".join(str(n) for n in seen)))
     return 1 if fail else 0
 
 

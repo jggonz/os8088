@@ -47,11 +47,25 @@
 
 ; --- the jump keys, and what each moves the stopped view by -------------------
 ; NOT l/p/r/x/d/w/m/1-4/f/space/Esc/Home, which the bracket already answers.
+;
+; **AND NOT `v`, WHICH THIS LIST LEFT OUT.** V is the fullscreen SURFACE
+; (tracker.asm, SPEC.md 45.13), and its `cmp al, 'v' / je .txxt` sits THREE
+; LINES ABOVE the `%ifdef TRKDBG` block that calls this table - so a `v` here
+; is answered by the surface and never reaches `trk_dbg_key` at all. The entry
+; was `db 'v', -2` and it was dead: tests/trkscrl.py failed on exactly one of
+; its seven cases, "v moved 0 rows, not -2", identically at both ends of a
+; kernel size pass, and read for a week as a defect in the tracker's SCROLL.
+; Its neighbours pass, including the same direction from further away, which
+; was the tell - nothing about -2 from view 2 is special, and a key that is
+; never delivered looks exactly like a scroll that refuses.
+;
+; A key added here must not be one the two handlers above already compare
+; against. `u` is free in both.
 trk_dbg_keys:
     db 'j', 2
     db 'k', 3
     db 'n', 4
-    db 'v', -2
+    db 'u', -2
     db 'b', -3
     db 'c', -4
     db 0

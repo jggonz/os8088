@@ -77,7 +77,12 @@
 
 %include "os88api.inc"
 
-    OS88_HEADER 'CYCLONE 88', cy_entry, 1
+    OS88_HEADER 'CYCLONE 88', cy_entry, 1, OS88_STACK_192
+                                ; THE WORKER'S STACK, declared
+                                ; rather than defaulted (SPEC.md 8.7):
+                                ; static 66 for cy_worker
+                                ; over the 64-byte interrupt floor
+                                ; that is 130, and 192 gives 1.48x
 
 ; --- embedded 16x16 icon (SPEC.md 20.2, flags bit 0) --------------------------
 ; The tube seen down its own axis: concentric rings converging on a vanishing
@@ -2092,7 +2097,7 @@ cy_clamp:
 ; cy_fillx - a filled rect in content coordinates, preserving SI/DI and
 ; NOTHING else. This is the drawing spine's leaf (SPEC.md 67.5.5): every one
 ; of its callers reloads all four corners from bss on the next line, and the
-; eight bytes cy_fillc spends banking them are eight bytes of a 256-byte
+; eight bytes cy_fillc spends banking them are eight bytes of a 384-byte
 ; worker stack held for the whole of the kernel's gfx_fill underneath.
 ; in: AX/BX/CX/DX = x1/y1/x2/y2 inclusive.
 cy_fillx:
@@ -2773,7 +2778,8 @@ cy_obj_hide:
 ;
 ; Repairing here instead is a fill under an already deep chain, and the first
 ; attempt HUNG: cy_obj_put + cy_fillc + a far call, five frames below a worker
-; that gets 256 BYTES (SPEC.md 8), overran the slice and the kernel halted the
+; that got 256 BYTES then (SPEC.md 8 is 384 now), overran the slice and the
+; kernel halted the
 ; machine in sch_stkdie exactly as it is meant to. Moving the call one frame
 ; shallower was not enough - four runs of four still hung - because the spine
 ; above it was 76 bytes of politeness. Flattening that (67.5.5) took the whole
@@ -4069,7 +4075,7 @@ cy_update:
 ;
 ; IT PRESERVES NOTHING, AND NEITHER DOES ANYTHING ON THE DRAWING SPINE BELOW
 ; IT. That is SPEC.md 67.5.5 and it is a stack decision, not a style: a worker
-; gets 256 BYTES (SPEC.md 8) and this app's spine is seven frames deep, so six
+; gets 384 BYTES (SPEC.md 8) and this app's spine is seven frames deep, so six
 ; routines each politely banking AX..DX cost 60 of them for nothing. Both
 ; callers - cy_worker's loop and the fullscreen bracket's - reload every
 ; register they use from memory on the next line, so there was never anything
@@ -4525,7 +4531,8 @@ cy_input:
 ; That beep is the bug, not the noise. It is `call F000:E8C0`, two `loop $`
 ; delays run with INTERRUPTS ENABLED, so every IRQ1 that arrives inside it
 ; nests another int 09h - and another beep - on whichever task stack happens
-; to be current. A worker gets 256 BYTES (SPEC.md 8). Measured on a
+; to be current. A worker gets 384 BYTES (SPEC.md 8; it was 256 when this was
+; measured). Measured on a
 ; cycle-accurate 5150: the buffer went 0 -> 9 -> 15 pending inside one second
 ; of held arrow-plus-fire, and the machine halted in sch_stkdie with a stack
 ; holding SEVEN nested copies of the same 26-byte beep frame. It reads as a

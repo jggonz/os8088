@@ -286,8 +286,10 @@ Two ways to carry them:
   instructions and one branch — the same derivation `vid_apply` does, in the
   one other place that changes which display is live. **Recommended.**
 
-`[vid_rseg]`, `[vid_rpara]` and `[vid_rend]` — the software renderer's target
-and its loop bounds — are *inside* the run already and need nothing.
+`[vid_rseg]` — the software renderer's target — is *inside* the run already
+and needs nothing. It had two companions here, `[vid_rpara]` and `[vid_rend]`,
+the loop bounds; SPEC.md §39.26 deleted the loop that read them and they have
+since left the run altogether.
 
 ### 4.3 What is sized in planes
 
@@ -372,7 +374,10 @@ reach and the shipping pair cannot:
 Worth stating, because it is most of the feature:
 
 - The per-display context, the swap, `vid_disp_of`/`vid_disp_find`,
-  `vid_pt_local`/`vid_pt_clamp`, `vid_span_one`, `vid_desk_union`.
+  `vid_pt_clamp`, `vid_span_one`, `vid_desk_union`. (`vid_pt_local` was on
+  this list too and is now deleted: it had no caller anywhere, its header
+  cited §39.15 and the symbol appeared nowhere in SPEC.md at all — a whole
+  `ret`-terminated body no gate in the tree can see.)
 - `GFXDISP`/`GFXDENTER`/`GFXDORG` and every primitive under them.
 - The crossing cursor and `mou_clamp` (§39.15).
 - `wm_fit`, `ui_drag_dead`, `wm_disp_of`, both fullscreens, the fsx bracket.

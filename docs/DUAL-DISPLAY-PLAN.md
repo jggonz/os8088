@@ -241,7 +241,7 @@ entries and the whole of blitting.
 | path | what it needs | why it is not covered by the four |
 |---|---|---|
 | `font_char` / `font_run` | whole-cell display selection | clips per cell via `wm_clip_test`, not per pixel |
-| `ico_core` | whole-shape display selection | same, and it reads `[vid_stride]`/`[vid_strm1]` directly |
+| `ico_core` | whole-shape display selection | same, and it reads `[vid_stride]` directly. **The `[vid_strm1]` this row also named was never read by it** — `icons.inc` reads `[vid_stride]` at three sites and `vid_strm1` at none, and that cell has since been deleted for exactly that reason |
 | `gfx_scroll` | per-display; refuse a straddling blit | deliberately off the clip list (SPEC.md §11.3) — a blit cannot take a sub-rect |
 | `gfx_save` / `gfx_restore` | display of the rect | the cursor's save-under, from inside IRQ4 |
 | `gfx_line_mono` / `gfx_lstep*` | display of each endpoint | walks pixels, not rects |
@@ -292,12 +292,23 @@ vid_wrapfix  vid_bankmask  vid_strm1  vid_rseg  vid_rpara  vid_rend
 + the display's own clip extent (see below)
 ```
 
+> **As built, and since shrunk**: `vid_strm1`, `vid_rpara` and `vid_rend` are
+> gone. Each was written by `vid_apply` and read by nothing — `vid_rpara` and
+> `vid_rend` were `sw_xfer`'s loop bounds, and SPEC.md §39.26 deleted the loop
+> — so the run is **sixteen** words, not nineteen, and a per-display record is
+> six bytes smaller. SPEC.md §39.13 is the current shape; `VID_CTX_W` is the
+> number and `vidsel.inc`'s `%if` asserts it.
+
 **What does NOT move — and this split is the crux of the whole design:**
 
 ```
 vid_dock_y0  vid_dock_ty0  vid_clk_hx  vid_ymax  vid_popmax
-vid_desk_zx  vid_desk_zl  vid_desk_zr
+vid_desk_zx
 ```
+
+> `vid_desk_zl`/`vid_desk_zr` were on this list and are gone too: nothing read
+> them either. `desk_zone_rect` derives the drawn rect from `[vid_desk_zx]`
+> and `DESK_ZW`/`DESK_ZOVER` (SPEC.md §26.4).
 
 Those are **desktop layout**, not display geometry. They belong to the virtual
 desktop and to the primary's chrome, and they must not change when a primitive
@@ -317,10 +328,10 @@ enumerable:
 | module | renderer-side reads |
 |---|---|
 | `vga12.inc` | `vga_rect_setup` — 4 |
-| `icons.inc` | ~9 (`vid_h`, `vid_hm1`, `vid_stride`, `vid_strm1`) |
+| `icons.inc` | ~9 (`vid_h`, `vid_hm1`, `vid_stride`; **not** `vid_strm1` — see the note under `ico_core` above) |
 | `mouse.inc` | ~5 in `cur_draw`/`cur_geom` |
 | `softgfx.inc` | 2 in `gfx_scroll` |
-| `font.inc` | 2 (`vid_wm8`/`vid_hm8`, the whole-cell clip) |
+| `font.inc` | 2 (the whole-cell clip). **It is `vid_cwm8`/`vid_chm8`, the DISPLAY's** — this row named the desktop's pair, and `vid_hm8` turned out to have no reader anywhere and has been deleted |
 | `wm.inc` | 2 in `wm_su_edge` |
 
 **~24 sites against ~60+.** So `[vid_w]`/`[vid_h]` keep meaning *the desktop*
@@ -1292,10 +1303,11 @@ Two things made it cheaper than this plan assumed. **The eighteen words a
 display owns were almost contiguous already** — `vid_tab` was the only thing
 between the live block and the derived renderer words, and it is a static
 table, so moving it above them makes the whole run one `rep movsw` instead of
-two. And **the boundary lands exactly where §5 wanted it**: the run ends at
-`vid_rend`, and `vid_dock_y0` — the first word the *desktop* owns — is the very
-next one, so the split between per-display and per-desktop geometry needed no
-rearranging at all, only a name.
+two. And **the boundary lands exactly where §5 wanted it**: the run ended at
+`vid_rend` (it ends at `vid_tseg` now, SPEC.md §6.1.10, and `vid_rend` has
+been deleted), and `vid_dock_y0` — the first word the *desktop* owns — was
+the very next one, so the split between per-display and per-desktop geometry
+needed no rearranging at all, only a name.
 
 **The gate was the screen, not the binary.** `kern_small` is the pre-step-1
 kernel by construction (everything here is behind `%ifdef KERN_BIG`), so

@@ -71,7 +71,7 @@
     call KERNEL_SEG:cw_font_run
   %endmacro
   %macro UI_WIDTH 0
-    call KERNEL_SEG:cw_font_width
+    call KERNEL_SEG:font_width
   %endmacro
   %macro UI_PEN 0
     call KERNEL_SEG:cw_gfx_pen_cf
@@ -253,15 +253,33 @@ OS88UI_DOWN equ 16              ; THE PRESSED LOOK (SPEC.md 13.8): interior
 ;
 ; It is an opt-out rather than an opt-in so that every existing consumer is
 ; byte-identical, which is checked rather than asserted.
+;
+; --- OS88UI_NOBTN - the SAME opt-out, for a package with no bar either -------
+; OS88UI_BARONLY is the button's opt-out spelled as a statement about the
+; SCROLL BAR, and the About card (OS88UI_ABOUT, SPEC.md 20.5.1) is the first
+; consumer for which that sentence is simply false: it draws no bar and no
+; button, and under the old spelling the only way to say so was a name that
+; promised a bar. So the gate is OS88UI_NOBTN and OS88UI_BARONLY now IMPLIES
+; it - which is why every existing consumer is still byte-identical, and the
+; %error below still fires for the one thing neither name may mean, an include
+; that emits no drawing code at all.
 %ifdef OS88UI_BARONLY
  %ifndef OS88UI_SCROLL
   %error "OS88UI_BARONLY without OS88UI_SCROLL includes no drawing code at all"
  %endif
+ %define OS88UI_NOBTN
+%endif
+%ifdef OS88UI_NOBTN
  %ifdef OS88UI_KERNEL
-  %error "OS88UI_BARONLY is a PACKAGE's: both kernel dialogs draw buttons"
+  %error "OS88UI_NOBTN/BARONLY is a PACKAGE's: both kernel dialogs draw buttons"
+ %endif
+ %ifndef OS88UI_SCROLL
+  %ifndef OS88UI_ABOUT
+   %error "OS88UI_NOBTN with neither OS88UI_SCROLL nor OS88UI_ABOUT includes no drawing code at all"
+  %endif
  %endif
 %endif
-%ifndef OS88UI_BARONLY
+%ifndef OS88UI_NOBTN
 ; -----------------------------------------------------------------------------
 ; os88ui_btn - draw one standard button
 ; in:  BX = rect {x1,y1,x2,y2} inclusive, SI = NUL label, DI = OS88UI_* flags
@@ -683,8 +701,9 @@ os88ui_glyph:
                                 ; the CLIP's, and is why the test above stands
                                 ; where it does.
                                 ;
-                                ; icon_draw_x refuses four shapes: ww = 0,
-                                ; ww > 1, rows = 0, rows > ICO_STAGE_H.
+                                ; icon_draw_x refuses a width that is not
+                                ; ICO_STAGE_WW - ww = 0 and ww > 1 in one
+                                ; compare - and rows = 0, rows > ICO_STAGE_H.
                                 ; os88ui_grec is `db 1, OS88UI_GW` - a
                                 ; CONSTANT, one word a row and twelve rows -
                                 ; so all four are decided at assembly time and
@@ -863,7 +882,7 @@ os88ui_g_con:                   ; check, set: the same square, crossed
 %if (OS88UI_GRADIO | OS88UI_GON) != 1 || OS88UI_GCHECK != 2
   %error "os88ui: the glyph indices no longer walk the array in order"
 %endif
-%endif                          ; OS88UI_BARONLY
+%endif                          ; OS88UI_NOBTN
 %ifdef OS88UI_KERNEL
 section .cold
 %endif
@@ -880,7 +899,7 @@ section .cold
   %ifdef KERN_BIG
     %define OS88UI_ARM
   %endif
-%elifndef OS88UI_BARONLY        ; ...and NOT under OS88UI_BARONLY: os88ui_bfind
+%elifndef OS88UI_NOBTN          ; ...and NOT under OS88UI_NOBTN: os88ui_bfind
   %define OS88UI_ARM             ; walks a button table by calling os88ui_bhit,
 %endif                           ; which the block above has just taken out
 %ifdef OS88UI_ARM
@@ -1764,6 +1783,13 @@ os88ui_sbd_id:   dw 0, 0
 ;
 ; wm_destroy_seg sweeps it at teardown (SPEC.md 20.2), so an app that dies
 ; with its alert up leaves nothing behind.
+;
+; --- AND IT DOES NOT ZOOM OPEN (SPEC.md 11.99.2.1) --------------------------
+; os88ui_ask calls OSAPI_WM_NOANIM before it shows the window. Your own second
+; window may want the same: the flag is for a DIALOG, something opened and
+; dismissed over and over or arriving in answer to a click that meant
+; something else. It is not for your main window - whether the system animates
+; at all is the user's choice, in Control Panel -> Theme.
 ; =============================================================================
 
 OS88UI_AOK     equ 0            ; the button sets. Index 0 is the DEFAULT - it
@@ -1868,6 +1894,19 @@ os88ui_ask:
                                 ; button under it), and the close box is
     mov ax, os88ui_aclose       ; intercepted
     call OSAPI_WM_ONCLOSE       ; (SPEC.md 75.1) so it can be the CANCEL
+    call OSAPI_WM_NOANIM        ; ...AND IT DOES NOT ZOOM OPEN (SPEC.md
+                                ; 11.99.2.1). The Standard File dialog and the
+                                ; notice window already declined and this is
+                                ; the third of the same species - except that
+                                ; the argument is stronger here, because the
+                                ; other two answer a command the user picked
+                                ; and this one answers a click on the CLOSE
+                                ; BOX: it arrives INSTEAD OF the close that
+                                ; was asked for, and a third of a second of
+                                ; outline in front of an interruption reads as
+                                ; the machine making a show of getting in the
+                                ; way. BX is still the window - the four slots
+                                ; above all take it and preserve it
     mov [os88ui_awin], bx       ; take the gate LAST: until this store the
     call OSAPI_WM_SHOW          ; window is an ordinary one
     clc
@@ -2272,6 +2311,274 @@ os88ui_akey:
     pop ax
     ret
 %endif                          ; OS88UI_ALERT
+
+%ifdef OS88UI_ABOUT
+; =============================================================================
+; THE ABOUT PANEL (SPEC.md 12.2, 20.5.1)
+;
+; The fourth shared element, and its argument is the SCROLL BAR's rather than
+; the button's: a button was five bodies that agreed, and this was SEVENTEEN
+; PRIVATE IMPLEMENTATIONS OF ONE CARD - arkanoid, browser, calc, cyclone,
+; ftpd, missile, modplug, paint, solitaire, tamegram, telnet, texpad, tracker,
+; wire and three more - each a white fill plus a black frame plus a column of
+; centred lines, each with its own arithmetic for where the card goes, and no
+; two of them measuring it the same way. Ten more packages had NO About at
+; all, which is how the credit for a contributed package went missing: the
+; cheapest thing to write was nothing.
+;
+; --- WHAT IT DOES NOT OWN ----------------------------------------------------
+; The panel is DRAWN here and it is REMEMBERED by you. There is no state byte
+; in this file and no dismissal: your `[x_abon]`, your painter drawing the
+; card last while it is set, and your click/key/menu handler taking it down
+; are four lines each and they are entangled with what your app is doing
+; underneath - arkanoid PAUSES a live ball, tracker drops the worker's frame,
+; calc repaints a keypad. A widget that tried to own that would have to know
+; all three.
+;
+; --- WHY THERE ARE TWO ENTRIES ----------------------------------------------
+; `os88ui_about` is for the HANDLER - the proc you gave OSAPI_ABOUT_SET.
+; NOTHING HAS ARMED A CLIP REGION THERE: ui_dispatch takes the gfx lock and
+; far-calls you, and the kernel arms a clip for a W_PAINT and for nothing else
+; (SPEC.md 11.3), so a card drawn without one lands on top of whatever window
+; is covering yours. `os88ui_about_d` is for your PAINTER, where the kernel's
+; own region is already armed and re-arming would throw the damage rect away
+; and redraw the whole card for a two-pixel repair.
+;
+; Two names over one flag argument, which is os88ui_arm/os88ui_armed's rule:
+; "the handler" and "the painter" are what the two callers actually are, and a
+; caller that got the flag backwards would draw over its neighbour.
+;
+; --- USING IT ----------------------------------------------------------------
+;   %define OS88UI_ABOUT        ; before the %include, beside OS88UI_SCROLL
+;
+;   my_ablines:                 ; a line table: near ptrs, 0 terminates.
+;       dw my_ab1, my_ab2, my_ab3, 0
+;   my_ab1: db 'Thing for os8088', 0
+;   my_ab2: db 0                ; an EMPTY string is a blank line
+;   my_ab3: db 'Contributed by Someone', 0
+;
+;   my_about:                   ; ...registered with OSAPI_ABOUT_SET
+;       mov byte [my_abon], 1
+;       mov bx, [my_win]
+;       mov si, my_ablines
+;       call os88ui_about       ; CF = 1: not one pixel of you is visible, so
+;       ret                     ; nothing was drawn - your flag is still set
+;                               ; and the next paint puts the card up
+;
+; The card is MEASURED from the strings themselves - widest line sets the
+; width, count sets the height - and CLAMPED to the live content box, never
+; pinned: SPEC.md 39's three adapters give three content widths for one
+; window, and a card sized for VGA hangs out of a CGA's.
+;
+; It is drawn with UI_RUN and not a fill-then-letter pair, so no pixel of it
+; is written twice (SPEC.md 6.1); the only fill is the ground the frame and
+; the gaps between lines stand on.
+; =============================================================================
+
+OS88UI_ABLH   equ 12            ; the line pitch: an 8px cell and 4px of air
+OS88UI_ABPADX equ 12            ; ...the margin either side of the widest line
+OS88UI_ABPADY equ 7             ; ...and above the first cell, inside the frame
+
+; -----------------------------------------------------------------------------
+; os88ui_about - the standard About card, from your ABOUT HANDLER
+; in:  BX = your window ptr, SI = your line table; the gfx lock is HELD
+; out: CF = 1 nothing was drawn - not one pixel of your content is visible
+; preserves every register
+; -----------------------------------------------------------------------------
+os88ui_about:
+    call OSAPI_WM_CLIP_SET      ; see "why there are two entries" above. The
+    jc .gone                    ; region dies at the kernel's own gfx_unlock,
+    jmp short os88ui_about_d    ; so there is nothing here to undo
+.gone:
+    ret                         ; CF is set, and BX/SI are wm_clip_set's own
+
+; -----------------------------------------------------------------------------
+; os88ui_about_d - the same card, from your PAINTER, with a region already
+;                  armed. Draw it LAST: it is opaque over its own rect and
+;                  everything under it has been drawn by now.
+; in:  BX = your window ptr, SI = your line table; the gfx lock is HELD
+; out: CF = 1 the window is not visible and nothing was drawn
+; preserves every register
+; -----------------------------------------------------------------------------
+os88ui_about_d:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    call os88ui_abmeas
+    jc .out                     ; a pop writes no flags, so the CF set by
+    call os88ui_abdraw          ; os88ui_abmeas survives the seven below
+    clc
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; os88ui_abmeas - size and centre the card from the strings (internal)
+; in:  BX = window, SI = line table
+; out: [os88ui_abx]/[os88ui_aby]/[os88ui_abw]/[os88ui_abh], SCREEN coords;
+;      CF = 1 the window is not visible
+; -----------------------------------------------------------------------------
+os88ui_abmeas:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    call OSAPI_WM_CONTENT       ; AX = content left, DX = content top - the
+    mov [os88ui_abx], ax        ; ORIGIN, banked now because the size call
+    mov [os88ui_aby], dx        ; below is about to want DX for the height
+    call OSAPI_WM_GEOM          ; CX = content width, DX = content height
+    jc .gone                    ; ...and CF = 1 if the window is not visible
+    push cx
+    push dx
+
+    xor di, di                  ; DI = the widest line in pixels...
+    xor bp, bp                  ; ...BP = how many there are. BP as a REGISTER
+.m:                             ; is free; it is [bp+disp] that addresses SS
+    mov ax, [si]
+    or ax, ax
+    jz .mdone
+    add si, 2
+    push si
+    mov si, ax
+    UI_WIDTH                    ; AX = this line's pixels; clobbers nothing
+    pop si                      ; else, so DI and BP ride through it
+    inc bp
+    cmp ax, di
+    jbe .m
+    mov di, ax
+    jmp short .m
+.mdone:
+    pop dx                      ; the content height...
+    pop cx                      ; ...and its width
+
+    push cx                     ; HEIGHT FIRST, because the multiply below
+    mov ax, bp                  ; wants DX and the width does not
+    push dx
+    mov bx, OS88UI_ABLH
+    mul bx                      ; AX = lines * the pitch (DX:AX, and a card
+    pop dx                      ; taller than 5,461 lines is not a card)
+    add ax, OS88UI_ABPADY * 2
+    cmp ax, dx
+    jbe .hok                    ; CLAMPED to the content box, never pinned:
+    mov ax, dx                  ; one window is three content sizes across
+.hok:                           ; SPEC.md 39's three adapters
+    mov [os88ui_abh], ax
+    sub dx, ax
+    shr dx, 1
+    add [os88ui_aby], dx
+
+    pop cx                      ; ...and the width, the same way
+    mov ax, di
+    add ax, OS88UI_ABPADX * 2
+    cmp ax, cx
+    jbe .wok
+    mov ax, cx
+.wok:
+    mov [os88ui_abw], ax
+    sub cx, ax
+    shr cx, 1
+    add [os88ui_abx], cx
+    clc
+.gone:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; os88ui_abdraw - the card itself (internal)
+; in:  the four words above are current, SI = line table; gfx lock held
+; preserves every register
+;
+; White ground, black frame, black-on-white text: the one pairing that says
+; the same thing on all three adapters (SPEC.md 39.4), where a grey would
+; round to black on two of them.
+; -----------------------------------------------------------------------------
+os88ui_abdraw:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call .rect
+    UI_WHITE
+    UI_FILL
+    call .rect                  ; again: a primitive owns its four registers
+    UI_BLACK
+    UI_FRAME
+
+    mov di, [os88ui_aby]
+    add di, OS88UI_ABPADY       ; the first cell's top, inside the frame
+.l:
+    mov ax, [si]
+    or ax, ax
+    jz .out
+    add si, 2
+    push si
+    mov si, ax
+    UI_WIDTH                    ; AX = its pixels
+    mov cx, [os88ui_abw]
+    sub cx, ax
+    jns .cok                    ; a line WIDER than the clamped card would
+    mov cx, OS88UI_ABPADX * 2   ; otherwise centre itself off the LEFT edge -
+.cok:                           ; shr on a negative is a large positive - so it
+    shr cx, 1                   ; starts at the margin and clips at the frame.
+                                ; Keep the lines short: the card is clamped to
+                                ; the content box and a CGA's is the narrow one
+    add cx, [os88ui_abx]        ; CX = the pen x, DX = the pen y
+    mov dx, di
+    mov ax, (CWHITE << 8) | CBLACK
+    UI_RUN                      ; OPAQUE (SPEC.md 6.1): the cell's ground and
+    pop si                      ; its glyph in one pass, so no pixel of the
+    add di, OS88UI_ABLH         ; card is written twice
+    jmp short .l
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+.rect:                          ; the card as (x1,y1)-(x2,y2), INCLUSIVE -
+    mov ax, [os88ui_abx]        ; gfx_frame's convention, which gfx_fill
+    mov bx, [os88ui_aby]        ; shares
+    mov cx, ax
+    add cx, [os88ui_abw]
+    dec cx
+    mov dx, bx
+    add dx, [os88ui_abh]
+    dec dx
+    ret
+
+; --- the card's rect, INLINE DATA and not bss, for os88ui_armw's reason ------
+; It is scratch between os88ui_abmeas and os88ui_abdraw and nothing reads it
+; afterwards: both run on the UI task with the gfx lock held, which is the
+; whole of the mutual exclusion this needs.
+os88ui_abx: dw 0
+os88ui_aby: dw 0
+os88ui_abw: dw 0
+os88ui_abh: dw 0
+%endif                          ; OS88UI_ABOUT
 
 %endif
 

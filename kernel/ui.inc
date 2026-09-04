@@ -130,36 +130,22 @@ ui_task:
     cmp word [bx + W_ONKEY], 0  ; window may not take keys
     je .key_done
     mov si, bx                  ; W_ONKEY contract: AL=ascii, AH=scan, SI=win
-    call inst_win_owner         ; bill the handler to its instance, not to
-    push di                     ; this task (SPEC.md 8.1); BX/SI/AX survive
-    push word [snd_inst]        ; stamp the dispatched instance for sound
-    call snd_disp_set           ; grants made inside the handler (SPEC 34.3)
-    push ax                     ; the key - task_cycles returns in DX:AX
-    call task_cycles            ; DX:AX = start stamp
-    mov bx, ax
-    pop ax                      ; key back for the handler's contract
-    push dx                     ; start stamp: hi, then lo
-    push bx
-    push bp
     mov bp, [si + W_ONKEY]      ; wm_pkgcall: record in SI (where the
-    KFZ 7                       ; 7: about to far-call the package
-    call wm_pkgcall             ; contract already puts it), offset in BP
+                                ; contract already puts it), offset in BP
+    KFZ 7                       ; 7: about to far-call the package. HERE and
+                                ; not inside ui_bill: the ladder exists to
+                                ; locate a freeze that reaches no package, and
+                                ; folded into the shared body these two would
+                                ; fire on every click and every menu command
+    call ui_bill
     KFZ 8                       ; 8: the handler returned
-    pop bp
-    pop ax
-    pop dx
-    pop word [snd_inst]         ; the outer dispatch's stamp, back
-    pop di
-    or di, di
-    jz .key_done
-    call inst_charge
 .key_done:
     call gfx_unlock
     KFZ 9                       ; 9: a healthy keystroke, start to finish
 
     ; --- 2. events: DRAIN the ring, acting on each record (SPEC.md 10.2) ------
 .events:
-    VMM_POLL                    ; the VMware absolute pointer (SPEC.md 9.10.3):
+    VMM_POLL                    ; the VMware absolute pointer (SPEC.md 9.11.3):
                                 ; drain its queue into mouse_x/y and the event
                                 ; ring BEFORE evq_pop below, so a click it
                                 ; carries lands this pass. One byte compare off
@@ -187,7 +173,7 @@ ui_task:
 .evloop:
     mov di, ui_ev
     call evq_pop
-    jc .yield                   ; queue empty. A wake whose record a drain ate
+    jc .yj0                     ; queue empty. A wake whose record a drain ate
                                 ; needs nothing here: it is WKQ_EATEN, and
                                 ; wm_wake_redo at the top of the pass already
                                 ; put it back in the ring (SPEC.md 74.1.1)
@@ -201,14 +187,14 @@ ui_task:
     cmp ax, EVT_WAKE            ; a package's own kick (SPEC.md 74.1): its
     je .wake                    ; wake handler, WITHOUT the gfx lock
     cmp ax, EVT_MDOWN
-    jne .yield                  ; only mouse-downs matter here
+    jne .yj0                    ; only mouse-downs matter here
     mov cx, [ui_ev + EV_A]      ; CX = click x
     mov dx, [ui_ev + EV_B]      ; DX = click y
     mov ax, [ui_ev + EV_C]      ; publish the click's birth tick for the
     mov [ui_click_t], ax        ; double-click detectors (SPEC 22, 26)
 
     call COLD_SEG:fdlg_grab_x   ; a modal file dialog swallows every press
-    jc .yield                   ; outside its own frame (SPEC.md 38.2).
+    jc .yj1                     ; outside its own frame (SPEC.md 38.2).
                                 ; AHEAD of every branch below - modality is
                                 ; not a window property, and a press on the
                                 ; menu bar must die as firmly as one on
@@ -246,14 +232,16 @@ ui_task:
     call menu_track             ; in: CX = mousedown x; out: AX = CMD_* or 0
     call gfx_unlock
     call ui_dispatch
-    jmp .yield
+    jmp .yj1
 
 .clock_cell:                    ; open the Control Panel on its Date/Time
     mov byte [cp_sel], CP_ITIME ; page (SPEC.md 31.5); no lock held here, so
     call COLD_SEG:cpf_cp_open   ; cp_open is app_launch with the module load
-    jnc .yield                  ; in front of it (SPEC.md 2.8.4) - and it owns
-    jmp .yield                  ; the refusal, beep or toast, so there is
-                                ; nothing left here to say
+    jnc .yj1                    ; in front of it (SPEC.md 2.8.4) - and it owns
+.yj0:                           ; ...and a third hop, for the two sites at
+    jmp .yj1                    ; the very top of the ladder. The refusal,
+                                ; beep or toast, is cp_open's own, so there
+                                ; is nothing left here to say
 
 .on_desktop:
     call wm_hit                 ; BX = window hit (0 = none), AL = region
@@ -287,22 +275,26 @@ ui_task:
     call gfx_lock
     call wm_front               ; raise + repaint
     call gfx_unlock
-    jmp .yield
+.yj1:                           ; A TRAMPOLINE, and nothing else: the 8086
+    jmp .yield                  ; has no near conditional jump, so a `jc`
+                                ; out of short range is a five-byte
+                                ; inverted pair. Every branch below that
+                                ; reaches HERE reaches .yield one hop on
 
 .content_front:
     mov bp, [si + W_ONCLICK]
     or bp, bp
-    jz .yield                   ; window does not take clicks
+    jz .yj1                     ; window does not take clicks
 %ifdef KERN_BIG
     mov [ui_dragx], cx          ; ...the point the tracking edge measures
     mov [ui_dragy], dx          ; movement against (SPEC.md 13.8.2), seeded
                                 ; with the point the package is about to be
                                 ; TOLD about, so its first W_ONDRAG is the
                                 ; first place the pointer is not. BEFORE the
-                                ; dispatch: ui_ptcall does not preserve CX/DX
+                                ; dispatch: ui_bill does not preserve CX/DX
 %endif
     call gfx_lock               ; W_ONCLICK contract: CX=x, DX=y, SI=win
-    call ui_ptcall              ; (CX/DX survived wm_hit/wm_top/gfx_lock)
+    call ui_bill              ; (CX/DX survived wm_hit/wm_top/gfx_lock)
     mov [ui_armw], si           ; ...and the RELEASE is owed to this window
     mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
     mov byte [ui_armr], 0       ; (SPEC.md 13.7): region 0, armed only because
@@ -310,11 +302,11 @@ ui_task:
                                 ; raised a window, or that this window refused
                                 ; above, arms nothing
     call gfx_unlock
-    jmp .yield
+    jmp .yj1
 
 .desk_icons:
     call dock_click             ; CX/DX; CF=1 = consumed (locks internally,
-    jc .yield                   ; SPEC.md 30) - the dock gets first look
+    jc .yj1                     ; SPEC.md 30) - the dock gets first look
 
     xor bx, bx                  ; the bare desktop: clicking it switches back
     call menu_activate          ; to Locator (SPEC.md 12), CF=1 = it changed
@@ -324,7 +316,7 @@ ui_task:
     call gfx_unlock             ; and activate it in turn
 .desk_go:
     call COLD_SEG:desk_click_x  ; CX/DX = click point, no lock held; select /
-    jmp .yield                  ; double-click-open is desk.inc's business
+    jmp .yj1                    ; double-click-open is desk.inc's business
 
     ; --- the chrome boxes: the press only ARMS (SPEC.md 13.5) ----------------
     ; Both boxes arm identically, so they are one body with two names rather
@@ -347,7 +339,7 @@ ui_task:
 %ifdef KERN_BIG
     call ui_lit_on              ; ...and the arm and the picture are set in the
 %endif                          ; same breath, so no pass can see one without
-    jmp .yield                  ; the other
+    jmp .yj2                    ; the other
 
 .mup:
     ; The release. Two species, and they differ in exactly one way:
@@ -362,7 +354,7 @@ ui_task:
     ;
     ; The arm is spent either way.
     cmp word [ui_armw], 0
-    je .yield                   ; nothing armed: one compare, and the release
+    je .yj2                     ; nothing armed: one compare, and the release
                                 ; is ignored exactly as it always was
     mov cx, [ui_ev + EV_A]      ; NO [ui_click_t] STORE HERE, and that is
     mov dx, [ui_ev + EV_B]      ; binding: SPEC.md 22/26/38's four detectors
@@ -388,12 +380,12 @@ ui_task:
     call wm_hit                 ; BX = window under the release, AL = region;
                                 ; AH survives it by wm_hit's own contract
     cmp bx, si
-    jne .yield                  ; a different window - two windows' boxes can
+    jne .yj2                    ; a different window - two windows' boxes can
                                 ; share a point, so this half is not optional
     cmp al, ah
-    jne .yield                  ; ...or the other box on the same title bar
+    jne .yj2                    ; ...or the other box on the same title bar
     call gfx_lock
-    test word [si + W_FLAGS], 2 ; the window can have gone between the two
+    test byte [si + W_FLAGS], 2 ; the window can have gone between the two
     jz .mup_done                ; passes - a package worker reaching
                                 ; inst_task_die, or a command off its own bar.
                                 ; wm_hit has answered already, so this is the
@@ -409,29 +401,30 @@ ui_task:
     call inst_minimize          ; in: BX; flags the instance minimized and
 .mup_done:                      ; hides - its dock tile inverts (SPEC.md 30)
     call gfx_unlock
-    jmp .yield
+.yj2:                           ; ...and the second, for the sites below
+    jmp .yield                  ; .yj1's own reach
 
 .mup_pkg:                       ; SPEC.md 13.7 - the package's release
     call gfx_lock
-    test word [si + W_FLAGS], 2 ; ...unless the window went away between the
+    test byte [si + W_FLAGS], 2 ; ...unless the window went away between the
     jz .mup_pdone               ; two passes, which a worker can do
     mov bp, [si + W_ONMOUSEUP]
     or bp, bp
     jz .mup_pdone               ; the package never asked for releases, which
-    call ui_ptcall              ; is every shipped package today
+    call ui_bill              ; is every shipped package today
 .mup_pdone:
     call gfx_unlock
-    jmp .yield
+    jmp .yj2
 
 .grow_box:
     call ui_grow                ; in: BX = window, CX/DX = mousedown x/y
-    jmp .yield
+    jmp .yj2
 
 .title_bar:
     mov si, bx                  ; keep the hit window; wm_top returns in BX
     call ui_tdbl                ; the second press on THIS title bar inside
     jnc .tb_raise               ; UI_TDBLT ticks ZOOMS it (SPEC.md 11.95)
-    test word [si+W_FLAGS], WF_SIZABLE
+    test byte [si+W_FLAGS], WF_SIZABLE
     jz .tb_raise                ; ...if it is resizable. A fixed-layout window
                                 ; has nothing to zoom into, so the press stays
                                 ; an ordinary one and drags as before
@@ -472,7 +465,9 @@ ui_task:
 .yield:                         ; SPEC.md 10.2 - every dispatch above lands here,
     dec word [ui_drain]         ; and the ring is asked again before the tail
     jz .tail                    ; runs. Two words of work when the queue is
-    cmp word [evq_count], 0     ; empty, which is nearly every pass
+    cmp byte [evq_count], 0     ; empty, which is nearly every pass. A
+                                ; BYTE (events.inc's .bss): the word form read
+                                ; clk_sec beside it and was never zero
     jne .evloop
 .tail:
     cmp byte [mou_ptr], 0       ; the keyboard mouse's end-of-pass service
@@ -505,9 +500,14 @@ ui_task:
     ; forgets [ui_post] costs at most 55 ms of latency instead of a feature
     ; that silently stops working. That is the whole reason this is affordable
     ; to do across twenty-six call sites.
-    cmp byte [ui_post], 0
-    je .posted_done
-    mov byte [ui_post], 0
+    xor al, al                  ; TEST AND CLEAR IN ONE INSTRUCTION, here and
+    xchg al, [ui_post]          ; at the six flags below. It is smaller, it is
+    or al, al                   ; faster (xchg r,m is 17 clocks against a
+    jz .posted_done             ; cmp's 8 plus a mov's 10), and it is ATOMIC
+                                ; against an ISR post - which is strictly
+                                ; better than the order it replaces, because
+                                ; SPEC.md 13.13's rule is CLEARED BEFORE THE
+                                ; WALK and over-setting is free
 
     cmp byte [kbd_ovb], 0       ; ...and a beep the keyboard ISR asked for when
     je .ovb_done                ; the BIOS buffer overran (SPEC.md 9.8). HERE
@@ -533,7 +533,19 @@ ui_task:
     call ui_timer_pass          ; on a machine with none armed, which is nearly
 .tmr_done:                      ; always - and the compare is HERE, so that is
 %endif                          ; all it is
+%ifdef FDLG_MOD
+    cmp word [mod_r_fdlg], 0    ; ...and on kern_small the question is not
+                                ; "is a dialog up" but "is the IMAGE held",
+                                ; which is SPEC.md 38.0.1: three of the four
+                                ; ways a dialog goes away clear [fdlg_win]
+                                ; from INSIDE the image's own callback, so a
+                                ; guard on that word shuts the door on the
+                                ; drop that has to follow it. Same one
+                                ; compare, of a word that is 0 on a machine
+                                ; that has not opened a dialog
+%else
     cmp word [fdlg_win], 0      ; a file dialog cancelled by its close or
+%endif
     je .chk_close               ; minimize box is only HIDDEN by that route
     call fdlg_reap              ; (SPEC.md 38.1) - collect it here rather
                                 ; than leaving the menu bar on Locator
@@ -550,58 +562,74 @@ ui_task:
     je .clr_done                ; HERE, with none of its code on the stack
     call wm_close_pass          ; (SPEC.md 75.2)
 .clr_done:
-    mov ax, [inst_launch]       ; deferred instance launch (posted by
-    or ax, ax                   ; lock-held handlers via inst_launch_post)
+    xor ax, ax                  ; deferred instance launch (posted by
+    xchg ax, [inst_launch]      ; lock-held handlers via inst_launch_post);
+    or ax, ax                   ; consumed before running, not after
     jz .chk_ld
     dec ax                      ; stored as kind + 1
-    mov word [inst_launch], 0   ; consume before running, not after
     call app_launch             ; in: AL = kind; does its own locking
+    jnc .chk_ld
+    call snd_beep               ; CF = the tables are full, or the kind is at
+                                ; its cap (SPEC.md 29.4.1) - the same audible
+                                ; refusal ui_cmd gives the Apple-menu route.
+                                ; This is the Disk window's Builtins route
+                                ; (fm_c_timer/fm_c_bounce), and it discarded
+                                ; the CF, so ten Bounces plus one more here
+                                ; did nothing and said nothing - exactly the
+                                ; symptom 29.4.1 exists to remove
 .chk_ld:
-    cmp word [ld_pending], 0    ; set by files.inc's click handler
-    je .chk_assoc               ; ...and NOT .chk_pcmd: a document open posts
+    xor ax, ax                  ; set by files.inc's click handler, stored as
+    xchg al, [ld_pending]       ; directory index + 1, consumed before running
+    or al, al                   ; - a BYTE now, and the xor above leaves AH 0
+                                ; so `dec ax` and the call below are untouched
+    jz .chk_assoc               ; ...and NOT .chk_pcmd: a document open posts
                                 ; no package index, so skipping past the step
                                 ; below on "no package pending" is skipping
                                 ; the only case that can be pending
-    mov ax, [ld_pending]        ; stored as directory index + 1
     dec ax
-    mov word [ld_pending], 0    ; consume before running, not after
     call COLD_SEG:loader_run_x  ; in: AX = index; does its own locking
 .chk_assoc:
+%ifdef OS88_ASSOC
     cmp byte [assoc_dapp], 0xFF ; a document double-click (SPEC.md 54.4):
     je .chk_pcmd                ; find its program, load it, and hand the
     call COLD_SEG:assoc_run_x   ; document over by pull. Consumes the slot
                                 ; itself, and does its own locking
+%endif                          ; kern_small posts no document (SPEC.md 54.0),
+                                ; so there is never a slot to consume
 .chk_pcmd:
-    mov ax, [ui_pcmd]           ; a kernel menu command posted from under
-    or ax, ax                   ; the lock (ui_post_cmd, SPEC.md 13)
+    xor ax, ax                  ; a kernel menu command posted from under
+    xchg ax, [ui_pcmd]          ; the lock (ui_post_cmd, SPEC.md 13)
+    or ax, ax
     jz .chk_fmf                 ; every step's "nothing to do" names the NEXT
                                 ; step, so a step inserted below is a step
                                 ; this jump has to be pointed at
-    mov word [ui_pcmd], 0       ; consume before running, not after
     call ui_cmd                 ; in: AX = CMD_*; takes its own locks, and
                                 ; CMD_REBOOT never comes back
 .chk_fmf:
-    cmp byte [fm_fchk], 0       ; a file operation changed a folder, or the
-    je .chk_cp                  ; active window changed (SPEC.md 22.8): the
-    mov byte [fm_fchk], 0       ; FRONT window may be a Disk window owing a
-    call gfx_lock               ; refresh. One compare per pass when it is
+    xor al, al                  ; a file operation changed a folder, or the
+    xchg al, [fm_fchk]          ; active window changed (SPEC.md 22.8): the
+    or al, al                   ; FRONT window may be a Disk window owing a
+    jz .chk_cp                  ; refresh. One compare per pass when it is
+    call gfx_lock
     call wm_top                 ; not - which is nearly always, because
     mov al, 1                   ; wm_raise has usually spent the debt on the
     call COLD_SEG:fm_focus_x    ; way in. AL = 1: there is nobody here to
     call gfx_unlock             ; defer the repaint to, so fm_focus draws
 .chk_cp:
-    cmp byte [cp_dirty], 0      ; scheduler mode changed in the Control
-    je .chk_zones               ; Panel (SPEC.md 31.2): windows that quote
-    mov byte [cp_dirty], 0      ; the mode - the About box's third line -
-    call gfx_lock               ; are already painted, so repaint them here,
+    xor al, al                  ; scheduler mode changed in the Control
+    xchg al, [cp_dirty]         ; Panel (SPEC.md 31.2): windows that quote
+    or al, al                   ; the mode - the About box's third line -
+    jz .chk_zones               ; are already painted, so repaint them here,
+    call gfx_lock
     call wm_paint_all           ; outside cp_onclick's held lock
     call gfx_unlock
 .chk_zones:
-    cmp byte [desk_zdirty], 0   ; a volume was mounted or unmounted (26.2),
-    je .chk_curs                ; posted for the same reason and drained in
-    mov byte [desk_zdirty], 0   ; the same pass - but it costs the drive-zone
-    call gfx_lock               ; grid and the windows over it, not the screen
-    call COLD_SEG:dkz_desk_zones_paint
+    xor al, al                  ; a volume was mounted or unmounted (26.2),
+    xchg al, [desk_zdirty]      ; posted for the same reason and drained in
+    or al, al                   ; the same pass - but it costs the drive-zone
+    jz .chk_curs                ; grid and the windows over it, not the screen
+    call gfx_lock
+    call COLD_SEG:desk_zones_paint_x
     call gfx_unlock
 .chk_curs:
     cmp byte [cur_shchk], 0     ; which window is the pointer over, and does it
@@ -737,41 +765,52 @@ ui_task:
     jmp .loop
 
 ; -----------------------------------------------------------------------------
-; ui_ptcall - dispatch a POINT callback on a window, billed (SPEC.md 8.1/34.3)
+; ui_bill - dispatch a WINDOW CALLBACK, billed (SPEC.md 8.1/34.3)
 ; in:  SI = window, BP = the handler's offset in that window's segment,
-;      CX = x, DX = y; the caller holds the gfx lock
-; out: nothing; the point does NOT come back - CX is whatever the handler left
-;      and DX is the billing stamp's high word, so read the point before this
+;      AX/BX/CX/DX = whatever that handler's own contract says
+; out: nothing; the payload does NOT come back
 ; clobbers: AX, BX, CX, DX, DI (and whatever the handler clobbers)
 ;
-; W_ONCLICK and W_ONMOUSEUP have the identical contract and the identical
-; environment - UI task, gfx lock held, billed to the owning instance, with
-; the dispatched instance stamped for sound grants (SPEC.md 34.3) - so this is
-; the one body rather than two that have to be kept in step. It was factored
-; out of .content_front when W_ONMOUSEUP arrived; before that there was only
-; one caller and no reason.
+; W_ONKEY, W_ONCLICK, W_ONMOUSEUP and the app menu's AM_ONCMD have the
+; identical ENVIRONMENT - UI task, gfx lock held, billed to the owning
+; instance, with the dispatched instance stamped for sound grants
+; (SPEC.md 34.3) - and differ only in which registers carry the payload. So
+; this is the one body rather than three that have to be kept in step; it was
+; ui_bill, which was already two of them.
+;
+; THE PAYLOAD IS BANKED ON THE STACK AND READ BACK THROUGH BP, because
+; task_cycles answers in DX:AX and inst_win_owner takes BX. `[bp+n]` addresses
+; SS, and SS IS the stack - this is the one place in the kernel where that is
+; what is wanted rather than the trap CLAUDE.md warns about. CX survives all
+; three calls (inst_win_owner "clobbers nothing else", task_cycles "DX:AX...
+; clobbers nothing else", snd_disp_set "clobbers: nothing") and is never
+; banked.
 ;
 ; The caller checks the handler is non-zero. BP is the offset because that is
 ; what wm_pkgcall wants and what the record already holds.
+;
+; Stack: +8 bytes deeper at the moment a package callback runs, against
+; STK0_SIZE 1,024 and a measured 274-byte watermark.
 ; -----------------------------------------------------------------------------
-ui_ptcall:
+ui_bill:
+    push bp                     ; the handler...
+    push ax                     ; ...and the three payload registers the stamp
+    push bx                     ; shuffle destroys: AX and DX (task_cycles),
+    push dx                     ; BX (inst_win_owner's input)
     mov bx, si
     call inst_win_owner         ; DI = the owning record, 0 = unowned window
     push di
     push word [snd_inst]        ; stamp the dispatched instance for sound
     call snd_disp_set           ; grants made inside the handler (SPEC 34.3)
-    push cx                     ; the point - task_cycles answers in DX:AX,
-    push dx                     ; so CX/DX have to step aside
     call task_cycles            ; DX:AX = start stamp
-    mov bx, ax
-    mov ax, dx
-    pop dx                      ; y
-    pop cx                      ; x
-    push ax                     ; start stamp: hi, then lo
-    push bx
-    push bp
+    push dx                     ; start stamp: hi, then lo
+    push ax
+    mov bp, sp
+    mov ax, [bp+12]             ; the payload back, off SS
+    mov bx, [bp+10]
+    mov dx, [bp+8]
+    mov bp, [bp+14]             ; ...and the handler
     call wm_pkgcall             ; SI = window, BP = the handler
-    pop bp
     pop ax
     pop dx
     pop word [snd_inst]         ; the outer dispatch's stamp, back
@@ -780,6 +819,8 @@ ui_ptcall:
     jz .out
     call inst_charge
 .out:
+    add sp, 6                   ; the three banked payload words
+    pop bp
     ret
 
 ; -----------------------------------------------------------------------------
@@ -815,7 +856,7 @@ ui_arm_chk:
     je .out                     ; nothing armed - the common case
     test byte [mouse_btn], 1
     jnz .out                    ; still held: the release is yet to come
-    cmp word [evq_count], 0
+    cmp byte [evq_count], 0     ; a BYTE - see .yield above
     jne .out                    ; ...or it is queued behind something else
 %ifdef KERN_BIG
     call ui_lit_off             ; ...and the picture goes with the arm, or the
@@ -855,10 +896,10 @@ ui_timer_pass:
     push dx
     push si
     push bp
-    push di                     ; ui_ptcall leaves the owning record here
+    push di                     ; ui_bill leaves the owning record here
     mov byte [wm_tarm], 0       ; THE FLAG IS ITS OWN ACCUMULATOR, and that is
                                 ; what keeps a live value out of a register
-                                ; across the dispatch below - ui_ptcall
+                                ; across the dispatch below - ui_bill
                                 ; clobbers AX, BX and DI, and CX/DX are the
                                 ; point it takes. A window found still armed
                                 ; puts it back; a HANDLER that re-arms puts it
@@ -868,7 +909,7 @@ ui_timer_pass:
     mov si, wm_wins
     mov cx, MAX_WIN
 .next:
-    test word [si+W_FLAGS], 1   ; used? a destroyed record is skipped before
+    test byte [si+W_FLAGS], 1   ; used? a destroyed record is skipped before
     jz .step                    ; its handler word is even read
     mov ax, [si+W_TIMER]
     or ax, ax
@@ -888,7 +929,7 @@ ui_timer_pass:
     xor cx, cx                  ; can do anything a window callback can
     xor dx, dx                  ; (a timer has no point - SPEC.md 13.9)
     call gfx_lock
-    call ui_ptcall
+    call ui_bill
     call gfx_unlock
     pop si
     pop cx
@@ -978,9 +1019,9 @@ ui_arm_trk:
                                 ; come straight back on the same point
     push si
     push bp
-    push di                     ; ui_ptcall leaves the owning record here
+    push di                     ; ui_bill leaves the owning record here
     mov si, [ui_armw]
-    test word [si + W_FLAGS], 2 ; the window can have gone between two passes -
+    test byte [si + W_FLAGS], 2 ; the window can have gone between two passes -
     jz .pout                    ; a package worker reaching inst_task_die, or a
                                 ; second window destroyed inside W_ONCLICK.
                                 ; wm_destroy does not clear W_ONDRAG any more
@@ -994,7 +1035,7 @@ ui_arm_trk:
     jz .pout                    ; the package never asked for tracking, which
                                 ; is every shipped package but Calculator
     call gfx_lock
-    call ui_ptcall
+    call ui_bill
     call gfx_unlock
 .pout:
     pop di
@@ -1042,7 +1083,7 @@ ui_lit_go:
     jz .none
     cmp byte [ui_armr], 0
     je .none                    ; region 0: nothing was ever drawn
-    test word [si+W_FLAGS], 2
+    test byte [si+W_FLAGS], 2
     jz .none                    ; the window has gone, and its pixels with it
     cmp al, [ui_armlit]
     je .out                     ; already in that state
@@ -1056,12 +1097,7 @@ ui_lit_go:
 .none:
     mov byte [ui_armlit], 0     ; nothing is lit and nothing can be, so the
 .out:                           ; byte must say so - it is what the next XOR
-    pop si                      ; is computed against
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_si
 %endif                          ; KERN_BIG - SPEC.md 13.8.1/13.8.2/13.9
 
 ; -----------------------------------------------------------------------------
@@ -1124,8 +1160,7 @@ ui_rdown:
     mov bx, si                  ; a background window: raise it and stop
     call gfx_lock
     call wm_front               ; activates it too, so the bar follows
-    call gfx_unlock
-    ret
+    jmp gfx_unlock
 
 .front:
     or al, al
@@ -1143,9 +1178,9 @@ ui_rdown:
     or bp, bp
     jz .ctxwin
     call gfx_lock               ; W_ONCLICK's environment exactly - CX = x,
-    call ui_ptcall              ; DX = y, SI = window, billed to the owning
-    call gfx_unlock             ; instance (CX/DX survived wm_hit/wm_top)
-    ret                         ; and NOTHING ELSE sees this press: a package
+    call ui_bill              ; DX = y, SI = window, billed to the owning
+    jmp gfx_unlock              ; instance (CX/DX survived wm_hit/wm_top)
+                                ; and NOTHING ELSE sees this press: a package
                                 ; that takes the right button owns it whole,
                                 ; the way it owns the left one
 .ctxwin:
@@ -1182,8 +1217,8 @@ ui_rdown:
     ret
 
 .strip:
-    call dock_rclick            ; CX/DX; CF = 1 = consumed (locks internally,
-    ret                         ; SPEC.md 30.2). CF is nobody's answer here -
+    jmp dock_rclick             ; CX/DX; CF = 1 = consumed (locks internally,
+                                ; SPEC.md 30.2). CF is nobody's answer here -
                                 ; the desktop's case IS "do nothing"
 
 ; -----------------------------------------------------------------------------
@@ -1271,14 +1306,12 @@ ui_drag:
     ; release + fast re-press inside one pass must still end the drag (the
     ; re-press stays queued and is dispatched as a fresh click afterwards).
     mov di, ui_ev
-    call evq_pop
-    jc .no_evt
-    cmp word [ui_ev + EV_TYPE], EVT_MUP
-    je .release                 ; exits with outline drawn + lock held
-    call wm_wake_eaten          ; ...and ANYTHING ELSE is dropped on the floor
-    jmp .track                  ; here (SPEC.md 74.1.1): a package's wake among
-                                ; them, whose promise would otherwise outlive
-                                ; its record and deafen the window for good
+    call evq_mup                ; ...and ANYTHING ELSE is dropped on the floor
+    jnc .release                ; inside it (SPEC.md 74.1.1), the wake among
+                                ; them owed back through wm_wake_eaten - its
+                                ; promise would otherwise outlive its record
+                                ; and deafen the window for good. Exits with
+                                ; the outline drawn and the lock held
 .no_evt:
     test byte [mouse_btn], 1    ; fallback: the EVT_MUP was dropped
     jz .release                 ; (queue full) - the level still says so
@@ -1479,8 +1512,7 @@ ui_drag:
     call wm_dc_done             ; ...and the waiver is spent (SPEC.md 11.96.12)
 %endif
 .done:
-    call gfx_unlock             ; NO second gfx_lock here - already held (§7)
-    ret
+    jmp gfx_unlock              ; NO second gfx_lock here - already held (§7)
 
 ; -----------------------------------------------------------------------------
 ; ui_drag_size - what size should a dropped window have? (SPEC.md 11.100.3/.4)
@@ -1686,7 +1718,7 @@ ui_drag_xor:
     mov dx, bx
     add dx, [ui_dragh]
     dec dx                      ; y2 = y1 + h - 1
-    call vga_xor_rect_vram      ; clips, so off-screen edges are fine.
+    jmp vga_xor_rect_vram       ; clips, so off-screen edges are fine.
                                 ; VRAM-direct (SPEC.md 32): the outline is a
                                 ; transient overlay like the cursor - it is
                                 ; always XOR-erased before the lock drops, so
@@ -1694,7 +1726,7 @@ ui_drag_xor:
                                 ; anyone else can draw. Going through the back
                                 ; buffer instead would dirty the whole window
                                 ; rect and flush it twice per pass.
-    ret
+                                ; A TAIL CALL, both ends `.text`
 
 ; -----------------------------------------------------------------------------
 ; ui_grow - grow-box resize: XOR outline anchored at the window's top-left,
@@ -1814,12 +1846,11 @@ ui_grow:
 
 .track:
     mov di, ui_ev               ; button tracked by EDGE, like ui_drag: a
-    call evq_pop                ; release + fast re-press inside one pass
-    jc .no_evt                  ; must still end the resize
-    cmp word [ui_ev + EV_TYPE], EVT_MUP
-    je .release                 ; exits with outline drawn + lock held
-    call wm_wake_eaten          ; ...drained mid-resize, and a wake among them
-    jmp .track                  ; is owed back (SPEC.md 74.1.1)
+    call evq_mup                ; release + fast re-press inside one pass
+    jnc .release                ; must still end the resize. Anything else is
+                                ; drained mid-resize and a wake among them is
+                                ; owed back (SPEC.md 74.1.1). Exits with the
+                                ; outline drawn and the lock held
 .no_evt:
     test byte [mouse_btn], 1    ; fallback: the EVT_MUP was dropped
     jz .release
@@ -1963,6 +1994,18 @@ ui_grow:
                                 ; its published size instead of the one the
                                 ; hand just dragged out
 %ifdef KERN_BIG
+    call wm_nat_bank            ; ...AND NEITHER MAY THE BANK (SPEC.md
+                                ; 39.16.3.5). wm_usr_mark closes the PREFERENCE
+                                ; half of 11.100.5 - wm_pref_take reads wm_usrsz
+                                ; and declines - and wm_strad_fit opens with
+                                ; wm_nat_take_wh, which consults no mark at all.
+                                ; The bank is not written until below, so a grow
+                                ; across the seam was handed the PRE-GROW size
+                                ; and the whole resize was discarded: the
+                                ; outline tracked to 946x136 and the record came
+                                ; back 266x180. Banked HERE, where the take
+                                ; reads it, that take is a no-op and the clamp
+                                ; still bounds the answer
     call wm_land_fit            ; a grow can push a frame across the seam too
 %endif                          ; (SPEC.md 39.16.3)
     call wm_snap_win            ; ...and the ALIGNED x is a question about the
@@ -1977,6 +2020,20 @@ ui_grow:
                                 ; because the snap may have moved the origin,
                                 ; and after the straddle fit for its reason
                                 ; (SPEC.md 39.11.2.1)
+                                ;
+                                ; LEFT EXACTLY AS IT WAS, and the bank above is
+                                ; an ADDITION rather than a move. Making this
+                                ; one xy-only is arguable on 11.100.3 - banking
+                                ; behind a clamp banks the cut, which is why
+                                ; ui_drag's release uses wm_nat_bank_xy here -
+                                ; but it is not needed to fix anything: on a
+                                ; SINGLE display wm_land_fit returns at its
+                                ; first compare, so the reorder's only effect
+                                ; there is the banked size becoming the PRE-snap
+                                ; one, a change to every machine for a rule
+                                ; about the seam. The added bank leaves the
+                                ; final banked state identical on such a
+                                ; machine; reordering this one does not
 
     ; --- A PURE SHRINK OWES ITS CONTENT NOTHING (SPEC.md 11.90.3) ----------
     ; Every pixel inside the new content rect is still what the application
@@ -2033,8 +2090,7 @@ ui_grow:
     mov bx, [bx + W_Y]          ; (the read completes before BX changes)
     call wm_paint_dmg           ; caller-held lock, per the wm contract
     mov word [wm_dmg_rzwin], 0  ; a one-shot, and its life is that one call
-    call gfx_unlock             ; NO second gfx_lock here - already held (§7)
-    ret
+    jmp gfx_unlock              ; NO second gfx_lock here - already held (§7)
 
 ; -----------------------------------------------------------------------------
 ; ui_dispatch - route one menu selection (SPEC.md 13)
@@ -2072,9 +2128,15 @@ ui_grow:
 ;
 ; NOT called before a popup (§12.4) or from menu_relayout: this list is only
 ; ever read while a menu is dropping, and one call site is one thing to keep
-; right. The tables-full refusals below (Timer, Bounce, Disk at the instance
-; cap) stay beeps - MAX_TASKS is 12, a user reaches it about never, and the
-; predicate is per-kind rather than one word.
+; right. The tables-full refusals below (Timer and Bounce at their cap of ten)
+; stay beeps rather than greying, because the predicate is per-kind rather than
+; one word - and they ARE beeps now, which is a correction to what this
+; paragraph used to assert. app_launch fronted an existing instance at ANY cap
+; and answered CF=0, so a multi-instance kind at its cap did nothing, said
+; nothing and made nothing (SPEC.md 29.4.1). Nobody could see it until the slot
+; classes gave the machine enough workers to reach a cap of ten at all: on six
+; slices the seventh Bounce failed on the TASK table, which really did beep.
+; Disk is not in the list - fm_choose counts FM_MAXWIN itself (§22.1).
 ; -----------------------------------------------------------------------------
 ui_loc_gate:
     push ax
@@ -2158,15 +2220,14 @@ ui_dispatch:
     mov bx, [menu_win]          ; the lock dropped between menu_track and
     or bx, bx                   ; here, so the window that owned the bar may
     jz .apc_done                ; be gone: the same re-check .app makes below,
-    test word [bx + W_FLAGS], 2 ; and for the same reasons
+    test byte [bx + W_FLAGS], 2 ; and for the same reasons
     jz .apc_done
     call app_close_win          ; in: BX; lock held, UI task (SPEC.md 29.4).
                                 ; Unbilled, like the close box - and here it
                                 ; could not be billed anyway: the record the
                                 ; cycles would go to is the one being freed
 .apc_done:
-    call gfx_unlock
-    ret
+    jmp gfx_unlock
 
 .app:
     ; The menu handler is a window callback reached through the bar, so it
@@ -2181,7 +2242,7 @@ ui_dispatch:
     mov bx, [menu_win]          ; the lock dropped between menu_track and
     or bx, bx                   ; here, so re-check the owner before calling
     jz .app_done                ; into it. This guard used to be unreachable
-    test word [bx + W_FLAGS], 2 ; insurance once - the old reasoning was
+    test byte [bx + W_FLAGS], 2 ; insurance once - the old reasoning was
     jz .app_done                ; "only packages reach this path, and
                                 ; packages had no tasks then", false twice
                                 ; over now. Locator's fm_menus made it
@@ -2195,15 +2256,10 @@ ui_dispatch:
                                 ; we hold, and only the UI task (us) calls
                                 ; wm_create, so the slot cannot be recycled
                                 ; behind this test.
-    call inst_win_owner         ; DI = owning record, 0 = unowned window
-    push di
-    push word [snd_inst]
-    call snd_disp_set
-    call task_cycles            ; DX:AX = start stamp
-    push dx                     ; start stamp: hi, then lo
-    push ax
-    mov si, [menu_win]          ; the handler's contract: AL = item,
-    mov bx, [menu_set]          ; AH = menu, SI = window, BX = the set
+    mov si, bx                  ; the handler's contract: AL = item,
+    mov bx, [menu_set]          ; AH = menu, SI = window, BX = the set. BX is
+                                ; [menu_win] already - loaded for the guard
+                                ; above, and gfx_lock preserves it
     push es                     ; the set is the OWNER's data (SPEC.md 12.2),
     push di                     ; so AM_ONCMD is read through its segment
     mov di, si
@@ -2221,23 +2277,15 @@ ui_dispatch:
 .cbok:
     pop di
     pop es
-    jcxz .nocb                  ; a handler withdrawn while the lock was down
+    jcxz .app_done              ; a handler withdrawn while the lock was down
     mov ax, [ui_menusel]        ; (wm_about_set 0 / MENU_SET in the gap) must
-    push bp                     ; not be called at offset 0 (SPEC.md 12.2)
-    mov bp, cx
-    call wm_pkgcall             ; SI = window, BP = the handler
-    pop bp
-.nocb:
-    pop ax                      ; start stamp
-    pop dx
-    pop word [snd_inst]         ; the outer dispatch's stamp, back
-    pop di
-    or di, di
-    jz .app_done
-    call inst_charge
+    mov bp, cx                  ; not be called at offset 0 (SPEC.md 12.2).
+    call ui_bill                ; The resolution above is OUTSIDE the billing
+                                ; bracket now, so a withdrawn handler is
+                                ; charged nothing at all instead of ~0, and
+                                ; wm_strseg's microseconds go unbilled. A wash
 .app_done:
-    call gfx_unlock
-    ret
+    jmp gfx_unlock
 
 ; the base CMD_* of each kernel-dispatched bar cell (SPEC.md 12.3): the
 ; System menu, then Locator's File and Builtins (SPEC.md 12.3.1)
@@ -2305,9 +2353,18 @@ ui_pcmd:    dw 0                ; posted CMD_*, 0 = none (see above)
 ; on TASKMGR.O88 in a Disk window is unaffected and still opens as many as
 ; you like - that is the package rule, and this is the menu item's rule.
 ; =============================================================================
-ui_s_tmdir:  db 'SYSTEM', 0      ; the folder it lives in (SPEC.md 28.3), on
-                                 ; the system disk and the apps disk alike -
-                                 ; the menu cannot know which is in the drive
+ui_s_nofile: db 'TASKMGR.O88 is not in '   ; ONE 'SYSTEM',0 serves both the
+ui_s_tmdir:  db 'SYSTEM', 0      ; folder name and the tail of the notice that
+                                 ; says the file is not in it - two labels
+                                 ; over one `db`, so nothing may be inserted
+                                 ; between these two lines. The folder it
+                                 ; lives in (SPEC.md 28.3), on the system disk
+                                 ; and the apps disk alike - the menu cannot
+                                 ; know which is in the drive. The message
+                                 ; fits the 288px notice window, which a path
+                                 ; spelled out in full would not:
+                                 ; app_about_center centres it and font_str
+                                 ; stops at the SCREEN edge, not the window's
 ui_s_tmfile: db 'TASKMGR.O88', 0
 ui_s_tmname: db 'TaskMgr', 0     ; the 16-byte header name inst_set_name_x
                                  ; copied into the record - what identifies
@@ -2331,14 +2388,8 @@ ui_tm_open:
     call ui_tm_find             ; already running? front it and stop
     jc .load
     call gfx_lock
-%ifdef WM_ANIM
-    call inst_unmin             ; un-minimize, the app_launch cap path's rule -
-                                ; and SPEC.md 11.100.3's other half with it
-%else
-    and byte [di+I_FLAGS], 0xFE ; un-minimize, the app_launch cap path's rule
-%endif
-    mov bx, [di+I_WIN]
-    call wm_show
+    call inst_restore           ; un-minimize and show - the app_launch cap
+                                ; path's rule, and now literally its code
     call gfx_unlock
     jmp short .out
 
@@ -2412,15 +2463,7 @@ ui_tm_open:
 .back:
     call ui_tm_back
 .out:
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_es
 
 ; -----------------------------------------------------------------------------
 ; ui_tm_sysdir - step into SYSTEM on the volume just mounted (SPEC.md 28.3)
@@ -2509,12 +2552,11 @@ ui_s_nodisk: db 'No system disk in drive '
 ui_s_nodisk_l: db 'A:', 0       ; the LETTER, stamped once by dsk_boot_from
                                 ; (SPEC.md 52.10.3) - a label rather than an
                                 ; offset, so rewording the message cannot
-                                ; leave the stamp pointing at a space
-ui_s_nofile: db 'TASKMGR.O88 is not in SYSTEM', 0    ; ...and it fits the
-                                 ; 288px notice window, which a path spelled
-                                 ; out in full would not: app_about_center
-                                 ; centres it and font_str stops at the SCREEN
-                                 ; edge, not the window's
+                                ; leave the stamp pointing at a space.
+                                ; TWO READERS: files.inc's fm_s_swapd is
+                                ; `equ` this, the formatter's swap prompt
+                                ; being the only standalone 'A:' of the six.
+                                ; Reword the message; do not delete the label
 ui_s_dskerr: db 'Disk error reading it', 0
 ui_s_badpkg: db 'TASKMGR.O88 is not a valid package', 0
 ui_s_toobig: db 'TASKMGR.O88 is too large', 0
@@ -2651,12 +2693,7 @@ ui_note_paint:
     add dx, 16
     mov si, [ui_note_msg]
     call app_about_center
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_si
 
 ; -----------------------------------------------------------------------------
 ; ui_cmd - act on one of the kernel's own menu commands
@@ -2670,30 +2707,27 @@ ui_note_paint:
 ; which quits the frontmost instance - with nothing to close.
 ; -----------------------------------------------------------------------------
 ui_cmd:
-    or ax, ax
-    jz .done
-    cmp ax, CMD_ABOUT
-    je .about
-    cmp ax, CMD_CTRL
-    je .ctrl
-    cmp ax, CMD_TIMER
-    je .timer
-    cmp ax, CMD_BOUNCE
-    je .bounce
-    cmp ax, CMD_FILES
-    je .files
-    cmp ax, CMD_CLOSE
-    je .close
-    cmp ax, CMD_TASKS
-    je .tasks
-    cmp ax, CMD_REBOOT
-    je .reboot
+    dec ax                      ; CMD_ABOUT = 1 .. CMD_FILES (9, or 10 with
+    cmp ax, CMD_FILES           ; Hibernate on kern_big) are CONTIGUOUS
+    jae .done                   ; (SPEC.md 13, menu.inc), so an eight-deep
+    mov bx, ax                  ; compare ladder is a table walk. AX = 0 wraps
+    shl bx, 1                   ; to 0xFFFF and the same unsigned compare
+    jmp word [bx + .tab]        ; catches it, exactly as `or ax,ax / jz` did.
+.done:                          ; CMD_SEP is entry 3 and goes to .done: it is
+    ret                         ; the RULE above Hibernate (Restart on
+                                ; kern_small) and dispatches to nothing
+                                ; (SPEC.md 12.3)
+
+.tab:                           ; data in .text, reached only by the indirect
+                                ; jump above - ui_loc_base's pattern, and
+                                ; fm_jmp's. os88ovlchk cannot see an indirect
+                                ; transfer, so EVERY ENTRY HERE MUST BE .text
+                                ; and is
 %ifdef KERN_BIG
-    cmp ax, CMD_HIBER
-    je .hiber
+    dw .about, .ctrl, .tasks, .done, .hiber, .reboot, .close, .timer, .bounce, .files
+%else
+    dw .about, .ctrl, .tasks, .done, .reboot, .close, .timer, .bounce, .files
 %endif
-.done:
-    ret
 
 %ifdef KERN_BIG
 .hiber:
@@ -2707,7 +2741,11 @@ ui_cmd:
 .ctrl:
     call COLD_SEG:cpf_cp_open   ; NOT .launch: the panel's code is a file now
     ret                         ; (SPEC.md 2.8.4), so opening it can fail for
-                                ; a reason app_launch knows nothing about
+                                ; a reason app_launch knows nothing about.
+                                ; NOT a far tail jump: cpf_cp_open ends in
+                                ; retf and ui_cmd does not, so the retf would
+                                ; pop a NEAR frame as CS:IP - a wild jump, and
+                                ; os88ovlchk refuses it
 .timer:
     mov al, KIND_TIMER
     jmp .launch
@@ -2715,18 +2753,17 @@ ui_cmd:
     mov al, KIND_BOUNCE
     jmp .launch
 .tasks:
-    call ui_tm_open             ; not a kind any more: it is a package on the
-    ret                         ; system disk (SPEC.md 28)
+    jmp ui_tm_open              ; not a kind any more: it is a package on the
+                                ; system disk (SPEC.md 28)
 .launch:
     call app_launch             ; takes its own locks; out CF = tables full
-    jnc .launched
-    call snd_beep               ; audible refusal (SPEC.md 34.3)
-.launched:
-    ret
+    jnc .done
+    jmp snd_beep                ; audible refusal (SPEC.md 34.3)
 
 .files:
     call COLD_SEG:fmf_files_open ; fronts, creates or moves a file-manager
-    ret                         ; window (SPEC.md 22.1); locks internally
+    ret                         ; window (SPEC.md 22.1); locks internally -
+                                ; and `call`/`ret` for .ctrl's reason
 
 .close:
     call gfx_lock
@@ -2738,8 +2775,7 @@ ui_cmd:
 .close_none:
     call snd_beep               ; nothing to close: audible refusal (34.3)
 .close_out:
-    call gfx_unlock
-    ret
+    jmp gfx_unlock
 
 .reboot:
     xor al, al                  ; the System menu's Restart FLUSHES: the user

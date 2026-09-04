@@ -209,6 +209,9 @@ static struct os88_place w_savhere2;    /* 19.9's walk, one step at a time */
  * ==========================================================================*/
 static void w_repaint2(void *win, int clear);
 static void w_reload(void *win);
+static int  w_abdismiss(void *win);     /* the About card (SPEC.md 20.5.1.1):
+                                         * os88_paint and os88_onclick are both
+                                         * above the block that defines it */
 static int  w_samename(const char *a, const char *b);
 static void w_infield(int i, int x1, int y1, int x2, int y2, int dis);
 static void w_press(int i, int x, int y);
@@ -538,6 +541,18 @@ static void w_repaint(void *win)
     w_repaint2(win, 0);                 /* the W_PAINT case: already whitened */
 }
 
+/* --- the About card's lines and flag (SPEC.md 20.5.1.1) ------------------
+ * Up here rather than beside os88_about() below, because os88_paint() draws
+ * the card and is the first thing past this comment. */
+static const char *w_about_lines[] = {
+    "WEAVE for os8088",
+    "Runs a compiled .WAB bundle",
+    "",
+    "Contributed by Jorge Gonzalez",
+    0
+};
+static int w_abon;                      /* the card is up */
+
 /* ============================================================================
  * THE CALLBACKS
  * ==========================================================================*/
@@ -559,6 +574,10 @@ void os88_paint(void *win)
         w_openpend(win);
     }
     w_repaint(win);
+    /* ...and the About card LAST, over the card or the Deck it covers. _d
+     * because this paint's region is already armed (SPEC.md 20.5.1.1). */
+    if (w_abon)
+        os88_about_card_d(win, w_about_lines);
 }
 
 /* W_ONRESIZE (SPEC.md 11.98): the content box changed and we did not ask - an
@@ -589,6 +608,8 @@ void os88_onclick(int x, int y, void *win)
 {
     int i;
 
+    if (w_abdismiss(win))               /* credits up: the click is spent */
+        return;
     if (w_state != W_ST_RUN)
         return;
     if (!w_layout(win))
@@ -604,6 +625,8 @@ void os88_onclick(int x, int y, void *win)
 
 void os88_onkey(int ascii, int scan, void *win)
 {
+    if (w_abdismiss(win))               /* any key takes the credits down */
+        return;
     if (w_state == W_ST_RUN) {
         w_key(win, ascii, scan);        /* wact.c: ^R, Tab, then the armed
                                          * field (6.7, 1.7) */
@@ -713,10 +736,43 @@ void os88_onfile(int mode, const char *name, unsigned size_lo, unsigned size_hi,
     w_repaint2(win, 1);                 /* over the LAST state - see w_repaint2 */
 }
 
+/* ============================================================================
+ * THE ABOUT CARD (SPEC.md 12.2, 20.5.1.1)
+ *
+ * IT WAS A TOAST, and a toast cannot carry a credit: SPEC.md 59 gives it
+ * three seconds and TOAST_MAX characters, which is why this package shipped
+ * saying what the WVM measures and not who wrote it. ovl_about() still runs -
+ * WEAVE-SPEC 4.12's ops/s banner is a real reading and the wave-5 field run
+ * is asked for it - and the card goes up over it.
+ *
+ * The card itself is os88ui.inc's, reached through os88_about_card(). What is
+ * ours is the flag, os88_paint drawing it last, and the click or key taking
+ * it down.
+ * ==========================================================================*/
+/* w_abdismiss - answers 1 when the click or key was spent taking the card
+ * down, which is the assembly side's CF. Nothing has armed a clip region for
+ * a click or a key (SPEC.md 11.3), so this arms one before it draws. */
+static int w_abdismiss(void *win)
+{
+    if (!w_abon)
+        return 0;
+    w_abon = 0;
+    if (os88_wm_clip_set(win) == 0)
+        w_repaint2(win, 1);             /* the whole content: the card was
+                                         * opaque over its own rect */
+    return 1;
+}
+
 void os88_about(void *win)
 {
-    ovl_about();
+    ovl_about();                        /* the ops/s banner, still a toast */
+    w_abon = 1;
+    if (os88_wm_clip_set(win) != 0)
+        return;                         /* not a visible pixel of us - the flag
+                                         * stays set and the next paint puts
+                                         * the card up */
     w_repaint2(win, 1);
+    os88_about_card_d(win, w_about_lines);
 }
 
 /* ============================================================================

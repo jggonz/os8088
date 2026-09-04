@@ -18,6 +18,7 @@ import dispcp                                          # noqa: E402
 import ethernet as eth                                 # noqa: E402
 import os88sym                                         # noqa: E402
 import importlib.util
+import os88qemu                                              # noqa: E402
 
 spec = importlib.util.spec_from_file_location("g", "tests/ftpd.py")
 G = importlib.util.module_from_spec(spec)
@@ -47,6 +48,9 @@ def boot():
     for f in ("build/qmp.sock", "build/qemu.pid"):
         if os.path.exists(f):
             os.remove(f)
+    # `make test` DAEMONISES the emulator, so it outlives this script
+    # unless somebody kills it - and the somebody is us (os88qemu).
+    os88qemu.own()
     r = subprocess.run(["make", "test", "ETHER=1", "ETHFWD=1",
                         "TESTIMG=build/ether360.img",
                         "TESTAPPS=build/ftpapps.img"],

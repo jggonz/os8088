@@ -71,6 +71,20 @@ tk_fsx_main:
     jne .out
     call tk_steps                   ; CX = ticks since the last frame
     jcxz .skip
+    mov [tk_lstep], cl              ; ...and the lattice the assist gives back
+                                    ; half of (SPEC.md 85.6.5.6): the player
+                                    ; can only command a heading every
+                                    ; TK_TURN * this.
+                                    ;
+                                    ; AND IT IS WRITTEN AFTER tk_input ON
+                                    ; PURPOSE. tk_fire runs up there, so a shot
+                                    ; is corrected with the SAME tk_lstep that
+                                    ; tk_lockon closed the sight on at the end
+                                    ; of the last frame. Written before it, a
+                                    ; frame that owed two ticks instead of
+                                    ; three would shrink the cap between the
+                                    ; sight closing and the trigger, and the
+                                    ; sight would have lied (85.6.5.7)
     cmp byte [tk_pause], 0
     jne .skip
     cmp byte [tk_over], 0           ; the world is finished with; what moves
@@ -121,8 +135,10 @@ tk_fsx_main:
 ; The cap is what keeps a stall from teleporting anybody: a floppy access or a
 ; long first frame can leave several ticks owing, and a shell that advances
 ; four times in one frame can pass clean through a tank it should have hit.
+; TK_MAXSTEP is declared in tank.asm beside TK_TURN, because the two multiply
+; to the coarsest heading lattice the player is ever on and SPEC.md 85.6.5.8
+; derives the aim box from it.
 ; -----------------------------------------------------------------------------
-TK_MAXSTEP equ 3
 tk_steps:
     call OSAPI_GET_TICKS
     mov bx, ax
@@ -266,6 +282,7 @@ tk_input:
     mov byte [tk_quit], 1
     jmp .done
 
+
 ; THE HELD KEYS ARE LATCHED HERE AND SPENT ON THE TICK (SPEC.md 85.6.4).
 ; They used to be applied right here, once per FRAME, while the world stepped
 ; once per TICK - so the player turned at the machine's frame rate and the
@@ -355,6 +372,236 @@ tk_pmove:
     ret
 
 ; -----------------------------------------------------------------------------
+; tk_aimerr - how far off the sights the object in slot BX (a slot x 2) is
+; in:  BX = slot x 2, [tk_csin]/[tk_ccos] set for the CURRENT heading
+; out: CF=0 and AX = the error in QUARTER angle units, positive when the target
+;      is to the right, so tk_pa + AX/4 points at it; CF=1 not shootable
+; clobbers CX, DX, SI, DI.  preserves BX
+;
+; NO ARCTANGENT HERE EITHER, and this one does not need SPEC.md 85.6's cross
+; product: tk_objcam_raw already has the pair the projection divides, and over
+; the few units either side of the sights that anything asks about, THE ANGLE
+; IS ITS TANGENT. ocx/ocz = tan(err) and one unit is tan(1u) = 402/16384 -
+; tk_sintab's own first entry - so err = 40.756 * ocx/ocz. In quarters, because
+; a quarter is a useful step and a whole unit's rounding would cost a third of
+; the window at the shell's longest reach (SPEC.md 85.6.5.2).
+; -----------------------------------------------------------------------------
+tk_aimerr:
+    call tk_objcam_raw
+    mov cx, [tk_ocz]
+    cmp cx, TK_NEARZ                ; behind us, or close enough to ram
+    jl .no
+    cmp cx, TK_FARZ
+    jg .no
+    mov ax, [tk_ocx]                ; ...and inside 45 degrees, which is what
+    or ax, ax                       ; bounds the quotient at 163 and so the
+    jns .abs                        ; idiv itself. Everything this is asked
+    neg ax                          ; about is within a few units of the sights
+.abs:
+    cmp ax, cx
+    jg .no
+    mov ax, [tk_ocx]
+    mov si, TK_ERRK
+    imul si                         ; DX:AX, because ocx*163 leaves 16 bits
+    idiv cx
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; tk_besttarget - the live tank nearest the sights, if one is inside AX
+; in:  AX = the half-window, in quarter units, inclusive
+; out: CF=0 and AX = that tank's error in quarter units, [tk_aimz] = its range;
+;      CF=1 none
+; clobbers AX, BX, CX, DX, SI, DI
+;
+; It takes the camera's own sine and cosine first, because LOCK asks this in
+; the middle of a step and tk_camsetup last ran a frame and a heading ago.
+; -----------------------------------------------------------------------------
+tk_besttarget:
+    call tk_camsetup
+    mov [tk_aimw], ax
+    mov word [tk_aimb], 0x7FFF
+    mov bx, TK_NSTAT * 2            ; the scenery owns the first TK_NSTAT slots
+    mov cx, TK_NOBJ - TK_NSTAT      ; and tk_findfree's rule holds here too
+.o:
+    push cx
+    push bx
+    mov si, bx
+    shr si, 1
+    cmp byte [tk_otype + si], OT_TANK
+    jne .n
+    call tk_aimerr
+    jc .n
+    mov dx, ax
+    or ax, ax
+    jns .p
+    neg ax
+.p:
+    cmp ax, [tk_aimw]
+    jg .n
+    cmp ax, [tk_aimb]
+    jge .n
+    mov [tk_aimb], ax
+    mov [tk_aimq], dx
+    mov ax, [tk_ocz]                ; the RANGE decides the hit window, and
+    mov [tk_aimz], ax               ; tk_ocz is the last object looked at
+.n:
+    pop bx
+    add bx, 2
+    pop cx
+    loop .o
+    cmp word [tk_aimb], 0x7FFF
+    je .none
+    mov ax, [tk_aimq]
+    clc
+    ret
+.none:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; tk_lockon - would a shot fired RIGHT NOW hit? (SPEC.md 85.6.5.7)
+; out: [tk_locked] set, and a blip on the frame it ACQUIRES
+; clobbers AX, BX, CX, DX, SI, DI
+;
+; THE SIGHT MAY NOT LIE, and that is the whole design of it. A reticle keyed to
+; the BRACKETS would say "on target" for a tank five units off at 3,900 out,
+; where tk_espoil's window is one and a half - so it would close on shots that
+; miss, at exactly the range where the player cannot tell. It is keyed to the
+; window instead: TK_HITQ/range is how far off a shot may be and still land,
+; and tk_aimfix is how much of an error the gun is about to correct, so the
+; sight closes on precisely the shots that hit.
+;
+; It follows that AIM OFF gets a reticle that closes rarely at long range and
+; freely up close, which is not a lesser version of the feature - it is the
+; defect being SHOWN. The brackets are still the outer gate, because a tank
+; outside them is not one the player is aiming at.
+; -----------------------------------------------------------------------------
+tk_lockon:
+    mov byte [tk_locked], 0
+    cmp byte [tk_over], 0
+    jne .edge
+    cmp byte [tk_dead], 0           ; nothing is aimed through cracked glass
+    jne .edge
+    mov ax, TK_RETQ
+    call tk_besttarget
+    jc .edge
+    mov cx, ax
+    call tk_aimfix                  ; ...less whatever the gun is going to fix
+    sub cx, ax                      ; CX = what the shell is still wrong by
+    mov ax, cx
+    or ax, ax
+    jns .p
+    neg ax
+.p:
+    mov bx, ax                      ; BX = |that|, in quarter units
+    mov ax, TK_HITQ                 ; ...against the window at THIS range
+    xor dx, dx
+    div word [tk_aimz]
+    mov cx, ax
+.hys:
+    cmp byte [tk_lockwas], 0        ; a target ON the boundary would otherwise
+    je .cmp                         ; chatter the sight and its blip
+    add cx, TK_LOCKHYS
+.cmp:
+    cmp bx, cx
+    ja .edge
+    mov byte [tk_locked], 1
+.edge:
+    mov al, [tk_locked]             ; the blip is an ACQUISITION, so it is the
+    cmp al, [tk_lockwas]            ; EDGE that sounds and not the state
+    je .out
+    mov [tk_lockwas], al
+    or al, al
+    jz .out
+    mov ax, TK_BLIPHZ
+    mov cx, 1
+    mov dl, TK_BLIPPRI              ; under the muzzle's, so a shot always wins
+    call OSAPI_SND_TONE
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; tk_aimfix - the correction the gun applies to an error of AX quarter units
+; in:  AX = the signed error, from tk_besttarget
+; out: AX = the signed correction, 0 for none.  clobbers nothing else
+;
+; ONE ROUTINE FOR THE GUN AND THE SIGHT (SPEC.md 85.6.5.6), which is what makes
+; the closed reticle a promise rather than a decoration: tk_fire adds what this
+; returns and tk_lockon subtracts it, so the sight closes on exactly the shots
+; that land and the two cannot drift apart.
+;
+; THE BOX IS THE GATE, and outside it the player aims for themselves
+; (SPEC.md 85.6.5.8). It is TK_BOXQ wide because that is half the coarsest
+; lattice they can command, so the nearest heading to any bearing is inside the
+; box AND inside the cap - the correction is exact there, and there is no
+; bearing a sequence of presses cannot reach.
+;
+; THE CAP IS HALF THE LATTICE THIS FRAME PUTS THEM ON, and nothing more: the
+; player can only command a heading every TK_TURN * tk_lstep units, so half of
+; that is what the frame rate ROUNDED AWAY and anything further is aiming for
+; them. Three units on a 5150 and one on a 386 - the assist is exactly the
+; machine's own handicap - and at 1,000 units out, where tk_espoil's window is
+; already 12 units wide, it changes no outcome at all.
+; -----------------------------------------------------------------------------
+tk_aimfix:
+    push bx
+    push cx
+    mov cx, ax                      ; CX = the error, sign and all
+    or ax, ax
+    jns .p
+    neg ax
+.p:
+    cmp ax, TK_BOXQ                 ; outside the closed sight's own box the
+    ja .none                        ; gun does nothing at all
+    mov al, [tk_lstep]
+    mov ah, TK_TURN * 2             ; half the lattice, in quarter units:
+    mul ah                          ; TK_TURN * lstep * 4 / 2. tank.asm asserts
+    or ax, ax                       ; this cannot exceed TK_BOXQ, so nothing
+    jz .none                        ; clamps it here
+    mov bx, ax                      ; BX = the cap; clamp the error to it
+    mov ax, cx
+    cmp ax, bx
+    jle .lo
+    mov ax, bx
+    jmp short .out
+.lo:
+    neg bx
+    cmp ax, bx
+    jge .out
+    mov ax, bx
+.out:
+    pop cx
+    pop bx
+    ret
+.none:
+    xor ax, ax
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; tk_qround - AX = an error in quarter units; out AL = it in whole ones, ROUNDED
+; -----------------------------------------------------------------------------
+tk_qround:
+    or ax, ax
+    jns .p
+    neg ax
+    add ax, 2
+    sar ax, 1
+    sar ax, 1
+    neg ax
+    ret
+.p:
+    add ax, 2
+    sar ax, 1
+    sar ax, 1
+    ret
+
+; -----------------------------------------------------------------------------
 ; tk_drive - move the player BX units along its heading, unless something is
 ;            already standing there
 ; -----------------------------------------------------------------------------
@@ -385,7 +632,24 @@ tk_drive:
     and ax, TK_WMASK
     mov [tk_nz], ax
     call tk_blocked
-    jc .out
+    jnc .move
+    push word [tk_nx]               ; refused - but are we ALREADY inside
+    push word [tk_nz]               ; something? Then every direction is
+    mov ax, [tk_px]                 ; refused and this is the dead end of
+    mov [tk_nx], ax                 ; SPEC.md 85.6.6, so the move is an escape
+    mov ax, [tk_pz]                 ; and is allowed. TK_CLEARR means it cannot
+    mov [tk_nz], ax                 ; happen; this means it cannot come back by
+    call tk_blocked_scen            ; some other route, and it changes nothing
+    pop word [tk_nz]                ; in a game where the player is outside
+    pop word [tk_nx]                ; everything - which is every game.
+    jnc .out                        ; SCENERY only: tk_blocked counts an enemy
+                                    ; tank too, and one within 300 units - the
+                                    ; ramming range - made the player's own
+                                    ; position "blocked", so every step was
+                                    ; allowed, into a cube included, and once
+                                    ; inside it the position stayed blocked
+                                    ; and the player drove through the piece
+.move:
     mov ax, [tk_nx]
     mov [tk_px], ax
     mov ax, [tk_nz]
@@ -402,6 +666,21 @@ tk_drive:
 ; tk_blocked - would the player standing at [tk_nx]/[tk_nz] be inside a solid?
 ; out: CF=1 blocked.  clobbers AX, BX, CX, DX, SI
 ; -----------------------------------------------------------------------------
+; tk_blocked_scen - the same question of the SCENERY alone: a tank is not a
+;                   wall you can be inside of. CF as tk_blocked; the bound
+;                   byte is restored on the way out with a mov, so CF survives
+; -----------------------------------------------------------------------------
+tk_bltop:   db OT_SHELL             ; the first type tk_blocked drives THROUGH:
+                                    ; OT_SHELL (your own fire) by default,
+                                    ; OT_TANK for the scenery-only question.
+                                    ; Image data, never executed: a `ret`
+                                    ; precedes it and a label follows
+tk_blocked_scen:
+    mov byte [tk_bltop], OT_TANK
+    call tk_blocked
+    mov byte [tk_bltop], OT_SHELL
+    ret
+
 tk_blocked:
     xor bx, bx
     mov cx, TK_NOBJ
@@ -411,8 +690,10 @@ tk_blocked:
     mov al, [tk_otype + si]
     or al, al
     jz .next
-    cmp al, OT_SHELL
+    cmp al, [tk_bltop]
     jae .next                       ; you may drive through your own fire
+                                    ; (OT_SHELL and above), or - asked by
+                                    ; tk_blocked_scen - through a tank
     mov ax, [tk_ox + bx]
     sub ax, [tk_nx]
     call tk_wrap
@@ -838,7 +1119,17 @@ tk_fire:
     je .out
     inc si
     loop .s
-    mov al, [tk_pa]
+    mov al, [tk_pa]                 ; A tank inside the CLOSED sight's box is
+    mov [tk_aimh], al               ; one the player has aimed at themselves
+    mov ax, TK_RETQ                 ; (SPEC.md 85.6.5.8), and only there does
+    call tk_besttarget              ; the shell leave at its bearing rather
+                                    ; than at the hull's
+    jc .have
+    call tk_aimfix
+    call tk_qround
+    add [tk_aimh], al
+.have:
+    mov al, [tk_aimh]
     call tk_sincos                  ; AX = sin, BX = cos
     mov cx, bx
     mov bx, 250                     ; out of the barrel, not out of the eye
@@ -854,7 +1145,7 @@ tk_fire:
     and ax, TK_WMASK
     mov [tk_sz], ax
     mov al, OT_SHELL
-    mov ah, [tk_pa]
+    mov ah, [tk_aimh]
     call tk_spawnshell
     mov ax, 900                     ; the muzzle report
     mov cx, 2
@@ -1130,6 +1421,28 @@ tk_newgame:
     call OSAPI_RAND
     and ax, TK_WMASK
     mov [tk_oz + bx], ax
+    mov ax, [tk_ox + bx]            ; ...AND NOT ON TOP OF THE PLAYER (SPEC.md
+    sub ax, [tk_px]                 ; 85.6.6). A box test, like tk_blocked's
+    call tk_wrap                    ; own, so clearing it on EITHER axis is
+    or ax, ax                       ; enough - and x is the one shoved, because
+    jns .qx                         ; the piece only has to leave the box, not
+    neg ax                          ; go anywhere in particular
+.qx:
+    cmp ax, TK_CLEARR
+    jge .qok
+    mov ax, [tk_oz + bx]
+    sub ax, [tk_pz]
+    call tk_wrap
+    or ax, ax
+    jns .qz
+    neg ax
+.qz:
+    cmp ax, TK_CLEARR
+    jge .qok
+    add word [tk_ox + bx], TK_CLEARR * 2    ; a FOLD and not a re-draw: it
+    and word [tk_ox + bx], TK_WMASK         ; terminates, and a retry loop on
+.qok:                                       ; OSAPI_RAND is a hang waiting for
+                                            ; a bad one
     mov byte [tk_oa + si], 0
     inc si
     loop .s
@@ -1324,13 +1637,18 @@ tk_drawtab:
 ; tk_hud - the panel, the gunsight, and the cracks
 ; -----------------------------------------------------------------------------
 tk_hud:
-    mov al, TKI_MARK
+    call tk_lockon                  ; SPEC.md 85.6.5.7, and it must run before
+    mov al, TKI_MARK                ; the ink is set: tk_besttarget is under it
     call tk_setink
     mov ax, [tk_vcx]
     mov [tk_tox], ax
     mov ax, [tk_vcy]
     mov [tk_toy], ax
     mov si, tk_t_sight
+    cmp byte [tk_locked], 0
+    je .sight
+    mov si, tk_t_lock               ; ...the SAME EIGHT segments, moved: a lock
+.sight:                             ; costs the frame nothing
     call tk_drawtab
 
     mov al, TKI_HUD
@@ -1864,6 +2182,7 @@ tk_glyph_modex:
 ; tk_strlen - SI = string; out CX = its length
 ; -----------------------------------------------------------------------------
 tk_utoa:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in BP
     push ax
     push bx
     push dx
@@ -1966,6 +2285,22 @@ tk_t_sight:                         ; the arcade's gunsight: two stalks and a
     dw   34, -10,   34,  10
     dw   46,  10,   34,  10
     dw 0x7FFF
+
+tk_t_lock:                          ; ...and CLOSED on a target (85.6.5.7).
+    dw    0, -34,    0, -14         ; EIGHT SEGMENTS, the same eight, of the
+    dw    0,  14,    0,  34         ; same lengths - so the sight snapping shut
+    dw  -(TK_BOXPX+12), -10,  -TK_BOXPX, -10        ; is free: tk_drawtab draws
+    dw  -TK_BOXPX, -10,  -TK_BOXPX,  10             ; the identical number of
+    dw  -(TK_BOXPX+12),  10,  -TK_BOXPX,  10        ; identical-length runs and
+    dw   TK_BOXPX+12, -10,   TK_BOXPX, -10          ; the frame a lock lands in
+    dw   TK_BOXPX, -10,   TK_BOXPX,  10             ; costs what every other
+    dw   TK_BOXPX+12,  10,   TK_BOXPX,  10          ; frame costs
+    dw 0x7FFF                       ; THE INNER EDGE IS TK_BOXPX AND NOT A
+                                    ; DRAWING CHOICE: it is the box the gun
+                                    ; corrects inside, derived in tank.asm and
+                                    ; asserted against TK_BOXQ there, so what
+                                    ; the player is told to aim inside is the
+                                    ; same number the gun tests
 
 tk_t_crack:                         ; the glass, when they get you first
     dw    0,   0,  -40, -30

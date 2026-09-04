@@ -54,10 +54,11 @@ feel what they were up against).
 > wrote by reading it back.
 
 ```
-make          # build all seven floppy images
+make          # build all nine floppy images
 make run      # boot it in QEMU (with an emulated serial mouse)
 make run-640  # the same, on a 640KB machine
 make run-720  # the same, off the 720KB pair
+make run-120  # the same, off the 1.2MB 5.25" HD pair
 make xt       # boot the 360KB image on an emulated IBM PC/XT in 86Box
 make xt-640   # the same XT with a full 640KB of RAM
 make xt-mfm   # ...and a 20MB MFM hard disk on IBM's Fixed Disk Adapter
@@ -90,7 +91,8 @@ make xt-runcpm  # 86Box: the 4.77MHz XT with the 360KB RunCPM disk in B:
 make 286-runcpm # 86Box: the 12.5MHz 286 with the 720KB one - arcade games
 make 386-runcpm # 86Box: the 386DX with the 1.44MB one - everything
 make c64disk  # build the C64 floppy - a Commodore 64: the package, its
-              # overlay and C64.ROM, the KERNAL/BASIC/CHARGEN sidecar
+              # overlay; the KERNAL/BASIC/CHARGEN ROM rides INSIDE the
+              # package as an embedded part (SPEC.md 20.12)
               # (make c64rom builds that from the ROMs in apps/c64/rom/)
               # ...in all three geometries: c64.img, c64720.img, c64360.img
 make xt-c64   # 86Box: the 4.77MHz XT with the 360KB C64 disk in B: - where
@@ -264,7 +266,7 @@ every one of these on one 1.44MB floppy.
 | piece         | how it works on an XT                                       |
 |---------------|--------------------------------------------------------------|
 | graphics      | VGA mode 12h, 640x480x16 planar, drawn directly by default (the real Mac drew directly too). Set/Reset + Bit Mask fills, XOR for drag outlines and menu highlights. **CGA and Hercules are the same binary**: the adapter is probed at boot, a 1bpp renderer takes over, and the live screen size is read at runtime rather than assumed — so anything that clips or anchors to an edge is right on all three. |
-| multitasking  | round-robin off int 08h (PIT, 18.2Hz): chain to the BIOS tick, then save the register frame on the task stack, swap SP, and iret into the next ready task. 12 task slots, 512-byte stacks (sized against a measured 150-byte high-water mark). Pre-emptive by default; in cooperative mode the tick declines to switch and a task runs until it yields, sleeps or exits — with a ~1s watchdog so a runaway one can't take the machine with it. |
+| multitasking  | round-robin off int 08h (PIT, 18.2Hz): chain to the BIOS tick, then save the register frame on the task stack, swap SP, and iret into the next ready task. 8 task slots, 384-byte stacks (sized against a measured 150-byte high-water mark). Pre-emptive by default; in cooperative mode the tick declines to switch and a task runs until it yields, sleeps or exits — with a ~1s watchdog so a runaway one can't take the machine with it. |
 | mouse         | Microsoft serial mouse on **COM1 or COM2** (IRQ4 / IRQ3), 1200 baud 7N1, 3-byte packets — the period-correct XT mouse. The port is neither asked nor configured: both are probed for a UART, every one that answers is listened to at once, and the first to deliver a run of clean packets wins — so the other port stays free for the modem that is usually on it. QEMU emulates a mouse natively (`-chardev msmouse`); `make run MOUSEPORT=com2` puts it on the second port. |
 | ...and a **PS/2 mouse** | the 8042's auxiliary port on IRQ12, probed **after** both serial ports and only above the XT — an 8088's keyboard is an 8255 and port 64h is not decoded there, so the whole module is behind the CPU tier and compiled out of the 128KB kernel entirely. Unlike a serial mouse this one *answers*: a reset it acknowledges with `FA AA` is a real probe, so there is no run threshold and the first packet settles it. Both mice can be live at once and the first complete packet wins, exactly as it does between two UARTs; the loser is switched off once. `make run MOUSEPORT=ps2` takes the serial ports away and leaves it the only pointing device on the machine. |
 | cursor        | arrow with save-under, drawn by the mouse ISR itself when it's safe, deferred to the next unlock when a task holds the drawing lock. |
@@ -516,14 +518,16 @@ says how to use it, and `LESSONS.md` inside the skill is worth reading on its
 own even if you never run it: it is the list of everything that assembles
 cleanly and runs wrong when C meets this machine.
 
-## Three geometries of everything
+## Four geometries of everything
 
 | image                  | geometry                 | for                             |
 |------------------------|--------------------------|---------------------------------|
 | `build/os8088.img`     | 1.44MB, 18 spt, 2 heads  | QEMU boot floppy (A:)           |
+| `build/os8088-120.img` | 1.2MB, 15 spt, 2 heads   | 5.25" HD boot floppy — an AT-class machine with no 3.5" drive |
 | `build/os8088-720.img` | 720KB, 9 spt, 2 heads    | 3.5" DD / USB floppy / Gotek    |
 | `build/os8088-360.img` | 360KB, 9 spt, 2 heads    | 86Box / real XT boot floppy     |
 | `build/apps.img`       | 1.44MB FAT12             | QEMU software floppy (B:)       |
+| `build/apps120.img`    | 1.2MB FAT12              | 5.25" HD software floppy        |
 | `build/apps720.img`    | 720KB FAT12              | 3.5" DD software floppy         |
 | `build/apps360.img`    | 360KB FAT12              | 86Box / real XT software floppy |
 | `build/media360.img`   | 360KB FAT12              | 360KB media floppy — the shipped module, which the 360KB apps disk has no room for |
@@ -542,7 +546,7 @@ A 1.44MB drive postdates the 8086 by years, so period hardware gets the
 360KB build.
 
 **No binary is committed to this repository.** `build/` is gitignored
-outright — the seven images, the kernel, the boot sectors, the drivers and
+outright — the nine images, the kernel, the boot sectors, the drivers and
 every package are products of `make`, which needs only `nasm` and `python3`.
 For a floppy you can boot without a toolchain, take a
 [release](https://github.com/jggonz/os8088/releases) or
@@ -557,6 +561,20 @@ them — so the two share `build/boot360.bin` and only the BPB differs. It is
 there for the machines that can take neither of the others: an XT or AT
 fitted with a 3.5" DD drive, and every USB floppy drive and Gotek made,
 which read 720KB and 1.44MB and nothing 5.25" at all.
+
+1.2MB is that argument from the 5.25" side: an AT-class machine — a 286 or
+later, or a late XT with an HD controller — whose only drive is 5.25" reads
+neither 3.5" disk. It *can* boot the 360KB one, because a 1.2MB drive reads
+360KB media, and that is what it had to do; it then got 354 clusters of
+software in a drive with 2,371, and had to swap the media disk in for
+`BEVERLY.MOD`. The 1.2MB pair carries the full 1.44MB payload instead. It is
+also the safer disk to write: a 1.2MB drive's head is narrower than a 360KB
+drive's, so a 360KB disk written in one is often unreadable in a real 360KB
+drive afterwards — and the OS writes its settings to the boot disk. It is the
+one geometry with a boot sector of its own (`build/boot120.bin`), 15 sectors
+being a different track shape. **It is not for the 5150**: a 1.2MB drive wants
+a 500 kbps controller, which is the AT's, so period XT hardware still takes
+the 360KB pair.
 
 ## Emulators
 
@@ -640,6 +658,7 @@ All targets, at a glance:
 | `xt-sound` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | Sound Blaster 2.0 |
 | `xt-sound-1.44` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | Sound Blaster 1.0 |
 | `286` | AMI 286 clone | 286 @ 12.5MHz | 1MB | OTI-067 VGA | — |
+| `286-525` | AMI 286 clone, two 1.2MB **5.25"** drives | 286 @ 12.5MHz | 1MB | OTI-067 VGA | — |
 | `286-sound` | AMI 286 clone | 286 @ 12.5MHz | 1MB | OTI-067 VGA | Sound Blaster 16 |
 | `386sx` | Shuttle HOT-304 | 386SX @ 16MHz | 2MB | OTI-067 VGA | — |
 | `386` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | — |
@@ -664,7 +683,10 @@ All targets, at a glance:
 
 The XT-class machines boot the 360KB system disk; most pair it with the 360KB
 apps disk, while `xt-sound-1.44` mounts the everything disk in a 1.44MB B:
-drive. The AT-class machines boot the 1.44MB pair.
+drive. The AT-class machines boot the 1.44MB pair — all but `286-525`, which
+is the same AMI 286 fitted with two **5.25" HD** drives and boots the 1.2MB
+pair. It is the only profile here with those drives, so it is the only place
+that geometry runs on period hardware.
 
 `xt-multimon` is the **two-card** XT — a CGA and a Hercules, a monitor window
 each — and the only 86Box machine that can show the extended desktop. It boots

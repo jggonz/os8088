@@ -56,6 +56,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from shot import read_ppm            # noqa: E402  (tools/shot.py)
 from rczex_ocr import Screen         # noqa: E402
+import os88qemu                                              # noqa: E402
 
 BANNER = {
     0: "  CP/M Emulator v6.9 by Marcelo Dantas",
@@ -160,6 +161,9 @@ def main():
     if os.path.exists(sock):
         os.unlink(sock)
     log = open(os.path.join(args.shots, "rczex-qemu.log"), "w")
+    # `make test` DAEMONISES the emulator, so this Popen returns and the
+    # guest stays up - killing the Popen would not reach it (os88qemu).
+    os88qemu.own()
     qemu = subprocess.Popen(["make", "test", f"TESTAPPS={args.image}"], stdout=log,
                             stderr=subprocess.STDOUT)
     t0 = time.time()

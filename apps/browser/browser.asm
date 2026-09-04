@@ -55,7 +55,14 @@ BR_SBRATE   equ SB_RATE         ; that followed the hand IS input overrun
                                 ; includes, so the two ends of it
                                 ; cannot drift (SPEC.md 20.11)
 
-    OS88_HEADER 'BROWSER', br_entry, 3  ; bit0 = icon, bit1 = association
+    OS88_HEADER 'BROWSER', br_entry, 3, OS88_STACK_384  ; bit0 = icon, bit1 = association
+                                ; THE WORKER'S STACK, declared
+                                ; rather than defaulted (SPEC.md 8.7):
+                                ; static 148 on the layout path
+                                ; AND ftpd's socket branch - the
+                                ; deeper of the two, not the sum
+                                ; over the 64-byte interrupt floor
+                                ; that is 212, and 384 gives 1.81x
 
     OS88_ICON16
     dw 0x0000                       ; 16 mask rows (white underlay): a page
@@ -791,8 +798,28 @@ br_srect:
     push bx
     push cx
     push dx
-    mov dx, [br_r3+4]               ; DX = the first x the state may use
+    mov dx, [br_r3+4]               ; DX = the first x the state may use...
     add dx, BR_BTNG + 1
+    sub dx, [br_cx]                 ; ...**ALIGNED UP**, and that is the whole
+    add dx, 7                       ; of this fix. The pen below is right-
+    and dx, 0FFF8h                  ; aligned and then FLOORED to a multiple of
+    add dx, [br_cx]                 ; 8, and a floor moves it LEFT - by up to
+                                    ; 7px, which is further than BR_BTNG's gap
+                                    ; is wide. So the field began ON the Reload
+                                    ; button's right-edge column, and since it
+                                    ; is one OPAQUE font_run padded in front
+                                    ; with spaces (br_status), those spaces
+                                    ; drew white ground over the frame: the
+                                    ; button lost its right stroke every time
+                                    ; the state was rewritten. Measured on both
+                                    ; 1bpp adapters at the shipped window size:
+                                    ; Reload's right edge is x=184, the first
+                                    ; usable x 188, and the floored pen came
+                                    ; back 184. Aligning the BOUND up instead
+                                    ; costs the field a cell at most and makes
+                                    ; the floor unable to cross it - a value
+                                    ; at or above an 8-aligned floor stays
+                                    ; above it when floored
     mov bx, [br_cx]
     add bx, [br_cw]
     sub bx, BR_LPAD                 ; BX = one past its right edge
@@ -1735,9 +1762,9 @@ br_onclick:
     mov bx, br_r3
     call br_inrect
     jc .out
-    call br_okrel
-    jc .out
-    call br_hgo                     ; Reload is Back to where we already are
+    call br_okrel                   ; ONE predicate for the greying and the
+    jc .out                         ; refusal...
+    call br_reload                  ; ...and ONE action behind both its doors
     jmp .out
 .nostrip:
     cmp cx, [br_sbx]
@@ -2002,6 +2029,17 @@ br_hgo:
     mov di, br_ubuf                 ; br_go reads the URL from br_ubuf and puts
     mov cx, BR_UBUF                 ; it in the bar, so that is where it goes
     rep movsb
+    mov si, br_loc                  ; **AND THE CONTROL IS TOLD IT HAPPENED.**
+    mov di, br_ubuf                 ; That was the bar's OWN buffer, written
+    call os88line_set               ; behind its back, and br_go only resyncs
+                                    ; on the FAR SIDE of br_split - so a slot
+                                    ; br_split refuses left LN_LEN describing
+                                    ; text that is no longer there, and the
+                                    ; bar then draws N cells of nothing that
+                                    ; its own opaque font_run never covers.
+                                    ; One self-copy, and "the buffer and the
+                                    ; length agree" holds by construction
+                                    ; instead of by every caller remembering
     mov byte [br_nopush], 1         ; ...and this trip is not a new place
     mov si, br_ubuf
     call br_go
@@ -2012,6 +2050,40 @@ br_hgo:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; br_reload - Go > Reload AND the toolbar button, which have to be one thing
+; in:  br_okrel has said yes; the gfx lock held
+;
+; **THE BUTTON USED TO CALL br_hgo** - "Reload is Back to where we already
+; are" - and that is not the question br_okrel answers. br_okrel asks whether
+; the BAR holds anything; br_hgo goes to history entry [br_histi], which does
+; not exist until something has been fetched. So on a browser that had just
+; opened, Reload copied a ZEROED history slot over br_ubuf - the location
+; bar's own buffer - and br_go refused the empty URL before ever reaching the
+; os88line_set that would have told the control its text had changed.
+;
+; ONE desync, THREE faults, and the field reported all three (SPEC.md 47 rule
+; 5, which the comment at .t3 claimed to be obeying): the bar drew no text,
+; because its font_run stops at the NUL now sitting at offset 0; Reload GREYED
+; ITSELF, because br_okrel reads that same byte; and a later backspace left
+; caret copies behind, because the cells between the NUL and LN_LEN are
+; painted by neither the run nor the strip fill past it, so every caret drawn
+; in them stayed. A screen saver is what made it visible all at once - the
+; stale pixels sat on the glass until something forced a full repaint.
+;
+; Reloading is re-fetching WHAT THE BAR SAYS, which is what the menu item
+; always did - and [br_nopush], which the menu item always forgot, so a Reload
+; from that door pushed a duplicate history entry every time.
+; -----------------------------------------------------------------------------
+br_reload:
+    push si
+    mov byte [br_nopush], 1         ; a reload is not a new place
+    mov si, br_ubuf
+    call br_go
+    mov byte [br_nopush], 0
+    pop si
     ret
 
 ; --- the three predicates, each answering CF=0 LIVE (gfx_pen_cf's shape) -----
@@ -2389,6 +2461,7 @@ br_resolve:
 .done:
     mov bx, [br_upos]
     mov byte [br_ubuf+bx], 0
+    call br_undot                   ; ...and ONE call covers all three shapes
     clc
 .out:
     pop es
@@ -2443,6 +2516,125 @@ br_hrefpfx:
     pop bx
     pop ax
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; br_undot - remove the dot segments from the composed URL in br_ubuf
+;
+; RFC 3986 5.2.4, and it is THE CLIENT'S JOB: `../` is not a thing a server is
+; asked for, it is a thing the browser resolves before asking. Composing the
+; base directory with the href gives `http://h/a/b/../c.htm`, and sending that
+; is what "problems with relative links" was (issue #137) - a `..` link either
+; 404s or is answered by a page other than the one that was clicked, and which
+; of the two happens depends on the server rather than on us.
+;
+; Done HERE, on the finished buffer, rather than in the three composers above:
+; `/a/../b` is legal in an absolute href and in a root-relative one as well as
+; in the directory-relative case, so one pass over the result covers all three
+; and cannot be forgotten by a fourth.
+;
+; The rewrite is IN PLACE and forward-only - the write cursor is never ahead of
+; the read cursor, because a segment is only ever kept or dropped - so it needs
+; no second buffer. The scan stops at '?' or '#': a query may hold slashes and
+; dots of its own and not one of them is a path segment.
+; -----------------------------------------------------------------------------
+br_undot:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov si, br_ubuf
+    add si, 7                       ; past "http://" - every shape that reaches
+    cmp byte [si-1], 0              ; .done was absolute or went through
+    je .out                         ; br_ubase, so the scheme is always there
+.find:
+    mov al, [si]                    ; the path starts at the host's first '/'
+    or al, al
+    jz .out
+    cmp al, '/'
+    je .go
+    cmp al, '?'                     ; a URL with no path at all: nothing to do
+    je .out
+    cmp al, '#'
+    je .out
+    inc si
+    jmp .find
+.go:
+    mov di, si                      ; the write cursor, and...
+    mov cx, si                      ; ...the floor a '..' may not climb past
+.seg:
+    cmp byte [si], '/'
+    jne .tail                       ; NUL, '?' or '#': the path is done
+    inc si
+    mov bx, si                      ; BX = the segment, SI walks to its end
+.scan:
+    mov al, [si]
+    or al, al
+    je .end
+    cmp al, '/'
+    je .end
+    cmp al, '?'
+    je .end
+    cmp al, '#'
+    je .end
+    inc si
+    jmp .scan
+.end:
+    mov ax, si
+    sub ax, bx                      ; AX = the segment's length
+    cmp ax, 1
+    je .one
+    cmp ax, 2
+    jne .copy
+    cmp byte [bx], '.'
+    jne .copy
+    cmp byte [bx+1], '.'
+    jne .copy
+.pop:                               ; '..' - back over the last kept segment
+    cmp di, cx
+    jbe .last                       ; already at the root: excess '..' are
+    dec di                          ; DISCARDED rather than escaping the host
+    cmp byte [di], '/'
+    jne .pop
+    jmp short .last
+.one:
+    cmp byte [bx], '.'
+    jne .copy
+.last:                              ; a dropped LAST segment still leaves the
+    cmp byte [si], '/'              ; path ending in '/': `/a/b/..` is `/a/`,
+    je .seg                         ; and a directory is not the file beside it
+    mov byte [di], '/'
+    inc di
+    jmp short .tail
+.copy:
+    mov byte [di], '/'
+    inc di
+.cp:
+    cmp bx, si
+    jae .seg
+    mov al, [bx]
+    mov [di], al
+    inc di
+    inc bx
+    jmp .cp
+.tail:
+    mov al, [si]                    ; the query or fragment, verbatim
+    mov [di], al
+    inc si
+    inc di
+    or al, al
+    jnz .tail
+    dec di
+    mov ax, di
+    sub ax, br_ubuf
+    mov [br_upos], ax               ; ...and the cursor stays honest behind it
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; --- br_ubase - "http://host" (+ ":port" when it is not 80) into br_ubuf -----
@@ -2522,6 +2714,7 @@ br_uputh:
 
 ; --- br_uputdec - AX as decimal ----------------------------------------------
 br_uputdec:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push ax
     push bx
     push cx
@@ -2900,10 +3093,9 @@ br_oncmd:
     call br_hgo
     jmp .out
 .reload:
-    mov si, br_ubuf                 ; Go > Reload: the bar's own text, which is
-    cmp byte [si], 0                ; what br_go last put there
-    je .out
-    call br_go
+    call br_okrel                   ; the SAME predicate the button uses, and
+    jc .out                         ; the same action below it
+    call br_reload
 .out:
     pop si
     pop bx
@@ -4362,12 +4554,21 @@ br_layout:
     je .mlnk1                       ; END NO LINE.** Every other marker in this
     cmp al, D_LNK0                  ; format is a break and the emitline below
     je .mlnk0                       ; is why; a link is a run of ordinary text
+    cmp al, D_END                   ; **AND D_END COMES BEFORE THE EMIT, NOT
+    je .fin                         ; AFTER IT**: .fin emits the pending line
+                                    ; itself, so testing it below meant a
+                                    ; document whose last text is followed by
+                                    ; no block tag - </address></body></html>,
+                                    ; every one of them unknown here - was
+                                    ; emitted TWICE and drew its last line
+                                    ; doubled (issue #137). Nothing resets
+                                    ; [br_nch] on the way past, which is why
+                                    ; br_emitline's empty-line guard did not
+                                    ; catch it
     mov bx, si                      ; with a bracket either side, so putting
     mov cx, [br_nch]                ; these through that path would break the
     call br_emitline                ; sentence at every anchor
     inc si
-    cmp al, D_END
-    je .fin
     cmp al, D_PARA
     je .mpara
     cmp al, D_BR
@@ -5023,6 +5224,7 @@ br_trowout:
     shl bx, 1
     mov ax, [bx+br_cs]
     mov [bx+br_tcur], ax
+    mov word [bx+br_tlnk], 0FFFFh   ; no anchor is open in a fresh row
     inc di
     cmp di, cx
     jb .init
@@ -5104,15 +5306,34 @@ br_tcell1:
     jae .store
     push ax
     mov al, [es:si]
-    cmp al, ' '
+    cmp al, D_LNK1                  ; ...but a LINK MARKER IS NOT A SPACE, and
+    jae .keep                       ; eating it here is what left every anchor
+    cmp al, ' '                     ; in a table cell with no bracket at all
+    pop ax                          ; (issue #137): the marker is the cell's
+    ja .go                          ; first byte in the common case
+    inc si                          ; <td><a href=...>, so this loop consumed
+    jmp .skip                       ; it before br_twrap ever saw one
+.keep:
     pop ax
-    ja .go
-    inc si
-    jmp .skip
 .go:
     push bx
-    call br_twrap                   ; SI advanced, CX = placed
-    mov dx, cx
+    push ax                         ; the cell's end - br_twrap's own AX
+    mov ax, [bx+br_tlnk]            ; A LINK THE LAST FRAGMENT LEFT OPEN IS
+    mov [br_wlnk], ax               ; RE-OPENED AT THE HEAD OF THIS ONE and
+    cmp ax, 0FFFFh                  ; closed again at its tail, so each
+    je .g2                          ; composed row is balanced on its own. The
+    call br_creopen                 ; row is one arena line with every column
+.g2:                                ; on it, and br_linkat answers a click by
+    pop ax                          ; scanning BACKWARD - so a link left open
+    call br_twrap                   ; at the end of column 0 would swallow
+    mov dx, cx                      ; columns 1..n and send their clicks to the
+    mov ax, [br_wlnk]               ; wrong page. Re-opening costs three bytes
+    mov [bx+br_tlnk], ax            ; of arena per wrapped fragment and needs
+    cmp ax, 0FFFFh                  ; no second walk
+    je .g3
+    mov al, D_LNK0
+    call br_cput
+.g3:
     pop bx
 .store:
     mov [bx+br_tcur], si
@@ -5184,20 +5405,35 @@ br_twrap:
     mov si, dx                      ; rewind and emit exactly CX characters
     xor dx, dx
 .emit:
+    cmp si, ax                      ; **THE CHARACTER BUDGET IS TESTED AT THE
+    jae .skiptail                   ; TEXT BYTE, not at the top of the loop**:
+    push ax                         ; a link's closing marker sits just past
+    mov al, [es:si]                 ; the last character it covers, and exiting
+    cmp al, 0x20                    ; on the count alone left it behind - the
+    jae .etxt                       ; anchor stayed open across the cell wall
+    cmp al, D_LNK1                  ; and the rest of the row read as part of
+    jb .e2                          ; it. D_LNK1, D_LNK0 and D_LNK1's two
+    jne .em0                        ; payload bytes are the whole of 14..31, so
+    mov [br_wlnk], si               ; ONE compare - read twice, for below and
+    jmp .eput                       ; for equal - separates them from every
+.em0:                               ; other marker, which is still dropped.
+    cmp al, D_LNK0                  ; A LINK COSTS NO WIDTH: it is copied
+    jne .eput                       ; without touching DX, so a cell keeps the
+    mov word [br_wlnk], 0FFFFh      ; columns br_tmeas measured
+.eput:
+    call br_cput
+    jmp .e2
+.etxt:
     cmp dx, cx
-    jae .skiptail
-    cmp si, ax
-    jae .skiptail
-    push ax
-    mov al, [es:si]
-    cmp al, 0x20
-    jb .e2
+    jae .edone
     call br_cput
     inc dx
 .e2:
     pop ax
     inc si
     jmp .emit
+.edone:
+    pop ax
 .skiptail:
     cmp si, ax                      ; step over the space we broke at
     jae .out
@@ -5311,6 +5547,27 @@ br_cdrop:
     push ax
     mov ax, [br_cline]
     mov [br_comp], ax
+    pop ax
+    ret
+
+; --- br_creopen - re-open the link whose D_LNK1 sits at ES:AX ----------------
+; The three bytes are COPIED from the document rather than re-encoded: the
+; index is already in the payload's 16..31 form there, so this needs neither
+; the shift nor the knowledge of that encoding, and it cannot disagree with
+; what br_anchor wrote.
+br_creopen:
+    push ax
+    push bx
+    push cx
+    mov bx, ax
+    mov cx, 3                       ; the marker and its two payload bytes
+.l:
+    mov al, [es:bx]
+    call br_cput
+    inc bx
+    loop .l
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -6814,4 +7071,13 @@ br_argp     equ br_abon + 13          ; byte: ...and whether one is pending at
                                       ; all - 0,0 is a real locator (drive 0's
                                       ; root), so the pair cannot speak for
                                       ; itself
-BR_BSS      equ (br_abon - os88_image_end) + 14
+; --- a table row's link state (BROWSER-PLAN 14.2.2) --------------------------
+; A composed row is ONE arena line carrying every column, and br_linkat answers
+; a click by scanning backward through it - so an anchor may not be left open
+; at a cell wall. br_tcell1 closes one at the end of each fragment and re-opens
+; it at the head of the next, and these are what it needs to.
+br_tlnk     equ br_abon + 14          ; BR_TCOLS words: the offset of the
+                                      ; D_LNK1 each column's cell has left
+                                      ; open, 0FFFFh = none
+br_wlnk     equ br_tlnk + BR_TCOLS*2  ; word: br_twrap's running copy of it
+BR_BSS      equ (br_wlnk - os88_image_end) + 2

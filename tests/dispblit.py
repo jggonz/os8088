@@ -52,7 +52,9 @@ from os88geom import (VID_CTX_SZ, VID_CTX_VX,          # noqa: E402
 # looking at the mirrored ones. It is looking at both now.
 
 MBAR_H, TITLE_H = 20, 18
-# vid_ctx: an 18-word run with vid_cw/vid_ch inside it, then VX/VY/KIND.
+# vid_ctx: a VID_CTX_W-word run with vid_cw/vid_ch inside it, then
+# VX/VY/KIND - all four offsets come from os88geom, which is why this line
+# saying "18" for years cost nothing. It is 16 now.
 PT_CV_X, PT_CHROME_W, PT_CHROME_H = 44, 46, 42
 S = os88sym.linear
 

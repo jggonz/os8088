@@ -31,6 +31,7 @@ import os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
 import os88marty, os88mouse, os88sym, dispcp
+from os88geom import MB_ENTSZ      # the bar cell stride, SPEC.md 12.2
 
 S = os88sym.linear
 KERNEL_SEG = 0x0060
@@ -44,7 +45,7 @@ TITLE_H = 18
 CAL_KEY_X0, CAL_KEY_Y0 = 4, 24
 CAL_BTN_W, CAL_BTN_H = 51, 14
 CAL_KEY_PIT, CAL_BTN_HG = 16, 4
-MBAR_H, MENU_ITEM_H, MB_ENTSZ, MB_XL = 20, 16, 14, 6
+MBAR_H, MENU_ITEM_H, MB_XL, MB_SEG = 20, 16, 6, 10
 CAL_HROW_N, CAL_CUT = 26, ord("~")
 # the keypad, row-major, exactly as cal_keytab lists it
 KEYPAD = ["C", "CE", "<-", "/",
@@ -218,7 +219,7 @@ def menu_title(m, seg, cell):
     set points at is an offset in the OWNING WINDOW's segment (SPEC.md 12.2),
     which is what MB_SEG carries; the kernel's own cells have MB_SEG 0."""
     t = m.read(S("menu_bar") + cell * MB_ENTSZ, MB_ENTSZ)
-    p, sg = u16(t, 0), u16(t, 12)
+    p, sg = u16(t, 0), u16(t, MB_SEG)
     if not p:
         return "<logo>"
     return m.read((sg or KERNEL_SEG) * 16 + p,

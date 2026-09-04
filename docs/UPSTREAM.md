@@ -70,6 +70,41 @@ histories", and ported three upstream commits as new SHAs it could have merged.
 repositories.** If the histories look unrelated, the clone is shallow. That
 flag would duplicate the entire tree.
 
+## Rule 0b — a squashed branch keeps a huge merge-base diff
+
+Rule 0's sibling, and it bites in the opposite direction: there the clone hid
+history, here the history is intact and the *branch* is the illusion.
+
+Because `main` squash-merges (see the cycle above), a branch whose work has
+fully landed keeps **every one of its own commits** and therefore keeps a large
+diff against `git merge-base`. `--is-ancestor` says "not merged" about content
+that is completely merged, because the squash carried the content and not the
+commits.
+
+**So never ask what a branch changed against its merge-base. Ask what it
+changes against the branch you are actually on.**
+
+```sh
+git diff --stat origin/elendilon <branch> -- <paths>   # the real question
+git log --oneline -5 origin/elendilon -- <path>        # ...and who last touched it
+```
+
+Measured, on the two kernel-size branches:
+
+| | vs merge-base | vs `origin/elendilon` |
+|---|---|---|
+| `kernel-size-optimization-vx08di` (**done**, squashed as `2f33456`) | `mouse.inc` 497 lines | **33, and net-negative** |
+| `kernel-size-optimization-p2-zcuuac` (**running**) | `sched.inc` 481 | `sched.inc` 481, `mouse.inc` **untouched** |
+
+A session read the merge-base column and told its requester that the running
+pass was about to rewrite `mouse.inc` from under a measurement. The opposite was
+true twice over: the file's size pass was already **in** the measurement, and
+the running pass was nowhere near it. The tell is the sign — a branch whose diff
+against the integration branch is net-**negative** is *behind* it, not ahead of
+it, and content that far behind is content that already landed.
+
+**A net-negative diff is merged work, not pending work.**
+
 ## "N commits behind main" — read them before acting
 
 ```sh
@@ -165,7 +200,9 @@ question rather than the particular answer:
   and `main` did not: `OSAPI_FONT_GLYPHS` answering `DX:SI` rather than `SI`
   (the glyph table is not in `KERNEL_SEG`); the file-dialog completion proc
   gaining `DX:CX` = the chosen file's size; worker task stacks halving from 512
-  bytes to 256.
+  bytes to 256. **That last one has since converged** — both trees have been
+  `SCH_STACK` = 384 since #112 — and it is left here as the SHAPE to look for,
+  not as a live difference. Check the constant, never this sentence.
 - **Greying must go through `OSAPI_GFX_PEN`** (SPEC.md §47 rule 1) wherever
   that slot exists. Code written before it greys with `CDGRAY` alone — a real
   grey on VGA and **solid black on Hercules and CGA**, pixel-identical to a
@@ -173,8 +210,11 @@ question rather than the particular answer:
   this way, and it is invisible on the adapter most people test on.
 - **Look at it on a 1bpp adapter** before believing it works: `make test
   VIDEO=cga`, and `docs/HERCULES-TESTING.md` for the other one.
-- **Check the worker's stack** if the package claims one. The slice is 256
-  bytes (SPEC.md §8, §20.6 rule 6). A static worst-case walk of the worker's
+- **Check the worker's stack** if the package claims one. A worker's stack is
+  **384** bytes today (`SCH_STACK`, SPEC.md §8, §20.6 rule 6) — and the point
+  of the check is the constant in `kernel/sched.inc`, not the number written
+  here: it has been 1,536, 512, 256 and 384, and a doc quoting the wrong one
+  is how a session concludes a contract moved when it did not. A static worst-case walk of the worker's
   call tree compared against a known-good peer is the cheap check — Tracker's
   worker measures 92 bytes, ModPlug's 98 — and `tests/stackprobe` on real iron
   is the only thing that settles the margin, because SeaBIOS hides a real

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The VMware absolute pointer wins the contest and tracks (SPEC.md 9.10).
+"""The VMware absolute pointer wins the contest and tracks (SPEC.md 9.11).
 
     python3 tests/vmmouse.py
 
@@ -7,7 +7,7 @@ QEMU's `pc` machine carries a `vmport` and a `vmmouse` by default, so the
 kernel's backdoor probe (`vmm_init`) succeeds here exactly as it does under
 v86 in the browser - which is the one place this feature actually runs. That
 makes it the rare browser-only feature with a CI gate: nearly every other
-`make test` recipe turns the port OFF (SPEC.md 9.10, the Makefile's `VMPORT`)
+`make test` recipe turns the port OFF (SPEC.md 9.11, the Makefile's `VMPORT`)
 because tools/mouse.py drives the msserial mouse and the backdoor would
 otherwise leave that device retired; this one turns it back ON and drives the
 backdoor instead.
@@ -21,7 +21,7 @@ WHAT IT ASSERTS:
   cpu_tier   2 (CPU_386)   - the island's run-time gate would refuse a lower
                              tier; QEMU is a 386+, so this is a sanity check
   vmm_on     1             - the GETVERSION probe answered and REQUEST /
-                             ABSOLUTE went through (SPEC.md 9.10.1)
+                             ABSOLUTE went through (SPEC.md 9.11.1)
   mou_bases  0000 0000     - `-serial none`: no UART, so the serial contest
                              cannot even be entered and this is the backdoor
                              alone, like the browser
@@ -163,7 +163,7 @@ def main():
         if on != 1:
             fails.append("vmm_on %d, want 1: the backdoor probe or the "
                          "REQUEST/ABSOLUTE handshake did not complete "
-                         "(SPEC.md 9.10.1)" % on)
+                         "(SPEC.md 9.11.1)" % on)
         bases = q.read(os88sym.linear("mou_bases"), 4)
         if any(bases):
             fails.append("mou_bases %s - a serial row probed present; this run "
@@ -193,7 +193,7 @@ def main():
         # --- press, move WHILE HELD, release: the freeze regression --------
         # vmmouse has no ISR, so a spin loop (a drag, a menu) that does not
         # pump the backdoor never sees the release. task_yield is what drains
-        # it for every such loop (SPEC.md 9.10.3); if that stops working the
+        # it for every such loop (SPEC.md 9.11.3); if that stops working the
         # machine wedges here with [mouse_btn] stuck at 1.
         if not fails:
             t0 = word(q, "ticks")
@@ -215,14 +215,14 @@ def main():
             if byte(q, "mouse_btn") != 0:
                 fails.append("RELEASE NEVER ARRIVED: mouse_btn stuck at 1 - a "
                              "spin loop that does not pump vmmouse (SPEC.md "
-                             "9.10.3), the freeze this test exists for")
+                             "9.11.3), the freeze this test exists for")
             t1 = word(q, "ticks")
             if (t1 - t0) & 0xFFFF < 10:
                 fails.append("clock barely moved (%d ticks in ~1.5s) - the "
                              "machine is wedged" % ((t1 - t0) & 0xFFFF))
 
         # --- the keyboard survives vmm_p2wake's 8042 poke -----------------
-        # vmm_init sends AUX 0xF4/0xF5 through the 8042 (SPEC.md 9.10.2) so v86
+        # vmm_init sends AUX 0xF4/0xF5 through the 8042 (SPEC.md 9.11.2) so v86
         # starts delivering mouse events. A stray aux ack left in the output
         # buffer would be read as a scancode by int 09h. Six keys must advance
         # the BIOS keyboard buffer tail (0040:001C) by exactly twelve bytes -
@@ -239,7 +239,7 @@ def main():
             if (tail1 - tail0) & 0xFFFF != 12:
                 fails.append("BIOS keyboard tail %04X -> %04X, want +12 for six "
                              "keys: vmm_p2wake left a byte in the 8042 that "
-                             "int 09h ate (SPEC.md 9.10.2)" % (tail0, tail1))
+                             "int 09h ate (SPEC.md 9.11.2)" % (tail0, tail1))
 
         q.hmp("quit")
     finally:

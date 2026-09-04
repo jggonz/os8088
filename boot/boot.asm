@@ -27,11 +27,11 @@
 ; same number, and mem_init reads the same call for the top of the heap, so
 ; both ends of the system agree by construction.
 ;
-; STAGE 2 LANDS JUST BELOW OUR OWN STACK, at a segment computed from ours - so
-; it needs no constant of its own, and the .nomem compare below still bounds
-; it: that test is stricter than stage 2's own requirement by 0x780
-; paragraphs, because it asks the kernel to clear our BASE and stage 2 sits
-; above that.
+; STAGE 2 LANDS ON THE HEAP'S FLOOR, first time, and the .nomem compare below
+; is exactly that: the machine has to hold the blob at HEAP_SEG under the
+; 2,560 bytes we keep live at the ceiling. It used to land under our stack and
+; copy itself down, because the top was the only address we could compute;
+; SPEC.md 2.7.1 tells us HEAP_SEG, so SPEC.md 2.9.5's copy is gone.
 ;
 ; Assembled with -DKERNEL_SECTORS=<n>, -DBOOT2_SECS=<n> and -DKSIG=<word> by
 ; the Makefile, which measures the built kernel: the signature in particular
@@ -65,9 +65,12 @@ org 0x7C00
 
 ; Floppy geometry. Defaults describe a 1.44MB 3.5" disk; the Makefile
 ; overrides them to 9/2 for the 360KB 5.25" build that 8086-era machines
-; can actually read. They are handed to stage 2 in CX and DH, because the
-; KERNEL is one binary for all three geometries and cannot have them as
-; immediates the way this sector does.
+; can actually read, and to 15/2 for the 1.2MB 5.25" HD disk an AT-class
+; machine takes (SPEC.md 19). They are handed to stage 2 in CX and DH,
+; because the KERNEL is one binary for every geometry and cannot have them
+; as immediates the way this sector does. Four geometries, THREE sectors:
+; 720KB and 360KB are the same 9/2 track on a different cylinder count, and
+; a count is the one thing about a disk this sector never holds.
 %ifndef SPT
 %define SPT 18
 %endif
@@ -81,20 +84,63 @@ KERNEL_SEG   equ 0x0060         ; kernel lands at linear 0x00600, the first
                                 ; kernel ends clear of our relocated stack
 STACK_TOP    equ 0x7C00         ; stack grows down from our own base, so it
                                 ; relocates with us and stays out of the way
-BOOT_STACK   equ 2048           ; stack room below us, and the one figure
-                                ; still shared with kernel/kernel.asm - which
-                                ; reserves the same 2,048 in guard 5
+BOOT_SECT    equ 512            ; our own body, at the very top of memory...
+BOOT_STACK   equ 2048           ; ...and our stack under it. The two figures
+                                ; still shared with kernel/kernel.asm, which
+                                ; reserves the same 2,560 in guard 5 - and
+                                ; tests/unit/t_mirror.py compares them without
+                                ; being told to, any name defined in both
+                                ; files being a name it checks
 RELOC_ADJ    equ 0x07E0         ; int 12h answers KB; KB*64 is the paragraph
                                 ; ONE PAST the last byte of conventional RAM,
                                 ; so the segment we want is that minus our own
                                 ; offset (0x7C00 = 0x7C0 paragraphs) and minus
                                 ; our own 512 bytes (0x20 more), which is what
                                 ; puts our LAST byte on the machine's last byte
-STAGE2_ADJ   equ 0x07C0 - BOOT_STACK/16 - BOOT2_SECS*32
-                                ; ...and stage 2 goes immediately below that
-                                ; stack: our segment plus our offset in
-                                ; paragraphs, less the stack and less stage 2
-                                ; itself, so its LAST byte is the stack's last
+; STAGE2_ADJ was here, and it is gone with the copy it existed for (SPEC.md
+; 2.9.5). Stage 2 used to be read to the top of RAM, immediately below our
+; stack, and `rep movsw` itself down to HEAP_SEG - because the top was the
+; only address WE could compute, HEAP_SEG falling out of the kernel's section
+; sizes. Since SPEC.md 2.7.1 we are TOLD HEAP_SEG, so we read the blob to
+; where it lives and there is nothing to copy.
+
+; --- what this machine has to HAVE, in paragraphs (SPEC.md 2.7.1) ------------
+; The question is not "does the kernel's read reach us". It is "does stage 2's
+; blob fit at HEAP_SEG, under the 2,560 bytes we keep live at the ceiling" -
+; because that is where we READ it (SPEC.md 2.9.5) and the kernel's image ends
+; AT HEAP_SEG by construction. So the kernel needs no term of its own and
+; KERNEL_SECTORS is not in this sum: it counts the blob twice, the blob being
+; the front of the same file.
+;
+; HEAP_PARA is injected by the Makefile out of tools/kernsize.py's `kend`, the
+; way boot/boothd.asm has taken BLOB_SEG since SPEC.md 2.9.9. It cannot be
+; derived here - LOW_PARA is a nobits size that is not in the file - and it
+; cannot be a constant, because this sector is assembled before the kernel it
+; boots is measured.
+%ifdef FLAT_PAYLOAD
+MEMFIT       equ KERNEL_SEG + KERNEL_SECTORS*32 + (BOOT_SECT + BOOT_STACK)/16
+                                ; a diagnostic payload (SPEC.md 2.9.3) has no
+                                ; stage 2 and no heap floor: it is loaded whole
+                                ; to KERNEL_SEG, so ITS read is the bound
+%else
+; ONE blob length, and it was briefly two. Stage 2 used to be read to the top
+; and copy itself down, so the far jump at the end of that copy had to survive
+; being copied over - a second BOOT2_PAD, less the offset of the surviving
+; byte. Reading the blob to HEAP_SEG in the first place retires all of it
+; (SPEC.md 2.9.5): there is no copy, so there is nothing to survive it.
+MEMFIT       equ HEAP_PARA + BOOT2_SECS*32 + (BOOT_SECT + BOOT_STACK)/16
+%endif
+%if MEMFIT < RELOC_ADJ
+MEMNEED      equ RELOC_ADJ      ; ...AND THE RELOCATION HAS ITS OWN FLOOR. We
+%else                           ; move to KB*64 - RELOC_ADJ, so a machine that
+MEMNEED      equ MEMFIT         ; cannot hold this sector at its own 0x7C00
+%endif                          ; offset underflows that subtraction and sends
+                                ; us to the top of a 1MB machine that is not
+                                ; there. Only a small FLAT_PAYLOAD can compute
+                                ; a bound that low - which is exactly the four
+                                ; images whose job is a machine that will not
+                                ; boot, so the clamp is not theoretical. It is
+                                ; an assembly-time %if and costs no bytes.
 
 DPT_AT       equ 0x0580         ; 0000:0580 - our copy of the diskette
                                 ; parameter table, at the address stage 2 uses
@@ -167,21 +213,24 @@ entry:
                                 ; AX = conventional memory, KB
     mov cl, 6
     shl ax, cl                  ; AX = KB*64 = one paragraph past the top
-    sub ax, RELOC_ADJ           ; ...and back off our offset and our own size
 
-    ; Would the kernel's own sectors land on us? Then this machine cannot run
-    ; the OS (SPEC.md 2.7). Refuse here rather than be overwritten mid-load,
-    ; which is a hang with a half-drawn splash and nothing to read. The same
-    ; compare catches a BIOS that under-reports and a shift that overflowed a
-    ; claim of 1MB or more: both land below the kernel, which is exactly what
-    ; this asks about.
+    ; Is this machine big enough to run the OS (SPEC.md 2.7, 2.7.1)? Refuse
+    ; here rather than be overwritten mid-load, which is a hang with a
+    ; half-drawn splash and nothing to read. The same compare catches a BIOS
+    ; that under-reports and a shift that overflowed a claim of 1MB or more:
+    ; both leave AX below MEMNEED, which is exactly what this asks about.
     ;
-    ; The bound is our STACK's bottom, not our own base: it is live for the
-    ; whole load - every push, every int 13h, every splash call - so the read
-    ; has to clear that too. Stage 2 sits ABOVE that bound, so this covers it
-    ; as well and needs no second term.
-    cmp ax, KERNEL_SEG + KERNEL_SECTORS*32 + BOOT_STACK/16
+    ; THE COMPARE IS AGAINST THE TOP OF MEMORY, not against our relocated
+    ; segment, and that is the whole of SPEC.md 2.7.1. Subtracting first asked
+    ; whether the kernel cleared our segment BASE - which sits RELOC_ADJ below
+    ; us, so it demanded 31,744 bytes of headroom that nothing was ever going
+    ; to use, and refused machines the kernel fits on by that much.
+    cmp ax, MEMNEED
     jb .nomem
+    sub ax, RELOC_ADJ           ; ...and only NOW is it our segment: back off
+                                ; our offset and our own size. Safe against
+                                ; underflow because MEMNEED is never below
+                                ; RELOC_ADJ and we are at or above it.
     mov es, ax
     mov cx, 256
     cld
@@ -305,9 +354,8 @@ entry:
 %else
     mov word [left], BOOT2_SECS
 
-    mov ax, cs                  ; stage 2's home, below our own stack
-    add ax, STAGE2_ADJ
-    mov [dest], ax
+    mov word [dest], HEAP_PARA  ; stage 2's home, FIRST TIME (SPEC.md 2.9.5):
+                                ; the heap's floor, which we are told
 %endif
 
     ; --- read stage 2 -------------------------------------------------------
@@ -411,8 +459,7 @@ entry:
     ; sector and says nothing about a missing one in the middle. ~20 ms on a
     ; 4.77MHz machine, once, against a boot that is nine seconds.
     push ds
-    mov ax, cs
-    add ax, STAGE2_ADJ
+    mov ax, HEAP_PARA
     mov ds, ax
     xor si, si
     xor bx, bx
@@ -456,19 +503,16 @@ entry:
 %else
     ; --- into stage 2 (SPEC.md 2.9) -----------------------------------------
     ; BP is still t=0. The geometry goes in CX and DH because the kernel is
-    ; one binary for three disks; the signature in DI because it is read out
+    ; one binary for every disk; the signature in DI because it is read out
     ; of that kernel and cannot be inside it.
     mov cx, SPT
     mov dh, HEADS
     mov dl, [boot_drive]
     mov si, [lba0]
     mov di, KSIG
-    mov ax, cs
-    add ax, STAGE2_ADJ
-    push ax                     ; the computed far jump again: `jmp seg:off`
-    xor ax, ax                  ; takes a constant and stage 2's segment is
-    push ax                     ; not one
-    retf
+    jmp HEAP_PARA:0x0000        ; ...and a PLAIN far jump, where this was a
+                                ; computed one: `jmp seg:off` takes a constant
+                                ; and stage 2's segment is one now
 %endif
 
 .halt:                          ; write the NUL-terminated string at DS:SI and

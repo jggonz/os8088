@@ -47,7 +47,8 @@ def state(m, slot):
     nx, ny, nw, nh = dispsize.bank(m, slot)
     flags = u16(m.read(S("wm_wins") + slot * os88geom.WIN_SIZE +
                        os88geom.W_FLAGS, 2))
-    usr = m.read(S("wm_usrsz") + slot, 1)[0]
+    usr = 1 if flags & os88geom.WF_USRSZ else 0   # SPEC.md 11.100.5 is a
+                                                  # W_FLAGS bit, not a table
     kind = m.read(S("wm_pkind") + slot, 1)[0]
     return dict(x=x, y=y, w=w, h=h, nw=nw, nh=nh, usr=usr, kind=kind,
                 flags=flags)

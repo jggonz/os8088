@@ -56,6 +56,14 @@ def main():
                           machine="os8088_5150_sb_gla", boot=False) as m:
         m.run()
         os88marty.settle(m, gate=os88marty.desktop_up)
+        # THE SAVER, OFF, before anything waits. This row polls for the
+        # player to become resident for up to two guest MINUTES with no
+        # input, which is well inside no_saver's own rule, and the saver
+        # then animates - so `settle` can never return and the run dies
+        # naming the saver rather than the tracker. Measured, in the pass-2
+        # soak: "the screen was still changing after 120s because SPEC.md
+        # 79's SCREEN SAVER IS RUNNING" (docs/HANDOFF-SOAK-FINDINGS.md B7).
+        os88marty.no_saver(m)
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")
         slot = dispcp.win_list(m, S)[-1]

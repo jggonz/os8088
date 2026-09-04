@@ -562,6 +562,7 @@ aps_kv_emit:
 
 ; aps_u16 - AX unsigned -> decimal NUL string at DI
 aps_u16:
+    ; STKBALANCE-LOOP: pushes one digit per loop turn, pops them in the second loop - an itoa
     push ax
     push bx
     push cx
@@ -590,6 +591,7 @@ aps_u16:
 
 ; aps_u32 - DX:AX unsigned -> decimal NUL string at DI
 aps_u32:
+    ; STKBALANCE-LOOP: the 32-bit itoa: a digit pushed per turn, popped in the second loop
     push ax
     push bx
     push cx
@@ -651,6 +653,7 @@ apdg_s:
 
 ; apdg_num - append decimal AX then newline at [DI], DI walks
 apdg_num:
+    ; STKBALANCE-LOOP: pushes one digit per loop turn, pops them in the second loop - an itoa
     push ax
     push bx
     push cx
@@ -680,6 +683,7 @@ apdg_num:
 
 ; apdg_num32 - append decimal DX:AX then newline at [DI], DI walks
 apdg_num32:
+    ; STKBALANCE-LOOP: the 32-bit itoa: a digit pushed per turn, popped in the second loop
     push ax
     push bx
     push cx

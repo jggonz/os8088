@@ -27,6 +27,19 @@
 %define CC_HAS_ONWAKE               ; void os88_onwake(void *) - the launch
                                     ; document (SPEC.md 54.10)
 %define CC_HAS_WORKER               ; void os88_worker(void *) - the close path
+
+%define CC_STACK_CLASS OS88_STACK_256 ; ...AND HOW MUCH STACK IT WANTS
+                                    ; (SPEC.md 8.7). Declared rather
+                                    ; than defaulted:
+                                    ; os88_worker() is a sleep/alive loop with a gfx_lock / wm_destroy
+                                    ; bracket on the close path. It draws nothing and takes no lock
+                                    ; otherwise, so ~10 bytes over the 64-byte interrupt floor is 74,
+                                    ; and 128 gives 1.73x
+                                    ; It is NOT the same number as
+                                    ; crt0.asm's CC_STACK, which is
+                                    ; the LARGEST class: this is what
+                                    ; we ask for and that is the
+                                    ; widest slice we could be given
                                     ; (there is no self-close slot: SPEC.md
                                     ; 65.2, and apps/cword/cwcmd.c says how)
 %define CC_HAS_OVL                  ; ...and half of this program is in

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """os88disk: build (or verify) a FAT data floppy image from .o88 packages.
 
-    python3 tools/os88disk.py -o OUT.img --size {1440,720,360}
+    python3 tools/os88disk.py -o OUT.img --size {1440,1200,720,360}
                              [--folder PATH ...] [[DIR[/DIR...]:]PKG.o88 ...]
     python3 tools/os88disk.py -o OUT.img --hdd --mbr MBR.bin
                              --boot BOOTHD.bin --kernel KERNEL.bin [...]
@@ -19,12 +19,16 @@ truncation guard depends on it) and fixed timestamps (date 0x5C21 =
 argument order; every field is fixed, so rebuilds are byte-identical.
 Directory display names are the host filenames (8.3, uppercased).
 
-Geometries: 1440 (1.44MB, FAT12), 720 (720KB 3.5" DD, FAT12) and 360
-(360KB, FAT12) are the shipped disks, and now the only ones. 720 and 360
-are the SAME 9 spt / 2 heads track shape and differ only in cylinder count
-(80 vs 40), which is why they share a boot sector: boot/boot.asm knows a
-geometry as -DSPT/-DHEADS and nothing else, and the BPB that does differ is
-written here. A 2880 (2.88MB ED, 5,698 clusters => FAT16)
+Geometries: 1440 (1.44MB, FAT12), 1200 (1.2MB 5.25" HD, FAT12), 720 (720KB
+3.5" DD, FAT12) and 360 (360KB, FAT12) are the shipped disks, and now the
+only ones. 720 and 360 are the SAME 9 spt / 2 heads track shape and differ
+only in cylinder count (80 vs 40), which is why they share a boot sector:
+boot/boot.asm knows a geometry as -DSPT/-DHEADS and nothing else, and the
+BPB that does differ is written here. 1200 is 15 spt on those same 80
+cylinders, so it needs a boot sector of its own (-DSPT=15) and gets one -
+build/boot120.bin - but nothing else about it is new: 2,371 clusters of 512
+bytes, a 7-sector FAT inside DSK_FAT_SECS, and spt 15 is already in the
+kernel's mount-rule 11 whitelist. A 2880 (2.88MB ED, 5,698 clusters => FAT16)
 geometry lived here so the kernel's FAT16 path had a positive test; it went
 when DSK_FAT_SECS fell to 10 sectors, which is below the 16 a FAT has to
 have to be FAT16 at all, so mount rule 10 (SPEC.md 18.2) now turns every
@@ -82,8 +86,44 @@ NAME_CHARS = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
 
 # size -> (spt, heads, total sectors, sec/clus, FAT sectors, root entries,
 #          media byte)   -- mirrors SPEC.md section 19's geometry table
+def fatcap(size, cap):
+    """(spc, fatsz) for `size` with a FAT of at most `cap` sectors.
+
+    SPEC.md 51.0's kern_small caps DSK_FAT_SECS at 2 - it mounts nothing whose
+    FAT is bigger - and the naive reading of that is "so it only gets 360KB
+    disks". It does not have to: a FAT is sized by the CLUSTER COUNT, not by
+    the disk, so raising sectors-per-cluster brings any geometry under the cap.
+    A 1.44MB floppy with 4KB clusters declares a 2-sector FAT and is still
+    1.44MB, still FAT12, and still a volume any host OS mounts.
+
+    What it costs is cluster slack - a 100-byte file occupies 4KB on that disk
+    - which on a floppy carrying twenty packages of 5-48KB is a few percent,
+    and buys the geometry back whole.
+
+    Powers of two only (mount rule 4), and the search is upward from the
+    standard value so a size that already fits is left EXACTLY as DOS would
+    have formatted it.
+    """
+    spt, heads, tot, spc, fatsz, root_ent, media = GEOMETRY[size]
+    while spc <= 64:
+        lay = Layout(spc, 1, 2, root_ent, tot, fatsz)
+        need = ((lay.nclus + 2) * 3 + 1) // 2       # FAT12: 1.5 bytes an entry
+        need = (need + SECTOR - 1) // SECTOR
+        if need <= cap:
+            # re-derive with the FAT it actually needs, then check it still
+            # fits: shrinking the FAT moves data_lba down and can only ADD
+            # clusters, so one more pass settles it.
+            lay = Layout(spc, 1, 2, root_ent, tot, max(need, 1))
+            n2 = (((lay.nclus + 2) * 3 + 1) // 2 + SECTOR - 1) // SECTOR
+            if n2 <= cap:
+                return spc, max(n2, 1)
+        spc *= 2
+    fail(f"no cluster size brings a {size}KB volume under a {cap}-sector FAT")
+
+
 GEOMETRY = {
     1440: (18, 2, 2880, 1, 9, 224, 0xF0),
+    1200: (15, 2, 2400, 1, 7, 224, 0xF9),
     720: (9, 2, 1440, 2, 3, 112, 0xF9),
     360: (9, 2, 720, 2, 2, 112, 0xFD),
 }
@@ -137,14 +177,22 @@ def validate_o88(path: str) -> bytes:
     if data[2] != 3:
         fail(f"{path}: format version {data[2]}; this is the v3 toolchain "
              "(rebuild the package)")
-    if len(data) > 0xFFFF:
+    parts = bool(data[3] & 4)          # flags bit 2 (SPEC.md 20.12)
+    if len(data) > 0xFFFF and not parts:
         fail(f"{path}: {len(data)} bytes overflows the 16-bit size field")
     image = struct.unpack_from("<H", data, 8)[0]
     if not 32 <= image <= len(data):
         fail(f"{path}: header image size {image} out of range")
-    if image != len(data):
+    if image != len(data) and not parts:
         fail(f"{path}: header image size {image} != file size {len(data)}; "
              "a v3 package has no relocation table (run os88pkg.py first)")
+    # WITH flags bit 2 the file is longer than the image ON PURPOSE and the
+    # tail is the package's own (SPEC.md 20.12) - so image <= file is the
+    # whole rule, the 16-bit ceiling belongs to the IMAGE and not to the file,
+    # and the mount types such a file up to PKG_FILE_HI (SPEC.md 19.1).
+    if parts and len(data) >= (1 << 20):
+        fail(f"{path}: {len(data)} bytes; PKG_FILE_HI caps a package file at "
+             "1MB (SPEC.md 19.1)")
     hname = data[16:32].split(b"\0", 1)[0]
     if not hname:
         fail(f"{path}: empty name field in header")
@@ -544,6 +592,8 @@ def build(args) -> int:
         spt, heads, tot, media = HDD_SPT, HDD_HEADS, HDD_PSECS, 0xF8
     else:
         spt, heads, tot, spc, fatsz, root_ent, media = GEOMETRY[args.size]
+        if args.fatcap:
+            spc, fatsz = fatcap(args.size, args.fatcap)
 
     # --- the system disk (SPEC.md 19.3) --------------------------------------
     # The kernel is an ordinary FILE, KERNEL.SYS, allocated FIRST and
@@ -602,6 +652,7 @@ def build(args) -> int:
     for folder in args.folder:
         ensure(folder_key(folder))
 
+    raw_paths = set(args.raw)
     for arg in args.packages:
         folder, path = split_spec(arg)
         key = folder_key(folder) if folder else ""
@@ -611,7 +662,7 @@ def build(args) -> int:
         # disk can carry a module, a picture or a text file next to the
         # programs that read it (SPEC.md 24). The 8.3 name, the per-directory
         # cap and the duplicate check all apply the same either way.
-        if path.lower().endswith(".o88"):
+        if path.lower().endswith(".o88") and path not in raw_paths:
             data = validate_o88(path)
         else:
             data = read_data_file(path)
@@ -1230,9 +1281,15 @@ def main() -> int:
         description="Build or verify a FAT data floppy of .o88 packages and data files.")
     ap.add_argument("-o", "--output", metavar="OUT.img",
                     help="floppy image to write")
-    ap.add_argument("--size", type=int, choices=(1440, 720, 360),
-                    help="disk size in KB: 1440 (18 spt), 720 or 360 (9 spt; "
-                         "80 and 40 cylinders)")
+    ap.add_argument("--fatcap", type=int, default=0, metavar="N",
+                    help="format with a FAT of at most N sectors, raising "
+                         "sectors-per-cluster to get there (SPEC.md 51.0): "
+                         "what lets kern_small, whose DSK_FAT_SECS is 2, "
+                         "still read a 720KB or 1.44MB disk")
+    ap.add_argument("--size", type=int, choices=(1440, 1200, 720, 360),
+                    help="disk size in KB: 1440 (18 spt), 1200 (15 spt, "
+                         "5.25\" HD), 720 or 360 (9 spt; 80 and 40 "
+                         "cylinders)")
     ap.add_argument("--hdd", action="store_true",
                     help="build a bootable HARD-DISK image instead of a "
                          "floppy (SPEC.md 80.1): MBR + partition table, "
@@ -1242,6 +1299,16 @@ def main() -> int:
     ap.add_argument("--mbr", metavar="MBR.bin",
                     help="with --hdd: boot/mbr.asm's 446 bytes of MBR boot "
                          "code (build/mbr.bin)")
+    ap.add_argument("--raw", metavar="PATH", action="append", default=[],
+                    help="TEST ONLY: ship this *.O88 path verbatim, with no "
+                         "package validation. A gate that needs a file the "
+                         "MOUNT will type as a package and the LOADER must "
+                         "then refuse - SPEC.md 19.1's size rule - needs a "
+                         "*.O88 that is deliberately not a package, and "
+                         "validate_o88 exists to make that unbuildable. The "
+                         "path must also appear as a positional; this flag "
+                         "only says which of them skips the check. Nothing "
+                         "shipped uses it (--scramble's precedent)")
     ap.add_argument("--scramble", action="store_true",
                     help="fragment cluster chains round-robin (test only)")
     ap.add_argument("--verify-hdd", metavar="IMG",

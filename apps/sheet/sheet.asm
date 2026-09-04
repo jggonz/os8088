@@ -421,7 +421,7 @@ SH_PNEST_MAX equ 12                  ; the parser's own nesting budget (81.3):
                                       ; the deepest SH_EVAL_MAXDEPTH chain of
                                       ; folds needs (one call + one depth per
                                       ; level); each level holds tens of bytes
-                                      ; of task 0's 1,024-byte stack, so the
+                                      ; of task 0's 512-byte stack, so the
                                       ; cap is sized to that stack, not to the
                                       ; grammar
 
@@ -821,6 +821,14 @@ sh_paint:
     mov bx, si
     call sh_geom
     call sh_drawall
+    cmp byte [sh_abon], 0             ; ...and the About card LAST, over the
+    je .noab                          ; grid it is opaque about (SPEC.md 20.5.1)
+    push si
+    mov bx, si
+    mov si, sh_ablines
+    call os88ui_about_d               ; _d: this paint's region is already armed
+    pop si
+.noab:
     pop bx
     ret
 
@@ -878,6 +886,8 @@ sh_onclick:
     push bx
     push cx
     push dx
+    call sh_abdismiss                  ; the credits are up: this click is
+    jc .out                            ; spent taking them down
     cmp word [sh_fdlg_win], 0
     je .nofdlg
     call sh_fdlg_close                 ; stage 1.8: a Format dialog isn't
@@ -1528,6 +1538,8 @@ sh_onkey:
     push bx
     push cx
     push dx
+    call sh_abdismiss                  ; any key takes the credits down, and
+    jc .out                            ; is spent doing it
     cmp word [sh_fdlg_win], 0
     je .nofdlg
     call sh_fdlg_close                 ; see sh_onclick's own copy of this
@@ -4728,23 +4740,46 @@ sh_docmd_help:
 ; things. Keeping the menu item as well as the name pull-down is deliberate:
 ; Excel 2.1d has a Help menu and this app follows Excel, while the pull-down is
 ; what os8088 users reach for.
+;
+; IT WAS A ONE-LINE ALERT and is the standard card now (SPEC.md 20.5.1).
+; os88ui_ask's line is OS88UI_AMAX = 34 characters and CLIPPED rather than
+; refused, which is a box with no room for a credit in it - and that is how
+; this package shipped with no attribution while seventeen others had one.
 ; -----------------------------------------------------------------------------
 sh_about:
-    push ax
     push bx
     push si
-    push di
-    mov al, OS88UI_AOK
+    mov byte [sh_abon], 1
     mov bx, [sh_ownwin]
-    mov si, sh_s_about
-    mov di, sh_help_ack
-    call os88ui_ask
-    pop di
+    mov si, sh_ablines
+    call os88ui_about               ; arms the clip itself: both doors into
+    pop si                          ; here are menu dispatches, and neither
+    pop bx                          ; arrives with a region (SPEC.md 11.3)
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_abdismiss - take the card down if it is up
+; in:  gfx lock held ([sh_ownwin] names the window)
+; out: CF = 1 the click or key was spent doing it; preserves every register
+; -----------------------------------------------------------------------------
+sh_abdismiss:
+    cmp byte [sh_abon], 0
+    je .none
+    push bx
+    push si
+    mov byte [sh_abon], 0
+    mov bx, [sh_ownwin]
+    mov si, bx
+    call OSAPI_WM_CLIP_SET          ; nothing has armed a region for a click
+    jc .gone                        ; or a key (SPEC.md 11.3)
+    call sh_repaint                 ; ...which white-fills and draws it all
+.gone:
     pop si
     pop bx
-    pop ax
+    stc
     ret
-sh_help_ack:
+.none:
+    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -16481,7 +16516,7 @@ sh_ppowcont:
 ; sh_pnest_enter / sh_pnest_leave - the parser's shared nesting budget (81.3).
 ; SH_EVAL_MAXDEPTH bounds cell-to-cell recursion, but nothing bounded a
 ; formula's OWN nesting: every '(', unary '-', '^' and nested call recurses
-; the parser and banks bytes on task 0's 1,024-byte stack, and six
+; the parser and banks bytes on task 0's 512-byte stack, and six
 ; memoization-cold cells chained that way could run SP off the stack's floor
 ; into .lowbss - silent corruption that fails later, somewhere unrelated.
 ; One counter charges every recursion point, with the cell depth folded in;
@@ -18359,6 +18394,7 @@ sh_clearcell:
 ; sh_colname - bijective base-26 column letters (0-based index in AX)
 ; out: sh_colbuf = NUL-terminated letters (up to 2 for a 256-column grid)
 sh_colname:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push ax
     push bx
     push cx
@@ -18396,6 +18432,7 @@ sh_colname:
 
 ; sh_itoa - signed AX to a NUL-terminated decimal string in sh_numbuf
 sh_itoa:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push ax
     push bx
     push cx
@@ -19250,7 +19287,13 @@ sh_it_calc:     db 'Calculation...', 0
 sh_m_help:     db 'Help', 0
 sh_i_help:     dw sh_it_about
 sh_it_about:   db 'About Sheet...', 0
-sh_s_about:    db 'Sheet - a spreadsheet for os8088', 0
+; --- the About card's lines (SPEC.md 20.5.1) ----------------------------------
+sh_ablines:
+    dw sh_ab1, sh_ab2, sh_ab3, sh_ab4, 0
+sh_ab1:        db 'Sheet for os8088', 0
+sh_ab2:        db 'A spreadsheet in the shape of Excel 2.1d', 0
+sh_ab3:        db 0
+sh_ab4:        db 'Contributed by Koriban', 0
 
 sh_defname:    db 'SHEET1.SLK', 0
 sh_s_ready:    db 'Ready', 0
@@ -19362,7 +19405,8 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
                                      ; which needs W_ONCLICK/W_ONDRAG/
                                      ; W_ONMOUSEUP - Sheet already has the
                                      ; first two for range selection
-%include "os88ui.inc"
+%define OS88UI_ABOUT                ; ...and the standard About card (20.5.1),
+%include "os88ui.inc"                ; which replaced a one-line alert here
 
 ; stage 3.0b: the one-line text field, the shared control browser.asm and
 ; telnet.asm already use. It gives the formula bar's content box a real caret
@@ -19391,7 +19435,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3137
+    OS88_BSS 3138
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -20090,7 +20134,8 @@ sh_blitx2         equ sh_blitx1 + 2    ; sh_dmgdraw's band-fill x span)...
 sh_blity1         equ sh_blitx2 + 2
 sh_blity2         equ sh_blity1 + 2
 sh_blitdel        equ sh_blity2 + 2    ; ...and its signed row delta
-sh_bss_end        equ sh_blitdel + 2
+sh_abon           equ sh_blitdel + 2   ; byte: the About card is up (20.5.1)
+sh_bss_end        equ sh_abon + 1
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

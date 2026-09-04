@@ -4675,7 +4675,7 @@ def print_costs(adapter):
           "(%s exact: %d us)" % (CALL_US, GLYPH_US, A["name"],
                                  A["cell_us"]))
     print("           band composer %d us/call + %d us/cell "
-          "(PERFORMANCE.md Set 68, confirmed for wband.inc by Set 113 at "
+          "(PERFORMANCE.md Set 68, confirmed for wband.inc by Set 114 at "
           "915/162)" % (BAND_CALL_US, BAND_CELL_US))
     print("           field rows carried as measured: glyph toggle "
           "%d-%d ms, list scroll %d-%d ms/line,"

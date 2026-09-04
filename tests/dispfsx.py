@@ -56,6 +56,13 @@ import time
 
 sys.path.insert(0, "/home/user/os8088/tools")
 sys.path.insert(0, "/home/user/os8088/tests")
+
+from os88geom import (VID_CTX_SZ, VID_CTX_VX,          # noqa: E402
+                      VID_CTX_VY, VID_CTX_KIND, VID_CTX_CH)
+# SPEC.md 39.14's per-display record: DERIVED from VID_CTX_W and never
+# written down here. This file spelled it `42 + 36`, which is the
+# VID_CTX_W = 18 layout - two bytes early, and what sits there is
+# display 1's vid_chm8, so the seam read 192 instead of 720.
 import os88marty, os88mouse, os88sym, dispcp                # noqa: E402
 
 S = os88sym.linear
@@ -107,7 +114,7 @@ def state(m, label, cards, win=None):
     fb = {c: m.fbuf(card=c) for c in cards}
     out = {"fb": {c: fb[c][2] for c in cards},
            "geom": {c: (fb[c][0], fb[c][1]) for c in cards},
-           "ctx": bytes(m.read(S("vid_ctx"), 84)),
+           "ctx": bytes(m.read(S("vid_ctx"), 2 * VID_CTX_SZ)),
            "cur": m.read(S("vid_cur"), 1)[0],
            "live": bytes(m.read(S("vid_seg"), 36))}
     print("   %-24s ndisp=%d cur=%d kind=%-4s w=%d h=%d  fsx_cur=0x%02X"
@@ -191,8 +198,9 @@ def main():
             print("primary is card %d (%s), second is card %d (%s)"
                   % (pri, cards[pri]["type"], sec, cards[sec]["type"]))
             dispcp.close_panel(m, mo, S, os88marty.settle, card=pri)
-            ctx = m.read(S("vid_ctx"), 84)
-            seam = (u16(ctx, 42 + 36), u16(ctx, 42 + 38))
+            ctx = m.read(S("vid_ctx"), 2 * VID_CTX_SZ)
+            seam = (u16(ctx, VID_CTX_SZ + VID_CTX_VX),
+                    u16(ctx, VID_CTX_SZ + VID_CTX_VY))
             print("extended %s; the SECOND display sits at virtual %r"
                   % (a.mode, seam))
 

@@ -28,7 +28,6 @@
 VGA_GC      equ 0x3CE           ; Graphics Controller index port (data +1)
 VGA_SEQ     equ 0x3C4           ; Sequencer index port (data +1)
 
-gfx_color       db CBLACK       ; current drawing color for every solid op
 gfx_mono1       dw 0            ; THE WINDOW BEING DRAWN HAS DECLARED ITS
                                 ; CONTENT TWO COLOURS (SPEC.md 11.96.17.1), so
                                 ; font_ink takes its mono path here as well -
@@ -138,6 +137,11 @@ thm_tab:
 
 %endif
 
+gfx_color       db CBLACK       ; current drawing color for every solid op.
+                                ; IT LIVES HERE, not up beside gfx_mono1,
+                                ; because the pen setters write it and the
+                                ; two bytes below it TOGETHER - see the
+                                ; adjacency guard under gfx_disink
 gfx_dis         db 0            ; 1 = what is being drawn is a DISABLED
                                 ; control (SPEC.md 47). It is a FLAG and not
                                 ; a colour because the renderer has to do
@@ -175,15 +179,61 @@ gfx_disink      db CBLACK       ; ...and WHICH DIRECTION a disabled GLYPH
                                 ; [gfx_dis]'s reason one line up: nothing
                                 ; zeroes .bss, and CBLACK is the answer for
                                 ; every caller that never touches it.
+%if gfx_dis - gfx_color != 1 || gfx_disink - gfx_dis != 1
+  %error "gfx_color/gfx_dis/gfx_disink must stay adjacent: gfx_pen_live and gfx_pen_dis each set a PAIR of them in one word store"
+%endif
+; THE EDGE MASKS, AND THE GC INDEX THAT ALWAYS GOES WITH THEM. Every site
+; that uses one does `mov ah,[mask] / mov al,8 / out dx,ax` - the Bit Mask
+; register's index is 8 and never anything else - so the literal lives in
+; front of the mask and the pair is ONE word load. That is 3 bytes and 4
+; clocks a site, in the hot fills, and it is CLAUDE.md's prefetch-floor case:
+; `mov ax,[m]` is the 3-byte accumulator form.
+;
+; In .text rather than .bss for the same reason gfx_dis is: -f bin initialises
+; .text, so the two 8s are real bytes in the image. gfx_rect_setup writes both
+; masks as BYTES and softgfx.inc reads them as bytes; nothing addresses the
+; pair from the other end.
+;
+; THE MASKS ARE SHARED AND THEIR PACKING IS VGA'S, which is why they carry a
+; gfx_ name and live in the VGA file rather than beside the body that writes
+; them. gfx_rect_setup moved to softgfx.inc because nothing in it touches this
+; card (see there); these four bytes did not follow it, because splitting the
+; pair to move two of them costs every VGA fill 3 bytes and 4 clocks a site -
+; the whole point of the interleave - and a name in the right file is not
+; worth that. The 8s are the only VGA-specific part and they are two bytes;
+; docs/MONO-RECLAIM-PLAN.md 1.1 carries the trade.
+vga_m8l         db 8
+gfx_lmsk        db 0            ; rect: left edge bit mask
+vga_m8r         db 8
+gfx_rmsk        db 0            ; rect: right edge bit mask
+%if gfx_lmsk - vga_m8l != 1 || gfx_rmsk - vga_m8r != 1
+  %error "vga_m8l/gfx_lmsk and vga_m8r/gfx_rmsk must stay adjacent: the fills load each pair as one word"
+%endif
 gfx_pat         dw 0            ; gfx_fill_pat: near ptr to 8 row bytes,
                                 ; set by the caller before every call
-gfx_lock_flag   db 0            ; drawing mutex (SPEC.md 7); 0 = free.
-                                ; Initialized data, NOT .bss: nothing zeroes
-                                ; .bss at boot, and this byte must start clear.
+gfx_lock_flag   db 0            ; drawing mutex (SPEC.md 7); **strictly 0 or 1
+                                ; and never a count** - toast_now reads this
+                                ; byte and the next AS ONE WORD (`cmp word
+                                ; [gfx_lock_flag], 1` = held, and held by task
+                                ; 0), and that test dies SILENTLY if this ever
+                                ; becomes a depth. Four writers in the tree and
+                                ; no fifth: :5303 (1), :5384 (0), sched.inc
+                                ; :1683 (0) and :1699 (the value banked at
+                                ; :1677).
+                                ; Initialized data and NOT .bss - not because
+                                ; .bss is unzeroed (it arrives zeroed, SPEC.md
+                                ; 2.6) but because gfx_lock_own below cannot
+                                ; live there at all, and the two must stay
+                                ; together.
 gfx_lock_own    db 0xFF         ; ...and WHICH task holds it ([sch_cur] at the
                                 ; take, 0xFF = nobody). toast_now's whole test
                                 ; (SPEC.md 59.4): the flag alone says somebody
                                 ; holds it, never that the CALLER does.
+                                ; **KEEP IT IMMEDIATELY AFTER THE FLAG**, which
+                                ; is what makes that test one word read.
+%if gfx_lock_own - gfx_lock_flag != 1
+  %error "toast_now reads gfx_lock_flag and gfx_lock_own as ONE WORD (`cmp word [gfx_lock_flag], 1` = held by task 0). Separate them and it silently stops firing."
+%endif
 gfx_lock_want   db 0            ; SPEC.md 7.3: SOMEBODY IS BLOCKED ON IT. Set by
                                 ; a waiter on its way to task_yield, spent by
                                 ; the last owner's next acquire. Initialized
@@ -200,7 +250,7 @@ gfx_lock_last   db 0xFF         ; ...and who took it last, which gfx_lock_own
 ; burst is wrapped in gfx_lock/gfx_unlock", and "the mouse ISR moves the cursor
 ; when the lock is free AND cur_level >= 0". So a primitive that runs with
 ; [gfx_lock_flag] clear is drawing WHILE IRQ4 may be drawing the arrow - the
-; two share the VGA's registers, vga_rect_setup's statics and the framebuffer,
+; two share the VGA's registers, gfx_rect_setup's statics and the framebuffer,
 ; and cur_draw's own header says it wants "default GC state on entry".
 ;
 ; This counts those calls and remembers WHERE THEY CAME FROM: the return
@@ -370,6 +420,29 @@ gfx_aud_end:                    ; the primitive's answer is in the flags on
 ; font_run that has already translated falls back to gfx_fill + font_str, and
 ; a translated caller reaching a hooked callee would translate twice.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; NOVGA_ARM - the no-VGA arm of an entry whose VGA body is FALLEN INTO
+;
+; SPEC.md 39.27.5. Four entries in this file are reached by fall-through from a
+; GFXDISP or a plain label above them, and GFXDISP EXPANDS TO NOTHING on
+; kern_small - so on that build the entry lands on whatever the assembler put
+; next. An `equ` to the software twin is the obvious way to write the no-VGA
+; arm and it is WRONG for exactly that reason: an `equ` emits no code, so the
+; fall-through goes past it into the following routine. It assembles, it boots,
+; and gfx_fill_gray runs osapi_gfx_fill_pat's body.
+;
+; So the arm is a LABEL AND A JUMP, and the %if is what stops the next person
+; turning it back into an `equ`: an arm that emits nothing fails the build.
+; -----------------------------------------------------------------------------
+%macro NOVGA_ARM 2
+%1:
+    jmp %2
+%%armend:
+ %if %%armend - %1 < 2
+  %error "the no-VGA arm of %1 emits no code - the entry above FALLS THROUGH to it (SPEC.md 39.27.5)"
+ %endif
+%endmacro
+
 %macro GFXDISP 1
 %ifdef KERN_BIG
     cmp byte [vid_ndisp], 1
@@ -575,6 +648,51 @@ gfx_disp_enter_cd:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; gfx_denter / gfx_denter_rect / gfx_dleave - what GFXDENTER, GFXDORG and
+; GFXDLEAVE used to expand INTO at every site (SPEC.md 39.14.2)
+;
+; The three macros were 10, 15 and 13 bytes at 7, 5 and 11 sites. Every
+; GFXDENTER/GFXDORG site is a WHOLE-SHAPE primitive - gfx_line, gfx_blit4,
+; gfx_blitp, gfx_xor_rect, gfx_save, gfx_restore, gfx_scroll - whose own
+; arrival is hundreds of microseconds, so a near call+ret at 43 clocks is
+; under half a percent of any of them. font_char's and font_run's leaves stay
+; INLINE, for the reason the macro banner gives: a glyph cell is ~1ms and 11us
+; is 1.2% of every character in the system.
+;
+; gfx_denter_rect does NOT call gfx_denter - it inlines the two instructions.
+; That is +7 bytes once and removes a nested call from all five rect sites,
+; which is the whole of what the conversion would otherwise have cost them.
+; The one-display skip is shared: on a machine with one card [gfx_dnest] never
+; leaves 0, so GFXDORG's own `cmp/jne` would have skipped anyway.
+; -----------------------------------------------------------------------------
+gfx_denter:
+    cmp byte [vid_ndisp], 1
+    jbe .one
+    jmp gfx_disp_enter          ; a tail jump: it returns to OUR caller
+.one:
+    ret
+
+gfx_denter_rect:
+    cmp byte [vid_ndisp], 1
+    jbe .one
+    call gfx_disp_enter
+    cmp byte [gfx_dnest], 1     ; gated on the nest count being exactly 1, not
+    jne .one                    ; on non-zero: nested, an OUTER hook did the
+    sub cx, [vid_ox]            ; translation and [vid_ox] is that hook's
+    sub dx, [vid_oy]            ; origin, so subtracting it again would move
+.one:                           ; the shape twice
+    ret
+
+gfx_dleave:
+    pushf                       ; the FLAGS, because more than one of these
+    cmp byte [vid_ndisp], 1     ; routines answers in CF and a leave is the
+    jbe .one                    ; last thing before its `ret` - and `dec`
+    dec byte [gfx_dnest]        ; sets them
+.one:
+    popf
+    ret
+
 %endif
 
 ; GFXDENTER / GFXDLEAVE - the two above, with their one-display test inlined
@@ -584,10 +702,18 @@ gfx_disp_enter_cd:
 ; branch that is never taken on any machine but one.
 %macro GFXDENTER 0
 %ifdef KERN_BIG
-    cmp byte [vid_ndisp], 1
-    jbe %%one
-    call gfx_disp_enter
-%%one:
+    call gfx_denter
+%endif
+%endmacro
+
+; ...and the RECT spelling: the enter above plus what GFXDORG used to be, for
+; a routine holding a rect rather than a point. The enter translated the
+; anchor; this translates the far corner in CX/DX. Every GFXDORG site in the
+; tree was `GFXDENTER` / `GFXDORG cx, dx` on consecutive lines, so the pair is
+; one call and GFXDORG no longer exists on its own.
+%macro GFXDENTERR 0
+%ifdef KERN_BIG
+    call gfx_denter_rect
 %endif
 %endmacro
 
@@ -602,23 +728,6 @@ gfx_disp_enter_cd:
 %endif
 %endmacro
 
-; GFXDORG - move two more of the caller's coordinates into the display the
-; enter above chose. For a routine holding a RECT rather than a point: the
-; enter translated the anchor, this translates the far corner.
-;
-; Gated on the nest count being exactly 1, not on it being non-zero: nested,
-; an OUTER hook did the translation and [vid_ox] is that hook's origin, so
-; subtracting it again would move the shape twice.
-%macro GFXDORG 2
-%ifdef KERN_BIG
-    cmp byte [gfx_dnest], 1
-    jne %%skip
-    sub %1, [vid_ox]
-    sub %2, [vid_oy]
-%%skip:
-%endif
-%endmacro
-
 ; ...and GFXDLEAVE is only the count coming down, because NOTHING RESTORES
 ; THE DISPLAY any more (SPEC.md 39.14.3): the last one drawn on stays current
 ; until gfx_unlock, so a burst of primitives in one place pays one swap
@@ -626,6 +735,16 @@ gfx_disp_enter_cd:
 ; routines answers in CF and a leave is the last thing before its `ret`, and
 ; `dec` sets them.
 %macro GFXDLEAVE 0
+%ifdef KERN_BIG
+    call gfx_dleave
+%endif
+%endmacro
+
+; ...and the INLINE spelling, for font_char and font_run_x alone. The banner
+; above is the reason: a glyph cell is ~1ms on the target and a call/ret is
+; ~11us, which is 1.2% of every character in the system for a branch no
+; single-card machine ever takes.
+%macro GFXDLEAVEI 0
 %ifdef KERN_BIG
     pushf
     cmp byte [vid_ndisp], 1
@@ -635,6 +754,93 @@ gfx_disp_enter_cd:
     popf
 %endif
 %endmacro
+
+; -----------------------------------------------------------------------------
+; gfx_rect_isect - AX/BX/CX/DX intersected with the rect at DS:SI
+; in:       AX = x1, BX = y1, CX = x2, DX = y2 (inclusive); SI = a four-word
+;           block laid out x1, y1, x2, y2 - the WCR_* order, which every rect
+;           in the window manager and every clip rect here already uses
+; out:      the same four registers, clipped. Flags are `cmp dx, [si+6]`'s,
+;           which is what the open-coded copies left too
+; clobbers: nothing else
+;
+; SIGNED compares, and they have to be: wm_paint_dmg's clamp takes screen
+; coordinates negative.
+;
+; **THE RECT IS ADDRESSED THROUGH DS**, so a rect this serves may never move
+; to `.lowbss`. All of them are `.text` or `.bss` today.
+;
+; It is HERE, in the lowest layer, rather than in wm.inc: this file is
+; %included first, so the five sites up there are backward references and a
+; gfx_* primitive is not left forward near-calling a wm_* helper. Eight blocks
+; of these four compares existed - five intersections and, with the store form
+; below, three unions - and every one of them already did `mov si, <rect>`
+; first, which is why sharing this pays: the marshalling does not grow.
+; -----------------------------------------------------------------------------
+gfx_rect_isect:
+    cmp ax, [si]
+    jge .a
+    mov ax, [si]
+.a:
+    cmp bx, [si+2]
+    jge .b
+    mov bx, [si+2]
+.b:
+    cmp cx, [si+4]
+    jle .c
+    mov cx, [si+4]
+.c:
+    cmp dx, [si+6]
+    jle .d
+    mov dx, [si+6]
+.d:
+    ret
+
+; -----------------------------------------------------------------------------
+; gfx_rect_hit - does AX/BX/CX/DX OVERLAP the rect at DS:SI?
+; in:       AX = x1, BX = y1, CX = x2, DX = y2 (inclusive); SI = the same
+;           four-word WCR_* block gfx_rect_isect takes
+; out:      CF = 1 they overlap, CF = 0 they do not
+; clobbers: nothing at all - not even the four inputs
+;
+; gfx_rect_isect's missing sibling. gfx_rect_isectcf answers the same question
+; but CLIPS on the way, so using it here would cost four pushes and four pops
+; and lose more than the compares are worth; this one only compares.
+;
+; SIGNED, for gfx_rect_isect's reason: wm_paint_dmg's clamp takes screen
+; coordinates negative.
+; -----------------------------------------------------------------------------
+gfx_rect_hit:
+    cmp ax, [si+4]
+    jg .no
+    cmp cx, [si]
+    jl .no
+    cmp bx, [si+6]
+    jg .no
+    cmp dx, [si+2]
+    jl .no
+    stc
+    ret
+.no:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; gfx_rect_isectcf - gfx_rect_isect, and CF = 1 if the answer is EMPTY
+; in/out:   as above, plus CF = 1 -> x1 > x2 or y1 > y2, i.e. nothing left
+; clobbers: nothing else
+; -----------------------------------------------------------------------------
+gfx_rect_isectcf:
+    call gfx_rect_isect
+    cmp ax, cx
+    jg .no
+    cmp bx, dx
+    jg .no
+    clc
+    ret
+.no:
+    stc
+    ret
 
 ; -----------------------------------------------------------------------------
 ; gfx_clip_run - internal: run a rect primitive once per visible fragment
@@ -672,30 +878,15 @@ gfx_clip_run:
     mov si, wm_clip_tab
     mov di, [wm_clip_n]
 .frag:
-    mov ax, [si+WCR_X1]         ; AX/CX = the fragment's x span, clipped to
-    cmp ax, [gfx_cl_x1]         ; the primitive's
-    jge .x1
-    mov ax, [gfx_cl_x1]
-.x1:
-    mov cx, [si+WCR_X2]
-    cmp cx, [gfx_cl_x2]
-    jle .x2
-    mov cx, [gfx_cl_x2]
-.x2:
-    cmp ax, cx
-    jg .next
-    mov bx, [si+WCR_Y1]
-    cmp bx, [gfx_cl_y1]
-    jge .y1
-    mov bx, [gfx_cl_y1]
-.y1:
-    mov dx, [si+WCR_Y2]
-    cmp dx, [gfx_cl_y2]
-    jle .y2
-    mov dx, [gfx_cl_y2]
-.y2:
-    cmp bx, dx
-    jg .next
+    mov ax, [si+WCR_X1]         ; the fragment, clipped to the primitive's own
+    mov bx, [si+WCR_Y1]         ; rect - and gfx_cl_x1..y2 is laid out in the
+    mov cx, [si+WCR_X2]         ; same WCR order, so the helper reads it as
+    mov dx, [si+WCR_Y2]         ; one block
+    push si
+    mov si, gfx_cl_x1
+    call gfx_rect_isectcf
+    pop si
+    jc .next                    ; nothing of this fragment is inside
 %ifdef KERN_BIG
     cmp byte [gfx_dnest], 0     ; ...and the fragment back into the display the
     je .lv                      ; body is going to draw on. The loop re-reads
@@ -718,6 +909,7 @@ gfx_clip_run:
     pop ax
     ret
 
+%ifdef GFX_VGA
 ; -----------------------------------------------------------------------------
 ; vga_set_color - internal: arm Set/Reset with [gfx_color] on all planes
 ; in:       -
@@ -776,6 +968,7 @@ vga_gc_reset:
     pop dx
     pop ax
     ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; SPEC.md 5.4.1's one-shot: the pair tables are derived from gfx_inktab, so
@@ -790,80 +983,6 @@ gfx_pairbuilt db 0
 %ifdef GFX_PLANE
 vga_p4built db 0
 %endif
-
-; The two edge masks, by x & 7. They were computed with `shr dl,cl` / `shl
-; dl,cl`, which on an 8088 is 8 clocks plus 4 PER BIT and costs a push/pop of
-; CX to free the count register - about a fifth of vga_rect_setup for two
-; bytes that a table answers outright (PERFORMANCE.md Part 2: the per-call
-; floor is CPU-side setup, and this is setup).
-; -----------------------------------------------------------------------------
-vga_lmtab:  db 0xFF, 0x7F, 0x3F, 0x1F, 0x0F, 0x07, 0x03, 0x01  ; FF >> (x1 & 7)
-vga_rmtab:  db 0x80, 0xC0, 0xE0, 0xF0, 0xF8, 0xFC, 0xFE, 0xFF  ; FF << 7-(x2&7)
-
-; -----------------------------------------------------------------------------
-; vga_rect_setup - internal: clip a rect and precompute its geometry
-; in:       AX = x1, BX = y1, CX = x2, DX = y2  (x1<=x2, y1<=y2)
-; out:      CF = 1 if the clipped rect is empty (nothing else valid);
-;           else CF = 0 and vga_y1/vga_rows/vga_off/vga_span/vga_lmsk/
-;           vga_rmsk hold clipped top row, row count, VRAM offset of the
-;           top-left byte, right byte - left byte, and the edge bit masks
-;           (combined into vga_lmsk when the rect spans a single byte).
-; clobbers: AX, BX, CX, DX, flags
-; -----------------------------------------------------------------------------
-vga_rect_setup:
-    or bx, bx                   ; y1 < 0 -> 0
-    jns .y1ok
-    xor bx, bx
-.y1ok:
-    cmp dx, [vid_ch]            ; y2 past the last row -> the last row
-    jl .y2ok
-    mov dx, [vid_chm1]
-.y2ok:
-    cmp dx, bx
-    jl .empty
-    or ax, ax                   ; x1 < 0 -> 0
-    jns .x1ok
-    xor ax, ax
-.x1ok:
-    cmp cx, [vid_cw]            ; x2 past the last column -> the last column
-    jl .x2ok
-    mov cx, [vid_cwm1]
-.x2ok:
-    cmp cx, ax
-    jl .empty
-    mov [vga_y1], bx            ; y1 is banked, so BX is the free register the
-    sub dx, bx                  ; mask lookups below index through - which is
-    inc dx                      ; what retires the two variable shifts and the
-    mov [vga_rows], dx          ; three push/pops the old sequence needed
-    mov bx, ax                  ; left mask = FF >> (x1 & 7)
-    and bx, 7                   ; (BH = 0 falls out of the AND)
-    mov dl, [bx + vga_lmtab]
-    mov [vga_lmsk], dl
-    mov bx, cx                  ; right mask = FF << (7 - (x2 & 7))
-    and bx, 7
-    mov dl, [bx + vga_rmtab]
-    mov [vga_rmsk], dl
-    mov dx, cx                  ; DX = x2; [vga_rows] already banked it
-    mov cl, 3
-    shr ax, cl                  ; ax = left byte  (x1 / 8)
-    mov [vga_lcol], ax          ; ax = left byte column
-    shr dx, cl                  ; dx = right byte (x2 / 8)
-    sub dx, ax
-    mov [vga_span], dx          ; span = right byte - left byte
-    or dx, dx
-    jnz .offs
-    mov dl, [vga_rmsk]          ; one-byte rect: combine the masks
-    and [vga_lmsk], dl
-.offs:
-    mov ax, [vga_y1]            ; this one call re-bases every rect primitive
-    call gfx_rowbase            ; in BOTH renderers - on VGA it is still just
-    add ax, [vga_lcol]          ; y1 * 80 (SPEC.md 39.3)
-    mov [vga_off], ax
-    clc
-    ret
-.empty:
-    stc
-    ret
 
 ; -----------------------------------------------------------------------------
 ; gfx_pixel - plot one pixel in [gfx_color]
@@ -959,11 +1078,7 @@ gfx_linit:
     mov [es:di + GLS_DY], dx
     sub cx, dx                  ; err = dx - dy, exactly gfx_line's
     mov [es:di + GLS_ERR], cx
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_dx
 
 ; -----------------------------------------------------------------------------
 ; gfx_lstep - draw the next CX pixels of the walk in [gfx_color]
@@ -1583,8 +1698,8 @@ gfx_line:
     push di
     push bp                     ; 5.6.6's three-column walk uses it as a plain
     push es                     ; register - never as an address base
-    GFXDENTER                   ; the walk goes onto the display holding the
-    GFXDORG cx, dx              ; FIRST endpoint and is cut at that display's
+    GFXDENTERR                  ; the walk goes onto the display holding the
+                                ; FIRST endpoint and is cut at that display's
                                 ; edge, exactly as it is cut at a screen edge
                                 ; (SPEC.md 39.14.2). Above the axis-aligned
                                 ; dispatch, so .hline/.vline reach gfx_fill
@@ -1640,10 +1755,12 @@ gfx_line:
     ; One walk with a three-bit mask is therefore the identical pixel set at a
     ; third of the Bresenham. Solid ink only: the dither class alternates with
     ; x, so the neighbours never carry the centre's bit.
-    cmp byte [vid_mono], 0         ; the same two tests gfx_line_raw makes
-    je .passes
-    cmp byte [vid_planes], 1
+%ifdef GFX_VGA
+    cmp byte [vid_mono], 0         ; the same two tests gfx_line_raw makes -
+    je .passes                  ; and gated the same way: without a VGA in
+    cmp byte [vid_planes], 1    ; the build both are constants
     jne .passes
+%endif
     mov al, [gfx_color]
     call gfx_ink
     cmp al, 1
@@ -1709,15 +1826,7 @@ gfx_line:
     jmp .passes
 .out:
     GFXDLEAVE
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_es
 .hline:
     cmp ax, cx                  ; gfx_hline wants x1 <= x2 in AX/BX, y in DX
     jle .hord
@@ -1771,7 +1880,8 @@ gfx_lf_wide3:
     jle .ord
     xchg ax, bx
 .ord:
-    add bx, 2                       ; ...pass 2 being two columns right of 0
+    inc bx                      ; ...pass 2 being two columns right of 0
+    inc bx
     cmp word [wm_clip_n], 0
     jne .armed
     or ax, ax                       ; disarmed: the box is the screen
@@ -1799,11 +1909,14 @@ gfx_lf_wide3:
 ;                box in gfx_ln_c*. The Bresenham state is already staged.
 ; clobbers: everything but the segment registers
 gfx_line_raw:
+%ifdef GFX_VGA
     cmp byte [vid_mono], 0         ; SPEC.md 5.6.4: mono IS the 4.77MHz machine
     je gfx_line_runs            ; and gets the per-pixel loop; VGA is the fast
     cmp byte [vid_planes], 1    ; one and gets major-axis runs, still fewer
     jne gfx_line_runs           ; calls than the app-side horizontal-only
-                                ; coalescing this replaces
+%endif                          ; coalescing this replaces. Both tests are
+                                ; constants without a VGA in the build - a
+                                ; 1bpp adapter is the only kind there is
 %ifdef KERN_BIG
     call gfx_line_fast          ; SPEC.md 5.6.4.1 - the same pixels, 4.9x, when
     jc gfx_line_mono            ; the line's shape lets the box be spent up
@@ -1812,6 +1925,16 @@ gfx_line_raw:
                                 ; kern_small (5.6.4.4): it is 686 bytes of
                                 ; .text and that machine is short of the thing
                                 ; it would be spent from
+%else
+    jmp gfx_line_mono           ; 5.6.4.4: the general walk, and NOT a fall
+                                ; through - gfx_lm_pre sits between this entry
+                                ; and it. With both gates above closed the
+                                ; entry fell into gfx_lm_pre, which steps the
+                                ; walk to the box's top edge and RETURNS, so
+                                ; every gfx_line on kern_small drew nothing at
+                                ; all: 0 lit pixels for a (100,66)-(180,94)
+                                ; against 81 on kern_big, measured through
+                                ; the debugger on a CGA 5150
 %endif
 ; -----------------------------------------------------------------------------
 ; gfx_lm_pre - advance the walk to the box's top edge, drawing nothing
@@ -2228,6 +2351,7 @@ gfx_line_fast:
     clc
     ret
 %endif
+%ifdef GFX_VGA
 
 
 ; --- major-axis runs, one gfx_fill_raw each ----------------------------------
@@ -2282,9 +2406,15 @@ gfx_line_runs:
     je .step
     mov [gfx_ln_rs], si
     jmp short .step
-.last:
-    call gfx_line_flush
-    ret
+.last:                          ; ...AND FALLS THROUGH into gfx_line_flush,
+                                ; whose ret is gfx_line's.  It was `call
+                                ; gfx_line_flush / ret`, four bytes to reach a
+                                ; label six lines down.  The %endif below emits
+                                ; nothing, and gfx_line_flush is defined
+                                ; OUTSIDE it - so NOTHING MAY BE APPENDED TO
+                                ; THIS ARM, and nothing may go between the
+                                ; %endif and gfx_line_flush's label
+%endif
 
 ; gfx_line_flush - internal: the open run, clipped to the box, as one rect.
 ; in:  SI = x, DX = y (the run's far end), [gfx_ln_rs] its near end
@@ -2554,8 +2684,10 @@ gfx_blit4:
                                 ; GFXDISP (SPEC.md 39.14.7)
 .dsp1:
 %endif
+%ifdef GFX_VGA
     cmp byte [vid_mono], 0
-    je .vga
+    je .vga                     ; (no test at all without a VGA in the build:
+%endif                          ; [vid_mono] is 1 by construction there)
     or ax, ax                   ; 1 = THE ROW DECODER (SPEC.md 5.4.1), which
     js .slow                    ; does not clip in x: a left clip advances the
     add ax, cx                  ; source by a pixel count that may be ODD, and
@@ -2566,6 +2698,7 @@ gfx_blit4:
     jne .slow
     call sw_pairbuild           ; once a boot, from gfx_inktab
     jmp short .slow
+%ifdef GFX_VGA
 .vga:
     mov byte [gfx_blit_fst], 2  ; 2 = the planar SPAN writer, whose Enable
     call vga_sr_on              ; Set/Reset is armed ONCE here and cleared at
@@ -2604,13 +2737,14 @@ gfx_blit4:
     call vga_p4build            ; once a boot, like sw_pairbuild
 .pdone:
 %endif
+%endif                          ; ...end of gfx_blit4's VGA arm
 .slow:
 .row:
     mov si, [gfx_blit_sv]       ; ES:SI = this row's first byte
     cmp byte [gfx_blit_fst], 0
     je .rowd
     cmp bx, [vid_ch]            ; UNSIGNED, so a negative y is caught too: the
-    jae .nextrow                ; row is off screen and nothing below it clips
+    jae .jnextrow               ; row is off screen and nothing below it clips
     push ax                     ; any more
     mov ax, bx
     call gfx_rowbase            ; once a ROW, where gfx_fill did it once a RUN.
@@ -2632,6 +2766,7 @@ gfx_blit4:
     cmp byte [gfx_blit_fst], 1
     jne .rowd
     call sw_blit_row            ; THE WHOLE ROW, no run scan at all
+.jnextrow:
     jmp .nextrow                ; (near: the scan below is longer than 127)
 .rowd:
     xor dx, dx                  ; DX = the pixel the next run starts at
@@ -2735,12 +2870,16 @@ gfx_blit4:
     add di, dx                  ; DI = the run's first x, on screen
     mov ah, [gfx_blit_c]
     mov dx, [gfx_blit_e]        ; DX = one past its last pixel, row-relative
+%ifdef GFX_VGA
     cmp byte [gfx_blit_fst], 2  ; (which is where the next run starts) 2 = the
     je .emitv                   ; planar span writer; 0 = gfx_fill as it always
-    call gfx_blit_run           ; was. 1 never gets here - the decoder above
-    jmp short .emitd            ; draws the whole row and skips the scan
+%endif                          ; was. 1 never gets here - the decoder above
+    call gfx_blit_run           ; draws the whole row and skips the scan.
+%ifdef GFX_VGA                  ; Without a VGA, 2 is unreachable and the fork
+    jmp short .emitd            ; is not a branch, it is the only arm
 .emitv:
     call vga_blit_span
+%endif
 .emitd:
     cmp dx, [gfx_blit_w]
     jb .run
@@ -2775,9 +2914,11 @@ gfx_blit4:
     dec word [gfx_blit_h]
     jnz .row
 .out:
+%ifdef GFX_VGA
     cmp byte [gfx_blit_fst], 2  ; the planar writer left Enable Set/Reset on
     jne .done                   ; for the whole call (SPEC.md 5.4.1)
     call vga_gc_reset
+%endif
 .done:
 %ifdef KERN_BIG
     cmp byte [gfx_blit_hk], 0   ; ...and the nest comes down only if this call
@@ -2786,14 +2927,7 @@ gfx_blit4:
 .nohk:
 %endif
 .pops:                          ; ...and the CUT returns here, having had its
-    pop bp                      ; teardown done by each half (SPEC.md 39.14.7.2)
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_bp
 
 %ifdef KERN_BIG
 %ifndef NOBLITCUT
@@ -2912,6 +3046,7 @@ gfx_blit4:
     jmp .hkdone
 %endif
 %endif
+%ifdef GFX_VGA
 
 ; -----------------------------------------------------------------------------
 ; vga_sr_on - internal: Enable Set/Reset on all four planes, and nothing else
@@ -2977,10 +3112,10 @@ vga_blit_span:
     jl .out                     ; entirely off the screen (or an empty run)
     mov si, ax                  ; BH = left edge mask, BL = right, by table
     and si, 7
-    mov bh, [si + vga_lmtab]
+    mov bh, [si + gfx_lmtab]
     mov si, cx
     and si, 7
-    mov bl, [si + vga_rmtab]
+    mov bl, [si + gfx_rmtab]
     shr cx, 1                   ; CX = right byte column
     shr cx, 1
     shr cx, 1
@@ -3034,6 +3169,7 @@ vga_blit_span:
     pop bx
     pop ax
     ret
+%endif                          ; ...end of the VGA span writer
 
 %ifdef GFX_PLANE
 ; -----------------------------------------------------------------------------
@@ -3190,12 +3326,12 @@ vga_blit_prow:
     mov cl, 3                   ; carry the shift count for both columns
     shr di, cl                  ; DI = its byte column
     and bx, 7
-    mov bl, [bx + vga_rmtab]
+    mov bl, [bx + gfx_rmtab]
     mov [ss:vga_pr_rm], bl
     mov bx, ax
     and bx, 7
     mov bp, bx                  ; BP = p, the destination phase
-    mov bl, [bx + vga_lmtab]
+    mov bl, [bx + gfx_lmtab]
     mov [ss:vga_pr_lm], bl
 
     mov dx, ax
@@ -3309,14 +3445,7 @@ vga_blit_prow:
     call vga_sr_on
     pop es
     pop ds                      ; ovlchk: DS restored
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_bp
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -3512,7 +3641,7 @@ gfx_blitp:
     push ax
     and ax, 7
     xchg ax, bx
-    mov bl, [bx + vga_rmtab]
+    mov bl, [bx + gfx_rmtab]
     xchg ax, bx
     mov [ss:vga_pr_rm], al
     pop ax
@@ -3617,14 +3746,7 @@ gfx_blitp:
 %endif
     pop es
     pop ds
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_bp
 %endif
 
 %ifdef GFX_PLANE
@@ -3747,72 +3869,6 @@ gfx_blit_run:
     ret
 
 
-; -----------------------------------------------------------------------------
-; vga_vline_core - internal: vertical run of masked byte writes
-;
-; Shared by gfx_pixel / gfx_vline / gfx_xor_rect: the caller has already
-; armed GC0/GC1 (and GC3 for XOR). Reads each byte before writing, which
-; both loads the latches for the masked write and feeds the XOR ALU.
-; in:       AX = x, BX = y1, DX = y2
-; out:      GC8 left set to the column mask (caller resets)
-; clobbers: flags only
-; -----------------------------------------------------------------------------
-vga_vline_core:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    cmp ax, SCREEN_W            ; catches x < 0 too (unsigned). Width is 640
-    jae .done                  ; on both planar adapters, so a constant here
-    or bx, bx
-    jns .y1ok
-    xor bx, bx
-.y1ok:
-    cmp dx, [vid_ch]           ; ...but the HEIGHT is 480 on VGA and 350 on
-    jl .y2ok                   ; EGA, so this bottom clip is the live one
-    mov dx, [vid_chm1]         ; (SPEC.md 39.24). Identical to SCREEN_H on VGA.
-.y2ok:
-    cmp dx, bx
-    jl .done
-    mov si, dx                  ; si = row count
-    sub si, bx
-    inc si
-    push ax
-    mov ax, ROW_BYTES
-    mul bx                      ; ax = y1 * 80
-    mov di, ax
-    pop ax
-    mov cx, ax                  ; bh = 80h >> (x & 7)
-    and cl, 7
-    mov bh, 0x80
-    shr bh, cl
-    mov cl, 3
-    shr ax, cl
-    add di, ax                  ; di = VRAM offset of top byte
-    mov dx, VGA_GC
-    mov ah, bh
-    mov al, 8
-    out dx, ax                  ; GC8 = column mask
-    mov ax, VGA_SEG
-    mov es, ax
-.row:
-    mov al, [es:di]             ; load latches
-    mov [es:di], al
-    add di, ROW_BYTES
-    dec si
-    jnz .row
-.done:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
 
 ; -----------------------------------------------------------------------------
 ; gfx_vline - vertical line in [gfx_color], inclusive endpoints
@@ -3821,7 +3877,8 @@ vga_vline_core:
 ; clobbers: flags
 ;
 ; A 1-column solid rect via gfx_fill (which clips and adapter-
-; dispatches itself); vga_vline_core stays for gfx_xor_rect's verticals.
+; dispatches itself). vga_vline_core used to live above this for
+; gfx_xor_rect's verticals; gfx_xor_strips draws them as fills now.
 ; -----------------------------------------------------------------------------
 gfx_vline:
     push cx
@@ -3841,8 +3898,40 @@ gfx_fill:
 gfx_fill_d:
     GFXDISP gfx_fill_raw
 gfx_fill_raw:
+%ifndef GFX_VGA
+    jmp sw_fill                 ; NO VGA IN THIS BUILD: the software renderer is
+                                ; not a branch, it is the only renderer there is.
+                                ; The `jmp` and not an `equ` because the FALL
+                                ; THROUGH below is what a VGA build takes, and
+                                ; there is nothing here to fall into any more
+%else
     cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
-    jne sw_fill
+    jne sw_fill                 ; the renderer - and the flag store is BELOW
+    mov byte [vga_xorm], 0      ; this jump, so the 1bpp arm is byte-identical
+
+; -----------------------------------------------------------------------------
+; vga_solid_rect - the VGA rect body, for gfx_fill_raw AND gfx_xor_fill_raw
+;
+; in:  AX/BX/CX/DX = the rect; [vga_xorm] = 0 replace, 1 XOR
+;
+; The two differed in exactly two places: which routine arms the GC, and
+; whether the interior is `rep stosb` or a byte-at-a-time read-then-write
+; (the XOR ALU needs fresh latches per byte). The seven pushes, gfx_rect_setup,
+; the `jc`, the ES/DX setup, BOTH masked edge column loops, the span tests, the
+; 0FF08h interior mask, vga_gc_reset and the seven pops were the same 138 and
+; 155 bytes twice.
+;
+; THE EDGE LOOPS SHARE VERBATIM, which is the fact that makes this a merge and
+; not a rewrite: with Set/Reset enabled on all four planes the CPU byte is
+; IGNORED, so `mov al,[es:di] / mov [es:di],al` means the same thing in both
+; modes - a latch load and a masked write-back.
+;
+; PERFORMANCE (SPEC.md 5.7.1, PERFORMANCE.md Set 93.1): this adds one flag
+; store and two compares to the VGA arm of the most-called drawing routine in
+; the system - about 50 clocks against a 2,405-cycle floor, +2.1%, PREDICTED.
+; The 1bpp arm pays nothing.
+; -----------------------------------------------------------------------------
+vga_solid_rect:
     push ax
     push bx
     push cx
@@ -3850,32 +3939,36 @@ gfx_fill_raw:
     push si
     push di
     push es
-    call vga_rect_setup
+    call gfx_rect_setup
     jc .done
+    cmp byte [vga_xorm], 0
+    jne .armx
     call vga_set_color
+    jmp short .armed
+.armx:
+    call vga_set_xor
+.armed:
     mov ax, VGA_SEG
     mov es, ax
     mov dx, VGA_GC
-    mov ah, [vga_lmsk]          ; left edge column (whole rect if 1 byte wide)
-    mov al, 8
-    out dx, ax
-    mov di, [vga_off]
-    mov si, [vga_rows]
+    mov ax, [vga_m8l]           ; left edge column (whole rect if 1 byte
+    out dx, ax                  ; wide): AL = 8, AH = the mask, one word
+    mov di, [gfx_roff]
+    mov si, [gfx_rrows]
 .lcol:
     mov al, [es:di]             ; load latches
     mov [es:di], al
     add di, ROW_BYTES
     dec si
     jnz .lcol
-    mov bx, [vga_span]
+    mov bx, [gfx_rspan]
     or bx, bx
     jz .reset
-    mov ah, [vga_rmsk]          ; right edge column
-    mov al, 8
+    mov ax, [vga_m8r]           ; right edge column
     out dx, ax
-    mov di, [vga_off]
+    mov di, [gfx_roff]
     add di, bx
-    mov si, [vga_rows]
+    mov si, [gfx_rrows]
 .rcol:
     mov al, [es:di]
     mov [es:di], al
@@ -3886,17 +3979,29 @@ gfx_fill_raw:
     jz .reset
     mov ax, 0xFF08              ; full bytes: latches irrelevant
     out dx, ax
-    mov di, [vga_off]
+    mov di, [gfx_roff]
     inc di
-    mov si, [vga_rows]
+    mov si, [gfx_rrows]
     mov dx, ROW_BYTES           ; DX = the row step LESS what the rep advances
     sub dx, bx                  ; DI by, so one add ends the row (SPEC.md 5.7.1)
+    cmp byte [vga_xorm], 0
+    jne .xrow
 .irow:
     mov cx, bx
     rep stosb
     add di, dx
     dec si
     jnz .irow
+    jmp short .reset
+.xrow:                          ; XOR: every interior byte read before write,
+    mov cx, bx                  ; because the ALU works off the latches
+.xbyte:
+    mov al, [es:di]
+    stosb
+    loop .xbyte
+    add di, dx
+    dec si
+    jnz .xrow
 .reset:
     call vga_gc_reset
 .done:
@@ -3908,6 +4013,7 @@ gfx_fill_raw:
     pop bx
     pop ax
     ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; gfx_frame - 1px outline rectangle in [gfx_color]
@@ -3916,29 +4022,13 @@ gfx_fill_raw:
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 gfx_frame:
-    push bx
-    push dx
-    push si
-    push di
-    mov si, bx                  ; si = y1
-    mov di, dx                  ; di = y2
-    mov bx, cx                  ; hline wants BX = x2
-    mov dx, si
-    call gfx_hline              ; top
-    mov dx, di
-    call gfx_hline              ; bottom
-    mov bx, si                  ; vline wants BX = y1, DX = y2
-    mov dx, di
-    call gfx_vline              ; left  (replace mode: corner overlap is fine)
-    push ax
-    mov ax, cx
-    call gfx_vline              ; right
-    pop ax
-    pop di
-    pop si
-    pop dx
-    pop bx
-    ret
+    push bp                     ; the SAME four strips gfx_xor_rect draws, and
+    mov bp, gfx_fill            ; the same pixels this drew with two hlines and
+    call gfx_xor_strips         ; two vlines: the strips' top and bottom are
+    pop bp                      ; full width, so they cover the corners the
+    ret                         ; verticals used to draw twice. Four calls
+                                ; either way, and gfx_fill is one wrapper
+                                ; frame shallower than gfx_hline/gfx_vline
 
 ; =============================================================================
 ; SPEC.md 5.10 - gfx_spans: a RUN OF SCAN LINES, one call
@@ -3949,7 +4039,7 @@ gfx_frame:
 ; only:
 ;
 ;   the wrapper (clip test, display test, [vid_mono], the push set)     381
-;   vga_rect_setup                                                    1,236
+;   gfx_rect_setup                                                    1,236
 ;   sw_plane_op - the rows themselves                                 3,197
 ;                                                                     -----
 ;                                                                     5,305 cyc
@@ -4035,6 +4125,9 @@ gfx_spans:
     call gfx_rowbase            ; the ONE row base this call computes
     mov [gfx_sp_row], ax
     CURUNLAZY                   ; unclipped, so this may write any pixel on
+%ifndef GFX_VGA
+    jmp sw_spans                ; no VGA: softgfx.inc's row loop is the loop
+%else
     cmp byte [vid_mono], 0      ; the screen and a hide is owed (7.1.4)
     jne sw_spans                ; 1bpp: softgfx.inc's row loop, then .done
 .vga:
@@ -4070,6 +4163,7 @@ gfx_spans:
     dec word [gfx_sp_n]
     jnz .vrow
     call vga_gc_reset
+%endif
 .done:
     pop es
     pop bp
@@ -4094,10 +4188,10 @@ gfx_spans:
 ;           row is stepped either way.
 ; clobbers: cx, dx, si, bp, flags
 ;
-; This is vga_rect_setup minus the two things a RUN already knows - the row is
+; This is gfx_rect_setup minus the two things a RUN already knows - the row is
 ; one row, and its base is the last one stepped rather than gfx_rowbase's
 ; lookup and multiply - and minus the scratch. **IT ANSWERS IN REGISTERS AND
-; THAT IS THE POINT**: writing [vga_lmsk]/[vga_rmsk]/[vga_span]/[vga_off] for a
+; THAT IS THE POINT**: writing [gfx_lmsk]/[gfx_rmsk]/[gfx_rspan]/[gfx_roff] for a
 ; row writer three instructions away to read back is four stores and six loads
 ; a span, and on an 8088 a word through memory costs what a masked framebuffer
 ; byte costs. Both writers take the same four registers, so neither carries a
@@ -4141,10 +4235,10 @@ gfx_sp_next:
     jl .empty
     mov bx, ax                  ; left mask = FF >> (x1 & 7)
     and bx, 7
-    mov ch, [bx + vga_lmtab]
+    mov ch, [bx + gfx_lmtab]
     mov bx, dx                  ; right mask = FF << (7 - (x2 & 7))
     and bx, 7
-    mov cl, [bx + vga_rmtab]
+    mov cl, [bx + gfx_rmtab]
     mov bx, dx
     shr bx, 1
     shr bx, 1
@@ -4176,12 +4270,25 @@ gfx_sp_next:
 ; in:       AX = x1, BX = y1, CX = x2, DX = y2
 ; out:      -
 ; clobbers: flags
+;
+; THE VGA BODY BELOW IS DELIBERATELY ITS OWN, and it looks like 139 bytes of
+; duplication because it nearly is: gfx_fill_pat_raw's VGA body is this one
+; with the row byte read out of a table where this toggles `not bh`, so with
+; the eight bytes AA 55 AA 55 AA 55 AA 55 they are the same function. That
+; merge was taken and MEASURED: gfxbench GFX_FILL_GRAY 64x64 on MartyPC VGA
+; went 4,266.31 -> 5,685.53 us, +33.27% for 139 bytes, and it was reverted.
+; UI_GRAY is os88ui_sbar's trough, so the bill lands on every scrollbar in
+; every package and on every C package through os88thunk.asm. Do not re-derive
+; it: docs/LAST-DROP-BYTES.md 7.6 carries the numbers and the flip condition.
 ; -----------------------------------------------------------------------------
 gfx_fill_gray:
     GFXCLIP gfx_fill_gray_d
 gfx_fill_gray_d:
     GFXDISP gfx_fill_gray_raw
-gfx_fill_gray_raw:
+%ifndef GFX_VGA
+    NOVGA_ARM gfx_fill_gray_raw, sw_fill_gray
+%else                           ; renderer is not a branch - it is the
+gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray has
     cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
     jne sw_fill_gray
     push ax
@@ -4191,21 +4298,20 @@ gfx_fill_gray_raw:
     push si
     push di
     push es
-    call vga_rect_setup
+    call gfx_rect_setup
     jc .done
     mov bl, 0xAA                ; pattern for the top clipped row
-    test byte [vga_y1], 1
+    test byte [gfx_ry1], 1
     jz .parity
     mov bl, 0x55
 .parity:
     mov ax, VGA_SEG
     mov es, ax
     mov dx, VGA_GC
-    mov ah, [vga_lmsk]          ; left edge column
-    mov al, 8
+    mov ax, [vga_m8l]           ; left edge column: AL = 8, AH = the mask
     out dx, ax
-    mov di, [vga_off]
-    mov si, [vga_rows]
+    mov di, [gfx_roff]
+    mov si, [gfx_rrows]
     mov bh, bl
 .lcol:
     mov al, [es:di]             ; load latches for the masked write
@@ -4214,15 +4320,14 @@ gfx_fill_gray_raw:
     add di, ROW_BYTES
     dec si
     jnz .lcol
-    mov cx, [vga_span]
+    mov cx, [gfx_rspan]
     or cx, cx
     jz .reset
-    mov ah, [vga_rmsk]          ; right edge column
-    mov al, 8
+    mov ax, [vga_m8r]           ; right edge column
     out dx, ax
-    mov di, [vga_off]
+    mov di, [gfx_roff]
     add di, cx
-    mov si, [vga_rows]
+    mov si, [gfx_rrows]
     mov bh, bl
 .rcol:
     mov al, [es:di]
@@ -4235,9 +4340,9 @@ gfx_fill_gray_raw:
     jz .reset
     mov ax, 0xFF08              ; full bytes: latches irrelevant
     out dx, ax
-    mov di, [vga_off]
+    mov di, [gfx_roff]
     inc di
-    mov si, [vga_rows]
+    mov si, [gfx_rrows]
     mov ah, bl                  ; the row pattern moves to AH so BX can carry
     mov bx, cx                  ; the count the rep destroys, and DX the row
     mov dx, ROW_BYTES           ; step less that count (SPEC.md 5.7.1)
@@ -4261,6 +4366,7 @@ gfx_fill_gray_raw:
     pop bx
     pop ax
     ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; gfx_fill_pat - 8x8 dither pattern fill, screen-aligned (SPEC.md 5)
@@ -4270,15 +4376,15 @@ gfx_fill_gray_raw:
 ; [gfx_color] and, like gfx_fill_gray, writes only colors 0/15, so it
 ; is a pattern rather than a solid colour. Same masked-edge scheme as
 ; gfx_fill_gray, with the row byte fetched from the table instead of the
-; AA/55 toggle. The 8 pattern bytes are staged into vga_patbuf first:
-; [bp+bx] is not an 8086 addressing mode, but [vga_patbuf+bx] is (and the
+; AA/55 toggle. The 8 pattern bytes are staged into gfx_patbuf first:
+; [bp+bx] is not an 8086 addressing mode, but [gfx_patbuf+bx] is (and the
 ; bb twin shares the staging).
 ; in:       AX = x1, BX = y1, CX = x2, DX = y2; [gfx_pat] = pattern ptr
 ; out:      -
 ; clobbers: flags
 ;
 ; Clipped like the other rect fills, and it re-enters per fragment for free
-; because the pattern is SCREEN-aligned: the row byte is [vga_y1] & 7 off a
+; because the pattern is SCREEN-aligned: the row byte is [gfx_ry1] & 7 off a
 ; table staged from [gfx_pat] on every call, so a fragment starting at any y
 ; picks the same byte the whole rect would have. It was the one rect
 ; primitive without the hook, and the Task Manager's memory map is drawn
@@ -4295,7 +4401,7 @@ gfx_fill_gray_raw:
 ; out: nothing; SI preserved
 ;
 ; The eight bytes are staged into the kernel's own segment first, the
-; dsk_get_dir idiom (SPEC.md 2.1), because vga_pat_stage reads [gfx_pat]
+; dsk_get_dir idiom (SPEC.md 2.1), because gfx_pat_stage reads [gfx_pat]
 ; through DS and DS is KERNEL_SEG by the time it runs. [gfx_pat] is a NEAR
 ; pointer and always was; giving it a segment would put one on every kernel
 ; caller of a primitive that is drawn per fragment.
@@ -4318,14 +4424,19 @@ osapi_gfx_fill_pat:
     pop si
     pop cx
     pop ax
-    call gfx_fill_pat
-    ret
-
+                                ; ...AND FALLS THROUGH into gfx_fill_pat, whose
+                                ; ret is this routine's.  It was `call
+                                ; gfx_fill_pat / ret`, four bytes to reach the
+                                ; label on the next line.  NOTHING MAY BE
+                                ; INSERTED BETWEEN THESE TWO LABELS
 gfx_fill_pat:
     GFXCLIP gfx_fill_pat_d
 gfx_fill_pat_d:
     GFXDISP gfx_fill_pat_raw
-gfx_fill_pat_raw:
+%ifndef GFX_VGA
+    NOVGA_ARM gfx_fill_pat_raw, sw_fill_pat
+%else                           ; renderer is not a branch - it is the
+gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
     cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
     jne sw_fill_pat
     push ax
@@ -4335,21 +4446,20 @@ gfx_fill_pat_raw:
     push si
     push di
     push es
-    call vga_rect_setup
+    call gfx_rect_setup
     jc .done
-    call vga_pat_stage          ; vga_patbuf <- the 8 bytes at [gfx_pat]
+    call gfx_pat_stage          ; gfx_patbuf <- the 8 bytes at [gfx_pat]
     mov ax, VGA_SEG
     mov es, ax
     mov dx, VGA_GC
-    mov ah, [vga_lmsk]          ; left edge column
-    mov al, 8
+    mov ax, [vga_m8l]           ; left edge column: AL = 8, AH = the mask
     out dx, ax
-    mov di, [vga_off]
-    mov si, [vga_rows]
-    mov bx, [vga_y1]
+    mov di, [gfx_roff]
+    mov si, [gfx_rrows]
+    mov bx, [gfx_ry1]
     and bx, 7
 .lcol:
-    mov ah, [vga_patbuf+bx]     ; row byte first: the masked write must
+    mov ah, [gfx_patbuf+bx]     ; row byte first: the masked write must
     mov al, [es:di]             ; follow the latch load immediately
     mov [es:di], ah
     inc bx
@@ -4357,19 +4467,18 @@ gfx_fill_pat_raw:
     add di, ROW_BYTES
     dec si
     jnz .lcol
-    mov cx, [vga_span]
+    mov cx, [gfx_rspan]
     or cx, cx
     jz .reset
-    mov ah, [vga_rmsk]          ; right edge column
-    mov al, 8
+    mov ax, [vga_m8r]           ; right edge column
     out dx, ax
-    mov di, [vga_off]
+    mov di, [gfx_roff]
     add di, cx
-    mov si, [vga_rows]
-    mov bx, [vga_y1]
+    mov si, [gfx_rrows]
+    mov bx, [gfx_ry1]
     and bx, 7
 .rcol:
-    mov ah, [vga_patbuf+bx]
+    mov ah, [gfx_patbuf+bx]
     mov al, [es:di]
     mov [es:di], ah
     inc bx
@@ -4381,14 +4490,14 @@ gfx_fill_pat_raw:
     jz .reset
     mov ax, 0xFF08              ; full bytes: latches irrelevant
     out dx, ax
-    mov di, [vga_off]
+    mov di, [gfx_roff]
     inc di
-    mov si, [vga_rows]
+    mov si, [gfx_rrows]
     mov dx, cx                  ; DX = the count, which the rep destroys; BX is
-    mov bx, [vga_y1]            ; the pattern row and BP is not ours to spend,
+    mov bx, [gfx_ry1]            ; the pattern row and BP is not ours to spend,
     and bx, 7                   ; so the row start is unwound (SPEC.md 5.7.1)
 .irow:
-    mov al, [vga_patbuf+bx]
+    mov al, [gfx_patbuf+bx]
     mov cx, dx
     rep stosb
     sub di, dx
@@ -4408,115 +4517,7 @@ gfx_fill_pat_raw:
     pop bx
     pop ax
     ret
-
-; -----------------------------------------------------------------------------
-; vga_pat_stage - internal: copy the 8 bytes at [gfx_pat] into vga_patbuf
-;                 so the fill loops can index them ([bx+disp] addressing)
-; in:       [gfx_pat]
-; out:      vga_patbuf filled
-; clobbers: SI, DI, ES, flags
-; -----------------------------------------------------------------------------
-vga_pat_stage:
-    push ds                     ; DF=0 per SPEC.md 1
-    pop es
-    mov si, [gfx_pat]
-    mov di, vga_patbuf
-    movsw
-    movsw
-    movsw
-    movsw
-    ret
-
-; -----------------------------------------------------------------------------
-; vga_xor_hline - internal: horizontal XOR line
-;
-; Caller has armed the XOR state (vga_set_xor). Every byte - edges AND
-; interior - is read immediately before the write so the ALU XORs against
-; fresh latches. No rep stosb here (SPEC.md 5).
-; in:       AX = x1, BX = x2, DX = y  (x1 <= x2)
-; out:      GC8 left set (caller resets)
-; clobbers: flags only
-; -----------------------------------------------------------------------------
-vga_xor_hline:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    cmp dx, [vid_ch]           ; live height: 480 VGA / 350 EGA (SPEC.md
-    jae .done                  ; 39.24). Identical to SCREEN_H on VGA.
-    or ax, ax
-    jns .x1ok
-    xor ax, ax
-.x1ok:
-    cmp bx, SCREEN_W           ; width is 640 on both, a constant is fine
-    jl .x2ok
-    mov bx, SCREEN_W-1
-.x2ok:
-    cmp bx, ax
-    jl .done
-    push ax
-    mov ax, ROW_BYTES
-    mul dx                      ; ax = y * 80
-    mov di, ax
-    pop ax
-    mov si, ax                  ; si = left byte
-    mov cl, 3
-    shr si, cl
-    mov dx, bx                  ; dx = right byte
-    shr dx, cl
-    sub dx, si
-    add di, si
-    mov si, dx                  ; si = span
-    mov cl, al                  ; ch = left mask
-    and cl, 7
-    mov ch, 0xFF
-    shr ch, cl
-    mov cl, bl                  ; bh = right mask
-    and cl, 7
-    xor cl, 7
-    mov bh, 0xFF
-    shl bh, cl
-    mov ax, VGA_SEG
-    mov es, ax
-    mov dx, VGA_GC
-    or si, si
-    jnz .edge
-    and ch, bh                  ; one byte: combine the masks
-.edge:
-    mov ah, ch
-    mov al, 8
-    out dx, ax
-    mov al, [es:di]             ; read-before-write: loads the latches
-    stosb
-    or si, si
-    jz .done
-    dec si
-    jz .right
-    mov ax, 0xFF08              ; interior: full mask, still byte-by-byte
-    out dx, ax
-    mov cx, si
-.interior:
-    mov al, [es:di]
-    stosb
-    loop .interior
-.right:
-    mov ah, bh
-    mov al, 8
-    out dx, ax
-    mov al, [es:di]
-    stosb
-.done:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; gfx_xor_rect - 1px outline rectangle, XOR 0Fh (drag outline)
@@ -4579,70 +4580,60 @@ gfx_xor_rect_d:
     push bx
     push cx
     push dx
-    GFXDENTER
-    GFXDORG cx, dx
-    call gfx_xor_rect_raw
+    push bp
+    mov bp, gfx_xor_fill_raw    ; already inside the display hook and past the
+                                ; clip, so the strips take the RAW entry
+    GFXDENTERR
+    call gfx_xor_strips
     GFXDLEAVE
+    pop bp
     pop dx
     pop cx
     pop bx
     pop ax
     ret
 
-; gfx_xor_rect_raw - internal: the outline, in the ACTIVE display's own
-;                    coordinates and on whichever renderer that display wants
-; clobbers: flags
-gfx_xor_rect_raw:
-    cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
-    jne sw_xor_rect             ; the direct path (SPEC.md 39.5), and it banks
-                                ; its own registers
-    push bx
-    push dx
-    push si
-    push di
-    call vga_set_xor
-    mov si, bx                  ; si = y1
-    mov di, dx                  ; di = y2
-    mov bx, cx                  ; xor_hline wants BX = x2
-    mov dx, si
-    call vga_xor_hline          ; top
-    cmp di, si
-    je .reset                   ; y1 = y2: one line, done
-    mov dx, di
-    call vga_xor_hline          ; bottom
-    mov bx, si                  ; verticals span y1+1 .. y2-1
-    inc bx
-    mov dx, di
-    dec dx
-    cmp dx, bx
-    jl .reset                   ; only two rows: no vertical part
-    call vga_vline_core         ; left (AX = x1; reads before writes)
-    cmp cx, ax
-    je .reset                   ; x1 = x2: one column, done
-    push ax
-    mov ax, cx
-    call vga_vline_core         ; right
-    pop ax
-.reset:
-    call vga_gc_reset
-    pop di
-    pop si
-    pop dx
-    pop bx
+; -----------------------------------------------------------------------------
+; gfx_xor_strips - AN OUTLINE AS FOUR FILLED STRIPS, once (SPEC.md 5)
+; in:       AX = x1, BX = y1, CX = x2, DX = y2; BP = the FILL to draw each
+;           strip with
+; out:      -
+; clobbers: flags. Every register including BP comes back the caller's.
+;
+; This decomposition was written out THREE times - here, in gfx_xor_rect_raw
+; (VGA, through hand-rolled vga_xor_hline and vga_vline_core, all three now
+; deleted), and in softgfx.inc's sw_xor_rect (deleted with them). gfx_frame was a FOURTH of the same rectangle with
+; overlapping corners, which in replace mode draws the identical pixels: the
+; top and bottom strips are full width, so they cover the corners the
+; verticals used to draw twice. The degenerate cases are the same three tests
+; in all four.
+;
+; Each pixel is touched exactly ONCE, which is what keeps the XOR forms
+; self-inverting.
+;
+; BP CARRIES THE FILL, which is how gfx_line already uses it in this file. It
+; survives every callee: gfx_fill and gfx_xor_fill document "clobbers: flags";
+; vga_solid_rect names no BP at all; gfx_clip_run, gfx_disp_run,
+; gfx_rect_setup, vga_set_color, vga_set_xor and vga_gc_reset name none
+; either; sw_rect brackets push bp/pop bp around sw_plane_op, whose own header
+; declares it clobbers BP; and cur_unlazy's cursor_hide pushes it.
+; gfx_fill_pat_raw's "BP is not ours to spend" is the same invariant from the
+; other side.
+;
+; The three heads: gfx_xor_rect_d passes gfx_xor_fill_raw (already hooked and
+; past the clip), gfx_xor_rect's clipped arm passes the PUBLIC gfx_xor_fill so
+; each strip meets GFXCLIP itself (SPEC.md 11.3 - an OUTLINE is not the
+; intersection of its bounding rect with anything), and gfx_frame passes
+; gfx_fill.
+; -----------------------------------------------------------------------------
+gfx_xor_rect_clip:              ; the clipped head: each strip meets GFXCLIP
+    push bp
+    mov bp, gfx_xor_fill
+    call gfx_xor_strips
+    pop bp
     ret
 
-; -----------------------------------------------------------------------------
-; gfx_xor_rect_clip - internal: the outline as four filled strips
-; in:       AX = x1, BX = y1, CX = x2, DX = y2; the clip is armed
-; out:      -
-; clobbers: flags
-;
-; The same decomposition sw_xor_rect uses, with the same degenerate cases -
-; each pixel is touched exactly once, so the result is still self-inverting.
-; Every strip goes through the PUBLIC gfx_xor_fill, which is where it meets
-; the clip region (SPEC.md 11.3).
-; -----------------------------------------------------------------------------
-gfx_xor_rect_clip:
+gfx_xor_strips:
     push ax
     push bx
     push cx
@@ -4652,12 +4643,12 @@ gfx_xor_rect_clip:
     mov si, bx                  ; SI = y1, DI = y2
     mov di, dx
     mov dx, si
-    call gfx_xor_fill           ; top row
+    call bp                     ; top row
     cmp di, si
     je .out                     ; y1 = y2: one line, done
     mov bx, di
     mov dx, di
-    call gfx_xor_fill           ; bottom row
+    call bp                     ; bottom row
     mov bx, si                  ; verticals span y1+1 .. y2-1
     inc bx
     mov dx, di
@@ -4666,20 +4657,14 @@ gfx_xor_rect_clip:
     jl .out                     ; only two rows: no vertical part
     push cx
     mov cx, ax
-    call gfx_xor_fill           ; left column
+    call bp                     ; left column
     pop cx
     cmp cx, ax
     je .out                     ; x1 = x2: one column, done
     mov ax, cx
-    call gfx_xor_fill           ; right column
+    call bp                     ; right column
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_di
 
 ; -----------------------------------------------------------------------------
 ; gfx_xor_fill - filled rectangle, XOR 0Fh (menu highlight)
@@ -4694,82 +4679,26 @@ gfx_xor_fill:
 gfx_xor_fill_d:
     GFXDISP gfx_xor_fill_raw
 gfx_xor_fill_raw:
+%ifndef GFX_VGA
+    jmp sw_xor_fill
+vga_xor_fill_vram:              ; ...and this one keeps its cur_unlazy: it is
+    call cur_unlazy             ; entered DIRECTLY by menu.inc and kernel.asm's
+    jmp sw_xor_fill             ; thunk, which have not hidden the arrow (7.1.4)
+%else
     cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
     jne sw_xor_fill
 vga_xor_fill_vram:
     call cur_unlazy              ; ...and the menu highlights with it. VRAM
                                 ; body under its own name (see
-                                ; vga_xor_rect_vram)
+                                ; vga_xor_rect_vram). The re-test below is
+                                ; NOT redundant: this label is entered
+                                ; directly by menu.inc and by kernel.asm's
+                                ; thunk, so it owes its own adapter check
     cmp byte [vid_mono], 0
     jne sw_xor_fill
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    call vga_rect_setup
-    jc .done
-    call vga_set_xor
-    mov ax, VGA_SEG
-    mov es, ax
-    mov dx, VGA_GC
-    mov ah, [vga_lmsk]          ; left edge column
-    mov al, 8
-    out dx, ax
-    mov di, [vga_off]
-    mov si, [vga_rows]
-.lcol:
-    mov al, [es:di]             ; read-before-write
-    mov [es:di], al
-    add di, ROW_BYTES
-    dec si
-    jnz .lcol
-    mov bx, [vga_span]
-    or bx, bx
-    jz .reset
-    mov ah, [vga_rmsk]          ; right edge column
-    mov al, 8
-    out dx, ax
-    mov di, [vga_off]
-    add di, bx
-    mov si, [vga_rows]
-.rcol:
-    mov al, [es:di]
-    mov [es:di], al
-    add di, ROW_BYTES
-    dec si
-    jnz .rcol
-    dec bx                      ; interior bytes per row
-    jz .reset
-    mov ax, 0xFF08
-    out dx, ax
-    mov di, [vga_off]
-    inc di
-    mov si, [vga_rows]
-    mov dx, ROW_BYTES           ; the row step less what the byte loop advances
-    sub dx, bx                  ; DI by (SPEC.md 5.7.1)
-.irow:
-    mov cx, bx
-.ibyte:
-    mov al, [es:di]             ; every interior byte too
-    stosb
-    loop .ibyte
-    add di, dx
-    dec si
-    jnz .irow
-.reset:
-    call vga_gc_reset
-.done:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    mov byte [vga_xorm], 1      ; ...and the body is gfx_fill_raw's, which is
+    jmp vga_solid_rect          ; the same 155 bytes with two differences
+%endif
 
 ; -----------------------------------------------------------------------------
 ; gfx_save - copy a screen region to a buffer, plane by plane
@@ -4800,8 +4729,8 @@ gfx_bank_ok:                    ; unlocked caller banks the arrow and nothing
     push bx                     ; translates it and never puts it back - DI is
     push cx                     ; NOT, because DI advancing is this routine's
     push dx                     ; documented answer
-    GFXDENTER                   ; ...and it reads it off ONE CARD (SPEC.md
-    GFXDORG cx, dx              ; 39.14.8): a save is pixels, and pixels live
+    GFXDENTERR                  ; ...and it reads it off ONE CARD (SPEC.md
+                                ; 39.14.8): a save is pixels, and pixels live
     call vga_save_vram          ; on a card rather than in a coordinate space,
     GFXDLEAVE                   ; so this is whole-shape like gfx_scroll and
     call gfx_1bpp_off           ; ...and a ONE-PLANE arm is spent (11.96.17)
@@ -4820,7 +4749,10 @@ gfx_bank_ok:                    ; unlocked caller banks the arrow and nothing
                                 ; the arrow brackets itself (39.15.2), and a
                                 ; hook here would translate a rect that
                                 ; cur_geom has already resolved.
-vga_save_vram:
+%ifndef GFX_VGA
+    NOVGA_ARM vga_save_vram, sw_save
+%else                           ; renderer is not a branch - it is the
+vga_save_vram:                              ; only renderer gfx_save has
     cmp byte [vid_mono], 0      ; the cursor's save-under, from inside IRQ4:
     jne sw_save                 ; on mono the framebuffer IS the renderer's
                                 ; target, so one "plane" of sw_xfer is it
@@ -4830,7 +4762,7 @@ vga_save_vram:
     push dx
     push si
     push bp
-    call vga_rect_setup
+    call gfx_rect_setup
     jc .done
     mov byte [vga_plane], 0
 .plane:
@@ -4838,9 +4770,9 @@ vga_save_vram:
     mov ah, [vga_plane]
     mov al, 4                   ; GC4: Read Map Select
     out dx, ax
-    mov si, [vga_off]
-    mov dx, [vga_rows]
-    mov bp, [vga_span]
+    mov si, [gfx_roff]
+    mov dx, [gfx_rrows]
+    mov bp, [gfx_rspan]
     inc bp                      ; bp = bytes per row
     push ds
     mov ax, VGA_SEG
@@ -4868,6 +4800,7 @@ vga_save_vram:
     pop bx
     pop ax
     ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; --- the SUB-RECT restore (SPEC.md 5.8) --------------------------------------
@@ -4935,7 +4868,7 @@ gfx_sub_ps  dw 0                ; ...and past each plane
 ; gfx_save's buffer is plane-major, `full_row` bytes per row, x1 rounded down
 ; and x2 up (SPEC.md 5), so a sub-rect is three numbers: where its first byte
 ; is, how far past the end of each row its next row starts, and the same past
-; each plane. The SCREEN side needs nothing at all - vga_rect_setup recomputes
+; each plane. The SCREEN side needs nothing at all - gfx_rect_setup recomputes
 ; the geometry from whatever rect it is handed, so the caller passes the
 ; sub-rect and it lands in the right place.
 ;
@@ -5019,14 +4952,7 @@ gfx_sub_arm:
 .no:
     stc
 .out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_bp
 
 ; -----------------------------------------------------------------------------
 ; gfx_sub_off - back to restoring whole buffers
@@ -5062,17 +4988,16 @@ gfx_restore:
     push bx                     ; it for the same reason: SI advancing is what
     push cx                     ; this routine answers
     push dx
-    GFXDENTER                   ; ...onto the card it came off (SPEC.md
-    GFXDORG cx, dx              ; 39.14.8) - gfx_save's twin, and it has to be
+    GFXDENTERR                  ; ...onto the card it came off (SPEC.md
+                                ; 39.14.8) - gfx_save's twin, and it has to be
     call vga_restore_vram       ; the same hook or a rect banked on one display
     GFXDLEAVE                   ; could be put back on the other
     call gfx_1bpp_off           ; ...and a ONE-PLANE arm is spent (11.96.17)
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-vga_restore_vram:
+    jmp kret_dx
+%ifndef GFX_VGA
+    NOVGA_ARM vga_restore_vram, sw_restore
+%else                           ; renderer is not a branch - it is the
+vga_restore_vram:                              ; only renderer gfx_restore has
     cmp byte [vid_mono], 0      ; see vga_save_vram
     jne sw_restore
     push ax
@@ -5081,7 +5006,7 @@ vga_restore_vram:
     push dx
     push di
     push bp
-    call vga_rect_setup
+    call gfx_rect_setup
     jc .done
     add si, [gfx_sub_st]        ; the SUB-RECT restore (SPEC.md 5.8), and 0 at
                                 ; rest: DS is still KERNEL_SEG out here, so
@@ -5093,14 +5018,14 @@ vga_restore_vram:
     mov ah, [vga_plane]
     mov al, 2                   ; SEQ2: Map Mask = this plane only
     out dx, ax
-    mov di, [vga_off]
-    mov dx, [vga_rows]
-    mov bp, [vga_span]
+    mov di, [gfx_roff]
+    mov dx, [gfx_rrows]
+    mov bp, [gfx_rspan]
     inc bp                      ; bp = bytes per row
     push ds
     push es
-    mov ax, es
-    mov ds, ax                  ; movsb source = caller's buffer
+    push es
+    pop ds                      ; movsb source = caller's buffer
     mov ax, VGA_SEG
     mov es, ax                  ; movsb dest = VRAM
 .row:
@@ -5132,6 +5057,7 @@ vga_restore_vram:
     pop bx
     pop ax
     ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; gfx_pen_live / gfx_pen_dis / gfx_pen_cf - the enabled and disabled pens
@@ -5345,8 +5271,7 @@ gfx_blit1_pen:
 gfx_pen_cf:
     jc gfx_pen_dis
 gfx_pen_live:
-    mov byte [gfx_color], CBLACK
-    mov byte [gfx_dis], 0
+    mov word [gfx_color], CBLACK | (0 << 8)   ; ...and [gfx_dis] with it
     ret
 gfx_pen_dis:
     mov byte [gfx_color], CDGRAY
@@ -5369,9 +5294,9 @@ gfx_pen_dis:
                                     ; font_run lays the checkerboard on every
                                     ; adapter. The stipple carries the signal,
                                     ; so the colour no longer has to
-    mov byte [gfx_dis], 1
-    mov byte [gfx_disink], CBLACK   ; content is white in both themes, so a
-    ret                             ; greyed caption stipples in black
+    mov word [gfx_dis], 1 | (CBLACK << 8)   ; ...and [gfx_disink] with it:
+    ret                             ; content is white in both themes, so a
+                                    ; greyed caption stipples in black
 
 ; ...and the CHROME's pair, for menu_drop's items (SPEC.md 76.6). Same shape,
 ; same [gfx_dis] contract - only the two colours come from the theme, so on
@@ -5571,8 +5496,8 @@ gfx_scroll:
     push dx
     push si
     push di
-    GFXDENTER                   ; a blit cannot take a sub-rect (SPEC.md 11.3),
-    GFXDORG cx, dx              ; so it goes onto the display holding its top
+    GFXDENTERR                  ; a blit cannot take a sub-rect (SPEC.md 11.3),
+                                ; so it goes onto the display holding its top
                                 ; left - and the two edge tests below then
                                 ; REFUSE a rect that reaches past that display,
                                 ; which is 39.14.2's straddle rule for free
@@ -5629,6 +5554,7 @@ gfx_scroll:
     mov [vgas_ydst], dx          ; down: dest rows y1+|dy|..y2, walked
     mov word [vgas_step], -1     ; bottom-up (source above destination)
 .disp:
+%ifdef GFX_VGA
     cmp byte [vid_planes], 1
     je .mono
     mov dx, 0x03CE              ; VRAM, via the latches
@@ -5640,6 +5566,7 @@ gfx_scroll:
     mov ax, 0x0005              ; write mode back to 0 (SPEC.md 1 rule 7)
     out dx, ax
     jmp short .ok
+%endif
 .mono:
     call vgas_bankcopy           ; the framebuffer IS [vid_rseg] (SPEC.md 39)
 .ok:
@@ -5649,13 +5576,8 @@ gfx_scroll:
     stc
 .out:
     GFXDLEAVE                   ; ...and it banks CF, which is this routine's
-    pop di                      ; whole answer
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_di
+%ifdef GFX_VGA
 
 ; -----------------------------------------------------------------------------
 ; vgas_lincopy - scroll one LINEAR segment (the VGA stride): a buffer plane,
@@ -5685,8 +5607,8 @@ vgas_lincopy:
     pop ds                      ; DS = ES = the target for the movs
     cld
     rep movsb
-    mov ax, KERNEL_SEG
-    mov ds, ax
+    push cs
+    pop ds
     add bx, [vgas_step]
     dec word [vgas_left]
     jnz .r
@@ -5726,14 +5648,15 @@ vgas_lincopy:
     push es
     pop ds                      ; DS = ES = the target for the movs
     rep movsb
-    mov ax, KERNEL_SEG
-    mov ds, ax
+    push cs
+    pop ds
     add di, bx
     dec word [vgas_left]
     jnz .r
 %endif
     pop ds
     ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; vgas_bankcopy - the mono twin: per-row copies through gfx_rowbase, which
@@ -5743,8 +5666,7 @@ vgas_lincopy:
 ; -----------------------------------------------------------------------------
 vgas_bankcopy:
     push ds
-    mov ax, [vid_rseg]
-    mov es, ax
+    mov es, [vid_rseg]
     mov ax, [vgas_rows]
     mov [vgas_left], ax
     mov bx, [vgas_ydst]
@@ -5778,8 +5700,8 @@ vgas_bankcopy:
     push es
     pop ds
     rep movsb
-    mov ax, KERNEL_SEG
-    mov ds, ax
+    push cs
+    pop ds
     sub di, [vgas_nb]           ; back to the row's own byte: rep movsb left DI
                                 ; nb past it, and the advance below is
                                 ; column-preserving, so it has to start from
@@ -5795,8 +5717,8 @@ vgas_bankcopy:
     push es
     pop ds
     rep movsb
-    mov ax, KERNEL_SEG
-    mov ds, ax
+    push cs
+    pop ds
     sub di, [vgas_nb]           ; back to the row's own byte: rep movsb left DI
                                 ; nb past it, and the advance below is
                                 ; column-preserving, so it has to start from
@@ -5822,8 +5744,8 @@ vgas_bankcopy:
     pop ds
     cld
     rep movsb
-    mov ax, KERNEL_SEG
-    mov ds, ax
+    push cs
+    pop ds
     add bx, [vgas_step]
     dec word [vgas_left]
     jnz .r
@@ -5835,7 +5757,7 @@ section .bss
 
 api_pat:     resb 8             ; osapi_gfx_fill_pat's staging slot: a
                                 ; package's eight pattern bytes, copied into
-                                ; the kernel's segment because vga_pat_stage
+                                ; the kernel's segment because gfx_pat_stage
                                 ; reads them through DS
 
 gfx_blit_x:  resw 1             ; gfx_blit4's row cursor (SPEC.md 5.4):
@@ -5872,13 +5794,11 @@ gfx_bp_hk:   resb 1             ; ...and did THIS gfx_blitp take the whole-shape
 %endif
 
 vga_plane       resb 1          ; save/restore plane counter / mask bit
-vga_lmsk        resb 1          ; rect: left edge bit mask
-vga_rmsk        resb 1          ; rect: right edge bit mask
-vga_y1          resw 1          ; rect: clipped top row (dither parity)
-vga_rows        resw 1          ; rect: clipped row count
-vga_span        resw 1          ; rect: right byte - left byte
-vga_off         resw 1          ; rect: VRAM offset of top-left byte
-vga_lcol        resw 1          ; rect: left byte column (bb dirty union)
+vga_xorm        resb 1          ; vga_solid_rect: 0 = replace, 1 = XOR. The
+                                ; ONE difference between gfx_fill_raw's VGA
+                                ; body and gfx_xor_fill_raw's, and both heads
+                                ; write it before the body reads it, so .bss's
+                                ; guaranteed zero is not being relied on
 %ifdef KERN_BIG
 gfx_sp_seg      resw 1          ; SPEC.md 5.10 - gfx_spans' walk: the CALLER's
 gfx_sp_si       resw 1          ; segment and cursor into the span list, the
@@ -5887,7 +5807,6 @@ gfx_sp_row      resw 1          ; It is memory and not registers because
 gfx_sp_y        resw 1          ; the row writers keep nothing across a call
 gfx_sp_fb       resw 1          ; ...and the framebuffer ES is put back to
 %endif
-vga_patbuf      resb 8          ; gfx_fill_pat: staged pattern rows
 gfx_cl_x1       resw 1          ; gfx_clip_run: the primitive's own rect,
 gfx_cl_y1       resw 1          ; held while the raw body runs per fragment
 gfx_cl_x2       resw 1

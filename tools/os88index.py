@@ -101,6 +101,10 @@ INCLUDES = [
      "Sub-tick timing off the 8253."),
     ("os88type.inc", "54",
      "File-type recognition by name and by content."),
+    ("os88parts.inc", "20.12",
+     "Package parts: named, sized parts inside one `.O88` - claimed, loaded on "
+     "demand, optionally into XMS, and refused with an arithmetic the package "
+     "states itself. A package over 64KB is still a package."),
 ]
 
 

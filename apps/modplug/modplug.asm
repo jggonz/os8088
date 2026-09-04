@@ -50,7 +50,12 @@
 
 %include "os88api.inc"
 
-    OS88_HEADER 'MODPLUG', mpp_entry, 1
+    OS88_HEADER 'MODPLUG', mpp_entry, 1, OS88_STACK_256
+                                ; THE WORKER'S STACK, declared
+                                ; rather than defaulted (SPEC.md 8.7):
+                                ; static 98 for mpp_worker
+                                ; over the 64-byte interrupt floor
+                                ; that is 162, and 256 gives 1.58x
 
 ; --- embedded 16x16 icon (SPEC.md 20.2, flags bit 0) ---------------------------
 ; The player's face: a bevelled box with an LCD band across the top and a
@@ -2215,7 +2220,8 @@ mpp_s_bpm:      db '  BPM ', 0
 ; come with it - a user who reads this should not be left thinking libopenmpt
 ; is in here somewhere.
 mpp_about_lines:
-    dw mpp_ab1, mpp_ab2, mpp_ab3, mpp_ab4, mpp_ab5, mpp_ab6, mpp_ab7, 0
+    dw mpp_ab1, mpp_ab2, mpp_ab3, mpp_ab4, mpp_ab5, mpp_ab6, mpp_ab7
+    dw mpp_ab8, mpp_ab9, 0
 mpp_ab1: db 'ModPlug Player for os8088', 0
 mpp_ab2: db 0
 mpp_ab3: db 'Interface ported from ModPlug Player V2', 0
@@ -2223,6 +2229,8 @@ mpp_ab4: db 'by Volkan Orhan - modplugplayer.org, GPLv3', 0
 mpp_ab5: db 0
 mpp_ab6: db 'Replayer: 4-channel ProTracker, 8-bit mono.', 0
 mpp_ab7: db 'Not libopenmpt - see SPEC.md 56.1.', 0
+mpp_ab8: db 0
+mpp_ab9: db 'Ported by Jorge Gonzalez', 0
 
 ; =============================================================================
 ; The other three quarters of the package

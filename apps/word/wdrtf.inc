@@ -353,6 +353,7 @@ wd_res:
 
 ; wd_rnum - emit signed AX in decimal, then one space. Preserves all but DI.
 wd_rnum:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push ax
     push bx
     push cx

@@ -45,12 +45,38 @@ WHAT A TIER MAY NOT DO.  `fast` may not build anything: it runs after `make`
 and inspects its output, so a `fast` row that shells out to `make` is
 measuring the build, not the tree.  `full` may build, and does.
 
-SERIAL ROWS.  Every emulator test in this tree drives MartyPC's debug server
-on 127.0.0.1:9001 - one port, one connection (docs/MARTYPC-DEBUG.md: a
-second client does not error, it HANGS) - so those rows carry `serial=True`
-and share one lane while the host-side rows fan out across the others.  Two
-emulator rows run in parallel would not fail, which is worse: the second
-would silently drive the FIRST one's machine.
+SERIAL ROWS.  Emulator tests carry `serial=True` and share a lane behind the
+host-side rows, which fan out across the others.  That used to be forced:
+every emulator test drove one debug server on one fixed port, and two rows in
+parallel would not fail - the second would silently drive the FIRST one's
+machine.  It is not forced any more.  `os88marty.launch` gives every instance
+its own port, its own run directory and its own disks (docs/MARTYPC-DEBUG.md),
+so `--marty-jobs N` widens that lane to N.
+
+WHAT STILL RUNS ALONE, and it is no longer about the emulator.  TWO flags,
+and they are different claims:
+
+  * `builds=True` - the row shells out to `make`, so it rewrites `build/`
+    under any row reading it.  It cannot share the TREE, and
+    `tests/unit/t_registry.py` checks this one against the script rather than
+    trusting it.
+  * `alone=True` - the row's ANSWER needs the machine to itself.  A row whose
+    assertion is a RATE cannot share four cores with two other guests; nor can
+    one whose clicks are paced by a host-timed settle.  It can share the tree
+    and only needs the CORES.
+
+Both keep the row out of the shared lane whatever `--marty-jobs` says, and
+both land it in the one-at-a-time lane of the SAME run - so "the whole soak
+except the rate rows, then the rate rows" is one command now and not two.
+
+WHY THE DEFAULT IS 1.  Not caution about the isolation - `tests/martyconc.py`
+is the gate on that - but arithmetic.  Every instance runs its guest as fast
+as the host will let it, so N of them on an N-core box is the ceiling and past
+it each row takes LONGER in host seconds.  Guest cycle counts are unaffected
+(they are counted, not timed), but a row's declared `secs`, its timeout and
+`settle`'s patience are all host seconds, so raising this trades wall-clock
+for slack that some rows have not got.  Raise it deliberately, with the box in
+mind: `--marty-jobs 3` on a four-core machine.
 
 CAPABILITIES.  A row names what it needs (`marty`, `qemu`, `cc`, `net`) and
 is SKIPPED, loudly, when the machine has not got it - a container with no
@@ -108,6 +134,15 @@ def capabilities():
     # named its parent.
     if os.access(os.path.join(ROOT, "build/cc/SmallerC/smlrcc"), os.X_OK):
         caps.add("cc")
+    # WIREFRAME is an instrument and does not ship (SPEC.md 78.9), so `all`
+    # builds wire.o88 and NO shipped floppy carries it - the disk comes from
+    # `make wiredisk` and nothing in the suite runs that. Without this, the
+    # three rows that drive it (wireflick, wirefps, uilat) FAIL on a tree that
+    # simply has not built it, and a failure meaning "this box has no disk"
+    # buries the failures that mean something. Named for the artifact, per the
+    # note above.
+    if os.path.exists(os.path.join(ROOT, "build/wire360.img")):
+        caps.add("wiredisk")
     return caps
 
 
@@ -126,17 +161,55 @@ def run_row(row, caps, strict, verbose):
 
     t0 = time.time()
     try:
-        p = subprocess.run(row.cmd, cwd=ROOT, capture_output=True, text=True,
-                           timeout=row.timeout)
-        out = p.stdout + p.stderr
+        p = subprocess.Popen(row.cmd, cwd=ROOT, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True)
+    except OSError as e:
+        return Result(row, False, False, time.time() - t0, str(e), "could not run")
+    try:
+        so, se = p.communicate(timeout=row.timeout)
+        out = so + se
         ok = p.returncode == 0
         reason = "" if ok else "exit %d" % p.returncode
-    except subprocess.TimeoutExpired as e:
-        out = (e.stdout or "") + (e.stderr or "") if isinstance(e.stdout, str) else ""
+    except subprocess.TimeoutExpired:
+        # SIGTERM, NOT SIGKILL. subprocess.run(timeout=) kills the row
+        # outright, and a killed Python runs no atexit - which is where every
+        # QEMU launcher's teardown lives (tests/os88qemu.py). So a row that
+        # timed out left its emulator running, holding build/qmp.sock, and
+        # the next row drove THAT machine. terminate() lets the row exit
+        # normally and take its guest with it; only a row that will not go
+        # inside ten seconds is killed.
+        p.terminate()
+        try:
+            so, se = p.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            so, se = p.communicate()
+        out = (so or "") + (se or "")
         ok, reason = False, "TIMEOUT after %ds" % row.timeout
-    except OSError as e:
-        out, ok, reason = str(e), False, "could not run"
+        if "qemu" in row.needs:
+            out += _sweep_qemu()
     return Result(row, ok, False, time.time() - t0, out, reason)
+
+
+def _sweep_qemu():
+    """Stop every QEMU a timed-out row can have left, by PIDFILE.
+
+    The belt under the braces above: a row killed after ignoring SIGTERM ran
+    no atexit either. Every launcher in tests/ daemonizes with `-pidfile
+    build/<x>.pid` - qemu.pid for most, ps2.pid for the PS/2 row - so the
+    sweep is over build/*.pid, through os88qemu.kill, which is by pidfile and
+    never by `pkill -f` (its docstring says why). The default pidfile's
+    socket is cleared with it; a private one's socket is that row's own.
+    """
+    import glob
+    import os88qemu
+    swept = []
+    for pf in sorted(glob.glob(os.path.join(ROOT, "build", "*.pid"))):
+        sock = os88qemu.SOCK if pf == os88qemu.PIDFILE else None
+        os88qemu.kill(pf, sock)
+        swept.append(os.path.basename(pf))
+    return ("\nos88test: swept %s after the timeout\n" % ", ".join(swept)
+            if swept else "")
 
 
 def kernel_is_stale(rows):
@@ -191,8 +264,27 @@ def main():
                     help="fast (every build), full (pre-merge), soak (everything)")
     ap.add_argument("-k", metavar="GLOB", action="append", default=[],
                     help="only rows whose name matches (repeatable)")
+    ap.add_argument("-x", "--exclude", metavar="GLOB", action="append",
+                    default=[],
+                    help="drop rows whose name matches, AFTER -k (repeatable). "
+                         "It was written for one shape - a row whose assertion "
+                         "is a RATE, excluded from a wide run and taken in a "
+                         "second serial one - and that shape is alone=True on "
+                         "the row now, in ONE run. What is left is the ordinary "
+                         "use: dropping a row on purpose. Excluding one is a "
+                         "decision, so the run prints which it dropped and a "
+                         "green result cannot quietly be a green result over "
+                         "less.")
     ap.add_argument("-j", type=int, default=min(4, (os.cpu_count() or 2)),
                     help="parallel lanes for the host-side rows")
+    ap.add_argument("--marty-jobs", type=int, dest="mj",
+                    default=int(os.environ.get("OS88_MARTY_JOBS", "1")),
+                    help="how many EMULATOR rows may run at once (default 1). "
+                         "Instances are isolated, so this is a question about "
+                         "how many cores the box has, not about safety - see "
+                         "the header. Rows marked builds=True (cannot share the "
+                         "TREE) or alone=True (cannot share the CORES) run "
+                         "alone whatever this says.")
     ap.add_argument("--list", action="store_true", help="print the registry and exit")
     ap.add_argument("--strict", action="store_true",
                     help="a missing capability is a FAILURE, not a skip")
@@ -221,6 +313,12 @@ def main():
     want = [r for r in rows if order[r.tier] <= order[a.tier]]
     if a.k:
         want = [r for r in want if any(fnmatch.fnmatch(r.name, g) for g in a.k)]
+    if a.exclude:
+        dropped = [r.name for r in want
+                   if any(fnmatch.fnmatch(r.name, g) for g in a.exclude)]
+        want = [r for r in want if r.name not in dropped]
+        print("os88test: -x dropped %d row(s): %s"
+              % (len(dropped), " ".join(sorted(dropped)) or "(none matched)"))
     if not want:
         print("os88test: no rows matched", file=sys.stderr)
         return 1
@@ -240,8 +338,21 @@ def main():
 
     t0 = time.time()
     results = []
-    par = [r for r in want if not r.serial]
-    ser = [r for r in want if r.serial]
+    par = [r for r in want if not r.serial and not r.builds]
+    ser = [r for r in want if r.serial or r.builds]
+    # ...`builds` keeps a row OUT of the shared lane whatever the row says
+    # about serial: buildmatrix and bmshare both drive make against build/,
+    # and the 47 par rows read build/kernel.bin and build/*.img meanwhile
+    # THREE LANES, not two. A row that builds keeps the tree to itself; an
+    # emulator row that does not build can share the machine with another,
+    # because every instance has its own port, directory and disks now.
+    mj = max(1, a.mj)
+    conc = [r for r in ser
+            if mj > 1 and "marty" in r.needs and not r.builds and not r.alone]
+    ser = [r for r in ser if r not in conc]
+    if conc:
+        print("os88test: %d emulator row(s) in a lane of %d; %d run alone"
+              % (len(conc), mj, len(ser)))
 
     def report(res):
         if res.skipped:
@@ -268,6 +379,17 @@ def main():
         res = run_row(r, caps, a.strict, a.verbose)
         results.append(res)
         report(res)
+    # ...and the emulator lane LAST, never beside the builders above: a `make`
+    # halfway through rewriting build/kernel.bin is exactly what an emulator
+    # row must not be reading.
+    if conc:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=mj) as ex:
+            futs = {ex.submit(run_row, r, caps, a.strict, a.verbose): r
+                    for r in conc}
+            for f in concurrent.futures.as_completed(futs):
+                res = f.result()
+                results.append(res)
+                report(res)
 
     wall = time.time() - t0
     failed = [r for r in results if not r.ok]

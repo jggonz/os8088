@@ -21,6 +21,13 @@ The click lands at the centre of the bottom-left cell, which on a CGA is
 BELOW `[vid_dock_y0]`: one press proves the frame reaches there and that the
 window rather than the dock gets it.
 
+WHAT THE PRESS HAS TO PRODUCE IS "the game decoded it", and it has to be asked
+ON A FRESH BOARD. This file used to press a control cell first and then ask
+whether the count of open cells had gone UP, and that is unanswerable one run
+in four - by two routes, both of them in mines.asm's own reveal path. It
+failed 1 run in 4 on an idle box, and was classified once as a contention
+artefact on the strength of a single passing re-run.
+
 --expect-cut asserts the opposite of every check, so `make KEEPH=0` must FAIL
 this file's happy path and pass its inverse. Without that, "the click worked"
 is a claim about the click path and not about the flag.
@@ -112,41 +119,89 @@ def main(argv):
                             "against %d) - this run tested nothing"
                             % (rect[1], h, dock_y0))
 
-        # --- 2: a click the fix cannot be the reason for ------------------------
-        # The TOP-left cell is inside the frame in BOTH builds. If this one
-        # does not open a cell the run is measuring a broken click path, and
-        # every verdict below it is worthless.
-        cx, cy = cell_xy(rect, 0, 0)
-        mo.click(cx, cy)
-        settle(m)
-        top = dispapps.words(m, seg, "mines", WATCH)
-        say("top cell    (%d,%d) -> %r" % (cx, cy, top))
-        if not top["mn_revealed"]:
-            sys.exit("dispmine: the TOP-left cell did not open either - the "
-                     "click path is broken, not the frame")
-
-        # --- 3: ...and the one this is about -----------------------------------
+        # --- 2: the press this row is about, ON A FRESH BOARD -----------------
         # The bottom-left cell's centre is below [vid_dock_y0] on a CGA, so
         # this single press asks both questions at once: does the frame reach
         # there, and does the WINDOW get a press the dock strip is under.
+        #
+        # **IT GOES FIRST, AND THE ORDER IS THE WHOLE FIX.** It used to go
+        # second, after a top-left click that proved the click path - and that
+        # control made this press unanswerable one run in four, by two routes,
+        # both of them in mines.asm's own reveal path:
+        #
+        #   cmp byte [mn_state+bx], MN_S_COVER
+        #   jne .out                    ; an OPEN cell is done: nothing happens
+        #
+        # so a control click whose flood reached the bottom-left cell - it
+        # opens anywhere from 1 to 62 of the 81, measured - left this press
+        # nothing to do; and if the cell was one of the 10 MINES, the press
+        # ended the game and moved `mn_revealed` not at all. Both read as "it
+        # went past the window to the dock" and blamed SPEC.md 11.93.
+        #
+        # On a FRESH board neither can happen, and mines.asm says so rather
+        # than this comment hoping so: every cell is MN_S_COVER, and
+        #
+        #   cmp byte [mn_mode], MN_M_FRESH
+        #   jne .armed
+        #   call mn_place               ; lazy placement: first click always safe
+        #
+        # places the mines AROUND the press. So the first press on this cell
+        # must open at least itself and must take the mode FRESH -> LIVE.
+        def reached(a_, b_):
+            """Did the press reach the GAME - not "did a cell open", which is a
+            different question. Either half is proof, and neither can be
+            produced by a press the dock swallowed: `mn_mode` moves only on a
+            press mines.asm decoded."""
+            return (b_["mn_revealed"] > a_["mn_revealed"]
+                    or b_["mn_mode"] != a_["mn_mode"])
+
+        def why(a_, b_):
+            if b_["mn_revealed"] > a_["mn_revealed"]:
+                return "opened %d cell(s)" % (b_["mn_revealed"] - a_["mn_revealed"])
+            if b_["mn_mode"] != a_["mn_mode"]:
+                return "ended the game (mn_mode %d -> %d)" % (a_["mn_mode"],
+                                                             b_["mn_mode"])
+            return "did nothing"
+
         cx, cy = cell_xy(rect, 0, MN_COLS - 1)
         if cy < dock_y0:
             fail.append("the bottom cell's centre (%d) is above the dock (%d) "
                         "- this machine cannot pose the question" % (cy, dock_y0))
+        was = dispapps.words(m, seg, "mines", WATCH)
         mo.click(cx, cy)
         settle(m)
         got = dispapps.words(m, seg, "mines", WATCH)
-        say("bottom cell (%d,%d) -> %r" % (cx, cy, got))
-        opened = got["mn_revealed"] > top["mn_revealed"]
+        say("bottom cell (%d,%d) -> %r  ...the press %s"
+            % (cx, cy, got, why(was, got)))
+
+        # --- 3: the control, asked only when it has something to distinguish --
+        # The TOP-left cell is inside the frame in BOTH builds, so a press that
+        # reaches it says the click path works and the FRAME is what differs.
+        # A control that runs when the answer is already yes is the control
+        # that broke this row.
+        if not reached(was, got) or a.expect_cut:
+            tx, ty = cell_xy(rect, 0, 0)
+            before = dispapps.words(m, seg, "mines", WATCH)
+            mo.click(tx, ty)
+            settle(m)
+            top = dispapps.words(m, seg, "mines", WATCH)
+            say("top cell    (%d,%d) -> %r  ...the press %s"
+                % (tx, ty, top, why(before, top)))
+            if not reached(before, top):
+                sys.exit("dispmine: the TOP-left cell did not take a press "
+                         "either - the click path is broken, not the frame")
+
         if a.expect_cut:
-            if opened:
-                fail.append("KEEPH=0 opened a cell at y=%d, which is %d rows "
-                            "below its own frame - the reference build is not "
-                            "reproducing the bug" % (cy, cy - (rect[1] + h - 1)))
-        elif not opened:
+            if reached(was, got):
+                fail.append("KEEPH=0 took a press at y=%d, which is %d rows "
+                            "below its own frame (it %s) - the reference build "
+                            "is not reproducing the bug"
+                            % (cy, cy - (rect[1] + h - 1), why(was, got)))
+        elif not reached(was, got):
             fail.append("the bottom row still cannot be played: a press at "
-                        "(%d,%d) opened nothing, so it went past the window "
-                        "(frame %d..%d) to the dock (SPEC.md 11.93)"
+                        "(%d,%d) neither opened a cell nor moved the game's "
+                        "mode, so it went past the window (frame %d..%d) to "
+                        "the dock (SPEC.md 11.93)"
                         % (cx, cy, rect[1], rect[1] + h - 1))
 
         w, hgt, d = m.fbuf()

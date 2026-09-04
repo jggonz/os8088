@@ -39,6 +39,13 @@ import os, sys, time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
+
+from os88geom import (VID_CTX_SZ, VID_CTX_VX,          # noqa: E402
+                      VID_CTX_VY, VID_CTX_KIND, VID_CTX_CH)
+# SPEC.md 39.14's per-display record: DERIVED from VID_CTX_W and never
+# written down here. This file spelled it `42 + 36`, which is the
+# VID_CTX_W = 18 layout - two bytes early, and what sits there is
+# display 1's vid_chm8, so the seam read 192 instead of 720.
 import os88marty, os88mouse, os88sym, dispcp, os88layout
 S = os88sym.linear
 SY = os88sym.syms()
@@ -237,7 +244,8 @@ def main():
         dispcp.open_panel(m, mo, S, os88marty.settle)
         dispcp.set_mode(m, mo, S, os88marty.settle, "right")
         dispcp.close_panel(m, mo, S, os88marty.settle)
-        ctx = m.read(S("vid_ctx"), 84); seam = u16(ctx, 42 + 36)
+        ctx = m.read(S("vid_ctx"), 2 * VID_CTX_SZ)
+        seam = u16(ctx, VID_CTX_SZ + VID_CTX_VX)
         print("seam at x=%d" % seam)
 
         dispcp.open_drive(m, mo, S, os88marty.settle, "B", card=pri)

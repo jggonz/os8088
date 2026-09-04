@@ -30,8 +30,30 @@ from os88geom import WIN_SIZE, MAX_WIN   # NOT a local copy: this one
                                         # 13.8.2's W_ONDRAG, and a stale
                                         # stride decodes window 1 as
                                         # garbage and reads it as unused
-MUP = (240, 100)                 # the main window's frame
-VAN = (160, 60)                  # ...and the vanish window's
+
+
+def granted(w):
+    """The frame width the kernel GRANTS for a requested frame width `w`.
+
+    SPEC.md 11.94.5's `wm_snap_w` rounds a window's CONTENT width - `W_W - 2`,
+    the frame less its two borders - UP to a multiple of 8 wherever it fits, so
+    that the LAST cell in a row owns its framebuffer byte exactly as 11.94's
+    origin snap makes the first one own its. muptest asks for a 240 and a 160
+    wide frame, whose content widths are 238 and 158; neither is a multiple of
+    8, so what the window manager hands back is 242 and 162.
+
+    Derived rather than written down as 242, so the rule is stated once and a
+    fixture that changes its own size does not need this line changed with it.
+    The heights are untouched - 11.94.5 snaps the width alone.
+    """
+    return ((w - 2 + 7) // 8) * 8 + 2
+
+
+MUP = (granted(240), 100)        # the main window's frame, AS GRANTED, and
+VAN = (granted(160), 60)         # ...the vanish window's. MU_W/MU_H in
+                                 # tests/muptest/muptest.asm are what the
+                                 # package ASKS for, which stopped being what
+                                 # it is given when 11.94.5 landed.
 fails = []
 
 

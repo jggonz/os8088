@@ -185,6 +185,7 @@ mdg_show:
 
     mov si, mdg_t9              ; --- ...and WHERE inside step 2 it stopped,
     call mdg_tpl                ; which p2st cannot say: four of its calls fail
+%ifdef KERN_BIG                 ; the PS/2 probe is kern_big's (SPEC.md 9.9):
     mov al, [mou_p2sub]         ; into the same .fail (SPEC.md 9.9.6)
     mov di, mdg_buf + 4
     call mdg_h1
@@ -198,6 +199,7 @@ mdg_show:
     mov al, [mou_p2sta]         ; ...and at the moment it gave up
     mov di, mdg_buf + 26
     call mdg_h8
+%endif                          ; kern_small has none of those four bytes
     mov al, [mou_p2cm1]
     mov di, mdg_buf + 34
     call mdg_h8

@@ -62,6 +62,7 @@ ROOT = os.path.normpath(os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import heapmap                                              # noqa: E402
 import os88sym                                              # noqa: E402
+import os88qemu                                              # noqa: E402
 
 SOCK = os.path.join(ROOT, "build", "ps2.sock")
 PIDFILE = os.path.join(ROOT, "build", "ps2.pid")
@@ -106,11 +107,14 @@ def launch():
     em = "qemu" + "-system-i386"     # never whole on a command line: kill_stale
     subprocess.run(
         em + " -machine pc,vmport=off"    # ...or the VMware backdoor (SPEC.md
-        " -drive file=build/os8088.img,format=raw,if=floppy -boot a"  # 9.10)
+        " -drive file=build/os8088.img,format=raw,if=floppy -boot a"  # 9.11)
         " -drive file=build/apps.img,format=raw,if=floppy,index=1"    # wins
         " -serial none"                  # the contest and this tests the PS/2
         " -display none -qmp unix:%s,server,nowait -daemonize -pidfile %s"
         % (SOCK, PIDFILE), cwd=ROOT, shell=True, check=True)
+    # ...and it is DAEMONISED, so it outlives this script unless
+    # somebody kills it - and the somebody is us (os88qemu).
+    os88qemu.own(PIDFILE, SOCK)
 
 
 def byte(q, sym):

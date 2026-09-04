@@ -45,7 +45,12 @@
 WD_SBRATE   equ SB_RATE         ; the system
 %endif
 
-    OS88_HEADER 'WORD', wd_entry, 3    ; bit 0 icon, bit 1 the DOC
+    OS88_HEADER 'WORD', wd_entry, 3, OS88_STACK_256    ; bit 0 icon, bit 1 the DOC
+                                ; THE WORKER'S STACK, declared
+                                ; rather than defaulted (SPEC.md 8.7):
+                                ; static 126 for wd_worker
+                                ; over the 64-byte interrupt floor
+                                ; that is 190, and 256 gives 1.35x
                                        ; association block (SPEC.md 68.4)
 
 ; --- embedded 16x16 icon (SPEC.md 20.2, flags bit 0) ---------------------------
@@ -5315,7 +5320,7 @@ wd_reconcile:
 ; in:  gfx lock held (OSAPI_TASK_SPAWN requires it); preserves all registers
 ;
 ; Lazy on purpose: a Note Pad that never breaks never costs a task slot or a
-; 512-byte stack, which on a 12-slot table is worth the byte of state. A
+; 384-byte stack, which on an 8-slot table is worth the byte of state. A
 ; refusal is normal and transient (the table can be full), so nothing is
 ; latched and the next break asks again.
 ; -----------------------------------------------------------------------------
@@ -12767,6 +12772,7 @@ wd_saymsg:
 ; wd_utoa - AX as decimal at DI, no leading zeros; DI advances past it.
 ; Preserves every other register.
 wd_utoa:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push ax
     push bx
     push cx
@@ -16797,6 +16803,7 @@ wd_rad3:
 
 ; wd_unum - write unsigned AX into the NUL buffer at BX. Preserves all.
 wd_unum:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push ax
     push bx
     push cx
@@ -17031,8 +17038,8 @@ wd_abopen:
     cmp ax, 360                     ; name line as a toast instead - refusal
     jb .toast                       ; with the reason (SPEC.md 47)
     mov ax, [wd_ch]
-    cmp ax, 96
-    jb .toast
+    cmp ax, 112                     ; ...and 16 taller since the porter credit
+    jb .toast                       ; became a fourth line (SPEC.md 68.2)
     mov ax, [wd_cw]
     sub ax, 344
     shr ax, 1
@@ -17042,7 +17049,7 @@ wd_abopen:
     add ax, 343
     mov [wd_abrect+4], ax
     mov ax, [wd_ch]
-    sub ax, 72
+    sub ax, 88
     shr ax, 1
     add ax, [wd_ct]
     mov dx, [wd_ct]
@@ -17052,7 +17059,7 @@ wd_abopen:
     mov ax, dx
 .yok:
     mov [wd_abrect+2], ax
-    add ax, 71
+    add ax, 87
     mov [wd_abrect+6], ax
     ; panel, frame, shadow - the dropdown's dress
     mov al, CWHITE
@@ -17081,8 +17088,9 @@ wd_abopen:
     inc cx
     mov dx, bx
     call OSAPI_GFX_FILL_GRAY
-    ; the three lines (SPEC.md 68.2): the name, the version, and where the
-    ; authentic UI came from - the Computer History Museum's Opus release
+    ; the four lines (SPEC.md 68.2): the name, the version, where the
+    ; authentic UI came from - the Computer History Museum's Opus release -
+    ; and who brought it here
     mov cx, [wd_abrect]
     add cx, 8
     mov dx, [wd_abrect+2]
@@ -17098,6 +17106,10 @@ wd_abopen:
     mov si, wd_s_abou3
     mov ax, (CWHITE << 8) | CBLACK
     call OSAPI_FONT_RUN
+    add dx, 12
+    mov si, wd_s_abou4
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
     ; the OK button
     mov ax, [wd_abrect]
     add ax, 148
@@ -17105,7 +17117,7 @@ wd_abopen:
     add ax, 47
     mov [wd_abok+4], ax
     mov ax, [wd_abrect+2]
-    add ax, 50
+    add ax, 66
     mov [wd_abok+2], ax
     add ax, 13
     mov [wd_abok+6], ax
@@ -19284,6 +19296,7 @@ wd_s_sp3:   db '   ', 0
 wd_s_about: db 'Microsoft Word', 0
 wd_s_abou2: db 'Version 1.1a for os8088', 0
 wd_s_abou3: db 'UI from the CHM Opus source release', 0
+wd_s_abou4: db 'Ported by Jorge Gonzalez', 0
 wd_s_ok:    db 'OK', 0
 wd_m_noclose: db 'Close refused - try again', 0
 

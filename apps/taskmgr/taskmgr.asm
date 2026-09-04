@@ -92,7 +92,31 @@
 ;   ................
 ;   ................
 ;   ................
-    OS88_HEADER 'TaskMgr', tm_entry, 1
+    OS88_HEADER 'TaskMgr', tm_entry, 1, OS88_STACK_256
+                                ; THE WORKER'S STACK, declared rather than
+                                ; defaulted (SPEC.md 8.7). It said 192 on a
+                                ; static 56, and 56 WAS THE WRONG BRANCH:
+                                ; tm_update reaches the performance list by
+                                ; falling through and the other two pages by
+                                ; `je tm_upd_mem` / `ja tm_upd_heap`, and
+                                ; tools/stkdepth.py followed `call` edges
+                                ; only - so the deepest thing this worker
+                                ; does was invisible to the measurement that
+                                ; sized the slice (SPEC.md 8.7.4).
+                                ;
+                                ; The heap page walks tm_upd_heap ->
+                                ; tm_rows_heap -> tm_hgrp -> tm_hhead ->
+                                ; tm_mrow_nolast -> tm_mrow_close ->
+                                ; tm_row_draw -> tm_row_lead, which is
+                                ; **96** bytes; 96 + SPEC.md 8.7's 64-byte
+                                ; floor is 160, and 256 gives the 1.60x the
+                                ; line above meant to be buying. MEASURED
+                                ; with tools/stkwater.py on the field's own
+                                ; recipe - this page open while PAINT holds
+                                ; MEDIA/OS8088.GIF - the slice reads **180**,
+                                ; and it reads 180 given a 384 slice too, so
+                                ; that is the ceiling and not a clamp. 180
+                                ; was 94% of 192.
     OS88_ICON16
     dw 0x0000, 0x7000, 0x701E, 0x701E, 0x71FE, 0x71FE, 0x7FFE, 0x7FFE
     dw 0x7FFE, 0x7FFE, 0x7FFE, 0x7FFE, 0x7FFE, 0x0000, 0x0000, 0x0000
@@ -927,6 +951,10 @@ tm_entry:
                                 ; unlocks OSAPI_WM_DAMAGE, which answers
                                 ; "whole" without this flag (SPEC.md 11.90.2's
                                 ; interlock)
+    push si                     ; 'About Task Manager' above the Close the
+    mov si, tm_about            ; kernel already puts in our pull-down
+    call OSAPI_ABOUT_SET        ; (SPEC.md 12.2) - BX is still the window and
+    pop si                      ; the slot preserves the flags
     call tm_kinit               ; preserves the flags, so the CF our ret owes
 .out:                           ; the loader is wm_create's
     pop si                      ; POP leaves the flags alone
@@ -938,7 +966,7 @@ tm_entry:
 ; out: nothing (all registers preserved)
 ;
 ; Latches on SUCCESS only, so a refusal is retried by the next paint rather
-; than being permanent - MAX_TASKS is 12 and shared, and closing one Timer
+; than being permanent - MAX_TASKS is 14 and shared, and closing one Timer
 ; frees a slot. Without a worker the window is still correct, just static
 ; until something repaints it.
 ; -----------------------------------------------------------------------------
@@ -960,6 +988,65 @@ tm_hire:
 
 ; --- window template: {x, y, w, h, title, paint, onkey, onclick} words -------
     OS88_PREFER tm_pref, TM_PREF_W1, TM_PREF_H,  TM_PREF_W1, TM_PREF_H,  TM_PREF_W2, TM_PREF_H
+
+; =============================================================================
+; 'About Task Manager' - the credit card (SPEC.md 12.2, 20.5.1)
+; =============================================================================
+; The card is os88ui.inc's. What is here is the flag, the painter drawing it
+; last, the click taking it down, and the worker's guard - tm_worker refreshes
+; the same content on a timer and its tm_update is INCREMENTAL, so without the
+; guard it would letter changed rows straight through the card rather than
+; over the whole of it.
+
+; -----------------------------------------------------------------------------
+; tm_about - the OSAPI_ABOUT_SET handler (slot 0x01E0)
+; in:  SI = our window ptr; the UI task, gfx lock HELD
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+tm_about:
+    push bx
+    push si
+    mov byte [tm_abon], 1
+    mov bx, si
+    mov si, tm_ablines
+    call os88ui_about               ; arms the clip itself: a menu dispatch
+    pop si                          ; arrives without one (SPEC.md 11.3)
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_abdismiss - take the card down if it is up
+; in:  SI = our window ptr; gfx lock held
+; out: CF = 1 the click was spent doing it; preserves every register
+;
+; tm_clear_content + tm_draw_full, which is the view swap's own pair: this
+; window carries WF_OWNBG (SPEC.md 11.90.1), so nothing else erases the
+; ground under the card, and the incremental painter would leave it standing.
+; -----------------------------------------------------------------------------
+tm_abdismiss:
+    cmp byte [tm_abon], 0
+    je .none
+    push bx
+    mov byte [tm_abon], 0
+    mov bx, si
+    call OSAPI_WM_CLIP_SET      ; nothing has armed a region for a click
+    jc .gone                    ; (SPEC.md 11.3)
+    call tm_clear_content       ; SI = window ptr, as the view swap calls it
+    call tm_draw_full
+.gone:
+    pop bx
+    stc
+    ret
+.none:
+    clc
+    ret
+
+; --- the About card's lines (SPEC.md 20.5.1) ----------------------------------
+tm_ablines:
+    dw tm_ab1, tm_ab2, tm_ab3, 0
+tm_ab1:     db 'Task Manager for os8088', 0
+tm_ab2:     db 0
+tm_ab3:     db 'Contributed by Elendilon', 0
 
 tm_tpl:     dw 250, 100, 232, 312, tm_ttl, tm_paint, 0, tm_click
 tm_ttl:     db 'Task Manager', 0
@@ -1291,6 +1378,12 @@ tm_worker:
                                 ; all. CF=1 here is "wholly invisible" or
                                 ; "more than 16 fragments", which genuinely
                                 ; do mean skip. gfx_unlock disarms it
+    cmp byte [tm_abon], 0       ; the credits are up: the UI task owns the
+    jne .skip                   ; content until a click takes them down, and
+                                ; tm_abdismiss repaints it whole (SPEC.md
+                                ; 20.5.1). Above tm_update, not below: the
+                                ; incremental painter would letter rows
+                                ; through the card
     call tm_update              ; incremental redraw, lock held
     mov ax, [tm_qkey]           ; THE PAINT HAPPENED, so record what tm_quiet
     mov [tm_elck + 2*TMC_QUIET], ax     ; asked about (SPEC.md 28.6.1). Here
@@ -1834,8 +1927,8 @@ tm_sample:
     ; TWO terms, not three. There used to be a third - a sum of every resident
     ; package REGION off the instance snapshot - because a region came out of
     ; a pool that the claim heap knew nothing about. Since SPEC.md 20.1 a
-    ; region IS a heap claim, so mem_claimed_kb already counts every one of
-    ; them and the sum counted them a second time.
+    ; region IS a heap claim, so the kernel's mem_sum_kb already counts every
+    ; one of them and the sum counted them a second time.
     ;
     ; That is what let this figure exceed the machine: with a package loaded,
     ; used was over by its region, and a 20KB menu save-under landing on top
@@ -1997,8 +2090,17 @@ tm_paint:
 .out:
     call tm_dmg_none            ; the band is this paint's and no later one's
     call tm_promise             ; ...and the promise, re-stated: free when
-    ret                         ; nothing changed, and it follows a resize for
-                                ; the same nothing
+    cmp byte [tm_abon], 0       ; nothing changed, and it follows a resize for
+    je .noab                    ; the same nothing
+    push bx                     ; ...and the About card LAST, over the rows it
+    push si                     ; is opaque about (SPEC.md 20.5.1)
+    mov bx, si
+    mov si, tm_ablines
+    call os88ui_about_d         ; _d: this paint's region is already armed
+    pop si
+    pop bx
+.noab:
+    ret
 
 ; -----------------------------------------------------------------------------
 ; tm_clear_content - white-fill this window's whole content
@@ -2510,6 +2612,8 @@ tm_click:
     push bx
     push cx
     push dx
+    call tm_abdismiss           ; the credits are up: this click is spent
+    jc .out                     ; taking them down rather than cycling the page
 
     cmp byte [tm_view], 2       ; the heap page's SCROLL BAR gets the point
     jne .cycle                  ; first (SPEC.md 28.4.4), and answers CF = 1
@@ -3171,12 +3275,21 @@ tm_rows_mem:
 
     ; --- the kernel's own buffers, one row each -------------------------------
     ; Indented under System, and between them they account for every byte of
-    ; it: image + scratch + cold code, the task stacks, the disk buffers and
-    ; the FAT window are the whole of KERN_SIZE (SPEC.md 2). All four figures
-    ; come out of one osapi_sys_kb call, and they sum to the System row above
-    ; exactly - which is the property that block is built around, and which
-    ; the cold segment quietly broke while these were constants of this
-    ; module's own (SPEC.md 20.9).
+    ; it: image + scratch + cold code + the kernel's own tables, the task
+    ; stacks, the disk buffers and the FAT window are the whole of KERN_SIZE
+    ; (SPEC.md 2). All four figures come out of one osapi_sys_kb call, and
+    ; they sum to the System row above exactly - which is the property that
+    ; block is built around, and which the cold segment quietly broke while
+    ; these were constants of this module's own (SPEC.md 20.9).
+    ;
+    ; SUMMING IS NOT THE WHOLE OF BEING RIGHT, and this list is where that was
+    ; learned: `Disk bufs` totalled correctly at 6K for years while the
+    ; buffers it names are 3,584 bytes, because it was the residual the other
+    ; rows' rounding fell into. Since SPEC.md 20.9 every SK_*_KB is a declared
+    ; span rounded cumulatively, so the column still totals and no row is a
+    ; kilobyte out. Nothing here changed - the rows have read this block since
+    ; the window left the kernel, which is exactly why the fix is one file
+    ; away and not four.
     mov bx, tm_s_bimg           ; NO square: the image is drawn in the same
     mov cx, [tm_kb+SK_IMG]      ; gray as the System row above it, and a
     xor dx, dx                  ; square that repeats one is not a legend
@@ -3638,6 +3751,7 @@ tm_put2:
 ; is 27 characters at two-digit counts and there is no room for the padding.
 ; -----------------------------------------------------------------------------
 tm_putn:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push ax
     push bx
     push cx
@@ -6248,7 +6362,8 @@ tm_put3:
 ; them on screen.
 %define OS88UI_BARONLY
 %define OS88UI_SCROLL
-%include "os88ui.inc"
+%define OS88UI_ABOUT            ; ...and the standard About card (SPEC.md
+%include "os88ui.inc"           ; 20.5.1), which draws no button either
 
     OS88_BSS TM_BSS_TOTAL
     OS88_IMAGE_END
@@ -6465,4 +6580,6 @@ tm_dmg      equ tm_hsb + 14  ; THIS PAINT'S DAMAGE, absolute, x1 y1 x2
                                        ; lettered again. Read by tm_dmg_hit
                                        ; once per chunk and by nothing else
 
-TM_BSS_TOTAL equ tm_dmg + 8 - os88_image_end
+tm_abon     equ tm_dmg + 8   ; byte: the About card is up (SPEC.md 20.5.1)
+
+TM_BSS_TOTAL equ tm_abon + 1 - os88_image_end

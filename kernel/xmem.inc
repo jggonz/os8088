@@ -24,12 +24,18 @@
 ; reach. kern_small had already dropped it outright (SPEC.md 41.11); this is
 ; the same removal for kern_big, keeping the capability.
 ;
-; NOTHING IN THE TREE ALLOCATES OUT OF THE POOL TODAY, and that is worth
-; knowing before reading any comment here as a description of live behaviour.
-; Exactly one consumer has ever existed - SPEC.md 53.6.1's fullscreen desktop
-; stash - and it was removed. What remains is a published package ABI
-; (SPEC.md 20.8 rule 4) with no caller inside the kernel, which is a
-; deliberate state and not an oversight; consumers are expected.
+; THE POOL HAS A KERNEL CONSUMER, and this banner said the opposite for
+; several releases - which is worth knowing before reading any comment here
+; as a description of live behaviour, and before deleting anything on the
+; strength of it. **kernel/clone.inc declares all four published slots and
+; calls every one**: clo_xmsup asks xm_caps for the free KB and xm_alloc for
+; a whole floppy's worth, so a same-drive clone makes ONE trip to the disk
+; box instead of twenty-two (SPEC.md 18.99.4); clo_free gives it back, and
+; xm_copy moves the image. It is also a package ABI (SPEC.md 20.8 rule 4).
+; The sentence that used to be here - "nothing in the tree allocates out of
+; the pool today", true when SPEC.md 53.6.1's fullscreen desktop stash was
+; removed and never revisited - is what a size pass would have deleted a
+; live subsystem on.
 ;
 ; [xm_kb] IS THE ONE GATE, and it means two things at once on purpose: "there
 ; is a store" and "the overlay is attached". The kernel writes it LAST, after
@@ -104,20 +110,38 @@ XMC_SIZE    equ 12
 section .text
 
 xm_fname:   db 'XMEM.DRV', 0
-xm_title:   db 'XMS', 0         ; nothing draws it - there is no row and no
-                                ; caption - but DRVR_TITLE is not allowed to
-                                ; be 0 in a record the shared loader walks
 
 xm_row:
     dw PKG_DISP, 0              ; DRVR_DISP, DRVR_SEG: together the far
                                 ; pointer xm_dsp calls through
-    dw xm_fname, xm_title       ; DRVR_FILE, DRVR_TITLE
+                                ; DRVR_TITLE POINTS AT THE FILE NAME, and that
+                                ; is not laziness: the field may not be 0 in a
+                                ; record the shared loader walks, and there is
+                                ; no row, no caption and no Drivers page here,
+                                ; so nothing ever draws it. Every reader of
+                                ; DRVR_TITLE in the tree takes BX from
+                                ; drvf_drv_row, i.e. from drv_tab, and this
+                                ; record is not in drv_tab by construction
+                                ; (SPEC.md 41.12). blank.inc's ss_row - the
+                                ; kernel's other DRVC_OVL record - already
+                                ; does exactly this
+    dw xm_fname, xm_fname       ; DRVR_FILE, DRVR_TITLE
     dw 0, 0                     ; DRVR_KB, DRVR_ENT
     db DRVC_OVL                 ; DRVR_CLASS - not a class the kernel knows
     db 0                        ; DRVR_WANT - xm_sniff is the only writer, and
                                 ; no settings file can reach it
-    db DRVE_OK                  ; DRVR_ERR
-    db 0                        ; DRVR_PAD
+    db DRVE_OK                  ; DRVR_ERR - and NO DRVR_PAD byte after it.
+                                ; The pad exists to make DRVR_SIZE 16 so that
+                                ; drv_row can index drv_tab with `mov cl,4 /
+                                ; shl bx,cl`; this record is deliberately not
+                                ; in drv_tab, so nothing ever strides over it.
+                                ; Offset 15 is written and read by nothing
+                                ; anywhere in the tree - the last field any of
+                                ; drv_load_at / drv_check / drv_release /
+                                ; drv_call touches is DRVR_ERR at 14. The
+                                ; "sixteen bytes shaped like a drv_tab row" of
+                                ; SPEC.md 41.12 is about the FIELDS, which are
+                                ; unchanged and at the same offsets
 
 xm_kb:      dw 0                ; THE GATE. KB the pool holds, and "the
                                 ; overlay is attached" - see the file header.
@@ -126,7 +150,9 @@ xm_kb:      dw 0                ; THE GATE. KB the pool holds, and "the
 ; -----------------------------------------------------------------------------
 ; xm_sniff - is there memory above 1MB? (SPEC.md 41.12.1)
 ;
-; in:       [cpu_tier] published (cpu_detect has run)
+; in:       nothing - IT RUNS cpu_detect ITSELF, so [cpu_tier] is published by
+;           the time the compare below reads it (kern_big only; kern_small has
+;           no sniff and kmain calls cpu_detect directly there)
 ; out:      nothing (all registers preserved). On a hit, xm_row's DRVR_WANT
 ;           is set and xm_boot will read the image
 ;
@@ -155,9 +181,19 @@ xm_kb:      dw 0                ; THE GATE. KB the pool holds, and "the
 ; mount writes over the overlay, so a probe called from there would be running
 ; FAT. The overlay costs no RAM at all, so the sniff is free of both guards.
 ; -----------------------------------------------------------------------------
-section .ovl
+section .ovlw
 
 xm_sniff:
+    call FAT_SEG:cpu_detect     ; THE TIER THIS READS, PUBLISHED FIRST. kmain
+                                ; made two adjacent OVWCALLs and now makes one:
+                                ; 5 resident bytes of .text for 5 of overlay,
+                                ; which is forfeit at the first mount. A far
+                                ; call into the segment we are already running
+                                ; in, because cpu_detect ends `retf` and must
+                                ; keep doing so - kern_small still calls it
+                                ; from kmain, and os88ovlchk refuses a near
+                                ; call to a retf body. The ORDER is what it
+                                ; always was; nothing else moved
     push ax
     cmp byte [cpu_tier], CPU_8086
     je .out                     ; the target machine leaves here: an 8088 has
@@ -170,7 +206,14 @@ xm_sniff:
     mov byte [xm_row+DRVR_WANT], 1
 .out:
     pop ax
-    ret
+    retf                        ; FAR, and the shim that used to own this
+                                ; return is deleted (SPEC.md 2.6.1, 2.5.2):
+                                ; the caller names this body directly through
+                                ; OVWCALL - a plain `call FAT_SEG:%%1` - and
+                                ; nothing near-calls it. NOT OVLGATE1: that is
+                                ; the .ovl half's gate and this body is .ovlw,
+                                ; which the first mount overwrites rather than
+                                ; spl_finish
 
 section .cold                   ; xm_boot is COLD, and that is not a saving:
                                 ; every routine it calls - drv_load_at,
@@ -202,6 +245,14 @@ section .cold                   ; xm_boot is COLD, and that is not a saving:
 ; published - the snd_live ordering of SPEC.md 34.7. Every cell below tests
 ; that one word, so it must not be visible before what it gates.
 ; -----------------------------------------------------------------------------
+section .ovl                   ; THE BOOT OVERLAY (SPEC.md 2.5.2,
+                                ; docs/LAST-DROP-BYTES.md row 5): kmain calls
+                                ; this once, right at the end, and the XMS
+                                ; driver it attaches outlives it - what does not
+                                ; is the attaching. The three drv_* edges below
+                                ; go out through the far entries in driver.inc's
+                                ; `.cold` block, which is where every other
+                                ; cross-segment caller of them already goes
 xm_boot_x:
     push ax
     push bx
@@ -214,12 +265,12 @@ xm_boot_x:
     cmp byte [xm_row+DRVR_WANT], 0
     je .out                     ; no store on this machine: not one sector
     mov bx, xm_row
-    call drv_load_at            ; loaded and validated, NOT attached
+    call COLD_SEG:drvf_drv_load_at            ; loaded and validated, NOT attached
     jc .out
     mov bp, [bx+DRVR_ENT]
     mov al, DRVV_ATTACH
     mov ah, XM_ABI_VER          ; ...which the image checks against its own
-    call drv_call               ; out: SI = the XMV table, AX = KB, DL = the
+    call COLD_SEG:drvf_drv_call               ; out: SI = the XMV table, AX = KB, DL = the
     jc .refuse                  ; CPU_F_* that actually verified
     push ax
     push dx
@@ -237,15 +288,25 @@ xm_boot_x:
                                 ; The row is a link-time constant, so asking
                                 ; for it again costs three bytes and removes
                                 ; the cross-boundary assumption entirely
-    mov es, [bx+DRVR_SEG]       ; stage the table out of its segment, the
-    mov di, xm_svc              ; dsk_get_dir idiom: every later dispatch is
-    mov cx, XMV_SIZE / 2        ; then a near read and one far call
-.stage:
-    mov ax, [es:si]
-    mov [di], ax
-    add si, 2
-    add di, 2
-    loop .stage
+    mov ax, [bx+DRVR_SEG]       ; stage the table out of its segment, the
+                                ; dsk_get_dir idiom: every later dispatch is
+                                ; then a near read and one far call.
+                                ; DS AND ES SWAP ROUND FOR IT, because movsw
+                                ; reads DS:SI and writes ES:DI and the source
+                                ; is the image's: the row is read through DS
+                                ; BEFORE DS moves, and ES takes the KERNEL's
+                                ; from DS rather than from CS - this body is
+                                ; `.ovl` and CS is the BLOB's segment here,
+                                ; not KERNEL_SEG
+    push ds
+    push ds
+    pop es                      ; ES = KERNEL_SEG, the destination
+    mov ds, ax                  ; DS = the image, the source
+    mov di, xm_svc
+    mov cx, XMV_SIZE / 2
+    cld
+    rep movsw
+    pop ds
     pop dx
     pop ax
     and dl, CPU_F_A20 | CPU_F_HMA | CPU_F_UNREAL
@@ -271,7 +332,7 @@ xm_boot_x:
     pop cx
     pop bx
     pop ax
-    ret
+    retf                        ; FAR: kmain reaches this through OVLGATE1
 .refuse:
     mov bx, xm_row              ; ...and here too, for the same reason. This
                                 ; path worked BY LUCK on the machine it was
@@ -289,12 +350,11 @@ xm_boot_x:
                                 ; but a debugger reading the row should find
                                 ; the truth rather than the DRVE_OK the load
                                 ; stamped on its way past
-    call drv_release            ; BX = the row; the claim goes back and
+    call COLD_SEG:drvf_drv_release            ; BX = the row; the claim goes back and
     jmp short .out              ; nothing was hooked
 
-; --- the far entry kmain reaches xm_boot through (SPEC.md 2.6) --------------
-xmf_xm_boot:        call xm_boot_x
-                    retf
+; The far entry kmain used to reach xm_boot through is GONE with the move: the
+; body is in the blob and OVLGATE1 is the crossing now (SPEC.md 2.5.2).
 
 section .text
 
@@ -306,6 +366,13 @@ section .text
 ; out: whatever it returns
 ; clobbers: BP; DS and ES restored
 ;
+; THE ES RESTORE IS LOAD-BEARING FOR EVERY CALLER, and that is now the whole
+; of the guarantee rather than half of it. All five - xm_caps, xm_alloc,
+; xm_free, xm_copy and xm_release_rec - are published-slot or teardown bodies
+; that promise the caller's ES back, and NOT ONE of them banks ES itself; the
+; `push es`/`pop es` below is what they promise with. No test asserts ES
+; across slot 0x01A8, so a future edit that drops it would be silent.
+;
 ; drv_svc_call with the row baked in rather than taken in BX, and that is the
 ; point: BX is an ARGUMENT here (BL carries the requesting instance to ALLOC
 ; and FREE), so a dispatcher that spent it would silently become the owner
@@ -315,6 +382,19 @@ section .text
 ; Callers must gate on [xm_kb] first: this one does not, because every caller
 ; needs its own tier-0 answer anyway and a shared refusal would have to invent
 ; a code that fits none of them.
+; -----------------------------------------------------------------------------
+; xm_have - is there an XMS pool at all?  ZF = 1 = no.
+; clobbers: flags only - and `ret` writes none, so the answer crosses it.
+;
+; The five entry points each keep their OWN refusal below their own `je`: a
+; shared one would have to invent a code that fits none of them, which is the
+; reason this file gives for not sharing, and that reason is about the
+; REFUSAL and not about the compare.
+; -----------------------------------------------------------------------------
+xm_have:
+    cmp word [xm_kb], 0
+    ret
+
 ; -----------------------------------------------------------------------------
 xm_dsp:
     push ds
@@ -371,7 +451,7 @@ xm_ownbl:
 ; machine.
 ; -----------------------------------------------------------------------------
 xm_caps:
-    cmp word [xm_kb], 0
+    call xm_have
     je .none
     push bp
     mov bp, [xm_svc+XMV_CAPS]
@@ -380,10 +460,10 @@ xm_caps:
     ret
 .none:
     xor ax, ax
-    xor dx, dx
-    xor cx, cx
-    mov bl, XM_MAX_BLKS
-    ret
+    cwd                         ; DX = 0, in ONE byte: AX is 0 on the line
+    xor cx, cx                  ; above so the sign extension is a zero, and
+    mov bl, XM_MAX_BLKS         ; CWD writes no flag, so the CF this contract
+    ret                         ; promises is still the `xor`'s 0
 
 ; -----------------------------------------------------------------------------
 ; xm_alloc - first-fit a run of extended memory (osapi slot 0x0198's body)
@@ -395,16 +475,16 @@ xm_caps:
 ; clobbers: nothing else (flags)
 ; -----------------------------------------------------------------------------
 xm_alloc:
-    cmp word [xm_kb], 0
+    call xm_have
     je .none
     push bp
-    push bx
-    call xm_ownbl               ; BL = who is asking
-    mov bp, [xm_svc+XMV_ALLOC]
-    call xm_dsp
-    pop bx                      ; pop leaves CF alone, and BX is no output
-    pop bp
-    ret
+    mov bp, [xm_svc+XMV_ALLOC]  ; the ONE thing that differs from xm_free, so
+    jmp short xm_free.stamp     ; it is loaded here and everything after it is
+                                ; shared. The label is xm_free's own local and
+                                ; not a new top-level one on purpose: a bare
+                                ; label between the two routines would
+                                ; re-parent xm_free's `.none` and NASM refuses
+                                ; to assemble the file
 .none:
     xor ax, ax
     stc
@@ -419,14 +499,20 @@ xm_alloc:
 ; clobbers: nothing (DX:AX preserved; flags)
 ; -----------------------------------------------------------------------------
 xm_free:
-    cmp word [xm_kb], 0
+    call xm_have
     je .none
     push bp
-    push bx
-    call xm_ownbl
     mov bp, [xm_svc+XMV_FREE]
+.stamp:                         ; ...and xm_alloc arrives HERE, having pushed
+                                ; exactly BP too - the arrival depths match,
+                                ; which is the property stkbalance checks
+    push bx
+    call xm_ownbl               ; BL = who is asking. It must not spend BP,
+                                ; and it does not: xm_ownbl -> snd_req_inst ->
+                                ; inst_caller -> sch_currec touches BX and DH
+                                ; and nothing else
     call xm_dsp
-    pop bx
+    pop bx                      ; pop leaves CF alone, and BX is no output
     pop bp
     ret
 .none:
@@ -443,7 +529,8 @@ xm_free:
 ; out:      CF = 0 done; CF = 1 and AX = 1 no store (or the transport
 ;           refused) / 2 the range is not inside a block this caller owns /
 ;           3 bad length
-; clobbers: nothing else (ES restored per SPEC.md 1; flags)
+; clobbers: nothing else (ES restored per SPEC.md 1 - by xm_dsp's bank, which
+;           this body leans on rather than duplicating; flags)
 ;
 ; UI-TASK CONTEXT (SPEC.md 41.8): the entry proc or any window callback, and
 ; THE GFX LOCK MAY BE HELD - a callback moving a buffer to or from the store
@@ -471,32 +558,45 @@ xm_copy:
     push si
     push di
     push bp
-    push es
-    cmp word [xm_kb], 0
+    call xm_have                ; ...and NO `push es`: nothing between here and
+                                ; the return writes ES. The one ES reference in
+                                ; the body is the `mov ax, es` READ below;
+                                ; xm_have, xm_ownbl and its chain never name
+                                ; it; and xm_dsp banks ES itself around the far
+                                ; call into the image, so even a driver that
+                                ; trashes it is covered. THAT IS NOW A
+                                ; DEPENDENCY rather than belt and braces, and
+                                ; it is named at xm_dsp
     je .e1
-    mov [xm_cblk+XMC_EXT], ax   ; the extended end, as handed to us
-    mov [xm_cblk+XMC_EXT+2], dx
-    mov [xm_cblk+XMC_LEN], cx
-    mov al, 0
-    or di, di
-    jz .dir
-    mov al, 1
-.dir:
-    mov [xm_cblk+XMC_DIR], al
-    mov ax, es                  ; the conventional end, as linear ES*16 + SI
-    mov dx, ax
+    mov bp, si                  ; bank the caller's conventional OFFSET, and
+    mov si, xm_cblk             ; point SI at the block: every store below is
+                                ; then a disp8 form instead of a disp16 one.
+                                ; BP is free until the dispatch offset is
+                                ; loaded, and xm_ownbl preserves it (the same
+                                ; chain xm_alloc's tail relies on)
+    mov [si+XMC_EXT], ax        ; the extended end, as handed to us
+    mov [si+XMC_EXT+2], dx
+    mov [si+XMC_LEN], cx
+    neg di                      ; DI's direction flag as 0/1 without a branch:
+    sbb al, al                  ; `neg` sets CF iff the operand was non-zero,
+    neg al                      ; `sbb al,al` turns that into 00/FF and `neg`
+                                ; into 0/1. It SPENDS DI, which is banked at
+                                ; entry and read nowhere below - the epilogue
+                                ; pops it.
+    mov [si+XMC_DIR], al
+    mov ax, es                  ; the conventional end, as linear ES*16 + SI,
+    mov dx, ax                  ; SI being the offset now parked in BP
     mov cl, 4
     shl ax, cl
     mov cl, 12
     shr dx, cl
-    add ax, si
+    add ax, bp                  ; a REGISTER add, so SS-vs-DS does not reach it
     adc dx, 0
-    mov [xm_cblk+XMC_CONV], ax
-    mov [xm_cblk+XMC_CONV+2], dx
+    mov [si+XMC_CONV], ax
+    mov [si+XMC_CONV+2], dx
     call xm_ownbl
-    mov [xm_cblk+XMC_INST], bl
-    mov si, xm_cblk             ; xm_dsp points ES at KERNEL_SEG itself
-    inc byte [sch_lock]
+    mov [si+XMC_INST], bl       ; SI is already the block xm_dsp hands the
+    inc byte [sch_lock]         ; image at ES:SI, ES being KERNEL_SEG
     mov bp, [xm_svc+XMV_COPY]
     call xm_dsp
     dec byte [sch_lock]         ; dec leaves CF alone
@@ -505,7 +605,6 @@ xm_copy:
     mov ax, 1
     stc
 .out:
-    pop es
     pop bp
     pop di
     pop si
@@ -521,14 +620,19 @@ xm_copy:
 ; out:      nothing
 ; clobbers: nothing (flags)
 ;
-; snd_release_rec's shape, byte for byte, and for the same reason: the
-; SPEC.md 29.4 teardown sites hold the record, the release wants the slot, and
-; the conversion belongs beside the release rather than at three call sites.
+; FOUR CALLERS, and the routine's own header claimed three for a year. Three
+; are the SPEC.md 29.4 teardown sites, and they no longer arrive here directly:
+; instance.inc's inst_rel_rec does the record -> slot conversion once for the
+; sound release and this one together and TAIL-JUMPS in, so this entry is
+; reached at the same depth it always was. The fourth is ld_unreserve
+; (loader.inc:157), SPEC.md 41.5.1's abort sweep, which owes the blocks and
+; not a sound grant and comes in far through cw_xm_release_rec.
 ;
-; Called from the three sites snd_release_rec is called from, immediately
-; beside it: app_close_win's synchronous leg, inst_task_die, and
-; inst_pkg_alive's winless leg. `git grep snd_release_rec kernel/instance.inc`
-; is still the list, and a fourth teardown site owes both.
+; That fourth caller is why the two releases are not simply one body: it is in
+; another file, it names this routine and not the sound one, and the grep this
+; header used to recommend - `git grep snd_release_rec kernel/instance.inc` -
+; could not find it by construction. It very nearly cost a size pass a wrong
+; finding. The list is `grep -rn xm_release_rec`, over the whole tree.
 ;
 ; It was called from none of them for a year: the #51 integration merge
 ; dropped all three and the comment describing them survived the code, which
@@ -544,16 +648,13 @@ xm_copy:
 ; slot and this will never free it. Claim from a callback (SPEC.md 41.5.1).
 ; -----------------------------------------------------------------------------
 xm_release_rec:
-    cmp word [xm_kb], 0
+    call xm_have
     je .out                     ; no overlay, so no table and nothing to free
     push ax
     push bx
     push cx
     push bp
-    mov ax, di
-    sub ax, inst_tab
-    mov cl, 5                   ; I_RECSZ = 32
-    shr ax, cl                  ; AL = the instance slot
+    call inst_idx               ; AL = the instance slot
     mov bp, [xm_svc+XMV_RELINST]
     call xm_dsp
     pop bp
@@ -614,7 +715,7 @@ section .text
 ; -----------------------------------------------------------------------------
 xm_caps:
     xor ax, ax
-    xor dx, dx
+    cwd                         ; DX = 0 in one byte - see the kern_big twin
     xor cx, cx
     mov bl, XM_MAX_BLKS
     ret

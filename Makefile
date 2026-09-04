@@ -19,9 +19,17 @@ VMPORT ?= off
 QEMU  := qemu-system-i386 -machine pc,vmport=$(VMPORT)
 BUILD := build
 IMG   := $(BUILD)/os8088.img
+# ...and the 1.2MB 5.25" HD pair (SPEC.md 19), which is the AT-class machine
+# with a 5.25" drive and nothing else in it. That machine can read the 360KB
+# disk - a 1.2MB drive reads 360KB media - but it then gets 354 clusters of
+# software on a drive with 2,371, and the media disk has to be swapped in for
+# BEVERLY.MOD. This is the same full payload the 1.44MB and 720KB disks carry,
+# in the geometry that machine's own drive was sold as.
+IMG120 := $(BUILD)/os8088-120.img
 IMG720 := $(BUILD)/os8088-720.img
 IMG360 := $(BUILD)/os8088-360.img
 APPSIMG := $(BUILD)/apps.img
+APPSIMG120 := $(BUILD)/apps120.img
 APPSIMG720 := $(BUILD)/apps720.img
 APPSIMG360 := $(BUILD)/apps360.img
 # ...and the MEDIA disk, which exists at 360KB ALONE (SPEC.md 24.4): the third
@@ -73,6 +81,11 @@ VMEGA := $(CURDIR)/vm/xt-ega
 # cards in it, each on its own monitor window.
 VMMULTI := $(CURDIR)/vm/xt-multimon
 VM286 := $(CURDIR)/vm/286
+# ...and the same 286 with two 1.2MB 5.25" drives instead of two 3.5" ones
+# (SPEC.md 19). It is the only machine here that can boot that geometry at
+# all: every other AT-class profile is `fdd_type = 35_2hd`, and a 5.25" HD
+# drive is what the 1.2MB pair exists for.
+VM286525 := $(CURDIR)/vm/286-525
 VM386SX := $(CURDIR)/vm/386sx
 VM386DX := $(CURDIR)/vm/386dx
 # ...and the SAME 386DX with 4MB in it, for the store above 1MB (SPEC.md 41).
@@ -314,6 +327,32 @@ endif
 VIDDEF += -DBOOT_PROFILE
 endif
 
+# STKDIAG=1 compiles in docs/STACK-SLOTS-PLAN.md's task-stack diagnostic: a
+# sentinel written into the free bytes below SP around sch_isr's
+# `call far [sch_old08]`, so what the ROM's int 08h handler scrubs is what it
+# COSTS a task stack - the one number in that plan that came from an A/B
+# between two kernels under one BIOS, and the one that has to be true on a
+# 5150, an XT clone and a 386 before any slice is made smaller.
+#
+# It boots to its own panel with no input at all, which is the point: the quiet
+# phase is the reading that matters most and the only one a human cannot
+# perturb, so it must not need a double-click to start. Phases 2 and 3 ask for
+# the mouse and the keyboard on the glass, and a phase nobody performs reads
+# equal to the one before it rather than leaving a hole. Published in SPEC.md
+# 57's registry as 'SD' as well, so an emulator run is read rather than
+# photographed (tools/stkdiagread.py).
+#
+# It REFUSES to coexist with QUANTUM= for BOOTPROF's reason one step removed:
+# the phase clock is counted in system ticks and 53.2.1 divides the very period
+# those are, so every phase would end early by a ratio.
+ifneq ($(STKDIAG),)
+ifneq ($(QUANTUM),)
+$(error STKDIAG=1 and QUANTUM= cannot be built together: QUANTUM reprograms \
+the PIT divisor (SPEC.md 53.2.1) and the phase clock is counted in ticks)
+endif
+VIDDEF += -DSTK_DIAG
+endif
+
 # MOUIDSLOW=1 always spends the whole of SPEC.md 9.4.1's identify window,
 # instead of closing it as soon as a port has answered LIKE A MOUSE and gone
 # quiet (SPEC.md 9.4.5). The pre-9.4.5 mouse_init - 1,200 ms rather than
@@ -531,25 +570,105 @@ endif
 # disagree (SPEC.md 2.9). The sector needs it to know how many sectors to
 # fetch before anything has told it; kernel.asm asserts that stage 2 fits.
 BOOT2_SECS := $(shell sed -n 's/^BOOT2_SECS  *equ  *\([0-9][0-9]*\).*/\1/p' kernel/kernel.asm)
-# ...and SPLSTARS' blob is a sector longer (SPEC.md 15.3.8.5), read from its own
-# constant for the reason above: the two must not be able to disagree. The
-# %ifdef that picks it is in kernel.asm; this is the SECTOR the boot sector is
-# told to fetch, and a boot sector fetching 13 for a 14-sector stage 2 jumps
-# into a blob whose last sector never landed.
-ifneq ($(SPLSTARS),)
-BOOT2_SECS := $(shell sed -n 's/^BOOT2_SECS_STARS  *equ  *\([0-9][0-9]*\).*/\1/p' kernel/kernel.asm)
-endif
+# THERE IS ONE BLOB LENGTH, AND THE SECOND `sed` THAT FOUND SPLSTARS' IS GONE.
+# `BOOT2_SECS_STARS` was 9 because the twinkle's `.boot2` and the boot overlay
+# came to 4,193 of a 4,096-byte blob (SPEC.md 15.3.8.5), and it stood here as an
+# `ifneq ($(SPLSTARS),)` override. The splash's size pass took that arm to
+# 2,568 + 1,421 = 3,993 and the override went with it. What it was really
+# costing is KSIG_OFF below: a canary offset had to be legal for BOTH lengths,
+# and that intersection is four sectors wide with every one of them at the top
+# of `.text`.
 BOOT2_PAD  := $(shell echo $$(( $(BOOT2_SECS) * 512 )))
 
-# IT IS A MEMORY OFFSET, AND THE FILE SECTOR IS 13 FURTHER IN (SPEC.md 2.9).
-# Stage 2 sits in front of the image now, so the sector this names in KERNEL.SYS
-# is KSIG_OFF/512 + BOOT2_SECS - which is why KSIGDEF2 below adds BOOT2_PAD to
-# read the word out. The number was left at the one that used to put it on file
-# sector 36, and that moved the probe to file sector 49: a run's FIRST HALF on
-# 360KB and on 1.44MB, the half that loads correctly on exactly the machine the
-# canary exists to catch. 11776 puts it back on 36 - the same sector the
-# argument above is about, still in the middle of the common band 33..38.
-KSIG_OFF := 11776
+# IT IS A MEMORY OFFSET, AND THE FILE SECTOR IS BOOT2_SECS FURTHER IN (SPEC.md
+# 2.9). Stage 2 sits in front of the image now, so the sector this names in
+# KERNEL.SYS is KSIG_OFF/512 + BOOT2_SECS - which is why KSIGDEF2 below adds
+# BOOT2_PAD to read the word out. The number was once left at the one that used
+# to put it on file sector 36, and that moved the probe to file sector 49: a
+# run's FIRST HALF on 360KB and on 1.44MB, the half that loads correctly on
+# exactly the machine the canary exists to catch.
+#
+# **THIS CONSTANT IS TIED TO BOOT2_SECS AND HAS TO MOVE WITH IT.** SPEC.md
+# 2.9.12 took the blob from 13 sectors to 19, which slid the same memory offset
+# six sectors further into the file and straight out of the band - 11776 landed
+# on file sector 42, a first half on all three geometries. tests/unit/t_canary.py
+# re-derives the band from every shipped image's own BPB and is what caught
+# this - it is in the FAST tier, so a blob resize that forgets this line stops
+# the build rather than shipping a canary that cannot fire.
+#
+# **AND IT IS TIED TO THE SET OF SHIPPED GEOMETRIES, which is what moved it
+# last.** The common band is the INTERSECTION over every shipped disk, and the
+# 1.2MB 5.25" geometry (SPEC.md 19) does not overlap the old one anywhere: its
+# data area starts at LBA 29 and its run is 30 sectors, so file sector 36 - the
+# middle of 33..38, which served the other three for two years - sits 5 sectors
+# into a run's FIRST half there. The canary would have been loaded correctly on
+# precisely the machine it exists to catch, on one disk of the four, silently.
+# That is the same defect the paragraph above is about, and the fourth geometry
+# re-introduced it rather than the constant drifting.
+#
+# **AND IT IS TIED TO THE SIZE OF `.text`, which is what moved it last and is
+# now the BINDING constraint rather than the band.** The band is a property of
+# the geometries; what has to be true as well is that the offset names a live
+# byte, and `.text` is the only section that reaches it - `.bss` is `nobits`,
+# so from the end of `.text` to `COLD_START` the file is ZEROS. A canary in
+# that padding is not merely uninformative, it is INERT in the one direction
+# that matters: every word in it equals its neighbour a sector away, so a read
+# that flipped heads early compares equal and the canary PASSES. The kernel
+# size pass shrank `.text` 52,916 -> 50,207 and slid 51200 out of the code and
+# into that padding with no line of the boot path edited - the third distinct
+# way this constant has gone wrong, after drifting against BOOT2_SECS and
+# against the set of geometries, and the second one where a merge that
+# conflicted in no file produced it. tests/unit/t_canary.py's neighbour test
+# is what caught it.
+#
+# **AND THE DESIGN CHANGE THE LAST PARAGRAPH ASKED FOR HAS BEEN TAKEN.** This
+# constant was 50176 - file sector 98 + BOOT2_SECS - with the sentence
+# "`.text` MAY NOT FALL BELOW 50,178 BYTES ... and the answer then is a design
+# change, not a new number" written here in capitals. `.text` was 50,607, so
+# that was 429 bytes of headroom, and the kernel size pass that read it takes
+# ~600. THE DESIGN CHANGE IS THAT THERE IS ONE BLOB LENGTH NOW.
+#
+# The band is the intersection over the four shipped geometries, and it is
+# ALSO an intersection over the blob lengths, because the file sector is the
+# memory offset plus BOOT2_SECS. Re-derived from the four BPBs, in MEMORY
+# sectors:
+#
+#   crossing on all four, BOOT2_SECS = 8    : 13, 49, 98, 99, 100, 101, 102
+#   crossing on all four, BOOT2_SECS = 9    : 12, 48, 97, 98, 99, 100, 101
+#   both, which is what the old value needed : 98, 99, 100, 101
+#
+# So while SPLSTARS' blob was a sector longer, the only offsets legal at all
+# were four sectors at the very TOP of `.text` - the part a size pass eats
+# first - and 98 was the bottom of them. That is the whole reason this constant
+# ran out of room, and retiring BOOT2_SECS_STARS (SPEC.md 15.3.8.5) is what
+# gives it back: with one length the band is seven sectors wide and reaches
+# memory 6,656.
+#
+# 6656 is memory sector 13, file sector **13 + BOOT2_SECS** = 21. It is a LONE
+# sector rather than a run of five, which is what the old value's paragraph
+# preferred - a lone sector was not legal at all while there were two blob
+# lengths - and the trade is deliberate: margin against a BPB that moves is
+# worth less than margin against `.text`, because a geometry change is a
+# decision somebody takes and `.text` shrinks whenever anyone tidies anything.
+# `.text` may now fall to **6,658** before this constant needs looking at
+# again, against 50,178 before; it is 50,607 today. It is inside the first
+# 64KB, so the compare still reuses the ES the handoff already loads, and the
+# word is still the same for every geometry because KERNEL.SYS is one file.
+# tests/unit/t_canary.py re-derives every line of the table above from the
+# shipped images themselves and checks the word against BOTH its neighbours -
+# and it now refuses a second blob length outright rather than silently
+# describing only the default one.
+#
+# THE OLD "stays below bootdiag's 48-sector payload" RULE IS GONE, and it was
+# already dead when it was written down: SPEC.md 2.9 moved the canary into
+# STAGE 2, and every diagnostic that carries a short payload - bootdiagx,
+# rdiag, comscan, lptlink - is built -DFLAT_PAYLOAD, which jumps straight to
+# KERNEL_SEG:0 and never enters stage 2 at all. There has been no canary on
+# those disks for either value of this constant. What still holds is the
+# runtime fence one line down, and it is enough on its own: a payload shorter
+# than this offset gets no -DKSIG, boot/boot.asm's `%define KSIG 0` applies,
+# and stage 2's `cmp word [b2_ksig], 0` skips the compare.
+KSIG_OFF := 6656
 #
 # A PAYLOAD SHORTER THAN THE OFFSET DEFINES NO KSIG AT ALL, and that is the
 # whole of this line's second job. It used to answer 0, and a fabricated zero is
@@ -571,7 +690,15 @@ KSIGDEF = -DKSIG_OFF=$(KSIG_OFF) $$(python3 -c "import sys; d = open(sys.argv[1]
 # the FILE. The signature itself still has to be injected - it is read out of
 # the built kernel, so a kernel that carried it would need a second assembly
 # to reach a fixed point, and stage 1 is built afterwards and hands it over.
-KSIGDEF2 = $$(python3 -c "import sys; d = open(sys.argv[1], 'rb').read(); o = $(KSIG_OFF) + $(BOOT2_PAD); print('-DKSIG=%d' % int.from_bytes(d[o:o+2], 'little')) if len(d) > o + 1 else None" $(1))
+#
+# AND IT REFUSES A KERNEL SHORTER THAN THE OFFSET. KSIGDEF above prints nothing
+# for a short payload on purpose; this one MUST NOT, because boot/boot.asm
+# defaults KSIG to 0 and 0 means NO CANARY - so a kernel that came out shorter
+# than KSIG_OFF (a cut-down build, a broken split) would boot with the check
+# silently switched off. The refusal is two-sided: the message goes to stderr
+# and an option nasm rejects goes to stdout, because a failing `$(...)` on its
+# own does not fail the recipe - the sector would still assemble, canary-less.
+KSIGDEF2 = $$(python3 -c "import sys; d = open(sys.argv[1], 'rb').read(); o = $(KSIG_OFF) + $(BOOT2_PAD); print('-DKSIG=%d' % int.from_bytes(d[o:o+2], 'little')) if len(d) > o + 1 else (sys.stderr.write('KSIGDEF2: %s is %d bytes, shorter than KSIG_OFF + BOOT2_PAD = %d - no canary word to read, and KSIG=0 would switch the canary OFF\n' % (sys.argv[1], len(d), o)), print('--KSIGDEF2-REFUSED-kernel-shorter-than-KSIG_OFF'))" $(1))
 
 # ...and THE BLOB'S OWN CHECKSUM (SPEC.md 2.9.7). The kernel's load has had
 # 18.93.1's canary since the day a BIOS was caught flipping heads early; the
@@ -720,7 +847,7 @@ endif
 # feature set long before they stop fitting the same image, so the answer at
 # the ceiling is TWO KERNELS OFF ONE TREE rather than another raise.
 #
-# THE DEFAULT IS BIG. `all` ships kern_big, so the seven images, `make field`,
+# THE DEFAULT IS BIG. `all` ships kern_big, so the nine images, `make field`,
 # `make marty` and every test run the full kernel, and kern_small is the one
 # you ask for. That is the right way round for the same reason the budget
 # guards are: kern_big is what nearly every machine runs, and kern_small is a
@@ -866,6 +993,16 @@ ifneq ($(NOUIBLOCK),)
 VIDDEF += -DNOUIBLOCK
 endif
 
+ifneq ($(NOCOLFAST),)
+VIDDEF += -DNOCOLFAST
+endif
+
+# NOCOLFAST=1 takes SPEC.md 39.25's whole-column store out of sw_col, so every
+# masked column goes back to the read-modify-write pair whatever its mask is.
+# The A/B, and the only thing that keeps the general body honest on an
+# ordinary build: a chrome fill arrives byte-aligned (SPEC.md 11.94) and takes
+# the fast body, so a defect in the general one would be invisible until an
+# unaligned rect found it.
 ifneq ($(NOPLANE),)
 VIDDEF += -DNOPLANE
 endif
@@ -927,6 +1064,39 @@ endif
 # like (SPEC.md 39.14.6).
 ifneq ($(NOSPLIT),)
 VIDDEF += -DNOSPLIT
+endif
+
+# NOSEAMCUT=1 is SPEC.md 39.14.11's A/B, one level below NOSPLIT's: the same
+# kernel with the CELL cut removed, so the one cell a seam crosses goes back to
+# 39.14.2's whole-cell drop and unaligned text loses a character again. It is
+# what makes tests/dispseam.py an A/B rather than an assertion - the fixed
+# kernel conserves the run's ink across the seam and this one does not, and a
+# row that only ever runs the fixed build cannot tell a conserved run from a
+# run that never crossed. NOSPLIT's own record is why: a null A/B is evidence
+# about the TEST until the test is shown to contain the case.
+# IT IS IN $(VIDSTAMP) AND $(KNOBS) BELOW, on the day it was added, which is
+# the whole of what NOSPLIT got wrong.
+ifneq ($(NOSEAMCUT),)
+VIDDEF += -DNOSEAMCUT
+endif
+
+# NOCURDISK=1 puts the pointer back on the freeze it took before SPEC.md 7.4:
+# the arrow stops dead for the length of every disk transfer, and once an
+# operation moves FPG_WARM = 3 sectors fpg_paint's unconditional cur_unlazy
+# takes it OFF THE GLASS for the rest of the freeze. The default lets the mouse
+# ISR move it through each `int 13h`, on SPEC.md 15.3.8's measurement that the
+# CPU in there is parked on IRQ6 waiting for DMA - 21 consecutive ticks taken
+# with IF set and not one IRQ0 lost - so what the draw spends is a gap the
+# machine was going to spend idle. The boot splash already animates from IRQ0
+# inside int 13h on that same evidence.
+#
+# It is a knob because it is a LOOK QUESTION WITH A REJECTED PRECEDENT: SPEC.md
+# 7.1.4.3 shipped a lit-but-frozen arrow, the field called it a stutter, and
+# 7.1.4.4 is why CURFIX is off by default. This change is only worth having if
+# the arrow TRACKS - so the A/B is the point, and this knob is the other arm of
+# it. tests/curdisk.py is the row.
+ifneq ($(NOCURDISK),)
+VIDDEF += -DNOCURDISK
 endif
 
 # NOSUOCCL=1 is SPEC.md 11.96.15's A/B, and it exists because REDRAWFULL is
@@ -1257,13 +1427,13 @@ endif
 # BUILD on api-abi. KERN_SMALL was the sharp one: `make KERN_SMALL=1` is the
 # second build CLAUDE.md asks for after every change, and it exited 1.
 KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
-                             KFZ DIRW1 INSTRO KEEPH STRAD DIRTYRAM HEAPCOMPACT HEAPPARK HEAPPARKLK FDDPROBE FDDABSENT REDRAWFULL NOSPLIT NOSUOCCL SNDSNIFF RAMKB DRAGCACHE FATWNONE FATWGATE \
+                             KFZ DIRW1 INSTRO KEEPH STRAD DIRTYRAM HEAPCOMPACT HEAPPARK HEAPPARKLK FDDPROBE FDDABSENT REDRAWFULL NOSPLIT NOSEAMCUT NOSUOCCL SNDSNIFF RAMKB DRAGCACHE FATWNONE FATWGATE \
                              SNAPAUDIT SCROLLROW QUANTUM GFXAUDIT \
                              CURFIX \
                              FONT INSTCHUNK PICOMEM PM_BASE PM_SB_PORT ANIMOFF DISINK0 \
-                             BOOTPROF BOOTMARK BOOTHALT BOOTSTOP NOPS2 MOUIDSLOW MOUDIAG FDDSLOW TRACKRUN SBDRAGOFF SBRATE \
+                             BOOTPROF STKDIAG BOOTMARK BOOTHALT BOOTSTOP NOPS2 MOUIDSLOW MOUDIAG FDDSLOW TRACKRUN SBDRAGOFF SBRATE \
                              ETHPROF FTPDSLOW FTPDBG \
-                             KERN_SMALL FSNOSTAMP THEMEDARK TITLESNAP SPLSTARS NOSIZESNAP NOFLUSHR NOUNAL BAND NOPLANE NOBLITCUT NOUIBLOCK VGADIRTY DLJUNK,\
+                             KERN_SMALL FSNOSTAMP THEMEDARK TITLESNAP SPLSTARS NOSIZESNAP NOFLUSHR NOUNAL BAND NOPLANE NOCOLFAST NOBLITCUT NOUIBLOCK NOMOUPRIV NOCHAINPRIV NOHEDGE NOCURDISK VGADIRTY DLJUNK,\
                              $(if $($(k)),$(k)=$($(k)))))
 # **A KNOB KERNEL IS NOT THE SHIPPED KERNEL, so KERN_BUDGET does not bind it**
 # (kernel.asm guard 1). It is built to answer a question about a machine and
@@ -1276,7 +1446,10 @@ KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
 # five %ifdefs this replaced were added one at a time, each after a diagnostic
 # that would not assemble. tools/os88sym.py derives the same thing, so a tool
 # re-assembling a knob kernel for its symbol map gets the same answer.
-ifneq ($(filter-out KERN_SMALL=%,$(KNOBS)),)
+# ...and NOHEDGE, which reaches SAVER.DRV and not one kernel byte, so it is in
+# $(KNOBS) for the matrix and NOT in $(VIDSTAMP): exempting the kernel for it
+# would be the sticky exemption the ETHPROF note below describes.
+ifneq ($(filter-out KERN_SMALL=% NOHEDGE=%,$(KNOBS)),)
 VIDDEF += -DKERN_KNOB
 endif
 
@@ -1305,13 +1478,14 @@ endif
 # asked for it read a PLAIN kernel, so its assertion was about a build nobody
 # had made. Both halves, every time - the list above so the knob announces
 # itself, this string so the kernel is rebuilt when it changes.
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(STRAD),-st$(STRAD))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(GFXAUDIT),-ga$(GFXAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(QUANTUM),-q$(QUANTUM))$(if $(DIRTYRAM),-dr$(DIRTYRAM))$(if $(FSNOSTAMP),-fn$(FSNOSTAMP))$(if $(ANIMOFF),-ao$(ANIMOFF))$(if $(THEMEDARK),-td$(THEMEDARK))$(if $(DISINK0),-di$(DISINK0))$(if $(BOOTPROF),-bp$(BOOTPROF))$(if $(BOOTMARK),-bm$(BOOTMARK))$(if $(BOOTHALT),-bh$(BOOTHALT))$(if $(BOOTSTOP),-bs$(BOOTSTOP))$(if $(NOPS2),-np$(NOPS2))$(if $(MOUIDSLOW),-mis$(MOUIDSLOW))$(if $(MOUDIAG),-mdg$(MOUDIAG))$(if $(FDDSLOW),-fsl$(FDDSLOW))$(if $(TRACKRUN),-tr$(TRACKRUN))$(if $(SBDRAGOFF),-sbo$(SBDRAGOFF))$(if $(SBRATE),-sbr$(SBRATE))$(if $(TITLESNAP),-ts$(TITLESNAP))$(if $(SPLSTARS),-sst$(SPLSTARS))$(if $(NOSIZESNAP),-nzs$(NOSIZESNAP))$(if $(NOFLUSHR),-nfr$(NOFLUSHR))$(if $(NOUNAL),-nu$(NOUNAL))$(if $(BAND),-bnd$(BAND))$(if $(NOPLANE),-npl$(NOPLANE))$(if $(NOBLITCUT),-nbc$(NOBLITCUT))$(if $(NOUIBLOCK),-nub$(NOUIBLOCK))$(if $(VGADIRTY),-vd$(VGADIRTY))$(if $(BOOTDIAG),-bd$(BOOTDIAG))$(if $(PICOMEM),-pm$(PICOMEM))$(if $(PM_BASE),-pmb$(PM_BASE))$(if $(PM_SB_PORT),-pms$(PM_SB_PORT))$(if $(ETHPROF),-ep$(ETHPROF))$(if $(FTPDSLOW),-fs$(FTPDSLOW))$(if $(FTPDBG),-fd$(FTPDBG))$(if $(DLJUNK),-dlj$(DLJUNK))$(if $(FATWNONE),-fwn$(FATWNONE))$(if $(FATWGATE),-fwg$(FATWGATE))
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(STRAD),-st$(STRAD))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSEAMCUT),-nsc$(NOSEAMCUT))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(GFXAUDIT),-ga$(GFXAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(QUANTUM),-q$(QUANTUM))$(if $(DIRTYRAM),-dr$(DIRTYRAM))$(if $(FSNOSTAMP),-fn$(FSNOSTAMP))$(if $(ANIMOFF),-ao$(ANIMOFF))$(if $(THEMEDARK),-td$(THEMEDARK))$(if $(DISINK0),-di$(DISINK0))$(if $(BOOTPROF),-bp$(BOOTPROF))$(if $(STKDIAG),-sd$(STKDIAG))$(if $(NOMOUPRIV),-nmp$(NOMOUPRIV))$(if $(NOCHAINPRIV),-ncp$(NOCHAINPRIV))$(if $(BOOTMARK),-bm$(BOOTMARK))$(if $(BOOTHALT),-bh$(BOOTHALT))$(if $(BOOTSTOP),-bs$(BOOTSTOP))$(if $(NOPS2),-np$(NOPS2))$(if $(MOUIDSLOW),-mis$(MOUIDSLOW))$(if $(MOUDIAG),-mdg$(MOUDIAG))$(if $(FDDSLOW),-fsl$(FDDSLOW))$(if $(TRACKRUN),-tr$(TRACKRUN))$(if $(SBDRAGOFF),-sbo$(SBDRAGOFF))$(if $(SBRATE),-sbr$(SBRATE))$(if $(TITLESNAP),-ts$(TITLESNAP))$(if $(SPLSTARS),-sst$(SPLSTARS))$(if $(NOSIZESNAP),-nzs$(NOSIZESNAP))$(if $(NOFLUSHR),-nfr$(NOFLUSHR))$(if $(NOUNAL),-nu$(NOUNAL))$(if $(BAND),-bnd$(BAND))$(if $(NOPLANE),-npl$(NOPLANE))$(if $(NOCOLFAST),-ncf$(NOCOLFAST))$(if $(NOBLITCUT),-nbc$(NOBLITCUT))$(if $(NOUIBLOCK),-nub$(NOUIBLOCK))$(if $(NOCURDISK),-ncd$(NOCURDISK))$(if $(VGADIRTY),-vd$(VGADIRTY))$(if $(BOOTDIAG),-bd$(BOOTDIAG))$(if $(PICOMEM),-pm$(PICOMEM))$(if $(PM_BASE),-pmb$(PM_BASE))$(if $(PM_SB_PORT),-pms$(PM_SB_PORT))$(if $(ETHPROF),-ep$(ETHPROF))$(if $(FTPDSLOW),-fs$(FTPDSLOW))$(if $(FTPDBG),-fd$(FTPDBG))$(if $(DLJUNK),-dlj$(DLJUNK))$(if $(FATWNONE),-fwn$(FATWNONE))$(if $(FATWGATE),-fwg$(FATWGATE))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/kernel-full.bin \
                                       $(BUILD)/ctrl.drv $(BUILD)/format.drv \
                                       $(BUILD)/clone.drv $(BUILD)/hiber.drv \
                                       $(BUILD)/boot.bin $(BUILD)/boot360.bin \
+                                      $(BUILD)/boot120.bin \
                                       $(BUILD)/hdd.bin $(BUILD)/hdd.drv \
                                       $(BUILD)/hddtool.bin $(BUILD)/hddtool.drv \
                                       $(BUILD)/saver.bin $(BUILD)/saver.drv; \
@@ -1387,15 +1561,15 @@ KERNEL_SRC := kernel/kernel.asm
 # a map that described "a DIFFERENT kernel".
 KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
 
-.PHONY: small kernsplit all run run-640 run-720 debug test test-snd xt xt-640 xt-mfm xt-cga \
-        xt-hercules xt-ega xt-multimon 286 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 \
+.PHONY: stkdiag small kernsplit all run run-640 run-720 run-120 debug test test-snd xt xt-640 xt-mfm xt-cga \
+        xt-hercules xt-ega xt-multimon 286 286-525 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 \
         286-sound 386-sound 486 pentium \
         bench field combo combo144 combo720 stackprobe trklog trkscrl npbench clicktest marty \
         comscan lptlink calcref \
         fonts fontsheets fontlist \
         stories zdisk ztest zh zhboot zcheck zgfx zpic zgfxpic zscreens xt-z 386-z \
         worddisk wordcheck xt-word 386-word \
-        cc-note chello covl cword cworddisk 386-c-word runcpm runcpmdisk \
+        cc-note chello covl pkgbig cword cworddisk 386-c-word runcpm runcpmdisk \
         runcpm-src cpmsw rcz80test rcmemtest rczex 386-runcpm \
         xt-runcpm 286-runcpm \
         allapps usb iso live burn rcbandbench \
@@ -1415,7 +1589,8 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
 # paragraph, only when the compiler is absent, never an error.
 WEAVEDEMOS := apps/weave/demos
 WEAVEWABS  := $(BUILD)/FORM.WAB $(BUILD)/SHEET.WAB $(BUILD)/PONG.WAB
-all: checkdocs $(IMG) $(IMG720) $(IMG360) $(APPSIMG) $(APPSIMG720) $(APPSIMG360) \
+all: checkdocs $(IMG) $(IMG120) $(IMG720) $(IMG360) \
+     $(APPSIMG) $(APPSIMG120) $(APPSIMG720) $(APPSIMG360) \
      $(MEDIAIMG360) $(BUILD)/wire.o88 $(WEAVEWABS) $(BUILD)/.weave-hostchecks \
      cc-note test-fast
 # wire.o88 is named here and NOWHERE else in `all`, because WIREFRAME is built
@@ -1440,7 +1615,7 @@ all: checkdocs $(IMG) $(IMG720) $(IMG360) $(APPSIMG) $(APPSIMG720) $(APPSIMG360)
 #               produced (the kernel binary, the packages, the images) and
 #               checks the invariants that break SILENTLY: the API table
 #               against the SDK, a constant mirrored in two files, the FAT12
-#               structure of all seven floppies, unreachable code, and that
+#               structure of all nine floppies, unreachable code, and that
 #               every test in tests/ is registered somewhere.
 #
 #   test-full   ~2 minutes, and THE ONE TO RUN BEFORE A MERGE. Adds the
@@ -1465,20 +1640,23 @@ all: checkdocs $(IMG) $(IMG720) $(IMG360) $(APPSIMG) $(APPSIMG720) $(APPSIMG360)
 # redraw change kept the picture (SPEC.md 12.9's argument). Skipping is right
 # rather than passing the defines through: the other nine tests are about the
 # SHIPPED artifacts, and a knob build is not one.
-test-fast: $(IMG) $(IMG720) $(IMG360) $(APPSIMG) $(APPSIMG720) $(APPSIMG360) \
+test-fast: $(IMG) $(IMG120) $(IMG720) $(IMG360) \
+           $(APPSIMG) $(APPSIMG120) $(APPSIMG720) $(APPSIMG360) \
            $(MEDIAIMG360) $(WEAVEWABS)
 ifeq ($(KNOBS),)
-	@python3 tools/os88test.py fast
+	@OS88_PKGDEFS="$(PKGSBDEF)" python3 tools/os88test.py fast
 else
 	@echo "os88test: skipped - this is a KNOB build ($(KNOBS)), and the fast"
 	@echo "          tier reads the shipped artifacts. Run a plain \`make\`."
 endif
 
-test-full: $(IMG) $(IMG720) $(IMG360) $(APPSIMG) $(APPSIMG720) $(APPSIMG360) \
+test-full: $(IMG) $(IMG120) $(IMG720) $(IMG360) \
+           $(APPSIMG) $(APPSIMG120) $(APPSIMG720) $(APPSIMG360) \
            $(MEDIAIMG360) $(WEAVEWABS)
 	@python3 tools/os88test.py full
 
-test-soak: $(IMG) $(IMG720) $(IMG360) $(APPSIMG) $(APPSIMG720) $(APPSIMG360) \
+test-soak: $(IMG) $(IMG120) $(IMG720) $(IMG360) \
+           $(APPSIMG) $(APPSIMG120) $(APPSIMG720) $(APPSIMG360) \
            $(MEDIAIMG360)
 	@python3 tools/os88test.py soak
 
@@ -1519,12 +1697,30 @@ $(BUILD):
 # stale in silence when an app's icon changes, where this dependency cannot.
 # The DAG stays acyclic - a package depends on apps/os88api.inc, never on
 # kernel.bin.
-ASSOCICO := $(BUILD)/associco.inc
-$(ASSOCICO): tools/os88mini.py $(BUILD)/paint.o88 $(BUILD)/notepad.o88 \
-             $(BUILD)/tracker.o88 $(BUILD)/artful.o88 | $(BUILD)
+#
+# ICODIR - WHERE THOSE FOUR PACKAGES AND THE INCLUDE COME FROM, and it is
+# $(BUILD) unless a caller says otherwise.  RECURSIVE for $(KMODDIR)'s reason,
+# one block up: a rule that builds a kernel somewhere else sets it for itself.
+#
+# The point of the knob is that this file is KERNEL-KNOB-INDEPENDENT.  None of
+# VIDEO=, RTC=, BAND=, QUANTUM= and the rest reaches a package's command line,
+# so a build that wants only a knob KERNEL rebuilds four packages to arrive at
+# a byte-identical associco.inc - which tests/unit/t_buildmatrix.py did 43
+# times a run.  `ICODIR=build` points it at the copy the default build already
+# made, and the knob kernel is byte-identical either way.
+#
+# IT IS NOT SAFE FOR EVERY KNOB, and $(PKGSBDEF) is the reason: SBDRAGOFF= and
+# SBRATE= DO reach a package build (see their block above - a package's copy of
+# os88ui.inc is its own), so a caller passing one of those must leave ICODIR
+# alone or it stops assembling the arm the knob exists for.  The matrix derives
+# that list from $(PKGSBDEF) itself rather than keeping a copy of it.
+ICODIR = $(BUILD)
+ASSOCICO = $(ICODIR)/associco.inc
+$(ASSOCICO): tools/os88mini.py $(ICODIR)/paint.o88 $(ICODIR)/notepad.o88 \
+             $(ICODIR)/tracker.o88 $(ICODIR)/artful.o88 | $(ICODIR)
 	python3 tools/os88mini.py -o $@ \
-		PAINT=$(BUILD)/paint.o88 NOTEPAD=$(BUILD)/notepad.o88 \
-		TRACKER=$(BUILD)/tracker.o88 ARTFUL=$(BUILD)/artful.o88
+		PAINT=$(ICODIR)/paint.o88 NOTEPAD=$(ICODIR)/notepad.o88 \
+		TRACKER=$(ICODIR)/tracker.o88 ARTFUL=$(ICODIR)/artful.o88
 
 # The baked typeface (SPEC.md 6.2), when FONT= asked for one. Empty otherwise,
 # so the prerequisite below simply is not there on a default build.
@@ -1548,6 +1744,34 @@ KMODS = $(KMODDIR)/ctrl.drv $(KMODDIR)/format.drv $(KMODDIR)/clone.drv \
         $(KMODDIR)/hiber.drv
 KMODARGS = -m 0=$(BUILD)/ctrl.drv -m 1=$(BUILD)/format.drv \
            -m 2=$(BUILD)/clone.drv -m 3=$(BUILD)/hiber.drv
+# ...and kern_small's FIFTH and SIXTH, Cut/Copy/Paste (SPEC.md 22.3, MOD_FCP)
+# and the Standard File dialog (SPEC.md 38.0, MOD_FDLG): that build carries
+# the bodies in FILECP.DRV and FDLG.DRV where kern_big keeps them resident
+# (docs/KERN-SMALL-MODULE-SPLIT.md 9.2 wave 1). HIBER.DRV is index 3 on BOTH
+# builds: kern_small's is the one-entry stub hiber.inc emits so that every
+# kernel cuts the same first four files (SPEC.md 87), which is why it sits in
+# $(KMODS) above and these two do not. The index IS the kernel's
+# MOD_* and os88mod.py refuses a count that disagrees with the image's own
+# map - which is how this line announced itself when it was missing, rather
+# than by shipping a floppy with the feature silently absent.
+# KMODARGS is expanded by the make that ASSEMBLES the kernel, so the guard is
+# right here: only a KERN_SMALL=1 build has a fifth module to split out.
+ifneq ($(KERN_SMALL),)
+KMODARGS += -m 4=$(BUILD)/filecp.drv
+KMODARGS += -m 5=$(BUILD)/fdlg.drv
+endif
+# ...but $(KMODS) is NOT guarded, and that is the trap this comment exists for.
+# The small floppy rules below expand $(SMALLDRIVERS) - and so $(KMODS) - in
+# the OUTER make, where KERN_SMALL is NOT set; a guard here therefore left
+# FILECP.DRV off the disk while every build step succeeded, and the machine
+# booted, and Cut/Copy/Paste refused with FERR_NODISK because mod_need could
+# not find a file nobody had shipped. $(SMALLMODS) names it for those rules
+# instead, and the plain build simply never asks for it.
+#
+# IT IS A RECIPE ARGUMENT AND NEVER A PREREQUISITE - see the small360.img rule
+# for why, and for why $(SMALLDRIVERS) beside it is not the counter-example it
+# looks like.
+SMALLMODS = $(SMALLDIR)/filecp.drv $(SMALLDIR)/fdlg.drv
 
 # THE KERNEL IS ASSEMBLED WHOLE AND THEN CUT UP (SPEC.md 2.8). Everything
 # from .modc onward is an on-demand module: kernel code that ships as a file
@@ -1555,9 +1779,33 @@ KMODARGS = -m 0=$(BUILD)/ctrl.drv -m 1=$(BUILD)/format.drv \
 # a module is .cold code running with DS = KERNEL_SEG - so every kernel symbol
 # it names has to be the address the kernel itself uses, and one assembly is
 # what makes that true rather than claimed.
+#
+# KINC - the kernel assembly's include path. $(ICODIR) is added ONLY when it
+# differs from $(BUILD), so the default build's command line is the one it has
+# always been rather than the same directory named twice.
+KINC = -I kernel/ -I apps/ -I $(BUILD)/$(if $(filter-out $(BUILD),$(ICODIR)), -I $(ICODIR)/)
+#
+# NOOVLCHK=1 - DO NOT RUN THE GATE HERE, BECAUSE THE CALLER ALREADY RAN IT.
+# os88ovlchk.py reads tracked SOURCE and nothing else: no argument, no
+# environment, no build directory, and it does not expand a single %ifdef - so
+# it sees every arm of every knob and its answer is a function of kernel/ and
+# nothing else. Running it once per kernel in a sweep of 43 knob kernels is
+# therefore the same answer 43 times, which is what this exists to stop
+# (tests/unit/t_buildmatrix.py, ~40s of a 4-core box per run).
+#
+# IT IS NOT A WAY TO SKIP THE GATE. The caller that sets it must have run
+# os88ovlchk.py over this same tree and failed on it - the matrix does, as a
+# check of its own, before it builds anything. Nothing that produces a SHIPPED
+# byte may set it, which is why it is not in $(KNOBS) and not in the stamp: it
+# changes no output, so a build made with it is byte-identical to one without,
+# and the line below says so on the terminal rather than passing in silence.
 $(BUILD)/kernel-full.bin: $(KERNEL_SRC) $(KERNEL_INC) $(ASSOCICO) $(FONTINC) $(BUILDINC) tools/os88ovlchk.py | $(BUILD)
+ifeq ($(NOOVLCHK),)
 	@python3 tools/os88ovlchk.py
-	$(NASM) -f bin -w+error -I kernel/ -I apps/ -I $(BUILD)/ $(VIDDEF) -o $@ $(KERNEL_SRC)
+else
+	@echo "os88ovlchk: NOT RUN (NOOVLCHK=1 - the caller states it ran it over this same source)"
+endif
+	$(NASM) -f bin -w+error $(KINC) $(VIDDEF) -o $@ $(KERNEL_SRC)
 
 $(BUILD)/kernel.bin: $(BUILD)/kernel-full.bin tools/os88mod.py | $(BUILD)
 	python3 tools/os88mod.py $< -k $@ $(KMODARGS) --build $(BUILDNUM)
@@ -1581,7 +1829,14 @@ $(BUILD)/kernel.bin: $(BUILD)/kernel-full.bin tools/os88mod.py | $(BUILD)
 # rule is up to date the moment os88mod.py has written the files, so on an
 # ordinary build neither the report nor the banner ran at all. A guard that
 # stops being asked reads exactly like a guard that passes.
-	@python3 tools/kernsize.py --build $(BUILD) $(VIDDEF) || true
+# NOKERNSIZE=1 skips it, and only a sweep should: the line below is a REPORT
+# with `|| true` after it, so it gates nothing - but it RE-ASSEMBLES the kernel
+# to measure it, which is the single most expensive thing in a knob build and
+# is pure waste when the caller is going to discard the text. It is not in
+# $(KNOBS) or the stamp for NOOVLCHK's reason: it changes no output byte.
+ifeq ($(NOKERNSIZE),)
+	@python3 tools/kernsize.py --build $(BUILD) --ico $(ICODIR) $(VIDDEF) || true
+endif
 # ...and this tests the KNOBS, not $(VIDDEF), and NAMES them: the banner used
 # to be a row of blank assignments, which says no more than the alarm itself.
 # Both halves of that were the same bug and $(KNOBS) is where it is explained.
@@ -1608,8 +1863,40 @@ $(KMODS): $(BUILD)/kernel.bin ;
 # and appear nowhere in boot/boot.asm, so moving the canary (SPEC.md 18.93.1)
 # left `make` looking at an up-to-date boot360.bin and shipping the OLD offset.
 # It reads exactly like the canary not working, and cost a test round to find.
-$(BUILD)/boot.bin: boot/boot.asm $(BUILD)/kernel.bin Makefile | $(BUILD)
-	$(NASM) -f bin $(BOOTDEF) \
+# HEAP_PARA - THE HEAP FLOOR, HANDED TO THE SECTOR (SPEC.md 2.7.1). The
+# .nomem refusal asks whether stage 2's blob fits at HEAP_SEG under the 2,560
+# bytes we keep live at the ceiling, and `kend` is that floor in paragraphs.
+# It cannot be derived from kernel.bin - LOW_PARA is a nobits size that is not
+# in the file - and it cannot be a constant in boot/boot.asm, which is
+# assembled before the kernel it boots is measured.
+#
+# This is BOOTHD_DEFS' value by another name: boot/boothd.asm has taken
+# BLOB_SEG from the same `kseg + ksize/16` since SPEC.md 2.9.9, and `kend` is
+# what kernsize calls it. Both sectors now ask one tool one question.
+#
+# TWO THINGS ARE COPIED FROM THAT RULE ON PURPOSE, both of them scars.
+# $(VIDDEF) is passed to kernsize because it re-ASSEMBLES the kernel to
+# measure it, so --json with no defines describes the SHIPPED kernel whatever
+# is in build/ - a kern_small sector would otherwise be told kern_big's floor
+# and refuse machines kern_small runs on. And the extraction is ITS OWN STEP
+# rather than a $$(python3 ...) inside the nasm line, because that throws the
+# interpreter's exit status away: a refusal arrives as an empty string and is
+# reported by the assembler, about a symbol, several lines further on.
+#
+# IT IS ONE VALUE AGAIN. A B2_TAIL rode beside it for one commit, because the
+# blob used to be read to the top of RAM and copy itself down, and the far
+# jump at the end of that copy had to survive being copied over. Reading the
+# blob to HEAP_SEG in the first place retires the copy and the constant with
+# it (SPEC.md 2.9.5).
+BOOTHEAP_DEFS = import sys, subprocess, json; \
+                k = json.loads(subprocess.check_output(['python3','tools/kernsize.py','--json','--build','$(BUILD)','--ico','$(ICODIR)'] + sys.argv[1:])); \
+                print('-DHEAP_PARA=%d' % k['kend'])
+
+$(BUILD)/boot.bin: boot/boot.asm kernel/kernel.asm $(BUILD)/kernel.bin Makefile | $(BUILD)
+	@H=$$(OS88_DEFINES="$(patsubst -D%,%,$(VIDDEF))" OS88_BUILD="$(BUILD)" OS88_ICODIR="$(ICODIR)" \
+	     python3 -c "$(BOOTHEAP_DEFS)" $(VIDDEF)) && \
+	 echo "$(NASM) -f bin $(BOOTDEF) $$H ... -o $@ boot/boot.asm" && \
+	 $(NASM) -f bin $(BOOTDEF) $$H \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/kernel.bin) + 511 ) / 512 )) \
 		-DBOOT2_SECS=$(BOOT2_SECS) $(call KSIGDEF2,$(BUILD)/kernel.bin) $(call BLOBSUMDEF,$(BUILD)/kernel.bin) \
 		-o $@ boot/boot.asm
@@ -1628,8 +1915,36 @@ $(BUILD)/boot.bin: boot/boot.asm $(BUILD)/kernel.bin Makefile | $(BUILD)
 # bytes when it builds the image. A boot720.bin would therefore be a
 # byte-identical second artifact that can only ever say what this one already
 # says.
-$(BUILD)/boot360.bin: boot/boot.asm $(BUILD)/kernel.bin Makefile | $(BUILD)
-	$(NASM) -f bin -DSPT=9 -DHEADS=2 $(BOOTDEF) \
+$(BUILD)/boot360.bin: boot/boot.asm kernel/kernel.asm $(BUILD)/kernel.bin Makefile | $(BUILD)
+	@H=$$(OS88_DEFINES="$(patsubst -D%,%,$(VIDDEF))" OS88_BUILD="$(BUILD)" OS88_ICODIR="$(ICODIR)" \
+	     python3 -c "$(BOOTHEAP_DEFS)" $(VIDDEF)) && \
+	 echo "$(NASM) -f bin -DSPT=9 -DHEADS=2 $(BOOTDEF) $$H ... -o $@ boot/boot.asm" && \
+	 $(NASM) -f bin -DSPT=9 -DHEADS=2 $(BOOTDEF) $$H \
+		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/kernel.bin) + 511 ) / 512 )) \
+		-DBOOT2_SECS=$(BOOT2_SECS) $(call KSIGDEF2,$(BUILD)/kernel.bin) $(call BLOBSUMDEF,$(BUILD)/kernel.bin) \
+		-o $@ boot/boot.asm
+	@test $(call FILESIZE,$@) -eq 512 || { echo "boot sector is not 512 bytes"; exit 1; }
+
+# ...and the 1.2MB 5.25" HD disk's sector (SPEC.md 19): 15 sectors per track,
+# 2 heads, the SAME 80 cylinders as the 720KB disk. This is the one geometry
+# in the set that does NOT share a sector with a neighbour, and the reason is
+# the whole of what boot/boot.asm knows about a disk: SPT and HEADS. 720KB and
+# 360KB differ only in a cylinder count the sector never holds, so one sector
+# serves both; 15 spt is a different track, so `mov al, SPT`, the run bound and
+# the CX/DH handoff to stage 2 are all different immediates and it needs its
+# own artifact. That is three boot sectors for four geometries, not four.
+#
+# NOTHING ELSE IN THE KERNEL CHANGES FOR IT. The geometry reaches the kernel in
+# CX and DH from here (boot/boot.asm's note on the defaults), mount rule 11
+# already whitelists 15 spt as one of the six real floppy shapes
+# (kernel/disk.inc's delta walk), and the 7-sector FAT is inside DSK_FAT_SECS's
+# 9 - so the FAT window is still the degenerate whole-FAT case a floppy has
+# always had, and 2,400 sectors is exactly rule 13's spt*heads*80 bound.
+$(BUILD)/boot120.bin: boot/boot.asm kernel/kernel.asm $(BUILD)/kernel.bin Makefile | $(BUILD)
+	@H=$$(OS88_DEFINES="$(patsubst -D%,%,$(VIDDEF))" OS88_BUILD="$(BUILD)" OS88_ICODIR="$(ICODIR)" \
+	     python3 -c "$(BOOTHEAP_DEFS)" $(VIDDEF)) && \
+	 echo "$(NASM) -f bin -DSPT=15 -DHEADS=2 $(BOOTDEF) $$H ... -o $@ boot/boot.asm" && \
+	 $(NASM) -f bin -DSPT=15 -DHEADS=2 $(BOOTDEF) $$H \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/kernel.bin) + 511 ) / 512 )) \
 		-DBOOT2_SECS=$(BOOT2_SECS) $(call KSIGDEF2,$(BUILD)/kernel.bin) $(call BLOBSUMDEF,$(BUILD)/kernel.bin) \
 		-o $@ boot/boot.asm
@@ -1771,6 +2086,87 @@ BD_IMGS := $(BUILD)/bootdiag360.img $(BUILD)/bootdiag720.img \
            $(BUILD)/bootdiagx720.img $(BUILD)/bootdiagx144.img
 
 .PHONY: bootdiag
+# NOMOUPRIV=1 puts BOTH mouse ISRs back on the interrupted TASK's stack, which
+# is what shipped before SPEC.md 9.10. The default runs the whole ISR on one
+# shared 128-byte stack in .lowbss, so what it costs the task is the six bytes
+# the CPU pushed at the gate and nothing else - ~48 bytes off every slice, and
+# a slice pays it seven times over where the swap costs .text once.
+#
+# This is the A/B those numbers come off (docs/STACK-SLOTS-PLAN.md 4.2), it is
+# arm 2 of `make stkdiag`, and it is the only thing keeping the un-swapped path
+# assembling.
+#
+# The default needs no re-entrancy guard, which is a property of that ISR and
+# not an assumption - mou_isr runs IF=0 from the gate to the iret and never
+# stis, so it cannot interrupt itself and IRQ3/IRQ4 cannot interrupt each
+# other. The tick's chain is not like that and its own move needs a busy flag.
+ifneq ($(NOMOUPRIV),)
+VIDDEF += -DNO_MOUPRIV
+endif
+
+# NOCHAINPRIV=1 puts the ROM's int 08h chain back on the interrupted TASK's
+# stack, which is what shipped before SPEC.md 8.5. The default runs it on one
+# shared 128-byte stack in .lowbss - ~56 bytes off every slice, the largest
+# single item in the interrupt floor, and the one that made a slot class
+# smaller than the ROM impossible.
+#
+# This is the A/B those numbers come off (docs/STACK-SLOTS-PLAN.md 4.1), it is
+# arm 3 of `make stkdiag`, and it is the only thing keeping the un-swapped path
+# assembling.
+ifneq ($(NOCHAINPRIV),)
+VIDDEF += -DNO_CHAINPRIV
+endif
+
+# --- STKDIAG=1's disks (docs/STACK-SLOTS-PLAN.md 10) -------------------------
+#
+# A RECURSIVE make and not a payload rule, because the payload is the ordinary
+# system disk: the panel is in the kernel and spawns itself, so there is no
+# package to put beside it and nothing to launch. That is the whole reason it
+# is a knob - a package would need a double-click, and the double-click is
+# inside the quiet phase it would be perturbing.
+#
+# All three geometries, because the machines this is for are not all 3.5":
+# a 5150 with 360KB drives is exactly the machine whose ROM number nobody has.
+#
+# It leaves build/os8088*.img holding the KNOB kernel. The VIDSTAMP notices and
+# a later plain `make` rebuilds them, which is the trap that stamp exists for
+# (see VIDSTAMP above) - but do not ship an image out of a tree you last built
+# this way without running `make` first.
+stkdiag:
+	$(MAKE) STKDIAG=1
+	cp $(BUILD)/os8088.img     $(BUILD)/stkdiag144.img
+	cp $(BUILD)/os8088-720.img $(BUILD)/stkdiag720.img
+	cp $(BUILD)/os8088-360.img $(BUILD)/stkdiag360.img
+	cp $(BUILD)/os8088-120.img $(BUILD)/stkdiag120.img
+	$(MAKE) STKDIAG=1 NOMOUPRIV=1
+	cp $(BUILD)/os8088.img     $(BUILD)/stkdiagmp144.img
+	cp $(BUILD)/os8088-720.img $(BUILD)/stkdiagmp720.img
+	cp $(BUILD)/os8088-360.img $(BUILD)/stkdiagmp360.img
+	cp $(BUILD)/os8088-120.img $(BUILD)/stkdiagmp120.img
+	$(MAKE) STKDIAG=1 NOCHAINPRIV=1
+	cp $(BUILD)/os8088.img     $(BUILD)/stkdiagcp144.img
+	cp $(BUILD)/os8088-720.img $(BUILD)/stkdiagcp720.img
+	cp $(BUILD)/os8088-360.img $(BUILD)/stkdiagcp360.img
+	cp $(BUILD)/os8088-120.img $(BUILD)/stkdiagcp120.img
+	@echo ""
+	@echo "stkdiag: TWELVE disks, in three arms of four - 360, 720, 1.2M and 1.44M."
+	@echo "         stkdiag<size>.img is the kernel AS IT SHIPS - both the"
+	@echo "         mouse ISRs (SPEC.md 9.10) and the ROM's int 08h chain"
+	@echo "         (SPEC.md 8.5) already on stacks of their own. The other two"
+	@echo "         each turn ONE of those off: stkdiagmp<size>.img is"
+	@echo "         NOMOUPRIV=1 and stkdiagcp<size>.img is NOCHAINPRIV=1."
+	@echo "         THE ARMS NO LONGER NEST, which is the point - arm 2 minus"
+	@echo "         arm 1 is what the mouse fix is worth on YOUR machine and"
+	@echo "         arm 3 minus arm 1 is what the tick's chain is worth, and"
+	@echo "         neither reading needs the other taken first."
+	@echo "         Boot one and DO NOT TOUCH THE MACHINE. The panel runs three"
+	@echo "         90-second phases and tells you when to move the mouse and when"
+	@echo "         to type; it says HANDS OFF for five seconds before each"
+	@echo "         reading is taken. Photograph the panel when it says DONE."
+	@echo "         The number to quote is FLOOR, idle - and ROM int08 is now"
+	@echo "         read off the SHIPPING stack, so it sizes SCH_CHSTK directly."
+	@echo ""
+
 bootdiag: $(BD_IMGS) $(BUILD)/bootdiag.com
 	@echo "bootdiag: six images. Boot bootdiag<size>.img FIRST - it loads"
 	@echo "          through tests/bootdiag/bdboot.asm, which cannot fail the"
@@ -2093,6 +2489,35 @@ $(BUILD)/xmem.drv: $(BUILD)/xmem.bin tools/os88drv.py
 # (SPEC.md 2.8) would have to keep all of it in the kernel's own `.text`. Here
 # it is on the floppy and the kernel spends 126 bytes.
 #
+# NOHEDGE=1 puts sea life back on the WHOLE screen width on Hercules - the
+# saver before SPEC.md 79.5.10, and the A/B for it. What the default buys is
+# the field's column-0 shimmer GONE, on 86Box and on the 5150 both: 86Box's
+# plain Hercules renderer copies an attenuated version of what stands at column
+# 719 onto column 0 of the row BELOW it (79.5.9 - one row down, which is why it
+# is the display's and not this kernel's), so the mode reserves SV_HEDGE = 8
+# pixels at the right edge and never lights them, leaving the copy nothing to
+# carry. What it costs the picture is eight columns of 720 that the sea is
+# already black in, and what it costs the machine is nothing measurable - the
+# pass is 54.93 ms median either way, one tick, on both 1bpp adapters.
+#
+# IT IS A KNOB BECAUSE IT IS A LOOK QUESTION WITH A WORKAROUND IN IT. The
+# artifact is one emulator's and possibly one class of monitor's, and a fork
+# that would rather draw the whole screen than hide someone else's defect
+# flips this and loses nothing else - which is the shape SPEC.md 39.4's greying
+# and 11.101's BAND are knobs for too.
+#
+# THIS IS ALSO THE ONLY THING THAT KEEPS THE UNRESERVED PATH ASSEMBLING, and
+# the stamp is the saver's own rather than $(VIDSTAMP)'s: nothing here reaches
+# the kernel, so flipping it rebuilds two files instead of the tree.
+ifneq ($(NOHEDGE),)
+SAVDEF += -DNOHEDGE
+endif
+SAVSTAMP := $(BUILD)/.saver-$(if $(NOHEDGE),nohedge,hedge)
+$(shell mkdir -p $(BUILD); \
+        [ -f $(SAVSTAMP) ] || { rm -f $(BUILD)/.saver-* $(BUILD)/saver.bin \
+                                      $(BUILD)/saver.drv; \
+                                touch $(SAVSTAMP); })
+
 # -I apps/wire/ IS NOT A CONVENIENCE: sv_sintab %includes wiresin.inc, the same
 # generated 256-byte table WIREFRAME uses (SPEC.md 78.2), so there is one
 # amplitude in the tree rather than two that can be regenerated apart. That is
@@ -2102,7 +2527,7 @@ $(BUILD)/saver.bin: drivers/saver/saver.asm drivers/saver/svcube.inc \
                     drivers/saver/svfish.inc drivers/saver/svcfg.inc \
                     apps/wire/wiresin.inc drivers/os88drv.inc apps/os88api.inc \
                     apps/os88ui.inc apps/os88line.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I drivers/ -I apps/ -I drivers/saver/ \
+	$(NASM) -f bin -w+error $(SAVDEF) -I drivers/ -I apps/ -I drivers/saver/ \
 		-I apps/wire/ -o $@ drivers/saver/saver.asm
 	@echo "saver:  $(call FILESIZE,$@) bytes"
 
@@ -2141,7 +2566,7 @@ $(BUILD)/mbr.bin: boot/mbr.asm | $(BUILD)
 # not start.
 BOOTHD_DEFS = import sys, subprocess, json; sys.path.insert(0, 'tools'); \
               import os88sym; \
-              k = json.loads(subprocess.check_output(['python3','tools/kernsize.py','--json','--build','$(BUILD)'] + sys.argv[1:])); \
+              k = json.loads(subprocess.check_output(['python3','tools/kernsize.py','--json','--build','$(BUILD)','--ico','$(ICODIR)'] + sys.argv[1:])); \
               print('-DBLOB_SEG=%d -DSPL_FSEG=%d' % (k['kseg'] + k['ksize'] // 16, os88sym.syms()['spl_fseg']))
 
 # BLOB_SEG follows the SHIPPED kernel's ladder. A kern_small installed to a
@@ -2184,7 +2609,7 @@ BOOTHD_DEFS = import sys, subprocess, json; sys.path.insert(0, 'tools'); \
 # and it needs both. The floppy path cannot have this bug at all, stage 2
 # publishing the segment it actually relocated itself to.
 $(BUILD)/boothd.bin: boot/boothd.asm kernel/kernel.asm $(BUILD)/kernel.bin | $(BUILD)
-	@D=$$(OS88_DEFINES="$(patsubst -D%,%,$(VIDDEF))" OS88_BUILD="$(BUILD)" \
+	@D=$$(OS88_DEFINES="$(patsubst -D%,%,$(VIDDEF))" OS88_BUILD="$(BUILD)" OS88_ICODIR="$(ICODIR)" \
 	     python3 -c "$(BOOTHD_DEFS)" $(VIDDEF)) && \
 	 echo "$(NASM) -f bin -w+error -DBOOT2_SECS=$(BOOT2_SECS) $$D -o $@ $<" && \
 	 $(NASM) -f bin -w+error -DBOOT2_SECS=$(BOOT2_SECS) $$D -o $@ $<
@@ -2420,7 +2845,7 @@ $(BUILD)/ether.drv: $(BUILD)/ether.bin tools/os88drv.py
 # and the stack it serves them with is drivers/ether's own, over a packet
 # driver instead of an NE2000. Hence the second include path and the six
 # extra prerequisites - a change to the stack has to rebuild BOTH ends.
-$(BUILD)/os88net.com: drivers/net/os88net.asm drivers/net/lplink.inc \
+$(BUILD)/os88net.raw: drivers/net/os88net.asm drivers/net/lplink.inc \
                       drivers/net/lplslv.inc drivers/net/nwslv.inc \
                       drivers/net/nwire.inc drivers/net/netpkg.inc \
                       drivers/net/pktdrv.inc \
@@ -2428,7 +2853,33 @@ $(BUILD)/os88net.com: drivers/net/os88net.asm drivers/net/lplink.inc \
                       drivers/ether/ethstate.inc drivers/ether/inet.inc \
                       drivers/ether/tcp.inc drivers/ether/dns.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I drivers/net/ -I drivers/ether/ -o $@ $<
-	@echo "os88net.com: $(call FILESIZE,$@) bytes - the DOS end, for the FAR machine"
+	@echo "os88net:     $(call FILESIZE,$@) bytes unpacked - the DOS end, for the FAR machine"
+
+# ...AND THE SHIPPED FILE IS AN ARCHIVE OF THAT (SPEC.md 62.12). OS88NET.COM
+# is the one thing on either floppy that does not run on os8088 at all - it
+# rides the apps disk for TRANSPORT (see APPS_DOS below) - so it ships packed
+# and unpacks itself on the DOS machine it was always for. The .lzi carries
+# the unpacked size across to the stub, so the two ends cannot disagree about
+# where the image stops; both are prerequisites of the assembly below, and
+# `%include`/`incbin` resolve out of $(BUILD) rather than beside the source.
+#
+# ONE INVOCATION WRITES BOTH, and the empty rule below is how that is said
+# without a grouped target: `&:` is GNU make 4.3 and Apple still ships 3.81,
+# where it would parse as a target named `&` and take the build apart on the
+# one platform tools/setup-macos.sh exists for. The idiom is the portable one
+# - the .lzi is up to date once the .lz that wrote it is - and it is
+# parallel-safe, because make has one recipe to run and one only.
+# os88sfx.asm asserts the two agree anyway: "cannot happen" is a claim about
+# make, and the disk is where stale halves actually live.
+$(BUILD)/os88net.lz: $(BUILD)/os88net.raw tools/os88sfx.py
+	python3 tools/os88sfx.py $(BUILD)/os88net.raw -o $(BUILD)/os88net.lz \
+	        --inc $(BUILD)/os88net.lzi
+$(BUILD)/os88net.lzi: $(BUILD)/os88net.lz ;
+
+$(BUILD)/os88net.com: drivers/net/os88sfx.asm $(BUILD)/os88net.lz \
+                      $(BUILD)/os88net.lzi | $(BUILD)
+	$(NASM) -f bin -w+error -I $(BUILD)/ -o $@ $<
+	@echo "os88net.com: $(call FILESIZE,$@) bytes packed - self-extracting, runs on DOS"
 
 $(IMG): $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
@@ -2448,6 +2899,33 @@ $(IMG): $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS) 
 $(IMG720): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 \
 		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin \
+		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(APPDATAFOLDER)
+
+# The 1.2MB 5.25" HD disk (SPEC.md 19). The geometry of the machine the 720KB
+# note above describes from the other side: an AT-class box - 286 and up, or a
+# late XT with an HD controller - whose only drive is 5.25". It can read the
+# 360KB disk, because a 1.2MB drive reads 360KB media, and that is what such a
+# machine has had to boot until now: 354 clusters, no BEVERLY.MOD without a
+# disk swap, and OS88NET.COM competing with the games for room. This disk is
+# 2,371 clusters of 512 bytes and carries the SAME payload as the 1.44MB one.
+#
+# It is worth being exact about which machines this is and is not for. A 1.2MB
+# drive needs a 500 kbps controller, which is the AT's, so this does NOT boot
+# the calibration 5150 - `make xt`'s 360KB pair is still that machine's, and
+# always will be (docs/FIELD-MACHINES.md). What it replaces is the 360KB disk
+# in a 1.2MB drive, which works and is the one combination of media and drive
+# in this project that is known to be marginal to WRITE: a 1.2MB drive's head
+# is narrower than a 360KB drive's, so a 360KB disk written in one is often
+# unreadable in a real 360KB drive afterwards. Booting the geometry the drive
+# was sold as sidesteps that entirely.
+#
+# Its OWN boot sector, unlike the pair above it: 15 spt is a different track
+# shape, and boot/boot.asm's whole knowledge of a disk is SPT and HEADS. See
+# build/boot120.bin's rule for why that is three sectors and not four.
+$(IMG120): $(BUILD)/boot120.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 \
+		--boot $(BUILD)/boot120.bin --kernel $(BUILD)/kernel.bin \
 		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(APPDATAFOLDER)
 
@@ -3680,6 +4158,83 @@ $(BUILD)/covl360.img: $(BUILD)/covl.o88 tools/os88disk.py
 #   make test TESTAPPS=build/covl.img    boots with it in B:
 covl: $(BUILD)/covl.img $(BUILD)/covl360.img
 
+# --- PKGBIG, the package-size rule's disk (ON DEMAND: `make pkgbig`) ---------
+# SPEC.md 19.1 types a *.O88 as a package by its EXTENSION and its SIZE, before
+# a byte of it is read, so what the gate needs is a *.O88 that is deliberately
+# NOT a package - and validate_o88 exists to make exactly that unbuildable.
+# --raw is the escape (os88disk.py, --scramble's precedent) and nothing
+# shipped uses it. The pair is the experiment: 70,144 bytes must type 1 and be
+# refused Too large, 1,048,576 must type 0 and be refused Bad package.
+# 1.44MB only - the four fixtures do not fit a 360KB disk, and neither rule
+# they test has any geometry in it. The disk carries BOTH gates' fixtures
+# (tests/pkgbig.py and tests/pkgfence.py) because it is one `--raw` build and
+# one megabyte of it is HUGE.O88.
+$(BUILD)/pkgbig.img: tests/pkgbig/mkfix.py tools/os88disk.py | $(BUILD)
+	python3 tests/pkgbig/mkfix.py $(BUILD)/pkgbig
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--raw $(BUILD)/pkgbig/BIGPKG.O88 --raw $(BUILD)/pkgbig/HUGE.O88 \
+		--raw $(BUILD)/pkgbig/BSSWRAP.O88 --raw $(BUILD)/pkgbig/BSSWORST.O88 \
+		$(BUILD)/pkgbig/BIGPKG.O88 $(BUILD)/pkgbig/HUGE.O88 \
+		$(BUILD)/pkgbig/BSSWRAP.O88 $(BUILD)/pkgbig/BSSWORST.O88
+	@python3 tools/os88disk.py --verify $@
+
+#   make pkgbig                          builds the fixture disk
+#   python3 tests/pkgbig.py              runs the mount/size gate on MartyPC
+#   python3 tests/pkgfence.py            ...and the img+bss write-bound gate
+pkgbig: $(BUILD)/pkgbig.img
+
+# --- MSEG, the parts standard's consumer (ON DEMAND: `make mseg`) -----------
+# SPEC.md 20.12: a package that carries its parts in its own file. It is a
+# CAPABILITY GATE and not software, so nothing shipped carries it - the same
+# standing as tests/wire (SPEC.md 78.9).
+#
+# The three modules are assembled on their own, at org 0, naming no label of
+# the package's: apps/os88parts.inc is what puts them somewhere and MSEG is
+# what checks they arrived. os88pkg.py appends them 512-aligned and fills the
+# rows MSEG reserved in its OWN table, which lives in its image - so the
+# kernel reads nothing but flags bit 2 (SPEC.md 20.12.3).
+$(BUILD)/msegp%.bin: tests/multiseg/msegp%.asm tests/multiseg/msegpart.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I tests/multiseg/ -o $@ $<
+
+$(BUILD)/mseg.bin: tests/multiseg/mseg.asm apps/os88api.inc apps/os88parts.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I tests/multiseg/ -o $@ $<
+
+$(BUILD)/mseg.o88: $(BUILD)/mseg.bin $(BUILD)/msegp0.bin $(BUILD)/msegp1.bin \
+                   $(BUILD)/msegp2.bin $(BUILD)/msegp3.bin $(BUILD)/msegp4.bin \
+                   tools/os88pkg.py apps/os88parts.inc
+	python3 tools/os88pkg.py $(BUILD)/mseg.bin -o $@ \
+		--part $(BUILD)/msegp0.bin --part $(BUILD)/msegp1.bin \
+		--part $(BUILD)/msegp2.bin --part $(BUILD)/msegp3.bin \
+		--part $(BUILD)/msegp4.bin
+
+# BOTH GEOMETRIES, and the 360KB one is not a formality: its clusters are 1KB
+# where the 1.44MB disk's are 512 bytes, so the cluster-aligned read starts
+# BELOW the run and op_claim's head slack is what makes the segments land
+# (SPEC.md 20.12.2). At 1.44MB the slack is always zero and the arithmetic
+# never runs.
+$(BUILD)/msegbig.bin: tests/multiseg/msegbig.asm apps/os88api.inc apps/os88parts.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ $<
+
+$(BUILD)/msegbig.o88: $(BUILD)/msegbig.bin $(BUILD)/msegp0.bin \
+                      $(BUILD)/msegp1.bin $(BUILD)/msegp2.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/msegbig.bin -o $@ \
+		--part $(BUILD)/msegp0.bin --part $(BUILD)/msegp1.bin \
+		--part $(BUILD)/msegp2.bin
+
+$(BUILD)/mseg.img: $(BUILD)/mseg.o88 $(BUILD)/msegbig.o88 tools/os88disk.py | $(BUILD)
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		$(BUILD)/mseg.o88 $(BUILD)/msegbig.o88
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/mseg360.img: $(BUILD)/mseg.o88 $(BUILD)/msegbig.o88 tools/os88disk.py | $(BUILD)
+	python3 tools/os88disk.py -o $@ --size 360 \
+		$(BUILD)/mseg.o88 $(BUILD)/msegbig.o88
+	@python3 tools/os88disk.py --verify $@
+
+#   make mseg                            builds both fixture disks
+#   python3 tests/multiseg.py 1440       runs the gate on MartyPC
+mseg: $(BUILD)/mseg.img $(BUILD)/mseg360.img
+
 # --- CWORD and its document floppy (SPEC.md 73.12) ---------------------------
 # The C toolchain's demonstrator: a word processor whose UI, layout, redraw
 # and RTF engine are all C, going through the same five steps ccsmoke and
@@ -3710,8 +4265,11 @@ $(BUILD)/cword.bin: apps/cword/cwmove.inc
 
 cword: $(BUILD)/cword.o88
 
-# All three geometries, as every disk-visible image in this tree is built
-# (CLAUDE.md): 1.44MB and 720KB for QEMU, 360KB for an 86Box XT or a real one.
+# All three geometries an APPLICATION's own floppy is built in (CLAUDE.md):
+# 1.44MB and 720KB for QEMU, 360KB for an 86Box XT or a real one. The shipped
+# system and apps pair gained a fourth, 1.2MB 5.25" (SPEC.md 19), and these did
+# not: an on-demand disk is for a machine somebody already has, and the machine
+# that wanted that geometry reads the 360KB disk in the same drive.
 # The C toolchain has been booted from a 360KB floppy once, on chello, and
 # that is the geometry a 20KB image most wants re-checked on.
 #
@@ -3945,7 +4503,7 @@ rczex: $(BUILD)/runcpm.img
 #
 # THE HOST CHECKS RUN FIRST AND STOP THE BUILD, through the stamp below: a
 # check that fails leaves no stamp, and the compile does not run.
-$(eval $(call CC_PACKAGE,c64,c64,C64.OVL))
+$(eval $(call CC_PACKAGE,c64,c64,C64.OVL,$(BUILD)/c64-rom/C64.ROM))
 
 # THE REST OF THE TRANSLATION UNIT (SPEC.md 73.1): c64.c #includes the parts,
 # and the shim %includes the three hand-written pieces and the icon. Every one
@@ -3995,9 +4553,14 @@ $(BUILD)/c64-rom/C64.ROM: tools/c64rom.py $(C64ROMS) | $(BUILD)
 
 c64rom: $(BUILD)/c64-rom/C64.ROM
 
-# THE DISK. C64.O88, C64.OVL and C64.ROM are THREE FILES IN ONE FOLDER on
-# every disk they share (SPEC.md 19.2.1: the .OVL is resolved in the launching
-# instance's current directory), plus a README.TXT naming the licence and
+# THE DISK. C64.O88 and C64.OVL are TWO FILES IN ONE FOLDER on every disk they
+# share (SPEC.md 19.2.1: the .OVL is resolved in the launching instance's
+# current directory). **THE ROM USED TO BE A THIRD** - C64.ROM, 20,480 bytes
+# of KERNAL, BASIC and CHARGEN that a file copy could separate from the
+# program it is useless without - and it is a PART inside C64.O88 now
+# (SPEC.md 20.12, the CC_PACKAGE call above). It is still built here, because
+# build/c64-rom/C64.ROM is what the packer appends and what c64uitest reads.
+# Plus a README.TXT naming the licence and
 # whose the ROMs are - AND COPYING, THE LICENCE ITSELF. The floppy is the
 # distributed form of a GPL-2-or-later binary and README.TXT on it says "the
 # full licence text is apps/c64/COPYING in the os8088 source tree, and it
@@ -4010,12 +4573,11 @@ c64rom: $(BUILD)/c64-rom/C64.ROM
 # folder on each - ~62KB, so even the 360KB disk carries the licence. One
 # disk per 86Box machine: c64.img for the 386, c64720.img for the 286,
 # c64360.img for the XT (runcpmdisk's arrangement, §74.5).
-C64DISK := $(BUILD)/c64.o88 $(BUILD)/C64.OVL $(BUILD)/c64-rom/C64.ROM \
+C64DISK := $(BUILD)/c64.o88 $(BUILD)/C64.OVL \
            apps/c64/COPYING apps/c64/README.TXT tools/os88disk.py
 C64IMG = python3 tools/os88disk.py -o $(1) --size $(2) \
 	    C64:$(BUILD)/c64.o88 C64:$(BUILD)/C64.OVL \
-	    C64:$(BUILD)/c64-rom/C64.ROM C64:apps/c64/README.TXT \
-	    C64:apps/c64/COPYING
+	    C64:apps/c64/README.TXT C64:apps/c64/COPYING
 c64disk: $(BUILD)/c64.img $(BUILD)/c64720.img $(BUILD)/c64360.img
 
 $(BUILD)/c64.img: $(C64DISK)
@@ -4171,8 +4733,11 @@ $(BUILD)/wsmsize.inc: $(BUILD)/WEAVE.WSM
 
 weave: $(BUILD)/weave.o88 $(BUILD)/WEAVE.WSM
 
-# All three geometries, as every disk-visible image in this tree is built
-# (CLAUDE.md): 1.44MB and 720KB for QEMU, 360KB for an 86Box XT or a real one.
+# All three geometries an APPLICATION's own floppy is built in (CLAUDE.md):
+# 1.44MB and 720KB for QEMU, 360KB for an 86Box XT or a real one. The shipped
+# system and apps pair gained a fourth, 1.2MB 5.25" (SPEC.md 19), and these did
+# not: an on-demand disk is for a machine somebody already has, and the machine
+# that wanted that geometry reads the 360KB disk in the same drive.
 # --verify is a standalone structural fsck of what came out and it is in the
 # recipe rather than in a target of its own because it costs milliseconds and
 # catches the class of defect - a bad FAT chain, a directory entry pointing at
@@ -4567,8 +5132,11 @@ $(BUILD)/wpvsize.inc: $(BUILD)/LOOM.WPV
 loom: $(BUILD)/loom.o88 $(BUILD)/LOOM.WPV
 
 # --- the LOOM floppy ---------------------------------------------------------
-# All three geometries, as every disk-visible image in this tree is built
-# (CLAUDE.md): 1.44MB and 720KB for QEMU, 360KB for an 86Box XT or a real one.
+# All three geometries an APPLICATION's own floppy is built in (CLAUDE.md):
+# 1.44MB and 720KB for QEMU, 360KB for an 86Box XT or a real one. The shipped
+# system and apps pair gained a fourth, 1.2MB 5.25" (SPEC.md 19), and these did
+# not: an on-demand disk is for a machine somebody already has, and the machine
+# that wanted that geometry reads the 360KB disk in the same drive.
 # --verify is a standalone structural fsck of what came out.
 #
 # WHAT IS ON IT, AND WHY EACH FILE IS THERE:
@@ -5536,6 +6104,17 @@ $(BUILD)/bench360.img: $(BENCHPKGS) $(BENCHDATA) tools/os88disk.py
 #                                         # (BROWSER-PLAN 4.1.1, SPEC.md
 #                                         # 71.10). brtest's own blit check
 #                                         # runs at top=0 and so cannot see it
+#   python3 tests/brreload.py             # ...and the RELOAD one: its
+#                                         # predicate and its action must be
+#                                         # the same question, or it empties
+#                                         # the location bar's own buffer
+#   python3 tests/brtoolbar.py            # ...and the TOOLBAR one: the state
+#                                         # field may not floor its pen back
+#                                         # onto the Reload button
+#   python3 tests/brtable.py              # ...and the TABLE one: issue #137's
+#                                         # three - an anchor inside a cell,
+#                                         # the doubled last line and a `..`
+#                                         # in a relative link
 #   python3 tests/brnav.py                # Back/Forward/Reload and Save As
 #                                         # (BROWSER-PLAN 5/5.2/5.3). It needs
 #                                         # `make ethertest` too and boots
@@ -5547,7 +6126,7 @@ $(BUILD)/bench360.img: $(BENCHPKGS) $(BENCHDATA) tools/os88disk.py
 #                                         # whose Back button did nothing
 BRFILES := $(BUILD)/browser.o88 $(BUILD)/DEMO.HTM $(BUILD)/TORTURE.HTM \
            $(BUILD)/UTF8.HTM $(BUILD)/FROGFIND.HTM $(BUILD)/FFHOME.HTM \
-           $(BUILD)/LINKS.HTM
+           $(BUILD)/LINKS.HTM $(BUILD)/PUBZONE.HTM
 
 browsertest: $(BUILD)/brtest.img $(BUILD)/brtest360.img
 
@@ -5562,6 +6141,8 @@ $(BUILD)/FROGFIND.HTM: tests/htm/frogfind-de-ie5.htm | $(BUILD)
 $(BUILD)/FFHOME.HTM: tests/htm/frogfind-home.htm | $(BUILD)
 	cp $< $@
 $(BUILD)/LINKS.HTM: tests/htm/links.htm | $(BUILD)
+	cp $< $@
+$(BUILD)/PUBZONE.HTM: tests/htm/pubzone.htm | $(BUILD)
 	cp $< $@
 
 $(BUILD)/brtest.img: $(BRFILES) tools/os88disk.py
@@ -5661,6 +6242,12 @@ FIELDKNOBS := DISKCNT=1
 # being true is the day the split acquired an ABI, which is the one thing this
 # design is written to avoid.
 SMALLDIR := $(BUILD)/smallk
+SMALLAPPDIR := $(BUILD)/smallapp
+                                    # ...and where the small BUILDS of the
+                                    # packages go. Beside $(SMALLDIR) because
+                                    # both name a directory the small product
+                                    # is assembled into, and both are read by
+                                    # the system disk's rule below
 
 # ...and its drivers are $(DRIVERS) LESS THE STORE ABOVE 1MB AND LESS THE RAM
 # DISK. XMEM.DRV is dead weight on this kernel and only on this one: xmem.inc
@@ -5677,34 +6264,256 @@ SMALLDIR := $(BUILD)/smallk
 # there is no row here that could name these two files. Leaving them on the
 # disk would be ~11KB of a 360KB floppy carrying software this kernel cannot
 # reach.
-# RECURSIVE, like $(DRIVERS) itself: $(KMODS) inside it still reads the
-# per-target KMODDIR.
-SMALLDRIVERS = $(filter-out $(BUILD)/xmem.drv $(BUILD)/ramdisk.drv \
-                            $(BUILD)/saver.drv \
-                            $(BUILD)/rampage.drv,$(DRIVERS))
+# ...AND NEITHER DOES ANY OTHER `.DRV`. SPEC.md 51.0 takes the loadable-driver
+# mechanism out of kern_small altogether, so SOUND, HDD, NET, ETHER and
+# HDDTOOL are not "unused" on this disk - there is no code left that could
+# name, read or load them. That is 49,621 bytes of a 360KB floppy, 13.5% of
+# it, and it is SPEC.md 24.5's rule applied one layer down: if it can never
+# run there, it does not go on the disk.
+#
+# STATED AS WHAT IT IS rather than as a filter-out list, and that is the point
+# of writing it this way: a driver added to $(DRIVERS) tomorrow must NOT
+# appear on this disk, and a subtraction list would have put it there
+# silently. $(KMODS) is the on-demand KERNEL MODULES (SPEC.md 2.8) - the
+# Control Panel, Format and Clone - which are this kernel's own code cut out
+# of its own binary and are a different mechanism entirely; $(SMALLMODS) adds
+# kern_small's two extra. RECURSIVE, like $(DRIVERS) itself, so $(KMODS)
+# inside it still reads the per-target KMODDIR.
+SMALLDRIVERS = $(KMODS)
 
 small: $(BUILD)/small360.img $(BUILD)/small.img
 	@python3 tools/kernsplit.py $(SMALLDIR)/kernel.bin $(BUILD)/kernel.bin
 
 # its kernel is $(SMALLDIR)'s, so its modules are too
+# --- WHAT THE SMALL DISKS DO NOT CARRY (SPEC.md 24.5) -------------------------
+#
+# **If it can never run there, it does not go on the disk.** Every row below is
+# a package whose REQUIREMENT kern_small cannot meet, and the requirement is
+# what puts it here - this is not a list of the biggest packages and must not
+# become one. A package that merely wants a lot of heap still ships: it will
+# refuse itself on the machine, in its own words, which is a thing the user can
+# read (SPEC.md 42.6 is the worked example). A package that cannot reach its
+# DRIVER cannot say anything at all.
+#
+#   browser, ftpd, telnet   ETHER.DRV. The NIC is not in $(SMALLDRIVERS) and
+#                           SPEC.md 72's whole surface is driver verbs, so
+#                           there is no socket to refuse on
+#   modplug, recorder,      SOUND.DRV, which a 128-256KB machine has nothing
+#   tracker, audio          to spare for - the same judgement that took
+#                           RAMDISK.DRV and RAMPAGE.DRV out of $(SMALLDRIVERS)
+#   tank                    the fullscreen surface (SPEC.md 42.7/81). It opens
+#                           and draws its splash, and there is no GAME behind
+#                           it without fsx, so what ships is a menu that leads
+#                           nowhere
+#
+# 99,749 bytes of a 360KB floppy - 27% of it - for eight programs that could
+# not have started (SPEC.md 24.5 has the same figures, re-measured together).
+SMALLOMIT := $(BUILD)/browser.o88 $(BUILD)/ftpd.o88 $(BUILD)/telnet.o88 \
+             $(BUILD)/modplug.o88 $(BUILD)/recorder.o88 $(BUILD)/tracker.o88 \
+             $(BUILD)/audio.o88
+SMALLOMIT_GAMES := $(BUILD)/tank.o88
+
+# ...and DEMO.HTM with the browser, for the same reason one step along: a .HTM
+# is openable by nothing else on the machine (SPEC.md 71).
+SMALLOMIT_DATA := tests/htm/demo.htm apps/tracker/beverly.mod
+                                    # ...and BEVERLY.MOD with the two players
+                                    # that read it. At 360KB it was already on
+                                    # a media disk of its own (SPEC.md 24.4);
+                                    # this takes it off the 1.44MB one too
+
+# THE PACKAGES THAT HAVE A SMALL BUILD - the build rules' list, and nothing
+# else. $(SMALLBASE) is the same set spelled as the ordinary build's paths, so
+# it is derived rather than repeated.
+#
+# **IT IS NOT A DISK LIST.** Which FOLDER a package ships in is decided by
+# which of $(APPS_TOOLS) / $(APPS_GAMES) it is in, exactly as on the ordinary
+# floppy - Solitaire is a game and belongs in GAMES/ on both. Naming these
+# APPS: directly put it in BOTH folders for a cycle.
+SMALLPKGS     := $(SMALLAPPDIR)/notepad.o88 $(SMALLAPPDIR)/paint.o88 \
+                 $(SMALLAPPDIR)/calc.o88 $(SMALLAPPDIR)/solitair.o88
+SMALLBASE      = $(patsubst $(SMALLAPPDIR)/%,$(BUILD)/%,$(SMALLPKGS))
+
+# The substitution, ONE IDIOM used by all four lists below: drop the omitted
+# packages, and take the small build of any that has one. A list that forgets
+# it ships BOTH builds on one floppy and the shipped one is whichever the
+# loader finds first - tests/unit/t_appsmall.py walks the built images for
+# exactly that, because this comment said so once already and the guard only
+# covered the tools.
+SMALLSUB       = $(patsubst $(BUILD)/%,$(SMALLAPPDIR)/%,$(filter $(SMALLBASE),$(2))) \
+                 $(filter-out $(SMALLBASE) $(1),$(2))
+
+# ...and the SAME substitution the tools get below, because a package with a
+# small build can be a GAME: Solitaire is, and for one cycle this line shipped
+# the full build into GAMES/ beside the small one in APPS/ - two copies on one
+# floppy, exactly what SMALLBASE exists to prevent. tests/unit/t_appsmall.py
+# now walks the built disks for it rather than trusting this line.
+SMALLGAMES      = $(call SMALLSUB,$(SMALLOMIT_GAMES),$(APPS_GAMES))
+                                    # DEFERRED (`=`), and it matters: $(APPS_GAMES)
+                                    # is defined ~400 lines BELOW here, so `:=`
+                                    # takes an EMPTY list and the disk ships with
+                                    # no GAMES folder at all - silently, because
+                                    # os88disk.py is being asked for nothing
+                                    # rather than for something missing
+SMALLDATA_360   = $(filter-out $(SMALLOMIT_DATA),$(APPS_DATA_360))
+SMALLDATA       = $(filter-out $(SMALLOMIT_DATA),$(APPS_DATA))
+
+
+SMALLAPPSARGS  = $(addprefix APPS:,$(call SMALLSUB,$(SMALLOMIT),$(APPS_TOOLS)))
+
+# --- THE CORE PACKAGES, on the small system disk too --------------------------
+# SPEC.md 24.3: the core packages ship on the SYSTEM disk as well as the apps
+# disk - a second copy and never a move - so a single-floppy machine has
+# something to run. `make small` never did that, and a 128KB machine is the
+# likeliest single-floppy machine there is.
+#
+# It is CORE_TOOLS with the same two filters the apps disk uses: the omitted
+# packages go, and the ones with a small build are the small build.
+SMALLCORE_TOOLS = $(call SMALLSUB,$(SMALLOMIT),$(CORE_TOOLS))
+SMALLCORE_GAMES = $(call SMALLSUB,$(SMALLOMIT_GAMES),$(CORE_GAMES))
+SMALLCOREARGS   = $(addprefix APPS:,$(SMALLCORE_TOOLS)) \
+                  $(addprefix GAMES:,$(SMALLCORE_GAMES))
+
 $(BUILD)/small360.img: KMODDIR := $(SMALLDIR)
 
-$(BUILD)/small360.img: $(SMALLDRIVERS) $(SYSAPPS) $(SYSDOC) tools/os88disk.py
+# $(SMALLMODS) is the ON-DEMAND KERNEL MODULES (SPEC.md 2.8), and it is
+# listed here rather than folded into $(KMODS) because these rules expand in
+# the OUTER make where KERN_SMALL is not set - which is how FILECP.DRV came to
+# be left off the disk with every build step green (docs/KERN-SMALL-MODULE-
+# SPLIT.md 9.2.5).
+#
+# IN THE RECIPE ONLY, AND NOT IN THE PREREQUISITES. Nothing in the outer make
+# can build $(SMALLDIR)/filecp.drv: it is cut out of $(SMALLDIR)/kernel.bin by
+# the SUB-MAKE this recipe runs, so demanding it up front asks make for a file
+# that cannot exist until the recipe has started - `No rule to make target'.
+# $(SMALLDIR)/kernel.bin and $(SMALLDIR)/boot360.bin are the same shape and
+# are already absent from this list for the same reason.
+#
+# $(SMALLDRIVERS) looks like a counter-example and is not: KMODDIR is a
+# TARGET-SPECIFIC variable, which GNU make applies to the recipe and NOT to a
+# prerequisite list expanded when the makefile is read - so that name is
+# `build/ctrl.drv` above the tab and `build/smallk/ctrl.drv` below it, and
+# only the first has a rule. It works by that asymmetry rather than in spite
+# of it, which is why $(SMALLMODS) - spelled with $(SMALLDIR) directly, so the
+# same both sides - could not join it.
+#
+# What still triggers the rebuild is $(SMALLDRIVERS)' big-build half: those
+# fall out of $(BUILD)/kernel.bin, so any kernel source change makes them
+# newer than the disk. And a module the sub-make somehow failed to write is
+# LOUD rather than silent - os88disk.py is handed the name and refuses.
+$(BUILD)/small360.img: $(SMALLDRIVERS) $(SYSAPPS) \
+                       $(SMALLCORE_TOOLS) $(SMALLCORE_GAMES) $(SYSDOC) \
+                       tools/os88disk.py
 	@$(MAKE) BUILD=$(SMALLDIR) KERN_SMALL=1 $(SMALLDIR)/boot360.bin
-	python3 tools/os88disk.py -o $@ --size 360 \
+	python3 tools/os88disk.py --fatcap 2 -o $@ --size 360 \
 		--boot $(SMALLDIR)/boot360.bin --kernel $(SMALLDIR)/kernel.bin \
-		$(SMALLDRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(MEDIAFOLDER)
-	@echo "small: $@ - kern_small on 360KB. Its apps disk is the ordinary"
-	@echo "       build/apps360.img: one package, both kernels"
+		$(SMALLDRIVERS) $(SMALLMODS) $(SYSAPPSARGS) $(SMALLCOREARGS) \
+		$(SYSDOC) $(MEDIAFOLDER)
+	@echo "small: $@ - kern_small on 360KB. Pair it with"
+	@echo "       build/smallapps360.img (\`make smallapps\`)"
 
 # its kernel is $(SMALLDIR)'s, so its modules are too
 $(BUILD)/small.img: KMODDIR := $(SMALLDIR)
 
-$(BUILD)/small.img: $(SMALLDRIVERS) $(SYSAPPS) $(SYSDOC) tools/os88disk.py
+$(BUILD)/small.img: $(SMALLDRIVERS) $(SYSAPPS) \
+                    $(SMALLCORE_TOOLS) $(SMALLCORE_GAMES) $(SYSDOC) \
+                    tools/os88disk.py
 	@$(MAKE) BUILD=$(SMALLDIR) KERN_SMALL=1 $(SMALLDIR)/boot.bin
-	python3 tools/os88disk.py -o $@ --size 1440 \
+	python3 tools/os88disk.py --fatcap 2 -o $@ --size 1440 \
 		--boot $(SMALLDIR)/boot.bin --kernel $(SMALLDIR)/kernel.bin \
-		$(SMALLDRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(MEDIAFOLDER)
+		$(SMALLDRIVERS) $(SMALLMODS) $(SYSAPPSARGS) $(SMALLCOREARGS) \
+		$(SYSDOC) $(MEDIAFOLDER)
+
+# --- THE SMALL APPS DISK (SPEC.md 27.16) -------------------------------------
+#
+# `make smallapps` is the APPS half of `make small`: the same floppy in the
+# same two geometries, with the SMALL BUILD of any package that has one in
+# place of the shipped one. Note Pad was the first consumer and Paint the second
+# (SMALLPKGS below is the list).
+#
+# IT IS NOT A SECOND ABI, and that is the whole reason this is a disk rather
+# than a kernel feature. A small-built package calls the same API table at the
+# same offsets as every other (docs/KERN-SPLIT-PLAN.md 3), so it runs on
+# kern_big exactly as it runs on kern_small - it simply has fewer features.
+# What pairs it with kern_small is which floppy it is written to, and nothing
+# else. `make small`'s note that a package is "one package, both kernels" is
+# still true: this is ONE PACKAGE BUILT TWICE, not two packages.
+#
+# So the shipped build/apps*.img are UNTOUCHED and must stay that way - the
+# default is the full package on every disk `all` produces, exactly as the
+# default kernel is kern_big.
+#
+# THE PATTERN IS `modplugdbg`'s, deliberately: a subdirectory build plus a
+# substituted package on an otherwise ordinary disk. That keeps -DAPP_SMALL
+# off every shipped nasm line, which is why it is not in $(KNOBS) and needs no
+# row in the build matrix - no top-level `make` can carry it into build/.
+
+$(SMALLAPPDIR)/notepad.bin: apps/notepad/notepad.asm apps/os88api.inc \
+                            apps/os88ui.inc $(SBSTAMP) | $(BUILD)
+	@mkdir -p $(SMALLAPPDIR)
+	$(NASM) -f bin -w+error -I apps/ -DAPP_SMALL $(PKGSBDEF) -o $@ \
+	        apps/notepad/notepad.asm
+	@echo "notepad (APP_SMALL): $(call FILESIZE,$@) bytes"
+
+$(SMALLAPPDIR)/notepad.o88: $(SMALLAPPDIR)/notepad.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(SMALLAPPDIR)/notepad.bin -o $@
+
+$(SMALLAPPDIR)/paint.bin: apps/paint/paint.asm apps/os88api.inc \
+                          apps/os88ui.inc $(SBSTAMP) | $(BUILD)
+	@mkdir -p $(SMALLAPPDIR)
+	$(NASM) -f bin -w+error -I apps/ -DAPP_SMALL $(PKGSBDEF) -o $@ \
+	        apps/paint/paint.asm
+	@echo "paint (APP_SMALL): $(call FILESIZE,$@) bytes"
+
+$(SMALLAPPDIR)/paint.o88: $(SMALLAPPDIR)/paint.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(SMALLAPPDIR)/paint.bin -o $@
+
+$(SMALLAPPDIR)/calc.bin: apps/calc/calc.asm apps/os88api.inc apps/os88ui.inc \
+                         $(SBSTAMP) | $(BUILD)
+	@mkdir -p $(SMALLAPPDIR)
+	$(NASM) -f bin -w+error -I apps/ -DAPP_SMALL $(PKGSBDEF) -o $@ \
+	        apps/calc/calc.asm
+	@echo "calc (APP_SMALL): $(call FILESIZE,$@) bytes"
+
+$(SMALLAPPDIR)/calc.o88: $(SMALLAPPDIR)/calc.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(SMALLAPPDIR)/calc.bin -o $@
+
+$(SMALLAPPDIR)/solitair.bin: apps/solitaire/solitaire.asm apps/os88api.inc \
+                             $(SBSTAMP) | $(BUILD)
+	@mkdir -p $(SMALLAPPDIR)
+	$(NASM) -f bin -w+error -I apps/ -DAPP_SMALL $(PKGSBDEF) -o $@ \
+	        apps/solitaire/solitaire.asm
+	@echo "solitaire (APP_SMALL): $(call FILESIZE,$@) bytes"
+
+$(SMALLAPPDIR)/solitair.o88: $(SMALLAPPDIR)/solitair.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(SMALLAPPDIR)/solitair.bin -o $@
+
+smallapps: $(BUILD)/smallapps360.img $(BUILD)/smallapps.img
+	@python3 tools/os88pkgsize.py $(BUILD)/notepad.o88 $(SMALLAPPDIR)/notepad.o88
+	@python3 tools/os88pkgsize.py $(BUILD)/paint.o88 $(SMALLAPPDIR)/paint.o88
+	@python3 tools/os88pkgsize.py $(BUILD)/calc.o88 $(SMALLAPPDIR)/calc.o88
+	@python3 tools/os88pkgsize.py $(BUILD)/solitair.o88 $(SMALLAPPDIR)/solitair.o88
+
+$(BUILD)/smallapps360.img: $(SMALLPKGS) $(APPS_TOOLS) $(SMALLGAMES) $(SYSAPPS) \
+                           $(APPS_DOS) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+	    $(SMALLAPPSARGS) \
+	    $(addprefix GAMES:,$(SMALLGAMES)) \
+	    $(addprefix MEDIA:,$(SMALLDATA_360)) \
+	    $(SYSAPPSARGS) \
+	    $(addprefix SYSTEM/DOS:,$(APPS_DOS)) \
+	    $(MEDIAFOLDER) $(APPDATAFOLDER)
+	@echo "smallapps: $@ - pair it with build/small360.img (\`make small\`)"
+
+$(BUILD)/smallapps.img: $(SMALLPKGS) $(APPS_TOOLS) $(SMALLGAMES) $(SYSAPPS) \
+                        $(APPS_DOS) tools/os88disk.py
+	python3 tools/os88disk.py --fatcap 2 -o $@ --size 1440 \
+	    $(SMALLAPPSARGS) \
+	    $(addprefix GAMES:,$(SMALLGAMES)) \
+	    $(addprefix MEDIA:,$(SMALLDATA)) \
+	    $(SYSAPPSARGS) \
+	    $(addprefix SYSTEM/DOS:,$(APPS_DOS)) \
+	    $(APPDATAFOLDER)
+	@echo "smallapps: $@ - pair it with build/small.img (\`make small\`)"
 
 # ...and the size comparison on its own, for when you want the numbers without
 # building two floppies for them. SMALL FIRST in the argument order, because it
@@ -6106,6 +6915,7 @@ $(BUILD)/dosstub.img: $(BUILD)/dsboot.bin $(BUILD)/dosstub.bin tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/dsboot.bin --kernel $(BUILD)/dosstub.bin
 
+.PHONY: mseg
 .PHONY: dosstub
 dosstub: $(BUILD)/dosstub.img
 	@echo "dosstub: $(BUILD)/dosstub.img - boots and runs OS88NET.COM with no DOS"
@@ -6239,6 +7049,12 @@ APPS_SYS := $(SYSAPPS)
 # the first place, so "copy it off the disk that came with the OS" cannot
 # depend on already having a way to move a file across.
 #
+# AND BECAUSE THIS MACHINE NEVER RUNS IT, IT SHIPS PACKED (SPEC.md 62.12): a
+# self-extracting archive that unpacks itself on the DOS machine, 11,653 bytes
+# where the program is 19,333. It is still copied and typed exactly as before -
+# the archive extracts into memory and enters the program, so there is no
+# unpacked file to find and no second step to explain.
+#
 # On the APPS disk rather than the system disk, so a single-floppy machine
 # does not have to eject the disk it booted from to reach it; and in SYSTEM/
 # rather than the root because it is machinery and not a program to go and
@@ -6296,7 +7112,11 @@ APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
 # and two things put it back: BEVERLY.MOD moved to a disk of its own (SPEC.md
 # 24.4), and 59% OF THAT 34KB WAS LITERAL ZEROS. The buffers are reserved past
 # the image now rather than written into the file, so it is 18KB and 36 of the
-# 354 clusters. Being on this disk is the whole reason a user has it to hand.
+# 708 SECTORS - 18 of the 354 clusters, this volume's being 1,024 bytes each,
+# which the line said wrongly in clusters until SPEC.md 62.12 redid the sum.
+# AND IT IS PACKED NOW (SPEC.md 62.12): 11,653 bytes and 12 clusters, which is
+# what took this disk off THREE free clusters and put it on ten.
+# Being on this disk is the whole reason a user has it to hand.
 APPSARGS360 := $(addprefix APPS:,$(APPS_TOOLS_360)) \
                $(addprefix GAMES:,$(APPS_GAMES)) \
                $(addprefix MEDIA:,$(APPS_DATA_360)) \
@@ -6312,6 +7132,9 @@ MEDIAARGS360 := $(addprefix MEDIA:,$(MEDIA_DISK_DATA))
 
 $(APPSIMG): $(APPS) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(APPSARGS)
+
+$(APPSIMG120): $(APPS) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(APPSARGS)
 
 $(APPSIMG720): $(APPS) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 $(APPSARGS)
@@ -6401,7 +7224,7 @@ ALLAPPSIMG := $(BUILD)/apps-all.img
 ALLAPPSFILES := $(APPS) $(BUILD)/frotz.o88 \
                 $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC \
                 $(BUILD)/cword.o88 $(BUILD)/CWORD.OVL $(BUILD)/WELCOME.RTF \
-                $(BUILD)/c64.o88 $(BUILD)/C64.OVL $(BUILD)/c64-rom/C64.ROM \
+                $(BUILD)/c64.o88 $(BUILD)/C64.OVL \
                 apps/c64/README.TXT apps/c64/COPYING \
                 $(WEAVEDISK) $(WEAVELOOM) $(LOOMRUN) $(LOOMSRCS) \
                 $(RUNCPMDISK)
@@ -6432,7 +7255,6 @@ ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(BUILD)/frotz.o88) \
                                   $(BUILD)/WELCOME.RTF) \
                $(addprefix RUNCPM:,$(RUNCPMDISK)) \
                $(addprefix C64:,$(BUILD)/c64.o88 $(BUILD)/C64.OVL \
-                                $(BUILD)/c64-rom/C64.ROM \
                                 apps/c64/README.TXT apps/c64/COPYING) \
                $(addprefix WEAVE:,$(WEAVEDISK)) \
                $(addprefix LOOM:,$(WEAVELOOM) $(LOOMRUN) $(LOOMSRCS)) \
@@ -6841,6 +7663,14 @@ run-640: $(IMG) $(APPSIMG)
 # 737,280 bytes is a standard one (2 heads x 80 cyl x 9 spt), so this needs
 # nothing beyond naming the two images - which is itself the check that
 # matters: a 720KB image the BIOS reads as some other shape fails here.
+# The 1.2MB 5.25" HD pair, and it is the same one-line check run-720 is:
+# QEMU picks a floppy's geometry from the image SIZE, and 1,228,800 bytes is a
+# standard one (2 heads x 80 cyl x 15 spt), so naming the images is the whole
+# recipe - and an image the BIOS reads as some other shape fails right here.
+run-120: $(IMG120) $(APPSIMG120)
+	$(QEMU) -drive file=$(IMG120),format=raw,if=floppy -boot a $(MOUSE) \
+		-drive file=$(APPSIMG120),format=raw,if=floppy,index=1 $(DEVCARD)
+
 run-720: $(IMG720) $(APPSIMG720)
 	$(QEMU) -drive file=$(IMG720),format=raw,if=floppy -boot a $(MOUSE) \
 		-drive file=$(APPSIMG720),format=raw,if=floppy,index=1 $(DEVCARD)
@@ -7123,6 +7953,18 @@ xt-multimon: $(IMG360) $(APPSIMG360)
 286: $(IMG) $(APPSIMG)
 	@$(UNPROTECT) $(VM286)/86box.cfg
 	$(BOX) -P $(VM286) -N
+
+# The 1.2MB 5.25" pair on the machine class it is for (SPEC.md 19): an AMI 286
+# at 12.5MHz with two 525_2hd drives. This is the ONLY 86Box profile in the
+# tree that can boot that geometry - every other AT-class machine here is
+# fitted with 3.5" drives, and a 1.2MB disk needs a 5.25" HD one - so it is
+# also the only place the geometry is exercised on period hardware at all.
+#
+# It has a CMOS like every AT-class machine, so the first launch stops in BIOS
+# setup: pick EXIT FOR BOOT once (see the note above `286`).
+286-525: $(IMG120) $(APPSIMG120)
+	@$(UNPROTECT) $(VM286525)/86box.cfg
+	$(BOX) -P $(VM286525) -N
 
 386sx: $(IMG) $(APPSIMG)
 	@$(UNPROTECT) $(VM386SX)/86box.cfg

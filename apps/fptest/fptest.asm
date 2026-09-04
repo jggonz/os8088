@@ -57,6 +57,7 @@ fpt_s_hw:    db '8087 ', 0
 
 ; fpt_itoa - AX signed -> the string at DI. Diagnostics only.
 fpt_itoa:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push ax
     push bx
     push cx

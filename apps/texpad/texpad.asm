@@ -2649,9 +2649,19 @@ tp_draw_frames:
     ; A FOCUS RING IS DRAWN ONE PIXEL OUTSIDE THE PANE, so the ring that is
     ; ERASED (white, the pane that just lost focus) takes with it whatever
     ; else lives on those four lines: the SPLITTER down the right of the
-    ; source pane, and the status strip's RULE along the bottom of both.
-    ; Neither belongs to this routine and both have to be put back, or a
-    ; click on the other pane leaves a white gap where they were.
+    ; source pane, the PREVIEW BAR's left frame column, and the status strip's
+    ; RULE along the bottom of both. None of them belongs to this routine and
+    ; all three have to be put back, or a click on the other pane leaves a
+    ; white gap where they were.
+    ;
+    ; THE THIRD ONE IS THERE BECAUSE THE PANES ARE NOT SYMMETRIC. The source
+    ; frame's right edge is [tp_r_ssb+4], its own bar's x2, so the source ring
+    ; falls one pixel BEYOND that bar - on the splitter. The preview frame's
+    ; is [tp_px2], which stops SHORT of its bar, so the preview ring falls ON
+    ; [tp_r_psb], the bar's left frame column, for the bar's whole height.
+    ; tests/tpdraw.py measured it as 344 pixels at x 617 down y 63..406, and
+    ; only ever on a preview -> source change: the ring that GAINS focus is
+    ; black, which is what the bar wanted on that column anyway.
     mov al, CBLACK
     call OSAPI_SET_COLOR
     mov ax, [tp_ox]
@@ -2659,6 +2669,10 @@ tp_draw_frames:
     inc ax
     mov bx, [tp_py1]
     mov dx, [tp_py2]
+    call OSAPI_GFX_VLINE
+    mov ax, [tp_r_psb]          ; the preview bar's left frame column, which
+    mov bx, [tp_r_psb+2]        ; the ring above lands on rather than beyond
+    mov dx, [tp_r_psb+6]
     call OSAPI_GFX_VLINE
     mov ax, [tp_ox]
     mov bx, ax
@@ -4202,10 +4216,6 @@ tp_bact:
     ret
 .prev:
     call tp_prev_page
-    stc
-    ret
-.next:
-    call tp_next_page
     stc
     ret
 ; -----------------------------------------------------------------------------
@@ -5940,6 +5950,7 @@ tp_cpatn:
     ret
 
 tp_u16_di:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push ax
     push bx
     push cx

@@ -83,7 +83,7 @@ Copyright © Commodore Business Machines**, they are neither GPL nor ours, and
 they are distributed here exactly as VICE distributes them in `data/C64/`.
 Nothing else third-party is committed.
 
-### 1.4 `C64.ROM` — the sidecar file
+### 1.4 The ROM — a PART of the package
 
 `tools/c64rom.py` concatenates the three into `build/c64-rom/C64.ROM` with a
 **fixed layout** and checks each input's SHA-256 against §1.3's table before
@@ -96,29 +96,47 @@ it writes:
 | `0x4000` | 4,096 | CHARGEN (`chargen-901225-01.bin`) |
 | | **20,480** | total — 40 sectors, exactly 20KB |
 
-20,480 is 512-aligned and 1KB-exact, so the file is read straight into the
-base of a 20KB claim with `os88_file_read_seg` and no scratch buffer
-(SPEC.md §2.1.1's alignment rule is met by construction). **The ROMs are not
-embedded in the package** — on paper an embedded build was over 64,000 bytes
-against SPEC.md §73's 61,440 cap, refused before a line was written.
+**IT IS PART 0 OF `C64.O88`** (SPEC.md §20.12). `tools/c64rom.py` still builds
+the same 20,480 bytes from the same committed inputs — `make` produces them on
+any checkout with no network and no VICE tree — and what changed is that
+`os88pkg.py` appends the result to the package instead of `os88disk.py` putting
+it on the floppy beside it. The shim declares one `OS88_PART OP_ASSET` and
+`apps/cc/crt0.asm` calls `op_load` before any C runs, so by the time
+`os88_main` executes the 20KB is claimed and the ROM is in it — or the launch
+was refused, with a toast, **before a sector was read**, because the part table
+`op_load` sizes from is already inside the image the kernel had to read anyway.
 
-`C64.ROM` is a **shipped file, not a fetched one**: it is built from
-committed inputs, so `make` produces it on any checkout with no network and
-no VICE tree.
+**It was a SIDECAR and that is the whole of what changed.** `C64.ROM` sat
+beside `C64.O88` in one folder, and a file copy could separate the program from
+the ROM it is useless without. Everything below used to exist to say so when it
+happened, and every line of it is deleted rather than disabled — a greying may
+not outlive its reason (SPEC.md §47):
 
-**A disk without `C64.ROM` says so on the glass**, naming the file. The
-machine is not started; the window IS.
+- the halted-machine state (`c64_norom`) and the four-line notice on the glass
+  naming the file, with its own once-only gate and its own expose repair;
+- the permanent status row `C64.ROM missing - see README.TXT` (§10.1's longest
+  message, which is why that gate's cap was what it was);
+- Preferences > Advance frame, Edit > Copy and Edit > Paste greying on it —
+  each keeps its OTHER reasons, the jam and the pause, which are real;
+- and `build/c64uitest --no-rom`, a whole second host-test process that existed
+  because `os88_main` decides that surface once per launch.
 
-That is a wave-1 amendment and it was made by a screendump. The first build
-returned 0 from `os88_main` and toasted `C64: no C64.ROM` — and what reached
-the glass was the KERNEL's own `Load failed`, because a refused launch raises
-its own toast over the package's. So the refusal now takes LESSONS.md 13's
-RUNCPM shape: the window comes up, the screen area says which file is missing
-and what it is for, the status row carries `C64.ROM missing - see README.TXT`
-as a permanent line rather than a message that expires, and the toast goes out
-as well (§9.8's both-routes rule). A claim that cannot be had is still a
-refused launch and still quotes `os88_mem_largest_kb()` (§3.1): there is
-nothing to put a window on when the memory is not there.
+**The number that refused this on paper was the wrong number.** This section
+used to record that an embedded build "was over 64,000 bytes against SPEC.md
+§73's 61,440 cap, refused before a line was written". `APP_MAX_SIZE` bounds the
+primary SEGMENT's image plus bss, not the FILE: a part lives past the image and
+the segment never sees it. Measured after the conversion — image **40,854**,
+bss **13,176**, sum **54,030** against the 61,440 cap, in a file of **61,440**
+bytes. The cap was never the obstacle; nothing existed to put the bytes
+anywhere else.
+
+A claim that cannot be had is still a refused launch (§3.1), and it is
+`op_load`'s refusal now rather than the package's: it names the figure in a
+toast, and the kernel's own `Load failed` replaces it because §21 step 10
+toasts for every outcome (SPEC.md §20.12.4). That is a real loss of wording
+against the sidecar's on-glass notice, and it is the trade: a message about a
+file that cannot go missing is worth less than the file not being able to go
+missing.
 
 ---
 
@@ -164,11 +182,12 @@ their own segments:
 | claim | size | contents |
 |---|---|---|
 | RAM | `os88_mem_claim(64)` — 65,536 bytes | the C64's RAM, `$0000-$FFFF`, flat, one segment |
-| ROM | `os88_mem_claim(20)` — 20,480 bytes | `C64.ROM` read straight in, §1.4's layout |
+| ROM | `op_load`'s carve — 20,480 bytes | the ROM PART, §1.4's layout, claimed and read by the parts standard before `os88_main` runs; `os88_part_seg(0)` is its base |
 
 Launch is **defined by the claims succeeding**, not by a free-KB figure: the
-64KB claim, the 20KB claim and the `C64.ROM` read must all succeed, and the
-refusal sentence quotes what was asked and `os88_mem_largest_kb()`. Two more
+64KB claim must succeed and `op_load` must have had its 20KB and read the part
+into it, and the refusal sentence quotes what was asked and
+`os88_mem_largest_kb()`. Two more
 claims appear later and are refused politely if they cannot be had: the
 package's own `C64.OVL` module (§13.3) at the first menu command, and a
 transient claim the size of the `.PRG` during Smart attach (§11.3).
@@ -693,8 +712,8 @@ keep counting across a second launch and a drag.
 format string of `src/maincpu.c:612` with `CPU_STR` from `src/6510core.c:45`
 and VICE's dialog padding dropped (§2's row). It goes up as a message,
 because that is how it arrives, and then it **stays**: `C64_ST_JAM` is a
-permanent status-row state beside §1.4's `C64.ROM missing`, for the same
-reason — neither is a thing that stops being true, and a five-second message
+permanent status-row state — it is not a thing that stops being true, and a
+five-second message
 left a dead machine and an idle one showing the identical widget row
 (`build/port-shots/wave2-05-jam.png` was that defect;
 `wave2fix-18-jam-permanent.png` is the row eight seconds after the message
@@ -1589,8 +1608,8 @@ exactly why nothing could see this.
 it authors one** (amended in wave 1's review). `os88_main` calls
 `os88_video()` and clamps the height to `dock_top − 20`; a 200-line CGA
 desktop cannot give 226, and authoring it anyway left `wm_fit` to clamp the
-window with the **status row off the bottom** — the row that carries §1.4's
-permanent `C64.ROM missing` fact and every refusal
+window with the **status row off the bottom** — the row that carries
+§4.5's permanent jam line and every refusal
 (`build/port-shots/wave1-cga-launch.png` is the first draft doing exactly
 that). The flush then reads the LIVE content box every time it runs:
 
@@ -2480,8 +2499,9 @@ deflection of the stick blanked the two widgets that report the stick.
 
 So the fill is `ox .. ox + 199` for a message of 25 cells or fewer, and the
 widgets right of it stay on the glass and keep delta-drawing under it. A
-LONGER message — `C64.ROM missing - see README.TXT` at 32,
-`Pasting the first 2048 bytes.` at 29 — still owns all 40 field cells, because
+LONGER message — `Pasting the first 2048 bytes.` at 29, and until §1.4
+`C64.ROM missing - see README.TXT` at 32, which is where the cap came from —
+still owns all 40 field cells, because
 there is nowhere else for it to go. The cost, from §9.7: **22.8 ms going up and 26.0 ms
 coming down**, against 36.8 + 42.0 for the erase-and-rebuild pair.
 
@@ -2530,14 +2550,15 @@ success says
 **nothing**, because VICE says nothing and the window it came from has not
 changed.
 
-**THERE ARE THREE PERMANENT ROW STATES AND A MESSAGE IS NOT ONE OF THEM.**
-`C64.ROM missing - see README.TXT` (§1.4) and `Main CPU: JAM at $XXXX` (§4.5)
-are LINES, not messages: neither is a thing that stops being true after five
+**A PERMANENT ROW STATE IS NOT A MESSAGE.** `Main CPU: JAM at $XXXX` (§4.5)
+is a LINE, not a message: it is not a thing that stops being true after five
 seconds, and a jam that expired left the ordinary widget row up — `0% cpu
 0.0 fps` — which is what an IDLE machine looks like, so the glass could not
 tell a dead machine from a stopped one (pause at least inverts `P`). The row's
-selector is therefore three-way: a message while one is up, then the jam line,
-then `C64.ROM missing`, then the widgets.
+selector is therefore: a message while one is up, then the jam line, then the
+widgets. **There were TWO such lines** — `C64.ROM missing - see README.TXT`
+(§1.4) was the other, and it went when the ROM became a part of the package
+and stopped being a thing that can go missing.
 
 **AND A PERMANENT LINE DOES NOT ARRIVE AS A MESSAGE**, which is the fix pass's
 correction to the sentence that used to stand here (*"the message is only how
@@ -2556,18 +2577,19 @@ the widgets right of cell 24 alone.) `hosttest/c64uitest.c`
 gates it with the second draw as its negative control.
 
 **AND THE DEADLINE IS EXAMINED FIRST THING IN THE FLUSH**, before any branch
-can return past it. It used to sit down beside the status row, past
-`c64_flush`'s ROM-less early return — so on a disk with **no `C64.ROM`**
-nothing ever cleared `c64_msg`, and the first menu command a user picked owned
-the row for the rest of the session with §1.4's permanent
-`C64.ROM missing - see README.TXT` behind it. There is exactly one writer of
-`c64_msg` (`c64_say`) and one reader of the clock, and it belongs where every
-flush passes through it.
+can return past it. It used to sit down beside the status row, past an early
+return — `c64_flush`'s ROM-less branch, which §1.4 deleted along with the state
+it drew — so on a disk with no `C64.ROM` nothing ever cleared `c64_msg`, and
+the first menu command a user picked owned the row for the rest of the session
+with that permanent line behind it. There is exactly one writer of `c64_msg`
+(`c64_say`) and one reader of the clock, and it stays at the top: it belongs
+where every flush passes through it, whatever branches get added below it
+later.
 
 **BUT A MESSAGE IS NOT A REASON TO ASK FOR ANOTHER WAKE.** A running machine
 already asks, so its messages expire on the ordinary flush cadence. **A machine
-the user stopped — paused, jammed, or a disk with no `C64.ROM` — keeps its
-message until the next event**, and that is a decision rather than an
+the user stopped — paused or jammed — keeps its message until the next
+event**, and that is a decision rather than an
 oversight: `c64_msg[0] != 0` used to be the first term of `c64_wants_wake`, so
 a stopped machine re-posted for the whole five-second life of every message
 with nothing inside the wake but a re-read of the clock — SPEC.md §74.1's
@@ -2778,8 +2800,9 @@ item.
 both**: a pull-down is at most `MENU_POPMAX` = **11 items** and each item is
 truncated to `MENU_MAXCH` = **24 glyphs** (`kernel/menu.inc:195`, `:207`).
 They are facts about the machine, and they are measured on the SMALLEST
-screen: `vid_popmax` is `(vid_h − 22) / 16`, which is 11 on a 200-line CGA and
-clamped to 11 above it. Three rules follow:
+screen: `(vid_h − 22) / 16` is 11 on a 200-line CGA and clamped to 11 above
+it, which is why `[vid_popmax]` is now that constant rather than that
+arithmetic (SPEC.md §39.2). Three rules follow:
 
 1. **A section that is ENTIRELY unavailable folds into ONE item, and that item
    is the section's FIRST** — its submenu head label where it has one,
@@ -2936,9 +2959,9 @@ path that changes the state.
 
 | item | greyed while | and the fact is |
 |---|---|---|
-| Preferences > Advance frame | `c64_norom` or `C64_ST_JAM` | §1.4's or §4.5's permanent line |
-| Edit > Paste | `c64_norom`, `C64_ST_JAM` **or `c64_pause`** | for the first two, §1.4's or §4.5's permanent line — and in **any** of the three, nothing would ever drain the queue (§7.7), which is why the sentence here used to read *"in either greyed state"* and now reads any. **The PAUSED state's fact is not a message**: `Paused.` is a `c64_say` and expires after ~5 s, so what stands for as long as the pause does is §10.2's **`P` lamp** on the status row and the check beside Preferences > Pause emulation. **This is a deliberate departure from VICE**, which queues a paste on a paused machine and delivers it on resume: there the queue is drained by the vsync handler, which runs whatever the machine is doing, and here `c64_paste_feed` is called only from the RUNNING arm of `os88_onwake` — so nothing would ever drink it |
-| Edit > Copy | `c64_norom` | the same — and the system clipboard is not this app's to spend (§7.7). Copy is **not** greyed by a pause or a jam: the frozen screen is real, and the body runs from the wake whatever the machine's state is |
+| Preferences > Advance frame | `C64_ST_JAM` | §4.5's permanent line. It was `c64_norom` OR a jam until §1.4 made the ROM a part; the missing-ROM half went with the state, because a greying may not outlive its reason (SPEC.md §47) |
+| Edit > Paste | `C64_ST_JAM` **or `c64_pause`** | for the first, §4.5's permanent line — and in **any** of the three, nothing would ever drain the queue (§7.7), which is why the sentence here used to read *"in either greyed state"* and now reads any. **The PAUSED state's fact is not a message**: `Paused.` is a `c64_say` and expires after ~5 s, so what stands for as long as the pause does is §10.2's **`P` lamp** on the status row and the check beside Preferences > Pause emulation. **This is a deliberate departure from VICE**, which queues a paste on a paused machine and delivers it on resume: there the queue is drained by the vsync handler, which runs whatever the machine is doing, and here `c64_paste_feed` is called only from the RUNNING arm of `os88_onwake` — so nothing would ever drink it |
+| Edit > Copy | *nothing* | it was greyed by `c64_norom` alone, and with the ROM a part (§1.4) there is no machine that never started — so the one fact that greyed it is gone and the item is always live. It is **not** greyed by a pause or a jam either: the frozen screen is real, and the body runs from the wake whatever the machine's state is |
 
 **The chords are guarded with them.** `os88_onkey` dispatches Alt+Shift+P,
 Alt+Delete and Alt+Insert itself (§7.5), and the kernel's *"a disabled item is
@@ -3415,8 +3438,9 @@ C64's own RAM (§3.5).
   (§7.7) — the one thing in this program that runs exactly once, and therefore
   the one thing besides a menu command that §73.14 sends out. The tables
   themselves are bss and stay resident: only code moves.
-- `C64.O88`, `C64.OVL` and `C64.ROM` are **three files in one folder** on
-  every disk they share (SPEC.md §19.2.1, SPEC.md §19.9) — §14.2.
+- `C64.O88` and `C64.OVL` are **two files in one folder** on every disk they
+  share (SPEC.md §19.2.1, SPEC.md §19.9) — §14.2. `C64.ROM` was a third and is
+  a PART of `C64.O88` now (§1.4).
 
 ---
 
@@ -3428,11 +3452,11 @@ C64's own RAM (§3.5).
 |---|---|
 | package name | `C64` |
 | source | `apps/c64/` |
-| shipped files | `C64.O88`, `C64.OVL`, `C64.ROM` |
+| shipped files | `C64.O88` (with the ROM as part 0, §1.4), `C64.OVL` |
 | window title | `VICE (C64)` |
 | menu-set `AM_NAME` | `VICE` |
 | images | `build/c64.img` (1.44MB), `build/c64720.img` (720KB), `build/c64360.img` (360KB) |
-| tools | `tools/c64rom.py` (builds `C64.ROM`, §1.4), `tools/c64prg.py` (writes `.PRG` fixtures, §14.4), `tools/c64ref.py` (the reference compositor, §14.5) |
+| tools | `tools/c64rom.py` (builds the ROM the packer appends, §1.4), `tools/c64prg.py` (writes `.PRG` fixtures, §14.4), `tools/c64ref.py` (the reference compositor, §14.5) |
 
 The name is checked against `apps/`, `vm/`, the Makefile and `build/` before
 wave 1 (LESSONS 1's rule about two programs sharing an ambition).
@@ -3440,8 +3464,9 @@ wave 1 (LESSONS 1's rule about two programs sharing an ambition).
 ### 14.2 Disks
 
 Three geometries, each `os88disk.py --verify`'d in the recipe. Each carries
-**`C64.O88` + `C64.OVL` + `C64.ROM` in one folder**, plus a `README.TXT`
-naming the licence and carrying the ROM copyright line (§1.2, §1.3).
+**`C64.O88` + `C64.OVL` in one folder**, plus a `README.TXT` naming the licence
+and carrying the ROM copyright line (§1.2, §1.3). The ROM is inside `C64.O88`
+(§1.4), so the byte count is unchanged and the file count is one lower.
 
 **AND `COPYING` TRAVELS WITH THE BINARY.** The floppy is the distributed form
 of a GPL-2-or-later program, `apps/runcpm`'s disks ship their upstream licence
@@ -3453,7 +3478,7 @@ tree.
 
 **Which geometries carry it, with the arithmetic:**
 
-| geometry | clusters | `C64.O88` + `C64.OVL` + `C64.ROM` + `README.TXT` | `COPYING` (17,989 B) | carries it |
+| geometry | clusters | `C64.O88` (ROM included) + `C64.OVL` + `README.TXT` | `COPYING` (17,989 B) | carries it |
 |---|---|---|---|---|
 | 1.44MB | 2,847 × 512 B | ~78 | 36 | **yes** |
 | 720KB | 713 × 1KB | ~40 | 18 | **yes** |

@@ -21,6 +21,13 @@ machine's tick does not advance, and every debug read still answers.
 import sys, time
 sys.path.insert(0, "/home/user/os8088/tools")
 sys.path.insert(0, "/home/user/os8088/tests")
+
+from os88geom import (VID_CTX_SZ, VID_CTX_VX,          # noqa: E402
+                      VID_CTX_VY, VID_CTX_KIND, VID_CTX_CH)
+# SPEC.md 39.14's per-display record: DERIVED from VID_CTX_W and never
+# written down here. This file spelled it `42 + 36`, which is the
+# VID_CTX_W = 18 layout - two bytes early, and what sits there is
+# display 1's vid_chm8, so the seam read 192 instead of 720.
 import os88marty, os88mouse, os88sym, dispcp
 S = os88sym.linear
 TITLE_H = 18
@@ -90,7 +97,8 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     dispcp.open_panel(m, mo, S, os88marty.settle)
     dispcp.set_mode(m, mo, S, os88marty.settle, "right")
     dispcp.close_panel(m, mo, S, os88marty.settle)
-    ctx = m.read(S("vid_ctx"), 84); seam = u16(ctx, 42 + 36)
+    ctx = m.read(S("vid_ctx"), 2 * VID_CTX_SZ)
+    seam = u16(ctx, VID_CTX_SZ + VID_CTX_VX)
     print("seam at x=%d" % seam)
     alive(m, "after extend")
 

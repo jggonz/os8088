@@ -137,6 +137,43 @@ timing is not. docs/MARTYPC-DEBUG.md carries the per-machine table. And the
 without one in `tools/martypc/roms/` can run only the GLaBIOS twins — which
 is the class you must not take that timing from.
 
+### Which ROM did it actually load? Fingerprint it, never infer it
+
+Pass 1's worst bug was a divide overflow that hard-locks an IBM machine and is
+merely a wrong clip index on GLaBIOS, and the pass ran its whole suite without
+noticing that every MartyPC row was a GLaBIOS one. Its handoff drew the right
+lesson — *"check what the emulator actually loaded"* — and left no committed way
+to do it. This is that way: read the ROM. Chip U33 sits at `0xFE000` and the
+reset vector's date string at `0xFFFF5`.
+
+```python
+with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
+                      machine="os8088_5150_cga", boot=3) as m:
+    print(bytes(m.read(0xFE000, 24)))     # b'1501476 COPR. IBM 1982'
+    print(bytes(m.read(0xFFFF5, 8)))      # b'10/27/82'
+```
+
+Measured, on a container with the dump in place:
+
+| machine | `0xFE000` | `0xFFFF5` |
+|---|---|---|
+| `os8088_5150_cga` | `1501476 COPR. IBM 1982` | `10/27/82` |
+| `os8088_5150_cga_gla` | `GLaBIOS [.] Reboot the Past` | `07/17/25` |
+
+**The failure is LOUD, which corrects the half of pass 1's account that said it
+was silent.** With the dump moved aside, `os8088_5150_cga` does not quietly come
+up as `glabios_pc`: `martypc_headless` exits **rc=1** before the guest runs at
+all, so a container without a ROM cannot run an IBM row *or* mistake a GLaBIOS
+one for it. The monoculture was the suite choosing GLaBIOS machines, not the
+emulator substituting them. Fingerprint anyway — the config's name is an
+inference and the two reads above are a measurement.
+
+**`tests/int0sweep.py` is the row that needs the real ROM.** On an IBM 5150 the
+INT 0 vector is the BIOS stub that masks the whole 8259, so a single divide
+overflow is a dead machine where GLaBIOS gives a wrong clip index and carries
+on. Run against the ROM fingerprinted above, across both drives and the folder
+walk: **`INT 0 never fired`**.
+
 ---
 
 This document exists because the opposite keeps getting concluded about
@@ -214,15 +251,25 @@ a cycle-accurate 5150 in a container:
   * a MartyPC boot to a settled desktop is **7.8 seconds**;
   * the emulator tests in `tests/` are **40-75 seconds each**, because each
     one boots its own machine and then drives a session through it;
-  * and they **cannot run in parallel**. Every one drives the debug server on
-    127.0.0.1:9001 - one port, one connection, and a second client does not
-    error, it HANGS (docs/MARTYPC-DEBUG.md). The runner marks them `serial`
-    and gives them one lane behind the host-side rows.
+  * and they run in one lane by default. That used to be forced - every one
+    drove the debug server on 127.0.0.1:9001, one port, one connection, and a
+    second client did not error, it HUNG. It is not forced any more:
+    `os88marty.launch` gives every instance its own port, run directory and
+    disks (docs/MARTYPC-DEBUG.md), and `os88test.py --marty-jobs N` widens the
+    lane. What still runs alone is a row marked `builds=True`, which shells
+    out to `make` and so rewrites `build/` under anything reading it -
+    `tests/unit/t_registry.py` checks that flag against the script rather than
+    trusting it.
 
-So ten minutes is about **eight** emulator tests, not fifty. That is not a
-limitation to engineer away, it is what the machine costs. The honest response
-is to say which eight and put the rest in `soak`, where they are still one
-command away.
+So ten minutes is about **eight** emulator tests at `--marty-jobs 1`, not
+fifty. The default is 1 for arithmetic rather than caution: every instance
+runs its guest as fast as the host will let it, so N of them on an N-core box
+is the ceiling, and past it each row takes longer in HOST seconds - which is
+what a row's declared `secs`, its timeout and `settle`'s patience are all
+measured in. Guest cycle counts are unaffected, being counted rather than
+timed. Measured on a four-core container, four emulator rows: **175.6 s at
+`--marty-jobs 1`, 85.9 s at 3**, each row 6-10% slower and none of them
+failing. Raise it deliberately, with the box in mind.
 
 **What earns a `full` row is breadth per second.** `tests/bootsmoke.py` is the
 model: eight seconds, and it exercises the boot sector, FAT12, the `int 13h`
@@ -244,7 +291,7 @@ failure this tree has actually had:
 | `image` | The seven shipped floppies walked by an **independent** FAT12 reader: `KERNEL.SYS` contiguous (the boot sector has no chain walker - a fragmented kernel builds, verifies and mounts cleanly and does not boot), a byte-exact standard BPB (SPEC.md 19.3 - DOS reads a floppy's geometry from its own table), SPEC.md 19.6's attributes. |
 | `pkg` | Package, driver and module headers - and every file on every image proved byte-identical to the artifact in `build/` it came from. *"A stale image is indistinguishable from a change that did nothing."* |
 | `diskverify` | The tree's own fsck, which `make` ran on the C, Word and RunCPM disks and on **none** of the seven the default build ships. |
-| `asmrules` | Unreachable code after an unconditional jump - CLAUDE.md's own worked example is the tracker shipping *"two `jmp short`s in a row"* which assembles, boots, and puts a field bug back. And that a `cpu 8086` is reachable from every root; `boot/boot.asm` had none at all. |
+| `asmrules` | Unreachable code after an unconditional jump - CLAUDE.md's own worked example is the tracker shipping *"two `jmp short`s in a row"* which assembles, boots, and puts a field bug back. And that a `cpu 8086` is reachable from every root; `boot/boot.asm` had none at all. And a kernel **local block nothing can reach**: the first check stops at *"is there a label between the jump and this line"*, and a label only helps if something reaches it - `dskw_wdata.stg` and `dskw_rdata.stg`, the DMA staging arm of both file pipelines, had zero incoming jumps for a year with this row green (SPEC.md 18.4.2.1). |
 | `registry` | Every test in `tests/` is registered in a tier or says why not. **This is the row that stops the suite going back to what it was.** |
 
 ### Adding a test
@@ -278,7 +325,7 @@ emulator have the hardware": a ✅ means reach for it first.
 | A **cross-wired IRQ** (SPEC.md §9.5.2) | ➖ | ✅ | `make test MOUSEPORT=com2irq4` | the Compaq Portable III: mouse at 2F8 driving IRQ4. Undetectable before the fix |
 | A **modem** on the other port | ➖ | ✅ | a socket chardev at 3F8 — see below | eight result codes claim nothing, move nothing, click nothing |
 | **A PS/2 mouse** (SPEC.md §9.9) | ➖ | ✅ | `make test MOUSEPORT=ps2` | the `pc` machine's 8042 has an auxiliary port whether or not anything is plugged into it, so both halves are testable here and neither is on MartyPC or a 5150 — an XT has no 8042 at all, and `[cpu_tier]` refuses the whole module there. See below |
-| **The VMware absolute pointer** (SPEC.md §9.10) | ➖ | ✅ | `python3 tests/vmmouse.py` (or `make run VMPORT=on`) | QEMU's `pc` machine carries a `vmport` and a `vmmouse` by default, so the backdoor probe succeeds here exactly as it does under v86 in the browser — the one CI gate this browser-only feature gets. **Every other recipe turns it off** (`-machine pc,vmport=off`, the Makefile's `VMPORT`): `tools/mouse.py` drives `msserial`, and left on, `vmm_init` wins the contest and retires it. `tests/vmmouse.py` turns it back on with `-serial none`, asserts `mou_port` = 6, and injects absolute positions through `vmmouse` that must land on the pixel. MartyPC has no backdoor |
+| **The VMware absolute pointer** (SPEC.md §9.11) | ➖ | ✅ | `python3 tests/vmmouse.py` (or `make run VMPORT=on`) | QEMU's `pc` machine carries a `vmport` and a `vmmouse` by default, so the backdoor probe succeeds here exactly as it does under v86 in the browser — the one CI gate this browser-only feature gets. **Every other recipe turns it off** (`-machine pc,vmport=off`, the Makefile's `VMPORT`): `tools/mouse.py` drives `msserial`, and left on, `vmm_init` wins the contest and retires it. `tests/vmmouse.py` turns it back on with `-serial none`, asserts `mou_port` = 6, and injects absolute positions through `vmmouse` that must land on the pixel. MartyPC has no backdoor |
 | **The hardware clock** (SPEC.md §37.90/§37.94) | ➖ | ✅ | `make test`, then drive the Date/Time page and `system_reset` — see below | a 5150 has no RTC and MartyPC models no clock card, so `[clk_tier]` is 0 there and the whole ladder is untestable. QEMU's MC146818 is rung 1 and the only hardware clock in this tree. Verified: `Hardware clock: AT 70h`, year stepped 2026 → 2024, panel closed, `system_reset`, and the bar still reads `Aug 26 2024`. Rungs 2 and 3 are the 5150's — no emulator here has an MM58167 or an RP5C01 |
 | Performance benchmarks | ✅ | ✅ | `make bench` (from `tests/`, not in `all`) | numbers are always in flux — see below |
 | **Flicker** — the double-draw flash | ✅ | ❌ | `os88marty.py flicker` (PERFORMANCE.md Part 3.1) | one sample per displayed frame. A Disk window repaint flashes 1,963 px for 166 ms; an idle desktop and a pointer move measure zero. CGA, Hercules and VGA — the MDA's rasterisation of Hercules graphics was measured working at the pinned build (docs/MARTYPC-DEBUG.md); this row used to exclude it |
@@ -1252,7 +1299,7 @@ checks referenced throughout this document:
 | `ethernet` | **an NE2000, a TCP/IP stack, and the browser over it** (§72). **THE ONE GATE HERE THAT IS QEMU'S RATHER THAN MARTYPC'S, and not by preference**: MartyPC has no network card of any kind, so the emulator this tree develops on cannot host `ETHER.DRV` at all — it is on the short list beside the 286/386 targets and §52.1's IDE rung 1. Five assertions climbing the stack: a card was found and its PROM address is plausible (not zero, not all ones, not multicast); DHCP bound and the address, router and name server are the ones slirp hands out — which is already transmit, receive, broadcast, UDP and the option walker before a socket exists; the browser fetched a page over TCP and the exact request line reached a REAL host socket; `br_nstate` is `BN_DONE` and `br_nlines` non-zero; and the `.o88` under test is the one `make` builds for the shipped floppy. **Every assertion is about behaviour and none about speed** — QEMU is not an 8088 and there is no number here for PERFORMANCE.md to want off the 5150. `ETHDUMP=<file>` writes every frame either way to a pcap, which is the instrument for this driver: a stack that is silent and a stack talking nonsense look identical from inside the guest | `make ethertest && make browsertest && python3 tests/ethernet.py` |
 | `drvscroll` | **the Drivers page's pressed look costs one control** (SPEC.md §31.1.2). Not a package — a host script, because what it asserts is what is on the GLASS around a mouse edge. The decisive check is the ROW BAND either side of an arrow press: 0 differing pixels *and* no flashing rect reaching into it, because a control redrawn to the same value is invisible to a pixel diff and unmistakable to `flicker`'s bbox. It also proves the arrow is drawn HELD, that sliding off puts the cell back to 0 differing pixels, that one click is one row, that a greyed arrow draws and scrolls nothing, and that the scrolled pane matches a forced full repaint. Reads the 1bpp framebuffer, so CGA or Hercules — and both were run | `python3 tests/drvscroll.py [machine] [image]` |
 | `drvcall` | **a package reaching a driver** (§20.11): `OSAPI_DRV_CALL`, the `DSV_PKGCALL` fence, and — the half nothing else can check — that the driver was handed the *package's* segment in `ES`. Its counterpart is `RAMDISK.DRV`'s two package verbs, so it needs no card and no cable and runs on MartyPC. The assertion is in `tests/drvcall.py`, which reads the three report strings out of the package's own image and drives the Control Panel tick, so it sees the refusal **before** the driver is published as well as the answer after | `make drvcalltest && python3 tests/drvcall.py [--adapter herc]` |
-| `stackprobe` | the 256-byte task-stack margin (§8) | `make test TESTAPPS=build/stkprobe.img` |
+| `stackprobe` | the 384-byte task-stack margin (§8) | `make test TESTAPPS=build/stkprobe.img` |
 | `xmtest` | the extended-memory **teardown** (§41.5/§29.4): does a closed instance's blocks above 1MB get freed? Needs a machine with a store, so **QEMU on a 386** — the target machine can never have one. The assertion lives outside the package, in `tests/xmcheck.py`, which reads `xm_tab` over QMP around the close | `make test TESTAPPS=build/xmtest.img` then `python3 tests/xmcheck.py build/qmp.sock` |
 | `trkscrl` | **the pattern view scrolls, and it reaches past one row** (SPEC.md §45.12.2). Tracker built with `-DTRKDBG` (`tests/trkscrl.inc`), which adds four counters and two keys and changes the shipped `TRACKER.O88` by nothing — `trklog`'s shape exactly. Two assertions, and the second is the one the gate exists for: a jump of *n* rows must leave the row area **byte-identical to a full repaint of the same view** (§22.11's standard — a blit that drops one strip is invisible in a screenshot and wrong ever after), and it must cost **one scroll and no full repaint**. That second one is the ratchet, asserted without a clock: while the reach was 1, a late frame took `tui_draw_pat`'s 35 strips, outlasted its own frame, and the machine settled into re-lettering the grid at every row change. **QEMU, not MartyPC**: §45.9.1 turns the grid into one banded line on a tier-0 machine, so the surface under test needs something faster than an 8088. It needs no sound card — the jump keys move the *stopped* view, which is the only way to put more than one row between two frames at all | `make trkscrl && python3 tests/trkscrl.py` |
 | `trklog` | not a gate — a **recorder**. Tracker itself, built with `-DTRKLOG`, logging one record per system tick and writing it to `TRKLOG.TXT` (SPEC.md §45.14) | `make test SB16=1 TESTAPPS=build/trklog.img` |
@@ -1616,7 +1663,9 @@ of a session, and none of the failures says what it is:
 - **Read the FILE, not the screen**: the report self-saves when it finishes,
   and the whole thing is forty-plus rows the screen pages through.
   `os88flush.Flush(marty=m).volume(0).read("SYSBENCH.TXT")` is it, sharing
-  the one debug connection (a second `Marty` HANGS).
+  the one debug connection an instance allows (a second `Marty` on the same
+  instance is refused, and sharing also gives `Flush` that instance's run
+  directory, which is what its mount paths are relative to).
 - **Keep the driver script OUT of the session scratchpad.** One vanished
   mid-session here and the run died with `can't open file` — which reads
   exactly like a path typo. `/tmp/<something>/` of your own is fine.
@@ -2358,8 +2407,11 @@ middle of that range.
 >
 > **One connection at a time.** The debug server accepts a single client, so a
 > script that wants both the mouse driver and the framebuffer must share one:
-> `Mouse(marty=m)`, never a second `Marty`. Opening a second one does not
-> error — it *hangs* until the read times out.
+> `Mouse(marty=m)`, never a second `Marty` on the same instance. Opening a
+> second one is refused with a sentence naming the client that holds it — it
+> used to not error at all and *hang* until the read timed out. A script that
+> wants two MACHINES launches two: instances are isolated, so that needs no
+> arrangement (docs/MARTYPC-DEBUG.md).
 
 > **And start the emulator with `os88marty.launch`, wait with `settle`, and
 > name a kernel flag with `m.sym`.** Every scripted session used to hand-roll
@@ -2373,13 +2425,18 @@ middle of that range.
 >     os88marty.settle(m)              # ...instead of time.sleep(4)
 > ```
 >
-> `launch` kills survivors **by PID out of /proc** and waits for the port —
-> a survivor keeps 9001, the new emulator cannot bind and says so only in its
-> log, and the client then drives the *stale* machine. `pkill -f
-> martypc_headless` and `pgrep -f` both match the calling shell's own command
-> line, so the first can kill the caller and the second makes `until ! pgrep`
-> loop forever. It copies each floppy into the run directory (the guest WRITES
-> to a mounted image), asserts `cycles == 0`, and owns the process so nothing
+> `launch` gives every instance its own port, its own run directory and its
+> own disks, so two sessions in one checkout never meet. It reaps **orphans**
+> by PID out of /proc — an emulator whose owning script is gone — and leaves
+> every live, owned instance alone; it used to sweep *every* martypc_headless,
+> which is what made two harnesses in one tree take turns killing each other.
+> `pkill -f martypc_headless` and `pgrep -f` both match the calling shell's own
+> command line, so the first can kill the caller and the second makes
+> `until ! pgrep` loop forever — and both would now also destroy somebody
+> else's run. `os88marty.py instances` is what to type instead. It copies each
+> floppy into that instance's run directory (the guest WRITES to a mounted
+> image), checks the emulator's **pid** as well as `cycles == 0`, and owns the
+> process so nothing
 > leaks onto the next session.
 >
 > `settle(m)` is two identical rendered frames a second apart, which an os8088

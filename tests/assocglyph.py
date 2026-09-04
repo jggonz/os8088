@@ -2,6 +2,15 @@
 """A DECLARED extension's icon is right from a COLD mount (SPEC.md 54.7.3).
 
     make && python3 tests/assocglyph.py [machine] [system-image]
+                                        [--save PATH] [--ref PATH]
+
+    # the reference, taken on BOTH 1bpp adapters BEFORE the change lands
+    # (the system image defaults to build/os8088-360.img):
+    python3 tests/assocglyph.py os8088_5150_cga_gla --save tests/assocref/cga.txt
+    python3 tests/assocglyph.py os8088_5150_herc_gla --save tests/assocref/herc.txt
+    # ...and afterwards, on the same two, asserting 0 differing pixels:
+    python3 tests/assocglyph.py os8088_5150_cga_gla --ref tests/assocref/cga.txt
+    python3 tests/assocglyph.py os8088_5150_herc_gla --ref tests/assocref/herc.txt
 
 `ASSOC.DAT` carries, per package, its stem, its size, the folder it lives in
 AND its 64-byte icon body (SPEC.md 54.7). `asc_seed` took the first three and
@@ -17,9 +26,15 @@ bakes into the kernel, so it has one before any disk is read.
 
 The second argument is a system image, so this can be pointed at a reference
 build - both assertions fail against a kernel from before 54.7.3, which is
-what says the gate is testing something.
+what says the gate is testing something. It is the image this BOOTS, though,
+and that is worth saying in the file rather than leaving to be inferred:
+handing it an older build runs the whole gate ON the old kernel and compares
+nothing between the two. `--ref` is the cross-build comparison; the second
+argument is not, and reading it as one produces a green result that means
+nothing.
 
-Two assertions, and the second is the one that matters:
+Three assertions, and the third is the only one that can see a bitmap that is
+consistently WRONG:
 
   1. After ONE root mount of B:, the declared slots' glyphs are RESOLVED.
   2. The Disk window showing `MEDIA/` is BYTE-IDENTICAL drawn cold and
@@ -27,6 +42,28 @@ Two assertions, and the second is the one that matters:
      the icon they keep. That is checked inside ONE build, so it needs no
      reference kernel: what it compares is the seeded glyph against the
      harvested one, which is the whole claim.
+  3. With `--ref PATH`, that cold capture is byte-identical to one `--save
+     PATH` took from ANOTHER build. 1 and 2 are both self-consistency
+     checks - each compares this kernel against itself - so a generator
+     that composes the same wrong page every time satisfies both of them
+     cleanly, and the icon it is wrong about is on every document in the
+     system. A change that stops STORING a bitmap and starts COMPOSING one
+     therefore needs a capture taken BEFORE it lands: there is no way to
+     take one afterwards, which makes this a scheduling constraint and not
+     only a test.
+
+`--save` writes the cold capture as one line a pixel ROW, `#` lit, so a `git
+diff` of two references shows the icon that moved instead of a hex blob. It
+records the card and the rect, and `--ref` REFUSES rather than compares when
+either has changed - a diff of two different rectangles is a number with no
+meaning. It records the ROM's own banner too, read out of the ROM at 0xFE001
+rather than inferred from the machine name, because two machine configs
+differing only in `rom_set` are one edit apart; that one is provenance and
+not a refusal, since the window's pixels are the kernel's - MEASURED, rather
+than assumed: the two references in `tests/assocref/` were taken under
+GLaBIOS and answer 0 differing pixels under the IBM 5150 part as well
+(`os8088_5150_cga`, `os8088_5150_herc`, banner `501476 COPR. IBM`), so a run
+may be diffed across ROMs even though a BENCH run may not.
 
 The diff is the WINDOW's rect and not the screen, because the menu bar
 carries a clock (SPEC.md 12.9) and the two captures are minutes apart - a
@@ -47,6 +84,20 @@ import os88mouse
 import os88sym
 import dispcp
 
+
+def opt(name):
+    """`--name PATH`, lifted OUT of argv so the positionals keep their places."""
+    if name not in sys.argv:
+        return None
+    i = sys.argv.index(name)
+    if i + 1 >= len(sys.argv):
+        sys.exit("assocglyph: %s wants a path after it" % name)
+    del sys.argv[i]
+    return sys.argv.pop(i)
+
+
+SAVE = opt("--save")
+REF = opt("--ref")
 MACHINE = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_cga_gla"
 SYS_IMG = sys.argv[2] if len(sys.argv) > 2 else "build/os8088-360.img"
 APPS_IMG = "build/apps360.img"
@@ -59,6 +110,7 @@ PARK = (320, 190)               # the pointer is DRAWN, over the window like
                                 # them, and os88mouse.to lands pixel-exact
 fails = []
 PIX1BPP = ("cga", "mda")        # the cards vram() can read as flat memory
+REF_MAGIC = "assocglyph-ref 1"  # first line of a --save file, checked on --ref
 
 
 def say(s):
@@ -85,6 +137,50 @@ def shot(m, mo, rect):
     x, y, rw, rh = rect
     return rw, b"".join(bytes(rows[yy][x:x + rw])
                         for yy in range(y, min(y + rh, h)))
+
+
+def rom(m):
+    """The ROM's own banner, READ OUT OF IT - never inferred from the config.
+
+    0xFE001 is where a 5150-class BIOS puts its copyright string: the IBM
+    part reads `501476 COPR. IBM` and GLaBIOS reads `GLaBIOS [`. A reference
+    labelled from the machine NAME is a label that can be wrong with nothing
+    to notice, so it is labelled from the bytes.
+    """
+    s = m.read(0xFE001, 16).decode("latin1")
+    return "".join(c if " " <= c <= "~" else "." for c in s)
+
+
+def ref_write(path, card, rect, w, pix, sig):
+    """The capture as text, behind a header saying what it is a capture OF."""
+    if len(pix) % w:
+        sys.exit("assocglyph: the capture is %d px and the rect is %d wide - "
+                 "the window hangs off the right edge and the rows are "
+                 "ragged" % (len(pix), w))
+    with open(path, "w") as f:
+        f.write("%s\nmachine %s\ncard %s\nrect %d %d %d %d\nwidth %d\n"
+                "rom %s\npixels\n"
+                % ((REF_MAGIC, MACHINE, card) + tuple(rect) + (w, sig)))
+        for i in range(0, len(pix), w):
+            f.write("".join("#" if p else "." for p in pix[i:i + w]) + "\n")
+
+
+def ref_read(path):
+    """...and back, as {machine, card, rect, width, rom, pixels}."""
+    lines = open(path).read().splitlines()
+    if not lines or lines[0] != REF_MAGIC:
+        sys.exit("assocglyph: %s does not begin %r, so it is not one of these"
+                 % (path, REF_MAGIC))
+    head, i = {}, 1
+    while i < len(lines) and lines[i] != "pixels":
+        k, _, v = lines[i].partition(" ")
+        head[k] = v
+        i += 1
+    head["rect"] = tuple(int(n) for n in head["rect"].split())
+    head["width"] = int(head["width"])
+    head["pixels"] = bytes(1 if c == "#" else 0
+                           for r in lines[i + 1:] for c in r)
+    return head
 
 
 def media(m, mo, wx, wy):
@@ -134,6 +230,48 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
         cold = None
         say("card is %r: the pixel compare needs a 1bpp framebuffer, so this "
             "run asserts the glyph bytes alone" % card)
+
+    # --- 2a. ...and against a capture taken from ANOTHER BUILD ---------------
+    if SAVE or REF:
+        if cold is None:
+            sys.exit("assocglyph: --save/--ref compare the 1bpp framebuffer, "
+                     "and this machine's card is %r - run them on CGA or "
+                     "Hercules, never on VGA" % card)
+        sig = rom(m)
+        say("ROM banner at 0xFE001: %r" % sig)
+    if SAVE:
+        ref_write(SAVE, card, rect, w, cold, sig)
+        say("saved the %r window - %d px, %d lit - to %s"
+            % (rect, len(cold), sum(cold), SAVE))
+    if REF:
+        r = ref_read(REF)
+        if r["card"] != card or r["rect"] != tuple(rect):
+            sys.exit("assocglyph: %s is card %r rect %r and this run is %r %r "
+                     "- a diff of two different rectangles is a number with "
+                     "no meaning"
+                     % (REF, r["card"], r["rect"], card, tuple(rect)))
+        if len(r["pixels"]) != len(cold):
+            sys.exit("assocglyph: %s holds %d px and this capture is %d, with "
+                     "the rects agreeing - the reference file is malformed"
+                     % (REF, len(r["pixels"]), len(cold)))
+        if r.get("rom") != sig:
+            say("note: the reference was taken under ROM %r and this run is "
+                "%r - the window's pixels are the KERNEL's, so that is "
+                "provenance and not a refusal" % (r.get("rom"), sig))
+        n = sum(1 for p, q in zip(r["pixels"], cold) if p != q)
+        say("%d px of %d differ from %s" % (n, len(cold), REF))
+        if n:
+            bad = [i for i, (p, q) in enumerate(zip(r["pixels"], cold))
+                   if p != q]
+            say("bbox x %d..%d y %d..%d"
+                % (min(i % w for i in bad), max(i % w for i in bad),
+                   min(i // w for i in bad), max(i // w for i in bad)))
+            fails.append("the MEDIA/ window is not the one %s recorded: %d px "
+                         "differ. That is the CROSS-BUILD check - assertions "
+                         "1 and 2 compare this kernel against itself and pass "
+                         "whatever a generator composes, so this is the only "
+                         "one that sees a page bitmap that is consistently "
+                         "wrong" % (REF, n))
 
     # --- 3. ...and again, with APPS/ harvested in between --------------------
     dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "..")

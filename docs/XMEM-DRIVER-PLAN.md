@@ -291,7 +291,7 @@ no third class-dispatch body to add.
   `DRVV_READY`.** All unwanted: there is no user management, no tiers, and no
   fence to wait for — XMEM publishes nothing through `OSAPI_VOL_*` or
   `OSAPI_DRV_TASK`, which are the only things `DRVV_READY` exists for.
-- **`drv_seg_scan` / `drv_owns_seg` will not find the image**, since they walk
+- **`drv_row_ix_of` / `drv_owns_seg` will not find the image**, since they walk
   `drv_tab`. This *sounds* like it breaks the Task Manager's accounting and
   does not: `mem_sum_kb` counts the image by its **owner tag**
   (`cmp word [ss:si+MC_OWN], MEM_K_DRV`, memory.inc:1637), not by table

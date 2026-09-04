@@ -68,6 +68,13 @@ SND_RT_CARD equ SND_RT_FM       ; the old two-value name, kept so a SYSTEM.CFG
 SND_PRI_UI  equ 0C0h            ; kernel UI beeps (SPEC.md 34.3)
 SND_PRI_PKG equ 040h            ; documented package default priority
 
+SND_PATCH_N equ 11              ; bytes in an OPL patch (SPEC.md 34.2) - the
+                                ; length osapi_snd_fm_x stages, and the length
+                                ; the driver reads back
+%if SND_PATCH_N != 11
+  %error "SND_PATCH_N is the OPL patch's length (SPEC.md 34.2) and the driver is NOT told it: drivers/sound/sound.asm's opl_patch reads 5 modulator bytes, 5 carrier bytes and 1 feedback byte out of the staging buffer and stops. Changing this changes what is staged and not what is read"
+%endif
+
 ; =============================================================================
 ; Initialised .text data (SPEC.md 34.7): everything snd_tick or an early
 ; caller could read before snd_init has stored the .bss state.
@@ -76,7 +83,6 @@ SND_PRI_PKG equ 040h            ; documented package default priority
 snd_live:      db 0             ; the boot gate: set LAST by snd_init (34.7)
 snd_excl_ok:   db 1             ; policy: exclusive clips allowed (34.4)
 
-snd_s_spk:     db 'Speaker', 0  ; the resident sink's name (osapi_snd_caps)
 snd_route:     db SND_RT_AUTO   ; where tones go (SPEC.md 34.8). Initialised
                                 ; .text, not .bss: snd_tone_out reads it on
                                 ; the machine's first beep, and SYSTEM.CFG
@@ -110,11 +116,15 @@ spk_tone:
     jb .bad
     cmp ax, 20000
     ja .bad
-    mov bx, ax                  ; divisor = 1193182 / freq
+    xchg ax, bx                 ; divisor = 1193182 / freq. xchg, not mov: AX
+                                ; is dead here - the next two instructions
+                                ; load the dividend into DX:AX
     mov dx, 0x0012              ; 1193182 = 0x1234DE
     mov ax, 0x34DE
     div bx                      ; AX = divisor (freq >= 19 keeps it 16-bit)
-    mov bx, ax                  ; BL/BH = divisor lo/hi
+    xchg ax, bx                 ; BL/BH = divisor lo/hi; AX is dead again -
+                                ; `mov al, 0xB6` is the next write and AH is
+                                ; never read
     pushf
     cli
     mov al, 0xB6                ; ch2, lobyte/hibyte, mode 3 (square wave)
@@ -125,19 +135,17 @@ spk_tone:
     out 0x42, al
     in al, 0x61                 ; gate + speaker data on; upper bits kept
     or al, 0x03
-    out 0x61, al
-    popf
-    clc
-    jmp .out
+    jmp short .put61
 .off:
     pushf
     cli
     in al, 0x61
     and al, 0xFC
-    out 0x61, al
-    popf
+.put61:                         ; both arms differ only in the bits they set,
+    out 0x61, al                ; so the store, the popf that closes SPEC.md
+    popf                        ; 34.1's window and the CF=0 answer are shared
     clc
-    jmp .out
+    jmp short .out
 .bad:
     stc
 .out:
@@ -149,30 +157,6 @@ spk_tone:
 ; =============================================================================
 ; The PC speaker PWM clip driver (SPEC.md 34.4, Phase 2)
 ; =============================================================================
-
-; -----------------------------------------------------------------------------
-; spk_pcm_op - the speaker row's PCM-out op (SPEC.md 34.2)
-;
-; in:       AL = verb: 0 start (ES:SI = 8-bit unsigned mono, CX = count,
-;           DX = rate Hz; [snd_pcm_n] already validated and the ch2 grant
-;           already taken by the router), 1 stop, 2 status
-; out:      verb 0: CF = 0 clip completed, CF = 1 aborted with AL = 1 (a
-;           mouse click) or 2 (the snd_abort flag); AX clobbered.
-;           verb 1: nothing (flags). verb 2: AX = samples emitted so far.
-; clobbers: verb 0: AX; others nothing else
-;
-; Verb 0 is run-to-completion - the exclusive-clip contract (SPEC.md 34.2):
-; it returns when the clip ends or aborts, never before.
-; -----------------------------------------------------------------------------
-spk_pcm_op:
-    cmp al, 1
-    jb spk_pcm_run              ; verb 0: the clip loop below
-    je .stop
-    mov ax, [snd_pcm_emitted]   ; verb 2: status
-    ret
-.stop:
-    call snd_stop               ; verb 1: flag the running clip down
-    ret
 
 ; -----------------------------------------------------------------------------
 ; spk_pcm_run - play one PWM clip, run-to-completion (SPEC.md 34.4, binding)
@@ -192,10 +176,12 @@ spk_pcm_op:
 ; latch+read triple sits in its own pushf/cli..popf window (SPEC.md 34.1,
 ; binding - the 8254 ignores a second latch while one is unread), IF = 1
 ; between polls. THE RESYNC RULE: a sample late by more than one period
-; resets the deadline to now and drops samples - inc [snd_pcm_resync] -
-; never burst catch-up writes, so a long interrupt becomes dropped samples,
-; never a buzz. snd_pcm_emitted counts every pulse; both counters are the
-; Phase 2 gate's instrument, surfaced on the Control Panel caption.
+; resets the deadline to now and drops samples, never burst catch-up
+; writes, so a long interrupt becomes dropped samples, never a buzz. It
+; used to keep two counters here - emitted pulses and resyncs - which
+; nothing could read: the Control Panel Sound page they were "surfaced on"
+; is retired (SPEC.md 31.4) and no file under tests/, tools/ or apps/ ever
+; named either. Re-adding a counter is one rebuild (PERFORMANCE.md rule 4).
 ;
 ; Scheduling: executes on the caller's task with IF=1 throughout, inside
 ; inc/dec [sch_lock] - the second sanctioned raiser (SPEC.md 7), with
@@ -209,8 +195,8 @@ spk_pcm_op:
 ; a bit set now but clear in the baseline aborts. The fold is load-bearing:
 ; clips start from W_ONCLICK handlers - dispatched on EVT_MDOWN with the
 ; button still held - so the baseline starts with bit 0 set; the release
-; retires it and the next press differs. [snd_abort] (snd_stop /
-; snd_release_inst) is checked in the same window. No code in mou_isr.
+; retires it and the next press differs. [snd_abort] (snd_release_inst, its
+; only writer) is checked in the same window. No code in mou_isr.
 ; -----------------------------------------------------------------------------
 spk_pcm_run:
     push bx
@@ -244,17 +230,13 @@ spk_pcm_run:
     mov bx, snd_xlat            ; BX = the rescale table, for xlat
     jcxz .done                  ; zero samples: restore idle and report ok
 
-    pushf                       ; prime the deadline: one atomic ch0
-    cli                         ; latch+read triple (SPEC.md 34.1, binding)
-    mov al, 0
-    out 0x43, al
-    in al, 0x40
-    mov dl, al
-    in al, 0x40
-    mov dh, al
-    popf
-    neg dx                      ; DX = phase; first sample is due at once
-    mov di, dx                  ; DI = deadline
+    call sch_pit_now            ; prime the deadline: one atomic ch0
+    mov di, ax                  ; latch+read triple (SPEC.md 34.1, binding),
+                                ; sched.inc's, which owns the PIT (8.1).
+                                ; DI = deadline; the first sample is due at
+                                ; once.  The `.wait` poll below keeps its own
+                                ; copy of the triple - it is the per-sample
+                                ; pacer and a call there is real money
 
 .next:
     es lodsb                    ; AL = sample from ES:SI (SPEC.md 20.3)
@@ -277,38 +259,39 @@ spk_pcm_run:
     cmp ax, bp                  ; late by more than one period?
     jbe .emit
     mov di, dx                  ; RESYNC: drop samples, never a burst
-    inc word [snd_pcm_resync]
 .emit:
     mov al, [snd_pcm_smp]
     out 0x42, al                ; the pulse: AL PIT-cycles low
     add di, bp                  ; next deadline
-    inc word [snd_pcm_emitted]
     mov al, [mouse_btn]         ; abort checks, emit path only: FOLD
     and [snd_btn0], al          ; RELEASES INTO THE BASELINE first...
-    mov ah, [snd_btn0]
-    not ah
-    and al, ah                  ; ...then: pressed now, not in the baseline?
-    jnz .click
-    cmp byte [snd_abort], 0     ; snd_stop / snd_release_inst
+    cmp al, [snd_btn0]          ; ...then: pressed now, not in the baseline?
+    jne .click                  ; the fold has just made the baseline
+                                ; (old & AL), a SUBSET of AL, so
+                                ; "AL has a bit the baseline has not" is
+                                ; exactly "AL != baseline" - one compare
+                                ; instead of not/and, and 16 clocks off the
+                                ; emit loop's 296 (~5%): pacer headroom, not
+                                ; machine time back, since sch_lock is held
+    cmp byte [snd_abort], 0     ; snd_release_inst
     jne .flag
     loop .next
 
 .done:
+    xor al, al                  ; the three exits differ ONLY in the abort
+    jmp short .fin              ; code, so set it and share the rest
+.click:
+    mov al, 1                   ; aborted by a mouse click
+    jmp short .fin
+.flag:
+    mov al, 2                   ; aborted by the flag
+.fin:
     call spk_pcm_idle           ; ports + ownership, one IF=0 window
     dec byte [sch_lock]
-    clc
-    jmp .out
-.click:
-    call spk_pcm_idle
-    dec byte [sch_lock]
-    mov al, 1                   ; aborted by a mouse click
-    stc
-    jmp .out
-.flag:
-    call spk_pcm_idle
-    dec byte [sch_lock]
-    mov al, 2                   ; aborted by the flag
-    stc
+    cmp al, 1                   ; CF from the code: 0 borrows -> CF=1 -> cmc
+    cmc                         ; -> CF=0 completed; 1 and 2 -> CF=0 -> cmc
+                                ; -> CF=1 aborted. AL=0 on the completed path
+                                ; is inside the documented output
 .out:
     pushf                       ; re-arm the sub-tick. The bank is taken
     push ax                     ; UNCONDITIONALLY - CF is this routine's
@@ -417,17 +400,17 @@ snd_tone_req:
     mov [snd_town_exp], cx
     mov byte [snd_town_act], 1
     mov byte [snd_ch2mode], 1
+.granted:
     popf
     clc
-    jmp .out
+    jmp short .out
 
 .off:                           ; --- tone off: release the channel ----------
     call snd_town_off
     inc byte [snd_gen]          ; a release updates the record too (34.3)
     mov al, [snd_gen]
-    popf
-    clc
-    jmp .out
+    jmp short .granted          ; same window close, same CF=0 answer, same
+                                ; AL = the generation
 
 .refuse:
     popf
@@ -485,6 +468,7 @@ snd_town_off:
 ; (SPEC.md 8.2).
 ; -----------------------------------------------------------------------------
 snd_tone_out:
+%ifdef OS88_SNDCARD
     call snd_rt_card
     jc spk_tone                 ; tail call: the speaker, and CF is its own
     push bp
@@ -492,6 +476,9 @@ snd_tone_out:
     call drv_svc_call
     pop bp                      ; POP leaves the driver's CF alone
     ret
+%else
+    jmp spk_tone                ; SPEC.md 34.0: there is no other sink on this
+%endif                          ; build, so the test above has one answer
 
 ; -----------------------------------------------------------------------------
 ; snd_rt_card - do tones go to the driver's hardware right now? (SPEC.md 34.8)
@@ -505,6 +492,7 @@ snd_tone_out:
 ; to a machine with no card must not take the beep away with it.
 ; -----------------------------------------------------------------------------
 snd_rt_card:
+%ifdef OS88_SNDCARD
     cmp byte [snd_route], SND_RT_SPK
     je .no
     cmp word [drv_svc+DSV_TONE], 0
@@ -512,8 +500,9 @@ snd_rt_card:
     clc
     ret
 .no:
-    stc
-    ret
+%endif
+    stc                         ; SPEC.md 34.0: always the speaker, and the
+    ret                         ; Control Panel's page reads the same answer
 
 ; -----------------------------------------------------------------------------
 ; snd_beep - the kernel UI beep (SPEC.md 34.3): menu error, refused clicks
@@ -527,34 +516,16 @@ snd_beep:
     push ax
     push cx
     push dx
-    cmp byte [snd_live], 0
-    je .out
     mov ax, 880                 ; 3 ticks of 880 Hz at kernel priority
     mov cx, 3
     mov dx, 0FF00h | SND_PRI_UI ; DH = 0xFF (kernel), DL = priority
-    call snd_tone_req
-.out:
+    call snd_tone_req           ; no snd_live test here: snd_tone_req opens
+                                ; its own pushf/cli window and refuses on
+                                ; exactly that byte, and a refusal is already
+                                ; this routine's normal answer
     pop dx
     pop cx
     pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; snd_stop - abort the running PCM_EXCL clip, if any (SPEC.md 34.4)
-;
-; in:       nothing
-; out:      nothing
-; clobbers: nothing (flags)
-;
-; Sets [snd_abort]; the clip loop sees it on its next emitted sample and
-; exits err 5. A single byte store: safe from any context, including under
-; IF=0 (snd_release_inst calls this pattern inline).
-; -----------------------------------------------------------------------------
-snd_stop:
-    cmp byte [snd_pcm_busy], 0
-    je .out
-    mov byte [snd_abort], 1
-.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -574,6 +545,7 @@ snd_stop:
 snd_tick:
     cmp byte [snd_live], 0      ; the boot gate - nothing else is readable
     je .done
+%ifdef OS88_SNDCARD
     cmp word [drv_svc+DSV_TICK], 0
     je .tone                    ; a loaded driver may want the tick too; it
     push ax                     ; runs here, inside IRQ0, at IF=0
@@ -583,6 +555,11 @@ snd_tick:
     pop bp
     pop ax
 .tone:
+%endif                          ; SPEC.md 34.0: no driver, so nothing else
+                                ; wants the tick and the expiry test is the
+                                ; whole of it. The one gate here that is on a
+                                ; path INSIDE IRQ0, so it is cycles saved 18.2
+                                ; times a second as well as four bytes
     cmp word [snd_town_exp], 0
     je .done
     dec word [snd_town_exp]
@@ -590,11 +567,9 @@ snd_tick:
     mov al, [snd_texp_gen]      ; expiry generation-guarded (SPEC.md 34.3)
     cmp al, [snd_town_gen]
     jne .done
-    push bx
-    push si
-    call snd_town_off           ; IF is already 0: the tick IS the window
-    pop si
-    pop bx
+    call snd_town_off           ; IF is already 0: the tick IS the window.
+                                ; No push bx/si: snd_town_off banks both in
+                                ; its own frame, on its one exit
 .done:
     ret
 
@@ -636,34 +611,20 @@ snd_release_inst:
     je .done
     cmp al, [snd_town_inst]
     jne .done
-    push bx
-    push si
-    call snd_town_off
-    pop si
-    pop bx
+    call snd_town_off           ; banks BX and SI itself (one exit)
     inc byte [snd_gen]          ; a release updates the record (SPEC.md 34.3)
 .done:
     popf
     ret
 
-; -----------------------------------------------------------------------------
-; snd_release_rec - snd_release_inst for a record pointer (internal helper
-;                   for the two SPEC.md 29.4 teardown call sites)
-; in:  DI = instance record ptr
-; out: nothing
-; clobbers: nothing (flags)
-; -----------------------------------------------------------------------------
-snd_release_rec:
-    push ax
-    push cx
-    mov ax, di
-    sub ax, inst_tab
-    mov cl, 5                   ; I_RECSZ = 32
-    shr ax, cl
-    call snd_release_inst       ; in: AL = instance slot
-    pop cx
-    pop ax
-    ret
+; snd_release_rec USED TO BE HERE, and its three SPEC.md 29.4 teardown sites
+; now call instance.inc's inst_rel_rec instead: the sound release and the
+; extended-memory one were always called as an adjacent PAIR, in that order,
+; at all three, and each separately converted the same DI into the same slot.
+; One caller-side helper does the conversion once and tail-jumps into
+; xm_release_rec, which keeps its own entry for loader.inc's fourth caller.
+; The helper is in instance.inc because the record is instance.inc's and the
+; pair is what SPEC.md 29.4 asks for, not something sound owns.
 
 ; -----------------------------------------------------------------------------
 ; snd_disp_set - stamp the instance a window callback is dispatched for
@@ -682,21 +643,14 @@ snd_release_rec:
 ; -----------------------------------------------------------------------------
 snd_disp_set:
     push ax
-    push cx
-    mov ax, di
-    or ax, ax
-    jz .none
-    sub ax, inst_tab
-    mov cl, 5                   ; I_RECSZ = 32
-    shr ax, cl
-    jmp .store
-.none:
-    mov al, 0xFF
+    mov al, 0xFF                ; the default first, so the common path loses
+    or di, di                   ; a taken jump (15 clocks) for a mov (4)
+    jz .store
+    call inst_idx               ; AL = instance slot; CX comes back ours
 .store:
     mov ah, [sch_cur]           ; ...and WHICH TASK stamped it, so that a
     mov [snd_inst], ax          ; worker pre-empting this callback mid-flight
-    pop cx                      ; cannot inherit the stamp (SPEC.md 34.3)
-    pop ax
+    pop ax                      ; cannot inherit the stamp (SPEC.md 34.3)
     ret
 
 ; =============================================================================
@@ -717,7 +671,7 @@ snd_disp_set:
 ; and sets snd_live LAST: the publish that arms snd_tick and the public
 ; entry points (SPEC.md 34.7, the 29.2 publish-last idiom).
 
-section .ovl                    ; the boot overlay (SPEC.md 2.5): saving the boot
+section .ovlw                  ; the boot overlay (SPEC.md 2.5): saving the boot
                                 ; 61h bits and publishing snd_live happens
                                 ; once. snd_unhook below is the shutdown
                                 ; path and stays resident. Nothing here
@@ -747,14 +701,15 @@ snd_init:
     mov byte [snd_pcm_inst], 0xFF
     mov byte [snd_pcm_smp], 0
     mov word [snd_pcm_n], 149   ; the default-rate divisor (8,008 Hz)
-    mov word [snd_pcm_emitted], 0
-    mov word [snd_pcm_resync], 0
 
     mov byte [snd_live], 1      ; publish-last (SPEC.md 34.7, binding)
 
     pop cx
     pop ax
-    ret
+    retf                        ; FAR, and the shim that used to own this
+                                ; return is deleted (SPEC.md 2.6.1, 2.5.2):
+                                ; kmain names this body directly through
+                                ; OVLGATE1 and nothing near-calls it
 
 ; -----------------------------------------------------------------------------
 ; snd_unhook - quiesce the sound hardware for reboot (SPEC.md 34.7)
@@ -802,6 +757,7 @@ snd_unhook:
 ; -----------------------------------------------------------------------------
 osapi_snd_caps:
     mov ax, SND_CAP_TONE | SND_CAP_PCM_EXCL
+%ifdef OS88_SNDCARD
     or ax, [drv_svc+DSV_CAPS]   ; ...plus whatever a loaded driver adds
     mov bl, 0                   ; BL = where a tone would go RIGHT NOW: 0 the
     call snd_rt_card            ; speaker, 1 the driver's own sink - the
@@ -811,8 +767,13 @@ osapi_snd_caps:
     mov dx, 1                   ; DX bit 0 = the speaker, always present
     cmp word [drv_svc+DSV_CAPS], 0
     je .out
-    or dx, 2                    ; bit 1 = a sound driver is loaded
+    mov dl, 3                   ; bit 1 = a sound driver is loaded (DX is 1
+                                ; three instructions up, so DH is already 0)
 .out:
+%else
+    xor bl, bl                  ; SPEC.md 34.0: the speaker, and only ever the
+    mov dx, 1                   ; speaker. The SHAPE a package reads is the
+%endif                          ; same - it just cannot vary
     ret
 
 ; -----------------------------------------------------------------------------
@@ -830,6 +791,32 @@ osapi_snd_caps:
 ; own to do it. DH is the grant-stamping rule (SPEC.md 34.3) crossing the
 ; segment boundary as an argument.
 ; -----------------------------------------------------------------------------
+%ifndef OS88_SNDCARD
+; SPEC.md 34.0: FM is an OPL2 and an OPL2 is a driver, so on this build there
+; is nothing behind either slot. THE SLOTS STAY - a slot's OFFSET is the ABI
+; (SPEC.md 20.4), so a gated feature refuses rather than moving the table
+; under every package built against it - and each refuses in ITS OWN
+; vocabulary, which is what the two live bodies below were careful about: CF
+; alone for FM, and AX = 4 "no streaming sink" for a stream verb, because
+; AX = 0 is how every stream verb says OK and a phantom grant is what handed
+; Recorder a buffer that did not exist.
+osapi_snd_fm_x:
+osapi_snd_fm:
+    stc
+    ret
+
+osapi_snd_stream:
+    mov ax, 4
+    stc
+    ret
+
+; ...and the interlock the exclusive-clip tier asks before it takes the
+; speaker (SPEC.md 34.9): with no streaming sink there is never one to
+; collide with, so the answer is a constant "not busy".
+snd_str_busy:
+    clc
+    ret
+%else
 osapi_snd_fm_x:
     cmp al, 2
     jne osapi_snd_fm            ; every verb but patch-load carries no pointer
@@ -837,7 +824,7 @@ osapi_snd_fm_x:
     push si                     ; the kernel, the dsk_get_dir idiom - the
     push di                     ; driver runs with DS = its own segment and
     mov di, snd_patch           ; cannot reach the caller's
-    mov cx, 11
+    mov cx, SND_PATCH_N
 .stage:
     mov ah, [es:si]
     mov [di], ah
@@ -865,6 +852,8 @@ osapi_snd_fm:
     pop bp
     ret
 
+%endif                          ; OS88_SNDCARD - the FM slot's live body ends
+
 ; -----------------------------------------------------------------------------
 ; osapi_snd_stream - the public stream request (slot 0x0100, SPEC.md 34.5)
 ; in:       AL = verb, and the verb's own registers
@@ -885,6 +874,7 @@ osapi_snd_fm:
 ; after the call - a `cmp` there would eat the CF the call just answered
 ; with, and the verb is known before the call anyway.
 ; -----------------------------------------------------------------------------
+%ifdef OS88_SNDCARD
 osapi_snd_stream:
     cmp word [drv_svc+DSV_STREAM], 0
     jne .have
@@ -923,7 +913,8 @@ osapi_snd_stream:
     call snd_req_inst           ; DH = the requester
     mov bp, [drv_svc+DSV_STREAM]
     call drv_svc_call
-    pop dx
+    pop dx                      ; ...only the main path owes this one
+.pops:
     pop bp
     pop bx
     ret
@@ -932,9 +923,9 @@ osapi_snd_stream:
     call snd_req_inst
     mov bp, [drv_svc+DSV_STREAM]
     call drv_svc_call
-    pop bp
-    pop bx
-    ret
+    jmp short .pops             ; jmp does not touch the CF just answered with
+
+%endif                          ; OS88_SNDCARD - the stream slot's live body
 
 ; -----------------------------------------------------------------------------
 ; osapi_snd_tone - the public tone request (slot 0x00E8, SPEC.md 20.3)
@@ -1030,29 +1021,32 @@ osapi_snd_play:
     ; The range checks double as the div guard: a tiny rate would overflow
     ; the 32/16 divide (quotient > 16 bits traps to int 0).
     cmp dx, 4679                ; N <= 255  <=>  rate >= 4,679 Hz
-    jb .e2
+    jb .e2j
     cmp dx, 16124               ; N >= 74   <=>  rate <= 16,124 Hz
-    ja .e2
-    push cx
-    push dx
-    mov cx, dx
-    mov dx, 0x0012              ; 1193182 = 0x1234DE
-    mov ax, 0x34DE
-    div cx                      ; AX = N, 74..255 by the checks above
+    ja .e2j
+    mov bx, dx                  ; BX, not CX: CX is the sample count and must
+    mov dx, 0x0012              ; reach spk_pcm_run untouched, and BX is not
+    mov ax, 0x34DE              ; an input here (1193182 = 0x1234DE)
+    div bx                      ; AX = N, 74..255 by the checks above
     mov [snd_pcm_n], ax
-    pop dx
-    pop cx
 
-    push dx                     ; requesting instance (SPEC.md 34.3) - the one
-    call snd_req_inst           ; routine, so the task qualification is not
-    mov bh, dh                  ; open-coded a second time and cannot drift
-    pop dx
+    call snd_req_inst           ; requesting instance (SPEC.md 34.3) - the one
+    mov bh, dh                  ; routine, so the task qualification is not
+                                ; open-coded a second time and cannot drift.
+                                ; The rate is DEAD from the divide on: DH is
+                                ; snd_req_inst's output from here and DL is
+                                ; written below, which also makes the
+                                ; DSV_STREAM verb-8 call ABI-correct - the
+                                ; driver contract says DH is the requesting
+                                ; instance, and it now is
 
     mov dl, 1                   ; the OTHER tier, asked BEFORE the grant
     call snd_str_busy           ; window opens - so this refusal exits by
     jnc .grant                  ; the plain path, with no popf owed
-    mov ax, 1                   ; busy: a stream is open (SPEC.md 34.9)
-    jmp .err
+    mov al, 1                   ; busy: a stream is open (SPEC.md 34.9).
+    jmp .err                    ; AL, not AX: .err zeroes AH for all six
+.e2j:                           ; ...and the range refusal's two arms, at 2
+    jmp .e2                     ; bytes each rather than five (-3)
 .grant:
     pushf                       ; --- the grant window (SPEC.md 34.3) ------
     cli
@@ -1076,8 +1070,6 @@ osapi_snd_play:
     mov [snd_pcm_inst], bh
     mov al, [mouse_btn]         ; the click-abort baseline (SPEC.md 34.4)
     mov [snd_btn0], al
-    mov word [snd_pcm_emitted], 0
-    mov word [snd_pcm_resync], 0
     popf                        ; --- granted ------------------------------
 
     mov ax, [snd_pcm_n]         ; build the per-clip rescale table: far
@@ -1088,9 +1080,9 @@ osapi_snd_play:
                                 ; between the op's internal release and the
                                 ; drain could switch to a task that pops
                                 ; the aborting click first (SPEC.md 34.4)
-    mov al, 0                   ; verb 0: run the clip to completion; the
-    call spk_pcm_op             ; op's epilogue releases ch2 + busy. Out:
-    jc .aborted                 ; CF=1 aborted, AL = 1 click / 2 flag
+    call spk_pcm_run            ; run the clip to completion; its epilogue
+    jc .aborted                 ; releases ch2 + busy. CF=1 aborted, AL = 1
+                                ; click / 2 flag
     dec byte [sch_lock]
     xor ax, ax
     clc
@@ -1099,31 +1091,34 @@ osapi_snd_play:
 .aborted:
     cmp al, 1
     jne .e5                     ; flag abort: nothing queued to drain
-.drain:                         ; click abort: drain the aborting mouse
-    mov di, snd_evtmp           ; events - and everything queued while the
-    call evq_pop                ; screen was frozen - before returning
-    jc .drained                 ; (SPEC.md 34.4, binding)
-    call wm_wake_eaten          ; ...a wake in there is owed back, not dropped
-    jmp short .drain            ; (SPEC.md 74.1.1)
-.drained:
+                                ; click abort: drain the aborting mouse events
+    mov di, snd_evtmp           ; - and everything queued while the screen was
+    call evq_drain              ; frozen - before returning (SPEC.md 34.4,
+                                ; binding).  OUR OWN buffer: this drain is the
+                                ; only one of the three that is atomic, and
+                                ; sharing one would let it overwrite a UI-task
+                                ; record mid-loop
 .e5:
     dec byte [sch_lock]         ; the router's raise ends here on every
-    mov ax, 5                   ; abort path (drained or flag)
+    mov al, 5                   ; abort path (drained or flag)
     jmp .err
 .busyw:
     popf
-    mov ax, 1
+    mov al, 1
     jmp .err
 .e2:
-    mov ax, 2
+    mov al, 2
     jmp .err
 .e3:
-    mov ax, 3
+    mov al, 3
     jmp .err
 .e4:
-    mov ax, 4
+    mov al, 4
 .err:
-    stc
+    xor ah, ah                  ; one zero for all six codes: AH is not known
+    stc                         ; 0 on entry (the je .e4 above is reached
+                                ; before AX is touched), and xor clears CF,
+                                ; so it goes ABOVE the stc
 .out:
     pop bp
     pop di
@@ -1159,25 +1154,21 @@ section .text
 ; With no driver loaded there is no stream to collide with, and drv_svc_call
 ; says so by refusing - which is the same answer, arrived at for free.
 ; -----------------------------------------------------------------------------
+%ifdef OS88_SNDCARD
 snd_str_busy:
     push ax
     push bp
     mov al, 8
     mov bp, [drv_svc+DSV_STREAM]
     call drv_svc_call
-    jc .free                    ; no driver, no stream
-    or ax, ax
-    jnz .busy
-.free:
-    pop bp
+    jnc .ask                    ; no driver, no stream: AX = 0, and say so
+    xor ax, ax                  ; without leaning on drv_svc_call's refusal
+.ask:                           ; also answering AX = 0
+    neg ax                      ; CF = (AX != 0) on 8086 - which IS the two
+    pop bp                      ; epilogues' answer. pop does not touch flags
     pop ax
-    clc
     ret
-.busy:
-    pop bp
-    pop ax
-    stc
-    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; snd_xlat_build - build the 256-byte PWM rescale table (far body)
@@ -1199,29 +1190,20 @@ snd_xlat_build:
     push cx
     push dx
     push si
-    push di
-    mov bx, ax
-    sub bx, 2                   ; BL = N-2 (N <= 255, so it fits a byte)
-    mov di, snd_xlat
-    xor si, si                  ; SI = s, 0..255
-.s:
-    mov ax, si
-    mul bl                      ; AX = s * (N-2)   (<= 255*253 = 64515)
-    mov cl, 255
+    sub al, 2                   ; AL = N-2 (N <= 255, so AH is already 0);
+    mov dl, al                  ; the accumulator form, two bytes
+    mov bx, snd_xlat            ; BX, not DI: [bx+si] is a legal 8086 EA and
+    mov cl, 255                 ; [di+si] is not. The divisor is a constant,
+    mov si, 255                 ; so it is hoisted out of the loop, and SI
+.s:                             ; counts DOWN so the bound is a sign test
+    mov ax, si                  ; (AH = 0 for SI <= 255, which mul needs)
+    mul dl                      ; AX = s * (N-2)   (<= 255*253 = 64515)
     div cl                      ; AL = AX/255 (<= 253), AH = remainder
     inc al                      ; 1..N-1
-    mov [di], al
-    inc di
-    inc si
-    cmp si, 256
-    jb .s
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    mov [bx+si], al
+    dec si
+    jns .s                      ; SI 255..0, then 0xFFFF sets SF and exits
+    jmp kret_si
 
 section .text
 
@@ -1249,8 +1231,27 @@ snd_inst:      resw 1           ; low byte: instance slot being dispatched
 snd_xlat:      resb 256         ; per-clip PWM rescale table (34.4), built
                                 ; by snd_xlat_build before every clip -
                                 ; write-before-read, needs no boot init
+snd_evtmp      equ snd_xlat     ; click-abort event drain scratch (8 bytes,
+                                ; evq_pop copies into DS memory) OVERLAID on
+                                ; the rescale table, which is dead by then.
+                                ; Four legs, and the first is the one to check:
+                                ; snd_xlat_build is guarded by snd_pcm_busy,
+                                ; NOT by sch_lock - it runs at :1080, two
+                                ; instructions ABOVE osapi_snd_play's raise -
+                                ; and a second caller is refused at .busyw
+                                ; while that byte is set. (2) the table's live
+                                ; range ends at spk_pcm_run's last xlat, and
+                                ; the drain runs only after it returns CF=1.
+                                ; (3) the drain's own guard IS sch_lock, and
+                                ; it is needed: spk_pcm_idle has cleared
+                                ; snd_pcm_busy by then. (4) no ISR touches
+                                ; either object - evq_push writes evq_buf in
+                                ; LOW_SEG and evq_pop copies OUT of it.
+                                ; tests/evqfull.py, tests/linefast.py and
+                                ; tools/os88linecost.py plant a stub in
+                                ; snd_xlat; none of them plays a clip
 snd_btn0:      resb 1           ; click-abort baseline; releases fold in
-snd_abort:     resb 1           ; set by snd_stop / snd_release_inst
+snd_abort:     resb 1           ; set by snd_release_inst, its only writer
 snd_pcm_busy:  resb 1           ; a PCM_EXCL clip is running (34.3)
 snd_pcm_inst:  resb 1           ;   the instance that owns it (0xFF kernel)
 snd_pcm_smp:   resb 1           ;   the sample parked across pacer polls
@@ -1258,11 +1259,11 @@ snd_pcm_fast:  resb 1           ;   the fsx sub-tick parked across the clip
                                 ;   (SPEC.md 53.2.1); written before every
                                 ;   read, so an unzeroed .bss cannot bite
 snd_pcm_n:     resw 1           ;   the clip divisor N (74..255)
-snd_pcm_emitted: resw 1         ; debug counters (34.4), reset per clip:
-snd_pcm_resync:  resw 1         ;   pulses emitted / deadline resyncs
-snd_patch:     resb 12          ; a package's 11-byte FM patch, staged into
-                                ; the kernel so the driver can read it (34.2)
-snd_evtmp:     resb 8           ; click-abort event drain scratch (evq_pop
-                                ; copies into DS memory)
+%ifdef OS88_SNDCARD
+snd_patch:     resb SND_PATCH_N ; a package's SND_PATCH_N-byte FM patch, staged
+                                ; into the kernel so the driver can read it
+                                ; (34.2). The guard above ties the reservation
+                                ; to the staging loop's own count
+%endif
 
 section .text

@@ -237,7 +237,7 @@ narrowest case the masks have and one a picture barely reaches.
 
 `sw_blit_row` walks the destination byte by byte; a source byte is two pixels
 and a 256-byte table turns it into two destination bits. **No hybrid** —
-docs/LAST-DROP.md 3 is the costing, kept as the record of a deliberate
+docs/LAST-DROP-PERF.md 3 is the costing, kept as the record of a deliberate
 omission. Measured (PERFORMANCE.md Set 44):
 
 | Paint's canvas | pre-§5.4.1 | span writer | **decoder** |

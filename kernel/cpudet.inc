@@ -69,10 +69,16 @@ cpu_feat        db 0            ; CPU_F_* - what actually verified, as
                                 ; opposed to what the CPU could in principle
                                 ; do. Initialized data for the same reason.
 
-cpu_x87sw       dw 0            ; the x87 probe's landing pad. In .text for
-                                ; cpu_tier's reason and because cpu_detect is
-                                ; boot overlay - it cannot own bss that
-                                ; outlives it.
+; THE x87 PROBE'S LANDING PAD IS NOT HERE. It used to be a `cpu_x87sw dw 0`
+; in .text - two of this file's eight resident bytes, a quarter of it - purely
+; so FNSTSW/FNSTCW would have a memory operand. It is two bytes of
+; cpu_detect's own STACK FRAME now (`[bp+0]`), which is the third option the
+; old comment's reasoning skipped: .bss cannot outlive an overlay, but the
+; overlay's stack is alive exactly as long as the probe is.
+
+%if cpu_feat - cpu_tier != 1
+  %error "cpu_info answers with ONE word read at [cpu_tier] (AL = the tier, AH = the features), so cpu_feat must be the byte after it. Split them and AH picks up whatever follows cpu_tier instead - silently, and only where a caller reads the feature bits"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; cpu_detect - publish the CPU tier (SPEC.md 41.1)
@@ -95,18 +101,40 @@ cpu_x87sw       dw 0            ; the x87 probe's landing pad. In .text for
 ; This routine is the one place in either module that runs before the tier
 ; is known, so there is no island in it and there cannot be one.
 
-section .ovl                    ; the boot overlay (SPEC.md 2.5): runs once from
+section .ovlw                   ; the boot overlay (SPEC.md 2.5): runs once from
                                 ; kmain and is written over by the first
                                 ; mount. cpu_info stays resident below: it is
                                 ; API slot 0x0188 and answers all session
                                 ; long. Nothing here calls out of the overlay
                                 ; and nothing here has data of its own -
                                 ; cpu_tier and cpu_feat are .text, written
-                                ; through DS like any kernel byte
+                                ; through DS like any kernel byte, and the x87
+                                ; probe's scratch is two bytes of this
+                                ; routine's own stack frame
 ; -----------------------------------------------------------------------------
 cpu_detect:
     push ax
     push cx
+    push bp
+    push ax                     ; ...and this one is not a bank: it is the two
+    mov bp, sp                  ; bytes the x87 probe below writes into, at
+                                ; SS:[bp+0]. THE ABSENCE OF A SEGMENT OVERRIDE
+                                ; IS THE MECHANISM AND NOT AN OVERSIGHT: a BP
+                                ; base addresses SS by default, which is where
+                                ; the pad is, and an 8087 takes the operand
+                                ; address from the 8088's own dummy cycle -
+                                ; computed with the segment the addressing mode
+                                ; selects. "Fixing" any of these five to
+                                ; `word [ds:bp+0]` puts the pad in KERNEL_SEG
+                                ; at a stack offset and reports an 8087 that is
+                                ; there as absent.
+                                ;
+                                ; The frame stays valid across the FLAGS probe
+                                ; because `mov bp, sp` is taken AFTER the pad
+                                ; push: every push, pushf and interrupt frame
+                                ; below lands at a LOWER address and cannot
+                                ; reach [bp+0], and all the probe's pairs are
+                                ; balanced.
     pushf                       ; the caller's FLAGS - the probe overwrites
                                 ; them and popf at the end puts them back
     pushf
@@ -128,14 +156,15 @@ cpu_detect:
     pop ax
     and ax, 0xF000
     jz .is286                   ; all four forced to zero: 286 in real mode
-    mov byte [cpu_tier], CPU_386
-    jmp short .tierdone
-.is286:
-    mov byte [cpu_tier], CPU_286
-    jmp short .tierdone
-.is8086:
-    mov byte [cpu_tier], CPU_8086
-.tierdone:
+    mov al, CPU_386
+    jmp short .store            ; the verdict travels in AL and is stored ONCE
+.is286:                         ; - three `mov byte [cpu_tier], imm8` were 5
+    mov al, CPU_286             ; bytes each where `mov al, imm8` is 2. AL is
+    jmp short .store            ; the caller's and is popped at .out; nothing
+.is8086:                        ; between here and the pad write reads it
+    xor al, al                  ; CPU_8086 = 0, so this is the 2-byte form too
+.store:
+    mov [cpu_tier], al          ; A2 disp16, the accumulator form
 
     ; --- is a coprocessor socketed? (SPEC.md 41.1) ---------------------------
     ; A 5150 shipped with an EMPTY 8087 socket, and plenty were filled later,
@@ -162,21 +191,30 @@ cpu_detect:
     ; SWITCH someone set by hand - it reports what the owner claimed, not what
     ; is in the socket.
     fninit
-    mov word [cpu_x87sw], 0x5A5A
-    fnstsw word [cpu_x87sw]
-    cmp word [cpu_x87sw], 0
+    mov word [bp+0], 0x5A5A     ; the pad is SS-relative BY DESIGN - see the
+    fnstsw word [bp+0]          ; frame set-up above. No override on any of
+    cmp word [bp+0], 0          ; these five, deliberately
     jne .out
-    fnstcw word [cpu_x87sw]
-    mov ax, [cpu_x87sw]
+    fnstcw word [bp+0]
+    mov ax, [bp+0]
     and ax, 0x103F
     cmp ax, 0x003F              ; a just-initialised control word: all
     jne .out                    ; exceptions masked, extended precision
     or byte [cpu_feat], CPU_F_X87
 .out:
     popf
+    pop bp                      ; the pad, discarded (pop writes no flags, so
+    pop bp                      ; the FLAGS popf just restored survive it)
     pop cx
     pop ax
-    ret
+    retf                        ; FAR, and the shim that used to own this
+                                ; return is deleted (SPEC.md 2.6.1, 2.5.2):
+                                ; the caller names this body directly through
+                                ; OVWCALL - a plain `call FAT_SEG:%%1` - and
+                                ; nothing near-calls it. NOT OVLGATE1: that is
+                                ; the .ovl half's gate and this body is .ovlw,
+                                ; which the first mount overwrites rather than
+                                ; spl_finish
 
 
 ; -----------------------------------------------------------------------------
@@ -193,6 +231,9 @@ cpu_detect:
 section .text
 ; -----------------------------------------------------------------------------
 cpu_info:
-    mov al, [cpu_tier]
-    mov ah, [cpu_feat]
-    ret
+    mov ax, [cpu_tier]          ; ONE word: little-endian puts [cpu_tier] in
+    ret                         ; AL and [cpu_feat] in AH, which is the
+                                ; documented output byte for byte. The %if
+                                ; beside the declarations is what keeps the
+                                ; pair adjacent. An unaligned word read is
+                                ; legal on the 8086 and this is not hot.

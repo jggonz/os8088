@@ -187,6 +187,10 @@ rc_entry:
     pop ax                          ; the pointer is off it rather than at the
                                     ; release. Not template words; set after
                                     ; wm_create, like MENU_SET
+    mov si, rc_about                ; 'About Recorder' above the Close the
+    call OSAPI_ABOUT_SET            ; kernel already puts in our pull-down
+                                    ; (SPEC.md 12.2) - flags preserved, so the
+                                    ; CF the branch above cleared still stands
     mov si, rc_menus                ; BX = the window wm_create just returned
     call OSAPI_MENU_SET             ; (draws nothing, takes no lock, and
                                     ; preserves the flags as well as the
@@ -217,6 +221,13 @@ rc_paint:
     mov [rc_oy], dx
     call rc_poll
     call rc_draw_all
+    cmp byte [rc_abon], 0           ; ...and the About card LAST, over the
+    je .out                         ; face it is opaque about (SPEC.md 20.5.1)
+    push si
+    mov si, rc_ablines
+    call os88ui_about_d             ; _d: this paint's region is already armed
+    pop si
+.out:
     pop di
     pop si
     pop dx
@@ -237,6 +248,8 @@ rc_onclick:
     push dx
     push si
     push di
+    call rc_abdismiss               ; the credits are up: this click is spent
+    jc .out                         ; taking them down
     mov bx, si
     push cx
     push dx
@@ -396,7 +409,8 @@ rc_onup:
 ; declare one menu.
 ; -----------------------------------------------------------------------------
 rc_oncmd:
-    mov bx, si
+    call rc_abdismiss               ; a menu pick takes the credits down first,
+    mov bx, si                      ; and then does what it says
     push ax                         ; the selection: wm_content answers in AX
     call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
     mov [rc_ox], ax
@@ -1199,6 +1213,72 @@ rc_putu5:
     ret
 
 ; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
+; =============================================================================
+; 'About Recorder' - the credit card (SPEC.md 12.2, 20.5.1)
+; =============================================================================
+; The card is os88ui.inc's; the flag, the painter drawing it last and the two
+; handlers taking it down are what a widget cannot own.
+
+; -----------------------------------------------------------------------------
+; rc_about - the OSAPI_ABOUT_SET handler (slot 0x01E0)
+; in:  SI = our window ptr; the UI task, gfx lock HELD
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+rc_about:
+    push bx
+    push si
+    mov byte [rc_abon], 1
+    mov bx, si
+    mov si, rc_ablines
+    call os88ui_about               ; arms the clip itself: a menu dispatch
+    pop si                          ; arrives without one (SPEC.md 11.3)
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; rc_abdismiss - take the card down if it is up
+; in:  SI = our window ptr; gfx lock held
+; out: CF = 1 the click was spent doing it; preserves every register
+;
+; rc_draw_all is the whole face, which is what the card covered - and it is
+; what rc_paint draws. The poll goes with it, because the stream may have
+; retired while the credits were up.
+; -----------------------------------------------------------------------------
+rc_abdismiss:
+    cmp byte [rc_abon], 0
+    je .none
+    push ax
+    push bx
+    push dx
+    mov byte [rc_abon], 0
+    mov bx, si
+    call OSAPI_WM_CONTENT           ; the window may have been dragged since
+    mov [rc_ox], ax                 ; the card went up
+    mov [rc_oy], dx
+    mov bx, si
+    call OSAPI_WM_CLIP_SET          ; ...and nothing armed a region for a
+    jc .gone                        ; click either (SPEC.md 11.3)
+    call rc_poll
+    call rc_draw_all
+.gone:
+    pop dx
+    pop bx
+    pop ax
+    stc
+    ret
+.none:
+    clc
+    ret
+
+; --- the About card's lines (SPEC.md 20.5.1) ----------------------------------
+; SHORT: the card is clamped to the content box and this window's is 218px.
+rc_ablines:
+    dw rc_ab1, rc_ab2, rc_ab3, rc_ab4, 0
+rc_ab1:     db 'Recorder for os8088', 0
+rc_ab2:     db 0
+rc_ab3:     db 'Contributed by', 0
+rc_ab4:     db 'Jorge Gonzalez', 0
+
 rc_tpl:
     dw 210, 150, 220, 140           ; x, y, w, h -> content 218 x 121
     dw rc_ttl, rc_paint, 0, rc_onclick
@@ -1276,9 +1356,10 @@ rc_sine:
     db  94, 96, 98,100,102,105,107,109,111,113,115,117,119,122,124,126
 
 ; --- the shared controls (SPEC.md 47 rule 1 in one place) -------------------
-%include "os88ui.inc"
+%define OS88UI_ABOUT            ; ...and the standard About card beside the
+%include "os88ui.inc"           ; buttons this already drew
 
-    OS88_BSS 4022
+    OS88_BSS 4023
     OS88_IMAGE_END
 
 ; --- loader-zeroed bss (SPEC.md 21 step 5) -------------------------------------
@@ -1303,4 +1384,5 @@ rc_cap   equ os88_image_end + 4020  ; word: the grant size rc_grant actually
                                     ; slotted into the pad at +15, because an
                                     ; odd-addressed word is legal and slow and
                                     ; this is read on every poll
-                                    ; total 4022
+rc_abon  equ os88_image_end + 4022  ; byte: the About card is up
+                                    ; total 4023

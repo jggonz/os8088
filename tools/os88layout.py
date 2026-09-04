@@ -77,9 +77,17 @@ def cold_span(root=None):
         `9A offset <cold seg> / C3` that live in `.text` and are what calls
         `.cold`. Comparing those against `.cold` differs in ~98% of bytes.
       * the length: `FAT_SEG - COLD_SEG` is the RUNG the section was rounded
-        up into, not the section. `.cold` is the last thing in kernel.bin and
-        ends at EOF, so what the file holds after the offset IS the section -
-        checked against the rung, which stays the upper bound.
+        up into. `.cold` is padded out to fill it and `.ovlw` starts at the
+        far end, so the span is `OVLW_START - offset` and not `EOF - offset`.
+
+        **THAT SENTENCE USED TO SAY `.cold` IS THE LAST THING IN kernel.bin
+        AND ENDS AT EOF**, which stopped being true when `.ovlw` was
+        introduced after it, and the two rows below then failed on every build
+        - 37,376 of rung plus 5,215 of `.ovlw` measured as 42,591 of section.
+        The failure named the wrong cause too, telling the reader to rebuild a
+        build that was current, and it cost a wrong diagnosis before the
+        arithmetic was done. A check whose message names the wrong cause is
+        worse than one with no message.
 
     Also: COLD_SEG is asked for, never written down. It has moved twice
     (0x0E00 -> 0x0E20 -> 0x0FC0) and a stale copy reads the wrong RAM.
@@ -90,11 +98,20 @@ def cold_span(root=None):
     root = root or ROOT
     seg = os88sym.segment_of("fm_layout")            # any .cold symbol will do
     off = seg_at(seg, root=root)
-    rung = (os88sym.equates()["FAT_SEG"] - seg) << 4
-    size = os.path.getsize(os.path.join(root, "build", "kernel.bin")) - off
+    eq = os88sym.equates()
+    rung = (eq["FAT_SEG"] - seg) << 4
+    size = eq["OVLW_START"] - off
+    have = os.path.getsize(os.path.join(root, "build", "kernel.bin"))
     if not 0 < size <= rung:
         raise RuntimeError(
-            ".cold is %d bytes from file offset %d, against a %d-byte rung "
-            "below FAT_SEG - the map and the binary disagree, so rebuild "
-            "before trusting this" % (size, off, rung))
+            ".cold spans %d bytes from file offset %d to OVLW_START, against "
+            "a %d-byte rung below FAT_SEG - two equates that derive from the "
+            "same section order now disagree, so kernel.asm's layout has "
+            "moved and this routine has not" % (size, off, rung))
+    if have < off + size:
+        raise RuntimeError(
+            "build/kernel.bin is %d bytes and .cold's rung ends at %d - the "
+            "binary is SHORTER than the map says the section is. A rebuild is "
+            "the likely cure; a truncated write is the other one"
+            % (have, off + size))
     return seg, off, size

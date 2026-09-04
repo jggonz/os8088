@@ -95,7 +95,11 @@ def attach(args, want_len=None):
 
 
 def cmd_boot(args):
-    drive.start(image=args.image, machine=args.machine)
+    # THE ADDRESS COMES FROM start(), not from args: `--addr` defaulted before
+    # this boot existed, and the port is the one the OS handed the emulator a
+    # moment ago. Every LATER command picks it up from drive.ADDRFILE.
+    args.addr = drive.start(image=args.image, machine=args.machine)
+    print("bench on %s" % args.addr)
     lab = Lab(args.addr)
     drive.open_readme(lab.m)
     out = os.path.join(ROOT, "build", "notepad-lab-opened.png")
@@ -180,7 +184,10 @@ def cmd_trace(args):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--addr", default="127.0.0.1:9001")
+    # The bench's address, not a constant: `boot` starts a detached instance
+    # on a port the OS picked and records it (drive.ADDRFILE), so every
+    # command after it finds the machine without anybody typing a number.
+    ap.add_argument("--addr", default=drive.addr())
     ap.add_argument("--bin", default=BIN)
     ap.add_argument("--lst", default=LST)
     ap.add_argument("--pkg", default="NOTEPAD")

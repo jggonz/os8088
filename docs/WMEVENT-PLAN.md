@@ -266,7 +266,7 @@ fact for whoever touches it next, and §2.4 says where to look for room.
 (12 windows × 2 for `W_ONMOUSEUP`, plus 3 that were Tier 1's). `.text` +151 is
 four times the ~37 estimated, and the estimate was wrong because it counted
 only the new code: the API cell (8), the setter, the `wm_create` zero, the
-`.mup_pkg` branch, **and `ui_ptcall`** — the billing block factored out of
+`.mup_pkg` branch, **and `ui_bill`** — the billing block factored out of
 `.content_front` so `W_ONCLICK` and `W_ONMOUSEUP` share one body. Factoring
 was supposed to pay for itself and roughly did; the estimate simply never
 included the branch or the cell.
@@ -361,7 +361,7 @@ four withdrawn cells.
 3. ~~`W_ONMOUSEUP`, the setter cell, the `wm_create` zero, the factored
    billing block.~~ **Done.** `W_ONMOUSEUP` at record offset 26 (`WIN_SIZE`
    26 → 28), `OSAPI_WM_ONMOUSEUP` appended at **0x03A8** — an append, so
-   nothing renumbered — and `ui_ptcall` is the shared dispatcher.
+   nothing renumbered — and `ui_bill` is the shared dispatcher.
 4. ~~The gate package and cases 1–8, CGA first.~~ **Done** — `tests/muptest`,
    `make build/muptest.img`, four cases on CGA, Hercules and VGA.
 5. ~~SPEC edits.~~ §13.7 landed. §11's record table and §41's slot list were

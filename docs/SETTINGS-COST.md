@@ -100,8 +100,9 @@ Identical, and neither is the interesting part:
 Five external calls change kind and four want a far entry that does not exist
 yet — `drv_vol_bank`, `drv_vol_back`, `drv_mounted` and `ss_mins2idle`, 16
 bytes of `.cold`. `dwf_dskw_read`, `dwf_dskw_stat`, `dwf_dskw_write_sys`,
-`cw_thm_set`, `cw_sched_mode_get` and `sched_mode_set` are all reachable as
-they stand.
+`cw_thm_set`, `sched_mode_get` (its `cw_` shim went in size pass 2 — the body
+is far-entered directly under §2.6.1) and `sched_mode_set` are all reachable
+as they stand.
 
 ## 4 The problem both designs exist to solve
 

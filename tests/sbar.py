@@ -28,6 +28,7 @@ sys.path.insert(0, "tools")
 import os88marty as M
 from os88mouse import Mouse
 from os88geom import WIN_SIZE, MAX_WIN
+from os88fixture import need                             # noqa: E402
 
 ARG = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_cga_gla"
 DLG = ARG == "dlg"
@@ -88,6 +89,28 @@ def px(r, x, y):
     return r[y][x]
 
 
+def front(m, after):
+    """The frontmost live window, or a sentence naming the step that lost it.
+
+    THE GUARD IS THE WHOLE REASON THIS IS A FUNCTION. It was three copies of
+    the same read, each ending in a bare `live[-1]`, so a step that failed to
+    open its window died with `IndexError: list index out of range` against
+    130 lines of file and no clue which of the three it was. tests/deskbench.py
+    lost a soak run to exactly that shape, and a traceback was what found it.
+
+    `& 2` is sbar's own predicate and not dispcp's `& 3 == 3`: it asks whether
+    the slot is VISIBLE, which is what a click needs to know.
+    """
+    b = m.read(m.sym("wm_wins"), WIN_SIZE * MAX_WIN)
+    live = [tuple(_u16(b[i*WIN_SIZE:], o) for o in (2, 4, 6, 8))
+            for i in range(MAX_WIN) if _u16(b[i*WIN_SIZE:], 0) & 2]
+    if not live:
+        raise RuntimeError("no visible window after %s - the step before this "
+                           "one did not put anything on screen, so there is "
+                           "nothing to click" % after)
+    return live[-1]
+
+
 def dialog(m, mo):
     """muptest's second window puts a Standard File dialog up (fdlgup.py's
     route) - the only way to get one on screen."""
@@ -96,27 +119,26 @@ def dialog(m, mo):
     vw = int.from_bytes(m.read(m.sym("vid_w"), 2), "little")
     mo.dblclick(vw - 40, 32 + step + h1 // 2)
     M.settle(m)
-    b = m.read(m.sym("wm_wins"), WIN_SIZE * MAX_WIN)
-    live = [tuple(_u16(b[i*WIN_SIZE:], o) for o in (2, 4, 6, 8))
-            for i in range(MAX_WIN) if _u16(b[i*WIN_SIZE:], 0) & 2]
-    d = live[-1]
+    d = front(m, "the second muptest window was double-clicked open")
     mo.click(d[0] + d[2] // 2, d[1] + 9)
     M.settle(m)
     mo.dblclick(d[0] + 40, d[1] + TITLE_H + 30)
     M.settle(m)
-    b = m.read(m.sym("wm_wins"), WIN_SIZE * MAX_WIN)
-    live = [tuple(_u16(b[i*WIN_SIZE:], o) for o in (2, 4, 6, 8))
-            for i in range(MAX_WIN) if _u16(b[i*WIN_SIZE:], 0) & 2]
-    w = live[-1]
+    w = front(m, "the Standard File dialog was asked for")
     cx, cy = w[0] + 1, w[1] + TITLE_H
     two = (cx + 100 + 31, cy + 40 + 9)
     mo.menu(two[0], two[1], two[0] + 2, two[1])
     M.settle(m)
-    b = m.read(m.sym("wm_wins"), WIN_SIZE * MAX_WIN)
-    live = [tuple(_u16(b[i*WIN_SIZE:], o) for o in (2, 4, 6, 8))
-            for i in range(MAX_WIN) if _u16(b[i*WIN_SIZE:], 0) & 2]
-    return live[-1]
+    return front(m, "the dialog's menu was dragged")
 
+
+# `all` builds NOTHING under tests/, so on a clean tree this disk is absent
+# and launch() dies in its copy with a FileNotFoundError in a tenth of a
+# second - an ABSENT gate that reads as a failing one, which is worse than
+# either. fdlgup and mouseup want the same disk and have asked for it since
+# it was written; this row never did, so WHICH ROW RAN FIRST decided whether
+# it passed (docs/HANDOFF-SOAK-FINDINGS.md B4).
+need("build/muptest.img")
 
 if DLG:
     with M.launch("build/os8088-360.img", apps="build/muptest.img",

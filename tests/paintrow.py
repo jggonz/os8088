@@ -16,16 +16,19 @@ and the counter off a pixel that is otherwise eight shifts (SPEC.md 42.13.1.2)
 column of a row. Unrolling a loop and leaving its exit condition behind is the
 classic way to write a routine that is right for 63 columns of 59.
 
-**IT IS CURRENTLY RED, ON PURPOSE, AND IT IS RIGHT.** Since SPEC.md 11.94.5
-put a window's SIZE on the byte grid, opening this 466-wide picture leaves
-`[pt_cw]` at 472: the snap rounds Paint's content width up and `pt_track`,
-which defines the canvas as the content area, grows the document to match.
-`pt_bmp_hdr` writes `biWidth` from `[pt_cw]`, so a Save then writes a 472-wide
-file with six columns of white on the end, and nothing warns. The width
-assertion below is what catches it - `make NOSIZESNAP=1` gives 466 and this
-row passes every check. **Do not relax it to 472**; that blesses the defect.
-docs/SAVEUNDER-LIVE-PLAN.md 28 has the measurement and the three candidate
-fixes, which are a decision rather than a patch.
+**THE WIDTH ASSERTION IS HALF OF IT, and it was red for a month.** SPEC.md
+11.94.5 put a window's SIZE on the byte grid, so opening this 466-wide picture
+left `[pt_cw]` at 472: the snap rounded Paint's content width up and pt_track,
+which defined the canvas AS the content area, grew the document to match.
+`pt_bmp_hdr` writes `biWidth` from `[pt_cw]`, so a Save wrote a 472-wide file
+with six columns of white welded to the end and nothing warned. SPEC.md 42.20
+is the fix and this row is what held the line until it arrived - do not relax
+it to 472, which would bless the defect rather than catch it.
+
+**And the row loop under it had never run at all**, because the width
+assertion exits first. When it finally did, it did not work either - for
+reasons that were entirely the rig's and are written down at patch_caller and
+call_line_get. pt_line_get itself was right the whole time.
 
 **IT CALLS THE ROUTINE, rather than driving something that calls it.** Paint
 is stopped at `pt_blit`'s entry, so CS and DS are already the package's, and
@@ -54,6 +57,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 sys.path.insert(0, HERE)
 import os88marty, os88mouse, os88sym, dispcp                 # noqa: E402
+import dispapps                                              # noqa: E402
 from blitpair import gif_pixels                              # noqa: E402
 from paintmove import pkg_syms                               # noqa: E402
 
@@ -61,64 +65,84 @@ S = os88sym.linear
 ROWS = (0, 1, 54, 55, 108, 109)     # top, middle and bottom of the picture
 
 
+def _diskname(path):
+    """What os88disk called it: colour_gif already answers in 8.3 upper case."""
+    return os.path.basename(path)
+
+
 def patch_caller(m, base, sym):
-    """A five-byte CALL/JMP loop written over pt_blit's entry.
+    """An eight-byte loop written over pt_blit's entry, CARRYING THE ROW.
+
+        pt_blit+0:  BF row       mov di, <row>
+        pt_blit+3:  E8 rel16     call pt_line_get
+        pt_blit+6:  EB F8        jmp pt_blit+0
 
     The debug server will not set IP - `pc` is the FETCH pointer and a bare
     write leaves the old prefetch queue in front of the new address, which it
     says so at its own `reg_of`. So the call is made the way the 8088 makes
-    one: the instruction is written where the CPU already is.
+    one: the instruction is written where the CPU already is. Paint's task
+    never leaves this until the harness quits, which is fine and is why the
+    routine is the LAST thing the test does.
 
-        pt_blit+0:  E8 rel16     call pt_line_get
-        pt_blit+3:  EB FB        jmp pt_blit+0
+    **THE ROW IS AN IMMEDIATE AND NOT A REGISTER**, which is what makes the
+    loop drivable at all. Two things this rig used to do cannot be done here:
 
-    Stop on the `jmp`, read the answer, set DI, run: it loops round and calls
-    again. Paint's task never leaves this until the harness quits, which is
-    fine and is why the routine is the LAST thing the test does.
+    - `setreg di` between turns does not stick. pt_line_get pushes DI at entry
+      and pops it at exit, so a value written while the guest is inside the
+      routine is thrown away by its own epilogue and the loop goes on
+      redrawing the row it already had.
+    - a breakpoint cannot be used to find a moment when it WOULD stick.
+      Measured: the first exec breakpoint after a fresh run fires, and no
+      breakpoint armed after that stop ever fires again - not at the same
+      address, not at pt_line_get's entry, not at its exit 330 bytes along -
+      while `run` is provably resuming (127 million cycles in eight seconds,
+      state still 'running'). The rig read that as "pt_line_get(N) never came
+      back", which points squarely at the routine under test.
+
+    Writing the immediate needs neither a breakpoint nor a register, so the
+    loop is driven by one memory write and a timed advance.
+
+    Returns the address of the immediate.
     """
     at = sym["pt_blit"]
-    rel = (sym["pt_line_get"] - (at + 3)) & 0xFFFF
-    m.write(base + at, bytes((0xE8, rel & 0xFF, rel >> 8, 0xEB, 0xFB)))
-    return base + at + 3
+    rel = (sym["pt_line_get"] - (at + 6)) & 0xFFFF
+    m.write(base + at, bytes((0xBF, 0, 0, 0xE8, rel & 0xFF, rel >> 8,
+                              0xEB, 0xF8)))
+    return base + at + 1
+
+# pt_line_get is about 19,000 cycles for a 466-column planar row, so this is
+# roughly ten turns of the loop. It does not have to land BETWEEN turns: the
+# loop redraws the same row every time, so once one complete pass has run,
+# every later pass writes pt_line the identical bytes. That idempotence is
+# what replaces the breakpoint the debugger will not give (see patch_caller).
+TURNS = 200000
 
 
-def call_line_get(m, base, sym, spin, row, cw):
-    """pt_line_get(DI=row), through the loop patch_caller left behind.
+def call_line_get(m, base, sym, rowat, row, cw):
+    """pt_line_get(<row>), through the loop patch_caller left behind.
 
-    **THIS RIG DOES NOT SURVIVE ITS SECOND CALL, AND THAT IS AN OPEN BUG IN
-    THE RIG rather than in pt_line_get** (SPEC.md 42.20). Nothing had noticed
-    because the row loop has not run since SPEC.md 11.94.5: the width
-    assertion above it exits first, and was correctly red from that commit
-    until 42.20 stopped the canvas growing into the snap's slack.
+    **SETTLED, not timed.** Two consecutive reads that agree is the proof that
+    the loop has been round at least once on THIS row, and it is needed twice
+    over. The 8088 has a prefetch queue and the patch is written while the CPU
+    is stopped at the address being patched, so the first turn executes the
+    bytes that were queued before it - the real pt_blit, which then blits the
+    whole canvas and calls pt_line_get for every row of it, leaving pt_line
+    holding one this call never asked for. And a canvas blit is millions of
+    cycles, so no fixed advance is safely bigger than it.
 
-    What happens: the first call is made from a stop at `pt_blit+0` and
-    returns good data - row 0 comes back matching the file exactly. Every call
-    after it resumes from `spin` itself, because that is where the previous
-    one stopped, and the breakpoint at `spin` is then never reported again.
-    The guest is NOT hung: it spins round the patched loop for ever, which is
-    why the CS:IP sampled at the timeout is a different one every run and
-    never inside this package - it is whatever interrupt was in hand. The
-    symptom reads as "pt_line_get(N) never came back", which points squarely
-    at the routine under test.
-
-    Ruled out: it is not the row (reordering ROWS to (54, 0, 1) fails on the
-    SECOND call, whichever row that is), not `setreg` (DI is read back as the
-    value written), and not the patch bytes (`e8 1f 45 eb fb` are still there
-    at the stall). Stepping off the address with `advance(cycles=)` before
-    re-arming does leave the guest provably elsewhere - inside pt_line_get -
-    and the breakpoint at `spin` still does not fire; nor does arming
-    pt_line_get's entry and `spin` alternately, which never resumes from an
-    armed address at all. The remaining suspect is `patch_caller`'s own
-    warning one level down: MartyPC's `pc` is the FETCH pointer, and
-    `pt_blit+3` sits inside the prefetch window of the `call` at `pt_blit+0`.
+    That is what made row 0 - and only row 0 - come back wrong: every later
+    row was read from a loop that had long since taken over.
     """
-    m.setreg("di", row)
-    m.bp_exec(spin)
-    m.run()
-    if not m.wait_stop(limit=120.0):
-        sys.exit("paintrow: pt_line_get(%d) never came back" % row)
-    return m.read(base + sym["pt_line"], cw)
-
+    m.write(rowat, bytes((row & 0xFF, (row >> 8) & 0xFF)))
+    prev = None
+    for _ in range(40):
+        m.advance(cycles=TURNS)
+        cur = m.read(base + sym["pt_line"], cw)
+        if cur == prev:
+            return cur
+        prev = cur
+    sys.exit("paintrow: pt_line never settled for row %d - the patched loop "
+             "is not running, or is not running this row" % row)
 
 def classes(seq):
     """...as a pattern: which entries match the first one."""
@@ -131,8 +155,20 @@ def main():
     ap.add_argument("--image", default="build/os8088-360.img")
     ap.add_argument("--apps", default="/tmp/paintrow.img")
     ap.add_argument("--machine", default="os8088_xt_vga")
-    ap.add_argument("--gif", default="build/OS8088.GIF")
+    ap.add_argument("--gif", default=None,
+                    help="the picture to open (default: a COLOUR derivation "
+                         "of build/OS8088.GIF - see below)")
     a = ap.parse_args()
+
+    # A COLOUR PICTURE, and it has to be said now. SPEC.md 42.23.6 opens a GIF
+    # whose colour table has two entries ONE BIT DEEP on any adapter, and
+    # build/OS8088.GIF has exactly two - so the fixture every other paint row
+    # uses stopped being able to give THIS one a four-plane canvas at all, and
+    # the row failed saying "no gfx_blitp", which is true and points at the
+    # wrong thing. dispapps.colour_gif appends two unused entries and changes
+    # not one pixel, so `gif_pixels` below is the oracle it always was.
+    if a.gif is None:
+        a.gif = dispapps.colour_gif()
 
     if a.apps == "/tmp/paintrow.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
@@ -155,7 +191,7 @@ def main():
         rx, ry = dispcp.row_xy(bx, by,
                                dispcp.scroll_to(m, mo, S, settle, bx, by,
                                                 dispcp.row_of(m, S,
-                                                              "OS8088.GIF")))
+                                                              _diskname(a.gif))))
         mo.to(rx, ry)
         settle(m)
         # the FIRST canvas blit is what tells us where the package landed, and
@@ -172,15 +208,32 @@ def main():
         m.run()
         time.sleep(6)
 
-        # ...and now stop INSIDE Paint, so CS and DS are the package's
+        # ...and now stop INSIDE Paint, so CS and DS are the package's.
+        #
+        # **A DRAG OF PAINT'S OWN TITLE BAR, and it has to be** - this was
+        # `mo.to(rx + 3, ry + 3)`, commented "anything that repaints it", and a
+        # POINTER MOVE REPAINTS NOTHING. Measured on this tree and on upstream
+        # `main`, three targets each: rx+3/ry+3, rx/ry and 4,4 all fail to
+        # reach pt_blit inside 25 s, and a title drag hits it every time. The
+        # reason is on the glass: the file row is at (164,145) and Paint opens
+        # at (71,24) 522x152 over it, so the move lands on Paint's OWN palette
+        # strip - and the arrow is a save-under (SPEC.md 7.1), so crossing a
+        # window does not ask it to draw. The row has been failing on this
+        # step for as long as the geometry has been this shape; it is not a
+        # regression in anything.
+        #
+        # A drag is the right provoker rather than a lucky one: wm_drag
+        # damages what the window vacates and W_PAINT is Paint's first
+        # pt_blit caller (SPEC.md 42). Small, so the window stays on screen,
+        # and it does not matter that the drag never completes - the
+        # breakpoint stops the machine inside it, which is exactly where the
+        # patch below wants to be.
+        wx, wy, ww = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:3]
         m.bp_exec(base + sym["pt_blit"])
-        mo.to(rx + 3, ry + 3)                   # anything that repaints it
+        mo.drag(wx + ww // 2, wy + 4, wx + ww // 2 - 40, wy + 30)
         if not m.wait_stop(limit=120.0):
-            m.bp_exec(base + sym["pt_blit"])
-            mo.to(rx, ry)
-            if not m.wait_stop(limit=120.0):
-                sys.exit("paintrow: Paint never repainted its canvas, so "
-                         "there is nowhere to call the routine from")
+            sys.exit("paintrow: Paint never repainted its canvas, so "
+                     "there is nowhere to call the routine from")
         cw = m.read(base + sym["pt_cw"], 2)
         cw = cw[0] | (cw[1] << 8)
         planar = m.read(base + sym["pt_planar"], 1)[0]
@@ -193,12 +246,12 @@ def main():
             sys.exit("paintrow: stopped at IP %04X, not pt_blit's entry - the "
                      "patch below would land mid-instruction"
                      % m.regs()["ip"])
-        spin = patch_caller(m, base, sym)
+        rowat = patch_caller(m, base, sym)
         bad = 0
         for row in ROWS:
             if row >= ih:
                 continue
-            got = classes(call_line_get(m, base, sym, spin, row, cw))
+            got = classes(call_line_get(m, base, sym, rowat, row, cw))
             want = classes(px[row * iw:(row + 1) * iw])
             if len(set(want)) != 2:
                 sys.exit("paintrow: file row %d is one colour, so it proves "

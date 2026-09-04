@@ -86,7 +86,12 @@
 
 %include "os88api.inc"
 
-    OS88_HEADER 'ARKANOID', ark_entry, 1
+    OS88_HEADER 'ARKANOID', ark_entry, 1, OS88_STACK_192
+                                ; THE WORKER'S STACK, declared
+                                ; rather than defaulted (SPEC.md 8.7):
+                                ; static 76 for ark_worker
+                                ; over the 64-byte interrupt floor
+                                ; that is 140, and 192 gives 1.37x
 
 ; --- embedded 16x16 icon (SPEC.md 20.2, flags bit 0) ---------------------------
 ; A brick wall over a ball over the paddle - the whole game in three objects.

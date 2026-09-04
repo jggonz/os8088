@@ -37,8 +37,20 @@ import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
 import dispcp                                               # noqa: E402
 
-MBAR_H, MENU_ITEM_H, TITLE_H = 20, 16, 18
 S = os88sym.linear
+
+# THE KERNEL'S OWN NUMBERS, not a copy of them (SPEC.md 39.2.1). This row read
+# vid_ctx with a hand-written record size and hand-written VX/VY offsets, and
+# the record GREW: VID_CTX_SZ is VID_CTX_W*2+5, so a word added to the copied
+# run moves all three. The stale set (42, 36, 38) against the real (43, 38,
+# 40) put display 1's origin four bytes early - it read (340, 45056), and
+# 45056 is 0xB000, a framebuffer segment being read as a y coordinate. The
+# test then dragged the window to a y no display holds and waited for a repaint
+# that could never come, which is a 246 s timeout and not a failed assertion.
+_E = os88sym.equates()
+MBAR_H, MENU_ITEM_H, TITLE_H = _E["MBAR_H"], _E["MENU_ITEM_H"], _E["TITLE_H"]
+CTX_SZ, CTX_VX, CTX_VY = (_E["VID_CTX_SZ"], _E["VID_CTX_VX"],
+                          _E["VID_CTX_VY"])
 
 
 def u16(b, i=0):
@@ -107,8 +119,9 @@ def main(argv):
         pri = [c for c in cards if c["type"] == ("mda" if kind == 1
                                                  else "cga")][0]
         sec = [c for c in cards if c is not pri][0]
-        ctx = m.read(S("vid_ctx"), 2 * 42)
-        d1vx, d1vy = u16(ctx, 42 + 36), u16(ctx, 42 + 38)
+        ctx = m.read(S("vid_ctx"), 2 * CTX_SZ)
+        d1vx = u16(ctx, CTX_SZ + CTX_VX)
+        d1vy = u16(ctx, CTX_SZ + CTX_VY)
         say("display 1 (%s) at (%d,%d); its top row is %d, not MBAR_H"
             % (sec["type"], d1vx, d1vy, d1vy))
 
@@ -126,7 +139,15 @@ def main(argv):
         tx = d1vx + 40
         skind = "herc" if sec["type"] == "mda" else "cga"
         sw, sh, srows = m.vram(skind)
-        clean = band(srows, 40, 40 + ww - 1, 0, TITLE_H)
+        # THE BAND'S WIDTH IS FIXED HERE AND REUSED, because ww is re-read
+        # after every drag and the window is not the same width afterwards:
+        # SPEC.md 11.94.5 snaps a frame's WIDTH, so the About box comes back
+        # 300 wide where it went out 306. Comparing a 306-column `clean`
+        # against a 300-column `after` walks the two with different strides
+        # and the diff is a perfect staircase - 6 more pixels wrong per row,
+        # which reads exactly like a dither drawn at the wrong phase.
+        bandw = ww
+        clean = band(srows, 40, 40 + bandw - 1, 0, TITLE_H)
 
         mo.drag(wx + ww // 2, wy + TITLE_H // 2, tx + ww // 2,
                 wy + TITLE_H // 2)
@@ -176,7 +197,7 @@ def main(argv):
             fail.append("the window did not move away (y=%d) - step 3 is "
                         "measuring a drag that did not happen" % ay2)
         sw, sh, srows = m.vram(skind)
-        after = band(srows, 40, 40 + ww - 1, 0, TITLE_H)
+        after = band(srows, 40, 40 + bandw - 1, 0, TITLE_H)
         # a control: the same rows where the window has never been, so a
         # "restored" band can be checked against real desktop rather than
         # against a number that looks about right

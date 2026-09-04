@@ -50,6 +50,12 @@ WHERE = ("tests", os.path.join("tests", "unit"), "tools")
 EXEMPT = {
     "fatwpin.py": "md5s the whole image and never indexes it, so no address "
                   "of any kind crosses into it",
+    "os88ladder.py": "md5s the whole of kernel.bin for the page's provenance "
+                     "stamp and never indexes it. Every os88sym address it "
+                     "holds is handed to the EMULATOR - m.read(), a "
+                     "breakpoint - so it addresses the guest's memory and "
+                     "not the file, and `.boot2` (which os88sym will not "
+                     "place) it resolves against the ladder's own kend",
     "os88layout.py": "is the answer",
 }
 

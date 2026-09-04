@@ -1,12 +1,22 @@
 ; =============================================================================
 ; os8088 - clockw.inc : SPEC.md 37's RTC WRITE half (SPEC.md 37.94)
 ;
-; NOT A KERNEL FILE. It is %included from ctrl.inc's `.modc`, so every byte
-; below ships in CTRL.DRV: read off the floppy when the Control Panel opens,
-; freed when it closes. It has no `section` directive of ITS OWN for exactly
-; that reason - the section is the one the includer is in, which is why
-; tools/os88ovlchk.py carries this file in its EXTRA map and why adding one
-; here would silently move the module header off offset 0.
+; NOT A KERNEL FILE. It is %included from ctrl.inc's `.modc` (ctrl.inc's
+; %include line is the only place that says so), so every byte below ships in
+; CTRL.DRV: read off the floppy when the Control Panel opens, freed when it
+; closes. It has no `section` directive of ITS OWN for exactly that reason -
+; the section is the one the includer is in, and adding one here would
+; silently move the module header off offset 0.
+;
+; SO THIS IS THE ONE FILE IN kernel/ WHOSE SECTION CANNOT BE READ FROM THE
+; FILE, and every host-side tool that walks `kernel/*.inc` one file at a time
+; has to be told. tools/os88ovlchk.py is told, in its EXTRA map - and a size
+; pass that was not told measured `.text` jumps landing inside the CTRL.DRV
+; image, which assembles and runs wrong. tools/kernsize.py --modules is the
+; other end of the same gap: it brackets modules by their %include lines in
+; kernel.asm, so this file has no row of its own and its bytes are counted
+; under ctrl.inc. Neither is a defect to fix here; both are things to know
+; before quoting a number about this file.
 ;
 ; WHY IT IS HERE AND NOT IN THE KERNEL. clk_rtc_write has one caller:
 ; cp_flush_close_x, the Control Panel's teardown (SPEC.md 31.8). It used to
@@ -30,7 +40,9 @@
 ; loaded, because the only things that ask are the three rungs below.
 ;
 ; BIOS FROM HERE IS FINE, and the old comment in clock.inc said the opposite.
-; Rung 4 calls int 1Ah with the gfx lock held, from the UI task - and
+; Rung 4 (CLK_T_BIOS - the enum, which is what the section headers below
+; number by; it is step 5 of clk_probe's WALK) calls int 1Ah with the gfx
+; lock held, from the UI task - and
 ; drv_cfg_save's int 13h, two lines further into cp_flush_close_x, is two
 ; seconds of the same thing. SPEC.md 31.1's "must not call BIOS" binds
 ; cp_paint and cp_onclick, which are page callbacks. Teardown is not one.
@@ -47,36 +59,39 @@
 ; out: nothing (all registers preserved)
 ;
 ; A machine without an RTC returns immediately: the clock is the PIT's. The
-; "outside the gfx lock" rule predates the ladder - only rung 5 calls BIOS
+; "outside the gfx lock" rule predates the ladder - only rung 4 calls BIOS
 ; now - but it stays, because the caller cannot know which rung answered and
 ; ui_task step 3 is a perfectly good place to drain [clk_dirty] from.
 ; -----------------------------------------------------------------------------
 clk_rtc_write:
     push ax
+    push bx
     cmp byte [clk_rtc], 0
     je .out
-    mov al, [clk_tier]
-    cmp al, CLK_T_AT
-    jne .n1
-    call clk_at_write
-    jmp short .out
-.n1:
-    cmp al, CLK_T_RP
-    jne .n2
-    call clk_rp_write
-    jmp short .out
-.n2:
-    cmp al, CLK_T_NS
-    jne .n3
-    call clk_ns_write
-    jmp short .out
-.n3:
-    cmp al, CLK_T_BIOS
-    jne .out
-    call clk_bios_write
-.out:
+    mov bl, [clk_tier]          ; 1..4 whenever [clk_rtc] is 1, so it indexes
+    xor bh, bh                  ; the table below directly. The compare chain
+    dec bx                      ; this replaces was four `cmp al,CLK_T_X / jne
+    shl bx, 1                   ; / call / jmp short` blocks, 9 bytes a rung
+    cmp bx, 8                   ; belt as well as braces: [clk_rtc] already
+    jae .out                    ; says a rung claimed, and .bss is not zeroed
+    call [cs:clk_wtab+bx]       ; THROUGH CS: this is a module (SPEC.md 2.8.6)
+.out:                           ; and its data may not be reached through DS,
+    pop bx                      ; exactly as clk_dowt below is read
     pop ax
     ret
+
+; THE TABLE IS INDEXED BY THE CLK_T_* ENUM, NOT BY THE ORDER THE LADDER WALKS
+; - the same trap ctrl.inc's cp_rtcnam carries by name, and getting it wrong
+; writes the WRONG CHIP on a machine nobody here has. The rows are the ENUM's
+; order - AT (1), NS (2), RP (3), BIOS (4), less the 1 the `dec bx` takes off -
+; while the PROBE walks AT, the int 1Ah reference, RP, NS, BIOS. Two different
+; sequences, and this is the first one.
+;
+; ALL FOUR TARGETS MUST STAY IN .modc. os88ovlchk checks a DIRECT near call's
+; section and says outright that it cannot check an indirect one, so this
+; converts four checked calls into one it is blind to. A writer that ever
+; moves out of this module has to become a far entry here by hand.
+clk_wtab:   dw clk_at_write, clk_ns_write, clk_rp_write, clk_bios_write
 
 ; =============================================================================
 ; Rung 1: the MC146818 / DS12885 at 70h/71h
@@ -89,15 +104,11 @@ clk_rtc_write:
 ; -----------------------------------------------------------------------------
 clk_at_put:
     push ax
-    push dx
     or al, 0x80
-    mov dx, CLK_AT_IDX
-    out dx, al
-    jmp short $+2
-    inc dx
-    mov al, ah
-    out dx, al
-    pop dx
+    out CLK_AT_IDX, al          ; the IMMEDIATE port form: 70h and 71h are both
+    jmp short $+2               ; below 100h, so DX is not needed and there is
+    mov al, ah                  ; nothing to bank (as clk_at_get, clock.inc)
+    out CLK_AT_DAT, al
     pop ax
     ret
 ; -----------------------------------------------------------------------------
@@ -117,6 +128,24 @@ clk_at_enc:
     call KERNEL_SEG:cw_clk_tobcd
 .bin:
     ret
+; -----------------------------------------------------------------------------
+; clk_at_eput - encode a binary field and write it to a CMOS register
+; in:  AL = a 0..99 field, CH = its CMOS index
+; out: nothing (all registers preserved except AH, which clk_at_enc spends)
+;
+; Five sites of `mov al,[clk_X] / call clk_at_enc / mov ah,al / mov al,<idx> /
+; call clk_at_put` written once. CH AND NOT DX: DX is what clk_at_write does
+; not bank any more (F-clockw-02), CL is the divisor 100 later in the same
+; routine and BL parks the century across it, so CH is the free half.
+; clk_at_enc reaches cw_clk_tobcd, which banks CX; clk_at_put banks AX.
+; -----------------------------------------------------------------------------
+clk_at_eput:
+    call clk_at_enc
+    mov ah, al
+    mov al, ch
+    call clk_at_put
+    ret
+
 ; -----------------------------------------------------------------------------
 ; clk_at_hour - a 0..23 hour back into the chip's hours register
 ; in:  AL = 0..23; out: AL encoded, PM bit included; clobbers AH
@@ -167,8 +196,12 @@ clk_at_hour:
 clk_at_write:
     push ax
     push bx
-    push cx
-    push dx
+    push cx                     ; ...and NOT DX: this body never names it, and
+                                ; neither does anything it calls. clk_at_get,
+                                ; clk_at_done and clk_at_put use the IMMEDIATE
+                                ; port form and do not touch DX at all now;
+                                ; clk_at_enc reaches clk_tobcd, which banks CX;
+                                ; clk_at_hour banks BX; clk_dow banks BX/CX/DX
     pushf
     cli
     mov al, 0x0B
@@ -180,30 +213,22 @@ clk_at_write:
     call clk_at_put
 
     mov al, [clk_sec]
-    call clk_at_enc
-    mov ah, al
-    xor al, al
-    call clk_at_put
+    mov ch, 0x00
+    call clk_at_eput
     mov al, [clk_min]
-    call clk_at_enc
-    mov ah, al
-    mov al, 0x02
-    call clk_at_put
-    mov al, [clk_hour]
-    call clk_at_hour
-    mov ah, al
+    mov ch, 0x02
+    call clk_at_eput
+    mov al, [clk_hour]          ; the hour goes through clk_at_hour instead -
+    call clk_at_hour            ; it carries the PM bit - so it keeps its own
+    mov ah, al                  ; sequence
     mov al, 0x04
     call clk_at_put
     mov al, [clk_day]
-    call clk_at_enc
-    mov ah, al
-    mov al, 0x07
-    call clk_at_put
+    mov ch, 0x07
+    call clk_at_eput
     mov al, [clk_mon]
-    call clk_at_enc
-    mov ah, al
-    mov al, 0x08
-    call clk_at_put
+    mov ch, 0x08
+    call clk_at_eput
     call clk_dow
     inc al                      ; the chip counts 1..7 from Sunday. Nothing
     mov ah, al                  ; here reads it, but a BIOS setup screen and
@@ -214,10 +239,8 @@ clk_at_write:
     div cl                      ; AL = century, AH = the year within it
     mov bl, al                  ; park it: clk_at_enc clobbers AH
     mov al, ah
-    call clk_at_enc
-    mov ah, al
-    mov al, 0x09
-    call clk_at_put
+    mov ch, 0x09
+    call clk_at_eput
     cmp byte [clk_cent], 0
     je .nocent                  ; this BIOS keeps no century byte, so do not
     mov al, bl                  ; invent one. 32h is outside the AT CMOS
@@ -232,7 +255,6 @@ clk_at_write:
     call clk_at_put             ; SET cleared, every other bit as we found it
     popf
     call KERNEL_SEG:clk_at_done
-    pop dx
     pop cx
     pop bx
     pop ax
@@ -252,50 +274,59 @@ clk_at_write:
 ; carry can land on top of a field we have already stored is as short as
 ; possible; seconds go last.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; clk_ns_bput - BCD-encode a field and write it to an MM58167 counter
+; in:  AL = a 0..99 field, BL = its register
+; out: nothing (AH spent, everything else preserved)
+;
+; Five sites of `mov al,[clk_X] / call cw_clk_tobcd / mov ah,al /
+; mov al,CLK_NS_Y / call cw_clk_ns_put` written once. The day-of-week site is
+; the sixth and is deliberately NOT BCD, so it keeps its own sequence.
+;
+; BL is what makes clk_ns_write's `push bx` live again - see its prologue.
+; -----------------------------------------------------------------------------
+clk_ns_bput:
+    call KERNEL_SEG:cw_clk_tobcd
+    mov ah, al
+    mov al, bl
+    call KERNEL_SEG:cw_clk_ns_put
+    ret
+
 clk_ns_write:
     push ax
-    push bx
-    push cx
+    push bx                     ; ...and NOT CX: this body never names it and
+                                ; every callee banks it - clk_tobcd, clk_dow,
+                                ; clk_ns_stamp. BX is a different matter: it is
+                                ; clk_ns_bput's ARGUMENT, so the bank stays
     push dx
     pushf
     cli
     mov al, [clk_mon]
-    call KERNEL_SEG:cw_clk_tobcd
-    mov ah, al
-    mov al, CLK_NS_MON
-    call KERNEL_SEG:cw_clk_ns_put
+    mov bl, CLK_NS_MON
+    call clk_ns_bput
     mov al, [clk_day]
-    call KERNEL_SEG:cw_clk_tobcd
-    mov ah, al
-    mov al, CLK_NS_DOM
-    call KERNEL_SEG:cw_clk_ns_put
+    mov bl, CLK_NS_DOM
+    call clk_ns_bput
     call clk_dow
-    inc al                      ; 1..7, and our own probe insists on it
-    mov ah, al
-    mov al, CLK_NS_DOW
+    inc al                      ; 1..7, and our own probe insists on it. NOT
+    mov ah, al                  ; BCD - the day of the week is a plain 3-bit
+    mov al, CLK_NS_DOW          ; counter - so this one is written out
     call KERNEL_SEG:cw_clk_ns_put
     mov al, [clk_hour]
-    call KERNEL_SEG:cw_clk_tobcd
-    mov ah, al
-    mov al, CLK_NS_HR
-    call KERNEL_SEG:cw_clk_ns_put
+    mov bl, CLK_NS_HR
+    call clk_ns_bput
     mov al, [clk_min]
-    call KERNEL_SEG:cw_clk_tobcd
-    mov ah, al
-    mov al, CLK_NS_MIN
-    call KERNEL_SEG:cw_clk_ns_put
+    mov bl, CLK_NS_MIN
+    call clk_ns_bput
     mov al, [clk_sec]
-    call KERNEL_SEG:cw_clk_tobcd
-    mov ah, al
-    mov al, CLK_NS_SEC
-    call KERNEL_SEG:cw_clk_ns_put
+    mov bl, CLK_NS_SEC
+    call clk_ns_bput
     ; --- the year, in both conventions, plus the bookkeeping that says so
     mov ax, [clk_year]
     mov dl, [clk_mon]
     call KERNEL_SEG:clk_ns_stamp
     popf
     pop dx
-    pop cx
     pop bx
     pop ax
     ret
@@ -313,9 +344,9 @@ clk_ns_write:
 clk_rp_put:
     push ax
     push dx
-    mov dl, al
-    xor dh, dh
-    add dx, CLK_XT_BASE
+    mov dx, CLK_XT_BASE         ; the base whole, the port index into DL alone:
+    add dl, al                  ; AL is 00h..0Fh by this routine's contract, so
+                                ; DL <= 0xCF and the add cannot carry into DH
     mov al, ah
     and al, 0x0F
     out dx, al
@@ -327,8 +358,9 @@ clk_rp_put:
 ; out: AL = 0..99; preserves every other register
 ; -----------------------------------------------------------------------------
 clk_rp_yy:
-    push bx
-    push dx
+    push bx                     ; ...and NOT DX: the `div bl` below is the
+                                ; 8-BIT form, which writes AL and AH and never
+                                ; touches DX
     mov ax, [clk_year]
     cmp byte [clk_rpep], 0
     je .cent
@@ -343,7 +375,6 @@ clk_rp_yy:
     mov al, ah
 .out:
     xor ah, ah
-    pop dx
     pop bx
     ret
 ; -----------------------------------------------------------------------------
@@ -423,8 +454,10 @@ clk_rp_pair:
 clk_rp_write:
     push ax
     push bx
-    push cx
-    push dx
+    push cx                     ; ...and NOT DX: this body never names it, and
+                                ; clk_rp_get, clk_rp_put, clk_rp_pair,
+                                ; clk_rp_yy, clk_rp_hour and clk_dow all bank
+                                ; or ignore it
     pushf
     cli
     mov al, CLK_RP_MODE
@@ -480,7 +513,6 @@ clk_rp_write:
     mov al, CLK_RP_MODE         ; battery-backed and would stay stopped
     call clk_rp_put
     popf
-    pop dx
     pop cx
     pop bx
     pop ax
@@ -491,7 +523,7 @@ clk_rp_write:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; clk_bios_write - rung 5's write: int 1Ah AH=03h + AH=05h
+; clk_bios_write - rung 4's write: int 1Ah AH=03h + AH=05h
 ; out: nothing (all registers preserved)
 ;
 ; There is no way to find out whether this did anything. An XT-lineage BIOS

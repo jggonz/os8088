@@ -30,7 +30,13 @@
 
 %include "os88api.inc"
 
-    OS88_HEADER 'TRACKER', trk_entry, 3
+    OS88_HEADER 'TRACKER', trk_entry, 3, OS88_STACK_192
+                                ; THE WORKER'S STACK, declared
+                                ; rather than defaulted (SPEC.md 8.7):
+                                ; static 80, measured +60;
+                                ; the larger of the two wins
+                                ; over the 64-byte interrupt floor
+                                ; that is 144, and 192 gives 1.33x
 
 ; --- embedded 16x16 icon (SPEC.md 20.2, flags bit 0) ---------------------------
 ; Two beamed eighth notes over a square wave - the app in two glyphs. The mask
@@ -1557,8 +1563,12 @@ trk_fsx_key:
 %ifdef TRKDBG
     cmp al, 'g'                     ; bench-only (tests/trkscrl.inc): G
     je .grid                        ; repaints the grid with the view held
-    cmp al, 'G'                     ; still, and j/k/n/v/b/c move the stopped
-    je .grid                        ; view by more than one row in one frame
+    cmp al, 'G'                     ; still, and j/k/n/u/b/c move the stopped
+    je .grid                        ; view by more than one row in one frame.
+                                    ; NOT `v`: the SURFACE binding above answers
+                                    ; it first, so a jump key bound to `v` here
+                                    ; is dead (tests/trkscrl.inc says how that
+                                    ; read for a week as a scroll defect)
     call trk_dbg_key
     jnc .out
 %endif

@@ -884,6 +884,7 @@ sc_close:
 ; is a divide loop either way.
 ; -----------------------------------------------------------------------------
 sc_num2str:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push di
     mov bx, 10
     mov cx, 0                   ; CX = digits pushed

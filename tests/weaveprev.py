@@ -86,6 +86,7 @@ import weavesmoke                                           # noqa: E402
 import weavegrid                                            # noqa: E402
 import weavegfx                                             # noqa: E402
 from harness import check, done                             # noqa: E402
+from os88geom import MB_ENTSZ      # the bar cell stride, SPEC.md 12.2
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -118,8 +119,11 @@ LM_SH_ROWS = 52
 
 # The menu bar, dispcalc.py's own constants. The View menu is set index 1, and
 # an app's own menus start at bar cell 1 because cell 0 is the chip - so View
-# is cell 2, and Preview is its first item.
-MBAR_H, MENU_ITEM_H, MB_ENTSZ, MB_XL = 20, 16, 14, 6
+# is cell 2, and Preview is its first item. MB_ENTSZ is NOT among them: the
+# bar cell stride is imported from tools/os88geom.py, because a retyped copy
+# of it is what t_mirror exists to catch - this file arrived carrying 14, the
+# value before SPEC.md 12.2's cell lost MB_TX.
+MBAR_H, MENU_ITEM_H, MB_XL = 20, 16, 6
 VIEW_CELL, PREVIEW_ITEM = 2, 0
 
 

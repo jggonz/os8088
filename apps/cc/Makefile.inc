@@ -72,7 +72,7 @@ CC_SCINC    := $(CC_SC)/v0100/include
 # Every C package depends on these four: the SDK header, the two runtime
 # assemblies, and the SDK the runtime is written against.
 CC_RUNTIME  := $(CC_DIR)/os88.h $(CC_DIR)/crt0.asm $(CC_DIR)/os88thunk.asm \
-               apps/os88api.inc
+               apps/os88api.inc apps/os88parts.inc
 
 # CC_MAXFRAME is tools/cc8086.py's --max-frame (SPEC.md 73.8). 96 is the
 # tool's own default and it is a SMELL THRESHOLD, not a budget: a 96-byte
@@ -129,8 +129,13 @@ $(BUILD)/$(1).bin: apps/$(2)/$(1).asm $(BUILD)/$(1).gen.asm $(CC_RUNTIME) | $(BU
 	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -o $$@ apps/$(2)/$(1).asm
 	@echo "$(1): $$(call FILESIZE,$$@) bytes"
 
-$(BUILD)/$(1).o88: $(BUILD)/$(1).bin tools/os88pkg.py $(if $(3),tools/os88ovl.py)
-	$(if $(3),python3 tools/os88ovl.py $$< -o $(BUILD)/$(3) --trim $(BUILD)/$(1).trim.bin$(CC_NL)	python3 tools/os88pkg.py $(BUILD)/$(1).trim.bin -o $$@,python3 tools/os88pkg.py $$< -o $$@)
+# $(4) is the PARTS (SPEC.md 20.12), one file per OS88_PART row that has file
+# bytes, in table order - appended by os88pkg.py after the image, and after
+# the overlay has been cut off it, so the three mechanisms stack in the one
+# order they can: nasm emits image+module, os88ovl.py takes the module away,
+# os88pkg.py puts the parts on the end.
+$(BUILD)/$(1).o88: $(BUILD)/$(1).bin tools/os88pkg.py $(if $(3),tools/os88ovl.py) $(4)
+	$(if $(3),python3 tools/os88ovl.py $$< -o $(BUILD)/$(3) --trim $(BUILD)/$(1).trim.bin$(CC_NL)	python3 tools/os88pkg.py $(BUILD)/$(1).trim.bin -o $$@ $(addprefix --part ,$(4)),python3 tools/os88pkg.py $$< -o $$@ $(addprefix --part ,$(4)))
 
 endef
 

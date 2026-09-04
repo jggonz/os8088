@@ -68,7 +68,15 @@
                                     ; drivers/ether/ether.asm includes, so the
                                     ; two ends cannot drift (SPEC.md 20.11)
 
-    OS88_HEADER 'FTPD', fd_entry, 1
+    OS88_HEADER 'FTPD', fd_entry, 1, OS88_STACK_384
+                                ; THE WORKER'S STACK, declared
+                                ; rather than defaulted (SPEC.md 8.7):
+                                ; MEASURED +150 after a whole
+                                ; FTP session, 220 on the 5150;
+                                ; fd_worker's own chain is 90
+                                ; and the rest is the driver
+                                ; over the 64-byte interrupt floor
+                                ; that is 214, and 384 gives 1.79x
     OS88_ICON16
     ; 16 mask rows (the white underlay), then 16 of ink: a disk platter with
     ; an arrow leaving it - the machine's own storage, served outwards.
@@ -1482,6 +1490,7 @@ fd_dcatn:
 
 ; --- fd_dnum - append AX as unsigned decimal ---------------------------------
 fd_dnum:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push ax
     push bx
     push cx
@@ -1517,6 +1526,7 @@ fd_dnum:
 ; divide the high half, carry its REMAINDER into the low half's dividend, and
 ; the pair of quotients is the 32-bit answer with the final remainder in DX.
 fd_dnum32:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in SI
     push ax
     push bx
     push cx
@@ -7272,11 +7282,6 @@ fd_drawctl:
     pop ax
     ret
 
-.no:
-    pop ax
-    stc
-    ret
-
 ; --- fd_onkey - W_ONKEY: AL = ASCII, AH = scan -------------------------------
 ; --- fd_onkey - W_ONKEY: AL = ASCII, AH = scan. Lock held ------------------
 ; The LOG face takes no typed text at all - it is two controls and a list - so
@@ -8717,13 +8722,16 @@ fd_ftab:
     dw fd_s_f3, fd_passs, FD_USERMAX
 
 ; --- the About panel ---------------------------------------------------------
-fd_ab_l:    dw fd_ab1, fd_ab2, fd_ab3, fd_ab4, fd_ab5, fd_ab6, 0
+; WHAT IT IS AND WHO WROTE IT, and nothing about what it is DOING. The served
+; folder and who can reach it are CONFIGURED (SPEC.md 77), so a card that
+; states either is a help screen with a stale answer in it - and this is an
+; About box.
+fd_ab_l:    dw fd_ab1, fd_ab2, fd_ab3, fd_ab4, fd_ab5, 0
 fd_ab1:     db 'FTP Server for os8088', 0
 fd_ab2:     db 0
 fd_ab3:     db 'RFC 959, one client at a time.', 0
-fd_ab4:     db 'Serves the folder it was launched from.', 0
-fd_ab5:     db 0
-fd_ab6:     db 'Anyone on the network can read these', 0
+fd_ab4:     db 0
+fd_ab5:     db 'Contributed by Elendilon', 0
 
     OS88_MENUSET fd_menus, fd_name_s, fd_oncmd
         OS88_MENU fd_m_srv, fd_i_srv, 4

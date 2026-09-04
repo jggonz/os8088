@@ -1136,6 +1136,9 @@ hbm_arm:
 ; resume, and the one every exit below returns through.
 ; -----------------------------------------------------------------------------
 hbm_perform:
+    ; STKBALANCE-OK: enters the resume stub by pushing HS_CODE:0 and `retf`
+    ; into it (SPEC.md 87.5) - a far jump spelled as a return, on purpose, so
+    ; the static walk sees a ret two words deep. Nothing returns here.
     mov [hb_sp], sp
     cld
     cmp al, UI_RBQ_HIBER

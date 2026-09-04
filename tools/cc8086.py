@@ -158,7 +158,7 @@ gets past.
 THE REPORT
 ----------
 Every function's frame size, from its `sub sp, N`, because the budget is not
-generous and is not visible from the C.  A worker task gets a **256-byte**
+generous and is not visible from the C.  A worker task gets a **384-byte**
 stack (kernel/sched.inc, SCH_STACK) and the UI task has of the order of 700
 bytes of headroom, so a single 128-byte C automatic is most of a worker's
 stack and nothing says so at the call site.  `--max-frame` (default 96) fails
@@ -1473,7 +1473,7 @@ def run(path, text, args):
     for name, size, no in over:
         errors.append(
             "%s:%d: error: frame of `%s` is %d bytes; --max-frame is %d. A "
-            "worker task's whole stack is 256 bytes (kernel/sched.inc, "
+            "worker task's whole stack is 384 bytes (kernel/sched.inc, "
             "SCH_STACK) and the UI task has of the order of 700 bytes of "
             "headroom, so this frame is a crash waiting for a deep call. Move "
             "the big automatic to static storage."
@@ -1515,7 +1515,7 @@ def main():
                     help="lowered assembly; stdout if omitted")
     ap.add_argument("--max-frame", type=int, default=96, metavar="N",
                     help="fail on any stack frame wider than N bytes "
-                         "(default 96; a worker's whole stack is 256)")
+                         "(default 96; a worker's whole stack is 384 bytes)")
     ap.add_argument("--no-gate", action="store_true",
                     help="lower but do not enforce the &local / ES-string / "
                          "float / 32-bit rules. FOR MEASURING A CORPUS THAT "

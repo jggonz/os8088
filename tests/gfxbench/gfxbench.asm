@@ -1342,7 +1342,7 @@ gb_prims:
     ; ~756 us"; it measures 118 in instructions, and ~36 instructions removed
     ; per arrival rather than 5.7's 196. The reason is structural and worth
     ; knowing: gfx_lstep is NOT a rect primitive - it never goes near
-    ; vga_rect_setup or sw_rect - so its arrival is the far-call cell and a
+    ; gfx_rect_setup or sw_rect - so its arrival is the far-call cell and a
     ; prologue, not the rect machinery 5.7 measured. 5.6.8 borrowed a floor
     ; that does not apply to it.
     ;
@@ -3308,10 +3308,23 @@ gb_it_top:  db 'Top of Report', 0
 ; A hand-totalled figure that is too small is a package writing over
 ; benchlib's arena, which assembles cleanly and produces a report full of
 ; plausible nonsense.
-; vid_ctx (SPEC.md 57.4's 'VD'): an 18-word run with vid_cw/vid_ch inside it,
-; then the display's origin in the virtual desktop and its kind. Mirrored here
-; and in tests/sysbench for the same reason - a test package reads kernel state
-; through the registry and shipped software never does (SPEC.md 57).
+; vid_ctx (SPEC.md 57.4's 'VD'): a VCTX_W-word run with vid_cw/vid_ch inside
+; it, then the display's origin in the virtual desktop and its kind. Mirrored
+; here and in tests/sysbench for the same reason - a test package reads kernel
+; state through the registry and shipped software never does (SPEC.md 57).
+;
+; THE THREE OFF THE END ARE DERIVED, and they are derived here for the reason
+; kernel/vidsel.inc derives them there: they are `VID_CTX_W*2`, `+2` and `+4`,
+; so a word added to or taken out of the run MOVES ALL THREE. They were
+; written out as 36/38/40 against a run that had been VID_CTX_W = 19 since
+; SPEC.md 6.1.10 added vid_tseg, so the display scan in gb_disp compared a
+; pixel x against vid_tseg - a SEGMENT - never matched, and fell to the
+; one-display fallback on every machine. Nothing sees that: t_mirror walks
+; kernel/, boot/ and apps/, and os88geom.scan walks .py, so an .asm under
+; tests/ is outside both. The run has since SHRUNK to 16 - [vid_strm1],
+; [vid_rpara] and [vid_rend] left it, having no reader - and THIS IS THE ONE
+; LINE that moves with it, here and in tests/sysbench.
+VCTX_W      equ 16              ; == kernel/vidsel.inc's VID_CTX_W
 VCTX_SEG    equ 0               ; vid_seg:    the framebuffer
 VCTX_STRIDE equ 2               ; vid_stride: bytes from a row to the row one
                                 ;             BANK down (SPEC.md 39.3)
@@ -3319,9 +3332,9 @@ VCTX_BMASK  equ 4               ; vid_bmask:  y & this = the bank
 VCTX_BSHIFT equ 6               ; vid_bshift: y >> this = the row in that bank
 VCTX_CW     equ 14              ; vid_cw / vid_ch: THIS DISPLAY's extent, not
 VCTX_CH     equ 16              ; the desktop's (SPEC.md 39.2.1)
-VCTX_VX     equ 36              ; ...and its origin in the virtual desktop
-VCTX_VY     equ 38
-VCTX_KIND   equ 40              ; ...and which adapter it is
+VCTX_VX     equ VCTX_W*2        ; ...and its origin in the virtual desktop
+VCTX_VY     equ VCTX_W*2+2
+VCTX_KIND   equ VCTX_W*2+4      ; ...and which adapter it is
 
 GB_NWALK    equ 8               ; walks stepped together (SPEC.md 5.6.8)
 GB_O_SCAL   equ 216             ; ...where the scalars below end

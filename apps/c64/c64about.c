@@ -22,11 +22,11 @@
  *
  * TWELVE ROWS IS A 640x200 NUMBER (LESSONS.md 8). A control's y is
  * 6 + row * 10 and nothing clamps it, so a 19-row panel puts its OK button on
- * the DESKTOP on CGA and Hercules. This one is eight rows and its OK sits at
- * 6 + 8 * 10 + 11 = 97 against the ~122 a framed CGA content box has.
+ * the DESKTOP on CGA and Hercules. This one is nine rows and its OK sits at
+ * 6 + 9 * 10 + 11 = 107 against the ~122 a framed CGA content box has.
  * ==========================================================================*/
 
-#define C64_ABT_ROWS 8
+#define C64_ABT_ROWS 9
 /* THE PANEL IS AS WIDE AS THE C64 SCREEN AND ITS BORDER - 336 - and that is a
  * redraw decision rather than a taste. At 280 px in a 336-px box it left a
  * 28-px strip of C64 screen down each side, so an expose while the panel was
@@ -60,7 +60,8 @@ static const char *c64_abt_text[C64_ABT_ROWS] = {
     "Copyright 1996-2025, VICE team",       /* uiabout.c:244 */
     "GPL-2 or later - see COPYING",         /* uiabout.c:235 */
     "ROMs Copyright Commodore",             /* README 186-290 */
-    "Business Machines"
+    "Business Machines",
+    "Ported by Jorge Gonzalez"
 };
 
 static int c64_abt;                         /* the panel is up */

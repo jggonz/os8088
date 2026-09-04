@@ -18,6 +18,19 @@ label, the instruction stream is walked LINEARLY - `push`/`pushf` +2,
 call, which is how the API is reached) - and every call site is recorded with
 the depth it happens at. The routine's cost is then the deepest of them.
 
+**A TAIL JUMP INTO ANOTHER ROUTINE IS AN EDGE TOO**, at +0 rather than +2:
+nothing is pushed, and the target runs on top of the frame the jumping routine
+still has on the stack, returning to ITS caller. Leaving those out is not a
+rounding error, it is a whole missing BRANCH - and it shipped a machine that
+froze. `tm_update` reaches the Task Manager's performance list by falling
+through and its other two pages by `je tm_upd_mem` / `ja tm_upd_heap`, so a
+walker that followed `call` only priced `tm_worker` at 56 bytes when the heap
+page it also draws is 96. The 192-byte slice that was sized from 56 measured
+180 of 192 in the field and went through the canary on a real 5150
+(SPEC.md 8.7.4). Two packages re-priced when this was fixed - the Task
+Manager 56 -> 96 and Missile Command 106 -> 126 - and `tests/unit/t_stkclass.py`
+is the gate that now reads the answer.
+
 --- WHAT THAT APPROXIMATION GETS WRONG -------------------------------------
 **Branches.** A linear walk cannot know that `.err` popped three registers and
 jumped to the exit; where a routine's paths differ, the number it prints is the
@@ -55,6 +68,14 @@ import tempfile
 LBL = re.compile(r"^([A-Za-z_][\w]*)$")
 CALL = re.compile(r"\bcall\s+(?:(far|near)\s+)?([A-Za-z_.][\w.]*)\s*$")
 CALLIND = re.compile(r"\bcall\s+(?:far\s+|near\s+)?[\[A-Z]")
+# A TAIL JUMP INTO ANOTHER ROUTINE IS AN EDGE, and leaving it out is what made
+# this tool under-report by a whole branch. `jmp`/`jcc` to a global label
+# continues at the CURRENT depth - no return address is pushed - so the target
+# runs on top of the frame the jumping routine still has on the stack. See the
+# note above `deepest`.
+JMP = re.compile(r"^\s*(?:jmp|j[a-z]{1,3})\s+"
+                 r"(?:(?:short|near|far|word|dword)\s+)?"
+                 r"([A-Za-z_.][\w.]*)\s*$")
 PUSH = re.compile(r"^\s*(push|pushf)\b")
 POP = re.compile(r"^\s*(pop|popf)\b")
 SUBSP = re.compile(r"^\s*sub\s+sp\s*,\s*(\w+)")
@@ -193,6 +214,11 @@ def routines(lst, syms):
         elif CALLIND.search(text):
             indirect.append((cur, addr))
             rout[cur][1].append((d + 4, None, "indirect"))
+        elif JMP.match(text):
+            # ...at d, NOT d + 2: nothing is pushed. Local labels are the
+            # routine's own control flow and are dropped by `deepest`, the
+            # same way a `call .local` is.
+            rout[cur][1].append((d, JMP.match(text).group(1), "tail"))
         elif INT.match(text):
             mx = max(mx, d + 6)
         mx = max(mx, d)
@@ -299,6 +325,10 @@ def redundant(rout, saves, owns, name, memo=None):
                     continue
                 ok = True
                 for _at, callee, kind in calls:
+                    if kind == "tail":
+                        continue      # it returns to OUR caller, not to us:
+                                      # what it preserves says nothing about
+                                      # whether our own push was needed
                     if callee is None or callee.startswith("."):
                         ok = ok and callee is not None
                         continue
@@ -316,8 +346,9 @@ def redundant(rout, saves, owns, name, memo=None):
     for r in saves.get(name, ()):
         if r in owns.get(name, ()):
             continue
-        if all(c is None or c.startswith(".") or r in pres.get(c, ())
-               for _a, c, _k in rout[name][1]):
+        if all(k == "tail" or c is None or c.startswith(".")
+               or r in pres.get(c, ())
+               for _a, c, k in rout[name][1]):
             out.append(r)
     return out, pres
 
@@ -346,7 +377,10 @@ def deepest(rout, name, seen=(), leaves=()):
         else:
             sub, sc = deepest(rout, callee, seen + (name,), leaves)
         if at + sub > best:
-            best, chain = at + sub, ["%s -> %s (+%d here)" % (name, callee, at)] + sc
+            arrow = "=>" if kind == "tail" else "->"
+            best, chain = at + sub, ["%s %s %s (+%d here%s)"
+                                     % (name, arrow, callee, at,
+                                        ", TAIL JUMP" if kind == "tail" else "")] + sc
     return best, chain
 
 

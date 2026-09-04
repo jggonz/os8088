@@ -47,10 +47,22 @@
  * puts it there. It is the same shape lm_say() has, said once by hand because
  * the two halves want different words.
  * ==========================================================================*/
+/* THE CREDIT GOES IN THE STATUS ROW, and the reason is the segment ceiling
+ * rather than taste. WEAVE got SPEC.md 20.5.1.1's standard card; LOOM has
+ * 242 bytes of headroom against os88pkg's 0xF000 budget (image 54,982 + bss
+ * 6,216 = 61,198 of 61,440) and the card is 546, so it does not fit and
+ * finding 304 bytes elsewhere is a size pass, not an attribution. What DOES
+ * fit is the name in the sentence this already writes - and the status row
+ * KEEPS it (WEAVE-SPEC 10.1) after the toast has retired itself, which is
+ * more than a card that a click takes away.
+ *
+ * lm_status is LM_MSG = 88, so the sentence has 87 characters. The old one
+ * used all 87; this one uses 81 and drops '(WEAVE-SPEC 1.2)' to make room -
+ * a section number is in the document, and the author's name was nowhere. */
 static int ovl_about(void)
 {
-    os88_toast("LOOM - the Weave IDE", 0);
-    lm_quiet("LOOM - the Weave family's IDE (WEAVE-SPEC 1.2). "
+    os88_toast("LOOM by Jorge Gonzalez", 0);    /* TOAST_MAX is 23 */
+    lm_quiet("LOOM - the Weave IDE, by Jorge Gonzalez. "
              "^S saves, ^P packs, ^R reloads in Weave.");
     return 1;
 }

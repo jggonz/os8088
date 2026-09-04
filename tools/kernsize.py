@@ -71,6 +71,13 @@ KERNEL = os.path.join(ROOT, "kernel", "kernel.asm")
 # measured the wrong kernel for `small` silently and could not assemble a
 # baked-font one at all.  --build is how the Makefile says which.
 BUILDDIR = os.path.join(ROOT, "build")
+# ...and where associco.inc is, which since the Makefile's ICODIR need not be
+# the same directory: a knob build that only wants a knob KERNEL takes that
+# include from the default build rather than rebuilding four byte-identical
+# packages for it. This tool RE-ASSEMBLES the kernel to measure it, so it needs
+# the same include path the Makefile used or nasm cannot find the file - which
+# arrives here as a JSON decode error in whoever called --json.
+ICODIR = None
 DOC = os.path.join(ROOT, "docs", "KERNEL-MEMORY.md")
 BEGIN = "<!-- kernsize:begin -->"
 END = "<!-- kernsize:end -->"
@@ -109,11 +116,12 @@ def knob_args(nasm_args):
     return [x for x in nasm_args if x not in VARIANT_DEFS]
 
 # The sections an author can actually move a byte into, in the order the
-# ladder lays them out.  `ovl` is here because it has to be watched, not
-# because it costs anything: the boot overlay lands in the FAT window and is
-# overwritten by the first mount (SPEC.md 2.5), so its rung is somebody
-# else's.  It still has a ceiling - see the guard on OVL_SIZE.
-SECTIONS = ("text", "bss", "cold", "lowbss", "vgabuf", "ovl")
+# ladder lays them out.  The two overlay halves are here because they have to
+# be watched, not because they cost anything: `ovl` rides the boot blob and is
+# given back at spl_finish, `ovlw` lands in the FAT window and is overwritten
+# by the first mount (SPEC.md 2.5, 2.5.3), so neither has a rung of its own.
+# Each still has a ceiling - see the guards on OVL_SIZE and OVLW_SIZE.
+SECTIONS = ("text", "bss", "cold", "lowbss", "vgabuf", "ovl", "ovlw")
 
 # Which rung each section rounds into.  .text and .bss share one; that is why
 # a byte moved from .bss to .lowbss can cost 512 rather than saving anything
@@ -125,10 +133,10 @@ RUNGS = (
     ("vgabuf", ("vgabuf",), "vgabufpara"),
 )
 
-# ...and therefore the sections a rung CHARGES for, which is not SECTIONS: the
-# boot overlay lands in the FAT window and is charged to no rung at all
-# (SPEC.md 2.5), so counting `.ovl` in the spend would price a change that
-# only moved overlay code as if it had eaten the image rung's slack.  Derived
+# ...and therefore the sections a rung CHARGES for, which is not SECTIONS:
+# neither overlay half is charged to a rung at all (SPEC.md 2.5, 2.5.3), so
+# counting `.ovl` or `.ovlw` in the spend would price a change that only moved
+# overlay code as if it had eaten the image rung's slack.  Derived
 # from RUNGS rather than written out, so the two cannot drift apart.
 RUNG_SECTIONS = tuple(dict.fromkeys(
     s for _, members, _ in RUNGS for s in members))
@@ -141,7 +149,15 @@ THEMES_END = "<!-- /kernsize:themes -->"
 # The same, per module, plus `.boot2`: splash.inc has no section directive
 # of its own and takes the `.boot2` it is included at (SPEC.md 2.9.4), so
 # without it here a 967-byte module reports as costing nothing.
-MOD_SECTIONS = ("text", "bss", "lowbss", "vgabuf", "cold", "ovl", "boot2")
+MOD_SECTIONS = ("text", "bss", "lowbss", "vgabuf", "cold", "ovl", "ovlw", "boot2")
+# ...AND `kernel.asm`'s OWN `.boot2` FIGURE IS ALMOST ALL boot/boot2.asm.
+# Stage 2 is `%include`d at the FOOT of kernel.asm, below the last module this
+# brackets, so it lands in the residual: of kernel.asm's `.boot2` row, all but
+# a three-byte `jmp` is the loader.  That is not a defect to fix here - the
+# bracketing is by kernel.asm's %include lines and boot2.asm has none of its
+# own - but it is worth knowing before quoting the row, because boot/boot2.asm
+# is the one file in the tree where a byte is genuinely delicate (SPEC.md
+# 2.9.6's blob ceiling) and it has no row.
 INCLUDE = re.compile(r'^%include\s+"([\w.]+)"')
 # Column 0 only, which is where every one of kernel.asm's own switches sits -
 # a `section` inside a module is that module's business and it has to hand
@@ -163,9 +179,16 @@ THEMES = (
     # fprog.inc's reason turned around: it drives int 13h directly and knows
     # nothing about FAT, but what it IS to a reader is a File Manager command
     # on a volume, which is where disk.inc and diskw.inc already live.
+    # dskwin.inc (SPEC.md 2.1.2) is the file system's too, and it is worth
+    # saying why it is a file at all: it holds no code, only the mount-owned
+    # `.lowbss` window and the four constants that size it, and it exists
+    # because that window's ADDRESS is load-bearing - a reservation is placed
+    # by the order its file is included, so it has to be the first one. So
+    # 3,584 bytes of `.lowbss` moved off disk.inc's row and onto this one
+    # without a byte moving in the machine.
     ("the file system, end to end",
-     ("disk.inc", "diskw.inc", "files.inc", "filecp.inc", "fdlg.inc",
-      "loader.inc", "assoc.inc", "clone.inc")),
+     ("disk.inc", "dskwin.inc", "diskw.inc", "files.inc", "filecp.inc",
+      "fdlg.inc", "loader.inc", "assoc.inc", "clone.inc")),
     ("the window system and its furniture",
      ("wm.inc", "ui.inc", "menu.inc", "instance.inc", "desk.inc", "dock.inc",
       "fsx.inc", "clip.inc", "fprog.inc", "toast.inc")),
@@ -185,13 +208,21 @@ THEMES = (
     # bootprof.inc (SPEC.md 15.5) is here because what it measures is kmain's
     # own phase sequence, which lives in kernel.asm - and because it is not in
     # a shipped build at all (`make BOOTPROF=1`), so no other theme's figure
-    # should move when it is compiled in.
+    # should move when it is compiled in. stkdiag.inc
+    # (docs/STACK-SLOTS-PLAN.md 10) is here for both halves of that: what it
+    # measures is sch_isr's own chain to the ROM, and `make STKDIAG=1` is the
+    # only build that has it.
     ("the kernel proper: API table, heap, scheduler, events",
      (RESIDUAL, "memory.inc", "sched.inc", "events.inc", "mod.inc",
-      "bootprof.inc")),
+      "bootprof.inc", "stkdiag.inc")),
     ("the Control Panel", ("ctrl.inc",)),
     ("the three built-in kinds", ("apps.inc",)),
 )
+
+
+def icoinc():
+    """`-I <ICODIR>`, and only when it is not $(BUILD) already."""
+    return ["-I", ICODIR + os.sep] if ICODIR and ICODIR != BUILDDIR else []
 
 
 def measure(nasm_args=()):
@@ -208,6 +239,7 @@ def measure(nasm_args=()):
                "-I", os.path.join(ROOT, "kernel") + os.sep,
                "-I", os.path.join(ROOT, "apps") + os.sep,
                "-I", BUILDDIR + os.sep,
+               *icoinc(),
                *nasm_args, "-o", out_path, KERNEL]
         r = subprocess.run(cmd, capture_output=True, text=True)
     finally:
@@ -215,6 +247,23 @@ def measure(nasm_args=()):
             os.unlink(out_path)
         except OSError:
             pass
+    # NASM EMITS `ks:` AND THEN CAN STILL FAIL.  The line comes from a
+    # `%warning` late in kernel.asm, but the guards below it - and any error in
+    # a module - fire afterwards, so a tree that does NOT ASSEMBLE still leaves
+    # a complete, plausible ks: line in stderr.  Grepping for it without
+    # checking the exit status therefore prints a confident full report for a
+    # build that does not exist, which is the worst failure mode a measurement
+    # tool has: it is not wrong loudly, it is wrong quietly and in detail.
+    #
+    # Demonstrated rather than assumed: a `%error` appended after the ks: line
+    # gives nasm rc=1 and still yields "text 52,916 cold 38,927 ksize 114,176".
+    # Found during size pass 2, where it nearly let a KERN_SMALL finding ship on
+    # numbers from a build that failed.  measure_modules() already checks.
+    if r.returncode != 0:
+        tail = (r.stderr.strip().splitlines() or ["(no stderr)"])[-1]
+        return None, ("nasm FAILED (exit %d) - any ks: line in its output "
+                      "describes a build that does not assemble: %s"
+                      % (r.returncode, tail[:160]))
     m = re.search(r"\bks: (.*?)(?: \[|$)", r.stderr, re.M)
     if not m:
         return None, (r.stderr.strip() or "nasm produced no ks: line")
@@ -301,6 +350,7 @@ def _nasm(path, out_path, nasm_args=()):
          "-I", os.path.join(ROOT, "kernel") + os.sep,
          "-I", os.path.join(ROOT, "apps") + os.sep,
          "-I", BUILDDIR + os.sep,
+         *icoinc(),
          *nasm_args, "-o", out_path, path],
         capture_output=True, text=True)
 
@@ -556,8 +606,9 @@ def report(cur, base, variant="big", out=sys.stdout):
           f" feature does not have to ask for. A saving is priced in bytes,"
           f" not in steps (CLAUDE.md's rung rule)")
     elif total:
-        p(f"{tag} .ovl moved and no rung did - the overlay lands in the FAT"
-          f" window and is charged to no rung at all (SPEC.md 2.5)")
+        p(f"{tag} the boot overlay moved and no rung did - .ovl rides the"
+          f" blob and .ovlw lands in the FAT window, and neither is charged"
+          f" to a rung at all (SPEC.md 2.5, 2.5.3)")
     else:
         p(f"{tag} unchanged")
     return crossed
@@ -729,9 +780,17 @@ def main():
     ap.add_argument("--modules", action="store_true",
                     help="the per-module attribution")
     ap.add_argument("--json", action="store_true", help="the raw figures")
+    ap.add_argument("--strict", action="store_true",
+                    help="exit 1 when the size cannot be measured. This tool "
+                         "is a REPORT and exits 0 by default even when it "
+                         "measured nothing; a gate wants the opposite.")
     ap.add_argument("--build", metavar="DIR",
                     help="where the generated includes are (default build/); "
                          "a sub-make with BUILD= set needs this")
+    ap.add_argument("--ico", metavar="DIR",
+                    help="where associco.inc is, when the Makefile's ICODIR "
+                         "points it somewhere other than --build. Added to "
+                         "the include path, never replacing it")
     # Anything else is handed to NASM verbatim - parse_known_args rather than
     # a positional, because the knobs arrive looking like options
     # (-DVID_FORCE=3) and argparse would claim them.
@@ -739,6 +798,9 @@ def main():
     if a.build:
         global BUILDDIR
         BUILDDIR = os.path.abspath(a.build)
+    if a.ico:
+        global ICODIR
+        ICODIR = os.path.abspath(a.ico)
     variant = variant_of(nasm_args)
     knobs = knob_args(nasm_args)
 
@@ -748,7 +810,14 @@ def main():
         # reporter that can break `make` is a reporter someone will delete.
         print(f"kernsize: could not measure ({err.splitlines()[-1][:120]})",
               file=sys.stderr)
-        return 0
+        # EXIT 0 IS DELIBERATE, and it is also a trap for a GATE.  This tool is
+        # a report - the Makefile runs it with `|| true` and the guards inside
+        # kernel.asm are what refuse an overrun - so failing the build here
+        # would be wrong.  But a script that checks $? would sail straight past
+        # "could not measure" and conclude the size was fine, which is the same
+        # class of quiet wrongness as the ks:-after-a-failed-assembly bug above.
+        # --strict is how a gate asks for the other contract.
+        return 1 if a.strict else 0
 
     if a.json:
         print(json.dumps({k: cur[k] for k in sorted(cur)}, indent=2))
@@ -800,4 +869,19 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # `kernsize.py | head` closes the pipe under us; an unhandled
+    # BrokenPipeError buries the report under a traceback.  Same cure as
+    # tools/martylock.py: die quietly the way `cat` does.
+    try:
+        import signal
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+    except (ImportError, AttributeError, ValueError):
+        pass
+    try:
+        sys.exit(main())
+    except BrokenPipeError:
+        try:
+            sys.stderr.close()
+        except Exception:
+            pass
+        os._exit(0)

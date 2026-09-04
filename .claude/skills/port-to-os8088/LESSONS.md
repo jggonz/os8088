@@ -144,7 +144,7 @@ has the mechanics of the compiler and the gate and is not repeated here.
   a `return`. Grep for `struct` on the right of `=` and in argument lists.
 - **Frames were never the problem** — 26 bytes maximum in 158 functions
   against the 96 cap — because every buffer is static. Keep it that way; the
-  worker task has 256 bytes of stack in total.
+  worker task has 384 bytes of stack in total (`SCH_STACK`; check the constant, not this line - it has been 1,536, 512, 256 and 384).
 - **The one hand-written byte mover is the only place ES is loaded**, and it
   is tested on a real x86 with `SS != DS` by a boot-sector harness
   (`hosttest/cwmovetest.asm`) with negative controls, including "ES not

@@ -1,7 +1,7 @@
 # The VMware absolute pointer — `vmmouse`, for the browser
 
 **Research document, not a contract — and now IMPLEMENTED.**
-> The study below was written before the code. **SPEC.md §9.10 is the binding
+> The study below was written before the code. **SPEC.md §9.11 is the binding
 > account**; where the two disagree, the SPEC wins. §12 records what actually
 > shipped and where it differed from the plan.
 
@@ -319,7 +319,7 @@ the island grows.
 
 ## 10. SPEC / doc changes when this lands
 
-- **New SPEC.md §9.10** — "The VMware absolute pointer": the protocol
+- **New SPEC.md §9.11** — "The VMware absolute pointer": the protocol
   sequence, the `MOU_VMROW` = 6 contest entry, the `cpu 386` island rule
   pointer (§41.9 rule 2), the cadence, the cost accounting in §9.9.5's idiom,
   and the "what is not done" list from §7.
@@ -327,7 +327,7 @@ the island grows.
   `mou_hotplug` as "the UI task's per-pass call", noting it is `kern_big`
   and tier-2 only.
 - **CLAUDE.md's document table** — a row for this file:
-  *"docs/VMMOUSE-PLAN.md | the browser's absolute pointer (§9.10) — why the
+  *"docs/VMMOUSE-PLAN.md | the browser's absolute pointer (§9.11) — why the
   backdoor probe is the whole of 'detect the browser', and the first
   `cpu 386` island in the kernel"*.
 - **`MOUDIAG=1`** could gain a row (backdoor present? version id? packets
@@ -347,7 +347,7 @@ the island grows.
 4. Decide QEMU testability (§9); land `tests/vmmouse.py` or record why not.
 5. The `mouse_init` early-return optimisation (§4) — separate commit, its
    own before/after boot-time measurement.
-6. SPEC.md §9.10, the doc-table row, `MOUDIAG` if wanted. PR.
+6. SPEC.md §9.11, the doc-table row, `MOUDIAG` if wanted. PR.
 
 ---
 
@@ -417,7 +417,7 @@ recipe would have. Resolved:
   absolute positions through QEMU's `vmmouse` and checks the pointer lands on
   the pixel. **So this browser-only feature does get a CI gate after all** —
   the plan's §9 open question, answered yes.
-- SPEC.md §9.10.6 and docs/TESTING.md carry it.
+- SPEC.md §9.11.6 and docs/TESTING.md carry it.
 
 ### 13. The freeze — found on `make run VMPORT=on`, fixed
 

@@ -169,9 +169,10 @@ static const struct cw_ctl cw_dc_about[] = {
     { CWK_LABEL,  4,  6, 0, 0, "interface and file format of Word for Windows" },
     { CWK_LABEL,  4,  7, 0, 0, "1.1a. Copyright (C) Microsoft Corporation," },
     { CWK_LABEL,  4,  8, 0, 0, "from the Computer History Museum release, 2014." },
+    { CWK_LABEL,  4,  9, 0, 0, "Ported by Jorge Gonzalez" },
     { CWK_BUTTON,24, 10, 8, 201, "OK" }
 };
-#define CW_NC_ABOUT 8
+#define CW_NC_ABOUT 9
 
 /* --- the dialog's live state, all resident bss --------------------------- */
 static int  cw_d_n;                     /* controls in the open dialog */

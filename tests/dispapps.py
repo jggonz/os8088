@@ -47,7 +47,7 @@ PN_KB_Y1, PN_KB_Y2_FULL = 88, 155   # apps/piano's own constants
 _MAPS = {}
 
 
-def _map(app):
+def _map(app, defines=()):
     """Every equate in a package, from nasm's own `[map]` on a temp copy.
 
     NOT a regex over the source: apps/arkanoid and apps/solitaire declare their
@@ -56,11 +56,21 @@ def _map(app):
     skipped the two games would be a gate that passes because it tested
     nothing. The map is also what tools/os88sym.py uses, for the same reason.
     """
-    if app in _MAPS:
-        return _MAPS[app]
+    key = (app, tuple(defines))
+    if key in _MAPS:
+        return _MAPS[key]
     src = os.path.join(ROOT, "apps", app, app + ".asm")
-    tmp = "/tmp/os88_%s_map.asm" % app
-    mp = "/tmp/os88_%s.map" % app
+    # PER PROCESS, and that is not tidiness. These were "/tmp/os88_<app>.map"
+    # flat, so two rows of the suite mapping the same package at once wrote
+    # each other's file - and `os88test.py --marty-jobs 3` runs exactly that.
+    # What it looked like was not a race: one row said "could not map paint"
+    # with an EMPTY nasm stderr, and the others read plausible-looking rubbish
+    # out of the guest - [pt_planar] = 60, a 14337x28673 canvas - because the
+    # offsets came from a half-written map. Every one of those points at the
+    # package under test rather than at the harness.
+    tag = app + "".join("_" + d.lstrip("-D") for d in defines)
+    tmp = "/tmp/os88_%s_map_%d.asm" % (tag, os.getpid())
+    mp = "/tmp/os88_%s_%d.map" % (tag, os.getpid())
     open(tmp, "w").write(open(src).read() + "\n[map all %s]\n" % mp)
     inc = ["-I", os.path.join(ROOT, "apps") + os.sep,
            "-I", os.path.join(ROOT, "apps", app) + os.sep,
@@ -72,8 +82,9 @@ def _map(app):
                                         # too. Harmless for every other app -
                                         # nasm only reaches a -I when an
                                         # %include misses
-    r = subprocess.run(["nasm", "-f", "bin", "-w+error"] + inc +
-                       ["-o", "/dev/null", tmp],
+    bn = "/tmp/os88_%s_%d.bin" % (tag, os.getpid())
+    r = subprocess.run(["nasm", "-f", "bin", "-w+error"] + inc + list(defines) +
+                       ["-o", bn, tmp],
                        capture_output=True, text=True)
     if r.returncode:
         sys.exit("dispapps: could not map %s:\n%s" % (app, r.stderr[:400]))
@@ -85,23 +96,116 @@ def _map(app):
                 out[p[2]] = int(p[0], 16)
             except ValueError:
                 pass
+    for f in (tmp, mp):                 # unique names, so they must be swept
+        try:
+            os.unlink(f)
+        except OSError:
+            pass
     if "os88_image_end" not in out:
         sys.exit("dispapps: %s's map has no os88_image_end" % app)
-    _MAPS[app] = out
+    # **THE MAP DESCRIBES THE SOURCE; THE GUEST IS RUNNING THE IMAGE.** If
+    # build/ is behind the tree, every offset below is right for a layout the
+    # machine does not have - and what comes back is not an error, it is
+    # plausible rubbish. It cost two rows: `canvas 0 wide, [pt_planar] = 0`
+    # and `Paint reports a 0x0 canvas`, both of which name the PACKAGE and
+    # neither of which is about it.
+    #
+    # tools/os88test.py already makes this check for the KERNEL - os88sym
+    # refuses an address unless a re-assembly is byte-identical to
+    # build/kernel.bin - and packages had no equivalent. This is it.
+    # os88pkg.py validates and stamps without changing a byte, so the
+    # comparison is exact rather than a size test.
+    sub = os.path.join("build", "smallapp") if defines else "build"
+    o88 = os.path.join(ROOT, sub,
+                       {"solitaire": "solitair"}.get(app, app) + ".o88")
+    try:
+        built = open(o88, "rb").read()
+        fresh = open(bn, "rb").read()
+    except OSError as e:
+        sys.exit("dispapps: cannot compare %s against the tree (%s) - run "
+                 "`make`%s" % (o88, e, " && make smallapps" if defines else ""))
+    finally:
+        for f in (tmp, mp, bn):
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
+    if built != fresh:
+        sys.exit("dispapps: %s is %d bytes and apps/%s/%s.asm assembles to "
+                 "%d - build/ is BEHIND THE TREE, so every bss offset this "
+                 "returns describes a layout the guest does not have. Run "
+                 "`make%s`." % (o88, len(built), app, app, len(fresh),
+                                " && make smallapps" if defines else ""))
+    _MAPS[key] = out
     return out
 
 
-def bss_off(app, name):
-    """The offset of a bss word from the start of the package's bss."""
-    m = _map(app)
+def colour_gif(src="build/OS8088.GIF", dst="/tmp/OS88COL.GIF"):
+    """`src` with a FOUR-entry colour table, so SPEC.md 42.23.6 keeps it 4bpp.
+
+    **Every pixel is identical** - the two entries the image uses keep their
+    indices and their colours, and two unused ones are appended - so any row
+    whose oracle is "the canvas against the file" is unaffected. What changes
+    is the one bit `pt_fmtpick` reads: 42.23.6 opens a picture whose colour
+    table has two entries ONE BIT DEEP, on any adapter, and `build/OS8088.GIF`
+    turns out to have exactly two.
+
+    That is correct for that file and it left the tree with no COLOUR picture
+    at all - so `paintrow` and `paintback`, whose whole subject is the
+    four-plane canvas, stopped being able to get one. Deriving the fixture
+    rather than committing a second image keeps them pinned to the same
+    picture the rest of the paint rows use, and keeps the repo free of a
+    binary (CONTRIBUTING.md 6).
+
+    Returns `dst`, whose basename is deliberately already a legal 8.3 name in
+    upper case: the row has to find it in a file window by the name os88disk
+    put on the disk, and a stem of nine characters would be silently truncated
+    to something neither end agrees on.
+    """
+    import os
+    import shutil
+    sp = os.path.join(ROOT, src) if not os.path.isabs(src) else src
+    if (os.path.exists(dst)
+            and os.path.getmtime(dst) >= os.path.getmtime(sp)):
+        return dst
+    d = bytearray(open(sp, "rb").read())
+    if d[:3] != b"GIF":
+        sys.exit("dispapps: %s is not a GIF" % sp)
+    pk = d[10]
+    if not pk & 0x80:
+        sys.exit("dispapps: %s has no global colour table to widen" % sp)
+    n = 2 << (pk & 7)
+    if n != 2:
+        shutil.copyfile(sp, dst)            # already colour: nothing to do
+        return dst
+    d[10] = (pk & 0xF8) | 1                 # 2 << 1 = four entries
+    d[13:13] = bytes([0xAA, 0x00, 0x00,     # ...two of them unused by the
+                      0x00, 0x00, 0xAA])    # image, and genuinely colours
+    open(dst, "wb").write(bytes(d))
+    return dst
+
+
+def bss_off(app, name, small=False):
+    """The offset of a bss word from the start of the package's bss.
+
+    `small=True` maps the `-DAPP_SMALL` build, WHICH IS A DIFFERENT LAYOUT.
+    Without it a row reading a small-built package's bss gets the shipped
+    build's offsets applied to the wrong image, and what comes back is not an
+    error - it is plausible rubbish. That cost a wrong reading once already:
+    a 0x258-wide canvas with a stride of 0 and a claim "1.8 KB" out of a Paint
+    holding 15.
+    """
+    m = _map(app, ("-DAPP_SMALL",) if small else ())
     if name not in m:
-        sys.exit("dispapps: %s has no symbol %s" % (app, name))
+        sys.exit("dispapps: %s has no symbol %s%s"
+                 % (app, name, " in the APP_SMALL build" if small else ""))
     return m[name] - m["os88_image_end"]
 
 
-def img_size(app):
+def img_size(app, small=False):
     """The package's image size, which is where its bss starts."""
-    p = os.path.join(ROOT, "build", {"solitaire": "solitair"}.get(app, app)
+    sub = os.path.join("build", "smallapp") if small else "build"
+    p = os.path.join(ROOT, sub, {"solitaire": "solitair"}.get(app, app)
                      + ".o88")
     d = open(p, "rb").read()
     if d[:2] != b"O8":

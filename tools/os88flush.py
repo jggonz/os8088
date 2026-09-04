@@ -284,9 +284,16 @@ class Flush(object):
 
     Either attaches on its own (`Flush("127.0.0.1:9001")`) or SHARES a session's
     connection (`Flush(marty=m)`). Sharing is not a convenience: the debug
-    server accepts one client and a second connection hangs rather than
-    failing, so a script that drives the UI and then wants to look at the disk
-    must pass its own `Marty` in.
+    server accepts one client and refuses a second, so a script that drives
+    the UI and then wants to look at the disk must pass its own `Marty` in.
+
+    SHARE THE RUN DIRECTORY TOO, which is why `marty=` is the better spelling
+    for a launched session. Every instance runs in a private tree now
+    (os88marty.launch), so the drive's mount path - which the server reports
+    RELATIVE to its own working directory - resolves against that instance and
+    not against the staged one. A `Flush` given an address and no run_dir can
+    only guess, and the guess is the staged tree, which holds no floppy at
+    all.
     """
 
     def __init__(self, addr=None, marty=None, run_dir=None, timeout=None):
@@ -296,8 +303,7 @@ class Flush(object):
             addr, timeout=timeout or os88marty.DEFAULT_TIMEOUT)
         self._own = marty is None
         if run_dir is None:
-            here = os.path.dirname(os.path.abspath(__file__))
-            run_dir = os.path.join(os.path.dirname(here), "build", "martypc", "run")
+            run_dir = getattr(self.m, "run_dir", None) or os88marty.base_run_dir()
         self.run_dir = run_dir
 
     def __enter__(self):
@@ -324,10 +330,11 @@ class Flush(object):
     def source_path(self, drive=0):
         """The host file the drive was mounted from, absolute.
 
-        Under `launch()` that is the session's private copy in the run tree
-        (`media/floppies/run0.img`), which is why it is worth resolving: it is
-        both the reference a diff is against and the file a bare
-        `save(drive)` writes back over.
+        Under `launch()` that is the session's private copy in ITS OWN run
+        tree (`build/martypc/inst/<tag>/media/floppies/run0.img`), which is
+        why it is worth resolving: it is both the reference a diff is against
+        and the file a bare `save(drive)` writes back over. Resolve it while
+        the session is open - closing the instance takes its media with it.
         """
         d = self._drive(drive)
         p = d.get("path")

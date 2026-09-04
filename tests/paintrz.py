@@ -51,6 +51,7 @@ ROOT = os.path.dirname(HERE)
 S = os88sym.linear
 EQU = ["PT_SZ_Y", "PT_SZ_DY", "PT_SZ_BH", "PT_SZ_BX", "PT_SZ_BW"]
 PT_BMPHDR = 118                 # 14 + 40 + 16*4, mirrored in apps/paint
+PT_BMPHDR1 = 62                 # ...and 14 + 40 + 2*4 at one bit (SPEC.md 42.23)
 
 
 def _equates(src="apps/paint/paint.asm", incs=("apps/",)):
@@ -88,18 +89,22 @@ def _bss(m, seg, name, w=2):
 def _ink(m, seg):
     """The set of inked canvas pixels, read out of the canvas itself.
 
-    NOT white is the test, and white is 0xFF in both formats - a nibble of
-    0x0F twice over packed, all four planes set planar - so neither the
-    palette nor the plane ORDER has to be known here, only which bit or nibble
-    a column falls in. **Whole bytes of 0xFF are skipped before any of that**:
+    NOT white is the test, and white is 0xFF in all THREE formats - a nibble
+    of 0x0F twice over packed, all four planes set planar, and every bit set
+    at one bit deep, where SPEC.md 42.23.1 makes 1 the LIT colour precisely so
+    that the polarity agrees with the other two - so neither the palette nor
+    the plane ORDER has to be known here, only which bit or nibble a column
+    falls in. **Whole bytes of 0xFF are skipped before any of that**:
     a pixel at a time over the debug socket is 125,440 of them on a 448x280
     canvas and the row never finishes.
     """
     w, h = _bss(m, seg, "pt_cw"), _bss(m, seg, "pt_ch")
     planar = _bss(m, seg, "pt_planar", 1)
+    one = _bss(m, seg, "pt_1bpp", 1)
     bpr, stride = _bss(m, seg, "pt_bpr"), _bss(m, seg, "pt_stride")
     lin = _bss(m, seg, "pt_base") << 4
-    total = PT_BMPHDR + h * stride
+    hdr = PT_BMPHDR1 if one else PT_BMPHDR
+    total = hdr + h * stride
     buf, got = bytearray(), 0
     while got < total:                          # the canvas can span segments,
         n = min(16384, total - got)             # so it is read as one linear
@@ -107,8 +112,17 @@ def _ink(m, seg):
         got += n
     out = set()
     for row in range(h):
-        o = PT_BMPHDR + (h - 1 - row) * stride
-        if planar:
+        o = hdr + (h - 1 - row) * stride
+        if one:
+            run = buf[o:o + (w + 7) // 8]
+            for i, b in enumerate(run):
+                if b == 0xFF:
+                    continue
+                for k in range(8):
+                    c = i * 8 + k
+                    if c < w and not b & (0x80 >> k):
+                        out.add((c, row))
+        elif planar:
             for p in range(4):
                 run = buf[o + p * bpr:o + (p + 1) * bpr]
                 for i, b in enumerate(run):
@@ -177,7 +191,8 @@ def main(argv):
         w0, h0 = _bss(m, seg, "pt_cw"), _bss(m, seg, "pt_ch")
         ink = _ink(m, seg)
         print("   canvas %dx%d %s, %d inked pixels, x %d..%d y %d..%d"
-              % (w0, h0, "planar" if _bss(m, seg, "pt_planar", 1) else "packed",
+              % (w0, h0, "planar" if _bss(m, seg, "pt_planar", 1)
+                 else ("1bpp" if _bss(m, seg, "pt_1bpp", 1) else "packed"),
                  len(ink), min(p[0] for p in ink), max(p[0] for p in ink),
                  min(p[1] for p in ink), max(p[1] for p in ink)))
         if len(ink) < 40:

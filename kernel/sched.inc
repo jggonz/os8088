@@ -43,10 +43,24 @@
 ; =============================================================================
 
 ; --- task table (SPEC.md 8) --------------------------------------------------
-MAX_TASKS   equ 8               ; mirrored in apps/os88api.inc, which sizes
+%ifdef KERN_SMALL
+MAX_TASKS   equ 7               ; SIX worker slices and the UI task
+                                ; (docs/KERN-SMALL-CUT-PLAN.md D1). The SDK's
+                                ; copy STAYS AT 14, on SPEC.md 51.0's rule for
+                                ; MEM_P_FATW_N: apps/os88api.inc publishes this
+                                ; to packages and taskmgr sizes buffers from it
+                                ; (SS_TSTATE is MAX_TASKS bytes), so a package
+                                ; built at 14 reading a 7-slot snapshot
+                                ; OVER-allocates, which is safe, where the
+                                ; reverse would overflow. One .o88 runs on both
+                                ; kernels (SPEC.md 24), so the SDK carries the
+                                ; larger of the two.
+%else
+MAX_TASKS   equ 14              ; mirrored in apps/os88api.inc, which sizes
                                 ; every package's snapshot buffer from it
                                 ; (SPEC.md 20.9) - change them together and
                                 ; rebuild every .o88
+%endif
 T_STATE     equ 0               ; byte: 0 free, 1 ready, 2 sleeping
 T_SP        equ 2               ; word: saved SP (frame above)
 T_WAKE      equ 4               ; word: [ticks] value to wake at
@@ -62,6 +76,20 @@ TF_SERVICE  equ 1               ; survives the fullscreen-exclusive freeze:
                                 ; plumbing, not app work, and parking it
                                 ; would starve a Sound Blaster stream mid-
                                 ; game (SPEC.md 53.2)
+
+SCH_CHSTK   equ 128             ; the ROM int 08h chain's private stack
+                                ; (SPEC.md 8.5). It holds the chain itself -
+                                ; 56 bytes on the worst BIOS measured, SeaBIOS,
+                                ; including the pushf and the far call - plus
+                                ; whatever lands in the window the ROM stis
+                                ; open: an int 09h, a mouse IRQ's six-byte gate
+                                ; frame before it swaps away (SPEC.md 9.10),
+                                ; the floppy's completion. ~78 worst case, so
+                                ; 1.6x. A second IRQ0 does NOT nest here and
+                                ; SPEC.md 8.5.1 says why
+%if SCH_CHSTK % 2
+  %error "SCH_CHSTK must be EVEN: sch_chstack precedes sch_stacks in .lowbss and an odd size would move it off the word boundary its canary and `rep stosw` fill both need"
+%endif
 
 SCH_STACK   equ 384             ; per-task stack bytes. It was 1,536 when the
                                 ; stacks were the only thing in .lowbss, then
@@ -90,17 +118,148 @@ SCH_STACK   equ 384             ; per-task stack bytes. It was 1,536 when the
                                 ; hand-chained literals and was the other half
                                 ; of why nobody could; it derives now
 %if (SCH_STACK % 128) != 0
-  %error "SCH_STACK must be a multiple of 128 - sch_switch's canary base below"
+  %error "SCH_STACK must be a multiple of 128 - it is the largest class and every class is one"
 %endif
-%if (MAX_TASKS - 1) * SCH_STACK > 65535
-  %error "the task slices no longer fit one segment"
-%endif
+
+; --- what the KERNEL's own spawners ask for (SPEC.md 8.7) --------------------
+; A package says so in its header; these three have no header to say it in, so
+; they say it here, each against a measurement rather than a guess.
+SCH_IDLE_STK    equ 128         ; the idle task. Its own footprint is at most 4
+                                ; bytes - `pushf` then `cli`, then task_yield's
+                                ; own `pushf`/`cli` - so what it needs IS the
+                                ; interrupt floor, measured at 32 on QEMU and
+                                ; 40-64 on real iron (docs/STACK-SLOTS-PLAN.md
+                                ; 7.1). 128 is 2x the worst of those
+SCH_BUILTIN_STK equ 128         ; a built-in kind's task. Timer and Bounce are
+                                ; the two that take one, and six Bounces at
+                                ; once measured +10..24 over the floor
+SCH_DRV_STK     equ 192         ; a driver's worker. The only one in the tree
+                                ; is the sound driver's stream task, whose
+                                ; deepest static chain is 28 bytes
+                                ; (tools/stkdepth.py on sbl_refill_task) - so
+                                ; 64 + 28 = 92 and this is 2.1x. It is one
+                                ; number for all drivers because one driver
+                                ; calls OSAPI_DRV_TASK in the whole tree (the
+                                ; sound driver's refill and drain spawners);
+                                ; a driver that needs more is a line here with
+                                ; a reason beside it, not a new mechanism
+
 SCH_MAGIC   equ 0x5A57          ; the word at the BOTTOM of every slice. A
                                 ; stack that reaches it has overrun, and the
                                 ; next push corrupts the slice below - which
                                 ; is another task's, so the symptom would be
                                 ; arbitrary and nowhere near the cause
 SCH_FRAME   equ 24              ; saved-frame size: 9 regs + IP/CS/FLAGS
+
+; -----------------------------------------------------------------------------
+; SCH_PARTITION - THE SLICE LAYOUT, WRITTEN ONCE (SPEC.md 8.7)
+;
+; One SCH_SLOT line per background slot, in slot order, giving that slot's
+; stack in BYTES. Everything else about the layout is DERIVED from this list:
+; sch_stkbase's addresses, sch_stksize's sizes, the total sch_stacks reserves,
+; and the count that must agree with MAX_TASKS. Edit here and nowhere else.
+;
+; It is a FIXED PARTITION and not an allocator (docs/STACK-SLOTS-PLAN.md 6.2):
+; the slices exist from boot, a spawn takes the smallest free one that is big
+; enough, and running out is OSAPI_TASK_SPAWN's existing CF=1 - which SPEC.md
+; 20.6 already requires every package to degrade on. No compaction, no
+; fragmentation, no new failure mode.
+;
+; The list is uniform TODAY. What made it a list is that the sizes are about to
+; stop being uniform, and every reader had to stop assuming otherwise first.
+; -----------------------------------------------------------------------------
+%ifdef KERN_SMALL
+; --- kern_small's SIX (docs/KERN-SMALL-CUT-PLAN.md D1) -----------------------
+; 1,280 bytes against kern_big's 2,816. The COUNT is the owner's; what is
+; chosen here is WHICH SIX, off the same survey (docs/STACK-SLOTS-PLAN.md 12.1)
+; read against what SPEC.md 24.5 actually puts on the small disks:
+;
+;   the 384 class  ftpd, the Browser and Frotz - NONE of which ships on
+;                  kern_small. ONE IS KEPT ANYWAY, and not for them: the C SDK
+;                  declares CC_STACK = SCH_STACK (SPEC.md 20.6 rule 7),
+;                  tests/unit/t_mirror.py guards the pair, and SCH_STACK is the
+;                  LARGEST class by construction. Take the class away and
+;                  either a C package's worker can never be spawned or the
+;                  mirror breaks.
+;   the 256 class  Missile Command ships; Modplug, Word and Telnet do not
+;   the 192 class  the modal class, and the one with real competition here:
+;                  Artful, the Task Manager, the Fractal, Cyclone, Notepad,
+;                  Arkanoid and Tamegram are all on the small apps disk
+;   the 128 class  the idle task holds one for the life of the machine, so the
+;                  second is the only sleeper slot a program can have - and the
+;                  sound driver's stream task, one of its four consumers, went
+;                  with SPEC.md 51.0
+;
+; FIVE USABLE, the idle task owning the sixth. A 43KB heap holds about two
+; packages, so the binding resource is not this table.
+%macro SCH_PARTITION 0
+    SCH_SLOT 128                ; the idle task's, for the life of the machine
+    SCH_SLOT 128                ; ...and the one sleeper slot left over
+    SCH_SLOT 192                ; the modal class (STACK-SLOTS-PLAN 12.1)
+    SCH_SLOT 192
+    SCH_SLOT 256                ; Missile Command
+    SCH_SLOT SCH_STACK          ; ...and the top class, here for CC_STACK's
+%endmacro                       ; sake rather than for a program's
+%else
+%macro SCH_PARTITION 0
+    SCH_SLOT 128                ; the sleepers. ONE of these is the idle task's
+    SCH_SLOT 128                ; for as long as the machine is up, so two are
+    SCH_SLOT 128                ; really available: a Timer, a Bounce, the
+                                ; sound driver's stream task. NOT a C package
+                                ; whose worker "only sleeps": CWORD's and
+                                ; RUNCPM's close the window from that worker,
+                                ; and wm_destroy repaints what it uncovered
+                                ; on the CALLER's stack - they ask for 256
+    SCH_SLOT 192                ; THE MODAL CLASS - eleven of the twenty
+    SCH_SLOT 192                ; workers in the tree land here
+    SCH_SLOT 192                ; (docs/STACK-SLOTS-PLAN.md 12.1): WIREFRAME,
+    SCH_SLOT 192                ; Artful, the Task Manager, the Fractal, WEAVE,
+    SCH_SLOT 192                ; Cyclone, Notepad, Arkanoid, Tracker
+    SCH_SLOT 192
+    SCH_SLOT 256                ; Modplug, Missile Command, Word, Telnet,
+    SCH_SLOT 256                ; Tamegram, Tank Attack, CWORD, RUNCPM
+    SCH_SLOT SCH_STACK          ; ftpd, the Browser and Frotz - and TWO is the
+    SCH_SLOT SCH_STACK          ; judgement in this list. The pair that plausibly
+                                ; runs at once is ftpd and the Browser, on a
+                                ; machine serving files while somebody reads;
+                                ; a third costs 192 bytes and, because the low
+                                ; window has 162 left, 512 of anybody's RAM.
+                                ; It is one line here if the field wants it
+%endmacro
+%endif
+
+; --- and the three things counted off it, before anything can use them -------
+%assign SCH_STK_TOTAL 0
+%assign SCH_STK_N     0
+%assign SCH_STK_MAX   0
+%macro SCH_SLOT 1
+    %if (%1) < SCH_STK_MAX
+      %error "SCH_PARTITION must ascend: first fit is SMALLEST fit (SPEC.md 8.7.1) only while the slots are listed small to large"
+    %endif
+    %assign SCH_STK_TOTAL SCH_STK_TOTAL + (%1)
+    %assign SCH_STK_N     SCH_STK_N + 1
+    %if (%1) > SCH_STK_MAX
+        %assign SCH_STK_MAX (%1)
+    %endif
+    %if ((%1) % 2) != 0
+        %error "every slice must be EVEN: sch_switch's canary is a word written at the slice base and task_spawn fills with `rep stosw`, so an odd size puts every slice above it on an odd address and the canary straddles"
+    %endif
+    %if (%1) < SCH_FRAME + 2
+        %error "a slice smaller than SCH_FRAME + the canary word cannot hold a task's own parked frame, never mind an interrupt"
+    %endif
+%endmacro
+SCH_PARTITION
+%unmacro SCH_SLOT 1
+
+%if SCH_STK_N != (MAX_TASKS - 1)
+  %error "SCH_PARTITION must have exactly MAX_TASKS-1 SCH_SLOT lines: slot 0 is the UI task and owns no slice of sch_stacks"
+%endif
+%if SCH_STK_MAX != SCH_STACK
+  %error "SCH_STACK must be the LARGEST class in SCH_PARTITION - it is what a package that declares nothing is given, and what every bound in the SDK is written against"
+%endif
+%if SCH_STK_TOTAL > 65535
+  %error "the task slices no longer fit one segment"
+%endif
 
 SCH_WD_TICKS equ 18             ; cooperative mode: the watchdog forces a
                                 ; switch once the running task has held the
@@ -116,7 +275,23 @@ SCH_WD_TICKS equ 18             ; cooperative mode: the watchdog forces a
 ; in:       nothing
 ; out:      nothing
 ; clobbers: flags
+;
+; IT IS IN THE BOOT OVERLAY (SPEC.md 2.5, docs/LAST-DROP-BYTES.md row 3), which
+; is 166 bytes of `.text` that stop existing when kmain gives the blob back.
+; kmain:4170 is its ONE caller and there is no second entry: nothing
+; re-initialises the scheduler, the reboot path is sched_unhook - which RESTORES
+; the old vector and is a different routine - and sch_fast_on/sch_fast_off
+; re-programme the PIT without coming near this body. Zero outbound calls, so
+; the move needs no shim in either direction.
+;
+; The vector store below is what makes it safe to be here and is worth reading
+; before anything is added: `mov word [es:0x22], KERNEL_SEG` names the segment
+; as a CONSTANT. In `.ovl` CS is the BLOB's, and the blob is about to become
+; somebody's heap claim, so `mov [es:0x22], cs` would install a vector into
+; freed memory and the machine would die later at an address with no connection
+; to this file. tools/os88ovlchk.py rule 2b refuses that spelling outright now.
 ; -----------------------------------------------------------------------------
+section .ovlw
 sched_init:
     push ax
     push bx
@@ -135,24 +310,32 @@ sched_init:
     mov word [ticks], 0
     mov byte [sch_fast], 0      ; no sub-tick until a bracket asks (53.8)
     mov byte [sch_coop], 0      ; pre-emptive until the Control Panel says
-    mov byte [sch_hold], 0      ; otherwise (SPEC.md 8.2). All three are
+    mov byte [sch_hold], SCH_WD_TICKS
+                                ; otherwise (SPEC.md 8.2). All three are
     mov byte [sch_idleslot], 0xFF ; NO idle task yet, and this is exactly why
                                 ; it is 0xFF rather than 0 - nothing clears
                                 ; .bss, and a zero here names slot 0, the UI
                                 ; task, which sch_switch's scan would then
                                 ; skip for ever
-    mov word [sch_wd_hits], 0   ; zeroed HERE by hand: nothing clears .bss at
-                                ; boot, so an uninitialised sch_coop would
-                                ; boot into a random mode
-%ifdef KFZTRACE
-    push es                     ; TASK 0 HAS NO CANARY (see sch_switch's
-    push ax                     ; .nocanary) and its stack grows DOWN onto the
-    mov ax, LOW_SEG             ; top of .lowbss - the other tasks' slices, the
-    mov es, ax                  ; glyph table, the disk buffers - so an overrun
-    mov word [es:STK0_BOT], SCH_MAGIC ; there is silent. Seed one so the
-    pop ax                      ; heartbeat can report it
-    pop es
-%endif
+    mov word [sch_wd_hits], 0   ; zeroed HERE by hand, like the four bytes
+                                ; above it: nothing clears .bss at boot, so
+                                ; every one of these has to be stored rather
+                                ; than assumed. (This comment used to explain
+                                ; sch_coop, which is set three lines up - and
+                                ; a store whose comment justifies a DIFFERENT
+                                ; store is a store somebody deletes)
+    push es                     ; TASK 0 HAS A CANARY NOW, and it is checked on
+    push ax                     ; every switch like everybody else's - see
+    mov ax, LOW_SEG             ; sch_stkbase, whose slot-0 entry is this word.
+    mov es, ax                  ; Its stack grows DOWN onto the top of .lowbss
+    mov word [es:STK0_BOT], SCH_MAGIC ; - the other tasks' slices, the glyph
+    pop ax                      ; table, the disk buffers - so an overrun there
+    pop es                      ; used to be SILENT, which is what the KFZ-only
+                                ; version of this seed was written to complain
+                                ; about and could only report on a build nobody
+                                ; runs. Unconditional now: the seed is what
+                                ; makes the table uniform, and the table is
+                                ; what makes the check free
     mov byte [sch_tasks+T_STATE], 1     ; task 0 = this thread, ready
     mov byte [sch_tasks+T_INST], 0xFF   ; the UI task owns no instance
     mov byte [sch_tasks+T_FLAGS], 0
@@ -176,7 +359,8 @@ sched_init:
     mov cx, MAX_TASKS * 2
 .zcyc:
     mov word [bx], 0
-    add bx, 2
+    inc bx
+    inc bx
     loop .zcyc
 
     mov al, 0x00                ; seed sch_pit_last with a coherent stamp:
@@ -205,7 +389,13 @@ sched_init:
     pop cx
     pop bx
     pop ax
-    ret
+    retf                        ; FAR, and it has to be: everything in the blob
+                                ; is reached through `call far [spl_fp]`, so an
+                                ; entry that kept its near `ret` would pop IP
+                                ; and leave CS on the stack. SPEC.md 2.6.1's
+                                ; rule, one section along - the body owns the
+                                ; far return and there is no thunk in between
+section .text
 
 ; -----------------------------------------------------------------------------
 ; sch_fast_on / sch_fast_off - the fsx sub-tick (SPEC.md 53.2.1)
@@ -227,6 +417,52 @@ sched_init:
 ; The one thing that genuinely cannot survive is sch_account, whose elapsed
 ; arithmetic reads the PIT counter against its own 65536 period; it pauses
 ; while armed and is re-seeded here on the way out.
+; -----------------------------------------------------------------------------
+; sch_pit_now - channel 0's clock, LATCHED AND NEVER WRITTEN (SPEC.md 34.1)
+; in:  nothing
+; out: DX:AX = [ticks]:phase, the phase counting UP from 0 at the tick
+;      (65536 - the latched count)
+; clobbers: AX, DX, flags
+;
+; The latch, both reads AND the [ticks] read sit inside ONE pushf/cli...popf
+; window, which is SPEC.md 34.1's BINDING atomicity rule: the 8254 ignores a
+; second latch command while a latched value is unread, so an interleave
+; hands one reader a stale byte - and a phase paired with a tick from outside
+; the window can straddle a reload.
+;
+; sched.inc owns the PIT (SPEC.md 8.1), and this triple stood in FOUR places
+; before size pass 2: here in sch_fast_off's re-seed, in wm.inc's wm_an_pit
+; (which this replaces outright - it WAS this routine, in the wrong module),
+; and in snd.inc's PCM deadline prime.  Two copies are deliberately NOT
+; converted:
+;   * sched_init's seed at the top of this file is `.ovlw`, the boot overlay,
+;     and a near call from there to `.text` would assemble cleanly and run
+;     wrong;
+;   * sch_account's is on the IRQ0 path and does more (the IRR coherence
+;     test), so it is neither this body nor a place to add a call.
+;
+; It does NOT re-derive sch_account's IRQ-pending coherence test and does not
+; need to: every caller compares a deadline with `js`, so a DX one behind at
+; the instant of a reload costs at most one extra pass and never a wrong
+; answer.  This clock is a pace, not an accounting.
+; -----------------------------------------------------------------------------
+sch_pit_now:
+    push cx
+    pushf
+    cli
+    mov al, 0x00                ; latch channel 0's count
+    out 0x43, al
+    in al, 0x40
+    mov cl, al
+    in al, 0x40
+    mov ch, al
+    mov dx, [ticks]
+    popf
+    neg cx                      ; phase = 65536 - count, counting up from the
+    mov ax, cx                  ; tick
+    pop cx
+    ret
+
 ; -----------------------------------------------------------------------------
 sch_fast_on:
     push ax
@@ -271,16 +507,12 @@ sch_fast_off:
     xor al, al
     out 0x40, al
     out 0x40, al
-    mov al, 0x00                ; ...and re-seed the accounting stamp, or the
-    out 0x43, al                ; first full tick after this charges a whole
-    in al, 0x40                 ; bracket's worth of garbage to somebody
-    mov cl, al
-    in al, 0x40
-    mov ch, al
-    neg cx
-    mov [sch_pit_last], cx
-    mov ax, [ticks]
-    mov [sch_pit_last+2], ax
+    call sch_pit_now            ; ...and re-seed the accounting stamp, or the
+    mov [sch_pit_last], ax      ; first full tick after this charges a whole
+    mov [sch_pit_last+2], dx    ; bracket's worth of garbage to somebody.
+                                ; Its own pushf/cli nests inside this one and
+                                ; its popf restores IF=0, which is what we are
+                                ; already in
     mov byte [sch_fast], 0
     popf
 .out:
@@ -344,15 +576,29 @@ sched_unhook:
 ; is already READY is a no-op.
 ; -----------------------------------------------------------------------------
 sch_wake_ui:
-    mov byte [sch_uiwake], 1    ; ...and SAY SO, for the lost-wakeup guard at
-                                ; ui_task's .idle (SPEC.md 8.1.2.3). The
-                                ; T_STATE store below is not enough on its own:
-                                ; it carries no information while the task is
-                                ; RUNNING, which is exactly when the race
-                                ; happens
-    mov byte [sch_idlewake], 1  ; ...and the same fact for the idle task's own
-                                ; halt guard (SPEC.md 8.1.2), which is spent
-                                ; there and not here
+    mov word [sch_uiwake], 0x0101
+                                ; ...and SAY SO, for the lost-wakeup guard at
+                                ; ui_task's .idle (SPEC.md 8.1.2.3) AND for
+                                ; the idle task's own halt guard (SPEC.md
+                                ; 8.1.2), spent at sch_idle_body's .rearm.
+                                ; The T_STATE store below is not enough on its
+                                ; own: it carries no information while the
+                                ; task is RUNNING, which is exactly when the
+                                ; race happens.
+                                ;
+                                ; ONE word store, not two byte stores: the two
+                                ; bytes are adjacent (the %if at the foot of
+                                ; this file makes that a build-time fact) and
+                                ; are always set together to the same value.
+                                ; 6 bytes against 10, so the 8088's fetch
+                                ; floor falls 43.4 -> 26.0 clocks - and an
+                                ; 8086 takes an interrupt only at an
+                                ; instruction boundary, so a single word store
+                                ; cannot be torn where two byte stores can,
+                                ; which is the right direction for a
+                                ; lost-wakeup guard. NOTHING ABOUT THE WAKEUP
+                                ; LOGIC CHANGES: same bytes, same values, same
+                                ; two readers, each spending its own
     mov byte [sch_tasks+T_STATE], 1
     ret
 
@@ -409,6 +655,18 @@ sch_idle_body:
 
 ; in:  nothing.  out: CF=1 if no slot was free (the machine keeps the old
 ;      resume-the-outgoing fallback and nothing else changes)
+;
+; IN THE BOOT OVERLAY (docs/LAST-DROP-BYTES.md row 16). One caller, kmain:4182,
+; and the idle task it spawns outlives it by construction - a task's code is
+; sch_idle_body in `.text`, which is what BX = 0 above names. Taking the address
+; of a `.text` label from `.ovl` is correct and taking the address of an `.ovl`
+; one would not be: `.text` has vstart=0 and the consumer supplies KERNEL_SEG.
+;
+; **kmain does not read the CF this answers with**, which is what lets the site
+; use the flag-banking gate rather than OVLCALLC. If a caller ever does, the
+; call has to change with it.
+; -----------------------------------------------------------------------------
+section .ovlw
 sch_idle_start:
     push bx
     push cx
@@ -423,9 +681,11 @@ sch_idle_start:
                                 ; it is the one docs/FIELD-NOTES.md has seen
     mov ax, sch_idle_body
     xor bx, bx                  ; KERNEL_SEG
+    mov cx, SCH_IDLE_STK        ; the smallest class: its own footprint is 4
+                                ; bytes and the rest is the floor (SPEC.md 8.7)
     mov dx, 0x00FF              ; DL -> T_INST = 0xFF, "owns no instance"
-    call task_spawn
-    jc .out
+    call KERNEL_SEG:cw_task_spawn ; FAR: `.ovl` -> resident, through the shim
+    jc .out                       ; driver.inc already needed
     mov [sch_idleslot], al      ; the ONE identifier for the idle task: the
                                 ; scan skips this index and the fallback picks
                                 ; it, and both need the index anyway
@@ -434,7 +694,10 @@ sch_idle_start:
     pop dx
     pop cx
     pop bx
-    ret
+    retf                        ; FAR - see sched_init above. `retf` pops IP:CS
+                                ; and leaves the flags alone, so the CF this
+                                ; answers with survives it
+section .text
 
 ; -----------------------------------------------------------------------------
 ; task_spawn - create a task that iret-launches into a near entry point
@@ -445,6 +708,14 @@ sch_idle_start:
 ; before the publish (the ISR only charges the RUNNING slot, so a
 ; pre-publish write cannot race - SPEC.md 8.1). The scan starts at slot 1:
 ; slot 0 is the UI task, never free, and runs on the boot stack.
+;
+; CX IS THE STACK THE TASK ASKS FOR, IN BYTES (SPEC.md 8.7), and the scan takes
+; the first free slot at least that big. SCH_PARTITION is written smallest
+; first, so first fit IS smallest fit and a big worker cannot be given the last
+; small slice a Timer would have fitted in. **CX = 0 means the largest class**,
+; which is what a package that declares nothing gets - so a caller that has no
+; opinion says nothing and is safe, rather than silently asking for the
+; smallest.
 ; The entry routine must never ret - it terminates only via task_exit
 ; (usually through inst_task_die, SPEC.md 29) or loops forever.
 ;
@@ -471,6 +742,8 @@ sch_idle_start:
 ;                the frame below sets up - the scheduler itself needs no
 ;                change, because DS, ES and CS are already part of the saved
 ;                frame and sch_resume pops all three.
+;           CX = the stack the task wants, in bytes; 0 = the largest class
+;                (SPEC.md 8.7.1). Preserved.
 ;           DX = argument word - lands in the new task's DX; DL is also
 ;                stored to T_INST (instance index, 0xFF = none)
 ; out:      CF = 1 if no free slot (task not created)
@@ -484,42 +757,59 @@ task_spawn:
     push si
     push di
     push es
+    push bp                     ; BP is the new task's SEGMENT below - a
+                                ; VALUE, never an address, so no [bp+..] is
+                                ; introduced and SS != DS is untouched
     pushf                       ; the caller's IF, banked across the window
     cli
     or bx, bx                   ; BX = 0 means the kernel's own segment
     jnz .haveseg
     mov bx, KERNEL_SEG
 .haveseg:
-    mov [sch_newseg], bx        ; banked: BX is the scan pointer below, and
-                                ; this whole routine runs at IF=0 so no
-                                ; second spawner can be in here with us
+    mov bp, bx                  ; banked: BX is the scan pointer below. A
+                                ; register rather than a .bss word: task_spawn
+                                ; uses BP nowhere else and makes no outbound
+                                ; call between here and the frame build, so
+                                ; the two segment stores can read it directly
 
-    mov bx, sch_tasks + T_SIZE  ; scan for a free slot, from slot 1
-    mov cx, 1                   ; CX = slot index
+    or cx, cx                   ; CX = the stack asked for, in bytes; 0 is
+    jnz .haveask                ; "no opinion", and no opinion gets the LARGEST
+    mov cx, SCH_STACK           ; class. Zero must not fall through as a
+.haveask:                       ; request for the smallest free slice
+    mov bx, sch_tasks + T_SIZE  ; scan for a free slot BIG ENOUGH, from slot 1
+    mov si, 2                   ; SI = slot * 2, the index both tables take
 .find:
     cmp byte [bx+T_STATE], 0
-    je .found
+    jne .next
+    cmp cx, [si+sch_stksize]    ; free - but does it fit? SCH_PARTITION is
+    jbe .found                  ; written smallest first, so first fit is
+.next:                          ; SMALLEST fit and one instruction
     add bx, T_SIZE
-    inc cx
-    cmp cx, MAX_TASKS
+    inc si
+    inc si
+    cmp si, MAX_TASKS * 2
     jb .find
-    xor ax, ax                  ; table full: AL = 0, which is never a valid
-    jmp .done                   ; slot (slot 0 is the UI task) - .done turns
-                                ; it back into CF = 1 after the popf
+    xor ax, ax                  ; nothing free that is big enough: AL = 0,
+    jmp .done                   ; which is never a valid slot (slot 0 is the
+                                ; UI task) - .done turns it back into CF = 1
+                                ; after the popf, which is the refusal
+                                ; SPEC.md 20.6 already makes every package
+                                ; degrade on
 
 .found:
-    mov si, ax                  ; SI = entry (AX becomes scratch)
-    mov ax, cx                  ; stack top = sch_stacks + slot*SCH_STACK
-    mov di, SCH_STACK           ; (slot 1 owns the FIRST slice; slot 0 has no
-    push dx                     ; slice - it runs on the task-0 stack)
-    mul di                      ; DX:AX = AX * SCH_STACK (high half discarded)
-    pop dx
-    add ax, sch_stacks
-    push ax                     ; seed this slice's canary before the frame:
-    sub ax, SCH_STACK           ; AX is the slice TOP, so its base is one
-    mov di, ax                  ; SCH_STACK below
-    mov ax, LOW_SEG
-    mov es, ax
+    mov cx, si                  ; the scan left SI = slot * 2, which is the
+    shr cx, 1                   ; index BOTH tables take - so the slice costs
+    mov di, ax                  ; two loads and no arithmetic. CX becomes the
+    mov ax, [si+sch_stksize]    ; slot index again (AL returns it and the cycle
+    mov si, [si+sch_stkbase]    ; counter below wants it); the entry is parked
+    xchg si, di                 ; in DI and comes back as SI, where the rest of
+                                ; this routine expects it. DI = the slice BASE,
+                                ; where the canary goes, and AX = its SIZE
+    push cx                     ; ...all three banked across the fill, which
+    push di                     ; wants CX for its own count and walks DI
+    push ax
+    push ss                     ; ES = LOW_SEG (SPEC.md 2.1), which is what SS names
+    pop es
     ; --- THE 0xCC FILL, and it is NOT a debug build's (SPEC.md 8.3) --------
     ; Every byte of the slice, so the deepest one anything ever touched can be
     ; read back out of LOW_SEG. The canary and the frame are written OVER this,
@@ -528,57 +818,68 @@ task_spawn:
     ; **UNCONDITIONAL, and that is the point.** It was `%ifdef KFZTRACE`, which
     ; meant the only kernel whose margin could be measured was one nobody runs -
     ; and the margin is the thing this project has just spent a week being
-    ; wrong about (docs/FIELD-NOTES.md 29.6). It costs ONE `rep stosb` of
-    ; SCH_STACK bytes per SPAWN - a few hundred microseconds, once, against a
-    ; launch that has already been through int 13h - and it turns
-    ; tests/stackprobe from a probe of its own slice into one that can read
-    ; EVERY task's high water on the shipping kernel, on the real machine,
-    ; while the thing under suspicion is running.
-    push cx                     ; CX is the slot index and is still needed
-    push di
-    push ax
-%if SCH_STACK % 2
-  %error "the word fill below wants an even SCH_STACK"
-%endif
-    mov cx, SCH_STACK / 2
+    ; wrong about (docs/FIELD-NOTES.md 29.6). It costs ONE `rep stosw` of the
+    ; slice per SPAWN - a few hundred microseconds, once, against a launch that
+    ; has already been through int 13h - and it turns tests/stackprobe from a
+    ; probe of its own slice into one that can read EVERY task's high water on
+    ; the shipping kernel, on the real machine, while the thing under suspicion
+    ; is running.
+    ;
+    ; THE FILL IS DONE FIRST, before the top is worked out, and that ordering
+    ; is what keeps this register-clean now that the size is per-slot: the
+    ; count IS the size, so taking it while AX still holds it costs one `mov`
+    ; and no second table read.
+    mov cx, ax
+    shr cx, 1                   ; ...as WORDS. SCH_SLOT's own %error is what
+                                ; keeps every size even, which this and the
+                                ; word canary below both need
     mov ax, 0xCCCC
     cld
     rep stosw                   ; ES:DI = the slice base, upwards - words,
                                 ; 12.5 clocks a byte against stosb's 17, and
                                 ; this whole fill runs inside the spawn's cli
-                                ; (the base is even: sch_stacks is aligned
-                                ; and slices are multiples of 128)
-    pop ax
-    pop di
-    pop cx
+    pop ax                      ; the size...
+    pop di                      ; ...the base...
+    pop cx                      ; ...and the slot index, which is NOT dead: the
+                                ; cycle counter and the return value both want
+                                ; it
     mov word [es:di], SCH_MAGIC
-    pop ax
-    sub ax, SCH_FRAME           ; carve the fake frame at the very top
+    add ax, di                  ; base + size = the slice TOP...
+    sub ax, SCH_FRAME           ; ...and the fake frame is carved from it
     mov di, ax
     mov [bx+T_SP], di
 
-    mov ax, LOW_SEG             ; the frame lives in LOW_SEG, so it is built
-    mov es, ax                  ; through ES - DS cannot reach it. AX is dead
-                                ; here: DI already carries the frame address
-                                ; and the xor below is its next use. CX IS
+                                ; the frame lives in LOW_SEG, so it is built
+                                ; through ES - DS cannot reach it. ES IS
+                                ; ALREADY LOW_SEG, loaded for the 0xCC fill
+                                ; above, and nothing between writes it. CX IS
                                 ; NOT DEAD - it is the slot index, and it is
                                 ; still needed for the cycle counter and the
                                 ; return value below
-    mov ax, [sch_newseg]
-    mov [es:di], ax                ; DS slot = the task's own segment
-    mov word [es:di+2], KERNEL_SEG ; ES slot: the kernel, always (SPEC 20.1)
+                                ; ...and DI is dead past the block: the frame
+                                ; address is already parked in T_SP above, so
+                                ; stosw may walk it. DF is 0 from the fill's
+                                ; own cld and nothing between touches it
+    mov ax, bp
+    stosw                       ; DS  = the task's own segment
+    mov ax, KERNEL_SEG
+    stosw                       ; ES  = the kernel, always (SPEC.md 20.1)
     xor ax, ax
-    mov [es:di+4], ax           ; BP
-    mov [es:di+6], ax           ; DI
-    mov [es:di+8], ax           ; SI
-    mov [es:di+10], ax          ; BX
-    mov [es:di+12], dx          ; DX = the spawn argument
-    mov [es:di+14], ax          ; CX
-    mov [es:di+16], ax          ; AX
-    mov [es:di+18], si          ; IP = entry
-    mov ax, [sch_newseg]
-    mov [es:di+20], ax          ; CS = the task's own segment
-    mov word [es:di+22], 0x0202 ; FLAGS: IF=1, reserved bit 1 set
+    stosw                       ; BP
+    stosw                       ; DI
+    stosw                       ; SI
+    stosw                       ; BX
+    xchg ax, dx                 ; one byte each way, and DX is wanted below
+    stosw                       ; DX  = the spawn argument
+    xchg ax, dx
+    stosw                       ; CX
+    stosw                       ; AX
+    mov ax, si
+    stosw                       ; IP  = entry
+    mov ax, bp
+    stosw                       ; CS  = the task's own segment
+    mov ax, 0x0202
+    stosw                       ; FLAGS: IF=1, reserved bit 1 set
     mov [bx+T_INST], dl         ; owning instance (0xFF = none)
     mov byte [bx+T_FLAGS], 0    ; TF_SERVICE is the driver cell's to set
                                 ; (SPEC.md 53.2), never inherited
@@ -587,8 +888,13 @@ task_spawn:
     shl ax, 1                   ; publish, so a reused slot never inherits
     shl ax, 1                   ; a dead task's total (SPEC.md 8.1)
     mov di, ax
-    mov word [di+sch_cycles], 0
-    mov word [di+sch_cycles+2], 0
+    xor ax, ax                  ; through AX: mov [m],ax is 4 bytes where
+    mov [di+sch_cycles], ax     ; mov word [m],0 is 6, and AX is free here
+    mov [di+sch_cycles+2], ax   ; (it held the FLAGS word, dead, and is
+                                ; reloaded from CX two lines below).
+                                ; [di+disp] addresses DS, not SS - DI is not
+                                ; BP - which is the addressing this already
+                                ; used
 
     mov byte [bx+T_STATE], 1    ; publish - MUST be the last record write
     mov ax, cx                  ; AL = slot index (1..MAX_TASKS-1)
@@ -598,6 +904,7 @@ task_spawn:
     cmp al, 1                   ; the answer is re-derived from AL here:
                                 ; AL = 0 -> CF = 1 (table full), else CF = 0.
                                 ; The pops below touch no flags.
+    pop bp
     pop es
     pop di
     pop si
@@ -620,7 +927,7 @@ task_spawn:
 ; -----------------------------------------------------------------------------
 task_yield:
 %ifdef KERN_BIG
-    ; --- the VMware absolute pointer's service point (SPEC.md 9.10.3) --------
+    ; --- the VMware absolute pointer's service point (SPEC.md 9.11.3) --------
     ; vmmouse is POLLED, not interrupt-driven, so every spin loop that waits on
     ; the mouse - a drag, a menu, the file manager's icon drag - has to pump it
     ; or the button-release it is waiting for never arrives (a freeze). They
@@ -640,6 +947,9 @@ task_yield:
     pop ax
     pop ds
 %endif
+    ; STKBALANCE-OK: fabricates the int 08h frame (pushf / push cs /
+    ; call .save), so the ret below is reached by the scheduler's iret and not
+    ; by .save returning - the depth at that ret is the frame, by design.
     pushf                       ; FLAGS slot - carries the caller's IF
     cli                         ; frame build + switch must be atomic
     push cs                     ; CS slot
@@ -656,8 +966,8 @@ task_yield:
     push bp
     push es
     push ds
-    mov ax, KERNEL_SEG          ; caller's DS is on the stack; we need ours
-    mov ds, ax
+    push cs                     ; caller's DS is on the stack; we need ours
+    pop ds
                                 ; NO sch_account HERE (SPEC.md 8.1.1). It used
                                 ; to charge the slice unconditionally, and on a
                                 ; machine with one runnable task that is 500
@@ -682,21 +992,42 @@ task_yield:
 ; out:      nothing (returns when the deadline has passed)
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
+; sch_currec - BX = the RUNNING task's record offset ([sch_cur] * T_SIZE)
+; in:  nothing
+; out: BX = the offset, so every caller's `[bx+sch_tasks+T_*]` is unchanged
+; clobbers: BX ONLY - not CX, which is why the multiply is three open shifts
+;      rather than the `mov cl,3 / shl bx,cl` the five sites spelled it with.
+;      instance.inc's inst_ctx_inst pushes BX and nothing else, and that is
+;      the site that decides the contract
+;
+; The idiom stood in six places and was spelled three different ways.  Five
+; are now calls; THE SIXTH IS NOT AND MUST NOT BE - sch_switch's copy is on
+; the switch path, where a near call and ret (~43 clocks) is 0.05% of an idle
+; machine but ~1.4% at the 1,541 switches a second docs/SCHED-IDLE-PLAN.md
+; 6.1.2 measures with an app open.  That is why this saves what it saves.
+;
+; PLACEMENT: outside the sch_isr -> sch_switch -> sch_resume fall-through run.
+; -----------------------------------------------------------------------------
+sch_currec:
+    mov bl, [sch_cur]
+    xor bh, bh
+    shl bx, 1                   ; T_SIZE = 8, as three open shifts: CX belongs
+    shl bx, 1                   ; to the callers here
+    shl bx, 1
+    ret
+
+; -----------------------------------------------------------------------------
 task_sleep:
     push ax
     push bx
-    push cx
-
-    mov bl, [sch_cur]           ; BX = current task record
-    xor bh, bh
-    mov cl, 3
-    shl bx, cl
+                                ; NO push cx: sch_currec clobbers BX only, and
+                                ; nothing else in this body names CX
+    call sch_currec             ; BX = current task record
     add ax, [ticks]
     mov [bx+sch_tasks+T_WAKE], ax       ; deadline first...
     mov byte [bx+sch_tasks+T_STATE], 2  ; ...then state (both stores atomic)
     call task_yield             ; switch away; we resume once state -> 1
 
-    pop cx
     pop bx
     pop ax
     ret
@@ -732,10 +1063,7 @@ task_exit:
     jz .norel
     mov byte [di], 0            ; release the instance record (SPEC.md 29)
 .norel:
-    mov bl, [sch_cur]           ; free our own task record
-    xor bh, bh
-    mov cl, 3
-    shl bx, cl
+    call sch_currec             ; free our own task record
     mov byte [bx+sch_tasks+T_STATE], 0
     jmp sch_switch              ; explicit jump - placement-safe
 
@@ -766,9 +1094,40 @@ task_exit:
 ; in:       IF=0, DS=KERNEL_SEG, [sch_cur] = the task being charged. Both
 ;           call sites (sch_isr, task_yield's save path) hold a complete
 ;           saved frame, so clobbering is safe.
-; clobbers: AX, BX, CX, DX, SI
+; out:      SI = 4 * [sch_cur], the byte offset of that task's slot inside
+;           sch_cycles - ON BOTH ARMS, including the sch_fast early-out,
+;           which charges nothing but still answers the question. task_cycles
+;           and task_debit used to re-derive this from the same [sch_cur]
+;           under the same cli; now they do not.
+; clobbers: AX, BX, CX, DX, SI - on BOTH arms now; the early-out used to
+;           clobber nothing. Every call site already tolerated the list:
+;           sch_isr holds a full frame, sch_switch's .pick pushes DX and BX,
+;           task_exit banks the record pointer in DI first, task_cycles and
+;           task_debit push BX/CX/SI.
+;
+; WHAT THE MOVE COSTS, said out loud. On the charging arm it is exactly
+; neutral - the same five instructions, relocated from .cohere, which every
+; path through that arm reaches anyway. On the sch_fast EARLY-OUT arm it is
+; 12 bytes of new straight-line code: 23 clocks of execution under a 52.1
+; fetch floor, so 52.1 clocks per entry, and that arm is taken only while an
+; fsx bracket is armed (SPEC.md 53.2.1). sch_isr calls this at .full, the
+; TICK, and not on sub-ticks, so the ISR's share of that is 18.2/s = 948
+; clocks a second = 0.020% of a 4.77 MHz 8088; each additional REAL task
+; change inside the bracket adds 52.1 more (100/s would be 0.11%), and the
+; freeze leaves at most the exclusive task, its kept worker and a driver's
+; service worker eligible. Outside a bracket sch_fast is 0, this arm is not
+; taken, and the change costs nothing at all. The alternative - a second copy
+; of the index block on the early-out arm - is 12 of the 24 bytes back for
+; that 0.02%, and the bytes win.
 ; -----------------------------------------------------------------------------
 sch_account:
+    mov bl, [sch_cur]           ; SI = &sch_cycles[sch_cur] - an OUTPUT, so it
+    xor bh, bh                  ; is computed before the early-out below and
+    shl bx, 1                   ; not after the charge. In BX, because CX
+    shl bx, 1                   ; carries the latched phase further down; and
+    mov si, bx                  ; hoisting it above the latch cannot change
+                                ; the reading, because nothing before the
+                                ; `out 0x43` affects it
     cmp byte [sch_fast], 0      ; the fsx sub-tick (SPEC.md 53.2.1) divides the
     jne .idle                   ; very period this arithmetic is built on, so
                                 ; accounting PAUSES for the bracket - here
@@ -798,12 +1157,7 @@ sch_account:
     sbb bx, [sch_pit_last+2]
     mov [sch_pit_last], cx
     mov [sch_pit_last+2], dx
-    mov cl, [sch_cur]           ; sch_cycles[sch_cur] += elapsed
-    xor ch, ch
-    shl cx, 1
-    shl cx, 1
-    mov si, cx
-    add [si+sch_cycles], ax
+    add [si+sch_cycles], ax     ; sch_cycles[sch_cur] += elapsed, at the SI
     adc [si+sch_cycles+2], bx
 .idle:
     ret
@@ -829,12 +1183,7 @@ task_cycles:
     push si
     pushf
     cli                         ; sch_account's contract: IF=0
-    call sch_account
-    mov cl, [sch_cur]
-    xor ch, ch
-    shl cx, 1
-    shl cx, 1
-    mov si, cx
+    call sch_account            ; ...which hands back SI = the slot's offset
     mov ax, [si+sch_cycles]
     mov dx, [si+sch_cycles+2]
     popf
@@ -874,12 +1223,7 @@ task_debit:
     mov di, dx                  ; clobbers AX/BX/CX/DX/SI, but not BP/DI
     pushf
     cli
-    call sch_account
-    mov cl, [sch_cur]
-    xor ch, ch
-    shl cx, 1
-    shl cx, 1
-    mov si, cx
+    call sch_account            ; ...which hands back SI = the slot's offset
     mov ax, [si+sch_cycles]
     mov dx, [si+sch_cycles+2]
     sub ax, bp                  ; DX:AX = now - start
@@ -941,7 +1285,8 @@ sched_mode_set:
     mov al, 1                   ; normalise: any non-zero means cooperative
 .store:
     mov [sch_coop], al
-    mov byte [sch_hold], 0      ; the incoming mode starts with a full budget
+    mov byte [sch_hold], SCH_WD_TICKS
+                                ; the incoming mode starts with a full budget
     popf
     pop ax
     retf
@@ -961,9 +1306,9 @@ sched_mode_set:
 ; out:      AL = 0 pre-emptive, 1 cooperative
 ; clobbers: AL (it is the output); flags untouched
 ; -----------------------------------------------------------------------------
-sched_mode_get:
-    mov al, [sch_coop]
-    ret
+sched_mode_get:                 ; FAR-ENTERED (SPEC.md 2.6.1): no near caller
+    mov al, [sch_coop]          ; of its own, so the shim that used to `call`
+    retf                        ; this and `retf` is gone
 
 ; -----------------------------------------------------------------------------
 ; sch_isr - int 08h handler (PIT, ~18.2 Hz)
@@ -1235,8 +1580,8 @@ sch_isr:
     push bp
     push es
     push ds
-    mov ax, KERNEL_SEG
-    mov ds, ax
+    push cs
+    pop ds
 
 %ifdef KFZTRACE
     ; --- the heartbeat (SPEC.md 7/8, KFZ only) -------------------------------
@@ -1298,15 +1643,15 @@ sch_isr:
     je .khbnodeep               ; and its SP means something else entirely
     push bx                     ; the old `neg al` depth assumed 256-byte
     push dx                     ; 256-ALIGNED slices; SCH_STACK is 384 now, so
-    mov al, [sch_cur]           ; odd slots sit at 128 mod 256 and the byte it
-    xor ah, ah                  ; produced was garbage on the instrument that
-    mov bx, SCH_STACK           ; aims the next stack cut. The slice TOP is
-    mul bx                      ; sch_stacks + cur*SCH_STACK (slot n's base is
-    add ax, sch_stacks          ; (n-1)*SCH_STACK), and depth = top - SP, less
-    sub ax, sp                  ; this sampler's own two pushes, so it agrees
-    sub ax, 4                   ; with khb_spl/khb_sph above - stored HALVED,
-    shr ax, 1                   ; so one byte holds 0..384 and
-    pop dx                      ; tools/stkwater.py doubles it back
+    mov bl, [sch_cur]           ; odd slots sit at 128 mod 256 and the byte it
+    xor bh, bh                  ; produced was garbage on the instrument that
+    shl bx, 1                   ; aims the next stack cut. THROUGH sch_stkbase
+    mov ax, [bx+sch_stkbase]    ; now, so this reader assumes nothing about the
+    add ax, [bx+sch_stksize]    ; layout OR the size: base + size is the TOP and
+    sub ax, sp                  ; depth = top - SP, less this sampler's own two
+    sub ax, 4                   ; pushes so it agrees with khb_spl/khb_sph
+    shr ax, 1                   ; above - stored HALVED, so one byte holds
+    pop dx                      ; 0..384 and tools/stkwater.py doubles it back
     pop bx
     cmp al, [cs:khb_deep]
     jbe .khbnodeep
@@ -1468,8 +1813,59 @@ sch_isr:
     mov al, [sch_fast]
     mov [sch_fcnt], al
 .full:
+    ; --- the ROM's chain, on a stack of its own (SPEC.md 8.5) ---------------
+    ; This one call is the largest single item in the interrupt floor, and it
+    ; is charged to whichever TASK SLICE was interrupted - 50 bytes plus the 6
+    ; of the pushf and the far call that reach it, and the ROM is not ours to
+    ; shrink. SS never changes (SPEC.md 1/2.1), so moving it costs SP alone.
+    ;
+    ; Registers are already saved here, so unlike SPEC.md 9.10's swap this one
+    ; needs no `cs:` override and a plain byte flag will do.
+%ifndef NO_CHAINPRIV
+    cmp byte [sch_chbusy], 0    ; NESTED? (SPEC.md 8.5.1) The ROM sends its EOI
+    jne .chskip                 ; and then stis, so a second IRQ0 can re-enter
+                                ; this ISR - and that one may not chain again
+                                ; on the private stack (sch_chsave is one
+                                ; word), and it is ALREADY on that stack, so
+                                ; the switch below is refused for it too: a
+                                ; task record must never hold a private SP.
+                                ; Everything else that can land in that window
+                                ; - int 09h, a mouse gate frame, the floppy's
+                                ; completion - nests harmlessly, and the stack
+                                ; is sized for it
+    mov ax, ss
+    cmp ax, LOW_SEG             ; **ONLY ON A TASK STACK** (SPEC.md 8.5). SS is
+    jne .chplain                ; LOW_SEG for every os8088 context, but not
+                                ; inside a ROM service that switched stacks -
+                                ; and int 13h runs with IF=1, taking 21 of
+                                ; these a transfer (15.3.8). SeaBIOS serves it
+                                ; on an internal stack in a segment of its own,
+                                ; so moving SP alone there put the chain at
+                                ; SS:sch_chstack in the ROM's segment. The IBM
+                                ; ROMs do not hop; where one does, the chain
+                                ; runs in place as it did before 8.5
+    inc byte [sch_chbusy]
+    mov [sch_chsave], sp
+    mov sp, sch_chstack + SCH_CHSTK
     pushf                       ; chain: BIOS ticks its count and sends EOI
     call far [sch_old08]
+    mov sp, [sch_chsave]        ; ...and the ROM's iret restored our IF=0 with
+    dec byte [sch_chbusy]       ; the flags the pushf banked, so this is back
+    jmp short .chained          ; inside the ISR's own contract
+.chplain:
+    pushf                       ; not a task stack: chain where we stand
+    call far [sch_old08]
+    jmp short .chained
+.chskip:
+    inc word [sch_chskip]       ; the claim in SPEC.md 8.5.1 is a READING, not
+                                ; an argument: STKDIAG publishes this
+    mov al, 0x20                ; ...and a skipped chain owes the EOI itself,
+    out 0x20, al                ; exactly as the sub-tick above does
+.chained:
+%else
+    pushf                       ; chain: BIOS ticks its count and sends EOI
+    call far [sch_old08]
+%endif
 %ifdef KFZTRACE
     inc byte [khb_chain]        ; THE CHAIN CAME BACK. khb_beat counts entries
     call khb_paint              ; ...and the strip is painted a SECOND time, or
@@ -1494,6 +1890,14 @@ sch_isr:
                                 ; runs every tick even during floppy reads.
                                 ; It no-ops itself while the fsx sub-tick is
                                 ; armed (SPEC.md 53.2.1)
+%ifndef NO_CHAINPRIV
+    cmp byte [sch_chbusy], 0    ; a NESTED tick is on sch_chstack (8.5.1):
+    jne .nospl                  ; the accounting above and the wake scan
+                                ; below fit there; the driver's tick and a
+                                ; spinner frame - 58 bytes on top of the
+                                ; chain's own 56 - do not, and there is no
+                                ; canary under them
+%endif
     call snd_tick               ; sound duties (SPEC.md 8.2/34): a called
                                 ; leaf, gated on snd_live until snd_init
                                 ; publishes; runs every tick in both modes,
@@ -1554,78 +1958,81 @@ sch_isr:
     add bx, T_SIZE
     loop .wake
 
+%ifndef NO_CHAINPRIV
+    cmp byte [sch_chbusy], 0    ; a NESTED tick is running on sch_chstack
+    jne sch_resume              ; (8.5.1): it may account and wake, which fit
+                                ; there, but it may not park a PRIVATE SP in a
+                                ; task record - the outer tick's frame is the
+                                ; interrupted task's and it is resumed below
+%endif
     cmp byte [sch_lock], 0      ; locked: count ticks but do not switch
     jne sch_resume
     cmp byte [sch_coop], 0
     je .sw                      ; pre-emptive: switch every tick
-    inc byte [sch_hold]         ; cooperative: only the watchdog switches
-    cmp byte [sch_hold], SCH_WD_TICKS
-    jb sch_resume
+    dec byte [sch_hold]         ; cooperative: only the watchdog switches.
+    jnz sch_resume              ; DOWN, not up: the decrement's own ZF is the
+                                ; test, so a second read and a compare go.
+                                ; Same 18 ticks either way - every entry to
+                                ; sch_switch re-arms the budget
     inc word [sch_wd_hits]      ; forced switch - diagnostic only
 .sw:
     ; fall through into sch_switch
 
 ; -----------------------------------------------------------------------------
-; sch_switch - common switch path (module-internal)
-;
-; Entered with IF=0, DS=KERNEL_SEG and a complete saved frame on the current
-; stack (from sch_isr or task_yield's save stub). Parks SP in the current
-; record, picks the next ready task round-robin (falling back to the current
-; task if nothing is ready), and resumes it.
-;
-; Clearing sch_hold is the FIRST thing done here, and deliberately on the
-; routine's single entry point rather than at each caller: the counter means
-; "ticks since the running task last reached the switch path", so every one of
-; the three ways in - fall-through from sch_isr, the explicit jmp from
-; task_yield's save path, the explicit jmp from task_exit - must clear it
-; (SPEC.md 8.2). Hence a task that yields voluntarily can never trip the
-; watchdog however long it runs in total; the "nothing ready, resume the
-; outgoing task" fallback below clears it too, so an idle single-task system
-; manufactures no watchdog hits; and a dying task clears it for its successor.
-; -----------------------------------------------------------------------------
 sch_switch:
-    mov byte [sch_hold], 0      ; the outgoing task reached the switch path
+    ; STKBALANCE-OK: the context switch. Its iret restores the NEXT task and
+    ; returns onto that task's stack, so a depth measured against whatever
+    ; entry walked in here is meaningless (SPEC.md 8). The walker stops on
+    ; arrival at an exempted routine, so this one line also covers task_exit
+    ; and inst_task_die, which both reach the switch by a tail jmp.
+    mov ax, ss                  ; **ONLY ON A TASK STACK** - the chain swap's
+    cmp ax, LOW_SEG             ; test (SPEC.md 8.5), for the same reason: a
+    jne sch_resume              ; ROM that hops stacks for int 16h (SeaBIOS
+                                ; does, for AH=01h, which ui_task polls with
+                                ; sch_lock CLEAR) would have its SP parked in
+                                ; the task record and task 0's canary read
+                                ; through its segment - a false STACK OVERFLOW
+                                ; panel, or a task resumed on a foreign SP.
+                                ; Not switching this tick is the whole cost.
+                                ; AX is free here: every entry arrives with
+                                ; the full frame saved
+    mov byte [sch_hold], SCH_WD_TICKS
+                                ; the outgoing task reached the switch path,
+                                ; so its watchdog budget is full again
     mov bl, [sch_cur]           ; park the outgoing task's SP
     xor bh, bh
     mov cl, 3
     shl bx, cl
     mov [bx+sch_tasks+T_SP], sp
 
-    ; --- the outgoing task's canary (SPEC.md 8): slot n's slice starts at
-    ; sch_stacks + (n-1)*SCH_STACK, and with SCH_STACK = 256 the offset part
-    ; is the slot index in the HIGH byte and nothing else - no multiply on
-    ; the switch path. Task 0 owns no slice of sch_stacks and is skipped. SS
-    ; is LOW_SEG, so the read needs no segment set-up. sch_stacks is NOT at
-    ; .lowbss offset 0 (font's glyph block precedes it); the math here is
-    ; symbol-relative and does not care. The alignb at the declaration
-    ; aligns only the BLOCK: with SCH_STACK = 384 the individual slices are
-    ; 128-aligned, and nothing may derive a slice base from SP's low bits
-    ; alone - the khb deep sampler and tests/stackprobe both did, and both
-    ; read garbage until they derived from sch_stacks + slot * SCH_STACK.
+    ; --- the outgoing task's canary (SPEC.md 8), through sch_stkbase above.
+    ; SS is LOW_SEG for every task including task 0, so the read needs no
+    ; segment set-up beyond the override; the table's own header says why
+    ; there is no arithmetic here any more, and why slot 0 needs no branch.
     mov bl, [sch_cur]
-    or bl, bl
-    jz .nocanary                ; task 0: its stack is above .lowbss, not in it
-    dec bl
-%if SCH_STACK == 256
-    mov bh, bl                  ; BX = (cur-1) * 256: the slot index in the HIGH
-    xor bl, bl                  ; byte and nothing else. Two instructions - and
-                                ; NOT the shipping configuration since the
-                                ; 8 x 384 move: the %else below is what ships
-%else
-    xor bh, bh                  ; ...and for any OTHER slice size, one 8-bit
-    mov ax, bx                  ; multiply: SCH_STACK is a multiple of 128 by
-    mov ah, SCH_STACK / 128     ; the guard above, so (cur-1) * (SCH_STACK/128)
-    mul ah                      ; shifted left 7 is the base. AX and CX are both
-    mov cl, 7                   ; free here - the outgoing task's copies are on
-    shl ax, cl                  ; the stack sch_resume pops from - and ~75
-    mov bx, ax                  ; clocks at 18.2 switches a second is 0.03% of
-%endif                          ; the machine. SCH_STACK is a CONSTANT AND A
-                                ; REBUILD now, which is what a change to it has
-                                ; to be if it is ever going to be taken
-    cmp word [ss:bx+sch_stacks], SCH_MAGIC
+    xor bh, bh
+    shl bx, 1
+    mov bx, [bx+sch_stkbase]
+    cmp word [ss:bx], SCH_MAGIC
     jne sch_stkdie
-.nocanary:
 
+    mov cl, 3                   ; T_SIZE = 8, so a slot index shifts left 3.
+                                ; ***CL IS LIVE FROM HERE TO .pick*** - the
+                                ; two `shl bx, cl` below share this one load,
+                                ; which also takes it out of the up-to-8
+                                ; iteration scan body. NOTHING ADDED BETWEEN
+                                ; HERE AND .pick MAY WRITE CX: .scan would
+                                ; then shift by a wrong count, .pick would
+                                ; load SP from a mis-strided record and
+                                ; sch_resume would iret into nothing. It is
+                                ; set below the canary check and not above it
+                                ; because that check is free to use CL. It no
+                                ; longer does - sch_stkbase took the multiply
+                                ; out - but the ordering is kept: it costs
+                                ; nothing and it is one fewer thing to get
+                                ; wrong if anything is ever put back there.
+                                ; Past .pick, `call sch_account` clobbers CX
+                                ; and nothing reads CL again.
     mov dl, [sch_cur]           ; scan cur+1, cur+2, ... (cur itself last)
     mov dh, MAX_TASKS
 .scan:
@@ -1636,8 +2043,7 @@ sch_switch:
 .nowrap:
     mov bl, dl
     xor bh, bh
-    mov cl, 3
-    shl bx, cl
+    shl bx, cl                  ; CL = 3, set once above the scan
     cmp byte [bx+sch_tasks+T_STATE], 1
     jne .skip
     cmp dl, [sch_idleslot]      ; the idle task is picked at the fallback
@@ -1660,8 +2066,7 @@ sch_switch:
 .idlepick:
     mov bl, dl
     xor bh, bh
-    mov cl, 3
-    shl bx, cl
+    shl bx, cl                  ; CL = 3, set once above the scan
 .pick:
     ; --- charge the OUTGOING task, and ONLY on a real change (SPEC.md 8.1.1)
     ; [sch_cur] still names the task that just ran, which is what sch_account
@@ -1718,9 +2123,16 @@ sch_resume:
 ;
 ; So it stops, loudly and reproducibly. A halted machine is a bug report; a
 ; machine that carries on is a bug that gets blamed on something else three
-; subsystems away. This is a can't-happen path - 256 bytes is 1.8x the
-; measured worst case - and it exists so that "can't" is checked rather than
-; assumed. Re-run the 0xCC fill probe (docs/KERNEL-MEMORY.md) if it ever hits.
+; subsystems away.
+;
+; IT IS NOT A CAN'T-HAPPEN PATH, and this comment said it was. It read "256
+; bytes is 1.8x the measured worst case" - a sentence about a SCH_STACK that
+; has since been 512 and is now 384, and about a margin the FIELD has since
+; spent: docs/FIELD-NOTES.md 29.6 is an overrun of 256, which is what moved
+; the constant. So the margin is a measurement that goes stale, not a proof,
+; and this is a live check. Re-run the 0xCC fill probe (docs/KERNEL-MEMORY.md,
+; tools/stkwater.py) if it ever hits, and read SCH_STACK's own header for what
+; the deepest mark actually was.
 ; -----------------------------------------------------------------------------
 sch_stkdie:
 %ifdef KFZTRACE
@@ -1730,8 +2142,8 @@ sch_stkdie:
     ; reports. Silent, it is indistinguishable from a wild jump; one solid bar
     ; and a task number turn it into a diagnosis a photograph can carry.
     ; Registers are free: the next instruction halts for ever.
-    mov ax, KERNEL_SEG
-    mov ds, ax
+    push cs
+    pop ds
     mov bx, [vid_rseg]
     or bx, bx
     jz .nomark                  ; no adapter yet: nothing to say it on
@@ -1761,9 +2173,271 @@ sch_stkdie:
 .nomark:
 %endif
     cli
+    call sch_diepanel           ; SPEC.md 8.8 - and if anything in there is
+                                ; itself broken, the hang below is still the
+                                ; behaviour this routine promises
 .hang:
     hlt
     jmp short .hang
+
+; -----------------------------------------------------------------------------
+; sch_diepanel - WHAT DIED, on the glass (SPEC.md 8.8)
+;
+; in:  DS = KERNEL_SEG, SS = LOW_SEG, IF = 0, [sch_cur] = the slot that overran
+; out: never usefully returns; every register clobbered
+;
+; The panel a stack overflow used to print was NOTHING AT ALL. `cli`/`hlt` is
+; the correct thing to DO and a terrible thing to WATCH: the field reports "it
+; froze", which is the same sentence a wild jump, a lost IRQ and a livelock all
+; produce, and a session then spends its first hour deciding which of the four
+; it is looking at. SPEC.md 8.8 is what these two lines save.
+;
+; WHY IT IS SAFE TO DRAW HERE, when the comment above sch_stkdie says nothing
+; is. That comment is about the WINDOW MANAGER - `wm_paint_all` on the
+; corrupted stack that got us here - and this takes none of that. It calls one
+; primitive, `font_run`, which takes no lock, claims nothing, and reads only
+; the video geometry and the glyph table, both settled since boot. What it
+; needs from this routine is three things the dying machine cannot be trusted
+; to have left it:
+;
+;   * **A STACK THAT IS NOT THE DEAD ONE.** SP is currently somewhere below the
+;     dead slice's canary, scribbling on the slot underneath. So the evidence -
+;     the slot, its parked SP, its instance - is banked into `.bss` FIRST, in
+;     nine instructions on the stack we arrived on, and only then is SP moved.
+;     It moves to task 0's, the largest in the machine and, at IF = 0 for ever,
+;     owned by nobody: if task 0 is itself the corpse then its contents are
+;     already banked and overwriting them costs the panel nothing.
+;   * **NO ARMED CLIP REGION.** `font_run` honours one (SPEC.md 11.3), and a
+;     package that died mid-paint left one armed - so the panel would be
+;     clipped to the window of the program that has just killed the machine.
+;     One store, and it is the difference between this working and this
+;     working *except in the case it exists for*.
+;   * **NOTHING ELSE.** No lock is taken and none is waited on: a lock is an
+;     agreement between things that are still running, and nothing is.
+;
+; IT IS `font_run` AND NOT `gfx_fill` + `font_str`, for SPEC.md 6.6's reason
+; and one of its own: the pair leaves the glyph TRANSPARENT over whatever the
+; desktop had under it, and a panel nobody can read is worse than no panel at
+; all. One pass puts a ground under the letters wherever the window happened
+; to be - and it is the same primitive on all three adapters, which is what
+; keeps this small enough to exist.
+; -----------------------------------------------------------------------------
+SDP_X       equ 8               ; hard left and under the menu bar, so it needs
+SDP_Y       equ 24              ; no geometry: it fits 720, 640 and 640 alike.
+                                ; ONE LINE, at 54 characters of the 80 the
+                                ; narrowest adapter here has - two would cost a
+                                ; row variable, its initialiser and its
+                                ; advance, and this has a byte budget
+
+sch_diepanel:
+    mov bl, [sch_cur]           ; --- bank the evidence, still on the dead
+    mov [sch_dpn], bl           ;     stack: after this nothing here reads a
+    xor bh, bh                  ;     task record, so nothing here cares that
+    mov cl, 3                   ;     the table is suspect
+    shl bx, cl
+    mov ax, [bx+sch_tasks+T_SP]
+    mov [sch_dpsp], ax
+    mov al, [bx+sch_tasks+T_INST]
+    mov [sch_dpi], al
+
+    mov sp, STK0_TOP            ; ...and OFF it (see the header)
+    mov word [wm_clip_n], 0     ; nothing may clip the panel away
+    mov word [sch_dpcol], SDP_X
+
+    mov si, sch_s_over          ; WHAT happened, WHICH task, WHOSE, and where
+    call sch_dpstr              ; its SP was. The slice's BASE and SIZE are
+    mov al, [sch_dpn]           ; deliberately not here: they are
+    call sch_dphex2             ; sch_stkbase[n] and sch_stksize[n] in the very
+    mov si, sch_s_sp            ; binary the reader has open, and the slot
+    call sch_dpstr              ; number is the whole of what it takes to look
+    mov ax, [sch_dpsp]          ; them up
+    call sch_dphex4
+    mov si, sch_s_in
+    call sch_dpstr
+    mov al, [sch_dpi]
+    cmp al, 0xFF                ; the UI task owns no instance record
+    je .ui
+    xor ah, ah
+    mov cl, 5                   ; I_RECSZ = 32
+    shl ax, cl
+    add ax, inst_tab + I_NAME
+    xchg ax, si
+    jmp short .name
+.ui:
+    mov si, sch_s_ui
+.name:
+    jmp short sch_dpstr         ; its `ret` is ours
+
+; sch_dpstr - the ASCIIZ at DS:SI, at the pen, which then advances past it
+sch_dpstr:
+    mov cx, [sch_dpcol]
+    mov dx, SDP_Y
+    mov ax, 0x0F00              ; AL = 0 ink on AH = 15 ground: BLACK ON WHITE,
+                                ; which is the one pair that reads on all three
+                                ; adapters and on any desktop pattern under it
+    push ds
+    pop es                      ; font_run_x takes the string at ES:SI
+    call font_run
+.adv:
+    lodsb                       ; the pen moves by what was actually drawn, so
+    or al, al                   ; no caller ever counts a string's length
+    jz .out
+    add word [sch_dpcol], 8
+    jmp short .adv
+.out:
+    ret
+
+; sch_dphex4 / sch_dphex2 - AX / AL as hex at the pen, most significant first
+sch_dphex4:
+    push ax
+    mov al, ah
+    call sch_dphex2
+    pop ax
+sch_dphex2:
+    push ax
+    mov cl, 4
+    shr al, cl
+    call .nib
+    pop ax
+.nib:
+    and al, 0x0F
+    add al, '0'
+    cmp al, '9'
+    jbe .put
+    add al, 'A' - '0' - 10
+.put:
+    mov [sch_dphc], al          ; one digit as a one-character STRING, so the
+    mov si, sch_dphc            ; hex path and the text path are the same two
+    jmp short sch_dpstr         ; lines of drawing code and not two copies
+
+sch_s_over: db 'STACK OVERFLOW  TASK ', 0   ; grep the tree for this sentence
+sch_s_sp:   db '  SP ', 0                ; and SPEC.md 8.8 is the first hit
+sch_s_in:   db '  ', 0
+sch_s_ui:   db 'UI TASK', 0
+
+; -----------------------------------------------------------------------------
+; sch_stkbase - where slot n's stack BOTTOM is, one word per slot
+;
+; The canary word lives at the bottom of every stack (SCH_MAGIC), so this is
+; both "the base of the slice" and "where the canary is", and every consumer
+; wants one or the other.
+;
+; IT REPLACES ARITHMETIC, and that is the point rather than a side effect.
+; sch_switch used to DERIVE the base from the slot index, which needed a
+; multiply in the general case and carried two hand-written special cases
+; beside it - one for SCH_STACK = 256 that had not shipped since the 8 x 384
+; move, and one for 384 that decomposed it into two shifts. The comment on
+; that block records the failure mode the whole time it existed: two
+; instruments derived the base a DIFFERENT wrong way (from SP's low bits) and
+; read garbage, because a derivation is something every reader has to get
+; right independently and a table is something they look up.
+;
+; A DERIVATION ALSO CANNOT SURVIVE VARIABLE SIZES, which is what
+; docs/STACK-SLOTS-PLAN.md 6 needs: with classes there is no expression from
+; the slot index to the base at all. So the table is the enabling mechanism as
+; well as the simplification, and both of those were true before any class
+; existed.
+;
+; IT SITS BELOW sch_stkdie's HANG LOOP, and that placement is load-bearing.
+; The obvious home for it is beside sch_switch, which is where it went first -
+; and sch_isr FALLS THROUGH into sch_switch, so sixteen bytes of `dw` placed
+; there are sixteen bytes the TIMER ISR EXECUTES on every tick. It cost an hour
+; and every symptom pointed elsewhere: kern_big survived it, kern_small booted
+; to a task resuming with CS = 0xCCCC (task_spawn's own fill, SPEC.md 8.3), and
+; a bisect that reverted every line of logic still failed - because the failure
+; was the DATA, not the code. The control that named it was padding a different
+; module by the same sixteen bytes, which changed nothing. A `hlt` / `jmp $` is
+; the one place in this file nothing can fall through.
+;
+; IT IS IN .text WITH REAL INITIALISERS, not .bss with a loop. The partition is
+; fixed at assembly time - the slices exist from boot and are never handed out
+; or given back (STACK-SLOTS-PLAN 6.2) - so a table of `dw`s costs 2 bytes a
+; slot and no init code at all, where .bss would cost the same 2 bytes plus the
+; loop that fills them. It cannot be corrupted either, which for the word that
+; says where a canary is worth having.
+;
+; SLOT 0 IS IN IT. Task 0 runs on SS:STK0_TOP rather than a slice of
+; sch_stacks, and the old arithmetic had to branch around it (`or bl, bl / jz
+; .nocanary`). A table just holds STK0_BOT there - which sched_init already
+; seeds with SCH_MAGIC - so the branch goes AND task 0's canary is now checked
+; on every switch, where before only a KFZ build ever looked at it.
+; -----------------------------------------------------------------------------
+sch_stkbase:
+%macro SCH_SLOT 1
+    dw sch_stacks + sch_stk_off
+    %assign sch_stk_off sch_stk_off + (%1)
+%endmacro
+    dw STK0_BOT                 ; slot 0: the UI task, above .lowbss
+%assign sch_stk_off 0
+    SCH_PARTITION               ; ...and slots 1 up, in SCH_PARTITION's order
+%unmacro SCH_SLOT 1
+
+; -----------------------------------------------------------------------------
+; sch_stksize - and how BIG it is, one word per slot, in bytes
+;
+; The other half of sch_stkbase, from the same list, and it exists because a
+; base alone stopped being enough the moment the slices stopped being the same
+; size. Everything that wants a slice's TOP - task_spawn's frame carve, its
+; 0xCC fill, the KFZ deep sampler, the STKDIAG panel - wants base + size, and
+; every one of them used to write `+ SCH_STACK` and be right by the luck of
+; uniformity.
+;
+; A WORD AND NOT A BYTE-IN-UNITS-OF-64, which was tried first and cost more
+; than the 14 bytes it saved: every consumer had to shift, and a shift by 6
+; wants CL, which is a register task_spawn does not have spare. Indexed by
+; slot*2 it shares sch_stkbase's own index, so the pair costs one `shl` between
+; them and the scan compares a request against a slot in one instruction.
+;
+; Slot 0 is in it for sch_stkbase's reason: a table with a hole in it is a
+; table every reader has to remember the hole in.
+; -----------------------------------------------------------------------------
+sch_stksize:
+%macro SCH_SLOT 1
+    dw %1
+%endmacro
+    dw STK0_SIZE                ; slot 0: the UI task's 1,024
+    SCH_PARTITION
+%unmacro SCH_SLOT 1
+
+; -----------------------------------------------------------------------------
+; sch_clsbytes - the CLASSES a package may ask for, by index (SPEC.md 8.7)
+;
+; A package declares one byte in its header (LD_H_CLASS) and this is what that
+; byte means. An INDEX rather than the size itself, for two reasons: a byte
+; cannot hold 384, and an index makes the set of legal answers a closed list
+; the kernel owns - so a package cannot ask for 200 and be given a slice that
+; does not exist, and the list can be re-cut without every package being wrong.
+;
+; INDEX 0 IS "NO OPINION" AND MEANS THE LARGEST, which is what makes the field
+; free to adopt: every package built before it has 0 there, and 0 gets exactly
+; the stack it always had.
+; -----------------------------------------------------------------------------
+sch_clsbytes:
+    dw SCH_STACK                ; 0: unspecified - the largest class
+    dw 128                      ; 1: a sleeper. The idle task, a C package
+    dw 192                      ;    whose worker only sleeps, a Timer, a
+    dw 256                      ;    Bounce, a driver's stream task
+    dw SCH_STACK                ; 4: the largest, asked for on purpose
+SCH_NCLASS  equ ($ - sch_clsbytes) / 2
+
+; -----------------------------------------------------------------------------
+; sch_switch - common switch path (module-internal)
+;
+; Entered with IF=0, DS=KERNEL_SEG and a complete saved frame on the current
+; stack (from sch_isr or task_yield's save stub). Parks SP in the current
+; record, picks the next ready task round-robin (falling back to the current
+; task if nothing is ready), and resumes it.
+;
+; RE-ARMING sch_hold is the FIRST thing done here, and deliberately on the
+; routine's single entry point rather than at each caller: the counter means
+; "ticks of watchdog budget left since the running task last reached the switch
+; path", so every one of the three ways in - fall-through from sch_isr, the
+; explicit jmp from task_yield's save path, the explicit jmp from task_exit -
+; must re-arm it (SPEC.md 8.2). Hence a task that yields voluntarily can never
+; trip the watchdog however long it runs in total; the "nothing ready, resume
+; the outgoing task" fallback below re-arms it too, so an idle single-task
+; system manufactures no watchdog hits; and a dying task re-arms it for its
+; successor.
 
 ; -----------------------------------------------------------------------------
 
@@ -1772,34 +2446,90 @@ sch_stkdie:
 ; =============================================================================
 section .lowbss                         ; LOW_SEG, reached through SS (SPEC.md 2.1)
 
-resb (256 - (($-$$) % 256)) % 256       ; keep the BLOCK on a 256-byte
-                                        ; boundary (alignb spelled out - NASM
+resb ($-$$) % 2                         ; keep the BLOCK on a WORD boundary,
+                                        ; and a word is the whole of what it
+                                        ; needs (alignb spelled out - NASM
                                         ; refuses the macro form against this
-                                        ; nobits section). The BLOCK only:
-                                        ; with SCH_STACK = 384 an individual
-                                        ; slice is 128-aligned, so nothing may
-                                        ; derive a slice base from SP's low
-                                        ; bits - the canary math above and
-                                        ; tests/stackprobe both work from
-                                        ; sch_stacks + slot * SCH_STACK. Free
-                                        ; today: font's 768-byte block
-                                        ; precedes this one and 768 is
-                                        ; already a multiple
-sch_stacks: resb (MAX_TASKS-1) * SCH_STACK ; slots 1..MAX_TASKS-1: slot n's stack
-                                        ; top at n*SCH_STACK relative to
-                                        ; sch_stacks, which is NOT offset 0
+                                        ; nobits section). It was 256 for
+                                        ; twelve months and nothing ever asked
+                                        ; for 256: with SCH_STACK = 384 an
+                                        ; individual slice is 128-aligned
+                                        ; anyway, so nothing may derive a
+                                        ; slice base from SP's low bits, and
+                                        ; every consumer works from
+                                        ; sch_stacks + slot * SCH_STACK -
+                                        ; sch_switch's canary arm, task_spawn's
+                                        ; fill, tests/stackprobe (whose own
+                                        ; comment records that the high-byte
+                                        ; trick WAS the bug), tools/stkwater.py,
+                                        ; tools/kfzread.py and tests/ftpd.py.
+                                        ; WORD is required and is required by
+                                        ; two: the canary is a word written at
+                                        ; the slice base, and task_spawn fills
+                                        ; the slice with `rep stosw`. SCH_STACK
+                                        ; is even (the %error beside that fill
+                                        ; says why), so an even BLOCK base makes
+                                        ; every slice base even.
+                                        ; It cost 42 bytes of .lowbss on
+                                        ; kern_big and 0 on kern_small, which is
+                                        ; the tightest rung in the kernel.
+%ifndef NO_CHAINPRIV
+sch_chstack: resb SCH_CHSTK             ; the ROM int 08h chain's own stack
+                                        ; (SPEC.md 8.5). .lowbss and not .bss
+                                        ; because SS is LOW_SEG for every task
+                                        ; and the swap moves SP alone. It is
+                                        ; declared ABOVE sch_stacks' alignment
+                                        ; guard on purpose: SCH_CHSTK is even,
+                                        ; so it cannot disturb it, and the
+                                        ; %error below is what proves that on
+                                        ; every build rather than on this one
+%endif
+sch_stacks: resb SCH_STK_TOTAL          ; slots 1..MAX_TASKS-1, one slice per
+                                        ; SCH_SLOT line of SCH_PARTITION in that
+                                        ; order; a slice's bottom is
+                                        ; sch_stkbase[n] and its size
+                                        ; sch_stksize[n] - nothing derives
+                                        ; either (SPEC.md 8.6)
                                         ; of .lowbss (font_glyphs precedes
                                         ; it). Slot 0 = the UI task runs on
                                         ; the task-0 stack, SS:STK0_TOP,
                                         ; which grows down from above this
                                         ; section - it needs no reservation
+%if (sch_stacks - $$) % 2
+  %error "sch_stacks must be WORD-aligned in .lowbss: sch_switch's canary is a word written at the slice base and task_spawn fills the slice with `rep stosw`. The pad above this label is what guarantees it - do not delete it, and do not put an odd `resb` between it and this label"
+%endif
 
 section .bss
 
 sch_tasks:  resb MAX_TASKS * T_SIZE     ; task records (layout above)
 sch_old08:  resb 4                      ; saved BIOS int 08h vector (off:seg)
+sch_dpcol:  resw 1                      ; the death panel's pen x (SPEC.md
+                                        ; 8.8); its y is the constant SDP_Y
+sch_dpsp:   resw 1                      ; ...and the evidence it banks off the
+sch_dpn:    resb 1                      ; dead stack before it leaves it: the
+sch_dpi:    resb 1                      ; parked SP, the slot and its instance
+sch_dphc:   resb 2                      ; one hex digit, as an ASCIIZ string
+%ifndef NO_CHAINPRIV
+sch_chsave: resw 1                      ; the task's SP across the chain...
+sch_chskip: resw 1                      ; ...how many chains a nested tick has
+                                        ; skipped (SPEC.md 8.5.1), so the
+                                        ; "one transfer in 280" claim is a
+                                        ; reading. STKDIAG publishes it
+sch_chbusy: resb 1                      ; ...and non-zero while the ROM has it
+%endif
 ticks:      resw 1                      ; public tick count, wraps at 65536
-sch_cur:    resb 1                      ; index of the running task
+sch_cur:    resb 1                      ; index of the running task. ALWAYS a
+                                        ; live slot, 0..MAX_TASKS-1: 0xFF is
+                                        ; NOT available here as a "nothing
+                                        ; running" sentinel, because fsx_mine
+                                        ; reads this byte and the one below as
+                                        ; ONE WORD and 0xFF is fsx_task's OFF
+                                        ; value - two sentinels would compare
+                                        ; equal and grant a bracket to nobody.
+                                        ; fsx_mine refuses on the RANGE for
+                                        ; that reason, so the failure is now a
+                                        ; refusal rather than a mode set; this
+                                        ; line is why the range test is there
 fsx_task:   resb 1                      ; the fsx freeze (SPEC.md 53.2):
                                         ; 0xFF off, else the exclusive
                                         ; task's slot. Scheduler state
@@ -1826,17 +2556,24 @@ sch_subs:   resw 1                      ; free-running IRQ0 entries, SUB-TICKS
                                         ; wrap at 65536 is not a case
 sch_coop:   resb 1                      ; mode (SPEC.md 8.2): 0 pre-emptive,
                                         ; 1 cooperative; sched_mode_set/_get
-sch_hold:   resb 1                      ; ticks the running task has held the
-                                        ; CPU since the last entry to
-                                        ; sch_switch; only counts up while
-                                        ; sch_coop is set and sch_lock clear,
-                                        ; and is compared against
-                                        ; SCH_WD_TICKS (18) on the tick that
-                                        ; incremented it, so it cannot pass 18
-sch_newseg: resw 1                      ; task_spawn scratch: the code segment
-                                        ; of the task being built (IF=0, so
-                                        ; it cannot race a second spawner)
-sch_uiwake: resb 1                      ; an ISR woke the UI task; spent at
+sch_hold:   resb 1                      ; ticks of watchdog budget LEFT to the
+                                        ; running task: armed to SCH_WD_TICKS
+                                        ; on every entry to sch_switch and
+                                        ; counted DOWN, only while sch_coop is
+                                        ; set and sch_lock clear. The
+                                        ; decrement's own ZF is the test, so
+                                        ; there is no second read and no
+                                        ; compare. The only 0 it holds is the
+                                        ; transient one that falls straight
+                                        ; into sch_switch and re-arms -
+                                        ; sched_init arms it BEFORE it hooks
+                                        ; int 08h, so the ISR never sees
+                                        ; .bss's zero, which here would wrap
+                                        ; to 255 rather than count as 1
+sch_uiwake: resb 1                      ; an ISR woke the UI task - or a saver
+                                        ; frame came back already due, which
+                                        ; is the same statement from inside
+                                        ; the pass (SPEC.md 8.1.2.4); spent at
                                         ; ui_task's .idle (SPEC.md 8.1.2.3)
 sch_idlewake: resb 1                    ; the same wake, for the idle task's
                                         ; halt guard; spent at sch_idle_body's
@@ -1851,5 +2588,12 @@ sch_idleslot: resb 1                    ; the idle task's slot, or 0xFF for
 sch_wd_hits: resw 1                     ; watchdog-forced switches; diagnostic
                                         ; only (QMP xp on segment 0x0800),
                                         ; wraps mod 65536, never reset
+
+; sch_wake_ui sets BOTH wake bytes with one `mov word [sch_uiwake], 0x0101`.
+; The labels cannot be folded at the store's own line, so the guard lives here,
+; after the declarations.
+%if sch_idlewake - sch_uiwake != 1
+  %error "sch_wake_ui sets both wake bytes with ONE word store (SPEC.md 8.1.2) - keep sch_uiwake and sch_idlewake adjacent, in that order"
+%endif
 
 section .text

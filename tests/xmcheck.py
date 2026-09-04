@@ -42,10 +42,16 @@ the same run leaves all three blocks live at KB=4 owner=1 after the close.
 import os
 import subprocess
 import sys
+import os88qemu                                              # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-XM_BLKSZ, XM_MAX_BLKS = 8, 8        # kernel/kernel.asm
+XM_BLKSZ, XM_MAX_BLKS = 8, 8        # XM_MAX_BLKS: kernel/kernel.asm.
+                                    # XM_BLKSZ: drivers/xmem/xmem.asm, NOT
+                                    # kernel.asm - it is the image's, and it
+                                    # is the stride this file decodes xm_tab
+                                    # with, so a wrong citation sends the next
+                                    # reader to the wrong file to check it
 DRVR_SEG = 2                        # kernel/driver.inc, into xm_row
 XB_OFF, XB_KB, XB_OWN = 0, 2, 4
 XM_OWN_KERN = 0xFF
@@ -243,6 +249,9 @@ def boot():
     for f in (SOCK, PID):
         if os.path.exists(f):
             os.remove(f)
+    # `make test` DAEMONISES the emulator, so it outlives this script
+    # unless somebody kills it - and the somebody is us (os88qemu).
+    os88qemu.own()
     r = subprocess.run(["make", "test", "TESTAPPS=" + XMIMG],
                        capture_output=True, text=True, cwd=ROOT)
     if r.returncode:

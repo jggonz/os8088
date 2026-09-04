@@ -38,14 +38,35 @@ import os, re, sys, glob
 CALL = re.compile(r'\b(?:call|jmp|j[a-z]{1,3}|loop[a-z]{0,2})\s+'
                   r'(?:(?:near|short)\s+)?(?:(\w+):)?([A-Za-z_]\w*)\b')
 # an API cell macro whose body near-calls its LAST argument
-CELL = re.compile(r'^\s*OSAPI_(?:SLOT|NSTUB|XSTUB)\s+(?:\w+\s*,\s*)?'
-                  r'([A-Za-z_]\w*)\s*$')
-MODS = ('.modc', '.modf', '.modl')   # on-demand module images (SPEC.md 2.8).
+CELL = re.compile(r'^\s*OSAPI_(?:SLOT|JSLOT|NSTUB|XSTUB)\s+(?:\w+\s*,\s*)?'
+                  r'([A-Za-z_]\w*)\s*(?:,\s*\d+\s*)?$')
+# ...and the two-or-three-argument cells DEFINE their first argument, as `%1:`
+# inside the macro body.  A `name:` scan cannot see that, so the 45 OSAPI_JSLOT
+# targets were not merely untested above - they were not in the label map at
+# all, which is how adding JSLOT alone would have bought nothing.
+CELLDEF = re.compile(r'^\s*OSAPI_(?:NSTUB|XSTUB)\s+([A-Za-z_]\w*)\s*,')
+MODS = ('.modc', '.modf', '.modl', '.modh', '.modp', '.modd')  # module images (2.8).
+# `.modp` is Cut/Copy/Paste and kern_small's ALONE (SPEC.md 22.3,
+# docs/KERN-SMALL-MODULE-SPLIT.md 9.2): filecp.inc emits its bodies there on
+# that build and into `.cold` on kern_big, which is the first conditional
+# `section` in the tree. This scanner reads SOURCE and cannot evaluate the
+# %ifdef, so it files those bodies as `.modp` on both - which is why filecp.inc
+# now carries exactly ONE such switch and every call that leaves the image goes
+# through its FCPX/FCPXJ macros. A near call inside the body is then
+# `.modp -> .modp` and true on either build. `.modd` is fdlg.inc on the same
+# terms (SPEC.md 38.0) and obeys the same three rules.
+# `.modh` is hiber.inc's HIBER.DRV (SPEC.md 87) - a stub on kern_small - and
+# was missing from this list when it shipped, so every label in it filed as
+# `.text` and a near call from the module into the kernel passed in silence.
 # **A section added here and nowhere else is a section NOTHING below checks**,
 # which is how `.modl` shipped once with the near-call check blind to it - the
 # clone module's every `call COLD_SEG:` was correct, and would not have been
 # reported had one been near.
-FAR = ('.boot2', '.ovl', '.cold') + MODS   # sections with a vstart of their own
+FAR = ('.boot2', '.ovl', '.ovlw', '.cold') + MODS  # sections with a vstart
+# `.ovlw` is the boot overlay's OTHER half (SPEC.md 2.5.3): the bodies that are
+# dead at the first mount rather than at spl_finish, landing on FAT_SEG off the
+# kernel's own read.  It has a vstart of its own for `.ovl`'s reason and every
+# rule below that names one names both.
 
 
 # A file the kernel %includes from OUTSIDE kernel/, and the section its
@@ -83,15 +104,75 @@ EXTRA = {'apps/os88ui.inc': '.cold',
          'kernel/clockw.inc': '.modc'}
 
 
+# THE SECTION WALK, DONE ONCE PER FILE AND KEPT.  Every check below wants the
+# same (section, line) sequence, and there are eighteen loops over it: walking
+# the file per check is the same parse eighteen times, which measured as 1.86M
+# line-parses over 110,920 lines of kernel and 78% of this tool's run time
+# (2.16s -> 1.00s, and every `make` pays it once).
+# The cache is keyed on the path and never invalidated, which is correct for a
+# process that reads each file and exits; a caller that edits kernel/ and asks
+# again inside one process would get the old answer, and there is none.
+#
+# `section` as a SUBSTRING before the regex is the second half of it: a line
+# matching SECT must contain the word, and almost none of them do, so the
+# test that costs a byte scan replaces one that costs a regex.
+SECT = re.compile(r'^\s*section\s+(\.\w+)')
+_WALK = {}
+
+# ...and the rest of the per-line patterns, compiled once for the same reason.
+# `re.match(r'...')` is not free: it is a cache lookup and two function calls
+# per line per check, and there are 564k of them left after the walk above.
+# The ones built with `%` interpolation further down are deliberately NOT
+# here - re's own cache is what serves a pattern whose text is not a constant.
+MACRO_D = re.compile(r'^\s*%macro\s+(\w+)')
+MACRO_B = re.compile(r'^\s*%macro\b')
+ENDMACRO = re.compile(r'^\s*%endmacro')
+ENDMACRO_B = re.compile(r'^\s*%endmacro\b')
+LABEL = re.compile(r'^([A-Za-z_]\w*):')
+LABEL_DOT = re.compile(r'^[A-Za-z_.]\w*:')
+DRVBOOT = re.compile(r'^\s*OVL(?:GATE1?|CALL)\s+drv_boot_x\b')
+OVWCALL = re.compile(r'\bOVWCALL\s+(\w+)')
+CSMEM = re.compile(r'\[[^]]*\bcs\s*:')
+RESERVE = re.compile(r'^\s*([A-Za-z_]\w*)\s*:?\s*(?:res[bwdqt])\b')
+WORD = re.compile(r'\b\w+\b')
+# A label a MACRO PASTES TOGETHER - `%1 %+ _pack:` in driver.inc's CFG_DATA,
+# CFG_SHARED, CFG_BOOT and CFG_SAVE - is `ovc_pack` or `cpc_pack` once
+# expanded, and a `name:` scan never sees it: it entered no map (where, half,
+# mdata, rets), so a near call into `ovc_load` from `.text` was reported by
+# NOTHING. driver.inc's own comment above ovl_cfg_load says as much and routes
+# the one crossing through a plain label to give the gate something to look
+# at. So a macro body is read as a TEMPLATE - which suffixes it defines,
+# whether each is data, what each returns - and every expansion line
+# (`CFG_SHARED ovc`) adds the pasted names to the maps, in the section the
+# EXPANSION is in, which is the only section that means anything for them.
+TLABEL = re.compile(r'^\s*%1\s*%\+\s*(\w+):(.*)$')
+TDATA = re.compile(r'^\s*(?:times\s+\S+\s+)?(?:d[bwdq]|res[bwdqt])\b', re.I)
+TRET = re.compile(r'^\s*(ret|retf|retn|iret)\b', re.I)
+TLADJ = re.compile(r'^\s*jmp\s+(kretf?c?_[a-z]{2})\s*$', re.I)
+TEXP = re.compile(r'^\s*(\w+)\s+([A-Za-z_]\w*)\s*$')
+
+
+def _walk(path):
+    """[(section, line-number, stripped-line, raw-line)] for the whole file."""
+    got = _WALK.get(path)
+    if got is None:
+        got = []
+        cur = EXTRA.get(path, '.text')
+        for n, raw in enumerate(open(path), 1):
+            line = raw.split(';')[0]
+            if 'section' in line:
+                m = SECT.match(line)
+                if m:
+                    cur = m.group(1)
+                    continue
+            got.append((cur, n, line, raw))
+        _WALK[path] = got
+    return got
+
+
 def sections(path):
     """yield (section, line-number, source-line) with comments stripped"""
-    cur = EXTRA.get(path, '.text')
-    for n, raw in enumerate(open(path), 1):
-        line = raw.split(';')[0]
-        m = re.match(r'^\s*section\s+(\.\w+)', line)
-        if m:
-            cur = m.group(1)
-            continue
+    for cur, n, line, _raw in _walk(path):
         yield cur, n, line
 
 
@@ -99,17 +180,12 @@ def sections_raw(path):
     """...and the same walk with the RAW line beside the stripped one.
 
     The `; ovlchk: DS = ...` markers below live in COMMENTS, which sections()
-    throws away before anything can see them - so the check that needs both
-    halves gets its own walk rather than a flag on the shared one.
+    throws away before anything can see them - so the one check that needs
+    both halves takes the raw line as a fourth field rather than being given a
+    flag.  It is the SAME walk underneath: _walk keeps both, and which fields
+    a caller unpacks is the whole of the difference between these two.
     """
-    cur = EXTRA.get(path, '.text')
-    for n, raw in enumerate(open(path), 1):
-        line = raw.split(';')[0]
-        m = re.match(r'^\s*section\s+(\.\w+)', line)
-        if m:
-            cur = m.group(1)
-            continue
-        yield cur, n, line, raw
+    return iter(_walk(path))
 
 
 def main():
@@ -123,15 +199,117 @@ def main():
     # twice reports every finding in it twice.
     files = kfiles + [f for f in sorted(EXTRA) if f not in kfiles]
     where = {}                       # label -> section it is defined in
+    mbody = {}                       # %macro -> the labels its body near-calls
+    tmpl = {}                        # %macro -> [(suffix, is_data, ret kinds)]
     for f in files:
+        macro = None
+        tcur = None                  # the `%1 %+ _x:` template label open now
         for sect, n, line in sections(f):
-            m = re.match(r'^([A-Za-z_]\w*):', line)
+            m = MACRO_D.match(line)
+            if m:
+                macro = m.group(1)
+                mbody.setdefault(macro, set())
+                tmpl.setdefault(macro, [])
+                tcur = None
+                continue
+            if ENDMACRO.match(line):
+                macro = None
+                tcur = None
+            elif macro:
+                for mm in CALL.finditer(line):
+                    if mm.group(1) is None:
+                        mbody[macro].add(mm.group(2))
+                t = TLABEL.match(line)
+                if t:
+                    # [suffix, is_data, ret kinds, undecided]: a label with
+                    # its data on the SAME line (`%1 %+ _sig: db ...`) is
+                    # decided here; a bare one (`%1 %+ _keys:` then `db`) by
+                    # the first line under it.
+                    rest = t.group(2).strip()
+                    tcur = [t.group(1), bool(TDATA.match(rest)), set(),
+                            not rest]
+                    tmpl[macro].append(tcur)
+                elif tcur is not None:
+                    if tcur[3] and line.strip():
+                        tcur[1], tcur[3] = bool(TDATA.match(line)), False
+                    r = TRET.match(line)
+                    if r:
+                        tcur[2].add(r.group(1).lower())
+                    l = TLADJ.match(line)
+                    if l:
+                        tcur[2].add('retf' if l.group(1).lower()
+                                    .startswith('kretfc_') else 'ret')
+            m = LABEL.match(line)
             if m:
                 where[m.group(1)] = sect
+            m = CELLDEF.match(line)
+            if m:
+                where[m.group(1)] = sect
+    # ...and a %macro whose BODY holds a near transfer to a fixed label makes
+    # every expansion site a call site that no textual scan can see.  `MARK 42`
+    # is not a call; `call mark_here` is, three thousand lines away in the
+    # macro.  Eight MARK sites sit inside mouse_init, so a section move that
+    # takes mouse_init cold takes eight invisible near calls with it - and
+    # `bootmark` being in the build matrix does NOT cover it, because a near
+    # call between two vstart=0 sections assembles perfectly.  Collected from
+    # the source above rather than hand-listed, so a new macro is covered the
+    # day it is written; %%local labels start with `%` and fall out by
+    # themselves, and anything that is not a known label is dropped here.
+    mbody = {k: (v & set(where)) for k, v in mbody.items()}
+    mbody = {k: v for k, v in mbody.items() if v}
+    MEXP = re.compile(r'^\s*(\w+)\b')
+
+    # ...and the PASTED labels (TLABEL above): every expansion of a macro that
+    # defines `%1 %+ _x:` puts `<arg>_x` in the expansion's section. `where`
+    # takes them now; `half`, `mdata` and `rets` take theirs where each is
+    # built. A definition seen twice (CFG_DATA ovc, CFG_DATA cpc) is two
+    # different names, which is the whole point of the paste.
+    tmpl = {k: v for k, v in tmpl.items() if v}
+    pasted = {}                      # 'ovc_pack' -> (section, is_data, kinds)
+    for f in files:
+        inmacro = False
+        for sect, n, line in sections(f):
+            if MACRO_B.match(line):
+                inmacro = True
+                continue
+            if ENDMACRO_B.match(line):
+                inmacro = False
+                continue
+            if inmacro:
+                continue
+            m = TEXP.match(line)
+            if m and m.group(1) in tmpl:
+                for suffix, is_data, kinds, _u in tmpl[m.group(1)]:
+                    # the suffix carries its own underscore: `%1 %+ _load`
+                    pasted[m.group(2) + suffix] = (sect, is_data, kinds)
+    for lab, (sect, _d, _k) in pasted.items():
+        where[lab] = sect
+
     bad = []
     for f in files:
+        inmacro = False
         for sect, n, line in sections(f):
+            # A %macro BODY is not a call site; its EXPANSIONS are, and mbody
+            # above is what makes each of those visible. Scanning the body
+            # itself reports the DEFINITION's section, which is wherever the
+            # macro happens to be written - so a macro defined beside a file's
+            # constants and expanded only inside a module image was reported as
+            # a `.text -> .modc` crossing that does not exist, and the only way
+            # to silence it was to write the definition inside a `section` it
+            # emits nothing into. That is a false positive with a workaround
+            # attached, which is the worst kind.
+            if MACRO_B.match(line):
+                inmacro = True
+                continue
+            if ENDMACRO_B.match(line):
+                inmacro = False
+                continue
+            if inmacro:
+                continue
             hits = [(m.group(1), m.group(2)) for m in CALL.finditer(line)]
+            m = MEXP.match(line)
+            if m and m.group(1) in mbody:
+                hits += [(None, t) for t in mbody[m.group(1)]]
             m = CELL.match(line)
             if m:
                 hits.append((None, m.group(1)))
@@ -176,7 +354,10 @@ def main():
     # lost with it is the guard against `mov ax, cs` meaning KERNEL_SEG inside
     # a module; that is now a review rule, and the cheap half of it is the
     # `lods` refusal further down.
-    CS = re.compile(r'\b(?:push\s+cs|mov\s+\w+\s*,\s*cs|cs\s*:'
+    CS = re.compile(r'\b(?:push\s+cs'
+                    r'|mov\s+(?:\w+|(?:(?:byte|word|dword)\s+)?\[[^\]]*\])'
+                    r'\s*,\s*cs'
+                    r'|cs\s*:'
                     r'|cs\s+(?:lods|movs|stos|scas))', re.I)
     # SCOPED TO kernel/, and EXTRA's files are deliberately left out. A
     # one-source-two-worlds include (apps/os88ui.inc, SPEC.md 20.5.1) is half
@@ -199,6 +380,242 @@ def main():
                  "rule 2 (name the segment)" % len(cs_bad))
     print("os88ovlchk: no .cold code assumes CS")
 
+    # --- rule 2b: `.ovl` code may not STORE CS ------------------------------
+    # `.ovl` rides inside the boot blob and is GIVEN BACK TO THE HEAP at
+    # spl_finish (kernel.asm, "It costs no RAM after that at all"). That is the
+    # whole reason boot-only code is worth putting there - it stops costing
+    # anything the moment the desktop is up - and it is also the trap.
+    #
+    # READING through CS in `.ovl` is correct and stays allowed, for the reason
+    # the block above gives: the overlay's data rides with it. What can never be
+    # right is WRITING CS somewhere - an interrupt vector, a far pointer, a saved
+    # segment word. The value stored is the blob's segment, and the blob is
+    # about to be handed to the heap and written over by the first claim. The
+    # store succeeds, the boot finishes, and the machine dies later at a vector
+    # that now points into somebody's buffer.
+    #
+    # This is not hypothetical. mouse_init installs the mouse and int 09h
+    # vectors with `mov [es:si+2], cs`, and moving its boot half into `.ovl` is
+    # exactly what SPEC.md 9.4's overlay move does. Three such sites are inside
+    # the moved range. Before this rule they were guarded by NOTHING: the CS
+    # check above is scoped to `.cold`, `.ovl` was deliberately exempt from it,
+    # and nasm is happy - so the reviewer's own note that "the gate refuses it"
+    # was false, and was demonstrated false by reverting the fix and watching
+    # both the stock and the patched gate pass in silence.
+    #
+    # WHAT THIS CANNOT SEE, stated so nobody trusts it further than it goes: a
+    # store laundered through a register (`mov ax, cs` ... `mov [foo], ax`) is
+    # invisible here, and so is a `push cs` whose value is popped into a far
+    # frame. Those stay a review rule. What is caught is the direct form, which
+    # is the one that is written by hand and the one that has actually shipped.
+    OVLCS = re.compile(r'\bmov\s+(?:(?:byte|word|dword)\s+)?\[[^\]]*\]'
+                       r'\s*,\s*cs\b', re.I)
+    ovlcs_bad = []
+    for f in kfiles:
+        for sect, n, line in sections(f):
+            if sect in ('.ovl', '.ovlw') and OVLCS.search(line):
+                ovlcs_bad.append((f, n, sect, line.strip()[:60]))
+    for f, n, sect, src_ in ovlcs_bad:
+        print("%s:%d: %s stores CS: %s" % (f, n, sect, src_), file=sys.stderr)
+    if ovlcs_bad:
+        sys.exit("os88ovlchk: %d CS store(s) in the boot overlay - both halves "
+                 "are given back (.ovl at spl_finish, .ovlw at the first "
+                 "mount), so the stored segment becomes somebody else's memory "
+                 "(name the segment instead)" % len(ovlcs_bad))
+    print("os88ovlchk: no boot-overlay code stores CS")
+
+    # --- rule 2c: every reference INTO `.ovl` is registered ------------------
+    # The rule above stops `.ovl` publishing its own segment. This one stops the
+    # opposite mistake, which is quieter and which nothing in this tree caught
+    # before: somebody adds a call to a body that lives in the overlay, from
+    # code that runs AFTER the overlay is gone.
+    #
+    # `.ovl` is released at spl_finish. A body there is correct exactly as long
+    # as every path that reaches it runs during boot. That is not a property the
+    # assembler can check, it is not a property a screenshot shows, and the
+    # failure is silent: the call lands in whatever the heap handed out, so the
+    # routine "works" until the machine is busy enough for the claim underneath
+    # it to be something else.
+    #
+    # `dispcold` byte-compares `.cold` and has no `.ovl` counterpart. This is it,
+    # in the only form that is cheap and exact: a REGISTRY, the way SPEC.md
+    # 6.6's transparent-text sites are a registry. Every reference into `.ovl`
+    # from outside it is listed in tests/ovlrefs.txt with the reason it is
+    # boot-only. A new one fails the build until somebody writes that reason
+    # down, and the list can be read in one sitting to audit the whole surface.
+    #
+    # The list may shrink freely. It grows only by a deliberate edit, and the
+    # question that edit has to answer is the only question that matters here:
+    # WHAT GUARANTEES THIS RUNS BEFORE spl_finish?
+    #
+    # ...OR BEFORE THE FIRST MOUNT, which is the other half of it since SPEC.md
+    # 2.5.3 split the overlay by lifetime. `.ovl` rides in the blob and lives to
+    # spl_finish; `.ovlw` lands on FAT_SEG and is forfeit the moment drv_boot
+    # mounts a volume, which is EARLIER. So a symbol's deadline depends on which
+    # half it is in, and the error below says which - "it looks like boot code"
+    # was never an answer and is now not even a well-formed one.
+    #
+    # THE DIRECTION MATTERS, and it is the new way to get this wrong.
+    #
+    #   .ovlw -> .ovl    always safe: the callee outlives the caller.
+    #   .ovl  -> .ovlw   NOT safe by construction. The blob half is still there
+    #                    after the mount and the window half is not, so a call
+    #                    the other way is exactly the silent failure this rule
+    #                    exists for - and it is INSIDE the overlay, which is
+    #                    where the old rule stopped looking.
+    #
+    # So `.ovlw` is exempt as a SOURCE only when the target is `.ovl`, and every
+    # other crossing is registered.
+    OVLREG = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), 'tests', 'ovlrefs.txt')
+    registered = set()
+    if os.path.exists(OVLREG):
+        for line in open(OVLREG):
+            line = line.split('#', 1)[0].strip()
+            if line:
+                registered.add(line.split()[0])
+
+    half = {}                       # label -> '.ovl' | '.ovlw'
+    for f in kfiles:
+        for sect, n, line in sections(f):
+            if sect in ('.ovl', '.ovlw'):
+                m = LABEL.match(line)
+                if m:
+                    half[m.group(1)] = sect
+    for lab, (sect, _d, _k) in pasted.items():
+        if sect in ('.ovl', '.ovlw'):
+            half[lab] = sect         # the ovc_ family, pasted into .ovl
+
+    DEADLINE = {'.ovl': 'spl_finish', '.ovlw': "drv_boot's FIRST MOUNT"}
+    ovl_refs, unregistered = set(), []
+    if half:
+        pat = re.compile(r'\b(' + '|'.join(sorted(map(re.escape, half))) + r')\b')
+        for f in kfiles:
+            for sect, n, line in sections(f):
+                code = line.split(';', 1)[0]
+                for m in pat.finditer(code):
+                    sym = m.group(1)
+                    tgt = half[sym]
+                    if sect == tgt:
+                        continue            # within one half: near, and fine
+                    if sect == '.ovlw' and tgt == '.ovl':
+                        continue            # the callee outlives the caller
+                    ovl_refs.add(sym)
+                    if sym not in registered:
+                        unregistered.append((f, n, sect, sym, tgt,
+                                             code.strip()[:52]))
+    for f, n, sect, sym, tgt, src_ in unregistered:
+        print("%s:%d: unregistered reference from %s into %s: %s   %s"
+              % (f, n, sect or '(resident)', tgt, sym, src_), file=sys.stderr)
+    if unregistered:
+        deadlines = sorted({DEADLINE[t] for _, _, _, _, t, _ in unregistered})
+        sys.exit("os88ovlchk: %d reference(s) into the boot overlay are not in "
+                 "tests/ovlrefs.txt - each one must say what guarantees it runs "
+                 "before %s" % (len(unregistered), ' / '.join(deadlines)))
+    stale = sorted(registered - ovl_refs)
+    if stale:
+        sys.exit("os88ovlchk: tests/ovlrefs.txt lists %d reference(s) that no "
+                 "longer exist (%s) - the registry may only shrink by deleting "
+                 "the row with the code" % (len(stale), ', '.join(stale[:4])))
+    nw = sum(1 for v in half.values() if v == '.ovlw')
+    print("os88ovlchk: every reference into the boot overlay is registered "
+          "(%d of %d labels; %d in .ovl to spl_finish, %d in .ovlw to the "
+          "first mount)" % (len(ovl_refs), len(half), len(half) - nw, nw))
+
+    # --- rule 2d: the CALL MACRO has to match the HALF ----------------------
+    # Rule 2c asks whether a reference is registered. It does not ask whether
+    # the call will ARRIVE, and after SPEC.md 2.5.3 those are different
+    # questions: the blob half is reached through [spl_fseg], the window half
+    # by `call FAT_SEG:`, and a body registered perfectly well can still be
+    # called through the wrong one.
+    #
+    # What that does is not a refusal, it is a far call to the BLOB's segment
+    # carrying a WINDOW offset - so the machine lands wherever that offset
+    # falls inside the loading screen, executes it, and returns through a
+    # stack it has already ruined. Measured, the first time it happened: a
+    # spin at HEAP_SEG:36D2 with SP 53,482 bytes past task 0's stack, a screen
+    # of garbage, and no message from anything.
+    #
+    # It is a one-line mistake to make - `dsk_flop_add: OVLGATE1 dsk_flop_add_x`
+    # survived the sweep that converted the other twenty-three sites because
+    # the macro shared its line with a label - so it is checked rather than
+    # reviewed.
+    MACHALF = {'SPLCALL': '.ovl', 'OVLCALL': '.ovl', 'OVLCALLC': '.ovl',
+               'OVLGATE': '.ovl', 'OVLGATE1': '.ovl', 'SPLSTUB': '.ovl',
+               'SPLGATE': '.ovl', 'SPLGATE1': '.ovl', 'OVWCALL': '.ovlw'}
+    MACPAT = re.compile(r'\b(' + '|'.join(MACHALF) + r')\s+(\w+)')
+    REACH = {'.ovl': 'the blob, through [spl_fseg]',
+             '.ovlw': 'the FAT window, by `call FAT_SEG:`'}
+    macbad = []
+    for f in kfiles:
+        for sect, n, line in sections(f):
+            m = MACPAT.search(line.split(';', 1)[0])
+            if not m:
+                continue
+            macro, tgt = m.group(1), m.group(2)
+            want, got = MACHALF[macro], half.get(tgt)
+            if got and got != want:
+                macbad.append((f, n, macro, tgt, want, got))
+    for f, n, macro, tgt, want, got in macbad:
+        print("%s:%d: %s reaches %s, but %s is in %s"
+              % (f, n, macro, REACH[want], tgt, got), file=sys.stderr)
+    if macbad:
+        sys.exit("os88ovlchk: %d call(s) into the boot overlay use the wrong "
+                 "half's entry - the segment and the offset would come from "
+                 "different sections (SPEC.md 2.5.3)" % len(macbad))
+    print("os88ovlchk: every overlay call matches its target's half")
+
+    # --- rule 2e: nothing in the WINDOW half is called after the mount ------
+    # Rule 2d asks whether a call arrives. This asks whether it arrives IN
+    # TIME, for the one ordering the tree actually writes down: `kmain` calls
+    # `drv_boot_x`, which mounts a volume, and the mount takes the FAT window
+    # and the buffers above it - so every `.ovlw` byte is gone from that line
+    # onward. Any OVWCALL below it is a call into a FAT table.
+    #
+    # THIS IS THE ONE THAT COST A BOOT. `xm_boot_x` is boot-only and was
+    # registered as such, correctly, for the deadline the registry used to
+    # have: it runs before spl_finish. It runs AFTER drv_boot, though - kmain
+    # calls it on the next line - so the split put it in the half that is
+    # already overwritten, and the machine mounted A:, far-called into the FAT
+    # table, executed it, and unwound its own stack until sch_switch's canary
+    # caught the wreckage several thousand instructions later. Nothing named
+    # the overlay.
+    #
+    # Only kmain is scanned, and that is deliberate rather than a shortcut:
+    # kmain is where the boot's ORDER is written, one call per line, and a
+    # reachability answer for anything else is what tests/ovlrefs.txt's reason
+    # column is for. A body reached from a runtime path is rule 2c's business.
+    kfile = [f for f in kfiles if f.endswith('kernel.asm')]
+    late = []
+    for f in kfile:
+        lines = open(f, errors='replace').read().split('\n')
+        try:
+            kstart = next(i for i, l in enumerate(lines) if l.startswith('kmain:'))
+            mount = next(i for i, l in enumerate(lines)
+                         if i > kstart and DRVBOOT.search(l))
+        except StopIteration:
+            continue
+        # ...and STOP at kmain's own end, which is the next label in column 0.
+        # Scanning to the end of the file instead reads the resident
+        # trampolines below it - `dsk_flop_add: OVWCALL dsk_flop_add_x` is one,
+        # and it is called from desk_init at MARK 20, long before the mount.
+        # A rule about ORDER has to stop where the ordered code does.
+        for i in range(mount + 1, len(lines)):
+            if LABEL_DOT.match(lines[i]):
+                break
+            m = OVWCALL.search(lines[i].split(';', 1)[0])
+            if m:
+                late.append((f, i + 1, m.group(1)))
+    for f, n, sym in late:
+        print("%s:%d: OVWCALL %s is AFTER drv_boot_x - the first mount has "
+              "already taken the FAT window those bytes are in"
+              % (f, n, sym), file=sys.stderr)
+    if late:
+        sys.exit("os88ovlchk: %d call(s) into .ovlw run after the mount - move "
+                 "the body to .ovl, which lives until spl_finish (SPEC.md "
+                 "2.5.3)" % len(late))
+    print("os88ovlchk: no .ovlw body is called after the first mount")
+
     # --- rule 1: cold code's DATA lives in .text ----------------------------
     # Same argument as the CS check and the same kind of invariant: DS still
     # names KERNEL_SEG in cold code, so a `db`/`dw` inside .cold is addressed
@@ -217,7 +634,7 @@ def main():
     #
     # .ovl is again exempt, and for the same reason: the overlay's data rides
     # WITH it, so fdd_mbit, drvp_sbbase and ovl_font_bits all belong there.
-    DATA = re.compile(r'^\s*(?:[A-Za-z_]\w*:?\s+)?(?:d[bwdq]|times|resb|resw)\b',
+    DATA = re.compile(r'^\s*(?:[A-Za-z_]\w*:?\s+)?(?:d[bwdq]|times|res[bwdqt])\b',
                       re.I)
     d_bad = []
     for f in kfiles:                     # kernel/ only - see the note above
@@ -283,6 +700,112 @@ def main():
                  % len(m_bad))
     print("os88ovlchk: no module image reads its data through DS")
 
+    # --- ...and the OTHER way to read module data through DS -----------------
+    # The `lods` check above is the whole of what this file used to say about
+    # SPEC.md 2.8.6, and it is blind to the two failures that actually happen
+    # when a body of strings moves into an image:
+    #
+    #   * a MISSING `cs:` on a table read - `mov si, [si + cp_vidnam]` reads
+    #     the KERNEL image at that offset and letters whatever is there;
+    #   * a MISSING staging call - `mov si, cp_s_vcap` hands `font_run` a
+    #     pointer that is correct in the IMAGE and nonsense in KERNEL_SEG.
+    #
+    # Neither moves a byte, both assemble, and both draw rubbish on a page a
+    # user opens. Proven rather than asserted: deleting one `call cp_stage`
+    # and one `cs:` from ctrl.inc left `kernsize` byte-for-byte identical and
+    # every check in this file passing. That is the safety net this batch
+    # exists to put under a 26-site hand review, and both halves are here.
+    #
+    # **Half 1 is universal.** A memory operand naming module data must carry
+    # a `cs:`. There is no correct way to write that operand without one, in
+    # any image, so this needs no registration and has no false positives.
+    #
+    # **Half 2 is per image, and needs the image to be written for it.** A
+    # pointer LOAD (`mov si, <label>`) is indistinguishable from correct code
+    # until you know what happens to SI, which is dataflow this cannot do. So
+    # the rule is turned round: an image registers the macro that DEFINES a
+    # string and the macros that READ one, and then a string label may appear
+    # only at its own definition, inside another data directive or `equ` in
+    # the same image, or as an argument of one of those macros. A bare
+    # `mov si, cp_s_*` fails the build. It is a construction rule rather than
+    # an analysis, which is why it is exact.
+    #
+    # **`.modl` (CLONE.DRV) and `.modf` (FORMAT.DRV) are NOT registered**, and
+    # so get half 1 only. They predate this and read their strings with a bare
+    # `mov si, clo_s_x` / `call clo_cat` in 26 and 10 places, in shapes a
+    # next-line rule cannot express (`jmp .tail` reaches the composer four
+    # lines later; a conditional pair stages at the join). Registering them
+    # means converting those sites to a macro of their own - worth doing, and
+    # not on the back of a change to a different image.
+    MODDEF  = re.compile(r'^\s*([A-Za-z_]\w*):\s*(?:times\s+\S+\s+)?'
+                         r'(?:d[bwdq]|res[bwdqt])\b', re.I)
+    ISDATA  = re.compile(r'^\s*(?:[A-Za-z_]\w*:)?\s*(?:times\s+\S+\s+)?'
+                         r'(?:d[bwdq]|res[bwdqt])\b', re.I)
+    ISEQU   = re.compile(r'^\s*[A-Za-z_]\w*\s+equ\b', re.I)
+    WORD    = re.compile(r'\b([A-Za-z_]\w*)\b')
+    # per image: the macro that DEFINES one of its strings, and the macros
+    # that READ one.  An image absent from here gets half 1 only.
+    MODSTAGE = {'.modc': {'def': ('CPS',), 'use': ('CPSTAGE', 'CPSTAGEX')}}
+
+    mdata = {}                       # module string/table label -> its section
+    for f in files:
+        for sect, n, line in sections(f):
+            if sect not in MODS:
+                continue
+            m = MODDEF.match(line)
+            if m:
+                mdata[m.group(1)] = sect
+                continue
+            reg = MODSTAGE.get(sect)
+            if reg:
+                for d in reg['def']:
+                    m = re.match(r'^\s*%s\s+([A-Za-z_]\w*)\s*,' % d, line)
+                    if m:
+                        mdata[m.group(1)] = sect
+    for lab, (sect, is_data, _k) in pasted.items():
+        if sect in MODS and is_data:
+            mdata[lab] = sect        # cpc_sig, cpc_buf, ... pasted into .modc
+    # the image HEADER is the one exception SPEC.md 2.8 carves out: mod_need
+    # reads it through ES, at offset 0, before the image is ever entered.
+    for k in [k for k in mdata if k.endswith('_hdr')]:
+        del mdata[k]
+
+    d_bad = []
+    for f in files:
+        for sect, n, line in sections(f):
+            names = [w for w in WORD.findall(line) if w in mdata]
+            if not names:
+                continue
+            if MODDEF.match(line) and MODDEF.match(line).group(1) in mdata:
+                continue                       # the definition itself
+            if sect in MODS and (ISDATA.match(line) or ISEQU.match(line)):
+                continue                       # a table or an equ in the image
+            reg = MODSTAGE.get(sect)
+            if reg:
+                mm = re.match(r'^\s*(%s)\s+([A-Za-z_]\w*)'
+                              % '|'.join(reg['def'] + reg['use']), line)
+                if mm and mm.group(2) in mdata:
+                    continue                   # a sanctioned macro
+            # half 1: a memory operand over module data must name CS
+            if CSMEM.search(line):
+                continue
+            for w in names:
+                if reg is None and not re.search(r'\[[^]]*\b%s\b' % w, line):
+                    continue          # unregistered image: half 1 only, and
+                                      # this is a pointer LOAD rather than a
+                                      # memory operand over the image
+                d_bad.append((f, n, sect, w, line.strip()[:56]))
+    for f, n, sect, w, src in d_bad:
+        print("%s:%d: %s is %s data read through DS: %s" % (f, n, w, sect, src),
+              file=sys.stderr)
+    if d_bad:
+        sys.exit("os88ovlchk: %d module-data reference(s) do not name CS or a "
+                 "registered stager - SPEC.md 2.8.6 (an image's own data is "
+                 "CS-relative, and a pointer to it must be staged before "
+                 "anything reads it through DS)" % len(d_bad))
+    print("os88ovlchk: every module-data reference names CS or a registered "
+          "stager (%d symbols)" % len(mdata))
+
     # --- and no TAIL CALL to a cw_ shim -------------------------------------
     # A cw_ shim is `call <target>` / `retf`: it exists to turn a far CALL
     # from cold code into a near call plus a far return.  Reaching it with a
@@ -342,7 +865,7 @@ def main():
         for sect, n, line in sections(f):
             if sect not in SECT_SEG:
                 continue
-            m = re.match(r'^\s*([A-Za-z_]\w*)\s*:?\s*(?:res[bwdqt])\b', line)
+            m = RESERVE.match(line)
             if m:
                 lb[m.group(1)] = SECT_SEG[sect]
     # `\b` on both sides so `vid_rowtab` does not match `vid_rowtab2` and
@@ -379,7 +902,7 @@ def main():
                 seg = (m.group(1) or '').lower()
                 if seg in ('ss', 'es', 'cs'):
                     continue
-                for w in re.findall(r'\b\w+\b', m.group(2)):
+                for w in WORD.findall(m.group(2)):
                     if w not in lb or lb[w] == bank:
                         continue
                     l_bad.append((f, n, w, 'reached without ss: or es:'
@@ -417,6 +940,19 @@ def main():
     # dual-entry routine are both legitimate and neither is this rule's
     # business.  An INDIRECT call (`call bx`, a `dw` table) is invisible here
     # exactly as it is to the near-call check, and stays a review rule.
+    #
+    # A ROUTINE THAT ENDS ON THE SHARED EPILOGUE LADDER STILL RETURNS.  The
+    # ladder (kernel.asm, `kret_*` in .text, `kretc_*`/`kretfc_*` in .cold) is
+    # reached by a tail `jmp`, so its rungs' `ret`/`retf` sit outside the
+    # routine's extent and RETI saw nothing at all: 140 routines in kernel/
+    # reach a rung and 135 of them were UNCLASSIFIED, which is neither arm of
+    # the rule firing rather than the rule passing.  LADJ reads the rung's own
+    # name - `kretfc_*` is the far ladder and returns `retf`, `kret_*` and
+    # `kretc_*` are the near ones - so a converted routine keeps exactly the
+    # coverage its `ret` had.  Nothing else about the ladder is this rule's
+    # business: the DEPTH is `tools/stkbalance.py` and the pop ORDER is
+    # `t_asmrules.crossed_pops`, and neither of those can see a return KIND.
+    LADJ = re.compile(r'^\s*jmp\s+(kretf?c?_[a-z]{2})\s*(?:;.*)?$', re.I)
     RETI = re.compile(r'^\s*(?:[A-Za-z_.]\w*:\s*)?(ret|retf|retn|iret)\b', re.I)
     TOPL = re.compile(r'^([A-Za-z_]\w*):')
     FARC = re.compile(r'\bcall\s+(?:far\s+)?\w+\s*:\s*([A-Za-z_]\w*)')
@@ -446,8 +982,15 @@ def main():
             r = RETI.match(line)
             if r and cur:
                 seen.add(r.group(1).lower())
+            l = LADJ.match(line)
+            if l and cur:
+                seen.add('retf' if l.group(1).lower().startswith('kretfc_')
+                         else 'ret')
         if cur:
             rets.setdefault(cur, []).append(seen)
+    for lab, (_s, _d, kinds) in pasted.items():
+        if kinds:
+            rets.setdefault(lab, []).append(set(kinds))
 
     def kind1(r):
         if not r or 'iret' in r:
@@ -477,6 +1020,84 @@ def main():
         sys.exit("os88ovlchk: %d return-kind mismatch(es) - SPEC.md 2.6.1 (a "
                  "far entry ends in retf and is never near-called)" % len(r_bad))
     print("os88ovlchk: every return kind matches how the routine is called")
+
+    # --- and no far TAIL JUMP into a far entry either -----------------------
+    # The cw_ rule above covers ONE direction of two.  A cw_ shim is
+    # `call X / retf` in `.text`, reached from `.cold`; the `.text` -> `.cold`
+    # far entries (cpf_, fmf_, dwf_, dkf_, ldf_, drvf_, uif_, ...) are the
+    # SAME two instructions pointing the other way, and reaching one with
+    # `jmp SEG:entry` has the identical failure: the jump pushes nothing, so
+    # the entry's `retf` pops the JUMPING routine's near return address as IP
+    # and whatever sits above it on the stack as CS.  A wild jump, and the
+    # JSHIM regex above never named these labels because it matches `cw_` only.
+    #
+    # A far tail jump IS correct from a routine that was itself far-entered:
+    # then the far frame the `retf` consumes is the one its own caller pushed.
+    # That is the whole exemption, and it is decided by the same `kinds()` map
+    # the return-kind rule already builds - so a body must PROVE it is far
+    # (`retf` and nothing else) to be allowed one.
+    JFAR = re.compile(r'\bjmp\s+(?:far\s+)?\w+\s*:\s*([A-Za-z_]\w*)')
+    t_bad = []
+    for f in files:
+        cur = None
+        for sect, n, line in sections(f):
+            m = TOPL.match(line)
+            if m:
+                cur = m.group(1)
+            m = JFAR.search(line)
+            if m and 'far' in kinds(m.group(1)) and kinds(cur) != {'far'}:
+                t_bad.append((f, n, m.group(1), cur or '(file head)'))
+    for f, n, tgt, cur in t_bad:
+        print("%s:%d: jmp to %s - it ends in retf, and %s does not, so the "
+              "retf pops a near frame as CS:IP" % (f, n, tgt, cur),
+              file=sys.stderr)
+    if t_bad:
+        sys.exit("os88ovlchk: %d far tail call(s) into a retf entry from a "
+                 "near-returning body - use call + ret" % len(t_bad))
+    print("os88ovlchk: no far tail jump enters a retf body without a far frame")
+
+    # --- and a BLOB entry ends in retf, whichever macro names it ------------
+    # The rule above judges a call it can SEE. The blob's entries are reached
+    # by an indirect far call - `mov word [spl_fp], X` / `call far [spl_fp]`,
+    # inside SPLCALL / OVLCALL / OVLCALLC / SPLGATE1 / OVLGATE1 / SPLSTUB - and
+    # the only textual trace of X at the site is an operand of a `mov`. So
+    # FARC never matched one, and an entry that kept its near `ret` popped IP,
+    # left CS on the stack, and returned into whatever the word above it named.
+    #
+    # Every entry in the tree happened to be a `call body / retf` trampoline,
+    # so the hole was invisible until SPEC.md 2.5.3 started moving BODIES into
+    # `.ovl` and naming them directly - which is the right shape (SPEC.md
+    # 2.6.1: the body owns the far return and the thunk in the middle is
+    # deleted) and is one keystroke from a wild return. It was written wrong
+    # here first, twice, and neither nasm nor any other check in this file said
+    # anything.
+    #
+    # The macro name is the whole signal and that is deliberate: a site says
+    # `OVLGATE1 sched_init` and nothing else in the line is a call, so this is
+    # the one place the target can be read at all.
+    # OVWCALL is in here for the same reason as the rest: it is a FAR call, so
+    # its target owes a `retf` exactly as a blob entry does. Leaving it out was
+    # not hypothetical - the sweep that created `.ovlw` moved 78 bodies and
+    # this check stopped looking at every one of them.
+    BLOBCALL = re.compile(r'^\s*(?:(?:SPL|OVL)(?:CALL|CALLC|GATE|GATE1|STUB)'
+                          r'|OVWCALL)\s+([A-Za-z_]\w*)\s*$')
+    b_bad = []
+    for f in files:
+        for sect, n, line in sections(f):
+            m = BLOBCALL.match(line)
+            if not m:
+                continue
+            if 'near' in kinds(m.group(1)):
+                b_bad.append((f, n, m.group(1)))
+    for f, n, lab in b_bad:
+        print("%s:%d: %s is reached through `call far [spl_fp]` and ends in a "
+              "NEAR ret" % (f, n, lab), file=sys.stderr)
+    if b_bad:
+        sys.exit("os88ovlchk: %d blob entry(ies) end in a near ret - every "
+                 "SPLCALL/OVLCALL/OVLGATE target is entered with a FAR call, "
+                 "so it ends in retf (SPEC.md 2.5.3, 2.6.1)" % len(b_bad))
+    print("os88ovlchk: every blob entry ends in retf")
+
 
 
 # =============================================================================

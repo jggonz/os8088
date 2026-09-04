@@ -151,7 +151,9 @@ def main(argv):
         os88marty.settle(m)
         m.pause()
         rig = Rig(m, sym, sym["snd_xlat"])      # the stub's 256 idle .bss
-                                                # bytes (tools/os88linecost.py)
+                                                # bytes (tools/os88linecost.py);
+                                                # bytes 0..7 are snd_evtmp too,
+                                                # and idle for the same reason
         got = m.read((KERNEL_SEG << 4) + call, 3)
         if got[0] != 0xE8:
             sys.exit("linefast: %04x is not `call gfx_line_fast` (%s) - the "

@@ -1066,8 +1066,8 @@ the first run after a cold boot, then ran normally after a reboot and
 produced note 7's answer.
 
 **The mechanism is structural.** A BIOS runs its disk handler, and the IRQ6
-nesting inside it, on whichever **256-byte task stack** is current
-(SPEC.md §8) — here on top of the benchmark's own frame, `bl_run`'s and
+nesting inside it, on whichever **task stack** is current — 256 bytes when
+this was observed, `SCH_STACK` = 384 today (SPEC.md §8) — here on top of the benchmark's own frame, `bl_run`'s and
 benchlib's. And the kernel's `dsk_xfer` holds **`sch_lock`** across every
 `int 13h` so nothing can switch underneath one; a package has no way to ask
 for that, because there is no slot for it. Whether it dies depends on where
@@ -3302,11 +3302,12 @@ beat F7  chain F7   sch_cur 01   SP 0314   CS:IP 97:0184   stk0 bad 00
 ```
 
 ...and **eight solid black bytes at framebuffer byte 20**, which is `KHB_STK`
-and nothing else: `sch_stkdie`'s bar. **A task overran its 256-byte stack
-slice and the kernel halted itself** (`cli`/`hlt`, the only one in the tree) —
-so the timer interrupt really is gone, and every instrument with it. That is
-why the dots stopped, and it is what the field has been calling a hard freeze
-all along.
+and nothing else: `sch_stkdie`'s bar. **A task overran its stack slice and the
+kernel halted itself** (`cli`/`hlt`, the only one in the tree) — the slice was
+**256 bytes** when this was taken, which is what the arithmetic below is in;
+`SCH_STACK` is 384 today — so the timer interrupt really is gone, and every
+instrument with it. That is why the dots stopped, and it is what the field has
+been calling a hard freeze all along.
 
 The arithmetic is unambiguous. `sch_stacks` is at `0x0300` in `LOW_SEG` and
 slot 1 owns the first slice, `0x0300`–`0x03FF`. `SP` = `0x0314` is read in the
@@ -4585,3 +4586,119 @@ below the ink lands where the hand did. The step costs 2.05 ms, so the nib's
 ceiling is ~490 px/s against the width-1 pencil's ~6,000; and **63% of that
 step is `pt_rect`'s fixed preamble rather than any pixel** (SPEC.md §42.8.3),
 which is where a fix for it would go.
+
+
+---
+
+## 38. A swimmer at the RIGHT edge lights a pixel at COLUMN 0 — 86Box 5150 + Hercules (CLOSED, NOT OURS: the mark is one row DOWN, which no write can reach — SPEC.md §79.5.9)
+
+**What was seen.** On an 86Box IBM 5150 with a Hercules, running the images
+built at `a4af84d`: every time a sea-life swimmer enters or leaves at the
+right edge, one to three pixels light at the far LEFT of the screen, in rows
+that overlap the swimmer's own. Reported as *"a shimmer of pixels"*. A
+five-second screen recording was supplied and analysed frame by frame.
+
+**What the recording establishes.** The mark is real and it is not another
+swimmer: at the frames where the only thing near the left edge is the mark
+itself, its rows sit inside the right-hand swimmer's rows and outside every
+other object's. **And it SHRINKS as the swimmer comes further on** — fourteen
+rows when two pixels of the swimmer are visible, three rows when twenty are.
+That is the signature of the half still off the right arriving at the start of
+the row, and it is what makes this a rendering defect rather than a
+coincidence of two swimmers in one lane, which the same recording also
+contains and which reads identically to the eye.
+
+**One reading error is recorded here because it cost the first pass.** The
+capture is 740x350 for a 720x348 picture and the guest's column 0 is image
+column **9**, not 10. An analysis written against the wrong origin never looks
+at column 0 at all — and column 0 is the whole report. The tell was in the
+data the whole time: a dim green pixel at image column 9 with nothing beside
+it.
+
+**What has been ruled out, all of it under MartyPC on a cycle-accurate 5150:**
+
+- The framebuffer. A swimmer forced to straddle the right edge continuously —
+  both scales, both kinds, all four speeds, every 8-pixel alignment, both
+  directions, every lane, ~2,500 frames — with the other three swimmers parked
+  where `gfx_blit1` refuses them and every bubble off the picture, and the
+  WHOLE screen compared against the one swimmer's own box each frame. Nothing.
+- Unforced sessions: 700 frames Hercules, 350 CGA, whole screen against every
+  swimmer's and bubble's box. Nothing.
+- **The previous renderer behaves identically** — the same sweeps against the
+  4bpp `gfx_blit4` build are equally clean, so this is not something SPEC.md
+  §79.5.8 introduced, or at least not something it introduced *here*.
+- The display path. MartyPC's own rasterised field was compared against the
+  framebuffer, column by column, for every frame of a straddle. They agree:
+  the card shows what the memory says.
+- The instrument. A pixel planted at column 0 of four rows, and a byte planted
+  one past a row's end, are both seen exactly where the Hercules bank
+  arithmetic puts them — so a negative result is a negative result.
+- `gfx_fill` at the edges: bubbles pinned at and past the right edge draw
+  nothing at the left.
+- The geometry: `vid_cw` = 720 and `vid_stride` = 90 on Hercules, `640`/`80`
+  on CGA. The clip cannot let a row overrun.
+
+**What settled it: the mark is on row y+1.** Cross-correlating the left-hand
+mark's rows against the right-hand columns, over every frame where the mark is
+the only thing near the left edge, gives **+1 and nothing else**. The swimmer
+stands in rows 276-282; the mark stands in rows 277-283. It carries **55-73%
+of the energy** of the pixel it copies, it is at column 0 alone, and it lives
+exactly as long as the box overhangs - gone the frame the box is wholly on
+screen, which is the reporter's *"it shrinks as the sprite comes further on"*
+(the mark wears column 719's silhouette, and that thins as the tail passes).
+
+**+1 is not reachable by a write.** Row *y* lives in bank `y & 3` at
+`(y >> 2) * 90`, so the byte after row *y*'s last is row **y+4** column 0; row
+**y+1** column 0 is in another bank, 8,103 bytes from anything a row-*y* draw
+touches. Scanlines are adjacent in the *display* and nowhere else, so the
+mark is the display's.
+
+**And the reporter's own last test named the device.** A dual-card machine
+with the Hercules as primary is clean - and that machine's card is 86Box's
+`hercules_plus`, where the failing machine's `86box.cfg` says
+`gfxcard = hercules`. Different device, different render loop. Together with MartyPC
+clean on both 1bpp adapters, in the framebuffer *and* in its rasterised field,
+and with the guest's video memory provably not containing the mark, that is
+the whole answer: **86Box's plain Hercules renderer, not this kernel.** The
+shape of it is a horizontal filter reading one pixel before a scanline starts,
+which in a contiguous line buffer is the previous scanline's last pixel; the
+specific internals have not been read and are not claimed.
+
+**Anyone can re-run the discriminator in thirty seconds**: change `gfxcard =
+hercules` to `hercules_plus` in the machine's `86box.cfg` and boot the same
+floppies. The shimmer goes and nothing else about the machine changes.
+
+**The desktop MASKS it, which is why it shows in the sea and nowhere else.**
+The desktop is the 50% dither, lit where x + y is even: column 719 is lit on
+every odd row and column 0 on every even one, 162 of each between the menu bar
+and the dock. The mark copies column 719 of row y to column 0 of row y+1, and
+an odd y makes y+1 even - so it lands on a pixel the dither has ALREADY lit at
+full brightness, on 160 of those 162 rows. Nothing new appears. The menu bar,
+white at both edges, masks it the same way. Over the saver's black sea column 0
+is black, the copy is the only thing there, and it MOVES with a swimmer.
+
+**A measurement trap, recorded because it produced a wrong published answer.**
+`os88marty.vram()` returns ONE ENTRY PER PIXEL, not packed framebuffer bytes.
+Read as bytes, the dither's 1,0,1,0... looks like a stipple of 0x01/0x00 one
+pixel in eight - which says column 0 is never lit and predicts a faint dotted
+line down every desktop's left edge. That was published, and it is wrong.
+tests/smallboot.py held the tell all along: it compares `sum(1 for v in
+rows[4] if v)` against `w * 0.9`, which no packed row of 90 bytes could reach.
+
+**And it predates the change.** Bubbles are `OSAPI_GFX_FILL`, untouched by
+SPEC.md 79.5.8, and they wrap too; sprites, RNG and positions are unchanged by
+construction; and the previous `sv_fish_clip` cut the block so its last column
+was 719 just as the band's does. What changed is cadence - a variable 7.5-15.5
+fps became a locked 18.2 - and an irregular one-pixel flicker reads as noise
+where a regular one reads as a shimmer.
+
+**`sv_bnd_clip` has been removed** (SPEC.md §79.5.9). It was shipped as the
+removal of a route rather than a fix, the route was not the one, and what it
+left behind was a second copy of a clip the kernel performs correctly - plus
+the part worth stating, a loss of coverage: with it in place the saver never
+exercised `gfx_blit1`'s right clip at all.
+
+**The lesson that generalises** is the reading error above, not the defect. An
+origin taken by eye off a capture is a guess; calibrate it against a feature
+the guest controls - here the hard cut at the screen's right edge - before
+reading a single pixel off the file.

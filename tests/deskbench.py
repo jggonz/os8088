@@ -101,6 +101,7 @@ import json
 import os
 import sys
 import time
+import traceback
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
@@ -128,12 +129,12 @@ DB_CASC = 32                            # title bar left exposed per
                                         # background window, in pixels
 DB_PAINT_W = 0.55                       # Paint: this much of the screen wide
 DB_PAINT_H = 0.72                       # ...and of the desktop band tall
-DB_QUIET = 12                           # frames under peak/8 that END a
-                                        # redraw's burst - see measure()
+DB_QUIET = 12                           # frames under the threshold that END
+                                        # a redraw's burst - see measure()
 DB_MAXBURST = 240                       # ...and the longest a burst may be
                                         # before the row says TRUNCATED
-DB_FLIGHT = 24                          # frames of a mouse packet's flight to
-                                        # spend before a capture - see release()
+DB_ARRIVE = 90                          # the LONGEST a release packet may take
+                                        # to be decoded - see release()
 
 
 def u16(b, i=0):
@@ -143,24 +144,25 @@ def u16(b, i=0):
 # -----------------------------------------------------------------------------
 # measuring one action
 # -----------------------------------------------------------------------------
-def measure(m, name, trigger, frames=400, burst="first"):
+def measure(m, name, trigger, frames=400):
     """Inject `trigger` with the machine paused, then price what it drew.
 
-    `burst` says WHICH END of the capture the redraw is at, and it is not a
-    detail - it is the difference between a stable row and a row that reports
-    50 ms one run and 600 the next.
-
+    THE SPAN IS ALWAYS THE FIRST BURST, and the one thing every row has to do
+    to earn that is open its capture on the operation rather than before it.
     A press on a title bar raises the window AND starts ui_drag, whose XOR
-    outline is redrawn once a tick for as long as the button is down: on a
-    PRESS row the redraw comes first and the outline is a suffix, so the span
-    is the FIRST burst. On a RELEASE row the button has been down since before
-    the capture opened, so the outline is a PREFIX - it runs while the release
-    packet is in flight, ~0.5 guest seconds at 1200 baud (SPEC.md 7.3.1) - and
-    the commit is the last thing that happens, so the span is the LAST burst.
-    A single rule for both got the prefix on one kind and the suffix on the
-    other, and inflated whichever it got.
+    outline is redrawn once a tick for as long as the button is down, so a
+    press row is the redraw with the outline as a SUFFIX and the first burst
+    is right by construction. A release row would be the other way round -
+    outline prefix, commit last - and this file used to carry a `burst="last"`
+    arm for it, WHICH NO CALLER EVER PASSED and which would not have worked:
+    measured on the Control Panel move, the held outline peaks at 955 changed
+    pixels against the commit's own peak of 2,266, so the backward walk clears
+    peak/8 = 283 on the outline and swallows the whole flight. The release
+    rows open their capture on the DECODED release instead (see release()
+    below), which leaves no prefix to walk back through.
 
-    A burst ends at DB_QUIET consecutive frames under peak/8. Not peak/4: a
+    A burst ends at DB_QUIET consecutive frames under the threshold, which is
+    peak/8 unless the noise floor below is higher. Not peak/4: a
     window repaint on a 4.77 MHz 8088 is hundreds of milliseconds -
     PERFORMANCE.md Part 2 prices ONE 78-cell text row at 71 - so it spans
     twenty frames or more at 16.7 guest ms each and its per-frame rate is
@@ -180,33 +182,53 @@ def measure(m, name, trigger, frames=400, burst="first"):
     m.run()
     per = fl.get("per_frame", [])
     ch = [p["changed"] for p in per]
-    if not any(ch):
+    peak = max(ch) if ch else 0
+    # THE HELD OUTLINE'S OWN LEVEL, MEASURED IN THIS CAPTURE rather than
+    # guessed at. A press row leaves the button down for the whole 600 frames
+    # and its redraw is over inside twenty, so the capture's SECOND HALF is
+    # the XOR outline and nothing else - a noise floor the row calibrates for
+    # itself, per adapter and per window, with no geometry plumbed in.
+    #
+    # It matters where the redraw is SMALL. The Control Panel raise peaks at
+    # 5,032 against an outline of 955, so peak/8 = 629 counts outline frames
+    # as redraw, the forward walk never sees DB_QUIET quiet frames, and the
+    # row came back 4,005 ms and TRUNCATED for a raise that took nine.
+    #
+    # The eighth on top is because the tail is a SAMPLE: the outline's
+    # per-frame count varies with which part of the redraw a frame lands in,
+    # so a maximum over 300 frames is a percent or two under a maximum over
+    # 570 (measured on one capture: 948 against 957) and a floor set one pixel
+    # above the sample is a floor the outline steps over. An eighth is still
+    # half the distance to the smallest frame of the redraw it is separating
+    # from - 1,074 against 2,132 on that same row.
+    #
+    # Capped at peak/2 so a genuinely truncated row still reports its span and
+    # its flag instead of declaring itself dead on its own noise.
+    tail = ch[len(ch) // 2:]
+    noise = max(tail) if tail else 0
+    thr = max(64, peak // 8, min(noise + noise // 8 + 1, peak // 2))
+    live = [i for i, c in enumerate(ch) if c >= thr]
+    if not live:
+        # NOTHING DREW, and the test is `live` rather than `any(ch)`.
+        # The two are not the same and the difference is a CRASH: thr has a
+        # floor of 64, so a capture holding a few frames of pointer or caret
+        # noise and no redraw passes `any(ch)` with an EMPTY `live`, and the
+        # next line is `live[0]`. Measured, on this file's own soak row: the
+        # "move Control Panel" capture came back with the commit already spent
+        # (see release() below) and 39- and 59-pixel frames left in it, and
+        # deskbench died with "list index out of range" 150 seconds into a run.
         return dict(row=name, frames=0, ms=0.0, changed=0, transient=0,
                     trunc=False, dead=True, tail=0,
                     per_frame=[[p["changed"], p["transient"]] for p in per])
-    peak = max(ch)
-    thr = max(64, peak // 8)
-    live = [i for i, c in enumerate(ch) if c >= thr]
-    if burst == "last":
-        b = live[-1]
-        a, quiet = b, 0
-        for i in range(b - 1, -1, -1):
-            if ch[i] >= thr:
-                a, quiet = i, 0
-            else:
-                quiet += 1
-                if quiet >= DB_QUIET:
-                    break
-    else:
-        a = live[0]
-        b, quiet = a, 0
-        for i in range(a + 1, min(len(ch), a + DB_MAXBURST)):
-            if ch[i] >= thr:
-                b, quiet = i, 0
-            else:
-                quiet += 1
-                if quiet >= DB_QUIET:
-                    break
+    a = live[0]
+    b, quiet = a, 0
+    for i in range(a + 1, min(len(ch), a + DB_MAXBURST)):
+        if ch[i] >= thr:
+            b, quiet = i, 0
+        else:
+            quiet += 1
+            if quiet >= DB_QUIET:
+                break
     c0 = per[a - 1]["cycles"] if a else 0
     cyc = per[b]["cycles"] - c0
     return dict(row=name, frames=b - a + 1, ms=1000.0 * cyc / CPU_HZ,
@@ -515,26 +537,52 @@ def rows(m, mo, sc, pts, settle, say):
     press = lambda: m.mouse(0, 0, l=True)
 
     def release():
-        """Let go, and SKIP THE PACKET'S FLIGHT before the capture starts.
+        """Let go, and SPEND THE PACKET'S FLIGHT - as long as it actually is.
 
-        A Microsoft packet is ~0.5 guest seconds down a 1200-baud line
+        A Microsoft packet is most of a guest second down a 1200-baud line
         (SPEC.md 7.3.1), and the button is still down for all of it - so a
         capture opened at the release begins with twenty-odd frames of
         ui_drag's XOR outline and only then the commit. The outline's frames
-        and the commit's tail are the same magnitude, so which one a threshold
+        and the commit's are the same magnitude, so which one a threshold
         catches depends on where the packet happened to land: the same row
         measured 50 ms and 300 ms on two consecutive runs of this file.
-        DB_FLIGHT frames of the flight are spent here instead, so the capture
-        opens on the commit and the ordinary first-burst rule applies.
+
+        SO THE FLIGHT IS WAITED OUT, AND WAITED OUT BY ASKING THE GUEST - not
+        by advancing a constant. It was a constant, DB_FLIGHT = 24 frames, and
+        a constant is wrong in whichever direction the kernel last moved: on
+        the tree this comment was written on the commit was OVER by frame 22,
+        so the capture opened on a dead screen and three of the file's eleven
+        rows reported NOTHING DREW for a window that had visibly moved -
+        including one that then crashed the run, because a capture holding
+        39- and 59-pixel noise frames and no redraw has no frame above
+        measure()'s floor (see there). mouse_btn is the guest's own published
+        answer to "has the release been decoded yet", which is what
+        os88mouse._edge waits on, and it cannot drift with the kernel's speed
+        or the adapter's frame rate.
+
+        A packet that is never decoded is a DROPPED one - the same failure
+        drag_hold guards at the other end - and it is raised rather than
+        waited out, because a row measured from a release the guest never saw
+        is measuring the next thing that happens to move. NOT re-sent, which
+        is what os88mouse._edge would do: a packet is dropped when it is
+        clocked in while another is in flight, and drag_hold has just spent 45
+        frames on a clear line, so a drop here would mean something else is
+        wrong and a retry would hide it.
         """
         m.mouse(0, 0, l=False)
-        m.advance(frames=DB_FLIGHT)
+        for _ in range(DB_ARRIVE):
+            if not (mo.where()[2] & 1):
+                return
+            m.advance(frames=1)
+        raise RuntimeError("the release was never decoded in %d frames "
+                           "(mouse_btn = %02x) - the 1200-baud UART dropped "
+                           "the packet" % (DB_ARRIVE, mo.where()[2]))
 
     def release_now():
-        """...and the same edge WITHOUT skipping the flight, for a release
+        """...and the same edge WITHOUT waiting the flight out, for a release
         that is not ending a drag. A menu is press-drag-release (SPEC.md 12.2)
-        and there is no outline in front of it, so spending the flight here
-        spends the dismissal too: the row came back NOTHING DREW."""
+        and there is no outline in front of it, so waiting for the decode here
+        waits out the dismissal too: the row came back NOTHING DREW."""
         m.mouse(0, 0, l=False)
 
     def park(pt):
@@ -799,7 +847,14 @@ def main(argv):
         try:
             res = run_one(a, label, machine, lambda s: print("  " + s))
         except Exception as e:                              # noqa: BLE001
-            print("  SCENE FAILED: %s" % e)
+            # WITH THE TRACEBACK, because the message alone is not enough to
+            # act on: this file raises RuntimeErrors that name themselves and
+            # also dies on plain IndexErrors out of a helper, and "list index
+            # out of range" against 800 lines is a bisect rather than a bug
+            # report. Measured: one soak failure cost a re-run to locate.
+            print("  SCENE FAILED: %s: %s" % (type(e).__name__, e))
+            for ln in traceback.format_exc().rstrip().splitlines():
+                print("    | " + ln)
             bad += 1
             continue
         allres.append(res)

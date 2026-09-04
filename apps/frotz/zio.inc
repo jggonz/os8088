@@ -1570,7 +1570,7 @@ zi_scpy:
 ; from the head. That is O(n^2) in the frame count, which is the right trade
 ; here: n is a routine-call depth (tens), this runs once per save against a
 ; ~400ms disk write, and the alternative is an array of frame offsets on a
-; 256-byte worker stack.
+; 384-byte worker stack.
 ;
 ; A frame's evaluation stack runs from just past its locals to the base of the
 ; NEXT YOUNGER frame - or to [zf_sp] for the newest - which is why the walk

@@ -149,7 +149,8 @@ ct_paint:
     push di
     push bp
     push es
-    mov bx, si
+    mov di, si                          ; the window, banked for the card:
+    mov bx, si                          ; SI is spent on the blit below
     call OSAPI_WM_CONTENT               ; ax=content x, dx=content y
     call ch_margin                      ; THE INTERIOR THE PICTURE DOES NOT
                                          ; COVER (SPEC.md 82.1.1, issue #142) -
@@ -167,6 +168,14 @@ ct_paint:
     mov dx, CH_H
     call OSAPI_GFX_BLIT4
     pop es
+    cmp byte [ct_abon], 0               ; ...and the About card LAST, over the
+    je .noab                            ; canvas it is opaque about (20.5.1)
+    push si
+    mov bx, di                          ; the WINDOW - not SI, which is CH_PXOFF
+    mov si, ct_ablines                  ; since the blit
+    call os88ui_about_d                 ; _d: this paint's region is armed
+    pop si
+.noab:
     pop bp
     pop di
     pop si
@@ -306,16 +315,58 @@ ct_oncmd:
 ; ct_about - the OSAPI_ABOUT_SET handler (slot 0x01E0, SPEC.md 12.2). SI = our
 ; window on entry; the UI task, gfx lock held.
 ;
-; A TOAST rather than a drawn card, because this package already has the toast
-; and has no alert include: SPEC.md 59 is a one-line transient and an About is
-; one line here. It says what the package is; a card would say the same thing
-; and cost the package os88ui.inc.
+; IT WAS A TOAST, on the argument that "an About is one line here" and that a
+; card would cost the package os88ui.inc. Both halves were wrong: an About is
+; one line only while it credits nobody, and SPEC.md 59's toast is a THREE
+; SECOND TRANSIENT - it says what the package is to whoever is looking at that
+; moment and then it is gone, which is not what a user picking About is asking
+; for. This package and SHEET shipped with no attribution in them (SPEC.md
+; 20.5.1), and this is the sentence that let it happen.
 ; -----------------------------------------------------------------------------
 ct_about:
+    push bx
     push si
-    mov si, ct_s_about
-    call ct_toast
-    pop si
+    mov byte [ct_abon], 1
+    mov bx, si
+    mov si, ct_ablines
+    call os88ui_about                   ; arms the clip itself: a menu dispatch
+    pop si                              ; arrives without one (SPEC.md 11.3)
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; ct_abdismiss - take the card down if it is up
+; in:  SI = our window ptr; gfx lock held
+; out: CF = 1 the click was spent doing it; preserves every register
+;
+; ct_paint is one OSAPI_GFX_BLIT4 of the whole canvas, so putting the content
+; back is the paint itself - there is nothing incremental here to repair.
+; -----------------------------------------------------------------------------
+ct_abdismiss:
+    cmp byte [ct_abon], 0
+    je .none
+    push bx
+    mov byte [ct_abon], 0
+    mov bx, si
+    call OSAPI_WM_CLIP_SET              ; nothing has armed a region for a
+    jc .gone                            ; click (SPEC.md 11.3)
+    call ct_paint
+.gone:
+    pop bx
+    stc
+    ret
+.none:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; ct_onclick - W_ONCLICK, and it exists for ONE reason: a card the user cannot
+;              click away is not a card. This window is a pure display
+;              otherwise and the handler does nothing else.
+; in:  CX = x, DX = y, SI = window ptr; gfx lock held
+; -----------------------------------------------------------------------------
+ct_onclick:
+    call ct_abdismiss
     ret
 
 ; ct_toast - in: SI = NUL message; shows it as a menu-bar toast for the
@@ -1527,7 +1578,8 @@ ct_read_dif:
 ; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
 ct_tpl:
     dw 0, 0, CT_WIN_W, CT_WIN_H
-    dw ct_s_title, ct_paint, 0, 0       ; no onkey/onclick - pure display
+    dw ct_s_title, ct_paint, 0, ct_onclick  ; no onkey; the click is the About
+                                        ; card's dismissal and nothing else
 
 ; --- the app menu set (SPEC.md 12.2) -------------------------------------------
     OS88_MENUSET ct_menus, ct_name_app, ct_oncmd
@@ -1578,7 +1630,14 @@ ct_it_cmb:    db 'Combination', 0
 
 ct_gal_map:    dw CH_T_AREA, CH_T_BAR, CH_T_COLUMN, CH_T_LINE, CH_T_PIE, CH_T_SCATTER, CH_T_COMBO
 ct_s_title:    db 'Chart', 0
-ct_s_about:    db 'Chart - charts a column of a SYLK, DIF or BIFF sheet', 0
+; --- the About card's lines (SPEC.md 20.5.1) ----------------------------------
+; The content box is CT_WIN_W - 2 = 258px, so 30 cells less the card's margins.
+ct_ablines:
+    dw ct_ab1, ct_ab2, ct_ab3, ct_ab4, 0
+ct_ab1:        db 'Chart for os8088', 0
+ct_ab2:        db 'Charts a column of a sheet', 0
+ct_ab3:        db 0
+ct_ab4:        db 'Contributed by Koriban', 0
 ct_s_chartbmp: db 'CHART.BMP', 0
 ct_s_noexp:    db 'No chart to export.', 0
 ct_s_experr:   db 'Chart export failed.', 0
@@ -1602,10 +1661,15 @@ ct_s_ext_biff: db '.BIF', 0
                                        ; which calls into it.
 %include "os88chart.inc"
 
+; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
+%define OS88UI_ABOUT                   ; the standard About card, and NOTHING
+%define OS88UI_NOBTN                   ; else: this package draws no button
+%include "os88ui.inc"
+
 ; =============================================================================
 ; bss (loader-zeroed, SPEC.md 21 step 5)
 ; =============================================================================
-    OS88_BSS 1831
+    OS88_BSS 1832
     OS88_IMAGE_END
 
 ct_chartseg equ os88_image_end + 0  ; word: the offscreen canvas claim
@@ -1766,7 +1830,8 @@ fp_hw             equ fp_tv + 8        ; --- the coprocessor path ---
 fp_x1             equ fp_hw + 1        ; 10: A in 80-bit form
 fp_x2             equ fp_x1 + 10       ; 10: B
 fp_sw             equ fp_x2 + 10       ; where the status word lands
-ct_bss_end  equ fp_sw + 2
+ct_abon     equ fp_sw + 2   ; byte: the About card is up (SPEC.md 20.5.1)
+ct_bss_end  equ ct_abon + 1
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL that nothing cross-checks, and setting

@@ -61,7 +61,12 @@
 
 %include "os88api.inc"
 
-    OS88_HEADER 'TANK', tk_entry, 1
+    OS88_HEADER 'TANK', tk_entry, 1, OS88_STACK_256
+                                ; THE WORKER'S STACK, declared
+                                ; rather than defaulted (SPEC.md 8.7):
+                                ; static 82 for tk_worker
+                                ; over the 64-byte interrupt floor
+                                ; that is 146, and 256 gives 1.75x
 
 ; --- embedded 16x16 icon (SPEC.md 20.2, flags bit 0) --------------------------
 ; The gunsight over a pyramid on the horizon - the game's own first screen.
@@ -185,7 +190,14 @@ TK_SHSEG  equ 16000             ; the CGA/Hercules shadow, in bytes
 TK_SHKB   equ 16                ; ...as a claim
 
 ; --- gameplay -----------------------------------------------------------------
-TK_TURN   equ 2                 ; angle units per frame at full lock
+TK_TURN   equ 2                 ; angle units per TICK at full lock
+TK_MAXSTEP equ 3                ; ...and the most a frame may ever spend of
+                                ; them, which tk_steps caps a stall at. It
+                                ; lives here rather than beside tk_steps
+                                ; because TK_MAXSTEP * TK_TURN is the COARSEST
+                                ; heading lattice any machine puts the player
+                                ; on, and SPEC.md 85.6.5.8 derives the aim
+                                ; box from exactly that
 TK_SPEED  equ 26                ; world units per frame, forward
 TK_RSPEED equ 16                ; ...and reversing
 TK_SHVEL  equ 130               ; a shell's speed, world units a TICK
@@ -195,6 +207,94 @@ TK_SHLIFE equ 30                ; ...and its life in ticks, so its reach is
                                 ; shoots you in the back
 TK_LIVES  equ 4
 TK_HITR   equ 150               ; a shell within this of a target is a hit
+
+; --- the ground the player starts on has to be drivable (SPEC.md 85.6.6) -----
+; tk_newgame scattered TK_NSTAT pieces of scenery uniformly over the torus and
+; stood the player at the origin without ever comparing the two. tk_blocked
+; refuses a destination within 300 of a piece and a step is only TK_SPEED, so a
+; player who starts inside that box cannot get out of it in ANY direction:
+; reported as "sometimes I spawn into an obstacle, and can only turn, never
+; drive", and modelled at 5.27% of games - one in nineteen - with another 2.15%
+; fenced in on some headings but not all.
+;
+; TK_CLEARR is twice tk_blocked's own box, and the margin is what makes it a
+; proof rather than an improvement: a piece this far off cannot refuse even the
+; FIRST step, because 300 + TK_SPEED is 326. Modelled again with the rule in,
+; over the same 40,000 games: zero stuck and zero fenced.
+TK_CLEARR equ 600               ; ...and no piece may stand nearer the spawn
+
+; --- aiming, and what the TURN's own step costs it (SPEC.md 85.6.5) -----------
+; A heading is a byte, so a unit is 1.40625 degrees and TK_TURN spends two of
+; them a TICK. tk_input latches once a FRAME and tk_pmove spends up to
+; TK_MAXSTEP of them, so the finest turn a player can COMMAND is
+; TK_TURN * min(ticks a frame, TK_MAXSTEP) - SIX units, 8.44 degrees, on both
+; 1bpp adapters, where docs/GFX-FSX-PLAN.md 0 measures 6.06 and 4.32 fps. What
+; that has to fit inside is tk_espoil's own window, 6,100/R units either side:
+; 4.1 units wide at 3,000 and 3.1 at the shell's 3,900-unit reach. So the sweep
+; steps clean over a distant tank and the phase of the press decides whether it
+; was ever hittable.
+
+; --- where the auto-aim applies, DERIVED and not chosen (SPEC.md 85.6.5.8) ---
+; THE PLAYER HAS TO AIM IT THEMSELVES, so the gun only corrects a shot at a
+; tank inside the box the CLOSED sight draws. Which makes the box's width a
+; reachability question rather than a taste one: the player can only command a
+; heading every TK_TURN * tk_lstep units and tk_lstep is capped at TK_MAXSTEP,
+; so the coarsest lattice anywhere is Q = TK_MAXSTEP * TK_TURN = 6 units and
+; the nearest heading to an arbitrary bearing is within Q/2 = 3 of it.
+;
+; A BOX NARROWER THAN Q/2 THEREFORE HAS BEARINGS NOTHING CAN REACH. At the 18
+; px this was first drawn at - 2.65 units - it is 11.8% of them: one tank in
+; nine that no sequence of presses can put in the box, which is SPEC.md
+; 85.6.5's original defect in miniature. At 21 px it is none, ever, on any
+; machine.
+;
+; And tk_aimfix's cap is Q/2 as well, which makes the pair sufficient rather
+; than merely necessary: at the nearest reachable heading the error is inside
+; the box AND inside the cap, so the correction is exact and the shot lands at
+; every range. At the box's EDGE the residual is 0.24 units, against a window
+; of 1.56 at the shell's longest reach.
+TK_BOXQ   equ TK_MAXSTEP * TK_TURN * 2 + 1      ; Q/2 in quarter units, plus a
+                                                ; quarter unit of margin
+TK_BOXPX  equ 22                ; ...and what that is in tk_t_lock's own
+                                ; 320x200 units: 3.25 * sclx * tan(1u) = 22.1
+
+%if TK_BOXQ < TK_MAXSTEP * TK_TURN * 2
+  %error "TK_BOXQ is under half the coarsest turn lattice: there are bearings no sequence of presses can put a tank inside the box"
+%endif
+; ...and the same inequality read the other way is what lets tk_aimfix clamp
+; nothing at runtime: the cap is TK_MAXSTEP * TK_TURN * 2 at its largest, which
+; is inside the box by construction, so a correction can never reach past the
+; brackets the player is being asked to aim within.
+%assign TK_BOXDRAWN (TK_BOXPX * 5882) / 10      ; the DRAWN box, quarters x1000
+%if TK_BOXDRAWN > TK_BOXQ * 1000 + 588
+  %error "tk_t_lock is drawn WIDER than the box the gun uses: the closed sight would promise a correction outside it"
+%endif
+%if TK_BOXDRAWN < TK_BOXQ * 1000 - 588
+  %error "tk_t_lock is drawn NARROWER than the box the gun uses"
+%endif
+
+TK_RETQ   equ 20                ; the gunsight's OWN half-width, in quarter
+                                ; angle units, and the outer gate on every
+                                ; assist. tk_t_sight brackets at 34 of
+                                ; 320x200's units and a unit of heading is
+                                ; sclx*tan(1u) pixels, so it is
+                                ; 34/(277*0.024536) = 5.00 units on both
+                                ; 320-wide viewports and 68/(554*0.024536) =
+                                ; 5.00 on Hercules - one constant on all three,
+                                ; because 85.3's table sets sclx for the same
+                                ; field of view everywhere
+TK_ERRK   equ 163               ; 40.756 * 4: units per (ocx/ocz), in quarters
+TK_HITQ   equ 24444             ; tk_espoil's window, in quarter units times
+                                ; the range: TK_HITR*256*4/(2*pi). Divided by
+                                ; the range it is how far off the sights a shot
+                                ; may be and still hit - 6.2 quarters at the
+                                ; shell's longest reach and 35 at 700
+TK_LOCKHYS equ 2                ; ...widened by half a unit once the sight has
+                                ; closed, so a target on the boundary does not
+                                ; chatter the reticle and its blip
+TK_BLIPHZ equ 2200              ; the acquisition blip: one tick, and BELOW the
+TK_BLIPPRI equ 020h             ; muzzle's SND_PRI_PKG, so a shot always wins
+TK_AIMBAN equ 36                ; ticks the mode banner stays up: two seconds
 
 ; --- what a shell cannot pass through (SPEC.md 85.6.2) ------------------------
 ; One radius per scenery type, indexed by its OT_*. A slab is wider than a
@@ -230,12 +330,15 @@ TK_RADR   equ 4000              ; what the radar's rim means, in world units
 
 ; --- the attract window (SPEC.md 85.10) ---------------------------------------
 ; The frame; the content is two narrower and nineteen shorter, and the window
-; manager rounds the width up so the content lands on a multiple of 8. The
-; score table sits BESIDE the logo rather than under it, which is what decides
-; the width: 258 of logo, 128 of table and the margins between them. The window
-; is not resizable, because every row below is placed off a constant rather
-; than measured.
-TK_WINW   equ 480
+; manager rounds the width up so the content lands on a multiple of 8 - so a
+; multiple of 8 here IS the content width. What decides it is the BOTTOM PAIR:
+; 8 of margin, 128 of score band, 8 of gutter, 192 of instructions and 8 of
+; margin. The logo used to share the top row with the table and set the width
+; itself at 480, which left a band of nothing under its left half; it is
+; centred over both of them now, and tkattr.inc asserts this number against the
+; columns rather than restating them. The window is not resizable, because
+; every row is placed off a constant rather than measured.
+TK_WINW   equ 344
 TK_WINH   equ 152
 
 ; --- scancodes this game reads directly (SPEC.md 9.7) -------------------------
@@ -269,6 +372,11 @@ tk_entry:
     mov byte [tk_at_scrt], TK_SCRT  ; the band's first roll is a whole interval
                                     ; away, not 256 of them: the loader zeroes
                                     ; bss and this counts DOWN
+    mov byte [tk_at_blink], 1       ; ...and the play line starts LIT, for the
+    mov byte [tk_at_blt], TK_BLINKON    ; same reason: a zeroed counter would
+                                    ; hold the first dark phase for 256 wakes
+                                    ; and a zeroed flag would open the window
+                                    ; on a panel with no play line at all
 
     ; Centre the attract window in the desktop band. It is not resizable and
     ; it never draws the game - the game is the bracket - so one size does.
@@ -306,6 +414,12 @@ tk_entry:
                                     ; fact this package holds about it
     mov si, tk_menus
     call OSAPI_MENU_SET
+    mov si, tk_about                ; ...and 'About Tank Attack' above the
+    call OSAPI_ABOUT_SET            ; Close the kernel already puts in our
+                                    ; pull-down (SPEC.md 12.2). WINDOWED only:
+                                    ; inside an fsx bracket the app owns every
+                                    ; pixel and there is no bar to pull down
+                                    ; (SPEC.md 53.7, docs/GFX-FSX-PLAN.md)
 .full:
     pop di
     pop si
@@ -428,6 +542,13 @@ tk_paint:
     call tk_band_full
     call tk_at_resume               ; the two gleam cursors are absolute, so a
     call tk_hire                    ; window that MOVED has to re-init them
+    cmp byte [tk_abon], 0           ; ...and the About card LAST, over the
+    je .out                         ; attract panel it is opaque about (20.5.1)
+    push si
+    mov bx, [tk_win]
+    mov si, tk_ablines
+    call os88ui_about_d             ; _d: this paint's region is already armed
+    pop si
 .out:
     pop di
     pop si
@@ -442,6 +563,8 @@ tk_paint:
 ; -----------------------------------------------------------------------------
 tk_onkey:
     push ax
+    call tk_abdismiss               ; any key takes the credits down, and is
+    jc .out                         ; spent doing it
     cmp al, 'f'
     je .go
     cmp al, 'F'
@@ -466,7 +589,10 @@ tk_onkey:
 ; tk_onclick - W_ONCLICK: a click in the panel starts a session too
 ; -----------------------------------------------------------------------------
 tk_onclick:
+    call tk_abdismiss               ; the credits are up: this click takes them
+    jc .out                         ; down rather than starting a session
     call tk_cmd_play
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -475,7 +601,8 @@ tk_onclick:
 tk_oncmd:
     push ax
     push bx
-    cmp al, 0
+    call tk_abdismiss               ; a menu pick takes the credits down first,
+    cmp al, 0                       ; and then does what it says
     jne .n1
     call tk_cmd_play
     jmp short .out
@@ -517,6 +644,68 @@ tk_s_score:  db 'SCORE ', 0
 tk_s_gnew:   db 'N - NEW GAME', 0
 tk_s_gexit:  db 'F - EXIT', 0
 tk_s_enter:  db 'PRESS ENTER', 0
+
+; =============================================================================
+; 'About Tank Attack' - the credit card (SPEC.md 12.2, 20.5.1)
+; =============================================================================
+; WINDOWED ONLY, and that is the architecture rather than a choice: the game
+; itself runs inside an fsx bracket where this package owns every pixel and no
+; kernel drawing slot is legal at all (SPEC.md 53.7, docs/GFX-FSX-PLAN.md), so
+; there is no bar to pull the item down from. The attract panel is where the
+; kernel's chrome exists, and the card goes on it.
+;
+; The attract worker animates the same content two ticks at a time, so
+; tk_at_step checks [tk_abon] under the lock it has just taken and drops the
+; whole frame - the arkanoid/tracker pattern.
+
+; -----------------------------------------------------------------------------
+; tk_about - the OSAPI_ABOUT_SET handler (slot 0x01E0)
+; in:  SI = our window ptr; the UI task, gfx lock HELD
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+tk_about:
+    push bx
+    push si
+    mov byte [tk_abon], 1
+    mov bx, si
+    mov si, tk_ablines
+    call os88ui_about               ; arms the clip itself: a menu dispatch
+    pop si                          ; arrives without one (SPEC.md 11.3)
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; tk_abdismiss - take the card down if it is up
+; in:  gfx lock held ([tk_win] names the window; every caller is a callback of
+;      ours and the worker never calls this)
+; out: CF = 1 the click or key was spent doing it; preserves every register
+;
+; tk_paint is the whole attract panel, which is what the card covered AND what
+; the worker skipped while it was up - one repaint settles both.
+; -----------------------------------------------------------------------------
+tk_abdismiss:
+    cmp byte [tk_abon], 0
+    je .none
+    push bx
+    mov byte [tk_abon], 0
+    mov bx, [tk_win]
+    call OSAPI_WM_CLIP_SET          ; nothing has armed a region for a click
+    jc .gone                        ; or a key (SPEC.md 11.3)
+    call tk_paint
+.gone:
+    pop bx
+    stc
+    ret
+.none:
+    clc
+    ret
+
+; --- the About card's lines (SPEC.md 20.5.1) ----------------------------------
+tk_ablines:
+    dw tk_ab1, tk_ab2, tk_ab3, 0
+tk_ab1:      db 'Tank Attack for os8088', 0
+tk_ab2:      db 0
+tk_ab3:      db 'Contributed by Elendilon', 0
 
 tk_tpl:
     dw 0, 0, TK_WINW, TK_WINH
@@ -665,6 +854,17 @@ tk_tpl:
     ZBYTE tk_pa
     ZBYTE tk_kturn                  ; the held keys, latched by tk_input and
     ZWORD tk_kdrv                   ; spent one step at a time by tk_pmove
+    ZBYTE tk_aimh                   ; the heading THIS shell leaves at
+    ZBYTE tk_lstep                  ; steps the LAST frame owed - TRIM's whole
+                                    ; input, because the lattice the player is
+                                    ; stuck on is TK_TURN times this
+    ZWORD tk_aimw                   ; tk_besttarget's window, best, pick and
+    ZWORD tk_aimb                   ; the picked target's RANGE, in quarter
+    ZWORD tk_aimq                   ; units but for the last
+    ZWORD tk_aimz
+    ZBYTE tk_locked                 ; the sight is closed on a target...
+    ZBYTE tk_lockwas                ; ...and was last frame, which is what makes
+                                    ; the blip an ACQUISITION and not a tone
     ZBUF  tk_ox, TK_NOBJ * 2        ; the world's, indexed by slot x 2
     ZBUF  tk_oz, TK_NOBJ * 2
     ZBUF  tk_otype, TK_NOBJ
@@ -780,8 +980,8 @@ tk_tpl:
     ZBYTE tk_at_lag                 ; wakes the tail still owes the head
     ZBYTE tk_at_scrt                ; wakes until the band rolls
     ZWORD tk_at_scr                 ; the table row at the top of the band
-    ZBYTE tk_atink
-    ZWORD tk_atrow
+    ZBYTE tk_at_blink               ; the play line: lit or dark, and the wakes
+    ZBYTE tk_at_blt                 ; left of that phase (SPEC.md 85.10.3)
     ZWORD tk_e1x                    ; one segment's ends, in screen coords
     ZWORD tk_e1y
     ZWORD tk_e2x
@@ -791,10 +991,16 @@ tk_tpl:
     ZWORD tk_cn                     ; ...and what this LSTEP takes of them
     ZWORD tk_due                    ; the tick the worker's next wake is due
     ZBYTE tk_hired
+    ZBYTE tk_abon                   ; the About card is up (SPEC.md 20.5.1)
     ZBUF  tk_curfh, TKC_SZ          ; the two gaps and their two tails: one
     ZBUF  tk_curft, TKC_SZ          ; walk block each, plus where it has got
     ZBUF  tk_curbh, TKC_SZ          ; to and what it still owes this glyph
     ZBUF  tk_curbt, TKC_SZ
+
+; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
+%define OS88UI_ABOUT            ; the standard About card, and NOTHING else:
+%define OS88UI_NOBTN            ; the attract panel is the game's own chrome
+%include "os88ui.inc"
 
     OS88_BSS TK_BSS
     OS88_IMAGE_END

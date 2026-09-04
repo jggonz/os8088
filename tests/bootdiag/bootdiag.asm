@@ -74,7 +74,14 @@ BOOT2_SECS  equ 11              ; ...and how many sectors of blob precede it
                                 ; for the stage-1 replay in section 7)
 RELOC_ADJ   equ 0x07E0          ; boot/boot.asm's, exactly
 BOOT_STACK  equ 2048
-STAGE2_ADJ  equ 0x07C0 - BOOT_STACK/16 - BOOT2_SECS*32
+; The LOW end of the top-of-RAM region stage 1 writes. It used to be stage 2's
+; own base - the blob was read to just under stage 1's stack and copied down
+; from there - so this carried `- BOOT2_SECS*32` too. SPEC.md 2.9.5 reads the
+; blob straight to HEAP_SEG now, which is a LOW address and one this sector
+; deliberately cannot know: it depends on none of the things under test. What
+; is left at the top, and what the probes below still have to prove holds a
+; write, is stage 1's own 2,560 bytes.
+STACK_BOT_ADJ equ 0x07C0 - BOOT_STACK/16
 DPT_AT      equ 0x0580          ; the address stage 1 parks its patched
                                 ; diskette parameter table at
 SCR_SECS    equ 16              ; sectors the read buffer holds - 8KB, which
@@ -853,8 +860,8 @@ sec_memory:
     mov [d_topseg], ax
     sub ax, RELOC_ADJ
     mov [d_relseg], ax
-    add ax, STAGE2_ADJ
-    mov [d_b2seg], ax
+    add ax, STACK_BOT_ADJ
+    mov [d_stkseg], ax
 
     mov si, s_mtop
     call puts
@@ -866,7 +873,7 @@ sec_memory:
     call puthex16
     mov si, s_mb2
     call puts
-    mov ax, [d_b2seg]
+    mov ax, [d_stkseg]
     call puthex16
     call crlf
 
@@ -887,7 +894,7 @@ sec_memory:
     call rd_okc
     mov si, s_mthere2
     call puts
-    mov ax, [d_b2seg]
+    mov ax, [d_stkseg]
     mov es, ax
     xor di, di
     call mem_probe_at           ; ...and stage 2's own first byte
@@ -997,7 +1004,7 @@ sec_memory:
     ; --- 3: and the same question for stage 2's 5.5KB -----------------------
     mov si, s_mstay2
     call puts
-    mov ax, [d_b2seg]
+    mov ax, [d_stkseg]
     mov es, ax
     xor di, di
     mov cx, BOOT2_SECS * 512
@@ -1007,7 +1014,7 @@ sec_memory:
     mov dl, [d_usedl]
     int 0x13
     call rd_boot
-    mov ax, [d_b2seg]
+    mov ax, [d_stkseg]
     mov es, ax
     xor di, di
     mov cx, BOOT2_SECS * 512
@@ -1060,7 +1067,7 @@ sec_replay:
 replay_run:
     mov [t_lba], ax
     mov word [r_left], BOOT2_SECS
-    mov ax, [d_b2seg]
+    mov ax, [d_stkseg]
     mov [r_dest], ax
     mov byte [d_replay], 1
 .next:
@@ -1884,7 +1891,7 @@ d_equip     dw 0
 d_scr       dw 0
 d_topseg    dw 0
 d_relseg    dw 0
-d_b2seg     dw 0
+d_stkseg     dw 0
 d_pat       dw 0
 d_stmask    db 0
 d_badmask   dw 0
@@ -2016,9 +2023,9 @@ s_h6        db '[6] MEMORY - the top of RAM, where stage 1 relocates to',
             db 13, 10, 0
 s_mtop      db '  top of conventional ', 0
 s_mrel      db '  stage 1 at ', 0
-s_mb2       db '  stage 2 at ', 0
+s_mb2       db "  stage 1's stack floor at ", 0
 s_mthere    db '  RAM really exists at stage 1: ', 0
-s_mthere2   db '   at stage 2: ', 0
+s_mthere2   db '   at its stack floor: ', 0
 s_mstay     db "  on stage 1's own stack: read AH ", 0
 s_mstay1    db ', ROM used ', 0
 s_mstay2b   db ' bytes below SP', 0

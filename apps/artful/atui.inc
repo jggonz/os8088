@@ -1196,7 +1196,10 @@ at_about_body:
     add dx, 12
     mov si, at_s_url
     call at_ctext
-    pop si
+    add dx, 12
+    mov si, at_s_credit             ; ...and who brought it here. It clears the
+    call at_ctext                   ; OK button by 16px on the full card and by
+    pop si                          ; 20 on CGA's compact one (at_mdrect)
     pop dx
     pop cx
     pop bx

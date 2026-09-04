@@ -59,6 +59,30 @@
 
 %include "os88api.inc"
 
+; -----------------------------------------------------------------------------
+; APP_SMALL - THE SMALL-APPS BUILD OF THIS PACKAGE (SPEC.md 43.12)
+;
+; Note Pad's SPEC.md 27.16 is the pattern and its rules hold: one source
+; assembled twice, `make smallapps` passes -DAPP_SMALL, never a second ABI.
+;
+; There is very little to take here and that is the finding, not a shortfall -
+; SPEC.md 43.11 is where this package's bytes actually came from, and they
+; came off BOTH builds. What is left is two things a game can do without:
+;
+;   SOLF_AUTO   Auto Finish - the A key and the Game menu's third item. The
+;               CLICK-to-foundation convenience stays (a press and release
+;               without moving), because that is how the game is played rather
+;               than a labelled extra, and it is what sol_tofnd is really for
+;   SOLF_ABOUT  the About card
+;
+; **AT THE TOP** for the reason apps/notepad/notepad.asm's note gives: these
+; are preprocessor tests answered in file order.
+; -----------------------------------------------------------------------------
+%ifndef APP_SMALL
+%define SOLF_AUTO
+%define SOLF_ABOUT
+%endif
+
     OS88_HEADER 'SOLITAIRE', sol_entry, 1
 
 ; --- embedded 16x16 icon (SPEC.md 20.2, flags bit 0) ---------------------------
@@ -189,6 +213,8 @@ SOL_PH_S    equ SOL_FAND_S * 6 + SOL_FANU_S * 12 + SOL_TOPY_S + SOL_CH_S \
 SOL_BACKMAX equ 704                 ; the back image at the LARGER metrics,
                                     ; (32/2) * 44 bytes of packed 4bpp
 SOL_TABLE   equ CGREEN              ; the felt: green on VGA, black on 1bpp
+SOL_NOPEN   equ 0xFF                ; [sol_pipink] for a mask the sprite pass
+                                    ; must NOT draw - see sol_setink
 SOL_GHOST   equ CDGRAY              ; empty-slot outlines and their ghost
                                     ; pips - in the dither class, so the
                                     ; distinction survives SPEC.md 39.4
@@ -341,11 +367,13 @@ sol_entry:
                                     ; nor the promise above touches the flags,
                                     ; so wm_create's CF still rides out to the
                                     ; loader
+%ifdef SOLF_ABOUT
     mov si, sol_about
     call OSAPI_ABOUT_SET            ; 'About Solitaire' under our name in the
                                     ; bar (SPEC.md 12.2) - same contract, and
                                     ; it preserves the flags for the same
                                     ; reason: the CF above is the loader's
+%endif   ; SOLF_ABOUT
 .full:
     pop di
     pop si
@@ -454,13 +482,7 @@ sol_onresize:
                                     ; THIS card's height: 348 or 200, which is
                                     ; the one number the big/small card choice
                                     ; turns on
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop6
 
 ; -----------------------------------------------------------------------------
 sol_track:
@@ -517,13 +539,7 @@ sol_paint:
     push di
     call sol_track
     call sol_drawall
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop6
 
 ; -----------------------------------------------------------------------------
 ; sol_drawall - felt, thirteen piles, and the plaque if the game is won
@@ -570,15 +586,13 @@ sol_drawall:
     je .about
     call sol_banner
 .about:
+%ifdef SOLF_ABOUT
     cmp byte [sol_abon], 0
     je .out
     call sol_abdraw
+%endif
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop4
 
 ; -----------------------------------------------------------------------------
 ; sol_drawpile - erase one pile's slot back to felt and redraw it
@@ -740,13 +754,7 @@ sol_drawpile:
                                     ; ONE site, at the single exit, so a pile
                                     ; kind added later cannot forget it; it is
                                     ; sol_prec that refuses a non-tableau pile
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop6
 
 ; =============================================================================
 ; The shadow - what is on the glass, per tableau column (SPEC.md 43.10)
@@ -1023,11 +1031,7 @@ sol_slot:
     add dx, [sol_ch]
     dec dx
     call sol_framec
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop4
 
 ; -----------------------------------------------------------------------------
 ; sol_ghost16 - a 16x16 mask centred in an empty pile, in the dither class
@@ -1039,8 +1043,11 @@ sol_ghost16:
     push bx
     push cx
     push dx
-    mov al, SOL_GHOST
-    call OSAPI_SET_COLOR
+    mov al, SOL_GHOST               ; CDGRAY, which is a DITHER on 1bpp: it
+    call OSAPI_SET_COLOR            ; has to be composed per pixel by the walk,
+    mov byte [sol_pipink], SOL_NOPEN ; and the sprite pen would lay it down
+                                    ; FLAT - black on black felt, so the ghost
+                                    ; would simply vanish (SPEC.md 43.11.3)
     mov ax, [sol_cw]
     sub ax, 16
     shr ax, 1
@@ -1054,11 +1061,7 @@ sol_ghost16:
     mov cx, 16
     mov dx, 16
     call sol_maskrun
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop4
 
 ; -----------------------------------------------------------------------------
 ; sol_card - draw one card
@@ -1108,13 +1111,7 @@ sol_card:
     call sol_drawface
 .out:
     pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop6
 
 ; -----------------------------------------------------------------------------
 ; sol_drawback - blit the prebuilt back image
@@ -1196,7 +1193,8 @@ sol_drawface:
     jne .ink                        ; on 1bpp index 12 reduces to WHITE, which
     mov al, CLRED                   ; on a white face is nothing at all
 .ink:
-    call OSAPI_SET_COLOR
+    call sol_setink                 ; ...the pips are masks, so the sprite pen
+                                    ; needs this colour too (SPEC.md 43.11.3)
 
     mov ax, [sol_ry]                ; --- rank ---
     add ax, 8
@@ -1220,39 +1218,68 @@ sol_drawface:
 .one:
     call OSAPI_FONT_CHAR_XPARENT
 
-    mov ax, [sol_psy]               ; --- corner pip, 8x8 ---
-    add ax, 8
-    cmp ax, [sol_cvis]
-    ja .done
-    mov al, [sol_ccard]
-    call sol_suit
-    mov ah, 0
-    call sol_pipsel                 ; SI = mask
-    mov ax, [sol_cdx]
-    add ax, [sol_psx]
-    mov bx, [sol_cdy]
-    add bx, [sol_psy]
-    mov cx, 8
-    mov dx, 8
-    call sol_maskrun
-
-    mov ax, [sol_ply]               ; --- centre pip, 16x16, if it shows ---
-    add ax, 16
-    cmp ax, [sol_cvis]
-    ja .done
-    mov al, [sol_ccard]
-    call sol_suit
-    mov ah, 1
-    call sol_pipsel
-    mov ax, [sol_cdx]
-    add ax, [sol_plx]
-    mov bx, [sol_cdy]
-    add bx, [sol_ply]
-    mov cx, 16
-    mov dx, 16
-    call sol_maskrun
+    mov ah, 0                       ; --- corner pip, 8x8 ---
+    call sol_facepip
+    jc .done                        ; ...and nothing BELOW it fits either
+    mov ah, 1                       ; --- centre pip, 16x16 ---
+    call sol_facepip
 .done:
     ret
+
+; -----------------------------------------------------------------------------
+; sol_facepip - one suit pip on the card face, if the visible band reaches it
+; in:  AH = 0 the 8x8 corner pip, 1 the 16x16 centre one; [sol_ccard] the card,
+;      [sol_cdx]/[sol_cdy] its top-left, [sol_cvis] how many rows of it show
+; out: CF = 1 the band is too short - and it is too short for everything BELOW
+;      this pip too, which is why the caller stops rather than skipping
+; clobbers: nothing else
+;
+; The two pips differed in four things and shared the other eleven
+; instructions: which card-relative offset pair they sit at, how big they are,
+; which of sol_pipsel's two tables they come from, and that only the second can
+; be the last thing on the card. The offsets are adjacent in .bss in draw order
+; (sol_psx/sol_psy, then sol_plx/sol_ply), so ONE pointer selects the pair -
+; and the size is the same AH that sol_pipsel already wanted.
+; -----------------------------------------------------------------------------
+sol_facepip:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, sol_psx                 ; the 8x8 corner pip's offsets...
+    mov cx, 8
+    or ah, ah
+    jz .have
+    mov si, sol_plx                 ; ...or the 16x16 centre one's
+    mov cx, 16
+.have:                              ; AH IS STILL LIVE from here to sol_pipsel -
+                                    ; it is the size, and the arithmetic below
+                                    ; must not touch it. `mov ax, bx` here drew
+                                    ; the 8x8 table 16 rows tall, off the end
+                                    ; of it and into the next suit, which is a
+                                    ; picture rather than a crash
+    mov bx, [si+2]                  ; does the visible band reach the BOTTOM of
+    mov dx, bx                      ; it? A pip half off the card is not drawn
+    add dx, cx                      ; half, it is not drawn
+    cmp dx, [sol_cvis]
+    ja .short
+    mov dx, [si]
+    add bx, [sol_cdy]               ; BX = absolute y
+    add dx, [sol_cdx]               ; DX = absolute x
+    mov al, [sol_ccard]
+    call sol_suit                   ; AL = the suit; AH is still the size
+    call sol_pipsel                 ; SI = the mask rows
+    mov ax, dx                      ; ...and sol_maskrun wants AX/BX = x/y,
+    mov dx, cx                      ; CX = rows, DX = width
+    call sol_maskrun
+    clc
+    jmp .out
+.short:
+    stc
+.out:
+    pop si
+    jmp sol_pop4
 
 ; -----------------------------------------------------------------------------
 ; sol_pipsel  - pick a suit's pip mask, hollow where hollow means something
@@ -1292,17 +1319,12 @@ sol_pipsel:
     jb .solid
     cmp bl, SUIT_DI
     ja .solid
-    dec bl                          ; the hollow tables index 0 = hearts
-    or ah, ah
-    jnz .h16
-    shl bx, cl                      ; 8 words a suit
-    mov si, sol_p8h
-    jmp .add
-.h16:
-    shl bx, cl                      ; 16 words a suit
-    shl bx, 1
-    mov si, sol_p16h
-    jmp .add
+    mov byte [sol_mrh], 1           ; ...and THAT is the whole of hollow now:
+                                    ; the same solid mask, outlined by
+                                    ; sol_maskrun as it plots it. One-shot -
+                                    ; sol_maskrun clears it - so a caller that
+                                    ; never sets it draws solid, which is what
+                                    ; sol_pipsold and the ring rely on
 .solid:
     or ah, ah
     jnz .s16
@@ -1321,6 +1343,70 @@ sol_pipsel:
     ret
 
 ; -----------------------------------------------------------------------------
+; sol_pop6 / sol_pop4 - the shared epilogue ladder
+;
+; Entered by a near JMP and never a call, which is what makes it free: the
+; frame is the caller's and nothing is added to it (docs/STACK-SLOTS-PLAN.md
+; found the same for the kernel's own pass). `pop` does not touch the flags,
+; so a routine returning CF returns it through here unchanged.
+;
+; 22 sites, 4 or 2 bytes each, against 7 bytes once.
+; -----------------------------------------------------------------------------
+sol_pop6:
+    pop di
+    pop si
+sol_pop4:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+
+; -----------------------------------------------------------------------------
+; sol_outline - DX = the 1px outline of mask row DX (SPEC.md 43.11)
+; in:  DX = this row, SI -> it, [sol_mrp] = the row above (0 before the first),
+;      [sol_mrn] = rows left, so 1 means this is the last
+; out: DX = the outline; [sol_mrp] = the SOLID row, for the next call
+;
+;     outline(r) = r AND NOT (up AND r AND dn AND (r << 1) AND (r >> 1))
+;
+; i.e. the row less the pixels whose four neighbours are all set - the pixels
+; strictly INSIDE the shape. A row above or below the mask is all-zero, which
+; makes the first and last rows entirely their own outline, and that is right:
+; a shape's top row is all boundary.
+;
+; It replaces two tables (SPEC.md 43.11); the note above sol_p8s has the
+; reasoning and the identity, which holds for every row of both suits.
+; -----------------------------------------------------------------------------
+sol_outline:
+    push ax
+    push bx
+    mov ax, [sol_mrp]               ; up
+    and ax, dx
+    cmp word [sol_mrn], 1           ; ...dn, which the last row has not got
+    je .nodn
+    and ax, [si+2]
+.nodn:
+    mov bx, dx                      ; ...and the two sideways neighbours
+    shl bx, 1
+    and ax, bx
+    mov bx, dx
+    shr bx, 1
+    and ax, bx
+    mov [sol_mrp], dx               ; the SOLID row is what the next row sees
+    not ax
+    and dx, ax
+    pop bx
+    pop ax
+    ret
+
+; SPEC.md 25.6's sprite stage is 16 rows of one 16px word. A record taller or
+; wider than that is REFUSED, not clipped, so this is the kernel's number
+; (icons.inc ICO_STAGE_H) rather than a choice of ours.
+SOL_ICROWS  equ 16
+
+; -----------------------------------------------------------------------------
 ; sol_maskrun - plot a 1-bit mask transparently, one hline per run
 ; in:  AX = x, BX = y (absolute), SI = rows as words (bit 15 = leftmost),
 ;      CX = row count, DX = width in pixels; colour in [gfx_color]
@@ -1336,9 +1422,72 @@ sol_maskrun:
     push cx
     push dx
     push si
+    push di
     mov [sol_mrx], ax
     mov [sol_mry], bx
     mov [sol_mrw], dx
+    mov [sol_mrr], cx
+    mov [sol_mrn], cx
+    mov word [sol_mrp], 0           ; no row above the first
+
+    ; --- stage the shape into the sprite record (SPEC.md 43.11.3) ----------
+    ; The DATA half must be clear: ico_core lays the mask down in the pen's
+    ; first colour and then draws the data rows OVER it, ungated by the mask,
+    ; so a stray data bit would be drawn. Writing the whole buffer - the
+    ; shape, then zeros to the end - covers mask and data for any row count
+    ; this is called with, in one loop and under one rule.
+    mov al, 1                       ; wwords: one 16px word a row
+    mov ah, cl                      ; ...and the rows the caller asked for
+    mov [sol_icrec], ax
+    mov di, sol_icmask
+    mov cx, SOL_ICROWS * 2
+.stage:
+    xor dx, dx
+    cmp word [sol_mrn], 0
+    je .put                         ; past the shape: zero to the end
+    mov dx, [si]
+    cmp byte [sol_mrh], 0
+    je .solid
+    call sol_outline                ; DX = the outline of this row
+.solid:
+    add si, 2
+    dec word [sol_mrn]
+.put:
+    mov [di], dx
+    add di, 2
+    loop .stage
+    mov byte [sol_mrh], 0           ; ONE-SHOT (see sol_pipsel)
+
+    ; --- ONE drawing call, when the whole shape may be drawn --------------
+    ; ico_core clips a sprite WHOLE - one shape or none, the font_char rule -
+    ; so a pip a damage rect cuts would vanish entirely. That is what the
+    ; walk below is still here for, and it is os88ui_glyph's own pair.
+    mov ax, [sol_mrx]
+    mov bx, [sol_mry]
+    mov cx, ax
+    add cx, [sol_mrw]
+    dec cx
+    mov dx, bx
+    add dx, [sol_mrr]
+    dec dx
+    cmp byte [sol_pipink], SOL_NOPEN ; an ink the pen cannot lay down flat
+    je .walk
+    call OSAPI_WM_CLIP_TEST         ; CF = 0 also when no clip is armed
+    jc .walk
+    mov al, [sol_pipink]            ; mask colour; the data rows are clear, so
+    mov ah, al                      ; the second half of the pen never applies
+    call OSAPI_ICON_PEN
+    mov cx, [sol_mrx]
+    mov dx, [sol_mry]
+    mov si, sol_icrec
+    call OSAPI_ICON_DRAW
+    jnc .out                        ; ...and CF = 1 is a record it would not
+                                    ; stage, which the walk still draws
+
+    ; --- one OSAPI_GFX_HLINE per run of set bits, the original -------------
+.walk:
+    mov si, sol_icmask              ; the STAGED rows: already outlined, so
+    mov cx, [sol_mrr]               ; this loop no longer asks
     mov [sol_mrn], cx
 .row:
     mov dx, [si]
@@ -1368,12 +1517,10 @@ sol_maskrun:
     inc word [sol_mry]
     dec word [sol_mrn]
     jnz .row
+.out:
+    pop di
     pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop4
 
 .emit:                              ; the open run is [sol_mrs .. CX-1]
     push ax
@@ -1496,11 +1643,7 @@ sol_mkback:
     jb .side
 
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop4
 
 ; -----------------------------------------------------------------------------
 ; sol_bpx - set one pixel of the back image
@@ -1539,11 +1682,7 @@ sol_bpx:
 .put:
     mov [di], bl
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop4
 
 ; sol_about - the About handler (API 0x01E0, SPEC.md 12.2/43)
 ; in:  SI = our window; the UI task, gfx lock HELD, far-called at our segment
@@ -1556,6 +1695,7 @@ sol_bpx:
 ; the gfx lock against every background task for as long as the player left
 ; the credits up.
 ; -----------------------------------------------------------------------------
+%ifdef SOLF_ABOUT
 sol_about:
     push ax
     push bx
@@ -1566,13 +1706,7 @@ sol_about:
     mov byte [sol_abon], 1
     call sol_track
     call sol_drawall
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop6
 
 ; -----------------------------------------------------------------------------
 ; sol_abdismiss - take the About panel down, if it is up
@@ -1652,13 +1786,7 @@ sol_abmeas:
     sub ax, [sol_abh]
     shr ax, 1
     mov [sol_abt], ax
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop6
 
 ; -----------------------------------------------------------------------------
 ; sol_abdraw - the About panel: white card, black frame, the credit centred
@@ -1709,13 +1837,7 @@ sol_abdraw:
     add di, SOL_ABLH
     jmp .line
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop6
 .rect:                              ; the panel as (x1,y1)-(x2,y2), inclusive
     mov ax, [sol_abl]
     mov bx, [sol_abt]
@@ -1732,6 +1854,15 @@ sol_abdraw:
 ; in:  gfx lock held, origin tracked
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
+%else
+; No About card (APP_SMALL). sol_abdismiss is called by the click and key paths
+; before anything else and answers CF = 1 when it SPENT the event taking the
+; card down - so with no card it must answer "not spent".
+sol_abdismiss:
+    clc
+    ret
+%endif   ; SOLF_ABOUT
+
 sol_banner:
     push ax
     push bx
@@ -1782,11 +1913,7 @@ sol_banner:
     call OSAPI_FONT_STR_XPARENT
     call sol_pinv                   ; the plaque lands on the felt BETWEEN the
     pop si                          ; piles, and on a short window its top row
-    pop dx                          ; is a pixel off a column's slivers
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop4
 .box:
     mov ax, [sol_tmpc]
     mov bx, [sol_tmpd]
@@ -1803,36 +1930,52 @@ sol_banner:
 ; in:  AX = x1, BX = y1, CX = x2, DX = y2 (content-relative, inclusive)
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
+; These two differ in ONE instruction - which kernel entry the rect ends at -
+; so they share the translation and part company at the call.
 sol_fillc:
     push ax
     push bx
     push cx
     push dx
-    add ax, [sol_ox]
-    add cx, [sol_ox]
-    add bx, [sol_oy]
-    add dx, [sol_oy]
+    call sol_toabs
     call OSAPI_GFX_FILL
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop4
 
 sol_framec:
     push ax
     push bx
     push cx
     push dx
+    call sol_toabs
+    call OSAPI_GFX_FRAME
+    jmp sol_pop4
+
+; sol_setink - OSAPI_SET_COLOR, and ARM the sprite path with the same colour
+;
+; The masked-sprite pass sets its OWN pen (SPEC.md 25.6) rather than reading
+; [gfx_color], so sol_maskrun cannot ask the kernel what colour it is drawing
+; in - and, more than that, the pen lays a colour down SOLID. A dithered ink
+; is composed per pixel by gfx_* from screen-absolute (x + y) parity (SPEC.md
+; 39.4), which a sprite pass does not do, so a mask drawn in one through
+; OSAPI_ICON_DRAW comes out flat: CDGRAY on a 1bpp adapter is BLACK on black
+; felt, and the shape disappears (SPEC.md 43.11.3).
+;
+; So the sprite path is OPT-IN, one draw at a time. This is the opting in, and
+; a caller whose ink is a dither simply does not call it: `sol_pipok` is 0 in
+; a fresh .bss and sol_maskrun clears it on the way out, so the default for
+; every mask is the per-run walk, which dithers correctly.
+; in:  AL = a SOLID colour; out: nothing; preserves all registers
+sol_setink:
+    mov [sol_pipink], al
+    call OSAPI_SET_COLOR
+    ret
+
+; sol_toabs - AX/BX/CX/DX, a content-relative rect, to absolute screen coords
+sol_toabs:
     add ax, [sol_ox]
     add cx, [sol_ox]
     add bx, [sol_oy]
     add dx, [sol_oy]
-    call OSAPI_GFX_FRAME
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================
@@ -1908,11 +2051,7 @@ sol_pilerect:
     dec dx
 .short:
     mov [sol_ry2], dx
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop4
 
 ; -----------------------------------------------------------------------------
 ; sol_colfan - the fan steps THIS tableau column will be drawn at
@@ -2016,11 +2155,7 @@ sol_colfan:
     mov [sol_cfa], ax
 .out:
     pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop4
 
 ; -----------------------------------------------------------------------------
 ; sol_yoff - a card's y offset within its column
@@ -2206,11 +2341,7 @@ sol_canfnd:
 .no:
     stc
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop4
 
 ; -----------------------------------------------------------------------------
 ; sol_cantab - may this card go on that tableau column?
@@ -2265,11 +2396,7 @@ sol_cantab:
 .no:
     stc
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop4
 
 ; -----------------------------------------------------------------------------
 ; sol_move - move the top N cards of one pile to another, in order
@@ -2339,13 +2466,7 @@ sol_move:
     jb .done
     dec byte [sol_wfan]
 .done:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop6
 
 ; -----------------------------------------------------------------------------
 ; sol_domove - sol_move, then the win test, then the repaint
@@ -2455,11 +2576,7 @@ sol_newgame:
     jnz .shuf
     call sol_deal
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop4
 
 sol_deal:
     push ax
@@ -2561,11 +2678,7 @@ sol_stock:
     jnz .back
     mov byte [sol_wfan], 0
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop4
 
 ; -----------------------------------------------------------------------------
 ; sol_checkwin - are all four foundations full?
@@ -2676,13 +2789,7 @@ sol_onclick:
     call sol_drag
 .out:
     pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop6
 
 ; -----------------------------------------------------------------------------
 ; sol_hit - what is under a content-relative point?
@@ -3036,11 +3143,7 @@ sol_drag:
     jmp .pass
 .up:
     call sol_drop
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop4
 
 ; -----------------------------------------------------------------------------
 ; sol_linger - yield until the timer tick changes, gfx lock HELD throughout
@@ -3063,11 +3166,13 @@ sol_linger:
     pop ax
     ret
 
+%ifdef SOLF_AUTO
 sol_pace:
     call OSAPI_GFX_UNLOCK
     call sol_linger
     call OSAPI_GFX_LOCK
     ret
+%endif   ; SOLF_AUTO - the pause exists so the auto-finish can be WATCHED
 
 ; -----------------------------------------------------------------------------
 ; sol_dxor - draw (or erase - XOR is its own inverse) the hand's outline
@@ -3112,13 +3217,7 @@ sol_dxor:
     dec di
     jnz .rule
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop6
 
 ; -----------------------------------------------------------------------------
 ; sol_drop - the button came up: play the hand, or leave it where it was
@@ -3220,11 +3319,7 @@ sol_drop:
     mov cl, [sol_dnum]
     call sol_domove
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop4
 
 ; -----------------------------------------------------------------------------
 ; sol_handcard - the lowest card of the hand, the one a drop is judged on
@@ -3269,10 +3364,12 @@ sol_onkey:
     je .restart
     cmp bl, 'R'
     je .restart
+%ifdef SOLF_AUTO
     cmp bl, 'a'
     je .auto
     cmp bl, 'A'
     je .auto
+%endif
     cmp bl, ' '
     je .deal
     jmp .out
@@ -3282,20 +3379,16 @@ sol_onkey:
 .restart:
     call sol_cmd_restart
     jmp .out
+%ifdef SOLF_AUTO
 .auto:
     call sol_cmd_auto
     jmp .out
+%endif
 .deal:
     call sol_cmd_deal
 .out:
     pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sol_pop6
 
 ; -----------------------------------------------------------------------------
 ; sol_oncmd - AM_ONCMD: run a menu item (SPEC.md 12.2)
@@ -3320,8 +3413,10 @@ sol_oncmd:
     jz .new
     cmp bl, 1
     je .restart
+%ifdef SOLF_AUTO
     cmp bl, 2
     je .auto
+%endif
     jmp .out
 .new:
     call sol_cmd_new
@@ -3329,9 +3424,11 @@ sol_oncmd:
 .restart:
     call sol_cmd_restart
     jmp .out
+%ifdef SOLF_AUTO
 .auto:
     call sol_cmd_auto
     jmp .out
+%endif
 .deal:
     mov byte [sol_draw3], 0
     or bl, bl
@@ -3402,6 +3499,7 @@ sol_cmd_deal:
 ; Auto Finish: send everything that will go, a move a tick so it reads as
 ; play rather than as a repaint. The lock is dropped inside sol_pace, which
 ; is what puts each move on the glass before the next one is computed.
+%ifdef SOLF_AUTO
 sol_cmd_auto:
     push ax
 .round:
@@ -3422,6 +3520,8 @@ sol_cmd_auto:
 .out:
     pop ax
     ret
+
+%endif   ; SOLF_AUTO
 
 ; -----------------------------------------------------------------------------
 ; sol_dealmenu - grey out whichever Deal item is already in force
@@ -3458,22 +3558,37 @@ sol_tpl:
     OS88_PREFER sol_pref, SOL_PW_B, SOL_PH_B,  SOL_PW_B, SOL_PH_B,  SOL_PW_S, SOL_PH_S
 
     OS88_MENUSET sol_menus, sol_m_name, sol_oncmd
+%ifdef SOLF_AUTO
         OS88_MENU sol_m_game, sol_mi_game, 3
+%else
+        OS88_MENU sol_m_game, sol_mi_game, 2
+%endif
         OS88_MENU sol_m_deal, sol_mi_deal, 2
     OS88_MENUSET_END sol_menus
 
 sol_m_name:  db 'Solitaire', 0
 sol_m_game:  db 'Game', 0
-sol_mi_game: dw sol_s_new, sol_s_rest, sol_s_auto
+sol_mi_game: dw sol_s_new, sol_s_rest
+%ifdef SOLF_AUTO
+             dw sol_s_auto
+%endif
 sol_s_new:   db 'New Game', 0
 sol_s_rest:  db 'Restart Deal', 0
+%ifdef SOLF_AUTO
 sol_s_auto:  db 'Auto Finish', 0
+%endif
 sol_m_deal:  db 'Deal', 0
 sol_mi_deal: dw sol_s_d1x, sol_s_d3     ; draw-one is the zero state, so it
-sol_s_d1:    db 'Draw One', 0           ; starts as the greyed-out one
-sol_s_d1x:   db MENU_DIS, 'Draw One', 0
+; The two forms of each item are the SAME text, one of them disabled - which
+; is what MENU_DIS is (os88api.inc): a leading byte, and the kernel greys the
+; rest. So the plain label IS the disabled one from its second byte on, and
+; the pair costs one byte rather than a second copy of the string. 20 bytes
+; over the four, and sol_dealmenu still names both labels, so nothing here
+; depends on the overlap surviving a later edit.
+sol_s_d1x:   db MENU_DIS
+sol_s_d1:    db 'Draw One', 0           ; draw-one starts as the greyed-out one
+sol_s_d3x:   db MENU_DIS
 sol_s_d3:    db 'Draw Three', 0
-sol_s_d3x:   db MENU_DIS, 'Draw Three', 0
 
 sol_ttl:     db 'Solitaire', 0
 sol_s_win:   db 'You win!', 0
@@ -3485,12 +3600,14 @@ sol_s_win:   db 'You win!', 0
 ; height. Keep every line inside 24 glyphs - CGA gives this window 220px of
 ; content, which is 27 glyphs less the panel's own margins (SPEC.md 39).
 SOL_ABLH equ 11                     ; line pitch, px (8px glyphs + 3 of air)
+%ifdef SOLF_ABOUT
 sol_ablines:
     dw sol_ab1, sol_ab2, sol_ab3, sol_ab4, 0
 sol_ab1:     db 'Solitaire for os8088', 0
 sol_ab2:     db 'Klondike, in 8086 asm', 0
 sol_ab3:     db 0                   ; a blank line is a line with no glyphs
 sol_ab4:     db 'Contributed by Elendilon', 0
+%endif   ; SOLF_ABOUT
 
 ; needs two glyphs, and sol_drawface spells it out.
 sol_rankch:
@@ -3509,19 +3626,26 @@ sol_met_sml:                        ; CGA 640x200, over the dock: 179 rows
     dw SOL_FANU_S, 2, 2, 18, 2, 6, 10, SOL_TGAP_S
 
 ; --- suit pips, 1 bit per pixel, bit 15 leftmost -------------------------------
-; Solid for every suit on a colour screen; on 1bpp the two red suits switch to
-; the hollow masks below, which is the only thing carrying red vs black there
-; (SPEC.md 39.4). The 8x8 masks are stored left-justified in words so one
-; routine - sol_maskrun - plots both sizes.
+; Solid for every suit on a colour screen; on 1bpp the two red suits are drawn
+; HOLLOW, which is the only thing carrying red vs black there (SPEC.md 39.4).
+; The 8x8 masks are stored left-justified in words so one routine -
+; sol_maskrun - plots both sizes.
+;
+; THERE ARE NO HOLLOW TABLES. There were - sol_p8h and sol_p16h, 96 bytes -
+; and every row of both was EXACTLY the morphological outline of the solid
+; mask beside it:
+;
+;     outline(r) = r AND NOT (up AND r AND dn AND (r << 1) AND (r >> 1))
+;
+; which is what "hollow" means drawn rather than stored. sol_maskrun computes
+; it now (SPEC.md 43.11), so the two shapes cannot drift apart: a suit redrawn
+; here changes its own outline by construction, where before it left a hollow
+; table describing the pip that used to be.
 sol_p8s:                            ; spade
     dw 0x1800, 0x3C00, 0x7E00, 0xFF00, 0xFF00, 0x6600, 0x1800, 0x3C00
     dw 0x6600, 0xFF00, 0xFF00, 0xFF00, 0x7E00, 0x3C00, 0x1800, 0x0000
     dw 0x1800, 0x3C00, 0x7E00, 0xFF00, 0x7E00, 0x3C00, 0x1800, 0x0000
     dw 0x1800, 0x3C00, 0x3C00, 0xBD00, 0xFF00, 0xDB00, 0x1800, 0x3C00
-
-sol_p8h:                            ; hollow heart, hollow diamond
-    dw 0x6600, 0x9900, 0x8100, 0x8100, 0x4200, 0x2400, 0x1800, 0x0000
-    dw 0x1800, 0x2400, 0x4200, 0x8100, 0x4200, 0x2400, 0x1800, 0x0000
 
 sol_p16s:                           ; spade
     dw 0x0180, 0x03C0, 0x07E0, 0x0FF0, 0x1FF8, 0x3FFC, 0x7FFE, 0xFFFF
@@ -3535,13 +3659,6 @@ sol_p16s:                           ; spade
                                     ; club
     dw 0x03C0, 0x07E0, 0x0FF0, 0x0FF0, 0x07E0, 0x33CC, 0x7BDE, 0xFFFF
     dw 0xFFFF, 0x7BDE, 0x33CC, 0x03C0, 0x03C0, 0x07E0, 0x1FF8, 0x3FFC
-
-sol_p16h:                           ; hollow heart
-    dw 0x3C3C, 0x4242, 0x8181, 0x8001, 0x8001, 0x8001, 0x8001, 0x4002
-    dw 0x4002, 0x2004, 0x1008, 0x0810, 0x0420, 0x0240, 0x0180, 0x0000
-                                    ; hollow diamond
-    dw 0x0180, 0x0240, 0x0420, 0x0810, 0x1008, 0x2004, 0x4002, 0x8001
-    dw 0x8001, 0x4002, 0x2004, 0x1008, 0x0810, 0x0420, 0x0240, 0x0180
 
 ; The empty stock's mark: a ring, for "round again".
 sol_ic_ring:
@@ -3617,11 +3734,13 @@ sol_ic_ring:
     SBYTE sol_draw3                 ; 0 = deal one, 1 = deal three
     SBYTE sol_wfan                  ; waste cards to fan, 0..3
     SBYTE sol_won
+%ifdef SOLF_ABOUT
     SBYTE sol_abon                  ; 1 = the credit panel is up (43.8)
     SWORD sol_abw                   ; its measured width, height, left and top
     SWORD sol_abh                   ; - content coords, all four settled by
     SWORD sol_abl                   ; sol_abmeas before a pixel is drawn
     SWORD sol_abt
+%endif
     SBYTE sol_bkcol                 ; the card back's field colour
 
 ; --- sol_drawpile's loop -----------------------------------------------------
@@ -3660,6 +3779,25 @@ sol_ic_ring:
     SWORD sol_mrw
     SWORD sol_mrn
     SWORD sol_mrs                   ; column the open run started at, or FFFF
+    SWORD sol_mrp                   ; the previous SOLID row, for the outline
+    SWORD sol_mrr                   ; rows the caller asked for; sol_mrn is
+                                    ; spent counting them down while staging
+    SBYTE sol_mrh                   ; 1 = outline this mask as it is plotted
+                                    ; (SPEC.md 43.11). ONE-SHOT: sol_pipsel
+                                    ; sets it, sol_maskrun clears it
+    SBYTE sol_pipink                ; the colour a set mask bit lays down, or
+                                    ; SOL_NOPEN for an ink the sprite pass
+                                    ; cannot lay down at all. It is a REQUIRED
+                                    ; input to sol_maskrun and all three
+                                    ; callers set it, so the zero a fresh .bss
+                                    ; starts at is never the one read
+
+; The sprite record itself (SPEC.md 43.11.3), which must be one contiguous
+; run: `db wwords, rows`, then rows MASK words, then rows DATA words. It is
+; .bss and not .text because the mask is composed per pip - and being .bss the
+; DATA half costs claim rather than image, and starts zero.
+    SBUF  sol_icrec, 2              ; wwords (always 1), then rows
+    SBUF  sol_icmask, SOL_ICROWS*4  ; rows of mask, then rows of data
 
 ; --- sol_colfan / sol_yoff ---------------------------------------------------
     SWORD sol_cfd                   ; face-down cards in the column

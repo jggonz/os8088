@@ -64,7 +64,7 @@ class Rows(dispcells.Pump):
     def on_stop(self, r, sym):
         b = self.m.read(((r["ss"] & 0xFFFF) << 4) + (r["sp"] & 0xFFFF), 2)
         ret = b[0] | (b[1] << 8)
-        if not (self.stub <= ret < self.stub + 16):
+        if not (self.stub <= ret < self.stub + 12):
             return                              # the kernel's own drawing
         t = self.m.read(((r["es"] & 0xFFFF) << 4) + (r["si"] & 0xFFFF), 48)
         n = t.find(b"\0")
@@ -172,7 +172,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     w, d, c = W(slot), W(disk), W(calc)
     print("SETUP   : page %r, Disk %r, Calc %r"
           % ((w.x, w.y, w.w, w.h), (d.x, d.y, d.w, d.h), (c.x, c.y, c.w, c.h)))
-    stub = m.sym("api_font_run") - (KSEG << 4)
+    stub = m.sym("api_x") - (KSEG << 4)      # SPEC.md 20.3's shared X body
 
     def to_heap(cap):
         """...onto the heap page, capturing every repaint on the way."""

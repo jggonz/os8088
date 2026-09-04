@@ -29,11 +29,18 @@ right on all of them: a row is 1.0 pixel wide on VGA (640x480 in 4:3), 1.55
 on Hercules (720x348) and 2.40 on CGA (640x200).  --png writes the preview
 at all three, which is the only way to choose the proportions.
 
+It also cuts the same logo SQUARE, for the places that want one and crop it
+to a circle - a chat server's icon, a favicon, an app tile (SPEC.md 63.6).
+Those are re-cuts of this logo and of the loading screen, not a second one,
+and nothing ships or commits them either.
+
   python3 tools/os88logo.py -o build/OS8088.GIF --png build/logo
+  python3 tools/os88logo.py --icons build/marks --sheet build/marks.png
 """
 
 import argparse
 import math
+import os
 import struct
 import sys
 import zlib
@@ -87,12 +94,19 @@ class Bitmap:
             for x in range(max(0, x0), min(self.w - 1, x1) + 1):
                 row[x] = v
 
-    def dither(self, x0, y0, x1, y1, phase=0):
-        """SPEC.md 39.4's 50% class: the desktop's own ground."""
+    def dither(self, x0, y0, x1, y1, phase=0, cell=1):
+        """SPEC.md 39.4's 50% class: the desktop's own ground.
+
+        `cell` is 1 for anything that will be shown at the size it was drawn,
+        which is the screen and therefore the logo.  A mark that a client
+        resamples to whatever size it likes wants 2: a 1px checkerboard put
+        through an arbitrary scale factor beats against it and moires, and
+        the ground stops reading as a texture and starts reading as noise."""
         for y in range(max(0, y0), min(self.h - 1, y1) + 1):
             row = self.px[y]
             for x in range(max(0, x0), min(self.w - 1, x1) + 1):
-                row[x] = INK if ((x + y + phase) & 1) == 0 else PAPER
+                row[x] = INK if (((x // cell) + (y // cell) + phase) & 1) == 0 \
+                    else PAPER
 
     def rrect(self, x0, y0, x1, y1, r, v):
         """A filled rounded rect.  The corner is a quarter disc, tested at
@@ -310,6 +324,153 @@ def draw_logo():
 
 
 # -----------------------------------------------------------------------------
+# the square marks (SPEC.md 63.6)
+#
+# A chat server, a favicon and an app tile all want the logo in a SQUARE, and
+# most of them crop it to a circle on top of that.  The wide logo cannot be
+# used there: inscribe a 4.2:1 word in a circle and the word is a quarter of
+# the diameter, which is unreadable at the 40px a sidebar draws it at.
+#
+# So these are the same logo re-cut, not a second one: the same package,
+# legs, notch, keyline and dither, the same four letterforms from the same
+# pen, on two baselines instead of one.  The two alternates are the loading
+# screen's own artwork (kernel/splash.inc) for the same reason - a mark that
+# is already on the machine's screen beats one invented for a chat client.
+#
+# They are drawn on a 128px grid and scaled by WHOLE numbers, so a 512px icon
+# is this picture with 4x4 pixels.  That is the same choice --png makes for
+# the previews and it is deliberate: the chunky pixel is what says the mark
+# came off a 1984 screen, and an icon resampled smoothly says the opposite.
+# Everything stays inside ICON_SAFE of the centre, which is the circle a
+# client crops to less a margin, because a mark that touches the crop reads
+# as a mark that was cropped by accident.
+# -----------------------------------------------------------------------------
+ICON_G = 128                      # the design grid; every icon is a multiple
+ICON_SAFE = 56                    # ...and nothing is drawn past this radius
+
+ICAP, IXH, ISTROKE, IGAP = 18, 14, 3, 4     # the type, at 0.4 of the logo's
+ILEAD = 4                                   # ...and what separates the lines
+IPAD_X, IPAD_Y = 5, 7             # package edge to wordmark
+ILEG_H, ILEG_W, IPINS = 6, 3, 20  # still a 40-pin DIP: 20 legs a side
+IKEYLINE = 2
+INOTCH_R = 7
+
+
+def wordmark_stacked(cap, xh, stroke, gap, lead):
+    """wordmark()'s six glyphs on TWO baselines - 'os' centred over '8088'.
+
+    The digits keep the cap height and the letters the x-height, so the two
+    lines are the one word they are in the wide logo rather than a stack of
+    two.  Centred on each other and not left-aligned: the word is inside a
+    package that is symmetric about both axes, and the eye reads the block
+    against the package before it reads the letters against each other."""
+    dw = cap * 4 // 5
+    ow, sw = xh * 8 // 7, xh * 6 // 7
+    top = [glyph_o(ow, xh, stroke), glyph_s(sw, xh, stroke)]
+    bot = [glyph_eight(dw, cap, stroke), glyph_o(dw, cap, stroke),
+           glyph_eight(dw, cap, stroke), glyph_eight(dw, cap, stroke)]
+    tw = sum(g.w for g in top) + gap * (len(top) - 1)
+    bw = sum(g.w for g in bot) + gap * (len(bot) - 1)
+    out = Bitmap(max(tw, bw), xh + lead + cap)
+    for row, roww, y in ((top, tw, 0), (bot, bw, xh + lead)):
+        x = (out.w - roww) // 2
+        for g in row:
+            out.blit_mask(g, x, y, INK)
+            x += g.w + gap
+    return out
+
+
+def icon_chip():
+    """The logo, square: the package with the wordmark knocked out of it."""
+    wm = wordmark_stacked(ICAP, IXH, ISTROKE, IGAP, ILEAD)
+    body_w = wm.w + 2 * IPAD_X + INOTCH_R       # the notch gets a pad of its
+    body_h = wm.h + 2 * IPAD_Y                  # own, so the word keeps IPAD_X
+    b = Bitmap(ICON_G, ICON_G)                  # of package on both sides
+    b.dither(0, 0, ICON_G - 1, ICON_G - 1, cell=2)
+
+    chip_w = body_w + 2 * IKEYLINE               # ...and the whole chip, which
+    chip_h = body_h + 2 * (ILEG_H + IKEYLINE)   # is what the crop sees
+    corner = math.hypot(chip_w / 2.0, chip_h / 2.0)
+    if corner > ICON_SAFE:
+        sys.exit("os88logo: the chip's corner is %.1f from the centre, past "
+                 "ICON_SAFE %d. A client crops this to a circle of %d, and a "
+                 "mark that reaches the crop reads as one cropped by accident "
+                 "- take it out of the type, which everything else is sized "
+                 "from." % (corner, ICON_SAFE, ICON_G // 2))
+
+    bx0, by0 = (ICON_G - body_w) // 2, (ICON_G - body_h) // 2
+    bx1, by1 = bx0 + body_w - 1, by0 + body_h - 1
+    b.rect(bx0 - IKEYLINE, by0 - ILEG_H - IKEYLINE,     # the keyline, over the
+           bx1 + IKEYLINE, by1 + ILEG_H + IKEYLINE, PAPER)   # legs as well
+    for i in range(IPINS):
+        lx = bx0 + (body_w * (2 * i + 1)) // (2 * IPINS) - ILEG_W // 2
+        b.rect(lx, by0 - ILEG_H, lx + ILEG_W - 1, by0 - 1, INK)
+        b.rect(lx, by1 + 1, lx + ILEG_W - 1, by1 + ILEG_H, INK)
+    b.rrect(bx0, by0, bx1, by1, 3, INK)
+
+    ncy = (by0 + by1) // 2                              # the orientation notch
+    for y in range(ncy - INOTCH_R, ncy + INOTCH_R + 1):
+        for x in range(bx0, bx0 + INOTCH_R + 1):
+            dx, dy = x - bx0, y - ncy
+            if dx * dx + dy * dy <= INOTCH_R * INOTCH_R:
+                b.put(x, y, PAPER)
+
+    b.blit_mask(wm, bx0 + IPAD_X + INOTCH_R, by0 + IPAD_Y, PAPER)
+    return b
+
+
+def spl_digit(b, x, y, w, h, t, middle, v=INK):
+    """One loading-screen glyph, which is kernel/splash.inc's spl_rowmk: two
+    verticals, a top and a bottom bar, and - for an 8 rather than a 0 - the
+    middle one at row 20.  Not a typeface: the splash draws these itself,
+    before any font is resident to draw them with."""
+    b.rect(x, y, x + t - 1, y + h - 1, v)
+    b.rect(x + w - t, y, x + w - 1, y + h - 1, v)
+    b.rect(x, y, x + w - 1, y + t - 1, v)
+    b.rect(x, y + h - t, x + w - 1, y + h - 1, v)
+    if middle:
+        b.rect(x, y + (h - t) // 2, x + w - 1, y + (h - t) // 2 + t - 1, v)
+
+
+def icon_boot():
+    """The loading screen: the spinner's "8088" over its progress bar, white
+    on black, which is what mode 12h and spl_span between them leave."""
+    gw, gh, t, gap = 19, 36, 4, 5
+    b = Bitmap(ICON_G, ICON_G, INK)
+    total = 4 * gw + 3 * gap                    # corners at 55.6 of ICON_SAFE
+    x0 = (ICON_G - total) // 2
+    for i, d in enumerate("8088"):
+        spl_digit(b, x0 + i * (gw + gap), 36, gw, gh, t, d == "8", PAPER)
+    by, bh = 84, 11                             # the trough, and the bar in it
+    b.rect(x0, by, x0 + total - 1, by + bh - 1, PAPER)
+    b.rect(x0 + 2, by + 2, x0 + total - 3, by + bh - 3, INK)
+    b.rect(x0 + 4, by + 4, x0 + 4 + int(total * 0.58), by + bh - 5, PAPER)
+    return b
+
+
+def icon_monogram():
+    """The same four glyphs stacked two by two - the mark for the sizes where
+    a word of any kind is gone.  It is a re-arrangement of the splash's own
+    drawing rather than a new one, and it is the only mark here that still
+    resolves at 40px: four rings, and the one without a waist is the 0."""
+    gw, gh, t, gap = 32, 36, 5, 8
+    b = Bitmap(ICON_G, ICON_G)
+    x0 = (ICON_G - (2 * gw + gap)) // 2
+    y0 = (ICON_G - (2 * gh + gap)) // 2
+    for i, d in enumerate("8088"):
+        spl_digit(b, x0 + (i % 2) * (gw + gap), y0 + (i // 2) * (gh + gap),
+                  gw, gh, t, d == "8")
+    return b
+
+
+ICONS = {
+    "chip": (icon_chip, "the logo itself, re-cut square"),
+    "boot": (icon_boot, "the loading screen's wordmark and bar"),
+    "monogram": (icon_monogram, "the splash's glyphs, stacked 2x2"),
+}
+
+
+# -----------------------------------------------------------------------------
 # GIF87a, two colours
 #
 # The LZW here is giflib's ordering, deliberately: the code is emitted at the
@@ -387,14 +548,15 @@ def gif87a(bm):
 # -----------------------------------------------------------------------------
 # previews - no Pillow in a fresh container, so the PNG is written by hand
 # -----------------------------------------------------------------------------
-def write_png(path, bm, sx, sy):
-    w, h = int(bm.w * sx), int(bm.h * sy)
+def _png(path, w, h, rows):
+    """Eight-bit grey scanlines out, one byte a pixel and no filtering.
+    There is no Pillow in a fresh container, and every picture here is one
+    of two colours or a grey between them, so this is all of the format
+    that is needed - a colour type nothing writes is one nothing tests."""
     raw = bytearray()
-    for y in range(h):
+    for r in rows:
         raw.append(0)
-        row = bm.px[min(bm.h - 1, int(y / sy))]
-        raw += bytes(0 if row[min(bm.w - 1, int(x / sx))] == INK else 255
-                     for x in range(w))
+        raw += r
 
     def chunk(tag, data):
         return (struct.pack(">I", len(data)) + tag + data
@@ -408,6 +570,116 @@ def write_png(path, bm, sx, sy):
     return w, h
 
 
+def write_png(path, bm, sx, sy):
+    w, h = int(bm.w * sx), int(bm.h * sy)
+    rows = []
+    for y in range(h):
+        row = bm.px[min(bm.h - 1, int(y / sy))]
+        rows.append(bytes(0 if row[min(bm.w - 1, int(x / sx))] == INK else 255
+                          for x in range(w)))
+    return _png(path, w, h, rows)
+
+
+def icon_scaled(bm, scale, inverted=False):
+    """The mark at `scale` whole pixels per pixel, as grey scanlines."""
+    ink, paper = (255, 0) if inverted else (0, 255)
+    rows = []
+    for row in bm.px:
+        line = bytearray()
+        for v in row:
+            line += bytes([ink if v == INK else paper]) * scale
+        rows.extend([bytes(line)] * scale)
+    return rows
+
+
+def icon_crop(rows, n, size, bg):
+    """Box-average an n x n grey image down to size, over `bg`, with an
+    antialiased round crop: what a chat client does to a server icon, done
+    here so the answer can be LOOKED at before the mark is chosen."""
+    out = []
+    r = size / 2.0
+    for oy in range(size):
+        y0 = oy * n // size
+        y1 = max(y0 + 1, (oy + 1) * n // size)
+        line = bytearray()
+        for ox in range(size):
+            x0 = ox * n // size
+            x1 = max(x0 + 1, (ox + 1) * n // size)
+            acc = cnt = 0
+            for sy in range(y0, y1):
+                row = rows[sy]
+                for sx in range(x0, x1):
+                    acc += row[sx]
+                    cnt += 1
+            hit = 0
+            for j in range(4):                  # 4x4 coverage, so the circle
+                for i in range(4):              # has an edge and not a stair
+                    dx = ox + (i + 0.5) / 4.0 - r
+                    dy = oy + (j + 0.5) / 4.0 - r
+                    if dx * dx + dy * dy <= r * r:
+                        hit += 1
+            a = hit / 16.0
+            line.append(int(round((float(acc) / cnt) * a + bg * (1.0 - a))))
+        out.append(bytes(line))
+    return out
+
+
+def icon_sheet(path, names, inverted=False):
+    """Every mark, round-cropped, at the three sizes a chat client shows one
+    at, on both of its themes.  This is the instrument for CHOOSING: the
+    marks differ at 128px and it is at 40 that most of them stop working."""
+    from os88font import parse          # the tree's 8x8 face, for labels only
+    font = parse(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              os.pardir, "fonts", "tallx.f8"))
+    SIZES = (128, 72, 40)
+    GROUND, DARK, LIGHT = 30, 51, 255
+    PAD, GAP, LBL = 16, 18, 8 * 9
+
+    panel_w = PAD + sum(SIZES) + GAP * (len(SIZES) - 1) + PAD
+    rowh = SIZES[0] + 22
+    panel_h = 22 + len(names) * rowh + PAD // 2
+    w = PAD + LBL + 2 * panel_w + GAP + PAD
+    h = 34 + panel_h + PAD
+    canvas = [bytearray([GROUND]) * w for _ in range(h)]
+
+    def fill(x, y, bw, bh, g):
+        for j in range(y, min(h, y + bh)):
+            canvas[j][x:x + bw] = bytes([g]) * bw
+
+    def caption(text, ox, oy, g):
+        for n, ch in enumerate(text):
+            gl = font.get(ord(ch))
+            if gl is None:
+                continue
+            for r in range(8):
+                for k in range(8):
+                    if gl[r] & (0x80 >> k):
+                        canvas[oy + r][ox + n * 8 + k] = g
+
+    caption("os8088 marks - as a chat client crops them", PAD, 12, 225)
+    px0 = PAD + LBL
+    fill(px0, 34, panel_w, panel_h, DARK)
+    fill(px0 + panel_w + GAP, 34, panel_w, panel_h, LIGHT)
+    caption("dark theme", px0 + PAD, 40, 150)
+    caption("light theme", px0 + panel_w + GAP + PAD, 40, 120)
+
+    y = 34 + 22
+    for name in names:
+        rows = icon_scaled(ICONS[name][0](), 4, inverted)
+        caption(name, PAD, y + SIZES[0] // 2 - 4, 225)
+        for panel, bg in ((px0, DARK), (px0 + panel_w + GAP, LIGHT)):
+            x = panel + PAD
+            for size in SIZES:
+                paste = icon_crop(rows, ICON_G * 4, size, bg)
+                for j in range(size):
+                    oy = y + (SIZES[0] - size) // 2 + j
+                    canvas[oy][x:x + size] = paste[j]
+                x += size + GAP
+        y += rowh
+    _png(path, w, h, [bytes(r) for r in canvas])
+    return w, h
+
+
 def main():
     ap = argparse.ArgumentParser(description="the os8088 logo, as a mono GIF")
     ap.add_argument("-o", "--output", metavar="OUT.GIF",
@@ -415,6 +687,20 @@ def main():
     ap.add_argument("--png", metavar="PREFIX",
                     help="also write <PREFIX>-<adapter>.png previews, each "
                          "at that adapter's pixel aspect")
+    ap.add_argument("--icons", metavar="DIR",
+                    help="also write the square marks (SPEC.md 63.6) into "
+                         "DIR, each in both polarities")
+    ap.add_argument("--icon-sizes", metavar="N[,N...]", default="512",
+                    help="what to write them at, whole multiples of the "
+                         "%d-px grid (default 512)" % ICON_G)
+    ap.add_argument("--mark", action="append", choices=sorted(ICONS),
+                    help="restrict --icons and --sheet to this mark, "
+                         "repeatable (default: all of them)")
+    ap.add_argument("--sheet", metavar="OUT.PNG",
+                    help="write the pick-one contact sheet: every mark, "
+                         "round-cropped, at the sizes a client shows one at")
+    ap.add_argument("--inverted", action="store_true",
+                    help="draw the contact sheet in the inverted polarity")
     args = ap.parse_args()
 
     bm = draw_logo()
@@ -441,6 +727,30 @@ def main():
     print("os88logo: %s %dx%d, %d bytes of %d, %.0f%% ink"
           % (args.output or "(not written)", bm.w, bm.h, len(gif),
              LOGO_MAXBYTES, 100.0 * ink / (bm.w * bm.h)))
+
+    marks = args.mark or sorted(ICONS)
+    if args.icons:
+        sizes = [int(n) for n in args.icon_sizes.split(",")]
+        for size in sizes:
+            if size % ICON_G:
+                sys.exit("os88logo: %d is not a whole multiple of the %d-px "
+                         "grid - a mark here is scaled by whole pixels, which "
+                         "is what keeps it a picture off a screen"
+                         % (size, ICON_G))
+        if not os.path.isdir(args.icons):
+            os.makedirs(args.icons)
+        for name in marks:
+            mark = ICONS[name][0]()
+            for size in sizes:
+                for tag, inv in (("", False), ("-inverted", True)):
+                    out = os.path.join(args.icons, "os8088-%s-%d%s.png"
+                                       % (name, size, tag))
+                    _png(out, size, size, icon_scaled(mark, size // ICON_G, inv))
+                    print("os88logo: %s  %dx%d  %s"
+                          % (out, size, size, ICONS[name][1]))
+    if args.sheet:
+        w, h = icon_sheet(args.sheet, marks, args.inverted)
+        print("os88logo: %s  %dx%d  contact sheet" % (args.sheet, w, h))
     return 0
 
 

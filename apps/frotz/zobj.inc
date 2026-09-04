@@ -47,7 +47,7 @@
 
 ; --- private state, from this module's own bss range (zbss.inc part 10) ------
 ; zo_remove needs to hold three object numbers across five calls and the
-; worker's stack is 256 bytes shared with the tick, mouse and sound IRQs
+; worker's stack is 384 bytes shared with the tick, mouse and sound IRQs
 ; (docs/FROTZ-PLAN.md 4) - so they live here rather than on SP. Nothing is
 ; re-entrant: the VM is one task and zo_insert's call to zo_remove finishes
 ; before zo_insert reads any of them back.

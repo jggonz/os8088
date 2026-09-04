@@ -87,7 +87,15 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
         return [x for x in os88geom.windows(m) if x.i == i][0]
 
     def drag(x0, y0, x1, y1):
-        mo.to(x0, y0); mo._edge(True); mo.to(x1, y1, l=True); mo._edge(False)
+        mo.to(x0, y0)
+        if mo.where()[2] & 1:       # a button still down from an earlier
+            mo._edge(False)         # gesture makes this press NO EDGE AT ALL,
+                                    # and _edge returns happy because the level
+                                    # it wants is the one already published -
+                                    # so the drag is a silent no-op. The guard
+                                    # os88mouse's own `drag` has and this
+                                    # hand-rolled one did not.
+        mo._edge(True); mo.to(x1, y1, l=True); mo._edge(False)
         mo.to(*dispcorner.PARK); os88marty.settle(m, limit=120)
 
     dispcp.open_drive(m, mo, S, os88marty.settle, "B")
@@ -179,6 +187,22 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
         p = Own(m, mo)
         if attempt:
             p.drag(d.x + 30, d.y + 9, 8 + 30, 250 + 9)      # off again first
+            # ...AND LET THE DOUBLE-CLICK WINDOW EXPIRE BEFORE PRESSING AGAIN.
+            # Both of these drags press on the Disk window's TITLE BAR and
+            # there was no guest time at all between the first one's release
+            # and the second one's press - `d = W(disk)` is a debug read and
+            # costs the guest nothing. The window is 9 ticks (os88mouse's
+            # DBL_TICKS, ~0.5 s), so the pair read as a DOUBLE-CLICK on the
+            # title and MAXIMIZED the cover; a maximized Disk window covers
+            # this one WHOLLY, which is 11.96.18's other case, and the leg
+            # then refused to conclude - correctly, about a layout the retry
+            # had just broken.
+            #
+            # ONLY EVER ON THE RETRY PATH, which is what makes it legible in
+            # the log: every observed failure said "after 3 drop(s)" and every
+            # pass "after 1" or "after 2". The retry meant to settle a drag
+            # race was failing the leg by itself.
+            p.pump(40, 4)               # ~160 frames, comfortably past 9 ticks
             d = W(disk)
         p.drag(d.x + 30, d.y + 9, w.x + w.w // 2 + 30, w.y + 60 + 9)
         p.pump(900, 4)
@@ -191,7 +215,9 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     whole = (d.x <= w.x and d.y <= w.y
              and d.x + d.w >= w.x + w.w and d.y + d.h >= w.y + w.h)
     print("QUIET   : dropped over it partially (wholly=%s) after %d drop(s) "
-          "- TM holds %04X" % (whole, attempt + 1, held))
+          "- TM holds %04X   cover (%d,%d %dx%d) over (%d,%d %dx%d)"
+          % (whole, attempt + 1, held, d.x, d.y, d.w, d.h,
+             w.x, w.y, w.w, w.h))
     if whole:
         fails.append("QUIET: the cover is TOTAL, which is 11.96.18's other "
                      "case - the cache stands there whatever tm_quiet does, "

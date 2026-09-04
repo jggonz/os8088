@@ -507,10 +507,15 @@ FSV_SIZE     equ 30
 ; The five slots themselves are published by os88api.inc, which this file
 ; includes: a slot number belongs in one place (SPEC.md 20.8).
 
-; The listing claim a mounted volume wants (SPEC.md 22.6): DSK_VENT entries of
-; 32 bytes followed by the same number of 64-byte icon slots. Claim it before
+; The listing claim a mounted volume wants (SPEC.md 22.6): DSK_VENT entries
+; followed by the same number of 64-byte icon slots. Claim it before
 ; OSAPI_VOL_ADD and hand over the segment; pass 0 instead and the volume lists
 ; into the kernel's own 32-entry buffers, which works and shows fewer files.
+; **Claim 6KB whatever the kernel's own stride is.** The entry a driver hands
+; over through OSAPI_FS_ENT is DSK_DE_SIZE (32) bytes wide and always will be;
+; what the kernel STORES in the claim is narrower (SPEC.md 19.1), so this
+; number is a ceiling the kernel writes under rather than a layout to mirror -
+; which is what keeps it off a driver's rebuild list.
 HDD_LISTKB   equ 6
 
 ; --- memory a bus-master can reach (SPEC.md 50.3/51.6) -----------------------
