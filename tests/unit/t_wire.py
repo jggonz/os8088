@@ -20,6 +20,13 @@ file on its own.
    the machine's refusal is one line in a status cell, where this one names
    the entry, the field and the limit.
 
+3b. **AND THE GENERIC ICON IS THE KERNEL'S.** `tools/os88wire.py` gives a
+   record whose package declares no `OS88_ICON16` the kernel's own
+   `ico_app16` — what the Disk window already draws for that package — and it
+   is baked in rather than parsed, because the website's packer runs in a
+   checkout with no kernel in it. So the two copies are compared here, against
+   `kernel/icons.inc`'s own `dw` rows.
+
 3. **THE MIRROR.** Every `WC_*`, `WIRE_*`, `WF_*` and `WK_*` equ in
    `apps/thewire/wcat.inc` is compared against the same name in
    `tools/os88wire.py`. There is no linker in this tree, so a format that
@@ -49,6 +56,7 @@ from harness import check, eq, done                       # noqa: E402
 
 TOOL = os.path.join(ROOT, "tools", "os88wire.py")
 WCAT = os.path.join(ROOT, "apps", "thewire", "wcat.inc")
+ICONS = os.path.join(ROOT, "kernel", "icons.inc")
 BUILD = os.path.join(ROOT, "build")
 
 # --- SPEC.md 88.2, read out of the spec and not out of the tool -------------
@@ -118,6 +126,44 @@ def mirror():
            "wcat.inc's %s is %s and SPEC.md 88.2 says %d"
            % (n, asm.get(n), want),
            "both files could agree on a number the SPEC does not say")
+
+
+def icons():
+    """os88wire.py's generic icon IS the kernel's `ico_app16`.
+
+    That icon is what the Disk window draws for a package with no
+    OS88_ICON16, so a Wire row showing something else would put one program
+    under two pictures. The tool cannot READ kernel/icons.inc - the website's
+    packer runs in a checkout with no kernel beside it - so the rows are baked
+    in, and this is what stops the two copies drifting.
+    """
+    src = open(ICONS).read()
+    i = src.find("\nico_app16:")
+    body = src[i + 1:] if i >= 0 else ""
+    nxt = body.find("\nico_", 1)                # the next icon in the file
+    if nxt > 0:
+        body = body[:nxt]
+    rows = [int(m.group(1), 16)
+            for m in re.finditer(r"^\s*dw\s+(0x[0-9A-Fa-f]{4})", body, re.M)]
+    if not check(len(rows) == 32,
+                 "ico_app16 has 32 dw rows in kernel/icons.inc",
+                 "the scan found something else, so the comparison below is "
+                 "against nothing - and a scan that finds nothing passes",
+                 got=len(rows), want=32):
+        return
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("os88wire", TOOL)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    eq(mod.GENERIC_ICON_MASK, rows[:16],
+       "os88wire.py's GENERIC_ICON_MASK is ico_app16's mask",
+       "a record whose package declares no icon gets this one, and the Disk "
+       "window draws ico_app16 for that same package - one program under two "
+       "pictures is the drift (SPEC.md 88.2)")
+    eq(mod.GENERIC_ICON_DATA, rows[16:],
+       "os88wire.py's GENERIC_ICON_DATA is ico_app16's data",
+       "as above, and the tool cannot read kernel/icons.inc because the "
+       "website's packer runs in a checkout with no kernel in it")
 
 
 # =============================================================================
@@ -415,6 +461,60 @@ def corrupt(tmp):
         check(r.returncode != 0, "--verify fails %s" % what, why,
               got=(r.stdout + r.stderr).strip() or "exit 0")
 
+    # --- and the two arms of the ICON check (SPEC.md 88.2) ----------------
+    # MINES declares an OS88_ICON16, so its record must carry exactly those 64
+    # bytes; HELLO declares none, so its record carries a GENERIC one and the
+    # verifier may not compare it against anything - two writers may pick
+    # different generics and both be right. What it may still refuse is an
+    # icon with no pixels, which icon_draw_x accepts and draws as nothing.
+    pub = os.path.join(tmp, "pkg")
+    b = bytearray(good)
+    b[S_HDR + S_REC + 48] ^= 0xFF           # MINES's icon, one byte
+    p = os.path.join(tmp, "c.bin")
+    open(p, "wb").write(bytes(b))
+    r = run("--verify", p, "--pkgdir", pub)
+    check(r.returncode != 0,
+          "--verify fails a record whose package DECLARES an icon and whose "
+          "record carries different bytes",
+          "the row is drawn from those 64 bytes alone, so it would show one "
+          "program under another program's picture",
+          got=(r.stdout + r.stderr).strip() or "exit 0")
+
+    b = bytearray(good)
+    b[S_HDR + 48:S_HDR + 112] = b"\0" * 64  # HELLO's generic, blanked
+    open(p, "wb").write(bytes(b))
+    r = run("--verify", p, "--pkgdir", pub)
+    check(r.returncode != 0,
+          "--verify fails a generic icon of 64 zero bytes",
+          "icon_draw_x accepts it and draws nothing at all, so the row "
+          "silently has no picture rather than refusing where anybody sees it",
+          got=(r.stdout + r.stderr).strip() or "exit 0")
+
+    b = bytearray(good)
+    for k in range(16):                      # HELLO's generic, mask only
+        b[S_HDR + 48 + 32 + k * 2] = 0
+        b[S_HDR + 48 + 32 + k * 2 + 1] = 0
+    open(p, "wb").write(bytes(b))
+    r = run("--verify", p, "--pkgdir", pub)
+    check(r.returncode != 0,
+          "--verify fails a generic icon whose DATA rows are all zero",
+          "the mask lays down white and nothing is drawn over it, so the row "
+          "shows a blank block where a picture should be",
+          got=(r.stdout + r.stderr).strip() or "exit 0")
+
+    b = bytearray(good)                      # ...and HELLO's generic CHANGED
+    for k in range(64):                      # is NOT a failure: SPEC.md 88.2
+        b[S_HDR + 48 + k] ^= 0x0F            # leaves which generic to the
+    open(p, "wb").write(bytes(b))            # writer
+    r = run("--verify", p, "--pkgdir", pub)
+    check(r.returncode == 0,
+          "--verify ACCEPTS a different generic on a package with no icon",
+          "SPEC.md 88.2 says 'the package's own OS88_ICON16 block or the "
+          "site's generic program icon', so two independent writers may "
+          "choose differently and both be right - this is the check that "
+          "failed the website's real catalog on three records",
+          got=(r.stdout + r.stderr).strip(), want="exit 0")
+
     p = os.path.join(tmp, "good.bin")
     open(p, "wb").write(bytes(good))
     r = run("--verify", p)
@@ -513,6 +613,7 @@ def main():
             print("t_wire: no build/%s - run `make` first" % f)
             sys.exit(1)
     mirror()
+    icons()
     with tempfile.TemporaryDirectory() as tmp:
         roundtrip(tmp)
         refusals(tmp)

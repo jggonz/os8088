@@ -13,6 +13,14 @@ the same bytes, and `--verify` run against the site's published
 `catalog.bin` is the cross-check between them - the arrangement
 `tests/unit/t_wab.py` has over a `.WAB`, one format along.
 
+**THE VERIFIER DOES NOT COMPARE A GENERIC ICON.** A record whose package
+declares an `OS88_ICON16` (header flags bit 0) must carry exactly those 64
+bytes and `--verify --pkgdir` says so. A record whose package declares none
+carries a generic, and SPEC.md 88.2 leaves which generic to the writer - so
+two independent writers may choose differently and both be right. What is
+checked there is the one thing that is a fault either way: an icon with no
+pixels in it, which `icon_draw_x` accepts and draws as nothing.
+
 **EVERY OFFSET BELOW IS MIRRORED IN apps/thewire/wcat.inc**, and
 `tests/unit/t_wire.py` compares the two files in the FAST tier. There is no
 linker in this tree, so a format that lives on both sides of a wire is a
@@ -125,17 +133,24 @@ def o88_header(blob, name):
     return flags, size, bss
 
 
-# The icon a record gets when its package declares none. A 16x16 sheet of
-# paper with a folded corner - the shape kernel/icons.inc's own ico_app16 uses
-# for a package with no icon of its own, so a Wire listing looks like the Disk
-# window listing the same program.
+# The icon a record gets when its package declares none, and it IS the
+# kernel's own `ico_app16` (kernel/icons.inc) - a diamond outline with a
+# filled square at its centre, over a solid diamond mask. That is what the
+# Disk window already draws for a package with no OS88_ICON16, so a program
+# looks the same in the Wire's list as it does in the folder it comes from.
+#
+# It is BAKED IN rather than parsed out of kernel/icons.inc, and that is
+# forced: the website's packer runs in a checkout that has no kernel in it.
+# `tests/unit/t_wire.py` compares these two lists against `ico_app16`'s own
+# `dw` rows in the fast tier, which is this tree's standing arrangement for a
+# constant that has to live in two places (t_mirror's argument).
 GENERIC_ICON_MASK = [
-    0x0000, 0x1FF0, 0x1FF8, 0x1FFC, 0x1FFE, 0x1FFE, 0x1FFE, 0x1FFE,
-    0x1FFE, 0x1FFE, 0x1FFE, 0x1FFE, 0x1FFE, 0x1FFE, 0x1FFE, 0x0000,
+    0x0180, 0x03C0, 0x07E0, 0x0FF0, 0x1FF8, 0x3FFC, 0x7FFE, 0xFFFF,
+    0xFFFF, 0x7FFE, 0x3FFC, 0x1FF8, 0x0FF0, 0x07E0, 0x03C0, 0x0180,
 ]
 GENERIC_ICON_DATA = [
-    0x0000, 0x1FF0, 0x1018, 0x1014, 0x101E, 0x1002, 0x1002, 0x13E2,
-    0x1002, 0x13E2, 0x1002, 0x13E2, 0x1002, 0x1002, 0x1FFE, 0x0000,
+    0x0180, 0x0240, 0x0420, 0x0810, 0x1008, 0x2004, 0x43C2, 0x83C1,
+    0x83C1, 0x43C2, 0x2004, 0x1008, 0x0810, 0x0420, 0x0240, 0x0180,
 ]
 
 
@@ -430,6 +445,7 @@ def verify(blob, pkgdir=None):
                % (tag, size, WIRE_FILEMAX))
         if total < size:
             no("%s: WC_TOTAL %d is under WC_SIZE %d" % (tag, total, size))
+        tot = size
         for j in range(nside):
             e = scoff + (side0 + j) * WIRE_SC
             if e + WIRE_SC > len(blob):
@@ -437,10 +453,30 @@ def verify(blob, pkgdir=None):
             nm = blob[e:e + 12]
             if b"\0" not in nm:
                 no("%s: sidecar %d's name is not NUL-terminated" % (tag, j))
+            sname = nm.split(b"\0")[0].decode("latin1")
             sz = struct.unpack_from("<I", blob, e + WC_SCSIZE)[0]
+            tot += sz
             if sz == 0 or (sz > WIRE_FILEMAX and not flags & WF_FLOPPY):
-                no("%s: sidecar %s is %d bytes"
-                   % (tag, nm.split(b"\0")[0].decode("latin1"), sz))
+                no("%s: sidecar %s is %d bytes" % (tag, sname, sz))
+            if pkgdir:
+                # THE SIDECARS ARE CROSS-CHECKED TOO, and they are the half
+                # that matters more: the .O88 is fetched under the name the
+                # USER chose in the Save dialog, but a sidecar is written
+                # under the name in this table and its package looks for
+                # exactly that. A size that disagrees with the published file
+                # is a transfer wr_hdrdone refuses AFTER the .O88 has already
+                # landed, which leaves half a program on somebody's disk.
+                sp = os.path.join(pkgdir, sname)
+                if not os.path.exists(sp):
+                    no("%s: sidecar %s is not in %s" % (tag, sname, pkgdir))
+                elif os.path.getsize(sp) != sz:
+                    no("%s: sidecar %s is %d bytes in the table and %d on "
+                       "disk" % (tag, sname, sz, os.path.getsize(sp)))
+        if total != tot:
+            no("%s: WC_TOTAL is %d and the .O88 plus its sidecars is %d - "
+               "Add to Disk's free-space check is decided on that figure, so "
+               "a wrong one refuses a disk that would have fitted, or fills "
+               "one that will not" % (tag, total, tot))
 
         if pkgdir:
             path = os.path.join(pkgdir, stem + ".O88")
@@ -453,13 +489,39 @@ def verify(blob, pkgdir=None):
                 if len(b) != size:
                     no("%s: WC_SIZE is %d and the file is %d"
                        % (tag, size, len(b)))
+                got = blob[o + WC_ICON:o + WC_ICON + 64]
                 try:
-                    want = icon_of(b, path)
+                    hflags, _, _ = o88_header(b, path)
                 except Refused as ex:
                     no("%s: %s" % (tag, ex))
-                    want = None
-                if want and want != blob[o + WC_ICON:o + WC_ICON + 64]:
-                    no("%s: the icon is not the package's own" % tag)
+                    hflags = None
+                if hflags is None:
+                    pass
+                elif hflags & O88_F_ICON:
+                    # IT DECLARES ONE, so the record must carry THAT one:
+                    # anything else shows a program under another program's
+                    # picture, and the row is drawn from these 64 bytes alone.
+                    if got != b[32:96]:
+                        no("%s: the package declares an OS88_ICON16 and the "
+                           "record carries different bytes" % tag)
+                else:
+                    # IT DECLARES NONE, so the record carries a GENERIC one -
+                    # and SPEC.md 88.2 says "or the site's generic program
+                    # icon", which is a choice the writer makes rather than a
+                    # value this can compare against. Two writers may pick
+                    # different generics and both be right, so what is checked
+                    # is the only thing that is actually a fault: an icon with
+                    # no pixels in it. icon_draw_x accepts an all-zero record
+                    # and draws nothing at all, so a blank one is a row that
+                    # silently has no picture rather than a refusal anybody
+                    # sees.
+                    if not any(got):
+                        no("%s: the package declares no icon and the record's "
+                           "generic is 64 zero bytes - the row would draw "
+                           "nothing at all" % tag)
+                    elif not any(got[32:]):
+                        no("%s: the generic icon's DATA rows are all zero, so "
+                           "the row draws a blank white block" % tag)
     return bad
 
 
