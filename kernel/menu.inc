@@ -2064,6 +2064,8 @@ menu_drop:
     call kbm_pollm              ; ...and let the keyboard mouse release the
                                 ; button it latched, or this loop never ends
                                 ; on a machine with no mouse (SPEC.md 9.6)
+    VMM_POLL                    ; ...and drain the VMware absolute pointer, so a
+                                ; pull-down tracks it too (SPEC.md 9.10.3)
     call task_yield             ; keep the scheduler healthy while we spin
     jmp .poll
 

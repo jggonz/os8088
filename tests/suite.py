@@ -673,6 +673,18 @@ SOAK = [
         "a chance to take a byte from int 09h. QEMU by name on CLAUDE.md's "
         "closed list - MartyPC is an 8088 and has no 8042 to test",
         needs=("qemu", "nasm"), serial=True, timeout=420),
+    Row("vmmouse", "full", py("tests/vmmouse.py"), 45.0,
+        "The VMware absolute pointer (SPEC.md 9.10), the browser's grabless "
+        "mouse. QEMU's pc machine carries a vmport and a vmmouse by default, "
+        "so `vmm_init`'s backdoor probe succeeds here exactly as it does under "
+        "v86 - which makes this the one CI gate a browser-only feature gets. "
+        "vmport ON and -serial none: the backdoor is the only pointing "
+        "device. Asserts cpu_tier 2, vmm_on 1, mou_port 6 (VMM_ROW, so "
+        "mou_lockon retired the serial rows), then absolute positions "
+        "injected through vmmouse landing within a few px - the sign and axis "
+        "handling that a boot-state read cannot see. QEMU by name on "
+        "CLAUDE.md's closed list - MartyPC has no backdoor",
+        needs=("qemu", "nasm"), serial=True, timeout=420),
     Row("heapmap", "soak", py("tests/heapmap.py"), 120.0,
         "What does the claim heap look like when the boot is over? (SPEC.md "
         "50, 66) Every driver attached at once on a machine WITH memory above "

@@ -8,7 +8,15 @@
 # =============================================================================
 
 NASM  := nasm
-QEMU  := qemu-system-i386
+# The `pc` machine carries a `vmport` and a `vmmouse` by default, so the
+# kernel's VMware absolute pointer (SPEC.md 9.10) PROBES SUCCESSFULLY here and
+# WINS the mouse contest - which is right in v86 and on a desktop hypervisor,
+# and wrong for automated testing, where tools/mouse.py drives the msserial
+# device by relative deltas and the backdoor's event queue stays empty (the
+# pointer would never move). So every driving recipe turns the port off;
+# `tests/vmmouse.py` and `make run VMPORT=on` turn it back on.
+VMPORT ?= off
+QEMU  := qemu-system-i386 -machine pc,vmport=$(VMPORT)
 BUILD := build
 IMG   := $(BUILD)/os8088.img
 IMG720 := $(BUILD)/os8088-720.img

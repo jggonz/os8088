@@ -7774,6 +7774,13 @@ reproduced here.
   CPU_8086` because an XT has no 8042 at all, and only ever committed to on a
   device that answered `0xFF` with `0xFA 0xAA`. It joins §9.5's contest as row
   `MOU_P2ROW` = 4 and the first complete packet still wins.
+- **And the VMware absolute-pointer backdoor on I/O port `0x5658`** (§9.10),
+  which is how the browser build (v86) gets a grabless absolute pointer.
+  `kern_big` only, behind `[cpu_tier] == CPU_386` at run time and a `cpu 386`
+  island at assembly — the probe and every command are 32-bit. Present ⇒ it
+  wins the contest outright at boot as row `MOU_VMROW` = 6 and the serial /
+  PS/2 ports are retired; absent (every real XT, and a real 386 with no
+  hypervisor) ⇒ the probe fails cleanly and nothing below changes.
 - Microsoft protocol, 3-byte packets, 7 data bits. Byte 0 has bit 6 set:
   `1 LB RB Y7 Y6 X7 X6`; bytes 1/2 have bit 6 clear: low 6 bits of X, Y.
   dx = sign-extended {X7X6,X5..X0}, dy likewise (positive = down).
@@ -7851,7 +7858,9 @@ reproduced here.
   `mouse_x` (word), `mouse_y` (word), `mouse_btn` (byte), `mou_hotplug`
   (§9.4, the UI task's per-pass call). The PS/2 half adds no entry point of
   its own: `mouse_init` probes it, `mou_lockon` retires it and `mouse_unhook`
-  gives its vector back (§9.9.4).
+  gives its vector back (§9.9.4). The VMware half adds `vmm_poll`, the UI
+  task's other per-pass call — one byte compare (`[vmm_on]`) on a machine
+  that is not in a browser (`kern_big` only, §9.10).
 
 ### 9.4 Reset, absence and hot-plug (`mou_hotplug`)
 
@@ -9833,6 +9842,138 @@ The decision tree it collapses, in the order the columns are read:
 | `p2st 09`, `irq 0000` | the handshake completed and the line never fired: the cascade, the mask, or the vector |
 | `p2st 09`, `irq` moving, `pkt 0000` | bytes arrive and never sync — read `b0` |
 | `pkt` moving, `x` still | decoded and not applied |
+
+### 9.10 The VMware absolute pointer — the browser's grabless mouse
+
+os8088 runs in the browser under **v86**, which since June 2026 emulates the
+**VMware mouse backdoor** on I/O port `0x5658`. The browser side already feeds
+v86 absolute canvas coordinates with no pointer lock, hides the host cursor
+and suppresses the context menu once a guest enables absolute mode — so the
+guest side is just a driver that speaks the protocol. The pointer then tracks
+1:1 with no grab, which is the whole point.
+
+**The catch, and the two gates.** The backdoor protocol is 32-bit: the probe
+and every command are `EAX`/`EBX`/`ECX`/`EDX` and `in eax, dx`. On a real
+8086 there are no 32-bit registers and `0x66` is not a prefix, so this code
+**must never execute on the target machine**. It is gated twice, exactly as
+`XMEM.DRV`'s tier-2 code is (§41.9 rule 2):
+
+1. a `cpu 386` island closed by `cpu 8086` — **the first in `kernel/`** —
+   which is assembly-time permission only;
+2. `cmp byte [cpu_tier], CPU_386` in front of every entry to it. `cpu_detect`
+   (§60) reports `CPU_386` for a 386 and everything above, i.e. exactly
+   "386+", and runs from the boot overlay before `mouse_init`.
+
+`kern_big` only. `kern_small` is the 128–256 KB product and every machine it
+runs on is an 8086 — the module is `%ifdef`-ed out there entire, state
+included, and costs nothing (§9.10.5).
+
+**There is nothing to detect but the backdoor itself.** The probe —
+`EAX = 0x564D5868`, `ECX = 10` (`GETVERSION`), `EDX = 0x5658`, `in eax, dx` —
+is present iff `EBX` comes back `0x564D5868` and `EAX != 0xFFFFFFFF`. On bare
+metal the `in` reads an undriven port (`0x5658` was chosen by VMware because
+no hardware decodes it), `EBX` is untouched, and the test fails. No v86
+detection, no hypervisor CPUID bit, no VMware-vs-VirtualBox branch.
+
+#### 9.10.1 Enable, and the packet
+
+Following the published Linux/Xorg `vmmouse` driver exactly. All of it goes
+through one helper (`vmm_bd`: command in `CX`, argument in the `[vmm_ebx]`
+scratch dword, four result dwords out).
+
+- **Enable** (`vmm_enable`, on the probe and after any disable): `ECX = 41`
+  (`ABSPOINTER_COMMAND`) `EBX = 0x45414552` → REQUEST; then read one dword via
+  `ECX = 39` `EBX = 1` and require `0x3442554A` (the protocol version); then
+  `ECX = 41` `EBX = 0x53424152` → ABSOLUTE.
+- **Poll** (`vmm_poll`, per §9.10.3): `ECX = 40` (`STATUS`) → `EAX`. If
+  `(EAX & 0xFFFF0000) == 0xFFFF0000` the backdoor was disabled (v86 does this
+  on its own queue overflow) — re-run enable and return. Otherwise
+  `count = EAX & 0xFFFF` dwords are queued; while `count >= 4`, read a packet
+  with `ECX = 39` `EBX = 4` → `EAX` status, `EBX` x, `ECX` y, `EDX` z, and
+  loop. The drain is bounded (`VMM_DRAIN`), like `ui_task`'s `EVQ_CAP`.
+- **Status word**: `0x20`/`0x10`/`0x08` = left/right/middle button;
+  `0x00010000` = RELATIVE_PACKET (x,y are signed deltas — v86 only sends
+  these under pointer lock, which os8088 never engages, so this is a
+  defensive route to §9's signed-delta path); otherwise x,y are `0..0xFFFF`
+  absolute, scaled `screen = (v * [vid_w or vid_h]) >> 16` — **one `mul` an
+  axis**. `z` (wheel) is read and dropped, as §9.9.5 drops the PS/2 wheel;
+  §10 has nowhere to put it.
+
+#### 9.10.2 Winning the contest
+
+`mouse_init` calls `vmm_init` where it would call `mou_p2_init`. On success it
+settles §9.5's contest exactly as `mou_claim` does — `[mou_port]` = `MOU_VMROW`
+= 6 (past `MOU_P2ROW`, no serial row, so every `cmp bl, [mou_port]` in the
+serial decoder fails), `[mou_line]` = `MOU_P2LINE` (`0xFF`, not a master-8259
+bit), `[mou_seen]` = 1, `[mou_ptr]` = 1 (the machine **has** a pointer, so the
+keyboard mouse §9.6 stands down), `[mou_idany]` = 1 (so `mou_hotplug` stands
+down too) — then calls `mou_lockon` to retire the UARTs already hooked, and
+`mouse_init` skips the PS/2 probe. `mouse_unhook` has nothing extra to undo:
+nothing serial was left live and `vmm_poll` simply stops being called.
+
+The serial identify window (§9.4.1, ~1 s) still runs ahead of `vmm_init` in
+this first cut; removing it on the browser build is a later optimisation with
+its own boot-time measurement.
+
+#### 9.10.3 `vmm_poll` — the cadence
+
+`vmm_poll` runs once per `ui_task` pass (in `.events`, before the ring is
+drained, so a click lands the same pass) and beside every `kbm_pollm` in the
+drag / grow / menu-track sub-loops, through the `VMM_POLL` macro — a single
+`cmp byte [vmm_on], 0` when it is not a browser, the same price `mou_hotplug`
+and the keyboard-mouse tail already pay. Its body **only ever executes under
+an emulator**, where the CPU is ~1000× the 4.77 MHz target, so PERFORMANCE.md's
+budget does not reach it and the two backdoor `in`s a pass are not measured.
+
+Absolute reports enter `mou_apply` through a new `mou_apply_abs`: set
+`[blk_act]`, `mou_clamp`, store `[mouse_x]`/`[mouse_y]`, then join
+`mou_apply`'s tail unchanged from the clamp on — the events, the both-buttons
+fall-through (§9), `[cur_shchk]`, `sch_wake_ui` and the draw-or-defer are all
+protocol-agnostic (§9.9.3's argument, one axis further). One copy of that tail.
+`vmm_poll` is UI-task context with the gfx lock possibly held; `mou_apply`'s
+`.move` already defers the draw on a held lock, exactly as the serial ISR
+relies on.
+
+#### 9.10.4 Not done
+
+- **No wheel, no middle button, no Control Panel row, no `SYSTEM.CFG` key, no
+  build knob** — §9.5's and §9.9.5's reasons, verbatim. `[vmm_on]` is
+  discovered every boot.
+- **No multi-display scaling.** v86 presents one framebuffer; `[vid_w]`/
+  `[vid_h]` are the whole screen there. `mou_clamp`'s `.multi` arm exists if a
+  dual-display hypervisor guest ever matters.
+- **No `int 15h AH=C2h`** — the BIOS absolute-pointer path, absent from v86
+  and a far call into unknown ROM in the pointer path regardless (§9.9.5).
+
+#### 9.10.5 Cost
+
+`kern_big` only, and the whole module — code and the ~19 bytes of `.bss`-role
+state (`[vmm_on]` and four result dwords, all `.text` with real `0`
+initialisers, `cur_mvt`'s idiom) — is inside `%ifdef KERN_BIG`. `kern_small`
+pays nothing, not even the published-state shape §9.9 had to leave behind:
+§9.10 publishes no block a test package reads by offset. Check
+`tools/kernsize.py` before and after — §9.9.5 records `kern_big` with one
+512-byte image rung of `KERN_BUDGET` spare, and this may be the addition that
+spends it.
+
+#### 9.10.6 QEMU carries the backdoor — the harness turns it off
+
+QEMU's `pc` machine has a `vmport` **and** a `vmmouse` by default, so
+`vmm_init` succeeds under a plain `qemu-system-i386` exactly as it does under
+v86 — and the backdoor then wins the contest and retires the `msserial`
+device. That is correct for an interactive session (grabless pointer) and
+wrong for the test harness, where `tools/mouse.py` drives `msserial` by
+relative deltas and the backdoor's queue stays empty, so the pointer never
+moves. The Makefile therefore launches every driving recipe with
+`-machine pc,vmport=$(VMPORT)`, `VMPORT` defaulting to `off`; `tests/ps2mouse.py`,
+`tests/heapmap.py` and `tests/vgadirty.py` spell the same `off` in their own
+launch strings. **`tests/vmmouse.py` is the exception** — it launches with
+`vmport=on` and `-serial none` (the backdoor as the only pointing device,
+like the browser) and is the one automated proof the feature works: the
+contest settles on `MOU_VMROW`, and absolute positions injected through
+QEMU's `vmmouse` land on the requested pixel. `make run VMPORT=on` is how a
+developer gets the grabless pointer interactively. MartyPC has no backdoor of
+any kind, so nothing there changes.
 
 ## 10. events.inc
 

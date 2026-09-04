@@ -105,9 +105,10 @@ def launch():
     machine has anyway (docs/TESTING.md)."""
     em = "qemu" + "-system-i386"     # never whole on a command line: kill_stale
     subprocess.run(
-        em + " -drive file=build/os8088.img,format=raw,if=floppy -boot a"
-        " -drive file=build/apps.img,format=raw,if=floppy,index=1"
-        " -serial none"
+        em + " -machine pc,vmport=off"    # ...or the VMware backdoor (SPEC.md
+        " -drive file=build/os8088.img,format=raw,if=floppy -boot a"  # 9.10)
+        " -drive file=build/apps.img,format=raw,if=floppy,index=1"    # wins
+        " -serial none"                  # the contest and this tests the PS/2
         " -display none -qmp unix:%s,server,nowait -daemonize -pidfile %s"
         % (SOCK, PIDFILE), cwd=ROOT, shell=True, check=True)
 

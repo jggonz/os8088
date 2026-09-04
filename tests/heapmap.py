@@ -122,7 +122,8 @@ def launch(hdd_mb=32, hdd=True):
                        stderr=subprocess.DEVNULL)
     hdarg = (" -drive file=%s,format=raw,if=ide,index=0,media=disk" % hdimg) if hdd else ""
     em = "qemu" + "-system-i386"        # never on a command line whole: see kill_stale
-    cmd = (em + " -S"
+    cmd = (em + " -S -machine pc,vmport=off"   # vmport off: the msserial mouse
+                                               # is what this drives (SPEC.md 9.10)
            " -drive file=%s,format=raw,if=floppy -boot a"
            " -chardev msmouse,id=m0 -serial chardev:m0"
            " -drive file=build/apps.img,format=raw,if=floppy,index=1"

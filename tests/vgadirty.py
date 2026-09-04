@@ -95,8 +95,9 @@ def build(knob):
 def launch():
     em = "qemu" + "-system-i386"     # never whole on a command line: kill_stale
     subprocess.run(
-        em + " -S -drive file=build/os8088.img,format=raw,if=floppy -boot a"
-        " -drive file=build/apps.img,format=raw,if=floppy,index=1"
+        em + " -S -machine pc,vmport=off"   # the msserial mouse drives this
+        " -drive file=build/os8088.img,format=raw,if=floppy -boot a"  # (SPEC.md
+        " -drive file=build/apps.img,format=raw,if=floppy,index=1"    # 9.10)
         " -chardev msmouse,id=m0 -serial chardev:m0"
         " -display none -qmp unix:%s,server,nowait -daemonize -pidfile %s"
         % (SOCK, PIDFILE), cwd=ROOT, shell=True, check=True)

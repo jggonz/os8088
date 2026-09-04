@@ -159,6 +159,11 @@ ui_task:
 
     ; --- 2. events: DRAIN the ring, acting on each record (SPEC.md 10.2) ------
 .events:
+    VMM_POLL                    ; the VMware absolute pointer (SPEC.md 9.10.3):
+                                ; drain its queue into mouse_x/y and the event
+                                ; ring BEFORE evq_pop below, so a click it
+                                ; carries lands this pass. One byte compare off
+                                ; a browser
     call blk_pass               ; spend the mouse ISR's activity flag, and dark
                                 ; every monitor once the idle period is up
                                 ; (SPEC.md 64.1). AHEAD of evq_pop and not
@@ -1280,6 +1285,7 @@ ui_drag:
     call ui_drag_xor            ; erase...
     call gfx_unlock             ; ...only then may the lock drop
     call kbm_pollm              ; the keyboard mouse drags too (SPEC.md 9.6)
+    VMM_POLL                    ; ...and the VMware absolute pointer (9.10.3)
     call task_yield             ; background tasks stay live here
     call gfx_lock
     mov ax, [mouse_x]           ; outline pos = orig + (mouse - start)
@@ -1821,6 +1827,7 @@ ui_grow:
     call ui_drag_xor            ; erase...
     call gfx_unlock             ; ...only then may the lock drop
     call kbm_pollm              ; ...and resizes (SPEC.md 9.6)
+    VMM_POLL                    ; ...and the VMware absolute pointer (9.10.3)
     call task_yield
     call gfx_lock
     mov ax, [mouse_x]           ; tracked size = orig + (mouse - start),
