@@ -91628,10 +91628,16 @@ RECORD i, 256 bytes at 32 + 256*i
                             live in a folder tree the Wire does not create
                             (RunCPM's A/0/). Both actions refused.
           bit 4  WF_ARC     an ARCHIVE (88.13): the file is /wire/pkg/<STEM>.WPK,
-                            a folder tree in one stream. n = 0, and bits 0 and
-                            3 are clear - Load Program unpacks it into a RAM
-                            disk and runs it (88.14), Add to Disk unpacks it
-                            where the dialog points
+                            a folder tree in one stream. n = 0 and bit 0 is
+                            clear; Load Program unpacks it into a RAM disk
+                            and runs it (88.14), Add to Disk unpacks it where
+                            the dialog points. **The writer sets bit 3 WITH
+                            it** and a reader that knows bit 4 ignores bit 3
+                            on such a record: wr_catck never refused a flag
+                            it did not know, so a Wire from before 88.13
+                            reads the same catalog, greys both buttons with
+                            the floppy reason, and never fetches a .O88 that
+                            is not there
  +35  1   sidecar count n, 0..8
  +36  2   first sidecar index into the table (meaningless when n = 0)
  +38  4   size of <STEM>.O88 in bytes - or of <STEM>.WPK, the bytes the

@@ -34,7 +34,10 @@ WC_FLAGS    equ 34              ; byte, WF_* below
 WC_NSIDE    equ 35              ; byte, 0..WIRE_SCMAX
 WC_SIDE0    equ 36              ; word, the first sidecar's table index
 WC_SIZE     equ 38              ; dword, the .O88's size
-WC_TOTAL    equ 42              ; dword, it plus every sidecar
+WC_TOTAL    equ 42              ; dword, it plus every sidecar - an archive's
+                                ; UNPACKED total
+WC_NEEDKB   equ 46              ; word, an archive's RAM disk KB (88.13's
+                                ; header figure); 0 on every other record
 WC_ICON     equ 48              ; 64: 16 mask words then 16 data words
 WC_DESC     equ 112             ; WC_DESCN lines of WC_DESCW, pre-wrapped
 WIRE_REC    equ 256
@@ -54,7 +57,16 @@ WF_PIC      equ 2               ; /wire/pic/<STEM>.PIC exists
 WF_NEW      equ 4               ; new on the Wire
 WF_FLOPPY   equ 8               ; only as a floppy image - its files live in a
                                 ; folder tree the Wire does not create. Both
-                                ; actions refuse
+                                ; actions refuse - UNLESS WF_ARC is set too,
+                                ; which is what the writer does for every
+                                ; archive so a reader from before 88.13 greys
+                                ; it rather than fetching a .O88 that is not
+                                ; there
+WF_ARC      equ 16              ; an ARCHIVE, /wire/pkg/<STEM>.WPK (SPEC.md
+                                ; 88.13): one stream, a folder tree. n = 0.
+                                ; Load Program unpacks into a RAM disk and
+                                ; runs it (88.14); Add to Disk unpacks where
+                                ; the dialog points
 
 ; --- WC_KIND -----------------------------------------------------------------
 ; Only 0..2 are used today; the field is the room the brand leaves to grow,
