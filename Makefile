@@ -3979,6 +3979,13 @@ $(BUILD)/missile.bin: apps/missile/missile.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/missile.o88: $(BUILD)/missile.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/missile.bin -o $@
 
+# Pac-Man, the native Roklan Atari disk port (SPEC.md 89).
+$(BUILD)/pacman.bin: apps/pacman/pacman.asm apps/pacman/assets.inc apps/pacman/LICENSE apps/os88api.inc apps/os88ui.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/pacman/pacman.asm
+
+$(BUILD)/pacman.o88: $(BUILD)/pacman.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/pacman.bin -o $@
+
 # Cyclone 88, a Tempest 2000 clone (SPEC.md 67). The web is a polygon of rim
 # vertices in a normalised space plus a depth ladder, resolved ONCE per layout
 # into a vertex table, so no frame does any perspective arithmetic. It is drawn
@@ -7295,7 +7302,7 @@ APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
               $(BUILD)/texpad.o88 $(BUILD)/tracker.o88 $(BUILD)/audio.o88
 APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/tank.o88 $(BUILD)/cyclone.o88 \
               $(BUILD)/mines.o88 \
-              $(BUILD)/missile.o88 $(BUILD)/solitair.o88 $(BUILD)/tamegram.o88
+              $(BUILD)/missile.o88 $(BUILD)/pacman.o88 $(BUILD)/solitair.o88 $(BUILD)/tamegram.o88
 
 # The CORE PACKAGES (SPEC.md 24.3) are a SECOND copy on the system disk and
 # never a move, so the two lists above are unchanged and still carry every

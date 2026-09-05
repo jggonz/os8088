@@ -92511,3 +92511,63 @@ Together that is about 210, and the first item is over 40% of it. **The
 ceiling itself is not the lever**: 88.11's twelve kilobytes are the 360KB
 system disk's spare clusters written as a number, and raising it is a decision
 about what comes OFF that disk.
+
+## 89. Pac-Man (`apps/pacman/pacman.asm`)
+
+`PACMAN.O88` is a native 8086 port of Roklan's Atari computer **disk version,
+revision 3.0, 10/03/82**, from `atari-pacman`, using only the public package
+ABI. It ships in `GAMES/` on every software-disk geometry. Prefix `pm_`; one
+segment per instance; no kernel changes, external ROM or heap claims.
+Provenance, the upstream license and reproducible extraction are in
+`apps/pacman/README.md` and `tools/pacman_assets.py`.
+
+### 89.1 Rules and adaptations
+
+The source's DATMAZ/PACCHR supply the complete 40 by 22 maze, 256 ordinary
+dots and four power pellets. VTABLE, HTABLE and HTAB01..10 supply legal
+movement and junction decisions, including the horizontal tunnel. PACDAT2
+supplies the player and ghost silhouettes, home corners, release delays,
+frightened-time ladder and fruit score ladder. Dots score 10, pellets 50, blue
+ghosts 200/400/800/1600, fruit 100 through 5000. Fruit appears after 80 and
+160 dots, for roughly ten seconds. Three lives start a game; one extra life at
+10,000; all 260 dots advance the level. Scores use two words.
+
+This is a one-player adaptation. Atari interrupts, POKEY sound, console
+options, attract screens, two-player swapping and intermission cartoons are
+replaced by an OS worker, short speaker tones, menus and status text. Movement
+advances one horizontal color clock or two vertical source pixels per OS tick.
+Ghosts alternate home-corner and direct chase phases; frightened ghosts flee,
+eaten ghosts return to the house. The original scripted opening and patrol
+patterns are not reproduced. Timing is expressed in 18.2 Hz ticks, not the
+original video interrupts. Buffered arrow/WASD turns, P or Space pause, N new
+game, F full screen, Esc leave full screen. About pauses play; dismissing it
+leaves the game paused. Losing focus suspends the simulation.
+
+### 89.2 Rendering and lifetime
+
+One 256-byte-stack worker (20.6) is hired on first paint; refusal leaves a "No
+task slot" status and the next paint retries. The worker calls TASK_ALIVE
+outside the graphics lock, sleeps to a tick deadline, and re-anchors when
+late. Updates and rendering share the graphics lock with the UI callbacks, so
+input and simulation never mutate the same state concurrently. Gameplay
+resumes only with focus; no catch-up burst follows a slow draw. Closing the
+window ends the worker through the package lifetime protocol.
+
+A 320 by 176 packed 4bpp canvas occupies 28,160 B of BSS. The mutable tile map
+is 880 B; only maze-used source tiles are expanded to doubled 4bpp pixels at
+build time, with an offset table retaining the original tile IDs. Old and new
+actor rectangles mark horizontal tile spans in 22 bands. Only marked tiles are
+restored from the mutable map, then current actors are composed into RAM. Each
+marked band is sent once through GFX_BLIT4 on color displays. On monochrome,
+four small-table lookups pack eight pixels into one byte in a 320-byte scratch
+band for GFX_BLIT1, with GFX_BLIT4 as its refusal fallback. The board origin
+is byte-aligned. There is no erase on the display. A full rebuild is reserved
+for new boards and paints. Colors use white/dither classes so walls, dots and
+sprites survive monochrome reduction.
+
+VGA and Hercules use 320 by 176 pixels, CGA 320 by 88 (every other source row,
+with a doubled source stride). Frame preferences are 338 by 222, 338 by 222,
+and 338 by 140 respectively; content geometry determines which layout fits.
+The board is centered in the current content, including full screen. All
+self-initiated drawing arms the window clip. The status strip uses opaque
+FONT_RUN and changes only when its values change.
