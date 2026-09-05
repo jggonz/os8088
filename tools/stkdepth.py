@@ -466,8 +466,8 @@ def main():
     ap.add_argument("--top", type=int, default=12,
                     help="how many roots to list when none is named")
     a = ap.parse_args()
-    inc = a.inc or [os.path.dirname(a.asm) + "/", "drivers/net/", "drivers/",
-                    "apps/"]
+    inc = a.inc or [os.path.dirname(a.asm) + "/", "drivers/net/",
+                    "drivers/ramdisk/", "drivers/", "apps/"]
     lst, mp = assemble(a.asm, inc)
     syms = symbols(mp)
     rout, indirect, saves, owns = routines(lst, syms)

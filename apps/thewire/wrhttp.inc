@@ -85,7 +85,12 @@ wr_start:
     mov [wr_dmax], cx
     mov [wr_kind], dl
     mov word [wr_got], 0
-    mov word [wr_clen], 0
+    mov word [wr_got+2], 0              ; both halves: a WK_ARC transfer leaves
+    mov word [wr_clen], 0               ; them non-zero and the next kind reads
+    mov word [wr_clen+2], 0             ; them as a 4GB body already delivered
+    mov word [wr_rxp], 0                ; ...and the bytes an archive's pause
+    mov word [wr_rxn], 0                ; kept in wr_rxb belong to a transfer
+                                        ; that is now superseded
     mov word [wr_code], 0
     mov word [wr_hlen], 0
     mov word [wr_hline], 0
@@ -130,8 +135,7 @@ wr_pathbuild:
 .pic:
     mov si, wr_p_pic                    ; /wire/pic/<STEM>.PIC
     call wr_sput
-    mov ax, [wr_sel]
-    call wr_recs
+    call wr_selrec
     add si, WC_STEM
     mov cx, 8
     call wr_stemcopy
@@ -169,12 +173,11 @@ wr_gchk:
     push ax
     mov al, [wr_gen]
     cmp al, [wr_gen0]
-    je .ok
-    pop ax
+    pop ax                              ; `pop` leaves the flags, so the answer
+    je .ok                              ; is the compare's either way
     stc
     ret
 .ok:
-    pop ax
     clc
     ret
 
@@ -217,7 +220,12 @@ wr_nstep:
     je .drain
     cmp al, WS_BODY
     je .drain
-    jmp .out
+    jmp .out                            ; ...and WS_PAUSE falls out HERE, which
+                                        ; is the whole of "the pause holds the
+                                        ; wire": no NETV_RECV is issued, so
+                                        ; TCP's own receive window backs the
+                                        ; server off while the UI task writes
+                                        ; a file (SPEC.md 88.14)
 
 .open:
     call net_find                       ; WHICH driver, and is it one of ours?
@@ -285,6 +293,10 @@ wr_nstep:
     jmp .redraw
 
 .drain:
+    cmp word [wr_rxn], 0                ; BYTES THIS PASS DID NOT ASK FOR: an
+    jne .feed                           ; archive's pause stops feeding
+                                        ; mid-chunk and leaves the rest here,
+                                        ; so they go in before another RECV
     mov al, [wr_hnd]
     mov di, wr_rxb
     mov cx, WR_CHUNK
@@ -296,15 +308,28 @@ wr_nstep:
     jc .out                             ; may have freed and re-claimed the
     or cx, cx                           ; destination under this pass
     jz .maybeend
+    mov [wr_rxn], cx
+    mov word [wr_rxp], 0
+.feed:
     call wr_take
     cmp byte [wr_state], WS_FAIL
     je .postfail
+    cmp byte [wr_state], WS_PAUSE
+    je .pause
     cmp byte [wr_state], WS_BODY
     jne .prog
+    mov ax, [wr_got+2]                  ; --- is the body complete? 32 bits,
+    cmp ax, [wr_clen+2]                 ; because an archive is the one kind
+    jb .prog                            ; whose body may pass 64KB
+    ja .end
     mov ax, [wr_got]
     cmp ax, [wr_clen]
     jb .prog
+.end:
     call wr_finish
+    jmp short .out
+.pause:
+    call wr_pausepost
     jmp short .out
 .prog:
     call wr_progress
@@ -410,7 +435,9 @@ wr_rputs:
     ret
 
 ; -----------------------------------------------------------------------------
-; wr_take - CX bytes at wr_rxb into the destination
+; wr_take - the bytes still in wr_rxb, into the destination
+; in:  [wr_rxp] = where to start, [wr_rxn] = how many; both are UPDATED, so a
+;      loop that stops early leaves the rest exactly where it was
 ;
 ; **THE GENERATION IS RE-READ PER BYTE** (SPEC.md 71.11). wr_nstep checks once
 ; a pass and this loop is up to WR_CHUNK stores long: a tick landing inside it
@@ -418,6 +445,12 @@ wr_rputs:
 ; chunk would then be stored into a claim that has been freed - or, worse,
 ; re-claimed by somebody else. The check at the top of the pass was true when
 ; the pass started and is stale a thousand stores later.
+;
+; **AND IT MAY STOP BEFORE THE CHUNK IS SPENT.** An archive's unpacker pauses
+; at every entry boundary (SPEC.md 88.14) and a boundary lands wherever it
+; lands, so the read position is state rather than a register - which is also
+; why the counter is carried in CX and written back at each exit rather than
+; run down by `loop`.
 ; -----------------------------------------------------------------------------
 wr_take:
     push ax
@@ -428,22 +461,28 @@ wr_take:
     push di
     push es
     mov si, wr_rxb
+    add si, [wr_rxp]
+    mov cx, [wr_rxn]
     mov es, [wr_dseg]                   ; ONCE, not per byte: nothing in the
                                         ; loop but the store touches ES, and
                                         ; DS is untouched throughout
 .next:
+    jcxz .done
     mov ah, [wr_gen]
     cmp ah, [wr_gen0]
     jne .done
     mov al, [si]
     inc si
+    dec cx
     cmp byte [wr_state], WS_BODY
     je .body
     call wr_hdrb
     cmp byte [wr_state], WS_FAIL
     je .done
-    jmp short .step
+    jmp short .next
 .body:
+    cmp byte [wr_kind], WK_ARC
+    je .arc
     mov bx, [wr_got]
     cmp bx, [wr_clen]
     jae .over
@@ -462,9 +501,22 @@ wr_take:
     add bx, [wr_dbase]
     mov [es:bx], al
     inc word [wr_got]
-.step:
-    loop .next
+    jmp short .next
+.arc:
+    call wr_afeed                       ; THE UNPACKER, not a store: this byte
+                                        ; is a header field, a literal or half
+                                        ; of a pair, and where it lands is
+                                        ; wrarc.inc's business (SPEC.md 88.13)
+    add word [wr_got], 1                ; ...and the count is 32-bit HERE ONLY,
+    adc word [wr_got+2], 0              ; so a package and a picture keep the
+                                        ; single `inc` they always had
+    cmp byte [wr_state], WS_BODY
+    je .next                            ; WS_PAUSE or WS_FAIL: stop feeding and
+                                        ; leave what is left where it is
 .done:
+    mov [wr_rxn], cx
+    sub si, wr_rxb
+    mov [wr_rxp], si
     pop es
     pop di
     pop si
@@ -547,30 +599,46 @@ wr_hdrline:
     inc si
     jmp short .sp
 .num:
-    xor bx, bx
+    ; **THE ACCUMULATOR IS 32 BITS** (SPEC.md 88.14): a .WPK is the one body
+    ; this client reads that may pass 64KB, and a word here would take a
+    ; 196KB archive as a 65KB one - a small plausible number, which is
+    ; PERFORMANCE.md rule 3's failure mode exactly. The low half is multiplied
+    ; first and its carry added to the high half's product; either overflowing
+    ; saturates, and wr_hdrdone then refuses the length against what the
+    ; transfer can actually hold.
+    mov word [wr_clen], 0
+    mov word [wr_clen+2], 0
 .d:
     mov al, [si]
     cmp al, '0'
-    jb .store
+    jb .out
     cmp al, '9'
-    ja .store
+    ja .out
     sub al, '0'
-    mov cl, al
-    xor ch, ch
-    mov ax, bx
-    mov bx, 10
-    mul bx
-    or dx, dx                           ; a length that will not fit a word is
-    jnz .huge                           ; refused here rather than wrapping
+    xor ah, ah
+    mov di, ax                          ; DI = the digit
+    mov cx, 10
+    mov ax, [wr_clen]
+    mul cx
+    mov bx, ax                          ; BX = the new low half...
+    push dx                             ; ...and DX its carry into the high one
+    mov ax, [wr_clen+2]
+    mul cx
+    pop cx
+    or dx, dx
+    jnz .huge                           ; past 32 bits
     add ax, cx
     jc .huge
-    mov bx, ax
+    add bx, di
+    adc ax, 0
+    jc .huge
+    mov [wr_clen], bx
+    mov [wr_clen+2], ax
     inc si
     jmp short .d
 .huge:
-    mov bx, 0xFFFF                      ; ...and wr_hdrdone refuses it against
-.store:                                 ; [wr_dmax], which no claim reaches
-    mov [wr_clen], bx
+    mov word [wr_clen], 0xFFFF          ; ...and wr_hdrdone refuses it, which
+    mov word [wr_clen+2], 0xFFFF        ; no claim and no catalog size reaches
     jmp short .out
 .status:
     mov si, wr_hbuf                     ; `HTTP/1.0 200 OK`: columns 9..11
@@ -662,12 +730,21 @@ wr_hdrdone:
     push bx
     push si                             ; SI is wr_take's READ POINTER and the
     push di                             ; two message paths below both use it
+    push es                             ; ...and ES is the DESTINATION wr_take
+                                        ; loaded once for its whole loop, which
+                                        ; the archive's wr_recs below clobbers
     cmp word [wr_code], 200
     jne .status
-    cmp word [wr_clen], 0
-    je .status                          ; no length is 'did not answer (0)',
+    mov ax, [wr_clen]
+    or ax, [wr_clen+2]
+    jz .status                          ; no length is 'did not answer (0)',
                                         ; which is true and is what SPEC.md
                                         ; 88.4 requires
+    cmp byte [wr_kind], WK_ARC
+    je .arc
+    cmp word [wr_clen+2], 0             ; every OTHER kind lands in one claim,
+    jne .toobig                         ; so a body needing more than 16 bits
+                                        ; is over the ceiling by inspection
     mov ax, [wr_clen]
     cmp ax, [wr_dmax]
     ja .toobig
@@ -688,6 +765,23 @@ wr_hdrdone:
 .ok:
     mov byte [wr_state], WS_BODY
     jmp short .out
+.arc:
+    ; **AN ARCHIVE MUST BE EXACTLY THE BYTES THE CATALOG PROMISED**, over 32
+    ; bits, and there is no claim to check it against: WC_SIZE is what the
+    ; transfer carries and WC_TOTAL what it unpacks to (SPEC.md 88.2), so this
+    ; is the only bound the stream has before wr_ahdrck sees the header.
+    call wr_selrec
+    mov ax, [wr_clen]
+    cmp ax, [es:si+WC_SIZE]
+    jne .badarc
+    mov ax, [wr_clen+2]
+    cmp ax, [es:si+WC_SIZE+2]
+    jne .badarc
+    mov byte [wr_state], WS_BODY
+    jmp short .out
+.badarc:
+    mov word [wr_msg], wr_s_badarc
+    jmp short .fail
 .status:
     mov di, wr_nmsg
     mov si, wr_s_answ
@@ -710,6 +804,7 @@ wr_hdrdone:
 .fail:
     mov byte [wr_state], WS_FAIL
 .out:
+    pop es
     pop di
     pop si
     pop bx
@@ -740,6 +835,26 @@ wr_finish:
     pop ax
     ret
 
+; --- wr_pausepost - the THIRD way out of a pass, and it is not an end -------
+; The unpacker has reached a boundary the worker may not cross (a claim, a
+; folder, a file - SPEC.md 20.6 rule 7), so the socket is LEFT OPEN and the
+; handler is woken with the same one byte a completion uses. It comes back as
+; WS_BODY when the UI task has done its half.
+wr_pausepost:
+    push ax
+    push bx
+    mov al, [wr_kind]
+    mov [wr_wkind], al
+    mov al, [wr_apw]
+    mov [wr_wake], al                   ; ...LAST, after everything the handler
+                                        ; will read (SPEC.md 88.5)
+    mov bx, [wr_win]
+    call OSAPI_WM_WAKE
+    call wr_nshow
+    pop bx
+    pop ax
+    ret
+
 wr_failpost:
     push ax
     push bx
@@ -763,14 +878,21 @@ wr_failpost:
 wr_progress:
     push ax
     push cx
-    mov ax, [wr_got]
-    mov cl, 10
-    shr ax, cl
+    push dx
+    mov ax, [wr_got]                    ; DX:AX >> 10, because an archive is
+    mov dx, [wr_got+2]                  ; counted over 32 bits and a word shift
+    mov cl, 10                          ; would show a 196KB fetch stuck under
+.s:                                     ; 64K
+    shr dx, 1
+    rcr ax, 1
+    dec cl
+    jnz .s
     cmp ax, [wr_shown]
     je .out
     mov [wr_shown], ax
     call wr_nshow
 .out:
+    pop dx
     pop cx
     pop ax
     ret

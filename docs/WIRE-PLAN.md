@@ -546,8 +546,10 @@ decided the shape:
 
 1. **One connection is the win, compression the change.** Fifty-nine
    connections on a stop-and-wait TCP over a 4.77 MHz 8088 are tens of
-   seconds of handshakes; the RunCPM master disk compresses 323KB to 196KB,
-   eight seconds of wire against three of decoding. So the container came
+   seconds of handshakes; the RunCPM master disk compresses 320KB to 229KB
+   as per-entry LZSS (the 196KB first estimated was deflate's, Huffman
+   coding included), six seconds of wire against three of decoding. So the
+   container came
    first and LZSS rode in on it, pinned by its decoder so two writers may
    disagree about matches and never about bytes.
 2. **The RAM disk is a volume, so run-from-RAM is a decision and not a
@@ -562,9 +564,12 @@ decided the shape:
    game archive names `RUNCPM` and paths under `A/1/`, and lands beside a
    RunCPM that is already there on either path.
 
-**The arithmetic on the 640KB XT** is in §88.14, and it is the reason the
-website publishes the 360KB curation as the RunCPM archive and not the 720KB
-one. **Deferred, still**: a resumable transfer (no `Range:`), a checksum per
+**The arithmetic on the 640KB XT** is in §88.14, and it was measured: the
+whole 360KB curation as one archive mounts and unpacks and RunCPM then fails
+to get a region, so the website publishes a CORE archive (the package, CCP,
+`.SUB`s, DRI utilities, MBASIC — 132KB unpacked) that runs beside RunCPM on
+640KB, and the tools as a second archive into the same drive. **Deferred,
+still**: a resumable transfer (no `Range:`), a checksum per
 entry (TCP's and the structure's checks are what there is), games as
 archives on the site (the master disk ships first; each game is a decision
 about redistribution the site's owner takes), and WEAVE/LOOM as archives (they

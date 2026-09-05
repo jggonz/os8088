@@ -97,11 +97,24 @@ wr_r_disk:   db 'Needs its files on a disk - use Add to Disk', 0
 wr_r_flop:   db 'Available as a floppy from os8088.com', 0
 wr_r_space:  db 'Not enough room on that disk', 0
 
+; --- ...and the three the RAM disk answers (SPEC.md 88.7, 88.14) -------------
+; The two with a figure in them are COMPOSED, so what is here is a head and a
+; tail with wr_snum and wr_s_k between (wrarc.inc's wr_rreason). The figure is
+; the SHORTFALL a person can act on - the size to set on the RAM disk's page,
+; or the room to make on it - and not the size of the tree, which they can
+; already read off the detail pane.
+wr_r_nord:   db 'Needs RAMDISK.DRV - use Add to Disk', 0
+wr_r_rdneed: db 'Needs ', 0             ; + 'NNNK free for a RAM disk'
+wr_r_rdfree: db ' free for a RAM disk', 0
+wr_r_rdmore: db 'RAM disk needs ', 0    ; + 'NNNK more room'
+wr_r_rdroom: db ' more room', 0
+
 ; --- what the network can say ------------------------------------------------
 wr_s_lost:   db 'The Wire stopped answering', 0
 wr_s_refus:  db 'The Wire refused the connection', 0
 wr_s_answ:   db 'The Wire did not answer (', 0  ; + 'NNN)'
 wr_s_badcat: db 'Catalog not understood', 0
+wr_s_badarc: db 'That archive is not understood', 0
 wr_s_badpic: db 'That picture is not a picture', 0
 wr_s_nomem:  db 'Not enough memory for that program', 0
 wr_s_toobig: db 'That program is too big for one claim', 0
@@ -113,6 +126,8 @@ wr_s_adding: db 'Adding ', 0
 wr_s_file:   db ' file', 0
 wr_s_files:  db ' files', 0
 wr_s_added:  db ' added to your disk', 0
+wr_s_addram: db ' added to the RAM disk', 0      ; ...and where an archive with
+                                                ; no WAH_PROGRAM lands (88.8)
 wr_s_loaded: db 'Loaded ', 0
 wr_s_fromw:  db ' from the Wire', 0
 wr_s_wrote:  db 'Could not write ', 0
@@ -142,6 +157,7 @@ wr_p_pic:    db 'pic/', 0
 wr_f_cat:    db 'catalog.bin', 0
 wr_x_o88:    db '.O88', 0
 wr_x_pic:    db '.PIC', 0
+wr_x_wpk:    db '.WPK', 0               ; an archive record's file (88.13)
 
 ; --- WIRE.CFG (SPEC.md 19.9, 88.4) -------------------------------------------
 wr_cfg_name: db 'WIRE.CFG', 0

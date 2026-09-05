@@ -112,10 +112,18 @@ def depth(asm, root):
     """stkdepth.py's deepest chain from `root`, in bytes."""
     # drivers/net is on the path for ftpd and Telnet: netpkg.inc is the socket
     # ABI they include from the DRIVER's tree (SPEC.md 72), so a package's own
-    # directory is not enough to assemble one.
+    # directory is not enough to assemble one. drivers/ramdisk is there for
+    # the Wire, which includes rdpkg.inc - the RAM disk's package verbs
+    # (SPEC.md 62.9.16) - and through it rdabi.inc, the same shape one driver
+    # along. The Makefile's nasm line for each package is the authority on
+    # what a package includes; this list has to keep up with it, and the
+    # failure when it does not is "nasm failed: unable to open include file",
+    # which this gate reports rather than skipping (a package whose depth
+    # cannot be measured is one the gate is not watching).
     r = subprocess.run([sys.executable, TOOL, asm, "-I", os.path.join(ROOT, "apps"),
                         "-I", BUILD, "-I", os.path.dirname(asm),
                         "-I", os.path.join(ROOT, "drivers", "net"),
+                        "-I", os.path.join(ROOT, "drivers", "ramdisk"),
                         "--from", root],
                        capture_output=True, text=True, cwd=ROOT, timeout=900)
     m = re.search(r"^== %s: (\d+) bytes ==" % re.escape(root), r.stdout, re.M)

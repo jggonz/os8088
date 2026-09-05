@@ -429,9 +429,24 @@ pick in the Standard File dialog.
 That is the point of it. A networked XT with one 360KB drive reaches the whole
 collection without a second disk, a host computer or a download.
 
-`THEWIRE.O88` is 10KB and rides the **system** disk in `SYSTEM/`, on all four
+A program that is a **folder tree** — RunCPM with its CP/M drive A — travels as
+an **archive**, `<STEM>.WPK`: the whole tree in one compressed stream, so one
+connection carries it instead of one per file, and each entry names its
+folders so the machine makes them as it goes. On an archive the two buttons
+keep their meanings and grow: **Load Program** mounts a RAM disk (or reuses
+one), unpacks the tree onto it and starts the program from there, and **Add to
+Disk...** writes the same tree onto the floppy you pick as a folder. Both need
+nothing but `ETHER.DRV`; the first needs `RAMDISK.DRV` too, and greys with the
+size it wants when the machine cannot fund the store. The site publishes
+RunCPM as a core archive that fits beside RunCPM on a 640KB machine and its
+remaining tools as a second one. SPEC.md §88.13 is the format, pinned by its
+decoder, and §88.14 the run-from-RAM path, with the 640KB arithmetic.
+
+`THEWIRE.O88` is 12KB and rides the **system** disk in `SYSTEM/`, on all four
 geometries — the disk that already carries the network driver ought to carry
-the program that turns it into software you do not have yet. With no card, or
+the program that turns it into software you do not have yet, and it rides
+**no apps disk**, since the desktop icon launches it out of the disk the
+machine booted from. With no card, or
 no driver, the window opens anyway and says so, with the three lines that
 would fix it and both buttons greyed; it never puts up an alert about a card
 you do not have.

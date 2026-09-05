@@ -3098,15 +3098,32 @@ vmmousetest: $(BUILD)/vmmouse.img
 # Disk WRITES, and QEMU mounts a floppy writable - so pointing it at
 # build/apps.img would leave the shipped image dirty and the next `make test`
 # testing a disk this gate had edited.
+#
+# **AND ITS OWN SYSTEM.CFG, WANTING TWO DRIVERS.** Ethernet's bit is 1 << 4
+# and the RAM disk's is 1 << 2 (drv_cfgbit, tests/bootstatus.py's BIT_ETHER and
+# BIT_RAM) - neither is its row number. The RAM disk is there for SPEC.md
+# 88.14: Load Program on an archive unpacks into a store, and with no
+# RAMDISK.DRV the predicate greys the button with `Needs RAMDISK.DRV - use Add
+# to Disk`, which is a true answer and not a thing to test the unpacker
+# through. build/system.cfg is left alone because tests/ethernet.py boots from
+# it, and this lands in a directory of its own for build/vmmcfg's reason:
+# os88disk.py names a file on the volume from its BASENAME, and two different
+# SYSTEM.CFGs cannot share one.
+$(BUILD)/wirecfg/SYSTEM.CFG: | $(BUILD)
+	@mkdir -p $(BUILD)/wirecfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
+	  ((1 << 4) | (1 << 2)).to_bytes(2,'little') + b'\0\0')" > $@
+
 $(BUILD)/wirecfg/WIRE.CFG: | $(BUILD)
 	@mkdir -p $(BUILD)/wirecfg
 	printf '10.0.2.2:8092/wire/\n' > $@
 
-$(BUILD)/thewire360.img: $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/system.cfg $(BUILD)/wirecfg/WIRE.CFG tools/os88disk.py
+$(BUILD)/thewire360.img: $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/wirecfg/SYSTEM.CFG $(BUILD)/wirecfg/WIRE.CFG tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin \
 		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
-		$(BUILD)/system.cfg SYSTEM/APPDATA:$(BUILD)/wirecfg/WIRE.CFG
+		$(BUILD)/wirecfg/SYSTEM.CFG SYSTEM/APPDATA:$(BUILD)/wirecfg/WIRE.CFG
 
 # THE DATA DISK IS SCRATCH AND CARRIES NO PACKAGE. It used to hold a second
 # THEWIRE.O88 and a second WIRE.CFG, because before the desktop zone existed
@@ -3581,11 +3598,20 @@ $(BUILD)/telnet.o88: $(BUILD)/telnet.bin tools/os88pkg.py
 # mirrored in tools/os88wire.py - `tests/unit/t_wire.py` compares the two in
 # the fast tier, which is what stops a format that lives on both sides of a
 # wire from being typed out twice and drifting once.
+#
+# **AND rdpkg.inc IS INCLUDED FOR THE SAME REASON netpkg.inc IS** (SPEC.md
+# 20.11): RAMDISK.DRV's two package verbs are the DRIVER's contract, so Load
+# Program on an archive (SPEC.md 88.14) asks them out of the driver's own
+# header rather than out of a copy. rdabi.inc comes with it for RD_STEPKB
+# alone - the granule RDPV_MOUNT rounds a size up to, which the refusal
+# strings have to name.
 $(BUILD)/thewire.bin: apps/thewire/thewire.asm apps/thewire/wrhttp.inc \
-                      apps/thewire/wrtxt.inc apps/thewire/wcat.inc \
+                      apps/thewire/wrarc.inc apps/thewire/wrtxt.inc \
+                      apps/thewire/wcat.inc apps/thewire/warc.inc \
                       apps/os88api.inc apps/os88ui.inc apps/os88sock.inc \
-                      drivers/net/netpkg.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -I apps/thewire/ -I drivers/net/ -o $@ apps/thewire/thewire.asm
+                      drivers/net/netpkg.inc drivers/ramdisk/rdpkg.inc \
+                      drivers/ramdisk/rdabi.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/thewire/ -I drivers/net/ -I drivers/ramdisk/ -o $@ apps/thewire/thewire.asm
 	@echo "thewire: $(call FILESIZE,$@) bytes"
 
 $(BUILD)/thewire.o88: $(BUILD)/thewire.bin tools/os88pkg.py

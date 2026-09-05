@@ -83,7 +83,22 @@ WK_SHARED   equ 5
 WIRE_VER    equ 1
 WIRE_CATMAX equ 16384           ; the claim is made before Content-Length is
                                 ; known, so this is the claim AND the ceiling
-WIRE_FILEMAX equ 64512          ; 63 KB: one claim, one OSAPI_FILE_WRITE
+WIRE_FILEMAX equ 64512          ; 63 KB: one claim, one OSAPI_FILE_WRITE.
+                                ; **IT BOUNDS A RECORD'S WC_SIZE ONLY WHEN
+                                ; WF_ARC IS CLEAR** - see WIRE_ARCMAX below
+WIRE_ARCMAX equ 0x100000        ; 1 MB, and it is THE FIRST SIZE REFUSED: an
+                                ; archive's WC_SIZE must be BELOW it, which is
+                                ; one compare on the high word rather than
+                                ; three on the pair. There is never a claim for
+                                ; the whole of a .WPK - the reader decodes one
+                                ; entry at a time into a claim sized from
+                                ; WA_MAXENT (SPEC.md 88.13) - so this is a
+                                ; SANITY bound and not a capacity one, which is
+                                ; why it is a round number rather than a
+                                ; derived figure. RunCPM's master disk is
+                                ; 231,463 bytes on the wire, and the 16-bit
+                                ; rule that fits every other record refused it
+                                ; outright
 WIRE_NMAX   equ 255             ; the format's ceiling. WIRE_CATMAX is the
                                 ; binding one - 16,384 bytes is 63 records
                                 ; with no sidecar table at all - and it is
