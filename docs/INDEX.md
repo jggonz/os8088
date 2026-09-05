@@ -296,6 +296,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | MISSILE | `apps/missile/missile.asm` | §48 |
 | MODPLUG | `apps/modplug/modplug.asm` | §56 |
 | NOTEPAD | `apps/notepad/notepad.asm` | §27 |
+| PACMAN | `apps/pacman/pacman.asm` | §89 |
 | PAINT | `apps/paint/paint.asm` | §42 |
 | PIANO | `apps/piano/piano.asm` | §36 |
 | RECORDER | `apps/recorder/recorder.asm` | §35 |
@@ -405,6 +406,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 86 | AUDIO PLAYER — background music from a streamed WAV (`apps/audio/`) |
 | 87 | Hibernate — the machine to a file on the hard disk, and back (`kernel/hiber.inc`, `HIBER.DRV`) |
 | 88 | THE WIRE — the online software library (`apps/thewire/thewire.asm`) |
+| 89 | Pac-Man (`apps/pacman/pacman.asm`) |
 
 ## docs/
 

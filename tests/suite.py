@@ -111,6 +111,8 @@ def _kernel_sources():
 # fast - host-side, no emulator, no build. Runs on every `make`.
 # --------------------------------------------------------------------------
 FAST = [
+    Row("pacman-maze", "fast", py("tests/unit/t_pacman.py"), 0.1,
+        "the Atari maze has 260 reachable dots, bounded tunnel edges and complete sprites"),
     Row("blobruns", "fast", py("tests/unit/t_blobruns.py"), 0.1,
         "how many int 13h calls stage 1 spends on the blob, per geometry "
         "(SPEC.md 15.3.8.5) - the count is NOT a function of BOOT2_SECS "
@@ -666,6 +668,9 @@ FULL = [
 # single-subject gates; several are worth reading before touching their area.
 # --------------------------------------------------------------------------
 SOAK = [
+    Row("pacman", "soak", py("tests/pacman.py"), 100.0,
+        "native 8088 Pac-Man movement, score, pellets, fruit, level transitions, "
+        "pause, full-screen repaint and worker teardown", needs=("marty",)),
     Row("weavevm", "soak", py("tests/weavevm.py"), 20.0,
         "WEAVE-SPEC 12.3: the SHIPPING apps/weave/wvm.inc run in a raw-QEMU "
         "BOOT SECTOR with SS != DS and no OS under it at all, diffed case by "
