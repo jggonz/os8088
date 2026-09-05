@@ -70726,6 +70726,123 @@ paragraph above the RAM disk's row already took when it reused `DEBUG.DRV`'s
 index: the worst outcome is a driver the user did not ask for, and both of
 those probe nothing that a wrong answer damages.
 
+#### 62.9.16 Two package verbs — `RDPV_STATE` and `RDPV_MOUNT`
+
+Until this section the store was mounted from its Control Panel page and
+nowhere else, and a package could learn nothing about it. The Wire's run-from-
+RAM path (§88.14) needs two answers before it moves a byte: *is there a store,
+and how big could one be*, and *mount one of this size*. Both are
+`OSAPI_DRV_CALL` verbs in `drivers/ramdisk/rdpkg.inc`, §20.11's shape, after
+`RDPV_IDENT` and `RDPV_UPCASE`; `RDPV_MAX` becomes 3 and an older driver
+refuses them with CF = 1 and AX = 0, which a caller reads as "no RAM disk".
+
+```
+RDPV_STATE  = 2   in   nothing
+                  out  CF = 0
+                       AL = the volume index, 0xFF = no store mounted
+                       AH = the location setting, RDL_CONV / RDL_XMS
+                       BX = the store's size in KB (0 when none)
+                       CX = its free KB: free extents x the extent's KB
+                       DX = the largest store RDPV_MOUNT could claim now, KB
+                            (rd_kb_max: OSAPI_MEM_AVAIL's largest run less
+                            the table, or OSAPI_XMEM_CAPS above 1MB, clamped
+                            to RD_MAXKB)
+                       SI = free directory rows (RD_MAXENT less the live ones)
+RDPV_MOUNT  = 3   in   AX = KB wanted; rounded UP to RD_STEPKB
+                  out  CF = 0, AL = the volume index - a store of at least
+                       that size is mounted. A store ALREADY mounted answers
+                       CF = 0 with its index whatever AX said (the caller
+                       has RDPV_STATE for its size); nothing is resized
+                       CF = 1, AL = RDERR_MEM: rd_kb_max is under the size,
+                       and nothing was claimed; or rd_mount's own RDERR_*
+```
+
+**UI-task context only, both of them**: `RDPV_STATE` asks `OSAPI_MEM_AVAIL`
+and `RDPV_MOUNT` registers a volume and paints a desktop zone, neither of
+which §20.6 rule 7 lets a worker near. **`RDPV_MOUNT` sets the live size and
+not the setting**: `[rd_kb]` is what `rd_store_get` reads, and it is written;
+`rd_cfg_mark` is not called, so the size the user chose on the page is what
+the next boot restores. The page shows the live store, as it does for any
+mount. The ceiling on the driver's image is `DRVM_IMG_RAM` in
+`kernel/driver.inc` — 9KB, `t_drvmem` — and these two verbs fit under it.
+
+**As built**: `RAMDISK.DRV` is **8,829 bytes**, from 8,711 — **118 bytes** for
+both verbs and the ladder that reaches them, leaving 387 of headroom under
+`DRVM_IMG_RAM`'s 9,216. That is cheap because neither verb computes anything:
+`RDPV_STATE` is four existing routines read into five registers — `rd_kb_max`,
+`rd_free_ext` × `[rd_extkb]` (the page's own free-space arithmetic, §62.9.10.5),
+`rd_nfiles` — and `RDPV_MOUNT` is a round, a compare against `rd_kb_max` and
+`rd_mount`. The one piece of arithmetic written here is the round UP itself,
+and it refuses a size whose round would **carry** rather than letting it wrap
+to a store that succeeds at `RD_MINKB`. The live size is **banked across
+`rd_mount`** and put back when it refuses, so every failure of this verb —
+`RDERR_MEM` and `rd_mount`'s own alike — leaves the machine as it found it and
+the page still shows the size the user chose.
+
+#### 62.9.17 `OSAPI_FILE_FIND` on a redirected volume
+
+**`dsk_find_x` gains the `DVK_FILE` arm `fcp_scan` already has**, and it is a
+gap rather than a design: §19.7.1's walk was written for FAT sectors and
+`kernel/kernel.asm`'s `api_file_find` has always handed it every volume,
+including one a driver serves. On a redirected volume there are no directory
+sectors, so the first call with `CX` = 0 answered `CF` = 1 and a package could
+`OSAPI_FILE_MKDIR` a folder on a RAM disk and then not ENTER it — the handle
+`OSAPI_FILE_GOTO` and `_GOTO_Q` take comes out of this walk and out of nowhere
+else in the SDK.
+
+It was found by §88.14, whose opening sentence says "the file slots reach it",
+and it is not that section's problem alone: **RunCPM resolves its `A/0` drive
+folders with `os88_file_find`** (§74), so any package that keeps a tree on a
+redirected volume needs this.
+
+```
+dsk_find_x, at the top, where it reads [dsk_cwd]:
+
+    DVK_FILE  -> one FSV_ENUM by ordinal:  AX = [dsk_cwd] (the folder's
+                 handle), CX = the ordinal, DX:BX = dsk_ent, BP = FSV_ENUM
+              -> the driver stages a §19.1 entry into dsk_ent
+              -> join the sector arm's own tail, which copies dsk_ent into
+                 the caller's DSK_FIND_SZ buffer
+    otherwise -> dsk_dirw_start_x and the raw-sector walk, unchanged
+```
+
+**From the caller's side the two arms are the same cell.** The ordinal is
+opaque and dense on both — a raw one counts directory SLOTS and a driver's
+counts live ROWS, and neither is a number a caller may compute; ask for 0, then
+for whatever `CX` comes back as, which is what §19.7.1 already says. The
+buffer's `+16` is the same word `OSAPI_FILE_GOTO` takes for a folder, which on
+a redirected volume is the driver's opaque handle and on a FAT one the first
+cluster — §62.9.1's rule, and the reason `wr_dive`'s FIND-then-GOTO works
+unchanged on both.
+
+**`AX` = 0 from `drv_fs_call` is "the driver does not publish `FSV_ENUM`"**,
+not an error, and it becomes `CF` = 1 with `FERR_NOENT` at once — the same
+answer an empty folder gives, which is what a caller of this cell already
+handles. Any other `AX` is the driver's own `FERR_*` and is passed through.
+A driver that answers `FSV_LIST` and not `FSV_ENUM` therefore lists in the
+Disk window and enumerates as empty here; `RAMDISK.DRV` answers both
+(`rd_enum`, §62.9.7).
+
+**The species filter is the sector arm's and does not apply**: deleted
+entries, the dot links, long-name fragments and the volume label are things a
+FAT directory holds and a driver's row array does not, so the driver's own
+`FSV_ENUM` is the filter. **Hidden and system are the exception** and the
+fence is unchanged — it lives in `api_file_find` above both arms, so a package
+still cannot find a system file on either kind of volume.
+
+**What it costs**: **45 bytes of `.cold`**, which is where `dsk_find_x` lives,
+and nothing at all of `.text` or `.bss` — `tools/kernsize.py` reads 37,622 to
+37,667 and no rung crossed. Four of the forty-five are a `push es`/`push di`
+pair around the driver call, which is not optional: `ES:DI` is the CALLER's
+buffer and §62.9's rule is that a driver's verb owns every register the FSV
+ABI does not reserve. RAMDISK.DRV happens to preserve both and the cable's
+need not.
+
+Per call it is one `drv_fs_call` in place of a directory re-read, and on a
+redirected volume it is strictly the cheaper of the two: §19.7.1's stateless
+re-seek costs the FAT arm a sector walk per entry, where the driver walks its
+own rows in RAM.
+
 ### 62.10 The cable's file client — `NET.DRV` becomes the redirector
 
 §62.9's kernel is finished and proven four milestones deep against a RAM
@@ -91587,12 +91704,32 @@ RECORD i, 256 bytes at 32 + 256*i
           bit 3  WF_FLOPPY  only as a floppy image from os8088.com - its files
                             live in a folder tree the Wire does not create
                             (RunCPM's A/0/). Both actions refused.
+          bit 4  WF_ARC     an ARCHIVE (88.13): the file is /wire/pkg/<STEM>.WPK,
+                            a folder tree in one stream. n = 0 and bit 0 is
+                            clear; Load Program unpacks it into a RAM disk
+                            and runs it (88.14), Add to Disk unpacks it where
+                            the dialog points. **The writer sets bit 3 WITH
+                            it** and a reader that knows bit 4 ignores bit 3
+                            on such a record: wr_catck never refused a flag
+                            it did not know, so a Wire from before 88.13
+                            reads the same catalog, greys both buttons with
+                            the floppy reason, and never fetches a .O88 that
+                            is not there
  +35  1   sidecar count n, 0..8
  +36  2   first sidecar index into the table (meaningless when n = 0)
- +38  4   size of <STEM>.O88 in bytes
+ +38  4   size of <STEM>.O88 in bytes - or of <STEM>.WPK, the bytes the
+          transfer will carry (wr_hdrdone checks Content-Length against it).
+          **ON AN ARCHIVE IT IS A DWORD BOUNDED BY WIRE_ARCMAX** = 1MB, which
+          is the FIRST SIZE REFUSED, and the 16-bit-and-WIRE_FILEMAX rule
+          below is the NON-archive reader's alone: a .WPK is never one claim
+          and never one file, so its size is bounded for sanity rather than
+          for capacity, and RunCPM's is 231,463. The 16-bit rule applied to
+          every record refused that one and took the whole catalog with it
  +42  4   total bytes, the .O88 plus every sidecar - Add to Disk refuses
-          before touching the disk when OSAPI_FILE_DFREE is short
- +46  2   zero
+          before touching the disk when OSAPI_FILE_DFREE is short. For an
+          archive: the UNPACKED total
+ +46  2   WC_NEEDKB: for an archive, the KB a RAM disk store must have to
+          hold it - the archive header's own figure (88.13). Zero otherwise
  +48  64  icon: 16 mask words then 16 data words, bit 15 = leftmost - the
           package's own OS88_ICON16 block (file offset 32..95 when its header
           flags bit 0 is set) or the site's generic program icon. Drawn per
@@ -91643,6 +91780,15 @@ known); the magic, the version and the two size fields exactly as above;
 sidecar index in range; every file size `<= WIRE_FILEMAX` = 64,512 (63 KB —
 one claim, one `OSAPI_FILE_WRITE`). A larger file gets `WF_FLOPPY` from the
 writer, which is the site's job and the verifier's check.
+
+**A `WF_ARC` RECORD IS CHECKED BY DIFFERENT RULES AND THEY ARE NOT A
+RELAXATION**, they are the ones that are true of an archive: `WC_SIZE` is
+non-zero and **below `WIRE_ARCMAX`** (1MB), `WC_TOTAL` is non-zero, and `n` is
+**0**. `WC_TOTAL >= WC_SIZE` is not among them and cannot be — `WC_TOTAL` is
+what the tree UNPACKS to and a tree of incompressible files is stored, so the
+stream is the total plus 32 bytes of header and 64 an entry. Neither is the
+sidecar span, because `n` is 0 and 88.13's `WC_SIDE0` is meaningless there.
+The 16-bit bound stays on every other record, where it is exactly right.
 
 `WIRE_CATMAX` bounds `N` well below the format's 255: 16,384 bytes is 63
 records with no sidecar table at all, and the record array may not run past
@@ -91806,6 +91952,25 @@ person acts on. The test is the pane's own height — `>= 170 rows` draws the
 picture — so it is the *screen* that decides and not a `VID_*` compare, which
 is §39's rule.
 
+#### 88.6.1 The wake handler is a BACKGROUND painter
+
+`wr_onwake` draws the list, the pane, the buttons and the status cell after a
+transfer lands, from the UI task's wake and not from `W_PAINT` — and after
+`Load Program` it does so with the launched program's window **on top of
+ours**. Drawn at absolute coordinates with no region armed, the two buttons
+landed inside that window's content and stayed there until it was next
+repainted, which the field reported as the Wire's buttons corrupting the
+program it had just loaded. §11.3 is the rule and this is its application:
+every lock hold in the handler arms `OSAPI_WM_CLIP_SET` first (`wr_clip`), and
+because the pane, the list and each button all **erase and then draw glyphs**,
+each tests its own rect with `OSAPI_WM_CLIP_TEST` and draws the whole unit or
+none of it — the granularity rule's whole-thing gate, `fr_status`'s shape. The
+status cell is one opaque `font_run` and needs no gate of its own. `CLIP_SET`'s
+CF = 1 arms **nothing**, so the handler carries `[wr_hid]` for that case: the
+state work (the next fetch, the free, the launch) still runs and every painter
+returns at once. The worker's own repaint (`wr_nshow`) keeps its
+`OSAPI_WM_OBSCURED` veto, which is all a single run owes.
+
 ### 88.7 The two buttons, one predicate, three consumers
 
 §47. One routine answers, for the selected record, "may Load?" / "may Add?"
@@ -91821,6 +91986,14 @@ File menu's items carry a `MENU_DIS` prefix from it.
 | `Needs its files on a disk - use Add to Disk` | `WF_DISK`, Load only |
 | `Available as a floppy from os8088.com` | `WF_FLOPPY`, both |
 | `Needs NNNK free on the disk` | the Save completion's `OSAPI_FILE_DFREE` |
+| `Needs RAMDISK.DRV - use Add to Disk` | `WF_ARC`, Load only: no driver of the class answers `RDPV_IDENT` with `RD_SIG`, or it refuses `RDPV_STATE` (an older driver) |
+| `Needs NNNK free for a RAM disk` | `WF_ARC`, Load only: no store is mounted and `RDPV_STATE`'s largest possible store is under `WC_NEEDKB` rounded up to `RD_STEPKB` (88.14) |
+| `RAM disk needs NNNK more room` | `WF_ARC`, Load only: a store is mounted and its free KB is under `WC_NEEDKB` |
+
+The three RAM-disk reasons are answered by the same predicate from
+`RDPV_STATE`, asked once per paint; the figure in the two that carry one is
+the shortfall the user can act on — the size to set on the RAM disk's page,
+or the room to make on it.
 
 The last one is not in the painter's answer and cannot be: it is knowable
 only once a *volume and folder* have been chosen, which is what §38.6's
@@ -91863,6 +92036,15 @@ used with.
   files`; a toast on the last. **A failure mid-chain leaves what was
   written** and says which file failed — there is no undo on this system
   (§22).
+- **On a `WF_ARC` record, both actions run the same UNPACKER over one
+  transfer** (88.13, 88.14). Load Program mounts or reuses a RAM disk, moves
+  the instance's directory to its root and unpacks there; Add to Disk unpacks
+  where the Save dialog pointed (the typed name is ignored — the archive names
+  its own files). Either way the archive's `home` folder is made and entered
+  first, every entry's folders are made as they are met, and when the last
+  entry is a package the buffer still holds it and Load Program hands it to
+  `OSAPI_PKG_RUN` from there. Status `Adding <title>... N of M files`; the
+  toast says `added to your disk` or `added to the RAM disk`.
 - **A selection change** fetches the record's `.PIC` when it has `WF_PIC` and
   the worker is idle, and repaints the detail pane and the two rows whose
   selection changed and nothing else. A second selection change while a
@@ -91893,8 +92075,9 @@ says the buttons will refuse and the pane says what to do about it.
 Measured on this tree. The times are PERFORMANCE.md Part 2's XT figures
 applied to the calls each path makes — this is an 8088 cost model and not a
 stopwatch, because the machine that can hold a stopwatch to it is a 4.77 MHz
-one somebody is holding and the only harness for the network half is QEMU
-(§88.12).
+one somebody is holding and the only scripted harness for the network half is
+QEMU (§88.12); `make xt-wire` is the 4.77 MHz machine with a card in it, and it
+can be looked at but not asserted on.
 
 **The picture, 128 × 64 (§88.3).** One `OSAPI_GFX_BLIT1`: one drawing call, so
 **~756 µs of fixed cost** plus 64 rows × 16 bytes of `rep movsb` per plane —
@@ -91954,6 +92137,9 @@ segment register, because the bytes really are ours (§77.10).
 | `tests/unit/t_wire.py` | fast | pack -> verify -> dump round trip on a fixture built from `build/hello.o88` and `build/mines.o88`; the writer's refusals; and the `WC_*`/`WIRE_*` equs in `wcat.inc` compared against `tools/os88wire.py`'s |
 | `tests/thewire.py` (`make thewiretest`) | soak | QEMU with an NE2000 and a host HTTP server on 8092. Seven assertions: the catalog loads and `wr_catck` accepts it, the host saw `GET /wire/catalog.bin HTTP/1.0` with a `Host:` and a `User-Agent:`, the list lists three rows, the `8088/8086` filter cuts it to two, a tier-3 `WF_DISK` record greys Load Program and **not** Add to Disk, the 128 × 64 picture on the glass matches the served `.PIC` **pixel for pixel**, and Add to Disk writes the `.O88` and its sidecar byte-identical — read back on the host by a FAT12 reader in that file after `quit` |
 
+| `tests/unit/t_wire.py` (archives) | fast | `--archive` pack -> verify -> dump round trip over a fixture tree; the LZSS encoder against the reference decoder on patterned and random bytes, and the decoder's refusals (a distance past the start, a copy past the end, a short stream, trailing bytes); the `WA_*` equs in `warc.inc` compared against the packer's; the writer's refusals (a path four folders deep, a name that is not 8.3, an entry over `WIRE_FILEMAX`, a program entry that is not last, entries not grouped by folder, more than 255 entries) |
+| `tests/thewire.py` (archives) | soak | the same boot, with `RAMDISK.DRV` wanted as well (`BIT_RAM`, a `SYSTEM.CFG` of the gate's own in `build/wirecfg/`). A fixture `.WPK` the test packs with `--archive`: a `home`, three folders, six entries at depths 0..2 — a stored one, a 40,000-byte LZSS one, an empty file, a twelve-character name and `HELLO.O88` last with `WAH_PROGRAM`. Add to Disk to B: -> every file under `home/` byte-identical, read back by the FAT12 reader in that file, folders included. Load Program on it -> a third live volume appears in `dsk_vtab` and it is `DVK_FILE`, the tree lands on it, the status cell says `Loaded`, and a `HELLO` window appears. Then the clip assertion of 88.6.1: after Load Program the launched window's content is captured, the window is dragged 8px and back for a clean full repaint, and the two must agree PIXEL FOR PIXEL — they read 0 of 17,040 differing, and they do not agree at all when the buttons have been drawn into it. **The pointer is parked at a fixed spot before each capture**: the arrow is drawn into the framebuffer, so a screendump carries it, and the drag left it somewhere else — 47 differing pixels in the shape of a cursor, reported by the first version of this row as the defect it exists to catch |
+
 **The picture assertion is the one nothing else can make.** §88.3 stores the
 band inverted so that one `gfx_blit1` is right on all three adapters, and an
 inversion that went the other way draws a perfectly plausible picture in
@@ -91967,3 +92153,361 @@ polarity; a few hundred is the block landing at the wrong x or y.
 network card of any kind, so `ETHER.DRV` cannot be hosted on it at all
 (§72.9). Every assertion in it is about behaviour and none about speed,
 because the machine under it is not an 8088.
+
+**`make xt-wire` is where it is an 8088.** `vm/xt-wire` is `xt-sound`'s XT
+with a Novell NE1000 — the 8-bit card an XT bus takes — on 86Box's slirp,
+booting `make ethertest`'s system disk so `ETHER.DRV` is up before the first
+paint and the zone is on the desktop when the machine comes up; the default
+`WIRE.CFG` (none, §88.4) reaches os8088.com's live catalog through slirp's
+NAT with nothing running on the host. B: is a kept scratch disk, because Add
+to Disk writes and 86Box writes a floppy back to its file. It is a machine to
+LOOK at — the Refresh cost in §88.10 on the CPU it was priced for, the zone's
+look in §88.6 — and not a gate: 86Box has no automation socket
+(docs/TESTING.md).
+
+### 88.13 The archive — `<STEM>.WPK`, format version 1
+
+A program that is a folder tree — RunCPM's `A/0/` master disk, the C64's
+parts — was `WF_FLOPPY` until this section, because the Wire moved one flat
+file per HTTP connection into one folder. An archive moves the tree in **one
+stream**, and that is where the win is: on a stop-and-wait TCP over a 4.77 MHz
+8088, fifty-nine connections are tens of seconds of handshakes and slow starts
+that one connection does not pay. Compression is the smaller half — the
+RunCPM master disk is 320KB raw and **229KB** as independent per-entry LZSS
+streams with a 4KB window (both writers land within 0.5% of each other;
+deflate's 196KB on the same bytes is Huffman coding this machine will not
+pay for), about six seconds of wire at the field's 15 KB/s against three
+seconds of decoding — and it is in the format because it is nearly free once
+the container exists.
+
+Little-endian, fixed offsets, read with `mov` and never parsed. Every name is
+an uppercase 8.3, ASCII, in a 12-byte slot: **NUL-padded when shorter, and a
+twelve-character name fills the slot with no NUL** — the reader copies at most
+twelve bytes and stops at a NUL, which is `wr_sputn`'s rule and the shape the
+catalog's sidecar names already take on the machine. The first draft said
+"NUL-terminated", and five of the RunCPM master disk's 77 files
+(`CONSOLE7.COM`, `LEFT-OFF.TXT`...) are twelve characters, so the format's
+motivating example would have excluded them. The **writer** refuses anything
+that is not an 8.3 name and the **reader** refuses on any check below and
+says `That archive is not understood`.
+
+```
+HEADER, 32 bytes
+ +0   4   'WPAK'
+ +4   1   format version, 1
+ +5   1   flags: bit 0 WAH_PROGRAM - the LAST entry is a package (.O88 at
+          depth 0) and Load Program runs it when the tree has landed
+ +6   2   entry count N, 1..255
+ +8   4   unpacked total, bytes (= the catalog's WC_TOTAL)
+ +12  2   need KB: the sum over entries of ceil(unpacked / 1024) - what a
+          RAM disk store must hold, at the 1KB extent a store <= 2MB has
+          (62.9.10). The catalog's WC_NEEDKB is a copy of it
+ +14  2   largest unpacked entry, bytes, <= WIRE_FILEMAX - the ONE claim the
+          reader makes for the whole transfer
+ +16  12  home: a folder the whole tree lands under, or all-NUL for none.
+          RunCPM's is 'RUNCPM', so the tree lands the way the apps floppy
+          lays it out and a later archive of a CP/M game names the same
+          home and paths under A/1/
+ +28  4   zero
+
+ENTRY i, 64 bytes, followed at once by its BODY of `stored` bytes
+ +0   1   method: 0 stored, 1 LZSS (below)
+ +1   1   depth d, 0..3 - how many FOLDER names precede the file name
+ +2   2   zero
+ +4   4   stored size - the body's bytes on the wire
+ +8   4   unpacked size, 0..WIRE_FILEMAX (0 is an empty file: stored 0)
+ +12  4   zero
+ +16  48  the path: four 12-byte slots; slots 0..d-1 are folders, slot d the
+          file name, slots after d all-NUL
+```
+
+**Entries are GROUPED BY FOLDER and the writer enforces it**: every entry whose
+path equals the previous entry's path follows it directly, so the reader that
+banks the folder it is standing in (88.14) enters each folder once. On a
+floppy a folder change is `OSAPI_FILE_FIND` walks and a `GOTO`, each priced in
+`int 13h` calls (PERFORMANCE.md), and a tree written in the writer's order
+costs one change per folder rather than one per file. **The program entry is
+LAST** (`WAH_PROGRAM`) for the reason 88.14 gives.
+
+**Method 1, LZSS, pinned by its DECODER** — two writers exist (this tree's and
+the website's) and they need not choose the same matches, but every stream
+either writes must decode identically:
+
+- The output's length is the entry's unpacked size and the decoder stops
+  when it is reached, whatever is left of the current group.
+- The stream is groups: one FLAG byte, then up to eight items for its bits 0
+  to 7, least significant first. A set bit is one LITERAL byte, copied. A
+  clear bit is a PAIR `B0 B1`: distance `((B1 >> 4) << 8 | B0) + 1` (1 to
+  4096) and length `(B1 & 15) + 3` (3 to 18); copy `length` bytes from
+  `distance` bytes back in the output, one byte at a time, so a distance
+  shorter than the length repeats (a run).
+- Refused: a distance past the start of this entry's output, a copy that
+  would pass its end, a stream that ends before the output is complete, and
+  stored bytes left over when it is.
+
+There is no window buffer: the output is a whole file in one claim, so a
+back-reference is a copy within the destination and the decoder is a state
+machine of a few bytes — the phase (a flag, an item, a pair's second byte),
+the flag byte and its bits left, and a pair's first byte — which is what
+makes it **resumable across the 1,024-byte drains** the worker takes. No
+checksum: TCP carries one, `Content-Length` is checked against `WC_SIZE`
+before the body, and the structure above is checked entry by entry.
+
+The `WA_*` offsets are `apps/thewire/warc.inc`, mirrored in
+`tools/os88wire.py` and compared by `t_wire` exactly as `wcat.inc`'s are.
+`tools/os88wire.py --archive` is this tree's writer and `--verify` its reader;
+the website's `tools/wire.py` is the second writer, and the OS's verifier is
+what the site's build runs over what it wrote.
+
+**AS BUILT** — three things the text above left open, pinned by
+`apps/thewire/wrarc.inc` because the reader had to decide them:
+
+- **A `stored` size of 64KB or more is refused.** The unpacked size has a
+  bound in this section (`WIRE_FILEMAX`, 63KB) and the stored size has none,
+  so `wr_aentck` gives it one: both counters are words, and a word that laps
+  is PERFORMANCE.md rule 3's failure — a small plausible number rather than a
+  refusal. A writer that would emit more stored bytes than unpacked ones
+  should be storing the entry instead of compressing it, so nothing legal is
+  turned away.
+- **A path slot is refused for a separator or a leading dot.** `/`, `\` and
+  `:` inside a slot, and any name beginning `.`, are the only things in this
+  format that could reach a file outside the folder the user chose — the
+  depth field says how many names there are, so a slot is ONE name. Anything
+  outside printable ASCII, an empty slot below the depth and twelve bytes
+  with no NUL in them are refused with them.
+- **`stored` = 0 with a non-zero unpacked size is refused at the ENTRY
+  HEADER**, rather than waiting for a body that never comes.
+
+### 88.14 Run from RAM — Load Program on an archive
+
+Nothing in 88.13 needs a new volume kind: the RAM disk is a volume like any
+other — a **redirected** one, `DVK_FILE`, because RAMDISK.DRV serves files
+rather than sectors (62.9) — packages launch off it (62.9.5) and `FSV_MKDIR`
+makes folders on it (62.9.7). What Load Program adds is the decision to put
+the tree there, and one transfer shared with Add to Disk.
+
+**One file slot did NOT reach it, and this section found that out.**
+`OSAPI_FILE_FIND` had no arm for a redirected volume, so a package could make
+a folder on a store and never enter it — which is every folder an archive
+lands. **62.9.17 is the fix**, in `dsk_find_x` where the gap was rather than
+worked around here, because RunCPM resolves its own `A/0` folders through the
+same cell (74) and would have unpacked and then failed inside itself.
+
+**The decision, in the UI task, before any I/O**, with `RDPV_STATE` (62.9.16):
+
+1. No driver of the class answers `RD_SIG`, or `RDPV_STATE` is refused (an
+   older `RAMDISK.DRV`): grey, `Needs RAMDISK.DRV - use Add to Disk`.
+2. A store is mounted: its free KB must be `>= WC_NEEDKB`, else grey with
+   the shortfall, `RAM disk needs NNNK more room`. A mounted store is REUSED
+   and never resized or unmounted — a second Load, a game after RunCPM,
+   lands in the same store, and what is on it is the user's.
+3. No store: ask for `WC_NEEDKB + WR_RAMSLACK` (16KB, room for what the
+   program will save) rounded up to `RD_STEPKB`; if `RDPV_STATE`'s largest
+   possible store is under that, ask for `WC_NEEDKB` rounded up alone; if it
+   is under that too, grey with `Needs NNNK free for a RAM disk`, NNN being
+   that rounded figure. Otherwise `RDPV_MOUNT` with it — at the location the
+   user's page setting names, conventional or above 1MB, which is the
+   driver's own `rd_kb_max` answering.
+
+Then `OSAPI_FILE_GOTO_Q` to the store's root (DX = 0, BL = the volume index
+`RDPV_STATE` answered), and the chain. On the 640KB XT this is for, the
+arithmetic was **measured and it does not go the way the first draft said**:
+the whole curated master disk — 320KB in 58 rows, `WC_NEEDKB` 345 — mounts a
+368KB store, unpacks, and then `OSAPI_PKG_RUN` answers `LD_ENOMEM`, because
+with ETHER.DRV's rings, the driver, the Wire's own region, catalog and entry
+claim beside a store that size, a ~532KB heap has about 46KB left and RunCPM
+wants its 47KB region and a 64KB Z80 claim before it opens a file. So the
+site publishes RunCPM as **two archives** (§88.13's subsets): `RUNCPM`, the
+core — the package, its overlay, the CCP, the `.SUB`s and the DRI utilities
+with MBASIC, 131,733 bytes unpacked in a 90,329-byte stream, `WC_NEEDKB`
+152 — and `CPMTOOLS`, the assemblers, editors and archivers into the same
+`RUNCPM/A/0`, 190,812 unpacked in 141,166, `WC_NEEDKB` 193, with no program
+entry. Measured under QEMU with the site's own catalog: the core downloads in
+seven seconds, mounts, unpacks and RunCPM comes up at `A>` with its CCP read
+off the RAM disk and drive A resolved through §62.9.17's arm; launched a
+second time by name from the RAM disk's Disk window with the Wire still open,
+it comes up again. Loading `CPMTOOLS` after it wants a store the core's mount
+did not size for, and says so with the figure (`RAM disk needs NNNK more
+room`) — the RAM disk's page sets a larger one first, or Add to Disk takes it
+to a floppy. `RD_MAXENT` is 96 rows and `RD_FILEMAX` 63KB; the core is 39
+entries in 42 rows with its three folders, and its largest file is the
+package. On a 286 with XMS the store is
+above 1MB and none of this is tight.
+
+**One transfer, one unpacker, two writers of the outcome.** The transfer is
+`WK_ARC`: `pkg/<STEM>.WPK`, `Content-Length` checked against `WC_SIZE` — a
+DWORD for this kind, the archive being the first body over 64KB. The worker
+feeds every drained byte to the unpacker, a resumable state machine over the
+header, each entry header and each body, decoding into the ONE claim the UI
+task made from the header's largest-entry figure. When an entry's body is
+complete the worker **pauses** — `WS_PAUSE`, no more `NETV_RECV`, the rest of
+the drained chunk kept at its read position, TCP's window holding the wire —
+and wakes the handler with `WW_ENTRY`. The handler is the only one that
+touches a file (20.6 rule 7, 88.5): it enters the entry's folders, making each
+that is missing, writes the file whole with `OSAPI_FILE_WRITE`, goes back to
+the base folder it banked with `OSAPI_FILE_HERE` when the chain began — the
+`home` folder, entered and made first — and puts the worker back in
+`WS_BODY`. **The folder it stands in is banked**: an entry whose folders match
+the last entry's is written without moving, which with 88.13's grouping rule
+is one folder change per folder. The header's `N` is the chain's length and
+the status cell counts it; a `WW_DONE` before `N` entries, or a byte after the
+last, is `The Wire stopped answering`. A failure mid-tree **leaves what was
+written** and says which file, which is 88.8's rule and §22's.
+
+**The program entry is last so that the launch costs nothing**: when the last
+entry has been written the claim still holds it, byte for byte what the
+`.O88` on the disk now holds, and `OSAPI_PKG_RUN` takes it from there with the
+instance's directory already on the tree — the overlay and the sidecars are
+where the launched package will look (§73.14, 88.8). A tree with no
+`WAH_PROGRAM` — a CP/M game into `RUNCPM/A/1` — ends with the toast and no
+launch. Add to Disk is the same chain from the dialog's completion, with the
+free-space check against `WC_TOTAL` first as before, and `home` made under
+the chosen folder.
+
+**What it costs the package**: the unpacker, the decoder, the RAM decision and
+its reasons, inside `THEWIRE.O88`'s 12,288-byte ceiling (88.11) — the 360KB
+system disk's seven spare clusters are the bound, and a package that will not
+fit is a decision to take with the arithmetic, not a ceiling to raise in
+passing. Measured sizes are in 88.15.
+
+#### 88.14.1 As built
+
+Six things the section above left to the implementation, and one it got
+wrong.
+
+**`OSAPI_FILE_GOTO_QM` and never `GOTO_Q`.** The quiet twin moves the GLOBAL
+current folder and deliberately not the INSTANCE's, and every file cell
+re-stands the machine in the instance's folder first — so a `GOTO_Q` is undone
+by the very next `OSAPI_FILE_WRITE`. `wr_cfgload` already carried that finding
+for `WIRE.CFG` (19.9), and the tree needs it twice over: the writes have to
+land where the archive says, and `OSAPI_PKG_RUN`'s new instance inherits our
+directory (19.2.1), which is the whole reason the program entry is last.
+
+**A mounted RAM disk is `DVK_FILE`, not `DVK_DRV`.** RAMDISK.DRV serves files
+rather than sectors (62.9), so its volume is redirected exactly as NET.DRV's
+is. Nothing in the package depends on the kind; `tests/thewire.py` reads it,
+and this is written down because the first draft of that gate asserted
+`DVK_DRV` and failed on a store that was plainly there.
+
+**The pause is posted with `[wr_apw]`, and the two boundaries carry different
+wakes.** `WW_HDR` says "the claim does not exist yet"; `WW_ENTRY` says "an
+entry's bytes are waiting for a file". Both go through the same one byte in
+88.5's order, and `WS_PAUSE` sits between `WS_BODY` and `WS_DONE` so the
+predicate's contiguous range needs no second compare. **`WS_DONE` and
+`WS_FAIL` moved up one with it**, which is what a state inserted into a
+load-bearing range costs; nothing outside `thewire.asm` reads them.
+
+**Add to Disk STAYS where the tree is**, exactly as Load Program does, rather
+than returning to the folder the dialog chose. The chain ends standing in the
+last entry's folder and nothing after it resolves a name, so moving would be
+work for its own sake — and the one thing that reads the instance's directory
+afterwards is a launch, which only the RAM path takes.
+
+**The status cell counts FILES and the progress figure counts KILOBYTES over
+32 bits.** `Adding <title>... N of M files` is the header's `N` and the
+entries done; the `NNK of MMK` beside it is the transfer, and it is a dword
+because an archive is the first body this client reads that may pass 64KB
+(88.13). Both come from `[wr_pnum]` and `[wr_ptot]`, which the sidecar chain
+fills from `WC_NSIDE` and the archive from its header — one composer, two
+counts of different things.
+
+**AND ONE THING THIS SECTION ASSUMED THAT IS NOT TRUE, WHICH IS NOW FIXED IN
+THE KERNEL**: `OSAPI_FILE_FIND` had no arm for a redirected volume, so on a
+RAM disk the first call with `CX` = 0 answered `CF` = 1 and this feature could
+make `home` and never enter it. Add to Disk was unaffected throughout — a
+floppy is `DVK_BIOS` and every part of the chain works there — and the failure
+was `Could not write TREE` at the first folder. **62.9.17 is the fix**, in
+`dsk_find_x` rather than worked around here, because RunCPM resolves its own
+`A/0` folders through the same cell (74).
+
+**A path slot may be TWELVE characters with no NUL** (88.13), so every name
+this package hands a kernel cell goes through `wr_aname` first: a `wr_sputn`
+bounded at `WARC_SLOT` into a thirteen-byte buffer that always gets a
+terminator. `wr_sput` would have run a twelve-character name into the next
+slot, and at depth 3 the next slot is another name.
+
+### 88.15 Sizes, as built
+
+Measured on the build that landed 88.13 and 88.14, with
+`python3 tools/os88pkg.py build/thewire.bin -o /dev/null` and
+`python3 tools/os88disk.py --verify`.
+
+| | before | after |
+|---|---|---|
+| `THEWIRE.O88` image | 10,310 | **12,285** (the ceiling is 12,288) |
+| its bss | 2,999 | **3,230** |
+| 360KB system disk | 351 of 354 clusters, 3 free | **350 of 354, 4 free** |
+| kernel `.cold` (62.9.17) | 37,622 | **37,667**, no rung crossed |
+
+**Three bytes of the ceiling are left**, and that is the number to look at
+before adding anything to this package. The feature cost 1,975 bytes of image
+against the ~2,000 88.11 left for it, so it fit — but only after TWO
+compaction passes, and the second was paid for by a DEFECT rather than by a
+feature: 88.2's `WIRE_ARCMAX` arm is 34 bytes that had to be found after the
+package was written and already under the ceiling. That is the argument for
+88.15.1 below being a list somebody keeps rather than a note.
+
+Where the room came from:
+
+- `wr_lockarm`, `wr_dall` and `wr_dend`. Nine holds in the wake handler and in
+  `wrarc.inc` opened with the same `OSAPI_GFX_LOCK` / `wr_clip` / `wr_geom`
+  trio, four state changes redrew the same four things and four finished chains
+  the same three. Eleven bytes a site became three. **It is also the safer
+  spelling**: 88.6.1's whole defect is a hold that draws without arming, and a
+  hold that cannot be written without the arm cannot forget it.
+- `wr_selrec`. Eighteen sites read `[wr_sel]` and called `wr_recs`.
+- `wr_stemput`. Three sites composed `<STEM>` plus an extension into a buffer.
+- `wr_wrfail`. `Could not write <name>` is the same sentence for a sidecar
+  chain and for a tree, so it is one routine (88.14).
+- **One epilogue per routine** where there were two. `wr_catck`, `wr_dive`,
+  `wr_nth`, `wr_vispos`, `wr_ieq`, `wr_pass` and every routine in `wrarc.inc`
+  each had a `clc`-and-pops arm beside an identical `stc`-and-pops one. `pop`
+  leaves the flags, so setting the answer and jumping to ONE shared pop set is
+  the same behaviour in fewer bytes — twenty-seven across the six named.
+
+The bss grew by 231 bytes and **none of it is a buffer for the archive's
+data**: 32 bytes of file header, 64 of entry header, 36 for the folder the
+last entry was written into, 40 for the predicate's composed reason and about
+forty of counters. What the tree is decoded through is one heap claim sized
+from `WA_MAXENT`, which is the whole point of 88.13's largest-entry figure.
+
+**`RAMDISK.DRV` and its two verbs are 62.9.16's own figures** and are recorded
+there; the driver's ceiling is `DRVM_IMG_RAM` = 9KB in `kernel/driver.inc`,
+enforced by `t_drvmem`.
+
+**Four spare clusters on the 360KB system disk.** 88.11 said seven and the
+package has taken three of them. That is the binding number for anything that
+wants to ship on that disk next, and it is enforced by `os88disk.py` refusing
+an image that does not fit rather than by this table.
+
+#### 88.15.1 Where the next 200 bytes are, if somebody needs them
+
+Three bytes is not room to work in, and the answer is still NOT to shave now —
+a byte saved against no requirement is a line of code made worse for nothing.
+This is the list, in the order a reader should take it, so that whoever needs
+the room does not have to find it under pressure:
+
+- **~90 bytes: the routines with ONE caller keep their own save sets.**
+  `wr_arcbase`, `wr_arcwrite` and `wr_arcend` are each called from exactly one
+  place in `wr_onwake`, which has already pushed AX, BX, CX, DX, SI, DI and ES.
+  Documenting them as "clobbers everything; one caller" deletes three prologues
+  and six epilogues. It is a real departure from §1's register discipline and
+  that is why it is not taken: the discipline is what makes the next reader
+  able to move a call.
+- **~55 bytes: the two reason strings that share a tail.** `Needs
+  RAMDISK.DRV - use Add to Disk` and `Needs its files on a disk - use Add to
+  Disk` (88.7) end in the same eighteen bytes, and `Adding `/`Loaded `/`Could
+  not write ` are three heads of the same shape. Suffix-sharing needs one head
+  to physically precede the shared tail, so only one of a pair can have it;
+  reworded, both could. **The brand table forbids rewording the buttons and the
+  menu items, not the reasons.**
+- **~40 bytes: `wr_afeed`'s two header accumulators.** The file header and the
+  entry header differ only in a base and a length; a base in BX makes them one
+  block at one byte per store more.
+- **~25 bytes: `wr_aslot` and `wr_apathn`** are the same `mul` with a different
+  add on the end.
+
+Together that is about 210, and the first item is over 40% of it. **The
+ceiling itself is not the lever**: 88.11's twelve kilobytes are the 360KB
+system disk's spare clusters written as a number, and raising it is a decision
+about what comes OFF that disk.

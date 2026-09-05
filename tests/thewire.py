@@ -15,24 +15,25 @@ is about speed, so there is no number in this file for PERFORMANCE.md to want
 off the 5150.
 
 THE HOST SERVES A FIXTURE CATALOG, packed by `tools/os88wire.py` out of
-`build/hello.o88`, `build/mines.o88` and a tier-3 `WF_DISK` entry with one
-sidecar, on **port 8092** - tests/ethernet.py's is 8090, and the two gates may
+`build/hello.o88`, `build/mines.o88`, a tier-3 `WF_DISK` entry with one
+sidecar and a `WF_ARC` one whose `.WPK` this file packs with `--archive` out
+of a fixture tree it writes, on **port 8092** - tests/ethernet.py's is 8090, and the two gates may
 be run side by side; a bound port is a gate reading the other one's answers.
 `make thewiretest`'s `SYSTEM/APPDATA/WIRE.CFG` names `10.0.2.2:8092/wire/`, so
 the machine asks the host for it and every byte under test is a byte this file
 chose.
 
-SIX ASSERTIONS.
+ELEVEN ASSERTIONS.
 
-1. THE CATALOG ARRIVES AND IS UNDERSTOOD. `wr_n` is 3, `wr_state` is WS_DONE
+1. THE CATALOG ARRIVES AND IS UNDERSTOOD. `wr_n` is 4, `wr_state` is WS_DONE
    and `wr_nodrv` is 0 - which is the whole stack under it (ARP, a handshake,
    a GET, a windowed drain, a close) plus wr_catck having accepted every field.
 2. THE HOST SAW THE REQUEST IT EXPECTED, `GET /wire/catalog.bin HTTP/1.0` with
    a Host: header, so the path composition and WIRE.CFG both worked.
 3. THE LIST IS THE CATALOG. The scroll block's `total` - which is the machine's
-   own `wr_count`, written by the painter - is 3.
+   own `wr_count`, written by the painter - is 4.
 4. THE FILTER FILTERS. Clicking `8088/8086` leaves `wr_filter` = 1 and that
-   same count at 2, because the fixture's third entry is tier 3.
+   same count at 3, because the fixture's third entry is tier 3.
 5. THE PREDICATE GREYS THE RIGHT BUTTON. Selecting the tier-3 `WF_DISK` entry
    leaves `wr_grey` bit 0 set and bit 1 clear: Load Program refuses (its files
    must be on a disk) and Add to Disk does not.
@@ -54,6 +55,42 @@ SIX ASSERTIONS.
    region of the kernel's own and a window titled HELLO appears. Nothing was
    written to a disk and nothing was read from one - the bytes came off the
    host's socket, through a claim, into a running instance.
+
+9. AN ARCHIVE, ADDED TO DISK (SPEC.md 88.13, 88.14). The fourth record is a
+   `.WPK` this file packs with `tools/os88wire.py --archive` out of a tree
+   with a `home`, three folders, entries at depths 0, 1 and 2, a STORED
+   entry, an LZSS entry of ~40KB, an EMPTY file and `build/hello.o88` last
+   with WAH_PROGRAM. Add to Disk, walked to B: exactly as assertion 7 walks
+   it, and after `quit` every file under `TREE/` on the B: image is compared
+   byte for byte with the source it was packed from - folders included, by
+   the FAT12 reader in this file. That is the LZSS decoder, the folder
+   banking, the grouping rule and the empty-file case in one assertion, and
+   nothing on the host can make it: the decoder that matters is the 8086's.
+
+10. AN ARCHIVE, RUN FROM RAM (SPEC.md 88.14). Load Program on the same
+   record. `RDPV_MOUNT` puts a store up, the instance stands on its root, the
+   tree lands there and the last entry - still in the claim - goes to
+   `OSAPI_PKG_RUN`. Asserted: a THIRD live volume appears in `dsk_vtab` and
+   it is `DVK_FILE` - RAMDISK.DRV serves FILES and not sectors (SPEC.md
+   62.9), and nothing else on this machine registers a volume - the status
+   cell says `Loaded`, and a HELLO window opens.
+
+11. THE CLIP ASSERTION (SPEC.md 88.6.1). The Wire's two buttons are drawn at
+   absolute coordinates from the WAKE handler, and Load Program has just put
+   a window on top of them: the Wire's content is x 61..444 and its button
+   column x 217..440 at y ~194..232, while HELLO's window is 240 x 90 at
+   (200, 150) - so the buttons land INSIDE HELLO's content and the overlap is
+   not incidental. What the fix does is arm `OSAPI_WM_CLIP_SET` and test each
+   button's rect against it, so the launched window keeps its own pixels.
+   The assertion is a REPAINT COMPARISON rather than a picture of what the
+   defect looks like: HELLO's content is captured as it stands after the
+   launch, then HELLO is dragged 8px and back - which is a clean full repaint
+   from its own W_PAINT - and captured again. The two must agree pixel for
+   pixel. Without the fix the first capture carries two button-shaped blocks
+   of grey frame and lettering over HELLO's white ground and the second does
+   not, so the count of dark pixels in the button column alone separates
+   them; with it the region is white in both. The old kernel cannot be built
+   here to show the other arm, so this is stated rather than demonstrated.
 
 **THE LAUNCH IS THE DESKTOP ZONE** (SPEC.md 26.7). `ETHER.DRV` registers it,
 so the ethertest-shaped disk that already asks for the driver has the icon on
@@ -83,6 +120,7 @@ sys.path.insert(0, HERE)
 import dispcp                                              # noqa: E402
 import os88sym                                             # noqa: E402
 import os88qemu                                            # noqa: E402
+import os88geom                                            # noqa: E402
 import os88wire                                            # noqa: E402
 
 S = os88sym.linear
@@ -91,12 +129,20 @@ PORT = 8092
 SYSIMG = "build/thewire360.img"
 DATIMG = "build/thewiredata.img"
 
-WS_DONE, WS_FAIL = 6, 7
+WS_DONE, WS_FAIL = 7, 8                 # thewire.asm's WS_*, and WS_PAUSE
+                                        # (SPEC.md 88.14) went in at 6 between
+                                        # WS_BODY and these two, so both moved
+                                        # up. Named here rather than read out
+                                        # of the source, so the reason travels
 TITLE_H = 18
 FD_BX1, FD_BX2, FD_BH = 224, 286, 13    # kernel/fdlg.inc's button column
 FD_BY0, FD_BY2 = 20, 60                 # ...Save, and Drive two rows down
 VOL_B = ord("B") - ord("A")             # a VOLUME INDEX, which is what
                                         # [disk_drive] holds since SPEC.md 52
+DVK_FILE = 2                            # kernel/disk.inc: a REDIRECTED volume,
+                                        # which is what a mounted RAM disk is -
+                                        # os88geom mirrors DVK_BIOS and DVK_DRV
+                                        # and not this one
 
 FIXTURE = {
     "date": "20260904",
@@ -110,8 +156,17 @@ FIXTURE = {
         {"stem": "BIGONE", "title": "Needs a disk", "kind": 0, "tier": 3,
          "files": ["hello.o88", "mines.o88"],
          "description": "Two files, so Load Program refuses it."},
+        # THE ARCHIVE (SPEC.md 88.13). Tier 0 so the 8088/8086 filter keeps
+        # it: assertion 4 counts what that filter shows, and a tier-3 archive
+        # would leave the two assertions reading each other's fixture.
+        {"stem": "TREEONE", "title": "A whole tree", "kind": 0, "tier": 0,
+         "archive": {"file": "TREEONE.WPK"},
+         "description": "Folders, in one stream."},
     ],
 }
+ARC_STEM = "TREEONE"
+ARC_HOME = "TREE"                       # the folder the whole tree lands under
+ARC_ROW = 3                             # ...and its row in the unfiltered list
 SIDECAR = "MINES.O88"                   # what BIGONE's second file is called
                                         # in /wire/pkg/ and on the disk
 PICX, PICY = 208, 21                    # WR_PICX and the picture's y in the
@@ -134,6 +189,77 @@ def fixture_pic():
     return bytes(out)
 
 
+def fixture_tree(root):
+    """The tree the .WPK is packed from, and what every file in it must hold.
+
+    Four things are being covered and each is a different failure:
+      DOCS/README.TXT   depth 1, and STORED - the method that is not a decoder
+      A/0/BIG.BIN       depth 2 and ~40KB of a pattern LZSS eats, so the
+                        decoder runs across forty of the worker's 1,024-byte
+                        drains and pauses inside pairs
+      A/1/X.COM         depth 2 again but a DIFFERENT folder, which is the
+                        folder-banking path (SPEC.md 88.14)
+      A/1/EMPTY.DAT     zero bytes, which completes on its entry HEADER with
+                        no body at all - the one entry that never reaches the
+                        decoder
+      A/1/CONSOLE7.COM  a TWELVE-character name, which fills its slot with no
+                        NUL (SPEC.md 88.13's late clarification)
+      A/0/RANDOM[12].BIN  34,000 bytes each of INCOMPRESSIBLE noise, which
+                        the writer stores - and which put the whole stream
+                        over 65,536 bytes, so the dword Content-Length and
+                        the 32-bit byte count are read with a non-zero high
+                        word
+    plus build/hello.o88 at depth 0, last and WAH_PROGRAM.
+    """
+    want = {}
+
+    def put(rel, data):
+        path = os.path.join(root, *rel.split("/"))
+        d = os.path.dirname(path)
+        if d and not os.path.isdir(d):
+            os.makedirs(d)
+        open(path, "wb").write(data)
+        want[rel] = data
+
+    put("DOCS/README.TXT", b"The Wire moves a tree in one stream.\r\n" * 40)
+    # A RUN AND A LITERAL RUN, deliberately: a pattern with long repeats
+    # exercises the pair whose distance is SHORTER than its length (88.13's
+    # run), and the counter bytes between them stop the whole thing being one
+    # match a broken decoder could also get right.
+    big = bytearray()
+    n = 0
+    while len(big) < 40000:
+        big += b"os8088 " * 11 + bytes([n & 0xFF, (n >> 8) & 0xFF])
+        n += 1
+    put("A/0/BIG.BIN", bytes(big[:40000]))
+    put("A/1/X.COM", bytes(range(256)) * 3)
+    # A TWELVE-CHARACTER NAME, which SPEC.md 88.13 stores with NO NUL after
+    # it - `CONSOLE7.COM` is one of the five in RunCPM's master disk. The
+    # slot after it is another NAME, so a reader that copied to a terminator
+    # would write the file under `CONSOLE7.COM` plus whatever followed, and
+    # at depth 2 the entry after this one is what follows.
+    put("A/1/CONSOLE7.COM", b"MSX-DOS CONSOLE\r\n" * 7)
+    # **TWO INCOMPRESSIBLE ENTRIES, TO PUT THE STREAM OVER 64KB.** LZSS makes
+    # these bigger, so the writer stores them (tools/os88wire.py), and the
+    # .WPK then passes 65,536 bytes on the wire - which is the only way to
+    # exercise the DWORD Content-Length and the 32-bit running count with a
+    # NON-ZERO HIGH WORD. A word there laps into a small plausible number
+    # rather than failing, which is PERFORMANCE.md rule 3's failure mode and
+    # invisible in any shorter fixture. They are 34,000 each rather than one
+    # of 68,000 because WIRE_FILEMAX caps ONE entry at 63KB.
+    # The generator is an LCG so the fixture is byte-for-byte reproducible.
+    for which in (1, 2):
+        buf, x = bytearray(), 0x1234 + which
+        while len(buf) < 34000:
+            x = (x * 1103515245 + 12345) & 0xFFFFFFFF
+            buf.append((x >> 16) & 0xFF)
+        put("A/0/RANDOM%d.BIN" % which, bytes(buf))
+    put("A/1/EMPTY.DAT", b"")
+    hello = open("build/hello.o88", "rb").read()
+    put("HELLO.O88", hello)
+    return want
+
+
 def say(*a):
     print(*a)
     sys.stdout.flush()
@@ -149,10 +275,20 @@ def say(*a):
 # reads whatever landed there.
 # =============================================================================
 def bss_offsets():
-    src = os.path.join(ROOT, "apps", "thewire", "thewire.asm")
+    # THE FORMAT HEADERS COME FIRST, and they have to: the bss block sizes its
+    # archive buffers out of warc.inc's WARC_* and wcat.inc's WIRE_*, so a
+    # parse that read only thewire.asm evaluated every offset after the first
+    # of them to nothing and dropped it - silently, which is what the guard
+    # list at the bottom of this function is for.
+    files = [os.path.join(ROOT, "apps", "os88api.inc")] + [
+        os.path.join(ROOT, "apps", "thewire", n)
+        for n in ("wcat.inc", "warc.inc", "thewire.asm")]
     consts, out = {}, {}
     equ = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s+equ\s+([^;]+?)\s*(?:;.*)?$")
-    for line in open(src):
+    lines = []
+    for f in files:
+        lines += list(open(f))
+    for line in lines:
         m = equ.match(line)
         if not m:
             continue
@@ -170,7 +306,8 @@ def bss_offsets():
             except Exception:
                 pass
     for want in ("wr_n", "wr_state", "wr_nodrv", "wr_filter", "wr_sel",
-                 "wr_grey", "wr_ox", "wr_oy", "wr_sb", "wr_catseg"):
+                 "wr_grey", "wr_ox", "wr_oy", "wr_sb", "wr_catseg",
+                 "wr_adone", "wr_an", "wr_aph", "wr_ramjob", "wr_msg"):
         if want not in out:
             sys.exit("thewire: %s is not in apps/thewire/thewire.asm's bss "
                      "block - the block moved and every offset this file "
@@ -196,6 +333,134 @@ def svc_ordinal(m):
             continue
         n += 1
     return n
+
+
+def live_vols(m):
+    """Every LIVE volume in dsk_vtab, as (index, kind).
+
+    A mounted RAM disk is one more of these and it is **DVK_FILE**, not
+    DVK_DRV: RAMDISK.DRV serves FILES rather than sectors (SPEC.md 62.9), so
+    its volume is redirected exactly as NET.DRV's is. Nothing else on this
+    machine can be one - A: and B: are the BIOS floppies and the gate disk
+    mounts no hard disk - so a third live volume of that kind IS the store.
+    Reading the kernel's own table is what makes assertion 10 independent of
+    the driver's internals: RDPV_STATE is the thing under test, so asking it
+    would be asking the defendant.
+    """
+    t = m.read(S("dsk_vtab"), dispcp.DVOL_MAX * dispcp.DV_SIZE)
+    out = []
+    for v in range(dispcp.DVOL_MAX):
+        r = t[v * dispcp.DV_SIZE:(v + 1) * dispcp.DV_SIZE]
+        if r[dispcp.DV_KIND] == dispcp.DVK_FREE or not (r[dispcp.DV_FLAGS] & 1):
+            continue
+        out.append((v, r[dispcp.DV_KIND]))
+    return out
+
+
+def win_title(m, slot):
+    """The title string of window `slot`, out of its own package's segment."""
+    r = m.read(S("wm_wins") + slot * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
+    return (m.readseg(u16(r, W_SEG), u16(r, dispcp.W_TITLE), 16)
+            .split(b"\0")[0].decode("latin1", "replace"))
+
+
+def clip_check(m, mo, slot, shot, no, say):
+    """SPEC.md 88.6.1: does the launched window keep its own pixels?
+
+    `wr_onwake` draws the list, the pane, the two buttons and the status cell
+    from the UI task's WAKE, and after Load Program it does so with the
+    launched program's window on top of ours. Drawn at absolute coordinates
+    with no region armed, the buttons landed inside that window's content and
+    stayed there until it was next repainted - which the field reported as the
+    Wire's buttons corrupting the program it had just loaded.
+
+    The overlap is not incidental on this machine: the Wire's content runs to
+    x 444 and its button column is x 217..440 at about y 194..232, while
+    HELLO's window is 240 x 90 at (200, 150). The buttons land inside HELLO's
+    content, so a Wire that draws them unclipped draws them THERE.
+
+    What is compared is HELLO's content as it stands after the launch against
+    the same content after a clean full repaint, which is what dragging the
+    window 8px and back produces (SPEC.md 11.94 snaps a content origin to a
+    multiple of 8, so the two positions are exact and the window comes home).
+    Equal is the fix working. THE OTHER ARM CANNOT BE BUILT HERE - the kernel
+    before the fix is not a knob - so what it would look like is stated: two
+    button-shaped blocks of frame and lettering over HELLO's white ground in
+    the first capture and not in the second, which the dark-pixel count in
+    the button column alone separates.
+    """
+    def content(sl):
+        x, y, wd, ht = dispcp.win_rect(m, S, sl)
+        return x + 1, y + TITLE_H, wd - 2, ht - TITLE_H - 1
+
+    def grab(tag):
+        # **PARK THE POINTER FIRST, AT THE SAME PLACE BOTH TIMES.** The arrow
+        # is drawn INTO the framebuffer (SPEC.md 7), so a screendump carries
+        # it, and the drag below leaves it somewhere else - which read as 47
+        # differing pixels in the shape of an arrow and was reported by the
+        # first version of this assertion as the defect it exists to catch.
+        # (300, 440) is desktop: below the Wire's frame and left of the zone
+        # column.
+        mo.run("to", "300", "440")
+        time.sleep(0.6)
+        png = os.path.join(tempfile.mkdtemp(), tag + ".png")
+        subprocess.run(["python3", "tools/shot.py", SOCK, png],
+                       check=True, capture_output=True)
+        return os88wire.png_read(png)[2]
+
+    cx, cy, cw, ch = content(slot)
+    say("the launched window's content is %dx%d at (%d, %d)"
+        % (cw, ch, cx, cy))
+    px0 = grab("clip-a")
+    shot("09-clip-a")
+
+    tx, ty, tw, _ = dispcp.win_rect(m, S, slot)
+    bar = (tx + tw // 2, ty + TITLE_H // 2)
+    for dx in (8, -8):                  # out and back: two clean W_PAINTs
+        mo.run("to", str(bar[0]), str(bar[1]))
+        subprocess.run(["python3", "tools/qmp.py", SOCK, "mouse_button 1",
+                        "sleep 0.15"], check=True, capture_output=True)
+        mo.run("to", str(bar[0] + dx), str(bar[1]))
+        time.sleep(0.4)
+        subprocess.run(["python3", "tools/qmp.py", SOCK, "mouse_button 0"],
+                       check=True, capture_output=True)
+        time.sleep(1.5)
+        bar = (bar[0] + dx, bar[1])
+    time.sleep(1.5)
+    nx, ny, nw, nh = content(slot)
+    px1 = grab("clip-b")
+    shot("09-clip-b")
+    if (nx, ny, nw, nh) != (cx, cy, cw, ch):
+        say("the window came back to (%d, %d) %dx%d and went from (%d, %d) "
+            "%dx%d - comparing them by their own origins"
+            % (nx, ny, nw, nh, cx, cy, cw, ch))
+        cw, ch = min(cw, nw), min(ch, nh)
+
+    def dark(px, x, y):
+        r, g, b = px(x, y)
+        return (r * 299 + g * 587 + b * 114) // 1000 < 128
+
+    bad = ink0 = ink1 = 0
+    for yy in range(ch):
+        for xx in range(cw):
+            d0 = dark(px0, cx + xx, cy + yy)
+            d1 = dark(px1, nx + xx, ny + yy)
+            if d0:
+                ink0 += 1
+            if d1:
+                ink1 += 1
+            if d0 != d1:
+                bad += 1
+    say("the launched window's content: %d dark pixels after the launch, %d "
+        "after a clean repaint, %d of %d differ"
+        % (ink0, ink1, bad, cw * ch))
+    if bad:
+        no("%d of %d pixels inside the launched window differ between the "
+           "state Load Program left and a clean repaint. That is SPEC.md "
+           "88.6.1: wr_onwake drew something into a window that is not ours. "
+           "The dark counts are %d and %d - a surplus of a few hundred in the "
+           "first is the two buttons, which land at x 217..440 inside this "
+           "window's content" % (bad, cw * ch, ink0, ink1))
 
 
 def zstr(m, sym, n):
@@ -396,10 +661,18 @@ def fat12_files(path):
             nm = prefix + name + ("." + ext if ext else "")
             c = u16(e, 26)
             if e[11] & 0x10:            # a folder, and the Save dialog OPENS
-                if prefix:              # IN ONE: SPEC.md 38.10 starts it in
-                    continue            # MEDIA, so the write lands there and
-                walk(chain(c), nm + "/")    # a reader that only knew the root
-                continue                    # would report it as never written
+                                        # IN ONE: SPEC.md 38.10 starts it in
+                                        # MEDIA, so the write lands there and
+                                        # a reader that only knew the root
+                                        # would report it as never written.
+                                        # **AND IT RECURSES ALL THE WAY** now:
+                                        # an archive's tree is three deep
+                                        # (SPEC.md 88.13's WARC_DEPTH) and a
+                                        # one-level walk would report every
+                                        # file under A/0/ as missing
+                if nm.count("/") <= 4:
+                    walk(chain(c), nm + "/")
+                continue
             out[nm.upper()] = chain(c, struct.unpack_from("<I", e, 28)[0])
 
     walk(img[root:root + nroot * 32], "")
@@ -444,6 +717,27 @@ def main():
     os.makedirs(pics, exist_ok=True)
     pic = fixture_pic()
     open(os.path.join(pics, "HELLO.PIC"), "wb").write(pic)
+    # THE ARCHIVE IS PACKED BEFORE THE CATALOG IS, and it has to be: every
+    # figure in a WF_ARC record - WC_SIZE, WC_TOTAL, WC_NEEDKB and the icon -
+    # comes out of the .WPK's own header rather than out of the manifest
+    # (tools/os88wire.py), which is the same rule the machine checks the other
+    # way round in wr_ahdrck.
+    src = os.path.join(tmp, "tree")
+    os.makedirs(src, exist_ok=True)
+    tree = fixture_tree(src)
+    try:
+        wpk = os88wire.archive(src, home=ARC_HOME, program="HELLO.O88")
+    except os88wire.Refused as e:
+        sys.exit("thewire: the fixture tree will not pack: %s" % e)
+    open(os.path.join("build", ARC_STEM + ".WPK"), "wb").write(wpk)
+    say("archive %s: %d bytes on the wire, %d entries, %d files unpacked"
+        % (ARC_STEM + ".WPK", len(wpk), len(tree), len(tree)))
+    if len(wpk) <= 0xFFFF:
+        sys.exit("thewire: the fixture archive is %d bytes and the whole "
+                 "point of the two incompressible entries is to pass 65,536 "
+                 "- without that the dword Content-Length and the 32-bit "
+                 "byte count are never read with a high word in them"
+                 % len(wpk))
     try:
         cat = os88wire.pack(json.load(open(man)), "build", pics)
     except os88wire.Refused as e:
@@ -454,11 +748,12 @@ def main():
               "/wire/pkg/HELLO.O88": hello,
               "/wire/pkg/MINES.O88": mines,
               "/wire/pkg/BIGONE.O88": hello,
+              "/wire/pkg/%s.WPK" % ARC_STEM: wpk,
               "/wire/pic/HELLO.PIC": pic}
     srv = Server(served)
     srv.start()
-    say("http server on 10.0.2.2:%d, catalog %d bytes, 3 records"
-        % (PORT, len(cat)))
+    say("http server on 10.0.2.2:%d, catalog %d bytes, %d records"
+        % (PORT, len(cat), len(FIXTURE["entries"])))
 
     # A SURVIVOR KEEPS THE SOCKET, so the new machine cannot bind and every
     # read below would come from the OLD one - which reads as a change that
@@ -554,9 +849,14 @@ def main():
         elif state != WS_DONE:
             no("wr_state is %d and not WS_DONE - the fetch never completed"
                % state)
-        if n != 3:
-            no("wr_n is %d and the fixture catalog has 3 records: either it "
-               "did not arrive or wr_catck refused a field" % n)
+        if n != 4:
+            no("wr_n is %d and the fixture catalog has 4 records: either it "
+               "did not arrive or wr_catck refused a field. **THE FOURTH IS "
+               "AN ARCHIVE OF %d BYTES**, and a reader that bounds every "
+               "record's WC_SIZE to 16 bits and WIRE_FILEMAX refuses it and "
+               "takes the WHOLE CATALOG down with it - which is how the "
+               "site's own catalog was found broken (SPEC.md 88.2's "
+               "WIRE_ARCMAX)" % (n, len(wpk)))
 
         # --- 2: what the host was actually asked for ------------------------
         first = srv.asked[0] if srv.asked else None
@@ -580,8 +880,8 @@ def main():
             return u16(m.readseg(pseg, img + off["wr_sb"] + 8, 2))
 
         say("the list shows %d of %d" % (shown(), n))
-        if shown() != 3:
-            no("the list shows %d rows over a 3-record catalog" % shown())
+        if shown() != 4:
+            no("the list shows %d rows over a 4-record catalog" % shown())
 
         ox, oy = w("wr_ox"), w("wr_oy")
         say("content origin (%d, %d)" % (ox, oy))
@@ -598,13 +898,13 @@ def main():
         if b("wr_filter")[0] != 1:
             no("wr_filter is %d after clicking the 8088/8086 radio"
                % b("wr_filter")[0])
-        if shown() != 2:
-            no("the 8088/8086 filter shows %d rows and the fixture has two "
+        if shown() != 3:
+            no("the 8088/8086 filter shows %d rows and the fixture has three "
                "tier-0 entries" % shown())
 
         mo.click(ox + 48 + 6, oy + 2 + 6)        # ...and back to All
         time.sleep(1.0)
-        if shown() != 3:
+        if shown() != 4:
             no("back on All the list shows %d rows" % shown())
 
         def rect(name):
@@ -697,24 +997,28 @@ def main():
             no("Add to Disk is greyed on a WF_DISK record, and Add to Disk is "
                "exactly what such a record is FOR (wr_grey = %d)" % grey)
 
-        # --- 6: Add to Disk writes both files -------------------------------
-        settled()
-        press("wr_rb")                           # Add to Disk...
-        time.sleep(2.0)
-        shot("04-savedlg")
-        wins3 = dispcp.win_list(m, S)
-        if len(wins3) <= len(wins2):
-            no("Add to Disk... put up no Save dialog")
-        else:
-            dx, dy = dispcp.win_rect(m, S, wins3[-1])[:2]
-            bx = dx + 1 + (FD_BX1 + FD_BX2) // 2
+        def save_to_b(tag, base):
+            """Add to Disk..., walk the Save dialog to B:, and press Save.
 
-            # THE DIALOG OPENS ON THE VOLUME THE WIRE WAS LAUNCHED FROM, which
-            # since the zone landed is A: - the boot disk, whose SYSTEM/ the
-            # zone reads the package out of. Its Drive button steps to the next
-            # LIVE volume and wraps (SPEC.md 38.11), so this walks rather than
-            # assuming one click is enough: a machine that mounted a hard disk
-            # would need two, and [disk_drive] is the machine's own answer.
+            THE DIALOG OPENS ON THE VOLUME THE WIRE WAS LAUNCHED FROM, which
+            since the zone landed is A: - the boot disk, whose SYSTEM/ the
+            zone reads the package out of. Its Drive button steps to the next
+            LIVE volume and wraps (SPEC.md 38.11), so this walks rather than
+            assuming one click is enough: a machine that mounted a hard disk
+            would need two, and [disk_drive] is the machine's own answer. The
+            second call finds it already on B:, which the loop reads and
+            leaves alone.
+            """
+            settled()
+            press("wr_rb")                       # Add to Disk...
+            time.sleep(2.0)
+            shot(tag + "-savedlg")
+            wins = dispcp.win_list(m, S)
+            if len(wins) <= len(base):
+                no("Add to Disk... put up no Save dialog")
+                return False
+            dx, dy = dispcp.win_rect(m, S, wins[-1])[:2]
+            bx = dx + 1 + (FD_BX1 + FD_BX2) // 2
             for _ in range(dispcp.DVOL_MAX):
                 if m.read(S("disk_drive"), 1)[0] == VOL_B:
                     break
@@ -722,20 +1026,45 @@ def main():
                 time.sleep(1.2)
             vol = m.read(S("disk_drive"), 1)[0]
             say("the Save dialog is on volume %d (B: is %d)" % (vol, VOL_B))
-            shot("04b-onB")
+            shot(tag + "-onB")
             if vol != VOL_B:
                 no("the Save dialog would not walk to B:, so the write below "
                    "is about the wrong disk")
+                return False
             mo.click(bx, dy + TITLE_H + FD_BY0 + FD_BH // 2)
             time.sleep(2.0)
-            for _ in range(60):
+            for _ in range(240):
                 time.sleep(0.5)
                 if b("wr_job")[0] == 0 and b("wr_state")[0] in (WS_DONE,
                                                                WS_FAIL):
                     break
-            shot("05-added")
-            say("after the chain: wr_job = %d, wr_state = %d"
-                % (b("wr_job")[0], b("wr_state")[0]))
+            shot(tag + "-added")
+            say("after the chain: wr_job = %d, wr_state = %d, wr_msg = %04X"
+                % (b("wr_job")[0], b("wr_state")[0], w("wr_msg")))
+            return b("wr_state")[0] != WS_FAIL
+
+        def raise_wire():
+            """Click a dead spot in the Wire's content, which raises it.
+
+            Everything after a Load Program has ANOTHER window on top, and a
+            click that lands on that window is a click the Wire never sees -
+            which reads as the button doing nothing. (ox + 4, oy + 4) is
+            inside the filter row's band and to the left of every radio, so
+            wr_filhit finds no hit and the whole of the click is the raise.
+            It is also outside HELLO's 240 x 90 at (200, 150), so it cannot
+            be swallowed by the very window it exists to get out from under.
+            """
+            mo.click(ox + 4, oy + 4)
+            time.sleep(1.0)
+
+        def pick(row):
+            raise_wire()
+            mo.click(ox + 40, oy + 19 + row * 16 + 8)
+            time.sleep(1.5)
+            settled()
+
+        # --- 6: Add to Disk writes both files -------------------------------
+        save_to_b("04", wins2)
 
         # --- 8: Load Program, out of memory (SPEC.md 21.5, 88.8) -----------
         if have_pkg_run():
@@ -796,10 +1125,93 @@ def main():
                 say("HELLO is running, and nothing it needs was ever on a "
                     "disk: the image came off the host's socket, through a "
                     "claim, into OSAPI_PKG_RUN")
+                # --- 11: THE CLIP ASSERTION (SPEC.md 88.6.1) ---------------
+                # HERE rather than after the archive's launch, and it is the
+                # same code path: what 88.6.1 is about is `wr_onwake` drawing
+                # from the UI task's WAKE with the launched window on top of
+                # ours, which is what has just happened. Doing it on the
+                # PLAIN Load Program also keeps the assertion standing when
+                # the archive's own launch cannot run.
+                clip_check(m, mo, after[-1], shot, no, say)
         else:
             no("apps/os88api.inc carries no OSAPI_PKG_RUN, so this build has "
                "no kernel half - the assertion above cannot run and its "
                "absence must not read as a pass")
+
+        # --- 9: AN ARCHIVE, ADDED TO DISK (SPEC.md 88.13, 88.14) ------------
+        # The read-back is at the bottom of this file with assertion 7's; what
+        # is asserted here is that the machine got through the whole chain -
+        # one transfer, an unpacker paused at every entry boundary, and five
+        # files written into three folders it made as it met them.
+        pick(ARC_ROW)
+        say("archive row: wr_sel = %d, wr_grey = %d" % (w("wr_sel"),
+                                                        b("wr_grey")[0]))
+        if w("wr_sel") != ARC_ROW:
+            no("wr_sel is %d after clicking the archive's row" % w("wr_sel"))
+        if b("wr_grey")[0] & 2:
+            no("Add to Disk is greyed on a WF_ARC record. The writer sets "
+               "WF_FLOPPY with WF_ARC on purpose (SPEC.md 88.2) and a reader "
+               "that knows bit 4 must ignore bit 3 on it - this is that "
+               "reader failing to (wr_grey = %d)" % b("wr_grey")[0])
+        arc_added = save_to_b("07", dispcp.win_list(m, S))
+        if not arc_added:
+            no("the archive chain ended in WS_FAIL: wr_msg = %04X, and the "
+               "candidates are wr_s_badarc (a field wr_ahdrck or wr_aentck "
+               "refused), wr_s_lost (the stream ended short of its N "
+               "entries) or wr_s_wrote (a file or a folder the disk refused)"
+               % w("wr_msg"))
+
+        # --- 10: AN ARCHIVE, RUN FROM RAM (SPEC.md 88.14) -------------------
+        vols0 = live_vols(m)
+        say("live volumes before Load Program: %r" % (vols0,))
+        pick(ARC_ROW)
+        if b("wr_grey")[0] & 1:
+            no("Load Program is greyed on the archive: the predicate refused "
+               "the RAM disk (SPEC.md 88.7's three reasons), so either "
+               "RAMDISK.DRV is not up - build/wirecfg/SYSTEM.CFG asks for it "
+               "with BIT_RAM - or RDPV_STATE answered a store it could not "
+               "make. wr_grey = %d" % b("wr_grey")[0])
+        before = dispcp.win_list(m, S)
+        press("wr_ra")                            # Load Program
+        for _ in range(240):
+            time.sleep(0.5)
+            if (b("wr_job")[0] == 0
+                    and b("wr_state")[0] in (WS_DONE, WS_FAIL)):
+                break
+        time.sleep(2.0)
+        shot("08-fromram")
+        after = dispcp.win_list(m, S)
+        vols1 = live_vols(m)
+        say("live volumes after: %r, windows %d -> %d, wr_state = %d"
+            % (vols1, len(before), len(after), b("wr_state")[0]))
+        asked = b"".join(srv.asked).decode("latin1", "replace")
+        if "/wire/pkg/%s.WPK" % ARC_STEM not in asked:
+            no("the host was never asked for /wire/pkg/%s.WPK, so no archive "
+               "transfer started at all" % ARC_STEM)
+        new_vols = [v for v in vols1 if v not in vols0]
+        if not new_vols:
+            no("no new volume appeared: RDPV_MOUNT never put a store up, so "
+               "the tree went nowhere (SPEC.md 88.14 step 3)")
+        elif new_vols[0][1] != DVK_FILE:
+            no("the new volume is kind %d and a RAM disk is DVK_FILE = %d - "
+               "nothing else on this machine registers a volume"
+               % (new_vols[0][1], DVK_FILE))
+        else:
+            say("a store is mounted: volume %d, DVK_FILE" % new_vols[0][0])
+        if len(after) <= len(before):
+            no("Load Program on the archive opened no window, and the tree "
+               "carries HELLO.O88 last with WAH_PROGRAM (SPEC.md 88.14)")
+        else:
+            ttl = win_title(m, after[-1])
+            say("the launched window is %r, wr_msg = %04X" % (ttl, w("wr_msg")))
+            if ttl.upper() != "HELLO":
+                no("the archive launched %r and its program entry is "
+                   "HELLO.O88" % ttl)
+            msg = m.readseg(pseg, w("wr_msg"), 48).split(b"\0")[0]
+            say("the status cell says %r" % msg.decode("latin1", "replace"))
+            if not msg.startswith(b"Loaded"):
+                no("the status cell says %r and SPEC.md 88.14 says `Loaded "
+                   "<title> from the Wire`" % msg)
     finally:
         if not a.keep:
             m.quit()
@@ -837,6 +1249,40 @@ def main():
         else:
             say("%s: %d bytes, byte-identical to what the host sent"
                 % (k, len(want)))
+
+    # --- assertion 9's other half: the whole tree, off the image -----------
+    # THE PATH IS MATCHED FROM `TREE/` DOWN and not from the root, for
+    # assertion 7's reason one level deeper: the Save dialog decides where the
+    # home folder lands and the archive decides everything under it, so what
+    # the Wire owes is the SHAPE of the tree and the bytes in it.
+    got_tree = {}
+    for k, v in got.items():
+        parts = k.split("/")
+        if ARC_HOME in parts:
+            got_tree["/".join(parts[parts.index(ARC_HOME) + 1:])] = v
+    say("%s/ on B: holds %r" % (ARC_HOME, sorted(got_tree)))
+    if not got_tree:
+        no("nothing landed under %s/ on B: - Add to Disk on the archive wrote "
+           "no tree at all (SPEC.md 88.13's home folder)" % ARC_HOME)
+    for rel, want in sorted(tree.items()):
+        blob = got_tree.get(rel.upper())
+        if blob is None:
+            no("%s/%s is nowhere on B:. Its folders are made as the entries "
+               "are met (SPEC.md 88.14), so a missing file at depth 2 is the "
+               "folder walk and a missing one at depth 0 is the chain ending "
+               "early" % (ARC_HOME, rel))
+        elif blob != want:
+            first = next((i for i in range(min(len(blob), len(want)))
+                          if blob[i] != want[i]), min(len(blob), len(want)))
+            no("%s/%s is %d bytes on B: and the source is %d; they first "
+               "differ at byte %d. A length that is right with bytes that are "
+               "wrong is the LZSS decoder (SPEC.md 88.13's distance, length "
+               "or the one-byte-at-a-time copy that makes a run); a length "
+               "that is short is the entry ending early"
+               % (ARC_HOME, rel, len(blob), len(want), first))
+        else:
+            say("%s/%s: %d bytes, byte-identical to what was packed"
+                % (ARC_HOME, rel, len(want)))
 
     say("thewire: %s" % ("FAILED" if fails else "ok"))
     return 1 if fails else 0

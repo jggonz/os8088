@@ -53,6 +53,14 @@
                                     ; drivers/ether/ether.asm includes, so the
                                     ; two ends cannot drift (SPEC.md 20.11)
 %include "wcat.inc"                 ; the catalog format (SPEC.md 88.2)
+%include "warc.inc"                 ; ...and the archive's (SPEC.md 88.13)
+%include "rdabi.inc"                ; RD_STEPKB, the granule RDPV_MOUNT rounds
+                                    ; a size to - the RAM disk's own constant
+                                    ; rather than a second spelling of 8 here
+%include "rdpkg.inc"                ; RAMDISK.DRV's package verbs, THE DRIVER'S
+                                    ; OWN HEADER again (SPEC.md 20.11): the two
+                                    ; RAM-disk answers Load Program needs
+                                    ; before it moves a byte (SPEC.md 62.9.16)
 
 ; OSAPI_PKG_RUN is apps/os88api.inc's (SPEC.md 21.5). While the two halves of
 ; this feature were being built on separate branches there was an %ifndef here
@@ -195,29 +203,52 @@ WR_HVGA     equ 243             ; content 224 -> 12 rows
 WR_HCGA     equ 147             ; content 128 ->  6 rows
 
 ; --- the state machine (wrhttp.inc) ------------------------------------------
-; **THE ORDER IS LOAD-BEARING**: WS_OPEN..WS_BODY is a CONTIGUOUS RANGE and it
+; **THE ORDER IS LOAD-BEARING**: WS_OPEN..WS_PAUSE is a CONTIGUOUS RANGE and it
 ; is the whole definition of "a transfer is in flight", which the predicate and
 ; wr_start both test as a range. The states either side are finished ones.
 ; brnet.inc carries the scar this copies the shape from - a test of "not IDLE"
 ; refused every fetch after the first for the life of the window.
+;
+; **WS_PAUSE IS INSIDE THE RANGE AND HAD TO GO IN IT** (SPEC.md 88.14): an
+; archive's worker spends most of the transfer parked at an entry boundary
+; waiting for the UI task to write a file, and a pause the predicate read as
+; `finished` would offer Load Program on a record whose tree is half on the
+; disk. It sits between WS_BODY and WS_DONE so the range stays one compare
+; each side and nothing else in this file had to learn about it.
 WS_IDLE     equ 0
 WS_OPEN     equ 1               ; --- in flight from here...
 WS_WAIT     equ 2
 WS_SEND     equ 3
 WS_HEAD     equ 4
 WS_BODY     equ 5
-WS_DONE     equ 6               ; --- ...to here
-WS_FAIL     equ 7
+WS_PAUSE    equ 6               ; ...the unpacker is at a boundary and the
+                                ; handler owes us the next WS_BODY
+WS_DONE     equ 7               ; --- ...to here
+WS_FAIL     equ 8
 
 ; --- what a transfer is FOR --------------------------------------------------
 WK_CAT      equ 0
 WK_PIC      equ 1
 WK_FILE     equ 2
+WK_ARC      equ 3               ; an ARCHIVE (88.13): one stream, a folder
+                                ; tree, and the FIRST body this package reads
+                                ; that may be over 64KB - which is why
+                                ; [wr_got] and [wr_clen] are dwords
 
 ; --- what the worker asks the UI task to do (SPEC.md 88.5's one byte) --------
 WW_NONE     equ 0
 WW_DONE     equ 1
 WW_FAIL     equ 2
+WW_HDR      equ 3               ; the archive's 32-byte header has arrived and
+                                ; the ONE claim is sized from it (88.14)
+WW_ENTRY    equ 4               ; ...and one entry's bytes are decoded and
+                                ; waiting to be written
+
+WR_RAMSLACK equ 16              ; the KB asked for OVER the tree when a store
+                                ; is mounted for it (88.14 step 3): room for
+                                ; what the program will save. A machine that
+                                ; cannot spare it gets a store sized to the
+                                ; tree alone rather than a refusal
 
 ; --- and what the UI task is in the middle of (the Add chain) ----------------
 WJ_NONE     equ 0
@@ -398,6 +429,63 @@ wr_dy:                                  ; in/out DX
     add dx, [wr_oy]
     ret
 
+; --- wr_clip - arm the visible region for a BACKGROUND draw (SPEC.md 11.3) --
+; in:  the gfx lock held, in a context that is not W_PAINT and not a click
+; out: [wr_hid] = 1 when nothing of the window can be seen
+;
+; THE WAKE HANDLER IS A BACKGROUND PAINTER. It draws the list, the pane, the
+; buttons and the status cell after a transfer lands - and after `Load
+; Program` has just put a NEW WINDOW ON TOP OF OURS, which is exactly when it
+; redraws the two buttons. Drawn at absolute coordinates with no region
+; armed, they landed inside the launched program's content and stayed there
+; until that window was next repainted. So every lock hold in wr_onwake arms
+; the region first, and each painter below tests its own rect against it
+; (OSAPI_WM_CLIP_TEST) before it erases anything - the whole-unit gate of
+; 11.3's granularity rule, since each of them fills and then draws glyphs.
+; CF = 1 arms NOTHING (the window is hidden or wholly covered), so the state
+; work still runs and the drawing is skipped by the flag, not by the region.
+; -----------------------------------------------------------------------------
+wr_clip:
+    push bx
+    mov byte [wr_hid], 0
+    mov bx, [wr_win]
+    call OSAPI_WM_CLIP_SET
+    jnc .out
+    mov byte [wr_hid], 1
+.out:
+    pop bx
+    ret
+
+; --- wr_lockarm - take the lock, arm the region, re-measure ------------------
+; The wake handler and wrarc.inc hold the lock nine times between them and
+; every one of those holds owes the same three calls: SPEC.md 11.3's region
+; before anything is drawn at absolute coordinates, and wr_geom because a
+; window moves. Written once, so a hold that forgot the arm cannot be added by
+; hand - which is the defect 88.6.1 exists about.
+wr_lockarm:
+    call OSAPI_GFX_LOCK
+    call wr_clip
+    call wr_geom
+    ret
+
+; --- wr_dall - the whole content, from a state change ------------------------
+; The menu follows the buttons, the list follows the catalog and the pane and
+; the cell follow the selection. Three call sites want exactly this set and
+; they wanted it in three different orders once.
+wr_dall:
+    call wr_menufix
+    call wr_dlist
+    call wr_ddet
+    call wr_dstat
+    ret
+
+; --- wr_dend - what every finished chain redraws -----------------------------
+wr_dend:
+    call wr_menufix
+    call wr_dstat
+    call wr_dbtns
+    ret
+
 ; =============================================================================
 ; THE PAINTERS
 ; =============================================================================
@@ -533,6 +621,10 @@ wr_dlist:
     add cx, [wr_ox]
     mov dx, [wr_y2]
     call wr_dy
+    cmp byte [wr_hid], 0
+    jne .out
+    call OSAPI_WM_CLIP_TEST             ; the whole pane or none of it
+    jc .out                             ; (SPEC.md 11.3, wr_clip)
     call OSAPI_GFX_FRAME
     mov word [wr_selrow], 0xFFFF        ; wr_drow re-answers it below
     xor di, di
@@ -542,6 +634,7 @@ wr_dlist:
     cmp di, [wr_rows]
     jb .l
     call wr_dscroll
+.out:
     pop di
     pop si
     pop dx
@@ -776,6 +869,10 @@ wr_ddet:
     add cx, [wr_ox]
     mov dx, [wr_y2]
     call wr_dy
+    cmp byte [wr_hid], 0
+    jne .out
+    call OSAPI_WM_CLIP_TEST             ; the whole pane or none of it
+    jc .out                             ; (SPEC.md 11.3, wr_clip)
     call OSAPI_GFX_FRAME
     mov al, CWHITE                      ; the INTERIOR, so an incremental
     call OSAPI_SET_COLOR                ; repaint has a ground of its own
@@ -819,6 +916,7 @@ wr_ddet:
     call wr_ddesc                       ; five pre-wrapped lines
 .btns:
     call wr_dbtns
+.out:
     pop di
     pop si
     pop dx
@@ -868,8 +966,7 @@ wr_dpic:
     push es
     cmp word [wr_ph], WR_PICMIN
     jb .out
-    mov ax, [wr_sel]
-    call wr_recs
+    call wr_selrec
     test byte [es:si+WC_FLAGS], WF_PIC
     jz .none
     cmp byte [wr_picok], 0
@@ -1016,8 +1113,7 @@ wr_dinfo:
     push si
     push di
     push es
-    mov ax, [wr_sel]
-    call wr_recs
+    call wr_selrec
     mov di, wr_line                     ; --- the title
     push si
     add si, WC_TITLE
@@ -1101,8 +1197,7 @@ wr_ddesc:
     push di
     push bp                             ; the counter, and BP is the kernel
     push es                             ; dispatcher's register (SPEC.md 20.1)
-    mov ax, [wr_sel]
-    call wr_recs
+    call wr_selrec
     add si, WC_DESC
     mov bp, WC_DESCN
 .l:
@@ -1173,8 +1268,11 @@ wr_dbtns:
     or byte [wr_grey], 1
 .a:
     mov bx, wr_ra
-    mov si, wr_s_run
-    call os88ui_btn
+    call wr_btnok                       ; THE STATE IS RECORDED WHETHER OR NOT
+    jc .a2                              ; THE BUTTON IS DRAWN: a covered button
+    mov si, wr_s_run                    ; still answers a click and the gate
+    call os88ui_btn                     ; still reads [wr_grey]
+.a2:
     mov al, 1                           ; Add to Disk...
     call wr_may
     mov di, OS88UI_FILL
@@ -1183,14 +1281,41 @@ wr_dbtns:
     or byte [wr_grey], 2
 .b:
     mov bx, wr_rb
+    call wr_btnok
+    jc .b2
     mov si, wr_s_add
     call os88ui_btn
+.b2:
     pop di
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
+    ret
+
+; --- wr_btnok - may the button whose rect is at BX be drawn? out CF = 1 no --
+; The rect is the four screen words wr_geom left there. Every register but
+; the flags is preserved, which the two call sites above lean on.
+wr_btnok:
+    cmp byte [wr_hid], 0
+    jne .no
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [bx]
+    mov cx, [bx+4]
+    mov dx, [bx+6]
+    mov bx, [bx+2]
+    call OSAPI_WM_CLIP_TEST
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.no:
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1201,6 +1326,8 @@ wr_dbtns:
 ; 8-aligned, so the whole 48 cells are a single store a row.
 ; -----------------------------------------------------------------------------
 wr_dstat:
+    cmp byte [wr_hid], 0
+    jne .hid
     push ax
     push bx
     push cx
@@ -1221,6 +1348,7 @@ wr_dstat:
     pop cx
     pop bx
     pop ax
+.hid:
     ret
 
 ; --- wr_statbuild - what the status cell says, padded to WR_STATN cells ------
@@ -1241,29 +1369,38 @@ wr_statbuild:
     jae .reading
     mov si, wr_s_conn
     call wr_sput
-    jmp short .pad
+    jmp .pad
 .reading:
     mov si, wr_s_load
-    cmp byte [wr_job], WJ_ADD           ; ...or WHICH FILE OF THE SET, which is
-    jne .rsay                           ; the thing a person watching a
-    cmp word [wr_msg], 0                ; four-file Add wants to know. The
-    je .rsay                            ; kilobyte figure still follows it
-    mov si, [wr_msg]
+    cmp word [wr_msg], 0                ; ...or WHICH FILE OF THE SET, which is
+    je .rsay                            ; the thing a person watching a
+    mov si, [wr_msg]                    ; four-file Add - or a fifty-nine-file
+                                        ; archive - wants to know. The
+                                        ; kilobyte figure still follows it, and
+                                        ; a plain Load leaves [wr_msg] at zero
+                                        ; (wr_start clears it) so it says
+                                        ; `Loading from the Wire...` as before
 .rsay:
     call wr_sput
-    cmp byte [wr_state], WS_BODY
-    jne .pad
-    cmp word [wr_clen], 0
-    je .pad
+    mov al, [wr_state]
+    cmp al, WS_BODY
+    je .fig
+    cmp al, WS_PAUSE                    ; an archive spends most of a transfer
+    jne .pad                            ; parked here (88.14), and a figure
+.fig:                                   ; that vanished at every entry would
+                                        ; read as a stall
+    mov ax, [wr_clen]
+    or ax, [wr_clen+2]
+    jz .pad
     mov byte [di], ' '
     inc di
-    mov ax, [wr_got]                    ; ' NNK of MMK'
-    xor dx, dx
-    call wr_kfig
-    mov si, wr_s_of
+    mov ax, [wr_got]                    ; ' NNK of MMK', over 32 bits: an
+    mov dx, [wr_got+2]                  ; archive is the one body that passes
+    call wr_kfig                        ; 64KB and a word here would show it
+    mov si, wr_s_of                     ; counting from zero again
     call wr_sput
     mov ax, [wr_clen]
-    xor dx, dx
+    mov dx, [wr_clen+2]
     call wr_kfig
     jmp short .pad
 .settled:
@@ -1440,6 +1577,18 @@ wr_recs:
     pop ax
     ret
 
+; --- wr_selrec - ES:SI = the SELECTED record's base --------------------------
+; Fifteen call sites wanted `mov ax, [wr_sel]` and then wr_recs, and one of
+; them is in the worker (wrhttp.inc's path composer): [wr_catseg] and [wr_sel]
+; are both stable words, so reading a record from either task is safe and the
+; two spellings of it may as well be one.
+wr_selrec:
+    push ax
+    mov ax, [wr_sel]
+    call wr_recs
+    pop ax
+    ret
+
 ; --- wr_pass - is a record of tier AL shown under the current filter? --------
 ; out: CF = 0 shown. Filter 0 is All; filter f shows tier <= f-1.
 wr_pass:
@@ -1451,12 +1600,12 @@ wr_pass:
     cmp al, bl
     ja .no
 .yes:
-    pop bx
     clc
-    ret
+    jmp short .out
 .no:
-    pop bx
     stc
+.out:
+    pop bx
     ret
 
 ; --- wr_nth - the AXth record the filter shows -------------------------------
@@ -1490,20 +1639,16 @@ wr_nth:
     jmp short .l
 .yes:
     mov ax, bx
-    pop es
-    pop si
-    pop dx
-    pop cx
-    pop bx
     clc
-    ret
+    jmp short .out
 .no:
-    pop es
+    stc
+.out:
+    pop es                              ; ONE epilogue: `pop` leaves the flags
     pop si
     pop dx
     pop cx
     pop bx
-    stc
     ret
 
 ; --- wr_count - how many records the filter shows ----------------------------
@@ -1560,20 +1705,16 @@ wr_vispos:
     jmp short .l
 .yes:
     mov ax, cx
-    pop es
-    pop si
-    pop dx
-    pop cx
-    pop bx
     clc
-    ret
+    jmp short .out
 .no:
+    stc
+.out:
     pop es
     pop si
     pop dx
     pop cx
     pop bx
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1660,6 +1801,9 @@ wr_catck:
     push cx
     call wr_recs
     pop cx
+    test byte [es:si+WC_FLAGS], WF_ARC
+    jnz .arcrec                         ; an ARCHIVE is bounded differently and
+                                        ; by different fields (below)
     cmp byte [es:si+WC_NSIDE], WIRE_SCMAX
     ja .no
     mov ax, [es:si+WC_SIZE+2]           ; a size that needs more than 16 bits
@@ -1684,30 +1828,52 @@ wr_catck:
     jc .no
     cmp ax, [es:WC_SCN]
     ja .no
+.nextrec:
     inc bx
     loop .rec
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     clc
-    ret
+    jmp short .out
 .no:
     mov word [wr_n], 0
-    pop es
-    pop bp
+    stc
+.out:
+    pop es                              ; ONE epilogue: `pop` leaves the flags,
+    pop bp                              ; so the answer set above survives it
     pop di
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
-    stc
     ret
+
+.arcrec:
+    ; --- AN ARCHIVE'S RECORD (SPEC.md 88.2, 88.13) --------------------------
+    ; **NONE OF THE THREE RULES ABOVE IS TRUE OF ONE**, and the site's real
+    ; catalog is what said so: RunCPM's WC_SIZE is 231,463, which the 16-bit
+    ; bound refused outright and took the whole catalog down with it.
+    ;
+    ;   WC_SIZE is the bytes the TRANSFER carries, and there is never a claim
+    ;   for the whole of it - one entry at a time into a claim sized from
+    ;   WA_MAXENT - so the bound is WIRE_ARCMAX, a sanity figure, and it is a
+    ;   dword.
+    ;   WC_TOTAL is what the tree UNPACKS to and may be SMALLER than the
+    ;   stream: a tree of incompressible files is stored, and the container
+    ;   adds 32 bytes of header plus 64 an entry on top of it. So it is
+    ;   checked for being there and not against WC_SIZE.
+    ;   n is 0 on every archive record (88.2), so there is no sidecar span to
+    ;   be in range and WC_SIDE0 is meaningless.
+    cmp byte [es:si+WC_NSIDE], 0
+    jne .no
+    mov ax, [es:si+WC_SIZE+2]
+    cmp ax, WIRE_ARCMAX >> 16
+    jae .no                             ; ...and WIRE_ARCMAX is the first size
+    or ax, [es:si+WC_SIZE]              ; refused, so one compare does it
+    jz .no                              ; a dword zero is no file at all
+    mov ax, [es:si+WC_TOTAL]
+    or ax, [es:si+WC_TOTAL+2]
+    jz .no                              ; ...and neither is a tree of nothing
+    jmp short .nextrec
 
 ; --- wr_side - ES:SI = sidecar entry AX ---------------------------------------
 wr_side:
@@ -1760,15 +1926,32 @@ wr_may:
     je .nocat
     cmp word [wr_sel], 0xFFFF
     je .nosel
-    mov ax, [wr_sel]
-    call wr_recs
+    call wr_selrec
     mov al, [es:si+WC_FLAGS]
+    test al, WF_ARC                     ; **AN ARCHIVE IGNORES WF_FLOPPY**, and
+    jnz .arc                            ; the writer sets that bit WITH WF_ARC
+                                        ; on purpose (SPEC.md 88.2): a Wire
+                                        ; from before 88.13 does not know bit 4
+                                        ; and greys both buttons with the
+                                        ; floppy reason rather than fetching a
+                                        ; .O88 that is not there. This reader
+                                        ; knows bit 4, so it tests it first
     test al, WF_FLOPPY
     jnz .flop
     or bl, bl
     jnz .yes                            ; Add works for a WF_DISK record: that
     test al, WF_DISK                    ; is what Add is FOR
     jnz .disk
+    jmp short .yes
+.arc:
+    or bl, bl
+    jnz .yes                            ; Add to Disk unpacks wherever the
+                                        ; dialog points, so an archive is
+                                        ; always addable (88.8)
+    xor al, al                          ; Load Program: the RAM disk decision,
+    call wr_ramck                       ; ASKED and not acted on - this runs
+    jc .no                              ; from the painter (88.14 steps 1..3,
+                                        ; and SI is the reason)
 .yes:
     pop es
     pop si
@@ -1968,10 +2151,7 @@ wr_refilter:
     mov word [wr_sel], 0xFFFF
     mov byte [wr_picok], 0
 .draw:
-    call wr_menufix
-    call wr_dlist
-    call wr_ddet
-    call wr_dstat
+    call wr_dall
     pop ax
     ret
 
@@ -2408,28 +2588,48 @@ wr_do:
     call wr_may
     pop ax
     jnc .go
+.say:
     mov [wr_msg], si
     call wr_dstat
-    jmp short .out
+    jmp .out
 .go:
+    mov byte [wr_ramjob], 0
     or al, al
     jnz .add
+    push ax
+    call wr_selrec
+    test byte [es:si+WC_FLAGS], WF_ARC
+    pop ax
+    jnz .arc
     mov byte [wr_job], WJ_LOAD          ; --- Load Program: one file, and the
     mov word [wr_chain], 0              ; wake runs it
     call wr_fetchnext
     jmp short .out
+.arc:
+    mov al, 1                           ; --- Load Program on an ARCHIVE: the
+    call wr_ramck                       ; SECOND ask, and the one that MOUNTS
+    jc .say                             ; (SPEC.md 88.14). The predicate has
+                                        ; already answered, so a refusal here
+                                        ; is a store that went away between
+                                        ; the paint and the click
+    xor dx, dx                          ; ...and the store's ROOT, which the
+    call OSAPI_FILE_GOTO_QM             ; instance MOVES to: OSAPI_PKG_RUN's
+    jc .nordo                           ; new instance inherits our directory
+                                        ; (SPEC.md 19.2.1), and the whole point
+                                        ; of unpacking a tree is that the
+                                        ; program's own files are beside it
+    mov byte [wr_ramjob], 1
+    mov byte [wr_job], WJ_LOAD
+    call wr_arcstart
+    jmp short .out
+.nordo:
+    mov si, wr_r_nord                   ; a store that is mounted and cannot be
+    jmp short .say                      ; stood on is a driver that is not
+                                        ; usable, which is what that says
 .add:
-    mov ax, [wr_sel]                    ; --- Add to Disk...: the dialog first
-    call wr_recs
-    push si
-    mov di, wr_savename
-    add si, WC_STEM
-    mov cx, 8
-    call wr_stemcopy
+    mov di, wr_savename                 ; --- Add to Disk...: the dialog first
     mov si, wr_x_o88
-    call wr_sput
-    mov byte [di], 0
-    pop si
+    call wr_stemput
     mov al, FDLG_SAVE
     mov bx, [wr_win]
     mov di, wr_saved
@@ -2447,6 +2647,31 @@ wr_do:
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; --- wr_stemput - '<STEM><ext>' into DS:DI, for the selected record ----------
+; in:  DI = the buffer, SI = a NUL extension (wr_x_o88, wr_x_wpk); DI advanced
+;
+; Three call sites want the same eight-and-three: the chain's first file, the
+; Save dialog's default name and an archive's own .WPK. They had it three
+; times over and one of the three banked a register the other two did not.
+wr_stemput:
+    push ax
+    push cx
+    push si
+    push es
+    push si                             ; the extension, banked past wr_recs
+    call wr_selrec                  ; ES:SI = the record
+    add si, WC_STEM
+    mov cx, 8
+    call wr_stemcopy
+    pop si
+    call wr_sput
+    mov byte [di], 0
+    pop es
+    pop si
+    pop cx
     pop ax
     ret
 
@@ -2504,8 +2729,7 @@ wr_saved:
     pop es
     call wr_geom
     jc .out
-    mov ax, [wr_sel]
-    call wr_recs
+    call wr_selrec
     mov bx, [es:si+WC_TOTAL]            ; what the whole set will take, BANKED:
     mov [wr_need], bx                   ; **OSAPI_FILE_DFREE WRITES BX** (it is
     mov bx, [es:si+WC_TOTAL+2]          ; the sectors-per-cluster output), so a
@@ -2521,6 +2745,17 @@ wr_saved:
     jb .noroom
 .room:
     mov byte [wr_job], WJ_ADD
+    mov byte [wr_ramjob], 0
+    call wr_selrec
+    test byte [es:si+WC_FLAGS], WF_ARC
+    jz .chain
+    call wr_arcstart                    ; --- an ARCHIVE unpacks where the
+    jmp short .out                      ; dialog pointed, and THE TYPED NAME IS
+                                        ; IGNORED (88.8): the archive names its
+                                        ; own files, so there is one name the
+                                        ; user could have typed and fifty-nine
+                                        ; the machine is about to write
+.chain:
     mov word [wr_chain], 0
     call wr_fetchnext
     jmp short .out
@@ -2554,24 +2789,15 @@ wr_fetchnext:
     push si
     push di
     push es
-    mov ax, [wr_sel]
-    call wr_recs
+    call wr_selrec
     mov ax, [wr_chain]
     or ax, ax
     jnz .side
     mov cx, [es:si+WC_SIZE]             ; --- the package itself
     mov [wr_flen], cx
     mov di, wr_fname
-    push si
-    add si, WC_STEM
-    push cx
-    mov cx, 8
-    call wr_stemcopy
-    pop cx
-    pop si
     mov si, wr_x_o88
-    call wr_sput
-    mov byte [di], 0
+    call wr_stemput
     jmp short .claim
 .side:
     dec ax
@@ -2613,7 +2839,15 @@ wr_fetchnext:
     call wr_start
     cmp byte [wr_job], WJ_ADD           ; ...and the chain says WHERE IT IS,
     jne .said                           ; composed here rather than after the
-    call wr_addprog                     ; write: wr_start has just cleared
+    call wr_selrec                  ; write: wr_start has just cleared
+    mov bl, [es:si+WC_NSIDE]
+    xor bh, bh
+    inc bx                              ; the .O88 and its sidecars
+    mov [wr_ptot], bx
+    mov ax, [wr_chain]
+    inc ax                              ; [wr_chain] is 0-based and a person
+    mov [wr_pnum], ax                   ; counts from one
+    call wr_addprog
 .said:                                  ; [wr_msg], and a line written after
     call wr_dstat                       ; the last file is a line nothing draws
     jmp short .out
@@ -2643,11 +2877,17 @@ wr_fetchnext:
 ; surprise than a folder with two of three files in it. The cell says which.
 wr_abandon:
     push ax
+    cmp byte [wr_state], WS_PAUSE       ; **A PAUSED WORKER IS STILL IN FLIGHT**
+    jne .st                             ; and the predicate reads that as a
+    inc byte [wr_gen]                   ; range: an archive abandoned at an
+    call wr_hclose                      ; entry boundary would otherwise leave
+    mov byte [wr_state], WS_FAIL        ; both buttons greyed with `A transfer
+.st:                                    ; is already running` for the life of
+                                        ; the window, and the socket held with
+                                        ; them
     mov byte [wr_job], WJ_NONE
     call wr_freefile
-    call wr_menufix
-    call wr_dstat
-    call wr_dbtns
+    call wr_dend
     pop ax
     ret
 
@@ -2679,8 +2919,7 @@ wr_chaindone:
     mov byte [wr_job], WJ_NONE
     call wr_freefile
     mov di, wr_omsg
-    mov ax, [wr_sel]
-    call wr_recs
+    call wr_selrec
     push si
     add si, WC_TITLE
     mov cx, 23
@@ -2689,15 +2928,17 @@ wr_chaindone:
     push ds
     pop es
     mov si, wr_s_added
+    cmp byte [wr_ramjob], 0             ; ...and WHERE it landed, which for an
+    je .say                             ; archive run from RAM is not a disk
+    mov si, wr_s_addram                 ; the user can put in a drawer (88.8)
+.say:
     call wr_sput
     mov byte [di], 0
     mov si, wr_omsg
     xor cx, cx
     call OSAPI_TOAST                    ; ES:SI, and ES is ours (SPEC.md 59)
     mov word [wr_msg], wr_omsg
-    call wr_menufix
-    call wr_dstat
-    call wr_dbtns
+    call wr_dend
     pop es
     pop di
     pop si
@@ -2739,10 +2980,7 @@ wr_refresh:
 .nomem:
     mov word [wr_msg], wr_s_nomem
 .say:
-    call wr_menufix
-    call wr_dlist
-    call wr_ddet
-    call wr_dstat
+    call wr_dall
     pop dx
     pop cx
     pop bx
@@ -2798,8 +3036,7 @@ wr_picwant:
 .free:                                  ; a selection change bumps the
     cmp word [wr_sel], 0xFFFF           ; generation anyway
     je .out
-    mov ax, [wr_sel]
-    call wr_recs
+    call wr_selrec
     test byte [es:si+WC_FLAGS], WF_PIC
     jz .out
     push ds
@@ -2851,7 +3088,15 @@ wr_onwake:
     call OSAPI_GFX_LOCK
     call wr_geom
     call OSAPI_GFX_UNLOCK
-    cmp byte [wr_wake0], WW_DONE
+    ; EVERY HOLD BELOW ARMS THE REGION FIRST (wr_clip): this handler runs
+    ; from the UI task's wake, not from W_PAINT, and the window may be
+    ; behind the one Load Program has just opened (SPEC.md 11.3)
+    mov al, [wr_wake0]
+    cmp al, WW_HDR                      ; --- the archive's two PAUSES, where
+    je .ahdr                            ; the worker has stopped and the next
+    cmp al, WW_ENTRY                    ; thing to do is a claim or a file, and
+    je .aent                            ; a worker may do neither (88.14)
+    cmp al, WW_DONE
     jne .failed
     mov al, [wr_wkind]
     cmp al, WK_CAT
@@ -2861,6 +3106,7 @@ wr_onwake:
     jmp .file
 .failed:
     call OSAPI_GFX_LOCK
+    call wr_clip
     cmp byte [wr_wkind], WK_PIC
     jne .fhard
     mov byte [wr_picok], 0              ; a picture that did not arrive is not
@@ -2877,53 +3123,88 @@ wr_onwake:
     jnc .catok
     mov word [wr_msg], wr_s_badcat
 .catok:
-    call OSAPI_GFX_LOCK
-    call wr_geom
+    call wr_lockarm
     mov word [wr_top], 0
-    call wr_menufix
-    call wr_dlist
-    call wr_ddet
-    call wr_dstat
+    call wr_dall
     call OSAPI_GFX_UNLOCK
     jmp .out
 
 .pic:
     mov byte [wr_picok], 1
-    call OSAPI_GFX_LOCK
-    call wr_geom
+    call wr_lockarm
     call wr_ddet
     call OSAPI_GFX_UNLOCK
     jmp .out
 
+.ahdr:
+    call wr_arcbase                     ; --- the ONE claim, sized from the
+    jc .wfail                           ; header, and `home` made and entered
+    call OSAPI_GFX_LOCK                 ; (88.14). NO LOCK for either: a claim
+    call wr_clip                        ; and a folder are not drawing
+    call wr_geom
+    call wr_dstat
+    call OSAPI_GFX_UNLOCK
+    jmp .out
+
+.aent:
+    call wr_arcwrite                    ; --- one entry: its folders, then the
+    jc .wfail                           ; file, and NO LOCK for the same reason
+    mov ax, [wr_adone]
+    cmp ax, [wr_an]
+    jb .amore
+    call wr_arcend                      ; the last one: the launch or the toast
+    jmp .out
+.amore:
+    mov ax, [wr_adone]
+    inc ax
+    mov [wr_pnum], ax
+    mov ax, [wr_an]
+    mov [wr_ptot], ax
+    mov byte [wr_state], WS_BODY        ; **AND ONLY NOW MAY THE WORKER RUN**:
+                                        ; it overwrites [wr_ehdr] with the next
+                                        ; entry's header the moment it does,
+                                        ; and wr_arcwrite has just been reading
+                                        ; it
+    call wr_lockarm
+    call wr_addprog
+    call wr_dstat
+    call OSAPI_GFX_UNLOCK
+    jmp .out
+
 .file:
+    cmp byte [wr_wkind], WK_ARC         ; A WW_DONE ON AN ARCHIVE is the stream
+    jne .fnorm                          ; meeting its Content-Length with fewer
+    mov word [wr_msg], wr_s_lost        ; than N entries decoded (88.14), which
+    jmp short .wfail                    ; is a short answer and not a small one
+.fnorm:
     cmp byte [wr_job], WJ_LOAD
     je .run
     call wr_write                       ; --- Add: write it, then the next
     jc .wfail
     call wr_freefile
     inc word [wr_chain]
-    call OSAPI_GFX_LOCK
-    call wr_geom
+    call wr_lockarm
     call wr_fetchnext
     call OSAPI_GFX_UNLOCK
     jmp short .out
 .wfail:
-    call OSAPI_GFX_LOCK
-    call wr_geom
+    call wr_lockarm
     call wr_abandon
     call OSAPI_GFX_UNLOCK
     jmp short .out
 .run:
+    mov ax, [wr_got]                    ; what ARRIVED - wr_write's reason
+    mov [wr_rlen], ax
     call wr_pkgrun                      ; --- Load: hand the image to the
     call OSAPI_GFX_LOCK                 ; loader's back half
-    call wr_geom
+    call wr_clip                        ; ...which has just put ITS window on
+    call wr_geom                        ; top of ours
     mov byte [wr_job], WJ_NONE
     call wr_freefile
-    call wr_menufix
-    call wr_dstat
-    call wr_dbtns
+    call wr_dend
     call OSAPI_GFX_UNLOCK
 .out:
+    mov byte [wr_hid], 0                ; the flag is this handler's alone
     pop es
     pop di
     pop si
@@ -2968,16 +3249,7 @@ wr_write:
     xor dx, dx
     call OSAPI_FILE_WRITE
     jnc .ok
-    push ds
-    pop es
-    mov di, wr_omsg
-    mov si, wr_s_wrote
-    call wr_sput
-    mov si, [wr_wname]
-    mov cx, 12
-    call wr_sputn
-    mov byte [di], 0
-    mov word [wr_msg], wr_omsg
+    call wr_wrfail
     pop es
     pop di
     pop si
@@ -2999,7 +3271,40 @@ wr_write:
     clc
     ret
 
+; --- wr_wrfail - 'Could not write <name>', for the file at [wr_wname] --------
+; Shared by the sidecar chain and by the archive's tree (wrarc.inc), because a
+; failure mid-set and a failure mid-tree are the same sentence about the same
+; kind of thing: SPEC.md 22 leaves what was written and the cell says which
+; file, which is the only part of it a person can act on.
+wr_wrfail:
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    mov di, wr_omsg
+    mov si, wr_s_wrote
+    call wr_sput
+    mov si, [wr_wname]
+    mov cx, 12
+    call wr_sputn
+    mov byte [di], 0
+    mov word [wr_msg], wr_omsg
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
 ; --- wr_addprog - 'Adding <title>... N of M files' ---------------------------
+; **THE TWO NUMBERS ARE PASSED IN [wr_pnum] AND [wr_ptot]** rather than derived
+; here, because there are two chains now and they count different things: the
+; Add chain counts the .O88 and its sidecars (WC_NSIDE + 1) and an archive
+; counts the entries in its header (SPEC.md 88.14). One composer, two callers,
+; and the sentence a person reads is the same either way.
 wr_addprog:
     push ax
     push bx
@@ -3011,33 +3316,22 @@ wr_addprog:
     mov di, wr_omsg
     mov si, wr_s_adding
     call wr_sput
-    mov ax, [wr_sel]
-    call wr_recs
-    push si
+    call wr_selrec
     add si, WC_TITLE
     mov cx, 18
     call wr_sputn
-    pop si
-    mov bl, [es:si+WC_NSIDE]
-    xor bh, bh
-    inc bx                              ; the .O88 and its sidecars
     push ds
     pop es
     mov byte [di], ' '
     inc di
-    mov ax, [wr_chain]
-    inc ax                              ; [wr_chain] is 0-based and a person
-    call wr_snum                        ; counts from one
-    push bx
+    mov ax, [wr_pnum]
+    call wr_snum
     mov si, wr_s_of
     call wr_sput
-    pop bx
-    mov ax, bx
-    push bx
+    mov ax, [wr_ptot]
     call wr_snum
-    pop bx
     mov si, wr_s_files
-    cmp bx, 1
+    cmp word [wr_ptot], 1
     jne .pl
     mov si, wr_s_file
 .pl:
@@ -3055,7 +3349,12 @@ wr_addprog:
 
 ; -----------------------------------------------------------------------------
 ; wr_pkgrun - the image in the claim, into a running instance
-; in:  [wr_fseg], [wr_flen], [wr_fname]; the UI task, NO LOCK
+; in:  [wr_fseg], [wr_rlen], [wr_fname]; the UI task, NO LOCK
+;
+; [wr_rlen] IS THE LENGTH AND IT IS A WORD THE CALLER WRITES: for a plain Load
+; Program it is [wr_got], what arrived (see wr_write's reason); for an archive
+; it is the last entry's unpacked size, and the claim holding it is the same
+; claim the whole tree was decoded through (SPEC.md 88.14).
 ;
 ; SPEC.md 21.x. The new instance's current directory is OURS (SPEC.md 19.2.1),
 ; which is why a WF_DISK record is refused by the predicate rather than
@@ -3071,7 +3370,7 @@ wr_pkgrun:
     push es
     mov es, [wr_fseg]
     xor si, si
-    mov cx, [wr_got]                    ; what ARRIVED - wr_write's reason
+    mov cx, [wr_rlen]
     xor dx, dx
     mov di, wr_fname
     call OSAPI_PKG_RUN
@@ -3081,8 +3380,7 @@ wr_pkgrun:
     mov di, wr_omsg                     ; 'Loaded <title> from the Wire'
     mov si, wr_s_loaded
     call wr_sput
-    mov ax, [wr_sel]
-    call wr_recs
+    call wr_selrec
     add si, WC_TITLE
     mov cx, 23
     call wr_sputn
@@ -3198,20 +3496,28 @@ wr_dive:
     push si
     push di
     push es
-    push ds
-    pop es
+    mov [wr_dvname], si             ; **BANKED, AND NOT ON THE STACK**: this
+                                    ; walk now runs on a RAM DISK as well as
+                                    ; on a floppy (SPEC.md 88.14), and on a
+                                    ; DVK_FILE volume CX, SI and DI are the
+                                    ; DRIVER's across every file cell (SPEC.md
+                                    ; 62.9). SI held the name we are looking
+                                    ; for, so on a redirected volume the
+                                    ; comparison below was against whatever
+                                    ; the driver left there
     xor cx, cx
 .l:
-    mov di, wr_fbuf
+    push ds                         ; ES too, for the same reason: it is the
+    pop es                          ; find buffer's segment and an input to
+    mov di, wr_fbuf                 ; every call
     call OSAPI_FILE_FIND
     jc .no
     cmp word [wr_fbuf+14], OSAPI_FT_DIR
     jne .l
     push cx
-    push si
+    mov si, [wr_dvname]
     mov di, wr_fbuf
     call wr_ieq
-    pop si
     pop cx
     jc .l
     mov dx, [wr_fbuf+16]
@@ -3219,16 +3525,11 @@ wr_dive:
     mov dx, [wr_fbuf+16]                ; ...so the cluster goes back
     call OSAPI_FILE_GOTO_QM
     jc .no
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     clc
-    ret
+    jmp short .out
 .no:
+    stc
+.out:
     pop es
     pop di
     pop si
@@ -3236,7 +3537,6 @@ wr_dive:
     pop cx
     pop bx
     pop ax
-    stc
     ret
 
 ; --- wr_ieq - the NUL strings at DS:SI and DS:DI, case-blind. CF = 0 equal ---
@@ -3258,14 +3558,13 @@ wr_ieq:
     inc di
     jmp short .c
 .yes:
-    pop bx
-    pop ax
     clc
-    ret
+    jmp short .out
 .no:
+    stc
+.out:
     pop bx
     pop ax
-    stc
     ret
 
 wr_upper:
@@ -3399,6 +3698,8 @@ wr_i_file:  dw wr_it_refr, wr_it_run, wr_it_add, wr_it_close
 
 ; =============================================================================
 %include "wrhttp.inc"                   ; the client and the worker (88.4)
+%include "wrarc.inc"                    ; the unpacker and the RAM disk (88.13,
+                                        ; 88.14)
 %include "wrtxt.inc"                    ; every string (docs/WIRE-PLAN.md 7)
 
 %define OS88UI_SCROLL                   ; the list's bar...
@@ -3464,24 +3765,41 @@ wr_flen     equ os88_image_end + 60
 wr_dseg     equ os88_image_end + 62     ; word: where the body is going...
 wr_dbase    equ os88_image_end + 64
 wr_dmax     equ os88_image_end + 66
-wr_got      equ os88_image_end + 68     ; word: ...and how much has
-wr_clen     equ os88_image_end + 70     ; word: Content-Length
-wr_code     equ os88_image_end + 72     ; word: the status code
-wr_hline    equ os88_image_end + 74     ; word: which reply line
-wr_hlen     equ os88_image_end + 76     ; word: how much of it is buffered
-wr_sent     equ os88_image_end + 78     ; word: request bytes on the wire
-wr_reqn     equ os88_image_end + 80
-wr_port     equ os88_image_end + 82
-wr_cfgn     equ os88_image_end + 84
-wr_dbclus   equ os88_image_end + 86     ; word: the banked cwd (19.9)
-wr_shown    equ os88_image_end + 88     ; word: the K figure last drawn
-wr_wname    equ os88_image_end + 90     ; word: the name OSAPI_FILE_WRITE was
+wr_got      equ os88_image_end + 68     ; DWORD: ...and how much has
+wr_clen     equ os88_image_end + 72     ; DWORD: Content-Length
+                                        ; **BOTH ARE DWORDS BECAUSE OF THE
+                                        ; ARCHIVE** (88.13): a .WPK is the
+                                        ; first body here that may pass 64KB -
+                                        ; the RunCPM master disk is 196KB
+                                        ; compressed - and a 16-bit count laps
+                                        ; into a small plausible number rather
+                                        ; than failing (PERFORMANCE.md rule 3).
+                                        ; The high halves are zero for every
+                                        ; other kind and the per-byte store
+                                        ; loop only touches them on WK_ARC, so
+                                        ; a package and a picture cost exactly
+                                        ; what they cost before
+wr_code     equ os88_image_end + 76     ; word: the status code
+wr_hline    equ os88_image_end + 78     ; word: which reply line
+wr_hlen     equ os88_image_end + 80     ; word: how much of it is buffered
+wr_sent     equ os88_image_end + 82     ; word: request bytes on the wire
+wr_reqn     equ os88_image_end + 84
+wr_port     equ os88_image_end + 86
+wr_cfgn     equ os88_image_end + 88
+wr_dbclus   equ os88_image_end + 90     ; word: the banked cwd (19.9)
+wr_shown    equ os88_image_end + 92     ; word: the K figure last drawn
+wr_wname    equ os88_image_end + 94     ; word: the name OSAPI_FILE_WRITE was
                                         ; given, banked because a DVK_FILE
                                         ; volume owns SI across that call
-wr_need     equ os88_image_end + 92     ; dword: WC_TOTAL, banked because
+wr_need     equ os88_image_end + 96     ; dword: WC_TOTAL, banked because
                                         ; OSAPI_FILE_DFREE WRITES BX
+wr_hid      equ os88_image_end + 100    ; byte: the wake handler is drawing
+                                        ; with NOTHING of the window visible
+                                        ; (wr_clip's CF), so every painter it
+                                        ; reaches returns at once. Set and
+                                        ; cleared inside wr_onwake alone
 
-WR_B0       equ 96
+WR_B0       equ 102
 wr_sb       equ os88_image_end + WR_B0              ; 7 words (13.10)
 wr_ra       equ os88_image_end + WR_B0 + 14         ; 4 words: Load Program
 wr_rb       equ os88_image_end + WR_B0 + 22         ; 4 words: Add to Disk...
@@ -3531,4 +3849,73 @@ wr_rxb      equ os88_image_end + WR_B4 + WIRE_PICSZ ; WR_CHUNK, and it is in
                                                     ; OUR SEGMENT because
                                                     ; NETV_RECV takes ES:DI
                                                     ; and ES is ours (77.10)
-WR_BSS      equ WR_B4 + WIRE_PICSZ + WR_CHUNK
+
+; --- the archive (SPEC.md 88.13, 88.14; wrarc.inc is the code) ---------------
+; **THE BIG BUFFER IS THE HEAP CLAIM AND NOT ANY OF THIS.** One entry is
+; decoded at a time into a claim sized from the header's WA_MAXENT, so what
+; the package's own bss owes the feature is the two headers it is reading, the
+; folder it last stood in, and about thirty bytes of counters.
+WR_B5       equ WR_B4 + WIRE_PICSZ + WR_CHUNK
+wr_ahdr     equ os88_image_end + WR_B5              ; WARC_HDR: the file header
+wr_ehdr     equ os88_image_end + WR_B5 + WARC_HDR   ; WARC_ENT: one entry's
+wr_lpath    equ os88_image_end + WR_B5 + WARC_HDR + WARC_ENT
+WR_LPATHN   equ WARC_DEPTH * WARC_SLOT              ; 36: the FOLDERS of the
+                                                    ; entry last written, so an
+                                                    ; entry in the same folder
+                                                    ; is written without moving
+WR_B6       equ WR_B5 + WARC_HDR + WARC_ENT + WR_LPATHN
+WR_RMSGN    equ 40
+wr_rmsg     equ os88_image_end + WR_B6              ; WR_RMSGN: the PREDICATE's
+                                                    ; composed reason, and it
+                                                    ; may not be wr_omsg -
+                                                    ; wrarc.inc's wr_rreason
+                                                    ; says why
+WR_B7       equ WR_B6 + WR_RMSGN
+wr_aph      equ os88_image_end + WR_B7 + 0          ; byte: WAP_*
+wr_apw      equ os88_image_end + WR_B7 + 1          ; byte: which wake the pause
+                                                    ; is to post
+wr_ldep     equ os88_image_end + WR_B7 + 2          ; byte: the banked depth,
+                                                    ; 0xFF = nothing banked
+wr_aflags   equ os88_image_end + WR_B7 + 3          ; byte: WA_FLAGS
+wr_ramjob   equ os88_image_end + WR_B7 + 4          ; byte: this tree is going
+                                                    ; to a RAM disk, which is
+                                                    ; what the toast says
+wr_rdmnt    equ os88_image_end + WR_B7 + 5          ; byte: wr_ramck may mount
+wr_lph      equ os88_image_end + WR_B7 + 6          ; byte: the decoder is
+                                                    ; waiting on a pair's
+                                                    ; second byte
+wr_lflag    equ os88_image_end + WR_B7 + 7          ; byte: the group's flags
+wr_lbits    equ os88_image_end + WR_B7 + 8          ; byte: ...items left in it
+wr_lb0      equ os88_image_end + WR_B7 + 9          ; byte: a pair's first byte
+wr_bdrv     equ os88_image_end + WR_B7 + 10         ; byte: the base folder's
+                                                    ; drive
+wr_acnt     equ os88_image_end + WR_B7 + 12         ; word: header bytes so far
+wr_an       equ os88_image_end + WR_B7 + 14         ; word: the entry count
+wr_adone    equ os88_image_end + WR_B7 + 16         ; word: entries complete
+wr_asize    equ os88_image_end + WR_B7 + 18         ; word: this entry unpacked
+wr_asto     equ os88_image_end + WR_B7 + 20         ; word: ...and stored
+wr_aout     equ os88_image_end + WR_B7 + 22         ; word: bytes decoded
+wr_ain      equ os88_image_end + WR_B7 + 24         ; word: stored bytes fed
+wr_bclus    equ os88_image_end + WR_B7 + 26         ; word: the base folder
+wr_rxp      equ os88_image_end + WR_B7 + 28         ; word: the read position in
+                                                    ; wr_rxb, so a pause keeps
+                                                    ; the rest of the chunk
+wr_rxn      equ os88_image_end + WR_B7 + 30         ; word: ...and what is left
+wr_pnum     equ os88_image_end + WR_B7 + 32         ; word: 'N of M', the N...
+wr_ptot     equ os88_image_end + WR_B7 + 34         ; word: ...and the M
+wr_rlen     equ os88_image_end + WR_B7 + 36         ; word: the bytes handed to
+                                                    ; OSAPI_PKG_RUN
+wr_needkb   equ os88_image_end + WR_B7 + 38         ; word: WC_NEEDKB, banked
+                                                    ; because OSAPI_DRV_CALL
+                                                    ; owns every register
+wr_dvname   equ os88_image_end + WR_B7 + 40         ; word: the folder name
+                                                    ; wr_dive is looking for,
+                                                    ; banked past a file cell
+                                                    ; that owns SI
+wr_anb      equ os88_image_end + WR_B7 + 42         ; 13: one path slot, copied
+                                                    ; and TERMINATED. SPEC.md
+                                                    ; 88.13's twelve-character
+                                                    ; name fills its slot with
+                                                    ; no NUL, and every kernel
+                                                    ; cell reads to one
+WR_BSS      equ WR_B7 + 55

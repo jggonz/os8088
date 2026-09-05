@@ -25,9 +25,12 @@
 ; where ES is not KERNEL_SEG (SPEC.md 20.11).
 ;
 ; **WORKER SAFETY IS STATED PER VERB**, because SPEC.md 20.6 rule 7's
-; allowlist covers the CELL and not what is behind it. Both of these are
-; register work in the driver's own segment: no lock, no disk, no kernel call.
-; Both are worker-safe.
+; allowlist covers the CELL and not what is behind it, and this table is now
+; split down the middle. RDPV_IDENT and RDPV_UPCASE are register work in the
+; driver's own segment - no lock, no disk, no kernel call - and are
+; worker-safe. RDPV_STATE and RDPV_MOUNT are NOT: the first asks
+; OSAPI_MEM_AVAIL and the second registers a volume and posts a desktop
+; repaint (SPEC.md 62.9.16). Call those two from the UI task only.
 ; =============================================================================
 
 RDPV_IDENT   equ PKGV_IDENT     ; = 0, and it is the UNIVERSAL verb 0 rather
@@ -55,7 +58,30 @@ RD_CLASS     equ DRVC_FILE      ; the publication slot this driver sits in -
                                 ; RDPV_IDENT load-bearing rather than tidy
 RD_SIG       equ 'DR'           ; ...and what RDPV_IDENT answers
 
-RDPV_MAX     equ 1              ; ...and anything above this is refused. A
+RDPV_STATE   equ 2              ; in  nothing
+                                ; out CF=0: AL = the volume index (0xFF = no
+                                ;     store mounted), AH = RDL_*, BX = the
+                                ;     store's KB (0 = none), CX = its free KB,
+                                ;     DX = the largest store RDPV_MOUNT could
+                                ;     claim now in KB (rd_kb_max), SI = free
+                                ;     directory rows. UI TASK ONLY: it asks
+                                ;     OSAPI_MEM_AVAIL (SPEC.md 62.9.16)
+RDPV_MOUNT   equ 3              ; in  AX = KB wanted, rounded UP to RD_STEPKB
+                                ; out CF=0: AL = the volume index, and a store
+                                ;     of at least that size is mounted - an
+                                ;     already-mounted store answers its own
+                                ;     index whatever AX said, resized never.
+                                ;     CF=1: AL = RDERR_MEM when rd_kb_max is
+                                ;     under the size (nothing claimed), or
+                                ;     rd_mount's RDERR_*. UI TASK ONLY. Sets
+                                ;     the LIVE size and not the page's setting
+                                ;     (no rd_cfg_mark)
+RDPV_MAX     equ 3              ; ...and anything above this is refused. A
                                 ; verb table indexed by an unchecked verb is
                                 ; a wild near call, which is the same hazard
-                                ; FSV_SIZE guards on the other table
+                                ; FSV_SIZE guards on the other table. It was 1
+                                ; until rd_pkg answered the two above, and a
+                                ; driver still at 1 refuses them with CF=1 and
+                                ; AX=0 - which is the answer SPEC.md 62.9.16
+                                ; pins for an OLD driver, and a caller reads
+                                ; as "no RAM disk"

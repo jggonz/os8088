@@ -385,8 +385,12 @@ rd_seed_one:
 rd_pkg:
     cmp bl, RDPV_MAX
     ja .none                    ; an unchecked verb into a jump table is a
-                                ; wild near call. The table is two entries and
+                                ; wild near call. The table is four entries and
                                 ; this is a compare, so it is a ladder instead
+    cmp bl, RDPV_STATE
+    je .state
+    cmp bl, RDPV_MOUNT
+    je .mount
     or bl, bl
     jnz .upcase
 
@@ -420,6 +424,93 @@ rd_pkg:
     ret
 .none:
     xor ax, ax
+    stc
+    ret
+
+; --- RDPV_STATE: is there a store, and how big could one be (SPEC.md 62.9.16)
+; out: CF=0, AL = [rd_vol] (0xFF = none), AH = [rd_loc], BX = the store's KB
+;      (0 = none), CX = its free KB, DX = rd_kb_max, SI = free directory rows
+;
+; UI TASK ONLY, and it is rd_kb_max that says so: it asks OSAPI_MEM_AVAIL,
+; which SPEC.md 20.6 rule 7 does not let a worker near. Everything else here
+; is a read of our own segment. The other verbs in this file are worker-safe
+; and these two are not, which is why rdpkg.inc states it per verb.
+;
+; THE CEILING IS ASKED LIVE, for rd_kb_max's own reason (SPEC.md 62.9.10.1):
+; an application opening takes heap, so a figure staged at attach is a Mount
+; that fails for a reason the caller cannot see.
+.state:
+    call rd_kb_max              ; BX = KB, and it clobbers nothing else
+    mov dx, bx
+    xor bx, bx                  ; no store: no size and no free space. The test
+    xor cx, cx                  ; is [rd_have] and not [rd_vol], because it is
+    cmp byte [rd_have], 0       ; the STORE the two figures describe - and
+    je .st_dir                  ; rd_free_ext walks the chain TABLE, which a
+                                ; freed store has given back (segment 0)
+    mov bx, [rd_kb]
+    push dx
+    call rd_free_ext            ; AX = free extents...
+    mul word [rd_extkb]         ; ...x the LIVE granule, which is the page's
+    mov cx, ax                  ; own arithmetic (SPEC.md 62.9.10.5). DX comes
+    pop dx                      ; back zero - 2,048 extents of 8KB is 16,384,
+                                ; inside a word - but MUL wrote it, so the
+                                ; ceiling is banked across the multiply
+.st_dir:
+    call rd_nfiles              ; AX = the live rows, so RD_MAXENT less them is
+    mov si, RD_MAXENT           ; what a caller may still create
+    sub si, ax
+    mov al, [rd_vol]
+    mov ah, [rd_loc]
+    clc
+    ret
+
+; --- RDPV_MOUNT: mount a store of at least AX KB (SPEC.md 62.9.16) -----------
+; in:  AX = KB wanted
+; out: CF=0 and AL = the volume index; CF=1 and AL = RDERR_*
+;
+; UI TASK ONLY: rd_kb_max asks OSAPI_MEM_AVAIL and rd_mount registers a volume.
+;
+; IT SETS THE LIVE SIZE AND NOT THE SETTING. [rd_kb] is what rd_geom and
+; rd_store_get read, so it is written; rd_cfg_mark is NOT called, so the size
+; the user chose on the page is what the next boot restores. A package
+; borrowing the RAM disk does not get to edit the machine's settings.
+.mount:
+    cmp byte [rd_vol], 0xFF
+    jne .mounted                ; already up: its own index, whatever AX said,
+                                ; and nothing resized. The caller has
+                                ; RDPV_STATE for the size it actually got
+    add ax, RD_STEPKB - 1       ; round UP to a whole step, which is what keeps
+    jc .nomem                   ; the last chunk of a preserve cluster-aligned
+                                ; (rdimg.inc's header). A size so large the
+                                ; round WRAPS is a size no machine can fund,
+                                ; and refusing it here is what stops it landing
+                                ; back on RD_MINKB as a store that succeeds
+    and ax, ~(RD_STEPKB - 1) & 0xFFFF
+    cmp ax, RD_MINKB
+    jae .msz
+    mov ax, RD_MINKB            ; ...and never under the floor
+.msz:
+    push ax
+    call rd_kb_max              ; BX = the largest store this machine will fund
+    pop ax                      ; RIGHT NOW - and it is already clamped to
+    cmp ax, bx                  ; RD_MAXKB, so a request past the arithmetic
+    ja .nomem                   ; limit is refused here too and rd_geom keeps
+                                ; its promise that nothing bigger reaches it
+    push word [rd_kb]           ; BANKED, because a mount that fails must leave
+    mov [rd_kb], ax             ; the machine as it found it - the same
+    call rd_mount               ; property RDERR_MEM above has for free. The
+    jnc .mok                    ; LIVE size is what rd_store_get calls rd_geom
+    pop word [rd_kb]            ; off, so the extent, the count and the table
+    stc                         ; all follow with no second poke; AL is
+    ret                         ; rd_mount's own RDERR_*
+.mok:
+    pop ax                      ; the banked size, discarded
+.mounted:
+    mov al, [rd_vol]
+    clc
+    ret
+.nomem:
+    mov al, RDERR_MEM
     stc
     ret
 

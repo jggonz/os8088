@@ -149,6 +149,7 @@ VM386PS2 := $(CURDIR)/vm/386-ps2
 # something to attach to, and it is not a real card: these are.
 VMXTSND := $(CURDIR)/vm/xt-sound
 VMXTSND144 := $(CURDIR)/vm/xt-sound-1.44
+VMXTWIRE := $(CURDIR)/vm/xt-wire
 VM286SND := $(CURDIR)/vm/286-sound
 VM386SND := $(CURDIR)/vm/386-sound
 # The top of the range: a 486DX2/66 and a Pentium 133, both with an SB16.
@@ -1604,7 +1605,7 @@ KERNEL_SRC := kernel/kernel.asm
 KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
 
 .PHONY: stkdiag small kernsplit all run run-640 run-720 run-120 debug test test-snd xt xt-640 xt-mfm xt-cga \
-        xt-hercules xt-ega xt-multimon 286 286-525 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 \
+        xt-hercules xt-ega xt-multimon 286 286-525 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 xt-wire \
         286-525-z 286-525-word 286-525-cword 286-525-runcpm 286-525-c64 \
         286-525-weave 286-525-loom 286-525-all \
         286-sound 386-sound 486 pentium \
@@ -2352,6 +2353,15 @@ DRIVERS += $(KMODS)
 # the image is the enforcement rather than this comment.
 SYSAPPS := $(BUILD)/taskmgr.o88 $(BUILD)/thewire.o88
 SYSAPPSARGS := $(addprefix SYSTEM:,$(SYSAPPS))
+# ...and the SUBSET an APPS disk carries: the Task Manager alone, for the
+# single-floppy machine above. THEWIRE.O88 is on NO apps disk (CLAUDE.md,
+# SPEC.md 88.11): the desktop zone launches it out of the BOOT volume's
+# SYSTEM/ (SPEC.md 26.7), so a copy on B: is never the one that runs - and the
+# 360KB apps disk is full to its last cluster, which is what the copy cost
+# when it rode along in #151 and what the archive unpacker (88.13) could not
+# have afforded.
+APPSYS := $(BUILD)/taskmgr.o88
+APPSYSARGS := $(addprefix SYSTEM:,$(APPSYS))
 
 # --- the CORE PACKAGES (SPEC.md 24.3) ----------------------------------------
 # Six programs that ride the SYSTEM disk as well as the apps disk, each in
@@ -3088,15 +3098,32 @@ vmmousetest: $(BUILD)/vmmouse.img
 # Disk WRITES, and QEMU mounts a floppy writable - so pointing it at
 # build/apps.img would leave the shipped image dirty and the next `make test`
 # testing a disk this gate had edited.
+#
+# **AND ITS OWN SYSTEM.CFG, WANTING TWO DRIVERS.** Ethernet's bit is 1 << 4
+# and the RAM disk's is 1 << 2 (drv_cfgbit, tests/bootstatus.py's BIT_ETHER and
+# BIT_RAM) - neither is its row number. The RAM disk is there for SPEC.md
+# 88.14: Load Program on an archive unpacks into a store, and with no
+# RAMDISK.DRV the predicate greys the button with `Needs RAMDISK.DRV - use Add
+# to Disk`, which is a true answer and not a thing to test the unpacker
+# through. build/system.cfg is left alone because tests/ethernet.py boots from
+# it, and this lands in a directory of its own for build/vmmcfg's reason:
+# os88disk.py names a file on the volume from its BASENAME, and two different
+# SYSTEM.CFGs cannot share one.
+$(BUILD)/wirecfg/SYSTEM.CFG: | $(BUILD)
+	@mkdir -p $(BUILD)/wirecfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
+	  ((1 << 4) | (1 << 2)).to_bytes(2,'little') + b'\0\0')" > $@
+
 $(BUILD)/wirecfg/WIRE.CFG: | $(BUILD)
 	@mkdir -p $(BUILD)/wirecfg
 	printf '10.0.2.2:8092/wire/\n' > $@
 
-$(BUILD)/thewire360.img: $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/system.cfg $(BUILD)/wirecfg/WIRE.CFG tools/os88disk.py
+$(BUILD)/thewire360.img: $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/wirecfg/SYSTEM.CFG $(BUILD)/wirecfg/WIRE.CFG tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin \
 		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
-		$(BUILD)/system.cfg SYSTEM/APPDATA:$(BUILD)/wirecfg/WIRE.CFG
+		$(BUILD)/wirecfg/SYSTEM.CFG SYSTEM/APPDATA:$(BUILD)/wirecfg/WIRE.CFG
 
 # THE DATA DISK IS SCRATCH AND CARRIES NO PACKAGE. It used to hold a second
 # THEWIRE.O88 and a second WIRE.CFG, because before the desktop zone existed
@@ -3571,11 +3598,20 @@ $(BUILD)/telnet.o88: $(BUILD)/telnet.bin tools/os88pkg.py
 # mirrored in tools/os88wire.py - `tests/unit/t_wire.py` compares the two in
 # the fast tier, which is what stops a format that lives on both sides of a
 # wire from being typed out twice and drifting once.
+#
+# **AND rdpkg.inc IS INCLUDED FOR THE SAME REASON netpkg.inc IS** (SPEC.md
+# 20.11): RAMDISK.DRV's two package verbs are the DRIVER's contract, so Load
+# Program on an archive (SPEC.md 88.14) asks them out of the driver's own
+# header rather than out of a copy. rdabi.inc comes with it for RD_STEPKB
+# alone - the granule RDPV_MOUNT rounds a size up to, which the refusal
+# strings have to name.
 $(BUILD)/thewire.bin: apps/thewire/thewire.asm apps/thewire/wrhttp.inc \
-                      apps/thewire/wrtxt.inc apps/thewire/wcat.inc \
+                      apps/thewire/wrarc.inc apps/thewire/wrtxt.inc \
+                      apps/thewire/wcat.inc apps/thewire/warc.inc \
                       apps/os88api.inc apps/os88ui.inc apps/os88sock.inc \
-                      drivers/net/netpkg.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -I apps/thewire/ -I drivers/net/ -o $@ apps/thewire/thewire.asm
+                      drivers/net/netpkg.inc drivers/ramdisk/rdpkg.inc \
+                      drivers/ramdisk/rdabi.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/thewire/ -I drivers/net/ -I drivers/ramdisk/ -o $@ apps/thewire/thewire.asm
 	@echo "thewire: $(call FILESIZE,$@) bytes"
 
 $(BUILD)/thewire.o88: $(BUILD)/thewire.bin tools/os88pkg.py
@@ -3821,13 +3857,13 @@ $(BUILD)/dbg/modplug.o88: $(BUILD)/dbg/modplug.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/dbg/modplug.bin -o $@
 
 $(BUILD)/dbg-apps360.img: $(BUILD)/dbg/modplug.o88 $(APPS_TOOLS) $(APPS_GAMES) \
-                          $(SYSAPPS) tools/os88disk.py
+                          $(APPSYS) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 	    $(patsubst %,APPS:%,$(filter-out $(BUILD)/modplug.o88 $(BUILD)/audio.o88,$(APPS_TOOLS))) \
 	    APPS:$(BUILD)/dbg/modplug.o88 \
 	    $(patsubst %,GAMES:%,$(APPS_GAMES)) \
 	    MEDIA:apps/tracker/beverly.mod \
-	    $(patsubst %,SYSTEM:%,$(SYSAPPS))
+	    $(patsubst %,SYSTEM:%,$(APPSYS))
 	@echo "modplugdbg: boot build/os8088-360.img with $@ as the APPS disk"
 
 # ArtfulType, the eleventh shipped package (SPEC.md 46): a port of
@@ -6787,24 +6823,24 @@ smallapps: $(BUILD)/smallapps360.img $(BUILD)/smallapps.img
 	@python3 tools/os88pkgsize.py $(BUILD)/calc.o88 $(SMALLAPPDIR)/calc.o88
 	@python3 tools/os88pkgsize.py $(BUILD)/solitair.o88 $(SMALLAPPDIR)/solitair.o88
 
-$(BUILD)/smallapps360.img: $(SMALLPKGS) $(APPS_TOOLS) $(SMALLGAMES) $(SYSAPPS) \
+$(BUILD)/smallapps360.img: $(SMALLPKGS) $(APPS_TOOLS) $(SMALLGAMES) $(APPSYS) \
                            $(APPS_DOS) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 	    $(SMALLAPPSARGS) \
 	    $(addprefix GAMES:,$(SMALLGAMES)) \
 	    $(addprefix MEDIA:,$(SMALLDATA_360)) \
-	    $(SYSAPPSARGS) \
+	    $(APPSYSARGS) \
 	    $(addprefix SYSTEM/DOS:,$(APPS_DOS)) \
 	    $(MEDIAFOLDER) $(APPDATAFOLDER)
 	@echo "smallapps: $@ - pair it with build/small360.img (\`make small\`)"
 
-$(BUILD)/smallapps.img: $(SMALLPKGS) $(APPS_TOOLS) $(SMALLGAMES) $(SYSAPPS) \
+$(BUILD)/smallapps.img: $(SMALLPKGS) $(APPS_TOOLS) $(SMALLGAMES) $(APPSYS) \
                         $(APPS_DOS) tools/os88disk.py
 	python3 tools/os88disk.py --fatcap 2 -o $@ --size 1440 \
 	    $(SMALLAPPSARGS) \
 	    $(addprefix GAMES:,$(SMALLGAMES)) \
 	    $(addprefix MEDIA:,$(SMALLDATA)) \
-	    $(SYSAPPSARGS) \
+	    $(APPSYSARGS) \
 	    $(addprefix SYSTEM/DOS:,$(APPS_DOS)) \
 	    $(APPDATAFOLDER)
 	@echo "smallapps: $@ - pair it with build/small.img (\`make small\`)"
@@ -7333,8 +7369,8 @@ APPS_DATA_360   := $(filter-out $(MEDIA_DISK_DATA),$(APPS_DATA))
 # The Task Manager, in SYSTEM/ and not in the root, because that is where
 # ui_tm_open looks (SPEC.md 28.3). Not in APPS_TOOLS - it is not a program to
 # go and find, it is the chip menu's, and a copy in APPS/ would be a second
-# one to double-click by mistake.
-APPS_SYS := $(SYSAPPS)
+# one to double-click by mistake. THE TASK MANAGER ALONE - see APPSYS.
+APPS_SYS := $(APPSYS)
 
 # OS88NET.COM, the DOS end of the parallel link (SPEC.md 62), in SYSTEM/DOS.
 # It is the one thing on either floppy that does not run on os8088 at all: it
@@ -7391,7 +7427,7 @@ APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES) $(APPS_DATA_360) $(APPS_SYS) $(APPS_D
 APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
             $(addprefix GAMES:,$(APPS_GAMES)) \
             $(addprefix MEDIA:,$(APPS_DATA)) \
-            $(SYSAPPSARGS) \
+            $(APPSYSARGS) \
             $(addprefix SYSTEM/DOS:,$(APPS_DOS)) \
             $(APPDATAFOLDER)
 
@@ -7414,7 +7450,7 @@ APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
 APPSARGS360 := $(addprefix APPS:,$(APPS_TOOLS_360)) \
                $(addprefix GAMES:,$(APPS_GAMES)) \
                $(addprefix MEDIA:,$(APPS_DATA_360)) \
-               $(SYSAPPSARGS) \
+               $(APPSYSARGS) \
                $(addprefix SYSTEM/DOS:,$(APPS_DOS)) \
                $(MEDIAFOLDER) $(APPDATAFOLDER)
 
@@ -7573,7 +7609,7 @@ ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(BUILD)/frotz.o88) \
                                 apps/c64/README.TXT apps/c64/COPYING) \
                $(addprefix WEAVE:,$(WEAVEDISK)) \
                $(addprefix LOOM:,$(WEAVELOOM) $(LOOMRUN) $(LOOMSRCS)) \
-               $(SYSAPPSARGS) \
+               $(APPSYSARGS) \
                $(addprefix SYSTEM/DOS:,$(APPS_DOS))
 ALLAPPSDIRS := $(sort $(foreach a,$(ALLAPPSARGS),$(firstword $(subst :, ,$a))) \
                       DOCS RUNCPM/A SYSTEM/APPDATA)
@@ -8401,6 +8437,43 @@ xt-sound: $(IMG360) $(APPSIMG360)
 xt-sound-1.44: $(IMG360) $(ALLAPPSIMG)
 	@$(UNPROTECT) $(VMXTSND144)/86box.cfg
 	$(BOX) -P $(VMXTSND144) -N
+
+# THE WIRE'S MACHINE (SPEC.md 88): xt-sound's XT - the 1986 board, 640KB, an
+# OTI-067 and the SB 2.0 - with a Novell NE1000 on 86Box's slirp. The NE1000
+# rather than the NE2000 because it is the 8-BIT card, the one an XT's bus
+# can take; ETHER.DRV drives both as the same 8390 and probes 0x300 first,
+# which is 86Box's default for it, and it polls, so the card's IRQ is never
+# asked for. slirp NATs through the host with no setup: DHCP binds, its DNS
+# resolves os8088.com, and the Wire's default WIRE.CFG - none at all, which
+# 88.4 reads as os8088.com:80/wire/ - reaches the live catalog over plain
+# HTTP. Nothing on the host runs; there is no proxy in this path.
+#
+# A: is `make ethertest`'s disk and not the stock system disk, for the reason
+# that disk exists: a SYSTEM.CFG that asks for ETHER.DRV before the first
+# paint, so the Wire icon is on the desktop when it comes up instead of
+# after a visit to Control Panel > Drivers. Same kernel, same drivers, same
+# packages - one 18-byte SYSTEM.CFG different.
+#
+# B: is a SCRATCH 360KB disk and not the apps floppy, for thewiretest's
+# reason: Add to Disk WRITES, 86Box writes a floppy image back to its file,
+# and a shipped image the emulator has edited is a shipped image. It carries
+# what Add to Disk needs and nothing else - MEDIA for the Save dialog to open
+# in (SPEC.md 38.10) and SYSTEM/APPDATA because every disk that carries an
+# application carries one (SPEC.md 19.9). It is built once and KEPT, the way
+# xt-mfm's hard disk is, so what was added last time is still there; `rm
+# build/wiredata360.img` starts over.
+#
+# This is the only machine here whose A: is not a stock system disk, and the
+# first 86Box profile in the tree with a network card of any kind. It is
+# interactive, like every 86Box target: tests/thewire.py is the scripted gate
+# and runs under QEMU, which can host an NE2000 but is not an 8088.
+$(BUILD)/wiredata360.img: tools/os88disk.py | $(BUILD)
+	python3 tools/os88disk.py -o $@ --size 360 \
+		--folder MEDIA --folder SYSTEM/APPDATA
+
+xt-wire: $(BUILD)/ether360.img $(BUILD)/wiredata360.img
+	@$(UNPROTECT) $(VMXTWIRE)/86box.cfg
+	$(BOX) -P $(VMXTWIRE) -N
 
 286-sound: $(IMG) $(APPSIMG)
 	@$(UNPROTECT) $(VM286SND)/86box.cfg

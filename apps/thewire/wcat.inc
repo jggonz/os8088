@@ -34,7 +34,10 @@ WC_FLAGS    equ 34              ; byte, WF_* below
 WC_NSIDE    equ 35              ; byte, 0..WIRE_SCMAX
 WC_SIDE0    equ 36              ; word, the first sidecar's table index
 WC_SIZE     equ 38              ; dword, the .O88's size
-WC_TOTAL    equ 42              ; dword, it plus every sidecar
+WC_TOTAL    equ 42              ; dword, it plus every sidecar - an archive's
+                                ; UNPACKED total
+WC_NEEDKB   equ 46              ; word, an archive's RAM disk KB (88.13's
+                                ; header figure); 0 on every other record
 WC_ICON     equ 48              ; 64: 16 mask words then 16 data words
 WC_DESC     equ 112             ; WC_DESCN lines of WC_DESCW, pre-wrapped
 WIRE_REC    equ 256
@@ -54,7 +57,16 @@ WF_PIC      equ 2               ; /wire/pic/<STEM>.PIC exists
 WF_NEW      equ 4               ; new on the Wire
 WF_FLOPPY   equ 8               ; only as a floppy image - its files live in a
                                 ; folder tree the Wire does not create. Both
-                                ; actions refuse
+                                ; actions refuse - UNLESS WF_ARC is set too,
+                                ; which is what the writer does for every
+                                ; archive so a reader from before 88.13 greys
+                                ; it rather than fetching a .O88 that is not
+                                ; there
+WF_ARC      equ 16              ; an ARCHIVE, /wire/pkg/<STEM>.WPK (SPEC.md
+                                ; 88.13): one stream, a folder tree. n = 0.
+                                ; Load Program unpacks into a RAM disk and
+                                ; runs it (88.14); Add to Disk unpacks where
+                                ; the dialog points
 
 ; --- WC_KIND -----------------------------------------------------------------
 ; Only 0..2 are used today; the field is the room the brand leaves to grow,
@@ -71,7 +83,22 @@ WK_SHARED   equ 5
 WIRE_VER    equ 1
 WIRE_CATMAX equ 16384           ; the claim is made before Content-Length is
                                 ; known, so this is the claim AND the ceiling
-WIRE_FILEMAX equ 64512          ; 63 KB: one claim, one OSAPI_FILE_WRITE
+WIRE_FILEMAX equ 64512          ; 63 KB: one claim, one OSAPI_FILE_WRITE.
+                                ; **IT BOUNDS A RECORD'S WC_SIZE ONLY WHEN
+                                ; WF_ARC IS CLEAR** - see WIRE_ARCMAX below
+WIRE_ARCMAX equ 0x100000        ; 1 MB, and it is THE FIRST SIZE REFUSED: an
+                                ; archive's WC_SIZE must be BELOW it, which is
+                                ; one compare on the high word rather than
+                                ; three on the pair. There is never a claim for
+                                ; the whole of a .WPK - the reader decodes one
+                                ; entry at a time into a claim sized from
+                                ; WA_MAXENT (SPEC.md 88.13) - so this is a
+                                ; SANITY bound and not a capacity one, which is
+                                ; why it is a round number rather than a
+                                ; derived figure. RunCPM's master disk is
+                                ; 231,463 bytes on the wire, and the 16-bit
+                                ; rule that fits every other record refused it
+                                ; outright
 WIRE_NMAX   equ 255             ; the format's ceiling. WIRE_CATMAX is the
                                 ; binding one - 16,384 bytes is 63 records
                                 ; with no sidecar table at all - and it is

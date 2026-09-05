@@ -273,7 +273,7 @@ exactly like the feature being broken.
 `xt-mfm` (a 20MB ST-225 on a Xebec MFM controller — the machine to install
 and hibernate on; `build/mfm20.img` is created blank and kept),
 `xt-cga`, `xt-hercules`, `xt-ega`, `xt-multimon`, `xt-sound`,
-`xt-sound-1.44`, `286`,
+`xt-sound-1.44`, `xt-wire`, `286`,
 `286-sound`, the eight `286-525-*` application machines (`-z`, `-word`,
 `-cword`, `-runcpm`, `-c64`, `-weave`, `-loom`, `-all` — `vm/286-525` with a
 1.2MB app disk in B: instead of the apps floppy, and the only machines in the
@@ -285,7 +285,12 @@ controller, so no XT profile can host one),
 plus `marty` (MartyPC). `xt-multimon` is the
 **two-card** XT — a CGA and a Hercules, a monitor window each — and the only
 86Box machine that can show §39.12–§39.19's extended desktop; it boots Single,
-and Control Panel → Display → Desktop is what extends it (§39.19.1). `xt-z`
+and Control Panel → Display → Desktop is what extends it (§39.19.1).
+**`xt-wire` is the NETWORKED XT** — `xt-sound`'s machine plus a Novell NE1000
+on slirp, booting `make ethertest`'s disk so `ETHER.DRV` is up before the
+first paint and The Wire (§88) reaches os8088.com's live catalog with nothing
+running on the host; the only 86Box profile with a NIC, and its B: is a kept
+scratch disk because Add to Disk writes. `xt-z`
 and `386-z` are the Frotz machines (§61.9), `xt-word`/`386-word` are the Word
 machines (§68.5), `386-c-word` is the C word processor's (§73.12) and
 `xt-runcpm`/`286-runcpm`/`386-runcpm` the CP/M emulator's, one per floppy
