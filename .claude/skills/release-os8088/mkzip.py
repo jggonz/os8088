@@ -90,8 +90,8 @@ MANIFEST = [
                               "CP/M's own disk than the 1.44MB one holds."),
     ("runcpm360.img",  False, "CP/M emulator disk, 360KB. Carries the emulator and no "
                               "programs -- there is no room for them at this size."),
-    ("c64.img",        False, "Commodore 64 disk, 1.44MB. Carries the emulator, the three "
-                              "Commodore ROM images it reads at launch, and COPYING."),
+    ("c64.img",        False, "Commodore 64 disk, 1.44MB. Carries the emulator, with the three "
+                              "Commodore ROM images inside it, and COPYING."),
     ("c64720.img",     False, "Commodore 64 disk, 720KB."),
     ("c64120.img",     False, "Commodore 64 disk, 1.2MB."),
     ("c64360.img",     False, "Commodore 64 disk, 360KB."),
