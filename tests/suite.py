@@ -924,6 +924,11 @@ SOAK = [
         "FOLDER open beside it is the control that says the breakpoint "
         "fires at all.",
         needs=("marty",), serial=True),
+    Row("fontview", "soak", py("tests/fontview.py"), 60.0,
+        "SPEC.md 90: an F88 association launches FONT VIEWER with that family "
+        "selected, every installed face is listed, typing edits the specimen, "
+        "and both arrow and mouse selection finish loading another face.",
+        needs=("marty",), serial=True),
     Row("fmcommit", "soak", py("tests/fmcommit.py"), 62.0,
         "SPEC.md 22.13.3: a committing keystroke redraws the Disk window and "
         "a REFUSED character does not. fm_onkey banks fm_editkey's answer "

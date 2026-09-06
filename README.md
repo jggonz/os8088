@@ -180,7 +180,9 @@ a Standard File dialog for opening and saving.
   Helvetica and a Courier, two more text faces and three monospaces, each
   fitted onto an 8-pixel grid from an open outline font (SPEC.md 6.4.1). The
   kernel keeps its 8x8 cell for chrome; an app composes a row in a real face
-  and puts it down in one call.
+  and puts it down in one call. Double-click any `.F88` to open **Font
+  Viewer**, which lists every installed family; click a family or use the
+  arrow keys to switch, then type directly into its specimen.
 
 **Disks and files**
 
@@ -197,12 +199,12 @@ a Standard File dialog for opening and saving.
 
 **Software**
 
-Eighteen loadable packages ship on the software disk, all closable and most
+Loadable packages ship on the software disk, all closable and most
 multi-instance:
 
 - **Apps** — Note Pad (word wrap, DOS-readable text files), TeXPad, Paint,
-  ArtfulType, Fractal, Calculator, Piano, Recorder, Tracker and ModPlug Player
-  (both play Amiga MOD files).
+  ArtfulType, Font Viewer, Fractal, Calculator, Piano, Recorder, Tracker and
+  ModPlug Player (both play Amiga MOD files).
 - **Games** — Minesweeper, Solitaire, Arkanoid, Missile Command, [Pac-Man](apps/pacman/README.md), Cyclone 88,
   Tank Attack (a first-person wireframe tank duel that takes the whole
   machine, in 320x200 colour on CGA, Mode X on VGA and 640x200 mono in the

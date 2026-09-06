@@ -287,6 +287,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | CHART | `apps/chart/chart.asm` | §82 |
 | CWORD | `apps/cword/cword.asm` | §73.12 |
 | CYCLONE 88 | `apps/cyclone/cyclone.asm` | §67 |
+| FONT VIEWER | `apps/fontview/fontview.asm` | §90 |
 | FPTEST | `apps/fptest/fptest.asm` |  |
 | FRACTAL | `apps/fractal/fractal.asm` | §40 |
 | FTPD | `apps/ftpd/ftpd.asm` | §77 |
@@ -408,6 +409,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 87 | Hibernate — the machine to a file on the hard disk, and back (`kernel/hiber.inc`, `HIBER.DRV`) |
 | 88 | THE WIRE — the online software library (`apps/thewire/thewire.asm`) |
 | 89 | Pac-Man (`apps/pacman/pacman.asm`) |
+| 90 | FONT VIEWER — the system face browser (`apps/fontview/fontview.asm`) |
 | 91 | PACCMAN — pacman.c, written in C (`apps/paccman/`) |
 
 ## docs/

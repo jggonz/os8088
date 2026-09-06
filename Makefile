@@ -2377,12 +2377,12 @@ APPSYSARGS := $(addprefix SYSTEM:,$(APPSYS))
 #      from before it could open anything at all;
 #   2. os88disk.py builds ASSOC.DAT from the packages on the disk it is
 #      building (SPEC.md 54.7), so the system disk's cache gains PAINT,
-#      NOTEPAD and BROWSER rows naming the folder they live in ON THAT VOLUME
+#      NOTEPAD, BROWSER and FONT VIEWER rows naming their folder ON THAT VOLUME
 #      - and the first full mount of A: therefore seeds the
 #      .TXT/.BMP/.GIF/.HTM hints at A: instead of at a disk that is not in
 #      the drive (SPEC.md 54.7.1). That mount used to teach the machine
 #      nothing at all, TASKMGR.O88 being the only package on the disk and
-#      nothing being associated with it. Calculator, Mines and Telnet have no
+#      nothing being associated with it. Mines and Telnet have no
 #      association and are here for reason 1 alone; their rows are icon-cache
 #      rows, which is what makes APPS/ and GAMES/ on this disk open without a
 #      header read per package.
@@ -2421,8 +2421,8 @@ APPSYSARGS := $(addprefix SYSTEM:,$(APPSYS))
 # was already lying in build/, which reads exactly like a stale package rather
 # than like a missing dependency. The guard that keeps these on the apps disk
 # too is down beside APPS_TOOLS, where both lists exist.
-CORE_TOOLS := $(BUILD)/browser.o88 $(BUILD)/calc.o88 $(BUILD)/notepad.o88 \
-              $(BUILD)/paint.o88 $(BUILD)/telnet.o88
+CORE_TOOLS := $(BUILD)/browser.o88 $(BUILD)/fontview.o88 \
+              $(BUILD)/notepad.o88 $(BUILD)/paint.o88 $(BUILD)/telnet.o88
 CORE_GAMES := $(BUILD)/mines.o88
 COREAPPS := $(CORE_TOOLS) $(CORE_GAMES)
 COREAPPSARGS := $(addprefix APPS:,$(CORE_TOOLS)) \
@@ -2536,6 +2536,14 @@ $(BUILD)/taskmgr.bin: apps/taskmgr/taskmgr.asm apps/os88api.inc | $(BUILD)
 
 $(BUILD)/taskmgr.o88: $(BUILD)/taskmgr.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/taskmgr.bin -o $@
+
+$(BUILD)/fontview.bin: apps/fontview/fontview.asm apps/os88api.inc \
+                       apps/os88type.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/fontview/fontview.asm
+	@echo "fontview: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/fontview.o88: $(BUILD)/fontview.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/fontview.bin -o $@
 
 # ...AND A STAMP FILE, for exactly VIDSTAMP's and DSSTAMP's reason. PICOMEM,
 # PM_BASE and PM_SB_PORT change the command line and no source, so without
@@ -7414,7 +7422,7 @@ $(BUILD)/lptlink144.img: $(BUILD)/llboot144.bin $(BUILD)/lptlink.bin \
 # also the only answer that survives a host OS writing to the disk. What is
 # left here is which packages ship and which folder each lands in.
 APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
-              $(BUILD)/chart.o88 $(BUILD)/fractal.o88 \
+              $(BUILD)/chart.o88 $(BUILD)/fontview.o88 $(BUILD)/fractal.o88 \
               $(BUILD)/hello.o88 $(BUILD)/modplug.o88 $(BUILD)/notepad.o88 \
               $(BUILD)/paint.o88 $(BUILD)/piano.o88 $(BUILD)/recorder.o88 \
               $(BUILD)/ftpd.o88 $(BUILD)/sheet.o88 $(BUILD)/telnet.o88 \
@@ -7530,8 +7538,10 @@ APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS)
 # AUDIO.O88 is left off the 360KB disk: it fits with one cluster to spare
 # (353/354) which is too tight to be a good neighbour, and the XT/floppy is
 # exactly where streaming performance is least proven (docs/AUDIO-PLAN.md).
-# It ships on the 1.44MB and 720KB apps disks, which have room.
-APPS_TOOLS_360 := $(filter-out $(BUILD)/audio.o88,$(APPS_TOOLS))
+# FONT VIEWER is already in APPS/ on the paired 360KB system disk, beside the
+# FONTS/ files it opens; copying it to the software disk as well would exceed
+# that disk by four clusters. Both packages ship on the roomier apps disks.
+APPS_TOOLS_360 := $(filter-out $(BUILD)/audio.o88 $(BUILD)/fontview.o88,$(APPS_TOOLS))
 APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES) $(APPS_DATA_360) $(APPS_SYS) $(APPS_DOS)
 
 # ...and the same list with the folder each package lands in. os88disk.py
