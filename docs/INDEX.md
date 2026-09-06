@@ -282,6 +282,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | CHART | `apps/chart/chart.asm` | §82 |
 | CWORD | `apps/cword/cword.asm` | §73.12 |
 | CYCLONE 88 | `apps/cyclone/cyclone.asm` | §67 |
+| FONT VIEWER | `apps/fontview/fontview.asm` | §87 |
 | FPTEST | `apps/fptest/fptest.asm` |  |
 | FRACTAL | `apps/fractal/fractal.asm` | §40 |
 | FTPD | `apps/ftpd/ftpd.asm` | §77 |
@@ -397,6 +398,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 84 | Software floating point (`apps/os88fp.inc`) |
 | 85 | TANK ATTACK — a wireframe tank duel in a foreign mode (`apps/tank/`) |
 | 86 | Hibernate — the machine to a file on the hard disk, and back (`kernel/hiber.inc`, `HIBER.DRV`) |
+| 87 | FONT VIEWER — the system face browser (`apps/fontview/fontview.asm`) |
 
 ## docs/
 

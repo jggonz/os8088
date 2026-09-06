@@ -83466,3 +83466,49 @@ with a `SYSTEM.CFG` that wants `HDD.DRV`, the same VHD mounted through it —
 is the same script with `--driver`, registered as `hibernatedrv`. Both write
 three rendered screenshots to `build/hiber-*.png`; docs/TESTING.md has the
 recipe and what it cannot see.
+
+## 87. FONT VIEWER — the system face browser (`apps/fontview/fontview.asm`)
+
+FONT VIEWER is a package in `APPS/` on the system disk. It is also carried in
+`APPS/` on the applications disk, as the other core packages are (§24.3), so a
+single-floppy machine keeps the same document association after swapping the
+disk it booted from. Its package header declares `F88`; browsing `FONTS/` and
+double-clicking any face therefore launches the viewer on the first attempt,
+through the ordinary §54 association cache rather than a kernel special case.
+
+The left side of the window lists every family `ty_scan` found in the system
+volume's `FONTS/` directory. The selected row names the one face open in
+`os88type.inc`; moving the selection with Up/Down or clicking another row
+closes that face and opens the new one. A launch document selects the matching
+8.3 name before the first paint. The application deliberately does not keep
+all ten face files open: `TY_MAXFACE` is the number of concurrently useful
+faces in a typesetting application, not a catalogue-size limit, and a viewer
+needs one external face at a time.
+
+### 87.1 The specimen is the input field
+
+The right side is both proof and editor. Printable ASCII appends to a
+NUL-terminated 127-byte specimen, Backspace removes its last byte, and every
+keystroke recomposes the visible rows in the current face. The initial line
+contains capitals, lowercase, figures and punctuation, so opening the program
+already proves a face without requiring input. Text wraps by measured glyph
+advance through `ty_fit`; each row is composed by `ty_band` + `ty_putn` and
+emitted once by `ty_flush` (§6.5). System-face labels remain in `font_run`, so
+a malformed or unreadable `.F88` can still explain its own failure.
+
+Face changes are deferred through `W_ONWAKE`. Mouse and key callbacks hold the
+graphics lock and therefore may update the selected index and post a wake, but
+may not turn the floppy; the wake opens the face on the UI task after the
+window is visible, then takes the lock only for the repaint. A missing system
+`FONTS/` directory leaves the built-in face active and an explicit status line
+instead of preventing the package from opening.
+
+### 87.2 Testing
+
+`tests/fontview.py` boots the 360 KB system disk under MartyPC, walks through
+the file manager to `FONTS/`, and double-clicks `CHARTER.F88`. It asserts that
+the association made a new FONT VIEWER window, the launch name selected and
+opened Charter, the catalogue count equals the ten `.F88` directory entries,
+typed bytes and Backspace change the specimen, and both Down and a mouse click
+finish a deferred face load with no error. The row is `fontview` in the soak
+tier.
