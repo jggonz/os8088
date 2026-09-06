@@ -102,6 +102,209 @@ asked. Each answers a question in plan.json's `questions`.
 
 ---
 
+## Pre-wave-1 review: the Codex findings and their resolutions (binding)
+
+An outside read-only review of plan.json by the Codex CLI (2026-09-06, its
+report is `codex-plan-review.md` beside the plan in the session scratchpad;
+its verdict was "do not start wave 1 unchanged") found nine things. Each is
+resolved here, and the resolution binds every wave. Where a resolution
+narrows an accuracy promise, that is deliberate: this port is a
+SCANLINE-GRANULAR emulator in InfoNES's own class, and the reason it exists
+is speed on an 8088; it does not become a dot-clock PPU to pass a gate.
+
+R1. THE 512-BYTE STACK (blocker 1). Task 0's stack is `STK0_SIZE` = 512
+    bytes (kernel/kernel.asm) and the bracket, the frame loop, the core and
+    any C register handler called from inside an instruction all run on it,
+    under the kernel's own `fsx_run` and `wm_pkgcall` frames, with interrupts
+    landing on top. Wave 1 WRITES THE STACK BUDGET as a table in SPEC §91:
+    every frame on the chain from the menu callback to the deepest C
+    handler, counted from the generated `.raw.asm` and the shim, plus 64
+    bytes of interrupt headroom, and it must sum under 512 with the kernel's
+    frames included. If it does not fit, PPU/mapper register handlers move
+    from C into `nicpu.inc`/`nippu` assembly and every scratch goes static —
+    the plan's "every buffer is static" rule already points that way. Wave 2
+    adds a HIGH-WATER SENTINEL test: the shim fills the free stack with a
+    pattern before entering the bracket and `nisystest` reports the deepest
+    scrub after a run that exercises mapper writes, PPU reads, OAM DMA,
+    reset, key polling and the present; the SPEC records the number.
+
+R2. THE BUS AND INTERRUPT CONTRACT (blocker 2), written in SPEC §91 by wave
+    1 before a handler is translated:
+    - The D flag is STATE, not arithmetic: SED/CLD/PLP/RTI/PHP carry it in
+      `CH` like V, I and B; ADC/SBC never look at it. (The plan's "drop D"
+      meant the arithmetic; nestest's P column needs the bit.)
+    - Dummy reads: on the indexed page-cross penalty path and on every
+      read-modify-write, if the effective address is in $2000-$3FFF or
+      $4000-$401F the core performs the extra read/write through the slow
+      path (one compare on a path already priced as the penalty); RAM and
+      ROM addresses skip it. That is what `cpu_dummy_reads` tests.
+    - Every mapper write re-evaluates the fetch bias: the mapper handler
+      returns a flag and the core clears `BLO`/`BOUND` so the next fetch
+      re-biases `ES`, even when PC did not leave the cached region.
+    - OAM DMA ($4014) costs 513 cycles (514 on an odd cycle: one parity bit
+      in scratch) and the debt is SUBTRACTED from the scanline budget and
+      carried into following lines without executing instructions; the
+      frame loop's "overrun by one instruction" rule is stated as
+      "overrun by one instruction or one DMA".
+    - Open bus: one scratch byte holds the last value on the data bus;
+      unmapped reads ($4000-$401F except $4015/$4016/$4017, $4020-$5FFF,
+      $6000-$7FFF without SRAM) answer it; $2002 and $2007 reads mix in the
+      documented open-bus bits.
+    - NMI is an EDGE: latched when vblank sets with NMI enabled, and when
+      $2000 enables NMI while vblank is already set; cleared by the $2002
+      read only for the flag, not for a pending edge. IRQ is a LEVEL of
+      three sources (mapper, APU frame — see below, none else) OR'd into
+      one scratch byte, honoured when I is clear.
+    - The silent APU: $4015 reads answer the frame-IRQ flag in bit 6 and
+      zero elsewhere; $4017 writes are honoured for the frame-counter mode
+      and the IRQ-inhibit bit; the 4-step frame IRQ IS raised every 29,830
+      cycles when not inhibited (a counter in scratch, decremented per
+      scanline) because games that rely on it hang otherwise; all other APU
+      registers are write-only sinks. Stated in the SPEC as a fact.
+    - Focused bus traces beside nestest: `nicputest` gains rows for the
+      dummy read, the fetch re-bias after a mapper write, the DMA debt, the
+      NMI edge on late enable and the frame IRQ, each with a negative
+      control.
+
+R3. THE PPU ACCURACY PROMISE IS NARROWED (blocker 3). The PPU is a
+    SCANLINE state machine, in InfoNES's class, and the SPEC says so in a
+    sentence. What it does: per visible line, at line START copy the
+    horizontal bits of `t` into `v` (dot 257 at line granularity), at the
+    pre-render line copy the vertical bits; a $2005/$2006 write mid-line
+    takes effect from the NEXT line; vblank sets at line 241 and clears at
+    the pre-render line; the odd-frame dot skip is NOT modelled (the frame
+    is 29,780 or 29,781 cycles by the triple's phase, stated). The wave-4
+    gate is therefore NOT "all ten ppu_vbl_nmi singles": it is the subset a
+    scanline model can pass, determined by running them — 01-vbl_basic and
+    the NMI on/off and timing-independent singles are expected; each single
+    that fails is LISTED in SPEC §91 with its reason and no gate rests on
+    it. The instr_test-v5 singles, cpu_dummy_reads and instr_timing remain
+    gates.
+
+R4. THE HARNESS FIXES (blocker 4), all in wave 1 or 2 as stated:
+    - The blargg signature is `$DE $B0 $61` at $6001-$6003 (the plan's
+      `$G1` was a documentation typo); the runner is a bounded state
+      machine: startup ($6000 not yet $80), running ($80), reset requested
+      ($81: perform a CPU reset after ~100 ms and continue), done (< $80),
+      timeout (a cycle cap per ROM, printed).
+    - The CPU harness's stub bus raises a PERIODIC vblank: $2002 bit 7
+      sets every 29,780 cycles and clears on read, because blargg's shell
+      waits for vblank repeatedly before it opens its result channel.
+    - `palette_ram` (2005) is DROPPED from the gate list (its result
+      protocol is `result == 1`, not $6000); the modern singles replace it.
+    - The 240→200 row-drop table moves INTO WAVE 2 with the 13h present:
+      exactly 200 destination rows, 40 dropped source rows (8 top, 8 bottom,
+      then 24 of the middle 224 by a fixed table), and every store bounded
+      inside the 64,000-byte screen; `nimemtest` asserts the bounds.
+    - `niuitest`'s whole-ROM oracle is NAMED: agnes (`agnes.c`, MIT) is
+      compiled into the host harness as the reference machine; our C PPU
+      register model is driven with the same inputs and compared per frame
+      against agnes's state and framebuffer through `niref.py` (which
+      masks the priority-tag bits before comparing NES palette indices and
+      receives the per-line scroll/palette history the composer used, not
+      only the final PPU snapshot). The stub `os88.h` is diffed against
+      `apps/cc/os88.h`'s prototypes by `build.sh` so drift fails the build.
+    - Wave 2's `done_when` includes a NON-TRIVIAL `nisystest` run (one
+      blargg single end to end through the $6000 protocol on the shipping
+      package), not only screendumps.
+
+R5. THE LOADER AND THE CLAIM TABLE (major 5). Wave 1 publishes in SPEC §91
+    an OFFSET-AND-SIZE CLAIM TABLE with ownership and lifetime: the RAM/PPU
+    claim (2KB RAM, 2KB nametables, 256 OAM, 32 palette, 8KB SRAM window,
+    core scratch, the bank tables), the PRG storage claims (16KB banks, up
+    to 256KB in four 64KB claims; the mapped window is a 4-entry table of
+    8KB segment bases for $8000-$FFFF, so MMC3's 8KB granularity and MMC1's
+    16/32KB both fit), the CHR claim (up to 128KB in two 64KB claims, or
+    8KB CHR-RAM), the 32KB tile cache claim, and the TRANSIENT staging
+    claim used during a load. A ROM ≤ 64KB (every shipped game, every
+    harness single, nestest) is read whole by `os88_file_read_seg` into
+    the staging claim and copied out with the header skew by `nimem.inc`'s
+    mover — that is wave 1, and it is the whole loader wave 1 needs. A ROM
+    > 64KB is WAVE 4's: `os88_file_read_at` into a resident cluster buffer
+    of 4,096 bytes of bss (media with clusters above 4KB refuse with the
+    fact: "INFONES reads ROMs in clusters of up to 4KB; this volume's are
+    %u"), streamed into the PRG/CHR claims with the carry across cluster
+    boundaries handled by the mover, and the 4,096 is in the budget table.
+    The trainer: when the header's trainer bit is set PRG begins at byte
+    528 and the 512 trainer bytes are copied to $7000 (SRAM window) — done,
+    not refused. Reload: the old ROM's claims are FREED before the new
+    load's claims are taken, so the peak is one ROM plus the staging claim.
+
+R6. PACING COUNTS ELAPSED TIME (major 6). The 110/100 accumulator is
+    driven by TICKS ELAPSED, not by wait calls: `dt = os88_ticks() - last`
+    (18.2065 Hz), `acc += dt * 330` (60.0988/18.2065 = 3.3009), run one
+    emulated frame per 100 while `acc >= 100`, with BOUNDED CATCH-UP (at
+    most 4 emulated frames per wake; beyond that the debt is DROPPED and an
+    overload counter the panel can show is bumped — the XT lives in this
+    branch permanently and that is the "demonstration" of decision 4), and
+    only when `acc < 100` does the loop wait on `FSXW_FRAME` (with
+    `FSXF_FASTTICK`, so the wait is ≤ 18 ms and yields). Mode X page-flip
+    blocking is inside the same accounting. `niuitest` tests the pacer
+    with an injected clock: work below and above one sub-tick, a double
+    frame, tick wraparound at 65,535, and the XT's overload branch. Keys:
+    the D-pad sweep keeps BOTH the current held level and the sticky
+    press latch; system keys are drained at the same sub-frame interval.
+
+R7. SPRITES COMPOSE INTO THE SPRITE SCRATCH FIRST (major 7). Per line: the
+    up-to-eight sprites are painted into the 272-byte sprite scratch in
+    ASCENDING OAM order with first-writer-wins (so the lowest index owns a
+    pixel), carrying the behind-background bit and the sprite-0 bit as
+    tags; then ONE merge pass with the untouched background line resolves
+    priority per pixel (opaque background beats a behind-tagged sprite;
+    otherwise the sprite). Sprite-0 hit is computed IN THE MERGE as the
+    first pixel where sprite 0 is opaque AND the background is opaque (left
+    masks respected, X = 255 excluded, transparent prefixes skipped); the
+    hit X found on a line is what the NEXT FRAME's same line uses for the
+    CPU-budget split (status bars are stable frame to frame, and the SPEC
+    records this one-frame latency as the approximation). On skipped
+    frames the sprite-0 hit line and X are carried from the last rendered
+    frame so the split still happens. `niuitest` adds synthetic cases: a
+    hidden lower-index sprite, nine sprites on a line (the eighth wins
+    the cap, the overflow flag sets), transparent prefixes, the left
+    masks, both flips, and a palette colour shared by a transparent and an
+    opaque pattern value.
+
+R8. MMC3 (major 8). The scanline IRQ is InfoNES's HSync approximation —
+    counted once per visible line while rendering is enabled — and SPEC
+    §91 states it as an approximation of the A12-edge counter (8×16
+    sprites and mid-line pattern-table swaps can be off by a line). The
+    tile cache's eight 1KB slots are keyed by PHYSICAL bank number AND a
+    CHR-RAM write generation, so an A→B→A alternation in a used slot is
+    the decode cost it really is; wave 4 BENCHES the used-bank
+    alternation, and the recorded fallback if MMC3 titles thrash is a
+    per-tile 2bpp decode through a 256-entry unpack table on the MMC3
+    path only. A mapper-1 and a mapper-4 TEST ROM (not a screenshot of a
+    shipped NROM game) are the wave-4 evidence, and the split-screen
+    assertion becomes "the split row is stable across ten frames AND the
+    frame counter advanced ten" read from the panel.
+
+R9. LICENCE MANIFEST (major 9). Decision 1 stands with its limit STATED:
+    InfoNES descends from pNesX (K6502.cpp:5 says so) whose authorship and
+    terms are unestablished; the 2019 Apache-2.0 grant covers what Jay
+    Kumogata holds and this port records that it cannot establish more.
+    Derivation is tracked PER FILE in each header (which reference file
+    each part follows). `nicpu.inc` is written from the 6502 documentation
+    and InfoNES's K6502.cpp behaviour in `apps/c64/c64cpu.inc`'s REGISTER
+    PLAN — a plan is not code — and copies NO text from c64cpu.inc, which
+    is GPL-2-or-later by its VICE ancestry; if any routine is ever copied
+    from apps/c64 that file's header says GPL-2+. agnes's MIT notice is
+    reproduced verbatim in the harness files that link it. The disks and
+    The Wire archive carry: LICENSE.TXT (Apache-2.0 text), LICENSES.TXT
+    (the GPL-3 text once, the Zlib and All-Permissive notices, Mega
+    Mountain's MIT notice) and README.TXT with, per GPL title, the pinned
+    tag/commit of the corresponding source and the sentence that source is
+    obtainable from that URL and from os8088.com beside the download; the
+    Wire records for the Mojon titles carry their LGPL-3 code obligation
+    and CC BY-NC-SA notice in the same way. Disk occupancy is recomputed
+    with these files in wave 4.
+
+Also folded from the plan writer's report: `done_when` fields are prose
+(as intended); waves 3 AND 4 each re-check the size line (both); the SDK
+DOES have a build-time association block (`CC_ASSOC`, apps/cc/crt0.asm),
+so `.NES` opens on the first double-click and LESSONS.md §9 is corrected in
+wave 5; `vm/xt-infones` SHIPS (decision 4); `nifsx.inc` is resident.
+
+
 ## Authority table — every surface, and the file that defines it
 
 | surface | authority |
