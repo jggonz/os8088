@@ -30,6 +30,9 @@ export const meta = {
 }
 
 const REPO = args.repo
+// Optional model override for every agent this workflow spawns: args.models = { scout, plan, review }
+// (the implement workflow has the same shape). Omitted, each inherits the session model.
+const MODELS = args.models || {}
 const SKILL = REPO + '/.claude/skills/port-to-os8088'
 const SOURCES = (args.sources || []).slice(0, 4)
 if ((args.sources || []).length > 4) log(`scout: only the first 4 of ${args.sources.length} sources are scouted; name fewer or merge them`)
@@ -124,7 +127,7 @@ The user's notes: ${args.notes || '(none)'}
 Map the tree (ls -R, wc -l, grep) and READ the files that define what a user sees and touches: menu resources, key maps, dialog templates, string tables, status/tool bars, about text, icons; the file formats it reads and writes; the core algorithms; and its license/copyright. Distinguish the file that DEFINES a surface from the ones that merely use it - the porter will quote the defining file verbatim.
 
 For each core feature say honestly whether the CODE can port to a strict 16-bit C subset (no long/float/double, no address-of-local, no struct by value, frames < 96 bytes, no string instructions, one translation unit) or whether only the BEHAVIOUR ports and it must be rewritten. Do not read every file - read the authorities and sample the rest. Do not write anything anywhere.`,
-  { label: `scout:src${i + 1}`, phase: 'Scout', schema: SOURCE_SCHEMA })))
+  { label: `scout:src${i + 1}`, phase: 'Scout', schema: SOURCE_SCHEMA, model: MODELS.scout })))
 
 const TREE_TOPICS = [
   { key: 'api', prompt: `Report the API surface a C package can reach and what it cannot. Read ${REPO}/apps/cc/os88.h in full and ${REPO}/apps/cc/os88thunk.asm; list what is wrapped (windows, drawing, fonts/type library, files, menus, dialogs, clipboard, toast, timers, workers, sound, assoc), what is deliberately NOT wrapped and why, and how a new thunk is added (the pattern in os88thunk.asm, with one concrete example). Then read ${REPO}/apps/os88api.inc's slot list for facilities that exist in assembly but have no C thunk yet. Report facts with file:line.` },
@@ -133,7 +136,7 @@ const TREE_TOPICS = [
 ]
 const treeReports = await parallel(TREE_TOPICS.map(t => () => agent(
 `${READ_FIRST}\n\nThen: ${t.prompt}\n\nReturn structured facts only; you are briefing a planner who has not read the tree.`,
-  { label: `scout:tree:${t.key}`, phase: 'Scout', schema: TREE_SCHEMA })))
+  { label: `scout:tree:${t.key}`, phase: 'Scout', schema: TREE_SCHEMA, model: MODELS.scout })))
 
 const srcOk = sourceReports.filter(Boolean)
 const treeOk = treeReports.filter(Boolean)
@@ -167,7 +170,7 @@ Rules the plan must obey, each of which cost the CWORD port real time (LESSONS.m
 Order the WAVES so that each builds and boots on its own: 1 = window, chrome, menu bar (from the source), the document/data model, the harness stub; 2 = the keystroke / interaction path with its damage model; 3 = the commands and their menus; 4 = file format in/out; 5 = dialogs and the rest; 6 = polish (About, icon, welcome document, disk images, vm machine, README/SPEC section). Fewer waves is fine for a small program.
 
 Put in "questions" ONLY decisions the user has to make - the package name if unclear, scope cuts that change what ships, the file format if the original had several, whether to spend API slots, which reference wins where two disagree. Decide everything else yourself and record the decision in the plan.`
-const draft = await agent(planPrompt, { label: 'plan:draft', phase: 'Plan', schema: PLAN_SCHEMA })
+const draft = await agent(planPrompt, { label: 'plan:draft', phase: 'Plan', schema: PLAN_SCHEMA, model: MODELS.plan })
 
 // ---------------------------------------------------------------- Verify
 phase('Verify')
@@ -178,7 +181,7 @@ const LENSES = [
 ]
 const reviews = await parallel(LENSES.map(l => () => agent(
 `${READ_FIRST}\n\nA port plan has been drafted for "${args.app}". Review it adversarially through ONE lens and try to break it. Be concrete: name the section of the plan, the number, the file. Prefer few sharp findings to many soft ones. Default to "sound" only if you actually tried and failed to break it.\n\n${l.prompt}\n\nTHE PLAN:\n${JSON.stringify(draft, null, 1)}`,
-  { label: `verify:${l.key}`, phase: 'Verify', schema: REVIEW_SCHEMA })))
+  { label: `verify:${l.key}`, phase: 'Verify', schema: REVIEW_SCHEMA, model: MODELS.review })))
 
 const reviewsOk = reviews.filter(Boolean)
 const blockers = reviewsOk.flatMap(r => r.findings.filter(f => f.severity === 'blocker'))
@@ -186,6 +189,6 @@ log(`verify: ${reviewsOk.length} reviews, ${blockers.length} blockers, ${reviews
 
 const final = await agent(
 `${READ_FIRST}\n\nYou are the reconciler. Fold these adversarial reviews into the draft port plan for "${args.app}": fix what is fixable in the plan itself, keep the plan's decisions unless a finding shows one wrong, and add to "questions" only what a reviewer showed is genuinely the user's call. Keep every field of the schema populated. Add a "risks" line for any major finding you could not resolve.\n\nDRAFT:\n${JSON.stringify(draft, null, 1)}\n\nREVIEWS:\n${JSON.stringify(reviewsOk, null, 1)}`,
-  { label: 'plan:final', phase: 'Verify', schema: PLAN_SCHEMA })
+  { label: 'plan:final', phase: 'Verify', schema: PLAN_SCHEMA, model: MODELS.plan })
 
 return { plan: final || draft, sources: srcOk, tree: treeOk, reviews: reviewsOk }
