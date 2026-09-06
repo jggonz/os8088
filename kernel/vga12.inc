@@ -5873,6 +5873,13 @@ gfx_b1inv        resb 1          ; 1 = the varying planes want ~band. Rides to
                                  ;     the emit in DL; see there
 gfx_b1g0         resw 1          ; the GC0 write: Set/Reset = the constant
 gfx_b1g1         resw 1          ; planes' colour, and GC1 = which they are
+gfx_b1sq         resw 1          ; SPEC.md 5.4.2.2.1's SPLIT, and read only when
+                                 ; [gfx_b1act] is 2: the SEQ write pass 1 arms,
+                                 ; AL = 2 (the Map Mask index) and AH = C|A
+gfx_b1b          resb 1          ; ...and pass 2's Map Mask, B alone. It rides
+                                 ; to the emit in BL, because DS spends the
+                                 ; emit on the caller's band and the second
+                                 ; pass is decided after it
 %if gfx_b1inv - gfx_b1act != 1
   %error "gfx_b1act/gfx_b1inv must stay adjacent: gfx_blit1_x clears both in one word store"
 %endif
@@ -6070,15 +6077,26 @@ gfx_blit1_x:
 .ybot:
 
     call .pen                   ; SPEC.md 5.4.2.4: THE PEN, now that there IS a
-    jc .penref                  ; display under this band - [vid_mono],
+                                ; display under this band - [vid_mono],
                                 ; [vid_seg] and [vid_cw] all mean something
-                                ; here and none of them did at the door
+                                ; here and none of them did at the door. It
+                                ; cannot refuse (SPEC.md 5.4.2.2.1)
 
     ; --- the frame the row loop reads, and then DS leaves KERNEL_SEG --------
     mov di, cx
     shr di, 1
     shr di, 1
     shr di, 1                   ; DI = bytes per row
+    push si                     ; [bp+14] SPEC.md 5.4.2.2.1's TWO STARTS: the
+    push ax                     ; [bp+12] band's first byte and its first
+                                ; framebuffer byte, which the second pass
+                                ; begins again from and neither of which is
+                                ; recoverable from where the first one leaves
+                                ; them - SI advances by a stride a row and DI
+                                ; by a rowadd plus whatever the wrap fix
+                                ; added. AX is a PLACEHOLDER: DI is not
+                                ; computed until forty lines below, and the
+                                ; frame's offsets are fixed by the pushes
     push dx                     ; [bp+10] rows remaining
     push di                     ; [bp+8]  bytes per row
     mov cx, bp
@@ -6099,6 +6117,10 @@ gfx_blit1_x:
     pop cx
     add ax, cx
     mov di, ax                  ; DI = the band's first framebuffer byte
+    mov [bp+12], di             ; ...and the placeholder above becomes it
+    xor bl, bl                  ; BL = pass 2's Map Mask, 0 = there is no
+                                ; pass 2 - and it must say so on the path that
+                                ; never asks
     cmp byte [gfx_b1act], 0     ; SPEC.md 5.4.2.2's pen: the ports are the
     je .penres                  ; BAND's, issued once, and DS is still ours
     mov dx, VGA_GC              ; here - the emit below spends it on the
@@ -6106,17 +6128,29 @@ gfx_blit1_x:
     out dx, ax                  ; GC0 Set/Reset = the constant planes' colour
     mov ax, [gfx_b1g1]
     out dx, ax                  ; GC1 Enable Set/Reset = C
+    cmp byte [gfx_b1act], 2     ; ...and SPEC.md 5.4.2.2.1's SPLIT arms the Map
+    jne .penres                 ; Mask on top of them: pass 1 writes C and A
+    mov dx, VGA_SEQ
+    mov ax, [gfx_b1sq]
+    out dx, ax
+    mov bl, [gfx_b1b]           ; ...and pass 2 the B planes, at .emitted
+    mov dh, [bp+10]             ; DH = the rows, which the loop below counts
+                                ; down to zero and the second pass needs back.
+                                ; A band is at most 255 rows (the refusal at
+                                ; the door), so one byte holds it
 .penres:
     mov ax, [vid_seg]           ; the UNIFORM cell, and NOT vid_rseg, which is
-    mov bx, es                  ; 0 on VGA (viddet.inc:115) - and already the
+    mov cx, es                  ; 0 on VGA (viddet.inc:115) - and already the
     mov dl, [gfx_b1inv]         ; ...and WHICH LOOP, read while DS is still
                                 ; ours. `cs:` does not reach it - this body's
                                 ; CS is COLD_SEG and the flag is KERNEL_SEG's
                                 ; - and the frame is full, so it rides in DL,
                                 ; which the frame banked at [bp+10] and
-                                ; neither emit loop touches
+                                ; neither emit loop touches. The segment goes
+                                ; through CX rather than BX because BX now
+                                ; carries the split across the whole emit
     mov es, ax                  ; resolved display's, the enter above having
-    mov ds, bx                  ; run first (SPEC.md 39.12)
+    mov ds, cx                  ; run first (SPEC.md 39.12)
     cld
     or dl, dl
     jnz .rowi
@@ -6181,8 +6215,29 @@ gfx_blit1_x:
     dec word [bp+10]
     jnz .rowi
 .emitted:
+    ; --- SPEC.md 5.4.2.2.1's SECOND PASS, and it changes ONE port -------------
+    ; The band is emitted again, complemented, with the Map Mask moved from
+    ; C|A to B. Set/Reset stays exactly as pass 1 armed it: every plane of B
+    ; is a VARYING plane, so Enable Set/Reset is 0 for all of them and what it
+    ; holds for the others cannot reach a plane the Map Mask has turned off.
+    ; DS is the caller's band here and ES the framebuffer, which is what the
+    ; complemented loop wants - so nothing is restored and nothing re-derived.
+    or bl, bl
+    jz .noswap
+    mov ah, bl                  ; ...and BL says it ONCE: the loop below comes
+    xor bl, bl                  ; back here and must not go round again
+    mov al, 2
+    push dx
+    mov dx, VGA_SEQ
+    out dx, ax
+    pop dx
+    mov si, [bp+14]             ; both starts, banked at the frame's head
+    mov di, [bp+12]
+    mov [bp+10], dh             ; the rows again - the high byte is the zero
+    jmp short .rowi             ; the first pass counted down to
+.noswap:
     mov sp, bp
-    add sp, 12
+    add sp, 16
 .done:
     pop ax
     pop bx
@@ -6198,11 +6253,17 @@ gfx_blit1_x:
                                 ; them landed in the CALLER'S IMAGE - see below.
     cmp byte [gfx_b1act], 0     ; SPEC.md 5.4.2.2: vga12.inc's standing contract
     je .nopen                   ; is that every routine leaves Enable Set/Reset
-    push ax                     ; = 0. GC0 is not part of that resting state,
-    push dx                     ; and the Bit Mask and Map Mask were never
-    mov dx, VGA_GC              ; touched, so the teardown is one `out`
-    mov ax, 0x0001
+    push ax                     ; = 0. GC0 is not part of that resting state
+    push dx                     ; and the Bit Mask was never touched, so the
+    mov dx, VGA_GC              ; teardown is one `out` - unless SPEC.md
+    mov ax, 0x0001              ; 5.4.2.2.1's SPLIT moved the Map Mask, which
+    out dx, ax                  ; the resting state pins at 0Fh (SPEC.md 5's
+    cmp byte [gfx_b1act], 2     ; opening) and which the split leaves holding B
+    jne .nomm
+    mov dx, VGA_SEQ
+    mov ax, 0x0F02
     out dx, ax
+.nomm:
     pop dx
     pop ax
     mov byte [gfx_b1act], 0
@@ -6338,12 +6399,35 @@ gfx_blit1_x:
     or bh, bh
     jz .peninv                  ; A empty: every varying plane wants ~band
     or ah, ah
-    jnz .penno                  ; both: a Map Mask split, which this does not do
+    jz .pen1                    ; B empty: they want the band as it stands
+
+    ; --- BOTH non-empty: SPEC.md 5.4.2.2.1's MAP MASK SPLIT -------------------
+    ; This was the FOURTH REFUSAL and it is not one any more. A and B want
+    ; opposite things of the same CPU byte, so no single pass can serve both -
+    ; but the Map Mask can hand each set a pass of its own, and the constant
+    ; planes ride pass 1 for nothing. Pass 1 writes C|A with the band as it
+    ; stands, pass 2 writes B complemented, and the two together cover all
+    ; four planes exactly once because C, A and B partition them.
+    ;
+    ; Set/Reset is armed ONCE, for both passes: pass 2's Map Mask is B, and no
+    ; plane of B is in C, so Enable Set/Reset has nothing to say about the
+    ; planes that pass writes. Only the Map Mask moves between them.
+    mov [gfx_b1b], ah           ; pass 2's Map Mask, and the flag the emit
+                                ; reads in BL to know there IS a second pass
+    mov ah, bl
+    not ah
+    and ah, 0x0F                ; AH = C, the planes the two colours agree on
+    or ah, bh                   ; ...and pass 1 writes those and A together
+    mov [gfx_b1sq+1], ah
+    mov byte [gfx_b1sq], 2      ; SEQ index 2 IS the Map Mask
+    mov bh, 2                   ; ...and [gfx_b1act] says SPLIT, not just PEN
     jmp short .penset
 .peninv:
     mov byte [gfx_b1inv], 1
+.pen1:
+    mov bh, 1                   ; one pass: the ports below and nothing else
 .penset:
-    mov byte [gfx_b1act], 1
+    mov [gfx_b1act], bh
     not bl
     and bl, 0x0F                ; BL = C, the planes Set/Reset answers for
     mov ah, al                  ; ...with the INK's bits: on those planes the
@@ -6355,32 +6439,12 @@ gfx_blit1_x:
 .pdone:
     pop bx
     pop ax
-    clc                         ; the pops write no flag, so both answers say
-    ret                         ; so themselves
-.penno:                         ; SPEC.md 5.4.2.2's fourth refusal: a pen
-    pop bx                      ; whose two colours share no plane in EITHER
-    pop ax                      ; direction. CDGRAY on CLGRAY - 8 against 7 -
-    stc                         ; is the only such pair this system sets, and
-    ret                         ; it belongs to text rather than to a band
-
-    ; --- ...and that refusal now arrives from BELOW the banking pushes, which
-    ; is what asking the pen on the display costs: the nine registers and the
-    ; nest count the enter took both have to come back before the `stc`.
-    ; Nothing was drawn and no port was armed - [gfx_b1act] is only ever set on
-    ; the path that does not refuse - so there is nothing else to undo.
-.penref:
-    pop ax
-    pop bx
-    pop cx
-    pop dx
-    pop di
-    pop si
-    pop bp
-    pop ds                      ; KERNEL_SEG again, and the two reads below
-    pop es                      ; wait for it (SPEC.md 5.4.2.1)
-    cmp byte [vid_ndisp], 1
-    jbe .refuse
-    dec byte [gfx_dnest]        ; ...and NOTHING restores the display (39.14.3)
+    ret                         ; ...and NO `clc`: SPEC.md 5.4.2.2.1 lifted the
+                                ; fourth refusal, so this has exactly one
+                                ; answer now and the caller stopped testing.
+                                ; The unwind that answer used to need - nine
+                                ; banked registers and the nest count, undone
+                                ; below the pushes - went with it
 .refuse:
     stc
     ret

@@ -216,9 +216,13 @@ CWHITE    equ 15
                                  ; band got before this existed - and
                                  ; OSAPI_GFX_UNLOCK puts it back, so a pen is
                                  ; valid for exactly the lock hold you set it
-                                 ; in. Refuses NOTHING itself; the BLIT then
-                                 ; answers CF=1 for a pair whose two colours
-                                 ; share no plane in either direction.
+                                 ; in. Refuses NOTHING, and NEITHER DOES THE
+                                 ; BLIT: a pair whose two colours share no
+                                 ; plane in either direction used to answer
+                                 ; CF=1 and is drawn in two passes now, the
+                                 ; Map Mask splitting the band between them
+                                 ; (SPEC.md 5.4.2.2.1). Every pair of the
+                                 ; sixteen colours is a legal pen.
                                  ;
                                  ; NOT READ on a 1bpp adapter - a band there
                                  ; already means lit and unlit - so a package

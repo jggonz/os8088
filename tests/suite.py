@@ -2287,6 +2287,35 @@ SOAK = [
         "the SIZE snap aligns a content width WITHOUT shrinking the zoom "
         "(SPEC.md 11.94.5) - a maximized window must stay x=0, w=[vid_pw]",
         needs=("marty",), serial=True),
+    Row("telnet", "soak", py("tests/telnet.py", "--machine",
+                             "os8088_5150_cga_gla"), 300.0,
+        "SPEC.md 70.8: TELNET's 80x25 screen of CHARACTER AND ATTRIBUTE, both "
+        "renderers and the 1bpp polarity rule. Seven assertions and no wire - "
+        "the transport is tests/socktest's - and the two defects 70.8.8 "
+        "records are the last two: full screen never scrolled at all, and the "
+        "kept worker parked on the gfx lock the FSX bracket holds, which "
+        "SPEC.md 53.2 calls death by another name for a feeder. The GLaBIOS "
+        "twin because the default machine wants the licensed IBM ROM",
+        needs=("marty",), serial=True),
+    Row("telnetherc", "soak", py("tests/telnet.py", "--adapter", "herc",
+                                 "--machine", "os8088_5150_herc_gla"), 300.0,
+        "...and the same seven on the OTHER 1bpp adapter, which is not a "
+        "duplicate: Hercules is 720 wide, so the window shows all EIGHTY "
+        "columns there and CGA shows 79 of them and only 13 rows - the "
+        "viewport arithmetic (70.8.10) is a different answer on each, and the "
+        "full-screen framebuffer is B000 rather than B800 with the MDA "
+        "attribute mapping (70.8.9) under it",
+        needs=("marty",), serial=True),
+    Row("telpen", "soak", py("tests/telpen.py"), 300.0,
+        "SPEC.md 5.4.2.2.1: gfx_blit1's pen used to REFUSE a pair whose two "
+        "colours share no plane in either direction - green on red, and most "
+        "of the sixteen-colour pairs a board's art is made of - and the Map "
+        "Mask splits the band between two passes now. The only row in the "
+        "tree that can see it: the pen is not read on a 1bpp adapter at all, "
+        "and mode 12h has no flat framebuffer, so it is os8088_xt_vga plus "
+        "`fbuf`. Every cell is rendered on the HOST out of the guest's own "
+        "glyph table and compared pixel for pixel",
+        needs=("marty",), serial=True),
     Row("netpromise", "soak", py("tests/netpromise.py"), 240.0,
         "SPEC.md 70.7/77.47: Telnet and the FTP server promise per DEBT, not"
         "per session.",

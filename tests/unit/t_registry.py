@@ -90,7 +90,6 @@ UNREGISTERED = {
     "proxytest.py": "drives tools/os88proxy.py against a live network",
     "proxyguitest.py": "drives the proxy GUI, needs a display",
     "socktest.py": "needs `make socktest` and QEMU networking",
-    "telnet.py": "needs QEMU networking",
 
     # --- A/B gates: each needs a SECOND kernel built with a knob, so it is a
     #     two-build session rather than a row (the knob itself is kept alive

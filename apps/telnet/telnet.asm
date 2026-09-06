@@ -12,13 +12,15 @@
 ; than the application can use.
 ;
 ; --- WHAT IT IS ---------------------------------------------------------------
-; A dumb terminal, deliberately. No cursor addressing, no colour, no scroll
-; regions: a printing terminal with a scrolling window, which is what makes a
-; BBS, a MUD and a Unix login prompt all readable. Escape sequences are
-; RECOGNISED AND DISCARDED rather than acted on (te_esc), because the honest
-; failure for a sequence this does not implement is nothing appearing - and
-; the dishonest one is `[2J` printed as four characters into the middle of a
-; sentence.
+; It WAS a dumb terminal, deliberately - no cursor addressing, no colour, no
+; scroll regions - and SPEC.md 70.8 ended that. The screen is 80x25 cells of a
+; CHARACTER AND AN ATTRIBUTE now, which is the screen an ANSI board draws its
+; menus, its boxes and its art against: a terminal of any other size does not
+; render that art wrongly so much as it renders a different picture.
+;
+; Escape sequences are still RECOGNISED AND DISCARDED here (te_putc's .inesc).
+; The parser that acts on them is teansi.inc and is not in this wave; what IS
+; in this wave is the screen underneath it, both renderers, and the glyphs.
 ;
 ; --- THE WORKER OWNS THE SOCKET ----------------------------------------------
 ; SPEC.md 20.6's shape, and netpkg.inc's rule: every NETV_* verb is
@@ -93,14 +95,21 @@
     dw 0x0000
     OS88_ICON16_END
 
-TE_W        equ 528                 ; 66 columns of 8px, plus chrome
-TE_H        equ 190
-TE_COLS     equ 64                  ; ...and the screen is FIXED, not derived:
-TE_ROWS     equ 18                  ; a terminal that reflows on a resize is a
+TE_W        equ 656                 ; 80 columns of 8px, plus chrome - and
+TE_H        equ 254                 ; wm_fit clamps it onto the live desktop,
+                                    ; so a 640-wide screen opens a window that
+                                    ; shows 76 of the 80 and full screen shows
+                                    ; the rest (SPEC.md 70.8.10)
+TE_COLS     equ 80                  ; ...and the screen is FIXED, not derived:
+TE_ROWS     equ 25                  ; a terminal that reflows on a resize is a
                                     ; terminal whose host has the wrong idea of
-                                    ; how wide it is, and this one never tells
-                                    ; the host anything (no NAWS - see te_opt)
-TE_SCR      equ TE_COLS * TE_ROWS
+                                    ; how wide it is. It is 80x25 because that
+                                    ; is not a size, it is the BOARD's own
+                                    ; screen, so NAWS reports a FACT (70.8)
+TE_CELLS    equ TE_COLS * TE_ROWS   ; 2,000 cells...
+TE_SCRSZ    equ TE_CELLS * 2        ; ...of a character and an attribute
+TE_BAND     equ TE_COLS * 8         ; one composed screen row, 1bpp, 640 bytes
+TE_GLYF     equ 256 * 8             ; ...and the 256-glyph CP437 face (70.8.6)
 TE_RX       equ 512                 ; one NETV_RECV's landing ground
 TE_HOSTMAX  equ 48
 TE_TX       equ 64                  ; keystrokes waiting for the worker
@@ -117,8 +126,8 @@ TE_STATH    equ 10                  ; the status line's band at the FOOT of the
                                     ; a screen whose pixels depend on which
                                     ; drew last - and it is what made the
                                     ; scroll blit move the status line up
-%if TE_COLS != 64
-  %error "te_markcur shifts by 6 for the row: TE_COLS must be 64"
+%if TE_ROWS > 32
+  %error "te_drb is four bytes: TE_ROWS must fit twenty-five bits and no more"
 %endif
 
 ; --- the connection's state --------------------------------------------------
@@ -154,7 +163,13 @@ te_entry:
                                             ; offset 0 - the package's own
                                             ; header - and the first keystroke
                                             ; writes into it
-    call te_clear
+    mov byte [te_attr], 0x07        ; SPEC.md 70.8's reset attribute, and the
+                                    ; only one anything sets until the parser
+                                    ; lands (70.9.4). bss arrives ZEROED, and
+                                    ; zero is black on black
+    mov byte [te_cvis], 1           ; ...and the cursor is drawn until `?25l`
+    call te_font                    ; the 256 CP437 glyphs, ROM where there is
+    call te_clear                   ; one and the shipped table where not
     mov al, 1
     mov bx, [te_win]                ; ...BX is the window: WM_CREATE left it
     call OSAPI_WM_SNAP              ; there, but te_clear runs in between              ; the screen is 8px cells, so an aligned
@@ -197,6 +212,26 @@ te_layout:
     push bx
     push cx
     push dx
+    ; --- WHAT DEPTH THE SCREEN IS, asked here and not once at launch -------
+    ; SPEC.md 70.8.4: the pen is not read on a 1bpp adapter, so the polarity
+    ; goes into the BAND instead - and which of those two the composer does is
+    ; a fact about the screen the window is on, which a window can be dragged
+    ; off. te_layout runs on every paint, click, key and worker draw, so this
+    ; is one far call in the place the answer is already being re-derived.
+    ; **It is the PRIMARY's depth** (osapi_video's own contract), and on an
+    ; extended desktop with a mono card beside a colour one that is the wrong
+    ; question for the far display - there is no per-display depth to ask
+    ; (SPEC.md 39.14 publishes none), so it is stated rather than hidden.
+    call OSAPI_VIDEO                ; DH = bits per pixel, 4 or 1
+    cmp dh, 1
+    mov dh, 0
+    ja .colour
+    mov dh, 1
+.colour:
+    mov [te_mono], dh
+    call te_ice_label               ; ...and the Session item follows the
+                                    ; adapter: a window dragged onto a mono
+                                    ; display greys it (SPEC.md 70.8.9)
     mov bx, si
     call OSAPI_WM_CONTENT           ; AX = left, DX = top
     mov [te_ox], ax
@@ -306,11 +341,20 @@ te_layout:
     ret
 
 ; =============================================================================
-; WHICH ROWS ARE OWED (SPEC.md 70.4)
+; WHICH ROWS ARE OWED - A BITMAP NOW (SPEC.md 70.8.1)
 ;
-; A RANGE and not a bitmap, because terminal output is sequential: a burst of
-; bytes touches a contiguous run of rows, so one compare a mark and one bound
-; at the draw is the whole cost. Empty is dr0 > dr1.
+; It was a RANGE (SPEC.md 70.4), on a stated assumption: terminal output is
+; sequential, so a burst of bytes touches a contiguous run of rows and one
+; compare a mark plus one bound at the draw is the whole cost. **CURSOR
+; ADDRESSING IS EXACTLY THE THING THAT ASSUMPTION EXCLUDES.** A board that
+; draws a menu writes row 3, then row 20, then row 3 again; the range spanning
+; them is eighteen rows and seventeen of them are clean, which on the machine
+; this is for is about fifty milliseconds of drawing to change two rows.
+;
+; So it is four bytes and twenty-five bits: bit r of byte r>>3. Both renderers
+; walk it, for 70.6's reason unchanged - te_putc runs on the kept worker and
+; marks the row it wrote whichever screen is up, so the two cannot drift about
+; what changed.
 ; =============================================================================
 
 ; --- te_wpx - AX = the visible text width in PIXELS, from te_vcols ----------
@@ -325,42 +369,88 @@ te_wpx:
     pop cx
     ret
 
+; --- te_bit - BX = a row; out AL = its bit, BX = its byte's index -----------
+; The one place the shape of the bitmap is written down, so a mark and a test
+; cannot disagree about it. CL is spent and restored by the callers.
+te_bit:
+    mov cl, bl
+    and cl, 7
+    mov al, 1
+    shl al, cl                      ; `shl reg, CL` is 8086; `shl reg, imm` is
+    mov cl, 3                       ; not, and only the imm form is refused
+    shr bx, cl
+    ret
+
 ; --- te_mark - BX = a row that must be redrawn ------------------------------
 te_mark:
-    cmp bx, [te_dr0]
-    jae .hi
-    mov [te_dr0], bx
-.hi:
-    cmp bx, [te_dr1]
-    jbe .out
-    mov [te_dr1], bx
+    push ax
+    push bx
+    push cx
+    cmp bx, TE_ROWS
+    jae .out                        ; the cursor may sit one past the end
+    call te_bit
+    or [te_drb + bx], al
 .out:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; --- te_owedrow - BX = a row; CF=1 if it is owed ----------------------------
+te_owedrow:
+    push ax
+    push bx
+    push cx
+    cmp bx, TE_ROWS
+    jae .no
+    call te_bit
+    and al, [te_drb + bx]
+    jz .no
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+.no:
+    pop cx
+    pop bx
+    pop ax
+    clc
     ret
 
 ; --- te_markcur - the row the cursor is on ----------------------------------
+; Called BOTH SIDES of every cursor move: the underline is composed into the
+; band (SPEC.md 70.8.2), so the row it LEFT owes a redraw as much as the row
+; it arrived on.
 te_markcur:
     push bx
-    push cx
-    mov bx, [te_cur]
-    mov cl, 6                       ; TE_COLS = 64, asserted at the top
-    shr bx, cl
-    cmp bx, TE_ROWS
-    jae .out                        ; the cursor may sit one past the end
+    mov bx, [te_cy]
     call te_mark
-.out:
-    pop cx
     pop bx
     ret
 
 ; --- te_markall / te_markclr - everything, and nothing ----------------------
 te_markall:
-    mov word [te_dr0], 0
-    mov word [te_dr1], TE_ROWS - 1
-    ret
+    mov word [te_drb], 0xFFFF
+    mov word [te_drb + 2], 0x01FF   ; ...twenty-five bits and not thirty-two:
+    ret                             ; byte 3 carries row 24 alone
 
 te_markclr:
-    mov word [te_dr0], TE_ROWS
-    mov word [te_dr1], 0
+    mov word [te_drb], 0
+    mov word [te_drb + 2], 0
+    ret
+
+; --- te_markup - the bitmap follows the buffer up one row -------------------
+; **A DEFECT THE RANGE HAD AND NOBODY COULD FIX CHEAPLY.** A row marked before
+; a scroll names a row of the BUFFER, and the scroll moved every row up one:
+; row 5's pixels are on the glass at row 4 now, and the mark still says 5. The
+; range could only widen to cover both; the bitmap is a 25-bit number, and
+; moving every mark down one row is moving that number right one bit.
+te_markup:
+    shr byte [te_drb + 3], 1        ; ...highest byte first, and the carry then
+    rcr byte [te_drb + 2], 1        ; walks down through the other three
+    rcr byte [te_drb + 1], 1
+    rcr byte [te_drb + 0], 1
     ret
 
 ; -----------------------------------------------------------------------------
@@ -508,16 +598,15 @@ te_rows_owed:
     push dx
     push si
     push di
-    mov bx, [te_dr0]
+    xor bx, bx
 .row:
-    cmp bx, [te_dr1]
-    ja .done
-    cmp bx, TE_ROWS
-    jae .done
+    call te_owedrow
+    jnc .next
     call te_row
+.next:
     inc bx
-    jmp short .row
-.done:
+    cmp bx, TE_ROWS
+    jb .row
     call te_markclr
     pop di
     pop si
@@ -577,8 +666,19 @@ te_scrollpaint:
     inc bx
     cmp bx, TE_ROWS
     jb .mk
+    call te_markcur                 ; **AND THE CURSOR'S ROW.** The underline
+                                    ; is composed into a band (SPEC.md
+                                    ; 70.8.2), so the blit carries it up the
+                                    ; window with everything else and the row
+                                    ; it LEFT keeps a stale one. A scroll from
+                                    ; te_scroll1 always leaves the cursor on
+                                    ; the row it opened, which is marked
+                                    ; already; a scroll the PARSER asks for
+                                    ; (SPEC.md 70.9.3's SU) does not, and the
+                                    ; gate found this with a debt spent
+                                    ; against a cursor that had not moved
     jmp short .out
-.all:
+.all:                               ; (te_markall covers it on this arm)
     call te_markall
 .out:
     pop si
@@ -588,7 +688,26 @@ te_scrollpaint:
     pop ax
     ret
 
-; --- te_row - BX = a row index. One opaque run, NUL-terminated in place ------
+; =============================================================================
+; THE WINDOWED RENDERER (SPEC.md 70.8.2)
+;
+; **A GLYPH CALL PER CELL IS NOT AFFORDABLE AND NEVER WAS.** PERFORMANCE.md
+; prices an 8x8 cell at ~900us on a 4.77 MHz 8088, so an 80x25 screen lettered
+; a cell at a time is 1.8 seconds. The row is COMPOSED instead - eighty cells
+; of eight byte stores each, at RAM speed and with no drawing call at all -
+; and then put down with OSAPI_GFX_BLIT1, once per ATTRIBUTE RUN, with
+; OSAPI_GFX_BLIT1_PEN set to that run's ink and paper.
+;
+; Both of the blit's alignment demands hold BY CONSTRUCTION: a cell is eight
+; pixels, so a run's x and a run's width are multiples of eight whatever the
+; run is, and the pen was 70.4's aligned pen already.
+;
+; EVERY PIXEL IS WRITTEN ONCE. That is PERFORMANCE.md Part 1's rule rather
+; than an optimisation, and it is what the erase-then-letter pair the old
+; font_run fallback produced could not offer.
+; =============================================================================
+
+; --- te_row - BX = a buffer row: compose it, then put it down ---------------
 te_row:
     push ax
     push bx
@@ -598,29 +717,297 @@ te_row:
     push di
     cmp bx, [te_vtop]
     jb .done                        ; above the visible window on a short one
-    mov ax, TE_COLS
-    mul bx
+    call te_compose
+    call te_emit
+.done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; te_compose - BX = a buffer row -> te_band, TE_COLS bytes a scanline
+;
+; Eight byte stores a cell and no call at all. The 1bpp polarity (SPEC.md
+; 70.8.4) is folded in here as an XOR mask, because the CALLS are identical
+; either way and the calls are what the machine is priced in: a cell whose
+; background is not black and whose foreground is black or dark grey is drawn
+; INVERSE, which is the only rule that keeps a board's highlighted menu item
+; from rendering as nothing at all in one bit.
+; -----------------------------------------------------------------------------
+te_compose:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov [te_rr], bx                 ; the row, for the cursor test at the foot:
+    mov ax, TE_COLS * 2             ; every register is spent by then
+    mul bx                          ; **MUL WRITES DX** (SPEC.md 1)
     mov si, te_scr
-    add si, ax
-    mov di, si
-    add di, [te_vcols]              ; ...the run ends where the WINDOW does
-    mov al, [di]                    ; bank the byte the terminator covers -
-    push ax                         ; os88line_draw's trick, and for its reason
-    mov byte [di], 0
-    mov ax, bx                      ; the y FIRST, while CX is still free
+    add si, ax                      ; SI = the row's first cell
+    mov di, te_band
+    mov cl, [te_vcols]              ; <= TE_COLS, clamped in te_layout
+    mov dl, 0x70                    ; which bits are a BACKGROUND: bit 7 joins
+    cmp byte [te_ice], 0            ; them under iCE, where it is the fourth
+    je .cell                        ; background bit and not blink (70.8.9)
+    mov dl, 0xF0
+.cell:
+    xor ch, ch                      ; CH = the cell's XOR mask, 00 or FF
+    cmp byte [te_mono], 0
+    je .glyph                       ; a colour screen takes its polarity from
+    mov al, [si+1]                  ; the PEN and never from the band
+    test al, 0x07
+    jnz .glyph                      ; the foreground is not 0 or 8: it reads
+    test al, dl                     ; lit on dark ground whatever the paper is
+    jz .glyph
+    mov ch, 0xFF                    ; INVERSE: lit paper, dark glyph
+.glyph:
+    mov bl, [si]
+    xor bh, bh
+    shl bx, 1                       ; three single shifts: `shl reg, imm` is
+    shl bx, 1                       ; not 8086 and `mov cl, 3` would cost the
+    shl bx, 1                       ; cell counter
+    add bx, te_glyf
+    mov ah, [bx]
+    xor ah, ch
+    mov [di], ah
+    mov ah, [bx+1]
+    xor ah, ch
+    mov [di + TE_COLS], ah
+    mov ah, [bx+2]
+    xor ah, ch
+    mov [di + TE_COLS*2], ah
+    mov ah, [bx+3]
+    xor ah, ch
+    mov [di + TE_COLS*3], ah
+    mov ah, [bx+4]
+    xor ah, ch
+    mov [di + TE_COLS*4], ah
+    mov ah, [bx+5]
+    xor ah, ch
+    mov [di + TE_COLS*5], ah
+    mov ah, [bx+6]
+    xor ah, ch
+    mov [di + TE_COLS*6], ah
+    mov ah, [bx+7]
+    xor ah, ch
+    mov [di + TE_COLS*7], ah
+    inc si
+    inc si
+    inc di
+    dec cl
+    jnz .cell
+
+    ; --- THE CURSOR IS COMPOSED IN, not painted (SPEC.md 70.8.2) -----------
+    ; Two lit scanlines in the cell's bottom two band rows. It is not a second
+    ; paint and it never flashes: the cell goes from its old pixels to its
+    ; final pixels in the band, and the band reaches the glass once.
+    cmp byte [te_cvis], 0
+    je .out
+    mov ax, [te_cy]
+    cmp ax, [te_rr]
+    jne .out
+    mov ax, [te_cx]
+    cmp ax, [te_vcols]
+    jae .out                        ; the cursor is off the right of a narrow
+    mov di, te_band + TE_COLS*6     ; window: there is no cell to underline
+    add di, ax
+    or byte [di], 0xFF
+    or byte [di + TE_COLS], 0xFF
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; te_emit - the composed band onto the glass. BX = the buffer row
+; in:  te_band composed, te_layout run, THE GFX LOCK HELD
+;
+; On a 1bpp adapter that is ONE blit for the whole row: the pen is not read
+; there (SPEC.md 5.4.2.2) and the polarity is already in the band, so there
+; are no attribute runs to walk at all. On a colour one it is one blit per
+; maximal run of cells sharing an attribute byte, each with the pen set to
+; that run's (ink, paper).
+;
+; **THE PEN DIES WITH THE LOCK** (SPEC.md 5.4.2.2): gfx_unlock puts
+; CWHITE/CBLACK back, so it is set inside the caller's hold and never banked
+; across one.
+; -----------------------------------------------------------------------------
+te_emit:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    push ds
+    pop es                          ; ES:SI = OUR band: the blit takes the
+                                    ; caller's own segment (SPEC.md 5.4.2)
+    mov ax, bx
     sub ax, [te_vtop]
-    mov cl, 3
-    shl ax, cl
-    mov dx, [te_oy]
-    add dx, TE_TOPY
-    add dx, ax
-    mov cx, [te_px]                 ; ...8-aligned (te_layout)
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    add ax, [te_oy]
+    add ax, TE_TOPY
+    mov [te_ry], ax                 ; the band's y, out of the registers' way
+    mov ax, TE_COLS * 2
+    mul bx
+    add ax, te_scr
+    mov [te_rcp], ax                ; ...and where the row's cells are
+    cmp byte [te_mono], 0
+    je .runs
+    xor ax, ax                      ; ONE band, ONE blit, no runs (70.8.4)
+    mov cx, [te_vcols]
+    call te_blitrun
+    jmp short .out
+.runs:
+    xor di, di                      ; DI = the run's first column
+.run:
+    cmp di, [te_vcols]
+    jae .out
+    mov si, [te_rcp]
+    mov ax, di
+    shl ax, 1
+    add si, ax
+    mov ah, [si+1]                  ; the run's attribute
+    xor cx, cx
+.grow:
+    inc cx
+    mov bx, di
+    add bx, cx
+    cmp bx, [te_vcols]
+    jae .emit                       ; the row ends the run
+    add si, 2
+    cmp ah, [si+1]
+    je .grow
+.emit:
+    push cx
+    push di
+    call te_pen                     ; AH = the attribute
+    pop di
+    pop cx
+    mov ax, di
+    call te_blitrun
+    add di, cx
+    jmp short .run
+.out:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; --- te_pen - AH = a cell attribute -> OSAPI_GFX_BLIT1_PEN ------------------
+; Bit 7 is BLINK, which is ignored windowed - there is nothing here that
+; blinks - unless [te_ice] says the board asked for bright backgrounds
+; instead, when it is the background's fourth bit (SPEC.md 70.8.9).
+te_pen:
+    push ax
+    push bx
+    push cx
+    mov bl, ah
+    mov cl, 4
+    shr bl, cl
+    and bl, 0x07
+    cmp byte [te_ice], 0
+    je .ink
+    test ah, 0x80
+    jz .ink
+    or bl, 0x08
+.ink:
+    mov al, ah
+    and al, 0x0F                    ; AL = ink, AH = paper
+    mov ah, bl
+    call OSAPI_GFX_BLIT1_PEN
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; --- te_blitrun - AX = the first column, CX = columns -----------------------
+; ES = ours, [te_ry] the band's y. A REFUSAL is not a hypothetical: SPEC.md
+; 5.4.2 says kern_small carries the slot and a stc/retf stub and nothing else,
+; so the documented degrade - letter the row in the kernel's 8x8 face - is
+; what happens, once for the whole row and not once per run.
+te_blitrun:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push bp
+    cmp byte [te_nob], 0
+    jne .out                        ; the first refusal answered for the row
+    mov si, te_band
+    add si, ax
+    mov bp, TE_COLS
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    add ax, [te_px]                 ; ...8-aligned (te_layout), and a cell is
+    mov bx, [te_ry]                 ; eight wide, so the run's x and width are
+    shl cx, 1                       ; multiples of 8 by construction
+    shl cx, 1
+    shl cx, 1
+    mov dx, 8
+    call OSAPI_GFX_BLIT1
+    jnc .out
+    mov byte [te_nob], 1            ; ...and every later row takes the fallback
+    call te_rowfont                 ; without asking the kernel again
+.out:
+    pop bp
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; --- te_rowfont - the documented degrade: letter the row with font_run ------
+; [te_rcp] is the row's cells and [te_ry] its y. The characters are copied out
+; of the interleaved buffer into a NUL-terminated run, because font_run wants
+; a string and a cell is two bytes; the ATTRIBUTES are lost, which is what a
+; machine with no band blitter can offer.
+te_rowfont:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov si, [te_rcp]
+    mov di, te_sline
+    mov cx, [te_vcols]
+.copy:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc si
+    inc di
+    loop .copy
+    mov byte [di], 0
+    mov cx, [te_px]
+    mov dx, [te_ry]
+    mov si, te_sline
     mov al, CBLACK
     mov ah, CWHITE
     call OSAPI_FONT_RUN
-    pop ax
-    mov [di], al
-.done:
     pop di
     pop si
     pop dx
@@ -835,23 +1222,119 @@ te_toggle:
     ret
 
 ; --- te_clear - blank the screen and home the cursor -------------------------
+; A CELL IS A WORD now: AL = the space, AH = the current attribute, which is
+; ANSI.SYS's convention rather than VT's and is what a board expects an erase
+; to leave behind (SPEC.md 70.9.3).
 te_clear:
     push ax
     push cx
     push di
+    push es
+    push ds
+    pop es                          ; ...ES is the KERNEL's on a callback
+    cld
     mov di, te_scr
-    mov cx, TE_SCR
+    mov cx, TE_CELLS
     mov al, ' '
-.z:
-    mov [di], al
-    inc di
-    loop .z
-    mov word [te_cur], 0
+    mov ah, [te_attr]
+    rep stosw
+    pop es
+    mov word [te_cx], 0
+    mov word [te_cy], 0
+    mov byte [te_pwrap], 0
     mov word [te_scrl], 0           ; ...and a cleared screen owes no blit
     call te_markall
     pop di
     pop cx
     pop ax
+    ret
+
+; =============================================================================
+; te_font - the 256 CP437 glyphs, built once at launch (SPEC.md 70.8.6)
+;
+; OSAPI_FONT_GLYPHS answers the KERNEL's own face and kernel/font.inc keeps
+; 32..126 of it - 95 glyphs. A terminal needs 0..255, and it needs them to be
+; CP437 rather than the system face: a `make FONT=` kernel replaces the OS's
+; letters, and a board's box-drawing character is not a design choice this
+; package may inherit.
+;
+; THE SPLIT IS ON A FACT RATHER THAN CAUTION. 32..127 are ASCII and every ROM
+; agrees about them, so they come off the machine; 0..31 and 128..255 are
+; CP437's own and a clone ROM is free to differ, so they are SHIPPED -
+; tools/cp437font.py's clean-room table, 160 glyphs of it.
+;
+;   an EGA/VGA BIOS   int 10h AX=1130h BH=3 answers all 256
+;   a CGA/Hercules    F000:FA6E is 0..127 and the shipped table is the rest
+;
+; kernel/font.inc's font_init is the probe, verbatim in its shape and for its
+; stated reason: ZERO ES:BP, call AX=1130h, and treat an unchanged 0:0 as "no
+; EGA-or-later BIOS" - AH=11h is not implemented on a pre-EGA ROM and returns
+; with the pair untouched.
+; =============================================================================
+te_font:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    ; --- the shipped half first, so the ROM half can simply overwrite it ----
+    mov si, te_cp437
+    mov di, te_glyf
+    mov cx, 32 * 8                  ; 0..31
+    call .blk
+    mov di, te_glyf + 128 * 8
+    mov cx, 128 * 8                 ; ...and 128..255, SI walking straight on
+    call .blk
+    ; --- then the machine's, if it has one ---------------------------------
+    push bp
+    xor bp, bp
+    mov es, bp
+    mov ax, 0x1130
+    mov bh, 3
+    int 0x10                        ; out ES:BP = the 8x8 set
+    mov ax, es
+    mov bx, bp
+    pop bp
+    or ax, ax
+    jnz .rom
+    or bx, bx
+    jnz .rom
+    mov ax, 0xF000                  ; no EGA-or-later ROM: the CGA/MDA half
+    mov bx, 0xFA6E + 32*8           ; table, which is 0..127 and no further
+    mov es, ax
+    mov si, bx
+    mov di, te_glyf + 32 * 8
+    mov cx, 96 * 8
+    call .far
+    jmp short .out
+.rom:
+    mov es, ax
+    mov si, bx
+    mov di, te_glyf
+    mov cx, 256 * 8
+    call .far
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+.blk:                               ; CX bytes DS:SI -> DS:DI
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    loop .blk
+    ret
+.far:                               ; CX bytes ES:SI -> DS:DI
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    loop .far
     ret
 
 ; --- te_hire - one worker, retried until granted (SPEC.md 20.6) --------------
@@ -1016,9 +1499,9 @@ te_owed:
     jne .yes
     cmp word [te_scrl], 0
     jne .yes
-    mov ax, [te_dr0]
-    cmp ax, [te_dr1]
-    ja .no
+    mov ax, [te_drb]
+    or ax, [te_drb + 2]
+    jz .no
 .yes:
     pop ax
     stc
@@ -1067,8 +1550,16 @@ te_owed:
 ; needs the withdrawal at te_feed, and rule 7 forbids a worker touching this
 ; without the lock.
 ;
-; TWO COLOURS: CBLACK and CWHITE, four uses each and nothing else, so the
-; depth claim rides along (11.96.17) and the cache is a quarter of 46,526.
+; **THE DEPTH CLAIM IS NOT TWO COLOURS ANY MORE** (SPEC.md 70.8.5). It was:
+; CBLACK and CWHITE, four uses each and nothing else, so OSAPI_SAVEU_1BPP rode
+; along and the cache was 11,642 bytes rather than 46,526. After 70.8 the
+; content is whatever sixteen colours the board chose, and 11.96.17's promise
+; - every pixel of my content is colour 0 or colour 15 - is FALSE on a colour
+; screen. So the flag goes per ADAPTER, and per CALL rather than once at
+; launch, because 11.96.17 re-states the claim on every wm_saveu and a window
+; can move to a display of another depth (39.18.2). What it costs on VGA is a
+; cache over wm_su_kb for a window this size: the promise is then refused, the
+; window is not banked, and the raise repaints. That is the price of colour.
 ; -----------------------------------------------------------------------------
 te_promise:
     pushf
@@ -1080,6 +1571,9 @@ te_promise:
     call te_owed
     mov al, 0                       ; something is owed: withdraw
     jc .say
+    mov al, OSAPI_SAVEU_ON
+    cmp byte [te_mono], 0
+    je .say                         ; colour: 1bpp would be a LIE (70.8.5)
     mov al, OSAPI_SAVEU_ON | OSAPI_SAVEU_1BPP
 .say:
     call OSAPI_WM_SAVEU             ; BX is [te_win] and not whatever was in it
@@ -1261,7 +1755,24 @@ te_refuse:
     pop ax
     ret
 
+; --- te_celloff - AX = the cursor's byte offset within te_scr ----------------
+te_celloff:
+    push dx
+    mov ax, TE_COLS * 2
+    mul word [te_cy]                ; **MUL WRITES DX** (SPEC.md 1), and the
+    add ax, [te_cx]                 ; product is under 4,000 either way
+    add ax, [te_cx]
+    pop dx
+    ret
+
 ; --- te_putc - AL onto the screen at the cursor ------------------------------
+; THE PARSER IS NOT HERE (SPEC.md 70.9, teansi.inc, a later wave). What is
+; here is the screen model underneath it: a cell is a character AND THE
+; CURRENT ATTRIBUTE, the cursor is a row and a column rather than an offset,
+; and a glyph written in the last column leaves the cursor there with the
+; PENDING WRAP flag set - so the next glyph wraps and a `CR` that follows does
+; not lose a line (SPEC.md 70.9.5). The escape discard survives until the
+; parser replaces it.
 te_putc:
     push ax
     push bx
@@ -1281,20 +1792,40 @@ te_putc:
     cmp al, 9
     je .tab
     cmp al, ' '
-    jb .out                         ; every other control byte is DISCARDED:
-    cmp al, 0x7E                    ; a printing terminal prints characters
-    ja .out
-    mov di, [te_cur]
+    jb .out                         ; the C0 controls this does not act on are
+                                    ; DISCARDED until 70.9.2 makes glyphs of
+                                    ; them. **0x7F AND EVERY BYTE ABOVE IT IS
+                                    ; A GLYPH** and always was one on a board:
+                                    ; 0x80-0xFF are CP437 and never C1
+    call te_markcur                 ; the row the cursor is LEAVING owes a
+                                    ; redraw: the underline is in its band
+    cmp byte [te_pwrap], 0
+    je .noww
+    mov byte [te_pwrap], 0          ; ...the wrap the LAST glyph promised
+    mov word [te_cx], 0
+    call te_nextrow
+    call te_markcur
+.noww:
+    push ax
+    call te_celloff
+    mov di, ax
+    pop ax
     mov [te_scr + di], al
+    mov bl, [te_attr]
+    mov [te_scr + di + 1], bl
     call te_markcur                 ; ...BEFORE the cursor moves: this row is
-    inc di                          ; the one whose pixels changed
-    mov [te_cur], di
-    mov ax, TE_COLS
-    call te_wrapck
-    jmp short .out
+    mov ax, [te_cx]                 ; the one whose pixels changed
+    inc ax
+    cmp ax, TE_COLS
+    jb .cxok
+    mov byte [te_pwrap], 1          ; the glyph in the last column STAYS
+    dec ax                          ; visible and the cursor stays on it
+.cxok:
+    mov [te_cx], ax
+    jmp .out
 .esc:
     mov byte [te_ansi], 1
-    jmp short .out
+    jmp .out
 .inesc:
     cmp al, '['                     ; RECOGNISED AND DISCARDED. A sequence this
     je .out                         ; does not implement showing up as text in
@@ -1308,41 +1839,33 @@ te_putc:
     mov byte [te_ansi], 0
     jmp short .out
 .cr:
-    mov ax, [te_cur]
-    mov bl, TE_COLS
-    div bl                          ; AH = the column
-    mov al, ah
-    xor ah, ah
-    mov bx, [te_cur]
-    sub bx, ax
-    mov [te_cur], bx
+    call te_markcur
+    mov word [te_cx], 0
+    mov byte [te_pwrap], 0          ; ANY cursor motion clears it (70.9.5)
     jmp short .out
 .lf:
-    mov ax, [te_cur]
-    add ax, TE_COLS
-    mov [te_cur], ax
-    call te_scrollck
+    call te_markcur
+    mov byte [te_pwrap], 0
+    call te_nextrow
+    call te_markcur
     jmp short .out
 .bs:
-    cmp word [te_cur], 0
+    call te_markcur
+    mov byte [te_pwrap], 0
+    cmp word [te_cx], 0
     je .out
-    dec word [te_cur]
+    dec word [te_cx]
     jmp short .out
 .tab:
-    mov al, ' '
-    call .space8
-    jmp short .out
-.space8:
     push cx
-    mov cx, 8
-.sp:
+    mov cx, 8                       ; ...every eight columns, and not settable
+.sp:                                ; (SPEC.md 70.8): a board sets no tab stop
     push cx
     mov al, ' '
     call te_putc
     pop cx
     loop .sp
     pop cx
-    ret
 .out:
     pop di
     pop dx
@@ -1351,52 +1874,50 @@ te_putc:
     pop ax
     ret
 
-; --- te_wrapck / te_scrollck - the cursor past the edge, and past the bottom -
-te_wrapck:
+; --- te_nextrow - the cursor down one, scrolling at the bottom ---------------
+te_nextrow:
     push ax
-    push bx
-    push dx
-    mov ax, [te_cur]
-    xor dx, dx
-    mov bx, TE_COLS
-    div bx
-    or dx, dx
-    jnz .out                        ; not at a row boundary: nothing to do
-    call te_scrollck
-.out:
-    pop dx
-    pop bx
+    mov ax, [te_cy]
+    inc ax
+    cmp ax, TE_ROWS
+    jb .set
+    call te_scroll1
+    mov ax, TE_ROWS - 1
+.set:
+    mov [te_cy], ax
     pop ax
     ret
 
-te_scrollck:
+; -----------------------------------------------------------------------------
+; te_scroll1 - the buffer up one row, the last blanked
+;
+; ES IS THE KERNEL'S on a callback (SPEC.md 20), so the string ops here point
+; it at us and put it back. It is worth the four instructions: 3,840 bytes as
+; a hand byte loop is about 32 ms on a 4.77 MHz 8088 and `rep movsw` is 10.
+; -----------------------------------------------------------------------------
+te_scroll1:
     push ax
     push bx
     push cx
     push si
     push di
-    cmp word [te_cur], TE_SCR
-    jb .out
-    mov si, te_scr + TE_COLS        ; ...one row up, and the last row blanked
+    push es
+    push ds
+    pop es
+    cld
+    mov si, te_scr + TE_COLS*2      ; ...one row up
     mov di, te_scr
-    mov cx, TE_SCR - TE_COLS
-.mv:
-    mov al, [si]
-    mov [di], al
-    inc si
-    inc di
-    loop .mv
-    mov cx, TE_COLS
-    mov al, ' '
-.bl:
-    mov [di], al
-    inc di
-    loop .bl
-    mov word [te_cur], TE_SCR - TE_COLS
+    mov cx, TE_CELLS - TE_COLS
+    rep movsw
+    mov cx, TE_COLS                 ; ...and the row it opened, blanked in the
+    mov al, ' '                     ; CURRENT attribute
+    mov ah, [te_attr]
+    rep stosw
+    pop es
+    call te_markup                  ; every mark follows the buffer (70.8.1)
     inc word [te_scrl]              ; ...and te_scrollpaint spends it as ONE
     mov bx, TE_ROWS - 1             ; blit; only the row it opens is lettered
     call te_mark
-.out:
     pop di
     pop si
     pop cx
@@ -1410,11 +1931,30 @@ te_scrollck:
 ; SPEC.md 20.6 rule 3: take the lock, draw, release. The lock is NEVER held
 ; across a NETV_* call above - a recv is up to 274 ms of cable and the cursor
 ; would stop dead for every one of them.
+;
+; **[te_txm] IS TESTED BEFORE THE LOCK, AND THAT IS A FIX** (SPEC.md 70.8.8).
+; It used to sit eleven instructions PAST the OSAPI_GFX_LOCK below, and the
+; FSX bracket holds the gfx lock for its whole life (SPEC.md 53.6, the
+; caller's hold, taken before fsx_run and released after it returns). gfx_lock
+; is a yield-spin with no owner field, so this proc parked on a byte that
+; cannot change until the bracket exits - and SPEC.md 53.2 is binding about
+; what that means for a KEPT WORKER: "it parks safely if it tries, but for a
+; feeder, parking is death by another name: its slices burn in the retry loop
+; while the ring drains". The first byte to arrive after entering full screen
+; froze the session until ^]. The file's own comment claimed the worker
+; "skips its very first turn"; it did not skip it, it parked on it.
+;
+; The rule that encodes, and it is not this proc's alone: **a kept worker's
+; every path to a drawing slot is gated on [te_txm] BEFORE the gate, not
+; inside it.**
 ; -----------------------------------------------------------------------------
 te_show:
     push ax
     push bx
     push si
+    cmp byte [te_txm], 0
+    jne .gone                       ; a foreign text mode is up: the bracket
+                                    ; draws, and the LOCK IS ITS (70.8.8)
     call OSAPI_GFX_LOCK
     call te_promise                 ; te_owed is TRUE by construction here (it
                                     ; is what got us called), so this WITHDRAWS
@@ -1428,11 +1968,6 @@ te_show:
                                     ; background painter that drew anyway
                                     ; would paint over the window on top
                                     ; (SPEC.md 11.3)
-    cmp byte [te_txm], 0
-    jne .un                         ; A FOREIGN TEXT MODE IS UP: every drawing
-                                    ; slot renders desktop geometry into what
-                                    ; are now character cells (SPEC.md 53.1),
-                                    ; and the bracket draws instead
     cmp byte [te_abon], 0
     jne .un                         ; the credits are up: the worker may not
                                     ; draw over them, and the click that
@@ -1452,6 +1987,7 @@ te_show:
                                     ; ...and the glass matches the buffer
 .un:                                ; again: promise
     call OSAPI_GFX_UNLOCK
+.gone:
     pop si
     pop bx
     pop ax
@@ -1601,7 +2137,7 @@ te_split:
 ; --- the app menu set (SPEC.md 12.2) -----------------------------------------
 ; No Close: SPEC.md 12.7 puts one in the app-NAME cell for every application.
     OS88_MENUSET te_menus, te_name_s, te_oncmd
-        OS88_MENU te_m_sess, te_i_sess, 3
+        OS88_MENU te_m_sess, te_i_sess, 4
     OS88_MENUSET_END te_menus
 
 te_oncmd:
@@ -1613,8 +2149,13 @@ te_oncmd:
     jmp short .rp                   ; Screen could never be reached. The
 .i1:                                ; browser's Go menu had the same fault at
     cmp al, 1                       ; the same place (SPEC.md 71.8)
-    jne .fs
+    jne .i2
     call te_clear
+    jmp short .rp
+.i2:
+    cmp al, 2
+    jne .fs
+    call te_ice_flip
     jmp short .rp
 .fs:
     mov si, [te_win]
@@ -1628,11 +2169,57 @@ te_oncmd:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; te_ice_flip - iCE COLOURS (SPEC.md 70.8.9)
+;
+; Bit 7 of an attribute is BLINK, which is what the adapter powers up doing
+; and what a board that uses blink expects; a board that uses BRIGHT
+; BACKGROUNDS instead is drawing against a terminal the user has told it
+; about, which is what a toggle is. OFF by default, therefore.
+;
+; The label is the state, because the kernel's pull-down has no check mark
+; (os88api.inc publishes MENU_DIS and nothing else) and Solitaire's precedent
+; is a second string and a pointer swap. **On Hercules the item is GREYED with
+; the reason on it** - SPEC.md 47's rule, grey a FACT: MDA text is monochrome
+; and has no background colour to make bright, so there is nothing for the
+; toggle to do and saying so is better than a toggle that does nothing.
+; -----------------------------------------------------------------------------
+te_ice_flip:
+    push ax
+    cmp byte [te_mono], 0
+    jne .relabel                    ; ...and the greyed item is unreachable by
+    mov al, [te_ice]                ; the mouse anyway; this is the belt
+    xor al, 1
+    mov [te_ice], al
+    call te_markall                 ; every cell's polarity may have moved
+.relabel:
+    call te_ice_label
+    pop ax
+    ret
+
+; --- te_ice_label - point the item at the string that is true right now -----
+te_ice_label:
+    push ax
+    mov ax, te_it_ice0
+    cmp byte [te_mono], 0
+    jne .set                        ; 1bpp: there IS no bright background
+    mov ax, te_it_ice
+    cmp byte [te_ice], 0
+    je .set
+    mov ax, te_it_icy
+.set:
+    mov [te_i_sess + 2*2], ax
+    pop ax
+    ret
+
 te_name_s:  db 'Telnet', 0
 te_m_sess:  db 'Session', 0
-te_i_sess:  dw te_it_conn, te_it_clr, te_it_fs
+te_i_sess:  dw te_it_conn, te_it_clr, te_it_ice, te_it_fs
 te_it_conn: db 'Connect / Close', 0
 te_it_clr:  db 'Clear Screen', 0
+te_it_ice:  db 'iCE Colours', 0
+te_it_icy:  db 'iCE Colours (on)', 0
+te_it_ice0: db MENU_DIS, 'iCE Colours (Mono)', 0
 te_it_fs:   db 'Full Screen  ^]', 0
 
 te_names:   dw te_s_idle, te_s_open, te_s_wait, te_s_up, te_s_down, te_s_err
@@ -1660,6 +2247,10 @@ te_tpl:
 %include "os88ui.inc"
 %include "os88line.inc"
 %include "os88sock.inc"         ; net_find (SPEC.md 72, SPEC.md 20.11.1)
+%include "tecp437.inc"          ; the shipped 160 glyphs (SPEC.md 70.8.6) -
+                                ; GENERATED by tools/cp437font.py, committed,
+                                ; and regenerated and diffed by every `make`
+                                ; the way docs/INDEX.md is
 %include "tetxt.inc"            ; ...and the text-mode screen (SPEC.md 70.6)
 
     OS88_BSS TE_BSS
@@ -1671,7 +2262,7 @@ te_ox       equ os88_image_end + 2
 te_oy       equ os88_image_end + 4
 te_cw       equ os88_image_end + 6
 te_chh      equ os88_image_end + 8
-te_cur      equ os88_image_end + 10   ; the cursor, as a screen offset
+te_rr       equ os88_image_end + 10   ; the row te_compose is composing
 te_txr      equ os88_image_end + 12
 te_txw      equ os88_image_end + 14
 te_port     equ os88_image_end + 16
@@ -1688,22 +2279,65 @@ te_btn      equ os88_image_end + 28   ; 8: the Connect button's rect
 te_line     equ os88_image_end + 36   ; OS88LINE_SZ
 te_hbuf     equ te_line + OS88LINE_SZ ; TE_HOSTMAX: what the user typed
 te_host     equ te_hbuf + TE_HOSTMAX  ; ...and the half before the colon
-te_sline     equ te_host + TE_HOSTMAX  ; 20: the padded status field
-te_txb      equ te_sline + 20          ; TE_TX
+te_sline    equ te_host + TE_HOSTMAX  ; TE_COLS+1: the padded status field,
+                                      ; and te_rowfont's NUL-terminated run.
+                                      ; The two cannot overlap in time - the
+                                      ; rows are drawn before the status line
+                                      ; on both paths that draw both
+te_txb      equ te_sline + TE_COLS+1  ; TE_TX
 te_rx       equ te_txb + TE_TX        ; TE_RX
-te_scr      equ te_rx + TE_RX         ; TE_SCR + 1 (the run's terminator)
-te_px       equ te_scr + TE_SCR + 1   ; word: the text pen, 8-ALIGNED
+te_scr      equ te_rx + TE_RX         ; TE_SCRSZ: 80 x 25 CELLS, each a
+                                      ; character then an IBM attribute byte -
+                                      ; which is text VRAM's own layout, so
+                                      ; the full-screen renderer is a move and
+                                      ; not a translation (SPEC.md 70.8.7)
+te_band     equ te_scr + TE_SCRSZ     ; TE_BAND: one composed screen row
+te_glyf     equ te_band + TE_BAND     ; TE_GLYF: the 256 CP437 glyphs
+te_px       equ te_glyf + TE_GLYF     ; word: the text pen, 8-ALIGNED
 te_vcols    equ te_px + 2             ; word: columns the LIVE box shows
 te_vrows    equ te_vcols + 2          ; word: rows the LIVE content box fits
 te_vtop     equ te_vrows + 2          ; word: the first buffer row it shows
-te_dr0      equ te_vtop + 2           ; word: the dirty range, dr0 > dr1 = none
-te_dr1      equ te_dr0 + 2
-te_scrl     equ te_dr1 + 2            ; word: rows the BUFFER has scrolled
+te_ry       equ te_vtop + 2           ; word: the band's y, for te_blitrun
+te_rcp      equ te_ry + 2             ; word: ...and its first cell
+te_cx       equ te_rcp + 2            ; word: the cursor column, 0..79
+te_cy       equ te_cx + 2             ; word: ...and its row, 0..24
+te_sx       equ te_cy + 2             ; word: the SAVED cursor (CSI s / ESC 7)
+te_sy       equ te_sx + 2
+te_scrl     equ te_sy + 2             ; word: rows the BUFFER has scrolled
                                       ; since the screen last agreed with it
-te_abon     equ te_scrl + 2           ; byte: the credits have the screen
+te_drb      equ te_scrl + 2           ; 4 bytes: the dirty ROW BITMAP, bit r
+                                      ; of byte r>>3, 25 bits used (70.8.1)
+te_attr     equ te_drb + 4            ; byte: the current attribute; reset 0x07
+te_satr     equ te_attr + 1           ; byte: ...the one ESC 7 saved
+te_pwrap    equ te_satr + 1           ; byte: a glyph landed in column 79 and
+                                      ; the cursor stayed on it (70.9.5)
+te_cvis     equ te_pwrap + 1          ; byte: the cursor is drawn (CSI ?25h/l)
+te_ice      equ te_cvis + 1           ; byte: bit 7 is a BRIGHT BACKGROUND and
+                                      ; not blink (SPEC.md 70.8.9)
+te_ul       equ te_ice + 1            ; byte: SGR 4; it reaches the glass on
+                                      ; MDA alone
+te_mono     equ te_ul + 1             ; byte: this screen is 1bpp, so the pen
+                                      ; is not read and the polarity goes into
+                                      ; the band (SPEC.md 70.8.4)
+te_nob      equ te_mono + 1           ; byte: OSAPI_GFX_BLIT1 refused once, so
+                                      ; every row letters instead (5.4.2)
+te_abon     equ te_nob + 1            ; byte: the credits have the screen
 te_txm      equ te_abon + 1           ; byte: a FOREIGN TEXT MODE is up, so
                                       ; every kernel drawing slot is off-limits
                                       ; (SPEC.md 53.1) and te_show must not
-te_tseg     equ te_txm + 1           ; word: ...its framebuffer segment
+te_tkind    equ te_txm + 1            ; byte: that display's VID_* kind, asked
+                                      ; of OSAPI_FSX_CAPS rather than
+                                      ; OSAPI_VIDEO - which answers about the
+                                      ; PRIMARY, and a bracket on the Hercules
+                                      ; of a VGA-primary desktop would be told
+                                      ; the wrong thing (SPEC.md 53.7.1)
+te_tcur     equ te_tkind + 1          ; byte: the cursor visibility the CRTC
+                                      ; was last told about
+te_thint    equ te_tcur + 1           ; byte: the text row the ` ^] to leave`
+                                      ; hint is on, or 0xFF once it has gone -
+                                      ; a VRAM scroll carries it up and the
+                                      ; row it lands on is owed (SPEC.md
+                                      ; 70.8.7)
+te_tseg     equ te_thint + 1           ; word: ...its framebuffer segment
 te_fsi      equ te_tseg + 2           ; FSI_SIZE: what OSAPI_FSX_MODE filled
 TE_BSS      equ (te_fsi - os88_image_end) + FSI_SIZE
