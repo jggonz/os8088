@@ -670,7 +670,9 @@ FULL = [
 SOAK = [
     Row("pacman", "soak", py("tests/pacman.py"), 100.0,
         "native 8088 Pac-Man movement, score, pellets, fruit, level transitions, "
-        "pause, full-screen repaint and worker teardown", needs=("marty",)),
+        "pause, the SPEC.md 53 full-screen bracket - its mode per adapter, the "
+        "screen rebuilt from the canvas on the host, the tick rate it exists "
+        "for and the desktop restored - and worker teardown", needs=("marty",)),
     Row("weavevm", "soak", py("tests/weavevm.py"), 20.0,
         "WEAVE-SPEC 12.3: the SHIPPING apps/weave/wvm.inc run in a raw-QEMU "
         "BOOT SECTOR with SS != DS and no OS under it at all, diffed case by "
