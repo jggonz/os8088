@@ -1618,6 +1618,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         runcpm-src cpmsw rcz80test rcmemtest rczex 386-runcpm \
         xt-runcpm 286-runcpm \
         allapps usb iso live burn rcbandbench \
+        paccman paccmandisk pmcbandbench \
         c64 c64disk c64rom c64bandbench c64cputest c64memtest 386-c64 xt-c64 286-c64 \
         weave weavedisk weavevm weavecanvas weavegame weavebandbench \
         xt-weave 386-weave xt-weave-256 \
@@ -4275,8 +4276,9 @@ cc-note:
 	@test -x $(CC_SMLRCC) || { \
 	  echo "";                                                              \
 	  echo "note: the C toolchain (SPEC.md 73) is not built, so the C";     \
-	  echo "      targets - cc-smoke, chello, cword, cworddisk and";        \
-	  echo "      386-c-word - are unavailable. Everything else, which is"; \
+	  echo "      targets - cc-smoke, chello, cword, cworddisk,";           \
+	  echo "      paccman, paccmandisk, pmcbandbench and 386-c-word - are";  \
+	  echo "      unavailable. Everything else, which is";                   \
 	  echo "      every floppy this project ships, is built above.";        \
 	  echo "";                                                              \
 	  echo "      To get it:  tools/setup-cc.sh";                           \
@@ -4568,6 +4570,123 @@ $(BUILD)/cword120.img: $(CWORDDISK) tools/os88disk.py
 $(BUILD)/cword360.img: $(CWORDDISK) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(CWORDDISK) --folder DOCS
 	@python3 tools/os88disk.py --verify $@
+
+# --- PACCMAN, pacman.c as a C package (SPEC.md 91) ---------------------------
+# The C toolchain's fourth application: the Namco arcade Pac-Man as Andre
+# Weissflog's pacman.c has it (MIT, commit 0f5ec5a), reimplemented in the C
+# this toolchain compiles plus the band composer that is hand-written 8086.
+# `make paccman` runs the host checks (apps/paccman/build.sh) and then builds
+# the package; `make paccmandisk` the floppy in all four geometries; `make
+# pmcbandbench` brackets the composer on MartyPC's XT.
+#
+# IT IS NOT PACMAN (SPEC.md 73.12's rule). §89's apps/pacman/ is the Roklan
+# Atari disk version in hand-written assembly, package PACMAN, on the shipped
+# apps disks' GAMES/ folder. The two share no file, package name, make target,
+# disk image or VM directory - and the names differ by ONE LETTER, so a typo
+# here silently builds the other program. Nothing in this section may reach a
+# `pacman` name and nothing in §89's may reach a `paccman` one.
+#
+# On demand, like cword: nothing in `all` reaches it and it needs SmallerC.
+$(eval $(call CC_PACKAGE,paccman,paccman))
+
+# THE REST OF THE TRANSLATION UNIT. `nasm -f bin` has no notion of an external
+# symbol, so a C package is ONE compilation and one assembly (SPEC.md 73.1):
+# paccman.c #includes eight parts and the shim %includes the band composer.
+# CC_PACKAGE names apps/paccman/paccman.c and apps/paccman/paccman.asm, which
+# is right for the general case and nine files short here, and MAKE CANNOT SEE
+# THROUGH A #include OR A %include. Without these lines an edit to the
+# composer or to the generated ROM tables leaves build/paccman.o88 untouched,
+# and a stale package reads exactly like the change having done nothing.
+PACCMANSRC := apps/paccman/pmc_rom.c apps/paccman/pmc_time.c \
+              apps/paccman/pmc_vid.c apps/paccman/pmc_move.c \
+              apps/paccman/pmc_game.c apps/paccman/pmc_intro.c \
+              apps/paccman/pmc_snd.c apps/paccman/pmc_draw.c \
+              apps/paccman/pmc_menu.c
+PACCMANHOST := apps/paccman/build.sh apps/paccman/hosttest/os88.h \
+               apps/paccman/hosttest/pmcuitest.c \
+               apps/paccman/hosttest/pmcbandtest.asm \
+               apps/paccman/hosttest/pmcbandtest.sh
+$(BUILD)/paccman.raw.asm: $(PACCMANSRC) $(BUILD)/.paccman-hostchecks
+$(BUILD)/paccman.bin: apps/paccman/pmcband.inc apps/paccman/icon.inc \
+                      apps/paccman/LICENSE apps/os88ui.inc
+
+# The host checks, before anything is built for the 8086 - the harness's
+# recomposition audit and the composer's SS != DS gate both catch what a
+# screendump cannot (LESSONS.md 7). apps/paccman/pmcband.inc is in the
+# prerequisites because pmcbandtest.asm %includes the SHIPPING file: an edit
+# to a composer must re-run the gate, and make cannot see through a %include.
+$(BUILD)/.paccman-hostchecks: apps/paccman/paccman.c $(PACCMANSRC) \
+                              $(PACCMANHOST) apps/paccman/pmcband.inc | $(BUILD)
+	apps/paccman/build.sh
+	@touch $@
+
+.PHONY: paccman paccmandisk pmcbandbench
+paccman: $(BUILD)/paccman.o88
+
+# ALL FOUR geometries (CLAUDE.md): 1.44MB and 720KB for QEMU, 360KB for an
+# 86Box XT or a real one, and 1.2MB 5.25" HD for the AT-class machine with no
+# 3.5" drive. --verify is a standalone structural fsck and is in the recipe
+# because it costs milliseconds and catches the class of defect that otherwise
+# arrives as "Disk error" inside the emulator ten minutes later.
+#
+# NO FOLDER AND NO SIDECAR: there is no .OVL (SPEC.md 91's budget says none is
+# needed) and no document type - pacman.c has no file I/O of any kind - so the
+# package sits at the root beside its README and nothing can be separated from
+# anything. The day the size line passes 50,000 and pmc_intro.c moves out,
+# this grows a folder, the way CWORD's disk carries one.
+PACCMANDISK := $(BUILD)/paccman.o88 apps/paccman/README.md
+
+$(BUILD)/paccman.img: $(PACCMANDISK) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(PACCMANDISK)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/paccman720.img: $(PACCMANDISK) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(PACCMANDISK)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/paccman120.img: $(PACCMANDISK) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(PACCMANDISK)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/paccman360.img: $(PACCMANDISK) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(PACCMANDISK)
+	@python3 tools/os88disk.py --verify $@
+
+paccmandisk: $(BUILD)/paccman.img $(BUILD)/paccman720.img \
+             $(BUILD)/paccman120.img $(BUILD)/paccman360.img
+
+# THE BAND BENCH (SPEC.md 91, PERFORMANCE.md): tests/pmcband/pmcbandbench.asm
+# %includes the SHIPPING apps/paccman/pmcband.inc and brackets each of its
+# routines, one OSAPI_GFX_BLITP of a 224x8 band and one OSAPI_GFX_BLIT4 of the
+# same. TAKEN UNDER `qemu-system-i386 -icount shift=3` and converted at
+# PERFORMANCE.md Part 4's one count = 0.359 ms of real XT, which is the house
+# practice C64-SPEC 14 and WEAVE-SPEC use; it is NOT a MartyPC run, and the
+# three documents that said so were corrected. Its numbers are the ONLY
+# source of any microsecond in SPEC.md 91, in apps/paccman/README.md or in
+# the harness's cost table - LESSONS.md 13's rule that a per-cell guess was
+# 7x wrong once and a bench settled it. Under `make bench`'s rules, not
+# `all`'s.
+# Its tables are built BY NASM, with %rep, from the same definitions
+# tools/paccman_assets.py uses - so the bench needs no generated file and
+# measures the routines rather than a copy of the data.
+#
+#   make pmcbandbench
+#   python3 tools/marty.py ... build/pmcband.img          (docs/MARTYPC-DEBUG.md)
+$(BUILD)/pmcbband.bin: tests/pmcband/pmcbandbench.asm apps/paccman/pmcband.inc \
+                       tests/benchlib.inc apps/os88api.inc tools/benchlint.py \
+                       | $(BUILD)
+	python3 tools/benchlint.py tests/pmcband/pmcbandbench.asm
+	$(NASM) -f bin -w+error -I apps/ -I tests/ -o $@ tests/pmcband/pmcbandbench.asm
+	@echo "pmcbband: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/pmcbband.o88: $(BUILD)/pmcbband.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/pmcbband.bin -o $@
+
+$(BUILD)/pmcband.img: $(BUILD)/pmcbband.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/pmcbband.o88
+	@python3 tools/os88disk.py --verify $@
+
+pmcbandbench: $(BUILD)/pmcband.img
 
 # --- RUNCPM, RunCPM 6.9 as a C package (SPEC.md 71) --------------------------
 # The C toolchain's second application: a CP/M 2.2 emulator - a Z80 in a 64KB

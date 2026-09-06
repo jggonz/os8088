@@ -1,0 +1,383 @@
+; =============================================================================
+; os8088 - apps/paccman/pmcband.inc      PACCMAN's band composer (SPEC.md 91)
+;
+; Derived from Andre Weissflog's pacman.c (github.com/floooh/pacman.c, MIT,
+; (c) 2020 Andre Weissflog) at commit 0f5ec5a: the 2bpp tile format and the
+; colour-block indirection these loops walk are the reference's (its
+; gfx_decode_tile at pacman.c 2800-2845 and gfx_decode_color_palette at
+; 2865-2891), decoded on the host by tools/paccman_assets.py. The tile data
+; itself is Pac-Man arcade ROM data (Namco); see apps/paccman/README.md.
+;
+; -----------------------------------------------------------------------------
+; WHY THIS IS ASSEMBLY (SPEC.md 73.11, PERFORMANCE.md)
+; -----------------------------------------------------------------------------
+; A frame is composed in the package's own RAM and sent with ONE blit per dirty
+; band. Everything above that line is C deciding WHAT to compose; everything
+; below is per-pixel and per-byte work, which C costs 3-5x. These four entry
+; points are the whole of the per-byte half:
+;
+;   _pmc_tile      one 8x8 tile through its 4-entry colour block into the
+;                  packed 4bpp band (two pixels a byte, high nibble leftmost -
+;                  which is OSAPI_GFX_BLIT4's own format, so the BLIT4 fallback
+;                  path needs no conversion at all)
+;   _pmc_pack_pl   the packed band -> four bitplanes for OSAPI_GFX_BLITP
+;   _pmc_pack_1    the packed band -> 1bpp for OSAPI_GFX_BLIT1, through the
+;                  monochrome class table and the row-alternating checkerboard
+;   _pmc_sprite    (wave 2) one 16x16 sprite over the band, index 0 transparent
+;
+; NO GLOBAL IS NAMED FROM HERE. Every table and every buffer arrives as a
+; POINTER argument, computed by the C. That is what lets the host harness
+; define byte-identical C twins with the same signatures, and what lets
+; hosttest/pmcbandtest.asm %include this file and feed it vectors of its own.
+;
+; ES IS NEVER LOADED. There is not one string instruction here that writes:
+; `lodsb` reads DS:SI, which is the package's own segment, and every store is
+; `mov [di], r8`, which is DS-relative on the 8086. So the routines below need
+; no `push es` and cannot write into KERNEL_SEG (SPEC.md 20.4, 73.5.1) - and
+; hosttest/pmcbandtest.asm asserts exactly that with an ES sentinel.
+;
+; cdecl throughout, SmallerC's: arguments pushed right to left, the CALLER
+; cleans, and BP/SI/DI/DS/ES/SS are the callee's to restore. The leading
+; underscore is SmallerC's, which is why the C prototypes say `pmc_tile`.
+; =============================================================================
+
+PMC_BAND_W      equ 224                 ; the arcade field, in pixels
+PMC_BAND_STRIDE equ (PMC_BAND_W / 2)    ; 112 - packed 4bpp, two pixels a byte
+PMC_PL_STRIDE   equ (PMC_BAND_W / 8)    ; 28 - one plane's bytes per row
+PMC_PL_STEP     equ (PMC_PL_STRIDE * 8) ; 224 - and the step to the next plane.
+                                        ; It is 8 rows' worth WHATEVER the band
+                                        ; holds, so that the four displacements
+                                        ; below are CONSTANTS: a 4-row CGA band
+                                        ; leaves half of each plane unwritten
+                                        ; and OSAPI_GFX_BLITP is told 4 rows,
+                                        ; so nothing reads it
+
+section .text
+
+; -----------------------------------------------------------------------------
+; _pmc_tile - void pmc_tile(const unsigned char *src, const unsigned char *pairs,
+;                           unsigned char *dst, int rowstep)
+;
+; in:  [bp+4]  src     the tile's 16 bytes: two per row, four 2-bit pixels a
+;                      byte, the LEFTMOST pixel in the high bits
+;      [bp+6]  pairs   the 16-entry pair table for this tile's colour block -
+;                      pairs[hi*4 + lo] is the packed byte for the pixel pair
+;                      (hi, lo), which is exactly what a source NIBBLE indexes.
+;                      Built on the host into pmc_pairs[32][16], so a tile
+;                      costs no table setup at all
+;      [bp+8]  dst     the tile's top-left byte inside the packed band
+;      [bp+10] rowstep 1 = every source row (8 output rows), 2 = alternate
+;                      rows (4 output rows - the CGA layout, SPEC.md 91)
+; out: 8 (or 4) rows of 4 bytes written at PMC_BAND_STRIDE apart
+;
+; Two XLATs a source byte and nothing else: the colour indirection, the
+; nibble split and the pack are ONE table lookup each, because the pair table
+; is indexed by the very nibble the source byte already holds.
+; -----------------------------------------------------------------------------
+; THE ROW COUNTER IS IN CH AND THE ROW SKIP IN DX, so this routine has no
+; local and its epilogue is a plain sequence of pops. CL already holds the
+; nibble shift for the whole loop and its other half was going spare; the
+; first version spent a stack local on the skip and then had to drop it with
+; `mov sp, bp`, which tools/stkbalance.py cannot follow and rightly refuses.
+_pmc_tile:
+    push bp
+    mov  bp, sp
+    push si
+    push di
+    push bx
+    cld
+
+    mov  si, [bp+4]                 ; the tile's rows
+    mov  bx, [bp+6]                 ; the colour block's pair table (XLAT's)
+    mov  di, [bp+8]                 ; where it lands in the band
+
+    mov  dx, [bp+10]                ; rowstep
+    dec  dx
+    add  dx, dx                     ; (rowstep - 1) * 2 bytes skipped a row
+
+    mov  ch, 8
+    cmp  word [bp+10], 1
+    je   .rows
+    mov  ch, 4                      ; alternate rows: half as many
+.rows:
+    mov  cl, 4                      ; the nibble shift, held for the whole loop
+
+.row:
+    lodsb                           ; pixels 0..3
+    mov  ah, al
+    shr  al, cl                     ; the high nibble = pixels 0 and 1
+    xlatb
+    mov  [di], al
+    mov  al, ah
+    and  al, 0x0F                   ; the low nibble  = pixels 2 and 3
+    xlatb
+    mov  [di+1], al
+
+    lodsb                           ; pixels 4..7
+    mov  ah, al
+    shr  al, cl
+    xlatb
+    mov  [di+2], al
+    mov  al, ah
+    and  al, 0x0F
+    xlatb
+    mov  [di+3], al
+
+    add  si, dx                     ; skip the row we are not sampling
+    add  di, PMC_BAND_STRIDE
+    dec  ch
+    jnz  .row
+
+    pop  bx
+    pop  di
+    pop  si
+    pop  bp
+    ret                             ; cdecl: the CALLER pops the arguments
+
+; -----------------------------------------------------------------------------
+; _pmc_pack_pl - void pmc_pack_pl(const unsigned char *band,
+;                                 unsigned char *planes, int rows,
+;                                 const unsigned int *planar, int cols)
+;
+; The packed 4bpp band -> the four bitplanes OSAPI_GFX_BLITP takes (SPEC.md
+; 5.4.3, apps/os88api.inc's OSAPI_GFX_BLITP): plane p at planes + p*PMC_PL_STEP,
+; row r at + r*PMC_PL_STRIDE, bit 7 leftmost.
+;
+; in:  [bp+4]  band    the SPAN's first packed byte; rows of PMC_BAND_STRIDE
+;      [bp+6]  planes  4 * PMC_PL_STEP bytes of scratch
+;      [bp+8]  rows    8 or 4 (decremented in place - it is the caller's slot)
+;      [bp+10] planar  pmc_planar[256]: a packed byte's four planes as 2-bit
+;                      fragments, NIBBLE SPACED (plane 0 in bits 1:0, plane 3
+;                      in bits 13:12)
+;      [bp+12] cols    output bytes a row, 1..PMC_PL_STRIDE - the damage span,
+;                      which is a whole number of 8-pixel TILES by construction
+;                      (SPEC.md 91's per-band column span). The row strides
+;                      stay PMC_BAND_STRIDE and PMC_PL_STRIDE whatever it is,
+;                      so BLITP is always told the same two numbers and the
+;                      bytes past the span are simply not written
+;
+; THE NIBBLE SPACING IS THE WHOLE TRICK. Two source bytes are four pixels, and
+; four pixels are four bits of every plane. `w0 << 2 | w1` accumulates all four
+; planes' four bits AT ONCE, because each plane's field is a nibble wide and
+; two 2-bit fragments fit it exactly. Two such accumulators - the left four
+; pixels and the right four - then split into the four output bytes with one
+; shift and one mask each, and a byte shifted left by four discards the nibble
+; that does not belong in it, so no mask is needed on that side.
+; -----------------------------------------------------------------------------
+_pmc_pack_pl:
+    push bp
+    mov  bp, sp
+    sub  sp, 4                      ; [bp-2] source skip a row, [bp-4] dest
+    push si
+    push di
+    push bx
+    cld
+
+    mov  ax, [bp+12]                ; cols
+    or   ax, ax
+    jle  .done
+    cmp  word [bp+8], 0
+    jle  .done
+    mov  dx, ax
+    add  ax, ax
+    add  ax, ax                     ; cols * 4 packed bytes are consumed a row
+    mov  bx, PMC_BAND_STRIDE
+    sub  bx, ax
+    mov  [bp-2], bx
+    mov  bx, PMC_PL_STRIDE
+    sub  bx, dx                     ; ...and cols bytes are written a row
+    mov  [bp-4], bx
+
+    mov  si, [bp+4]                 ; the packed band
+    mov  di, [bp+6]                 ; plane 0, row 0
+    mov  cl, 4                      ; the nibble shift, for the whole routine
+
+.row:
+    mov  ch, [bp+12]                ; one output byte per 8 pixels of the span
+.byte:
+    ; --- the LEFT four pixels, from two source bytes ----------------------
+    mov  bl, [si]
+    xor  bh, bh
+    add  bx, bx                     ; a word table
+    add  bx, [bp+10]
+    mov  ax, [bx]
+    mov  bl, [si+1]
+    xor  bh, bh
+    add  bx, bx
+    add  bx, [bp+10]
+    add  ax, ax
+    add  ax, ax                     ; each plane's fragment up one 2-bit place
+    or   ax, [bx]
+    push ax                         ; accA
+
+    ; --- the RIGHT four pixels --------------------------------------------
+    mov  bl, [si+2]
+    xor  bh, bh
+    add  bx, bx
+    add  bx, [bp+10]
+    mov  ax, [bx]
+    mov  bl, [si+3]
+    xor  bh, bh
+    add  bx, bx
+    add  bx, [bp+10]
+    add  ax, ax
+    add  ax, ax
+    or   ax, [bx]                   ; accB
+    pop  dx                         ; accA
+    add  si, 4
+
+    ; --- accA's nibble p and accB's nibble p are plane p's eight bits -----
+    mov  bl, dl
+    shl  bl, cl                     ; accA nibble 0 into the high half
+    mov  bh, al
+    and  bh, 0x0F
+    or   bl, bh
+    mov  [di], bl                   ; plane 0
+
+    mov  bl, dl
+    and  bl, 0xF0
+    mov  bh, al
+    shr  bh, cl
+    or   bl, bh
+    mov  [di + PMC_PL_STEP], bl     ; plane 1
+
+    mov  bl, dh
+    shl  bl, cl
+    mov  bh, ah
+    and  bh, 0x0F
+    or   bl, bh
+    mov  [di + 2*PMC_PL_STEP], bl   ; plane 2
+
+    mov  bl, dh
+    and  bl, 0xF0
+    mov  bh, ah
+    shr  bh, cl
+    or   bl, bh
+    mov  [di + 3*PMC_PL_STEP], bl   ; plane 3
+
+    inc  di
+    dec  ch
+    jnz  .byte
+
+    add  si, [bp-2]                 ; on to the next row of each
+    add  di, [bp-4]
+    dec  word [bp+8]                ; the row count, in the caller's own slot
+    jnz  .row
+.done:
+    pop  bx
+    pop  di
+    pop  si
+    add  sp, 4                      ; drop the two locals - the ARITHMETIC
+                                    ; inverse of the `sub sp, 4` above, and
+                                    ; not `mov sp, bp`: tools/stkbalance.py
+                                    ; walks add/sub and cannot follow a load,
+                                    ; so the tidier spelling reads to it as a
+                                    ; `ret` at depth +2
+    pop  bp
+    ret
+
+; -----------------------------------------------------------------------------
+; _pmc_pack_1 - void pmc_pack_1(const unsigned char *band, unsigned char *bits,
+;                               int rows, const unsigned char *mono2, int y0,
+;                               int cols)
+;
+; The packed 4bpp band -> the 1bpp band OSAPI_GFX_BLIT1 takes: bit 7 leftmost,
+; 1 = lit, PMC_PL_STRIDE bytes a row, in final screen polarity.
+;
+; in:  [bp+4]  band   rows * PMC_BAND_STRIDE packed bytes
+;      [bp+6]  bits   rows * PMC_PL_STRIDE bytes of scratch
+;      [bp+8]  rows   (decremented in place)
+;      [bp+10] mono2  pmc_mono2[2][256]: [parity][packed byte] -> two 1bpp
+;                     bits, bit 1 the LEFT pixel. The parity half resolves the
+;                     50% dither class against the checkerboard, so this loop
+;                     never tests a class and never tests a column
+;      [bp+12] y0     the band's first row ON THE SCREEN FIELD, which is what
+;                     the checkerboard's parity has to follow: on CGA the band
+;                     samples alternate SOURCE rows but draws consecutive
+;                     SCREEN rows, and it is the screen the dither is seen on
+;      [bp+14] cols   output bytes a row, as _pmc_pack_pl's
+;
+; Grey rounds to black on a 1bpp adapter (SPEC.md 39.4), so the class table -
+; not a threshold - is what makes the maze, the dots and four different ghosts
+; distinguishable there. Whether it succeeds is a look question and the answer
+; is a screendump on VIDEO=cga and VIDEO=herc.
+; -----------------------------------------------------------------------------
+_pmc_pack_1:
+    push bp
+    mov  bp, sp
+    sub  sp, 4                      ; [bp-2] source skip a row, [bp-4] dest
+    push si
+    push di
+    push bx
+    cld
+
+    mov  ax, [bp+14]                ; cols
+    or   ax, ax
+    jle  .done
+    cmp  word [bp+8], 0
+    jle  .done
+    mov  dx, ax
+    add  ax, ax
+    add  ax, ax
+    mov  bx, PMC_BAND_STRIDE
+    sub  bx, ax
+    mov  [bp-2], bx
+    mov  bx, PMC_PL_STRIDE
+    sub  bx, dx
+    mov  [bp-4], bx
+
+    mov  si, [bp+4]
+    mov  di, [bp+6]
+    mov  dx, [bp+12]                ; DL carries the screen row's parity
+
+.row:
+    mov  bx, [bp+10]
+    test dl, 1
+    jz   .even
+    add  bx, 256                    ; the odd rows' half of the pair table
+.even:
+    mov  ch, [bp+14]
+.byte:
+    mov  al, [si]                   ; four source bytes = eight pixels
+    xlatb
+    mov  dh, al
+    mov  al, [si+1]
+    xlatb
+    shl  dh, 1
+    shl  dh, 1
+    or   dh, al
+    mov  al, [si+2]
+    xlatb
+    shl  dh, 1
+    shl  dh, 1
+    or   dh, al
+    mov  al, [si+3]
+    xlatb
+    shl  dh, 1
+    shl  dh, 1
+    or   dh, al
+    mov  [di], dh
+    inc  di
+    add  si, 4
+    dec  ch
+    jnz  .byte
+
+    add  si, [bp-2]                 ; on to the next row of each
+    add  di, [bp-4]
+    inc  dl                         ; the next screen row, the other parity
+    dec  word [bp+8]
+    jnz  .row
+.done:
+    pop  bx
+    pop  di
+    pop  si
+    add  sp, 4                      ; drop the two locals - the ARITHMETIC
+                                    ; inverse of the `sub sp, 4` above, and
+                                    ; not `mov sp, bp`: tools/stkbalance.py
+                                    ; walks add/sub and cannot follow a load,
+                                    ; so the tidier spelling reads to it as a
+                                    ; `ret` at depth +2
+    pop  bp
+    ret
+
+section .text

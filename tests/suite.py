@@ -154,6 +154,19 @@ FAST = [
     Row("mirror", "fast", py("tests/unit/t_mirror.py"), 3.9,
         "a constant written down in two files must agree in both; there is no "
         "linker here to notice"),
+    Row("paccman", "fast", py("tests/unit/t_paccman.py"), 0.3,
+        "PACCMAN's generated arcade tables say what they claim to (SPEC.md "
+        "91). apps/paccman/pmc_rom.c is the build's TRUTH - the reference is "
+        "not vendored (CONTRIBUTING.md 6) and an ordinary build never reads "
+        "it - so nothing else checks the 240 dots, the four pills, the two "
+        "ghost-house doors, the open tunnel row, the table lengths or the "
+        "pinned commit in its header. It also asserts that the prelude's "
+        "MELODY is voice 1 at 539 then 1078 Hz and its bass voice 0 at 67, "
+        "because the two have been the wrong way round once and BOTH "
+        "orderings produce sound; and that pmcband.inc and paccman.c agree "
+        "about the band's three sizes, which is a constant written down in "
+        "two files with no linker here to notice. The byte-for-byte "
+        "reproduction row SKIPS, naming the pin, without $PACMANC_SRC"),
     Row("inktab", "fast", py("tests/unit/t_inktab.py"), 0.2,
         "SPEC.md 42.23.1: Paint's two ink-class masks ARE the kernel's "
         "gfx_inktab. A one-bit canvas stores what a 1bpp SCREEN shows, so the "
