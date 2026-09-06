@@ -92571,3 +92571,122 @@ and 338 by 140 respectively; content geometry determines which layout fits.
 The board is centered in the current content, including full screen. All
 self-initiated drawing arms the window clip. The status strip uses opaque
 FONT_RUN and changes only when its values change.
+
+## 90. PACCMAN — pacman.c, written in C (`apps/paccman/`)
+
+The C toolchain's fourth application is **`apps/paccman/`**, package name
+`PACCMAN`, product name **PaccMan**: a native reimplementation of Andre
+Weissflog's **`pacman.c`** (https://github.com/floooh/pacman.c, MIT, 2020),
+the arcade-faithful C99 Pac-Man, at its commit **0f5ec5a**. It is a port in
+§73.12's sense: **the screens, tables, timings and rules are pacman.c's, taken
+from its source and not from memory; the code is reimplemented in the C this
+toolchain compiles (§73) plus the composer loops that are hand-written 8086;
+what cannot carry is present with the fact stated (§47).** Nothing from the
+reference is vendored (CONTRIBUTING.md §6): every file carrying derived
+material cites `pacman.c`, the commit, the author and the licence in its
+header, and so does the About card. The design record is
+`docs/PACCMAN-PORT-PLAN.md`; every wave amends this section and its numbers are
+the shipping ones once the last wave lands.
+
+**It is a SECOND Pac-Man and shares nothing with the first.** §89's
+`apps/pacman` is Roklan's Atari disk version in hand-written assembly, package
+`PACMAN`, a 40×22 horizontal maze, `build/apps*.img`'s `GAMES/`. This one is
+the Namco arcade layout — a **28×36-tile, 224×288 vertical field** held as
+`video_ram`/`color_ram` the way the board holds it — package `PACCMAN`,
+`apps/paccman/`, `build/paccman*.img`, `make paccman`/`make paccmandisk`, a
+`PACCMAN/` folder on `apps-all.img`, `vm/xt-paccman`. No file, name, image,
+target or vm directory answers to both, by §73.12's rule. What the two DO
+share is a rendering *shape*, borrowed from §89.2 as a precedent and not as
+code: one worker sleeping to a tick deadline, dirty tile bands composed in the
+package's own RAM and sent with ONE blit per band, 1bpp packed bands on a
+monochrome adapter, alternate-row sampling where the display is short, focus
+loss suspending play.
+
+**Where the behaviour comes from — the authority table**, every user-visible
+surface traced to the reference:
+
+| what | from |
+|---|---|
+| the intro screen: `1UP   HIGH SCORE   2UP`, `CHARACTER / NICKNAME`, the four-ghost reveal (2×3 tile block, `-SHADOW`/`-SPEEDY`/`-BASHFUL`/`-POKEY`, `BLINKY`/`PINKY`/`INKY`/`CLYDE`) at ticks 60+90i / 120+90i / 150+90i, the `10 PTS`/`50 PTS` legend at 570, `PRESS ANY KEY TO START!` blinking from 630, `CREDIT  0`; the hiscore field only when > 0 | `pacman.c` 2326–2399 `intro_tick` |
+| the game screen: `HIGH SCORE`, `PLAYER ONE`, `READY!`, `GAME  OVER`, the prelude, READY 130 ticks, the freezes (eat-ghost 60, death 60+150, round won 240, game over 180) | `pacman.c` 1447–1583, 2217–2322, 249–256 |
+| the score strip (right-to-left digits, score/10 with a trailing 0), pill blink on `tick & 8`, fruit at (12..15,20) for 120 ticks, lives at row 34, the fruit list of the last seven rounds, the round-won flash | `pacman.c` 1584–1637, 1092–1132 |
+| the maze: the 31×28 map and its char→tile table, 240 dots + 4 pills, the tunnel row, the red zones, the door | `pacman.c` 1377–1432 |
+| tile, sprite and colour codes | `pacman.c` 190–247 |
+| the 21-row level table (fruit, bonus, fright ticks), clamped after round 20 | `pacman.c` 591–623 |
+| ghost AI: the four personalities, the scatter/chase schedule 7/20/7/20/5/20/5 s, frightened/eyes/house/leave/enter, red-zone no-up, tunnel and frightened half speed, the house dot counters (Inky 30, Clyde 60), the global counter 7/17/32, the 4 s force-leave, reversal on phase change | `pacman.c` 1639–2215 |
+| the time-trigger vocabulary and the 60 Hz fixed step | `pacman.c` 322–325, 420–428, 744–780, 844–915 |
+| sound: three voice registers, the prelude and death register dumps, the six procedural effects | `pacman.c` 3121–3380, 3960–4300 |
+| the tile, sprite, hardware-colour and palette ROM tables and their decoders | `pacman.c` 3382–3945, 2800–2891 |
+| keys: Up/W Down/S Left/A Right/D as LEVELS read every game tick, priority up > down > right > left; F full screen and never "any key"; Esc always "any key" | `pacman.c` 782–817, 926–946 |
+| the Game menu (New Game, Pause, Sound On/Off, Full Screen), P/N in play — platform chrome the reference has no equivalent of | `apps/pacman/pacman.asm`'s `pm_items`, as the precedent |
+
+**The five things the reference is not, stated as facts.** Its own header
+(lines 47–53) lists what it leaves out, and the port carries the reference and
+not the arcade: **no attract-mode chase**, **no coffee-break intermissions**,
+**no per-round speed table** (the constant speeds are pacman.c's); each is a
+recorded follow-up and not a greyed item, because there is no menu entry for
+an animation. **The three-voice Namco wavetable is reduced to the one
+PC-speaker square wave** (`OSAPI_SND_TONE`, no waveform, no volume): one
+voice is chosen per OS tick by priority — effects, then the siren/frightened
+tone/prelude melody, then the prelude bass — and the reduction is stated here
+and in the README, never in the About card. **The alpha fade is a cut**: one
+black fill at the fade-out's start and a full repaint at the fade-in's end,
+with the reference's tick counts kept so every sequence keeps its length.
+**Nothing is greyed**: the one candidate, Game > Sound, has no fact behind it —
+`osapi_snd_caps` answers a constant on every kernel this OS boots.
+
+**Time is two words and the tick is an accumulator.** pacman.c counts 60 Hz
+ticks in a `uint32_t` and there is no 32-bit type here (§73.7), so the tick
+and every trigger are `lo/hi` word pairs, `since()` saturates for compares and
+`since_lo()` wraps for masks. The OS tick is 18.2 Hz, so a frame advances the
+game by `600 × elapsed OS ticks / 182` game ticks, elapsed capped at
+`PMC_CATCHUP_MAX` = 2: a slow frame runs at most two OS ticks' worth of game,
+every sprite stays within one tile of where it was last drawn, and the worker
+re-anchors rather than bursts. **The effective game speed per adapter is
+measured and stated, never predicted.** The one input divergence from the
+reference: a key PRESS is latched until the next frame's poll, because a frame
+here is 3–11 game ticks long and a tap shorter than one would otherwise be
+lost; a hold released before a junction is forgotten, as in the reference.
+There is no buffered turn.
+
+**Rendering.** A frame's damage is the set of tiles a `vid_*` write changed
+(compare-then-write; a write that changes nothing marks nothing) plus the old
+and new rectangles of every sprite, coalesced into one column span per 8-row
+band. Each dirty band is composed in an 896-byte scratch by `pmcband.inc`'s
+assembly loops — tiles, then sprites over them — and sent with **one** blit:
+`OSAPI_GFX_BLITP` (four planes) on a colour display, `GFX_BLIT1` on a
+monochrome one, `GFX_BLIT4` when either refuses. There is no persistent
+canvas: the dirty span is exactly the tile set that must be recomposed anyway.
+VGA, EGA and Hercules take every source row (a 307-row frame under `WF_KEEPH`,
+§11.93, so it hangs over the dock rather than losing rows); CGA takes alternate
+rows (224×144, 4-row bands, a 163-row frame). Colour is a 32×4 colour-block →
+nibble map; monochrome a nibble → white/dither/black class table. The worker
+is `OS88_STACK_256` and its tick path is flattened to fit it, with the water
+mark measured (`tools/stkwater.py`) and asserted by `tests/paccman.py`.
+
+**"Maybe more performant on XTs" is a hypothesis this section will answer
+with a number, not a claim it makes.** §89's port measures 5.5 fps on a
+4.77 MHz VGA XT with ~202 of 235 ms inside `gfx_blit4`'s planar decoder; a
+224-pixel-wide band takes that decoder unconditionally, and `GFX_BLITP` is the
+one lever that avoids it. The plan carries NO fps prediction: wave 1 brackets
+the four costs (composition, repack, blit, C game logic) with
+`tests/pmcbandbench` on MartyPC's XT profile, the harness's cost table is
+priced from those measured terms, and wave 4's `tests/paccman.py` prints
+`PACCMAN.O88` beside `PACMAN.O88` on the same profile with a verdict line.
+*Numbers: to be filled in by each wave's measured os88pkg line, the bench's
+five terms, and the wave-4 table.*
+
+**Budget.** Estimated ~34.5 KB image + ~5 KB bss of 61,440 (the reference's
+game code at cword's measured ~9.4 bytes per code line, plus ~13 KB of ROM
+tables paid in `.data`), so no overlay is planned; `pmc_intro.c` and the
+round set-up are the first `ovl_*` candidates the day the size line passes
+50,000. Two thunks are added to the C SDK (`os88_gfx_blitp` with the probe
+form, `os88_wm_display`), a dozen lines each in `apps/cc/os88thunk.asm`.
+
+**Provenance.** The code is Andre Weissflog's under MIT; the tile, sprite and
+colour tables are Pac-Man arcade ROM data (Namco) and the two register dumps
+were captured from an arcade emulator, all embedded in the reference the same
+way; the gameplay follows Jamey Pittman's Pac-Man Dossier. Shipping the ROM
+data follows the user-decided C64 precedent (docs/C64-SPEC.md). The About card
+carries the product, the reference and its commit, the author's copyright and
+licence, the ROM and Dossier credits, and nothing about how the build renders.
