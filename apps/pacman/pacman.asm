@@ -23,6 +23,32 @@ PM_LEVEL equ 3
 PM_OVER equ 4
 ; Actors 0..3 ghosts, 4 player. Positions are Atari HPOS / VPOS.
 
+; Render targets (89.3). PM_TGT_WIN is every kernel drawing slot - the window,
+; the 11.2 surface and a SAME-MODE 53 bracket alike; the other two are the
+; foreign framebuffers a bracket sets, which this package writes itself.
+PM_TGT_WIN equ 0
+PM_TGT_V13 equ 1                 ; FSXM_VGA13:  320x200x256, chunky, A000
+PM_TGT_C4  equ 2                 ; FSXM_CGA320: 320x200x4, two banks, B800
+PM_FS_TOP  equ 16                ; board top in either 320x200 foreign mode
+PM_FS_MSG  equ 192               ; ...and the message row under it
+
+; The status strip is four independent fields, so eating a dot letters the
+; score and not the other 58 cells (89.3.3).
+PM_SD_SCORE equ 1
+PM_SD_LIVES equ 2
+PM_SD_LEVEL equ 4
+PM_SD_MSG   equ 8
+PM_SD_ALL   equ 15
+
+; One sprite pixel. Unrolled by its caller so the row costs no `loop`.
+%macro PM_SPX 0
+    shl al, 1
+    jnc %%s
+    mov [di], dl
+%%s:
+    inc di
+%endmacro
+
 pm_entry:
     call OSAPI_VIDEO
     cmp bx, 250
@@ -116,7 +142,7 @@ pm_reset_actors:
     mov byte [pm_chase], 0
     mov byte [pm_mode], PM_READY
     mov word [pm_hold], 36
-    mov byte [pm_status_dirty], 1
+    mov byte [pm_status_dirty], PM_SD_ALL
     ret
 
 ; Public callbacks preserve the dispatcher registers. Internal routines use
@@ -199,24 +225,268 @@ pm_key_body:
     jmp pm_paint
 .pause:
     xor byte [pm_pause], 1
-    mov byte [pm_status_dirty], 1
+    or byte [pm_status_dirty], PM_SD_MSG
     jmp pm_redraw
 .fs:
-    mov al, [pm_fs]
-    xor al, 1
-    jmp short .fullscreen
+    cmp byte [pm_fs], 0
+    jne .exitfs                  ; F leaves fullscreen as well as entering it,
+    call pm_fs_enter             ; and Esc is the escape hatch (SPEC.md 11.2.1)
+    ret
 .exitfs:
+    cmp byte [pm_fs], 0
+    je .out
     xor al, al
-.fullscreen:
     mov bx, [pm_win]
-    push ax
     call OSAPI_FULLSCREEN
-    pop ax
     jc .out
-    mov [pm_fs], al
+    mov byte [pm_fs], 0
     call pm_paint
 .out:
     ret
+
+; ---------------------------------------------------------------------------
+; pm_fs_enter - the 11.2 surface, and then the machine (SPEC.md 53)
+; in:  gfx lock held (key or menu context); preserves all registers
+;
+; Missile Command's shape (SPEC.md 48), with one difference that is the whole
+; point of it here: this bracket SETS A MODE where Missile's F does not. A
+; 4.77MHz 8088 cannot letter this board through OSAPI_GFX_BLIT4 at 18.2 Hz -
+; the desktop's 4bpp blit is priced per colour change and the maze is nothing
+; but colour changes - so fullscreen drops to a mode whose pixels are BYTES
+; and the band becomes a copy (89.3). The bracket is an optimisation and not
+; the feature: a refusal leaves the game on the 11.2 surface it already has.
+; ---------------------------------------------------------------------------
+pm_fs_enter:
+    push ax
+    push bx
+    push cx
+    call pm_pick_mode
+    cmp byte [pm_fsxm], 0FFh
+    jne .bracket                 ; A MODE-SETTING BRACKET TAKES NO 11.2 SURFACE
+                                 ; (SPEC.md 42.7's measured reason). That
+                                 ; surface's own W_PAINT is a whole board
+                                 ; through OSAPI_GFX_BLIT4 - 56,320 pixels,
+                                 ; ~2.8 s on a 4.77MHz 8088 - and every one of
+                                 ; them is thrown away by the mode set two
+                                 ; calls later. The same-mode bracket below
+                                 ; does want it: it draws through the window's
+                                 ; own geometry and there is nothing else for
+                                 ; the window to be.
+    mov al, 1
+    mov bx, [pm_win]
+    call OSAPI_FULLSCREEN        ; fronts and repaints us, so the layout
+    jc .out                      ; re-derives itself; no second paint here
+    mov byte [pm_fs], 1
+.bracket:
+    mov ax, pm_fsx_main
+    mov bx, [pm_win]
+    xor cx, cx                   ; no KEEPWORKER: the worker freezes and the
+    call OSAPI_FSX_RUN           ; bracket's own loop replaces it
+    jnc .left
+    cmp byte [pm_fs], 0
+    jne .out                     ; refused with the 11.2 surface already up:
+                                 ; stay on it, which is what F did before
+    mov al, 1                    ; refused before we had any surface: give the
+    mov bx, [pm_win]             ; user the one the bracket was an optimisation
+    call OSAPI_FULLSCREEN        ; over
+    jc .out
+    mov byte [pm_fs], 1
+    jmp short .out
+.left:
+    cmp byte [pm_fs], 0
+    je .out                      ; we never took a surface: 53.6 has already
+    mov byte [pm_fs], 0          ; repainted the desktop whole
+    xor al, al
+    mov bx, [pm_win]
+    call OSAPI_FULLSCREEN
+.out:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; ---------------------------------------------------------------------------
+; pm_pick_mode - the lowest-resolution mode this display will give us
+; out: [pm_fsxm] = an FSXM_* id, or 0FFh for a same-mode bracket
+;
+; ASKED ABOUT OUR WINDOW'S DISPLAY, not the primary (SPEC.md 39.18.2): on a
+; two-monitor desktop the answer differs per card and the window moves. A
+; Hercules offers nothing below its own 720x348, so it takes the same-mode
+; bracket and keeps the picture it had - what it gains there is exclusivity.
+; ---------------------------------------------------------------------------
+pm_pick_mode:
+    push ax
+    push bx
+    push dx
+    mov byte [pm_fsxm], 0FFh
+    mov bx, [pm_win]
+    call OSAPI_FSX_CAPS
+    test ax, 1 << FSXM_VGA13
+    jz .cga
+    mov byte [pm_fsxm], FSXM_VGA13
+    jmp short .out
+.cga:
+    test ax, 1 << FSXM_CGA320
+    jz .out
+    mov byte [pm_fsxm], FSXM_CGA320
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; ---------------------------------------------------------------------------
+; pm_fsx_main - the exclusive main (SPEC.md 53.1)
+; in:  SI = our window, ES = KERNEL_SEG, DS = CS = ours, the gfx lock held for
+;      the whole session and every other task frozen
+; out: a near ret leaves the bracket; the kernel restores the desktop
+;
+; The worker's loop rewritten for a machine we own: no lock to take and give
+; back, no clip region to arm, no events - keys are polled through int 16h,
+; which is legal because this IS the UI task - and one frame per tick, the
+; worker's own pace. After OSAPI_FSX_MODE every drawing slot is off limits
+; (SPEC.md 53.7), so from there on the band blitters and the letterer below
+; are the only things that write a pixel.
+; ---------------------------------------------------------------------------
+pm_fsx_main:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    call OSAPI_FONT_GLYPHS       ; DX:SI = the kernel's 8x8 bitmaps, AL/AH the
+    mov [pm_gtab], si            ; range they cover: how an app letters a
+    mov [pm_gseg], dx            ; foreign mode without a second typeface
+    mov [pm_gfirst], al
+    mov [pm_glast], ah
+    push ds
+    pop es                       ; ES = ours, which is what fsx_mode wants
+    mov al, [pm_fsxm]
+    cmp al, 0FFh
+    je .ready                    ; same-mode: the kernel's slots stay legal and
+    mov di, pm_fsi               ; every path below is the one the desktop uses
+    call OSAPI_FSX_MODE
+    jc .home                     ; refused, and nothing was changed
+    mov ax, [pm_fsi+FSI_SEG]
+    mov [pm_fseg], ax
+    mov ax, [pm_fsi+FSI_STRIDE]
+    mov [pm_fstride], ax
+    mov ax, [pm_fsi+FSI_BSTEP]
+    mov [pm_fbstep], ax
+    cmp byte [pm_fsi+FSI_MODE], FSXM_VGA13
+    jne .c4
+    mov byte [pm_tgt], PM_TGT_V13
+    call pm_pal13
+    jmp short .ready
+.c4:
+    mov byte [pm_tgt], PM_TGT_C4
+    call pm_palc4
+    call pm_c4build
+.ready:
+    mov byte [pm_full], 1
+    mov byte [pm_status_dirty], PM_SD_ALL
+    call pm_redraw
+.loop:
+.keys:
+    mov ah, 1                    ; poll: no events are dispatched in a bracket
+    int 0x16
+    jz .nokey
+    xor ah, ah
+    int 0x16
+    cmp al, 27
+    je .done
+    cmp al, 'f'
+    je .done
+    cmp al, 'F'
+    je .done
+    call pm_fsx_key
+    jmp short .keys
+.nokey:
+    call pm_fsx_frame
+    xor al, al                   ; FSXW_TICK: one frame a tick, and it halts
+    call OSAPI_FSX_WAIT          ; between polls rather than spinning
+    jmp .loop
+.done:
+    mov byte [pm_full], 1        ; the desktop's picture is owed a whole one
+.home:
+    mov byte [pm_tgt], PM_TGT_WIN
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; One frame inside the bracket. pm_frame's body without the two questions that
+; cannot be true here: nothing else can be the top window, and the About box
+; needs an event to appear.
+pm_fsx_frame:
+    cmp byte [pm_pause], 0
+    jne .status
+    cmp byte [pm_mode], PM_OVER
+    je .status
+    cmp byte [pm_mode], PM_PLAY
+    je .move
+    cmp word [pm_hold], 1
+    jbe .move
+    dec word [pm_hold]
+    jmp short .status
+.move:
+    call pm_mark_actors
+    call pm_step
+    call pm_mark_actors
+    call pm_redraw
+    ret
+.status:
+    cmp byte [pm_status_dirty], 0
+    je .out                      ; a pause message still has to reach the glass
+    call pm_redraw
+.out:
+    ret
+
+; The bracket's keyboard: the windowed bindings minus the ones its caller has
+; already taken (F and Esc), and minus the ones that need a window.
+pm_fsx_key:
+    cmp al, 'n'
+    je .win
+    cmp al, 'N'
+    je .win
+    cmp al, 'p'
+    je .win
+    cmp al, 'P'
+    je .win
+    cmp al, ' '
+    je .win
+    cmp ah, KSC_LEFT
+    je .win
+    cmp ah, KSC_RIGHT
+    je .win
+    cmp ah, KSC_UP
+    je .win
+    cmp ah, KSC_DOWN
+    je .win
+    push ax
+    or al, 20h
+    cmp al, 'a'
+    je .pop
+    cmp al, 'd'
+    je .pop
+    cmp al, 'w'
+    je .pop
+    cmp al, 's'
+    je .pop
+    pop ax
+    ret
+.pop:
+    pop ax
+.win:
+    jmp pm_key                   ; the windowed handler, register-preserving
 
 pm_command_body:
     cmp al, 0
@@ -318,7 +588,7 @@ pm_step:
     ret
 .ready:
     mov byte [pm_mode], PM_PLAY
-    mov byte [pm_status_dirty], 1
+    or byte [pm_status_dirty], PM_SD_MSG
     ret
 .play:
     cmp word [pm_fright], 0
@@ -675,7 +945,7 @@ pm_eat:
     jne .spawn
     mov byte [pm_mode], PM_LEVEL
     mov word [pm_hold], 36
-    mov byte [pm_status_dirty], 1
+    or byte [pm_status_dirty], PM_SD_MSG
     ret
 .spawn:
     cmp word [pm_eaten], 80
@@ -755,7 +1025,7 @@ pm_collide:
     jne .dead
     mov byte [pm_mode], PM_OVER
 .dead:
-    mov byte [pm_status_dirty], 1
+    or byte [pm_status_dirty], PM_SD_MSG | PM_SD_LIVES
     mov ax, 180
     call pm_tone
     ret
@@ -764,7 +1034,7 @@ pm_collide:
 pm_addscore:
     add [pm_score], ax
     adc word [pm_score+2], 0
-    mov byte [pm_status_dirty], 1
+    or byte [pm_status_dirty], PM_SD_SCORE
     cmp byte [pm_bonus], 0
     jne .out
     cmp word [pm_score+2], 0
@@ -774,6 +1044,7 @@ pm_addscore:
 .bonus:
     mov byte [pm_bonus], 1
     inc byte [pm_lives]
+    or byte [pm_status_dirty], PM_SD_LIVES
 .out:
     ret
 pm_tone:
@@ -848,6 +1119,21 @@ pm_mark:
     ret
 
 pm_track:
+    cmp byte [pm_tgt], PM_TGT_WIN
+    je .win
+    mov byte [pm_bpp], 4         ; the foreign surface: 320x200 either way, the
+    mov byte [pm_half], 0        ; board whole, and no window to read it off
+    xor ax, ax
+    mov [pm_cx], ax
+    mov [pm_cy], ax
+    mov [pm_ox], ax
+    mov ax, [pm_fsi+FSI_W]
+    mov [pm_cw], ax
+    mov ax, [pm_fsi+FSI_H]
+    mov [pm_ch], ax
+    mov word [pm_oy], PM_FS_TOP
+    ret
+.win:
     mov bx, [pm_win]
     call OSAPI_WM_DISPLAY
     mov [pm_bpp], dh
@@ -886,7 +1172,7 @@ pm_paint_body:
     mov byte [pm_hired], 1
 .draw:
     mov byte [pm_full], 1
-    mov byte [pm_status_dirty], 1
+    mov byte [pm_status_dirty], PM_SD_ALL
     call pm_redraw
     cmp byte [pm_abon], 0
     je .out
@@ -898,13 +1184,20 @@ pm_paint_body:
 
 pm_redraw:
     push es
-    mov bx, [pm_win]
-    call OSAPI_WM_CLIP_SET
+    cmp byte [pm_tgt], PM_TGT_WIN
+    jne .own                     ; a foreign framebuffer is ours whole: there
+    mov bx, [pm_win]             ; is no window above it to clip against, and
+    call OSAPI_WM_CLIP_SET       ; wm_clip_set is a desktop question anyway
     jc .out
+.own:
     call pm_track
     cmp byte [pm_full], 0
     je .compose
     mov byte [pm_full], 0
+    mov byte [pm_score_prev], 0  ; the strip is gone with the rest of it
+    cmp byte [pm_tgt], PM_TGT_WIN
+    jne .marked                  ; the mode set already cleared, and every band
+                                 ; below is about to be written again
     xor al, al
     call OSAPI_SET_COLOR
     mov ax, [pm_cx]
@@ -916,6 +1209,7 @@ pm_redraw:
     add dx, [pm_ch]
     dec dx
     call OSAPI_GFX_FILL
+.marked:
     xor bx, bx
 .all:
     mov byte [pm_min+bx], 0
@@ -923,7 +1217,7 @@ pm_redraw:
     inc bx
     cmp bx, 22
     jb .all
-    mov byte [pm_status_dirty], 1
+    mov byte [pm_status_dirty], PM_SD_ALL
 .compose:
     push ds
     pop es
@@ -936,34 +1230,30 @@ pm_redraw:
     cmp al, [pm_max+bx]
     ja .nextband
     mov [pm_col], ax
+    shl bx, 1                    ; the band's two bases, once a band: both were
+    mov ax, [pm_bandmap+bx]      ; a 16-bit MUL per TILE, and an 8088 charges
+    mov [pm_mapb], ax            ; ~124 clocks for one (PERFORMANCE.md Part 2)
+    mov ax, [pm_bandcv+bx]
+    mov [pm_cvb], ax
 .tile:
-    mov ax, bp
-    mov cx, 40
-    mul cx
-    add ax, [pm_col]
-    mov bx, ax
+    mov bx, [pm_col]
+    add bx, [pm_mapb]
     xor ax, ax
     mov al, [pm_map+bx]
     shl ax, 1
     mov bx, ax
     mov si, [pm_tile_offsets+bx]
     add si, pm_tiles
-    mov ax, bp
-    mov cx, 1280
-    mul cx
-    mov di, pm_canvas
-    add di, ax
-    mov ax, [pm_col]
-    shl ax, 1
-    shl ax, 1
-    add di, ax
-    mov dx, 8
-.row:
-    movsw
+    mov di, [pm_col]
+    shl di, 1
+    shl di, 1
+    add di, [pm_cvb]
+    add di, pm_canvas
+%rep 8                           ; unrolled: the row counter was 19 clocks a
+    movsw                        ; row on a tile that copies four bytes
     movsw
     add di, 156
-    dec dx
-    jnz .row
+%endrep
     inc word [pm_col]
     mov bx, bp
     xor ax, ax
@@ -985,16 +1275,9 @@ pm_redraw:
     cmp al, [pm_max+di]
     ja .clean
     mov bx, bp
-    mov cl, 3
-    shl bx, cl
-    push bx
-    push ax
-    mov ax, bx
-    mov cx, 160
-    mul cx
-    mov si, pm_canvas
-    add si, ax
-    pop ax
+    shl bx, 1
+    mov si, [pm_bandcv+bx]
+    add si, pm_canvas
     mov bx, ax
     shl bx, 1
     shl bx, 1
@@ -1010,7 +1293,10 @@ pm_redraw:
     shl ax, 1
     shl ax, 1
     add ax, [pm_ox]
-    pop bx
+    mov bx, bp
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
     mov dx, 8
     push bp
     mov bp, 160
@@ -1038,6 +1324,10 @@ pm_redraw:
 ; two identical pixels, so four table lookups compose eight output pixels.
 ; This avoids the software BLIT4 renderer's per-pixel color/clip work on XT.
 pm_blit:
+    cmp byte [pm_tgt], PM_TGT_V13
+    je pm_blit13
+    cmp byte [pm_tgt], PM_TGT_C4
+    je pm_blitc4
     cmp byte [pm_bpp], 1
     jne .packed
     call pm_packmono
@@ -1098,6 +1388,465 @@ pm_packmono:
     dec dx
     jnz .row
     pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+
+; ===========================================================================
+; THE FOREIGN-MODE BACKENDS (SPEC.md 89.3)
+;
+; Everything below runs only inside a SPEC.md 53 bracket that set a mode, and
+; nothing above it changes. The canvas, the tile composer, the sprite composer
+; and the dirty bands are the same on every path; what differs is the twelve
+; instructions that put a band on the glass.
+; ===========================================================================
+
+; ---------------------------------------------------------------------------
+; pm_blit13 - one band into 320x200x256 (FSXM_VGA13)
+; in:  DS:SI = the band's first canvas byte, BP = the canvas stride, AX = x,
+;      BX = y, CX = width in pixels, DX = rows. All registers preserved.
+;
+; A canvas byte is TWO IDENTICAL 4bpp pixels (89.2) and a mode 13h byte is one
+; pixel, so the whole conversion is `mov ah, al` - and pm_pal13 has put colour
+; c in DAC entry c|c<<4, which is exactly what a canvas byte holds. No
+; transpose, no run scan, no clip test, no per-call arrival: ~18 clocks a
+; pixel where the desktop's own OSAPI_GFX_BLIT4 measures ~235 on this art,
+; because that primitive is priced per COLOUR CHANGE and a maze is nothing
+; else (89.3.4).
+; ---------------------------------------------------------------------------
+pm_blit13:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov [pm_bw], cx
+    mov [pm_bh], dx
+    mov [pm_bsk], bp
+    mov [pm_bx], ax              ; x goes to MEMORY: the `mul` below writes DX
+    mov ax, bx                   ; and a register would not survive it
+    mov bx, 320
+    mul bx
+    add ax, [pm_bx]
+    mov di, ax                   ; ES:DI = the first destination byte
+    mov es, [pm_fseg]
+    mov cx, [pm_bw]
+    shr cx, 1                    ; canvas bytes a row
+    mov ax, [pm_bsk]
+    sub ax, cx
+    mov [pm_bsk], ax
+    shr cx, 1
+    shr cx, 1                    ; ...in groups of four: a tile column is eight
+    mov [pm_bc], cx              ; pixels, so this always divides (89.2)
+    mov ax, 320
+    sub ax, [pm_bw]
+    mov [pm_bdk], ax
+    cld
+.row:
+    mov cx, [pm_bc]
+.grp:
+%rep 4
+    lodsb
+    mov ah, al
+    stosw
+%endrep
+    loop .grp
+    add si, [pm_bsk]
+    add di, [pm_bdk]
+    dec word [pm_bh]
+    jnz .row
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; ---------------------------------------------------------------------------
+; pm_blitc4 - one band into 320x200x4 (FSXM_CGA320)
+; Same contract as pm_blit13.
+;
+; Two canvas bytes are four screen pixels in one byte. pm_c4hi/pm_c4lo hold
+; each byte's contribution already shifted into place, so packing is two
+; lookups and an OR - and the CGA's two banks (FSI_BANKS = 2) mean a row
+; alternates between +FSI_BSTEP and +FSI_STRIDE-FSI_BSTEP rather than adding a
+; stride, which is why the row base is carried rather than computed.
+; ---------------------------------------------------------------------------
+pm_blitc4:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov [pm_bw], cx
+    mov [pm_bh], dx
+    mov [pm_by], bx
+    mov [pm_bsp], bp
+    mov [pm_bx], ax
+    mov ax, bx
+    call pm_c4off                ; DI = that row's first byte
+    mov ax, [pm_bx]
+    shr ax, 1
+    shr ax, 1
+    add di, ax
+    mov es, [pm_fseg]
+    mov ax, [pm_bw]
+    shr ax, 1
+    shr ax, 1
+    mov [pm_bc], ax              ; screen bytes a row
+    mov ax, [pm_bsp]
+    mov dx, [pm_bw]
+    shr dx, 1
+    sub ax, dx
+    mov [pm_bsk], ax             ; canvas bytes to skip after one
+    xor bh, bh
+    cld
+.row:
+    mov cx, [pm_bc]
+    mov [pm_bdi], di
+.byte:
+    mov bl, [si]
+    mov al, [bx+pm_c4hi]
+    mov bl, [si+1]
+    or al, [bx+pm_c4lo]
+    add si, 2
+    stosb
+    loop .byte
+    add si, [pm_bsk]
+    mov di, [pm_bdi]
+    test byte [pm_by], 1
+    jnz .odd
+    add di, [pm_fbstep]          ; even row -> the odd bank, same line
+    jmp short .next
+.odd:
+    add di, [pm_fstride]         ; odd row -> the even bank, one line down
+    sub di, [pm_fbstep]
+.next:
+    inc word [pm_by]
+    dec word [pm_bh]
+    jnz .row
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; AX = a screen row -> DI = its first byte in the CGA's interleaved banks.
+pm_c4off:
+    push ax
+    push dx
+    mov dx, ax
+    shr ax, 1
+    push dx
+    mov dx, [pm_fstride]
+    mul dx
+    mov di, ax
+    pop dx
+    test dl, 1
+    jz .out
+    add di, [pm_fbstep]
+.out:
+    pop dx
+    pop ax
+    ret
+
+; Build the two packing tables. Every canvas byte is c|c<<4, so only sixteen
+; entries carry meaning; indexing by the whole byte is what makes the inner
+; loop two lookups with no shift in it.
+pm_c4build:
+    push ax
+    push bx
+    push cx
+    xor bx, bx
+.b:
+    mov al, bl
+    mov cl, 4
+    shr al, cl
+    push bx
+    xor ah, ah
+    mov bx, ax
+    mov al, [bx+pm_c4]
+    pop bx
+    mov ah, al
+    shl ah, 1
+    shl ah, 1
+    or al, ah                    ; the byte's two pixels, 2bpp
+    mov [bx+pm_c4lo], al
+    mov cl, 4
+    shl al, cl
+    mov [bx+pm_c4hi], al
+    inc bx
+    cmp bx, 256
+    jb .b
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; ---------------------------------------------------------------------------
+; pm_pal13 - the desktop's sixteen colours into DAC entries 0x11*c
+;
+; This is what makes pm_blit13's `mov ah, al` legal: a canvas byte is c|c<<4,
+; so if entry c|c<<4 holds colour c the byte IS the pixel. SPEC.md 53.7 hands
+; the DAC to the app inside a foreign mode, and the exit mode set puts it back.
+; ---------------------------------------------------------------------------
+pm_pal13:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    xor bx, bx
+.c:
+    mov dx, 0x3C8
+    mov al, bl
+    mov ah, bl
+    mov cl, 4
+    shl ah, cl
+    or al, ah
+    out dx, al
+    inc dx
+    mov si, bx
+    add si, bx
+    add si, bx
+    add si, pm_dac
+    mov al, [si]
+    out dx, al
+    mov al, [si+1]
+    out dx, al
+    mov al, [si+2]
+    out dx, al
+    inc bx
+    cmp bx, 16
+    jb .c
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; CGA palette 1 at high intensity - black, cyan, magenta, white - with a black
+; border. The BIOS mode set leaves it on palette 0 (green/red/yellow), which is
+; not a maze.
+;
+; BOTH WAYS ROUND, and the second is for the EGA. 3D9h is the CGA's colour
+; select and an EGA does not decode it at all - that card keeps its palette in
+; the attribute controller - so the direct write alone would leave an EGA on
+; green and red. int 10h AH=0Bh is not a mode set (SPEC.md 53.7 forbids only
+; those) and both BIOSes implement it, so the call is asked first and the port
+; write, which carries the intensity bit a real CGA needs, lands over it on the
+; card that has one.
+pm_palc4:
+    push ax
+    push bx
+    push dx
+    mov ax, 0x0B01               ; BH=01 select palette, BL=01 palette 1
+    mov bx, 0x0101
+    int 0x10
+    mov dx, 0x3D9
+    mov al, 0x30                 ; palette 1, high intensity, black border
+    out dx, al
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; ---------------------------------------------------------------------------
+; pm_fstext - a NUL-terminated string in opaque 8x8 cells, straight into the
+;             foreign framebuffer
+; in:  SI = the string, CX = x (a multiple of 8), DX = y. All registers kept.
+;
+; OSAPI_FONT_RUN is a drawing slot and renders DESKTOP geometry, so after
+; OSAPI_FSX_MODE it is off limits (SPEC.md 53.7). What is legal is
+; OSAPI_FONT_GLYPHS - the bitmaps themselves - which is the whole reason that
+; slot exists, and it means the strip is the same typeface it always was.
+; ---------------------------------------------------------------------------
+pm_fstext:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov [pm_penx], cx
+    mov [pm_peny], dx
+    cld
+.char:
+    mov al, [si]
+    inc si
+    or al, al
+    jz .done
+    push si
+    call pm_fsglyph
+    call pm_fscell
+    pop si
+    add word [pm_penx], 8
+    jmp short .char
+.done:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; AL = a character -> its eight rows in pm_gbuf. Anything outside the table's
+; range letters as a space, which is what a font run does with it too.
+pm_fsglyph:
+    push ax
+    push bx
+    push cx
+    push di
+    push es
+    cmp al, [pm_gfirst]
+    jb .space
+    cmp al, [pm_glast]
+    jbe .have
+.space:
+    mov al, ' '
+.have:
+    sub al, [pm_gfirst]
+    xor ah, ah
+    mov bx, ax
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    add bx, [pm_gtab]
+    mov es, [pm_gseg]            ; the table is NOT in KERNEL_SEG (SPEC.md 20.8)
+    mov di, pm_gbuf
+    mov cx, 8
+.copy:
+    mov al, [es:bx]
+    mov [di], al
+    inc bx
+    inc di
+    loop .copy
+    pop es
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; pm_gbuf at [pm_penx],[pm_peny], in whichever foreign mode is up.
+pm_fscell:
+    cmp byte [pm_tgt], PM_TGT_C4
+    je pm_fscellc4
+    ; ...and fall through to the chunky one
+
+pm_fscell13:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov ax, [pm_peny]
+    mov dx, 320
+    mul dx
+    add ax, [pm_penx]
+    mov di, ax
+    mov es, [pm_fseg]
+    mov si, pm_gbuf
+    mov byte [pm_rowc], 8
+    cld
+.row:
+    lodsb
+    mov ah, al
+    and ah, 0Fh
+    mov cl, 4
+    shr al, cl
+    mov bl, al                   ; the high nibble is the left four pixels
+    xor bh, bh
+    shl bx, 1
+    shl bx, 1
+    mov dx, [bx+pm_nib13]
+    mov [es:di], dx
+    mov dx, [bx+pm_nib13+2]
+    mov [es:di+2], dx
+    mov bl, ah
+    xor bh, bh
+    shl bx, 1
+    shl bx, 1
+    mov dx, [bx+pm_nib13]
+    mov [es:di+4], dx
+    mov dx, [bx+pm_nib13+2]
+    mov [es:di+6], dx
+    add di, 320
+    dec byte [pm_rowc]
+    jnz .row
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+pm_fscellc4:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov ax, [pm_peny]
+    mov [pm_bdi], ax             ; the pen's row, carried down the cell
+    mov si, pm_gbuf
+    mov es, [pm_fseg]
+    mov byte [pm_rowc], 8
+    cld
+.row:
+    mov ax, [pm_bdi]
+    call pm_c4off
+    mov ax, [pm_penx]
+    shr ax, 1
+    shr ax, 1
+    add di, ax
+    lodsb
+    mov ah, al
+    and ah, 0Fh
+    mov cl, 4
+    shr al, cl
+    mov bl, al
+    xor bh, bh
+    mov dl, [bx+pm_nibc4]
+    mov [es:di], dl
+    mov bl, ah
+    xor bh, bh
+    mov dl, [bx+pm_nibc4]
+    mov [es:di+1], dl
+    inc word [pm_bdi]
+    dec byte [pm_rowc]
+    jnz .row
+    pop es
     pop di
     pop si
     pop dx
@@ -1197,50 +1946,110 @@ pm_sprite:
     mov dh, 10
 .row:
     lodsb
-    mov cx, 8
-.pixel:
-    shl al, 1
-    jnc .skip
-    mov [di], dl
-.skip:
-    inc di
-    loop .pixel
+%rep 8
+    PM_SPX                       ; unrolled: `loop` is 17 clocks an 8088 spends
+%endrep                          ; on nothing, eight times a sprite row
     add di, 152
     dec dh
     jnz .row
 .out:
     ret
 
+; ---------------------------------------------------------------------------
+; pm_status - the strip, one field at a time (89.3.3)
+;
+; It used to be one dirty bit over four fields, so eating a dot lettered all
+; 74 cells: ~67 ms on a 4.77MHz 8088 at ~0.9 ms a cell, more than a whole
+; frame's budget, for two digits that moved. Each field now carries its own
+; bit, and the score - the one that changes every few frames - is drawn from
+; the first digit that actually differs, which for a 10-point dot is two.
+; ---------------------------------------------------------------------------
 pm_status:
-    cmp byte [pm_status_dirty], 0
+    mov al, [pm_status_dirty]
+    or al, al
     je .out
+    mov [pm_sdbits], al
     mov byte [pm_status_dirty], 0
+    mov ax, [pm_ox]              ; where the strip lives: inside the content on
+    mov [pm_sx], ax              ; the desktop, at the screen's own edges in a
+    mov dx, [pm_cy]              ; foreign mode
+    add dx, 3
+    mov bx, [pm_cy]
+    add bx, [pm_ch]
+    sub bx, 11
+    cmp byte [pm_tgt], PM_TGT_WIN
+    je .rows
+    mov word [pm_sx], 0
+    mov dx, 4
+    mov bx, PM_FS_MSG
+.rows:
+    mov [pm_stop], dx
+    mov [pm_sbot], bx
+
+    test byte [pm_sdbits], PM_SD_SCORE
+    jz .lives
     mov ax, [pm_score]
     mov dx, [pm_score+2]
     mov di, pm_score_text+6
     mov cx, 10
     call pm_decimal
+    xor bx, bx                   ; the first cell that moved
+.diff:
+    mov al, [pm_score_text+bx]
+    cmp al, [pm_score_prev+bx]
+    jne .from
+    or al, al
+    jz .lives                    ; identical: nothing to letter
+    inc bx
+    jmp short .diff
+.from:
+    push bx
+.copy:
+    mov al, [pm_score_text+bx]
+    mov [pm_score_prev+bx], al
+    or al, al
+    jz .copied
+    inc bx
+    jmp short .copy
+.copied:
+    pop bx
+    mov cx, bx
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    add cx, [pm_sx]
+    mov si, pm_score_text
+    add si, bx
+    mov dx, [pm_stop]
+    call pm_run
+.lives:
+    test byte [pm_sdbits], PM_SD_LIVES
+    jz .flevel
     mov al, [pm_lives]
     add al, '0'
     mov [pm_lives_text+6], al
+    mov si, pm_lives_text
+    mov cx, [pm_sx]
+    add cx, 144
+    mov dx, [pm_stop]
+    call pm_run
+.flevel:
+    test byte [pm_sdbits], PM_SD_LEVEL
+    jz .msg
     mov ax, [pm_level]
     inc ax
     xor dx, dx
     mov di, pm_level_text+6
     mov cx, 5
     call pm_decimal
-    mov cx, [pm_ox]
-    mov dx, [pm_cy]
-    add dx, 3
-    mov si, pm_score_text
-    mov ax, CWHITE
-    call OSAPI_FONT_RUN
-    add cx, 144
-    mov si, pm_lives_text
-    call OSAPI_FONT_RUN
-    add cx, 88
     mov si, pm_level_text
-    call OSAPI_FONT_RUN
+    mov cx, [pm_sx]
+    add cx, 232
+    mov dx, [pm_stop]
+    call pm_run
+.msg:
+    test byte [pm_sdbits], PM_SD_MSG
+    jz .out
     mov bx, pm_s_play
     cmp byte [pm_mode], PM_READY
     jne .dead
@@ -1267,13 +2076,22 @@ pm_status:
     mov bx, pm_s_wait
 .available:
     mov si, bx
-    mov cx, [pm_ox]
-    mov dx, [pm_cy]
-    add dx, [pm_ch]
-    sub dx, 11
+    mov cx, [pm_sx]
+    mov dx, [pm_sbot]
+    call pm_run
+.out:
+    ret
+
+; One run of text, wherever this frame is going.
+; in: SI = string, CX = x, DX = y. Preserves what its two backends preserve.
+pm_run:
+    cmp byte [pm_tgt], PM_TGT_WIN
+    jne .foreign
     mov ax, CWHITE
     call OSAPI_FONT_RUN
-.out:
+    ret
+.foreign:
+    call pm_fstext
     ret
 
 ; DX:AX -> CX decimal digits at DS:DI; divide the high word first so no
@@ -1331,6 +2149,60 @@ pm_ab3: db 'Original maze, sprites and scoring',0
 pm_ab4: db 'Native 8086 adaptation',0
 pm_ab5: db 'Arrows/WASD move. P pauses. N starts.',0
 align 32, db 0
+
+; A band's two bases, indexed by band (89.3.5): 22 words each, against a
+; 16-bit MUL an 8088 charges ~124 clocks for.
+pm_bandmap:
+%assign pmb 0
+%rep 22
+    dw pmb * 40
+%assign pmb pmb+1
+%endrep
+pm_bandcv:
+%assign pmb 0
+%rep 22
+    dw pmb * 1280
+%assign pmb pmb+1
+%endrep
+
+; The desktop's sixteen colours as 6-bit DAC triples, for FSXM_VGA13.
+pm_dac:
+    db  0, 0, 0,   0, 0,42,   0,42, 0,   0,42,42
+    db 42, 0, 0,  42, 0,42,  42,21, 0,  42,42,42
+    db 21,21,21,  21,21,63,  21,63,21,  21,63,63
+    db 63,21,21,  63,21,63,  63,63,21,  63,63,63
+
+; ...and as CGA palette 1 at high intensity - black, cyan, magenta, white.
+; Walls (9) are cyan, dots and the player (14/15) white, the ghosts magenta;
+; a frightened ghost (7) goes white, which is the flash it already has.
+pm_c4:
+    db 0,1,1,1,2,2,1,3,1,1,3,2,2,2,3,3
+
+; Four pixels of a glyph nibble, one byte each, for FSXM_VGA13's chunky bytes
+; (0xFF is colour 15 in the palette pm_pal13 lays down).
+pm_nib13:
+    db 0x00,0x00,0x00,0x00
+    db 0x00,0x00,0x00,0xFF
+    db 0x00,0x00,0xFF,0x00
+    db 0x00,0x00,0xFF,0xFF
+    db 0x00,0xFF,0x00,0x00
+    db 0x00,0xFF,0x00,0xFF
+    db 0x00,0xFF,0xFF,0x00
+    db 0x00,0xFF,0xFF,0xFF
+    db 0xFF,0x00,0x00,0x00
+    db 0xFF,0x00,0x00,0xFF
+    db 0xFF,0x00,0xFF,0x00
+    db 0xFF,0x00,0xFF,0xFF
+    db 0xFF,0xFF,0x00,0x00
+    db 0xFF,0xFF,0x00,0xFF
+    db 0xFF,0xFF,0xFF,0x00
+    db 0xFF,0xFF,0xFF,0xFF
+
+; ...and the same nibble as one 2bpp byte for FSXM_CGA320, ink 3.
+pm_nibc4:
+    db 0x00,0x03,0x0C,0x0F,0x30,0x33,0x3C,0x3F
+    db 0xC0,0xC3,0xCC,0xCF,0xF0,0xF3,0xFC,0xFF
+
 pm_mono_pairs: db 0,0,0,0,0,0,0,2,2,2,2,2,3,2,3,3
     db 0,0,0,0,0,0,0,1,1,1,1,1,3,1,3,3
 pm_initial_x: db 124,124,116,132,122
@@ -1406,6 +2278,38 @@ pm_license:
     PM_VAR pm_min,22
     PM_VAR pm_max,22
     PM_VAR pm_map,880
+    PM_VAR pm_tgt,1
+    PM_VAR pm_fsxm,1
+    PM_VAR pm_fsi,FSI_SIZE
+    PM_VAR pm_fseg,2
+    PM_VAR pm_fstride,2
+    PM_VAR pm_fbstep,2
+    PM_VAR pm_gtab,2
+    PM_VAR pm_gseg,2
+    PM_VAR pm_gfirst,1
+    PM_VAR pm_glast,1
+    PM_VAR pm_gbuf,8
+    PM_VAR pm_rowc,1
+    PM_VAR pm_penx,2
+    PM_VAR pm_peny,2
+    PM_VAR pm_sdbits,1
+    PM_VAR pm_sx,2
+    PM_VAR pm_stop,2
+    PM_VAR pm_sbot,2
+    PM_VAR pm_score_prev,17
+    PM_VAR pm_bw,2
+    PM_VAR pm_bh,2
+    PM_VAR pm_bc,2
+    PM_VAR pm_bsk,2
+    PM_VAR pm_bdk,2
+    PM_VAR pm_bsp,2
+    PM_VAR pm_bx,2
+    PM_VAR pm_by,2
+    PM_VAR pm_bdi,2
+    PM_VAR pm_mapb,2
+    PM_VAR pm_cvb,2
+    PM_VAR pm_c4hi,256
+    PM_VAR pm_c4lo,256
     PM_VAR pm_canvas,28160
     OS88_BSS PM_BSS
     OS88_IMAGE_END

@@ -92569,5 +92569,138 @@ VGA and Hercules use 320 by 176 pixels, CGA 320 by 88 (every other source row,
 with a doubled source stride). Frame preferences are 338 by 222, 338 by 222,
 and 338 by 140 respectively; content geometry determines which layout fits.
 The board is centered in the current content, including full screen. All
-self-initiated drawing arms the window clip. The status strip uses opaque
-FONT_RUN and changes only when its values change.
+self-initiated drawing arms the window clip. The status strip uses opaque text
+and each of its four fields changes only when its own value does (89.3.3).
+
+### 89.3 Full screen is a 53 bracket, and on VGA and CGA it changes the mode
+
+**F takes the machine, not just the screen.** The 11.2 surface it used to take
+is still taken first — the window loses its chrome and fronts, exactly as
+11.2.1 binds — and then `OSAPI_FSX_RUN` (53.1) runs `pm_fsx_main` with every
+other task frozen and the graphics lock held for the whole session. F and Esc
+leave it, which is the same binding seen from inside. **The bracket is an
+optimisation and not the feature**: `OSAPI_FSX_RUN` answering CF=1 leaves the
+game on the 11.2 surface with its worker, which is what it had before.
+
+Which mode is `OSAPI_FSX_CAPS` asked **about this window's display** (39.18.2),
+at the moment F is pressed rather than at launch, and the lowest resolution
+offered wins:
+
+| adapter | mode | board | why |
+|---|---|---|---|
+| VGA | `FSXM_VGA13` — 320x200x256 | 320x176, sixteen colours | a pixel is a byte, so a band is a copy |
+| EGA | `FSXM_CGA320` — 320x200x4 | 320x176, four colours | 53.4 offers the EGA the CGA-compatible modes only |
+| CGA | `FSXM_CGA320` | 320x176, four colours | **full height in colour**, where the desktop's 640x200x1bpp gets 320x88 monochrome |
+| Hercules | same-mode (no `fsx_mode`) | 320x176, as before | nothing below 720x348 exists on that card; what the bracket buys is exclusivity |
+
+The board sits at y = 16 in either 320x200 mode, the score/lives/level row at
+y = 4 and the message row at y = 192 — 200 rows exactly. Nothing above the
+band blitters changes: the map, the 4bpp canvas, the dirty bands, the tile
+composer and the sprite composer are one body on every path, and a render
+target byte picks the twelve instructions that put a band on the glass.
+
+**A mode-setting bracket takes NO 11.2 surface** (42.7's measured reason, and
+here it is seconds): that surface's own `W_PAINT` is a whole board through
+`OSAPI_GFX_BLIT4` — 56,320 pixels, ~2.8 s on a 4.77MHz 8088 — and the mode set
+two calls later throws every one of them away. The same-mode bracket does take
+it, because it draws through the window's own geometry and 53.7.1 is then
+answered by the window record rather than by `fsx_surf`. A refused
+`OSAPI_FSX_RUN` falls back to the 11.2 surface either way.
+
+**Measured on a cycle-accurate 4.77MHz 8088**, the board held in play so a
+death hold cannot flatter the count (`tests/pacman.py` asserts the last
+column, which is the whole point of the bracket):
+
+| adapter | windowed, before | windowed, now | full screen |
+|---|---|---|---|
+| VGA | 4.73 fps | 4.77 fps | **18.20** — the tick rate |
+| CGA | 18.20 fps | 18.20 fps | **18.20**, and the board is now full height in colour |
+| Hercules | 10.47 fps | 14.07 fps | **18.20** — the tick rate |
+
+The windowed VGA column is the honest one: 89.3.4 is why it does not move.
+
+#### 89.3.1 The two foreign backends
+
+**Mode 13h is `mov ah, al`.** A canvas byte is two identical 4bpp pixels (89.2)
+and a mode 13h byte is one pixel, so a band converts with no transpose, no run
+scan and no clip test — provided the byte is already the palette index it
+means. It is: `pm_pal13` writes the desktop's sixteen colours into DAC entries
+`0x11 * c`, which is exactly what a doubled nibble holds. 53.7 hands the DAC to
+the app inside a foreign mode and the exit mode set puts it back.
+
+**CGA mode 4 is two lookups and an OR.** Two canvas bytes are four screen
+pixels in one byte; `pm_c4hi`/`pm_c4lo` are built at entry from `pm_c4`'s
+sixteen-entry colour map and hold each byte's contribution already shifted into
+place. Rows alternate the card's two banks (`FSI_BANKS` = 2), so a row adds
+`FSI_BSTEP` or `FSI_STRIDE - FSI_BSTEP` rather than a stride. `pm_palc4` puts
+3D9h on palette 1 at high intensity — black, cyan, magenta, white — because the
+BIOS mode set leaves it on green/red/yellow, which is not a maze. Walls are
+cyan, dots and the player white, the ghosts magenta; a frightened ghost is
+white, which is the flash it already has.
+
+#### 89.3.2 Letters without a drawing slot
+
+After the first `fsx_mode` every drawing slot is off limits (53.7) — including
+`OSAPI_FONT_RUN`, which renders desktop geometry. What stays legal is
+`OSAPI_FONT_GLYPHS`, the bitmaps themselves, and that is the whole reason that
+slot exists. `pm_fstext` letters opaque 8x8 cells from them, so the strip is
+the same typeface it is on the desktop, through a per-target cell writer:
+four bytes a nibble in mode 13h, one 2bpp byte a nibble on the CGA.
+
+#### 89.3.3 The status strip is four fields, and the score is its digits
+
+One dirty bit over four fields meant eating a dot lettered all 74 cells. At
+~0.9 ms a cell on a 4.77MHz 8088 that is ~67 ms — more than a whole frame's
+budget — for two digits that moved. Each field now carries its own bit
+(`PM_SD_SCORE`/`LIVES`/`LEVEL`/`MSG`), and the score, the one that changes
+every few frames, is drawn from the first digit that actually differs against
+a kept copy of the previous text. A full paint clears that copy, because the
+screen it agreed with is gone.
+
+#### 89.3.4 Why the windowed VGA path is what it is
+
+Measured on a cycle-accurate 4.77MHz 8088 with a VGA, windowed: **4.7 frames
+a second against the 18.2 the worker asks for, and 81% of the frame is
+`OSAPI_GFX_BLIT4`** — nine bands, 3,648 dirty pixels, 180 ms of a 222 ms
+frame. That primitive is priced per **colour change**, not per pixel (5.4.1):
+this art runs ~6.6 runs a row and a run is ~1,800 clocks, which is ~235 clocks
+a pixel.
+
+Two package-side attempts on that number were measured and **both lost**, and
+they are written down so they are not tried again:
+
+- **Widening a band to reach 5.4.1.3's planar row decoder**, whose 64-pixel
+  floor Pac-Man's 24-to-88-pixel bands fall under. Widening to 64 gave 3.67 fps
+  and to 128 gave 2.50, because the extra pixels are extra runs and the row
+  keeps the run path either way.
+- **Lowering that floor in the kernel** to 16 with the `W/32` threshold floored
+  at one run. The blits went from 180 ms to 222 ms: the decoder's per-row fixed
+  cost is real and 64 is where it stops mattering. The gate stands.
+
+What would fix it is `gfx_blitp` (5.4.3) — a canvas held as four planes, where
+a repaint is a copy — and it is **refused for this package**, not overlooked: a
+package that arms its own clip region through `OSAPI_WM_CLIP_SET` meets a
+region that is binding rather than advisory (5.4.3.3), and a worker painting
+under a window that is not the one it thinks it is under has to. Pac-Man's
+worker arms one on every self-initiated frame (89.2). So the windowed VGA
+picture on a 4.77MHz machine stays what it is, and **F is the answer**: the
+same board in mode 13h is a copy per band.
+
+#### 89.3.5 What the composition work bought, on every path
+
+Four changes below the blit, and they cost no picture:
+
+- **The band's two bases come out of a 22-entry table** (`pm_bandmap`,
+  `pm_bandcv`) rather than a 16-bit `MUL` per **tile**. An 8088 charges ~124
+  clocks for one and the tile loop ran two. The blit loop's own per-band `MUL`
+  goes the same way.
+- **The tile's row loop is unrolled**, eight rows of four bytes with no counter.
+- **The sprite row is unrolled**, so it no longer spends `loop`'s 17 clocks
+  eight times a row, five actors and a fruit a frame.
+- **The strip is four fields** (89.3.3), which is the largest of them whenever
+  a dot is eaten.
+
+Measured on the same frame: tile composition **22.7 ms → 12.1**, sprite
+composition **6.6 → 4.8**. That is ~3% of a windowed VGA frame, where the blit
+is 81% of it — and **34% of a Hercules one** (10.47 → 14.07 fps), where the
+blit is cheap and this was most of what was left.

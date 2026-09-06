@@ -23,6 +23,22 @@ import os88geom
 import dispcp
 import dispapps
 
+XT_HZ = 4772727                 # the 8088's own 14.31818/3, for a guest second
+
+# What each adapter's F is: the render target it reaches (SPEC.md 89.3) and
+# the FSXM_* id behind it. A Hercules has nothing below its own 720x348, so it
+# takes a same-mode bracket - 0FFh - and keeps the desktop's mode.
+MODES = {
+    'os8088_xt_vga':        (1, 6),      # PM_TGT_V13, FSXM_VGA13
+    'os8088_5150_cga_gla':  (2, 2),      # PM_TGT_C4,  FSXM_CGA320
+    'os8088_5150_herc_gla': (0, 0xFF),   # same mode
+}
+
+# apps/pacman's own pm_c4: a desktop colour to a CGA palette-1 index. Written
+# out here on purpose - a test that imported the table it is checking would
+# agree with any table at all.
+CGA4 = [0, 1, 1, 1, 2, 2, 1, 3, 1, 1, 3, 2, 2, 2, 3, 3]
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
@@ -218,22 +234,98 @@ def main():
 
         # A forced complete reconstruction must equal the incremental canvas.
         # This sees sprite residue and erased pellets even when the glass looks
-        # plausible. Freeze gameplay; full-screen input invokes W_PAINT.
+        # plausible - and it is the assertion that caught the foreign-mode
+        # blitter writing every band at x = 0 (SPEC.md 89.3.1), because the
+        # canvas was right and only the copy out of it was wrong. Freeze
+        # gameplay first; entering full screen redraws whole.
         put('pm_pause', 1)
         canvas = m.read(base + symbols['pm_canvas'], 28160)
+        desktop_mode = m.video()['mode']
+
+        # F is a SPEC.md 53 bracket now, not just the 11.2 surface: the worker
+        # freezes and pm_fsx_frame is the frame, so `boundary` cannot be the
+        # fence here.
+        m.bp_exec(base + symbols['pm_fsx_frame'])
+        m.key('KeyF')
+        m.run()
+        assert m.wait_stop(60) == 'breakpoint', 'F did not reach the bracket'
         m.bp_exec()
-        key('KeyF')
         m.advance(frames=120)
-        boundary()
-        assert read('pm_fs') == 1
+        kind, want = MODES[args.machine]
+        assert read('pm_tgt') == kind, ('render target', read('pm_tgt'), kind)
+        assert read('pm_fsxm') == want, ('fsx mode', read('pm_fsxm'), want)
+        got = m.video()['mode']
+        if kind == 0:
+            assert got == desktop_mode, ('a same-mode bracket changed the mode', got)
+            assert read('pm_fs') == 1, 'the same-mode bracket wants the 11.2 surface'
+        else:
+            assert got != desktop_mode, ('the mode never changed', got)
+            assert read('pm_fs') == 0, 'a mode-setting bracket takes no 11.2 surface'
         assert m.read(base + symbols['pm_canvas'], 28160) == canvas
+
+        # ...and the SCREEN, rebuilt from that canvas on the host. A picture of
+        # a maze looks plausible with the packing wrong; this answers whether
+        # the bytes the blitter wrote are the bytes the canvas says (SPEC.md
+        # 89.3.1), and it is what would have caught the x = 0 defect on its own.
+        if kind:
+            put('pm_full', 1)
+            put('pm_status_dirty', 0x0F)
+            m.advance(frames=300)
+            board = m.read(base + symbols['pm_canvas'], 28160)
+            seg = read('pm_fseg', 2)
+            stride, bstep = read('pm_fstride', 2), read('pm_fbstep', 2)
+            bad = 0
+            if kind == 1:                    # 320x200x256: one byte a pixel
+                vram = m.read(seg * 16, 64000)
+                for row in range(176):
+                    src = board[row * 160:(row + 1) * 160]
+                    want = bytes(b for c in src for b in (c, c))
+                    got = vram[(row + 16) * 320:(row + 16) * 320 + 320]
+                    bad += sum(1 for x, y in zip(want, got) if x != y)
+            else:                            # 320x200x4: two banks, 2bpp
+                vram = m.read(seg * 16, 16384)
+                for row in range(176):
+                    src = board[row * 160:(row + 1) * 160]
+                    want = bytes(((CGA4[src[i] >> 4] * 5) << 4) | (CGA4[src[i+1] >> 4] * 5)
+                                 for i in range(0, 160, 2))
+                    y = row + 16
+                    off = (y >> 1) * stride + (y & 1) * bstep
+                    got = vram[off:off + 80]
+                    bad += sum(1 for x, z in zip(want, got) if x != z)
+            assert bad == 0, ('the foreign-mode blitter and the canvas disagree', bad)
+            canvas = board
+
+        # THE POINT OF THE BRACKET, asserted rather than admired: a 4.77MHz
+        # 8088 must complete a frame per tick. Windowed on a VGA the same board
+        # measures 4.4 fps, all of it in OSAPI_GFX_BLIT4 (SPEC.md 89.3.4), and
+        # the rate is quantised to 18.2/N - so anything at or under 9.1 fails
+        # this and 14 cannot be reached by a machine that missed a tick.
+        put('pm_pause', 0)
+        put('pm_mode', 0)
+        put('pm_hold', 1, 2)
+        put('pm_lives', 9)
+        raw('pm_release', [255] * 4)     # nothing leaves the house, nothing dies
+        m.advance(cycles=XT_HZ // 2)
+        f0 = read('pm_frames', 2)
+        m.advance(cycles=XT_HZ * 4)
+        fps = ((read('pm_frames', 2) - f0) & 0xFFFF) / 4.0
+        assert fps >= 14.0, ('full screen missed the tick rate', fps)
+        put('pm_pause', 1)
+        m.advance(frames=60)
+        canvas = m.read(base + symbols['pm_canvas'], 28160)
+
+        m.bp_exec(base + symbols['pm_frame'])
+        m.key('Escape')
+        m.run()
+        assert m.wait_stop(60) == 'breakpoint', 'Esc did not leave the bracket'
         m.bp_exec()
-        key('Escape')
         m.advance(frames=120)
-        boundary()
+        assert read('pm_tgt') == 0, 'the render target survived the bracket'
         assert read('pm_fs') == 0, (read('pm_fs'), m.regs())
+        assert m.video()['mode'] == desktop_mode, 'the desktop mode was not restored'
         assert m.read(base + symbols['pm_canvas'], 28160) == canvas
-        print('  game over, restart, full-screen round trip and repaint: pass', flush=True)
+        print(f'  game over, restart, full-screen bracket ({fps:.1f} fps) and repaint: pass',
+              flush=True)
 
         # Close through the real window control and watch instance teardown.
         m.bp_exec()

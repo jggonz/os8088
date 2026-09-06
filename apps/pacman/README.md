@@ -6,7 +6,10 @@ the software disk, or install Pac-Man from The Wire.
 
 - Arrow keys or WASD steer; turns are buffered until a legal junction.
 - P or Space pauses. N starts a new game.
-- F enters or leaves full screen; Esc leaves it.
+- F enters or leaves full screen; Esc leaves it. Full screen takes the machine
+  (SPEC.md 53) and, where the card has one, drops to a lower-resolution mode:
+  320x200x256 on a VGA, 320x200x4 on a CGA or EGA. A Hercules has nothing
+  below its own 720x348 and keeps the picture it had.
 - The system About menu shows the credits. Dismiss with a click or key,
   then press P to resume. Switching to another window suspends play.
 
@@ -23,13 +26,29 @@ alternating corner/chase phases with distance-based fleeing. The original
 scripted opening and patrol routes, attract screens, two-player swapping,
 difficulty selector and intermission cartoons are not implemented.
 
-VGA and Hercules display a 320 by 176 board. CGA uses a 320 by 88 board,
-sampling alternate source rows. All layouts retain the same maze and game
-coordinates. Dirty tile bands are composed in RAM and blitted once, so
-moving sprites do not erase directly on the display. Monochrome displays
-use packed 1-bit bands; color displays use packed 4bpp bands. Each instance owns its
-state and one 256-byte-stack worker; no kernel changes or extra heap claims
-are required. The packed canvas accounts for 28,160 bytes of the BSS.
+In a window, VGA and Hercules display a 320 by 176 board and CGA a 320 by 88
+one, sampling alternate source rows. In full screen every adapter gets the
+whole 320 by 176 board, the CGA in four colours. All layouts retain the same
+maze and game coordinates. Dirty tile bands are composed in RAM and blitted
+once, so moving sprites do not erase directly on the display. Monochrome
+displays use packed 1-bit bands; color displays use packed 4bpp bands; the two
+full-screen modes take the canvas byte for byte, which is why they are fast.
+Each instance owns its state and one 256-byte-stack worker; no kernel changes
+or extra heap claims are required. The packed canvas accounts for 28,160 bytes
+of the BSS.
+
+Frames a second on a cycle-accurate 4.77 MHz 8088, the board held in play:
+
+| adapter | in a window | full screen |
+|---|---|---|
+| VGA | 4.8 | **18.2** — the tick rate |
+| CGA | 18.2 | 18.2, and the board is full height in colour |
+| Hercules | 14.1 | **18.2** |
+
+A windowed VGA frame is 81% one call, `OSAPI_GFX_BLIT4`, which is priced per
+colour change and a maze is nothing else; SPEC.md 89.3.4 records the two
+attempts on that number that were measured and lost. Full screen is the
+answer, and it is what the F key does.
 
 Build with `make build/pacman.o88`, or `make` for every software floppy.
 The port's contract is [SPEC.md §89](../../SPEC.md#89-pac-man-appspacmanpacmanasm).
