@@ -56,7 +56,9 @@ and the contradiction is called out in "Where this file overrides the plan".
    the resident size line still has 1,500 bytes or more spare after wave 5**.
    Otherwise ship without it, stated as absent in `README.TXT` and SPEC.md §92.
 6. **SPEC.md section number: LEMMINGS is §92.** main's §90 is FONT VIEWER;
-   PACCMAN and PHOTOSHOP, in flight in sibling worktrees, hold §90/§91. The
+   PACCMAN and PHOTOSHOP, in flight in sibling worktrees, hold the numbers 90
+   and 91 (cited without section marks here because 91 is not a heading in this
+   tree yet, and the doc gate is right to say so). The
    section and a regenerated `docs/INDEX.md` land in the same commit as this
    file, before any code.
 7. **The XT: SHIP ON THE XT AT WHATEVER RATE WAVE 2 MEASURES.** The user's own
@@ -72,10 +74,38 @@ and the contradiction is called out in "Where this file overrides the plan".
    anything under `.claude/`**. Never stage `vm/386dx/86box.cfg` or
    `vm/xt-wire/86box.cfg` — they are dirty user files. Always `git add` explicit
    paths, never `-A` or `-u`.
+9. **THE WIRE'S LIMITS SHAPE THE CONVERTER'S OUTPUT** — scouted from SPEC.md
+   §88.13/§88.14 and the site's `tools/wire.py`; the recipe is in
+   `<scratchpad>/wire-recipe.md`, and the limits are pinned in SPEC.md §92.3.2.
+   Five parts, and the converter refuses on each rather than discovering it at
+   publication:
+   - **(a)** No band file may exceed **64,512 bytes** (`WIRE_FILEMAX`; and
+     `RD_FILEMAX` = 65,024 one device along, SPEC.md §62.9.10). The converter
+     REFUSES to write a larger one, and a bank that would exceed it — a 4bpp
+     VGASPEC picture at 76,800, or any future style — is written as **numbered
+     parts** the package reads in sequence into **ONE claim**, one
+     `os88_file_read_seg` per part at successive 512-aligned offsets of that
+     claim. Each part is 512-padded, so the next part's base is aligned by
+     construction. **The claim is still sized for the whole bank; it is the
+     single READ that is bounded.**
+   - **(b)** The folder should stay **under about 90 files** (`RD_MAXENT` = 96
+     directory rows on the RAM disk). Group the 80 level records **eight to a
+     file**, the way the DOS files do, and keep one band per style bank, so the
+     folder is about 30 to 40 files.
+   - **(c)** The whole data set plus package plus overlay must stay under
+     **1,048,575 bytes** as one `.WPK` stream (`WIRE_ARCMAX`), which ~836KB
+     plus overhead does. The converter prints the archive total beside its
+     per-geometry cluster manifests.
+   - **(d)** On a 640KB machine The Wire's **Load Program (run from RAM) will
+     grey** with the RAM-disk figure and **Add to Disk is the path**. That is by
+     design, not a defect.
+   - **(e)** The Wire record is **kind 1 (game)**, **tier 0** if wave 2's XT
+     measurement is playable and **tier 1** otherwise; every file name is
+     uppercase 8.3 in `[A-Z0-9_-]`.
 
 ### Where this file overrides the plan
 
-Four paragraphs below were written before the decisions and are superseded:
+Five paragraphs below were written before the decisions and are superseded:
 
 - Anything reading "pending question 1" or "pending question 5" in **Scope →
   Absent**: decision 1 settles Oh No! (out), decision 5 settles the particle
@@ -90,6 +120,11 @@ Four paragraphs below were written before the decisions and are superseded:
   7's threshold". Decision 7: it is created unconditionally.
 - The plan's distribution paragraph says on-demand images only; decision 2 adds
   **The Wire** as a `.WPK`, and leaves `apps-all.img` to wave 6's arithmetic.
+- **Wave 1's `tools/os88lem.py` feature and the budget's "one bank claim …
+  sized once at the largest" line** both predate decision 9. The band writer
+  additionally refuses any file over 64,512 bytes and splits a larger bank into
+  numbered parts; the level records are grouped eight to a file; and the bank
+  claim is still sized at 76,800 while no single read into it exceeds 64,512.
 
 ### What the three adversarial reviews changed
 
@@ -221,7 +256,7 @@ taste, and all five are already folded into the paragraphs below:
 | `apps/lemmings/hosttest/fixture/` | A tiny SYNTHETIC data set in the converted format - two levels, one style, the resource band - written by tools/os88lem.py --fixture and COMMITTED, carrying no bytes derived from the original. It is what lets apps/lemmings/build.sh run the harness with no network fetch, which is what makes question 2's 'make lemmings needs no fetch' true and keeps the real-data reader out of the 30-second fast tier | no |
 | `apps/lemmings/build.sh` | The host gate, apps/runcpm's pattern: four checks, every one stops the build and a failure leaves no stamp so the 8086 compile never runs. (1) the converter's --selfcheck, (2) hosttest/lemtest.c against the committed fixture, (3) the raw-x86 harness for lemmask.inc and lemblit.inc under SS != DS, (4) the cost table printed and compared against a recorded ceiling | no |
 | `tools/getlemmings.py` | The fetcher, in tools/getstories.py's shape: one pinned URL (Lemmix at commit 40e9bc34451f0e9127fd53b290a3877e700d143d, src/Data/Styles/Orig/orig.zip), one SHA-256 (bf1f2dbd11cd20df9f748047f8c4a32e7033d3ac7bb4b77058c3ecf27c0a9d6d, 336,839 bytes), unpacked into build/lemdata/ behind $(BUILD)/lemdata.stamp. Nothing is committed, and the stamp gates the DISK target only, never `make lemmings` | no |
-| `tools/os88lem.py` | The converter: the DAT container walk and its backward bit-stream decompressor, the 2048-byte record reader with Lemmix's bit unpacking, GROUNDxO, VGAGRx, VGASPECx's second-level RLE, MAIN.DAT's seven sections, the ODDTABLE overlay, the 120-level order - then the machine-native writer, whose OUTPUT SHAPE IS ONE 512-PADDED BAND FILE PER BANK (one per style, one per rating, one resource band of strings, one per special picture) so os88_file_read_seg reads a band straight into a claim and cluster slack is bounded by the number of BANDS rather than by the number of levels. The per-geometry manifest prints its arithmetic in CLUSTERS as well as bytes, because 360KB and 720KB both have spc = 2 (tools/os88disk.py:124) and 120 level files would have cost 120 clusters for 84,000 bytes. --fixture writes the committed synthetic set. Deterministic: the same input rebuilds the same bytes | no |
+| `tools/os88lem.py` | The converter: the DAT container walk and its backward bit-stream decompressor, the 2048-byte record reader with Lemmix's bit unpacking, GROUNDxO, VGAGRx, VGASPECx's second-level RLE, MAIN.DAT's seven sections, the ODDTABLE overlay, the 120-level order - then the machine-native writer, whose OUTPUT SHAPE IS ONE 512-PADDED BAND FILE PER BANK (one per style, one per rating, one resource band of strings, one per special picture) so os88_file_read_seg reads a band straight into a claim and cluster slack is bounded by the number of BANDS rather than by the number of levels. The per-geometry manifest prints its arithmetic in CLUSTERS as well as bytes, because 360KB and 720KB both have spc = 2 (tools/os88disk.py:124) and 120 level files would have cost 120 clusters for 84,000 bytes. --fixture writes the committed synthetic set. Deterministic: the same input rebuilds the same bytes. DECISION 9 bounds the output: no file over 64,512 bytes (a larger bank becomes numbered 512-padded parts), level records grouped eight to a file to keep the folder under ~90 entries, uppercase 8.3 names, and the archive total printed against 1,048,575 - SPEC.md §92.3.2 | no |
 | `tests/unit/t_lemdat.py` | The independent second reader, written from Lemmings.ts's semantics rather than from os88lem.py: 101 sections' XOR checksums and lengths, the mask = plane 3 identity over all 273 terrain pieces, the four VGASPEC pictures at exactly 4 chunks of 14,400, the 120-level order against BOTH reference tables, and every converted band's header against what the converter claims. Registered in tests/suite.py's FAST tier with its MEASURED seconds and a SKIP when $(BUILD)/lemdata.stamp is absent (the `lmpack` row's precedent) - the fast tier's 30-second wall clock is enforced and this row must never depend on a network fetch to pass | no |
 | `tests/cfsx/cfsx.c` | The capability gate for the new C fsx surface, tests/covl's shape: puts NUMBERS on the glass - the caps mask, the FSI block's seven fields, a 16-colour ramp in mode 0Dh, the panel drawn below a line compare while the top half scrolls by pel panning, a MID-BRACKET MODE CHANGE from 0Dh to 12h and back (which the 640x350 screens need and nothing in this tree has ever done), an ovl_* called from INSIDE the bracket, the same call with the .OVL deleted, and a counter only the bracket can bump. Built before the port needs the mechanism, not after | no |
 
@@ -246,7 +281,7 @@ BSS, buffers listed with sizes: lemming pool 100 x 20 = 2,000; object instances 
 
 TOTAL RESIDENT 50,000 of 61,440 = 81%, 11,440 spare - and LESSONS.md 5 says to expect the first full build to overshoot (cword's did, by 2,514, fixed by halving one buffer). The os88pkg size line goes in the WAVE 1 done_when, not wave 6, and 55,000 is the trigger for the next move-out (lemdraw.c's panel composition and lemtab.c's colour-class maps).
 
-CLAIM RECORDS ARE A BUDGET TOO, and nothing in the draft counted them: kernel/memory.inc gives MEM_MAX = 32 on kern_big and 20 on kern_small, system-wide, shared with every Disk window and driver already open. This program's claim list is merged down to FOUR: the solid mask 32,000 (1600x160 bits, all adapters); ONE bank claim reused in sequence for the terrain piece bank (up to 42,200), the object bank (up to 53,580) and then the derived sprite bank (~48,000 on VGA) or a VGASPEC picture (76,800), sized once at the largest; the adapter terrain copy (CGA 2bpp 63,360, Hercules 1bpp 31,680, VGA none - it lives in VRAM); and the 80-byte-stride screen shadow 16,000 on the two 1bpp adapters. Four records plus the package's own region plus the overlay module's is six, which fits 20 with room and is stated in the refusal text. Worst case ~255KB on CGA, comfortably inside the 532KB a 640KB machine has free after boot (docs/KERNEL-MEMORY.md), and refused with that arithmetic on the glass on a 256KB machine (WEAVE-SPEC 1.4's precedent).
+CLAIM RECORDS ARE A BUDGET TOO, and nothing in the draft counted them: kernel/memory.inc gives MEM_MAX = 32 on kern_big and 20 on kern_small, system-wide, shared with every Disk window and driver already open. This program's claim list is merged down to FOUR: the solid mask 32,000 (1600x160 bits, all adapters); ONE bank claim reused in sequence for the terrain piece bank (up to 42,200), the object bank (up to 53,580) and then the derived sprite bank (~48,000 on VGA) or a VGASPEC picture (76,800), sized once at the largest - and DECISION 9 bounds the READ rather than the claim, so that 76,800-byte picture arrives as numbered parts of at most 64,512 bytes read at successive 512-aligned offsets of this one claim (SPEC.md §92.3.2); the adapter terrain copy (CGA 2bpp 63,360, Hercules 1bpp 31,680, VGA none - it lives in VRAM); and the 80-byte-stride screen shadow 16,000 on the two 1bpp adapters. Four records plus the package's own region plus the overlay module's is six, which fits 20 with room and is stated in the refusal text. Worst case ~255KB on CGA, comfortably inside the 532KB a 640KB machine has free after boot (docs/KERNEL-MEMORY.md), and refused with that arithmetic on the glass on a 256KB machine (WEAVE-SPEC 1.4's precedent).
 
 ## API gaps, and what each one costs
 
@@ -328,7 +363,7 @@ CLAIM RECORDS ARE A BUDGET TOO, and nothing in the draft counted them: kernel/me
 
 - SPEC.md's section number CLAIMED FIRST, as a wave-0 one-liner and not a wave-6 task (question 6): a stub section landing the surface->reference table, with docs/INDEX.md regenerated in the SAME commit. tools/os88index.py:220 regexes CC_PACKAGE out of the Makefile and the `docindex` fast row runs --check on every make, so the Makefile edit below fails every build until the index is regenerated; and checkdocs.py, also fast-tier, rejects a citation to a heading that does not exist, which lemblit.inc, lemmask.inc, lemfont.inc, lemmings.asm, tools/os88lem.py and tests/unit/t_lemdat.py all want to make
 - tools/getlemmings.py: the pinned Lemmix commit, the pinned SHA-256, into build/lemdata/ behind $(BUILD)/lemdata.stamp - which gates the DISK target only, never `make lemmings` (apps/runcpm's runcpm-src.stamp is the shape, Makefile:4627/4698)
-- tools/os88lem.py: every reader (DAT bit stream, 2048-byte record with Lemmix's bit unpacking, GROUNDxO, VGAGRx, VGASPECx's RLE, MAIN's seven sections, ODDTABLE) and the BAND writer - one 512-padded file per bank, so os88_file_read_seg reads a band into a claim and no cluster-window arithmetic is needed anywhere in the package. The resource band of strings is written here too. Plus --fixture (the committed synthetic set) and the per-geometry manifest printed in CLUSTERS as well as bytes
+- tools/os88lem.py: every reader (DAT bit stream, 2048-byte record with Lemmix's bit unpacking, GROUNDxO, VGAGRx, VGASPECx's RLE, MAIN's seven sections, ODDTABLE) and the BAND writer - one 512-padded file per bank, so os88_file_read_seg reads a band into a claim and no cluster-window arithmetic is needed anywhere in the package. The resource band of strings is written here too. Plus --fixture (the committed synthetic set) and the per-geometry manifest printed in CLUSTERS as well as bytes. **DECISION 9, and it is part of this wave's deliverable, not a later tightening**: the writer REFUSES any file over 64,512 bytes (`WIRE_FILEMAX`) and writes a bank that would exceed it - a 4bpp VGASPEC picture at 76,800, or any future style - as NUMBERED PARTS, each 512-padded, that the package reads in sequence into one claim at successive 512-aligned offsets; the 80 level records are grouped EIGHT TO A FILE so the folder stays under ~90 entries (`RD_MAXENT` = 96); every name is uppercase 8.3 in `[A-Z0-9_-]`; and the run prints the whole-archive total against `WIRE_ARCMAX` (1,048,575) beside the per-geometry cluster manifests. SPEC.md §92.3.2 is the pinned form of all four
 - tests/unit/t_lemdat.py: the independent second reader, registered in tests/suite.py's fast tier with MEASURED seconds and a SKIP when the stamp is absent
 - apps/cc: the seven FSX thunks (run, caps, mode, wait, page, surf, key) ALL BEHIND %ifdef CC_HAS_FSX, CC_HAS_FSX + the cc_fsxentry trampoline, and struct os88_fsi with its sizeof self-check - the whole SDK change, in one edit, with the host stubs added in the same edit (LESSONS.md 4)
 - tests/cfsx: the capability gate. Numbers on the glass, tests/covl's shape - the caps mask, the seven FSI fields, a 16-colour ramp, a hardware scroll by pel panning, the split-screen panel standing still, a MID-BRACKET mode change 0Dh -> 12h -> 0Dh, an ovl_* called from inside the bracket, and the same call with the .OVL deleted

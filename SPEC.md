@@ -92747,6 +92747,11 @@ converter pads each band to 512 and the package reads it straight in.
 `os88_file_read_at()` survives only for the manifest header, read into a
 DS-relative static at offset 0.
 
+**A band file is capped at 64,512 bytes and a larger bank is written as
+numbered PARTS** — §92.3.2 has the arithmetic and the reason, which is The
+Wire's and the RAM disk's rather than this program's. The claim is still sized
+for the whole bank; it is the single READ that is bounded.
+
 The band also fixes the CLUSTER arithmetic. Both the 360KB and the 720KB
 geometries have spc = 2 (`tools/os88disk.py:124`), so **every file rounds up to
 1,024 bytes**: 120 separate level files would have cost 120 clusters to carry
@@ -92796,6 +92801,29 @@ Tricky 14, *What an AWESOME level* Taxing 15, *A BeastII of a level* Mayhem 22)
 each have an **empty terrain list, measured and not assumed**, and take their
 whole terrain from a 960x160 3bpp picture decoded in exactly 4 chunks of
 exactly 14,400 bytes and drawn at x = 304, y = 0.
+
+#### 92.3.2 The Wire's limits, which BOUND the band format
+
+LEMMINGS is published on The Wire as a `.WPK` archive (§88.13), and an archive
+is unpacked onto the RAM disk and run from there (§88.14). Four of that path's
+constants are limits on the CONVERTER's output rather than on the package, so
+they are pinned here and `tools/os88lem.py` refuses on each rather than
+discovering them at publication:
+
+| limit | value | what the converter does |
+|---|---:|---|
+| the largest single file, `WIRE_FILEMAX` (§88.13) — and `RD_FILEMAX` = 65,024 one device along (§62.9.10), because every offset inside a RAM-disk file is a word | **64,512** | **refuses to write a band over it.** A bank that would exceed it — a 4bpp VGASPEC picture at 76,800 bytes, or any future style — is written as **numbered parts**, and the package reads them in sequence into ONE claim with one `os88_file_read_seg` per part at successive 512-aligned offsets. Each part is 512-padded, so the next part's base is aligned by construction |
+| directory rows over the whole RAM-disk volume, `RD_MAXENT` (§62.9.10) | 96 | keeps the folder **under about 90 files**. The 80 level records are grouped **eight to a file**, the way the DOS `LEVELxxx.DAT` files already do, and there is one band per style bank — so the folder is about 30 to 40 files with the package, the overlay and the manifests in it |
+| the whole archive, `WIRE_ARCMAX` (§88.13) — the first size refused | 1,048,575 | the full set is ~836KB of converted data plus the package and the overlay, which fits with room. The converter prints the archive total beside its per-geometry cluster manifests |
+| every name | uppercase 8.3, `[A-Z0-9_-]` | the band, part and manifest names are generated in that alphabet, not derived from the level titles |
+
+Two consequences are stated rather than worked around. **Load Program greys on
+a 640KB machine** — running from RAM wants the whole set unpacked into a RAM
+disk that machine cannot offer, so The Wire greys the action with its own
+figure and **Add to Disk is the path** on that class of machine, which is by
+design and not a defect. And the Wire record is **kind 1 (game)**, at **tier 0
+if wave 2's XT measurement is playable and tier 1 otherwise** — the one field
+of the record that waits on §92.7's number.
 
 ### 92.4 The three rasters, over one game
 
@@ -92976,7 +93004,7 @@ to **four**:
 | claim | worst case | on |
 |---|---:|---|
 | the 1bpp solid mask, 1600x160 bits | 32,000 | every adapter |
-| ONE bank claim, reused in sequence: the terrain piece bank (up to 42,200), then the object bank (up to 53,580), then the derived sprite bank (~48,000 on VGA) or a VGASPEC picture (76,800) — sized once at the largest | 76,800 | every adapter |
+| ONE bank claim, reused in sequence: the terrain piece bank (up to 42,200), then the object bank (up to 53,580), then the derived sprite bank (~48,000 on VGA) or a VGASPEC picture (76,800) — **sized once at the largest, but filled by reads no larger than 64,512** (§92.3.2: the picture arrives as numbered parts read at successive 512-aligned offsets of this one claim) | 76,800 | every adapter |
 | the adapter terrain copy | 63,360 CGA (2bpp), 31,680 Hercules (1bpp), none on VGA — it lives in VRAM | CGA, Hercules |
 | the 80-byte-stride screen shadow | 16,000 | CGA, Hercules |
 
@@ -93121,7 +93149,8 @@ full set, and `build/apps-all.img` is one 1.44MB floppy already carrying Frotz,
 both Words, RunCPM, the C64 and the Weave family's two. A folder on that disk
 is taken only if the cluster arithmetic still closes with everything else on it
 (§19.10), decided by the numbers and not required. It is also published through
-The Wire as a `.WPK` archive (§88).
+The Wire as a `.WPK` archive (§88), whose limits bound the converter's output
+rather than merely describing it — §92.3.2.
 
 **What each geometry carries**, decided in clusters and not in bytes:
 
