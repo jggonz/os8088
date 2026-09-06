@@ -92620,3 +92620,998 @@ opened Charter, the catalogue count equals the ten `.F88` directory entries,
 typed bytes and Backspace change the specimen, and both Down and a mouse click
 finish a deferred face load with no error. The row is `fontview` in the soak
 tier.
+
+## 91. INFONES — InfoNES, a NES emulator written in C (`apps/infones/`)
+
+The C toolchain's fourth application is **`apps/infones/`**, package name
+`INFONES`, and it is a native reimplementation of **InfoNES**, Jay Kumogata's
+portable Nintendo Entertainment System emulator: a 2A03 core, a per-scanline
+PPU, five mappers and a front panel, running the game **fullscreen** through
+§53's exclusive bracket. It follows §73.12's `cword`, §74's `RUNCPM` and
+docs/C64-SPEC.md's `C64` as C packages, and it is the first of them whose
+subject machine is *faster* than the machine it runs on.
+
+**Nothing of InfoNES's C survives literally, and none of it could.** Its
+model is a flat pointer space larger than 64KB, a 122,880-byte RGB frame
+buffer, a 32,768-byte static `ChrBuf`, 263-byte automatics and `DWORD`
+arithmetic on the hot path — five hard refusals from §73.7's four rules and
+§33's segment. What ports is the **shape** the survey picked InfoNES for: a
+per-scanline composer over a **pre-decoded one-byte-per-pixel tile cache**, a
+frame loop of *run 113 or 114 CPU cycles, call the mapper's HSync hook, draw
+one line*, and sprite-0 hit resolved by splitting that line's CPU budget at
+the sprite's X. The behaviour, the tables, the refusal wordings and the
+interface come from the source and are cited; the code does not.
+
+**The honest deliverable is stated here before anything else, and it is TWO
+numbers rather than one**, because one of them was hiding the other. On the
+target machine — an IBM PC/XT, 8088 at 4.77 MHz — the un-skippable 2A03 core
+alone costs about 340 ms of an emulated frame, so no amount of frame skip
+takes the machine past **2.94 emulated frames a second**, and at the skip that
+reaches it the picture is **painted about once every two seconds**. There is
+no frame-skip setting at which an 8088 both advances the game plausibly and
+repaints more than once a second. §91.13's tier table carries both figures on
+every machine class, the front panel prints both while the game runs, and
+`CATALOG.TXT` on every floppy says in those words that **an 8088 shows a NES
+emulator running and is not a machine to play on**. The package never refuses
+on tier: the demonstration is the deliverable there, and it ships.
+
+### 91.1 Provenance, licence and attribution
+
+The reference is **InfoNES at commit `fe3295c0a86bf5bbecc22aeab3b3af11f6f47908`**,
+`https://github.com/jay-kumogata/InfoNES`, under **Apache-2.0**. The lineage
+recorded so no later reader re-derives it: **xNES → pNesX → InfoNES**, and
+**pNesX's authorship and terms are unestablished** — the Apache grant is a
+2019 retrofit by InfoNES's sole author and is the only licence statement the
+tree carries.
+
+Every source file in `apps/infones/` that carries derived material — which is
+every file except the icon — carries an Apache-2.0 header naming **Jay
+Kumogata / Jay's Factory**, the upstream URL and that commit, plus the
+Apache-2.0 section 4(b) modification notice in these words: *derived from
+InfoNES fe3295c0, restructured for 8086 real mode*. The **Apache-2.0 licence
+text ships as `LICENSE.TXT` on every floppy that carries the binary**, the way
+`apps/c64`'s `COPYING` travels with `C64.O88` (C64-SPEC §1.2). The
+attribution is in the About panel (§91.7.3), which is the part of the program
+a user can see.
+
+Two further references are read and cited and **neither ships**:
+
+| reference | licence | how it is used |
+|---|---|---|
+| `agnes` | MIT | the **specification** for the loopy `v`/`t` scroll, palette-address mirroring, sprite evaluation and the sprite-0 exclusion; and the host-side behaviour oracle that generates the frame-hash goldens |
+| `nofrendo` | LGPL-2 | read for **intent only** and cited file and line in comments. Nothing is transcribed |
+
+**The nofrendo line is a rule and not a preference.** Its `ppu_renderbg()` is
+the correct model, and its file legend requires any partial reproduction to
+carry the legend — so transcribing its scroll expressions would put an LGPL-2
+file inside an Apache-2.0 package. The scroll arithmetic is therefore taken
+from agnes, which states the same thing in `uint16_t` and under MIT. If a
+routine is ever genuinely transcribed from nofrendo it goes in a file of its
+own under nofrendo's legend with `COPYING.LGPL` on the disk, and that is a
+decision somebody takes deliberately rather than drifts into.
+
+**Nothing is vendored** (`CONTRIBUTING.md` §6). The reference tree lives
+outside this repository; this port quotes strings, tables, formats and
+behaviour and cites the file and line for each.
+
+The **NES** and **Nintendo Entertainment System** names are Nintendo's. That
+sentence lives in the source headers and in `README.TXT` on the disk, not in
+the About panel — at 40 cells it wraps to two rows and §91.7.3's nine-row
+count is a compatibility constant (§39).
+
+### 91.2 The authority table — where every surface comes from
+
+`cword` took its interface from `Opus/resource/menus.cmd` (§73.12); this port
+takes its own the same way. Every row below is a surface a user can see and
+the file that defines it.
+
+| surface | authority |
+|---|---|
+| the menu bar's membership and order | `src/win32/InfoNES_Resource_Win.rc`, `IDR_MENU` lines 61-105, read through `iconv -f CP932` because the file is Shift-JIS. **TRANSLATED, and FLATTENED — see §91.2.1** |
+| command ids | `src/win32/InfoNES_Resource_Win.h` |
+| About: tagline, copyright, version | `src/linux/InfoNES_System_Linux.cpp:45` and `:324-328`. **One file, deliberately — see §91.2.2** |
+| the ROM-info fields and their ORDER | `src/win32/InfoNES_System_Win.cpp:497-511`, identically `src/linux/InfoNES_System_Linux.cpp:309-320`. Units cross-confirmed against nofrendo `src/nes/nes_rom.c:390-415` |
+| controller 1 bit order, and X = A / Z = B | `src/sdl/InfoNES_System_SDL.cpp:503-540` — bit0 A, bit1 B, bit2 Select, bit3 Start, bit4 Up, bit5 Down, bit6 Left, bit7 Right |
+| Start = Enter, Select = RShift (Space alias) | agnes `examples/simple_sdl2.c:105-116`, cross-read with nofrendo's `README` lines 20-84 |
+| in-bracket system keys C, R, Page Up, Page Down, M | `src/linux/InfoNES_System_Linux.cpp` `add_key` — clip, `reset_application` at `:262-266`, frame skip at `:290-301`, mute at `:304` |
+| the mapper refusal, naming the number | `src/InfoNES.cpp:439` — `Mapper #%d is unsupported.` |
+| the bad-magic refusal | `src/sdl/InfoNES_System_SDL.cpp:158-167`; nofrendo `src/nes/nes_rom.c:329` is the cross-read |
+| iNES header semantics | `src/InfoNES.h:263-274` (`NesHeader_tag`) + `src/InfoNES.cpp:358-380`, including the DiskDude guard at `:365-373`. Cross-read: nofrendo `src/nes/nes_rom.c:313-383`, agnes `agnes.c:517-561` |
+| the frame loop, HSync hook and sprite-0 budget split | `src/InfoNES.cpp:556-751` and `:1053-1101`. The three-PPU-dots-per-CPU-cycle relation is written out in nofrendo `src/nes/nes_ppu.c:237-246` |
+| the BYTE scanline composer and the `\|0x80` backdrop tag | `gba/src/InfoNES_Advance/InfoNES.cpp:682-940` and `gba/src/InfoNES_Advance/K6502_rw.h:287` — **the GBA renderer, not the desktop one**, which writes WORD RGB into a 122,880-byte buffer |
+| the DAC mirror that makes the tag free | `gba/src/InfoNES_Advance/InfoNES_System_GBA.cpp:99-103`; nofrendo `ppu_buildpalette` (`src/nes/nes_ppu.c:530-552`) for the same reason. **EXTENDED here — §91.6.3** |
+| the tile cache and its invalidation | `src/InfoNES.cpp:1103-1191` (`InfoNES_SetupChr`) + `src/K6502_rw.h:325` |
+| the per-line drop table's SHAPE | `gba/src/InfoNES_Advance/InfoNES.cpp:244-261` (`PPU_ScalingTable`). **SHAPE ONLY — §91.7.2** |
+| the frame-skip gate | `src/InfoNES.cpp:660-663`, `:707-722` |
+| 2A03 opcodes, cycle costs, page-cross penalties, the `JMP ()` page-wrap bug, BRK/NMI/IRQ sequencing | `src/K6502.cpp` (151 cases, `CLK(n)` each) + `src/K6502.h` + `src/K6502_rw.h`. Flag bit values, the vectors and "no decimal on a 2A03" cross-confirmed at nofrendo `src/cpu/nes6502.h:26-95` |
+| the CPU memory map: `switch (addr & 0xE000)`, four 8KB PRG windows, sixteen 1KB PPU windows, `$4014` DMA, `$4016`/`$4017` | `src/K6502_rw.h:46-186` (read) and `:190-470` (write); agnes `agnes.c:814-831` is the cross-read |
+| loopy `v`/`t` scroll: the coarse and fine increments, the nametable wrap, the dot-257 horizontal copy, the dots-280..304 vertical copy | agnes `agnes.c:1100-1140`, `:1071-1082`, `:1312-1380`. **agnes and not nofrendo, for the licence reason in §91.1** |
+| palette-RAM address mirroring, sprite evaluation with the 8-per-line cap, 8x16 tile arithmetic, the sprite-0 `x != 255` exclusion | agnes `agnes.c:946-949`, `:1142-1167`, `:1218-1272`, `:1169-1198` |
+| mappers 0, 1, 2, 3, 4 and the 6x4 nametable mirroring table | `src/mapper/InfoNES_Mapper_000.cpp`, `_001.cpp`, `_002.cpp`, `_003.cpp`, `_004.cpp` (1,055 lines) + `src/InfoNES.cpp:166-174` and `:513-536`. agnes `mapper4_set_offsets` (`agnes.c:2425-2583`) is the cross-check; agnes has **no mapper 3**, so InfoNES is the only source for CNROM |
+| the 64-colour NES palette (192 bytes RGB888) | NESdev `2C02G_U_wiki.pal`, `https://www.nesdev.org/w/images/default/e/e2/2C02G_U_wiki.pal` — versioned and named for the chip. **Not** nofrendo's `shady_palette` (LGPL) and **not** agnes's unattributed table |
+| NTSC timing: 341 dots a line, 262 lines, 113 2/3 CPU cycles a line, 29,780.5 a frame, 60.0988 Hz, 256x240 visible | NESdev `Cycle_reference_chart`. The canonical figures are taken, **not** InfoNES's 113 / 29,828 / vblank-at-243 roundings |
+| the ROMs that ship, their licences, URLs and SHA-256s | `nes-roms.md` sections 2.2, 2.3, 3.1, 3.2 and 4 — every hash computed there rather than copied |
+
+**agnes's MMC3 IRQ trigger is explicitly not used.** It fakes the PA12 edge at
+a hardcoded dot and its own comment admits it (*"Should be 260 but it caused
+glitches in Kirby"*). This port counts the scanline IRQ in the HSync hook the
+frame loop already calls, which is InfoNES's own arrangement.
+
+**The Linux front end's controller comments are a trap and the bit numbers are
+the authority.** `src/linux/InfoNES_System_Linux.cpp:237-247` sets the same
+bits with its `/* 'A' */` and `/* 'B' */` comments **swapped**. Quote the bit
+numbers, never those comments.
+
+#### 91.2.1 The menu is an ADAPTATION, not a trace
+
+InfoNES's menu is **CP932 Japanese and three POPUPs deep**. os8088's is one
+flat array of NUL-terminated strings: `AM_LIST` entries are
+`{AMENU_TITLE, AMENU_ITEMS, AMENU_NITEM}` and there is no submenu field, no
+separator primitive and one per-item decoration (§12.2, `apps/os88api.inc`
+around line 1917; `apps/cc/os88.h` mirrors it in six bytes with a build-time
+`sizeof` assertion). The `.rc`'s structure, as read:
+
+```
+ﾌｧｲﾙ(&F)      { 開く(&O), ﾘｾｯﾄ(&R), 停止(&S), SEPARATOR, 終了(&X) }
+ｵﾌﾟｼｮﾝ(&O)    { ﾌﾚｰﾑｽｷｯﾌﾟ(&F) { ｵｰﾄ(&A) CHECKED, 減らす(&D), 増やす(&I) },
+                画面(&V) { ｻｲｽﾞ(&S) { 1倍(&1) CHECKED, 2倍(&2), 3倍(&3) },
+                           ｸﾘｯﾌﾟ(&C) { 上端・下端(&V) } },
+                ｻｳﾝﾄﾞ(&S) { ﾐｭｰﾄ(&M) } }
+ﾍﾙﾌﾟ(&H)      { ROM情報(&I), ﾊﾞｰｼﾞｮﾝ情報(&A) }
+```
+
+**There is no English original anywhere in the reference tree**, so every
+English string this port ships is a **translation the porter performed**, and
+every string in `apps/infones/nimenu.c` carries the Japanese and the `.rc` line
+it translates in a comment beside it. The bounds the flattening had to meet
+are the kernel's: `MENU_APPMAX` = 5 menus, `MENU_POPMAX` = 11 items
+(`kernel/menu.inc:208`), and `MENU_MAXCH` = (208 - 16) / 8 = **24 glyphs**
+(`apps/os88api.inc:1943`). Every shipped string is 24 glyphs or fewer.
+
+What the flattening did, each recorded as an adaptation rather than presented
+as a traced string:
+
+- **Frame skip's three-item submenu becomes three items in the flat Options
+  list**, with the check state carried in the label (§91.9).
+- **Screen > Size 1x/2x/3x is DROPPED**, not greyed — §91.12 has the reason
+  and the arithmetic.
+- **Screen > Clip becomes one item in the flat list**, live or greyed by mode.
+- **`MENUITEM SEPARATOR` in the File menu is DROPPED**: the kernel's item
+  array is NUL strings and nothing else, and there is no separator primitive.
+- **`Full screen` is an item InfoNES does not have at all** — its fullscreen
+  is Alt+Enter (`src/sdl/InfoNES_System_SDL.cpp:504-506`) — and it is here
+  because on this OS the bracket is entered from a command.
+- **`Open ROM` is 開く, "Open", with no ellipsis in the original.**
+- **`Stop` keeps its position and changes meaning.** InfoNES's Stop halts the
+  emulation thread; there is no second task here — the machine runs only
+  inside the bracket — so Stop unloads the ROM and returns the panel to its
+  *No ROM* state.
+- **Help > ROM information and Help > Version information collapse into one
+  About item** (§91.12).
+
+#### 91.2.2 The About line — four pairings in the tree, one quoted
+
+The reference tree carries **four incompatible version/copyright pairings**
+and a draft of this plan invented a fifth by mixing two of them. All four are
+recorded here so no later wave re-picks:
+
+| front end | version | copyright |
+|---|---|---|
+| Win32 (`src/win32/InfoNES_System_Win.cpp:517-533`) | `APP_NAME`, which is **undefined tree-wide** | 1999-2004 |
+| Linux (`src/linux/InfoNES_System_Linux.cpp:45`, `:324-328`) | `InfoNES v0.96J` | 1999-2005, Jay's Factory |
+| SDL (`src/sdl/InfoNES_System_SDL.cpp:32`, banner `:164-166`) | `InfoNES v0.97J RC1` | 1998-2006, *SDL Ports by mata* |
+| Zaurus | `v0.93J RC4` | — |
+
+**The Linux pairing is quoted verbatim** and nothing else is: it is the only
+live handler in the tree that pairs a version with the tagline and a
+copyright. So the About panel reads `InfoNES v0.96J`, `A fast and portable NES
+emulator`, `Copyright (c) 1999-2005` / `Jay's Factory` — lower-case `(c)`, the
+1999-2005 range — while the pinned commit's SDL front end says v0.97J RC1.
+That is a deliberate consequence: taking SDL's version obliges crediting mata,
+and the Win32 About cannot be a version authority because the symbol it prints
+does not exist. The port makes **no version claim of its own** beyond naming
+the reference as `@fe3295c0`. The `.rc`'s `IDD_DIALOG` at `:113-124` is dead
+code behind `#if 0` and is not an authority either.
+
+### 91.3 The memory model — the package image, and the claims
+
+**Nothing big is in the package.** The emulated machine lives entirely in heap
+claims, sized at launch from `os88_mem_largest_kb()` and refused with the
+arithmetic if the heap cannot answer (§47, `RUNCPM`'s refusal shape). The
+package image carries code, the panel's shadow, the small tables and the
+reduction tables, and nothing that scales with the ROM.
+
+#### 91.3.1 The claim table
+
+| claim | size | holds |
+|---|---|---|
+| the tile cache | 32,768 | one byte per pixel of decoded CHR: 64 bytes a tile, 512 tiles |
+| CHR / VRAM | 8,192 + 2,048 + 256 | the CHR bank window, the two nametables, and OAM |
+| CPU RAM | 2,048 | `$0000-$07FF`, the segment `DS` points at for the whole of the core |
+| SRAM | 8,192 | `$6000-$7FFF`, present whether or not the header claims it |
+| PRG banks | up to 262,144 | the program, addressed through the bank table |
+| CHR banks | up to 131,072 | the character data the cache decodes from |
+| the staging claim | up to 65,536 | transient, for a whole-file read; released as soon as the load is done |
+
+An NROM title needs about **88KB** of claim. The hard cap is **256KB PRG +
+128KB CHR**, which is the bank table's own size, and it is stated on the panel
+so the refusal is never a surprise.
+
+**Every claim base is 512-byte ALIGNED**, without exception. `int 13h` answers
+a transfer straddling a 64KB physical boundary with error 09h, and only a
+512-aligned start prevents it (CLAUDE.md's hard rules; `RUNCPM` saw it on
+about 13% of ZEXDOC launches on real hardware). QEMU never shows this failure.
+
+**The PRG bank table is a table of SEGMENT BASES**, sixteen words, one per 4KB
+of the `$8000-$FFFF` window, built by the loader and read by the core and by
+every mapper. It is resident bss and not a claim: only the *data* moves.
+
+#### 91.3.2 Every claim is PINNED, and that is a decision
+
+`OSAPI_MEM_MOVABLE` (slot 0x0400) exists and has no C thunk, because it takes
+a relocation **proc** and a C package cannot name one (§66). That is not a gap
+left open here: **every claim in this package stays pinned by design.** The
+core caches segment bases in the bank table and in `ES`, and a compaction
+would invalidate both silently — which is exactly the failure §66 warns about,
+one segment further from the poke that would fix it.
+
+### 91.4 The 2A03 core
+
+The core is **hand-written 8086** in `apps/infones/nicpu.inc`, in
+`apps/c64/c64cpu.inc`'s shape, because §73.11's posture is that nothing on a
+hot path is written in C and a 6502 interpreter is nothing but hot path. It
+implements all **151 official opcodes** with their real cycle costs, the
+page-cross and taken-branch penalties, the `JMP ()` page-wrap bug, the
+zero-page wrap, BRK/NMI/IRQ sequencing and `INT_CYCLES` = 7, and the
+unofficial opcodes `nestest` exercises: LAX, SAX, DCP, ISB, SLO, RLA, SRE,
+RRA, `SBC $EB` and the NOP/DOP/TOP family.
+
+**There is no decimal mode.** A 2A03 has none — the ADC/SBC decimal paths are
+absent from the silicon, and the whole of C64-SPEC §4.1's `BP` scratch
+frame, which exists for the 6510's decimal temporaries, is therefore not
+needed here.
+
+#### 91.4.1 The register plan
+
+C64-SPEC §4.1's plan, minus decimal:
+
+| 2A03 | 8086 | note |
+|---|---|---|
+| A | `AL` | |
+| P (N, Z, C) | `AH` | the `lahf` layout, so the host flags carry them |
+| P (V, I, B) | `CH` | never a `cs:` static — a write into the package's own code page is a slow path, and V moves on every ADC, SBC and BIT |
+| X | `CL` | indexed addressing is `add bl,cl / adc bh,0`, whose carry **is** the page-cross penalty, so `CH` is free for the flags at no cost |
+| Y | `DL` | and `DH` is the memory-data byte and a free scratch: nothing ever needs `DX` as a word |
+| PC | `SI` | |
+| S | `DI` | held as the full stack address `$0100 + S`, so a push is `mov [di],v / dec di / or di,0x0100` and the page wrap is one instruction |
+| dispatch scratch / effective address | `BX` | |
+| CPU RAM | `DS` | the 2,048-byte claim |
+| the fetch segment | `ES` | biased so `[es:si]` is `PC`'s byte, with a two-compare boundary guard |
+
+The dispatch is a 256-entry `jmp [cs:bx+tab]` over
+`xor bh,bh / mov bl,[es:si] / inc si / shl bx,1`, beside a 256-byte cycle
+table. **`P` is packed and unpacked once per call**, not per instruction, so
+the C and the harnesses read the register the emulated machine has rather than
+this table's layout; PHP, PLP, BRK, RTI and interrupt entry all go through the
+same two helpers.
+
+**The stack wrap is `and di,0x00FF / or di,0x0100`**, not `and di,0x01FF`. The
+one-line form is wrong and silently so — `0x0200 & 0x01FF` is `0x0000` — and
+C64-SPEC §4.1 records the same defect passing an entire BASIC boot
+before a test ROM caught it.
+
+#### 91.4.2 Time is 2A03 cycles, in 16 bits
+
+**The clock is the emulated CPU's cycle count and nothing else.** The core
+takes a budget in cycles and decrements it by each opcode's real cost; the
+check is between instructions and never inside one, so a call may overrun what
+it was asked for by at most one instruction. What was not spent is left
+negative in the counter and the caller's `ran = asked - left` is exact.
+
+**The budget is a SIGNED word** (C64-SPEC §4.2's discipline) and a
+scanline is 113 or 114 cycles, so the cap is nowhere near 32,767 and nothing
+here needs 32 bits. That matters because **`long` does not parse and `float`
+is poisoned** (§73.7), so every quantity that would be 32-bit elsewhere is
+carried as two words with an **explicit fold per slice**: the emulated cycle
+count, the emulated frame count and the rendered frame count all work that
+way, and the fold happens once a scanline or once a frame rather than once an
+instruction. `OSAPI_XMEM_*` is not wrapped for C for the same reason and is
+not used here.
+
+**The line cadence is a rotating 113 / 114 / 114 triple**, which is exact over
+three scanlines and needs no fractional accumulator: 113 2/3 CPU cycles a line
+and 29,780.5 a frame are the canonical NTSC figures, and InfoNES's own 113 /
+29,828 / vblank-at-243 roundings are deliberately not taken.
+
+### 91.5 The PPU — a per-scanline composer over a tile cache
+
+The PPU is `apps/infones/nippu.c` (the register file, in C) plus
+`apps/infones/niband.inc` (the composer and the cache decoder, in 8086). The
+register file is called once per write; the composer is called **once per
+line and never per pixel**.
+
+`nippu.c` carries: the `$2000`/`$2001` control decode; the shared write latch
+behind `$2005` and `$2006`; `$2002`'s read-clears-vblank-and-flip-flop; the
+buffered `$2007` read; the palette write with its every-four mirror rule
+(`$3F10`/`$3F14`/`$3F18`/`$3F1C` fold onto `$3F00`/`$3F04`/`$3F08`/`$3F0C`);
+the loopy `v`/`t` pair with its per-line latch and increments, the dot-257
+horizontal copy and the dots-280..304 vertical copy; `$4014` OAM DMA with a
+fast path for a source wholly inside the 2KB RAM claim; and sprite evaluation
+with the 8-per-line cap and the overflow flag.
+
+#### 91.5.1 The tile cache and its invalidation
+
+A 1KB CHR bank decodes into **64 bytes per tile, one byte per pixel**, so the
+whole 8KB pattern space is a **32,768-byte claim** and the composer's inner
+loop is a byte load rather than two plane bytes and a shift pair. Invalidation
+is InfoNES's own: **a bitmask bit per 1KB bank**, set on a CHR-RAM write
+(`ChrBufUpdate |= 1 << (addr >> 10)`), plus a previous-bank comparison so a
+mapper that re-selects the bank it already had decodes nothing.
+
+**The MMC3 storm is the known hazard and its fallback is named in advance.**
+MMC3 switches CHR banks per scanline, so a bank comparison that misses
+re-decodes 4,096 output bytes a switch — about 41,000 8088 cycles — and a
+status-bar split can cost the whole cache twice a frame, roughly 65,000 stores
+and **~136 ms**. `make nibandbench` measures it. If it exceeds the frame
+budget the fix is a **per-bank lazy decode** — decode a 1KB bank the first
+time a scanline actually reads it in a frame — and **not a second renderer**.
+
+#### 91.5.2 The line buffer, the tag bits, and the overdraw
+
+The composer writes into a **272-byte line buffer with the visible 256-pixel
+window at offset +8**. That is not slack: the background run writes up to
+**7 pixels before** the visible line and **8 after** it, because the fine-X
+phase means a run's two partial end blocks straddle both edges. Bounding the
+buffer at 256 would be a silent write past a bss array on every line with a
+non-zero fine X.
+
+Each byte in the line buffer is a **NES palette index in bits 0-5 with two tag
+bits above it**: the backdrop tag (`| 0x80`, InfoNES's own) and the
+priority/strike tag. That makes the sprite pass's priority test **one byte
+compare** rather than a mask, a shift and a branch — and it makes the tags free
+at present time only because of §91.5.3.
+
+The order is: background over the cache, with the loopy scroll, the attribute
+quadrants, the left-column masks, the fine-X partial blocks and the nametable
+flip at the wrap; then sprites **back to front** into the same buffer, with the
+transparency test, both flips, 8x8 and 8x16, and front/behind priority.
+**Sprite-0 hit is resolved by splitting the scanline's CPU budget at
+`SPRRAM[SPR_X]`** — run the cycles up to the sprite's X, set the flag, run the
+rest — which is InfoNES's own arrangement and the reason a status-bar split
+holds still.
+
+#### 91.5.3 The DAC mirror, and the 256-entry reduction tables
+
+On VGA the 64 NES colours are written **four times into the DAC** — at 0, 0x40,
+0x80 and 0xC0 — so a pixel byte carrying either tag bit indexes a *correct*
+colour and the present routine needs **no masking pass at all**. §53.7 makes
+the DAC, the sequencer, the CRTC and the graphics controller the app's inside a
+foreign mode, and the exit mode set reprograms everything they touch, so this
+costs the system nothing.
+
+**CGA and Hercules have no DAC to mirror, and this port extends the trick
+rather than dropping it.** Their reduction tables are **256 entries**, built at
+load by filling the 64 real entries four times over: the identical mirror,
+moved from the hardware into the table, at **512 bytes of bss and zero
+cycles**. A 64-entry table indexed by a tagged pixel byte reads **up to 192
+bytes past its end** and produces a wrong colour or dither cell rather than a
+crash — invisible in a full-screen dump, which is why §91.14.4's zoomed crops
+on both 1bpp adapters are a named gate.
+
+### 91.6 The fullscreen bracket
+
+The game runs inside §53's exclusive bracket, entered with
+`OSAPI_FSX_RUN` (slot 0x02C8) from the package's **resident** `os88_oncmd`.
+The whole bracket is `apps/infones/nifsx.inc`, in assembly, because §53 is
+deliberately not wrapped for C — `apps/cc/os88.h` says the rules are the whole
+feature and none of them is checkable from C. `apps/tank/tank.asm:431-475` and
+`apps/cyclone/cyclone.asm:8086-8190` are the shapes it copies.
+
+One cdecl helper crosses back: **`ni_fsx_caps`**, so `nimenu.c` can grey the
+mode and clip items from the live mask. **It is called at use and never
+banked**: `OSAPI_FSX_CAPS` (slot 0x02C0) takes the window to ask about, and
+`apps/os88api.inc:2438-2449` says an answer banked in an entry proc describes
+the window you were *launched from*, because yours does not exist yet. On a
+two-card desktop the Full screen item therefore greys **per monitor** and the
+refusal names the adapter (§39.4).
+
+#### 91.6.1 The mode per adapter
+
+`OSAPI_FSX_MODE` (slot 0x02D0), ids from §53.4:
+
+| adapter | id | mode | rows | when |
+|---|---|---|---|---|
+| VGA | `FSXM_VGA13` (6) | 320x200x256 | 200, so the row drop applies | **the default on every tier** |
+| VGA | `FSXM_MODEX` (8) | 320x240x256, 3 pages | 240 at 1:1, no drop | a menu choice **above the CPU_8086 tier** |
+| CGA, EGA | `FSXM_CGA320` (2) | 320x200x4 | 200, so the row drop applies | the only choice |
+| Hercules | `FSXM_HERC` (4) | 720x348 mono | 348, so 240 fits at 1:1 | the only choice |
+
+**Mode 13h is the default everywhere, including on a 486.** Mode X's four
+plane selects and stride-4 gather cost more per line than 13h's single
+`rep movsw`, and its value is the 240 rows and the page flip
+(`OSAPI_FSX_PAGE`, slot 0x04E8, §53.10) — worth choosing, never worth
+imposing. The picture is centred: 256 columns in 320 leaves 32 columns of
+border each side.
+
+Four present routines, one per mode, all in `nifsx.inc`: 13h's `rep movsw`;
+Mode X's four plane selects with the stride-4 gather per line and the page
+flip; CGA's 2-bit pack over two interleaved banks; and Hercules's 1bpp
+threshold with a 2x2 ordered dither over four interleaved banks.
+`OSAPI_FSX_SURF` (slot 0x03F8) gives the rect the bracket owns.
+
+#### 91.6.2 The 240 → 200 row reduction — this port's arithmetic
+
+In any 200-row mode, 240 NES rows do not fit. The reduction is **crop 8 top
+and 8 bottom to 224, then drop 24 of those 224** through a per-line table
+where `0xff` means *this line is not displayed*.
+
+**The table's SHAPE is InfoNES's; the arithmetic is this port's.**
+`PPU_ScalingTable` (`gba/src/InfoNES_Advance/InfoNES.cpp:244-261`) keeps 5 of
+every 7 lines of a 224-row window — 224 x 5/7 = 160, the GBA's screen height.
+That defines a 224→160 reduction and not a 224→200 one, and a plan that cited
+it as though it did would be wrong by 40 rows.
+
+**The Clip item is greyed in every 200-row mode with the fact**, because the
+clip is *forced* there. Shipping it as a live toggle that is structurally inert
+on two modes of four — present, not greyed, not checked and silently ignored —
+is exactly the shape this project has shipped before and been caught by.
+
+#### 91.6.3 The wall clock — `FSXW_FRAME` + `FSXF_FASTTICK`, and a 110/100 accumulator
+
+**Nothing this OS offers is 60.0988 Hz, and nothing can be.**
+`OSAPI_FSX_WAIT` (slot 0x02D8, §53.5) offers exactly three clocks:
+
+| clock | rate |
+|---|---|
+| `FSXW_TICK` | 18.2065 Hz |
+| `FSXW_VSYNC` | the **current mode's** retrace — 70 Hz in mode 13h, 60 in Mode X and CGA 320x200, 50 on Hercules |
+| `FSXW_FRAME` | 18.2065 Hz, or **54.6195 Hz** with `FSXF_FASTTICK` armed (`FSX_SUBTICK` = 3, §53.5.1) |
+
+**Pacing on the retrace is wrong and adapter-dependent.** On a 486 in mode 13h
+that is 70 Hz, so the game runs **16.5% fast** and the panel reports 116%; on
+Hercules it runs 17% slow. It is invisible on the target only because the
+target never reaches the clock at all.
+
+**This port paces on an accumulator.** `FSXW_FRAME` with `FSXF_FASTTICK`
+armed gives 54.6195 Hz, and 60.0988 / 54.6195 = 1.1002, so:
+
+```
+acc += 110;
+while (acc >= 100) { one_frame(); acc -= 100; }
+```
+
+One word, no `long`, **0.02% residual error**, and `FSXW_FRAME` waits by
+yielding rather than spinning. `FSXW_VSYNC` is used **only** to place the
+present inside the retrace on a machine that is ahead of the accumulator, and
+never as the frame budget.
+
+#### 91.6.4 Input inside the bracket
+
+Two readers, `apps/tank/tkgame.inc:234-246`'s model:
+
+- **What is HELD** — the D-pad and buttons — through `os88_key_down()`, which
+  is already wrapped (§9.7). It takes no lock and touches no port.
+- **What was TYPED** — the system keys — through a ten-line `int 16h` shim in
+  `nifsx.inc`. `int 16h` is legal here because the bracket **is** the UI task
+  (§53.1), and the queue is **drained**, never sampled.
+
+**The pad is swept every ~16 scanlines and not once a frame.** An emulated
+frame is **340 ms or more** of wall time on the target and a human press is
+80-150 ms, so a once-a-frame poll is a ~3 Hz sample: it misses most presses
+outright and stretches the ones it catches across twenty emulated frames. Each
+sweep ORs into a **sticky pad latch that the emulated `$4016` strobe clears**,
+so a press that happened anywhere in the frame is delivered exactly once. The
+cost is about 30 extra reads a frame — **1.4 ms of a 340 ms frame, 0.4%**.
+
+The keys, and where each comes from:
+
+| key | does | authority |
+|---|---|---|
+| arrows | D-pad | SDL front end |
+| `X` | A | SDL front end, by bit number |
+| `Z` | B | SDL front end, by bit number |
+| Enter | Start | agnes, cross-read with nofrendo |
+| RShift, or Space | Select | agnes, cross-read with nofrendo |
+| `C` | toggle top/bottom clip | InfoNES `add_key` |
+| `R` | reset | InfoNES `add_key` `:262-266` |
+| Page Up / Page Down | frame skip up / down | InfoNES `add_key` `:290-301` |
+| `M` | mute — **refused, printing the fact** | InfoNES `add_key` `:304` |
+| `F`, Esc | leave the bracket | §11.2.1, not InfoNES's Q/ESC |
+
+**InfoNES's own `S` = Start and `A` = Select are deliberately not used**: A and
+S collide with a WASD reflex, and Enter and Shift are what `apps/c64` and
+`apps/runcpm` already condition a user of this OS to expect. **`P` = pause is
+not a key of InfoNES's** — there is no `'p'` or `'P'` case in any front end and
+its `README.md` lists four system keys — and a draft that carried it had it
+from memory. InfoNES's `L` (load) and `I` (ROM info) are not carried: the file
+dialog is a menu command here and the ROM info is permanently on the panel.
+
+#### 91.6.5 What the bracket may not call
+
+**No `ovl_*` function may be called from inside the bracket, ever.** This has
+teeth here in a way it did not in earlier C packages, because `ovl_rom_load`
+is itself in the overlay: the call would be *legal* by §73.14's rules and by
+the SP gate — the bracket runs on the UI task — and it would read a floppy
+while the machine is in a foreign video mode, with any refusal toasted onto a
+bar the user cannot see. The fsx entry path is **resident code only**, and
+`Full screen` is answered in the resident half for the same reason
+`apps/c64`'s is: it is the one command that must work on a disk whose `.OVL`
+is missing.
+
+### 91.7 The front panel
+
+The window is a **front panel**, not a picture. It carries, in this order:
+
+1. the loaded ROM's name;
+2. **InfoNES's own seven ROM-info rows in InfoNES's own order** — `Mapper`,
+   `PRG ROM nKB`, `CHR ROM nKB`, `Mirroring V`/`H`, `SRAM Yes`/`No`,
+   `4 Screen Yes`/`No`, `Trainer Yes`/`No`. PRG is counted in 16KB banks and
+   printed as KB, CHR in 8KB banks printed as KB;
+3. **two measured rates side by side** (§91.7.1);
+4. the controls legend;
+5. the state line — `No ROM` / `Ready` / `Running`, or a refusal;
+6. **the FACT LINE** (§91.7.2).
+
+**It is shadowed and delta-drawn.** Each field's current text on the glass is
+held in a shadow, and only a field whose text changed is re-lettered, one
+`os88_font_run` each — never erase-then-letter, which is a double-draw flash
+(§6.1, and CLAUDE.md's second performance rule). The layout is read off the
+**live screen size**, never off 640x480 (§39). The shadow is invalidated after
+anything else owns the glass: a dialog, the About card, the file dialog, or the
+bracket's exit repaint.
+
+#### 91.7.1 The two rates, composed from integers
+
+The panel prints **the emulated rate and the rendered rate**, side by side,
+both against `os88_ticks`:
+
+- **emulated** — a plain unsigned percentage of a real NES, from the emulated
+  frame counter, e.g. `NES 3%`;
+- **rendered** — tenths of a second per painted frame, from the rendered frame
+  counter, e.g. `2.2 s/frame`.
+
+Both are composed by `os88_utoa` from integers. **There is no formatter and no
+float**: `apps/cc/os88.h` `#define`s `float` and `double` to error tokens and
+there is no `printf` family, so a rate is held in **tenths as a scaled int**
+and written as `os88_utoa(t / 10)`, `'.'`, `'0' + (t % 10)`. No wave writes
+`%4.1f` or `%3d%%` against a runtime that has no formatter.
+
+**Both are printed because frame skip trades one for the other.** Skip buys
+emulated speed by spending rendered frames, and a panel that showed only the
+first would say the machine had got faster while the picture got slower.
+
+#### 91.7.2 The fact line — where a greyed item's reason is read
+
+`MENU_DIS` items **cannot be clicked**. `apps/os88api.inc:1945-1972` says the
+kernel never highlights or selects one, so there is no click, no command and
+nothing to toast, and a refusal handler written for a greyed item is
+unreachable code. §47 still requires the fact, so this package puts it in two
+places, **neither of them a toast**:
+
+- **the short form in the item label**, within `MENU_MAXCH`'s 24 glyphs —
+  `\x01Mute (no APU)` — which is `os88api.inc`'s own `(NoRam)` idiom;
+- **the sentence on the panel's permanent FACT LINE**, beside the ROM info the
+  user is already looking at.
+
+A keyboard shortcut still answers (`os88api.inc:1957-1959`), so pressing `M`
+inside the bracket prints the fact where the user's eyes are.
+
+**A later wave adding a greyed item and forgetting its fact-line entry is a
+defect no build step can catch.** That is why the rule is in this document and
+not only in a comment.
+
+#### 91.7.3 The About panel — NINE rows
+
+`OSAPI_ABOUT_SET` (slot 0x01E0), nine content rows at about 40 cells, which is
+`apps/c64/c64about.c:29-46`'s measured shape: `6 + 9 * 10 + 11 = 107` against
+the roughly 122 pixels a framed content box has on a 640x200 adapter (§39).
+The rows:
+
+```
+About InfoNES
+A fast and portable NES emulator
+InfoNES v0.96J (@fe3295c0)
+os8088 port: NTSC, no APU
+Copyright (c) 1999-2005
+Jay's Factory
+Apache-2.0 - see LICENSE.TXT
+Scroll model from agnes (MIT)
+Ported by <name>
+```
+
+**Nine is a compatibility constant and the source carries a comment saying
+so.** The email address, the Apache-2.0 section 4(b) modification notice and
+the Nintendo trademark sentence are **not** here: the first is not a licence
+requirement, and the other two each wrap to two rows at 40 cells — they go in
+the source headers and in `README.TXT` on the disk. A draft that listed eight
+content items including a 64-character copyright line reached **twelve** rows
+once wrapped, which is §73.12's dialog failure one package later.
+
+### 91.8 The menus, and the single meaning of `MENU_DIS`
+
+Three flat kernel menus, `AM_NAME` = `InfoNES`, 3 of `MENU_APPMAX`'s 5, every
+list inside `MENU_POPMAX`'s 11 and every string inside `MENU_MAXCH`'s 24:
+
+| menu | items |
+|---|---|
+| **File** | `Open ROM`, `Reset`, `Stop`, `Exit` |
+| **Options** | `Frame skip: Auto`, `Frame skip faster`, `Frame skip slower`, `Full screen`, `Clip top and bottom`, `\x01Mute (no APU)` |
+| **Help** | `About InfoNES` |
+
+**`MENU_DIS` means exactly one thing in this package: UNAVAILABLE.** §12.2
+spends the same dithering on **two** meanings — unavailable, and a **radio
+mark** where the dithered item is the *selected* one — and on a 1bpp adapter
+grey rounds to black, so the two are indistinguishable there (§39.4, §47).
+This package uses it only for unavailable, and carries **every check state in
+the LABEL** instead: `Frame skip: Auto` is one live item that cycles
+Auto / 0 / 1 / 2 / 3 by pointing at a different string, which is
+`os88api.inc:1949-1956`'s own relabelling idiom.
+
+**A later wave adding a checkable item with the mark would reintroduce the
+collision silently.** That is why this rule is in the SPEC and not only in
+`nimenu.c`.
+
+### 91.9 What ships
+
+- The **front panel** window: ROM name, the seven InfoNES ROM-info rows in
+  InfoNES's order, both rates, the controls legend, the state line and the
+  fact line.
+- **Three flat menus**, as above.
+- **Fullscreen play** through §53's bracket: 13h by default on every tier,
+  Mode X as a menu choice above the CPU_8086 tier, CGA/EGA 320x200x4,
+  Hercules 720x348, paced on the 110/100 accumulator.
+- The **2A03 core**: 151 official opcodes with real cycle costs, page-cross
+  and taken-branch penalties, the `JMP ()` page wrap, the zero-page wrap,
+  BRK/NMI/IRQ sequencing, and the unofficial opcodes `nestest` exercises. No
+  decimal mode.
+- The **PPU** as a per-scanline composer over the tile cache: background with
+  the loopy scroll, attribute quadrants, left-column masks; 8 sprites a line
+  with the overflow flag, 8x8 and 8x16, both flips, front/behind priority; and
+  sprite-0 hit by splitting the line's CPU budget.
+- **CHR-ROM and CHR-RAM**, including a game that writes its own tiles through
+  `$2006`/`$2007` — `robotfindskitten` and RHDE on the shipped disks are
+  exactly that path.
+- **Mappers 0 (NROM), 1 (MMC1), 2 (UxROM), 3 (CNROM) and 4 (MMC3 with its
+  scanline IRQ).** Everything else refuses at load naming the number.
+- **Controller 1 on the keyboard**, swept every ~16 scanlines into a sticky
+  latch.
+- **Frame skip**, automatic by default and adjustable on Page Up / Page Down.
+  The CPU and the mappers run every frame so game logic advances; only the
+  composer and the present are skipped.
+- **Top/bottom clip** on `C`, live in Mode X and on Hercules, greyed with the
+  fact in any 200-row mode.
+- **Reset** on `R` inside the bracket.
+- The **64-colour palette** mirrored four times, in the DAC on VGA and in
+  256-entry reduction tables on CGA and Hercules.
+- The **iNES loader** with a **length check none of the three references
+  has** — every byte off a floppy is hostile (§19) — the DiskDude guard, the
+  trainer skip, the four flag bits, and heap claims sized from
+  `os88_mem_largest_kb()`, every base 512-aligned.
+- An **icon**, a **build-time `.NES` association** (`CC_ASSOC`,
+  `apps/cc/crt0.asm:292-321`, §54.6) **and** the runtime `os88_assoc_set` —
+  they are not alternatives — the nine-row About panel, and a record in The
+  Wire's catalog (§88).
+- `tools/nigetroms.py` and four floppy geometries with a per-geometry ROM set
+  (§91.14.2).
+
+### 91.10 What is present and greyed, and the fact that greys it
+
+§47's rule is to grey a fact, never a guess. Each fact's sentence is read on
+the panel's fact line (§91.7.2).
+
+| item | the fact |
+|---|---|
+| Options > `\x01Mute (no APU)` | *No APU in this port: the PC speaker plays one square wave and the 2A03 mixes five voices.* |
+| Controller 2 (the legend's second column) | *One controller in this port.* No front end in the reference tree fills pad 2 from a keyboard either — `InfoNES_System_Win.cpp:1016` sets it to 0 — so this greys what the reference itself never had |
+| Options > `Clip top and bottom`, in any 200-row mode | *Clip is forced at 320x200 — 240 NES rows do not fit 200.* The predicate is the **live** `FSI_H` of the mode this package would enter on **this window's display** |
+| Options > `Full screen`, where the adapter offers no mode | The predicate is `OSAPI_FSX_CAPS`'s mask for **this window's display**, re-asked at use and never banked — never `OSAPI_VIDEO`, which answers about the primary. On a two-card desktop the item greys per monitor and the refusal names the adapter |
+| File > `Open ROM` with an unsupported mapper | **Refused at load, not greyed** — the mapper number is not knowable before the header is read, so this is §47's attempted-and-reported half and it *can* toast. The refusal is InfoNES's own sentence with the number in it: `Mapper #%d is unsupported.` |
+| File > `Open ROM` with a ROM larger than the heap can hold | *INFONES wanted %u KB and the largest free block is %u KB* — `RUNCPM`'s refusal shape, quoting what it asked and what `os88_mem_largest_kb()` answered |
+
+**The pulse-1 arithmetic is recorded so the sound follow-up is costed rather
+than guessed**, and it is the only piece of APU written down anywhere in this
+port: the period is `t = ((reg3 & 7) << 8) | reg2` from `$4002`/`$4003`, muted
+below 8, and the PIT divisor is exactly `(t + 1) * 32 / 3` — 16-bit, no table,
+no `long`.
+
+### 91.11 What is dropped rather than greyed, and why
+
+- **Options > Screen > Size 1x / 2x / 3x.** Two independent reasons: there is
+  no submenu to grey them in, and `MENU_DIS` already means *unavailable* in
+  this package's one Options list — so a dithered `1x` (the `.rc`'s CHECKED
+  default) beside a dithered `2x` and `3x` (refused) would be **identical
+  pixels with opposite meanings**, and worse on 1bpp where grey rounds to
+  black. The arithmetic that would have been the fact is recorded instead: the
+  NES picture is 256x240 and the largest mode a display offers is whatever
+  `FSI_W`/`FSI_H` report — 320x240 on a VGA, 320x200 on CGA and EGA, 720x348
+  on Hercules.
+- **`MENUITEM SEPARATOR`.** No kernel primitive; the item array is NUL strings
+  and nothing else.
+- **The APU as a sound source of any kind.** No stream, ever: `OSAPI_SND_TONE`
+  is wrapped, and `OSAPI_SND_FM`, `SND_STREAM` and `SND_PLAY` are driver verb
+  protocols `apps/cc/os88.h` declines by name (§34).
+  `InfoNES_pAPU.cpp`'s 1,068 lines have no subset that fits: every channel
+  carries a 32-bit phase accumulator and the mix is per sample at 11-44 kHz.
+- **Battery-backed SRAM save and load (`.srm`).** Dropped rather than greyed
+  on C64-SPEC §10.3's shape: InfoNES's menu has **no item** for it — it
+  writes the file on exit — so there is no surface to grey. None of the shipped
+  games sets the SRAM bit; the format is a hand-rolled RLE whose reader and
+  writer each declare an 8,192-byte **automatic**, which is two §73.7 refusals
+  at once; and the file would belong in `SYSTEM/APPDATA/` (§19.9). A costed
+  follow-up, not a gap.
+- **A live windowed picture.** The window is the front panel and the game is
+  fullscreen. If it ever lands it is the 4bpp `os88_gfx_blit4` path at a low
+  rate over **the same 256-byte line the composer already produces** — never a
+  second renderer.
+- **Save states.** InfoNES has none in this tree, and agnes's is an
+  84,560-byte host-ABI copy of one struct whose screen buffer alone is 61,440
+  — the whole package ceiling.
+- **Help > ROM information as a menu item.** Its seven rows are permanently on
+  the window, so the item would open a dialog showing what is already on the
+  glass.
+- **Help > Version information as a separate item** — folded into `About
+  InfoNES`, which is where §12.2 puts it and what `os88_about_set()` names.
+- **`P` = pause inside the bracket**, `L` (load) and `I` (ROM info) — see
+  §91.6.4.
+- **PAL timing, iNES 2.0's extended sizes and submappers, expansion audio, the
+  Zapper, the four-screen VRAM arrangement** (refused at load with the flag
+  named), and **mappers 5 and above**.
+- Everything host-side that never crosses onto the machine: agnes's SDL2 front
+  ends and its vendored parsers, nofrendo's overlay GUI, its config file and
+  its SNSS save states.
+
+### 91.12 The tier table — **PLANNED**
+
+**Every figure in this table is an estimate and stays marked PLANNED until
+`make nibandbench` replaces it**, at which point the bench's numbers are
+written here and become a new Set in `PERFORMANCE.md`. The arithmetic behind
+the estimates, so the bench can be checked against a prediction rather than
+against nothing: the composer is about **34 cycles a background pixel** through
+the cache, plus the sprite pass, plus about **3,300 cycles a line to present**
+— roughly **14,600 cycles a line** and **~690 ms a rendered frame** on a
+4.77 MHz 8088; the core is about **13,500 6502 instructions a frame at ~120
+8086 cycles each**, about **340 ms**, and **the core is not skippable**. So an
+emulated frame costs `340 + 690/k` ms at frame skip `k`.
+
+| machine | emulated | rendered | posture |
+|---|---|---|---|
+| IBM PC/XT, 8088 4.77 MHz (`CPU_8086`) | ~2 fps at auto skip; **2.94 fps is the ceiling at any k** | **~0.5 painted frames a second**, one picture every ~2.2 s | **A NON-INTERACTIVE DEMONSTRATION, and it ships.** The panel prints both rates, and `CATALOG.TXT`, this table, `README.md` and the release and Wire copy say in those words that an 8088 shows a NES emulator running and is not a machine to play on. The package never refuses on tier |
+| 286 | between the two | between the two | Mode X available; still well under full speed |
+| 386DX-33 | roughly half speed | roughly half speed | playable for a slow game |
+| 486DX2/66 | near full speed | near full speed | the field's floor for a C NES emulator |
+
+**No NES emulator has ever run on an 8088, a 286 or a bare 68000.** The field's
+floor is a 486DX2/66 for C and a Pentium for hand-written real-mode assembly.
+That is the risk this port is built around, it was known before the first line,
+and it is stated twice: here, and on the glass while the game runs.
+
+**It also weakens the bracket's justification on the target machine** — at half
+a present a second the tear-free mode switch, the Mode X flip and retrace
+pacing buy nothing a windowed blit would not. That is an argument for the
+deferred windowed picture, not against the bracket: the bracket is what makes
+a 386 and a 486 worth having.
+
+### 91.13 The budget — **PLANNED**
+
+| | planned | basis |
+|---|---|---|
+| resident image | **36,000** | 4,650 C lines at 4.3 bytes a line (20,000) + 4,100 assembly lines at 2.32 (9,500) + the C runtime (6,000) |
+| resident bss | **6,000** | ~4,200 counted buffer by buffer, rounded **up** — the first full build always overshoots |
+| `INFONES.OVL` | **4,500** | 1,030 overlay C lines at 4.3, plus the strings and the dialog table |
+| **resident total** | **~42,000** of 61,440 | about 19,400 spare, and **13,000 under §73.9's 55,000 trigger** |
+
+**The basis is `apps/c64` measured, not guessed.** C64-SPEC §13.0.1's
+shipped line is 39,384 image + 13,106 bss + 2,149 overlay = 52,490 resident,
+from 6,913 lines of C and 3,318 of assembly. **The C runtime is ~6,000 and not
+3,000**: C64-SPEC §13.2's own planning row is *crt0 + thunks (`ccsmoke`
+alone is 3,406) ~6,000*, and `ccsmoke` is the minimal package — one that links
+menus, a file dialog, `key_down`, `mem_claim`, `assoc`, `about` and the wake
+links more thunks. Backing 3,318 assembly lines at 2.32 (7,698) and 6,000 of
+runtime out of c64's image leaves 25,686 for 6,913 C lines = ~3.7 bytes a line,
+and its 2,149-byte overlay over 590 lines is 3.64 — so **~4.0 is the honest C
+figure and 4.3 the conservative one**, which is what this table uses.
+
+The bss, buffer by buffer: the composed line 272, the sprite scratch 272, the
+packed present line 320 (13h's worst), the 240-entry row-drop table, the panel
+shadow (14 fields x 40 = 560), the DAC image 192, the 64-entry NES palette 192,
+**two 256-entry reduction tables (512)**, the sprite-eval list 32, the pad,
+sticky latch and key state 40, the bank table (16 words), the core's boundary
+and counter words, the wall-clock accumulator, and menu, label-swap and message
+scratch ~1,200, plus slack.
+
+**`CC_HAS_OVL` is on from the first commit and three files are already out**
+(C64-SPEC §13.1's rule): the alternative is discovering at 55,000 that
+the code is not the *kind* that can move. The `os88pkg` five-figure line —
+resident image, bss, `.OVL`, resident shims, largest frame — is reported at the
+end of every wave, and **55,000 is the trigger at which the next wave's first
+job is another move, by FREQUENCY and never by size** (§73.14).
+
+#### 91.13.1 The file split
+
+| file | holds | where |
+|---|---|---|
+| `infones.c` | the translation unit's root: the licence header, every prototype, `os88_main`, `os88_paint`, `os88_onkey`, `os88_onclick`, `os88_oncmd`, `os88_onfile`, `os88_onwake` | resident |
+| `nirom.c` | `ovl_rom_load` — the iNES reader, the length check, the DiskDude guard, the trainer skip, the mapper refusal, and the load into claims | **overlay** |
+| `nimap.c` | mappers 0/1/2/3/4 as five blocks behind one switch; the nametable mirroring table; MMC3's scanline IRQ counter | resident |
+| `nippu.c` | the `$2000-$2007` register file, `$4014` DMA, sprite evaluation, the palette and both reduction tables | resident |
+| `nirun.c` | the frame loop, the cycle triple, the sprite-0 split, frame skip, the wall-clock accumulator, the pad sweep and latch, and both rate counters | resident |
+| `nipanel.c` | the panel, its shadow, the delta draw, the fact line and the two rate fields | resident |
+| `nimenu.c` | the three flat menu tables, the greying predicates, the label-swap table | resident |
+| `nicmd.c` | `ovl_*`: every menu command shell except Full screen | **overlay** |
+| `niabout.c` | `ovl_about_show` — the nine-row panel | **overlay** |
+| `nicpu.inc` | the 2A03 core | resident |
+| `niband.inc` | the scanline composer and the tile-cache decoder | resident |
+| `nifsx.inc` | the whole §53 bracket, the DAC programming, the four presents, the `int 16h` shim | resident |
+| `nimem.inc` | the cross-segment movers, the OAM block move, the 16-byte iNES shift | resident |
+| `infones.asm` | the shim: `CC_PKG_NAME` `'INFONES'`, `CC_HAS_ONKEY`/`ONCLICK`/`MENUS`/`ABOUT`/`FDLG`/`ONWAKE`/`OVL`, `CC_ICON`, `CC_ASSOC`, `CC_STACK_CLASS` | resident |
+| `icon.inc`, `niassoc.inc` | the 16x16 controller icon, and the `.NES` association block | resident |
+
+**There is no `CC_HAS_WORKER`.** The machine runs only inside the bracket and
+`File > Exit` is `os88_wm_close`, so §20.6's worker rules never come into play
+here — which also means every buffer in this package is owned by exactly one
+path at a time (§73.5.1: a static is per package *instance*, and the bracket
+owns its buffers exclusively).
+
+**`nimem.inc` is the only place `ES` is loaded**, line by line marked
+`; cc8086:allow` with its reason, and gated on a real x86 under SS ≠ DS by
+`nimemtest`.
+
+**`ovl_rom_load` is called from the WAKE and never from `os88_main`** — the
+first callback is where an overlay may first be reached (§74.1) — announced
+with a toast before the long walk, and its `.OVL`-missing refusal is printed on
+the panel's **state line**, not toasted into a window nobody is looking at.
+
+#### 91.13.2 The iNES header defeats `os88_file_read_at`, silently
+
+`os88_file_read_at` requires its offset **and** its capacity each to be a whole
+number of clusters or it answers `FERR_NAME` (§18.4.1, `apps/cc/os88.h` around
+line 827). A PRG bank's offset is `16 + n * 16384` because of the iNES header,
+and **16 mod any cluster size is not 0**, so no PRG bank can be read directly.
+
+Two paths, and the second exists only for ROMs this port does not ship:
+
+- **ROM ≤ 64KB** — every shipping game, every blargg single and `nestest`: read
+  whole with `os88_file_read_seg` into a transient staging claim and copied out
+  with the 16-byte skew for free.
+- **ROM > 64KB**: read in cluster windows and shifted down 16 bytes by
+  `nimem.inc`'s mover, one extra pass over the ROM at load.
+
+The shift path has a gate of its own precisely because **no shipped ROM
+exercises it**, and a path nothing runs is a path that is broken.
+
+### 91.14 Names, disks, machines and harnesses
+
+#### 91.14.1 Names — two prefixes for two audiences
+
+**User-facing names are `INFONES`; every engineering artifact is `ni`.** Stated
+as a rule because it is what stops a grep missing a file.
+
+| | |
+|---|---|
+| package | `INFONES` (`CC_PKG_NAME`, 7 of the 15-character limit) |
+| directory | `apps/infones/` |
+| sources | `apps/infones/infones.c`, `infones.asm`, and `ni*.c` / `ni*.inc` |
+| overlay | `INFONES.OVL` (§73.14) |
+| images | `build/infones360.img`, `build/infones720.img`, `build/infones.img` (1.44MB), `build/infones12.img` (1.2MB) |
+| machines | `vm/xt-infones`, `vm/286-infones`, `vm/386-infones` |
+| targets | `make infones`, `make infonesdisk`, `make nicputest`, `make nisystest`, `make nibandbench`, `make nimemtest` |
+| tools | `tools/nigetroms.py`, `tools/niref.py` |
+| bench | `tests/niband/` |
+| on `apps-all.img` | `INFONES/` — **a folder of its own**, because a package with an overlay gets one (§19.9, §19.10) |
+| file type | `.NES` |
+
+#### 91.14.2 The ROM set per geometry
+
+`tools/nigetroms.py` is `tools/getstories.py`'s shape: a manifest of pinned URL
+plus SHA-256 plus a licence and source-offer note per entry, an iNES header
+parse that verifies the mapper and the PRG/CHR sizes against the manifest, a
+`write_catalog()` that emits a **per-geometry `CATALOG.TXT` and `README.TXT`**
+saying which games are on **this** disk and why the others are not (the
+`make cpmsw` / `GAMES.TXT` precedent, §74.6), a `NESROMS=` knob for the user's
+own dumps, and **nothing committed**.
+
+**Every shipped floppy is free of non-commercial and share-alike conditions.**
+
+| geometry | ROMs |
+|---|---|
+| 360KB | the four Damian Yerrick games (114,752 bytes total) |
+| 720KB, 1.2MB, 1.44MB | those four, plus Mega Mountain (GPL-3 + MIT) |
+| through The Wire only | Sir Ababol Remastered and Super Uwol, each with its own licence text in the record |
+
+`README.TXT` on each disk carries the **GPL-3 source offers** with repository
+URL and tag, and the Zlib and all-permissive copyright lines; `LICENSE.TXT`
+carries the Apache-2.0 text (§91.1). The 360KB arithmetic: package + overlay +
+the four ROMs + the three text files is about **150 of 354 clusters**.
+
+**The test ROMs have no licence at all** — there is no `LICENSE` in the
+`nes-test-roms` collection and no permission statement in any readme — so they
+are fetched into `build/nesroms/` for the harnesses and **ship nowhere**: not
+on a floppy, not through The Wire, not in the repository.
+
+#### 91.14.3 The three 86Box machines
+
+Each is a copy of a machine that has already booted, with **only the B: image
+and the uuid changed**:
+
+| machine | from | B: |
+|---|---|---|
+| `vm/xt-infones` | `vm/xt-c64` — IBM XT, 8088 at 4.77 MHz | `build/infones360.img` |
+| `vm/286-infones` | `vm/286-c64` | `build/infones720.img` |
+| `vm/386-infones` | `vm/386-c64` | `build/infones.img` |
+
+**These are manual evidence and no gate rests on them** (docs/TESTING.md).
+`vm/xt-infones` ships once the port has been **measured** there and not before:
+an XT target ahead of a measurement is a claim rather than a machine.
+
+#### 91.14.4 The harnesses and the gates
+
+| artifact | what it proves | run by |
+|---|---|---|
+| `hosttest/niuitest.c` | the whole C compiled with clang against a **second copy** of `os88.h` placed ahead of `apps/cc` on the include path, so drift is a compile failure. A pixel model of the glass for the panel; drives the program like a user; asserts field for field that the glass shows what the shadow says; prints the cost table in calls, cells and milliseconds; replays the frame-hash recordings | `build.sh` |
+| `hosttest/nicputest.asm` | **the CPU gate**: `nicpu.inc` assembled standalone against a stub bus whose contract is written down beside it, running `nestest.nes` from `$C000` and diffing PC, opcode bytes, A/X/Y/P/SP and CYC against `nestest.log` line by line — the first differing line names the wrong instruction — then blargg's `instr_test-v5` `rom_singles` 01-16 through the `$6000` protocol | **`make nicputest` ALONE.** It takes minutes and needs a fetched fixture, and `apps/c64/build.sh`'s header says in capitals why that does not belong in a build |
+| `hosttest/nisystest.asm` | **the whole-emulator ROM gate**, and a new artifact this port adds: a `NITEST=1` headless debug build of the **package** that loads a named ROM on the wake, runs it with no bracket and no present, polls `$6000` and prints the `$6004` string, read back over QMP. `ppu_vbl_nmi` 01-10, `cpu_dummy_reads`, `palette_ram`, `instr_timing` | `make nisystest` |
+| `hosttest/nimemtest.asm` | `niband.inc`'s and `nimem.inc`'s entry points on a real x86 under **SS ≠ DS** with an `ES` sentinel and four discipline negative controls (ES, DF, BP, DS); and it writes the composed 256x240 frame out over the serial port, which is the **only** path by which the shipping assembly's output reaches `tools/niref.py` | `build.sh` — it is seconds |
+| `tools/niref.py` | `tools/c64ref.py`'s role: an **independent** Python compositor written from NESdev documentation, compared bit for bit against **both** dumps — `niuitest`'s C model and `nimemtest`'s shipping assembly. `--selftest` injects a one-bit defect and requires the compare to fail | `build.sh` |
+| `tests/niband/` | the icount bench: the composer per pixel and per line, the decoder per 1KB bank, each present per line, the core per 6502 cycle and per core entry. **This is what writes §91.12's table.** Registered in `tests/suite.py` | `make nibandbench` |
+
+**`make nicputest` cannot test the PPU and that is why `nisystest` exists.** The
+CPU gate is nasm-only: `nippu.c`, `nirun.c` and `nimap.c` are compiled C and
+cannot be in that binary, so `ppu_vbl_nmi` — a test of exactly the code it
+excludes — would have nowhere to run. `cpu_timing_test6` and the
+`branch_timing_tests` family have **no `$6000` status byte at all**: they
+predate the protocol and report only on a rendered screen, so they are
+screendumped and read by eye and **no gate rests on them**.
+
+**The assembly gets its own gate because the harness models it.**
+C64-SPEC §9.8's all-black 2x screendump is the cautionary case: the C
+harness transcribed the routine correctly, and that is exactly what made the
+real routine's two independent defects invisible. Running `niref.py` against
+the C model alone would be the same trap one level up.
+
+**Restore equality is checked and it is SCOPED.** A desktop screendump before
+entering the bracket and after leaving it — through `F` and again through Esc,
+and after cycling every mode the adapter offers — is byte-identical **outside
+the panel's field rect**, and the fields expected to differ are named: the
+state line goes `Running` → `Ready` and the two rate fields go from `--` to
+numbers. An unscoped whole-screen comparison must fail the moment the panel
+does its job, and the likely reaction — weakening it — would throw away §53.9's
+one strong check.
+
+**Fullscreen frames are visible under QEMU**: 13h, Mode X and the CGA modes are
+real BIOS modes and `screendump` follows the CRTC (§53.9). Hercules is the
+exception and needs `tools/hercshot.py`.
+
+### 91.15 What this port adds to the kernel and the SDK: nothing
+
+No slot is added, no thunk is added, `apps/cc/crt0.asm` is unchanged and
+`apps/cc/os88.h` gains no declaration. Every gap this port meets is answered
+**in the package**:
+
+| the gap | the answer |
+|---|---|
+| §53 is not wrapped for C | the whole bracket is `nifsx.inc`, plus one cdecl helper for the greying predicates |
+| no 60.0988 Hz clock exists, and none can | the 110/100 accumulator over `FSXW_FRAME` + `FSXF_FASTTICK` |
+| nothing wraps `int 16h` | a ten-line shim in `nifsx.inc`; the queue is drained |
+| no DAC call exists | the app owns the DAC inside a foreign mode (§53.7) |
+| `os88_file_read_at`'s cluster rule vs. the 16-byte header | the staging-claim read, and the shift path for large ROMs (§91.13.2) |
+| no 32-bit type | two words with an explicit fold per slice |
+| no formatter, no float | rates held in tenths and composed by `os88_utoa` |
+| no submenu, no separator, one item mark | flattened in the package; check state in the label |
+| a `MENU_DIS` item has no click to answer | the short form in the label and the sentence on the fact line |
+| `OSAPI_MEM_MOVABLE` has no C thunk | every claim is pinned by design (§91.3.2) |
+| sound | greyed with the fact; the pulse-1 arithmetic recorded and nothing added to the SDK |
+| a `.NES` double-clicked on a cold boot | `CC_ASSOC` **and** `os88_assoc_set`, which are not alternatives |
+
+### 91.16 It shares nothing with any other package by copy
+
+`INFONES` is `apps/infones/`, package `INFONES`, `.NES`, `build/infones*.img`
+and `vm/{xt,286,386}-infones`. It shares no file, no buffer and no routine with
+`apps/c64`, `apps/runcpm`, `apps/cword` or any other package: what it takes
+from them is **shape** — `c64cpu.inc`'s register plan, `c64ref.py`'s role,
+`RUNCPM`'s refusal wording, `getstories.py`'s manifest, `tank`'s two-reader
+input model — and shape is copied by reading, not by including.
+
+Where two packages must genuinely share, the rule is WEAVE-SPEC §1.2's:
+they share **source**, through `%include` or `#include`, and never a copy. This
+port shares nothing that way today, and a later wave that needs to must do it
+that way rather than duplicating a file.
