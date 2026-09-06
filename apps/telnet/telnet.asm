@@ -112,7 +112,14 @@ TE_BAND     equ TE_COLS * 8         ; one composed screen row, 1bpp, 640 bytes
 TE_GLYF     equ 256 * 8             ; ...and the 256-glyph CP437 face (70.8.6)
 TE_RX       equ 512                 ; one NETV_RECV's landing ground
 TE_HOSTMAX  equ 48
-TE_TX       equ 64                  ; keystrokes waiting for the worker
+TE_TX       equ 256                 ; keystrokes and protocol replies waiting
+                                    ; for the worker - 64 before SPEC.md
+                                    ; 70.10.3, and still a power of two so the
+                                    ; index is `and`-masked
+TE_PND      equ 32                  ; ...and the ONE refused reply, held whole:
+                                    ; a Zmodem hex header is 21 bytes and a
+                                    ; binary one at most 18 after escaping,
+                                    ; `SB TTYPE IS` is 10 and `SB NAWS` is 9
 
 TE_BAR      equ 16                  ; the host box's height
 TE_PAD      equ 3
@@ -147,6 +154,18 @@ T_WONT      equ 252
 T_DO        equ 253
 T_DONT      equ 254
 
+; --- the four options a board expects to be answered (SPEC.md 70.10.1) -------
+TO_BINARY   equ 0                   ; RFC 856 - and Zmodem does not work without
+TO_ECHO     equ 1                   ; it, because a data subpacket contains every
+TO_SGA      equ 3                   ; byte value and a host that has not agreed
+TO_TTYPE    equ 24                  ; is entitled to strip the eighth bit
+TO_NAWS     equ 31
+
+; --- the SB state machine's phases, which are [te_ph] 3 and above -----------
+TP_SBOPT    equ 3                   ; the option byte of a subnegotiation
+TP_SBODY    equ 4                   ; ...its body
+TP_SBIAC    equ 5                   ; ...and an IAC inside it
+
 ; -----------------------------------------------------------------------------
 ; te_entry - package entry (SPEC.md 20.2)
 ; -----------------------------------------------------------------------------
@@ -163,10 +182,13 @@ te_entry:
                                             ; offset 0 - the package's own
                                             ; header - and the first keystroke
                                             ; writes into it
-    mov byte [te_attr], 0x07        ; SPEC.md 70.8's reset attribute, and the
-                                    ; only one anything sets until the parser
-                                    ; lands (70.9.4). bss arrives ZEROED, and
-                                    ; zero is black on black
+    mov byte [te_lfg], 0x07         ; SPEC.md 70.9.4's LOGICAL state, and
+    call te_derive                  ; [te_attr] is derived from it and never
+                                    ; set by hand - which is the whole reason
+                                    ; `CSI 7;31m` comes out black on red. bss
+                                    ; arrives ZEROED (SPEC.md 21 step 5), and
+                                    ; a logical foreground of zero would derive
+                                    ; black on black
     mov byte [te_cvis], 1           ; ...and the cursor is drawn until `?25l`
     call te_font                    ; the 256 CP437 glyphs, ROM where there is
     call te_clear                   ; one and the shipped table where not
@@ -276,7 +298,7 @@ te_layout:
     mov [te_px], cx
 
     ; --- and how many rows the LIVE content box can show --------------------
-    ; TE_ROWS is 18 and the screen is fixed, but the WINDOW is not: wm_fit
+    ; TE_ROWS is 25 and the screen is fixed, but the WINDOW is not: wm_fit
     ; clamps a 190-row template to the desktop band, which on CGA is 155. The
     ; rows that did not fit were drawn anyway - the gfx primitives clip to the
     ; SCREEN, not to the window (SPEC.md 39.7) - so the bottom of the terminal
@@ -304,10 +326,11 @@ te_layout:
     mov [te_vtop], cx
 
     ; --- and how many COLUMNS it can show -----------------------------------
-    ; **THIS IS NOT REFLOW AND MUST NOT BECOME IT.** The screen is 64 columns
+    ; **THIS IS NOT REFLOW AND MUST NOT BECOME IT.** The screen is 80 columns
     ; wide whatever the window is: the buffer does not change, the host is
-    ; still told nothing (no NAWS - see te_opt), and its idea of where a line
-    ; wraps stays exactly what it was. What a narrow window changes is how
+    ; told 80x25 whatever this answers (SPEC.md 70.10.1's NAWS reports the
+    ; BUFFER), and its idea of where a line wraps stays exactly what it was.
+    ; What a narrow window changes is how
     ; much of each line you can SEE, which is the same bargain te_vrows makes
     ; vertically. Reflowing instead would be a terminal quietly disagreeing
     ; with the host about its own width, and every wrapped line on screen
@@ -396,15 +419,36 @@ te_mark:
     pop ax
     ret
 
-; --- te_owedrow - BX = a row; CF=1 if it is owed ----------------------------
-te_owedrow:
+; -----------------------------------------------------------------------------
+; te_takerow - BX = a row; CF=1 if it was owed, AND ITS BIT IS CLEARED
+;
+; **THE BIT IS TAKEN, NOT READ AND LATER FORGOTTEN**, and that is a fix rather
+; than a style (the w2 review's MAJOR 2b). Both renderers used to walk rows
+; 0..24 and then call te_markclr, which zeroes all four bytes - so a te_mark
+; the WORKER set for a row the loop had already passed was cleared unread, and
+; the character that arrived for row 3 while the loop was on row 18 never
+; reached the screen at all. The window was the whole twenty-five-row pass, and
+; in full screen (FSXF_KEEPWORKER, SPEC.md 70.8.7) the two really are different
+; tasks.
+;
+; Clearing as it draws makes a lost mark impossible instead of unlikely: a mark
+; set for a row already passed stays set and the next pass draws it. The
+; read-modify-write is SPEC.md 70.2's own critical section, one byte along -
+; `pushf`/`cli` … `popf`, never `cli`/`sti` (SPEC.md 1).
+; -----------------------------------------------------------------------------
+te_takerow:
     push ax
     push bx
     push cx
     cmp bx, TE_ROWS
     jae .no
-    call te_bit
-    and al, [te_drb + bx]
+    call te_bit                     ; AL = the bit, BX = its byte
+    pushf
+    cli
+    and al, [te_drb + bx]           ; AL = the bit if it was set, else 0
+    xor [te_drb + bx], al           ; ...and a zero XORs nothing, so there is
+    popf                            ; no second branch to get wrong
+    or al, al
     jz .no
     pop cx
     pop bx
@@ -418,6 +462,24 @@ te_owedrow:
     clc
     ret
 
+; -----------------------------------------------------------------------------
+; te_takescroll - AX = the scroll debt, and the counter is zeroed with it
+;
+; The w2 review's MAJOR 2a. `mov ax, [te_scrl]` … `mov word [te_scrl], 0` is a
+; read-modify-write with the same two tasks either side of it, and te_scrollup
+; ADDS to that counter: a board that scrolled twice in the window between the
+; read and the store lost one of them, VRAM moved N rows where the buffer moved
+; N+1, and every row the board did not touch again stayed one line out of place
+; for the rest of the session. Nothing short of `^]` repaired it.
+; -----------------------------------------------------------------------------
+te_takescroll:
+    pushf
+    cli
+    mov ax, [te_scrl]
+    mov word [te_scrl], 0
+    popf
+    ret
+
 ; --- te_markcur - the row the cursor is on ----------------------------------
 ; Called BOTH SIDES of every cursor move: the underline is composed into the
 ; band (SPEC.md 70.8.2), so the row it LEFT owes a redraw as much as the row
@@ -429,16 +491,13 @@ te_markcur:
     pop bx
     ret
 
-; --- te_markall / te_markclr - everything, and nothing ----------------------
+; --- te_markall - every row. **AND THERE IS NO te_markclr**: a bitmap that
+; is cleared wholesale is a bitmap that drops the marks another task set
+; while it was being walked, which is te_takerow's whole subject.
 te_markall:
     mov word [te_drb], 0xFFFF
     mov word [te_drb + 2], 0x01FF   ; ...twenty-five bits and not thirty-two:
     ret                             ; byte 3 carries row 24 alone
-
-te_markclr:
-    mov word [te_drb], 0
-    mov word [te_drb + 2], 0
-    ret
 
 ; --- te_markup - the bitmap follows the buffer up one row -------------------
 ; **A DEFECT THE RANGE HAD AND NOBODY COULD FIX CHEAPLY.** A row marked before
@@ -565,7 +624,7 @@ te_status:
 te_screen:
     call te_markall
     call te_rows_owed
-    mov word [te_scrl], 0           ; **AND THE SCROLL DEBT, WHICH IT DID NOT.**
+    call te_takescroll              ; **AND THE SCROLL DEBT, WHICH IT DID NOT.**
     ret                             ; Every row has just been drawn from the
                                     ; buffer, so a pending "blit the pixels up
                                     ; by N" is not owed - and spending it is
@@ -600,14 +659,13 @@ te_rows_owed:
     push di
     xor bx, bx
 .row:
-    call te_owedrow
-    jnc .next
-    call te_row
-.next:
+    call te_takerow                 ; ...which CLEARS the bit it answers for,
+    jnc .next                       ; so a mark the worker sets for a row this
+    call te_row                     ; loop has passed survives into the next
+.next:                              ; pass instead of being dropped
     inc bx
     cmp bx, TE_ROWS
     jb .row
-    call te_markclr
     pop di
     pop si
     pop dx
@@ -633,10 +691,9 @@ te_scrollpaint:
     push cx
     push dx
     push si
-    mov ax, [te_scrl]
+    call te_takescroll              ; ...read and zeroed together (70.8.8)
     or ax, ax
     jz .out
-    mov word [te_scrl], 0
     cmp ax, [te_vrows]
     jae .all                        ; the whole window scrolled away: the blit
                                     ; would move nothing anybody can see
@@ -737,7 +794,28 @@ te_row:
 ; background is not black and whose foreground is black or dark grey is drawn
 ; INVERSE, which is the only rule that keeps a board's highlighted menu item
 ; from rendering as nothing at all in one bit.
-; -----------------------------------------------------------------------------
+;
+; **THE PREDICATE IS A MACRO AND IS EMITTED TWICE**, once in the cell loop and
+; once for the cursor's own cell, because those two must not be able to
+; disagree and neither may pay for a call: a `call` a cell is eighty of them a
+; row on a machine PERFORMANCE.md prices a near call at 11us on. One source,
+; two emissions - and it is the third reader of 70.8.4's rule, te_tx_mattr
+; being the second.
+;
+;   in:  AL = the cell's attribute, DL = which bits are the background
+;   out: CH = 00 (a lit glyph on dark paper) or FF (INVERSE)
+%macro TE_INVMASK 0
+    xor ch, ch
+    cmp byte [te_mono], 0
+    je %%done                       ; a colour screen takes its polarity from
+    test al, 0x07                   ; the PEN and never from the band
+    jnz %%done                      ; a foreground that is not 0 or 8 reads as
+    test al, dl                     ; text whatever the paper is
+    jz %%done
+    mov ch, 0xFF
+%%done:
+%endmacro
+
 te_compose:
     push ax
     push bx
@@ -750,23 +828,25 @@ te_compose:
     mul bx                          ; **MUL WRITES DX** (SPEC.md 1)
     mov si, te_scr
     add si, ax                      ; SI = the row's first cell
+    mov [te_rowp], si               ; ...kept, because the cursor block at the
+                                    ; foot needs the CURSOR's cell and SI has
+                                    ; walked to the end of the row by then
     mov di, te_band
     mov cl, [te_vcols]              ; <= TE_COLS, clamped in te_layout
     mov dl, 0x70                    ; which bits are a BACKGROUND: bit 7 joins
-    cmp byte [te_ice], 0            ; them under iCE, where it is the fourth
-    je .cell                        ; background bit and not blink (70.8.9)
-    mov dl, 0xF0
-.cell:
-    xor ch, ch                      ; CH = the cell's XOR mask, 00 or FF
-    cmp byte [te_mono], 0
-    je .glyph                       ; a colour screen takes its polarity from
-    mov al, [si+1]                  ; the PEN and never from the band
-    test al, 0x07
-    jnz .glyph                      ; the foreground is not 0 or 8: it reads
-    test al, dl                     ; lit on dark ground whatever the paper is
-    jz .glyph
-    mov ch, 0xFF                    ; INVERSE: lit paper, dark glyph
-.glyph:
+    cmp byte [te_mono], 0           ; them under iCE, where it is the fourth
+    jne .cell                       ; background bit and not blink (70.8.9)
+    cmp byte [te_ice], 0            ; **AND ONLY ON A COLOUR SCREEN.** This
+    je .cell                        ; widened the mask above the [te_mono] test,
+    mov dl, 0xF0                    ; so 0x88 - blink set, black on black - read
+.cell:                              ; as INVERSE windowed on CGA and as plain
+                                    ; in full screen on MDA, where te_tx_mattr
+                                    ; always masks 0x70. The two 1bpp
+                                    ; predicates ARE one predicate (70.8.4), and
+                                    ; on one bit a bright background means
+                                    ; nothing at all
+    mov al, [si+1]
+    TE_INVMASK                      ; -> CH, the cell's XOR mask
     mov bl, [si]
     xor bh, bh
     shl bx, 1                       ; three single shifts: `shl reg, imm` is
@@ -817,8 +897,26 @@ te_compose:
     jae .out                        ; the cursor is off the right of a narrow
     mov di, te_band + TE_COLS*6     ; window: there is no cell to underline
     add di, ax
-    or byte [di], 0xFF
-    or byte [di + TE_COLS], 0xFF
+    ; **IT IS THE CURSOR CELL'S OWN POLARITY AND NOT ALWAYS `or`.** On a 1bpp
+    ; screen a cell the loop drew INVERSE has those two scanlines at 0xFF
+    ; already, so an OR drew nothing at all - the cursor vanished inside a
+    ; board's highlighted menu bar, which is exactly where a user looks for it.
+    ; The mask is re-derived from THAT cell's attribute rather than taken from
+    ; CH, which after the loop is the LAST column's and not the cursor's.
+    mov bx, ax
+    shl bx, 1
+    add bx, [te_rowp]
+    mov al, [bx+1]
+    TE_INVMASK
+    mov al, ch
+    not al                          ; AL = FF on a normal cell, 00 on inverse
+    or [di], al
+    or [di + TE_COLS], al
+    mov al, ch
+    and [di], al                    ; ...and an inverse cell has those two rows
+    and [di + TE_COLS], al          ; CLEARED instead: a dark underline on lit
+                                    ; paper, the same two scanlines the other
+                                    ; way up
 .out:
     pop di
     pop si
@@ -866,6 +964,18 @@ te_emit:
     mul bx
     add ax, te_scr
     mov [te_rcp], ax                ; ...and where the row's cells are
+    cmp byte [te_nob], 0
+    je .live
+    call te_rowfont                 ; **THE LATCH IS TESTED PER ROW AND NOT PER
+    jmp short .out                  ; RUN**, which is the w2 review's MAJOR 1.
+                                    ; It used to sit at the head of te_blitrun,
+                                    ; where it returned BEFORE the fallback: the
+                                    ; first refused run lettered its own row and
+                                    ; every later call - the first run of every
+                                    ; OTHER row included - returned having drawn
+                                    ; nothing. One row of text and twenty-four
+                                    ; blank ones, for the life of the instance
+.live:
     cmp byte [te_mono], 0
     je .runs
     xor ax, ax                      ; ONE band, ONE blit, no runs (70.8.4)
@@ -900,6 +1010,14 @@ te_emit:
     pop cx
     mov ax, di
     call te_blitrun
+    cmp byte [te_nob], 0
+    jne .out                        ; **AND THIS ROW STOPS HERE.** te_blitrun
+                                    ; latched and te_rowfont lettered the WHOLE
+                                    ; row, so the runs after this one have
+                                    ; nothing left to put down - and walking on
+                                    ; would letter the same row once per
+                                    ; remaining run. The latch IS the signal;
+                                    ; te_emit tested it zero at the top
     add di, cx
     jmp short .run
 .out:
@@ -952,9 +1070,9 @@ te_blitrun:
     push dx
     push si
     push bp
-    cmp byte [te_nob], 0
-    jne .out                        ; the first refusal answered for the row
-    mov si, te_band
+    mov si, te_band                 ; ...and no [te_nob] test here: te_emit
+                                    ; answers for the whole row before it walks
+                                    ; a single run (the w2 review's MAJOR 1)
     add si, ax
     mov bp, TE_COLS
     shl ax, 1
@@ -968,9 +1086,9 @@ te_blitrun:
     mov dx, 8
     call OSAPI_GFX_BLIT1
     jnc .out
-    mov byte [te_nob], 1            ; ...and every later row takes the fallback
-    call te_rowfont                 ; without asking the kernel again
-.out:
+    mov byte [te_nob], 1            ; ...and every later ROW takes the fallback
+    call te_rowfont                 ; at the head of te_emit, without asking the
+.out:                               ; kernel again
     pop bp
     pop si
     pop dx
@@ -1124,24 +1242,119 @@ te_onkey:
     pop ax
     ret
 
+; =============================================================================
+; THE KEYS (SPEC.md 70.10.2)
+;
+; The delivery contract is W_ONKEY's: AL = ASCII, AH = the `int 16h` scan code,
+; and the kernel passes int 16h AH=00h's AX through unchanged - there is no
+; kernel scan-code table and no translation. **AL = 0 IS HOW AN EXTENDED KEY IS
+; RECOGNISED**, tested before AH is looked at, which is SPEC.md 27's rule for
+; exactly the reason it gives: the numeric keypad sends `4 6 8 2 7 1 .` with the
+; scan codes of Left, Right, Up, Down, Home, End and Delete.
+;
+; te_tx_keys reads int 16h directly inside the full-screen bracket and calls
+; this with the same AX, so one table serves both screens.
+;
+; **ELEVEN OF THESE KEYS NEVER REACH THIS PACKAGE ON A MACHINE WITH NO MOUSE.**
+; SPEC.md 9.6's keyboard-mouse takes Home, Up, PgUp, Left, Right, End, Down and
+; PgDn for pointer movement and Ins, Del and Space for the buttons whenever
+; [mou_ptr] is 0. ScrollLock is the escape hatch and it is the only one, so the
+; About panel says so (SPEC.md 70.10.2, te_ab5).
+; =============================================================================
+; --- the extended-key table: scan, length, then the bytes -------------------
+; ANSI-BBS conventions rather than the VT's - `ESC [ K` for End and `ESC [ V` /
+; `ESC [ U` for the page keys are what a DOOR game reads, and every board's own
+; help screen names them.
+te_keytab:
+    db 0x48, 3, 0x1B, '[', 'A'      ; Up
+    db 0x50, 3, 0x1B, '[', 'B'      ; Down
+    db 0x4D, 3, 0x1B, '[', 'C'      ; Right
+    db 0x4B, 3, 0x1B, '[', 'D'      ; Left
+    db 0x47, 3, 0x1B, '[', 'H'      ; Home
+    db 0x4F, 3, 0x1B, '[', 'K'      ; End
+    db 0x49, 3, 0x1B, '[', 'V'      ; PgUp
+    db 0x51, 3, 0x1B, '[', 'U'      ; PgDn
+    db 0x52, 3, 0x1B, '[', '@'      ; Ins
+    db 0x53, 1, 0x7F                ; Del
+    db 0x3B, 3, 0x1B, 'O', 'P'      ; F1
+    db 0x3C, 3, 0x1B, 'O', 'Q'      ; F2
+    db 0x3D, 3, 0x1B, 'O', 'R'      ; F3
+    db 0x3E, 3, 0x1B, 'O', 'S'      ; F4
+    db 0x3F, 5, 0x1B, '[', '1', '5', '~'    ; F5
+    db 0x40, 5, 0x1B, '[', '1', '7', '~'    ; F6
+    db 0x41, 5, 0x1B, '[', '1', '8', '~'    ; F7
+    db 0x42, 5, 0x1B, '[', '1', '9', '~'    ; F8
+    db 0x43, 5, 0x1B, '[', '2', '0', '~'    ; F9
+    db 0x44, 5, 0x1B, '[', '2', '1', '~'    ; F10
+    db 0x85, 5, 0x1B, '[', '2', '3', '~'    ; F11 - and it MAY NEVER ARRIVE:
+    db 0x86, 5, 0x1B, '[', '2', '4', '~'    ; F12   the kernel polls int 16h
+    db 0                                    ;       AH=01h/00h and never the
+                                            ;       enhanced AH=10h/11h, so an
+                                            ;       XT-class BIOS does not
+                                            ;       surface 0x85/0x86. The rows
+                                            ;       are here so a machine whose
+                                            ;       BIOS does sends the right
+                                            ;       thing; nothing depends on it
+te_k_crlf:  db 13, 10
+te_k_iac:   db IAC, IAC
+
 ; -----------------------------------------------------------------------------
-; te_tx - queue AL (and AH's scan code, for the arrows) for the worker
+; te_tx - queue AL (or AH's scan code, for the extended keys) for the worker
 ; in:  AL = ascii, AH = scan
 ;
 ; A RING WITH A DROP, not a block: the UI task must never wait for the wire.
-; At 3,741 bytes a second a 64-byte queue is seventeen milliseconds of typing
-; ahead of the cable, and a human who outruns that has an unresponsive machine
-; either way - what they must not have is a frozen one.
+; At 3,741 bytes a second a 256-byte queue is 68 ms of typing ahead of the
+; cable, and a human who outruns that has an unresponsive machine either way -
+; what they must not have is a frozen one. A key SEQUENCE goes in whole or not
+; at all (te_enq), for the same reason a protocol reply does: half of
+; `ESC [ 1 5 ~` on the wire is `15~` typed into a board's menu.
 ; -----------------------------------------------------------------------------
 te_tx:
+    push cx
+    push si
     or al, al
-    jz .out                         ; a bare scan code: no arrows, no function
-                                    ; keys. This terminal sends CHARACTERS
+    jz .ext
     cmp al, 13
-    jne te_txraw
-    mov al, 13                      ; CR, and the LF is the host's business:
-    jmp short te_txraw              ; RFC 854 says CR LF and every host in
-.out:                               ; practice accepts a bare CR
+    je .enter
+    cmp al, IAC
+    je .iac                         ; **AN OUTGOING 0xFF IS DOUBLED**, which is
+                                    ; IAC IAC and is the same rule as the
+                                    ; incoming half (SPEC.md 70.10.1)
+    call te_txraw
+    jmp short .out
+.enter:                             ; **CR LF, which is RFC 854's requirement
+    mov si, te_k_crlf               ; for an NVT** - or a bare CR when we have
+    mov cx, 2                       ; agreed to TRANSMIT-BINARY, which is what
+    test byte [te_obin], 1          ; BINARY means. The old code sent CR
+    jz .send                        ; unconditionally under the comment "the LF
+    mov cx, 1                       ; is the host's business", which every host
+    jmp short .send                 ; tolerates and the RFC does not say
+.iac:
+    mov si, te_k_iac
+    mov cx, 2
+    jmp short .send
+.ext:
+    mov si, te_keytab
+.scan:
+    mov cl, [si]
+    or cl, cl
+    jz .out                         ; not a key this terminal sends: dropped,
+    cmp cl, ah                      ; which is what a bare scan code with no
+    je .found                       ; meaning to a board deserves
+    mov cl, [si+1]
+    xor ch, ch
+    add si, cx
+    add si, 2
+    jmp short .scan
+.found:
+    mov cl, [si+1]
+    xor ch, ch
+    add si, 2
+.send:
+    call te_enq
+.out:
+    pop si
+    pop cx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1180,6 +1393,128 @@ te_txraw:
     ret
 
 ; -----------------------------------------------------------------------------
+; te_enq - queue CX bytes at DS:SI, WHOLE OR NOT AT ALL (SPEC.md 70.10.3)
+; out: CF=1 and nothing enqueued
+;
+; A KEYSTROKE IS ONE BYTE AND A FULL RING DROPS IT, which SPEC.md 70.2
+; justified and which is still right. **A PROTOCOL REPLY IS NOT ONE BYTE AND
+; MUST NOT BE CUT**: half of an `SB TTYPE IS "ANSI" SE` on the wire is a
+; subnegotiation the host waits for the end of, and half of a Zmodem header is
+; a header the sender NAKs for ever.
+;
+; The space is tested and every byte copied inside ONE critical section, so the
+; ring cannot fill between the test and the copy - and [te_txw]'s two writers
+; (te_onkey on the UI task, the worker's replies) are why there is one at all.
+; -----------------------------------------------------------------------------
+te_enq:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    pushf
+    cli
+    mov bx, [te_txr]
+    sub bx, [te_txw]
+    dec bx
+    and bx, TE_TX-1                 ; BX = the free bytes
+    xor dx, dx                      ; DX = 0 taken, 1 refused
+    cmp bx, cx
+    jae .copy
+    inc dx
+    jmp short .done
+.copy:
+    mov bx, [te_txw]
+    jcxz .store
+.byte:
+    mov al, [si]
+    inc si
+    mov [te_txb + bx], al
+    inc bx
+    and bx, TE_TX-1
+    loop .byte
+.store:
+    mov [te_txw], bx
+.done:
+    popf                            ; ...and the answer is carried in DX, not
+    or dx, dx                       ; in CF: popf restores the flags this proc
+    jnz .full                       ; was entered with (SPEC.md 1's critical
+    pop si                          ; section is pushf/cli...popf, never
+    pop dx                          ; cli/sti)
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.full:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; te_reply - a PROTOCOL message: enqueued whole, or held and retried
+; in:  DS:SI = the bytes, CX = the length (at most TE_PND); THE WORKER'S TASK
+;
+; **ONE DEEP IS ENOUGH BECAUSE THE WORKER STOPS CONSUMING WHILE IT IS
+; OCCUPIED** (SPEC.md 70.10.3): a pass that could not finish its receive buffer
+; issues no new NETV_RECV, so there is never a second message to compose while
+; the first is pending. TCP's own window holds the sender, and no byte is
+; dropped anywhere in the chain.
+;
+; te_pnd is the WORKER's alone - te_onkey never writes it - so the one-deep
+; slot has one writer and needs no critical section of its own.
+; -----------------------------------------------------------------------------
+te_reply:
+    call te_enq
+    jnc .out
+    push ax
+    push bx
+    push cx
+    push si
+    cmp cx, TE_PND
+    ja .drop                        ; longer than the slot: cannot happen, and
+                                    ; a silent truncation is what this whole
+                                    ; routine exists to prevent
+    cmp byte [te_pndn], 0
+    jne .drop
+    xor bx, bx
+.cp:
+    mov al, [si]
+    mov [te_pnd + bx], al
+    inc si
+    inc bx
+    loop .cp
+    mov [te_pndn], bl
+.drop:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+.out:
+    ret
+
+; --- te_retry - the held reply, at the TOP of the next worker pass -----------
+te_retry:
+    push cx
+    push si
+    cmp byte [te_pndn], 0
+    je .out
+    mov cl, [te_pndn]
+    xor ch, ch
+    mov si, te_pnd
+    call te_enq
+    jc .out
+    mov byte [te_pndn], 0
+.out:
+    pop si
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
 ; te_toggle - the Connect / Close button, and Return in the host box
 ; -----------------------------------------------------------------------------
 te_toggle:
@@ -1207,6 +1542,7 @@ te_toggle:
     mov byte [te_state], TS_OPEN    ; TS_IDLE, TS_DOWN and TS_ERR all connect
     mov byte [te_want], 0           ; ...and a close asked for on a session
     mov word [te_msg], 0            ; that has already ended is not owed
+    call te_reset
     call te_clear
     call te_promise                 ; AT THE TRANSITION and unconditionally
                                     ; (SPEC.md 70.7): te_clear has just
@@ -1218,6 +1554,43 @@ te_toggle:
 .down:
     mov byte [te_want], 1           ; ...ASKED, not done: closing is a wire
 .out:                               ; command and the worker owns the wire
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; te_reset - a NEW SESSION starts with none of the last one's state
+;
+; Every byte here is negotiated, learned or half-parsed, and carrying any of it
+; across a connect is a session drawing against the previous host's idea of
+; itself: a BINARY agreement the new host never made would send Enter as a bare
+; CR (SPEC.md 70.10.2), a parser left mid-CSI would swallow the new host's
+; first sequence, and a Zmodem handover that never completed would stop the new
+; session before its first byte. The SCREEN is te_clear's, next door.
+; -----------------------------------------------------------------------------
+; **ONE `rep stosb` AND FOUR STORES**, which is why the parser's whole state is
+; one contiguous run of bss ([te_pst] to [te_rxn]) rather than bytes scattered
+; where each was convenient. Twenty separate `mov byte [x], 0` is sixty bytes
+; of a package on a floppy that has two clusters left, and a state byte added
+; later that nobody remembered to add here is a session that starts dirty -
+; which is the failure this shape makes impossible rather than unlikely.
+te_reset:
+    push ax
+    push cx
+    push di
+    push es
+    push ds
+    pop es                          ; ...ES is the KERNEL's on a callback
+    cld
+    mov di, te_pst
+    mov cx, TE_PSTATE
+    xor al, al
+    rep stosb
+    mov byte [te_cvis], 1           ; ...the one byte of it that is not zero
+    mov byte [te_lfg], 0x07         ; ...SGR 0's state, through the one routine
+    call te_derive                  ; that owns the derivation
+    pop es
+    pop di
+    pop cx
     pop ax
     ret
 
@@ -1258,13 +1631,22 @@ te_clear:
 ; letters, and a board's box-drawing character is not a design choice this
 ; package may inherit.
 ;
-; THE SPLIT IS ON A FACT RATHER THAN CAUTION. 32..127 are ASCII and every ROM
-; agrees about them, so they come off the machine; 0..31 and 128..255 are
-; CP437's own and a clone ROM is free to differ, so they are SHIPPED -
-; tools/cp437font.py's clean-room table, 160 glyphs of it.
+; THE SPLIT IS ON A FACT RATHER THAN CAUTION, and the fact is about the ROM and
+; not about the code point. **AN EGA-OR-LATER BIOS's 8x8 set IS CP437, all 256
+; of it, by the adapter's own definition** - so where there is one, all 256 come
+; off the machine and the shipped table is overwritten entirely. That is
+; deliberate and it is not the shipped table going to waste: it is the terminal
+; drawing the letters the rest of the machine draws.
 ;
-;   an EGA/VGA BIOS   int 10h AX=1130h BH=3 answers all 256
-;   a CGA/Hercules    F000:FA6E is 0..127 and the shipped table is the rest
+; A PRE-EGA ROM has 128 glyphs at F000:FA6E and no standard says what a clone
+; put in the low 32 of them, so there only 32..127 - which is ASCII, and every
+; ROM agrees about ASCII - is trusted, and 0..31 and 128..255 stay the shipped
+; table's: tools/cp437font.py's clean-room 160.
+;
+;   an EGA/VGA BIOS   int 10h AX=1130h BH=3 answers all 256, and all 256 are
+;                     taken
+;   a CGA/Hercules    F000:FA6E is 0..127; 32..127 is taken and the shipped
+;                     table keeps the other 160
 ;
 ; kernel/font.inc's font_init is the probe, verbatim in its shape and for its
 ; stated reason: ZERO ES:BP, call AX=1130h, and treat an unchanged 0:0 as "no
@@ -1275,9 +1657,11 @@ te_font:
     push ax
     push bx
     push cx
-    push si
-    push di
-    push es
+    push dx                         ; **int 10h AX=1130h ANSWERS IN DX**: DL is
+    push si                         ; the character rows and CX the bytes per
+    push di                         ; character, so this proc came back with DX
+    push es                         ; changed and said nothing (CLAUDE.md's
+                                    ; register discipline)
     ; --- the shipped half first, so the ROM half can simply overwrite it ----
     mov si, te_cp437
     mov di, te_glyf
@@ -1318,6 +1702,7 @@ te_font:
     pop es
     pop di
     pop si
+    pop dx
     pop cx
     pop bx
     pop ax
@@ -1426,7 +1811,7 @@ te_step:
     cmp ah, NSK_CONNECT
     je .done
     mov si, te_s_refused
-    jmp short .fail
+    jmp .fail
 .isup:
     mov byte [te_state], TS_UP
     mov byte [te_dirty], 1
@@ -1439,8 +1824,22 @@ te_step:
     call te_close
     jmp .done
 .send:
+    call te_retry                   ; **THE HELD REPLY FIRST, before anything
+                                    ; else is enqueued** (SPEC.md 70.10.3)
     call te_flushtx
     jc .busyq
+    cmp byte [te_pndn], 0
+    jne .done                       ; still owed: this pass consumes NOTHING
+                                    ; new, so there is never a second message
+                                    ; to compose while the first is pending and
+                                    ; TCP's own window holds the sender
+    cmp byte [te_zon], 0
+    jne .done                       ; SPEC.md 70.9.6's handover: the stream is
+                                    ; the Zmodem receiver's from [te_rxi] on
+                                    ; and the parser is fed nothing more
+    mov ax, [te_rxi]
+    cmp ax, [te_rxn]
+    jb .drain                       ; last pass could not finish the buffer
     mov al, [te_hnd]
     mov di, te_rx
     mov cx, TE_RX
@@ -1450,6 +1849,9 @@ te_step:
     jc .busyq
     or cx, cx
     jz .empty
+    mov [te_rxn], cx
+    mov word [te_rxi], 0
+.drain:
     call te_feed                    ; ...the bytes onto the screen
     jmp .done
 .empty:
@@ -1649,35 +2051,58 @@ te_flushtx:
     ret
 
 ; -----------------------------------------------------------------------------
-; te_feed - CX bytes at te_rx onto the screen
+; te_feed - the receive QUEUE, drained a byte at a time (SPEC.md 70.10.3)
 ;
-; The Telnet protocol is three bytes wide and this is all of it: IAC
-; introduces a command, DO/WILL are answered with WONT/DONT, and a subnegotia-
-; tion is swallowed to its IAC SE. **Refusing everything is a valid Telnet
-; implementation** and it is the right one here: the options worth accepting
-; (ECHO, SGA) change what the HOST does and not what this draws, and NAWS
-; would have to report a window size this app does not let the user change.
+; It was a BATCH - CX bytes, all of them, no way to stop. It is a queue now
+; ([te_rxn] bytes at te_rx with [te_rxi] taken) for one reason: a pass that
+; could not finish the buffer must issue no new NETV_RECV. Two things stop a
+; pass, and both need the rest of the bytes still to be here next time:
+;
+;   * a protocol reply that would not fit the transmit ring (te_reply held it,
+;     and it is retried at the top of the next pass), and
+;   * SPEC.md 70.9.6's Zmodem handover, where everything from [te_rxi] on
+;     belongs to the receiver and the parser is fed nothing more.
+;
+; The index is advanced BEFORE the byte acts, which is what makes [te_soff] -
+; and so [te_zat] - the offset JUST PAST the byte, matching ansisim's `feed()`
+; return exactly (SPEC.md 70.12).
 ; -----------------------------------------------------------------------------
 te_feed:
     push ax
-    push bx
-    push cx
     push si
-    mov si, te_rx
 .next:
-    mov al, [si]
+    mov si, [te_rxi]
+    cmp si, [te_rxn]
+    jae .out
+    mov al, [te_rx + si]
     inc si
-    push cx
+    mov [te_rxi], si
     call te_byte
-    pop cx
-    loop .next                      ; ...and NOT [te_dirty]: te_putc marked the
-    pop si                          ; rows it changed, and the chrome did not
-    pop cx
-    pop bx
-    pop ax
+    cmp byte [te_zon], 0
+    jne .out                        ; the rest is the receiver's
+    cmp byte [te_pndn], 0
+    je .next                        ; ...and a held reply stops the pass here
+.out:
+    pop si                          ; ...and NOT [te_dirty]: te_putc marked the
+    pop ax                          ; rows it changed, and the chrome did not
     ret
 
-; --- te_byte - one byte through the protocol and onto the screen ------------
+; =============================================================================
+; te_byte - one byte through the TELNET OPTION LAYER (SPEC.md 70.10.1)
+;
+; SPEC.md 70.1's *"refusing every Telnet option is a valid implementation"* was
+; true and was right while nothing this drew depended on the host's idea of the
+; terminal. **IT STOPPED BEING RIGHT WHEN THE TERMINAL BECAME AN 80x25 ANSI
+; SCREEN**: a board asks what the terminal is and draws a different screen for
+; the answer, and a board that is not told sends the line-oriented fallback.
+;
+; Five options are answered and everything else keeps 70.1's mirror. **IAC IAC
+; is one literal 0xFF in the application stream in BOTH directions, and that is
+; not cosmetic**: Zmodem sends binary and binary is full of 0xFF, so a terminal
+; that forgets to halve an incoming pair corrupts every download with one in it
+; - while agreeing perfectly with a sender that also forgets, which is why that
+; defect survives a test written by one author.
+; =============================================================================
 te_byte:
     push bx
     mov bl, [te_ph]
@@ -1692,8 +2117,12 @@ te_byte:
     je .cmd
     cmp bl, 2
     je .optn
-    cmp bl, 3
-    je .sb
+    cmp bl, TP_SBOPT
+    je .sbopt
+    cmp bl, TP_SBODY
+    je .sbody
+    cmp bl, TP_SBIAC
+    je .sbiac
     mov byte [te_ph], 0
     jmp .out
 .cmd:
@@ -1709,7 +2138,7 @@ te_byte:
     mov byte [te_ph], 0
     jmp .text
 .startsb:
-    mov byte [te_ph], 3
+    mov byte [te_ph], TP_SBOPT
     jmp .out
 .want:
     mov [te_verb], al               ; DO/DONT/WILL/WONT: the option follows
@@ -1717,43 +2146,162 @@ te_byte:
     jmp .out
 .optn:
     mov byte [te_ph], 0
-    call te_refuse
+    call te_option
     jmp .out
-.sb:
-    cmp al, T_SE                    ; ...swallowed to the end. A subnegotiation
-    jne .out                        ; we never agreed to cannot be one we have
-    mov byte [te_ph], 0             ; to parse
+.sbopt:
+    mov [te_sbopt], al              ; WHICH subnegotiation, and how far in we
+    mov byte [te_sbn], 0            ; are: `SB TTYPE SEND` is the option, then
+    mov byte [te_sbsnd], 0          ; a single 1
+    mov byte [te_ph], TP_SBODY
+    jmp .out
+.sbody:
+    cmp al, IAC
+    je .sbesc                       ; **AND IT IS AN IAC THAT ENDS ONE**, not a
+    cmp byte [te_sbn], 0            ; bare 240: a subnegotiation's body is
+    jne .sbmore                     ; binary and 0xF0 is an ordinary byte in it
+    cmp byte [te_sbopt], TO_TTYPE
+    jne .sbmore
+    cmp al, 1                       ; TTYPE SEND
+    jne .sbmore
+    mov byte [te_sbsnd], 1
+.sbmore:
+    inc byte [te_sbn]
+    jmp .out
+.sbesc:
+    mov byte [te_ph], TP_SBIAC
+    jmp .out
+.sbiac:
+    cmp al, T_SE
+    je .sbend
+    mov byte [te_ph], TP_SBODY      ; IAC IAC inside a body, or a command this
+    jmp .out                        ; does not act on: back to swallowing
+.sbend:
+    mov byte [te_ph], 0
+    cmp byte [te_sbsnd], 0
+    je .out
+    mov byte [te_sbsnd], 0
+    call te_say_ttype
     jmp .out
 .text:
-    call te_putc
-.out:
+    call te_pbyte                   ; ...and the APPLICATION byte goes to the
+.out:                               ; parser (SPEC.md 70.9)
     pop bx
     ret
 
-; --- te_refuse - answer AL's option with WONT or DONT ------------------------
-; The reply's SENSE is the mirror of the question: a host that WILL is told
-; DONT, a host that asks us to DO is told WONT. Getting that backwards is an
-; option loop - two ends each answering the other for ever - which is the one
-; way a Telnet client can wedge a connection that is working.
-te_refuse:
+; -----------------------------------------------------------------------------
+; te_option - answer AL's option, [te_verb] being the DO/DONT/WILL/WONT
+;
+; **THE REPLY'S SENSE IS STILL THE MIRROR OF THE QUESTION** for everything not
+; in the table: a host that WILL is told DONT, a host that asks us to DO is told
+; WONT. Getting that backwards is an option loop - two ends each answering the
+; other for ever - and it is the one way a Telnet client can wedge a connection
+; that is working perfectly.
+; -----------------------------------------------------------------------------
+te_option:
     push ax
     push bx
-    mov bl, al                      ; the option
-    mov al, IAC
-    call te_txraw                   ; RAW, all three: option 0 is legal and
-    mov al, T_WONT                  ; te_tx's scan-code filter would eat it,
-    cmp byte [te_verb], T_DO        ; leaving a two-byte command the host
-    je .send                        ; completes with the user's next keystroke
-    cmp byte [te_verb], T_DONT
-    je .send
-    mov al, T_DONT                  ; it said WILL or WONT
-.send:
-    call te_txraw
-    mov al, bl
-    call te_txraw
+    push cx
+    push si
+    mov bl, al                      ; BL = the option
+    mov al, [te_verb]
+    cmp al, T_DO
+    je .do
+    cmp al, T_DONT
+    je .dont
+    cmp al, T_WILL
+    je .will
+                                    ; WONT
+    cmp bl, TO_BINARY
+    jne .mirror_dont
+    and byte [te_obin], 0xFD          ; they will NOT send 8-bit clean
+    jmp short .mirror_dont
+.do:
+    cmp bl, TO_TTYPE
+    je .willit
+    cmp bl, TO_SGA
+    je .willit
+    cmp bl, TO_NAWS
+    je .naws
+    cmp bl, TO_BINARY
+    jne .mirror_wont
+    or byte [te_obin], 1            ; **WE** send 8-bit clean, so Enter is a
+    jmp short .willit               ; bare CR from here on (SPEC.md 70.10.2)
+.dont:
+    cmp bl, TO_BINARY
+    jne .mirror_wont
+    and byte [te_obin], 0xFE
+    jmp short .mirror_wont
+.will:
+    cmp bl, TO_ECHO
+    je .doit                        ; the host echoes; this draws what comes
+    cmp bl, TO_SGA                  ; back, which is what a board needs
+    je .doit
+    cmp bl, TO_BINARY
+    jne .mirror_dont
+    or byte [te_obin], 2            ; **THEY** send 8-bit clean
+    jmp short .doit
+.naws:
+    ; **ONE MESSAGE OF TWELVE BYTES AND NOT TWO**, which is the only arm here
+    ; that answers a single received byte with two replies - and te_pnd is ONE
+    ; DEEP (SPEC.md 70.10.3). Sent as two, a full ring would hold the `WILL`
+    ; and DROP the size behind it, leaving the host told this terminal has a
+    ; window and never told how big. The ring is 256 bytes and empty when a
+    ; board negotiates, so that is a hole nothing could reach; it is closed by
+    ; construction rather than by luck.
+    mov si, te_will_naws            ; ...and the size, unasked: a client that
+    mov cx, 12                      ; reported a NARROW window would have the
+    call te_reply                   ; host wrap its lines where the buffer is
+    jmp short .out                  ; not going to wrap them, and every line of
+.willit:                            ; art after the first would be in the wrong
+    mov al, T_WILL                  ; place. NAWS reports the BUFFER, always
+    jmp short .say                  ; 80x25 (SPEC.md 70.8.10)
+.doit:
+    mov al, T_DO
+    jmp short .say
+.mirror_wont:
+    mov al, T_WONT
+    jmp short .say
+.mirror_dont:
+    mov al, T_DONT
+.say:
+    call te_say3
+.out:
+    pop si
+    pop cx
     pop bx
     pop ax
     ret
+
+; --- te_say3 - IAC, AL, BL: one three-byte option reply, whole --------------
+te_say3:
+    push cx
+    push si
+    mov byte [te_say + 0], IAC
+    mov [te_say + 1], al
+    mov [te_say + 2], bl
+    mov si, te_say
+    mov cx, 3
+    call te_reply
+    pop si
+    pop cx
+    ret
+
+; --- te_say_ttype - `SB TTYPE IS "ANSI" SE`, ten bytes on the wire ----------
+te_say_ttype:
+    push cx
+    push si
+    mov si, te_sb_ttype
+    mov cx, 10
+    call te_reply
+    pop si
+    pop cx
+    ret
+
+te_sb_ttype:  db IAC, T_SB, TO_TTYPE, 0, 'A', 'N', 'S', 'I', IAC, T_SE
+te_will_naws: db IAC, T_WILL, TO_NAWS
+              db IAC, T_SB, TO_NAWS, 0, TE_COLS, 0, TE_ROWS, IAC, T_SE
+                                    ; ...and neither 80 nor 25 is 0xFF, so
+                                    ; nothing in this message needs doubling
 
 ; --- te_celloff - AX = the cursor's byte offset within te_scr ----------------
 te_celloff:
@@ -1765,38 +2313,27 @@ te_celloff:
     pop dx
     ret
 
-; --- te_putc - AL onto the screen at the cursor ------------------------------
-; THE PARSER IS NOT HERE (SPEC.md 70.9, teansi.inc, a later wave). What is
-; here is the screen model underneath it: a cell is a character AND THE
-; CURRENT ATTRIBUTE, the cursor is a row and a column rather than an offset,
-; and a glyph written in the last column leaves the cursor there with the
-; PENDING WRAP flag set - so the next glyph wraps and a `CR` that follows does
-; not lose a line (SPEC.md 70.9.5). The escape discard survives until the
-; parser replaces it.
+; --- te_putc - AL, a GLYPH, onto the screen at the cursor --------------------
+; **IT IS ONLY A GLYPH NOW.** The controls and the escape sequences are the
+; parser's (SPEC.md 70.9, teansi.inc), which is what replaced the "recognised
+; and discarded" this proc carried; what is left here is te_putc's own half of
+; the contract, ansisim's `_put` to the line:
+;
+;   * a cell is a character AND THE CURRENT ATTRIBUTE, which the parser derived
+;     (SPEC.md 70.9.4) and this only reads;
+;   * **a glyph written in column 79 STAYS VISIBLE and the cursor stays on it**
+;     with [te_pwrap] set, so the next GLYPH wraps (SPEC.md 70.9.5). The naive
+;     alternative loses a character on every board that fills the last column
+;     and then sends CR LF;
+;   * 0x00-0x1F and 0x7F reach here as ordinary glyphs, because on a board they
+;     are CP437's faces, suits and arrows - and 0x80-0xFF are CP437 too and
+;     never C1 controls.
 te_putc:
     push ax
     push bx
     push cx
     push dx
     push di
-    cmp al, 27
-    je .esc
-    cmp byte [te_ansi], 0
-    jne .inesc
-    cmp al, 13
-    je .cr
-    cmp al, 10
-    je .lf
-    cmp al, 8
-    je .bs
-    cmp al, 9
-    je .tab
-    cmp al, ' '
-    jb .out                         ; the C0 controls this does not act on are
-                                    ; DISCARDED until 70.9.2 makes glyphs of
-                                    ; them. **0x7F AND EVERY BYTE ABOVE IT IS
-                                    ; A GLYPH** and always was one on a board:
-                                    ; 0x80-0xFF are CP437 and never C1
     call te_markcur                 ; the row the cursor is LEAVING owes a
                                     ; redraw: the underline is in its band
     cmp byte [te_pwrap], 0
@@ -1822,51 +2359,6 @@ te_putc:
     dec ax                          ; visible and the cursor stays on it
 .cxok:
     mov [te_cx], ax
-    jmp .out
-.esc:
-    mov byte [te_ansi], 1
-    jmp .out
-.inesc:
-    cmp al, '['                     ; RECOGNISED AND DISCARDED. A sequence this
-    je .out                         ; does not implement showing up as text in
-    cmp al, ';'                     ; the middle of a sentence is worse than
-    je .out                         ; the sequence doing nothing (file header)
-    cmp al, '0'
-    jb .endesc
-    cmp al, '9'
-    jbe .out
-.endesc:
-    mov byte [te_ansi], 0
-    jmp short .out
-.cr:
-    call te_markcur
-    mov word [te_cx], 0
-    mov byte [te_pwrap], 0          ; ANY cursor motion clears it (70.9.5)
-    jmp short .out
-.lf:
-    call te_markcur
-    mov byte [te_pwrap], 0
-    call te_nextrow
-    call te_markcur
-    jmp short .out
-.bs:
-    call te_markcur
-    mov byte [te_pwrap], 0
-    cmp word [te_cx], 0
-    je .out
-    dec word [te_cx]
-    jmp short .out
-.tab:
-    push cx
-    mov cx, 8                       ; ...every eight columns, and not settable
-.sp:                                ; (SPEC.md 70.8): a board sets no tab stop
-    push cx
-    mov al, ' '
-    call te_putc
-    pop cx
-    loop .sp
-    pop cx
-.out:
     pop di
     pop dx
     pop cx
@@ -1889,39 +2381,18 @@ te_nextrow:
     ret
 
 ; -----------------------------------------------------------------------------
-; te_scroll1 - the buffer up one row, the last blanked
+; te_scroll1 - the buffer up ONE row, which is what an LF at the bottom does
 ;
-; ES IS THE KERNEL'S on a callback (SPEC.md 20), so the string ops here point
-; it at us and put it back. It is worth the four instructions: 3,840 bytes as
-; a hand byte loop is about 32 ms on a 4.77 MHz 8088 and `rep movsw` is 10.
+; **THE GENERAL CASE IS te_scrollup** (teansi.inc), because SPEC.md 70.9.3's
+; `SU` scrolls by a parameter and nothing about the one-row case was special
+; except that it was the only one before the parser. One `rep movsw`, one
+; blanked row in the CURRENT attribute, every existing mark carried up with the
+; buffer, and one row of scroll debt for the renderers to spend as a blit.
 ; -----------------------------------------------------------------------------
 te_scroll1:
     push ax
-    push bx
-    push cx
-    push si
-    push di
-    push es
-    push ds
-    pop es
-    cld
-    mov si, te_scr + TE_COLS*2      ; ...one row up
-    mov di, te_scr
-    mov cx, TE_CELLS - TE_COLS
-    rep movsw
-    mov cx, TE_COLS                 ; ...and the row it opened, blanked in the
-    mov al, ' '                     ; CURRENT attribute
-    mov ah, [te_attr]
-    rep stosw
-    pop es
-    call te_markup                  ; every mark follows the buffer (70.8.1)
-    inc word [te_scrl]              ; ...and te_scrollpaint spends it as ONE
-    mov bx, TE_ROWS - 1             ; blit; only the row it opens is lettered
-    call te_mark
-    pop di
-    pop si
-    pop cx
-    pop bx
+    mov ax, 1
+    call te_scrollup
     pop ax
     ret
 
@@ -2067,11 +2538,21 @@ te_abdismiss:
     ret
 
 te_ablines:
-    dw te_ab1, te_ab2, te_ab3, te_ab4, 0
-te_ab1:     db 'Telnet for os8088', 0
-te_ab2:     db 'RFC 854 over the socket API', 0
+    dw te_ab1, te_ab2, te_ab3, te_ab4, te_ab5, te_ab6, 0
+te_ab1:     db 'Telnet for os8088 - an ANSI-BBS terminal', 0
+te_ab2:     db 'RFC 854 over the socket API, 80x25, colour', 0
 te_ab3:     db 0                    ; a blank line is a line with no glyphs
-te_ab4:     db 'Contributed by Elendilon', 0
+te_ab4:     db 'A board needs the arrow keys, and with no', 0
+te_ab5:     db 'mouse SCROLL LOCK is what gives them back.', 0
+                                    ; **SPEC.md 9.6's keyboard-mouse takes
+                                    ; eleven of SPEC.md 70.10.2's keys** - the
+                                    ; arrows, Home, End, PgUp, PgDn, Ins, Del
+                                    ; and Space - whenever [mou_ptr] is 0, and
+                                    ; kbm_slock is the ONLY escape hatch. A
+                                    ; board is unusable without them, so this
+                                    ; is on the panel rather than in a document
+                                    ; nobody has beside the machine
+te_ab6:     db 'Contributed by Elendilon', 0
 
 ; -----------------------------------------------------------------------------
 ; te_split - the host box into te_host and te_port
@@ -2247,6 +2728,9 @@ te_tpl:
 %include "os88ui.inc"
 %include "os88line.inc"
 %include "os88sock.inc"         ; net_find (SPEC.md 72, SPEC.md 20.11.1)
+%include "teansi.inc"           ; THE ANSI-BBS PARSER (SPEC.md 70.9), whose
+                                ; second reader is tools/ansisim.py and whose
+                                ; gate is tests/telansi.py
 %include "tecp437.inc"          ; the shipped 160 glyphs (SPEC.md 70.8.6) -
                                 ; GENERATED by tools/cp437font.py, committed,
                                 ; and regenerated and diffed by every `make`
@@ -2272,11 +2756,8 @@ te_spawned  equ os88_image_end + 21
 te_hnd      equ os88_image_end + 22
 te_want     equ os88_image_end + 23   ; the user asked to close
 te_dirty    equ os88_image_end + 24
-te_ph       equ os88_image_end + 25   ; the IAC state machine's phase
-te_verb     equ os88_image_end + 26   ; ...and the DO/WILL it is answering
-te_ansi     equ os88_image_end + 27   ; inside an escape sequence
-te_btn      equ os88_image_end + 28   ; 8: the Connect button's rect
-te_line     equ os88_image_end + 36   ; OS88LINE_SZ
+te_btn      equ os88_image_end + 25   ; 8: the Connect button's rect
+te_line     equ os88_image_end + 33   ; OS88LINE_SZ
 te_hbuf     equ te_line + OS88LINE_SZ ; TE_HOSTMAX: what the user typed
 te_host     equ te_hbuf + TE_HOSTMAX  ; ...and the half before the colon
 te_sline    equ te_host + TE_HOSTMAX  ; TE_COLS+1: the padded status field,
@@ -2285,7 +2766,14 @@ te_sline    equ te_host + TE_HOSTMAX  ; TE_COLS+1: the padded status field,
                                       ; rows are drawn before the status line
                                       ; on both paths that draw both
 te_txb      equ te_sline + TE_COLS+1  ; TE_TX
-te_rx       equ te_txb + TE_TX        ; TE_RX
+te_pnd      equ te_txb + TE_TX        ; TE_PND: the ONE refused reply, held
+                                      ; whole and retried at the top of the
+                                      ; next worker pass (SPEC.md 70.10.3)
+te_say      equ te_pnd + TE_PND       ; 3: an option reply, composed before it
+                                      ; is enqueued, because IAC/verb/option
+                                      ; goes on the wire whole or not at all
+te_ans      equ te_say + 3            ; TE_ANS: `ESC [ <row> ; <col> R`
+te_rx       equ te_ans + TE_ANS       ; TE_RX
 te_scr      equ te_rx + TE_RX         ; TE_SCRSZ: 80 x 25 CELLS, each a
                                       ; character then an IBM attribute byte -
                                       ; which is text VRAM's own layout, so
@@ -2299,24 +2787,40 @@ te_vrows    equ te_vcols + 2          ; word: rows the LIVE content box fits
 te_vtop     equ te_vrows + 2          ; word: the first buffer row it shows
 te_ry       equ te_vtop + 2           ; word: the band's y, for te_blitrun
 te_rcp      equ te_ry + 2             ; word: ...and its first cell
-te_cx       equ te_rcp + 2            ; word: the cursor column, 0..79
+te_rowp     equ te_rcp + 2            ; word: te_compose's row base, kept
+                                      ; because SI has walked to the end of
+                                      ; the row by the time the cursor's own
+                                      ; cell is wanted (SPEC.md 70.8.4)
+te_cx       equ te_rowp + 2           ; word: the cursor column, 0..79
 te_cy       equ te_cx + 2             ; word: ...and its row, 0..24
-te_sx       equ te_cy + 2             ; word: the SAVED cursor (CSI s / ESC 7)
-te_sy       equ te_sx + 2
-te_scrl     equ te_sy + 2             ; word: rows the BUFFER has scrolled
+te_scrl     equ te_cy + 2             ; word: rows the BUFFER has scrolled
                                       ; since the screen last agreed with it
 te_drb      equ te_scrl + 2           ; 4 bytes: the dirty ROW BITMAP, bit r
                                       ; of byte r>>3, 25 bits used (70.8.1)
-te_attr     equ te_drb + 4            ; byte: the current attribute; reset 0x07
-te_satr     equ te_attr + 1           ; byte: ...the one ESC 7 saved
-te_pwrap    equ te_satr + 1           ; byte: a glyph landed in column 79 and
+te_attr     equ te_drb + 4            ; byte: the current attribute; reset 0x07.
+                                      ; **DERIVED, never assigned** - te_derive
+                                      ; is the one writer (SPEC.md 70.9.4)
+                                      ; **AND THERE IS NO te_satr.** SPEC.md
+                                      ; 70.8's first draft carried one for the
+                                      ; attribute `ESC 7` saved; 70.9.3 settles
+                                      ; it - ESC 7/8 and CSI s/u share ONE slot
+                                      ; and it holds the POSITION and never the
+                                      ; attribute, so `ESC[41m ESC 7 ESC[42m
+                                      ; ESC 8` leaves the green set
+te_pwrap    equ te_attr + 1           ; byte: a glyph landed in column 79 and
                                       ; the cursor stayed on it (70.9.5)
 te_cvis     equ te_pwrap + 1          ; byte: the cursor is drawn (CSI ?25h/l)
 te_ice      equ te_cvis + 1           ; byte: bit 7 is a BRIGHT BACKGROUND and
                                       ; not blink (SPEC.md 70.8.9)
-te_ul       equ te_ice + 1            ; byte: SGR 4; it reaches the glass on
-                                      ; MDA alone
-te_mono     equ te_ul + 1             ; byte: this screen is 1bpp, so the pen
+                                      ; **AND THERE IS NO te_ul.** SPEC.md
+                                      ; 70.8's first draft carried one for
+                                      ; SGR 4, mapped to MDA's 0x01 underline
+                                      ; in te_tx_mattr. 70.8.9 dropped it: SGR
+                                      ; 4 does not reach the ATTRIBUTE at all,
+                                      ; the parser keeps underline out of the
+                                      ; cell, and a byte no renderer reads is
+                                      ; a byte that goes stale in silence
+te_mono     equ te_ice + 1            ; byte: this screen is 1bpp, so the pen
                                       ; is not read and the polarity goes into
                                       ; the band (SPEC.md 70.8.4)
 te_nob      equ te_mono + 1           ; byte: OSAPI_GFX_BLIT1 refused once, so
@@ -2339,5 +2843,67 @@ te_thint    equ te_tcur + 1           ; byte: the text row the ` ^] to leave`
                                       ; row it lands on is owed (SPEC.md
                                       ; 70.8.7)
 te_tseg     equ te_thint + 1           ; word: ...its framebuffer segment
-te_fsi      equ te_tseg + 2           ; FSI_SIZE: what OSAPI_FSX_MODE filled
+
+; --- the parser's own state (SPEC.md 70.9), and every byte of it is HERE ----
+; Not one byte of it lives in a local across a call, which is the property the
+; whole design turns on: a stream split at any offset behaves like one that is
+; not (SPEC.md 70.9, tools/ansisim.py's fragment sweep).
+te_pst      equ te_tseg + 2           ; byte: PS_*, the state
+te_ph       equ te_pst + 1            ; byte: the IAC state machine's phase
+te_verb     equ te_ph + 1             ; byte: ...and the DO/WILL it is answering
+te_sbopt    equ te_verb + 1           ; byte: the option a subnegotiation is
+                                      ; about
+te_pn       equ te_sbopt + 1          ; byte: how many parameters are held
+te_psink    equ te_pn + 1             ; byte: the ninth parameter onward goes
+                                      ; NOWHERE - accumulating its digits into
+                                      ; the eighth would set one of 3144
+te_ppfx     equ te_psink + 1          ; byte: the private prefix, 0x3C..0x3F,
+                                      ; and only the FIRST one is it
+te_prm      equ te_ppfx + 1           ; TE_PMAX bytes, each clamped at 255
+te_lfg      equ te_prm + TE_PMAX      ; byte: LOGICAL foreground, 4 bits
+te_lbg      equ te_lfg + 1            ; byte: ...background, 3 bits
+te_blk      equ te_lbg + 1            ; byte: SGR 5
+te_rev      equ te_blk + 1            ; byte: SGR 7 - **A FLAG, and not a swap
+                                      ; of the attribute's nibbles**: a parser
+                                      ; that swapped when it saw the 7 and then
+                                      ; wrote a 31 into the low nibble draws
+                                      ; blue on white where `CSI 7;31m` means
+                                      ; black on red (SPEC.md 70.9.4)
+te_con      equ te_rev + 1            ; byte: SGR 8
+te_soff     equ te_con + 1            ; word: the application STREAM offset,
+                                      ; which is ansisim's `offset` and what
+                                      ; [te_zat] is published in
+te_zdet     equ te_soff + 2           ; byte: how much of `**\x18B00` matched
+te_zon      equ te_zdet + 1           ; byte: the Zmodem receiver has the stream
+te_zn       equ te_zon + 1            ; byte: how many times the trigger fired
+te_zat      equ te_zn + 1             ; word: ...the offset it fired at
+te_sbn      equ te_zat + 2            ; byte: bytes into a subnegotiation body
+te_sbsnd    equ te_sbn + 1            ; byte: it was `SB TTYPE SEND`
+te_obin     equ te_sbsnd + 1          ; byte: bit 0 = WE send 8-bit clean, bit 1
+                                      ; = they do. TWO BITS AND NOT ONE, because
+                                      ; the two directions are separate options
+                                      ; in RFC 856 and a host may agree to one
+                                      ; and refuse the other (SPEC.md 70.10.1)
+te_pndn     equ te_obin + 1           ; byte: the held reply's length, 0 = none
+te_rxi      equ te_pndn + 1           ; word: bytes of te_rx taken
+te_rxn      equ te_rxi + 2            ; word: ...and bytes in it
+te_sx       equ te_rxn + 2            ; word: the SAVED cursor - ESC 7 / ESC 8
+te_sy       equ te_sx + 2             ; and CSI s / CSI u share this ONE slot,
+                                      ; and it holds the POSITION and never the
+                                      ; attribute (SPEC.md 70.9.3)
+TE_PSTATE   equ (te_sy + 2) - te_pst  ; ...and te_reset zeroes the LOT in one
+                                      ; `rep stosb`, which is why they are
+                                      ; contiguous and why a byte added here
+                                      ; needs no line adding there
+
+te_fsi      equ te_rxn + 2            ; FSI_SIZE: what OSAPI_FSX_MODE filled
 TE_BSS      equ (te_fsi - os88_image_end) + FSI_SIZE
+
+; --- and the one place a bss ORDER is load-bearing (teansi.inc's te_pclear) --
+; That routine clears te_pn and te_psink with a single WORD store, so a reorder
+; that separated them would clear somebody else's byte and silently leave the
+; parameter sink set - which shows up as `CSI 0;1;1;1;1;1;1;31;44m` losing its
+; 31 on the sequence AFTER the one that filled the eight, and nothing else.
+%if te_psink != te_pn + 1 || te_ppfx != te_psink + 1
+  %error "te_pclear stores a WORD over te_pn/te_psink: the three must be adjacent"
+%endif

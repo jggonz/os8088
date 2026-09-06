@@ -174,6 +174,14 @@ te_tx_keys:
 ; THE SAME MARKS THE WINDOWED PATH USES (SPEC.md 70.8.1). te_putc runs on the
 ; kept worker and marks the row it wrote whichever screen is up, so the two
 ; renderers share one answer to "what changed" and cannot drift about it.
+;
+; **AND THIS ONE RUNS ON THE UI TASK WHILE THAT WORKER IS STILL GOING**, which
+; is what FSXF_KEEPWORKER means (SPEC.md 53.5.1) and what makes the debt a
+; SHARED WORD rather than a private one. Both reads below are te_take*'s now:
+; the bit is cleared as the row is drawn and the scroll counter is read and
+; zeroed together, so neither a mark nor a scroll can be lost between the read
+; and the store. `te_markclr` used to sit at the foot of this loop and threw
+; away every mark the worker set during the pass (SPEC.md 70.8.8).
 ; -----------------------------------------------------------------------------
 te_tx_owed:
     push ax
@@ -187,14 +195,13 @@ te_tx_owed:
     call te_tx_scroll               ; ...FIRST: the rows below are lettered on
     xor bx, bx                      ; top of the pixels this moves
 .row:
-    call te_owedrow
+    call te_takerow
     jnc .next
     call te_tx_row
 .next:
     inc bx
     cmp bx, TE_ROWS
     jb .row
-    call te_markclr
     call te_tx_cursor
     pop es
     pop di
@@ -230,10 +237,9 @@ te_tx_scroll:
     push si
     push di
     push es
-    mov ax, [te_scrl]
-    or ax, ax
-    jz .out
-    mov word [te_scrl], 0
+    call te_takescroll              ; ...read and zeroed together, because the
+    or ax, ax                       ; WORKER adds to that counter while this
+    jz .out                         ; runs (SPEC.md 70.8.8)
     cmp ax, TET_ROWS
     jae .all                        ; the whole screen scrolled away: there is
                                     ; nothing under it worth moving
@@ -288,6 +294,12 @@ te_tx_scroll:
                                     ; hardware, and te_tx_cursor places it
                                     ; from [te_cx]/[te_cy] on every pass)
 .all:
+    mov byte [te_thint], 0xFF       ; ...AND THE HINT IS GONE WITH IT. Without
+                                    ; this the next scroll subtracts from a row
+                                    ; number that no longer means anything and
+                                    ; marks an unrelated row - one redundant
+                                    ; redraw, never wrong pixels, and one line
+                                    ; to stop it
     call te_markall
 .out:
     pop es

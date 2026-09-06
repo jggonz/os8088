@@ -2530,6 +2530,45 @@ $(FACELIC): faces/LICENSES.txt | $(BUILD)
 		open(sys.argv[2], 'wb').write(d.replace(b'\r\n', b'\n').replace(b'\n', b'\r\n'))" \
 		$< $@
 
+# --- WHAT THE 360KB SYSTEM DISK ALONE LEAVES OFF (SPEC.md 24.3) --------------
+#
+# That geometry is **354 clusters of 1,024 bytes** and it carries the whole
+# driver set, both kernel-module sets, the manual, the logo, ten typefaces with
+# their licence and the six core packages. It had 352 in use and 2 free before
+# SPEC.md 70.9's ANSI-BBS parser, which takes TELNET.O88 from 7 clusters to 10.
+#
+# **TELNET STAYS, BECAUSE THE XT IS THE MACHINE §24.3's ARGUMENT IS ABOUT.**
+# A network machine's system disk carries the driver, so it should carry the
+# programs that use it; a 360KB disk is precisely the machine that has no other
+# floppy to swap in. What gives way instead, on THIS GEOMETRY ONLY:
+#
+#   MINES.O88       a second copy of a GAME. §24.3's argument for the core six
+#                   is about programs the boot disk's own drivers make useful,
+#                   which Browser and Telnet are and a game is not. It is
+#                   untouched on the 720KB, 1.44MB and 1.2MB system disks and
+#                   on every apps disk, so nothing is lost anywhere else.
+#   JETBRAIN.F88    one of TEN faces, and the largest (1,688 bytes with
+#                   COURIER.F88). Nothing names it: `apps/browser` names
+#                   `times` and `apps/sheet` names `Helv`, and Sheet is not on
+#                   a system disk at all. This geometry still carries
+#                   INCONSOL.F88 and ROBOMONO.F88, so it does not lose the
+#                   monospace SHAPE, only one family of it.
+#
+# **A FILTER-OUT AND NOT A SECOND LIST**, which is the opposite of $(SMALLOMIT)
+# and is right for the opposite reason: kern_small's list says what CANNOT run
+# there and must not gain a row by accident, where this one says what a full
+# machine is doing without for want of two kilobytes. A package added to
+# $(COREAPPS) tomorrow SHOULD appear here and be refused by os88disk if it does
+# not fit, which is the failure everybody wants.
+SYS360OMIT := $(BUILD)/mines.o88 $(BUILD)/jetbrain.f88
+CORE_TOOLS360 := $(filter-out $(SYS360OMIT),$(CORE_TOOLS))
+CORE_GAMES360 := $(filter-out $(SYS360OMIT),$(CORE_GAMES))
+COREAPPS360 := $(CORE_TOOLS360) $(CORE_GAMES360)
+COREAPPSARGS360 := $(addprefix APPS:,$(CORE_TOOLS360)) \
+                   $(addprefix GAMES:,$(CORE_GAMES360))
+FACES360 := $(filter-out $(SYS360OMIT),$(FACES))
+FACESARG360 := $(addprefix FONTS:,$(FACES360)) FONTS:$(FACELIC)
+
 SYSDOC := $(BUILD)/readme.txt
 
 $(BUILD)/readme.txt: readme.txt tools/checkreadme.py | $(BUILD)
@@ -3154,6 +3193,40 @@ thewiretest: $(BUILD)/thewire360.img $(BUILD)/thewiredata.img
 	@echo "             build/thewiredata.img is the scratch B: it writes to."
 	@echo "             Run it with: python3 tests/thewire.py"
 
+# TELNETTEST: the BBS terminal's gate disks (SPEC.md 70.12), ethertest's shape
+# and for ethertest's reason - the driver is asked for by a SYSTEM.CFG that is
+# ON THE DISK, so the card is up and DHCP has bound before the first paint and
+# tests/telansi.py drives a connection rather than the Control Panel. QEMU by
+# name, because MartyPC has no network card of any kind (SPEC.md 72.9).
+#
+# **1.44MB AND NOT 360KB, WHICH IS THE ONE DIFFERENCE FROM ethertest.** The
+# gate is about the PARSER, and a 360KB system disk is 354 clusters with the
+# whole driver set, ten typefaces and the core packages already on it - so the
+# geometry that carries this gate's disk would be deciding how much parser
+# there is allowed to be. The four shipped geometries are still built by every
+# `make` and os88disk still refuses one that does not fit; what this target
+# does is stop a TEST disk being the thing that fails first.
+#
+# The B: floppy is a SCRATCH image of its own for thewiretest's reason: QEMU
+# mounts a floppy WRITABLE, wave 4's Zmodem receive writes to it, and pointing
+# it at build/apps.img would leave the shipped image dirty and the next
+# `make test` testing a disk this gate had edited.
+$(BUILD)/telnetsys.img: $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/system.cfg tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(BUILD)/kernel.bin \
+		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/system.cfg $(APPDATAFOLDER)
+
+$(BUILD)/telnetdata.img: tools/os88disk.py | $(BUILD)
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--folder MEDIA --folder SYSTEM/APPDATA
+
+.PHONY: telnettest
+telnettest: $(BUILD)/telnetsys.img $(BUILD)/telnetdata.img
+	@echo "telnettest: build/telnetsys.img - ETHER.DRV already wanted, and"
+	@echo "            build/telnetdata.img is the scratch B: a download writes."
+	@echo "            Run it with: python3 tests/telansi.py"
+
 .PHONY: ethertest
 ethertest: $(BUILD)/ether360.img
 	@echo "ethertest: build/ether360.img - the Ethernet driver already wanted."
@@ -3262,10 +3335,13 @@ $(BUILD)/ftpapps.img: $(FTPDFILES) tools/os88disk.py
 		--deep-folders \
 		--folder SYSTEM/APPDATA
 
-$(IMG360): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) tools/os88disk.py
+# ...and this one alone takes $(COREAPPSARGS360)/$(FACESARG360) - the 354
+# clusters that geometry has do not hold MINES.O88 and JETBRAIN.F88 as well as
+# SPEC.md 70.9's parser, and §24.3 carries the arithmetic.
+$(IMG360): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin \
-		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(APPDATAFOLDER)
 
 # FMTEST: the AdLib gate package (SPEC.md 34.2/51.4). NEVER on the shipped
@@ -7421,7 +7497,22 @@ APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS)
 # (353/354) which is too tight to be a good neighbour, and the XT/floppy is
 # exactly where streaming performance is least proven (docs/AUDIO-PLAN.md).
 # It ships on the 1.44MB and 720KB apps disks, which have room.
-APPS_TOOLS_360 := $(filter-out $(BUILD)/audio.o88,$(APPS_TOOLS))
+#
+# **AND MODPLUG.O88 SINCE SPEC.md 70.9** (§24.4's own argument, one step on).
+# That disk was at 354 of 354 clusters - not tight, FULL - and the ANSI-BBS
+# parser takes TELNET.O88 from 7 clusters to 10. Something had to go, and the
+# one package on there with a stated reason is the MOD player: §24.4 already
+# moved BEVERLY.MOD off this geometry onto a media disk of its own, so at
+# 360KB alone MODPLUG ships beside no module to play. TRACKER stays, because
+# Tracker is an EDITOR as well as a player and can make a module out of
+# nothing; a player with nothing to play is the redundancy on a disk with no
+# room. It ships on the 720KB, 1.44MB and 1.2MB apps disks, unchanged.
+#
+# Nineteen clusters for a need of three, deliberately: this geometry has been
+# at zero free twice now, and SPEC.md 70.11's Zmodem receiver will grow TELNET
+# again. A disk that is exactly full is a disk the next byte breaks.
+APPS_TOOLS_360 := $(filter-out $(BUILD)/audio.o88 $(BUILD)/modplug.o88,\
+                               $(APPS_TOOLS))
 APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES) $(APPS_DATA_360) $(APPS_SYS) $(APPS_DOS)
 
 # ...and the same list with the folder each package lands in. os88disk.py

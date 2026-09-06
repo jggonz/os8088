@@ -6326,8 +6326,9 @@ gfx_blit1_x:
     ;     C = ~(ink ^ paper) the planes both agree on - Set/Reset's job
     ; With GC1 = C, GC0 = ink and the Bit Mask left at FF, one CPU byte gives C
     ; its constant and hands A|B the data, and the Bit Mask being FF is what
-    ; removes the latch read. A or B empty is one pass; BOTH non-empty needs a
-    ; Map Mask split and is the fourth refusal.
+    ; removes the latch read. A or B empty is one pass; BOTH non-empty is
+    ; SPEC.md 5.4.2.2.1's Map Mask SPLIT - two passes, [gfx_b1act] = 2 - and
+    ; was the fourth refusal until then. There is one answer and no flag.
     ;
     ; IT USED TO SIT AT THE TOP, beside the argument refusals, and SPEC.md
     ; 5.4.2.4 is what that cost: `[vid_mono]` is a fact about a DISPLAY on a
@@ -6340,8 +6341,10 @@ gfx_blit1_x:
     ; other, splitting one byte INTO the second screen rather than at the seam.
     ;
     ; in:  the display resolved and current; DS = KERNEL_SEG
-    ; out: CF = 0 resolved into [gfx_b1act]/[gfx_b1inv]/[gfx_b1g0]/[gfx_b1g1],
-    ;      CF = 1 the fourth refusal. AX and BX preserved.
+    ; out: resolved into [gfx_b1act]/[gfx_b1inv]/[gfx_b1g0]/[gfx_b1g1] and,
+    ;      for a split, [gfx_b1sq]/[gfx_b1b]. It cannot refuse (SPEC.md
+    ;      5.4.2.2.1) and sets no flag: the call site tests none. AX and BX
+    ;      preserved.
 .pen:
     push ax
     push bx

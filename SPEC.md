@@ -35011,6 +35011,64 @@ scoping (§63) and for the same reason. `make field`'s narrow disks and the
 bench disks are 360KB volumes whose free clusters are the *measurement*, and
 `make combo` already carries every package there is.
 
+#### 24.3.1 The 360KB disks ran out, and TELNET is what stays
+
+*"The figure the next thing proposed for this disk has to argue against"* was
+79 clusters narrowing to 60, and §70.9's ANSI-BBS parser is the next thing.
+`TELNET.O88` goes from **7,052 bytes to 10,235** — 7 clusters to 10 — and both
+360KB disks refused the image outright:
+
+| the 360KB disk | in use | free | wave 3 needs |
+|---|---|---|---|
+| system, before | 352 of 354 | 2 | **355** |
+| apps, before | **354 of 354** | **0** | **357** |
+
+The apps disk was not tight, it was **exactly full**, and had been since before
+this wave — which is a thing nobody could see, because a disk that fits reports
+nothing. The parser was cut by 400 bytes first (§70.9.7) and that closed one of
+the four clusters; the other three came off the disks, and **on that geometry
+alone**:
+
+| | what comes off | clusters | after |
+|---|---|---|---|
+| system | `MINES.O88`, `JETBRAIN.F88` | 2 + 2 | **350 of 354, 4 free** |
+| apps | `MODPLUG.O88` | 19 | **338 of 354, 16 free** |
+
+**TELNET STAYS, and the XT is the machine this section's argument is about.**
+A network machine's system disk carries the driver, so it should carry the
+programs that use it, and a 360KB machine is precisely the one with no other
+floppy to swap in. What gives way instead is chosen on the same test:
+
+* **`MINES.O88` is a second copy of a GAME.** The argument above for the core
+  six is about programs the boot disk's own drivers make useful — Browser and
+  Telnet are, and a game is not. It is untouched on the 720KB, 1.44MB and
+  1.2MB system disks and on every apps disk.
+* **`JETBRAIN.F88` is one of TEN faces and the largest** (1,688 bytes, with
+  `COURIER.F88`). Nothing names it: `apps/browser` names `times` and
+  `apps/sheet` names `Helv`, and Sheet is on no system disk at all. That
+  geometry still carries `INCONSOL.F88` and `ROBOMONO.F88`, so it loses one
+  monospace family and not the monospace shape. `license.txt` stays: it
+  travels with the faces that are there (§6.4.1).
+* **`MODPLUG.O88` is §24.4's own argument one step on.** That section already
+  moved `BEVERLY.MOD` off this geometry onto a media disk of its own, so at
+  360KB alone the MOD player ships beside no module to play. `TRACKER.O88`
+  stays, because Tracker is an editor as well as a player and can make a
+  module out of nothing — a player with nothing to play is the redundancy on a
+  disk with no room.
+
+**Nineteen clusters for a need of three is deliberate.** This geometry has
+been at zero free twice now, and §70.11's Zmodem receiver grows `TELNET.O88`
+again by about two clusters on both disks; the four and sixteen above are what
+that is budgeted out of. A disk that is exactly full is a disk the next byte
+breaks, and the breakage lands on whoever is holding it.
+
+**A `filter-out` and not a second list**, which is the opposite of
+`SMALLOMIT`'s shape and right for the opposite reason: `kern_small`'s list says
+what CANNOT run there and must not gain a row by accident, where these say what
+a full machine is doing without for want of two kilobytes. A package added to
+`COREAPPS` tomorrow SHOULD land on this disk and be refused by `os88disk.py` if
+it does not fit, which is the failure everybody wants.
+
 ### 24.4 The MEDIA DISK — a third shipped disk, at 360KB alone
 
 `build/media360.img` is a data floppy carrying `MEDIA/BEVERLY.MOD` and
@@ -78095,7 +78153,6 @@ The state, all of it, and every byte named:
 | `te_blk` | byte | 1 = blink (SGR 5) |
 | `te_rev` | byte | 1 = reverse (SGR 7) |
 | `te_con` | byte | 1 = concealed (SGR 8) |
-| `te_ul` | byte | 1 = SGR 4 — **published and drawn nowhere** (§70.9.4) |
 | `te_pwrap` | byte | 1 = a glyph was written in column 79 and the cursor stayed there |
 | `te_cvis` | byte | 1 = the cursor is drawn; `CSI ?25l` clears it, `?25h` sets it |
 | `te_ice` | byte | 1 = iCE colours: bit 7 is a bright background, not blink. **Render-time only** — it changes nothing in `te_scr` |
@@ -78251,12 +78308,37 @@ reads **0 differing pixels of 2,944 on each of six pairs**, four of which were
 refused before — green on red, cyan on magenta, yellow on blue and bright green
 on red — every cell rendered on the host out of the guest's own glyph table.
 
-**The renderer still tests CF on every blit**, because a refusal is a normal
-path (PERFORMANCE.md's rule 6) and `kern_small` carries a `stc`/`retf` stub and
-no body at all (§5.4.2). What it does on a refusal is §70.8.2's degrade — one
-`OSAPI_FONT_RUN` for the whole row, once, with `[te_nob]` latched so no later
-row asks again — and not the BLIT4 path below, which was the answer to "the
-split does not fit" and is now unreachable.
+**The renderer still tests CF on every blit, and the reason is NOT the one
+that used to be written here.** It said "for `kern_small`'s sake", and that is
+false: TELNET is in the Makefile's `SMALLOMIT` list, so no `kern_small` floppy
+carries it and no `kern_small` machine can launch it. The two true reasons:
+
+* **After §5.4.2.2.1 a refusal is unreachable for this renderer on a shipping
+  kernel.** The three surviving refusals are about geometry — an x or a width
+  that is not a multiple of eight, and a band taller than 255 rows — and a cell
+  is eight pixels wide and eight tall, so a run's x, a run's width and a band's
+  height are all right by construction (§70.8.2). There is no attribute pair
+  left to refuse.
+* **It is reachable in exactly one way**, and it is a way a user can take: the
+  package is a FILE, and copying `TELNET.O88` onto a `kern_small` system disk
+  by hand puts it in front of a kernel whose slot is a `stc`/`ret` stub with no
+  body at all (§5.4.2). A refusal is a normal path (PERFORMANCE.md's rule 6),
+  and a terminal that answered it with a blank window rather than with grey
+  letters would be a program that had a reason and did not use it.
+
+What it does on a refusal is §70.8.2's degrade — one `OSAPI_FONT_RUN` for the
+whole row, with `[te_nob]` latched so no later row asks the kernel again — and
+not the BLIT4 path below, which was the answer to "the split does not fit" and
+is now unreachable.
+
+**The latch is tested per ROW and it used to be tested per RUN**, which is the
+w2 review's MAJOR 1 and was a defect of exactly the shape a compile-tested path
+has: `te_blitrun` returned on `[te_nob]` *before* reaching the fallback, so the
+first refused run lettered its own row and every later call — the first run of
+every OTHER row included — returned having drawn nothing. One row of text and
+twenty-four blank ones, for the life of the instance, on the one machine that
+can see it. The test now lives at the head of `te_emit`, which answers for the
+whole row before it walks a single run.
 
 **The fallback that was NOT needed, kept for the record: `OSAPI_GFX_BLIT4`
 (0x01D8) for that run, and never an approximation.** A 4bpp band carries a colour per pixel, so
@@ -78296,16 +78378,36 @@ highlighted menu item is made of. Every other pair — a colour on black, a
 colour on a colour — reads correctly as lit glyph on dark ground.
 
 **Blink is ignored windowed.** With `[te_ice]` set, bit 7 means a bright
-background instead, which on 1bpp means nothing either — there is one
-brightness. The polarity rule reads the background NIBBLE, so an iCE bright
-background is a non-zero nibble and inverts a cell the same way a dim one
-does.
+background instead, **on a COLOUR screen and there only**. The first version
+widened the background mask from 0x70 to 0xF0 above the `[te_mono]` test, so
+an iCE machine read bit 7 as a background bit on one bit as well — and
+attribute 0x88, blink set on black, then drew INVERSE in the window and plain
+in full screen, where `te_tx_mattr` always masks 0x70. On one bit there is one
+brightness and a bright background is not a thing, so the mask is 0x70 there
+whatever `[te_ice]` says, and §70.8.9's two 1bpp paths agree again.
 
 Composing the inverse is an `XOR` with a mask byte, eight times a cell over
 the band bytes, which is why this costs nothing: **the calls are identical
 either way**, and the calls are what the machine is priced in. The mask is
 `00` on a colour screen, so the same loop serves both and there is no second
 composer.
+
+**The predicate is a MACRO and is emitted twice, and neither emission is a
+call.** The cell loop needs it per cell and the cursor block needs it for the
+cursor's own cell; a `call` a cell is eighty of them a row on a machine
+PERFORMANCE.md prices a near call at 11us on, so the answer is one source and
+two emissions rather than one routine or two copies. It is the third reader of
+the rule above — `te_tx_mattr` is the second — and the one thing all three
+must not be able to disagree about.
+
+**And the cursor is drawn in that cell's OWN polarity.** The underline is two
+lit scanlines OR'd into the band's bottom two rows, and on a cell the loop
+drew inverse those rows are 0xFF already — so the OR drew nothing and the
+cursor vanished inside a board's highlighted menu bar, which is exactly where
+a reader is looking for it. It is an OR on a normal cell and an AND-NOT on an
+inverse one: the same two scanlines, the other way up. The mask is re-derived
+from the cursor cell's attribute and **not** taken from the loop's last value,
+which after the loop is the last COLUMN's and not the cursor's.
 
 **Measured on the glass, both 1bpp adapters** (`tests/telnet.py`, the same
 forty characters in each of two rows, one `0x30` and one `0x03`):
@@ -78377,9 +78479,18 @@ it is the one that has a reason: it needs the codes the kernel's table does
 not carry.
 
 **The shipped half is 0..31 and 128..255 — 160 glyphs, 1,280 bytes** — and the
-split is on a fact rather than caution: **32..127 are ASCII and every ROM
-agrees about them**, while 0..31 and 128..255 are CP437's own and a clone ROM
-is free to differ. `tools/cp437font.py` generates them and
+split is on a fact rather than caution, but **the fact is about the ROM and not
+about the code point**, which is not how this section first put it. An
+EGA-or-later BIOS's 8x8 set IS CP437, all 256 of it, by the adapter's own
+definition: so where there is one, all 256 are taken and the shipped table is
+overwritten entirely. That is deliberate and it is not waste — it is the
+terminal drawing the letters the rest of the machine draws. A **pre-EGA** ROM
+has 128 glyphs at `F000:FA6E` and no standard says what a clone put in the low
+32 of them, so there only 32..127 is trusted — that half is ASCII and every ROM
+agrees about ASCII — and the other 160 stay the shipped table's. The table
+above is the whole of it; the sentence that used to be here said 0..31 and
+128..255 ship "because a clone ROM is free to differ", full stop, which reads
+as a claim about the EGA path that the EGA path does not make. `tools/cp437font.py` generates them and
 `apps/telnet/tecp437.inc` is the generated file, **committed**, regenerated and
 diffed by every `make` the way `docs/INDEX.md` is: a generated file that is not
 checked is a generated file that is edited by hand once and then lies.
@@ -78542,6 +78653,31 @@ It read **1** on the reverted build and **0** on the fix. A screenshot cannot
 see this at all — the bracket is on the UI task and goes on drawing either way
 — which is why the byte is the assertion and not a picture.
 
+**3. And the debt itself had no critical section**, which §70.9's own wave
+found rather than the field. `FSXF_KEEPWORKER` means `te_tx_owed` runs on the
+**UI task** while `te_putc`, `te_scroll1` and `te_mark` keep running on the
+**worker**, and two read-modify-writes crossed that boundary unguarded. §70.2
+had the house answer for exactly this one word along — `pushf`/`cli` … `popf`,
+and its own comment says *"`te_txw` HAS TWO WRITERS"*.
+
+| what | the window | what a board saw |
+|---|---|---|
+| `mov ax, [te_scrl]` … `mov word [te_scrl], 0` | two instructions | a board that scrolled twice in it lost one: VRAM moved N rows where the buffer moved N+1, and **every row the board did not touch again stayed one line out of place for the rest of the session** |
+| the row loop, then `te_markclr` | **the whole 25-row pass** | a character arriving for row 3 while the loop was on row 18 had its mark cleared unread and **never reached the screen at all** |
+
+The fix is two small procs and **no snapshot buffer**, which is the shape worth
+having: `te_takerow` clears a row's bit *as it draws that row*, under one
+`cli`, so a mark set for a row the loop has passed survives into the next pass
+instead of being dropped; `te_takescroll` reads the counter and zeroes it
+together. `te_markclr` is **deleted** — a bitmap that is cleared wholesale is a
+bitmap that drops what the other task wrote while it was being walked, and
+leaving the routine in the file would have left the shape available.
+
+**Both renderers take the same two procs**, which is the other half of it: the
+windowed path had the identical race on `te_screen`'s UI-task pass, where a
+lost scroll was masked by the `te_markall` that opened the sequence. One
+answer, not two, and no renderer can now be the one that forgot.
+
 #### 70.8.9 iCE colours, and what MDA does with an attribute
 
 **iCE colours are a Session-menu toggle and are OFF by default.** The default
@@ -78674,8 +78810,14 @@ not assume they were:
    the mono half of an extended desktop composes with a colour polarity.
 2. **The windowed cursor does not blink.** §70.8.2 pins a steady underline and
    that is what shipped; the full-screen one blinks because the CRTC does.
-3. **`[te_ul]` is written by nobody yet.** It reaches the glass on MDA alone
-   (§70.8.9) and the parser that sets it is §70.9.4's `SGR 4`.
+3. **There is no `[te_ul]`, and the table above §70.8.1 no longer lists one.**
+   It was dropped after §70.8.9 lost its underline row: `SGR 4` does not reach
+   the attribute at all, the parser consumes it and discards it (§70.9.4), and
+   the MDA mapping is three cases plus the blink bit. A byte no renderer reads
+   is a byte that goes stale in silence, so it is not declared. **`te_satr`
+   went with it and for the same reason** — §70.9.3's one saved slot holds the
+   POSITION and never the attribute, so the byte that was to hold `ESC 7`'s
+   colours had no writer either.
 
 ### 70.9 The ANSI-BBS parser (`apps/telnet/teansi.inc`)
 
@@ -78951,12 +79093,12 @@ them needs to know what any other did.
 | 0 | `te_lfg := 7`, `te_lbg := 0`, blink, reverse, conceal and underline all cleared |
 | 1 | bold: `te_lfg |= 8` |
 | 2 | faint: ignored |
-| 4 | underline: `te_ul := 1` — **and the attribute is not touched** |
+| 4 | underline: **consumed and discarded** — the attribute is not touched and no byte is kept |
 | 5 | `te_blk := 1` |
 | 7 | `te_rev := 1` |
 | 8 | `te_con := 1` |
 | 22 | `te_lfg &= ~8` |
-| 24 | `te_ul := 0` |
+| 24 | underline off: the same nothing |
 | 25 | `te_blk := 0` |
 | 27 | `te_rev := 0` |
 | 28 | `te_con := 0` |
@@ -78973,13 +79115,23 @@ background. That is the standard iCE convention, it falls out of bit 7 being one
 bit, and its consequence is that **`CSI 25m` also turns a bright background
 off**.
 
-**SGR 4 does not reach the glass anywhere.** A cell is two bytes and has nowhere
-to put a third bit; a third byte per cell is **2,000 bytes of package bss** for
-something no board sends. `[te_ul]` exists so that this terminal and
-`ansisim` publish the same state — the byte-for-byte contract of §70.12 is
-unaffected either way — and an MDA shows attribute 0x01 as an underline for a
-blue foreground on its own hardware, which is as much underline as this needs to
-have. §70.8.9's MDA mapping carries no underline row for that reason.
+**SGR 4 does not reach the glass anywhere, and it is not KEPT anywhere
+either.** A cell is two bytes and has nowhere to put a third bit; a third byte
+per cell is **2,000 bytes of package bss** for something no board sends. An MDA
+shows attribute 0x01 as an underline for a blue foreground on its own hardware,
+which arrives through §70.8.9's ordinary colour mapping and is as much underline
+as this needs to have.
+
+**The first draft declared a `[te_ul]` byte so that this terminal and `ansisim`
+would "publish the same state", and it is gone.** The byte-for-byte contract of
+§70.12 is `te_scr` and nothing else, so publishing the flag bought the gate
+nothing; what it cost was a byte in a package's bss that no renderer read, and
+a byte no renderer reads is a byte that goes stale in silence — the next
+person to add a rule about underline would have found a flag that was already
+being maintained and would have believed it meant something. `ansisim` keeps
+`Screen.underline` because a Python object may publish what it likes; the
+assembly consumes SGR 4 and SGR 24 and stores nothing. The two readers still
+agree about every one of the 4,000 bytes, which is the contract.
 
 #### 70.9.5 Wrap is PENDING, and that is the whole of it
 
@@ -79040,6 +79192,58 @@ until the receiver resumes it. `ansisim`'s `Screen.feed()` returns the same
 short count and publishes the offset as `zmodem_at`, which is how
 `tests/telansi.py` asserts the handover without a transfer.
 
+#### 70.9.7 What the parser cost, and the four shapes it took
+
+**`apps/telnet/teansi.inc` is 2,494 bytes of the package's image**, and the
+package went from **7,052 to 10,235** — the parser, §70.10's negotiation, the
+key table and the queue together. `tools/os88pkg.py`'s line:
+
+| | image | bss | total |
+|---|---|---|---|
+| after §70.8 | 7,052 | 7,554 | 14,606 |
+| **after §70.9/§70.10** | **10,235** | **7,821** | **18,056** |
+
+**Ten clusters of a 1,024-byte cluster, with five bytes to spare**, which is
+not a coincidence: the 360KB system disk had two free and §24.3.1 carries what
+came off it. **About 350 bytes were found rather than spent** — against 50 the
+wave-2 review's fixes cost — and each is a shape rather than a trick:
+
+* **The CSI finals are a table, not a compare chain.** Twenty-three
+  `cmp al, imm` / `je` pairs are four bytes each and a row of
+  `db final` + `dw handler` is three, and `jmp word [bx+1]` reaches the handler
+  with the same `ret` behind it. It also puts every final in one column where a
+  reader can count them.
+* **One cell mover, and it picks its own direction.** IL, SD and ICH open a gap
+  and copy backwards; DL, SU and DCH close one and copy forwards. Six
+  hand-written `rep movsw` blocks were six chances to get an overlap wrong and
+  six copies of the doubling from cells to bytes; `te_cmove` compares its two
+  addresses and is the only place `std` appears.
+* **`te_reset` is one `rep stosb`**, which is why the parser's whole state is
+  one contiguous run of bss — the option layer's phase and the saved cursor
+  moved in for it. Twenty separate stores is sixty bytes, and a state byte
+  added later that nobody remembers to zero is a session that starts dirty:
+  this shape makes that impossible rather than unlikely.
+* **The seven controls are a sixteen-bit mask.** All seven are below 0x10, so
+  `TE_CTLMASK` = 0x3781 replaces a thirty-two-byte table.
+
+**The worker's deepest chain is 102 bytes**, `tools/stkdepth.py`, and it is the
+feed path rather than the draw path now: `te_step` → `te_feed` → `te_byte` →
+`te_pbyte` → `te_ground` → `te_putc` → `te_nextrow` → `te_scroll1` →
+`te_scrollup` → `te_fillcells` → `te_markcells` → `te_mark` → `te_bit`.
+`OS88_STACK_256` covers it with §8.7's 64-byte interrupt floor at 1.54x, above
+the 1.25x `stkclass` enforces.
+
+**And a mark is a DIFFERENCE, not a habit.** The first version marked the
+cursor's row at both ends of every CSI, which is one call in and one out — and
+a board's art is mostly SGR, so that would have redrawn a row that did not
+change, eighty cells composed and blitted, thousands of times a screen, in
+flat contradiction of PERFORMANCE.md's rule 1. The dispatcher remembers the
+cursor and marks the two rows only if the final MOVED it; the finals that
+change a CELL mark their own rows inside `te_fillcells`, where the row
+arithmetic is already being done. The controls carry the same rule one level
+down: NUL and BEL move nothing and take neither mark, and a board sends CR and
+LF by the thousand.
+
 ### 70.10 Negotiation, the keys, and the transmit queue
 
 #### 70.10.1 The options a board expects, and the mirror behind them
@@ -79054,7 +79258,7 @@ the answer, and a board that is not told sends the line-oriented fallback.
 |---|---|---|
 | `DO TTYPE` (24) | `WILL TTYPE` | |
 | `SB TTYPE SEND` | `SB TTYPE IS "ANSI" SE` | 10 bytes on the wire |
-| `DO NAWS` (31) | `WILL NAWS`, then `SB NAWS 0 80 0 25 SE` | 9 bytes; **always 80x25** |
+| `DO NAWS` (31) | `WILL NAWS` **and** `SB NAWS 0 80 0 25 SE`, as ONE message | 12 bytes; **always 80x25** |
 | `WILL ECHO` (1) | `DO ECHO` | the host echoes; this draws what comes back |
 | `WILL SGA` (3) | `DO SGA` | character at a time, which a board needs |
 | `DO SGA` | `WILL SGA` | |
@@ -79084,6 +79288,15 @@ subpacket contains every byte value, and a host that has not agreed to
 `TRANSMIT-BINARY` is entitled to strip the eighth bit. `[te_obin]` is two
 bits and not one because the two directions are separate options in RFC 856
 and a host may agree to one and refuse the other.
+
+**The NAWS answer is ONE message of twelve bytes and not two**, and it is the
+only row above that answers one received byte with two replies. §70.10.3's
+held slot is ONE DEEP: sent as two, a full transmit ring would hold the `WILL`
+and drop the size behind it, and the host would be told this terminal has a
+window and never told how big. The ring is 256 bytes and empty when a board
+negotiates, so nothing could reach that hole — which is exactly why it is
+worth closing by construction rather than leaving to arithmetic that happens
+to hold.
 
 **NAWS reports the buffer and not the viewport**, which §70.8.10 states and
 this is the other half of: a client that reported a narrow window would have
@@ -79183,7 +79396,7 @@ section, so the ring cannot fill between the test and the copy.
 at the top of the next worker pass before anything else is enqueued. Thirty-two
 is the longest message this package composes — a Zmodem hex header is 21 bytes
 and a binary one at most 18 after escaping; `SB TTYPE IS` is 10 and
-`SB NAWS` is 9.
+`WILL NAWS` plus `SB NAWS` together are 12.
 
 **One deep is enough because the worker stops consuming while it is
 occupied.** The receive buffer becomes a queue rather than a batch — `[te_rxn]`
@@ -79198,6 +79411,35 @@ filter, for §70.2's reason exactly: that filter is right for the keyboard,
 where AL = 0 is a bare scan code, and wrong for a reply, where **option 0 is
 `TRANSMIT-BINARY`** — which is no longer a hypothetical, because §70.10.1
 answers that option.
+
+**A KEY SEQUENCE GOES IN WHOLE TOO**, which the design first reserved for
+protocol replies and which is the same argument one keyboard along: half of
+`ESC [ 1 5 ~` on the wire is `15~` typed into a board's menu. What a key does
+*not* get is `te_pnd` — the held slot has ONE writer, the worker, and a
+keystroke arrives on the UI task, so a full ring drops the key and says
+nothing. That is §70.2's original bargain and it is still the right one for a
+human's typing; it is a bargain a protocol cannot take.
+
+**`te_enq` carries its answer in DX and not in CF**, which is not a style
+choice: the critical section ends in `popf`, and `popf` restores the flags the
+routine was ENTERED with — so a carry set inside it is a carry the section
+throws away. Every routine in this tree that returns a flag out of a
+`pushf`/`cli` … `popf` has the same trap in it.
+
+**The one thing the ring did NOT need is a second index.** `te_feed` advances
+`[te_rxi]` *before* the byte acts, so `[te_soff]` — and therefore §70.9.6's
+published handover offset — is the offset just PAST the byte, which is exactly
+what `ansisim`'s `feed()` returns. Two implementations of one number, and the
+gate compares them (§70.12).
+
+**And a new session resets all of it.** `te_reset` runs at the Connect
+transition and zeroes every byte the last session negotiated, learned or half
+parsed: a BINARY agreement the new host never made would send Enter as a bare
+CR, a parser left mid-CSI would swallow the new host's first sequence, and a
+Zmodem handover that never completed would stop the new session before its
+first byte. It is one `rep stosb` over one contiguous run of bss, so a state
+byte added later is covered by construction rather than by somebody
+remembering (§70.9.7).
 
 ### 70.11 Zmodem receive (`apps/telnet/tezm.inc`)
 
@@ -79561,6 +79803,64 @@ that `ZSKIP` reached the server and that the terminal came back.
 whole session, which is minutes rather than seconds, and neither is a
 pre-merge gate for the same reason `tests/ethernet.py` is not: the machine
 under them is not an 8088 and the timings are the host's.
+
+#### 70.12.1 What building `tests/telansi.py` found
+
+**A CONNECTION PER FIXTURE, and Connect is the only thing that dials.** The
+parser carries state across a stream — the SGR colours, the saved cursor, the
+pending wrap — and `ansisim` starts each fixture on a fresh `Screen`, so the
+guest has to start each one on a fresh session: Close, Connect, and `te_reset`
+(§70.10.3) makes the two starts the same start. The first version typed the
+host and pressed **Return**, which IS Connect (`te_onkey`'s `.go`) — it dialled
+before the test's server existed, and the Connect click that followed then
+landed on a session that was already up and CLOSED it. **Tab leaves the box
+without dialling**, and it is also the only way to reach the screen with the
+keyboard, so it is the right key for both reasons.
+
+**`make telnettest`'s disk is 1.44MB where `make ethertest`'s is 360KB**, and
+that is the one difference between them. The gate is about the parser, and a
+360KB system disk is 354 clusters with the whole driver set, ten typefaces and
+the core packages already on it (§24.3) — so that geometry would be deciding
+how much parser there is allowed to be. The four shipped geometries are still
+built by every `make` and `os88disk.py` still refuses one that does not fit;
+what this stops is a TEST disk being the thing that fails first.
+
+**The leave hint is the one thing in VRAM that is not in the buffer**, so the
+full-screen memcmp skips exactly twelve cells and asserts them separately.
+`te_tx_hint` writes ` ^] to leave` into row 24's last twelve cells on entry and
+**the host is allowed to overwrite it** (§70.8.7), so it is in VRAM and in no
+buffer — and a gate that compared 4,000 bytes flat would report twenty-one
+differing bytes for a renderer that is behaving exactly as designed. Both facts
+are asserted; neither is the other's excuse.
+
+**`tools/os88bbs.py` cannot exercise §70.1's MIRROR**, because it offers only
+the five options a board offers and every one of them is in §70.10.1's table —
+so nothing it does reaches the fall-through that answers every OTHER option.
+The gate therefore carries a second server of fourteen lines which asks for
+LINEMODE and X-DISPLAY-LOCATION and reads back what it is told: `IAC WONT 34`
+and `IAC DONT 35`. It is worth its own connection because the mirror's SENSE is
+the one way a Telnet client can wedge a session that is working perfectly.
+
+**THE FULL-SCREEN MEMCMP WAS PASSING OVER A BLANK SCREEN**, and the
+screenshot is the only thing that said so. It ran at the end of the fixture
+loop, by which time Close and the mirror check had each put the terminal
+through `te_reset` and `te_clear` — so 4,000 bytes of SPACE were compared with
+4,000 bytes of space, which is a comparison a renderer that drew *nothing at
+all* would also pass. The picture was a black screen with the leave hint on it.
+The check now opens one more session, feeds the `art` fixture, **asserts that
+at least a hundred cells hold a glyph before it presses `^]`**, and then
+compares — 310 of 2,000 on that fixture. The lesson generalises past this file:
+a memcmp is only as strong as the thing on both sides of it, and a gate that
+compares two empty buffers is a gate that reports its own setup.
+
+**The `report` fixture is the answer gate and it needs no `--dsr`.** It asks
+DSR 6 three times, DSR 5 once and DA twice, and `ansisim` publishes exactly
+which bytes come back — so the assertion is that string, in order, inside
+`log["keys_hex"]`, rather than the server's own opinion of a reply it prompted.
+
+**Thirteen fixtures, 0 differing cells of 2,000, on every one.** The stream
+offset the guest fed matches the fixture's length on twelve of them and stops
+at **82 of 151** on `zmodem`, which is `ansisim`'s own `zmodem_at` to the byte.
 
 ## 71. The browser fetches (`apps/browser/brnet.inc`)
 

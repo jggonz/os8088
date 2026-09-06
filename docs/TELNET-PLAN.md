@@ -372,6 +372,29 @@ measurement**; the real numbers come off `os88pkg`'s line when the code exists.
 | `tezm.inc` | ~+1,800 | |
 | **estimated total** | **~9,300** | **~15,900** |
 
+**What it actually reads, after §70.8 and §70.9/§70.10** — `os88pkg`'s own
+line, the two waves that have landed:
+
+| | image | bss | total |
+|---|---|---|---|
+| the estimate above, waves 2 and 3's share | ~7,500 | ~7,700 | ~15,200 |
+| after §70.8 (the screen, both renderers, the glyphs) | 7,052 | 7,554 | 14,606 |
+| **after §70.9/§70.10 (the parser, the keys, the queue)** | **10,235** | **7,821** | **18,056** |
+
+The estimate was **good to about four per cent on bss and nine on image**,
+which is worth saying because the estimate is what the whole plan was sized
+from: `teansi.inc` came in at 2,494 bytes against ~1,500 guessed, and the
+difference is almost exactly §70.10's negotiation, key table and queue, which
+this table put in no row of their own.
+
+**And the FLOPPY is the budget that bit, not the validator.** 18,056 of 61,440
+is 29% and never in question; what refused the build was `os88disk.py` on the
+360KB geometry, twice — the system disk had two clusters free and the apps disk
+had **none at all**. §24.3.1 is the account and the arithmetic. Nothing in §6's
+estimate could have caught it, because this table measures the package and the
+constraint is the disk it rides on with sixteen other packages, ten typefaces
+and the whole driver set.
+
 **~25,200 of 61,440 — about 41%.** Comfortable against the validator, and the
 thing to watch is not the validator: the package region is a **heap claim**, so
 the real limit is whatever the heap has contiguous, and a 25 KB claim on a
@@ -422,7 +445,11 @@ download for 4,096 bytes of a budget that has 36,000 spare.
 6. **The RX buffer becomes a queue.** `[te_rxn]`/`[te_rxi]`, and a pass that
    could not finish it issues no new `NETV_RECV`. Both the whole-message TX
    rule (§70.10.3) and Zmodem's staging back-pressure (§70.11.3) need it, and
-   neither works without it.
+   neither works without it. **Landed in wave 3**, and it bought a third thing
+   nobody predicted: `[te_rxi]` advances BEFORE the byte acts, which makes the
+   stream offset the parser publishes the offset just PAST the byte — exactly
+   what `ansisim.feed()` returns, so §70.9.6's handover offset is one number
+   two implementations compute and `tests/telansi.py` compares.
 7. **`SPEC.md §74.1`'s slot table is stale** — it lists `OSAPI_WM_WAKE` at
    0x0428 and `OSAPI_WM_ONWAKE` at 0x0430, and `kernel/kernel.asm` has them at
    **0x0450** and **0x0458** (the note at that table's definition records the
@@ -431,4 +458,21 @@ download for 4,096 bytes of a budget that has 36,000 spare.
    numbers.
 8. **`apps/telnet/telnet.asm` cites §11.2.1 for "a zero is a bare scan code"
    and §11.2.1 is the FULLSCREEN KEY.** §27 is where that rule is actually
-   stated. §70.10.2 corrects it; the comment in the source should follow.
+   stated. §70.10.2 corrects it; **the source followed in wave 3** — the
+   citation was in `te_txraw`'s header, which the key table replaced, and the
+   remaining §11.2.1 in `tetxt.inc` is the RIGHT one (the `F` contract and its
+   exemption for an app taking typed text).
+
+9. **A byte no renderer reads is a byte that goes stale in silence.** Two of
+   them were declared before any code existed — `te_ul` for SGR 4 and `te_satr`
+   for the attribute `ESC 7` saves — and both are gone (§70.9.4, §70.9.3). The
+   design's own contract is the 4,000 bytes of `te_scr`; a flag published
+   beside it bought the gate nothing and would have been believed by whoever
+   next added a rule about underline.
+
+10. **The 360KB floppy is a budget this plan never costed.** §6's table sizes
+    the PACKAGE against `APP_MAX_SIZE` and answers 29%; what refused the build
+    twice was `os88disk.py` on a 354-cluster disk that carries sixteen other
+    packages, ten typefaces and the whole driver set. §24.3.1 is the account.
+    A plan for a package that ships on the small geometry should cost the disk
+    as well as the claim, and this one did not.

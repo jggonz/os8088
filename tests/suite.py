@@ -2316,6 +2316,24 @@ SOAK = [
         "`fbuf`. Every cell is rendered on the HOST out of the guest's own "
         "glyph table and compared pixel for pixel",
         needs=("marty",), serial=True),
+    Row("telansi", "soak", py("tests/telansi.py"), 900.0,
+        "SPEC.md 70.9/70.10/70.12: the ANSI-BBS PARSER on the machine, against "
+        "tools/ansisim.py - the same state machine in Python, and the "
+        "contract's second reader the way htmsim.py is the browser's. Thirteen "
+        "fixtures from tests/fixtures/ansi/ are fed by tools/os88bbs.py in "
+        "deliberately RAGGED fragments, and te_scr is read out of guest memory "
+        "and compared with the simulator's 4,000 bytes CHARACTER AND ATTRIBUTE "
+        "- the oracle computed at test time, never stored, so it cannot drift "
+        "from the reference renderer. Then the negotiation and both "
+        "subnegotiations out of the server's own log (a screenshot cannot see "
+        "a byte this end SENDS), the mirror against a second server asking for "
+        "an option this terminal does not implement, the DSR and DA answers, "
+        "the twelve special keys as the exact bytes on the wire, Enter as a "
+        "BARE CR under TRANSMIT-BINARY, the Zmodem trigger's handover offset, "
+        "and full screen as a memcmp of te_scr against text VRAM. QEMU by "
+        "name for tests/ethernet.py's reason: MartyPC has no NIC, so this "
+        "package's receive path cannot be reached on it at all",
+        needs=("qemu",), serial=True, builds=True),
     Row("netpromise", "soak", py("tests/netpromise.py"), 240.0,
         "SPEC.md 70.7/77.47: Telnet and the FTP server promise per DEBT, not"
         "per session.",
