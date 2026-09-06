@@ -409,6 +409,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 88 | THE WIRE — the online software library (`apps/thewire/thewire.asm`) |
 | 89 | Pac-Man (`apps/pacman/pacman.asm`) |
 | 90 | FONT VIEWER — the system face browser (`apps/fontview/fontview.asm`) |
+| 92 | LEMMINGS — Lemmings (DMA Design, 1991), written in C (`apps/lemmings/`) |
 
 ## docs/
 
